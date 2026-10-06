@@ -412,7 +412,7 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   `src/repo/sessions.ts`; Garmin imports opt out). An exercise's NAME is never a sign — only its
   history is. `recentWorkingWeight` ranks less assist and more reps as harder.
 - **The daily envelope's up direction is `reach`, a separate field — never a sixth posture.**
-  `SignalPosture` is a five-value safety ladder. `reach.level='push'` licenses ONE challenge top set
+  `SignalPosture` is a five-value safety ladder. `reach.level='push'` licenses ONE challenge top set (up to `MAX_REACH_HOSTS` under an open, harm-free push stance, each on a different movement pattern)
   on the first eligible compound (`src/repo/daily-composition.ts`), computed from the LOGGED working
   weight, never a plan target, and only on a lift the progression engine is moving and did recently;
   composition reports back so the persisted envelope never promises a reach that is not on a card.

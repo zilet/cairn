@@ -70,6 +70,14 @@ const { Cdp, launchChrome, stopChrome, tail } = await import("./cdp-chrome.mjs")
 // the page once it has hydrated, before the settle wait.
 const ROUTES = [
   { name: "today", path: "/app/today", tab: "today" },
+  {
+    // Today's "What's ahead" strip with the next planned day opened inline.
+    name: "today-ahead-open",
+    path: "/app/today",
+    tab: "today",
+    // Waits past Today's first-paint snapshot (a copy whose controls are not wired yet).
+    prepare: `new Promise((resolve) => { let n = 0; const tick = () => { const b = document.querySelector('.tstrip-day:not(.is-rest):not(.is-today):not(.is-past)'); if (b) { b.click(); setTimeout(() => { document.querySelector('#todayStripSlot')?.scrollIntoView(); resolve(true); }, 900); } else if (n++ < 60) setTimeout(tick, 100); else resolve(false); }; setTimeout(tick, 2500); })`,
+  },
   { name: "today-session", path: "/app/today/session", tab: "session" },
   { name: "today-fuel", path: "/app/today/fuel", tab: "plan" },
   { name: "today-menu", path: "/app/today/menu", tab: "plan" },
@@ -104,6 +112,9 @@ const ROUTES = [
     tab: "horizon",
     prepare: `(() => { document.querySelector('[data-horizon-seg="season"]')?.click(); return true; })()`,
   },
+  // A day opened from Horizon's week: two days ahead (a preview) and two days back (a record).
+  { name: "horizon-day-next", path: () => `/app/horizon/day?date=${localDay(2)}`, tab: "day" },
+  { name: "horizon-day-past", path: () => `/app/horizon/day?date=${localDay(-2)}`, tab: "day" },
   { name: "horizon-race", path: "/app/horizon/race", tab: "plan" },
   { name: "horizon-goal", path: "/app/horizon/goal", tab: "horizon" },
   { name: "you", path: "/app/you", tab: "you" },
@@ -118,6 +129,13 @@ const ROUTES = [
 ];
 
 // ---------- helpers ----------
+/** The local calendar day `offset` days from today, as the app's routes write it. */
+function localDay(offset) {
+  const d = new Date();
+  d.setDate(d.getDate() + offset);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 /**
  * A little more of the demo conversation than the seed carries: a meal logged in
  * chat (so the compact capture chip and its review render) — synthetic demo text,
@@ -342,14 +360,15 @@ async function captureApp() {
     for (const scheme of SCHEMES) {
       await setScheme(cdp, scheme);
       for (const route of routes) {
-        await navigate(cdp, `${server.base}${route.path}`);
+        const routePath = typeof route.path === "function" ? route.path() : route.path;
+        await navigate(cdp, `${server.base}${routePath}`);
         await waitForView(cdp, route.tab);
         if (route.prepare) await evaluate(cdp, route.prepare).catch((error) => console.warn(`  ! ${route.name}: ${error.message}`));
         await sleep(SETTLE_MS);
         const file = path.join(OUT, `${route.name}--${scheme}.png`);
         const h = await captureFullPage(cdp, file, { width: WIDTH, height: HEIGHT, dpr: DPR });
         files.push({ route: route.name, scheme, file });
-        console.log(`  ${scheme.padEnd(5)} ${route.name.padEnd(18)} ${route.path} (${h}px)`);
+        console.log(`  ${scheme.padEnd(5)} ${route.name.padEnd(18)} ${routePath} (${h}px)`);
       }
     }
     if (!args.flags.has("no-sheet")) {

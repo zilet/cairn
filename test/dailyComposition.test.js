@@ -1609,6 +1609,64 @@ test("a reach day injects exactly one top set on the first compound", () => {
   assert.ok(!env.soft_preferences.some((e) => e.code === "reach_no_room"));
 });
 
+// A dated push stance licenses reach.hosts = 2 (daily-decision.ts): the second challenge
+// lands on the next moving compound of a DIFFERENT pattern, never a second squat.
+test("a push stance's two reach hosts seat two top sets on different patterns", () => {
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+  repo.upsertExercise({ name: "Bench Press", muscle_group: "chest", mode: "reps" });
+  logWorking("Back Squat", 225);
+  logWorking("Bench Press", 155);
+  const env = reachEnvelope({
+    reach: { level: "push", backed_by: ["push_stance", "training_log"], why: "You asked to push", hosts: 2 },
+    candidates: [
+      reachCandidate("Back Squat", 225, { muscle_group: "quads" }),
+      reachCandidate("Bench Press", 155, { muscle_group: "chest", rep_low: 6, rep_high: 8 }),
+    ],
+  });
+  const { session, validation } = normalizeComposedSession(
+    agentSession([
+      { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 7, target_weight: 225 },
+      { exercise: "Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 155 },
+    ]),
+    env
+  );
+  assert.ok(session);
+  const tops = session.items.filter((i) => i.reach && i.sets === 1);
+  assert.deepEqual(
+    tops.map((i) => i.exercise),
+    ["Back Squat", "Bench Press"],
+    "both moving compounds take a heavier look"
+  );
+  assert.equal(validation.reach_landed, true);
+});
+
+test("two reach hosts never land on the same movement pattern", () => {
+  repo.upsertExercise({ name: "Back Squat", muscle_group: "quads", mode: "reps" });
+  repo.upsertExercise({ name: "Front Squat", muscle_group: "quads", mode: "reps" });
+  logWorking("Back Squat", 225);
+  logWorking("Front Squat", 165);
+  const env = reachEnvelope({
+    reach: { level: "push", backed_by: ["push_stance", "training_log"], why: "You asked to push", hosts: 2 },
+    candidates: [
+      reachCandidate("Back Squat", 225, { muscle_group: "quads" }),
+      reachCandidate("Front Squat", 165, { muscle_group: "quads" }),
+    ],
+  });
+  const { session } = normalizeComposedSession(
+    agentSession([
+      { exercise: "Back Squat", sets: 3, rep_low: 5, rep_high: 7, target_weight: 225 },
+      { exercise: "Front Squat", sets: 3, rep_low: 5, rep_high: 7, target_weight: 165 },
+    ]),
+    env
+  );
+  assert.ok(session);
+  assert.ok(session.items.some((i) => i.exercise === "Front Squat"), "both squats stay on the card");
+  assert.deepEqual(
+    session.items.filter((i) => i.reach && i.sets === 1).map((i) => i.exercise),
+    ["Back Squat"]
+  );
+});
+
 test("an assisted lift on a reach day gets an AMRAP note, not a positive load", () => {
   repo.upsertExercise({ name: "Pull-up", muscle_group: "lats", mode: "reps" });
   logWorking("Pull-up", -30);

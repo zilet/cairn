@@ -21,6 +21,7 @@ import {
   reactivateGoalCheckin,
   setProfile,
 } from "../domain/person/index.js";
+import { acceptPushOffer, dismissPushOffer, setTrainingDrive, trainingDriveRead } from "../domain/training/index.js";
 
 export const personRouter = Router();
 
@@ -30,6 +31,10 @@ export const personRouter = Router();
 personRouter.get("/profile", (_req, res) => res.json(getProfile()));
 // The athlete's stated run days. days[] is {dow: 0-6 (0=Sunday), kind:
 // easy|quality|long|any}. The run engine and rolling agenda honor these weekdays.
+// `quality` is the stated quality session {type: threshold|tempo|vo2|hills, work_km?,
+// warm_up_km?, cool_down_km?, note?} the engine runs on the quality day. Set through
+// PUT /profile `endurance_schedule` (a body of only `{quality}` changes just the
+// session; `quality: null` clears it; omitted, the stored one stays).
 // null when unset. MCP: get_endurance_schedule.
 personRouter.get("/profile/endurance-schedule", (_req, res) => res.json(getEnduranceSchedule()));
 // The athlete's stated LIFTING weekdays. days[] is {dow: 0-6 (0=Sunday)} — no kind,
@@ -96,6 +101,38 @@ personRouter.put("/training-intent", (req, res) => {
   const profile = setProfile({ training_intent: value });
   const intent = getTrainingIntent(profile);
   res.json({ intent, endurance_capacity: getEnduranceCapacity(intent) });
+});
+
+// ---- training drive (steady | push) and the dated push stance ----
+// The UI-ready read: what is in force, what it opens, what never yields, and on a push
+// day what is still holding today back ("why not more"). ?date= reads another day.
+// MCP: get_training_drive.
+personRouter.get("/training-drive", (req, res) => {
+  const date = typeof req.query.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date) ? req.query.date : null;
+  res.json(trainingDriveRead(date));
+});
+// Set the drive: {drive:'push', until?:'YYYY-MM-DD', scope?:'block', words?} starts a
+// dated push stance (recorded in the decision ledger with a one-tap Undo);
+// {drive:'steady'} steps back. Always 200 — a refusal is {ok:false, error}.
+// MCP: set_training_drive. Chat: the set_training_drive action.
+personRouter.put("/training-drive", (req, res) => {
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+  res.json(
+    setTrainingDrive({ drive: body.drive, until: body.until, scope: body.scope, words: body.words, via: "athlete" })
+  );
+});
+// The coach's open push offer (`read.offer`): an ASK the log earned, never a change.
+// Accept = the same setTrainingDrive a stated push uses (two weeks, with its Undo);
+// dismiss = "not now", remembered for four weeks. Body: {decision_id?} — the offer the
+// athlete is answering; a stale id is refused. Always 200; a refusal is {ok:false, error}.
+// MCP: accept_push_offer / dismiss_push_offer.
+personRouter.post("/training-drive/offer/accept", (req, res) => {
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+  res.json(acceptPushOffer({ decision_id: body.decision_id, via: "athlete" }));
+});
+personRouter.post("/training-drive/offer/dismiss", (req, res) => {
+  const body = req.body && typeof req.body === "object" ? req.body : {};
+  res.json(dismissPushOffer({ decision_id: body.decision_id }));
 });
 
 // ---- bodyweight log ----

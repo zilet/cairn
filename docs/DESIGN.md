@@ -374,7 +374,27 @@ a ‹ › stepper and a back link that names where the day was opened from. Any 
 calendar, the history sheet and Horizon's week rows. The day view and Fuel wear the same eyebrow
 (`Mon 28 Sep`, `Fuel · Tue 29 Sep`). Agent health is not Today's to say: it is one quiet
 `.agent-state` line in You › Settings › Agents that follows the newest agent attempt, so it clears
-itself after the next good run. Today-only components whose base rules still
+itself after the next good run. **The day detail is ONE view** (`.ddv`, `day-detail-{model,run-client,client,controller}.ts`, lazy
+`day`, CSS `today/day-detail.css`; GET `/api/plan/day-detail?date=`): the day view composes it for any
+day the read reaches (to the end of next week; a past day keeps its record's fuel, read and weigh-in
+under it, and a day past that reach falls back to the record alone), and Today's strip opens it
+inline. Top to bottom: a mono kicker (where the day sits · its state), the read's serif headline,
+the ONE point of the day, a strength chip and an endurance chip with its distance, the week's place
+in mono (race rung · block week), life caveats; today's server line; a heavy-legs-beside-a-key-run
+note in a `.well-accent-sm`; on a lived day "What you did" first and the plan folded under "What
+was planned"; the lift (the body figure lit by the day's regions, the anchor in a strength-ruled
+callout, then every movement as the Program gallery's own `.prog-row` — `exerciseRowHtml` is shared,
+so train depends on day — with the progression's step in sage only when it moves); the run as ONE
+bar drawn to scale (warm-up → the work, one block per rep → cool-down, each part a zone fill
+`--ddv-z1..5` mixed from stone hues), its parts as rows and three facts (zone, heart-rate band, pace
+band in the athlete's run units); "Worth watching"; and "Why this day". **What's ahead**
+(`.tstrip` in `#todayStripSlot`, under the Brief's why and before the Path card,
+`today-strip-{client,controller}.ts` in the today-ahead bundle, carried across the Brief's in-place
+upgrade): seven real `<button>`s (weekday, date, the lift's short name in a strength tag, the run as
+a bar — longer for the long run, hatched for quality — ticked when done, today ringed in dawn),
+today's strength line verbatim with "X in place of Y" when today adapted, and a fold (grid rows
+0fr → 1fr, `inert` while closed, `aria-expanded` on the day) that opens the tapped day inline with
+"Open in Horizon ›". An open day survives a repaint of Today. Today-only components whose base rules still
 live in older partials (the block thread, agenda cards, the run line, the context tags) take the v2
 look in `today/pebbles.css`, scoped to `.today-wrap`.
 

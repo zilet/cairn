@@ -28,8 +28,12 @@ type DayOpenOrigin = { tab: ClientTabName; label: string };
     return String(home || "today").replace(/^./, (c) => c.toUpperCase());
   }
 
-  /** Open a day: today opens Today; any other day opens its record or preview. */
-  function openDay(date: unknown): void {
+  /**
+   * Open a day: today opens Today; any other day opens its record or preview. `home`
+   * reads the day under another home than the one it was opened from (Today's strip
+   * opens a day "in Horizon"); the back link still names where it was opened.
+   */
+  function openDay(date: unknown, opts?: { home?: ClientHomeName }): void {
     const iso = String(date || "").slice(0, 10);
     if (!ISO.test(iso)) return;
     if (iso === localISO()) {
@@ -41,7 +45,7 @@ type DayOpenOrigin = { tab: ClientTabName; label: string };
       // (/app/train/day), the tab bar keeps it lit and the back link names it.
       const home = homeFor(state.tab);
       from = { tab: state.tab, label: homeLabel(home) };
-      state.dayHome = home;
+      state.dayHome = opts?.home || home;
     }
     state.dayDate = iso;
     try {

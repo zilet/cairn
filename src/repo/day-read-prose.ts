@@ -716,6 +716,60 @@ export const STACKED_DAYS_CAVEAT: readonly string[] = [
   "several training days in a row, with nothing arguing against today, so go, and tell me if that shifts",
   "you've stacked the work, and you're still absorbing it, so go, and let me know if that changes",
 ];
+// The same uncorroborated run of days, on the athlete's OWN week (stated-rhythm.ts:
+// every day of the streak sat on a stated lift day, a stated run day or the recurring
+// cross-training day, and nothing in the last three days says it cost them). It is the
+// plan being described, not a pile-up being warned about — so it names the week, keeps
+// the day open, and still asks to hear if that changes. Advisory only, never a brake.
+export const STACKED_ON_RHYTHM_CAVEAT: readonly string[] = [
+  "the days have stacked up, but they're the week you set and nothing says they've cost you, so go, and tell me if that changes",
+  "that's a run of training days in a row, all on your own week and all carried well, so go, and say so if it starts to feel off",
+  "you've stacked the work exactly where your week puts it, with nothing arguing against today, so go, and tell me if that shifts",
+  "several training days in a row, every one of them on your own schedule and none of them costing you, so go, and let me know if that changes",
+];
+// Today's endurance work is already logged and the lift is still open — the planned-
+// training read leads its caveat run with it, so the Brief and the strength line ("Run
+// in · Push still open") tell one story. Templated on the activity's plain noun.
+export const RUN_IN_LIFT_OPEN_CAVEAT: ReadonlyArray<(activity: string) => string> = [
+  (activity) => `today's ${activity} is already in, so the lifting is the work that's left`,
+  (activity) => `the ${activity} is done for today, which leaves the lift as what's still open`,
+  (activity) => `you've got the ${activity} in already, so the lift is what remains today`,
+];
+// The same morning when the read is EASY: appended to the easy rule's own sentence, so
+// the rule still says why today is quieter and this says what the quiet day still holds
+// — the run done, the lift left, taken light. Never an instruction to lift: it offers.
+export const LIFT_OPEN_AFTER_ACTIVITY_EASY_WHY: ReadonlyArray<(activity: string) => string> = [
+  (activity) => `Today's ${activity} is already in, and the lift is what's left — if you take it, keep it light.`,
+  (activity) => `The ${activity} is done; the lift is still open, held light and short if you want it.`,
+  (activity) =>
+    `With the ${activity} already in, the lift is the only work left today, and a lighter version of it fits.`,
+];
+// The plain noun a sentence uses for today's logged activity. A type it does not know
+// speaks as "cardio" rather than as a raw Garmin key.
+const ACTIVITY_NOUNS: Readonly<Record<string, string>> = {
+  run: "run",
+  running: "run",
+  trail_run: "run",
+  treadmill: "run",
+  ride: "ride",
+  cycling: "ride",
+  bike: "ride",
+  mtb: "ride",
+  walk: "walk",
+  walking: "walk",
+  hike: "hike",
+  hiking: "hike",
+  swim: "swim",
+  swimming: "swim",
+  row: "row",
+  rowing: "row",
+};
+export function activityNoun(type: unknown): string {
+  const key = String(type ?? "")
+    .trim()
+    .toLowerCase();
+  return ACTIVITY_NOUNS[key] ?? "cardio";
+}
 export const LOW_SLEEP_CAVEAT: readonly string[] = [
   "sleep's been running short lately, so keep the session controlled and stop a rep or two shy",
   "your sleep's been on the short side, so keep the session controlled and leave a couple of reps in the tank",
@@ -780,6 +834,8 @@ export const DAY_READ_CAVEAT_VARIANTS: Readonly<Record<string, readonly string[]
   "planned_training:volume_spike": VOLUME_SPIKE_CAVEAT,
   "planned_training:fuel_around": FUEL_AROUND_TRAINING_CAVEAT,
   "planned_training:stacked_days": STACKED_DAYS_CAVEAT,
+  "planned_training:stacked_on_rhythm": STACKED_ON_RHYTHM_CAVEAT,
+  "planned_training:run_in": RUN_IN_LIFT_OPEN_CAVEAT.map((render) => render("run")),
   "planned_training:low_sleep": LOW_SLEEP_CAVEAT,
   "planned_training:sleep_exposure": SLEEP_EXPOSURE_CAVEAT,
   "planned_training:hold_aggression": HOLD_AGGRESSION_CAVEAT,
@@ -801,6 +857,12 @@ export const DAY_READ_CAVEAT_CONCEPT: Readonly<Record<string, RegExp>> = {
   // it. A bare /\bdays\b/ would pass on almost any sentence in this file and register
   // nothing.
   "planned_training:stacked_days": /\b(?:stacked (?:up|the work)|run of hard days|training days in a row)\b/i,
+  // Both halves: the run of days AND that it is the athlete's own week — a phrasing
+  // that drops the week is the plain stacked-days caveat under another key.
+  "planned_training:stacked_on_rhythm":
+    /\b(?:stacked (?:up|the work)|training days in a row)\b(?=[\s\S]*\b(?:week|schedule)\b)|\b(?:week|schedule)\b(?=[\s\S]*\b(?:stacked|in a row)\b)/i,
+  // The logged activity AND the lift still open — the whole point is naming both.
+  "planned_training:run_in": /\b(?:run|ride|walk|hike|swim|row|cardio)\b(?=[\s\S]*\blift(?:ing)?\b)/i,
   "planned_training:low_sleep": /\b(?:sleep|nights?)\b/i,
   // The exposure caveat must stay about the RISKY ELEMENTS, never about shortening
   // or skipping the day — that disjointness is what keeps rule 4's "downgrade
@@ -1153,6 +1215,9 @@ export const DAY_READ_WHY_VARIANTS: Readonly<Record<string, readonly string[]>> 
   // arms like every other athlete-facing string.
   outcome_feedback_held: OUTCOME_FEEDBACK_HELD_WHY,
   outcome_feedback_held_symptom: OUTCOME_FEEDBACK_HELD_SYMPTOM_WHY,
+  // Also a sentence, not a rule code: appended to an EASY read on a day the run is in
+  // and the lift is still open (day-read.ts, `liftOpenEasy`).
+  lift_open_after_activity: LIFT_OPEN_AFTER_ACTIVITY_EASY_WHY.map((render) => render("run")),
   unprogrammed_easy_day: UNPROGRAMMED_WHY,
   planned_training: TRAIN_CLEAR_WHY,
   // The backed train day. It keeps the `planned_training` LEDGER code — the decision
@@ -1242,6 +1307,8 @@ export const DAY_READ_REQUIRED_CONCEPT: Readonly<Record<string, RegExp>> = {
   // arm additionally may not claim a check-in, which its own case pins.
   outcome_feedback_held: /\b(?:you said|you told|your own|you(?:'ve)? put)\b/i,
   outcome_feedback_held_symptom: /\b(?:you said|you told|your own|you(?:'ve)? put)\b/i,
+  // Both halves of the day: the activity already in, and the lift still left — light.
+  lift_open_after_activity: /\b(?:run|ride|walk|hike|swim|row|cardio)\b(?=[\s\S]*\blift\b)(?=[\s\S]*\blight(?:er)?\b)/i,
   planned_reduced_training: /\b(?:reduced|light|lighter)\b/i,
   planned_training: /\b(?:due|train|session)\b/i,
   // A push read that forgets to offer the reach is just a clear day with extra words.

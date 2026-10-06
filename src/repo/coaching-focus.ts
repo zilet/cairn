@@ -23,6 +23,37 @@
 // ============================================================================
 
 import { followupLabel, labRecheckLabel } from "./attention-labels.js";
+import {
+  type CapacityInput,
+  type CutQualityInput,
+  type FocusBlockRead,
+  type FocusChange,
+  type FocusDayState,
+  type FocusEvidence,
+  type GoalPaceInput,
+  type HealthPriorityInput,
+  type HealthReadingInput,
+  type LiftInput,
+  type RaceBuildInput,
+  type RaceRead,
+  type WeekWinsInput,
+  blockRead,
+  flaggedReadings,
+  focusChanges,
+  focusEvidence,
+  joinAnd,
+  leverFacts,
+  leverLift,
+  paceRelation,
+  phaseMoveFor,
+  raceItem,
+  raceName,
+  raceRead,
+  raceShapesTheWeek,
+  readingPhrase,
+  weightRead,
+} from "./coaching-focus-read.js";
+import { shortDate } from "./dexa-window.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { isDoctorLoopSignal } from "./doctor-loop-items.js";
 import { movementKey } from "./exercise-canon.js";
@@ -41,6 +72,15 @@ import { coerceFinite as num } from "../lib/numbers.js";
 
 // Re-exported so existing importers keep resolving `FocusDomain` from the conductor.
 export type { FocusCandidate, FocusDomain } from "./focus-candidate.js";
+export type {
+  FocusBlockRead,
+  FocusChange,
+  FocusChangeKind,
+  FocusDayState,
+  FocusDeloadDecision,
+  FocusDirection,
+  FocusEvidence,
+} from "./coaching-focus-read.js";
 
 export interface FocusItem {
   domain: FocusDomain;
@@ -85,7 +125,9 @@ export interface CoachingFocus {
   acts?: boolean;
   lead: FocusItem | null; // THE single highest-leverage lever this block
   parallel: FocusItem[]; // 1-2 handled simultaneously, usually via a different lever
-  later: { domain: FocusDomain; title: string }[]; // explicitly deferred — the sequence
+  // Explicitly deferred — the sequence. `why` says why it waits (on pace, after race
+  // day, rides with the lead…), so a deferral reads as a decision, not an omission.
+  later: { domain: FocusDomain; title: string; why?: string }[];
   connections: string[]; // 1-2 plain cross-domain ties
   retest: CoachingRetest | null; // ONE batched check-in, not four nag feeds
   horizon_weeks: number | null;
@@ -102,8 +144,22 @@ export interface CoachingFocus {
   caveat_cause: string | null;
   // Temporal placement inside the active program block, plain words — "Week 3 of
   // 5 — building volume." Descriptive calendar truth, never a score or a gate.
-  // Null when no block is active.
+  // Read through block-phase.ts's ONE resolution, so a scheduled deload a push athlete
+  // runs as intensification is SAID to be set aside, never "in sight". Null when no
+  // block is active.
   block_line: string | null;
+  // The same block read, structured: week N of M, the phase the week runs as, and what
+  // the deload / peak decision actually is this week. Null when no block is active.
+  block: FocusBlockRead | null;
+  // TODAY's posture (rest / easy / complete) — a day state, said apart from the week's
+  // lever. A finished day no longer takes the lead: the week's lever does.
+  day_state: FocusDayState | null;
+  // Value-and-direction bullets behind the read, ordered by the card's own domains.
+  // Values and directions only — no score, no percentile, never an impact_score.
+  evidence: FocusEvidence[];
+  // What moved, each measured against a stated date (a new best, the race estimate,
+  // the weight average, a fresh lab, last week's running).
+  changed_since: FocusChange[];
 }
 
 interface CoachingDisciplineInput {
@@ -134,10 +190,12 @@ interface EnduranceCapacityInput {
 interface ProgramMesocycleInput {
   phase?: unknown;
   note?: unknown;
+  deload_evidence?: unknown;
 }
 
 interface ProgramStateInput {
   mesocycle?: ProgramMesocycleInput | null;
+  lifts?: LiftInput[] | null;
 }
 
 interface RecoveryDeltaInput {
@@ -171,11 +229,13 @@ interface HealthFocusLeadInput {
   why?: unknown;
   tier?: unknown;
   moves?: HealthFocusMovesInput | null;
+  readings?: HealthReadingInput[] | null;
 }
 
 interface HealthFocusInput {
   headline?: unknown;
   lead?: HealthFocusLeadInput | null;
+  priorities?: HealthPriorityInput[] | null;
 }
 
 interface PerformanceLeverInput {
@@ -186,6 +246,8 @@ interface PerformanceLeverInput {
 
 interface PerformanceEnduranceInput {
   tone?: unknown;
+  vo2max?: unknown;
+  trend?: unknown;
 }
 
 interface PerformanceHeroInput {
@@ -208,6 +270,10 @@ interface PerformanceInput {
   endurance?: PerformanceEnduranceInput | null;
   imbalances?: unknown;
   tests_due?: unknown;
+  // The benchmark capacities (est-1RM, level, the next standard) — read for the
+  // lever lift's values; the level is a supporting fact only when strength leads.
+  capacities?: CapacityInput[] | null;
+  momentum?: { chips?: unknown } | null;
 }
 
 interface ProgramAdjustmentInput {
@@ -352,6 +418,17 @@ export interface CoachingFocusInput {
   // Announced / quiet-pending brain decisions landing soon (upcomingBrainDecisions)
   // — lets a recovery lead name the weekday its auto-set recovery week arrives.
   upcoming?: unknown;
+  // ---- the week read (coaching-focus-read.ts) ---------------------------------
+  // The read's own date (YYYY-MM-DD). Falls back to the signal state's date.
+  date?: unknown;
+  // raceBuild() — the dated race build: estimate, fit, this week and next, the ride.
+  raceBuild?: RaceBuildInput | null;
+  // goalPace(21) — canonical weigh-ins, the trend and the line to the goal.
+  goalPace?: GoalPaceInput | null;
+  // weekWins() — the new bests set in the trailing seven days.
+  weekWins?: WeekWinsInput | null;
+  // cutQualityRead() — whether the lifts are holding as the weight comes down.
+  cutQuality?: CutQualityInput | null;
 }
 
 // An applied exercise rotation the brain/athlete already made (recentAppliedRotations).
@@ -375,6 +452,12 @@ interface ProgramBlockSummaryInput {
   focus?: unknown;
   phase?: unknown;
   week_of?: unknown;
+  // coachBlockSummary (block-phase.ts): a push athlete's scheduled deload is running
+  // as intensification because the loaded weeks did not earn it.
+  scheduled_deload_skipped?: unknown;
+  // nextWeekScheduledDeloadRuns (block-phase.ts): whether next week's scheduled deload
+  // will actually run. Absent = unknown.
+  next_week_deload_runs?: unknown;
 }
 
 interface Candidate {
@@ -382,6 +465,11 @@ interface Candidate {
   leverage: number; // INTERNAL ordering only — never surfaced
   slot: "lead" | "parallel" | "later";
   key: string;
+  // The lever as a short noun phrase for the headline ("your overhead press", "the
+  // half marathon build"). Internal; only the headline speaks it.
+  noun?: string;
+  // Why this waits, when it lands in `later` ("on pace — nothing to change").
+  defer?: string;
   // Set when this (training) lever loads a flagged/injured/sore area — the conductor
   // prefers a non-conflicting lead and, if it keeps this one, surfaces the caveat.
   caveat?: string;
@@ -631,6 +719,7 @@ function recoveryCandidate(inp: CoachingFocusInput): Candidate | null {
       key: "recovery-deload",
       leverage: 5,
       slot: "lead",
+      noun: "the recovery week",
       item: {
         domain: "recovery",
         title: pickDayVariant(RECOVERY_WEEK_ACTIVE_TITLES, date, "cfocus:recovery-active:title"),
@@ -649,6 +738,7 @@ function recoveryCandidate(inp: CoachingFocusInput): Candidate | null {
       key: "recovery-drift",
       leverage: 3.2,
       slot: "parallel",
+      noun: "recovery",
       item: {
         domain: "recovery",
         title: pickDayVariant(RECOVERY_DRIFT_TITLES, date, "cfocus:recovery-drift:title"),
@@ -693,6 +783,7 @@ function recoveryCandidate(inp: CoachingFocusInput): Candidate | null {
     key: "recovery-deload",
     leverage: 5,
     slot: "lead",
+    noun: "an earned lighter week",
     item: {
       domain: "recovery",
       title: pickDayVariant(RECOVERY_WEEK_LEAD_TITLES, date, "cfocus:recovery-lead:title"),
@@ -764,6 +855,7 @@ function trainingCandidate(inp: CoachingFocusInput): Candidate | null {
         key: "training-stall",
         leverage: 4.2,
         slot: "lead",
+        noun: `the ${label} plateau`,
         caveat,
         item: {
           domain: "training",
@@ -797,22 +889,49 @@ function trainingCandidate(inp: CoachingFocusInput): Candidate | null {
     const caveat = conflicts
       ? `Ease this AROUND the ${flagged.phrase || "flagged area"} — pain-free work only until it settles.`
       : undefined;
+    // The lever in values: the lift's est-1RM, its distance to the next standard and
+    // its logged trend — so the card moves when the lift does, rather than restating
+    // the same standing every week.
+    const lifted = leverLift(inp);
+    const facts = lifted ? leverFacts(lifted) : "";
+    const baseWhy = String(
+      lever.why || "Focused volume on your furthest-behind lift is where the easiest, most motivating progress is."
+    );
+    const why = facts ? wholeSentences(`${facts} ${baseWhy}`, LEVER_WHY_MAX) : baseWhy;
+    // What the block's phase asks of this lift THIS week (the progression policy, in
+    // words), then the standing target.
+    const block = blockRead(inp)?.read ?? null;
+    const phaseMove = phaseMoveFor(block?.phase ?? null, lifted?.label ?? "", block?.deload === "set_aside");
+    const target = lever.target ? `Target: ${String(lever.target).replace(/\.$/, "")}.` : "";
+    const move = [phaseMove, target].filter(Boolean).join(" ");
+    const hero = String(inp.performance?.hero?.headline ?? "").trim();
     return {
       key: "training-lever",
       leverage: 3.8,
       slot: "lead",
+      noun: String(lever.headline)
+        .replace(/^bring up\s+/i, "")
+        .trim()
+        .replace(/^./, (c) => c.toLowerCase()),
+      defer: "Waits behind this week's lead; the lift keeps its normal progression meanwhile.",
       caveat,
       item: {
         domain: "training",
         title: String(lever.headline),
-        why: `${String(lever.why || "Focused volume on your furthest-behind lift is where the easiest, most motivating progress is.")}${caveat ? ` (${caveat})` : ""}`,
-        move: lever.target ? String(lever.target) : undefined,
-        based_on: ["Performance standing lever", lever.why ? String(lever.why) : "Capacity comparison across lifts"],
+        why: `${why}${caveat ? ` (${caveat})` : ""}`,
+        move: move || undefined,
+        // The strength-standing line is a SUPPORTING fact here, where strength is the
+        // lever — never the card's headline.
+        based_on: [
+          "Performance standing lever",
+          hero || (lever.why ? String(lever.why) : "Capacity comparison across lifts"),
+        ],
       },
     };
   }
   return null;
 }
+const LEVER_WHY_MAX = 260;
 
 // A plateau the brain already rotated a variation in for — its own producer so the
 // calm "new stimulus" note rides ALONGSIDE whatever training lead is live (the
@@ -835,6 +954,8 @@ function rotationHandledCandidate(inp: CoachingFocusInput): Candidate | null {
       key: "training-stall-handled",
       leverage: 2.2,
       slot: "parallel",
+      noun: `the new ${label} stimulus`,
+      defer: "Give the new variation a few weeks to read before judging it.",
       item: {
         domain: "training",
         title: `New stimulus in for your ${label}`,
@@ -852,18 +973,50 @@ function rotationHandledCandidate(inp: CoachingFocusInput): Candidate | null {
 function runningCandidate(inp: CoachingFocusInput): Candidate | null {
   const goal = inp.enduranceGoal;
   const end = inp.performance?.endurance;
-  const phase = lc(goal?.phase);
+  const race = raceRead(inp);
+  const phase = lc(goal?.phase) || (race?.phase ?? "");
   const role = enduranceRole(inp);
-  const raceActive = activeRace(inp);
-  // A dated race in build/sharpen is time-bound — high leverage, lead-eligible.
+  const raceActive = activeRace(inp) || race != null;
+  // A dated race in build/sharpen/taper is time-bound — high leverage, lead-eligible.
   // (getEnduranceGoal discriminates on `is_race`/`mode`, never a `kind` field.)
-  if (goal?.is_race && (phase === "build" || phase === "sharpen")) {
+  if ((goal?.is_race || race != null) && (phase === "build" || phase === "sharpen" || phase === "taper")) {
     const legacyRaceLead = role === "none" && lc(inp.trainingIntent?.source) !== "explicit";
     const leadEligible = role === "primary" || role === "co_primary" || legacyRaceLead;
+    // The peak, taper and race weeks are SHAPED by the race — the stress budget trims
+    // the legs and the week is built around the key runs — so for those weeks even a
+    // supporting race is the week's lever. Earlier, it rides alongside.
+    const shapesWeek = raceShapesTheWeek(race) && (role !== "none" || legacyRaceLead);
+    // Inside the final six weeks a supporting race outranks the generic parallels.
+    const closing = race?.daysTo != null && race.daysTo <= 42;
+    const leverage = shapesWeek ? 4.3 : leadEligible ? 4.0 : role === "supporting" ? (closing ? 3.7 : 3.2) : 3.0;
+    const slot: Candidate["slot"] = shapesWeek || leadEligible ? "lead" : "parallel";
+    if (race) {
+      const said = raceItem(race);
+      return {
+        key: "running-race",
+        leverage,
+        slot,
+        noun: said.noun,
+        defer: `The runs keep their days this week; ${said.noun} takes the lead from the peak week.`,
+        item: {
+          domain: "running",
+          title: clip(said.title, 90),
+          why: clip(said.why || inp.runPlan?.why || "", 260),
+          move: said.move ? clip(said.move, 240) : undefined,
+          based_on: [
+            `Race goal is in ${phase} phase`,
+            race.current?.focus_short
+              ? `Race build this week: ${String(race.current.focus_short)}`
+              : "Race build is available",
+          ],
+        },
+      };
+    }
     return {
       key: "running-race",
-      leverage: leadEligible ? 4.0 : role === "supporting" ? 3.2 : 3.0,
-      slot: leadEligible ? "lead" : "parallel",
+      leverage,
+      slot,
+      noun: "the race build",
       item: {
         domain: "running",
         title: phase === "sharpen" ? "Sharpen for your race" : "Build toward your race",
@@ -885,6 +1038,7 @@ function runningCandidate(inp: CoachingFocusInput): Candidate | null {
     if (role === "none") return null;
     return {
       key: "running-aerobic",
+      noun: "your aerobic base",
       leverage: 3.6,
       slot: role === "primary" || role === "co_primary" ? "lead" : "parallel",
       item: {
@@ -905,6 +1059,7 @@ function runningCandidate(inp: CoachingFocusInput): Candidate | null {
   if ((role !== "none" || raceActive) && inp.runPlan?.available && inp.runPlan?.quality_focus) {
     return {
       key: "running-quality",
+      noun: "the week's quality run",
       leverage: 2.4,
       slot: "parallel",
       item: {
@@ -936,6 +1091,7 @@ function capacityCandidate(inp: CoachingFocusInput): Candidate | null {
         : `Build your ${sport} capacity`;
   return {
     key: "endurance-capacity",
+    noun: `your ${sport} capacity`,
     leverage: role === "primary" ? 3.7 : role === "co_primary" ? 3.5 : 2.3,
     slot: role === "primary" || role === "co_primary" ? "lead" : "parallel",
     item: {
@@ -943,7 +1099,9 @@ function capacityCandidate(inp: CoachingFocusInput): Candidate | null {
       title,
       why: clip(
         capacity?.summary ||
-          (target ? `The durable target is an outing around ${Math.round(target)} minutes.` : "The durable capability needs a calm next exposure."),
+          (target
+            ? `The durable target is an outing around ${Math.round(target)} minutes.`
+            : "The durable capability needs a calm next exposure."),
         220
       ),
       move: capacity?.next_step ? clip(capacity.next_step, 240) : undefined,
@@ -960,23 +1118,50 @@ function healthCandidate(inp: CoachingFocusInput): Candidate | null {
   if (!lead?.group) return null;
   const actNow = lc(lead.tier) === "act_now";
   const moves: HealthFocusMovesInput = lead.moves ?? {};
-  const move = moves.nutrition || moves.training || moves.watch;
   const viaNutrition = !!moves.nutrition;
+  // The finding in the lab's own values and directions (never an impact_score), then
+  // the health engine's own sentence about why they belong together.
+  const readings = flaggedReadings(lead, 2);
+  const valuesLine = readings.length
+    ? `${joinAnd(readings.map(readingPhrase))} sit${readings.length === 1 ? "s" : ""} outside the optimal band.`
+    : "";
+  const engineWhy = String(lead.why || inp.healthFocus?.headline || "").trim();
+  const why = [valuesLine, engineWhy ? `${engineWhy.replace(/[.\s]+$/, "")}.` : ""].filter(Boolean).join(" ");
+  // The engine's own move when it has one; otherwise the group's everyday lever, so the
+  // card never names a finding without saying what is in the athlete's hands.
+  const engineMove = moves.nutrition || moves.training || moves.watch;
+  const move = engineMove ? String(engineMove) : healthFallbackMove(lc(lead.group));
+  const group = lc(lead.group);
   return {
     key: "health-lead",
     leverage: actNow ? 4.0 : 2.6,
+    noun: `your ${group.split(/\s*&\s*|\s+and\s+/)[0] || group}`,
+    defer: "Tracked; the next panel shows its direction.",
     // Health is usually addressed through diet/lifestyle, so it runs PARALLEL to
     // training rather than displacing it — but a true act_now with no training lead
     // can be promoted to lead by the selector below.
     slot: "parallel",
     item: {
       domain: viaNutrition ? "nutrition" : "health",
-      title: `Move your ${lc(lead.group)}`,
-      why: clip(lead.why || (inp.healthFocus?.headline ?? ""), 220),
-      move: move ? clip(move, 240) : undefined,
+      title: `Move your ${group}`,
+      why: clip(why, 260),
+      move: move ? clip(`${move.replace(/[.\s]+$/, "")}. Informational, not medical advice.`, 260) : undefined,
       based_on: [`Health lead: ${lead.group}`, lead.tier ? `Tier: ${lead.tier}` : "Connected-brain health focus"],
     },
   };
+}
+
+// The everyday lever per health group, for a finding the health engine named without a
+// move. Food and training habits only — never a drug, a dose or a supplement; the
+// clinical call stays with the athlete and their clinician.
+function healthFallbackMove(group: string): string {
+  if (/lipid|cholesterol|cardio/.test(group))
+    return "The food lever is yours: soluble fiber and oily fish most days, fewer saturated fats — the next lipid panel shows whether it's landing";
+  if (/inflamm/.test(group))
+    return "Sleep, keeping easy days easy and oily fish are the everyday levers; a recheck shows the direction";
+  if (/glucose|metabolic/.test(group))
+    return "Fiber first at meals and a walk after the biggest one are the everyday levers; the next panel shows the direction";
+  return "Worth raising at your next clinician visit; the next panel shows the direction";
 }
 
 function dexaCandidate(inp: CoachingFocusInput): Candidate | null {
@@ -993,6 +1178,7 @@ function dexaCandidate(inp: CoachingFocusInput): Candidate | null {
   const domain: FocusDomain = visceral ? "nutrition" : bone ? "health" : "training";
   return {
     key: "dexa-lead",
+    noun: "your DEXA target",
     leverage: bone ? 3.4 : visceral ? 2.8 : 2.6,
     slot: "parallel",
     item: {
@@ -1007,15 +1193,73 @@ function dexaCandidate(inp: CoachingFocusInput): Candidate | null {
 
 function bodyCandidate(inp: CoachingFocusInput): Candidate | null {
   if (lc(inp.goalMode) !== "lose") return null;
+  const lean =
+    "Keep the deficit modest and protein high so the weight that comes off is fat, not the muscle you're working to build.";
+  const w = weightRead(inp);
+  if (!w) {
+    return {
+      key: "body-deficit",
+      leverage: 2.0,
+      slot: "parallel",
+      noun: "the cut",
+      item: {
+        domain: "nutrition",
+        title: "Hold a lean-safe deficit",
+        why: lean,
+        based_on: ["Goal mode is fat loss", "Nutrition target is lean-safe"],
+      },
+    };
+  }
+  // The cut in values against the line to the goal — information, never a verdict.
+  const relation = paceRelation(w);
+  const r1 = (n: number) => Math.round(n * 10) / 10;
+  const sgn = (n: number) => (r1(n) < 0 ? `−${Math.abs(r1(n)).toFixed(1)}` : r1(n) > 0 ? `+${r1(n).toFixed(1)}` : "0");
+  const trendWords = w.trend != null ? `, trending ${sgn(w.trend)} lb a week` : "";
+  const lineWords =
+    w.goalLb != null && w.goalDate && w.needed != null
+      ? ` Reaching ${r1(w.goalLb)} lb by ${shortDate(w.goalDate)} asks about ${sgn(w.needed)} lb a week${
+          relation === "on"
+            ? " — the trend is on that line."
+            : relation === "ahead"
+              ? " — the trend is running ahead of that line."
+              : relation === "behind"
+                ? " — the trend runs a little slower than that line."
+                : "."
+        }`
+      : "";
+  const cq = inp.cutQuality;
+  const considered = num(cq?.strength?.considered);
+  const holding = num(cq?.strength?.holding);
+  const liftsWords =
+    cq?.active === true && considered != null && considered >= 3 && holding != null
+      ? ` ${holding} of ${considered} main lifts are holding or climbing as it comes down.`
+      : "";
+  // Long runs ahead change WHERE the deficit sits, not whether it exists.
+  const race = raceRead(inp);
+  const longRunsAhead = race?.maxLongKmAhead != null && race.maxLongKmAhead >= 14;
+  const move = longRunsAhead
+    ? "Fuel the long runs and the day after; let the deficit sit on the lighter days."
+    : relation === "on"
+      ? "Nothing to change — the trend, not one weigh-in, decides any adjustment."
+      : "Keep the deficit modest; the two-week trend, not one weigh-in, decides any change.";
   return {
     key: "body-deficit",
-    leverage: 2.0,
+    leverage: relation === "on" ? 2.2 : 2.8,
     slot: "parallel",
+    noun: "the cut",
+    defer:
+      relation === "on"
+        ? "On pace — nothing to change this week."
+        : "Rides with the lead; the trend decides any change, not one weigh-in.",
     item: {
       domain: "nutrition",
-      title: "Hold a lean-safe deficit",
-      why: "Keep the deficit modest and protein high so the weight that comes off is fat, not the muscle you're working to build.",
-      based_on: ["Goal mode is fat loss", "Nutrition target is lean-safe"],
+      title: relation === "on" ? "The cut is on pace — hold it" : "Hold a lean-safe deficit",
+      why: clip(
+        `${r1(w.latest)} lb now${trendWords}.${lineWords}${liftsWords} ${lean}`.replace(/\s+/g, " ").trim(),
+        300
+      ),
+      move,
+      based_on: ["Goal mode is fat loss", w.trend != null ? `Weight trend ${sgn(w.trend)} lb/wk` : "Weigh-ins logged"],
     },
   };
 }
@@ -1093,7 +1337,11 @@ function riskCandidate(inp: CoachingFocusInput): Candidate | null {
     ],
     action: { kind: "open_health", label: "Open cardiovascular risk" },
   };
-  return lift(fc, leverage, slot, "risk-cardiovascular");
+  return {
+    ...lift(fc, leverage, slot, "risk-cardiovascular"),
+    noun: "cardiovascular risk",
+    defer: "Moves with the lipid and aerobic work already on the card.",
+  };
 }
 
 interface JourneyMilestoneInput {
@@ -1121,7 +1369,7 @@ function journeyCandidate(inp: CoachingFocusInput): Candidate | null {
     priority_inputs: ["Body-composition journey milestone"],
     action: { kind: "open_progress", label: "See your journey" },
   };
-  return lift(fc, 2.0, "parallel", "journey-milestone");
+  return { ...lift(fc, 2.0, "parallel", "journey-milestone"), noun: "a body-composition milestone" };
 }
 
 interface BenchmarkMilestoneInput {
@@ -1153,7 +1401,11 @@ function benchmarkCandidate(inp: CoachingFocusInput): Candidate | null {
     priority_inputs: ["Strength/endurance benchmark read"],
     action: { kind: "open_progress", label: "See your benchmarks" },
   };
-  return lift(fc, 2.0, "parallel", "benchmark-milestone");
+  return {
+    ...lift(fc, 2.0, "parallel", "benchmark-milestone"),
+    noun: lc(top.title),
+    defer: "Within reach on the normal progression — no test needed to get there.",
+  };
 }
 
 function laterCandidates(inp: CoachingFocusInput): Candidate[] {
@@ -1231,6 +1483,37 @@ function buildConnections(lead: FocusItem | null, parallel: FocusItem[], inp: Co
   const all = [lead, ...parallel].filter(Boolean) as FocusItem[];
   const has = (d: FocusDomain) => all.some((x) => x.domain === d);
   const titles = all.map((x) => lc(x.title)).join(" ");
+  const race = raceRead(inp);
+
+  // The strength lever against the race build: an upper-body lever keeps progressing
+  // straight through the peak and taper (the race trims only the legs —
+  // race-strength.ts); a lower-body one holds in the taper and resumes after race day.
+  if (lead?.domain === "training" && race && lc(lead.title) === lc(inp.performance?.lever?.headline)) {
+    const lever = leverLift(inp);
+    const taperAhead = blockRead(inp)?.read.race_taper_from ?? null;
+    if (lever && (taperAhead || raceShapesTheWeek(race))) {
+      const name = lc(lever.label);
+      out.push(
+        lever.upper
+          ? `The ${name} is upper-body work, so it keeps progressing through the peak and taper — the ${race.distanceName} only trims the legs.`
+          : `The ${name} loads the legs the ${race.distanceName} needs: it holds lighter through the taper and race week, then picks back up after race day.`
+      );
+    }
+  }
+  // The race leads: how the lifting fits THIS race week, in the race build's own words.
+  if (lead?.domain === "running" && race?.current?.with_lifting) {
+    out.push(String(race.current.with_lifting));
+  }
+  // A habitual hard ride the day before the long run is the athlete's week, not a
+  // conflict — the race build already wrote the one sentence about it.
+  if (
+    race?.ride?.placement &&
+    race.longRunDay != null &&
+    race.ride.dayNumber != null &&
+    race.ride.dayNumber + 1 === race.longRunDay
+  ) {
+    out.push(race.ride.placement);
+  }
 
   // Lipids/metabolic via diet, while a deficit is also running → one change, two wins.
   if (
@@ -1349,34 +1632,24 @@ function buildRetest(inp: CoachingFocusInput): CoachingRetest | null {
   const dedup = distinct(focus, 5);
   const dedupLabs = distinct(labs, 4);
   if (!dedup.length && !dedupLabs.length) return null;
+  // Inside a race's final four weeks a max-effort lift test competes with the key runs:
+  // the lifts wait for race day, the labs can book any time.
+  const race = raceRead(inp);
+  const raceClose = race?.raceDate && race.daysTo != null && race.daysTo <= 28 && dedup.length > 0;
   return {
     in_weeks: dueNow ? 0 : 1,
     focus: dedup,
     labs: dedupLabs,
-    why: "Batch these into one check-in window so labs, scans and lift re-tests land together every ~6–8 weeks — enough to see real change, not so often it interrupts the work.",
+    why: raceClose
+      ? `Hold the heavy lift re-tests until after race day (${shortDate(String(race?.raceDate))}) so a max effort never lands near a key run${dedupLabs.length ? "; the labs and scans can book any time in the same window" : ""}.`
+      : "Batch these into one check-in window so labs, scans and lift re-tests land together every ~6–8 weeks — enough to see real change, not so often it interrupts the work.",
   };
 }
 
 // ---- temporal placement: the block's calendar truth, plain words -------------
-// "This block" without WHERE in the block reads like a sticky note. One line:
-// week N of M plus what the phase means for effort — descriptive, never a gate.
-function blockPlacementLine(b: ProgramBlockSummaryInput | null | undefined): string | null {
-  const weekOf = String(b?.week_of ?? "").trim();
-  if (!weekOf) return null;
-  const wk = weekOf.charAt(0).toUpperCase() + weekOf.slice(1);
-  const phase = lc(b?.phase);
-  const tail =
-    phase === "deload"
-      ? "a deload week: absorb the work you've put in"
-      : phase === "realization"
-        ? "test week: express what the block built"
-        : phase === "intensification"
-          ? "pushing intensity; the deload is in sight"
-          : phase === "accumulation"
-            ? "building volume"
-            : "";
-  return tail ? `${wk} — ${tail}.` : `${wk}.`;
-}
+// "This block" without WHERE in the block reads like a sticky note. The line and the
+// structured read (week N of M, the phase the week runs as, the deload decision) come
+// from blockRead() in coaching-focus-read.ts — descriptive, never a gate.
 
 // ---- canonical daily-state adapters ----------------------------------------
 // Athlete-facing prose here is a VARIANT SET, never one literal: a stable input fires
@@ -1575,27 +1848,21 @@ function signalStateCandidates(input: CoachingFocusInput): Candidate[] {
   const spoken = (voice: Parameters<typeof spokenSignalVoice>[0], key?: string) =>
     spokenSignalVoice(voice, String(state?.date ?? ""), key, action.posture);
 
-  if (action.posture === "rest" || action.posture === "easy" || action.posture === "done") {
+  // A protective day (rest / easy) still owns the card: it is a safety posture and the
+  // week's levers wait in Later for the next ready day. A COMPLETED day is not a
+  // lever at all — it is a day state (`day_state`), and the week's lever leads.
+  if (action.posture === "rest" || action.posture === "easy") {
     const posture = action.posture;
     out.push({
       key: "signal-daily-posture",
       leverage: 6,
       slot: "lead",
+      noun: "recovery",
       item: {
         domain: "recovery",
-        title:
-          posture === "rest"
-            ? "Protect recovery today"
-            : posture === "easy"
-              ? "Keep today easy"
-              : "Today's work is complete",
+        title: DAY_STATE_TITLES[posture],
         why: clip(spoken(action.voice, SIGNAL_VOICE_KEYS.protect), 220),
-        move:
-          posture === "rest"
-            ? "Keep today restorative and let the work absorb."
-            : posture === "easy"
-              ? "Keep movement genuinely easy; leave hard loading for the next ready day."
-              : "Let today's work absorb before adding another hard effort.",
+        move: DAY_STATE_MOVES[posture],
         based_on: evidence("Unified daily planning state"),
         day_posture: posture,
       },
@@ -1607,6 +1874,11 @@ function signalStateCandidates(input: CoachingFocusInput): Candidate[] {
       key: "signal-fuel-protect",
       leverage: 3.6,
       slot: "parallel",
+      noun: "fueling",
+      defer:
+        action.posture === "done" || action.posture === "rest" || action.posture === "easy"
+          ? "Rides with today's state: eat to recover around the work."
+          : "A today note: hold or raise fuel around the work rather than deepening the deficit.",
       item: {
         domain: "nutrition",
         title: "Protect fuel around today's work",
@@ -1635,6 +1907,7 @@ function signalStateCandidates(input: CoachingFocusInput): Candidate[] {
       key: "signal-schedule-compress",
       leverage: 3.5,
       slot: "parallel",
+      noun: "today's tight window",
       item: {
         domain: "training",
         title: commitment
@@ -1649,6 +1922,36 @@ function signalStateCandidates(input: CoachingFocusInput): Candidate[] {
     });
   }
   return out;
+}
+
+const DAY_STATE_TITLES: Record<FocusDayState["posture"], string> = {
+  rest: "Protect recovery today",
+  easy: "Keep today easy",
+  done: "Today's work is complete",
+};
+const DAY_STATE_MOVES: Record<FocusDayState["posture"], string> = {
+  rest: "Keep today restorative and let the work absorb.",
+  easy: "Keep movement genuinely easy; leave hard loading for the next ready day.",
+  done: "Let today's work absorb before adding another hard effort.",
+};
+
+// TODAY's posture as a day state, apart from the week's lever. The line is the Brief's
+// own sentence (same voice, key and date), so one signal reads as one observation; a
+// fuel-protect directive rides on the move so a finished day still says "eat to recover".
+function dayState(input: CoachingFocusInput): FocusDayState | null {
+  const state = input.signalState;
+  const action = state?.action;
+  const posture = action?.posture;
+  if (posture !== "rest" && posture !== "easy" && posture !== "done") return null;
+  const line = clip(
+    spokenSignalVoice(action?.voice, String(state?.date ?? ""), SIGNAL_VOICE_KEYS.protect, posture),
+    220
+  );
+  const fuel =
+    action?.directives?.fueling === "protect"
+      ? " Eat to recover: hold or raise fuel around the work rather than deepening the deficit today."
+      : "";
+  return { posture, title: DAY_STATE_TITLES[posture], line, move: `${DAY_STATE_MOVES[posture]}${fuel}` };
 }
 
 function activeInjuryWorkaround(input: CoachingFocusInput): string | null {
@@ -1677,14 +1980,19 @@ function applySignalStateConstraints(candidates: Candidate[], input: CoachingFoc
   if (!action) return candidates;
   const trainingFamily = (candidate: Candidate) =>
     candidate.item.domain === "training" || candidate.item.domain === "running";
-  const protectsDay = action.posture === "rest" || action.posture === "easy" || action.posture === "done";
+  // A COMPLETED day protects nothing further: the work is in, and the week's lever is
+  // what the card is for (the day itself rides on `day_state`).
+  const protectsDay = action.posture === "rest" || action.posture === "easy";
 
-  // A canonical recovery/complete posture owns the day. Training ideas remain in
-  // Later for block continuity, but cannot appear as an actionable lead/parallel
-  // beside a rest/easy Brief.
+  // A canonical recovery posture owns the day. Training ideas remain in Later for
+  // block continuity, but cannot appear as an actionable lead/parallel beside a
+  // rest/easy Brief.
   if (protectsDay) {
     for (const candidate of candidates) {
-      if (trainingFamily(candidate)) candidate.slot = "later";
+      if (trainingFamily(candidate)) {
+        candidate.slot = "later";
+        candidate.defer = "Waits for the next ready day — today belongs to recovery.";
+      }
     }
   }
 
@@ -1812,12 +2120,16 @@ export function coachingFocus(input: CoachingFocusInput = {}): CoachingFocus {
     .slice(0, 2);
 
   const used = new Set<string>([leadKey, ...parallel.map((c) => c.key)].filter(Boolean) as string[]);
-  // LATER: the explicit deferral — what we are NOT doing yet, in priority order.
-  const later = candidates
+  // LATER: the explicit deferral — what we are NOT doing yet, in priority order, each
+  // with why it waits.
+  const deferred = candidates
     .filter((c) => !used.has(c.key))
     .sort(byScore)
-    .slice(0, 3)
-    .map((c) => ({ domain: c.item.domain, title: c.item.title }));
+    .slice(0, 3);
+  const later = deferred.map((c) => {
+    const why = clip(c.defer || c.item.why || "", 140);
+    return why ? { domain: c.item.domain, title: c.item.title, why } : { domain: c.item.domain, title: c.item.title };
+  });
 
   const leadItem = cleanFocusItem(lead?.item ?? null);
   const parallelItems = parallel.map((c) => cleanFocusItem(c.item)).filter((item): item is FocusItem => item != null);
@@ -1825,25 +2137,24 @@ export function coachingFocus(input: CoachingFocusInput = {}): CoachingFocus {
   const retest = buildRetest(input);
   const horizon_weeks = num(input.trajectory?.horizon_weeks) ?? num(input.enduranceGoal?.weeks_to_race) ?? null;
 
-  // HEADLINE: where you are (reuse performance's honest one-liner) + the through-line.
-  const where = clip(input.performance?.hero?.headline || "", 110);
-  let headline: string;
-  if (!leadItem) {
-    headline = where || "Log a few sessions and Cairn will set your focus for the block.";
-  } else {
-    const tail = parallelItems.length
-      ? ` — with ${parallelItems
-          .map((p) => lc(p.domain))
-          .filter((d, i, a) => a.indexOf(d) === i)
-          .join(" + ")} handled alongside`
-      : "";
-    // Colon form, title case preserved: lead titles are often imperative phrases
-    // ("Take an earned recovery week"), and "This block, take an earned recovery
-    // week leads" reads broken. "This block: <title> — with X handled alongside."
-    // reads right for imperative and noun titles alike.
-    const stem = `This block: ${leadItem.title}${tail}.`;
-    headline = where ? `${where}. ${stem}` : stem;
-  }
+  // The week read around the choice: the block, today's state, the evidence and what moved.
+  const block = blockRead(input);
+  const race = raceRead(input);
+  const day_state = dayState(input);
+  const changed_since = focusChanges(input, race);
+  const domainOrder = [lead, ...parallel].filter((c): c is Candidate => c != null).map((c) => c.item.domain);
+  const evidence = leadItem
+    ? focusEvidence(input, domainOrder, { leverIsLead: lead?.key === "training-lever", race })
+    : [];
+
+  const headline = composeHeadline({
+    lead,
+    parallel,
+    deferred,
+    block: block?.read ?? null,
+    race,
+    change: changed_since[0] ?? null,
+  });
 
   return {
     available: leadItem != null,
@@ -1863,9 +2174,53 @@ export function coachingFocus(input: CoachingFocusInput = {}): CoachingFocus {
     // last one IS the injury work-around by construction, so it labels itself rather
     // than reporting no cause at all.
     caveat_cause: caveat
-      ? (lead?.caveat ? lead.caveat_cause : conflictedLever?.caveat_cause) ??
-        CAVEAT_CAUSE_LABEL.health_constraints
+      ? ((lead?.caveat ? lead.caveat_cause : conflictedLever?.caveat_cause) ?? CAVEAT_CAUSE_LABEL.health_constraints)
       : null,
-    block_line: blockPlacementLine(input.programBlock),
+    block_line: block?.line ?? null,
+    block: block?.read ?? null,
+    day_state,
+    evidence,
+    changed_since,
   };
+}
+
+// ---- the headline: the week's through-line, never a standing slogan ------------
+// "<where in the block / days to the race>: <lead> leads, with <a> and <b> alongside.
+// <the most newsworthy change>". It names the levers by noun (the lead block below it
+// carries the title), so the card never says the same sentence twice. The strength
+// standing ("an intermediate lifter overall") is NOT a headline: it is a supporting
+// fact on the lead when — and only when — strength is the lever.
+function composeHeadline(args: {
+  lead: Candidate | null;
+  parallel: Candidate[];
+  deferred: Candidate[];
+  block: FocusBlockRead | null;
+  race: RaceRead | null;
+  change: FocusChange | null;
+}): string {
+  const { lead, parallel, deferred, block, race, change } = args;
+  if (!lead) return "Log a few sessions and Cairn will set your focus for the block.";
+  const anchorParts: string[] = [];
+  if (block?.week != null && block.of != null) anchorParts.push(`Week ${block.week} of ${block.of}`);
+  if (race?.daysTo != null && race.daysTo >= 0 && race.daysTo <= 112) {
+    anchorParts.push(
+      race.daysTo === 0
+        ? `race day for ${raceName(race)}`
+        : `${race.daysTo} day${race.daysTo === 1 ? "" : "s"} to ${raceName(race)}`
+    );
+  }
+  const anchor = anchorParts.join(", ");
+  const nounOf = (c: Candidate) => c.noun || lc(c.item.title);
+  let through: string;
+  if (lead.item.day_posture) {
+    const waiting = deferred.find((c) => c.item.domain === "training" || c.item.domain === "running");
+    through = `today belongs to recovery${waiting ? `; ${nounOf(waiting)} picks back up on the next ready day` : ""}`;
+  } else {
+    const along = parallel.map(nounOf).filter((n, i, a) => n && a.indexOf(n) === i);
+    through = `${nounOf(lead)} leads this week${along.length ? `, with ${joinAnd(along)} alongside` : ""}`;
+  }
+  const raw = anchor ? `${anchor}: ${through}.` : `${through}.`;
+  const sentence = `${raw.charAt(0).toUpperCase()}${raw.slice(1)}`;
+  const withChange = change ? `${sentence} ${change.text}` : sentence;
+  return withChange.length <= 240 ? withChange : sentence;
 }

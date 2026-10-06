@@ -552,6 +552,48 @@ export function reconcileChatRunReply(
   return appendReceipt(reply, receipt);
 }
 
+// Prose asserting the drive / push changed ("I've set you to push", "push is on").
+function replyClaimsDriveSet(reply: string): boolean {
+  return /\b(?:i(?:['’]ve| have)?\s+(?:now\s+)?(?:set|switched|turned|put|opened)\b[\s\S]{0,40}\b(?:push|steady|drive|throttle)|(?:push|your drive)\s+is\s+(?:now\s+)?(?:on|set|live|active))\b/i.test(
+    reply
+  );
+}
+
+const DRIVE_NOT_SET_VARIANTS = [
+  (reason: string) => `Your training drive did not change: ${reason}.`,
+  (reason: string) => `For the record, the drive is unchanged — ${reason}.`,
+] as const;
+
+/**
+ * The truthful receipt for a training-drive statement: what was recorded (and until when),
+ * what today still gives way to when something holds — the athlete's word stands and the
+ * floors are said, never silently obeyed or overridden — or that nothing changed.
+ */
+export function reconcileTrainingDriveReply(
+  reply: string,
+  applied: Array<{ type: ChatActionType; result?: unknown; error?: string }>
+): string {
+  const entries = applied.filter((entry) => entry.type === "set_training_drive");
+  if (!entries.length) return reply;
+  const today = localDateISO();
+  const last = entries[entries.length - 1];
+  if (last.error || recordOrNull(last.result)?.ok !== true) {
+    const reason = String(last.error ?? recordOrNull(last.result)?.error ?? "it was not stored").replace(/\.$/, "");
+    const line = pickDayVariant(DRIVE_NOT_SET_VARIANTS, today, "chat-drive-not-set")(reason);
+    return replyClaimsDriveSet(reply) ? line : appendReceipt(reply, line);
+  }
+  const result = recordOrNull(last.result) ?? {};
+  const read = recordOrNull(result.read) as any;
+  const parts: string[] = [];
+  if (read?.drive === "push" && read?.stance?.line) parts.push(String(read.stance.line));
+  else if (read?.drive === "steady") parts.push("Your drive is back to steady.");
+  const notes: unknown[] = Array.isArray(result.notes) ? result.notes : [];
+  for (const note of notes) parts.push(String(note));
+  if (read?.today?.line) parts.push(String(read.today.line));
+  if (read?.drive === "push") parts.push("It's in Changes with a one-tap Undo.");
+  return parts.length ? appendReceipt(reply, parts.join(" ")) : reply;
+}
+
 export function reconcileStrengthObjectiveReply(
   reply: string,
   message: string | null | undefined,

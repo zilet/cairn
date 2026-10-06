@@ -128,28 +128,21 @@ function progDayHtml(
     const tile = artImg("exercise", exercise, "artile-md strip-tile", art("exercise", exercise, item.muscle_group));
     return tile ? `<div data-guide="${encodeURIComponent(exercise)}" style="cursor:pointer">${tile}</div>` : "";
   }).join("");
+  // One movement row, shared with the day view (day-detail-client.ts, the "day" bundle
+  // train depends on), so a lift reads the same in the plan and on its day.
   const rows = items.map((item) => {
     const exercise = String(item.exercise || "");
-    const tile = artImg("exercise", exercise, "artile-sm", art("exercise", exercise, item.muscle_group));
     const timed = item.mode === "timed" || item.target_seconds != null;
     const range = timed
       ? (item.target_seconds != null ? fmtDur(item.target_seconds) : "time")
       : (item.rep_low === item.rep_high ? `${item.rep_low ?? ""}` : `${item.rep_low ?? "?"}–${item.rep_high ?? "?"}`);
-    const hints = [
-      item.warmup_sets ? `${item.warmup_sets} warmup` : null,
-      item.note ? escHtml(item.note) : null,
-    ].filter(Boolean).join(" · ");
-    return `<div class="prog-row">
-          ${tile}
-          <div class="prog-row-main">
-            <button class="prog-row-name" data-guide="${encodeURIComponent(exercise)}">${escHtml(exercise)}</button>
-            ${hints ? `<div class="prog-row-hint">${hints}</div>` : ""}
-          </div>
-          <div class="prog-row-nums">
-            <span class="numeral">${item.sets ?? "?"} × ${range}</span>
-            ${item.target_weight != null && (!timed || Number(item.target_weight) !== 0) ? `<span class="numeral prog-row-wt">${escHtml(fmtWeightLb(item.target_weight))}</span>` : ""}
-          </div>
-        </div>`;
+    return CairnDayDetailView.exerciseRowHtml({
+      name: exercise,
+      muscleGroup: item.muscle_group == null ? null : String(item.muscle_group),
+      prescription: `${item.sets ?? "?"} × ${range}`,
+      load: item.target_weight != null && (!timed || Number(item.target_weight) !== 0) ? fmtWeightLb(item.target_weight) : "",
+      hints: [item.warmup_sets ? `${item.warmup_sets} warmup` : null, item.note ? String(item.note) : null],
+    });
   }).join("");
   return `<div class="prog-day reveal" style="${stagger(dayIndex)}" data-pd="${dayIndex}">
         <div class="prog-head">

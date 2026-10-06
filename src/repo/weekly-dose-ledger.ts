@@ -385,6 +385,10 @@ export interface WeeklyDoseDecisionContext {
   candidates: readonly DailyDecisionCandidate[];
   recoveryWeek: boolean;
   mesocyclePhase: string | null;
+  // The athlete's dated push stance is OPEN today (harm-free, no deciding brake, under its
+  // own stacked-days ceiling — daily-decision.ts `stanceOpen`). It raises only how many
+  // fills the day may carry (WEEKLY_DOSE_STANCE_MAX_FILLS); every guard above still holds.
+  stanceOpen?: boolean;
   // The whole snapshot, for anything else the rule needs. Never mutate it.
   snapshot: DailyDecisionSnapshot;
 }
@@ -399,6 +403,9 @@ export interface WeeklyDoseDecision {
 
 // At most one extra set per item (the fill shape) and two per day.
 export const WEEKLY_DOSE_MAX_FILLS_PER_DAY = 2;
+// Under an open push stance ("I can push harder than this"): one more fill toward a short
+// week — still one set per item, load unchanged, never an untested slot or the anchor.
+export const WEEKLY_DOSE_STANCE_MAX_FILLS = 3;
 
 // The rationale line when the day carries a fill. Calm, no numbers, no gate; a
 // variant set because a steady week can fill on the same weekday for weeks running.
@@ -472,8 +479,9 @@ export function weeklyDoseDecision(
 
   const fills: DailyDecisionDose["fills"] = [];
   const seen = new Set<string>();
+  const maxFills = ctx.stanceOpen === true ? WEEKLY_DOSE_STANCE_MAX_FILLS : WEEKLY_DOSE_MAX_FILLS_PER_DAY;
   for (const item of snapshot.eligible) {
-    if (fills.length >= WEEKLY_DOSE_MAX_FILLS_PER_DAY) break;
+    if (fills.length >= maxFills) break;
     const group = norm(item.group);
     const key = String(item.exercise).toLowerCase();
     if (seen.has(key) || blocked.has(group)) continue;

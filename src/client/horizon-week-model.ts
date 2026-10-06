@@ -100,6 +100,10 @@
         });
       }
       const weekday = text(day.weekday) || (date ? CairnRaceViewModel.longDate(date).split(",")[0] : "");
+      // Today's selection can adapt to another plan day than the weekday map's: the row
+      // says, quietly, which day it stands in for ("In place of Lower B").
+      const shown = line ? text(line.title) : lift;
+      const from = isToday ? text(plan?.swapped_from?.name) : "";
       // A week in plan order (no lifting weekdays stated) has no dates: its rows count
       // "DAY 1, 2, 3" rather than standing unlabelled.
       return {
@@ -109,6 +113,9 @@
         today: isToday,
         pills,
         line,
+        rest: !pills.length && !line,
+        done: pills.length > 0 && pills.every((p) => p.state === "done") && !line,
+        swappedFrom: from && from !== shown ? from : "",
       };
     });
     const line = CairnRaceViewModel.runWords(text(read.progress?.line) || text(read.summary), units);

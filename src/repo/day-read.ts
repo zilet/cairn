@@ -51,9 +51,11 @@ import {
   sensorIsCurrent,
 } from "./sensor-freshness.js";
 import { getRecentSessions } from "./sessions.js";
-import { getSettings } from "./settings.js";
+import { PUSH_STANCE_CONSEC_CEILING, type PushStance, trainingDriveState } from "./training-drive.js";
+import { pushStanceHarmFree } from "./push-stance-open.js";
 import { getPlan } from "./plan.js";
 import { planItemsOutOfOrder } from "../domain/training/plan-item-order.js";
+import { planDayPurposeLine, type PlanPurposePhase } from "./plan-day-purpose.js";
 import { getActiveBlock } from "./program-blocks.js";
 import { resolvedBlockPhase } from "./block-phase.js";
 import { activeRecoveryWeekLedger, RECOVERY_WEEK_ACTIVE_DAYS } from "./recovery-week-ledger.js";
@@ -168,6 +170,10 @@ import {
   STACKED_DAYS_CAVEAT,
   STACKED_LOAD_CEILING_WHY,
   STACKED_LOAD_WHY,
+  STACKED_ON_RHYTHM_CAVEAT,
+  RUN_IN_LIFT_OPEN_CAVEAT,
+  LIFT_OPEN_AFTER_ACTIVITY_EASY_WHY,
+  activityNoun,
   STATED_RUN_DAY_WHY,
   TEMPLATE_REST_DAY_WHY,
   TRAIN_CAVEAT_LEAD,
@@ -800,6 +806,9 @@ export function dayReadInputFingerprint(
     ...(signals.training_drive && signals.training_drive !== "steady"
       ? { training_drive: signals.training_drive }
       : {}),
+    // Same omit-when-idle rule for the dated stance: it moves the stacked-days ceiling,
+    // so setting, ending or outliving one throws the warm read away.
+    ...(signals.push_stance ? { push_stance: signals.push_stance } : {}),
     context: signals.context ?? null,
     // The unified signal state's DECISION, not its narration: `reason`/`reasons`/
     // `confidence` restate the same posture in different words as evidence lines
@@ -1033,9 +1042,22 @@ export function dayPlanningSignalState(date: string, provided: DayPlanningSignal
       directives: provided.directives ?? signalInput(() => brainSignal("active_directives", listActiveDirectives), []),
       context: provided.context ?? signalInput(() => activeContextEffect(date), null),
       contextEvents: provided.contextEvents ?? signalInput(() => planningContextEvents(date), []),
-      completedToday: provided.completedToday ?? false,
+      // "Today's planned work is already complete" is false on a lifting weekday whose
+      // lift is still open — a run is not the lifting (the same law as the day read's
+      // `liftDayStillOpen` and the done rule). Asked HERE, once, so the Brief's state and
+      // getCoachContext's (whichever builds the memoized state first) agree about it.
+      completedToday: (provided.completedToday ?? false) && !signalInput(() => liftStillOpenOn(date), false),
     });
   });
+}
+
+// A lifting weekday (stated, or observed off the log) with no set logged on it yet.
+function liftStillOpenOn(date: string): boolean {
+  if (!liftDows(date).includes(new Date(`${date}T00:00:00Z`).getUTCDay())) return false;
+  const row = db
+    .prepare(`SELECT 1 AS hit FROM logged_sets l JOIN sessions s ON s.id = l.session_id WHERE s.date = ? LIMIT 1`)
+    .get(date) as { hit?: number } | undefined;
+  return !row?.hit;
 }
 
 // ---------- which rests the outcome loop may soften ----------
@@ -1145,6 +1167,10 @@ const SOFTENABLE_EASY_CODES: ReadonlySet<string> = new Set([
 //      it cannot answer (3). Five is the bound on the preference, not on the
 //      easy ladder.
 const PUSH_DRIVE_CONSEC_CEILING = 5;
+// The brakes that describe the stated week's own endurance dose rather than the body's
+// answer to it. On a stack the athlete's own week carries (stated-rhythm.ts) they do not
+// corroborate the stacked-days rest; harm evidence, readiness, sleep and taps still do.
+const RHYTHM_OWN_DOSE_FIELDS: ReadonlySet<string> = new Set(["hybrid_interference"]);
 // Readiness that positively CORROBORATES the day, as opposed to merely failing to
 // object. `lowReadiness` (the rest trigger) sits at <35; this is a long way clear of
 // it, because the wearable path is the one that can earn the read without a single
@@ -1407,13 +1433,25 @@ function computeDayRead(
   // (see the drive rule below), never produce one on its own. Fail-soft to the floor's
   // own rhythm — dayRead never throws, and a settings read that fails must not be able
   // to hand out a training day.
-  const trainingDrive = (() => {
+  //
+  // A DATED push stance (training-drive.ts) is the same preference with an end date and
+  // a little more room: while it covers the day and the last three days are harm-free,
+  // the stacked-days count ceiling is PUSH_STANCE_CONSEC_CEILING rather than five —
+  // for the ceiling-easy read and for both rules that answer the rhythm rest. A
+  // corroborated stack still rests exactly as before; the stance moves a count, never
+  // a signal.
+  const driveState = (() => {
     try {
-      return getSettings().training_drive;
+      return trainingDriveState(d);
     } catch {
-      return "steady" as const;
+      return null;
     }
   })();
+  const trainingDrive: "steady" | "push" = driveState?.drive === "push" ? "push" : "steady";
+  const pushStance: PushStance | null = trainingDrive === "push" ? (driveState?.stance ?? null) : null;
+  // One source (push-stance-open.ts): the daily decision and progression ask the same.
+  const stanceHarmFree = pushStance != null && pushStanceHarmFree(d);
+  const consecCeiling = pushStance && stanceHarmFree ? PUSH_STANCE_CONSEC_CEILING : PUSH_DRIVE_CONSEC_CEILING;
 
   // Discipline shapes what "a training day" means for the consecutive-days +
   // earned-rest rules. For a strength athlete a logged lifting session counts;
@@ -1727,6 +1765,9 @@ function computeDayRead(
     // so flipping the control regenerates the Brief instead of leaving yesterday's
     // rest warm on a morning it can no longer produce.
     training_drive: trainingDrive,
+    // The dated stance, when one covers the day: its end date and whether the last three
+    // days were clean enough for it to move the ceiling. Hashed (see the fingerprint).
+    ...(pushStance ? { push_stance: { until: pushStance.until, harm_free: stanceHarmFree } } : {}),
     // The last few days' actual load grade (hard/moderate/easy/none), so the read
     // reflects intensity, not just "did something get logged".
     recent_load: recentLoads,
@@ -2110,14 +2151,21 @@ function computeDayRead(
   // same read the daily decision licenses from), the ceiling is the plan, not an
   // overload signal: it falls back to the stacked-days caveat like any shorter run of
   // days. A genuine corroborating signal still rests the day exactly as before.
-  const atCountCeiling = stackedLoadingRest && consec >= PUSH_DRIVE_CONSEC_CEILING;
-  const rhythmCarriesCeiling =
-    atCountCeiling &&
+  //
+  // Asked for ANY stacked run, not only at the ceiling (2026-10-06): the same answer
+  // also picks which caveat names the run of days — on the athlete's own week it is
+  // their plan being described, not a pile-up being warned about. "The week" includes
+  // the recurring cross-training day (stated-rhythm.ts), so a Saturday ride between a
+  // Mon–Fri lifting week and a Sunday long run no longer breaks it.
+  const atCountCeiling = stackedLoadingRest && consec >= consecCeiling;
+  const rhythmCarriesStack =
+    stackedLoadingRest &&
     (() => {
       const rhythm = signalInput(() => statedRhythmRead(d, consec), undefined);
       return rhythm?.streak_on_rhythm === true && rhythm.recent_harm_free === true;
     })();
-  const atHardCeiling = atCountCeiling && !rhythmCarriesCeiling;
+  if (rhythmCarriesStack) (signals as any).stacked_on_rhythm = true;
+  const atHardCeiling = atCountCeiling && !rhythmCarriesStack;
   const recoveryCapacity = signalState.dimensions.recovery_capacity;
   // The brake is a CURRENT caution, not a watch status beside some fresh support: a
   // wearable caution kept only as context (a reading older than last night) never counts.
@@ -2143,8 +2191,16 @@ function computeDayRead(
     yesterdayRecoveryOverdose ||
     // A rest is a DECISION, so only a brake that may decide corroborates one — fueling
     // advice after a long run (an advisory brake) does not. An uncorroborated check-in
-    // tap is not one either (see feltRestCorroborated above).
-    hasFreshDecidingBrake(signalState.dimensions, { exceptFelt: !feltRestCorroborated }) ||
+    // tap is not one either (see feltRestCorroborated above). And on the athlete's own
+    // week, the hybrid-interference caution is the stated week's endurance DOSE — the
+    // very long run and ride already counted in the run of days — so it is not news
+    // about the body either: counting it twice would make the calendar a brake again
+    // (2026-10-06). It still holds the overlapping strength conservative on the train
+    // read; it just does not rest the whole day.
+    hasFreshDecidingBrake(signalState.dimensions, {
+      exceptFelt: !feltRestCorroborated,
+      ...(rhythmCarriesStack ? { exceptFields: RHYTHM_OWN_DOSE_FIELDS } : {}),
+    }) ||
     recoveryCapacityFreshBrake ||
     clinicallyDriven(signalState, healthWorkaround) ||
     tomorrowClinical;
@@ -2323,7 +2379,7 @@ function computeDayRead(
         // blocks a thing.
         if (templateRestDay()) return null;
         if (yesterdayRecoveryOverdose || lowSubjective || lowReadiness) return null;
-        if (consec >= PUSH_DRIVE_CONSEC_CEILING) return null;
+        if (consec >= consecCeiling) return null;
         if (clinicallyDriven(signalState, healthWorkaround)) return null;
         const backed = signalState.action.support?.level === "backed";
         const solidReadiness =
@@ -2524,7 +2580,7 @@ function computeDayRead(
         if (templateRestDay()) return null;
         if (!stackedLoadingRest) return null;
         if (yesterdayRecoveryOverdose || lowSubjective || lowReadiness) return null;
-        if (consec >= PUSH_DRIVE_CONSEC_CEILING) return null;
+        if (consec >= consecCeiling) return null;
         if (clinicallyDriven(signalState, healthWorkaround)) return null;
         if (hasFreshBrake(signalState.dimensions)) return null;
         // A due plan day gives the read a focus and a compressed clock; with nothing
@@ -2842,6 +2898,14 @@ function computeDayRead(
         // two already clear. It is enumerated anyway: a veto that depends on a
         // coincidence of two other layers is a veto nobody can find later.
         const pushVetoes: string[] = [];
+        // Today's run (or ride) is already in and the lift is still open: the read says
+        // so FIRST, so the Brief tells the same story as the strength line under it
+        // ("Run in · Push still open") instead of describing a blank day. Bookkeeping —
+        // a fact about today's log, never a veto.
+        if (liftDayStillOpen && bigActivity)
+          caveats.push(
+            pickDayVariant(RUN_IN_LIFT_OPEN_CAVEAT, d, "planned_training:run_in")(activityNoun(bigActivity.type))
+          );
         if (recoveryWeek) {
           caveats.push(pickDayVariant(RECOVERY_WEEK_CAVEAT, d, "planned_training:recovery_week"));
           pushVetoes.push("recovery_week");
@@ -2886,7 +2950,11 @@ function computeDayRead(
           caveats.push(pickDayVariant(ANTICIPATE_DELOAD_CAVEAT, d, "planned_training:anticipate_deload"));
         if (volumeSpike) caveats.push(pickDayVariant(VOLUME_SPIKE_CAVEAT, d, "planned_training:volume_spike"));
         if (stackedLoadingRest && !stackedLoadCorroborated && !atHardCeiling)
-          caveats.push(pickDayVariant(STACKED_DAYS_CAVEAT, d, "planned_training:stacked_days"));
+          caveats.push(
+            rhythmCarriesStack
+              ? pickDayVariant(STACKED_ON_RHYTHM_CAVEAT, d, "planned_training:stacked_on_rhythm")
+              : pickDayVariant(STACKED_DAYS_CAVEAT, d, "planned_training:stacked_days")
+          );
         // A CHRONICALLY short sleeper is a caveat on the session, not a reason to
         // withhold it. This used to be its own rule ABOVE this one, so anyone whose
         // rolling average sat under six hours was never offered a due plan day at all
@@ -3097,9 +3165,13 @@ function computeDayRead(
 
   const resolved = resolveDayReadRule(rules);
   const ruleOutcome = resolved?.outcome ?? UNPROGRAMMED_EASY_DAY;
+  // The one caveat an uncorroborated stack rides as — advisory, never a change of day
+  // kind; on the athlete's own week it names the week.
   const unprogrammedCaveat =
     stackedLoadingRest && !stackedLoadCorroborated && !atHardCeiling
-      ? pickDayVariant(STACKED_DAYS_CAVEAT, d, "planned_training:stacked_days")
+      ? rhythmCarriesStack
+        ? pickDayVariant(STACKED_ON_RHYTHM_CAVEAT, d, "planned_training:stacked_on_rhythm")
+        : pickDayVariant(STACKED_DAYS_CAVEAT, d, "planned_training:stacked_days")
       : null;
   const unprogrammedWhy = pickDayVariant(UNPROGRAMMED_WHY, d, "unprogrammed_easy_day");
   const ruleRead = resolved?.read ?? {
@@ -3316,12 +3388,31 @@ function computeDayRead(
           ? ("active_injury" as const)
           : ("health_constraint" as const),
   };
+  // ---- an easy read on a day the run is in and the lift is still open (2026-10-06) ----
+  // The strength line already says "Run in · Push still open"; an easy read that spoke
+  // only of rest and walks sat on top of it as a second, contradicting story. So the
+  // easy read names both halves — the run is done, the lift is what is left, held light
+  // — and the generic recovery menu steps aside for it (day-read-use-case.ts). A REST
+  // read is left alone: it has its own reason, and the line already says the lift is
+  // still theirs.
+  const liftOpenEasy =
+    liftDayStillOpen && !!bigActivity && resolvedRead.kind === "easy" && suggestedPlanDay() != null;
+  const liftOpenRead = liftOpenEasy
+    ? {
+        ...resolvedRead,
+        why: `${endStopped(resolvedRead.why)} ${pickDayVariant(
+          LIFT_OPEN_AFTER_ACTIVITY_EASY_WHY,
+          d,
+          "lift_open_after_activity"
+        )(activityNoun(bigActivity!.type))}`,
+      }
+    : resolvedRead;
   const workaroundAlreadySpoken =
-    !!healthWorkaround && signalVoice(workaroundVoice).some((variant) => resolvedRead.why.includes(variant));
+    !!healthWorkaround && signalVoice(workaroundVoice).some((variant) => liftOpenRead.why.includes(variant));
   const base =
-    healthWorkaround && QUIET_KINDS.has(resolvedRead.kind) && !workaroundAlreadySpoken
+    healthWorkaround && QUIET_KINDS.has(liftOpenRead.kind) && !workaroundAlreadySpoken
       ? {
-          ...resolvedRead,
+          ...liftOpenRead,
           // Named in the athlete's own register and rotated by day like everything
           // else. It used to splice the evidence `summary` behind a fixed lead-in —
           // one sentence printed verbatim for as long as the injury lasted, carrying
@@ -3329,9 +3420,9 @@ function computeDayRead(
           // ("…around the active injury: Achilles tendinopathy: an active injury is
           // worth easing or working around."). endStopped stays: everything the
           // continuity voice adds lands AFTER this, so the sentence must close.
-          why: `${resolvedRead.why} ${endStopped(spokenSignalVoice(workaroundVoice, d, SIGNAL_VOICE_KEYS.injury))}`,
+          why: `${liftOpenRead.why} ${endStopped(spokenSignalVoice(workaroundVoice, d, SIGNAL_VOICE_KEYS.injury))}`,
         }
-      : resolvedRead;
+      : liftOpenRead;
   // Honest about the evidence itself, not just the posture: when visibly less of
   // the board is currently backing today's read than usual (a wearable gap, an
   // unlogged stretch), say so instead of letting the read project a confidence the
@@ -3614,52 +3705,39 @@ export function weekAheadPlan(date = localDateISO()): { days: WeekAheadDay[]; su
   };
 }
 
-// The SAME grounded purpose line (weekAheadDayNote), for a single plan day —
-// so today's session surface can carry the same "why this session" sentence
-// the week-ahead card does, not a second drifted implementation. Never throws;
-// null on any failure or when the program state can't ground a purpose.
-export function planDayPurpose(planDayId: number, date = localDateISO()): string | null {
-  // Request-memoized: GET /plan's purpose lines are read twice per Today open (the
-  // aggregate and the week strip). The answer is a string or null; the key names the
-  // plan day id with its type, the day, and the local date the program state reads.
-  if (typeof planDayId === "number")
-    return requestMemo(
-      `plan_day_purpose:${planDayId}:${String(date).slice(0, 10)}:${localDateISO()}`,
-      () => planDayPurposeRead(planDayId, date),
-      (value) => value
-    );
-  return planDayPurposeRead(planDayId, date);
-}
-
-function planDayPurposeRead(planDayId: number, date: string): string | null {
-  try {
-    const d = String(date).slice(0, 10);
-    // Plan days hold strength only, so a day with items is a lifting day.
-    const row = db
-      .prepare(`SELECT COUNT(*) AS strength FROM plan_items WHERE plan_day_id = ? AND COALESCE(kind, 'strength') != 'cardio'`)
-      .get(planDayId) as any;
-    if (!(Number(row?.strength) > 0)) return null;
-    const kind: WeekAheadDay["kind"] = "lift";
-    const meso = getProgramState(d)?.mesocycle ?? null;
-    const goal = getEnduranceGoal(d);
-    return weekAheadDayNote(kind, d, meso, goal);
-  } catch {
-    return null;
-  }
-}
-
 // getPlan(), with the SAME purpose line attached per day — the one source both
 // GET /plan and the /today aggregate read, so the sentence never appears from
 // one endpoint and vanishes when the client's background /plan revalidation
 // lands (see today-data-loader.ts, which overwrites the cached "plan" key).
 // `out_of_order` flags a day whose stored item order differs from effect order
 // so the Plan gallery can offer a quiet "Order for effect" without a second fetch.
+//
+// The purpose is the DAY's own (plan-day-purpose.ts): what leads it and what follows,
+// its role in the week, and the block phase the week runs as — keyed on the plan day,
+// so the gallery no longer prints one shared sentence on every card. The week's phase is
+// read once: the block's resolved phase (block-phase.ts), else the mesocycle's.
 export function getPlanWithPurpose(date = localDateISO()): Array<Record<string, unknown>> {
+  const d = String(date).slice(0, 10);
+  const phase = planPurposePhase(d);
   return getPlan().map((day: any) => ({
     ...day,
-    purpose: day?.id != null ? planDayPurpose(Number(day.id), date) : null,
+    purpose: day?.id != null ? planDayPurposeLine(day, d, phase) : null,
     out_of_order: planItemsOutOfOrder(Array.isArray(day?.items) ? day.items : []),
   }));
+}
+
+function planPurposePhase(date: string): PlanPurposePhase | null {
+  try {
+    const block = resolvedBlockPhase(date);
+    if (block) return block;
+  } catch {
+    /* no block read — the mesocycle below */
+  }
+  try {
+    return getProgramState(date)?.mesocycle?.phase ?? null;
+  } catch {
+    return null;
+  }
 }
 
 

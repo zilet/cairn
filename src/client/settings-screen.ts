@@ -80,6 +80,11 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
   // DOM elements, which may not be mounted in the active slice). Switching sub-tabs
   // re-renders a slice FROM the model — no refetch, no lost edits.
   const wm = CairnSettingsSurface.workingModel(data);
+  // The drive this screen LOADED with. persistSettings sends training_drive only when the
+  // athlete moved the control away from it: a screen opened before a chat/Brief push
+  // stance would otherwise re-send a stale "steady"/"push" on any unrelated save, and a
+  // push→steady write ends the athlete's open stance (src/repo/settings.ts).
+  const loadedTrainingDrive = wm.training_drive;
   const meta: Record<string, SettingsScreenAgent> = Object.fromEntries(agents.map((a) => [a.name, a])); // name → declarative fields
   // lazily-fetched per-agent detail (version/model/update + models list), cached so a
   // re-render of the Agents slice doesn't re-hit the network for what we already have.
@@ -157,8 +162,8 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
       chat_profile_bindings: wm.chat_profile_bindings,
       update_check_enabled: wm.update_check_enabled,
       lead_mode: wm.lead_mode,
-      training_drive: wm.training_drive,
     };
+    if (wm.training_drive !== loadedTrainingDrive) body.training_drive = wm.training_drive;
     // password / api-key fields: blank means "leave the configured value intact" — only
     // send a typed value (matches the old per-field placeholder behavior).
     if (wm.gemini_api_key.trim()) body.gemini_api_key = wm.gemini_api_key.trim();

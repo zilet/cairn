@@ -38,10 +38,11 @@ type CairnLazyBundleName = ClientLazyBundleName;
 
   // What else a bundle calls into at render time. Health reuses the body-metrics
   // figure and the DEXA targeting read (train); Horizon paints the journey reads,
-  // the run-plan cards and the plan week strip (train).
+  // the run-plan cards and the plan week strip (train). Train's Program gallery draws
+  // its movement rows with the day view's shared row (day).
   const LAZY_BUNDLE_DEPS: Readonly<Record<CairnLazyBundleName, readonly CairnLazyBundleName[]>> = {
     "me-health": ["train"],
-    "train": [],
+    "train": ["day"],
     "horizon": ["train"],
     "ask": [],
     "settings": [],

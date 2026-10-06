@@ -29,6 +29,12 @@ export type ConferenceConflictKey =
   | "medication_supplement"
   | "allergy_meal"
   | "race_strength"
+  // The athlete's OWN stated push meeting evidence that holds against it (recovery strain,
+  // an open injury/symptom, an act-now finding that governs training). A coaching
+  // trade-off, not a safety floor: the floors still hold on their own terms, and this
+  // makes the conference SAY so — a revision that gives less than they asked must cite
+  // the evidence that holds, in a party's own words, or the change is announced with it.
+  | "stated_push"
   | "clinical_autonomy";
 
 /** WHICH specialist domains may speak to a conflict. A resolution has to be
@@ -41,6 +47,7 @@ const CONFLICT_PARTIES: Readonly<Record<ConferenceConflictKey, readonly Speciali
   medication_supplement: ["health", "nutrition"],
   allergy_meal: ["nutrition", "health"],
   race_strength: ["training", "endurance", "recovery"],
+  stated_push: ["training", "endurance", "recovery", "health"],
   clinical_autonomy: [],
 };
 
@@ -99,6 +106,39 @@ export function safetyConflictGovernsRevision(
   return true;
 }
 
+/**
+ * Whether an unresolved `stated_push` conflict governs THIS revision. The conflict is
+ * the athlete's own ask to be pushed meeting evidence that holds against it, so it is a
+ * question about RAISING training load — the same relevance rule as `injury_load`: it
+ * holds a training/running change that adds load, volume or intensity, and never a
+ * change that only eases what the plan already holds (`easesLoad`, read by the caller
+ * against the plan — giving less than they asked is the answer the evidence calls for,
+ * never a breach of it) nor a change in another domain (a fueling target). Advice with
+ * no revision changes nothing, so it reads as governed (nothing executes either way).
+ */
+export function statedPushGovernsRevision(revision: unknown, options: { easesLoad?: boolean } = {}): boolean {
+  if (record(revision) == null) return true;
+  const scope = revisionScope(revision);
+  if (!scope.domain) return true;
+  return scope.domain === "training" && options.easesLoad !== true;
+}
+
+/**
+ * Whether an unresolved conflict governs THIS revision: a safety conflict by
+ * `safetyConflictGovernsRevision`, the athlete's stated push by
+ * `statedPushGovernsRevision`, and every other coaching trade-off (deficit vs recovery,
+ * race vs strength) holds the whole bundle as before. One routing rule for the caller.
+ */
+export function conflictGovernsRevision(
+  key: ConferenceConflictKey,
+  revision: unknown,
+  options: { easesLoad?: boolean } = {}
+): boolean {
+  if (conflictIsSafetyFloor(key)) return safetyConflictGovernsRevision(key, revision, options);
+  if (key === "stated_push") return statedPushGovernsRevision(revision, options);
+  return true;
+}
+
 /** What one act-now finding governs: a domain the brain changes itself, and the
  * areas inside it the directive's own words name (empty = the whole domain). */
 export interface ClinicalLever {
@@ -125,6 +165,8 @@ export interface ConferenceConflictInputs {
   raceCommitment: Evidence;
   /** Strength/hypertrophy is one of the athlete's declared priorities. */
   strengthEmphasis: Evidence;
+  /** The athlete's own dated push stance is in force (training_drive.stance). */
+  statedPush: Evidence;
   /** A lab/clinical priority the brain is being asked to act on now. */
   clinicalAttention: Evidence;
   /** An act-now finding is being propagated into a domain the brain can change itself. */
@@ -327,6 +369,13 @@ function readRaceCommitment(context: Record<string, unknown>): Evidence {
   return text(goal.phase) !== "past";
 }
 
+function readStatedPush(context: Record<string, unknown>): Evidence {
+  if (!Object.hasOwn(context, "training_drive")) return null;
+  const drive = record(context.training_drive);
+  if (!drive) return false;
+  return text(drive.drive) === "push" && record(drive.stance) != null;
+}
+
 function readStrengthEmphasis(context: Record<string, unknown>): Evidence {
   const intent = record(context.training_intent);
   const priorities = list(intent?.priorities).map((priority) => text(priority));
@@ -410,6 +459,7 @@ export function conferenceConflictInputs(
     recoveryStrain: readRecoveryStrain(root),
     raceCommitment: readRaceCommitment(root),
     strengthEmphasis: readStrengthEmphasis(root),
+    statedPush: readStatedPush(root),
     clinicalAttention: readClinicalAttention(root),
     clinicalLever: readClinicalLever(root),
     clinicalLevers: readClinicalLevers(root),
@@ -440,6 +490,14 @@ export const CONFERENCE_CONFLICT_RULES: ReadonlyArray<{
   { key: "allergy_meal", fires: (i) => i.knownAllergies.length > 0 && i.mealPlanning === true },
   // A dated race build competing with a strength/hypertrophy push.
   { key: "race_strength", fires: (i) => both(i.raceCommitment, i.strengthEmphasis) },
+  // The athlete asked to be pushed, and the evidence holds against it right now.
+  {
+    key: "stated_push",
+    fires: (i) =>
+      both(i.statedPush, i.recoveryStrain) ||
+      both(i.statedPush, i.activeInjury) ||
+      (i.statedPush === true && i.clinicalLevers.some((lever) => lever.domain === "training")),
+  },
   // An act-now finding being propagated into a domain the brain can change itself.
   // Before the revision exists this is a heads-up to the specialists; what the SERVER
   // enforces is clinicalAutonomyFromRevision, once there is a change to judge.

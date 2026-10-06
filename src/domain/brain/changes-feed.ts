@@ -22,6 +22,7 @@ import { pickDayVariant } from "../../repo/brain/day-read-rules.js";
 import {
   addDaysISO,
   clipText,
+  daysBetweenISO,
   joinList,
   localDateISO,
   localDayOfStamp,
@@ -93,10 +94,32 @@ function isTeamChange(decision: BrainDecision): boolean {
   return CHANGE_KINDS.has(String(decision.kind)) && TEAM_TIERS.has(String(decision.autonomy_tier));
 }
 
+// STATED INPUT (2026-10-06): a change that is the athlete's own word — a push stance, a
+// stated quality session — is recorded `observe` (they decided; Cairn recorded), so the
+// team-tier test above never saw it and "You said X → the brain changed Y" had no row.
+// It is a change to what the engines do, so it belongs here, marked as theirs.
+function isStatedChange(decision: BrainDecision): boolean {
+  const context = (decision.context ?? {}) as Record<string, unknown>;
+  return (
+    CHANGE_KINDS.has(String(decision.kind)) &&
+    (context.stated_by_athlete === true || context.training_drive_stance === true)
+  );
+}
+
+function statedWords(decision: BrainDecision): string | null {
+  if (!isStatedChange(decision)) return null;
+  const words = String(((decision.context ?? {}) as Record<string, unknown>).words ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return words ? clipText(words, 160) : null;
+}
+
 // The athlete asked for it in their own words: it is in the feed, but it is not news.
 function athleteAsked(decision: BrainDecision): boolean {
   const context = (decision.context ?? {}) as Record<string, unknown>;
-  return context.explicit_user_request === true || context.athlete_requested_restructure === true;
+  return (
+    context.explicit_user_request === true || context.athlete_requested_restructure === true || isStatedChange(decision)
+  );
 }
 
 // ---------- what the change touched (for the title, the composed why and the Undo label) ----------
@@ -576,7 +599,32 @@ function writtenTitle(decision: BrainDecision, draft: Draft | null): string | nu
   return written && !LABEL_SHAPE.test(written) ? written : null;
 }
 
+// A stated change is titled by WHAT IT CHANGED, in words with no absolute date (the feed's
+// voice): the push and how long it runs, the quality session as named. Null when the row
+// is not a stated one the feed knows how to title.
+function statedTitle(decision: BrainDecision, voice: RowVoice): string | null {
+  if (!isStatedChange(decision)) return null;
+  const context = (decision.context ?? {}) as Record<string, unknown>;
+  const action = (decision.action ?? {}) as Record<string, unknown>;
+  if (context.training_drive_stance === true) {
+    if (action.training_drive !== "push") return "Back to a steady drive";
+    const until = String(action.until ?? "");
+    const span = until ? daysBetweenISO(until, voice.day) : null;
+    if (action.scope === "block") return "Pushing harder through the end of this block";
+    if (span != null && span >= 0) {
+      const days = span + 1;
+      if (days % 7 === 0 && days <= 84) return `Pushing harder for the next ${countWord(days / 7)} week${days === 7 ? "" : "s"}`;
+      return `Pushing harder for the next ${countWord(days)} days`;
+    }
+    return "Pushing harder, as you asked";
+  }
+  const label = String(action.title ?? "").trim();
+  return label || null;
+}
+
 function changeTitle(decision: BrainDecision, what: Touched, draft: Draft | null, voice: RowVoice): string {
+  const stated = statedTitle(decision, voice);
+  if (stated) return stated;
   const written = writtenTitle(decision, draft);
   const undated = written ? withoutAbsoluteDates(written, voice) : null;
   if (undated) return undated;
@@ -678,6 +726,15 @@ function changeWhy(decision: BrainDecision, draft: Draft | null, what: Touched, 
   return composedWhy(decision, what, voice);
 }
 
+// The stated row's why: the athlete's words first, then what the brain changed for them.
+// The quote is never cut inside a word; the change sentence is the decision's own.
+function capStatedWhy(said: string, changed: string | null): string {
+  const quote = `You said “${said.replace(/[“”"]/g, "")}”.`;
+  if (!changed) return quote;
+  const both = `${quote} ${changed}`;
+  return both.length <= WHY_MAX_CHARS + 120 ? both : quote;
+}
+
 // ---------- outcome and confidence ----------
 
 function latestOutcome(decision: BrainDecision): {
@@ -715,6 +772,11 @@ function confidenceWord(expectation: BrainExpectation | null): ClientBrainChange
 
 function restoreLabel(decision: BrainDecision, what: Touched): string {
   if (what.recoveryCycle) return "Return to your regular week";
+  // The athlete's own push / steady statement (src/domain/training/training-drive.ts).
+  if ((decision.context as Record<string, unknown> | null)?.training_drive_stance === true)
+    return "Go back to your previous drive";
+  if ((decision.context as Record<string, unknown> | null)?.stated_kind === "run_week")
+    return "Go back to your previous run week";
   switch (decision.kind) {
     case "training_target":
       return what.exercises.length === 1 ? `Restore previous ${what.exercises[0]} target` : "Restore previous targets";
@@ -909,7 +971,7 @@ function seenMarker(): string | null {
 
 function projectDecision(decision: BrainDecision, read: ReadContext, floor: string, seenFrom: number): Row | null {
   const { asOf } = read;
-  if (!isTeamChange(decision) || decision.id == null) return null;
+  if ((!isTeamChange(decision) && !isStatedChange(decision)) || decision.id == null) return null;
   const state = changeState(decision);
   if (!state) return null;
   const decidedDay = localDayOfStamp(decision.created_at) ?? "";
@@ -937,13 +999,17 @@ function projectDecision(decision: BrainDecision, read: ReadContext, floor: stri
   const { expectation, evaluation } = latestOutcome(decision);
   const key = outcomeKey(state, evaluation);
   const landsOn = state === "announced" ? String(decision.effective_date ?? "").slice(0, 10) || null : null;
+  const said = statedWords(decision);
+  const why = changeWhy(decision, draft, what, voice);
   return {
     id: decision.id,
     day,
     state,
     domain: String(decision.domain),
     title: changeTitle(decision, what, draft, voice),
-    why: changeWhy(decision, draft, what, voice),
+    // "You said X → the brain changed Y": the quote leads the why, the change follows.
+    why: said ? capStatedWhy(said, why) : why,
+    ...(said ? { said } : {}),
     status_line: statusLine(state, day, landsOn, asOf),
     lands_on: landsOn,
     outcome: { key, phrase: BRAIN_CHANGE_OUTCOME_PHRASES[key] },

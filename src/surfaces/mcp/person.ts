@@ -21,6 +21,7 @@ import {
   movementConsiderationsRead,
   setProfile,
 } from "../../domain/person/index.js";
+import { acceptPushOffer, dismissPushOffer, setTrainingDrive, trainingDriveRead } from "../../domain/training/index.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 
 export function registerPersonTools(server: McpToolRegistrar) {
@@ -136,6 +137,19 @@ export function registerPersonTools(server: McpToolRegistrar) {
             .describe(
               "stated recurring NON-RUN days ('Saturday optional, MTB or other' → {dow: 6, sport: 'ride'}); never a run day. Omit to keep what is stored, [] clears. At most three; an unreadable entry is dropped"
             ),
+          quality: z
+            .object({
+              type: z.string().describe("threshold|tempo|vo2|hills"),
+              work_km: z.number().optional().describe("the stated work, km (1-15)"),
+              warm_up_km: z.number().optional().describe("0-5 km; omit for the engine's default"),
+              cool_down_km: z.number().optional().describe("0-5 km; omit for the engine's default"),
+              note: z.string().optional(),
+            })
+            .nullable()
+            .optional()
+            .describe(
+              "the stated quality session ('hard threshold 5k' → {type: 'threshold', work_km: 5}); the engine runs it on the quality day inside the week's ceiling. Omit to keep what is stored, null clears. set_endurance_schedule can change it alone"
+            ),
           note: z.string().optional(),
           source: z.enum(["athlete", "chat"]).optional(),
         })
@@ -220,6 +234,45 @@ export function registerPersonTools(server: McpToolRegistrar) {
       const intent = getTrainingIntent();
       return asText({ intent, endurance_capacity: getEnduranceCapacity(intent) });
     }
+  );
+
+  server.tool(
+    "get_training_drive",
+    "The athlete's training drive: 'steady' or 'push' (the Settings toggle), plus any DATED push stance on top of it (since/until/scope, the athlete's own words, days left, the ledger decision whose revert is its one-tap Undo). Also: what the drive in force currently licenses, what it never overrides, and — on a push day today or later — `today.holding`/`today.line`, the honest plain-words 'why not more' (the brake, the recovering group, or a lift's own hold). On a steady drive, `offer` is the coach's open 'want to open the throttle?' ask when the log has earned it (answer with accept_push_offer / dismiss_push_offer — only on the athlete's word). Read-only; nothing here is a score.",
+    {
+      date: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
+    },
+    async ({ date }) => asText(trainingDriveRead(date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null))
+  );
+
+  server.tool(
+    "set_training_drive",
+    "Record the ATHLETE'S OWN stated push or step-back — only when they said it ('I can push harder than this', 'push me until the block ends', 'back to steady'). drive 'push' starts a DATED push stance: until (YYYY-MM-DD) wins, else scope 'block' runs through the active block's last day, else 4 weeks; at most 12 weeks. While it runs and the last three days are clean it widens the room (up to two challenge top sets on moving lifts, a stack of days stays a caveat up to seven, a top set with a rep in hand earns the step, longevity-first ordering no longer holds the load) — never over a rest-grade morning, harm evidence, a symptom/injury, the clinician floor or an act-now health finding. drive 'steady' ends it. Lands at once, recorded in the decision ledger with expectations and a one-tap Undo (revert_brain_decision). Returns {ok, notes, decision_id, read}; a refusal is {ok:false, error}.",
+    {
+      drive: z.enum(["push", "steady"]),
+      until: z.string().optional().describe("YYYY-MM-DD, the stance's last day (push only)"),
+      scope: z.enum(["block", "date"]).optional().describe("'block' = through the active program block's last day"),
+      words: z.string().max(240).optional().describe("the athlete's own sentence, kept verbatim"),
+    },
+    async ({ drive, until, scope, words }) => asText(setTrainingDrive({ drive, until, scope, words, via: "mcp" }))
+  );
+
+  server.tool(
+    "accept_push_offer",
+    "Answer YES to the coach's open push offer (get_training_drive `offer`: the log says the athlete is carrying the program with room to spare). Only on the athlete's own yes. Calls the same door as set_training_drive: a two-week push stance with its ledger row and one-tap Undo; the offer is closed as answered. Returns {ok, decision_id, read}; {ok:false, error} when no offer is open or decision_id names an answered one.",
+    {
+      decision_id: z.number().int().positive().optional().describe("the offer's decision_id from get_training_drive `offer`"),
+    },
+    async ({ decision_id }) => asText(acceptPushOffer({ decision_id, via: "mcp" }))
+  );
+
+  server.tool(
+    "dismiss_push_offer",
+    "Answer 'not now' to the coach's open push offer. Remembered: the coach does not ask again for four weeks. Changes nothing about training. Returns {ok, decision_id, read}; {ok:false, error} when no offer is open.",
+    {
+      decision_id: z.number().int().positive().optional().describe("the offer's decision_id from get_training_drive `offer`"),
+    },
+    async ({ decision_id }) => asText(dismissPushOffer({ decision_id }))
   );
 
   server.tool(

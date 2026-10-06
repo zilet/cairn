@@ -187,7 +187,7 @@ export function registerConnectedBrainTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_coaching_focus",
-    "THE CONDUCTOR — the single sequenced WHOLE-PICTURE focus, the cross-domain analog of get_health_focus. Arbitrates training, running, DEXA body-comp, labs, nutrition and recovery into ONE lead lever for this block + 1-2 things handled alongside (usually via a different lever) + an explicit 'later' (what's deferred) + the cross-domain connections + ONE batched ~6-8wk retest checkpoint. How an elite coach prioritizes + sequences: act on a few things, name what waits, connect the domains.",
+    "THE CONDUCTOR — the single sequenced WHOLE-PICTURE focus, the cross-domain analog of get_health_focus. Arbitrates training, running, DEXA body-comp, labs, nutrition and recovery into ONE lead lever for this block + 1-2 things handled alongside (usually via a different lever) + an explicit 'later' (what's deferred) + the cross-domain connections + ONE batched ~6-8wk retest checkpoint. How an elite coach prioritizes + sequences: act on a few things, name what waits, connect the domains. The week read around it: headline (the week's through-line anchored in the block and race, never a standing strength slogan), block (week N of M, the phase the week actually runs as, and the deload/peak decision), day_state (today's rest/easy/complete posture, kept apart from the lever — a finished day never leads), evidence (value-and-direction bullets per domain, never a score), changed_since (what moved against a stated date: a new best, the race estimate, the weight average, a fresh lab, last week's running), and later[].why (why each item waits).",
     {},
     async () => asText(getCoachingFocus())
   );

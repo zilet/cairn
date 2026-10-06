@@ -76,6 +76,7 @@ function loadCoachingFocus(options = {}) {
   vm.runInNewContext(readFileSync(join(root, "public/js/ui-feedback-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/coaching-focus-render-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/coaching-focus-client.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/train-focus-card-client.js"), "utf8"), context);
   return { focus: context.CairnCoachingFocus, handlers, state, activated };
 }
 
@@ -156,7 +157,7 @@ test("one renderer, four variants: each surface keeps its own chrome and density
 
   // overview — the Progress well: flat lead, one-line retest, its own link family.
   const overview = focus.coachingFocusHtml(richFocus, { variant: "overview", style: "--i:3" });
-  assert.match(overview, /class="well-accent tov-focus reveal" style="--i:3"/);
+  assert.match(overview, /class="well-accent tov-focus reveal tfc" style="--i:3"/);
   assert.match(overview, /tov-focus-title">Break &lt;plateau&gt;/);
   assert.match(overview, /tov-focus-move">Rotate incline &lt;press&gt;/);
   assert.match(overview, /Re-test Bench &lt;top set&gt;, 5k in ~2 wk/);
@@ -622,4 +623,60 @@ test("Program's card says 'Where to focus' once: Train owns the headline, Progra
   // Every other surface is untouched.
   assert.match(focus.coachingFocusCardHtml(richFocus), /class="cfocus-headline"/);
   assert.match(focus.coachingFocusHtml(richFocus, { variant: "overview" }), /Where to focus/);
+});
+
+test("Train card: hero + one move, also chips, what moved, block decision, one expander; day_state is a chip, never the lead", () => {
+  const { focus } = loadCoachingFocus();
+  const payload = {
+    ...richFocus,
+    headline: "Week <3> reads steady.",
+    parallel: [
+      { domain: "nutrition", title: "Protein <floor>", why: "w" },
+      { domain: "running", title: "Easy <run>", why: "w" },
+      { domain: "health", title: "Third never shown", why: "w" },
+    ],
+    block_line: "Week 3 of 5 — building volume.",
+    block: { week: 3, of: 5, phase: "build", scheduled_phase: "build", deload: "next_week_if_earned", decision: "Deload <next week> only if earned.", race_taper_from: null },
+    day_state: { posture: "done", title: "Today's <work> is complete", line: 'Nothing more needed "today"', move: "" },
+    evidence: [{ domain: "training", label: "Bench <e1RM>", value: "92 <kg>", direction: "up", note: "vs last <month>", as_of: null }],
+    changed_since: [{ domain: "training", kind: "new_best", text: "New best: Bench <e1RM> 92 kg", since: "since <Mon>" }],
+  };
+  const html = focus.coachingFocusHtml(payload, { variant: "overview" });
+
+  assert.match(html, /tfc-state tfc-state-done" title="Nothing more needed &quot;today&quot;">Today's &lt;work&gt; is complete</);
+  assert.ok(html.indexOf("tfc-state") < html.indexOf("tfc-hero"), "the chip sits above, the lead is the week's lever");
+  assert.match(html, /tov-focus-title">Break &lt;plateau&gt;/);
+  assert.match(html, /tov-focus-move">Rotate incline &lt;press&gt;/);
+  assert.match(html, /Protein &lt;floor&gt;/);
+  assert.match(html, /Easy &lt;run&gt;/);
+  assert.doesNotMatch(html, /Third never shown/, "at most two alongside chips");
+  assert.match(html, /tfc-dir-up" role="img" aria-label="up">↑<\/span><span class="tfc-moved-text">New best: Bench &lt;e1RM&gt; 92 kg/);
+  assert.match(html, /since &lt;Mon&gt;/);
+  assert.match(html, /Week 3 of 5 — building volume\. Deload &lt;next week&gt; only if earned\./);
+  assert.match(html, /aria-expanded="false" aria-controls="tfcPanel"/);
+  assert.match(html, /id="tfcPanel" hidden>/);
+  assert.match(html, /Bench &lt;e1RM&gt;<\/span><span class="tfc-ev-value">92 &lt;kg&gt;/);
+  assert.match(html, /vs last &lt;month&gt;/);
+  assert.match(html, /Full program read ›/);
+  assert.doesNotMatch(html, /<work>|<floor>|<e1RM>|<kg>|<next week>|<3>|<Mon>|<month>/);
+  assert.doesNotMatch(html, /impact_score/);
+});
+
+test("Train card tolerates an older payload (no new fields)", () => {
+  const { focus } = loadCoachingFocus();
+  const html = focus.coachingFocusHtml(
+    { available: true, headline: "", lead: { domain: "health", title: "Retest lipids", why: "Due" }, parallel: [], later: [], connections: [], retest: null, horizon_weeks: null },
+    { variant: "overview" }
+  );
+  assert.match(html, /Retest lipids/);
+  assert.doesNotMatch(html, /tfc-state|tfc-moved|tfc-also|tfc-block|tfc-evidence/);
+  assert.match(html, /tov-focus-why">Due/, "no move: the why is the hero's one line");
+});
+
+test("Today thread stays quiet when the lead only restates the day state", () => {
+  const { focus } = loadCoachingFocus();
+  const dayState = { posture: "done", title: "Today is done", line: "", move: "" };
+  const lead = { domain: "recovery", title: "Today is done", why: "x" };
+  assert.equal(focus.coachingFocusThreadHtml({ ...richFocus, lead, day_state: dayState }), "");
+  assert.notEqual(focus.coachingFocusThreadHtml({ ...richFocus, day_state: dayState }), "");
 });

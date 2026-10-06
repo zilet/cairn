@@ -213,6 +213,74 @@ export function renderNow(ctx: any): string {
   return `\nRIGHT NOW: ${n.weekday}, ${n.time} (${n.part_of_day}). Anchor every time-relative word to this clock — "today", "tonight", "this morning", "yesterday", "last night" must match it. Don't ask about something that hasn't happened yet (at 5 PM dinner is still ahead — ask how the day's going, not how dinner landed), and don't re-ask about a meal or moment already covered earlier in this conversation.\n`;
 }
 
+// The athlete's own push / steady stance (DATA.training_drive, src/repo/training-drive-read.ts).
+// Said once, beside the durable intent, so every prompt that shapes training knows they
+// ASKED for more — and that the server's floors still stand under it. Empty when steady.
+export function renderTrainingDriveLine(ctx: any): string {
+  const drive = ctx?.training_drive;
+  if (!drive || typeof drive !== "object") return "";
+  const never = Array.isArray(drive.never_overrides) ? drive.never_overrides.slice(0, 6).join("; ") : "";
+  const heldBy = Array.isArray(drive.held_by) ? drive.held_by.filter(Boolean).slice(0, 4) : [];
+  // Conflict honesty: their word and the evidence disagree. Say both, in their terms.
+  const held = heldBy.length
+    ? ` RIGHT NOW THE FLOORS HOLD AGAINST IT: ${heldBy.join("; ")}. Their word still stands — say plainly, in their terms, that this is what outranks it today and what would release it; never quietly obey the push over it, never quietly override the push without saying so.`
+    : "";
+  if (drive.drive === "push" && drive.stance) {
+    const words = typeof drive.stance.words === "string" && drive.stance.words ? ` — in their words: "${drive.stance.words}"` : "";
+    const opens = Array.isArray(drive.licenses) ? drive.licenses.join("; ") : "";
+    return `\nTHEIR OWN STANCE — PUSH, through ${drive.stance.until} (stated ${drive.stance.since}${words}). This is the athlete's own word: it outranks anything you merely infer, and only the floors outrank it. They asked for more than the ordinary read gives. The server already widened the room on clean days: ${opens}. Lean toward the heavier honest option the evidence allows — the next load step, the extra top set, the fuller week inside the ACWR and stress-budget ceilings — and when something still holds a day back, NAME it plainly (the brake, the recovering group, the lift's own log) instead of quietly softening. It never overrides: ${never}.${held}`;
+  }
+  if (drive.drive === "push") {
+    return `\nTHEIR STANDING DRIVE: PUSH (no end date). They prefer to be pushed when the evidence is green; it never overrides: ${never}.${held}`;
+  }
+  const offer = drive.offer && typeof drive.offer === "object" ? drive.offer : null;
+  if (offer) {
+    const evidence = Array.isArray(offer.evidence) ? offer.evidence.slice(0, 3).join("; ") : "";
+    return `\nOPEN QUESTION FROM THE COACH (DATA.training_drive.offer, an ASK — nothing has changed): the log says they are carrying the program with room to spare (${evidence}). If it fits the conversation, you may relay it once, calmly: would they like to open the throttle through ${offer.until}? Only THEIR yes sets it (set_training_drive push, until ${offer.until}); never set it on your own read, never press it twice.`;
+  }
+  if (drive.ended_until) {
+    return `\nTHEIR PUSH ENDED ${drive.ended_until}: the drive is back to steady unless they say otherwise — do not keep pushing on its account.`;
+  }
+  return "";
+}
+
+// THE ATHLETE'S OWN WORD, in one block, for the seats that reason about the week without
+// the per-surface render chain (the case conference's specialists and conductor): the
+// stance (with what holds against it) and the stated quality session. What they SAID
+// outranks anything inferred; only the floors outrank it. Empty when nothing was stated.
+export function renderStatedInputLine(ctx: any): string {
+  const parts: string[] = [];
+  const drive = renderTrainingDriveLine(ctx).trim();
+  if (drive) parts.push(drive);
+  const q = ctx?.endurance_schedule?.quality;
+  if (q && typeof q === "object" && q.type) {
+    const bits = [
+      q.work_km != null ? `${q.work_km} km of work` : null,
+      q.warm_up_km != null ? `${q.warm_up_km} km warm-up` : null,
+      q.cool_down_km != null ? `${q.cool_down_km} km cool-down` : null,
+    ].filter(Boolean);
+    const day = Array.isArray(ctx?.endurance_schedule?.days)
+      ? ctx.endurance_schedule.days.find((d: any) => d?.kind === "quality")
+      : null;
+    const dayName = day ? ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][Number(day.dow)] : null;
+    parts.push(
+      `THEIR STATED QUALITY SESSION: ${q.type}${bits.length ? ` (${bits.join(", ")})` : ""}${dayName ? ` on ${dayName}` : ""}. Their choice, not the engine's rotation — keep that session on that day; when the week cannot carry the full work, the engine holds it below and says so, and so should you.`
+    );
+  }
+  if (!parts.length) return "";
+  return ` THE ATHLETE'S OWN WORD (it outranks anything you infer; only the safety and clinical floors outrank it): ${parts.join(" ")}`;
+}
+
+// The fueling side of the same word: a push means harder training days are coming, so the
+// food read should not under-fuel them. Adherence-neutral and never a surplus by itself —
+// the cut's own floors and pace stay authoritative. Empty when steady.
+export function renderTrainingDriveFuelLine(ctx: any): string {
+  const drive = ctx?.training_drive;
+  if (!drive || drive.drive !== "push") return "";
+  const until = drive.stance?.until ? ` through ${drive.stance.until}` : "";
+  return `\nTHEY ASKED TO BE PUSHED${until}: harder training days are coming. Fuel the hard days and the recovery after them inside the current targets — never under-fuel a push week, never add a surplus on its account alone.`;
+}
+
 export function renderDiscipline(ctx: any, focus: "training" | "nutrition" | "day"): string {
   const disc = disciplineOf(ctx);
   const sport = enduranceSportOf(ctx);
@@ -293,7 +361,8 @@ export function renderDiscipline(ctx: any, focus: "training" | "nutrition" | "da
     }
     return "";
   })();
-  const head = `\n${durable}\n${roleLine}${capabilityLine ? `\n${capabilityLine}` : ""}\n${ageLine}${sportContext}${placeContext}`;
+  const driveLine = focus === "nutrition" ? "" : renderTrainingDriveLine(ctx);
+  const head = `\n${durable}\n${roleLine}${capabilityLine ? `\n${capabilityLine}` : ""}${driveLine}\n${ageLine}${sportContext}${placeContext}`;
   if (focus === "nutrition") {
     if (role === "none") {
       return `${head}
@@ -1162,12 +1231,17 @@ export function renderCoachingFocus(ctx: PartialCoachContext, opts: { brief?: bo
   if (!cf || !cf.available || !cf.lead) return "";
   const lead = cf.lead;
   const caveat = caveatLine(cf);
+  // A finished / rest / easy day is TODAY's state, said apart from the week's lever, so
+  // a completed day never reads to the model as "the focus is: nothing".
+  const dayState = cf.day_state?.title ? `TODAY (a day state, not the block focus): ${cf.day_state.title}.` : "";
   if (opts.brief) {
     const grounds = focusGrounds(lead);
-    return `THIS BLOCK'S ONE FOCUS: ${lead.title}${focusWhy(lead)}${lead.move ? ` (${lead.move})` : ""}${grounds ? `\n${grounds}` : ""}${caveat ? `\n${caveat}` : ""}\n`;
+    return `THIS BLOCK'S ONE FOCUS: ${lead.title}${focusWhy(lead)}${lead.move ? ` (${lead.move})` : ""}${grounds ? `\n${grounds}` : ""}${caveat ? `\n${caveat}` : ""}${dayState ? `\n${dayState}` : ""}\n`;
   }
   const lines: string[] = [];
   lines.push("THIS BLOCK — THE FOCUS (the conductor; LEAD with this — everything below it is evidence, not a checklist):");
+  if (dayState) lines.push(`  ▸ ${dayState}`);
+  if (cf.block?.decision) lines.push(`  ▸ BLOCK: ${cf.block_line ? `${cf.block_line} ` : ""}${cf.block.decision}`);
   lines.push(`  ▸ LEAD: ${lead.title}${focusWhy(lead)}${lead.move ? ` ${lead.move}` : ""}`);
   const leadGrounds = focusGrounds(lead);
   if (leadGrounds) lines.push(`  ▸ ${leadGrounds}`);
@@ -1176,7 +1250,9 @@ export function renderCoachingFocus(ctx: PartialCoachContext, opts: { brief?: bo
     const parallelGrounds = focusGrounds(p);
     if (parallelGrounds) lines.push(`  ▸ ${parallelGrounds}`);
   }
-  if ((cf.later || []).length) lines.push(`  ▸ LATER (say it's deferred — do NOT act on it yet): ${cf.later.map((l: any) => l.title).join("; ")}`);
+  if ((cf.later || []).length) lines.push(`  ▸ LATER (say it's deferred — do NOT act on it yet): ${cf.later.map((l: any) => (l.why ? `${l.title} (${l.why})` : l.title)).join("; ")}`);
+  const changed: any[] = Array.isArray(cf.changed_since) ? cf.changed_since : [];
+  if (changed.length) lines.push(`  ▸ WHAT MOVED: ${changed.map((c: any) => c.text).join(" ")}`);
   for (const c of cf.connections || []) lines.push(`  ▸ CONNECT: ${c}`);
   // The work-around caveat: a training lever that runs into a flagged constraint is
   // worked AROUND, never pushed through — plain words, a suggestion not a gate.
@@ -1450,7 +1526,14 @@ export function renderRunPlan(ctx: PartialCoachContext): string {
       if (Array.isArray(r.interval) && r.interval.length) {
         ivl = ` — ${r.interval.map((iv: any) => `${iv.reps} × ${iv.on}${iv.zone ? ` @ ${iv.zone}` : ""}, ${iv.off} recovery`).join("; ")}`;
       }
-      lines.push(`  - Provisional day ${r.day_number}: ${r.label || "Run"}${dist ? ` ${dist}` : ""}${zone}${ivl}.`);
+      // The athlete's stated session: its parts, and a hold below the stated work said.
+      const sq = r.stated_quality;
+      const stated = sq
+        ? ` [the athlete's stated ${sq.type} session: ${sq.warm_up_km} km warm-up + ${sq.work_km} km work + ${sq.cool_down_km} km cool-down${
+            sq.held && sq.stated_work_km != null ? `; held below the stated ${sq.stated_work_km} km this week (${sq.held.reason})` : ""
+          }]`
+        : "";
+      lines.push(`  - Provisional day ${r.day_number}: ${r.label || "Run"}${dist ? ` ${dist}` : ""}${zone}${ivl}${stated}.`);
     }
     if (Array.isArray(rp.rationale) && rp.rationale.length) {
       lines.push(`  Why this week: ${rp.rationale.join(" ")}`);
@@ -1465,6 +1548,21 @@ export function renderRunPlan(ctx: PartialCoachContext): string {
         })
         .join(", ");
       lines.push(`  Stated run days: ${stated}. Never propose a run on any other weekday.`);
+    }
+    // The athlete's own quality session. The engine already sized this week's version
+    // of it (the quality run above carries warm-up + work + cool-down); the line tells the
+    // agent it is the athlete's choice, so a proposal never rotates it away.
+    const statedQuality = (ctx?.endurance_schedule as { quality?: Record<string, unknown> } | null)?.quality;
+    if (statedQuality && typeof statedQuality.type === "string") {
+      const km = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? `${v} km` : null);
+      const parts = [
+        km(statedQuality.work_km) ? `${km(statedQuality.work_km)} of work` : null,
+        km(statedQuality.warm_up_km) ? `${km(statedQuality.warm_up_km)} warm-up` : null,
+        km(statedQuality.cool_down_km) ? `${km(statedQuality.cool_down_km)} cool-down` : null,
+      ].filter(Boolean);
+      lines.push(
+        `  Stated quality session: ${statedQuality.type}${parts.length ? ` (${parts.join(", ")})` : ""}. The athlete chose it — keep that type on the quality day; the run above is this week's sized version of it.`
+      );
     }
     lines.push(
       "  Plan day numbers are provisional anchors, not fixed-day obligations. Actual logs and the rolling read control completion and the next opening; never call an off-day run missed, never repeat a completed intention, and never add catch-up volume."

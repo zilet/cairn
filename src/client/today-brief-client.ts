@@ -480,8 +480,8 @@ type TodayBriefHtmlOptions = {
       todayBriefDistinctLine(read?.focus, read?.headline || meta.lead, strengthLine ? line?.text : "")
     );
     const updated = todayBriefUpdatedHtml(read, kind, options.isToday !== false);
-    // The Path card's slot (today only, under the voice, before NOW); aria-live off, like fuel.
-    const pathSlot = options.isToday === true ? `<div id="todayPathSlot" class="tpath-slot" aria-live="off"></div>` : "";
+    // Today only, under the voice, before NOW: "What's ahead" (the week's days, filled by the lazy today-ahead bundle) then the Path card; aria-live off, like fuel.
+    const pathSlot = options.isToday === true ? `<div id="todayStripSlot" class="tstrip-slot" aria-live="off"></div><div id="todayPathSlot" class="tpath-slot" aria-live="off"></div>` : "";
     const reason = todayBriefReasonHtml(read, kind);
     const lookBack = todayBriefLookBackHtml(read, options.isToday !== false);
 

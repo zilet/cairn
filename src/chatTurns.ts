@@ -61,6 +61,8 @@ import { clinicalPlanProvenance, type ClinicalPlanProvenance } from "./domain/br
 // src/domain/brain/structure-request.ts — both doors (chat and the Plan tab) have to
 // resolve to the ONE standing flag, so one module owns both.
 import { describeLandingDay, requestStructureRedraw } from "./domain/brain/structure-request.js";
+import { setTrainingDrive } from "./domain/training/training-drive.js";
+import { recordStatedRunWeek } from "./domain/training/stated-input.js";
 import { enqueueAgentJob } from "./agentJobs.js";
 import { diagnosticErrorName, recordAsyncFailure } from "./diagnostics.js";
 import { resolveChatProfile, type ChatLane, type ChatRoutingDecision } from "./chatRouting.js";
@@ -75,6 +77,9 @@ import {
   hasExplicitStrengthObjectiveIntent,
   hasExplicitSymptomReportIntent,
   hasExplicitSymptomResolveIntent,
+  hasExplicitTrainingDriveIntent,
+  hasExplicitTrainingDriveIntentInContext,
+  carriesDriveAffirmation,
   hasSelfContainedPlanEditIntent,
   isFoodOnlyTurn,
   isInstantFoodCaptureDecision,
@@ -88,6 +93,7 @@ import {
   reconcileGoalIdentityReply,
   reconcileMisfiledActivityReply,
   reconcileStrengthObjectiveReply,
+  reconcileTrainingDriveReply,
   reconcileTrainingStructureReply,
 } from "./chat-reconcile.js";
 import {
@@ -145,6 +151,7 @@ export {
   reconcileGoalIdentityReply,
   reconcileMisfiledActivityReply,
   reconcileStrengthObjectiveReply,
+  reconcileTrainingDriveReply,
   reconcileTrainingStructureReply,
   RESTRUCTURE_DRAFT_VARIANTS,
   RESTRUCTURE_HELD_FOR_REVIEW_VARIANTS,
@@ -399,7 +406,8 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
     // question to the receipt.
     const planReply = reconcileChatPlanReply(proposedReply, turn.message, applied, drafts, explicitPlanEdit);
     const runReply = reconcileChatRunReply(planReply, turn.message, applied);
-    const objectiveReply = reconcileStrengthObjectiveReply(runReply, turn.message, applied);
+    const driveReply = reconcileTrainingDriveReply(runReply, applied);
+    const objectiveReply = reconcileStrengthObjectiveReply(driveReply, turn.message, applied);
     const goalReply = reconcileGoalIdentityReply(objectiveReply, droppedGoalFields, appliedGoalPatch);
     const structureReply = reconcileTrainingStructureReply(goalReply, applied);
     const activityReply = reconcileMisfiledActivityReply(structureReply, misfiledCaptures, applied);
@@ -2217,6 +2225,17 @@ export function applyChatActions(
   const droppedGoalFields: string[] = [];
   let appliedGoalPatch: Record<string, unknown> | null = null;
   const explicitStrengthObjectiveIntent = !foodOnly && hasExplicitStrengthObjectiveIntent(message);
+  // The training drive is the athlete's own stance: only their sentence sets it — or
+  // their plain "yes" right after the coach ASKED whether to push (the coach's previous
+  // message offering it, e.g. relaying the open push offer). A bare "yes" with no such
+  // question before it answers something else and sets nothing.
+  const explicitTrainingDriveIntent =
+    !foodOnly &&
+    hasExplicitTrainingDriveIntentInContext(message, {
+      priorCoachMessage: carriesDriveAffirmation(message)
+        ? (ctx.priorAssistant ?? priorAssistantContext(ctx.userMessageId)).message
+        : null,
+    });
   // ONE reading of this sentence for the whole turn. A message that names its own
   // instruction ("apply it to my program for today") never touches the chat log; a bare
   // go-ahead ("apply it", "go ahead") reads the coach's previous message to find out what
@@ -2290,12 +2309,37 @@ export function applyChatActions(
           break;
         }
         case "set_endurance_schedule": {
+          const statesQuality = Object.hasOwn(a, "quality") && a.quality !== undefined;
+          // The week as it stood, so the ledger can say "You said X → the brain changed Y"
+          // and Undo can put it back (src/domain/training/stated-input.ts).
+          const scheduleBefore = repo.getEnduranceSchedule();
+          // Only the quality session was said: change it alone; the run week stands.
+          if (!Array.isArray(a.days)) {
+            if (!statesQuality) {
+              applied.push({ type: a.type, error: "invalid endurance_schedule" });
+              break;
+            }
+            applied.push({
+              type: a.type,
+              result: repo.setProfile({ endurance_schedule: { quality: a.quality ?? null, source: "chat" } }),
+            });
+            recordStatedRunWeek({ before: scheduleBefore, words: message, via: "chat" });
+            break;
+          }
           const schedule = repo.normalizeEnduranceSchedule({ days: a.days, note: a.note, source: "chat" });
           if (!schedule) {
             applied.push({ type: a.type, error: "invalid endurance_schedule" });
             break;
           }
-          applied.push({ type: a.type, result: repo.setProfile({ endurance_schedule: schedule }) });
+          // The quality session rides beside the days as said (null clears); unsaid, the
+          // stored one stays (profile.ts serializeEnduranceSchedule).
+          applied.push({
+            type: a.type,
+            result: repo.setProfile({
+              endurance_schedule: statesQuality ? { ...schedule, quality: a.quality ?? null } : schedule,
+            }),
+          });
+          recordStatedRunWeek({ before: scheduleBefore, words: message, via: "chat" });
           break;
         }
         case "set_strength_schedule": {
@@ -2310,6 +2354,28 @@ export function applyChatActions(
         case "set_movement_considerations": {
           // The action is the full list the athlete now holds; [] clears it.
           applied.push({ type: a.type, result: repo.setProfile({ movement_considerations: { items: a.items } }) });
+          break;
+        }
+        case "set_training_drive": {
+          // The athlete's own stance, never the coach's suggestion: a turn whose message
+          // does not state it applies nothing (the reply cannot claim a push it did not set).
+          if (!explicitTrainingDriveIntent) {
+            applied.push({ type: a.type, error: "only your own words can set the training drive" });
+            break;
+          }
+          // The stance keeps the athlete's OWN sentence, verbatim — never the model's
+          // paraphrase. A bare "yes" to the coach's offer is kept as what it answered.
+          const ownWords = hasExplicitTrainingDriveIntent(message)
+            ? message.trim().slice(0, 240)
+            : `${message.trim().slice(0, 160)} (to the coach's offer to push)`;
+          const result = setTrainingDrive({
+            drive: a.drive,
+            until: a.until,
+            scope: a.scope,
+            words: ownWords || (typeof a.words === "string" ? a.words : null),
+            via: "chat",
+          });
+          applied.push(result.ok ? { type: a.type, result } : { type: a.type, error: result.error ?? "not set" });
           break;
         }
         case "set_strength_objective": {

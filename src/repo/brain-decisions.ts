@@ -737,7 +737,11 @@ export type BrainRollbackKind =
   | "meal_plan"
   | "recovery_cycle"
   | "goal_date"
-  | "garmin_strength";
+  | "garmin_strength"
+  // The athlete's training drive / dated push stance (src/domain/training/training-drive.ts).
+  | "training_stance"
+  // The athlete's stated run week / quality session (src/domain/training/stated-input.ts).
+  | "endurance_schedule";
 
 const BRAIN_ROLLBACK_KINDS: readonly BrainRollbackKind[] = [
   "training_plan",
@@ -746,6 +750,8 @@ const BRAIN_ROLLBACK_KINDS: readonly BrainRollbackKind[] = [
   "recovery_cycle",
   "goal_date",
   "garmin_strength",
+  "training_stance",
+  "endurance_schedule",
 ];
 
 export function saveBrainRollback(decisionId: number, kind: BrainRollbackKind, payload: unknown): boolean {
@@ -798,17 +804,39 @@ export interface RollbackEvidenceGroup {
 // Near-`applied` weight, deliberately just under 1 — see the section doc above.
 export const ROLLBACK_EVIDENCE_WEIGHT = 0.9;
 
+// Rollback shapes that undo the athlete's OWN statement (a push stance, a stated run
+// week) — never a change the brain made, so never evidence about the brain's calls.
+const STATED_ROLLBACK_KINDS: ReadonlySet<string> = new Set(["training_stance", "endurance_schedule"]);
+
+// Is this reverted row the athlete taking back their own word rather than undoing a
+// brain change? An observe-tier row records what they said (nothing was decided for
+// them), and a stated statement carries `context.stated_by_athlete` /
+// `training_drive_stance` — taking it back says nothing about how the coach decides.
+function revertedOwnStatement(row: {
+  rollback_kind?: unknown;
+  autonomy_tier?: unknown;
+  context_json?: unknown;
+}): boolean {
+  if (STATED_ROLLBACK_KINDS.has(String(row.rollback_kind ?? ""))) return true;
+  if (String(row.autonomy_tier ?? "") === "observe") return true;
+  const context = parsedObject(row.context_json);
+  return !!context && (context.stated_by_athlete === true || context.training_drive_stance === true);
+}
+
 // Every decision kind with at least one REVERTED decision that carries a rollback
 // snapshot, most-recently-reverted first. Bounded and read-only; callers gate
 // their own "is this repeated" threshold (a single revert is a real signal on its
 // own — unlike a dismissal, an athlete does not revert idly — but a repeat is
-// what the reaction-model producer below actually surfaces).
+// what the reaction-model producer below actually surfaces). The athlete undoing
+// their OWN statement (revertedOwnStatement) is not a brain change being refused, so
+// it never counts here.
 export function rollbackEvidenceByKind(limit = 200): RollbackEvidenceGroup[] {
   let rows: any[] = [];
   try {
     rows = db
       .prepare(
-        `SELECT d.kind AS kind, d.domain AS domain, d.reverted_at AS reverted_at
+        `SELECT d.kind AS kind, d.domain AS domain, d.reverted_at AS reverted_at,
+                r.kind AS rollback_kind, d.autonomy_tier AS autonomy_tier, d.context_json AS context_json
            FROM brain_rollbacks r
            JOIN brain_decisions d ON d.id = r.decision_id
           WHERE d.status = 'reverted'
@@ -821,6 +849,7 @@ export function rollbackEvidenceByKind(limit = 200): RollbackEvidenceGroup[] {
   }
   const groups = new Map<string, RollbackEvidenceGroup>();
   for (const row of rows) {
+    if (revertedOwnStatement(row)) continue;
     const kind = String(row?.kind ?? "").trim();
     if (!kind) continue;
     const g = groups.get(kind) ?? { kind, domain: String(row?.domain ?? ""), count: 0, last_reverted_at: null };

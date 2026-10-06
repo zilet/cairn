@@ -9,7 +9,7 @@
 .dayrec-top{display:flex;align-items:center;justify-content:space-between;gap:var(--space-4);min-height:32px}
 .dayrec-top .home-back{margin:0}
 .dayrec-step{display:flex;gap:var(--space-2)}
-.dayrec-step-btn{width:36px;height:32px;display:grid;place-items:center;border:1px solid var(--line);
+.dayrec-step-btn{width:44px;height:44px;display:grid;place-items:center;border:1px solid var(--line);
   border-radius:var(--radius-pill);background:none;color:var(--ink2);font:inherit;font-size:var(--text-lead);line-height:1;
   cursor:pointer;-webkit-tap-highlight-color:transparent;transition:border-color var(--dur-1) var(--ease),color var(--dur-1) var(--ease)}
 .dayrec-step-btn:hover{border-color:var(--line-strong);color:var(--ink)}

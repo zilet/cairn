@@ -112,6 +112,7 @@ type WriteInvalidationApi = {
     report_training_symptom: t(DAY, PLAN, ["today:session:"]),
     resolve_training_symptom: t(DAY, PLAN, ["today:session:"]),
     log_checkin: t(DAY, ["recovery:"]),
+    set_training_drive: t(DAY, GOAL, PLAN),
     set_activity_effort: t(DAY, TRAINING, ["@endurance", "recovery:"]),
     flag_training_structure: t(DAY, PLAN),
     // A revert puts back whatever the decision changed: it can be any of the above.

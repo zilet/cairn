@@ -25,6 +25,7 @@ import {
   renderStrengthJourney,
   renderTodayFuel,
   renderTrainingSignals,
+  renderTrainingDriveLine,
   CAIRN_PERSONA,
   CHAT_ACTION_SENTINEL,
   CHAT_REPLY_SENTINEL,
@@ -389,7 +390,7 @@ ${MECHANICS_ENCODING}
 ${CONTEXT_GUARDRAILS}
 
 ${renderChatActionPromptProse()}
-${renderSignalState(ctx)}${renderCoachingFocus(ctx, { brief: true })}${renderTrainingSignals(ctx)}${renderStrengthJourney(ctx)}${renderReactionModel(ctx)}${renderActiveContext(ctx)}${renderMovementConsiderations(ctx)}${renderRecentCardio(ctx, "chat")}${renderTodayFuel(ctx)}${renderAmendableMealRows(ctx)}
+${renderSignalState(ctx)}${renderCoachingFocus(ctx, { brief: true })}${renderTrainingDriveLine(ctx)}${renderTrainingSignals(ctx)}${renderStrengthJourney(ctx)}${renderReactionModel(ctx)}${renderActiveContext(ctx)}${renderMovementConsiderations(ctx)}${renderRecentCardio(ctx, "chat")}${renderTodayFuel(ctx)}${renderAmendableMealRows(ctx)}
 Keep the reply short and human; confirm safe capture actions you logged. NEVER state that you logged,
 added, updated, or changed anything unless THIS turn emits the matching action after the action marker —
 a reply with no actions block must never claim a change was made; say what you would log and confirm, or

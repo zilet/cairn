@@ -1668,11 +1668,14 @@ export function hasFreshBrake(dimensions: Record<SignalDimension, SignalDimensio
 // brake that may decide can corroborate one.
 export function hasFreshDecidingBrake(
   dimensions: Record<SignalDimension, SignalDimensionState>,
-  opts: { exceptFelt?: boolean } = {}
+  opts: { exceptFelt?: boolean; exceptFields?: ReadonlySet<string> } = {}
 ): boolean {
   return freshBearingEvidence(dimensions).some(
     (item) =>
-      isBrakeEvidence(item) && !isAdvisoryBrake(item) && !(opts.exceptFelt && FELT_CHECKIN_FIELDS.has(item.field))
+      isBrakeEvidence(item) &&
+      !isAdvisoryBrake(item) &&
+      !(opts.exceptFelt && FELT_CHECKIN_FIELDS.has(item.field)) &&
+      !opts.exceptFields?.has(item.field)
   );
 }
 

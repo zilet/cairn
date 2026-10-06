@@ -9,7 +9,7 @@ Health's short-lived pairing exchange is public and passes through the instance-
 when that limiter is enabled; its resulting credential is scoped only to `POST /api/health-metrics`.
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**367 routes** across 128 groups.
+**372 routes** across 129 groups.
 
 ## `/activities`
 
@@ -608,6 +608,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | PUT | `/api/plan/:day` |  |
 | POST | `/api/plan/:day/order-for-effect` | Quiet "Order for effect" — rewrite one day's items into compounds → accessories → finishers → cardio. Returns the day (unchanged when already ordered). 200 + null when the day number is absent — same absence shape as other single-row lookups. |
 | PUT | `/api/plan/:day/target` |  |
+| GET | `/api/plan/day-detail` | One calendar day opened (Horizon's tap-a-day view, Today's "what's ahead" strip): the day's focus, the lift's exercises with the progression's loads, the run's distance, zone, pace band and quality structure, why the day sits where it does, where to pay attention, and what was done. Read-only. 400 on a malformed date; 200 + null past the end of next week (nothing is forecast there). Registered ahead of /plan/:day. |
 | GET | `/api/plan/look-ahead` | The Program landing's look-ahead: today through the end of next week, a row a day (the lift day's name and key movements, the calendar's runs and rest), with the week's context (race-build rung, recovery or deload week). Read-only; registered ahead of /plan/:day, which would otherwise take "look-ahead" for a day number. |
 | GET | `/api/plan/quality` |  |
 | GET | `/api/plan/recovery-status` | The recovery-week story for the Plan surface: a waiting draft ('drafted'), the applied lighter week in flight ('applied', ~a week from the apply stamp), or null. The Plan tab's banner reads this so a reshaped week announces itself — heads-up + what changed — instead of arriving silently. |
@@ -622,7 +623,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 |---|---|---|
 | GET | `/api/profile` | Read the athlete profile, including optional manual home_location. An active dated trip may override effective coaching location without rewriting home. |
 | PUT | `/api/profile` | Partially update the athlete profile. Omitted fields stay unchanged; explicit null/empty clears nullable fields such as home_location. |
-| GET | `/api/profile/endurance-schedule` | The athlete's stated run days. days[] is {dow: 0-6 (0=Sunday), kind: easy\|quality\|long\|any}. The run engine and rolling agenda honor these weekdays. null when unset. MCP: get_endurance_schedule. |
+| GET | `/api/profile/endurance-schedule` | The athlete's stated run days. days[] is {dow: 0-6 (0=Sunday), kind: easy\|quality\|long\|any}. The run engine and rolling agenda honor these weekdays. `quality` is the stated quality session {type: threshold\|tempo\|vo2\|hills, work_km?, warm_up_km?, cool_down_km?, note?} the engine runs on the quality day. Set through PUT /profile `endurance_schedule` (a body of only `{quality}` changes just the session; `quality: null` clears it; omitted, the stored one stays). null when unset. MCP: get_endurance_schedule. |
 | POST | `/api/profile/grow-about-me` | Grow profile.about_me from typed memory + family + check-ins (augments, never overwrites blindly). changed:false is the calm, common answer. |
 | GET | `/api/profile/movement-considerations` | The athlete's stated movement considerations: lasting, painless conditions in their own words ({items:[{label, detail?, wants_addressed, source, stated_on}]}). They shape plan selection and balance and never gate a lift. Set through PUT /profile (movement_considerations; null or items: [] clears). null when none are stated. MCP: get_movement_considerations. |
 | GET | `/api/profile/strength-schedule` | The athlete's stated LIFTING weekdays. days[] is {dow: 0-6 (0=Sunday)} — no kind, because which split lands on which day is the plan's business. The weekday ring lays the plan's strength days onto exactly these weekdays. null when unset. MCP: get_strength_schedule. |
@@ -926,6 +927,15 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/training-agenda` | Rolling weekly run intentions: actual compatible logs close intentions and suggested openings move around real strength/endurance load. Any completed run occupies its actual date; moderate/hard cross-training also reserves its date, while light cross-training may still share a clean easy-run opening. Runs that closed no intention ride out as `extras`. Read-only; unfinished work creates no catch-up debt. |
+
+## `/training-drive`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/training-drive` | The UI-ready read: what is in force, what it opens, what never yields, and on a push day what is still holding today back ("why not more"). ?date= reads another day. MCP: get_training_drive. |
+| PUT | `/api/training-drive` | Set the drive: {drive:'push', until?:'YYYY-MM-DD', scope?:'block', words?} starts a dated push stance (recorded in the decision ledger with a one-tap Undo); {drive:'steady'} steps back. Always 200 — a refusal is {ok:false, error}. MCP: set_training_drive. Chat: the set_training_drive action. |
+| POST | `/api/training-drive/offer/accept` | The coach's open push offer (`read.offer`): an ASK the log earned, never a change. Accept = the same setTrainingDrive a stated push uses (two weeks, with its Undo); dismiss = "not now", remembered for four weeks. Body: {decision_id?} — the offer the athlete is answering; a stale id is refused. Always 200; a refusal is {ok:false, error}. MCP: accept_push_offer / dismiss_push_offer. |
+| POST | `/api/training-drive/offer/dismiss` |  |
 
 ## `/training-intent`
 

@@ -68,6 +68,12 @@ export interface ClientBrainChange {
   undo: ClientBrainChangeUndo;
   /** True when the team made this change after the athlete last opened the feed. */
   new: boolean;
+  /**
+   * The athlete's OWN words when this change is what they said (a push stance, a stated
+   * quality session): the row reads "You said X → the brain changed Y", with `title` the
+   * Y and `why` opening on the quote. Absent on a change the team decided.
+   */
+  said?: string | null;
 }
 
 export interface ClientBrainChangeDay {

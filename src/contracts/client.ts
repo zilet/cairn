@@ -132,6 +132,10 @@ export interface ClientDayRead {
     line: string;
     options: Array<{ key: "upper" | "lighter" | "rest"; label: string; focus: string | null; constraints: string | null }>;
   } | null;
+  // The training drive on a push day (see ClientTrainingDriveRead): the stance the athlete
+  // stated, what it opens, and `today.line` — the honest "why not more" when something
+  // holds the day back. Absent on a steady drive. Derived fresh, never persisted.
+  push?: import("./training-drive.js").ClientTrainingDriveRead | null;
   // The week-wins reassurance on a rest/easy read (mirrors the done card's week
   // footnote, today-session-status-client.ts doneWeekHtml). Absent on train/done
   // reads and on a zero-training week — absence is not failure.
@@ -293,13 +297,70 @@ export interface ClientCoachingFocus {
   acts?: boolean;
   lead: ClientCoachingFocusItem | null;
   parallel: ClientCoachingFocusItem[];
-  later: Array<{ domain: ClientCoachingFocusDomain; title: string }>;
+  // `why` says why the item waits ("On pace — nothing to change this week").
+  // Optional: an older cached payload carries none.
+  later: Array<{ domain: ClientCoachingFocusDomain; title: string; why?: string }>;
   connections: string[];
   retest: ClientCoachingRetest | null;
   horizon_weeks: number | null;
   // Temporal placement inside the active program block, plain words
   // ("Week 3 of 5 — building volume."). Absent/null when no block is active.
   block_line?: string | null;
+  // The same block read, structured, with the deload/peak decision. Optional (additive).
+  block?: ClientCoachingFocusBlock | null;
+  // TODAY's posture as a day state, apart from the week's lever. A completed day no
+  // longer leads the card. Optional (additive).
+  day_state?: ClientCoachingFocusDayState | null;
+  // Value-and-direction bullets behind the read — never a score. Optional (additive).
+  evidence?: ClientCoachingFocusEvidence[];
+  // What moved, each against a stated date. Optional (additive).
+  changed_since?: ClientCoachingFocusChange[];
+  // The training drive (same read as the Brief's `push`): present whenever the drive is
+  // push or a stance just ran out. Optional (additive).
+  push?: import("./training-drive.js").ClientTrainingDriveRead | null;
+}
+
+export type ClientCoachingFocusDirection = "up" | "down" | "steady";
+
+export interface ClientCoachingFocusEvidence {
+  domain: ClientCoachingFocusDomain;
+  label: string;
+  value: string;
+  direction: ClientCoachingFocusDirection | null;
+  note: string | null;
+  as_of: string | null;
+}
+
+export interface ClientCoachingFocusChange {
+  domain: ClientCoachingFocusDomain;
+  kind: "new_best" | "race_estimate" | "run_volume" | "weight" | "new_lab";
+  text: string;
+  since: string | null;
+}
+
+export interface ClientCoachingFocusDayState {
+  posture: "rest" | "easy" | "done";
+  title: string;
+  line: string;
+  move: string;
+}
+
+export interface ClientCoachingFocusBlock {
+  week: number | null;
+  of: number | null;
+  phase: string | null;
+  scheduled_phase: string | null;
+  deload:
+    | "recovery_week"
+    | "deload_week"
+    | "set_aside"
+    | "next_week"
+    | "next_week_if_earned"
+    | "earned"
+    | "later"
+    | "none";
+  decision: string;
+  race_taper_from: string | null;
 }
 
 export interface ClientMacroTotals {
@@ -771,3 +832,4 @@ export * from "./client-api.js";
 export * from "./client-api-coverage.js";
 export * from "./client-routes.js";
 export * from "./brain-changes.js";
+export * from "./training-drive.js";

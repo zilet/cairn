@@ -101,6 +101,8 @@ import {
   planChangeKey,
 } from "../../repo/plan-annotation-release.js";
 import { revertGarminReconcile } from "../../repo/activities.js";
+import { revertTrainingStance } from "../training/training-drive.js";
+import { revertStatedRunWeek } from "../training/stated-input.js";
 import { withSqliteSavepoint } from "../../repo/sqlite-savepoint.js";
 import {
   captureNutritionProposalEvidence,
@@ -4209,6 +4211,14 @@ export function revertDecision(id: number, reason = "user veto"): { ok: boolean;
           Number(cycle?.overlay?.source_decision_id) === id;
         if (!ownsCycle) throw new Error("recovery-cycle rollback ownership no longer matches");
         cancelRecoveryCycle(cycleId, localDateISO());
+      } else if (rollback?.kind === "training_stance" && rollback.payload?.version === 1) {
+        // The athlete's own drive / push stance. Ownership-guarded inside: a newer stance
+        // or a Settings toggle since this decision wins, and the Undo refuses.
+        revertTrainingStance(rollback.payload, localDateISO());
+      } else if (rollback?.kind === "endurance_schedule" && rollback.payload?.version === 1) {
+        // The athlete's stated run week / quality session. Ownership-guarded inside: a
+        // newer statement since this one wins, and the Undo refuses.
+        revertStatedRunWeek(rollback.payload);
       } else if (rollback?.kind === "garmin_strength" && rollback.payload?.version === 1) {
         // Ownership-guarded per session inside revertGarminReconcile itself — a
         // session touched again since the merge (re-sync, second reconcile) wins

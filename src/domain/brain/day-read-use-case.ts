@@ -20,6 +20,7 @@ import {
   getCachedDayRead,
   replaceStaleDayReadOverride,
   saveDayRead,
+  type DayRead,
   type DayReadDecision,
   type DayReadPeriodizationContext,
 } from "../../repo/intelligence.js";
@@ -29,6 +30,8 @@ import { buildRecoveryMenu, type RecoveryMenu } from "../../repo/recovery-menu.j
 import { buildRunLegChoice, type RunLegChoice } from "../../repo/run-leg-choice.js";
 import { weekWins } from "../../repo/sessions.js";
 import { todayStrengthLine, type TodayStrengthLine } from "../../repo/today-strength-line.js";
+import { trainingDriveRead } from "../../repo/training-drive-read.js";
+import type { ClientTrainingDriveRead } from "../../contracts/training-drive.js";
 import { getTrajectory } from "../../repo/trajectory.js";
 import { decideTodayAttention, type TodayAttention } from "./today-attention.js";
 
@@ -80,6 +83,11 @@ export interface DayReadResult {
   // legs / rest (repo/run-leg-choice.ts). Derived fresh, never persisted; absent
   // whenever the offer does not apply.
   run_leg_choice?: RunLegChoice | null;
+  // The training drive on a push day (repo/training-drive-read.ts): what the athlete
+  // asked for, what it opens, and — when something holds today back — the honest
+  // "why not more" (`push.today.line`). Absent on a steady drive with no stance just
+  // ended. Derived fresh per response, never persisted.
+  push?: ClientTrainingDriveRead | null;
   periodization_context: DayReadPeriodizationContext;
   // Which Today surface earns the position of prominence (see today-attention.ts).
   // Optional by contract: absent on any non-live date and on any failure, and the
@@ -190,6 +198,16 @@ export function attachDayReadContext(readDate: string, read: Record<string, unkn
     attention = null;
   }
 
+  // Today's lift, named by the plan day and read off the log — the Brief prints the
+  // same line the Session header, week strip and Train overview print. Read before the
+  // recovery menu, which defers to it (below).
+  let strengthLine: TodayStrengthLine | null = null;
+  try {
+    strengthLine = todayStrengthLine(readDate);
+  } catch {
+    strengthLine = null;
+  }
+
   // The guided recovery menu (Track D): a rest/easy Brief is never a void. Same
   // precedent as forward/arc above — derived fresh per response, never cached
   // or persisted, so it always reflects today's live symptom/load state.
@@ -199,9 +217,22 @@ export function attachDayReadContext(readDate: string, read: Record<string, unkn
   // offered against a routed past date it invites a session that day is over for,
   // and it would be grounded in today's symptoms rather than that day's anyway.
   // `attention` above declines past dates on the same reasoning.
+  //
+  // …and never on an EASY day whose run is already in and whose lift is still open
+  // (2026-10-06). The strength line already says so and offers that lift, held light
+  // ("Run in · Push still open" — "Push is still there, held light"), and the read's own
+  // sentence names both halves; a menu of walks and mobility beside them told a second
+  // story that ignored both the run already logged and the session still waiting. The
+  // line is the one source for that state — this only reads it. A REST read keeps its
+  // menu: the lift there is "still yours if you want it", not the day's offer.
+  const liftOpenOnEasy =
+    String(read.kind ?? "") === "easy" &&
+    strengthLine?.role === "strength" &&
+    strengthLine.run_in != null &&
+    (strengthLine.state === "not_started" || strengthLine.state === "in_progress");
   let recovery: RecoveryMenu | null = null;
   try {
-    if (readDate >= localToday()) recovery = buildRecoveryMenu(readDate, String(read.kind ?? ""));
+    if (readDate >= localToday() && !liftOpenOnEasy) recovery = buildRecoveryMenu(readDate, String(read.kind ?? ""));
   } catch {
     recovery = null;
   }
@@ -236,15 +267,6 @@ export function attachDayReadContext(readDate: string, read: Record<string, unkn
 
   const asOf = evidenceAsOf(read);
 
-  // Today's lift, named by the plan day and read off the log — the Brief prints the
-  // same line the Session header, week strip and Train overview print.
-  let strengthLine: TodayStrengthLine | null = null;
-  try {
-    strengthLine = todayStrengthLine(readDate);
-  } catch {
-    strengthLine = null;
-  }
-
   // Only on a day the athlete can still act on, same as the recovery menu.
   let runLegChoice: RunLegChoice | null = null;
   try {
@@ -253,6 +275,16 @@ export function attachDayReadContext(readDate: string, read: Record<string, unkn
     }
   } catch {
     runLegChoice = null;
+  }
+
+  // The drive, said on the Brief whenever the athlete has asked to be pushed (or a push
+  // they asked for just ran out): the stance, and on a day something holds back, why.
+  let push: ClientTrainingDriveRead | null = null;
+  try {
+    const driveRead = trainingDriveRead(readDate, { read: read as unknown as DayRead });
+    if (driveRead.drive === "push" || driveRead.ended || driveRead.offer) push = driveRead;
+  } catch {
+    push = null;
   }
 
   return {
@@ -267,6 +299,7 @@ export function attachDayReadContext(readDate: string, read: Record<string, unkn
     ...(lookBack ? { look_back: lookBack } : {}),
     ...(strengthLine ? { strength_line: strengthLine } : {}),
     ...(runLegChoice ? { run_leg_choice: runLegChoice } : {}),
+    ...(push ? { push } : {}),
   } as DayReadResult;
 }
 

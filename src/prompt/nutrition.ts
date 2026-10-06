@@ -24,6 +24,7 @@ import {
   renderConnectedBrain,
   renderDexaTargeting,
   renderDiscipline,
+  renderTrainingDriveFuelLine,
   renderEnduranceGoal,
   renderSignalState,
   renderTrajectory,
@@ -692,7 +693,7 @@ ${CONTEXT_GUARDRAILS}
 - HEALTH MARKERS specifically: make the ACT-NOW nutrition priorities in the PRIORITIZED HEALTH FOCUS
   the backbone of the plan (e.g. a lipid-lowering pattern, iron-rich foods for low ferritin) — let them
   shape the default meals, not just a footnote; flag the marker-driven emphasis in notes. Not medical advice.
-${renderSignalState(ctx)}${renderCoachingFocus(ctx, { brief: true })}${renderDiscipline(ctx, "nutrition")}${renderEnduranceGoal(ctx, "nutrition")}${freqBlock}${strategyBlock}${renderConnectedBrain(ctx, { domains: ["nutrition"] })}${renderTrajectory(ctx)}${renderFoodMemory(planningMemory)}${renderDexaTargeting(ctx, "nutrition")}${renderBodyComp(ctx)}${renderHouseholdDiet(ctx)}
+${renderSignalState(ctx)}${renderCoachingFocus(ctx, { brief: true })}${renderDiscipline(ctx, "nutrition")}${renderTrainingDriveFuelLine(ctx)}${renderEnduranceGoal(ctx, "nutrition")}${freqBlock}${strategyBlock}${renderConnectedBrain(ctx, { domains: ["nutrition"] })}${renderTrajectory(ctx)}${renderFoodMemory(planningMemory)}${renderDexaTargeting(ctx, "nutrition")}${renderBodyComp(ctx)}${renderHouseholdDiet(ctx)}
 TASK: ${userInstruction?.trim() || defaultTask}
 
 ${renderJsonContract(MEAL_SCHEMA)}
@@ -811,7 +812,7 @@ WHEN TO PROPOSE A CHANGE (else change:false):
 
 ${CONTEXT_GUARDRAILS}
 ${renderHolisticNutritionStrategy(context, exp)}${renderFuelDemand(context, { days: 2 })}
-${renderSignalState(context)}${renderDiscipline(context, "nutrition")}${renderEnduranceGoal(context, "nutrition")}${renderConnectedBrain(context, { domains: ["nutrition"] })}${renderTrajectory(context)}${renderDexaTargeting(context, "nutrition")}${renderBodyComp(context)}${renderAcuteLoadNote(context)}${renderTodayFuel(context)}${renderFuelingFeedback(context)}
+${renderSignalState(context)}${renderDiscipline(context, "nutrition")}${renderTrainingDriveFuelLine(context)}${renderEnduranceGoal(context, "nutrition")}${renderConnectedBrain(context, { domains: ["nutrition"] })}${renderTrajectory(context)}${renderDexaTargeting(context, "nutrition")}${renderBodyComp(context)}${renderAcuteLoadNote(context)}${renderTodayFuel(context)}${renderFuelingFeedback(context)}
 USER: profile: ${JSON.stringify(profile)}
 
 ${renderStreamingContract(

@@ -43,6 +43,13 @@ export interface PlanWeekPlanDay {
   day_type: "training" | "rest";
   role: WeekdayPlanDayRole;
   out_of_order: boolean;
+  /**
+   * TODAY's cell only, and only before anything is logged: the day the weekday map laid
+   * on this weekday, when today's selection (the one strength line — the Brief, Session
+   * and Train card all read it) adapted to a different plan day. The cell names the day
+   * the athlete will actually be offered; this keeps the map's day one field away.
+   */
+  swapped_from?: { day_number: number; name: string };
 }
 
 export interface PlanWeekSession {
@@ -462,11 +469,31 @@ export function planWeek(date?: string): PlanWeek {
     /* ignore */
   }
 
-  let todayDayNumber: number | null = null;
-  try {
-    todayDayNumber = selectAdaptivePlanDay(asOf)?.day_number ?? null;
-  } catch {
-    todayDayNumber = null;
+  // Today's lift, in the ONE line every surface prints (the Brief, the Session header,
+  // the Train card, Horizon). Read before the cells are laid so today's cell names the
+  // same plan day the line does — the weekday map is the week's forecast, and the
+  // adaptive selection may hand today a different strength day (the legs still carrying
+  // a long run turn a lower day into the upper one). Two names for one morning was the
+  // 2026-10-06 bug: the strip said "Lower B" under a Train card saying "Push".
+  const strengthLine = (() => {
+    try {
+      return todayStrengthLine(asOf);
+    } catch {
+      return null;
+    }
+  })();
+  const lineDayNumber =
+    strengthLine && strengthLine.role === "strength" && strengthLine.day_number != null
+      ? Number(strengthLine.day_number)
+      : null;
+
+  let todayDayNumber: number | null = lineDayNumber;
+  if (todayDayNumber == null) {
+    try {
+      todayDayNumber = selectAdaptivePlanDay(asOf)?.day_number ?? null;
+    } catch {
+      todayDayNumber = null;
+    }
   }
 
   const isHard = (plan_day: PlanWeekPlanDay | null, run: PlanWeekRun | null): boolean =>
@@ -500,7 +527,19 @@ export function planWeek(date?: string): PlanWeek {
         const candidate = map.get(dow) ?? null;
         templateDay = candidate ? (byNumber.get(candidate.day_number) ?? null) : null;
       }
-      const plan_day = templateDay ? toPlanWeekPlanDay(templateDay) : null;
+      let plan_day = templateDay ? toPlanWeekPlanDay(templateDay) : null;
+      // Today, nothing logged yet, on a lifting weekday: the cell names the strength
+      // line's day. The map's own day rides along as `swapped_from` when they differ.
+      if (!sessionRow && cellDate === asOf && map.has(dow) && lineDayNumber != null) {
+        const lineDay = byNumber.get(lineDayNumber) ?? null;
+        if (lineDay) {
+          const mapped = plan_day;
+          plan_day = toPlanWeekPlanDay(lineDay);
+          if (mapped && mapped.day_number !== plan_day.day_number) {
+            plan_day.swapped_from = { day_number: mapped.day_number, name: mapped.name };
+          }
+        }
+      }
       const session = sessionRow ? toPlanWeekSession(sessionRow) : null;
       // Runs are dated by the agenda: a completion on this date, or an open intent
       // suggested for it. An intent with no date stays off the calendar — putting it
@@ -634,13 +673,6 @@ export function planWeek(date?: string): PlanWeek {
           ? "Your training week in plan order — say which weekdays you lift and the strip will sit on the calendar."
           : null;
 
-  const strengthLine = (() => {
-    try {
-      return todayStrengthLine(asOf);
-    } catch {
-      return null;
-    }
-  })();
   // One day, one voice: the cell that IS today carries the line's own suggestion. The
   // line has already decided whether one applies (a lift not yet logged, a quiet read).
   if (strengthLine?.suggestion && strengthLine.suggestion_label) {

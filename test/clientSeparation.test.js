@@ -252,6 +252,8 @@ test("the strength editor models, draws and saves lift days only, and points run
   });
   vm.runInNewContext(read("public/js/html-utils.js"), context);
   vm.runInNewContext(read("public/js/cardio-plan-client.js"), context);
+  vm.runInNewContext(read("public/js/day-detail-model.js"), context);
+  vm.runInNewContext(read("public/js/day-detail-client.js"), context);
   vm.runInNewContext(read("public/js/plan-editor-client.js"), context);
   vm.runInNewContext(read("public/js/plan-editor-form-client.js"), context);
   const editor = context.CairnPlanEditor;

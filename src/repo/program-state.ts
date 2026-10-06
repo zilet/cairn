@@ -46,7 +46,7 @@ import { pickDayVariant } from "./brain/day-read-rules.js";
 // than importing the builder — so reaching up into domain/ from here adds no cycle.
 import { weekLayoutRead } from "../domain/training/week-layout.js";
 import { blockEndsInDeload, getActiveBlock, previousCompletedBlock } from "./program-blocks.js";
-import { getSettings } from "./settings.js";
+import { effectiveTrainingDrive } from "./training-drive.js";
 import { completedRecoveryWeekLedger, type CompletedRecoveryWeekLedger } from "./recovery-week-ledger.js";
 import { getProgress } from "./sessions.js";
 import { comparableLiftDates, sessionCountsTowardLiftTrajectory } from "./lift-comparability.js";
@@ -1266,7 +1266,7 @@ function mesocycle(
   const carriedPastSkippedDeload = (): boolean => {
     try {
       if (!block || startedAgeDays == null || loadedStreak * 7 <= startedAgeDays) return false;
-      if (getSettings().training_drive !== "push") return false;
+      if (effectiveTrainingDrive(date) !== "push") return false;
       const previous = previousCompletedBlock(block);
       return !!previous && blockEndsInDeload(previous);
     } catch {

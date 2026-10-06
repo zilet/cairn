@@ -1861,6 +1861,13 @@ declare global {
     spec: CfocusVariantSpec,
     after?: string
   ): string;
+  declare function cfocusTrainCardHtml(
+    focus: ClientCoachingFocus,
+    lead: ClientCoachingFocusItem,
+    spec: CfocusVariantSpec,
+    headline: string,
+    style: string
+  ): string;
   declare function cfocusRetestHtml(focus: ClientCoachingFocus, spec: CfocusVariantSpec): string;
   declare function scheduledMealPlan(plan: unknown): Record<string, unknown> | null;
   declare function mealBoundaryLabel(value: unknown): string;
@@ -1933,10 +1940,10 @@ declare global {
   declare function renderTab(tab: string): unknown;
   declare function renderToday(): unknown;
   /** Today is Home (v2 wave 7): open any day — today opens Today, another day its record or preview. */
-  declare function openDay(date: unknown): void;
+  declare function openDay(date: unknown, opts?: { home?: ClientHomeName }): void;
   /** Eager (day-open-client.ts): opening a day, and where it was opened from. */
   declare const CairnDayOpen: {
-    openDay(date: unknown): void;
+    openDay(date: unknown, opts?: { home?: ClientHomeName }): void;
     origin(): { tab: ClientTabName; label: string } | null;
     takeOrigin(): { tab: ClientTabName; label: string } | null;
     /** "Train" — a home as its tab-bar button names it. */
@@ -1946,9 +1953,128 @@ declare global {
   declare function renderDay(): Promise<void>;
   declare const CairnDayRecord: {
     dayHtml(record: import("./day-record.js").DayRecord, opts: { backLabel: string }): string;
+    composedHtml(
+      record: import("./day-record.js").DayRecord | null,
+      detail: import("./day-detail.js").DayDetail | null,
+      opts: { backLabel: string; date: string; today: string }
+    ): string;
     relativeWords(iso: string, today: string): string;
     shortDate(iso: string): string;
     renderDay(): Promise<void>;
+  };
+  /** LAZY "day" bundle (day-detail-model.ts): the day detail framed for its one view. */
+  declare const CairnDayDetailModel: {
+    relativeWords(iso: string, today: string): string;
+    kicker(detail: Pick<import("./day-detail.js").DayDetail, "date" | "today" | "status">): string;
+    distText(km: number | null | undefined, units: unknown): string;
+    paceText(
+      pace: { text?: string; slow_sec_per_km?: number; fast_sec_per_km?: number } | null | undefined,
+      units: unknown
+    ): string;
+    bandText(low: number | null | undefined, high: number | null | undefined): string;
+    zoneClass(key: unknown): string;
+    runSegments(run: import("./day-detail.js").DayDetailRun | null | undefined): Array<{
+      part: import("./day-detail.js").DayDetailRunSegment["part"];
+      label: string;
+      text: string;
+      frac: number;
+      zone: string;
+      zoneKey: string;
+      dist: string;
+      reps: number;
+      hr: string;
+      pace: string;
+    }>;
+    muscleTones(exercises: readonly import("./day-detail.js").DayDetailExercise[] | null | undefined): {
+      tones: Record<string, string>;
+      front: boolean;
+      back: boolean;
+    };
+    whyRest(detail: Pick<import("./day-detail.js").DayDetail, "why" | "week">): string;
+    contextLine(detail: Pick<import("./day-detail.js").DayDetail, "week">): string;
+    doneRunText(
+      run: {
+        km?: number | null;
+        distance_km?: number | null;
+        duration_min?: number | null;
+        pace_sec_per_km?: number | null;
+        pace?: string | null;
+        effort?: string | null;
+        note?: string | null;
+      },
+      units: unknown
+    ): string;
+  };
+  /**
+   * LAZY "day" bundle (day-detail-client.ts): the ONE day view — Horizon's week, Train's
+   * week ahead and Today's strip open it. `exerciseRowHtml` is shared with the Program
+   * gallery (train depends on day).
+   */
+  declare const CairnDayDetailView: {
+    dayDetailHtml(detail: import("./day-detail.js").DayDetail, opts?: { inline?: boolean; titleId?: string }): string;
+    exerciseRowHtml(row: {
+      name: string;
+      muscleGroup?: string | null;
+      prescription: string;
+      load?: string | null;
+      change?: string | null;
+      hints?: Array<string | null | undefined>;
+      anchor?: boolean;
+    }): string;
+    skeletonHtml(): string;
+    errorHtml(): string;
+  };
+  /** LAZY "day" bundle (day-detail-run-client.ts): the day's run section and its structure bar. */
+  declare const CairnDayDetailRun: {
+    runHtml(run: import("./day-detail.js").DayDetailRun | null, opts?: { hidePoint?: boolean }): string;
+    stripHtml(run: import("./day-detail.js").DayDetailRun): string;
+    factsHtml(run: import("./day-detail.js").DayDetailRun): string;
+  };
+  /** LAZY "day" bundle (day-detail-controller.ts): one day opened into a host. */
+  declare const CairnDayDetailController: {
+    mount(
+      host: Element,
+      deps: {
+        date: string;
+        peek(key: string): { data: unknown; fresh: boolean } | null;
+        load(path: string, options: { key: string }): Promise<unknown>;
+        inline?: boolean;
+        painted?(detail: import("./day-detail.js").DayDetail | null): void;
+      }
+    ): () => void;
+    keyOf(date: string): string;
+    pathOf(date: string): string;
+    isDetail(value: unknown): value is import("./day-detail.js").DayDetail;
+  };
+  /** LAZY (today-ahead bundle, today-strip-client.ts): Today's "What's ahead" strip. */
+  type ClientTodayStripCell = {
+    date: string;
+    dow: number;
+    num: string;
+    today: boolean;
+    past: boolean;
+    lift: { name: string; abbr: string; state: "done" | "live" | "planned" | "open" } | null;
+    run: { label: string; kind: string; km: number | null; state: "done" | "live" | "planned" | "open" } | null;
+    swappedFrom: string;
+  };
+  declare const CairnTodayStrip: {
+    stripHtml(week: import("./client-api.js").ClientPlanWeek | null | undefined, today: string, selected?: string | null): string;
+    daysHtml(cells: ClientTodayStripCell[], selected: string | null): string;
+    nowHtml(week: import("./client-api.js").ClientPlanWeek | null | undefined, cells: ClientTodayStripCell[]): string;
+    cellsOf(week: import("./client-api.js").ClientPlanWeek | null | undefined, today: string): ClientTodayStripCell[] | null;
+    abbr(name: string): string;
+  };
+  /** LAZY (today-ahead bundle, today-strip-controller.ts). */
+  declare const CairnTodayStripController: {
+    mount(
+      slot: Element,
+      deps: {
+        date: string;
+        peek(key: string): { data: unknown; fresh: boolean } | null;
+        load(path: string, options: { key: string }): Promise<unknown>;
+        openInHorizon(date: string): void;
+      }
+    ): () => void;
   };
   declare function renderSession(opts?: Record<string, unknown>): unknown;
   declare function openSession(
@@ -6640,6 +6766,12 @@ declare global {
      * strip's), printed verbatim in place of a lift pill so one morning reads as one answer.
      */
     line: import("./client-api.js").ClientTodayStrengthLine | null;
+    /** Nothing planned or logged: a rest day. */
+    rest?: boolean;
+    /** Everything the day held is logged. */
+    done?: boolean;
+    /** Today only: the weekday map's plan day, when today's selection adapted to another. */
+    swappedFrom?: string;
   };
   type ClientHorizonWeek = { line: string; days: ClientHorizonWeekDay[] };
   /** One week of the terrain; `logged` weeks are closed weeks read off the log, before the ladder. */
@@ -6799,6 +6931,8 @@ declare global {
       mount(host: Element, deps: ClientHorizonDeps): () => void;
       /** The shell's frame for this app session: the view to open on and whether the race view belongs. */
       shellOptions(): { view: ClientHorizonView; race: boolean; raceLabel: string };
+      /** Open the next Horizon paint on this view (held for the app session, like a tap). */
+      pickView(view: ClientHorizonView): void;
     };
   }
   declare const CairnHorizonModel: Window["CairnHorizonModel"];

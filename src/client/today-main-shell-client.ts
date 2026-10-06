@@ -152,6 +152,8 @@ type TodayMainShellApi = {
   function carryBriefSlots(from: Element): (into: Element) => void {
     const fuel = from.querySelector("#todayFuelSlot");
     const path = from.querySelector("#todayPathSlot");
+    // "What's ahead" rides too: its node keeps its listeners and an open day stays open.
+    const strip = from.querySelector("#todayStripSlot");
     return (into) => {
       const g = globalThis as {
         CairnTodayFuelGlance?: { place?(brief: Element, slot: Element): void };
@@ -159,10 +161,15 @@ type TodayMainShellApi = {
       try {
         if (fuel) g.CairnTodayFuelGlance?.place?.(into, fuel);
       } catch {}
-      try {
-        const home = into.querySelector("#todayPathSlot");
-        if (path && home && path.innerHTML) home.replaceWith(path);
-      } catch {}
+      for (const [node, id] of [
+        [path, "#todayPathSlot"],
+        [strip, "#todayStripSlot"],
+      ] as const) {
+        try {
+          const home = into.querySelector(id);
+          if (node && home && node.innerHTML) home.replaceWith(node);
+        } catch {}
+      }
     };
   }
 

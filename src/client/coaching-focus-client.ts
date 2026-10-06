@@ -168,6 +168,7 @@ function coachingFocusHtml(
   // and a review LINK. Absent → true (the legacy navigate-and-act surfaces).
   const acts = focus.acts !== false;
   const style = options.style ? ` style="${escAttr(options.style)}"` : "";
+  if (spec.fold && lead && spec.lead === "flat" && typeof cfocusTrainCardHtml === "function") return cfocusTrainCardHtml(focus, lead, spec, headline, style);
 
   let html = `<div class="${spec.wrap}"${style}>`;
   const saidElsewhere = spec === CFOCUS_VARIANTS.full && options.headline === false; // said once, on Train; linked back
@@ -260,6 +261,10 @@ function coachingFocusThreadHtml(focus: ClientCoachingFocus | null | undefined):
   // same posture as a compact conductor thread is duplicate narration; genuine
   // block, health, nutrition, and other distinct conductor threads still render.
   if (focus.lead.day_posture) return "";
+  // The day's own state (day_state) is the Brief's to say, never a thread of its own: a
+  // lead that merely restates it (an older server mixing both) stays quiet on Today.
+  const dayTitle = cfocusText(focus.day_state?.title);
+  if (dayTitle && cfocusText(focus.lead.title) === dayTitle) return "";
   const title = focus.lead.title || "";
   if (!title) return "";
   const domain = isCoachingFocusDomain(focus.lead.domain) ? focus.lead.domain : "stand";
@@ -377,7 +382,20 @@ function focusRouteTarget(event: Event): string | null {
   return element instanceof HTMLElement ? element.dataset.cfocusGo || "" : element.getAttribute("data-cfocus-go") || "";
 }
 
+// The Train card's one expander: aria-expanded on the button, `hidden` on its panel.
+function cfocusToggle(button: Element): void {
+  const open = button.getAttribute("aria-expanded") !== "true";
+  button.setAttribute("aria-expanded", open ? "true" : "false");
+  const panel = document.getElementById(button.getAttribute("aria-controls") || "");
+  if (panel) panel.hidden = !open;
+}
+
 document.addEventListener("click", (event) => {
+  const toggle = event.target instanceof Element ? event.target.closest("[data-cfocus-toggle]") : null;
+  if (toggle) {
+    cfocusToggle(toggle);
+    return;
+  }
   const go = focusRouteTarget(event);
   if (go != null) cfocusRoute(go);
 });

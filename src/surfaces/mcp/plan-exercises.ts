@@ -2,6 +2,8 @@ import { z } from "zod";
 import {
   attachGuide,
   buildPlanICS,
+  dayDetail,
+  dayDetailDate,
   deleteExercise,
   deletePlanDay,
   detachGuide,
@@ -93,6 +95,16 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
     "The training days ahead, read-only: today through the end of next week, one row a day — the lifting day's name and first few movements (plan days hold strength only), the calendar's run (easy/quality/long, km when known) or rest, today's lift in the server's one strength line, and each week's context (race-build rung, a recovery or deload week). mode 'order' when no lifting weekdays are known (the lifting days in the order they come round), 'empty' when nothing is planned. Mirrors GET /api/plan/look-ahead.",
     {},
     async () => asText(planLookAhead())
+  );
+
+  server.tool(
+    "get_plan_day_detail",
+    "One calendar day of the training week, opened → { date, weekday, today, status: done|today|upcoming|rest|open, placed, focus, headline, why, week:{race,block}, lift, run, watch[], stack, done, caveats[], run_units }. `lift`: the plan day's name/focus, an intent line specific to the day, the point of the session, the anchor lift, every exercise with sets × rep range and its load (the progression engine's next prescription for a day ahead, the plan's target for a day already lived; a guess is never a load). `run`: kind easy|quality|long, the engine's km (with a miles twin), the target zone with its bpm band, the race build's pace band when a race is dated, and the structure — warm-up / the work (reps × distance at threshold, VO2, hills) / cool-down, sized from the engine's own numbers. `watch`: a training-symptom watch the day's lifts load, a constraint note, a best set this past week, a new or changing prescription. `stack`: a quiet note when heavy legs sit beside a quality or long run. `done`: the logged session and runs for a lived day. No scores; suggestions only. Pure read, mirrors GET /api/plan/day-detail. `date` (YYYY-MM-DD) is required; null past the end of next week.",
+    { date: z.string() },
+    async ({ date }) => {
+      const day = dayDetailDate(date);
+      return asText(day ? dayDetail(day) : { error: "date (YYYY-MM-DD) required" });
+    }
   );
 
   server.tool(

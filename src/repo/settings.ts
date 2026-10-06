@@ -618,7 +618,11 @@ export function getSettings(): Settings {
   return d;
 }
 
-export function setSettings(patch: any): Settings {
+// `keepStances` is the push-stance service's own door (src/domain/training/training-drive.ts):
+// it flips the standing drive as part of setting or ending a dated stance and owns that
+// stance's lifecycle itself. Every other caller is the Settings toggle, and a toggle that
+// actually CHANGES the drive ends any open stance — the athlete's newest word wins.
+export function setSettings(patch: any, opts: { keepStances?: boolean } = {}): Settings {
   ensureSettingsSchema();
   const cur = getSettings();
   const raw = db
@@ -770,6 +774,15 @@ export function setSettings(patch: any): Settings {
     merged.run_units,
     merged.meal_plan_auto_draft ? 1 : 0
   );
+  if (!opts.keepStances && merged.training_drive !== cur.training_drive) {
+    try {
+      db.prepare(
+        `UPDATE training_stances SET ended_at = datetime('now'), ended_reason = 'settings_toggle' WHERE ended_at IS NULL`
+      ).run();
+    } catch {
+      // A DB without the stance table has nothing to end.
+    }
+  }
   return getSettings();
 }
 

@@ -216,7 +216,12 @@
     });
   }
 
-  const CAIRN_HORIZON_CONTROLLER = { mount: mountHorizon, shellOptions };
+  /** Open the next Horizon paint on `view` (Today's strip opens today "in Horizon" on the week). */
+  function pickView(view: ClientHorizonView): void {
+    chosenView = view;
+  }
+
+  const CAIRN_HORIZON_CONTROLLER = { mount: mountHorizon, shellOptions, pickView };
 
   Object.assign(globalThis, { CairnHorizonController: CAIRN_HORIZON_CONTROLLER });
 }

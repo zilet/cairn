@@ -558,10 +558,36 @@ export type EnduranceScheduleCrossTraining = {
   sport: CrossTrainingSport;
   optional: true;
 };
+/**
+ * The quality session the athlete STATED ("hard threshold 5k, plus a few km around it,
+ * Thursday"). When present the run engine runs THIS type on the quality day instead of
+ * its phase rotation, and sizes the session as warm-up + work + cool-down — still inside
+ * the week's ceiling and the athlete's demonstrated running (run-progression.ts
+ * `statedQualitySession`): a week that cannot carry the stated work holds it below and
+ * says so. Whether quality runs at all stays the engine's call (a recovery week, a health
+ * hold, a thin base, a constrained supporting week, race week).
+ *   - `work_km`: the stated work itself (the 5 of "threshold 5k"), 1–15 km. Omitted, the
+ *     engine sizes the work for the type.
+ *   - `warm_up_km` / `cool_down_km`: 0–5 km each. Omitted, the engine uses a default and
+ *     says it did.
+ */
+export const STATED_QUALITY_TYPES = ["threshold", "tempo", "vo2", "hills"] as const;
+export type StatedQualityType = (typeof STATED_QUALITY_TYPES)[number];
+export type EnduranceScheduleQuality = {
+  type: StatedQualityType;
+  work_km?: number;
+  warm_up_km?: number;
+  cool_down_km?: number;
+  note?: string;
+};
+export const STATED_QUALITY_WORK_KM = { min: 1, max: 15 } as const;
+export const STATED_QUALITY_WARM_COOL_KM = { min: 0, max: 5 } as const;
 export type EnduranceSchedule = {
   days: EnduranceScheduleDay[];
   /** Stated recurring non-run days, at most one per weekday and three in all. */
   cross_training?: EnduranceScheduleCrossTraining[];
+  /** The stated quality session (type + optional work / warm-up / cool-down km). */
+  quality?: EnduranceScheduleQuality;
   note?: string;
   source: EnduranceScheduleSource;
   updated_at: string;
@@ -616,6 +642,54 @@ function crossTrainingEntry(entry: any, fromDays: boolean): EnduranceScheduleCro
   const sport = crossTrainingSportKey(word) ?? (entry.optional === true || !fromDays ? "other" : null);
   if (!sport) return null;
   return { dow: dow as EnduranceScheduleCrossTraining["dow"], sport, optional: true };
+}
+
+// A quality-session word as the athlete or a model writes it, to its type. Null for a
+// word that names no quality session (a typo, a run kind) — the stated preference is
+// then dropped rather than guessed.
+function statedQualityTypeKey(raw: unknown): StatedQualityType | null {
+  const word = String(raw ?? "")
+    .trim()
+    .toLowerCase();
+  if (!word) return null;
+  if ((STATED_QUALITY_TYPES as readonly string[]).includes(word)) return word as StatedQualityType;
+  if (/\bhill/.test(word)) return "hills";
+  if (/threshold|cruise|lactate|\blt\b/.test(word)) return "threshold";
+  if (/vo2|v02|interval|\b(?:400|800)(?:m|s)?\b|track|speed/.test(word)) return "vo2";
+  if (/tempo|steady[\s_-]*state|marathon[\s_-]*pace/.test(word)) return "tempo";
+  return null;
+}
+
+// A km field: a finite, non-negative number clamped into [min, max] to 0.1 km; anything
+// else (a string that is not a number, NaN, a negative) is dropped, never guessed.
+function statedKm(raw: unknown, bounds: { min: number; max: number }, positive = false): number | undefined {
+  if (raw == null || raw === "") return undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0 || (positive && n <= 0)) return undefined;
+  return Math.round(Math.min(bounds.max, Math.max(bounds.min, n)) * 10) / 10;
+}
+
+/**
+ * The stated quality session, normalized, or null when nothing usable was said. A bare
+ * type word ("threshold") is accepted; an unknown type drops the whole preference, and a
+ * garbage km field drops only that field.
+ */
+export function normalizeStatedQuality(input: unknown): EnduranceScheduleQuality | null {
+  const raw: any = typeof input === "string" ? { type: input } : input;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const type = statedQualityTypeKey(raw.type ?? raw.kind);
+  if (!type) return null;
+  const work_km = statedKm(raw.work_km, STATED_QUALITY_WORK_KM, true);
+  const warm_up_km = statedKm(raw.warm_up_km, STATED_QUALITY_WARM_COOL_KM);
+  const cool_down_km = statedKm(raw.cool_down_km, STATED_QUALITY_WARM_COOL_KM);
+  const note = capStr(raw.note, 160);
+  return {
+    type,
+    ...(work_km != null ? { work_km } : {}),
+    ...(warm_up_km != null ? { warm_up_km } : {}),
+    ...(cool_down_km != null ? { cool_down_km } : {}),
+    ...(note ? { note } : {}),
+  };
 }
 
 export function normalizeEnduranceSchedule(
@@ -684,7 +758,15 @@ export function normalizeEnduranceSchedule(
   const note = capStr(raw.note, 240);
   const updatedRaw = typeof raw.updated_at === "string" ? raw.updated_at.trim().slice(0, 40) : "";
   const updated_at = updatedRaw || new Date().toISOString();
-  return { days, ...(cross.length ? { cross_training: cross } : {}), ...(note ? { note } : {}), source, updated_at };
+  const quality = normalizeStatedQuality(raw.quality);
+  return {
+    days,
+    ...(cross.length ? { cross_training: cross } : {}),
+    ...(quality ? { quality } : {}),
+    ...(note ? { note } : {}),
+    source,
+    updated_at,
+  };
 }
 
 function scheduleInput(input: any): any {
@@ -722,14 +804,46 @@ function statesRunKind(input: any): boolean {
   });
 }
 
+// Did this input SAY something usable about the quality session? An explicit
+// `quality: null` (the clear) or a readable preference does; no `quality` key, or one
+// nothing could be read from, does not — the stored preference then stands.
+function statesQuality(input: any): boolean {
+  const raw = scheduleInput(input);
+  if (!raw || !Object.hasOwn(raw, "quality")) return false;
+  return raw.quality === null || normalizeStatedQuality(raw.quality) != null;
+}
+
 function serializeEnduranceSchedule(
   input: any,
   sourceDefault: EnduranceScheduleSource = "athlete",
   current?: string | null
 ): string | null {
   if (input == null) return null;
+  const raw = scheduleInput(input);
+  // A quality-only update ({quality: {...}} or {quality: null}, no days[]) changes the
+  // stated session and nothing else: the run week, the cross-training days and the note
+  // stand. Unreadable quality with no days is no update at all (null → stored kept).
+  if (raw && !Array.isArray(raw.days) && Object.hasOwn(raw, "quality")) {
+    if (!statesQuality(raw)) return null;
+    const stored = normalizeEnduranceSchedule(current);
+    const base: any = stored ? { ...stored } : { days: [] };
+    delete base.quality;
+    if (raw.quality !== null) base.quality = raw.quality;
+    base.source = raw.source ?? stored?.source ?? sourceDefault;
+    const patched = normalizeEnduranceSchedule(base, { source: sourceDefault });
+    return patched ? JSON.stringify({ ...patched, updated_at: new Date().toISOString() }) : null;
+  }
   const g = normalizeEnduranceSchedule(input, { source: sourceDefault });
   if (!g) return null;
+  // A run-day update that says nothing (readable) about the quality session keeps the
+  // stated one, exactly as it keeps the cross-training days: "Tuesday easy, Thursday
+  // quality" restated must not erase "my Thursday is a hard threshold 5k". Only an
+  // explicit `quality: null` clears it.
+  if (!statesQuality(input)) {
+    const kept = normalizeEnduranceSchedule(current)?.quality;
+    if (kept) g.quality = kept;
+    else delete g.quality;
+  }
   // A run-day update that says nothing about cross-training keeps the stated ones: the
   // run-day setters (set_endurance_schedule) carry no such field, and re-stating the
   // run week must not silently erase "Saturday is my optional MTB".

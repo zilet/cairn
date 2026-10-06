@@ -64,6 +64,25 @@
     let ask: ReturnType<Window["CairnTodayWorth"]["askCandidate"]> = null;
     let insight: unknown = null;
 
+    // "What's ahead": the week's seven days under the Brief's why, a tapped day opening
+    // inline (today-strip-controller.ts). "Open in Horizon" reads another day under
+    // Horizon; today is Today's own, so in Horizon it is a row of the week.
+    const strip = root.querySelector("#todayStripSlot");
+    if (strip) {
+      CairnTodayStripController.mount(strip, {
+        date: deps.date,
+        peek: deps.peek,
+        load: deps.load,
+        openInHorizon: (date) => {
+          if (date !== deps.date) return CairnDayOpen.openDay(date, { home: "horizon" });
+          void withBundle("horizon", () => {
+            if (typeof CairnHorizonController !== "undefined") CairnHorizonController.pickView("week");
+          });
+          activateTab("horizon");
+        },
+      });
+    }
+
     function write(slot: string, html: string): void {
       if (!live || !root.isConnected) return;
       const el = root.querySelector<HTMLElement>(slot);

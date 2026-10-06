@@ -688,6 +688,26 @@ CREATE TABLE IF NOT EXISTS brain_rollbacks (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
+-- The athlete's DATED push stance ("push me hard until the block ends"). One row per
+-- statement; the open row (ended_at NULL) whose window covers a day widens what
+-- settings.training_drive='push' licenses on it (src/repo/training-drive.ts). Past its
+-- until date it simply stops reading — the drive falls back to previous_drive with no
+-- write. Ended by a newer stance, by the athlete stepping back, by the settings toggle,
+-- or by the ledger's one-tap Undo (brain_rollbacks kind 'training_stance').
+CREATE TABLE IF NOT EXISTS training_stances (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  since TEXT NOT NULL,
+  until TEXT NOT NULL,
+  scope TEXT NOT NULL DEFAULT 'date',     -- 'block' (until = the block's last day) | 'date'
+  words TEXT,                             -- the athlete's own sentence, verbatim (≤ 240)
+  previous_drive TEXT NOT NULL DEFAULT 'steady',
+  set_via TEXT NOT NULL DEFAULT 'athlete', -- athlete | chat | mcp
+  decision_id INTEGER,
+  ended_at TEXT,
+  ended_reason TEXT,                      -- replaced | stepped_back | settings_toggle | undone
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS brain_expectations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   decision_id INTEGER NOT NULL REFERENCES brain_decisions(id) ON DELETE CASCADE,

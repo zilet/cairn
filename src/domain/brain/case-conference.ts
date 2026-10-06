@@ -26,17 +26,18 @@ import {
   citedConflictResolutions,
   clinicalAutonomyFromRevision,
   conferenceConflictInputs,
+  conflictGovernsRevision,
   conflictIsSafetyFloor,
   conflictParties,
   conflictsFromInputs,
   deterministicConferenceConflicts,
   revisionHoldsClinicalFloor,
-  safetyConflictGovernsRevision,
   unresolvedConflictCeiling,
   type ConferenceConflictKey,
 } from "./conference-conflicts.js";
 import { getCoachContext } from "../../repo/coach.js";
 import { projectCoachContext } from "../../prompt/context-projection.js";
+import { renderStatedInputLine } from "../../prompt/shared.js";
 import { localDateISO } from "../../repo/shared.js";
 import { listTrainingSymptoms } from "../../repo/training-symptoms.js";
 import { recentlySettledPlaces } from "../../repo/injury-symptom-link.js";
@@ -387,9 +388,10 @@ function specialistPrompt(
   question: string,
   snapshot: ImmutableBrainSnapshot,
   conflicts: ConferenceConflictKey[],
-  painState: ConferencePainState | null = null
+  painState: ConferencePainState | null = null,
+  stated = ""
 ): string {
-  return `You are Cairn's ${domain} specialist in a multidisciplinary case conference — ${specialistCharter(domain)} Return ONLY a SpecialistOpinion JSON object; no hidden reasoning or transcript. The literal contract is ${SPECIALIST_PROMPT_SCHEMA}. domain MUST be exactly ${JSON.stringify(domain)}. Use evidence_keys for the facts that matter, name uncertainty, and never exceed clinical or safety boundaries. Snapshot id: ${snapshot.id}. Question: ${question}. Deterministic conflicts already detected: ${JSON.stringify(conflicts)}.${painStateLine(painState)} Immutable bounded context: ${JSON.stringify(snapshot.context)}`;
+  return `You are Cairn's ${domain} specialist in a multidisciplinary case conference — ${specialistCharter(domain)} Return ONLY a SpecialistOpinion JSON object; no hidden reasoning or transcript. The literal contract is ${SPECIALIST_PROMPT_SCHEMA}. domain MUST be exactly ${JSON.stringify(domain)}. Use evidence_keys for the facts that matter, name uncertainty, and never exceed clinical or safety boundaries. Snapshot id: ${snapshot.id}. Question: ${question}. Deterministic conflicts already detected: ${JSON.stringify(conflicts)}.${painStateLine(painState)}${stated} Immutable bounded context: ${JSON.stringify(snapshot.context)}`;
 }
 
 const TRACK_WORDS: Record<PriorityTrack, string> = { muscle: "muscle & strength", race: "the race", cut: "the cut" };
@@ -400,7 +402,8 @@ function conductorPrompt(
   opinions: SpecialistOpinion[],
   conflicts: ConferenceConflictKey[],
   priority: readonly PriorityTrack[],
-  painState: ConferencePainState | null = null
+  painState: ConferencePainState | null = null,
+  stated = ""
 ): string {
   // Say honestly what makes a resolution VALID. The old line ("every conflict must
   // appear in resolved_conflicts or the server will demote") trained the model to
@@ -417,7 +420,7 @@ function conductorPrompt(
     priority.length
       ? `RECONCILE BY THE BLOCK'S PRIORITY ORDER: ${priority.map((track) => TRACK_WORDS[track]).join(" > ")}. When two opinions pull against each other, the earlier goal's next step wins and the later goal's step is protected or deferred, never silently dropped; name the deferral in deferred. `
       : ""
-  }${painStateLine(painState).trimStart()}${painStateLine(painState) ? " " : ""}Snapshot id: ${snapshot.id}. Question: ${question}. Conflicts: ${JSON.stringify(conflicts)}. Opinions: ${JSON.stringify(opinions)}`;
+  }${painStateLine(painState).trimStart()}${painStateLine(painState) ? " " : ""}${stated ? `${stated.trimStart()} When your revision gives the athlete LESS than they said they want, its user_explanation must say so in their terms — what holds, and what would release it. ` : ""}Snapshot id: ${snapshot.id}. Question: ${question}. Conflicts: ${JSON.stringify(conflicts)}. Opinions: ${JSON.stringify(opinions)}`;
 }
 
 const TIER_ORDER = ["observe", "quiet_apply", "announce", "ask", "clinician"] as const;
@@ -594,6 +597,9 @@ export async function runCaseConference(
       : defaultPainState(conferenceDay);
   const conflictInputs = conferenceConflictInputs(fullContext, { activeSymptomAreas });
   const conflicts = conflictsFromInputs(conflictInputs);
+  // What the athlete SAID (a push stance and what holds against it, a stated quality
+  // session), read from the FULL context like the conflicts — the seats argue inside it.
+  const statedLine = renderStatedInputLine(fullContext);
   const perSpecialistCalls = Math.max(
     1,
     Math.min(Math.floor(12 / Math.max(1, domains.length)), Math.trunc(Number(input.maxCallsPerSpecialist)) || 12)
@@ -630,7 +636,7 @@ export async function runCaseConference(
     domains.map(async (domain) => {
       const value = await specialistRun(
         agent,
-        specialistPrompt(domain, question, snapshot, conflicts, painState),
+        specialistPrompt(domain, question, snapshot, conflicts, painState, statedLine),
         domain,
         snapshot,
         perSpecialistCalls
@@ -679,7 +685,7 @@ export async function runCaseConference(
     });
   const rawDecision = await conductorRun(
     agent,
-    conductorPrompt(question, snapshot, opinions, conflicts, priority, painState)
+    conductorPrompt(question, snapshot, opinions, conflicts, priority, painState, statedLine)
   );
   assertActive();
   const normalizedDecision = normalizeStrictCaseConferenceDecision(rawDecision);
@@ -765,10 +771,11 @@ export async function runCaseConference(
   // A conflict that governs nothing here stays recorded (unresolved_conflicts) and moves
   // no tier.
   const revisionEasesLoad = decision.revision?.type === "plan_update" && changesOnlyEaseLoad(decision.revision.changes);
-  const governingConflicts = unresolvedConflicts.filter(
-    (conflict) =>
-      !conflictIsSafetyFloor(conflict) ||
-      safetyConflictGovernsRevision(conflict, decision.revision, { easesLoad: revisionEasesLoad })
+  // The athlete's stated push is held to the same relevance (conflictGovernsRevision):
+  // it is a question about RAISING training load, so an easing-only change or a fueling
+  // target is never tightened by it.
+  const governingConflicts = unresolvedConflicts.filter((conflict) =>
+    conflictGovernsRevision(conflict, decision.revision, { easesLoad: revisionEasesLoad })
   );
   const safetyUnresolved = governingConflicts.some((conflict) => conflictIsSafetyFloor(conflict));
   const conflictCeiling = unresolvedConflictCeiling(governingConflicts, leadMode);

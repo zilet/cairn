@@ -85,6 +85,10 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/today-fuel-glance-client.ts", output: "public/js/today-fuel-glance-client.js" },
   { source: "src/client/today-worth-client.ts", output: "public/js/today-worth-client.js" },
   { source: "src/client/day-open-client.ts", output: "public/js/day-open-client.js" },
+  { source: "src/client/day-detail-model.ts", output: "public/js/day-detail-model.js" },
+  { source: "src/client/day-detail-run-client.ts", output: "public/js/day-detail-run-client.js" },
+  { source: "src/client/day-detail-client.ts", output: "public/js/day-detail-client.js" },
+  { source: "src/client/day-detail-controller.ts", output: "public/js/day-detail-controller.js" },
   { source: "src/client/day-record-client.ts", output: "public/js/day-record-client.js" },
   { source: "src/client/today-rail-controller.ts", output: "public/js/today-rail-controller.js" },
   { source: "src/client/today-plan-selection-client.ts", output: "public/js/today-plan-selection-client.js" },
@@ -143,6 +147,8 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/today-week-client.ts", output: "public/js/today-week-client.js" },
   { source: "src/client/today-horizon-client.ts", output: "public/js/today-horizon-client.js" },
   { source: "src/client/today-ahead-controller.ts", output: "public/js/today-ahead-controller.js" },
+  { source: "src/client/today-strip-client.ts", output: "public/js/today-strip-client.js" },
+  { source: "src/client/today-strip-controller.ts", output: "public/js/today-strip-controller.js" },
   { source: "src/client/today-screen.ts", output: "public/js/03-today.js" },
   { source: "src/client/progress-data-client.ts", output: "public/js/progress-data-client.js" },
   { source: "src/client/progress-endurance-client.ts", output: "public/js/progress-endurance-client.js" },
@@ -179,6 +185,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/journey-progress-client.ts", output: "public/js/journey-progress-client.js" },
   { source: "src/client/journey-timeline-client.ts", output: "public/js/journey-timeline-client.js" },
   { source: "src/client/progress-overview-snapshot-client.ts", output: "public/js/progress-overview-snapshot-client.js" },
+  { source: "src/client/train-focus-card-client.ts", output: "public/js/train-focus-card-client.js" },
   { source: "src/client/progress-overview-client.ts", output: "public/js/progress-overview-client.js" },
   // v2 wave 5 slots (stream A pre-registered them; B fills You, the stack, the stone detail).
   { source: "src/client/cairn-stack-model.ts", output: "public/js/cairn-stack-model.js" },
@@ -768,6 +775,7 @@ export const BUNDLES = [
       "public/js/progress-program-controller.js",
       "public/js/journey-progress-client.js",
       "public/js/journey-timeline-client.js",
+      "public/js/train-focus-card-client.js",
       "public/js/progress-overview-client.js",
       "public/js/plan-week-client.js",
       "public/js/body-metrics-client.js",
@@ -871,12 +879,21 @@ export const BUNDLES = [
   },
   {
     output: "public/js/bundle-12-day.js",
-    label: "A day (record or preview)",
+    label: "A day (record or preview, and the shared day detail)",
     // LAZY: any day that is not today, read-only (v2 wave 7, "Today is Home"). The
     // opener (day-open-client, eager in bundle-02) injects this on the first open.
+    // It also carries the ONE day-detail view: Today's "What's ahead" strip opens a
+    // day inline through withBundle("day"), and Train's Program gallery draws its
+    // movement rows with the shared row (train depends on day).
     lazy: "day",
     views: ["day"],
-    inputs: ["public/js/day-record-client.js"],
+    inputs: [
+      "public/js/day-detail-model.js",
+      "public/js/day-detail-run-client.js",
+      "public/js/day-detail-client.js",
+      "public/js/day-detail-controller.js",
+      "public/js/day-record-client.js",
+    ],
   },
   {
     output: "public/js/bundle-13-meals.js",
@@ -919,6 +936,8 @@ export const BUNDLES = [
       "public/js/today-week-client.js",
       "public/js/today-horizon-client.js",
       "public/js/today-ahead-controller.js",
+      "public/js/today-strip-client.js",
+      "public/js/today-strip-controller.js",
     ],
   },
 ];

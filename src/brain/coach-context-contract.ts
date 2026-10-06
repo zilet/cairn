@@ -295,12 +295,33 @@ export interface CoachWhatWorksForYou {
   modifiers: CoachPersonalModifier[];
 }
 
+export interface CoachTrainingDrive {
+  drive: "steady" | "push";
+  standing: "steady" | "push";
+  stance: { since: string; until: string; scope: "block" | "date"; words: string | null; days_left: number } | null;
+  ended_until: string | null;
+  licenses: string[];
+  never_overrides: string[];
+  /**
+   * While push is in force: what the floors are holding against it RIGHT NOW, in the
+   * athlete's terms (a day that cost something, a fresh brake, an open symptom, a health
+   * finding that governs training, a recovery week). Empty = nothing holds. Read off the
+   * same deterministic reads the day uses — never the composed envelope.
+   */
+  held_by?: string[];
+  /** The coach's open "want to open the throttle?" ask (src/repo/push-offer.ts), or null. */
+  offer?: { offered_on: string; evidence: string[]; until: string } | null;
+}
+
 export interface CoachContextEnvelope {
   now: CoachNowContext;
   profile: CoachRecord | null;
   location: EffectiveLocationContext;
   discipline: CoachDiscipline;
   training_intent: ResolvedTrainingIntent;
+  // The athlete's drive and dated push stance (src/repo/training-drive-read.ts
+  // trainingDriveForCoach). Optional: a context built before it existed carries none.
+  training_drive?: CoachTrainingDrive | null;
   endurance_capacity: EnduranceCapacityRead | null;
   endurance_goal: CoachEnduranceGoal | null;
   endurance_schedule: CoachEnduranceSchedule | null;

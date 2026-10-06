@@ -158,7 +158,25 @@
 .horizon-pill.is-open{background:transparent;box-shadow:inset 0 0 0 1.5px var(--c);color:var(--ink-2)}
 .horizon-pill-tick{font-size:var(--text-xs);color:var(--ink-2)}
 .horizon-pill-live{width:6px;height:6px;border-radius:50%;background:var(--dawn);flex:none}
-.horizon-rest{font-family:var(--font-display);font-size:var(--text-lead);color:var(--ink-2);padding-top:1px}
+/* The day's lift leads the row as its name (a strength dot, the UI face), the run rides
+   beside it as the endurance chip with its distance. */
+.horizon-pill.is-strength{background:none;box-shadow:none;padding-inline:0;font-size:var(--text-md);
+  font-weight:var(--weight-semibold);color:var(--ink);margin-right:var(--space-2)}
+.horizon-pill.is-strength::before{content:"";width:8px;height:8px;border-radius:50%;flex:none;
+  box-shadow:inset 0 0 0 1.5px var(--s-strength)}
+.horizon-pill.is-strength.is-done::before,.horizon-pill.is-strength.is-live::before{background:var(--s-strength)}
+.horizon-pill.is-strength.is-open{color:var(--ink-2)}
+.horizon-pills{align-items:center}
+/* A rest day is quiet: the word in the UI face, muted, the row a little shorter. */
+.horizon-rest{font-size:var(--text-md);color:var(--muted);padding-top:var(--space-3)}
+.horizon-day.is-rest .horizon-day-when b{color:var(--ink-2)}
+/* A day whose work is all logged: a small sage check beside its date. */
+.horizon-day-check{display:inline-grid;place-items:center;width:14px;height:14px;margin-left:var(--space-2);border-radius:50%;
+  background:var(--sage-text);color:var(--on-accent);font-family:var(--font-ui);font-size:var(--text-2xs);vertical-align:2px}
+.horizon-day.is-done .horizon-pill.is-done{background:color-mix(in srgb,var(--c) 46%,transparent)}
+/* Today adapted to another plan day: said once, quietly. */
+.horizon-day-swap{font-size:var(--text-xs);color:var(--muted);line-height:var(--leading-normal)}
+.horizon-day:focus-visible{outline:2px solid var(--dawn);outline-offset:2px;border-radius:var(--radius-md)}
 /* Today's lift in the server's one line, verbatim with its caveat, leading the day's pills. */
 .horizon-day-body{display:flex;flex-direction:column;gap:var(--space-2);min-width:0}
 .horizon-day-body .strength-line{padding-top:1px}

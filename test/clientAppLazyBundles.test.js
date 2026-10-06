@@ -110,12 +110,20 @@ test("a bundle resolves only once its dependencies have executed too", async () 
   const pending = env.context.ensureBundle("me-health").then(() => {
     done = true;
   });
-  assert.deepEqual(env.scripts.map((s) => s.src).sort(), ["/js/bundle-05-me-health.js", "/js/bundle-08-train.js"]);
+  // …and train draws its movement rows with the day view's shared row (day).
+  assert.deepEqual(env.scripts.map((s) => s.src).sort(), [
+    "/js/bundle-05-me-health.js",
+    "/js/bundle-08-train.js",
+    "/js/bundle-12-day.js",
+  ]);
   byName(env.scripts, "me-health").fire("load");
   await new Promise((r) => setTimeout(r, 0));
   assert.equal(done, false, "me-health alone is not enough");
   assert.equal(env.context.bundleLoaded("me-health"), false);
   byName(env.scripts, "train").fire("load");
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(done, false, "train's own dependency is still loading");
+  byName(env.scripts, "day").fire("load");
   await pending;
   assert.equal(env.context.bundleLoaded("me-health"), true);
   assert.equal(env.context.bundleLoaded("train"), true);
@@ -157,7 +165,7 @@ test("withBundle runs synchronously when warm and after the load when cold", asy
   });
   assert.deepEqual(calls, [], "a cold destination waits for its bundle");
   assert.equal(typeof cold.then, "function");
-  env.scripts[0].fire("load");
+  for (const s of env.scripts) s.fire("load"); // train and the day bundle it depends on
   assert.equal(await cold, "painted");
 
   // Warm: the render runs inside the caller's turn (a view transition's update
@@ -300,7 +308,8 @@ test("the idle warm-up executes every lazy bundle one at a time, once", async ()
     }
     await new Promise((r) => setImmediate(r));
   }
-  assert.deepEqual(order, ["today-ahead", "train", "ask", "horizon", "day", "me-health", "meals", "settings"]);
+  // Train brings the day bundle it depends on with it (its dependency's tag goes in first).
+  assert.deepEqual(order, ["today-ahead", "day", "train", "ask", "horizon", "me-health", "meals", "settings"]);
   assert.equal(env.scripts.length, 8, "one tag per bundle");
 });
 

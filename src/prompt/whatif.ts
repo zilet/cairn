@@ -10,7 +10,7 @@ import type { TodayStone } from "../contracts/today-stones.js";
 import { getCoachContext } from "../repo/coach.js";
 import type { CoachContext } from "../repo/coach-context.js";
 import { promptData } from "./context-projection.js";
-import { CAIRN_PERSONA, renderJsonContract } from "./shared.js";
+import { CAIRN_PERSONA, renderJsonContract, renderTrainingDriveLine } from "./shared.js";
 
 // Prose twin of agent-contracts.ts WHAT_IF_SCHEMA. Keep the two in step.
 const WHAT_IF_PROSE_SCHEMA = `{
@@ -89,7 +89,7 @@ THE CHANGE:
 THE RIPPLE: one entry per stone the change would genuinely touch (all six is fine). Each "why" is ONE
 short sentence in a friend's voice, grounded in their actual data.
 
-${renderStones(opts.stones ?? [])}${renderHint(opts.hint)}
+${renderStones(opts.stones ?? [])}${renderHint(opts.hint)}${renderTrainingDriveLine(context)}
 ${renderJsonContract(WHAT_IF_PROSE_SCHEMA)}
 
 DATA:

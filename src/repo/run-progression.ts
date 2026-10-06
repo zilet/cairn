@@ -48,6 +48,8 @@ import {
   dowToDayNumber,
   formatEnduranceScheduleDays,
   type EnduranceSchedule,
+  type EnduranceScheduleQuality,
+  type StatedQualityType,
 } from "./profile.js";
 import { applyPersonalResponseModifier, personalResponseModifierFor } from "./reaction-model.js";
 import {
@@ -71,7 +73,7 @@ import { raceLadderPeak } from "./race-ladder-hook.js";
 // A function-only cycle (the agenda reads this module's weeklyRunPlan at call time):
 // the morning read asks the agenda's own observation read whether the week's quality
 // is already in, so the two can never disagree about it.
-import { qualityRunLoggedBefore } from "./flexible-training-agenda.js";
+import { longestQualityRunKm, qualityRunLoggedBefore } from "./flexible-training-agenda.js";
 import {
   applyRunDayIntensity,
   HRV_DIP_MIN_RELATIVE_DROP,
@@ -603,6 +605,12 @@ export interface RunPlanPrescription extends RunPrescription {
   dose?: "short";
   /** Set only on the run the morning moved: the kind the WEEK put on this day. */
   planned_kind_label?: "easy" | "long" | "quality";
+  /**
+   * Present only on a quality run that is the athlete's STATED session
+   * (`endurance_schedule.quality`): warm-up / work / cool-down km, the stated work, and
+   * — when this week holds the work below it — the sentence that says why. Additive.
+   */
+  stated_quality?: StatedQualityRx;
 }
 
 export interface WeeklyRunPlan {
@@ -981,6 +989,389 @@ export const SHORT_QUALITY_KEPT_VARIANTS: ReadonlyArray<(session: string) => str
   (session) =>
     `Less running this week, but a short ${session} stimulus stays on the quality day when the morning is green; otherwise that day goes easy.`,
 ];
+
+// ---- the STATED quality session (endurance_schedule.quality) ----
+// The athlete said what their quality day is ("hard threshold 5k, a few km around it").
+// The engine runs THAT type instead of its phase rotation and sizes it as warm-up + the
+// stated work + cool-down, with the total as the run's distance. Everything protective
+// still decides WHETHER quality runs (weeklyRunPlanRead's includeQuality); this only
+// decides what the session is and how much of the stated work this week can carry.
+//
+// Threshold structure. "Hard threshold 5k" reads, the way most coaches use it, as ~5 km
+// OF threshold work — not a 5 km race. Up to 6 km that is run CONTINUOUS at threshold
+// (a 20–30 minute effort is the classic threshold run, and it is what the athlete asked
+// for); the note offers the cruise-interval split (N × 1 km, 60 s jog) as the fallback
+// when the pace slips. Past 6 km of work the session becomes cruise intervals of 2 km
+// with 90 s jogs — continuous threshold that long stops being threshold.
+export type StatedQualityHeldReason = "short" | "taper" | "first" | "capacity" | "room";
+export interface StatedQualityRx {
+  source: "stated";
+  type: StatedQualityType;
+  /** Continuous work or reps (cruise intervals, VO2 reps, hill repeats). */
+  form: "continuous" | "intervals";
+  warm_up_km: number;
+  /** The work this week carries, km (hill repeats: the reps and their jog-downs, approximate). */
+  work_km: number;
+  cool_down_km: number;
+  /** warm-up + work + cool-down — the run's distance. */
+  total_km: number;
+  /** The work the athlete stated; null when they named only the type (the engine sized it). */
+  stated_work_km: number | null;
+  /** True when the warm-up/cool-down are the engine's default, not the athlete's numbers. */
+  warm_cool_default: boolean;
+  /** `short` a trimmed week's set, `taper` the taper's smaller dose, else `full`. */
+  dose: "full" | "short" | "taper";
+  /** Set when this week holds the work below what was stated, with the sentence that says why. */
+  held: { reason: StatedQualityHeldReason; line: string } | null;
+}
+
+/** The stated session could not fit this week at all: even its floor (the least work worth
+ * running, 1 km easy either side) — or the session after its final rounding — runs past
+ * what the athlete has shown (`capacity`) or what the week has room for (`room`). The
+ * engine's own quality (or easy) answer stands, and `line` says so. */
+export interface StatedQualityUnfit {
+  unfit: true;
+  reason: "capacity" | "room";
+  line: string;
+}
+
+// Said when the stated session cannot fit this week at all and the engine's own answer
+// stands — each reason its own small set.
+export const STATED_QUALITY_UNFIT_VARIANTS: Record<
+  StatedQualityUnfit["reason"],
+  ReadonlyArray<(session: string) => string>
+> = {
+  capacity: [
+    (session) =>
+      `Your ${session} session is still a step past what your recent running has carried, so this week runs a smaller quality session toward it.`,
+    (session) =>
+      `Even a short ${session} session runs past the hard running on record, so the week keeps its own lighter quality day for now.`,
+  ],
+  room: [
+    (session) =>
+      `This week's kilometres can't hold your ${session} session even at its smallest, so the quality day runs the week's own session.`,
+    (session) => `There isn't room in this week for your ${session} session yet — the week's own quality day stands.`,
+  ],
+};
+
+const STATED_QUALITY_DEFAULT_WARM_KM = 2;
+const STATED_QUALITY_DEFAULT_COOL_KM = 2;
+// A trimmed week's short set keeps the warm-up/cool-down shorter by default.
+const STATED_QUALITY_SHORT_WARM_COOL_KM = 1.5;
+// The least work a session is worth running at all.
+const STATED_QUALITY_MIN_WORK_KM = 2;
+// The fewest 800 m reps a VO2 session runs.
+const STATED_QUALITY_VO2_MIN_REPS = 3;
+// A trimmed week runs about half the stated work; a taper week about 60% of it; a
+// first hard session after weeks without one starts at about 60% of it.
+const STATED_QUALITY_SHORT_FRACTION = 0.5;
+const STATED_QUALITY_TAPER_FRACTION = 0.6;
+const STATED_QUALITY_FIRST_FRACTION = 0.6;
+// The session (warm-up included) may take at most this share of the week; the long run
+// keeps at least a quarter of it and each easy run its 3 km floor.
+const STATED_QUALITY_WEEK_SHARE_MAX = 0.4;
+const STATED_QUALITY_LONG_FLOOR_SHARE = 0.25;
+// One step past the longest quality-graded run on record — never a leap past it.
+const STATED_QUALITY_CAPACITY_STEP = 1.15;
+// How far back "a quality run on record" reaches.
+export const STATED_QUALITY_EVIDENCE_DAYS = 42;
+const THRESHOLD_CONTINUOUS_MAX_KM = 6;
+
+const STATED_QUALITY_WORDS: Record<StatedQualityType, string> = {
+  threshold: "threshold",
+  tempo: "tempo",
+  vo2: "VO2 intervals",
+  hills: "hill repeats",
+};
+
+// Said once a week when the stated session runs as stated. A variant set, per week.
+export const STATED_QUALITY_KEPT_VARIANTS: ReadonlyArray<(session: string) => string> = [
+  (session) => `The quality day runs the session you set: ${session}.`,
+  (session) => `Your own quality session stays on the card — ${session}.`,
+  (session) => `Quality this week is the one you chose: ${session}.`,
+];
+// The warm-up/cool-down the athlete did not give a number for.
+export const STATED_QUALITY_DEFAULT_AROUND_VARIANTS: ReadonlyArray<(km: string) => string> = [
+  (km) => `You didn't give a warm-up or cool-down distance, so it's ${km} easy either side.`,
+  (km) => `The easy running around it is ${km} each side — change it whenever you like.`,
+  (km) => `With no warm-up distance stated, ${km} easy either side is the default.`,
+];
+// Held below the stated work — each reason its own small set, the numbers always said.
+export const STATED_QUALITY_HELD_VARIANTS: Record<
+  StatedQualityHeldReason,
+  ReadonlyArray<(session: string, stated: string, held: string) => string>
+> = {
+  short: [
+    (session, stated, held) =>
+      `A lighter week keeps your ${session} session but at ${held} of its ${stated} — that morning decides whether it runs.`,
+    (session, stated, held) =>
+      `Your ${stated} of ${session} is the target; this lighter week holds ${held} of it, and the morning has the final say.`,
+  ],
+  taper: [
+    (session, stated, held) =>
+      `Tapering: your ${session} session stays, trimmed to ${held} of its ${stated} so the legs arrive fresh.`,
+    (session, stated, held) =>
+      `The taper keeps the ${session} feel but not the volume — ${held} of your ${stated} this week.`,
+  ],
+  first: [
+    (session, stated, held) =>
+      `Your ${session} ${stated} is the target; this week holds ${held} of it — the first hard session in a while starts below it.`,
+    (session, stated, held) =>
+      `No hard running on record lately, so the ${session} work opens at ${held} and steps toward your ${stated}.`,
+  ],
+  capacity: [
+    (session, stated, held) =>
+      `Your ${session} ${stated} is the target; this week holds ${held} of it — one step past what your recent running has carried, not a leap.`,
+    (session, stated, held) =>
+      `Stepping toward your ${stated} of ${session}: ${held} this week, a step past the sessions you've already run.`,
+  ],
+  room: [
+    (session, stated, held) =>
+      `Your ${session} ${stated} is the target; this week holds ${held} of it so the session fits inside the week's volume.`,
+    (session, stated, held) =>
+      `The week's kilometres can't carry the full ${stated} of ${session} yet — ${held} this week, building toward it.`,
+  ],
+};
+
+function kmWords(km: number): string {
+  return `${Number.isInteger(km) ? km : round1(km)} km`;
+}
+
+const floorHalf = (km: number): number => Math.floor(km * 2 + 1e-9) / 2;
+
+/**
+ * What the athlete's running has shown a hard session can hold, at `anchor` (the closed
+ * week): one step past the longest quality-graded run of the evidence window, else —
+ * with no quality run on record — one step past the longest mid-week run, the session
+ * being a mid-week run too. `firstInAWhile` when no quality run is on record at all.
+ */
+function statedQualityEvidence(
+  anchor: string,
+  hasQuality: boolean
+): { capacityKm: number | null; firstInAWhile: boolean } {
+  let longest: number | null = null;
+  try {
+    longest = longestQualityRunKm(isoDaysAgo(anchor, STATED_QUALITY_EVIDENCE_DAYS - 1), anchor);
+  } catch {
+    longest = null;
+  }
+  if (longest != null) return { capacityKm: round1(longest * STATED_QUALITY_CAPACITY_STEP), firstInAWhile: false };
+  const midweek = demonstratedMidweekRunKm(anchor);
+  return {
+    capacityKm: midweek != null ? round1(midweek * STATED_QUALITY_CAPACITY_STEP) : null,
+    firstInAWhile: !hasQuality,
+  };
+}
+
+/** The stated session in a phrase: "5 km of threshold with 2 km easy either side (9 km in all)". */
+function statedSessionWords(sq: StatedQualityRx): string {
+  const work =
+    sq.type === "hills" || sq.type === "vo2"
+      ? STATED_QUALITY_WORDS[sq.type]
+      : `${kmWords(sq.work_km)} of ${STATED_QUALITY_WORDS[sq.type]}`;
+  const around =
+    sq.warm_up_km === sq.cool_down_km
+      ? `${kmWords(sq.warm_up_km)} easy either side`
+      : `${kmWords(sq.warm_up_km)} easy before and ${kmWords(sq.cool_down_km)} after`;
+  return `${work} with ${around} (${kmWords(sq.total_km)} in all)`;
+}
+
+/** The work the engine sizes for a type the athlete named without a distance. */
+function statedQualityDefaultWorkKm(type: StatedQualityType, phase: string): number {
+  if (type === "threshold") return phase === "sharpen" || phase === "taper" ? 4 : 5;
+  if (type === "vo2") return phase === "taper" ? 3.2 : phase === "sharpen" ? 4 : 4.8;
+  if (type === "hills") return 3;
+  return 4;
+}
+
+/**
+ * The stated quality session as this week can run it. Pure: the caller hands in the
+ * week's ceilings. `ceilingKm` is the most the run may total (the week's room, or the
+ * easy distance a morning opened a set inside); `capacityKm` one step past the longest
+ * quality-graded run on record (null when there is none); `firstInAWhile` no quality
+ * session at all in the evidence window.
+ */
+export function statedQualitySession(args: {
+  stated: EnduranceScheduleQuality;
+  phase: string;
+  dose: "full" | "short" | "taper";
+  zones: RunZones;
+  hrModel: HrModel | null;
+  ceilingKm: number | null;
+  capacityKm: number | null;
+  firstInAWhile: boolean;
+  date: string;
+}): (ReturnType<typeof qualitySpec> & { stated: StatedQualityRx }) | StatedQualityUnfit {
+  const { stated, phase, dose, zones, hrModel, date } = args;
+  // A ceiling the whole run must stay inside (0.05 km of rounding slack); the first one
+  // the session overruns is the reason it cannot run as stated this week.
+  const overrun = (total: number): StatedQualityUnfit["reason"] | null => {
+    const past = (ceiling: number | null) => ceiling != null && Number.isFinite(ceiling) && total > ceiling + 0.05;
+    return past(args.capacityKm) ? "capacity" : past(args.ceilingKm) ? "room" : null;
+  };
+  const unfit = (reason: StatedQualityUnfit["reason"]): StatedQualityUnfit => ({
+    unfit: true,
+    reason,
+    line: pickDayVariant(
+      STATED_QUALITY_UNFIT_VARIANTS[reason],
+      date,
+      `run-stated-quality-unfit:${reason}`
+    )(STATED_QUALITY_WORDS[stated.type]),
+  });
+  const type = stated.type;
+  const statedWork = stated.work_km ?? null;
+  const target = statedWork ?? statedQualityDefaultWorkKm(type, phase);
+  const aroundDefault = dose === "short" ? STATED_QUALITY_SHORT_WARM_COOL_KM : null;
+  const warmDefault = stated.warm_up_km == null;
+  const coolDefault = stated.cool_down_km == null;
+  let warm = stated.warm_up_km ?? aroundDefault ?? STATED_QUALITY_DEFAULT_WARM_KM;
+  let cool = stated.cool_down_km ?? aroundDefault ?? STATED_QUALITY_DEFAULT_COOL_KM;
+  // VO2 work runs as 800 m reps, three at the least: its floor is 2.4 km, so the fit
+  // below sizes the session the structure will actually run (never 2 km that the rep
+  // count then rounds back up past the ceiling).
+  const structureMin = type === "vo2" ? STATED_QUALITY_VO2_MIN_REPS * 0.8 : 0;
+  const minWork = Math.max(structureMin, Math.min(target, STATED_QUALITY_MIN_WORK_KM));
+  let work = Math.max(target, structureMin);
+  let reason: StatedQualityHeldReason | null = null;
+  const holdTo = (km: number, why: StatedQualityHeldReason) => {
+    const next = Math.max(minWork, floorHalf(km));
+    if (next < work - 0.05) {
+      work = next;
+      reason ??= why;
+    }
+  };
+  if (dose === "short") holdTo(target * STATED_QUALITY_SHORT_FRACTION, "short");
+  else if (dose === "taper") holdTo(target * STATED_QUALITY_TAPER_FRACTION, "taper");
+  if (args.firstInAWhile) holdTo(target * STATED_QUALITY_FIRST_FRACTION, "first");
+  // The two ceilings on the whole run: what one step past the shown hard sessions allows,
+  // then what the week has room for. The work gives way first; the warm-up and cool-down
+  // shrink (never below 1 km each) only when the work is already at its floor.
+  const fit = (ceiling: number | null, why: StatedQualityHeldReason) => {
+    if (ceiling == null || !Number.isFinite(ceiling)) return;
+    if (warm + work + cool <= ceiling + 0.05) return;
+    holdTo(ceiling - warm - cool, why);
+    let over = round1(warm + work + cool - ceiling);
+    if (over > 0.05) {
+      // Half the overrun from the warm-up, rounded UP to the 0.1 km grid, then whatever is
+      // still over (re-measured, so a rounding tenth never slips through) from the cool-down.
+      const trimWarm = Math.min(Math.ceil((over / 2) * 10 - 1e-9) / 10, Math.max(0, warm - 1));
+      warm = round1(warm - trimWarm);
+      over = round1(warm + work + cool - ceiling);
+      if (over > 0.05) cool = round1(cool - Math.min(over, Math.max(0, cool - 1)));
+    }
+  };
+  fit(args.capacityKm, "capacity");
+  fit(args.ceilingKm, "room");
+  // Even the floor (the least work worth running, 1 km easy either side) can run past a
+  // ceiling: then the stated session does not run this week at all — the engine's own
+  // answer stands — rather than a session past what the week or the legs can hold.
+  const floorOverrun = overrun(round1(warm + work + cool));
+  if (floorOverrun) return unfit(floorOverrun);
+
+  // The structure the work runs as.
+  const z4 = zoneTag("Z4", zones, hrModel);
+  let label: string;
+  let zoneKey: ZoneKey;
+  let interval: IntervalRep[] | null = null;
+  let form: StatedQualityRx["form"] = "intervals";
+  let main: string;
+  const short = dose === "short";
+  switch (type) {
+    case "threshold": {
+      zoneKey = "Z4";
+      if (work <= THRESHOLD_CONTINUOUS_MAX_KM) {
+        form = "continuous";
+        label = short ? "Short threshold" : "Threshold run";
+        const split = Number.isInteger(work) && work >= 2 ? `${work} × 1 km` : "1 km reps";
+        main = `${kmWords(work)} continuous at ${z4}, threshold effort (if the pace slips, split it into ${split} with a 60s jog between)`;
+      } else {
+        // 2 km cruise reps when the work divides into them, else 1 km reps.
+        const whole = Math.floor(work + 1e-9);
+        const repKm = whole % 2 === 0 ? 2 : 1;
+        const reps = whole / repKm;
+        const off = repKm === 2 ? "90s jog" : "60s jog";
+        work = whole;
+        label = short ? "Short threshold" : "Threshold intervals";
+        interval = [{ reps, on: `${repKm}km`, off, zone: "Z4" }];
+        main = `${reps} × ${repKm} km at ${z4}, threshold effort, ${off.replace("s ", "s easy ")} between`;
+      }
+      break;
+    }
+    case "tempo": {
+      zoneKey = "Z3";
+      form = "continuous";
+      label = short ? "Short tempo" : "Tempo run";
+      main = `${kmWords(work)} continuous at ${zoneTag("Z3", zones, hrModel)}, comfortably hard`;
+      break;
+    }
+    case "vo2": {
+      zoneKey = "Z5";
+      const reps = Math.min(10, Math.max(STATED_QUALITY_VO2_MIN_REPS, Math.floor(work / 0.8 + 0.01)));
+      work = round1(reps * 0.8);
+      label = short ? "Short intervals" : "VO2 intervals";
+      interval = [{ reps, on: "800m", off: "90s jog", zone: "Z5" }];
+      main = `${reps} × 800m hard at ${zoneTag("Z5", zones, hrModel)}, 90s jog recovery`;
+      break;
+    }
+    default: {
+      zoneKey = "Z4";
+      const reps = short ? 6 : phase === "base" ? 8 : 10;
+      const on = short ? "30s uphill" : "45s uphill";
+      label = short ? "Short hills" : "Hill repeats";
+      interval = [{ reps, on, off: "jog down", zone: "Z4" }];
+      main = `${reps} × ${on.replace("s ", " s ")} at ${z4} effort, jog down to recover (about ${kmWords(work)} with the jogs)`;
+      break;
+    }
+  }
+  warm = round1(warm);
+  cool = round1(cool);
+  work = round1(work);
+  const total = round1(warm + work + cool);
+  // The structure's own rounding (VO2's three-rep minimum) can add work back after the
+  // fit; a session that now overruns a ceiling does not run as stated either.
+  const roundedOverrun = overrun(total);
+  if (roundedOverrun) return unfit(roundedOverrun);
+  const note = `${kmWords(warm)} easy, then ${main}, then ${kmWords(cool)} easy — ${kmWords(total)} in all.`;
+  const words = STATED_QUALITY_WORDS[type];
+  // Said only against a number the athlete GAVE: "your 5 km is the target" about a
+  // distance the engine picked would put words in their mouth. A type-only preference
+  // held for a lighter week reads through the week's own short-set sentence instead.
+  // (Assigned inside the hold closures, so read through a cast: flow analysis still has
+  // it at its initial null here.)
+  const heldBy = reason as StatedQualityHeldReason | null;
+  const held =
+    heldBy && statedWork != null && work < target - 0.05
+      ? {
+          reason: heldBy,
+          line: pickDayVariant(STATED_QUALITY_HELD_VARIANTS[heldBy], date, `run-stated-quality-held:${heldBy}`)(
+            words,
+            kmWords(target),
+            kmWords(work)
+          ),
+        }
+      : null;
+  return {
+    label,
+    zoneKey,
+    interval,
+    distance: total,
+    duration: null,
+    note,
+    stated: {
+      source: "stated",
+      type,
+      form,
+      warm_up_km: warm,
+      work_km: work,
+      cool_down_km: cool,
+      total_km: total,
+      stated_work_km: statedWork,
+      warm_cool_default: warmDefault || coolDefault,
+      dose,
+      held,
+    },
+  };
+}
 
 // ---- the connected brain: endurance-limiting health directives shape the week ----
 // `isEnduranceHoldDirective` and the marker derivation behind it now live in
@@ -1891,8 +2282,20 @@ function weeklyRunPlanRead(
     !supportingConstrained &&
     !(taper && (recoveryDown || spiking));
   const shortQuality = includeQuality && trimmedWeek && !taper;
+  // The athlete's STATED quality session (endurance_schedule.quality) replaces the phase
+  // rotation — everything above still decides whether quality runs at all. Race week
+  // keeps the engine's own light touch: the stated session is training, and race week
+  // has none left to do.
+  const statedQuality = statedSchedule?.quality ?? null;
+  const raceDateAhead = goal?.is_race && goal.date ? String(goal.date).slice(0, 10) : null;
+  const raceSlotAhead = raceDateAhead ? daysBetweenISO(raceDateAhead, week_start) : null;
+  const raceWeekAhead = raceSlotAhead != null && raceSlotAhead >= 0 && raceSlotAhead <= 6;
+  const statedQualityApplies = !!statedQuality && !raceWeekAhead;
   let qualityType: "tempo" | "threshold" | "vo2" | "hills" | null = null;
-  if (includeQuality) {
+  if (includeQuality && statedQualityApplies && statedQuality) {
+    // Said once the session is sized (below), with its numbers.
+    qualityType = statedQuality.type;
+  } else if (includeQuality) {
     const pool = QUALITY_BY_PHASE[phase] ?? QUALITY_BY_PHASE.standing;
     qualityType = pool[ord % pool.length];
     // Base with no quality at all yet → make sure the first quality is gentle (tempo).
@@ -1968,11 +2371,61 @@ function weeklyRunPlanRead(
   // the same demonstrated long the plan can. Seeded blind (no 4-week longest in the
   // endurance state) it would cap a real long run against an invented one.
   const rampLongCeiling = ramp && (prevLongForRamp > 0 || prevLong <= 0) ? ramp.required_long_km : null;
-  const q = qualityType
-    ? shortQuality
-      ? shortQualitySpec(qualityType, zones, hrModel)
-      : qualitySpec(qualityType, phase, zones, round1(weeklyKm * 0.18), hrModel)
+  // What the athlete has already shown a hard session can hold, read at the volume
+  // anchor (the closed week) so the stated session is sized the same every morning.
+  const statedEvidence =
+    qualityType && statedQualityApplies ? statedQualityEvidence(volumeAnchor, !!runState?.has_quality) : null;
+  const statedSession =
+    qualityType && statedQualityApplies && statedQuality && statedEvidence
+      ? statedQualitySession({
+          stated: statedQuality,
+          phase,
+          dose: shortQuality ? "short" : taper ? "taper" : "full",
+          zones,
+          hrModel,
+          // Inside the week like any quality session: at most its share of the week,
+          // with the long run's floor and each easy run's 3 km left standing.
+          ceilingKm: round1(
+            Math.min(
+              weeklyKm * STATED_QUALITY_WEEK_SHARE_MAX,
+              weeklyKm - easyCount * 3 - weeklyKm * STATED_QUALITY_LONG_FLOOR_SHARE
+            )
+          ),
+          capacityKm: statedEvidence.capacityKm,
+          firstInAWhile: statedEvidence.firstInAWhile,
+          date: week_start,
+        })
+      : null;
+  // A stated session that cannot fit this week at all leaves the engine's own answer.
+  const statedUnfit = statedSession && "unfit" in statedSession ? statedSession : null;
+  const q: (ReturnType<typeof qualitySpec> & { stated?: StatedQualityRx }) | null = qualityType
+    ? statedSession && !("unfit" in statedSession)
+      ? statedSession
+      : shortQuality
+        ? shortQualitySpec(qualityType, zones, hrModel)
+        : qualitySpec(qualityType, phase, zones, round1(weeklyKm * 0.18), hrModel)
     : null;
+  if (statedUnfit) rationale.push(statedUnfit.line);
+  if (q?.stated) {
+    const sq = q.stated;
+    if (sq.held) rationale.push(sq.held.line);
+    else if (sq.dose === "short")
+      rationale.push(
+        pickDayVariant(SHORT_QUALITY_KEPT_VARIANTS, week_start, "run-short-quality")(STATED_QUALITY_WORDS[sq.type])
+      );
+    else
+      rationale.push(
+        pickDayVariant(STATED_QUALITY_KEPT_VARIANTS, week_start, "run-stated-quality")(statedSessionWords(sq))
+      );
+    if (sq.warm_cool_default && sq.warm_up_km === sq.cool_down_km)
+      rationale.push(
+        pickDayVariant(
+          STATED_QUALITY_DEFAULT_AROUND_VARIANTS,
+          week_start,
+          "run-stated-quality-around"
+        )(kmWords(sq.warm_up_km))
+      );
+  }
   const qualityKm = q?.distance ?? 0;
   // What the week has left for a long run once the other runs have taken their
   // minimum useful distance. The raise must fit INSIDE the weekly step, not on top
@@ -2289,6 +2742,7 @@ function weeklyRunPlanRead(
       focus: "Endurance · quality",
       interval: qualityRun.interval,
       ...(shortQuality ? { dose: "short" as const } : {}),
+      ...(qualityRun.stated ? { stated_quality: qualityRun.stated } : {}),
     });
   }
   runs.push({
@@ -2524,7 +2978,38 @@ function weeklyRunPlanRead(
           !raceThisWeek &&
           !supportingConstrained;
         let qualityRunForDay: Partial<RunPlanPrescription> | null = null;
-        if (statedQualityDay) {
+        // The athlete's own session, as a short set sized INSIDE today's easy distance —
+        // or, when even its floor cannot fit there, the engine's own short set below.
+        const statedForDay =
+          statedQualityDay && statedQualityApplies && statedQuality
+            ? (() => {
+                const evidence = statedQualityEvidence(volumeAnchor, !!runState?.has_quality);
+                return statedQualitySession({
+                  stated: statedQuality,
+                  phase,
+                  dose: "short",
+                  zones,
+                  hrModel,
+                  ceilingKm: run.target_distance_km ?? null,
+                  capacityKm: evidence.capacityKm,
+                  firstInAWhile: evidence.firstInAWhile,
+                  date: d,
+                });
+              })()
+            : null;
+        if (statedForDay && !("unfit" in statedForDay)) {
+          const spec = statedForDay;
+          qualityRunForDay = {
+            label: spec.label,
+            day_name: spec.label,
+            focus: "Endurance · quality",
+            interval: spec.interval,
+            target_zone: zoneTag(spec.zoneKey, zones, hrModel),
+            target_distance_km: spec.distance,
+            note: spec.note,
+            stated_quality: spec.stated,
+          };
+        } else if (statedQualityDay) {
           const pool = QUALITY_BY_PHASE[phase] ?? QUALITY_BY_PHASE.standing;
           let type = pool[ord % pool.length];
           if (!runState?.has_quality && phase !== "sharpen" && phase !== "build")
@@ -2563,6 +3048,15 @@ function weeklyRunPlanRead(
             planned_runs = runs.slice();
             let moved = applyRunDayIntensity(run, adj, z2, qualityRunForDay);
             if (adj.kind === "quality" && adj.dose === "short") moved = { ...moved, dose: "short" as const };
+            // The stated session's structure travels only on a run that IS that session:
+            // opened onto an easy day it comes with it, and a quality day the morning made
+            // easy (or rest) drops it.
+            if (moved.kind_label === "quality" && qualityRunForDay?.stated_quality && !moved.stated_quality)
+              moved = { ...moved, stated_quality: qualityRunForDay.stated_quality };
+            else if (moved.kind_label !== "quality" && moved.stated_quality) {
+              const { stated_quality: _dropped, ...rest } = moved;
+              moved = rest;
+            }
             runs[index] = moved;
           }
         }

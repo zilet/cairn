@@ -21,6 +21,12 @@ import type {
 import type { ClientFuelIdeas, ClientIntakeBand } from "./fuel.js";
 import type { TodayStonesRead } from "./today-stones.js";
 import type { DayRecord } from "./day-record.js";
+import type { DayDetail } from "./day-detail.js";
+import type {
+  ClientPushOfferAnswerResponse,
+  ClientSetTrainingDriveResponse,
+  ClientTrainingDriveRead,
+} from "./training-drive.js";
 import type {
   ClientEvidenceWantedRead,
   ClientHealthReportJson,
@@ -691,7 +697,7 @@ export interface ClientPlanDay {
   // ZERO items — the emptiness is the prescription, not a day the athlete forgot
   // to fill in.
   day_type?: "training" | "rest";
-  // A single grounded "why this session" line (repo/day-read.ts planDayPurpose)
+  // A single grounded "why this session" line (repo/plan-day-purpose.ts, via getPlanWithPurpose)
   // tying the day to the active strength block/endurance goal. Absent — never
   // a fabricated fallback — whenever the program state can't ground one.
   purpose?: string | null;
@@ -713,6 +719,8 @@ export interface ClientPlanWeekPlanDay {
   day_type: "training" | "rest";
   role: ClientPlanWeekRole;
   out_of_order: boolean;
+  /** Today's cell only: the weekday map's day, when today's selection adapted to another. */
+  swapped_from?: { day_number: number; name: string };
 }
 
 export interface ClientPlanWeekSession {
@@ -3711,6 +3719,10 @@ export interface ClientApiResponses {
   "/api/profile/movement-considerations": ClientMovementConsiderations | null;
   "/api/goal": ClientGoalCheck;
   "/api/training-intent": ClientTrainingIntentResponse;
+  // GET reads the drive; PUT sets it and answers with the receipt (always 200).
+  "/api/training-drive": ClientTrainingDriveRead | ClientSetTrainingDriveResponse;
+  "/api/training-drive/offer/accept": ClientPushOfferAnswerResponse;
+  "/api/training-drive/offer/dismiss": ClientPushOfferAnswerResponse;
   "/api/bodyweight": ClientWeightRow[];
   "/api/body-metrics": ClientBodyMetricsSummary;
   "/api/body-metrics/trends": ClientBodyMetricTrends;
@@ -3719,6 +3731,7 @@ export interface ClientApiResponses {
   "/api/plan": ClientPlanDay[];
   "/api/plan/week": ClientPlanWeek;
   "/api/plan/look-ahead": ClientPlanLookAhead;
+  "/api/plan/day-detail": DayDetail | null;
   "/api/plan/:day/order-for-effect": ClientPlanDay | null;
   // POST asks for a redraw and answers with the receipt; GET reports what is standing.
   "/api/plan/redraw": ClientPlanRedrawReceipt | ClientPlanRedrawStatus;

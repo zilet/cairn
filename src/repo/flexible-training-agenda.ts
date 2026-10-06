@@ -318,6 +318,23 @@ export function qualityRunLoggedBefore(weekStart: string, date: string): boolean
   );
 }
 
+/**
+ * The longest run graded QUALITY (the same observation read that closes a quality
+ * intention) in `from..through`, km — what the athlete has already shown a hard session
+ * can hold. The run engine sizes a STATED quality session against it (one step past it,
+ * never a leap). Null when no quality run with a distance is on record in the window.
+ */
+export function longestQualityRunKm(from: string, through: string): number | null {
+  if (!from || !through || through < from) return null;
+  let best = 0;
+  for (const observation of runObservations(from, through)) {
+    if (!observation.quality) continue;
+    const km = observation.distance_km ?? 0;
+    if (km > best) best = km;
+  }
+  return best > 0 ? Math.round(best * 10) / 10 : null;
+}
+
 function targetDoseMet(observation: RunObservation, prescription: RunPlanPrescription, fraction: number): boolean {
   const targetKm = validNumber(prescription.target_distance_km);
   const targetMin = validNumber(prescription.target_duration_min);

@@ -11,6 +11,7 @@ import {
 } from "./coachOps.js";
 import { precomputeDayRead, precomputeDayReadFloor, sleepRowExistsFor, localToday, warmToday } from "./dayread.js";
 import { checkForUpdate } from "./updateCheck.js";
+import { offerPushStanceIfEarned } from "./domain/training/push-offer.js";
 import {
   evaluateMatureExpectations,
   queueExpectationRevisions,
@@ -1343,6 +1344,20 @@ export function startScheduler() {
         } catch (e: any) {
           recordSchedulerFailure("felt_signals_rebuild", e);
           log.error(`[memory] felt-signals rebuild failed`, { error: e });
+        }
+        // 1b‴. The PUSH OFFER (deterministic, src/repo/push-offer.ts): when the log says
+        //      the athlete is carrying the program with room to spare and no floor holds,
+        //      file ONE ask-tier "want to open the throttle?" with falsifiable
+        //      expectations. It never changes the drive — only the athlete's yes does —
+        //      and it waits on the training-drive read. Pull, never push.
+        try {
+          const offer = offerPushStanceIfEarned(stamp);
+          if (offer.filed || offer.lapsed) {
+            log.info(`[brain] push offer: ${offer.filed ? "filed" : offer.reason}${offer.lapsed ? `, ${offer.lapsed} lapsed` : ""}.`);
+          }
+        } catch (e: any) {
+          recordSchedulerFailure("push_offer", e);
+          log.error(`[brain] push offer evaluation failed`, { error: e });
         }
         // 1b″. Rebuild the LEARNED CROSS-DOMAIN models (deterministic) — endurance→
         //      strength interference + short-sleep→fueling — and cache them so

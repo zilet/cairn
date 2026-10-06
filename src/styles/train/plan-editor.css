@@ -38,6 +38,13 @@
 }
 .prog-nums span,.prog-row-nums span{color:var(--muted);font-size:var(--text-sm)}
 .prog-row-wt{display:block;font-size:var(--text-sm);color:var(--accent);margin-top:1px}
+/* The shared movement row (day-detail-client.ts exerciseRowHtml) on a day: the anchor
+   wears a small strength-ink word, a moving slot its step in sage. */
+.prog-row-anchor{display:inline-block;margin-right:var(--space-3);font-family:var(--font-mono);font-size:var(--text-2xs);
+  letter-spacing:var(--tracking-mono);text-transform:uppercase;color:var(--d-strength)}
+.prog-row-nums .prog-row-step{display:block;font-family:var(--font-ui);font-size:var(--text-xs);
+  font-weight:var(--weight-semibold);color:var(--sage-text);margin-top:1px}
+.prog-row-name:focus-visible{outline:2px solid var(--dawn);outline-offset:2px;border-radius:var(--radius-2xs)}
 .prog-head .prog-edit{margin-top:var(--space-1);flex:0 0 auto}
 
 /* -------------------------------------------------------------------

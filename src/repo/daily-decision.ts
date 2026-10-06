@@ -10,6 +10,7 @@ import {
   parseEquipmentCapability,
 } from "./equipment-capability.js";
 import { withMorningReadiness } from "./brain/read-adherence.js";
+import { pushStanceHarmFree } from "./push-stance-open.js";
 import { canonicalGroup, classifyMuscleGroup, resolveExerciseName } from "./exercise-canon.js";
 import { findExercise } from "./exercises.js";
 import { flexibleTrainingAgenda } from "./flexible-training-agenda.js";
@@ -32,7 +33,11 @@ import { planDayProgression, recentAutoregulation, workingWeightUnderPrescriptio
 import { personalResponseModifierFor } from "./reaction-model.js";
 import { adaptBasePlanDayForRecovery, recoveryCycleAt } from "./recovery-cycles.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
-import { getSettings } from "./settings.js";
+import {
+  PUSH_STANCE_CONSEC_CEILING,
+  PUSH_STANCE_REACH_HOSTS,
+  trainingDriveState,
+} from "./training-drive.js";
 import { readsRestGradeReadiness } from "./readiness-bands.js";
 import { LAST_NIGHT_MAX_AGE_DAYS, isLastNight, isReadDayReadiness } from "./sensor-freshness.js";
 import { sessionLogContradictsLowRating } from "./session-dose-log.js";
@@ -166,6 +171,10 @@ export const DAILY_DECISION_REASONS = [
   "race_taper_legs",
   // Race week: the heavy leg work sits out; calves and core stay light.
   "race_week_legs",
+  // The athlete's DATED push stance is in force and widened today (training-drive.ts):
+  // a preference hold lifted, a second reach host, a recovering main lift no longer
+  // parking the reach. Never fires over a deciding brake or a harmed recent day.
+  "push_stance",
 ] as const;
 
 // The run day's headline line on the envelope. Rotates like every repeating
@@ -409,6 +418,11 @@ export interface DailyDecisionSignalSupport {
   // intensity caution is the usual case: a finding about runs that may inform a lift
   // day but may not decide it. Omit-when-idle, like soft_brake_only.
   advisory_brake_only?: true;
+  // A DATED push stance covers the day (src/repo/training-drive.ts). `harm_free`: no
+  // harm evidence on any of the last three days (harmEvidenceOnDay) — the stance widens
+  // nothing over a day the body already paid for. Omit-when-idle, so every envelope
+  // without a stance fingerprints exactly as before.
+  push_stance?: { until: string; harm_free: boolean };
 }
 
 export interface DailyDecisionTarget {
@@ -571,6 +585,10 @@ export interface DailyDecisionReach {
   level: "push" | null;
   backed_by: string[];
   why: string;
+  // How many challenge top sets composition may seat, each on a different compound
+  // pattern. Omitted = one (the ordinary reach); a push stance licenses
+  // PUSH_STANCE_REACH_HOSTS. Omit-when-one keeps historical envelope_json identical.
+  hosts?: number;
 }
 
 const KNEE_GROUPS = ["quads", "hamstrings", "calves", "glutes"];
@@ -1374,9 +1392,17 @@ function compactSignalSupport(
   // Not a snapshot field — gather folds it into `lift_day_open.rest_grade`.
   posture_rest: boolean;
 } {
-  const drive = safe(() => (getSettings().training_drive === "push" ? "push" : "steady"), "steady") as
-    | "push"
-    | "steady";
+  const driveState = safe(() => trainingDriveState(date), null);
+  const drive: "push" | "steady" = driveState?.drive === "push" ? "push" : "steady";
+  // The dated stance, with its own harm read: three clean days or it widens nothing.
+  const pushStance: DailyDecisionSignalSupport["push_stance"] | undefined =
+    drive === "push" && driveState?.stance
+      ? {
+          until: driveState.stance.until,
+          // One source (push-stance-open.ts): the progression engine asks the same.
+          harm_free: pushStanceHarmFree(date),
+        }
+      : undefined;
   const state = safe(() => dayPlanningSignalState(date, { recovery }), null);
   const recovery_capacity = compactRecoveryCapacity(state, date) ?? undefined;
   const posture_rest = state?.action?.posture === "rest";
@@ -1394,6 +1420,7 @@ function compactSignalSupport(
         backed_by: [],
         training_directive: "proceed",
         fresh_brake: true,
+        ...(pushStance ? { push_stance: pushStance } : {}),
       },
     };
   }
@@ -1425,6 +1452,7 @@ function compactSignalSupport(
       fresh_brake,
       ...(fresh_brake && freshBrakesAreSoft(state) ? { soft_brake_only: true as const } : {}),
       ...(advisoryOnly ? { advisory_brake_only: true as const } : {}),
+      ...(pushStance ? { push_stance: pushStance } : {}),
     },
   };
 }
@@ -1713,6 +1741,28 @@ export const REACH_LOG_BACKED_WHY: readonly [string, ...string[]] = [
   "The last few days went in clean, so there's room to reach today",
 ];
 
+// A reach the athlete's DATED push stance backs (no rated session or wearable read
+// vouched, but the last three days came back clean and they asked to be pushed).
+export const REACH_STANCE_WHY: readonly [string, ...string[]] = [
+  "You asked to push, and the last few days came back clean — take the heavier look if the bar moves well",
+  "Your call to push stands, and nothing from the last three days argues with it — a heavier top set fits",
+  "You said there's more in you; the recent days agree — reach today if the warm-ups feel quick",
+];
+
+// Said on the card when the stance actually widened the day. `until` is plain words.
+export const PUSH_STANCE_RATIONALE: ReadonlyArray<(until: string) => string> = [
+  (until) => `You asked to be pushed through ${until} — today keeps its load and room to reach.`,
+  (until) => `Your push runs through ${until}, so the stacked days stay a caveat and the load stays on.`,
+  (until) => `Pushing until ${until}, as you asked — the same safety floors still stand under it.`,
+];
+
+const MONTH_WORDS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function monthDayWords(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!m) return iso;
+  return `${MONTH_WORDS[Number(m[2]) - 1] ?? m[2]} ${Number(m[3])}`;
+}
+
 // Composition could not seat a distinct top set (the day is already at its
 // item cap, the heavier look does not exceed the working weight, or no
 // eligible host remains). The day is still a reach day — the working sets
@@ -1760,7 +1810,13 @@ function resolveReach(
   snapshot: DailyDecisionSnapshot,
   kind: DailyDecisionKind,
   deep: ReadonlySet<string>,
-  logBacked: boolean
+  logBacked: boolean,
+  // A dated push stance in force with three clean days and no deciding brake (the
+  // caller's `stanceOpen`). It backs a reach like the rhythm license does, lets the
+  // challenge seat on the next moving compound when the main lift's group is still
+  // deeply recovering (composition still refuses every saturated host), and licenses
+  // PUSH_STANCE_REACH_HOSTS top sets.
+  stanceOpen = false
 ): { reach: DailyDecisionReach; trimmed: boolean } {
   const support = snapshot.signal_support;
   if (!support || kind !== "train") return { reach: EMPTY_REACH, trimmed: false };
@@ -1779,7 +1835,7 @@ function resolveReach(
     freshBrake: support.fresh_brake,
     trainingDirective: support.training_directive,
   });
-  if (!support.backed && !capacityBacked && !logBacked) return { reach: EMPTY_REACH, trimmed: false };
+  if (!support.backed && !capacityBacked && !logBacked && !stanceOpen) return { reach: EMPTY_REACH, trimmed: false };
   const directive = support.training_directive;
   if (support.backed) {
     if (directive !== "proceed" && directive !== "hold_aggression") return { reach: EMPTY_REACH, trimmed: false };
@@ -1787,15 +1843,19 @@ function resolveReach(
     return { reach: EMPTY_REACH, trimmed: false };
   }
   const mainGroup = mainLiftGroup(snapshot);
-  if (mainGroup && deep.has(mainGroup)) return { reach: EMPTY_REACH, trimmed: false };
+  if (mainGroup && deep.has(mainGroup) && !stanceOpen) return { reach: EMPTY_REACH, trimmed: false };
   const byLog = !support.backed && !capacityBacked;
+  // Only the stance backs it: the athlete's word over three clean days, said as such.
+  const byStance = byLog && !logBacked && stanceOpen;
   const backed_by = support.backed
     ? Array.isArray(support.backed_by)
       ? support.backed_by.filter((field) => typeof field === "string" && field.trim()).slice(0, 8)
       : []
-    : byLog
-      ? ["training_log"]
-      : ["recovery_capacity"];
+    : byStance
+      ? ["push_stance", "training_log"]
+      : byLog
+        ? ["training_log"]
+        : ["recovery_capacity"];
   const trimmed = support.backed && directive === "hold_aggression";
   return {
     reach: {
@@ -1803,9 +1863,14 @@ function resolveReach(
       backed_by,
       why: trimmed
         ? pickDayVariant(REACH_TRIMMED_WHY, snapshot.date, "daily_decision:reach_trimmed")
-        : byLog
-          ? pickDayVariant(REACH_LOG_BACKED_WHY, snapshot.date, "daily_decision:reach_log")
-          : pickDayVariant(REACH_PUSH_WHY, snapshot.date, "daily_decision:reach"),
+        : byStance
+          ? pickDayVariant(REACH_STANCE_WHY, snapshot.date, "daily_decision:reach_stance")
+          : byLog
+            ? pickDayVariant(REACH_LOG_BACKED_WHY, snapshot.date, "daily_decision:reach_log")
+            : pickDayVariant(REACH_PUSH_WHY, snapshot.date, "daily_decision:reach"),
+      // A fueling-trimmed reach keeps the working sets only; a second host would be a
+      // second thing fueling just said to wait on.
+      ...(stanceOpen && !trimmed ? { hosts: PUSH_STANCE_REACH_HOSTS } : {}),
     },
     trimmed,
   };
@@ -1991,6 +2056,21 @@ export function buildDailySessionDecision(
   const rhythm = snapshot.stated_rhythm;
   const rhythmLicensed =
     rhythm != null && rhythm.streak_on_rhythm === true && rhythm.recent_harm_free === true && !decidingBrake(snapshot);
+  // ---- the athlete's DATED push stance (training-drive.ts) ----
+  // "I can push harder than this" is the athlete's word, and it is bounded the way the
+  // rhythm license is: three harm-free days, no deciding brake, and a run of days under
+  // the stance's own ceiling (seven, not five). Inside those it plays the rhythm
+  // license's part — a stack is not double-day pressure, a soft preference (longevity's
+  // calmer dose, the reopened lift after a morning run) no longer holds the load — and
+  // it widens the reach below. Every signal hold (readiness, soreness, an underpowered
+  // session, a deload, a recovery cycle, train-anyway from rest) keeps its own cap.
+  const stance = snapshot.signal_support?.training_drive === "push" ? snapshot.signal_support.push_stance : undefined;
+  const stanceOpen =
+    stance != null &&
+    stance.harm_free === true &&
+    !decidingBrake(snapshot) &&
+    consecutive < PUSH_STANCE_CONSEC_CEILING;
+  const stackLicensed = rhythmLicensed || stanceOpen;
   if (rhythmLicensed && consecutive >= 2) {
     fire(precedence, "stated_rhythm_clean");
     soft.push({
@@ -2571,9 +2651,9 @@ export function buildDailySessionDecision(
       keyRunProtect ||
       (enduranceReduced.length > 0 && hardLowerOnPlan) ||
       (hasRelevantOpenKeyRun && hardLowerOnPlan) ||
-      (consecutive >= 2 && !rhythmLicensed));
+      (consecutive >= 2 && !stackLicensed));
   const longevityEase = longevityLeads && doubleDayPressure && kind === "train";
-  const longevityHoldsIntensity = longevityEase && !rhythmLicensed;
+  const longevityHoldsIntensity = longevityEase && !stackLicensed;
   if (longevityEase) {
     fire(precedence, "training_intent");
     soft.push({
@@ -2628,7 +2708,7 @@ export function buildDailySessionDecision(
             longevityHoldsIntensity ||
             // A lifting day reopened after its morning run holds its load unless the
             // same rhythm license that stops a stack from capping the day backs it.
-            (liftStillDue && !rhythmLicensed) ||
+            (liftStillDue && !stackLicensed) ||
             // The clock opens; the LOAD does not. A brake the log answered still holds
             // aggression for the day it was answered on.
             quietDayOpened
@@ -2843,11 +2923,30 @@ export function buildDailySessionDecision(
   const { reach, trimmed: reachTrimmed } =
     quietDayOpened || runDay
       ? { reach: EMPTY_REACH, trimmed: false }
-      : resolveReach(snapshot, kind, deepGroups, rhythmLicensed);
+      : resolveReach(snapshot, kind, deepGroups, rhythmLicensed, stanceOpen);
   if (reach.level === "push") {
     const reachCode: DailyDecisionReason = reachTrimmed ? "reach_trimmed_by_fueling" : "backed_day_reach";
     fire(precedence, reachCode);
     soft.push({ code: reachCode, detail: reach.why });
+  }
+  // The stance said out loud on a training card it actually shaped — never on a quiet
+  // day, a run day, or one it could not open.
+  const stanceWidened =
+    stanceOpen &&
+    kind === "train" &&
+    !runDay &&
+    ((reach.level === "push" && (reach.hosts ?? 1) > 1) ||
+      (longevityEase && !rhythmLicensed) ||
+      (liftStillDue && !rhythmLicensed) ||
+      (consecutive >= 2 && !rhythmLicensed));
+  if (stanceWidened && stance) {
+    fire(precedence, "push_stance");
+    intentRationale.push({
+      code: "push_stance",
+      text: pickDayVariant(PUSH_STANCE_RATIONALE, snapshot.date, "daily_decision:push_stance")(
+        monthDayWords(stance.until)
+      ),
+    });
   }
 
   const muscles: DailyDecisionEnvelope["muscles"] = {
@@ -2877,6 +2976,7 @@ export function buildDailySessionDecision(
         candidates,
         recoveryWeek: snapshot.day_read.recovery_week,
         mesocyclePhase: snapshot.program.mesocycle_phase,
+        stanceOpen,
         snapshot,
       }),
     EMPTY_DOSE_DECISION

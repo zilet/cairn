@@ -3,6 +3,7 @@ import {
   getEnduranceSchedule,
   getStrengthSchedule,
   normalizeEnduranceSchedule,
+  normalizeStatedQuality,
   normalizeStrengthSchedule,
   setProfile,
 } from "../../domain/person/index.js";
@@ -11,6 +12,7 @@ import {
   getEnduranceGoal,
   getEndurancePRs,
   getWeeklyStats,
+  recordStatedRunWeek,
   runComplianceRead,
 } from "../../domain/training/index.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
@@ -73,14 +75,14 @@ export function registerTrainingStatusTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_endurance_schedule",
-    "The athlete's stated run days. days[] is {dow: 0-6 (0=Sunday), kind: easy|quality|long|any}. The run engine and rolling agenda honor these weekdays and never suggest a run off-schedule. null when unset.",
+    "The athlete's stated run days. days[] is {dow: 0-6 (0=Sunday), kind: easy|quality|long|any}. The run engine and rolling agenda honor these weekdays and never suggest a run off-schedule. `quality`, when present, is the stated quality session {type: threshold|tempo|vo2|hills, work_km?, warm_up_km?, cool_down_km?, note?}: the engine runs that type on the quality day (instead of its phase rotation) as warm-up + work + cool-down, holding the work below the stated km — and saying so — when the week or the athlete's demonstrated running cannot carry it yet. null when unset.",
     {},
     async () => asText(getEnduranceSchedule())
   );
 
   server.tool(
     "set_endurance_schedule",
-    "Set or clear the athlete's stated run days. Only weekdays they named — never invent a day. days is [{dow: 0-6 (0=Sunday), kind: easy|quality|long|any}]. Pass days: null to clear. A duplicate weekday keeps the first kind. A stated recurring NON-RUN day ('Saturday optional, MTB or other') goes in cross_training as {dow, sport}, never as a run day; omit cross_training to keep what is stored, [] clears it.",
+    "Set or clear the athlete's stated run days. Only weekdays they named — never invent a day. days is [{dow: 0-6 (0=Sunday), kind: easy|quality|long|any}]. Pass days: null to clear. A duplicate weekday keeps the first kind. A stated recurring NON-RUN day ('Saturday optional, MTB or other') goes in cross_training as {dow, sport}, never as a run day; omit cross_training to keep what is stored, [] clears it. A stated QUALITY SESSION ('Thursday is a hard threshold 5k with a few km around it') goes in quality as {type: 'threshold', work_km: 5, warm_up_km?, cool_down_km?}; omit quality to keep what is stored, quality: null clears it. To change ONLY the quality session, omit days and pass quality — the stored run week, cross-training days and note stay. Likewise omit days and pass cross_training and/or note to change only those; the stored run week stays.",
     {
       days: z
         .array(
@@ -96,7 +98,9 @@ export function registerTrainingStatusTools(server: McpToolRegistrar) {
         )
         .nullable()
         .optional()
-        .describe("omit or pass null to clear the whole schedule"),
+        .describe(
+          "pass null to clear the whole schedule (a call with no days, quality, cross_training or note also clears it); omit beside cross_training/note/quality to keep the stored run week"
+        ),
       cross_training: z
         .array(
           z.object({
@@ -107,14 +111,61 @@ export function registerTrainingStatusTools(server: McpToolRegistrar) {
         )
         .optional()
         .describe("stated recurring non-run days, at most three; omit to keep what is stored, [] clears"),
+      quality: z
+        .object({
+          type: z
+            .string()
+            .describe("threshold|tempo|vo2|hills (a close word like 'cruise' or 'intervals' is read to its type)"),
+          work_km: z
+            .number()
+            .optional()
+            .describe("the stated work itself, km (the 5 of 'threshold 5k'); 1-15, clamped. Omit to let the engine size it"),
+          warm_up_km: z.number().optional().describe("easy km before the work, 0-5; omit for the engine's default"),
+          cool_down_km: z.number().optional().describe("easy km after the work, 0-5; omit for the engine's default"),
+          note: z.string().optional().describe("the athlete's own words for the session, up to 160 chars"),
+        })
+        .nullable()
+        .optional()
+        .describe(
+          "the stated quality session the engine runs on the quality day instead of its phase rotation, still inside the week's ceiling (held below the stated work, and said so, when the week or demonstrated running cannot carry it). Omit to keep what is stored; null clears"
+        ),
       note: z.string().optional(),
     },
     async (input) => {
-      if (input.days == null) return asText(setProfile({ endurance_schedule: null }));
+      // The week as it stood: the stated change is recorded in the ledger ("You said X →
+      // the brain changed Y", with Undo) once the write lands (stated-input.ts).
+      const before = getEnduranceSchedule();
+      const words = input.note ?? (input.quality && typeof input.quality === "object" ? input.quality.note : undefined);
+      const stated = (result: unknown) => {
+        recordStatedRunWeek({ before, words, via: "mcp" });
+        return asText(result);
+      };
+      // Clearing the whole schedule takes an explicit days: null, or a call that states
+      // nothing at all. A call that names cross_training, a note or the quality session but
+      // no days changes those and keeps the stored run week.
+      const statesNothing =
+        input.days === undefined &&
+        input.quality === undefined &&
+        input.cross_training === undefined &&
+        input.note === undefined;
+      if (input.days === null || statesNothing) return stated(setProfile({ endurance_schedule: null }));
+      // A quality-only update: no days, a quality (or null). The stored run week, the
+      // cross-training days and the note stand (profile.ts serializeEnduranceSchedule).
+      if (input.days === undefined && input.cross_training === undefined && input.note === undefined) {
+        if (input.quality !== null && !normalizeStatedQuality(input.quality))
+          return asText({ ok: false, error: "quality needs a readable type: threshold|tempo|vo2|hills" });
+        return stated(setProfile({ endurance_schedule: { quality: input.quality } }));
+      }
+      // No days, but cross-training and/or a note: patch them onto the stored run week.
+      const stored = input.days === undefined ? before : null;
       const schedule = normalizeEnduranceSchedule({
-        days: input.days,
-        ...(input.cross_training !== undefined ? { cross_training: input.cross_training } : {}),
-        note: input.note,
+        days: input.days ?? stored?.days ?? [],
+        ...(input.cross_training !== undefined
+          ? { cross_training: input.cross_training }
+          : stored?.cross_training
+            ? { cross_training: stored.cross_training }
+            : {}),
+        note: input.note !== undefined ? input.note : (stored?.note ?? undefined),
         source: "athlete",
       });
       if (!schedule) {
@@ -126,9 +177,13 @@ export function registerTrainingStatusTools(server: McpToolRegistrar) {
       }
       // An explicit cross_training (even []) is passed on as said, so [] clears the stored
       // days; omitted, setProfile keeps them (profile.ts serializeEnduranceSchedule).
-      const stated =
-        input.cross_training !== undefined ? { ...schedule, cross_training: schedule.cross_training ?? [] } : schedule;
-      return asText(setProfile({ endurance_schedule: stated }));
+      const next: Record<string, unknown> =
+        input.cross_training !== undefined
+          ? { ...schedule, cross_training: schedule.cross_training ?? [] }
+          : { ...schedule };
+      // The quality session as said (null clears); omitted, setProfile keeps the stored one.
+      if (input.quality !== undefined) next.quality = input.quality;
+      return stated(setProfile({ endurance_schedule: next }));
     }
   );
 

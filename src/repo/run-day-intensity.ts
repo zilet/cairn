@@ -731,7 +731,8 @@ function sessionWord(label: unknown): string {
   const text = String(label ?? "").toLowerCase();
   if (/hill/.test(text)) return "hills";
   if (/tempo/.test(text)) return "tempo";
-  if (/threshold/.test(text)) return "threshold reps";
+  // A stated continuous threshold session is "Threshold run" — not reps.
+  if (/threshold/.test(text)) return /\brun\b/.test(text) ? "threshold run" : "threshold reps";
   if (/interval|vo2|800/.test(text)) return "intervals";
   return "quality session";
 }

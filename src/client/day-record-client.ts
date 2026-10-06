@@ -12,6 +12,7 @@
 // LAZY (bundle-12-day): the view renders here; opening a day is day-open-client.ts's,
 // which stays eager so any surface can open a day without loading this bundle first.
 type DayRecord = import("../contracts/day-record.js").DayRecord;
+type DayRecordDetail = import("../contracts/day-detail.js").DayDetail;
 
 {
   const ISO = /^\d{4}-\d{2}-\d{2}$/;
@@ -178,28 +179,52 @@ type DayRecord = import("../contracts/day-record.js").DayRecord;
     </nav>`;
   }
 
+  function topHtml(date: string, today: string, backLabel: string): string {
+    return `<div class="dayrec-top">
+        <button class="home-back linkbtn linkbtn-plain" type="button" data-day-back>‹ ${escHtml(backLabel)}</button>
+        ${stepperHtml(date, today)}
+      </div>`;
+  }
+
+  /** A past day's fuel, the read that stood, a weigh-in and the way to log there. */
+  function pastExtrasHtml(record: DayRecord): string {
+    const weight =
+      record.weight_lb != null
+        ? `<p class="dayrec-meta dayrec-weight">Weighed ${escHtml(fmtWeightLb(record.weight_lb))}</p>`
+        : "";
+    const log = `<div class="dayrec-foot"><button type="button" class="linkbtn dayrec-log" data-day-log="${escAttr(record.date)}">${record.session ? "Edit this day's session" : "Log a session to this day"}</button></div>`;
+    return `${fuelHtml(record)}${readHtml(record)}${weight}${log}`;
+  }
+
+  /** The day from its record alone: a day the detail read does not reach (past next week's end). */
   function dayHtml(record: DayRecord, opts: { backLabel: string }): string {
     const past = record.relation === "past";
     const kicker = `${relativeWords(record.date, record.today)} · ${past ? "the day's record" : "a preview"}`;
-    const weight =
-      past && record.weight_lb != null
-        ? `<p class="dayrec-meta dayrec-weight">Weighed ${escHtml(fmtWeightLb(record.weight_lb))}</p>`
-        : "";
-    const log = past
-      ? `<div class="dayrec-foot"><button type="button" class="linkbtn dayrec-log" data-day-log="${escAttr(record.date)}">${record.session ? "Edit this day's session" : "Log a session to this day"}</button></div>`
-      : "";
     return `<article class="dayrec dayrec-${escAttr(record.relation)}" aria-labelledby="dayrecTitle">
-      <div class="dayrec-top">
-        <button class="home-back linkbtn linkbtn-plain" type="button" data-day-back>‹ ${escHtml(opts.backLabel)}</button>
-        ${stepperHtml(record.date, record.today)}
-      </div>
+      ${topHtml(record.date, record.today, opts.backLabel)}
       <div class="dayrec-head">
         <span class="lbl dayrec-kicker">${escHtml(kicker)}</span>
         <h2 class="dayrec-title" id="dayrecTitle">${escHtml(record.line)}</h2>
         ${caveatsHtml(record)}
       </div>
-      ${past ? `${trainingHtml(record)}${fuelHtml(record)}${readHtml(record)}${weight}${log}` : planHtml(record)}
+      ${past ? `${trainingHtml(record)}${pastExtrasHtml(record)}` : planHtml(record)}
     </article>`;
+  }
+
+  /**
+   * The day opened: the shared day detail (the hero, what was done, the lift, the run,
+   * what to watch, why the day) — the same view Today's strip opens inline — and, on a
+   * past day, its record's fuel, the read that stood and a weigh-in under it. Without a
+   * detail read (a day past next week's end) the record stands alone.
+   */
+  function composedHtml(record: DayRecord | null, detail: DayRecordDetail | null, opts: { backLabel: string; date: string; today: string }): string {
+    if (!detail) return record ? dayHtml(record, opts) : errorHtml(opts.backLabel);
+    const past = detail.date < detail.today;
+    return `<div class="dayrec dayrec-${past ? "past" : "future"} has-detail" aria-labelledby="dayrecTitle">
+      ${topHtml(detail.date, detail.today, opts.backLabel)}
+      ${CairnDayDetailView.dayDetailHtml(detail, { titleId: "dayrecTitle" })}
+      ${past && record ? pastExtrasHtml(record) : ""}
+    </div>`;
   }
 
   function fmtWeightLb(lb: number): string {
@@ -254,34 +279,48 @@ type DayRecord = import("../contracts/day-record.js").DayRecord;
     }
     const token = ++renderToken;
     CairnUiHeader.setEyebrowTitle(headerTitle, shortDate(date));
+    const today = localISO();
+    const opts = { backLabel, date, today };
     const key = `day-record:${date}`;
+    const detailKey = CairnDayDetailController.keyOf(date);
     const cached = peekCached<DayRecord>(key, 5 * 60_000);
-    if (cached?.data) {
-      view.innerHTML = dayHtml(cached.data, { backLabel });
-      wire(view);
-    } else {
-      view.innerHTML = skeletonHtml(backLabel);
-      wire(view);
-    }
-    try {
-      const record = (await api(`/day-record?date=${encodeURIComponent(date)}`)) as DayRecord;
-      if (token !== renderToken || state.tab !== "day" || state.dayDate !== date) return;
-      if (!record || typeof record !== "object" || !("relation" in record)) throw new Error("no record");
-      swrSet(key, record);
-      const html = dayHtml(record, { backLabel });
-      // A warm open whose record did not change keeps its paint (no flash, no jump).
-      if (cached?.data && JSON.stringify(cached.data) === JSON.stringify(record)) return;
+    const cachedDetail = peekCached<DayRecordDetail | null>(detailKey, 5 * 60_000);
+    const warmDetail = cachedDetail && CairnDayDetailController.isDetail(cachedDetail.data) ? cachedDetail.data : null;
+    let painted = "";
+    const paint = (html: string): void => {
+      if (html === painted) return;
+      painted = html;
       view.innerHTML = html;
       wire(view);
-    } catch {
-      if (token !== renderToken || state.tab !== "day" || state.dayDate !== date) return;
-      if (!cached?.data) {
-        view.innerHTML = errorHtml(backLabel);
-        wire(view);
+      if (typeof wireGuides === "function") {
+        try {
+          wireGuides(view);
+        } catch {}
       }
+    };
+    paint(cached?.data || warmDetail ? composedHtml(cached?.data ?? null, warmDetail, opts) : skeletonHtml(backLabel));
+    const current = () => token === renderToken && state.tab === "day" && state.dayDate === date;
+    // Both reads at once: the detail (the plan, what was done) and the record (fuel, the read).
+    const [record, detail] = await Promise.all([
+      api(`/day-record?date=${encodeURIComponent(date)}`)
+        .then((value) => (value && typeof value === "object" && "relation" in value ? (value as DayRecord) : null))
+        .catch(() => null),
+      api(CairnDayDetailController.pathOf(date))
+        .then((value) => (CairnDayDetailController.isDetail(value) ? value : null))
+        .catch(() => null),
+    ]);
+    if (!current()) return;
+    if (record) swrSet(key, record);
+    if (detail) swrSet(detailKey, detail);
+    if (!record && !detail) {
+      // A failed read keeps a warm paint; a cold one says so in one line.
+      if (!cached?.data && !warmDetail) paint(errorHtml(backLabel));
+      return;
     }
+    // A warm open whose reads did not change keeps its paint (no flash, no jump).
+    paint(composedHtml(record ?? cached?.data ?? null, detail ?? warmDetail, opts));
   }
 
-  const CAIRN_DAY_RECORD = { dayHtml, relativeWords, shortDate, renderDay };
+  const CAIRN_DAY_RECORD = { dayHtml, composedHtml, relativeWords, shortDate, renderDay };
   Object.assign(globalThis, { CairnDayRecord: CAIRN_DAY_RECORD, renderDay });
 }

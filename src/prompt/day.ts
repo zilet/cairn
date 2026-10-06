@@ -49,6 +49,7 @@ import {
   renderRunZones,
   renderSignalState,
   renderTodayFuel,
+  renderTrainingDriveLine,
   renderTrainingConstraints,
   renderTrainingSignals,
   renderTrajectory,
@@ -988,7 +989,7 @@ The two facets MUST come from different domains — a link inside one domain is 
 connection. Pick the closest facet; if nothing on the list fits either side, the connection isn't one
 this can carry, so return {"found": false}.
 
-${renderTodayFuel(context)}
+${renderTodayFuel(context)}${renderTrainingDriveLine(context)}
 ${renderJsonContract(INSIGHT_SCHEMA, {
     lead: `When there's nothing real to say: {"found": false}
 When there is exactly one genuine connection:`,
@@ -1062,7 +1063,7 @@ THE CONSTITUTION (binding):
   carries a fit word (fits / stretch / beyond this block): say it in those words, never as a percent or
   a countdown. Leave it null when road_ahead names nothing.
 ${renderRunCompliance(context, "weekly")}${renderRecentCardio(context, "weekly")}
-${renderTodayFuel(context)}
+${renderTodayFuel(context)}${renderTrainingDriveLine(context)}
 ${renderStreamingContract(
   'write how their week actually went in ONE or two warm plain sentences (the same reading that goes in the JSON\'s "text")',
   WEEKLY_READ_SCHEMA,

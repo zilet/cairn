@@ -45,6 +45,7 @@ import {
   violatesReadingGrammar,
 } from "../dist/repo/day-read.js";
 import { UNPROGRAMMED_EASY_DAY, pickDayVariant } from "../dist/repo/brain/day-read-rules.js";
+import { setTrainingDrive } from "../dist/domain/training/training-drive.js";
 import { SIGNAL_VOICE_REGISTRY, signalVoice, thinSignalCoverage } from "../dist/repo/signal-state.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -409,6 +410,24 @@ test("the drive read has a hard ceiling: at five hard days the read is easy, not
   assert.equal(four.decision.rule_code, "push_drive_targeted_training");
 });
 
+// A DATED push stance (training-drive.ts) moves that count — and only the count — to
+// seven, while the last three days are harm-free. A corroborated stack still rests.
+test("a push stance raises the stacked-days ceiling to seven, and nothing past it", () => {
+  seedDriveMorning({ days: 5 });
+  setTrainingDrive({ drive: "push", until: localDaysAgo(-10), words: "push me" });
+  const five = repo.dayRead(DRIVE_REF);
+  assert.equal(five.signals.consecutive_training_days, 5);
+  assert.equal(five.decision.rule_code, "push_drive_targeted_training", five.why);
+  assert.deepEqual(five.signals.push_stance, { until: localDaysAgo(-10), harm_free: true });
+
+  seedDriveMorning({ days: 7 });
+  setTrainingDrive({ drive: "push", until: localDaysAgo(-10) });
+  const seven = repo.dayRead(DRIVE_REF);
+  assert.equal(seven.signals.consecutive_training_days, 7);
+  assert.equal(seven.kind, "easy", "at the stance's own ceiling the stack eases");
+  assert.equal(seven.decision.rule_code, "accumulated_load_rest");
+});
+
 // The stack IS the week (2026-09-29): five days in a row that all sat on the athlete's
 // own stated lifting week, with nothing in the last three days saying it cost them, are
 // the plan — not an overload signal. The ceiling falls back to the stacked-days caveat.
@@ -425,7 +444,9 @@ test("a clean stated rhythm carries the five-day ceiling; the count alone no lon
   assert.equal(r.signals.consecutive_training_days, 5);
   assert.equal(r.kind, "train", "the athlete's own week, kept clean, is a training day");
   assert.equal(r.decision.rule_code, "planned_training");
-  saysOneCaveat(r.why, "planned_training:stacked_days");
+  // An advisory line that names the week (2026-10-06), never the plain pile-up caveat.
+  saysOneCaveat(r.why, "planned_training:stacked_on_rhythm");
+  assert.equal(r.signals.stacked_on_rhythm, true);
 
   // A genuine signal still decides: the same stack on a genuinely short night with a
   // run-down tap rests exactly as before.

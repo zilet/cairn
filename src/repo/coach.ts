@@ -18,7 +18,8 @@ import {
   invalidateDayReadIfDecisionChanged,
 } from "./intelligence.js";
 import { getActiveBlock } from "./program-blocks.js";
-import { coachBlockSummary } from "./block-phase.js";
+import { coachBlockSummary, nextWeekScheduledDeloadRuns } from "./block-phase.js";
+import { goalPace } from "./goal-pace.js";
 import { getProgramState, type ProgramState } from "./program-state.js";
 import { getStrengthJourney } from "./strength-objectives.js";
 import { performanceStanding } from "./performance.js";
@@ -33,7 +34,7 @@ import { flexibleTrainingAgenda } from "./flexible-training-agenda.js";
 import { weekLayoutClosed } from "./week-layout-closed.js";
 import { dexaTargeting } from "./dexa-targeting.js";
 import { muscleGroupTrajectory, planExerciseNames, testWeekDue } from "./muscle-trajectory.js";
-import { coachingFocus } from "./coaching-focus.js";
+import { coachingFocus, type FocusItem } from "./coaching-focus.js";
 import { type AcuteGateReading, acuteGates } from "./hybrid-load.js";
 import { planDayProgression, programAdjustments, programBalance, recentMuscleLoad } from "./progression.js";
 import { weeklySetTargetsRead } from "./volume-floor-context.js";
@@ -84,7 +85,7 @@ import { sensorAgeDays } from "./sensor-freshness.js";
 import { sampleSd, STRESS_WINDOW_DAYS, trainingConstraintsRead } from "./recovery-science.js";
 import { readAdherenceModel, withMorningReadiness } from "./brain/read-adherence.js";
 import { readinessBand } from "./readiness-bands.js";
-import { getProgress, getRecentSessions, typicalTrainingHour, vouchedRunCompliance } from "./sessions.js";
+import { getProgress, getRecentSessions, typicalTrainingHour, vouchedRunCompliance, weekWins } from "./sessions.js";
 import { sessionLogContradictsLowRating } from "./session-dose-log.js";
 import { recordSymptomReport } from "./symptom-reports.js";
 import { symptomAreaKey } from "./symptom-area.js";
@@ -136,6 +137,9 @@ import { getTrainingIntent } from "./training-intent.js";
 import { getEnduranceCapacity } from "./endurance-capacity.js";
 import { round1 } from "../lib/numbers.js";
 import { copyDeep, requestMemo } from "./request-memo.js";
+import { stanceHeldBy, trainingDriveForCoach, trainingDriveRead } from "./training-drive-read.js";
+import { pickDayVariant } from "./brain/day-read-rules.js";
+import type { ClientTrainingDriveRead } from "../contracts/training-drive.js";
 
 // ---------- coach context (shared by prompts) ----------
 // Compact view of a health doc for coaching: kind, date, summary, key markers
@@ -630,6 +634,7 @@ function buildPersonSlice(
   | "location"
   | "discipline"
   | "training_intent"
+  | "training_drive"
   | "memory"
   | "learnings"
   | "context_events"
@@ -668,6 +673,11 @@ function buildPersonSlice(
     // Ordered durable goals supersede the old assumption that "hybrid" means every
     // modality is co-equal. Legacy profiles receive a derived compatible view.
     training_intent: trainingIntentView,
+    // The athlete's training drive and any DATED push stance (training-drive.ts) — their
+    // own word about how hard to push, with what it opens and what it never overrides.
+    // Compact on purpose: today's "why not more" composes the day's envelope and rides
+    // on the Brief / conductor responses instead, never inside this shared build.
+    training_drive: trainingDriveForCoach(),
     // Ranked retrieval (Stream 2): always the load-bearing person-model
     // (constraints/injuries/preferences/decisions) + recent observations, with
     // superseded rows hidden. Replaces the raw recency dump and stamps
@@ -1664,13 +1674,48 @@ function getCoachContextFromSnapshot(): CoachContext {
         cardioRisk: cardioRiskView,
         // Temporal placement: where the athlete is inside the active block, so
         // "This block" carries its calendar ("week 3 of 5 — building volume").
+        // The phase is block-phase.ts's ONE resolution (a push athlete's scheduled
+        // deload runs as intensification unless the loaded weeks earn it), plus whether
+        // next week's scheduled deload will actually run — so the card can say what
+        // the deload decision is instead of "the deload is in sight".
         programBlock: (() => {
           try {
-            return coachBlockSummary(today);
+            const summary = coachBlockSummary(today);
+            if (!summary) return null;
+            let nextRuns: boolean | undefined;
+            try {
+              nextRuns = nextWeekScheduledDeloadRuns(
+                today,
+                () => fullProgramState?.mesocycle?.deload_evidence === true
+              );
+            } catch {
+              nextRuns = undefined;
+            }
+            return { ...summary, next_week_deload_runs: nextRuns };
           } catch {
             return null;
           }
         })(),
+        // The week read (coaching-focus-read.ts): the dated race build, the canonical
+        // weigh-in trend, the week's new bests and whether the lifts hold through the
+        // cut — all reads already built or cheap, so the conductor stays pure.
+        date: today,
+        raceBuild: raceBuildView,
+        goalPace: brainSignal(`goal_pace:21:${today}`, () => {
+          try {
+            return goalPace(21, today);
+          } catch {
+            return null;
+          }
+        }),
+        weekWins: brainSignal(`week_wins:${today}`, () => {
+          try {
+            return weekWins(today);
+          } catch {
+            return null;
+          }
+        }),
+        cutQuality: cutQualityView,
         // Autonomy-awareness (lead-by-default): under 'lead' the coach applies bounded
         // changes itself at natural boundaries, so the conductor drops its one-tap asks
         // and speaks state. recentRotations + plannedNames let it tell a HANDLED plateau
@@ -1736,6 +1781,10 @@ function getCoachContextFromSnapshot(): CoachContext {
         horizon_weeks: null,
         caveat: null,
         block_line: null,
+        block: null,
+        day_state: null,
+        evidence: [],
+        changed_since: [],
       };
     }
   });
@@ -1833,9 +1882,71 @@ function getCoachContextFromSnapshot(): CoachContext {
 // one waited on a training/marker counter that no settings or directive write ever
 // bumped) and a shorter TTL. ONE memo, so coaching-focus and the prompts can never be
 // looking at two different builds of the same day.
+const STANCE_LEAD_LINE: ReadonlyArray<(until: string) => string> = [
+  (until) => `You asked to be pushed through ${until}, and this week carries it.`,
+  (until) => `This is the push you asked for, running through ${until}.`,
+  (until) => `Your push stands through ${until}; this is where it goes this week.`,
+];
+const STANCE_HELD_LEAD_LINE: ReadonlyArray<(held: string) => string> = [
+  (held) => `You asked to push, and that stands — right now ${held} holds it back.`,
+  (held) => `Your push still stands; today it gives way to one thing: ${held}.`,
+];
+
+/**
+ * The conductor's lead under a push stance. Pure. A training or running lever gains one
+ * sentence on its `why` (and the stance on `based_on`): the push it carries, or — when a
+ * floor holds against it right now — what holds, in the athlete's terms. Any other lead
+ * (recovery, health, nutrition, a rest day) is returned untouched: a stance never
+ * rewrites a protective or clinical lead.
+ */
+export function stanceOnLead(
+  lead: FocusItem | null | undefined,
+  push: Pick<ClientTrainingDriveRead, "stance" | "date"> | null | undefined,
+  heldBy: readonly string[] = []
+): FocusItem | null {
+  if (!lead) return lead ?? null;
+  const stance = push?.stance;
+  if (!stance || (lead.domain !== "training" && lead.domain !== "running") || lead.day_posture) return lead;
+  const until = (() => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(stance.until);
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    return m ? `${months[Number(m[2]) - 1]} ${Number(m[3])}` : stance.until;
+  })();
+  const day = String(push?.date ?? localDateISO());
+  const sentence = heldBy.length
+    ? pickDayVariant(STANCE_HELD_LEAD_LINE, day, "coaching_focus:stance_held")(heldBy[0])
+    : pickDayVariant(STANCE_LEAD_LINE, day, "coaching_focus:stance")(until);
+  const why = String(lead.why ?? "").trim();
+  const basedOn = [...(lead.based_on ?? [])];
+  const stanceBasis = `your push stance (through ${until})`;
+  if (!basedOn.includes(stanceBasis)) basedOn.unshift(stanceBasis);
+  return { ...lead, why: why ? `${why.replace(/\s*$/, "")} ${sentence}` : sentence, based_on: basedOn.slice(0, 6) };
+}
+
 export function getCoachingFocus() {
   try {
-    return getCoachContext().coaching_focus;
+    const focus = getCoachContext().coaching_focus;
+    // The training drive rides on the conductor's card (not inside the coach context
+    // build, which the prompts share and which must not compose today's envelope).
+    let push: ClientTrainingDriveRead | null = null;
+    try {
+      const read = trainingDriveRead();
+      if (read.drive === "push" || read.ended || read.offer) push = read;
+    } catch {
+      push = null;
+    }
+    if (!push) return focus;
+    // The athlete's own word reaches the LEAD, not only a side field: a training or
+    // running lever under a stance says the push it is carrying — or, when a floor holds
+    // against it right now, says that in their terms (stanceOnLead).
+    let heldBy: string[] = [];
+    try {
+      heldBy = push.stance ? stanceHeldBy() : [];
+    } catch {
+      heldBy = [];
+    }
+    const lead = stanceOnLead(focus.lead as FocusItem | null, push, heldBy);
+    return lead && lead !== focus.lead ? { ...focus, lead, push } : { ...focus, push };
   } catch {
     return {
       available: false,
@@ -1848,6 +1959,10 @@ export function getCoachingFocus() {
       horizon_weeks: null,
       caveat: null,
       block_line: null,
+      block: null,
+      day_state: null,
+      evidence: [],
+      changed_since: [],
     };
   }
 }

@@ -233,10 +233,14 @@
         // and the plan strip's own words), leading the day as a lift pill would.
         const line = day.line && typeof CairnUiReads !== "undefined" ? CairnUiReads.strengthLineHtml(day.line) : "";
         const pills = day.pills.length ? `<div class="horizon-pills">${day.pills.map(pillHtml).join("")}</div>` : "";
+        // Today adapted to another plan day: said once, quietly, under the day.
+        const swap = day.swappedFrom
+          ? `<span class="horizon-day-swap">${escHtml(`In place of ${day.swappedFrom}`)}</span>`
+          : "";
         const body =
           pills || line
-            ? line
-              ? `<div class="horizon-day-body">${line}${pills}</div>`
+            ? line || swap
+              ? `<div class="horizon-day-body">${line}${pills}${swap}</div>`
               : pills
             : `<span class="horizon-rest">Rest</span>`;
         // Every dated day opens (v2 wave 7): today opens Today, another day its record
@@ -244,8 +248,11 @@
         const open = day.date
           ? ` data-open-day="${escAttr(day.date)}" role="link" tabindex="0"`
           : "";
-        return `<li class="horizon-day${day.today ? " is-today" : ""}${day.date ? " is-open" : ""}"${day.today ? ` aria-current="date"` : ""}${open}>
-          <span class="horizon-day-when">${escHtml(day.weekday)}<b>${escHtml(day.day)}</b></span>${body}${day.date ? `<span class="horizon-day-go"><span aria-hidden="true">›</span><span class="sr-only">, open the day</span></span>` : ""}</li>`;
+        const state = day.today ? ", today" : day.done ? ", done" : day.rest ? ", rest" : "";
+        const cls = `horizon-day${day.today ? " is-today" : ""}${day.date ? " is-open" : ""}${day.rest ? " is-rest" : ""}${day.done ? " is-done" : ""}`;
+        const check = day.done ? `<span class="horizon-day-check" aria-hidden="true">✓</span>` : "";
+        return `<li class="${cls}"${day.today ? ` aria-current="date"` : ""}${open}>
+          <span class="horizon-day-when">${escHtml(day.weekday)}<b>${escHtml(day.day)}${check}</b></span>${body}${day.date ? `<span class="horizon-day-go"><span aria-hidden="true">›</span><span class="sr-only">${escHtml(state)}, open the day</span></span>` : ""}</li>`;
       })
       .join("");
     // The server's week line, its first sentence as the serif voice and the rest under it.

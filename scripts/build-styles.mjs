@@ -78,6 +78,7 @@ export const STYLE_PARTIALS = [
   "today/path",
   "today/ahead",
   "today/day",
+  "today/day-detail",
   "you/cairn",
   "shell/identity",
   "shell/nav",

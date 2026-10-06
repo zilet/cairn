@@ -210,3 +210,33 @@
 .tov-today .strength-line-caveat{font-size:var(--text-sm);color:var(--ink-2);line-height:var(--leading-normal)}
 .tov-today .tov-start{margin:0}
 
+/* Train "Where to focus": hero, chips, moved, block, one expander */
+.tfc-top{display:flex;align-items:center;justify-content:space-between;gap:var(--space-4);min-height:28px}
+.tfc-state{font-size:var(--text-xs);color:var(--ink-2);background:var(--surface2);border-radius:var(--radius-pill);padding:var(--space-1) var(--space-4)}
+.tfc-headline{margin:var(--space-3) 0 var(--space-6);font-family:var(--font-display);font-size:var(--text-lead);line-height:var(--leading-snug);color:var(--ink);text-wrap:balance}
+.tfc-hero{display:flex;gap:var(--space-5);margin:var(--space-4) 0 var(--space-6)}
+.tfc-hero-body{min-width:0;flex:1}
+.tfc-hero .cfocus-dom{display:block}
+.tfc-hero .tov-focus-title{font-size:var(--text-lg);line-height:var(--leading-snug);margin:0}
+.tfc-dot{flex:none;width:12px;height:12px;border-radius:50%;background:var(--s-strength);box-shadow:inset 0 0 0 1px var(--stone-rim);margin-top:var(--space-2)}
+.tfc-dot-running{background:var(--s-endurance)}.tfc-dot-recovery{background:var(--s-recovery)}.tfc-dot-nutrition{background:var(--s-fuel)}
+.tfc-dot-body{background:var(--s-body)}.tfc-dot-health{background:var(--s-heart)}
+.tfc-lbl{display:block;color:var(--muted);margin-bottom:var(--space-2)}
+.tfc-also,.tfc-moved{margin-bottom:var(--space-6)}
+.tfc-chips{display:flex;flex-wrap:wrap;gap:var(--space-3)}
+.tfc-chip{display:inline-flex;align-items:center;gap:var(--space-3);background:var(--surface2);border-radius:var(--radius-pill);padding:var(--space-2) var(--space-5) var(--space-2) var(--space-4);font-size:var(--text-sm);color:var(--ink-2)}
+.tfc-chip .tfc-dot{width:8px;height:8px;margin:0}
+.tfc-moved-list,.tfc-evidence{list-style:none;margin:0;padding:0}
+.tfc-moved-item,.tfc-ev{display:flex;align-items:baseline;flex-wrap:wrap;gap:var(--space-3);padding:var(--space-1) 0;font-size:var(--text-sm);color:var(--ink-2)}
+.tfc-moved-since,.tfc-ev-note{color:var(--muted);font-size:var(--text-xs)}
+.tfc-ev-note{flex-basis:100%;padding-left:1.5em}
+.tfc-ev-value{color:var(--ink);font-weight:var(--weight-semibold)}
+.tfc-dir{flex:0 0 1.2em;text-align:center;color:var(--muted);font-weight:var(--weight-semibold)}
+.tfc-dir-up{color:var(--d-endurance)}
+.tfc-block{margin:0 0 var(--space-3);font-size:var(--text-sm);line-height:var(--leading-normal);color:var(--ink-2);border-top:1px solid var(--line);padding-top:var(--space-5)}
+.tfc-expand{display:flex;align-items:center;gap:var(--space-3);min-height:44px;width:100%;background:none;border:0;padding:0;cursor:pointer;font:inherit;font-size:var(--text-sm);color:var(--ink-2)}
+.tfc-expand[aria-expanded="true"] .tfc-chev{transform:rotate(90deg)}
+.tfc-panel[hidden]{display:none}
+.tfc-why,.tfc-based,.tfc-conn,.tfc-later-row{margin:0 0 var(--space-4);font-size:var(--text-sm);line-height:var(--leading-normal);color:var(--ink-2)}
+.tfc-evidence{margin-bottom:var(--space-4)}
+.tfc .linkbtn{min-height:44px;display:inline-flex;align-items:center}

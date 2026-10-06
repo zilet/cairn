@@ -55,7 +55,8 @@ import {
 // prescription, autoregulation and the proposal builders.
 import { availableEquipment } from "./equipment.js";
 import { type ParsedPreference, learnedPreferences, preferenceRerank } from "./exercise-preferences.js";
-import { getSettings } from "./settings.js";
+import { PUSH_STANCE_RIR_RESERVE, effectiveTrainingDrive } from "./training-drive.js";
+import { pushStanceInForce } from "./push-stance-open.js";
 import { relatedLiftStart } from "./related-lift.js";
 import {
   type AcuteGateReading,
@@ -1598,6 +1599,10 @@ export interface PrescriptionOpts {
   cut?: CutPressure | (() => CutPressure) | null; // the shared fuel/cut read for the pass (lazy when a thunk, recomputed when absent)
   estimate?: EstimateReader | null; // the shared, lazy per-lift calibration read for the pass
   drive?: TrainingDrive | null; // the athlete's standing posture (settings.training_drive); read from settings when absent
+  // A DATED push stance covers the day AND the last three days were harm-free
+  // (src/repo/push-stance-open.ts): a strong top set may carry one rep in hand instead
+  // of two. Read for the day when absent.
+  pushStance?: boolean | null;
   slotStamps?: Map<number, string | null> | null; // a pass's one read of plan_items.prescribed_at (planSlotStamps)
 }
 
@@ -1611,12 +1616,8 @@ export interface PrescriptionOpts {
 // tier are all deliberately blind to it.
 export type TrainingDrive = "steady" | "push";
 
-export function readTrainingDrive(): TrainingDrive {
-  try {
-    return getSettings().training_drive === "push" ? "push" : "steady";
-  } catch {
-    return "steady";
-  }
+export function readTrainingDrive(date?: string | null): TrainingDrive {
+  return effectiveTrainingDrive(date);
 }
 
 export function nextPrescription(
@@ -1708,7 +1709,8 @@ export function nextPrescription(
     // once and threads it in (planDayProgression does); a standalone call reads it
     // here. Absent OR null means "whatever the athlete has standing" — there is no
     // meaningful third state to preserve, unlike the block/cut/estimate thunks.
-    drive: opts?.drive ?? readTrainingDrive(),
+    drive: opts?.drive ?? readTrainingDrive(date),
+    pushStance: opts?.pushStance ?? pushStanceInForce(date),
     deloadEvidence: deloadEvidenceReader(date),
     // The band is a property of THIS movement on THIS day, so it is read per lift.
     // The read returns null before touching its heavier queries when nothing has
@@ -1746,6 +1748,7 @@ interface PrescCtx {
   cut: () => CutPressure; // the fuel/cut pressure, computed at most once and only if consulted
   estimate: EstimateReader; // the calibration read, computed at most once per lift and only if consulted
   drive: TrainingDrive; // the athlete's standing "push me" declaration; bounded authority, never over a safety floor
+  pushStance?: boolean; // a dated push stance is in force (covers the day, last three days harm-free): the strong-top-set reserve bar drops to one rep
   pain: PainBandRead | null; // this movement's traffic-light band; null = nothing stated (absent, not green)
 }
 
@@ -2028,10 +2031,15 @@ function repsPrescription(
   const recencyRef = latestLoggedSessionDate(date) ?? date;
   const lastAge = last?.date ? daysBetweenISO(recencyRef, last.date) : null;
   const current = lastAge == null || lastAge <= LIFT_CURRENT_WINDOW_DAYS;
+  // A DATED push stance lowers the bar by one rep: a top set finished with a rep in hand
+  // at the ceiling is strong enough to count (src/repo/training-drive.ts). RIR 0 is still
+  // a grind under any stance, and the bar stays two for everyone else.
+  const strongReserve =
+    brakeCtx?.pushStance === true && brakeCtx?.drive === "push" ? PUSH_STANCE_RIR_RESERVE : RIR_IN_RESERVE;
   const strong =
     current &&
     doseEligibility.eligible &&
-    (status === "progressing" || (topReserve != null ? topReserve >= RIR_IN_RESERVE : true));
+    (status === "progressing" || (topReserve != null ? topReserve >= strongReserve : true));
   // The card must not tell an athlete who never logs RIR to come back at "RIR 2+".
   // Where a phrasing names the rating, the same meaning also exists spoken in reps;
   // the RIR wording is picked ONLY when an RIR was actually logged.
@@ -3188,7 +3196,10 @@ function planDayProgressionRead(
   // 400-day history once, and a movement no branch asks about never walks it.
   const estimate = estimateReader(readDay);
   // The athlete's standing declaration is a property of the day too — read once.
-  const drive = readTrainingDrive();
+  const drive = readTrainingDrive(readDay);
+  // In force = the stance covers the day AND the last three days were clean — the same
+  // harm_free the day read and the daily decision gate the stance on (push-stance-open.ts).
+  const pushStance = drive === "push" && pushStanceInForce(readDay);
   // Items whose volume is still owed back after a cut: the restore ledger owns their
   // climb, so the set-count catch-up stays off them (read once for the day).
   const owedRestoreKeys = (() => {
@@ -3233,6 +3244,7 @@ function planDayProgressionRead(
       cut,
       estimate,
       drive,
+      pushStance,
       slotStamps,
     });
     if (p) {

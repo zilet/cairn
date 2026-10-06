@@ -7,7 +7,12 @@ import {
 import { HEALTH_DOCUMENT_KINDS, normalizeHealthDocumentKind, type HealthDocumentKind } from "./healthDocumentKinds.js";
 import { CONTEXT_TAG_VOCAB, isContextTagKey } from "./contextTags.js";
 import { localDateISO } from "./repo/shared.js";
-import { normalizeEnduranceSchedule, normalizeStrengthSchedule } from "./repo/profile.js";
+import {
+  type EnduranceScheduleQuality,
+  normalizeEnduranceSchedule,
+  normalizeStatedQuality,
+  normalizeStrengthSchedule,
+} from "./repo/profile.js";
 import { parseMovementConsiderations, type MovementConsideration } from "./repo/movement-considerations.js";
 import { MAX_REDRAW_REQUEST_CHARS } from "./domain/brain/structure-request.js";
 import { classifyActivityCapture } from "./repo/activity-capture.js";
@@ -35,6 +40,7 @@ export const CHAT_ACTION_TYPES = [
   "set_strength_schedule",
   "set_movement_considerations",
   "set_strength_objective",
+  "set_training_drive",
   "add_memory",
   "update_memory",
   "supersede_memory",
@@ -109,8 +115,12 @@ export interface SetEnduranceScheduleAction extends ChatActionBase {
   type: "set_endurance_schedule";
   // A stated cross-training day rides here as {dow, kind: <sport>, optional: true}: the
   // schedule parser moves it into `cross_training`, never onto a run day.
-  days: Array<{ dow: number; kind: string; optional?: true }>;
+  // Omitted when the turn only states the quality session ("my Thursday is a hard
+  // threshold 5k"): the stored run week then stands.
+  days?: Array<{ dow: number; kind: string; optional?: true }>;
   note?: unknown;
+  // The stated quality session (profile.ts normalizeStatedQuality); null clears it.
+  quality?: EnduranceScheduleQuality | null;
 }
 
 export interface SetStrengthScheduleAction extends ChatActionBase {
@@ -129,6 +139,14 @@ export interface SetStrengthObjectiveAction extends ChatActionBase {
   exercise: string;
   target_kind: "return_to_personal_best" | "explicit_est_1rm";
   target_est_1rm?: unknown;
+}
+
+export interface SetTrainingDriveAction extends ChatActionBase {
+  type: "set_training_drive";
+  drive: "push" | "steady";
+  until?: string;
+  scope?: "block" | "date";
+  words?: string;
 }
 
 export interface AddMemoryAction extends ChatActionBase {
@@ -391,6 +409,7 @@ export type ChatAction =
   | SetStrengthScheduleAction
   | SetMovementConsiderationsAction
   | SetStrengthObjectiveAction
+  | SetTrainingDriveAction
   | AddMemoryAction
   | UpdateMemoryAction
   | SupersedeMemoryAction
@@ -505,11 +524,17 @@ export const CHAT_ACTION_PROMPT_SPECS = {
     // without Sat/Sun → Saturday (dow 6) as the long-run day.
     // A recurring NON-RUN day they name ("Saturday optional MTB") is an entry with
     // kind = the sport (ride | swim | walk | row | paddle | other) and optional: true.
+    // A QUALITY SESSION they state ("Thursday is a hard threshold 5k plus a few km
+    // around it") rides in "quality": type threshold | tempo | vo2 | hills, work_km the
+    // work itself, warm_up_km / cool_down_km only when they said them. Omit "days" when
+    // the turn states only the session — the stored run week stays.
     { "type": "set_endurance_schedule",
       "days": [{ "dow": 2, "kind": "quality" }, { "dow": 4, "kind": "easy" }, { "dow": 0, "kind": "long" },
                { "dow": 6, "kind": "ride", "optional": true }],
+      "quality": { "type": "threshold", "work_km": 5 },
       "note": "<optional short restatement of their words>" }`,
     guidance: [
+      `When the athlete states WHAT their quality session is ("hard threshold 5k on Thursday", "my quality day is hill repeats", "I want tempo, 6 km of it"), send it as "quality": {"type", "work_km"} — work_km is the hard part only (the 5 of "threshold 5k"); add warm_up_km / cool_down_km only when they gave numbers ("a few km around it" gives none — leave them out and the engine picks and says so). A turn that states only the session omits "days". The engine still decides whether quality runs in a given week and holds the work below the stated km, saying so, when the week cannot carry it — never promise them the full session every week. "quality": null clears it when they ask the coach to choose again.`,
       `Emit set_endurance_schedule when the athlete states which days they run. Map named weekdays only; do not fill in a third day they did not mention. Duplicate weekdays keep the first kind.`,
       `A ride, swim, walk, paddle or other sport they keep on a weekday ("Saturday optional, MTB or other") is a cross-training day, NEVER a run day: send it as {"dow": 6, "kind": "ride", "optional": true} beside the run days. The engine plans the runs around it (a ride the day before the long run is a known pattern, not a conflict). Never turn it into an easy or "any" run. A cross-training day already stated is kept when you resend only the run days.`,
     ],
@@ -554,6 +579,18 @@ export const CHAT_ACTION_PROMPT_SPECS = {
     guidance: [
       `Set a strength objective ONLY when the athlete explicitly chooses ONE named anchor lift and states that they want to return to its personal best or reach a specific estimated-1RM. A question like "what should my bench goal be?", comparing exercises, or general comeback talk is exploratory and MUST NOT write an objective — ask one brief clarifying question instead.`,
       `return_to_personal_best snapshots that exact exercise's logged all-time est-1RM now. explicit_est_1rm snapshots the athlete's stated number. Barbell and dumbbell variants are different objectives; never silently merge or substitute them.`,
+    ],
+  },
+  set_training_drive: {
+    type: "set_training_drive",
+    applyMode: "immediate",
+    shape: `{ "type": "set_training_drive", "drive": "push"|"steady",
+      "until": "YYYY-MM-DD (push only; optional)", "scope": "block (push only; optional)",
+      "words": "<the athlete's own sentence>" }`,
+    guidance: [
+      `Emit ONLY when the athlete's own message states it — "I can push way harder than this", "push me until the block ends", "I want to push this block", "I feel ready for more", "back to steady" — or when they say yes right after YOU asked whether to push (relaying DATA.training_drive.offer: then "until" is the offer's until). A question ("should I push harder?") or your own suggestion never sets it; answer, and let them say it.`,
+      `Declining a scheduled deload ("I'm not doing the deload", "skip the deload") IS a push stance: send "scope":"block". Say plainly what that does — the block's scheduled deload runs as a normal loaded week — and what it cannot do: a deload the loaded weeks have EARNED still holds.`,
+      `A push is always dated: their named date goes in "until"; "this block" is "scope":"block"; with neither the server runs it four weeks. It widens the room on clean days and never overrides a rest-grade morning, a day that cost them, a symptom or anything clinical. When DATA.training_drive.held_by names something holding right now, say it in their terms — their word stands, and this is what still outranks it today — never quietly obey it and never quietly override it. The Changes feed holds a one-tap Undo.`,
     ],
   },
   add_memory: {
@@ -938,6 +975,19 @@ export function normalizeChatAction(value: unknown): ChatAction | null {
     case "set_endurance_goal":
       return { ...value, type: "set_endurance_goal" };
     case "set_endurance_schedule": {
+      // The stated quality session: readable → carried, explicit null → the clear,
+      // anything else → not carried (the stored one stands).
+      const statedQuality = Object.hasOwn(value, "quality")
+        ? value.quality === null
+          ? null
+          : (normalizeStatedQuality(value.quality) ?? undefined)
+        : undefined;
+      const quality = statedQuality !== undefined ? { quality: statedQuality } : {};
+      // A turn that states only the quality session carries no days[]: the stored run
+      // week stands (profile.ts serializeEnduranceSchedule's quality-only update).
+      if (!Array.isArray(value.days)) {
+        return statedQuality !== undefined ? { type: "set_endurance_schedule", ...quality } : null;
+      }
       const schedule = normalizeEnduranceSchedule({ ...value, source: "chat" });
       if (!schedule) return null;
       // Cross-training days travel back inside days[] in the shape the parser moves
@@ -949,6 +999,7 @@ export function normalizeChatAction(value: unknown): ChatAction | null {
           ...(schedule.cross_training ?? []).map((c) => ({ dow: c.dow, kind: c.sport, optional: true as const })),
         ],
         note: schedule.note,
+        ...quality,
       };
     }
     case "set_strength_schedule": {
@@ -971,6 +1022,19 @@ export function normalizeChatAction(value: unknown): ChatAction | null {
           (Number.isFinite(Number(value.target_est_1rm)) && Number(value.target_est_1rm) > 0))
         ? { ...value, type: "set_strength_objective", exercise: value.exercise, target_kind: value.target_kind }
         : null;
+    case "set_training_drive": {
+      const drive = String(value.drive ?? "")
+        .trim()
+        .toLowerCase();
+      if (drive !== "push" && drive !== "steady") return null;
+      return {
+        type: "set_training_drive",
+        drive,
+        ...(nonBlank(value.until) ? { until: String(value.until).trim().slice(0, 10) } : {}),
+        ...(value.scope === "block" || value.scope === "date" ? { scope: value.scope } : {}),
+        ...(nonBlank(value.words) ? { words: String(value.words).slice(0, 240) } : {}),
+      };
+    }
     case "add_memory":
       return nonBlank(value.content) ? { ...value, type: "add_memory", content: value.content } : null;
     case "update_memory":

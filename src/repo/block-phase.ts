@@ -22,16 +22,13 @@ import {
   getActiveBlock,
 } from "./program-blocks.js";
 import { getProgramState } from "./program-state.js";
-import { getSettings } from "./settings.js";
+import { effectiveTrainingDrive } from "./training-drive.js";
 
 export type BlockDrive = "steady" | "push";
 
-function readDrive(): BlockDrive {
-  try {
-    return getSettings().training_drive === "push" ? "push" : "steady";
-  } catch {
-    return "steady";
-  }
+// The drive in force on the day (a dated push stance past its end no longer counts).
+function readDrive(date?: string): BlockDrive {
+  return effectiveTrainingDrive(date);
 }
 
 // Whether the loaded-weeks evidence calls for a deload (program-state's mesocycle,
@@ -71,7 +68,7 @@ export function resolvedPhaseOf(
 
 /** The active block's phase on `date` as the week actually runs it, or null with no block. */
 export function resolvedBlockPhase(date?: string): BlockPhase | null {
-  return resolvedPhaseOf(activeBlockContext(date), readDrive(), deloadEvidenceReader(date));
+  return resolvedPhaseOf(activeBlockContext(date), readDrive(date), deloadEvidenceReader(date));
 }
 
 /**
@@ -82,7 +79,7 @@ export function coachBlockSummary(date?: string): (BlockCoachSummary & { schedul
   const summary = blockForCoach(date);
   if (!summary) return null;
   const block = activeBlockContext(date);
-  if (!scheduledDeloadSkipped(block, readDrive(), deloadEvidenceReader(date))) return summary;
+  if (!scheduledDeloadSkipped(block, readDrive(date), deloadEvidenceReader(date))) return summary;
   return { ...summary, phase: "intensification", scheduled_deload_skipped: true };
 }
 
@@ -91,11 +88,16 @@ export function coachBlockSummary(date?: string): (BlockCoachSummary & { schedul
  * a push athlete without the loaded-weeks evidence runs it as intensification, so a
  * volume-floor exemption for "about to enter the deload" must not fire for them.
  */
-export function nextWeekScheduledDeloadRuns(date?: string): boolean {
+export function nextWeekScheduledDeloadRuns(
+  date?: string,
+  // A caller that already holds the day's program state passes its loaded-weeks
+  // evidence, so this never builds a second one.
+  deloadEvidence: () => boolean = deloadEvidenceReader(date)
+): boolean {
   const block = getActiveBlock();
   if (!block) return false;
   const total = Number(block.total_weeks);
   const week = Number(block.week_index);
   if (!(total > 2 && week < total && derivePhase(week + 1, total, block.focus) === "deload")) return false;
-  return readDrive() !== "push" || deloadEvidenceReader(date)();
+  return readDrive(date) !== "push" || deloadEvidence();
 }

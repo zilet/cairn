@@ -162,6 +162,8 @@ proceed-only), the kind is `train`, and the day's main-lift group is not DEEP-sa
 (`AcuteGateReading.deep`; an early-out — composition re-checks the actual host).
 `hold_aggression` keeps `level: "push"` and trims only the challenge item (`reach_trimmed_by_fueling`:
 fueling keeps today's reach to the working sets). Policy `daily_decision_v7`. On an open reach day, composition injects one challenge top set
+(up to `MAX_REACH_HOSTS` (2) when the athlete's dated push stance is open and harm-free — `reach.hosts`,
+`PUSH_STANCE_REACH_HOSTS` — each on a different movement pattern)
 on the first *eligible* compound (`classifyPattern` squat/hinge/lunge/horizontal or vertical push or
 pull — a curl never hosts) — never a reduced, excluded, saturated, or ungrouped item, never a
 lift whose candidate the progression engine is holding, deloading, re-grounding or rotating (only
@@ -262,7 +264,8 @@ keeping the template's movement.
 split ring, not the highest-scoring day anywhere. That is how Monday's Lower B becomes Monday's
 Push after a Sunday long run, instead of Thursday's Upper mashed with Monday's bench.
 
-**Only ONE challenge top set a session, whichever shape produces it.** An agent-authored nested
+**Only ONE challenge top set a session (up to `MAX_REACH_HOSTS` under an open push stance, never two on one
+movement pattern), whichever shape produces it.** An agent-authored nested
 `top_set` on a composed item now sets `reachHostConsumed` when it's inserted (`agentTopSetItemFor()`,
 `src/repo/daily-composition.ts`), so a later server-derived compound in the same list can no longer
 also claim the reach slot — before this a day could render both an agent-composed single AND a
@@ -466,6 +469,10 @@ whose slots are mostly `substitution_for` reads "Pull, reshaped" and carries the
 list. It rides on every Brief response (`attachDayReadContext`), the Today aggregate, `planWeek()`, and
 `GET /api/today-strength-line` (Session header, Train overview), and every client prints `text`/`caveat`
 verbatim through `CairnUiReads.strengthLineHtml` — so never derive a today state in a renderer.
+`planWeek()` reads the line BEFORE laying cells: today's calendar cell (nothing logged yet) names the
+line's `day_number`, not the weekday map's forecast, and carries the map's day as
+`plan_day.swapped_from` when the adaptive pick moved it (the strip once said "Lower B" under a Train
+card saying "Push"). Days after today keep the map's forecast; it re-phases once today is logged.
 
 **Plan tab week projection.** `GET /api/plan/week` (`planWeek()` in `src/domain/training/plan-week.ts`)
 assembles that same map into a connected week strip for Strength + Endurance: calendar Mon→Sun when
@@ -1141,6 +1148,34 @@ effort is still harm. The matcher is cycle-free by contract: it never calls `wee
 `flexibleTrainingAgenda`, `harmEvidenceOnDay` or `demonstratedRunCapacity` (the harm read sits under the
 run plan). `test/movedKeyRunLiveWeek.test.js`, `test/liveWeekReplay.test.js`.
 
+### The stated quality session (`endurance_schedule.quality`, `run-progression.ts`, 2026-10-06)
+
+The athlete can say WHAT the quality day is, not only which weekday: `endurance_schedule.quality` =
+`{type: threshold|tempo|vo2|hills, work_km? (1–15), warm_up_km? (0–5), cool_down_km? (0–5), note?}`
+inside `profile.endurance_schedule_json` (no column). `normalizeStatedQuality` reads close words to a
+type ("cruise" → threshold, "intervals" → vo2), clamps km fields and drops a garbage one, and drops the
+whole preference on an unreadable type. Every setter (`set_endurance_schedule`, `set_profile`, PUT
+/profile, the chat action) keeps a stored preference on a run-days-only update exactly as it keeps
+`cross_training`; `quality: null` clears it, and a body with `quality` and no `days[]` changes the
+session alone (the run week, cross days and note stand).
+
+`weeklyRunPlan` runs the stated type instead of `QUALITY_BY_PHASE`'s rotation; everything protective
+still decides WHETHER quality runs (recovery week, health holds, thin base, a constrained supporting
+week, race week — which keeps the engine's own touch). `statedQualitySession` sizes it as warm-up +
+work + cool-down (unstated warm/cool default to 2 km each, 1.5 on a short set, and the rationale says
+so), the total being the run's distance and so inside `weeklyKm` like any quality run. The work is
+HELD below the stated km — and the run's `stated_quality.held.line` says why, rotated through
+`pickDayVariant` — on a trimmed week (`short`, ~half, the morning decides), a taper week (~60%), a
+first hard session after none in `STATED_QUALITY_EVIDENCE_DAYS` (~60%), past one step (×1.15) beyond
+the longest quality-graded run on record (`longestQualityRunKm`, the agenda's own grading; else the
+longest mid-week run), or past the week's room (≤ 40% of the week, the long run's quarter and each
+easy run's 3 km left standing). Threshold work up to 6 km runs continuous (the note offers the 1 km
+cruise split); past 6 km it becomes 2 km (or 1 km) cruise reps. The morning branch that opens a short
+set on the stated quality weekday uses the stated type, sized inside that day's easy distance. Labels
+stay the engine's (`Threshold run`, `Short threshold`, …) so `paceKeyForQuality`, the race build and
+the agenda read the threshold band unchanged. The run carries `stated_quality` (`StatedQualityRx`);
+`applyRunDayIntensity` moving it to easy drops it. `test/statedQualitySession.test.js`.
+
 ### The cross-training day: stated, then observed (`src/repo/cross-training-day.ts`, 2026-10-04)
 
 A recurring non-run day lives in `endurance_schedule.cross_training` (`{dow, sport, optional:true}`, at
@@ -1810,6 +1845,20 @@ notes about the same morning a tab apart. `SignalDimensionState.voice` sits alon
 dimension's `reason` for the conductor's parallel fueling/schedule cards, which speak to one
 dimension rather than the day's whole posture.
 
+**The conductor reads the WEEK; today is a day state.** A completed day (`posture: done`) is not a
+lever: it rides on `coaching_focus.day_state` and the week's lever leads (rest / easy still own the
+card — they are protective — and also report themselves on `day_state`). The headline is the week's
+through-line anchored in the block and the race ("Week 6 of 6, 26 days to …: your overhead press leads
+this week, with … alongside"), never the performance hero line — the strength standing is a supporting
+fact on the lead only when strength IS the lever. Around the choice, `src/repo/coaching-focus-read.ts`
+(pure) supplies `block` (week N of M, the phase the week runs as through `coachBlockSummary`, and the
+deload decision — a push athlete's set-aside deload is SAID, never "the deload is in sight"),
+`evidence` (value-and-direction bullets, never a score / percentile / impact_score), `changed_since`
+(a dated window over the evidence itself — a new best, the race estimate, the weight average, a fresh
+lab, last week's running — never a stored snapshot, so a GET never writes), and `later[].why`. A dated
+race takes the lead in its peak / taper / race weeks even for a supporting role; earlier it rides
+alongside with this week's sessions and next week's shape.
+
 **A voice follows its observation's DIRECTION.** HRV and resting HR pick their voice key in the
 same order their direction is decided: an excursion, then the TREND past the norm, and only then the
 lone-reading `*_unsettled` note — a neutral set whose phrasing says there is nothing to act on. Ordered
@@ -2274,6 +2323,124 @@ default is omitted from the hash rather than nulled, so the key's first appearan
 every warm read at once; and the drive read hashes a stable token in the `focus` slot, because its
 focus is the rendered due list, which moves as the session is logged.
 
+**A push stance is the drive with an end date and a little more room (2026-10-06).** "I can push way
+harder than the program is recommending" is the athlete's word, recorded as said: a row in
+`training_stances` (a new table — `since`, `until`, `scope` block|date, the athlete's `words`,
+`previous_drive`). `trainingDriveState(date)` / `effectiveTrainingDrive(date)` (`src/repo/training-drive.ts`)
+are the ONE read every consumer asks (progression, block-phase, program-state, the daily decision, the
+day read) — never `getSettings().training_drive` directly. The open stance covering a day makes the drive
+push; past `until` it simply stops reading and the drive falls back to `previous_drive` with no write.
+The Settings toggle still sets the standing drive and, when it actually changes it, ends any open stance.
+The door is `setTrainingDrive` (`src/domain/training/training-drive.ts`; `PUT /api/training-drive`, MCP
+`set_training_drive`, chat `set_training_drive`, the last gated on `hasExplicitTrainingDriveIntent` — the
+athlete's own sentence, never a question or the coach's suggestion): an explicit date wins, `scope:"block"`
+runs through the active block's last calendar day (said when that is under a week away), else four weeks,
+capped at twelve. Each change is an `observe`-tier, reversible `training_structure` decision with
+lift-progression and session-feedback expectations and a `training_stance` rollback; Undo refuses once a
+newer stance or a toggle has moved the drive, and undoing a renewal re-opens the stance it replaced.
+While a stance covers the day AND the last three days are harm-free (`harmEvidenceOnDay`) it widens, and
+only widens: the stacked-days count ceiling 5 → `PUSH_STANCE_CONSEC_CEILING` (7) for the ceiling-easy read
+and both rhythm-rest answers (`consecCeiling`, day-read.ts); in the envelope (`signal_support.push_stance`,
+omit-when-idle) it plays the rhythm license's part under that ceiling with no deciding brake — a stack is
+not double-day pressure, longevity-first ordering and a reopened lift after a morning run no longer hold
+intensity — and it backs a reach by itself (`backed_by:["push_stance","training_log"]`,
+`REACH_STANCE_WHY`), lets a deeply recovering main-lift group no longer park the reach (composition still
+refuses every saturated host), and licenses `reach.hosts = 2` (composition seats the second challenge on
+a different compound pattern, inside the same set/item budget); in progression a top set capped with one
+rep in hand counts as strong (`PUSH_STANCE_RIR_RESERVE`; RIR 0 stays a grind). Every signal hold keeps
+its own cap: rest-grade readiness, harm evidence, soreness, an underpowered session, a deload or recovery
+cycle, symptoms/injuries, `clinicallyDriven`, an act-now finding's directive, fueling's trim. The
+envelope says so with `push_stance` (precedence + `PUSH_STANCE_RATIONALE`) only on a day it actually
+widened.
+
+**The push read says why not more.** `trainingDriveRead(date)` (`src/repo/training-drive-read.ts`,
+`ClientTrainingDriveRead` in `src/contracts/training-drive.ts`) is the UI-ready answer: drive, standing,
+stance (with its line and days left), a just-ended stance, `licenses` and `never_overrides` in plain
+words, and on a live push day `today` — `reaching`, `reach_hosts`, and `holding`: the decisive holds read
+off the composed envelope (the persisted one when its fingerprint matches, so a reach with no room says
+so) and the day read — the quiet day's own reason, a stance's harmed day or ceiling, an injury, the fresh
+deciding brakes (`freshDecidingBrakeFields`) in words, a deload, low recovery, soreness, an underpowered
+session, longevity's hold, fueling's trim, a recovering group, "nothing has vouched yet", and each held
+compound in its own progression `why`. `today.line` rotates through `WHY_NOT_MORE`. It decides nothing.
+It rides as `push` on the Brief (`attachDayReadContext`) and the conductor (`getCoachingFocus`), and
+`GET /api/training-drive` / MCP `get_training_drive`. Prompts see the compact `training_drive` key
+(PERSON bundle, `trainingDriveForCoach` — no envelope inside the shared coach context) rendered by
+`renderTrainingDriveLine` beside the durable intent: lean toward the heavier honest option, and name what
+holds a day back instead of softening silently.
+
+**What the athlete SAYS is first-class evidence (stated input, 2026-10-06).** One law across the brain:
+the athlete's own word outranks anything the coach merely infers, and only the safety and clinical
+floors outrank it. *Capture.* `hasExplicitTrainingDriveIntent` (`src/chat-intent.ts`) reads every way of
+saying it — "I can push harder", "I want to push this block", "I feel ready for more", "open the
+throttle", and declining a scheduled deload ("I'm not doing the deload", which IS a push stance through
+the block: the block's scheduled deload runs loaded, an EARNED deload still holds) — and never a
+question or a narration ("felt easy, could have done more" is not a stance; the offer below reads the
+logged evidence — ratings, reps in reserve, lifts moving — instead). `hasExplicitTrainingDriveIntentInContext` adds a short "yes" ONLY right after the coach's own
+message asked whether to push. The stance keeps the athlete's sentence verbatim (never the model's
+paraphrase); `reconcileTrainingDriveReply` (`src/chat-reconcile.ts`) appends the truthful receipt (until
+when, today's "why not more", the Undo) or corrects a reply that claimed a push the gate refused. A
+stated run week or quality session ("Thursday is a hard threshold 5k with a few km around it") is
+recorded by `recordStatedRunWeek` (`src/domain/training/stated-input.ts`) from chat's and MCP's
+`set_endurance_schedule`: an `observe`-tier, reversible `training_structure` row with
+`context.stated_by_athlete`, the words, an athlete-register `action.title`/`user_explanation`, and an
+`endurance_schedule` rollback that Undo restores only while the stored week is still the one that
+statement wrote. Nothing is recorded when nothing changed.
+
+**"You said X → the brain changed Y" (the Changes feed).** A stated row (`stated_by_athlete` or a push
+stance) is a feed row whatever its tier — the observe tier used to hide every stance from
+`brainChangesRead`. The title is what changed, in words with no absolute date ("Pushing harder for the
+next two weeks", "Thursday's quality run is now a threshold 5 km"), `said` is the athlete's own words
+(optional on `ClientBrainChange`), and `why` opens on the quote ("You said “…”.") before the change
+sentence. It is never `new` — their own word is not news to them — and carries the ordinary Undo.
+
+**Conflict honesty.** `stanceHeldBy(date)` (`training-drive-read.ts`) names, in the athlete's terms, what
+the floors hold against a push right now — a day in the last three that cost something, a fresh deciding
+brake, an open symptom, an act-now finding that governs training (the conference's own
+`clinicalLevers` rule), a recovery week, an EARNED deload — and rides on the coach context as
+`training_drive.held_by`. `renderTrainingDriveLine` then tells every prompt that sees it to say both:
+their word stands, this is what outranks it today and what would release it — never quietly obey, never
+quietly override. The conductor's lead says the same (`stanceOnLead`, `src/repo/coach.ts`): a training
+or running lever under a stance gains one sentence (the push it carries, or what holds it back) and
+`based_on` names the stance; a protective, clinical or day-posture lead is never rewritten. The case
+conference reads the stance and the stated quality session from the FULL context
+(`renderStatedInputLine`, every seat and the conductor), and a stated push meeting recovery strain, an
+open injury/symptom or an act-now training lever is its own deterministic conflict, `stated_push` — a
+coaching trade-off (parties: training, endurance, recovery, health), never a safety floor: a revision
+that gives less than they asked must cite the evidence that holds, or it is announced with it.
+
+**What a stance widens in the week.** Beyond the day (reach, RIR, the stack ceiling, the scheduled
+deload above), an OPEN stance (`stanceOpen` in `daily-decision.ts`) lets the weekly dose carry
+`WEEKLY_DOSE_STANCE_MAX_FILLS` (3, not 2) fills toward a short week — still one set per item, load
+unchanged, never an untested slot or the anchor (`weekly-dose-ledger.ts`). The run engine, ACWR ceiling
+and stress budget are deliberately untouched: the run engine already builds to new peaks off
+demonstrated capacity, and the stress budget's trims are protective. Prompts carry the stance at every
+training-shaped site (insight, weekly read, week ahead, what-if and chat now render
+`renderTrainingDriveLine`; the meal plan and nutrition check-in get `renderTrainingDriveFuelLine` — fuel
+the push, never a surplus on its account alone). Health review and synthesis do not: a clinical read is
+not shaped by a training wish.
+
+**Inference with consent: the push offer (`src/repo/push-offer.ts`).** When he says nothing but the log
+shows he is carrying more than the program prescribes, the coach ASKS. `pushOfferVerdict` (pure) earns
+the question only with at least two recently trained main compounds `progressing` in the program read
+and none regressing or stalled, plus one more witness — two or more sessions rated strong and none poor,
+three or more working sets finished with ≥2 reps in reserve, three or more lifts moving, or a supportive
+recovery read — over at least `OFFER_MIN_SESSIONS` strength sessions in `OFFER_EVIDENCE_DAYS`. Any floor
+closes it outright: push already in force, harm in the last `OFFER_HARM_FREE_DAYS`, a fresh deciding
+brake, an open symptom, an act-now training lever, a recovery week, a deload phase or earned deload, a
+"not now" inside `OFFER_DISMISS_COOLDOWN_DAYS` (28), a stance that ended inside
+`OFFER_AFTER_STANCE_DAYS`. The nightly memory pass (`offerPushStanceIfEarned`,
+`src/domain/training/push-offer.ts`) files at most ONE open offer: a `training_structure` decision at tier
+`ask`, status `observed` (a question, never a parked change the thaw could land), `context.push_offer`,
+its plain-words evidence, and the lift-progression expectations on the carried lifts (the claim "you
+are carrying this" is falsifiable). It rides as `offer` on the training-drive read (so on the Brief and
+the conductor's `push`) and as `training_drive.offer` in the coach context; past `OFFER_TTL_DAYS` it
+hides and the next pass retires it (`canceled`, `lapsed`). Accept (`POST
+/api/training-drive/offer/accept`, MCP `accept_push_offer`, or a chat "yes" to the coach relaying it)
+calls the SAME `setTrainingDrive` for `OFFER_STANCE_DAYS` (two weeks); any push said while an offer is
+open supersedes the offer with the stance's decision (`closeOpenPushOffer`). Dismiss (`POST
+…/offer/dismiss`, MCP `dismiss_push_offer`) marks it `rejected` with `dismissed_on` — the ledger is the
+memory — and keeps its expectations live. Pinned by `test/statedInput.test.js`.
+
 **A run of loading days is a caveat, never a brake of its own — `daily_decision_v7`.** A day counts as
 LOADING when it is `hard`, or moderate STRENGTH work, or genuinely hard cardio
 (`hardCardioDay(iso, cardioLoadMedian)`, asked directly rather than read off the day's grade, since a
@@ -2295,6 +2462,26 @@ another train day the drive preference above can keep reopening (the preference 
 tier only; it cannot answer the ceiling). `accumulated_load_rest` was also added to
 `SOFTENABLE_EASY_CODES`, since the ceiling-easy read is itself now an easy-tier outcome the adherence
 ladder can move up when the athlete has repeatedly trained through it without cost.
+
+**A stack on the athlete's own week is the plan, not overload (2026-10-06).** `statedRhythmRead`
+(`stated-rhythm.ts`) counts the recurring cross-training day (`crossTrainingDays`: stated
+`endurance_schedule.cross_training`, else the observed 2-of-6-weeks pattern) as on-rhythm beside the
+stated lift and run weekdays — a Mon–Fri lifter who rides Saturdays and runs long on Sunday used to
+break `streak_on_rhythm` every weekend, so seven clean days hit the ceiling and the Brief read "easy,
+25 min" over his own stated Push day. The day read asks the rhythm for ANY uncorroborated stack (not
+only at the ceiling): on rhythm (and harm-free over three days) the ceiling never fires, the caveat is
+`STACKED_ON_RHYTHM_CAVEAT` (`planned_training:stacked_on_rhythm`, advisory, names the week) and
+`signals.stacked_on_rhythm` is set; off rhythm it stays `STACKED_DAYS_CAVEAT`. Corroboration (low
+readiness, harm/novelty, a corroborated felt-low tap, a deciding brake, anything clinical) still rests
+exactly as before, and the drive preference still cannot answer the five-day ceiling.
+
+**A run in and a lift still open is one story (2026-10-06).** On a lifting weekday where a run/ride is
+already logged and no set is (`liftDayStillOpen`), `planned_training` leads its caveat run with
+`RUN_IN_LIFT_OPEN_CAVEAT` (`planned_training:run_in`), and an EASY read that still has a plan day due
+appends `LIFT_OPEN_AFTER_ACTIVITY_EASY_WHY` (the run done, the lift left, held light).
+`attachDayReadContext` drops the generic recovery menu (walk/mobility/core) on an easy read whose
+strength line is an open lift with `run_in` — the line itself ("Run in · Push still open", "held
+light") is the offer. A rest read keeps its menu.
 
 **Soreness routes rather than softens only on a genuinely open morning.** A high (`≥4`) soreness
 report used to unconditionally soften the whole day's volume. It now checks whether the morning is
@@ -4872,6 +5059,67 @@ the engine staying in km), and the `race_build` key in the ENDURANCE prompt bund
 `renderRunPlan` as a RACE BUILD block (estimate, target, pace bands, ladder, strength principle,
 ride placement) so every running prompt is shooting at the same numbers. `coach.ts` computes it
 once per context as `raceBuildView`, reusing `runPlanView` and `weekLayoutView`.
+
+## The day detail (`src/domain/training/day-detail.ts`)
+
+ONE read for one calendar day of the training week, opened: `dayDetail(date)`, served by
+`GET /api/plan/day-detail?date=` and MCP `get_plan_day_detail`, typed by `DayDetail` in
+`src/contracts/day-detail.ts` (the client reads that file; the response map entry is
+`"/api/plan/day-detail": DayDetail | null`). It is what Horizon's tap-a-day view and Today's "what's
+ahead" strip render, so neither works anything out of a week strip. 400 on a malformed date;
+**200 + null past the end of next week** (the run engine and the lifting week forecast no further).
+
+It is a composition, never a second engine:
+
+- **The calendar** is `planWeek`, read for the day's week by `dayDetailWeekAsOf`: this week AS OF
+  today and a later week as of its Monday (`lookAheadWeekAsOf`, so a tapped row opens on the words
+  the look-ahead showed), a past week as of its Sunday. `status` is `done | today | upcoming | rest |
+  open` (`open` = a past day whose planned work was not logged, said neutrally). `placed:false` when
+  the lifting week has no weekdays yet (template order): only a dated run can show.
+- **`lift`** is the plan day's items in plan order. A day still ahead carries the progression
+  engine's next prescription per slot (`planDayProgression(day, { readDate })` → `load.source:
+  "progression"`, with `change`/`action` in the engine's words); a lived day keeps the plan's stored
+  target (`source: "plan"`), because the engine has already moved on to the next exposure. A
+  related-lift guess (`starting_idea`) is never shown as a load. `anchor` is the first primary-tier
+  compound — the weekly dose ledger's own read. `intent` names what leads and what follows on THIS
+  day; `point` is the anchor's step (overload / hold / deload) plus the block phase. (The plan day's
+  `purpose` — GET /plan, `getPlanWithPurpose` → `planDayPurposeLine`, `src/repo/plan-day-purpose.ts` —
+  is the gallery's one-fragment version: the lead lift and what follows, the heavy-leg role, the
+  block phase as the week runs it (`resolvedBlockPhase`, else the mesocycle), rotated per plan day
+  and per WEEK so each card keeps its wording all week. It is not used here.) Today carries the one
+  strength line (`today_line`) and the day read's caveat.
+- **`run`** is the rolling agenda's intent dated on the day (planWeek's matcher: a completion, else
+  an open suggestion; a covered or rested run is no run) joined to the weekly run plan's prescription
+  of that kind. `zone` is the engine's zone with its bpm band from `runZones` resolved through the
+  SAME HR model the week's plan read (`getHrModel(asOf)`), so the band always equals the engine's own
+  zone tag (`zone.text`, verbatim). `pace` is the race build's band for the kind (easy / long /
+  `paceKeyForQuality(label)` / race) — dated race only. `structure` is warm-up → main → cool-down for
+  quality work, sized from the engine's own numbers: the main block is `reps × rep distance` ("5 × 1
+  km at threshold, 60 s jog between (5 km of threshold work)"), and whatever the run's distance holds
+  beyond it splits either side. When the engine sized only the work (the run's km equals the reps,
+  or a tempo / timed rep), the warm-up and cool-down are said in words with `km: null` — never an
+  invented distance. Easy / long / race runs are one segment. `adjusted` is the morning's own
+  sentence when it moved the run; `completed` is the agenda's completion evidence. When the quality
+  run is the athlete's STATED session (`stated_quality` on the prescription), `structure` is that
+  session's own parts with every km filled (warm-up → work, continuous or reps → cool-down), `stated`
+  carries the type, the parts, the stated work and `held` (the hold-below sentence, null when it runs
+  as stated), and `point` names it as theirs (or carries the hold sentence).
+- **`watch`** (≤ 5, days still ahead only): a training-symptom watch the day's movements load
+  (`trainingSymptomsForMovements`, read-only — `seed_legacy:false`), the exercise's constraint note,
+  at most two best sets from the last seven days (`weekWins`, the anchor's first), and an untested or
+  re-shaped prescription in the progression's own words.
+- **`stack`**: a quiet note when a heavy-lower plan day (`planDayStrengthGroups().heavy_lower`) sits
+  on, the day before, or the day after a quality or long run, with the neighbour named. Neighbours
+  across a week boundary read their own week. Suggestion voice; it changes nothing (the composition's
+  own key-run-eve trim is `stress-budget.ts`, untouched).
+- **`why`** ties the day to the race build's rung for its week (`word`, the rung's `focus`, weeks to
+  the race; for a lift day the rung's `with_lifting` sentence only when it names this day) and the
+  block's phase as the week runs it (`resolvedBlockPhase`); with neither, a lift day says where it
+  sits in the lifting week and a run day carries the run plan's own `why`.
+- **`done`** is the day record's log (`dayRecord`): the session with its movements, runs, other
+  efforts.
+
+Every repeating sentence rotates through `pickDayVariant(date, "day-detail:…")`. No score, no grade.
 
 ## Background enrichment (`src/enrich.ts`)
 

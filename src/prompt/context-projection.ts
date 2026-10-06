@@ -47,6 +47,9 @@ const PERSON = [
   "location",
   "discipline",
   "training_intent",
+  // The athlete's own push / steady stance — tiny, and every prompt that sees the
+  // priorities should see how hard they asked to be pushed and until when.
+  "training_drive",
   "goal",
   "goal_mode",
   "memory",
@@ -914,6 +917,12 @@ function compactCoachingFocus(focus: unknown): unknown {
   };
   const out: Record<string, unknown> = { ...row, lead: stripPostureProse(row.lead) };
   if (Array.isArray(row.parallel)) out.parallel = row.parallel.map(stripPostureProse);
+  // `day_state.line` is the same Brief sentence a posture item carried in `why`: the
+  // posture, title and move ship; the phrasing does not.
+  if (row.day_state && typeof row.day_state === "object" && !Array.isArray(row.day_state)) {
+    const { line: _line, ...dayState } = row.day_state as Record<string, unknown>;
+    out.day_state = dayState;
+  }
   return out;
 }
 

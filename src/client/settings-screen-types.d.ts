@@ -59,7 +59,9 @@ type SettingsScreenPersistBody = {
   chat_profile_bindings: Record<string, Record<string, Record<string, unknown>>>;
   update_check_enabled: boolean;
   lead_mode: "lead" | "announce_first" | "review_everything";
-  training_drive: "steady" | "push";
+  /** Sent only when the athlete moved the control this visit — a stale screen must never
+   * re-assert the drive it loaded with (a push→steady write ends an open stance). */
+  training_drive?: "steady" | "push";
   gemini_api_key?: string;
   garmin_password?: string;
 };

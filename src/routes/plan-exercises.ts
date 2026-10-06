@@ -10,6 +10,8 @@ import {
   attachGuide,
   buildPlanICS,
   cachedGuideImage,
+  dayDetail,
+  dayDetailDate,
   dedupeExercises,
   deleteExercise,
   deletePlanDay,
@@ -59,6 +61,16 @@ planExercisesRouter.get("/plan/week", (_req, res) => res.json(planWeek()));
 // week's context (race-build rung, recovery or deload week). Read-only; registered
 // ahead of /plan/:day, which would otherwise take "look-ahead" for a day number.
 planExercisesRouter.get("/plan/look-ahead", (_req, res) => res.json(planLookAhead()));
+// One calendar day opened (Horizon's tap-a-day view, Today's "what's ahead" strip): the
+// day's focus, the lift's exercises with the progression's loads, the run's distance,
+// zone, pace band and quality structure, why the day sits where it does, where to pay
+// attention, and what was done. Read-only. 400 on a malformed date; 200 + null past
+// the end of next week (nothing is forecast there). Registered ahead of /plan/:day.
+planExercisesRouter.get("/plan/day-detail", (req, res) => {
+  const date = dayDetailDate(req.query.date);
+  if (!date) return res.status(400).json({ error: "date (YYYY-MM-DD) required" });
+  res.json(dayDetail(date));
+});
 planExercisesRouter.get("/plan/quality", (_req, res) => res.json(getPlanQuality()));
 
 // The recovery-week story for the Plan surface: a waiting draft ('drafted'), the

@@ -219,6 +219,111 @@ export function hasExplicitStrengthObjectiveIntent(message: string | null | unde
   );
 }
 
+// The training drive is the athlete's own stance ("I can push way harder than this",
+// "push me until the block ends", "back to steady"). Like a strength objective it is
+// durable state, so only the athlete's OWN sentence may set it: a question ("should I
+// push harder?") is a conversation, and the coach suggesting a push is not their word.
+// Stepping back is the athlete's word on its own: "back to steady", "stop pushing".
+const DRIVE_STEP_BACK_RE =
+  /\b(?:back\s+(?:to\s+)?steady|step(?:ping)?\s+back\s+from\s+(?:the\s+)?push|stop\s+pushing|ease\s+off\s+the\s+push|(?:i'?m|i\s+am)\s+done\s+pushing|don'?t\s+push\s+me)\b/i;
+// "Back to normal" is a step-back only when the sentence is about the drive — "my sleep
+// is back to normal" is news about sleep, never a word about how hard to train.
+const DRIVE_BACK_TO_NORMAL_RE = /\bback\s+to\s+normal\b/i;
+const DRIVE_CONTEXT_RE =
+  /\b(?:push(?:ing)?|drive|throttle|intensity|program|plan|training|block|loads?|harder|heavier)\b/i;
+// "I can't push harder", "I don't think I can go heavier" — first-person inability is
+// the opposite of a push, never its word.
+const DRIVE_INABILITY_RE =
+  /\b(?:can'?t|cannot|can\s+not|couldn'?t|not\s+able\s+to|unable\s+to|wasn'?t\s+able\s+to|won'?t\s+be\s+able\s+to|don'?t\s+think\s+i\s+can|no\s+way\s+i\s+can)\s+(?:really\s+|even\s+|actually\s+)?(?:push|go|train|lift|handle|take|do)\b/i;
+// A pain/illness clause in the same sentence makes a push phrase narration about the body
+// ("I'm not taking the deload because my knee hurts"), never a request for more load. A
+// pain that is GONE ("doesn't hurt anymore", "pain-free") is not one.
+const DRIVE_PAIN_RE =
+  /\b(?:hurts?|hurting|pain(?:ful)?|sore(?:ness)?|injur(?:y|ed|ies)|tweak(?:ed)?|strain(?:ed)?|aches?|aching|niggle|sick|ill|flu|exhausted|wrecked|fried)\b/i;
+const DRIVE_PAIN_GONE_RE =
+  /\b(?:(?:doesn'?t|does\s+not|don'?t|no\s+longer|isn'?t|not|stopped)\s+(?:\w+\s+){0,1}(?:hurt(?:s|ing)?|ach(?:e|es|ing)|sore)|(?:no|zero)\s+(?:more\s+)?(?:pain|soreness)|pain[-\s]free|(?:the\s+)?(?:pain|soreness)\s+(?:is\s+)?gone)\b/gi;
+
+function drivePushIsNarration(t: string): boolean {
+  if (DRIVE_INABILITY_RE.test(t)) return true;
+  return DRIVE_PAIN_RE.test(t.replace(DRIVE_PAIN_GONE_RE, " "));
+}
+
+export function hasExplicitTrainingDriveIntent(message: string | null | undefined): boolean {
+  const text = String(message ?? "").trim();
+  if (!text) return false;
+  if (/\?\s*$/.test(text) && !/\b(?:can you|could you|please)\b/i.test(text)) return false;
+  if (/\b(?:should|could|would)\s+i\b/i.test(text)) return false;
+  const t = text.replace(/[‘’]/g, "'");
+  if (DRIVE_STEP_BACK_RE.test(t)) return true;
+  if (DRIVE_BACK_TO_NORMAL_RE.test(t) && DRIVE_CONTEXT_RE.test(t.replace(DRIVE_BACK_TO_NORMAL_RE, " "))) return true;
+  // Everything below RAISES the drive, so a sentence of inability or pain never counts.
+  if (drivePushIsNarration(t)) return false;
+  return (
+    // "push me", "push (me) way harder", "I can push harder than this"
+    /\bpush\s+me\b/i.test(t) ||
+    /\b(?:push|pushing)\s+(?:it\s+|me\s+)?(?:way\s+|much\s+|a\s+lot\s+|a\s+bit\s+)?(?:harder|heavier|more)\b/i.test(t) ||
+    // "keep pushing until the block ends", "push through the end of the block"
+    /\b(?:push|pushing)\b.{0,20}\b(?:until|through)\s+(?:the\s+)?(?:end|block|next|\d)/i.test(t) ||
+    /\b(?:i\s+(?:can|could)\s+(?:go|train|lift|handle|take|push)|i\s+want\s+(?:to\s+)?(?:go|train|lift))\b.{0,30}\b(?:harder|heavier|more)\b/i.test(
+      t
+    ) ||
+    // "I want to push this block", "let's push this week", "I'm going to push it this cycle"
+    /\b(?:i\s+want\s+to|i'?d\s+like\s+to|let'?s|i'?m\s+going\s+to|i'?m\s+gonna|i'?ll|i\s+will|time\s+to)\s+push\b/i.test(t) ||
+    /\bpush(?:ing)?\s+(?:it\s+)?(?:this|the|my)\s+(?:block|week|cycle|month|phase|mesocycle|meso)\b/i.test(t) ||
+    // "I feel I'm ready for more", "ready to push", "ready for heavier"
+    /\b(?:i'?m|i\s+am|i\s+feel\s+(?:like\s+)?(?:i'?m|i\s+am)?|feeling)\s*ready\s+(?:for|to)\s+(?:more|heavier|harder|push|go\s+harder|step\s+(?:it\s+)?up|a\s+(?:bigger|harder|heavier))\b/i.test(
+      t
+    ) ||
+    /\b(?:open\s+(?:up\s+)?the\s+throttle|step\s+it\s+up|turn\s+it\s+up|crank\s+it\s+up)\b/i.test(t) ||
+    // "give me more (work|load)" as a whole clause — never "give me more protein ideas"
+    /\bgive\s+me\s+more(?:\s+(?:work|load|weight|volume|sets))?\s*(?:[.!,;]|$)/i.test(t) ||
+    // Declining a scheduled deload IS a push stance: under push the block's scheduled
+    // deload runs as intensification unless the loaded weeks earn it (block-phase.ts).
+    /\b(?:skip(?:ping)?|not\s+(?:doing|taking|running|having)|won'?t\s+(?:do|take|run)|don'?t\s+(?:want|need)|no(?:\s+need\s+for)?)\s+(?:the\s+|a\s+|this\s+|that\s+|my\s+)?deload\b/i.test(
+      t
+    )
+  );
+}
+
+// "Yes, let's do it" is the athlete's word only beside something the coach OFFERED: the
+// open push offer (src/repo/push-offer.ts) or the coach's previous message asking whether
+// to open the throttle. Short, not a question, nothing that reverses it.
+const DRIVE_AFFIRMATION_RE =
+  /\b(?:yes|yeah|yep|yup|sure|ok(?:ay)?|deal|let'?s\s+(?:do\s+(?:it|that|this)|go|push)|do\s+it|go\s+for\s+it|sounds\s+good|open\s+it\s+up|i'?m\s+in|absolutely|definitely)\b/i;
+const DRIVE_AFFIRMATION_REVERSAL_RE = /\b(?:not|don'?t|do\s+not|never|hold\s+off|wait|later|maybe|instead|but|no)\b/i;
+// The coach's question has to be about the THROTTLE — the push-offer wording
+// (src/repo/push-offer.ts OFFER_LINE: "open the throttle", "push you for the next two
+// weeks", "open it up for two weeks") or plainly asking to push them harder. Never a bare
+// "push": Push is a plan-day name ("Push is still open — want to do it after work?"),
+// and "push it to Thursday" moves a session.
+const COACH_PUSH_OFFER_RE =
+  /\b(?:(?:open(?:ing)?\s+(?:up\s+)?)?the\s+throttle|push(?:ing)?\s+(?:you\s+)?(?:way\s+|a\s+bit\s+|a\s+little\s+)?(?:harder|heavier)|push(?:ing)?\s+(?:you\s+)?(?:for\s+)?(?:the\s+)?(?:next|rest\s+of\s+the|this|two|three|\d+)\s+(?:\w+\s+)?(?:weeks?|block|cycle|phase)|(?:a|the|your)\s+push\s+(?:stance|phase)|open\s+(?:it|things)\s+up\s+for|step\s+it\s+up|turn\s+it\s+up)\b/i;
+
+export function carriesDriveAffirmation(message: string | null | undefined): boolean {
+  const text = String(message ?? "")
+    .replace(/[‘’]/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text || text.length > 80 || text.includes("?") || isLeadingQuestion(text)) return false;
+  if (DRIVE_AFFIRMATION_REVERSAL_RE.test(text)) return false;
+  return DRIVE_AFFIRMATION_RE.test(text);
+}
+
+/** The coach's previous message offered a push and asked (a question about pushing). */
+export function coachOfferedPush(message: string | null | undefined): boolean {
+  const text = String(message ?? "");
+  return text.includes("?") && COACH_PUSH_OFFER_RE.test(text);
+}
+
+export function hasExplicitTrainingDriveIntentInContext(
+  message: string | null | undefined,
+  opts: { priorCoachMessage?: string | null; offerOpen?: boolean } = {}
+): boolean {
+  if (hasExplicitTrainingDriveIntent(message)) return true;
+  if (!carriesDriveAffirmation(message)) return false;
+  return opts.offerOpen === true || coachOfferedPush(opts.priorCoachMessage);
+}
+
 // A question is a conversation, not an authorization. The coach may still PROPOSE the
 // change; it just doesn't carry the athlete's own word with it, so autonomy policy
 // decides on its ordinary terms instead of on `explicit_user_request`.

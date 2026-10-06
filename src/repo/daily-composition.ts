@@ -486,6 +486,9 @@ const REACH_COMPOUND_PATTERNS: ReadonlySet<string> = new Set([
   "vertical-pull",
 ]);
 
+// The most challenge top sets one card may carry, whatever an envelope asks for.
+const MAX_REACH_HOSTS = 2;
+
 // Reps the reach leaves in hand against the recent best estimate.
 const REACH_RESERVE_REPS = 1;
 
@@ -1455,14 +1458,27 @@ export function normalizeComposedSession(
     return group == null || deepGroups.has(group);
   });
   const reachOpen = reachChallengeOpen(envelope) && !substitutionParksReach && !opts.planSnapshot;
-  let reachHostConsumed = false;
+  // ONE challenge a session, unless the athlete's dated push stance licensed more
+  // (`reach.hosts`, daily-decision.ts) — and then never two on the same movement
+  // pattern: a second top set belongs on a different lift, not a heavier double of the
+  // first. Every host still passes isReachHostItem's gates, and every top set still
+  // spends the set and item budget below.
+  const reachHosts = Math.max(1, Math.min(MAX_REACH_HOSTS, Math.trunc(Number(envelope.reach?.hosts) || 1)));
+  let reachHostsUsed = 0;
+  const reachPatterns = new Set<string>();
+  const reachPattern = (item: any): string =>
+    String(classifyPattern(String(item?.exercise ?? ""), itemMuscleGroup(item) ?? undefined) ?? "");
+  const consumeReachHost = (item: any): void => {
+    reachHostsUsed += 1;
+    reachPatterns.add(reachPattern(item));
+  };
   let reachLanded = false;
   for (const item of capped) {
     delete item.reach;
     const nestedTop = item.top_set;
     delete item.top_set;
     const isHost =
-      !reachHostConsumed &&
+      reachHostsUsed < reachHosts &&
       isReachHostItem(
         item,
         reducedExercises,
@@ -1470,7 +1486,8 @@ export function normalizeComposedSession(
         excluded,
         candidates.get(String(item.exercise ?? "").toLowerCase()),
         envelope.date
-      );
+      ) &&
+      (reachHostsUsed === 0 || !reachPatterns.has(reachPattern(item)));
     const hostLoad = isHost ? reachHostLoad(String(item.exercise ?? "")) : null;
     // An agent's single is held to the same verdict as the server's reach: never above a
     // lift the engine is holding, deloading, re-grounding or rotating.
@@ -1491,10 +1508,10 @@ export function normalizeComposedSession(
         insertedTopSet = true;
         topSetsInserted += 1;
         changed = true;
-        // ONE challenge top set a session. This lift just took it, so no later
-        // compound may host a second — without this the day could render an agent
-        // single here AND a server-derived reach further down the card list.
-        reachHostConsumed = true;
+        // This lift just took a challenge top set, so it spends a host — without this
+        // the day could render an agent single here AND a server-derived reach further
+        // down the card list beyond what the envelope licensed.
+        consumeReachHost(item);
         if (reachOpen && agentTopSetIsReach(top, hostLoad)) reachLanded = true;
         withTopSets.push(item);
         continue;
@@ -1508,7 +1525,7 @@ export function normalizeComposedSession(
           if (applyReachAmrap(item, envelope.date)) {
             changed = true;
             reachLanded = true;
-            reachHostConsumed = true;
+            consumeReachHost(item);
           }
         } else {
           top = reachTopSetItemFor(item, hostLoad.weight, envelope.date);
@@ -1522,14 +1539,14 @@ export function normalizeComposedSession(
         changed = true;
         if (top.reach) {
           reachLanded = true;
-          reachHostConsumed = true;
+          consumeReachHost(item);
         }
       }
     } else if (reachOpen && isHost && hostLoad?.kind === "unloaded") {
       if (applyReachAmrap(item, envelope.date)) {
         changed = true;
         reachLanded = true;
-        reachHostConsumed = true;
+        consumeReachHost(item);
       }
     }
     withTopSets.push(item);
