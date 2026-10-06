@@ -26,11 +26,7 @@
   /** Mark kinds drawn in the body hue (a scan of the body), not the labs' heart. */
   const BODY_MARK_KINDS: ReadonlySet<string> = new Set(["dexa", "rescan"]);
 
-  function monoMonth(iso: string): string {
-    const d = new Date(`${iso.slice(0, 10)}T12:00:00Z`);
-    if (Number.isNaN(d.getTime())) return "";
-    return d.toLocaleDateString("en-US", { month: "short", timeZone: "UTC" }).toUpperCase();
-  }
+  const monoMonth = (iso: string): string => CairnFmt.date(iso.slice(0, 10), { fmt: { month: "short" }, utc: true }).toUpperCase();
 
   // ---- season -----------------------------------------------------------------
 

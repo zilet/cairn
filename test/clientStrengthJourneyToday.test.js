@@ -11,6 +11,8 @@ function loadRenderer() {
   const context = { Array, Map, Number, Object, String, window: null, globalThis: null };
   context.window = context;
   context.globalThis = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/date-utils.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-plan-surface-renderer.js"), "utf8"), context);
   return context.CairnTodayPlanSurfaceRenderer;
 }
@@ -91,7 +93,7 @@ const journey = {
 test("selected anchor day annotates exact anchor and exact plan-backed support only", () => {
   const items = render(1, journey);
   assert.equal(items[0].journey_role, "anchor");
-  assert.match(items[0].journey_line, /160\.0 lb estimated 1RM on 2026-07-07/);
+  assert.match(items[0].journey_line, /160\.0 lb estimated 1RM on Jul 7(, 2026)?/);
   assert.equal(items[1].journey_role, "support");
   assert.match(items[1].journey_line, /upper back for Barbell Bench Press — Builds the press shelf/);
   assert.equal(items[2].journey_role, undefined, "unrelated planned work stays silent");

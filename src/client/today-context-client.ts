@@ -60,10 +60,8 @@ type TodayHealthFocusBanner = {
 
   function daysUntil(startISO: unknown, todayISO?: string): number | null {
     if (!startISO) return null;
-    const start = new Date(String(startISO) + "T00:00:00");
-    const today = new Date(todayContextDateISO(todayISO) + "T00:00:00");
-    if (!Number.isFinite(start.getTime()) || !Number.isFinite(today.getTime())) return null;
-    return Math.round((start.getTime() - today.getTime()) / 86400000);
+    const start = String(startISO);
+    return /^\d{4}-\d{2}-\d{2}/.test(start) ? CairnFmt.daysBetween(start, todayContextDateISO(todayISO)) : null;
   }
 
   function eventCountdown(days: unknown): string {

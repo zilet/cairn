@@ -51,6 +51,8 @@ class FakeElement {
       "mealPlanAutoDraft",
       "geminiApiKey",
       "leadMode",
+      "runUnits",
+      "weightUnits",
       "driveCard",
     ];
     for (const id of ids) {
@@ -114,6 +116,7 @@ function loadSettingsSourcesAutomationController() {
   // The controller hands the real date helpers to the surface, so the connection
   // rows are rendered here exactly as the browser renders them.
   vm.runInNewContext(readFileSync(join(root, "public/js/date-utils.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/settings-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/settings-surface-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/settings-sources-automation-controller.js"), "utf8"), context);
@@ -333,6 +336,8 @@ test("settings automation controller owns enrichment and research toggles", () =
     meal_plan_auto_draft: false,
     gemini_api_key: "",
     lead_mode: "lead",
+    run_units: "km",
+    weight_units: "lb",
   };
   const harness = baseDeps(rootEl, wm, {
     settings: { gemini_api_key_configured: true, gemini_api_key_source: "env" },
@@ -349,6 +354,10 @@ test("settings automation controller owns enrichment and research toggles", () =
   assert.equal(rootEl.querySelector("#mealPlanAutoDraft").checked, false, "automatic meal plans render off");
   rootEl.querySelector("#mealPlanAutoDraft").change(true);
   rootEl.querySelector("#leadMode").change("announce_first");
+  // Units: the Settings Units group is their only writer (no per-surface km / mi switch).
+  assert.match(rootEl.innerHTML, /id="runUnits"[\s\S]*id="weightUnits"/);
+  rootEl.querySelector("#runUnits").change("mi");
+  rootEl.querySelector("#weightUnits").change("kg");
   rootEl.querySelector("#geminiApiKey").input("gemini-key");
 
   assert.equal(wm.enrich_enabled, false);
@@ -356,6 +365,8 @@ test("settings automation controller owns enrichment and research toggles", () =
   assert.equal(wm.research_enabled, true);
   assert.equal(wm.meal_plan_auto_draft, true);
   assert.equal(wm.lead_mode, "announce_first");
+  assert.equal(wm.run_units, "mi");
+  assert.equal(wm.weight_units, "kg");
   // The drive is not part of the save-bar model: its card writes through PUT
   // /api/training-drive on its own, and without the drive modules it simply hides.
   assert.equal("training_drive" in wm, false);

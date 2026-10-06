@@ -16,7 +16,9 @@ function load(globals = {}) {
   return loadClientModule(
     [
       "html-utils",
+      "ui-format",
       "format-utils",
+      "ui-format",
       "ui-actions-client",
       "ui-reads",
       "day-detail-model",
@@ -392,7 +394,7 @@ function week() {
 
 function loadStrip(globals = {}) {
   return loadClientModule(
-    ["html-utils", "ui-actions-client", "ui-reads", "today-strip-client", "today-strip-controller"],
+    ["html-utils", "ui-format", "ui-actions-client", "ui-reads", "today-strip-client", "today-strip-controller"],
     {
       globals,
     }
@@ -532,7 +534,7 @@ test("a tap on a strip Today is replacing reaches the strip that replaces it", a
 test("the strip re-wires across the Brief's in-place upgrade: a week that lands after the swap paints a live strip", async () => {
   const opened = [];
   const w = loadClientModule(
-    ["html-utils", "ui-actions-client", "ui-reads", "today-main-shell-client", "today-strip-client", "today-strip-controller"],
+    ["html-utils", "ui-format", "ui-actions-client", "ui-reads", "today-main-shell-client", "today-strip-client", "today-strip-controller"],
     {
       globals: {
         withBundle: (_name, fn) => fn(),
@@ -623,11 +625,13 @@ test("the strip's header: the block clock and the run plan arrive later and repa
 test("Horizon's week: rest is quiet, a finished day is ticked, today names the day it stands in for", () => {
   const w = loadClientModule([
     "html-utils",
+    "ui-format",
     "ui-components",
     "ui-reads",
     "ui-actions-client",
     "ui-chart",
     "format-utils",
+    "ui-format",
     "journey-progress-client",
     "journey-timeline-client",
     "race-week-model",
@@ -663,7 +667,9 @@ test("the day view opens the shared detail, and a past day keeps its record's fu
   const w = loadClientModule(
     [
       "html-utils",
+      "ui-format",
       "format-utils",
+      "ui-format",
       "ui-reads",
       "day-detail-model",
       "day-detail-run-client",

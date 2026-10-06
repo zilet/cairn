@@ -35,6 +35,14 @@ export interface TodayPathRace {
   trend_delta_sec: number | null;
   /** The date the trend window starts on; null with one point. */
   since: string | null;
+  /** `since` in words ("since Sep 8"); null with no window. */
+  since_words?: string | null;
+  /** The race day in words ("Oct 18"). */
+  date_words?: string;
+  /** The estimate as a clock ("1:52:10"): every surface that names the fit names the time too. */
+  estimate_text?: string;
+  /** The target as written, else its clock; null with no target. */
+  target_text?: string | null;
   fit: TodayPathFit | null;
 }
 
@@ -51,6 +59,18 @@ export interface TodayPathWeight {
   needed_lb_wk: number | null;
   /** The canonical weigh-ins of the last ~6 weeks, oldest first (a sparkline's points). */
   points: Array<{ date: string; weight_lb: number }>;
+  /** The athlete's weight unit; every `*_text` / `*_words` here is already in it. */
+  units?: "lb" | "kg";
+  /** "159.6 lb" / "72.4 kg". */
+  current_text?: string;
+  goal_text?: string | null;
+  /** The trend and the ask in words ("−0.9 lb/wk"), from the ONE weight-trend read. */
+  trend_words?: string | null;
+  needed_words?: string | null;
+  /** The one on-pace verdict (weightTrendRead): on_pace | ahead | behind | steady. */
+  verdict?: "on_pace" | "ahead" | "behind" | "steady" | null;
+  /** The one sentence every weight surface prints ("Trending −0.9 lb/wk — on pace for Dec 1."). */
+  line?: string | null;
 }
 
 export interface TodayPathAnchor {
@@ -73,6 +93,8 @@ export interface TodayPathMilestone {
   kind: TodayPathMilestoneKind;
   /** One plain sentence of why or what; null when there is nothing to add. */
   detail: string | null;
+  /** `date` (and the window's end) in words: "Oct 18", "Nov 17 – Nov 23". Never an ISO date. */
+  date_words?: string;
 }
 
 export type TodayPathLeverKind = "weight" | "sleep" | "race";
@@ -114,8 +136,20 @@ export interface TodayPathWeek {
   km_logged: number | null;
   /** This week's long run, km; null when the week has none. */
   long_km: number | null;
-  /** The race build's phase word for this week ("Build", "Sharpen", "Peak", "Taper"); null with no race. */
+  /** The week's stage word (stage-words.ts: "Sharpen", "Peak week", "Taper"); null when nothing names the week. */
   phase: string | null;
+  /** The week's running in the athlete's run units ("3.8 of 19.3 mi"); null with no plan. */
+  distance_words?: string | null;
+}
+
+/** The week's frame (week-stage.ts weekFrameLine), and Today's one link into Horizon. */
+export interface TodayPathFrame {
+  /** "26 days to Cambridge Half". */
+  headline: string | null;
+  /** "Sharpen · block week 6 of 6 · push through Nov 15". */
+  line: string | null;
+  /** The glance line Today prints, and where it goes. */
+  glance: { line: string; href: string } | null;
 }
 
 export interface TodayPath {
@@ -132,4 +166,8 @@ export interface TodayPath {
   focus: string | null;
   board: TodayPathBoardRow[];
   week: TodayPathWeek | null;
+  /** The week's frame and Today's glance into Horizon; absent on older payloads. */
+  frame?: TodayPathFrame | null;
+  /** The athlete's units every sentence and `*_text` here is already in. */
+  units?: { distance: "km" | "mi"; weight: "lb" | "kg" };
 }

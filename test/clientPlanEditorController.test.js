@@ -252,6 +252,7 @@ function loadPlanEditorController(plan) {
     activateTab: (name) => activatedTabs.push(String(name)),
   };
   context.window = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
   // The shared strength-only filters (isCardioItem / strengthPlanItems / strengthPlanDays)
   // load ahead of the Plan bundle in the app; load the real module rather than a stub.

@@ -2,6 +2,7 @@
 // source value/unit; marker history normalizes recognized markers here before
 // comparing them with Cairn's optimal-zone bands.
 
+import { LB_PER_KG } from "./display-words.js";
 export interface LabUnitZone {
   label?: string;
   unit?: string | null;
@@ -179,7 +180,7 @@ function normalizeAnthropometricReading(name: string, numeric: number, value: un
     if (!from || sameUnit(from, "lb")) return { value: numeric, unit: "lb" };
     if (sameUnit(from, "kg")) {
       return {
-        value: roundLabValue(numeric * 2.2046226218),
+        value: roundLabValue(numeric * LB_PER_KG),
         unit: "lb",
         source_value: sourceValue,
         source_unit: unit,

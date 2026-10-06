@@ -46,13 +46,12 @@ function jpMuscleFuelLine(muscle: unknown, fuel: unknown): string {
 }
 
 function jpDate(iso: unknown): string {
-  if (typeof fmtShortDate === "function") return fmtShortDate(iso);
-  return jpText(iso);
+  return iso ? CairnFmt.date(iso) : "";
 }
 
 function jpPounds(value: unknown): string {
   const n = jpNumber(value);
-  return n == null ? "" : `${Math.round(n * 10) / 10} lb`;
+  return n == null ? "" : CairnFmt.weight(n);
 }
 
 function jpBodyFat(value: unknown): string {
@@ -111,7 +110,7 @@ function jpPhaseLine(read: JourneyProgressRead | null | undefined): string {
     const target = jpPhaseTarget(read, phase);
     if (started) bits.push(`since ${started}`);
     if (target) bits.push(`toward ${target}`);
-    return bits.join(" / ");
+    return bits.join(" · ");
   }
   const suggestion = read?.transition_suggestion;
   if (strategy?.stage?.label) return jpText(strategy.stage.label);

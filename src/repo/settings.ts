@@ -11,6 +11,7 @@ import {
   type ReasoningLevel,
 } from "../agents.js";
 import crypto from "node:crypto";
+import { normalizeUnit, unitsFrom, validUnit, UNIT_REGISTRY, type AthleteUnits } from "./display-words.js";
 import { getAgentAvailability } from "./agent-availability.js";
 import { recordedClientTimeZone } from "./client-tz.js";
 import {
@@ -44,6 +45,7 @@ export interface Settings {
   garmin_last_sync_status: string; // short result line: "ok: 12 activities · 14 daily" | "failed: …"
   garmin_export_strength: boolean; // send finished Cairn strength sessions back to Garmin (default ON; Garmin stays the input for runs/recovery)
   run_units: "km" | "mi"; // athlete-facing run distance and pace; the engine stays in km
+  weight_units: "lb" | "kg"; // athlete-facing bodyweight and loads; stored data stays lb
   garmin_last_export_attempt_at: string | null; // UTC ISO of the last write-back ATTEMPT (landed or not)
   garmin_last_export_status: string; // short result line: "ok: 8 of 14 sets" | "failed: …"
   gemini_api_key_configured: boolean;
@@ -328,6 +330,7 @@ const SETTINGS_COLUMN_REPAIRS: [string, string][] = [
   ["garmin_last_export_attempt_at", "TEXT DEFAULT ''"],
   ["garmin_last_export_status", "TEXT DEFAULT ''"],
   ["run_units", "TEXT DEFAULT 'km'"],
+  ["weight_units", "TEXT DEFAULT 'lb'"],
 ];
 let settingsSchemaChecked = false;
 
@@ -480,7 +483,8 @@ function defaultSettings(): Settings {
     garmin_last_sync_at: null,
     garmin_last_sync_status: "",
     garmin_export_strength: true, // a finished Cairn strength session goes back to the watch by default
-    run_units: "km", // prescriptions display in km / min/km until the athlete picks miles
+    run_units: UNIT_REGISTRY.distance.default, // prescriptions display in km / min/km until the athlete picks miles
+    weight_units: UNIT_REGISTRY.weight.default, // bodyweight and loads in lb until the athlete picks kg
     garmin_last_export_attempt_at: null,
     garmin_last_export_status: "",
     gemini_api_key_configured: !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_KEY),
@@ -569,7 +573,8 @@ function rowToSettings(row: any): Settings {
     garmin_last_sync_status: row.garmin_last_sync_status == null ? "" : String(row.garmin_last_sync_status),
     // NULL on old rows (column added by the settings column repair) defaults to ON.
     garmin_export_strength: row.garmin_export_strength == null ? true : !!row.garmin_export_strength,
-    run_units: String(row.run_units) === "mi" ? "mi" : "km",
+    run_units: normalizeUnit("distance", row.run_units),
+    weight_units: normalizeUnit("weight", row.weight_units),
     garmin_last_export_attempt_at: String(row.garmin_last_export_attempt_at ?? "").trim() || null,
     garmin_last_export_status:
       row.garmin_last_export_status == null ? "" : String(row.garmin_last_export_status),
@@ -622,6 +627,20 @@ export function getSettings(): Settings {
 // it flips the standing drive as part of setting or ending a dated stance and owns that
 // stance's lifecycle itself. Every other caller is the Settings toggle, and a toggle that
 // actually CHANGES the drive ends any open stance — the athlete's newest word wins.
+/**
+ * The athlete's display units, one field per kind in the units registry
+ * (display-words.ts). Every prose builder reads THIS, never `run_units` by hand, and
+ * hands it to the one formatter. Settings is the only writer; an unreadable settings
+ * row speaks in the defaults (km, lb), never throws.
+ */
+export function athleteUnits(): AthleteUnits {
+  try {
+    return unitsFrom(getSettings() as unknown as Record<string, unknown>);
+  } catch {
+    return unitsFrom(null);
+  }
+}
+
 export function setSettings(patch: any, opts: { keepStances?: boolean } = {}): Settings {
   ensureSettingsSchema();
   const cur = getSettings();
@@ -688,7 +707,10 @@ export function setSettings(patch: any, opts: { keepStances?: boolean } = {}): S
     garmin_last_sync_status: cur.garmin_last_sync_status,
     garmin_export_strength:
       patch.garmin_export_strength !== undefined ? !!patch.garmin_export_strength : cur.garmin_export_strength,
-    run_units: ["km", "mi"].includes(String(patch.run_units)) ? patch.run_units : cur.run_units,
+    // Units: a valid option replaces, anything else KEEPS what is stored (the registry
+    // in display-words.ts is the one list of options).
+    run_units: validUnit("distance", patch.run_units) ?? cur.run_units,
+    weight_units: validUnit("weight", patch.weight_units) ?? cur.weight_units,
     // Write-back status is read-only here too — recorded by setGarminExportStatus().
     garmin_last_export_attempt_at: cur.garmin_last_export_attempt_at,
     garmin_last_export_status: cur.garmin_last_export_status,
@@ -741,7 +763,7 @@ export function setSettings(patch: any, opts: { keepStances?: boolean } = {}): S
     `UPDATE settings SET agent_strategy=?, agent_order=?, disabled_agents=?, rr_cursor=?,
        coach_enabled=?, coach_day=?, coach_hour=?, onboarded=?, enrich_enabled=?, proactive_enabled=?, art_enabled=?, art_enabled_at=?, meal_prefs=?,
        garmin_username=?, garmin_password=?, garmin_password_encrypted=?, gemini_api_key=?, gemini_api_key_encrypted=?,
-       research_enabled=?, bg_ops_enabled=?, agent_routes=?, chat_routing_mode=?, chat_profile_bindings=?, agent_profile_bindings=?, update_check_enabled=?, lead_mode=?, training_drive=?, garmin_export_strength=?, run_units=?, meal_plan_auto_draft=?, updated_at=datetime('now') WHERE id = 1`
+       research_enabled=?, bg_ops_enabled=?, agent_routes=?, chat_routing_mode=?, chat_profile_bindings=?, agent_profile_bindings=?, update_check_enabled=?, lead_mode=?, training_drive=?, garmin_export_strength=?, run_units=?, weight_units=?, meal_plan_auto_draft=?, updated_at=datetime('now') WHERE id = 1`
   ).run(
     merged.agent_strategy,
     JSON.stringify(merged.agent_order),
@@ -772,6 +794,7 @@ export function setSettings(patch: any, opts: { keepStances?: boolean } = {}): S
     merged.training_drive,
     merged.garmin_export_strength ? 1 : 0,
     merged.run_units,
+    merged.weight_units,
     merged.meal_plan_auto_draft ? 1 : 0
   );
   if (!opts.keepStances && merged.training_drive !== cur.training_drive) {

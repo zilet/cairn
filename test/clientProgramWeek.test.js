@@ -43,6 +43,7 @@ function load(extra = {}) {
   for (const file of [
     "html-utils",
     "format-utils",
+    "ui-format",
     "ui-reads",
     "program-week-model",
     "program-week-client",

@@ -8,8 +8,11 @@ import vm from "node:vm";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 function loadFormatUtils() {
-  const context = { String, Number, Math };
+  const context = { String, Number, Math, Date, Intl, RegExp, localISO: () => "2026-06-29" };
   vm.runInNewContext(readFileSync(join(root, "public/js/format-utils.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/endurance-format-client.js"), "utf8"), context);
   return context;
 }
 

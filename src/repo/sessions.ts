@@ -36,7 +36,7 @@ import { listFoodNotes, listMealPlans } from "./nutrition.js";
 import { getPlan } from "./plan.js";
 import { runComplianceRead } from "./run-compliance.js";
 import { effectiveGoalMode, getProfile, leanGainRate, listWeight } from "./profile.js";
-import { getSettings } from "./settings.js";
+import { athleteUnits, getSettings } from "./settings.js";
 import { normalizeSymptomArea } from "./symptom-area.js";
 import { recordSymptomReport } from "./symptom-reports.js";
 import { inferTrainingSymptomExposures } from "./training-symptoms.js";
@@ -48,6 +48,7 @@ import {
   trainingBackstopSignature,
 } from "./training-cache.js";
 import { deriveSessionTitle } from "./training-read.js";
+import { weightWords } from "./display-words.js";
 import { canonicalBodyweightSeries, resolvedCurrentBodyweight } from "./bodyweight.js";
 import {
   completeStrengthObjectiveFromLoggedSet,
@@ -146,6 +147,9 @@ export function sessionSummary(sessionId: number) {
     sets: sets.length,
     exercises: new Set(sets.map((s) => s.exercise)).size,
     tonnage: Math.round(tonnage),
+    // The tonnage as a person reads it, in their weight unit (display-words.ts) — the
+    // session-finish card prints this, never "<n> lb" of its own.
+    tonnage_words: tonnage > 0 ? weightWords(tonnage, athleteUnits().weight, { grouped: true }) : null,
     skipped: skipsForSession(sessionId).length, // consciously skipped, not unfinished
   };
 }
@@ -2355,9 +2359,9 @@ function prsForSession(
   sessionId: number,
   date: string,
   sets?: SessionSet[]
-): Array<{ exercise: string; kind: "e1rm" | "duration"; label: string }> {
+): Array<{ exercise: string; kind: "e1rm" | "duration"; label: string; weight_lb?: number; reps?: number }> {
   const rows = sets ?? (setsForSession(sessionId) as unknown as SessionSet[]);
-  const out: Array<{ exercise: string; kind: "e1rm" | "duration"; label: string }> = [];
+  const out: Array<{ exercise: string; kind: "e1rm" | "duration"; label: string; weight_lb?: number; reps?: number }> = [];
   for (const { exId, name, mode, exSets } of groupByExercise(rows).values()) {
     if (mode === "timed") {
       if (bestDuration(exSets) <= 0) continue;
@@ -2388,6 +2392,10 @@ function prsForSession(
             exercise: name,
             kind: "e1rm",
             label: `${fmtWeight(Number(win.weight))} lb × ${Number(win.reps)} — new best`,
+            // The set itself, so a surface can say it in the athlete's weight unit
+            // (display-words.ts loadWords) rather than restate the lb label.
+            weight_lb: Number(win.weight),
+            reps: Number(win.reps),
           });
         }
       }
@@ -2544,12 +2552,12 @@ function comparisonsForSession(sessionId: number, date: string, sets?: SessionSe
 function prEventsInWindow(
   startISO: string,
   endISO: string
-): Array<{ exercise: string; kind: "e1rm" | "duration"; label: string; date: string }> {
+): Array<{ exercise: string; kind: "e1rm" | "duration"; label: string; weight_lb?: number; reps?: number; date: string }> {
   const sessions = db
     .prepare(`SELECT DISTINCT s.id AS id, s.date AS date FROM sessions s
               JOIN logged_sets l ON l.session_id = s.id WHERE s.date >= ? AND s.date <= ? ORDER BY s.date, s.id`)
     .all(startISO, endISO) as any[];
-  const out: Array<{ exercise: string; kind: "e1rm" | "duration"; label: string; date: string }> = [];
+  const out: Array<{ exercise: string; kind: "e1rm" | "duration"; label: string; weight_lb?: number; reps?: number; date: string }> = [];
   for (const sess of sessions) {
     for (const pr of prsForSession(Number(sess.id), String(sess.date))) {
       out.push({ ...pr, date: String(sess.date) });
@@ -2587,12 +2595,20 @@ export function weekWins(date?: string) {
   // New bests this week, DEDUPED to one entry per exercise (the latest supersedes an
   // earlier one — events arrive oldest-first, so the last write is the newest label),
   // sorted newest-first: a calm display list, not a raw event stream.
-  const byExercise = new Map<string, { exercise: string; label: string; date: string }>();
+  const byExercise = new Map<
+    string,
+    { exercise: string; label: string; date: string; weight_lb?: number; reps?: number }
+  >();
   for (const e of prEventsInWindow(start, end))
-    byExercise.set(e.exercise, { exercise: e.exercise, label: e.label, date: e.date });
+    byExercise.set(e.exercise, {
+      exercise: e.exercise,
+      label: e.label,
+      date: e.date,
+      ...(e.weight_lb != null ? { weight_lb: e.weight_lb, reps: e.reps } : {}),
+    });
   const prs = [...byExercise.values()]
     .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
-    .map(({ exercise, label }) => ({ exercise, label }));
+    .map(({ date: _date, ...pr }) => pr);
 
   const ws = getWeeklyStats(end);
   return {

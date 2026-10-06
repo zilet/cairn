@@ -68,19 +68,13 @@
   }
 
   /**
-   * The one date label: "Jun 20" (or "Jun 20, 26" with `year`). A bare
+   * The one date label: "Jun 20" (or "Jun 20, 2026" with `year`). A bare
    * `YYYY-MM-DD` reads as that local calendar day; anything unparseable comes back
    * as given, and an empty value as "".
    */
   function dateLabel(value: unknown, options: { year?: boolean } = {}): string {
     if (value == null || value === "") return "";
-    const source = String(value);
-    const parsed = new Date(/^\d{4}-\d{2}-\d{2}$/.test(source) ? `${source}T00:00:00` : source);
-    if (Number.isNaN(parsed.getTime())) return source;
-    return parsed.toLocaleDateString(
-      undefined,
-      options.year ? { month: "short", day: "numeric", year: "2-digit" } : { month: "short", day: "numeric" }
-    );
+    return CairnFmt.date(value, { style: "short", year: options.year ? "always" : false });
   }
 
   // Tiny inline sparkline (numbers only). The y-span is floored so a near-flat

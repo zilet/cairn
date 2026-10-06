@@ -13,6 +13,7 @@ function loadMainShell() {
   const context = { Object, String };
   context.window = context;
   context.globalThis = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-main-shell-client.js"), "utf8"), context);
   return context.CairnTodayMainShell;
 }
@@ -53,7 +54,7 @@ test("Body & recovery: ONE week view on Today — no second Mon–Sun strip, no 
   assert.doesNotMatch(html, /cardio/);
   // The weigh-in tile keeps the inline capture's id; its number has its own node so
   // a save rewrites it without dropping the sparkline beside it.
-  assert.match(html, /<div class="tweek-tallies is-one"><button id="wtChipMini" class="tweek-tally tweek-wt"[^>]*><span class="tweek-n num" data-wtval>172\.4<span class="tweek-u">lb<\/span><\/span><small>lb · −0\.8\/wk<\/small><span class="tweek-spark" id="tweekSpark"/);
+  assert.match(html, /<div class="tweek-tallies is-one"><button id="wtChipMini" class="tweek-tally tweek-wt"[^>]*><span class="tweek-n num" data-wtval>172\.4<span class="tweek-u">lb<\/span><\/span><small>−0\.8\/wk<\/small><span class="tweek-spark" id="tweekSpark"/);
   assert.match(html, /id="tweekGauges"/);
   // The weight input opens under the tallies, outside the fold.
   assert.ok(html.indexOf('id="wtInlineInput"') < html.indexOf("<details"));

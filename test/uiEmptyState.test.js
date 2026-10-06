@@ -48,6 +48,7 @@ test("the meal-plan history and the Health read's markers render the primitive w
   const health = loadClientModule(
     [
       "date-utils",
+      "ui-format",
       "html-utils",
       "ui-components",
       "ui-chart",

@@ -20,6 +20,8 @@ import { sleepNightsMissing } from "../repo/activities.js";
 import { getDiagnostics, ingestClientDiagnosticEvents, parseClientDiagnosticBatch } from "../repo/diagnostics.js";
 import { lastGarminStrengthExportAt } from "../repo/garmin-strength-export.js";
 import { getBuildStamp } from "../build-info.js";
+import { unitsRegistryRead } from "../repo/display-words.js";
+import { athleteUnits } from "../repo/settings.js";
 
 export const operatorRouter = Router();
 
@@ -62,6 +64,9 @@ function garminInputState(): { garmin_sleep_gap_nights: number | null } {
 export function settingsResponse() {
   return {
     settings: { ...getSettings(), ...garminInputState() },
+    // The units registry with the athlete's choices (display-words.ts): the Settings
+    // Units group renders from this, so a new unit kind needs no client list of its own.
+    units: unitsRegistryRead(athleteUnits()),
     agents: getAgentConfig(),
     route_tasks: listRoutableTasks(),
     research_auto_eligible: researchAutoEligible(),
@@ -75,6 +80,7 @@ operatorRouter.get("/settings", (_req, res) => res.json(settingsResponse()));
 operatorRouter.put("/settings", (req, res) =>
   res.json({
     settings: { ...setSettings(req.body ?? {}), ...garminInputState() },
+    units: unitsRegistryRead(athleteUnits()),
     agents: getAgentConfig(),
     route_tasks: listRoutableTasks(),
     garmin_last_export_at: lastGarminStrengthExportAt(),

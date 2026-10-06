@@ -62,6 +62,7 @@ import { buildClinicalReportData, clinicalReportJson, parseReportSections } from
 import { directivesResponse } from "./connected-brain.js";
 import { nutritionDayResponse } from "./nutrition.js";
 import { settingsResponse } from "./operator.js";
+import { weeklyStatsResponse } from "./training-log.js";
 
 export type ScreenResponses = Record<string, unknown>;
 
@@ -128,7 +129,7 @@ export function trainHomeResponses(viewQuery: unknown, dateQuery: unknown, hourQ
   }
   if (view !== "endurance") put(out, "/coaching-focus", () => getCoachingFocus());
   if (view === "overview") {
-    put(out, "/stats", () => getWeeklyStats());
+    put(out, "/stats", () => weeklyStatsResponse());
     put(out, "/program/balance", () => programBalance());
     put(out, "/muscle-trajectory", () => muscleGroupTrajectory(undefined));
     put(out, "/muscle-load", () => muscleLoadPayload(2));
@@ -151,7 +152,7 @@ export function trainHomeResponses(viewQuery: unknown, dateQuery: unknown, hourQ
     put(out, "/dexa-targeting", () => dexaTargeting());
     put(out, "/plan/look-ahead", () => planLookAhead());
   } else {
-    put(out, "/stats", () => getWeeklyStats());
+    put(out, "/stats", () => weeklyStatsResponse());
     put(out, "/endurance-prs", () => getEndurancePRs(undefined));
     put(out, "/endurance-goal", () => getEnduranceGoal());
     put(out, "/run-compliance", () => runComplianceRead(undefined));

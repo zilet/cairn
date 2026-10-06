@@ -28,8 +28,7 @@ function progressHistorySessionSetScore(set: ProgressHistorySet): number {
 }
 
 function progressHistoryWeekday(date: unknown): string {
-  const [year, month, day] = String(date || "").split("-").map(Number);
-  return year ? new Date(year, month - 1, day).toLocaleDateString(undefined, { weekday: "long" }) : "";
+  return Number(String(date || "").slice(0, 4)) ? CairnFmt.date(date, { fmt: { weekday: "long" } }) : "";
 }
 
 function progressHistoryExerciseGroups(sets: ProgressHistorySet[] | null | undefined): ProgressHistoryExerciseGroup[] {

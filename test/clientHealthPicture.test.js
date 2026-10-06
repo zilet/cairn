@@ -23,6 +23,7 @@ function loadHealthPicture() {
   context.window = context;
   for (const file of [
     "public/js/date-utils.js",
+    "public/js/ui-format.js",
     "public/js/html-utils.js",
     "public/js/ui-components.js",
     "public/js/health-evidence-client.js",

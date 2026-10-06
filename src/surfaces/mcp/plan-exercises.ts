@@ -22,6 +22,8 @@ import {
   planLookAhead,
   planUpcomingNote,
   planWeek,
+  weekRead,
+  weekReadStart,
   reconcileExerciseGroups,
   replacePlanByPerson,
   savePlanDayByPerson,
@@ -88,6 +90,16 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
     "The Plan tab's connected week: calendar Mon–Sun when lift/run schedules map weekdays, otherwise template day order with weekday null. Each cell carries status (done/today/upcoming/rest/open), the plan day, any logged session, and any run intent. Layout suggestion is a quiet collision note when the week stacks heavy lower next to a long/quality run.",
     {},
     async () => asText(planWeek())
+  );
+
+  server.tool(
+    "get_week",
+    "One calendar week as Horizon's Week page reads it → { as_of, today, week_start, week_end, range_words, this_week, units, frame:{stage{key,word,week_word,source}, block{week,of,words}, countdown{days,event,race_date,race_date_words,words}, push{until,until_words,words}, headline, line, glance}, summary, totals:{lift_days_done/planned, runs_done/planned, run_km_done/planned, lift_words, run_words}, days:[DayChip{date, date_words, weekday, status, today, lift, run{distance_words}, rest, hard, words, load{dose: rest|easy|moderate|hard|big, word, height 0..1}, href}], layout_note, still_open[≤2], next_milestones[≤3], goals:[race (estimate WITH its time), weight (the one weight trend), strength], weight_trend }. Built on the plan strip's own week (get_plan_week's cells), the one stage word, the race build and the one weight-trend read; every sentence is in the athlete's units and names dates in words. `load.height` is a drawing aid, never a score. Pure read, mirrors GET /api/week. `start` (YYYY-MM-DD, any day of the week) defaults to this week.",
+    { start: z.string().optional().describe("any day of the week to read (YYYY-MM-DD); defaults to this week") },
+    async ({ start }) => {
+      const day = weekReadStart(start);
+      return asText(day ? weekRead(day) : { error: "start must be YYYY-MM-DD" });
+    }
   );
 
   server.tool(

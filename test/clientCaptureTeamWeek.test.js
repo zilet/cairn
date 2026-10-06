@@ -35,6 +35,7 @@ class FakeElement {
 function loadCards() {
   const context = { Object, Array, String, Number, Date, Intl };
   context.window = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/capture-read-cards-client.js"), "utf8"), context);
   return context.CairnCaptureReadCards;
 }

@@ -120,13 +120,14 @@ function path(overrides = {}) {
 }
 
 function loadPath() {
-  return loadClientModule(["html-utils", "today-path-client"]).CairnTodayPath;
+  return loadClientModule(["html-utils", "ui-format", "today-path-client"]).CairnTodayPath;
 }
 
 function loadAhead(globals = {}) {
   return loadClientModule(
     [
       "html-utils",
+      "ui-format",
       "ui-actions-client",
       "decision-undo-client",
       "today-worth-client",
@@ -176,7 +177,7 @@ test("the Path card: kicker, a trail drawn to scale with today's breathing dot, 
 });
 
 test("the Path card's All goals link opens Horizon's goal line; a modified click keeps the href", async () => {
-  const win = loadClientModule(["html-utils", "ui-actions-client", "today-path-client", "today-path-controller"]);
+  const win = loadClientModule(["html-utils", "ui-format", "ui-actions-client", "today-path-client", "today-path-controller"]);
   const host = createHost(win.document, { html: "" });
   let opened = 0;
   win.CairnTodayPathController.mount(host, {
@@ -546,7 +547,7 @@ test("the new connection: one sentence at Today's foot, only when new; the progr
 });
 
 test("All goals on Horizon's goal line: a track per thread with numbers at the ends, the marker's direction", () => {
-  const { CairnHorizon } = loadClientModule(["html-utils", "horizon-client"]);
+  const { CairnHorizon } = loadClientModule(["html-utils", "ui-format", "horizon-client"]);
   const html = CairnHorizon.goalsBoardHtml(path());
   const host = renderHtml(html);
   assert.equal(host.querySelector(".thd-mast .lbl").textContent, "All goals");

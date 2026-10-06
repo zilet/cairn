@@ -97,6 +97,25 @@ function buildPictureHtml(errorHtml: unknown, docCount: unknown): string {
   </div>`;
 }
 
+// A review's prose names dates as ISO; the athlete reads them as words (CairnFmt), and the
+// latest draw's date is said once by the caller, never repeated in the prose.
+function humanizeReviewText(text: string, latestISO: string | null | undefined): string {
+  if (!text) return text || "";
+  let s = String(text);
+  if (latestISO && /^\d{4}-\d{2}-\d{2}$/.test(latestISO)) {
+    const esc = latestISO.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    s = s.replace(new RegExp(`\\s*[([]?\\b(?:on|as of|dated|measured on|recorded on|taken on)\\s+${esc}\\b[)\\]]?`, "gi"), "");
+    s = s.replace(new RegExp(`\\s*[([]\\s*${esc}\\s*[)\\]]`, "g"), "");
+  }
+  s = s.replace(/\b\d{4}-\d{2}-\d{2}\b/g, (m0) => CairnFmt.date(m0, { style: "ago" }));
+  return s.replace(/\(\s*\)/g, "").replace(/\s+([,.;:])/g, "$1").replace(/\s{2,}/g, " ").replace(/^\s*[,.;:]\s*/, "").trim();
+}
+
+function latestReviewDate(p: unknown): string | null {
+  const hits = JSON.stringify(p || {}).match(/\d{4}-\d{2}-\d{2}/g);
+  return hits && hits.length ? hits.sort()[hits.length - 1] : null;
+}
+
 function reviewHtml(review: HealthPictureReview, stale: unknown, errorHtml: unknown): string {
   const parsed = parsedReview(review) || {};
   const latestISO = latestReviewDate(parsed);
@@ -184,6 +203,8 @@ const CAIRN_HEALTH_PICTURE = {
   healthHeroHtml,
   buildPictureHtml,
   reviewHtml,
+  humanizeReviewText,
+  latestReviewDate,
 };
 
 Object.assign(globalThis, { CairnHealthPicture: CAIRN_HEALTH_PICTURE });

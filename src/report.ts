@@ -17,6 +17,7 @@ import crypto from "node:crypto";
 import * as repo from "./repo.js";
 import { formatReportDate, formatReportDateShort, reportDateISO, reportDaysBetween, reportTodayISO } from "./reportDates.js";
 import { round1 } from "./lib/numbers.js";
+import { LB_PER_KG } from "./repo/display-words.js";
 import { optimalTrustworthy } from "./repo/optimal-trust.js";
 import { labRangeRead } from "./repo/lab-range.js";
 import type {
@@ -503,7 +504,7 @@ function applyCurrentBodyContext(m: ReportMarker, ctx: CurrentBodyContext): Repo
     if (Number.isFinite(heightCm) && heightCm > 0 && (!m.latestDate || weightDate >= m.latestDate)) {
       const prior = latestNumericHistory(m);
       const heightM = heightCm / 100;
-      const bmi = round1((weight * 0.45359237) / (heightM * heightM));
+      const bmi = round1(weight / LB_PER_KG / (heightM * heightM));
       m.value = bmi;
       m.latestDate = weightDate;
       m.unit = "kg/m2";

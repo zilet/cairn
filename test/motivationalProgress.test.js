@@ -40,7 +40,7 @@ test("sessionHighlights flags an est-1RM PR vs prior history, with an up compari
 
   const h = repo.sessionHighlights(sid("2026-06-05"));
   assert.equal(h.prs.length, 1);
-  assert.deepEqual(h.prs[0], { exercise: "Bench Press", kind: "e1rm", label: "110 lb × 5 — new best" });
+  assert.deepEqual(h.prs[0], { exercise: "Bench Press", kind: "e1rm", label: "110 lb × 5 — new best", weight_lb: 110, reps: 5 });
 
   assert.equal(h.comparisons.length, 1);
   assert.deepEqual(h.comparisons[0], {
@@ -159,7 +159,7 @@ test("weekWins rolls up new bests, trained days, hard sets, and filled volume fo
 
   const w = repo.weekWins("2026-06-17"); // window [2026-06-11, 2026-06-17]
 
-  assert.deepEqual(w.prs, [{ exercise: "Bench Press", label: "110 lb × 5 — new best" }]);
+  assert.deepEqual(w.prs, [{ exercise: "Bench Press", label: "110 lb × 5 — new best", weight_lb: 110, reps: 5 }]);
   assert.equal(w.trained_days_7, 3); // 06-12 sets, 06-15 sets, 06-13 activity
   assert.equal(w.week_sets, 8); // 1 bench + 7 curls inside the window
 
@@ -181,8 +181,8 @@ test("weekWins dedupes multiple PRs of the same lift to the latest, newest-first
   const w = repo.weekWins("2026-06-17"); // window [2026-06-11, 2026-06-17]
   // One entry per exercise (bench's latest 110 wins), newest PR first (squat on 06-17).
   assert.deepEqual(w.prs, [
-    { exercise: "Back Squat", label: "210 lb × 5 — new best" },
-    { exercise: "Bench Press", label: "110 lb × 5 — new best" },
+    { exercise: "Back Squat", label: "210 lb × 5 — new best", weight_lb: 210, reps: 5 },
+    { exercise: "Bench Press", label: "110 lb × 5 — new best", weight_lb: 110, reps: 5 },
   ]);
 });
 

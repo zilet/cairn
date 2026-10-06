@@ -24,7 +24,7 @@ function planRecoveryBannerHtml(rs: import("../contracts/client.js").ClientRecov
     const when = upcomingWhenLabel(rs.effective_date);
     return `<div class="plan-recovery-banner reveal">
       <span class="lbl plan-recovery-mast">YOUR RECOVERY WEEK</span>
-      <p class="plan-recovery-line">Set for ${escHtml(when || rs.effective_date)} — it lands automatically at the week boundary, with no Apply step.</p>
+      <p class="plan-recovery-line">Set for ${escHtml(when || "the week boundary")} — it lands automatically at the week boundary, with no Apply step.</p>
       ${rs.summary ? `<p class="plan-recovery-summary">${escHtml(rs.summary)}</p>` : ""}
       <p class="plan-recovery-until">Hold it before then or Undo after it lands; your word always wins.</p>
     </div>`;
@@ -42,8 +42,7 @@ function planRecoveryBannerHtml(rs: import("../contracts/client.js").ClientRecov
 function fmtDate(iso: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso ?? ""));
   if (!m) return "";
-  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-  return d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
+  return CairnFmt.date(iso, { fmt: { weekday: "long", month: "short", day: "numeric" } });
 }
 
 // "lands Monday" for something inside the week, else "Mon, Jul 21" further out —
@@ -55,8 +54,7 @@ function upcomingWhenLabel(iso: string): string {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const days = Math.round((d.getTime() - today.getTime()) / 86400000);
-  if (days >= 0 && days <= 6) return d.toLocaleDateString(undefined, { weekday: "long" });
-  return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+  return CairnFmt.date(iso, days >= 0 && days <= 6 ? { fmt: { weekday: "long" } } : { style: "label" });
 }
 
 // The calm forward look: queued training/recovery changes the brain will land

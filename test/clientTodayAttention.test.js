@@ -24,6 +24,7 @@ function loadTodayBrief() {
   const context = { Array, Math, Number, Object, String, escHtml, escAttr };
   context.window = context;
   context.globalThis = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-brief-client.js"), "utf8"), context);
   return context.CairnTodayBrief;
 }
@@ -32,6 +33,7 @@ function loadMainShell() {
   const context = { Object, String };
   context.window = context;
   context.globalThis = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-main-shell-client.js"), "utf8"), context);
   return context.CairnTodayMainShell;
 }
@@ -40,6 +42,7 @@ function loadRailController() {
   const context = { Array, Number, Object, Set, String };
   context.window = context;
   context.globalThis = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-rail-controller.js"), "utf8"), context);
   return context.CairnTodayRailController;
 }

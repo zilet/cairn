@@ -30,7 +30,6 @@
   };
 
   const { stageWord, unitsOf, kmText, distNum, runWords } = CairnRaceWeekModel;
-  const KM_PER_MILE = 1.609344;
   const WEEKDAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
   const KIND_WORD: Record<RunKind, string> = { easy: "easy", quality: "quality", long: "long" };
 
@@ -57,9 +56,7 @@
   function paceText(secPerKm: unknown, units?: unknown): string {
     const n = num(secPerKm);
     if (n == null || n <= 0) return "";
-    const mi = unitsOf(units) === "mi";
-    const total = Math.round(mi ? n * KM_PER_MILE : n);
-    return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}/${mi ? "mi" : "km"}`;
+    return `${CairnFmt.pace(n, units ?? "km")}${fmtRunUnitSuffix(units)}`;
   }
 
   function text(value: unknown): string {

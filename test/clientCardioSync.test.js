@@ -28,6 +28,7 @@ function loadCardioSync() {
   // date-utils publishes pickDayVariant, which the quiet notes rotate through; the
   // fixture's relTime stub still wins so the assertions stay on the wording.
   vm.runInNewContext(readFileSync(join(root, "public/js/date-utils.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
   context.relTime = (at) => `<${at}>`;
   vm.runInNewContext(readFileSync(join(root, "public/js/cardio-sync-client.js"), "utf8"), context);
   return context.CairnCardioSync;

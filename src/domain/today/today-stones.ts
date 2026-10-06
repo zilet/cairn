@@ -36,6 +36,7 @@ import { dayPlanningSignalState } from "../../repo/day-read.js";
 import { listActiveDirectives } from "../../repo/directives-read.js";
 import { activitySportWhere, RUN_SPORT_PATTERNS } from "../../repo/endurance-sports.js";
 import { goalPace } from "../../repo/goal-pace.js";
+import { GOAL_PACE_WINDOW_DAYS, weightTrendRead } from "../../repo/weight-trend.js";
 import { getMarkerHistory } from "../../repo/health.js";
 import { completedIntakeRange } from "../../repo/intake-window.js";
 import { readingAgeDays, readingPastValidity } from "../../repo/marker-validity.js";
@@ -401,11 +402,12 @@ function bodyStone(ctx: Voiced): TodayStone {
   const W = TODAY_STONE_WORDS.body;
   const L = TODAY_STONE_LINES;
   // Read as of the stone's date, so a past date's trend never fits later weigh-ins.
-  const pace = goalPace(30, ctx.date);
+  // The ONE weight-trend read (weight-trend.ts): the rate every weight surface prints.
+  const pace = goalPace(GOAL_PACE_WINDOW_DAYS, ctx.date);
   const latest = pace.points.filter((point) => point.date <= ctx.date).at(-1);
   const age = latest ? daysBetweenISO(ctx.date, latest.date) : null;
   if (!latest || age == null || age > BODY_STONE_MAX_AGE_DAYS) return quietStone("body");
-  const slope = pace.trend.lb_wk;
+  const slope = weightTrendRead(ctx.date, { pace }).rate_lb_wk;
   if (slope == null) return stone("body", W.weighed, "ok", pick(L.body_one, ctx.date, "body"));
   const moving = Math.abs(slope) >= BODY_HOLDING_LB_WK ? Math.sign(slope) : 0;
   const goal = pace.goal.weight_lb;

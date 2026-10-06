@@ -220,6 +220,7 @@ function loadController() {
   // date-utils loads before the life card in the browser (it formats the card's dates);
   // the day stays pinned.
   vm.runInNewContext(readFileSync(join(root, "public/js/date-utils.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
   context.localISO = () => "2026-06-30";
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/ui-components.js"), "utf8"), context);

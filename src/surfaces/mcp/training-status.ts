@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { weightTrendRead } from "../../repo/weight-trend.js";
 import {
   getEnduranceSchedule,
   getStrengthSchedule,
@@ -22,7 +23,7 @@ export function registerTrainingStatusTools(server: McpToolRegistrar) {
     "get_weekly_stats",
     "Compact weekly dashboard: training days, tonnage, total logged sets (incl. timed) over the last 7 days, plus the consistency streak — and an additive `endurance` block (this week's mileage, moving time, longest effort, time-in-HR-zone, pace trend) for runner/hybrid athletes.",
     {},
-    async () => asText(getWeeklyStats())
+    async () => asText({ ...getWeeklyStats(), weight_trend: weightTrendRead() })
   );
 
   server.tool(

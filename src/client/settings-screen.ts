@@ -160,6 +160,8 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
       chat_profile_bindings: wm.chat_profile_bindings,
       update_check_enabled: wm.update_check_enabled,
       lead_mode: wm.lead_mode,
+      run_units: wm.run_units,
+      weight_units: wm.weight_units,
     };
     // password / api-key fields: blank means "leave the configured value intact" — only
     // send a typed value (matches the old per-field placeholder behavior).
@@ -167,6 +169,13 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
     if (wm.garmin_password.trim()) body.garmin_password = wm.garmin_password.trim();
     await api("/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     swrInvalidate(SETTINGS_SCREEN_CACHE_KEY);
+    // Units follow the athlete everywhere: hand the formatter the saved units and drop every cache that
+    // holds prose written in the old units (the broadest write-reach row; the eager table
+    // has no budget for a row of its own), so each surface re-reads on its next paint.
+    CairnFmt.set(wm);
+    if (typeof CairnWriteInvalidation !== "undefined") {
+      CairnWriteInvalidation.invalidate(CairnWriteInvalidation.targetsForChatAction("revert_decision"));
+    }
     artEnabled = wm.art_enabled; // take effect on the next render, no reload
     return true;
   };

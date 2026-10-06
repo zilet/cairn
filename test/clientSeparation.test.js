@@ -31,6 +31,7 @@ function vmContext(extra = {}) {
 
 function loadPreparation() {
   const context = vmContext();
+  vm.runInNewContext(read("public/js/ui-format.js"), context);
   vm.runInNewContext(read("public/js/today-plan-session-model.js"), context);
   vm.runInNewContext(read("public/js/today-plan-session-data-client.js"), context);
   vm.runInNewContext(read("public/js/today-plan-session-preparation.js"), context);
@@ -96,6 +97,7 @@ test("an old run-only day is not startable, and only a real synced run names a l
 
 test("the surface renderer draws lifts only, even when handed a cardio item", () => {
   const context = vmContext();
+  vm.runInNewContext(read("public/js/ui-format.js"), context);
   vm.runInNewContext(read("public/js/today-plan-surface-renderer.js"), context);
   const drawn = [];
   const skipped = [];
@@ -156,6 +158,7 @@ test("the surface renderer draws lifts only, even when handed a cardio item", ()
 
 test("day pills offer lift days only, and the session head never names a planned run", () => {
   const context = vmContext();
+  vm.runInNewContext(read("public/js/ui-format.js"), context);
   vm.runInNewContext(read("public/js/today-plan-surface-client.js"), context);
   const surface = context.CairnTodayPlanSurface;
   const pills = surface.daySwitchHtml(plain(OLD_PLAN), 1, { escapeHtml: escHtml });
@@ -179,6 +182,7 @@ test("day pills offer lift days only, and the session head never names a planned
 
 test("today's run is one line from the agenda, outside the lift card, and only for a run opened today", () => {
   const context = vmContext();
+  vm.runInNewContext(read("public/js/ui-format.js"), context);
   vm.runInNewContext(read("public/js/today-plan-surface-client.js"), context);
   const surface = context.CairnTodayPlanSurface;
   const agenda = {

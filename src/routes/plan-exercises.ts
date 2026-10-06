@@ -30,6 +30,8 @@ import {
   planLookAhead,
   planUpcomingNote,
   planWeek,
+  weekRead,
+  weekReadStart,
   reconcileExerciseGroups,
   recoveryWeekStatus,
   replacePlanByPerson,
@@ -56,6 +58,17 @@ planExercisesRouter.get("/plan", (_req, res) => res.json(getPlanWithPurpose()));
 // Connected week for the Plan tab (did / today / upcoming). Separate from GET /plan
 // so the editor still receives the raw template ring for save.
 planExercisesRouter.get("/plan/week", (_req, res) => res.json(planWeek()));
+// One calendar week as Horizon's Week page reads it (src/contracts/week-read.ts): the
+// frame (one stage word, block week, countdown), the week's summary sentence, totals in
+// the athlete's units, a chip per day with its planned dose as a word and a relative
+// height, what is still open, the next milestones and the goals. Built on the same
+// planWeek cells /plan/week answers (kept as the strip's alias). 400 on a malformed
+// ?start=; absent means this week.
+planExercisesRouter.get("/week", (req, res) => {
+  const start = weekReadStart(req.query.start);
+  if (!start) return res.status(400).json({ error: "start must be YYYY-MM-DD" });
+  res.json(weekRead(start));
+});
 // The Program landing's look-ahead: today through the end of next week, a row a day
 // (the lift day's name and key movements, the calendar's runs and rest), with the
 // week's context (race-build rung, recovery or deload week). Read-only; registered

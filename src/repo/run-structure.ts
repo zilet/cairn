@@ -24,6 +24,8 @@
 // Never a grade: nothing here scores a run. Garmin's training-effect label does not
 // ride here either (the owner law in run-intensity.ts).
 
+import { KM_PER_MI } from "./display-words.js";
+
 export type RunSegmentKind = "warmup" | "work" | "recovery" | "rest" | "cooldown" | "run" | "walk" | "stand";
 
 export interface RunStructureSegment {
@@ -99,7 +101,6 @@ const TYPED_LAP_KIND: Record<string, RunLapKind> = {
   INTERVAL_OTHER: "other",
 };
 
-const KM_PER_MI = 1.609344;
 
 function num(value: unknown): number | null {
   if (value == null || value === "") return null;

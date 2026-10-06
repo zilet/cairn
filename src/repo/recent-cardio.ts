@@ -22,6 +22,7 @@
 // coach read away (`read_activity_detail`). There are no second-by-second HR streams
 // or GPS tracks in the database, so nothing may be narrated as "not pulled through
 // yet" — the prompt blocks built on this say so.
+import { KM_PER_MI } from "./display-words.js";
 import { db } from "../db.js";
 import { addDaysISO } from "../lib/dates.js";
 import { withoutShadowActivities } from "./activity-shadow.js";
@@ -29,14 +30,13 @@ import { isStrengthGarminType } from "./activities.js";
 import { canonicalEnduranceSport } from "./endurance-sports.js";
 import type { HrModel } from "./hr-model.js";
 import { personalRunReadForRow, usablePersonalHrModel } from "./run-intensity.js";
-import { getSettings } from "./settings.js";
+import { athleteUnits } from "./settings.js";
 import { clipText, clockLabel, localDateISO } from "./shared.js";
 import { isStatedEasyRpe } from "./stated-effort.js";
 import { structureNote } from "./run-structure.js";
 
 export const RECENT_CARDIO_DAYS = 7;
 const RECENT_CARDIO_MAX_ROWS = 14;
-const KM_PER_MI = 1.609344;
 // Pace is a foot-sport number; a ride or a swim reads by distance and time.
 const PACED_SPORTS = new Set(["run", "walk"]);
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] as const;
@@ -114,7 +114,7 @@ function formatPace(km: number | null, minutes: number | null, units: "km" | "mi
 
 function runUnits(): "km" | "mi" {
   try {
-    return getSettings().run_units === "mi" ? "mi" : "km";
+    return athleteUnits().distance;
   } catch {
     return "km";
   }

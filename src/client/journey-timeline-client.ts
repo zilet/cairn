@@ -28,13 +28,7 @@ function ftlIsDated(entry: ForwardTimelineEntry): boolean {
 // A window renders as a compact "Aug 25 – Sep 22" band (dropping the year unless
 // the two ends straddle a year boundary). Dated entries lean on the shared relAge
 // helper, which already renders a future date as an absolute "Sep 14, 2026".
-function ftlShort(iso: unknown): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ""));
-  if (!m) return ftlText(iso);
-  const d = new Date(+m[1], +m[2] - 1, +m[3]);
-  if (Number.isNaN(d.getTime())) return ftlText(iso);
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
+const ftlShort = (iso: unknown): string => CairnFmt.date(iso, { year: false });
 
 function ftlWindowLabel(win: { start?: unknown; end?: unknown } | null | undefined): string {
   const start = String(win?.start ?? "");
@@ -53,12 +47,7 @@ function ftlWhenLabel(entry: ForwardTimelineEntry): string {
   return "";
 }
 
-function ftlMonthName(iso: unknown): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ""));
-  if (!m) return "";
-  const d = new Date(+m[1], +m[2] - 1, +m[3]);
-  return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString(undefined, { month: "long" });
-}
+const ftlMonthName = (iso: unknown): string => (iso ? CairnFmt.date(iso, { fmt: { month: "long" } }) : "");
 
 // A deterministic plain-language lead: name the destination month when a goal
 // date anchors the road, and count the concrete checkpoints worth planning.

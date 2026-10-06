@@ -15,6 +15,8 @@ import { getAgentJob, listActiveAgentJobs } from "../../domain/person/index.js";
 import { cancelAgentJob } from "../../agentJobs.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 import { getDiagnostics } from "../../repo/diagnostics.js";
+import { unitsRegistryRead } from "../../repo/display-words.js";
+import { athleteUnits } from "../../repo/settings.js";
 import { getAgentCliUpdateStatus, startAgentCliUpdate, startInstalledAgentCliUpdate } from "../../agentCliUpdates.js";
 
 const ROUTABLE_TASK_LIST = ROUTABLE_TASKS.join(", ");
@@ -65,9 +67,15 @@ export function registerOperatorTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_settings",
-    "Get app settings: agent selection strategy (round_robin/random/priority), agent order, disabled agents, per-task route metadata, the timezone-aware weekly background-review cadence, and Garmin sync status (garmin_last_sync_at/garmin_last_sync_status). Includes the merged agent list.",
+    "Get app settings: agent selection strategy (round_robin/random/priority), agent order, disabled agents, per-task route metadata, the timezone-aware weekly background-review cadence, and Garmin sync status (garmin_last_sync_at/garmin_last_sync_status). `units` is the units registry (distance km|mi as run_units, weight lb|kg as weight_units) with the current choice. Includes the merged agent list.",
     {},
-    async () => asText({ settings: getSettings(), agents: getAgentConfig(), route_tasks: listRoutableTasks() })
+    async () =>
+      asText({
+        settings: getSettings(),
+        units: unitsRegistryRead(athleteUnits()),
+        agents: getAgentConfig(),
+        route_tasks: listRoutableTasks(),
+      })
   );
 
   server.tool(
@@ -129,6 +137,12 @@ export function registerOperatorTools(server: McpToolRegistrar) {
         .optional()
         .describe(
           "athlete-facing run distance and pace: km (min/km) or mi (min/mile). The engine stays in kilometres either way."
+        ),
+      weight_units: z
+        .enum(["lb", "kg"])
+        .optional()
+        .describe(
+          "athlete-facing bodyweight and loads: lb or kg. Stored weights stay pounds either way; every sentence the server writes says them in this unit."
         ),
       clear_gemini_api_key: z.boolean().optional().describe("clear the saved Gemini key; env fallback still applies"),
       clear_garmin_password: z

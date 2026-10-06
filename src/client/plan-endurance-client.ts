@@ -180,7 +180,6 @@ function paintPlanEndurance(
   // build week by week, how the lifting fits, the finish estimate. A failed read still
   // mounts it for a race goal, so it can say so and try again.
   const showRace = enduranceModel().showsRaceView(goal, raceBuild);
-  const unitsToggle = typeof CairnRaceView !== "undefined" ? CairnRaceView.unitsHtml(units) : "";
   // With no race, THIS WEEK still stands: the week's volume from the run engine and the
   // runs by weekday — never an empty ladder or an estimate with nothing behind it.
   const plainWeek =
@@ -196,7 +195,7 @@ function paintPlanEndurance(
     : goal
       ? `<div class="card-stack-item end-goal-row">${typeof enduranceGoalCard === "function" ? enduranceGoalCard(goal, { units }) : ""}</div>`
       : `<div class="end-goal card-stack-item reveal" style="${stagger(0)}">
-         <div class="end-goal-head"><span class="lbl">Running</span>${plainWeek ? "" : unitsToggle}</div>
+         <div class="end-goal-head"><span class="lbl">Running</span></div>
          <div class="end-goal-name">No race on the calendar</div>
          <div class="end-goal-sub">Set a dated race or a standing distance in <b>You → Profile</b> and the coach builds your running toward it.</div>
        </div>`;
@@ -254,23 +253,6 @@ function paintPlanEndurance(
       nextWeekHtml,
       agenda,
       reducedMotion: () => (typeof reducedMotion === "function" ? reducedMotion() : false),
-    });
-  }
-
-  // The km / mi switch lives in whichever head painted (the race's, or the goal's):
-  // delegated, so a race view painted after a retry answers too.
-  if (!(body as HTMLElement & { _unitsWired?: boolean })._unitsWired) {
-    (body as HTMLElement & { _unitsWired?: boolean })._unitsWired = true;
-    body.addEventListener("click", (event) => {
-      const button = (event.target as Element | null)?.closest<HTMLElement>("[data-run-units]");
-      if (!button) return;
-      const next = button.dataset.runUnits === "mi" ? "mi" : "km";
-      if (button.classList.contains("on")) return;
-      void api("/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ run_units: next }),
-      }).catch(() => {}).finally(() => { renderPlanEndurance(); });
     });
   }
 

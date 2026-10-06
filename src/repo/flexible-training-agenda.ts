@@ -1,4 +1,5 @@
 import { db } from "../db.js";
+import { distanceWords, type DistanceUnit } from "./display-words.js";
 import type { WeeklyRunPlan, RunPlanPrescription } from "./run-progression.js";
 import { weekAsPlanned, weeklyRunPlan } from "./run-progression.js";
 import { applyRunDayIntensity, type RunDayIntensity, runDayIntensity } from "./run-day-intensity.js";
@@ -968,7 +969,11 @@ function completedLabel(
  * then what this morning made of it: "Planned long run 10.7 km, shortened to 8 km this
  * morning." Actual-first surfaces print the run and put this line second.
  */
-export function plannedRunLine(intent: Pick<FlexibleRunIntent, "kind" | "label" | "planned_label" | "planned_distance_km" | "target_distance_km" | "adjustment">): string {
+export function plannedRunLine(
+  intent: Pick<FlexibleRunIntent, "kind" | "label" | "planned_label" | "planned_distance_km" | "target_distance_km" | "adjustment">,
+  units: DistanceUnit = "km"
+): string {
+  const kmText = (km: number) => distanceWords(km, units);
   const name = String(intent.planned_label || intent.label || `${intent.kind} run`).replace(/\s*·\s*shorter$/i, "");
   const plannedKm = intent.planned_distance_km ?? null;
   const head = `Planned ${name[0].toLowerCase()}${name.slice(1)}${plannedKm != null ? ` ${kmText(plannedKm)}` : ""}`;
@@ -982,10 +987,6 @@ export function plannedRunLine(intent: Pick<FlexibleRunIntent, "kind" | "label" 
   return `${head}.`;
 }
 
-function kmText(km: number): string {
-  const r = Math.round(km * 10) / 10;
-  return `${Number.isInteger(r) ? r : r.toFixed(1)} km`;
-}
 
 export function flexibleTrainingAgenda(
   date?: string,

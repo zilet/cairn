@@ -122,13 +122,6 @@
     return `<div class="horizon-vol"><span class="lbl">The last ${weeks.length} weeks</span><ol class="horizon-vol-weeks" aria-label="Running per week, the last ${weeks.length} weeks">${cols}</ol></div>`;
   }
 
-  /** The km / mi switch: the athlete's run units, saved to settings from any surface. */
-  function unitsHtml(units: "km" | "mi"): string {
-    const btn = (value: "km" | "mi") =>
-      `<button type="button" class="end-unit-btn${units === value ? " on" : ""}" data-horizon-units="${value}" aria-pressed="${units === value}">${value}</button>`;
-    return `<div class="end-units horizon-units" role="group" aria-label="Distance and pace units">${btn("km")}${btn("mi")}</div>`;
-  }
-
   /**
    * The goal line's chart slot: space held at the chart's own shape so the season line
    * lands without moving anything. The controller fills it (or drops it) once the
@@ -176,7 +169,6 @@
         <header class="horizon-lane-head">
           <div class="horizon-lane-kickrow">
             <span class="lbl horizon-lane-kicker">${escHtml(lane.title)}</span>
-            ${unitsHtml(lane.units === "mi" ? "mi" : "km")}
           </div>
           ${title}
           ${lane.lede ? `<p class="horizon-lane-lede">${escHtml(lane.lede)}</p>` : ""}

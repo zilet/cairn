@@ -7,17 +7,13 @@ function captureReadWeekRangeLabel(iso: unknown): string {
   const s = String(iso || "").slice(0, 10);
   const [y, m, d] = s.split("-").map(Number);
   if (!y || !m || !d) return "";
-  const date = new Date(y, m - 1, d);
-  if (Number.isNaN(date.getTime())) return "";
-  const dow = (date.getDay() + 6) % 7; // 0 = Monday
-  const mon = new Date(date);
-  mon.setDate(date.getDate() - dow);
-  const sun = new Date(mon);
-  sun.setDate(mon.getDate() + 6);
-  const long = (dt: Date) => dt.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-  return mon.getMonth() === sun.getMonth()
-    ? `${mon.toLocaleDateString(undefined, { month: "short" })} ${mon.getDate()}–${sun.getDate()}`
-    : `${long(mon)} – ${long(sun)}`;
+  const dow = (new Date(y, m - 1, d).getDay() + 6) % 7; // 0 = Monday
+  const at = (n: number): string => new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+  const mon = at(-dow);
+  const sun = at(6 - dow);
+  return mon.slice(5, 7) === sun.slice(5, 7)
+    ? `${CairnFmt.date(mon, { fmt: { month: "short" } })} ${Number(mon.slice(8))}–${Number(sun.slice(8))}`
+    : `${CairnFmt.date(mon, { year: false })} – ${CairnFmt.date(sun, { year: false })}`;
 }
 
 const CAIRN_CAPTURE_READ_DATE: CaptureReadDateApi = {

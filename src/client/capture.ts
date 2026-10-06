@@ -24,8 +24,10 @@ function setupWeightChip(): void {
   const paintMini = (w: number): void => {
     if (!mini) return;
     const val = typeof mini.querySelector === "function" ? mini.querySelector("[data-wtval]") : null;
-    if (val) val.innerHTML = `${w}<span class="tweek-u">lb</span>`;
-    else mini.innerHTML = `${w}<span class="wt-mini-unit">lb</span><span class="stat-plus">+</span>`;
+    const u = CairnFmt.units().weight;
+    const n = CairnFmt.weight(w, u, true);
+    if (val) val.innerHTML = `${n}<span class="tweek-u">${u}</span>`;
+    else mini.innerHTML = `${n}<span class="wt-mini-unit">${u}</span><span class="stat-plus">+</span>`;
   };
   const save = async (): Promise<void> => {
     const w = +input.value;

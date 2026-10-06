@@ -39,6 +39,8 @@ function loadJourneyClient() {
   };
   context.globalThis = context;
   context.window = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/date-utils.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/journey-progress-client.js"), "utf8"), context);
   return context;
 }

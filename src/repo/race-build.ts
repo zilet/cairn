@@ -75,6 +75,16 @@ import {
 } from "./run-capacity.js";
 import type { HarmEvidenceKind } from "./brain/read-adherence.js";
 import { localDateISO } from "./shared.js";
+import {
+  dateWords,
+  distanceWords,
+  KM_PER_MI,
+  paceBandWords,
+  paceWords,
+  type DistanceUnit,
+} from "./display-words.js";
+import { athleteUnits } from "./settings.js";
+import { STAGE_WEEK_WORD, stageKeyOf } from "./stage-words.js";
 import { planDayStrengthGroups } from "./training-read.js";
 import { registerRaceLadderPeak, type RaceLadderPlanDraft } from "./race-ladder-hook.js";
 import { type RaceStrengthLead, raceStrengthLead, raceStrengthPrinciple } from "./race-strength.js";
@@ -147,6 +157,12 @@ export interface RaceBuildWeek {
   focus: string;
   /** The same week in a few words, for a row: "Race-pace work", "Longest long run". */
   focus_short: string;
+  /**
+   * The week's ONE stage word as a week tag (stage-words.ts: a build rung by its phase,
+   * every other rung by its kind) — "Sharpen week", "Peak week". Every surface that
+   * names this week reads it.
+   */
+  stage_word?: string;
   /**
    * The rung is bigger than any closed week on record (`best_week_km`, run-capacity.ts)
    * and every rung before it — a genuine new milestone, said in words, never a score.
@@ -246,6 +262,8 @@ export type RunningPresence = "race" | "runs" | "none";
 export interface RaceBuild {
   available: boolean;
   as_of: string;
+  /** The athlete's run units: every SENTENCE here (and each band's `text`) says its distances and paces in them. */
+  units?: DistanceUnit;
   /**
    * `null` on a no-race read that did not ask (`describeRunning` off): telling a runner
    * from a lifter costs a log read the internal callers never need. A dated build is
@@ -406,7 +424,7 @@ function parseTargetClause(clause: string | null | undefined, raw: string | null
   const pace = cleaned.match(/(\d{1,2})[:.](\d{2})\s*(?:min)?\s*(?:\/|per)\s*(km|k|mi|mile)/);
   if (pace) {
     let perKm = Number(pace[1]) * 60 + Number(pace[2]);
-    if (pace[3].startsWith("mi")) perKm /= 1.609344;
+    if (pace[3].startsWith("mi")) perKm /= KM_PER_MI;
     if (perKm < 120 || perKm > 900) return null;
     return { sec: Math.round(perKm * distanceKm), pace_sec_per_km: perKm, raw: String(raw).trim(), kind: "pace" };
   }
@@ -463,7 +481,7 @@ const PACE_LABELS: Record<SessionPaceKey, string> = {
 };
 
 /** Per-session pace bands from a race pace, for the goal distance. */
-export function paceBandsFor(racePaceSecPerKm: number, distanceKm: number): PaceBand[] {
+export function paceBandsFor(racePaceSecPerKm: number, distanceKm: number, units: DistanceUnit = "km"): PaceBand[] {
   const offsets = offsetsFor(distanceKm);
   const band = (key: SessionPaceKey, slowOff: number, fastOff: number): PaceBand => {
     const slow = Math.round(racePaceSecPerKm + slowOff);
@@ -473,7 +491,7 @@ export function paceBandsFor(racePaceSecPerKm: number, distanceKm: number): Pace
       label: PACE_LABELS[key],
       slow_sec_per_km: slow,
       fast_sec_per_km: fast,
-      text: slow === fast ? `${fmtPace(fast)} /km` : `${fmtPace(fast)}–${fmtPace(slow)} /km`,
+      text: paceBandWords(fast, slow, units),
     };
   };
   return [
@@ -947,7 +965,7 @@ const STANDARD_DISTANCES = [
   { key: "race_predict_marathon_sec", km: 42.195 },
 ] as const;
 
-function watchPrediction(asOf: string, distanceKm: number): RacePrediction | null {
+function watchPrediction(asOf: string, distanceKm: number, units: DistanceUnit = "km"): RacePrediction | null {
   // The watch predicts four standard distances; the closest one is Riegel-adjusted
   // to the exact goal distance (a 21.1 km "half" moves by seconds, a 15 km race by
   // more — either way it is the athlete's own fitness, not a table).
@@ -987,7 +1005,7 @@ function watchPrediction(asOf: string, distanceKm: number): RacePrediction | nul
     estimate_sec: Math.round(estimate),
     estimate_pace_sec_per_km: Math.round(estimate / distanceKm),
     basis: "watch_predictor",
-    basis_detail: `your watch's ${nearest.km >= 42 ? "marathon" : nearest.km >= 21 ? "half-marathon" : `${nearest.km}k`} prediction, adjusted to ${round1(distanceKm)} km`,
+    basis_detail: `your watch's ${nearest.km >= 42 ? "marathon" : nearest.km >= 21 ? "half-marathon" : `${nearest.km}k`} prediction, adjusted to ${distanceWords(distanceKm, units)}`,
     as_of: latest.date,
     trend,
     gap_sec: null,
@@ -1027,14 +1045,7 @@ function recentRuns(asOf: string, days: number): RunRow[] {
   return out;
 }
 
-const RUN_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-/** A run's date as the athlete reads it ("Sep 20"), never the ISO key. */
-function runDateWords(iso: string): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
-  return m ? `${RUN_MONTHS[Number(m[2]) - 1] ?? m[2]} ${Number(m[3])}` : iso;
-}
-
-function runPrediction(distanceKm: number, runs: RunRow[]): RacePrediction | null {
+function runPrediction(distanceKm: number, runs: RunRow[], asOf: string, units: DistanceUnit = "km"): RacePrediction | null {
   // The fastest recent run of at least 5 km, extrapolated with Riegel. Training runs
   // are not races, so this reads conservative — it is said as such.
   const paced = runs.filter((r) => r.km >= 5 && r.min > 0);
@@ -1046,7 +1057,7 @@ function runPrediction(distanceKm: number, runs: RunRow[]): RacePrediction | nul
     estimate_sec: Math.round(estimate),
     estimate_pace_sec_per_km: Math.round(estimate / distanceKm),
     basis: "recent_run_riegel",
-    basis_detail: `your ${round1(best.km)} km run on ${runDateWords(best.date)} (${fmtPace((best.min * 60) / best.km)} /km), extended to race distance — a training run, so this reads conservative`,
+    basis_detail: `your ${distanceWords(best.km, units)} run on ${dateWords(best.date, asOf)} (${paceWords((best.min * 60) / best.km, units, { spaced: true })}), extended to race distance — a training run, so this reads conservative`,
     as_of: best.date,
     trend: null,
     gap_sec: null,
@@ -1199,15 +1210,17 @@ function ridePlacement(
 // The read
 // ---------------------------------------------------------------------------
 
+// {km} and {long} arrive already said in the athlete's run units ("31 km", "8.1 mi").
 const WHY_VARIANTS = [
-  "{weeks} weeks to {event}: this week is {km} km with a {long} km long run. {estimate}",
-  "{event} is {weeks} weeks out. The week asks for {km} km, long run {long} km. {estimate}",
-  "Building toward {event}, {weeks} weeks away — {km} km this week, {long} km long. {estimate}",
+  "{weeks} weeks to {event}: this week is {km} with a {long} long run. {estimate}",
+  "{event} is {weeks} weeks out. The week asks for {km}, long run {long}. {estimate}",
+  "Building toward {event}, {weeks} weeks away — {km} this week, {long} long. {estimate}",
 ] as const;
 
-function estimateSentence(p: RacePrediction | null, t: RaceTarget | null): string {
-  if (!p) return t ? `Target ${fmtClock(t.sec)} (${fmtPace(t.pace_sec_per_km)} /km).` : "";
-  const est = `Current shape reads about ${fmtClock(p.estimate_sec)} (${fmtPace(p.estimate_pace_sec_per_km)} /km)`;
+function estimateSentence(p: RacePrediction | null, t: RaceTarget | null, units: DistanceUnit = "km"): string {
+  const pace = (sec: number) => paceWords(sec, units, { spaced: true });
+  if (!p) return t ? `Target ${fmtClock(t.sec)} (${pace(t.pace_sec_per_km)}).` : "";
+  const est = `Current shape reads about ${fmtClock(p.estimate_sec)} (${pace(p.estimate_pace_sec_per_km)})`;
   const trend = p.trend ? `, ${p.trend.word === "steady" ? "holding steady" : `${Math.abs(Math.round(p.trend.delta_sec / 60))} min ${p.trend.word}`} over the last month` : "";
   if (!t) return `${est}${trend}.`;
   const gap = p.gap_sec ?? 0;
@@ -1234,6 +1247,8 @@ function runningWithoutRace(asOf: string, goal: ReturnType<typeof getEnduranceGo
 /** What `thisWeekRead` needs beyond the plan: the agenda's week as run, and its closure. */
 interface ThisWeekContext {
   agenda: FlexibleTrainingAgenda | null;
+  /** The athlete's run units: the week's sentences say their distances in them. */
+  units?: DistanceUnit;
   closed: CurrentWeekClosed;
   /** The biggest closed week BEFORE this one (a new high is said against it). */
   bestBeforeKm: number | null;
@@ -1255,7 +1270,8 @@ function thisWeekRead(
   const qualityRun = runs.find((r) => r.kind_label === "quality") ?? null;
   const monday = mondayOf(asOf);
   const logged = round1(logRuns.filter((r) => r.date >= monday && r.date <= asOf).reduce((s, r) => s + r.km, 0));
-  const weekRuns = raceWeekRuns(ctx.agenda);
+  const units = ctx.units ?? "km";
+  const weekRuns = raceWeekRuns(ctx.agenda, units);
   const recap = weekRecap(
     {
       logged_km: logged,
@@ -1267,7 +1283,8 @@ function thisWeekRead(
       best_before_km: ctx.bestBeforeKm,
       harmed: !!ctx.adapt?.harmed,
     },
-    asOf
+    asOf,
+    units
   );
   return {
     week_start: plan.week_start,
@@ -1275,7 +1292,7 @@ function thisWeekRead(
     long_km: longRun?.target_distance_km != null ? Number(longRun.target_distance_km) : null,
     logged_km: logged,
     quality: qualityRun ? { label: qualityRun.label || plan.quality_focus || "Quality run", pace: qualityPace } : null,
-    why: plan.why,
+    why: (units === "mi" ? plan.why_mi : null) || plan.why,
     closed: ctx.closed.closed,
     closed_reason: ctx.closed.reason,
     runs: weekRuns,
@@ -1287,11 +1304,12 @@ function thisWeekRead(
 const RUN_WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] as const;
 
 /** What this morning made of the run a slot planned, in words (km); null when nothing. */
-function adjustmentWords(intent: FlexibleRunIntent): string | null {
+function adjustmentWords(intent: FlexibleRunIntent, units: DistanceUnit = "km"): string | null {
   const adj = intent.adjustment;
   if (!adj?.changed) return null;
   if (adj.dose === "rest") return "turned to a rest day this morning";
-  if (adj.dose === "shortened" && adj.target_distance_km != null) return `shortened to ${kmText(adj.target_distance_km)} this morning`;
+  if (adj.dose === "shortened" && adj.target_distance_km != null)
+    return `shortened to ${kmText(adj.target_distance_km, units)} this morning`;
   if (adj.kind === "easy" && adj.planned_kind !== "easy") return "eased to an easy run this morning";
   if (adj.kind === "quality" && adj.planned_kind !== "quality") return "opened to a quality run this morning";
   return null;
@@ -1299,12 +1317,13 @@ function adjustmentWords(intent: FlexibleRunIntent): string | null {
 
 /** "13.5 km · 6:11/km · easy" — the run as run, in km. */
 export function actualRunLine(
-  run: Pick<RunCompletionEvidence, "distance_km" | "duration_min" | "pace_sec_per_km" | "intensity_word">
+  run: Pick<RunCompletionEvidence, "distance_km" | "duration_min" | "pace_sec_per_km" | "intensity_word">,
+  units: DistanceUnit = "km"
 ): string {
   const bits: string[] = [];
-  if (run.distance_km != null) bits.push(kmText(run.distance_km));
+  if (run.distance_km != null) bits.push(kmText(run.distance_km, units));
   else if (run.duration_min != null) bits.push(`${Math.round(run.duration_min)} min`);
-  if (run.pace_sec_per_km != null && run.pace_sec_per_km > 0) bits.push(`${fmtPace(run.pace_sec_per_km)}/km`);
+  if (run.pace_sec_per_km != null && run.pace_sec_per_km > 0) bits.push(paceWords(run.pace_sec_per_km, units));
   bits.push(run.intensity_word);
   return bits.join(" · ");
 }
@@ -1315,7 +1334,7 @@ const EXTRA_RUN_LINE = "An extra run, beyond the week's plan.";
  * Every run logged this week from the agenda — the runs that answered a planned slot and
  * the extras that answered none — in date order, actual first.
  */
-export function raceWeekRuns(agenda: FlexibleTrainingAgenda | null | undefined): RaceWeekRun[] {
+export function raceWeekRuns(agenda: FlexibleTrainingAgenda | null | undefined, units: DistanceUnit = "km"): RaceWeekRun[] {
   if (!agenda?.available) return [];
   const out: RaceWeekRun[] = [];
   const toRun = (c: RunCompletionEvidence, intent: FlexibleRunIntent | null): RaceWeekRun => {
@@ -1344,9 +1363,9 @@ export function raceWeekRuns(agenda: FlexibleTrainingAgenda | null | undefined):
               km: intent.planned_distance_km ?? null,
             }
           : null,
-      adjustment: intent ? adjustmentWords(intent) : null,
-      actual_line: actualRunLine({ ...c, intensity_word: word }),
-      plan_line: intent ? plannedRunLine(intent) : EXTRA_RUN_LINE,
+      adjustment: intent ? adjustmentWords(intent, units) : null,
+      actual_line: actualRunLine({ ...c, intensity_word: word }, units),
+      plan_line: intent ? plannedRunLine(intent, units) : EXTRA_RUN_LINE,
     };
   };
   for (const intent of agenda.intents ?? []) {
@@ -1388,7 +1407,12 @@ export interface WeekRecapInput {
 }
 
 /** The week in two lines (see above). Null with no run logged. */
-export function weekRecap(input: WeekRecapInput, date: string): { headline: string; detail: string } | null {
+export function weekRecap(
+  input: WeekRecapInput,
+  date: string,
+  units: DistanceUnit = "km"
+): { headline: string; detail: string } | null {
+  const kmText = (km: number) => distanceWords(km, units);
   const n = input.runs.length;
   if (!n || !(input.logged_km > 0)) return null;
   const planned = input.planned_km != null && input.planned_km > 0 ? input.planned_km : null;
@@ -1460,9 +1484,12 @@ export function raceBuild(
     describeRunning?: boolean;
     /** The rolling agenda the caller already holds (read here off the live week otherwise). */
     agenda?: FlexibleTrainingAgenda | null;
+    /** The units the sentences speak (default: the athlete's, athleteUnits()). */
+    units?: DistanceUnit;
   }
 ): RaceBuild {
   const asOf = date || localDateISO();
+  const units: DistanceUnit = opts?.units ?? athleteUnits().distance;
   const goal = getEnduranceGoal(asOf);
   // The week as RUN: the agenda grades and matches every logged run (extras included),
   // off the live week with this morning's call on it, so a completed slot can say what
@@ -1477,6 +1504,7 @@ export function raceBuild(
     const out: RaceBuild = {
       available: false,
       as_of: asOf,
+      units,
       running,
       race: null,
       prediction: null,
@@ -1499,7 +1527,7 @@ export function raceBuild(
     const closed = safe(() => currentWeekClosedEarly(asOf, { agenda })) ?? NOT_CLOSED;
     return {
       ...out,
-      this_week: thisWeekRead(plan, asOf, logRuns, null, { agenda, closed, bestBeforeKm: null, adapt: null }),
+      this_week: thisWeekRead(plan, asOf, logRuns, null, { agenda, closed, bestBeforeKm: null, adapt: null, units }),
       review: weeklyReview(asOf, logRuns, closed.closed),
     };
   };
@@ -1525,7 +1553,7 @@ export function raceBuild(
   const logRuns = recentRuns(asOf, 42);
   const target = parseRaceTarget(goal.target, distance);
   const stretchTarget = parseRaceStretch(goal.target, distance);
-  let prediction = watchPrediction(asOf, distance) ?? runPrediction(distance, logRuns);
+  let prediction = watchPrediction(asOf, distance, units) ?? runPrediction(distance, logRuns, asOf, units);
   if (prediction && target) {
     prediction = { ...prediction, gap_sec: prediction.estimate_sec - target.sec, fit: raceFit(prediction.estimate_sec, target.sec) };
   }
@@ -1544,8 +1572,8 @@ export function raceBuild(
           anchored_on: (target && trainingPace === target.pace_sec_per_km ? "target" : "estimate") as "target" | "estimate",
           race_pace_sec_per_km: Math.round(racePace),
           bands: [
-            ...paceBandsFor(racePace, distance).filter((b) => b.key === "race"),
-            ...paceBandsFor(trainingPace, distance)
+            ...paceBandsFor(racePace, distance, units).filter((b) => b.key === "race"),
+            ...paceBandsFor(trainingPace, distance, units)
               .filter((b) => b.key !== "race")
               .map((b) => (b.key === "easy" || b.key === "long" ? { ...b, hr_ceiling_bpm: hrCeiling } : b)),
           ],
@@ -1633,8 +1661,13 @@ export function raceBuild(
   // A ring with nothing on it (no run placed, nothing lifted, no ride) is no map: it
   // goes out empty rather than as seven blank columns.
   if (!leg_map.some((d) => d.run || d.strength || d.ride)) leg_map.length = 0;
-  // Every rung speaks to the same ring: how lifting and running fit, week by week.
-  for (const week of weeks) week.with_lifting = liftingLine(week, leg_map, strengthLead);
+  // Every rung speaks to the same ring: how lifting and running fit, week by week — and
+  // carries the ONE stage word every surface names that week with.
+  for (const week of weeks) {
+    week.with_lifting = liftingLine(week, leg_map, strengthLead);
+    const stage = stageKeyOf(week.kind, week.phase);
+    if (stage) week.stage_word = STAGE_WEEK_WORD[stage];
+  }
 
   // ---- strength placement ----
   const layout =
@@ -1669,18 +1702,19 @@ export function raceBuild(
     clean: layout ? layout.clean : true,
   };
 
-  const event = goal.event || `your ${round1(distance)} km race`;
+  const event = goal.event || `your ${distanceWords(distance, units)} race`;
   const why = pickDayVariant(WHY_VARIANTS, asOf, "race-build:why")
     .replace("{weeks}", String(weeksToRace))
     .replace("{event}", event)
-    .replace("{km}", String(Math.round(weekKm || review.weeks.at(-1)?.km || 0)))
-    .replace("{long}", String(longKm != null ? round1(longKm) : round1(weeks[0]?.long_km ?? 0)))
-    .replace("{estimate}", estimateSentence(prediction, target))
+    .replace("{km}", distanceWords(weekKm || review.weeks.at(-1)?.km || 0, units, { whole: true }))
+    .replace("{long}", distanceWords(longKm != null ? longKm : (weeks[0]?.long_km ?? 0), units))
+    .replace("{estimate}", estimateSentence(prediction, target, units))
     .trim();
 
   return {
     available: true,
     as_of: asOf,
+    units,
     running: "race",
     race: {
       event: goal.event ?? null,
@@ -1697,7 +1731,7 @@ export function raceBuild(
     },
     prediction,
     paces,
-    this_week: thisWeekRead(plan, asOf, logRuns, qualityPace, { agenda, closed: closedRead, bestBeforeKm, adapt }),
+    this_week: thisWeekRead(plan, asOf, logRuns, qualityPace, { agenda, closed: closedRead, bestBeforeKm, adapt, units }),
     weeks,
     leg_map,
     strength,
@@ -1708,11 +1742,11 @@ export function raceBuild(
           floor_week_start: shownCapacity.floor_week_start,
           best_week_km: shownCapacity.best_week_km,
           set_aside: shownCapacity.set_aside.map((w) => ({ week_start: w.week_start, km: w.km, kind: w.harm.kind })),
-          note: capacitySetAsideLine(shownCapacity, asOf),
+          note: capacitySetAsideLine(shownCapacity, asOf, units),
         }
       : null,
     review,
-    adapted: adaptedLine(adapt, asOf),
+    adapted: adaptedLine(adapt, asOf, units),
     why,
     reason: null,
   };
@@ -1877,8 +1911,9 @@ const ADAPTED_REREAD: ReadonlyArray<(logged: string, planned: string) => string>
  * the week is still open, or closed close to its plan. Every claim is one the ladder
  * draws: next week's figure is the engine's own rung. In km; a suggestion, never a verdict.
  */
-export function adaptedLine(adapt: RaceLadderAdapt | null | undefined, date: string): string {
+export function adaptedLine(adapt: RaceLadderAdapt | null | undefined, date: string, units: DistanceUnit = "km"): string {
   if (!adapt?.closed) return "";
+  const kmText = (km: number) => distanceWords(km, units);
   const logged = kmText(adapt.logged_km);
   const planned = adapt.planned_km != null ? kmText(adapt.planned_km) : null;
   if (adapt.harmed && adapt.next_km != null && adapt.next_km > 0 && adapt.next_km <= adapt.logged_km + 0.05) {
@@ -1890,9 +1925,8 @@ export function adaptedLine(adapt: RaceLadderAdapt | null | undefined, date: str
   return pickDayVariant(ADAPTED_REREAD, date, "race-build:adapted:reread")(logged, planned);
 }
 
-function kmText(km: number): string {
-  const r = round1(km);
-  return `${Number.isInteger(r) ? r : r.toFixed(1)} km`;
+function kmText(km: number, units: DistanceUnit = "km"): string {
+  return distanceWords(km, units);
 }
 
 // The engine's race-feasibility sentence reads the same walk (race-ladder-hook.ts).

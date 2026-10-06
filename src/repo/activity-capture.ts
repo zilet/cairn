@@ -10,6 +10,7 @@
 // duration or a distance) stays an activity, and a reroute needs the WHOLE text to
 // be the reading — never a number fished out of a sentence about something else.
 
+import { kmFromMiles, lbFromKg } from "./display-words.js";
 export interface ParsedActivityText {
   type: string;
   duration_min: number | null;
@@ -41,7 +42,7 @@ export function parseActivity(text: string): ParsedActivityText {
   const km = t.match(/(\d+(?:\.\d+)?)\s*(?:km|k\b)/);
   const mi = t.match(/(\d+(?:\.\d+)?)\s*(?:mi|mile|miles)\b/); // \b so "min" isn't read as miles
   if (km) distance_km = parseFloat(km[1]);
-  else if (mi) distance_km = +(parseFloat(mi[1]) * 1.60934).toFixed(2);
+  else if (mi) distance_km = kmFromMiles(parseFloat(mi[1]));
 
   let pace: string | null = null;
   const pc = t.match(/(\d+:\d{2})\s*(?:\/|per)\s*km/);
@@ -70,7 +71,6 @@ const WEIGHT_MAX_LB = 700;
 const BARE_NUMBER_REFERENCE_TOLERANCE = 0.15;
 const BARE_NUMBER_MIN_LB = 80;
 const BARE_NUMBER_MAX_LB = 450;
-const KG_TO_LB = 2.20462;
 
 // Cuff-plausible ranges (narrower than the repo's clamps, which exist to store
 // whatever a device reports; this decides whether a slash pair IS a reading).
@@ -239,7 +239,7 @@ function readWeight(text: string, namedWeight: boolean, referenceWeightLb: numbe
   for (const match of text.matchAll(WEIGHT_NUMBER)) {
     const value = Number(match[1]);
     const unit = match[2] ? match[2].toLowerCase() : null;
-    const lb = unit && unit.startsWith("k") ? value * KG_TO_LB : value;
+    const lb = unit && unit.startsWith("k") ? lbFromKg(value) : value;
     if (!Number.isFinite(lb) || lb < WEIGHT_MIN_LB || lb > WEIGHT_MAX_LB) continue;
     candidates.push({ lb: Math.round(lb * 10) / 10, unit });
   }

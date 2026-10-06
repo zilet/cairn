@@ -84,6 +84,7 @@ function load(globals = {}) {
     [
       "html-utils",
       "date-utils",
+      "ui-format",
       "ui-components",
       "ui-actions-client",
       "packet-builder-model",

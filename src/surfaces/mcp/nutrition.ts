@@ -17,6 +17,7 @@ import {
   USER_TARGET_MIN_KCAL,
 } from "../../domain/nutrition/index.js";
 import { goalPace } from "../../repo/goal-pace.js";
+import { weightTrendRead } from "../../repo/weight-trend.js";
 import { carbBasis, dayFuelDemand } from "../../repo/fuel-demand.js";
 import { setFuelingFeedback } from "../../repo/fueling.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
@@ -100,9 +101,9 @@ export function registerNutritionTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_goal_pace",
-    "The goal-pace series behind the motivational weight-progress chart: { points:[{date,weight_lb}] (canonical weigh-ins, manual beats Garmin), trend:{lb_wk, line:[{date,weight_lb},{date,weight_lb}]|null} (unweighted least-squares slope over the most recent ≤21 days, projected ~28 days out; null under 2 points or a <3-day span), needed:{lb_wk, line:[…]|null} (the straight line from today's weight to goal_weight_lb by goal_date; null with no goal, a past date, or no current weight), goal:{weight_lb,date}, window_days }. Read-only, null-safe. ?days clamps to 14–365 (default 90).",
+    "The goal-pace series behind the motivational weight-progress chart: { points:[{date,weight_lb}] (canonical weigh-ins, manual beats Garmin), trend:{lb_wk, line:[{date,weight_lb},{date,weight_lb}]|null} (unweighted least-squares slope over the most recent ≤21 days, projected ~28 days out; null under 2 points or a <3-day span), needed:{lb_wk, line:[…]|null} (the straight line from today's weight to goal_weight_lb by goal_date; null with no goal, a past date, or no current weight), goal:{weight_lb,date}, window_days, read }. `read` is the ONE weight-trend read every surface prints: { rate_lb_wk, needed_lb_wk (each rounded once to a tenth), rate_words / needed_words in the athlete's weight unit, verdict on_pace|ahead|behind|steady, line, week_change }. Read-only, null-safe. ?days clamps to 14–365 (default 90).",
     { days: z.number().int().optional().describe("trailing window of weigh-ins to read (default 90, clamped 14–365)") },
-    async ({ days }) => asText(goalPace(days ?? 90))
+    async ({ days }) => asText({ ...goalPace(days ?? 90), read: weightTrendRead() })
   );
 
   server.tool(

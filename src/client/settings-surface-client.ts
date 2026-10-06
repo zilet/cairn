@@ -53,7 +53,7 @@ type AppleHealthUiState = {
 type SettingsAutomationSliceOptions = {
   workingModel: Pick<
     SettingsScreenWorkingModel,
-    "enrich_enabled" | "art_enabled" | "research_enabled" | "meal_plan_auto_draft" | "lead_mode"
+    "enrich_enabled" | "art_enabled" | "research_enabled" | "meal_plan_auto_draft" | "lead_mode" | "run_units" | "weight_units"
   >;
   settings: Record<string, unknown>;
   artSpendHtml: string;
@@ -146,6 +146,9 @@ function settingsWorkingModel(data: SettingsScreenData): SettingsScreenWorkingMo
     lead_mode: ["lead", "announce_first", "review_everything"].includes(settingsSurfaceString(s.lead_mode))
       ? (settingsSurfaceString(s.lead_mode) as SettingsScreenWorkingModel["lead_mode"])
       : "lead",
+    // Units: Settings is their only writer (every surface reads them through CairnFmt).
+    run_units: runUnits(s.run_units),
+    weight_units: s.weight_units === "kg" ? "kg" : "lb",
     // No training_drive here on purpose: the drive is written only through the stance door
     // (PUT /api/training-drive, settings-drive-controller.ts), never by the save bar, so a
     // stale screen can never re-send a drive and end — or fake — a dated push.
@@ -190,7 +193,7 @@ function settingsArtSpendCardHtml(stats: unknown): string {
   };
   const recent = settingsSurfaceRecord(artStats.since_enabled);
   const all = settingsSurfaceRecord(artStats.all_time);
-  const since = artStats.enabled_at ? `since ${escHtml(String(artStats.enabled_at).slice(0, 10))}` : "all-time";
+  const since = artStats.enabled_at ? `since ${escHtml(CairnFmt.date(String(artStats.enabled_at).slice(0, 10)))}` : "all-time";
   return `
     <div class="sess" style="margin-top:10px">
       <div class="sess-line"><b>${money(recent.est_cost_usd)}</b> est. spend ${since} · ${recent.images_generated} image${recent.images_generated === 1 ? "" : "s"} generated · ${recent.reused} reused (~${money(recent.est_saved_usd)} saved)</div>
@@ -373,7 +376,20 @@ function settingsAutomationSliceHtml(options: SettingsAutomationSliceOptions): s
       <section class="set-group set-group--flush">
         <p class="set-group-sub">Background touches that make logging effortless. Everything falls back gracefully when off.</p>
 
-        <h1 class="lbl" style="margin:14px 0 8px">How much should Cairn lead?</h1>
+        <h1 class="lbl" style="margin:14px 0 8px">Units</h1>
+        <div class="field"><label for="runUnits">Distance and pace</label>
+          <select id="runUnits">
+            <option value="km" ${wm.run_units === "km" ? "selected" : ""}>Kilometres</option>
+            <option value="mi" ${wm.run_units === "mi" ? "selected" : ""}>Miles</option>
+          </select></div>
+        <div class="field"><label for="weightUnits">Weight</label>
+          <select id="weightUnits">
+            <option value="lb" ${wm.weight_units === "lb" ? "selected" : ""}>Pounds</option>
+            <option value="kg" ${wm.weight_units === "kg" ? "selected" : ""}>Kilograms</option>
+          </select></div>
+        <div class="sess-line" style="color:var(--muted);margin-top:6px">Every surface and every sentence follows these. Your data stays as recorded; only the words change.</div>
+
+        <h1 class="lbl" style="margin:22px 0 8px">How much should Cairn lead?</h1>
         <div class="field">
           <select id="leadMode" aria-label="How much should Cairn lead?">
             <option value="lead" ${wm.lead_mode === "lead" ? "selected" : ""}>Lead</option>

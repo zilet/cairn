@@ -21,11 +21,13 @@ function loadRunPlan() {
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/format-utils.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
   // The lead sentence and the calibration line rotate through the shared
   // pickDayVariant, so the real rotation has to be in scope. date-utils also
   // defines absDate/humanDate, which the assertions below want stubbed — restore
   // the stubs after loading it (the render functions resolve them at call time).
   vm.runInNewContext(readFileSync(join(root, "public/js/date-utils.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
   Object.assign(context, {
     absDate: (date) => `ABS:${date}`,
     humanDate: (date) => `HUMAN:${date}`,

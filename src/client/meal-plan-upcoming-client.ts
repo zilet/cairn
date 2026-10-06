@@ -14,8 +14,7 @@ function scheduledMealPlan(plan: unknown): MealRecord | null {
 function mealBoundaryLabel(value: unknown): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ""));
   if (!m) return "at the next food-day boundary";
-  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-  return d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
+  return CairnFmt.date(String(value), { fmt: { weekday: "long", month: "short", day: "numeric" } });
 }
 
 function mealTargetValue(value: unknown): number | null {

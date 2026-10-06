@@ -23,6 +23,7 @@ function loadLifeClient() {
   // through; load it first (as the browser does), then pin the day so the rotation
   // is deterministic here.
   vm.runInNewContext(readFileSync(join(root, "public/js/date-utils.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
   context.localISO = () => "2026-06-30";
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/life-client.js"), "utf8"), context);

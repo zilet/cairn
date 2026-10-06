@@ -38,7 +38,7 @@ function calMonthHtml(ym: string, byDate: Map<string, CalendarCell>, todayIso: s
   const [year, month] = ym.split("-").map(Number);
   const firstDow = new Date(year, month - 1, 1).getDay();
   const daysIn = new Date(year, month, 0).getDate();
-  const monthName = new Date(year, month - 1, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  const monthName = CairnFmt.date(`${ym}-01`, { fmt: { month: "long", year: "numeric" } });
   const dows = ["S", "M", "T", "W", "T", "F", "S"];
   let cellsHtml = "";
   for (let i = 0; i < firstDow; i++) cellsHtml += `<span class="cal-day cal-pad"></span>`;

@@ -43,6 +43,7 @@ function loadTodayLately() {
   // date-utils publishes pickDayVariant, which the export receipt rotates through.
   // It also publishes the real relTime/humanDate; the fixture's stubs win, as before.
   vm.runInNewContext(readFileSync(join(root, "public/js/date-utils.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
   context.relTime = (iso) => `rel:${iso}`;
   context.humanDate = (iso) => `human:${iso}`;
   vm.runInNewContext(readFileSync(join(root, "public/js/today-lately-client.js"), "utf8"), context);

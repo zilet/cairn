@@ -39,6 +39,8 @@ type SettingsScreenWorkingModel = {
   time_zone: string;
   update_check_enabled: boolean;
   lead_mode: "lead" | "announce_first" | "review_everything";
+  run_units: "km" | "mi";
+  weight_units: "lb" | "kg";
 };
 
 type SettingsScreenPersistBody = {
@@ -58,6 +60,8 @@ type SettingsScreenPersistBody = {
   chat_profile_bindings: Record<string, Record<string, Record<string, unknown>>>;
   update_check_enabled: boolean;
   lead_mode: "lead" | "announce_first" | "review_everything";
+  run_units: "km" | "mi";
+  weight_units: "lb" | "kg";
   gemini_api_key?: string;
   garmin_password?: string;
 };

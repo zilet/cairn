@@ -26,6 +26,7 @@ function loadHealthClient() {
     stagger: (i) => `--i:${Math.min(i ?? 0, 12)}`,
   };
   context.window = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/ui-components.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/ui-chart.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/health-evidence-client.js"), "utf8"), context);

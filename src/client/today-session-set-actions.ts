@@ -114,7 +114,7 @@ type TodaySessionSetActionsApi = {
       }
     });
     const isToday = deps.state.logDate === deps.localISO();
-    stat.textContent = `${sets} sets · ${Math.round(tonnage).toLocaleString()} lb ${isToday ? "logged today" : "on " + deps.state.logDate}`;
+    stat.textContent = `${sets} sets · ${Math.round(tonnage).toLocaleString()} lb ${isToday ? "logged today" : "on " + CairnFmt.date(deps.state.logDate)}`;
     return false;
   }
 

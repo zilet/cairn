@@ -22,7 +22,8 @@ import { isoDow, WEEKDAY_NAMES } from "../../repo/profile.js";
 import { raceBuild } from "../../repo/race-build.js";
 import { activeRecoveryWeek, recoveryWeekStatus } from "../../repo/recovery-week.js";
 import { RUN_KIND_LABELS } from "../../repo/run-edit.js";
-import { getSettings } from "../../repo/settings.js";
+import { athleteUnits } from "../../repo/settings.js";
+import { rungStage } from "../../repo/week-stage.js";
 import { localDateISO } from "../../repo/shared.js";
 import { todayStrengthLine, type TodayStrengthLine } from "../../repo/today-strength-line.js";
 import { planWeek, type PlanWeek, type PlanWeekDay } from "./plan-week.js";
@@ -195,13 +196,6 @@ function dayOf(day: PlanWeekDay, today: string, items: Map<number, PlanDayItems>
   return { date, weekday: shortWeekday(date), today: isToday, lift, run, rest: !lift && !run, hard: !!day.hard };
 }
 
-const RACE_WEEK_WORD: Record<string, string> = {
-  build: "Build week",
-  down: "Lighter week",
-  peak: "Peak week",
-  taper: "Taper week",
-  race: "Race week",
-};
 
 // A note that only restates its tag ("Lighter week" · "A lighter week") says nothing.
 function distinctNote(word: string, note: string): string | null {
@@ -221,8 +215,10 @@ function weekMarkers(
 
   // The race build's rung for this week, its own short words beside it.
   const rung = race?.available ? (race.weeks ?? []).find((w) => w.week_start === weekStart) : null;
-  if (rung && RACE_WEEK_WORD[rung.kind]) {
-    const word = RACE_WEEK_WORD[rung.kind];
+  // The week's name is the ONE stage word (stage-words.ts), as a week tag.
+  const stage = rungStage(rung);
+  if (rung && stage) {
+    const word = stage.week_word;
     out.push({ kind: "race_build", word, note: distinctNote(word, text(rung.focus_short)) });
   }
 
@@ -267,7 +263,7 @@ function ringOrder(week: PlanWeek, items: Map<number, PlanDayItems>): PlanLookAh
 
 export function planLookAhead(date?: string): PlanLookAhead {
   const today = String(date || localDateISO()).slice(0, 10);
-  const runUnits: "km" | "mi" = safe(() => (getSettings().run_units === "mi" ? "mi" : "km"), "km");
+  const runUnits = athleteUnits().distance;
   const thisWeek = safe(() => planWeek(today), null);
   const strengthLine = thisWeek?.strength_line ?? safe(() => todayStrengthLine(today), null);
   const items = planDayItems();

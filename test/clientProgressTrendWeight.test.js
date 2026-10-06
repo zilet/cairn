@@ -51,6 +51,7 @@ function loadTrendWeight(overrides = {}) {
   if (!overrides.cachedApi) context.cachedApi = (path) => context.api(path);
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/date-utils.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/ui-components.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/ui-chart.js"), "utf8"), context);

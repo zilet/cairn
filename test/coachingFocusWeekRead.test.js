@@ -86,7 +86,9 @@ test("live shape: evidence is values and directions; changed_since is dated", ()
   assert.ok(kinds.includes("run_volume"));
   for (const change of out.changed_since) assert.ok(change.since, `${change.kind} names its comparison date`);
   const weight = out.changed_since.find((c) => c.kind === "weight");
-  assert.match(weight.text, /1\.0 lb lower than the week before/);
+  // Said through the one formatter (display-words.ts): no trailing ".0".
+  assert.match(weight.text, /\b1 lb lower than the week before/);
+  for (const change of out.changed_since) assert.ok(change.since_words, `${change.kind} says its window in words`);
   // The change is the "What moved" strip's to say, right under the headline — never both.
   assert.ok(out.changed_since.some((c) => /Half marathon estimate 9 min faster since Sep 8/.test(c.text)));
   assert.doesNotMatch(out.headline, /estimate 9 min faster/);

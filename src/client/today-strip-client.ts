@@ -168,11 +168,7 @@
   }
 
   /** A distance's number in the athlete's run units ("6.1"); "" for nothing. */
-  function dist(km: number, units: string | undefined): string {
-    if (!(km > 0)) return "";
-    const r = Math.round((units === "mi" ? km / 1.609344 : km) * 10) / 10;
-    return Number.isInteger(r) ? String(r) : r.toFixed(1);
-  }
+  const dist = (km: number, units: string | undefined): string => (km > 0 ? CairnFmt.distance(km, units ?? "km", true) : "");
 
   /**
    * The week so far in one header line, from the server's own counts: lifting days in

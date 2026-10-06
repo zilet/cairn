@@ -614,16 +614,75 @@ test("no stance and nothing hard on record: the live week holds a lower dose and
   assert.ok(!sq.authoritative);
 });
 
-test("the stance is open but yesterday carried harm: the evidence holds stand", () => {
+// A session rated well under par is harm evidence on its day (harmEvidenceOnDay).
+function harmOn(date) {
+  db.prepare(`INSERT INTO sessions (date, performance, finished_at) VALUES (?, 1, datetime('now'))`).run(date);
+}
+const TUESDAY = "2026-04-21";
+const WEDNESDAY = "2026-04-22";
+
+test("the stance is open but the day before the quality day carried harm: the evidence holds stand", () => {
   milos();
   seedRunner();
   openStance();
-  // A session rated well under par yesterday is harm evidence (harmEvidenceOnDay).
-  db.prepare(`INSERT INTO sessions (date, performance, finished_at) VALUES (?, 1, datetime('now'))`).run(before(1));
+  harmOn(WEDNESDAY);
+  for (const asOf of [MONDAY, THURSDAY]) {
+    const sq = qualityRun(weeklyRunPlan(asOf, LIVE)).stated_quality;
+    assert.ok(sq.work_km < 5, `${asOf}: held, got ${sq.work_km}`);
+    assert.ok(sq.held?.line);
+    assert.ok(!sq.authoritative, `${asOf}: Wednesday's harm sits in Thursday's own window`);
+  }
+});
+
+// The authority is read at the QUALITY DAY's own date (2026-10-07 diagnosis): a harm day
+// the previous Saturday held Thursday's session on a Monday or Tuesday read and released
+// it from Wednesday, with nothing new logged — the week's prescription changed with the
+// morning it was read on.
+test("a harm day outside Thursday's own window gives every morning of the week the same Thursday", () => {
+  milos();
+  seedRunner();
+  openStance();
+  harmOn(before(2)); // the Saturday before the week
+  const reads = [MONDAY, TUESDAY, WEDNESDAY].map((asOf) => qualityRun(weeklyRunPlan(asOf, LIVE)));
+  for (const [i, q] of reads.entries()) {
+    assertFull(q, `as of ${[MONDAY, TUESDAY, WEDNESDAY][i]}`);
+    assert.equal(q.stated_quality.authoritative, true);
+  }
+  assert.deepEqual(
+    reads.map((q) => q.stated_quality),
+    [reads[0].stated_quality, reads[0].stated_quality, reads[0].stated_quality],
+    "one Thursday, whatever the morning"
+  );
+});
+
+test("the same Saturday harm still holds a quality day whose own window holds it", () => {
+  // Quality on Tuesday: its three days before are Saturday, Sunday and Monday.
+  repo.setProfile({
+    age: 40,
+    sex: "male",
+    primary_discipline: "hybrid",
+    endurance_sport: "running",
+    training_intent: {
+      priorities: ["longevity", "muscle", "strength", "leanness", "endurance"],
+      endurance_role: "supporting",
+    },
+    endurance_goal: { mode: "race", event: "City Half", date: RACE, distance_km: 21.1, target: "1:55" },
+    endurance_schedule: {
+      days: [
+        { dow: 0, kind: "long" },
+        { dow: 2, kind: "quality" },
+        { dow: 4, kind: "easy" },
+      ],
+      quality: THRESHOLD_5K,
+      source: "athlete",
+    },
+  });
+  seedRunner();
+  openStance();
+  harmOn(before(2));
   const sq = qualityRun(weeklyRunPlan(MONDAY, LIVE)).stated_quality;
+  assert.ok(!sq.authoritative, "Saturday sits in Tuesday's window");
   assert.ok(sq.work_km < 5, `held, got ${sq.work_km}`);
-  assert.ok(sq.held?.line);
-  assert.ok(!sq.authoritative);
 });
 
 test("the taper keeps its smaller dose even with the stance open, and says so", () => {

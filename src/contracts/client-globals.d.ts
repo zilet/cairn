@@ -847,6 +847,8 @@ declare global {
       | "meal_plan_auto_draft"
       | "gemini_api_key"
       | "lead_mode"
+      | "run_units"
+      | "weight_units"
     >;
     settings: Record<string, unknown>;
     data: SettingsScreenData;
@@ -1281,10 +1283,8 @@ declare global {
   declare function relTime(iso: string): string;
   declare function relAge(iso: string): string;
   declare function absDate(iso: string): string;
-  declare function shortDate(iso: string): string;
+  declare function shortDate(iso: string, opts?: { year?: boolean | "always"; today?: string }): string;
   declare function humanDate(iso: string): string;
-  declare function humanizeReviewText(text: string, latestISO: string | null | undefined): string;
-  declare function latestReviewDate(parsed: unknown): string | null;
   declare function learnedTimelineHtml(data: ClientLearnedTimeline | null | undefined): string;
   declare function checkupHtml(data: ClientNextCheckup | null | undefined): string;
   declare function foodNum(value: unknown): number | null;
@@ -1296,7 +1296,20 @@ declare global {
   declare function fmtKm(km: unknown): string;
   declare function runUnits(value: unknown): "km" | "mi";
   declare function fmtRunUnitSuffix(units?: unknown): string;
-  declare function fmtDist(km: unknown, units?: unknown): string;
+  declare function fmtDist(km: unknown, units?: unknown, bare?: boolean): string;
+  declare function fmtLb(lb: unknown, units?: unknown, bare?: boolean): string;
+  declare const CairnFmt: {
+    units(): { distance: "km" | "mi"; weight: "lb" | "kg" };
+    ready(): Promise<{ distance: "km" | "mi"; weight: "lb" | "kg" }>;
+    set(settings: { run_units?: unknown; weight_units?: unknown } | null | undefined): { distance: "km" | "mi"; weight: "lb" | "kg" };
+    distance(km: unknown, units?: unknown, bare?: boolean): string;
+    toUnit(km: unknown, units?: unknown): number;
+    pace(secPerKm: unknown, units?: unknown): string;
+    weight(lb: unknown, units?: unknown, bare?: boolean): string;
+    date(iso: unknown, o?: { style?: "short" | "long" | "label" | "ago" | "age"; year?: boolean | "always"; today?: string; fmt?: Intl.DateTimeFormatOptions; utc?: boolean }): string;
+    relDay(iso: unknown, today: unknown): string;
+    daysBetween(later: unknown, earlier: unknown): number;
+  };
   declare function fmtPaceFromSecPerKm(secPerKm: unknown, units?: unknown): string;
   declare function fmtPaceBand(
     band: { slow_sec_per_km?: unknown; fast_sec_per_km?: unknown; text?: unknown } | null | undefined,
@@ -3966,6 +3979,8 @@ declare global {
           | "research_enabled"
           | "meal_plan_auto_draft"
           | "lead_mode"
+          | "run_units"
+          | "weight_units"
         >;
         settings: Record<string, unknown>;
         artSpendHtml: string;
@@ -4894,7 +4909,7 @@ declare global {
       runLineHtml(
         agenda: unknown,
         options: { date: string; units?: "km" | "mi"; syncLine?: string },
-        deps: { escapeHtml(value: unknown): string; formatDistance?(km: unknown, units?: unknown): string }
+        deps: { escapeHtml(value: unknown): string }
       ): string;
     };
 
@@ -6745,7 +6760,6 @@ declare global {
       /** "9.7 of 19.5 km", or the week's volume alone before anything is run; never a zero. */
       volumeFigureHtml(week: ClientRaceThisWeek | null | undefined, cls: string): string;
       liftingHtml(lines: ClientRaceLiftingLine[]): string;
-      unitsHtml(units: "km" | "mi"): string;
       skeletonHtml(): string;
       emptyHtml(reason?: unknown): string;
       errorHtml(): string;
@@ -6921,7 +6935,6 @@ declare global {
     hrefFor?(target: ClientHorizonTarget): string | null;
     reducedMotion?(): boolean;
     /** Save the athlete's run units (settings.run_units); the controller repaints on its own. */
-    saveUnits?(units: "km" | "mi"): Promise<unknown>;
   };
   interface Window {
     CairnHorizonModel: {

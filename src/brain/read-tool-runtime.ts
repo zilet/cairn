@@ -22,7 +22,7 @@ import {
   paceFromSpeed,
   structureNote,
 } from "../repo/run-structure.js";
-import { getSettings } from "../repo/settings.js";
+import { athleteUnits } from "../repo/settings.js";
 import {
   COACH_READ_TOOL_CATALOG,
   normalizeCoachReadToolRequest,
@@ -724,7 +724,7 @@ function readCurrentPlanDetail(request: Extract<CoachReadToolRequest, { tool: "r
 
 function trainingUnits(): "km" | "mi" {
   try {
-    return getSettings().run_units === "mi" ? "mi" : "km";
+    return athleteUnits().distance;
   } catch {
     return "km";
   }

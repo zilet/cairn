@@ -15,6 +15,7 @@ const MODULES = [
   "ui-actions-client",
   "ui-chart",
   "format-utils",
+  "ui-format",
   "race-week-model",
   "race-week-runs-model",
   "race-ladder-model",
@@ -252,7 +253,7 @@ test("run volume and paces both follow the athlete's run units", () => {
   assert.equal(host.querySelector(".race-week-num").textContent, "11.2 mi · plan 19.9");
   assert.equal(host.querySelector(".race-week-long").textContent, "Long run 8.1 mi");
   assert.doesNotMatch(host.querySelector(".race-week").textContent, /\bkm\b/);
-  assert.equal(host.querySelector("[data-run-units='mi']").getAttribute("aria-pressed"), "true");
+  assert.equal(host.querySelector("[data-run-units]"), null, "no per-surface unit switch: Settings owns units");
   assert.doesNotMatch(host.querySelector(".race-ladder").textContent, /\bkm\b/);
   assert.equal(host.querySelector(".race-ladder-unit").textContent, "mi per week");
   assert.match(host.querySelector(".race-view-pace dd").textContent, /\/mi/);

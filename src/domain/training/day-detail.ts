@@ -25,9 +25,10 @@
 //
 // Changes nothing. Words, prescriptions and distances; no score, no gate. Every
 // sentence that would repeat day after day rotates through pickDayVariant. Every
-// distance a sentence here SAYS is in the athlete's run units (settings.run_units),
-// through the run engine's one words formatter (kmWords); the numbers travel in km
-// with a miles twin, so the client never restates a sentence.
+// distance and load a sentence here SAYS is in the athlete's units (athleteUnits()),
+// through the one server formatter (display-words.ts); the numbers travel in km / lb
+// with a miles twin, so the client never restates a sentence. The week's name is the
+// one stage word (week-stage.ts).
 import type {
   DayDetail,
   DayDetailDone,
@@ -58,15 +59,19 @@ import { isoDow, WEEKDAY_NAMES } from "../../repo/profile.js";
 import { planDayProgression, type Prescription } from "../../repo/progression.js";
 import { paceKeyForQuality, raceBuild, type PaceBand, type RaceBuild } from "../../repo/race-build.js";
 import { RUN_KIND_LABELS } from "../../repo/run-edit.js";
-import {
-  kmWords,
-  runZones,
-  weeklyRunPlan,
-  type RunPlanPrescription,
-  type RunZones,
-} from "../../repo/run-progression.js";
+import { activeRecoveryWeek } from "../../repo/recovery-week.js";
+import { runZones, weeklyRunPlan, type RunPlanPrescription, type RunZones } from "../../repo/run-progression.js";
 import { weekWins } from "../../repo/sessions.js";
-import { getSettings } from "../../repo/settings.js";
+import { athleteUnits } from "../../repo/settings.js";
+import {
+  distanceValue,
+  distanceWords,
+  loadChangeWords,
+  loadWords,
+  type WeightUnit,
+} from "../../repo/display-words.js";
+import { rungStage } from "../../repo/week-stage.js";
+import { STAGE_PHRASE, stageKeyOfBlockPhase } from "../../repo/stage-words.js";
 import { localDateISO } from "../../repo/shared.js";
 import { planDayStrengthGroups } from "../../repo/training-read.js";
 import { trainingSymptomsForMovements } from "../../repo/training-symptoms.js";
@@ -80,7 +85,6 @@ export type { DayDetail } from "../../contracts/day-detail.js";
 /** A valid YYYY-MM-DD, or null (the route answers 400 on null). */
 export const dayDetailDate = dayRecordDate;
 
-const KM_PER_MI = 1.609344;
 /** The most attention notes a day carries; past that they stop being read. */
 const MAX_WATCH = 5;
 
@@ -110,7 +114,7 @@ function positiveKm(value: unknown): number | null {
 }
 
 function miOf(km: number | null): number | null {
-  return km == null ? null : round1(km / KM_PER_MI);
+  return km == null ? null : distanceValue(km, "mi");
 }
 
 type RunUnits = "km" | "mi";
@@ -221,11 +225,11 @@ function anchorIndex(items: PlanItem[]): number {
   return items.findIndex((item) => !isDrill(item) && planItemEffectTier(item) === PLAN_ITEM_EFFECT_TIER.primary);
 }
 
-function loadText(weight: number | null): string {
-  if (weight == null) return "bodyweight";
-  const w = Math.abs(weight);
-  const n = Number.isInteger(w) ? String(w) : w.toFixed(1);
-  return weight < 0 ? `${n} lb assist` : `${n} lb`;
+/** The engine's change words when they speak the athlete's unit, else the step rebuilt from its numbers. */
+function changeWords(p: Prescription, units: WeightUnit): string | null {
+  const delta = text(p.delta_text) || null;
+  if (!delta || units === "lb" || !/\blb\b/.test(delta)) return delta;
+  return loadChangeWords(num(p.current?.weight), num(p.suggested?.weight), units);
 }
 
 function prescriptionText(
@@ -250,7 +254,12 @@ function prescriptionText(
  * prescription; a guess borrowed from a related lift (`starting_idea`) is never shown
  * as a load. A day already lived (or no progression row) keeps the plan's target.
  */
-function loadOf(item: PlanItem, p: Prescription | undefined, mode: DayDetailExercise["mode"]): DayDetailLoad | null {
+function loadOf(
+  item: PlanItem,
+  p: Prescription | undefined,
+  mode: DayDetailExercise["mode"],
+  units: WeightUnit
+): DayDetailLoad | null {
   if (mode === "mobility") return null;
   if (p && !p.starting_idea && p.suggested && "weight" in p.suggested && p.suggested.weight !== undefined) {
     const weight = num(p.suggested.weight);
@@ -258,15 +267,15 @@ function loadOf(item: PlanItem, p: Prescription | undefined, mode: DayDetailExer
     if (weight == null && mode === "timed") return null;
     return {
       weight,
-      text: loadText(weight),
+      text: loadWords(weight, units),
       source: "progression",
-      change: text(p.delta_text) || null,
+      change: changeWords(p, units),
       action: p.action ?? null,
     };
   }
   const planned = num(item.target_weight);
   if (planned == null) return null;
-  return { weight: planned, text: loadText(planned), source: "plan", change: null, action: null };
+  return { weight: planned, text: loadWords(planned, units), source: "plan", change: null, action: null };
 }
 
 // A stored note that names a deload or a back-off ("Deload: backed off to 2 sets of 6–8
@@ -284,13 +293,24 @@ const BACK_OFF_NOTE = /\b(?:de-?load(?:ed|ing)?|back(?:ed|ing|s)?[\s-]+off|eas(?
  * or a slot with no progression read, keeps its note: there is no current prescription
  * to contradict it. Stored plan data is never touched.
  */
-function currentNote(item: PlanItem, p: Prescription | undefined): string | null {
+function currentNote(item: PlanItem, p: Prescription | undefined, weekDeload: boolean): string | null {
   const note = text(item.note);
-  const stale = !!note && BACK_OFF_NOTE.test(note) && !!p && !p.starting_idea && p.action !== "deload";
+  // Stale beside a prescription that no longer deloads — and, whatever the day, in a
+  // week that resolves as no deload at all (block-phase.ts; no recovery week running):
+  // a lived day of an ordinary week never reads "Deload: …" off a note from another one.
+  const engineMovedOn = !!p && !p.starting_idea && p.action !== "deload";
+  const weekMovedOn = !weekDeload && p?.action !== "deload";
+  const stale = !!note && BACK_OFF_NOTE.test(note) && (engineMovedOn || weekMovedOn);
   return (stale ? "" : note) || text(item.constraint_note) || null;
 }
 
-function exerciseOf(item: PlanItem, p: Prescription | undefined, anchor: boolean): DayDetailExercise {
+function exerciseOf(
+  item: PlanItem,
+  p: Prescription | undefined,
+  anchor: boolean,
+  units: WeightUnit,
+  weekDeload: boolean
+): DayDetailExercise {
   const mode: DayDetailExercise["mode"] = isDrill(item)
     ? "mobility"
     : String(item.mode ?? "") === "timed" || (num(item.target_seconds) != null && num(item.rep_low) == null)
@@ -310,9 +330,9 @@ function exerciseOf(item: PlanItem, p: Prescription | undefined, anchor: boolean
     rep_high: repHigh,
     target_seconds: seconds,
     prescription: prescriptionText(mode, sets, repLow, repHigh, seconds),
-    load: loadOf(item, p, mode),
+    load: loadOf(item, p, mode, units),
     anchor,
-    note: currentNote(item, p),
+    note: currentNote(item, p, weekDeload),
   };
 }
 
@@ -386,8 +406,9 @@ function liftPoint(
 ): string {
   const parts: string[] = [];
   if (anchor && p && !p.starting_idea) {
-    if (p.action === "overload" && text(p.delta_text))
-      parts.push(pickDayVariant(POINT_OVERLOAD, date, "day-detail:point:overload")(anchor.name, text(p.delta_text)));
+    const step = anchor.load?.change ?? (text(p.delta_text) || null);
+    if (p.action === "overload" && step)
+      parts.push(pickDayVariant(POINT_OVERLOAD, date, "day-detail:point:overload")(anchor.name, step));
     else if (p.action === "deload")
       parts.push(pickDayVariant(POINT_DELOAD, date, "day-detail:point:deload")(anchor.name));
     else if (p.action === "hold" || p.action === "overload")
@@ -405,12 +426,19 @@ function liftPoint(
   return parts.join(" ");
 }
 
+/** A new best's set in the athlete's weight unit ("84 kg × 8"), else the engine's own label. */
+function bestSetWords(pr: { label: string; weight_lb?: number; reps?: number }, units: WeightUnit): string {
+  if (pr.weight_lb != null && pr.weight_lb > 0 && pr.reps != null) return `${loadWords(pr.weight_lb, units)} × ${pr.reps}`;
+  return text(pr.label).replace(/\s*—\s*new best$/i, "");
+}
+
 function liftWatch(
   date: string,
   readOn: string,
   exercises: DayDetailExercise[],
   byName: Map<string, Prescription>,
-  constraints: Map<string, string>
+  constraints: Map<string, string>,
+  units: WeightUnit
 ): DayDetailWatch[] {
   const out: DayDetailWatch[] = [];
   const names = exercises.filter((e) => e.mode !== "mobility").map((e) => e.name);
@@ -435,7 +463,10 @@ function liftWatch(
   // Two at most, the anchor's first: a wall of bests stops being something to look at.
   const anchorName = exercises.find((e) => e.anchor)?.name.toLowerCase() ?? null;
   const wanted = new Set(names.map((n) => n.toLowerCase()));
-  const prs = safe(() => weekWins(readOn).prs, [] as { exercise: string; label: string }[])
+  const prs = safe(
+    () => weekWins(readOn).prs,
+    [] as { exercise: string; label: string; weight_lb?: number; reps?: number }[]
+  )
     .filter((pr) => wanted.has(String(pr.exercise).toLowerCase()))
     .sort(
       (a, b) =>
@@ -447,7 +478,7 @@ function liftWatch(
     out.push({
       kind: "recent_best",
       exercise: pr.exercise,
-      text: `${pr.exercise}: ${text(pr.label).replace(/\s*—\s*new best$/i, "")} was a new best this past week — build on it rather than chasing it again.`,
+      text: `${pr.exercise}: ${bestSetWords(pr, units)} was a new best this past week — build on it rather than chasing it again.`,
     });
   }
   // The progression's own words where a slot changes shape or is new.
@@ -475,7 +506,8 @@ function buildLift(
   ctx: DayContext,
   done: DayDetailDone | null,
   phase: string | null,
-  todayLine: PlanWeek["strength_line"] | null
+  todayLine: PlanWeek["strength_line"] | null,
+  units: WeightUnit
 ): { lift: DayDetailLift; watch: DayDetailWatch[] } | null {
   const plan = strengthOf(cell);
   const session = done?.session ?? null;
@@ -495,9 +527,18 @@ function buildLift(
     byName.set(String(p.exercise).toLowerCase(), p);
   }
   const anchorAt = anchorIndex(items);
+  // The week resolves as a deload only on the block's own deload week or a running
+  // recovery week; every other week's stored back-off note is another week's words.
+  const weekDeload = phase === "deload" || !!safe(() => activeRecoveryWeek(date), null);
   const exercises = items
     .map((item, i) =>
-      exerciseOf(item, byItem.get(Number(item.id)) ?? byName.get(text(item.exercise).toLowerCase()), i === anchorAt)
+      exerciseOf(
+        item,
+        byItem.get(Number(item.id)) ?? byName.get(text(item.exercise).toLowerCase()),
+        i === anchorAt,
+        units,
+        weekDeload
+      )
     )
     .filter((e) => e.name);
   const anchor = exercises.find((e) => e.anchor) ?? null;
@@ -532,7 +573,7 @@ function buildLift(
   // Attention belongs to a day still to come; a lived day's record speaks for itself.
   const watch =
     plan && (status === "today" || status === "upcoming")
-      ? liftWatch(date, date <= ctx.today ? date : ctx.today, exercises, byName, constraints)
+      ? liftWatch(date, date <= ctx.today ? date : ctx.today, exercises, byName, constraints, units)
       : [];
   return { lift, watch };
 }
@@ -590,7 +631,7 @@ function spaced(words: string): string {
  */
 function repWords(on: string, units: RunUnits): string {
   const km = /^\s*\d+(?:\.\d+)?\s*(?:km|k)\s*$/i.test(String(on)) ? repKm(on) : null;
-  return km != null ? kmWords(km, units) : spaced(on);
+  return km != null ? distanceWords(km, units) : spaced(on);
 }
 
 function hrBand(zones: RunZones | null, key: DayDetailZoneKey | null): { low_bpm: number; high_bpm: number } | null {
@@ -648,7 +689,7 @@ export function dayDetailRunStructure(
   units: RunUnits = "km"
 ): DayDetailRunSegment[] {
   const band = (key: string) => bands.find((b) => b.key === key) ?? null;
-  const dist = (n: number) => kmWords(n, units);
+  const dist = (n: number) => distanceWords(n, units);
   const easyBand = band("easy");
   if (race) {
     return [
@@ -860,7 +901,7 @@ function sessionLine(rx: RunPlanPrescription | null, structure: DayDetailRunSegm
   if (!parts.length) return null;
   const total = structure.reduce((n, s) => n + (s.km ?? 0), 0);
   const sized = structure.length > 1 && structure.every((s) => s.km != null) && total > 0;
-  return `${cap(parts.join(", then "))}${sized ? ` — ${kmWords(round1(total), units)} in all` : ""}.`;
+  return `${cap(parts.join(", then "))}${sized ? ` — ${distanceWords(round1(total), units)} in all` : ""}.`;
 }
 
 /** The athlete's stated session as the day carries it (contract: DayDetailStatedQuality). */
@@ -988,30 +1029,20 @@ function buildRun(
 // The week, the stack, the day's words
 // ---------------------------------------------------------------------------
 
-const RACE_WEEK_WORD: Record<string, string> = {
-  build: "Build week",
-  down: "Lighter week",
-  peak: "Peak week",
-  taper: "Taper week",
-  race: "Race week",
-};
-
-const PHASE_WORD: Record<string, string> = {
-  accumulation: "a loading week",
-  intensification: "a sharpening week",
-  deload: "the lighter week",
-  realization: "the top-end week",
-};
-
 function weekOf(date: string, today: string, build: RaceBuild | null): DayDetailWeek {
   const weekStart = mondayOf(date);
   const rung = build?.available ? (build.weeks ?? []).find((w) => w.week_start === weekStart) : null;
+  // The week's name is the ONE stage word (stage-words.ts), the same Horizon, Today and
+  // the plan look-ahead print for this week.
+  const stage = rungStage(rung);
   const race =
-    rung && RACE_WEEK_WORD[rung.kind]
+    rung && stage
       ? {
           event: build?.race?.event ?? null,
           kind: rung.kind,
-          word: RACE_WEEK_WORD[rung.kind],
+          stage: stage.key,
+          word: stage.week_word,
+          phrase: stage.phrase,
           focus: text(rung.focus),
           weeks_to_race: rung.weeks_to_race,
         }
@@ -1039,13 +1070,14 @@ const WHY_RUN_RACE: readonly ((
   toGo: string,
   event: string,
   weeks: number,
-  raceWeek: boolean
+  raceWeek: boolean,
+  phrase: string
 ) => string)[] = [
   (word, focus, toGo) => `${word}${toGo}. ${focus}`,
-  (word, focus, _toGo, event, weeks, raceWeek) =>
+  (_word, focus, _toGo, event, weeks, raceWeek, phrase) =>
     raceWeek
       ? `${focus} ${cap(event)} is this week.`
-      : `${focus} ${cap(event)} is ${weeks} ${weeks === 1 ? "week" : "weeks"} out — ${lower(word)}.`,
+      : `${focus} ${cap(event)} is ${weeks} ${weeks === 1 ? "week" : "weeks"} out — ${phrase}.`,
 ];
 
 const ORDINAL_WORDS = ["first", "second", "third", "fourth", "fifth", "sixth", "seventh"];
@@ -1083,7 +1115,8 @@ function whyLine(
           toGo,
           event,
           race.weeks_to_race,
-          race.kind === "race"
+          race.kind === "race",
+          race.phrase ?? lower(race.word)
         )
       );
     } else if (lift) {
@@ -1096,8 +1129,11 @@ function whyLine(
   }
   if (lift && week.block) {
     const b = week.block;
+    // One stage per week: with a race rung naming the week, the block line names only
+    // where in the block it sits; with none, the block's phase is the week's stage.
+    const key = race ? null : stageKeyOfBlockPhase(b.phase);
     parts.push(
-      `Week ${b.week_index} of ${b.total_weeks} of the ${b.focus.replace(/-/g, " ")} block — ${PHASE_WORD[b.phase] ?? "the block's week"}.`
+      `Week ${b.week_index} of ${b.total_weeks} of the ${b.focus.replace(/-/g, " ")} block${key ? ` — ${STAGE_PHRASE[key]}` : ""}.`
     );
   } else if (lift && !race && liftSlot && liftSlot.of > 1) {
     // No block and no race to tie it to: where the day sits in the lifting week.
@@ -1332,7 +1368,8 @@ export function dayDetail(date: string, opts: { today?: string } = {}): DayDetai
   const week = weekFor(ctx, day);
   const cell = week?.days.find((d) => d.date === day) ?? null;
   const placed = !!week?.days.some((d) => d.date);
-  const runUnits: "km" | "mi" = safe(() => (getSettings().run_units === "mi" ? "mi" : "km"), "km");
+  const units = athleteUnits();
+  const runUnits = units.distance;
   const build = safe(() => raceBuild(today), null);
   const done = doneOf(day, today);
   const weekRead = weekOf(day, today, build);
@@ -1350,7 +1387,16 @@ export function dayDetail(date: string, opts: { today?: string } = {}): DayDetai
   const hasRun = !!ownRun(cell) && ownRun(cell)?.kind !== "logged";
   const status = statusOf(day, today, cell, hasLift, hasRun, done);
 
-  const liftRead = buildLift(day, status, cell, ctx, done, weekRead.block?.phase ?? null, week?.strength_line ?? null);
+  const liftRead = buildLift(
+    day,
+    status,
+    cell,
+    ctx,
+    done,
+    weekRead.block?.phase ?? null,
+    week?.strength_line ?? null,
+    units.weight
+  );
   const lift = liftRead?.lift ?? null;
   const run = buildRun(day, cell, asOf, runUnits, build);
   const watch = (liftRead?.watch ?? []).slice(0, MAX_WATCH);
@@ -1375,5 +1421,6 @@ export function dayDetail(date: string, opts: { today?: string } = {}): DayDetai
     done,
     caveats: caveatsOf(day),
     run_units: runUnits,
+    weight_units: units.weight,
   };
 }

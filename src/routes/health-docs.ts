@@ -30,6 +30,7 @@ import { inferHealthDocumentKind, normalizeHealthDocumentKind } from "../healthD
 import { UPLOADS_DIR, safeUploadPath } from "../uploadPaths.js";
 import { extForMime, isAcceptedMime, isInlineMime } from "../uploadMime.js";
 import { streamEnrichRow } from "./enrich-stream.js";
+import { labDraws } from "../repo/lab-draws.js";
 import {
   createDicomImportJobFromStaged,
   createDicomStagingPath,
@@ -217,6 +218,13 @@ healthDocsRouter.post("/dedupe", (req, res) => {
 });
 
 healthDocsRouter.get("/", (req, res) => res.json(listHealthDocuments(req.query.limit ? Number(req.query.limit) : 50)));
+
+// One row per draw (kind + date), newest first: the Season's and the labs lane's list.
+// A draw's upload and the panels split out of it are one draw, never three rows
+// (repo/lab-draws.ts). Registered ahead of /:id. ?limit= caps the rows.
+healthDocsRouter.get("/draws", (req, res) =>
+  res.json(labDraws({ limit: req.query.limit != null ? Number(req.query.limit) || undefined : undefined }))
+);
 
 // Single row (poll fallback for watching enrichment_status).
 healthDocsRouter.get("/:id", (req, res) => {

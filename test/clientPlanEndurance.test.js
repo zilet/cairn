@@ -23,6 +23,7 @@ function loadPlanEnduranceClient() {
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/format-utils.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/plan-endurance-model.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/plan-endurance-briefing-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/plan-endurance-client.js"), "utf8"), context);
@@ -519,6 +520,7 @@ test("the race page without a race: THIS WEEK still stands for a runner, never a
       "html-utils",
       "ui-chart",
       "format-utils",
+      "ui-format",
       "race-week-model",
       "race-week-runs-model",
       "race-ladder-model",
@@ -566,7 +568,7 @@ test("the race page without a race: THIS WEEK still stands for a runner, never a
   assert.match(card.querySelector(".race-runs").textContent, /Long run/);
   // The run engine's own sentence, in the athlete's units, is the focus.
   assert.equal(card.querySelector(".race-week-focus").textContent, "About 12.4 mi this week: 2 easy + 1 long.");
-  assert.equal(card.querySelector("[data-run-units='mi']").getAttribute("aria-pressed"), "true");
+  assert.equal(card.querySelector("[data-run-units]"), null, "no per-surface unit switch: Settings owns units");
   assert.equal(body.querySelector(".race-ladder"), null);
   assert.equal(body.querySelector(".race-estimate"), null);
   assert.equal(body.querySelector("#endRaceSlot"), null);

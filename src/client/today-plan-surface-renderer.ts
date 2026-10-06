@@ -257,7 +257,7 @@ type TodayPlanSurfaceRendererApi = {
         : journey?.phase === "protecting"
           ? "Anchor lift — hold or ease today; the relevant safety signal takes priority."
           : current
-            ? `Anchor lift — ${Number(current.est_1rm).toFixed(1)} lb estimated 1RM on ${current.date}${Number(gap) > 0 ? ` · ${Number(gap).toFixed(1)} lb to target` : ""}.`
+            ? `Anchor lift — ${Number(current.est_1rm).toFixed(1)} lb estimated 1RM on ${CairnFmt.date(current.date)}${Number(gap) > 0 ? ` · ${Number(gap).toFixed(1)} lb to target` : ""}.`
             : "Anchor lift — establish one clean exact-lift checkpoint today.";
       return { ...item, journey_role: "anchor", journey_line: line };
     }

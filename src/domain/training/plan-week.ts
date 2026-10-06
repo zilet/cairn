@@ -29,7 +29,8 @@ import { weekWins } from "../../repo/sessions.js";
 import { getPlanWithPurpose } from "../../repo/day-read.js";
 import { strengthScheduleRead } from "../../repo/strength-schedule.js";
 import { weekLayoutClosed } from "../../repo/week-layout-closed.js";
-import { getSettings } from "../../repo/settings.js";
+import { athleteUnits } from "../../repo/settings.js";
+import { distanceWords, type DistanceUnit } from "../../repo/display-words.js";
 import { localDateISO } from "../../repo/shared.js";
 import { deriveSessionTitle, planDayStrengthGroups } from "../../repo/training-read.js";
 import { todayStrengthLine, type TodayStrengthLine } from "../../repo/today-strength-line.js";
@@ -343,9 +344,6 @@ function toPlanWeekRun(intent: AgendaIntent): PlanWeekRun {
   };
 }
 
-function fmtKm(km: number): string {
-  return Number.isInteger(km) ? String(km) : km.toFixed(1);
-}
 
 const COUNT_WORDS = ["no", "one", "two", "three", "four", "five", "six", "seven"];
 function countWord(n: number): string {
@@ -356,7 +354,12 @@ function countWord(n: number): string {
  * The strip's one spoken line: what the week holds so far and what is still open.
  * Composed from counts, so a stable week never prints one literal for a month.
  */
-function progressLine(p: Omit<PlanWeekProgress, "line">, asOf: string, weekStart: string): string | null {
+function progressLine(
+  p: Omit<PlanWeekProgress, "line">,
+  asOf: string,
+  weekStart: string,
+  units: DistanceUnit
+): string | null {
   const parts: string[] = [];
   const weekOpened = asOf >= weekStart;
   if (p.lift_days_planned != null && p.lift_days_planned > 0) {
@@ -375,10 +378,10 @@ function progressLine(p: Omit<PlanWeekProgress, "line">, asOf: string, weekStart
   if (p.runs_done > 0) {
     const longest =
       p.longest_run_km != null && p.runs_done > 1 && p.longest_run_km >= 8
-        ? `, ${fmtKm(p.longest_run_km)} km the longest`
+        ? `, ${distanceWords(p.longest_run_km, units)} the longest`
         : "";
     parts.push(
-      `${fmtKm(p.run_km)} km run over ${countWord(p.runs_done)} ${p.runs_done === 1 ? "run" : "runs"}${longest}.`
+      `${distanceWords(p.run_km, units)} run over ${countWord(p.runs_done)} ${p.runs_done === 1 ? "run" : "runs"}${longest}.`
     );
   }
   const dated = p.runs_open.filter((r) => r.weekday);
@@ -665,7 +668,11 @@ export function planWeek(date?: string): PlanWeek {
       })),
     prs,
   };
-  const progress: PlanWeekProgress = { ...counts, line: days.length ? progressLine(counts, asOf, weekStart) : null };
+  const runUnits = weekRunUnits();
+  const progress: PlanWeekProgress = {
+    ...counts,
+    line: days.length ? progressLine(counts, asOf, weekStart, runUnits) : null,
+  };
 
   const summary =
     layoutRead && !layoutRead.clean && layoutRead.suggestion
@@ -708,15 +715,11 @@ export function planWeek(date?: string): PlanWeek {
     },
     schedule,
     strength_line: strengthLine,
-    run_units: weekRunUnits(),
+    run_units: runUnits,
   };
 }
 
-/** The athlete's run units; km when settings cannot be read. */
-function weekRunUnits(): "km" | "mi" {
-  try {
-    return getSettings().run_units === "mi" ? "mi" : "km";
-  } catch {
-    return "km";
-  }
+/** The athlete's run units (athleteUnits(), km when settings cannot be read). */
+function weekRunUnits(): DistanceUnit {
+  return athleteUnits().distance;
 }

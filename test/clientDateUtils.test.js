@@ -10,6 +10,9 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 function loadDateUtils() {
   const context = { Date, Intl, Number, String, Math, JSON, RegExp };
   vm.runInNewContext(readFileSync(join(root, "public/js/date-utils.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/health-picture-client.js"), "utf8"), context);
   return context;
 }
 
@@ -17,11 +20,11 @@ test("client date utilities stay pure and browser-global", () => {
   const utils = loadDateUtils();
   assert.equal(utils.localISO(new Date(2026, 5, 29)), "2026-06-29");
   assert.equal(
-    utils.latestReviewDate({ markers: [{ date: "2026-01-02" }, { note: "reviewed 2026-06-11" }] }),
+    utils.CairnHealthPicture.latestReviewDate({ markers: [{ date: "2026-01-02" }, { note: "reviewed 2026-06-11" }] }),
     "2026-06-11",
   );
 
-  const cleaned = utils.humanizeReviewText(
+  const cleaned = utils.CairnHealthPicture.humanizeReviewText(
     "LDL-C measured on 2026-06-11 stayed above the prior 2026-01-02 result.",
     "2026-06-11",
   );

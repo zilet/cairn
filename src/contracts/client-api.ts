@@ -22,6 +22,7 @@ import type { ClientFuelIdeas, ClientIntakeBand } from "./fuel.js";
 import type { TodayStonesRead } from "./today-stones.js";
 import type { DayRecord } from "./day-record.js";
 import type { DayDetail } from "./day-detail.js";
+import type { WeekRead } from "./week-read.js";
 import type {
   ClientPushOfferAnswerResponse,
   ClientSetTrainingDriveResponse,
@@ -295,6 +296,8 @@ export interface ClientSettings {
   garmin_export_strength?: boolean;
   /** Athlete-facing run distance and pace: km (min/km) or mi (min/mile). */
   run_units?: "km" | "mi";
+  /** Athlete-facing bodyweight and loads: lb or kg. Stored weights stay lb; the server's prose already speaks this unit. */
+  weight_units?: "lb" | "kg";
   /** Last strength write-back ATTEMPT (landed or not), and its one-line result. */
   garmin_last_export_attempt_at?: string | null;
   garmin_last_export_status?: string | null;
@@ -314,8 +317,24 @@ export interface ClientSettings {
   time_zone?: string | null;
 }
 
+/**
+ * One registered unit kind with the athlete's current choice (src/repo/display-words.ts
+ * UNIT_REGISTRY). The Settings Units group renders one control per entry; `setting` is
+ * the field a PUT /settings writes. A new kind arrives here with no client list to edit.
+ */
+export interface ClientUnitKind {
+  kind: "distance" | "weight";
+  setting: string;
+  label: string;
+  options: { value: string; words: string }[];
+  default: string;
+  value: string;
+}
+
 export interface ClientSettingsResponse {
   settings: ClientSettings;
+  /** The units registry with the athlete's choices, registry order. */
+  units?: ClientUnitKind[];
   agents: ClientAgentConfig;
   route_tasks: ClientRouteTask[];
   research_auto_eligible?: boolean;
@@ -1066,6 +1085,15 @@ export interface ClientTrainingSession {
     capacity_delta_lb: number;
     gap_closed_lb: number;
   } | null;
+  /** Finish only (sessionSummary): counts, and the tonnage said in the athlete's weight unit. */
+  summary?: {
+    sets: number;
+    exercises: number;
+    tonnage: number;
+    /** "12,450 lb" / "5,647 kg"; null with nothing loaded. Print this, never `tonnage` + a unit. */
+    tonnage_words: string | null;
+    skipped: number;
+  };
   [key: string]: unknown;
 }
 
@@ -1293,6 +1321,12 @@ export interface ClientGoalPaceResponse {
   needed: ClientGoalPaceLine;
   goal: { weight_lb: number | null; date: string | null };
   window_days: number;
+  /**
+   * The ONE weight-trend read (src/repo/weight-trend.ts): the rate, the ask, the on-pace
+   * verdict and the sentence every weight surface prints, in the athlete's weight unit.
+   * A chart draws `points`/`trend`/`needed`; it never re-judges the pace.
+   */
+  read?: import("./week-read.js").WeightTrendRead;
 }
 
 export interface ClientWeekWinsPr {
@@ -2332,6 +2366,8 @@ export interface ClientPerformanceStanding {
 }
 
 export interface ClientWeeklyStats {
+  /** The ONE weight-trend read (rate, ask, verdict, words in the athlete's unit) — print this, never re-judge `trend_lb_wk`. */
+  weight_trend?: import("./week-read.js").WeightTrendRead;
   week_sets?: number;
   week_cardio?: number;
   week_cardio_km?: number;
@@ -2857,6 +2893,19 @@ export interface ClientMealRecipeResponse extends ClientOkResponse {
   recipe?: unknown;
   cached?: boolean;
   agent_status?: string;
+}
+
+/**
+ * One lab draw or scan (src/repo/lab-draws.ts): a (kind, date) pair, one row however
+ * many documents carry it. `date` is the machine key; a person reads `date_words`.
+ */
+export interface ClientLabDraw {
+  date: string;
+  date_words: string;
+  kind: string;
+  label: string;
+  doc_id: number;
+  doc_ids: number[];
 }
 
 export interface ClientHealthDocument {
@@ -3734,6 +3783,7 @@ export interface ClientApiResponses {
   "/api/plan/week": ClientPlanWeek;
   "/api/plan/look-ahead": ClientPlanLookAhead;
   "/api/plan/day-detail": DayDetail | null;
+  "/api/week": WeekRead;
   "/api/plan/:day/order-for-effect": ClientPlanDay | null;
   // POST asks for a redraw and answers with the receipt; GET reports what is standing.
   "/api/plan/redraw": ClientPlanRedrawReceipt | ClientPlanRedrawStatus;
@@ -3871,6 +3921,7 @@ export interface ClientApiResponses {
   "/api/insights": ClientInsight[];
   "/api/insights/generate": ClientInsightGenerateResponse | ClientAgentJobEnvelope;
   "/api/health-docs": ClientHealthDocument[];
+  "/api/health-docs/draws": ClientLabDraw[];
   "/api/health-docs/imaging": ClientHealthDocument;
   "/api/health-docs/imaging/dicom-imports": ClientDicomImportJob;
   "/api/context-events": ClientContextEvent[];

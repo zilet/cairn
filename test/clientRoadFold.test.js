@@ -39,6 +39,8 @@ function loadRoadFold() {
   context.globalThis = context;
   context.window = context;
   for (const file of [
+    "public/js/date-utils.js",
+    "public/js/ui-format.js",
     "public/js/journey-progress-client.js",
     "public/js/journey-timeline-client.js",
     "public/js/progress-overview-client.js",

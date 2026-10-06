@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { loadClientModule, renderHtml } from "./_dom.mjs";
 
 function load() {
-  return loadClientModule(["html-utils", "ui-chart"]);
+  return loadClientModule(["html-utils", "ui-format", "ui-chart"]);
 }
 
 test("the chart module source carries no hex colour", () => {

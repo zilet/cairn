@@ -1176,6 +1176,14 @@ stay the engine's (`Threshold run`, `Short threshold`, …) so `paceKeyForQualit
 the agenda read the threshold band unchanged. The run carries `stated_quality` (`StatedQualityRx`);
 `applyRunDayIntensity` moving it to easy drops it. `test/statedQualitySession.test.js`.
 
+The session's own authority (`statedQualityAuthority`: an open harm-free push stance, or stated work
+within a step of a hard run on record) is read AT THE QUALITY DAY'S OWN DATE — its three days
+before it — never at the as-of morning (2026-10-07): a Saturday harm day had held Thursday's 5 km
+on a Monday or Tuesday read and released it from Wednesday with nothing new logged, so the week's
+prescription changed with the morning it was read on. A quality day already behind the read keeps
+today's read, a day not yet lived carries no harm until it is, and the morning's own
+`runDayIntensity` read still has the final say on the day itself.
+
 ### The cross-training day: stated, then observed (`src/repo/cross-training-day.ts`, 2026-10-04)
 
 A recurring non-run day lives in `endurance_schedule.cross_training` (`{dow, sport, optional:true}`, at
@@ -5119,6 +5127,56 @@ the engine staying in km), and the `race_build` key in the ENDURANCE prompt bund
 `renderRunPlan` as a RACE BUILD block (estimate, target, pace bands, ladder, strength principle,
 ride placement) so every running prompt is shooting at the same numbers. `coach.ts` computes it
 once per context as `raceBuildView`, reusing `runPlanView` and `weekLayoutView`.
+
+## Server words: units, dates, the stage word, the weight trend, the week (2026-10-07, `docs/IA.md`)
+
+**One formatter, units from the athlete.** `src/repo/display-words.ts` is the only place on the
+server a number or a date becomes words (`distanceWords`, `paceWords`/`paceBandWords`,
+`weightWords`/`weightRateWords`/`loadWords`/`loadChangeWords`, `dateWords`/`dateRangeWords`/
+`sinceWords`, `countdownWords`) and the only definition of `KM_PER_MI` and `LB_PER_KG`
+(`shared.ts` re-exports the latter; `test/unitsFollowAthlete.test.js` greps that each is defined
+once). Stored data stays canonical — km, lb, YYYY-MM-DD — and converts at the formatter edge only.
+The **units registry** (`UNIT_REGISTRY`: kind → settings column → options → default) is the one
+list of unit kinds; `settings.run_units` (km|mi) and `settings.weight_units` (lb|kg, migration 120)
+are its columns, Settings is the only writer, and every prose builder reads `athleteUnits()`
+(`settings.ts`). A new kind is one registry entry plus its column (the schema two-step).
+`GET/PUT /api/settings` and MCP `get_settings` carry `units` (`unitsRegistryRead`) so the client's
+Units group renders from the registry. Day detail, the race build (bands, basis, recap, adapted,
+capacity note), the conductor's week read, Today's path, the plan strip's progress line and the
+week read all speak the athlete's units; a kg athlete's loads are the nearest half kilo, and a
+progression step the engine wrote in lb is rebuilt from its numbers. A plan item's stored note is
+data and stays verbatim. Machine fields stay `*_date`/`date`; a person reads the `*_words`
+companion (`changed_since[].since_words`, milestone `date_words`, …).
+
+**One stage word per week.** `src/repo/stage-words.ts` is the vocabulary (Base / Build / Sharpen
+/ Lighter week / Peak week / Taper / Race week, with `*_week_word` and phrase forms);
+`stageKeyOf(kind, phase)` names a race rung (a build rung speaks as its PHASE, every other rung as
+its kind) and `stageKeyOfBlockPhase` names a week with no race. `weekStage(date)` /
+`weekFrameLine(date)` (`src/repo/week-stage.ts`) read it for a date and compose the frame: countdown
+headline ("26 days to Cambridge Half"), the line ("Sharpen · block week 6 of 6 · push through Nov
+15") and Today's one glance into Horizon. Day detail's `week.race.word`, the look-ahead's rung
+marker, the race build's `weeks[].stage_word`, Today's path `week.phase` and the conductor's
+`block_line` (input `weekStage`) all read it (`test/oneStageWord.test.js`).
+
+**One weight trend.** `weightTrendRead()` (`src/repo/weight-trend.ts`) is the rate (goal pace's
+21-day slope read off one 90-day window, rounded once to a tenth), the ask, the on-pace verdict
+(`paceVerdict`: one tolerance), the sentence, and the 7-day-average week change What moved
+prints. Today's path, the Body stone, the conductor's evidence and changes (input `weightTrend`),
+`GET /api/nutrition/goal-pace` (`read`), `GET /api/stats` (`weight_trend`) and the week read all
+carry it (`test/oneWeightTrend.test.js`).
+
+**The week read.** `weekRead(start)` (`src/domain/training/week-read.ts`, contract
+`src/contracts/week-read.ts`, `GET /api/week?start=` / `get_week`) is Horizon's Week page over
+`planWeek`'s own cells (`GET /api/plan/week` keeps answering the strip): the frame, ONE summary
+sentence, totals in the athlete's units (this week's planned running is the race build's week as
+planned — the one figure every surface prints), a `DayChip` per day with its planned dose as a
+WORD and a relative bar height (a drawing aid, never shown), ≤2 still-open sessions, the next
+milestones beyond the week and the compact goals (the race estimate WITH its time, the weight
+trend, the anchor lift).
+
+**One row per draw.** `labDraws()` (`src/repo/lab-draws.ts`, `GET /api/health-docs/draws`,
+`list_lab_draws`) is the labs-and-scans list as (kind, date) draws — an upload and the panels split
+out of it are one row — so the Season never shows one draw three times.
 
 ## The day detail (`src/domain/training/day-detail.ts`)
 

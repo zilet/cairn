@@ -14,6 +14,7 @@ function loadHeader() {
   const context = { Object, String, Number, Date };
   context.window = context;
   context.globalThis = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/ui-header-client.js"), "utf8"), context);
   return context.CairnUiHeader;
 }

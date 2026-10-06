@@ -39,7 +39,9 @@ function loadContext() {
   context.window = context;
   for (const file of [
     "format-utils.js",
+    "ui-format.js",
     "date-utils.js",
+    "ui-format.js",
     "ui-components.js",
     "today-training-client.js",
     "today-session-status-client.js",

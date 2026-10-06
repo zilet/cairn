@@ -14,7 +14,6 @@ type TodayPathMark = import("../contracts/today-path.js").TodayPathMilestone;
 type TodayPathTrailPoint = { x: number; y: number };
 
 (() => {
-  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   // The trail's frame (viewBox units): left and right ends, and the band it wanders in.
   const W = 320;
   const H = 82;
@@ -29,13 +28,7 @@ type TodayPathTrailPoint = { x: number; y: number };
   }
 
   /** "Sep 4" — a chart's mono date; never a bare ISO date. */
-  function shortDate(iso: unknown): string {
-    const [, m, d] = String(iso ?? "")
-      .slice(0, 10)
-      .split("-")
-      .map(Number);
-    return m && d ? `${MONTHS[m - 1]} ${d}` : "";
-  }
+  const shortDate = (iso: unknown): string => CairnFmt.date(String(iso ?? "").slice(0, 10), { year: false });
 
   /** Finish time in h:mm:ss (or m:ss under an hour), as the race build prints it. */
   function clock(sec: unknown): string {

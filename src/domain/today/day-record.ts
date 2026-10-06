@@ -33,7 +33,7 @@ import { classifyIntakeDay } from "../../repo/intake-window.js";
 import { getDayIntake } from "../../repo/nutrition.js";
 import { RUN_KIND_LABELS } from "../../repo/run-edit.js";
 import { getSessionByDate } from "../../repo/sessions.js";
-import { getSettings } from "../../repo/settings.js";
+import { athleteUnits } from "../../repo/settings.js";
 import { localDateISO } from "../../repo/shared.js";
 import { lookAheadWeekAsOf } from "../training/plan-look-ahead.js";
 import { planWeek, type PlanWeekDay } from "../training/plan-week.js";
@@ -217,7 +217,7 @@ function futureLine(lift: DayRecordPlannedLift | null, run: DayRecordPlannedRun 
 export function dayRecord(date: string, opts: { today?: string } = {}): DayRecord {
   const today = opts.today && ISO.test(opts.today) ? opts.today : localDateISO();
   const relation = relationOf(date, today);
-  const runUnits = safe(() => (getSettings().run_units === "mi" ? "mi" : "km"), "km" as const);
+  const runUnits = athleteUnits().distance;
 
   // ---- the log (a past day and today) ----
   const feed = relation === "future" ? [] : safe(() => trainingOnDate(date), []);

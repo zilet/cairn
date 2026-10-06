@@ -45,11 +45,24 @@ import { addDaysISO, clipText, daysBetweenISO, localDateISO } from "./shared.js"
 import { getStrengthJourneys, type StrengthJourney } from "./strength-objectives.js";
 import { isoDate } from "../lib/dates.js";
 import { round1 } from "../lib/numbers.js";
+import {
+  dateRangeWords,
+  dateWords,
+  distanceOfWords,
+  distanceWords,
+  raceDistanceName,
+  sinceWords,
+  weightRateWords,
+  weightWords,
+  type AthleteUnits,
+} from "./display-words.js";
+import { athleteUnits } from "./settings.js";
+import { weekFrameLine } from "./week-stage.js";
+import { GOAL_PACE_WINDOW_DAYS, weightTrendRead } from "./weight-trend.js";
 
 const HORIZON_DAYS = 200;
 const TRAIL_BACK_DAYS = 28;
 const MONTH_WEEKS = 30 / 7;
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 function attempt<T>(read: () => T, fallback: T): T {
   try {
@@ -69,44 +82,29 @@ const clamp01 = (n: number): number => Math.max(0, Math.min(1, n));
 // A stored day or timestamp, as its YYYY-MM-DD day (or null).
 const dayOf = (value: unknown): string | null => isoDate(String(value ?? "").slice(0, 10));
 
-function monthDay(iso: string): string {
-  const [, m, d] = iso.split("-").map(Number);
-  return `${MONTHS[(m || 1) - 1]} ${d}`;
-}
-
-function lbText(n: number): string {
-  return `${round1(n)} lb`;
-}
-
-function signed(n: number): string {
-  const r = round1(n);
-  return `${r > 0 ? "+" : r < 0 ? "−" : ""}${Math.abs(r)}`;
-}
+/** Where Today's one glance line into Horizon goes. */
+const HORIZON_HREF = "/app/horizon";
 
 // ---------- the race ----------
 
-function distanceLabel(km: number): string {
-  if (Math.abs(km - 21.1) < 0.6) return "Half marathon";
-  if (Math.abs(km - 42.2) < 0.8) return "Marathon";
-  if (Math.abs(km - 10) < 0.3) return "10K";
-  if (Math.abs(km - 5) < 0.2) return "5K";
-  return `${round1(km)} km race`;
-}
-
-function raceOf(build: RaceBuild | null): TodayPathRace | null {
+function raceOf(build: RaceBuild | null, asOf: string, units: AthleteUnits): TodayPathRace | null {
   const race = build?.race;
   const prediction = build?.prediction;
   if (!build?.available || !race || !prediction || !(prediction.estimate_sec > 0)) return null;
   return {
     event: race.event ? String(race.event).trim() || null : null,
-    distance_label: distanceLabel(race.distance_km),
+    distance_label: raceDistanceName(race.distance_km, units.distance),
     date: race.date,
+    date_words: dateWords(race.date, asOf),
+    estimate_text: fmtClock(Math.round(prediction.estimate_sec)),
+    target_text: race.target_raw ?? race.target?.raw ?? (race.target?.sec ? fmtClock(race.target.sec) : null),
     days_to_race: race.days_to_race,
     estimate_sec: Math.round(prediction.estimate_sec),
     target_sec: race.target?.sec ? Math.round(race.target.sec) : null,
     target_raw: race.target_raw ?? race.target?.raw ?? null,
     trend_delta_sec: prediction.trend ? Math.round(prediction.trend.delta_sec) : null,
     since: prediction.trend?.since ?? null,
+    since_words: prediction.trend?.since ? sinceWords(prediction.trend.since, asOf) : null,
     fit: prediction.fit ?? null,
   };
 }
@@ -122,21 +120,32 @@ function raceFitSentence(race: TodayPathRace): string {
 
 // ---------- the weight ----------
 
-function weightOf(asOf: string, profile: any): TodayPathWeight | null {
-  const pace = goalPace(90, asOf);
+// The rate, the ask and the verdict are the ONE weight-trend read (weight-trend.ts) —
+// the same figures the Body page, the Season and What moved print.
+function weightOf(asOf: string, profile: any, units: AthleteUnits): TodayPathWeight | null {
+  const pace = goalPace(GOAL_PACE_WINDOW_DAYS, asOf);
+  const trend = weightTrendRead(asOf, { units: units.weight, pace });
   const last = pace.points.at(-1) ?? null;
   const current = last?.weight_lb ?? num(profile?.weight_lb);
   if (current == null || !(current > 0)) return null;
   const since = addDaysISO(asOf, -42) ?? asOf;
+  const goalLb = num(pace.goal.weight_lb);
   return {
     mode: effectiveGoalMode(profile),
     current_lb: round1(current),
     current_date: last?.date ?? null,
-    goal_lb: num(pace.goal.weight_lb),
+    goal_lb: goalLb,
     goal_date: pace.goal.date ?? null,
-    trend_lb_wk: pace.trend.lb_wk,
-    needed_lb_wk: pace.needed.lb_wk,
+    trend_lb_wk: trend.rate_lb_wk,
+    needed_lb_wk: trend.needed_lb_wk,
     points: pace.points.filter((p) => p.date >= since).map((p) => ({ date: p.date, weight_lb: round1(p.weight_lb) })),
+    units: units.weight,
+    current_text: weightWords(current, units.weight),
+    goal_text: goalLb != null ? weightWords(goalLb, units.weight) : null,
+    trend_words: trend.rate_words,
+    needed_words: trend.needed_words,
+    verdict: trend.verdict,
+    line: trend.line,
   };
 }
 
@@ -169,7 +178,7 @@ function anchorOf(journeys: StrengthJourney[]): TodayPathAnchor | null {
 
 // ---------- the milestones ----------
 
-function nextLongRun(asOf: string, build: RaceBuild | null): TodayPathMilestone | null {
+function nextLongRun(asOf: string, build: RaceBuild | null, units: AthleteUnits): TodayPathMilestone | null {
   const agenda = attempt(() => flexibleTrainingAgenda(asOf), null);
   const long = agenda?.intents?.find((intent) => intent.kind === "long" && intent.status === "open");
   if (!long) return null;
@@ -182,19 +191,25 @@ function nextLongRun(asOf: string, build: RaceBuild | null): TodayPathMilestone 
     : long.target_zone
       ? `Easy, ${long.target_zone}.`
       : null;
-  return { date, end_date: null, label: km ? `Long run · ${round1(km)} km` : "Long run", kind: "long_run", detail };
+  return {
+    date,
+    end_date: null,
+    label: km ? `Long run · ${distanceWords(km, units.distance)}` : "Long run",
+    kind: "long_run",
+    detail,
+  };
 }
 
-function peakWeek(asOf: string, build: RaceBuild | null): TodayPathMilestone | null {
+function peakWeek(asOf: string, build: RaceBuild | null, units: AthleteUnits): TodayPathMilestone | null {
   const week = build?.weeks?.find((w) => w.kind === "peak" && (addDaysISO(w.week_start, 6) ?? w.week_start) >= asOf);
   if (!week) return null;
-  const detail = [week.long_km ? `Long run ${round1(week.long_km)} km.` : "", week.with_lifting || ""]
+  const detail = [week.long_km ? `Long run ${distanceWords(week.long_km, units.distance)}.` : "", week.with_lifting || ""]
     .filter(Boolean)
     .join(" ");
   return {
     date: week.week_start,
     end_date: addDaysISO(week.week_start, 6),
-    label: `Peak week · ${Math.round(week.km)} km${week.new_high ? ", a new high" : ""}`,
+    label: `Peak week · ${distanceWords(week.km, units.distance, { whole: true })}${week.new_high ? ", a new high" : ""}`,
     kind: "peak_week",
     detail: detail ? clipText(detail, 200, { collapseWhitespace: true, ellipsis: "…" }) : null,
   };
@@ -262,14 +277,17 @@ function milestonesOf(
   build: RaceBuild | null,
   race: TodayPathRace | null,
   weight: TodayPathWeight | null,
-  checkup: NextCheckupRead | null
+  checkup: NextCheckupRead | null,
+  units: AthleteUnits
 ): TodayPathMilestone[] {
   const out: TodayPathMilestone[] = [];
   const add = (m: TodayPathMilestone | null) => {
-    if (m && m.date >= asOf && (daysBetweenISO(m.date, asOf) ?? 0) <= HORIZON_DAYS) out.push(m);
+    if (m && m.date >= asOf && (daysBetweenISO(m.date, asOf) ?? 0) <= HORIZON_DAYS) {
+      out.push({ ...m, date_words: m.end_date ? dateRangeWords(m.date, m.end_date, asOf) : dateWords(m.date, asOf) });
+    }
   };
-  add(attempt(() => nextLongRun(asOf, build), null));
-  add(attempt(() => peakWeek(asOf, build), null));
+  add(attempt(() => nextLongRun(asOf, build, units), null));
+  add(attempt(() => peakWeek(asOf, build, units), null));
   add(attempt(() => strengthCheckpoint(asOf), null));
   if (race) {
     add({
@@ -285,11 +303,11 @@ function milestonesOf(
     add({
       date: weight.goal_date,
       end_date: null,
-      label: `Goal weight · ${round1(weight.goal_lb)} lb`,
+      label: `Goal weight · ${weightWords(weight.goal_lb, units.weight)}`,
       kind: "goal",
       detail:
         needed != null && weight.trend_lb_wk != null
-          ? `${signed(needed)} lb/wk gets there; the trend reads ${signed(weight.trend_lb_wk)}.`
+          ? `${weightRateWords(needed, units.weight)} gets there; the trend reads ${weightRateWords(weight.trend_lb_wk, units.weight)}.`
           : null,
     });
   }
@@ -342,9 +360,11 @@ function weightLever(asOf: string, weight: TodayPathWeight | null, peakAhead: bo
   if (!weight?.goal_date || weight.trend_lb_wk == null || weight.needed_lb_wk == null) return null;
   const left = daysBetweenISO(weight.goal_date, asOf);
   if (left == null || left < 14) return null;
-  const { trend_lb_wk: trend, needed_lb_wk: needed } = weight;
+  const { needed_lb_wk: needed } = weight;
   const through = peakAhead ? " through peak week" : "";
-  if (weight.mode === "lose" && needed < 0 && trend > needed * 0.85) {
+  // Behind is the ONE verdict the weight-trend read gives (weight-trend.ts paceVerdict).
+  const behind = weight.verdict === "behind";
+  if (weight.mode === "lose" && needed < 0 && behind) {
     return {
       kind: "weight",
       text: pickDayVariant(
@@ -357,7 +377,7 @@ function weightLever(asOf: string, weight: TodayPathWeight | null, peakAhead: bo
       ),
     };
   }
-  if (weight.mode === "gain" && needed > 0 && trend < needed * 0.85) {
+  if (weight.mode === "gain" && needed > 0 && behind) {
     return {
       kind: "weight",
       text: pickDayVariant(
@@ -408,7 +428,7 @@ function capitalize(text: string): string {
 
 // ---------- the board ----------
 
-function raceRow(race: TodayPathRace | null): TodayPathBoardRow | null {
+function raceRow(race: TodayPathRace | null, asOf: string): TodayPathBoardRow | null {
   if (!race) return null;
   const now = race.estimate_sec;
   const start = race.trend_delta_sec != null ? now - race.trend_delta_sec : null;
@@ -430,14 +450,19 @@ function raceRow(race: TodayPathRace | null): TodayPathBoardRow | null {
     note: reached
       ? "Past your target."
       : race.trend_delta_sec != null && race.trend_delta_sec !== 0 && race.since
-        ? `${Math.abs(Math.round(race.trend_delta_sec / 60)) || 1} min ${race.trend_delta_sec < 0 ? "faster" : "slower"} since ${monthDay(race.since)}`
+        ? `${Math.abs(Math.round(race.trend_delta_sec / 60)) || 1} min ${race.trend_delta_sec < 0 ? "faster" : "slower"} ${sinceWords(race.since, asOf)}`
         : null,
     direction: null,
     movement: span > 0 && race.trend_delta_sec != null ? Math.abs(race.trend_delta_sec) / span : 0,
   };
 }
 
-function weightRow(weight: TodayPathWeight | null, profile: any): TodayPathBoardRow | null {
+function weightRow(
+  weight: TodayPathWeight | null,
+  profile: any,
+  asOf: string,
+  units: AthleteUnits
+): TodayPathBoardRow | null {
   if (!weight || weight.goal_lb == null || weight.mode === "maintain") return null;
   const startLb = num(profile?.start_weight_lb);
   const startDate = dayOf(profile?.start_date);
@@ -449,7 +474,8 @@ function weightRow(weight: TodayPathWeight | null, profile: any): TodayPathBoard
   const span = start != null ? Math.abs(start - goal) : 0;
   const moved = start != null ? (lose ? start - now : now - start) : 0;
   const progress = start == null || span === 0 ? (reached ? 1 : null) : clamp01(moved / span);
-  const since = startLb != null && startDate ? ` since ${monthDay(startDate)}` : "";
+  const since = startLb != null && startDate ? ` ${sinceWords(startDate, asOf)}` : "";
+  const lbText = (n: number) => weightWords(n, units.weight);
   return {
     key: "weight",
     id: "weight",
@@ -461,16 +487,16 @@ function weightRow(weight: TodayPathWeight | null, profile: any): TodayPathBoard
     reached,
     note:
       start != null && Math.abs(start - now) >= 0.5
-        ? `${round1(Math.abs(start - now))} lb ${now < start ? "down" : "up"}${since}`
+        ? `${weightWords(Math.abs(start - now), units.weight)} ${now < start ? "down" : "up"}${since}`
         : weight.trend_lb_wk != null
-          ? `${signed(weight.trend_lb_wk)} lb/wk`
+          ? weightRateWords(weight.trend_lb_wk, units.weight)
           : null,
     direction: null,
     movement: span > 0 && weight.trend_lb_wk != null ? Math.abs(weight.trend_lb_wk * MONTH_WEEKS) / span : 0,
   };
 }
 
-function strengthRow(journey: StrengthJourney): TodayPathBoardRow | null {
+function strengthRow(journey: StrengthJourney, units: AthleteUnits): TodayPathBoardRow | null {
   const objective = journey.objective;
   const nowRead = journey.current ?? journey.latest;
   if (!objective || !nowRead) return null;
@@ -481,9 +507,10 @@ function strengthRow(journey: StrengthJourney): TodayPathBoardRow | null {
   const span = start != null ? goal - start : 0;
   const progress = start == null || span <= 0 ? (reached ? 1 : null) : clamp01((now - start) / span);
   const lbWk = num(journey.trend?.est_1rm_lb_per_week);
+  const load = (lb: number) => weightWords(lb, units.weight, { whole: true });
   const note =
     lbWk != null && lbWk !== 0
-      ? `${signed(lbWk)} lb/wk`
+      ? weightRateWords(lbWk, units.weight)
       : journey.phase === "rebuilding"
         ? "Rebuilding"
         : journey.phase === "consolidating"
@@ -493,9 +520,9 @@ function strengthRow(journey: StrengthJourney): TodayPathBoardRow | null {
     key: "strength",
     id: `strength:${objective.exercise_key || objective.exercise.toLowerCase()}`,
     label: objective.exercise,
-    start_text: start != null && Math.round(start) !== Math.round(now) ? `${Math.round(start)} lb` : null,
-    now_text: `${Math.round(now)} lb`,
-    goal_text: `${Math.round(goal)} lb`,
+    start_text: start != null && Math.round(start) !== Math.round(now) ? load(start) : null,
+    now_text: load(now),
+    goal_text: load(goal),
     progress,
     reached,
     note,
@@ -557,37 +584,41 @@ function focusWords(
 
 // ---------- the week ----------
 
-function weekOf(build: RaceBuild | null): TodayPathWeek | null {
+// The week's name is the ONE stage word (week-stage.ts), never a table of its own.
+function weekOf(build: RaceBuild | null, stageWord: string | null, units: AthleteUnits): TodayPathWeek | null {
   const week = build?.this_week;
   if (!week) return null;
-  const current = build?.weeks?.find((w) => w.current) ?? null;
-  const kindWord: Record<string, string> = { down: "Down week", peak: "Peak", taper: "Taper", race: "Race week" };
-  const phaseWord: Record<string, string> = { base: "Base", build: "Build", sharpen: "Sharpen", taper: "Taper" };
-  const phase = current
-    ? (kindWord[current.kind] ?? phaseWord[current.phase] ?? null)
-    : build?.race
-      ? (phaseWord[build.race.phase] ?? null)
-      : null;
+  const planned = num(week.km);
+  const logged = num(week.logged_km);
   return {
-    km_planned: num(week.km),
-    km_logged: num(week.logged_km),
+    km_planned: planned,
+    km_logged: logged,
     long_km: num(week.long_km),
-    phase,
+    phase: stageWord,
+    distance_words:
+      planned != null && planned > 0
+        ? logged != null && logged > 0
+          ? distanceOfWords(logged, planned, units.distance)
+          : distanceWords(planned, units.distance)
+        : null,
   };
 }
 
 // ---------- the read ----------
 
-export function todayPath(date?: string): TodayPath {
+export function todayPath(date?: string, opts: { build?: RaceBuild | null } = {}): TodayPath {
   const asOf = dayOf(date) ?? localDateISO();
+  const units = athleteUnits();
   const profile = attempt(() => getProfile(), null);
-  const build = attempt(() => raceBuild(asOf, { describeRunning: true }), null);
-  const race = attempt(() => raceOf(build), null);
-  const weight = attempt(() => weightOf(asOf, profile), null);
+  const build =
+    opts.build !== undefined ? opts.build : attempt(() => raceBuild(asOf, { describeRunning: true }), null);
+  const frame = attempt(() => weekFrameLine(asOf, { build }), null);
+  const race = attempt(() => raceOf(build, asOf, units), null);
+  const weight = attempt(() => weightOf(asOf, profile, units), null);
   const journeys = liveJourneys();
   const anchor = attempt(() => anchorOf(journeys), null);
   const checkup = attempt(() => nextCheckupRead({ asOf }), null);
-  const milestones = attempt(() => milestonesOf(asOf, build, race, weight, checkup), [] as TodayPathMilestone[]);
+  const milestones = attempt(() => milestonesOf(asOf, build, race, weight, checkup, units), [] as TodayPathMilestone[]);
   const longRun = milestones.find((m) => m.kind === "long_run") ?? null;
   const peakAhead = milestones.some((m) => m.kind === "peak_week");
   const lever =
@@ -595,9 +626,9 @@ export function todayPath(date?: string): TodayPath {
     attempt(() => sleepLever(asOf), null) ??
     attempt(() => raceLever(asOf, race, longRun), null);
   const board = [
-    attempt(() => raceRow(race), null),
-    attempt(() => weightRow(weight, profile), null),
-    ...journeys.map((journey) => attempt(() => strengthRow(journey), null)),
+    attempt(() => raceRow(race, asOf), null),
+    attempt(() => weightRow(weight, profile, asOf, units), null),
+    ...journeys.map((journey) => attempt(() => strengthRow(journey, units), null)),
     attempt(() => markerRow(checkup), null),
   ]
     .filter((row): row is TodayPathBoardRow => !!row)
@@ -615,7 +646,15 @@ export function todayPath(date?: string): TodayPath {
     lever,
     focus: attempt(() => focusWords(checkup, weight, race, journeys), null),
     board,
-    week: attempt(() => weekOf(build), null),
+    week: attempt(() => weekOf(build, frame?.stage?.word ?? null, units), null),
+    frame: frame
+      ? {
+          headline: frame.headline,
+          line: frame.line,
+          glance: frame.glance ? { line: frame.glance, href: HORIZON_HREF } : null,
+        }
+      : null,
+    units: { distance: units.distance, weight: units.weight },
   };
 }
 

@@ -27,6 +27,18 @@ import { shortDate } from "./dexa-window.js";
 import type { FocusDomain } from "./focus-candidate.js";
 import { addDaysISO, daysBetweenISO, isoDate as isoDayKey } from "../lib/dates.js";
 import { finite, round1 } from "../lib/numbers.js";
+import {
+  distanceOfWords,
+  distanceWords,
+  loadWords,
+  paceWords,
+  raceDistanceName,
+  sinceWords,
+  unitsFrom,
+  weightRateWords,
+  weightWords,
+  type AthleteUnits,
+} from "./display-words.js";
 
 // ---- the published shapes -------------------------------------------------------
 
@@ -53,6 +65,8 @@ export interface FocusChange {
   text: string;
   /** The date the comparison is made against (the window's start, the prior reading). */
   since: string | null;
+  /** `since` in words ("since Sep 25", "since Monday") — the only form a person reads. */
+  since_words?: string | null;
   /**
    * Which way the measured value moved, from the SAME evidence the text states — never a
    * verdict on it (a race estimate that got faster moves "down", a lower weight average
@@ -229,12 +243,6 @@ function addDays(iso: string, n: number): string {
 function cap(s: string): string {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
 }
-/** "−0.9" / "+0.4" with a real minus sign; "0" stays bare. */
-function signed(n: number): string {
-  const r = round1(n);
-  if (r === 0) return "0";
-  return r < 0 ? `−${Math.abs(r).toFixed(1)}` : `+${r.toFixed(1)}`;
-}
 /** A finish time: "1:53:52", or "2:00" for a round target. */
 export function clock(sec: number, opts: { round?: boolean } = {}): string {
   const s = Math.max(0, Math.round(sec));
@@ -257,6 +265,12 @@ export function joinAnd(items: string[]): string {
   const list = items.filter(Boolean);
   if (list.length <= 1) return list[0] ?? "";
   return `${list.slice(0, -1).join(", ")} and ${list[list.length - 1]}`;
+}
+
+/** "Sharpen · " — the week's one stage word ahead of the block line, when known. */
+function stagePrefix(inp: CoachingFocusInput): string {
+  const word = str((inp.weekStage as { word?: unknown } | null | undefined)?.word);
+  return word ? `${word} · ` : "";
 }
 
 /** The read's own date: explicit, else the signal state's, else the race build's. */
@@ -318,12 +332,14 @@ export function blockRead(inp: CoachingFocusInput): BlockReadResult | null {
     deload = "recovery_week";
     decision = "Your recovery week is running: same movements, lighter volume, then back to building.";
   } else if (skipped) {
+    // The set-aside is said ONCE, here in the line; the decision says what happens
+    // instead (the prompt and the card read the two side by side).
     tail =
       "the scheduled deload is set aside: your loaded weeks haven't called for one, so this week keeps pushing intensity";
     deload = "set_aside";
     decision = taper
-      ? `The block's deload is set aside because the loaded weeks haven't earned it; ${taperWords}.`
-      : "The block's deload is set aside because the loaded weeks haven't earned it; it comes back as soon as they do.";
+      ? `Intensity carries on until the loaded weeks earn a lighter week; ${taperWords}.`
+      : "Intensity carries on until the loaded weeks earn a lighter week.";
   } else if (phase === "deload") {
     tail = "a deload week: absorb the work you've put in";
     deload = "deload_week";
@@ -377,7 +393,8 @@ export function blockRead(inp: CoachingFocusInput): BlockReadResult | null {
       decision,
       race_taper_from: taper,
     },
-    line: tail ? `${wk} — ${tail}.` : `${wk}.`,
+    // The week's ONE stage word (week-stage.ts) leads when the orchestrator passed it.
+    line: `${stagePrefix(inp)}${tail ? `${wk} — ${tail}.` : `${wk}.`}`,
   };
 }
 
@@ -417,23 +434,29 @@ export interface RaceRead {
   lastClosed: { weekStart: string | null; km: number } | null;
   bestWeekKm: number | null;
   maxLongKmAhead: number | null;
+  /** The athlete's units: every sentence built off this read says its numbers in them. */
+  units?: AthleteUnits;
 }
 
-function distanceName(km: number | null): string {
+/** The race read's distance unit (km when a hand-built read carries none). */
+function raceDist(r: RaceRead): AthleteUnits["distance"] {
+  return r.units?.distance ?? "km";
+}
+
+/** The athlete's units off the input (CoachingFocusInput.units), km / lb when absent. */
+export function unitsOfInput(inp: CoachingFocusInput): AthleteUnits {
+  const u = inp.units as Partial<AthleteUnits> | null | undefined;
+  return unitsFrom({ distance: u?.distance, weight: u?.weight });
+}
+
+function distanceName(km: number | null, units: AthleteUnits): string {
   if (km == null) return "race";
-  if (Math.abs(km - 21.1) < 0.4) return "half marathon";
-  if (Math.abs(km - 42.2) < 0.6) return "marathon";
-  if (Math.abs(km - 10) < 0.3) return "10K";
-  if (Math.abs(km - 5) < 0.2) return "5K";
-  return `${round1(km)} km race`;
-}
-
-function paceText(secPerKm: number): string {
-  const s = Math.max(0, Math.round(secPerKm));
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} /km`;
+  const name = raceDistanceName(km, units.distance);
+  return /^\d/.test(name) || /^\d+K$/.test(name) ? name : name.toLowerCase();
 }
 
 export function raceRead(inp: CoachingFocusInput): RaceRead | null {
+  const units = unitsOfInput(inp);
   const rb = inp.raceBuild;
   if (!rb?.available || !rb.race) return null;
   const race = rb.race;
@@ -461,11 +484,14 @@ export function raceRead(inp: CoachingFocusInput): RaceRead | null {
   return {
     event: str(race.event),
     raceDate: dayOf(race.date),
-    distanceName: distanceName(fin(race.distance_km)),
+    distanceName: distanceName(fin(race.distance_km), units),
     daysTo: fin(race.days_to_race),
     phase,
     estimateSec: est,
-    estimatePace: fin(pred?.estimate_pace_sec_per_km) != null ? paceText(Number(pred?.estimate_pace_sec_per_km)) : null,
+    estimatePace:
+      fin(pred?.estimate_pace_sec_per_km) != null
+        ? paceWords(Number(pred?.estimate_pace_sec_per_km), units.distance, { spaced: true })
+        : null,
     estimateAsOf: dayOf(pred?.as_of),
     targetSec: fin(race.target?.sec),
     stretchSec: fin(race.stretch?.sec),
@@ -499,6 +525,7 @@ export function raceRead(inp: CoachingFocusInput): RaceRead | null {
     lastClosed: lastKm != null ? { weekStart: dayOf(last?.week_start), km: lastKm } : null,
     bestWeekKm: fin(rb.capacity?.best_week_km),
     maxLongKmAhead: longAhead.length ? Math.max(...longAhead) : null,
+    units,
   };
 }
 
@@ -530,12 +557,12 @@ export function raceFitWords(r: RaceRead): string {
   return parts.join(", ");
 }
 
-function weekPhrase(w: RaceWeekInput): string {
+function weekPhrase(w: RaceWeekInput, units: AthleteUnits): string {
   const kind = lc(w?.kind);
   const km = fin(w?.km);
   const long = fin(w?.long_km);
-  const kmWords = km != null ? `${round1(km)} km` : "";
-  const longWords = long != null ? ` with a ${round1(long)} km long run` : "";
+  const kmWords = km != null ? distanceWords(km, units.distance) : "";
+  const longWords = long != null ? ` with a ${distanceWords(long, units.distance)} long run` : "";
   if (kind === "peak") return `is the peak${kmWords ? `: ${kmWords}${longWords}` : ""}`;
   if (kind === "taper") return `the taper starts${kmWords ? `: about ${kmWords}` : ""}`;
   if (kind === "race") return "is race week";
@@ -549,11 +576,11 @@ export function raceMove(r: RaceRead): string {
   const tw = r.thisWeek;
   if (tw) {
     const quality = tw.quality ? `${lc(tw.quality)}${tw.qualityPace ? ` (${tw.qualityPace})` : ""}` : "";
-    const long = tw.longKm != null ? `a ${round1(tw.longKm)} km long run` : "";
+    const long = tw.longKm != null ? `a ${distanceWords(tw.longKm, raceDist(r))} long run` : "";
     const both = joinAnd([quality, long].filter(Boolean));
     if (both) bits.push(`This week: ${both}.`);
   }
-  if (r.next) bits.push(`Next week ${weekPhrase(r.next)}.`);
+  if (r.next) bits.push(`Next week ${weekPhrase(r.next, r.units ?? unitsFrom(null))}.`);
   return bits.join(" ");
 }
 
@@ -611,7 +638,8 @@ export function leverLift(inp: CoachingFocusInput): LeverLift | null {
 }
 
 /** "Overhead press sits at an est. 1RM of 87 lb — novice for your 40s, about 10 lb from intermediate." */
-export function leverFacts(l: LeverLift): string {
+export function leverFacts(l: LeverLift, units: AthleteUnits = unitsFrom(null)): string {
+  const lb = (n: number) => loadWords(Math.round(n), units.weight);
   const e1rm = fin(l.cap.est_1rm);
   const level = lc(l.cap.level);
   const band = str(l.cap.age_band);
@@ -619,19 +647,19 @@ export function leverFacts(l: LeverLift): string {
   const nextLevel = lc(l.cap.to_next?.level);
   const head =
     e1rm != null
-      ? `${cap(lc(l.label))} sits at an est. 1RM of ${Math.round(e1rm)} lb${level ? ` — ${level}${band ? ` for your ${band}` : ""}` : ""}${nextLb != null && nextLevel ? `, about ${Math.round(nextLb)} lb from ${nextLevel}` : ""}.`
+      ? `${cap(lc(l.label))} sits at an est. 1RM of ${lb(e1rm)}${level ? ` — ${level}${band ? ` for your ${band}` : ""}` : ""}${nextLb != null && nextLevel ? `, about ${lb(nextLb)} from ${nextLevel}` : ""}.`
       : "";
   const trend = fin(l.lift?.trend_per_wk);
   let move = "";
   if (trend != null && trend > 0.2) {
-    move = ` It's climbing about ${round1(trend)} lb a week`;
+    move = ` It's climbing about ${weightWords(trend, units.weight)} a week`;
     if (nextLb != null && nextLevel) {
       const weeks = Math.ceil(nextLb / trend);
       if (weeks <= 26) move += `, so ${nextLevel} is roughly ${weeks} week${weeks === 1 ? "" : "s"} out at this rate`;
     }
     move += ".";
   } else if (trend != null && trend < -0.2) {
-    move = ` It has slipped about ${round1(Math.abs(trend))} lb a week lately.`;
+    move = ` It has slipped about ${weightWords(Math.abs(trend), units.weight)} a week lately.`;
   } else if (lc(l.lift?.status) === "plateaued") {
     move = " It has held flat for several sessions.";
   } else if (trend != null) {
@@ -715,6 +743,7 @@ function strengthStanding(inp: CoachingFocusInput): FocusEvidence | null {
 
 function trainingEvidence(inp: CoachingFocusInput, leverIsLead: boolean): FocusEvidence[] {
   const out: FocusEvidence[] = [];
+  const units = unitsOfInput(inp);
   const l = leverLift(inp);
   if (l && fin(l.cap.est_1rm) != null) {
     const trend = fin(l.lift?.trend_per_wk);
@@ -724,13 +753,13 @@ function trainingEvidence(inp: CoachingFocusInput, leverIsLead: boolean): FocusE
     out.push({
       domain: "training",
       label: cap(lc(l.label)),
-      value: `est. 1RM ${Math.round(Number(l.cap.est_1rm))} lb`,
+      value: `est. 1RM ${loadWords(Math.round(Number(l.cap.est_1rm)), units.weight)}`,
       direction: trend == null ? null : trend > 0.2 ? "up" : trend < -0.2 ? "down" : "steady",
       note:
         [
-          trend != null && Math.abs(trend) > 0.2 ? `${signed(trend)} lb/wk` : null,
+          trend != null && Math.abs(trend) > 0.2 ? weightRateWords(trend, units.weight) : null,
           nextLb != null && nextLevel
-            ? `about ${Math.round(nextLb)} lb to ${nextLevel}${band ? ` for your ${band}` : ""}`
+            ? `about ${loadWords(Math.round(nextLb), units.weight)} to ${nextLevel}${band ? ` for your ${band}` : ""}`
             : null,
         ]
           .filter(Boolean)
@@ -751,7 +780,7 @@ function runningEvidence(r: RaceRead | null, inp: CoachingFocusInput): FocusEvid
   if (r && r.estimateSec != null) {
     const trendNote =
       r.trend && Math.abs(r.trend.deltaSec) >= 30
-        ? `${gapWords(r.trend.deltaSec)} ${r.trend.deltaSec < 0 ? "faster" : "slower"}${r.trend.since ? ` since ${shortDate(r.trend.since)}` : ""}`
+        ? `${gapWords(r.trend.deltaSec)} ${r.trend.deltaSec < 0 ? "faster" : "slower"}${r.trend.since ? ` ${sinceWords(r.trend.since, readDate(inp))}` : ""}`
         : null;
     out.push({
       domain: "running",
@@ -771,12 +800,14 @@ function runningEvidence(r: RaceRead | null, inp: CoachingFocusInput): FocusEvid
       domain: "running",
       label: "Running this week",
       value:
-        logged != null ? `${round1(logged)} of ${round1(r.thisWeek.km)} km` : `${round1(r.thisWeek.km)} km planned`,
+        logged != null
+          ? distanceOfWords(logged, r.thisWeek.km, raceDist(r))
+          : `${distanceWords(r.thisWeek.km, raceDist(r))} planned`,
       direction: null,
       note:
         [
-          r.thisWeek.longKm != null ? `long run ${round1(r.thisWeek.longKm)} km` : null,
-          r.lastClosed ? `last week ${round1(r.lastClosed.km)} km` : null,
+          r.thisWeek.longKm != null ? `long run ${distanceWords(r.thisWeek.longKm, raceDist(r))}` : null,
+          r.lastClosed ? `last week ${distanceWords(r.lastClosed.km, raceDist(r))}` : null,
           // The habitual ride is part of the week's load: one clause here, not a bullet.
           rideClause(r),
         ]
@@ -828,6 +859,8 @@ export interface WeightRead {
   goalLb: number | null;
   goalDate: string | null;
   windowDays: number | null;
+  /** The one on-pace verdict (weight-trend.ts), when the orchestrator passed the read. */
+  verdict?: "on_pace" | "ahead" | "behind" | "steady" | null;
 }
 
 export function weightRead(inp: CoachingFocusInput): WeightRead | null {
@@ -835,11 +868,15 @@ export function weightRead(inp: CoachingFocusInput): WeightRead | null {
   const points = arr<{ date?: unknown; weight_lb?: unknown }>(gp?.points).filter((p) => fin(p?.weight_lb) != null);
   if (!points.length) return null;
   const last = points[points.length - 1];
+  // The ONE weight-trend read wins when present: its rate and ask are rounded once, the
+  // same figures Today's path, the Body page and the Season print.
+  const one = inp.weightTrend;
   return {
     latest: Number(last.weight_lb),
     latestDate: dayOf(last.date),
-    trend: fin(gp?.trend?.lb_wk),
-    needed: fin(gp?.needed?.lb_wk),
+    trend: one ? fin(one.rate_lb_wk) : fin(gp?.trend?.lb_wk),
+    needed: one ? fin(one.needed_lb_wk) : fin(gp?.needed?.lb_wk),
+    verdict: one?.verdict ?? null,
     goalLb: fin(gp?.goal?.weight_lb),
     goalDate: dayOf(gp?.goal?.date),
     windowDays: fin(gp?.window_days),
@@ -848,6 +885,9 @@ export function weightRead(inp: CoachingFocusInput): WeightRead | null {
 
 /** How the weight trend sits against the line to the goal. Information, never a verdict. */
 export function paceRelation(w: WeightRead): "on" | "ahead" | "behind" | null {
+  // The ONE verdict (weight-trend.ts paceVerdict) when the read rode in.
+  if (w.verdict === "on_pace") return "on";
+  if (w.verdict === "ahead" || w.verdict === "behind") return w.verdict;
   if (w.trend == null || w.needed == null) return null;
   const diff = w.trend - w.needed; // both negative on a cut; a more negative trend is ahead
   if (Math.abs(diff) <= 0.2) return "on";
@@ -856,12 +896,15 @@ export function paceRelation(w: WeightRead): "on" | "ahead" | "behind" | null {
 
 function bodyEvidence(inp: CoachingFocusInput): FocusEvidence[] {
   const out: FocusEvidence[] = [];
+  const units = unitsOfInput(inp);
   const w = weightRead(inp);
   if (w) {
+    // The rate and the ask are the ONE weight-trend read's (weight-trend.ts) when the
+    // orchestrator passed it; the figures every other weight surface prints.
     const note = [
-      w.trend != null ? `${signed(w.trend)} lb/wk trend` : null,
+      w.trend != null ? `${weightRateWords(w.trend, units.weight)} trend` : null,
       w.goalLb != null && w.goalDate && w.needed != null
-        ? `${round1(w.goalLb)} lb by ${shortDate(w.goalDate)} asks ${signed(w.needed)} lb/wk`
+        ? `${weightWords(w.goalLb, units.weight)} by ${shortDate(w.goalDate)} asks ${weightRateWords(w.needed, units.weight)}`
         : null,
     ]
       .filter(Boolean)
@@ -869,7 +912,7 @@ function bodyEvidence(inp: CoachingFocusInput): FocusEvidence[] {
     out.push({
       domain: "body",
       label: "Weight",
-      value: `${round1(w.latest)} lb`,
+      value: weightWords(w.latest, units.weight),
       direction: w.trend == null ? null : w.trend <= -0.1 ? "down" : w.trend >= 0.1 ? "up" : "steady",
       note: note || null,
       as_of: w.latestDate,
@@ -983,6 +1026,21 @@ const WEIGHT_CHANGE_MIN_LB = 0.4;
 const CHANGES_MAX = 4;
 
 function weightChange(inp: CoachingFocusInput, today: string): FocusChange | null {
+  const units = unitsOfInput(inp);
+  // The ONE weight-trend read's week change and rate, when the orchestrator passed it.
+  const one = inp.weightTrend;
+  if (one) {
+    const wc = one.week_change;
+    if (!wc) return null;
+    const rate = fin(one.rate_lb_wk);
+    return {
+      domain: "body",
+      kind: "weight",
+      text: `Weight's 7-day average is ${weightWords(wc.avg_lb, units.weight)}, ${str(wc.words)}${rate != null ? ` — trending ${weightRateWords(rate, units.weight)}` : ""}.`,
+      since: wc.since,
+      direction: wc.delta_lb < 0 ? "down" : "up",
+    };
+  }
   const points = arr<{ date?: unknown; weight_lb?: unknown }>(inp.goalPace?.points)
     .map((p) => ({ date: dayOf(p?.date), w: fin(p?.weight_lb) }))
     .filter((p): p is { date: string; w: number } => p.date != null && p.w != null);
@@ -999,7 +1057,7 @@ function weightChange(inp: CoachingFocusInput, today: string): FocusChange | nul
   return {
     domain: "body",
     kind: "weight",
-    text: `Weight's 7-day average is ${a.toFixed(1)} lb, ${Math.abs(delta).toFixed(1)} lb ${delta < 0 ? "lower" : "higher"} than the week before.`,
+    text: `Weight's 7-day average is ${weightWords(a, units.weight)}, ${weightWords(Math.abs(delta), units.weight)} ${delta < 0 ? "lower" : "higher"} than the week before.`,
     since: priorStart,
     direction: delta < 0 ? "down" : "up",
   };
@@ -1013,11 +1071,19 @@ export function focusChanges(inp: CoachingFocusInput, race: RaceRead | null): Fo
   const today = readDate(inp);
   const out: FocusChange[] = [];
   // New bests this week (weekWins: one per lift, newest first).
-  const prs = arr<{ exercise?: unknown; label?: unknown }>(inp.weekWins?.prs).filter((p) => str(p?.exercise));
+  const units = unitsOfInput(inp);
+  const prs = arr<{ exercise?: unknown; label?: unknown; weight_lb?: unknown; reps?: unknown }>(inp.weekWins?.prs).filter(
+    (p) => str(p?.exercise)
+  );
   if (prs.length) {
-    const words = prs
-      .slice(0, 2)
-      .map((p) => `${str(p.exercise)}${str(p.label) ? ` ${str(p.label).replace(/\s*[—-]\s*new best\s*$/i, "")}` : ""}`);
+    // The set in the athlete's weight unit when the best carries it, else its own label.
+    const setWords = (p: { label?: unknown; weight_lb?: unknown; reps?: unknown }): string => {
+      const lb = fin(p.weight_lb);
+      const reps = fin(p.reps);
+      if (lb != null && lb > 0 && reps != null) return `${loadWords(lb, units.weight)} × ${reps}`;
+      return str(p.label).replace(/\s*[—-]\s*new best\s*$/i, "");
+    };
+    const words = prs.slice(0, 2).map((p) => `${str(p.exercise)}${setWords(p) ? ` ${setWords(p)}` : ""}`);
     out.push({
       domain: "training",
       kind: "new_best",
@@ -1031,7 +1097,7 @@ export function focusChanges(inp: CoachingFocusInput, race: RaceRead | null): Fo
     out.push({
       domain: "running",
       kind: "race_estimate",
-      text: `${cap(race.distanceName)} estimate ${gapWords(race.trend.deltaSec)} ${race.trend.deltaSec < 0 ? "faster" : "slower"}${race.trend.since ? ` since ${shortDate(race.trend.since)}` : ""} — now ${clock(race.estimateSec)}.`,
+      text: `${cap(race.distanceName)} estimate ${gapWords(race.trend.deltaSec)} ${race.trend.deltaSec < 0 ? "faster" : "slower"}${race.trend.since ? ` ${sinceWords(race.trend.since, today)}` : ""} — now ${clock(race.estimateSec)}.`,
       since: race.trend.since,
       // The estimate is a TIME: faster is the clock moving down — the evidence bullet's
       // own direction for the same trend.
@@ -1084,11 +1150,14 @@ export function focusChanges(inp: CoachingFocusInput, race: RaceRead | null): Fo
     out.push({
       domain: "running",
       kind: "run_volume",
-      text: `Last week's ${round1(race.lastClosed.km)} km was your biggest running week of the last eight.`,
+      text: `Last week's ${distanceWords(race.lastClosed.km, raceDist(race))} was your biggest running week of the last eight.`,
       since: race.lastClosed.weekStart,
       // The biggest week of the eight: the weekly volume went up.
       direction: "up",
     });
   }
-  return out.slice(0, CHANGES_MAX);
+  // Every change carries its window in words; `since` stays the machine date.
+  return out
+    .slice(0, CHANGES_MAX)
+    .map((c) => ({ ...c, since_words: c.since ? sinceWords(c.since, today) || null : null }));
 }

@@ -29,6 +29,7 @@ function loadTodayContext() {
   // The injury banner nudge rotates through date-utils' pickDayVariant; load it as
   // the browser does, then pin the day so the rotation is deterministic here.
   vm.runInNewContext(readFileSync(join(root, "public/js/date-utils.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
   context.localISO = () => "2026-07-01";
   vm.runInNewContext(readFileSync(join(root, "public/js/today-context-client.js"), "utf8"), context);
   return context.CairnTodayContext;

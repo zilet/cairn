@@ -251,6 +251,12 @@
         wm.meal_plan_auto_draft = settingsSourcesAutomationInput(event).checked;
       }
     );
+    settingsSourcesAutomationRequired<HTMLSelectElement>(deps.root, "#runUnits").addEventListener("change", (event) => {
+      wm.run_units = (event.currentTarget as HTMLSelectElement).value === "mi" ? "mi" : "km";
+    });
+    settingsSourcesAutomationRequired<HTMLSelectElement>(deps.root, "#weightUnits").addEventListener("change", (event) => {
+      wm.weight_units = (event.currentTarget as HTMLSelectElement).value === "kg" ? "kg" : "lb";
+    });
     settingsSourcesAutomationRequired<HTMLSelectElement>(deps.root, "#leadMode").addEventListener("change", (event) => {
       const value = (event.currentTarget as HTMLSelectElement).value;
       wm.lead_mode = (

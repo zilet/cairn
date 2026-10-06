@@ -33,6 +33,8 @@ function loadCards() {
   };
   context.globalThis = context;
   context.window = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/date-utils.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/capture-read-cards-client.js"), "utf8"), context);
   context.__esc = esc;
   return context;

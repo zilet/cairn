@@ -11,7 +11,6 @@
   type Terrain = ClientHorizonTerrain;
 
   const DAY = 86400000;
-  const KM_PER_MILE = 1.609344;
   const fx = (n: number): string => (Math.round(n * 10) / 10).toString();
 
   function dayNum(iso: string): number {
@@ -24,11 +23,7 @@
   }
 
   /** "SEP 21": the mono axis date. */
-  function monoDate(iso: string): string {
-    const d = new Date(`${iso.slice(0, 10)}T12:00:00Z`);
-    if (Number.isNaN(d.getTime())) return "";
-    return d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" }).toUpperCase();
-  }
+  const monoDate = (iso: string): string => CairnFmt.date(String(iso).slice(0, 10), { fmt: { month: "short", day: "numeric" }, utc: true }).toUpperCase();
 
   function kmWord(km: number): string {
     return String(Math.round(km * 10) / 10);
@@ -87,10 +82,8 @@
    * the race model's own kmText / distNum, so the chart and the card never disagree.
    */
   function thisWeekWords(targetKm: number, doneKm: number, units: "km" | "mi"): string {
-    const model = typeof CairnRaceWeekModel !== "undefined" ? CairnRaceWeekModel : null;
-    const conv = (k: number): number => (units === "mi" ? k / KM_PER_MILE : k);
-    const kmText = (k: number): string => (model ? model.kmText(k, units) : `${kmWord(conv(k))} ${units}`);
-    const distNum = (k: number): string => (model ? model.distNum(k, units) : kmWord(conv(k)));
+    const kmText = (k: number): string => CairnFmt.distance(k, units);
+    const distNum = (k: number): string => CairnFmt.distance(k, units, true);
     if (doneKm > 0 && targetKm > 0) return `${distNum(doneKm)} of ${kmText(targetKm)}`;
     if (doneKm > 0) return `${kmText(doneKm)} run`;
     return targetKm > 0 ? `${kmText(targetKm)} planned` : "";
@@ -126,7 +119,7 @@
     const end = raceDay >= lastStart && raceDay < lastStart + 7 ? raceDay + 1 : Math.max(raceDay + 1, lastStart + 7);
     const X = (n: number): number => L + ((n - first) / (end - first)) * (R - L);
     const units: "km" | "mi" = terrain.units === "mi" ? "mi" : "km";
-    const conv = (k: unknown): number => Math.max(0, Number(k) || 0) / (units === "mi" ? KM_PER_MILE : 1);
+    const conv = (k: unknown): number => Math.max(0, CairnFmt.toUnit(k, units));
     // The axis holds every figure a column stands to: the weeks, and this week's log
     // when it has already run past the plan.
     const values = weeks.map((w) => Math.max(conv(w.km), w.current ? conv(w.logged_km) : 0));
@@ -249,7 +242,7 @@
     const ribbonH = 15;
     const weeks = (terrain.weeks || []).filter((w) => Number.isFinite(dayNum(w.week_start)));
     const ahead = weeks.filter((w) => !w.logged);
-    const conv = (k: unknown): number => Math.max(0, Number(k) || 0) / (mi ? KM_PER_MILE : 1);
+    const conv = (k: unknown): number => Math.max(0, CairnFmt.toUnit(k, units));
     let g = "";
     // Recessive grid: solid hairlines, the axis numbers in mono beside them.
     for (const line of layout.grid) {

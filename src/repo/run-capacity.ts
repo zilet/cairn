@@ -38,6 +38,7 @@
 import { db } from "../db.js";
 import { addDaysISO, daysBetweenISO, isoDaysAgo, mondayOf } from "../lib/dates.js";
 import { round1 } from "../lib/numbers.js";
+import { distanceWords, type DistanceUnit } from "./display-words.js";
 import { withoutShadowActivities } from "./activity-shadow.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { harmEvidenceOnDay, nextMorningClean, type HarmEvidence } from "./brain/read-adherence.js";
@@ -339,9 +340,8 @@ const SET_ASIDE_NO_FLOOR: ReadonlyArray<(week: string, why: string) => string> =
 
 const OTHER_WEEKS = ["", "One other bigger week is set aside too.", "Two other bigger weeks are set aside too."];
 
-function kmWords(km: number): string {
-  const r = round1(km);
-  return `${Number.isInteger(r) ? r : r.toFixed(1)} km`;
+function kmWords(km: number, units: DistanceUnit = "km"): string {
+  return distanceWords(km, units);
 }
 
 /**
@@ -350,16 +350,17 @@ function kmWords(km: number): string {
  */
 export function capacitySetAsideLine(
   capacity: Pick<DemonstratedRunCapacity, "set_aside" | "floor_km"> | null | undefined,
-  date: string
+  date: string,
+  units: DistanceUnit = "km"
 ): string {
   const aside = capacity?.set_aside ?? [];
   if (!aside.length) return "";
   const top = aside[0]!;
   const why = setAsideReason(top.harm);
-  const floor = capacity?.floor_km != null && capacity.floor_km > 0 ? kmWords(capacity.floor_km) : null;
+  const floor = capacity?.floor_km != null && capacity.floor_km > 0 ? kmWords(capacity.floor_km, units) : null;
   const lead = floor
-    ? pickDayVariant(SET_ASIDE_WITH_FLOOR, date, "run-capacity:set-aside")(kmWords(top.km), why, floor)
-    : pickDayVariant(SET_ASIDE_NO_FLOOR, date, "run-capacity:set-aside")(kmWords(top.km), why);
+    ? pickDayVariant(SET_ASIDE_WITH_FLOOR, date, "run-capacity:set-aside")(kmWords(top.km, units), why, floor)
+    : pickDayVariant(SET_ASIDE_NO_FLOOR, date, "run-capacity:set-aside")(kmWords(top.km, units), why);
   const others = aside.length - 1;
   const tail =
     others <= 0

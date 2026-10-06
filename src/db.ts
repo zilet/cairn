@@ -1011,6 +1011,7 @@ CREATE TABLE IF NOT EXISTS settings (
   garmin_last_export_attempt_at TEXT DEFAULT '', -- when the last strength write-back was ATTEMPTED (UTC ISO) — landed or not
   garmin_last_export_status TEXT DEFAULT '',   -- short result: "ok: 8 of 14 sets" | "failed: …"; a persistently failing PUT must be visible
   run_units TEXT DEFAULT 'km',                 -- km | mi — athlete-facing run distance and pace (engine stays km)
+  weight_units TEXT DEFAULT 'lb',              -- lb | kg — athlete-facing bodyweight and loads (stored data stays lb; repo/display-words.ts)
   meal_plan_auto_draft INTEGER DEFAULT 0       -- 1 = weekly + protective meal-plan drafts without being asked; 0 = drafted on request (see src/repo/meal-plan-auto-draft.ts)
 );
 

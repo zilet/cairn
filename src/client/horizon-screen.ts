@@ -73,12 +73,6 @@ function wireHorizonBack(root: ParentNode): void {
     CairnHorizonController.mount(host, {
       today: localISO(),
       load: (path: string) => api(path),
-      saveUnits: (units: "km" | "mi") =>
-        api("/settings", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ run_units: units }),
-        }),
       navigate: horizonNavigate,
       hrefFor: horizonHref,
       reducedMotion: () => (typeof reducedMotion === "function" ? reducedMotion() : false),

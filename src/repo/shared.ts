@@ -358,9 +358,9 @@ export function metricLabel(metric: unknown): string {
   return METRIC_LABELS[key] ?? key.replace(/_/g, " ");
 }
 
-// Pounds per kilogram — the single conversion constant (was duplicated in profile.ts
-// and, less precisely as 2.2046, in enrich.ts's Garmin kg→lb path).
-export const LB_PER_KG = 2.2046226218;
+// Pounds per kilogram — defined once in display-words.ts (the one server formatter),
+// re-exported here for the modules that already import it from shared.
+export { LB_PER_KG } from "./display-words.js";
 
 export interface ClipTextOptions {
   // Collapse every whitespace run (including newlines) to a single space before

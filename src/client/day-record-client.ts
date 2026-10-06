@@ -29,23 +29,9 @@ type DayRecordDetail = import("../contracts/day-detail.js").DayDetail;
     return localISO(d);
   }
 
-  function daysBetween(later: string, earlier: string): number {
-    return Math.round((parts(later).getTime() - parts(earlier).getTime()) / 86_400_000);
-  }
-
   /** "Mon 28 Sep" — the day as every Today-home header eyebrow prints it. */
   function shortDate(iso: string): string {
     return CairnUiHeader.shortDate(iso);
-  }
-
-  /** Where the day sits against today, in words: "Yesterday", "3 days ago", "Tomorrow", "In 4 days". */
-  function relativeWords(iso: string, today: string): string {
-    const n = daysBetween(iso, today);
-    if (n === 0) return "Today";
-    if (n === -1) return "Yesterday";
-    if (n === 1) return "Tomorrow";
-    if (n < 0) return -n < 14 ? `${-n} days ago` : `${Math.round(-n / 7)} weeks ago`;
-    return n < 14 ? `In ${n} days` : `In ${Math.round(n / 7)} weeks`;
   }
 
   // ---- markup (pure) ----
@@ -199,7 +185,7 @@ type DayRecordDetail = import("../contracts/day-detail.js").DayDetail;
   /** The day from its record alone: a day the detail read does not reach (past next week's end). */
   function dayHtml(record: DayRecord, opts: { backLabel: string }): string {
     const past = record.relation === "past";
-    const kicker = `${relativeWords(record.date, record.today)} · ${past ? "the day's record" : "a preview"}`;
+    const kicker = `${CairnFmt.relDay(record.date, record.today)} · ${past ? "the day's record" : "a preview"}`;
     return `<article class="dayrec dayrec-${escAttr(record.relation)}" aria-labelledby="dayrecTitle">
       ${topHtml(record.date, record.today, opts.backLabel)}
       <div class="dayrec-head">
@@ -321,6 +307,6 @@ type DayRecordDetail = import("../contracts/day-detail.js").DayDetail;
     paint(composedHtml(record ?? cached?.data ?? null, detail ?? warmDetail, opts));
   }
 
-  const CAIRN_DAY_RECORD = { dayHtml, composedHtml, relativeWords, shortDate, renderDay };
+  const CAIRN_DAY_RECORD = { dayHtml, composedHtml, shortDate, renderDay };
   Object.assign(globalThis, { CairnDayRecord: CAIRN_DAY_RECORD, renderDay });
 }

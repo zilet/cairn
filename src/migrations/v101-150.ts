@@ -605,4 +605,12 @@ export const MIGRATIONS_101_150: Migration[] = [
       addColumn(db, "exercises", "per_side INTEGER");
     },
   },
+  {
+    version: 120,
+    name: "weight-display-units",
+    // Athlete-facing bodyweight and loads: lb or kg (the units registry,
+    // repo/display-words.ts). Stored weights stay pounds; only the formatter edge
+    // converts. Default lb so existing installs do not flip. Two-step: also in db.ts.
+    up: (db) => addColumn(db, "settings", "weight_units TEXT DEFAULT 'lb'"),
+  },
 ];

@@ -35,7 +35,10 @@ export type DayDetailStatus = "done" | "today" | "upcoming" | "rest" | "open";
 /** One of the engine's five heart-rate zones. */
 export type DayDetailZoneKey = "Z1" | "Z2" | "Z3" | "Z4" | "Z5";
 
-/** A prescribed load. Weights are lb; `null` = bodyweight; negative = assisted (-30 = 30 lb assist). */
+/**
+ * A prescribed load. `weight` is lb (canonical); `null` = bodyweight; negative = assisted
+ * (-30 = 30 lb assist). `text` and `change` are in the athlete's weight unit.
+ */
 export interface DayDetailLoad {
   weight: number | null;
   /** "185 lb", "bodyweight", "30 lb assist". */
@@ -241,8 +244,12 @@ export interface DayDetailWeek {
   race: {
     event: string | null;
     kind: "build" | "down" | "peak" | "taper" | "race";
-    /** "Build week", "Taper week". */
+    /** The week's stage key (src/repo/stage-words.ts): a build rung speaks as its phase. */
+    stage?: "base" | "build" | "sharpen" | "down" | "peak" | "taper" | "race";
+    /** The ONE stage word for the week, as a week tag: "Sharpen week", "Taper week". */
     word: string;
+    /** The stage inside a sentence: "a sharpen week". */
+    phrase?: string;
     /** The rung's one coaching sentence. */
     focus: string;
     weeks_to_race: number;
@@ -293,4 +300,6 @@ export interface DayDetail {
   /** Life-context events active that day, by title (a trip, an illness logged as context). */
   caveats: string[];
   run_units: "km" | "mi";
+  /** The athlete's weight unit; every load `text` / `change` here is already in it. */
+  weight_units?: "lb" | "kg";
 }

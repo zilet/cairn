@@ -91,7 +91,7 @@ type TodayCompassBuild = {
       : `${word}${stats.needed_lb_wk ? ` · need ${fmtPace(stats.needed_lb_wk)}` : ""}`;
     const title = mode === "maintain"
       ? `Weight trend ${fmtPace(stats.trend_lb_wk)} lb/wk — ${word || "holding steady"}`
-      : `Trend ${fmtPace(stats.trend_lb_wk)} lb/wk over recent weigh-ins${stats.goal_weight_lb != null ? ` · need ${fmtPace(stats.needed_lb_wk)} ${mode === "gain" ? "to build toward" : "to reach"} ${stats.goal_weight_lb} lb${stats.goal_date ? ` by ${stats.goal_date}` : ""}` : ""}`;
+      : `Trend ${fmtPace(stats.trend_lb_wk)} lb/wk over recent weigh-ins${stats.goal_weight_lb != null ? ` · need ${fmtPace(stats.needed_lb_wk)} ${mode === "gain" ? "to build toward" : "to reach"} ${stats.goal_weight_lb} lb${stats.goal_date ? ` by ${CairnFmt.date(stats.goal_date)}` : ""}` : ""}`;
     return `<div class="stat stat-pace pace-${stats.pace_status || "on"}" title="${deps.escapeAttr(title)}">
         <div class="stat-n numeral">${fmtPace(stats.trend_lb_wk)}</div>
         <div class="stat-sub">${deps.escapeHtml(sub)}</div>

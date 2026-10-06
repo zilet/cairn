@@ -465,7 +465,7 @@ test("MCP modular tool sources are discovered without duplicate names", () => {
   // The push offer: +2 (accept_push_offer, dismiss_push_offer) in src/surfaces/mcp/person.ts —
   // the mirrors of POST /api/training-drive/offer/accept|dismiss (the athlete's answer to the
   // coach's ask-tier "want to open the throttle?").
-  assert.equal(tools.length, 294,"tool count changes only for reviewed MCP additions");
+  assert.equal(tools.length, 296,"tool count changes only for reviewed MCP additions");
   assert.equal(new Set(tools).size, tools.length, "MCP tool names must be unique across modules");
   assert.doesNotMatch(mcp, /server\.tool\(/, "src/mcp.ts should stay a registry, not a tool-definition file");
   assert.doesNotMatch(mcp, /server\.tool\("get_chat_history"/);
@@ -1862,7 +1862,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /declare function fmtWeight\(weight: unknown\): string/);
   assert.match(clientGlobals, /declare function formatFoodNum\(value: unknown\): string/);
   assert.match(clientGlobals, /declare function fmtKm\(km: unknown\): string/);
-  assert.match(clientGlobals, /declare function fmtDist\(km: unknown, units\?: unknown\): string/);
+  assert.match(clientGlobals, /declare function fmtDist\(km: unknown, units\?: unknown, bare\?: boolean\): string/);
   assert.match(clientShellGlobals, /declare global \{/);
   assert.match(clientShellGlobals, /declare let pollToken: number/);
   assert.match(clientShellGlobals, /declare const PROGRESS_SEG: readonly ClientSegment\[\]/);

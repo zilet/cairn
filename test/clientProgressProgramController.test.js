@@ -136,6 +136,9 @@ function loadProgramController() {
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/format-utils.js"), "utf8"), context);
+  const dateStubs = { relAge: context.relAge, absDate: context.absDate };
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
+  Object.assign(context, dateStubs); // ui-format owns the real ones; this test asserts the card's contract, not a clock
   vm.runInNewContext(readFileSync(join(root, "public/js/progress-program-summary-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/progress-exercise-suggestions-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/progress-program-controller.js"), "utf8"), context);

@@ -52,7 +52,6 @@ type TodayPlanSurfaceApi = {
   ): string;
 };
 type TodayRunLineDeps = Pick<TodayPlanSurfaceDeps, "escapeHtml"> & {
-  formatDistance?(km: unknown, units?: unknown): string;
 };
 
 (() => {
@@ -193,7 +192,7 @@ type TodayRunLineDeps = Pick<TodayPlanSurfaceDeps, "escapeHtml"> & {
     const sets = Array.isArray(session.sets) ? session.sets : [];
     const tonnage = deps.setsTonnage(sets);
     return `<div class="finish">
-        <div class="finish-stat" data-finishstat>${sets.length} sets · ${Math.round(tonnage).toLocaleString()} lb ${options.isToday ? "logged today" : "on " + options.logDate}</div>
+        <div class="finish-stat" data-finishstat>${sets.length} sets · ${Math.round(tonnage).toLocaleString()} lb ${options.isToday ? "logged today" : "on " + CairnFmt.date(options.logDate)}</div>
         <div id="feedbackSlot" class="feedback-slot"></div>
         <div class="logrow finish-row">
           <input id="sessNotes" type="text" placeholder="How did it go? (optional)" aria-label="Session notes (optional)" value="${deps.escapeAttr(session.notes || "")}">
@@ -255,7 +254,7 @@ type TodayRunLineDeps = Pick<TodayPlanSurfaceDeps, "escapeHtml"> & {
     if (rested) {
       // No distance, pace or zone for a run that is not happening.
     } else if (intent.target_distance_km != null && Number.isFinite(km) && km > 0) {
-      dose.push(deps.formatDistance ? deps.formatDistance(km, options.units) : `${Number.isInteger(km) ? km : km.toFixed(1)} km`);
+      dose.push(CairnFmt.distance(km, options.units ?? "km"));
     } else if (intent.target_duration_min != null && Number.isFinite(min) && min > 0) {
       dose.push(`${Math.round(min)} min`);
     }

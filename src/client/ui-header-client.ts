@@ -36,11 +36,9 @@ type UiHeaderClientApi = {
   // destination (the day view, day-record-client.ts), reached from a day in a week.
   // "Tue 29 Sep" — the one short date every Today-home header prints (Today, a day, Fuel).
   function shortDate(iso: string): string {
-    const [yr, mo, da] = String(iso || "").split("-").map(Number);
-    const when = new Date(yr, (mo || 1) - 1, da || 1);
-    return Number.isNaN(when.getTime())
-      ? String(iso || "")
-      : `${when.toLocaleDateString(undefined, { weekday: "short" })} ${when.getDate()} ${when.toLocaleDateString(undefined, { month: "short" })}`;
+    return /^\d{4}-\d{2}-\d{2}/.test(String(iso || ""))
+      ? `${CairnFmt.date(iso, { fmt: { weekday: "short" } })} ${Number(String(iso).slice(8, 10))} ${CairnFmt.date(iso, { fmt: { month: "short" } })}`
+      : String(iso || "");
   }
 
   function headerDateText(deps: UiHeaderDeps): string {

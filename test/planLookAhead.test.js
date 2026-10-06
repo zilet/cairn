@@ -11,6 +11,7 @@ import { planLookAhead, lookAheadWeekAsOf, LOOK_AHEAD_KEY_LIFTS, runOf } from ".
 import { planWeek } from "../dist/domain/training/plan-week.js";
 import { dayRecord } from "../dist/domain/today/day-record.js";
 import { raceBuild } from "../dist/repo/race-build.js";
+import { rungStage } from "../dist/repo/week-stage.js";
 import { todayStrengthLine } from "../dist/repo/today-strength-line.js";
 import { seedDemo } from "../dist/demoSeed.js";
 import { localDateISO } from "../dist/repo/shared.js";
@@ -132,8 +133,12 @@ test("a race build names each week's rung beside it", (t) => {
   const today = localDateISO();
   const build = raceBuild(today);
   assert.equal(build.available, true);
+  // The ONE stage vocabulary (stage-words.ts): a build rung speaks as its race phase,
+  // every other rung as its own kind of week.
   const words = {
+    base: "Base week",
     build: "Build week",
+    sharpen: "Sharpen week",
     down: "Lighter week",
     peak: "Peak week",
     taper: "Taper week",
@@ -143,7 +148,9 @@ test("a race build names each week's rung beside it", (t) => {
     const rung = build.weeks.find((w) => w.week_start === week.week_start);
     const mark = week.markers.find((m) => m.kind === "race_build");
     assert.ok(rung && mark, `${week.label} carries its rung`);
-    assert.equal(mark.word, words[rung.kind]);
+    const key = rung.kind === "build" ? (rung.phase === "taper" ? "taper" : rung.phase) : rung.kind;
+    assert.equal(mark.word, words[key]);
+    assert.equal(mark.word, rungStage(rung).week_word);
     // The rung's own short words ride beside the tag, unless they only restate it.
     const restates = rung.kind === "down" && /^a lighter week\.?$/i.test(rung.focus_short || "");
     assert.equal(mark.note, restates ? null : rung.focus_short || null);

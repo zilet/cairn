@@ -16,6 +16,7 @@ const MODULES = [
   "ui-actions-client",
   "ui-chart",
   "format-utils",
+  "ui-format",
   "journey-progress-client",
   "journey-timeline-client",
   "race-week-model",
@@ -34,7 +35,7 @@ const MODULES = [
 ];
 
 function load(globals = {}) {
-  return loadClientModule(MODULES, { globals });
+  return loadClientModule(MODULES, { globals: { localISO: () => TODAY, ...globals } });
 }
 
 const TODAY = "2026-09-16";
@@ -1475,8 +1476,8 @@ test("run units: miles restate every distance on the race lane, the chart and th
 
   const host = createHost(win.document);
   host.innerHTML = win.CairnHorizon.laneHtml(mi);
-  assert.equal(host.querySelector('[data-horizon-units="mi"]').getAttribute("aria-pressed"), "true");
-  assert.equal(host.querySelector('[data-horizon-units="km"]').getAttribute("aria-pressed"), "false");
+  // Units are Settings' alone: no per-surface km / mi switch on the lane.
+  assert.equal(host.querySelector("[data-horizon-units]"), null);
   assert.doesNotMatch(host.querySelector(".horizon-tw").textContent, /\bkm\b/);
   assert.doesNotMatch(host.querySelector(".horizon-chart-key").textContent, /\bkm\b/);
 
@@ -1491,7 +1492,7 @@ test("run units: miles restate every distance on the race lane, the chart and th
   assert.equal(win.CairnHorizonWeekModel.dayRunText({ date: "2026-09-19", run: null }, TODAY), "");
 });
 
-test("run units: the controller reads settings, and the km/mi switch repaints at once and saves", async () => {
+test("run units: the controller reads settings; there is no per-surface km/mi switch", async () => {
   const win = load();
   const host = createHost(win.document);
   host.innerHTML = win.CairnHorizon.shellHtml();
@@ -1502,21 +1503,12 @@ test("run units: the controller reads settings, and the km/mi switch repaints at
     today: TODAY,
     load: loader,
     navigate: () => {},
-    saveUnits: (u) => {
-      saved.push(u);
-      return Promise.resolve({});
-    },
   });
   await flush();
   await flush();
   const km = () => root.querySelector('[data-horizon-lane="race"] .horizon-tw-num').textContent;
   assert.match(km(), / mi$/);
-  await root.querySelector('[data-horizon-units="km"]').click();
-  await flush();
-  assert.match(km(), / km$/);
-  assert.equal(root.querySelector('[data-horizon-units="km"]').getAttribute("aria-pressed"), "true");
-  assert.deepEqual(saved, ["km"]);
-  // The picked unit again is a no-op, never a second save.
-  await root.querySelector('[data-horizon-units="km"]').click();
-  assert.deepEqual(saved, ["km"]);
+  // No switch to flip: the lane follows settings.run_units and nothing else.
+  assert.equal(root.querySelector("[data-horizon-units]"), null);
+  assert.deepEqual(saved, []);
 });

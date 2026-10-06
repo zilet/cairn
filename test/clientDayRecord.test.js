@@ -57,6 +57,7 @@ function load() {
   context.window.CairnRoutes = { homeOf: (tab) => (tab === "progress" ? "train" : "today") };
   context.renderTab = () => {};
   // The eager opener (bundle-02) and the lazy view (bundle-12-day), in load order.
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/day-open-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/day-record-client.js"), "utf8"), context);
   return { day: { ...context.CairnDayRecord, openDay: context.CairnDayOpen.openDay }, context, tabs, listeners };
@@ -169,20 +170,20 @@ test("a future day renders its preview in the athlete's run units, with its cave
   assert.match(html, /In 2 days · a preview/);
   assert.match(html, /Planned/);
   assert.match(html, /Push<\/span><span class="dayrec-row-s">chest \/ shoulders/);
-  assert.match(html, /Easy run<\/span><span class="dayrec-row-s">5\.0 mi/);
+  assert.match(html, /Easy run<\/span><span class="dayrec-row-s">5 mi/);
   assert.match(html, /Lisbon — design offsite/);
   assert.doesNotMatch(html, /Training|Fuel|data-day-log/, "a future day has no log half");
 });
 
 test("the stepper walks to the neighbouring days; relative words read plainly", () => {
-  const { day } = load();
+  const { day, context } = load();
   const html = day.dayHtml(record({ date: "2026-09-27" }), { backLabel: "Today" });
   assert.match(html, /data-open-day="2026-09-26"/);
   assert.match(html, /data-open-day="2026-09-28"/);
-  assert.equal(day.relativeWords("2026-09-28", TODAY), "Yesterday");
-  assert.equal(day.relativeWords("2026-09-30", TODAY), "Tomorrow");
-  assert.equal(day.relativeWords("2026-09-25", TODAY), "4 days ago");
-  assert.equal(day.relativeWords("2026-10-20", TODAY), "In 3 weeks");
+  assert.equal(context.CairnFmt.relDay("2026-09-28", TODAY), "Yesterday");
+  assert.equal(context.CairnFmt.relDay("2026-09-30", TODAY), "Tomorrow");
+  assert.equal(context.CairnFmt.relDay("2026-09-25", TODAY), "4 days ago");
+  assert.equal(context.CairnFmt.relDay("2026-10-20", TODAY), "In 3 weeks");
 });
 
 test("opening a day: today opens Today, another day its own view; junk opens nothing", () => {

@@ -90,10 +90,11 @@ type TodayMainShellApi = {
         : "";
     const weight = num(options.currentWeight);
     const trend = num(options.trendLbWk);
-    const trendText = trend == null ? "log a weigh-in" : `${trend > 0 ? "+" : trend < 0 ? "−" : ""}${Math.abs(Math.round(trend * 10) / 10)}/wk`;
+    const unit = CairnFmt.units().weight;
+    const trendText = trend == null ? "log a weigh-in" : `${trend > 0 ? "+" : trend < 0 ? "−" : ""}${CairnFmt.weight(Math.abs(trend), unit, true)}/wk`;
     const wt = `<button id="wtChipMini" class="tweek-tally tweek-wt" type="button" title="Log bodyweight" data-keep-fold><span class="tweek-n num" data-wtval>${
-      weight != null ? `${esc(String(weight))}<span class="tweek-u">lb</span>` : "—"
-    }</span><small>${weight != null ? `lb · ${esc(trendText)}` : "weight · tap to log"}</small><span class="tweek-spark" id="tweekSpark" aria-hidden="true"></span></button>`;
+      weight != null ? `${esc(CairnFmt.weight(weight, unit, true))}<span class="tweek-u">${unit}</span>` : "—"
+    }</span><small>${weight != null ? esc(trendText) : "weight · tap to log"}</small><span class="tweek-spark" id="tweekSpark" aria-hidden="true"></span></button>`;
     return `<section class="tweek" id="todayWeek" aria-label="Body and recovery">
     <div class="tweek-mast"><span class="lbl">Body &amp; recovery</span></div>
     <div class="tweek-tallies${second ? "" : " is-one"}">${wt}${second}</div>

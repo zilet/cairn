@@ -10,6 +10,7 @@ import {
   listHealthDocuments,
 } from "../../domain/health/index.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
+import { labDraws } from "../../repo/lab-draws.js";
 
 export function registerHealthRecordTools(server: McpToolRegistrar) {
   server.tool(
@@ -17,6 +18,13 @@ export function registerHealthRecordTools(server: McpToolRegistrar) {
     "List recent health documents (bloodwork / DEXA / other) with their kind, test date, summary, key markers and analysis status. Does not include the binary file.",
     { limit: z.number().int().optional() },
     async ({ limit }) => asText(listHealthDocuments(limit ?? 50))
+  );
+
+  server.tool(
+    "list_lab_draws",
+    "The record's labs and scans as DRAWS, newest first: one row per (kind, date) → [{ date, date_words, kind: bloodwork|dexa|imaging|metabolic_test|ecg, label, doc_id, doc_ids[] }]. A draw's uploaded file and the panels split out of it are one row (doc_id is the uploaded source, else the newest; doc_ids lists every document of the draw). Read-only; mirrors GET /api/health-docs/draws.",
+    { limit: z.number().int().optional() },
+    async ({ limit }) => asText(labDraws({ limit: limit ?? undefined }))
   );
 
   server.tool(

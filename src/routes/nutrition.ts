@@ -23,6 +23,7 @@ import {
 } from "../domain/nutrition/index.js";
 import { userSetNutritionTarget } from "../domain/brain/autonomy-service.js";
 import { goalPace } from "../repo/goal-pace.js";
+import { weightTrendRead } from "../repo/weight-trend.js";
 import { carbBasis, dayFuelDemand } from "../repo/fuel-demand.js";
 import { fuelingFollowThroughDue, listFuelingFeedback, setFuelingFeedback } from "../repo/fueling.js";
 import { ACCEPTED_MIME } from "../uploadMime.js";
@@ -89,10 +90,18 @@ nutritionRouter.get("/nutrition/expenditure",
 // Goal-pace series behind the motivational weight-progress chart: the canonical
 // weigh-in points, the recent-trend line (with a short forward projection), and
 // the straight line to the goal. Read-only, null-safe; ?days= clamps to 14–365.
+// `read` is the ONE weight-trend read (weight-trend.ts): the rate, the ask, the on-pace
+// verdict and the sentence every weight surface prints — a chart draws the series, it
+// never re-judges the pace.
 nutritionRouter.get("/nutrition/goal-pace", (req, res) => {
   const days = req.query.days ? Number(req.query.days) : undefined;
-  res.json(goalPace(Number.isFinite(days as number) ? (days as number) : 90));
+  res.json(goalPaceResponse(Number.isFinite(days as number) ? (days as number) : 90));
 });
+
+/** The goal-pace series with the one weight-trend read beside it (REST and MCP share it). */
+export function goalPaceResponse(days = 90) {
+  return { ...goalPace(days), read: weightTrendRead() };
+}
 
 // GET /nutrition/day's body, shared with the /today fan-in (routes/today-responses.ts).
 export function nutritionDayResponse(date: string | undefined) {

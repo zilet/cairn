@@ -302,7 +302,7 @@ async function renderToday(opts: any = {}) {
             units: runUnits(settings?.run_units),
             syncLine: cardioSyncLine(settings, { expectingRun: true }),
           },
-          { escapeHtml: escHtml, formatDistance: fmtDist }
+          { escapeHtml: escHtml }
         );
         todayRunLineCache = { date: renderedDate, html: line };
         return line;

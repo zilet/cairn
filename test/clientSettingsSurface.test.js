@@ -21,6 +21,8 @@ function escAttr(v) {
 function loadSettingsSurface() {
   const context = { Math, Number, String, Object, Array, Set, escHtml, escAttr };
   context.window = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/date-utils.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/settings-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/settings-surface-client.js"), "utf8"), context);
   return context.CairnSettingsSurface;

@@ -12,6 +12,7 @@ import { labRangeFields } from "../dist/repo/lab-range.js";
 
 const MODULES = [
   "date-utils",
+  "ui-format",
   "html-utils",
   "ui-components",
   "ui-reads",

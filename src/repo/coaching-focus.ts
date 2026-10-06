@@ -51,9 +51,11 @@ import {
   raceRead,
   raceShapesTheWeek,
   readingPhrase,
+  unitsOfInput,
   weightRead,
 } from "./coaching-focus-read.js";
 import { shortDate } from "./dexa-window.js";
+import { weightRateWords, weightWords } from "./display-words.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { isDoctorLoopSignal } from "./doctor-loop-items.js";
 import { movementKey } from "./exercise-canon.js";
@@ -429,6 +431,17 @@ export interface CoachingFocusInput {
   weekWins?: WeekWinsInput | null;
   // cutQualityRead() — whether the lifts are holding as the weight comes down.
   cutQuality?: CutQualityInput | null;
+  // athleteUnits() — the units every sentence here says its numbers in (km|mi, lb|kg).
+  units?: { distance?: unknown; weight?: unknown } | null;
+  // weekStage(date) (week-stage.ts) — the week's ONE stage word, leading the block line.
+  weekStage?: { word?: unknown; week_word?: unknown } | null;
+  // weightTrendRead(date) (weight-trend.ts) — the ONE weight rate, ask and week change.
+  weightTrend?: {
+    rate_lb_wk?: number | null;
+    needed_lb_wk?: number | null;
+    verdict?: "on_pace" | "ahead" | "behind" | "steady" | null;
+    week_change?: { avg_lb: number; delta_lb: number; since: string; words: string } | null;
+  } | null;
 }
 
 // An applied exercise rotation the brain/athlete already made (recentAppliedRotations).
@@ -893,7 +906,7 @@ function trainingCandidate(inp: CoachingFocusInput): Candidate | null {
     // its logged trend — so the card moves when the lift does, rather than restating
     // the same standing every week.
     const lifted = leverLift(inp);
-    const facts = lifted ? leverFacts(lifted) : "";
+    const facts = lifted ? leverFacts(lifted, unitsOfInput(inp)) : "";
     const baseWhy = String(
       lever.why || "Focused volume on your furthest-behind lift is where the easiest, most motivating progress is."
     );
@@ -1212,12 +1225,12 @@ function bodyCandidate(inp: CoachingFocusInput): Candidate | null {
   }
   // The cut in values against the line to the goal — information, never a verdict.
   const relation = paceRelation(w);
-  const r1 = (n: number) => Math.round(n * 10) / 10;
-  const sgn = (n: number) => (r1(n) < 0 ? `−${Math.abs(r1(n)).toFixed(1)}` : r1(n) > 0 ? `+${r1(n).toFixed(1)}` : "0");
-  const trendWords = w.trend != null ? `, trending ${sgn(w.trend)} lb a week` : "";
+  // In the athlete's weight unit, with the one weight-trend read's figures.
+  const units = unitsOfInput(inp);
+  const trendWords = w.trend != null ? `, trending ${weightRateWords(w.trend, units.weight)}` : "";
   const lineWords =
     w.goalLb != null && w.goalDate && w.needed != null
-      ? ` Reaching ${r1(w.goalLb)} lb by ${shortDate(w.goalDate)} asks about ${sgn(w.needed)} lb a week${
+      ? ` Reaching ${weightWords(w.goalLb, units.weight)} by ${shortDate(w.goalDate)} asks about ${weightRateWords(w.needed, units.weight)}${
           relation === "on"
             ? " — the trend is on that line."
             : relation === "ahead"
@@ -1255,11 +1268,14 @@ function bodyCandidate(inp: CoachingFocusInput): Candidate | null {
       domain: "nutrition",
       title: relation === "on" ? "The cut is on pace — hold it" : "Hold a lean-safe deficit",
       why: clip(
-        `${r1(w.latest)} lb now${trendWords}.${lineWords}${liftsWords} ${lean}`.replace(/\s+/g, " ").trim(),
+        `${weightWords(w.latest, units.weight)} now${trendWords}.${lineWords}${liftsWords} ${lean}`.replace(/\s+/g, " ").trim(),
         300
       ),
       move,
-      based_on: ["Goal mode is fat loss", w.trend != null ? `Weight trend ${sgn(w.trend)} lb/wk` : "Weigh-ins logged"],
+      based_on: [
+        "Goal mode is fat loss",
+        w.trend != null ? `Weight trend ${weightRateWords(w.trend, units.weight)}` : "Weigh-ins logged",
+      ],
     },
   };
 }

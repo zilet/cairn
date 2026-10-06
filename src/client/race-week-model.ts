@@ -18,40 +18,33 @@
   }
 
   type Units = "km" | "mi";
-  const KM_PER_MILE = 1.609344;
 
   function unitsOf(value: unknown): Units {
-    return typeof runUnits === "function" ? runUnits(value) : value === "mi" ? "mi" : "km";
+    return runUnits(value);
   }
 
   /** "32 km", "12.5 km" (or "19.9 mi" in miles): one decimal only when it has one. */
   function kmText(km: unknown, units?: unknown): string {
     const n = num(km);
-    if (n == null || n < 0) return "";
-    const mi = unitsOf(units) === "mi";
-    const r = Math.round((mi ? n / KM_PER_MILE : n) * 10) / 10;
-    return `${Number.isInteger(r) ? r : r.toFixed(1)} ${mi ? "mi" : "km"}`;
+    return n == null || n < 0 ? "" : CairnFmt.distance(n, units ?? "km");
   }
 
   /** The distance's number alone in the run units ("12.5"), for "9.7 of 19.5 km". */
   function distNum(km: unknown, units?: unknown): string {
     const n = num(km);
-    if (n == null || n < 0) return "";
-    const r = Math.round((unitsOf(units) === "mi" ? n / KM_PER_MILE : n) * 10) / 10;
-    return Number.isInteger(r) ? String(r) : r.toFixed(1);
+    return n == null || n < 0 ? "" : CairnFmt.distance(n, units ?? "km", true);
   }
 
   /**
    * The server's own run sentences (a finish estimate's basis) say "12.3 km" and
    * "5:10 /km"; in miles those figures are restated, the words left as written.
+   * TODO(S1 display-words): retire this regex rewrite once finish-estimate basis and the
+   * plan-week summary are written in the athlete's units by the server (spec rule 5).
    */
   function runWords(value: unknown, units?: unknown): string {
     const s = String(value || "").trim();
     if (unitsOf(units) !== "mi") return s;
-    const pace = (mm: string, ss: string): string => {
-      const sec = Math.round((Number(mm) * 60 + Number(ss)) * KM_PER_MILE);
-      return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
-    };
+    const pace = (mm: string, ss: string): string => CairnFmt.pace(Number(mm) * 60 + Number(ss), "mi");
     // Ranges first, both ends at once ("5:10–5:40 /km", "10-12 km"): the single-value
     // passes below only see a range's LAST figure, which would restate half of it.
     return s

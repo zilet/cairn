@@ -336,6 +336,9 @@ export interface ClientCoachingFocusChange {
   kind: "new_best" | "race_estimate" | "run_volume" | "weight" | "new_lab";
   text: string;
   since: string | null;
+  // `since` in words ("since Sep 25", "since Monday") — the form a person reads; the
+  // machine date never renders.
+  since_words?: string | null;
   // Which way the measured value moved, from the same evidence the text states — a
   // direction, never a verdict (a faster race estimate moves "down"). Null when the
   // change has no direction of its own. Optional (additive): older payloads omit it.

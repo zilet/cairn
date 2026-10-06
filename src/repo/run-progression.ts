@@ -100,6 +100,8 @@ import { heavyLowerWeekdaySlots } from "./plan-selection.js";
 import { getTrainingIntent, type ResolvedTrainingIntent } from "./training-intent.js";
 import type { CoachPersonalModifier } from "../brain/coach-context-contract.js";
 import { round1 } from "../lib/numbers.js";
+import { distanceWords } from "./display-words.js";
+import { STAGE_WORD, stageKeyOfRacePhase } from "./stage-words.js";
 import { withoutShadowActivities } from "./activity-shadow.js";
 import {
   capacitySetAsideLine,
@@ -1170,16 +1172,13 @@ export const STATED_QUALITY_HELD_VARIANTS: Record<
   ],
 };
 
-const KM_PER_MI = 1.609344;
-
 /**
  * A distance in a sentence, in the athlete's run units: "5 km", "2.5 km", "3.1 mi". The
  * engine sizes in km; `units` only changes how the number is SAID (one decimal at most).
- * The one server-side words formatter for run distances — day-detail.ts speaks through it.
+ * Delegates to the one server formatter (display-words.ts distanceWords).
  */
 export function kmWords(km: number, units: "km" | "mi" = "km"): string {
-  const n = units === "mi" ? round1(km / KM_PER_MI) : km;
-  return `${Number.isInteger(n) ? n : round1(n)} ${units}`;
+  return distanceWords(km, units);
 }
 
 /** The held-below sentence, in either unit (one variant pick, so both twins say the same thing). */
@@ -2473,9 +2472,24 @@ function weeklyRunPlanRead(
     qualityType && statedQualityApplies ? statedQualityEvidence(volumeAnchor, !!runState?.has_quality) : null;
   // The athlete's word outranks the evidence holds (statedQualityAuthority): an open,
   // harm-free push stance, or stated work within a step of a hard run on record.
+  //
+  // The authority is read AT THE QUALITY DAY'S OWN DATE (its three days before it), never
+  // at the as-of morning: a week's prescription is a property of the week, so a harm day
+  // that falls outside Thursday's own window must not hold Thursday's session on a Monday
+  // read and release it on a Wednesday one. Days not yet lived carry no harm evidence and
+  // are re-read once they are; a quality day already behind `d` keeps today's read; the
+  // morning's own runDayIntensity read still has the final say on the day itself.
+  const statedQualitySlot = statedSchedule?.days.length
+    ? (() => {
+        const named = statedSchedule.days.find((day) => day.kind === "quality");
+        return named ? dowToDayNumber(named.dow) : qualitySlotFromSchedule(statedSchedule, staticLongSlot);
+      })()
+    : null;
+  const statedQualityDate = statedQualitySlot != null ? shiftDaysISO(week_start, statedQualitySlot - 1) : null;
+  const authorityDate = statedQualityDate && statedQualityDate > d ? statedQualityDate : d;
   const statedAuthority =
     !!qualityType && statedQualityApplies && !!statedQuality
-      ? statedQualityAuthority(statedQuality, phase, statedEvidence, d)
+      ? statedQualityAuthority(statedQuality, phase, statedEvidence, authorityDate)
       : false;
   // A week trimmed ONLY by the spike brake (no reset, no recovery dip) trims its VOLUME —
   // the ACWR ceiling stands in the week's km and the session must still fit its room —
@@ -2930,7 +2944,9 @@ function weeklyRunPlanRead(
   const easyLabel = `${placedEasyCount} easy`;
   const qualityPlaced = !!qualityRun && runs.some((r) => r.kind_label === "quality");
   const mix_summary = `${easyLabel} + ${raceThisWeek ? "race" : "1 long"}${qualityPlaced ? ` + 1 ${qualityShort ? "short " : ""}${qualityType}` : ""}`;
-  const phaseWord = goal?.is_race && goal.phase ? `${goal.phase} phase` : "steady";
+  // The race phase in the ONE stage vocabulary (stage-words.ts), never the raw key.
+  const stageKey = goal?.is_race ? stageKeyOfRacePhase(goal.phase) : null;
+  const phaseWord = stageKey ? STAGE_WORD[stageKey].toLowerCase() : "steady";
   const holdClause = firmHold
     ? `, ${holdMarkerPhrase(firmHold)}`
     : softHold
@@ -2949,7 +2965,7 @@ function weeklyRunPlanRead(
         : ", all easy aerobic";
   const weekWhy = (units: "km" | "mi") => {
     const total = prescribedKm || weeklyKm;
-    return `~${Math.round(units === "mi" ? total / KM_PER_MI : total)} ${units} this week (${phaseWord}): ${mix_summary}${qualityTail}${holdClause}.`;
+    return `${distanceWords(total, units, { approx: true, whole: true })} this week (${phaseWord}): ${mix_summary}${qualityTail}${holdClause}.`;
   };
   const why = weekWhy("km");
 

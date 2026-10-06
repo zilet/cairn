@@ -15,13 +15,6 @@
     </details>`;
   }
 
-  /** The km / mi switch, the same one every endurance surface wears (data-run-units). */
-  function unitsHtml(units: "km" | "mi"): string {
-    const btn = (value: "km" | "mi") =>
-      `<button type="button" class="end-unit-btn${units === value ? " on" : ""}" data-run-units="${value}" aria-pressed="${units === value}">${value}</button>`;
-    return `<div class="end-units" role="group" aria-label="Distance and pace units">${btn("km")}${btn("mi")}</div>`;
-  }
-
   /**
    * The week's volume as one figure: "9.7 of 19.5 km" once something is run, else the
    * week's volume named as the PLAN ("19.5 km planned") — a bare "19.5 km this week"
@@ -107,7 +100,7 @@
     const kicker = week?.kicker || "This week";
     return `<section class="race-week${week?.closed ? " is-closed" : ""}" aria-labelledby="raceWeekTitle">
       <div class="race-week-head">
-        <div class="race-view-kickrow"><span class="lbl">${escHtml(kicker)}</span>${opts.units ? unitsHtml(opts.units) : ""}</div>
+        <div class="race-view-kickrow"><span class="lbl">${escHtml(kicker)}</span></div>
         <h3 class="race-week-stage" id="raceWeekTitle">${escHtml(week?.headline || week?.stage_word || "Your running week")}</h3>
         ${focus ? `<p class="race-week-focus">${escHtml(focus)}</p>` : ""}
       </div>
@@ -154,7 +147,6 @@
       <header class="race-view-head">
         <div class="race-view-kickrow">
           <span class="lbl">Race</span>
-          ${unitsHtml(opts.units || model.ladder.units || "km")}
         </div>
         <h2 class="race-view-event">${escHtml(model.event)}</h2>
         ${when ? `<p class="race-view-when">${escHtml(when)}</p>` : ""}
@@ -200,7 +192,6 @@
     thisWeekHtml,
     volumeFigureHtml,
     liftingHtml,
-    unitsHtml,
     skeletonHtml,
     emptyHtml,
     errorHtml,

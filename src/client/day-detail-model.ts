@@ -14,30 +14,6 @@
   type DayDetailSegment = import("../contracts/day-detail.js").DayDetailRunSegment;
   type DayDetailExercise = import("../contracts/day-detail.js").DayDetailExercise;
 
-  const ISO = /^\d{4}-\d{2}-\d{2}$/;
-  const KM_PER_MI = 1.609344;
-
-  function parts(iso: string): Date {
-    const [y, m, d] = iso.split("-").map(Number);
-    return new Date(y, (m || 1) - 1, d || 1);
-  }
-
-  /** Whole calendar days from `earlier` to `later` (local dates, DST-safe by rounding). */
-  function daysBetween(later: string, earlier: string): number {
-    if (!ISO.test(later) || !ISO.test(earlier)) return 0;
-    return Math.round((parts(later).getTime() - parts(earlier).getTime()) / 86_400_000);
-  }
-
-  /** Where the day sits against today, in words: "Today", "Tomorrow", "Yesterday", "In 4 days", "3 days ago". */
-  function relativeWords(iso: string, today: string): string {
-    const n = daysBetween(iso, today);
-    if (n === 0) return "Today";
-    if (n === -1) return "Yesterday";
-    if (n === 1) return "Tomorrow";
-    if (n < 0) return -n < 14 ? `${-n} days ago` : `${Math.round(-n / 7)} weeks ago`;
-    return n < 14 ? `In ${n} days` : `In ${Math.round(n / 7)} weeks`;
-  }
-
   // The day's state as one quiet word beside where it sits. "open" is a past day whose
   // plan was not logged: said neutrally ("Left open"), never as "missed".
   const STATUS_WORD: Readonly<Record<string, string>> = {
@@ -50,7 +26,7 @@
 
   /** The hero's mono kicker: "Tomorrow · Planned", "Today · Still to do", "Yesterday · Done". */
   function kicker(detail: Pick<DayDetail, "date" | "today" | "status">): string {
-    const where = relativeWords(detail.date, detail.today);
+    const where = CairnFmt.relDay(detail.date, detail.today);
     const word = STATUS_WORD[detail.status] || "";
     if (detail.status === "today" && where === "Today") return "Today";
     return word ? `${where} · ${word}` : where;
@@ -66,14 +42,7 @@
   function distText(km: number | null | undefined, units: unknown): string {
     const n = Number(km);
     if (km == null || !Number.isFinite(n) || n <= 0) return "";
-    if (typeof fmtDist === "function") return fmtDist(n, units);
-    const v = units === "mi" ? n / KM_PER_MI : n;
-    return `${Math.round(v * 10) / 10} ${units === "mi" ? "mi" : "km"}`;
-  }
-
-  function paceClock(secPerKm: number, units: unknown): string {
-    const sec = Math.round(units === "mi" ? secPerKm * KM_PER_MI : secPerKm);
-    return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+    return CairnFmt.distance(n, units);
   }
 
   /**
@@ -88,9 +57,9 @@
     const fast = Number(pace.fast_sec_per_km);
     const slow = Number(pace.slow_sec_per_km);
     if (Number.isFinite(fast) && Number.isFinite(slow) && fast > 0 && slow > 0) {
-      const a = paceClock(Math.min(fast, slow), units);
-      const b = paceClock(Math.max(fast, slow), units);
-      return `${a === b ? a : `${a}–${b}`} /${units === "mi" ? "mi" : "km"}`;
+      const a = CairnFmt.pace(Math.min(fast, slow), units);
+      const b = CairnFmt.pace(Math.max(fast, slow), units);
+      return `${a === b ? a : `${a}–${b}`} ${fmtRunUnitSuffix(units)}`;
     }
     return text(pace.text);
   }
@@ -282,7 +251,7 @@
     const sec = Number(run.pace_sec_per_km);
     const pace =
       Number.isFinite(sec) && sec > 0
-        ? `${paceClock(sec, units)} /${units === "mi" ? "mi" : "km"}`
+        ? `${CairnFmt.pace(sec, units)} ${fmtRunUnitSuffix(units)}`
         : units === "mi"
           ? ""
           : text(run.pace);
@@ -297,7 +266,6 @@
   }
 
   const CAIRN_DAY_DETAIL_MODEL = {
-    relativeWords,
     kicker,
     distText,
     paceText,

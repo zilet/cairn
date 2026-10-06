@@ -87,7 +87,7 @@ function captureReadWrittenWeekday(iso: unknown): string {
     .map(Number);
   if (!y || !m || !d) return "";
   const date = new Date(y, m - 1, d);
-  return Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString(undefined, { weekday: "short" });
+  return Number.isNaN(date.getTime()) ? "" : CairnFmt.date(String(iso).slice(0, 10), { fmt: { weekday: "short" } });
 }
 
 function captureReadRenderWeeklyCard(
@@ -261,9 +261,7 @@ function captureTeamWeekHasContent(team: CaptureTeamWeek | null | undefined): bo
 function captureTeamShortDate(iso: unknown): string {
   const raw = String(iso || "").slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return "";
-  const parsed = new Date(`${raw}T00:00:00Z`);
-  if (Number.isNaN(parsed.getTime())) return "";
-  return new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short", day: "numeric" }).format(parsed);
+  return CairnFmt.date(raw, { year: false });
 }
 
 // Per-section display caps. The server returns the full coalesced/deduped read;

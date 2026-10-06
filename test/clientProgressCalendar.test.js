@@ -17,6 +17,7 @@ function loadCalendar() {
     stagger: (idx) => `--i:${idx}`,
   };
   context.window = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/progress-calendar-client.js"), "utf8"), context);
   return context.CairnProgressCalendar;

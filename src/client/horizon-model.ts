@@ -77,7 +77,7 @@
   function dateWord(iso: unknown, today: string): string {
     const key = dayKey(iso);
     if (!key) return "";
-    return CairnUiChart.dateLabel(key, { year: !!today && key.slice(0, 4) !== today.slice(0, 4) });
+    return CairnFmt.date(key, { today: today || undefined });
   }
 
   function windowWord(win: { start?: unknown; end?: unknown } | null | undefined, today: string): string {
@@ -181,7 +181,7 @@
     const now = num(progress?.current_weight_lb);
     const goal = num(progress?.goal_weight_lb ?? read?.profile?.goal_weight_lb);
     if (now == null || goal == null) return "";
-    const lb = (n: number) => `${Math.round(n * 10) / 10} lb`;
+    const lb = (n: number) => CairnFmt.weight(n);
     const scale = text(read?.recomposition?.scale?.line);
     return `${lb(now)} now, ${lb(goal)} the goal.${scale ? ` ${scale}` : ""}`;
   }

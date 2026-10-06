@@ -124,7 +124,9 @@ import {
   recentAppliedRotations,
   upcomingBrainDecisions,
 } from "./brain-decisions.js";
-import { getSettings } from "./settings.js";
+import { athleteUnits, getSettings } from "./settings.js";
+import { weekStage } from "./week-stage.js";
+import { weightTrendRead } from "./weight-trend.js";
 import { latestBrainEvaluation } from "./brain-evaluations.js";
 import { estimateExpenditure } from "./expenditure.js";
 import { tomorrowHolds, type UnifiedSignalState } from "./signal-state.js";
@@ -1716,6 +1718,29 @@ function getCoachContextFromSnapshot(): CoachContext {
           }
         }),
         cutQuality: cutQualityView,
+        // The athlete's units, the week's one stage word and the one weight-trend read:
+        // the week read speaks in the same units and figures as every other surface.
+        units: (() => {
+          try {
+            return athleteUnits();
+          } catch {
+            return null;
+          }
+        })(),
+        weekStage: brainSignal(`week_stage:${today}`, () => {
+          try {
+            return weekStage(today, { build: raceBuildView ?? null });
+          } catch {
+            return null;
+          }
+        }),
+        weightTrend: brainSignal(`weight_trend:${today}`, () => {
+          try {
+            return weightTrendRead(today);
+          } catch {
+            return null;
+          }
+        }),
         // Autonomy-awareness (lead-by-default): under 'lead' the coach applies bounded
         // changes itself at natural boundaries, so the conductor drops its one-tap asks
         // and speaks state. recentRotations + plannedNames let it tell a HANDLED plateau

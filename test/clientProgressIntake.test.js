@@ -6,6 +6,7 @@ import vm from "node:vm";
 function load() {
   const context = { window: {}, URL, console };
   vm.runInNewContext(readFileSync(new URL("../public/js/date-utils.js", import.meta.url), "utf8"), context);
+  vm.runInNewContext(readFileSync(new URL("../public/js/ui-format.js", import.meta.url), "utf8"), context);
   vm.runInNewContext(readFileSync(new URL("../public/js/html-utils.js", import.meta.url), "utf8"), context);
   vm.runInNewContext(readFileSync(new URL("../public/js/progress-intake-client.js", import.meta.url), "utf8"), context);
   return context.window.CairnProgressIntake;

@@ -1,3 +1,4 @@
+import { weightTrendRead } from "../repo/weight-trend.js";
 import { Router } from "express";
 import { localToday } from "../dayread.js";
 import { streamEnrichRow } from "./enrich-stream.js";
@@ -465,7 +466,16 @@ trainingLogRouter.put("/activities/:id/effort", (req, res) => {
 // terminal. EventSource can't set headers, so the PWA reaches this with ?token=.
 trainingLogRouter.get("/activities/:id/stream", streamEnrichRow("activity", getActivity));
 
-trainingLogRouter.get("/stats", (_req, res) => res.json(getWeeklyStats()));
+trainingLogRouter.get("/stats", (_req, res) => res.json(weeklyStatsResponse()));
+
+/**
+ * GET /stats's body (the screen fan-ins prime the same): the weekly stats plus the ONE
+ * weight-trend read (weight-trend.ts), so the compass prints its rate, ask and verdict
+ * in the athlete's weight unit instead of re-judging `trend_lb_wk` itself.
+ */
+export function weeklyStatsResponse() {
+  return { ...getWeeklyStats(), weight_trend: weightTrendRead() };
+}
 
 // This week's training load vs the athlete's own trailing typical (weekly set
 // count over the prior 8 weeks) — a plain-language band, "running hot" only when
