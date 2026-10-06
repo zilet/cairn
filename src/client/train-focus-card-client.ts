@@ -26,6 +26,19 @@ function cfocusDirectionMark(direction: unknown): string {
   return `<span class="tfc-dir" aria-hidden="true">·</span>`;
 }
 
+// A change's own direction when the server sends one (`direction`, additive); otherwise
+// the old read: the evidence row whose label the change's text names.
+function cfocusChangeDirection(
+  change: import("../contracts/client.js").ClientCoachingFocusChange,
+  evidence: import("../contracts/client.js").ClientCoachingFocusEvidence[]
+): import("../contracts/client.js").ClientCoachingFocusDirection | null {
+  const own: unknown = change.direction;
+  if (own === "up" || own === "down" || own === "steady") return own;
+  const text = cfocusText(change.text).toLowerCase();
+  const hit = evidence.find((e) => e.domain === change.domain && text.includes(cfocusText(e.label).toLowerCase()));
+  return hit ? hit.direction : null;
+}
+
 function cfocusMovedHtml(focus: ClientCoachingFocus): string {
   const changes = (Array.isArray(focus.changed_since) ? focus.changed_since : [])
     .filter((c) => c && cfocusText(c.text))
@@ -35,12 +48,46 @@ function cfocusMovedHtml(focus: ClientCoachingFocus): string {
   const rows = changes
     .map((c) => {
       const text = cfocusText(c.text);
-      const hit = evidence.find((e) => e.domain === c.domain && text.toLowerCase().includes(cfocusText(e.label).toLowerCase()));
       const since = cfocusText(c.since);
-      return `<li class="tfc-moved-item">${cfocusDirectionMark(hit ? hit.direction : null)}<span class="tfc-moved-text">${escHtml(text)}</span>${since ? `<span class="tfc-moved-since">${escHtml(since)}</span>` : ""}</li>`;
+      return `<li class="tfc-moved-item">${cfocusDirectionMark(cfocusChangeDirection(c, evidence))}<span class="tfc-moved-text">${escHtml(text)}</span>${since ? `<span class="tfc-moved-since">${escHtml(since)}</span>` : ""}</li>`;
     })
     .join("");
   return `<div class="tfc-moved"><span class="tfc-lbl lbl">What moved</span><ul class="tfc-moved-list">${rows}</ul></div>`;
+}
+
+const CFOCUS_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function cfocusDayWords(iso: unknown): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(cfocusText(iso));
+  return m && Number(m[2]) >= 1 && Number(m[2]) <= 12 ? `${CFOCUS_MONTHS[Number(m[2]) - 1]} ${Number(m[3])}` : "";
+}
+
+// The athlete's push stance, one quiet strip under the lead: "Push · through Nov 15" and,
+// on a push day, what is holding today back in the read's own words. Never the offer —
+// the Brief owns that ask. "" when the drive is steady with nothing to say.
+function cfocusPushHtml(focus: ClientCoachingFocus): string {
+  const push = focus.push;
+  if (!push || typeof push !== "object") return "";
+  const stance = push.stance || null;
+  if (push.drive === "push") {
+    const until = stance ? cfocusDayWords(stance.until) : "";
+    const head = until ? `through ${until}` : "no end date";
+    const holding = (Array.isArray(push.today?.holding) ? push.today.holding : [])
+      .map((h) => cfocusText(h?.words))
+      .filter(Boolean)
+      .slice(0, 2);
+    const line =
+      cfocusText(push.today?.line) ||
+      (holding.length ? `Holding it today: ${holding.join(" · ")}.` : "") ||
+      cfocusText(stance?.line);
+    return `<div class="tfc-push" role="note" aria-label="Your push stance"><p class="tfc-push-head"><span class="tfc-push-k">Push</span><span class="tfc-push-sep" aria-hidden="true">·</span><span class="tfc-push-until">${escHtml(head)}</span></p>${
+      line ? `<p class="tfc-push-line">${escHtml(line)}</p>` : ""
+    }</div>`;
+  }
+  const ended = cfocusText(push.ended?.line);
+  return ended
+    ? `<div class="tfc-push is-ended" role="note" aria-label="Your push stance"><p class="tfc-push-line">${escHtml(ended)}</p></div>`
+    : "";
 }
 
 function cfocusBlockHtml(focus: ClientCoachingFocus, leadDomain: unknown): string {
@@ -98,6 +145,7 @@ function cfocusTrainCardHtml(
   html += `<div class="tfc-hero">${cfocusDomainDot(lead.domain)}<div class="tfc-hero-body">${cfocusDomainTag(lead.domain)}<div class="${spec.leadTitleClass}">${escHtml(lead.title || "")}</div>`;
   html += move ? `<div class="${spec.moveClass}">${escHtml(move)}</div>` : lead.why ? `<div class="${spec.leadWhyClass}">${escHtml(lead.why)}</div>` : "";
   html += `</div></div>`;
+  html += cfocusPushHtml(focus);
   const also = (Array.isArray(focus.parallel) ? focus.parallel : []).filter((i) => i && cfocusText(i.title)).slice(0, 2);
   if (also.length)
     html += `<div class="tfc-also"><span class="tfc-lbl lbl">Also this week</span><div class="tfc-chips">${also
@@ -109,4 +157,4 @@ function cfocusTrainCardHtml(
   return `${html}${spec.footer}</div>`;
 }
 
-Object.assign(globalThis, { cfocusTrainCardHtml });
+Object.assign(globalThis, { cfocusTrainCardHtml, cfocusPushHtml });

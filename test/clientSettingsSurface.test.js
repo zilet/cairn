@@ -63,7 +63,7 @@ test("settings surface normalizes API data into the working model", () => {
   assert.equal(wm.update_check_enabled, true);
   assert.equal(wm.meal_plan_auto_draft, false, "an absent meal_plan_auto_draft reads as off — plans on request");
   assert.equal(wm.lead_mode, "lead");
-  assert.equal(wm.training_drive, "steady", "an absent training_drive reads as the steady rhythm");
+  assert.equal("training_drive" in wm, false, "the drive never rides the save bar");
   assert.equal(wm.garmin_username, "athlete@example.com");
   assert.equal(wm.time_zone, "America/New_York");
   assert.equal(wm.chat_routing_mode, "single");
@@ -80,7 +80,6 @@ test("settings surface renders source and automation slices without echoing secr
     art_enabled: false,
     research_enabled: false,
     lead_mode: "announce_first",
-    training_drive: "push",
   };
 
   const sources = surface.sourcesSliceHtml({
@@ -182,9 +181,8 @@ test("settings surface renders source and automation slices without echoing secr
   });
   assert.match(automation, /id="enrichEnabled" checked/);
   assert.match(automation, /value="announce_first" selected/);
-  assert.match(automation, /id="trainingDrive"/);
-  assert.match(automation, /value="push" selected/);
-  assert.doesNotMatch(automation, /value="steady" selected/);
+  assert.doesNotMatch(automation, /id="trainingDrive"/, "no bare toggle: the drive card replaces it");
+  assert.match(automation, /<div class="set-card drive-card" id="driveCard" data-save-ignore><\/div>/);
   assert.doesNotMatch(automation, /id="artEnabled" checked/);
   assert.match(automation, /id="mealPlanAutoDraft"/);
   assert.doesNotMatch(automation, /id="mealPlanAutoDraft" checked/, "automatic meal plans render off unless opted in");

@@ -183,6 +183,17 @@ type TodayBriefControllerDeps = {
     }
   }
 
+  // The push line and the push offer are painted into the Brief's slots by the lazy
+  // today-ahead bundle from the read. A fresh read repaints them (the line may change
+  // without the sentence changing); a Brief swap gets them back at once. Before the
+  // bundle has landed this is a no-op: its own mount paints from the current read.
+  function repaintPush(root: Element, read: TodayBriefControllerDayRead, isToday: boolean): void {
+    if (!isToday) return;
+    try {
+      (globalThis as { CairnTodayPushController?: { repaint(root: Element, read: unknown): void } }).CairnTodayPushController?.repaint(root, read);
+    } catch {}
+  }
+
   async function upgradeBriefInPlace(date: string, isToday: boolean, deps: TodayBriefControllerDeps): Promise<void> {
     const inflight = deps.state._briefInflight;
     if (!inflight || inflight.date !== date) return;
@@ -219,6 +230,7 @@ type TodayBriefControllerDeps = {
       deps.state.brief = { date, override: inflight.override || read.override || "", read };
       patchBriefStamp(briefEl, read, isToday);
       briefEl?.classList.remove("is-thinking");
+      repaintPush(deps.root, read, isToday);
       return;
     }
     deps.state.brief = { date, override: inflight.override || read.override || "", read };
@@ -266,6 +278,7 @@ type TodayBriefControllerDeps = {
     const carriedCheckin = !!(checkin && checkinHome && checkin.innerHTML);
     if (carriedCheckin) checkinHome!.replaceWith(checkin!);
     wireBrief(read, { isToday }, deps);
+    repaintPush(deps.root, read, isToday);
     if (!carriedCheckin) remountCheckin();
     deps.runCountUps(fresh);
     if (showPlan) deps.loadTrainingProvenance(isToday);

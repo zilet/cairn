@@ -326,7 +326,8 @@ Brief's voice is the page's one focal point; it pins to the top of the scroll an
 condenses to a slim blurred band — see `body[data-tab="today"] header.condensed`).
 
 **Today (Atelier v2).** One focal point, then show-when-needed, in this order: the Brief's voice →
-the Path → NOW → Fuel today → the overnight digest → This week → Coming up → the new connection
+the state line (NOW) → What's ahead → the Path → Fuel today → the overnight digest → Body & recovery
+→ Coming up → the new connection ("Today's run order" below has the Brief's own detail)
 (see "Today, the road ahead" below, which supersedes the Around today / Worth a look parts here). The six stones no longer print on Today: they
 live on You (the cairn-stack) and each stone's own detail page. The Brief (`.brief`) is the
 page's voice, not a card: it sits on the ground with a mono kicker, the Young Serif
@@ -388,13 +389,46 @@ so train depends on day — with the progression's step in sage only when it mov
 bar drawn to scale (warm-up → the work, one block per rep → cool-down, each part a zone fill
 `--ddv-z1..5` mixed from stone hues), its parts as rows and three facts (zone, heart-rate band, pace
 band in the athlete's run units); "Worth watching"; and "Why this day". **What's ahead**
-(`.tstrip` in `#todayStripSlot`, under the Brief's why and before the Path card,
-`today-strip-{client,controller}.ts` in the today-ahead bundle, carried across the Brief's in-place
-upgrade): seven real `<button>`s (weekday, date, the lift's short name in a strength tag, the run as
-a bar — longer for the long run, hatched for quality — ticked when done, today ringed in dawn),
-today's strength line verbatim with "X in place of Y" when today adapted, and a fold (grid rows
-0fr → 1fr, `inert` while closed, `aria-expanded` on the day) that opens the tapped day inline with
-"Open in Horizon ›". An open day survives a repaint of Today. Today-only components whose base rules still
+(`.tstrip` in `#todayStripSlot`, Today's ONE week view, under the Brief's state line and before the
+Path card, `today-strip-{client,controller}.ts` in the today-ahead bundle): a mast with the block
+clock on its right (`.tstrip-block`), the week so far in one header line (`.tstrip-tally`: "2 of 5
+lifting days · 6.1 of ~33 km · 3 new bests" — the server's `progress` counts, distance in the
+athlete's run units, never a score), seven real `<button>`s (weekday, date, the lift's short name
+in a strength tag, the run as a bar — longer for the long run, hatched for quality — ticked when
+done, today ringed in dawn), "X in place of Y" when today adapted (the strength line itself is the
+Brief's, said once), and a fold (grid rows 0fr → 1fr, `inert` while closed, `aria-expanded` on the
+day) that opens the tapped day inline with "Open in Horizon ›". An open day survives a repaint of
+Today. The slot node rides the Brief's in-place upgrade ALWAYS, painted or not
+(`carryBriefSlots`), so a week read that lands after the swap paints a live strip; on a reload it
+is held (`CairnTodaySlotHold`, inert) until the strip paints, and a saved first-paint snapshot
+freezes every `[data-wired]` section (`freezeSnapshot`: inert, `aria-busy`) — a snapshot never
+shows a dead control as live.
+
+**Today's run order (the front door).** The Brief reads, top to bottom: kicker, serif headline,
+why ("tap to see why" under it); the push line (`#todayPushSlot`, below); THE STATE LINE — on a
+train/done read the NOW card (or the bare lift line with its one action), on a rest/easy read the
+lift line alone with the plan day held light in the server's own words (`.brief-strength-held`,
+`strength_line.suggestion_label`: "lighter today", the caveat Train prints — and the kicker then
+drops its minutes, so "Easy day · 25 min" never contradicts "Pull"); the check-in row (rest/easy
+only); What's ahead; Your path; the push offer; the quiet day's menu (rest/easy only) and its
+actions; the steer line; then Fuel today (placed just before the provenance line). The sections
+from What's ahead down break on `--today-gap`.
+
+**Push on Today** (`today-push-{client,controller}.ts`, lazy today-ahead; `ClientDayRead.push`).
+While push is in force, ONE quiet line under the why (`.tpush-line`: a dawn mono "Push", then
+"until Nov 15 — room for one heavier top set today", or "— holding today:"), and when something
+holds the day back its holds as at most three plain chips (`.tpush-chip`, a 44px button around a
+small pill, `aria-expanded` mirroring the why): the hold's short form ("short night", "chest still
+recovering", "Bench Press holding"), its full sentence in the label. A chip opens the Brief's own
+"tap to see why", whose panel then leads with "Why not more today" — the server's sentence and
+every hold in full (`.tpush-why`). A stance that ran out is said once. The coach's **push offer**
+(`#todayPushOfferSlot`, `.tpush-offer`, after the Path card) is a calm pull card, never a
+notification: a dawn mono kicker, the server's question in the serif voice, the log's evidence as
+a short list, how long it would run, and two `.btn`s (the server's labels). Accept is optimistic
+but truthful ("Opening the throttle…", a refusal puts the card back with the server's words, a yes
+re-reads Today) and toasts the stance's one-tap Undo (`CairnDecisionUndoController.offer`); "Not
+now" leaves at once and is remembered on the device too. Writes invalidate `push_offer_accept` /
+`push_offer_dismiss`. No push read, no line and no card. Today-only components whose base rules still
 live in older partials (the block thread, agenda cards, the run line, the context tags) take the v2
 look in `today/pebbles.css`, scoped to `.today-wrap`.
 
@@ -435,13 +469,11 @@ it is on, what to do now, what the team did, and what is coming. Top to bottom:
   decision's server-labelled Undo (on the row for a one-lift change, one `.tdg-undo-row` for a
   multi-lift change). Drafts a newer review set aside never print on Today; they close the Changes
   feed. Omitted when empty.
-- **This week** (`.tweek`): a mast with the block clock (`#tweekBlock`: "Sharpen · Wk 5 of 6", or the
-  running recovery week), the Mon–Sun strip (`.twk-day`, one `.twk-st` stone per session in the
-  strength/endurance hue — filled done, outlined planned, dashed `is-open` for today's open session,
-  faint `is-past` for one not logged; today in dawn with a dot; stones settle in once), three tallies
-  (`.tweek-tally`: lifts done of planned with today's open lift, km run with "of ~33 incl. Sun long",
-  and the bodyweight tile `#wtChipMini` — number, trend per week and a `.tspark` sparkline over a dotted
-  goal line — whose tap opens the inline weigh-in), the recovery gauges (`.tgauge`: Resting HR, HRV,
+- **Body & recovery** (`.tweek`, what was "This week"): Today has ONE week view — the days, the
+  week's counts and the block clock are What's ahead's (above); the old Mon–Sun stones strip and the
+  lifts/km tallies are gone. What stays: the bodyweight tile `#wtChipMini` (number, trend per week
+  and a `.tspark` sparkline over a dotted goal line, one full-width row `.is-one`; its tap opens the
+  inline weigh-in) — beside a cardio count only for an athlete who does not run — the recovery gauges (`.tgauge`: Resting HR, HRV,
   Sleep; the reading and its unit, the athlete's band `.tgauge-band` with the pin, and a mono line
   "Wed night · usual 41–52" — only the read day's own row is last night, an older one is named by its
   night, a stale one draws no pin), then the older detail folded under "More about this week" (the

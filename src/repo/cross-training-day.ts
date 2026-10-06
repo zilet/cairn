@@ -204,6 +204,93 @@ function crossTrainingDaysRead(asOf: string): CrossTrainingDay[] {
   return out;
 }
 
+// ---------- was THIS outing the habit, or more than it? ----------
+//
+// A recurring ride is the athlete's week only at the dose the week usually carries. The
+// readers that let the cross-training day stand as "the plan" rather than as news
+// (stated-rhythm.ts) ask this first: an outing heavier than his usual on that weekday,
+// or clearly longer than it, is a new stimulus — the habit does not cover it.
+//
+// RELATIVE to his own history of that sport on that weekday (the window crossTrainingDays
+// reads), the outing itself excluded:
+//   • HEAVIER — its load band (light / moderate / heavy, hybrid-load's own grade) sits
+//     above his typical band there;
+//   • LONGER — past CROSS_TRAINING_LONGER_MULTIPLE × his median minutes there (the same
+//     1.5× the run engine's "long for him" bar uses, run-intensity.ts).
+// With no other outing of that sport on that weekday to compare against (a stated day
+// he has not yet ridden), only a heavy outing counts as past the habit: there is no
+// habit to cover it. Intensity alone never decides it — a habitually hard MTB is the
+// habit (read-adherence's knownCrossTrainingDose says the same about harm).
+export const CROSS_TRAINING_LONGER_MULTIPLE = 1.5;
+
+export interface CrossTrainingDose {
+  date: string;
+  sport_family: string;
+  minutes: number | null;
+  load: "light" | "moderate" | "heavy";
+  /** The day's outing graded hard on intensity (hybrid-load's grade). */
+  intensity_hard: boolean;
+  typical_min: number | null;
+  typical_load: CrossTrainingDay["typical_load"];
+  /** How many earlier outings the habit is read from. */
+  history: number;
+  within_habit: boolean;
+  /** Why it is past the habit; null when within it. */
+  beyond: "heavier" | "longer" | "no_history" | null;
+}
+
+/**
+ * The cross-training outing logged on `date` for `day`'s sport, read against his own
+ * earlier outings of that sport on that weekday. Null when no such outing is logged.
+ */
+export function crossTrainingDoseOn(date: string, day: Pick<CrossTrainingDay, "dow" | "sport_family">): CrossTrainingDose | null {
+  const iso = String(date).slice(0, 10);
+  if (isoDow(iso) !== day.dow) return null;
+  let impacts: EnduranceImpact[] = [];
+  try {
+    impacts = recentEnduranceImpacts(CROSS_TRAINING_WEEKS_WINDOW * 7, iso);
+  } catch {
+    return null;
+  }
+  const same = impacts.filter(
+    (impact) => impact.family !== "run" && impactFamily(impact) === day.sport_family && isoDow(impact.date) === day.dow
+  );
+  const onDay = same.filter((impact) => impact.date === iso);
+  if (!onDay.length) return null;
+  // The day's biggest outing of that sport speaks for it.
+  const outing = [...onDay].sort(
+    (a, b) => (LOAD_RANK[b.load] ?? 0) - (LOAD_RANK[a.load] ?? 0) || (b.duration_min ?? 0) - (a.duration_min ?? 0)
+  )[0];
+  const history = same.filter((impact) => impact.date < iso);
+  const typical = typicalOf(history);
+  const minutes = outing.duration_min ?? null;
+  let beyond: CrossTrainingDose["beyond"] = null;
+  if (!history.length) {
+    if (outing.load === "heavy") beyond = "no_history";
+  } else if (typical.typical_load != null && (LOAD_RANK[outing.load] ?? 0) > LOAD_RANK[typical.typical_load]) {
+    beyond = "heavier";
+  } else if (
+    minutes != null &&
+    typical.typical_min != null &&
+    typical.typical_min > 0 &&
+    minutes > typical.typical_min * CROSS_TRAINING_LONGER_MULTIPLE
+  ) {
+    beyond = "longer";
+  }
+  return {
+    date: iso,
+    sport_family: day.sport_family,
+    minutes,
+    load: outing.load,
+    intensity_hard: onDay.some((impact) => impact.intensity === "hard"),
+    typical_min: typical.typical_min,
+    typical_load: typical.typical_load,
+    history: history.length,
+    within_habit: beyond == null,
+    beyond,
+  };
+}
+
 /**
  * The cross-training day `date` falls on, read as of `asOf` (default: `date` itself, so a
  * logged day counts toward its own pattern), or null.

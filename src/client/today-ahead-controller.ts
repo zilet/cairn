@@ -1,7 +1,9 @@
 // @ts-check
 // Mounts the redesigned Today's async sections into the slots the screen owns
-// (today-main-shell-client.ts): the overnight digest, the week's strip / gauges /
-// block clock / km note / bodyweight sparkline, Coming up, and the one new connection.
+// (today-main-shell-client.ts): the push line and offer under the Brief's why, the
+// "What's ahead" week strip (its header takes the block clock and the week's run plan
+// from the path read), the overnight digest, Body & recovery's gauges and bodyweight
+// sparkline, Coming up, and the one new connection.
 // Each read goes through the SWR cache (`peek` for a warm paint, `load` to
 // revalidate), so a warm Today paints at once and a slot is rewritten only when its
 // markup actually changed. Every slot is optional: an empty answer or a failed read
@@ -19,6 +21,8 @@
         recovery_overlay?: { day_index?: unknown; total_days?: unknown } | null;
       } | null;
     } | null;
+    /** The Brief's read as it stands now (the push line and offer paint from it). */
+    currentRead?(): unknown;
     /** The day's agenda, once phase two has it (its one genuine ask). */
     agenda(): Promise<unknown>;
     peek(key: string): { data: unknown; fresh: boolean } | null;
@@ -36,9 +40,6 @@
 
   const SLOTS = {
     digest: "#todayDigestSlot",
-    strip: "#tweekStrip",
-    block: "#tweekBlock",
-    km: "#tweekKmNote",
     spark: "#tweekSpark",
     gauges: "#tweekGauges",
     horizon: "#todayHorizonSlot",
@@ -49,7 +50,6 @@
     return {
       path: [`/today-path?date=${encodeURIComponent(date)}`, `today:path:${date}`],
       digest: [`/today-digest?date=${encodeURIComponent(date)}`, `today:digest:${date}`],
-      week: ["/plan/week", "plan:week"],
       baseline: ["/recovery/baseline", "recovery:baseline"],
       insights: ["/insights", "today:insights"],
     } as const;
@@ -64,9 +64,18 @@
     let ask: ReturnType<Window["CairnTodayWorth"]["askCandidate"]> = null;
     let insight: unknown = null;
 
-    // "What's ahead": the week's seven days under the Brief's why, a tapped day opening
-    // inline (today-strip-controller.ts). "Open in Horizon" reads another day under
-    // Horizon; today is Today's own, so in Horizon it is a row of the week.
+    // The push line under the why and the coach's push offer (today-push-controller.ts),
+    // painted from the Brief's read as it stands now; the Brief's in-place upgrade
+    // repaints them itself once this bundle is here.
+    CairnTodayPushController.mount(root, deps.currentRead ? deps.currentRead() : deps.read, {
+      api: deps.api,
+      toast: deps.toast,
+      refresh: () => deps.refreshToday(),
+    });
+
+    // "What's ahead": the week's seven days under the Brief's state line, a tapped day
+    // opening inline (today-strip-controller.ts). "Open in Horizon" reads another day
+    // under Horizon; today is Today's own, so in Horizon it is a row of the week.
     const strip = root.querySelector("#todayStripSlot");
     if (strip) {
       CairnTodayStripController.mount(strip, {
@@ -105,24 +114,17 @@
       const clock = deps.read?.periodization_context;
       const overlay = clock?.recovery_overlay;
       const recoveryDay = overlay ? Math.max(1, Math.min(7, Math.round(Number(overlay.day_index) || 1))) : 0;
-      write(
-        SLOTS.block,
-        escHtml(
-          recoveryDay
+      // The block clock and the week's run plan ride the week strip's header (Today's one week view).
+      const strip = root.querySelector("#todayStripSlot");
+      if (live && strip) {
+        const planned = Number(week?.km_planned);
+        CairnTodayStripController.setHeader(strip, {
+          block: recoveryDay
             ? `Recovery week · day ${recoveryDay} of 7`
-            : CairnTodayWeek.blockLine(week?.phase ?? null, clock?.program_block ?? null)
-        )
-      );
-      const long = (path.milestones || []).find((m) => m.kind === "long_run");
-      const weekEnd = (() => {
-        const ms = Date.parse(`${deps.date}T12:00:00Z`);
-        const dow = Number.isFinite(ms) ? (new Date(ms).getUTCDay() + 6) % 7 : 0;
-        return new Date(ms + (6 - dow) * 864e5).toISOString().slice(0, 10);
-      })();
-      write(
-        SLOTS.km,
-        escHtml(CairnTodayWeek.kmNote(week?.km_planned ?? null, long && long.date <= weekEnd ? long.date : null))
-      );
+            : CairnTodayWeek.blockLine(week?.phase ?? null, clock?.program_block ?? null),
+          kmPlanned: Number.isFinite(planned) && planned > 0 ? planned : null,
+        });
+      }
       write(SLOTS.spark, CairnTodayWeek.sparkSvg(path.weight?.points, path.weight?.goal_lb ?? null));
     }
 
@@ -150,9 +152,6 @@
       digest = value && typeof value === "object" ? value : null;
       paintDigest();
     });
-    read<import("../contracts/client.js").ClientPlanWeek>(k.week, (value) =>
-      write(SLOTS.strip, CairnTodayWeek.stripHtml(value, deps.date))
-    );
     read<import("../contracts/client.js").ClientRecoveryBaselineRead>(k.baseline, (value) =>
       write(SLOTS.gauges, CairnTodayWeek.gaugesHtml(value, deps.date))
     );

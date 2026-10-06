@@ -2,8 +2,9 @@
 // send its whole working model on every save — including the training_drive it LOADED
 // with — so a screen opened before a chat push stance re-sent "steady" on an unrelated
 // save, and setSettings read push → steady as the athlete's toggle and ended the stance.
-// Three layers hold it now: the client sends training_drive only when the athlete moved
-// the control (settings-screen.ts), a stance write drops the cached Settings screen
+// Three layers hold it now: the Settings save never sends training_drive at all — the
+// drive card writes through PUT /api/training-drive (settings-drive-controller.ts) —
+// a stance write drops the cached Settings screen
 // (write-invalidation-client.ts), and the server never ends a stance for a write that
 // equals the standing drive (settings.ts).
 import { test } from "node:test";
@@ -21,15 +22,18 @@ import { pushStanceActive } from "../dist/repo/training-drive.js";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const today = () => localDateISO();
 
-test("the Settings save sends training_drive only when the athlete moved the control", () => {
+test("the Settings save never carries training_drive; the drive card writes through the stance door", () => {
   const screen = readFileSync(join(root, "src/client/settings-screen.ts"), "utf8");
   const persist = screen.slice(screen.indexOf("const persistSettings"), screen.indexOf("const settingsBar"));
   assert.ok(persist.length > 0, "persistSettings is where the body is built");
-  assert.doesNotMatch(persist, /training_drive:\s*wm\.training_drive/, "never unconditionally in the body");
-  assert.match(persist, /if \(wm\.training_drive !== loadedTrainingDrive\) body\.training_drive = wm\.training_drive;/);
-  assert.match(screen, /const loadedTrainingDrive = wm\.training_drive;/);
+  assert.doesNotMatch(persist, /training_drive/, "the save bar never sends the drive, moved or not");
+  const surface = readFileSync(join(root, "src/client/settings-surface-client.ts"), "utf8");
+  assert.doesNotMatch(surface, /training_drive:\s*settingsSurfaceString/, "the drive is not in the working model");
   const types = readFileSync(join(root, "src/client/settings-screen-types.d.ts"), "utf8");
-  assert.match(types, /training_drive\?: "steady" \| "push";/, "the persist body field is optional");
+  const body = types.slice(types.indexOf("type SettingsScreenPersistBody"), types.indexOf("type SettingsScreenAgentInfo"));
+  assert.doesNotMatch(body, /training_drive/);
+  const controller = readFileSync(join(root, "src/client/settings-drive-controller.ts"), "utf8");
+  assert.match(controller, /deps\.api\("\/training-drive", \{\s*method: "PUT"/);
 });
 
 test("a stance write (chat or Undo) drops the cached Settings screen", () => {

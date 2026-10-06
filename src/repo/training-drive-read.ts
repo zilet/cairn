@@ -282,6 +282,7 @@ export function trainingDriveRead(
     ended,
     licenses,
     never_overrides: [...PUSH_NEVER_OVERRIDES],
+    push_opens: [...STANDING_PUSH_LICENSES, ...PUSH_STANCE_LICENSES],
     today,
     offer,
   };

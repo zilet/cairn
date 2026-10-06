@@ -2936,7 +2936,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     "today-plan-selection-client.js must load after Today rail controller and before Today"
   );
   assert.ok(
-    bootPos("/js/today-garmin-reconciliation-client.js") > bootPos("/js/today-program-adjustments-client.js") &&
+    bootPos("/js/today-garmin-reconciliation-client.js") > bootPos("/js/today-cards-client.js") &&
       bootPos("/js/today-garmin-reconciliation-client.js") < bootPos("/js/03-today.js"),
     "today-garmin-reconciliation-client.js must load after Today helper dependencies and before 03-today.js"
   );
@@ -3096,20 +3096,16 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
       bootPos("/js/today-cards-client.js") < bootPos("/js/03-today.js"),
     "today-cards-client.js must load after session-status helpers and before Today"
   );
+  // The rail's week-ahead and program-adjustments cards left Today's column (the week
+  // strip and the overnight digest carry those stories): their renderers ride the lazy
+  // today-ahead bundle, reached by the rail loaders only through withBundle.
+  const todayAhead = BUNDLES.find((bundle) => bundle.lazy === "today-ahead");
+  for (const file of ["public/js/today-program-adjustments-client.js", "public/js/today-week-ahead-client.js"])
+    assert.ok(todayAhead?.inputs.includes(file), `${file} ships in the lazy today-ahead bundle`);
   assert.ok(
-    bootPos("/js/today-program-adjustments-client.js") > bootPos("/js/today-cards-client.js") &&
-      bootPos("/js/today-program-adjustments-client.js") < bootPos("/js/03-today.js"),
-    "today-program-adjustments-client.js must load after Today card helpers and before Today consumers"
-  );
-  assert.ok(
-    bootPos("/js/today-week-ahead-client.js") > bootPos("/js/today-program-adjustments-client.js") &&
-      bootPos("/js/today-week-ahead-client.js") < bootPos("/js/03-today.js"),
-    "today-week-ahead-client.js must load after Today rail helpers and before Today consumers"
-  );
-  assert.ok(
-    bootPos("/js/today-context-client.js") > bootPos("/js/today-week-ahead-client.js") &&
+    bootPos("/js/today-context-client.js") > bootPos("/js/today-cards-client.js") &&
       bootPos("/js/today-context-client.js") < bootPos("/js/03-today.js"),
-    "today-context-client.js must load after Today week-ahead helpers and before Today consumers"
+    "today-context-client.js must load after Today card helpers and before Today consumers"
   );
   assert.ok(
     bootPos("/js/today-dependencies.js") > bootPos("/js/today-post-render-wiring.js") &&

@@ -2337,7 +2337,12 @@ athlete's own sentence, never a question or the coach's suggestion): an explicit
 runs through the active block's last calendar day (said when that is under a week away), else four weeks,
 capped at twelve. Each change is an `observe`-tier, reversible `training_structure` decision with
 lift-progression and session-feedback expectations and a `training_stance` rollback; Undo refuses once a
-newer stance or a toggle has moved the drive, and undoing a renewal re-opens the stance it replaced.
+newer stance or a toggle has moved the drive, and undoing a renewal re-opens the stance it replaced —
+with its ledger row: the row this renewal superseded goes back to `applied` (`superseded_by` cleared,
+its still-open expectations resumed), so the reopened push has its own Undo again. The stated run week's
+Undo (`revertStatedRunWeek`) likewise owns the week's words (`applied_words`: the schedule note and the
+stated session's note) as well as its structure — a note changed since refuses the Undo — and a clean
+Undo invalidates today's read (`test/statedRevertGaps.test.js`).
 While a stance covers the day AND the last three days are harm-free (`harmEvidenceOnDay`) it widens, and
 only widens: the stacked-days count ceiling 5 → `PUSH_STANCE_CONSEC_CEILING` (7) for the ceiling-easy read
 and both rhythm-rest answers (`consecCeiling`, day-read.ts); in the envelope (`signal_support.push_stance`,
@@ -2441,6 +2446,25 @@ open supersedes the offer with the stance's decision (`closeOpenPushOffer`). Dis
 …/offer/dismiss`, MCP `dismiss_push_offer`) marks it `rejected` with `dismissed_on` — the ledger is the
 memory — and keeps its expectations live. Pinned by `test/statedInput.test.js`.
 
+The thresholds, in one place (all in `push-offer.ts`; none is a score, each is a count or a window):
+
+| Constant / bar | Value | Why this number |
+|---|---|---|
+| `OFFER_EVIDENCE_DAYS` | 21 | three weeks: long enough to see loads step, short enough to be "now" |
+| `OFFER_MIN_SESSIONS` | 5 | under ~2 sessions a week, a strong patch is a patch, not a log |
+| carried lifts | ≥2 main compounds `progressing`, none `regressing`/`plateaued` (trained inside `LIFT_CURRENT_WINDOW_DAYS`) | one lift moving is that lift; a stalled main lift says the dose is not light |
+| one more witness | ≥2 sessions rated ≥4 and none ≤2; or ≥3 working sets at RIR ≥2; or ≥3 lifts progressing; or `recovery_capacity` supportive | progression alone can be the engine stepping a light plan; a second, independent sign is required |
+| `OFFER_HARM_FREE_DAYS` | 14 | any `harmEvidenceOnDay` in two weeks closes it — a day that cost something is not room to spare |
+| `OFFER_DISMISS_COOLDOWN_DAYS` | 28 | a "not now" is remembered for a block-length month |
+| `OFFER_AFTER_STANCE_DAYS` | 14 | after a stance ends, let the next fortnight be read on its own |
+| `OFFER_TTL_DAYS` / `OFFER_STANCE_DAYS` | 10 / 14 | an unanswered offer ages out with its evidence; an accepted one is two weeks |
+
+Run against realistic four-week logs (`test/pushOfferShapes.test.js`): a strong, progressing athlete
+(three sessions a week, every main lift climbing, rated strong, reps in reserve) is asked; a stalled
+athlete (same loads four weeks), an injured one (the strong log plus an open symptom), a recovering one
+(a session rated poor inside the fortnight) and a thin log (under five sessions) are never asked — each
+by its own blocker. No threshold needed tuning: the outputs were sane on every shape.
+
 **A run of loading days is a caveat, never a brake of its own — `daily_decision_v7`.** A day counts as
 LOADING when it is `hard`, or moderate STRENGTH work, or genuinely hard cardio
 (`hardCardioDay(iso, cardioLoadMedian)`, asked directly rather than read off the day's grade, since a
@@ -2475,6 +2499,25 @@ only at the ceiling): on rhythm (and harm-free over three days) the ceiling neve
 readiness, harm/novelty, a corroborated felt-low tap, a deciding brake, anything clinical) still rests
 exactly as before, and the drive preference still cannot answer the five-day ceiling.
 
+The widening is BOUNDED (review, 2026-10-06), and `signals.stacked_on_rhythm` says how it carried:
+`{ source: "stated"|"observed", stated_week, observed_days, own_dose_exempt, past_ceiling? }`.
+- *The dose is the habit.* A cross-training day counts as the week only at its habitual dose —
+  `crossTrainingDoseOn` (`cross-training-day.ts`): not heavier than his usual load band on that
+  weekday and not past 1.5× his usual minutes there (the outing itself excluded; with no history, a
+  heavy outing is past the habit). Past it, the streak is off rhythm and the read publishes
+  `signals.stacked_off_rhythm.cross_training_beyond`. Intensity alone never decides it — a habitually
+  hard MTB is the habit.
+- *One observed day.* A stated week may lean on at most `OBSERVED_DAYS_MAX_IN_STREAK` (1) day that only
+  an observed pattern (observed lift weekday, observed cross-training day) puts on it.
+- *A stated week or no ceiling.* `stated_week` is whether he stated lifting or run days at all. A
+  rhythm read entirely off the log may name the stack (`source: "observed"`) below the hard ceiling,
+  but never carries it past (`past_ceiling: false`; the ceiling's easy read stands).
+- *The ride before the long run.* `hard_ride_before_long_run`: yesterday was the cross-training day,
+  its outing graded hard (hybrid-load's impact grade), and today is the stated long run. Then the
+  week's own endurance dose is NOT exempt from corroboration (`own_dose_exempt: false`) — a
+  `hybrid_interference` caution still rests the stacked day, as off the week. Pinned by
+  `test/ownWeekBounds.test.js`.
+
 **A run in and a lift still open is one story (2026-10-06).** On a lifting weekday where a run/ride is
 already logged and no set is (`liftDayStillOpen`), `planned_training` leads its caveat run with
 `RUN_IN_LIFT_OPEN_CAVEAT` (`planned_training:run_in`), and an EASY read that still has a plan day due
@@ -2482,6 +2525,23 @@ appends `LIFT_OPEN_AFTER_ACTIVITY_EASY_WHY` (the run done, the lift left, held l
 `attachDayReadContext` drops the generic recovery menu (walk/mobility/core) on an easy read whose
 strength line is an open lift with `run_in` — the line itself ("Run in · Push still open", "held
 light") is the offer. A rest read keeps its menu.
+
+Only an ADVISORY easy read may make that offer (review, 2026-10-06): the stacked ceiling, a mileage
+spike, a sleep trend, or the protect rule's felt-tap voice with nothing objective seconding it
+(`LIFT_OPEN_SOFT_EASY_CODES`). Anything clinical (`clinicallyDriven`), a rest-grade morning, a
+corroborated tap, a fresh deciding brake, a fresh non-felt safety override, a rest softened to easy
+(`outcome_feedback_soften`), or a plan day still deeply saturated (`planDayAcutelySaturated`) withholds
+it. The answer is published as `signals.lift_open_easy` (`{offered:true}` or `{offered:false,
+withheld:<reason>}`) and `attachDayReadContext` suppresses the menu only when the read itself offered
+the lift — a cached read without the flag keeps its menu. Pinned by `test/ownWeekBounds.test.js`.
+
+**Today's hard run holds the reopened lift's load (review, 2026-10-06).** `lift_day_open.run_heavy`
+(`gatherDailyDecisionSnapshot`) is `"longest"` when `longestRunNovelty(today)` fires, else `"hard"` when
+`hardCardioDayIntense(today, …, {sport:"run"})` grades it hard (the personal-model grade the harm read
+uses). Both licenses that lift the reopened lift's hold — the rhythm license and a push stance — read
+harm off CLOSED days, and this morning's run is not harm evidence until tomorrow; so with `run_heavy`
+the intensity stays `hold`, the reach is parked, and `morning_run_holds_load` says why. The leg
+reduction lists are unchanged. Pinned by `test/morningRunHold.test.js`.
 
 **Soreness routes rather than softens only on a genuinely open morning.** A high (`≥4`) soreness
 report used to unconditionally soften the whole day's volume. It now checks whether the morning is
@@ -5092,7 +5152,13 @@ It is a composition, never a second engine:
   an open suggestion; a covered or rested run is no run) joined to the weekly run plan's prescription
   of that kind. `zone` is the engine's zone with its bpm band from `runZones` resolved through the
   SAME HR model the week's plan read (`getHrModel(asOf)`), so the band always equals the engine's own
-  zone tag (`zone.text`, verbatim). `pace` is the race build's band for the kind (easy / long /
+  zone tag (`zone.text`, verbatim). With no usable personal model the formula bands need a resting HR
+  too: `runZones` reads the recovery aggregate itself when the caller hands none (as it reads the model),
+  so the day detail, `GET /api/run-zones` / `get_run_zones` and the run engine draw ONE Karvonen band —
+  the demo's "Z2 (129–141 bpm)" text beside a 107–125 band was the engine passing recovery and the
+  detail not. The aggregate counts only while its newest resting-HR reading is current
+  (`sensorIsCurrent("resting_hr", …)`, the law the Garmin fallback already kept), so a stale mean no
+  longer Karvonens the engine's bands either (`test/runZonesOneSource.test.js`). `pace` is the race build's band for the kind (easy / long /
   `paceKeyForQuality(label)` / race) — dated race only. `structure` is warm-up → main → cool-down for
   quality work, sized from the engine's own numbers: the main block is `reps × rep distance` ("5 × 1
   km at threshold, 60 s jog between (5 km of threshold work)"), and whatever the run's distance holds

@@ -336,6 +336,10 @@ export interface ClientCoachingFocusChange {
   kind: "new_best" | "race_estimate" | "run_volume" | "weight" | "new_lab";
   text: string;
   since: string | null;
+  // Which way the measured value moved, from the same evidence the text states — a
+  // direction, never a verdict (a faster race estimate moves "down"). Null when the
+  // change has no direction of its own. Optional (additive): older payloads omit it.
+  direction?: ClientCoachingFocusDirection | null;
 }
 
 export interface ClientCoachingFocusDayState {

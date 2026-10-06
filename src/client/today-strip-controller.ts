@@ -5,8 +5,11 @@
 // shared day detail mounts into it through withBundle("day") — the same view Horizon's
 // week and Train's week ahead open. Tapping the open day again, or Close, folds it.
 // "Open in Horizon" takes the day to its full view under Horizon. A repaint of the week
-// rewrites only the days and today's line, so an open day stays open. Delegated on the
-// slot through CairnUiActions.mount (idempotent per slot); returns the teardown.
+// rewrites only the days, the header line and today's line, so an open day stays open.
+// The header's block clock and run plan arrive from the path read through `setHeader`.
+// Delegated on the slot through CairnUiActions.mount (idempotent per slot); the SLOT
+// node rides the Brief's in-place upgrade (carryBriefSlots), so its listeners and any
+// paint still to land stay on screen. Returns the teardown.
 //
 // LAZY (today-ahead bundle). Reached from today-ahead-mount.ts through withBundle.
 {
@@ -20,11 +23,34 @@
     openInHorizon(date: string): void;
   };
 
+  type StripHeader = { block?: string; kmPlanned?: number | null; units?: string };
+
   const WEEK: readonly [string, string] = ["/plan/week", "plan:week"];
   /** The day open under each Today's strip, for this app session (a repaint remounts the strip). */
   const OPEN = new Map<string, string>();
   /** Every mounted strip, so a tap on one that is being replaced reaches its successor. */
   const LIVE = new Set<(date: string | null) => void>();
+  /**
+   * What each slot's header says beside the week's counts (the block clock, the week's
+   * run plan), set by Today's ahead controller from the path read — it may land before
+   * or after the week does, and survives the slot being carried across a Brief upgrade.
+   */
+  const HEADER = new WeakMap<Element, StripHeader>();
+  /** Each mounted slot's own repaint of its header line. */
+  const REPAINT = new WeakMap<Element, () => void>();
+
+  /** The athlete's run units from the warm settings read; km until it is known. */
+  function unitsOf(deps: Pick<TodayStripDeps, "peek">): string {
+    const warm = deps.peek("settings")?.data as { settings?: { run_units?: unknown } } | null | undefined;
+    const raw = String(warm?.settings?.run_units ?? "").toLowerCase();
+    return raw === "mi" || raw === "mile" || raw === "miles" ? "mi" : "km";
+  }
+
+  /** Set the block clock / the week's run plan on a slot's strip (painted now or on its first paint). */
+  function setHeader(slot: Element, header: StripHeader): void {
+    HEADER.set(slot, { ...(HEADER.get(slot) || {}), ...header });
+    REPAINT.get(slot)?.();
+  }
 
   function mountTodayStrip(slot: Element, deps: TodayStripDeps): () => void {
     let live = true;
@@ -33,9 +59,31 @@
     let detailTeardown: (() => void) | null = null;
     let lastDays = "";
     let lastNow = "";
+    let lastTally = "";
+    let lastBlock = "";
     let first = true;
     const host = slot as HTMLElement;
     const q = <T extends Element = HTMLElement>(sel: string): T | null => slot.querySelector<T>(sel);
+    const header = (): StripHeader => ({ ...(HEADER.get(slot) || {}), units: unitsOf(deps) });
+
+    // The header line and the block clock, rewritten only on a change.
+    function paintHeader(): void {
+      if (!live || !slot.isConnected || !week || first) return;
+      const head = header();
+      const nextTally = CairnTodayStrip.tallyHtml(week, head);
+      const tally = q("[data-tstrip-tally]");
+      if (tally && nextTally !== lastTally) {
+        tally.innerHTML = nextTally;
+        lastTally = nextTally;
+      }
+      const nextBlock = String(head.block || "");
+      const block = q("[data-tstrip-block]");
+      if (block && nextBlock !== lastBlock) {
+        block.textContent = nextBlock;
+        lastBlock = nextBlock;
+      }
+    }
+    REPAINT.set(slot, paintHeader);
 
     function paint(value: unknown): void {
       if (!live || !slot.isConnected) return;
@@ -51,18 +99,22 @@
       if (selected && !cells.some((c) => c.date === selected)) closeDay(false);
       const days = q("[data-tstrip-days]");
       if (!days || first) {
-        // This mount's first paint owns the whole strip (a carried node's old fold is not ours).
+        // This mount's first paint owns the whole strip (a carried or held node's old
+        // markup is not ours — its listeners died with it).
         first = false;
-        host.innerHTML = CairnTodayStrip.stripHtml(week, deps.date, null);
+        const head = header();
+        host.innerHTML = CairnTodayStrip.stripHtml(week, deps.date, null, head);
         lastDays = CairnTodayStrip.daysHtml(cells, null);
         lastNow = CairnTodayStrip.nowHtml(week, cells);
+        lastTally = CairnTodayStrip.tallyHtml(week, head);
+        lastBlock = String(head.block || "");
         // A day opened before Today repainted stays open across the repaint.
         const keep = selected || OPEN.get(deps.date) || null;
         selected = null;
         if (keep && cells.some((c) => c.date === keep)) openDay(keep);
         return;
       }
-      // An open day stays open: only the days and today's line are rewritten, and only on a change.
+      // An open day stays open: only the days, the header and today's line are rewritten, and only on a change.
       const nextDays = CairnTodayStrip.daysHtml(cells, selected);
       if (nextDays !== lastDays) {
         days.innerHTML = nextDays;
@@ -74,6 +126,7 @@
         now.innerHTML = nextNow;
         lastNow = nextNow;
       }
+      paintHeader();
     }
 
     function markSelected(): void {
@@ -162,6 +215,7 @@
       return () => {
         live = false;
         LIVE.delete(follow);
+        if (REPAINT.get(slot) === paintHeader) REPAINT.delete(slot);
         detailTeardown?.();
         detailTeardown = null;
       };
@@ -176,7 +230,7 @@
     return teardown;
   }
 
-  const CAIRN_TODAY_STRIP_CONTROLLER = { mount: mountTodayStrip };
+  const CAIRN_TODAY_STRIP_CONTROLLER = { mount: mountTodayStrip, setHeader };
 
   Object.assign(globalThis, { CairnTodayStripController: CAIRN_TODAY_STRIP_CONTROLLER });
 }

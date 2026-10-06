@@ -153,3 +153,32 @@
 .set-card .ah-builder-actions{margin-top:var(--space-5)}
 .set-card .ghostbtn{margin-top:0}
 @media (prefers-reduced-motion:reduce){.set-more>summary::after{transition:none}}
+
+/* ---- Training drive (settings-drive-client.ts): Steady / Push, always dated. The
+   segmented choice fills --ink when on; the chooser and the end confirm sit under a
+   hairline; what Push opens and what never gives way fold behind .set-more. ---- */
+.drive-card{margin-top:var(--space-11)}
+.drive-seg{display:flex;gap:var(--space-2);margin-top:var(--space-6);padding:var(--space-2);background:var(--surface2);border:1px solid var(--line);border-radius:var(--radius-pill)}
+.drive-opt{flex:1;min-height:44px;border:0;background:transparent;color:var(--ink2);border-radius:var(--radius-pill);font-family:var(--font-ui);font-size:var(--text-md);font-weight:var(--weight-semibold);cursor:pointer;transition:background var(--dur-1) var(--ease),color var(--dur-1) var(--ease)}
+.drive-opt.is-on{background:var(--ink);color:var(--on-ink)}
+.drive-state{margin-top:var(--space-7)}
+.drive-k{color:var(--muted);margin:0 0 var(--space-3)}
+.drive-line{margin:0;font-size:var(--text-md);line-height:var(--leading-normal);color:var(--ink)}
+.drive-said,.drive-note,.drive-err{margin:var(--space-4) 0 0;font-size:var(--text-sm);line-height:var(--leading-normal);color:var(--muted)}
+.drive-said{color:var(--ink2);font-style:italic}
+.drive-said-k{font-style:normal;color:var(--muted)}
+.drive-err{color:var(--dawn)}
+.drive-compose,.drive-confirm{margin-top:var(--space-7);padding-top:var(--space-6);border-top:1px solid var(--line)}
+.drive-chips{display:flex;flex-wrap:wrap;gap:var(--space-4)}
+.drive-chip{min-height:44px;padding:var(--chip-pad);font-family:var(--font-ui);font-size:var(--chip-text);font-weight:var(--chip-weight);color:var(--ink2);background:var(--surface);border:1px solid var(--line-strong);border-radius:var(--radius-pill);cursor:pointer}
+.drive-chip.is-on{background:var(--ink);color:var(--on-ink);border-color:var(--ink)}
+.set-card .drive-field{margin:var(--space-6) 0 0}
+.drive-acts{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-6);margin-top:var(--space-7)}
+.drive-acts>button{min-height:44px}
+.drive-confirm .drive-acts{margin-top:var(--space-5)}
+.drive-more-k{color:var(--muted);margin:var(--space-5) 0 0}
+.drive-list{margin:var(--space-3) 0 0;padding-left:var(--space-9);font-size:var(--text-sm);line-height:var(--leading);color:var(--ink2)}
+.drive-list li+li{margin-top:var(--space-2)}
+.drive-wait,.drive-error{margin-top:var(--space-6)}
+.drive-wait{color:var(--muted)}
+@media (prefers-reduced-motion:reduce){.drive-opt{transition:none}}

@@ -155,15 +155,21 @@
 .dayrec.has-detail>.ddv{gap:var(--space-11)}
 
 /* =====================================================================
-   "What's ahead" (today-strip-client.ts): seven day buttons under the
-   Brief's why, today ringed in dawn, a tapped day opening inline below.
+   "What's ahead" (today-strip-client.ts): Today's ONE week view, under the
+   Brief's state line — a mast with the block clock, the week's counts in one
+   header line, seven day buttons (today ringed in dawn), a tapped day opening
+   inline below.
    ===================================================================== */
 .tstrip-slot:empty{display:none}
 .tstrip-slot{margin-top:var(--space-8)}
+.today-wrap .tstrip-slot{margin-top:var(--today-gap)}
 .tstrip{display:flex;flex-direction:column}
-.tstrip-mast{display:flex;align-items:flex-end;justify-content:space-between;min-height:32px;
+.tstrip-mast{display:flex;align-items:flex-end;justify-content:space-between;gap:var(--space-5);min-height:32px;
   padding-bottom:var(--space-3);border-bottom:1px solid var(--line)}
 .tstrip-title{margin:0;color:var(--muted)}
+.tstrip-block{color:var(--muted);text-align:right}
+.tstrip-block:empty{display:none}
+.tstrip-tally{margin:var(--space-4) 0 0;font-size:var(--text-sm);line-height:var(--leading-snug);color:var(--ink2)}
 .tstrip-days{list-style:none;margin:var(--space-4) 0 0;padding:0;display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:var(--space-2)}
 .tstrip-cell{display:flex;min-width:0}
 .tstrip-day{flex:1;min-width:0;min-height:76px;display:flex;flex-direction:column;align-items:center;gap:var(--space-2);
@@ -198,9 +204,7 @@
 .tstrip-run.is-done{background:var(--s-endurance);box-shadow:none}
 .tstrip-run.is-open{box-shadow:inset 0 0 0 1px var(--line-strong)}
 .tstrip-rest{color:var(--faint);font-size:var(--text-lead);line-height:var(--leading-none)}
-.tstrip-now{display:flex;flex-direction:column;gap:var(--space-1);margin-top:var(--space-5)}
-.tstrip-now .strength-line{flex-direction:row;flex-wrap:wrap;align-items:baseline;gap:var(--space-4)}
-.tstrip-now .strength-line-k{color:var(--dawn)}
+.tstrip-now{display:flex;flex-direction:column;gap:var(--space-1);margin-top:var(--space-4)}
 .tstrip-swap{font-size:var(--text-xs);color:var(--muted)}
 
 /* the fold: grid rows 0fr → 1fr, never a hand-animated height */

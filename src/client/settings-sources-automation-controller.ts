@@ -257,13 +257,20 @@
         ["lead", "announce_first", "review_everything"].includes(value) ? value : "lead"
       ) as SettingsScreenWorkingModel["lead_mode"];
     });
-    settingsSourcesAutomationRequired<HTMLSelectElement>(deps.root, "#trainingDrive").addEventListener(
-      "change",
-      (event) => {
-        const value = (event.currentTarget as HTMLSelectElement).value;
-        wm.training_drive = (value === "push" ? "push" : "steady") as SettingsScreenWorkingModel["training_drive"];
-      }
-    );
+    // The training drive card writes on its own (PUT /api/training-drive), never via the
+    // save bar; a bundle without the drive modules simply shows no card.
+    const driveCard = settingsSourcesAutomationOptional<HTMLElement>(deps.root, "#driveCard");
+    if (driveCard && typeof CairnSettingsDriveController !== "undefined") {
+      CairnSettingsDriveController.mount({
+        root: driveCard,
+        api: deps.api,
+        toast: deps.toast,
+        cache: deps.driveCache,
+        onWrite: deps.onDriveWrite,
+      });
+    } else if (driveCard) {
+      driveCard.hidden = true;
+    }
     settingsSourcesAutomationRequired<HTMLInputElement>(deps.root, "#geminiApiKey").addEventListener(
       "input",
       (event) => {

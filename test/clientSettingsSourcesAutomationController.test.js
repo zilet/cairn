@@ -51,7 +51,7 @@ class FakeElement {
       "mealPlanAutoDraft",
       "geminiApiKey",
       "leadMode",
-      "trainingDrive",
+      "driveCard",
     ];
     for (const id of ids) {
       if (!new RegExp(`id="${id}"`).test(value)) continue;
@@ -333,7 +333,6 @@ test("settings automation controller owns enrichment and research toggles", () =
     meal_plan_auto_draft: false,
     gemini_api_key: "",
     lead_mode: "lead",
-    training_drive: "steady",
   };
   const harness = baseDeps(rootEl, wm, {
     settings: { gemini_api_key_configured: true, gemini_api_key_source: "env" },
@@ -350,7 +349,6 @@ test("settings automation controller owns enrichment and research toggles", () =
   assert.equal(rootEl.querySelector("#mealPlanAutoDraft").checked, false, "automatic meal plans render off");
   rootEl.querySelector("#mealPlanAutoDraft").change(true);
   rootEl.querySelector("#leadMode").change("announce_first");
-  rootEl.querySelector("#trainingDrive").change("push");
   rootEl.querySelector("#geminiApiKey").input("gemini-key");
 
   assert.equal(wm.enrich_enabled, false);
@@ -358,10 +356,10 @@ test("settings automation controller owns enrichment and research toggles", () =
   assert.equal(wm.research_enabled, true);
   assert.equal(wm.meal_plan_auto_draft, true);
   assert.equal(wm.lead_mode, "announce_first");
-  assert.equal(wm.training_drive, "push");
-  // An unrecognized value from a stale cached bundle falls back to the calm posture
-  // rather than writing junk the server would then have to reject.
-  rootEl.querySelector("#trainingDrive").change("maximum-overload");
-  assert.equal(wm.training_drive, "steady");
+  // The drive is not part of the save-bar model: its card writes through PUT
+  // /api/training-drive on its own, and without the drive modules it simply hides.
+  assert.equal("training_drive" in wm, false);
+  assert.match(rootEl.innerHTML, /id="driveCard"[^>]*data-save-ignore/);
+  assert.equal(rootEl.querySelector("#driveCard").hidden, true);
   assert.equal(wm.gemini_api_key, "gemini-key");
 });

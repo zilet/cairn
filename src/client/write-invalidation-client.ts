@@ -75,7 +75,7 @@ type WriteInvalidationApi = {
   ] as const;
   const FOOD = ["food:day:", "fuel:band:", "fuel:ideas:", "progress:intake", "progress:energy", "stats"] as const;
   const BODY = ["progress:weight", "progress:energy", "stats", "profile", "me:goal", "fuel:band:"] as const;
-  const GOAL = ["profile", "me:goal", "settings:screen", "@endurance", "@train"] as const;
+  const GOAL = ["profile", "me:goal", "settings:screen", "settings:drive", "@endurance", "@train"] as const;
   const HEALTH = ["health:", "markers:", "recovery:"] as const;
   const LIFE = ["me:life", "me:life:"] as const;
 
@@ -130,6 +130,11 @@ type WriteInvalidationApi = {
     proposal_apply: t(DAY, PLAN),
     // A meal plan edit / swap / status change.
     meal_edit: t(["meals:plans", "fuel:ideas:", "@brief"]),
+    // POST /training-drive/offer/accept: the same push stance a stated push sets
+    // (set_training_drive), so the same reach: the day, the drive's goal side, the plan.
+    push_offer_accept: CHAT_ACTION_TARGETS.set_training_drive,
+    // POST /training-drive/offer/dismiss: the offer rides the Brief and the conductor.
+    push_offer_dismiss: t(DAY, ["settings:screen"]),
   });
 
   const snapshots = new Map<string, () => void>();

@@ -706,29 +706,100 @@ function loadTodayBriefWithSessionStatus() {
   return context.CairnTodayBrief;
 }
 
-test("Today Brief surfaces the week-wins sentence on a rest day", () => {
+test("the week-wins sentence on a rest day: another date's Brief says it; today's leaves it to the week strip's header", () => {
   const brief = loadTodayBriefWithSessionStatus();
-  const html = brief.briefHtml(
-    {
-      kind: "rest",
-      headline: "Rest today",
-      why: "Nothing stacked up.",
-      signals: {},
-      week: { trained_days_7: 4, prs: 2 },
-    },
-    { isToday: true }
-  );
-  assert.match(html, /Trained 4 of the last 7 days, with 2 new bests/);
+  const read = {
+    kind: "rest",
+    headline: "Rest today",
+    why: "Nothing stacked up.",
+    signals: {},
+    week: { trained_days_7: 4, prs: 2 },
+  };
+  assert.match(brief.briefHtml(read, { isToday: false }), /Trained 4 of the last 7 days, with 2 new bests/);
+  // Today's "What's ahead" header carries the week's counts (lifting days, new bests): said once.
+  assert.doesNotMatch(brief.briefHtml(read, { isToday: true }), /Trained 4 of|done-week/);
 });
 
-test("Today Brief surfaces the week-wins sentence on an easy day too", () => {
+test("the week-wins sentence on an easy day too (another date's Brief)", () => {
   const brief = loadTodayBriefWithSessionStatus();
   const html = brief.briefHtml(
     { kind: "easy", headline: "Keep it light", why: "Yesterday was heavy.", signals: {}, week: { trained_days_7: 3, prs: 0 } },
-    { isToday: true }
+    { isToday: false }
   );
   assert.match(html, /Trained 3 of the last 7 days/);
   assert.doesNotMatch(html, /new best/);
+});
+
+// TODAY'S RUN ORDER (the front door): headline + why → push line → state line → check-in
+// → What's ahead → Your path → the push offer → the quiet day's menu → its actions → steer.
+test("today's rest/easy Brief reads in one order, the lift line held light in the server's own words", () => {
+  const brief = loadBriefWithReads();
+  const html = brief.briefHtml(
+    {
+      kind: "easy",
+      headline: "Keep it light",
+      why: "Your sleep ran short.",
+      est_minutes: 25,
+      signals: {},
+      strength_line: {
+        state: "not_started",
+        title: "Pull",
+        text: "Pull · not started",
+        suggestion: "easy",
+        suggestion_label: "lighter <today>",
+        caveat: "Today reads easy — Pull is still yours, just take it light.",
+        reshaped: false,
+        original: [],
+      },
+      recovery: { line: "If you want to move:", options: [{ label: "Easy walk", detail: "", minutes: 20 }] },
+    },
+    { isToday: true }
+  );
+  const at = (needle) => {
+    const i = html.indexOf(needle);
+    assert.ok(i >= 0, `${needle} is on the Brief`);
+    return i;
+  };
+  const order = [
+    at('class="brief-why"'),
+    at('id="todayPushSlot"'),
+    at('class="brief-strength"'),
+    at('id="checkinSlot"'),
+    at('id="todayStripSlot"'),
+    at('id="todayPathSlot"'),
+    at('id="todayPushOfferSlot"'),
+    at('class="brief-recovery"'),
+    at('class="brief-now"'),
+    at('class="brief-steer"'),
+  ];
+  assert.deepEqual([...order].sort((a, b) => a - b), order, "the run order holds");
+  // The state line says the plan day is held light (Train's own word), escaped; the kicker
+  // drops a minutes figure that would contradict it.
+  assert.match(html, /<span class="brief-strength-held">lighter &lt;today&gt;<\/span>/);
+  assert.match(html, /EASY DAY<\/div>/);
+  assert.doesNotMatch(html, /EASY DAY · 25 min/i);
+  // The quiet day's actions keep their place below the menu, without a second lift line.
+  const now = html.slice(at('class="brief-now"'));
+  assert.doesNotMatch(now.slice(0, now.indexOf("</div>") + 6), /strength-line/);
+});
+
+test("today's train Brief leads with the NOW card under the why, before the week and the path", () => {
+  const brief = loadBriefWithReads();
+  const html = brief.briefHtml(
+    {
+      kind: "train",
+      headline: "A strong Pull day",
+      why: "Recovered.",
+      signals: {},
+      strength_line: { state: "not_started", title: "Pull", text: "Pull · not started", reshaped: false, original: [] },
+    },
+    { isToday: true, showPlan: false }
+  );
+  const now = html.indexOf('class="brief-now');
+  assert.ok(now > html.indexOf('class="brief-why"'));
+  assert.ok(now < html.indexOf('id="todayStripSlot"'), "the state line leads the week");
+  assert.ok(html.indexOf('id="todayStripSlot"') < html.indexOf('id="todayPathSlot"'));
+  assert.doesNotMatch(html, /id="checkinSlot"/, "a train read asks no check-in");
 });
 
 test("Today Brief says nothing for a zero-training week — absence is not failure", () => {

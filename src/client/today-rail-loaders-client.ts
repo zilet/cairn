@@ -172,7 +172,10 @@ type TodayRailLoadersApi = {
     let response: unknown = null;
     try { response = await railGet(deps, RAIL_PATHS.weekAhead); } catch { holdFailed(slot); return; }
     if (!isCurrentToday(deps) || !slot.isConnected) return;
-    slot.innerHTML = CairnTodayWeekAhead.cardHtml(response);
+    // Lazy (today-ahead): Today's own column carries the week now ("What's ahead"), so
+    // this card only renders where a rail still asks for it.
+    const html = await withBundle("today-ahead", () => CairnTodayWeekAhead.cardHtml(response));
+    if (isCurrentToday(deps) && slot.isConnected) slot.innerHTML = html;
   }
 
   async function loadProgramAdjustmentsBanner(deps: ClientTodayRailControllerDeps): Promise<void> {
@@ -183,8 +186,13 @@ type TodayRailLoadersApi = {
     if (!isCurrentToday(deps) || !slot.isConnected) return;
     const list = Array.isArray(rows) ? rows : [];
     if (!list.length) { slot.innerHTML = ""; return; }
-    const more = CairnTodayProgramAdjustments.extraCount(list);
-    slot.innerHTML = CairnTodayProgramAdjustments.bannerHtml(list);
+    // Lazy (today-ahead): the digest carries the team's changes on Today's column.
+    const [more, html] = await withBundle("today-ahead", () => [
+      CairnTodayProgramAdjustments.extraCount(list),
+      CairnTodayProgramAdjustments.bannerHtml(list),
+    ] as const);
+    if (!isCurrentToday(deps) || !slot.isConnected) return;
+    slot.innerHTML = html;
     const card = slot.querySelector(".adjust-card");
     if (!card) return;
     card.addEventListener("click", (e: Event) => {

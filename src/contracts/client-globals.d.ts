@@ -847,7 +847,6 @@ declare global {
       | "meal_plan_auto_draft"
       | "gemini_api_key"
       | "lead_mode"
-      | "training_drive"
     >;
     settings: Record<string, unknown>;
     data: SettingsScreenData;
@@ -859,6 +858,10 @@ declare global {
     locationOrigin?: string;
     setTimeout?: typeof setTimeout;
     openUrl?: (url: string) => void;
+    /** The training drive card's last-known read (SWR); absent = fetch-only. */
+    driveCache?: ClientSettingsDriveControllerDeps["cache"];
+    /** Drop the caches a drive write makes stale. */
+    onDriveWrite?: () => void;
   };
 
   type ClientSettingsAgentsControllerWorkingModel = {
@@ -2057,10 +2060,19 @@ declare global {
     run: { label: string; kind: string; km: number | null; state: "done" | "live" | "planned" | "open" } | null;
     swappedFrom: string;
   };
+  /** The strip header's words beside the week's counts (block clock, run plan, run units). */
+  type ClientTodayStripHeader = { block?: string; kmPlanned?: number | null; units?: string };
   declare const CairnTodayStrip: {
-    stripHtml(week: import("./client-api.js").ClientPlanWeek | null | undefined, today: string, selected?: string | null): string;
+    stripHtml(
+      week: import("./client-api.js").ClientPlanWeek | null | undefined,
+      today: string,
+      selected?: string | null,
+      header?: ClientTodayStripHeader
+    ): string;
     daysHtml(cells: ClientTodayStripCell[], selected: string | null): string;
     nowHtml(week: import("./client-api.js").ClientPlanWeek | null | undefined, cells: ClientTodayStripCell[]): string;
+    tallyText(week: import("./client-api.js").ClientPlanWeek | null | undefined, header?: ClientTodayStripHeader): string;
+    tallyHtml(week: import("./client-api.js").ClientPlanWeek | null | undefined, header?: ClientTodayStripHeader): string;
     cellsOf(week: import("./client-api.js").ClientPlanWeek | null | undefined, today: string): ClientTodayStripCell[] | null;
     abbr(name: string): string;
   };
@@ -2075,6 +2087,35 @@ declare global {
         openInHorizon(date: string): void;
       }
     ): () => void;
+    /** Set the block clock / the week's run plan on a slot's strip (now, or on its first paint). */
+    setHeader(slot: Element, header: Omit<ClientTodayStripHeader, "units">): void;
+  };
+  /** LAZY (today-ahead bundle, today-push-client.ts): the push line, chips, why section and offer card. */
+  declare const CairnTodayPush: {
+    stateHtml(push: import("./training-drive.js").ClientTrainingDriveRead | null | undefined, kind?: string): string;
+    offerHtml(offer: import("./training-drive.js").ClientPushOffer | null | undefined): string;
+    answeringHtml(offer: import("./training-drive.js").ClientPushOffer | null | undefined, accepted: boolean): string;
+    whyHtml(push: import("./training-drive.js").ClientTrainingDriveRead | null | undefined): string;
+    chipsOf(
+      push: import("./training-drive.js").ClientTrainingDriveRead | null | undefined,
+      kind: string
+    ): Array<{ label: string; words: string }>;
+    offerId(offer: import("./training-drive.js").ClientPushOffer | null | undefined): number | null;
+    monthDay(iso: unknown): string;
+  };
+  /** LAZY (today-ahead bundle, today-push-controller.ts). The eager Brief reaches it only through a guard. */
+  declare const CairnTodayPushController: {
+    mount(
+      root: Element,
+      read: unknown,
+      deps: {
+        api(path: string, init?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+        toast(message: string, options?: { action?: string; onAction?: () => void }): void;
+        refresh(): unknown;
+      }
+    ): void;
+    repaint(root: Element, read: unknown): void;
+    DISMISSED_KEY: string;
   };
   declare function renderSession(opts?: Record<string, unknown>): unknown;
   declare function openSession(
@@ -3925,7 +3966,6 @@ declare global {
           | "research_enabled"
           | "meal_plan_auto_draft"
           | "lead_mode"
-          | "training_drive"
         >;
         settings: Record<string, unknown>;
         artSpendHtml: string;
@@ -3954,6 +3994,22 @@ declare global {
 
     CairnSettingsDataController: {
       render(deps: ClientSettingsDataControllerDeps): void;
+    };
+
+    CairnSettingsDrive: {
+      cardHtml(read: import("./training-drive.js").ClientTrainingDriveRead | null | undefined, ui: SettingsDriveUi): string;
+      driveView(read: import("./training-drive.js").ClientTrainingDriveRead | null | undefined): SettingsDriveView;
+      untilFor(choice: SettingsDriveUntilChoice | null, today: string, picked?: string): string | null;
+      pushBody(ui: SettingsDriveUi, today: string): import("./training-drive.js").ClientSetTrainingDriveBody | null;
+      confirmLabel(ui: SettingsDriveUi, today: string): string;
+      dayWords(iso: unknown): string;
+      daysLeftWords(daysLeft: unknown): string;
+      initialUi(): SettingsDriveUi;
+    };
+
+    CairnSettingsDriveController: {
+      mount(deps: ClientSettingsDriveControllerDeps): ClientSettingsDriveHandle;
+      CACHE_KEY: string;
     };
 
     CairnSettingsSourcesAutomationController: {
@@ -4669,6 +4725,8 @@ declare global {
         opts: {
           date: string;
           read: unknown;
+          /** The Brief's read as it stands now (an in-place upgrade may have replaced `read`). */
+          currentRead?(): unknown;
           agenda: Promise<unknown>;
           isCurrent(): boolean;
           rail: {
@@ -4699,10 +4757,8 @@ declare global {
 
     /** Lazy (today-ahead bundle). */
     CairnTodayWeek: {
-      stripHtml(week: import("./client-api.js").ClientPlanWeek | null | undefined, today: string): string;
       gaugesHtml(baseline: import("./client-api.js").ClientRecoveryBaselineRead | null | undefined, today: string): string;
       sparkSvg(points: Array<{ date: string; weight_lb: number }> | null | undefined, goal: number | null | undefined): string;
-      kmNote(planned: number | null | undefined, longDate: string | null | undefined): string;
       blockLine(phase: string | null | undefined, block: { week_index?: unknown; total_weeks?: unknown } | null | undefined): string;
       nightWord(band: import("./client-api.js").ClientRecoveryBaselineDimension, today: string): string;
     };
@@ -4728,6 +4784,8 @@ declare global {
         recovery_overlay?: { day_index?: unknown; total_days?: unknown } | null;
       } | null;
     } | null;
+          /** The Brief's read as it stands now (the push line and offer paint from it). */
+          currentRead?(): unknown;
           agenda(): Promise<unknown>;
           peek(key: string): { data: unknown; fresh: boolean } | null;
           load(path: string, options: { key: string }): Promise<unknown>;
@@ -4759,6 +4817,8 @@ declare global {
     CairnTodayMainShell: {
       /** Take the Brief's mounted slots (stones, fuel) out of `from`; the returned call stands them in the new Brief. */
       carryBriefSlots(from: Element): (into: Element) => void;
+      /** Freeze lazily wired sections (`[data-wired]`) in a saved first-paint snapshot: inert until live. */
+      freezeSnapshot(root: ParentNode): void;
       leadHtml(
         options: {
           isToday: boolean;
@@ -4776,7 +4836,6 @@ declare global {
         options?: {
           currentWeight?: unknown;
           trendLbWk?: unknown;
-          liftOpen?: unknown;
           runs?: boolean;
           weekCardio?: unknown;
         }
@@ -5704,6 +5763,8 @@ declare global {
   declare const CairnSettingsSurface: Window["CairnSettingsSurface"];
   declare const CairnSettingsData: Window["CairnSettingsData"];
   declare const CairnSettingsDataController: Window["CairnSettingsDataController"];
+  declare const CairnSettingsDrive: Window["CairnSettingsDrive"];
+  declare const CairnSettingsDriveController: Window["CairnSettingsDriveController"];
   declare const CairnSettingsSourcesAutomationController: Window["CairnSettingsSourcesAutomationController"];
   declare const CairnSettingsAgents: Window["CairnSettingsAgents"];
   declare const CairnSettingsAgentsController: Window["CairnSettingsAgentsController"];

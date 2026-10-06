@@ -131,6 +131,13 @@
   // Under the NOW card (after its steer line), inside the Brief; under the Brief when
   // it carries no NOW. Moves the node only when it is not already there.
   function placeGlance(brief: Element, slot: Element): void {
+    // Last in the Brief's own run, just before its provenance line: the state line (NOW)
+    // now leads under the why, so anchoring after it would put fuel above the week.
+    const prov = brief.querySelector("#briefProvenance");
+    if (prov && prov.parentNode === brief) {
+      if (prov.previousElementSibling !== slot) prov.before(slot);
+      return;
+    }
     const anchor = brief.querySelector(".brief-steer") || brief.querySelector(".brief-now");
     if (anchor && anchor.parentNode) {
       if (anchor.nextElementSibling !== slot) anchor.after(slot);

@@ -4214,11 +4214,11 @@ export function revertDecision(id: number, reason = "user veto"): { ok: boolean;
       } else if (rollback?.kind === "training_stance" && rollback.payload?.version === 1) {
         // The athlete's own drive / push stance. Ownership-guarded inside: a newer stance
         // or a Settings toggle since this decision wins, and the Undo refuses.
-        revertTrainingStance(rollback.payload, localDateISO());
+        revertTrainingStance(rollback.payload, localDateISO(), id);
       } else if (rollback?.kind === "endurance_schedule" && rollback.payload?.version === 1) {
         // The athlete's stated run week / quality session. Ownership-guarded inside: a
         // newer statement since this one wins, and the Undo refuses.
-        revertStatedRunWeek(rollback.payload);
+        revertStatedRunWeek(rollback.payload, localDateISO());
       } else if (rollback?.kind === "garmin_strength" && rollback.payload?.version === 1) {
         // Ownership-guarded per session inside revertGarminReconcile itself — a
         // session touched again since the merge (re-sync, second reconcile) wins

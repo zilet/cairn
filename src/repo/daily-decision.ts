@@ -56,7 +56,7 @@ import {
   type TrainingPriority,
 } from "./training-intent.js";
 import { listTrainingSymptoms } from "./training-symptoms.js";
-import { longestRunNovelty } from "./training-read.js";
+import { hardCardioDayIntense, longestRunNovelty } from "./training-read.js";
 import { stableJson, finite } from "../lib/numbers.js";
 import { PLAN_ITEM_EFFECT_TIER, planItemEffectTier } from "../domain/training/plan-item-order.js";
 import {
@@ -152,6 +152,10 @@ export const DAILY_DECISION_REASONS = [
   "stated_rhythm_clean",
   // A morning run on a lifting weekday: the endurance is in, the lifting is still due.
   "lift_still_due_after_endurance",
+  // This morning's run graded hard or was a new longest, and the lift is still to come:
+  // the lift's load holds whatever licenses the stack — today's run is not yet evidence
+  // either way (review, 2026-10-06).
+  "morning_run_holds_load",
   // No genuinely loaded lower session has landed yet this week, and today is the week's
   // next lower day: its leg work keeps its sets and its logged load (owner ruling,
   // 2026-09-23 — "heavy lower once a week").
@@ -386,7 +390,11 @@ export interface DailyDecisionSnapshot {
   // read stands on its own: a rest-grade MORNING readiness, a rest posture, or a rule
   // that is the athlete's own word (a claimed or traded day) — see
   // REST_GRADE_READ_RULES. An illness window is read off `constraints`. Omit-when-idle.
-  lift_day_open?: { after: string; rest_grade?: true };
+  // `run_heavy` marks a morning whose OWN run was graded hard (hardCardioDayIntense, the
+  // personal-model grade) or is a new longest (longestRunNovelty): today's run cannot be
+  // harm evidence until tomorrow morning, so neither the rhythm license nor a push stance
+  // may lift the reopened lift's intensity hold over it.
+  lift_day_open?: { after: string; rest_grade?: true; run_heavy?: "hard" | "longest" };
   // Today is a lifting weekday whose plan day carries squat/hinge work, and no genuinely
   // loaded lower session has been logged yet in this Monday-first week
   // (plan-selection's `weeklyLowerExposure`). `last_chance`: the lifting week lays no
@@ -882,9 +890,18 @@ export function gatherDailyDecisionSnapshot(
       supportSlice.posture_rest ||
       readsRestGradeReadiness(morningReadiness) ||
       REST_GRADE_READ_RULES.has(ruleCode);
+    // This morning's run, graded by the one source each question has: the personal-model
+    // intensity grade the harm read uses (hardCardioDayIntense, runs only) and the
+    // longest-run first (longestRunNovelty). Never re-derived here.
+    const runHeavy: "hard" | "longest" | null = safe(() => longestRunNovelty(d), null)
+      ? "longest"
+      : safe(() => hardCardioDayIntense(d, undefined, { sport: "run" }), false)
+        ? "hard"
+        : null;
     return {
       after: text((open as { activity?: unknown }).activity, 40) ?? "activity",
       ...(restGrade ? { rest_grade: true as const } : {}),
+      ...(runHeavy ? { run_heavy: runHeavy } : {}),
     };
   })();
 
@@ -2071,6 +2088,24 @@ export function buildDailySessionDecision(
     !decidingBrake(snapshot) &&
     consecutive < PUSH_STANCE_CONSEC_CEILING;
   const stackLicensed = rhythmLicensed || stanceOpen;
+  // ---- …but never over today's own hard or longest run (review, 2026-10-06) ----
+  // Both licenses read harm off CLOSED days (three harm-free days, a stance's harm read),
+  // and this morning's run cannot be harm evidence until tomorrow morning says what it
+  // cost. So a run graded hard on the personal model, or a new longest, keeps the lift
+  // reopened after it at a held load whatever licenses the stack. The leg reduction
+  // lists (today's loaded groups, the acute gate) stand exactly as before; this adds the
+  // load hold on top of them, never in place of them.
+  const morningRunHeavy = liftStillDue && snapshot.lift_day_open?.run_heavy != null;
+  if (morningRunHeavy) {
+    fire(precedence, "morning_run_holds_load");
+    soft.push({
+      code: "morning_run_holds_load",
+      detail:
+        snapshot.lift_day_open?.run_heavy === "longest"
+          ? "This morning's run was your longest in months — the lifting holds its load today"
+          : "This morning's run was a hard one — the lifting holds its load today",
+    });
+  }
   if (rhythmLicensed && consecutive >= 2) {
     fire(precedence, "stated_rhythm_clean");
     soft.push({
@@ -2707,8 +2742,9 @@ export function buildDailySessionDecision(
             lowPerformance ||
             longevityHoldsIntensity ||
             // A lifting day reopened after its morning run holds its load unless the
-            // same rhythm license that stops a stack from capping the day backs it.
-            (liftStillDue && !stackLicensed) ||
+            // same rhythm license that stops a stack from capping the day backs it —
+            // and holds it regardless when that run was hard or a new longest.
+            (liftStillDue && (!stackLicensed || morningRunHeavy)) ||
             // The clock opens; the LOAD does not. A brake the log answered still holds
             // aggression for the day it was answered on.
             quietDayOpened
@@ -2920,8 +2956,10 @@ export function buildDailySessionDecision(
   // being held.)
   // A stated run day has no lifting card for a reach to land on.
   const runDay = snapshot.plan.day_type === "run" && !trainAnyway;
+  // …and a lift held after this morning's hard or longest run parks its reach too: a
+  // challenge top set is the opposite of the held load the card just promised.
   const { reach, trimmed: reachTrimmed } =
-    quietDayOpened || runDay
+    quietDayOpened || runDay || morningRunHeavy
       ? { reach: EMPTY_REACH, trimmed: false }
       : resolveReach(snapshot, kind, deepGroups, rhythmLicensed, stanceOpen);
   if (reach.level === "push") {
@@ -2937,7 +2975,7 @@ export function buildDailySessionDecision(
     !runDay &&
     ((reach.level === "push" && (reach.hosts ?? 1) > 1) ||
       (longevityEase && !rhythmLicensed) ||
-      (liftStillDue && !rhythmLicensed) ||
+      (liftStillDue && !rhythmLicensed && !morningRunHeavy) ||
       (consecutive >= 2 && !rhythmLicensed));
   if (stanceWidened && stance) {
     fire(precedence, "push_stance");

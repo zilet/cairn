@@ -1171,6 +1171,19 @@ const PUSH_DRIVE_CONSEC_CEILING = 5;
 // answer to it. On a stack the athlete's own week carries (stated-rhythm.ts) they do not
 // corroborate the stacked-days rest; harm evidence, readiness, sleep and taps still do.
 const RHYTHM_OWN_DOSE_FIELDS: ReadonlySet<string> = new Set(["hybrid_interference"]);
+// The easy reads that are ADVISORY — an accumulation argument, never the body's own
+// answer — and so may name the lift still open after a run, held light (`liftOpenEasy`).
+// Every other easy-producing code keeps its recovery menu: a rest softened to easy by the
+// outcome ladder (`outcome_feedback_soften`) was a rest first, a lab-draw morning has its
+// own sequence, logged light work is not a brake at all. The protect rule's easy is soft
+// only in its felt-tap voice with nothing objective seconding it (checked at the call).
+const LIFT_OPEN_SOFT_EASY_CODES: ReadonlySet<string> = new Set([
+  DAY_READ_OUTCOMES.accumulated_load_rest.code,
+  DAY_READ_OUTCOMES.felt_low_easy.code,
+  DAY_READ_OUTCOMES.endurance_volume_spike.code,
+  DAY_READ_OUTCOMES.chronic_sleep_watch.code,
+  DAY_READ_OUTCOMES.acute_signal_protection.code,
+]);
 // Readiness that positively CORROBORATES the day, as opposed to merely failing to
 // object. `lowReadiness` (the rest trigger) sits at <35; this is a long way clear of
 // it, because the wearable path is the one that can earn the read without a single
@@ -2157,15 +2170,37 @@ function computeDayRead(
   // their plan being described, not a pile-up being warned about. "The week" includes
   // the recurring cross-training day (stated-rhythm.ts), so a Saturday ride between a
   // Mon–Fri lifting week and a Sunday long run no longer breaks it.
+  //
+  // The widening is bounded (stated-rhythm.ts, review 2026-10-06) and the read says which
+  // shape carried it — `stacked_on_rhythm.source` is "stated" when every day of the run
+  // sits on what the athlete said, "observed" when a pattern read off the log put one of
+  // them there. Two bounds land here:
+  //   • a rhythm read ENTIRELY off the log (no stated week) may name the stack below the
+  //     hard ceiling, but never carries it past — a guessed week does not move a safety
+  //     bound (`past_ceiling: false`, and the ceiling's easy read stands);
+  //   • the week's own endurance dose is exempt from corroborating the rest only while it
+  //     IS the week's dose: a hard cross-training outing yesterday under today's long run
+  //     still loads the long run's legs, so its caution keeps corroborating
+  //     (`own_dose_exempt: false`).
   const atCountCeiling = stackedLoadingRest && consec >= consecCeiling;
-  const rhythmCarriesStack =
-    stackedLoadingRest &&
-    (() => {
-      const rhythm = signalInput(() => statedRhythmRead(d, consec), undefined);
-      return rhythm?.streak_on_rhythm === true && rhythm.recent_harm_free === true;
-    })();
-  if (rhythmCarriesStack) (signals as any).stacked_on_rhythm = true;
-  const atHardCeiling = atCountCeiling && !rhythmCarriesStack;
+  const stackRhythm = stackedLoadingRest ? signalInput(() => statedRhythmRead(d, consec), undefined) : undefined;
+  const rhythmCarriesStack = stackRhythm?.streak_on_rhythm === true && stackRhythm.recent_harm_free === true;
+  const rhythmLiftsCeiling = rhythmCarriesStack && stackRhythm?.stated_week === true;
+  const rhythmOwnsDose = rhythmCarriesStack && stackRhythm?.hard_ride_before_long_run !== true;
+  if (rhythmCarriesStack && stackRhythm) {
+    (signals as any).stacked_on_rhythm = {
+      source: stackRhythm.basis,
+      stated_week: stackRhythm.stated_week,
+      observed_days: stackRhythm.observed_days,
+      own_dose_exempt: rhythmOwnsDose,
+      ...(atCountCeiling ? { past_ceiling: rhythmLiftsCeiling } : {}),
+    };
+  } else if (stackRhythm?.cross_training_beyond) {
+    // The habit did not cover the outing that broke the run of days: said, so the read's
+    // provenance shows why a week that usually carries the stack did not this time.
+    (signals as any).stacked_off_rhythm = { cross_training_beyond: stackRhythm.cross_training_beyond };
+  }
+  const atHardCeiling = atCountCeiling && !rhythmLiftsCeiling;
   const recoveryCapacity = signalState.dimensions.recovery_capacity;
   // The brake is a CURRENT caution, not a watch status beside some fresh support: a
   // wearable caution kept only as context (a reading older than last night) never counts.
@@ -2199,7 +2234,7 @@ function computeDayRead(
     // read; it just does not rest the whole day.
     hasFreshDecidingBrake(signalState.dimensions, {
       exceptFelt: !feltRestCorroborated,
-      ...(rhythmCarriesStack ? { exceptFields: RHYTHM_OWN_DOSE_FIELDS } : {}),
+      ...(rhythmOwnsDose ? { exceptFields: RHYTHM_OWN_DOSE_FIELDS } : {}),
     }) ||
     recoveryCapacityFreshBrake ||
     clinicallyDriven(signalState, healthWorkaround) ||
@@ -3395,8 +3430,60 @@ function computeDayRead(
   // — and the generic recovery menu steps aside for it (day-read-use-case.ts). A REST
   // read is left alone: it has its own reason, and the line already says the lift is
   // still theirs.
-  const liftOpenEasy =
-    liftDayStillOpen && !!bigActivity && resolvedRead.kind === "easy" && suggestedPlanDay() != null;
+  //
+  // …and only an easy read that is ADVISORY may say it (review, 2026-10-06). An easy day
+  // can be easy for two very different reasons. A soft one — the stack of days at the
+  // ceiling, a week's mileage that ramped, a sleep trend, a check-in tap nothing objective
+  // seconds — is a read about accumulation, and "the lift is what's left, keep it light"
+  // is the honest offer on top of it. A protective one — an injury or pain being worked
+  // around, an illness, anything clinical, a rest-grade morning, a fresh deciding brake
+  // (HRV/RHR past his own band, a subdued readiness reading, a corroborated tap), a fresh
+  // safety override — is the body's own answer, and a nudge toward a lift there would
+  // talk over it. Those keep their own words and the recovery menu. The gate, and the
+  // reason it was withheld, is published (`lift_open_easy`) so the Brief response reads
+  // THIS answer rather than re-deriving one (day-read-use-case.ts).
+  const liftOpenEasyWithheld: string | null = (() => {
+    if (!(liftDayStillOpen && !!bigActivity && resolvedRead.kind === "easy")) return null;
+    if (clinicallyDriven(signalState, healthWorkaround)) return "clinical";
+    if (restGradeReadiness) return "rest_grade";
+    if (feltRestCorroborated) return "felt_corroborated";
+    // A fresh safety override decides — except the check-in tap's own, which a tap alone
+    // never earns the weight of (FELT_REST_CORROBORATION): uncorroborated, it is the soft
+    // read this offer is for (corroborated, it was refused just above).
+    if (
+      Object.values(signalState.dimensions).some((dimension) =>
+        dimension.evidence.some(
+          (item) =>
+            item.safety_override === true &&
+            item.direction === "constraint" &&
+            item.freshness !== "stale" &&
+            !FELT_CHECKIN_FIELDS.has(item.field)
+        )
+      )
+    )
+      return "safety_override";
+    if (hasFreshDecidingBrake(signalState.dimensions, { exceptFelt: true })) return "deciding_brake";
+    if (!LIFT_OPEN_SOFT_EASY_CODES.has(outcome.code)) return "protective_read";
+    // The felt arm of the protect rule is soft only as an UNSECONDED tap (above); any
+    // other voice on that rule is a signal-state brake — already refused just above,
+    // restated here so a new voice on the rule cannot open the nudge by accident.
+    if (
+      outcome.code === DAY_READ_OUTCOMES.acute_signal_protection.code &&
+      !FELT_LIGHT_VOICE_KEYS.has(String(signalState.action.voice?.key ?? ""))
+    )
+      return "protective_read";
+    const day = suggestedPlanDay();
+    if (!day) return "no_lift_due";
+    // The lift must really be on offer: a plan day whose groups are still deeply carrying
+    // work (this morning's run included) is not one to nudge toward, light or not.
+    if (signalInput(() => planDayAcutelySaturated(day.day_number, d), true)) return "saturated";
+    return "";
+  })();
+  const liftOpenEasy = liftOpenEasyWithheld === "";
+  if (liftOpenEasyWithheld != null)
+    (signals as any).lift_open_easy = liftOpenEasy
+      ? { offered: true }
+      : { offered: false, withheld: liftOpenEasyWithheld };
   const liftOpenRead = liftOpenEasy
     ? {
         ...resolvedRead,

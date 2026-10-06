@@ -53,6 +53,13 @@ export interface FocusChange {
   text: string;
   /** The date the comparison is made against (the window's start, the prior reading). */
   since: string | null;
+  /**
+   * Which way the measured value moved, from the SAME evidence the text states — never a
+   * verdict on it (a race estimate that got faster moves "down", a lower weight average
+   * "down"). Null when the change carries no direction of its own (a lab whose reading
+   * has no trend yet). Optional on older cached payloads.
+   */
+  direction?: FocusDirection | null;
 }
 
 /** Today's posture: a DAY state, said apart from the week's lever. */
@@ -994,6 +1001,7 @@ function weightChange(inp: CoachingFocusInput, today: string): FocusChange | nul
     kind: "weight",
     text: `Weight's 7-day average is ${a.toFixed(1)} lb, ${Math.abs(delta).toFixed(1)} lb ${delta < 0 ? "lower" : "higher"} than the week before.`,
     since: priorStart,
+    direction: delta < 0 ? "down" : "up",
   };
 }
 
@@ -1015,6 +1023,8 @@ export function focusChanges(inp: CoachingFocusInput, race: RaceRead | null): Fo
       kind: "new_best",
       text: `New best${prs.length > 1 ? "s" : ""} this week: ${joinAnd(words)}${prs.length > 2 ? ` (+${prs.length - 2} more)` : ""}.`,
       since: today ? addDays(today, -6) : null,
+      // A best is a value that went up, by definition.
+      direction: "up",
     });
   }
   if (race?.trend && race.estimateSec != null && Math.abs(race.trend.deltaSec) >= 30) {
@@ -1023,6 +1033,9 @@ export function focusChanges(inp: CoachingFocusInput, race: RaceRead | null): Fo
       kind: "race_estimate",
       text: `${cap(race.distanceName)} estimate ${gapWords(race.trend.deltaSec)} ${race.trend.deltaSec < 0 ? "faster" : "slower"}${race.trend.since ? ` since ${shortDate(race.trend.since)}` : ""} — now ${clock(race.estimateSec)}.`,
       since: race.trend.since,
+      // The estimate is a TIME: faster is the clock moving down — the evidence bullet's
+      // own direction for the same trend.
+      direction: race.trend.deltaSec < 0 ? "down" : "up",
     });
   }
   if (today) {
@@ -1048,11 +1061,15 @@ export function focusChanges(inp: CoachingFocusInput, race: RaceRead | null): Fo
     });
     if (uniq.length) {
       const date = dayOf(uniq[0].date);
+      // The readings the text names, by their own trend: one shared direction, else none.
+      const named = uniq.slice(0, 2).map((r) => readingDirection(r.trend));
+      const labDirection = named.every((dir) => dir != null && dir === named[0]) ? named[0] : null;
       out.push({
         domain: "health",
         kind: "new_lab",
         text: `New lab${date ? ` (${shortDate(date)})` : ""}: ${joinAnd(uniq.slice(0, 2).map(readingPhrase))}.`,
         since: date,
+        direction: labDirection,
       });
     }
     const weight = weightChange(inp, today);
@@ -1069,6 +1086,8 @@ export function focusChanges(inp: CoachingFocusInput, race: RaceRead | null): Fo
       kind: "run_volume",
       text: `Last week's ${round1(race.lastClosed.km)} km was your biggest running week of the last eight.`,
       since: race.lastClosed.weekStart,
+      // The biggest week of the eight: the weekly volume went up.
+      direction: "up",
     });
   }
   return out.slice(0, CHANGES_MAX);

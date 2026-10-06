@@ -32,7 +32,29 @@ export type StatedInputVia = "chat" | "mcp" | "athlete";
 interface RunWeekRollback {
   version: 1;
   applied: CanonicalRunWeek | null;
+  /**
+   * The words this statement left on the stored week (the schedule's note and the stated
+   * session's note). `applied` is the structure only — a statement is RECORDED only when
+   * the structure changes — but the Undo's ownership check must also see a newer note,
+   * or it overwrote what the athlete wrote since. Absent on snapshots written before
+   * (2026-10-06): those keep the structure-only check.
+   */
+  applied_words?: OwnedWords | null;
   previous: EnduranceSchedule | null;
+}
+
+interface OwnedWords {
+  note: string | null;
+  quality_note: string | null;
+}
+
+function ownedWords(schedule: EnduranceSchedule | null | undefined): OwnedWords | null {
+  if (!schedule) return null;
+  return {
+    note: typeof schedule.note === "string" && schedule.note.trim() ? schedule.note : null,
+    quality_note:
+      typeof schedule.quality?.note === "string" && schedule.quality.note.trim() ? schedule.quality.note : null,
+  };
 }
 
 interface CanonicalRunWeek {
@@ -172,7 +194,12 @@ export function recordStatedRunWeek(input: {
       evaluator_version: null,
     });
     if (decision.id) {
-      const rollback: RunWeekRollback = { version: 1, applied: now, previous: input.before ?? null };
+      const rollback: RunWeekRollback = {
+        version: 1,
+        applied: now,
+        applied_words: ownedWords(after),
+        previous: input.before ?? null,
+      };
       saveBrainRollback(decision.id, "endurance_schedule", rollback);
     }
     try {
@@ -188,25 +215,36 @@ export function recordStatedRunWeek(input: {
 
 /**
  * Undo a stated run week (called inside the autonomy service's revert savepoint). Acts
- * only while the stored week is still the one this statement wrote.
+ * only while the stored week is still the one this statement wrote — its structure AND
+ * its words (a note the athlete changed since is a newer word, and it stands). The
+ * restored week moves today's Brief, so the day read is invalidated like the statement's
+ * own write invalidated it.
  */
-export function revertStatedRunWeek(payload: unknown): void {
+export function revertStatedRunWeek(payload: unknown, today: string = localDateISO()): void {
   const p = payload as RunWeekRollback | null;
   if (!p || p.version !== 1) throw new Error("rollback snapshot unavailable");
-  if (!same(canonical(getEnduranceSchedule()), p.applied))
+  const stored = getEnduranceSchedule();
+  if (!same(canonical(stored), p.applied))
     throw new Error("your run week has changed since — your newer word stands");
+  if (p.applied_words !== undefined && !same(ownedWords(stored), p.applied_words))
+    throw new Error("your run week's note has changed since — your newer word stands");
   const prev = p.previous;
   if (!prev) {
     setProfile({ endurance_schedule: null });
-    return;
+  } else {
+    setProfile({
+      endurance_schedule: {
+        days: prev.days,
+        cross_training: prev.cross_training ?? [],
+        quality: prev.quality ?? null,
+        ...(prev.note ? { note: prev.note } : {}),
+        source: prev.source,
+      },
+    });
   }
-  setProfile({
-    endurance_schedule: {
-      days: prev.days,
-      cross_training: prev.cross_training ?? [],
-      quality: prev.quality ?? null,
-      ...(prev.note ? { note: prev.note } : {}),
-      source: prev.source,
-    },
-  });
+  try {
+    invalidateDayRead(String(today).slice(0, 10));
+  } catch {
+    /* the fingerprint carries the schedule anyway; this only skips one stale serve */
+  }
 }

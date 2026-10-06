@@ -470,11 +470,35 @@ export function runZones(opts?: {
   const resolve = (view: RunZones): RunZones => resolveRunZones(view, model);
   const profile = opts?.profile ?? getProfile();
   // Resting HR (for Karvonen) — explicit, else recovery aggregate, else latest Garmin night.
-  const recovery = opts?.recovery;
+  //
+  // The recovery aggregate is read HERE when the caller hands none, exactly like the model
+  // above (2026-10-06). It used to be skipped, so a caller with nothing in hand (the day
+  // detail, GET /run-zones, MCP get_run_zones) drew plain max-HR bands while the run
+  // engine — which passes the same morning summary weeklyRunPlan reads — drew Karvonen
+  // bands off the athlete's resting HR: one "Z2" printed as 129–141 bpm in the session
+  // text and 107–125 in the structured band beside it. One resting HR, one set of bands.
+  const recovery =
+    opts && "recovery" in opts
+      ? opts.recovery
+      : (() => {
+          try {
+            return withMorningReadiness(getRecoverySummary(14), localDateISO());
+          } catch {
+            return null;
+          }
+        })();
+  // The aggregate speaks only while its newest resting-HR reading is current — the same
+  // sensor-age law the Garmin fallback below keeps (sensor-freshness.ts): a 14-day mean
+  // whose last night is ten days old is a stale reading wearing an average's name, and
+  // it must not draw Karvonen bands any more than the stale night itself may. A recovery
+  // snapshot with no per-field quality (a hand-built one) is taken as given.
+  const aggregateQuality = recovery?.quality?.resting_hr;
+  const aggregateCurrent =
+    aggregateQuality == null || sensorIsCurrent("resting_hr", aggregateQuality.latest_date ?? null, localDateISO());
   const restHr =
     (Number.isFinite(Number(opts?.restHr)) ? Number(opts?.restHr) : null) ??
     (Number.isFinite(Number(profile?.resting_hr)) ? Number(profile?.resting_hr) : null) ??
-    (Number.isFinite(Number(recovery?.recovery?.avg_resting_hr))
+    (aggregateCurrent && Number.isFinite(Number(recovery?.recovery?.avg_resting_hr))
       ? Math.round(Number(recovery.recovery.avg_resting_hr))
       : null) ??
     latestGarminRestHr();

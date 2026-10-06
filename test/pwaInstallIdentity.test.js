@@ -147,6 +147,8 @@ const PERSISTED_KEYS = {
   "cairn.turnwatch.v1": ["write-invalidation-client"],
   "cairn.train.v1": ["progress-overview-snapshot-client"],
   "cairn.checkin.dismissed.v1": ["capture-checkin-client"],
+  // The push offer card's "Not now", remembered on the device so a cached read never re-shows it.
+  "cairn.pushOffer.dismissed.v1": ["today-push-controller"],
   // The Brief's check-in line as it last stood today, painted in the Brief's own frame (v2 wave 7).
   "cairn.checkin.paint.v1": ["capture-checkin-client"],
   "cairn.diagnostics.v1": ["client-diagnostics"],

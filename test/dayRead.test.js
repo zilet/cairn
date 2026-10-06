@@ -446,7 +446,8 @@ test("a clean stated rhythm carries the five-day ceiling; the count alone no lon
   assert.equal(r.decision.rule_code, "planned_training");
   // An advisory line that names the week (2026-10-06), never the plain pile-up caveat.
   saysOneCaveat(r.why, "planned_training:stacked_on_rhythm");
-  assert.equal(r.signals.stacked_on_rhythm, true);
+  assert.equal(r.signals.stacked_on_rhythm?.source, "stated", "every day of it sits on what the athlete said");
+  assert.equal(r.signals.stacked_on_rhythm?.past_ceiling, true, "a stated week carries the stack past the ceiling");
 
   // A genuine signal still decides: the same stack on a genuinely short night with a
   // run-down tap rests exactly as before.

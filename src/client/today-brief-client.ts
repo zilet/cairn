@@ -438,16 +438,26 @@ type TodayBriefHtmlOptions = {
     return /\bdays?\b/i.test(trimmed) ? trimmed : `${trimmed} day`;
   }
 
+  // The plan day held light under a rest/easy read, in the server's own words beside
+  // the line ("lighter today", `suggestion_label`) — the same caveat Train prints, so
+  // the Brief's kicker and its lift line never tell two stories about one morning.
+  function todayBriefHeldLabel(read: TodayBriefRead | null | undefined, kind: string): string {
+    const line = read?.strength_line;
+    const open = !!line && (line.state === "not_started" || line.state === "in_progress");
+    return open && line!.suggestion === kind ? String(line!.suggestion_label || "").trim() : "";
+  }
+
   function todayBriefStrengthLineHtml(read: TodayBriefRead | null | undefined, kind: string, kicker = "Today's lift"): string {
     // Guarded: the reading primitives live in the core bundle, absent under a partial boot.
     const reads = (globalThis as { CairnUiReads?: { strengthLineHtml?: Window["CairnUiReads"]["strengthLineHtml"] } })
       .CairnUiReads;
     if (typeof reads?.strengthLineHtml !== "function") return "";
-    const html = reads.strengthLineHtml(read?.strength_line, {
-      kicker,
-      compact: kind === "rest" || kind === "easy",
-    });
-    return html ? `<div class="brief-strength">${html}</div>` : "";
+    const quiet = kind === "rest" || kind === "easy";
+    const html = reads.strengthLineHtml(read?.strength_line, { kicker, compact: quiet });
+    const held = quiet ? todayBriefHeldLabel(read, kind) : "";
+    // The held label sits inside the line, under its text (the line's own caveat column).
+    const said = held ? html.replace(/<\/div>$/, `<span class="brief-strength-held">${escHtml(held)}</span></div>`) : html;
+    return said ? `<div class="brief-strength">${said}</div>` : "";
   }
 
   function todayBriefHtml(read: TodayBriefRead | null | undefined, options: TodayBriefHtmlOptions = {}): string {
@@ -460,7 +470,10 @@ type TodayBriefHtmlOptions = {
     const voice = (globalThis as { CairnTodayBriefVoice?: TodayBriefVoiceApi }).CairnTodayBriefVoice;
     const why = read?.why ? (voice ? voice.whyHtml(escHtml(read.why)) : escHtml(read.why)) : "";
     const recovery = todayBriefRecoveryHtml(read, kind) + ((globalThis as { CairnTodayBriefRunLeg?: Window["CairnTodayBriefRunLeg"] }).CairnTodayBriefRunLeg?.html(read, options.isToday === true) ?? "");
-    const weekWins = todayBriefWeekHtml(read, kind);
+    const today = options.isToday === true;
+    const quietDay = kind === "rest" || kind === "easy";
+    // Today's week strip already carries the week's counts (its header line): say them once.
+    const weekWins = today ? "" : todayBriefWeekHtml(read, kind);
     // The forward line rides on train days AND done days — after the work is in,
     // "Next: …" is the so-what that replaces the retired Start-session controls.
     const forward = read?.forward && (kind === "train" || kind === "done") ? escHtml(read.forward) : "";
@@ -480,8 +493,11 @@ type TodayBriefHtmlOptions = {
       todayBriefDistinctLine(read?.focus, read?.headline || meta.lead, strengthLine ? line?.text : "")
     );
     const updated = todayBriefUpdatedHtml(read, kind, options.isToday !== false);
-    // Today only, under the voice, before NOW: "What's ahead" (the week's days, filled by the lazy today-ahead bundle) then the Path card; aria-live off, like fuel.
-    const pathSlot = options.isToday === true ? `<div id="todayStripSlot" class="tstrip-slot" aria-live="off"></div><div id="todayPathSlot" class="tpath-slot" aria-live="off"></div>` : "";
+    // Today only, under the state line and the check-in: "What's ahead" (the week's days)
+    // then the Path card, then the push offer when the coach has one open; the push state
+    // line rides under the why. All filled by the lazy today-ahead bundle; aria-live off, like fuel.
+    const pathSlot = today ? `<div id="todayStripSlot" class="tstrip-slot" aria-live="off"></div><div id="todayPathSlot" class="tpath-slot" aria-live="off"></div><div id="todayPushOfferSlot" class="tpush-offer-slot" aria-live="off"></div>` : "";
+    const pushSlot = today ? `<div id="todayPushSlot" class="tpush-slot" aria-live="off"></div>` : "";
     const reason = todayBriefReasonHtml(read, kind);
     const lookBack = todayBriefLookBackHtml(read, options.isToday !== false);
 
@@ -586,9 +602,13 @@ type TodayBriefHtmlOptions = {
     // any other read keeps a bare wrapper.
     const launch = actions.length ? `<div class="brief-launch">${actions.join("")}</div>` : "";
     const nowCard = !!voice?.nowHtml && kind === "train" && !!(sessionFold || live);
+    // THE STATE LINE leads under the why: on a train/done day it is the NOW card (or the
+    // bare lift line with its one action); on a rest/easy day the lift line alone (the
+    // plan day held light), and the quiet day's own actions wait below its menu.
     const now = nowCard
       ? voice!.nowHtml({ line: todayBriefStrengthLineHtml(read, kind, ""), focus, title: line?.title, live, fold: sessionFold, idle: fold && !fold.started && !live ? Number(fold.count) || 0 : 0, launch })
-      : `<div class="brief-now">${strengthLine}${live}${sessionFold}${launch}</div>`;
+      : `<div class="brief-now">${quietDay ? "" : strengthLine}${live}${sessionFold}${launch}</div>`;
+    const stateLine = quietDay ? strengthLine : now;
     // Today's own Brief has no "Around today" (Coming up and This week carry it now).
     const context =
       options.isToday === true
@@ -601,19 +621,21 @@ type TodayBriefHtmlOptions = {
       : "";
     return `<section class="brief brief-${kind}${morph}${enter}${thinking}${quiet}" style="--i:0" aria-live="polite"${busy}${band}>
       ${lookBack}
-      <div class="brief-kicker lbl"><span class="brief-glyph" aria-hidden="true">${meta.glyph}</span> ${escHtml(meta.kicker ? meta.kicker.toUpperCase() : `${meta.word.toUpperCase()} DAY`)}${est && foldMinutes == null ? ` · ${escHtml(est)}` : ""}</div>
+      <div class="brief-kicker lbl"><span class="brief-glyph" aria-hidden="true">${meta.glyph}</span> ${escHtml(meta.kicker ? meta.kicker.toUpperCase() : `${meta.word.toUpperCase()} DAY`)}${est && foldMinutes == null && !todayBriefHeldLabel(read, kind) ? ` · ${escHtml(est)}` : ""}</div>
       <h2 class="brief-headline">${headline}</h2>
       ${focus && kind === "train" && !nowCard ? `<div class="brief-focus">${focus}</div>` : ""}
       ${why ? `<p class="brief-why">${why}</p>` : ""}
       ${updated}
       ${caveatHtml}
-      <button class="brief-why-more" data-briefwhy hidden>tap to see why</button>
+      <button class="brief-why-more" data-briefwhy aria-expanded="false" hidden>tap to see why</button>
       ${reason}
+      ${pushSlot}
+      ${stateLine}
       ${checkinSlot}
       ${pathSlot}
       ${weekWins}
       ${recovery}
-      ${now}
+      ${quietDay ? now : ""}
       ${steer}
       ${context}
     </section>`;

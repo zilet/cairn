@@ -146,7 +146,11 @@ test("a clean stack on the athlete's own week is a training day: the count is ad
   seedLiveWeek();
   const r = repo.dayRead(REF);
   assert.ok(r.signals.consecutive_training_days >= 5, "past the five-day ceiling, as live");
-  assert.equal(r.signals.stacked_on_rhythm, true);
+  // The ride day is the one observed day the stated week leans on — said as such.
+  assert.equal(r.signals.stacked_on_rhythm?.source, "observed");
+  assert.deepEqual(r.signals.stacked_on_rhythm?.observed_days, [ago(3)]);
+  assert.equal(r.signals.stacked_on_rhythm?.stated_week, true);
+  assert.equal(r.signals.stacked_on_rhythm?.past_ceiling, true);
   assert.equal(r.kind, "train", `expected a training day, got ${r.kind}: ${r.why}`);
   assert.notEqual(r.decision.rule_code, "accumulated_load_rest");
   assert.equal(r.decision.rule_code, "planned_training");
@@ -177,7 +181,7 @@ test("on the athlete's own week the endurance dose it already counts never corro
     (e) => e.field === "hybrid_interference"
   );
   assert.ok(hybrid, "the precondition: the weekend's dose is on the board as a caution");
-  assert.equal(r.signals.stacked_on_rhythm, true);
+  assert.equal(r.signals.stacked_on_rhythm?.own_dose_exempt, true);
   assert.equal(r.kind, "train", `got ${r.kind}: ${r.why}`);
   assert.equal(r.decision.rule_code, "planned_training");
   // Off the week, the same caution still corroborates the stack exactly as before.

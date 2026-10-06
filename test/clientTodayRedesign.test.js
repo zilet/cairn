@@ -134,6 +134,10 @@ function loadAhead(globals = {}) {
       "today-week-client",
       "today-horizon-client",
       "today-ahead-controller",
+      "today-strip-client",
+      "today-strip-controller",
+      "today-push-client",
+      "today-push-controller",
     ],
     { globals }
   );
@@ -373,8 +377,8 @@ test("the digest is omitted when the team changed nothing and asks nothing", () 
   assert.equal(CairnTodayDigest.html(null, null), "");
 });
 
-test("the week strip: Mon–Sun, a stone per session — filled done, outlined planned, dashed for today's open lift", () => {
-  const { CairnTodayWeek } = loadAhead();
+test("ONE week view on Today: the old Mon–Sun stones strip is gone; What's ahead carries the days and the week's counts", () => {
+  const { CairnTodayWeek, CairnTodayStrip } = loadAhead();
   const days = ["2026-09-28", "2026-09-29", "2026-09-30", "2026-10-01", TODAY, "2026-10-03", "2026-10-04"].map(
     (date) => ({
       date,
@@ -413,17 +417,18 @@ test("the week strip: Mon–Sun, a stone per session — filled done, outlined p
     completion_date: null,
     km: 11.8,
   };
-  const host = renderHtml(CairnTodayWeek.stripHtml({ days }, TODAY));
-  const cells = host.querySelectorAll(".twk-day");
-  assert.equal(cells.length, 7);
-  assert.equal(cells[0].querySelector(".twk-dow").textContent, "MON");
-  assert.ok(cells[0].querySelector(".twk-st.is-lift.is-done"));
-  assert.ok(cells[1].querySelector(".twk-st.is-run.is-done"));
-  assert.ok(cells[4].classList.contains("is-today"));
-  assert.ok(cells[4].querySelector(".twk-st.is-lift.is-open"));
-  assert.ok(cells[6].querySelector(".twk-st.is-run.is-planned"));
-  assert.match(cells[4].getAttribute("aria-label"), /^Friday, today: Pull still open$/);
-  assert.equal(CairnTodayWeek.stripHtml({ days: days.slice(0, 5) }, TODAY), "", "no strip outside calendar mode");
+  assert.equal(CairnTodayWeek.stripHtml, undefined, "the stones strip left Today");
+  assert.equal(CairnTodayWeek.kmNote, undefined, "its km note rides the strip's header now");
+  const progress = { lift_days_done: 1, lift_days_planned: 5, runs_done: 1, run_km: 6, longest_run_km: 6, runs_open: [], prs: 2, line: null };
+  const host = renderHtml(
+    CairnTodayStrip.stripHtml({ days, progress }, TODAY, null, { block: "Sharpen · Wk <5> of 6", kmPlanned: 33.2 })
+  );
+  assert.equal(host.querySelectorAll("button.tstrip-day").length, 7);
+  assert.equal(host.querySelector("[data-tstrip-block]").textContent, "Sharpen · Wk <5> of 6");
+  assert.equal(host.querySelector(".tstrip-tally").textContent, "1 of 5 lifting days · 6 of ~33 km · 2 new bests");
+  assert.equal(host.querySelector(".tstrip-block b"), null, "escaped");
+  assert.equal(CairnTodayStrip.stripHtml({ days: days.slice(0, 5), progress }, TODAY), "", "no strip outside calendar mode");
+  assert.doesNotMatch(String(CairnTodayStrip.tallyText({ days, progress }, {})), /%|score/i);
 });
 
 test("recovery gauges show the reading, its unit and the usual band; an older night is named, never called last night", () => {
@@ -508,8 +513,6 @@ test("the bodyweight sparkline draws the weigh-ins over a dotted goal line, and 
   assert.match(svg, /<line class="tspark-goal"/);
   assert.match(svg, /<polyline class="tspark-line" points="[\d., ]+"/);
   assert.equal(CairnTodayWeek.sparkSvg([{ date: TODAY, weight_lb: 160 }], 154), "");
-  assert.equal(CairnTodayWeek.kmNote(33.2, "2026-10-04"), "of ~33 incl. Sun long");
-  assert.equal(CairnTodayWeek.kmNote(null, null), "this week");
   assert.equal(CairnTodayWeek.blockLine("Sharpen", { week_index: 5, total_weeks: 6 }), "Sharpen · Wk 5 of 6");
 });
 
@@ -568,12 +571,25 @@ test("the today-ahead controller fills each slot from its read and answers an as
   let refreshed = 0;
   const win = loadAhead();
   const host = createHost(win.document, {
-    html: `<div id="todayDigestSlot"></div><span id="tweekBlock"></span><div id="tweekStrip"></div><small id="tweekKmNote">this week</small><span id="tweekSpark"></span><div id="tweekGauges"></div><div id="todayHorizonSlot"></div><div id="todayHeadingSlot"></div>`,
+    html: `<section class="brief"><div id="todayPushSlot"></div><div id="todayStripSlot"></div><div id="todayPushOfferSlot"></div></section><div id="todayDigestSlot"></div><span id="tweekSpark"></span><div id="tweekGauges"></div><div id="todayHorizonSlot"></div><div id="todayHeadingSlot"></div>`,
   });
+  const weekDays = ["2026-09-28", "2026-09-29", "2026-09-30", "2026-10-01", TODAY, "2026-10-03", "2026-10-04"].map((date) => ({
+    date,
+    weekday: null,
+    dow: null,
+    status: "upcoming",
+    plan_day: null,
+    session: null,
+    run: null,
+    hard: false,
+  }));
   const reads = {
     [`/today-path?date=${TODAY}`]: path(),
     [`/today-digest?date=${TODAY}`]: { as_of: TODAY, when: "Overnight", headline: null, changes: [] },
-    "/plan/week": { days: [] },
+    "/plan/week": {
+      days: weekDays,
+      progress: { lift_days_done: 2, lift_days_planned: 4, runs_done: 1, run_km: 22.3, longest_run_km: 11.8, runs_open: [], prs: 0, line: null },
+    },
     "/recovery/baseline": { dimensions: [] },
     "/insights": [{ id: 3, kind: "connection", status: "new", text: "Long runs follow good sleep." }],
   };
@@ -606,13 +622,16 @@ test("the today-ahead controller fills each slot from its read and answers an as
   });
   await flush();
   await flush();
-  assert.equal(host.querySelector("#tweekBlock").textContent, "Sharpen · Wk 5 of 6");
-  assert.equal(host.querySelector("#tweekKmNote").textContent, "of ~33 incl. Sun long");
+  // The block clock and the week's run plan ride the ONE week strip's header.
+  assert.equal(host.querySelector("#todayStripSlot [data-tstrip-block]").textContent, "Sharpen · Wk 5 of 6");
+  assert.equal(host.querySelector("#todayStripSlot .tstrip-tally").textContent, "2 of 4 lifting days · 22.3 of ~33 km");
   assert.ok(host.querySelector("#tweekSpark svg.tspark"));
   assert.ok(host.querySelector("#todayHorizonSlot .thz"));
   assert.ok(host.querySelector("#todayHeadingSlot .thd-insight"), "the one new connection");
   assert.equal(host.querySelector("#todayHeadingSlot .thd-row"), null, "no progress board on Today");
-  assert.equal(host.querySelector("#tweekStrip").innerHTML, "", "no calendar week, no strip");
+  // No push read: the push line and the offer stay empty (collapsed).
+  assert.equal(host.querySelector("#todayPushSlot").innerHTML, "");
+  assert.equal(host.querySelector("#todayPushOfferSlot").innerHTML, "");
   const apply = host.querySelector("[data-tdg-apply]");
   assert.ok(apply, "the ask landed once the agenda did");
   await apply.click();

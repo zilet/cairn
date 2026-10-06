@@ -39,7 +39,6 @@ type SettingsScreenWorkingModel = {
   time_zone: string;
   update_check_enabled: boolean;
   lead_mode: "lead" | "announce_first" | "review_everything";
-  training_drive: "steady" | "push";
 };
 
 type SettingsScreenPersistBody = {
@@ -59,9 +58,6 @@ type SettingsScreenPersistBody = {
   chat_profile_bindings: Record<string, Record<string, Record<string, unknown>>>;
   update_check_enabled: boolean;
   lead_mode: "lead" | "announce_first" | "review_everything";
-  /** Sent only when the athlete moved the control this visit — a stale screen must never
-   * re-assert the drive it loaded with (a push→steady write ends an open stance). */
-  training_drive?: "steady" | "push";
   gemini_api_key?: string;
   garmin_password?: string;
 };
@@ -109,4 +105,45 @@ type SettingsDiagnosticsUiState = {
   recentPage: number;
   requestToken: number;
   foldOpen: boolean;
+};
+
+// ---- the training drive card (settings-drive-client.ts / settings-drive-controller.ts) ----
+
+type SettingsDriveUntilChoice = "block" | "two_weeks" | "four_weeks" | "date";
+
+/** The drive's honest state: steady, an active dated push, an undated standing push, or a push that ran out. */
+type SettingsDriveView = "steady" | "active" | "open" | "lapsed" | "unknown";
+
+type SettingsDriveUi = {
+  status: "loading" | "ready" | "unavailable";
+  /** The "Push until when?" chooser is open. */
+  composing: boolean;
+  choice: SettingsDriveUntilChoice | null;
+  /** The picked last day (YYYY-MM-DD) when `choice` is "date". */
+  date: string;
+  /** The athlete's own sentence, optional; it becomes the Changes feed's "You said". */
+  words: string;
+  /** "Back to steady from today?" is showing. */
+  confirmingEnd: boolean;
+  busy: boolean;
+  error: string | null;
+  /** The server's plain-words note after a write ("This block ends Sunday…"). */
+  note: string | null;
+};
+
+type ClientSettingsDriveControllerDeps = {
+  /** The card element; the controller owns its innerHTML. */
+  root: HTMLElement;
+  api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+  toast(message: string): void;
+  /** The card's last-known read (SWR), painted before the fetch lands. */
+  cache?: { peek(key: string): unknown; set(key: string, value: unknown): void };
+  /** Drop every cache a drive write makes stale (write-invalidation `training_drive`). */
+  onWrite?(): void;
+};
+
+type ClientSettingsDriveHandle = {
+  ready: Promise<void>;
+  refresh(): Promise<void>;
+  snapshot(): { read: import("../contracts/training-drive.js").ClientTrainingDriveRead | null; ui: SettingsDriveUi };
 };

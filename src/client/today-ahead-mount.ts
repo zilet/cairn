@@ -1,7 +1,8 @@
 // @ts-check
 // Mounts what the redesigned Today paints after its frame: the Path card under the
-// Brief (eager, CairnTodayPathController) and the lower half — the overnight digest,
-// This week's strip / gauges / sparkline, Coming up, the new connection — from the
+// Brief (eager, CairnTodayPathController) and the rest — the push line and offer, the
+// week strip, the overnight digest, Body & recovery's gauges / sparkline, Coming up,
+// the new connection — from the
 // lazy today-ahead bundle (CairnTodayAhead), reached only through withBundle. Warm, the
 // bundle mounts in the same turn; cold, the frame's empty slots fill once it lands.
 {
@@ -17,6 +18,8 @@
   type TodayAheadMountOptions = {
     date: string;
     read: unknown;
+    /** The Brief's read as it stands NOW (an in-place upgrade may have replaced `read`). */
+    currentRead?(): unknown;
     agenda: Promise<unknown>;
     /** Still the same Today render (tab, date and poll token unchanged). */
     isCurrent(): boolean;
@@ -45,6 +48,7 @@
       CairnTodayAhead.mount(main, {
         date: opts.date,
         read: (opts.read && typeof opts.read === "object" ? opts.read : null) as never,
+        currentRead: () => (opts.currentRead ? opts.currentRead() : opts.read),
         agenda: () => opts.agenda,
         peek: (key) => peekCached(key),
         load: (path, options) => cachedApi(path, options) as Promise<unknown>,

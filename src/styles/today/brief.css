@@ -68,6 +68,57 @@
 .brief-strength .strength-line-k{grid-column:1;white-space:nowrap}
 .brief-strength .strength-line-t{grid-column:2;font-size:var(--text-md);font-weight:var(--weight-semibold);color:var(--ink);line-height:var(--leading-normal)}
 .brief-strength .strength-line-caveat,.brief-strength .strength-line-orig{grid-column:2;font-size:var(--text-xs);color:var(--muted)}
+/* on a rest/easy read the plan day is held light: the server's own words beside the line */
+.brief-strength .brief-strength-held{grid-column:2;font-size:var(--text-xs);color:var(--muted)}
+
+/* ---- Today's run order under the why: push line → state line → check-in → What's ahead
+   → Your path → the push offer → the quiet day's menu. The sections below the state
+   line break on --today-gap (today/day-detail.css, today/path.css); the Brief's own
+   lines keep their tighter steps. ---- */
+.today-wrap .brief-recovery{margin-top:var(--today-gap)}
+
+/* the push line (today-push-client.ts, lazy): one quiet line under the why while push
+   is in force, its holds as chips that open "tap to see why" */
+.tpush-slot:empty,.tpush-offer-slot:empty{display:none}
+.tpush-slot{margin-top:var(--space-6)}
+.tpush-line{margin:0;display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--space-1) var(--space-4);
+  font-size:var(--text-sm);line-height:var(--leading-snug);color:var(--ink2)}
+.tpush-k{color:var(--dawn)}
+.tpush-line.is-ended .tpush-k{color:var(--muted)}
+.tpush-chips{display:flex;flex-wrap:wrap;gap:0 var(--space-3);margin-top:var(--space-1)}
+/* a 44px tap target around a small chip */
+.tpush-chip{min-height:44px;display:inline-flex;align-items:center;padding:0;border:0;background:none;font:inherit;
+  color:var(--ink2);cursor:pointer;-webkit-tap-highlight-color:transparent}
+.tpush-chip-t{display:inline-block;padding:var(--space-2) var(--space-5);border:1px solid var(--line);border-radius:var(--radius-pill);
+  background:var(--surface);font-size:var(--text-xs);line-height:var(--leading-snug);transition:border-color var(--dur-1) var(--ease)}
+@media (hover:hover){.tpush-chip:hover .tpush-chip-t{border-color:var(--line-strong)}}
+.tpush-chip:active .tpush-chip-t{transform:var(--press)}
+.tpush-chip:focus-visible{outline:none}
+.tpush-chip:focus-visible .tpush-chip-t{outline:2px solid var(--dawn);outline-offset:2px}
+.tpush-chip[aria-expanded="true"] .tpush-chip-t{border-color:var(--ink2);color:var(--ink)}
+/* the push section of the why panel: the server's "why not more" and every hold in full */
+.tpush-why{display:grid;gap:var(--space-3);margin-bottom:var(--space-6);padding-bottom:var(--space-6);border-bottom:1px solid var(--line)}
+.tpush-why:only-child{margin-bottom:0;padding-bottom:0;border-bottom:0}
+.tpush-why-k{color:var(--muted)}
+.tpush-why-line{margin:0;font-size:var(--text-sm);color:var(--ink2);line-height:var(--leading-normal);max-width:48ch}
+.tpush-why-list{margin:0;padding-left:var(--space-8);display:grid;gap:var(--space-2);font-size:var(--text-sm);
+  color:var(--ink2);line-height:var(--leading-normal)}
+
+/* the coach's push offer: a calm pull card — an open question, never a notification */
+.today-wrap .tpush-offer-slot{margin-top:var(--today-gap)}
+.tpush-offer{display:grid;gap:var(--space-4);padding:var(--space-7);background:var(--surface);border:1px solid var(--line);
+  border-radius:var(--radius-md)}
+.tpush-offer[aria-busy="true"]{border-color:var(--line-strong)}
+.tpush-offer-k{color:var(--dawn)}
+.tpush-offer-q{margin:0;font-family:var(--font-display);font-size:var(--text-lg);line-height:var(--leading-tight);color:var(--ink);
+  letter-spacing:var(--tracking-tight);text-wrap:balance}
+.tpush-offer-ev{margin:0;padding-left:var(--space-8);display:grid;gap:var(--space-2);font-size:var(--text-sm);
+  color:var(--ink2);line-height:var(--leading-normal)}
+.tpush-offer-until{margin:0;font-size:var(--text-xs);color:var(--muted);line-height:var(--leading-normal)}
+.tpush-offer-btns{display:flex;flex-wrap:wrap;gap:var(--space-4);align-items:center;margin-top:var(--space-2)}
+.tpush-offer-btns .btn{min-height:44px}
+.tpush-offer-said{margin:0;font-size:var(--text-sm);color:var(--ink2)}
+.tpush-offer-slot>.tpush-offer-said{padding:var(--space-4) 0}
 
 /* the week-wins reassurance on a rest/easy Brief — same sentence + rules as the
    done card's week footnote (.done-week), just repositioned here. */

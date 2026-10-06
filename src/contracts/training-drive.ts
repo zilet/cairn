@@ -65,6 +65,9 @@ export interface ClientTrainingDriveRead {
   licenses: string[];
   // What no drive or stance ever overrides, plain words.
   never_overrides: string[];
+  // What a dated push WOULD open, plain words, whatever is in force — so a steady athlete
+  // reads what Push means before choosing it (Settings). Optional: an older payload has none.
+  push_opens?: string[];
   // Today's answer: present only when push is in force and `date` is today or later.
   today: ClientTrainingDriveToday | null;
   // The coach's open question "want to open the throttle?" — present only while the

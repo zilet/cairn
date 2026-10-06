@@ -53,7 +53,7 @@ type AppleHealthUiState = {
 type SettingsAutomationSliceOptions = {
   workingModel: Pick<
     SettingsScreenWorkingModel,
-    "enrich_enabled" | "art_enabled" | "research_enabled" | "meal_plan_auto_draft" | "lead_mode" | "training_drive"
+    "enrich_enabled" | "art_enabled" | "research_enabled" | "meal_plan_auto_draft" | "lead_mode"
   >;
   settings: Record<string, unknown>;
   artSpendHtml: string;
@@ -146,7 +146,9 @@ function settingsWorkingModel(data: SettingsScreenData): SettingsScreenWorkingMo
     lead_mode: ["lead", "announce_first", "review_everything"].includes(settingsSurfaceString(s.lead_mode))
       ? (settingsSurfaceString(s.lead_mode) as SettingsScreenWorkingModel["lead_mode"])
       : "lead",
-    training_drive: settingsSurfaceString(s.training_drive) === "push" ? "push" : "steady",
+    // No training_drive here on purpose: the drive is written only through the stance door
+    // (PUT /api/training-drive, settings-drive-controller.ts), never by the save bar, so a
+    // stale screen can never re-send a drive and end — or fake — a dated push.
   };
 }
 
@@ -381,14 +383,7 @@ function settingsAutomationSliceHtml(options: SettingsAutomationSliceOptions): s
         </div>
         <div class="sess-line" style="color:var(--muted);margin-top:6px">Lead lets Cairn make bounded, reversible coaching changes at natural boundaries and explain them where they land. Announce first tells you before they take effect. Review everything keeps the classic approval flow. Goal-level and clinical decisions always stay with you.</div>
 
-        <h1 class="lbl" style="margin:22px 0 8px">Training drive</h1>
-        <div class="field">
-          <select id="trainingDrive" aria-label="Training drive">
-            <option value="steady" ${wm.training_drive === "steady" ? "selected" : ""}>Steady</option>
-            <option value="push" ${wm.training_drive === "push" ? "selected" : ""}>Push</option>
-          </select>
-        </div>
-        <div class="sess-line" style="color:var(--muted);margin-top:6px">Steady keeps the usual rhythm — a run of loading days reads as a rest day. Push asks Cairn to favour a targeted session for the muscle groups that are due instead, and only while the recovery evidence is good. A long enough run of days, anything clinical, or a signal pulling the other way still reads as rest.</div>
+        <div class="set-card drive-card" id="driveCard" data-save-ignore></div>
 
         <h1 class="lbl" style="margin:22px 0 8px">While you train</h1>
         <label class="toggle"><input type="checkbox" id="wakeLockEnabled"${wakeLockOn ? " checked" : ""}${wakeLockOk ? "" : " disabled"}>

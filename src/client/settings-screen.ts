@@ -79,12 +79,10 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
   // mirrors into this on change; persistSettings() serializes from HERE (never from
   // DOM elements, which may not be mounted in the active slice). Switching sub-tabs
   // re-renders a slice FROM the model — no refetch, no lost edits.
+  // training_drive is NOT in the working model: the drive card writes through the stance
+  // door (PUT /api/training-drive) on its own, so this save can never carry a stale drive
+  // and end the athlete's open push stance (src/repo/settings.ts).
   const wm = CairnSettingsSurface.workingModel(data);
-  // The drive this screen LOADED with. persistSettings sends training_drive only when the
-  // athlete moved the control away from it: a screen opened before a chat/Brief push
-  // stance would otherwise re-send a stale "steady"/"push" on any unrelated save, and a
-  // push→steady write ends the athlete's open stance (src/repo/settings.ts).
-  const loadedTrainingDrive = wm.training_drive;
   const meta: Record<string, SettingsScreenAgent> = Object.fromEntries(agents.map((a) => [a.name, a])); // name → declarative fields
   // lazily-fetched per-agent detail (version/model/update + models list), cached so a
   // re-render of the Agents slice doesn't re-hit the network for what we already have.
@@ -163,7 +161,6 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
       update_check_enabled: wm.update_check_enabled,
       lead_mode: wm.lead_mode,
     };
-    if (wm.training_drive !== loadedTrainingDrive) body.training_drive = wm.training_drive;
     // password / api-key fields: blank means "leave the configured value intact" — only
     // send a typed value (matches the old per-field placeholder behavior).
     if (wm.gemini_api_key.trim()) body.gemini_api_key = wm.gemini_api_key.trim();
@@ -225,6 +222,16 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
       api,
       toast,
       authToken,
+      driveCache: {
+        peek: (key: string) => peekCached(key, 0)?.data ?? null,
+        set: (key: string, value: unknown) => swrSet(key, value),
+      },
+      // A Settings drive write reaches exactly what the chat action saying it does (the
+      // eager table has no row of its own: the eager JS budget has no room for one).
+      onDriveWrite: () => {
+        if (typeof CairnWriteInvalidation === "undefined") return;
+        CairnWriteInvalidation.invalidate(CairnWriteInvalidation.targetsForChatAction("set_training_drive"));
+      },
     };
   }
 

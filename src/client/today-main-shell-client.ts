@@ -20,9 +20,7 @@ type TodayMainShellWeekOptions = {
   currentWeight?: unknown;
   /** The weight trend, lb/wk (the weekly stats' own slope). */
   trendLbWk?: unknown;
-  /** Today's lift name when it is still open ("Pull"), for the lifts tally. */
-  liftOpen?: unknown;
-  /** The athlete runs (a km tally rather than a cardio count). */
+  /** The athlete runs (their distance rides the week strip's header; no cardio count here). */
   runs?: boolean;
   weekCardio?: unknown;
 };
@@ -31,6 +29,7 @@ type TodayMainShellDeps = {
 };
 type TodayMainShellApi = {
   carryBriefSlots(from: Element): (into: Element) => void;
+  freezeSnapshot(root: ParentNode): void;
   leadHtml(options: TodayMainShellLeadOptions, deps: TodayMainShellDeps): string;
   weekFoldHtml(
     compass: TodayMainShellCompass,
@@ -67,13 +66,14 @@ type TodayMainShellApi = {
     ${captureRowHtml(options.isToday)}`;
   }
 
-  // THIS WEEK (the Today redesign): a seven-day strip of stones, three tallies (lifts
-  // done of planned, kilometres, the bodyweight with its trend and a sparkline), the
-  // recovery gauges, and the older detail (the compass tiles, the wearable strip)
-  // folded under "More about this week". What the frame knows at paint time (the
-  // weekly stats, today's lift line, the weight) is written now; the strip, the gauges,
-  // the block clock, the km plan and the sparkline are filled into their own slots by
-  // the today-ahead bundle (CairnTodayAhead). The bodyweight tile keeps the inline
+  // BODY & RECOVERY (what was "This week"): Today has ONE week view — the "What's ahead"
+  // strip under the Brief, whose header line carries the week's counts (lifting days,
+  // distance against the run plan, new bests) and the block clock. What stays here is
+  // the body's side of the week: the bodyweight with its trend and a sparkline (and,
+  // for an athlete who does not run, the week's cardio count), the recovery gauges, and
+  // the older detail (the compass tiles, the wearable strip) folded under "More about
+  // this week". The gauges and the sparkline are filled into their own slots by the
+  // today-ahead bundle (CairnTodayAhead). The bodyweight tile keeps the inline
   // capture's id, so one tap still opens the weigh-in input under the section.
   function weekFoldHtml(
     compass: TodayMainShellCompass,
@@ -83,28 +83,20 @@ type TodayMainShellApi = {
     const esc = deps.escapeHtml;
     const num = (value: unknown): number | null =>
       value == null || value === "" || !Number.isFinite(Number(value)) ? null : Number(value);
-    const done = num(compass.done) ?? 0;
-    const planned = num(compass.planned);
-    const km = num(compass.weekKm) ?? 0;
-    const open = String(options.liftOpen ?? "").trim();
-    const lifts = `<div class="tweek-tally"><div class="tweek-n num"><span data-cu="${done}">0</span>${
-      planned ? `<span class="tweek-u">/${planned}</span>` : ""
-    }</div><small>lift${done === 1 && !planned ? "" : "s"}${open ? ` · ${esc(open)} open` : ""}</small></div>`;
     const cardio = num(options.weekCardio) ?? 0;
     const second =
-      km > 0 || options.runs
-        ? `<div class="tweek-tally"><div class="tweek-n num">${esc(String(Math.round(km * 10) / 10))}<span class="tweek-u">km</span></div><small id="tweekKmNote">this week</small></div>`
-        : `<div class="tweek-tally"><div class="tweek-n num"><span data-cu="${cardio}">0</span></div><small>cardio</small></div>`;
+      !options.runs && !((num(compass.weekKm) ?? 0) > 0) && cardio > 0
+        ? `<div class="tweek-tally"><div class="tweek-n num"><span data-cu="${cardio}">0</span></div><small>cardio this week</small></div>`
+        : "";
     const weight = num(options.currentWeight);
     const trend = num(options.trendLbWk);
     const trendText = trend == null ? "log a weigh-in" : `${trend > 0 ? "+" : trend < 0 ? "−" : ""}${Math.abs(Math.round(trend * 10) / 10)}/wk`;
     const wt = `<button id="wtChipMini" class="tweek-tally tweek-wt" type="button" title="Log bodyweight" data-keep-fold><span class="tweek-n num" data-wtval>${
       weight != null ? `${esc(String(weight))}<span class="tweek-u">lb</span>` : "—"
     }</span><small>${weight != null ? `lb · ${esc(trendText)}` : "weight · tap to log"}</small><span class="tweek-spark" id="tweekSpark" aria-hidden="true"></span></button>`;
-    return `<section class="tweek" id="todayWeek" aria-label="This week">
-    <div class="tweek-mast"><span class="lbl">This week</span><span class="tweek-block lbl" id="tweekBlock"></span></div>
-    <div id="tweekStrip" class="tweek-strip-slot"></div>
-    <div class="tweek-tallies">${lifts}${second}${wt}</div>
+    return `<section class="tweek" id="todayWeek" aria-label="Body and recovery">
+    <div class="tweek-mast"><span class="lbl">Body &amp; recovery</span></div>
+    <div class="tweek-tallies${second ? "" : " is-one"}">${wt}${second}</div>
     <div class="wt-inline" id="wtInline" hidden>
       <input id="wtInlineInput" type="number" inputmode="decimal" step="0.1" placeholder="Weight (lb)" aria-label="Bodyweight in lb">
       <button id="wtInlineGo" class="logbtn" type="button" aria-label="Log bodyweight">+</button>
@@ -147,12 +139,14 @@ type TodayMainShellApi = {
   // fuel). An in-place Brief swap takes the painted node out of the old element and
   // stands it in the new one, where its own controller places it, so nothing
   // repaints or replays its entrance.
-  // The Path card's slot rides the same way: the painted node (its drawn trail, no
-  // replay) stands in for the fresh Brief's empty one.
+  // The Path card's slot and "What's ahead" ride the same way, ALWAYS — painted or not.
+  // Each is the node its controller mounted on: carried, it keeps its listeners, an open
+  // day stays open, and a paint still in flight (a cold week read, a held snapshot copy)
+  // lands on screen. Left behind when still empty, the controller painted into a
+  // detached node and the fresh Brief kept an empty, never-wired slot.
   function carryBriefSlots(from: Element): (into: Element) => void {
     const fuel = from.querySelector("#todayFuelSlot");
     const path = from.querySelector("#todayPathSlot");
-    // "What's ahead" rides too: its node keeps its listeners and an open day stays open.
     const strip = from.querySelector("#todayStripSlot");
     return (into) => {
       const g = globalThis as {
@@ -167,10 +161,21 @@ type TodayMainShellApi = {
       ] as const) {
         try {
           const home = into.querySelector(id);
-          if (node && home && node.innerHTML) home.replaceWith(node);
+          if (node && home) home.replaceWith(node);
         } catch {}
       }
     };
+  }
+
+  // A saved first-paint snapshot of Today is markup only: a section a lazy controller
+  // wires (`data-wired`: the week strip, the push offer) would paint as a live control
+  // that answers nothing until the real write lands. It is frozen instead — inert and
+  // busy — and the real render (or the slot hold's release) brings it back live.
+  function freezeSnapshot(root: ParentNode): void {
+    root.querySelectorAll("[data-wired]").forEach((el) => {
+      el.setAttribute("inert", "");
+      el.setAttribute("aria-busy", "true");
+    });
   }
 
   function wrapHtml(content: string, options: { railHtml: string }): string {
@@ -179,6 +184,7 @@ type TodayMainShellApi = {
 
   const CAIRN_TODAY_MAIN_SHELL: TodayMainShellApi = {
     carryBriefSlots,
+    freezeSnapshot,
     leadHtml,
     weekFoldHtml,
     digestSlotHtml,

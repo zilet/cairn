@@ -414,8 +414,10 @@ test("the strip: seven real buttons, today ringed, done ticked, lift short names
   assert.ok(days[5].querySelector(".tstrip-run.is-long"));
   assert.match(days[1].getAttribute("aria-label"), /^Tuesday 6, today: Pull <i>, planned/);
   assert.equal(host.querySelector(".tstrip-lift i"), null, "names are escaped");
-  // Today's line is the server's, verbatim; the swap is said quietly beside it.
-  assert.match(host.querySelector(".tstrip-now").textContent, /Pull · not started/);
+  // Today's strength line is the Brief's (said once, right above the strip): the strip
+  // only adds the swap, quietly.
+  assert.doesNotMatch(host.querySelector(".tstrip-now").textContent, /not started/);
+  assert.equal(host.querySelector(".tstrip-now .strength-line"), null);
   assert.match(host.querySelector(".tstrip-swap").textContent, /Pull <i> in place of Lower B/);
   assert.equal(
     w.CairnTodayStrip.stripHtml({ days: week().days.slice(0, 5) }, TODAY),
@@ -522,6 +524,88 @@ test("a tap on a strip Today is replacing reaches the strip that replaces it", a
   assert.equal(next.querySelector('[data-tstrip-day="2026-10-11"]').getAttribute("aria-expanded"), "true");
   await next.querySelector("[data-tstrip-close]").click();
   assert.equal(next.querySelector('[aria-expanded="true"]'), null);
+});
+
+// The warm-reload case: the strip mounts on an EMPTY slot (the week read still in
+// flight), the Brief then upgrades in place, and the week lands after the swap. The
+// slot rides the swap (carryBriefSlots), so the paint lands on screen and is wired.
+test("the strip re-wires across the Brief's in-place upgrade: a week that lands after the swap paints a live strip", async () => {
+  const opened = [];
+  const w = loadClientModule(
+    ["html-utils", "ui-actions-client", "ui-reads", "today-main-shell-client", "today-strip-client", "today-strip-controller"],
+    {
+      globals: {
+        withBundle: (_name, fn) => fn(),
+        CairnDayDetailController: { mount: (_h, deps) => (opened.push(deps.date), () => {}) },
+      },
+    }
+  );
+  const view = createHost(w.document, {
+    html: `<section class="brief"><div id="todayStripSlot" class="tstrip-slot"></div><div id="briefProvenance"></div></section>`,
+  });
+  let land;
+  const pending = new Promise((resolve) => (land = resolve));
+  const slot = view.querySelector("#todayStripSlot");
+  w.CairnTodayStripController.mount(slot, {
+    date: TODAY,
+    peek: () => null,
+    load: () => pending,
+    openInHorizon: () => {},
+  });
+  assert.equal(slot.innerHTML, "", "nothing painted yet");
+  // The Brief upgrades in place before the week arrives.
+  const old = view.querySelector(".brief");
+  const carry = w.CairnTodayMainShell.carryBriefSlots(old);
+  const tmp = w.document.createElement("div");
+  tmp.innerHTML = `<section class="brief"><div id="todayStripSlot" class="tstrip-slot"></div><div id="briefProvenance"></div></section>`;
+  const fresh = tmp.firstElementChild;
+  old.replaceWith(fresh);
+  carry(fresh);
+  land(week());
+  await flush();
+  const live = view.querySelector("#todayStripSlot");
+  assert.equal(live, slot);
+  assert.equal(live.querySelectorAll("button.tstrip-day").length, 7, "the strip painted on screen");
+  await live.querySelector('[data-tstrip-day="2026-10-08"]').click();
+  assert.deepEqual(opened, ["2026-10-08"], "and it answers a tap");
+});
+
+test("a held (snapshot) copy is never left standing: the first paint owns the whole slot", async () => {
+  const w = loadStrip({ withBundle: (_n, fn) => fn(), CairnDayDetailController: { mount: () => () => {} } });
+  const slot = createHost(w.document, {
+    html: `<section class="tstrip" data-wired inert aria-busy="true"><ol data-tstrip-days><li>stale</li></ol></section>`,
+  });
+  w.CairnTodayStripController.mount(slot, {
+    date: TODAY,
+    peek: () => ({ data: week(), fresh: true }),
+    load: () => Promise.resolve(week()),
+    openInHorizon: () => {},
+  });
+  assert.doesNotMatch(slot.innerHTML, /stale/);
+  const section = slot.querySelector(".tstrip");
+  assert.equal(section.hasAttribute("inert"), false, "live, not the frozen snapshot copy");
+  assert.equal(slot.querySelectorAll("button.tstrip-day").length, 7);
+});
+
+test("the strip's header: the block clock and the run plan arrive later and repaint only the header", async () => {
+  const w = loadStrip({ withBundle: (_n, fn) => fn(), CairnDayDetailController: { mount: () => () => {} } });
+  const progress = { lift_days_done: 2, lift_days_planned: 5, runs_done: 1, run_km: 6.1, longest_run_km: 6.1, runs_open: [], prs: 3, line: null };
+  const data = { ...week(), progress };
+  const slot = createHost(w.document);
+  w.CairnTodayStripController.mount(slot, {
+    date: TODAY,
+    peek: (key) => (key === "settings" ? { data: { settings: { run_units: "mi" } }, fresh: true } : { data, fresh: true }),
+    load: () => Promise.resolve(data),
+    openInHorizon: () => {},
+  });
+  const days = slot.querySelector("[data-tstrip-days]");
+  assert.equal(slot.querySelector(".tstrip-tally").textContent, "2 of 5 lifting days · 3.8 mi run · 3 new bests");
+  w.CairnTodayStripController.setHeader(slot, { block: "Build · Wk 2 of 6", kmPlanned: 33 });
+  assert.equal(slot.querySelector("[data-tstrip-block]").textContent, "Build · Wk 2 of 6");
+  assert.equal(slot.querySelector(".tstrip-tally").textContent, "2 of 5 lifting days · 3.8 of ~21 mi · 3 new bests");
+  assert.equal(slot.querySelector("[data-tstrip-days]"), days, "the days were not rewritten");
+  // An empty week says nothing — never "0 of 0".
+  assert.equal(w.CairnTodayStrip.tallyText({ progress: { lift_days_done: 0, lift_days_planned: null, run_km: 0, prs: 0 } }), "");
 });
 
 // ---- Horizon's week rows ----

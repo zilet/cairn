@@ -240,3 +240,11 @@
 .tfc-why,.tfc-based,.tfc-conn,.tfc-later-row{margin:0 0 var(--space-4);font-size:var(--text-sm);line-height:var(--leading-normal);color:var(--ink-2)}
 .tfc-evidence{margin-bottom:var(--space-4)}
 .tfc .linkbtn{min-height:44px;display:inline-flex;align-items:center}
+/* The athlete's push stance under the lead: "Push · through Nov 15", then what holds today. */
+.tfc-push{margin:0 0 var(--space-6);padding:var(--space-2) 0 var(--space-2) var(--space-6);border-left:2px solid var(--dawn)}
+.tfc-push.is-ended{border-left-color:var(--line-strong)}
+.tfc-push-head{margin:0;display:flex;align-items:baseline;gap:var(--space-3);font-size:var(--text-sm);color:var(--ink-2)}
+.tfc-push-k{font-weight:var(--weight-semibold);color:var(--ink)}
+.tfc-push-sep{color:var(--muted)}
+.tfc-push-line{margin:var(--space-2) 0 0;font-size:var(--text-sm);line-height:var(--leading-normal);color:var(--muted)}
+.tfc-push.is-ended .tfc-push-line{margin:0}

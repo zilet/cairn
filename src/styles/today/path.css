@@ -10,6 +10,7 @@
    ===================================================================== */
 .tpath-slot:empty{display:none}
 .tpath-slot{margin-top:var(--space-8)}
+.today-wrap .tpath-slot{margin-top:var(--today-gap)}
 .tpath{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
   padding:var(--space-7) var(--space-7) var(--space-6);display:grid;gap:var(--space-6)}
 .tpath-k{color:var(--muted)}

@@ -58,30 +58,19 @@
 .tdg-ask-q{margin:0;color:var(--ink);font-size:var(--text-base);line-height:var(--leading-normal)}
 .tdg-ask-btns{display:flex;flex-wrap:wrap;gap:var(--space-4);align-items:center}
 
-/* --- This week (today-main-shell-client.ts + today-week-client.ts) --- */
+/* --- Body & recovery (today-main-shell-client.ts + today-week-client.ts). The week's
+   days and counts are the "What's ahead" strip's (today/day-detail.css): one week view. --- */
 .today-wrap .tweek{margin-top:var(--today-gap);display:grid;gap:var(--space-6)}
 .tweek-mast{display:flex;justify-content:space-between;align-items:flex-end;gap:var(--space-5);min-height:44px;
   padding-bottom:var(--space-3);border-bottom:1px solid var(--line)}
 .tweek-mast .lbl{color:var(--muted)}
-.tweek-block:empty{display:none}
-.tweek-strip-slot:empty,.tweek-gauges-slot:empty{display:none}
-.twk-days{display:grid;grid-template-columns:repeat(7,1fr);gap:var(--space-2);text-align:center}
-.twk-day{display:grid;gap:var(--space-3);justify-items:center;font-family:var(--font-mono);font-size:var(--text-2xs);
-  letter-spacing:var(--tracking-wider);color:var(--muted)}
-.twk-stack{display:grid;gap:var(--space-2);justify-items:center;align-content:end;min-height:34px}
-.twk-st{display:block;width:18px;height:13px;border-radius:50% 50% 46% 54% / 58% 58% 42% 42%;
-  animation:twk-settle var(--dur-3) var(--ease) both;animation-delay:calc(var(--i,0) * 40ms)}
-.twk-st.is-lift{--c:var(--s-strength)}
-.twk-st.is-run{--c:var(--s-endurance)}
-.twk-st.is-done{background:var(--c)}
-.twk-st.is-planned{background:transparent;border:1.5px solid var(--c)}
-.twk-st.is-open{background:transparent;border:1.5px dashed var(--line-strong)}
-.twk-st.is-past{background:transparent;border:1.5px solid var(--line)}
-.twk-day.is-today{color:var(--dawn)}
-.twk-now{width:4px;height:4px;border-radius:50%;background:var(--dawn)}
-@keyframes twk-settle{from{transform:translateY(-6px);opacity:0}}
-.today-soft .twk-st,[data-held] .twk-st{animation:none}
-.tweek-tallies{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--space-4)}
+.tweek-gauges-slot:empty{display:none}
+.tweek-tallies{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--space-4)}
+/* The bodyweight alone: one row — the number, its trend, the sparkline at the end. */
+.tweek-tallies.is-one{grid-template-columns:minmax(0,1fr)}
+.tweek-tallies.is-one .tweek-wt{grid-template-columns:auto minmax(0,1fr) auto;align-items:center;column-gap:var(--space-6);
+  min-height:44px}
+.tweek-tallies.is-one .tweek-spark{margin-top:0;width:96px}
 .tweek-tally{display:grid;gap:var(--space-1);align-content:start;padding:var(--space-5);background:var(--surface);
   border:1px solid var(--line);border-radius:var(--radius-md);min-width:0;text-align:left;font:inherit;color:inherit}
 .tweek-tally small{color:var(--muted);font-size:var(--text-xs);line-height:var(--leading-snug)}

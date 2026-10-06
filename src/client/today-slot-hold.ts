@@ -74,6 +74,11 @@ type TodaySlotHoldApi = {
     "garminReconcileSlot",
     "fuelSlot",
     "qlRecent",
+    // The lazy today-ahead bundle's Brief slots: on a reload it lands after the write,
+    // so they hold (inert, never a dead control) until its controllers paint them.
+    "todayStripSlot",
+    "todayPushSlot",
+    "todayPushOfferSlot",
   ] as const;
   // Open folds worth keeping open across a rewrite: any <details> with an id, plus
   // the Brief's "around today" fold, which has none.

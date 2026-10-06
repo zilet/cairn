@@ -225,8 +225,17 @@ export function attachDayReadContext(readDate: string, read: Record<string, unkn
   // story that ignored both the run already logged and the session still waiting. The
   // line is the one source for that state — this only reads it. A REST read keeps its
   // menu: the lift there is "still yours if you want it", not the day's offer.
+  //
+  // …and only when the read ITSELF offered that lift (`signals.lift_open_easy.offered`,
+  // day-read.ts). An easy read that is easy for a protective reason — an injury, an
+  // illness, pain, a rest-grade morning, a fresh deciding brake — withholds the offer,
+  // and then the menu stays: the quiet day's offer is recovery, not a lighter lift. A
+  // cached read from before the gate carries no flag and keeps its menu (the safe side).
+  const readOffersLift = (read.signals as { lift_open_easy?: { offered?: unknown } } | null | undefined)
+    ?.lift_open_easy?.offered === true;
   const liftOpenOnEasy =
     String(read.kind ?? "") === "easy" &&
+    readOffersLift &&
     strengthLine?.role === "strength" &&
     strengthLine.run_in != null &&
     (strengthLine.state === "not_started" || strengthLine.state === "in_progress");

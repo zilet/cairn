@@ -576,7 +576,7 @@ async function renderToday(opts: any = {}) {
 
   // ---- Trajectory tier (this week), quiet, below the fold ----
   // ---- The digest, this week, then the road ahead (slots the today-ahead bundle fills) ----
-  html += todayMainShell.digestSlotHtml() + todayMainShell.weekFoldHtml(todayCompass, todayMainShellDeps(), { currentWeight: curW, trendLbWk: stats?.trend_lb_wk, liftOpen: read?.strength_line?.state === "not_started" ? read.strength_line.title : "", runs: isEndurance() || isHybrid() || todayCompass.weekKm > 0, weekCardio: stats?.week_cardio }) + todayMainShell.aheadSlotsHtml();
+  html += todayMainShell.digestSlotHtml() + todayMainShell.weekFoldHtml(todayCompass, todayMainShellDeps(), { currentWeight: curW, trendLbWk: stats?.trend_lb_wk, runs: isEndurance() || isHybrid() || todayCompass.weekKm > 0, weekCardio: stats?.week_cardio }) + todayMainShell.aheadSlotsHtml();
 
   // The primary column (.today-main) holds the Brief, capture, and logging surface;
   // the rail (.today-rail) sits beside it on wide screens and stacks under it on
@@ -657,7 +657,7 @@ async function renderToday(opts: any = {}) {
   wireExerciseDecisionUndo(todayView, () => renderToday({ soft: true }));
   if (isToday) CairnTodayFuelGlance.mountToday(todayView, { ...todayRailDeps(), date: todayState.logDate }); // under NOW
   // The Path card, then the lower half (digest, week, Coming up, the board): today-ahead-mount.ts.
-  if (isToday) CairnTodayAheadMount.mount(todayView, { date: renderedDate, read, agenda: agendaPromise, isCurrent: () => todayState.tab === "today" && todayState.logDate === renderedDate && pollToken === railToken, rail: todayRailDeps() });
+  if (isToday) CairnTodayAheadMount.mount(todayView, { date: renderedDate, read, currentRead: () => (todayState.brief && todayState.brief.date === renderedDate ? todayState.brief.read : read), agenda: agendaPromise, isCurrent: () => todayState.tab === "today" && todayState.logDate === renderedDate && pollToken === railToken, rail: todayRailDeps() });
   wireGuides(view);
 
   CairnTodaySessionController.wireSessionSurface({ session, hasLoggedSets, lastSets }, todaySessionDeps());
@@ -749,6 +749,7 @@ function saveHydratedNow(): void {
   if (todayView.querySelector("[data-held], .brief.is-thinking, .skel, [class*='skel']")) return;
   const copy = todayView.cloneNode(true) as HTMLElement;
   copy.querySelectorAll("[data-ephemeral]").forEach((el) => el.remove());
+  todayMainShell.freezeSnapshot(copy); // a lazily wired control paints frozen until it is live again
   todaySaveSurfaceSnapshot(at.date, copy.innerHTML);
 }
 function scheduleHydratedSave(ms: number): void {

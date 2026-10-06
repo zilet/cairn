@@ -124,19 +124,42 @@
     return `<p class="chfeed-outcome chfeed-outcome-${tone}">${escHtml(phrase)}</p>`;
   }
 
+  // The athlete's own words, as the row's first line ("You said “push me until the block
+  // ends”") — the row reads "You said X → the brain changed Y". Stray quote marks are
+  // dropped so the curly pair is never doubled, the same way the server writes its quote.
+  function saidWords(change: BrainChange): string {
+    return text(change.said).replace(/[“”"]/g, "").trim();
+  }
+
+  function saidHtml(said: string): string {
+    return said
+      ? `<p class="chfeed-said"><span class="chfeed-said-k">You said</span> <q class="chfeed-said-q">${escHtml(said)}</q></p>`
+      : "";
+  }
+
+  // The server's why OPENS on the same quote for a stated row (`You said “X”. Y`); with
+  // the quote printed as its own line, the why keeps only what the brain changed.
+  function whyAfterSaid(why: string, said: string): string {
+    if (!said) return why;
+    const quote = `You said “${said}”.`;
+    return why.startsWith(quote) ? why.slice(quote.length).trim() : why;
+  }
+
   /** One change. `data-chfeed-id` is the key the controller patches a single row by. */
   function rowHtml(change: BrainChange, options: ChangesFeedRowOptions = {}): string {
     const title = text(change.title);
     if (!title) return "";
+    const said = saidWords(change);
     const state = STATES.has(change.state) ? change.state : "applied";
     const classes = ["chfeed-row", `is-${state}`];
     if (change.new === true) classes.push("is-new");
     if (options.enter) classes.push("settle-in");
     else if (options.index != null) classes.push("reveal");
     if (options.settled) classes.push("is-settled");
+    if (said) classes.push("is-said");
     const stagger =
       !options.enter && options.index != null ? ` style="--i:${Math.max(0, Math.trunc(options.index))}"` : "";
-    const why = text(change.why);
+    const why = whyAfterSaid(text(change.why), said);
     const fresh = change.new === true ? `<span class="chfeed-new">New</span>` : "";
     const folds = why.length > WHY_FOLD_CHARS;
     const whyHtml = why
@@ -146,6 +169,7 @@
       : "";
     const talk = `<button class="linkbtn-quiet chfeed-talk" type="button" data-chfeed-talk="${escAttr(change.id)}">Talk it through</button>`;
     return `<li class="${classes.join(" ")}" data-chfeed-id="${escAttr(change.id)}"${stagger}>
+      ${saidHtml(said)}
       <div class="chfeed-head">${dotHtml(change)}${arrowHtml(title)}<p class="chfeed-title">${escHtml(title)}</p>${fresh}</div>
       ${whyHtml}
       ${outcomeHtml(change)}

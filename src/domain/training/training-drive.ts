@@ -21,6 +21,8 @@ import {
   recordDecision,
   transitionBrainDecision,
   getBrainDecision,
+  listBrainExpectations,
+  setBrainExpectationStatus,
 } from "../../repo/brain-decisions.js";
 import {
   buildLiftProgressionExpectations,
@@ -170,6 +172,9 @@ export function setTrainingDrive(input: SetTrainingDriveInput): ClientSetTrainin
     // stance (a renewed stance inherits it rather than "push" from the one it replaces).
     const fallback: TrainingDriveValue = before.stance ? before.stance.previous_drive : before.drive;
     if (standingBefore !== "push") setSettings({ training_drive: "push" }, { keepStances: true });
+    // An open stance whose window has CLOSED is replaced exactly like a live one: the
+    // standing value still reads push, so a toggle would see "push → push" and do nothing,
+    // but the drive in force already fell back — this push opens a new dated stance.
     const replaced = latestOpenStance();
     endOpenStances("replaced");
     const stance = insertStance({
@@ -222,6 +227,16 @@ export function setTrainingDrive(input: SetTrainingDriveInput): ClientSetTrainin
 
   // drive === "steady"
   if (before.drive === "steady" && !before.stance && standingBefore === "steady") {
+    return { ok: true, notes: ["The drive is already steady."], decision_id: null, read: trainingDriveRead(today) };
+  }
+  // A push that already ran out: the drive in force is ALREADY steady (read-time fall
+  // back), so stepping back changes nothing the athlete trains under. Tidy the lapsed row
+  // and the standing value so Settings and the read agree, with no ledger row — a "back
+  // to steady" with an Undo would be a change that never happened.
+  if (before.drive === "steady" && !before.stance) {
+    endOpenStances("stepped_back");
+    if (standingBefore !== "steady") setSettings({ training_drive: "steady" }, { keepStances: true });
+    safeInvalidate(today);
     return { ok: true, notes: ["The drive is already steady."], decision_id: null, read: trainingDriveRead(today) };
   }
   const ending = before.stance;
@@ -322,7 +337,11 @@ function recordStanceDecision(input: {
  * only while the world still holds what the decision applied — a newer stance or a
  * Settings toggle since then wins, and the Undo says so by throwing.
  */
-export function revertTrainingStance(payload: unknown, today: string = localDateISO()): void {
+export function revertTrainingStance(
+  payload: unknown,
+  today: string = localDateISO(),
+  undoneDecisionId: number | null = null
+): void {
   const p = payload as StanceRollback | null;
   if (!p || p.version !== 1 || !p.applied || !p.previous) throw new Error("rollback snapshot unavailable");
   const standing: TrainingDriveValue = getSettings().training_drive === "push" ? "push" : "steady";
@@ -343,7 +362,32 @@ export function revertTrainingStance(payload: unknown, today: string = localDate
     if (prior && !reopenStance(prior.id, today)) {
       // The earlier stance has run out in the meantime: go back to what stood under it.
       setSettings({ training_drive: prior.previous_drive }, { keepStances: true });
+    } else if (prior) {
+      restoreReopenedStanceDecision(prior.decision_id ?? null, undoneDecisionId, today);
     }
   }
   safeInvalidate(today);
+}
+
+// The reopened stance is in force again, so its own ledger row is too (review,
+// 2026-10-06): the newer stance superseded it, and undoing that newer stance used to
+// reopen the stance while its row stayed `superseded` — a push in force with no row to
+// show it and no Undo of its own. The row goes back to `applied` (so its own one-tap
+// Undo works again, ownership-guarded like any other), and the falsifiable expectations
+// the supersede canceled resume where their window still runs. Only a row this undone
+// decision superseded is touched; anything else moved it for its own reason.
+function restoreReopenedStanceDecision(decisionId: number | null, undoneDecisionId: number | null, today: string): void {
+  if (decisionId == null) return;
+  try {
+    const row = getBrainDecision(decisionId);
+    if (!row || row.status !== "superseded") return;
+    if (undoneDecisionId != null && row.superseded_by != null && row.superseded_by !== undoneDecisionId) return;
+    patchBrainDecision(decisionId, { status: "applied", superseded_by: null });
+    for (const expectation of listBrainExpectations({ decisionId, status: "canceled", limit: 100 })) {
+      if (expectation.id != null && String(expectation.window_end ?? "") >= today)
+        setBrainExpectationStatus(expectation.id, "pending");
+    }
+  } catch {
+    /* the stance is reopened either way; the row is accountability, best effort */
+  }
 }
