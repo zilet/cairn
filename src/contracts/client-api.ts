@@ -807,6 +807,8 @@ export interface ClientPlanWeek {
     run_days: string[];
   };
   strength_line?: ClientTodayStrengthLine | null;
+  /** The athlete's run units (settings.run_units); the server's word, so a header never guesses km. */
+  run_units?: "km" | "mi";
 }
 
 /** One lift day ahead in the Program look-ahead (GET /api/plan/look-ahead). */

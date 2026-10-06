@@ -2153,7 +2153,6 @@ export function coachingFocus(input: CoachingFocusInput = {}): CoachingFocus {
     deferred,
     block: block?.read ?? null,
     race,
-    change: changed_since[0] ?? null,
   });
 
   return {
@@ -2185,9 +2184,10 @@ export function coachingFocus(input: CoachingFocusInput = {}): CoachingFocus {
 }
 
 // ---- the headline: the week's through-line, never a standing slogan ------------
-// "<where in the block / days to the race>: <lead> leads, with <a> and <b> alongside.
-// <the most newsworthy change>". It names the levers by noun (the lead block below it
-// carries the title), so the card never says the same sentence twice. The strength
+// "<where in the block / days to the race>: <lead> leads, with <a> and <b> alongside."
+// It names the levers by noun (the lead block below it carries the title), so the card
+// never says the same sentence twice — and for the same reason it never carries a
+// change: `changed_since` is the "What moved" strip's to say, right under it. The strength
 // standing ("an intermediate lifter overall") is NOT a headline: it is a supporting
 // fact on the lead when — and only when — strength is the lever.
 function composeHeadline(args: {
@@ -2196,9 +2196,8 @@ function composeHeadline(args: {
   deferred: Candidate[];
   block: FocusBlockRead | null;
   race: RaceRead | null;
-  change: FocusChange | null;
 }): string {
-  const { lead, parallel, deferred, block, race, change } = args;
+  const { lead, parallel, deferred, block, race } = args;
   if (!lead) return "Log a few sessions and Cairn will set your focus for the block.";
   const anchorParts: string[] = [];
   if (block?.week != null && block.of != null) anchorParts.push(`Week ${block.week} of ${block.of}`);
@@ -2220,7 +2219,5 @@ function composeHeadline(args: {
     through = `${nounOf(lead)} leads this week${along.length ? `, with ${joinAnd(along)} alongside` : ""}`;
   }
   const raw = anchor ? `${anchor}: ${through}.` : `${through}.`;
-  const sentence = `${raw.charAt(0).toUpperCase()}${raw.slice(1)}`;
-  const withChange = change ? `${sentence} ${change.text}` : sentence;
-  return withChange.length <= 240 ? withChange : sentence;
+  return `${raw.charAt(0).toUpperCase()}${raw.slice(1)}`;
 }

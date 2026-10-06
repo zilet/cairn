@@ -4116,7 +4116,10 @@ body[data-tab="session"] .toast{left:50%}
 .tfc-chip{display:inline-flex;align-items:center;gap:var(--space-3);background:var(--surface2);border-radius:var(--radius-pill);padding:var(--space-2) var(--space-5) var(--space-2) var(--space-4);font-size:var(--text-sm);color:var(--ink-2)}
 .tfc-chip .tfc-dot{width:8px;height:8px;margin:0}
 .tfc-moved-list,.tfc-evidence{list-style:none;margin:0;padding:0}
-.tfc-moved-item,.tfc-ev{display:flex;align-items:baseline;flex-wrap:wrap;gap:var(--space-3);padding:var(--space-1) 0;font-size:var(--text-sm);color:var(--ink-2)}
+.tfc-ev{display:flex;align-items:baseline;flex-wrap:wrap;gap:var(--space-3);padding:var(--space-1) 0;font-size:var(--text-sm);color:var(--ink-2)}
+.tfc-moved-item{display:grid;grid-template-columns:1.2em minmax(0,1fr) auto;align-items:baseline;column-gap:var(--space-3);padding:var(--space-1) 0;font-size:var(--text-sm);color:var(--ink-2)}
+.tfc-moved-text{min-width:0;overflow-wrap:anywhere}
+.tfc-moved-since{white-space:nowrap;font-variant-numeric:tabular-nums}
 .tfc-moved-since,.tfc-ev-note{color:var(--muted);font-size:var(--text-xs)}
 .tfc-ev-note{flex-basis:100%;padding-left:1.5em}
 .tfc-ev-value{color:var(--ink);font-weight:var(--weight-semibold)}

@@ -174,6 +174,62 @@ test("a threshold 5 km block keeps the engine's reps and splits the rest of the 
   assert.equal(bare[0].km, null);
   assert.equal(bare[2].km, null);
   assert.equal(bare[1].km, 5);
+
+  // An imperial athlete reads the same parts in miles: the words change, never the km.
+  const mi = dayDetailRunStructure("quality", 8, rx, rx.label, false, false, null, [], "mi");
+  assert.deepEqual(
+    mi.map((p) => [p.part, p.km, p.text]),
+    [
+      ["warm_up", 1.5, "0.9 mi easy"],
+      ["main", 5, "5 × 0.6 mi at threshold, 60 s jog between (3.1 mi of threshold work)"],
+      ["cool_down", 1.5, "0.9 mi easy"],
+    ]
+  );
+  assert.equal(mi[1].on, "1km", "the engine's rep words still travel as written");
+  for (const [kind, km] of [
+    ["easy", 8],
+    ["long", 16],
+  ]) {
+    const [one] = dayDetailRunStructure(kind, km, null, kind, false, false, null, [], "mi");
+    assert.doesNotMatch(one.text, /\bkm\b/, one.text);
+    assert.match(one.text, /\bmi\b/);
+  }
+});
+
+test("a stored deload note gives way when the day's prescription no longer deloads; an ordinary note stays", (t) => {
+  seedHybridWeek(t);
+  // Written by an earlier deload, still stored on the plan items.
+  repo.savePlanDay(2, "Lower A", "Squat and hinge", [
+    {
+      exercise: "Back Squat",
+      sets: 3,
+      rep_low: 5,
+      rep_high: 8,
+      target_weight: 185,
+      note: "Deload: backed off to 2 sets of 6–8 reps to recover from grinding.",
+    },
+    { exercise: "Romanian Deadlift", sets: 3, rep_low: 8, rep_high: 10, target_weight: 135, note: "Pause at the knee." },
+    {
+      exercise: "Leg Curl",
+      sets: 3,
+      rep_low: 10,
+      rep_high: 12,
+      target_weight: 90,
+      note: "Deload: backed off to 100 lb for a week.",
+    },
+  ]);
+  const read = dayDetail(WEDNESDAY);
+  const progression = planDayProgression(read.lift.day_number, { readDate: WEDNESDAY });
+  const byName = (name) => read.lift.exercises.find((e) => e.name === name);
+  for (const name of ["Back Squat", "Leg Curl"]) {
+    const p = progression.find((row) => row.exercise === name);
+    assert.ok(p && p.action !== "deload", `${name}: the engine's current action (${p?.action}) is not a deload`);
+    assert.equal(byName(name).note, null, `${name}: the stale deload note is not shown as current guidance`);
+  }
+  assert.equal(byName("Romanian Deadlift").note, "Pause at the knee.", "a note that fits the day stays");
+  // The stored plan is untouched.
+  const stored = repo.getPlan().find((d) => d.day_number === read.lift.day_number);
+  assert.match(stored.items.find((i) => i.exercise === "Back Squat").note, /^Deload: backed off/);
 });
 
 test("a long run day: one steady segment at the engine's distance, easy zone, the long-run pace band", (t) => {

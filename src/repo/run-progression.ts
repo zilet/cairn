@@ -69,6 +69,7 @@ import {
 } from "./run-ramp.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { harmEvidenceOnDay, withMorningReadiness } from "./brain/read-adherence.js";
+import { pushStanceHarmFree, pushStanceInForce } from "./push-stance-open.js";
 import { raceLadderPeak } from "./race-ladder-hook.js";
 // A function-only cycle (the agenda reads this module's weeklyRunPlan at call time):
 // the morning read asks the agenda's own observation read whether the week's quality
@@ -645,6 +646,8 @@ export interface WeeklyRunPlan {
   quality_focus: string | null; // e.g. "Threshold intervals" (null on an all-easy/taper week)
   mix_summary: string; // e.g. "3 easy + 1 long + 1 threshold"
   why: string; // one calm headline sentence
+  /** `why` with the week's distance in miles — the twin an imperial athlete reads (settings.run_units). */
+  why_mi?: string;
   // Where this week sits against a dated race — the machine register beside the
   // rationale's plain words. Additive and null whenever there is no race to arrive
   // at (a standing goal, no distance, or a short race where mileage is not the
@@ -1045,8 +1048,18 @@ export interface StatedQualityRx {
   warm_cool_default: boolean;
   /** `short` a trimmed week's set, `taper` the taper's smaller dose, else `full`. */
   dose: "full" | "short" | "taper";
-  /** Set when this week holds the work below what was stated, with the sentence that says why. */
-  held: { reason: StatedQualityHeldReason; line: string } | null;
+  /**
+   * Set when this week holds the work below what was stated, with the sentence that says
+   * why: `line` in km (the engine's register), `line_mi` the same sentence in miles — the
+   * twin an imperial athlete reads (settings.run_units), never a restated `line`.
+   */
+  held: { reason: StatedQualityHeldReason; line: string; line_mi: string } | null;
+  /**
+   * True when the athlete's stated session ran on its own authority this week (an open,
+   * harm-free push stance, or stated work within one step of a hard run on record): the
+   * evidence holds (first-in-a-while, capacity) and a spike-only trim gave way to it.
+   */
+  authoritative?: boolean;
 }
 
 /** The stated session could not fit this week at all: even its floor (the least work worth
@@ -1157,8 +1170,32 @@ export const STATED_QUALITY_HELD_VARIANTS: Record<
   ],
 };
 
-function kmWords(km: number): string {
-  return `${Number.isInteger(km) ? km : round1(km)} km`;
+const KM_PER_MI = 1.609344;
+
+/**
+ * A distance in a sentence, in the athlete's run units: "5 km", "2.5 km", "3.1 mi". The
+ * engine sizes in km; `units` only changes how the number is SAID (one decimal at most).
+ * The one server-side words formatter for run distances — day-detail.ts speaks through it.
+ */
+export function kmWords(km: number, units: "km" | "mi" = "km"): string {
+  const n = units === "mi" ? round1(km / KM_PER_MI) : km;
+  return `${Number.isInteger(n) ? n : round1(n)} ${units}`;
+}
+
+/** The held-below sentence, in either unit (one variant pick, so both twins say the same thing). */
+function statedHeldLine(
+  reason: StatedQualityHeldReason,
+  type: StatedQualityType,
+  statedKm: number,
+  workKm: number,
+  date: string,
+  units: "km" | "mi"
+): string {
+  return pickDayVariant(STATED_QUALITY_HELD_VARIANTS[reason], date, `run-stated-quality-held:${reason}`)(
+    STATED_QUALITY_WORDS[type],
+    kmWords(statedKm, units),
+    kmWords(workKm, units)
+  );
 }
 
 const floorHalf = (km: number): number => Math.floor(km * 2 + 1e-9) / 2;
@@ -1172,19 +1209,50 @@ const floorHalf = (km: number): number => Math.floor(km * 2 + 1e-9) / 2;
 function statedQualityEvidence(
   anchor: string,
   hasQuality: boolean
-): { capacityKm: number | null; firstInAWhile: boolean } {
+): { capacityKm: number | null; firstInAWhile: boolean; longestQualityKm: number | null } {
   let longest: number | null = null;
   try {
     longest = longestQualityRunKm(isoDaysAgo(anchor, STATED_QUALITY_EVIDENCE_DAYS - 1), anchor);
   } catch {
     longest = null;
   }
-  if (longest != null) return { capacityKm: round1(longest * STATED_QUALITY_CAPACITY_STEP), firstInAWhile: false };
+  if (longest != null)
+    return {
+      capacityKm: round1(longest * STATED_QUALITY_CAPACITY_STEP),
+      firstInAWhile: false,
+      longestQualityKm: longest,
+    };
   const midweek = demonstratedMidweekRunKm(anchor);
   return {
     capacityKm: midweek != null ? round1(midweek * STATED_QUALITY_CAPACITY_STEP) : null,
     firstInAWhile: !hasQuality,
+    longestQualityKm: null,
   };
+}
+
+/**
+ * Whether the athlete's STATED session runs on its own authority on `date` — the
+ * athlete's word outranks the engine's evidence holds. Two ways in, both only while
+ * the last three days carry no harm evidence (`pushStanceHarmFree`, the stance's own
+ * floor): an open push stance (`pushStanceInForce`, the one source), or stated work
+ * within one ordinary step (STATED_QUALITY_CAPACITY_STEP) of the longest run the
+ * athlete's own model graded QUALITY in the evidence window (`longestQualityRunKm`, the
+ * agenda's observation read — his model and title, not a "quality" label). Authority
+ * lifts only the evidence holds (first-in-a-while, capacity) and a spike-only trim;
+ * every protective hold — a reset or dip week's short set, the taper, race week, a
+ * recovery week, a health hold, the week's room, the morning's own read — still stands.
+ */
+function statedQualityAuthority(
+  stated: EnduranceScheduleQuality,
+  phase: string,
+  evidence: { longestQualityKm: number | null } | null,
+  date: string
+): boolean {
+  if (!pushStanceHarmFree(date)) return false;
+  if (pushStanceInForce(date)) return true;
+  const work = stated.work_km ?? statedQualityDefaultWorkKm(stated.type, phase);
+  const shown = evidence?.longestQualityKm ?? null;
+  return shown != null && work <= shown * STATED_QUALITY_CAPACITY_STEP + 0.05;
 }
 
 /** The stated session in a phrase: "5 km of threshold with 2 km easy either side (9 km in all)". */
@@ -1213,7 +1281,9 @@ function statedQualityDefaultWorkKm(type: StatedQualityType, phase: string): num
  * week's ceilings. `ceilingKm` is the most the run may total (the week's room, or the
  * easy distance a morning opened a set inside); `capacityKm` one step past the longest
  * quality-graded run on record (null when there is none); `firstInAWhile` no quality
- * session at all in the evidence window.
+ * session at all in the evidence window. `authoritative` (statedQualityAuthority): the
+ * athlete's word outranks the evidence, so `capacityKm` and `firstInAWhile` are not
+ * applied — the dose and the week's room still are.
  */
 export function statedQualitySession(args: {
   stated: EnduranceScheduleQuality;
@@ -1225,13 +1295,18 @@ export function statedQualitySession(args: {
   capacityKm: number | null;
   firstInAWhile: boolean;
   date: string;
+  authoritative?: boolean;
 }): (ReturnType<typeof qualitySpec> & { stated: StatedQualityRx }) | StatedQualityUnfit {
   const { stated, phase, dose, zones, hrModel, date } = args;
+  const authoritative = args.authoritative === true;
+  // The evidence holds give way to the athlete's own word; the week's room never does.
+  const capacityKm = authoritative ? null : args.capacityKm;
+  const firstInAWhile = !authoritative && args.firstInAWhile;
   // A ceiling the whole run must stay inside (0.05 km of rounding slack); the first one
   // the session overruns is the reason it cannot run as stated this week.
   const overrun = (total: number): StatedQualityUnfit["reason"] | null => {
     const past = (ceiling: number | null) => ceiling != null && Number.isFinite(ceiling) && total > ceiling + 0.05;
-    return past(args.capacityKm) ? "capacity" : past(args.ceilingKm) ? "room" : null;
+    return past(capacityKm) ? "capacity" : past(args.ceilingKm) ? "room" : null;
   };
   const unfit = (reason: StatedQualityUnfit["reason"]): StatedQualityUnfit => ({
     unfit: true,
@@ -1266,7 +1341,7 @@ export function statedQualitySession(args: {
   };
   if (dose === "short") holdTo(target * STATED_QUALITY_SHORT_FRACTION, "short");
   else if (dose === "taper") holdTo(target * STATED_QUALITY_TAPER_FRACTION, "taper");
-  if (args.firstInAWhile) holdTo(target * STATED_QUALITY_FIRST_FRACTION, "first");
+  if (firstInAWhile) holdTo(target * STATED_QUALITY_FIRST_FRACTION, "first");
   // The two ceilings on the whole run: what one step past the shown hard sessions allows,
   // then what the week has room for. The work gives way first; the warm-up and cool-down
   // shrink (never below 1 km each) only when the work is already at its floor.
@@ -1284,7 +1359,7 @@ export function statedQualitySession(args: {
       if (over > 0.05) cool = round1(cool - Math.min(over, Math.max(0, cool - 1)));
     }
   };
-  fit(args.capacityKm, "capacity");
+  fit(capacityKm, "capacity");
   fit(args.ceilingKm, "room");
   // Even the floor (the least work worth running, 1 km easy either side) can run past a
   // ceiling: then the stated session does not run this week at all — the engine's own
@@ -1356,7 +1431,6 @@ export function statedQualitySession(args: {
   const roundedOverrun = overrun(total);
   if (roundedOverrun) return unfit(roundedOverrun);
   const note = `${kmWords(warm)} easy, then ${main}, then ${kmWords(cool)} easy — ${kmWords(total)} in all.`;
-  const words = STATED_QUALITY_WORDS[type];
   // Said only against a number the athlete GAVE: "your 5 km is the target" about a
   // distance the engine picked would put words in their mouth. A type-only preference
   // held for a lighter week reads through the week's own short-set sentence instead.
@@ -1367,11 +1441,8 @@ export function statedQualitySession(args: {
     heldBy && statedWork != null && work < target - 0.05
       ? {
           reason: heldBy,
-          line: pickDayVariant(STATED_QUALITY_HELD_VARIANTS[heldBy], date, `run-stated-quality-held:${heldBy}`)(
-            words,
-            kmWords(target),
-            kmWords(work)
-          ),
+          line: statedHeldLine(heldBy, type, target, work, date, "km"),
+          line_mi: statedHeldLine(heldBy, type, target, work, date, "mi"),
         }
       : null;
   return {
@@ -1393,6 +1464,7 @@ export function statedQualitySession(args: {
       warm_cool_default: warmDefault || coolDefault,
       dose,
       held,
+      ...(authoritative ? { authoritative: true } : {}),
     },
   };
 }
@@ -2399,12 +2471,23 @@ function weeklyRunPlanRead(
   // anchor (the closed week) so the stated session is sized the same every morning.
   const statedEvidence =
     qualityType && statedQualityApplies ? statedQualityEvidence(volumeAnchor, !!runState?.has_quality) : null;
-  const statedSession =
+  // The athlete's word outranks the evidence holds (statedQualityAuthority): an open,
+  // harm-free push stance, or stated work within a step of a hard run on record.
+  const statedAuthority =
+    !!qualityType && statedQualityApplies && !!statedQuality
+      ? statedQualityAuthority(statedQuality, phase, statedEvidence, d)
+      : false;
+  // A week trimmed ONLY by the spike brake (no reset, no recovery dip) trims its VOLUME —
+  // the ACWR ceiling stands in the week's km and the session must still fit its room —
+  // but its short set is an evidence hold, not a protective one: under the stated
+  // session's authority the session runs whole, and the morning still has its say.
+  const statedThroughSpike = shortQuality && spiking && !downWeek && !recoveryDown && statedAuthority;
+  const sizeStated = (dose: "full" | "short" | "taper") =>
     qualityType && statedQualityApplies && statedQuality && statedEvidence
       ? statedQualitySession({
           stated: statedQuality,
           phase,
-          dose: shortQuality ? "short" : taper ? "taper" : "full",
+          dose,
           zones,
           hrModel,
           // Inside the week like any quality session: at most its share of the week,
@@ -2418,8 +2501,16 @@ function weeklyRunPlanRead(
           capacityKm: statedEvidence.capacityKm,
           firstInAWhile: statedEvidence.firstInAWhile,
           date: week_start,
+          authoritative: statedAuthority,
         })
       : null;
+  let statedSession = sizeStated(statedThroughSpike ? "full" : shortQuality ? "short" : taper ? "taper" : "full");
+  // Whole, it cannot fit the trimmed week's room: the week's own short set, as before.
+  if (statedThroughSpike && statedSession && "unfit" in statedSession) statedSession = sizeStated("short");
+  // The quality day's dose as it will run: the week's trim, unless the stated session
+  // ran whole through a spike-only trim above.
+  const qualityShort =
+    shortQuality && !(statedSession && !("unfit" in statedSession) && statedSession.stated.dose === "full");
   // A stated session that cannot fit this week at all leaves the engine's own answer.
   const statedUnfit = statedSession && "unfit" in statedSession ? statedSession : null;
   const q: (ReturnType<typeof qualitySpec> & { stated?: StatedQualityRx }) | null = qualityType
@@ -2765,7 +2856,7 @@ function weeklyRunPlanRead(
       day_name: qualityRun.label,
       focus: "Endurance · quality",
       interval: qualityRun.interval,
-      ...(shortQuality ? { dose: "short" as const } : {}),
+      ...(qualityShort ? { dose: "short" as const } : {}),
       ...(qualityRun.stated ? { stated_quality: qualityRun.stated } : {}),
     });
   }
@@ -2838,7 +2929,7 @@ function weeklyRunPlanRead(
   const placedEasyCount = runs.filter((r) => r.kind_label === "easy").length;
   const easyLabel = `${placedEasyCount} easy`;
   const qualityPlaced = !!qualityRun && runs.some((r) => r.kind_label === "quality");
-  const mix_summary = `${easyLabel} + ${raceThisWeek ? "race" : "1 long"}${qualityPlaced ? ` + 1 ${shortQuality ? "short " : ""}${qualityType}` : ""}`;
+  const mix_summary = `${easyLabel} + ${raceThisWeek ? "race" : "1 long"}${qualityPlaced ? ` + 1 ${qualityShort ? "short " : ""}${qualityType}` : ""}`;
   const phaseWord = goal?.is_race && goal.phase ? `${goal.phase} phase` : "steady";
   const holdClause = firmHold
     ? `, ${holdMarkerPhrase(firmHold)}`
@@ -2856,7 +2947,11 @@ function weeklyRunPlanRead(
       : raceThisWeek
         ? ", easy running around race day"
         : ", all easy aerobic";
-  const why = `~${Math.round(prescribedKm || weeklyKm)} km this week (${phaseWord}): ${mix_summary}${qualityTail}${holdClause}.`;
+  const weekWhy = (units: "km" | "mi") => {
+    const total = prescribedKm || weeklyKm;
+    return `~${Math.round(units === "mi" ? total / KM_PER_MI : total)} ${units} this week (${phaseWord}): ${mix_summary}${qualityTail}${holdClause}.`;
+  };
+  const why = weekWhy("km");
 
   // The fit, said plainly and only when it has something to say. A trajectory that
   // reaches what the distance leans on needs no sentence at all; one that does not
@@ -3018,6 +3113,7 @@ function weeklyRunPlanRead(
                   capacityKm: evidence.capacityKm,
                   firstInAWhile: evidence.firstInAWhile,
                   date: d,
+                  authoritative: statedQualityAuthority(statedQuality, phase, evidence, d),
                 });
               })()
             : null;
@@ -3098,10 +3194,11 @@ function weeklyRunPlanRead(
     quality_focus,
     mix_summary,
     why,
+    why_mi: weekWhy("mi"),
     goal_feasibility,
     today_adjustment,
     ...(planned_runs ? { planned_runs } : {}),
-    adapt: { locks, trimmed: shortQuality, dip: dipTrim, today: adjustToday },
+    adapt: { locks, trimmed: qualityShort, dip: dipTrim, today: adjustToday },
   };
 }
 

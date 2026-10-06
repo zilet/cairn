@@ -87,8 +87,11 @@ test("live shape: evidence is values and directions; changed_since is dated", ()
   for (const change of out.changed_since) assert.ok(change.since, `${change.kind} names its comparison date`);
   const weight = out.changed_since.find((c) => c.kind === "weight");
   assert.match(weight.text, /1\.0 lb lower than the week before/);
-  // The most newsworthy change closes the headline.
-  assert.match(out.headline, /Half marathon estimate 9 min faster since Sep 8 — now 1:53:52\./);
+  // The change is the "What moved" strip's to say, right under the headline — never both.
+  assert.ok(out.changed_since.some((c) => /Half marathon estimate 9 min faster since Sep 8/.test(c.text)));
+  assert.doesNotMatch(out.headline, /estimate 9 min faster/);
+  for (const change of out.changed_since) assert.ok(!out.headline.includes(change.text), change.text);
+  assert.match(out.headline, /leads this week[^.]*\.$/, "the headline ends on the week's through-line");
   // Deferred items say why they wait.
   assert.ok(out.later.length >= 1);
   for (const item of out.later) assert.ok(item.why, `${item.title} says why it waits`);
@@ -249,7 +252,8 @@ test("new bests and a fresh lab show up as dated changes", () => {
   assert.equal(best.since, "2026-09-30");
   const lab = out.changed_since.find((c) => c.kind === "new_lab");
   assert.match(lab.text, /New lab \(Oct 1\): ApoB 121 mg\/dL \(falling\)/);
-  assert.match(out.headline, /New best this week: Back Squat/);
+  // The strip owns the new best; the headline stays the week + its levers.
+  assert.doesNotMatch(out.headline, /New best/);
 });
 
 test("a VO2max reading rides in the evidence with the ride folded into the run week", () => {

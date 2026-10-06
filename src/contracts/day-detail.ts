@@ -16,7 +16,9 @@
 //
 // No score, no grade, no gate: words, prescriptions, logged numbers, kilometres and
 // heart-rate bands. Distances travel in km with a miles twin; `run_units` says which
-// one the athlete reads. Every sentence is a suggestion.
+// one the athlete reads, and every SENTENCE here (a segment's text, the run's point and
+// session, the held line, the why) already says its distances in those units — the
+// client never restates one. Every sentence is a suggestion.
 //
 // Self-contained apart from the day record's logged shapes: src/client/** reads these
 // types through `import("../contracts/day-detail.js")`.
@@ -65,7 +67,11 @@ export interface DayDetailExercise {
   load: DayDetailLoad | null;
   /** The day's anchor: its first primary-tier compound (the read the weekly dose and stress budget use). */
   anchor: boolean;
-  /** The plan item's own note, else the exercise's constraint note. */
+  /**
+   * The plan item's own note while it still matches the day's prescription (a stored
+   * "Deload: backed off…" beside a progression that holds or steps is dropped), else the
+   * exercise's constraint note.
+   */
   note: string | null;
 }
 
@@ -108,7 +114,7 @@ export interface DayDetailRunSegment {
   part: "warm_up" | "main" | "cool_down";
   /** "Warm-up", "Threshold", "Cool-down", "Easy", "Long run", "Race". */
   label: string;
-  /** The segment in a line ("5 × 1 km at threshold, 60 s easy jog between"), in km. */
+  /** The segment in a line ("5 × 1 km at threshold, 60 s easy jog between"), in the athlete's run units. */
   text: string;
   /** The segment's distance; null when the engine does not size it (a tempo's warm-up). */
   km: number | null;
@@ -161,7 +167,7 @@ export interface DayDetailStatedQuality {
   warm_cool_default: boolean;
   /** `short` a lighter week's set, `taper` the taper's dose, else `full`. */
   dose: "full" | "short" | "taper";
-  /** The work held below what was stated this week, in one sentence; null when it runs as stated. */
+  /** The work held below what was stated this week, in one sentence (in the athlete's run units); null when it runs as stated. */
   held: string | null;
 }
 
@@ -197,7 +203,7 @@ export interface DayDetailRun {
   structure: DayDetailRunSegment[];
   /** The athlete's own quality session, when this run is it; null otherwise. */
   stated: DayDetailStatedQuality | null;
-  /** The engine's own session sentence, verbatim. */
+  /** The engine's own session sentence (verbatim in km; for a miles athlete, the day's parts said in miles). */
   session: string | null;
   /** A trimmed week's short quality set: that morning decides whether it runs. */
   short: boolean;

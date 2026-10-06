@@ -188,9 +188,12 @@
     const planned = count(p.lift_days_planned);
     if (planned) parts.push(`${done} of ${planned} lifting day${planned === 1 ? "" : "s"}`);
     else if (done) parts.push(`${done} lifting session${done === 1 ? "" : "s"}`);
-    const unit = header.units === "mi" ? "mi" : "km";
-    const ran = dist(Number(p.run_km) || 0, header.units);
-    const plan = dist(Number(header.kmPlanned) || 0, header.units);
+    // The week read's own run units win: the warm settings read is only a fallback, so
+    // a cold settings cache never prints km to an imperial athlete.
+    const units = week?.run_units || header.units;
+    const unit = units === "mi" ? "mi" : "km";
+    const ran = dist(Number(p.run_km) || 0, unit);
+    const plan = dist(Number(header.kmPlanned) || 0, unit);
     const about = plan ? `~${Math.round(Number(plan))}` : "";
     if (ran && about) parts.push(`${ran} of ${about} ${unit}`);
     else if (ran) parts.push(`${ran} ${unit} run`);

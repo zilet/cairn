@@ -29,6 +29,7 @@ import { weekWins } from "../../repo/sessions.js";
 import { getPlanWithPurpose } from "../../repo/day-read.js";
 import { strengthScheduleRead } from "../../repo/strength-schedule.js";
 import { weekLayoutClosed } from "../../repo/week-layout-closed.js";
+import { getSettings } from "../../repo/settings.js";
 import { localDateISO } from "../../repo/shared.js";
 import { deriveSessionTitle, planDayStrengthGroups } from "../../repo/training-read.js";
 import { todayStrengthLine, type TodayStrengthLine } from "../../repo/today-strength-line.js";
@@ -122,6 +123,8 @@ export interface PlanWeek {
   };
   /** Today's lift in the one line the Brief, Session and Train overview also print. */
   strength_line: TodayStrengthLine | null;
+  /** The athlete's run units (settings.run_units): every `km` here is printed in them. */
+  run_units: "km" | "mi";
 }
 
 type TemplateDay = {
@@ -705,5 +708,15 @@ export function planWeek(date?: string): PlanWeek {
     },
     schedule,
     strength_line: strengthLine,
+    run_units: weekRunUnits(),
   };
+}
+
+/** The athlete's run units; km when settings cannot be read. */
+function weekRunUnits(): "km" | "mi" {
+  try {
+    return getSettings().run_units === "mi" ? "mi" : "km";
+  } catch {
+    return "km";
+  }
 }

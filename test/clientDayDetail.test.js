@@ -606,6 +606,16 @@ test("the strip's header: the block clock and the run plan arrive later and repa
   assert.equal(slot.querySelector("[data-tstrip-days]"), days, "the days were not rewritten");
   // An empty week says nothing — never "0 of 0".
   assert.equal(w.CairnTodayStrip.tallyText({ progress: { lift_days_done: 0, lift_days_planned: null, run_km: 0, prs: 0 } }), "");
+  // The week read's own run units win over a cold (or stale) settings cache: an imperial
+  // athlete never reads km because the settings read had not landed yet.
+  assert.equal(
+    w.CairnTodayStrip.tallyText({ progress, run_units: "mi" }, { kmPlanned: 33, units: "km" }),
+    "2 of 5 lifting days · 3.8 of ~21 mi · 3 new bests"
+  );
+  assert.equal(
+    w.CairnTodayStrip.tallyText({ progress, run_units: "km" }, { kmPlanned: 33, units: "mi" }),
+    "2 of 5 lifting days · 6.1 of ~33 km · 3 new bests"
+  );
 });
 
 // ---- Horizon's week rows ----

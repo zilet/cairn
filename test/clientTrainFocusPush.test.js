@@ -3,6 +3,7 @@
 // server sends one, falling back to the evidence-label match when it does not.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { loadClientModule, renderHtml } from "./_dom.mjs";
 
 function load() {
@@ -159,4 +160,37 @@ test("What moved: a change's own direction wins; absent, the evidence label stil
   assert.equal(marks[1].getAttribute("aria-label"), "up", "fallback: the evidence label it names");
   assert.equal(marks[2].getAttribute("aria-label"), null, "no direction and no evidence match: a quiet dot");
   assert.equal(marks[2].getAttribute("aria-hidden"), "true");
+});
+
+test("What moved: an ISO `since` reads as a short date, and every row is the same arrow · text · date shape", () => {
+  const win = load();
+  const host = card(win, {
+    ...base,
+    changed_since: [
+      {
+        domain: "training",
+        kind: "new_best",
+        text: "New bests this week: Farmer's Carry 70 lb × 45 s, Neutral-Grip Pull-Up 4 × 8, and Reverse Pec Deck.",
+        since: "2026-09-30",
+        direction: "up",
+      },
+      { domain: "body", kind: "weight", text: "Weight eased 1 lb", since: "2026-10-01", direction: "down" },
+      { domain: "running", kind: "run_volume", text: "Run volume held", since: "since <Mon>", direction: "steady" },
+    ],
+  });
+  const rows = [...host.querySelectorAll(".tfc-moved-item")];
+  assert.equal(rows.length, 3);
+  for (const row of rows) {
+    // One shape per row: the arrow, the text, then the quiet date — the arrow never alone.
+    const kids = [...row.children].map((el) => el.className.split(" ")[0]);
+    assert.deepEqual(kids, ["tfc-dir", "tfc-moved-text", "tfc-moved-since"]);
+  }
+  const dates = rows.map((row) => row.querySelector(".tfc-moved-since").textContent);
+  assert.deepEqual(dates, ["Sep 30", "Oct 1", "since <Mon>"], "an ISO date is a short date; other words stay as said");
+  assert.doesNotMatch(host.innerHTML, /2026-09-30|2026-10-01/, "no raw ISO date reaches the card");
+  // The row is a three-column grid (arrow, wrapping text, date), not a wrapping flex row
+  // that can strand the arrow on a line of its own.
+  const css = readFileSync(new URL("../src/styles/train/overview.css", import.meta.url), "utf8");
+  assert.match(css, /\.tfc-moved-item\{display:grid;grid-template-columns:1\.2em minmax\(0,1fr\) auto;/);
+  assert.doesNotMatch(css, /\.tfc-moved-item,\.tfc-ev\{display:flex/);
 });

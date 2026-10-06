@@ -12,6 +12,7 @@ import { statedQualitySession, weeklyRunPlan } from "../dist/repo/run-progressio
 import { flexibleTrainingAgenda } from "../dist/repo/flexible-training-agenda.js";
 import { registerTrainingStatusTools } from "../dist/surfaces/mcp/training-status.js";
 import { dayDetail } from "../dist/domain/training/day-detail.js";
+import { insertStance } from "../dist/repo/training-drive.js";
 
 const MONDAY = "2026-04-20";
 const THURSDAY = "2026-04-23";
@@ -280,14 +281,17 @@ test("no hard session on record: the stated work opens below it and the plan say
 });
 
 test("past one step beyond the longest hard session on record, the work is held and the reason named", () => {
-  milos({ type: "threshold", work_km: 8 });
+  // 10 km of stated work is more than one step past the 7 km hard runs on record
+  // (stated work within a step of them runs whole on its own authority — below).
+  milos({ type: "threshold", work_km: 10 });
   seedRunner({ qualityKm: 7 });
   const plan = weeklyRunPlan(MONDAY, { adjustToday: false });
   const sq = qualityRun(plan).stated_quality;
   assert.ok(sq.total_km <= 7 * 1.15 + 0.05, `total ${sq.total_km} stays within a step of the 7 km shown`);
-  assert.ok(sq.work_km < 8);
+  assert.ok(sq.work_km < 10);
   assert.equal(sq.held?.reason, "capacity");
-  assert.match(sq.held.line, /8 km/);
+  assert.match(sq.held.line, /10 km/);
+  assert.match(sq.held.line_mi, /6\.2 mi/, "the miles twin says the same hold in miles");
 });
 
 test("a week too small for the whole session holds the work so it fits inside the week, and says so", () => {
@@ -328,7 +332,7 @@ const SPIKE = {
 
 test("a trimmed week keeps the stated TYPE as the short set — never the rotation — and says so", () => {
   milos();
-  seedRunner({ qualityKm: 9 });
+  seedRunner(); // nothing hard on record and no stance: the spike's short set stands
   const plan = weeklyRunPlan(MONDAY, SPIKE);
   const q = qualityRun(plan);
   assert.ok(q, "the trimmed week keeps a quality day");
@@ -533,3 +537,176 @@ test("chat and REST already keep the schedule when no days are said", () => {
   repo.setProfile({ endurance_schedule: { note: "only a note" } });
   assert.equal(repo.getEnduranceSchedule().days.length, 3, "REST/profile: an unusable shape keeps what is stored");
 });
+
+// ---------------------------------------------------------------------------
+// The stated session is the athlete's word (2026-10-06): it runs at its full size
+// unless a PROTECTIVE hold applies; the evidence holds give way to an open stance or
+// to a hard run on record within a step of it.
+// ---------------------------------------------------------------------------
+
+// The live week: the closed week spiked (35.8 km after ~21 km weeks), so the volume is
+// held, and no quality run has been logged in a while.
+const LIVE = {
+  programState: { endurance: { sport: "run", longest_km_4wk: 15, has_quality: false, status: "spiking" } },
+  recovery: { delta: {}, baseline: {}, recovery: {}, quality: {} },
+  adjustToday: false,
+};
+
+function openStance(since = before(10), until = "2026-05-15") {
+  repo.setSettings({ training_drive: "push" });
+  insertStance({
+    since,
+    until,
+    scope: "date",
+    words: "push through the block",
+    previous_drive: "steady",
+    set_via: "athlete",
+  });
+}
+
+function assertFull(q, why) {
+  assert.ok(q?.stated_quality, `${why}: the stated session runs`);
+  const sq = q.stated_quality;
+  assert.equal(sq.work_km, 5, `${why}: the full 5 km of threshold (${JSON.stringify(sq)})`);
+  assert.equal(sq.held, null, `${why}: nothing held`);
+  assert.equal(sq.form, "continuous", "5 km of threshold runs continuous");
+  assert.equal(sq.warm_up_km, 2);
+  assert.equal(sq.cool_down_km, 2);
+  assert.equal(sq.total_km, 9);
+  assert.equal(q.dose, undefined, `${why}: not a short set`);
+}
+
+test("the live-shaped week with the push stance open runs the stated 5 km whole", () => {
+  milos();
+  seedRunner();
+  openStance();
+  const plan = weeklyRunPlan(MONDAY, LIVE);
+  const q = qualityRun(plan);
+  assertFull(q, "stance open");
+  assert.equal(q.stated_quality.authoritative, true);
+  assert.match(plan.mix_summary, /1 threshold/);
+  assert.doesNotMatch(plan.mix_summary, /short/);
+  assert.ok(!plan.rationale.some((line) => /holds .* of it|opens at/.test(line)), plan.rationale.join(" | "));
+});
+
+test("no stance, but a hard run on record within a step of the stated work: the 5 km runs whole", () => {
+  milos();
+  // Mid-week runs the watch graded threshold: 5 km of them.
+  seedRunner({ qualityKm: 5 });
+  const plan = weeklyRunPlan(MONDAY, {
+    ...LIVE,
+    programState: { endurance: { ...LIVE.programState.endurance, has_quality: true } },
+  });
+  assertFull(qualityRun(plan), "demonstrated");
+});
+
+test("no stance and nothing hard on record: the live week holds a lower dose and says why", () => {
+  milos();
+  seedRunner();
+  const plan = weeklyRunPlan(MONDAY, LIVE);
+  const q = qualityRun(plan);
+  const sq = q.stated_quality;
+  assert.ok(sq.work_km < 5, `held below 5 km, got ${sq.work_km}`);
+  assert.ok(sq.held?.line, "the hold is said");
+  assert.match(sq.held.line, /5 km/);
+  assert.match(sq.held.line_mi, /3\.1 mi/);
+  assert.equal(q.dose, "short");
+  assert.ok(!sq.authoritative);
+});
+
+test("the stance is open but yesterday carried harm: the evidence holds stand", () => {
+  milos();
+  seedRunner();
+  openStance();
+  // A session rated well under par yesterday is harm evidence (harmEvidenceOnDay).
+  db.prepare(`INSERT INTO sessions (date, performance, finished_at) VALUES (?, 1, datetime('now'))`).run(before(1));
+  const sq = qualityRun(weeklyRunPlan(MONDAY, LIVE)).stated_quality;
+  assert.ok(sq.work_km < 5, `held, got ${sq.work_km}`);
+  assert.ok(sq.held?.line);
+  assert.ok(!sq.authoritative);
+});
+
+test("the taper keeps its smaller dose even with the stance open, and says so", () => {
+  milos();
+  seedRunner({ qualityKm: 9 });
+  openStance(before(10), RACE);
+  const q = qualityRun(weeklyRunPlan("2026-05-04", { adjustToday: false }));
+  assert.ok(q?.stated_quality, "the taper week keeps its stated session");
+  const sq = q.stated_quality;
+  assert.equal(sq.dose, "taper");
+  assert.ok(sq.work_km < 5, `taper dose, got ${sq.work_km}`);
+  assert.equal(sq.held?.reason, "taper");
+});
+
+test("a recovery week keeps every run easy even with the stance open", () => {
+  milos();
+  seedRunner({ qualityKm: 9 });
+  openStance();
+  const plan = weeklyRunPlan(MONDAY, {
+    programState: {
+      endurance: { sport: "run", longest_km_4wk: 13.5, has_quality: true, status: "maintaining" },
+      mesocycle: { phase: "deload" },
+      recovery_week: { state: "applied" },
+    },
+    recovery: { delta: {}, baseline: {}, recovery: {}, quality: {} },
+    adjustToday: false,
+  });
+  assert.equal(qualityRun(plan), undefined);
+  assert.ok(!plan.runs.some((r) => r.stated_quality));
+});
+
+// ---------------------------------------------------------------------------
+// Every distance the athlete reads is in their run units (2026-10-06)
+// ---------------------------------------------------------------------------
+
+function spoken(read) {
+  const run = read.run;
+  return [
+    read.headline,
+    read.why,
+    read.stack?.text,
+    run?.point,
+    run?.session,
+    run?.adjusted,
+    run?.stated?.held,
+    ...(run?.structure ?? []).map((s) => s.text),
+    ...(read.watch ?? []).map((w) => w.text),
+  ]
+    .filter(Boolean)
+    .join(" | ");
+}
+
+for (const [label, seed] of [
+  ["held", () => seedRunner()],
+  ["whole", () => seedRunner({ qualityKm: 9 })],
+]) {
+  test(`the Thursday threshold day (${label}) says every distance in the athlete's units`, (t) => {
+    t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-04-21T12:00:00") });
+    milos();
+    seed();
+    const metric = dayDetail(THURSDAY);
+    assert.ok(metric?.run?.stated, "Thursday is the stated session");
+    const metricWords = spoken(metric);
+    assert.equal(metric.run_units, "km");
+    assert.match(metricWords, /\bkm\b/);
+    assert.doesNotMatch(metricWords, /\bmi\b/, metricWords);
+
+    repo.setSettings({ run_units: "mi" });
+    const imperial = dayDetail(THURSDAY);
+    const imperialWords = spoken(imperial);
+    assert.equal(imperial.run_units, "mi");
+    assert.doesNotMatch(imperialWords, /\bkm\b/, imperialWords);
+    assert.match(imperial.run.structure[0].text, /^\d+(\.\d)? mi easy$/);
+    assert.match(imperial.run.structure[1].text, /mi continuous at threshold/);
+    // The numbers still travel in km with the miles twin; only the words changed.
+    assert.deepEqual(
+      imperial.run.structure.map((s) => s.km),
+      metric.run.structure.map((s) => s.km)
+    );
+    if (label === "held") {
+      assert.ok(imperial.run.stated.held, "the hold is said");
+      assert.match(imperial.run.stated.held, /3\.1 mi/, "the stated 5 km, in miles");
+      assert.ok(imperial.run.point.includes(imperial.run.stated.held));
+    }
+  });
+}

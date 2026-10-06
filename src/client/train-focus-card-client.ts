@@ -48,7 +48,8 @@ function cfocusMovedHtml(focus: ClientCoachingFocus): string {
   const rows = changes
     .map((c) => {
       const text = cfocusText(c.text);
-      const since = cfocusText(c.since);
+      // The comparison date as a short date ("Sep 30"), the same words as the stance's "through Nov 15".
+      const since = cfocusDayWords(c.since) || cfocusText(c.since);
       return `<li class="tfc-moved-item">${cfocusDirectionMark(cfocusChangeDirection(c, evidence))}<span class="tfc-moved-text">${escHtml(text)}</span>${since ? `<span class="tfc-moved-since">${escHtml(since)}</span>` : ""}</li>`;
     })
     .join("");

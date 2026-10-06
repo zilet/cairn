@@ -23,8 +23,11 @@
 //     actually runs it (block-phase.ts).
 //   - what was done: the day record (the session log and the activity feed).
 //
-// Changes nothing. Words, prescriptions and kilometres; no score, no gate. Every
-// sentence that would repeat day after day rotates through pickDayVariant.
+// Changes nothing. Words, prescriptions and distances; no score, no gate. Every
+// sentence that would repeat day after day rotates through pickDayVariant. Every
+// distance a sentence here SAYS is in the athlete's run units (settings.run_units),
+// through the run engine's one words formatter (kmWords); the numbers travel in km
+// with a miles twin, so the client never restates a sentence.
 import type {
   DayDetail,
   DayDetailDone,
@@ -55,7 +58,13 @@ import { isoDow, WEEKDAY_NAMES } from "../../repo/profile.js";
 import { planDayProgression, type Prescription } from "../../repo/progression.js";
 import { paceKeyForQuality, raceBuild, type PaceBand, type RaceBuild } from "../../repo/race-build.js";
 import { RUN_KIND_LABELS } from "../../repo/run-edit.js";
-import { runZones, weeklyRunPlan, type RunPlanPrescription, type RunZones } from "../../repo/run-progression.js";
+import {
+  kmWords,
+  runZones,
+  weeklyRunPlan,
+  type RunPlanPrescription,
+  type RunZones,
+} from "../../repo/run-progression.js";
 import { weekWins } from "../../repo/sessions.js";
 import { getSettings } from "../../repo/settings.js";
 import { localDateISO } from "../../repo/shared.js";
@@ -104,9 +113,7 @@ function miOf(km: number | null): number | null {
   return km == null ? null : round1(km / KM_PER_MI);
 }
 
-function fmtKm(km: number): string {
-  return Number.isInteger(km) ? String(km) : km.toFixed(1);
-}
+type RunUnits = "km" | "mi";
 
 function cap(s: string): string {
   return s ? s[0].toUpperCase() + s.slice(1) : s;
@@ -262,6 +269,27 @@ function loadOf(item: PlanItem, p: Prescription | undefined, mode: DayDetailExer
   return { weight: planned, text: loadText(planned), source: "plan", change: null, action: null };
 }
 
+// A stored note that names a deload or a back-off ("Deload: backed off to 2 sets of 6–8
+// reps…", "lighter this week") — words written for the prescription of the day they
+// were written on.
+const BACK_OFF_NOTE = /\b(?:de-?load(?:ed|ing)?|back(?:ed|ing|s)?[\s-]+off|eas(?:e|ed|ing)\s+back|lighter)\b/i;
+
+/**
+ * The plan item's note as the day can carry it. The note is stored text from whenever
+ * the slot was last written; the prescription is the progression engine's read for
+ * THIS day. A note that names a deload or back-off is shown only while the engine's
+ * current action is a deload — beside a hold or a step it describes a prescription the
+ * day no longer carries, so it gives way (to the movement's constraint note, else
+ * nothing; the progression's own words are in "Worth watching"). A day already lived,
+ * or a slot with no progression read, keeps its note: there is no current prescription
+ * to contradict it. Stored plan data is never touched.
+ */
+function currentNote(item: PlanItem, p: Prescription | undefined): string | null {
+  const note = text(item.note);
+  const stale = !!note && BACK_OFF_NOTE.test(note) && !!p && !p.starting_idea && p.action !== "deload";
+  return (stale ? "" : note) || text(item.constraint_note) || null;
+}
+
 function exerciseOf(item: PlanItem, p: Prescription | undefined, anchor: boolean): DayDetailExercise {
   const mode: DayDetailExercise["mode"] = isDrill(item)
     ? "mobility"
@@ -284,7 +312,7 @@ function exerciseOf(item: PlanItem, p: Prescription | undefined, anchor: boolean
     prescription: prescriptionText(mode, sets, repLow, repHigh, seconds),
     load: loadOf(item, p, mode),
     anchor,
-    note: text(item.note) || text(item.constraint_note) || null,
+    note: currentNote(item, p),
   };
 }
 
@@ -556,6 +584,15 @@ function spaced(words: string): string {
   return text(words).replace(/^(\d+(?:\.\d+)?)(km|m|s|min)\b/i, "$1 $2");
 }
 
+/**
+ * A rep as the athlete reads it: a kilometre rep in their run units ("1km" → "0.6 mi"),
+ * a track rep ("800m") and a timed one ("45s uphill") as the engine wrote them.
+ */
+function repWords(on: string, units: RunUnits): string {
+  const km = /^\s*\d+(?:\.\d+)?\s*(?:km|k)\s*$/i.test(String(on)) ? repKm(on) : null;
+  return km != null ? kmWords(km, units) : spaced(on);
+}
+
 function hrBand(zones: RunZones | null, key: DayDetailZoneKey | null): { low_bpm: number; high_bpm: number } | null {
   if (!zones?.available || !key) return null;
   const z = zones.zones.find((b) => b.zone === key);
@@ -607,13 +644,15 @@ export function dayDetailRunStructure(
   race: boolean,
   short: boolean,
   zones: RunZones | null,
-  bands: PaceBand[]
+  bands: PaceBand[],
+  units: RunUnits = "km"
 ): DayDetailRunSegment[] {
   const band = (key: string) => bands.find((b) => b.key === key) ?? null;
+  const dist = (n: number) => kmWords(n, units);
   const easyBand = band("easy");
   if (race) {
     return [
-      segment("main", "Race", km != null ? `${fmtKm(km)} km at race pace` : "Race pace", km, null, zones, band("race")),
+      segment("main", "Race", km != null ? `${dist(km)} at race pace` : "Race pace", km, null, zones, band("race")),
     ];
   }
   if (kind === "easy") {
@@ -621,7 +660,7 @@ export function dayDetailRunStructure(
       segment(
         "main",
         "Easy",
-        km != null ? `${fmtKm(km)} km easy and conversational` : "Easy and conversational",
+        km != null ? `${dist(km)} easy and conversational` : "Easy and conversational",
         km,
         "Z2",
         zones,
@@ -634,7 +673,7 @@ export function dayDetailRunStructure(
       segment(
         "main",
         "Long run",
-        km != null ? `${fmtKm(km)} km steady and easy throughout` : "Steady and easy throughout",
+        km != null ? `${dist(km)} steady and easy throughout` : "Steady and easy throughout",
         km,
         "Z2",
         zones,
@@ -643,7 +682,8 @@ export function dayDetailRunStructure(
     ];
   }
   // The athlete's STATED session carries its own parts in km (run-progression.ts
-  // statedQualitySession): warm-up → the work → cool-down, never re-derived here.
+  // statedQualitySession): warm-up → the work → cool-down, never re-derived here —
+  // only said in the athlete's units.
   const sq = rx?.stated_quality ?? null;
   if (sq) {
     const statedType = sq.type as QualityType;
@@ -654,14 +694,14 @@ export function dayDetailRunStructure(
     const effort = QUALITY_EFFORT_WORD[statedType];
     const mainLine =
       sq.form === "continuous"
-        ? `${fmtKm(sq.work_km)} km continuous at ${effort}`
+        ? `${dist(sq.work_km)} continuous at ${effort}`
         : reps && siv
-          ? `${reps} × ${spaced(siv.on)} at ${effort}${text(siv.off) ? `, ${spaced(text(siv.off))} between` : ""}${
-              statedType === "hills" ? ` (about ${fmtKm(sq.work_km)} km with the jogs)` : ` (${fmtKm(sq.work_km)} km of work)`
+          ? `${reps} × ${repWords(siv.on, units)} at ${effort}${text(siv.off) ? `, ${spaced(text(siv.off))} between` : ""}${
+              statedType === "hills" ? ` (about ${dist(sq.work_km)} with the jogs)` : ` (${dist(sq.work_km)} of work)`
             }`
-          : `${fmtKm(sq.work_km)} km at ${effort}`;
+          : `${dist(sq.work_km)} at ${effort}`;
     return [
-      segment("warm_up", "Warm-up", `${fmtKm(sq.warm_up_km)} km easy`, sq.warm_up_km, "Z2", zones, easyBand),
+      segment("warm_up", "Warm-up", `${dist(sq.warm_up_km)} easy`, sq.warm_up_km, "Z2", zones, easyBand),
       segment(
         "main",
         QUALITY_MAIN_LABEL[statedType],
@@ -672,7 +712,7 @@ export function dayDetailRunStructure(
         statedBand,
         reps && siv ? { reps, on: text(siv.on), off: text(siv.off) || null } : undefined
       ),
-      segment("cool_down", "Cool-down", `${fmtKm(sq.cool_down_km)} km easy`, sq.cool_down_km, "Z2", zones, easyBand),
+      segment("cool_down", "Cool-down", `${dist(sq.cool_down_km)} easy`, sq.cool_down_km, "Z2", zones, easyBand),
     ];
   }
   const type = qualityTypeOf(rx?.label ?? label) ?? "tempo";
@@ -686,14 +726,14 @@ export function dayDetailRunStructure(
     const around = km != null && workKm != null ? round1((km - workKm) / 2) : null;
     const aroundKm = around != null && around >= 0.5 ? around : null;
     const off = text(iv.off);
-    const main = `${reps} × ${spaced(iv.on)} at ${QUALITY_EFFORT_WORD[type]}${off ? `, ${spaced(off)} between` : ""}${
-      workKm != null && reps > 1 ? ` (${fmtKm(workKm)} km of ${type === "threshold" ? "threshold" : "hard"} work)` : ""
+    const main = `${reps} × ${repWords(iv.on, units)} at ${QUALITY_EFFORT_WORD[type]}${off ? `, ${spaced(off)} between` : ""}${
+      workKm != null && reps > 1 ? ` (${dist(workKm)} of ${type === "threshold" ? "threshold" : "hard"} work)` : ""
     }`;
     return [
       segment(
         "warm_up",
         "Warm-up",
-        aroundKm != null ? `${fmtKm(aroundKm)} km easy` : "Easy running until loose",
+        aroundKm != null ? `${dist(aroundKm)} easy` : "Easy running until loose",
         aroundKm,
         "Z2",
         zones,
@@ -707,7 +747,7 @@ export function dayDetailRunStructure(
       segment(
         "cool_down",
         "Cool-down",
-        aroundKm != null ? `${fmtKm(aroundKm)} km easy` : "Easy running to finish",
+        aroundKm != null ? `${dist(aroundKm)} easy` : "Easy running to finish",
         aroundKm,
         "Z2",
         zones,
@@ -788,16 +828,43 @@ const STATED_POINT_TAIL: readonly string[] = [
   "The session is yours — the engine only sized it to the week.",
 ];
 
+/** The held-below sentence in the athlete's units (the engine writes both twins). */
+function heldLine(sq: NonNullable<RunPlanPrescription["stated_quality"]>, units: RunUnits): string | null {
+  if (!sq.held) return null;
+  return (units === "mi" ? sq.held.line_mi : null) || sq.held.line || null;
+}
+
 /** The run's point, with the stated session named and a hold below it said. */
-function statedPoint(date: string, kind: DayDetailRun["kind"], rx: RunPlanPrescription | null, point: string): string {
+function statedPoint(
+  date: string,
+  kind: DayDetailRun["kind"],
+  rx: RunPlanPrescription | null,
+  point: string,
+  units: RunUnits
+): string {
   const sq = kind === "quality" ? rx?.stated_quality : null;
   if (!sq) return point;
-  const tail = sq.held?.line ?? pickDayVariant(STATED_POINT_TAIL, date, "day-detail:run-point:stated");
+  const tail = heldLine(sq, units) ?? pickDayVariant(STATED_POINT_TAIL, date, "day-detail:run-point:stated");
   return `${point} ${tail}`;
 }
 
+/**
+ * The engine's session sentence, said in the athlete's units. The engine writes its
+ * note in km; for a miles athlete the sentence is the day's own parts (already said in
+ * miles above), never a km sentence restated.
+ */
+function sessionLine(rx: RunPlanPrescription | null, structure: DayDetailRunSegment[], units: RunUnits): string | null {
+  const note = text(rx?.note) || null;
+  if (units === "km" || !note) return note;
+  const parts = structure.map((s) => text(s.text)).filter(Boolean);
+  if (!parts.length) return null;
+  const total = structure.reduce((n, s) => n + (s.km ?? 0), 0);
+  const sized = structure.length > 1 && structure.every((s) => s.km != null) && total > 0;
+  return `${cap(parts.join(", then "))}${sized ? ` — ${kmWords(round1(total), units)} in all` : ""}.`;
+}
+
 /** The athlete's stated session as the day carries it (contract: DayDetailStatedQuality). */
-function statedOf(rx: RunPlanPrescription | null): DayDetailStatedQuality | null {
+function statedOf(rx: RunPlanPrescription | null, units: RunUnits): DayDetailStatedQuality | null {
   const sq = rx?.stated_quality;
   if (!sq) return null;
   return {
@@ -811,7 +878,7 @@ function statedOf(rx: RunPlanPrescription | null): DayDetailStatedQuality | null
     stated_work_km: sq.stated_work_km,
     warm_cool_default: sq.warm_cool_default,
     dose: sq.dose,
-    held: sq.held?.line ?? null,
+    held: heldLine(sq, units),
   };
 }
 
@@ -858,6 +925,8 @@ function buildRun(
         : paceKeyForQuality(rx?.label ?? label);
   const band = paceKey ? (bands.find((b) => b.key === paceKey) ?? null) : null;
 
+  const structure = dayDetailRunStructure(kind, plannedKm, rx, label, race, short, zones, bands, runUnits);
+
   const completed: DayDetailRunDone | null = completedEv
     ? {
         km: positiveKm(completedEv.distance_km),
@@ -898,13 +967,19 @@ function buildRun(
         }
       : null,
     hr_ceiling_bpm: kind === "quality" ? null : (num(band?.hr_ceiling_bpm) ?? null),
-    structure: dayDetailRunStructure(kind, plannedKm, rx, label, race, short, zones, bands),
-    stated: kind === "quality" ? statedOf(rx) : null,
-    session: text(rx?.note) || null,
+    structure,
+    stated: kind === "quality" ? statedOf(rx, runUnits) : null,
+    session: sessionLine(rx, structure, runUnits),
     short,
     race,
     adjusted: intent?.adjustment?.changed ? text(intent.adjustment.why) || null : null,
-    point: statedPoint(date, kind, rx, runPoint(date, kind, rx?.label ?? label, race, short && !rx?.stated_quality?.held)),
+    point: statedPoint(
+      date,
+      kind,
+      rx,
+      runPoint(date, kind, rx?.label ?? label, race, short && !rx?.stated_quality?.held),
+      runUnits
+    ),
     completed,
   };
 }
@@ -987,7 +1062,8 @@ function whyLine(
   run: DayDetailRun | null,
   covered: string | null,
   build: RaceBuild | null,
-  liftSlot: { index: number; of: number } | null
+  liftSlot: { index: number; of: number } | null,
+  units: RunUnits
 ): string | null {
   const parts: string[] = [];
   const race = week.race;
@@ -1030,8 +1106,14 @@ function whyLine(
     );
   }
   if (run && !race) {
-    // The run engine's own headline for the week ("~20 km this week: 3 easy + 1 long").
-    const sentence = text(safe(() => weeklyRunPlan(asOf)?.why, ""));
+    // The run engine's own headline for the week ("~20 km this week: 3 easy + 1 long"),
+    // its miles twin for an imperial athlete.
+    const sentence = text(
+      safe(() => {
+        const plan = weeklyRunPlan(asOf);
+        return (units === "mi" ? plan?.why_mi : null) || plan?.why;
+      }, "")
+    );
     if (sentence) parts.push(sentence);
   }
   if (covered) parts.push(covered);
@@ -1284,7 +1366,7 @@ export function dayDetail(date: string, opts: { today?: string } = {}): DayDetai
     placed,
     focus: focusLine(lift, run, status),
     headline: headlineOf(status, lift, run, done, day < today),
-    why: whyLine(day, asOf, weekRead, lift, run, covered, build, liftSlot),
+    why: whyLine(day, asOf, weekRead, lift, run, covered, build, liftSlot, runUnits),
     week: weekRead,
     lift,
     run,
