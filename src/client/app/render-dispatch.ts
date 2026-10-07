@@ -39,8 +39,8 @@
     }
 
     if (tab === "today") return renderToday();
-    // Any day that is not today, a record or a preview: the lazy "day" bundle.
-    if (tab === "day") return lazy("day", () => renderDay());
+    // Any day that is not today, a record or a preview: the lazy "calendar" bundle.
+    if (tab === "day") return lazy("calendar", () => renderDay());
     if (tab === "session") {
       // Session paints only after its loads settle, and switchTab skips the skeleton
       // when the plan cache is warm. On a deep link #view starts EMPTY, so without

@@ -212,5 +212,7 @@
 .tstrip-fold.is-open{grid-template-rows:1fr}
 .tstrip-fold-in{min-height:0;overflow:hidden}
 .tstrip-fold.is-open .tstrip-fold-in{padding:var(--space-9) 0 var(--space-2);border-bottom:1px solid var(--line)}
-.tstrip-foot{display:flex;align-items:center;justify-content:space-between;gap:var(--space-6);margin-top:var(--space-8)}
-.tstrip-foot .linkbtn,.tstrip-foot .linkbtn-quiet{min-height:44px;display:inline-flex;align-items:center}
+/* a peek's foot (drill-controller.ts): its one "Open day ›", and a quiet Close */
+.drill-foot{display:flex;align-items:center;justify-content:space-between;gap:var(--space-6);margin-top:var(--space-8)}
+.drill-foot .linkbtn,.drill-foot .linkbtn-quiet{min-height:44px;display:inline-flex;align-items:center}
+.drill-sheet{padding:var(--space-9) var(--space-8) var(--space-8)}

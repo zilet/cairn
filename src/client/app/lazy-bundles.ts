@@ -4,7 +4,7 @@ type CairnLazyBundleName = ClientLazyBundleName;
 // On-demand loader for app-shell bundles index.html does NOT load eagerly.
 //
 // Only Today, You, Fuel, capture and the shell are eager. Train, Horizon, Ask,
-// Settings, a day's record, the meal planner (Fuel's history fold) and the
+// Settings, the calendar (a day's page, peek and views, the drill controller), the meal planner (Fuel's history fold) and the
 // Me / Health / Records surfaces are injected on first
 // navigation to a destination that needs them, and warmed on idle after the
 // first paint (prefetchLazyBundles) so a tab switch does not wait on the network.
@@ -29,7 +29,9 @@ type CairnLazyBundleName = ClientLazyBundleName;
     "horizon": "/js/bundle-09-horizon.js",
     "ask": "/js/bundle-10-ask.js",
     "settings": "/js/bundle-11-settings.js",
-    "day": "/js/bundle-12-day.js",
+    // The calendar: the day's views (chip, row, compact, full), its page and the drill
+    // controller. Today's strip, Program and Horizon all reach it.
+    "calendar": "/js/bundle-12-calendar.js",
     "meals": "/js/bundle-13-meals.js",
     // Today's below-the-Brief sections (the digest, the week, Coming up, Where you're
     // heading): Today mounts them through withBundle once its frame is painted.
@@ -39,21 +41,22 @@ type CairnLazyBundleName = ClientLazyBundleName;
   // What else a bundle calls into at render time. Health reuses the body-metrics
   // figure and the DEXA targeting read (train); Horizon paints the journey reads,
   // the run-plan cards and the plan week strip (train). Train's Program gallery draws
-  // its movement rows with the day view's shared row (day).
+  // its movement rows and its week with the day view's shared row (calendar); Today's
+  // lower half draws its week strip with the day's chip and peeks a day (calendar).
   const LAZY_BUNDLE_DEPS: Readonly<Record<CairnLazyBundleName, readonly CairnLazyBundleName[]>> = {
     "me-health": ["train"],
-    "train": ["day"],
+    "train": ["calendar"],
     "horizon": ["train"],
     "ask": [],
     "settings": [],
-    day: [],
+    calendar: [],
     meals: [],
-    "today-ahead": [],
+    "today-ahead": ["calendar"],
   };
 
   // Warm order after first paint: the homes a tap away first, Settings last.
   // Today's own lower half leads: it is the home every open lands on.
-  const PREFETCH_ORDER: readonly CairnLazyBundleName[] = ["today-ahead", "train", "ask", "horizon", "day", "me-health", "meals", "settings"];
+  const PREFETCH_ORDER: readonly CairnLazyBundleName[] = ["today-ahead", "train", "ask", "horizon", "calendar", "me-health", "meals", "settings"];
 
   const inflight = new Map<CairnLazyBundleName, Promise<void>>();
   const executed = new Set<CairnLazyBundleName>();

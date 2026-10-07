@@ -2,7 +2,9 @@
 // The Program look-ahead, the model: GET /api/plan/look-ahead shaped into rows a day.
 // Nothing here decides a day's lift, its run, whether it rests or how today stands:
 // the read owns them, and today's lift is the server's one strength line, carried
-// whole for the view to print verbatim. Words and distances in the athlete's units.
+// whole for the view to print verbatim. A day's lift and run words are the day's
+// GLANCE (CairnDayDetailModel, the "calendar" bundle train depends on), the same words
+// Today's strip and Horizon's week say for that day.
 {
   type LookAhead = import("../contracts/client-api.js").ClientPlanLookAhead;
   type LookAheadDay = import("../contracts/client-api.js").ClientPlanLookAheadDay;
@@ -31,16 +33,6 @@
     return more ? `${names.join(" · ")} +${more}` : names.join(" · ");
   }
 
-  /** "Long run · 14 km" in the athlete's run units; the bare label when no distance is known. */
-  function runText(run: LookAheadDay["run"], units: unknown): string {
-    if (!run) return "";
-    const label = text(run.label) || "Run";
-    const km = Number(run.km);
-    if (!(run.km != null && Number.isFinite(km) && km > 0)) return label;
-    const dist = typeof fmtDist === "function" ? fmtDist(km, units) : `${Math.round(km * 10) / 10} km`;
-    return `${label} · ${dist}`;
-  }
-
   function dayNumber(date: string): string {
     const n = Number(String(date).slice(8, 10));
     return Number.isFinite(n) && n > 0 ? String(n) : "";
@@ -61,10 +53,11 @@
         ? todayLine
         : null;
     const lift = day.lift && text(day.lift.title) ? day.lift : null;
-    const run = day.run
-      ? { text: runText(day.run, units), done: day.run.done === true, kind: text(day.run.kind) }
-      : null;
+    const glance = CairnDayDetailModel.glanceOfLookAheadDay(day, units);
+    if (!glance) return null;
+    const run = day.run && glance.run ? { text: glance.run.words, done: day.run.done === true, kind: text(day.run.kind) } : null;
     return {
+      glance,
       date,
       weekday: text(day.weekday).slice(0, 3).toUpperCase(),
       day: dayNumber(date),
@@ -114,7 +107,7 @@
     return { mode: "calendar", groups, order: [] };
   }
 
-  const CAIRN_PROGRAM_WEEK_MODEL = { programWeekModel, liftsText, runText };
+  const CAIRN_PROGRAM_WEEK_MODEL = { programWeekModel, liftsText };
 
   Object.assign(globalThis, { CairnProgramWeekModel: CAIRN_PROGRAM_WEEK_MODEL });
 }

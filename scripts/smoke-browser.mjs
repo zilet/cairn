@@ -96,7 +96,7 @@ const lazyBundles = {
   horizon: { file: "bundle-09-horizon", globals: { renderHorizon: "function", renderPlanEndurance: "function" } },
   ask: { file: "bundle-10-ask", globals: { renderChat: "function", CairnChatClient: "object", CairnRippleCardController: "object" } },
   settings: { file: "bundle-11-settings", globals: { renderSettings: "function", CairnSettingsAgents: "object" } },
-  day: { file: "bundle-12-day", globals: { renderDay: "function", CairnDayRecord: "object" } },
+  calendar: { file: "bundle-12-calendar", globals: { renderDay: "function", CairnDayRecord: "object", CairnDrill: "object" } },
 };
 
 /** The lazy bundles a smoke route's destination must have injected (dependencies included). */
@@ -107,7 +107,7 @@ function lazyBundlesFor(route) {
   if (route.tab === "horizon") return ["horizon", "train"];
   if (route.tab === "chat") return ["ask"];
   if (route.tab === "settings") return ["settings"];
-  if (route.tab === "day") return ["day"];
+  if (route.tab === "day") return ["calendar"];
   if (route.tab === "plan" && planSeg === "edit") return ["train"];
   if (route.tab === "plan" && planSeg === "endurance") return ["horizon", "train"];
   if (route.tab === "plan" && planSeg === "coach") return ["ask"];

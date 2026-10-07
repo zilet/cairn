@@ -141,36 +141,51 @@ test("the redirect table covers every v1 tab and every v1 section", () => {
 });
 
 // Today is Home (v2 wave 7): Today never carries a date. An old dated Today link is
-// flagged for the in-place rewrite; the router opens that day's own view.
-test("a dated Today link is rewritten, and a day view keeps its date", () => {
+// flagged for the in-place rewrite; the router opens that day's own page.
+test("a dated Today link is rewritten, and a day page keeps its date in its path", () => {
   const routes = loadRoutes();
   const old = routes.parseRoute("/app/today?date=2026-06-27");
   assert.equal(old.tab, "today");
   assert.equal(old.date, "2026-06-27");
   assert.equal(old.legacy, true);
-  const day = routes.parseRoute("/app/today/day?date=2026-06-27");
+  // The canonical day page is home-free: /app/day/<date>.
+  const day = routes.parseRoute("/app/day/2026-06-27");
   assert.equal(day.tab, "day");
-  assert.equal(day.home, "today");
-  assert.equal(day.legacy, false);
-  assert.equal(routes.routeToUrl({ tab: "day", date: "2026-06-27" }), "/app/today/day?date=2026-06-27");
+  assert.equal(day.home, "today", "a cold day page reads under Today");
+  assert.equal(day.date, "2026-06-27");
+  assert.equal(day.section, null);
+  assert.equal(day.legacy, false, "canonical, never rewritten");
+  assert.equal(routes.routeToUrl({ tab: "day", date: "2026-06-27" }), "/app/day/2026-06-27");
+  assert.equal(routes.routeToUrl({ tab: "day", section: "horizon", date: "2026-06-27" }), "/app/day/2026-06-27", "the URL names no home");
   assert.equal(routes.homeOf("day"), "today");
+  // A day page with no valid date has nothing to show (the router lands it on Today).
+  assert.equal(routes.parseRoute("/app/day/not-a-date").date, null);
 });
 
-// A day opened from Train or Horizon is read under that home, so the tab bar lights
-// the place the back link returns to — the route carries the origin.
-test("a day view carries the home it was opened under", () => {
+// The old day URLs keep working (docs/IA.md): each parses to the day page, carries the
+// home it named (the opener the page is read under) and is flagged for the in-place
+// rewrite to /app/day/<date>.
+test("old day URLs are aliases of the home-free day page", () => {
   const routes = loadRoutes();
-  for (const home of ["train", "horizon"]) {
+  for (const home of ["today", "train", "horizon", "ask", "you"]) {
     const day = routes.parseRoute(`/app/${home}/day?date=2026-06-27`);
-    assert.equal(day.tab, "day");
+    assert.equal(day.tab, "day", home);
     assert.equal(day.home, home);
-    assert.equal(day.section, home);
+    assert.equal(day.section, home === "today" ? null : home);
     assert.equal(day.date, "2026-06-27");
-    assert.equal(day.legacy, false, "canonical, never rewritten");
-    assert.equal(routes.routeToUrl({ tab: "day", section: home, date: "2026-06-27" }), `/app/${home}/day?date=2026-06-27`);
+    assert.equal(day.legacy, true, "rewritten in place");
+    assert.equal(routes.routeToUrl(day), "/app/day/2026-06-27");
     assert.equal(routes.homeOf("day", home), home);
   }
-  assert.equal(routes.routeToUrl({ tab: "day", section: null, date: "2026-06-27" }), "/app/today/day?date=2026-06-27");
+  for (const url of ["/app/day?date=2026-06-27", "/day?date=2026-06-27", "/?tab=day&date=2026-06-27"]) {
+    const day = routes.parseRoute(url);
+    assert.equal(day.tab, "day", url);
+    assert.equal(day.date, "2026-06-27", url);
+    assert.equal(day.legacy, true, url);
+    assert.equal(routes.routeToUrl(day), "/app/day/2026-06-27", url);
+  }
+  // A peek in the address is not a reason to rewrite (the drill owns it).
+  assert.equal(routes.parseRoute("/app/today?peek=2026-06-27").legacy, false);
   assert.equal(routes.homeOf("day", "bogus"), "today");
 });
 
@@ -178,7 +193,7 @@ test("a canonical v2 URL parses to its surface and is never re-redirected", () =
   const routes = loadRoutes();
   const V2 = [
     ["/app/today", "today", null, "today"],
-    ["/app/today/day?date=2026-06-27", "day", null, "today"],
+    ["/app/day/2026-06-27", "day", null, "today"],
     ["/app/today/session?date=2026-06-29", "session", null, "today"],
     ["/app/today/fuel?date=2026-06-28", "plan", "food", "today"],
     ["/app/today/menu", "plan", "meals", "today"],

@@ -164,8 +164,8 @@ test("a Health deep link preloads Train then Me/Health and starts its leaf's one
   assert.deepEqual(
     links.map((l) => [l.rel, l.as, l.fetchPriority, l.href]),
     [
-      // Train draws its movement rows with the day view's shared row, so its closure starts with day.
-      ["preload", "script", "low", "/js/bundle-12-day.js"],
+      // Train draws its movement rows with the day view's shared row, so its closure starts with calendar.
+      ["preload", "script", "low", "/js/bundle-12-calendar.js"],
       ["preload", "script", "low", "/js/bundle-08-train.js"],
       ["preload", "script", "low", "/js/bundle-05-me-health.js"],
     ]
@@ -193,13 +193,17 @@ test("a Health deep link preloads Train then Me/Health and starts its leaf's one
 test("Train, Horizon, Ask, Settings and the week menu preload their closure and start only the shell's reads", () => {
   const cases = {
     "/app/today/menu": ["/js/bundle-13-meals.js"],
-    "/APP/Train": ["/js/bundle-12-day.js", "/js/bundle-08-train.js"],
-    "/app/horizon": ["/js/bundle-12-day.js", "/js/bundle-08-train.js", "/js/bundle-09-horizon.js"],
-    "/app/horizon/race": ["/js/bundle-12-day.js", "/js/bundle-08-train.js", "/js/bundle-09-horizon.js"],
+    "/APP/Train": ["/js/bundle-12-calendar.js", "/js/bundle-08-train.js"],
+    "/app/horizon": ["/js/bundle-12-calendar.js", "/js/bundle-08-train.js", "/js/bundle-09-horizon.js"],
+    "/app/horizon/race": ["/js/bundle-12-calendar.js", "/js/bundle-08-train.js", "/js/bundle-09-horizon.js"],
     "/app/ask": ["/js/bundle-10-ask.js"],
     "/app/ask/changes": ["/js/bundle-10-ask.js"],
     "/app/you/settings/agents": ["/js/bundle-11-settings.js"],
-    "/app/you/profile": ["/js/bundle-12-day.js", "/js/bundle-08-train.js", "/js/bundle-05-me-health.js"],
+    "/app/you/profile": ["/js/bundle-12-calendar.js", "/js/bundle-08-train.js", "/js/bundle-05-me-health.js"],
+    // The home-free day page (any date) preloads the calendar alone; an old alias under a
+    // home falls back to that home's closure (which carries the calendar too).
+    "/app/day/2026-10-08": ["/js/bundle-12-calendar.js"],
+    "/app/horizon/day": ["/js/bundle-12-calendar.js", "/js/bundle-08-train.js", "/js/bundle-09-horizon.js"],
   };
   for (const [pathname, hrefs] of Object.entries(cases)) {
     const { links, calls } = runBoot({ pathname });
@@ -217,7 +221,7 @@ test("Train, Horizon, Ask, Settings and the week menu preload their closure and 
   const program = runBoot({ pathname: "/app/train/program" });
   assert.deepEqual(
     program.links.map((l) => l.href),
-    ["/js/bundle-12-day.js", "/js/bundle-08-train.js"]
+    ["/js/bundle-12-calendar.js", "/js/bundle-08-train.js"]
   );
   assert.deepEqual(
     program.calls,
@@ -233,7 +237,7 @@ test("Train, Horizon, Ask, Settings and the week menu preload their closure and 
   const plan = runBoot({ pathname: "/app/train/plan" });
   assert.deepEqual(
     plan.links.map((l) => l.href),
-    ["/js/bundle-12-day.js", "/js/bundle-08-train.js"]
+    ["/js/bundle-12-calendar.js", "/js/bundle-08-train.js"]
   );
   assert.deepEqual(
     plan.calls,

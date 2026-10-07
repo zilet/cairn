@@ -115,15 +115,15 @@
         "brotli": 35840
       }
     },
-    "public/js/bundle-12-day.js": {
-      "lazy": "day",
+    "public/js/bundle-12-calendar.js": {
+      "lazy": "calendar",
       "measured": {
-        "raw": 34659,
-        "brotli": 8647
+        "raw": 45448,
+        "brotli": 11493
       },
       "budget": {
-        "raw": 35840,
-        "brotli": 9216
+        "raw": 47104,
+        "brotli": 12288
       }
     },
     "public/js/bundle-13-meals.js": {

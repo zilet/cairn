@@ -9,8 +9,13 @@ type RouteItem = string | readonly [string, unknown];
 type RouteItems = ReadonlyArray<RouteItem>;
 type RouteMode = "push" | "replace";
 
+/** What a day page's history entry remembers (drill-controller.ts): the opener's home, and whether the opener sits behind it. */
+type DrillHistoryState = { from?: unknown; drill?: unknown } | null | undefined;
+
 type ApplyRouteOptions = {
   state: ClientAppState;
+  /** The entry's own history.state: a reload or Back into a day page keeps its opener. */
+  historyState?: DrillHistoryState;
   routeApi?: AppRoutesApi | null;
   planSections: RouteItems;
   progressSections: RouteItems;
@@ -37,6 +42,8 @@ type SyncRouteOptions = {
   route: Partial<AppRoute>;
   location: Pick<Location, "pathname" | "search">;
   history?: Pick<History, "pushState" | "replaceState"> | null;
+  /** Extra history.state for the entry (a day page's opener). */
+  historyState?: Record<string, unknown> | null;
 };
 
 type AppRouterRoot = typeof globalThis & { CairnAppRouter?: ClientAppRouterApi };
@@ -99,8 +106,8 @@ type AppRouterRoot = typeof globalThis & { CairnAppRouter?: ClientAppRouterApi }
     learned: "learned",
   };
 
-  // The home a day view is read under, when it is not Today's own (null = Today).
-  const DAY_HOMES = new Set<string>(["train", "horizon", "ask", "you"]);
+  // The home a day page is read under: the tab that opened it (null = Today, its default).
+  const DAY_HOMES = new Set<string>(["today", "train", "horizon", "ask", "you"]);
   function dayHomeOf(section: unknown): ClientHomeName | null {
     const s = String(section || "");
     return DAY_HOMES.has(s) ? (s as ClientHomeName) : null;
@@ -120,9 +127,13 @@ type AppRouterRoot = typeof globalThis & { CairnAppRouter?: ClientAppRouterApi }
       dayWanted && route.date && !isLocalToday(route.date) ? "day" : requested === "day" ? "today" : requested;
     if (tab === "day") {
       state.dayDate = route.date;
-      // The home the day is read under rides in the path (/app/train/day): a reload or
-      // a Back into it keeps the tab it was opened from lit.
-      state.dayHome = dayHomeOf(requested === "day" ? route.section : null);
+      // The page is home-free (/app/day/<date>): the opener rides in the entry's
+      // history.state, so a reload or a Back into it keeps the tab that opened it lit.
+      // An old alias (/app/train/day?date=) names its home in the path instead.
+      const alias = dayHomeOf(requested === "day" ? route.section : null);
+      const hs = options.historyState;
+      state.drillFrom = alias || dayHomeOf(hs?.from);
+      state.drillBack = !alias && hs?.drill === 1;
       return tab;
     }
     if (tab === "today") {
@@ -188,8 +199,6 @@ type AppRouterRoot = typeof globalThis & { CairnAppRouter?: ClientAppRouterApi }
       // Today never carries a date: it is always today.
     } else if (tab === "day") {
       if (state.dayDate) route.date = state.dayDate;
-      const home = dayHomeOf(state.dayHome);
-      if (home) route.section = home as AppRoute["section"];
     } else if (tab === "session") {
       if (state.logDate) route.date = state.logDate;
     } else if (tab === "plan") {
@@ -225,7 +234,7 @@ type AppRouterRoot = typeof globalThis & { CairnAppRouter?: ClientAppRouterApi }
     const current = `${options.location.pathname}${options.location.search}`;
     if (next === current) return null;
     const mode = options.mode === "replace" ? "replace" : "push";
-    history[mode === "replace" ? "replaceState" : "pushState"]({ cairn: true }, "", next);
+    history[mode === "replace" ? "replaceState" : "pushState"]({ ...(options.historyState || {}), cairn: true }, "", next);
     return next;
   }
 

@@ -51,12 +51,15 @@ export type ClientAppState = {
   // Horizon's sub-view (null = the one timeline) and You's (null = the landing;
   // "stone" = one stone's detail, keyed by youStone, which rides in ?id=).
   horizonSeg?: ClientHorizonSection | null;
-  // The day the "day" view shows (/app/today/day?date=): any day that is not today,
+  // The day the day page shows (/app/day/<date>): any day that is not today,
   // read-only. Today itself never rides here; Today always renders today.
   dayDate?: string | null;
-  // The home the day view is read under — where it was opened from (/app/train/day):
-  // the tab bar lights it and the back link returns to it. Null/"today" = Today.
-  dayHome?: ClientHomeName | null;
+  // The home that opened the page (drill-controller.ts, CairnDrill.open): the tab bar
+  // keeps it lit and the back link names it and returns to it. Null = Today.
+  drillFrom?: ClientHomeName | null;
+  // An in-app opener sits behind the page's history entry, so Back is history.back();
+  // false on a cold deep link, where Back lands on drillFrom's root instead.
+  drillBack?: boolean;
   youSeg?: ClientYouSection | null;
   youStone?: string | null;
   pendingHealthScroll?: "hbDirectives" | string | null;

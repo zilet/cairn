@@ -18,6 +18,8 @@
     primeDiscipline();
     activateTab(landingTab || "today", { replace: canonicalizeLanding, syncRoute: canonicalizeLanding });
     window.addEventListener("popstate", () => {
+      // A Back that only closes (or moves) an open peek is the drill's, not a navigation.
+      if (typeof CairnDrill !== "undefined" && CairnDrill.popped()) return;
       const routes = routeApi();
       const route = routes ? routes.parseRoute(location.href) : null;
       const tab = applyRouteState(route);

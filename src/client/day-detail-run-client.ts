@@ -6,7 +6,7 @@
 // its heart-rate band and the pace band, in the athlete's run units. Pure strings;
 // every caller string escaped; zones are classes, never colours.
 //
-// LAZY ("day" bundle), after the model and before the view.
+// LAZY ("calendar" bundle), after the model and before the view.
 {
   type DayDetailRun = import("../contracts/day-detail.js").DayDetailRun;
 

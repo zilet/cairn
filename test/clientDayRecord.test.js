@@ -1,7 +1,7 @@
-// v2 wave 7, "Today is Home": the day view (src/client/day-record-client.ts) renders
+// v2 wave 7, "Today is Home": the day page (src/client/day-record-client.ts) renders
 // any day that is not today, read-only — a past day's record, a future day's preview —
-// and one delegated opener takes every `data-open-day` in the app there. Today itself
-// always opens Today.
+// and one delegated opener takes every `data-open-day` in the app there through the
+// drill controller (CairnDrill). Today itself always opens Today.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -45,6 +45,7 @@ function load() {
     state: { tab: "progress", planSeg: "edit", planJump: null },
     activateTab: (tab) => tabs.push(tab),
     syncRouteFromState: () => {},
+    withBundle: (_name, fn) => fn(),
     document: {
       addEventListener: (type, fn) => {
         listeners[type] = fn;
@@ -56,11 +57,13 @@ function load() {
   context.window.scrollTo = () => {};
   context.window.CairnRoutes = { homeOf: (tab) => (tab === "progress" ? "train" : "today") };
   context.renderTab = () => {};
-  // The eager opener (bundle-02) and the lazy view (bundle-12-day), in load order.
+  // The eager opener (bundle-02) and the lazy page + drill (bundle-12-calendar), in load order.
   vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/day-open-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/day-record-client.js"), "utf8"), context);
-  return { day: { ...context.CairnDayRecord, openDay: context.CairnDayOpen.openDay }, context, tabs, listeners };
+  vm.runInNewContext(readFileSync(join(root, "public/js/drill-controller.js"), "utf8"), context);
+  const openDay = (date) => context.CairnDrill.open("day", date, { mode: "page" });
+  return { day: { ...context.CairnDayRecord, openDay }, context, tabs, listeners };
 }
 
 function record(over = {}) {
@@ -207,17 +210,21 @@ test("opening a day: today opens Today, another day its own view; junk opens not
   assert.equal(context.state.dayDate, "2026-09-26");
 });
 
-// One day, one place: a day opened from Train is read UNDER Train. The route carries
-// that home (/app/train/day), so the lit tab and the "‹ Train" back link agree, and a
-// cold open of that URL steps back to Train, not Today.
-test("a day opened from Train lives under Train: its home rides in state, its back link names it", () => {
+// One day, one place: a day opened from Train is read UNDER Train. The page is
+// home-free (/app/day/<date>); the opener rides in state.drillFrom (and the entry's
+// history.state), so the lit tab and the "‹ Train" back link agree.
+test("a day opened from Train lives under Train: its opener rides in state, its back link names it", () => {
   const { day, context } = load();
   day.openDay("2026-09-27");
-  assert.equal(context.state.dayHome, "train");
-  assert.equal(context.CairnDayOpen.origin()?.label, "Train");
-  assert.equal(context.CairnDayOpen.homeLabel("horizon"), "Horizon");
-  // A cold deep link has no in-app origin: the route's home names Back and is where it goes.
+  assert.equal(context.state.drillFrom, "train");
+  assert.equal(context.state.drillBack, true, "an in-app opener sits behind the page");
+  assert.equal(context.CairnDrill.fromLabel(), "Train");
+  assert.equal(context.CairnDrill.homeLabel("horizon"), "Horizon");
+  // Stepping to another day keeps the opener (and replaces, never stacks, history).
+  day.openDay("2026-09-26");
+  assert.equal(context.state.drillFrom, "train");
+  // The page's back link and its label are the drill's.
   const src = readFileSync(join(root, "src/client/day-record-client.ts"), "utf8");
-  assert.match(src, /activateTab\(state\.dayHome \|\| "today"\)/);
-  assert.match(src, /CairnDayOpen\.homeLabel\(state\.dayHome \|\| "today"\)/);
+  assert.match(src, /CairnDrill\.back\(\)/);
+  assert.match(src, /CairnDrill\.fromLabel\(\)/);
 });

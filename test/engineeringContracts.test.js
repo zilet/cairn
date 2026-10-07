@@ -976,7 +976,7 @@ test("PWA route state is wired through boot, tabs, nested screens, and date-awar
   assert.match(appStartup, /window\.addEventListener\("popstate"/);
   assert.match(
     appRouter,
-    /history\[mode === "replace" \? "replaceState" : "pushState"\]\(\{ cairn: true \},\s*"",\s*next\)/
+    /history\[mode === "replace" \? "replaceState" : "pushState"\]\(\{ \.\.\.\(options\.historyState \|\| \{\}\), cairn: true \},\s*"",\s*next\)/
   );
   assert.match(appRenderDispatch, /renderTab: renderAppTab/);
   assert.match(appTabs, /function\s+switchTab\(tab,\s*opts\s*=\s*\{\}\)/);

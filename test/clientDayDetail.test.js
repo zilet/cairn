@@ -1,4 +1,4 @@
-// The ONE day view (day-detail-{model,client,controller}.ts, the lazy "day" bundle):
+// The ONE day view (day-detail-{model,client,controller}.ts, the lazy "calendar" bundle):
 // Horizon's week and Train's week ahead open it through the day view, Today's "What's
 // ahead" strip (today-strip-{client,controller}.ts) opens it inline. The view frames
 // the server's read — the hero, the anchor first, every movement with its sets × reps
@@ -9,6 +9,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHost, flush, loadClientModule, renderHtml } from "./_dom.mjs";
+import { createNav } from "./_nav.mjs";
+
+function navGlobals(start) {
+  const nav = createNav(start);
+  return { location: nav.location, history: nav.history };
+}
 
 const TODAY = "2026-10-06";
 
@@ -392,11 +398,24 @@ function week() {
   };
 }
 
+// The strip draws the day view's chips and peeks through the drill (the "calendar"
+// bundle today-ahead depends on); a test stubs only the detail's controller.
 function loadStrip(globals = {}) {
   return loadClientModule(
-    ["html-utils", "ui-format", "ui-actions-client", "ui-reads", "today-strip-client", "today-strip-controller"],
+    [
+      "html-utils",
+      "ui-format",
+      "ui-actions-client",
+      "ui-reads",
+      "day-detail-model",
+      "day-detail-run-client",
+      "day-detail-client",
+      "drill-controller",
+      "today-strip-client",
+      "today-strip-controller",
+    ],
     {
-      globals,
+      globals: { ...navGlobals(), ...globals },
     }
   );
 }
@@ -430,10 +449,13 @@ test("the strip: seven real buttons, today ringed, done ticked, lift short names
   assert.equal(w.CairnTodayStrip.abbr("Pull"), "Pull");
 });
 
-test("tapping a day opens it inline through the day bundle; tapping again folds it", async () => {
+test("tapping a day peeks it through the drill: ?peek= in history, one 'Open day ›', Back folds it", async () => {
   const mounts = [];
   const opened = [];
+  const nav = createNav("/app/today");
   const w = loadStrip({
+    location: nav.location,
+    history: nav.history,
     withBundle: (name, fn) => {
       opened.push(name);
       return fn();
@@ -446,13 +468,12 @@ test("tapping a day opens it inline through the day bundle; tapping again folds 
       },
     },
   });
+  nav.onPop = () => w.CairnDrill.popped();
   const slot = createHost(w.document);
-  const horizon = [];
   w.CairnTodayStripController.mount(slot, {
     date: TODAY,
     peek: () => ({ data: week(), fresh: true }),
     load: () => Promise.resolve(week()),
-    openInHorizon: (date) => horizon.push(date),
   });
   const thu = slot.querySelector('[data-tstrip-day="2026-10-08"]');
   await thu.click();
@@ -460,23 +481,90 @@ test("tapping a day opens it inline through the day bundle; tapping again folds 
   const fold = slot.querySelector("[data-tstrip-fold]");
   assert.ok(fold.classList.contains("is-open"));
   assert.equal(fold.hasAttribute("inert"), false);
-  assert.deepEqual(opened, ["day"]);
+  assert.deepEqual(opened, ["calendar"]);
   assert.equal(mounts[0].date, "2026-10-08");
-  assert.equal(mounts[0].inline, true);
+  assert.equal(mounts[0].inline, true, "the compact variant");
+  // The peek is in history, and ends with exactly one deeper link.
+  assert.equal(nav.url(), "/app/today?peek=2026-10-08");
+  assert.equal(nav.history.length, 2);
+  const full = slot.querySelectorAll("[data-drill-full]");
+  assert.equal(full.length, 1);
+  assert.equal(full[0].textContent, "Open day ›");
+  assert.equal(slot.querySelector("[data-tstrip-horizon]"), null, "no 'Open in Horizon' any more");
   // A revalidated week keeps the open day open.
   await flush();
   assert.equal(slot.querySelector('[data-tstrip-day="2026-10-08"]').getAttribute("aria-expanded"), "true");
-  await slot.querySelector("[data-tstrip-horizon]").click();
-  assert.deepEqual(horizon, ["2026-10-08"]);
-  await slot.querySelector('[data-tstrip-day="2026-10-08"]').click();
-  assert.equal(slot.querySelector('[data-tstrip-day="2026-10-08"]').getAttribute("aria-expanded"), "false");
+  // Another day moves the peek: the entry is replaced, never stacked.
+  await slot.querySelector('[data-tstrip-day="2026-10-09"]').click();
+  assert.equal(nav.url(), "/app/today?peek=2026-10-09");
+  assert.equal(nav.history.length, 2);
+  // The phone's Back closes it (and nothing else).
+  nav.history.back();
+  assert.equal(nav.url(), "/app/today");
+  assert.equal(slot.querySelector('[aria-expanded="true"]'), null);
   assert.ok(fold.hasAttribute("inert"));
   assert.ok(mounts.includes("torn"));
+  // Tapping a day, then tapping it again, folds it through history too.
+  await slot.querySelector('[data-tstrip-day="2026-10-08"]').click();
+  assert.equal(nav.url(), "/app/today?peek=2026-10-08");
+  await slot.querySelector('[data-tstrip-day="2026-10-08"]').click();
+  assert.equal(nav.url(), "/app/today");
+  assert.equal(slot.querySelector('[data-tstrip-day="2026-10-08"]').getAttribute("aria-expanded"), "false");
+  // …and its own Close does the same.
+  await slot.querySelector('[data-tstrip-day="2026-10-10"]').click();
+  await slot.querySelector("[data-drill-close]").click();
+  assert.equal(nav.url(), "/app/today");
+  assert.equal(slot.querySelector('[aria-expanded="true"]'), null);
+});
+
+test("'Open day ›' opens the day's page under Today; Back returns to Today with the peek open", async () => {
+  const nav = createNav("/app/today");
+  const tabs = [];
+  const w = loadStrip({
+    location: nav.location,
+    history: nav.history,
+    withBundle: (_n, fn) => fn(),
+    localISO: () => TODAY,
+    state: { tab: "today" },
+    activateTab: (tab) => {
+      tabs.push(tab);
+      w.state.tab = tab;
+      if (tab === "day") nav.history.pushState({ cairn: true, from: w.state.drillFrom, drill: 1 }, "", `/app/day/${w.state.dayDate}`);
+    },
+    CairnRoutes: { homeOf: (tab) => tab, routeToUrl: (r) => `/app/day/${r.date}` },
+    CairnDayDetailController: { mount: () => () => {} },
+  });
+  w.scrollTo = () => {};
+  nav.onPop = () => w.CairnDrill.popped();
+  const slot = createHost(w.document);
+  const deps = { date: TODAY, peek: () => ({ data: week(), fresh: true }), load: () => Promise.resolve(week()) };
+  w.CairnTodayStripController.mount(slot, deps);
+  await slot.querySelector('[data-tstrip-day="2026-10-08"]').click();
+  await slot.querySelector("[data-drill-full]").click();
+  assert.deepEqual(tabs, ["day"]);
+  assert.equal(w.state.dayDate, "2026-10-08");
+  assert.equal(w.state.drillFrom, "today", "the opener's tab stays lit");
+  assert.equal(w.CairnDrill.fromLabel(), "Today");
+  assert.equal(nav.url(), "/app/day/2026-10-08");
+  // Back: the page's entry gives way to the peek's, which is a navigation (Today repaints)…
+  nav.history.back();
+  assert.equal(nav.url(), "/app/today?peek=2026-10-08");
+  assert.equal(w.CairnDrill.popped(), false, "not the drill's to swallow: Today re-renders");
+  // …and the repainted Today's strip opens the day the address names.
+  const entries = nav.history.length;
+  slot.remove();
+  const again = createHost(w.document);
+  w.CairnTodayStripController.mount(again, deps);
+  assert.equal(again.querySelector('[data-tstrip-day="2026-10-08"]').getAttribute("aria-expanded"), "true");
+  assert.equal(nav.history.length, entries, "re-opening the named peek adds no entry");
 });
 
 test("a day left open survives Today repainting the strip; a closed one stays closed", async () => {
   const mounts = [];
+  const nav = createNav("/app/today");
   const w = loadStrip({
+    location: nav.location,
+    history: nav.history,
     withBundle: (_name, fn) => fn(),
     CairnDayDetailController: {
       mount: (_host, deps) => {
@@ -485,11 +573,11 @@ test("a day left open survives Today repainting the strip; a closed one stays cl
       },
     },
   });
+  nav.onPop = () => w.CairnDrill.popped();
   const deps = {
     date: TODAY,
     peek: () => ({ data: week(), fresh: true }),
     load: () => Promise.resolve(week()),
-    openInHorizon: () => {},
   };
   const first = createHost(w.document);
   w.CairnTodayStripController.mount(first, deps);
@@ -500,22 +588,25 @@ test("a day left open survives Today repainting the strip; a closed one stays cl
   w.CairnTodayStripController.mount(again, deps);
   assert.equal(again.querySelector('[data-tstrip-day="2026-10-09"]').getAttribute("aria-expanded"), "true");
   assert.deepEqual(mounts, ["2026-10-09", "2026-10-09"]);
-  await again.querySelector("[data-tstrip-close]").click();
+  await again.querySelector("[data-drill-close]").click();
   const third = createHost(w.document);
   w.CairnTodayStripController.mount(third, deps);
   assert.equal(third.querySelector('[aria-expanded="true"]'), null);
 });
 
 test("a tap on a strip Today is replacing reaches the strip that replaces it", async () => {
+  const nav = createNav("/app/today");
   const w = loadStrip({
+    location: nav.location,
+    history: nav.history,
     withBundle: (_name, fn) => fn(),
     CairnDayDetailController: { mount: () => () => {} },
   });
+  nav.onPop = () => w.CairnDrill.popped();
   const deps = {
     date: TODAY,
     peek: () => ({ data: week(), fresh: true }),
     load: () => Promise.resolve(week()),
-    openInHorizon: () => {},
   };
   const old = createHost(w.document);
   const next = createHost(w.document);
@@ -524,8 +615,10 @@ test("a tap on a strip Today is replacing reaches the strip that replaces it", a
   await old.querySelector('[data-tstrip-day="2026-10-11"]').click();
   old.remove();
   assert.equal(next.querySelector('[data-tstrip-day="2026-10-11"]').getAttribute("aria-expanded"), "true");
-  await next.querySelector("[data-tstrip-close]").click();
+  assert.equal(nav.history.length, 2, "one peek, one entry");
+  await next.querySelector("[data-drill-close]").click();
   assert.equal(next.querySelector('[aria-expanded="true"]'), null);
+  assert.equal(nav.url(), "/app/today");
 });
 
 // The warm-reload case: the strip mounts on an EMPTY slot (the week read still in
@@ -534,9 +627,22 @@ test("a tap on a strip Today is replacing reaches the strip that replaces it", a
 test("the strip re-wires across the Brief's in-place upgrade: a week that lands after the swap paints a live strip", async () => {
   const opened = [];
   const w = loadClientModule(
-    ["html-utils", "ui-format", "ui-actions-client", "ui-reads", "today-main-shell-client", "today-strip-client", "today-strip-controller"],
+    [
+      "html-utils",
+      "ui-format",
+      "ui-actions-client",
+      "ui-reads",
+      "today-main-shell-client",
+      "day-detail-model",
+      "day-detail-run-client",
+      "day-detail-client",
+      "drill-controller",
+      "today-strip-client",
+      "today-strip-controller",
+    ],
     {
       globals: {
+        ...navGlobals(),
         withBundle: (_name, fn) => fn(),
         CairnDayDetailController: { mount: (_h, deps) => (opened.push(deps.date), () => {}) },
       },
@@ -552,7 +658,6 @@ test("the strip re-wires across the Brief's in-place upgrade: a week that lands 
     date: TODAY,
     peek: () => null,
     load: () => pending,
-    openInHorizon: () => {},
   });
   assert.equal(slot.innerHTML, "", "nothing painted yet");
   // The Brief upgrades in place before the week arrives.
@@ -581,7 +686,6 @@ test("a held (snapshot) copy is never left standing: the first paint owns the wh
     date: TODAY,
     peek: () => ({ data: week(), fresh: true }),
     load: () => Promise.resolve(week()),
-    openInHorizon: () => {},
   });
   assert.doesNotMatch(slot.innerHTML, /stale/);
   const section = slot.querySelector(".tstrip");
@@ -598,7 +702,6 @@ test("the strip's header: the block clock and the run plan arrive later and repa
     date: TODAY,
     peek: (key) => (key === "settings" ? { data: { settings: { run_units: "mi" } }, fresh: true } : { data, fresh: true }),
     load: () => Promise.resolve(data),
-    openInHorizon: () => {},
   });
   const days = slot.querySelector("[data-tstrip-days]");
   assert.equal(slot.querySelector(".tstrip-tally").textContent, "2 of 5 lifting days · 3.8 mi run · 3 new bests");
@@ -642,6 +745,7 @@ test("Horizon's week: rest is quiet, a finished day is ticked, today names the d
     "race-ladder-client",
     "race-view-client",
     "horizon-model",
+    "day-detail-model",
     "horizon-week-model",
     "horizon-terrain-client",
     "horizon-chart-client",

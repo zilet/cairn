@@ -5,8 +5,11 @@
 //
 // Two grammars parse; one is written.
 // - v2 (canonical): /app/<home>/<section>[/<nested>]?date&id&session, where the
-//   home is a tab-bar button (today, train, horizon, ask, you). routeToUrl only
-//   ever writes this form.
+//   home is a tab-bar button (today, train, horizon, ask, you), plus the HOME-FREE
+//   object pages (/app/day/<date>): a page is read under whichever tab opened it
+//   (state.drillFrom, drill-controller.ts), so its URL names no home. routeToUrl only
+//   ever writes this form. The old day URLs (/app/<home>/day?date=, /app/day?date=,
+//   /app/today?date=) stay aliases: they parse, carry their home, and are rewritten.
 // - v1 (legacy): /app/<view>/<section>, a bare /<view>/<section>, or /?tab=<view>.
 //   Every one maps onto its v2 home and is flagged `legacy`, so the shell rewrites
 //   the address bar in place (replaceState) and an old bookmark keeps working.
@@ -142,8 +145,9 @@ type CairnRouteRoot = typeof globalThis & { CairnRoutes?: CairnRoutesApi };
   // Which tab-bar button a view lights. Plan is the one view split across homes.
   function homeOf(view: unknown, section?: unknown): CairnRouteHome {
     const v = viewFor(view);
-    // A day is read under the home it was opened from (/app/train/day?date=), so the
-    // lit tab and the "‹ Train" back link name the same place. Today is its default.
+    // A day page is read under the home that opened it (state.drillFrom, or an old
+    // /app/train/day alias's home), so the lit tab and the "‹ Train" back link name
+    // the same place. Today is its default (a cold /app/day/<date>).
     if (v === "day") {
       const home = cleanSegment(section);
       return (HOMES.has(home) ? home : DEFS.viewHomes.day) as CairnRouteHome;
@@ -246,11 +250,15 @@ type CairnRouteRoot = typeof globalThis & { CairnRoutes?: CairnRoutesApi };
     else if (VALID_TABS.has(parts[0]) || HOMES.has(parts[0])) segs = parts;
     else segs = [cleanSegment(firstParam(params, "tab"))];
     const [first = "", section = "", nested = ""] = segs;
+    // The home-free day page: /app/day/<date> (also /app/day?date=, written over).
+    const dayPage = first === "day";
 
     // "today" is both a v1 view and a v2 home, and the v2 grammar is a superset of
     // what v1 Today ever carried, so it parses as v2. "horizon" and "you" were
     // never v1 views.
-    const dest = HOMES.has(first)
+    const dest = dayPage
+      ? target("day")
+      : HOMES.has(first)
       ? parseV2(first, section, nested, id)
       : VALID_TABS.has(first)
         ? parseV1(first, section, nested, params, id)
@@ -261,7 +269,7 @@ type CairnRouteRoot = typeof globalThis & { CairnRoutes?: CairnRoutesApi };
       tab: dest.tab,
       section: dest.section as CairnRoute["section"],
       healthSection: null,
-      date: validDate(firstParam(params, "date")),
+      date: validDate(firstParam(params, "date")) || (dayPage ? validDate(section) : null),
       id,
       session: firstParam(params, "session"),
       jump: null,
@@ -271,7 +279,7 @@ type CairnRouteRoot = typeof globalThis & { CairnRoutes?: CairnRoutesApi };
     // Unrelated query params (?source=shortcut) are not a reason to rewrite.
     const canonicalPath = routeToUrl(route).split("?")[0];
     // Today never carries a date (v2 wave 7): an old /app/today?date=<day> link is
-    // rewritten to that day's own view (/app/today/day?date=), or to plain Today.
+    // rewritten to that day's own page (/app/day/<date>), or to plain Today.
     route.legacy =
       url.pathname !== canonicalPath ||
       params.has("tab") ||
@@ -293,8 +301,10 @@ type CairnRouteRoot = typeof globalThis & { CairnRoutes?: CairnRoutesApi };
     switch (tab) {
       case "session":
         return `${base}/today/session`;
-      case "day":
-        return `${base}/${homeOf("day", section)}/day`;
+      case "day": {
+        const date = validDate(r.date);
+        return date ? `${base}/day/${date}` : `${base}/day`;
+      }
       case "plan": {
         const s =
           oneOf(section, PLAN_SECTIONS, null) || oneOf(r.jump, PLAN_SECTIONS, null) || DEFS.defaults.planSection;
@@ -346,7 +356,8 @@ type CairnRouteRoot = typeof globalThis & { CairnRoutes?: CairnRoutesApi };
     const r = route || {};
     const path = pathFor(r);
     const params = new URLSearchParams();
-    addParam(params, "date", validDate(r.date));
+    // A day page carries its date in the path; every other view in ?date=.
+    if (viewFor(r.tab) !== "day") addParam(params, "date", validDate(r.date));
     addParam(params, "id", r.id);
     addParam(params, "session", r.session);
     const q = params.toString();

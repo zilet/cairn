@@ -61,27 +61,51 @@ test("app router carries Horizon's and You's sub-views through state and back", 
   assert.equal(state.youStone, null);
 });
 
-// A day opened from Train is read under Train: the home rides the route both ways, so
-// a reload of /app/train/day keeps Train lit and a URL written from state names it.
-test("app router carries a day view's home through state and back", () => {
+// A day page is home-free (/app/day/<date>); the opener it is read under rides in the
+// entry's history.state, so a reload or a Back into it keeps that tab lit. An old alias
+// (/app/train/day?date=) names its home in the path instead.
+test("app router restores a day page's opener from its history entry, or an old alias's home", () => {
   const router = loadRouter();
   const state = { tab: "today", day: null, dayPicked: false, plan: [], today: {}, logDate: "2026-06-29" };
-  assert.equal(router.applyRouteState({ tab: "day", section: "train", date: "2026-06-20" }, { state, ...deps }), "day");
+  const day = { tab: "day", section: null, date: "2026-06-20" };
+  // A reload / Back into a page Horizon opened in-app.
+  assert.equal(router.applyRouteState(day, { state, ...deps, historyState: { cairn: true, from: "horizon", drill: 1 } }), "day");
   assert.equal(state.dayDate, "2026-06-20");
-  assert.equal(state.dayHome, "train");
-  assert.deepEqual(plain(router.currentRouteState({ state: { ...state, tab: "day" }, ...deps, defaultProgressSection: null })), {
-    tab: "day",
-    date: "2026-06-20",
-    section: "train",
-  });
-  assert.equal(lastRoutes.routeToUrl({ tab: "day", date: "2026-06-20", section: "train" }), "/app/train/day?date=2026-06-20");
-  // Today's own day view carries no home.
-  assert.equal(router.applyRouteState({ tab: "day", section: null, date: "2026-06-20" }, { state, ...deps }), "day");
-  assert.equal(state.dayHome, null);
+  assert.equal(state.drillFrom, "horizon");
+  assert.equal(state.drillBack, true);
+  // The URL written from state names no home.
   assert.deepEqual(plain(router.currentRouteState({ state: { ...state, tab: "day" }, ...deps, defaultProgressSection: null })), {
     tab: "day",
     date: "2026-06-20",
   });
+  // An old alias: its home is the opener, and nothing in-app sits behind it.
+  assert.equal(router.applyRouteState({ tab: "day", section: "train", date: "2026-06-20" }, { state, ...deps }), "day");
+  assert.equal(state.drillFrom, "train");
+  assert.equal(state.drillBack, false);
+  // A cold deep link: Today, its default.
+  assert.equal(router.applyRouteState(day, { state, ...deps, historyState: null }), "day");
+  assert.equal(state.drillFrom, null);
+  assert.equal(state.drillBack, false);
+  // A junk opener in the entry is ignored.
+  router.applyRouteState(day, { state, ...deps, historyState: { from: "<x>" } });
+  assert.equal(state.drillFrom, null);
+});
+
+test("a day page's history entry carries its opener", () => {
+  const router = loadRouter();
+  const writes = [];
+  const history = {
+    pushState: (s, _t, url) => writes.push(["push", s, url]),
+    replaceState: (s, _t, url) => writes.push(["replace", s, url]),
+  };
+  router.syncRouteFromState({
+    routes: lastRoutes,
+    route: { tab: "day", date: "2026-06-20" },
+    location: { pathname: "/app/horizon", search: "" },
+    history,
+    historyState: { from: "horizon", drill: 1 },
+  });
+  assert.deepEqual(plain(writes), [["push", { from: "horizon", drill: 1, cairn: true }, "/app/day/2026-06-20"]]);
 });
 
 test("a parsed v1 URL applies to the same state its v2 twin does", () => {

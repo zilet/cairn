@@ -366,17 +366,21 @@ mast is a 44px row with its mono label on the baseline and a hairline under it, 
 
 **Today is Home (v2 wave 7).** Today only ever shows today: its header is a plain mono eyebrow
 (`Today · Tue 29 Sep`, `.hdr-eyebrow`), never a date picker, and "tap to see why" sits right under
-the why it explains. Any other day is its own read-only destination under the Today home, the
-day view (`/app/today/day?date=`, lazy `bundle-12-day`, `.dayrec`): a past day's record
+the why it explains. Any other day is its own read-only page, home-free at `/app/day/<date>`
+(lazy `bundle-12-calendar`, `.dayrec`) and read under the tab that opened it: a past day's record
 (training, fuel, the read that stood, a weigh-in) or a future day's preview (the planned lift and
 run in the athlete's run units, and known caveats), each a serif line over hairline sections, with
-a ‹ › stepper and a back link that names where the day was opened from. Any element carrying
-`data-open-day` opens its day (`day-open-client.ts`, eager): Train's plan strip, the Train
-calendar, the history sheet and Horizon's week rows. The day view and Fuel wear the same eyebrow
+a ‹ › stepper and a back link that names the opener ("‹ Horizon"). Every drill-down goes through
+ONE controller, `CairnDrill.open(kind, id, {from, mode})` (`drill-controller.ts`; inline | peek |
+page — docs/IA.md "Drill-down grammar"): the page keeps the opener's tab lit and Back returns to it;
+a peek adds `?peek=` to history so Back closes it and ends with one "Open day ›" (`.drill-foot`).
+Any element carrying `data-open-day` opens its day's page (`day-open-client.ts`, eager, routes to
+the drill): Train's plan strip, the Train calendar, the history sheet, Program's and Horizon's week
+rows. The day view and Fuel wear the same eyebrow
 (`Mon 28 Sep`, `Fuel · Tue 29 Sep`). Agent health is not Today's to say: it is one quiet
 `.agent-state` line in You › Settings › Agents that follows the newest agent attempt, so it clears
 itself after the next good run. **The day detail is ONE view** (`.ddv`, `day-detail-{model,run-client,client,controller}.ts`, lazy
-`day`, CSS `today/day-detail.css`; GET `/api/plan/day-detail?date=`): the day view composes it for any
+`calendar`, CSS `today/day-detail.css`; GET `/api/plan/day-detail?date=`): the day view composes it for any
 day the read reaches (to the end of next week; a past day keeps its record's fuel, read and weigh-in
 under it, and a day past that reach falls back to the record alone), and Today's strip opens it
 inline. Top to bottom: a mono kicker (where the day sits · its state), the read's serif headline,
@@ -385,7 +389,7 @@ in mono (race rung · block week), life caveats; today's server line; a heavy-le
 note in a `.well-accent-sm`; on a lived day "What you did" first and the plan folded under "What
 was planned"; the lift (the body figure lit by the day's regions, the anchor in a strength-ruled
 callout, then every movement as the Program gallery's own `.prog-row` — `exerciseRowHtml` is shared,
-so train depends on day — with the progression's step in sage only when it moves); the run as ONE
+so train depends on calendar — with the progression's step in sage only when it moves); the run as ONE
 bar drawn to scale (warm-up → the work, one block per rep → cool-down, each part a zone fill
 `--ddv-z1..5` mixed from stone hues), its parts as rows and three facts (zone, heart-rate band, pace
 band in the athlete's run units); "Worth watching"; and "Why this day". **What's ahead**
@@ -397,7 +401,10 @@ athlete's run units, never a score), seven real `<button>`s (weekday, date, the 
 in a strength tag, the run as a bar — longer for the long run, hatched for quality — ticked when
 done, today ringed in dawn), "X in place of Y" when today adapted (the strength line itself is the
 Brief's, said once), and a fold (grid rows 0fr → 1fr, `inert` while closed, `aria-expanded` on the
-day) that opens the tapped day inline with "Open in Horizon ›". An open day survives a repaint of
+day) that the tapped day PEEKS into (the day's compact view, then "Open day ›" to its page under
+Today, and Close; Back closes it too). Each day is the day view's CHIP variant over the day's
+glance (`CairnDayDetailModel.glanceOfWeekDay`), the same model Program's week ROW variant reads, so a
+lift and a run are said in the same words on both. An open day survives a repaint of
 Today. The slot node rides the Brief's in-place upgrade ALWAYS, painted or not
 (`carryBriefSlots`), so a week read that lands after the swap paints a live strip; on a reload it
 is held (`CairnTodaySlotHold`, inert) until the strip paints, and a saved first-paint snapshot

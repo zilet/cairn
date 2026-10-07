@@ -128,7 +128,7 @@ function progDayHtml(
     const tile = artImg("exercise", exercise, "artile-md strip-tile", art("exercise", exercise, item.muscle_group));
     return tile ? `<div data-guide="${encodeURIComponent(exercise)}" style="cursor:pointer">${tile}</div>` : "";
   }).join("");
-  // One movement row, shared with the day view (day-detail-client.ts, the "day" bundle
+  // One movement row, shared with the day view (day-detail-client.ts, the "calendar" bundle
   // train depends on), so a lift reads the same in the plan and on its day.
   const rows = items.map((item) => {
     const exercise = String(item.exercise || "");

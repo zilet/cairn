@@ -27,6 +27,8 @@ const MODULES = [
   "race-ladder-client",
   "race-view-client",
   "horizon-model",
+  // The week's run words are the day's glance (the calendar bundle horizon reaches through train).
+  "day-detail-model",
   "horizon-week-model",
   "horizon-terrain-client",
   "horizon-chart-client",

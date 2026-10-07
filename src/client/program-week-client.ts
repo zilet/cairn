@@ -32,39 +32,13 @@
     return `<span class="pahead-mark is-${escAttr(marker.kind.replace(/[^a-z_]/g, ""))}">${escHtml(marker.word)}</span>${note}`;
   }
 
-  function liftHtml(row: Row): string {
-    if (row.line) {
-      // Today's lift: the server's one line, verbatim, its caveat beneath.
-      const line =
-        typeof CairnUiReads !== "undefined" ? CairnUiReads.strengthLineHtml(row.line, { compact: true }) : "";
-      const said = line || `<span class="pahead-lift-t">${escHtml(String(row.line.text || ""))}</span>`;
-      const caveat = String(row.line.caveat || "").trim();
-      const lifts = row.lift?.lifts ? `<span class="pahead-lifts">${escHtml(row.lift.lifts)}</span>` : "";
-      return `<span class="pahead-item is-strength">${said}${caveat ? `<span class="pahead-caveat">${escHtml(caveat)}</span>` : ""}${lifts}</span>`;
-    }
-    if (!row.lift) return "";
-    const tick = row.lift.done ? `<span class="pahead-tick" aria-label="done">✓</span>` : "";
-    const lifts = row.lift.lifts ? `<span class="pahead-lifts">${escHtml(row.lift.lifts)}</span>` : "";
-    return `<span class="pahead-item is-strength"><span class="pahead-lift-t">${escHtml(row.lift.title)}${tick}</span>${lifts}</span>`;
-  }
-
-  function runHtml(row: Row): string {
-    if (!row.run) return "";
-    const tick = row.run.done ? `<span class="pahead-tick" aria-label="done">✓</span>` : "";
-    return `<span class="pahead-item is-endurance"><span class="pahead-run-t">${escHtml(row.run.text)}${tick}</span></span>`;
-  }
-
+  /**
+   * A day of the week: the day view's ROW variant (day-detail-client.ts), over the
+   * day's glance, so its lift and run read as Today's strip and Horizon's week say them.
+   * Today's lift is the server's one strength line, verbatim, its caveat beneath.
+   */
   function rowHtml(row: Row): string {
-    const body = row.rest
-      ? `<span class="pahead-rest">Rest</span>`
-      : `<span class="pahead-what">${liftHtml(row)}${runHtml(row)}</span>`;
-    const hard = row.hard && !row.rest ? `<span class="pahead-hard">A harder day</span>` : "";
-    const cls = `pahead-day${row.today ? " is-today" : ""}${row.rest ? " is-rest" : ""}${row.hard ? " is-hard" : ""}`;
-    return `<li class="${cls}" data-open-day="${escAttr(row.date)}" role="link" tabindex="0"${row.today ? ` aria-current="date"` : ""}>
-      <span class="pahead-when">${escHtml(row.weekday)}<b>${escHtml(row.day)}</b>${row.today ? `<span class="sr-only">, today</span>` : ""}</span>
-      <span class="pahead-main">${body}${hard}</span>
-      <span class="pahead-go" aria-hidden="true">›</span>
-    </li>`;
+    return CairnDayDetailView.rowHtml(row.glance, { line: row.line, lifts: row.lift?.lifts || "", hard: row.hard });
   }
 
   function groupHtml(group: Group): string {

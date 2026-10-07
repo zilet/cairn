@@ -1,11 +1,13 @@
 // @ts-check
 // Today's "What's ahead" strip, the controller: `mount(slot, deps)` paints the strip
 // from GET /api/plan/week (the SWR cache first, then the revalidated read), and opens a
-// tapped day INLINE: the fold under the strip grows open (grid rows 0fr → 1fr) and the
-// shared day detail mounts into it through withBundle("day") — the same view Horizon's
-// week and Train's week ahead open. Tapping the open day again, or Close, folds it.
-// "Open in Horizon" takes the day to its full view under Horizon. A repaint of the week
-// rewrites only the days, the header line and today's line, so an open day stays open.
+// tapped day as a PEEK: the fold under the strip grows open (grid rows 0fr → 1fr) and
+// the drill controller (CairnDrill, the "calendar" bundle) mounts the day's compact view
+// into it, adds ?peek=<date> to history (so the phone's Back closes it) and ends it with
+// one "Open day ›" — the day's page, read under Today. Tapping the open day again, its
+// Close, or Back folds it; a Today painted on an entry whose address names a peek opens
+// that day again. A repaint of the week rewrites only the days, the header line and
+// today's line, so an open day stays open.
 // The header's block clock and run plan arrive from the path read through `setHeader`.
 // Delegated on the slot through CairnUiActions.mount (idempotent per slot); the SLOT
 // node rides the Brief's in-place upgrade (carryBriefSlots), so its listeners and any
@@ -19,15 +21,11 @@
     date: string;
     peek(key: string): { data: unknown; fresh: boolean } | null;
     load(path: string, options: { key: string }): Promise<unknown>;
-    /** Open a day's full view under Horizon (today: Horizon's week). */
-    openInHorizon(date: string): void;
   };
 
   type StripHeader = { block?: string; kmPlanned?: number | null; units?: string };
 
   const WEEK: readonly [string, string] = ["/plan/week", "plan:week"];
-  /** The day open under each Today's strip, for this app session (a repaint remounts the strip). */
-  const OPEN = new Map<string, string>();
   /** Every mounted strip, so a tap on one that is being replaced reaches its successor. */
   const LIVE = new Set<(date: string | null) => void>();
   /**
@@ -47,6 +45,11 @@
   }
 
   /** Set the block clock / the week's run plan on a slot's strip (painted now or on its first paint). */
+  /** The day the address names as peeked (?peek=), the drill's word; null before it loads. */
+  function peekedDay(): string | null {
+    return typeof CairnDrill !== "undefined" ? CairnDrill.peeked() : null;
+  }
+
   function setHeader(slot: Element, header: StripHeader): void {
     HEADER.set(slot, { ...(HEADER.get(slot) || {}), ...header });
     REPAINT.get(slot)?.();
@@ -108,8 +111,9 @@
         lastNow = CairnTodayStrip.nowHtml(week, cells);
         lastTally = CairnTodayStrip.tallyHtml(week, head);
         lastBlock = String(head.block || "");
-        // A day opened before Today repainted stays open across the repaint.
-        const keep = selected || OPEN.get(deps.date) || null;
+        // A day opened before Today repainted stays open across the repaint, and an
+        // entry whose address names a peek (Back from the day's page) opens it again.
+        const keep = selected || peekedDay();
         selected = null;
         if (keep && cells.some((c) => c.date === keep)) openDay(keep);
         return;
@@ -141,7 +145,6 @@
     function closeDay(focusBack = true): void {
       const was = selected;
       selected = null;
-      OPEN.delete(deps.date);
       detailTeardown?.();
       detailTeardown = null;
       const fold = q("[data-tstrip-fold]");
@@ -158,26 +161,40 @@
       const detail = q("[data-tstrip-detail]");
       if (!fold || !detail) return;
       selected = date;
-      OPEN.set(deps.date, date);
       markSelected();
       detailTeardown?.();
       detailTeardown = null;
-      detail.innerHTML = "";
       fold.classList.add("is-open");
       fold.removeAttribute("inert");
       const label = q(`[data-tstrip-day="${date}"]`)?.getAttribute("aria-label") || "The day opened";
       fold.setAttribute("aria-label", label);
-      void withBundle("day", () => {
+      void withBundle("calendar", () => {
         if (!live || selected !== date || !detail.isConnected) return;
-        if (typeof CairnDayDetailController !== "undefined") {
-          detailTeardown = CairnDayDetailController.mount(detail, {
-            date,
-            peek: deps.peek,
-            load: deps.load,
-            inline: true,
-          });
-        }
+        // The drill owns the peek: the compact view, its one "Open day ›", the history entry.
+        detailTeardown = CairnDrill.open("day", date, {
+          mode: "peek",
+          from: "today",
+          host: detail,
+          peek: deps.peek,
+          load: deps.load,
+          onClose: () => {
+            closeDay();
+            tell(null);
+          },
+          onShow: (id) => openDay(id),
+        });
       });
+    }
+
+    /** Fold the open day: through the drill (its history entry goes too) when it holds it. */
+    function foldDay(): void {
+      const detail = q("[data-tstrip-detail]");
+      if (typeof CairnDrill !== "undefined" && CairnDrill.owns(detail)) {
+        CairnDrill.closePeek();
+        return;
+      }
+      closeDay();
+      tell(null);
     }
 
     // Another strip of the same Today (a repaint mid-tap) follows what this one was told.
@@ -200,16 +217,12 @@
         "tstrip-day": (el) => {
           const date = el.getAttribute("data-tstrip-day") || "";
           if (!date) return;
-          if (selected === date) closeDay();
-          else openDay(date);
+          if (selected === date) {
+            foldDay();
+            return;
+          }
+          openDay(date);
           tell(selected);
-        },
-        "tstrip-close": () => {
-          closeDay();
-          tell(null);
-        },
-        "tstrip-horizon": () => {
-          if (selected) deps.openInHorizon(selected);
         },
       });
       return () => {

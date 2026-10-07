@@ -7,7 +7,7 @@
 // renderer with its record. Async paints check the mount is still current and the host
 // still connected. Returns a teardown.
 //
-// LAZY ("day" bundle).
+// LAZY ("calendar" bundle).
 {
   type DayDetail = import("../contracts/day-detail.js").DayDetail;
   type DayDetailMountDeps = {

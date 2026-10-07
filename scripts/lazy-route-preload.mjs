@@ -76,7 +76,7 @@ export function viewBundleIndex(bundles) {
   return (route) => byView.get(`${route.tab}:${route.section}`) ?? byView.get(route.tab) ?? null;
 }
 
-/** Every canonical path the route grammar can name, two segments deep (plus Settings' nested ones). */
+/** Every canonical path the route grammar can name, two segments deep (plus Settings' nested ones and the day page). */
 function canonicalPaths(routes) {
   const defs = routes.routeDefinitions;
   const sections = new Set(Object.values(defs.sections).flat());
@@ -88,6 +88,9 @@ function canonicalPaths(routes) {
     for (const section of sections) out.push([home, section]);
   }
   for (const nested of defs.sections.settings) out.push(["you", "settings", nested]);
+  // The home-free object pages (/app/day/<date>): keyed by their first segment alone,
+  // which is what the inline script falls back to for /app/day/<any date>.
+  out.push(["day"]);
   return out;
 }
 

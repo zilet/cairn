@@ -45,6 +45,10 @@ function load(extra = {}) {
     "format-utils",
     "ui-format",
     "ui-reads",
+    // A day's row is the day view's ROW variant over its glance (the calendar bundle train depends on).
+    "day-detail-model",
+    "day-detail-run-client",
+    "day-detail-client",
     "program-week-model",
     "program-week-client",
     "program-week-controller",

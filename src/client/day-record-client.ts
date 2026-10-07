@@ -1,16 +1,17 @@
 // @ts-check
-// The day view (v2 wave 7, "Today is Home"): any day that is not today, read-only.
+// The day page (v2 wave 7, "Today is Home"; docs/IA.md): any day that is not today,
+// read-only, at its home-free URL /app/day/<date>.
 //
-// Today only ever renders today. Every other day is a destination under the Today
-// home, reached by tapping a day in a week (Train's plan strip, the Train calendar,
-// Horizon's week): a PAST day opens its record (the session, the runs and rides, the
+// Today only ever renders today. Every other day is a page read under the tab that
+// opened it (a week strip's "Open day ›", a Program row, Horizon's week, the Train
+// calendar — all through CairnDrill, drill-controller.ts): a PAST day opens its record (the session, the runs and rides, the
 // food summary, a weigh-in, the read that stood), a FUTURE day its preview (the planned
 // lift and run, and what is already known to shape it). One read, GET /api/day-record,
 // composed on the server (src/domain/today/day-record.ts); nothing here decides what a
 // day was or will be.
 //
-// LAZY (bundle-12-day): the view renders here; opening a day is day-open-client.ts's,
-// which stays eager so any surface can open a day without loading this bundle first.
+// LAZY ("calendar" bundle): the view renders here; opening a day, its back link's
+// target and its name are the drill controller's (CairnDrill).
 type DayRecord = import("../contracts/day-record.js").DayRecord;
 type DayRecordDetail = import("../contracts/day-detail.js").DayDetail;
 
@@ -239,10 +240,8 @@ type DayRecordDetail = import("../contracts/day-detail.js").DayDetail;
     root.querySelector<HTMLElement>("[data-day-back]")?.addEventListener("click", () => {
       // Opened from inside the app: step back through history, so Back and this link
       // agree and no loop of entries builds up. A cold deep link has nowhere to go
-      // back to: it lands on the home the day is read under (its route says which).
-      const back = CairnDayOpen.takeOrigin();
-      if (back && typeof history !== "undefined" && history.length > 1) history.back();
-      else activateTab(state.dayHome || "today");
+      // back to: it lands on the opener tab's root (drill-controller.ts).
+      CairnDrill.back();
     });
     const log = root.querySelector<HTMLElement>("[data-day-log]");
     log?.addEventListener("click", () => {
@@ -258,7 +257,7 @@ type DayRecordDetail = import("../contracts/day-detail.js").DayDetail;
 
   async function renderDay(): Promise<void> {
     const date = String(state.dayDate || "");
-    const backLabel = CairnDayOpen.origin()?.label || CairnDayOpen.homeLabel(state.dayHome || "today");
+    const backLabel = CairnDrill.fromLabel();
     if (!ISO.test(date) || date === localISO()) {
       activateTab("today", { replace: true });
       return;

@@ -97,7 +97,7 @@ test("every lazy bundle maps to its own precached url", () => {
     horizon: "/js/bundle-09-horizon.js",
     ask: "/js/bundle-10-ask.js",
     settings: "/js/bundle-11-settings.js",
-    day: "/js/bundle-12-day.js",
+    calendar: "/js/bundle-12-calendar.js",
     meals: "/js/bundle-13-meals.js",
     "today-ahead": "/js/bundle-14-today-ahead.js",
   });
@@ -110,11 +110,11 @@ test("a bundle resolves only once its dependencies have executed too", async () 
   const pending = env.context.ensureBundle("me-health").then(() => {
     done = true;
   });
-  // …and train draws its movement rows with the day view's shared row (day).
+  // …and train draws its movement rows with the day view's shared row (calendar).
   assert.deepEqual(env.scripts.map((s) => s.src).sort(), [
     "/js/bundle-05-me-health.js",
     "/js/bundle-08-train.js",
-    "/js/bundle-12-day.js",
+    "/js/bundle-12-calendar.js",
   ]);
   byName(env.scripts, "me-health").fire("load");
   await new Promise((r) => setTimeout(r, 0));
@@ -123,7 +123,7 @@ test("a bundle resolves only once its dependencies have executed too", async () 
   byName(env.scripts, "train").fire("load");
   await new Promise((r) => setTimeout(r, 0));
   assert.equal(done, false, "train's own dependency is still loading");
-  byName(env.scripts, "day").fire("load");
+  byName(env.scripts, "calendar").fire("load");
   await pending;
   assert.equal(env.context.bundleLoaded("me-health"), true);
   assert.equal(env.context.bundleLoaded("train"), true);
@@ -308,8 +308,9 @@ test("the idle warm-up executes every lazy bundle one at a time, once", async ()
     }
     await new Promise((r) => setImmediate(r));
   }
-  // Train brings the day bundle it depends on with it (its dependency's tag goes in first).
-  assert.deepEqual(order, ["today-ahead", "day", "train", "ask", "horizon", "me-health", "meals", "settings"]);
+  // Today's lower half brings the calendar it depends on with it (the dependency's tag
+  // goes in first); train then finds it already there.
+  assert.deepEqual(order, ["calendar", "today-ahead", "train", "ask", "horizon", "me-health", "meals", "settings"]);
   assert.equal(env.scripts.length, 8, "one tag per bundle");
 });
 

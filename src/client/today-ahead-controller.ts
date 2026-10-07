@@ -74,21 +74,13 @@
     });
 
     // "What's ahead": the week's seven days under the Brief's state line, a tapped day
-    // opening inline (today-strip-controller.ts). "Open in Horizon" reads another day
-    // under Horizon; today is Today's own, so in Horizon it is a row of the week.
+    // peeking open under it (today-strip-controller.ts) with one "Open day ›" to its page.
     const strip = root.querySelector("#todayStripSlot");
     if (strip) {
       CairnTodayStripController.mount(strip, {
         date: deps.date,
         peek: deps.peek,
         load: deps.load,
-        openInHorizon: (date) => {
-          if (date !== deps.date) return CairnDayOpen.openDay(date, { home: "horizon" });
-          void withBundle("horizon", () => {
-            if (typeof CairnHorizonController !== "undefined") CairnHorizonController.pickView("week");
-          });
-          activateTab("horizon");
-        },
       });
     }
 

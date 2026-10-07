@@ -36,30 +36,30 @@
    * session. The week's spoken line is the server's. Null when the read failed; a read
    * with no days is an empty week (the view says so in one line).
    */
-  const RUN_KIND_WORD: Readonly<Record<string, string>> = {
-    easy: "Easy run",
-    quality: "Quality run",
-    long: "Long run",
-  };
-
   /**
-   * One plan-week day's run in words, in the athlete's run units: "Long run · 8.4 mi".
-   * A run done or behind is named by its kind ("Easy run"): the agenda's label can be a
-   * morning's read ("Rest or an easy walk") that no longer describes it. A run today or
-   * ahead keeps the server's label, the words the day read and the week line say for
-   * that same run, so the row never contradicts the morning. "" with no run. Exported for
-   * any read-only preview of a day (Today's future-day previews print the same words).
+   * One plan-week day's run in words, in the athlete's run units: "Long run · 8.4 mi" —
+   * the day's GLANCE words (CairnDayDetailModel.glance, the "calendar" bundle horizon
+   * reaches through train), so Horizon's week, Today's strip and Program's week say one
+   * run the same way. A run done or behind is named by its kind ("Easy run"); a run today
+   * or ahead keeps the server's label. "" with no run.
    */
   function dayRunText(value: unknown, today: string, units?: unknown): string {
     const day = record(value) as PlanWeekDay | null;
     const run = day?.run;
     if (!run) return "";
     const date = dayKey(day?.date);
-    const past = !!date && !!today && date < today;
-    const settled = run.status === "completed" || past;
-    const label = (settled ? RUN_KIND_WORD[String(run.kind)] : "") || text(run.label) || "Run";
     const km = num(run.km);
-    return km != null && km > 0 ? `${label} · ${CairnRaceViewModel.kmText(km, units)}` : label;
+    return (
+      CairnDayDetailModel.glance({
+        date,
+        // A day with no date (a week in plan order) is never behind.
+        today: date ? today : "",
+        isToday: false,
+        lift: null,
+        run: { label: text(run.label), kind: text(run.kind), km: km != null && km > 0 ? km : null, done: run.status === "completed" },
+        units: units ?? "km",
+      }).run?.words || ""
+    );
   }
 
   function weekView(value: unknown, today: string, units?: unknown): ClientHorizonWeek | null {

@@ -91,6 +91,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/day-detail-client.ts", output: "public/js/day-detail-client.js" },
   { source: "src/client/day-detail-controller.ts", output: "public/js/day-detail-controller.js" },
   { source: "src/client/day-record-client.ts", output: "public/js/day-record-client.js" },
+  { source: "src/client/drill-controller.ts", output: "public/js/drill-controller.js" },
   { source: "src/client/today-rail-controller.ts", output: "public/js/today-rail-controller.js" },
   { source: "src/client/today-plan-selection-client.ts", output: "public/js/today-plan-selection-client.js" },
   { source: "src/client/today-training-client.ts", output: "public/js/today-training-client.js" },
@@ -556,8 +557,8 @@ export const BUNDLES = [
       "public/js/today-screen-runtime-deps.js",
       "public/js/today-screen-runtime.js",
       "public/js/session-snapshot-client.js",
-      // Today is Home (v2 wave 7): opening any other day. EAGER and tiny: a day is
-      // opened from Train and Horizon too; the view itself is the lazy "day" bundle.
+      // Today is Home (v2 wave 7): the one delegated `data-open-day` opener. EAGER and
+      // tiny; the page, the drill controller and the views are the lazy "calendar" bundle.
       "public/js/day-open-client.js",
       // Train's energy read (and the hero it paints with) stays EAGER: Fuel paints
       // it (#energyCard) and it owns the nutrition_checkin job reconnector, which
@@ -886,14 +887,15 @@ export const BUNDLES = [
     ],
   },
   {
-    output: "public/js/bundle-12-day.js",
-    label: "A day (record or preview, and the shared day detail)",
-    // LAZY: any day that is not today, read-only (v2 wave 7, "Today is Home"). The
-    // opener (day-open-client, eager in bundle-02) injects this on the first open.
-    // It also carries the ONE day-detail view: Today's "What's ahead" strip opens a
-    // day inline through withBundle("day"), and Train's Program gallery draws its
-    // movement rows with the shared row (train depends on day).
-    lazy: "day",
+    output: "public/js/bundle-12-calendar.js",
+    label: "The calendar (a day's page, peek and views; the drill controller)",
+    // LAZY: any day that is not today, read-only (v2 wave 7, "Today is Home"), at its
+    // home-free page /app/day/<date>. The opener (day-open-client, eager in bundle-02)
+    // injects this on the first open. It carries the ONE day view family (chip, row,
+    // compact, full) and the ONE drill controller (CairnDrill): Today's "What's ahead"
+    // strip draws its chips and peeks a day (today-ahead depends on calendar), and
+    // Train's Program draws its movement rows and week rows (train depends on calendar).
+    lazy: "calendar",
     views: ["day"],
     inputs: [
       "public/js/day-detail-model.js",
@@ -901,6 +903,7 @@ export const BUNDLES = [
       "public/js/day-detail-client.js",
       "public/js/day-detail-controller.js",
       "public/js/day-record-client.js",
+      "public/js/drill-controller.js",
     ],
   },
   {

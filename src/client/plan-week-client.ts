@@ -294,7 +294,7 @@ type PlanWeekRole = import("../contracts/client.js").ClientPlanWeekRole;
       // the day itself (its record, or its preview); today's cell stays put.
       if (!isMobilePweekLayout()) {
         const date = btn.getAttribute("data-pweek-date");
-        if (date && typeof openDay === "function") openDay(date);
+        if (date && typeof CairnDrill !== "undefined") CairnDrill.open("day", date, { mode: "page" });
         return;
       }
       const index = Number(btn.getAttribute("data-pweek-i"));

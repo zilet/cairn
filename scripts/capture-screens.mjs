@@ -113,8 +113,8 @@ const ROUTES = [
     prepare: `(() => { document.querySelector('[data-horizon-seg="season"]')?.click(); return true; })()`,
   },
   // A day opened from Horizon's week: two days ahead (a preview) and two days back (a record).
-  { name: "horizon-day-next", path: () => `/app/horizon/day?date=${localDay(2)}`, tab: "day" },
-  { name: "horizon-day-past", path: () => `/app/horizon/day?date=${localDay(-2)}`, tab: "day" },
+  { name: "horizon-day-next", path: () => `/app/day/${localDay(2)}`, tab: "day" },
+  { name: "horizon-day-past", path: () => `/app/day/${localDay(-2)}`, tab: "day" },
   { name: "horizon-race", path: "/app/horizon/race", tab: "plan" },
   { name: "horizon-goal", path: "/app/horizon/goal", tab: "horizon" },
   { name: "you", path: "/app/you", tab: "you" },

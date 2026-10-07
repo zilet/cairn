@@ -60,6 +60,7 @@ type RouteSyncMode = "push" | "replace";
   function routeSyncApply(route: RouteSyncRoute | null | undefined): ClientTabName {
     return window.CairnAppRouter.applyRouteState(route, {
       state,
+      historyState: typeof history !== "undefined" ? history.state : null,
       routeApi: routeSyncApi(),
       planSections: routeSyncPlanSections(),
       progressSections: PROGRESS_SEG,
@@ -93,6 +94,8 @@ type RouteSyncMode = "push" | "replace";
       route: routeSyncCurrent(),
       location,
       history,
+      // A day page remembers its opener in its own entry (drill-controller.ts).
+      historyState: state.tab === "day" ? { from: state.drillFrom || null, drill: state.drillBack ? 1 : 0 } : null,
     });
   }
 
