@@ -7,9 +7,12 @@ is set, owner routes require the token (`Authorization: Bearer …`, `X-Cairn-To
 `?token=…` on the documented GET-only allowlist). `GET /api/health` remains public. Apple
 Health's short-lived pairing exchange is public and passes through the instance-wide pre-auth limiter
 when that limiter is enabled; its resulting credential is scoped only to `POST /api/health-metrics`.
+The OAuth 2.1 doors an AI app signs in through for `/mcp` (`/.well-known/oauth-*`,
+`/oauth/register`, `/oauth/authorize`, `/oauth/token`) live outside `/api`; see
+[OPERATIONS.md](OPERATIONS.md) "Connect an AI app (MCP)".
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**374 routes** across 130 groups.
+**400 routes** across 134 groups.
 
 ## `/activities`
 
@@ -58,6 +61,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | GET | `/api/agents` |  |
 | GET | `/api/agents/:name/info` | Per-agent read-only visibility (subprocess probes — fetched lazily, not on every Settings open). Both return ok:false at HTTP 200, mirroring the rest of Cairn's designed failure signals. |
 | GET | `/api/agents/:name/models` |  |
+| POST | `/api/agents/:name/verify` | "Say hello": one tiny round-trip through the real spawn path for THIS agent only, no rotation. Always 200 — {ok:true, agent, ms} or {ok:false, agent, reason, message} with reason busy \| not_signed_in \| timeout \| failed \| not_installed (busy = retry, never a verdict). Success refreshes the cached login verdict (src/coachOps/welcome.ts). |
 
 ## `/apple-health`
 
@@ -80,6 +84,32 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | GET | `/api/art/stats` | Artwork spend telemetry: estimated Gemini cost since art was last enabled, all-time totals, generations avoided via semantic reuse, and cache size. Also returns `health`: when art last rendered, failures in the last 7 days, the last upstream error code, and whether the circuit breaker has paused generation. |
 | GET | `/api/art/versions` | Current exercise art versions, keyed like the PWA token (`exercise\|Name`). Optional `?q=a,b,c` (≤200 names, each ≤120 chars) returns only those; with no `q`, the most recently used 500 rows. Fetched once at boot and kept in memory. |
 | POST | `/api/art/warm` | Warm the art cache: enqueue generation for everything the PWA will ask for. Safe no-op when generation is unavailable. Exercises go through the context-aware producer, never a name-only prompt. |
+
+## `/auth`
+
+| Method | Path | Notes |
+|---|---|---|
+| DELETE | `/api/auth/calendar-link` | Retire the calendar link: every subscribed calendar stops updating. |
+| POST | `/api/auth/calendar-link` | Signed in → `{url}`: the calendar subscription link (`/api/plan.ics?feed=…`). The same link every time until it is reset, so subscribing on a second device never cuts off the first calendar. |
+| GET | `/api/auth/devices` | Every signed-in browser (this one marked `current`), newest activity first. Each other device carries `revoke_removes_passkeys` — the passkeys signing it out also removes — and `revoke_disconnects_apps` — the AI apps it connected, which signing it out from here disconnects; the list carries `revoke_others_removes_passkeys` and `revoke_others_disconnects_apps` for "Sign out other devices", so both confirm sheets name them before anything is removed. Signing THIS device out removes neither ([]). |
+| DELETE | `/api/auth/devices/:id` | Sign a device out. Another device loses every passkey it could still hold (bound to it, added by it, or last used by it) and every AI app it connected; this one keeps both and is signed out. |
+| PATCH | `/api/auth/devices/:id` | Rename a device ({name}, at most 60 characters). |
+| POST | `/api/auth/devices/revoke-others` | Sign out every device but the one asking, remove every passkey not bound to it (unbound ones too) or that another device added or last used, and disconnect every AI app one of those devices connected. |
+| POST | `/api/auth/logout` | Unauthenticated door (src/auth.ts SIGN_IN_DOORS): ends only the session this request carries. A cookie-carrying logout must come from this origin, like any cookie write. |
+| GET | `/api/auth/mcp-clients` | Every live connection, most recently used first. Never a key. |
+| POST | `/api/auth/mcp-clients` | {name} → a new per-app key, shown this once. A key made from a signed-in device remembers it: revoking that device from another one disconnects the key too. |
+| DELETE | `/api/auth/mcp-clients/:id` | Revoke one connection: a key stops working at once; an OAuth app loses its tokens. |
+| POST | `/api/auth/pair` | Unauthenticated door, failure-limited: a live pairing code → a new device session cookie. A browser that is already signed in keeps its session and leaves the code unspent. |
+| POST | `/api/auth/pairing-codes` | Signed in (master or session) → {code:"XXXX-XXXX", expires_at}: single use, ten minutes. |
+| GET | `/api/auth/passkeys` | Registered passkeys: names and dates only, never key material. |
+| DELETE | `/api/auth/passkeys/:id` | Remove a passkey; it can no longer sign anything in. |
+| POST | `/api/auth/passkeys/login/options` | Unauthenticated door. Discoverable credentials: no allow-list, so this reveals nothing about which passkeys exist. |
+| POST | `/api/auth/passkeys/login/verify` | Unauthenticated door: a verified assertion signs this browser in as a new device. |
+| POST | `/api/auth/passkeys/register/options` | Signed in → WebAuthn creation options (discoverable credential, 5-minute single-use challenge). |
+| POST | `/api/auth/passkeys/register/verify` | Verify the attestation and store the passkey, bound to the device that asked. |
+| POST | `/api/auth/resource-link` | Signed in → `{url}`: the same path with a `?sig=` that opens it for two minutes (thirty seconds after first use), and only it. For a report in a new tab, a file, a download — an installed iOS app opens those in Safari, which never carries this app's cookie. |
+| POST | `/api/auth/session` | Bearer master token → this browser's device session cookie. A browser that already carries a live session gets THAT session back (no new row): a page load that raced two exchanges, or a sign-in screen opened over a session that was fine, never piles up a second "Chrome on Mac". A session alone never mints a new one. |
+| GET | `/api/auth/status` | How this request was let in (master / session / open) and, for a session, its device. |
 
 ## `/beliefs`
 
@@ -318,6 +348,13 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | POST | `/api/family` |  |
 | DELETE | `/api/family/:id` |  |
 | PUT | `/api/family/:id` |  |
+
+## `/feedback`
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/api/feedback` | Forward feedback to the configured service, or hand back a prefilled GitHub issue URL the browser opens instead (nothing leaves the instance without a service). |
+| GET | `/api/feedback/preview` | The anonymous diagnostics snapshot "Include anonymous diagnostics" would attach — exactly what the feedback sheet previews — and where a message would go. |
 
 ## `/food-notes`
 
@@ -603,7 +640,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 |---|---|---|
 | GET | `/api/plan` | Each day carries the same grounded purpose line the /today aggregate and the week-ahead cards read (repo/day-read.ts getPlanWithPurpose) — one source, so the sentence is stable across whichever endpoint fills the client's cache. |
 | PUT | `/api/plan` |  |
-| GET | `/api/plan.ics` | Subscribe-able iCal of the training template — pull-not-push. Each plan day is a weekly-recurring all-day event (Day 1 → Monday by default; ?start=0..6 to shift, JS weekday where 0=Sun). Subscribe in Apple/Google Calendar via   webcal://<host>/api/plan.ics   (append ?token=… when CAIRN_AUTH_TOKEN is set, since a calendar client can't send a custom header). Registered before /plan/:day; the literal ".ics" path never matches the :day param. |
+| GET | `/api/plan.ics` | Subscribe-able iCal of the training template — pull-not-push. Each plan day is a weekly-recurring all-day event (Day 1 → Monday by default; ?start=0..6 to shift, JS weekday where 0=Sun). Subscribe in Apple/Google Calendar via   webcal://<host>/api/plan.ics   (with CAIRN_AUTH_TOKEN set, the PWA's Subscribe link carries the calendar feed token, ?feed=… from POST /api/auth/calendar-link, since a calendar client has no cookie and can't send a header; ?token= still works). Registered before /plan/:day; the literal ".ics" path never matches the :day param. |
 | DELETE | `/api/plan/:day` |  |
 | GET | `/api/plan/:day` |  |
 | PUT | `/api/plan/:day` |  |
@@ -968,6 +1005,12 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 |---|---|---|
 | GET | `/api/trajectory` |  |
 
+## `/update`
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/api/update/apply` | Start this host's update method (src/hosting.ts): POST the platform's deploy hook, or write the trigger file the installer's updater watches. A host that updates itself (Railway) or only by hand answers 409 with the sentence explaining how; a hook the host refused or never answered is a 502. The hook URL never leaves the server. |
+
 ## `/update-check`
 
 | Method | Path | Notes |
@@ -1015,6 +1058,12 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/week-wins` | The week's motivational rollup (new bests, days trained, hard sets, filled volume, weight-trend pace) ending at ?date= (default today). Evidence of forward motion, in plain words — never a 0-100 score. |
+
+## `/welcome`
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/api/welcome` | The coach's first conversation: the person's own words → understood, a first week and a starting food target put in place, the exchange saved to Ask. Agentic, so it always queues a durable `welcome` job ({ok:true, job}); the job's result is the reveal ({ok, reply, week, week_state, fuel, fuel_state, applied, agent, tried}) or the designed {ok:false, error, tried} when no agent answered (src/coachOps/welcome.ts). |
 
 ## `/what-if`
 

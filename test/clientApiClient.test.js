@@ -1920,3 +1920,53 @@ test("an early response whose body never arrives times out too", async () => {
   loaded.timers[0].fn();
   await assert.rejects(pending, (err) => err.kind === "timeout");
 });
+
+test("openResourceLink opens the tab inside the tap, then points it at a minted ?sig= link", async () => {
+  const { context, calls } = loadApiClient();
+  const opened = [];
+  const downloads = [];
+  context.window.open = (url, target) => {
+    const tab = {
+      url,
+      target,
+      opener: {},
+      location: {
+        replaced: "",
+        replace(u) {
+          this.replaced = u;
+        },
+      },
+    };
+    opened.push(tab);
+    return tab;
+  };
+  context.downloadFile = (href) => downloads.push(href);
+  context.fetch = async (url, init) => {
+    calls.push({ url, init });
+    const { path } = JSON.parse(init.body);
+    return { status: 200, json: async () => ({ ok: true, url: `${path}${path.includes("?") ? "&" : "?"}sig=S` }) };
+  };
+
+  context.location.href = "https://cairn.example/app/you/share";
+  context.URL = URL;
+  const pending = context.openResourceLink("/api/health-report?name=A");
+  assert.equal(opened.length, 1, "the tab opened synchronously, before any await (popup blockers)");
+  assert.equal(opened[0].url, "");
+  await pending;
+  const mint = calls.find((c) => c.url === "/api/auth/resource-link");
+  assert.equal(mint.init.method, "POST");
+  assert.deepEqual(JSON.parse(mint.init.body), { path: "/api/health-report?name=A" });
+  assert.equal(opened[0].location.replaced, "https://cairn.example/api/health-report?name=A&sig=S", "absolute");
+  assert.equal(opened[0].opener, null, "the opened page cannot reach back");
+
+  await context.openResourceLink("/api/export", "download");
+  assert.equal(opened.length, 1, "a download opens no tab");
+  assert.deepEqual(downloads, ["/api/export?sig=S"]);
+
+  // Cairn unreachable: the plain path still opens (a same-jar browser's cookie carries it).
+  context.fetch = async () => {
+    throw new TypeError("offline");
+  };
+  await context.openResourceLink("/api/export/db", "download");
+  assert.deepEqual(downloads, ["/api/export?sig=S", "/api/export/db"]);
+});

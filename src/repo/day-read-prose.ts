@@ -484,6 +484,25 @@ export const UNPROGRAMMED_WHY: readonly string[] = [
   "The plan's open today — anything easy counts.",
   "No session waiting on you today; easy movement is the whole ask.",
 ];
+// Day one (STARTING_OUT_DAY): the install has no week and no history. Every phrasing
+// carries the one idea the read exists for — the person is at the START, so the open day
+// is a beginning, never a rest prescribed by thin evidence.
+export const STARTING_OUT_WHY: readonly string[] = [
+  "Once your first week is in place, today's read will follow it. Until then, move however feels good.",
+  "Nothing's planned yet because you're just starting out. Tell your coach what you're training for and the first week takes shape from there.",
+  "This is the start: no plan yet and nothing to recover from. Any movement you feel like today is a fine first step.",
+  "You're at the beginning, so today is open. Your first week comes from a short conversation with your coach.",
+];
+// Day one's headline. The read's kind stays `easy` (the safety ladder knows rest < easy <
+// train and nothing else), so this is a FLAVOUR keyed off `signals.starting_out`, exactly
+// as the push and drive headlines are flavours of `train`.
+const STARTING_OUT_HEADLINE: readonly string[] = [
+  "Day one.",
+  "A fresh start today.",
+  "You're just getting started.",
+  "Starting out today.",
+];
+export const DAY_READ_STARTING_OUT_HEADLINE_VARIANTS: readonly string[] = STARTING_OUT_HEADLINE;
 export const TRAIN_CLEAR_WHY: readonly string[] = [
   "You're recovered and due — good to go.",
   "You're due and everything reads clear. Go get it.",
@@ -1056,6 +1075,8 @@ export function dayReadHeadline(
         ? pickDayVariant(TRAIN_PUSH_FOCUS_HEADLINE, date, "headline:train_focus_push")(focus)
         : pickDayVariant(TRAIN_FOCUS_HEADLINE, date, "headline:train_focus")(focus);
   }
+  if (kind === "easy" && read?.signals?.starting_out === true)
+    return pickDayVariant(STARTING_OUT_HEADLINE, date, "headline:starting_out");
   if (drive) return pickDayVariant(TRAIN_DRIVE_HEADLINE, date, "headline:train_drive");
   if (push) return pickDayVariant(TRAIN_PUSH_HEADLINE, date, "headline:train_push");
   const variants = DAY_READ_HEADLINE_VARIANTS[kind] ?? DAY_READ_HEADLINE_VARIANTS.train;
@@ -1219,6 +1240,7 @@ export const DAY_READ_WHY_VARIANTS: Readonly<Record<string, readonly string[]>> 
   // and the lift is still open (day-read.ts, `liftOpenEasy`).
   lift_open_after_activity: LIFT_OPEN_AFTER_ACTIVITY_EASY_WHY.map((render) => render("run")),
   unprogrammed_easy_day: UNPROGRAMMED_WHY,
+  starting_out_day: STARTING_OUT_WHY,
   planned_training: TRAIN_CLEAR_WHY,
   // The backed train day. It keeps the `planned_training` LEDGER code — the decision
   // is the same one, and a second code would split the adherence history of the most
@@ -1314,6 +1336,9 @@ export const DAY_READ_REQUIRED_CONCEPT: Readonly<Record<string, RegExp>> = {
   // A push read that forgets to offer the reach is just a clear day with extra words.
   planned_training_push: /\b(?:more|reach(?:ing)?|push(?:ing)?)\b/i,
   unprogrammed_easy_day: /\b(?:nothing|no session|open)\b/i,
+  // Day one's whole point is that the person is at the START — a phrasing that drops it
+  // is the unprogrammed floor again, which reads as a rest day to someone brand new.
+  starting_out_day: /\b(?:start|starting|started|beginning|first)\b/i,
   quiet_streak: /\bquiet days?\b/i,
   quiet_streak_guarded: /\bquiet days?\b/i,
   // Each signal voice declares its own required idea in signal-state.ts, beside the

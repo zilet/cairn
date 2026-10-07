@@ -39,7 +39,7 @@ function phoneAccessCardHtml(options: SettingsPhoneAccessCardOptions = {}): stri
             <span id="phoneTokenOut" class="phone-token"></span>
           </div>
           <div class="small-note">
-            On a private tailnet a token is optional; set one if others share your tailnet, or if Cairn is reachable beyond it (then set <b>CAIRN_REQUIRE_AUTH=1</b> too). iOS needs the HTTPS URL for a full offline app. Details in <b>docs/DEPLOYMENT.md</b> and <b>SECURITY.md</b>.
+            On a private tailnet a token is optional; set one if others share your tailnet, or if Cairn is reachable beyond it (then set <b>CAIRN_REQUIRE_AUTH=1</b> too). iOS needs the HTTPS URL for a full offline app; Home Screen apps sign in on their own with a passkey or a pairing code. Details in <b>docs/DEPLOYMENT.md</b> and <b>SECURITY.md</b>.
           </div>
         </div>
       </details>`;
@@ -101,7 +101,7 @@ function wirePhoneAccessCard(options: SettingsPhoneAccessWireOptions = {}): void
     apiFn("/health").then((h) => {
       if (h && typeof h === "object" && (h as Record<string, unknown>).auth_required) {
         phoneTokenRow.innerHTML =
-          `<div class="sess-line phone-token-set">✓ A shared token is already set — your phone will be asked for it once.</div>`;
+          `<div class="sess-line phone-token-set">✓ Sign-in is on. Sign your phone in with a pairing code from Settings → Devices — the token never needs to go on the phone.</div>`;
       }
     }).catch(() => {});
   }

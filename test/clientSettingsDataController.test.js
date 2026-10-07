@@ -43,6 +43,8 @@ test("settings data controller owns update, export, and setup wiring", async () 
     updateCardHtml: (status) => `card:${status?.latest || "none"}:${wm.update_check_enabled}`,
     withToken: (path) => `${path}?token=t`,
     downloadFile: (path) => downloads.push(path),
+    // A download leaves the app, so it rides a signed link (api-core openResourceLink).
+    openResourceLink: async (path, mode) => downloads.push(`${mode}:${path}`),
     reload: () => { reloaded = true; },
   });
 
@@ -69,9 +71,49 @@ test("settings data controller owns update, export, and setup wiring", async () 
 
   await rootEl.querySelector("#dlJson").click();
   await rootEl.querySelector("#dlDb").click();
-  assert.deepEqual(downloads, ["/api/export?token=t", "/api/export/db?token=t"]);
+  assert.deepEqual(downloads, ["download:/api/export", "download:/api/export/db"]);
 
   await rootEl.querySelector("#rerunSetup").click();
   assert.deepEqual(apiCalls.at(-1), ["/settings", "PUT", JSON.stringify({ onboarded: false })]);
   assert.equal(reloaded, true);
+});
+
+test("Devices is its own Settings slice: Data no longer carries the pairing card", async () => {
+  const wired = [];
+  const win = loadClientModule("settings-data-controller", {
+    globals: {
+      CairnSettingsData: {
+        phoneAccessCardHtml: () => "",
+        wirePhoneAccessCard: () => {},
+        wireExerciseGuideCard: () => {},
+      },
+      CairnSettingsPairing: {
+        devicesSliceHtml: () => '<section id="devicesSlice"><div id="accessCard" hidden></div></section>',
+        accessCardHtml: () => '<div id="accessCard" hidden></div>',
+        wireAccessCard: (deps) => wired.push([deps.root, deps.origin, typeof deps.api]),
+      },
+    },
+  });
+  const controller = win.CairnSettingsDataController;
+  const base = {
+    workingModel: { update_check_enabled: false },
+    api: async () => ({}),
+    toast: () => {},
+    markDirty: () => {},
+    updateCardHtml: () => "",
+    withToken: (p) => p,
+    downloadFile: () => {},
+    reload: () => {},
+    origin: "https://cairn.example",
+  };
+
+  const data = createHost(win.document, { id: "data" });
+  controller.render({ ...base, root: data });
+  assert.equal(data.querySelector("#accessCard"), null, "Data is exports and updates only");
+  assert.equal(wired.length, 0);
+
+  const devices = createHost(win.document, { id: "devices" });
+  controller.renderDevices({ ...base, root: devices });
+  assert.ok(devices.querySelector("#devicesSlice"));
+  assert.deepEqual(wired, [[devices, "https://cairn.example", "function"]]);
 });

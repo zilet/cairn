@@ -15,7 +15,7 @@
 
 import { addEvidence, getEvidence, isPlausibleSourceUrl, normTopic } from "./repo/evidence.js";
 import { prioritizeMarkers } from "./repo/propagation.js";
-import { getAgentConfig, getSettings } from "./repo/settings.js";
+import { executionProfileForTask, getAgentConfig, getSettings } from "./repo/settings.js";
 import { RESEARCH_SCHEMA } from "./agent-contracts.js";
 import { runChosen } from "./runChosen.js";
 import { buildResearchPrompt } from "./prompt.js";
@@ -29,13 +29,14 @@ export interface ResearchResult {
   summary?: string;
   evidence: any[];          // the cached evidence_cache rows produced this run
   cached?: boolean;         // true when results came from the cache (no agent call)
+  depth?: ResearchDepth;    // the pass that produced `evidence` (absent on a cache hit)
   agent?: string;
   tried?: { agent: string; error: string }[];
   error?: string;
 }
 
-// Research is OFF by default. When off, this is a pure no-op: no network, no agent,
-// the exact deterministic behavior the system has today.
+// Research is ON by default — a trustworthy team grounds what it says. When the
+// athlete turns it off, this is a pure no-op: no network, no agent, deterministic.
 export function researchEnabled(): boolean {
   try {
     return !!getSettings().research_enabled;
@@ -43,6 +44,16 @@ export function researchEnabled(): boolean {
     return false;
   }
 }
+
+// How hard one research call digs. "fast" is the everyday pass; "deep" is the
+// deeper model at high effort. "auto" (the default) runs fast and escalates ONCE to
+// deep when no claim survives the firewall — a thin answer earns a second, harder
+// look rather than an empty "see the evidence".
+export type ResearchDepth = "fast" | "deep";
+
+// A background leash per depth — research is never on the interactive path, and a
+// high-effort pass that browses several sources needs room to finish.
+const RESEARCH_TIMEOUT_MS: Record<ResearchDepth, number> = { fast: 300000, deep: 600000 };
 
 export interface ResearchAutoEligibility {
   eligible: boolean;       // a usable, web-capable agent is connected — safe to suggest enabling
@@ -148,6 +159,8 @@ function validateSources(raw: any, claim: any): ValidatedResearchSource[] {
  * - Cache-first: if recent evidence exists for this topic and `force` is not set,
  *   it's returned without an agent call (cheap + deterministic).
  * - Sourceless / bad-URL claims are DISCARDED (the hallucination firewall).
+ * - Depth: "auto" (default) runs fast and escalates once to deep on an empty pass;
+ *   "deep" goes straight to the deeper model (a flagged lab finding).
  * - Returns ok:false (never throws) when research is disabled or the agent fails.
  *
  * @param question  the health question to ground
@@ -156,7 +169,7 @@ function validateSources(raw: any, claim: any): ValidatedResearchSource[] {
 export async function researchEvidence(
   question: string,
   markers: string[] = [],
-  opts: { agent?: string; force?: boolean; timeoutMs?: number } = {}
+  opts: { agent?: string; force?: boolean; timeoutMs?: number; depth?: ResearchDepth | "auto" } = {}
 ): Promise<ResearchResult> {
   const topic = normTopic(question);
   if (!topic) return { ok: false, enabled: researchEnabled(), topic, evidence: [], error: "empty question" };
@@ -176,23 +189,45 @@ export async function researchEvidence(
   }
 
   const prompt = buildResearchPrompt(question, markers);
-  // Background timeout band (research is never on the interactive path).
-  const timeoutMs = Number.isFinite(opts.timeoutMs as number) ? (opts.timeoutMs as number) : 300000;
+  const want = opts.depth ?? "auto";
+  const first = await researchPass(topic, prompt, want === "deep" ? "deep" : "fast", opts);
+  if (first.ok || want !== "auto") return first;
+  // Auto escalation: the fast pass came back empty-handed (agent failure or no
+  // claim survived validation) — dig once more on the deep model before giving up.
+  const second = await researchPass(topic, prompt, "deep", opts);
+  return { ...second, tried: [...(first.tried ?? []), ...(second.tried ?? [])] };
+}
+
+// One agent pass at one depth, through the firewall into evidence_cache.
+async function researchPass(
+  topic: string,
+  prompt: string,
+  depth: ResearchDepth,
+  opts: { agent?: string; timeoutMs?: number }
+): Promise<ResearchResult> {
+  const timeoutMs = Number.isFinite(opts.timeoutMs as number) ? (opts.timeoutMs as number) : RESEARCH_TIMEOUT_MS[depth];
   let chosen = "";
   let tried: { agent: string; error: string }[] = [];
   let parsed: any = null;
   try {
     // The ONE op that wants the CLI's own tools: cited claims need live web search.
-    const r = await runChosen(opts.agent, prompt, { op: "research", timeoutMs, schema: RESEARCH_SCHEMA, tools: "provider" });
+    // The op stays "research" (web-capable-first order); only the depth changes.
+    const r = await runChosen(opts.agent, prompt, {
+      op: "research",
+      timeoutMs,
+      schema: RESEARCH_SCHEMA,
+      tools: "provider",
+      ...(depth === "deep" ? { profile: executionProfileForTask("research_deep") } : {}),
+    });
     chosen = r.agent;
     tried = r.tried;
     parsed = r.result.parsed;
   } catch (e: any) {
-    return { ok: false, enabled: true, topic, evidence: [], agent: chosen, tried, error: e?.message || "research agent failed" };
+    return { ok: false, enabled: true, topic, evidence: [], depth, agent: chosen, tried, error: e?.message || "research agent failed" };
   }
 
   if (!parsed || typeof parsed !== "object") {
-    return { ok: false, enabled: true, topic, evidence: [], agent: chosen, tried, error: "agent returned no usable research" };
+    return { ok: false, enabled: true, topic, evidence: [], depth, agent: chosen, tried, error: "agent returned no usable research" };
   }
 
   const claims = Array.isArray(parsed.claims) ? parsed.claims : [];
@@ -224,6 +259,7 @@ export async function researchEvidence(
       topic,
       summary: typeof parsed.summary === "string" ? parsed.summary : undefined,
       evidence: [],
+      depth,
       agent: chosen,
       tried,
       error: "no sourced claims survived validation",
@@ -236,13 +272,14 @@ export async function researchEvidence(
     topic,
     summary: typeof parsed.summary === "string" ? parsed.summary : undefined,
     evidence: stored,
+    depth,
     agent: chosen,
     tried,
   };
 }
 
 // Grounding for the health review: research the highest-impact off-optimal markers
-// (when enabled) and return the cited passages buildHealthReviewPrompt injects.
+// (on by default) and return the cited passages buildHealthReviewPrompt injects.
 // Best-effort and bounded — a failure on any one marker is swallowed so the review
 // still runs ungrounded (today's behavior). Returns [] when research is off.
 export async function gatherReviewGrounding(agent?: string): Promise<
@@ -284,7 +321,10 @@ export async function gatherReviewGrounding(agent?: string): Promise<
         : "off-optimal");
       const question = `What current clinical guidance applies to ${side} ${name}, and what are the safe, evidence-based lifestyle (diet/training) levers? Informational only.`;
       try {
-        const r = await researchEvidence(question, [name], { agent });
+        // A reading outside the lab's own reference range is clinical-adjacent: dig
+        // deep from the start. Merely off-optimal starts fast (and escalates if thin).
+        const flagged = m?.latest?.flag === "low" || m?.latest?.flag === "high";
+        const r = await researchEvidence(question, [name], { agent, depth: flagged ? "deep" : "auto" });
         return r.evidence
           .filter((e) => e?.provenance?.usable_for_claim === true)
           .slice(0, 4)

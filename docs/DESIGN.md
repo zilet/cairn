@@ -1424,7 +1424,7 @@ in each row.
 `fuel-today`, `idea-card`, `mmenu` (Fuel's "This week's menu" card), `pahead` (Program's "The week ahead": today through next Sunday, a row a day, from
 `program-week-{model,client,controller}.ts`), `records-search`, `packet-builder`, `visit-questions`, `race-ladder`,
 `cairn-stack`, `app-readd` (the one-time iOS re-add note) and `app-id` (Settings →
-Data's "This app" block: server build, this app's shell, Copy token), both from
+Data's "This app" block: server build and this app's shell), both from
 `app-identity-{model,client,controller}.ts`.
 
 **The time objects** (docs/IA.md "Component architecture", lazy `calendar` bundle, CSS
@@ -1444,3 +1444,11 @@ never a number), one line of why per stone that moves with the confidence as a w
 / "Not now". Its one entrance: the stones settle, then one ring spreads from each stone that
 moves; reduced motion paints it still. After "Do it" it prints the Changes feed's own row for
 that decision (same Undo), or a framing line, never a tier of its own.
+
+**Hosted-install pieces** (Settings, `settings-{update,pairing,feedback}-client.ts`): `upd`
+(Data's "how releases reach this host" line from the server, plus one calm "Update to vX"
+button only when the host can act on it), `pair` (the Devices tab's "Pair a device": a QR plate drawn with DOM
+calls from the vendored encoder — dark modules on a light ground in both themes, never the token
+as text), `fbk` (the Send feedback sheet on `.ui-sheet`: kind chips as a radiogroup, the
+diagnostics preview printed as text, the GitHub fallback as a plain link) and `setdata` (the
+Feedback & privacy block's heading, button and muted line).

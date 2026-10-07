@@ -135,7 +135,8 @@ test("Docker image ships the installer but no provider CLI layer", () => {
   assert.match(dockerfile, /COPY scripts\/install-agent-cli\.mjs \/usr\/local\/lib\/cairn/);
   assert.match(dockerfile, /CAIRN_CLI_ROOT=\/home\/app\/\.cairn-tools/);
   assert.doesNotMatch(dockerfile, /ARG INSTALL_CLAUDE|ARG INSTALL_CODEX|UPDATE_CLAUDE=|CLAUDE_CODE_VERSION=/);
-  assert.match(entrypoint, /mkdir -p \/data \/home\/app\/\.cairn-tools\/bin/);
+  assert.match(entrypoint, /IMAGE_HOME=\/home\/app/);
+  assert.match(entrypoint, /mkdir -p "\$DATA_ROOT" "\$APP_HOME\/\.cairn-tools\/bin"/);
   assert.doesNotMatch(entrypoint, /link_home_cli|ln -sfn/);
 });
 

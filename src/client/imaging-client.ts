@@ -288,7 +288,7 @@ function imagingInner(doc: ImagingDoc): string {
   const files = (doc.study_files || [])
     .map(
       (file) =>
-        `<li><a href="${escAttr(withToken(`/api/health-docs/${doc.id}/imaging-files/${file.id}`))}" target="_blank" rel="noopener">${escHtml(file.original_name)}</a> · ${escHtml(imagingLabel(file.source_kind))}</li>`
+        `<li><a href="${escAttr(`/api/health-docs/${doc.id}/imaging-files/${file.id}`)}" target="_blank" rel="noopener" data-resource-link>${escHtml(file.original_name)}</a> · ${escHtml(imagingLabel(file.source_kind))}</li>`
     )
     .join("");
   const confirmation = verification.user_confirmed

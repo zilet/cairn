@@ -3627,6 +3627,36 @@ Connected card can say "Gemini · week 96% left · 5h 93% left"), and **grok `mo
 positive signal, anything else falls through to the `~/.grok/auth.json` marker the in-app device-auth
 login writes). The quota cache shares the login verdict's lifetime and invalidation.
 
+## The first run: connect, say hello, the welcome (`src/coachOps/welcome.ts`, `src/repo/first-run.ts`)
+
+A fresh install has no scripted stand-in for a coach: the first run's job is getting ONE real agent
+connected, then letting it talk. Three server pieces:
+
+- **`POST /api/agents/:name/verify`** (`verifyAgent`) — a tiny prompt through `runAgent` for THAT
+  agent only (no rotation), interactive priority, a 75 s leash. Always 200: `{ok:true, agent, ms}` or
+  `{ok:false, agent, reason, message}` with `reason` busy | not_signed_in | timeout | failed |
+  not_installed and a plain-words message. `busy` is the spawn cap talking, never a verdict. Success
+  drops the cached login verdict (`invalidateAgentConfigured`) and switches the agent back on.
+- **`POST /api/welcome {text, agent?}`** → a durable `welcome` job (`welcomeCoach`), phases "reading
+  what you said" → "building your first week" → "setting your starting fuel". Understanding is the
+  onboarding extraction in welcome mode (`buildOnboardPrompt(text, {welcome:true})`, named in
+  `ONBOARD_SCHEMA`: `goal` → `profile.goal_mode` (recomp lands as `maintain` plus a remembered goal),
+  `lift_days` → the stated `strength_schedule` (named weekdays only), `welcome_reply` (held to
+  `violatesReadingGrammar`, else a rotating calm floor), `fuel_start`). With no plan, `composeWeek`
+  runs with `explicitRequest` — the person asked in their own words, so the week lands at THEIR
+  boundary (today) with Undo, not next Monday; a busy host hands it to its own durable `compose_week`
+  job instead. With no nutrition target, `fuel_start` goes through `setNutritionTarget` (its floors
+  clamp). The exchange is appended to chat history and settings `onboarded` + `coach_welcomed` are
+  set. Only "no agent answered" fails the op (the designed `{ok:false, error, tried}`), and then
+  nothing is marked done. `coach_welcomed` (migration 122) is backfilled true for installs that had
+  already onboarded, so an upgrade never says "say hello" to a long-standing athlete.
+- **Day one** (`isStartingOut()`: no plan item AND no logged set / activity / food note / check-in —
+  bodyweight alone is not a record) reads as `starting_out_day`, not the unprogrammed floor: its own
+  `why` set and a `signals.starting_out` headline flavour (kind stays `easy` for the safety ladder),
+  with no thin-coverage or quiet-streak sentence. The program digest drops the gap floors without a
+  plan (and the balance "due" groups without a plan or a record), and the monthly whole-person
+  revision conference waits for `hasLoggedHistory()`.
+
 ## Agent execution profiles (`src/repo/settings.ts` + `src/agents.ts`)
 
 *Which* agent runs an op is `TASK_POLICY`; *how* it runs is `TASK_EXECUTION_PROFILES`, its sibling in
@@ -5790,6 +5820,162 @@ sending the turn to the full agent lane instead, where the model resolves the se
 local clock it already receives via `DATA.now` ("last night" → yesterday, late evening; "this
 morning" → today, early). Erring toward the full lane is cheap (one ordinary chat turn); erring the
 other way writes the wrong day into the athlete's log.
+
+---
+
+## Access: master token, device sessions, passkeys (`src/auth.ts`, `src/authHttp.ts`, `src/routes/auth.ts`, `src/repo/auth-devices.ts`)
+
+Only meaningful with `CAIRN_AUTH_TOKEN` set; with no token every piece below is inert and the
+guard is a no-op, exactly as before.
+
+- **Two credentials, one guard.** `authGuard` accepts the master token (Bearer / `X-Cairn-Token` /
+  `?token=` on the browser-only GET surfaces) OR a live `cairn_session` cookie. The master token is
+  for API/MCP clients and is the recovery sign-in; browsers hold only their own session.
+  `authPrincipal(req)` says which (`master` / `session` + `device_id` / `link` / `feed` / `open`).
+- **Links a browser opens on its own.** An installed iOS app opens a report tab, a file or a
+  download in Safari, whose cookie jar is not the app's. So the client never puts a credential in
+  such a URL: `openResourceLink(path, mode)` (`api-core.ts`; `<a data-resource-link>` routes
+  through it) opens the tab inside the tap (popup blockers), then POSTs `/auth/resource-link` and
+  points the tab at `path?sig=…`. A sig is 32 random bytes kept only as its SHA-256 in process
+  memory (`ResourceLinkStore`), bound to ONE path on `queryTokenAllowedPath`'s allowlist AND its
+  exact query (`canonicalLinkQuery`: params sorted, `sig` left out — `?name=A` never opens `?name=B`), GET only,
+  dead two minutes after minting and 30 s after first use (a PDF viewer's range requests). It is
+  never a session (no cookie is set) and the response carries `Referrer-Policy: no-referrer`.
+- **The calendar feed.** A calendar app polls `plan.ics` for months with no cookie, so Train →
+  Plan → Subscribe asks `POST /auth/calendar-link` for `/api/plan.ics?feed=<token>`: one stable,
+  long-lived token in `app_state` that opens GET `/api/plan.ics` and nothing else, the same for
+  every device (a second subscription never cuts off the first), retired by Settings → Devices →
+  "Reset calendar link" (`DELETE /auth/calendar-link`). It is the one raw credential at rest, and
+  it unlocks only the training-plan calendar. `?token=` keeps old subscriptions working.
+- **A session is a device row.** `auth_devices` stores `sha256(secret)` (32 random bytes, base64url
+  in the cookie), a label from the user agent ("Safari on iPhone", never the raw UA), and
+  `last_seen_at`. The cookie is `HttpOnly; SameSite=Strict; Path=/; Max-Age=180d`, `Secure` when
+  `req.secure`. It slides: the stamp — and the re-issued cookie — move at most hourly, through
+  `memoNeutralWrite` (no memoized read consults an auth table). Idle past 180 days or revoked =
+  401, and the dead cookie is cleared.
+- **CSRF defense in depth.** A cookie-authenticated POST/PUT/PATCH/DELETE must carry an Origin (else
+  Referer) naming this host — the Host header, or `X-Forwarded-Host` only when a proxy hop is
+  trusted (`CAIRN_TRUST_PROXY`). The agent-login WebSocket upgrade takes the cookie under the same
+  Origin rule (`upgradeAuthorized`), or the master token on its query string.
+- **Sign-in doors** (`SIGN_IN_DOORS`, unauthenticated, POST-only): `/auth/pair` (a one-time code),
+  `/auth/passkeys/login/{options,verify}`, and `/auth/logout` (ends only the presented session;
+  same-origin when it carries one). `/auth/session` is NOT a door: it requires the master token
+  itself, so a session can never mint another session. A browser that already carries a live
+  session gets THAT session back from `/auth/session`, `/auth/pair` (the code stays unspent,
+  `already_signed_in`) and the passkey verify — so a page load that raced two exchanges never
+  piles up a second "Chrome on Mac".
+- **One row per browser.** Every sign-in sends `device_hint`, a random NON-secret id the browser
+  keeps in `localStorage["cairn.device-hint"]`. `createDeviceSession` reuses the latest row with the
+  same `hint_hash` (sha256) AND the same UA summary when it was never revoked (live or idle-expired),
+  giving it a fresh secret (the old one dies) and keeping its name. A REVOKED row is never brought
+  back — a revocation is final; that browser gets a new row carrying only the old label. The hint proves nothing; every sign-in
+  still needs the master token, a live code or a passkey. It only says which row a proven
+  sign-in belongs to.
+- **Pairing codes** (`auth_pairing_codes`): 8 chars from `ABCDEFGHJKMNPQRSTUVWXYZ23456789`, shown
+  `XXXX-XXXX`, hashed at rest, consumed by one atomic `UPDATE`, ten minutes, at most five live
+  (minting past that retires the oldest). `FailureLimiter` counts misses per address only: 5 in 15
+  min close that address (429 + Retry-After) for 15 min, doubling per repeat lockout up to 4 h;
+  a closed address is refused before its code is even checked, so a lockout never leaks which code
+  was right. There is NO global lock — one would let anyone shut pairing (the first-sign-in code
+  included) for everybody, and 31^8 codes × ≤5 live × 10 min make a distributed guess hopeless
+  without it. The passkey door uses the same per-address limiter. The QR carries
+  `/#pair=<code>`: a fragment never reaches a server, proxy log or Referer. `index.html`'s inline
+  boot script strips it with `history.replaceState`, POSTs it, and sets `window.__cairnAuthReady`;
+  the early reads are skipped and `api()`/`apiBinary()` wait on that promise, so nothing races the
+  exchange into a 401. A `localStorage.cairn_token` an older build stored is swapped through
+  `/auth/session` once and deleted; the retired `?pair=<token>` link is stripped at once, never sent
+  or stored, and flags `window.__cairnRetiredPairLink` so the sign-in screen says it is retired. That script is the ONE
+  owner of the exchange (`api()` never runs it), and a reload landing inside this tab's in-flight
+  swap (`sessionStorage["cairn.auth.swap"]`, ten seconds) does not start a second.
+- **The first device.** `firstSignInNotice()` runs at boot: while auth is on, no device or
+  passkey exists and the master token has never signed anything in (`app_state`
+  `auth_master_used_at`, stamped once by the guard), it replaces the previous boot's unused
+  `first_sign_in` code with a fresh one-hour code and returns the one log line allowed to carry a
+  code. Log drains see that line; `CAIRN_FIRST_SIGNIN_LOG=0` mints and prints nothing.
+- **Token rotation evicts everyone.** `applyAccessTokenEpoch()` (boot, `accessTokenEpochAtBoot`)
+  keeps a salted SHA-256 fingerprint of `CAIRN_AUTH_TOKEN` in `app_state`
+  (`auth_token_fingerprint`); a boot with a different token revokes every device, deletes every
+  passkey and pairing code, then stores the new fingerprint and logs one secret-free line. The
+  first boot only stores it.
+- **The WebSocket upgrade's client address** (`clientAddress`, `src/authHttp.ts`) follows Express's
+  numeric trust-proxy rule, so the per-IP limiter keys the agent-login socket exactly as `req.ip`.
+- **Passkeys** (`auth_passkeys`, `@simplewebauthn/server`, imported on first use only). Discoverable
+  credentials (`residentKey: required`) so sign-in never asks for a username; the login options have
+  no allow-list. RP ID = `req.hostname` (trust-proxy aware); expected origins = the request's own
+  scheme+host, plus a same-host Origin header (so a TLS proxy Cairn was not told to trust still
+  verifies). Challenges live in two in-memory `ChallengeStore`s — sign-in and registration, so
+  unauthenticated sign-in traffic can never evict a registration — 5-minute TTL, single use, bound
+  to their kind and RP ID; one address holds at most 5 outstanding sign-in challenges (its own
+  oldest goes first). A passkey login creates THIS browser's device session (a synced passkey on a
+  laptop never ends the phone's session) — unless it is the same browser's own earlier live row (the
+  device hint above); the passkey stays bound to its device while that device is signed in.
+  Every passkey also records `registered_device_id` and `last_used_device_id` (migration 124).
+  Revoking ANOTHER device deletes every passkey bound to it, added by it or last used by it
+  (`passkeysRemovedByRevoking` — a synced passkey lives on every device of its account); signing
+  THIS device out keeps them (the way back in). "Sign out other devices" also deletes every
+  passkey not bound to the device asking, unbound ones included (`passkeysRemovedByRevokingOthers`).
+  `GET /auth/devices` names both sets so the confirm sheets list them first.
+- **Client.** The eager door is `token-sheet.ts` (a stub, opened on any 401); the sign-in screen and
+  the passkey ceremonies are the lazy `auth` bundle (`auth-signin-client.ts`,
+  `auth-passkey-client.ts`, vendored `public/vendor/simplewebauthn-browser.js` loaded on first use).
+  Settings → Devices (`settings-pairing-client.ts`, its own Settings tab in the settings bundle) injects `auth` only on "Add a passkey".
+  With a cookie, `authToken()` is `""`, so `withToken()` leaves resource URLs bare and the browser's
+  own cookie authenticates `<img>`, downloads, EventSource and the WebSocket.
+- **Never logged:** session secrets, pairing codes (except that one first-sign-in line), the master
+  token, challenges, resource-link sigs, the calendar feed token. Telemetry path labels drop query
+  and fragment; client diagnostics redact `pair=`/`session=`/`challenge=`/`token=`/`sig=`/`feed=`
+  shapes.
+- **No MCP mirror** by design: no MCP tool manages access, so a connected app can never mint,
+  list or revoke connections.
+- **AI apps on /mcp** (`src/mcpAccess.ts`, `src/repo/mcp-clients.ts`, `src/routes/mcp-clients.ts`,
+  `src/routes/oauth.ts`). `authGuard` takes a third bearer on `/mcp` ONLY (scope lowercased, so
+  `/MCP` is the same door) and only from `Authorization` — never `X-Cairn-Token` or the query:
+  a per-app key (`cairn_mcp_…`, minted by `POST /api/auth/mcp-clients`, shown once) or an OAuth
+  access token (`cairn_mat_…`) whose stored resource equals this request's `<origin>/mcp` (RFC 8707
+  audience). Principal `mcp_client` + id. Both live in `mcp_clients` (kind `token` | `oauth`), hashed
+  (SHA-256 of 32 random bytes), `last_used_at` touched at most hourly through `memoNeutralWrite`.
+  A `/mcp` 401 carries `WWW-Authenticate: Bearer resource_metadata="<origin>/.well-known/oauth-protected-resource/mcp", scope="full"`
+  (+ `error="invalid_token"` when a bearer was presented). Settings → Devices → Connected AI apps
+  (`settings-mcp-client.ts`, settings bundle) lists both — a grant with the host of the redirect URI
+  it was APPROVED for (`mcp_clients.redirect_uri`), each with the device that made/approved it
+  (`created_by_device_id`, NULL under the master token) and when — Disconnects (`DELETE`), and tests
+  a new key with a real `initialize` sent `credentials:"omit"` (a cookie can never make a bad key
+  look good). Revoking a device FROM ANOTHER one (and "Sign out other devices") also disconnects
+  the apps that device connected; a device signing itself out keeps them. `GET /api/auth/devices`
+  names them first (`revoke_disconnects_apps`, `revoke_others_disconnects_apps`).
+- **OAuth 2.1 for custom connectors** (MCP Authorization 2026-07-28). Cairn is its own
+  authorization server; issuer = the canonical origin (`req.protocol` + `req.host`, so
+  X-Forwarded-* count only through `CAIRN_TRUST_PROXY`), https or loopback http only, all of it 404
+  with auth off. Mounted at the app root, outside the guard's `/api`/`/mcp` scope (no exemption
+  needed), behind `checkRateLimit`: `/.well-known/oauth-protected-resource{,/mcp}` and
+  `/.well-known/oauth-authorization-server` (exact case; `iss` response parameter advertised);
+  `POST /oauth/register` (RFC 7591, public clients only — `token_endpoint_auth_method` is always
+  `none`; redirect URIs https or loopback http, no fragment/userinfo, ≤5; names lose control and
+  format (`\p{Cf}`: bidi, zero-width) characters; 50 clients max, the oldest never-used one evicted
+  when full — never one under 15 min old, with a pending authorization or an unspent code; full of
+  those, a new registration is a 429; idle ones pruned after 30 days; 10/IP/hour). The root
+  protected-resource form stays because the MCP spec names it as the clients' fallback.
+  `GET /oauth/authorize` validates client + exact redirect URI first (an unknown one is an error
+  page, never a redirect; a loopback http URI may vary its port only), then PKCE S256 and
+  `resource`, and parks the request in memory (`PendingAuthorizations`, 10 min, keyed by a hashed
+  `rid`, ≤5 per address, an identical repeat reusing its entry). The cross-site hop carries no
+  `SameSite=Strict` session, so the first response is a meta-refresh to `?rid=` (same-site) and a
+  `cairn_oauth_hop` nonce cookie for that browser; still signed out, the `?rid=` leg sets
+  `cairn_oauth_return` and goes to `/` ONLY when it proves it is this browser's same-site leg
+  (`Sec-Fetch-Site: same-origin`, or the hop nonce) — a bare cross-site `?rid=` link is an expired
+  page, never a planted consent — and `/`'s sign-in reload lands in `oauthResume` → back to consent. The consent page is
+  server-rendered (escaped, no script, `Referrer-Policy: same-origin` so the form POST carries its
+  Origin); `POST /oauth/authorize` needs same-origin + the page's CSRF token + the same device. A
+  code is 60 s, single use, hashed, bound to client/redirect/challenge/resource. `POST
+  /oauth/token` spends the code FIRST (a bad verifier burns it); a replayed code revokes the grant
+  it minted. Access tokens live 1 h, refresh tokens 90 days and rotate on every use; presenting a
+  rotated one revokes the whole grant (reuse = theft) — except within 60 s of its rotation, by its
+  own client, while the pair that rotation minted (`oauth_tokens.parent_id`) was never used (its
+  refresh not rotated, its access token never presented — first use is stamped in `used_at`):
+  that is a retry or a race, so the unused pair is revoked and a fresh one minted (one live pair).
+  One live grant per registered client.
+  `revokeAllMcpAccess()` ends every key, grant and code — the hook for a "master token changed,
+  sign everyone out" reset.
 
 ---
 

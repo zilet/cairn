@@ -1124,6 +1124,22 @@ export const ONBOARD_SCHEMA: JsonSchema = {
       },
     },
     goal: { type: ["string", "null"] },
+    // Weekdays (0 = Sunday) the person NAMED for lifting — applied as the stated
+    // strength_schedule, never invented from a bare count of days.
+    lift_days: { type: ["array", "null"], items: { type: "integer" } },
+    // The first-run welcome's own fields (buildOnboardPrompt(text, { welcome: true })).
+    // Optional here so the plain onboard contract is unchanged; named so constrained
+    // decoding never drops them.
+    welcome_reply: { type: ["string", "null"] },
+    fuel_start: {
+      type: ["object", "null"],
+      additionalProperties: true,
+      properties: {
+        target_kcal: { type: ["integer", "null"] },
+        protein_g: { type: ["integer", "null"] },
+        why: { type: ["string", "null"] },
+      },
+    },
     supplements: {
       type: "array",
       items: {

@@ -133,10 +133,9 @@ type TodayBriefControllerDeps = {
           return instant;
         }
       }
-      const timeout = 1200;
       const raced: { r: TodayBriefControllerDayRead } | null = await Promise.race([
         fetchRead.then((r) => ({ r })),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), timeout)),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 1200)),
       ]);
       if (raced && raced.r && !raced.r._provisional) {
         deps.state.brief = { date, override: override || raced.r.override || "", read: raced.r };
@@ -167,8 +166,7 @@ type TodayBriefControllerDeps = {
     const stamp = briefEl ? briefEl.querySelector(".brief-updated") : null;
     if (!stamp) return;
     const inner = CairnTodayBrief.updatedInnerHtml(read, CairnTodayBrief.kind(read), isToday);
-    if (!inner) return;
-    stamp.innerHTML = inner;
+    if (inner) stamp.innerHTML = inner;
   }
 
   // The check-in mounts INSIDE the Brief now, so any repaint that replaces the Brief
@@ -176,11 +174,9 @@ type TodayBriefControllerDeps = {
   // the slot is absent (a train/done read) or the day is already answered.
   function remountCheckin(): void {
     const load = (globalThis as { loadCheckin?: () => unknown }).loadCheckin;
-    if (typeof load === "function") {
-      try {
-        void load();
-      } catch {}
-    }
+    try {
+      if (typeof load === "function") void load();
+    } catch {}
   }
 
   // The push line and the push offer are painted into the Brief's slots by the lazy
@@ -337,15 +333,9 @@ type TodayBriefControllerDeps = {
   function briefPlanDayName(read: TodayBriefControllerDayRead | null | undefined, deps: TodayBriefControllerDeps): string {
     const plan = Array.isArray(deps.state.plan) ? deps.state.plan : [];
     if (!plan.length) return "";
-    const signals = read?.signals && typeof read.signals === "object" ? (read.signals as Record<string, unknown>) : {};
-    const selection =
-      signals.plan_selection && typeof signals.plan_selection === "object"
-        ? (signals.plan_selection as Record<string, unknown>)
-        : null;
-    const selected =
-      selection && selection.selected && typeof selection.selected === "object"
-        ? (selection.selected as Record<string, unknown>)
-        : null;
+    const asRecord = (v: unknown): Record<string, unknown> | null =>
+      v && typeof v === "object" ? (v as Record<string, unknown>) : null;
+    const selected = asRecord(asRecord(asRecord(read?.signals)?.plan_selection)?.selected);
     const candidates = [selected?.day_number, deps.state.day];
     for (const candidate of candidates) {
       if (candidate == null) continue;
@@ -382,11 +372,7 @@ type TodayBriefControllerDeps = {
     return CairnTodayBrief.signalsText(read);
   }
 
-  function wireBrief(
-    read: TodayBriefControllerDayRead,
-    options: { isToday?: boolean },
-    deps: TodayBriefControllerDeps,
-  ): void {
+  function wireBrief(read: TodayBriefControllerDayRead, options: { isToday?: boolean }, deps: TodayBriefControllerDeps): void {
     CairnTodayBriefActionsClient.wireBriefActions(read, options, deps);
   }
 

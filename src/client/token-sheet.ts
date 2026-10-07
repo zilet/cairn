@@ -1,74 +1,50 @@
 // @ts-check
-// The Atelier token sheet (replaces the native window.prompt gate). A designed,
-// keyboard-perfect entry sheet for the optional shared token, in the warm-cream
-// language of the app rather than an OS chrome prompt. It runs on the shared
-// overlay primitive (CairnUiSheet); its styles live in styles.css beside the
-// outbox review. api-core opens it when a request comes back 401.
+// The eager door to sign-in. api-core opens it when a request comes back 401; the
+// sign-in screen itself (passkey, pairing code, access token) lives in the lazy
+// "auth" bundle (src/client/auth-signin-client.ts), so the eager shell carries only
+// this stub. It also hands the one calm "add a passkey" offer to that bundle after a
+// sign-in this tab just completed (index.html's pairing exchange or the sign-in
+// screen sets the session flag).
 type TokenSheetApi = { open(): void };
 declare const CairnTokenSheet: TokenSheetApi;
 
 {
-  function openTokenSheet(): void {
-    if (typeof document === "undefined" || typeof CairnUiSheet === "undefined") {
-      // Non-DOM context, or a shell without the overlay primitive (should not happen
-      // in the browser) — degrade to a reload so the app-shell guard has a chance to
-      // run again once a token exists.
-      try {
-        location.reload();
-      } catch {}
-      return;
-    }
-    if (document.querySelector(".token-sheet-ov")) return;
-    // The app is unusable without the token, so this sheet is deliberately not
-    // dismissible: no Escape, no backdrop close. CairnUiSheet keeps Tab inside it.
-    const sheet = CairnUiSheet.open({
-      overlayClass: "token-sheet-ov",
-      sheetClass: "token-sheet",
-      labelledBy: "tokenSheetTitle",
-      describedBy: "tokenSheetBody",
-      dismissible: false,
-      initialFocus: ".token-sheet-in",
-      html: `<h2 class="token-sheet-h" id="tokenSheetTitle">Enter your access token</h2>
-    <p class="token-sheet-p" id="tokenSheetBody">This Cairn is protected by a shared access token. Paste it to continue — it's stored only on this device.</p>
-    <input class="token-sheet-in" type="password" inputmode="text" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" aria-label="Access token" placeholder="Access token">
-    <div class="token-sheet-err" role="alert" aria-live="assertive" hidden></div>
-    <div class="token-sheet-ft"><button class="token-sheet-btn" type="button" data-token-save>Connect</button></div>`,
-    });
-
-    const input = sheet.sheet.querySelector<HTMLInputElement>(".token-sheet-in");
-    const errEl = sheet.sheet.querySelector<HTMLElement>(".token-sheet-err");
-    const save = (): void => {
-      const value = (input?.value || "").trim();
-      if (!value) {
-        if (errEl) {
-          errEl.textContent = "Paste the token to continue.";
-          errEl.hidden = false;
-        }
-        input?.focus();
-        return;
-      }
-      // A new credential: nothing remembered under the old one may paint again.
-      let changed = true;
-      try {
-        changed = (localStorage.getItem("cairn_token") || "").trim() !== value;
-      } catch {}
-      if (changed) {
-        try {
-          (globalThis as { clearRememberedApiBodies?: () => void }).clearRememberedApiBodies?.();
-        } catch {}
-      }
-      try {
-        localStorage.setItem("cairn_token", value);
-      } catch {}
-      location.reload();
-    };
-    sheet.sheet.querySelector("[data-token-save]")?.addEventListener("click", save);
-    input?.addEventListener("keydown", (event: KeyboardEvent) => {
-      if (event.key === "Enter") save();
-    });
+  // withBundle (app-lazy-bundles, a later eager bundle) exists by the time anything
+  // here runs: a 401 or the offer timer, never module load.
+  function openSignIn(): void {
+    if (typeof document === "undefined") return;
+    Promise.resolve()
+      .then(() => withBundle("auth", () => CairnSignIn.open()))
+      .catch(() => {
+        // The sign-in bundle could not load (a dropped connection at the worst
+        // moment). Say so plainly; reopening Cairn tries again.
+        if (typeof CairnUiSheet === "undefined" || document.querySelector(".token-sheet-ov")) return;
+        CairnUiSheet.open({
+          overlayClass: "token-sheet-ov",
+          sheetClass: "token-sheet",
+          dismissible: false,
+          html: `<h2 class="token-sheet-h">Sign in to Cairn</h2><p class="token-sheet-p">Couldn't load the sign-in screen. Check your connection, then reopen Cairn.</p>`,
+        });
+      });
   }
 
-  const CAIRN_TOKEN_SHEET: TokenSheetApi = { open: openTokenSheet };
+  // After index.html's pairing exchange (which may still be in flight) or a reload
+  // the sign-in screen made.
+  function offerPasskeyLater(): void {
+    if (typeof sessionStorage === "undefined" || !sessionStorage.getItem("cairn.auth.offer")) return;
+    setTimeout(() => {
+      Promise.resolve()
+        .then(() => withBundle("auth", () => CairnSignIn.offerPasskey()))
+        .catch(() => {});
+    }, 2500);
+  }
+
+  Promise.resolve((globalThis as { __cairnAuthReady?: unknown }).__cairnAuthReady)
+    .catch(() => {})
+    .then(offerPasskeyLater)
+    .catch(() => {});
+
+  const CAIRN_TOKEN_SHEET: TokenSheetApi = { open: openSignIn };
 
   Object.assign(globalThis, { CairnTokenSheet: CAIRN_TOKEN_SHEET });
 }

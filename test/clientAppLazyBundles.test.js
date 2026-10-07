@@ -100,6 +100,9 @@ test("every lazy bundle maps to its own precached url", () => {
     calendar: "/js/bundle-12-calendar.js",
     meals: "/js/bundle-13-meals.js",
     "today-ahead": "/js/bundle-14-today-ahead.js",
+    // The first-run welcome and the AI sign-in panel Settings → Agents reuses.
+    welcome: "/js/bundle-15-welcome.js",
+    auth: "/js/bundle-16-auth.js",
   });
 });
 
@@ -136,16 +139,16 @@ test("a bundle resolves only once its dependencies have executed too", async () 
 
 test("a failed load rejects and stays retryable", async () => {
   const env = loadLoader();
-  const attempt = env.context.ensureBundle("settings");
+  const attempt = env.context.ensureBundle("meals");
   env.scripts[0].fire("error");
-  await assert.rejects(attempt, /failed to load \/js\/bundle-11-settings\.js/);
+  await assert.rejects(attempt, /failed to load \/js\/bundle-13-meals\.js/);
   assert.equal(env.scripts.length, 0, "the dead tag is removed");
 
-  const retry = env.context.ensureBundle("settings");
+  const retry = env.context.ensureBundle("meals");
   assert.equal(env.scripts.length, 1, "a later navigation may retry");
   env.scripts[0].fire("load");
   await retry;
-  assert.equal(env.context.bundleLoaded("settings"), true);
+  assert.equal(env.context.bundleLoaded("meals"), true);
 });
 
 test("an unknown bundle name rejects instead of injecting anything", async () => {
@@ -216,7 +219,7 @@ test("a navigation into a bundle that brought a reconnector sweeps once, after i
 test("a sweep waits for an async destination render to settle", async () => {
   const { env, calls } = reconnectEnv();
   let finish;
-  const nav = env.context.withBundle("settings", () =>
+  const nav = env.context.withBundle("meals", () =>
     new Promise((resolve) => {
       finish = () => {
         calls.push("painted");
@@ -235,7 +238,7 @@ test("a sweep waits for an async destination render to settle", async () => {
 
 test("a bundle that registers no new reconnector costs no /agent-jobs sweep", async () => {
   const { env, calls } = reconnectEnv({}, 0);
-  const nav = env.context.withBundle("settings", () => calls.push("paint"));
+  const nav = env.context.withBundle("meals", () => calls.push("paint"));
   env.scripts[0].fire("load");
   await nav;
   await settle();
@@ -310,8 +313,9 @@ test("the idle warm-up executes every lazy bundle one at a time, once", async ()
   }
   // Today's lower half brings the calendar it depends on with it (the dependency's tag
   // goes in first); train then finds it already there.
-  assert.deepEqual(order, ["calendar", "today-ahead", "train", "ask", "horizon", "me-health", "meals", "settings"]);
-  assert.equal(env.scripts.length, 8, "one tag per bundle");
+  // Settings brings the welcome bundle (its sign-in panel) ahead of itself.
+  assert.deepEqual(order, ["calendar", "today-ahead", "train", "ask", "horizon", "me-health", "meals", "welcome", "settings"]);
+  assert.equal(env.scripts.length, 9, "one tag per bundle");
 });
 
 test("the idle warm-up stands down on Save-Data", () => {

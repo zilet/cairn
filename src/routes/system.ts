@@ -2,17 +2,35 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import { authEnabled } from "../auth.js";
 import { getUpdateStatus, checkForUpdate } from "../updateCheck.js";
+import { applyUpdate } from "../hosting.js";
+import { feedbackPreview, parseFeedbackInput, sendFeedback } from "../feedback.js";
 import { getVersion } from "../version.js";
 import { db } from "../db.js";
 import { getBuildInfo } from "../build-info.js";
 import { currentShellVersion } from "../swVersion.js";
+import { passkeyCount } from "../repo/auth-devices.js";
 
 export const systemRouter = Router();
 
 // `shell` is the derived service-worker cache name this server hands out; Settings
 // shows the one the device's worker holds, so a deploy can be checked on the phone.
+// `auth_methods` is the sign-in screen's only hint, and only a boolean: whether
+// offering "Sign in with passkey" can succeed at all. Never a count, never an id.
 export function healthBody() {
-  return { ok: true, auth_required: authEnabled, version: getVersion(), build: getBuildInfo(), shell: currentShellVersion() };
+  let passkeys = false;
+  try {
+    passkeys = authEnabled && passkeyCount() > 0;
+  } catch {
+    passkeys = false; // a liveness probe never fails on an auth-table read
+  }
+  return {
+    ok: true,
+    auth_required: authEnabled,
+    auth_methods: { passkeys },
+    version: getVersion(),
+    build: getBuildInfo(),
+    shell: currentShellVersion(),
+  };
 }
 
 // Liveness only: process identity, exact build provenance and the app shell it serves.
@@ -83,4 +101,29 @@ systemRouter.get("/update-status", (_req, res) => res.json(getUpdateStatus()));
 systemRouter.post("/update-check", async (_req, res) => {
   // checkForUpdate never throws; network failures fold into status.error.
   res.json(await checkForUpdate());
+});
+
+// Start this host's update method (src/hosting.ts): POST the platform's deploy hook,
+// or write the trigger file the installer's updater watches. A host that updates
+// itself (Railway) or only by hand answers 409 with the sentence explaining how; a
+// hook the host refused or never answered is a 502. The hook URL never leaves the
+// server.
+systemRouter.post("/update/apply", async (_req, res) => {
+  const result = await applyUpdate();
+  if (result.ok) return res.json(result);
+  const manualOnly = result.method === "automatic" || result.method === "manual";
+  return res.status(manualOnly ? 409 : result.method === "deploy_hook" ? 502 : 500).json(result);
+});
+
+// The anonymous diagnostics snapshot "Include anonymous diagnostics" would attach —
+// exactly what the feedback sheet previews — and where a message would go.
+systemRouter.get("/feedback/preview", (_req, res) => res.json(feedbackPreview()));
+
+// Forward feedback to the configured service, or hand back a prefilled GitHub issue
+// URL the browser opens instead (nothing leaves the instance without a service).
+systemRouter.post("/feedback", async (req, res) => {
+  const parsed = parseFeedbackInput(req.body);
+  if (!parsed.ok) return res.status(400).json({ ok: false, error: parsed.error });
+  const result = await sendFeedback(parsed.value);
+  return res.status(result.ok ? 200 : 502).json(result);
 });

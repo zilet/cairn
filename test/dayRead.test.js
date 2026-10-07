@@ -981,7 +981,15 @@ test("TRAIN when recovered, due, and a plan day exists", () => {
   assert.equal(typeof r.est_minutes, "number");
 });
 
+// Nothing programmed for an athlete with a RECORD. A brand-new install (no plan AND no
+// history) is day one instead — its own rule, test/welcome.test.js — so these fixtures
+// carry one long-past walk to stay on the unprogrammed floor.
+function seedPastRecord() {
+  db.prepare(`INSERT INTO activities (date, type, duration_min) VALUES (?, 'walk', 20)`).run("2025-06-01");
+}
+
 test("EASY when nothing is programmed and recovery is unremarkable", () => {
+  seedPastRecord();
   const r = repo.dayRead(REF, { has_data: false, recovery: {} });
   assert.equal(r.kind, "easy");
   assert.equal(r.decision.rule_code, "unprogrammed_easy_day");
@@ -1265,7 +1273,8 @@ test("forwardLook's loaded-near-future phrasing rotates and never breaks the rea
 // recovery/signal-state override (as most of this file's fixtures do, to drive a
 // specific deterministic branch) is supplying its own narrower evidence shape, and
 // reading thinness off that would describe the override, not the athlete's week.
-test("a bare dayRead with nothing at all on record names the read as thin", () => {
+test("a bare dayRead with nothing current on record names the read as thin", () => {
+  seedPastRecord();
   const r = repo.dayRead(isoDaysAgo(0));
   assert.ok(
     THIN_SIGNAL_COVERAGE_WHY.some((variant) => r.why.endsWith(variant)),
@@ -2826,7 +2835,9 @@ test("each reachable rule branch reports its own code and reason, never a generi
     return read;
   };
 
-  // No plan, nothing logged → the unprogrammed floor.
+  // No plan and nothing logged lately → the unprogrammed floor (with nothing EVER
+  // logged it is day one instead — test/welcome.test.js).
+  seedPastRecord();
   const bare = record(repo.dayRead(REF, { has_data: false, recovery: {} }));
   assert.equal(bare.decision.rule_code, "unprogrammed_easy_day");
   assert.ok(UNPROGRAMMED_EASY_DAY.reasons.includes(bare.decision.reason));

@@ -76,6 +76,20 @@ export const UNPROGRAMMED_EASY_DAY: DayReadRuleOutcome = {
   ],
 };
 
+// Day one: no week on the plan and nothing logged yet (src/repo/first-run.ts). Not the
+// unprogrammed floor — that floor reads an athlete between programs, and on a brand-new
+// install it said "keep today easy" over a "thin week for signals", which reads as a rest
+// day to someone who has not started. This one says what is true: nothing is owed yet,
+// the first week is the next thing, and any movement today is theirs to choose.
+export const STARTING_OUT_DAY: DayReadRuleOutcome = {
+  code: "starting_out_day",
+  reasons: [
+    "You're just starting out, so nothing is owed today — your first week is the next step.",
+    "There's no week on your plan yet, so today is open while the first one comes together.",
+    "Day one: no plan yet and nothing to recover from, so this first day is yours to shape.",
+  ],
+};
+
 export function resolveDayReadRule(rules: DayReadRule[]): DayReadRuleResult | null {
   for (const rule of rules) {
     const resolved = rule.resolve();

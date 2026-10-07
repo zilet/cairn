@@ -24,6 +24,7 @@ function loadSettingsSurface() {
   vm.runInNewContext(readFileSync(join(root, "public/js/date-utils.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/settings-client.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/settings-surface-model.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/settings-surface-client.js"), "utf8"), context);
   return context.CairnSettingsSurface;
 }
@@ -35,6 +36,7 @@ test("settings surface normalizes API data into the working model", () => {
     ["automation", "Automation"],
     ["data", "Data"],
     ["agents", "Agents"],
+    ["devices", "Devices"],
     ["system", "System"],
   ]);
   const data = surface.settingsData({
@@ -221,12 +223,12 @@ test("settings surface exposes status helpers and art spend card", () => {
   assert.match(spend, /5 cached/);
 });
 
-test("Settings opens onto Sources by default, with Agents & System pushed to the end", () => {
+test("Settings opens onto Sources by default, with Agents, Devices & System pushed to the end", () => {
   const surface = loadSettingsSurface();
   const keys = JSON.parse(JSON.stringify(surface.SET_SEG)).map(([key]) => key);
   assert.equal(keys[0], "sources");
   assert.equal(keys.includes("you"), false, "the old You slice is the You home's landing now");
-  assert.deepEqual(keys.slice(-2), ["agents", "system"]);
+  assert.deepEqual(keys.slice(-3), ["agents", "devices", "system"]);
 
   // The default lives in ONE place — the route definitions — and every call site
   // reads it from there. It used to be a "you" literal repeated at three call

@@ -13,6 +13,7 @@ export const API_CLIENT_MODULES = [
   "token-sheet",
   "api-cache",
   "api-reach",
+  "api-auth",
   "api-core",
   "api-signals",
   "outbox-queue",

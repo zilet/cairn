@@ -30,7 +30,9 @@ const MODULES = [
   // The calendar bundle horizon reaches through train: the day's glance and rows, and the
   // shared time objects (milestone row, goal row, frame line, the week's model and shape).
   "day-detail-model",
+  "day-glance-model",
   "day-detail-client",
+  "day-glance-view",
   "milestone-row-model",
   "milestone-row-client",
   "goal-row-model",

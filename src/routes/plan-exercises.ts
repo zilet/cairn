@@ -139,8 +139,9 @@ planExercisesRouter.get("/plan/redraw", (_req, res) => res.json(structureRedrawS
 // Subscribe-able iCal of the training template — pull-not-push. Each plan day is
 // a weekly-recurring all-day event (Day 1 → Monday by default; ?start=0..6 to
 // shift, JS weekday where 0=Sun). Subscribe in Apple/Google Calendar via
-//   webcal://<host>/api/plan.ics   (append ?token=… when CAIRN_AUTH_TOKEN is set,
-// since a calendar client can't send a custom header). Registered before
+//   webcal://<host>/api/plan.ics   (with CAIRN_AUTH_TOKEN set, the PWA's Subscribe link
+// carries the calendar feed token, ?feed=… from POST /api/auth/calendar-link, since a
+// calendar client has no cookie and can't send a header; ?token= still works). Registered before
 // /plan/:day; the literal ".ics" path never matches the :day param.
 planExercisesRouter.get("/plan.ics", (req, res) => {
   const start = req.query.start != null ? Number(req.query.start) : NaN;

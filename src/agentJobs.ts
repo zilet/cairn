@@ -30,6 +30,7 @@ import {
   growAboutMe,
   onboardFromText,
   whatIf,
+  welcomeCoach,
 } from "./coachOps.js";
 import { readToday } from "./domain/brain/day-read-use-case.js";
 import { runCaseConference } from "./domain/brain/case-conference.js";
@@ -494,9 +495,25 @@ async function processAgentJob(id: number): Promise<void> {
         break;
       }
       case "compose_week": {
-        result = await composeWeek(agent, input.instruction != null ? String(input.instruction) : undefined, hooks);
+        // `explicit_request` is set only by the first-run welcome handing its week here when
+        // the host was too busy to compose it inline: the person asked for this week in
+        // their own words, so it lands at their boundary (today) like their other asks.
+        const explicitRequest = input.explicit_request === true;
+        result = await composeWeek(
+          agent,
+          input.instruction != null ? String(input.instruction) : undefined,
+          hooks,
+          explicitRequest ? { explicitRequest: true } : undefined
+        );
         chosen = result?.agent ?? null;
         if (result?.proposal?.id) ref = { ref_table: "plan_proposals", ref_id: result.proposal.id };
+        if (explicitRequest && result?.autonomy?.announced) {
+          try {
+            applyDueAnnouncedDecisions(localDateISO());
+          } catch (err) {
+            recordAsyncFailure("agent_jobs", "welcome_week_land_now", err);
+          }
+        }
         break;
       }
       case "meal_plan": {
@@ -638,6 +655,28 @@ async function processAgentJob(id: number): Promise<void> {
       }
       case "onboard": {
         result = await onboardFromText(agent, String(input.text ?? ""), hooks);
+        break;
+      }
+      case "welcome": {
+        // The coach's first conversation (src/coachOps/welcome.ts). A week the busy host
+        // could not compose inline becomes its own durable compose job, which defers and
+        // retries on congestion like every other job instead of being dropped.
+        result = await welcomeCoach(agent, String(input.text ?? ""), hooks);
+        chosen = result?.agent ?? null;
+        if (result?.ok && result.week_state === "queued") {
+          try {
+            const weekJob = repo.createAgentJob({
+              kind: "compose_week",
+              agent: chosen,
+              input: { instruction: String(input.text ?? "").slice(0, 240), explicit_request: true },
+            }) as any;
+            enqueueAgentJob(Number(weekJob.id));
+            result = { ...result, week_job_id: Number(weekJob.id) };
+          } catch (err) {
+            recordAsyncFailure("agent_jobs", "welcome_week_queue", err);
+            result = { ...result, week_state: "failed" };
+          }
+        }
         break;
       }
       case "what_if": {

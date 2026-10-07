@@ -50,5 +50,6 @@ test("settings data phone access wiring generates token and suppresses generator
   assert.equal(output.title, "Set as CAIRN_AUTH_TOKEN=… in .env / compose, then restart");
   assert.deepEqual(copied, [token]);
   assert.deepEqual(toasts, ["Token copied. Set CAIRN_AUTH_TOKEN=… in .env / compose, then restart."]);
-  assert.match(row.innerHTML, /A shared token is already set/);
+  assert.match(row.innerHTML, /Sign-in is on\. Sign your phone in with a pairing code/);
+  assert.doesNotMatch(row.innerHTML, /asked for it/, "a phone is never asked for the token any more");
 });

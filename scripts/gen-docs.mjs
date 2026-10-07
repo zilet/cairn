@@ -83,6 +83,7 @@ const routes = [
   ...parseApiRoutes(read("src/routes/agent-jobs.ts"), { receiver: "agentJobsRouter", prefix: "/agent-jobs" }),
   ...parseApiRoutes(read("src/routes/apple-health.ts"), { receiver: "appleHealthRouter", prefix: "" }),
   ...parseApiRoutes(read("src/routes/art.ts"), { receiver: "artRouter", prefix: "" }),
+  ...parseApiRoutes(read("src/routes/auth.ts"), { receiver: "authRouter", prefix: "" }),
   ...parseApiRoutes(read("src/routes/chat.ts"), { receiver: "chatRouter", prefix: "/chat" }),
   ...parseApiRoutes(read("src/routes/connected-brain.ts"), { receiver: "connectedBrainRouter", prefix: "" }),
   ...parseApiRoutes(read("src/routes/day-coach.ts"), { receiver: "dayCoachRouter", prefix: "" }),
@@ -91,6 +92,7 @@ const routes = [
   ...parseApiRoutes(read("src/routes/health-docs.ts"), { receiver: "healthDocsRouter", prefix: "/health-docs" }),
   ...parseApiRoutes(read("src/routes/health-metrics.ts"), { receiver: "healthMetricsRouter", prefix: "" }),
   ...parseApiRoutes(read("src/routes/journey.ts"), { receiver: "journeyRouter", prefix: "" }),
+  ...parseApiRoutes(read("src/routes/mcp-clients.ts"), { receiver: "mcpClientsRouter", prefix: "" }),
   ...parseApiRoutes(read("src/routes/memory-learning.ts"), { receiver: "memoryLearningRouter", prefix: "" }),
   ...parseApiRoutes(read("src/routes/nutrition.ts"), { receiver: "nutritionRouter", prefix: "" }),
   ...parseApiRoutes(read("src/routes/operator.ts"), { receiver: "operatorRouter", prefix: "" }),
@@ -123,6 +125,9 @@ is set, owner routes require the token (\`Authorization: Bearer …\`, \`X-Cairn
 \`?token=…\` on the documented GET-only allowlist). \`GET /api/health\` remains public. Apple
 Health's short-lived pairing exchange is public and passes through the instance-wide pre-auth limiter
 when that limiter is enabled; its resulting credential is scoped only to \`POST /api/health-metrics\`.
+The OAuth 2.1 doors an AI app signs in through for \`/mcp\` (\`/.well-known/oauth-*\`,
+\`/oauth/register\`, \`/oauth/authorize\`, \`/oauth/token\`) live outside \`/api\`; see
+[OPERATIONS.md](OPERATIONS.md) "Connect an AI app (MCP)".
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
 **${routes.length} routes** across ${sortedKeys.length} groups.

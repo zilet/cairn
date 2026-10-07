@@ -638,8 +638,7 @@ type TodaySessionSetActionsApi = {
         const el = inputs[index];
         if (!el || value == null || el.value === value) return;
         el.value = value;
-        // The live "That beats last time" line listens on input — only the event
-        // tells it the row changed under it.
+        // The live "That beats last time" line listens on input; only the event tells it.
         try {
           el.dispatchEvent(new Event("input", { bubbles: true }));
         } catch {}

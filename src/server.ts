@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { api, apiErrorHandler } from "./api.js";
 import { handleMcpPost, methodNotAllowed } from "./mcp.js";
-import { seedIfEmpty } from "./seed.js";
+import { seedBootMessage, seedIfEmpty } from "./seed.js";
 import { startScheduler } from "./scheduler.js";
 import { catchUpExerciseEnrichment, recoverPendingEnrich } from "./enrich.js";
 import { recoverChatTurns, abortAllTurns } from "./chatTurns.js";
@@ -13,7 +13,10 @@ import { recoverDicomImports } from "./dicomImports.js";
 import { startBrainReviewJobSubscriber } from "./brainReviewJobs.js";
 import { REPAIRED_ART_WARM_PER_BOOT, repairMisfiledArtAliasesOnce, warmArt } from "./art.js";
 import { maybeScheduleAgentCliAutoUpdate } from "./agentCliUpdates.js";
-import { authGuard, authEnabled, requireAuth, authStartupError, rateLimitGuard, rateLimitEnabled, tokenMatches, checkRateLimit } from "./auth.js";
+import { authGuard, authEnabled, requireAuth, authStartupError, rateLimitGuard, rateLimitEnabled, upgradeAuthorized, checkRateLimit, trustProxyHops, accessTokenEpochAtBoot } from "./auth.js";
+import { clientAddress } from "./authHttp.js";
+import { firstSignInNotice } from "./repo/auth-devices.js";
+import { oauthResume, oauthRouter } from "./routes/oauth.js";
 import { setAgentRunSink, loadAgents, invalidateAgentConfigured, warmAgentProbes } from "./agents.js";
 import { startLoginSession, killActiveLoginSession } from "./agentLogin.js";
 import { reportScriptCspHash } from "./report.js";
@@ -45,16 +48,34 @@ installSmokeLifetime();
 // recordAgentRun is itself failure-safe.
 setAgentRunSink((r) => repo.recordAgentRun(r));
 
-if (await seedIfEmpty()) {
-  log.info(
-    process.env.CAIRN_SEED_DEMO === "1"
-      ? "Database was empty — seeded with the full-coverage demo dataset (CAIRN_SEED_DEMO=1)."
-      : "Database was empty — seeded with the default plan."
-  );
+if (await seedIfEmpty()) log.info(seedBootMessage());
+
+// A rotated CAIRN_AUTH_TOKEN evicts everyone: every device session and passkey was
+// minted on the old token's authority (repo/auth-devices.ts applyAccessTokenEpoch).
+try {
+  if (accessTokenEpochAtBoot() === "changed") {
+    log.info("[auth] Access token changed — every device was signed out; sign in again.");
+  }
+} catch (err) {
+  log.warn("[auth] could not check the access token epoch", { error: err });
+}
+
+// A token-gated instance nobody has signed in to yet (a one-click host deploy, no
+// terminal): mint a one-hour, single-use first-sign-in code and print the ONE log line
+// that may ever carry a pairing code. Silent once any device or passkey exists or the
+// master token has signed something in; CAIRN_FIRST_SIGNIN_LOG=0 turns it off.
+try {
+  const firstSignIn = firstSignInNotice({ authEnabled });
+  if (firstSignIn) log.info(firstSignIn);
+} catch (err) {
+  log.warn("[auth] could not mint the first sign-in code", { error: err });
 }
 
 const app = express();
 app.disable("x-powered-by");
+// Behind a reverse proxy, req.ip is the proxy unless its hop is trusted (see trustProxyHops).
+const proxyHops = trustProxyHops();
+if (proxyHops > 0) app.set("trust proxy", proxyHops);
 
 function contentSecurityPolicy(pathname: string): string {
   const scriptSources = ["'self'"];
@@ -115,6 +136,13 @@ app.use((req, _res, next) => {
   try { repo.recordClientTimeZone(tz); } catch (err) { log.debug("[tz] could not record the client time zone", { error: err }); }
   return runWithBrainSnapshot(() => runWithTimeZone(tz, () => next()));
 });
+
+// OAuth 2.1 for /mcp (src/routes/oauth.ts): discovery, registration, consent, tokens —
+// outside /api, so the guard never sees them; each is public by design, per-IP limited,
+// and inert unless CAIRN_AUTH_TOKEN is set. oauthResume sends a browser that just signed
+// in on the shell back to the consent page it was on its way to.
+app.use(oauthRouter);
+app.use(oauthResume);
 
 // gzip JSON bodies over ~1KB when the caller accepts it. Mounted immediately in
 // front of the router so it wraps res.json for every REST route and nothing else:
@@ -195,7 +223,7 @@ const server = app.listen(PORT, HOST, () => {
   log.info(`  mcp  -> http://${HOST}:${PORT}/mcp  (POST, Streamable HTTP)`);
   log.info(
     authEnabled
-      ? `  auth -> CAIRN_AUTH_TOKEN set: /api and /mcp require the token`
+      ? `  auth -> CAIRN_AUTH_TOKEN set: /api and /mcp require sign-in (/mcp also takes per-app keys and OAuth)`
       : `  auth -> none (set CAIRN_AUTH_TOKEN to gate /api and /mcp; keep the port private)`
   );
   if (rateLimitEnabled) log.info(`  rate -> per-IP limit active on /api and /mcp`);
@@ -299,19 +327,20 @@ server.on("upgrade", (req, socket, head) => {
 
   // Rate-limit the upgrade BEFORE auth (mirrors rateLimitGuard sitting in front of
   // authGuard) so a token-guessing flood on this pre-auth entry point is throttled.
-  // WS upgrades bypass Express, so we apply the shared per-IP window here directly.
-  const ip = req.socket.remoteAddress || "unknown";
+  // WS upgrades bypass Express, so we apply the shared per-IP window here directly —
+  // keyed by the same client address Express's trust-proxy hop count gives req.ip.
+  const ip = clientAddress(req.headers, req.socket.remoteAddress, proxyHops);
   if (!checkRateLimit(ip).allowed) {
     socket.write("HTTP/1.1 429 Too Many Requests\r\n\r\n");
     socket.destroy();
     return;
   }
 
-  // Auth: mirror the rest of the app via the shared timing-safe check. WebSocket
-  // can't set headers, so the token rides the query string (same pattern as the
-  // chat SSE stream). No token configured = open (loopback/trusted-network model).
+  // Auth: a browser's device session cookie (with a same-origin Origin header), or
+  // the master token on the query string (WebSocket can't set headers). No token
+  // configured = open (loopback/trusted-network model).
   const token = url.searchParams.get("token");
-  if (!tokenMatches(token)) {
+  if (!upgradeAuthorized(req, token)) {
     socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
     socket.destroy();
     return;

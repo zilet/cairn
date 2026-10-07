@@ -208,6 +208,68 @@ export interface ClientUpdateStatus {
   checked_at?: string | null;
   error?: string | null;
   enabled?: boolean;
+  /** Where this Cairn runs (src/hosting.ts). */
+  platform?: "railway" | "installer" | "docker" | "source";
+  /** How a new release reaches this host. */
+  update_method?: "automatic" | "deploy_hook" | "trigger_file" | "manual";
+  /** POST /api/update/apply can act here. */
+  can_apply?: boolean;
+  /** One server-owned sentence: how updates happen on this host. */
+  update_how?: string;
+  update_stale_hint?: string | null;
+  /** trigger_file only: the host updater's last report, or null when it never reported. */
+  updater?: {
+    installed: boolean;
+    last_run: string | null;
+    last_result: string | null;
+    version: string | null;
+    stale: boolean;
+  } | null;
+  update_requested_at?: string | null;
+  hook_misconfigured?: boolean;
+}
+
+export interface ClientUpdateApplyResponse {
+  ok: boolean;
+  method: "automatic" | "deploy_hook" | "trigger_file" | "manual";
+  message: string;
+}
+
+export interface ClientFeedbackDiagnostics {
+  version: string;
+  build_id: string;
+  platform: string;
+  update_method: string;
+  arch: string;
+  node: string;
+  uptime_hours: number;
+  window_days: number;
+  issues: Array<{
+    fingerprint: string;
+    source?: string;
+    kind?: string;
+    level?: string;
+    route?: string | null;
+    status?: number | null;
+    count?: number;
+    last_seen?: string;
+  }>;
+  issues_omitted?: number;
+}
+
+export interface ClientFeedbackPreview {
+  destination: "service" | "github";
+  diagnostics: ClientFeedbackDiagnostics;
+}
+
+export interface ClientFeedbackResponse {
+  ok: boolean;
+  method: "service" | "github";
+  id?: string | null;
+  /** github: the prefilled new-issue URL to open; service failure: the same fallback. */
+  url?: string;
+  message?: string;
+  error?: string;
 }
 
 export interface ClientAppleHealthConfig {
@@ -247,6 +309,121 @@ export interface ClientAppleHealthConnectionRevokeResponse {
   id: number;
 }
 
+/** A signed-in browser (src/routes/auth.ts). Never carries a secret. */
+export interface ClientAuthDevice {
+  id: number;
+  name: string;
+  kind: string;
+  created_at: string;
+  last_seen_at: string;
+  user_agent_summary: string | null;
+  current: boolean;
+  has_passkey: boolean;
+}
+
+export interface ClientAuthStatus {
+  auth_required: boolean;
+  method: "master" | "session" | "open";
+  device: ClientAuthDevice | null;
+}
+
+/** A passkey a sign-out would remove, as its confirm sheet names it. */
+export interface ClientAuthPasskeyLabel {
+  id: number;
+  name: string;
+}
+
+/** A connected AI app a sign-out would disconnect, as its confirm sheet names it. */
+export interface ClientAuthAppLabel {
+  id: number;
+  name: string;
+}
+
+export interface ClientAuthDevicesResponse {
+  /**
+   * Each device also names the passkeys signing it out removes and the AI apps it
+   * connected, which signing it out from here disconnects ([] for this device).
+   */
+  devices: Array<
+    ClientAuthDevice & {
+      revoke_removes_passkeys: ClientAuthPasskeyLabel[];
+      revoke_disconnects_apps: ClientAuthAppLabel[];
+    }
+  >;
+  current_device_id: number | null;
+  /** The passkeys "Sign out other devices" removes. */
+  revoke_others_removes_passkeys: ClientAuthPasskeyLabel[];
+  /** The AI apps "Sign out other devices" disconnects (the ones those devices connected). */
+  revoke_others_disconnects_apps: ClientAuthAppLabel[];
+}
+
+export interface ClientAuthPasskeysResponse {
+  passkeys: Array<{
+    id: number;
+    name: string;
+    device_id: number | null;
+    this_device: boolean;
+    created_at: string;
+    last_used_at: string | null;
+  }>;
+}
+
+/** POST /api/auth/pairing-codes — "XXXX-XXXX", single use, ten minutes. */
+export interface ClientAuthPairingCode {
+  code: string;
+  expires_at: string;
+}
+
+/**
+ * POST /api/auth/resource-link — the path with a two-minute, one-path `?sig=`;
+ * POST /api/auth/calendar-link — `/api/plan.ics?feed=…`, the calendar subscription.
+ * With sign-in off, the path comes back as it was.
+ */
+export interface ClientAuthLink {
+  ok: boolean;
+  url?: string;
+  expires_in_sec?: number;
+  error?: string;
+}
+
+/** GET /api/auth/mcp-clients — connected AI apps (per-app keys + OAuth grants), never a key. */
+export interface ClientMcpClientRow {
+  id: number;
+  name: string;
+  kind: "token" | "oauth";
+  created_at: string;
+  last_used_at: string | null;
+  /** OAuth: the host of the redirect URI the grant was approved for. */
+  redirect_host: string | null;
+  /** The device that made the key / approved the grant; null under the master token. */
+  device_name: string | null;
+}
+
+export interface ClientMcpClientsResponse {
+  auth_required: boolean;
+  mcp_url: string | null;
+  oauth_available: boolean;
+  clients: ClientMcpClientRow[];
+}
+
+/** POST /api/auth/mcp-clients — the new key, returned this once. */
+export interface ClientMcpClientCreated {
+  ok: boolean;
+  error?: string;
+  client?: ClientMcpClientRow;
+  token?: string;
+  mcp_url?: string | null;
+  oauth_available?: boolean;
+}
+
+export interface ClientAuthMutation {
+  ok: boolean;
+  error?: string;
+  device?: ClientAuthDevice;
+  signed_out?: boolean;
+  revoked?: number;
+}
+
 export interface ClientRouteTask {
   key: string;
   label: string;
@@ -264,6 +441,12 @@ export interface ClientAgentAvailability {
 export interface ClientAgentInfo {
   name?: string;
   description?: string | null;
+  /** Display name for the first-run provider tile ("Claude", "ChatGPT", "Google", "Grok"); null when unset. */
+  label?: string | null;
+  /** The plain plan line under that name ("Claude Pro or Max"); null for a non-provider (the offline stub). */
+  plan?: string | null;
+  can_login?: boolean;
+  installable?: boolean;
   enabled?: boolean;
   env_ok?: boolean;
   usable?: boolean;
@@ -283,6 +466,8 @@ export type ClientAgentConfig = ClientAgentInfo[];
 
 export interface ClientSettings {
   onboarded?: boolean;
+  /** The first-run welcome exchange with the coach happened (POST /api/welcome). */
+  coach_welcomed?: boolean;
   enrich_enabled?: boolean;
   art_enabled?: boolean;
   proactive_enabled?: boolean;
@@ -291,6 +476,8 @@ export interface ClientSettings {
   research_enabled?: boolean;
   bg_ops_enabled?: boolean;
   update_check_enabled?: boolean;
+  /** Opt-in weekly anonymous usage ping (default off). */
+  usage_ping_enabled?: boolean;
   garmin_last_sync_at?: string | null;
   garmin_last_sync_status?: string | null;
   garmin_export_strength?: boolean;
@@ -3531,6 +3718,60 @@ export interface ClientAgentJobsResponse {
   jobs: ClientAgentJob[];
 }
 
+/** POST /api/welcome: the coach's first conversation, always a durable `welcome` job. */
+export type ClientWelcomeQueuedResponse =
+  | { ok: true; job: ClientAgentJob }
+  | { ok: false; error: string; tried: ClientAgentAttempt[] };
+
+/** One lifting day in the welcome's first week. `dow` 0 = Sunday; null when no lifting weekdays were stated. */
+export interface ClientWelcomeWeekDay {
+  dow: number | null;
+  day_number: number;
+  name: string;
+}
+
+/**
+ * The `welcome` job's result (src/coachOps/welcome.ts). `week_state` says where the week
+ * is: applied (on the plan now), announced (lands at the person's next boundary), draft
+ * (held for review), existing (a plan was already there), queued (a busy host handed it to
+ * its own compose job, `week_job_id`), failed, or none.
+ */
+export type ClientWelcomeResult =
+  | {
+      ok: true;
+      reply: string;
+      week: ClientWelcomeWeekDay[] | null;
+      week_state: "applied" | "announced" | "draft" | "existing" | "queued" | "failed" | "none";
+      week_job_id?: number | null;
+      fuel: { target_kcal: number | null; protein_g: number | null } | null;
+      fuel_state: "set" | "existing" | "none";
+      applied: {
+        about_me: boolean;
+        profile: boolean;
+        goal: string | null;
+        lift_days: number[];
+        supplements: number;
+        memories: number;
+        context_events: number;
+        movement_considerations: number;
+      };
+      agent: string;
+      tried: ClientAgentAttempt[];
+      agent_status?: string;
+    }
+  | { ok: false; error: string; agent: null; tried: ClientAgentAttempt[]; agent_busy?: true; agent_status?: string };
+
+/** POST /api/agents/:name/verify: one "say hello" round-trip for that agent only. */
+export type ClientAgentVerifyResponse =
+  | { ok: true; agent: string; ms: number }
+  | {
+      ok: false;
+      agent: string;
+      /** busy = the host had no free slot: retry shortly, never show it as a failure. */
+      reason: "busy" | "not_signed_in" | "timeout" | "failed" | "not_installed";
+      message: string;
+    };
+
 /** POST /api/what-if: always a durable job; its result is a WhatIfResult or the designed failure. */
 export type ClientWhatIfQueuedResponse =
   | { ok: true; job: ClientAgentJob }
@@ -3746,6 +3987,9 @@ export interface ClientApiResponses {
   "/api/version": ClientVersionResponse;
   "/api/update-status": ClientUpdateStatus;
   "/api/update-check": ClientUpdateStatus;
+  "/api/update/apply": ClientUpdateApplyResponse;
+  "/api/feedback": ClientFeedbackResponse;
+  "/api/feedback/preview": ClientFeedbackPreview;
   "/api/settings": ClientSettingsResponse;
   "/api/agents": ClientAgentConfig;
   "/api/agent-stats": ClientAgentStats;
@@ -3766,6 +4010,17 @@ export interface ClientApiResponses {
   "/api/apple-health/connections": ClientAppleHealthConnectionsResponse;
   "/api/apple-health/connections/:id": ClientAppleHealthConnectionRevokeResponse;
   "/api/apple-health/pairings": ClientAppleHealthPairingResponse;
+  "/api/auth/status": ClientAuthStatus;
+  "/api/auth/devices": ClientAuthDevicesResponse;
+  "/api/auth/devices/:id": ClientAuthMutation;
+  "/api/auth/devices/revoke-others": ClientAuthMutation;
+  "/api/auth/pairing-codes": ClientAuthPairingCode;
+  "/api/auth/passkeys": ClientAuthPasskeysResponse;
+  "/api/auth/passkeys/:id": ClientAuthMutation;
+  "/api/auth/resource-link": ClientAuthLink;
+  "/api/auth/calendar-link": ClientAuthLink;
+  "/api/auth/mcp-clients": ClientMcpClientsResponse | ClientMcpClientCreated;
+  "/api/auth/mcp-clients/:id": ClientAuthMutation;
   "/api/profile": ClientProfile;
   "/api/profile/movement-considerations": ClientMovementConsiderations | null;
   "/api/goal": ClientGoalCheck;
@@ -3935,6 +4190,7 @@ export interface ClientApiResponses {
   "/api/supplements": ClientSupplement[];
   "/api/supplements/understand": { ok: true; supplements: ClientSupplement[] };
   "/api/onboard": ClientOkResponse;
+  "/api/welcome": ClientWelcomeQueuedResponse;
   "/api/chat": ClientChatMessage[] | ClientChatPostResponse;
   "/api/chat/sessions": ClientChatSessionSummary[];
   "/api/chat/sessions/:sessionId": ClientChatMessage[];
@@ -3954,6 +4210,12 @@ export type ClientApiPath = ClientApiCanonicalPath extends `/api${infer Path}` ?
 
 type ClientApiResponseForCleanPath<Path extends string> = `/api${Path}` extends keyof ClientApiResponses
   ? ClientApiResponses[`/api${Path}`]
+  : Path extends `/auth/devices/revoke-others`
+    ? ClientAuthMutation
+  : Path extends `/auth/devices/${string}`
+    ? ClientAuthMutation
+  : Path extends `/auth/passkeys/${string}`
+    ? ClientAuthMutation
   : Path extends `/apple-health/connections/${string}`
     ? ClientAppleHealthConnectionRevokeResponse
     : Path extends `/plan/${string}/target`
@@ -4057,6 +4319,8 @@ type ClientApiResponseForCleanPath<Path extends string> = `/api${Path}` extends 
                                                                                             ? ClientAgentJobResponse
                                                                                             : Path extends `/agent-jobs/${string}`
                                                                                               ? ClientAgentJobResponse
+                                                                                              : Path extends `/agents/${string}/verify`
+                                                                                                ? ClientAgentVerifyResponse
                                                                                               : Path extends `/agents/${string}/info`
                                                                                                 ? ClientAgentProbeResponse
                                                                                                 : Path extends `/agents/${string}/models`

@@ -70,3 +70,23 @@ test("getUpdateStatus with no cached check reports current only (calm unknown)",
   assert.equal(st.update_available, false);
   assert.equal(st.error, null);
 });
+
+test("staleUpdateHint: Railway only, newer release older than 3 days, else null", async () => {
+  const { staleUpdateHint } = await import("../dist/updateCheck.js");
+  const now = Date.parse("2026-10-10T12:00:00Z");
+  const st = (published_at, update_available = true) => ({ latest: "2.1.0", update_available, published_at });
+  const railway = { platform: "railway" };
+  const hint = staleUpdateHint(st("2026-10-06T12:00:00Z"), railway, now);
+  assert.match(hint, /^Railway hasn't picked up v2\.1\.0 yet\. If Auto Updates is off, turn it on: your service .* Settings .* Source .* Auto Updates\.$/);
+  assert.equal(staleUpdateHint(st("2026-10-08T12:00:00Z"), railway, now), null);
+  assert.equal(staleUpdateHint(st("2026-10-07T12:00:00Z"), railway, now), null);
+  assert.equal(staleUpdateHint(st("2026-10-06T12:00:00Z", false), railway, now), null);
+  assert.equal(staleUpdateHint(st(null), railway, now), null);
+  for (const platform of ["docker", "installer", "source"]) {
+    assert.equal(staleUpdateHint(st("2026-10-06T12:00:00Z"), { platform }, now), null);
+  }
+});
+
+test("getUpdateStatus carries update_stale_hint (null off Railway)", () => {
+  assert.equal(getUpdateStatus().update_stale_hint, null);
+});

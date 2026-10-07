@@ -143,8 +143,10 @@ function loadAhead(globals = {}) {
       "today-ahead-controller",
       // The strip's chips are the day view's (the calendar bundle today-ahead depends on).
       "day-detail-model",
+      "day-glance-model",
       "day-detail-run-client",
       "day-detail-client",
+      "day-glance-view",
       "day-detail-controller",
       "drill-controller",
       "today-strip-client",

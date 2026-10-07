@@ -23,6 +23,18 @@ image itself.
 | `cairn-home` | `/home/app` | Provider login directories, plus the V8 compile cache (`.cache/node-compile-cache`, regenerable) |
 | `cairn-tools` | `/home/app/.cairn-tools` | Optional provider binaries; regenerable, omitted from backups |
 
+**Single-volume mode (`CAIRN_SINGLE_VOLUME=1`).** Hosting platforms (such as Railway) give a
+service exactly one persistent volume. With this flag the entrypoint keeps the home state under
+`/data/home` instead: `HOME`, `CAIRN_CLI_ROOT`, `NPM_CONFIG_PREFIX`, `NPM_CONFIG_CACHE`,
+`NODE_COMPILE_CACHE`, and the `PATH` entries that pointed at `/home/app` are all rewritten to that
+location before the app starts. This works whether the container starts as root (the usual case:
+it chowns, then drops to `app`) or already runs as a non-root uid (then `/data` must be writable by
+it). The database (`/data/cairn.db`), `uploads/`, `art/`, `backups/` and the other `DATA_DIR`
+entries sit beside `home/` without overlap. **In this mode a backup of `/data` also contains the
+provider CLI logins**, so treat it as a secret. A platform shell bypasses the entrypoint, so sign
+in to a provider from Settings → Agents → Connect, or run the CLI as `app` with
+`HOME=/data/home` set. Templates and the sizing note: [`HOSTING.md`](HOSTING.md).
+
 For local dev, the DB lives at `./data/cairn.db` (relative to the project root). The path is
 controlled by `DATA_DIR` (directory) or `DB_PATH` (explicit file override) — see `.env.example`.
 
@@ -125,6 +137,126 @@ Cairn makes no outbound update request at all. The running version is also expos
 - `CAIRN_UPDATE_REPO` — `owner/repo` to check against (defaults to the upstream repo); set
   this on a fork that cuts its own releases.
 
+### How a release reaches this host ("Update now")
+
+The same card says, in one sentence, how updates happen where Cairn runs, and offers a calm
+**Update now** button when the host can act on a tap (`POST /api/update/apply`, MCP
+`apply_update`; the status carries `platform`, `update_method`, `can_apply`, `update_how`):
+
+| `update_method` | When | What Update now does |
+|---|---|---|
+| `automatic` | Railway | Nothing to do — the host installs new releases in its maintenance window. |
+| `deploy_hook` | `CAIRN_DEPLOY_HOOK_URL` set | Generic option for a host that offers a redeploy webhook: POSTs the hook; the host rebuilds from the latest release. |
+| `trigger_file` | the one-line installer (`CAIRN_UPDATE_METHOD=trigger-file`) | Writes `${DATA_DIR}/.cairn-update-requested` (`{requested_at}`); the host updater removes it, updates, and reports in `${DATA_DIR}/.cairn-updater.json` (`{installed,last_run,last_result,version}` — flagged stale after 3 days). |
+| `manual` | plain Docker or a source checkout | No button; the card shows the commands above. |
+
+- `CAIRN_PLATFORM` — `railway` \| `installer` \| `docker`. Unset, Cairn detects
+  Railway (`RAILWAY_ENVIRONMENT_ID`/`RAILWAY_PROJECT_ID`),
+  else `docker` when `/.dockerenv` exists, else `source`.
+- `CAIRN_DEPLOY_HOOK_URL` — the host's deploy hook (https only; anything else is ignored). It is
+  a credential: it never leaves the server, in any status, error or log line.
+- `CAIRN_UPDATE_METHOD=trigger-file` — use the data-folder trigger file regardless of platform.
+
+### Signing devices in (sessions, pairing codes, passkeys)
+
+With `CAIRN_AUTH_TOKEN` set, a browser signs in **once** and then carries its own HttpOnly
+`cairn_session` cookie (180 days, sliding; `Secure` whenever the request arrived over HTTPS). The
+master token never lives on a device. Ways in, from the sign-in screen:
+
+- **Passkey** — Face ID / fingerprint, offered once after a device's first sign-in and under
+  **Settings → Devices**. Needs an `https://` address (or `localhost`).
+- **Pairing code** — **Settings → Devices → Pair a device** on a signed-in device mints a one-time
+  code (`XXXX-XXXX`, ten minutes, works once) and shows it as a QR of
+  `https://<your-cairn>/#pair=XXXX-XXXX` plus the code in text. The code rides the URL *fragment*,
+  which no server or proxy ever logs, and the shell exchanges it for that device's own session.
+  Wrong codes are rate limited per address, and ten misses anywhere close pairing for 15 minutes.
+- **Access token** — the recovery path: paste `CAIRN_AUTH_TOKEN` itself.
+
+**Links that leave the app.** A report, a record's file or a download opens on a two-minute signed
+link (`?sig=`, one path, GET only), so the Safari tab an iOS Home Screen app opens it in needs no
+sign-in of its own. A calendar subscription (Train → Plan → Subscribe) carries its own long-lived,
+read-only link that opens `plan.ics` and nothing else; **Settings → Devices → Reset calendar link**
+retires it (subscribed calendars stop updating until re-subscribed).
+
+API clients keep sending `Authorization: Bearer <CAIRN_AUTH_TOKEN>`; an AI app should rather get
+its own access (next section). A script can mint a pairing code the same way:
+
+```bash
+curl -fsS -X POST -H "Authorization: Bearer $CAIRN_AUTH_TOKEN" https://<your-cairn>/api/auth/pairing-codes
+# → {"code":"ABCD-EFGH","expires_at":"…"}; open https://<your-cairn>/#pair=ABCD-EFGH on the device
+```
+
+**First device without a terminal.** While the token is set and nobody has signed in yet (no
+device, no passkey), every boot mints a one-hour first-sign-in code and logs one line — the only
+log line that ever carries a code: `First sign-in: open https://<domain>/#pair=XXXX-XXXX (expires in
+60 min, works once)` (the domain comes from `RAILWAY_PUBLIC_DOMAIN`; elsewhere it says "your Cairn
+address"). Once any device or passkey exists, or the access token has signed anything in, nothing is
+logged (and no code is minted). That line reaches whatever reads the service's logs — a platform log
+viewer, a log drain, a log shipper — so it is a live credential for its hour; set
+`CAIRN_FIRST_SIGNIN_LOG=0` to never mint or print it (then sign in with the access token).
+
+**Retired:** the older `/?pair=<token>` link (it put the master token in a URL). It no longer signs
+anything in: the shell strips it from the address bar at once, never sends or stores it, and the
+sign-in screen says "That sign-in link is retired — use a pairing code or your access token." If an
+old link with your token was ever shared or bookmarked, rotate the token (below). A token an older
+build stored in the browser is still swapped for a session cookie once on the next open, then
+deleted from the device.
+
+**Recovery.**
+
+- *Lost every device:* open Cairn, choose **Use your access token**, paste `CAIRN_AUTH_TOKEN` from
+  your host's settings (Railway → Variables, or the `.env` next to your install).
+- *Lost one device:* **Settings → Devices → Sign out** on it. Every passkey that device could still
+  hold goes too — bound to it, added by it, or last used to sign it in (a synced passkey lives on
+  every device of its account) — and the confirm sheet names them first. **Sign out other devices**
+  ends every session but the one you are holding and removes every passkey not tied to this device
+  (including one added with the access token alone). A device signed out is never brought back:
+  signing that browser in again makes a new device row.
+- *Rotate the master token = evict everyone:* change `CAIRN_AUTH_TOKEN` in the environment and
+  redeploy/restart. The database remembers a salted fingerprint of the token it last booted with
+  (never the token); the first boot with a different value signs EVERY device out and deletes
+  every passkey and pending pairing code — each was minted on the old token's authority — and logs
+  one line: `Access token changed — every device was signed out; sign in again.` Sign each browser
+  in again with the new token (or a pairing code from the first one you sign in), add passkeys
+  again, and give API/MCP clients the new value. The calendar subscription link and Apple Health
+  connections are separate credentials: reset them in Settings if they may have leaked too.
+  Connected AI apps (MCP keys and sign-ins, below) are disconnected by the rotation as well.
+
+### Connect an AI app (MCP)
+
+Cairn's MCP endpoint is `https://<your-cairn>/mcp` (Streamable HTTP). With `CAIRN_AUTH_TOKEN` set,
+each AI app gets its **own** access, listed under **Settings → Devices → Connected AI apps** with
+when it was last used and a **Disconnect**. None of it opens `/api`, and signing devices out never
+touches it.
+
+- **The Claude app, ChatGPT, or any app with "Add custom connector":** paste
+  `https://<your-cairn>/mcp`. The app registers itself, opens Cairn in your browser, you sign in if
+  asked (passkey, pairing code or the token, as above) and tap **Allow**. That is OAuth 2.1 with
+  PKCE: the app holds a one-hour access token and a rotating refresh token, both bound to `/mcp`.
+  It needs an `https://` address (or `localhost`); behind a TLS proxy, set `CAIRN_TRUST_PROXY` so
+  Cairn sees the https scheme (Railway is detected automatically).
+- **Claude Code, or a client configured by file:** **New key for an app** shows a key once
+  (`cairn_mcp_…`) with copy-ready setup and a **Test connection**:
+
+  ```bash
+  claude mcp add --transport http cairn https://<your-cairn>/mcp --header "Authorization: Bearer cairn_mcp_…"
+  ```
+
+  Other clients take the same URL and header in their `mcpServers` JSON. Keys are stored only as a
+  hash; a lost key is disconnected and replaced, never recovered.
+
+The master token still opens `/mcp` too, but a per-app key or a sign-in is the better habit: one
+app can be cut off without changing anything else. With sign-in off, `/mcp` is open to anything that
+can reach the port, and none of this applies.
+
+### Feedback and the opt-in usage ping
+
+- `CAIRN_FEEDBACK_URL` — base URL of the feedback service (`POST {base}/v1/feedback`, and
+  `POST {base}/v1/ping` for the opt-in ping). Unset (and with no maintainer default compiled
+  in), **Send feedback** sends nothing: it opens a prefilled GitHub issue for you to review and
+  submit yourself, and the usage ping stays inert. What each one sends is in
+  `docs/OBSERVABILITY.md` ("Feedback and the usage ping").
+
 ## The Update / Deploy Flow
 
 From a source checkout:
@@ -202,8 +334,9 @@ keys; `test/pwaInstallIdentity.test.js` pins all of it. Chrome and Android refre
 their own (the worker serves `/manifest.json` network-first). An iOS home-screen app keeps the
 icon and name it was added with, so bumping `APP_IDENTITY_VERSION` turns on a one-time, optional
 note in standalone iOS installs (only when nothing waits to sync) explaining that re-adding the app
-refreshes them and listing what must be re-entered; **Settings → Data → Copy token** makes that
-re-entry quick.
+refreshes them and listing what must be re-entered. Signing in is not on that list: a re-added
+Home Screen app signs in on its own with a passkey or a pairing code (**Settings → Devices → Pair a
+device** on another signed-in device).
 
 ### Rollback
 
@@ -266,8 +399,8 @@ storage keys (including the token and any unsent outbox), are unchanged, so a ph
 installed picks up v2 on its next open and keeps everything. Chrome and Android also refresh the
 new icon and name. An iOS home-screen app keeps the icon and name it was added with; re-adding it
 refreshes them but starts with empty storage, so a standalone iOS install shows one optional
-note about this. Use **Settings → Data → Copy token** before re-adding, then paste the token
-back in. See [Did the installed app pick it up?](#did-the-installed-app-pick-it-up) to verify.
+note about this. A re-added app signs in on its own with a passkey or a pairing code
+(**Settings → Devices → Pair a device**); the access token never needs to go on the phone. See [Did the installed app pick it up?](#did-the-installed-app-pick-it-up) to verify.
 
 **Rollback.** Stop the service, restore the pre-upgrade backup into the data volume
 ([Restore](#restore)), and start the previous image tag you noted in step 1. Do not run the old
@@ -302,7 +435,9 @@ existing rows need no manual step — just deploy and let boot apply them. Brand
 (`health_documents`, `context_events`, `checkins`, `daily_metrics`, `family_members`,
 `health_directives`, `insights`, `daily_session_compositions`, and the `art_*` cache tables) are created via
 `CREATE TABLE IF NOT EXISTS` on boot, so they need no migration entry. Down-migrations are not
-supported — **back up before deploying a schema change** (see Backups below).
+supported — **back up before deploying a schema change** (see Backups below). Boot also takes an
+[automatic pre-migration snapshot](#automatic-pre-migration-snapshots) whenever a migration is
+pending.
 
 **Uploaded files.** Health-document uploads (bloodwork/DEXA/etc.) are written to `data/uploads/`
 inside the mounted `cairn-data` volume — so they survive rebuilds and are captured by the same
@@ -428,6 +563,32 @@ transaction or two — SQLite's own recommendation for WAL, and it removes one f
 `busy_timeout` is what lets a one-off read-only query against the live file (or the test
 harness's parallel processes) wait for the writer instead of failing with "database is locked".
 None of these persist in the file; they are per-connection and re-applied on every boot.
+
+### Automatic pre-migration snapshots
+
+When boot finds pending migrations on an existing database (`user_version` above 0 and below the
+ladder's top), it first writes a `VACUUM INTO` copy of the untouched file to
+`${DATA_DIR}/backups/pre-migration-v<from>-to-v<to>-<timestamp>.db`
+(`src/migrationSnapshot.ts`). It keeps the newest three files with that prefix and never touches
+anything else in `backups/`. A fresh database, an up-to-date one and an in-memory one are never
+copied, so an ordinary restart costs one PRAGMA read. If the snapshot cannot be written (for
+example, a full disk), boot logs a warning and migrates anyway. Set
+`CAIRN_REQUIRE_MIGRATION_SNAPSHOT=1` to refuse to migrate instead.
+
+To roll back a bad upgrade, restore the snapshot and run the image tag you upgraded **from**. If
+you start the restored file on the new image, boot just migrates it again.
+
+```bash
+docker compose stop
+docker run --rm -v cairn-data:/data busybox ls -l /data/backups      # pick the file
+docker run --rm -v cairn-data:/data busybox sh -c \
+  "rm -f /data/cairn.db-wal /data/cairn.db-shm && cp /data/backups/pre-migration-v118-to-v119-<timestamp>.db /data/cairn.db"
+# set the image tag back to the release you upgraded FROM, then:
+docker compose up -d
+```
+
+On a hosting platform, use the platform's shell (or its volume-restore feature) to perform the
+same copy, then redeploy the previous image tag.
 
 ### Restore
 

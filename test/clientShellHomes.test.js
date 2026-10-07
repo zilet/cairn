@@ -246,7 +246,12 @@ test("the You landing lists Health, About you and Settings and opens each where 
   assert.equal(state.meSeg, "family");
   win.view.querySelector('[data-you-view="settings"][data-you-section="data"]').click();
   assert.equal(state.setSeg, "data");
-  assert.deepEqual(tabs, ["stand", "me", "settings"]);
+  // Device access has its own quiet row: a phone's way in is never buried under Data.
+  const devicesRow = win.view.querySelector('[data-you-view="settings"][data-you-section="devices"]');
+  assert.match(devicesRow.textContent, /Devices.*Pair your phone, passkeys/s);
+  devicesRow.click();
+  assert.equal(state.setSeg, "devices");
+  assert.deepEqual(tabs, ["stand", "me", "settings", "settings"]);
 });
 
 // The Horizon landing itself (the timeline, its lanes and the goal section) is

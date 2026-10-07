@@ -187,7 +187,7 @@ function healthDocInner(doc: HealthDocRow): string {
       </div>
       <div class="hdoc-actions">
         ${doc.has_file ? `<button class="hdoc-link hdoc-rescan" data-hrescan="${docIdAttr}"${busy ? " disabled" : ""} title="Re-run the scan over the original file">↻ re-analyze</button>` : ""}
-        ${fileId ? `<a class="hdoc-link" href="${withToken(`/api/health-docs/${fileId}/file`)}" target="_blank" rel="noopener">view file</a>` : ""}
+        ${fileId ? `<a class="hdoc-link" href="${escAttr(`/api/health-docs/${fileId}/file`)}" target="_blank" rel="noopener" data-resource-link>view file</a>` : ""}
         <button class="iconbtn hdoc-del" data-hdel="${docIdAttr}" title="delete">×</button>
       </div>
     </div>`;

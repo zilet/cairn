@@ -115,14 +115,7 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
 
   const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   const routeTasks = typeof settingsRouteTasks === "function" ? settingsRouteTasks(data) : [];
-  const inStandaloneApp = (() => {
-    try {
-      if (isStandalonePWA()) return true;
-      if (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) return true;
-      if ((navigator as Navigator & { standalone?: boolean }).standalone) return true;
-    } catch {}
-    return false;
-  })();
+  const inStandaloneApp = isStandalonePWA();
 
   // Same landing default as the router — read from the route definitions so the
   // URL contract and the seg bar can never disagree about where Settings opens.
@@ -159,6 +152,7 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
       chat_routing_mode: wm.chat_routing_mode,
       chat_profile_bindings: wm.chat_profile_bindings,
       update_check_enabled: wm.update_check_enabled,
+      usage_ping_enabled: wm.usage_ping_enabled,
       lead_mode: wm.lead_mode,
       run_units: wm.run_units,
       weight_units: wm.weight_units,
@@ -270,6 +264,7 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
       downloadFile,
       reload: () => location.reload(),
       inStandaloneApp,
+      relTime,
     };
   }
 
@@ -316,7 +311,7 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
       void loadSystemDiagnostics();
     }
     slot.innerHTML = `<div class="reveal">
-      <p class="set-group-sub">Operator diagnostics — Cairn's own runtime health, not something you need to check day to day.</p>
+      <p class="set-group-sub">Operator diagnostics — Cairn's own runtime health, not something you need to check day to day. Something off? <button class="linkbtn-quiet" type="button" data-feedback-open>Send feedback</button></p>
       <details class="route-card"${diagnosticsState.foldOpen ? " open" : ""}>
         <summary><h1 class="lbl" style="display:inline">Under the hood</h1></summary>
         ${CairnSettingsClient.diagnosticsCard(diagnosticsState.data, {
@@ -333,6 +328,7 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
         })}
       </details>
     </div>`;
+    slot.querySelector("[data-feedback-open]")?.addEventListener("click", () => CairnSettingsFeedback.open({ api, toast }));
     optionalEl<HTMLDetailsElement>("#setSlice > .reveal > details")?.addEventListener("toggle", (event) => {
       diagnosticsState.foldOpen = (event.currentTarget as HTMLDetailsElement).open;
     });
@@ -395,7 +391,7 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
     );
   }
 
-  const SLICES: Record<SettingsScreenSliceKey, () => void> = { agents: renderAgentsSlice, system: renderSystemSlice, sources: renderSourcesSlice, automation: renderAutomationSlice, data: renderDataSlice };
+  const SLICES: Record<SettingsScreenSliceKey, () => void> = { agents: renderAgentsSlice, system: renderSystemSlice, sources: renderSourcesSlice, automation: renderAutomationSlice, data: renderDataSlice, devices: () => CairnSettingsDataController.renderDevices(settingsDataDeps()) };
   const paintSlice = (key: ClientSettingsSection | undefined): void => (SLICES[key || "sources"] || renderSourcesSlice)();
 
   // Sub-tab switch: slide the thumb, swap ONLY #setSlice from the working model (no

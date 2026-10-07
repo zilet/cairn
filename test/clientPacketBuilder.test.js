@@ -409,6 +409,14 @@ function shareDeps(win, deps, calls) {
     stagger: (i) => `--i:${i ?? 0}`,
     switchHealthSeg: (seg, opts) => calls.segs.push([seg, opts]),
     withToken: (url) => `${url}${url.includes("?") ? "&" : "?"}token=t`,
+    // api-core's openResourceLink, recorded: the tab opens, then lands on the path.
+    openResourceLink: async (path, mode = "tab") => {
+      (calls.links ||= []).push({ path, mode });
+      if (mode === "download") return calls.downloads.push(path);
+      const tab = win.open("", "_blank");
+      tab.opener = null;
+      tab.location.href = path;
+    },
     reducedMotion: () => false,
     openCheckup: () => {},
   };
@@ -472,9 +480,11 @@ test("the share controller registers the packet slot; sharing carries the sectio
     "Is the synthetic plan still right?",
     "Synthetic question of my own?",
   ]);
-  assert.equal(opened.searchParams.get("token"), "t");
+  assert.equal(opened.searchParams.get("token"), null, "never the master token: a signed link instead");
+  assert.deepEqual(calls.links.map((l) => l.mode), ["tab"], "the report rides a signed resource link");
 
   await host.querySelector("[data-packet-text]").click();
+  assert.deepEqual(calls.links.map((l) => l.mode), ["tab", "download"]);
   const text = new URL(calls.downloads[0], "http://x");
   assert.equal(text.pathname, "/api/health-report.txt");
   assert.deepEqual(text.searchParams.getAll("questions"), [

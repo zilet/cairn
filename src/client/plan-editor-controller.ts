@@ -426,7 +426,10 @@ async function paintPlanEditor(reuseHeads?: PlanHeadReads): Promise<void> {
   if (token !== pollToken || state.tab !== "plan") return;
   if (peek && !peek.fresh) markRefreshing(true);
 
-  const icsUrl = withToken("/api/plan.ics");
+  // A calendar app subscribes with no cookie: the Subscribe tap asks for the calendar
+  // feed link (`?feed=`, long-lived, opens plan.ics alone) and hands THAT to the
+  // calendar; the (.ics) view rides a short-lived signed link (data-resource-link).
+  const icsUrl = "/api/plan.ics";
   const calFooter = helpers.calendarFooterHtml(plan, location.host, icsUrl);
   view.innerHTML = segBar("plan", PROGRESS_SEG) + `<div id="planWeekSlot" class="card-stack-item"></div><div id="planRecoverySlot"></div><div id="planUpcomingSlot"></div><div id="planRedrawSlot"></div><div id="planedit"></div>
     ${showEnduranceTab() ? `<div id="planRunsNote">${helpers.runsElsewhereHtml()}</div>` : ""}
@@ -438,6 +441,14 @@ async function paintPlanEditor(reuseHeads?: PlanHeadReads): Promise<void> {
   loadPlanUpcomingNote(token, "#planUpcomingSlot", heads.upcoming);
   loadExerciseNameOptions(token);
 
+  view.querySelector<HTMLAnchorElement>("[data-plan-cal-subscribe]")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    void api("/auth/calendar-link", { method: "POST" })
+      .then((r) => (r && typeof r.url === "string" ? r.url : icsUrl), () => icsUrl)
+      .then((url) => {
+        location.href = `webcal://${location.host}${url}`;
+      });
+  });
   view.querySelector<HTMLElement>("[data-plan-runs]")?.addEventListener("click", () => {
     state.planJump = state.planSeg = "endurance"; activateTab("plan"); // the race view is Horizon's
   });

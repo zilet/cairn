@@ -1,9 +1,28 @@
 # Cairn observability
 
 Cairn's operator telemetry is local-first SQLite data, not engagement analytics.
-It never sends diagnostics to a third party and never stores request/response
-bodies, prompts, chat/domain text, health values, credentials, filesystem paths,
-or raw agent stdout/stderr.
+It never sends diagnostics anywhere on its own — only a feedback message the owner
+writes, with diagnostics they tick, leaves the instance (below) — and never stores
+request/response bodies, prompts, chat/domain text, health values, credentials,
+filesystem paths, or raw agent stdout/stderr.
+
+## Feedback and the usage ping
+
+- **Send feedback** (Settings → Data or System; `POST /api/feedback` — a person's action, not an MCP tool)
+  sends the kind, the message as typed, an optional contact, the version, the platform and a
+  random install id. Only when "Include anonymous diagnostics" is ticked (default off) does it
+  add the snapshot the sheet previews verbatim (`GET /api/feedback/preview`): version, build id,
+  platform, update method, CPU arch, Node version, uptime and up to 40 coalesced issue rows from
+  `diagnostic_events` — fingerprint, source, kind, level, route template, status, count, last
+  seen; never the stored message. It is capped at 32 KB. With no `CAIRN_FEEDBACK_URL`, nothing is
+  sent: the browser opens a prefilled GitHub issue (contact left out, since an issue is public).
+- **Usage ping** — off by default (`settings.usage_ping_enabled`). On, and only with a feedback
+  service configured, at most once a week it sends exactly: the random install id, the Cairn
+  version, the host platform, CPU architecture and Node version. Failures are silent and retried
+  no sooner than a day later; it never sits in the boot path or inside a request. The test suite has no
+  service URL, so it never sends.
+- The install id is a random UUID created on first use (`app_state.instance_id`); it is not
+  derived from anything about the owner or the machine.
 
 ## Durable signals
 

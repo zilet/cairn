@@ -70,7 +70,7 @@ test("startup's popstate asks the drill first, so a Back that only closes a peek
 });
 
 test("the drill and the day views format through CairnFmt only", () => {
-  for (const f of ["drill-controller.ts", "day-detail-model.ts", "day-detail-client.ts", "day-record-client.ts", "day-open-client.ts"]) {
+  for (const f of ["drill-controller.ts", "day-detail-model.ts", "day-glance-model.ts", "day-detail-client.ts", "day-glance-view.ts", "day-record-client.ts", "day-open-client.ts"]) {
     const src = code(read(f));
     assert.doesNotMatch(src, /1\.609|toLocaleDateString|toLocaleTimeString|Intl\.DateTimeFormat/, f);
   }
@@ -323,7 +323,7 @@ test("an inline open mounts the compact view and leaves history alone", () => {
 // ---- the chip and the row say a day in the same words ----
 
 function loadViews() {
-  return loadClientModule(["html-utils", "ui-format", "format-utils", "ui-format", "ui-reads", "day-detail-model", "day-detail-run-client", "day-detail-client"]);
+  return loadClientModule(["html-utils", "ui-format", "format-utils", "ui-format", "ui-reads", "day-detail-model", "day-glance-model", "day-detail-run-client", "day-detail-client", "day-glance-view"]);
 }
 
 test("the chip and the row read one glance: the same lift and run words, CairnFmt units, no raw dates", () => {

@@ -118,6 +118,7 @@ function loadSettingsSourcesAutomationController() {
   vm.runInNewContext(readFileSync(join(root, "public/js/date-utils.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/settings-client.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/settings-surface-model.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/settings-surface-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/settings-sources-automation-controller.js"), "utf8"), context);
   return context.CairnSettingsSourcesAutomationController;

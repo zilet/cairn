@@ -132,7 +132,12 @@ test("the bump refuses to start from places that already disagree", () => {
 // a key whose shape changes is migrated in place under the same name. A new key gets
 // an entry here (and says which module owns it).
 const PERSISTED_KEYS = {
-  cairn_token: ["api-core", "token-sheet", "client-diagnostics"],
+  cairn_token: ["api-auth", "auth-signin-client", "client-diagnostics"],
+  // The one "add a passkey" offer's "Not now", remembered per device (auth-signin-client.ts).
+  "cairn.auth.passkey-offer": ["auth-signin-client"],
+  // This browser's non-secret device hint: every sign-in sends it so the server reuses
+  // this browser's own device row (index.html's boot script mints the same key).
+  "cairn.device-hint": ["auth-passkey-client"],
   "cairn.outbox.v1": ["outbox-queue"],
   "cairn-outbox-v1": ["outbox-runtime"], // the Web Locks name old and new tabs coordinate on
   "cairn.chat.draft": ["chat-turn-records-client"],
@@ -162,6 +167,9 @@ const PERSISTED_KEYS = {
   "cairn:lastInsightGen": ["capture-read-jobs-client"],
   "cairn:lastWeeklyGen": ["capture-read-jobs-client"],
   "cairn.wakeLock.v1": ["app/wake-lock"],
+  // This browser has seen the install onboarded: the boot skips hiding the shell
+  // while it asks whether the first-run welcome should open.
+  "cairn.onboarded": ["app/onboarding", "welcome-screen", "welcome-meet-controller"],
   "cairn.app.identity.v1": ["app-identity-model"],
   "cairn.app.readd.dismissed.v1": ["app-identity-model"],
   // The five-home navigation's one-time "what moved here" line (v2 wave 5).
@@ -178,8 +186,10 @@ const NOT_PERSISTED = new Set([
   "cairn-art-miss", // art-memory-client: images the server just answered "not drawn yet"
   "cairn.dicom-import-jobs.v1",
   "cairn.chat.retry.v1",
+  "cairn.auth.offer", // sessionStorage: a sign-in this tab just made arms the one passkey offer
   "cairn.ask.whatif.v1", // the ask surface's in-flight what-if job id (v2 wave 5)
   "cairn:keyboard-settle",
+  "cairn:reveal-focused", // a DOM event (focused set field above the iOS keyboard), never stored
   "cairn-shell",
   "cairn-",
 ]);

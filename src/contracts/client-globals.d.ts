@@ -821,17 +821,26 @@ declare global {
     newestDocAt?: string | null;
   };
 
+  /** A Settings api() handle: headers as a record, and the opt-in error-body read. */
+  type ClientSettingsApi = (
+    path: string,
+    opts?: RequestInit & { headers?: Record<string, string>; acceptErrorBody?: boolean },
+  ) => Promise<unknown>;
+
   type ClientSettingsDataControllerDeps = {
     root: ParentNode;
-    workingModel: { update_check_enabled: boolean };
+    workingModel: { update_check_enabled: boolean; usage_ping_enabled: boolean };
     api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
     toast(message: string): void;
     markDirty(): void;
     updateCardHtml(status: unknown): string;
     withToken(path: string): string;
     downloadFile(path: string): void;
+    openResourceLink?: (path: string, mode?: "tab" | "download") => Promise<void>;
     reload(): void;
     inStandaloneApp?: boolean;
+    origin?: string;
+    relTime?: (iso: string) => string;
   };
 
   type ClientSettingsSourcesAutomationControllerDeps = {
@@ -1057,6 +1066,8 @@ declare global {
     stagger(index?: number | null): string;
     switchHealthSeg(seg: ClientHealthSection, opts?: { openPicker?: boolean }): void;
     withToken(url: string): string;
+    /** Injected in tests; the browser build uses api-core's openResourceLink. */
+    openResourceLink?: (path: string, mode?: "tab" | "download") => Promise<void>;
   };
 
   type ClientHealthStandingControllerDeps = {
@@ -1323,6 +1334,7 @@ declare global {
   declare function joinList(items: string[]): string;
   declare function authToken(): string;
   declare function withToken(url: string): string;
+  declare function openResourceLink(path: string, mode?: "tab" | "download"): Promise<void>;
   declare function downloadFile(href: string): void;
   declare function deviceTimeZone(): string;
   declare function localISO(date?: Date): string;
@@ -1351,6 +1363,7 @@ declare global {
   declare function apiPrime(paths: readonly string[], source: Promise<unknown>, ttlMs?: number): void;
   // Forget every remembered API body on this device (a 401, a new token).
   declare function clearRememberedApiBodies(): void;
+  declare function handleUnauthorized(): void;
   // Drop api()'s own micro/stale tier (api-core.ts) — a write that landed elsewhere.
   declare function apiInvalidate(): void;
   // Moves on every write (local or apiInvalidate): a fan-in reuse guard keys on it, so
@@ -2421,7 +2434,7 @@ declare global {
   declare function primeArtManifest(): Promise<void>;
   declare function jobReconnect(opts?: { reuseWithinMs?: number }): Promise<void>;
   /** Names of the bundles index.html does NOT load eagerly (see build-client's BUNDLES). */
-  declare type ClientLazyBundleName = "me-health" | "train" | "horizon" | "ask" | "settings" | "calendar" | "meals" | "today-ahead";
+  declare type ClientLazyBundleName = "me-health" | "train" | "horizon" | "ask" | "settings" | "calendar" | "meals" | "today-ahead" | "auth";
   /** Inject a lazily-loaded app-shell bundle (and its dependencies) once; resolves after they have executed. */
   declare function ensureBundle(name: ClientLazyBundleName): Promise<void>;
   declare function bundleLoaded(name: ClientLazyBundleName): boolean;
@@ -4068,6 +4081,125 @@ declare global {
 
     CairnSettingsDataController: {
       render(deps: ClientSettingsDataControllerDeps): void;
+      /** Settings -> Devices: pair a device, signed-in devices, passkeys (settings-pairing-client.ts). */
+      renderDevices(deps: ClientSettingsDataControllerDeps): void;
+    };
+
+    /** Settings -> Data: how releases reach this host + "Update now" (settings-update-client.ts). */
+    CairnSettingsUpdate: {
+      updateActionsHtml(status: unknown, options?: { relTime?: (iso: string) => string }): string;
+      wireUpdateActions(deps: {
+        host: HTMLElement;
+        api: ClientSettingsApi;
+        toast?: (message: string) => unknown;
+      }): void;
+    };
+
+    /** Settings -> Devices: pair a device, devices, passkeys (settings-pairing-client.ts). */
+    CairnSettingsPairing: {
+      pairingUrl(origin: string, code: string): string;
+      pairingCountdown(msLeft: number): string;
+      accessCardHtml(): string;
+      devicesSliceHtml(): string;
+      waysBackInHtml(hasPasskey: boolean): string;
+      pairingQrSvg(
+        doc: Document,
+        qr: { getModuleCount(): number; isDark(row: number, col: number): boolean },
+      ): SVGSVGElement;
+      wireAccessCard(deps: {
+        root: ParentNode;
+        api: (path: string, opts?: RequestInit & { headers?: Record<string, string> }) => Promise<unknown>;
+        origin: string;
+        document?: Document;
+        loadQr?: () => Promise<
+          (typeNumber: number, level: "L" | "M" | "Q" | "H") => {
+            addData(data: string): void;
+            make(): void;
+            getModuleCount(): number;
+            isDark(row: number, col: number): boolean;
+          }
+        >;
+        now?: () => number;
+        relTime?: (iso: string) => string;
+        toast?: (message: string) => void;
+        reload?: () => void;
+        passkeys?: { supported(): boolean; add(name?: string): Promise<{ ok: boolean; reason?: string }> };
+        confirm?: (opts: { title: string; body: string; action: string }) => Promise<boolean>;
+      }): void;
+    };
+
+    /** Settings -> Devices -> Connected AI apps: MCP keys + signed-in apps (settings-mcp-client.ts). */
+    CairnSettingsMcp: {
+      mcpUrlFor(origin: string): string;
+      claudeCodeCommand(url: string, token: string): string;
+      jsonConfig(url: string, token: string): string;
+      cardHtml(): string;
+      rowHtml(
+        client: {
+          id: number;
+          name: string;
+          kind: "token" | "oauth";
+          created_at: string;
+          last_used_at: string | null;
+          redirect_host: string | null;
+          device_name?: string | null;
+        },
+        relTime: (iso: string) => string,
+        day?: (iso: string) => string,
+      ): string;
+      wire(deps: {
+        root: ParentNode;
+        api: (path: string, opts?: RequestInit & { headers?: Record<string, string> }) => Promise<unknown>;
+        origin: string;
+        relTime?: (iso: string) => string;
+        day?: (iso: string) => string;
+        toast?: (message: string) => void;
+        confirm?: (opts: { title: string; body: string; action: string }) => Promise<boolean>;
+        copy?: (text: string) => Promise<boolean>;
+        testKey?: (token: string) => Promise<boolean>;
+      }): void;
+    };
+
+    /** Passkey support + ceremonies, lazy "auth" bundle (auth-passkey-client.ts). */
+    CairnPasskeys: {
+      passkeysSupported(): boolean;
+      loadLib(doc?: Document): Promise<unknown>;
+      postJson(path: string, body: unknown): Promise<{ status: number; body: Record<string, unknown> }>;
+      signInWithPasskey(): Promise<
+        { ok: true; body: Record<string, unknown> } | { ok: false; reason: "cancelled" | "failed" }
+      >;
+      addPasskey(
+        name?: string,
+      ): Promise<{ ok: true; body: Record<string, unknown> } | { ok: false; reason: "cancelled" | "failed" }>;
+      deviceHint(): string;
+      withDeviceHint(body: Record<string, unknown>): Record<string, unknown>;
+    };
+
+    /** The sign-in screen + the one passkey offer, lazy "auth" bundle (auth-signin-client.ts). */
+    CairnSignIn: {
+      open(): void;
+      openSignIn(deps?: {
+        doc?: Document;
+        fetchHealth?: () => Promise<Record<string, unknown> | null>;
+        reload?: () => void;
+        standalone?: boolean;
+        passkeysSupported?: boolean;
+        pairFailed?: boolean;
+      }): Promise<void>;
+      offerPasskey(): void;
+      offerPasskeyWith(deps?: { doc?: Document; toast?: (message: string) => void }): Promise<void>;
+      signInSheetHtml(opts: { passkeys: boolean; standalone: boolean; pairFailed: boolean }): string;
+    };
+
+    /** The "Send feedback" sheet (settings-feedback-client.ts). */
+    CairnSettingsFeedback: {
+      feedbackSheetHtml(): string;
+      feedbackDoneHtml(result: Record<string, unknown>, opened: boolean): string;
+      open(deps: {
+        api: ClientSettingsApi;
+        toast?: (message: string) => unknown;
+        openWindow?: (url: string) => Window | null;
+      }): void;
     };
 
     CairnSettingsDrive: {
@@ -5828,6 +5960,12 @@ declare global {
   declare const CairnSettingsSurface: Window["CairnSettingsSurface"];
   declare const CairnSettingsData: Window["CairnSettingsData"];
   declare const CairnSettingsDataController: Window["CairnSettingsDataController"];
+  declare const CairnSettingsUpdate: Window["CairnSettingsUpdate"];
+  declare const CairnSettingsPairing: Window["CairnSettingsPairing"];
+  declare const CairnSettingsMcp: Window["CairnSettingsMcp"];
+  declare const CairnPasskeys: Window["CairnPasskeys"];
+  declare const CairnSignIn: Window["CairnSignIn"];
+  declare const CairnSettingsFeedback: Window["CairnSettingsFeedback"];
   declare const CairnSettingsDrive: Window["CairnSettingsDrive"];
   declare const CairnSettingsDriveController: Window["CairnSettingsDriveController"];
   declare const CairnSettingsSourcesAutomationController: Window["CairnSettingsSourcesAutomationController"];

@@ -96,7 +96,10 @@
   function fillWhy(brief: Element): void {
     const btn = whyButton(brief);
     const html = CairnTodayPush.whyHtml(PUSH.get(brief));
-    if (!btn || btn.getAttribute("aria-expanded") !== "true" || !html) return syncChips(brief);
+    if (!btn || btn.getAttribute("aria-expanded") !== "true" || !html) {
+      syncChips(brief);
+      return;
+    }
     let panel = brief.querySelector(".brief-why-panel");
     if (!panel) {
       // A read with no signal rows still opens a panel for the holds.

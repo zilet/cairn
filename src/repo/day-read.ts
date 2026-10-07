@@ -11,6 +11,7 @@ import { brainSignal } from "../brain/snapshot.js";
 import {
   pickDayVariant,
   resolveDayReadRule,
+  STARTING_OUT_DAY,
   UNPROGRAMMED_EASY_DAY,
   type DayReadRule,
   type DayReadRuleOutcome,
@@ -54,6 +55,7 @@ import { getRecentSessions } from "./sessions.js";
 import { PUSH_STANCE_CONSEC_CEILING, type PushStance, trainingDriveState } from "./training-drive.js";
 import { pushStanceHarmFree } from "./push-stance-open.js";
 import { getPlan } from "./plan.js";
+import { isStartingOut } from "./first-run.js";
 import { planItemsOutOfOrder } from "../domain/training/plan-item-order.js";
 import { planDayPurposeLine, type PlanPurposePhase } from "./plan-day-purpose.js";
 import { getActiveBlock } from "./program-blocks.js";
@@ -183,6 +185,7 @@ import {
   TRAIN_PUSH_CAVEAT_LEAD,
   TRAIN_PUSH_WHY,
   UNPROGRAMMED_WHY,
+  STARTING_OUT_WHY,
   VOLUME_SPIKE_CAVEAT,
   VOLUME_SPIKE_WHY,
   earnPathClause,
@@ -340,6 +343,8 @@ function applyContinuityVoice(
   continuity: DayReadContinuity
 ): Omit<DayRead, "decision" | "input_fingerprint" | "computed_at"> {
   if (!QUIET_KINDS.has(read.kind)) return read;
+  // Day one is a beginning, not a stretch of quiet days: the starting-out words stand.
+  if ((read.signals as any)?.starting_out === true) return read;
   // A day they have ALREADY moved on is not a day to talk about the stretch of quiet
   // days — the read is about the thing they just did, and "here's the smallest thing
   // worth doing" would ignore it.
@@ -3199,7 +3204,13 @@ function computeDayRead(
   ];
 
   const resolved = resolveDayReadRule(rules);
-  const ruleOutcome = resolved?.outcome ?? UNPROGRAMMED_EASY_DAY;
+  // Day one — no week on the plan and nothing logged — is not the unprogrammed floor:
+  // nobody has started, so there is nothing for an "easy day on thin evidence" to be
+  // about. It gets its own outcome and words (STARTING_OUT_DAY), and `starting_out`
+  // flavours the headline and keeps the thin-coverage and quiet-streak sentences off it.
+  const startingOut = !resolved && signalInput(() => isStartingOut(), false);
+  if (startingOut) (signals as any).starting_out = true;
+  const ruleOutcome = resolved?.outcome ?? (startingOut ? STARTING_OUT_DAY : UNPROGRAMMED_EASY_DAY);
   // The one caveat an uncorroborated stack rides as — advisory, never a change of day
   // kind; on the athlete's own week it names the week.
   const unprogrammedCaveat =
@@ -3212,7 +3223,11 @@ function computeDayRead(
   const ruleRead = resolved?.read ?? {
     kind: "easy" as const,
     focus: null,
-    why: unprogrammedCaveat ? `${unprogrammedWhy.replace(/[.!?]$/, "")} — ${unprogrammedCaveat}.` : unprogrammedWhy,
+    why: startingOut
+      ? pickDayVariant(STARTING_OUT_WHY, d, "starting_out_day")
+      : unprogrammedCaveat
+        ? `${unprogrammedWhy.replace(/[.!?]$/, "")} — ${unprogrammedCaveat}.`
+        : unprogrammedWhy,
     est_minutes: 20,
     signals,
   };
@@ -3528,6 +3543,7 @@ function computeDayRead(
   // athlete's actual week.
   const thin =
     base.kind !== "done" &&
+    (base.signals as any)?.starting_out !== true &&
     recovery === undefined &&
     unifiedState === undefined &&
     underfuelingSnapshot === undefined &&

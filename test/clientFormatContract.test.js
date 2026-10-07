@@ -170,7 +170,7 @@ test("a date range never wears a two-digit year ('NOV 17 – JAN 12, 27')", () =
 });
 
 test("run words in the athlete's units: day-detail model prints one unit per figure", () => {
-  const ctx = loadClientModule(["html-utils", "date-utils", "format-utils", "ui-format", "day-detail-model"], {
+  const ctx = loadClientModule(["html-utils", "date-utils", "format-utils", "ui-format", "day-detail-model", "day-glance-model"], {
     globals: { Intl },
   });
   const M = ctx.CairnDayDetailModel;

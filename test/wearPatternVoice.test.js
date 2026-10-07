@@ -83,6 +83,7 @@ function loadTodayBrief() {
   const context = { Array, Math, Number, Object, String, escHtml, escAttr: escHtml };
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/today-brief-client.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/today-brief-signals-client.js"), "utf8"), context);
   return context.CairnTodayBrief;
 }
 

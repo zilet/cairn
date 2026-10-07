@@ -753,7 +753,7 @@ export function seedDemo() {
   // proactive_enabled OFF so the background scheduler's nightly precompute can't
   // overwrite the warm cached Brief we seeded above (it would fall back to the
   // deterministic read with no agent configured). Pure capture hygiene.
-  db.prepare(`UPDATE settings SET onboarded = 1, art_enabled = 1, proactive_enabled = 0, coach_enabled = 0, meal_prefs = ? WHERE id = 1`).run(
+  db.prepare(`UPDATE settings SET onboarded = 1, coach_welcomed = 1, art_enabled = 1, proactive_enabled = 0, coach_enabled = 0, meal_prefs = ? WHERE id = 1`).run(
     "I train fasted first thing most mornings — no pre-workout meal, a real breakfast after. Bold savory food; no cottage cheese."
   );
 

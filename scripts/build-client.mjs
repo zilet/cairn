@@ -35,6 +35,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/token-sheet.ts", output: "public/js/token-sheet.js" },
   { source: "src/client/api-cache.ts", output: "public/js/api-cache.js" },
   { source: "src/client/api-reach.ts", output: "public/js/api-reach.js" },
+  { source: "src/client/api-auth.ts", output: "public/js/api-auth.js" },
   { source: "src/client/api-core.ts", output: "public/js/api-core.js" },
   { source: "src/client/api-signals.ts", output: "public/js/api-signals.js" },
   { source: "src/client/outbox-queue.ts", output: "public/js/outbox-queue.js" },
@@ -68,7 +69,13 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/agent-login-assets-client.ts", output: "public/js/agent-login-assets-client.js" },
   { source: "src/client/agent-login-modal-client.ts", output: "public/js/agent-login-modal-client.js" },
   { source: "src/client/agent-login-session-client.ts", output: "public/js/agent-login-session-client.js" },
+  { source: "src/client/agent-login-panel-client.ts", output: "public/js/agent-login-panel-client.js" },
   { source: "src/client/agent-login-client.ts", output: "public/js/agent-login-client.js" },
+  { source: "src/client/welcome-model.ts", output: "public/js/welcome-model.js" },
+  { source: "src/client/welcome-client.ts", output: "public/js/welcome-client.js" },
+  { source: "src/client/welcome-connect-controller.ts", output: "public/js/welcome-connect-controller.js" },
+  { source: "src/client/welcome-meet-controller.ts", output: "public/js/welcome-meet-controller.js" },
+  { source: "src/client/welcome-screen.ts", output: "public/js/welcome-screen.js" },
   { source: "src/client/agent-job-records-client.ts", output: "public/js/agent-job-records-client.js" },
   { source: "src/client/agent-job-client.ts", output: "public/js/agent-job-client.js" },
   { source: "src/client/pwa-install-coach.ts", output: "public/js/pwa-install-coach.js" },
@@ -86,9 +93,12 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/today-fuel-glance-client.ts", output: "public/js/today-fuel-glance-client.js" },
   { source: "src/client/today-worth-client.ts", output: "public/js/today-worth-client.js" },
   { source: "src/client/day-open-client.ts", output: "public/js/day-open-client.js" },
+  { source: "src/client/coach-link-client.ts", output: "public/js/coach-link-client.js" },
   { source: "src/client/day-detail-model.ts", output: "public/js/day-detail-model.js" },
+  { source: "src/client/day-glance-model.ts", output: "public/js/day-glance-model.js" },
   { source: "src/client/day-detail-run-client.ts", output: "public/js/day-detail-run-client.js" },
   { source: "src/client/day-detail-client.ts", output: "public/js/day-detail-client.js" },
+  { source: "src/client/day-glance-view.ts", output: "public/js/day-glance-view.js" },
   { source: "src/client/day-detail-controller.ts", output: "public/js/day-detail-controller.js" },
   { source: "src/client/day-record-client.ts", output: "public/js/day-record-client.js" },
   { source: "src/client/drill-controller.ts", output: "public/js/drill-controller.js" },
@@ -107,6 +117,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/today-brief-voice-client.ts", output: "public/js/today-brief-voice-client.js" },
   { source: "src/client/today-brief-run-leg-client.ts", output: "public/js/today-brief-run-leg-client.js" },
   { source: "src/client/today-brief-client.ts", output: "public/js/today-brief-client.js" },
+  { source: "src/client/today-brief-signals-client.ts", output: "public/js/today-brief-signals-client.js" },
   { source: "src/client/today-brief-override-client.ts", output: "public/js/today-brief-override-client.js" },
   { source: "src/client/today-brief-actions-client.ts", output: "public/js/today-brief-actions-client.js" },
   { source: "src/client/today-brief-cache-client.ts", output: "public/js/today-brief-cache-client.js" },
@@ -222,10 +233,18 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/capture.ts", output: "public/js/04-capture.js" },
   { source: "src/client/settings-routes.ts", output: "public/js/settings-routes.js" },
   { source: "src/client/settings-client.ts", output: "public/js/settings-client.js" },
+  { source: "src/client/settings-surface-model.ts", output: "public/js/settings-surface-model.js" },
   { source: "src/client/settings-surface-client.ts", output: "public/js/settings-surface-client.js" },
   { source: "src/client/settings-drive-client.ts", output: "public/js/settings-drive-client.js" },
   { source: "src/client/settings-drive-controller.ts", output: "public/js/settings-drive-controller.js" },
   { source: "src/client/settings-data-client.ts", output: "public/js/settings-data-client.js" },
+  { source: "src/client/settings-update-client.ts", output: "public/js/settings-update-client.js" },
+  { source: "src/client/settings-pairing-view.ts", output: "public/js/settings-pairing-view.js" },
+  { source: "src/client/settings-pairing-client.ts", output: "public/js/settings-pairing-client.js" },
+  { source: "src/client/settings-mcp-client.ts", output: "public/js/settings-mcp-client.js" },
+  { source: "src/client/auth-passkey-client.ts", output: "public/js/auth-passkey-client.js" },
+  { source: "src/client/auth-signin-client.ts", output: "public/js/auth-signin-client.js" },
+  { source: "src/client/settings-feedback-client.ts", output: "public/js/settings-feedback-client.js" },
   { source: "src/client/settings-data-controller.ts", output: "public/js/settings-data-controller.js" },
   { source: "src/client/settings-agents-client.ts", output: "public/js/settings-agents-client.js" },
   { source: "src/client/settings-agents-controller.ts", output: "public/js/settings-agents-controller.js" },
@@ -461,6 +480,7 @@ export const BUNDLES = [
       "public/js/token-sheet.js",
       "public/js/api-cache.js",
       "public/js/api-reach.js",
+      "public/js/api-auth.js",
       "public/js/api-core.js",
       "public/js/api-signals.js",
       "public/js/outbox-queue.js",
@@ -527,6 +547,7 @@ export const BUNDLES = [
       "public/js/today-brief-voice-client.js",
       "public/js/today-brief-run-leg-client.js",
       "public/js/today-brief-client.js",
+      "public/js/today-brief-signals-client.js",
       "public/js/today-brief-override-client.js",
       "public/js/today-brief-actions-client.js",
       "public/js/today-brief-cache-client.js",
@@ -569,6 +590,9 @@ export const BUNDLES = [
       // Today is Home (v2 wave 7): the one delegated `data-open-day` opener. EAGER and
       // tiny; the page, the drill controller and the views are the lazy "calendar" bundle.
       "public/js/day-open-client.js",
+      // The coach link (EAGER, tiny): is a coach connected, Today's one line and Ask's
+      // connect card. The welcome it opens is the lazy "welcome" bundle.
+      "public/js/coach-link-client.js",
       // Train's energy read (and the hero it paints with) stays EAGER: Fuel paints
       // it (#energyCard) and it owns the nutrition_checkin job reconnector, which
       // must register at boot.
@@ -871,6 +895,31 @@ export const BUNDLES = [
     ],
   },
   {
+    output: "public/js/bundle-15-welcome.js",
+    label: "The first-run welcome + the AI sign-in panel",
+    // LAZY: the full-screen welcome (/app/welcome — Hello, Connect, Meet) and the
+    // friendly AI sign-in it shares with Settings → Agents "Connect". It renders over
+    // the app rather than as a view, so no route dispatches to it: it is opened by the
+    // boot decision (app/onboarding.ts), Today's coach line and Ask's connect card,
+    // all through CairnCoachLink.openWelcome. Listed before Settings, which depends on
+    // it, so the sign-in modules keep their place ahead of the Settings screen.
+    lazy: "welcome",
+    routeless: true,
+    inputs: [
+      "public/js/agent-login-model-client.js",
+      "public/js/agent-login-assets-client.js",
+      "public/js/agent-login-modal-client.js",
+      "public/js/agent-login-session-client.js",
+      "public/js/agent-login-panel-client.js",
+      "public/js/agent-login-client.js",
+      "public/js/welcome-model.js",
+      "public/js/welcome-client.js",
+      "public/js/welcome-connect-controller.js",
+      "public/js/welcome-meet-controller.js",
+      "public/js/welcome-screen.js",
+    ],
+  },
+  {
     output: "public/js/bundle-11-settings.js",
     label: "Settings",
     // LAZY: the Settings surfaces. Route matching reads the section keys from
@@ -878,18 +927,20 @@ export const BUNDLES = [
     lazy: "settings",
     views: ["settings"],
     inputs: [
-      // The in-app CLI login terminal: opened only from Settings → Agents.
-      "public/js/agent-login-model-client.js",
-      "public/js/agent-login-assets-client.js",
-      "public/js/agent-login-modal-client.js",
-      "public/js/agent-login-session-client.js",
-      "public/js/agent-login-client.js",
+      // The AI sign-in (the friendly panel, its session and the Connect modal) rides
+      // the welcome bundle, which Settings depends on (LAZY_BUNDLE_DEPS).
       "public/js/settings-routes.js",
       "public/js/settings-client.js",
+      "public/js/settings-surface-model.js",
       "public/js/settings-surface-client.js",
       "public/js/settings-drive-client.js",
       "public/js/settings-drive-controller.js",
       "public/js/settings-data-client.js",
+      "public/js/settings-update-client.js",
+      "public/js/settings-pairing-view.js",
+      "public/js/settings-pairing-client.js",
+      "public/js/settings-mcp-client.js",
+      "public/js/settings-feedback-client.js",
       "public/js/settings-data-controller.js",
       "public/js/settings-agents-client.js",
       "public/js/settings-agents-controller.js",
@@ -913,8 +964,10 @@ export const BUNDLES = [
     views: ["day"],
     inputs: [
       "public/js/day-detail-model.js",
+      "public/js/day-glance-model.js",
       "public/js/day-detail-run-client.js",
       "public/js/day-detail-client.js",
+      "public/js/day-glance-view.js",
       "public/js/day-detail-controller.js",
       "public/js/day-record-client.js",
       "public/js/drill-controller.js",
@@ -977,6 +1030,17 @@ export const BUNDLES = [
       "public/js/today-push-client.js",
       "public/js/today-push-controller.js",
     ],
+  },
+  {
+    output: "public/js/bundle-16-auth.js",
+    label: "Sign-in (passkey, pairing code, access token) and the passkey ceremonies",
+    // LAZY: only a signed-out device or Settings → Devices ever needs it. The
+    // eager door (token-sheet.ts) injects it on a 401; Settings injects it on "Add a passkey". Never
+    // warmed on idle — a signed-in device has no use for it — but precached.
+    lazy: "auth",
+    views: [],
+    routeless: true,
+    inputs: ["public/js/auth-passkey-client.js", "public/js/auth-signin-client.js"],
   },
 ];
 
@@ -1174,6 +1238,10 @@ export const PRECOMPRESS_EXTRA = [
   // worker, so every install downloads it: ~280 KB raw, ~70 KB brotli.
   "public/vendor/xterm.js",
   "public/vendor/xterm.css",
+  // The vendored QR encoder (Settings → Devices "Pair a device"), lazy-loaded and precached.
+  "public/vendor/qrcode.js",
+  // The vendored WebAuthn helper (sign in with / add a passkey), lazy-loaded and precached.
+  "public/vendor/simplewebauthn-browser.js",
 ];
 
 /**

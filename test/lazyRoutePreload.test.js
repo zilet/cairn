@@ -110,7 +110,8 @@ test("a preload names the exact url ensureBundle injects, and the worker precach
   // is the week menu (/app/today/menu). Today's lower half (today-ahead) renders inside
   // the eager Today view, so it has no route; it is still precached and warmed first on
   // idle.
-  const ROUTELESS = new Set([LAZY_BUNDLE_SRC["today-ahead"]]);
+  // Sign-in (auth) is opened by a 401 or a Settings tap, never a route.
+  const ROUTELESS = new Set([LAZY_BUNDLE_SRC["today-ahead"], LAZY_BUNDLE_SRC.auth]);
   assert.deepEqual(
     [...table.b].sort(),
     Object.values(LAZY_BUNDLE_SRC)
@@ -198,7 +199,8 @@ test("Train, Horizon, Ask, Settings and the week menu preload their closure and 
     "/app/horizon/race": ["/js/bundle-12-calendar.js", "/js/bundle-08-train.js", "/js/bundle-09-horizon.js"],
     "/app/ask": ["/js/bundle-10-ask.js"],
     "/app/ask/changes": ["/js/bundle-10-ask.js"],
-    "/app/you/settings/agents": ["/js/bundle-11-settings.js"],
+    // Settings → Agents "Connect" mounts the welcome bundle's sign-in panel.
+    "/app/you/settings/agents": ["/js/bundle-15-welcome.js", "/js/bundle-11-settings.js"],
     "/app/you/profile": ["/js/bundle-12-calendar.js", "/js/bundle-08-train.js", "/js/bundle-05-me-health.js"],
     // The home-free day page (any date) preloads the calendar alone; an old alias under a
     // home falls back to that home's closure (which carries the calendar too).

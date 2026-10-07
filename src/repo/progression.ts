@@ -141,6 +141,7 @@ import { supportWorkRead } from "./support-work.js";
 // cycle (progression → run-progression → coach → progression) is resolved at call
 // time — these are only invoked inside programAdjustments, never at module init.
 import { enduranceTestsDue, weeklyRunPlan, type WeeklyRunPlan } from "./run-progression.js";
+import { hasLoggedHistory } from "./first-run.js";
 import { dexaTargeting, type DexaTargeting } from "./dexa-targeting.js";
 import { testWeekDue, type TestWeekDue } from "./muscle-trajectory.js";
 import { trainingPlaybook, type TrainingPlaybookRead } from "./training-playbook.js";
@@ -4197,8 +4198,27 @@ function computeProgramAdjustments(
   // and pull-ups. ONE plan query feeds both the per-group moves and the GAPS below.
   const plannedMoves = plannedMovesByGroup();
   const planned = new Set(plannedMoves.keys());
+  // With no plan there is no program to critique: the gap floors below ("add a little
+  // core") would be notes on a week that does not exist, and with no logged history either,
+  // every group reads "not trained in over a week" for someone who has not started.
+  const hasPlan = planned.size > 0;
+  const balanceReadable = hasPlan || hasLoggedHistory();
+  // This week's run plan, read once for both the mobility gap's wording and the running
+  // digest below. Reuses the pre-computed plan when getCoachContext threaded one.
+  let runPlanMemo: WeeklyRunPlan | null | undefined;
+  const runPlanRead = (): WeeklyRunPlan | null => {
+    if (runPlanMemo === undefined) {
+      try {
+        // A week-level digest (mix_summary / why): the morning's call on today changes neither.
+        runPlanMemo = opts && "runPlan" in opts ? (opts.runPlan ?? null) : weeklyRunPlan(undefined, { adjustToday: false });
+      } catch {
+        runPlanMemo = null;
+      }
+    }
+    return runPlanMemo;
+  };
   const recovering: Array<{ group: string; gate: AcuteGateReading }> = [];
-  for (const g of bal.due.slice(0, 4)) {
+  for (const g of balanceReadable ? bal.due.slice(0, 4) : []) {
     const gb = bal.groups.find((x) => x.group === g);
     const reason = gb && gb.band === "low" ? "under its productive volume range lately" : "not trained in over a week";
     // The shared acute gate: a group still carrying a session's worth of
@@ -4248,7 +4268,7 @@ function computeProgramAdjustments(
       recovering: true,
     });
   }
-  for (const g of bal.over.slice(0, 2)) {
+  for (const g of balanceReadable ? bal.over.slice(0, 2) : []) {
     push({
       kind: "balance",
       title: `${cap(g)} is running high`,
@@ -4280,12 +4300,16 @@ function computeProgramAdjustments(
     [
       "mobility",
       "A little mobility prep",
-      "No mobility / activation work is programmed — a few minutes of ankle + hip prep protects the joints, especially for a returning runner.",
+      "No mobility / activation work is programmed — a few minutes of ankle + hip prep protects the joints under everything else.",
       ["Ankle Rocker", "90/90 Hip Switch", "World's Greatest Stretch"],
     ],
   ] as const) {
-    if (!planned.has(group)) {
-      push({ kind: "gap", title, why, group, suggestions: [...suggestions] });
+    if (hasPlan && !planned.has(group)) {
+      // The run clause is said only to someone whose week carries runs — a lifter is
+      // never told they are a "returning runner".
+      const runs = group === "mobility" && !!runPlanRead()?.available;
+      const said = runs ? `${why.replace(/\.$/, "")}, and more so with runs in your week.` : why;
+      push({ kind: "gap", title, why: said, group, suggestions: [...suggestions] });
     }
   }
 
@@ -4293,8 +4317,7 @@ function computeProgramAdjustments(
   //    the "what changed & why" surface spans running, not just lifting. Reuse the
   //    pre-computed plan from getCoachContext when threaded; else compute it lazily.
   try {
-    // A week-level digest (mix_summary / why): the morning's call on today changes neither.
-    const rp = opts && "runPlan" in opts ? opts.runPlan : weeklyRunPlan(undefined, { adjustToday: false });
+    const rp = runPlanRead();
     if (rp?.available && rp.mix_summary) {
       push({
         kind: "cardio",

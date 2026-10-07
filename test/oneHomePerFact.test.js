@@ -278,6 +278,7 @@ function renderToday() {
       "ui-reads",
       "today-brief-voice-client",
       "today-brief-client",
+      "today-brief-signals-client",
       "today-push-client",
       "today-path-client",
       "today-horizon-client",
@@ -287,8 +288,10 @@ function renderToday() {
       "coaching-focus-render-client",
       "coaching-focus-client",
       "day-detail-model",
+      "day-glance-model",
       "day-detail-run-client",
       "day-detail-client",
+      "day-glance-view",
       "today-strip-client",
     ],
     { globals: { state: {}, view: { querySelector: () => null }, api: async () => null, activateTab: () => {}, localISO: () => TODAY } }

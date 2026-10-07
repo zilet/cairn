@@ -124,6 +124,8 @@ type TodayPostRenderWiringApi = {
     // load-bearing even though it's easy to miss at a glance; the tag chips never
     // feed dayRead — they're evidence for the insight generator only. Food frequents
     // live in the Chat composer now (prefill chips), not on Today.
+    // No AI coach yet (or one not yet met): one quiet line near the top.
+    if (deps.isToday) (globalThis as { CairnCoachLink?: CoachLinkApi }).CairnCoachLink?.mountToday(deps.root);
     deps.loadCheckin();
     deps.loadTagChips();
     deps.loadContextBanner();

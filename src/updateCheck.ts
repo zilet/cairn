@@ -1,4 +1,5 @@
 import * as repo from "./repo.js";
+import { updateCapability, type UpdateCapability } from "./hosting.js";
 import { getVersion, isNewer } from "./version.js";
 
 // In-app "a newer Cairn is available" check — the self-hosted update path.
@@ -38,6 +39,31 @@ export interface UpdateStatus {
   checked_at: string | null;
   enabled: boolean; // settings.update_check_enabled
   error: string | null;
+}
+
+// What GET /api/update-status and POST /api/update-check return: the release check
+// plus how a release reaches THIS host (src/hosting.ts) — never the deploy hook URL.
+export type UpdateStatusWithCapability = UpdateStatus & UpdateCapability & { update_stale_hint: string | null };
+
+const STALE_RELEASE_MS = 3 * 24 * 60 * 60 * 1000;
+
+// Pure: on Railway (which updates itself) a release older than three days that this
+// instance still has not picked up usually means Auto Updates is off. One calm line,
+// pull-only (rendered in the Settings update card); null everywhere else.
+export function staleUpdateHint(
+  status: Pick<UpdateStatus, "latest" | "update_available" | "published_at">,
+  capability: Pick<UpdateCapability, "platform">,
+  nowMs = Date.now(),
+): string | null {
+  if (capability.platform !== "railway" || !status.update_available || !status.latest) return null;
+  const published = status.published_at ? Date.parse(status.published_at) : Number.NaN;
+  if (!Number.isFinite(published) || nowMs - published <= STALE_RELEASE_MS) return null;
+  return `Railway hasn't picked up v${status.latest} yet. If Auto Updates is off, turn it on: your service \u2192 Settings \u2192 Source \u2192 Auto Updates.`;
+}
+
+function withCapability(status: UpdateStatus): UpdateStatusWithCapability {
+  const capability = updateCapability();
+  return { ...status, ...capability, update_stale_hint: staleUpdateHint(status, capability) };
 }
 
 // owner/repo to query. Overridable for forks/mirrors via CAIRN_UPDATE_REPO.
@@ -97,22 +123,22 @@ function writeCache(cache: UpdateCheckCache) {
 
 // The current rolled-up status from cache (no network). What GET /api/update-status
 // and the scheduler's "should I bother" read.
-export function getUpdateStatus(): UpdateStatus {
+export function getUpdateStatus(): UpdateStatusWithCapability {
   const enabled = !!repo.getSettings().update_check_enabled;
-  return computeUpdateStatus(getVersion(), readCache(), enabled);
+  return withCapability(computeUpdateStatus(getVersion(), readCache(), enabled));
 }
 
 // Reach GitHub for the latest release, cache it, return the rolled-up status.
 // Network/parse failure is swallowed into the cache's `error` field (the last
 // good `latest` is preserved) — this NEVER throws, so a caller can fire-and-forget.
-export async function checkForUpdate(): Promise<UpdateStatus> {
+export async function checkForUpdate(): Promise<UpdateStatusWithCapability> {
   const url = `https://api.github.com/repos/${repoSlug()}/releases/latest`;
   const checked_at = new Date().toISOString();
   const prev = readCache();
   const base = prev ?? { latest: null, html_url: null, notes: null, published_at: null };
-  const settle = (cache: UpdateCheckCache): UpdateStatus => {
+  const settle = (cache: UpdateCheckCache): UpdateStatusWithCapability => {
     writeCache(cache);
-    return computeUpdateStatus(getVersion(), cache, !!repo.getSettings().update_check_enabled);
+    return withCapability(computeUpdateStatus(getVersion(), cache, !!repo.getSettings().update_check_enabled));
   };
   try {
     const ctrl = new AbortController();

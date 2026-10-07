@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { onboardFromText } from "../coachOps.js";
+import { backgroundOp } from "./background-op.js";
 import { contextTagVocab } from "../repo/context-tag-effects.js";
 import {
   addContextEvent,
@@ -169,4 +170,18 @@ personContextRouter.delete("/supplements/:id", (req, res) =>
 personContextRouter.post("/onboard", async (req, res) => {
   const text = (req.body?.text ?? "").toString();
   res.json(await onboardFromText(req.body?.agent, text));
+});
+
+// ---- the first-run welcome ----
+// The coach's first conversation: the person's own words → understood, a first week and
+// a starting food target put in place, the exchange saved to Ask. Agentic, so it always
+// queues a durable `welcome` job ({ok:true, job}); the job's result is the reveal
+// ({ok, reply, week, week_state, fuel, fuel_state, applied, agent, tried}) or the
+// designed {ok:false, error, tried} when no agent answered (src/coachOps/welcome.ts).
+personContextRouter.post("/welcome", (req, res) => {
+  const b = req.body ?? {};
+  const text = typeof b.text === "string" ? b.text.trim() : "";
+  if (!text) return res.status(400).json({ ok: false, error: "text required", tried: [] });
+  const agent = typeof b.agent === "string" && b.agent.trim() && b.agent !== "auto" ? b.agent.trim() : null;
+  backgroundOp(res, "welcome", { text: text.slice(0, 4000) }, agent);
 });

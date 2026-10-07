@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runMigrations } from "./migrate.js";
+import { migrationSnapshotRequired, snapshotBeforeMigrations } from "./migrationSnapshot.js";
 import { localDateISO } from "./repo/shared.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -50,6 +51,11 @@ db.exec("PRAGMA busy_timeout = 5000;");
 db.exec("PRAGMA temp_store = MEMORY;");
 db.exec("PRAGMA cache_size = -16384;");
 db.exec("PRAGMA mmap_size = 268435456;");
+
+// A restore point before an existing database is migrated forward (no-op when nothing
+// is pending, on a fresh/test DB, or in memory). Taken ahead of the schema exec so the
+// copy is the file exactly as the previous release left it. See src/migrationSnapshot.ts.
+snapshotBeforeMigrations(db, { dbPath: DB_PATH, dataDir: DATA_DIR, required: migrationSnapshotRequired() });
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS exercises (
@@ -998,7 +1004,7 @@ CREATE TABLE IF NOT EXISTS settings (
   garmin_last_sync_at TEXT DEFAULT '',        -- when the last Garmin sync finished (UTC ISO)
   garmin_last_sync_status TEXT DEFAULT '',    -- short result: "ok: 12 activities · 14 daily" | "failed: …"
   proactive_enabled INTEGER DEFAULT 1,        -- 1 = nightly quiet insight + weekly read/nutrition-checkin precompute (pull-never-push)
-  research_enabled INTEGER DEFAULT 0,         -- 1 = host-side evidence research on (default OFF; off ⇒ deterministic, no network)
+  research_enabled INTEGER DEFAULT 1,         -- 1 = host-side evidence research on (default ON; off ⇒ deterministic, no network)
   bg_ops_enabled INTEGER DEFAULT 1,           -- legacy compatibility flag; agentic surfaces always use durable jobs
   agent_routes TEXT DEFAULT '',               -- optional JSON map { task -> agent }; empty/null = no routing (Auto everywhere, today's behavior)
   chat_routing_mode TEXT DEFAULT 'adaptive',  -- adaptive | single (legacy one-profile chat path)
@@ -1012,7 +1018,9 @@ CREATE TABLE IF NOT EXISTS settings (
   garmin_last_export_status TEXT DEFAULT '',   -- short result: "ok: 8 of 14 sets" | "failed: …"; a persistently failing PUT must be visible
   run_units TEXT DEFAULT 'km',                 -- km | mi — athlete-facing run distance and pace (engine stays km)
   weight_units TEXT DEFAULT 'lb',              -- lb | kg — athlete-facing bodyweight and loads (stored data stays lb; repo/display-words.ts)
-  meal_plan_auto_draft INTEGER DEFAULT 0       -- 1 = weekly + protective meal-plan drafts without being asked; 0 = drafted on request (see src/repo/meal-plan-auto-draft.ts)
+  meal_plan_auto_draft INTEGER DEFAULT 0,      -- 1 = weekly + protective meal-plan drafts without being asked; 0 = drafted on request (see src/repo/meal-plan-auto-draft.ts)
+  usage_ping_enabled INTEGER DEFAULT 0,        -- 1 = opt-in weekly anonymous usage ping (install id, version, platform, arch, Node — src/usagePing.ts); default OFF
+  coach_welcomed INTEGER DEFAULT 0             -- 1 = the first-run welcome exchange with the coach happened (src/coachOps/welcome.ts)
 );
 
 -- Generated-artwork bookkeeping (see src/art.ts). art_assets records what each
@@ -1367,6 +1375,99 @@ CREATE TABLE IF NOT EXISTS apple_health_pairings (
 );
 CREATE INDEX IF NOT EXISTS idx_apple_health_pairings_active
   ON apple_health_pairings(used_at, expires_at);
+
+-- Access for a hosted (public-URL) Cairn: per-device browser sessions, one-time
+-- pairing codes and passkeys (src/repo/auth-devices.ts). Only SHA-256 hashes of
+-- session secrets and pairing codes are ever stored. The master CAIRN_AUTH_TOKEN
+-- stays the API/MCP credential and the recovery sign-in; it is never stored here.
+CREATE TABLE IF NOT EXISTS auth_devices (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'unknown',  -- phone | tablet | desktop | unknown (from the user agent)
+  created_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  user_agent_summary TEXT,               -- "Safari on iPhone"; never the raw UA string
+  session_hash TEXT NOT NULL UNIQUE,     -- sha256(session secret), hex
+  revoked_at TEXT,
+  hint_hash TEXT                         -- sha256(the browser's non-secret device hint), hex
+);
+CREATE TABLE IF NOT EXISTS auth_pairing_codes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  code_hash TEXT NOT NULL UNIQUE,        -- sha256(normalized code), hex
+  purpose TEXT NOT NULL DEFAULT 'pair',  -- pair | first_sign_in (the boot-minted code)
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  used_at TEXT,
+  created_by_device_id INTEGER REFERENCES auth_devices(id) ON DELETE SET NULL
+);
+CREATE TABLE IF NOT EXISTS auth_passkeys (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id INTEGER REFERENCES auth_devices(id) ON DELETE SET NULL,
+  registered_device_id INTEGER,          -- the device that added it (NULL: the master token)
+  last_used_device_id INTEGER,           -- the device that last signed in with it
+  credential_id TEXT NOT NULL UNIQUE,    -- base64url
+  public_key TEXT NOT NULL,              -- base64url COSE key
+  sign_count INTEGER NOT NULL DEFAULT 0,
+  transports TEXT,                       -- JSON array
+  name TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  last_used_at TEXT
+);
+
+-- AI apps connected to /mcp (src/repo/mcp-clients.ts): a per-app key made in Settings
+-- (kind 'token', token_hash set) or an OAuth grant an app signed in for (kind 'oauth',
+-- client_id names its oauth_clients row). Every secret is stored as its SHA-256 only,
+-- and none of them opens /api — /mcp alone.
+CREATE TABLE IF NOT EXISTS mcp_clients (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'token',    -- token | oauth
+  token_hash TEXT UNIQUE,                -- sha256(per-app key), hex; NULL for an OAuth grant
+  scopes TEXT NOT NULL DEFAULT 'full',
+  client_id TEXT,                        -- oauth_clients.id for an OAuth grant
+  created_at TEXT NOT NULL,
+  last_used_at TEXT,
+  revoked_at TEXT,
+  redirect_uri TEXT,                     -- the redirect URI an OAuth grant was approved for
+  created_by_device_id INTEGER           -- the device that made the key / approved the grant (NULL: master token)
+);
+-- OAuth 2.1 public clients registered through Dynamic Client Registration (RFC 7591).
+CREATE TABLE IF NOT EXISTS oauth_clients (
+  id TEXT PRIMARY KEY,                   -- the client_id (random, not a secret)
+  name TEXT NOT NULL,
+  redirect_uris TEXT NOT NULL,           -- JSON array of exact redirect URIs
+  created_at TEXT NOT NULL,
+  last_used_at TEXT
+);
+-- Single-use, sixty-second authorization codes (hashed), bound to client, redirect URI,
+-- PKCE challenge and resource. grant_id is stamped on redemption so a replay can revoke it.
+CREATE TABLE IF NOT EXISTS oauth_codes (
+  code_hash TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL,
+  redirect_uri TEXT NOT NULL,
+  code_challenge TEXT NOT NULL,
+  resource TEXT NOT NULL,
+  scope TEXT NOT NULL DEFAULT 'full',
+  device_id INTEGER,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  used_at TEXT,
+  grant_id INTEGER
+);
+-- Access (one hour) and rotating refresh (ninety days) tokens of an OAuth grant, hashed.
+CREATE TABLE IF NOT EXISTS oauth_tokens (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  grant_id INTEGER NOT NULL,             -- mcp_clients.id (kind 'oauth'): the refresh family
+  kind TEXT NOT NULL,                    -- access | refresh
+  token_hash TEXT NOT NULL UNIQUE,
+  resource TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  used_at TEXT,                          -- refresh: its rotation stamp; access: its first use at /mcp
+  revoked_at TEXT,
+  parent_id INTEGER                      -- the refresh token whose rotation minted this pair
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_grant ON oauth_tokens(grant_id);
 
 -- Family members the coach plans around (partner, kids). Their recurring
 -- commitments live as context_events (kind:'family_event'); this is the roster.

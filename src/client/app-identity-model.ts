@@ -25,7 +25,6 @@ type AppIdentityNoteInput = {
 };
 
 type AppIdentityReentry = {
-  token: boolean;
   preferences: string[];
 };
 
@@ -107,7 +106,6 @@ declare const CairnAppIdentityModel: AppIdentityModelApi;
       }
     };
     return {
-      token: has("cairn_token"),
       preferences: APP_IDENTITY_PREFERENCES.filter((pref) => has(pref.key)).map((pref) => pref.label),
     };
   }

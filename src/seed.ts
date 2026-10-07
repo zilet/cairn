@@ -160,6 +160,21 @@ export function seed(options: { blankProfile?: boolean } = {}) {
   ).run(today);
 }
 
+function blankProfileRequested(env: NodeJS.ProcessEnv = process.env): boolean {
+  return /^(1|true|yes|on)$/i.test((env.CAIRN_BLANK_PROFILE || "").trim());
+}
+
+/** The one boot line after seedIfEmpty() seeded: it names what was actually written. */
+export function seedBootMessage(env: NodeJS.ProcessEnv = process.env): string {
+  if (env.CAIRN_SEED_DEMO === "1") {
+    return "Database was empty — seeded with the full-coverage demo dataset (CAIRN_SEED_DEMO=1).";
+  }
+  if (blankProfileRequested(env)) {
+    return "Database was empty — seeded the exercise catalog only (CAIRN_BLANK_PROFILE=1); first-time setup builds the plan.";
+  }
+  return "Database was empty — seeded with the default plan.";
+}
+
 export async function seedIfEmpty(): Promise<boolean> {
   // "Empty" must mean a pristine, never-initialized DB — NOT merely "no plan
   // days." A user can delete every plan day in-app (deletePlanDay is a feature),
@@ -180,8 +195,7 @@ export async function seedIfEmpty(): Promise<boolean> {
     seedDemo();
     return true;
   }
-  const blankProfile = /^(1|true|yes|on)$/i.test((process.env.CAIRN_BLANK_PROFILE || "").trim());
-  seed({ blankProfile });
+  seed({ blankProfile: blankProfileRequested() });
   // Drop in any pre-baked studio photos that match the seeded exercises, so a
   // fresh install renders real art (not just SVGs) with no Gemini key. Offline,
   // idempotent, and a no-op when the seed-art/ pack isn't present.

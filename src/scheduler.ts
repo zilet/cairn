@@ -11,6 +11,7 @@ import {
 } from "./coachOps.js";
 import { precomputeDayRead, precomputeDayReadFloor, sleepRowExistsFor, localToday, warmToday } from "./dayread.js";
 import { checkForUpdate } from "./updateCheck.js";
+import { maybeSendUsagePing } from "./usagePing.js";
 import { offerPushStanceIfEarned } from "./domain/training/push-offer.js";
 import {
   evaluateMatureExpectations,
@@ -50,6 +51,7 @@ import {
 import { mealPlanAutoDraftEnabled, retirePendingMealRefresh } from "./repo/meal-plan-auto-draft.js";
 import { PLAN_PROPOSAL_SCHEMA, isPlanProposalResult } from "./agent-contracts.js";
 import { autoImportExerciseGuidesIfEmpty } from "./domain/training/exercise-guide-use-case.js";
+import { hasLoggedHistory } from "./repo/first-run.js";
 import { createHash } from "node:crypto";
 import { log } from "./log.js";
 // Stream 2 (self-updating memory): quiet nightly memory housekeeping + outcome
@@ -660,6 +662,14 @@ export function startScheduler() {
     // specialist pool from being retried every minute. Successful phase/month
     // signatures are written by the completed case-conference job only.
     repo.setAppState("brain_revision_check_date", today);
+    // A fresh install has nothing to revise: with no logged training or food yet, the
+    // conference would convene five specialists over an empty record (it used to fire
+    // ~15 s after first boot). The monthly slot stays unclaimed, so it runs on the first
+    // daily check after the record exists.
+    if (!hasLoggedHistory()) {
+      revisionBusy = false;
+      return;
+    }
     let revisionClaim: repo.SchedulerOperationClaim | null = null;
     try {
       const trajectory = repo.wholePersonTrajectory({ end: today, days: 56 });
@@ -1447,6 +1457,20 @@ export function startScheduler() {
     }
   };
 
+  // ---- Opt-in usage ping (src/usagePing.ts). OFF unless settings.usage_ping_enabled
+  //      AND a feedback service is configured; at most weekly, failures silent and not
+  //      recorded as scheduler failures (a missing ping is not a defect). ----
+  let usagePingBusy = false;
+  const usagePingTick = async () => {
+    if (usagePingBusy) return;
+    usagePingBusy = true;
+    try {
+      await maybeSendUsagePing();
+    } finally {
+      usagePingBusy = false;
+    }
+  };
+
   // ---- Connected-brain propagation (labs → nutrition / training / watch). ----
   //      deriveDirectives() is diff-based, idempotent and feedback-suppressing, and folds a
   //      coarse monthly reading-AGE bucket into its signature — so the PASSAGE OF TIME alone
@@ -1578,12 +1602,14 @@ export function startScheduler() {
   setInterval(inOwnerTimeZone(precomputeTick), 60_000);
   setInterval(inOwnerTimeZone(memoryTick), 60_000); // Stream 2: nightly memory maintenance
   setInterval(inOwnerTimeZone(updateCheckTick), 60_000); // self-hosted update check (≤ once/day)
+  setInterval(usagePingTick, 60 * 60_000); // opt-in usage ping (≤ once/week; inert by default)
   setInterval(inOwnerTimeZone(propagationTick), 60_000); // connected-brain re-derivation (≤ once/day)
   setInterval(inOwnerTimeZone(hrModelTick), 60_000); // personal HR model re-derivation (≤ once/day)
   setInterval(inOwnerTimeZone(weekAheadWarmTick), 60_000); // week-ahead cache warm (≤ once/day)
   setInterval(heartbeatTick, 60_000); // readiness evidence; no agent/provider dependency
   setTimeout(inOwnerTimeZone(garminTick), 45_000); // the boot-time pass; later passes ride the minute tick
   setTimeout(inOwnerTimeZone(updateCheckTick), 30_000); // first update check shortly after boot (then daily)
+  setTimeout(usagePingTick, 90_000); // first usage-ping consideration well after boot, never in its path
   setTimeout(inOwnerTimeZone(propagationTick), 20_000); // catch up a day the process slept through
   setTimeout(inOwnerTimeZone(hrModelTick), 25_000); // same catch-up for the HR model
   setTimeout(inOwnerTimeZone(weekAheadWarmTick), 30_000); // catch up a day the process slept through

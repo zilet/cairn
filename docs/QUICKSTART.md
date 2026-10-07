@@ -3,11 +3,31 @@
 Cairn ships as one published Docker image. **Start at the top — it's a single command.** Read on
 only if you want to configure it, build from source, or run it somewhere other than this machine.
 
+## 0 · The one command
+
+```bash
+curl -fsSL https://cairn.fit/install | sh
+```
+
+It asks one question: **in the cloud on Railway** (about $5/month, nothing to keep running) or **on
+this computer or server** (free, private, needs to stay on). Then it sets everything up and opens
+Cairn already signed in. Pair your phone from **Settings → Devices → Pair a device** (a one-time code); your
+access token is your recovery key. Both choices are explained in [`docs/HOSTING.md`](HOSTING.md),
+every option in [`docs/INSTALL.md`](INSTALL.md).
+
+> **No terminal?** Deploy your own copy on Railway from the browser:
+> [![Deploy on Railway](https://railway.com/button.svg)](HOSTING.md#no-terminal-the-railway-button)
+> <!-- TODO(maintainer): point the Railway button at https://railway.com/new/template/<CODE> once
+>      the template is published (deploy/railway/README.md). -->
+> A hosted Railway URL is public, so it always requires a sign-in token.
+
 > **No install at all?** Open Cairn in a free cloud sandbox right from your browser —
 > [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/zilet/cairn)
 > — it boots a real Cairn with demo data, nothing on your machine. Great for a first look; see
-> [`docs/SANDBOX.md`](SANDBOX.md) for Daytona / Codespaces and how to keep data. Self-host (below) when
+> [`docs/SANDBOX.md`](SANDBOX.md) for Daytona / Codespaces and how to keep data. Self-host when
 > you want it on your phone for daily use.
+
+Everything below is the hands-on Docker path, and it is unchanged.
 
 ## 1 · Run it — 30 seconds, no clone
 
@@ -22,6 +42,8 @@ docker run -d --name cairn -p 127.0.0.1:8787:8787 \
 ```
 
 Open **http://localhost:8787** — you land on Today, where the Brief reads your day. That's the whole install.
+
+A bare `docker run` seeds an **example athlete** so there is something to look at straight away. To start fresh into the welcome instead, add `-e CAIRN_BLANK_PROFILE=1` (the [one-command installer](INSTALL.md) and the Railway template already do).
 
 > **Docker or Podman.** Every `docker …` command in these docs works unchanged with Podman
 > (`podman run`, `podman compose`) and the scripts detect whichever engine is installed and
@@ -301,7 +323,7 @@ no agent. Chat and generative adaptations need one.
 
 ### First 10 minutes
 
-1. **You → Profile:** replace the seeded example profile with your real weight, goal, training
+1. **You → Profile:** replace the example profile (a plain `docker run` seeds one; the installer and Railway start blank) with your real weight, goal, training
    age, and any constraints.
 2. **Today:** log one set or one bodyweight entry so the charts have your first real point.
 3. **Settings -> Agents:** install and connect the coaching provider you already use.

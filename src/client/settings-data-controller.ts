@@ -1,8 +1,10 @@
 // @ts-check
-// Settings -> Data controller: update checks, exports, setup reset, and phone access wiring.
+// Settings -> Data controller: update checks, exports, setup reset, and phone access
+// wiring — plus the Settings -> Devices slice (renderDevices), which shares its deps.
 
 type SettingsDataControllerWorkingModel = {
   update_check_enabled: boolean;
+  usage_ping_enabled: boolean;
 };
 
 type SettingsDataControllerDeps = {
@@ -14,9 +16,15 @@ type SettingsDataControllerDeps = {
   updateCardHtml(status: unknown): string;
   withToken(path: string): string;
   downloadFile(path: string): void;
+  /** Injected in tests; the browser build uses api-core's openResourceLink (a signed link). */
+  openResourceLink?: (path: string, mode?: "tab" | "download") => Promise<void>;
   reload(): void;
   inStandaloneApp?: boolean;
-  /** Injected in tests; the browser build reads its own storage, clipboard and worker. */
+  /** The page origin the pairing code points at; the browser build reads location. */
+  origin?: string;
+  /** "Dates read human" for the updater line. */
+  relTime?: (iso: string) => string;
+  /** Injected in tests; the browser build reads its own service worker. */
   appIdentity?: AppIdentityCardDeps;
 };
 
@@ -35,22 +43,19 @@ function settingsDataRequired<T extends Element = HTMLElement>(deps: SettingsDat
 function refreshSettingsDataUpdateCard(deps: SettingsDataControllerDeps): void {
   const el = deps.root.querySelector<HTMLElement>("#updateCard");
   if (el) el.innerHTML = deps.updateCardHtml(updateStatusCache);
+  // How releases reach this host + the calm "Update now" (settings-update-client.ts).
+  const actions = deps.root.querySelector<HTMLElement>("#updateActions");
+  if (!actions || typeof CairnSettingsUpdate === "undefined") return;
+  actions.innerHTML = CairnSettingsUpdate.updateActionsHtml(updateStatusCache, { relTime: deps.relTime });
+  CairnSettingsUpdate.wireUpdateActions({ host: actions, api: deps.api, toast: deps.toast });
 }
 
-// The browser's own storage, clipboard and service worker for the "This app" block.
+// The browser's own service worker for the "This app" block.
 function settingsDataAppIdentityDeps(deps: SettingsDataControllerDeps): AppIdentityCardDeps {
-  let storage: Storage | null = null;
-  try {
-    storage = localStorage;
-  } catch {}
   const nav = typeof navigator !== "undefined" ? navigator : null;
   return {
     api: (path) => deps.api(path),
-    storage,
-    toast: deps.toast,
-    clipboard: nav && nav.clipboard ? nav.clipboard : null,
     workerShell: () => (nav ? CairnAppIdentityController.workerShell(nav) : Promise.resolve("")),
-    execCopy: () => (typeof document !== "undefined" ? document.execCommand("copy") : false),
   };
 }
 
@@ -64,6 +69,7 @@ function renderSettingsData(deps: SettingsDataControllerDeps): void {
 
         <h1 class="lbl" style="margin:14px 0 8px">Cairn version</h1>
         <div id="updateCard" class="sess">${deps.updateCardHtml(updateStatusCache)}</div>
+        <div id="updateActions" class="upd-actions"></div>
         <label class="toggle" style="margin-top:12px"><input type="checkbox" id="updateCheckEnabled" ${wm.update_check_enabled ? "checked" : ""}>
           <span>Check for new Cairn releases</span></label>
         <div class="sess-line" style="color:var(--muted);margin-top:6px">A quiet daily check against the public GitHub Releases page — pull, never a notification. It sends nothing but an anonymous request; no data leaves your instance. Off keeps Cairn fully offline.</div>
@@ -79,6 +85,12 @@ function renderSettingsData(deps: SettingsDataControllerDeps): void {
         <div class="sess-line" style="color:var(--muted);margin-top:6px">Step-by-step instructions and two demonstration photos per movement, from the public-domain free-exercise-db dataset — about 1 MB from raw.githubusercontent.com, stored locally; photos are fetched per exercise on first view. Only unambiguous name matches are attached — the rest stay unlinked rather than showing you the wrong lift.</div>
         <button id="exGuideImport" class="ghostbtn" style="width:100%;text-align:center;padding:11px;margin-top:10px">Fetch exercise guide</button>
 
+        <h1 class="lbl setdata-h">Feedback &amp; privacy</h1>
+        <button id="feedbackOpen" class="ghostbtn setdata-btn" type="button">Send feedback</button>
+        <label class="toggle setdata-toggle"><input type="checkbox" id="usagePingEnabled" ${wm.usage_ping_enabled ? "checked" : ""}>
+          <span>Share anonymous usage</span></label>
+        <div class="sess-line setdata-muted">Once a week, Cairn sends a random install id, its version, the host platform, CPU architecture and Node version — nothing about you or your data. Off by default, and only sent when this build has a feedback service.</div>
+
         <h1 class="lbl" style="margin:22px 0 8px">Setup</h1>
         <button id="rerunSetup" class="ghostbtn" style="width:100%;text-align:center;padding:11px">Re-run first-time setup</button>
       </section>`;
@@ -89,6 +101,14 @@ function renderSettingsData(deps: SettingsDataControllerDeps): void {
   }
   CairnSettingsData.wirePhoneAccessCard({ api: deps.api, toast: deps.toast });
   CairnSettingsData.wireExerciseGuideCard({ root: deps.root, api: deps.api, toast: deps.toast });
+  refreshSettingsDataUpdateCard(deps);
+  settingsDataRequired<HTMLButtonElement>(deps, "#feedbackOpen").addEventListener("click", () => {
+    if (typeof CairnSettingsFeedback !== "undefined") CairnSettingsFeedback.open({ api: deps.api, toast: deps.toast });
+  });
+  settingsDataRequired<HTMLInputElement>(deps, "#usagePingEnabled").addEventListener("change", (event) => {
+    wm.usage_ping_enabled = (event.currentTarget as HTMLInputElement).checked;
+    deps.markDirty();
+  });
 
   settingsDataRequired<HTMLInputElement>(deps, "#updateCheckEnabled").addEventListener("change", (event) => {
     wm.update_check_enabled = (event.currentTarget as HTMLInputElement).checked;
@@ -113,12 +133,11 @@ function renderSettingsData(deps: SettingsDataControllerDeps): void {
     btn.textContent = "Check now";
   });
 
-  settingsDataRequired<HTMLButtonElement>(deps, "#dlJson").addEventListener("click", () => {
-    deps.downloadFile(deps.withToken("/api/export"));
-  });
-  settingsDataRequired<HTMLButtonElement>(deps, "#dlDb").addEventListener("click", () => {
-    deps.downloadFile(deps.withToken("/api/export/db"));
-  });
+  // A download leaves the app (an installed iOS app hands it to Safari, which does not
+  // share this app's sign-in), so it rides a short-lived signed link.
+  const download = (path: string): void => void (deps.openResourceLink || openResourceLink)(path, "download");
+  settingsDataRequired<HTMLButtonElement>(deps, "#dlJson").addEventListener("click", () => download("/api/export"));
+  settingsDataRequired<HTMLButtonElement>(deps, "#dlDb").addEventListener("click", () => download("/api/export/db"));
   settingsDataRequired<HTMLButtonElement>(deps, "#rerunSetup").addEventListener("click", async () => {
     await deps.api("/settings", {
       method: "PUT",
@@ -138,8 +157,39 @@ function renderSettingsData(deps: SettingsDataControllerDeps): void {
   }
 }
 
+// Settings -> Devices: pair a device, every signed-in device, passkeys, the recovery
+// line (settings-pairing-client.ts owns the card; this mounts it as its own slice).
+function renderSettingsDevices(deps: SettingsDataControllerDeps): void {
+  const root = deps.root as HTMLElement;
+  if (typeof CairnSettingsPairing === "undefined") {
+    root.innerHTML = "";
+    return;
+  }
+  const hasMcp = typeof CairnSettingsMcp !== "undefined";
+  root.innerHTML = CairnSettingsPairing.devicesSliceHtml() + (hasMcp ? CairnSettingsMcp.cardHtml() : "");
+  // Connected AI apps (settings-mcp-client.ts): MCP keys and signed-in apps, separate from devices.
+  if (hasMcp) {
+    CairnSettingsMcp.wire({
+      root: deps.root,
+      api: (path, opts) => deps.api(path, opts),
+      origin: deps.origin ?? (typeof location !== "undefined" ? location.origin : ""),
+      relTime: deps.relTime,
+      toast: deps.toast,
+    });
+  }
+  CairnSettingsPairing.wireAccessCard({
+    root: deps.root,
+    api: (path, opts) => deps.api(path, opts),
+    origin: deps.origin ?? (typeof location !== "undefined" ? location.origin : ""),
+    relTime: deps.relTime,
+    toast: deps.toast,
+    reload: deps.reload,
+  });
+}
+
 const CAIRN_SETTINGS_DATA_CONTROLLER = {
   render: renderSettingsData,
+  renderDevices: renderSettingsDevices,
 };
 
 Object.assign(globalThis, { CairnSettingsDataController: CAIRN_SETTINGS_DATA_CONTROLLER });

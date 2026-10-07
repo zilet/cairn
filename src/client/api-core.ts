@@ -46,54 +46,19 @@ type ApiFetchOutcome = {
     GET_TIMEOUT_MS: API_GET_TIMEOUT_MS,
   } = CairnApiCache;
 
-  // ---------- optional shared-token auth ----------
-  // No-op unless the server has CAIRN_AUTH_TOKEN set. The token lives in
-  // localStorage; api() sends it as a header, withToken() appends it to direct
-  // resource URLs (art images, file/export downloads) that can't carry a header.
-  function authToken(): string {
-    try {
-      return (localStorage.getItem("cairn_token") || "").trim();
-    } catch {
-      return "";
-    }
-  }
-
-  function withToken(url: string): string {
-    const t = authToken();
-    if (!t) return url;
-    return url + (url.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(t);
-  }
-
-  let promptingAuth = false;
-
-  // Every remembered API body on this device (the SWR tiers, cairn.swr.v1.*). A 401
-  // or a new token means the bodies were read under a credential that no longer
-  // stands, so none of them may paint again — the next open reads fresh or shows
-  // its skeleton. swr-cache.ts owns the memory tier; the disk sweep here also covers
-  // a boot where that module has not loaded yet.
-  function clearRememberedApiBodies(): void {
-    try {
-      (globalThis as { swrClearAll?: () => void }).swrClearAll?.();
-    } catch {}
-    try {
-      for (let i = localStorage.length - 1; i >= 0; i--) {
-        const key = localStorage.key(i);
-        if (key && key.startsWith("cairn.swr.v1.")) localStorage.removeItem(key);
-      }
-    } catch {}
-    try {
-      forgetReads();
-    } catch {}
-  }
-
-  function handleUnauthorized(): void {
-    if (promptingAuth) return;
-    promptingAuth = true;
-    try {
-      localStorage.removeItem("cairn_token");
-    } catch {}
-    clearRememberedApiBodies();
-    CairnTokenSheet.open();
+  // A pairing link (#pair=<code>) is being exchanged for this device's cookie
+  // by index.html's boot script: no request may leave before it settles, or it would
+  // arrive unsigned and open the sign-in screen over a sign-in already under way.
+  // Null (the common case) keeps the fetch synchronous with the call.
+  function authPending(): Promise<unknown> | null {
+    const root = globalThis as { __cairnAuthReady?: Promise<unknown> };
+    const pending = root.__cairnAuthReady;
+    if (!pending) return null;
+    return pending
+      .catch(() => {})
+      .then(() => {
+        if (root.__cairnAuthReady === pending) delete root.__cairnAuthReady;
+      });
   }
 
   // The device's live IANA timezone (e.g. "America/New_York", "Asia/Tokyo"). Sent
@@ -223,7 +188,12 @@ type ApiFetchOutcome = {
       // network failure. index.html starts it with no signal: the Response and its body
       // race this attempt's GET timeout instead, so a stalled one reads as a timeout.
       const early = isGet && !bypass ? CairnApiReach.takeEarlyResponse(p) : undefined;
-      const response = early ? untilAborted(early, init.signal) : fetch("/api" + p, init);
+      const pending = early ? null : authPending();
+      const response = early
+        ? untilAborted(early, init.signal)
+        : pending
+          ? pending.then(() => fetch("/api" + p, init))
+          : fetch("/api" + p, init);
       return response
         .then(async (r) => {
           const base = { status: r.status, durationMs: elapsed(), requestId: responseRequestId(r), writeGen };
@@ -369,6 +339,8 @@ type ApiFetchOutcome = {
     if (token) headers.set("X-Cairn-Token", token);
     const tz = deviceTimeZone();
     if (tz) headers.set("X-Cairn-TZ", tz);
+    const pending = authPending();
+    if (pending) await pending;
     const response = await fetch(`/api${p}`, { ...opts, headers, cache: "no-store" });
     if (!response.ok) throw new Error(`Binary request failed (${response.status})`);
     return { body: await response.arrayBuffer(), headers: response.headers };
@@ -386,14 +358,11 @@ type ApiFetchOutcome = {
   }
 
   Object.assign(globalThis, {
-    authToken,
-    withToken,
     deviceTimeZone,
     api,
     apiBinary,
     apiPrime,
     apiInvalidate: forgetReads,
     apiWriteGeneration: () => apiCoalescer().writeGeneration(),
-    clearRememberedApiBodies,
   });
 }

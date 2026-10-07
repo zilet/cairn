@@ -6,7 +6,8 @@ import {
   startAgentCliUpdate,
   startInstalledAgentCliUpdate,
 } from "../agentCliUpdates.js";
-import { agentInfoOp, agentModelsOp } from "../coachOps.js";
+import { loadAgents } from "../agents.js";
+import { agentInfoOp, agentModelsOp, verifyAgent } from "../coachOps.js";
 import {
   getAgentConfig,
   getAgentStats,
@@ -32,6 +33,17 @@ operatorRouter.get("/agents", (_req, res) => res.json(getAgentConfig()));
 // Cairn's designed failure signals.
 operatorRouter.get("/agents/:name/info", (req, res) => res.json(agentInfoOp(req.params.name)));
 operatorRouter.get("/agents/:name/models", (req, res) => res.json(agentModelsOp(req.params.name)));
+// "Say hello": one tiny round-trip through the real spawn path for THIS agent only, no
+// rotation. Always 200 — {ok:true, agent, ms} or {ok:false, agent, reason, message}
+// with reason busy | not_signed_in | timeout | failed | not_installed (busy = retry,
+// never a verdict). Success refreshes the cached login verdict (src/coachOps/welcome.ts).
+operatorRouter.post("/agents/:name/verify", async (req, res, next) => {
+  try {
+    res.json(await verifyAgent(req.params.name));
+  } catch (e) {
+    next(e);
+  }
+});
 
 operatorRouter.get("/agent-clis/update", (_req, res) => res.json(getAgentCliUpdateStatus()));
 // Backward-compatible bulk update: refresh only CLIs the user already installed;
@@ -101,7 +113,7 @@ operatorRouter.get("/brain-diagnostics", (req, res) =>
 );
 
 export function clientTelemetryHandler(req: Request, res: Response) {
-  const events = parseClientDiagnosticBatch(req.body);
+  const events = parseClientDiagnosticBatch(req.body, { providers: new Set(Object.keys(loadAgents())) });
   if (!events) return res.status(400).json({ error: "invalid telemetry batch" });
   ingestClientDiagnosticEvents(events, getBuildStamp());
   return res.status(204).end();

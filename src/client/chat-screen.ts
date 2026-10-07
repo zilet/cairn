@@ -194,6 +194,10 @@ async function renderChat(): Promise<void> {
     spawnPendingBubble,
     ensureMonitor: chatMonitorEnsure,
   });
+  // No AI coach connected: the composer gives way to one calm connect card, so a
+  // message never ends in a "No agents enabled" error bubble.
+  const dock = $<HTMLElement>(".chatdock");
+  if (dock) CairnCoachLink.mountAsk(dock);
 
   const cachedMessages = peekCached<ChatScreenMessage[]>(CHAT_LIVE_CACHE_KEY);
   if (cachedMessages) {

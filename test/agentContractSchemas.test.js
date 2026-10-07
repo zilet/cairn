@@ -733,9 +733,15 @@ const CONSUMER_READS = [
   },
   {
     schema: "ONBOARD_SCHEMA",
-    consumer: "onboardFromText",
+    consumer: "onboardFromText + welcomeCoach",
     fields: [
       "about_me",
+      "goal",
+      "lift_days",
+      "welcome_reply",
+      "fuel_start.target_kcal",
+      "fuel_start.protein_g",
+      "fuel_start.why",
       "profile.sex",
       "profile.age",
       "profile.height_cm",

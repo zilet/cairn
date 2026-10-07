@@ -96,7 +96,7 @@ const REDIRECTS = [
   // Settings lives in You; its old landing slice IS the You landing
   ["/app/settings", "you", null, "you", "/app/you"],
   ["/app/settings/you", "you", null, "you", "/app/you"],
-  ...["sources", "automation", "data", "agents", "system"].map((section) => [
+  ...["sources", "automation", "data", "agents", "devices", "system"].map((section) => [
     `/app/settings/${section}`,
     "settings",
     section,
@@ -129,7 +129,7 @@ test("the redirect table covers every v1 tab and every v1 section", () => {
     progress: CLIENT_ROUTE_DEFINITIONS.sections.progress,
     stand: CLIENT_ROUTE_DEFINITIONS.sections.stand,
     me: ["standing", "profile", "memory", "health", "life", "family"],
-    settings: ["you", "sources", "automation", "data", "agents", "system"],
+    settings: ["you", "sources", "automation", "data", "agents", "devices", "system"],
   };
   const paths = new Set(REDIRECTS.map(([url]) => new URL(url, "http://x").pathname));
   for (const tab of ["session", "plan", "progress", "stand", "me", "chat", "settings"]) {
@@ -286,6 +286,36 @@ test("routeToUrl writes view-keyed routes in the v2 grammar only", () => {
   for (const [route, url] of cases) assert.equal(routes.routeToUrl(route), url, JSON.stringify(route));
   // jump never reaches a v2 URL.
   assert.doesNotMatch(routes.routeToUrl({ tab: "plan", section: "food", jump: "food" }), /jump/);
+});
+
+test("a cold /app/you/settings/devices load applies the devices segment (boot path, settings bundle not loaded)", () => {
+  const routes = loadRoutes();
+  const context = { window: {}, URL, URLSearchParams };
+  vm.runInNewContext(readFileSync(new URL("../public/js/route-state.js", import.meta.url), "utf8"), context);
+  vm.runInNewContext(readFileSync(new URL("../public/js/app-router.js", import.meta.url), "utf8"), context);
+  const state = {};
+  const route = routes.parseRoute("https://cairn.local/app/you/settings/devices");
+  const tab = context.window.CairnAppRouter.applyRouteState(route, {
+    state,
+    historyState: null,
+    routeApi: context.window.CairnRoutes,
+    planSections: [],
+    progressSections: [],
+    standSections: context.window.CairnRoutes.standSections,
+    meSections: context.window.CairnRoutes.meSections,
+    healthSections: context.window.CairnRoutes.healthSections,
+    settingsSections: context.window.CairnRoutes.settingsSections,
+  });
+  assert.equal(tab, "settings");
+  assert.equal(state.setSeg, "devices");
+});
+
+test("the server returns the app shell for every /app deep link", () => {
+  const src = readFileSync(new URL("../src/server.ts", import.meta.url), "utf8");
+  const m = /app\.get\((\/\^\\\/app[^,]*\/),/.exec(src);
+  assert.ok(m, "SPA fallback route present");
+  const re = new RegExp(m[1].slice(1, -1));
+  assert.ok(re.test("/app/you/settings/devices"));
 });
 
 test("homeOf maps every view (and each Plan section) to its tab-bar home", () => {

@@ -15,11 +15,11 @@ beforeEach(() => {
 
 // ---------- F1: evidence summary (discoverability counts) ----------
 
-test("evidenceSummary is empty before any research, with research flag default-off", () => {
+test("evidenceSummary is empty before any research, with research flag default-on", () => {
   const s = repo.evidenceSummary();
   assert.equal(s.total, 0);
   assert.deepEqual(s.by_marker, []);
-  assert.equal(s.research_enabled, false); // off by default — the deterministic floor
+  assert.equal(s.research_enabled, true); // on by default — the team grounds its findings
 });
 
 test("evidenceSummary counts cached rows per marker (case-insensitive), newest-first by count", () => {
@@ -44,9 +44,9 @@ test("evidenceSummary: a NULL-marker evidence row counts toward total but no mar
   assert.deepEqual(s.by_marker, []); // a sourceless-of-marker row never invents a bucket
 });
 
-test("evidenceSummary reflects research_enabled when turned on", () => {
-  repo.setSettings({ research_enabled: true });
-  assert.equal(repo.evidenceSummary().research_enabled, true);
+test("evidenceSummary reflects research_enabled when turned off", () => {
+  repo.setSettings({ research_enabled: false });
+  assert.equal(repo.evidenceSummary().research_enabled, false);
 });
 
 // ---------- F2: outcome learnings ("What Cairn has noticed") ----------

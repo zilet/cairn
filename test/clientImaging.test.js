@@ -79,7 +79,12 @@ test("imaging cards group atomic findings, distinguish AI observations, and esca
   assert.match(html, /scan &lt;source&gt;\.pdf/);
   assert.match(html, /No &lt;acute&gt; fracture/);
   assert.doesNotMatch(html, /<acute>|<disc>|<signal>|<source>/);
-  assert.match(html, /TOKEN:\/api\/health-docs\/44\/imaging-files\/7/);
+  // The plain path, opened through a signed link (api-core's data-resource-link handler).
+  assert.match(
+    html,
+    /href="\/api\/health-docs\/44\/imaging-files\/7" target="_blank" rel="noopener" data-resource-link/
+  );
+  assert.doesNotMatch(html, /TOKEN:/);
   assert.equal(CairnImaging.imagingGroups(doc.parsed.imaging_study)[0][0], "musculoskeletal");
   assert.equal(CairnImaging.imagingGroups(doc.parsed.imaging_study)[0][1][0].lateralities[0].laterality, "not stated");
   assert.equal(CairnImaging.imagingLabel("lower_extremity.knee"), "Lower Extremity Knee");

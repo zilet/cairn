@@ -562,10 +562,17 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
 
 Single-user, trusted-network by default: **no authentication unless `CAIRN_AUTH_TOKEN` is set**, in
 which case one global guard in `src/auth.ts` gates `/api` and `/mcp`, exempting only `/api/health`
-(any method), `GET /api/apple-health/config`, and `POST /api/apple-health/pairing/exchange` — plus
-the static PWA shell, which stays ungated so it can render a token prompt. The PWA sends
-`X-Cairn-Token` (or `?token=` on direct resource URLs via
-`withToken()`); API/MCP clients use `Authorization: Bearer`. An optional per-IP rate limiter
+(any method), `GET /api/apple-health/config`, `POST /api/apple-health/pairing/exchange`, and the
+POST sign-in doors in `SIGN_IN_DOORS` — plus the static PWA shell, which stays ungated so it can
+render the sign-in screen. API/MCP clients send the master token (`Authorization: Bearer`); a
+browser signs in once (passkey, one-time `#pair=` code, or the token as recovery) and then carries
+an HttpOnly per-device `cairn_session` cookie whose cookie-authenticated writes must be same-origin.
+AI apps get their own `/mcp`-only access — a per-app key, or OAuth 2.1 + PKCE through the public
+`/.well-known/oauth-*` and `/oauth/*` doors (`src/routes/oauth.ts`, outside the guard's scope,
+per-IP limited); none of it ever opens `/api`.
+Only hashes of session secrets, pairing codes, MCP keys and OAuth codes/tokens are stored, and none
+of them — nor the token — may reach a log (the one exception: the boot's first-sign-in line).
+Details: `docs/ARCHITECTURE.md` "Access: master token, device sessions, passkeys". An optional per-IP rate limiter
 (`CAIRN_RATE_LIMIT`) is wired *before* the auth guard so it also blunts token brute-force. Uploads
 land in `data/uploads/` behind a raster-image/PDF mime allowlist (no SVG), and the 25 MB body limit is
 scoped to the health-doc upload route only (1 MB elsewhere). The container runs as non-root `app`, so
@@ -580,6 +587,7 @@ one-off `docker compose exec` commands that must persist a CLI login need `-u ap
 | `docs/API.md` · `docs/MCP-TOOLS.md` | Generated, authoritative endpoint and tool inventories. |
 | `docs/DESIGN.md` | The "Atelier v2" visual contract — tokens (light + dark), type, stones, components, motion, stylesheet ownership, and the client component architecture. Read before touching `src/styles/` or view markup. |
 | `docs/OPERATIONS.md` | Deploy, migrate, backup, restore, tooling notes. |
+| `docs/HOSTING.md` | One-click hosted install (Railway), single-volume mode, RAM sizing. |
 | `docs/ELITE-BRAIN-IMPLEMENTATION.md` | The decision ledger, evaluators, autonomy tiers. |
 | `docs/ARCHITECTURE-HISTORY.md` | Append-only per-round schema/feature changelog. |
 | `docs/` (rest) | User-facing guides — quickstart, deployment, Garmin, Apple Health, households, sharing, sandbox, observability. |

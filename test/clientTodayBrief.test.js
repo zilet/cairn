@@ -37,6 +37,7 @@ function loadTodayBrief() {
   };
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/today-brief-client.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/today-brief-signals-client.js"), "utf8"), context);
   return context.CairnTodayBrief;
 }
 
@@ -703,6 +704,7 @@ function loadTodayBriefWithSessionStatus() {
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/today-session-status-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-brief-client.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/today-brief-signals-client.js"), "utf8"), context);
   return context.CairnTodayBrief;
 }
 
@@ -1045,6 +1047,7 @@ function loadBriefWithReads() {
   vm.runInNewContext(readFileSync(join(root, "public/js/ui-reads.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-brief-voice-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-brief-client.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/today-brief-signals-client.js"), "utf8"), context);
   return context.CairnTodayBrief;
 }
 
@@ -1216,6 +1219,7 @@ test("Today Brief carries the today strength line and names the open lift", () =
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/ui-reads.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-brief-client.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/today-brief-signals-client.js"), "utf8"), context);
   const brief = context.CairnTodayBrief;
   const line = {
     state: "not_started",
@@ -1248,6 +1252,7 @@ function loadVoicedBrief() {
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/today-brief-voice-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-brief-client.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/today-brief-signals-client.js"), "utf8"), context);
   return { brief: context.CairnTodayBrief, voice: context.CairnTodayBriefVoice };
 }
 

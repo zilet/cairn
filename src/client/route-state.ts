@@ -75,7 +75,7 @@ type CairnRouteRoot = typeof globalThis & { CairnRoutes?: CairnRoutesApi };
       stand: ["records", "share", "learned", "connections", "markers", "body", "recovery", "supplements", "age", "checkup", "domain"],
       me: ["standing", "profile", "memory", "health", "life", "family"],
       health: ["read", "markers", "records", "share", "learned"],
-      settings: ["sources", "automation", "data", "agents", "system"],
+      settings: ["sources", "automation", "data", "agents", "devices", "system"],
       horizon: ["goal"],
       // "stone" carries the stone key in ?id= (strength, endurance, fuel, ...).
       you: ["stone"],

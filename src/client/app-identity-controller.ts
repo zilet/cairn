@@ -2,7 +2,7 @@
 // Installed-app identity controller: stamps which icon/name an iOS home-screen
 // install was added with (at load, before anything else writes storage), mounts the
 // one-time re-add note, and mounts Settings -> Data's "This app" block (server build,
-// this app's shell, Copy token). Rules live in app-identity-model.ts, markup in
+// this app's shell). Rules live in app-identity-model.ts, markup in
 // app-identity-client.ts.
 
 type AppIdentityStorage = Pick<Storage, "getItem" | "setItem"> & Partial<Pick<Storage, "key" | "length">>;
@@ -16,12 +16,8 @@ type AppIdentityNoteDeps = {
 
 type AppIdentityCardDeps = {
   api(path: string): Promise<unknown>;
-  storage: AppIdentityStorage | null;
-  toast(message: string): void;
-  clipboard?: { writeText(text: string): Promise<void> } | null;
   /** The derived cache name the controlling worker holds: "" with no worker, null when it did not answer. */
   workerShell(): Promise<string | null>;
-  execCopy?: () => boolean;
 };
 
 type AppIdentityControllerApi = {
@@ -168,14 +164,10 @@ declare const CairnAppIdentityController: AppIdentityControllerApi;
       build: "",
       shell: "",
       shellState: "checking",
-      tokenStored: String(read(deps.storage, "cairn_token") || "").trim() !== "",
     };
     host.innerHTML = CairnAppIdentity.appCardHtml(model0);
 
-    const teardown = CairnUiActions.mount(host, "appid", ({ delegate, signal }) => {
-      delegate("click", {
-        "appid-copy-token": () => copyToken(host, deps, signal),
-      });
+    const teardown = CairnUiActions.mount(host, "appid", ({ signal }) => {
       void Promise.all([deps.api("/health").catch(() => null), deps.workerShell().catch(() => null)]).then(
         ([rawHealth, shell]) => {
           if (signal.aborted || !host.isConnected) return;
@@ -191,45 +183,6 @@ declare const CairnAppIdentityController: AppIdentityControllerApi;
       );
     });
     return teardown;
-  }
-
-  async function copyToken(host: Element, deps: AppIdentityCardDeps, signal: AbortSignal): Promise<void> {
-    const token = String(read(deps.storage, "cairn_token") || "").trim();
-    if (!token) {
-      deps.toast("No access token is stored on this device.");
-      return;
-    }
-    try {
-      if (deps.clipboard && typeof deps.clipboard.writeText === "function") {
-        await deps.clipboard.writeText(token);
-        deps.toast("Token copied");
-        return;
-      }
-    } catch {}
-    // No clipboard API (a plain-HTTP origin) or it refused: reveal a selectable field,
-    // try the legacy copy, and clear the field the moment it loses focus so the token
-    // never sits on screen.
-    const field = host.querySelector<HTMLInputElement>(".app-id-token-field");
-    if (!field || signal.aborted) return;
-    field.value = token;
-    field.hidden = false;
-    field.focus();
-    if (typeof field.select === "function") field.select();
-    let copied = false;
-    try {
-      copied = !!deps.execCopy?.();
-    } catch {}
-    const hide = (): void => {
-      field.value = "";
-      field.hidden = true;
-    };
-    if (copied) {
-      hide();
-      deps.toast("Token copied");
-      return;
-    }
-    field.addEventListener("blur", hide, { once: true, signal });
-    deps.toast("Select the token and copy it");
   }
 
   const CAIRN_APP_IDENTITY_CONTROLLER: AppIdentityControllerApi = {

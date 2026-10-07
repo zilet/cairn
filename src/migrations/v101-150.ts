@@ -613,4 +613,82 @@ export const MIGRATIONS_101_150: Migration[] = [
     // converts. Default lb so existing installs do not flip. Two-step: also in db.ts.
     up: (db) => addColumn(db, "settings", "weight_units TEXT DEFAULT 'lb'"),
   },
+  {
+    version: 121,
+    name: "usage-ping-opt-in",
+    // The opt-in weekly usage ping (src/usagePing.ts): a random install id, the version,
+    // the host platform, CPU arch and Node version — nothing else, and only when the
+    // owner turns it on. DEFAULT 0 keeps every existing install silent. Two-step: the
+    // column also lives in db.ts's settings create block and repo/settings.ts's list.
+    up: (db) => addColumn(db, "settings", "usage_ping_enabled INTEGER DEFAULT 0"),
+  },
+  {
+    version: 122,
+    name: "settings-coach-welcomed",
+    // Whether the first-run welcome exchange with the coach has happened (src/coachOps/
+    // welcome.ts). Separate from `onboarded`: "Look around first" opens the app without a
+    // coach, and the welcome still waits for the day an agent is connected. DEFAULT 0;
+    // two-step: also in db.ts's settings create block and repo/settings.ts's list.
+    // An install that already onboarded through the old form has met its coach: mark it
+    // welcomed, so an upgrade never greets a long-standing athlete with "say hello".
+    up: (db) => {
+      addColumn(db, "settings", "coach_welcomed INTEGER DEFAULT 0");
+      if (!hasTable(db, "settings")) return;
+      try {
+        db.exec(`UPDATE settings SET coach_welcomed = 1 WHERE onboarded = 1 AND COALESCE(coach_welcomed, 0) = 0`);
+      } catch {
+        /* a settings table older than the onboarded column has nobody to welcome */
+      }
+    },
+  },
+  {
+    version: 123,
+    name: "auth-device-hint",
+    // The same browser signing in again reuses its own device row (repo/auth-devices.ts
+    // createDeviceSession) instead of minting a duplicate: rows remember the sha256 of
+    // the browser's non-secret device hint. NULL on every existing row, so nothing is
+    // reused until that browser next signs in. Two-step: also in db.ts's create block.
+    up: (db) => {
+      if (!hasTable(db, "auth_devices")) return;
+      addColumn(db, "auth_devices", "hint_hash TEXT");
+    },
+  },
+  {
+    version: 124,
+    name: "auth-passkey-provenance",
+    // Revoking a device removes every passkey it could still hold — bound to it, added
+    // by it, or last used by it (repo/auth-devices.ts passkeysRemovedByRevoking): a synced
+    // passkey lives on every device of its account, so the binding alone is not enough.
+    // Existing rows take their current binding as the registering device (the closest
+    // record there is); last_used_device_id fills in on the next sign-in. Two-step: also
+    // in db.ts's create block.
+    up: (db) => {
+      if (!hasTable(db, "auth_passkeys")) return;
+      addColumn(db, "auth_passkeys", "registered_device_id INTEGER");
+      addColumn(db, "auth_passkeys", "last_used_device_id INTEGER");
+      try {
+        db.exec(`UPDATE auth_passkeys SET registered_device_id = device_id WHERE registered_device_id IS NULL`);
+      } catch {
+        /* a passkeys table older than device_id has nothing to backfill */
+      }
+    },
+  },
+  {
+    version: 125,
+    name: "mcp-grant-provenance",
+    // Connected AI apps (repo/mcp-clients.ts) remember the redirect URI a grant was
+    // approved for (Settings shows THAT host, not the registration's first) and the device
+    // that made the key or approved the grant (revoking that device from another one
+    // disconnects them). OAuth tokens remember the refresh token whose rotation minted
+    // them, for the refresh-reuse grace. NULL on existing rows: an older grant shows its
+    // registration's host only when it registered one URI, and is cut by no device.
+    // Two-step: also in db.ts's create blocks.
+    up: (db) => {
+      if (hasTable(db, "mcp_clients")) {
+        addColumn(db, "mcp_clients", "redirect_uri TEXT");
+        addColumn(db, "mcp_clients", "created_by_device_id INTEGER");
+      }
+      if (hasTable(db, "oauth_tokens")) addColumn(db, "oauth_tokens", "parent_id INTEGER");
+    },
+  },
 ];

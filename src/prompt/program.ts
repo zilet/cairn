@@ -16,17 +16,40 @@ const EXERCISE_EXPLANATION_SCHEMA = `{
 // filling a form. Extract a calm structured starting picture — never ask anything
 // back. Only fill what they actually said; everything else stays null and Cairn
 // learns it as they go (progressive understanding). Informational, never medical.
-const ONBOARD_SCHEMA = `{
+const ONBOARD_FIELDS = `
   "about_me": "<a clean 1-3 sentence summary of who they are, what they're training for, and any constraints — factual, in plain language>",
   "profile": { "sex": "male|female|null", "age": <int|null>, "height_cm": <number|null>, "weight_lb": <number|null>, "goal_weight_lb": <number|null>, "goal_date": "YYYY-MM-DD|null", "days_per_week": <int|null> },
   "goal": "lose|maintain|gain|recomp|null",
+  "lift_days": [ <weekday number 0-6, 0 = Sunday, ONLY for weekdays they named as lifting / gym days> ],
   "supplements": [ { "name": "Creatine monohydrate", "dose": "5 g", "frequency": "daily", "category": "performance", "related_markers": ["eGFR"] } ],
   "memories": [ { "content": "<durable preference or fact, e.g. trains fasted in the mornings>", "kind": "preference|constraint|decision|goal|observation" } ],
   "context_events": [ { "kind": "injury|trip|life_event", "title": "<short>", "detail": "<optional>", "meta": { "area": "<injury area>", "severity": "mild|moderate|severe" } } ],
-  "movement_considerations": [ { "label": "<their condition in a few words, e.g. mild scoliosis>", "detail": "<optional: what they said about it>", "wants_addressed": <true only if they asked for the program to help with it> } ]
+  "movement_considerations": [ { "label": "<their condition in a few words, e.g. mild scoliosis>", "detail": "<optional: what they said about it>", "wants_addressed": <true only if they asked for the program to help with it> } ]`;
+const ONBOARD_SCHEMA = `{${ONBOARD_FIELDS}
 }`;
 
-export function buildOnboardPrompt(text: string): string {
+// The first-run welcome asks the same extraction plus the coach's first words back and a
+// starting fuel suggestion (src/coachOps/welcome.ts). The JSON Schema in
+// src/agent-contracts.ts names every one of these fields, so constrained decoding keeps them.
+const WELCOME_SCHEMA = `{${ONBOARD_FIELDS},
+  "welcome_reply": "<2-4 warm, plain sentences in your own coaching voice, second person: what you understood about them and what you are putting in place first. No numbers about them, no scores, no 'you must', no app or engineering words.>",
+  "fuel_start": { "target_kcal": <int|null>, "protein_g": <int|null>, "why": "<one plain sentence: what this starting point is based on>" }
+}`;
+
+export function buildOnboardPrompt(text: string, opts: { welcome?: boolean } = {}): string {
+  const welcome = opts.welcome === true;
+  const welcomeRules = welcome
+    ? `
+This is also your FIRST CONVERSATION with them. Write "welcome_reply": 2-4 warm, plain sentences that show
+you understood what they are training for and what their week looks like, and say you are putting a first
+week and a starting food target in place that they can change by just telling you. Second person, calm,
+no exclamation marks, no numbers about their body, no scores or grades, never "you must" or "you need to".
+Write "fuel_start" only from what they said: protein_g from their bodyweight when they gave one (about
+0.7-1 g per lb, toward the top when cutting or building), target_kcal only when their weight and goal
+make a sensible estimate possible (a modest deficit for "lose", maintenance for "maintain"/"recomp", a
+small surplus for "gain"); leave either null when you would be guessing. "why" says what it rests on.
+`
+    : "";
   return `${CAIRN_PERSONA}
 
 You're meeting the user for the FIRST time. They wrote a short intro about themselves.
@@ -37,9 +60,11 @@ null/empty (Cairn learns the rest naturally over time). Approximate supplements 
 an injury is something that HURTS or is healing. A lasting structural/postural condition they mention
 (scoliosis, hypermobility, a leg-length difference, an old fused joint) that does not hurt goes in
 movement_considerations, NOT context_events; set wants_addressed only when they say they want it worked
-on. Never infer a condition they did not state. No medical advice.
-
-${renderJsonContract(ONBOARD_SCHEMA)}
+on. Never infer a condition they did not state. No medical advice. Fill "lift_days" only with weekdays
+they actually named for lifting or the gym; a count of days alone ("three days a week") is
+profile.days_per_week, never invented weekdays.
+${welcomeRules}
+${renderJsonContract(welcome ? WELCOME_SCHEMA : ONBOARD_SCHEMA)}
 
 USER'S INTRO:
 """${String(text ?? "").slice(0, 4000)}"""`;

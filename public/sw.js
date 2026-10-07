@@ -19,12 +19,18 @@ const CORE_ASSETS = [
   // Every bundle, eager AND lazy, in manifest order: a lazy destination's first
   // offline visit resolves from here.
   "/js/bundle-01-core.js", "/js/bundle-02-today.js", "/js/bundle-03-capture.js", "/js/bundle-04-coach-meals.js", "/js/bundle-05-me-health.js", "/js/bundle-07-boot.js",
-  "/js/bundle-08-train.js", "/js/bundle-09-horizon.js", "/js/bundle-10-ask.js", "/js/bundle-11-settings.js", "/js/bundle-12-calendar.js", "/js/bundle-13-meals.js", "/js/bundle-14-today-ahead.js",
+  "/js/bundle-08-train.js", "/js/bundle-09-horizon.js", "/js/bundle-10-ask.js", "/js/bundle-15-welcome.js", "/js/bundle-11-settings.js", "/js/bundle-12-calendar.js", "/js/bundle-13-meals.js", "/js/bundle-14-today-ahead.js", "/js/bundle-16-auth.js",
   "/art.js", "/cairn-body-figure.js", "/manifest.json",
   // Self-hosted Atelier v2 faces (src/styles/foundation/fonts.css). Core, not
   // optional: an installed app offline must still set its own type.
   "/fonts/young-serif-latin-400.woff2", "/fonts/hanken-grotesk-latin-wght.woff2",
   "/fonts/martian-mono-latin-400.woff2", "/fonts/martian-mono-latin-500.woff2",
+  // The vendored QR encoder Settings → Devices "Pair a device" loads on demand (~16 KB
+  // brotli), so pairing a second device also works from an installed app offline.
+  "/vendor/qrcode.js",
+  // The vendored WebAuthn helper the sign-in screen and Settings → Devices load
+  // on demand (~5 KB brotli), so a passkey sign-in also works from an installed app.
+  "/vendor/simplewebauthn-browser.js",
 ];
 const OPTIONAL_ASSETS = [
   // Vendored xterm.js for the in-app agent-login terminal (lazy-loaded by the

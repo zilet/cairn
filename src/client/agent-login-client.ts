@@ -10,22 +10,16 @@
     return (globalThis as { CairnAgentLoginModal?: AgentLoginModalApi }).CairnAgentLoginModal || null;
   }
 
-  function agentLoginSession(): AgentLoginSessionApi | null {
-    return (globalThis as { CairnAgentLoginSession?: AgentLoginSessionApi }).CairnAgentLoginSession || null;
-  }
-
   async function openAgentLoginModal(agentName: unknown): Promise<void> {
     const model = agentLoginModel();
     const modal = agentLoginModal();
-    const session = agentLoginSession();
-    if (!model || !modal || !session) return;
+    if (!model || !modal) return;
 
     const name = model.normalizeName(agentName);
     if (!name) return;
 
-    const handle = modal.create(name, (retryName) => { void openAgentLoginModal(retryName); });
-    if (!handle) return;
-    await session.start(name, handle);
+    // The modal mounts the friendly sign-in panel, which starts the session itself.
+    modal.create(name, (retryName) => { void openAgentLoginModal(retryName); });
   }
 
   Object.assign(globalThis, { openAgentLoginModal });

@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { queryTokenAllowedPath, authStartupError, appleHealthTokenScopeAllows } from "../dist/auth.js";
+import { queryTokenAllowedPath, authStartupError, appleHealthTokenScopeAllows, trustProxyHops } from "../dist/auth.js";
 
 test("query-token auth is limited to browser-only GET surfaces", () => {
   assert.equal(queryTokenAllowedPath("/api/health-docs/12/file"), true);
@@ -121,4 +121,15 @@ test("auth middleware accepts an active Apple Health token only for metrics inge
   } finally {
     rmSync(dataDir, { recursive: true, force: true });
   }
+});
+
+test("trustProxyHops: a bounded hop count, never trust-everything", () => {
+  assert.equal(trustProxyHops({}), 0);
+  assert.equal(trustProxyHops({ CAIRN_TRUST_PROXY: "1" }), 1);
+  assert.equal(trustProxyHops({ CAIRN_TRUST_PROXY: "true" }), 1);
+  assert.equal(trustProxyHops({ CAIRN_TRUST_PROXY: "99" }), 4);
+  assert.equal(trustProxyHops({ CAIRN_TRUST_PROXY: "loopback" }), 0);
+  // Railway's edge proxy is always one hop in front; an explicit off still wins.
+  assert.equal(trustProxyHops({ RAILWAY_ENVIRONMENT_ID: "x" }), 1);
+  assert.equal(trustProxyHops({ RAILWAY_ENVIRONMENT_ID: "x", CAIRN_TRUST_PROXY: "0" }), 0);
 });

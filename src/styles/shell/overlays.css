@@ -201,6 +201,7 @@
   padding:var(--space-11) var(--space-10) var(--space-9);font-family:var(--font-ui)}
 .token-sheet-h{margin:0 0 var(--space-3);font-family:var(--font-display);font-size:var(--text-xl);font-weight:var(--weight-semibold);line-height:var(--leading-tight)}
 .token-sheet-p{margin:0 0 var(--space-7);font-size:var(--text-md);line-height:var(--leading);color:var(--ink-2)}
+.token-sheet-hint{margin:0 0 var(--space-7);font-size:var(--text-sm);line-height:var(--leading);color:var(--muted)}
 .token-sheet-in{width:100%;box-sizing:border-box;font-family:var(--font-ui);font-size:var(--text-lead);
   padding:var(--space-6) var(--space-7);border-radius:var(--radius-sm);border:1px solid var(--line-2);
   background:var(--card-2);color:var(--ink)}
@@ -214,5 +215,18 @@
 .token-sheet-btn:active{transform:var(--press)}
 .token-sheet-btn:focus-visible{outline:2px solid var(--accent-deep);outline-offset:2px}
 @media (prefers-reduced-motion:reduce){.token-sheet-ov{animation:none}.token-sheet-btn:active{transform:none}}
+/* The sign-in screen (auth-signin-client.ts) on the same sheet: passkey first, then a
+   pairing code, the access token folded away as the recovery path. */
+.signin-sheet{max-height:calc(100dvh - 36px);overflow:auto}
+.signin-passkey{width:100%;margin-bottom:var(--space-8)}
+.signin-note{margin:0 0 var(--space-7);font-size:var(--text-sm);line-height:var(--leading);color:var(--ink-2)}
+.signin-block{margin:0 0 var(--space-7)}
+.signin-lbl{display:block;font-weight:var(--weight-semibold);margin-bottom:var(--space-2)}
+.signin-row{display:flex;gap:var(--space-4);align-items:center}
+.signin-row .token-sheet-in{flex:1;min-width:0}
+.signin-code{font-family:var(--font-mono);letter-spacing:var(--tracking-mono);text-transform:uppercase}
+.signin-recovery{border-top:1px solid var(--line);padding-top:var(--space-6)}
+.signin-recovery summary{cursor:pointer;color:var(--ink-2);font-size:var(--text-sm);min-height:44px;display:flex;align-items:center}
+.signin-offer-ft{gap:var(--space-6);align-items:center}
 @media (prefers-reduced-motion:reduce){.outbox-review-ov{animation:none}.outbox-bar.outbox-actionable:hover{transform:translate(-50%,0)}}
 

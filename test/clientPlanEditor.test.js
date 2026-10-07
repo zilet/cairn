@@ -28,7 +28,9 @@ function loadPlanEditor() {
   vm.runInNewContext(readFileSync(join(root, "public/js/cardio-plan-client.js"), "utf8"), context);
   // The gallery draws its rows with the day view's shared movement row (the "day" bundle train depends on).
   vm.runInNewContext(readFileSync(join(root, "public/js/day-detail-model.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/day-glance-model.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/day-detail-client.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/day-glance-view.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/plan-editor-client.js"), "utf8"), context);
   return context.CairnPlanEditor;
 }

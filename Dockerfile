@@ -122,11 +122,14 @@ ENV NODE_ENV=production \
     NPM_CONFIG_CACHE=/home/app/.cairn-tools/.npm-cache \
     PATH="/home/app/.cairn-tools/bin:/home/app/.local/bin:/home/app/.grok/bin:/home/app/.antigravity-ide/antigravity-ide/bin:/usr/local/bin:${PATH}"
 
+# Hosting platforms that give a service ONE volume (Railway, Render) mount it at /data
+# and set CAIRN_SINGLE_VOLUME=1: the entrypoint then keeps home state under /data/home
+# and points HOME, CAIRN_CLI_ROOT, NPM_CONFIG_*, NODE_COMPILE_CACHE and PATH there.
 VOLUME ["/data", "/home/app", "/home/app/.cairn-tools"]
 EXPOSE 8787
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD curl -fsS http://localhost:8787/api/health || exit 1
+  CMD curl -fsS "http://localhost:${PORT:-8787}/api/health" || exit 1
 
 # Starts as root only to fix volume ownership, then drops to the `app` user.
 ENTRYPOINT ["cairn-entrypoint"]

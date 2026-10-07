@@ -1,0 +1,22 @@
+# Cairn feedback worker. Deploy once; self-hosted Cairn instances POST to it.
+name = "cairn-feedback"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "cairn-feedback"
+# Run `npx wrangler d1 create cairn-feedback` and paste the printed id here.
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+# Daily retention sweep (03:17 UTC): drops pings unseen > 180 days and
+# diagnostics older than 90 days. Feedback text is kept.
+[triggers]
+crons = ["17 3 * * *"]
+
+# Secrets (set with `wrangler secret put NAME`, never in this file):
+#   ADMIN_TOKEN         required  bearer token for /v1/admin/*
+#   RATE_SALT           optional  salt for hashing IPs (falls back to ADMIN_TOKEN)
+#   GITHUB_TOKEN        optional  fine-grained PAT, Issues: read/write on one repo
+#   GITHUB_REPO         optional  "owner/repo" to open issues in
+#   NOTIFY_WEBHOOK_URL  optional  generic JSON webhook (Discord/Slack/ntfy bridge)

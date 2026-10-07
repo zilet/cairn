@@ -30,7 +30,7 @@ import { planDraftFloorPrecheck, sessionFloorPrecheck } from "../repo/verify-flo
 import { localDateISO } from "../repo/shared.js";
 import { pickDayVariant } from "../repo/brain/day-read-rules.js";
 import { trainingBackstopSignature } from "../repo/training-cache.js";
-import type { FallbackResult } from "../agents.js";
+import type { AgentPriority, FallbackResult } from "../agents.js";
 import { runChosen, runChosenStreaming } from "../runChosen.js";
 import { buildCoachPrompt, buildProgramEvolutionPrompt, buildWeekComposePrompt, buildSessionPrompt, buildDailyCompositionPrompt, buildExerciseExplanationPrompt, buildWeekAheadPrompt, buildSessionVerifyPrompt, buildPlanDraftVerifyPrompt, buildExerciseReconcilePrompt } from "../prompt.js";
 import { applyProposalWithAutonomy } from "../domain/brain/autonomy-service.js";
@@ -666,7 +666,17 @@ function trainingWeekExists(): boolean {
  * GUARD: this is the first week only. With a week already on the plan it returns the
  * designed { ok:false, error } at 200 pointing at the evolve path, and writes nothing.
  */
-export async function composeWeek(agent: string | undefined, instruction: string | undefined, hooks?: OpHooks) {
+export async function composeWeek(
+  agent: string | undefined,
+  instruction: string | undefined,
+  hooks?: OpHooks,
+  // The first-run welcome (src/coachOps/welcome.ts): the person just asked, in their own
+  // words, for a first week while sitting in front of the screen. `explicitRequest` lands
+  // it at THEIR boundary (today) the way a chat restructure does, instead of the next
+  // Monday; `priority` lets the run take the interactive spawn lane. Both default off,
+  // so the Plan tab's compose and the MCP tool behave exactly as before.
+  opts: { explicitRequest?: boolean; priority?: AgentPriority } = {}
+) {
   // The one choke point both surfaces share, so the bound is server policy rather
   // than something the route and the MCP tool each remember to do. The athlete's
   // words go into a prompt AND into the stored proposal instruction, so a
@@ -699,6 +709,7 @@ export async function composeWeek(agent: string | undefined, instruction: string
       signal: hooks?.signal,
       acceptParsed: isPlanProposalResult,
       schema: PLAN_PROPOSAL_SCHEMA,
+      ...(opts.priority ? { priority: opts.priority } : {}),
     });
   } catch (error) {
     const failure = agentFailure(error, hooks);
@@ -728,7 +739,10 @@ export async function composeWeek(agent: string | undefined, instruction: string
   let autonomy: any = null;
   if (proposal?.id != null && composedDays > 0 && hasPlanProposalActions(result.parsed)) {
     try {
-      autonomy = applyProposalWithAutonomy(Number(proposal.id));
+      autonomy = applyProposalWithAutonomy(
+        Number(proposal.id),
+        opts.explicitRequest ? { explicit_user_request: true } : undefined
+      );
     } catch {
       autonomy = null;
     }

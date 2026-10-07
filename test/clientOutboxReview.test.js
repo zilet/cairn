@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { createFakeTimers, fire, flush, loadClientModule } from "./_dom.mjs";
 import { API_CLIENT_MODULES } from "./_apiClientModules.mjs";
 
-function loadApi({ fetch } = {}) {
+function loadApi({ fetch, globals = {} } = {}) {
   const timers = createFakeTimers();
   const toasts = [];
   const location = {
@@ -24,6 +24,7 @@ function loadApi({ fetch } = {}) {
       location,
       fetch: fetch || (async () => ({ status: 200, headers: { get: () => null }, json: async () => ({ ok: true }) })),
       toast: (message) => toasts.push(message),
+      ...globals,
     },
   });
   // Drain the module's own boot-time paint/flush so only the test's timers remain.
@@ -102,29 +103,43 @@ test("outbox review closes itself once nothing needs attention", async () => {
   assert.equal(env.doc.querySelector(".outbox-review-ov"), null);
 });
 
-test("a 401 opens the access-token sheet, which only a token can leave", async () => {
-  const env = loadApi({ fetch: async () => ({ status: 401, headers: { get: () => null }, json: async () => ({}) }) });
+test("a 401 opens the sign-in screen from the lazy auth bundle, once, and forgets a stale token", async () => {
+  const routed = [];
+  let opened = 0;
+  const env = loadApi({
+    fetch: async () => ({ status: 401, headers: { get: () => null }, json: async () => ({}) }),
+    globals: {
+      withBundle: (name, fn) => {
+        routed.push(name);
+        return fn();
+      },
+      CairnSignIn: { open: () => opened++, offerPasskey() {} },
+    },
+  });
+  env.win.localStorage.setItem("cairn_token", "stale");
   void env.win.api("/profile");
-  await flush();
+  void env.win.api("/settings");
+  for (let i = 0; i < 4; i++) await flush();
   env.timers.runPending();
+  await flush();
+  assert.deepEqual(routed, ["auth"], "the sign-in screen waits for its own bundle");
+  assert.equal(opened, 1, "two 401s open one screen");
+  assert.equal(env.win.localStorage.getItem("cairn_token"), null);
+});
 
+test("when the sign-in bundle cannot load, a calm note says so instead of a dead app", async () => {
+  const env = loadApi({
+    fetch: async () => ({ status: 401, headers: { get: () => null }, json: async () => ({}) }),
+    globals: {
+      withBundle: () => Promise.reject(new Error("offline")),
+    },
+  });
+  void env.win.api("/profile");
+  for (let i = 0; i < 4; i++) await flush();
+  env.timers.runPending();
   const overlay = env.doc.querySelector(".token-sheet-ov");
-  const dialog = overlay.querySelector(".token-sheet");
-  assert.equal(dialog.getAttribute("role"), "dialog");
-  assert.equal(dialog.getAttribute("aria-labelledby"), "tokenSheetTitle");
-  const input = dialog.querySelector(".token-sheet-in");
-  assert.equal(env.doc.activeElement, input);
-
-  await fire(input, "keydown", { key: "Escape" });
-  await overlay.click();
-  assert.ok(env.doc.querySelector(".token-sheet-ov"), "Escape and the backdrop leave it open");
-
-  await dialog.querySelector("[data-token-save]").click();
-  assert.equal(dialog.querySelector(".token-sheet-err").hidden, false, "an empty token asks again");
-  assert.equal(env.location.reloaded, 0);
-
-  input.value = "  owner-token  ";
-  await fire(input, "keydown", { key: "Enter" });
-  assert.equal(env.win.localStorage.getItem("cairn_token"), "owner-token");
-  assert.equal(env.location.reloaded, 1);
+  assert.ok(overlay);
+  assert.match(overlay.textContent, /Couldn't load the sign-in screen/);
+  await fire(env.doc, "keydown", { key: "Escape" });
+  assert.ok(env.doc.querySelector(".token-sheet-ov"), "not dismissible: there is nothing behind it");
 });

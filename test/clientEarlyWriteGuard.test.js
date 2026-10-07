@@ -45,7 +45,7 @@ function load() {
   };
   context.globalThis = context;
   context.window = context;
-  for (const file of ["public/js/api-cache.js", "public/js/api-reach.js", "public/js/api-core.js", "public/js/today-prefetch.js"]) {
+  for (const file of ["public/js/api-cache.js", "public/js/api-reach.js", "public/js/api-auth.js", "public/js/api-core.js", "public/js/today-prefetch.js"]) {
     vm.runInNewContext(read(file), context);
   }
   const early = (body) => ({

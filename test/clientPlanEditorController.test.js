@@ -257,7 +257,7 @@ function loadPlanEditorController(plan) {
   // The shared strength-only filters (isCardioItem / strengthPlanItems / strengthPlanDays)
   // load ahead of the Plan bundle in the app; load the real module rather than a stub.
   vm.runInNewContext(readFileSync(join(root, "public/js/cardio-plan-client.js"), "utf8"), context);
-  for (const f of ["day-detail-model", "day-detail-run-client", "day-detail-client"]) vm.runInNewContext(readFileSync(join(root, `public/js/${f}.js`), "utf8"), context);
+  for (const f of ["day-detail-model", "day-glance-model", "day-detail-run-client", "day-detail-client", "day-glance-view"]) vm.runInNewContext(readFileSync(join(root, `public/js/${f}.js`), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/plan-editor-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/plan-editor-form-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/plan-head-client.js"), "utf8"), context);

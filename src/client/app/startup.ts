@@ -20,6 +20,9 @@
     window.addEventListener("popstate", () => {
       // A Back that only closes (or moves) an open peek is the drill's, not a navigation.
       if (typeof CairnDrill !== "undefined" && CairnDrill.popped()) return;
+      // The welcome owns its own /app/welcome addresses (its stages); leaving them
+      // closes it and falls through to the app's own route.
+      if (typeof CairnWelcome !== "undefined" && CairnWelcome.popped()) return;
       const routes = routeApi();
       const route = routes ? routes.parseRoute(location.href) : null;
       const tab = applyRouteState(route);

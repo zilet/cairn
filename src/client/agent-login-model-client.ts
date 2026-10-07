@@ -2,17 +2,19 @@
 // Agent-login provider and status normalization helpers.
 
 (() => {
+  // Plain words for every way a sign-in can stand. They speak to the person, never
+  // about the terminal behind them (that stays folded under "Show details").
   const AGENT_LOGIN_STATUS: Record<AgentLoginStatusKey, string> = {
-    connecting: "Connecting\u2026",
-    ready: "Terminal ready \u2014 follow the prompts below.",
-    terminalLoadError: "Couldn't load the terminal. Reload and try again.",
-    connectionOpenError: "Couldn't open the connection.",
-    connected: "\u2713 Connected",
-    loginIncomplete: "Login didn't complete \u2014 check the terminal above, then try again.",
-    busy: "Another login is already running \u2014 try again in a moment.",
-    genericError: "Something went wrong.",
-    connectionError: "Connection error \u2014 make sure the server is reachable, then try again.",
-    disconnected: "Disconnected before the login finished \u2014 try again.",
+    connecting: "Starting the sign-in\u2026",
+    ready: "Waiting for the sign-in page\u2026",
+    terminalLoadError: "The sign-in couldn't load. Reload the page and try again.",
+    connectionOpenError: "Couldn't reach the server to start the sign-in.",
+    connected: "Signed in",
+    loginIncomplete: "The sign-in didn't finish.",
+    busy: "Another sign-in is already running. Try again in a moment.",
+    genericError: "Something went wrong with the sign-in.",
+    connectionError: "Lost the connection to the server. Make sure it's reachable, then try again.",
+    disconnected: "The sign-in closed before it finished.",
   };
 
   function agentLoginRecord(value: unknown): AgentLoginRecord {
@@ -30,12 +32,27 @@
   function agentLoginProviderHintHtml(name: string): string {
     const provider = name.toLowerCase();
     if (provider === "grok") {
-      return `<p class="agent-login-hint">Grok can also authenticate with an API key &mdash; set <code>XAI_API_KEY</code> in the server environment instead of this device login.</p>`;
+      return `<p class="agent-login-hint">Grok also works with an xAI API key: set <code>XAI_API_KEY</code> in the server's environment instead of signing in here.</p>`;
     }
     if (provider === "antigravity") {
-      return `<p class="agent-login-hint">Antigravity has no login-only command yet. Complete Google OAuth; when its full prompt opens, the login is saved and you can press <b>Cancel</b> to return to Cairn.</p>`;
+      return `<p class="agent-login-hint">Antigravity signs in inside its own screen below. Choose Google, approve it in the page that opens, and once its prompt appears you're signed in &mdash; then tap <b>I've signed in</b>.</p>`;
     }
     return "";
+  }
+
+  // The name a person knows each provider by. The agent key stays the server's.
+  const PROVIDER_LABELS: Record<string, string> = {
+    claude: "Claude",
+    codex: "ChatGPT",
+    antigravity: "Google",
+    grok: "Grok",
+  };
+
+  function agentLoginLabel(name: string): string {
+    const key = String(name || "").trim();
+    const known = PROVIDER_LABELS[key.toLowerCase()];
+    if (known) return known;
+    return key ? key.charAt(0).toUpperCase() + key.slice(1) : "";
   }
 
   function agentLoginStatus(key: AgentLoginStatusKey): string {
@@ -44,6 +61,7 @@
 
   const CAIRN_AGENT_LOGIN_MODEL: AgentLoginModelApi = {
     control: agentLoginControl,
+    label: agentLoginLabel,
     normalizeName: normalizeAgentLoginName,
     providerHintHtml: agentLoginProviderHintHtml,
     record: agentLoginRecord,

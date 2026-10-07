@@ -65,95 +65,9 @@ const SETTINGS_SURFACE_SEGMENTS: readonly ClientSegment[] = [
   ["automation", "Automation"],
   ["data", "Data"],
   ["agents", "Agents"],
+  ["devices", "Devices"],
   ["system", "System"],
 ];
-
-function settingsSurfaceRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
-}
-
-function settingsSurfaceString(value: unknown, fallback = ""): string {
-  return typeof value === "string" ? value : fallback;
-}
-
-function settingsSurfaceNumber(value: unknown, fallback = 0): number {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : fallback;
-}
-
-function settingsSurfaceBool(value: unknown, fallback = false): boolean {
-  return value == null ? fallback : !!value;
-}
-
-function settingsSurfaceChatBindings(value: unknown): Record<string, Record<string, Record<string, unknown>>> {
-  const raw = settingsSurfaceRecord(value);
-  const bindings: Record<string, Record<string, Record<string, unknown>>> = {};
-  for (const [provider, lanesValue] of Object.entries(raw)) {
-    const lanes = settingsSurfaceRecord(lanesValue);
-    bindings[provider] = {};
-    for (const [lane, profileValue] of Object.entries(lanes)) {
-      bindings[provider][lane] = { ...settingsSurfaceRecord(profileValue) };
-    }
-  }
-  return bindings;
-}
-
-function settingsData(value: unknown): SettingsScreenData {
-  const row = settingsSurfaceRecord(value);
-  const agents = Array.isArray(row.agents)
-    ? row.agents
-        .map((agent) => settingsSurfaceRecord(agent))
-        .filter((agent): agent is SettingsScreenAgent => typeof agent.name === "string")
-    : [];
-  const eligible = row.research_auto_eligible;
-  return {
-    settings: settingsSurfaceRecord(row.settings),
-    agents,
-    research_auto_eligible:
-      typeof eligible === "boolean" || (eligible && typeof eligible === "object")
-        ? (eligible as SettingsScreenData["research_auto_eligible"])
-        : undefined,
-    garmin_last_export_at: typeof row.garmin_last_export_at === "string" ? row.garmin_last_export_at : null,
-  };
-}
-
-function settingsWorkingModel(data: SettingsScreenData): SettingsScreenWorkingModel {
-  const s = data.settings;
-  const agents = data.agents;
-  return {
-    agent_strategy: settingsSurfaceString(s.agent_strategy, "round_robin"),
-    order: agents.map((agent) => agent.name),
-    disabled: new Set(agents.filter((agent) => !agent.enabled).map((agent) => agent.name)),
-    routes: { ...settingsSurfaceRecord(s.agent_routes) } as Record<string, string>,
-    chat_routing_mode: s.chat_routing_mode === "single" ? "single" : "adaptive",
-    // Keep provider/lane entries the current UI cannot render; saving an unrelated
-    // setting must not erase a future provider's profile preferences.
-    chat_profile_bindings: settingsSurfaceChatBindings(s.chat_profile_bindings),
-    enrich_enabled: settingsSurfaceBool(s.enrich_enabled),
-    art_enabled: settingsSurfaceBool(s.art_enabled, true),
-    research_enabled: settingsSurfaceBool(s.research_enabled),
-    // Defaults OFF: meal plans are ideas drafted when asked, not on a weekly clock.
-    meal_plan_auto_draft: settingsSurfaceBool(s.meal_plan_auto_draft),
-    gemini_api_key: "",
-    garmin_username: settingsSurfaceString(s.garmin_username),
-    garmin_password: "",
-    // Defaults ON: a finished Cairn session belongs on the athlete's Garmin history.
-    garmin_export_strength: settingsSurfaceBool(s.garmin_export_strength, true),
-    coach_day: settingsSurfaceNumber(s.coach_day),
-    coach_hour: settingsSurfaceNumber(s.coach_hour),
-    time_zone: settingsSurfaceString(s.time_zone),
-    update_check_enabled: settingsSurfaceBool(s.update_check_enabled, true),
-    lead_mode: ["lead", "announce_first", "review_everything"].includes(settingsSurfaceString(s.lead_mode))
-      ? (settingsSurfaceString(s.lead_mode) as SettingsScreenWorkingModel["lead_mode"])
-      : "lead",
-    // Units: Settings is their only writer (every surface reads them through CairnFmt).
-    run_units: runUnits(s.run_units),
-    weight_units: s.weight_units === "kg" ? "kg" : "lb",
-    // No training_drive here on purpose: the drive is written only through the stance door
-    // (PUT /api/training-drive, settings-drive-controller.ts), never by the save bar, so a
-    // stale screen can never re-send a drive and end — or fake — a dated push.
-  };
-}
 
 function routeEligible(data: SettingsScreenData): SettingsSurfaceRouteEligibility {
   const eligible = data.research_auto_eligible;
@@ -428,7 +342,7 @@ function settingsAutomationSliceHtml(options: SettingsAutomationSliceOptions): s
         <h1 class="lbl" style="margin:22px 0 8px">Research &amp; grounding</h1>
         <label class="toggle"><input type="checkbox" id="researchEnabled" ${wm.research_enabled ? "checked" : ""}>
           <span>Let Cairn research your findings and cite real sources</span></label>
-        <div class="sess-line" style="color:var(--muted);margin-top:6px">Cairn already cites trusted clinical guidelines (AHA/ACC, Endocrine Society, KDIGO…) <b>offline</b> on your directives — no network needed. Turn this on to also let a web-capable agent fetch fresh, cited sources and attach them behind each directive — open them under “see the evidence” on your <b>Health</b> read. Off by default; deterministic and offline when off. Informational, never medical advice.</div>
+        <div class="sess-line" style="color:var(--muted);margin-top:6px">On by default. Your findings are researched against current, cited sources by a web-capable agent — quickly for most, and with a deeper pass when a reading sits outside the lab's range or a first look comes back thin. Every claim must carry a real source to be kept; open them under “see the evidence” on your <b>Health</b> read. Trusted clinical guidelines (AHA/ACC, Endocrine Society, KDIGO…) stay cited offline either way, so turning this off keeps Cairn deterministic and off the network. Informational, never medical advice.</div>
         ${researchSuggest}
       </section>`;
 }

@@ -1,14 +1,15 @@
 // Bundled, offline "trusted guidelines pack" — the OFFLINE FLOOR for citations.
 //
 // The connected brain's propagation + prioritization are always-on, but the
-// CITED-evidence layer (src/research.ts → evidence_cache) ships OFF by default and
-// needs a web-capable agent, so most users never see a citation. This module fixes
+// CITED-evidence layer (src/research.ts → evidence_cache) needs a web-capable agent
+// (research is on by default, but a host without one still gets no live citation)
+// and the athlete can turn it off. This module fixes
 // the floor: a small, CONSERVATIVE, curated KB of trusted guideline statements for
 // exactly the markers/topics the connected brain already reasons about (aligned to
 // OPTIMAL_ZONES / MARKER_MAPPINGS / marker-canon keys). With this pack a directive
 // note can carry a real, recognized-body citation with NO network and research
-// disabled. Live web research (settings.research_enabled) stays the opt-in that
-// ADDS fresh grounding on top — it does not replace this floor.
+// disabled. Live web research (settings.research_enabled, default on) ADDS fresh
+// grounding on top — it does not replace this floor.
 //
 // CONSTITUTION: every statement is plain-language, NON-prescriptive, generic, and
 // INFORMATIONAL — never individualized medical advice, never a score/grade. Each

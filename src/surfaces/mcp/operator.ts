@@ -161,6 +161,12 @@ export function registerOperatorTools(server: McpToolRegistrar) {
         .describe(
           `legacy compatibility flag retained in settings; heavy agentic ops always use durable jobs so no user-facing request blocks. Job kinds: ${AGENT_JOB_KIND_LIST}`
         ),
+      usage_ping_enabled: z
+        .boolean()
+        .optional()
+        .describe(
+          "opt-in anonymous usage ping (default OFF). On: at most once a week, and only when a feedback service is configured, Cairn sends a random install id, its version, the host platform, CPU architecture and Node version — nothing else."
+        ),
     },
     async (p) => asText({ settings: setSettings(p), agents: getAgentConfig(), route_tasks: listRoutableTasks() })
   );

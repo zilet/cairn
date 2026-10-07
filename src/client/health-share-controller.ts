@@ -28,17 +28,15 @@ function healthShareSelect<T extends Element = Element>(deps: ClientHealthShareC
   return deps.root.querySelector<T>(selector) || deps.select<T>(selector);
 }
 
+// The report opens in a new tab and the downloads leave the app, so each carries a
+// short-lived signed link (api-core.ts openResourceLink): an installed iOS app hands
+// them to Safari, which does not share this app's sign-in.
+function openShareLink(deps: ClientHealthShareControllerDeps, path: string, mode: "tab" | "download"): void {
+  void (deps.openResourceLink || openResourceLink)(path, mode);
+}
+
 function openReportUrl(deps: ClientHealthShareControllerDeps, path: string): void {
-  const url = deps.withToken(path);
-  const tab = window.open("about:blank", "_blank");
-  if (!tab) {
-    deps.toast("Allow pop-ups to open the doctor report in a new tab");
-    return;
-  }
-  try {
-    tab.opener = null;
-  } catch {}
-  tab.location.href = url;
+  openShareLink(deps, path, "tab");
 }
 
 function openDoctorReportTab(deps: ClientHealthShareControllerDeps): void {
@@ -51,7 +49,7 @@ function sharePacket(deps: ClientHealthShareControllerDeps, kind: ClientPacketSh
     openReportUrl(deps, `/api/health-report${query}`);
     return;
   }
-  deps.downloadFile(deps.withToken(`/api/health-report.txt${query}`));
+  openShareLink(deps, `/api/health-report.txt${query}`, "download");
   deps.toast("Packet downloaded as text");
 }
 
@@ -76,7 +74,7 @@ function hasPacketSlot(deps: ClientHealthShareControllerDeps): boolean {
 function wireHealthShareActions(deps: ClientHealthShareControllerDeps): void {
   healthShareSelect(deps, "#hReportBtn")?.addEventListener("click", () => openDoctorReportTab(deps));
   healthShareSelect(deps, "#hExportBtn")?.addEventListener("click", () => {
-    deps.downloadFile(deps.withToken("/api/health-export"));
+    openShareLink(deps, "/api/health-export", "download");
     deps.toast("Structured data downloaded");
   });
   healthShareSelect(deps, "#hAlignBtn")?.addEventListener("click", async (e) => {

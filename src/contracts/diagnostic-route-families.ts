@@ -19,7 +19,7 @@ export const DIAGNOSTIC_ROUTE_FAMILIES = [
   "blood-pressure", "body-metrics", "bodyweight", "brain", "brain-diagnostics", "calendar", "calibration",
   "cardio", "chat", "chat-images", "checkins", "coach", "coaching-focus", "context-effect",
   "context-events", "dexa-targeting", "diagnostics", "directives", "endurance-goal", "endurance-prs",
-  "evidence", "exercise", "exercises", "export", "family", "food-notes", "frequent-foods", "garmin",
+  "evidence", "exercise", "exercises", "export", "family", "feedback", "food-notes", "frequent-foods", "garmin",
   "goal", "goal-checkin", "guidelines", "health", "health-docs", "health-export", "health-metrics",
   "health-report", "injury-impacts", "insights", "journey", "last-set", "learned-timeline", "learnings",
   "markers", "meal-plans", "mealplans", "memory", "muscle-load", "muscle-trajectory", "next-step",
@@ -29,7 +29,7 @@ export const DIAGNOSTIC_ROUTE_FAMILIES = [
   "sets", "settings", "since-last", "stats", "strength-journey", "suggestions", "supplements",
   "symptom-links", "team-week", "telemetry", "test-week", "today", "today-agenda", "today-plan-day",
   "today-read", "today-side", "today-strength-line", "training-agenda", "training-symptoms", "trajectory",
-  "turns", "update-check", "update-status", "version", "volume", "week-ahead", "week-wins", "whole-person-trajectory",
+  "turns", "update", "update-check", "update-status", "version", "volume", "week-ahead", "week-wins", "welcome", "whole-person-trajectory",
 ] as const;
 
 export const DIAGNOSTIC_ROUTE_FAMILY_SET: ReadonlySet<string> = new Set<string>(DIAGNOSTIC_ROUTE_FAMILIES);

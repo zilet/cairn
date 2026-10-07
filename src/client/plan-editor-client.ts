@@ -102,8 +102,8 @@ function progDayStatusLabel(ann: ProgDayAnnotation | undefined): string {
 function calendarFooterHtml(plan: unknown, host: unknown, icsUrl: unknown): string {
   return Array.isArray(plan) && plan.length
     ? `<div id="planCal" style="margin-top:16px;text-align:center;font-size:.82rem;color:var(--muted)">
-         <a href="webcal://${escAttr(host)}${escAttr(icsUrl)}" style="color:var(--muted);text-decoration:none">📅 Subscribe to this plan in your calendar</a>
-         <a href="${escAttr(icsUrl)}" target="_blank" rel="noopener" style="color:var(--muted);opacity:.7;margin-left:8px">(.ics)</a>
+         <a href="webcal://${escAttr(host)}${escAttr(icsUrl)}" data-plan-cal-subscribe style="color:var(--muted);text-decoration:none">📅 Subscribe to this plan in your calendar</a>
+         <a href="${escAttr(icsUrl)}" target="_blank" rel="noopener" data-resource-link style="color:var(--muted);opacity:.7;margin-left:8px">(.ics)</a>
        </div>`
     : "";
 }

@@ -60,6 +60,7 @@ type YouLandingGroup = { key: string; title: string; rows: readonly YouLandingRo
         { view: "settings", section: "automation", title: "Automation", sub: "How much the team does on its own" },
         { view: "settings", section: "data", title: "Data", sub: "Export, backup and this app" },
         { view: "settings", section: "agents", title: "Agents", sub: "The coaching agents and their order" },
+        { view: "settings", section: "devices", title: "Devices", sub: "Pair your phone, passkeys" },
         { view: "settings", section: "system", title: "System", sub: "Updates and diagnostics" },
       ],
     },

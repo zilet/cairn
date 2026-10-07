@@ -1,5 +1,7 @@
 // @ts-check
-// Agent-login modal rendering, focus trap, and close/retry controls.
+// Settings → Agents "Connect": the friendly sign-in panel (agent-login-panel-client.ts)
+// in a sheet, with its one way out (Escape, backdrop, ✕, Cancel) and, after a failed
+// sign-in, Try again. Styles live in src/styles/welcome/connect.css with the panel's.
 
 (() => {
   function agentLoginModel(): AgentLoginModelApi {
@@ -8,183 +10,88 @@
     return api;
   }
 
-  function ensureAgentLoginStyles(): void {
-    if (document.getElementById("agent-login-styles")) return;
-    const style = document.createElement("style");
-    style.id = "agent-login-styles";
-    style.textContent = `
-.agent-login-ov{position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;
-  padding:max(env(safe-area-inset-top),18px) 16px max(env(safe-area-inset-bottom),18px);
-  background:rgba(33,29,23,.46);backdrop-filter:saturate(1.1) blur(2px);
-  animation:agentLoginFade .16s ease both}
-@keyframes agentLoginFade{from{opacity:0}to{opacity:1}}
-.agent-login{width:min(720px,100%);max-height:100%;display:flex;flex-direction:column;
-  background:var(--card,#fffdf8);color:var(--ink,#211d17);border:1px solid var(--line,#e7dfd2);
-  border-radius:var(--radius,18px);box-shadow:var(--shadow-lg,0 28px 64px rgba(0,0,0,.3));
-  overflow:hidden;font-family:var(--font-ui,system-ui,sans-serif)}
-.agent-login-hd{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line,#e7dfd2)}
-.agent-login-hd h2{margin:0;font-family:var(--font-display,Georgia,serif);font-size:19px;font-weight:600;flex:1;line-height:1.2}
-.agent-login-x{appearance:none;border:0;background:transparent;color:var(--muted,#746c5c);
-  font-size:20px;line-height:1;cursor:pointer;padding:4px 8px;border-radius:8px}
-.agent-login-x:hover{color:var(--ink,#211d17);background:var(--paper,#f4efe7)}
-.agent-login-bd{padding:14px 16px 16px;display:flex;flex-direction:column;gap:10px;overflow:auto}
-.agent-login-term{background:var(--stone-deep,#2c2620);border-radius:12px;padding:10px 8px 8px;
-  border:1px solid var(--stone,#473f36);min-height:180px;height:clamp(180px,42vh,340px);overflow:auto}
-.agent-login-term .xterm{padding:0}
-.agent-login-status{font-size:13px;color:var(--muted,#746c5c);min-height:18px;display:flex;align-items:center;gap:6px}
-.agent-login-status.is-ok{color:var(--sage,#6e7f5c);font-weight:600}
-.agent-login-status.is-err{color:var(--accent,#b4552d);font-weight:600}
-.agent-login-hint{font-size:12.5px;color:var(--muted,#746c5c);line-height:1.5;margin:0}
-.agent-login-hint code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;
-  background:var(--paper,#f4efe7);padding:1px 5px;border-radius:5px;border:1px solid var(--line,#e7dfd2)}
-.agent-login-link{display:flex;gap:8px;flex-wrap:wrap}
-.agent-login-link[hidden]{display:none}
-.agent-login-link-open{text-decoration:none;text-align:center;display:inline-block;
-  background:var(--accent,#b4552d);color:var(--on-accent,#fffdf8);border-color:var(--accent,#b4552d)}
-.agent-login-link-open:hover{background:var(--accent,#b4552d);opacity:.92}
-.agent-login-paste{display:flex;gap:8px}
-.agent-login-paste[hidden]{display:none}
-.agent-login-paste-in{flex:1;min-width:0;font-family:inherit;font-size:16px;padding:8px 12px;
-  border-radius:11px;border:1px solid var(--line,#e7dfd2);background:var(--paper,#f4efe7);color:var(--ink,#211d17)}
-.agent-login-paste-in::placeholder{color:var(--muted,#746c5c)}
-.agent-login-paste-in:focus-visible{outline:2px solid var(--accent,#b4552d);outline-offset:2px}
-.agent-login-ft{display:flex;justify-content:flex-end;gap:10px;padding-top:2px}
-.agent-login-btn{appearance:none;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer;
-  padding:9px 16px;border-radius:11px;border:1px solid var(--line,#e7dfd2);
-  background:var(--paper,#f4efe7);color:var(--ink,#211d17)}
-.agent-login-btn:hover{background:var(--card,#fffdf8)}
-.agent-login-btn:focus-visible,.agent-login-x:focus-visible{outline:2px solid var(--accent,#b4552d);outline-offset:2px}
-@media (prefers-reduced-motion:reduce){.agent-login-ov{animation:none}}
-`;
-    document.head.appendChild(style);
+  function agentLoginPanel(): AgentLoginPanelApi | null {
+    return (globalThis as { CairnAgentLoginPanel?: AgentLoginPanelApi }).CairnAgentLoginPanel || null;
   }
 
   function closeAgentLoginModal(overlay: AgentLoginOverlay | null | undefined): void {
     if (!overlay || overlay.dataset.closing) return;
     overlay.dataset.closing = "1";
-    try { overlay._ws?.close(); } catch {}
-    try { overlay._term?.dispose?.(); } catch {}
-    try { if (overlay._onResize) window.removeEventListener("resize", overlay._onResize); } catch {}
+    try { overlay._panel?.close(); } catch {}
     const sheet = CairnUiSheet.sheetFor(overlay);
     if (sheet) sheet.close();
     else overlay.remove();
   }
 
   function createAgentLoginModal(name: string, retryLogin: AgentLoginRetry): AgentLoginModalHandle | null {
-    ensureAgentLoginStyles();
     const model = agentLoginModel();
-    // The paste box exists because iOS never offers a paste callout on xterm's
-    // hidden textarea; on fine-pointer desktops Cmd/Ctrl+V into the terminal
-    // just works, so the box only appears on touch devices.
-    const touchPaste = (typeof navigator !== "undefined" && (navigator.maxTouchPoints || 0) > 0) ||
-      (typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches);
-    // Escape, a backdrop tap, the ✕ and Cancel all close through the sheet, and
-    // every path runs the same socket/terminal teardown (onClose).
+    const label = model.label(name) || name;
     let overlayRef: AgentLoginOverlay | null = null;
     const sheet = CairnUiSheet.open({
       overlayClass: "agent-login-ov",
       sheetClass: "agent-login",
-      label: `Connect ${name}`,
+      label: `Connect ${label}`,
       closeSelector: ".agent-login-x, .agent-login-ft [data-close]",
       onClose: () => closeAgentLoginModal(overlayRef),
       html: `
       <div class="agent-login-hd">
-        <h2>Connect ${escHtml(name)}</h2>
-        <button class="agent-login-x" type="button" aria-label="Close">&times;</button>
+        <h2>Connect ${escHtml(label)}</h2>
+        <button class="agent-login-x iconbtn" type="button" aria-label="Close">&times;</button>
       </div>
       <div class="agent-login-bd">
-        <div class="agent-login-status" role="status">${model.status("connecting")}</div>
-        <div class="agent-login-term"></div>
-        <div class="agent-login-link" hidden>
-          <a class="agent-login-btn agent-login-link-open" target="_blank" rel="noopener">Open sign-in page</a>
-          <button class="agent-login-btn" type="button" data-copy-link>Copy link</button>
-        </div>
-        <div class="agent-login-paste" ${touchPaste ? "" : "hidden"}>
-          <input class="agent-login-paste-in" type="text" autocomplete="off" autocapitalize="off"
-            autocorrect="off" spellcheck="false" enterkeyhint="send"
-            placeholder="Paste the login code here" aria-label="Paste an authorization code">
-          <button class="agent-login-btn" type="button" data-paste-send>Send</button>
-        </div>
-        ${model.providerHintHtml(name)}
-        <p class="agent-login-hint">${touchPaste
-          ? "Follow the prompts. When a sign-in link appears in the terminal it also surfaces as a button above &mdash; open it, authorize, then paste the code in the box; the terminal itself can't take a paste on phones."
-          : "Follow the prompts &mdash; you can type and paste directly into the terminal. When a sign-in link appears it also surfaces as a button above."}</p>
+        <div class="agent-login-panel"></div>
         <div class="agent-login-ft">
-          <button class="agent-login-btn" type="button" data-close>Cancel</button>
+          <button class="btn" type="button" data-close>Cancel</button>
         </div>
       </div>`,
     });
     const overlay = sheet.overlay as AgentLoginOverlay;
     overlayRef = overlay;
-
-    const statusEl = overlay.querySelector<HTMLElement>(".agent-login-status");
-    const termHost = overlay.querySelector<HTMLElement>(".agent-login-term");
-    const pasteInput = overlay.querySelector<HTMLInputElement>(".agent-login-paste-in");
-    const pasteSend = overlay.querySelector<HTMLButtonElement>("[data-paste-send]");
-    const closeBtn = overlay.querySelector<HTMLButtonElement>(".agent-login-ft [data-close]");
+    const panelHost = overlay.querySelector<HTMLElement>(".agent-login-panel");
     const footer = overlay.querySelector<HTMLElement>(".agent-login-ft");
-    const linkRow = overlay.querySelector<HTMLElement>(".agent-login-link");
-    const linkOpen = overlay.querySelector<HTMLAnchorElement>(".agent-login-link-open");
-    const copyBtn = overlay.querySelector<HTMLButtonElement>("[data-copy-link]");
-    if (!statusEl || !termHost || !pasteInput || !pasteSend || !closeBtn || !footer || !linkRow || !linkOpen || !copyBtn) {
+    const closeBtn = overlay.querySelector<HTMLButtonElement>(".agent-login-ft [data-close]");
+    const panel = agentLoginPanel();
+    if (!panelHost || !footer || !closeBtn) {
       closeAgentLoginModal(overlay);
       return null;
     }
 
-    // Sign-in URLs surface as real controls: phones can't select or tap text
-    // inside the terminal canvas, so the URL the CLI prints is otherwise
-    // unreachable there. href is set as a DOM property (never innerHTML).
-    let authLinkUrl = "";
-    const showAuthLink = (url: string): void => {
-      if (!/^https:\/\//.test(url)) return;
-      authLinkUrl = url;
-      linkOpen.href = url;
-      linkRow.hidden = false;
-    };
-    copyBtn.addEventListener("click", async () => {
-      if (!authLinkUrl) return;
-      let copied = false;
-      try {
-        await navigator.clipboard.writeText(authLinkUrl);
-        copied = true;
-      } catch {}
-      copyBtn.textContent = copied ? "Copied" : "Copy failed";
-      setTimeout(() => { copyBtn.textContent = "Copy link"; }, 1600);
-    });
-
-    const setStatus = (text: string, cls?: string): void => {
-      statusEl.textContent = text;
-      statusEl.classList.remove("is-ok", "is-err");
-      if (cls) statusEl.classList.add(cls);
-    };
-    const markFailed = (message: string): void => {
-      setStatus(message, "is-err");
-      overlay._failed = true;
+    const offerRetry = (): void => {
       closeBtn.textContent = "Close";
-      if (!footer.querySelector("[data-retry]")) {
-        const retry = document.createElement("button");
-        retry.className = "agent-login-btn";
-        retry.type = "button";
-        retry.dataset.retry = "1";
-        retry.textContent = "Try again";
-        retry.addEventListener("click", () => {
-          closeAgentLoginModal(overlay);
-          retryLogin(name);
-        });
-        footer.insertBefore(retry, closeBtn);
-      }
+      if (footer.querySelector("[data-retry]")) return;
+      const retry = document.createElement("button");
+      retry.className = "btn btn-solid";
+      retry.type = "button";
+      retry.dataset.retry = "1";
+      retry.textContent = "Try again";
+      retry.addEventListener("click", () => {
+        closeAgentLoginModal(overlay);
+        retryLogin(name);
+      });
+      footer.insertBefore(retry, closeBtn);
     };
 
-    return {
-      overlay,
-      termHost,
-      pasteInput,
-      pasteSend,
-      isOk: () => statusEl.classList.contains("is-ok"),
-      markFailed,
-      setStatus,
-      showAuthLink,
-    };
+    if (panel) {
+      overlay._panel = panel.mount(panelHost, {
+        name,
+        label,
+        detailsOpen: name.toLowerCase() === "antigravity",
+        onConnected: () => {
+          closeBtn.textContent = "Done";
+          setTimeout(() => {
+            closeAgentLoginModal(overlay);
+            if (typeof renderSettings === "function") renderSettings();
+          }, 1200);
+        },
+        onFailed: offerRetry,
+        onBusy: (message) => {
+          if (typeof toast === "function") toast(message);
+          closeAgentLoginModal(overlay);
+        },
+      });
+    }
+
+    return { overlay, close: () => closeAgentLoginModal(overlay) };
   }
 
   const CAIRN_AGENT_LOGIN_MODAL: AgentLoginModalApi = {
@@ -193,8 +100,4 @@
   };
 
   Object.assign(globalThis, { CairnAgentLoginModal: CAIRN_AGENT_LOGIN_MODAL });
-
-  if (typeof window !== "undefined") {
-    Object.assign(window, { CairnAgentLoginModal: CAIRN_AGENT_LOGIN_MODAL });
-  }
 })();

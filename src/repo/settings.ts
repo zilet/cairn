@@ -32,6 +32,7 @@ export interface Settings {
   coach_hour: number;
   time_zone: string | null; // last valid IANA zone reported by the PWA; scheduler clock source
   onboarded: boolean;
+  coach_welcomed: boolean; // the first-run welcome exchange with the coach happened (src/coachOps/welcome.ts)
   enrich_enabled: boolean;
   proactive_enabled: boolean; // nightly quiet insight + weekly read/nutrition-checkin precompute (pull-never-push)
   meal_plan_auto_draft: boolean; // weekly + protective meal-plan drafts without being asked (default OFF; meal plans are drafted on request)
@@ -50,13 +51,14 @@ export interface Settings {
   garmin_last_export_status: string; // short result line: "ok: 8 of 14 sets" | "failed: …"
   gemini_api_key_configured: boolean;
   gemini_api_key_source: "settings" | "env" | "none";
-  research_enabled: boolean; // host-side evidence research (default OFF; off ⇒ deterministic, no network)
+  research_enabled: boolean; // host-side evidence research (default ON; off ⇒ deterministic, no network)
   bg_ops_enabled: boolean; // legacy compatibility flag; user-facing agentic ops always stay durable/non-blocking
   agent_routes: Record<string, string>; // optional per-task agent routing { task -> agent }; {} = no routing (Auto = today's rotation)
   chat_routing_mode: "adaptive" | "single"; // adaptive lane policy; single preserves the legacy one-profile path
   chat_profile_bindings: ChatProfileBindings; // provider -> capture|coach|deep -> optional model/reasoning
   agent_profile_bindings: AgentProfileBindings; // provider -> task -> optional model/reasoning override of TASK_EXECUTION_PROFILES
   update_check_enabled: boolean; // quiet daily check for a newer Cairn release (pull-never-push; off ⇒ no outbound check)
+  usage_ping_enabled: boolean; // opt-in weekly anonymous usage ping (install id, version, platform, arch, Node); default OFF
   lead_mode: "lead" | "announce_first" | "review_everything"; // how much Cairn leads within server policy
   training_drive: "steady" | "push"; // how the athlete wants a stacked-days rest read: 'push' asks for targeted training when the evidence is green
   updated_at?: string;
@@ -207,6 +209,10 @@ export const TASK_EXECUTION_PROFILES: Record<string, AbstractExecutionProfile> =
   // Background structuring — high volume, tight contracts, nothing to reason about.
   enrich: { model_class: "fast", reasoning: "low" },
   research: { model_class: "fast", reasoning: "medium" },
+  // The deep pass: a flagged (outside-reference) lab finding is researched here from
+  // the start, and any question whose fast pass yields no verified claim escalates
+  // here once (src/research.ts) — a clinical-adjacent citation is worth the depth.
+  research_deep: { model_class: "deep", reasoning: "high" },
   // Composition — a real plan the athlete will follow; worth the deeper model.
   session_suggest: { model_class: "deep", reasoning: "medium" },
   session_compose: { model_class: "deep", reasoning: "medium" },
@@ -214,6 +220,8 @@ export const TASK_EXECUTION_PROFILES: Record<string, AbstractExecutionProfile> =
   meal_swap: { model_class: "deep", reasoning: "medium" },
   recipe: { model_class: "deep", reasoning: "medium" },
   onboard: { model_class: "deep", reasoning: "medium" },
+  // The connect step's "say hello": a one-line round-trip that proves the CLI answers.
+  agent_hello: { model_class: "fast", reasoning: "low" },
   exercise_reconcile: { model_class: "deep", reasoning: "medium" },
   // Self-critique passes. The NUMERIC half of each verify is no longer a model
   // call at all: `src/repo/verify-floors.ts` computes the kcal / protein / fiber
@@ -317,7 +325,7 @@ const SETTINGS_COLUMN_REPAIRS: [string, string][] = [
   ["gemini_api_key_encrypted", "TEXT DEFAULT ''"],
   ["garmin_last_sync_at", "TEXT DEFAULT ''"],
   ["garmin_last_sync_status", "TEXT DEFAULT ''"],
-  ["research_enabled", "INTEGER DEFAULT 0"],
+  ["research_enabled", "INTEGER DEFAULT 1"],
   ["bg_ops_enabled", "INTEGER DEFAULT 1"],
   ["agent_routes", "TEXT DEFAULT ''"],
   ["chat_routing_mode", "TEXT DEFAULT 'adaptive'"],
@@ -331,6 +339,8 @@ const SETTINGS_COLUMN_REPAIRS: [string, string][] = [
   ["garmin_last_export_status", "TEXT DEFAULT ''"],
   ["run_units", "TEXT DEFAULT 'km'"],
   ["weight_units", "TEXT DEFAULT 'lb'"],
+  ["usage_ping_enabled", "INTEGER DEFAULT 0"],
+  ["coach_welcomed", "INTEGER DEFAULT 0"],
 ];
 let settingsSchemaChecked = false;
 
@@ -471,6 +481,7 @@ function defaultSettings(): Settings {
     coach_hour: Number(process.env.COACH_HOUR ?? 20),
     time_zone: recordedClientTimeZone() ?? null,
     onboarded: false,
+    coach_welcomed: false,
     enrich_enabled: true, // background enrichment on by default
     proactive_enabled: true, // calm precompute (quiet insight / weekly read / nutrition check-in) on by default
     meal_plan_auto_draft: false, // meal plans are ideas drafted on request; automatic drafts are an opt-in
@@ -489,13 +500,14 @@ function defaultSettings(): Settings {
     garmin_last_export_status: "",
     gemini_api_key_configured: !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_KEY),
     gemini_api_key_source: process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_KEY ? "env" : "none",
-    research_enabled: false, // host-side research off by default — opt-in, deterministic when off
+    research_enabled: true, // host-side research on by default — the team grounds its findings; off ⇒ deterministic, offline
     bg_ops_enabled: true, // retained for imported settings; durable jobs are now always on for user-facing ops
     agent_routes: {}, // no per-task routing by default — "auto" rotates as before
     chat_routing_mode: "adaptive",
     chat_profile_bindings: {}, // empty means every provider keeps its own model defaults
     agent_profile_bindings: {}, // empty means every op uses the TASK_EXECUTION_PROFILES default
     update_check_enabled: true, // quiet daily update check on by default (one toggle disables the outbound call)
+    usage_ping_enabled: false, // the anonymous weekly usage ping is opt-in only
     lead_mode: "lead", // bounded background coaching is the default relationship
     training_drive: "steady", // the safety floor's own rhythm until the athlete asks otherwise
   };
@@ -558,6 +570,7 @@ function rowToSettings(row: any): Settings {
     coach_hour: row.coach_hour ?? 20,
     time_zone: recordedClientTimeZone() ?? null,
     onboarded: !!row.onboarded,
+    coach_welcomed: !!row.coach_welcomed,
     // NULL on old rows (column added by migration) defaults to enabled.
     enrich_enabled: row.enrich_enabled == null ? true : !!row.enrich_enabled,
     proactive_enabled: row.proactive_enabled == null ? true : !!row.proactive_enabled,
@@ -580,8 +593,8 @@ function rowToSettings(row: any): Settings {
       row.garmin_last_export_status == null ? "" : String(row.garmin_last_export_status),
     gemini_api_key_configured: !!(rowGemini || envGemini),
     gemini_api_key_source: rowGemini ? "settings" : envGemini ? "env" : "none",
-    // NULL on old rows (column added by migration v28) defaults to OFF.
-    research_enabled: row.research_enabled == null ? false : !!row.research_enabled,
+    // NULL on old rows (column added by migration v28) defaults to ON.
+    research_enabled: row.research_enabled == null ? true : !!row.research_enabled,
     // NULL on old rows (column added by migration v32) defaults to ON.
     bg_ops_enabled: row.bg_ops_enabled == null ? true : !!row.bg_ops_enabled,
     // NULL/'' on old rows (column added by migration v34) parses to {} — no routing.
@@ -591,6 +604,8 @@ function rowToSettings(row: any): Settings {
     agent_profile_bindings: normalizeAgentProfileBindings(row.agent_profile_bindings),
     // NULL on old rows (column added by migration v47) defaults to ON.
     update_check_enabled: row.update_check_enabled == null ? true : !!row.update_check_enabled,
+    // NULL on old rows (column added by migration v120) stays OFF: the ping is opt-in only.
+    usage_ping_enabled: row.usage_ping_enabled == null ? false : !!row.usage_ping_enabled,
     lead_mode: ["lead", "announce_first", "review_everything"].includes(String(row.lead_mode)) ? row.lead_mode : "lead",
     // NULL on old rows (column added by migration v89) reads as the steady rhythm.
     training_drive: String(row.training_drive) === "push" ? "push" : "steady",
@@ -681,6 +696,7 @@ export function setSettings(patch: any, opts: { keepStances?: boolean } = {}): S
     coach_hour: patch.coach_hour ?? cur.coach_hour,
     time_zone: recordedClientTimeZone() ?? null,
     onboarded: patch.onboarded !== undefined ? !!patch.onboarded : cur.onboarded,
+    coach_welcomed: patch.coach_welcomed !== undefined ? !!patch.coach_welcomed : cur.coach_welcomed,
     enrich_enabled: patch.enrich_enabled !== undefined ? !!patch.enrich_enabled : cur.enrich_enabled,
     proactive_enabled: patch.proactive_enabled !== undefined ? !!patch.proactive_enabled : cur.proactive_enabled,
     meal_plan_auto_draft:
@@ -733,6 +749,8 @@ export function setSettings(patch: any, opts: { keepStances?: boolean } = {}): S
         : cur.agent_profile_bindings,
     update_check_enabled:
       patch.update_check_enabled !== undefined ? !!patch.update_check_enabled : cur.update_check_enabled,
+    usage_ping_enabled:
+      patch.usage_ping_enabled !== undefined ? !!patch.usage_ping_enabled : cur.usage_ping_enabled,
     lead_mode: ["lead", "announce_first", "review_everything"].includes(String(patch.lead_mode))
       ? patch.lead_mode
       : cur.lead_mode,
@@ -763,7 +781,7 @@ export function setSettings(patch: any, opts: { keepStances?: boolean } = {}): S
     `UPDATE settings SET agent_strategy=?, agent_order=?, disabled_agents=?, rr_cursor=?,
        coach_enabled=?, coach_day=?, coach_hour=?, onboarded=?, enrich_enabled=?, proactive_enabled=?, art_enabled=?, art_enabled_at=?, meal_prefs=?,
        garmin_username=?, garmin_password=?, garmin_password_encrypted=?, gemini_api_key=?, gemini_api_key_encrypted=?,
-       research_enabled=?, bg_ops_enabled=?, agent_routes=?, chat_routing_mode=?, chat_profile_bindings=?, agent_profile_bindings=?, update_check_enabled=?, lead_mode=?, training_drive=?, garmin_export_strength=?, run_units=?, weight_units=?, meal_plan_auto_draft=?, updated_at=datetime('now') WHERE id = 1`
+       research_enabled=?, bg_ops_enabled=?, agent_routes=?, chat_routing_mode=?, chat_profile_bindings=?, agent_profile_bindings=?, update_check_enabled=?, lead_mode=?, training_drive=?, garmin_export_strength=?, run_units=?, weight_units=?, meal_plan_auto_draft=?, usage_ping_enabled=?, coach_welcomed=?, updated_at=datetime('now') WHERE id = 1`
   ).run(
     merged.agent_strategy,
     JSON.stringify(merged.agent_order),
@@ -795,7 +813,9 @@ export function setSettings(patch: any, opts: { keepStances?: boolean } = {}): S
     merged.garmin_export_strength ? 1 : 0,
     merged.run_units,
     merged.weight_units,
-    merged.meal_plan_auto_draft ? 1 : 0
+    merged.meal_plan_auto_draft ? 1 : 0,
+    merged.usage_ping_enabled ? 1 : 0,
+    merged.coach_welcomed ? 1 : 0
   );
   if (!opts.keepStances && merged.training_drive !== cur.training_drive) {
     try {
@@ -904,6 +924,9 @@ export function getAgentConfig() {
     return {
       name,
       description: a.description,
+      // First-run provider tile copy (agents.json `label` / `plan`); null for the stub.
+      label: a.label ?? null,
+      plan: a.plan ?? null,
       env_ok,
       present,
       enabled,

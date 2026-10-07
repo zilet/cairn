@@ -51,7 +51,13 @@ function runEarly({ pathname, token = "", date = new Date(2026, 8, 26, 7, 5) }) 
 }
 
 test("on a Today open it starts the aggregate, the Brief's read and the preview with api()'s headers", () => {
-  const { calls, early } = runEarly({ pathname: "/app/today", token: " secret " });
+  const { calls: all, early } = runEarly({ pathname: "/app/today", token: " secret " });
+  // A token an older build stored is swapped for a session cookie alongside (it still
+  // rides the early reads until that lands; nothing waits on it).
+  const exchange = all.filter((c) => c.url === "/api/auth/session");
+  assert.equal(exchange.length, 1);
+  assert.equal(exchange[0].init.headers.Authorization, "Bearer secret");
+  const calls = all.filter((c) => !c.url.startsWith("/api/auth/"));
   assert.deepEqual(
     calls.map((c) => c.url),
     [

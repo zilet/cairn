@@ -85,6 +85,11 @@ export const STYLE_PARTIALS = [
   "ask/ask",
   "horizon/horizon",
   "horizon/week",
+  // The first-run welcome, the AI sign-in panel it shares with Settings, and the
+  // coach link's quiet cards on Today and Ask.
+  "welcome/coach-link",
+  "welcome/connect",
+  "welcome/welcome",
 ];
 
 const BANNER =

@@ -24,6 +24,7 @@ export const AGENT_JOB_KINDS = [
   "about_me_grow",
   "onboard",
   "what_if",
+  "welcome",
 ] as const;
 
 export type AgentJobKind = (typeof AGENT_JOB_KINDS)[number];

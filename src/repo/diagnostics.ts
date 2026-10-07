@@ -41,8 +41,43 @@ export interface ClientDiagnosticEvent {
   tab?: string | null;
   online?: boolean | null;
   release?: string | null;
+  /** Welcome-flow failure taxonomy (validated against fixed allowlists); never free text. */
+  welcome?: WelcomeFailure | null;
   fingerprint: string;
 }
+
+export interface WelcomeFailure {
+  step: string;
+  provider: string;
+  code: string;
+}
+
+export const WELCOME_FAILURE_STEPS: ReadonlySet<string> = new Set([
+  "hello",
+  "connect.install",
+  "connect.signin",
+  "connect.verify",
+  "meet",
+]);
+export const WELCOME_FAILURE_CODES: ReadonlySet<string> = new Set([
+  "unreachable",
+  "not_installable",
+  "install_failed",
+  "login_unavailable",
+  "login_terminal",
+  "login_connection",
+  "login_incomplete",
+  "login_error",
+  "login_disconnected",
+  "login_busy",
+  "verify_failed",
+  "not_signed_in",
+  "stayed_busy",
+  "enqueue_failed",
+  "job_failed",
+  "job_error",
+  "job_canceled",
+]);
 
 const SOURCES = new Set<DiagnosticSource>(["agent", "client", "api", "mcp", "process", "scheduler", "worker"]);
 const LEVELS = new Set<DiagnosticLevel>(["info", "warning", "error"]);
@@ -378,7 +413,22 @@ export function recordDiagnosticEvents(inputs: DiagnosticEventInput[]): void {
   }
 }
 
-export function parseClientDiagnosticBatch(body: unknown): ClientDiagnosticEvent[] | null {
+/** Only a known step, a known code and a configured provider survive; anything else is dropped. */
+function parseWelcomeFailure(value: unknown, providers: ReadonlySet<string>): WelcomeFailure | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  const step = typeof row.step === "string" ? row.step : "";
+  const code = typeof row.code === "string" ? row.code : "";
+  const provider = typeof row.provider === "string" ? row.provider : "";
+  if (!WELCOME_FAILURE_STEPS.has(step) || !WELCOME_FAILURE_CODES.has(code)) return null;
+  return { step, code, provider: providers.has(provider) ? provider : "other" };
+}
+
+export function parseClientDiagnosticBatch(
+  body: unknown,
+  options: { providers?: ReadonlySet<string> } = {},
+): ClientDiagnosticEvent[] | null {
+  const providers = options.providers ?? new Set<string>();
   if (!body || typeof body !== "object" || Array.isArray(body)) return null;
   const events = (body as { events?: unknown }).events;
   if (!Array.isArray(events) || events.length < 1 || events.length > 20) return null;
@@ -406,12 +456,17 @@ export function parseClientDiagnosticBatch(body: unknown): ClientDiagnosticEvent
     const route = event.route == null ? null : normalizeDiagnosticRoute(event.route);
     const method = event.method == null ? null : String(event.method).toUpperCase();
     const status = event.status == null ? null : finiteInteger(event.status, 100, 599);
+    const welcome = event.welcome == null ? null : parseWelcomeFailure(event.welcome, providers);
+    if (event.welcome != null && !welcome) continue;
     parsed.push({
       source: "client",
       kind: event.kind as ClientDiagnosticEvent["kind"],
       level: event.level as DiagnosticLevel,
-      message: clientDiagnosticMessage(event.kind as ClientDiagnosticEvent["kind"]),
-      fingerprint: resolveClientFingerprint(event.fingerprint, {
+      message: welcome ? "Welcome step failed" : clientDiagnosticMessage(event.kind as ClientDiagnosticEvent["kind"]),
+      welcome,
+      fingerprint: welcome
+        ? `client:welcome:${welcome.step}:${welcome.provider}:${welcome.code}:${status ?? "none"}`.slice(0, 120)
+        : resolveClientFingerprint(event.fingerprint, {
         kind: event.kind as ClientDiagnosticEvent["kind"],
         route,
         method,
@@ -443,9 +498,11 @@ export function ingestClientDiagnosticEvents(events: ClientDiagnosticEvent[], re
       duration_ms: event.duration_ms,
       request_id: event.request_id,
       fingerprint: event.fingerprint,
-      message: clientDiagnosticMessage(event.kind),
+      message: event.welcome ? "Welcome step failed" : clientDiagnosticMessage(event.kind),
       stack: clientStackFrames(event.stack),
-      metadata: { tab: event.tab, online: event.online },
+      metadata: event.welcome
+        ? { tab: event.tab, online: event.online, welcome_step: event.welcome.step, welcome_provider: event.welcome.provider, welcome_code: event.welcome.code }
+        : { tab: event.tab, online: event.online },
       release: releaseFallback,
     }))
   );

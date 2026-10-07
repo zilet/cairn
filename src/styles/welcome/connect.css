@@ -1,0 +1,65 @@
+/* -------------------------------------------------------------------
+   AI sign-in — the friendly panel (src/client/agent-login-panel-client.ts)
+   and the Settings → Agents "Connect" sheet that hosts it. The welcome's
+   Connect step hosts the same panel inline. It never looks like a
+   terminal: a primary "Open <Provider> sign-in" button, a large
+   copyable device code, a paste box; the terminal waits folded under
+   "Show details" (still mounted, so it keeps listening).
+   ------------------------------------------------------------------- */
+.alp{display:flex;flex-direction:column;gap:var(--space-7)}
+.alp-status{display:flex;align-items:center;gap:var(--space-4);margin:0;font-size:var(--text-md);line-height:var(--leading-normal);color:var(--ink2)}
+.alp-status.is-ok{color:var(--sage-text);font-weight:var(--weight-semibold)}
+.alp-status.is-err{color:var(--dawn)}
+.alp[data-alp-phase="link"] .alp-status,.alp[data-alp-phase="pasted"] .alp-status{color:var(--ink)}
+
+.alp-link{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-6) var(--space-10)}
+.alp-link[hidden],.alp-code[hidden],.alp-paste[hidden],.alp-done[hidden]{display:none}
+.alp-open{min-height:48px;padding:0 var(--space-11);font-size:var(--text-base);text-decoration:none;
+  animation:settlein var(--dur-2) var(--ease) both}
+.alp-open:focus-visible{outline:2px solid var(--dawn);outline-offset:2px}
+
+.alp-code{display:flex;flex-direction:column;gap:var(--space-3);padding:var(--space-7) var(--space-8);
+  border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface2);animation:settlein var(--dur-2) var(--ease) both}
+.alp-code-lbl{font-size:var(--text-sm);color:var(--ink2)}
+.alp-code-row{display:flex;align-items:center;justify-content:space-between;gap:var(--space-6)}
+.alp-code-val{font-family:var(--font-mono);font-weight:var(--weight-medium);font-size:var(--text-xl);letter-spacing:var(--tracking-wider);
+  color:var(--ink);user-select:all}
+
+.alp-paste{display:flex;flex-direction:column;gap:var(--space-4)}
+.alp-paste-lbl{font-size:var(--text-sm);font-weight:var(--weight-semibold);color:var(--ink2)}
+.alp-paste-row{display:flex;gap:var(--space-4)}
+.alp-paste-in{flex:1 1 auto;min-width:0;min-height:44px;box-sizing:border-box;padding:0 var(--space-8);
+  border:1px solid var(--line);border-radius:var(--radius-pill);background:var(--surface);color:var(--ink);
+  font-family:var(--font-ui);font-size:var(--text-base)}
+.alp-paste-in::placeholder{color:var(--muted)}
+.alp-paste-in:focus{outline:none;border-color:var(--dawn)}
+.alp-paste-send{min-height:44px;padding:0 var(--space-10)}
+.alp-done{align-self:flex-start;min-height:44px}
+
+.alp-more{display:flex}
+.alp-more-btn{min-height:32px}
+/* folded, not removed: the terminal keeps its size and keeps receiving output */
+.alp-details{display:grid;grid-template-rows:0fr;visibility:hidden;transition:grid-template-rows var(--dur-2) var(--ease),visibility 0s linear var(--dur-2)}
+.alp-details.is-open{grid-template-rows:1fr;visibility:visible;transition:grid-template-rows var(--dur-2) var(--ease)}
+.alp>.alp-details:not(.is-open){margin-top:calc(-1 * var(--space-7))}
+.alp-details-in{min-height:0;overflow:hidden;display:flex;flex-direction:column;gap:var(--space-6)}
+.alp-term{flex:0 0 auto;box-sizing:border-box;height:clamp(220px,40vh,340px);overflow:auto;padding:var(--space-5) var(--space-4) var(--space-4);
+  border-radius:var(--radius-md);background:var(--stone-deep)}
+.alp-term .xterm{padding:0}
+.agent-login-hint{margin:0;font-size:var(--text-sm);line-height:var(--leading);color:var(--muted)}
+.agent-login-hint code{font-family:var(--font-mono);font-size:var(--text-2xs);padding:0 var(--space-2);border-radius:var(--radius-2xs);
+  background:var(--surface2);border:1px solid var(--line)}
+
+/* ---- the Settings sheet around it ---- */
+.agent-login-ov{position:fixed;inset:0;z-index:var(--z-dialog);display:flex;align-items:center;justify-content:center;
+  padding:max(env(safe-area-inset-top),18px) var(--gutter) max(env(safe-area-inset-bottom),18px);
+  background:color-mix(in srgb,var(--stone-deep) 55%,transparent);animation:in var(--dur-2) var(--ease) both}
+.agent-login{width:min(34rem,100%);max-height:100%;display:flex;flex-direction:column;overflow:hidden;
+  background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:var(--radius-lg);box-shadow:var(--shadow-lg)}
+.agent-login:focus{outline:none}
+.agent-login-hd{display:flex;align-items:center;gap:var(--space-5);padding:var(--space-8) var(--space-8) var(--space-4)}
+.agent-login-hd h2{flex:1;margin:0;font-family:var(--font-display);font-weight:var(--weight-regular);font-size:var(--text-xl);line-height:var(--leading-tight)}
+.agent-login-x{font-size:var(--text-xl);line-height:var(--leading-none)}
+.agent-login-bd{display:flex;flex-direction:column;gap:var(--space-10);padding:var(--space-4) var(--space-8) var(--space-8);overflow:auto}
+.agent-login-ft{display:flex;justify-content:flex-end;gap:var(--space-5)}
+.agent-login-ft .btn,.agent-login-ft .btn-solid{min-height:40px;padding:0 var(--space-10)}

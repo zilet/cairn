@@ -65,6 +65,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.1",
+    "@simplewebauthn/server": "14.0.3",
     "dicom-parser": "1.8.21",
     "express": "^5.2.1",
     "garmin-connect": "^1.6.2",
@@ -75,6 +76,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.14",
+    "@simplewebauthn/browser": "14.0.0",
     "@types/express": "^5.0.6",
     "@types/node": "^26.6.3",
     "@types/pngjs": "6.0.5",

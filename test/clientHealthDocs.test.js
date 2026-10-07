@@ -52,7 +52,9 @@ test("health document helpers render analyzed records safely", () => {
   assert.match(inner, /Looks &lt;steady&gt;/);
   assert.match(inner, /id="hdate-12"/);
   assert.match(inner, /name="health_doc_date_12"/);
-  assert.match(inner, /TOKEN:\/api\/health-docs\/12\/file/);
+  // The plain path, opened through a signed link (api-core's data-resource-link handler).
+  assert.match(inner, /href="\/api\/health-docs\/12\/file" target="_blank" rel="noopener" data-resource-link/);
+  assert.doesNotMatch(inner, /TOKEN:/);
   assert.doesNotMatch(inner, /<direct>|<steady>|labs <raw>/);
   assert.equal(docs.docCollapsible(row), true);
   assert.equal(docs.markerFlagClass("critical"), "hm-flag warn");

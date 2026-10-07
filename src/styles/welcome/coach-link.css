@@ -1,0 +1,32 @@
+/* -------------------------------------------------------------------
+   The coach link (src/client/coach-link-client.ts): the two quiet places
+   that say no AI coach is connected yet. Today carries one line ahead of the
+   Brief (or, once a coach is connected but not met, the invitation to say
+   hello); Ask's composer gives way to one calm connect card. Never a nag,
+   never an error.
+   ------------------------------------------------------------------- */
+.clink-slot:empty{display:none}
+.clink-slot{margin-bottom:var(--space-10)}
+.clink-today{appearance:none;display:flex;align-items:center;gap:var(--space-6);width:100%;min-height:48px;box-sizing:border-box;
+  padding:var(--space-5) var(--space-7);border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface);
+  color:var(--ink2);font:inherit;font-size:var(--text-md);line-height:var(--leading-snug);text-align:left;cursor:pointer;
+  transition:border-color var(--dur-1) var(--ease),transform var(--dur-1) var(--ease)}
+.clink-today:hover{border-color:var(--line-strong)}
+.clink-today:active{transform:var(--press-lg)}
+.clink-today:focus-visible{outline:2px solid var(--dawn);outline-offset:2px}
+.clink-line{flex:1 1 auto}
+.clink-dot{flex:0 0 auto;box-sizing:border-box;width:9px;height:9px;border-radius:50%;border:1.5px solid var(--line-strong)}
+.clink-dot.is-live{border:0;background:var(--dawn);animation:ping var(--dur-ping) var(--ease) infinite}
+.clink-today .chev{font-size:var(--text-lg);line-height:var(--leading-none)}
+
+/* Ask without a coach: the card stands where the composer was */
+.chatdock.is-unlinked>:not(.clink-ask-slot){display:none}
+/* nothing to start a conversation with yet: no starters, no "say hi" */
+.chatview:has(.chatdock.is-unlinked) #chatlog>:is(.empty,.chat-chips){display:none}
+.clink-ask{display:grid;justify-items:start;gap:var(--space-4);padding:var(--space-9) var(--space-8);
+  border:1px solid var(--line);border-radius:var(--radius-lg);background:var(--surface);animation:settlein var(--dur-3) var(--ease) both}
+.clink-mark{display:block;margin-bottom:var(--space-4)}
+.clink-cairn{width:44px;height:auto}
+.clink-t{margin:0;font-family:var(--font-display);font-weight:var(--weight-regular);font-size:var(--text-lg);line-height:var(--leading-snug);color:var(--ink)}
+.clink-s{margin:0;font-size:var(--text-md);line-height:var(--leading-normal);color:var(--ink2)}
+.clink-go{margin-top:var(--space-4);min-height:44px;padding:0 var(--space-11)}

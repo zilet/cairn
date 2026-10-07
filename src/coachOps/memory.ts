@@ -257,38 +257,45 @@ export async function distillChat(
   return { ok: true as const, distilled, ...(farewell ? { farewell } : {}), ...(note ? { note } : {}) };
 }
 
-// Frictionless onboarding: ONE free-text intro → understood + applied, then onboarded.
-// "Get me started and let me go." The deterministic base ALWAYS runs first (the
-// athlete's words are never lost — about_me is saved, KB-recognized supplements are
-// captured), then an agent enriches it (profile numbers, memories, injuries, the
-// long-tail supplements). Fail-open: no agent → the deterministic base stands. Marks
-// onboarded at the end regardless, so a flaky agent never traps the user on setup.
-export async function onboardFromText(
-  agent: string | undefined,
-  text: string,
-  hooks?: OpHooks
-): Promise<{
-  ok: true;
-  source: "agent" | "deterministic" | "empty";
-  applied: {
-    about_me: boolean;
-    profile: boolean;
-    supplements: number;
-    memories: number;
-    context_events: number;
-    movement_considerations: number;
-  };
-}> {
-  const raw = String(text ?? "").trim();
-  const applied = { about_me: false, profile: false, supplements: 0, memories: 0, context_events: 0, movement_considerations: 0 };
-  if (!raw) {
-    try {
-      setSettings({ onboarded: true });
-    } catch (err) { log.warn("[onboard] could not mark the profile onboarded", { error: err }); }
-    return { ok: true as const, source: "empty", applied };
-  }
+// What an onboarding pass put in place. Shared by the plain onboard op and the
+// first-run welcome (src/coachOps/welcome.ts), which reports it back to the PWA.
+export interface OnboardApplied {
+  about_me: boolean;
+  profile: boolean;
+  goal: string | null;
+  lift_days: number[];
+  supplements: number;
+  memories: number;
+  context_events: number;
+  movement_considerations: number;
+}
 
-  // Deterministic base — never lose what they said.
+export function emptyOnboardApplied(): OnboardApplied {
+  return {
+    about_me: false,
+    profile: false,
+    goal: null,
+    lift_days: [],
+    supplements: 0,
+    memories: 0,
+    context_events: 0,
+    movement_considerations: 0,
+  };
+}
+
+// The stated goal word onto the profile's goal_mode (lose | maintain | gain). A
+// recomposition is maintenance-calorie training with protein held high, so it lands as
+// `maintain` and the intent itself is remembered in their words — never dropped.
+const ONBOARD_GOAL_MODES: Record<string, "lose" | "maintain" | "gain"> = {
+  lose: "lose",
+  maintain: "maintain",
+  gain: "gain",
+  recomp: "maintain",
+};
+
+// The deterministic base — never lose what they said. Their own words become about_me
+// and the KB-recognized supplements are captured, before any agent is asked anything.
+export function applyOnboardBase(raw: string, applied: OnboardApplied): void {
   try {
     setProfile({ about_me: raw.slice(0, 8000) });
     applied.about_me = true;
@@ -296,6 +303,138 @@ export async function onboardFromText(
   try {
     applied.supplements = understandSupplements(raw, { strict: true }).length;
   } catch (err) { log.debug("[onboard] no supplements understood from the text", { error: err }); }
+}
+
+// Apply one parsed onboarding extraction (ONBOARD_SCHEMA) through the existing repo
+// writers. Each field is best-effort on its own: one bad row never costs the rest.
+export function applyOnboardParsed(p: any, applied: OnboardApplied): void {
+  if (!p || typeof p !== "object") return;
+  if (typeof p.about_me === "string" && p.about_me.trim()) {
+    try {
+      setProfile({ about_me: p.about_me.trim().slice(0, 8000) });
+      applied.about_me = true;
+    } catch (err) { log.warn("[onboard] could not store the agent's about_me", { error: err }); }
+  }
+  const pr = p.profile && typeof p.profile === "object" ? p.profile : {};
+  const patch: any = {};
+  for (const k of ["sex", "age", "height_cm", "weight_lb", "goal_weight_lb", "goal_date"])
+    if (pr[k] != null && pr[k] !== "") patch[k] = pr[k];
+  if (Object.keys(patch).length) {
+    try {
+      setProfile(patch);
+      applied.profile = true;
+    } catch (err) { log.warn("[onboard] could not apply the agent's profile patch", { error: err }); }
+  }
+  // The goal they named sets the journey's shape (profile.goal_mode, read through
+  // effectiveGoalMode). An unrecognized word changes nothing.
+  const goalWord = typeof p.goal === "string" ? p.goal.trim().toLowerCase() : "";
+  const goalMode = ONBOARD_GOAL_MODES[goalWord];
+  if (goalMode) {
+    try {
+      setProfile({ goal_mode: goalMode });
+      applied.goal = goalWord;
+      applied.profile = true;
+    } catch (err) { log.warn("[onboard] could not apply the stated goal", { error: err }); }
+    if (goalWord === "recomp") {
+      try {
+        addMemory("Wants a body recomposition: lose fat while building muscle", "goal", "onboard");
+        applied.memories++;
+      } catch (err) { log.debug("[onboard] could not remember the recomposition goal", { error: err }); }
+    }
+  }
+  // Weekdays they NAMED for lifting are the stated strength schedule — the same fact chat
+  // records — so the first week lands on real weekdays. A bare count stays a memory below.
+  if (Array.isArray(p.lift_days) && p.lift_days.length) {
+    const days = [...new Set(p.lift_days.map((d: any) => Number(d)).filter((d: number) => Number.isInteger(d) && d >= 0 && d <= 6))] as number[];
+    if (days.length && days.length < 7) {
+      try {
+        setProfile({ strength_schedule: { days: days.map((dow) => ({ dow })), source: "chat" } });
+        applied.lift_days = days.sort((a, b) => a - b);
+      } catch (err) { log.warn("[onboard] could not store the stated lifting weekdays", { error: err }); }
+    }
+  }
+  if (Array.isArray(p.supplements) && p.supplements.length) {
+    let n = 0;
+    for (const it of p.supplements) {
+      if (it?.name) {
+        try {
+          addSupplement(it);
+          n++;
+        } catch (err) { log.debug("[onboard] skipped one supplement", { error: err }); }
+      }
+    }
+    if (n) applied.supplements = n; // the agent's structured set supersedes the deterministic count
+  }
+  if (Array.isArray(p.memories))
+    for (const m of p.memories) {
+      if (m?.content) {
+        try {
+          addMemory(String(m.content), m.kind, "onboard");
+          applied.memories++;
+        } catch (err) { log.debug("[onboard] skipped one memory", { error: err }); }
+      }
+    }
+  if (Array.isArray(p.context_events))
+    for (const ev of p.context_events) {
+      if (ev?.title || ev?.kind) {
+        try {
+          addContextEvent({
+            kind: ev.kind,
+            title: ev.title,
+            detail: ev.detail,
+            start_date: ev.start_date,
+            end_date: ev.end_date,
+            meta: ev.meta,
+          });
+          applied.context_events++;
+        } catch (err) { log.debug("[onboard] skipped one context event", { error: err }); }
+      }
+    }
+  // A lasting, painless condition goes onto the profile — never a context event,
+  // because an injury event would hard-gate the very lifts they want kept.
+  if (Array.isArray(p.movement_considerations) && p.movement_considerations.length) {
+    try {
+      const items = p.movement_considerations.map((item: any) => ({ ...item, source: "onboard" }));
+      setProfile({ movement_considerations: { items } });
+      applied.movement_considerations = movementConsiderationsRead()?.items.length ?? 0;
+    } catch (err) { log.warn("[onboard] could not store the stated movement considerations", { error: err }); }
+  }
+  // days_per_week stays a soft signal (remembered), not an auto plan rewrite — the
+  // week composer reads it from memory when it builds the first week.
+  if (pr.days_per_week != null && Number(pr.days_per_week) > 0) {
+    try {
+      addMemory(`Trains about ${Number(pr.days_per_week)} days/week`, "preference", "onboard");
+      applied.memories++;
+    } catch (err) { log.debug("[onboard] could not remember the weekly training cadence", { error: err }); }
+  }
+}
+
+// Frictionless onboarding: ONE free-text intro → understood + applied, then onboarded.
+// "Get me started and let me go." The deterministic base ALWAYS runs first (the
+// athlete's words are never lost — about_me is saved, KB-recognized supplements are
+// captured), then an agent enriches it (profile numbers, goal, stated lifting days,
+// memories, injuries, the long-tail supplements). Fail-open: no agent → the
+// deterministic base stands. Marks onboarded at the end regardless, so a flaky agent
+// never traps the user on setup.
+export async function onboardFromText(
+  agent: string | undefined,
+  text: string,
+  hooks?: OpHooks
+): Promise<{
+  ok: true;
+  source: "agent" | "deterministic" | "empty";
+  applied: OnboardApplied;
+}> {
+  const raw = String(text ?? "").trim();
+  const applied = emptyOnboardApplied();
+  if (!raw) {
+    try {
+      setSettings({ onboarded: true });
+    } catch (err) { log.warn("[onboard] could not mark the profile onboarded", { error: err }); }
+    return { ok: true as const, source: "empty", applied };
+  }
+
+  applyOnboardBase(raw, applied);
 
   let source: "agent" | "deterministic" = "deterministic";
   try {
@@ -309,76 +448,7 @@ export async function onboardFromText(
     const p: any = result.parsed;
     if (p && typeof p === "object") {
       source = "agent";
-      if (typeof p.about_me === "string" && p.about_me.trim()) {
-        try {
-          setProfile({ about_me: p.about_me.trim().slice(0, 8000) });
-          applied.about_me = true;
-        } catch (err) { log.warn("[onboard] could not store the agent's about_me", { error: err }); }
-      }
-      const pr = p.profile && typeof p.profile === "object" ? p.profile : {};
-      const patch: any = {};
-      for (const k of ["sex", "age", "height_cm", "weight_lb", "goal_weight_lb", "goal_date"])
-        if (pr[k] != null && pr[k] !== "") patch[k] = pr[k];
-      if (Object.keys(patch).length) {
-        try {
-          setProfile(patch);
-          applied.profile = true;
-        } catch (err) { log.warn("[onboard] could not apply the agent's profile patch", { error: err }); }
-      }
-      if (Array.isArray(p.supplements) && p.supplements.length) {
-        let n = 0;
-        for (const it of p.supplements) {
-          if (it?.name) {
-            try {
-              addSupplement(it);
-              n++;
-            } catch (err) { log.debug("[onboard] skipped one supplement", { error: err }); }
-          }
-        }
-        if (n) applied.supplements = n; // the agent's structured set supersedes the deterministic count
-      }
-      if (Array.isArray(p.memories))
-        for (const m of p.memories) {
-          if (m?.content) {
-            try {
-              addMemory(String(m.content), m.kind, "onboard");
-              applied.memories++;
-            } catch (err) { log.debug("[onboard] skipped one memory", { error: err }); }
-          }
-        }
-      if (Array.isArray(p.context_events))
-        for (const ev of p.context_events) {
-          if (ev?.title || ev?.kind) {
-            try {
-              addContextEvent({
-                kind: ev.kind,
-                title: ev.title,
-                detail: ev.detail,
-                start_date: ev.start_date,
-                end_date: ev.end_date,
-                meta: ev.meta,
-              });
-              applied.context_events++;
-            } catch (err) { log.debug("[onboard] skipped one context event", { error: err }); }
-          }
-        }
-      // A lasting, painless condition goes onto the profile — never a context event,
-      // because an injury event would hard-gate the very lifts they want kept.
-      if (Array.isArray(p.movement_considerations) && p.movement_considerations.length) {
-        try {
-          const items = p.movement_considerations.map((item: any) => ({ ...item, source: "onboard" }));
-          setProfile({ movement_considerations: { items } });
-          applied.movement_considerations = movementConsiderationsRead()?.items.length ?? 0;
-        } catch (err) { log.warn("[onboard] could not store the stated movement considerations", { error: err }); }
-      }
-      // days_per_week stays a soft signal (remembered), not an auto plan rewrite —
-      // the seeded plan is already there; the athlete adjusts it when they want to.
-      if (pr.days_per_week != null && Number(pr.days_per_week) > 0) {
-        try {
-          addMemory(`Trains about ${Number(pr.days_per_week)} days/week`, "preference", "onboard");
-          applied.memories++;
-        } catch (err) { log.debug("[onboard] could not remember the weekly training cadence", { error: err }); }
-      }
+      applyOnboardParsed(p, applied);
     }
   } catch (error) {
     if (hooks?.signal?.aborted) throw error;

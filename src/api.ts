@@ -23,6 +23,8 @@ import { trainingLogRouter } from "./routes/training-log.js";
 import { bodyMetricsRouter } from "./routes/body-metrics.js";
 import { journeyRouter } from "./routes/journey.js";
 import { appleHealthRouter } from "./routes/apple-health.js";
+import { authRouter } from "./routes/auth.js";
+import { mcpClientsRouter } from "./routes/mcp-clients.js";
 import { screensRouter } from "./routes/screens.js";
 import { diagnosticErrorName, diagnosticStackFrames, recordUnexpectedApiError, requestId } from "./diagnostics.js";
 import { telemetryRequestPathLabel } from "./telemetry-privacy.js";
@@ -99,6 +101,8 @@ const API_MOUNTS: ApiMount[] = [
   { name: "body-metrics", prefix: "/", router: bodyMetricsRouter },
   { name: "journey", prefix: "/", router: journeyRouter },
   { name: "apple-health", prefix: "/", router: appleHealthRouter },
+  { name: "auth", prefix: "/", router: authRouter },
+  { name: "mcp-clients", prefix: "/", router: mcpClientsRouter },
   { name: "screens", prefix: "/", router: screensRouter },
   { name: "chat", prefix: "/chat", router: chatRouter },
   { name: "agent-jobs", prefix: "/agent-jobs", router: agentJobsRouter },

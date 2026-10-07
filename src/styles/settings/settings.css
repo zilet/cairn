@@ -193,3 +193,95 @@
   color:var(--warn);background:var(--warn-bg);border:none;border-radius:var(--radius-pill);
   padding:var(--badge-pad);text-transform:uppercase}
 
+
+/* Settings > Data: the hosted-install pieces — how releases reach this host and the
+   calm "Update now" (.upd-*), Settings > Devices' "Pair a device" (.pair-*), the feedback & privacy block
+   (.setdata-*), and the Send feedback sheet (.fbk-*, on the shared .ui-sheet). */
+.setdata-h{margin:var(--space-11) 0 var(--space-4)}
+.setdata-btn{width:100%;text-align:center;padding:var(--space-5)}
+.setdata-toggle{margin-top:var(--space-6)}
+.setdata-muted{color:var(--muted);margin-top:var(--space-3)}
+.upd-actions:empty{display:none}
+.upd-actions{margin-top:var(--space-4)}
+.upd-how{color:var(--ink-2)}
+.upd-note{color:var(--muted);margin-top:var(--space-3)}
+.upd-now{width:100%;text-align:center;padding:var(--space-5);margin-top:var(--space-5)}
+.upd-result{color:var(--ink-2);margin-top:var(--space-4)}
+.pair-card{margin-top:var(--space-card)}
+.pair-h{margin:0 0 var(--space-3)}
+.pair-show{width:100%;text-align:center;padding:var(--space-5);margin-top:var(--space-5)}
+.pair-reveal{display:grid;justify-items:center;gap:var(--space-5);margin-top:var(--space-6)}
+/* A QR plate is a printed label: dark modules on a light ground in BOTH themes, so a
+   camera reads it the same way at night (--stone-deep stays dark in either palette;
+   the ground takes whichever neutral is light in the active one). */
+.pair-qr{width:min(240px,72vw);aspect-ratio:1;border-radius:var(--radius-xs);overflow:hidden;border:1px solid var(--line)}
+.pair-qr svg{display:block;width:100%;height:100%}
+.pair-qr-ground{fill:var(--surface)}
+.pair-qr-ink{fill:var(--stone-deep)}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .pair-qr-ground{fill:var(--ink)} }
+:root[data-theme="dark"] .pair-qr-ground{fill:var(--ink)}
+.pair-err{color:var(--warn);margin-top:var(--space-4)}
+.pair-code{font-family:var(--font-mono);font-size:var(--text-xl);letter-spacing:var(--tracking-widest);color:var(--ink)}
+.pair-expiry{color:var(--muted)}
+/* Settings > Devices (settings-pairing-client.ts): who is signed in, passkeys,
+   and the one recovery line. Rows read as a quiet list, actions as text links. */
+.access-card .sess + .sess{margin-top:var(--space-card)}
+.access-list{list-style:none;margin:0;padding:0}
+.access-row{display:flex;align-items:center;justify-content:space-between;gap:var(--space-5);padding:var(--space-4) 0;border-top:1px solid var(--line)}
+.access-row:first-child{border-top:0}
+.access-main{min-width:0}
+.access-name{font-weight:var(--weight-semibold);color:var(--ink);overflow-wrap:anywhere}
+.access-meta{font-size:var(--text-sm);color:var(--muted)}
+.access-tag{font-size:var(--text-xs);font-weight:var(--weight-semibold);color:var(--accent-deep);margin-left:var(--space-2)}
+.access-actions{display:flex;gap:var(--space-5);flex:none}
+.access-actions .linkbtn-quiet{min-height:44px}
+.access-rename{display:flex;gap:var(--space-4);align-items:center}
+.access-rename .token-sheet-in{padding:var(--space-3) var(--space-5);font-size:var(--text-md)}
+.access-wide{width:100%;text-align:center;padding:var(--space-5);margin-top:var(--space-5)}
+.access-muted{color:var(--muted)}
+.access-recovery{margin-top:var(--space-6);font-size:var(--text-sm)}
+/* Settings > Devices > Connected AI apps (settings-mcp-client.ts): the /mcp address,
+   the key shown once with its setup snippets, and the list of connected apps. */
+.mcp-group{margin-top:var(--space-card)}
+.mcp-addr{margin-top:var(--space-5)}
+.mcp-addr-row{display:flex;align-items:center;justify-content:space-between;gap:var(--space-4);margin-top:var(--space-2)}
+.mcp-addr-row .linkbtn-quiet{min-height:44px;flex:none}
+.mcp-code{font-family:var(--font-mono);font-size:var(--text-sm);color:var(--ink);overflow-wrap:anywhere;min-width:0}
+.mcp-secret{user-select:all}
+.mcp-note{margin-top:var(--space-3);font-size:var(--text-sm)}
+.mcp-list{margin-top:var(--space-5)}
+.mcp-form{margin-top:var(--space-5)}
+.mcp-form-row{display:flex;gap:var(--space-4);align-items:center;margin:var(--space-3) 0}
+.mcp-form-row .token-sheet-in{flex:1;min-width:0}
+.mcp-reveal{margin-top:var(--space-6);padding-top:var(--space-5);border-top:1px solid var(--line)}
+.mcp-h{margin:var(--space-6) 0 var(--space-3);font-size:var(--text-sm);font-weight:var(--weight-semibold);color:var(--ink)}
+.mcp-snippet{margin:0;padding:var(--space-4) var(--space-5);background:var(--well);border-radius:var(--radius-xs);font-family:var(--font-mono);font-size:var(--text-xs);line-height:var(--leading);color:var(--ink);white-space:pre-wrap;overflow-wrap:anywhere;user-select:all}
+.mcp-test{display:flex;align-items:center;gap:var(--space-5);flex-wrap:wrap;margin-top:var(--space-6)}
+.mcp-foot{margin-top:var(--space-6);font-size:var(--text-sm)}
+/* These set their own display, which would otherwise outrank the hidden attribute. */
+.pair-reveal[hidden],.pair-show[hidden],.access-wide[hidden],.mcp-form[hidden],.mcp-reveal[hidden]{display:none}
+.fbk-hd{display:flex;align-items:center;justify-content:space-between;gap:var(--space-6);margin-bottom:var(--space-4)}
+.fbk-h{margin:0;font-family:var(--font-display);font-size:var(--text-xl);font-weight:var(--weight-regular);line-height:var(--leading-tight)}
+.fbk-x{font-size:var(--text-lg);padding:var(--space-2)}
+.fbk-p{margin:0 0 var(--space-7);font-size:var(--text-md);line-height:var(--leading);color:var(--ink-2)}
+.fbk-kinds{display:flex;flex-wrap:wrap;gap:var(--space-3);margin-bottom:var(--space-7)}
+.fbk-chip{border:1px solid var(--line);background:var(--card-2);color:var(--ink-2);border-radius:var(--radius-pill);
+  padding:var(--chip-pad);font-family:var(--font-ui);font-size:var(--chip-text);font-weight:var(--chip-weight);cursor:pointer}
+.fbk-chip[aria-checked="true"]{background:var(--ink);border-color:var(--ink);color:var(--on-ink)}
+.fbk-chip:active{transform:var(--press-sm)}
+.fbk-lbl{display:block;margin:0 0 var(--space-3);font-size:var(--text-sm);color:var(--ink-2)}
+.fbk-opt{color:var(--muted)}
+.fbk-in{display:block;width:100%;box-sizing:border-box;margin-bottom:var(--space-7);padding:var(--space-5) var(--space-6);
+  border:1px solid var(--line-strong);border-radius:var(--radius-xs);background:var(--card-2);color:var(--ink);
+  font-family:var(--font-ui);font-size:var(--text-base);line-height:var(--leading)}
+.fbk-in:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:transparent}
+.fbk-msg{resize:vertical;min-height:110px}
+.fbk-diag{margin-bottom:var(--space-4)}
+.fbk-preview{margin-bottom:var(--space-6);font-size:var(--text-sm);color:var(--ink-2)}
+.fbk-preview summary{cursor:pointer;color:var(--muted)}
+.fbk-note{margin:var(--space-3) 0;font-size:var(--text-xs);line-height:var(--leading);color:var(--muted)}
+.fbk-pre{margin:0;max-height:220px;overflow:auto;padding:var(--space-5) var(--space-6);border-radius:var(--radius-xs);
+  background:var(--well);color:var(--ink-2);font-family:var(--font-mono);font-size:var(--text-xs);white-space:pre-wrap;word-break:break-word}
+.fbk-err{margin-bottom:var(--space-5);font-size:var(--text-sm);color:var(--warn);font-weight:var(--weight-semibold)}
+.fbk-ft{display:flex;justify-content:flex-end;align-items:center;gap:var(--space-5);margin-top:var(--space-6)}
+.fbk-gh{text-decoration:none}

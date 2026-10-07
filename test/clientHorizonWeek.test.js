@@ -30,7 +30,9 @@ const MODULES = [
   "race-view-client",
   // the calendar bundle horizon reaches through train
   "day-detail-model",
+  "day-glance-model",
   "day-detail-client",
+  "day-glance-view",
   "milestone-row-model",
   "milestone-row-client",
   "goal-row-model",

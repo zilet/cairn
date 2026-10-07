@@ -28,6 +28,38 @@ hardware, keeps everything in a SQLite file you own, and never scores you or nag
 > **Want to look before you install?** One click runs a real Cairn, preloaded with fictional demo
 > data, in your browser. Nothing touches your machine. More cloud options: [`docs/SANDBOX.md`](docs/SANDBOX.md).
 
+## Deploy
+
+Run your own Cairn, on your own account or hardware. One command, two choices:
+
+```bash
+curl -fsSL https://cairn.fit/install | sh
+```
+
+It asks where Cairn should live:
+
+- **In the cloud on Railway** (about $5/month on the Hobby plan; check current pricing; nothing to
+  keep running). It signs you in to Railway, creates the project with its volume and a generated
+  token, deploys, and opens Cairn.
+- **On this computer or server** (free, private, needs to stay on): a Mac, a home box, a Raspberry
+  Pi or a VPS, with Docker or Podman and nightly updates that roll back on their own.
+
+Either way, the installer opens Cairn already signed in; pair your phone from **Settings → Devices →
+Pair a device** (a one-time code); your access token is your recovery key. Then connect your own AI
+subscription (Claude, ChatGPT, Google or Grok) in **Settings → Agents**. Details:
+[`docs/HOSTING.md`](docs/HOSTING.md) (both choices side by side) and
+[`docs/INSTALL.md`](docs/INSTALL.md) (every option).
+
+No terminal? Deploy the Railway template from the browser instead:
+
+<!-- TODO(maintainer): publish the Railway template (deploy/railway/README.md), then point the
+     Railway button at https://railway.com/new/template/<CODE>. -->
+<p>
+  <a href="docs/HOSTING.md#no-terminal-the-railway-button"><img src="https://railway.com/button.svg" height="32" alt="Deploy on Railway (template link: TODO)"></a>
+</p>
+
+Already run Docker? The [Quickstart](#quickstart-30-seconds) below is one `docker run`, unchanged.
+
 ## Cairn 2.0: from a read to a team
 
 Version 1 learned to **read** you. It turned years of lifts, a watch's worth of nights and a folder of
@@ -181,7 +213,15 @@ background scheduler. Storage is SQLite via Node's built-in `node:sqlite`. The n
 
 ## Quickstart (30 seconds)
 
-You don't need the source. The image is published to GHCR (multi-arch, amd64 + arm64):
+The easiest way is the one command, which asks whether Cairn should run on Railway or on this
+machine, sets it up and opens it signed in ([`docs/INSTALL.md`](docs/INSTALL.md)):
+
+```bash
+curl -fsSL https://cairn.fit/install | sh
+```
+
+Rather run the container yourself? You don't need the source. The image is published to GHCR
+(multi-arch, amd64 + arm64):
 
 ```bash
 docker run -d --name cairn -p 127.0.0.1:8787:8787 \
@@ -224,6 +264,8 @@ detail, including terminal logins and the Grok API-key path:
 > `8787` to the open internet.** If any untrusted device can reach it, set `CAIRN_AUTH_TOKEN` to
 > require a shared token, and serve it over HTTPS (Tailscale Serve / a private reverse proxy) so the
 > PWA can install offline. See [`SECURITY.md`](SECURITY.md) and [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
+> The one-click hosted templates ([`docs/HOSTING.md`](docs/HOSTING.md)) do put Cairn on a public URL,
+> so they always require a token (`CAIRN_REQUIRE_AUTH=1`) and serve it over the platform's HTTPS.
 
 ### What works out of the box vs. what needs a coaching agent
 
@@ -253,6 +295,7 @@ you connect a real coach.
 
 | If you want... | Start here |
 |---|---|
+| The easiest setup, anywhere | `curl -fsSL https://cairn.fit/install \| sh` (Railway or this machine) |
 | Just run it on your laptop (no clone) | the `docker run … ghcr.io/zilet/cairn:latest` above |
 | Build from source / develop | `./quickstart.sh` |
 | Keep it always-on at home | `./scripts/quickstart-rpi.sh` on a Raspberry Pi or small home box |
@@ -340,6 +383,7 @@ credentials.
 | Doc | What it covers |
 |---|---|
 | [`docs/QUICKSTART.md`](docs/QUICKSTART.md) | 30-second start, Raspberry Pi, VM, Docker, Node, agent setup |
+| [`docs/HOSTING.md`](docs/HOSTING.md) | Run it without being an engineer: one command, two choices (Railway or this machine), the no-terminal Railway button, or Docker |
 | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) · [`docs/OPERATIONS.md`](docs/OPERATIONS.md) | Tailscale, HTTPS PWA, updates, migrations, backup/restore |
 | [`docs/HOUSEHOLDS.md`](docs/HOUSEHOLDS.md) · [`docs/SANDBOX.md`](docs/SANDBOX.md) | Private profiles per person; Daytona / Codespaces |
 | [`docs/APPLE_HEALTH.md`](docs/APPLE_HEALTH.md) · [`docs/GARMIN.md`](docs/GARMIN.md) | Bringing sleep, HRV and activities in; Garmin sync is two-way, with finished strength sessions going back out |

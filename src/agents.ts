@@ -101,6 +101,11 @@ export interface AgentDef {
   args: string[];                 // "{prompt}" is substituted with the full prompt
   input?: "arg" | "stdin";        // how the prompt reaches the CLI (default: arg)
   description?: string;
+  // Plain first-run copy for the provider tile: the name a person knows it by and the
+  // plan they already pay for. Display only — a definition without them is still a
+  // working agent, just not offered as a provider tile (the offline stub).
+  label?: string;
+  plan?: string;
   env_required?: string[];        // env vars that indicate this agent is usable
   web_access?: boolean;           // declares this CLI can browse the live web (drives research routing)
   // Declarative login / connected-state fields (Agent Connect). Every argv array is
@@ -165,6 +170,8 @@ export function listAgents() {
   return Object.entries(loadAgents()).map(([name, def]) => ({
     name,
     description: def.description || "",
+    label: typeof def.label === "string" && def.label.trim() ? def.label.trim() : null,
+    plan: typeof def.plan === "string" && def.plan.trim() ? def.plan.trim() : null,
     env_required: def.env_required || [],
     // whether this CLI declares live web access (drives web-capable-first research routing)
     web_access: def.web_access === true,

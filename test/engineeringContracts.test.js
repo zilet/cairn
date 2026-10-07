@@ -465,7 +465,10 @@ test("MCP modular tool sources are discovered without duplicate names", () => {
   // The push offer: +2 (accept_push_offer, dismiss_push_offer) in src/surfaces/mcp/person.ts —
   // the mirrors of POST /api/training-drive/offer/accept|dismiss (the athlete's answer to the
   // coach's ask-tier "want to open the throttle?").
-  assert.equal(tools.length, 296,"tool count changes only for reviewed MCP additions");
+  // Hosted installs: +1 (apply_update) in src/surfaces/mcp/system.ts — the MCP mirror of
+  // POST /api/update/apply. Feedback has NO MCP tool: sending it is a person's action in
+  // the app, never an agent's (POST /api/feedback stays REST-only).
+  assert.equal(tools.length, 297, "tool count changes only for reviewed MCP additions");
   assert.equal(new Set(tools).size, tools.length, "MCP tool names must be unique across modules");
   assert.doesNotMatch(mcp, /server\.tool\(/, "src/mcp.ts should stay a registry, not a tool-definition file");
   assert.doesNotMatch(mcp, /server\.tool\("get_chat_history"/);
@@ -4237,7 +4240,9 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(agentLoginModelSource, /function agentLoginStatus\(key: AgentLoginStatusKey\): string/);
   assert.match(agentLoginAssetsSource, /function agentLoginXtermWindow\(\): AgentLoginXtermGlobals/);
   assert.match(agentLoginAssetsSource, /function loadAgentLoginXtermAssets\(\): Promise<void>/);
-  assert.match(agentLoginModalSource, /function ensureAgentLoginStyles\(\): void/);
+  // The sheet's styles live in a stylesheet partial now (src/styles/welcome/connect.css),
+  // never injected at runtime.
+  assert.doesNotMatch(agentLoginModalSource, /ensureAgentLoginStyles|document\.createElement\("style"\)/);
   assert.match(
     agentLoginModalSource,
     /function closeAgentLoginModal\(overlay: AgentLoginOverlay \| null \| undefined\): void/
@@ -4246,15 +4251,16 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     agentLoginModalSource,
     /function createAgentLoginModal\(name: string, retryLogin: AgentLoginRetry\): AgentLoginModalHandle \| null/
   );
+  // The session reports to whoever hosts it (the friendly sign-in panel), never to a modal.
   assert.match(
     agentLoginSessionSource,
-    /async function startAgentLoginSession\(name: string, modal: AgentLoginModalHandle\): Promise<void>/
+    /async function startAgentLoginSession\(name: string, host: AgentLoginHost\): Promise<AgentLoginSessionHandle \| null>/
   );
   // The fitted terminal size rides the connect URL — the server PTY window is
   // fixed at spawn, so a size-less connect would fold agy's ~27-row login screen.
   assert.match(agentLoginSessionSource, /agentLoginWsUrl\(name, term\.cols \|\| 0, term\.rows \|\| 0\)/);
   assert.match(agentLoginSource, /async function openAgentLoginModal\(agentName: unknown\): Promise<void>/);
-  assert.match(agentLoginSource, /session\.start\(name, handle\)/);
+  assert.match(agentLoginSource, /modal\.create\(name, /);
   assert.match(agentLoginSource, /Object\.assign\(globalThis, \{ openAgentLoginModal \}\)/);
   assert.match(pwaInstallSource, /function isStandalonePWA\(\): boolean/);
   assert.match(pwaInstallSource, /function renderPhoneCoachBanner\(container: Element \| null \| undefined\): void/);
@@ -4977,8 +4983,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(settingsRoutesSource, /function settingsPruneRoutes/);
   assert.match(settingsClientSource, /type SettingsUpdateOptions = \{ updateCheckEnabled: boolean \}/);
   assert.match(settingsClientSource, /function updateCardHtml/);
-  assert.match(settingsSurfaceSource, /function settingsData/);
-  assert.match(settingsSurfaceSource, /function settingsWorkingModel/);
+  assert.match(read("src/client/settings-surface-model.ts"), /function settingsData/);
+  assert.match(read("src/client/settings-surface-model.ts"), /function settingsWorkingModel/);
   assert.match(settingsSurfaceSource, /function settingsSourcesSliceHtml/);
   assert.match(settingsSurfaceSource, /function settingsAutomationSliceHtml/);
   assert.match(settingsSurfaceSource, /CairnSettingsSurface/);
@@ -5829,9 +5835,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(appDisciplinePrimerSource, /renderTab\("plan"\)/);
   assert.match(appOnboardingSource, /async function maybeOnboard\(\): Promise<void>/);
   assert.match(appOnboardingSource, /function openOnboarding\(\): void/);
-  assert.match(appOnboardingSource, /hideSaveBar\(\)/);
-  assert.match(appOnboardingSource, /CairnUi\.jobCaptionHtml\(\)/);
-  assert.match(appOnboardingSource, /thinkingCaption\(capEl, "onboard"\)/);
+  // First run decides only WHEN the full-screen welcome opens (the lazy "welcome" bundle).
+  assert.match(appOnboardingSource, /CairnCoachLink\.openWelcome\(/);
   assert.match(appStartupSource, /function startAppShell\(\): void/);
   assert.match(appStartupSource, /registerTabBarHandlers\(\)/);
   assert.match(appStartupSource, /activateTab\(landingTab \|\| "today"/);
@@ -5856,7 +5861,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(boot, /function\s+syncRouteFromState/);
   assert.doesNotMatch(boot, /function\s+renderTab/);
   assert.match(apiCore, /Object\.assign\(globalThis, \{/);
-  assert.match(apiCore, /withToken/);
+  assert.match(read("public/js/api-auth.js"), /withToken/);
   assert.match(apiCore, /api/);
   assert.doesNotMatch(apiCore, /@returns\s*\{Promise<any>\}/);
   assert.match(appDownloadSource, /function downloadFile\(href: string\): void/);
@@ -7066,7 +7071,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     /function\s+renderPlanEditor|function\s+progDayHtml|function\s+pitemHtml|function\s+pdayHtml|const\s+blankStrength|const\s+blankCardio/
   );
   assert.match(settingsScreen, /CairnSettingsClient\.updateCardHtml/);
-  assert.match(appOnboarding, /CairnUi\.jobCaptionHtml\(\)/);
+  assert.match(appOnboarding, /CairnCoachLink\.openWelcome\(/);
   assert.match(boot, /startAppShell\(\)/);
   assert.doesNotMatch(boot, /function\s+renderSettings/);
   assert.doesNotMatch(boot, /CairnSettingsClient/);

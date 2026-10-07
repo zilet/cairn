@@ -5,6 +5,9 @@
 
 type ClientDiagnosticKind = "api_failure" | "render_error" | "unhandled_error" | "unhandled_rejection";
 type ClientDiagnosticLevel = "warning" | "error";
+// Taxonomy only: which welcome step failed, for which provider, in what class.
+// Never a message, a reply, a prompt or CLI output (the server re-validates it).
+type ClientDiagnosticWelcome = { step: string; provider: string; code: string };
 type ClientDiagnosticEvent = {
   kind: ClientDiagnosticKind;
   level: ClientDiagnosticLevel;
@@ -18,6 +21,7 @@ type ClientDiagnosticEvent = {
   tab?: string;
   online?: boolean;
   release?: string;
+  welcome?: ClientDiagnosticWelcome;
   fingerprint: string;
 };
 type ClientDiagnosticInput = Omit<ClientDiagnosticEvent, "fingerprint" | "message"> & {
@@ -48,7 +52,7 @@ const CLIENT_API_ROUTE_FAMILIES = [
   "blood-pressure", "body-metrics", "bodyweight", "brain", "brain-diagnostics", "calendar", "calibration",
   "cardio", "chat", "chat-images", "checkins", "coach", "coaching-focus", "context-effect",
   "context-events", "dexa-targeting", "diagnostics", "directives", "endurance-goal", "endurance-prs",
-  "evidence", "exercise", "exercises", "export", "family", "food-notes", "frequent-foods", "garmin",
+  "evidence", "exercise", "exercises", "export", "family", "feedback", "food-notes", "frequent-foods", "garmin",
   "goal", "goal-checkin", "guidelines", "health", "health-docs", "health-export", "health-metrics",
   "health-report", "injury-impacts", "insights", "journey", "last-set", "learned-timeline", "learnings",
   "markers", "meal-plans", "mealplans", "memory", "muscle-load", "muscle-trajectory", "next-step",
@@ -58,7 +62,7 @@ const CLIENT_API_ROUTE_FAMILIES = [
   "sets", "settings", "since-last", "stats", "strength-journey", "suggestions", "supplements",
   "symptom-links", "team-week", "telemetry", "test-week", "today", "today-agenda", "today-plan-day",
   "today-read", "today-side", "today-strength-line", "training-agenda", "training-symptoms", "trajectory",
-  "turns", "update-check", "update-status", "version", "volume", "week-ahead", "week-wins", "whole-person-trajectory",
+  "turns", "update", "update-check", "update-status", "version", "volume", "week-ahead", "week-wins", "welcome", "whole-person-trajectory",
 ];
 const CLIENT_API_ROUTE_FAMILY_SET = new Set(CLIENT_API_ROUTE_FAMILIES);
 // Same bound as the contract's DIAGNOSTIC_ROUTE_SEGMENT: an unknown family is
@@ -93,6 +97,20 @@ function clientDiagnosticNormalizeRoute(value: unknown): string {
   }
 }
 
+const CLIENT_WELCOME_STEPS = new Set(["hello", "connect.install", "connect.signin", "connect.verify", "meet"]);
+const CLIENT_WELCOME_TOKEN = /^[a-z][a-z0-9_-]{0,31}$/;
+
+// A welcome failure carries only three allowlisted tokens; anything else drops the field.
+function clientDiagnosticWelcome(value: unknown): ClientDiagnosticWelcome | null {
+  const row = value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+  if (!row) return null;
+  const step = String(row.step ?? "");
+  const provider = String(row.provider ?? "");
+  const code = String(row.code ?? "");
+  if (!CLIENT_WELCOME_STEPS.has(step) || !CLIENT_WELCOME_TOKEN.test(provider) || !CLIENT_WELCOME_TOKEN.test(code)) return null;
+  return { step, provider, code };
+}
+
 function clientDiagnosticSanitize(value: unknown, max = 300): string {
   let text = clientDiagnosticBound(value, max * 2);
   // Remove URL query values and common credential-shaped fragments. Do this on
@@ -101,7 +119,7 @@ function clientDiagnosticSanitize(value: unknown, max = 300): string {
   text = text.replace(/([?&][a-z0-9_.-]+)=([^&#\s]+)/gi, "$1=[redacted]");
   text = text.replace(/\bauthorization\b\s*[:=]\s*(?:bearer\s+)?[^\s,;]+/gi, "Authorization=[redacted]");
   text = text.replace(
-    /\b(authorization|bearer|token|api[_ -]?key|password|secret)\b\s*[:=]\s*[^\s,;]+/gi,
+    /\b(authorization|bearer|token|api[_ -]?key|password|secret|pair|session|challenge|sig|feed)\b\s*[:=]\s*[^\s,;]+/gi,
     "$1=[redacted]"
   );
   text = text.replace(/\b(sk-[a-z0-9_-]{8,}|gh[pousr]_[a-z0-9_]{8,})\b/gi, "[redacted]");
@@ -177,11 +195,15 @@ function createClientDiagnosticReporter(
   function normalize(input: ClientDiagnosticInput): ClientDiagnosticEvent {
     const route = clientDiagnosticNormalizeRoute(input.route);
     const method = clientDiagnosticBound(input.method, 12).toUpperCase();
-    const message = clientDiagnosticSanitize(input.message || input.kind.replaceAll("_", " "), 300);
+    const welcome = clientDiagnosticWelcome(input.welcome);
+    // A welcome event's message is built from its tokens, never taken from the caller.
+    const message = welcome
+      ? `welcome ${welcome.step} ${welcome.code}`
+      : clientDiagnosticSanitize(input.message || input.kind.replaceAll("_", " "), 300);
     const stack = clientDiagnosticSanitize(input.stack, 1800);
     const tab = clientDiagnosticBound(input.tab || options.tab?.(), 40);
     const release = clientDiagnosticBound(input.release || options.release?.(), 40);
-    const seed = [input.kind, route, method, input.status || "", message, stack.split(" ").slice(0, 12).join(" ")].join(
+    const seed = [input.kind, route, method, input.status || "", message, welcome ? welcome.provider : "", stack.split(" ").slice(0, 12).join(" ")].join(
       "|"
     );
     const event: ClientDiagnosticEvent = {
@@ -190,6 +212,7 @@ function createClientDiagnosticReporter(
       message,
       fingerprint: clientDiagnosticBound(input.fingerprint, 100) || `${input.kind}:${clientDiagnosticHash(seed)}`,
     };
+    if (welcome) event.welcome = welcome;
     if (stack) event.stack = stack;
     if (route) event.route = route;
     if (method) event.method = method;
@@ -214,6 +237,8 @@ function createClientDiagnosticReporter(
   }
   function report(input: ClientDiagnosticInput): boolean {
     try {
+      // A welcome event with anything off-taxonomy is dropped, never queued as free text.
+      if (input.welcome != null && !clientDiagnosticWelcome(input.welcome)) return false;
       const event = normalize(input);
       const timestamp = now();
       const seen = recent.get(event.fingerprint) || 0;

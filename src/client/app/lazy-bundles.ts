@@ -1,4 +1,6 @@
-type CairnLazyBundleName = ClientLazyBundleName;
+// "welcome" (the first-run stage and the shared AI sign-in it and Settings use) is not
+// yet in the shared ClientLazyBundleName list, so the loader widens its own name.
+type CairnLazyBundleName = ClientLazyBundleName | "welcome";
 
 // @ts-check
 // On-demand loader for app-shell bundles index.html does NOT load eagerly.
@@ -36,6 +38,11 @@ type CairnLazyBundleName = ClientLazyBundleName;
     // Today's below-the-Brief sections (the digest, the week, Coming up, Where you're
     // heading): Today mounts them through withBundle once its frame is painted.
     "today-ahead": "/js/bundle-14-today-ahead.js",
+    // The first-run welcome and the AI sign-in panel (Settings → Agents reuses it).
+    "welcome": "/js/bundle-15-welcome.js",
+    // Sign-in and the passkey ceremonies: a signed-out device (the eager 401 door,
+    // token-sheet.ts) and Settings → Devices.
+    "auth": "/js/bundle-16-auth.js",
   };
 
   // What else a bundle calls into at render time. Health reuses the body-metrics
@@ -48,15 +55,18 @@ type CairnLazyBundleName = ClientLazyBundleName;
     "train": ["calendar"],
     "horizon": ["train"],
     "ask": [],
-    "settings": [],
+    // Settings → Agents "Connect" mounts the welcome bundle's sign-in panel.
+    "settings": ["welcome"],
     calendar: [],
     meals: [],
     "today-ahead": ["calendar"],
+    "welcome": [],
+    "auth": [],
   };
 
   // Warm order after first paint: the homes a tap away first, Settings last.
   // Today's own lower half leads: it is the home every open lands on.
-  const PREFETCH_ORDER: readonly CairnLazyBundleName[] = ["today-ahead", "train", "ask", "horizon", "calendar", "me-health", "meals", "settings"];
+  const PREFETCH_ORDER: readonly CairnLazyBundleName[] = ["today-ahead", "train", "ask", "horizon", "calendar", "me-health", "meals", "settings", "welcome"];
 
   const inflight = new Map<CairnLazyBundleName, Promise<void>>();
   const executed = new Set<CairnLazyBundleName>();

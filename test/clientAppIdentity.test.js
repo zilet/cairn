@@ -98,22 +98,22 @@ test("the re-add note lists exactly what this phone would need entered again", (
   const storage = createStorage({ cairn_token: "s3cret-token", "cairn-bm-unit": "cm", restSec: "120" });
   const reentry = model.reentry((key) => storage.getItem(key));
   assert.deepEqual(JSON.parse(JSON.stringify(reentry)), {
-    token: true,
     preferences: ["your body measurement units", "your rest timer length"],
   });
   const host = renderHtml(win.CairnAppIdentity.readdNoteHtml(reentry), { document: win.document });
   const text = host.textContent;
   assert.match(text, /new icon and name/);
   assert.match(text, /only if you like/);
-  assert.match(
-    text,
-    /your access token \(copy it first from Settings → Data\), your body measurement units and your rest timer length/
-  );
+  assert.match(text, /these would need entering again: your body measurement units and your rest timer length/);
+  // Signing in is never a re-entry chore: a Home Screen app signs itself in.
+  assert.doesNotMatch(text, /access token/);
+  assert.match(text, /Home Screen apps sign in on their own with a passkey or a pairing code/);
   assert.doesNotMatch(text, /s3cret/, "the note never shows the token");
   assert.ok(host.querySelector("button[data-readd-dismiss]"));
 
   const bare = renderHtml(win.CairnAppIdentity.readdNoteHtml(model.reentry(() => null)), { document: win.document });
   assert.match(bare.textContent, /Nothing needs entering again/);
+  assert.match(bare.textContent, /sign in on their own/);
 });
 
 test("mountReaddNote shows only when the rules say so, and dismissal is remembered for this identity", async () => {
@@ -218,60 +218,15 @@ test("Settings shows the server build and whether this app runs the server's cur
   assert.match(gone.textContent, /Checking/, "a detached card is never repainted");
 });
 
-test("Copy token uses the clipboard and never puts the token on screen", async () => {
+test("the This app block never offers the access token, even when an older build stored one", async () => {
   const win = load();
   const host = createHost(win.document);
-  const written = [];
-  const { deps, toasts } = cardDeps({ clipboard: { writeText: async (text) => written.push(text) } });
-  win.CairnAppIdentityController.mountAppCard(host, deps);
-  await flush();
-  assert.doesNotMatch(host.innerHTML, /tok-XYZ/);
-  await host.querySelector("[data-appid-copy-token]").click();
-  assert.deepEqual(written, ["tok-XYZ"]);
-  assert.deepEqual(toasts, ["Token copied"]);
-  assert.equal(host.querySelector(".app-id-token-field").hidden, true);
-  assert.doesNotMatch(host.innerHTML, /tok-XYZ/);
-});
-
-test("Copy token falls back to a selected field, cleared the moment it loses focus", async () => {
-  const win = load();
-  const host = createHost(win.document);
-  const { deps, toasts } = cardDeps({
-    clipboard: {
-      writeText: async () => {
-        throw new Error("NotAllowedError");
-      },
-    },
-    execCopy: () => false,
-  });
-  win.CairnAppIdentityController.mountAppCard(host, deps);
-  await flush();
-  await host.querySelector("[data-appid-copy-token]").click();
-  const field = host.querySelector(".app-id-token-field");
-  assert.equal(field.hidden, false);
-  assert.equal(field.value, "tok-XYZ");
-  assert.equal(win.document.activeElement, field);
-  assert.deepEqual(toasts, ["Select the token and copy it"]);
-  field.blur();
-  assert.equal(field.value, "");
-  assert.equal(field.hidden, true);
-
-  const legacy = createHost(win.document);
-  const second = cardDeps({ execCopy: () => true });
-  win.CairnAppIdentityController.mountAppCard(legacy, second.deps);
-  await flush();
-  await legacy.querySelector("[data-appid-copy-token]").click();
-  assert.deepEqual(second.toasts, ["Token copied"]);
-  assert.equal(legacy.querySelector(".app-id-token-field").hidden, true);
-  assert.equal(legacy.querySelector(".app-id-token-field").value, "");
-});
-
-test("no stored token means no Copy token action", async () => {
-  const win = load();
-  const host = createHost(win.document);
-  win.CairnAppIdentityController.mountAppCard(host, cardDeps({ storage: createStorage() }).deps);
+  // cardDeps' storage still holds a legacy cairn_token: the block ignores it.
+  win.CairnAppIdentityController.mountAppCard(host, cardDeps().deps);
   await flush();
   assert.equal(host.querySelector("[data-appid-copy-token]"), null);
+  assert.equal(host.querySelector(".app-id-token-field"), null);
+  assert.doesNotMatch(host.innerHTML, /tok-XYZ|Copy token/);
 });
 
 test("workerShell asks the controlling worker over a MessageChannel and gives up quietly", async () => {
@@ -333,10 +288,7 @@ test("Settings -> Data mounts the This app block under Cairn version", async () 
   const card = root.querySelector("#appIdentityCard");
   assert.ok(card, "the block sits in the Data slice, standalone or not");
   assert.equal(card.querySelector(".app-id-row dd code").textContent, "2.0.0@abc123def456");
-  assert.ok(
-    card.querySelector("[data-appid-copy-token]"),
-    "Copy token is there in the installed app, where re-adding starts"
-  );
+  assert.equal(card.querySelector("[data-appid-copy-token]"), null, "no Copy token: Home Screen apps sign in on their own");
 });
 
 test("an installed app's Today gets no install coach — on iOS, the re-add note when the rules say so", () => {

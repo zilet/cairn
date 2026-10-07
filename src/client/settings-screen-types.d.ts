@@ -38,6 +38,7 @@ type SettingsScreenWorkingModel = {
   coach_hour: number;
   time_zone: string;
   update_check_enabled: boolean;
+  usage_ping_enabled: boolean;
   lead_mode: "lead" | "announce_first" | "review_everything";
   run_units: "km" | "mi";
   weight_units: "lb" | "kg";
@@ -59,6 +60,7 @@ type SettingsScreenPersistBody = {
   chat_routing_mode: "adaptive" | "single";
   chat_profile_bindings: Record<string, Record<string, Record<string, unknown>>>;
   update_check_enabled: boolean;
+  usage_ping_enabled: boolean;
   lead_mode: "lead" | "announce_first" | "review_everything";
   run_units: "km" | "mi";
   weight_units: "lb" | "kg";
