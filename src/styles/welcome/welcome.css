@@ -14,7 +14,7 @@
 :root:has(body.welcome-open),body.welcome-open{overflow:hidden}
 body:is(.welcome-open,.welcome-pending)>:is(header,#view,.tabbar){visibility:hidden}
 
-.wel{position:fixed;inset:0;z-index:calc(var(--z-tabbar) + 2);overflow-y:auto;overscroll-behavior:contain;
+.wel{position:fixed;inset:var(--vvt,0px) 0 var(--vvb,0px);z-index:calc(var(--z-tabbar) + 2);overflow-y:auto;overscroll-behavior:contain;
   background:var(--ground);color:var(--ink);-webkit-overflow-scrolling:touch}
 .wel-pane{box-sizing:border-box;width:100%;max-width:min(30rem,100%);min-height:100%;margin:0 auto;
   padding:calc(env(safe-area-inset-top) + 20px) var(--gutter) calc(env(safe-area-inset-bottom) + 28px);

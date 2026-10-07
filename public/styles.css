@@ -5677,7 +5677,7 @@ a.msrow-link:active{transform:var(--press-lg)}
 .agent-login-ft .btn,.agent-login-ft .btn-solid{min-height:40px;padding:0 var(--space-10)}
 :root:has(body.welcome-open),body.welcome-open{overflow:hidden}
 body:is(.welcome-open,.welcome-pending)>:is(header,#view,.tabbar){visibility:hidden}
-.wel{position:fixed;inset:0;z-index:calc(var(--z-tabbar) + 2);overflow-y:auto;overscroll-behavior:contain;background:var(--ground);color:var(--ink);-webkit-overflow-scrolling:touch}
+.wel{position:fixed;inset:var(--vvt,0px) 0 var(--vvb,0px);z-index:calc(var(--z-tabbar) + 2);overflow-y:auto;overscroll-behavior:contain;background:var(--ground);color:var(--ink);-webkit-overflow-scrolling:touch}
 .wel-pane{box-sizing:border-box;width:100%;max-width:min(30rem,100%);min-height:100%;margin:0 auto;padding:calc(env(safe-area-inset-top) + 20px) var(--gutter) calc(env(safe-area-inset-bottom) + 28px);display:flex;flex-direction:column;animation:in var(--dur-3) var(--ease) both}
 .wel h1:focus{outline:none}
 .wel-mark{margin:0;font-family:var(--font-display);font-size:var(--text-lg);line-height:var(--leading-tight);letter-spacing:var(--tracking-tight);color:var(--ink)}

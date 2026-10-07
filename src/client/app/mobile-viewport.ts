@@ -116,6 +116,10 @@
       // keyboard rather than snap down behind it.
       const rawVvb = window.innerHeight - (vv.offsetTop + vv.height);
       root.style.setProperty("--vvb", `${Math.round(Math.max(0, rawVvb))}px`);
+      // Its top twin: how far iOS has scrolled the visual viewport down (it does as the
+      // keyboard rises). A full-screen fixed layer pinned between --vvt and --vvb is
+      // exactly the visible area, so its bottom-docked composer rides the keyboard top.
+      root.style.setProperty("--vvt", `${Math.round(Math.max(0, vv.offsetTop))}px`);
     };
     // The focused field (and its composer) stays in view above the keyboard. The
     // browser scrolls a focused field into view as the keyboard rises, but it measures
