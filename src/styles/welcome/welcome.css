@@ -184,7 +184,7 @@ body:is(.welcome-open,.welcome-pending)>:is(header,#view,.tabbar){visibility:hid
   font-family:var(--font-ui);font-size:var(--text-base);line-height:var(--leading-normal);color:var(--ink)}
 .wel-text::placeholder{color:var(--muted)}
 .wel-text:focus{outline:none}
-.wel-mic{position:static;flex:0 0 auto;align-self:flex-end;width:40px;height:40px;margin:0}
+.wel-mic{position:relative;flex:0 0 auto;align-self:flex-end;width:40px;height:40px;margin:0}
 .wel-send{flex:0 0 auto;display:grid;place-items:center;width:40px;height:40px;border:0;border-radius:50%;
   background:var(--ink);color:var(--on-ink);cursor:pointer;transition:background var(--dur-1) var(--ease),transform var(--dur-1) var(--ease)}
 .wel-send svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
