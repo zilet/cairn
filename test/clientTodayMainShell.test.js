@@ -43,7 +43,8 @@ test("Body & recovery: ONE week view on Today — no second Mon–Sun strip, no 
   const html = shell.weekFoldHtml(
     { weekRecap: "2 lifts", cellsHtml: `<div class="stat">x</div>`, planned: 5, done: 4, weekKm: 22.34 },
     { escapeHtml: (v) => String(v).replace(/</g, "&lt;") },
-    { currentWeight: 172.4, trendLbWk: -0.76, runs: true }
+    // The trend is the ONE weight-trend read's words (stats.weight_trend.rate_words), never a re-derived slope.
+    { currentWeight: 172.4, trendWords: "−0.8 lb/wk", runs: true }
   );
   assert.match(html, /<section class="tweek" id="todayWeek" aria-label="Body and recovery">/);
   assert.match(html, /<span class="lbl">Body &amp; recovery<\/span>/);
@@ -54,7 +55,7 @@ test("Body & recovery: ONE week view on Today — no second Mon–Sun strip, no 
   assert.doesNotMatch(html, /cardio/);
   // The weigh-in tile keeps the inline capture's id; its number has its own node so
   // a save rewrites it without dropping the sparkline beside it.
-  assert.match(html, /<div class="tweek-tallies is-one"><button id="wtChipMini" class="tweek-tally tweek-wt"[^>]*><span class="tweek-n num" data-wtval>172\.4<span class="tweek-u">lb<\/span><\/span><small>−0\.8\/wk<\/small><span class="tweek-spark" id="tweekSpark"/);
+  assert.match(html, /<div class="tweek-tallies is-one"><button id="wtChipMini" class="tweek-tally tweek-wt"[^>]*><span class="tweek-n num" data-wtval>172\.4<span class="tweek-u">lb<\/span><\/span><small>−0\.8 lb\/wk<\/small><span class="tweek-spark" id="tweekSpark"/);
   assert.match(html, /id="tweekGauges"/);
   // The weight input opens under the tallies, outside the fold.
   assert.ok(html.indexOf('id="wtInlineInput"') < html.indexOf("<details"));
@@ -73,10 +74,24 @@ test("Body & recovery keeps a cardio count only for an athlete with no running",
   assert.doesNotMatch(none, /cardio/, "no '0 cardio' tile");
 });
 
-test("the redesigned Today's async slots: the digest before the week, Coming up and the board after", () => {
+test("the redesigned Today's async slots: the digest before the week, the one new connection after", () => {
   const shell = loadMainShell();
   assert.equal(shell.digestSlotHtml(), `<div id="todayDigestSlot" class="tdg-slot"></div>`);
-  assert.match(shell.aheadSlotsHtml(), /id="todayHorizonSlot"[\s\S]*id="todayHeadingSlot"/);
+  // Coming up left Today for Horizon: no slot for it.
+  assert.equal(shell.aheadSlotsHtml(), `<div id="todayHeadingSlot" class="thd-slot"></div>`);
+});
+
+test("a kg athlete reads and types bodyweight in kg: the tile and the weigh-in input follow the unit", () => {
+  const context = { Object, String };
+  context.window = context;
+  context.globalThis = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/today-main-shell-client.js"), "utf8"), context);
+  context.CairnFmt.set({ weight_units: "kg" });
+  const html = context.CairnTodayMainShell.weekFoldHtml({}, { escapeHtml: String }, { currentWeight: 176.37, trendWords: "−0.4 kg/wk", runs: true });
+  assert.match(html, /data-wtval>80<span class="tweek-u">kg<\/span><\/span><small>−0\.4 kg\/wk<\/small>/);
+  assert.match(html, /<input id="wtInlineInput"[^>]*placeholder="Weight \(kg\)" aria-label="Bodyweight in kg" data-unit="kg">/);
+  assert.doesNotMatch(html, /\blb\b/);
 });
 
 test("Today lead leaves the check-in to the Brief and keeps the tag chips, without the retired frequents strip", () => {

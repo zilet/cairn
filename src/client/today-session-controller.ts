@@ -283,7 +283,7 @@ type TodaySessionSurfaceOptions = ClientTodaySessionSurfaceOptions;
 
         const settle = () => {
           if (!surfaceStillCurrent(deps, actionDate, actionTab)) return;
-          deps.toast(`Done · ${Number(summary.sets || 0)} sets · ${Number(summary.tonnage || 0).toLocaleString()} lb`);
+          deps.toast(`Done · ${Number(summary.sets || 0)} sets${summary.tonnage_words ? ` · ${String(summary.tonnage_words)}` : ""}`); // the server's words, athlete's unit
           deps.renderToday();
         };
         const surface = deps.root.querySelector<HTMLElement>(".plansurface");

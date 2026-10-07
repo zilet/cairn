@@ -6,9 +6,9 @@
 // into it, adds ?peek=<date> to history (so the phone's Back closes it) and ends it with
 // one "Open day ›" — the day's page, read under Today. Tapping the open day again, its
 // Close, or Back folds it; a Today painted on an entry whose address names a peek opens
-// that day again. A repaint of the week rewrites only the days, the header line and
+// that day again. A repaint of the week rewrites only the days, the header note and
 // today's line, so an open day stays open.
-// The header's block clock and run plan arrive from the path read through `setHeader`.
+// The header's note (a running recovery week) arrives through `setHeader`.
 // Delegated on the slot through CairnUiActions.mount (idempotent per slot); the SLOT
 // node rides the Brief's in-place upgrade (carryBriefSlots), so its listeners and any
 // paint still to land stay on screen. Returns the teardown.
@@ -23,28 +23,20 @@
     load(path: string, options: { key: string }): Promise<unknown>;
   };
 
-  type StripHeader = { block?: string; kmPlanned?: number | null; units?: string };
+  type StripHeader = { block?: string };
 
   const WEEK: readonly [string, string] = ["/plan/week", "plan:week"];
   /** Every mounted strip, so a tap on one that is being replaced reaches its successor. */
   const LIVE = new Set<(date: string | null) => void>();
   /**
-   * What each slot's header says beside the week's counts (the block clock, the week's
-   * run plan), set by Today's ahead controller from the path read — it may land before
-   * or after the week does, and survives the slot being carried across a Brief upgrade.
+   * What each slot's header notes (a running recovery week), set by Today's ahead
+   * controller — it may land before or after the week does, and survives the slot being
+   * carried across a Brief upgrade.
    */
   const HEADER = new WeakMap<Element, StripHeader>();
-  /** Each mounted slot's own repaint of its header line. */
+  /** Each mounted slot's own repaint of its header note. */
   const REPAINT = new WeakMap<Element, () => void>();
 
-  /** The athlete's run units from the warm settings read; km until it is known. */
-  function unitsOf(deps: Pick<TodayStripDeps, "peek">): string {
-    const warm = deps.peek("settings")?.data as { settings?: { run_units?: unknown } } | null | undefined;
-    const raw = String(warm?.settings?.run_units ?? "").toLowerCase();
-    return raw === "mi" || raw === "mile" || raw === "miles" ? "mi" : "km";
-  }
-
-  /** Set the block clock / the week's run plan on a slot's strip (painted now or on its first paint). */
   /** The day the address names as peeked (?peek=), the drill's word; null before it loads. */
   function peekedDay(): string | null {
     return typeof CairnDrill !== "undefined" ? CairnDrill.peeked() : null;
@@ -62,24 +54,16 @@
     let detailTeardown: (() => void) | null = null;
     let lastDays = "";
     let lastNow = "";
-    let lastTally = "";
     let lastBlock = "";
     let first = true;
     const host = slot as HTMLElement;
     const q = <T extends Element = HTMLElement>(sel: string): T | null => slot.querySelector<T>(sel);
-    const header = (): StripHeader => ({ ...(HEADER.get(slot) || {}), units: unitsOf(deps) });
+    const header = (): StripHeader => HEADER.get(slot) || {};
 
-    // The header line and the block clock, rewritten only on a change.
+    // The header note, rewritten only on a change.
     function paintHeader(): void {
       if (!live || !slot.isConnected || !week || first) return;
-      const head = header();
-      const nextTally = CairnTodayStrip.tallyHtml(week, head);
-      const tally = q("[data-tstrip-tally]");
-      if (tally && nextTally !== lastTally) {
-        tally.innerHTML = nextTally;
-        lastTally = nextTally;
-      }
-      const nextBlock = String(head.block || "");
+      const nextBlock = String(header().block || "");
       const block = q("[data-tstrip-block]");
       if (block && nextBlock !== lastBlock) {
         block.textContent = nextBlock;
@@ -109,7 +93,6 @@
         host.innerHTML = CairnTodayStrip.stripHtml(week, deps.date, null, head);
         lastDays = CairnTodayStrip.daysHtml(cells, null);
         lastNow = CairnTodayStrip.nowHtml(week, cells);
-        lastTally = CairnTodayStrip.tallyHtml(week, head);
         lastBlock = String(head.block || "");
         // A day opened before Today repainted stays open across the repaint, and an
         // entry whose address names a peek (Back from the day's page) opens it again.

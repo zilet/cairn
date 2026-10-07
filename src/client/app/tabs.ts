@@ -264,6 +264,11 @@ type TabSwitchOptions = {
         if (state.tab !== next) return;
         paintTabSkeleton(next);
         armHydrate();
+        // While the destination loads, #view is named for it (never the tab just left);
+        // the post-render sync below hands the name to its heading once one paints.
+        try {
+          view.setAttribute("aria-label", tabDisplayName(next));
+        } catch {}
         // Not returned: the swap must not wait on the renderer's network reads.
         startRender().catch(() => {});
       })

@@ -52,6 +52,7 @@ import { activeBlockContext } from "../../repo/program-blocks.js";
 import { resolvedBlockPhase } from "../../repo/block-phase.js";
 import { pickDayVariant } from "../../repo/brain/day-read-rules.js";
 import { flexibleTrainingAgenda, type FlexibleRunIntent } from "../../repo/flexible-training-agenda.js";
+import { activeContextEffect, contextEventReadsAsLabDraw } from "../../repo/context-effect.js";
 import { listContextEvents } from "../../repo/health.js";
 import { getHrModel } from "../../repo/hr-model.js";
 import { getPlan } from "../../repo/plan.js";
@@ -1305,12 +1306,28 @@ function headlineOf(
   return past ? "A rest day." : "A rest day. Nothing is planned.";
 }
 
+/**
+ * The life context that bears on the day, each with its why: "Lisbon trip — travel
+ * tends to scramble fueling and the routine". A caveat is said only when the context
+ * engine (activeContextEffect, context-effect.ts) reads a consequence for the day —
+ * sleep, load, fueling, inflammation — or the event is a blood draw (sequencing). A
+ * note it reads nothing from ("Head blurriness on walks" filed as a life event) is not
+ * a caveat on a Pull day: a bare title with no why is never printed.
+ */
 function caveatsOf(date: string): string[] {
   const events = safe(() => listContextEvents({ activeOnly: true, on: date }) as any[], []);
+  const effect = safe(() => activeContextEffect(date, events), null);
   const out: string[] = [];
+  const add = (line: string) => {
+    if (line && !out.includes(line)) out.push(line);
+  };
+  for (const item of effect?.active ?? []) {
+    const why = text(item.reason).split("; ")[0];
+    if (why) add(`${text(item.title)} — ${why}`);
+  }
   for (const e of events) {
     const title = text(e?.title);
-    if (title && !out.includes(title)) out.push(title);
+    if (title && contextEventReadsAsLabDraw(e)) add(`${title} — a blood draw: keep any training for after it`);
   }
   return out.slice(0, 4);
 }

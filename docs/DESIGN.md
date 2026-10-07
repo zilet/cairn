@@ -234,16 +234,40 @@ Horizon's two views and Train's charts share one chart language (`horizon-chart-
   drawn.
 - **Space is held** at the chart's own aspect ratio while its reads land, so nothing jumps.
 
-Horizon opens on **To the race** when a race is set and on **Season** when there is nothing to
-run toward (a view the athlete picks holds for the session); **Week** is this week day by day
-from the plan-week read, its first sentence the serif voice. How much running Horizon holds is the
+Horizon opens on **Week**, always — a cold `/app/horizon` and a tab tap land in the same place,
+and a view picked earlier is never remembered (docs/IA.md "Horizon landing"). Week is the
+designed landing over ONE read, GET `/api/week` (`WeekRead`, `horizon-week-{client,controller}.ts`,
+SWR key `plan:week-read`), top to bottom: the **frame line** (`.frameline`,
+`frame-line-client.ts`: a mono kicker "This week · Oct 5 – Oct 11", the serif headline "26 days to
+Cambridge Half", the one line "Sharpen · block week 6 of 6 · push through Nov 15" — both verbatim —
+and a block ribbon of one step per block week, behind filled, this week ringed in dawn, "Race ·
+Nov 1" at its end); **this week's shape** (`.wkshape`, `week-strip-client.ts` variant "shape": seven
+real buttons, each a stone-coloured bar whose height is the server's relative dose
+`load.height` — strength below endurance on a day with both; done solid and ticked, a key session
+still ahead hollow in its deep hue, planned work a past day missed a quiet outline, rest a low
+stub, today outlined in dawn — labelled "Thu, Oct 8: Pull · Threshold intervals, 5 mi. Big day
+load", never a number; a tap PEEKS the day through `CairnDrill` into the fold under the shape),
+then the week's ONE summary sentence (Horizon owns it) and, folded under "Day by day", the days as
+the day view's own row variant (each opens its page); **Still open** (two lines at most, each
+opening its day); **Next up** (the next three milestones as `.msrow` milestone rows — the Season's
+own row — and "All of the season ›"); and **Goals** (`.goalrow`, the Path card's thread row lifted
+into `goal-row-client.ts`: the race estimate WITH its time, the weight on its one trend, the
+anchor lift, each over a calm meter filled from the server's `progress` and said in a word —
+"Past halfway", the race's "Fits" — never a percent). The shared objects (`week-model`,
+`week-strip`, `milestone-row`, `goal-row`, `frame-line`) ride the lazy `calendar` bundle; CSS
+`horizon/week.css`. How much running Horizon holds is the
 athlete's: a runner with no race reads the view as **Running** (this week's volume and the last
 four weeks as small columns, with the way to set a race), and a lifting-only athlete has no race
-view at all. The race view is a **glance**: one serif line from the ladder's own count ("Five
-weeks of build, then the half."), the terrain, THIS WEEK in one row (stage, logged of planned on a
+view at all. The race view is a **glance**: the week's frame line as its hero (the same words Week
+leads with; the ladder's own serif count — "Five weeks of build, then the half." — only until the
+week is read), the terrain, THIS WEEK in one row (stage, logged of planned on a
 quiet bar, the week's coaching sentence), and the finish estimate as a footnote, with the race page
-one tap away. The race page (`/app/horizon/race`) is the **depth**, top to bottom: the race, the
-km/mi switch and the estimate's one line ("Reads about 1:54 · inside sub-2:00 · 13 min faster in
+one tap away. **Season** is the goal line (its phase as ONE sentence, "Leaning-out phase since Sep
+25, toward 154 lb."; the weight as the week read's goal row, so the season never prints a second
+rate; its dates as milestone rows) and labs and scans, read from GET `/api/health-docs/draws` — one
+row per draw, never the same draw three times. Units are Settings' alone: no view carries a km/mi
+switch. The race page (`/app/horizon/race`) is the **depth**, top to bottom: the race and the
+estimate's one line ("Reads about 1:54 · inside sub-2:00 · 13 min faster in
 the last month"); THIS WEEK, the page's one focal card (kicker "This week · Sharpen · 4 wk out",
 the server's sentence for the week and one detail line, the volume as a **segmented bar** — one
 segment per logged run in its tone, easy a plain endurance fill, long the deep endurance ink,
@@ -326,8 +350,8 @@ Brief's voice is the page's one focal point; it pins to the top of the scroll an
 condenses to a slim blurred band — see `body[data-tab="today"] header.condensed`).
 
 **Today (Atelier v2).** One focal point, then show-when-needed, in this order: the Brief's voice →
-the state line (NOW) → What's ahead → the Path → Fuel today → the overnight digest → Body & recovery
-→ Coming up → the new connection ("Today's run order" below has the Brief's own detail)
+the state line (NOW) → What's ahead → the Horizon glance line → Fuel today → the overnight digest →
+Body & recovery → the new connection ("Today's run order" below has the Brief's own detail)
 (see "Today, the road ahead" below, which supersedes the Around today / Worth a look parts here). The six stones no longer print on Today: they
 live on You (the cairn-stack) and each stone's own detail page. The Brief (`.brief`) is the
 page's voice, not a card: it sits on the ground with a mono kicker, the Young Serif
@@ -393,11 +417,11 @@ so train depends on calendar — with the progression's step in sage only when i
 bar drawn to scale (warm-up → the work, one block per rep → cool-down, each part a zone fill
 `--ddv-z1..5` mixed from stone hues), its parts as rows and three facts (zone, heart-rate band, pace
 band in the athlete's run units); "Worth watching"; and "Why this day". **What's ahead**
-(`.tstrip` in `#todayStripSlot`, Today's ONE week view, under the Brief's state line and before the
-Path card, `today-strip-{client,controller}.ts` in the today-ahead bundle): a mast with the block
-clock on its right (`.tstrip-block`), the week so far in one header line (`.tstrip-tally`: "2 of 5
-lifting days · 6.1 of ~33 km · 3 new bests" — the server's `progress` counts, distance in the
-athlete's run units, never a score), seven real `<button>`s (weekday, date, the lift's short name
+(`.tstrip` in `#todayStripSlot`, Today's ONE week view and a GLANCE, under the Brief's state line and
+before the Horizon glance line, `today-strip-{client,controller}.ts` in the today-ahead bundle): a
+mast naming only a running recovery week on its right (`.tstrip-block`), no summary or tally line
+(the week's sentence and counts are Horizon's — docs/IA.md "one home per fact"; the stage word
+rides the glance line), seven real `<button>`s (weekday, date, the lift's short name
 in a strength tag, the run as a bar — longer for the long run, hatched for quality — ticked when
 done, today ringed in dawn), "X in place of Y" when today adapted (the strength line itself is the
 Brief's, said once), and a fold (grid rows 0fr → 1fr, `inert` while closed, `aria-expanded` on the
@@ -417,7 +441,7 @@ train/done read the NOW card (or the bare lift line with its one action), on a r
 lift line alone with the plan day held light in the server's own words (`.brief-strength-held`,
 `strength_line.suggestion_label`: "lighter today", the caveat Train prints — and the kicker then
 drops its minutes, so "Easy day · 25 min" never contradicts "Pull"); the check-in row (rest/easy
-only); What's ahead; Your path; the push offer; the quiet day's menu (rest/easy only) and its
+only); What's ahead; the Horizon glance line; the push offer; the quiet day's menu (rest/easy only) and its
 actions; the steer line; then Fuel today (placed just before the provenance line). The sections
 from What's ahead down break on `--today-gap`.
 
@@ -429,7 +453,7 @@ small pill, `aria-expanded` mirroring the why): the hold's short form ("short ni
 recovering", "Bench Press holding"), its full sentence in the label. A chip opens the Brief's own
 "tap to see why", whose panel then leads with "Why not more today" — the server's sentence and
 every hold in full (`.tpush-why`). A stance that ran out is said once. The coach's **push offer**
-(`#todayPushOfferSlot`, `.tpush-offer`, after the Path card) is a calm pull card, never a
+(`#todayPushOfferSlot`, `.tpush-offer`, after the Horizon glance line) is a calm pull card, never a
 notification: a dawn mono kicker, the server's question in the serif voice, the log's evidence as
 a short list, how long it would run, and two `.btn`s (the server's labels). Accept is optimistic
 but truthful ("Opening the throttle…", a refusal puts the card back with the server's words, a yes
@@ -444,20 +468,13 @@ it is on, what to do now, what the team did, and what is coming. Top to bottom:
 
 - **The Brief** keeps its kicker, serif headline and why (the agent credits work already logged today
   and points forward once, from `DATA.today_path`). "Around today" left today's own Brief (another
-  date's Brief keeps the fold): the road ahead is Coming up, the block clock rides This week's mast.
-- **The Path card** (`.tpath`, `today-path-client.ts` + `today-path-controller.ts`, eager; GET
-  `/api/today-path`) sits in `#todayPathSlot` under the why, before NOW, and rides the Brief's in-place
-  upgrade like the fuel slot (`carryBriefSlots`). A mono kicker ("Your path · 30 days to <race>"), an
-  SVG trail drawn to scale in time from `trail_start` through today to the furthest of peak week, the
-  race and the goal date (dotted `.tpath-trail`; the walked part `.tpath-walked` in dawn draws in ONCE
-  over 1.6s on the house curve by `stroke-dashoffset` from `--len`; the "now" dot `.tpath-now` breathes
-  on `--dur-ping` via `.tpath-pulse`; marks take their stone's deep hue: race endurance, goal body,
-  peak the endurance fill), then three threads (`.tpath-thread`: a stone-hue dot, the name with ONE
-  muted trend line, the real number in its unit — race clock, lb, est. 1RM lb), then the week's ONE
-  lever (`.tpath-lever`, a dawn diamond), and a quiet "All goals" link (`.tpath-all`,
-  `/app/horizon/goal`) — the card shows three threads, Horizon holds every goal. A repaint never replays the walk (`.tpath-quiet`,
-  `.today-soft`, a held slot), and reduced motion stills the walk and the breath. No score: the race
-  against its target is the build's fit word.
+  date's Brief keeps the fold): the road ahead is Horizon's, one glance line away.
+- **The Horizon glance line** (`a.tglance`, `today-path-client.ts` + `today-path-controller.ts`, eager;
+  GET `/api/today-path` `frame.glance`) sits in `#todayPathSlot` under What's ahead and rides the
+  Brief's in-place upgrade (`carryBriefSlots`): ONE quiet row, the server's own words ("26 days to
+  Cambridge · Sharpen, wk 6 of 6") and a "›", opening Horizon on its Week. The Path card (trail,
+  threads, lever) and Coming up left Today (docs/IA.md decision 1): the race estimate, the goals and
+  the dated road ahead are Horizon's in full.
 - **NOW** (the lift card) keeps Start / Ask / "Not quite right?". Its meta line carries the anchor (or
   first) lift's prescription ("Assisted Pull-Up · 30 lb assist · 3 × 6–8",
   `CairnTodayBrief.prescriptionLine`); the engine's guardrail and anchor lines moved behind "tap to
@@ -476,23 +493,19 @@ it is on, what to do now, what the team did, and what is coming. Top to bottom:
   decision's server-labelled Undo (on the row for a one-lift change, one `.tdg-undo-row` for a
   multi-lift change). Drafts a newer review set aside never print on Today; they close the Changes
   feed. Omitted when empty.
-- **Body & recovery** (`.tweek`, what was "This week"): Today has ONE week view — the days, the
-  week's counts and the block clock are What's ahead's (above); the old Mon–Sun stones strip and the
+- **Body & recovery** (`.tweek`, what was "This week"): Today has ONE week view — the days are What's
+  ahead's (above), the week's counts Horizon's; the old Mon–Sun stones strip and the
   lifts/km tallies are gone. What stays: the bodyweight tile `#wtChipMini` (number, trend per week
   and a `.tspark` sparkline over a dotted goal line, one full-width row `.is-one`; its tap opens the
-  inline weigh-in) — beside a cardio count only for an athlete who does not run — the recovery gauges (`.tgauge`: Resting HR, HRV,
+  inline weigh-in, typed in the athlete's weight unit and stored as lb at the write edge,
+  `CairnFmt.toLb`; the trend is the one weight-trend read's `rate_words`) — beside a cardio count only for an athlete who does not run — the recovery gauges (`.tgauge`: Resting HR, HRV,
   Sleep; the reading and its unit, the athlete's band `.tgauge-band` with the pin, and a mono line
   "Wed night · usual 41–52" — only the read day's own row is last night, an older one is named by its
   night, a stale one draws no pin), then the older detail folded under "More about this week" (the
   compass tiles and the wearable strip).
-- **Coming up** (`.thz`) replaces "Around today": a mast carrying the season's focus ("Coming up ·
-  focus: lipids & recomposition") over a dated rail (`.thz-row`: a mono date or window, a stone-hue
-  dot on a hairline rail, a title, one sentence) — next long run, peak week, the strength checkpoint,
-  the race (with "The race build →"), the goal date, and the checkup week ("See what to ask for →"
-  opens Health › Next checkup).
 - **The new connection** (`.thd-connection` in `#todayHeadingSlot`): ONE `.thd-insight` sentence,
   only when a new connection exists. The goals board that once sat here ("Where you're heading")
-  repeated the Path card three screens down; it is **All goals** on Horizon's goal line now
+  repeated the old Path card three screens down; it is **All goals** on Horizon's goal line now
   (`CairnHorizon.goalsBoardHtml`, styled in `horizon/horizon.css`): one row per thread (race, weight,
   each strength objective, the priority marker), "start → **now** · goal" in real units over a track
   (`.thd-track`: start and goal marks, `.thd-fill` growing to `--w` once over 1.1s; a marker row shows
@@ -500,7 +513,7 @@ it is on, what to do now, what the team did, and what is coming. Top to bottom:
 - What is left of "Worth a look" (`.today-rail`) holds only what has no other home: the weekly read,
   a Garmin merge's Undo, the install note and health reads (`CairnTodayWorth.railAgenda`).
 
-The digest, the week's strip/gauges/sparkline, Coming up and the new-connection line live in the lazy, route-less
+The digest, the week's strip/gauges/sparkline and the new-connection line live in the lazy, route-less
 `today-ahead` bundle (`bundle-14-today-ahead.js`: `today-digest-client`, `today-week-client`,
 `today-horizon-client`, `today-ahead-controller`), mounted by the screen through
 `withBundle("today-ahead", …)` after the frame paints and warmed first on idle; their slots collapse
@@ -1413,6 +1426,16 @@ in each row.
 `cairn-stack`, `app-readd` (the one-time iOS re-add note) and `app-id` (Settings →
 Data's "This app" block: server build, this app's shell, Copy token), both from
 `app-identity-{model,client,controller}.ts`.
+
+**The time objects** (docs/IA.md "Component architecture", lazy `calendar` bundle, CSS
+`horizon/week.css`): `wkshape` (`week-model.ts` + `week-strip-client.ts`, variant "shape": the
+week as seven dose-sized stone bars, words in every label), `msrow` (`milestone-row-{model,client}.ts`:
+one dated row, a dot or a lab/scan diamond in its stone's deep hue, filled behind today and open
+ahead, an optional "Today" mark), `goalrow` (`goal-row-{model,client}.ts`: a goal's stone dot,
+name over its one line, the real number, and a meter said in a word) and `frameline`
+(`frame-line-client.ts`: the week's frame, verbatim, with the block ribbon). Horizon's Week
+(`hwk`, `horizon-week-{client,controller}.ts`) composes them; To the race and the Season reuse
+`frameline`, `msrow` and `goalrow`.
 
 **`ripple-card`** (Ask, `ripple-card-{model,client,controller}.ts`, `.ripple-*`): the what-if
 answer inline at the foot of the thread, opened by the "What if…" starter chip. The change in

@@ -29,6 +29,8 @@ function loadTodayCompass() {
     escAttr,
   };
   context.window = context;
+  context.globalThis = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-compass-client.js"), "utf8"), context);
   return context.CairnTodayCompass;
 }
@@ -46,10 +48,8 @@ test("Today compass renders discipline-aware week cells and recap", () => {
     week_done: 2,
     week_cardio: 1,
     goal_mode: "lose",
-    pace_status: "on",
-    trend_lb_wk: -0.7,
-    needed_lb_wk: -0.5,
     goal_weight_lb: 180,
+    weight_trend: { units: "lb", rate_value: -0.7, verdict: "on_pace", verdict_words: "on pace", needed_words: "−0.5 lb/wk", line: "Trending −0.7 lb/wk — on pace." },
     endurance: { week_km: 12.4, week_moving_min: 72 },
   };
 
@@ -67,12 +67,20 @@ test("Today compass renders discipline-aware week cells and recap", () => {
 test("Today compass keeps pace only in the collapsed trajectory and emits no standalone ask", () => {
   const compass = loadTodayCompass();
   const fast = compass.build(
-    { goal_mode: "lose", pace_status: "fast", trend_lb_wk: -1.7, needed_lb_wk: -0.6 },
+    {
+      goal_mode: "lose",
+      // A stale client slope must never be re-judged: the tile prints the ONE read.
+      trend_lb_wk: -9,
+      pace_status: "fast",
+      weight_trend: { units: "kg", rate_value: -0.8, verdict: "behind", verdict_words: "behind the line", needed_words: "−0.3 kg/wk", line: "Trending −0.8 kg/wk." },
+    },
     deps,
-    { isToday: true, currentWeight: 172 },
+    { isToday: true, currentWeight: 172, weightTile: false },
   );
 
-  assert.match(fast.cellsHtml, /pace-fast/);
+  assert.match(fast.cellsHtml, /pace-behind/);
+  assert.match(fast.cellsHtml, /−0\.8<\/div>[\s\S]*behind the line · need −0\.3 kg\/wk[\s\S]*kg\/wk/);
+  assert.doesNotMatch(fast.cellsHtml, /-9|\blb\b/);
   assert.equal("paceOffer" in fast, false);
   assert.equal("paceOfferHtml" in fast, false);
   assert.equal(compass.paceOffer, undefined);

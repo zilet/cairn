@@ -9,10 +9,10 @@
 //     athlete no lane at all.
 //   - Goal line: GET /api/journey (the phase read) and the non-lab rows of
 //     GET /api/journey/timeline (the goal date, phase window, block boundary, re-tests).
-//   - Labs and scans: past draws and scans from GET /api/health-docs, what is ahead
-//     from GET /api/health/next-checkup in the server's own words (the recheck rows of
-//     the timeline stand in only when the checkup read is missing). Every row links
-//     into You's Health pages (the lazy me-health bundle); nothing here renders them.
+//   - Labs and scans, and the season line: horizon-labs-model.ts (it shapes with this
+//     module's `parts`).
+//   - The week read (GET /api/week) dresses two lanes (`withWeek`): its frame is the
+//     race lane's hero, its weight goal the goal line's one weight trend.
 //
 // Decision Q5: no merged server endpoint, so nothing here derives a server-owned fact.
 // Staleness is never judged (marker-validity.ts owns that), a due date is never turned
@@ -21,26 +21,13 @@
   type RaceBuild = import("../contracts/client-api.js").ClientRaceBuild;
   type JourneyRead = import("../contracts/client-api.js").ClientJourneyRead;
   type TimelineEntry = import("../contracts/client-api.js").ClientForwardTimelineEntry;
-  type HealthDoc = import("../contracts/client-api.js").ClientHealthDocument;
-  type Checkup = import("../contracts/client-api.js").ClientNextCheckup;
-  type CheckupItem = import("../contracts/client-api.js").ClientCheckupItem;
   type Lane = ClientHorizonLane;
   type Row = ClientHorizonRow;
   type Target = ClientHorizonTarget;
 
-  /** The document kinds that are a draw or a scan: the labs lane's "behind" rows. */
-  const LAB_KINDS: Readonly<Record<string, string>> = {
-    bloodwork: "Bloodwork",
-    dexa: "DEXA scan",
-    imaging: "Imaging",
-    metabolic_test: "Metabolic test",
-    ecg: "ECG",
-  };
   /** Timeline kinds that belong to the labs lane; every other kind is the goal line's. */
-  const LAB_TIMELINE_KINDS = new Set(["recheck", "rescan"]);
+  const LAB_TIMELINE_KINDS: ReadonlySet<string> = new Set(["recheck", "rescan"]);
 
-  const PAST_CAP = 3;
-  const AHEAD_CAP = 3;
   const GOAL_ROWS_CAP = 4;
 
   const TARGETS = {
@@ -186,8 +173,23 @@
     return `${lb(now)} now, ${lb(goal)} the goal.${scale ? ` ${scale}` : ""}`;
   }
 
+  /**
+   * The phase as ONE sentence for the Season's serif headline: "Leaning-out phase since
+   * Sep 25, toward 154 lb." — never the depth view's mono fragments ("… · since … · …"),
+   * which read as a path of slashes at headline size. With no active phase, the journey
+   * card's own summary.
+   */
   function phaseLine(read: JourneyRead | null): string {
     if (!read) return "";
+    const phase = record(read.active_phase);
+    if (phase && text(phase.kind)) {
+      const kind = text(phase.kind).replace(/_/g, " ");
+      const label = text(read.recomposition?.stage?.label) || kind.charAt(0).toUpperCase() + kind.slice(1);
+      const since = dayKey(phase.start_date) ? CairnFmt.date(dayKey(phase.start_date)) : "";
+      const goalLb = num(read.profile?.goal_weight_lb) ?? num(phase.target_weight_lb);
+      const toward = goalLb != null ? CairnFmt.weight(goalLb) : "";
+      return `${label}${since ? ` since ${since}` : ""}${toward ? `, toward ${toward}` : ""}.`;
+    }
     const journey = typeof CairnProgressJourney !== "undefined" ? CairnProgressJourney : null;
     return text(journey?.phaseSummary?.(read, []) || "");
   }
@@ -236,161 +238,49 @@
     });
   }
 
-  // ---- Labs and scans -------------------------------------------------------------
+  // ---- The week read, dressing two lanes ------------------------------------------
 
-  function docDate(doc: HealthDoc): string {
-    return dayKey(doc.doc_date) || dayKey(doc.created_at);
+  /**
+   * A lane as the week read (GET /api/week) dresses it: the race build wears the week's
+   * frame as its hero (the one stage vocabulary, never the ladder's own count), and the
+   * goal line carries the weight goal's row (the one weight trend) in place of its own
+   * weight sentence. Any other lane, or no read, comes back as it was.
+   */
+  function withWeek(source: Lane, week: unknown): Lane {
+    const read = record(week);
+    if (!read || source.state !== "set") return source;
+    if (source.key === "race") {
+      const frame = record(read.frame) as Lane["frame"] | null;
+      return frame && text(frame.headline) ? { ...source, frame } : source;
+    }
+    if (source.key === "goal" && typeof CairnWeekModel !== "undefined") {
+      const goalRow = CairnWeekModel.weightGoal(read);
+      return goalRow ? { ...source, goal_row: goalRow } : source;
+    }
+    return source;
   }
 
-  function pastRows(docs: unknown, today: string): Row[] {
-    const rows = (Array.isArray(docs) ? (docs as HealthDoc[]) : [])
-      .filter((doc) => !!record(doc) && Object.hasOwn(LAB_KINDS, String(doc.kind || "")) && doc.id != null)
-      .map((doc) => ({ doc, date: docDate(doc) }))
-      .filter((entry) => entry.date && (!today || entry.date <= today))
-      .sort((a, b) => (a.date === b.date ? Number(b.doc.id) - Number(a.doc.id) : a.date < b.date ? 1 : -1))
-      .slice(0, PAST_CAP);
-    // Newest three, laid out oldest first so the rail runs toward today.
-    return rows.reverse().map(({ doc, date }) => ({
-      side: "behind" as const,
-      when: dateWord(date, today),
-      label: LAB_KINDS[String(doc.kind)],
-      detail: "",
-      kind: String(doc.kind),
-      target: { tab: "stand", section: "records", id: String(doc.id) },
-    }));
-  }
-
-  function checkupRow(item: CheckupItem, today: string): Row | null {
-    const label = text(item?.label);
-    if (!label) return null;
-    return {
-      side: "ahead",
-      when: text(item.when_text) || dateWord(item.next_due, today),
-      label,
-      detail: "",
-      kind: text(item.kind) || "lab",
-      target: copyTarget(item.kind === "dexa" ? TARGETS.body : TARGETS.checkup),
-    };
-  }
-
-  function aheadRows(checkup: Checkup | null, timeline: unknown, today: string): Row[] {
-    const rows: Row[] = [];
-    const seen = new Set<string>();
-    const push = (row: Row | null) => {
-      if (!row || rows.length >= AHEAD_CAP) return;
-      const key = row.label.toLowerCase();
-      if (seen.has(key)) return;
-      seen.add(key);
-      rows.push(row);
-    };
-    if (checkup) {
-      const items = [
-        ...(Array.isArray(checkup.due_now) ? checkup.due_now : []),
-        ...(Array.isArray(checkup.upcoming) ? checkup.upcoming : []),
-      ];
-      for (const item of items) push(checkupRow(item, today));
-      return rows;
-    }
-    // No checkup read: the timeline's own recheck and re-scan rows say what is ahead.
-    for (const entry of timelineRows(timeline)) {
-      if (!LAB_TIMELINE_KINDS.has(String(entry.kind))) continue;
-      const ahead = entryAhead(entry, today);
-      if (!ahead) continue;
-      push({
-        side: "ahead",
-        when: ahead.when,
-        label: text(entry.label),
-        detail: "",
-        kind: String(entry.kind),
-        target: copyTarget(entry.kind === "rescan" ? TARGETS.body : TARGETS.checkup),
-      });
-    }
-    return rows;
-  }
-
-  function labsLane(docs: unknown, checkupValue: unknown, timeline: unknown, today: string): Lane {
-    const checkup = record(checkupValue) as Checkup | null;
-    if (!Array.isArray(docs) && !checkup) {
-      return lane("labs", "Labs and scans", {
-        state: "unread",
-        headline: "Labs and scans couldn't be read just now.",
-        links: [{ label: "Health", target: copyTarget(TARGETS.health) }],
-      });
-    }
-    const behind = pastRows(docs, today);
-    const ahead = aheadRows(checkup, timeline, today);
-    const links = [{ label: "Next checkup", target: copyTarget(TARGETS.checkup) }];
-    if (!behind.length && !ahead.length) {
-      return lane("labs", "Labs and scans", {
-        state: "none",
-        headline: "No labs or scans yet",
-        lede: "Add a lab panel or a scan in You → Health, and the next checkup lines up here.",
-        links: [{ label: "Add labs or scan", target: copyTarget(TARGETS.health) }],
-      });
-    }
-    const lede = checkup?.has_content ? text(checkup.lede) : "";
-    return lane("labs", "Labs and scans", {
-      headline: ahead.length ? "What's next" : "Your latest draws and scans",
-      lede,
-      rows: [...behind, ...ahead],
-      links,
-    });
-  }
-
-  // ---- Season ---------------------------------------------------------------------
-
-  // The season on one line: goal-pace weigh-ins and goal, the timeline's projection window
-  // (the fan) and race day, and dated marks. Null under two weigh-ins; the lanes still speak.
-  function season(
-    pace: unknown,
-    timeline: unknown,
-    docs: unknown,
-    checkupValue: unknown,
-    today: string
-  ): ClientHorizonSeason | null {
-    const read = record(pace);
-    const points = (Array.isArray(read?.points) ? (read.points as unknown[]) : [])
-      .map((p) => ({ date: dayKey(record(p)?.date), lb: num(record(p)?.weight_lb) }))
-      .filter((p): p is { date: string; lb: number } => !!p.date && p.lb != null)
-      .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-    if (points.length < 2) return null;
-    const entry = (id: string) => timelineRows(timeline).find((e) => e.id === id);
-    const win = entry("phase:projection")?.when?.window;
-    const race = entry("goal:endurance-race");
-    const marks: ClientHorizonSeasonMark[] = [];
-    for (const doc of Array.isArray(docs) ? (docs as HealthDoc[]) : []) {
-      const date = record(doc) && Object.hasOwn(LAB_KINDS, String(doc.kind || "")) ? docDate(doc) : "";
-      if (date && date >= points[0].date && (!today || date <= today))
-        marks.push({ date, label: LAB_KINDS[String(doc.kind)], kind: String(doc.kind), side: "behind" });
-    }
-    const checkup = record(checkupValue) as Checkup | null;
-    // A recheck due now stands on today's line even once its date has passed (the labs
-    // rail still lists it); an upcoming one stands at its own date.
-    const due = (checkup?.due_now || []).map((item) => [item, true] as const);
-    for (const [item, now] of [...due, ...(checkup?.upcoming || []).map((item) => [item, false] as const)]) {
-      const date = now && today && dayKey(item?.next_due) < today ? today : dayKey(item?.next_due);
-      if (date && (!today || date >= today))
-        marks.push({ date, label: text(item.label), kind: text(item.kind) || "lab", side: "ahead" });
-    }
-    return {
-      points,
-      goal_lb: num(record(read?.goal)?.weight_lb),
-      goal_date: dayKey(record(read?.goal)?.date) || dayKey(entry("goal:weight")?.when?.date) || null,
-      fan: dayKey(win?.start) && dayKey(win?.end) ? { start: dayKey(win?.start), end: dayKey(win?.end) } : null,
-      race: race && dayKey(race.when?.date) ? { date: dayKey(race.when?.date), label: text(race.label) } : null,
-      marks,
-      today,
-    };
-  }
+  /** The shaping parts the labs-and-season model (horizon-labs-model.ts) shares. */
+  const parts = {
+    record,
+    text,
+    num,
+    dayKey,
+    dateWord,
+    copyTarget,
+    lane,
+    timelineRows,
+    entryAhead,
+    LAB_TIMELINE_KINDS,
+  };
 
   const CAIRN_HORIZON_MODEL = {
-    season,
-    LAB_KINDS,
+    withWeek,
     TARGETS,
     raceLane,
     goalLane,
-    labsLane,
     weightLine,
+    parts,
   };
 
   Object.assign(globalThis, { CairnHorizonModel: CAIRN_HORIZON_MODEL });

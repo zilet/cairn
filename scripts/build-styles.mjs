@@ -84,6 +84,7 @@ export const STYLE_PARTIALS = [
   "shell/nav",
   "ask/ask",
   "horizon/horizon",
+  "horizon/week",
 ];
 
 const BANNER =

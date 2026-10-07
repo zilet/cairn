@@ -218,7 +218,12 @@ export function deriveSessionTitle(sessionId: number, planDayId?: number | null,
       WHERE l.session_id = ?`
     )
     .all(sessionId) as any[];
-  if (!rows.length) return planDayName || "Session";
+  // Nothing logged yet: the plan day, else the accepted prescription's own title —
+  // a composition-only session is never a bare "Session".
+  if (!rows.length) {
+    const prescribed = planDayName ? null : compositionForSession(sessionId);
+    return planDayName || (prescribed?.items.length ? prescribed.title : "") || "Session";
+  }
 
   const loggedTitle = contentTitle(bucketCounts(rows));
   const identity = (name: unknown) => exerciseIdentityKey(String(name ?? "")) || String(name ?? "").toLowerCase();

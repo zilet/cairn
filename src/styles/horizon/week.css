@@ -1,0 +1,154 @@
+/* =====================================================================
+   Horizon's Week — the landing (docs/IA.md "Horizon landing") — and the time
+   objects it shares with To the race and the Season: the frame line (the
+   hero), the week's shape (seven columns sized by planned dose), the
+   milestone row and the goal row. Every hue is a stone's (`stone-<key>` sets
+   --c / --cd); state is a word in the label, never a colour alone. Bars and
+   meters grow once on the landing's entrance; reduced motion paints them still.
+   ===================================================================== */
+
+/* ---- the frame line (frame-line-client.ts): Week's hero, To the race's ---- */
+.frameline{display:grid;gap:var(--space-3);margin:0;min-width:0}
+.frameline-k{color:var(--muted)}
+.frameline-h{margin:0;font-family:var(--font-display);font-weight:var(--weight-regular);font-size:var(--text-2xl);
+  line-height:var(--leading-tight);letter-spacing:var(--tracking-tight);color:var(--ink);text-wrap:balance;overflow-wrap:anywhere}
+.frameline-l{margin:0;font-size:var(--text-sm);line-height:var(--leading-normal);color:var(--ink2)}
+/* the block as steps: behind filled, this week ringed in dawn, race day named at the end */
+.frameline-ribbon{display:flex;align-items:center;gap:var(--space-5);margin-top:var(--space-3);min-width:0}
+.frameline-steps{flex:1;display:flex;gap:var(--space-2);min-width:0}
+.frameline-step{flex:1;height:6px;border-radius:var(--radius-pill);background:var(--surface2);box-shadow:inset 0 0 0 1px var(--line)}
+.frameline-step.is-done{background:var(--line-strong);box-shadow:none}
+.frameline-step.is-now{background:var(--dawn-wash);box-shadow:inset 0 0 0 1.5px var(--dawn)}
+.frameline-end{flex:none;font-family:var(--font-mono);font-size:var(--text-2xs);letter-spacing:var(--tracking-mono);
+  text-transform:uppercase;color:var(--d-endurance);white-space:nowrap}
+
+/* ---- the landing: a hero, then sections that break on the rhythm step ---- */
+.horizon-weekslot{min-width:0}
+.hwk{display:grid;gap:var(--space-11);min-width:0}
+.hwk-sec{display:grid;gap:var(--space-5);min-width:0}
+.hwk-mast{display:flex;align-items:flex-end;justify-content:space-between;gap:var(--space-5);
+  padding-bottom:var(--space-3);border-bottom:1px solid var(--line)}
+.hwk-k{margin:0;color:var(--muted)}
+.hwk-summary{margin:0;font-size:var(--text-md);line-height:var(--leading);color:var(--ink2);max-width:60ch}
+.hwk-note{margin:0;font-size:var(--text-xs);line-height:var(--leading-normal);color:var(--muted)}
+.hwk-empty{margin:0;font-size:var(--text-sm);color:var(--ink2)}
+
+/* ---- the week's shape (week-strip-client.ts "shape") ---- */
+.wkshape{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:var(--space-2)}
+.wkshape-cell{display:flex;min-width:0}
+.wkshape-day{flex:1;min-width:0;display:block;padding:var(--space-4) var(--space-1);border:1px solid transparent;
+  border-radius:var(--radius-sm);background:none;color:var(--ink);font:inherit;cursor:pointer;position:relative;
+  -webkit-tap-highlight-color:transparent;transition:background var(--dur-1) var(--ease),border-color var(--dur-1) var(--ease)}
+.wkshape-day.is-static{cursor:default}
+button.wkshape-day:active{transform:var(--press)}
+@media (hover:hover){button.wkshape-day:hover{background:var(--surface2)}}
+.wkshape-day:focus-visible{outline:2px solid var(--dawn);outline-offset:2px}
+.wkshape-day.is-today{border-color:var(--dawn);background:var(--dawn-wash)}
+.wkshape-day[aria-expanded="true"]{background:var(--surface);border-color:var(--line-strong)}
+.wkshape-day.is-today[aria-expanded="true"]{border-color:var(--dawn)}
+.wkshape-face{display:flex;flex-direction:column;align-items:center;gap:var(--space-3);min-width:0}
+.wkshape-dow{font-family:var(--font-mono);font-size:var(--text-2xs);letter-spacing:var(--tracking-mono);color:var(--muted)}
+.wkshape-day.is-today .wkshape-dow{color:var(--dawn)}
+/* the well holds every bar on one ground line; a bar's height is the server's relative dose */
+.wkshape-well{display:flex;align-items:flex-end;justify-content:center;width:100%;height:72px;border-bottom:1px solid var(--line)}
+.wkshape-bar{display:flex;flex-direction:column-reverse;gap:1px;width:18px;max-width:72%;height:max(4px,calc(var(--h,0) * 100%));
+  border-radius:var(--radius-2xs) var(--radius-2xs) 0 0;overflow:hidden;transform-origin:bottom}
+.wkshape-seg{flex:1;min-height:2px;background:color-mix(in srgb,var(--c) 42%,var(--surface))}
+.wkshape-seg.is-rest{background:var(--line)}
+.wkshape-day.is-done .wkshape-seg{background:var(--c)}
+/* a key session still ahead: hollow, its stone's deep line */
+.wkshape-day.is-key .wkshape-seg{background:transparent;box-shadow:inset 0 0 0 1.5px var(--cd)}
+/* planned work a past day did not get: dashed, quiet */
+.wkshape-day.is-missed .wkshape-seg{background:transparent;box-shadow:inset 0 0 0 1px var(--line-strong)}
+.wkshape-num{position:relative;font-family:var(--font-display);font-size:var(--text-lead);line-height:var(--leading-none);color:var(--ink)}
+.wkshape-tick{position:absolute;top:-4px;right:-12px;width:12px;height:12px;border-radius:50%;display:grid;place-items:center;
+  background:var(--sage-text);color:var(--on-accent);font-family:var(--font-ui);font-size:var(--text-2xs);line-height:var(--leading-none)}
+.wkshape-tag{max-width:100%;min-height:1lh;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:var(--text-2xs);font-weight:var(--weight-semibold);line-height:var(--leading-snug);color:var(--d-strength)}
+.hwk.settle-in .wkshape-bar{animation:wkshape-rise var(--dur-3) var(--ease) both}
+@keyframes wkshape-rise{from{transform:scaleY(0)}}
+/* the peek's fold: grid rows 0fr → 1fr, never a hand-animated height */
+.hwk-fold{display:grid;grid-template-rows:0fr;transition:grid-template-rows var(--dur-2) var(--ease)}
+.hwk-fold.is-open{grid-template-rows:1fr}
+.hwk-fold-in{min-height:0;overflow:hidden}
+.hwk-fold.is-open .hwk-fold-in{padding:var(--space-6) 0 var(--space-2);border-bottom:1px solid var(--line)}
+/* the days as rows, folded: Program's own week rows */
+.hwk-days{min-width:0}
+.hwk-days-sum{list-style:none;min-height:44px;display:inline-flex;align-items:center;gap:var(--space-3);cursor:pointer}
+.hwk-days-sum::-webkit-details-marker{display:none}
+.hwk-days-sum::after{content:"›";transition:transform var(--dur-1) var(--ease)}
+.hwk-days[open] .hwk-days-sum::after{transform:rotate(90deg)}
+
+/* ---- still open: at most two lines, each opening its day ---- */
+.hwk-open{list-style:none;margin:0;padding:0;display:grid}
+.hwk-open li+li{border-top:1px solid var(--line)}
+.hwk-open-row{display:grid;grid-template-columns:10px minmax(0,1fr) auto;align-items:center;gap:var(--space-5);width:100%;
+  min-height:44px;padding:var(--space-3) 0;border:0;background:none;color:var(--ink);font:inherit;font-size:var(--text-md);
+  text-align:left;-webkit-tap-highlight-color:transparent}
+button.hwk-open-row{cursor:pointer;transition:transform var(--dur-1) var(--ease)}
+button.hwk-open-row:active{transform:var(--press-lg)}
+.hwk-open-dot{width:9px;height:9px;border-radius:50%;box-shadow:inset 0 0 0 1.5px var(--cd)}
+.hwk-open-go{color:var(--muted);font-size:var(--text-lg);line-height:var(--leading-none)}
+.hwk-season{justify-self:start;min-height:44px;display:inline-flex;align-items:center;text-decoration:none}
+
+/* ---- before the read lands ---- */
+.hwk.is-pending{gap:var(--space-5)}
+.hwk-skel-k{height:var(--space-4);width:40%}
+.hwk-skel-title{height:1.8rem;width:70%}
+.hwk-skel-line{height:var(--space-5);width:85%}
+.hwk-skel-shape{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:var(--space-2);margin-top:var(--space-5)}
+.hwk-skel-col{height:120px;border-radius:var(--radius-sm)}
+
+/* ---- the milestone row (milestone-row-client.ts): Next up and the Season ---- */
+.msrow-list{list-style:none;margin:0;padding:0;display:grid}
+.msrow,.msrow-now{position:relative;min-width:0;border-top:1px solid var(--line)}
+.msrow-list>:first-child{border-top:0}
+.msrow-body{display:grid;grid-template-columns:14px minmax(0,1fr) auto;align-items:center;gap:var(--space-4);
+  min-height:48px;padding:var(--space-3) 0;color:inherit;text-decoration:none}
+div.msrow-body{grid-template-columns:14px minmax(0,1fr)}
+a.msrow-link{transition:transform var(--dur-1) var(--ease)}
+a.msrow-link:active{transform:var(--press-lg)}
+/* a dot for a training or goal date, a diamond for a lab or a scan: open ahead, filled behind */
+.msrow-mark{width:9px;height:9px;justify-self:center;border-radius:50%;border:1.5px solid var(--cd);background:var(--surface);box-sizing:border-box}
+.msrow.is-behind .msrow-mark{background:var(--cd)}
+.msrow.is-mark-diamond .msrow-mark{width:8px;height:8px;border-radius:var(--radius-3xs);transform:rotate(45deg)}
+.msrow-main{min-width:0;display:grid;grid-template-columns:minmax(0,1fr);gap:1px}
+.msrow-when{font-family:var(--font-mono);font-size:var(--text-2xs);letter-spacing:var(--tracking-mono);text-transform:uppercase;color:var(--muted)}
+.msrow-label{font-size:var(--text-body);font-weight:var(--weight-medium);line-height:var(--leading-snug);color:var(--ink)}
+.msrow.is-behind .msrow-label{font-weight:var(--weight-regular);color:var(--ink2)}
+.msrow-detail{font-size:var(--text-xs);line-height:var(--leading-normal);color:var(--muted)}
+.msrow-arw{color:var(--muted);font-size:var(--text-lg);line-height:1}
+.msrow-now{display:grid;grid-template-columns:14px minmax(0,1fr);align-items:center;gap:var(--space-4);min-height:30px;border-top-color:transparent}
+.msrow-now::after{content:"";position:absolute;left:24px;right:0;top:50%;height:1px;
+  background:linear-gradient(90deg,var(--dawn),transparent);opacity:.5}
+.msrow-now+.msrow{border-top-color:transparent}
+.msrow-mark.is-now{background:var(--dawn);border-color:var(--dawn);box-shadow:0 0 0 4px var(--dawn-wash)}
+.msrow-now-label{position:relative;z-index:1;justify-self:start;padding-right:var(--space-3);background:var(--ground);
+  font-family:var(--font-mono);font-size:var(--text-2xs);letter-spacing:var(--tracking-mono);text-transform:uppercase;color:var(--dawn)}
+
+/* ---- the goal row (goal-row-client.ts): the Path card's thread, with a meter in words ---- */
+.goalrow-list{list-style:none;margin:0;padding:0;display:grid;gap:var(--space-8)}
+.goalrow{display:grid;grid-template-columns:10px minmax(0,1fr) auto;column-gap:var(--space-5);row-gap:var(--space-3);
+  align-items:center;font-size:var(--text-md);min-width:0}
+.goalrow-dot{width:10px;height:10px;border-radius:50% 50% 45% 55%;background:var(--c)}
+.goalrow-name{min-width:0;color:var(--ink)}
+.goalrow-name small{display:block;color:var(--muted);font-size:var(--text-xs);line-height:var(--leading-snug)}
+.goalrow-num{font-family:var(--font-display);font-size:var(--text-lead);font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--ink)}
+.goalrow-meter{grid-column:2 / -1;display:grid;gap:var(--space-2);min-width:0}
+.goalrow-track{position:relative;display:block;height:6px;border-radius:var(--radius-pill);background:var(--surface2);
+  box-shadow:inset 0 0 0 1px var(--line)}
+.goalrow-fill{position:absolute;inset:0 auto 0 0;width:calc(var(--w,0) * 100%);border-radius:inherit;background:var(--c);transform-origin:left}
+.goalrow-end{position:absolute;right:0;top:-3px;bottom:-3px;width:2px;border-radius:var(--radius-3xs);background:var(--ink)}
+.goalrow-meta{display:flex;justify-content:space-between;gap:var(--space-4);font-size:var(--text-xs);color:var(--muted)}
+.goalrow-word{color:var(--cd)}
+.goalrow-word.is-stretch,.goalrow-word.is-beyond_horizon{color:var(--ink2)}
+.goalrow-word.is-reached{color:var(--sage-text)}
+.goalrow-goal{white-space:nowrap}
+.hwk.settle-in .goalrow-fill{animation:goalrow-grow var(--dur-3) var(--ease) both}
+@keyframes goalrow-grow{from{transform:scaleX(0)}}
+.horizon-lane-card .goalrow-list{margin-top:var(--space-2)}
+
+@media (prefers-reduced-motion:reduce){
+  .hwk.settle-in .wkshape-bar,.hwk.settle-in .goalrow-fill,.hwk.settle-in{animation:none}
+  .hwk-fold,a.msrow-link,button.hwk-open-row{transition:none}
+}

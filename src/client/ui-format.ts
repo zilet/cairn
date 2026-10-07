@@ -59,8 +59,10 @@ function fmtLb(lb: unknown, units?: unknown, bare?: boolean): string {
   const v = Number(lb);
   if (lb == null || lb === "" || !Number.isFinite(v)) return "—";
   const kg = units === "kg";
-  const n = Math.round((kg ? v * KG_PER_LB : v) * 10) / 10;
-  return bare ? String(n) : `${n} ${kg ? "kg" : "lb"}`;
+  const r = Math.round((kg ? v * KG_PER_LB : v) * 10) / 10;
+  // A tonnage reads "12,450 lb", never "12450.3 lb".
+  const n = Math.abs(r) >= 1000 ? Math.round(r).toLocaleString("en-US") : String(r);
+  return bare ? n : `${n} ${kg ? "kg" : "lb"}`;
 }
 
 // ---- dates: one parser, one Intl door ----
@@ -167,6 +169,11 @@ const CairnFmt = {
   pace: (secPerKm: unknown, units?: unknown): string => fmtPaceFromSecPerKm(secPerKm, units ?? CairnFmt.units().distance),
   /** Stored pounds as "159.6 lb" / "72.4 kg". */
   weight: (lb: unknown, units?: unknown, bare?: boolean): string => fmtLb(lb, units ?? CairnFmt.units().weight, bare),
+  /** The write edge: a number typed in the athlete's weight unit, as stored pounds (0 for nothing). */
+  toLb: (value: unknown, units?: unknown): number => {
+    const v = Number(value) || 0;
+    return (units ?? CairnFmt.units().weight) === "kg" ? Math.round((v / KG_PER_LB) * 100) / 100 : v;
+  },
   /** The one door for an athlete-facing date: never an ISO string. */
   date: (iso: unknown, o: FmtDateOpts = {}): string =>
     o.fmt ? fmtOn(iso, o.fmt, o.utc) : (FMT_DATE[o.style || "short"] || shortDate)(String(iso || ""), o),

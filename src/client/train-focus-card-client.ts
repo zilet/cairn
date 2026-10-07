@@ -63,9 +63,10 @@ function cfocusDayWords(iso: unknown): string {
   return m && Number(m[2]) >= 1 && Number(m[2]) <= 12 ? `${CFOCUS_MONTHS[Number(m[2]) - 1]} ${Number(m[3])}` : "";
 }
 
-// The athlete's push stance, one quiet strip under the lead: "Push · through Nov 15" and,
-// on a push day, what is holding today back in the read's own words. Never the offer —
-// the Brief owns that ask. "" when the drive is steady with nothing to say.
+// The athlete's push stance, one quiet strip under the lead: "Push · through Nov 15" and
+// the stance's own sentence. What holds TODAY back is the Brief's (its push line and
+// why panel) and the offer is the Brief's ask — neither is repeated here (one home per
+// fact). "" when the drive is steady with nothing to say.
 function cfocusPushHtml(focus: ClientCoachingFocus): string {
   const push = focus.push;
   if (!push || typeof push !== "object") return "";
@@ -73,14 +74,7 @@ function cfocusPushHtml(focus: ClientCoachingFocus): string {
   if (push.drive === "push") {
     const until = stance ? cfocusDayWords(stance.until) : "";
     const head = until ? `through ${until}` : "no end date";
-    const holding = (Array.isArray(push.today?.holding) ? push.today.holding : [])
-      .map((h) => cfocusText(h?.words))
-      .filter(Boolean)
-      .slice(0, 2);
-    const line =
-      cfocusText(push.today?.line) ||
-      (holding.length ? `Holding it today: ${holding.join(" · ")}.` : "") ||
-      cfocusText(stance?.line);
+    const line = cfocusText(stance?.line);
     return `<div class="tfc-push" role="note" aria-label="Your push stance"><p class="tfc-push-head"><span class="tfc-push-k">Push</span><span class="tfc-push-sep" aria-hidden="true">·</span><span class="tfc-push-until">${escHtml(head)}</span></p>${
       line ? `<p class="tfc-push-line">${escHtml(line)}</p>` : ""
     }</div>`;

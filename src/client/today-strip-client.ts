@@ -1,26 +1,19 @@
 // @ts-check
-// Today's "What's ahead" strip, the view: Today's ONE week view, right under the
-// Brief's state line. A mast (the block clock on its right), the week so far in one
-// quiet header line ("2 of 5 lifting days · 6.1 of ~33 km · 3 new bests" — counts the
-// server already made, GET /api/plan/week `progress`), then the seven days of this
-// week — each the day view's CHIP (day-detail-client.ts, over the day's glance, so its
-// lift and run read as Program and Horizon say them) — and a fold that a tapped day's
-// PEEK opens into (CairnDrill, the lazy "calendar" bundle). Today's strength line is the Brief's to say (one fact, said once); the strip
-// only adds "Pull in place of Push" when today adapted. Pure string builders; every
-// server string is escaped and no colour is written here.
+// Today's "What's ahead" strip, the view: a GLANCE at the week, right under the
+// Brief's state line (docs/IA.md decision 3). A mast (a running recovery week named on
+// its right), then the seven days of this week — each the day view's CHIP
+// (day-detail-client.ts, over the day's glance, so its lift and run read as Program and
+// Horizon say them) — and a fold that a tapped day's PEEK opens into (CairnDrill, the
+// lazy "calendar" bundle). No summary line: the week's sentence and counts are
+// Horizon's (one home per fact), and the stage word rides Today's glance line. Today's
+// strength line is the Brief's to say; the strip only adds "Pull in place of Push" when
+// today adapted. Pure string builders; every server string is escaped, no colour here.
 //
 // LAZY (today-ahead bundle). Mounted by today-strip-controller.ts.
 {
   type PlanWeek = import("../contracts/client-api.js").ClientPlanWeek;
-  /** What the strip's header says beside the week's own counts (filled by its mount). */
-  type StripHeader = {
-    /** The block clock: "Sharpen · Wk 5 of 6", or a running recovery week. */
-    block?: string;
-    /** The week's run plan in km (Today's path read), for "6.1 of ~33 km". */
-    kmPlanned?: number | null;
-    /** The athlete's run units ("km" | "mi"). */
-    units?: string;
-  };
+  /** What the strip's header notes (filled by its mount): a running recovery week, else nothing. */
+  type StripHeader = { block?: string };
 
   type Cell = ClientDayGlance;
 
@@ -59,51 +52,9 @@
       : "";
   }
 
-  function count(n: unknown): number {
-    const v = Math.round(Number(n));
-    return Number.isFinite(v) && v > 0 ? v : 0;
-  }
-
-  /** A distance's number in the athlete's run units ("6.1"); "" for nothing. */
-  const dist = (km: number, units: string | undefined): string => (km > 0 ? CairnFmt.distance(km, units ?? "km", true) : "");
-
   /**
-   * The week so far in one header line, from the server's own counts: lifting days in
-   * against the stated (or observed) lifting days, distance run against the week's run
-   * plan, and new bests. Counts only — never a score, never a percentage; a part with
-   * nothing to say is left out, and an empty week says nothing.
-   */
-  function tallyText(week: PlanWeek | null | undefined, header: StripHeader = {}): string {
-    const p = week?.progress;
-    if (!p || typeof p !== "object") return "";
-    const parts: string[] = [];
-    const done = count(p.lift_days_done);
-    const planned = count(p.lift_days_planned);
-    if (planned) parts.push(`${done} of ${planned} lifting day${planned === 1 ? "" : "s"}`);
-    else if (done) parts.push(`${done} lifting session${done === 1 ? "" : "s"}`);
-    // The week read's own run units win: the warm settings read is only a fallback, so
-    // a cold settings cache never prints km to an imperial athlete.
-    const units = week?.run_units || header.units;
-    const unit = units === "mi" ? "mi" : "km";
-    const ran = dist(Number(p.run_km) || 0, unit);
-    const plan = dist(Number(header.kmPlanned) || 0, unit);
-    const about = plan ? `~${Math.round(Number(plan))}` : "";
-    if (ran && about) parts.push(`${ran} of ${about} ${unit}`);
-    else if (ran) parts.push(`${ran} ${unit} run`);
-    else if (about) parts.push(`${about} ${unit} planned`);
-    const prs = count(p.prs);
-    if (prs) parts.push(`${prs} new best${prs === 1 ? "" : "s"}`);
-    return parts.join(" · ");
-  }
-
-  function tallyHtml(week: PlanWeek | null | undefined, header: StripHeader = {}): string {
-    const said = tallyText(week, header);
-    return said ? `<p class="tstrip-tally">${escHtml(said)}</p>` : "";
-  }
-
-  /**
-   * The whole strip: mast (with the block clock), the week's header line, the seven
-   * days, today's adaptation, and the (closed) fold its day opens into. "" outside
+   * The whole strip: mast (with its note), the seven days, today's adaptation, and
+   * the (closed) fold its day opens into. "" outside
    * calendar mode, so the slot collapses. `data-wired` marks a control a lazy
    * controller wires: a first-paint snapshot of Today freezes it (main shell).
    */
@@ -117,7 +68,6 @@
     if (!cells) return "";
     return `<section class="tstrip" aria-labelledby="tstripTitle" data-wired>
       <div class="tstrip-mast"><h2 class="lbl tstrip-title" id="tstripTitle">What's ahead</h2><span class="lbl tstrip-block" data-tstrip-block>${escHtml(header.block || "")}</span></div>
-      <div data-tstrip-tally>${tallyHtml(week, header)}</div>
       <ol class="tstrip-days" data-tstrip-days aria-label="This week, Monday to Sunday">${daysHtml(cells, selected)}</ol>
       <div data-tstrip-now>${nowHtml(week, cells)}</div>
       <div class="tstrip-fold" id="tstripFold" data-tstrip-fold role="region" aria-label="The day opened" inert>
@@ -128,7 +78,7 @@
     </section>`;
   }
 
-  const CAIRN_TODAY_STRIP = { stripHtml, daysHtml, nowHtml, tallyText, tallyHtml, cellsOf, abbr };
+  const CAIRN_TODAY_STRIP = { stripHtml, daysHtml, nowHtml, cellsOf, abbr };
 
   Object.assign(globalThis, { CairnTodayStrip: CAIRN_TODAY_STRIP });
 }

@@ -174,6 +174,17 @@ test("the muscle rows lead with the groups that ask for a look; the rest fold un
   assert.equal(ctx.tovRowsHtml([tovRow("neck", "none")]), "");
 });
 
+test("a muscle whose volume is in range while its lifts stall says both facts, never one contradictory verdict", () => {
+  const ctx = loadRoadFold();
+  const html = ctx.tovRowsHtml([tovRow("chest", "ok", { verdict: "stalling", sets: 12 }), tovRow("back", "ok"), tovRow("shoulders", "ok")]);
+  const chest = /data-group="chest"[\s\S]*?<span class="tov-row-note">([^<]*)<\/span>/.exec(html)[1];
+  assert.equal(chest, "12 sets this week · volume is in range, progress has stalled");
+  assert.doesNotMatch(chest, /in the productive range/);
+  // Not stalling: the range reads as before.
+  const back = /data-group="back"[\s\S]*?<span class="tov-row-note">([^<]*)<\/span>/.exec(html)[1];
+  assert.equal(back, "6 sets this week · in the productive range");
+});
+
 test("a tap on a folded muscle opens its fold and finds its row", () => {
   const ctx = loadRoadFold();
   const opened = { open: false, setAttribute: (name) => (opened[name] = true) };

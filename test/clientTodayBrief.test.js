@@ -706,7 +706,7 @@ function loadTodayBriefWithSessionStatus() {
   return context.CairnTodayBrief;
 }
 
-test("the week-wins sentence on a rest day: another date's Brief says it; today's leaves it to the week strip's header", () => {
+test("the week-wins sentence on a rest day: another date's Brief says it; today's leaves the week to Horizon", () => {
   const brief = loadTodayBriefWithSessionStatus();
   const read = {
     kind: "rest",
@@ -715,8 +715,10 @@ test("the week-wins sentence on a rest day: another date's Brief says it; today'
     signals: {},
     week: { trained_days_7: 4, prs: 2 },
   };
-  assert.match(brief.briefHtml(read, { isToday: false }), /Trained 4 of the last 7 days, with 2 new bests/);
-  // Today's "What's ahead" header carries the week's counts (lifting days, new bests): said once.
+  // The consistency line, never a week's new-best count (Train's What moved owns that).
+  assert.match(brief.briefHtml(read, { isToday: false }), /Trained 4 of the last 7 days</);
+  assert.doesNotMatch(brief.briefHtml(read, { isToday: false }), /new best/);
+  // The week's counts are Horizon's (one home per fact): today's Brief says none of them.
   assert.doesNotMatch(brief.briefHtml(read, { isToday: true }), /Trained 4 of|done-week/);
 });
 
@@ -731,7 +733,7 @@ test("the week-wins sentence on an easy day too (another date's Brief)", () => {
 });
 
 // TODAY'S RUN ORDER (the front door): headline + why → push line → state line → check-in
-// → What's ahead → Your path → the push offer → the quiet day's menu → its actions → steer.
+// → What's ahead → the Horizon glance line → the push offer → the quiet day's menu → its actions → steer.
 test("today's rest/easy Brief reads in one order, the lift line held light in the server's own words", () => {
   const brief = loadBriefWithReads();
   const html = brief.briefHtml(

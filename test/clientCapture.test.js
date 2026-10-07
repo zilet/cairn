@@ -105,6 +105,48 @@ test("weight capture only enqueues transient failures", async () => {
   assert.deepEqual(JSON.parse(JSON.stringify(queued.at(-1))), ["weight", "/bodyweight", { weight_lb: 181.5, date: "2026-09-29" }]);
 });
 
+test("the Brief's training line never speaks for a watch's overnight reading, and names its source", async () => {
+  const capture = loadCapture();
+  const slot = { isConnected: true, innerHTML: "", querySelectorAll: () => [] };
+  capture.view = { querySelector: (selector) => (selector === "#briefProvenance" ? slot : null) };
+  capture.state = { tab: "today" };
+  capture.api = async () => ({
+    directives: [
+      // HRV is Body & recovery's (last night against the athlete's own band): never here.
+      { id: 1, domain: "training", marker: "HRV", directive: "Keep intensity easy while HRV sits low", status: "active" },
+      { id: 2, domain: "watch", marker: "ApoB", directive: "Keep regular aerobic work in the week", status: "active" },
+    ],
+  });
+  await capture.loadTrainingProvenance(true);
+  assert.doesNotMatch(slot.innerHTML, /HRV/);
+  assert.match(slot.innerHTML, /aria-label="Training shaped by your labs: Keep regular aerobic work in the week"/);
+  assert.equal(capture.CairnCaptureProvenance.trainingProvenanceLabel({ marker: "VO2max" }), "Training shaped by your VO2max");
+});
+
+test("a kg athlete types kg; the weigh-in is stored in canonical lb at the write edge", async () => {
+  const capture = loadCapture();
+  capture.CairnFmt.set({ weight_units: "kg" });
+  let saveWeight;
+  const posted = [];
+  const mini = { innerHTML: "", addEventListener() {} };
+  const inline = { hidden: false };
+  const input = { value: "80", dataset: { unit: "kg" }, addEventListener() {}, focus() {}, scrollIntoView() {} };
+  const go = { addEventListener: (_type, handler) => { saveWeight = handler; } };
+  const elements = new Map([["#wtChipMini", mini], ["#wtInline", inline], ["#wtInlineInput", input], ["#wtInlineGo", go]]);
+  capture.view = { querySelector: (selector) => elements.get(selector) || null };
+  capture.api = async (_path, init) => {
+    posted.push(JSON.parse(init.body));
+    return { ok: true };
+  };
+  capture.swrInvalidate = () => {};
+  capture.toast = () => {};
+  capture.setupWeightChip();
+  await saveWeight();
+  assert.equal(posted[0].weight_lb, 176.37);
+  // Painted back in the athlete's own unit, never the stored pounds.
+  assert.match(mini.innerHTML, /^80<span class="wt-mini-unit">kg/);
+});
+
 test("bodyweight quick-add updates both the always-reachable chip and folded tile", async () => {
   const capture = loadCapture();
   let saveWeight;

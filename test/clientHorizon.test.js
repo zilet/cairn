@@ -2,9 +2,10 @@
 // wave 5, "Horizon"): three lanes on one line of time — the race (a read over
 // GET /api/race-build through the race view's own model, never a second engine), the
 // goal line (the journey read and the road-ahead timeline) and labs and scans (past
-// draws from the health documents, what is ahead in the checkup's own words). Every
-// lab row routes into You's Health pages; no lane ever sits empty, and nothing reads
-// as a score. Synthetic fixtures only.
+// draws from GET /api/health-docs/draws, one row per draw, what is ahead in the
+// checkup's own words). Every lab row routes into You's Health pages; no lane ever sits
+// empty, and nothing reads as a score. The Week landing (the default view) has its own
+// file, clientHorizonWeek.test.js. Synthetic fixtures only.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHost, flush, loadClientModule } from "./_dom.mjs";
@@ -26,12 +27,23 @@ const MODULES = [
   "race-estimate-client",
   "race-ladder-client",
   "race-view-client",
-  "horizon-model",
-  // The week's run words are the day's glance (the calendar bundle horizon reaches through train).
+  // The calendar bundle horizon reaches through train: the day's glance and rows, and the
+  // shared time objects (milestone row, goal row, frame line, the week's model and shape).
   "day-detail-model",
-  "horizon-week-model",
+  "day-detail-client",
+  "milestone-row-model",
+  "milestone-row-client",
+  "goal-row-model",
+  "goal-row-client",
+  "frame-line-client",
+  "week-model",
+  "week-strip-client",
+  "horizon-model",
+  "horizon-labs-model",
   "horizon-terrain-client",
   "horizon-chart-client",
+  "horizon-week-client",
+  "horizon-week-controller",
   "horizon-client",
   "horizon-controller",
 ];
@@ -164,14 +176,26 @@ function timeline() {
   ];
 }
 
+/** GET /api/health-docs/draws: one row per (kind, date), the uploads and their panels folded server-side. */
 function docs() {
+  const draw = (doc_id, kind, date, label, doc_ids = [doc_id]) => ({
+    date,
+    date_words: `words(${date})`,
+    kind,
+    label,
+    doc_id,
+    doc_ids,
+  });
   return [
-    { id: 11, kind: "bloodwork", doc_date: "2026-08-02", original_name: "panel.pdf" },
-    { id: 12, kind: "visit_note", doc_date: "2026-08-20" },
-    { id: 13, kind: "dexa", doc_date: "2026-07-10" },
-    { id: 14, kind: "bloodwork", doc_date: "2026-03-02" },
-    { id: 15, kind: "imaging", doc_date: null, created_at: "2026-05-01T12:00:00Z" },
-    { id: 16, kind: "bloodwork", doc_date: "2026-10-30" },
+    draw(11, "bloodwork", "2026-08-02", "Bloodwork", [11, 17, 18]),
+    // a kind that is no draw, and a draw dated after today, are left out
+    draw(12, "visit_note", "2026-08-20", "Visit note"),
+    draw(13, "dexa", "2026-07-10", "DEXA scan"),
+    draw(14, "bloodwork", "2026-03-02", "Bloodwork"),
+    draw(15, "imaging", "2026-05-01", "Imaging"),
+    draw(16, "bloodwork", "2026-10-30", "Bloodwork"),
+    // the same draw twice is still one row
+    draw(17, "bloodwork", "2026-08-02", "Bloodwork"),
   ];
 }
 
@@ -341,12 +365,13 @@ test("race lane, a lifting-only athlete: no lane at all, and Horizon drops the r
   assert.deepEqual(plain(bare.querySelectorAll('[role="tab"]').map((t) => t.textContent)), ["Week", "Season"]);
   assert.equal(bare.querySelector('[data-horizon-panel="race"]'), null);
   assert.equal(bare.querySelector("[data-horizon]").getAttribute("data-horizon-view"), "week");
-  // Mounted, the first race read removes the view and opens the week.
+  // Mounted, the first race read removes the view; Horizon is on the week.
   const host = createHost(win.document);
   host.innerHTML = win.CairnHorizon.shellHtml();
   const root = host.querySelector("[data-horizon]");
-  const { load: loader } = reads({ extra: { "/race-build": read, "/plan/week": planWeek() } });
+  const { load: loader } = reads({ extra: { "/race-build": read } });
   win.CairnHorizonController.mount(root, { today: TODAY, load: loader, navigate: () => {} });
+  await root.querySelector('[data-horizon-seg="race"]').click();
   await flush();
   await flush();
   assert.equal(root.querySelector('[data-horizon-seg="race"]'), null);
@@ -368,7 +393,8 @@ test("goal line: the phase read, the bodyweight toward the goal, and the non-lab
   const win = load();
   const lane = win.CairnHorizonModel.goalLane(journey(), timeline(), TODAY);
   assert.equal(lane.state, "set");
-  assert.match(lane.headline, /Mid-cut/);
+  // One sentence at headline size, never the depth view's dot- or slash-joined fragments.
+  assert.equal(lane.headline, "Mid-cut since Jun 1, toward 180 lb.");
   assert.equal(
     lane.lede,
     "195.4 lb now, 180 lb the goal. The completed-day trend is about -0.84 lb per week across the robust energy window."
@@ -401,10 +427,12 @@ test("goal line: the scale speaks in the server's words; no journey and no road 
 
 test("labs lane: the newest three draws and scans behind today, oldest first, each opening its record", () => {
   const win = load();
-  const lane = win.CairnHorizonModel.labsLane(docs(), checkup(), timeline(), TODAY);
+  const lane = win.CairnHorizonLabsModel.labsLane(docs(), checkup(), timeline(), TODAY);
   const behind = lane.rows.filter((row) => row.side === "behind");
-  // A visit note is not a draw; a document dated after today is not behind it.
+  // A visit note is not a draw; a draw dated after today is not behind it; one draw is one row.
   assert.deepEqual(plain(behind.map((row) => row.label)), ["Imaging", "DEXA scan", "Bloodwork"]);
+  // The draw's own date words, never a date built here.
+  assert.deepEqual(plain(behind.map((row) => row.when)), ["words(2026-05-01)", "words(2026-07-10)", "words(2026-08-02)"]);
   assert.deepEqual(plain(behind.map((row) => row.target)), [
     { tab: "stand", section: "records", id: "15" },
     { tab: "stand", section: "records", id: "13" },
@@ -414,7 +442,7 @@ test("labs lane: the newest three draws and scans behind today, oldest first, ea
 
 test("labs lane: what is ahead is the checkup's own words, capped, with a DEXA row opening Body", () => {
   const win = load();
-  const lane = win.CairnHorizonModel.labsLane(docs(), checkup(), timeline(), TODAY);
+  const lane = win.CairnHorizonLabsModel.labsLane(docs(), checkup(), timeline(), TODAY);
   const ahead = lane.rows.filter((row) => row.side === "ahead");
   assert.deepEqual(plain(ahead.map((row) => [row.label, row.when])), [
     ["LDL-C", "window is open"],
@@ -431,7 +459,7 @@ test("labs lane: what is ahead is the checkup's own words, capped, with a DEXA r
 
 test("labs lane: with no checkup read, the timeline's own rechecks stand in", () => {
   const win = load();
-  const lane = win.CairnHorizonModel.labsLane(docs(), null, timeline(), TODAY);
+  const lane = win.CairnHorizonLabsModel.labsLane(docs(), null, timeline(), TODAY);
   const ahead = lane.rows.filter((row) => row.side === "ahead");
   assert.deepEqual(plain(ahead.map((row) => row.label)), ["LDL recheck", "DEXA re-scan window"]);
   assert.equal(ahead[1].target.section, "body");
@@ -440,7 +468,7 @@ test("labs lane: with no checkup read, the timeline's own rechecks stand in", ()
 
 test("labs lane: nothing yet is a way to add them; a failed read is one calm line", () => {
   const win = load();
-  const none = win.CairnHorizonModel.labsLane(
+  const none = win.CairnHorizonLabsModel.labsLane(
     [],
     checkup({ due_now: [], upcoming: [], has_content: false }),
     [],
@@ -450,7 +478,7 @@ test("labs lane: nothing yet is a way to add them; a failed read is one calm lin
   assert.equal(none.headline, "No labs or scans yet");
   assert.equal(none.links[0].label, "Add labs or scan");
   assert.deepEqual(plain(none.links[0].target), { tab: "stand", section: null });
-  const unread = win.CairnHorizonModel.labsLane(null, null, null, TODAY);
+  const unread = win.CairnHorizonLabsModel.labsLane(null, null, null, TODAY);
   assert.equal(unread.state, "unread");
 });
 
@@ -461,7 +489,7 @@ function lanes(win) {
   return [
     m.raceLane(build()),
     m.goalLane(journey(), timeline(), TODAY),
-    m.labsLane(docs(), checkup(), timeline(), TODAY),
+    win.CairnHorizonLabsModel.labsLane(docs(), checkup(), timeline(), TODAY),
   ];
 }
 
@@ -483,11 +511,14 @@ test("each lane paints its words, the race lane the ladder, and every row a real
   assert.equal(cards[0].querySelector(".horizon-tw-num").textContent, "18 of 32 km");
   assert.equal(cards[0].querySelector("a.horizon-tw").getAttribute("href"), "/app/plan/endurance");
   assert.equal(cards[0].querySelector(".race-estimate-word").textContent, "Stretch");
-  const labRows = cards[2].querySelectorAll(".horizon-row-link");
+  // The rail is milestone rows (the row Week's "Next up" draws), labs as diamonds.
+  const labRows = cards[2].querySelectorAll(".msrow-link");
   assert.equal(labRows.length, 6);
   assert.equal(labRows[0].getAttribute("href"), "/app/stand/records?id=15");
+  assert.equal(labRows[0].getAttribute("data-horizon-go"), "labs:row:0");
+  assert.ok(cards[2].querySelector(".msrow").classList.contains("is-mark-diamond"));
   // The rail carries one Today mark between behind and ahead.
-  assert.equal(cards[2].querySelectorAll(".horizon-now").length, 1);
+  assert.equal(cards[2].querySelectorAll(".msrow-now").length, 1);
   assert.doesNotMatch(host.textContent, SCORE);
   // Never the server's why (its gap-as-verdict clause).
   assert.doesNotMatch(host.textContent, /off the target/);
@@ -509,7 +540,7 @@ function reads({ fail = [], extra = {} } = {}) {
     "/race-build": build(),
     "/journey": journey(),
     "/journey/timeline": timeline(),
-    "/health-docs": docs(),
+    "/health-docs/draws": docs(),
     "/health/next-checkup": checkup(),
     ...extra,
   };
@@ -567,7 +598,7 @@ test("a lab row routes into Health through navigate; a modified click keeps the 
   win.CairnHorizonController.mount(root, { today: TODAY, load: loader, navigate: (t) => went.push(t) });
   await flush();
   await flush();
-  const rows = root.querySelectorAll('[data-horizon-lane="labs"] .horizon-row-link');
+  const rows = root.querySelectorAll('[data-horizon-lane="labs"] .msrow-link');
   await rows[0].click();
   assert.deepEqual(plain(went), [{ tab: "stand", section: "records", id: "15" }]);
   const goal = root.querySelector('[data-horizon-lane="goal"] .horizon-lane-link');
@@ -625,7 +656,7 @@ function seasonTimeline() {
 
 test("season: weigh-ins sorted and cleaned, the goal, the window, race day, and draws and rechecks as marks", () => {
   const win = load();
-  const season = plain(win.CairnHorizonModel.season(pace(WEIGH_INS), seasonTimeline(), docs(), checkup(), TODAY));
+  const season = plain(win.CairnHorizonLabsModel.season(pace(WEIGH_INS), seasonTimeline(), docs(), checkup(), TODAY));
   assert.deepEqual(
     season.points.map((p) => p.date),
     ["2026-08-10", "2026-08-20", "2026-09-01", "2026-09-16"]
@@ -652,12 +683,14 @@ test("season: weigh-ins sorted and cleaned, the goal, the window, race day, and 
 
 test("season: a draw inside the window sits behind; fewer than two weigh-ins is no line", () => {
   const win = load();
-  const season = win.CairnHorizonModel.season(
+  const season = win.CairnHorizonLabsModel.season(
     pace(WEIGH_INS),
     timeline(),
     [
-      { id: 1, kind: "bloodwork", doc_date: "2026-08-25" },
-      { id: 2, kind: "visit_note", doc_date: "2026-08-26" },
+      { date: "2026-08-25", date_words: "Aug 25", kind: "bloodwork", label: "Bloodwork", doc_id: 1, doc_ids: [1, 3] },
+      { date: "2026-08-26", date_words: "Aug 26", kind: "visit_note", label: "Visit note", doc_id: 2, doc_ids: [2] },
+      // the same draw again is still one mark
+      { date: "2026-08-25", date_words: "Aug 25", kind: "bloodwork", label: "Bloodwork", doc_id: 3, doc_ids: [3] },
     ],
     null,
     TODAY
@@ -667,8 +700,8 @@ test("season: a draw inside the window sits behind; fewer than two weigh-ins is 
   ]);
   assert.equal(season.fan, null);
   assert.equal(season.race, null);
-  assert.equal(win.CairnHorizonModel.season(pace([["2026-09-16", 186]]), [], [], null, TODAY), null);
-  assert.equal(win.CairnHorizonModel.season(null, [], [], null, TODAY), null);
+  assert.equal(win.CairnHorizonLabsModel.season(pace([["2026-09-16", 186]]), [], [], null, TODAY), null);
+  assert.equal(win.CairnHorizonLabsModel.season(null, [], [], null, TODAY), null);
 });
 
 function seasonOf(_win, points, overrides = {}) {
@@ -813,7 +846,7 @@ test("terrain chart: a mid-week race ends the ground the day after it", () => {
 
 // ---------- the view switch ----------
 
-test("the views are tabs over their own panels; the race view opens first", () => {
+test("the views are tabs over their own panels; Week opens first", () => {
   const win = load();
   const host = createHost(win.document);
   host.innerHTML = win.CairnHorizon.shellHtml();
@@ -825,14 +858,14 @@ test("the views are tabs over their own panels; the race view opens first", () =
     assert.equal(panel.getAttribute("role"), "tabpanel");
     assert.equal(panel.getAttribute("aria-labelledby"), tab.getAttribute("id"));
   }
-  assert.equal(host.querySelector('[data-horizon-panel="race"]').hidden, false);
+  assert.equal(host.querySelector('[data-horizon-panel="race"]').hidden, true);
   assert.equal(host.querySelector('[data-horizon-panel="season"]').hidden, true);
-  assert.equal(host.querySelector('[data-horizon-panel="week"]').hidden, true);
+  assert.equal(host.querySelector('[data-horizon-panel="week"]').hidden, false);
   assert.ok(host.querySelector('[data-horizon-panel="season"] [data-horizon-lane="goal"]'));
   assert.ok(host.querySelector('[data-horizon-panel="season"] [data-horizon-lane="labs"]'));
 });
 
-test("with no race set the timeline steps to the season on its own; a picked view holds", async () => {
+test("with no race set Horizon still opens on Week, and a picked view is never remembered", async () => {
   const win = load();
   const host = createHost(win.document);
   host.innerHTML = win.CairnHorizon.shellHtml();
@@ -842,20 +875,21 @@ test("with no race set the timeline steps to the season on its own; a picked vie
   const teardown = win.CairnHorizonController.mount(root, { today: TODAY, load: loader, navigate: () => {} });
   await flush();
   await flush();
-  assert.equal(root.getAttribute("data-horizon-view"), "season");
-  assert.equal(root.querySelector('[data-horizon-panel="season"]').hidden, false);
-  assert.equal(root.querySelector('[data-horizon-seg="season"]').getAttribute("aria-selected"), "true");
-  // The athlete picks the race view; a remount in the same session keeps it, even with no race.
+  assert.equal(root.getAttribute("data-horizon-view"), "week");
+  assert.equal(root.querySelector('[data-horizon-seg="week"]').getAttribute("aria-selected"), "true");
+  // The athlete picks the race view; the next open is Week again.
   await root.querySelector('[data-horizon-seg="race"]').click();
   assert.equal(root.getAttribute("data-horizon-view"), "race");
   teardown();
-  host.innerHTML = win.CairnHorizon.shellHtml();
+  assert.equal(win.CairnHorizonController.shellOptions().view, "week");
+  host.innerHTML = win.CairnHorizon.shellHtml(win.CairnHorizonController.shellOptions().view);
   const again = host.querySelector("[data-horizon]");
   win.CairnHorizonController.mount(again, { today: TODAY, load: reads({ extra: noRace }).load, navigate: () => {} });
   await flush();
   await flush();
-  assert.equal(again.getAttribute("data-horizon-view"), "race");
-  assert.equal(again.querySelector('[data-horizon-panel="race"]').hidden, false);
+  assert.equal(again.getAttribute("data-horizon-view"), "week");
+  assert.equal(again.querySelector('[data-horizon-panel="race"]').hidden, true);
+  assert.equal("pickView" in win.CairnHorizonController, false, "no session memory to pick a view into");
 });
 
 test("the goal line's held slot takes the season line, or goes when there is none", async () => {
@@ -1177,266 +1211,6 @@ test("terrain layout: nothing run yet says the week planned; a week run past its
   if (peak) assert.ok(Math.abs(week.y - peak.y) >= 12 || Math.abs(week.x - peak.x) > 40);
 });
 
-function planWeek() {
-  const day = (date, weekday, status, extra = {}) => ({
-    date,
-    weekday,
-    dow: null,
-    status,
-    plan_day: null,
-    session: null,
-    run: null,
-    hard: false,
-    ...extra,
-  });
-  const lift = (name) => ({
-    day_number: 1,
-    name,
-    focus: null,
-    purpose: null,
-    day_type: "training",
-    role: "strength",
-    out_of_order: false,
-  });
-  return {
-    as_of: TODAY,
-    week_start: "2026-09-14",
-    days: [
-      day("2026-09-14", "Monday", "done", {
-        plan_day: lift("Push"),
-        session: { id: 1, title: "Push", date: "2026-09-14", finished: true },
-      }),
-      day("2026-09-15", "Tuesday", "open", {
-        run: {
-          kind: "easy",
-          label: "Rest or an easy walk",
-          status: "open",
-          suggested_date: "2026-09-15",
-          completion_date: null,
-          km: 5,
-        },
-      }),
-      day("2026-09-16", "Wednesday", "today", {
-        plan_day: lift("Lower A"),
-        session: { id: 2, title: "Lower A", date: "2026-09-16", finished: false },
-        run: {
-          kind: "quality",
-          label: "Intervals",
-          status: "completed",
-          suggested_date: null,
-          completion_date: "2026-09-16",
-          km: 6.4,
-        },
-      }),
-      day("2026-09-17", "Thursday", "rest"),
-      day("2026-09-18", "Friday", "upcoming", { plan_day: lift("Pull") }),
-    ],
-    summary: null,
-    progress: {
-      line: "One of three lifting days in. 6.4 km over one run.",
-      lift_days_done: 1,
-      lift_days_planned: 3,
-      runs_done: 1,
-      run_km: 6.4,
-      longest_run_km: 6.4,
-      runs_open: [],
-      prs: 0,
-    },
-    layout: { clean: true, suggestion: null },
-    schedule: { lift_days: [], lift_days_source: null, run_days: [] },
-  };
-}
-
-test("week: each day's lift and run as pills in their stones' hues, ticked when done, a missed run drawn open", () => {
-  const win = load();
-  const week = win.CairnHorizonWeekModel.weekView(planWeek(), TODAY);
-  assert.equal(week.line, "One of three lifting days in. 6.4 km over one run.");
-  assert.deepEqual(plain(week.days.map((d) => [d.weekday, d.day, d.today])), [
-    ["MON", "14", false],
-    ["TUE", "15", false],
-    ["WED", "16", true],
-    ["THU", "17", false],
-    ["FRI", "18", false],
-  ]);
-  assert.deepEqual(plain(week.days[0].pills), [{ stone: "strength", text: "Push", state: "done" }]);
-  // The run is named by its kind, never by the agenda's day read.
-  assert.deepEqual(plain(week.days[1].pills), [{ stone: "endurance", text: "Easy run · 5 km", state: "open" }]);
-  assert.deepEqual(plain(week.days[2].pills.map((p) => p.state)), ["live", "done"]);
-  assert.equal(week.days[3].pills.length, 0);
-  // A read with no days is an empty week (said calmly), never a failed read.
-  assert.deepEqual(plain(win.CairnHorizonWeekModel.weekView({ days: [] }, TODAY)), { line: "", days: [] });
-  assert.equal(win.CairnHorizonWeekModel.weekView(null, TODAY), null);
-  assert.match(win.CairnHorizon.weekHtml({ line: "", days: [] }), /Nothing planned this week yet/);
-  // A week in plan order (no lifting weekdays stated) counts its rows, never leaves them unlabelled.
-  const template = win.CairnHorizonWeekModel.weekView(
-    { days: planWeek().days.map((d) => ({ ...d, date: null, weekday: null, status: "upcoming" })) },
-    TODAY
-  );
-  assert.deepEqual(plain(template.days.slice(0, 2).map((d) => [d.weekday, d.day])), [
-    ["DAY", "1"],
-    ["DAY", "2"],
-  ]);
-
-  const host = createHost(win.document);
-  host.innerHTML = win.CairnHorizon.weekHtml(week);
-  assert.equal(host.querySelector(".horizon-week-voice").textContent, "One of three lifting days in.");
-  assert.equal(host.querySelector(".horizon-week-line").textContent, "6.4 km over one run.");
-  assert.equal(host.querySelector(".horizon-day.is-today").getAttribute("aria-current"), "date");
-  assert.equal(host.querySelector(".horizon-rest").textContent, "Rest");
-  assert.equal(host.querySelectorAll(".horizon-pill.is-done").length, 2);
-  assert.match(win.CairnHorizon.weekHtml(null), /couldn't be read just now/);
-});
-
-test("week: today speaks the server's today line and the run's own label, never a second answer", () => {
-  const win = load();
-  const read = planWeek();
-  // Today is a lift day the read suggests resting; the run still ahead today is the
-  // agenda's own words for it, the same the week line and the Brief say.
-  read.days[2] = {
-    ...read.days[2],
-    session: null,
-    plan_day: {
-      day_number: 2,
-      name: "Pull",
-      focus: null,
-      purpose: null,
-      day_type: "training",
-      role: "strength",
-      out_of_order: false,
-    },
-    run: {
-      kind: "easy",
-      label: "Rest or an easy walk",
-      status: "open",
-      suggested_date: TODAY,
-      completion_date: null,
-      km: 5,
-    },
-  };
-  read.strength_line = {
-    date: TODAY,
-    day_number: 2,
-    title: "Pull",
-    focus: null,
-    role: "strength",
-    state: "not_started",
-    suggestion: "rest",
-    caveat: "The read suggests rest today — Pull is still yours if you want it.",
-    run_in: null,
-    reshaped: false,
-    original: [],
-    text: "Pull · not started",
-  };
-  const week = win.CairnHorizonWeekModel.weekView(read, TODAY);
-  const today = week.days[2];
-  assert.equal(today.today, true);
-  // No lift pill of its own: the server's line carries today's lift.
-  assert.deepEqual(plain(today.pills), [{ stone: "endurance", text: "Rest or an easy walk · 5 km", state: "planned" }]);
-  assert.equal(today.line.text, "Pull · not started");
-  // A past, undone run is still named by its kind; other days carry no line.
-  assert.equal(week.days[1].pills[0].text, "Easy run · 5 km");
-  assert.equal(week.days[1].line, null);
-  assert.deepEqual(plain(week.days[4].pills), [{ stone: "strength", text: "Pull", state: "planned" }]);
-
-  const host = createHost(win.document);
-  host.innerHTML = win.CairnHorizon.weekHtml(week);
-  const row = host.querySelector(".horizon-day.is-today");
-  assert.equal(row.querySelector(".strength-line-t").textContent, "Pull · not started");
-  assert.match(row.querySelector(".strength-line-caveat").textContent, /suggests rest today/);
-  assert.equal(row.querySelectorAll(".horizon-pill.is-strength").length, 0);
-  assert.match(row.querySelector(".horizon-pill.is-endurance").textContent, /^Rest or an easy walk · 5 km$/);
-
-  // A line for another day, or one with nothing to say, leaves the plan's own pills.
-  const stale = win.CairnHorizonWeekModel.weekView(
-    { ...read, strength_line: { ...read.strength_line, date: "2026-09-15" } },
-    TODAY
-  );
-  assert.equal(stale.days[2].line, null);
-  assert.equal(stale.days[2].pills[0].text, "Pull");
-  const none = win.CairnHorizonWeekModel.weekView(
-    { ...read, strength_line: { ...read.strength_line, state: "none" } },
-    TODAY
-  );
-  assert.equal(none.days[2].line, null);
-});
-
-test("a failed week read says so, and the next tap on Week asks again", async () => {
-  const win = load();
-  const host = createHost(win.document);
-  host.innerHTML = win.CairnHorizon.shellHtml();
-  const root = host.querySelector("[data-horizon]");
-  let fail = true;
-  const asked = [];
-  const { load: base } = reads({ extra: { "/plan/week": planWeek() } });
-  const loader = (path) => {
-    if (path === "/plan/week") {
-      asked.push(path);
-      if (fail) return Promise.reject(new Error("offline"));
-    }
-    return base(path);
-  };
-  win.CairnHorizonController.mount(root, { today: TODAY, load: loader, navigate: () => {} });
-  await flush();
-  await root.querySelector('[data-horizon-seg="week"]').click();
-  await flush();
-  await flush();
-  assert.match(root.querySelector("[data-horizon-weekview]").textContent, /couldn't be read just now/);
-  fail = false;
-  await root.querySelector('[data-horizon-seg="week"]').click();
-  await flush();
-  await flush();
-  assert.equal(asked.length, 2);
-  assert.ok(root.querySelector(".horizon-days"));
-});
-
-test("the week view reads the plan week only once it is opened", async () => {
-  const win = load();
-  const host = createHost(win.document);
-  host.innerHTML = win.CairnHorizon.shellHtml();
-  const root = host.querySelector("[data-horizon]");
-  const { load: loader, calls } = reads({ extra: { "/plan/week": planWeek() } });
-  win.CairnHorizonController.mount(root, { today: TODAY, load: loader, navigate: () => {} });
-  await flush();
-  assert.equal(calls.includes("/plan/week"), false);
-  await root.querySelector('[data-horizon-seg="week"]').click();
-  await flush();
-  await flush();
-  assert.equal(root.getAttribute("data-horizon-view"), "week");
-  assert.equal(root.querySelector('[data-horizon-panel="week"]').hidden, false);
-  assert.equal(root.querySelectorAll(".horizon-day").length, 5);
-  await root.querySelector('[data-horizon-seg="race"]').click();
-  await root.querySelector('[data-horizon-seg="week"]').click();
-  assert.equal(calls.filter((p) => p === "/plan/week").length, 1);
-});
-
-test("a hidden Week panel holds no busy skeleton; opening it shows one until the week is read", async () => {
-  const win = load();
-  const host = createHost(win.document);
-  host.innerHTML = win.CairnHorizon.shellHtml();
-  const root = host.querySelector("[data-horizon]");
-  const week = root.querySelector('[data-horizon-panel="week"]');
-  assert.equal(week.hasAttribute("hidden"), true);
-  assert.equal(week.querySelector('[aria-busy="true"]'), null, "nothing hidden claims to be loading");
-  // Opened first, the week panel carries its skeleton in the shell itself.
-  const opened = createHost(win.document);
-  opened.innerHTML = win.CairnHorizon.shellHtml("week");
-  assert.ok(opened.querySelector('[data-horizon-panel="week"] [aria-busy="true"]'));
-
-  let answer = null;
-  const { load: base } = reads();
-  const loader = (path) => (path === "/plan/week" ? new Promise((resolve) => (answer = resolve)) : base(path));
-  win.CairnHorizonController.mount(root, { today: TODAY, load: loader, navigate: () => {} });
-  await flush();
-  await root.querySelector('[data-horizon-seg="week"]').click();
-  await flush();
-  assert.ok(week.querySelector('[aria-busy="true"]'), "the skeleton stands while the week is read");
-  answer(planWeek());
-  await flush();
-  await flush();
-  assert.equal(week.querySelector('[aria-busy="true"]'), null);
-  assert.ok(week.querySelector(".horizon-days"));
-});
-
 // ---------- run units (settings.run_units) ----------
 
 test("run units: miles restate every distance on the race lane, the chart and the week; bars still scale on km", () => {
@@ -1482,16 +1256,8 @@ test("run units: miles restate every distance on the race lane, the chart and th
   assert.equal(host.querySelector("[data-horizon-units]"), null);
   assert.doesNotMatch(host.querySelector(".horizon-tw").textContent, /\bkm\b/);
   assert.doesNotMatch(host.querySelector(".horizon-chart-key").textContent, /\bkm\b/);
-
-  const week = win.CairnHorizonWeekModel.weekView(planWeek(), TODAY, "mi");
-  assert.equal(week.line, "One of three lifting days in. 4 mi over one run.");
-  assert.equal(week.days[1].pills[0].text, "Easy run · 3.1 mi");
-  // The one helper a read-only day preview prints a planned run with, in the same words.
-  assert.equal(win.CairnHorizonWeekModel.dayRunText(planWeek().days[1], TODAY, "mi"), "Easy run · 3.1 mi");
-  assert.equal(win.CairnHorizonWeekModel.dayRunText(planWeek().days[2], TODAY), "Quality run · 6.4 km");
-  const ahead = { date: "2026-09-19", run: { kind: "long", label: "Long run", status: "open", km: 16 } };
-  assert.equal(win.CairnHorizonWeekModel.dayRunText(ahead, TODAY, "mi"), "Long run · 9.9 mi");
-  assert.equal(win.CairnHorizonWeekModel.dayRunText({ date: "2026-09-19", run: null }, TODAY), "");
+  // (The Week landing's words arrive in the athlete's units from GET /api/week:
+  // clientHorizonWeek.test.js renders it in miles + pounds and in km + kg.)
 });
 
 test("run units: the controller reads settings; there is no per-surface km/mi switch", async () => {

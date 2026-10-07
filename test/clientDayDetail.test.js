@@ -693,75 +693,81 @@ test("a held (snapshot) copy is never left standing: the first paint owns the wh
   assert.equal(slot.querySelectorAll("button.tstrip-day").length, 7);
 });
 
-test("the strip's header: the block clock and the run plan arrive later and repaint only the header", async () => {
+test("the strip is a glance: no summary line; a recovery week lands later and repaints only the header", async () => {
   const w = loadStrip({ withBundle: (_n, fn) => fn(), CairnDayDetailController: { mount: () => () => {} } });
-  const progress = { lift_days_done: 2, lift_days_planned: 5, runs_done: 1, run_km: 6.1, longest_run_km: 6.1, runs_open: [], prs: 3, line: null };
-  const data = { ...week(), progress };
+  const progress = { lift_days_done: 2, lift_days_planned: 5, runs_done: 1, run_km: 6.1, longest_run_km: 6.1, runs_open: [], prs: 3, line: "Two of five lifting days are in." };
+  const data = { ...week(), progress, summary: "Two of five lifting days are in." };
   const slot = createHost(w.document);
   w.CairnTodayStripController.mount(slot, {
     date: TODAY,
-    peek: (key) => (key === "settings" ? { data: { settings: { run_units: "mi" } }, fresh: true } : { data, fresh: true }),
+    peek: () => ({ data, fresh: true }),
     load: () => Promise.resolve(data),
   });
   const days = slot.querySelector("[data-tstrip-days]");
-  assert.equal(slot.querySelector(".tstrip-tally").textContent, "2 of 5 lifting days · 3.8 mi run · 3 new bests");
-  w.CairnTodayStripController.setHeader(slot, { block: "Build · Wk 2 of 6", kmPlanned: 33 });
-  assert.equal(slot.querySelector("[data-tstrip-block]").textContent, "Build · Wk 2 of 6");
-  assert.equal(slot.querySelector(".tstrip-tally").textContent, "2 of 5 lifting days · 3.8 of ~21 mi · 3 new bests");
+  // The week's sentence and counts are Horizon's (one home per fact): none of them here.
+  assert.equal(slot.querySelector(".tstrip-tally"), null);
+  assert.doesNotMatch(slot.textContent, /lifting days|new best|Two of five/);
+  assert.equal(w.CairnTodayStrip.tallyText, undefined);
+  assert.equal(slot.querySelector("[data-tstrip-block]").textContent, "");
+  w.CairnTodayStripController.setHeader(slot, { block: "Recovery week · day 2 of 7" });
+  assert.equal(slot.querySelector("[data-tstrip-block]").textContent, "Recovery week · day 2 of 7");
   assert.equal(slot.querySelector("[data-tstrip-days]"), days, "the days were not rewritten");
-  // An empty week says nothing — never "0 of 0".
-  assert.equal(w.CairnTodayStrip.tallyText({ progress: { lift_days_done: 0, lift_days_planned: null, run_km: 0, prs: 0 } }), "");
-  // The week read's own run units win over a cold (or stale) settings cache: an imperial
-  // athlete never reads km because the settings read had not landed yet.
-  assert.equal(
-    w.CairnTodayStrip.tallyText({ progress, run_units: "mi" }, { kmPlanned: 33, units: "km" }),
-    "2 of 5 lifting days · 3.8 of ~21 mi · 3 new bests"
-  );
-  assert.equal(
-    w.CairnTodayStrip.tallyText({ progress, run_units: "km" }, { kmPlanned: 33, units: "mi" }),
-    "2 of 5 lifting days · 6.1 of ~33 km · 3 new bests"
-  );
 });
 
 // ---- Horizon's week rows ----
 
-test("Horizon's week: rest is quiet, a finished day is ticked, today names the day it stands in for", () => {
+test("Horizon's week rows are this view's row variant over GET /api/week: rest is quiet, a done day ticked, each opens its page", () => {
   const w = loadClientModule([
     "html-utils",
     "ui-format",
-    "ui-components",
     "ui-reads",
-    "ui-actions-client",
-    "ui-chart",
-    "format-utils",
-    "ui-format",
-    "journey-progress-client",
-    "journey-timeline-client",
-    "race-week-model",
-    "race-week-runs-model",
-    "race-ladder-model",
-    "race-view-model",
-    "race-estimate-client",
-    "race-ladder-client",
-    "race-view-client",
-    "horizon-model",
     "day-detail-model",
-    "horizon-week-model",
-    "horizon-terrain-client",
-    "horizon-chart-client",
-    "horizon-client",
+    "day-detail-client",
+    "milestone-row-model",
+    "goal-row-model",
+    "week-model",
   ]);
-  const read = week();
-  read.days[0].run = null;
-  const view = w.CairnHorizonWeekModel.weekView(read, TODAY, "km");
-  assert.equal(view.days[2].rest, true);
-  assert.equal(view.days[0].done, true);
-  assert.equal(view.days[1].swappedFrom, "Lower B");
-  const host = renderHtml(w.CairnHorizon.weekHtml(view));
-  const rows = host.querySelectorAll(".horizon-day");
-  assert.ok(rows[0].classList.contains("is-done") && rows[0].querySelector(".horizon-day-check"));
+  const chip = (date, status, lift, run) => ({
+    date,
+    date_words: date,
+    weekday: "Mon",
+    status,
+    today: date === TODAY,
+    lift: lift ? { day_number: 1, title: lift, heavy_lower: false, suggestion: null } : null,
+    run,
+    rest: !lift && !run,
+    hard: false,
+    words: lift || "Rest",
+    load: { dose: lift ? "moderate" : "rest", word: lift ? "Moderate" : "Rest", height: lift ? 0.55 : 0.08 },
+    href: null,
+  });
+  const read = {
+    today: TODAY,
+    units: { distance: "km", weight: "lb" },
+    frame: {},
+    days: [
+      chip("2026-10-05", "done", "Upper B", null),
+      chip(TODAY, "today", "Push", null),
+      chip("2026-10-07", "rest", null, null),
+      chip("2026-10-08", "upcoming", null, {
+        kind: "quality",
+        label: "Threshold intervals",
+        status: "open",
+        km: 8,
+        distance_words: "8 km",
+        rested: false,
+        covered: false,
+      }),
+    ],
+  };
+  const view = w.CairnWeekModel.landing(read);
+  const host = renderHtml(view.glances.map((g) => w.CairnDayDetailView.rowHtml(g)).join(""));
+  const rows = host.querySelectorAll(".pahead-day");
+  assert.equal(rows.length, 4);
+  assert.ok(rows[0].querySelector(".pahead-tick"), "a done day is ticked");
   assert.ok(rows[2].classList.contains("is-rest"));
-  assert.equal(rows[1].querySelector(".horizon-day-swap").textContent, "In place of Lower B");
+  assert.equal(rows[1].getAttribute("aria-current"), "date");
+  assert.match(rows[3].textContent, /Threshold intervals · 8 km/);
   assert.equal(rows[3].getAttribute("data-open-day"), "2026-10-08");
 });
 

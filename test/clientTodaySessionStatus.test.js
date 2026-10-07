@@ -33,6 +33,7 @@ function loadTodaySessionStatus(extra = {}) {
     ...extra,
   };
   context.window = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-session-status-client.js"), "utf8"), context);
   return context.CairnTodaySessionStatus;
 }
@@ -209,8 +210,10 @@ test("Today done card leads with PRs when highlights carry them", () => {
   assert.match(html, /class="done-chip done-chip-pr chip-in">2 PRs</);
   assert.ok(html.indexOf("2 PRs") < html.indexOf("48 min"), "PR chip precedes the duration chip");
   assert.ok(html.indexOf("48 min") < html.indexOf("2,250 lb"), "tonnage chip sits last, after duration");
-  // Calm week context reads as a plain sentence of forward motion, not a metric wall.
-  assert.match(html, /class="done-week">Trained 4 of the last 7 days, with 2 new bests</);
+  // Calm week context reads as a plain sentence of forward motion, not a metric wall —
+  // and never a week's new-best count (Train's What moved owns that, one source).
+  assert.match(html, /class="done-week">Trained 4 of the last 7 days</);
+  assert.doesNotMatch(html, /new bests/);
 });
 
 // W4.2: weekHtml is exported standalone so today-brief-client.ts can thread the
@@ -219,7 +222,8 @@ test("Today done card leads with PRs when highlights carry them", () => {
 test("weekHtml is exported and renders the same week-context sentence the done card uses", () => {
   const status = loadTodaySessionStatus();
   assert.equal(typeof status.weekHtml, "function");
-  assert.match(status.weekHtml({ week: { trained_days_7: 4, prs: 2 } }), /Trained 4 of the last 7 days, with 2 new bests/);
+  assert.match(status.weekHtml({ week: { trained_days_7: 4, prs: 2 } }), /Trained 4 of the last 7 days</);
+  assert.equal(status.weekHtml({ week: { trained_days_7: 0, prs: 3 } }), "", "a bests count never stands alone here");
   assert.equal(status.weekHtml({ week: { trained_days_7: 0, prs: 0 } }), "", "a zero-training week renders nothing");
   assert.equal(status.weekHtml({}), "");
 });

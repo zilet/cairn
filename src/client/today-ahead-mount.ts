@@ -1,7 +1,7 @@
 // @ts-check
-// Mounts what the redesigned Today paints after its frame: the Path card under the
-// Brief (eager, CairnTodayPathController) and the rest — the push line and offer, the
-// week strip, the overnight digest, Body & recovery's gauges / sparkline, Coming up,
+// Mounts what the redesigned Today paints after its frame: the one Horizon glance line
+// under the Brief (eager, CairnTodayPathController) and the rest — the push line and
+// offer, the week strip, the overnight digest, Body & recovery's gauges / sparkline,
 // the new connection — from the
 // lazy today-ahead bundle (CairnTodayAhead), reached only through withBundle. Warm, the
 // bundle mounts in the same turn; cold, the frame's empty slots fill once it lands.
@@ -38,8 +38,8 @@
         date: opts.date,
         peek: (key) => peekCached(key) as ReturnType<Parameters<typeof CairnTodayPathController.mount>[1]["peek"]>,
         load: (path, options) => cachedApi(path, options) as never,
-        // "All goals" → Horizon's goal line (the same section /app/horizon/goal deep-links to).
-        openGoals: go("horizon", () => (rail.state.horizonSeg = "goal")),
+        // The glance opens Horizon on its Week (the default landing, never a remembered section).
+        openHorizon: go("horizon", () => (rail.state.horizonSeg = null)),
       });
     }
     void withBundle("today-ahead", () => {
@@ -57,8 +57,6 @@
         gotoChatWith: (text) => void rail.gotoChatWith(text),
         openChanges: go("plan", () => (rail.state.planJump = "coach")),
         openPlanCoach: go("plan", () => (rail.state.planJump = "coach")),
-        openCheckup: go("stand", () => (rail.state.standSeg = "checkup")),
-        openRace: go("horizon"),
         refreshToday: () => rail.refreshToday({ soft: true }),
         invalidate: (key) => rail.invalidate(key),
       });

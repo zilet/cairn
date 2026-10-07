@@ -40,7 +40,7 @@ function strip(win, focus) {
   return renderHtml(win.cfocusPushHtml(focus), { document: win.document });
 }
 
-test("active push: 'Push · through Nov 15' and the read's own why-not-more line", () => {
+test("active push: 'Push · through Nov 15' and the stance's own line — today's holds are the Brief's", () => {
   const win = load();
   const host = strip(win, {
     push: push({
@@ -57,11 +57,12 @@ test("active push: 'Push · through Nov 15' and the read's own why-not-more line
   assert.equal(el.getAttribute("role"), "note");
   assert.equal(host.querySelector(".tfc-push-k").textContent, "Push");
   assert.equal(host.querySelector(".tfc-push-until").textContent, "through Nov 15");
-  assert.equal(host.querySelector(".tfc-push-line").textContent, "Push is on. Today it gives way to one thing: a short <night>.");
-  assert.equal(host.querySelector(".tfc-push-line night"), null, "escaped");
+  // One home per fact: what holds today back is the Brief's push line and why panel.
+  assert.equal(host.querySelector(".tfc-push-line").textContent, "Pushing through Nov 15, as you asked on Oct 1.");
+  assert.doesNotMatch(host.innerHTML, /gives way|short/);
 });
 
-test("with no line, what is holding today is named in its own words", () => {
+test("what is holding today never rides Train's strip (the Brief names it)", () => {
   const win = load();
   const host = strip(win, {
     push: push({
@@ -79,8 +80,8 @@ test("with no line, what is holding today is named in its own words", () => {
     }),
   });
   const line = host.querySelector(".tfc-push-line").textContent;
-  assert.equal(line, "Holding it today: a deload your loaded weeks earned · the soreness you <reported>.");
-  assert.doesNotMatch(line, /third never shown/);
+  assert.equal(line, "Pushing through Nov 15, as you asked on Oct 1.");
+  assert.doesNotMatch(host.innerHTML, /Holding it today|soreness|third never shown/);
 });
 
 test("nothing holding: the stance's own line; an undated standing push says so", () => {

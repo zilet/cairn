@@ -43,7 +43,6 @@ import {
   runComplianceRead,
   strengthJourneyRead,
   testWeekDue,
-  todayStrengthLine,
   trainingLoadBand,
   weeklyRunPlan,
 } from "../domain/training/index.js";
@@ -139,7 +138,7 @@ export function trainHomeResponses(viewQuery: unknown, dateQuery: unknown, hourQ
     put(out, "/journey", () => journeyRead(undefined));
     put(out, "/journey/milestones", () => journeyMilestones(undefined));
     put(out, "/journey/timeline", () => forwardTimeline(undefined));
-    put(out, `/today-strength-line?date=${q(date)}`, () => todayStrengthLine(date));
+    // No today's-lift line: Train's home no longer repeats the Brief's (one home per fact).
   } else if (view === "program") {
     put(out, "/program-state", () => getProgramState(undefined));
     put(out, "/strength-journeys", () => ({ journeys: getStrengthJourneys() }));

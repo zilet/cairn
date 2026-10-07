@@ -32,6 +32,7 @@ function loadProgressScreen() {
   };
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/progress-data-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/05-progress.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/progress-volume-route-client.js"), "utf8"), context);
@@ -48,6 +49,8 @@ const ON_PACE = {
   needed: { lb_wk: -0.8, line: [{ date: "2026-07-01", weight_lb: 193 }, { date: "2026-10-04", weight_lb: 172 }] },
   goal: { weight_lb: 172, date: "2026-10-04" },
   window_days: 90,
+  // The ONE weight-trend read (weight-trend.ts) rides beside the series.
+  read: { line: "Trending −0.8 lb/wk — on pace for Oct 4.", verdict: "on_pace" },
 };
 
 test("goal-pace chart draws the trend, needed pace, goal ring and an on-pace read", () => {
@@ -80,22 +83,30 @@ test("behind pace states the needed rate as information, never blame", () => {
     needed: { lb_wk: -0.9, line: [{ date: "2026-07-01", weight_lb: 199 }, { date: "2026-10-04", weight_lb: 172 }] },
     goal: { weight_lb: 172, date: "2026-10-04" },
     window_days: 90,
+    read: { line: "Trending −0.3 lb/wk — −0.9 lb/wk would meet Oct 4.", verdict: "behind" },
   });
-  assert.match(html, /Trending −0\.3 lb\/wk; −0\.9 would meet Oct 4\./);
+  assert.match(html, /Trending −0\.3 lb\/wk — −0\.9 lb\/wk would meet Oct 4\./);
   assert.match(html, /gpace-read-behind/);
 });
 
-test("a cut running well past the needed rate reads calmly as ahead of pace, not blamed or alarmed", () => {
-  const { goalPaceChartHtml } = loadProgressScreen();
+test("the read line is the ONE weight-trend read's sentence, never a slope the chart re-judges", () => {
+  const { goalPaceChartHtml, CairnFmt } = loadProgressScreen();
+  // The chart's own fit says −3.1; the read says −0.9. Every surface prints the read.
   const html = goalPaceChartHtml({
     points: [{ date: "2026-05-01", weight_lb: 210 }, { date: "2026-07-01", weight_lb: 185.6 }],
     trend: { lb_wk: -3.1, line: [{ date: "2026-05-01", weight_lb: 210 }, { date: "2026-07-01", weight_lb: 185.6 }] },
     needed: { lb_wk: -0.9, line: [{ date: "2026-07-01", weight_lb: 185.6 }, { date: "2026-10-04", weight_lb: 172 }] },
     goal: { weight_lb: 172, date: "2026-10-04" },
     window_days: 90,
+    read: { line: "Trending −0.9 lb/wk — ahead of the line for Oct 4.", verdict: "ahead" },
   });
-  assert.match(html, /Trending −3\.1 lb\/wk — ahead of the needed pace for Oct 4\./);
+  assert.match(html, /Trending −0\.9 lb\/wk — ahead of the line for Oct 4\./);
+  assert.doesNotMatch(html, /3\.1/);
   assert.match(html, /gpace-read-on/); // still the calm on-pace styling, never alarming
+  // A kg athlete's goal ring is labelled in kg.
+  CairnFmt.set({ weight_units: "kg" });
+  assert.match(goalPaceChartHtml(ON_PACE), /78 kg · Oct 4/);
+  CairnFmt.set({ weight_units: "lb" });
 });
 
 test("no goal → no needed-pace line and no read line (the chart still shows the trend)", () => {
@@ -211,6 +222,7 @@ function loadProgressScreenWithDom() {
   };
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/progress-data-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/progress-components-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/05-progress.js"), "utf8"), context);
@@ -330,6 +342,7 @@ function loadVolumeRoute({ peeks = {}, answers = {} } = {}) {
   };
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/progress-data-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/progress-components-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/progress-volume-client.js"), "utf8"), context);

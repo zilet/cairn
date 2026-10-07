@@ -1,11 +1,15 @@
 // @ts-check
-// The Horizon timeline, the controller (docs/V2-PLAN.md wave 5). `mount(host, deps)`
-// fills the shell's three lane slots. Each lane reads on its own and paints the moment
-// its reads land, so a slow health read never holds the race lane back; a failed read
-// is that lane's one calm sentence, never the whole screen. A tap on a row or a link
-// follows the model's route through `deps.navigate` (the app's own router), so a lab
-// row opens You's Health pages, which load their lazy bundle on arrival. Nothing here
-// computes a week, a fit, a due date or a staleness; the reads own those.
+// The Horizon timeline, the controller (docs/IA.md "Horizon landing"). `mount(host, deps)`
+// opens on WEEK, always — the designed landing (horizon-week-controller.ts over
+// GET /api/week) — never on a view remembered from earlier in the session, so a cold
+// /app/horizon and a tab tap land in the same place. The race build and the season fill
+// their lane slots as their own reads land; a failed read is that lane's one calm
+// sentence, never the whole screen. The week read's frame is To the race's hero, and its
+// weight goal is the Season's one weight trend (CairnHorizonModel.withWeek), so the
+// stage and the trend are said once, the same way, on every view. A tap on a row or a
+// link follows the model's route through `deps.navigate` (the app's own router), so a
+// lab row opens You's Health pages, which load their lazy bundle on arrival. Nothing
+// here computes a week, a fit, a due date or a staleness; the reads own those.
 {
   type Deps = ClientHorizonDeps;
   type Lane = ClientHorizonLane;
@@ -16,22 +20,14 @@
   }
 
   /**
-   * The view the athlete last picked, for this app session. Unpicked, Horizon opens on
-   * the race build, and steps to the season on its own when no race is set.
-   */
-  let chosenView: ClientHorizonView | null = null;
-  /**
-   * What the last race read said about this athlete's running, for this app session, so
-   * the next open draws the right frame at once: no race view for a lifting-only athlete,
-   * "Running" for a runner with no race. Unknown until the first read lands.
+   * What the last race read said about this athlete's running, so the next open frames
+   * the race view right at once: none for a lifting-only athlete, "Running" for a runner
+   * with no race. It shapes the switch only; the view opened is always Week.
    */
   let runningSeen: "race" | "runs" | "none" | null = null;
 
   function shellOptions(): { view: ClientHorizonView; race: boolean; raceLabel: string } {
-    const race = runningSeen !== "none";
-    const fallback: ClientHorizonView = runningSeen === "none" ? "week" : "race";
-    const view = chosenView && (chosenView !== "race" || race) ? chosenView : fallback;
-    return { view, race, raceLabel: runningSeen === "runs" ? "Running" : "" };
+    return { view: "week", race: runningSeen !== "none", raceLabel: runningSeen === "runs" ? "Running" : "" };
   }
 
   function mountHorizon(host: Element, deps: Deps): () => void {
@@ -40,23 +36,42 @@
     let seasonMarkup: string | null = null;
     /** The athlete's run units (settings.run_units), and the reads they are written over. */
     let units: "km" | "mi" = "km";
-    let weekAsked = false;
+    /** The last week read (GET /api/week): its frame and weight goal ride to the other views. */
+    let weekRead: unknown = null;
+    let weekTeardown: (() => void) | null = null;
 
-    /** The week view reads GET /api/plan/week the first time it is shown, never before. */
+    const calm = (): boolean => (typeof deps.reducedMotion === "function" ? deps.reducedMotion() : false);
+    const read = (path: string): Promise<unknown> =>
+      Promise.resolve()
+        .then(() => deps.load(path))
+        .catch(() => null);
+
+    /** The Week landing reads GET /api/week the first time it is shown (on mount: it opens first). */
     function ensureWeek(): void {
-      if (weekAsked) return;
-      weekAsked = true;
-      const held = host.querySelector<HTMLElement>("[data-horizon-weekview]");
-      if (held && !held.firstElementChild) held.innerHTML = CairnHorizon.weekSkeletonHtml();
-      void Promise.all([read("/plan/week"), unitsRead]).then(([planWeek]) => {
-        if (!live || !host.isConnected) return;
+      if (weekTeardown) return;
+      const slot = host.querySelector<HTMLElement>("[data-horizon-weekview]");
+      if (!slot) return;
+      const peek = deps.peek || (() => null);
+      const cached = deps.cached || ((path: string) => deps.load(path));
+      weekTeardown = CairnHorizonWeekController.mount(slot, {
+        peek,
+        load: cached,
+        reducedMotion: deps.reducedMotion,
+        seasonHref: deps.hrefFor?.({ tab: "horizon", section: null }) || "",
+        onRead: (value) => {
+          weekRead = value;
+          for (const key of ["race", "goal"] as const) {
+            const lane = lanes.get(key);
+            if (lane) paint(lane, false);
+          }
+        },
         // A failed read says so, and the next tap on Week asks again.
-        if (planWeek == null) weekAsked = false;
-        const slot = host.querySelector<HTMLElement>("[data-horizon-weekview]");
-        if (!slot) return;
-        slot.innerHTML = CairnHorizon.weekHtml(CairnHorizonWeekModel.weekView(planWeek, deps.today, units), {
-          enter: !calm(),
-        });
+        onFail: () => {
+          const was = weekTeardown;
+          weekTeardown = null;
+          was?.();
+        },
+        onSeason: () => setView("season"),
       });
     }
 
@@ -86,12 +101,7 @@
       slot.classList.remove("is-pending");
       slot.removeAttribute("aria-busy");
     }
-    const calm = (): boolean => (typeof deps.reducedMotion === "function" ? deps.reducedMotion() : false);
-    const read = (path: string): Promise<unknown> =>
-      Promise.resolve()
-        .then(() => deps.load(path))
-        .catch(() => null);
-    // The run units ride with the race and week reads; a failed settings read is km.
+    // The run units ride with the race read; a failed settings read is km.
     const unitsRead = read("/settings").then((value) => {
       units = CairnFmt.set((value as { settings?: { run_units?: unknown } } | null)?.settings).distance;
     });
@@ -101,15 +111,15 @@
       const slot = host.querySelector(`[data-horizon-lane="${lane.key}"]`);
       if (!slot) return;
       lanes.set(lane.key, lane);
-      slot.innerHTML = CairnHorizon.laneHtml(lane, { enter: enter && !calm(), hrefFor: deps.hrefFor });
+      const shown = CairnHorizonModel.withWeek(lane, weekRead);
+      slot.innerHTML = CairnHorizon.laneHtml(shown, { enter: enter && !calm(), hrefFor: deps.hrefFor });
       if (lane.key === "goal") fillSeason();
       if (lane.key === "race") settleRace(lane);
     }
 
     /**
      * The race read decides how much running Horizon holds: no view at all for a
-     * lifting-only athlete (the week opens instead), "Running" for a runner with no race,
-     * the race build otherwise. Remembered for the session, so the next open is framed right.
+     * lifting-only athlete, "Running" for a runner with no race, the race build otherwise.
      */
     function settleRace(lane: Lane): void {
       if (lane.state === "unread") return;
@@ -119,13 +129,10 @@
       if (running === "none") {
         seg?.remove();
         host.querySelector<HTMLElement>('[data-horizon-panel="race"]')?.setAttribute("hidden", "");
-        if (host.getAttribute("data-horizon-view") === "race") setView(chosenView === "season" ? "season" : "week");
+        if (host.getAttribute("data-horizon-view") === "race") setView("week");
         return;
       }
       if (seg) seg.textContent = running === "runs" ? "Running" : "To the race";
-      // No race and nothing run to show: unpicked, Horizon steps to the season on its own.
-      const empty = lane.state === "none" && !lane.this_week && !(lane.volume || []).length;
-      if (empty && !chosenView) setView("season");
     }
 
     function targetFor(key: string): ClientHorizonTarget | null {
@@ -142,7 +149,9 @@
       const today = deps.today;
       const model = CairnHorizonModel;
       const timeline = read("/journey/timeline");
-      const docs = read("/health-docs");
+      // One row per draw (kind + date), server-side: a draw's upload and its split-out
+      // panels are one row, never three (repo/lab-draws.ts).
+      const draws = read("/health-docs/draws");
       const checkup = read("/health/next-checkup");
       void Promise.all([read("/race-build"), unitsRead]).then(([build]) => {
         paint(model.raceLane(build, units));
@@ -150,13 +159,13 @@
       void Promise.all([read("/journey"), timeline]).then(([journey, rows]) =>
         paint(model.goalLane(journey, rows, today))
       );
-      void Promise.all([docs, checkup, timeline]).then(([docRows, checkupRead, rows]) =>
-        paint(model.labsLane(docRows, checkupRead, rows, today))
+      void Promise.all([draws, checkup, timeline]).then(([drawRows, checkupRead, rows]) =>
+        paint(CairnHorizonLabsModel.labsLane(drawRows, checkupRead, rows, today))
       );
-      void Promise.all([read("/nutrition/goal-pace?days=180"), timeline, docs, checkup]).then(
-        ([pace, rows, docRows, checkupRead]) => {
+      void Promise.all([read("/nutrition/goal-pace?days=180"), timeline, draws, checkup]).then(
+        ([pace, rows, drawRows, checkupRead]) => {
           if (!live || !host.isConnected) return;
-          seasonMarkup = CairnHorizon.seasonHtml(model.season(pace, rows, docRows, checkupRead, today));
+          seasonMarkup = CairnHorizon.seasonHtml(CairnHorizonLabsModel.season(pace, rows, drawRows, checkupRead, today));
           fillSeason();
         }
       );
@@ -166,9 +175,7 @@
       delegate("click", {
         "horizon-seg": (el) => {
           const picked = el.getAttribute("data-horizon-seg");
-          const view: ClientHorizonView = picked === "season" || picked === "week" ? picked : "race";
-          chosenView = view;
-          setView(view);
+          setView(picked === "season" || picked === "race" ? picked : "week");
         },
         "horizon-go": (el, event) => {
           if (modified(event)) return;
@@ -178,24 +185,18 @@
           deps.navigate(target);
         },
       });
-      // Open on the view the shell was framed with (the athlete's pick, when that view is
-      // on this athlete's Horizon); a week view asks for its read here.
-      const framed = host.getAttribute("data-horizon-view") as ClientHorizonView | null;
-      const open = chosenView && host.querySelector(`[data-horizon-panel="${chosenView}"]`) ? chosenView : framed;
-      if (open) setView(open);
+      // Week is the landing, always; the shell was framed on it.
+      setView("week");
       load();
       return () => {
         live = false;
+        weekTeardown?.();
+        weekTeardown = null;
       };
     });
   }
 
-  /** Open the next Horizon paint on `view` (Today's strip opens today "in Horizon" on the week). */
-  function pickView(view: ClientHorizonView): void {
-    chosenView = view;
-  }
-
-  const CAIRN_HORIZON_CONTROLLER = { mount: mountHorizon, shellOptions, pickView };
+  const CAIRN_HORIZON_CONTROLLER = { mount: mountHorizon, shellOptions };
 
   Object.assign(globalThis, { CairnHorizonController: CAIRN_HORIZON_CONTROLLER });
 }

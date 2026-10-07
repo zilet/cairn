@@ -296,7 +296,7 @@ test("coaching focus delegated listeners share the route bridge", () => {
   assert.deepEqual(activated.at(-1), "progress");
 });
 
-test("the block's temporal placement renders in the card and leads the thread context", () => {
+test("the block's temporal placement renders in the card; Today's thread never repeats it", () => {
   const { focus } = loadCoachingFocus();
   const withBlock = { ...richFocus, block_line: "Week 3 of 5 — building volume." };
 
@@ -304,8 +304,12 @@ test("the block's temporal placement renders in the card and leads the thread co
   assert.match(card, /cfocus-blockline/);
   assert.match(card, /Week 3 of 5 — building volume\./);
 
+  // One home per fact: the block week rides Today's Horizon glance line and the deload
+  // decision is Train's block line, so Today's thread carries the lever and its why only.
   const thread = focus.coachingFocusThreadHtml(withBlock);
-  assert.match(thread, /Week 3 of 5 — building volume\. Bench needs a new stimulus/);
+  assert.doesNotMatch(thread, /Week 3 of 5/);
+  assert.match(thread, /Bench needs a new stimulus/);
+  assert.match(thread, />This block</);
 
   // No block → no placement anywhere (never fabricated).
   assert.doesNotMatch(focus.coachingFocusCardHtml(richFocus), /cfocus-blockline/);
@@ -324,6 +328,9 @@ test("the block calendar never attaches to a non-training lead; compact card car
   const thread = focus.coachingFocusThreadHtml(healthLead);
   assert.doesNotMatch(thread, /Week 3 of 5/);
   assert.match(thread, /ApoB is the lever\./);
+  // A health lead is the season's focus, never labelled "This block".
+  assert.doesNotMatch(thread, /This block/);
+  assert.match(thread, />Focus</);
 
   // The compact conductor (Stand overview): masthead + headline + lead only —
   // no parallel/later/connections/retest rivaling the synthesis below it.

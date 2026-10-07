@@ -11,6 +11,8 @@ type TodayCompassStats = {
   goal_weight_lb?: unknown;
   goal_date?: unknown;
   week_cardio?: unknown;
+  /** The ONE weight-trend read (weight-trend.ts): rate, ask and verdict in the athlete's unit. */
+  weight_trend?: import("../contracts/week-read.js").WeightTrendRead | null;
   endurance?: {
     week_km?: unknown;
     week_moving_min?: unknown;
@@ -43,12 +45,6 @@ type TodayCompassBuild = {
 };
 
 (() => {
-  const PACE_WORDS: Record<string, Record<string, string>> = {
-    lose: { on: "on pace", behind: "behind", fast: "too fast" },
-    gain: { on: "building", behind: "not building yet", fast: "building fast" },
-    maintain: { holding: "holding steady", drifting_up: "drifting up", drifting_down: "easing down" },
-  };
-
   function finiteNumber(value: unknown): number | null {
     const n = Number(value);
     return Number.isFinite(n) ? n : null;
@@ -58,16 +54,10 @@ type TodayCompassBuild = {
     return value && typeof value === "object" ? value as TodayCompassStats : {};
   }
 
+  /** A signed rate already rounded once by the server ("−0.9", "+0.3"). */
   function fmtPace(value: unknown): string {
     const n = finiteNumber(value) ?? 0;
-    return (n > 0 ? "+" : "") + (Math.round(n * 10) / 10);
-  }
-
-  function paceWord(statsValue: unknown): string {
-    const stats = todayCompassStats(statsValue);
-    const mode = String(stats.goal_mode || "lose");
-    const status = String(stats.pace_status || "");
-    return (PACE_WORDS[mode] || PACE_WORDS.lose)[status] || "";
+    return `${n > 0 ? "+" : n < 0 ? "−" : ""}${Math.abs(n)}`;
   }
 
   function statDots(planned: number, done: number): string {
@@ -76,26 +66,24 @@ type TodayCompassBuild = {
       : "";
   }
 
+  // The pace tile prints the ONE weight-trend read (stats.weight_trend): its rate, its
+  // ask and its verdict, already in the athlete's unit — never a re-judged slope.
   function paceTileHtml(statsValue: unknown, deps: TodayCompassDeps): string {
-    const stats = todayCompassStats(statsValue);
-    const mode = String(stats.goal_mode || "lose");
-    const word = paceWord(stats);
-    if (stats.trend_lb_wk == null) {
+    const wt = todayCompassStats(statsValue).weight_trend;
+    if (!wt || wt.rate_value == null) {
       return `<div class="stat stat-pace"><div class="stat-n numeral stat-dim">—</div><div class="stat-l lbl">pace · log weigh-ins</div></div>`;
     }
-    if (stats.needed_lb_wk == null) {
-      return `<div class="stat stat-pace"><div class="stat-n numeral">${fmtPace(stats.trend_lb_wk)}</div><div class="stat-l lbl">lb/wk · set a goal</div></div>`;
+    const unit = `${wt.units === "kg" ? "kg" : "lb"}/wk`;
+    const rate = fmtPace(wt.rate_value);
+    if (!wt.needed_words && !wt.verdict_words) {
+      return `<div class="stat stat-pace"><div class="stat-n numeral">${deps.escapeHtml(rate)}</div><div class="stat-l lbl">${unit} · set a goal</div></div>`;
     }
-    const sub = mode === "maintain"
-      ? word
-      : `${word}${stats.needed_lb_wk ? ` · need ${fmtPace(stats.needed_lb_wk)}` : ""}`;
-    const title = mode === "maintain"
-      ? `Weight trend ${fmtPace(stats.trend_lb_wk)} lb/wk — ${word || "holding steady"}`
-      : `Trend ${fmtPace(stats.trend_lb_wk)} lb/wk over recent weigh-ins${stats.goal_weight_lb != null ? ` · need ${fmtPace(stats.needed_lb_wk)} ${mode === "gain" ? "to build toward" : "to reach"} ${stats.goal_weight_lb} lb${stats.goal_date ? ` by ${CairnFmt.date(stats.goal_date)}` : ""}` : ""}`;
-    return `<div class="stat stat-pace pace-${stats.pace_status || "on"}" title="${deps.escapeAttr(title)}">
-        <div class="stat-n numeral">${fmtPace(stats.trend_lb_wk)}</div>
+    const sub = [wt.verdict_words, wt.needed_words ? `need ${wt.needed_words}` : ""].filter(Boolean).join(" · ");
+    const tone = wt.verdict === "behind" ? "behind" : wt.verdict === "steady" ? "holding" : "on";
+    return `<div class="stat stat-pace pace-${tone}" title="${deps.escapeAttr(wt.line || "")}">
+        <div class="stat-n numeral">${deps.escapeHtml(rate)}</div>
         <div class="stat-sub">${deps.escapeHtml(sub)}</div>
-        <div class="stat-l lbl">lb / week</div>
+        <div class="stat-l lbl">${unit}</div>
       </div>`;
   }
 
@@ -120,15 +108,18 @@ type TodayCompassBuild = {
     const leadSport = distanceSports[0] ?? sports[0] ?? null;
     const leadDistance = finiteNumber(leadSport?.distance_km) ?? 0;
     const leadMinutes = finiteNumber(leadSport?.moving_min) ?? 0;
-    const leadValue = leadDistance || leadMinutes;
+    // Distances in the athlete's run units; the engine's km never print raw.
+    const dUnit = CairnFmt.units().distance;
+    const dist = (km: unknown): string => CairnFmt.distance(finiteNumber(km) ?? 0, dUnit);
+    const leadValue = leadDistance ? Math.round(CairnFmt.toUnit(leadDistance, dUnit) * 10) / 10 : leadMinutes;
     const leadLabel = String(leadSport?.sport || "endurance");
     const modalityLine = distanceSports
-      .map((row) => `${String(row.sport || "other")} ${deps.formatKm(finiteNumber(row.distance_km) ?? 0)} km`)
+      .map((row) => `${String(row.sport || "other")} ${dist(row.distance_km)}`)
       .join(" · ");
     const dots = statDots(planned, done);
     const paceTile = paceTileHtml(stats, deps);
     const mileageTile = `<div class="stat" title="Endurance volume by sport this week">
-        <div class="stat-n numeral"><span data-cu="${leadValue}">0</span><span class="stat-frac">${leadDistance ? "km" : "min"}</span></div>
+        <div class="stat-n numeral"><span data-cu="${leadValue}">0</span><span class="stat-frac">${leadDistance ? dUnit : "min"}</span></div>
         ${modalityLine ? `<div class="stat-sub">${deps.escapeHtml(modalityLine)}</div>` : ""}
         <div class="stat-l lbl">${deps.escapeHtml(leadLabel)} this week${leadMinutes ? ` · ${Math.round(leadMinutes)} min` : ""}</div>
       </div>`;
@@ -137,9 +128,10 @@ type TodayCompassBuild = {
         ${dots}
         <div class="stat-l lbl">this week</div>
       </div>`;
+    const wUnit = CairnFmt.units().weight;
     const wtTile = `<button class="stat stat-wt" id="wtChip" title="Log bodyweight">
-        <div class="stat-n numeral" data-wtval>${options.currentWeight != null ? options.currentWeight : "—"}<span class="stat-plus">+</span></div>
-        <div class="stat-l lbl">${stats.goal_weight_lb != null ? `lb → ${deps.escapeHtml(String(stats.goal_weight_lb))}` : "weight · lb"}</div>
+        <div class="stat-n numeral" data-wtval>${options.currentWeight != null ? CairnFmt.weight(options.currentWeight, wUnit, true) : "—"}<span class="stat-plus">+</span></div>
+        <div class="stat-l lbl">${stats.goal_weight_lb != null ? `${wUnit} → ${CairnFmt.weight(stats.goal_weight_lb, wUnit, true)}` : `weight · ${wUnit}`}</div>
       </button>`;
     const weight = options.weightTile === false ? "" : wtTile;
     const cellsHtml = options.isEndurance ? `${mileageTile}${paceTile}${weight}`
@@ -151,10 +143,10 @@ type TodayCompassBuild = {
     if (distanceSports.length) {
       cardioBits.push(
         distanceSports
-          .map((row) => `${String(row.sport || "other")} ${deps.formatKm(finiteNumber(row.distance_km) ?? 0)} km`)
+          .map((row) => `${String(row.sport || "other")} ${dist(row.distance_km)}`)
           .join(" · ")
       );
-    } else if (weekKm) cardioBits.push(`run ${deps.formatKm(weekKm)} km`);
+    } else if (weekKm) cardioBits.push(`run ${dist(weekKm)}`);
     const cardioBit = cardioBits.join(" · ");
     const weekRecap = (options.isEndurance ? [cardioBit, liftBit] : [liftBit, cardioBit]).filter(Boolean).join(" · ");
     return {
@@ -168,7 +160,6 @@ type TodayCompassBuild = {
 
   const CAIRN_TODAY_COMPASS = {
     fmtPace,
-    paceWord,
     paceTileHtml,
     build,
   };

@@ -259,6 +259,15 @@ test("a rest day holds nothing and says so plainly", (t) => {
   assert.equal(read.headline, "A rest day. Nothing is planned.");
 });
 
+test("a caveat carries its why; a note the context engine reads nothing from is not a caveat", (t) => {
+  seedHybridWeek(t);
+  repo.addContextEvent({ kind: "life_event", title: "Head blurriness on walks", start_date: MONDAY });
+  repo.addContextEvent({ kind: "trip", title: "Lisbon offsite", start_date: MONDAY, end_date: SUNDAY });
+  const read = dayDetail(TUESDAY);
+  assert.deepEqual(read.caveats, ["Lisbon offsite — travel tends to scramble fueling and the routine"]);
+  assert.ok(!read.caveats.some((c) => /Head blurriness/.test(c)), "no bare title without a consequence");
+});
+
 test("a done day carries what was actually done; its loads are the plan's, not the next exposure's", (t) => {
   seedHybridWeek(t);
   for (let i = 0; i < 3; i++)

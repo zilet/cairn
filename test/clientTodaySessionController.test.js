@@ -1540,7 +1540,7 @@ test("Today session controller finishes into cached done mode immediately", asyn
             { exercise: "Push-up", weight: 20, reps: 8 },
             { exercise: "Push-up", weight: 20, reps: 8 },
           ],
-          summary: { sets: 2, tonnage: 320 },
+          summary: { sets: 2, tonnage: 320, tonnage_words: "320 lb" },
         };
       }
       return { ok: true };
@@ -1577,7 +1577,7 @@ test("Today session controller finishes into cached done mode immediately", asyn
   assert.deepEqual(harness.invalidations, ["stats", "history:sessions"]);
   assert.equal(harness.stops.length, 1);
   assert.equal(harness.renders.length, 1);
-  assert.deepEqual(harness.toasts.map((toast) => toast.message), ["Done · 2 sets · 320 lb"]);
+  assert.deepEqual(harness.toasts.map((toast) => toast.message), ["Done · 2 sets · 320 lb"], "the tonnage is the server's words (summary.tonnage_words)");
 });
 
 test("Today session controller queues finish when the network drops", async () => {

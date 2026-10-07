@@ -130,13 +130,14 @@ test("noDoubleUnit + noRawIso: the Body & recovery tile prints its unit once, in
   });
   const week = (options) =>
     ctx.CairnTodayMainShell.weekFoldHtml({ planned: 5, done: 4, weekKm: 22.3 }, { escapeHtml: ctx.escHtml }, options);
-  const lb = week({ currentWeight: 159.6, trendLbWk: -0.9, runs: true });
+  // The trend is the ONE weight-trend read's own words (already in the athlete's unit).
+  const lb = week({ currentWeight: 159.6, trendWords: "−0.9 lb/wk", runs: true });
   assertCleanText(lb, "weight tile (lb)");
-  assert.match(textOf(lb), /159\.6 lb −0\.9\/wk/, "the number carries its unit once; the trend does not repeat it");
+  assert.match(textOf(lb), /159\.6 lb −0\.9 lb\/wk/, "the number carries its unit once; the trend says its own");
   ctx.CairnFmt.set({ weight_units: "kg" });
-  const kg = week({ currentWeight: 159.6, trendLbWk: -0.9, runs: true });
+  const kg = week({ currentWeight: 159.6, trendWords: "−0.4 kg/wk", runs: true });
   assertCleanText(kg, "weight tile (kg)");
-  assert.match(textOf(kg), /72\.4 kg −0\.4\/wk/);
+  assert.match(textOf(kg), /72\.4 kg −0\.4 kg\/wk/);
   assert.doesNotMatch(textOf(kg), /\blb\b/);
 });
 

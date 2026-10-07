@@ -191,7 +191,7 @@ type DoneRuntimeGlobals = typeof globalThis & {
   function doneFallbackInsight(rows: DoneExerciseSummary[]): string {
     const totalTonnage = rows.reduce((sum, row) => sum + row.tonnage, 0);
     const leader = rows[0];
-    if (totalTonnage > 0) return `Top loaded work: ${leader.name} · ${Math.round(leader.tonnage).toLocaleString()} lb`;
+    if (totalTonnage > 0) return `Top loaded work: ${leader.name} · ${CairnFmt.weight(Math.round(leader.tonnage))}`;
     if (leader.bestDuration > 0) return `Longest hold: ${leader.name} · ${fmtDur(leader.bestDuration)}`;
     return `${rows.length} movement${rows.length === 1 ? "" : "s"} covered`;
   }
@@ -237,26 +237,15 @@ type DoneRuntimeGlobals = typeof globalThis & {
     return `<span class="lbl">ANALYSIS</span><strong>${escHtml(doneFallbackInsight(rows))}</strong>`;
   }
 
-  // A calm week-context footnote (motivational, never a score). Omitted when absent.
+  // A calm consistency footnote (motivational, never a score). Omitted when absent.
+  // The week's new-best COUNT is not said here: a rolling seven days counted a
+  // different number than the calendar week Train's What moved names (4 against 3).
+  // This card owns the session's own bests (its lead line); the week's are Train's.
   function doneWeekHtml(highlights: DoneHighlights): string {
     const week = highlights && highlights.week && typeof highlights.week === "object" ? highlights.week : null;
-    if (!week) return "";
-    const days = Number(week.trained_days_7);
-    const prs = Number(week.prs);
-    const hasDays = Number.isFinite(days) && days > 0;
-    const hasPrs = Number.isFinite(prs) && prs > 0;
-    // A plain sentence the reader takes in at a glance — the consistency win leads,
-    // the bests join it. When there's no day count to lead with, the bests stand on
-    // their own; nothing to say → nothing rendered.
-    let sentence = "";
-    if (hasDays) {
-      sentence = `Trained ${days} of the last 7 days`;
-      if (hasPrs) sentence += `, with ${prs} new best${prs === 1 ? "" : "s"}`;
-    } else if (hasPrs) {
-      sentence = `${prs} new best${prs === 1 ? "" : "s"} this week`;
-    }
-    if (!sentence) return "";
-    return `<div class="done-week">${escHtml(sentence)}</div>`;
+    const days = Number(week?.trained_days_7);
+    if (!(Number.isFinite(days) && days > 0)) return "";
+    return `<div class="done-week">${escHtml(`Trained ${days} of the last 7 days`)}</div>`;
   }
 
   function doneAnalysisHtml(sets: LoggedSetLike[], highlights: DoneHighlights, idAttr: string): string {
@@ -268,7 +257,7 @@ type DoneRuntimeGlobals = typeof globalThis & {
     // exercises (a leg press always dwarfs a curl) and duplicated the meta text.
     const list = rows.slice(0, 4).map((row) => {
       const meta = row.tonnage > 0
-        ? `${row.sets} set${row.sets === 1 ? "" : "s"} · ${Math.round(row.tonnage).toLocaleString()} lb`
+        ? `${row.sets} set${row.sets === 1 ? "" : "s"} · ${CairnFmt.weight(Math.round(row.tonnage))}`
         : row.timedSec > 0
           ? `${row.sets} set${row.sets === 1 ? "" : "s"} · ${fmtDur(row.timedSec)}`
           : `${row.sets} set${row.sets === 1 ? "" : "s"}`;
@@ -313,7 +302,7 @@ type DoneRuntimeGlobals = typeof globalThis & {
     chips.push({ text: `${setCount} set${setCount === 1 ? "" : "s"}` });
     if (exerciseCount) chips.push({ text: `${exerciseCount} movement${exerciseCount === 1 ? "" : "s"}` });
     if (durationMin) chips.push({ text: `${String(durationMin)} min` });
-    if (tonnage) chips.push({ text: `${Math.round(tonnage).toLocaleString()} lb` });
+    if (tonnage) chips.push({ text: CairnFmt.weight(Math.round(tonnage)) });
     return chips.map((chip) => `<span class="done-chip${chip.cls ? ` ${chip.cls}` : ""}">${escHtml(chip.text)}</span>`).join("");
   }
 

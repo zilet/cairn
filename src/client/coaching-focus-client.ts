@@ -268,18 +268,18 @@ function coachingFocusThreadHtml(focus: ClientCoachingFocus | null | undefined):
   const title = focus.lead.title || "";
   if (!title) return "";
   const domain = isCoachingFocusDomain(focus.lead.domain) ? focus.lead.domain : "stand";
+  // A glance into Train: the lever and its why. The block's week and its deload
+  // decision are NOT repeated here — the stage and block week ride Today's Horizon
+  // glance line and the deload decision is Train's block line (one home per fact).
   const why = focus.lead.why ? String(focus.lead.why) : "";
-  // The block's calendar placement leads the context line — but only under a
-  // training-family lever ("Week 3 of 5 — building volume. <why>"). Under a
-  // health/nutrition lead the lifting calendar would imply the lab work is
-  // block-scoped volume work; the lead's own why stands alone there.
-  const blockLine = cfocusBlockDomains(focus.lead.domain) && focus.block_line ? String(focus.block_line) : "";
-  const context = [blockLine, why].filter(Boolean).join(" ");
+  // The label says what the thread is: a training-family lever is the block's; a
+  // health or nutrition lead is the season's focus, never "This block".
+  const label = cfocusBlockDomains(focus.lead.domain) ? "This block" : "Focus";
   return `<button class="cfocus-thread" type="button" data-cfocus-go="${escAttr(domain)}">
     <span class="cfocus-thread-arrow" aria-hidden="true">↳</span>
     <span class="cfocus-thread-copy">
-      <span class="cfocus-thread-top"><span class="cfocus-thread-lbl lbl">This block</span><span class="cfocus-thread-txt">${escHtml(title)}</span></span>
-      ${context ? `<span class="cfocus-thread-why">${escHtml(context)}</span>` : ""}
+      <span class="cfocus-thread-top"><span class="cfocus-thread-lbl lbl">${label}</span><span class="cfocus-thread-txt">${escHtml(title)}</span></span>
+      ${why ? `<span class="cfocus-thread-why">${escHtml(why)}</span>` : ""}
     </span>
     <span class="cfocus-thread-go" aria-hidden="true">→</span>
   </button>`;

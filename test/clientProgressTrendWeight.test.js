@@ -252,6 +252,14 @@ test("the bodyweight line measures 'to go' in the goal's own direction", () => {
   assert.match(paint(cut, { goal_weight_lb: 153.4, goal_mode: "lose" }), /153 lb — at your goal\./);
   // Maintenance reads the distance either way, without "to go".
   assert.match(paint(cut, { goal_weight_lb: 150, goal_mode: "maintain" }), /153 lb, 3 from your goal\./);
+  // A kg athlete reads the Body hero in kg; the series stays canonical lb underneath.
+  const { context, elements, trendWeight, view } = loadTrendWeight();
+  context.CairnFmt.set({ weight_units: "kg" });
+  elements.set("#chart", { kind: "canvas" });
+  trendWeight.paintWeightBody(cut, { goal_weight_lb: 150, goal_mode: "lose" });
+  assert.match(view.innerHTML, /class="phero-line">69\.4 kg, 1\.4 to go\.</);
+  assert.match(view.innerHTML, /goal 68 kg/);
+  assert.doesNotMatch(view.innerHTML, /\blb\b/);
 });
 
 test("a warm 1RM series paints the picker, hero and chart in one write; a cold one waits for the read", async () => {

@@ -30,6 +30,7 @@ function loadStatus() {
     escHtml: esc,
     escAttr: esc,
     fmtWeight: (value) => `${value} lb`,
+    CairnFmt: { weight: (value) => `${value} lb` },
     fmtDur: (value) => `${value}s`,
   };
   context.globalThis = context;

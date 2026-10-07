@@ -18,8 +18,8 @@ type TodayMainShellCompass = {
 };
 type TodayMainShellWeekOptions = {
   currentWeight?: unknown;
-  /** The weight trend, lb/wk (the weekly stats' own slope). */
-  trendLbWk?: unknown;
+  /** The ONE weight-trend read's rate, already in words and units ("−0.9 lb/wk"). */
+  trendWords?: string | null;
   /** The athlete runs (their distance rides the week strip's header; no cardio count here). */
   runs?: boolean;
   weekCardio?: unknown;
@@ -89,9 +89,8 @@ type TodayMainShellApi = {
         ? `<div class="tweek-tally"><div class="tweek-n num"><span data-cu="${cardio}">0</span></div><small>cardio this week</small></div>`
         : "";
     const weight = num(options.currentWeight);
-    const trend = num(options.trendLbWk);
     const unit = CairnFmt.units().weight;
-    const trendText = trend == null ? "log a weigh-in" : `${trend > 0 ? "+" : trend < 0 ? "−" : ""}${CairnFmt.weight(Math.abs(trend), unit, true)}/wk`;
+    const trendText = options.trendWords || "log a weigh-in";
     const wt = `<button id="wtChipMini" class="tweek-tally tweek-wt" type="button" title="Log bodyweight" data-keep-fold><span class="tweek-n num" data-wtval>${
       weight != null ? `${esc(CairnFmt.weight(weight, unit, true))}<span class="tweek-u">${unit}</span>` : "—"
     }</span><small>${weight != null ? esc(trendText) : "weight · tap to log"}</small><span class="tweek-spark" id="tweekSpark" aria-hidden="true"></span></button>`;
@@ -99,7 +98,7 @@ type TodayMainShellApi = {
     <div class="tweek-mast"><span class="lbl">Body &amp; recovery</span></div>
     <div class="tweek-tallies${second ? "" : " is-one"}">${wt}${second}</div>
     <div class="wt-inline" id="wtInline" hidden>
-      <input id="wtInlineInput" type="number" inputmode="decimal" step="0.1" placeholder="Weight (lb)" aria-label="Bodyweight in lb">
+      <input id="wtInlineInput" type="number" inputmode="decimal" step="0.1" placeholder="Weight (${unit})" aria-label="Bodyweight in ${unit}" data-unit="${unit}">
       <button id="wtInlineGo" class="logbtn" type="button" aria-label="Log bodyweight">+</button>
     </div>
     <div id="tweekGauges" class="tweek-gauges-slot"></div>
@@ -115,13 +114,13 @@ type TodayMainShellApi = {
 
   // The redesigned Today's async sections below the column's lead, each an empty slot
   // the today-ahead bundle fills (an empty one collapses): the overnight digest sits
-  // before the week; Coming up and the one new connection follow it.
+  // before the week; the one new connection follows it.
   function digestSlotHtml(): string {
     return `<div id="todayDigestSlot" class="tdg-slot"></div>`;
   }
 
   function aheadSlotsHtml(): string {
-    return `<div id="todayHorizonSlot" class="thz-slot"></div><div id="todayHeadingSlot" class="thd-slot"></div>`;
+    return `<div id="todayHeadingSlot" class="thd-slot"></div>`;
   }
 
   // A control inside the week row's summary acts on its own, never toggling the fold.
@@ -140,7 +139,7 @@ type TodayMainShellApi = {
   // fuel). An in-place Brief swap takes the painted node out of the old element and
   // stands it in the new one, where its own controller places it, so nothing
   // repaints or replays its entrance.
-  // The Path card's slot and "What's ahead" ride the same way, ALWAYS — painted or not.
+  // The Horizon glance line's slot and "What's ahead" ride the same way, ALWAYS — painted or not.
   // Each is the node its controller mounted on: carried, it keeps its listeners, an open
   // day stays open, and a paint still in flight (a cold week read, a held snapshot copy)
   // lands on screen. Left behind when still empty, the controller painted into a

@@ -30,7 +30,8 @@ function setupWeightChip(): void {
     else mini.innerHTML = `${n}<span class="wt-mini-unit">${u}</span><span class="stat-plus">+</span>`;
   };
   const save = async (): Promise<void> => {
-    const w = +input.value;
+    // Typed in the athlete's unit (the input says which); stored in canonical lb.
+    const w = CairnFmt.toLb(+input.value, input.dataset?.unit);
     if (!w) { input.focus(); return; }
     const weighIn = { weight_lb: w, date: localISO() }; // dated: an offline replay keeps its day
     try {
@@ -47,7 +48,7 @@ function setupWeightChip(): void {
         return;
       }
       const pendingVal = chip && chip.querySelector("[data-wtval]");
-      if (pendingVal) pendingVal.innerHTML = `${w}<span class="stat-plus">+</span>`;
+      if (pendingVal) pendingVal.innerHTML = `${CairnFmt.weight(w, undefined, true)}<span class="stat-plus">+</span>`;
       paintMini(w);
       input.value = ""; inline.hidden = true;
       toast("Saved — will sync when you're back online");
@@ -60,7 +61,7 @@ function setupWeightChip(): void {
     swrInvalidate("profile");
     swrInvalidate("progress:energy");
     const valEl = chip && chip.querySelector("[data-wtval]");
-    if (valEl) valEl.innerHTML = `${w}<span class="stat-plus">+</span>`;
+    if (valEl) valEl.innerHTML = `${CairnFmt.weight(w, undefined, true)}<span class="stat-plus">+</span>`;
     paintMini(w);
     input.value = ""; inline.hidden = true;
     toast("Weight logged");

@@ -47,6 +47,11 @@ test("the conductor's block line leads with the week's stage word, and says a se
   assert.ok(skipped.block_line.startsWith("Sharpen · Week 6 of 6 — the scheduled deload is set aside"));
   // The line says the set-aside; the decision beside it never says it again.
   assert.doesNotMatch(skipped.block.decision, /set aside/i);
+  // Train prints the two side by side: the reason (the loaded weeks) and the move
+  // (intensity) are each said once across the pair, never twice in one sentence.
+  const said = `${skipped.block_line} ${skipped.block.decision}`;
+  assert.equal(said.match(/loaded weeks/gi)?.length, 1, said);
+  assert.equal(said.match(/intensity/gi)?.length, 1, said);
   // Without a stage the line keeps its old shape.
   assert.equal(
     coachingFocus({ programBlock: { phase: "accumulation", week_of: "week 3 of 5" } }).block_line,

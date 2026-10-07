@@ -103,28 +103,13 @@
 .today-wrap .tweek-more .weekfold-sum{min-height:40px;border-top:1px solid var(--line);border-bottom:0}
 .today-wrap .tweek-more[open]{border-bottom:1px solid var(--line)}
 
-/* --- Coming up (today-horizon-client.ts) --- */
-.thz-slot:empty,.thd-slot:empty{display:none}
-.today-wrap .thz-slot,.today-wrap .thd-slot{margin-top:var(--today-gap)}
-.thz-mast,.thd-mast{display:flex;align-items:flex-end;min-height:44px;padding-bottom:var(--space-3);
+/* --- The new connection (today-horizon-client.ts); .thd-mast also heads Horizon's goal board --- */
+.thd-slot:empty{display:none}
+.today-wrap .thd-slot{margin-top:var(--today-gap)}
+.thd-mast{display:flex;align-items:flex-end;min-height:44px;padding-bottom:var(--space-3);
   border-bottom:1px solid var(--line)}
-.thz-mast .lbl,.thd-mast .lbl{color:var(--muted)}
-.thz-list{list-style:none;margin:0;padding:0}
-.thz-row{display:grid;grid-template-columns:48px 14px minmax(0,1fr);gap:var(--space-5);padding:var(--space-5) 0}
-.thz-when{line-height:var(--leading-snug);padding-top:var(--space-1);color:var(--muted)}
-.thz-rail{position:relative;display:grid;justify-items:center}
-.thz-rail::before{content:"";position:absolute;top:0;bottom:calc(-1 * var(--space-5));width:1.5px;background:var(--line)}
-.thz-row:first-child .thz-rail::before{top:9px}
-.thz-row:last-child .thz-rail::before{bottom:auto;height:9px}
-.thz-row:only-child .thz-rail::before{display:none}
-.thz-dot{position:relative;width:10px;height:10px;border-radius:50%;margin-top:var(--space-2);background:var(--c,var(--line-strong));
-  box-shadow:0 0 0 2px var(--ground)}
-.thz-dot.is-dawn{--c:var(--dawn)}
-.thz-t{font-size:var(--text-md);font-weight:var(--weight-semibold);color:var(--ink)}
-.thz-d{font-size:var(--text-sm);color:var(--ink2);line-height:var(--leading-normal)}
-.thz-act{display:inline-block;margin-top:var(--space-2);font-size:var(--text-sm)}
+.thd-mast .lbl{color:var(--muted)}
 
-/* --- Where you're heading (today-horizon-client.ts) --- */
 .thd-insight{margin:var(--space-7) 0 0;padding-top:var(--space-6);border-top:1px solid var(--line);color:var(--ink2);
   font-size:var(--text-md);line-height:var(--leading)}
 .thd-insight .lbl{display:block;margin-bottom:var(--space-2);color:var(--dawn)}

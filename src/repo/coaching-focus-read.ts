@@ -332,14 +332,14 @@ export function blockRead(inp: CoachingFocusInput): BlockReadResult | null {
     deload = "recovery_week";
     decision = "Your recovery week is running: same movements, lighter volume, then back to building.";
   } else if (skipped) {
-    // The set-aside is said ONCE, here in the line; the decision says what happens
-    // instead (the prompt and the card read the two side by side).
-    tail =
-      "the scheduled deload is set aside: your loaded weeks haven't called for one, so this week keeps pushing intensity";
+    // The set-aside is said ONCE, here in the line; the decision says why and what
+    // happens instead. Train prints the two side by side ("<line> <decision>"), so
+    // neither half repeats the other's reason (the loaded weeks) or move (intensity).
+    tail = "the scheduled deload is set aside";
     deload = "set_aside";
     decision = taper
-      ? `Intensity carries on until the loaded weeks earn a lighter week; ${taperWords}.`
-      : "Intensity carries on until the loaded weeks earn a lighter week.";
+      ? `Your loaded weeks haven't called for one, so intensity carries on; ${taperWords}.`
+      : "Your loaded weeks haven't called for one, so intensity carries on.";
   } else if (phase === "deload") {
     tail = "a deload week: absorb the work you've put in";
     deload = "deload_week";

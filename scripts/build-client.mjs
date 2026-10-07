@@ -92,6 +92,13 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/day-detail-controller.ts", output: "public/js/day-detail-controller.js" },
   { source: "src/client/day-record-client.ts", output: "public/js/day-record-client.js" },
   { source: "src/client/drill-controller.ts", output: "public/js/drill-controller.js" },
+  { source: "src/client/milestone-row-model.ts", output: "public/js/milestone-row-model.js" },
+  { source: "src/client/milestone-row-client.ts", output: "public/js/milestone-row-client.js" },
+  { source: "src/client/goal-row-model.ts", output: "public/js/goal-row-model.js" },
+  { source: "src/client/goal-row-client.ts", output: "public/js/goal-row-client.js" },
+  { source: "src/client/frame-line-client.ts", output: "public/js/frame-line-client.js" },
+  { source: "src/client/week-model.ts", output: "public/js/week-model.js" },
+  { source: "src/client/week-strip-client.ts", output: "public/js/week-strip-client.js" },
   { source: "src/client/today-rail-controller.ts", output: "public/js/today-rail-controller.js" },
   { source: "src/client/today-plan-selection-client.ts", output: "public/js/today-plan-selection-client.js" },
   { source: "src/client/today-training-client.ts", output: "public/js/today-training-client.js" },
@@ -260,7 +267,9 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/race-view-controller.ts", output: "public/js/race-view-controller.js" },
   // v2 wave 5 slots (stream A pre-registered them; C fills Horizon, D the ripple card).
   { source: "src/client/horizon-model.ts", output: "public/js/horizon-model.js" },
-  { source: "src/client/horizon-week-model.ts", output: "public/js/horizon-week-model.js" },
+  { source: "src/client/horizon-labs-model.ts", output: "public/js/horizon-labs-model.js" },
+  { source: "src/client/horizon-week-client.ts", output: "public/js/horizon-week-client.js" },
+  { source: "src/client/horizon-week-controller.ts", output: "public/js/horizon-week-controller.js" },
   { source: "src/client/horizon-terrain-client.ts", output: "public/js/horizon-terrain-client.js" },
   { source: "src/client/horizon-chart-client.ts", output: "public/js/horizon-chart-client.js" },
   { source: "src/client/horizon-client.ts", output: "public/js/horizon-client.js" },
@@ -814,9 +823,11 @@ export const BUNDLES = [
       "public/js/race-view-client.js",
       "public/js/race-view-controller.js",
       "public/js/horizon-model.js",
-      "public/js/horizon-week-model.js",
+      "public/js/horizon-labs-model.js",
       "public/js/horizon-terrain-client.js",
       "public/js/horizon-chart-client.js",
+      "public/js/horizon-week-client.js",
+      "public/js/horizon-week-controller.js",
       "public/js/horizon-client.js",
       "public/js/horizon-controller.js",
       "public/js/horizon-screen.js",
@@ -895,6 +906,9 @@ export const BUNDLES = [
     // compact, full) and the ONE drill controller (CairnDrill): Today's "What's ahead"
     // strip draws its chips and peeks a day (today-ahead depends on calendar), and
     // Train's Program draws its movement rows and week rows (train depends on calendar).
+    // It also carries the shared time objects (docs/IA.md "Component architecture"): the
+    // week's model and its shape strip, the milestone row and the goal row (Horizon's
+    // Week and Season both draw them), and the frame line (Week's hero, To the race's).
     lazy: "calendar",
     views: ["day"],
     inputs: [
@@ -904,6 +918,13 @@ export const BUNDLES = [
       "public/js/day-detail-controller.js",
       "public/js/day-record-client.js",
       "public/js/drill-controller.js",
+      "public/js/milestone-row-model.js",
+      "public/js/milestone-row-client.js",
+      "public/js/goal-row-model.js",
+      "public/js/goal-row-client.js",
+      "public/js/frame-line-client.js",
+      "public/js/week-model.js",
+      "public/js/week-strip-client.js",
     ],
   },
   {

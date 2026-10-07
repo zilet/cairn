@@ -192,7 +192,7 @@ type TodayRunLineDeps = Pick<TodayPlanSurfaceDeps, "escapeHtml"> & {
     const sets = Array.isArray(session.sets) ? session.sets : [];
     const tonnage = deps.setsTonnage(sets);
     return `<div class="finish">
-        <div class="finish-stat" data-finishstat>${sets.length} sets · ${Math.round(tonnage).toLocaleString()} lb ${options.isToday ? "logged today" : "on " + CairnFmt.date(options.logDate)}</div>
+        <div class="finish-stat" data-finishstat>${sets.length} sets · ${CairnFmt.weight(Math.round(tonnage))} ${options.isToday ? "logged today" : "on " + CairnFmt.date(options.logDate)}</div>
         <div id="feedbackSlot" class="feedback-slot"></div>
         <div class="logrow finish-row">
           <input id="sessNotes" type="text" placeholder="How did it go? (optional)" aria-label="Session notes (optional)" value="${deps.escapeAttr(session.notes || "")}">

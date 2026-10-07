@@ -1,9 +1,11 @@
 // @ts-check
 // Mounts the redesigned Today's async sections into the slots the screen owns
 // (today-main-shell-client.ts): the push line and offer under the Brief's why, the
-// "What's ahead" week strip (its header takes the block clock and the week's run plan
-// from the path read), the overnight digest, Body & recovery's gauges and bodyweight
-// sparkline, Coming up, and the one new connection.
+// "What's ahead" week strip (a GLANCE: the days, and a running recovery week named in
+// its header — the week's summary is Horizon's), the overnight digest, Body &
+// recovery's gauges and bodyweight sparkline, and the one new connection. The road
+// ahead (Coming up, the Path card) left Today for Horizon: Today keeps one glance line
+// into it (today-path-controller.ts).
 // Each read goes through the SWR cache (`peek` for a warm paint, `load` to
 // revalidate), so a warm Today paints at once and a slot is rewritten only when its
 // markup actually changed. Every slot is optional: an empty answer or a failed read
@@ -14,10 +16,9 @@
   type TodayAheadDigestRead = import("../contracts/today-digest.js").TodayDigest;
   type TodayAheadDeps = {
     date: string;
-    /** The Brief's read (its block clock rides the week's header). */
+    /** The Brief's read (a running recovery week rides the week's header). */
     read: {
       periodization_context?: {
-        program_block?: { week_index?: unknown; total_weeks?: unknown } | null;
         recovery_overlay?: { day_index?: unknown; total_days?: unknown } | null;
       } | null;
     } | null;
@@ -31,8 +32,6 @@
     toast(message: string, options?: { action?: string; onAction?: () => void }): void;
     gotoChatWith(text: string): void;
     openChanges(): void;
-    openCheckup(): void;
-    openRace(): void;
     openPlanCoach(): void;
     refreshToday(): unknown;
     invalidate(key: string): void;
@@ -42,7 +41,6 @@
     digest: "#todayDigestSlot",
     spark: "#tweekSpark",
     gauges: "#tweekGauges",
-    horizon: "#todayHorizonSlot",
     connection: "#todayHeadingSlot",
   } as const;
 
@@ -100,22 +98,13 @@
 
     function paintPath(): void {
       if (!path) return;
-      write(SLOTS.horizon, CairnTodayHorizon.horizonHtml(path));
-      const week = path.week;
-      // The block clock rides the week's header; a running recovery week says so first.
-      const clock = deps.read?.periodization_context;
-      const overlay = clock?.recovery_overlay;
+      // The stage and block week ride the glance line (frame.glance); only a running
+      // recovery week is named on the strip's header, since the glance does not say it.
+      const overlay = deps.read?.periodization_context?.recovery_overlay;
       const recoveryDay = overlay ? Math.max(1, Math.min(7, Math.round(Number(overlay.day_index) || 1))) : 0;
-      // The block clock and the week's run plan ride the week strip's header (Today's one week view).
       const strip = root.querySelector("#todayStripSlot");
       if (live && strip) {
-        const planned = Number(week?.km_planned);
-        CairnTodayStripController.setHeader(strip, {
-          block: recoveryDay
-            ? `Recovery week · day ${recoveryDay} of 7`
-            : CairnTodayWeek.blockLine(week?.phase ?? null, clock?.program_block ?? null),
-          kmPlanned: Number.isFinite(planned) && planned > 0 ? planned : null,
-        });
+        CairnTodayStripController.setHeader(strip, { block: recoveryDay ? `Recovery week · day ${recoveryDay} of 7` : "" });
       }
       write(SLOTS.spark, CairnTodayWeek.sparkSvg(path.weight?.points, path.weight?.goal_lb ?? null));
     }
@@ -217,8 +206,6 @@
         "tdg-talk": (el) => deps.gotoChatWith(`Let's talk this through: ${el.getAttribute("data-tdg-talk") || ""}`),
         "tdg-review": () => deps.openPlanCoach(),
         "tdg-all": () => deps.openChanges(),
-        "thz-checkup": () => deps.openCheckup(),
-        "thz-race": () => deps.openRace(),
         "thd-insight": (el) =>
           deps.gotoChatWith(`Tell me more about this: ${el.getAttribute("data-thd-insight") || ""}`),
       });

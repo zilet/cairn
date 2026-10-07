@@ -147,23 +147,25 @@ function paintWeightBody(rows: ProgressWeightRow[], profile: ProgressRecord): vo
   // below the goal, a cut its excess above it. Only a reading within half a pound,
   // or already past the goal in that direction, is "at your goal".
   const toGoal = goalW != null ? weightToGoal(last, goalW, profile, first) : null;
-  // One voice line and one fact; the goal-pace read above carries the pace.
+  // One voice line and one fact; the goal-pace read above carries the pace. Every
+  // weight in the athlete's unit (CairnFmt); the series stays canonical lb.
+  const w = (lb: number): string => CairnFmt.weight(lb);
   const hero = progressHero("Bodyweight", [], {
     line:
       toGoal == null
-        ? `${last} lb today.`
+        ? `${w(last)} today.`
         : toGoal > 0.5
-          ? `${last} lb, ${toGoal} ${profile.goal_mode === "maintain" ? "from your goal" : "to go"}.`
-          : `${last} lb — at your goal.`,
-    fact: pts.length > 1 ? `${delta > 0 ? "+" : delta < 0 ? "−" : "±"}${Math.abs(delta)} lb since ${fmtShortDate(pts[0].date)}` : "",
-    meta: `${pts.length} weigh-in${pts.length === 1 ? "" : "s"}${goalW != null ? ` · goal ${goalW} lb` : ""}`,
+          ? `${w(last)}, ${CairnFmt.weight(toGoal, undefined, true)} ${profile.goal_mode === "maintain" ? "from your goal" : "to go"}.`
+          : `${w(last)} — at your goal.`,
+    fact: pts.length > 1 ? `${delta > 0 ? "+" : delta < 0 ? "−" : "±"}${w(Math.abs(delta))} since ${fmtShortDate(pts[0].date)}` : "",
+    meta: `${pts.length} weigh-in${pts.length === 1 ? "" : "s"}${goalW != null ? ` · goal ${w(goalW)}` : ""}`,
   });
   // The goal-pace read (when it resolves) is unified to LEAD, ahead of the numeral
   // hero — see mountGoalPaceChart in progress-screen.ts, which fills this anchor.
   view.innerHTML = head + `<div id="weightLeadMount"></div>` + hero + `<canvas id="chart" class="pchart is-body"></canvas>`;
   wireSeg(PROGRESS_HANDLERS);
   runCountUps(view);
-  drawLineChart($<HTMLCanvasElement>("#chart"), pts, { goal: goalW ?? null, fmt: (v) => `${Math.round(v * 10) / 10} lb` });
+  drawLineChart($<HTMLCanvasElement>("#chart"), pts, { goal: goalW ?? null, fmt: (v) => w(v) });
 }
 
 async function drawProgress(name: string): Promise<void> {

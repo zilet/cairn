@@ -1,8 +1,9 @@
-// The redesigned Today's renderers (docs/DESIGN.md "Today"): the Path card under the
-// Brief (today-path-client), the overnight digest (today-digest-client), This week's
-// strip / gauges / sparkline (today-week-client), Coming up and the one new connection
-// (today-horizon-client), and the today-ahead controller that mounts them. The progress
-// board left Today for Horizon's goal line (horizon-client, tested here too).
+// The redesigned Today's renderers (docs/DESIGN.md "Today"): the one Horizon glance
+// line under the Brief (today-path-client), the overnight digest (today-digest-client),
+// This week's strip / gauges / sparkline (today-week-client), the one new connection
+// (today-horizon-client), and the today-ahead controller that mounts them. The Path
+// card, Coming up and the progress board left Today for Horizon (docs/IA.md); the goal
+// board is Horizon's (horizon-client, tested here too).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHost, flush, loadClientModule, renderHtml } from "./_dom.mjs";
@@ -115,6 +116,11 @@ function path(overrides = {}) {
       },
     ],
     week: { km_planned: 33, km_logged: 22.3, long_km: 11.8, phase: "Sharpen" },
+    frame: {
+      headline: "30 days to Cambridge <Half>",
+      line: "Sharpen · block week 5 of 6",
+      glance: { line: "30 days to Cambridge <Half> · Sharpen, wk 5 of 6", href: "/app/horizon" },
+    },
     ...overrides,
   };
 }
@@ -150,39 +156,25 @@ function loadAhead(globals = {}) {
   );
 }
 
-test("the Path card: kicker, a trail drawn to scale with today's breathing dot, three threads with units, the lever — escaped", () => {
-  const card = loadPath().cardHtml(path());
-  const host = renderHtml(card);
-  assert.match(host.querySelector(".tpath-k").textContent, /Your path · 30 days to Cambridge <Half>/);
-  const svg = host.querySelector("svg.tpath-svg");
-  assert.ok(svg, "the trail is drawn");
-  assert.ok(host.querySelector(".tpath-walked"), "the walked part");
-  assert.match(host.querySelector(".tpath-walked").getAttribute("style"), /^--len:\d+$/);
-  assert.ok(host.querySelector(".tpath-now") && host.querySelector(".tpath-pulse"), "the now dot and its breath");
-  assert.equal(host.querySelectorAll(".tpath-node.is-race").length, 1);
-  assert.equal(host.querySelectorAll(".tpath-node.is-goal").length, 1);
-  const threads = host.querySelectorAll(".tpath-thread");
-  assert.equal(threads.length, 3);
-  assert.equal(threads[0].querySelector(".tpath-num").textContent, "1:54:56");
-  assert.match(threads[0].textContent, /12 min faster than Sep 4 · target sub-2:00/);
-  assert.equal(threads[1].querySelector(".tpath-num").textContent, "159.8 lb");
-  assert.match(threads[1].textContent, /−0\.76 lb\/wk · 154 by Nov 15 needs −0\.92/);
-  assert.equal(threads[2].querySelector(".tpath-num").textContent, "285 lb");
-  assert.match(threads[2].textContent, /Deadlift, est\. 1RM\+4\.2 lb\/wk · 340 target in 11–22 wks/);
-  assert.match(
-    host.querySelector(".tpath-lever").textContent,
-    /This week's lever: Weight is a little <behind> the line\./
-  );
-  assert.doesNotMatch(card, /<Half>|<behind>/, "server strings never open markup");
-  assert.doesNotMatch(card, /#[0-9a-f]{3,6}\b/i, "no colour literal");
-  // A quiet way to every goal: Horizon's goal line, as a real deep link.
-  const all = host.querySelector("a.tpath-all[data-tpath-goals]");
-  assert.ok(all, "the All goals link");
-  assert.equal(all.textContent, "All goals");
-  assert.equal(all.getAttribute("href"), "/app/horizon/goal");
+test("Today's road ahead is ONE glance line into Horizon, the server's own words, escaped", () => {
+  const api = loadPath();
+  const host = renderHtml(api.glanceHtml(path()));
+  const link = host.querySelector("a.tglance[data-tpath-goals]");
+  assert.ok(link, "the glance line");
+  assert.equal(link.getAttribute("href"), "/app/horizon");
+  assert.equal(link.querySelector(".tglance-t").textContent, "30 days to Cambridge <Half> · Sharpen, wk 5 of 6");
+  assert.equal(link.querySelector(".tglance-go").textContent, "›");
+  assert.doesNotMatch(api.glanceHtml(path()), /<Half>/, "server strings never open markup");
+  // The Path card's parts left Today: no trail, no threads, no lever, no "All goals".
+  assert.doesNotMatch(api.glanceHtml(path()), /tpath-svg|tpath-thread|lever|All goals|1:54:56/);
+  assert.equal(api.cardHtml, undefined, "the Path card is gone");
+  // Nothing to glance at: nothing painted (the slot collapses).
+  assert.equal(api.glanceHtml(null), "");
+  assert.equal(api.glanceHtml(path({ frame: null })), "");
+  assert.equal(api.glanceHtml(path({ frame: { headline: null, line: null, glance: null } })), "");
 });
 
-test("the Path card's All goals link opens Horizon's goal line; a modified click keeps the href", async () => {
+test("the glance line opens Horizon through the app's own tab switch; a modified click keeps the href", async () => {
   const win = loadClientModule(["html-utils", "ui-format", "ui-actions-client", "today-path-client", "today-path-controller"]);
   const host = createHost(win.document, { html: "" });
   let opened = 0;
@@ -190,13 +182,13 @@ test("the Path card's All goals link opens Horizon's goal line; a modified click
     date: TODAY,
     peek: () => ({ data: path(), fresh: true }),
     load: async () => path(),
-    openGoals: () => {
+    openHorizon: () => {
       opened += 1;
     },
   });
   await flush();
   const link = host.querySelector("[data-tpath-goals]");
-  assert.ok(link, "the card painted its link");
+  assert.ok(link, "the line painted");
   const plain = new win.MouseEvent("click", { bubbles: true, cancelable: true, button: 0 });
   link.dispatchEvent(plain);
   assert.equal(opened, 1);
@@ -210,24 +202,13 @@ test("the Path card's All goals link opens Horizon's goal line; a modified click
     date: TODAY,
     peek: () => ({ data: path(), fresh: true }),
     load: async () => path(),
-    openGoals: () => {
+    openHorizon: () => {
       opened += 1;
     },
   });
   await flush();
   host.querySelector("[data-tpath-goals]").dispatchEvent(new win.MouseEvent("click", { bubbles: true, cancelable: true }));
   assert.equal(opened, 2);
-});
-
-test("the Path card says nothing without a thread, and draws no trail without a dated mark", () => {
-  const api = loadPath();
-  assert.equal(api.cardHtml(null), "");
-  assert.equal(api.cardHtml(path({ race: null, weight: null, anchor: null })), "");
-  const card = api.cardHtml(path({ race: null, milestones: [] }));
-  assert.doesNotMatch(card, /<svg class="tpath-svg"/);
-  assert.match(card, /Your path</);
-  assert.equal(api.clock(6896), "1:54:56");
-  assert.equal(api.shortDate("2026-11-01"), "Nov 1");
 });
 
 function digestMove(exercise, from, to, reason = null) {
@@ -384,134 +365,24 @@ test("the digest is omitted when the team changed nothing and asks nothing", () 
   assert.equal(CairnTodayDigest.html(null, null), "");
 });
 
-test("ONE week view on Today: the old Mon–Sun stones strip is gone; What's ahead carries the days and the week's counts", () => {
+test("ONE week view on Today, a GLANCE: the stones strip is gone, and What's ahead carries the days, no counts", () => {
   const { CairnTodayWeek, CairnTodayStrip } = loadAhead();
   const days = ["2026-09-28", "2026-09-29", "2026-09-30", "2026-10-01", TODAY, "2026-10-03", "2026-10-04"].map(
-    (date) => ({
-      date,
-      weekday: null,
-      dow: null,
-      status: "rest",
-      plan_day: null,
-      session: null,
-      run: null,
-      hard: false,
-    })
+    (date) => ({ date, weekday: null, dow: null, status: "rest", plan_day: null, session: null, run: null, hard: false })
   );
   days[0].session = { id: 1, title: "Push", date: days[0].date, finished: true };
-  days[1].run = {
-    kind: "easy",
-    label: "Easy run",
-    status: "completed",
-    suggested_date: null,
-    completion_date: days[1].date,
-    km: 6,
-  };
-  days[4].plan_day = {
-    day_number: 2,
-    name: "Pull",
-    focus: null,
-    purpose: null,
-    day_type: "training",
-    role: "lift",
-    out_of_order: false,
-  };
-  days[6].run = {
-    kind: "long",
-    label: "Long run",
-    status: "open",
-    suggested_date: days[6].date,
-    completion_date: null,
-    km: 11.8,
-  };
+  days[4].plan_day = { day_number: 2, name: "Pull", focus: null, purpose: null, day_type: "training", role: "lift", out_of_order: false };
   assert.equal(CairnTodayWeek.stripHtml, undefined, "the stones strip left Today");
-  assert.equal(CairnTodayWeek.kmNote, undefined, "its km note rides the strip's header now");
+  assert.equal(CairnTodayWeek.kmNote, undefined);
   const progress = { lift_days_done: 1, lift_days_planned: 5, runs_done: 1, run_km: 6, longest_run_km: 6, runs_open: [], prs: 2, line: null };
-  const host = renderHtml(
-    CairnTodayStrip.stripHtml({ days, progress }, TODAY, null, { block: "Sharpen · Wk <5> of 6", kmPlanned: 33.2 })
-  );
+  const host = renderHtml(CairnTodayStrip.stripHtml({ days, progress, summary: "One of five lifting days in." }, TODAY, null, { block: "Recovery week · day <2> of 7" }));
   assert.equal(host.querySelectorAll("button.tstrip-day").length, 7);
-  assert.equal(host.querySelector("[data-tstrip-block]").textContent, "Sharpen · Wk <5> of 6");
-  assert.equal(host.querySelector(".tstrip-tally").textContent, "1 of 5 lifting days · 6 of ~33 km · 2 new bests");
+  assert.equal(host.querySelector("[data-tstrip-block]").textContent, "Recovery week · day <2> of 7");
   assert.equal(host.querySelector(".tstrip-block b"), null, "escaped");
+  // The week's sentence and counts are Horizon's: never a tally line on Today.
+  assert.equal(host.querySelector(".tstrip-tally"), null);
+  assert.doesNotMatch(host.textContent, /lifting days|new best|One of five/);
   assert.equal(CairnTodayStrip.stripHtml({ days: days.slice(0, 5), progress }, TODAY), "", "no strip outside calendar mode");
-  assert.doesNotMatch(String(CairnTodayStrip.tallyText({ days, progress }, {})), /%|score/i);
-});
-
-test("recovery gauges show the reading, its unit and the usual band; an older night is named, never called last night", () => {
-  const { CairnTodayWeek } = loadAhead();
-  const baseline = {
-    dimensions: [
-      {
-        key: "hrv",
-        label: "HRV",
-        phrase: "within your usual",
-        hot: false,
-        position: 0.5,
-        range_start: 0.3,
-        range_end: 0.7,
-        current: 45,
-        p25: 41,
-        p75: 52,
-        n: 20,
-        last_reading_date: "2026-10-01",
-      },
-      {
-        key: "rhr",
-        label: "Resting HR",
-        phrase: "above your usual",
-        hot: true,
-        position: 0.85,
-        range_start: 0.3,
-        range_end: 0.6,
-        current: 58,
-        p25: 52,
-        p75: 56,
-        n: 20,
-        last_reading_date: TODAY,
-      },
-      {
-        key: "sleep",
-        label: "Sleep",
-        phrase: "",
-        hot: false,
-        position: null,
-        range_start: 0.4,
-        range_end: 0.7,
-        current: null,
-        p25: 400,
-        p75: 445,
-        n: 20,
-        last_reading_date: "2026-09-27",
-      },
-    ],
-  };
-  const host = renderHtml(CairnTodayWeek.gaugesHtml(baseline, TODAY));
-  const gauges = host.querySelectorAll(".tgauge");
-  assert.deepEqual(
-    [...gauges].map((g) => g.querySelector(".tgauge-l").textContent),
-    ["Resting HR", "HRV", "Sleep"]
-  );
-  assert.equal(gauges[0].querySelector(".tgauge-v").textContent, "58 bpm");
-  assert.equal(
-    gauges[0].querySelector(".tgauge-sub").textContent,
-    "usual 52–56",
-    "today's own row is last night: no label needed"
-  );
-  assert.ok(gauges[0].querySelector(".tgauge-pin.is-hot"));
-  assert.equal(gauges[1].querySelector(".tgauge-v").textContent, "45 ms");
-  assert.equal(
-    gauges[1].querySelector(".tgauge-sub").textContent,
-    "Wed night · usual 41–52",
-    "a row dated Thu is Wednesday's night"
-  );
-  assert.equal(gauges[2].querySelector(".tgauge-v").textContent, "—");
-  assert.equal(gauges[2].querySelector(".tgauge-sub").textContent, "no recent night · usual 6h 40–7h 25");
-  assert.equal(gauges[2].querySelector(".tgauge-pin"), null, "a stale reading draws no pin");
-  // Only the read day's own row may be called last night.
-  assert.match(gauges[0].getAttribute("aria-label"), /58 bpm, last night/);
-  assert.doesNotMatch(gauges[1].getAttribute("aria-label"), /last night/i);
-  assert.match(gauges[1].getAttribute("aria-label"), /45 ms, Wed night/);
 });
 
 test("the bodyweight sparkline draws the weigh-ins over a dotted goal line, and the week's small lines", () => {
@@ -520,20 +391,12 @@ test("the bodyweight sparkline draws the weigh-ins over a dotted goal line, and 
   assert.match(svg, /<line class="tspark-goal"/);
   assert.match(svg, /<polyline class="tspark-line" points="[\d., ]+"/);
   assert.equal(CairnTodayWeek.sparkSvg([{ date: TODAY, weight_lb: 160 }], 154), "");
-  assert.equal(CairnTodayWeek.blockLine("Sharpen", { week_index: 5, total_weeks: 6 }), "Sharpen · Wk 5 of 6");
+  assert.equal(CairnTodayWeek.blockLine, undefined, "the stage words are the server's (the glance line)");
 });
 
-test("Coming up: a dated rail under the season's focus, windows as ranges, the checkup's action", () => {
+test("Coming up left Today: the road ahead is Horizon's, one glance line away", () => {
   const { CairnTodayHorizon } = loadAhead();
-  const host = renderHtml(CairnTodayHorizon.horizonHtml(path()));
-  assert.equal(host.querySelector(".thz-mast .lbl").textContent, "Coming up · focus: lipids & recomposition");
-  const rows = host.querySelectorAll(".thz-row");
-  assert.equal(rows.length, 5);
-  assert.equal(rows[0].querySelector(".thz-when").textContent, "SunOct 4");
-  assert.equal(rows[1].querySelector(".thz-when").textContent, "Oct12–18");
-  assert.equal(rows[2].querySelector(".thz-t").textContent, "Cambridge <Half>");
-  assert.ok(rows[4].querySelector("[data-thz-checkup]"), "See what to ask for →");
-  assert.equal(CairnTodayHorizon.horizonHtml(path({ milestones: [] })), "");
+  assert.equal(CairnTodayHorizon.horizonHtml, undefined);
 });
 
 test("the new connection: one sentence at Today's foot, only when new; the progress board is not on Today", () => {
@@ -578,7 +441,7 @@ test("the today-ahead controller fills each slot from its read and answers an as
   let refreshed = 0;
   const win = loadAhead();
   const host = createHost(win.document, {
-    html: `<section class="brief"><div id="todayPushSlot"></div><div id="todayStripSlot"></div><div id="todayPushOfferSlot"></div></section><div id="todayDigestSlot"></div><span id="tweekSpark"></span><div id="tweekGauges"></div><div id="todayHorizonSlot"></div><div id="todayHeadingSlot"></div>`,
+    html: `<section class="brief"><div id="todayPushSlot"></div><div id="todayStripSlot"></div><div id="todayPushOfferSlot"></div></section><div id="todayDigestSlot"></div><span id="tweekSpark"></span><div id="tweekGauges"></div><div id="todayHeadingSlot"></div>`,
   });
   const weekDays = ["2026-09-28", "2026-09-29", "2026-09-30", "2026-10-01", TODAY, "2026-10-03", "2026-10-04"].map((date) => ({
     date,
@@ -608,7 +471,7 @@ test("the today-ahead controller fills each slot from its read and answers an as
   };
   win.CairnTodayAhead.mount(host, {
     date: TODAY,
-    read: { periodization_context: { program_block: { week_index: 5, total_weeks: 6 } } },
+    read: { periodization_context: { program_block: { week_index: 5, total_weeks: 6 }, recovery_overlay: { day_index: 3, total_days: 7 } } },
     agenda: async () => ({ primary: [ask], more: [] }),
     peek: () => null,
     load: async (p) => reads[p],
@@ -619,8 +482,6 @@ test("the today-ahead controller fills each slot from its read and answers an as
     toast: (m) => toasts.push(m),
     gotoChatWith: () => {},
     openChanges: () => {},
-    openCheckup: () => {},
-    openRace: () => {},
     openPlanCoach: () => {},
     refreshToday: () => {
       refreshed += 1;
@@ -629,11 +490,12 @@ test("the today-ahead controller fills each slot from its read and answers an as
   });
   await flush();
   await flush();
-  // The block clock and the week's run plan ride the ONE week strip's header.
-  assert.equal(host.querySelector("#todayStripSlot [data-tstrip-block]").textContent, "Sharpen · Wk 5 of 6");
-  assert.equal(host.querySelector("#todayStripSlot .tstrip-tally").textContent, "2 of 4 lifting days · 22.3 of ~33 km");
+  // The strip is a glance: a running recovery week is its only header note (the stage
+  // and block week ride the Horizon glance line), and it carries no tally line.
+  assert.equal(host.querySelector("#todayStripSlot [data-tstrip-block]").textContent, "Recovery week · day 3 of 7");
+  assert.equal(host.querySelector("#todayStripSlot .tstrip-tally"), null);
   assert.ok(host.querySelector("#tweekSpark svg.tspark"));
-  assert.ok(host.querySelector("#todayHorizonSlot .thz"));
+  assert.equal(host.querySelector(".thz"), null, "Coming up left Today");
   assert.ok(host.querySelector("#todayHeadingSlot .thd-insight"), "the one new connection");
   assert.equal(host.querySelector("#todayHeadingSlot .thd-row"), null, "no progress board on Today");
   // No push read: the push line and the offer stay empty (collapsed).

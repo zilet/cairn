@@ -1,8 +1,10 @@
 // @ts-check
 // The Horizon home: what is ahead.
 //
-//   /app/horizon       the timeline: this week, the race build, and the season (the goal
-//                      line and labs and scans)
+//   /app/horizon       the timeline, opening on WEEK always (docs/IA.md "Horizon
+//                      landing": the frame hero, the week's shape, still open, next up,
+//                      goals — horizon-week-{client,controller}), then the race build and
+//                      the season (the goal line and labs and scans)
 //                      (horizon-model / -client / -controller), each lane tapping into
 //                      its depth view.
 //   /app/horizon/goal  the goal line in depth: All goals (every thread — race, weight,
@@ -73,6 +75,10 @@ function wireHorizonBack(root: ParentNode): void {
     CairnHorizonController.mount(host, {
       today: localISO(),
       load: (path: string) => api(path),
+      // The Week landing paints its last-known read at once and revalidates (SWR).
+      peek: (key: string) => (typeof peekCached === "function" ? peekCached(key) : null),
+      cached: (path: string, options: { key: string }) =>
+        typeof cachedApi === "function" ? (cachedApi(path, options) as Promise<unknown>) : api(path),
       navigate: horizonNavigate,
       hrefFor: horizonHref,
       reducedMotion: () => (typeof reducedMotion === "function" ? reducedMotion() : false),

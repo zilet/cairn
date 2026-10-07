@@ -1,7 +1,7 @@
 // @ts-check
 // Body & recovery on Today (docs/DESIGN.md "Today"): the recovery gauges with the
 // actual reading, its unit and the athlete's own band edges in words, the bodyweight
-// sparkline with its goal line, and the block clock's words for the week strip's mast.
+// sparkline with its goal line.
 // The days of the week are the "What's ahead" strip's alone (today-strip-client.ts) —
 // Today has ONE week view. Pure string builders over GET /api/recovery/baseline and the
 // path's weigh-ins; every server string is escaped and no colour is written here.
@@ -109,20 +109,8 @@ type TodayWeekBand = import("../contracts/client.js").ClientRecoveryBaselineDime
     return `<svg class="tspark" viewBox="0 0 ${W} ${H}" aria-hidden="true">${goalLine}<polyline class="tspark-line" points="${line}"/><circle class="tspark-dot" cx="${x(last)}" cy="${y(values[last])}" r="2"/></svg>`;
   }
 
-  // ---------- small lines ----------
-
-  /** The week's header words: "Sharpen · Wk 5 of 6". */
-  function blockLine(
-    phase: string | null | undefined,
-    block: { week_index?: unknown; total_weeks?: unknown } | null | undefined
-  ): string {
-    const week = Math.round(Number(block?.week_index) || 0);
-    const total = Math.round(Number(block?.total_weeks) || 0);
-    const wk = week > 0 ? `Wk ${week}${total >= week ? ` of ${total}` : ""}` : "";
-    return [phase ? String(phase) : "", wk].filter(Boolean).join(" · ");
-  }
-
-  const CAIRN_TODAY_WEEK = { gaugesHtml, sparkSvg, blockLine, nightWord };
+  // (The week's stage words are the server's: Today's Horizon glance line, frame.glance.)
+  const CAIRN_TODAY_WEEK = { gaugesHtml, sparkSvg, nightWord };
 
   Object.assign(globalThis, { CairnTodayWeek: CAIRN_TODAY_WEEK });
 })();

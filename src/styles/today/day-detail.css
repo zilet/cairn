@@ -169,7 +169,6 @@
 .tstrip-title{margin:0;color:var(--muted)}
 .tstrip-block{color:var(--muted);text-align:right}
 .tstrip-block:empty{display:none}
-.tstrip-tally{margin:var(--space-4) 0 0;font-size:var(--text-sm);line-height:var(--leading-snug);color:var(--ink2)}
 .tstrip-days{list-style:none;margin:var(--space-4) 0 0;padding:0;display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:var(--space-2)}
 .tstrip-cell{display:flex;min-width:0}
 .tstrip-day{flex:1;min-width:0;min-height:76px;display:flex;flex-direction:column;align-items:center;gap:var(--space-2);

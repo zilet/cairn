@@ -1,47 +1,14 @@
 /* =====================================================================
-   THE PATH — the card under the Brief's voice (today-path-client.ts).
-   A trail drawn to scale in time: the dotted road from the start of the
-   recent window to the furthest goal, the walked part in dawn drawing in
-   ONCE (stroke-dashoffset over the house curve), and the "now" dot
-   breathing on the live-dot timing. Then three threads — the race, the
-   weight, the anchor lift — each a stone-hue dot, a name with one muted
-   trend line, and the real number in its unit; then the week's ONE lever.
-   Reduced motion stills the draw and the breath (§30's blanket rule).
+   THE HORIZON GLANCE — Today's one line into Horizon (today-path-client.ts),
+   under the week strip: "26 days to Cambridge · Sharpen, wk 6 of 6 ›". The
+   race, the goals and the road ahead live on Horizon in full; Today glances.
+   One quiet row, a full-height tap target, the chevron saying "deeper".
    ===================================================================== */
 .tpath-slot:empty{display:none}
-.tpath-slot{margin-top:var(--space-8)}
-.today-wrap .tpath-slot{margin-top:var(--today-gap)}
-.tpath{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
-  padding:var(--space-7) var(--space-7) var(--space-6);display:grid;gap:var(--space-6)}
-.tpath-k{color:var(--muted)}
-.tpath-svg{width:100%;height:auto;display:block;overflow:visible}
-.tpath-trail{fill:none;stroke:var(--line-strong);stroke-width:2;stroke-dasharray:3 5;stroke-linecap:round}
-.tpath-walked{fill:none;stroke:var(--dawn);stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round;
-  stroke-dasharray:var(--len);stroke-dashoffset:0;animation:tpath-walk 1.6s var(--ease) both .2s}
-@keyframes tpath-walk{from{stroke-dashoffset:var(--len)}}
-/* a card already on screen settles without replaying the walk */
-.tpath-quiet .tpath-walked,.today-soft .tpath-walked,[data-held] .tpath-walked{animation:none}
-.tpath-node{fill:var(--surface);stroke:var(--line-strong);stroke-width:1.5}
-.tpath-node.is-race{stroke:var(--d-endurance);stroke-width:2}
-.tpath-node.is-goal{stroke:var(--d-body);stroke-width:2}
-.tpath-node.is-peak{stroke:var(--s-endurance);stroke-width:2}
-.tpath-now{fill:var(--dawn)}
-.tpath-pulse{fill:none;stroke:var(--dawn);stroke-width:1.5;opacity:.5;transform-origin:center;transform-box:fill-box;
-  animation:tpath-breathe var(--dur-ping) var(--ease) infinite}
-@keyframes tpath-breathe{0%{transform:scale(1);opacity:.55}100%{transform:scale(2.6);opacity:0}}
-.tpath-t{font-family:var(--font-mono);font-size:7.5px;letter-spacing:var(--tracking-wider);fill:var(--muted);text-transform:uppercase}
-.tpath-t-now{fill:var(--dawn)}
-.tpath-t-big{font-family:var(--font-display);font-size:10px;letter-spacing:0;text-transform:none;fill:var(--ink)}
-.tpath-threads{display:grid;gap:var(--space-4)}
-.tpath-thread{display:grid;grid-template-columns:10px minmax(0,1fr) auto;gap:var(--space-5);align-items:center;font-size:var(--text-md)}
-.tpath-dot{width:10px;height:10px;border-radius:50% 50% 45% 55%;background:var(--c)}
-.tpath-thread-name{min-width:0;color:var(--ink)}
-.tpath-thread-name small{display:block;color:var(--muted);font-size:var(--text-xs);line-height:var(--leading-snug)}
-.tpath-num{font-family:var(--font-display);font-size:var(--text-lead);font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--ink)}
-.tpath-lever{display:flex;gap:var(--space-5);align-items:flex-start;font-size:var(--text-md);color:var(--ink2);
-  border-top:1px solid var(--line);padding-top:var(--space-5)}
-.tpath-lever b{color:var(--ink);font-weight:var(--weight-semibold)}
-.tpath-lever svg{flex:none;margin-top:var(--space-2)}
-.tpath-lever-mark{fill:var(--dawn)}
-/* the quiet way to every goal: the Path card shows three, Horizon holds them all */
-.tpath-all{justify-self:start;min-height:44px;display:inline-flex;align-items:center;margin-top:calc(var(--space-4) * -1)}
+.tpath-slot{margin-top:var(--space-4)}
+.tglance{display:flex;align-items:center;justify-content:space-between;gap:var(--space-4);min-height:44px;
+  padding:var(--space-2) 0;border-top:1px solid var(--line);color:var(--ink2);font-size:var(--text-sm);
+  line-height:var(--leading-snug);text-decoration:none}
+.tglance-t{min-width:0}
+.tglance-go{flex:none;color:var(--muted);font-size:var(--text-md)}
+.tglance:hover .tglance-t{color:var(--ink)}

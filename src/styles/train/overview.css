@@ -198,17 +198,8 @@
 /* Plan editor: per-day "Train this day" stacks above "Edit day" in the read view. */
 .prog-head-actions{display:flex;flex-direction:column;gap:var(--space-3);flex:0 0 auto;align-items:flex-end}
 .prog-head-actions .ghostbtn{margin-top:0}
-/* Train overview: the calm "Start today's training" CTA under the week masthead. */
+/* Train overview, first run only: the calm "Start today's training" CTA. */
 .tov-start{margin:var(--space-2) 0 var(--space-6)}
-/* Today's lift leads Train: the one focal point — the day's lift in the serif
-   voice, its caveat quiet under it, and the one door into it. */
-.tov-today{display:flex;flex-direction:column;align-items:stretch;gap:var(--space-7);margin:var(--space-2) 0 var(--space-8);
-  padding:var(--space-8) var(--space-9) var(--space-9);background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-lg);box-shadow:none}
-.tov-today .strength-line{gap:var(--space-3)}
-.tov-today .strength-line-t{font-family:var(--font-display);font-weight:var(--weight-regular);font-size:var(--text-2xl);line-height:var(--leading-tight);
-  letter-spacing:0;text-wrap:balance}
-.tov-today .strength-line-caveat{font-size:var(--text-sm);color:var(--ink-2);line-height:var(--leading-normal)}
-.tov-today .tov-start{margin:0}
 
 /* Train "Where to focus": hero, chips, moved, block, one expander */
 .tfc-top{display:flex;align-items:center;justify-content:space-between;gap:var(--space-4);min-height:28px}

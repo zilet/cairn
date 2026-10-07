@@ -1,7 +1,7 @@
 {
   "totals": {
     "space": 16,
-    "font": 27,
+    "font": 25,
     "weight": 0,
     "radius": 0,
     "tracking": 0,
@@ -52,9 +52,6 @@
     },
     "src/styles/today/header.css": {
       "font": 1
-    },
-    "src/styles/today/path.css": {
-      "font": 2
     },
     "src/styles/train/overview.css": {
       "space": 1

@@ -576,7 +576,7 @@ async function renderToday(opts: any = {}) {
 
   // ---- Trajectory tier (this week), quiet, below the fold ----
   // ---- The digest, this week, then the road ahead (slots the today-ahead bundle fills) ----
-  html += todayMainShell.digestSlotHtml() + todayMainShell.weekFoldHtml(todayCompass, todayMainShellDeps(), { currentWeight: curW, trendLbWk: stats?.trend_lb_wk, runs: isEndurance() || isHybrid() || todayCompass.weekKm > 0, weekCardio: stats?.week_cardio }) + todayMainShell.aheadSlotsHtml();
+  html += todayMainShell.digestSlotHtml() + todayMainShell.weekFoldHtml(todayCompass, todayMainShellDeps(), { currentWeight: curW, trendWords: stats?.weight_trend?.rate_words, runs: isEndurance() || isHybrid() || todayCompass.weekKm > 0, weekCardio: stats?.week_cardio }) + todayMainShell.aheadSlotsHtml();
 
   // The primary column (.today-main) holds the Brief, capture, and logging surface;
   // the rail (.today-rail) sits beside it on wide screens and stacks under it on
@@ -656,7 +656,7 @@ async function renderToday(opts: any = {}) {
   );
   wireExerciseDecisionUndo(todayView, () => renderToday({ soft: true }));
   if (isToday) CairnTodayFuelGlance.mountToday(todayView, { ...todayRailDeps(), date: todayState.logDate }); // under NOW
-  // The Path card, then the lower half (digest, week, Coming up, the board): today-ahead-mount.ts.
+  // The Horizon glance line, then the lower half (digest, week, the connection): today-ahead-mount.ts.
   if (isToday) CairnTodayAheadMount.mount(todayView, { date: renderedDate, read, currentRead: () => (todayState.brief && todayState.brief.date === renderedDate ? todayState.brief.read : read), agenda: agendaPromise, isCurrent: () => todayState.tab === "today" && todayState.logDate === renderedDate && pollToken === railToken, rail: todayRailDeps() });
   wireGuides(view);
 
@@ -694,7 +694,6 @@ async function renderToday(opts: any = {}) {
     cfocusSlot.innerHTML = conductorHtml;
     cfocusSlot.classList.toggle("cfocus-thread-slot", conductorLeads);
   }
-  // (The standalone health lever line left Today: the focus heads Coming up.)
 
   // Rail: render the agenda-driven structure (or the calm fallback) into the reserved
   // .today-rail slot, then run its loaders. railHtml() fills agendaGeneric in place,
@@ -1510,7 +1509,7 @@ async function renderSession(opts: any = {}): Promise<void> {
   const planDayName = dailySession && dailySession.plan_day_id == null ? "" : day && day.name ? String(day.name) : "";
   const dayName = lineOwnsTitle
     ? String(linePlanDay!.title)
-    : planDayName || dailySession?.title || (prep.isRunDay ? "Today's run" : "Session");
+    : planDayName || dailySession?.title || (session?.title && session.title !== "Session" ? String(session.title) : "") || (prep.isRunDay ? "Today's run" : "Today's training"); // never a bare "Session"
   const dayFocus = lineOwnsTitle
     ? String(linePlanDay!.focus || "")
     : dailySession?.focus && dailySession.focus !== dayName

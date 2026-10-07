@@ -1308,6 +1308,7 @@ declare global {
     toUnit(km: unknown, units?: unknown): number;
     pace(secPerKm: unknown, units?: unknown): string;
     weight(lb: unknown, units?: unknown, bare?: boolean): string;
+    toLb(value: unknown, units?: unknown): number;
     date(iso: unknown, o?: { style?: "short" | "long" | "label" | "ago" | "age"; year?: boolean | "always"; today?: string; fmt?: Intl.DateTimeFormatOptions; utc?: boolean }): string;
     relDay(iso: unknown, today: unknown): string;
     daysBetween(later: unknown, earlier: unknown): number;
@@ -2135,7 +2136,7 @@ declare global {
   };
   type ClientTodayStripCell = ClientDayGlance;
   /** The strip header's words beside the week's counts (block clock, run plan, run units). */
-  type ClientTodayStripHeader = { block?: string; kmPlanned?: number | null; units?: string };
+  type ClientTodayStripHeader = { block?: string };
   declare const CairnTodayStrip: {
     stripHtml(
       week: import("./client-api.js").ClientPlanWeek | null | undefined,
@@ -2145,8 +2146,6 @@ declare global {
     ): string;
     daysHtml(cells: ClientTodayStripCell[], selected: string | null): string;
     nowHtml(week: import("./client-api.js").ClientPlanWeek | null | undefined, cells: ClientTodayStripCell[]): string;
-    tallyText(week: import("./client-api.js").ClientPlanWeek | null | undefined, header?: ClientTodayStripHeader): string;
-    tallyHtml(week: import("./client-api.js").ClientPlanWeek | null | undefined, header?: ClientTodayStripHeader): string;
     cellsOf(week: import("./client-api.js").ClientPlanWeek | null | undefined, today: string): ClientTodayStripCell[] | null;
     abbr(name: string): string;
   };
@@ -2160,8 +2159,8 @@ declare global {
         load(path: string, options: { key: string }): Promise<unknown>;
       }
     ): () => void;
-    /** Set the block clock / the week's run plan on a slot's strip (now, or on its first paint). */
-    setHeader(slot: Element, header: Omit<ClientTodayStripHeader, "units">): void;
+    /** Set the header's note (a running recovery week) on a slot's strip (now, or on its first paint). */
+    setHeader(slot: Element, header: ClientTodayStripHeader): void;
   };
   /** LAZY (today-ahead bundle, today-push-client.ts): the push line, chips, why section and offer card. */
   declare const CairnTodayPush: {
@@ -4770,13 +4769,8 @@ declare global {
     };
 
     CairnTodayPath: {
-      cardHtml(path: import("./today-path.js").TodayPath | null | undefined): string;
-      trailSvg(path: import("./today-path.js").TodayPath): string;
-      shortDate(iso: unknown): string;
-      clock(sec: unknown): string;
-      signed(n: number, digits?: number): string;
-      /** Where the card's "All goals" link lands (Horizon's goal line). */
-      goalsHref(): string;
+      /** Today's one glance line into Horizon (the server's frame.glance); "" without one. */
+      glanceHtml(path: import("./today-path.js").TodayPath | null | undefined): string;
     };
 
     CairnTodayPathController: {
@@ -4788,8 +4782,8 @@ declare global {
           date: string;
           peek(key: string): { data: import("./today-path.js").TodayPath; fresh: boolean } | null;
           load(path: string, options: { key: string }): Promise<import("./today-path.js").TodayPath>;
-          /** Open Horizon's goal line (the card's "All goals" link). */
-          openGoals?(): void;
+          /** Open Horizon (the glance line); without it the link navigates by its href. */
+          openHorizon?(): void;
         }
       ): () => void;
     };
@@ -4834,13 +4828,11 @@ declare global {
     CairnTodayWeek: {
       gaugesHtml(baseline: import("./client-api.js").ClientRecoveryBaselineRead | null | undefined, today: string): string;
       sparkSvg(points: Array<{ date: string; weight_lb: number }> | null | undefined, goal: number | null | undefined): string;
-      blockLine(phase: string | null | undefined, block: { week_index?: unknown; total_weeks?: unknown } | null | undefined): string;
       nightWord(band: import("./client-api.js").ClientRecoveryBaselineDimension, today: string): string;
     };
 
     /** Lazy (today-ahead bundle). */
     CairnTodayHorizon: {
-      horizonHtml(path: import("./today-path.js").TodayPath | null | undefined): string;
       /** The one new-connection line at Today's foot; "" without a new insight. */
       connectionHtml(insight?: { id?: unknown; text?: unknown; kind?: unknown; status?: unknown } | null): string;
       insightSentence(insight: { id?: unknown; text?: unknown; kind?: unknown; status?: unknown } | null | undefined): string;
@@ -4855,7 +4847,6 @@ declare global {
           date: string;
           read: {
       periodization_context?: {
-        program_block?: { week_index?: unknown; total_weeks?: unknown } | null;
         recovery_overlay?: { day_index?: unknown; total_days?: unknown } | null;
       } | null;
     } | null;
@@ -4868,8 +4859,6 @@ declare global {
           toast(message: string, options?: { action?: string; onAction?: () => void }): void;
           gotoChatWith(text: string): void;
           openChanges(): void;
-          openCheckup(): void;
-          openRace(): void;
           openPlanCoach(): void;
           refreshToday(): unknown;
           invalidate(key: string): void;
@@ -4910,7 +4899,7 @@ declare global {
         deps: { escapeHtml(value: unknown): string },
         options?: {
           currentWeight?: unknown;
-          trendLbWk?: unknown;
+          trendWords?: string | null;
           runs?: boolean;
           weekCardio?: unknown;
         }
@@ -5349,6 +5338,8 @@ declare global {
           | undefined,
         label: string
       ): string | null;
+      /** The training line's name for its source ("…your labs", "…your VO2max"). */
+      trainingProvenanceLabel(directive: ClientDirective): string;
       wireProvenance(scope?: ParentNode | null): void;
       loadTrainingProvenance(isToday?: boolean): Promise<void>;
       loadMealProvenance(): Promise<void>;
@@ -5590,7 +5581,6 @@ declare global {
 
     CairnTodayCompass: {
       fmtPace(value: unknown): string;
-      paceWord(stats: unknown): string;
       paceTileHtml(
         stats: unknown,
         deps: {
@@ -6878,37 +6868,91 @@ declare global {
     volume?: ClientHorizonVolumeWeek[];
     /** The run units the lane is written in (race lane only). */
     units?: "km" | "mi";
+    /** The week's frame (GET /api/week), the race lane's hero when it has a headline. */
+    frame?: import("./week-read.js").WeekReadFrame | null;
+    /** The weight goal's row (the one weight trend), the goal line's in place of its lede. */
+    goal_row?: ClientGoalRow | null;
     rows: ClientHorizonRow[];
     links: Array<{ label: string; target: ClientHorizonTarget }>;
   };
   /** Horizon's three views: this week, the race build, and the season line. */
   type ClientHorizonView = "week" | "race" | "season";
-  type ClientHorizonWeekPill = {
-    /** The stone whose hue the pill wears. */
-    stone: "strength" | "endurance";
-    text: string;
-    /** done (ticked), live (today's open session), open (a run still to place), planned. */
-    state: "done" | "live" | "open" | "planned";
-  };
-  type ClientHorizonWeekDay = {
-    date: string;
+  // ---- docs/IA.md "Horizon landing": the week page and its shared rows (calendar bundle) ----
+  /** A stone whose hue a row's mark or a column's bar wears. */
+  type ClientRowStone = "strength" | "endurance" | "body" | "heart" | "recovery" | "fuel";
+  /** One column of the week's shape (week-model.ts): words for the label, a height for drawing. */
+  type ClientWeekShapeDay = {
+    /** Machine date for the peek; null in template mode (no lifting calendar). */
+    date: string | null;
+    /** "MON" (or "DAY" in template mode). */
     weekday: string;
-    day: string;
+    /** "6" (or the day's place in template mode). */
+    num: string;
+    /** The lift's short name for a seventh of a phone ("Push", "LB"); "" with no lift. */
+    tag: string;
     today: boolean;
-    pills: ClientHorizonWeekPill[];
-    /**
-     * Today only: the server's one today line (the Brief's, the Session's, the plan
-     * strip's), printed verbatim in place of a lift pill so one morning reads as one answer.
-     */
-    line: import("./client-api.js").ClientTodayStrengthLine | null;
-    /** Nothing planned or logged: a rest day. */
-    rest?: boolean;
-    /** Everything the day held is logged. */
-    done?: boolean;
-    /** Today only: the weekday map's plan day, when today's selection adapted to another. */
-    swappedFrom?: string;
+    done: boolean;
+    rest: boolean;
+    /** A key session (a heavy-leg lift, a quality or long run) still ahead: drawn hollow. */
+    key_open: boolean;
+    /** Planned work a past day did not get: drawn dashed. */
+    missed: boolean;
+    /** The bar's stone hues, bottom first. */
+    stones: Array<"strength" | "endurance">;
+    /** The server's relative dose, 0..1: a drawing aid, never printed. */
+    height: number;
+    /** The server's dose word ("Moderate"). */
+    dose_word: string;
+    /** The column's whole label: its day, its words, its dose word. */
+    aria: string;
   };
-  type ClientHorizonWeek = { line: string; days: ClientHorizonWeekDay[] };
+  type ClientWeekOpenRow = { kind: string; stone: "strength" | "endurance"; words: string; date: string | null };
+  type ClientWeekLanding = {
+    frame: import("./week-read.js").WeekReadFrame;
+    /** "Oct 6 – Oct 12". */
+    range: string;
+    days: ClientWeekShapeDay[];
+    /** The week's ONE sentence (Horizon owns it); "" when the server has none. */
+    summary: string;
+    layout_note: string;
+    /** Each dated day as its glance, for the day-by-day rows (the words Program's rows say). */
+    glances: ClientDayGlance[];
+    open: ClientWeekOpenRow[];
+    next: ClientMilestoneRow[];
+    goals: ClientGoalRow[];
+  };
+  /** One dated row on a line of time (milestone-row-model.ts): Horizon's Next up and the Season. */
+  type ClientMilestoneRow = {
+    kind: string;
+    stone: ClientRowStone;
+    /** A dot for a training or goal date, a diamond for a lab or a scan (the season chart's marks). */
+    mark: "dot" | "diamond";
+    side: "behind" | "ahead";
+    /** Words: "Oct 18", "window is open". */
+    when: string;
+    label: string;
+    detail: string;
+  };
+  /** Where a milestone row goes: a real href and the delegated action key the controller resolves. */
+  type ClientMilestoneGo = { href: string; action: string; key: string };
+  /** One goal, compact (goal-row-model.ts): the race estimate WITH its time, the weight, the anchor lift. */
+  type ClientGoalRow = {
+    key: string;
+    stone: ClientRowStone;
+    label: string;
+    /** "1:52:10", "159.6 lb". */
+    now: string;
+    /** "sub-1:55", "154 lb"; "" with none. */
+    goal: string;
+    /** The server's one sentence for the goal; "" with none. */
+    line: string;
+    /** How much of the start → goal track is behind, 0..1, for the drawn meter only; null with no track. */
+    fill: number | null;
+    /** The meter in words ("Past halfway", "Stretch"), never a percent. */
+    word: string;
+    /** A tone hook for the word: the race's fit, or "reached". */
+    tone: string;
+  };
   /** One week of the terrain; `logged` weeks are closed weeks read off the log, before the ladder. */
   type ClientHorizonTerrainWeek = {
     week_start: string;
@@ -6994,31 +7038,120 @@ declare global {
     navigate(target: ClientHorizonTarget): void;
     hrefFor?(target: ClientHorizonTarget): string | null;
     reducedMotion?(): boolean;
-    /** Save the athlete's run units (settings.run_units); the controller repaints on its own. */
+    /** The SWR cache's warm read (peekCached) for the Week landing's instant paint. */
+    peek?(key: string): { data: unknown; fresh: boolean } | null;
+    /** The SWR read (cachedApi) the Week landing revalidates through; `load` when absent. */
+    cached?(path: string, options: { key: string }): Promise<unknown>;
   };
   interface Window {
     CairnHorizonModel: {
-      LAB_KINDS: Readonly<Record<string, string>>;
-      TARGETS: Readonly<Record<string, ClientHorizonTarget>>;
+      TARGETS: Readonly<Record<"race" | "goal" | "profile" | "checkup" | "body" | "health", ClientHorizonTarget>>;
       raceLane(build: unknown, units?: unknown): ClientHorizonLane;
       goalLane(journey: unknown, timeline: unknown, today: string): ClientHorizonLane;
-      labsLane(docs: unknown, checkup: unknown, timeline: unknown, today: string): ClientHorizonLane;
       weightLine(read: import("./client-api.js").ClientJourneyRead | null): string;
+      /** A lane dressed by the week read: the race lane's frame hero, the goal line's weight row. */
+      withWeek(lane: ClientHorizonLane, week: unknown): ClientHorizonLane;
+      /** The shaping parts horizon-labs-model.ts shares. */
+      parts: {
+        record(value: unknown): Record<string, unknown> | null;
+        text(value: unknown): string;
+        num(value: unknown): number | null;
+        dayKey(value: unknown): string;
+        dateWord(iso: unknown, today: string): string;
+        copyTarget(target: ClientHorizonTarget, id?: unknown): ClientHorizonTarget;
+        lane(key: ClientHorizonLane["key"], title: string, fields: Partial<ClientHorizonLane>): ClientHorizonLane;
+        timelineRows(value: unknown): import("./client-api.js").ClientForwardTimelineEntry[];
+        entryAhead(entry: import("./client-api.js").ClientForwardTimelineEntry, today: string): { when: string } | null;
+        LAB_TIMELINE_KINDS: ReadonlySet<string>;
+      };
+    };
+    /** LAZY "horizon" bundle (horizon-labs-model.ts): the Season's labs lane and its season line. */
+    CairnHorizonLabsModel: {
+      LAB_KINDS: Readonly<Record<string, string>>;
+      /** `draws` is GET /api/health-docs/draws: one row per draw. */
+      labsLane(draws: unknown, checkup: unknown, timeline: unknown, today: string): ClientHorizonLane;
       season(
         pace: unknown,
         timeline: unknown,
-        docs: unknown,
+        draws: unknown,
         checkup: unknown,
         today: string
       ): ClientHorizonSeason | null;
+      drawRows(
+        draws: unknown,
+        today: string
+      ): Array<{ draw: import("./client-api.js").ClientLabDraw; date: string }>;
     };
-    CairnHorizonWeekModel: {
-      weekView(planWeek: unknown, today: string, units?: unknown): ClientHorizonWeek | null;
-      /**
-       * One plan-week day's run as the week and a day preview print it ("Long run ·
-       * 8.4 mi"), in the athlete's run units; "" when the day holds no run.
-       */
-      dayRunText(day: unknown, today: string, units?: unknown): string;
+    /** LAZY "calendar" bundle (week-model.ts): GET /api/week shaped for Horizon's Week page. */
+    CairnWeekModel: {
+      landing(read: unknown): ClientWeekLanding | null;
+      shapeDay(chip: import("./week-read.js").DayChip, index: number): ClientWeekShapeDay;
+      weightGoal(read: unknown): ClientGoalRow | null;
+    };
+    /** LAZY "calendar" bundle (week-strip-client.ts): the week as seven columns, variant "shape". */
+    CairnWeekStrip: {
+      shapeHtml(
+        days: ReadonlyArray<ClientWeekShapeDay>,
+        opts?: { selected?: string | null; controls?: string; label?: string }
+      ): string;
+    };
+    /** LAZY "calendar" bundle (milestone-row-model.ts). */
+    CairnMilestoneRowModel: {
+      fromWeekRead(m: unknown): ClientMilestoneRow | null;
+      fromLaneRow(row: ClientHorizonRow | null | undefined): ClientMilestoneRow | null;
+      KINDS: Readonly<Record<string, { stone: ClientRowStone; mark: "dot" | "diamond" }>>;
+    };
+    /** LAZY "calendar" bundle (milestone-row-client.ts): the one dated row, Week and Season. */
+    CairnMilestoneRow: {
+      rowHtml(row: ClientMilestoneRow, opts?: { go?: ClientMilestoneGo | null }): string;
+      listHtml(
+        rows: ReadonlyArray<ClientMilestoneRow | null | undefined>,
+        opts?: { label: string; now?: boolean; go?: (row: ClientMilestoneRow, index: number) => ClientMilestoneGo | null }
+      ): string;
+    };
+    /** LAZY "calendar" bundle (goal-row-model.ts). */
+    CairnGoalRowModel: {
+      fromWeekRead(goal: unknown): ClientGoalRow | null;
+      progressWord(fill: number | null): string;
+    };
+    /** LAZY "calendar" bundle (goal-row-client.ts): one goal, compact, with its meter in words. */
+    CairnGoalRow: {
+      rowHtml(row: ClientGoalRow): string;
+      listHtml(rows: ReadonlyArray<ClientGoalRow | null | undefined>, opts?: { label?: string }): string;
+    };
+    /** LAZY "calendar" bundle (frame-line-client.ts): the week's frame as one hero. */
+    CairnFrameLine: {
+      heroHtml(
+        frame: import("./week-read.js").WeekReadFrame | null | undefined,
+        opts?: { kicker?: string; id?: string; ribbon?: boolean }
+      ): string;
+      ribbonHtml(frame: import("./week-read.js").WeekReadFrame | null | undefined): string;
+    };
+    /** LAZY "horizon" bundle (horizon-week-client.ts): Horizon's Week landing. */
+    CairnHorizonWeek: {
+      landingHtml(
+        model: ClientWeekLanding,
+        opts?: { enter?: boolean; selected?: string | null; seasonHref?: string }
+      ): string;
+      skeletonHtml(): string;
+      errorHtml(): string;
+      PEEK_ID: string;
+    };
+    /** LAZY "horizon" bundle (horizon-week-controller.ts). */
+    CairnHorizonWeekController: {
+      WEEK: readonly [string, string];
+      mount(
+        slot: Element,
+        deps: {
+          peek(key: string): { data: unknown; fresh: boolean } | null;
+          load(path: string, options: { key: string }): Promise<unknown>;
+          reducedMotion?(): boolean;
+          seasonHref?: string;
+          onRead?(read: unknown): void;
+          onFail?(): void;
+          onSeason?(): void;
+        }
+      ): () => void;
     };
     CairnHorizonTerrain: {
       TERRAIN: { readonly W: number; readonly H: number };
@@ -7054,8 +7187,6 @@ declare global {
       PANEL: Readonly<Record<ClientHorizonLane["key"], ClientHorizonView>>;
       laneSkeletonHtml(key: ClientHorizonLane["key"]): string;
       seasonHtml(season: ClientHorizonSeason | null): string;
-      weekHtml(week: ClientHorizonWeek | null, opts?: { enter?: boolean }): string;
-      weekSkeletonHtml(): string;
       /** `race: false` leaves the race view out (a lifting-only athlete). */
       shellHtml(active?: ClientHorizonView, opts?: { race?: boolean; raceLabel?: string }): string;
       /** All goals (the goal line's depth view): every progress-board thread; "" with none. */
@@ -7063,14 +7194,21 @@ declare global {
     };
     CairnHorizonController: {
       mount(host: Element, deps: ClientHorizonDeps): () => void;
-      /** The shell's frame for this app session: the view to open on and whether the race view belongs. */
+      /** The shell's frame: always the Week view first, and whether the race view belongs. */
       shellOptions(): { view: ClientHorizonView; race: boolean; raceLabel: string };
-      /** Open the next Horizon paint on this view (held for the app session, like a tap). */
-      pickView(view: ClientHorizonView): void;
     };
   }
   declare const CairnHorizonModel: Window["CairnHorizonModel"];
-  declare const CairnHorizonWeekModel: Window["CairnHorizonWeekModel"];
+  declare const CairnHorizonLabsModel: Window["CairnHorizonLabsModel"];
+  declare const CairnWeekModel: Window["CairnWeekModel"];
+  declare const CairnWeekStrip: Window["CairnWeekStrip"];
+  declare const CairnMilestoneRowModel: Window["CairnMilestoneRowModel"];
+  declare const CairnMilestoneRow: Window["CairnMilestoneRow"];
+  declare const CairnGoalRowModel: Window["CairnGoalRowModel"];
+  declare const CairnGoalRow: Window["CairnGoalRow"];
+  declare const CairnFrameLine: Window["CairnFrameLine"];
+  declare const CairnHorizonWeek: Window["CairnHorizonWeek"];
+  declare const CairnHorizonWeekController: Window["CairnHorizonWeekController"];
   declare const CairnHorizon: Window["CairnHorizon"];
   declare const CairnHorizonTerrain: Window["CairnHorizonTerrain"];
   declare const CairnHorizonChart: Window["CairnHorizonChart"];

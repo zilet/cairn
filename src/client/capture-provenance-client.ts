@@ -41,14 +41,25 @@ function wireProvenance(scope?: ParentNode | null): void {
   }));
 }
 
+// A watch's overnight readings (HRV, resting HR) are Body & recovery's to say — read
+// against last night and the athlete's own band. A directive judged on the week's
+// average beside them would be a second, contradicting read of the same signal.
+const PROV_RECOVERY_SIGNAL = /^(hrv|heart rate variability|resting hr|resting heart rate|rhr)$/i;
+
+/** What shaped the training, named for its source: a watch reading is not a lab. */
+function trainingProvenanceLabel(directive: CaptureDirective): string {
+  const marker = String(directive.marker || "").trim();
+  return /^vo2 ?max$/i.test(marker) ? `Training shaped by your ${marker}` : "Training shaped by your labs";
+}
+
 async function loadTrainingProvenance(_isToday?: boolean): Promise<void> {
   const slot = view.querySelector("#briefProvenance");
   if (!slot) return;
-  const rows = await activeDirectives();
+  const rows = (await activeDirectives()).filter((row) => !PROV_RECOVERY_SIGNAL.test(String(row.marker || "").trim()));
   if (state.tab !== "today" || !slot.isConnected) return;
   const directive = rows.find((row) => (row.domain || "watch") === "training" && !row.stale)
     || rows.find((row) => (row.domain || "watch") === "watch" && !row.stale);
-  const html = provenanceLineHtml(directive, "Training shaped by your labs");
+  const html = directive ? provenanceLineHtml(directive, trainingProvenanceLabel(directive)) : null;
   if (!html) { slot.innerHTML = ""; return; }
   slot.innerHTML = html;
   wireProvenance(slot);
@@ -69,6 +80,7 @@ async function loadMealProvenance(): Promise<void> {
 const CAIRN_CAPTURE_PROVENANCE = {
   activeDirectives,
   provenanceLineHtml,
+  trainingProvenanceLabel,
   wireProvenance,
   loadTrainingProvenance,
   loadMealProvenance,

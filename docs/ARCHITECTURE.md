@@ -3152,13 +3152,15 @@ disrupted) plus the always-true clause (the coach sees it, and a change evaluate
 counts it as a confounder). The vocabulary itself stays in `src/contextTags.ts`.
 
 The `/today?surface=today` fan-in carries `/today-path`, `/today-digest`, `/plan/week` and
-`/recovery/baseline`. On the client, the Path card is eager; the digest, the week strip and gauges,
-Coming up and the new-connection line are the lazy, route-less `today-ahead` bundle (`routeless: true` in
-`BUNDLES`, so the deep-link preload table skips it), mounted through `withBundle` after the frame
-paints. The progress `board` is NOT on Today (it echoed the Path card): Horizon's goal line
-(`/app/horizon/goal`, `renderHorizonGoal` → `CairnHorizon.goalsBoardHtml`) lays every thread out
-under "All goals", and the Path card's quiet "All goals" link opens it (`openGoals`, a real href for a
-modified click). Visual contract: docs/DESIGN.md "Today, the road ahead".
+`/recovery/baseline`. On the client, Today prints ONE line of the path read: `frame.glance`, the
+Horizon glance line (eager, `today-path-client.ts`; a tap opens Horizon's Week through `openHorizon`,
+a real href for a modified click). The Path card and Coming up left Today (docs/IA.md decision 1);
+the race estimate, the goals and the dated road ahead are Horizon's in full. The digest, the week
+strip and gauges and the new-connection line are the lazy, route-less `today-ahead` bundle
+(`routeless: true` in `BUNDLES`, so the deep-link preload table skips it), mounted through
+`withBundle` after the frame paints. Which component owns each fact in full, and which may only
+glance at it, is `src/contracts/fact-owners.ts` (enforced by `test/oneHomePerFact.test.js`). Visual
+contract: docs/DESIGN.md "Today, the road ahead".
 
 ## The Today lead arbitration (`src/domain/brain/today-attention.ts`)
 

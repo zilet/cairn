@@ -472,7 +472,7 @@ type TodayBriefHtmlOptions = {
     const recovery = todayBriefRecoveryHtml(read, kind) + ((globalThis as { CairnTodayBriefRunLeg?: Window["CairnTodayBriefRunLeg"] }).CairnTodayBriefRunLeg?.html(read, options.isToday === true) ?? "");
     const today = options.isToday === true;
     const quietDay = kind === "rest" || kind === "easy";
-    // Today's week strip already carries the week's counts (its header line): say them once.
+    // The week's counts are Horizon's (one home per fact): Today's own Brief never says them.
     const weekWins = today ? "" : todayBriefWeekHtml(read, kind);
     // The forward line rides on train days AND done days — after the work is in,
     // "Next: …" is the so-what that replaces the retired Start-session controls.
@@ -494,7 +494,7 @@ type TodayBriefHtmlOptions = {
     );
     const updated = todayBriefUpdatedHtml(read, kind, options.isToday !== false);
     // Today only, under the state line and the check-in: "What's ahead" (the week's days)
-    // then the Path card, then the push offer when the coach has one open; the push state
+    // then the one Horizon glance line, then the push offer when the coach has one open; the push state
     // line rides under the why. All filled by the lazy today-ahead bundle; aria-live off, like fuel.
     const pathSlot = today ? `<div id="todayStripSlot" class="tstrip-slot" aria-live="off"></div><div id="todayPathSlot" class="tpath-slot" aria-live="off"></div><div id="todayPushOfferSlot" class="tpush-offer-slot" aria-live="off"></div>` : "";
     const pushSlot = today ? `<div id="todayPushSlot" class="tpush-slot" aria-live="off"></div>` : "";

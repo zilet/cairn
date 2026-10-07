@@ -24,7 +24,7 @@ async function renderProgress() {
 // `profile`, for the goal line): the Weight seg paints its chart instantly on a
 // warm re-entry, then revalidates. A bodyweight log invalidates progress:weight.
 async function renderWeight() {
-  headerTitle.textContent = "Weight";
+  headerTitle.textContent = "Body"; // the Body group's landing: the header names the tab, not the leaf
   state.progressSeg = "weight";
   const token = ++pollToken;
   const peekRows = peekCached("progress:weight");
@@ -98,17 +98,9 @@ function gpaceMonthDay(ms: number): string {
   return `${months[d.getUTCMonth()]} ${d.getUTCDate()}`;
 }
 
-// A signed weekly rate with a true minus sign: "−0.8" (bare) / "−0.8 lb/wk".
-function gpaceRateNum(r: number): string {
-  const a = Math.round(Math.abs(r) * 10) / 10;
-  return `${r < 0 ? "−" : r > 0 ? "+" : ""}${a}`;
-}
-function gpaceRate(r: number): string {
-  return `${gpaceRateNum(r)} lb/wk`;
-}
-
+// A chart weight in the athlete's unit, bare ("72.6") — the goal label adds the unit.
 function gpaceLb(v: number): string {
-  return String(Math.round(v * 10) / 10);
+  return CairnFmt.weight(v, undefined, true);
 }
 
 // A finite number or NaN — treating null/undefined/"" as ABSENT (NaN), not 0.
@@ -243,7 +235,7 @@ function goalPaceChartHtml(gp: unknown): string {
       gy = py(goalW);
     const rightish = gx > W * 0.6;
     const lx = rightish ? gx - 9 : gx + 9;
-    const label = `${gpaceLb(goalW)} lb · ${gpaceMonthDay(goalT)}`;
+    const label = `${CairnFmt.weight(goalW)} · ${gpaceMonthDay(goalT)}`;
     goalSvg =
       `<circle class="gpace-goal-ring" cx="${gx.toFixed(1)}" cy="${gy.toFixed(1)}" r="5" fill="#fffdf8" stroke="#6e7f5c" stroke-width="2"/>` +
       `<circle class="gpace-goal-dot" cx="${gx.toFixed(1)}" cy="${gy.toFixed(1)}" r="1.8" fill="#6e7f5c"/>` +
@@ -259,31 +251,15 @@ function goalPaceChartHtml(gp: unknown): string {
       : `<text class="gpace-xlbl" x="${W - R}" y="${H - 7}" text-anchor="end" fill="#9a907d" font-size="9">${escHtml(gpaceMonthDay(pts[pts.length - 1].t))}</text>`);
 
   // The one-line read beneath — only with a goal (per spec, no goal → no read line).
-  const trendRate = gpaceNum(trend.lb_wk);
-  const neededRate = gpaceNum(needed.lb_wk);
-  let read = "";
-  let readCls = "gpace-read";
-  if (hasGoal && Number.isFinite(trendRate)) {
-    const goalLabel = gpaceMonthDay(goalT);
-    if (Number.isFinite(neededRate)) {
-      const dir = neededRate < 0 ? -1 : neededRate > 0 ? 1 : 0;
-      const progress = trendRate * dir; // movement toward the goal per week
-      const onPace = dir === 0 ? Math.abs(trendRate) <= 0.15 : progress >= Math.abs(neededRate) - 0.05;
-      // Lean-safe-first: a cut running well past the needed rate (>=1.5x, both
-      // negative) is still "on pace" for styling, but the copy should say so
-      // plainly rather than read as if it exactly matched the target rate.
-      const aheadOfPace =
-        onPace && trendRate < 0 && neededRate < 0 && Math.abs(trendRate) >= 1.5 * Math.abs(neededRate);
-      read = aheadOfPace
-        ? `Trending ${gpaceRate(trendRate)} — ahead of the needed pace for ${goalLabel}.`
-        : onPace
-          ? `Trending ${gpaceRate(trendRate)} — on pace for ${goalLabel}.`
-          : `Trending ${gpaceRate(trendRate)}; ${gpaceRateNum(neededRate)} would meet ${goalLabel}.`;
-      readCls = onPace ? "gpace-read gpace-read-on" : "gpace-read gpace-read-behind";
-    } else {
-      read = `Trending ${gpaceRate(trendRate)} toward ${goalLabel}.`;
-    }
-  }
+  // It is the ONE weight-trend read's own sentence (`read`, weight-trend.ts), the same
+  // rate and verdict Today, Horizon and What moved print; the chart never re-judges it.
+  const one = CairnProgressData.record(rec.read);
+  const read = hasGoal ? CairnProgressData.string(one.line) : "";
+  const readCls = !read
+    ? "gpace-read"
+    : one.verdict === "behind"
+      ? "gpace-read gpace-read-behind"
+      : "gpace-read gpace-read-on";
   const readHtml = read ? `<div class="${readCls}">${escHtml(read)}</div>` : "";
   const aria = read || (hasGoal ? "Your weight trend against goal pace." : "Your weight trend.");
 
@@ -450,7 +426,7 @@ async function renderEnergy() {
 // all interpretation; this route only paints the escaped client surface.
 const _intakeWatched = new Set<number>();
 async function renderIntake() {
-  headerTitle.textContent = "Intake";
+  headerTitle.textContent = "Fuel"; // the Fuel group's landing: the header names the tab, not the leaf
   state.progressSeg = "intake";
   const token = ++pollToken;
   const head = segBar("intake", PROGRESS_SEG);

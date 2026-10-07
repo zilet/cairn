@@ -1,6 +1,6 @@
 /* =====================================================================
-   Horizon (Atelier v2): what is ahead, on one line of time, in two views.
-   A pill switch (.horizon-seg) picks this week, the race build or the season; each lane
+   Horizon (Atelier v2): what is ahead, on one line of time, in three views.
+   A pill switch (.horizon-seg) picks this week (the landing: horizon/week.css), the race build or the season; each lane
    reads as a voice (mono kicker, serif line), then an instrument in a quiet
    card (.horizon-chart-card: the terrain km chart or the season weight line,
    drawn to scale by horizon-chart-client), then hairline rows. No card chrome
@@ -17,8 +17,6 @@
 .horizon-lane-card{display:grid;gap:var(--space-5);min-width:0}
 .horizon-lane-head{display:grid;gap:var(--space-2);padding:0;margin:0;max-width:none}
 .horizon-lane-kicker{color:var(--muted)}
-.horizon-lane-kickrow{display:flex;align-items:center;justify-content:space-between;gap:var(--space-3);min-width:0}
-.horizon-units{padding-top:0}
 .horizon-lane-title{margin:0;font-family:var(--font-display);font-weight:var(--weight-regular);
   font-size:var(--text-2xl);line-height:var(--leading-tight);letter-spacing:0;color:var(--ink);text-wrap:balance;overflow-wrap:anywhere}
 .horizon-lane-card.is-labs .horizon-lane-title{font-size:var(--text-lg)}
@@ -129,99 +127,6 @@
 .horizon-lane-card.is-build .horizon-lane-fit{padding-top:var(--space-6);border-top:1px solid var(--line);font-size:var(--text-xs)}
 .horizon-lane-fit-lbl{flex-basis:100%;color:var(--muted)}
 
-/* ---- this week, day by day ---- */
-.horizon-weekview{display:grid;gap:var(--space-6)}
-.horizon-week-voice+.horizon-week-line{margin-top:calc(-1 * var(--space-3))}
-.horizon-days{list-style:none;margin:0;padding:0;display:grid}
-.horizon-day{display:grid;grid-template-columns:44px minmax(0,1fr);gap:var(--space-5);align-items:start;
-  padding:var(--space-5) 0;border-top:1px solid var(--line);min-width:0}
-.horizon-day:first-child{border-top:0}
-.horizon-day.is-today{background:var(--dawn-wash);border-radius:var(--radius-md);padding-inline:var(--space-4);
-  margin-inline:calc(-1 * var(--space-4));border-top-color:transparent}
-.horizon-day.is-today+.horizon-day{border-top-color:transparent}
-/* a dated day opens: the row is the tap target, a quiet chevron says so (v2 wave 7) */
-.horizon-day.is-open{grid-template-columns:44px minmax(0,1fr) auto;cursor:pointer;-webkit-tap-highlight-color:transparent;
-  transition:background var(--dur-1) var(--ease)}
-.horizon-day.is-open:active{background:var(--surface2)}
-@media (hover:hover){.horizon-day.is-open:hover .horizon-day-go{color:var(--ink)}}
-.horizon-day-go{align-self:center;color:var(--faint);font-size:var(--text-lead);line-height:1;padding-left:var(--space-2)}
-.horizon-day-when{font-family:var(--font-mono);font-size:var(--text-2xs);letter-spacing:var(--tracking-mono);
-  color:var(--muted);line-height:var(--leading)}
-.horizon-day-when b{display:block;font-family:var(--font-display);font-weight:var(--weight-regular);font-size:var(--text-lead);letter-spacing:0;color:var(--ink)}
-.horizon-day.is-today .horizon-day-when{color:var(--dawn)}
-.horizon-pills{display:flex;flex-wrap:wrap;gap:var(--space-3);min-width:0;padding-top:var(--space-1)}
-.horizon-pill{--c:var(--s-strength);display:inline-flex;align-items:center;gap:var(--space-3);max-width:100%;
-  font-size:var(--text-sm);line-height:var(--leading-snug);padding:var(--space-2) var(--space-5);border-radius:var(--radius-pill);
-  background:color-mix(in srgb,var(--c) 34%,transparent);color:var(--ink);overflow-wrap:anywhere}
-.horizon-pill.is-endurance{--c:var(--s-endurance)}
-.horizon-pill.is-planned{background:color-mix(in srgb,var(--c) 18%,transparent);color:var(--ink-2)}
-.horizon-pill.is-open{background:transparent;box-shadow:inset 0 0 0 1.5px var(--c);color:var(--ink-2)}
-.horizon-pill-tick{font-size:var(--text-xs);color:var(--ink-2)}
-.horizon-pill-live{width:6px;height:6px;border-radius:50%;background:var(--dawn);flex:none}
-/* The day's lift leads the row as its name (a strength dot, the UI face), the run rides
-   beside it as the endurance chip with its distance. */
-.horizon-pill.is-strength{background:none;box-shadow:none;padding-inline:0;font-size:var(--text-md);
-  font-weight:var(--weight-semibold);color:var(--ink);margin-right:var(--space-2)}
-.horizon-pill.is-strength::before{content:"";width:8px;height:8px;border-radius:50%;flex:none;
-  box-shadow:inset 0 0 0 1.5px var(--s-strength)}
-.horizon-pill.is-strength.is-done::before,.horizon-pill.is-strength.is-live::before{background:var(--s-strength)}
-.horizon-pill.is-strength.is-open{color:var(--ink-2)}
-.horizon-pills{align-items:center}
-/* A rest day is quiet: the word in the UI face, muted, the row a little shorter. */
-.horizon-rest{font-size:var(--text-md);color:var(--muted);padding-top:var(--space-3)}
-.horizon-day.is-rest .horizon-day-when b{color:var(--ink-2)}
-/* A day whose work is all logged: a small sage check beside its date. */
-.horizon-day-check{display:inline-grid;place-items:center;width:14px;height:14px;margin-left:var(--space-2);border-radius:50%;
-  background:var(--sage-text);color:var(--on-accent);font-family:var(--font-ui);font-size:var(--text-2xs);vertical-align:2px}
-.horizon-day.is-done .horizon-pill.is-done{background:color-mix(in srgb,var(--c) 46%,transparent)}
-/* Today adapted to another plan day: said once, quietly. */
-.horizon-day-swap{font-size:var(--text-xs);color:var(--muted);line-height:var(--leading-normal)}
-.horizon-day:focus-visible{outline:2px solid var(--dawn);outline-offset:2px;border-radius:var(--radius-md)}
-/* Today's lift in the server's one line, verbatim with its caveat, leading the day's pills. */
-.horizon-day-body{display:flex;flex-direction:column;gap:var(--space-2);min-width:0}
-.horizon-day-body .strength-line{padding-top:1px}
-.horizon-day-body .strength-line-t{font-family:var(--font-display);font-weight:var(--weight-regular);font-size:var(--text-lead);color:var(--ink)}
-.horizon-day-body .strength-line-caveat{font-size:var(--text-xs);color:var(--ink-2)}
-.horizon-week-empty{margin:0;font-size:var(--text-sm);color:var(--ink-2)}
-.horizon-skel-day{height:36px;border-radius:var(--radius-sm)}
-.horizon-weekview.is-pending{gap:var(--space-5)}
-
-/* ---- the line of dates: mono when, the thing, a chevron when it opens ---- */
-.horizon-rail{list-style:none;margin:0;padding:0;display:grid}
-.horizon-row,.horizon-now{position:relative;min-width:0;border-top:1px solid var(--line)}
-.horizon-rail>:first-child{border-top:0}
-.horizon-row-body{display:grid;grid-template-columns:14px minmax(0,1fr) auto;align-items:center;gap:var(--space-4);
-  min-height:48px;padding:var(--space-3) 0;color:inherit;text-decoration:none}
-a.horizon-row-link{transition:transform var(--dur-1) var(--ease)}
-a.horizon-row-link:active{transform:var(--press-lg)}
-.horizon-row-dot{width:9px;height:9px;justify-self:center;border-radius:50%;border:1.5px solid var(--d-endurance);
-  background:var(--surface);box-sizing:border-box}
-.horizon-row.is-behind .horizon-row-dot{background:var(--muted);border-color:var(--muted)}
-.horizon-row.is-kind-goal .horizon-row-dot{background:var(--dawn);border-color:var(--dawn)}
-/* labs and scans wear the season chart's diamonds */
-.horizon-lane-card.is-labs .horizon-row .horizon-row-dot{border-radius:var(--radius-3xs);transform:rotate(45deg);width:8px;height:8px;
-  border-color:var(--d-heart);background:var(--surface)}
-.horizon-lane-card.is-labs .horizon-row.is-behind .horizon-row-dot{background:var(--d-heart)}
-.horizon-lane-card.is-labs .horizon-row.is-kind-dexa .horizon-row-dot{border-color:var(--d-body)}
-.horizon-lane-card.is-labs .horizon-row.is-behind.is-kind-dexa .horizon-row-dot{background:var(--d-body)}
-.horizon-row-main{min-width:0;display:grid;grid-template-columns:minmax(0,1fr);gap:1px}
-.horizon-row-when{font-family:var(--font-mono);font-size:var(--text-2xs);letter-spacing:var(--tracking-mono);
-  text-transform:uppercase;color:var(--muted)}
-.horizon-row-label{font-size:var(--text-body);font-weight:var(--weight-medium);color:var(--ink);line-height:var(--leading-snug)}
-.horizon-row.is-behind .horizon-row-label{color:var(--ink-2);font-weight:var(--weight-regular)}
-.horizon-row-detail{font-size:var(--text-xs);color:var(--muted);line-height:var(--leading-normal)}
-.horizon-row-arw{color:var(--muted);font-size:var(--text-lg);line-height:1}
-.horizon-row>.horizon-row-body:not(a){grid-template-columns:14px minmax(0,1fr)}
-.horizon-now{display:grid;grid-template-columns:14px minmax(0,1fr);align-items:center;gap:var(--space-4);
-  min-height:30px;border-top-color:transparent}
-.horizon-now::after{content:"";position:absolute;left:24px;right:0;top:50%;height:1px;
-  background:linear-gradient(90deg,var(--dawn),transparent);opacity:.5}
-.horizon-now+.horizon-row{border-top-color:transparent}
-.horizon-now-dot{width:9px;height:9px;justify-self:center;border-radius:50%;background:var(--dawn);border-color:var(--dawn);
-  box-shadow:0 0 0 4px var(--dawn-wash)}
-.horizon-now-label{position:relative;z-index:1;justify-self:start;padding-right:var(--space-3);background:var(--ground);
-  font-family:var(--font-mono);font-size:var(--text-2xs);letter-spacing:var(--tracking-mono);text-transform:uppercase;color:var(--dawn)}
-
 /* ---- before the reads land ---- */
 .horizon-lane-card.is-loading{gap:var(--space-4)}
 .horizon-skel-title{height:1.6rem;width:62%}
@@ -259,6 +164,6 @@ a.horizon-row-link:active{transform:var(--press-lg)}
 .thd-dir.is-away{color:var(--dawn)}
 
 @media (prefers-reduced-motion:reduce){
-  .horizon-lane-card.settle-in,.horizon-weekview.settle-in{animation:none}
-  a.horizon-row-link,a.horizon-tw{transition:none}
+  .horizon-lane-card.settle-in{animation:none}
+  a.horizon-tw{transition:none}
 }

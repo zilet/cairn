@@ -32,8 +32,6 @@ type TovData = {
   journey: import("../contracts/client-api.js").ClientJourneyRead | null;
   journeyMilestones: import("../contracts/client-api.js").ClientJourneyMilestone[] | null;
   timeline: import("../contracts/client-api.js").ClientForwardTimelineEntry[] | null;
-  // Today's lift in the server's one line (the Brief and Session print the same).
-  strengthLine?: import("../contracts/client-api.js").ClientTodayStrengthLine | null;
 };
 
 // SVG paint attrs don't reliably resolve CSS var() — hardcoded Atelier hexes,
@@ -88,12 +86,11 @@ function tovPaths(): string[] {
     "/journey",
     "/journey/milestones",
     "/journey/timeline",
-    `/today-strength-line?date=${encodeURIComponent(localISO())}`,
   ];
 }
 
 function tovCompose(values: unknown[]): TovData {
-  const [stats, balance, trajectory, focus, load, loadBand, adjustments, sessions, journey, journeyMilestones, timeline, strengthLine] = values;
+  const [stats, balance, trajectory, focus, load, loadBand, adjustments, sessions, journey, journeyMilestones, timeline] = values;
   return {
     stats: CairnProgressData.record(stats),
     balance: CairnProgressData.record(balance),
@@ -106,10 +103,6 @@ function tovCompose(values: unknown[]): TovData {
     journey: journey && typeof journey === "object" && !Array.isArray(journey) ? journey as import("../contracts/client-api.js").ClientJourneyRead : null,
     journeyMilestones: Array.isArray(journeyMilestones) ? journeyMilestones as import("../contracts/client-api.js").ClientJourneyMilestone[] : null,
     timeline: Array.isArray(timeline) ? timeline as import("../contracts/client-api.js").ClientForwardTimelineEntry[] : null,
-    strengthLine:
-      strengthLine && typeof strengthLine === "object" && !Array.isArray(strengthLine)
-        ? strengthLine as import("../contracts/client-api.js").ClientTodayStrengthLine
-        : null,
   };
 }
 
@@ -341,20 +334,15 @@ function tovFigureSvgFallback(side: "front" | "back", tones: Record<string, stri
 
 // ---- section renderers ----------------------------------------------------------
 
-function tovHeadline(data: TovData, rows: TovRow[]): string {
-  const stats = data.stats || {};
-  const done = CairnProgressData.number(stats.week_done);
-  const planned = CairnProgressData.number(stats.week_planned);
-  const opener = planned > 0
-    ? (done >= planned ? "Week complete — every planned session is in."
-      : `${done} of ${planned} sessions in this week.`)
-    : done > 0 ? `${done} session${done === 1 ? "" : "s"} in this week.` : "";
+// What the muscle map says, in one line. No session count: the week's sessions done
+// against planned are Horizon's (one home per fact) — Train reads whether it is working.
+function tovHeadline(_data: TovData, rows: TovRow[]): string {
   const due = rows.filter((r) => r.tone === "due").map((r) => r.label);
   const advancing = rows.filter((r) => r.verdict === "advancing").map((r) => r.label);
   const clause = due.length ? `${due.slice(0, 2).join(" and ")} ${due.length === 1 ? "is" : "are"} due.`
     : advancing.length ? `${advancing.slice(0, 2).join(" and ")} ${advancing.length === 1 ? "is" : "are"} advancing.`
     : "";
-  return [opener, clause].filter(Boolean).join(" ") || "Your training, in one look.";
+  return clause || "Your training, in one look.";
 }
 
 // The week's load, as one serif voice line and at most one supporting mono fact.
@@ -431,7 +419,10 @@ function tovBandBar(row: TovRow): string {
 function tovRowNote(row: TovRow): string {
   const parts: string[] = [];
   if (row.sets > 0) parts.push(`${row.sets} set${row.sets === 1 ? "" : "s"} this week`);
-  if (row.band === "productive") parts.push("in the productive range");
+  // Volume in range while the lifts stall is two facts, said as two: never "stalling
+  // … in the productive range" as if the range were the verdict.
+  if (row.band === "productive" && row.verdict === "stalling") parts.push("volume is in range, progress has stalled");
+  else if (row.band === "productive") parts.push("in the productive range");
   else if (row.band === "high") parts.push("above the productive range");
   else if (row.tone === "due") parts.push(row.sets > 0 ? "room for more" : "not trained lately");
   if (row.loadNote) parts.push(row.loadNote);
@@ -497,24 +488,11 @@ function tovCapitalize(value: string): string {
   return value ? value.charAt(0).toUpperCase() + value.slice(1) : value;
 }
 
-// The always-available start entry, through the shared openSession() (the Brief's path;
-// dayPicked reset in wireTovStart). Today's lift in the server's one line, with the one
-// door into it: it names the plan day ("Start Pull →") and goes once the lift is logged.
-function tovStartHtml(data?: TovData): string {
-  const line = data?.strengthLine || null;
-  const lineHtml = line ? CairnUiReads.strengthLineHtml(line, { kicker: "Today" }) : "";
-  const open = !line || line.state === "not_started" || line.state === "in_progress" || line.state === "none";
-  const label =
-    line && line.title && line.state === "in_progress"
-      ? `Continue ${line.title} →`
-      : line && line.title && line.state === "not_started"
-        ? `Start ${line.title} →`
-        : "Start today's training →";
-  const button = open
-    ? `<button class="draftbtn tov-start" type="button" id="tovStart">${escHtml(label)}</button>`
-    : "";
-  if (!lineHtml) return button ? button.replace('class="draftbtn tov-start"', `class="draftbtn tov-start reveal" style="${stagger(1)}"`) : "";
-  return `<div class="tov-today reveal" style="${stagger(1)}">${lineHtml}${button}</div>`;
+// The first-run start entry (nothing logged yet), through the shared openSession() (the
+// Brief's path; dayPicked reset in wireTovStart). A Train with history has no "Today"
+// card: today's lift is the Brief's line, said once (docs/IA.md "Tab model").
+function tovStartHtml(): string {
+  return `<button class="draftbtn tov-start reveal" style="${stagger(1)}" type="button" id="tovStart">Start today's training →</button>`;
 }
 
 function wireTovStart(): void {
@@ -558,6 +536,16 @@ function tovMovesHtml(data: TovData): string {
   </div>`;
 }
 
+// A session's name: the server's content title (deriveSessionTitle), else its plan day,
+// else the day it was trained ("Tuesday's session") — never a bare "Session".
+function tovSessionTitle(s: Record<string, unknown>): string {
+  const title = String(s.title || "").trim();
+  if (title && title !== "Session") return title;
+  if (s.day_name) return String(s.day_name);
+  const weekday = s.date ? CairnFmt.date(String(s.date), { fmt: { weekday: "long" } }) : "";
+  return weekday && !/\d{4}-/.test(weekday) ? `${weekday}'s session` : "Training session";
+}
+
 function tovSessionsHtml(data: TovData): string {
   const sessions = CairnProgressData.rows<Record<string, unknown>>(data.sessions);
   if (!sessions.length) return "";
@@ -565,7 +553,7 @@ function tovSessionsHtml(data: TovData): string {
     const sets = Array.isArray(s.sets) ? s.sets.length : 0;
     const when = s.date && typeof relAge === "function" ? relAge(String(s.date)) : String(s.date || "");
     return `<button class="tov-sess" type="button" data-tovgo="sessions">
-      <span class="tov-sess-name">${escHtml(s.title || s.day_name || "Session")}</span>
+      <span class="tov-sess-name">${escHtml(tovSessionTitle(s))}</span>
       <span class="tov-sess-meta">${escHtml(when)}${sets ? ` · ${sets} set${sets === 1 ? "" : "s"}` : ""}</span>
       <span class="tov-row-arw">›</span>
     </button>`;
@@ -637,13 +625,12 @@ function paintTrainOverview(data: TovData): void {
     wireTovJourneyPointer();
     return;
   }
-  // Train leads with the one thing that matters now — today's lift and its start —
-  // then where to focus, then the week's load (the voice line, the load band, the
-  // muscle map and the groups asking for a look). The week-by-week moves, the
-  // latest sessions and the deeper views follow; the journey is one line that opens
-  // Horizon's goal line.
+  // Train reads whether the training is working: Where to focus and What moved lead,
+  // then the week's load (the voice line, the load band, the muscle map and the groups
+  // asking for a look). The week-by-week moves, the latest sessions and the deeper
+  // views follow; the journey is one line that opens Horizon's goal line. Today's lift
+  // and the week's session count are not here: the Brief and Horizon own them.
   view.innerHTML = head +
-    tovStartHtml(data) +
     tovFocusHtml(data) +
     tovMastHtml(data, rows) +
     tovLoadBandHtml(data) +
@@ -654,7 +641,6 @@ function paintTrainOverview(data: TovData): void {
     `<div data-train-deeper-slot></div>` +
     tovJourneyPointerHtml(data);
   wireSeg(PROGRESS_HANDLERS);
-  wireTovStart();
   wireTovJourneyPointer();
   runCountUps(view);
   view.querySelectorAll<HTMLElement>("[data-tovgo]").forEach((el) =>

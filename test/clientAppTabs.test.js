@@ -164,6 +164,24 @@ test("tab controller lands Progress on the Train overview by default", async () 
   assert.match(env.view.innerHTML, /^seg:overview:/);
 });
 
+test("while a tab loads, <main> is named for the destination, never the tab just left", async () => {
+  const attrs = { "aria-label": "Horizon" };
+  const view = {
+    innerHTML: "",
+    setAttribute: (name, value) => (attrs[name] = String(value)),
+    removeAttribute: (name) => delete attrs[name],
+    querySelector: () => null,
+  };
+  // The renderer never settles: the label must already follow the tab while it loads.
+  const env = loadTabs({ view, currentTab: "horizon" });
+  env.context.renderTab = () => new Promise(() => {});
+  env.context.document.querySelector = (selector) =>
+    selector === '.tab[data-tab="train"]' ? { getAttribute: (name) => (name === "aria-label" ? "Train" : null) } : null;
+  env.context.switchTab("progress", { syncRoute: false });
+  await flush();
+  assert.equal(attrs["aria-label"], "Train");
+});
+
 test("tab controller keeps the Endurance default for endurance athletes", async () => {
   const env = loadTabs({ endurance: true });
 
