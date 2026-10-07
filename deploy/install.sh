@@ -485,8 +485,9 @@ validate_opts() {
     die "--name must be lowercase letters, digits, '-' or '_' (got '$OPT_NAME')."
   fi
   if [ -n "$OPT_PORT" ]; then
-    valid_re "$OPT_PORT" '^[0-9]{1,5}$' && [ "$OPT_PORT" -ge 1 ] && [ "$OPT_PORT" -le 65535 ] \
-      || die "--port must be a number from 1 to 65535 (got '$OPT_PORT')."
+    if ! { valid_re "$OPT_PORT" '^[0-9]{1,5}$' && [ "$OPT_PORT" -ge 1 ] && [ "$OPT_PORT" -le 65535 ]; }; then
+      die "--port must be a number from 1 to 65535 (got '$OPT_PORT')."
+    fi
   fi
   case "$OPT_HTTPS" in "" | none | tailscale | caddy) ;; *) die "--https must be tailscale, caddy or none (got '$OPT_HTTPS')." ;; esac
   if [ -n "$OPT_DOMAIN" ] && ! valid_re "$OPT_DOMAIN" '^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$'; then
@@ -516,7 +517,7 @@ resolve_dir() {
     rd=""
     case "$0" in
       cairn.sh | */cairn.sh)
-        rd_self="$(cd "$(dirname "$0")" 2>/dev/null && pwd || true)"
+        rd_self="$(cd "$(dirname "$0")" 2>/dev/null && pwd)" || rd_self=""
         if [ -n "$rd_self" ] && [ -f "$rd_self/docker-compose.yml" ] && grep -q "$MARKER" "$rd_self/docker-compose.yml" 2>/dev/null; then
           rd="$rd_self"
         fi ;;
@@ -1300,8 +1301,9 @@ print_summary() {
 # ----------------------------------------------------------------------------- update
 
 require_install() {
-  [ -f "$ENV_FILE" ] && [ -f "$DIR/docker-compose.yml" ] \
-    || die "No Cairn install found in $DIR. Install first, or point at it with --dir=."
+  if ! { [ -f "$ENV_FILE" ] && [ -f "$DIR/docker-compose.yml" ]; }; then
+    die "No Cairn install found in $DIR. Install first, or point at it with --dir=."
+  fi
   grep -q "$MARKER" "$DIR/docker-compose.yml" || die "$DIR/docker-compose.yml was not written by this installer."
 }
 
@@ -1718,7 +1720,7 @@ cmd_open() {
 cmd_logs() {
   require_install
   compute_config
-  resolve_engine && [ -n "$COMPOSE" ] || die "Container engine unavailable: $ENGINE_WHY"
+  if ! { resolve_engine && [ -n "$COMPOSE" ]; }; then die "Container engine unavailable: $ENGINE_WHY"; fi
   compose logs --tail=100 cairn
 }
 
@@ -1733,7 +1735,7 @@ resolve_target() {
   SELF_RW_DIR=""
   case "$0" in
     cairn.sh | */cairn.sh)
-      rt_self="$(cd "$(dirname "$0")" 2>/dev/null && pwd || true)"
+      rt_self="$(cd "$(dirname "$0")" 2>/dev/null && pwd)" || rt_self=""
       if [ -n "$rt_self" ] && grep -q "$MARKER" "$rt_self/railway.state" 2>/dev/null; then
         SELF_RW_DIR="$rt_self"
         [ -n "$TARGET" ] || TARGET="railway"
