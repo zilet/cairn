@@ -49,7 +49,13 @@ import { recentEnduranceImpacts } from "../hybrid-load.js";
 import { isEnduranceHoldDirective, listActiveDirectives } from "../directives-read.js";
 import { longPeakTargetKm } from "../run-ramp.js";
 import { readinessBand, readsRestGradeReadiness, SUPPORTIVE_READINESS } from "../readiness-bands.js";
-import { nightPastBand, overnightBrakes, personalBand, type PersonalBand } from "../overnight-band.js";
+import {
+  nightPastBand,
+  overnightBrakes,
+  personalBand,
+  restingHrContradictedByFloor,
+  type PersonalBand,
+} from "../overnight-band.js";
 import { SENSOR_MAX_AGE_DAYS, isReadDayReadiness, sensorIsCurrent } from "../sensor-freshness.js";
 import { addDaysISO, daysBetweenISO, localDateISO } from "../shared.js";
 import { currentTrainingDataVersion, registerTrainingCacheClear } from "../training-cache.js";
@@ -1842,10 +1848,10 @@ function overnightNights(from: string, to: string): Map<string, OvernightNight> 
   try {
     rows = db
       .prepare(
-        `SELECT 0 AS pref, date, hrv_ms, resting_hr, hrv_status, hr_7d_avg FROM garmin_daily_metrics
+        `SELECT 0 AS pref, date, hrv_ms, resting_hr, min_hr, hrv_status, hr_7d_avg FROM garmin_daily_metrics
           WHERE date >= ? AND date <= ?
          UNION ALL
-         SELECT 1 AS pref, date, hrv_ms, resting_hr, NULL AS hrv_status, NULL AS hr_7d_avg FROM daily_metrics
+         SELECT 1 AS pref, date, hrv_ms, resting_hr, NULL AS min_hr, NULL AS hrv_status, NULL AS hr_7d_avg FROM daily_metrics
           WHERE date >= ? AND date <= ?
          ORDER BY pref`
       )
@@ -1862,7 +1868,12 @@ function overnightNights(from: string, to: string): Map<string, OvernightNight> 
     if (!date) continue;
     const night = byDate.get(date) ?? { hrv_ms: null, resting_hr: null, hrv_status: null, hr_7d_avg: null };
     night.hrv_ms ??= positive(row.hrv_ms);
-    night.resting_hr ??= positive(row.resting_hr);
+    // A resting HR its own row's floor contradicts (a provisional daytime estimate on an
+    // unworn night, below or far above that day's `min_hr`) is not a reading: dropped
+    // both as last night and from the band, so the field falls through to the next
+    // source. The one coherence rule (overnight-band.ts), shared with READING_TRUST.
+    const resting = positive(row.resting_hr);
+    if (!restingHrContradictedByFloor(resting, positive(row.min_hr))) night.resting_hr ??= resting;
     night.hrv_status ??= row.hrv_status == null || row.hrv_status === "" ? null : String(row.hrv_status).toLowerCase();
     night.hr_7d_avg ??= positive(row.hr_7d_avg);
     byDate.set(date, night);

@@ -112,6 +112,7 @@ import { roadAhead } from "./forward-timeline.js";
 import { activeContextEffect } from "./context-effect.js";
 import { getLocationContext } from "./location-context.js";
 import { nextBestStep } from "./next-step.js";
+import { restingHrContradictedByFloor } from "./overnight-band.js";
 // Read-only reads folded into the conductor as external FocusCandidate producers (K3).
 import { cardiovascularRiskRead } from "./risk.js";
 import { trainingBenchmarkRead } from "./training-milestones.js";
@@ -2481,9 +2482,8 @@ function getRecoverySummaryRead(days: number, garminSummary: any, asOfDate: stri
   // apart in every sleep-backed row on record). The tolerance is relative rather
   // than a flat 5 bpm, so an athlete whose floor sits at 70 is not told their own
   // 77 argues with it; at a floor of 50 it is exactly 5, so the calibration this
-  // was tuned on is unchanged.
-  const RESTING_HR_FLOOR_MARGIN = 5;
-  const RESTING_HR_FLOOR_MARGIN_RATIO = 0.1;
+  // was tuned on is unchanged. The test itself is `restingHrContradictedByFloor`
+  // (overnight-band.ts) — the one rule the harm arms drop the same reading by.
   // Two hours is the shortest thing worth calling a night. A phone that recorded a
   // 20-minute Sleep-Focus window saw a nap at most, and must not certify a resting
   // heart rate on the strength of it. Below the floor the row falls through to the
@@ -2525,7 +2525,7 @@ function getRecoverySummaryRead(days: number, garminSummary: any, asOfDate: stri
     const coherent =
       floor == null || resting == null || !Number.isFinite(resting)
         ? null // no same-source floor to test against
-        : resting >= floor && resting - floor <= Math.max(RESTING_HR_FLOOR_MARGIN, RESTING_HR_FLOOR_MARGIN_RATIO * floor);
+        : !restingHrContradictedByFloor(resting, floor);
     if (coherent === false) return "contradicted";
     // A row that recorded a real night saw the overnight context both resting HR and
     // HRV are derived from, so it verifies either of them.

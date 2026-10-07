@@ -2153,6 +2153,20 @@ reading before it can corroborate a miss but never brake a morning alone. The da
 recovery observations (`signal-state.ts`) already needed a meaningful excursion — two verified
 readings past a band wider than the SWC — or a median trend, so nothing changed there.
 
+**A resting HR its own row's floor contradicts is not a reading — in the harm arms too
+(2026-10-06).** On a day the watch was not worn overnight (no sleep, no HRV) Garmin posts a
+provisional daytime resting HR that can sit BELOW the same row's `min_hr` (live: 60 beside 62, 58
+beside 64, 59 beside 60) — impossible — or far above it. ONE helper,
+`restingHrContradictedByFloor(resting, minHr)` (`overnight-band.ts`), answers it: coherent only when
+resting ≥ min_hr and at most max(5, 10% of min_hr) above it; a missing floor contradicts nothing.
+The recovery summary's `READING_TRUST` (`coach.ts`) classifies `contradicted` with it, and the harm
+arms' `overnightNights` (`read-adherence.ts`) drop such a reading at read time — both as last night and
+from the band (`bandBefore`) the athlete is compared against, falling through to another source's
+reading for that date. Before, the summary withheld the number while the harm ladder charged it as a
+resting-HR `physiology_brake`: the run plan said resting HR was not up while the push stance closed
+on it, holding a stated 5 km threshold session at 2.5 km, and the phantom readings inflated the band.
+A coherent worn-night resting HR past the band brakes exactly as before.
+
 **"Morning readiness" is not the stored Garmin value on a training day.**
 `garmin_daily_metrics.training_readiness` holds the LAST value synced for the date and the watch
 recomputes it through the day, so on any date the athlete trained it is a post-workout number — example:

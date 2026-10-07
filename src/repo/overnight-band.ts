@@ -40,6 +40,39 @@ import { recoveryTrendBars } from "./recovery-trend.js";
 
 export type OvernightField = "hrv_ms" | "resting_hr";
 
+// ---------- A RESTING HR THE DAY'S OWN FLOOR ARGUES WITH IS NOT A READING ----------
+//
+// On a day the watch was not worn overnight Garmin posts a PROVISIONAL daytime resting
+// HR, and it can sit below the same row's own `min_hr` (live 2026-10-06: resting 60
+// beside a min 62) — physically impossible — or implausibly far above it. A true
+// resting HR sits just above the day's floor (1-3 bpm in every sleep-backed row on
+// record). The tolerance is relative, so an athlete whose floor sits at 70 is not told
+// their own 77 argues with it; at a floor of 50 it is exactly 5.
+//
+// This is the ONE coherence test. The recovery summary's READING_TRUST (coach.ts) drops
+// a contradicted reading from its trend windows with it, and the harm arms
+// (read-adherence.ts `overnightNights`) drop it both as last night and from the band
+// the athlete is compared against — so the run plan and the harm ladder cannot hold two
+// opinions about the same number. The caller passes a `min_hr` from the SAME source as
+// the resting HR; a missing floor (or a missing reading) cannot contradict anything.
+export const RESTING_HR_FLOOR_MARGIN = 5;
+export const RESTING_HR_FLOOR_MARGIN_RATIO = 0.1;
+
+/**
+ * True when the same source's day floor contradicts the resting HR: below it, or more
+ * than max(5, 10% of the floor) above it. Null/non-finite inputs never contradict.
+ */
+export function restingHrContradictedByFloor(
+  resting: number | null | undefined,
+  minHr: number | null | undefined
+): boolean {
+  if (resting == null || minHr == null) return false;
+  const r = Number(resting);
+  const floor = Number(minHr);
+  if (!Number.isFinite(r) || !Number.isFinite(floor)) return false;
+  return !(r >= floor && r - floor <= Math.max(RESTING_HR_FLOOR_MARGIN, RESTING_HR_FLOOR_MARGIN_RATIO * floor));
+}
+
 export interface PersonalBand {
   mean: number;
   /** The line one night has to cross to count at all. */
