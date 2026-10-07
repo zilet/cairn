@@ -41,8 +41,10 @@
     </li>`;
   }
 
-  function helloHtml(providers: CoachLinkProvider[]): string {
-    const list = providers.length
+  function helloHtml(providers: CoachLinkProvider[], unreachable = false): string {
+    const list = unreachable
+      ? `<div class="wel-empty reveal" style="--i:3"><p>Couldn't reach your Cairn.</p><button class="btn btn-solid" type="button" data-wel-reload>Try again</button></div>`
+      : providers.length
       ? `<ul class="wel-provs" aria-label="Connect the AI you use">${providers.map(providerHtml).join("")}</ul>`
       : `<p class="wel-empty reveal" style="--i:3">This server has no AI sign-ins set up yet. Its owner can add one from Settings, then this page offers it.</p>`;
     return `<div class="wel-pane wel-hello">
@@ -101,6 +103,7 @@
       <div class="wel-meet-hd">
         <div class="wel-mini" aria-hidden="true">${cairnHtml(3, "welAvatar")}</div>
         <h1 class="wel-h1 wel-h1-sm" tabindex="-1">Meet your coach</h1>
+        <button class="linkbtn-quiet wel-skip" type="button" data-wel-skip>Look around first</button>
       </div>
       <div class="wel-log" role="log" aria-live="polite" aria-label="Your first conversation">
         ${coachBubbleHtml(

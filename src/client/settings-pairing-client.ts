@@ -85,14 +85,17 @@ function wireAccessCard(deps: SettingsPairingWireDeps): void {
     ]);
     if (!card.isConnected && !deps.document) return;
     devices = accessDevices(devBody);
+    const devicesFailed = devBody == null;
     othersRemovePasskeys = accessRecord(devBody)?.revoke_others_removes_passkeys ?? [];
     othersDisconnectApps = accessRecord(devBody)?.revoke_others_disconnects_apps ?? [];
     const keys = accessPasskeys(keyBody);
     const devList = card.querySelector<HTMLElement>("[data-access-devices]");
     if (devList) {
-      devList.innerHTML = devices.length
-        ? devices.map((d) => deviceRowHtml(d, seenWhen)).join("")
-        : `<li class="sess-line access-muted">No device is signed in with a session yet.</li>`;
+      devList.innerHTML = devicesFailed
+        ? `<li class="sess-line access-muted" role="alert">Couldn't load your devices. <button class="linkbtn-quiet" type="button" data-access-retry>Try again</button></li>`
+        : devices.length
+          ? devices.map((d) => deviceRowHtml(d, seenWhen)).join("")
+          : `<li class="sess-line access-muted">No device is signed in with a session yet.</li>`;
     }
     const others = card.querySelector<HTMLElement>("[data-access-revoke-others]");
     if (others) others.hidden = !devices.some((d) => !d.current) || !devices.some((d) => d.current);
@@ -165,6 +168,7 @@ function wireAccessCard(deps: SettingsPairingWireDeps): void {
         codeEl.textContent = code;
         reveal.hidden = false;
         show.hidden = true;
+        reveal.focus({ preventScroll: true });
         const tick = (): void => {
           const left = expiresAt - now();
           if (left <= 0) {
@@ -203,24 +207,44 @@ function wireAccessCard(deps: SettingsPairingWireDeps): void {
     const deviceId = row ? Number(row.dataset.deviceId) : NaN;
     const device = devices.find((d) => d.id === deviceId);
 
+    if (target.closest("[data-access-retry]")) {
+      await refresh();
+      return;
+    }
+
     if (target.closest("[data-device-rename]") && row && device) {
       const nameEl = row.querySelector<HTMLElement>(".access-name");
       if (!nameEl || row.querySelector("input")) return;
-      nameEl.innerHTML = `<form class="access-rename" data-rename-form><input class="token-sheet-in" maxlength="60" aria-label="Device name" value="${escAttr(device.name)}"><button class="linkbtn-quiet" type="submit">Save</button></form>`;
+      nameEl.innerHTML = `<form class="access-rename" data-rename-form><input class="token-sheet-in" maxlength="60" aria-label="Device name" value="${escAttr(device.name)}"><button class="linkbtn-quiet" type="submit">Save</button><button class="linkbtn-quiet" type="button" data-rename-cancel>Cancel</button></form>`;
       const form = nameEl.querySelector<HTMLFormElement>("form");
       const input = nameEl.querySelector<HTMLInputElement>("input");
       input?.focus();
+      form?.querySelector("[data-rename-cancel]")?.addEventListener("click", () => void refresh());
+      input?.addEventListener("keydown", (key) => {
+        if (key.key === "Escape") {
+          key.preventDefault();
+          void refresh();
+        }
+      });
       form?.addEventListener("submit", async (submit) => {
         submit.preventDefault();
         const name = (input?.value || "").trim();
         if (name && name !== device.name) {
-          await deps
-            .api(`/auth/devices/${device.id}`, {
-              method: "PATCH",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ name }),
-            })
-            .catch(() => null);
+          const saved = accessRecord(
+            await deps
+              .api(`/auth/devices/${device.id}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name }),
+              })
+              .catch(() => null)
+          );
+          if (!saved) {
+            // Keep the form open with the typed name so nothing is lost.
+            say("Couldn't rename the device. Try again in a moment.");
+            input?.focus();
+            return;
+          }
         }
         await refresh();
       });
@@ -234,14 +258,19 @@ function wireAccessCard(deps: SettingsPairingWireDeps): void {
         : [passkeysRemovedHtml(device.revoke_removes_passkeys), appsDisconnectedHtml(device.revoke_disconnects_apps)]
             .filter(Boolean)
             .join(" ");
-      if (device.current || last || removes) {
+      {
         const title = device.current
           ? "Sign out this device?"
           : last
             ? "Sign out the last device?"
             : `Sign out ${device.name}?`;
         const waysBack = device.current || last ? waysBackInHtml(device.current && device.has_passkey) : "";
-        const ok = await confirm({ title, body: [removes, waysBack].filter(Boolean).join(" "), action: "Sign out" });
+        const plain = !device.current && !removes && !waysBack ? "That device will need a new sign-in." : "";
+        const ok = await confirm({
+          title,
+          body: [removes, waysBack, plain].filter(Boolean).join(" "),
+          action: "Sign out",
+        });
         if (!ok) return;
       }
       const result = accessRecord(await deps.api(`/auth/devices/${device.id}`, { method: "DELETE" }).catch(() => null));
@@ -287,10 +316,16 @@ function wireAccessCard(deps: SettingsPairingWireDeps): void {
 
     const keyRow = target.closest<HTMLElement>("[data-passkey-id]");
     if (target.closest("[data-passkey-remove]") && keyRow) {
+      const ok = await confirm({
+        title: "Remove this passkey?",
+        body: "You won't be able to use this passkey to sign in to Cairn anymore.",
+        action: "Remove",
+      });
+      if (!ok) return;
       const result = accessRecord(
         await deps.api(`/auth/passkeys/${Number(keyRow.dataset.passkeyId)}`, { method: "DELETE" }).catch(() => null)
       );
-      if (result?.ok) say("Passkey removed.");
+      say(result?.ok ? "Passkey removed." : "Couldn't remove the passkey. Try again in a moment.");
       await refresh();
       return;
     }

@@ -89,7 +89,7 @@ test("updateCapability describes each host in one sentence and never carries the
   assert.equal(railway.platform, "railway");
   assert.equal(railway.update_method, "automatic");
   assert.equal(railway.can_apply, false);
-  assert.match(railway.update_how, /automatically in its maintenance window/);
+  assert.match(railway.update_how, /automatically when Auto Updates is on/);
 
   const hooked = updateCapability({ CAIRN_PLATFORM: "docker", CAIRN_DEPLOY_HOOK_URL: HOOK, DATA_DIR: dir });
   assert.equal(hooked.update_method, "deploy_hook");
@@ -189,7 +189,7 @@ test("applyUpdate refuses, with the reason, on hosts that update themselves or o
   };
   const auto = await applyUpdate({ env: { RAILWAY_PROJECT_ID: "p" }, fetch: fetchSpy });
   assert.deepEqual([auto.ok, auto.method], [false, "automatic"]);
-  assert.match(auto.message, /maintenance window/);
+  assert.match(auto.message, /Auto Updates is on/);
   const manual = await applyUpdate({ env: { CAIRN_PLATFORM: "docker" }, fetch: fetchSpy });
   assert.deepEqual([manual.ok, manual.method], [false, "manual"]);
   assert.match(manual.message, /pull the new image/);

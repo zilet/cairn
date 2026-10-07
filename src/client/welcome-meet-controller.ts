@@ -80,7 +80,7 @@
       if (result.ok !== true) {
         note("job_failed");
         working?.remove();
-        fail(result.error ? String(result.error) : `I couldn't reach ${label} just now.`);
+        fail(CairnWelcomeModel.humanMessage(result.error, `I couldn't reach ${label} just now.`));
         return;
       }
       paintPhase(working, null, true);
@@ -172,7 +172,7 @@
       if (!response || response.ok === false || !id) {
         note("enqueue_failed");
         working?.remove();
-        fail(response?.error ? String(response.error) : "Couldn't reach your server.");
+        fail(CairnWelcomeModel.humanMessage(response?.error, "Couldn't reach your server. Check the connection, then try again."));
         return;
       }
       attach(id, working);
@@ -204,6 +204,8 @@
         deps.onReconnect();
       } else if (target?.closest("[data-wel-today]")) {
         deps.onDone();
+      } else if (target?.closest("[data-wel-skip]")) {
+        deps.onSkip();
       }
     });
 

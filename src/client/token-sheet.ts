@@ -23,8 +23,9 @@ declare const CairnTokenSheet: TokenSheetApi;
           overlayClass: "token-sheet-ov",
           sheetClass: "token-sheet",
           dismissible: false,
-          html: `<h2 class="token-sheet-h">Sign in to Cairn</h2><p class="token-sheet-p">Couldn't load the sign-in screen. Check your connection, then reopen Cairn.</p>`,
-        });
+          html: `<h2 class="token-sheet-h">Sign in to Cairn</h2><p class="token-sheet-p">Couldn't load the sign-in screen. Check your connection, then try again.</p>
+            <div class="token-sheet-ft"><button class="token-sheet-btn" type="button" data-token-retry>Try again</button></div>`,
+        }).sheet.querySelector("[data-token-retry]")?.addEventListener("click", () => location.reload());
       });
   }
 

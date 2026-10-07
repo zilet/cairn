@@ -39,7 +39,7 @@ function phoneAccessCardHtml(options: SettingsPhoneAccessCardOptions = {}): stri
             <span id="phoneTokenOut" class="phone-token"></span>
           </div>
           <div class="small-note">
-            On a private tailnet a token is optional; set one if others share your tailnet, or if Cairn is reachable beyond it (then set <b>CAIRN_REQUIRE_AUTH=1</b> too). iOS needs the HTTPS URL for a full offline app; Home Screen apps sign in on their own with a passkey or a pairing code. Details in <b>docs/DEPLOYMENT.md</b> and <b>SECURITY.md</b>.
+            On a private tailnet a token is optional; set one if others share your tailnet, or if Cairn is reachable beyond it (then set <b>CAIRN_REQUIRE_AUTH=1</b> too). iOS needs the HTTPS URL for a full offline app; a Home Screen app needs its own sign-in (a passkey or a pairing code). Details in <b>docs/DEPLOYMENT.md</b> and <b>SECURITY.md</b>.
           </div>
         </div>
       </details>`;

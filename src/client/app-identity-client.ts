@@ -35,7 +35,7 @@ declare const CairnAppIdentity: AppIdentityViewApi;
       ? `A re-added app starts fresh on this phone, so these would need entering again: ${escHtml(listSentence(again))}.`
       : "Nothing needs entering again — everything else comes back from your Cairn server.";
     const signInLine =
-      "If Cairn asks you to sign in, Home Screen apps sign in on their own with a passkey or a pairing code.";
+      "If Cairn asks you to sign in, the Home Screen app needs its own sign-in: a passkey or a pairing code.";
     return `<section class="sess app-readd" aria-labelledby="appReaddTitle">
       <div class="sess-line app-readd-title" id="appReaddTitle"><b>Cairn has a new icon and name</b></div>
       <div class="sess-line app-readd-sub">This home-screen app keeps the icon and name it was added with. To pick up the new ones, remove Cairn from your home screen and add it again from Safari — only if you like; everything works as it is.</div>

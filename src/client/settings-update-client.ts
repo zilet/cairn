@@ -85,6 +85,7 @@ function wireUpdateActions(deps: SettingsUpdateWireDeps): void {
     result.textContent = String(body?.message || "Couldn't start the update. Try again in a moment.");
     result.hidden = false;
     if (ok) {
+      result.textContent = `${result.textContent} Cairn restarts while it updates and is back in about a minute.`;
       button.hidden = true;
       deps.toast?.("Update started");
       return;

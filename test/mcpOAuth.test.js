@@ -424,6 +424,31 @@ test("authorize needs a signed-in browser: a same-site bounce, then the sign-in 
   assert.equal(consent.headers.get("cache-control"), "no-store");
 });
 
+test("auth status hands a signed-in shell its pending consent page (the SW-cached reload never reaches oauthResume)", async () => {
+  const reg = await register();
+  const first = await call(
+    `/oauth/authorize?${authorizeQuery({ clientId: reg.json.client_id, challenge: pkce().challenge })}`
+  );
+  const rid = /rid=([A-Za-z0-9_-]{43})/.exec(first.text)?.[1];
+  const hopPair = first.cookies.find((c) => c.startsWith("cairn_oauth_hop=")).split(";")[0];
+  const second = await call(`/oauth/authorize?rid=${rid}`, { headers: { Cookie: hopPair } });
+  const returnPair = second.cookies.find((c) => c.startsWith("cairn_oauth_return=")).split(";")[0];
+  const cookie = await session();
+  // The master token is no browser: nothing to resume, cookie untouched.
+  const asMaster = await call("/api/auth/status", { headers: { ...master, Cookie: returnPair } });
+  assert.equal(asMaster.json.oauth_resume, null);
+  // Without the return cookie there is nothing to resume.
+  assert.equal((await call("/api/auth/status", { headers: { Cookie: cookie } })).json.oauth_resume, null);
+  // Signed in with it: a same-origin relative path, and the cookie is spent.
+  const status = await call("/api/auth/status", { headers: { Cookie: `${returnPair}; ${cookie}` } });
+  assert.equal(status.json.oauth_resume, `/oauth/authorize?rid=${rid}`);
+  assert.ok(status.cookies.some((c) => c.startsWith("cairn_oauth_return=;") && /Max-Age=0/.test(c)));
+  // An answered (taken) request resumes nothing.
+  oauth.pendingAuthorizations.take(rid);
+  const stale = await call("/api/auth/status", { headers: { Cookie: `${returnPair}; ${cookie}` } });
+  assert.equal(stale.json.oauth_resume, null);
+});
+
 test("a ?rid= link planted cross-site never sets the return cookie; only this browser's same-site leg does", async () => {
   const reg = await register();
   const query = authorizeQuery({ clientId: reg.json.client_id, challenge: pkce().challenge });
@@ -758,13 +783,14 @@ test("refresh tokens rotate; presenting a rotated one revokes the whole family",
     "the old access token went with it"
   );
   assert.equal((await mcp(first.json.access_token, "initialize", initParams)).status, 200);
-  // Reuse of the rotated token: refused, and the live family dies with it.
-  const reuse = await call("/oauth/token", {
-    method: "POST",
-    form: { grant_type: "refresh_token", refresh_token: tokens.refresh_token, client_id: clientId },
+  // Reuse of the rotated token past the reuse grace: refused, and the live family dies with it.
+  const reuse = repo.rotateRefreshToken({
+    refreshToken: tokens.refresh_token,
+    clientId,
+    resource: null,
+    now: Date.now() + repo.REFRESH_REUSE_GRACE_MS + 1000,
   });
-  assert.equal(reuse.status, 400);
-  assert.equal(reuse.json.error, "invalid_grant");
+  assert.deepEqual(reuse, { ok: false, error: "invalid_grant", reused: true });
   assert.equal((await mcp(first.json.access_token, "initialize", initParams)).status, 401);
   const next = await call("/oauth/token", {
     method: "POST",
@@ -778,46 +804,45 @@ function refreshForm(refreshToken, clientId) {
   return { grant_type: "refresh_token", refresh_token: refreshToken, client_id: clientId, resource: RESOURCE };
 }
 
-test("refresh reuse grace: a retry inside 60 s supersedes the unused successor — one live pair", async () => {
+test("refresh reuse grace: a retry inside 60 s is refused and costs nothing — the successor pair stays live", async () => {
   const { clientId, tokens } = await connect();
   const a = await call("/oauth/token", { method: "POST", form: refreshForm(tokens.refresh_token, clientId) });
   assert.equal(a.status, 200);
-  // The app lost that answer and retries with the same token: a fresh pair, not a revocation.
   const b = await call("/oauth/token", { method: "POST", form: refreshForm(tokens.refresh_token, clientId) });
-  assert.equal(b.status, 200, b.text);
-  assert.notEqual(b.json.refresh_token, a.json.refresh_token);
-  assert.equal((await mcp(a.json.access_token, "initialize", initParams)).status, 401, "the superseded pair is dead");
-  const superseded = await call("/oauth/token", { method: "POST", form: refreshForm(a.json.refresh_token, clientId) });
-  assert.equal(superseded.json.error, "invalid_grant");
-  assert.equal((await mcp(b.json.access_token, "initialize", initParams)).status, 200, "the final pair works");
-  // Its access token is now in use: a third presentation of the old token is theft.
-  const late = await call("/oauth/token", { method: "POST", form: refreshForm(tokens.refresh_token, clientId) });
-  assert.equal(late.json.error, "invalid_grant");
-  assert.equal((await mcp(b.json.access_token, "initialize", initParams)).status, 401);
-  assert.equal((await call("/api/auth/mcp-clients", { headers: master })).json.clients.length, 0);
+  assert.equal(b.status, 400);
+  assert.equal(b.json.error, "invalid_grant");
+  assert.equal((await mcp(a.json.access_token, "initialize", initParams)).status, 200, "the successor still works");
+  // Even once that successor is in use, a reuse inside the window is a race, not theft.
+  const c = await call("/oauth/token", { method: "POST", form: refreshForm(tokens.refresh_token, clientId) });
+  assert.equal(c.json.error, "invalid_grant");
+  assert.equal((await mcp(a.json.access_token, "initialize", initParams)).status, 200);
+  const next = await call("/oauth/token", { method: "POST", form: refreshForm(a.json.refresh_token, clientId) });
+  assert.equal(next.status, 200, next.text);
+  assert.equal((await call("/api/auth/mcp-clients", { headers: master })).json.clients.length, 1);
 });
 
-test("refresh reuse grace: a concurrent double refresh leaves exactly one working pair", async () => {
+test("refresh reuse grace: a concurrent double refresh leaves exactly one working pair and the grant", async () => {
   const { clientId, tokens } = await connect();
-  const [x, y] = await Promise.all([
+  const results = await Promise.all([
     call("/oauth/token", { method: "POST", form: refreshForm(tokens.refresh_token, clientId) }),
     call("/oauth/token", { method: "POST", form: refreshForm(tokens.refresh_token, clientId) }),
   ]);
-  assert.equal(x.status, 200, x.text);
-  assert.equal(y.status, 200, y.text);
-  const xs = (await mcp(x.json.access_token, "initialize", initParams)).status;
-  const ys = (await mcp(y.json.access_token, "initialize", initParams)).status;
-  assert.deepEqual([xs, ys].sort(), [200, 401], "the later call superseded the earlier one's pair");
-  const [live, dead] = xs === 200 ? [x.json, y.json] : [y.json, x.json];
-  const stale = await call("/oauth/token", { method: "POST", form: refreshForm(dead.refresh_token, clientId) });
-  assert.equal(stale.json.error, "invalid_grant");
-  assert.equal((await mcp(live.access_token, "initialize", initParams)).status, 200, "and never cost the live pair");
+  const won = results.filter((r) => r.status === 200);
+  const lost = results.filter((r) => r.status !== 200);
+  assert.equal(won.length, 1, results.map((r) => r.text).join(" | "));
+  assert.equal(lost[0].json.error, "invalid_grant");
+  const live = won[0].json;
+  assert.equal(
+    (await mcp(live.access_token, "initialize", initParams)).status,
+    200,
+    "the race never cost the live pair"
+  );
   const next = await call("/oauth/token", { method: "POST", form: refreshForm(live.refresh_token, clientId) });
   assert.equal(next.status, 200);
   assert.equal((await mcp(next.json.access_token, "initialize", initParams)).status, 200);
 });
 
-test("refresh reuse grace ends at 60 s, or once the successor was rotated: then the whole grant goes", async () => {
+test("refresh reuse grace ends at 60 s: a later reuse is theft and the whole grant goes", async () => {
   // Late: 61 s after the rotation.
   {
     const { clientId, tokens } = await connect();
@@ -835,7 +860,12 @@ test("refresh reuse grace ends at 60 s, or once the successor was rotated: then 
       resource: RESOURCE,
       now: t0 + 59_000,
     });
-    assert.equal(inside.ok, true, "59 s on is still a retry");
+    assert.deepEqual(
+      inside,
+      { ok: false, error: "invalid_grant" },
+      "59 s on is still a race: refused, nothing revoked"
+    );
+    assert.equal((await mcp(first.tokens.access_token, "initialize", initParams)).status, 200);
     const late = repo.rotateRefreshToken({
       refreshToken: tokens.refresh_token,
       clientId,
@@ -843,17 +873,8 @@ test("refresh reuse grace ends at 60 s, or once the successor was rotated: then 
       now: t0 + 61_000,
     });
     assert.deepEqual(late, { ok: false, error: "invalid_grant", reused: true });
-    assert.equal((await mcp(inside.tokens.access_token, "initialize", initParams)).status, 401);
-  }
-  // Successor already rotated (used): reuse inside the window still revokes everything.
-  {
-    const { clientId, tokens } = await connect();
-    const a = await call("/oauth/token", { method: "POST", form: refreshForm(tokens.refresh_token, clientId) });
-    const a2 = await call("/oauth/token", { method: "POST", form: refreshForm(a.json.refresh_token, clientId) });
-    assert.equal(a2.status, 200);
-    const reuse = await call("/oauth/token", { method: "POST", form: refreshForm(tokens.refresh_token, clientId) });
-    assert.equal(reuse.json.error, "invalid_grant");
-    assert.equal((await mcp(a2.json.access_token, "initialize", initParams)).status, 401);
+    assert.equal((await mcp(first.tokens.access_token, "initialize", initParams)).status, 401);
+    assert.equal((await call("/api/auth/mcp-clients", { headers: master })).json.clients.length, 0);
   }
   // Another client presenting it inside the window gets nothing and costs nothing.
   {

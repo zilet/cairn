@@ -128,7 +128,7 @@ function readJsonFile(file: string): unknown {
 
 function howUpdatesHappen(platform: HostPlatform, method: UpdateMethod): string {
   if (method === "automatic")
-    return "Your host installs new releases automatically in its maintenance window — nothing to do here.";
+    return "Railway installs new releases automatically when Auto Updates is on (service Settings → Source).";
   if (method === "deploy_hook")
     return "Update now asks your host to rebuild Cairn from the latest release. Your data stays where it is.";
   if (method === "trigger_file")
@@ -182,7 +182,7 @@ export async function applyUpdate(options: ApplyUpdateOptions = {}): Promise<App
       ok: false,
       method,
       message:
-        "Your host installs new releases automatically in its maintenance window, so there is nothing to start from here.",
+        "Railway installs new releases automatically when Auto Updates is on (service Settings → Source), so there is nothing to start from here.",
     };
   }
   if (method === "manual") {

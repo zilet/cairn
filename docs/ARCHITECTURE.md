@@ -5970,9 +5970,8 @@ guard is a no-op, exactly as before.
   /oauth/token` spends the code FIRST (a bad verifier burns it); a replayed code revokes the grant
   it minted. Access tokens live 1 h, refresh tokens 90 days and rotate on every use; presenting a
   rotated one revokes the whole grant (reuse = theft) — except within 60 s of its rotation, by its
-  own client, while the pair that rotation minted (`oauth_tokens.parent_id`) was never used (its
-  refresh not rotated, its access token never presented — first use is stamped in `used_at`):
-  that is a retry or a race, so the unused pair is revoked and a fresh one minted (one live pair).
+  own client: that is a retry or a race, so it is a plain `invalid_grant` that revokes NOTHING —
+  the successor pair that rotation minted stays live and the grant stands.
   One live grant per registered client.
   `revokeAllMcpAccess()` ends every key, grant and code — the hook for a "master token changed,
   sign everyone out" reset.

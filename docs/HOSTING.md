@@ -63,7 +63,8 @@ What the installer does, in order:
    otherwise `npm i -g @railway/cli`, and Railway's official install script only if you agree.
 2. **Signs you in to Railway.** Your browser opens; sign in or create an account (email or GitHub
    both work; Cairn needs no access to your GitHub).
-3. **Creates a project** named `cairn` (`--railway-project-name=` picks another name). If you
+3. **Creates a project** named after the instance (`cairn` by default; `--name=` changes it, and
+   `--railway-project-name=` picks any other name). If you
    already have a project with that name, it asks before using it.
 4. **Adds one service** from the published image, **one volume** at `/data`, the settings Cairn
    needs, a generated access token and settings key (sent to Railway on stdin, never on a command

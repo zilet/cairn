@@ -238,7 +238,21 @@ test("--no-start writes private config once; re-running keeps the token, key and
       envPath,
       `${env1.replace(/^CAIRN_BLANK_PROFILE=1\n/m, "")}GEMINI_API_KEY=user-art-key\n# my note\n`
     );
-    const second = run(["--no-start", "--yes", `--dir=${target}`, "--lan", "--port=8790", "--no-updater"]);
+    // A data volume that does not exist yet: the missing key defaults to blank again.
+    const fakebin = path.join(dir, "bin");
+    fs.mkdirSync(fakebin);
+    const fakeTool = (exitCode) => {
+      fs.writeFileSync(path.join(fakebin, "voltool"), `#!/bin/sh\nexit ${exitCode}\n`, { mode: 0o755 });
+      return { PATH: `${fakebin}:${process.env.PATH}`, CAIRN_CONTAINER_TOOL: "voltool" };
+    };
+    const fresh = run(["--no-start", "--yes", `--dir=${target}`, "--no-updater"], { env: fakeTool(1) });
+    assert.equal(fresh.code, 0, fresh.all);
+    assert.match(fs.readFileSync(envPath, "utf8"), /^CAIRN_BLANK_PROFILE=1$/m, "no data volume yet: blank");
+    fs.writeFileSync(envPath, fs.readFileSync(envPath, "utf8").replace(/^CAIRN_BLANK_PROFILE=1\n/m, ""));
+    // The volume exists: an install that already has data is not flipped.
+    const second = run(["--no-start", "--yes", `--dir=${target}`, "--lan", "--port=8790", "--no-updater"], {
+      env: fakeTool(0),
+    });
     assert.equal(second.code, 0, second.all);
     const env2 = fs.readFileSync(envPath, "utf8");
     assert.match(env2, new RegExp(`^CAIRN_AUTH_TOKEN=${token}$`, "m"));
@@ -933,6 +947,10 @@ test("fake railway: an image without pairing codes (404) falls back to the acces
     assert.match(r.out, /Open: https:\/\/cairn-production-a1b2\.up\.railway\.app/);
     assert.match(r.out, /no one-time sign-in link yet/);
     assert.match(r.out, /Sign in with your access token: \(not printed: this output is not a terminal\)/);
+    // The terminal decision is made once, outside $(...): a forced terminal prints the token.
+    const tty = run(["--target=railway", "--yes"], { env: { ...rig.env, CAIRN_INSTALL_FORCE_TTY: "1" } });
+    assert.equal(tty.code, 0, tty.all);
+    assert.match(tty.out, new RegExp(`Sign in with your access token: ${rig.secrets().token}`));
     assert.match(r.out, /Railway \(project cairn -> service cairn -> Variables -> CAIRN_AUTH_TOKEN\)/);
     assert.match(r.out, /The access token shown above/);
     assert.doesNotMatch(r.all, new RegExp(rig.secrets().token));

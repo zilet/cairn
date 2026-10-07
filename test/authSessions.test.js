@@ -726,6 +726,42 @@ test("the first-sign-in line stops once the master token has worked, and can be 
   assert.equal(devicesRepo.firstSignInNotice({ authEnabled: true, env: {} }), null);
 });
 
+test("an upgraded install that was already set up never logs a first-sign-in code", async () => {
+  const { setSettings } = await import("../dist/repo/settings.js");
+  assert.ok(devicesRepo.firstSignInNotice({ authEnabled: true, env: {} }), "a fresh install gets the line");
+  setSettings({ onboarded: true });
+  assert.equal(devicesRepo.firstSignInNotice({ authEnabled: true, env: {} }), null);
+  assert.equal(devicesRepo.outstandingPairingCodeCount(), 1, "only the fresh boot's code; none minted after");
+});
+
+test("X-Forwarded-For with no trusted hop: one warning per process, never the header's value", async () => {
+  const { untrustedProxyNotice, UNTRUSTED_PROXY_WARNING } = await import("../dist/authHttp.js");
+  const said = [];
+  const mw = untrustedProxyNotice(0, (m) => said.push(m));
+  let nexts = 0;
+  const next = () => nexts++;
+  mw({ headers: {} }, null, next);
+  assert.equal(said.length, 0, "no proxy header, nothing to say");
+  mw({ headers: { "x-forwarded-for": "203.0.113.7" } }, null, next);
+  mw({ headers: { "x-forwarded-for": "198.51.100.1" } }, null, next);
+  assert.deepEqual(said, [UNTRUSTED_PROXY_WARNING]);
+  assert.match(said[0], /CAIRN_TRUST_PROXY=1/);
+  assert.doesNotMatch(said[0], /203\.0\.113\.7/);
+  assert.equal(nexts, 3, "never blocks a request");
+  const trusted = [];
+  untrustedProxyNotice(1, (m) => trusted.push(m))({ headers: { "x-forwarded-for": "203.0.113.7" } }, null, next);
+  assert.deepEqual(trusted, [], "a trusted hop is the configured case");
+});
+
+test("https at an untrusted proxy is told apart from a plain-http address", async () => {
+  const { httpsBehindUntrustedProxy } = await import("../dist/mcpAccess.js");
+  assert.equal(httpsBehindUntrustedProxy({ protocol: "http", headers: { "x-forwarded-proto": "https" } }), true);
+  assert.equal(httpsBehindUntrustedProxy({ protocol: "http", headers: { "x-forwarded-proto": "https, http" } }), true);
+  assert.equal(httpsBehindUntrustedProxy({ protocol: "https", headers: { "x-forwarded-proto": "https" } }), false);
+  assert.equal(httpsBehindUntrustedProxy({ protocol: "http", headers: { "x-forwarded-proto": "http" } }), false);
+  assert.equal(httpsBehindUntrustedProxy({ protocol: "http", headers: {} }), false);
+});
+
 test("rotating the access token evicts everyone: sessions, passkeys and pairing codes", async () => {
   assert.equal(devicesRepo.applyAccessTokenEpoch("token-one"), "first", "the first boot only remembers it");
   const a = await signInWithMaster();
@@ -752,6 +788,14 @@ test("rotating the access token evicts everyone: sessions, passkeys and pairing 
   assert.equal(devicesRepo.passkeyCount(), 0);
   assert.equal(devicesRepo.outstandingPairingCodeCount(), 0);
   assert.equal(devicesRepo.applyAccessTokenEpoch("token-two"), "same", "the new token is remembered");
+  // The calendar link was handed out under the old token: retired, and the next one is new.
+  const feed = devicesRepo.calendarFeedToken();
+  assert.equal(devicesRepo.verifyCalendarFeedToken(feed), true);
+  assert.equal(devicesRepo.applyAccessTokenEpoch("token-two"), "same");
+  assert.equal(devicesRepo.verifyCalendarFeedToken(feed), true, "a restart on the same token keeps it");
+  assert.equal(devicesRepo.applyAccessTokenEpoch("token-three"), "changed");
+  assert.equal(devicesRepo.verifyCalendarFeedToken(feed), false, "a rotation retires the calendar link");
+  assert.notEqual(devicesRepo.calendarFeedToken(), feed);
   // The boot wrapper reads the configured token; the line it logs carries no secret.
   assert.equal(typeof auth.accessTokenEpochAtBoot, "function");
 });

@@ -107,13 +107,13 @@ test("the re-add note lists exactly what this phone would need entered again", (
   assert.match(text, /these would need entering again: your body measurement units and your rest timer length/);
   // Signing in is never a re-entry chore: a Home Screen app signs itself in.
   assert.doesNotMatch(text, /access token/);
-  assert.match(text, /Home Screen apps sign in on their own with a passkey or a pairing code/);
+  assert.match(text, /the Home Screen app needs its own sign-in: a passkey or a pairing code/);
   assert.doesNotMatch(text, /s3cret/, "the note never shows the token");
   assert.ok(host.querySelector("button[data-readd-dismiss]"));
 
   const bare = renderHtml(win.CairnAppIdentity.readdNoteHtml(model.reentry(() => null)), { document: win.document });
   assert.match(bare.textContent, /Nothing needs entering again/);
-  assert.match(bare.textContent, /sign in on their own/);
+  assert.match(bare.textContent, /needs its own sign-in/);
 });
 
 test("mountReaddNote shows only when the rules say so, and dismissal is remembered for this identity", async () => {

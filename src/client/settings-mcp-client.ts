@@ -78,7 +78,7 @@ type SettingsMcpWireDeps = {
           </div>
           <button class="linkbtn-quiet" type="button" data-mcp-cancel>Cancel</button>
         </form>
-        <div class="mcp-reveal" data-mcp-reveal hidden>
+        <div class="mcp-reveal" data-mcp-reveal tabindex="-1" hidden>
           <div class="sess-line"><strong>Copy this key now.</strong> Cairn shows it once and keeps only a fingerprint of it.</div>
           <div class="mcp-addr-row"><code class="mcp-code mcp-secret" data-mcp-token></code><button class="linkbtn-quiet" type="button" data-mcp-copy="token">Copy</button></div>
           <h3 class="mcp-h">Claude Code</h3>
@@ -156,21 +156,8 @@ type SettingsMcpWireDeps = {
         method: "POST",
         credentials: "omit",
         cache: "no-store",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json, text/event-stream",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "initialize",
-          params: {
-            protocolVersion: "2025-06-18",
-            capabilities: {},
-            clientInfo: { name: "Cairn Settings connection test", version: "1" },
-          },
-        }),
+        headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "Cairn Settings connection test", version: "1" } } }),
       });
       return response.status === 200;
     } catch {
@@ -237,7 +224,13 @@ type SettingsMcpWireDeps = {
 
     const refresh = async (): Promise<void> => {
       const body = mcpRecord(await deps.api("/auth/mcp-clients").catch(() => null));
-      if (!body) return;
+      if (!body) {
+        const list = q("[data-mcp-list]");
+        if (list && !clients.length) {
+          list.innerHTML = `<li class="sess-line access-muted" role="alert">Couldn't load your connected apps. <button class="linkbtn-quiet" type="button" data-mcp-retry>Try again</button></li>`;
+        }
+        return;
+      }
       if (typeof body.mcp_url === "string" && body.mcp_url) setUrl(body.mcp_url);
       if (body.auth_required !== true) {
         card.hidden = true;
@@ -252,6 +245,9 @@ type SettingsMcpWireDeps = {
       const offNote = q("[data-mcp-oauth-off]");
       if (on) on.hidden = body.oauth_available !== true;
       if (offNote) offNote.hidden = body.oauth_available === true;
+      // Already https at a proxy Cairn does not trust: the fix is a setting, not a certificate.
+      if (offNote && body.oauth_unavailable_reason === "untrusted_proxy")
+        offNote.textContent = "Cairn is behind a proxy it doesn't trust yet, so apps can't sign in on their own. Set CAIRN_TRUST_PROXY=1 on the server and restart. A key below works now.";
       clients = mcpRows(body);
       renderList();
     };
@@ -305,7 +301,10 @@ type SettingsMcpWireDeps = {
       if (claude) claude.textContent = claudeCodeCommand(url, token);
       if (json) json.textContent = jsonConfig(url, token);
       if (resultEl) resultEl.textContent = "";
-      if (reveal) reveal.hidden = false;
+      if (reveal) {
+        reveal.hidden = false;
+        reveal.focus({ preventScroll: true });
+      }
       await refresh();
     });
 
@@ -313,6 +312,10 @@ type SettingsMcpWireDeps = {
       const target = event.target as HTMLElement | null;
       if (!target || typeof target.closest !== "function") return;
 
+      if (target.closest("[data-mcp-retry]")) {
+        await refresh();
+        return;
+      }
       if (target.closest("[data-mcp-new]")) {
         closeReveal();
         if (newBtn) newBtn.hidden = true;
@@ -356,10 +359,7 @@ type SettingsMcpWireDeps = {
         if (resultEl) resultEl.textContent = "Testing…";
         const ok = await testKey(shown.token);
         if (button) button.disabled = false;
-        if (resultEl)
-          resultEl.textContent = ok
-            ? "Connected — the key works."
-            : "That didn't connect. Check the address and try again.";
+        if (resultEl) resultEl.textContent = ok ? "Connected — the key works." : "That didn't connect. The key may be wrong or already removed. Make a new one and try again.";
         if (ok) await refresh();
         return;
       }

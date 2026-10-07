@@ -1364,6 +1364,8 @@ declare global {
   // Forget every remembered API body on this device (a 401, a new token).
   declare function clearRememberedApiBodies(): void;
   declare function handleUnauthorized(): void;
+  // A cookie-authenticated write refused 403 origin_mismatch (a proxy that rewrote Host).
+  declare function handleOriginMismatch(): void;
   // Drop api()'s own micro/stale tier (api-core.ts) — a write that landed elsewhere.
   declare function apiInvalidate(): void;
   // Moves on every write (local or apiInvalidate): a fan-in reuse guard keys on it, so

@@ -137,3 +137,32 @@ test("the token sheet takes its look from styles.css and injects no <style> of i
   assert.match(styles, /\.token-sheet-ov\{[^}]*z-index:var\(--z-token\)/);
   assert.match(styles, /\.token-sheet-btn\{[^}]*border-radius:var\(--radius-pill\)/);
 });
+
+test("a signed-in write refused 403 origin_mismatch says why (once), rejects, and never opens the sign-in sheet", async () => {
+  const said = [];
+  const win = loadClientModule(["html-utils", "ui-sheet", ...API_CLIENT_MODULES], {
+    globals: {
+      setTimeout: () => 0,
+      clearTimeout() {},
+      requestAnimationFrame: (fn) => fn(),
+      navigator: { onLine: true },
+      location: { reload() {} },
+      fetch: async () => ({
+        status: 403,
+        headers: { get: () => null },
+        json: async () => ({ error: "origin_mismatch" }),
+      }),
+      toast: (message) => said.push(message),
+    },
+  });
+  const post = () =>
+    win.api("/checkins", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).then(
+      () => "resolved",
+      (err) => err.status
+    );
+  assert.equal(await post(), 403, "the caller still sees the failure");
+  assert.equal(await post(), 403);
+  assert.equal(said.length, 1, "told once per page");
+  assert.match(said[0], /Host header|CAIRN_TRUST_PROXY/);
+  assert.equal(win.document.querySelector(".token-sheet-ov"), null, "signing in again would not fix it");
+});

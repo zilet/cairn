@@ -119,6 +119,27 @@ export function clientAddress(
   return chain[Math.min(trustedProxyHops, chain.length - 1)];
 }
 
+export const UNTRUSTED_PROXY_WARNING =
+  "[auth] A request arrived through a proxy (it carried X-Forwarded-For), but no proxy hop is trusted: " +
+  "per-IP rate limits and sign-in lockouts will treat every visitor as the proxy's one address. " +
+  "If Cairn sits behind a reverse proxy, set CAIRN_TRUST_PROXY=1 (the number of proxy hops).";
+
+/**
+ * Middleware that hands `warn` UNTRUSTED_PROXY_WARNING once per process, on the first
+ * request carrying X-Forwarded-For while no proxy hop is trusted. Never the header's
+ * value; inert (and free) once said, or when a hop is trusted.
+ */
+export function untrustedProxyNotice(trustedProxyHops: number, warn: (message: string) => void) {
+  let said = trustedProxyHops > 0;
+  return (req: { headers: IncomingHttpHeaders }, _res: unknown, next: () => void): void => {
+    if (!said && req.headers["x-forwarded-for"] != null) {
+      said = true;
+      warn(UNTRUSTED_PROXY_WARNING);
+    }
+    next();
+  };
+}
+
 const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 export function isUnsafeMethod(method: string): boolean {
   return UNSAFE_METHODS.has(String(method || "").toUpperCase());

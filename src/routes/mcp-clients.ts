@@ -8,7 +8,7 @@
 import { Router } from "express";
 import type { Request } from "express";
 import { authEnabled, authPrincipal } from "../auth.js";
-import { canonicalOrigin, mcpResourceUrl, oauthOriginAllowed } from "../mcpAccess.js";
+import { canonicalOrigin, httpsBehindUntrustedProxy, mcpResourceUrl, oauthOriginAllowed } from "../mcpAccess.js";
 import { getDevice } from "../repo/auth-devices.js";
 import { createMcpTokenClient, listMcpClients, revokeMcpClient } from "../repo/mcp-clients.js";
 
@@ -32,9 +32,14 @@ function clientDto(client: ReturnType<typeof listMcpClients>[number]) {
 /** What the Settings card needs to write a setup snippet: the /mcp URL and whether OAuth can run here. */
 function endpointInfo(req: Request) {
   const origin = canonicalOrigin(req);
+  const oauthAvailable = authEnabled && oauthOriginAllowed(origin);
   return {
     mcp_url: origin ? mcpResourceUrl(origin) : null,
-    oauth_available: authEnabled && oauthOriginAllowed(origin),
+    oauth_available: oauthAvailable,
+    // Why not, when it is not: "untrusted_proxy" (https at the proxy, CAIRN_TRUST_PROXY
+    // unset) reads differently from a plain-http address.
+    oauth_unavailable_reason:
+      oauthAvailable || !authEnabled ? null : httpsBehindUntrustedProxy(req) ? "untrusted_proxy" : "insecure_origin",
   };
 }
 

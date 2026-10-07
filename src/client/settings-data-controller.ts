@@ -89,7 +89,7 @@ function renderSettingsData(deps: SettingsDataControllerDeps): void {
         <button id="feedbackOpen" class="ghostbtn setdata-btn" type="button">Send feedback</button>
         <label class="toggle setdata-toggle"><input type="checkbox" id="usagePingEnabled" ${wm.usage_ping_enabled ? "checked" : ""}>
           <span>Share anonymous usage</span></label>
-        <div class="sess-line setdata-muted">Once a week, Cairn sends a random install id, its version, the host platform, CPU architecture and Node version — nothing about you or your data. Off by default, and only sent when this build has a feedback service.</div>
+        <div class="sess-line setdata-muted">Once a week, Cairn sends a random install id, its version, the host platform, device type and software version — nothing about you or your data. Off by default, and only sent when this build has a feedback service.</div>
 
         <h1 class="lbl" style="margin:22px 0 8px">Setup</h1>
         <button id="rerunSetup" class="ghostbtn" style="width:100%;text-align:center;padding:11px">Re-run first-time setup</button>

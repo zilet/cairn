@@ -67,6 +67,8 @@ body:is(.welcome-open,.welcome-pending)>:is(header,#view,.tabbar){visibility:hid
 .wel-none p{margin:0}
 .wel-none p+p{margin-top:var(--space-4)}
 .wel-empty{margin:var(--space-11) 0 0;font-size:var(--text-md);color:var(--ink2)}
+.wel-empty p{margin:0 0 var(--space-4)}
+.wel-skip{min-height:44px;margin-top:var(--space-4)}
 
 /* ---- Connect ------------------------------------------------------ */
 .wel-back{align-self:flex-start;display:inline-flex;align-items:center;gap:var(--space-2);min-height:44px;text-decoration:none}

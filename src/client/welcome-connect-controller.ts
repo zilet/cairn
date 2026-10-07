@@ -238,7 +238,7 @@
           return;
         }
         const message = result?.message
-          ? String(result.message)
+          ? CairnWelcomeModel.humanMessage(result.message, `${label} didn't answer. Try again, or use a different one.`)
           : result
             ? `${label} didn't answer.`
             : "Couldn't reach your server. Check the connection, then try again.";
@@ -302,9 +302,11 @@
 
     host.addEventListener("click", (event) => {
       const target = event.target instanceof Element ? event.target : null;
-      const act = target?.closest<HTMLElement>("[data-wel-act]")?.dataset.welAct;
+      const act = target?.closest<HTMLElement>("[data-wel-back]")
+        ? "back"
+        : target?.closest<HTMLElement>("[data-wel-act]")?.dataset.welAct;
       if (!act) return;
-      if (act === "switch") {
+      if (act === "switch" || act === "back") {
         deps.onSwitch();
       } else if (act === "setup-log") {
         const btn = target?.closest<HTMLButtonElement>("[data-wel-act]");

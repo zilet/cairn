@@ -104,7 +104,7 @@ What it does, in order:
    only with your consent (an interactive yes or `--install-railway-cli`; `--yes` alone is not enough), saved to a file and run from there.
 2. **Sign-in.** `railway whoami`; if you are not signed in, `railway login` opens your browser. With
    no terminal it stops and asks you to run `railway login` first (or set `RAILWAY_API_TOKEN`).
-3. **The project.** It creates a project named `cairn`, or the name you pass with
+3. **The project.** It creates a project named after the instance (`cairn` by default), or the name you pass with
    `--railway-project-name=`. If a project with that name exists, it asks before using it (`--yes`
    counts as yes). With several workspaces, add `--railway-workspace=<name or ID>`.
 4. **The service.** One service from `ghcr.io/zilet/cairn:latest`, one volume at `/data`, and
@@ -379,6 +379,7 @@ After a plain uninstall, `cairn.sh` is gone. Use the one-liner instead:
 | "No terminal to ask: Where should Cairn live?" | Add `--target=railway` or `--target=local` (and `--yes`). |
 | Railway: "Not signed in to Railway" | Run `railway login` in a terminal (or set `RAILWAY_API_TOKEN`), then run the same command again. |
 | Railway: the project could not be created | With more than one workspace, add `--railway-workspace=<name or ID>`. |
+| Railway: "could not read the service variables" | A passing Railway API error. Nothing was changed (the installer never makes new secrets without reading the old ones); re-run in a minute. |
 | Railway: "Your Railway CLI is too old" | `railway upgrade`, `brew upgrade railway` or `npm i -g @railway/cli`, then re-run. |
 | Railway: the deployment FAILED or CRASHED | Read the log lines the installer printed (or `cairn.sh logs`), fix the cause, then run the install command again. The project, volume and token stay. |
 | Railway: uninstall says two-factor | Run `railway delete --project <id>` yourself in a terminal; `cairn.sh status` shows the ID. |

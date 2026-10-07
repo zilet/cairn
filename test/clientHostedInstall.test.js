@@ -343,7 +343,8 @@ test("signing THIS device out asks first and names the ways back in; another dev
   await revokeOf(2).click();
   await flush();
   await flush();
-  assert.equal(asked.length, 2, "another device needs no confirm");
+  assert.equal(asked.length, 3, "another device now asks first, in plain words");
+  assert.match(asked[2].body, /will need a new sign-in/);
   assert.deepEqual(toasts, ["Signed out Laptop."]);
   assert.equal(host.querySelector("[data-access-passkey-note]").hidden, false, "no secure context: say why");
 
@@ -476,7 +477,7 @@ test("the update actions print the server's sentence and offer Update now only w
   await host.querySelector("[data-update-apply]").click();
   await flush();
   assert.deepEqual(posted, [["/update/apply", "POST", true]]);
-  assert.equal(host.querySelector(".upd-result").textContent, "Your host is rebuilding Cairn.");
+  assert.match(host.querySelector(".upd-result").textContent, /^Your host is rebuilding Cairn\. .*back in about a minute\.$/);
   assert.equal(host.querySelector("[data-update-apply]").hidden, true);
 });
 
@@ -486,7 +487,7 @@ test("the feedback sheet escapes what it prints and names the GitHub fallback pl
   const sheet = F.feedbackSheetHtml();
   assert.match(sheet, /Include anonymous diagnostics/);
   assert.match(sheet, /data-fbk-kind="bug"/);
-  assert.match(sheet, /role="radiogroup"/);
+  assert.match(sheet, /aria-pressed="true" data-fbk-kind="bug"/);
   const done = F.feedbackDoneHtml(
     { ok: true, method: "github", url: 'https://github.com/zilet/cairn/issues/new?title=a"b' },
     false

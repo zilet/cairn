@@ -34,8 +34,8 @@ export const MAX_REDIRECT_URIS = 5;
 /** A registration this young is never evicted to make room: its owner may be mid-consent. */
 export const OAUTH_CLIENT_FRESH_MS = 15 * 60 * 1000;
 /**
- * A just-rotated refresh token presented again this soon, by its own client, before its
- * successor was ever used, is a retry or a race — not theft — and gets a fresh pair.
+ * A just-rotated refresh token presented again this soon, by its own client, is a retry or
+ * a race — not theft: refused with invalid_grant, and nothing is revoked.
  */
 export const REFRESH_REUSE_GRACE_MS = 60 * 1000;
 /** The one scope this single-person instance grants: everything /mcp exposes. */
@@ -561,36 +561,23 @@ export function grantFromCode(input: { codeHash: string; row: AuthCodeRow; now?:
 
 /**
  * The reuse grace: `row` (an already-rotated refresh token) presented again within
- * REFRESH_REUSE_GRACE_MS of its rotation, while the pair that rotation minted was never
- * used (its refresh token not rotated, its access token never presented at /mcp). That is
- * the app retrying a refresh whose answer it lost, or racing itself — so the unused pair
- * is revoked and a fresh one minted in its place: the app ends up with ONE live pair.
- * Anything else (late, or the successor already in use) is a stolen copy: null, and the
- * caller revokes the whole grant.
+ * REFRESH_REUSE_GRACE_MS of its rotation. That is the app racing itself (two refreshes in
+ * flight) or retrying one whose answer it lost — never proof of theft. The answer is a
+ * plain invalid_grant that costs nothing: the successor pair the first rotation minted
+ * stays live (the app may well be holding it), and the grant stands. Only a reuse later
+ * than this is treated as a stolen copy.
  */
-function graceRotation(row: any, grant: McpClient, resource: string | null, now: number): IssuedTokens | null {
-  if (grant.revoked_at || row.revoked_at) return null;
+function withinReuseGrace(row: any, now: number): boolean {
   const since = now - Date.parse(String(row.used_at));
-  if (!(since >= 0 && since <= REFRESH_REUSE_GRACE_MS)) return null;
-  if (resource && !resourcesEqual(String(row.resource), resource)) return null;
-  const successors = db
-    .prepare(`SELECT id, used_at, revoked_at FROM oauth_tokens WHERE parent_id = ? AND grant_id = ?`)
-    .all(row.id, grant.id) as any[];
-  if (successors.some((s) => s.used_at != null)) return null;
-  const live = successors.filter((s) => s.revoked_at == null);
-  if (!live.length) return null;
-  return inTransaction(() => {
-    const revoke = db.prepare(`UPDATE oauth_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`);
-    for (const s of live) revoke.run(iso(now), s.id);
-    return issueTokens(grant.id, String(row.resource), now, Number(row.id));
-  });
+  return since >= 0 && since <= REFRESH_REUSE_GRACE_MS;
 }
 
 /**
  * Rotate a refresh token (OAuth 2.1 §4.3.1, mandatory for public clients). A token that
  * was already rotated and is presented again is a stolen copy — the whole family is
  * revoked (the app signs in again, the thief holds nothing) — except inside the short
- * reuse grace (graceRotation), where the app's own retry or race gets a fresh pair.
+ * reuse grace (withinReuseGrace), where the app's own race or retry is refused and nothing
+ * is revoked.
  */
 export function rotateRefreshToken(input: {
   refreshToken: unknown;
@@ -608,8 +595,7 @@ export function rotateRefreshToken(input: {
   if (!grant || grant.kind !== "oauth" || grant.client_id !== input.clientId)
     return { ok: false, error: "invalid_grant" };
   if (row.used_at) {
-    const graced = graceRotation(row, grant, input.resource, now);
-    if (graced) return { ok: true, tokens: graced };
+    if (withinReuseGrace(row, now)) return { ok: false, error: "invalid_grant" };
     revokeMcpClient(grant.id, now);
     return { ok: false, error: "invalid_grant", reused: true };
   }
@@ -630,9 +616,8 @@ export function rotateRefreshToken(input: {
     ).run(stamp, grant.id);
     return issueTokens(grant.id, String(row.resource), now, Number(row.id));
   });
-  if (!tokens) {
-    revokeMcpClient(grant.id, now);
-    return { ok: false, error: "invalid_grant", reused: true };
-  }
+  // Spent between the read and the write: a concurrent refresh of the same token just
+  // rotated it, which is the reuse grace by definition — refused, nothing revoked.
+  if (!tokens) return { ok: false, error: "invalid_grant" };
   return { ok: true, tokens };
 }

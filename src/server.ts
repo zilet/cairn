@@ -14,7 +14,7 @@ import { startBrainReviewJobSubscriber } from "./brainReviewJobs.js";
 import { REPAIRED_ART_WARM_PER_BOOT, repairMisfiledArtAliasesOnce, warmArt } from "./art.js";
 import { maybeScheduleAgentCliAutoUpdate } from "./agentCliUpdates.js";
 import { authGuard, authEnabled, requireAuth, authStartupError, rateLimitGuard, rateLimitEnabled, upgradeAuthorized, checkRateLimit, trustProxyHops, accessTokenEpochAtBoot } from "./auth.js";
-import { clientAddress } from "./authHttp.js";
+import { clientAddress, untrustedProxyNotice } from "./authHttp.js";
 import { firstSignInNotice } from "./repo/auth-devices.js";
 import { oauthResume, oauthRouter } from "./routes/oauth.js";
 import { setAgentRunSink, loadAgents, invalidateAgentConfigured, warmAgentProbes } from "./agents.js";
@@ -62,8 +62,9 @@ try {
 
 // A token-gated instance nobody has signed in to yet (a one-click host deploy, no
 // terminal): mint a one-hour, single-use first-sign-in code and print the ONE log line
-// that may ever carry a pairing code. Silent once any device or passkey exists or the
-// master token has signed something in; CAIRN_FIRST_SIGNIN_LOG=0 turns it off.
+// that may ever carry a pairing code. Silent once any device or passkey exists, the
+// master token has signed something in, or the install was already set up (an upgrade);
+// CAIRN_FIRST_SIGNIN_LOG=0 turns it off.
 try {
   const firstSignIn = firstSignInNotice({ authEnabled });
   if (firstSignIn) log.info(firstSignIn);
@@ -76,6 +77,7 @@ app.disable("x-powered-by");
 // Behind a reverse proxy, req.ip is the proxy unless its hop is trusted (see trustProxyHops).
 const proxyHops = trustProxyHops();
 if (proxyHops > 0) app.set("trust proxy", proxyHops);
+else app.use(untrustedProxyNotice(proxyHops, (message) => log.warn(message)));
 
 function contentSecurityPolicy(pathname: string): string {
   const scriptSources = ["'self'"];

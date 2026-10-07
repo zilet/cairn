@@ -39,7 +39,7 @@ test("a Home Screen app leads with the passkey, then the code, then the token �
   const sheet = win.document.querySelector(".signin-sheet");
   assert.ok(sheet, "the sign-in sheet is open");
   const text = sheet.textContent;
-  assert.match(text, /Home Screen apps sign in on their own — a passkey or a code from another device does it\./);
+  assert.match(text, /This Home Screen app needs its own sign-in — a passkey or a code from another device does it\./);
   const order = ["Sign in with passkey", "Enter a pairing code", "Use your access token"].map((s) => text.indexOf(s));
   assert.ok(
     order.every((i) => i >= 0),
@@ -103,6 +103,32 @@ test("the access token signs in as a Bearer header, is cleared from the field, a
   assert.equal(reloaded, 1);
   assert.equal(storage.getItem("cairn_token"), null, "no token on the device afterwards");
   for (let i = 0; i < storage.length; i++) assert.doesNotMatch(String(storage.getItem(storage.key(i))), /master-token/);
+});
+
+test("a sign-in that interrupted a connector's consent goes back to it (same-origin path only), not a cached reload", async () => {
+  const run = async (oauthResume) => {
+    const { win, calls } = load({
+      fetchImpl: async (url) =>
+        url === "/api/auth/status" ? { status: 200, body: { oauth_resume: oauthResume } } : { status: 200 },
+    });
+    let reloaded = 0;
+    const went = [];
+    await win.CairnSignIn.openSignIn({
+      fetchHealth: health(false),
+      reload: () => reloaded++,
+      navigate: (p) => went.push(p),
+    });
+    win.document.querySelector(".signin-code").value = "abcd-efgh";
+    win.document.querySelector("[data-signin-code-form]").dispatchEvent(new win.Event("submit", { cancelable: true }));
+    for (let i = 0; i < 4; i++) await flush();
+    assert.ok(calls.some((c) => c.url === "/api/auth/status"));
+    return { reloaded, went };
+  };
+  const rid = "A".repeat(43);
+  assert.deepEqual(await run(`/oauth/authorize?rid=${rid}`), { reloaded: 0, went: [`/oauth/authorize?rid=${rid}`] });
+  for (const hostile of ["https://evil.example/oauth/authorize?rid=x", "//evil.example/x", "/app/today", null]) {
+    assert.deepEqual(await run(hostile), { reloaded: 1, went: [] }, String(hostile));
+  }
 });
 
 test("the passkey offer shows once for a device without one, and 'Not now' is remembered", async () => {

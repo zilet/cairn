@@ -56,6 +56,7 @@ import {
   webauthnUserId,
 } from "../repo/auth-devices.js";
 import { mcpClientsCreatedByDevices } from "../repo/mcp-clients.js";
+import { pendingOAuthResumePath } from "./oauth.js";
 
 export const authRouter = Router();
 
@@ -149,6 +150,8 @@ authRouter.get("/auth/status", (req, res) => {
     device: device
       ? deviceDto(device, device.id, listPasskeys().filter((p) => p.device_id === device.id).length)
       : null,
+    // A connector's consent page this browser was signing in for (see pendingOAuthResumePath).
+    oauth_resume: pendingOAuthResumePath(req, res, device != null),
   });
 });
 

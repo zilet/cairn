@@ -2,7 +2,8 @@
 // The browser's credential and signed-link helpers, split out of api-core.ts (which
 // loads right after this module and calls them at request time): the optional shared
 // token, signed resource links for URLs the browser opens on its own, and the one
-// place a 401 clears every remembered body and opens the token sheet.
+// place a 401 clears every remembered body and opens the token sheet (and a 403
+// origin_mismatch says why a write was refused).
 {
   // ---------- optional auth ----------
   // No-op unless the server has CAIRN_AUTH_TOKEN set. A signed-in browser carries an
@@ -99,11 +100,26 @@
     CairnTokenSheet.open();
   }
 
+  // A signed-in write the server refused because the page's origin is not the address it
+  // sees (403 origin_mismatch): almost always a reverse proxy that rewrote the Host
+  // header. Signing in again cannot fix that, so say what can — once per page.
+  let toldOriginMismatch = false;
+  function handleOriginMismatch(): void {
+    if (toldOriginMismatch) return;
+    toldOriginMismatch = true;
+    const message =
+      "Cairn couldn't save that: this page's address doesn't match the one the server sees. If Cairn is behind a proxy, it must pass the Host header through (or set CAIRN_TRUST_PROXY=1).";
+    try {
+      if (typeof toast === "function") toast(message);
+    } catch {}
+  }
+
   Object.assign(globalThis, {
     authToken,
     withToken,
     openResourceLink,
     handleUnauthorized,
+    handleOriginMismatch,
     clearRememberedApiBodies,
   });
 }

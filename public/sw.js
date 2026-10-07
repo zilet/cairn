@@ -255,6 +255,12 @@ self.addEventListener("fetch", (e) => {
   }
   // Never cache the rest of API or MCP — always hit network.
   if (url.pathname.startsWith("/api") || url.pathname.startsWith("/mcp")) return;
+  // Server-rendered doors are never the shell: the OAuth consent flow for MCP connectors
+  // (/oauth/authorize, its same-site hop, the return after sign-in) and the discovery
+  // documents must reach the server, and so must any write (a form POST is a navigation
+  // too). Answering them with the cached index.html would strand the connector flow.
+  if (e.request.method !== "GET") return;
+  if (url.pathname === "/oauth" || url.pathname.startsWith("/oauth/") || url.pathname.startsWith("/.well-known/")) return;
   if (e.request.mode === "navigate") {
     // Cache-FIRST for the app shell. The installed PWA opens over a tailnet that
     // may be asleep or flapping, and a network-first navigation blocks on fetch("/")

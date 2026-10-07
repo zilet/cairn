@@ -424,8 +424,23 @@ export function masterTokenEverUsed(): boolean {
 }
 
 /**
+ * An install someone has already set up (onboarded) is not a fresh one, even with no
+ * device row and no master-token stamp yet: an upgrade from a build that predates both
+ * still has its owner, who signs in with the token they already hold.
+ */
+function installAlreadySetUp(): boolean {
+  try {
+    const row = db.prepare(`SELECT onboarded FROM settings WHERE id = 1`).get() as { onboarded?: unknown } | undefined;
+    return Number(row?.onboarded) === 1;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * When the server requires a token but nobody has signed in yet — no live device, no
- * passkey, and the master token never used successfully (a one-click host deploy, say) —
+ * passkey, the master token never used successfully, and the install never set up (a
+ * one-click host deploy, say) —
  * boot mints a one-hour first-sign-in code and returns the ONE log line that may carry
  * it. That line reaches whatever reads the logs (a host's log viewer, a log drain), which
  * is why it stops for good once anyone has signed in, and why CAIRN_FIRST_SIGNIN_LOG=0
@@ -438,7 +453,7 @@ export function firstSignInNotice(
   if (!opts.authEnabled) return null;
   const env = opts.env ?? process.env;
   if (/^(0|false|no|off)$/i.test(String(env.CAIRN_FIRST_SIGNIN_LOG || "").trim())) return null;
-  if (activeDeviceCount() > 0 || passkeyCount() > 0 || masterTokenEverUsed()) return null;
+  if (activeDeviceCount() > 0 || passkeyCount() > 0 || masterTokenEverUsed() || installAlreadySetUp()) return null;
   db.prepare(`DELETE FROM auth_pairing_codes WHERE purpose = 'first_sign_in' AND used_at IS NULL`).run();
   const { code } = createPairingCode({ purpose: "first_sign_in", ttlMs: FIRST_SIGN_IN_CODE_TTL_MS, now: opts.now });
   const domain = String(env.RAILWAY_PUBLIC_DOMAIN || "")
@@ -606,8 +621,8 @@ function tokenFingerprint(salt: string, token: string): string {
  * Rotating CAIRN_AUTH_TOKEN evicts everyone. The database keeps a salted SHA-256
  * fingerprint of the token it last booted with (`v1:<salt>:<hex>` in app_state — never
  * the token); a boot with a DIFFERENT token revokes every device session and deletes
- * every passkey and live pairing code, since each was minted on the old token's
- * authority, then remembers the new fingerprint. The first boot only stores it.
+ * every passkey, live pairing code and the calendar link, since each was minted on the
+ * old token's authority, then remembers the new fingerprint. The first boot only stores it.
  */
 export function applyAccessTokenEpoch(token: string, now = Date.now()): "first" | "same" | "changed" {
   const row = db.prepare(`SELECT value FROM app_state WHERE key = ?`).get(TOKEN_FINGERPRINT_KEY) as any;
@@ -624,6 +639,10 @@ export function applyAccessTokenEpoch(token: string, now = Date.now()): "first" 
       db.prepare(`UPDATE auth_devices SET revoked_at = ? WHERE revoked_at IS NULL`).run(iso(now));
       db.prepare(`DELETE FROM auth_passkeys`).run();
       db.prepare(`DELETE FROM auth_pairing_codes`).run();
+      // The calendar link was handed out under the old token's authority too: retired, so
+      // the next Subscribe mints a fresh one. (Apple Health ingest tokens are random,
+      // per-connection credentials, not derived from the token; they stand.)
+      db.prepare(`DELETE FROM app_state WHERE key = ?`).run(CALENDAR_FEED_KEY);
     }
     db.prepare(
       `INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, datetime('now'))

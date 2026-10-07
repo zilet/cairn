@@ -118,7 +118,18 @@
     }
   }
 
-  const CAIRN_WELCOME_MODEL: WelcomeModelApi = { STEPS, PHASES, phaseIndex, weekRows, weekNote, landed, fuelLines, reportFailure };
+  /**
+   * A server message is shown only when it already reads like a sentence to a person;
+   * anything that smells of engineering (a stack, a code, JSON, an HTTP status) gives
+   * way to the caller's calm fallback.
+   */
+  function humanMessage(raw: unknown, fallback: string): string {
+    const text = typeof raw === "string" ? raw.trim() : "";
+    if (!text || text.length > 200 || /\n|[{}<>]|\b(error|exception|undefined|ECONN|E2BIG|HTTP)|\d{3}\b|\.[jt]s\b/i.test(text)) return fallback;
+    return text;
+  }
+
+  const CAIRN_WELCOME_MODEL: WelcomeModelApi = { STEPS, PHASES, phaseIndex, weekRows, weekNote, landed, fuelLines, reportFailure, humanMessage };
 
   Object.assign(globalThis, { CairnWelcomeModel: CAIRN_WELCOME_MODEL });
 })();

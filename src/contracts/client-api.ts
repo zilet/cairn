@@ -325,6 +325,8 @@ export interface ClientAuthStatus {
   auth_required: boolean;
   method: "master" | "session" | "open";
   device: ClientAuthDevice | null;
+  /** A connector consent page (same-origin path) this signed-in browser was on its way to. */
+  oauth_resume?: string | null;
 }
 
 /** A passkey a sign-out would remove, as its confirm sheet names it. */
@@ -403,6 +405,8 @@ export interface ClientMcpClientsResponse {
   auth_required: boolean;
   mcp_url: string | null;
   oauth_available: boolean;
+  /** Why apps cannot sign in here: a plain-http address, or https at an untrusted proxy. */
+  oauth_unavailable_reason?: "insecure_origin" | "untrusted_proxy" | null;
   clients: ClientMcpClientRow[];
 }
 
@@ -414,6 +418,7 @@ export interface ClientMcpClientCreated {
   token?: string;
   mcp_url?: string | null;
   oauth_available?: boolean;
+  oauth_unavailable_reason?: "insecure_origin" | "untrusted_proxy" | null;
 }
 
 export interface ClientAuthMutation {

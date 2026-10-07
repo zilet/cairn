@@ -281,6 +281,12 @@ type ApiFetchOutcome = {
           setOffline(false); // a real response landed, Cairn is reachable
           apiReach.clear();
           if (result.status < 200 || result.status >= 300) {
+            if (
+              result.status === 403 &&
+              (result.body as { error?: unknown } | undefined)?.error === "origin_mismatch"
+            ) {
+              handleOriginMismatch();
+            }
             // Readiness uses 503 as meaningful operator truth (for example, a stale
             // scheduler) and still returns a bounded JSON contract. Opt-in callers
             // can consume that body without turning the expected signal into a

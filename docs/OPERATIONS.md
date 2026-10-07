@@ -190,8 +190,9 @@ curl -fsS -X POST -H "Authorization: Bearer $CAIRN_AUTH_TOKEN" https://<your-cai
 device, no passkey), every boot mints a one-hour first-sign-in code and logs one line — the only
 log line that ever carries a code: `First sign-in: open https://<domain>/#pair=XXXX-XXXX (expires in
 60 min, works once)` (the domain comes from `RAILWAY_PUBLIC_DOMAIN`; elsewhere it says "your Cairn
-address"). Once any device or passkey exists, or the access token has signed anything in, nothing is
-logged (and no code is minted). That line reaches whatever reads the service's logs — a platform log
+address"). Once any device or passkey exists, the access token has signed anything in, or the
+install has already been set up (an upgrade from a build before device sign-in), nothing is logged
+(and no code is minted). That line reaches whatever reads the service's logs — a platform log
 viewer, a log drain, a log shipper — so it is a live credential for its hour; set
 `CAIRN_FIRST_SIGNIN_LOG=0` to never mint or print it (then sign in with the access token).
 
@@ -215,12 +216,30 @@ deleted from the device.
 - *Rotate the master token = evict everyone:* change `CAIRN_AUTH_TOKEN` in the environment and
   redeploy/restart. The database remembers a salted fingerprint of the token it last booted with
   (never the token); the first boot with a different value signs EVERY device out and deletes
-  every passkey and pending pairing code — each was minted on the old token's authority — and logs
-  one line: `Access token changed — every device was signed out; sign in again.` Sign each browser
-  in again with the new token (or a pairing code from the first one you sign in), add passkeys
-  again, and give API/MCP clients the new value. The calendar subscription link and Apple Health
+  every passkey, pending pairing code and the calendar subscription link — each was minted on the
+  old token's authority — and logs one line:
+  `Access token changed — every device was signed out; sign in again.` Sign each browser in again
+  with the new token (or a pairing code from the first one you sign in), add passkeys again, give
+  API/MCP clients the new value, and re-subscribe calendars (Train → Plan → Subscribe). Apple Health
   connections are separate credentials: reset them in Settings if they may have leaked too.
   Connected AI apps (MCP keys and sign-ins, below) are disconnected by the rotation as well.
+
+### Behind a reverse proxy
+
+A signed-in browser's writes must come from the address Cairn itself sees: the request's `Origin`
+(else `Referer`) host is compared with its `Host` header — and with `X-Forwarded-Host` too, but only
+when the proxy hop is trusted. A proxy that rewrites `Host` to the upstream (`localhost:8787`) makes
+every save fail `403 origin_mismatch` (the app says so instead of saving). Either:
+
+- **preserve `Host`** — nginx: `proxy_set_header Host $host;` (Caddy and Traefik pass it by default), or
+- **trust the proxy** — `CAIRN_TRUST_PROXY=1` (the number of proxy hops in front of Cairn; Railway is
+  detected automatically). Then `X-Forwarded-Host` and `X-Forwarded-Proto` count, and per-IP limits
+  key on the client address in `X-Forwarded-For` rather than the proxy's.
+
+Without a trusted hop, every visitor shares the proxy's address for rate limits and pairing-code
+lockouts; the first request that arrives carrying `X-Forwarded-For` logs one warning saying so. Only
+set `CAIRN_TRUST_PROXY` when a proxy really sits in front: a client that reaches the port directly
+could otherwise pick its own address.
 
 ### Connect an AI app (MCP)
 

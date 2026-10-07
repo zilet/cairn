@@ -32,12 +32,12 @@ function settingsFeedbackRecord(value: unknown): Record<string, unknown> | null 
 function feedbackSheetHtml(): string {
   const chips = SETTINGS_FEEDBACK_KINDS.map(
     ([kind, label], index) =>
-      `<button class="fbk-chip" type="button" role="radio" aria-checked="${index === 0 ? "true" : "false"}" data-fbk-kind="${escAttr(kind)}">${escHtml(label)}</button>`
+      `<button class="fbk-chip" type="button" aria-pressed="${index === 0 ? "true" : "false"}" data-fbk-kind="${escAttr(kind)}">${escHtml(label)}</button>`
   ).join("");
   return `<div class="fbk-hd"><h2 class="fbk-h" id="fbkTitle">Send feedback</h2><button class="xbtn fbk-x" type="button" data-ui-sheet-close aria-label="Close">✕</button></div>
     <div class="fbk-body">
       <p class="fbk-p" id="fbkLede">Tell the people who make Cairn what's working, what isn't, or what you wish it did.</p>
-      <div class="fbk-kinds" role="radiogroup" aria-label="Kind of feedback">${chips}</div>
+      <div class="fbk-kinds" role="group" aria-label="Kind of feedback">${chips}</div>
       <label class="fbk-lbl" for="fbkMsg">Your message</label>
       <textarea id="fbkMsg" class="fbk-in fbk-msg" rows="5" maxlength="4000"></textarea>
       <label class="fbk-lbl" for="fbkContact">Email or handle <span class="fbk-opt">optional, for a reply</span></label>
@@ -96,7 +96,7 @@ function openFeedbackSheet(deps: SettingsFeedbackDeps): void {
       kind = chip.dataset.fbkKind || "other";
       sheet
         .querySelectorAll<HTMLButtonElement>("[data-fbk-kind]")
-        .forEach((other) => other.setAttribute("aria-checked", other === chip ? "true" : "false"));
+        .forEach((other) => other.setAttribute("aria-pressed", other === chip ? "true" : "false"));
     })
   );
 

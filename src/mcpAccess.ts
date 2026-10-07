@@ -39,6 +39,21 @@ export function oauthOriginAllowed(origin: string | null): origin is string {
   }
 }
 
+/**
+ * True when a proxy says the browser reached it over https (X-Forwarded-Proto) but this
+ * request still reads as plain http — the proxy hop is not trusted (CAIRN_TRUST_PROXY
+ * unset), so Express ignored the header. The fix is that setting, not a certificate.
+ */
+export function httpsBehindUntrustedProxy(req: Pick<Request, "protocol" | "headers">): boolean {
+  if (req.protocol === "https") return false;
+  const raw = req.headers?.["x-forwarded-proto"];
+  const first = String(Array.isArray(raw) ? raw[0] : raw || "")
+    .split(",")[0]
+    .trim()
+    .toLowerCase();
+  return first === "https";
+}
+
 /** The protected resource: this Cairn's /mcp endpoint. */
 export function mcpResourceUrl(origin: string): string {
   return `${origin}/mcp`;

@@ -57,6 +57,9 @@ NL='
 # ----------------------------------------------------------------------------- output
 
 setup_colors() {
+  # Decide "is stdout a terminal" once, out here: inside $(...) stdout is a pipe.
+  # CAIRN_INSTALL_FORCE_TTY=1 exists only so the tests can exercise the terminal branch.
+  if [ -t 1 ] || [ "${CAIRN_INSTALL_FORCE_TTY:-0}" = "1" ]; then IS_TTY=1; else IS_TTY=0; fi
   if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != "dumb" ]; then
     C_BOLD=$(printf '\033[1m'); C_GREEN=$(printf '\033[0;32m'); C_YELLOW=$(printf '\033[1;33m')
     C_RED=$(printf '\033[0;31m'); C_CYAN=$(printf '\033[0;36m'); C_RESET=$(printf '\033[0m')
@@ -551,6 +554,18 @@ load_existing() {
 
 # The effective configuration: flags win, then what this directory already has,
 # then defaults. Secrets are generated once and never regenerated.
+# Best effort: does this instance's data volume already exist? Unknown (no engine) counts as yes,
+# so nothing is changed for an install we cannot see.
+data_volume_exists() {
+  dv_seen=0
+  for dv_c in ${CAIRN_CONTAINER_TOOL:-docker podman}; do
+    has "$dv_c" || continue
+    dv_seen=1
+    "$dv_c" volume inspect "${NAME}_cairn-data" >/dev/null 2>&1 && return 0
+  done
+  [ "$dv_seen" = 0 ]
+}
+
 compute_config() {
   if [ -n "$OPT_NAME" ] && [ -n "$E_NAME" ] && [ "$OPT_NAME" != "$E_NAME" ]; then
     die "$DIR already holds the Cairn instance '$E_NAME'. Use --name=$E_NAME, or pick another --dir for a second instance."
@@ -581,7 +596,10 @@ compute_config() {
 
   if [ -n "$E_TOKEN" ]; then TOKEN="$E_TOKEN"; TOKEN_STATE="kept"; else TOKEN=""; TOKEN_STATE="new"; fi
   if [ -n "$E_SECRET" ]; then SECRET="$E_SECRET"; SECRET_STATE="kept"; else SECRET=""; SECRET_STATE="new"; fi
-  if [ "$HAVE_ENV" = 1 ]; then BLANK="$E_BLANK"; else BLANK="1"; fi
+  # Blank by default. An existing .env that states it is kept as is; one without the key
+  # stays on the compose default only when its data volume already exists (an install with
+  # data is never flipped), otherwise a fresh empty volume starts blank, not as the example athlete.
+  if [ "$HAVE_ENV" = 1 ] && { [ -n "$E_BLANK" ] || data_volume_exists; }; then BLANK="$E_BLANK"; else BLANK="1"; fi
 
   if valid_re "$E_UPDATE_TIME" '^0[34]:[0-5][0-9]$'; then UPDATE_TIME="$E_UPDATE_TIME"
   else UPDATE_TIME=$(printf '%02d:%02d' "$((3 + $(rand_int 2)))" "$(rand_int 60)"); fi
@@ -1619,7 +1637,7 @@ open_browser() {
 }
 
 token_text() {
-  if [ -t 1 ]; then printf '%s' "$1"; else printf '(not printed: this output is not a terminal)'; fi
+  if [ "${IS_TTY:-0}" = 1 ]; then printf '%s' "$1"; else printf '(not printed: this output is not a terminal)'; fi
 }
 
 # signin_block API_ORIGIN LINK_ORIGIN TOKEN WHERE_STORED SHOW_TOKEN(1|0) SCRATCH_DIR
@@ -1914,7 +1932,7 @@ rw_setup_paths() {
   if [ -n "$OPT_RW_PROJECT" ] && [ -n "$RW_PROJECT" ] && [ "$OPT_RW_PROJECT" != "$RW_PROJECT" ]; then
     die "$RW_DIR already manages the Railway project '$RW_PROJECT'. Use --name=<other> for a second install."
   fi
-  RW_PROJECT="${OPT_RW_PROJECT:-${RW_PROJECT:-cairn}}"
+  RW_PROJECT="${OPT_RW_PROJECT:-${RW_PROJECT:-$NAME}}"
   RW_SERVICE="${RW_SERVICE:-$NAME}"
   RW_ENV="${RW_ENV:-production}"
   IMAGE="${OPT_IMAGE:-$(rw_state_get RW_IMAGE)}"
@@ -1989,7 +2007,8 @@ rw_ensure_login() {
 # Variables currently on the service, KEY=VALUE per line, kept in memory only.
 rw_load_vars() {
   RW_KV=""
-  if rw_cap variable list --service "$RW_SERVICE" --environment "$RW_ENV" --kv; then RW_KV="$RW_OUT"; fi
+  RW_VARS_OK=0
+  if rw_cap variable list --service "$RW_SERVICE" --environment "$RW_ENV" --kv; then RW_KV="$RW_OUT"; RW_VARS_OK=1; fi
   RW_OUT=""
 }
 rw_var() { printf '%s\n' "$RW_KV" | sed -n "s/^$1=//p" | tail -n 1; }
@@ -2068,6 +2087,10 @@ rw_ensure_volume() {
 
 rw_ensure_vars() {
   rw_load_vars
+  # A failed list says nothing about which keys exist: generating secrets now could replace
+  # the real token (signing everyone out) or the settings key (stored secrets unreadable).
+  [ "$RW_VARS_OK" = 1 ] \
+    || die "Railway: could not read the service variables${RW_ERR:+ ($RW_ERR)}. Nothing was changed; re-run in a minute."
   set --
   for rv_kv in $RW_PLAIN_VARS; do
     rv_key="${rv_kv%%=*}"

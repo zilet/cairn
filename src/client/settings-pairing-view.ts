@@ -50,7 +50,7 @@ function accessCardHtml(): string {
           <h2 class="lbl pair-h">Pair a device</h2>
           <div class="sess-line">Point your phone's camera at the code — or open the link on a laptop — to sign it in. No password to type.</div>
           <button class="ghostbtn pair-show" type="button" data-pair-show>Show pairing code</button>
-          <div class="pair-reveal" hidden>
+          <div class="pair-reveal" tabindex="-1" hidden>
             <div class="pair-qr" role="img" aria-label="Pairing code for this Cairn"></div>
             <div class="pair-code" aria-live="polite"></div>
             <div class="small-note pair-expiry"></div>
@@ -198,6 +198,8 @@ function waysBackInHtml(hasPasskey: boolean): string {
   return `To sign back in, use ${ways.map((w) => escHtml(w)).join(", or ")}.`;
 }
 
+// `opts.body` is RAW HTML (it lands in the sheet unescaped so callers can bold names):
+// every caller must pass already-escaped HTML, built from escHtml or the *Html helpers above.
 function defaultConfirm(opts: { title: string; body: string; action: string }): Promise<boolean> {
   return new Promise((resolve) => {
     if (typeof CairnUiSheet === "undefined") return resolve(false);

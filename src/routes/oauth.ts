@@ -33,7 +33,13 @@ import {
   revokeMcpClient,
   rotateRefreshToken,
 } from "../repo/mcp-clients.js";
-import { canonicalOrigin, isLoopbackHost, mcpResourceUrl, oauthOriginAllowed } from "../mcpAccess.js";
+import {
+  canonicalOrigin,
+  httpsBehindUntrustedProxy,
+  isLoopbackHost,
+  mcpResourceUrl,
+  oauthOriginAllowed,
+} from "../mcpAccess.js";
 
 export const oauthRouter = Router();
 
@@ -532,7 +538,13 @@ oauthRouter.get("/oauth/authorize", (req, res) => {
   if (!origin) {
     return sendPage(res, 404, {
       title: "Not available",
-      body: `<p>${authEnabled ? "Connecting apps needs this Cairn on a secure (https) address." : "This Cairn has sign-in turned off, so apps connect without one."}</p>`,
+      body: `<p>${
+        !authEnabled
+          ? "This Cairn has sign-in turned off, so apps connect without one."
+          : httpsBehindUntrustedProxy(req)
+            ? "This Cairn sits behind a proxy it does not trust yet, so it cannot tell the address is secure. Set CAIRN_TRUST_PROXY=1 and restart."
+            : "Connecting apps needs this Cairn on a secure (https) address."
+      }</p>`,
     });
   }
   let rid = queryString(req, "rid", 64);
@@ -645,6 +657,21 @@ oauthRouter.post("/oauth/authorize", urlencoded, (req, res) => {
   });
   redirectToClient(res, entry.redirectUri, origin, { code, state: entry.state });
 });
+
+/**
+ * The consent page a signed-in browser is on its way back to, as a same-origin relative
+ * path — or null. For the shell's own sign-in screen: the return cookie is HttpOnly and an
+ * installed service worker answers the reload from its cache (oauthResume never sees it),
+ * so GET /api/auth/status hands the path to the client, which navigates there. Spends the
+ * return cookie exactly like oauthResume does.
+ */
+export function pendingOAuthResumePath(req: Request, res: Response, signedIn: boolean): string | null {
+  if (!authEnabled || !signedIn) return null;
+  const rid = readReturnCookie(req.headers.cookie);
+  if (!rid) return null;
+  res.append("Set-Cookie", returnCookie("", { secure: req.secure === true, maxAgeSec: 0 }));
+  return pendingAuthorizations.get(rid) ? `/oauth/authorize?rid=${encodeURIComponent(rid)}` : null;
+}
 
 /**
  * Back from the sign-in detour: the shell (`/`, `/app/…`) loaded with a pending request's

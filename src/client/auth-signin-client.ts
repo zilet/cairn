@@ -18,6 +18,8 @@ type SignInDeps = {
   passkeysSupported?: boolean;
   pairFailed?: boolean;
   retiredLink?: boolean;
+  oauthResume?: () => Promise<string | null>;
+  navigate?: (path: string) => void;
 };
 
 {
@@ -48,7 +50,7 @@ type SignInDeps = {
     retiredLink?: boolean;
   }): string {
     const lead = opts.standalone
-      ? `<p class="token-sheet-p signin-standalone">Home Screen apps sign in on their own — a passkey or a code from another device does it.</p>`
+      ? `<p class="token-sheet-p signin-standalone">This Home Screen app needs its own sign-in — a passkey or a code from another device does it.</p>`
       : `<p class="token-sheet-p">This Cairn is private. Sign this device in once and it stays signed in.</p>`;
     const passkey = opts.passkeys
       ? `<button class="token-sheet-btn signin-passkey" type="button" data-signin-passkey>Sign in with passkey</button>`
@@ -106,13 +108,29 @@ type SignInDeps = {
     }
   }
 
-  function signedIn(reload: () => void): void {
+  // A connector's consent page this browser was signing in for: the server holds it in
+  // an HttpOnly cookie, and the reload would be answered by the service worker's cached
+  // shell, so ask. Only a same-origin /oauth/authorize path is ever followed.
+  async function defaultOAuthResume(): Promise<string | null> {
+    try {
+      const response = await fetch("/api/auth/status", { credentials: "same-origin", cache: "no-store" });
+      const json = (await response.json()) as { oauth_resume?: unknown } | null;
+      const path = json && typeof json.oauth_resume === "string" ? json.oauth_resume : "";
+      return /^\/oauth\/authorize\?rid=[A-Za-z0-9_-]+$/.test(path) ? path : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function signedIn(reload: () => void, deps: SignInDeps): Promise<void> {
     try {
       (globalThis as { clearRememberedApiBodies?: () => void }).clearRememberedApiBodies?.();
     } catch {}
     try {
       localStorage.removeItem("cairn_token");
     } catch {}
+    const resume = await (deps.oauthResume || defaultOAuthResume)();
+    if (resume) return (deps.navigate || ((path: string) => location.replace(path)))(resume);
     reload();
   }
 
@@ -161,7 +179,7 @@ type SignInDeps = {
       busy(true);
       const result = await CairnPasskeys.signInWithPasskey();
       busy(false);
-      if (result.ok) return signedIn(reload);
+      if (result.ok) return signedIn(reload, deps);
       if (result.reason === "failed") say("That passkey didn't sign you in. Try again, or use a pairing code.");
     });
 
@@ -180,7 +198,7 @@ type SignInDeps = {
       busy(false);
       if (status === 200) {
         markOffer();
-        return signedIn(reload);
+        return signedIn(reload, deps);
       }
       say(
         status === 429
@@ -208,7 +226,7 @@ type SignInDeps = {
       if (input) input.value = "";
       if (status === 200) {
         markOffer();
-        return signedIn(reload);
+        return signedIn(reload, deps);
       }
       say(
         status === 0

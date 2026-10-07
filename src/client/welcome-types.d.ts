@@ -76,6 +76,8 @@ type WelcomeModelApi = {
   weekNote(state: unknown, hasRows: boolean): string | null;
   landed(weekState: unknown, fuelState: unknown): boolean;
   fuelLines(fuel: unknown, state: unknown): { main: string; sub: string } | null;
+  /** A server message when it already reads as plain words, else the calm fallback. */
+  humanMessage(raw: unknown, fallback: string): string;
   /** Leave one privacy-safe diagnostic (step, provider, code, status) for a failed step. */
   reportFailure(step: WelcomeFailureStep, provider: string | null | undefined, code: string, status?: unknown): boolean;
 };
@@ -90,7 +92,7 @@ type WelcomeReveal = {
 };
 
 type WelcomeClientApi = {
-  helloHtml(providers: CoachLinkProvider[]): string;
+  helloHtml(providers: CoachLinkProvider[], unreachable?: boolean): string;
   connectHtml(provider: CoachLinkProvider): string;
   cairnHtml(laid: number, idPrefix: string): string;
   meetHtml(provider: CoachLinkProvider | null): string;
@@ -116,6 +118,8 @@ type WelcomeMeetDeps = {
   provider: CoachLinkProvider | null;
   onReconnect(): void;
   onDone(): void;
+  /** Leave the welcome for the app, marking it done (Meet's "Look around first"). */
+  onSkip(): void;
 };
 
 declare const CairnWelcomeConnect: { mount(host: HTMLElement, deps: WelcomeConnectDeps): () => void };

@@ -19,6 +19,8 @@
   let stage: WelcomeStage = "hello";
   let agent: string | null = null;
   let paintSeq = 0;
+  // The last read found no server at all (a cold start offline), so Hello says so.
+  let unreachable = false;
 
   function urlFor(next: WelcomeStage, name: string | null): string {
     const id = name ? `?id=${encodeURIComponent(name)}` : "";
@@ -65,6 +67,7 @@
       return;
     }
     if (target?.closest("[data-wel-skip]")) close({ markOnboarded: true });
+    if (target?.closest("[data-wel-reload]")) go("hello", null, { replace: true });
   }
 
   function ensureRoot(): HTMLElement {
@@ -118,7 +121,7 @@
     el.dataset.stage = next;
     el.scrollTop = 0;
     if (next === "hello") {
-      el.innerHTML = CairnWelcomeClient.helloHtml(model?.providers || []);
+      el.innerHTML = CairnWelcomeClient.helloHtml(model?.providers || [], !model && unreachable);
     } else if (next === "connect") {
       const p = providerFor(model, name) || placeholder(name || "");
       el.innerHTML = CairnWelcomeClient.connectHtml(p);
@@ -139,6 +142,7 @@
           provider: p,
           onReconnect: () => go("connect", p?.name || name || null),
           onDone: () => close({ markOnboarded: true }),
+          onSkip: () => close({ markOnboarded: true }),
         });
       }
     }
@@ -154,6 +158,7 @@
       // A true cold start: never paint an empty provider list; wait for the server.
       ensureRoot();
       void reading.then((model) => {
+        unreachable = !model;
         if (!model) CairnWelcomeModel.reportFailure("hello", null, "unreachable");
         if (seq === paintSeq) swap(model)();
       });
