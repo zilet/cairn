@@ -76,7 +76,11 @@ type SettingsScreenAgentInfo = {
 
 type SettingsScreenCliUpdateStatus = {
   status?: string;
+  /** install (default) or remove. */
+  action?: string;
   agents?: string[];
+  /** The installer's own classified failure: a reason code and a plain headline. */
+  failure?: { reason?: string; message?: string } | null;
   started_at?: string;
   finished_at?: string;
   error?: string;

@@ -30,6 +30,7 @@ import {
   classifyLimitBannerText,
   isAuthFailureText,
   parseStreamRateLimitEvent,
+  resourceFailureHeadline,
   type AgentFailure,
 } from "./agentAvailability.js";
 import {
@@ -1389,8 +1390,25 @@ export function classifyChatAgentResult(agent: string, result: AgentResult): Cha
   // emitted its machine-readable rate-limit event). A real coaching answer that
   // happens to contain the words "rate limit" is a reply, not a failure — the
   // same reason the auth rule has always carried its infra-sized guard.
-  const suspect = result.code !== 0 || !raw.trim() || !!parseStreamRateLimitEvent(`${raw}\n${stderr}`);
-  let failure = suspect ? classifyAgentFailure(agent, { code: result.code, raw, stderr }, new Date()) : null;
+  const suspect =
+    result.code !== 0 || !!result.signal || !raw.trim() || !!parseStreamRateLimitEvent(`${raw}\n${stderr}`);
+  let failure = suspect
+    ? classifyAgentFailure(agent, { code: result.code, raw, stderr, signal: result.signal ?? null }, new Date())
+    : null;
+  // The server ran out of disk or memory: the person's to fix, so the bubble leads with
+  // what to do (raw CLI text never reaches it). A full disk also holds the provider.
+  if (failure && (failure.state === "disk_full" || failure.state === "out_of_memory")) {
+    if (availabilityHolds(failure.state)) noteChatAvailability(agent, failure);
+    const label = String(loadAgents()[agent]?.label || agent);
+    return {
+      agent,
+      ok: false,
+      status: failure.state,
+      error_class: failure.state,
+      error_message: resourceFailureHeadline(failure.state, label) || failure.detail,
+      ...usage,
+    };
+  }
   // A clean-exit LIMIT banner is the same shape of problem as a clean-exit login
   // banner, and several CLIs print exactly that: "You've hit your weekly limit ·
   // resets 8am" on stdout, exit 0. `suspect` is false for that run, so the banner
@@ -1503,7 +1521,12 @@ function chatFailureReply(e: any): {
   if (e instanceof ChatCompletionError) {
     const attempts = e.attempts.filter((a) => !a.ok);
     const first = attempts.length === 1 ? attempts[0] : null;
-    const content = first
+    // A full disk or a memory kill is the server's, whichever provider hit it: lead
+    // with that headline (it already says what to do), never a "couldn't reach" line.
+    const resource = attempts.find((a) => a.status === "disk_full" || a.status === "out_of_memory");
+    const content = resource?.error_message
+      ? resource.error_message
+      : first
       ? `Couldn't reach ${displayAgent(first.agent)} CLI: ${first.error_message || first.error_class || first.status}. Check Settings → Agents.`
       : `Couldn't reach a coaching agent. Tried ${summarizeChatAttempts(attempts)}. Check Settings → Agents.`;
     return {

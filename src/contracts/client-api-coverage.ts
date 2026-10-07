@@ -34,6 +34,7 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/brain/changes/seen",
   "/agent-clis/update",
   "/agent-clis/:name/install",
+  "/agent-clis/:name/remove",
   "/art/manifest",
   "/art/versions",
   "/art/state",

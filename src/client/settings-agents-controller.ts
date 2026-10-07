@@ -189,15 +189,21 @@ function renderSettingsAgentList(deps: ClientSettingsAgentsControllerDeps): void
     renderSettingsAgentList(deps);
   }));
   wireSettingsCliInstallButtons(deps);
+  wireSettingsCliRemoveButtons(deps);
 }
 
 function renderSettingsCliStatus(deps: ClientSettingsAgentsControllerDeps, result: SettingsScreenCliUpdateStatus | null): void {
   const el = settingsAgentsOptional<HTMLElement>(deps.root, "#agentCliUpdateStatus");
   if (!el || !result) return;
     const names = Array.isArray(result.agents) ? result.agents.join(", ") : "";
-  if (result.status === "running") el.textContent = `Installing ${names || "tool"}…`;
-  else if (result.status === "succeeded" && names) el.textContent = `${names} ready · ${(result.finished_at || "").replace("T", " ").slice(0, 16)}`;
-    else if (result.status === "failed") el.textContent = `Install failed${result.error ? `: ${result.error}` : ""}`;
+  const removing = result.action === "remove";
+  if (result.status === "running") el.textContent = `${removing ? "Removing" : "Installing"} ${names || "tool"}…`;
+  else if (result.status === "succeeded" && names)
+    el.textContent = `${names} ${removing ? "removed" : "ready"} · ${(result.finished_at || "").replace("T", " ").slice(0, 16)}`;
+    // The installer's classified failure leads (a full disk says what to do); the raw
+    // log stays in the details below.
+    else if (result.status === "failed")
+      el.textContent = result.failure?.message || `${removing ? "Remove" : "Install"} failed${result.error ? `: ${result.error}` : ""}`;
     else el.textContent = "";
     const log = settingsAgentsOptional<HTMLElement>(deps.root, "#agentCliUpdateLog");
     if (log) {
@@ -210,7 +216,7 @@ function renderSettingsCliStatus(deps: ClientSettingsAgentsControllerDeps, resul
       if (!log.hidden) log.scrollTop = log.scrollHeight;
     }
   const list = settingsAgentsOptional<HTMLElement>(deps.root, "#agentlist");
-  list?.querySelectorAll<HTMLButtonElement>("[data-install]").forEach((button) => {
+  list?.querySelectorAll<HTMLButtonElement>("[data-install],[data-remove]").forEach((button) => {
     button.disabled = result.status === "running";
   });
 }
@@ -266,6 +272,46 @@ function wireSettingsCliInstallButtons(deps: ClientSettingsAgentsControllerDeps)
     } else {
       deps.toast(`${agent} install failed`);
     }
+  }));
+}
+
+// Remove a provider's CLI to free disk: two taps (the first only arms the button), no
+// dialog. Its sign-in stays in HOME, so Install brings it back without a new login.
+function wireSettingsCliRemoveButtons(deps: ClientSettingsAgentsControllerDeps): void {
+  const list = settingsAgentsOptional<HTMLElement>(deps.root, "#agentlist");
+  list?.querySelectorAll<HTMLButtonElement>("[data-remove]").forEach((button) => button.addEventListener("click", async () => {
+    const agent = button.dataset.remove || "";
+    if (!agent) return;
+    if (button.dataset.armed !== "1") {
+      button.dataset.armed = "1";
+      button.textContent = "tap again to remove";
+      setTimeout(() => {
+        if (!button.isConnected) return;
+        delete button.dataset.armed;
+        button.textContent = "remove";
+      }, 4000);
+      return;
+    }
+    button.disabled = true;
+    renderSettingsCliStatus(deps, { status: "running", action: "remove", agents: [agent], started_at: new Date().toISOString() });
+    let result: SettingsScreenCliUpdateStatus | null = null;
+    try {
+      const started = await deps.api(`/agent-clis/${encodeURIComponent(agent)}/remove`, { method: "POST" }) as SettingsScreenCliUpdateStatus;
+      if (Array.isArray(started.agents) && !started.agents.includes(agent)) {
+        throw new Error(`Another tool is busy (${started.agents.join(", ")})`);
+      }
+      result = await pollSettingsCliStatus(deps);
+    } catch (error) {
+      renderSettingsCliStatus(deps, {
+        status: "failed",
+        action: "remove",
+        agents: [agent],
+        error: error instanceof Error ? error.message : "request failed",
+      });
+    }
+    await refreshSettingsAgentMeta(deps).catch(() => {});
+    renderSettingsAgentList(deps);
+    deps.toast(result?.status === "succeeded" ? `${agent} removed` : `${agent} couldn't be removed`);
   }));
 }
 

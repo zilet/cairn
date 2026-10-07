@@ -55,7 +55,8 @@ curl -fsSL https://cairn.fit/install | sh -s -- --target=railway
 
 Railway's free tier may pause your service, and its memory can be too small for the AI coach, so
 the Hobby plan (about $5/month) is the recommended choice. Check Railway's current pricing before
-you approve.
+you approve. A trial volume is 0.5 GB, enough for about one AI provider; Hobby allows 5 GB, which you
+set on the volume with **Live Resize** after upgrading (see [How much disk](#how-much-disk)).
 
 What the installer does, in order:
 
@@ -200,6 +201,25 @@ What we measured, and what we only estimated:
 | 2 GB or more | Comfortable. On a larger box you can raise `CAIRN_MAX_AGENT_PROCS`. |
 
 Railway charges for the memory you actually use, so the cap mostly protects you from short spikes.
+
+## How much disk
+
+Each AI provider's tool is installed onto the volume, and they are not small. Measured install
+sizes on Linux: Grok about 180 MB, Google (Antigravity) about 220 MB, Claude about 260 MB and
+ChatGPT (Codex) about 400 MB. The database itself is small.
+
+| Volume | What fits |
+|---|---|
+| 0.5 GB (Railway trial) | About one AI provider. A second one fails to install with "Your server's disk is nearly full". |
+| 5 GB (Railway Hobby) | Every provider, with room for years of data. Recommended. |
+
+Railway's trial gives a 0.5 GB volume. After upgrading to Hobby, the volume does not grow by itself:
+open the project, click the volume, and use **Live Resize** to raise it (5 GB is plenty). The
+service keeps running while it resizes.
+
+When the disk does fill, Cairn says so in plain words wherever it happens (setting up a provider,
+signing in, a coach reply), and **Settings → Agents → remove** takes a provider's tool off the volume
+to free its space. Its sign-in is kept, so installing it again later needs no new login.
 
 ## Security
 

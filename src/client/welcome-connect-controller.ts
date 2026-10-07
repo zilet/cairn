@@ -17,6 +17,8 @@
     status?: string;
     agents?: string[];
     error?: string;
+    /** The installer's classified failure: a reason code and a plain headline. */
+    failure?: { reason?: string; message?: string } | null;
     stdout_tail?: string;
     stderr_tail?: string;
   };
@@ -81,6 +83,13 @@
       </div>`;
     }
 
+    function signInActions(): string {
+      return `<div class="wel-acts">
+        <button class="btn btn-solid" type="button" data-wel-act="signin-now">Sign in to ${escHtml(label)}</button>
+        <button class="linkbtn-quiet" type="button" data-wel-act="switch">Use a different one</button>
+      </div>`;
+    }
+
     async function fresh(): Promise<CoachLinkProvider | null> {
       CairnCoachLink.invalidate();
       const m = await CairnCoachLink.read();
@@ -105,6 +114,20 @@
       if (!pre) return;
       pre.textContent = installTail(status) || "Preparing…";
       if (!pre.hidden) pre.scrollTop = pre.scrollHeight;
+    }
+
+    // The headline for a failed setup: the installer's own plain sentence for the
+    // failures a person can act on (a full disk says how much is free and what to do),
+    // else the calm default. The raw log stays under "Show details".
+    function installHeadline(status: InstallStatus | null): string {
+      const reason = String(status?.failure?.reason || "");
+      const message = String(status?.failure?.message || "").trim();
+      if (message && (reason === "disk_full" || reason === "out_of_memory")) return message;
+      if (reason === "not_runnable") return `${label} was set up but wouldn't start on your server. Try again, or use a different one.`;
+      if (reason === "integrity") return `${label}'s download didn't match what Cairn expected, so nothing was installed. Updating Cairn fixes this.`;
+      if (reason === "download_failed") return `Couldn't download ${label}. Check your server's internet connection, then try again.`;
+      if (reason === "unsupported") return `${label} doesn't offer a version for this server.`;
+      return `Setting up ${label} didn't finish.`;
     }
 
     async function install(seq: number): Promise<boolean> {
@@ -145,8 +168,9 @@
         set("setup", "done", "Ready on your server", "");
         return true;
       }
-      note("setup", "install_failed", httpStatus);
-      set("setup", "failed", `Setting up ${label} didn't finish.`, failActions("setup") + setupDetailsHtml());
+      const reason = String(status?.failure?.reason || "");
+      note("setup", reason ? `install_${reason}` : "install_failed", httpStatus);
+      set("setup", "failed", installHeadline(status), failActions("setup") + setupDetailsHtml());
       paintTail(status);
       return false;
     }
@@ -217,6 +241,8 @@
         if (!alive || seq !== runSeq) return;
         if (result?.ok) {
           CairnCoachLink.invalidate();
+          // An answer is proof of the sign-in too, whatever the probe could read.
+          if (stepEl("signin")?.dataset.state !== "done") set("signin", "done", `Signed in to ${label}`, "");
           set("hello", "done", `${label} answered. Your coach is ready.`, "");
           const next = await fresh();
           if (next) provider = next;
@@ -243,9 +269,15 @@
             ? `${label} didn't answer.`
             : "Couldn't reach your server. Check the connection, then try again.";
         if (reason === "not_signed_in") {
+          // Back to the sign-in step, with the sign-in itself offered — not a dead end.
           note("hello", "not_signed_in");
-          set("signin", "failed", message, failActions("signin"));
+          CairnCoachLink.invalidate();
           set("hello", "waiting", "");
+          if (provider.canLogin) {
+            set("signin", "failed", message, signInActions());
+          } else {
+            set("signin", "failed", `${message} Its owner can sign it in from Settings.`, failActions("signin"));
+          }
           return;
         }
         note("hello", result ? "verify_failed" : "unreachable", httpStatus);
@@ -254,6 +286,14 @@
       }
       note("hello", "stayed_busy");
       set("hello", "failed", "Your server stayed busy. Try again in a minute.", failActions("hello"));
+    }
+
+    // The hello said "not signed in": open the sign-in now, whatever the probe reads.
+    async function signInThenHello(): Promise<void> {
+      const seq = ++runSeq;
+      set("hello", "waiting", "");
+      if (!(await signIn(seq)) || !alive || seq !== runSeq) return;
+      await sayHello(seq);
     }
 
     // ---- The run --------------------------------------------------------------
@@ -286,15 +326,18 @@
       }
 
       if (from === "setup" || from === "signin") {
-        if (provider.usable || provider.configured === true) {
+        // Only a POSITIVE verdict skips the sign-in. A login the server cannot read
+        // (a probe that timed out on a cold container) is not "already signed in".
+        if (provider.signedIn) {
           set("signin", "done", `Already signed in to ${label}`, "");
-        } else if (!provider.canLogin) {
+        } else if (provider.canLogin) {
+          if (!(await signIn(seq))) return;
+        } else if (provider.configured === false) {
           note("signin", "login_unavailable");
           set("signin", "failed", `${label} signs in on the server itself. Its owner can do it from Settings.`, failActions("signin"));
           return;
-        } else if (!(await signIn(seq))) {
-          return;
         }
+        // No in-app sign-in and no verdict either way: the hello below is the test.
       }
       if (!alive || seq !== runSeq) return;
       await sayHello(seq);
@@ -317,6 +360,8 @@
         btn.textContent = pre.hidden ? "Show details" : "Hide details";
       } else if (act === "setup" || act === "signin" || act === "hello") {
         void run(act);
+      } else if (act === "signin-now") {
+        void signInThenHello();
       }
     });
 

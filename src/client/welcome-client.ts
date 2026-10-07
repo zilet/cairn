@@ -29,7 +29,7 @@
   const chevron = `<svg class="wel-chev" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3.5 10.5 8 6 12.5"/></svg>`;
 
   function providerHtml(p: CoachLinkProvider, i: number): string {
-    const state = p.usable
+    const state = p.usable && p.signedIn
       ? `<span class="wel-prov-on"><span class="wel-prov-dot" aria-hidden="true"></span>Connected</span>`
       : chevron;
     return `<li class="wel-prov-li reveal" style="--i:${i + 3}">
@@ -41,7 +41,15 @@
     </li>`;
   }
 
-  function helloHtml(providers: CoachLinkProvider[], unreachable = false): string {
+  // One calm line when a hosted server's disk fits only about one provider.
+  function diskNoteHtml(smallDisk?: CoachLinkModel["smallDisk"]): string {
+    if (!smallDisk) return "";
+    // Filesystem overhead makes a 0.5 GB volume report ~434 MB: name it as the host sells it.
+    const gb = Math.max(0.5, Math.ceil((smallDisk.total_mb / 1024) * 2) / 2);
+    return `<p class="wel-sub wel-disk reveal" style="--i:7">This server has a small disk (${escHtml(String(gb))} GB), enough for one AI provider. A bigger volume fits more.</p>`;
+  }
+
+  function helloHtml(providers: CoachLinkProvider[], unreachable = false, smallDisk: CoachLinkModel["smallDisk"] = null): string {
     const list = unreachable
       ? `<div class="wel-empty reveal" style="--i:3"><p>Couldn't reach your Cairn.</p><button class="btn btn-solid" type="button" data-wel-reload>Try again</button></div>`
       : providers.length
@@ -54,6 +62,7 @@
         <h1 class="wel-h1" tabindex="-1">A coach that reads your whole picture.</h1>
         <p class="wel-lead reveal" style="--i:2">It runs on the AI you already pay for. Any one of these works.</p>
         ${list}
+        ${unreachable ? "" : diskNoteHtml(smallDisk)}
         <div class="wel-quiet reveal" style="--i:8">
           <button class="linkbtn-quiet" type="button" data-wel-none aria-expanded="false" aria-controls="welNone">I don't have one yet</button>
           <button class="linkbtn-quiet" type="button" data-wel-skip>Look around first</button>
@@ -197,12 +206,16 @@
     </div>`;
   }
 
-  function failBubbleHtml(message: string): string {
+  function failBubbleHtml(message: string, signIn = false): string {
+    const acts = signIn
+      ? `<button class="btn btn-solid" type="button" data-wel-reconnect>Sign in again</button>
+        <button class="linkbtn-quiet" type="button" data-wel-retry>Try again</button>`
+      : `<button class="btn btn-solid" type="button" data-wel-retry>Try again</button>
+        <button class="linkbtn-quiet" type="button" data-wel-reconnect>Check the connection</button>`;
     return `<div class="wel-msg is-coach is-fail">
       <p>${escHtml(message)}</p>
       <div class="wel-fail-acts">
-        <button class="btn btn-solid" type="button" data-wel-retry>Try again</button>
-        <button class="linkbtn-quiet" type="button" data-wel-reconnect>Check the connection</button>
+        ${acts}
       </div>
     </div>`;
   }
@@ -217,6 +230,7 @@
 
   const CAIRN_WELCOME_CLIENT: WelcomeClientApi = {
     helloHtml,
+    diskNoteHtml,
     connectHtml,
     cairnHtml,
     meetHtml,

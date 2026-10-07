@@ -3,10 +3,12 @@ import type { Request, Response } from "express";
 import {
   getAgentCliUpdateStatus,
   installableAgentNames,
+  startAgentCliRemove,
   startAgentCliUpdate,
   startInstalledAgentCliUpdate,
 } from "../agentCliUpdates.js";
 import { loadAgents } from "../agents.js";
+import { serverDiskRead, type ServerDisk } from "../hosting.js";
 import { agentInfoOp, agentModelsOp, verifyAgent } from "../coachOps.js";
 import {
   getAgentConfig,
@@ -55,6 +57,14 @@ operatorRouter.post("/agent-clis/:name/install", (req, res) => {
   }
   return res.status(202).json(startAgentCliUpdate(req.params.name, "manual"));
 });
+// Remove one provider's CLI from the tools volume to free disk (its sign-in stays in
+// HOME, so a later Install needs no new login). Polled on GET /agent-clis/update.
+operatorRouter.post("/agent-clis/:name/remove", (req, res) => {
+  if (!installableAgentNames().includes(req.params.name)) {
+    return res.status(400).json({ ok: false, error: "unknown or non-installable agent" });
+  }
+  return res.status(202).json(startAgentCliRemove(req.params.name, "manual"));
+});
 
 // Settings + agent metadata. route_tasks is server-owned UI metadata for the
 // Settings routing controls, so frontend task labels cannot drift from the
@@ -72,6 +82,14 @@ function garminInputState(): { garmin_sleep_gap_nights: number | null } {
   }
 }
 
+function serverDiskSafe(): ServerDisk | null {
+  try {
+    return serverDiskRead();
+  } catch {
+    return null;
+  }
+}
+
 // GET /settings, as one call: the /today aggregate primes the same body.
 export function settingsResponse() {
   return {
@@ -80,6 +98,9 @@ export function settingsResponse() {
     // Units group renders from this, so a new unit kind needs no client list of its own.
     units: unitsRegistryRead(athleteUnits()),
     agents: getAgentConfig(),
+    // The disk the provider CLIs install onto: the welcome warns when a hosted volume
+    // fits only about one provider. Best-effort — a failed read is simply absent.
+    server_disk: serverDiskSafe(),
     route_tasks: listRoutableTasks(),
     research_auto_eligible: researchAutoEligible(),
     // Quiet state for the strength write-back toggle. Derived, not a settings column,

@@ -13,27 +13,87 @@ const MAX_TAIL = 24_000;
 
 type UpdateStatus = "idle" | "running" | "succeeded" | "failed";
 
+/**
+ * Why an install failed, as the installer itself classified it (scripts/install-agent-cli.mjs
+ * prints one `CAIRN_INSTALL_FAILURE {…}` line). `reason` is the code a client branches on;
+ * `message` leads with plain words and is safe to show as a headline.
+ */
+export type AgentCliFailureReason =
+  | "disk_full"
+  | "out_of_memory"
+  | "not_runnable"
+  | "integrity"
+  | "download_failed"
+  | "unsupported"
+  | "failed";
+export interface AgentCliFailure {
+  agent: string | null;
+  reason: AgentCliFailureReason;
+  message: string;
+  free_mb: number | null;
+  need_mb: number | null;
+}
+
 export interface AgentCliUpdateState {
   status: UpdateStatus;
+  /** install / update / remove — what this run was asked to do. */
+  action: "install" | "remove";
   agents: string[];
   reason: string | null;
   started_at: string | null;
   finished_at: string | null;
   exit_code: number | null;
   error: string | null;
+  failure: AgentCliFailure | null;
   stdout_tail: string;
   stderr_tail: string;
+}
+
+const FAILURE_PREFIX = "CAIRN_INSTALL_FAILURE ";
+const FAILURE_REASONS = new Set<AgentCliFailureReason>([
+  "disk_full",
+  "out_of_memory",
+  "not_runnable",
+  "integrity",
+  "download_failed",
+  "unsupported",
+  "failed",
+]);
+
+/** The installer's own classified failure, read from its stderr (the last one wins). */
+export function parseInstallFailure(stderr: string): AgentCliFailure | null {
+  const lines = String(stderr || "")
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith(FAILURE_PREFIX));
+  const last = lines.at(-1);
+  if (!last) return null;
+  try {
+    const raw = JSON.parse(last.slice(FAILURE_PREFIX.length));
+    const reason = FAILURE_REASONS.has(raw?.reason) ? (raw.reason as AgentCliFailureReason) : "failed";
+    const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+    return {
+      agent: typeof raw?.agent === "string" ? raw.agent : null,
+      reason,
+      message: String(raw?.message || "").slice(0, 600),
+      free_mb: num(raw?.free_mb),
+      need_mb: num(raw?.need_mb),
+    };
+  } catch {
+    return null;
+  }
 }
 
 let current: Promise<void> | null = null;
 let state: AgentCliUpdateState = {
   status: "idle",
+  action: "install",
   agents: [],
   reason: null,
   started_at: null,
   finished_at: null,
   exit_code: null,
   error: null,
+  failure: null,
   stdout_tail: "",
   stderr_tail: "",
 };
@@ -61,7 +121,7 @@ function updateScriptPath(): string {
 }
 
 export function getAgentCliUpdateStatus(): AgentCliUpdateState {
-  return { ...state, agents: [...state.agents] };
+  return { ...state, agents: [...state.agents], failure: state.failure ? { ...state.failure } : null };
 }
 
 export function installableAgentNames(): string[] {
@@ -85,12 +145,14 @@ function immediate(status: UpdateStatus, agents: string[], reason: string, error
   const now = new Date().toISOString();
   state = {
     status,
+    action: "install",
     agents,
     reason,
     started_at: now,
     finished_at: now,
     exit_code: status === "succeeded" ? 0 : null,
     error,
+    failure: null,
     stdout_tail: status === "succeeded" ? "No installed agent CLIs to update.\n" : "",
     stderr_tail: "",
   };
@@ -111,7 +173,19 @@ export function startInstalledAgentCliUpdate(reason = "manual"): AgentCliUpdateS
   return startAgentCliUpdates(agents, reason);
 }
 
-function startAgentCliUpdates(requested: string[], reason: string): AgentCliUpdateState {
+/** Remove one provider's CLI from the tools volume (its sign-in in HOME is kept). */
+export function startAgentCliRemove(agent: string, reason = "manual"): AgentCliUpdateState {
+  if (current) return getAgentCliUpdateStatus();
+  const agents = normalizedAgents([agent]);
+  if (!agents.length) return immediate("failed", [], reason, `Agent ${agent} is not installable.`);
+  return startAgentCliUpdates(agents, reason, "remove");
+}
+
+function startAgentCliUpdates(
+  requested: string[],
+  reason: string,
+  action: "install" | "remove" = "install"
+): AgentCliUpdateState {
   if (current) return getAgentCliUpdateStatus();
 
   const agents = normalizedAgents(requested);
@@ -120,12 +194,14 @@ function startAgentCliUpdates(requested: string[], reason: string): AgentCliUpda
   const script = updateScriptPath();
   state = {
     status: "running",
+    action,
     agents,
     reason,
     started_at: new Date().toISOString(),
     finished_at: null,
     exit_code: null,
     error: null,
+    failure: null,
     stdout_tail: "",
     stderr_tail: "",
   };
@@ -136,7 +212,8 @@ function startAgentCliUpdates(requested: string[], reason: string): AgentCliUpda
       ...spawnOptions.env,
       CAIRN_AGENT_CLI_MANIFEST: path.join(__dirname, "..", "agents.json"),
     };
-    const child = spawn(script, agents, spawnOptions);
+    log.info(`[agent-clis] ${action} started`, { agents, reason });
+    const child = spawn(script, action === "remove" ? ["--remove", ...agents] : agents, spawnOptions);
 
     child.stdout.on("data", (chunk) => {
       state.stdout_tail = appendTail(state.stdout_tail, chunk);
@@ -147,6 +224,7 @@ function startAgentCliUpdates(requested: string[], reason: string): AgentCliUpda
     child.on("error", (err) => {
       state.status = "failed";
       state.error = err.message;
+      log.warn(`[agent-clis] ${action} could not start`, { agents, error: err.message });
       state.finished_at = new Date().toISOString();
       current = null;
       resolve();
@@ -154,18 +232,35 @@ function startAgentCliUpdates(requested: string[], reason: string): AgentCliUpda
     child.on("close", (code) => {
       state.status = code === 0 ? "succeeded" : "failed";
       state.exit_code = code;
-      if (code !== 0 && !state.error) {
-        const tail = state.stderr_tail.trim().split(/\r?\n/).filter(Boolean).at(-1);
-        state.error = tail || `installer exited with status ${code}`;
+      if (code !== 0) {
+        state.failure = parseInstallFailure(state.stderr_tail);
+        if (!state.error) {
+          const tail = state.stderr_tail
+            .trim()
+            .split(/\r?\n/)
+            .filter((line) => line && !line.startsWith(FAILURE_PREFIX))
+            .at(-1);
+          state.error = state.failure?.message || tail || `installer exited with status ${code}`;
+        }
+        // The headline reason, the disk it saw — never the CLI's own output.
+        log.warn(`[agent-clis] ${action} failed`, {
+          agents,
+          reason: state.failure?.reason ?? "failed",
+          free_mb: state.failure?.free_mb ?? null,
+          need_mb: state.failure?.need_mb ?? null,
+          exit_code: code,
+        });
+      } else {
+        log.info(`[agent-clis] ${action} succeeded`, { agents });
       }
       state.finished_at = new Date().toISOString();
       current = null;
       // A successful update may have changed installed versions / model catalogs —
       // drop the cached version/model reads so the Settings cards refresh without a
       // server restart.
-      if (code === 0) {
-        for (const agent of agents) invalidateAgentConfigured(agent);
-      }
+      // Either way the installed set may have changed (a failed install removes a CLI
+      // that would not start), so drop the cached presence/version reads.
+      for (const agent of agents) invalidateAgentConfigured(agent);
       resolve();
     });
   });

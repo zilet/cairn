@@ -43,6 +43,9 @@ Right-click the service, choose **Attach Volume**, and set the mount path to:
 ```
 
 Railway allows one volume per service, which is exactly what Cairn's single-volume mode expects.
+Size matters: a trial volume is 0.5 GB, which fits about one AI provider's tool (Grok ~180 MB,
+Google ~220 MB, Claude ~260 MB, ChatGPT ~400 MB). On Hobby, 5 GB fits them all; an existing volume
+grows with **Live Resize** on the volume after upgrading.
 The database, uploads, provider sign-ins and installed AI tools all live under `/data`. Do **not**
 set `RAILWAY_RUN_UID`. The image starts as root only long enough to fix the volume's ownership,
 then drops to its unprivileged `app` user.
@@ -102,7 +105,8 @@ Suggested text for the template page:
 > generated for you: find it on the **Variables** tab as `CAIRN_AUTH_TOKEN`. To use the AI coach,
 > connect your own Claude, ChatGPT, Google or Grok subscription in **Settings → Agents**. Updates
 > arrive automatically in your maintenance window (**Settings → Source → Configure Auto Updates**).
-> At least 1 GB of memory is recommended for AI coaching. Guide:
+> At least 1 GB of memory is recommended for AI coaching. A trial volume is 0.5 GB, enough for
+> about one AI provider; on Hobby, grow the volume to 5 GB (click the volume → **Live Resize**). Guide:
 > https://github.com/zilet/cairn/blob/main/docs/HOSTING.md
 
 ## 8. Publish and wire up the button

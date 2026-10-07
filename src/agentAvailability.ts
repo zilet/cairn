@@ -24,7 +24,12 @@ export type AgentAvailabilityState =
   | "payment_required"
   | "permission_denied"
   | "process_error"
-  | "invalid_output";
+  | "invalid_output"
+  // The SERVER ran out of a resource, not the provider: a full disk (ENOSPC) or a
+  // child killed for memory (SIGKILL / exit 137 the CLI did not ask for). Named so
+  // every surface can lead with what the person can do about it.
+  | "disk_full"
+  | "out_of_memory";
 
 export type AgentLimitWindow = "5h" | "7d";
 
@@ -44,6 +49,9 @@ const HOLDING_STATES = new Set<AgentAvailabilityState>([
   "rate_limited",
   "auth_required",
   "payment_required",
+  // A full disk fails every spawn the same way until someone frees space; hold on the
+  // same short re-probe leash as a sign-in. Memory is not held: one run at a time may fit.
+  "disk_full",
 ]);
 
 export function availabilityHolds(state: AgentAvailabilityState): boolean {
@@ -250,6 +258,12 @@ const AUTH_PATTERNS: RegExp[] = [
   /\bunauthenticated\b/,
   /\bapi key\b.{0,40}\b(missing|required|invalid)\b/,
   /\b(missing|required|invalid)\b.{0,40}\bapi key\b/,
+  // The provider's own 401 envelope ("authentication_error", "invalid x-api-key",
+  // "OAuth token has expired") — what a signed-out or lapsed CLI prints in print mode.
+  /\bauthentication_error\b/,
+  /\binvalid x-api-key\b/,
+  /\boauth token (has )?(expired|been revoked)\b/,
+  /\b401\b.{0,24}\bunauthorized\b/,
 ];
 
 const AUTH_INFRA_MAX_CHARS = 800;
@@ -373,12 +387,17 @@ export function classifyLimitBannerText(raw: string, stderr: string, now: Date =
  */
 export function classifyAgentFailure(
   _agent: string,
-  r: { code: number | null; raw: string; stderr: string },
+  r: { code: number | null; raw: string; stderr: string; signal?: string | null },
   now: Date = new Date()
 ): AgentFailure | null {
   const raw = String(r.raw ?? "");
   const stderr = String(r.stderr ?? "");
   const combined = `${raw}\n${stderr}`;
+
+  // 0. The server itself ran out of room. Conclusive and the person's to fix, so it
+  //    beats every provider reading below.
+  const resource = resourceFailure(r);
+  if (resource) return resource;
 
   // 1. The structured stream event beats every prose reading.
   const event = parseStreamRateLimitEvent(combined);
@@ -437,6 +456,44 @@ export function classifyAgentFailure(
   };
 }
 
+// ENOSPC / "No space left on device" (Node, npm, Go and Rust CLIs all say one of these).
+const DISK_FULL = /\bENOSPC\b|no space left on (the )?device|disk quota exceeded/i;
+// A memory kill: the kernel/cgroup OOM killer sends SIGKILL (a shell-wrapped child
+// reports 137), and a runtime that fails to allocate says so.
+const OUT_OF_MEMORY = /\bENOMEM\b|cannot allocate memory|heap out of memory|fatal error: (runtime: )?out of memory|memory allocation of \d+ bytes failed/i;
+
+/**
+ * The resource arm of the classifier, usable on its own (install, login, probe):
+ * a full disk or a memory kill, else null. Only for a run that FAILED — a SIGKILL
+ * Cairn sent itself (timeout, Stop) never reaches here, because those paths reject
+ * before a result is read.
+ */
+export function resourceFailure(r: { code: number | null; raw?: string; stderr?: string; signal?: string | null }): AgentFailure | null {
+  const combined = `${r.raw ?? ""}\n${r.stderr ?? ""}`;
+  if (DISK_FULL.test(combined)) {
+    return { state: "disk_full", window: null, resets_at: null, detail: "The server's disk is full" };
+  }
+  if (r.signal === "SIGKILL" || r.code === 137 || OUT_OF_MEMORY.test(combined)) {
+    return { state: "out_of_memory", window: null, resets_at: null, detail: "The server ran out of memory" };
+  }
+  return null;
+}
+
+/**
+ * The headline a PERSON reads for a server-resource failure, with what to do about
+ * it. One wording for every surface (welcome, Meet, chat, Settings); raw CLI text
+ * stays under details.
+ */
+export function resourceFailureHeadline(state: AgentAvailabilityState, label: string): string | null {
+  if (state === "disk_full") {
+    return `Your server's disk is full, so ${label} couldn't work. Use a bigger volume or remove a provider you don't use.`;
+  }
+  if (state === "out_of_memory") {
+    return `Your server ran out of memory while ${label} was working. A bigger plan or one provider at a time helps.`;
+  }
+  return null;
+}
+
 const HOLD_CAP_MS = 8 * 86_400_000;
 
 /**
@@ -462,6 +519,7 @@ export function holdUntil(f: AgentFailure, streak: number, now: Date = new Date(
     case "payment_required":
       return cap(24 * 3_600_000);
     case "auth_required":
+    case "disk_full":
       return cap(30 * 60_000);
     default:
       return null;
@@ -489,6 +547,10 @@ export function availabilityReason(
       return "blocked by a headless permission rule";
     case "invalid_output":
       return "ran but returned no valid JSON";
+    case "disk_full":
+      return "the server's disk is full";
+    case "out_of_memory":
+      return "the server ran out of memory";
     default:
       return "the CLI failed";
   }

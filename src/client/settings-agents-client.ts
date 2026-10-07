@@ -207,6 +207,7 @@ function settingsAgentCardHtml(options: SettingsAgentsListOptions, name: string,
           </div>
           <div class="agent-card-actions">
             ${installButton}
+            ${present && agent.installable ? `<button class="linkbtn-quiet agent-detail-link" data-remove="${escAttr(name)}" title="Free its disk space; its sign-in is kept">remove</button>` : ""}
             ${present && agent.can_login ? `<button class="ghostbtn agent-connect-btn" data-connect="${escAttr(name)}">Connect</button>` : ""}
             ${present ? `<button class="linkbtn-quiet agent-detail-link" data-detail="${escAttr(name)}">${cached ? "details" : "check"}</button>` : ""}
             ${present && agent.models_list ? `<button class="linkbtn-quiet agent-detail-link" data-models="${escAttr(name)}">${Array.isArray(models) ? "hide models" : "view models"}</button>` : ""}
@@ -247,6 +248,8 @@ const SETTINGS_AGENT_FAIL_WORDS: Record<string, string> = {
   rate_limited: "an agent was busy",
   payment_required: "an agent's plan needs credit",
   timeout: "an agent took too long",
+  disk_full: "the server's disk is full — use a bigger volume or remove a provider",
+  out_of_memory: "the server ran out of memory — a bigger plan or one provider at a time helps",
 };
 
 // Settings > Agents: ONE quiet line for where the agent layer stands NOW. It used to

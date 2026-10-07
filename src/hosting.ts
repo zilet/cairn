@@ -252,3 +252,54 @@ export async function applyUpdate(options: ApplyUpdateOptions = {}): Promise<App
       : "Update requested. The updater on this machine will fetch the latest release and restart Cairn within a few minutes.";
   return { ok: true, method, message };
 }
+
+// ---------- the disk the provider CLIs live on ----------
+// A Railway trial volume is 0.5 GB: one AI provider's CLI (180–400 MB) nearly fills it.
+// The welcome's provider picker says so up front, in one calm line, instead of letting a
+// second install fail. Read on the CLI root (where installs land: HOME/.cairn-tools,
+// the data volume in single-volume mode), from its nearest existing directory.
+
+/** Below this total, a hosted server's disk fits about one provider. */
+export const SMALL_DISK_MB = 1536;
+
+export interface ServerDisk {
+  platform: HostPlatform;
+  total_mb: number | null;
+  /** Railway with a volume under SMALL_DISK_MB — the welcome shows its one-line note. */
+  small: boolean;
+}
+
+export function cliRootDir(env: Env = process.env): string | null {
+  if (env.CAIRN_CLI_ROOT) return path.resolve(env.CAIRN_CLI_ROOT);
+  const home = env.HOME || env.USERPROFILE || "";
+  return home ? path.join(home, ".cairn-tools") : null;
+}
+
+/** Total and free MB of the filesystem holding `dir` (its nearest existing ancestor). */
+export function diskSpaceMb(dir: string): { total_mb: number; free_mb: number } | null {
+  let at = path.resolve(dir);
+  for (;;) {
+    try {
+      const st = fs.statfsSync(at);
+      const mb = (blocks: number | bigint) => Math.floor((Number(blocks) * Number(st.bsize)) / (1024 * 1024));
+      return { total_mb: mb(st.blocks), free_mb: mb(st.bavail) };
+    } catch {
+      const up = path.dirname(at);
+      if (up === at) return null;
+      at = up;
+    }
+  }
+}
+
+export function serverDiskRead(env: Env = process.env): ServerDisk {
+  const platform = detectPlatform(env);
+  const dir = cliRootDir(env);
+  const space = dir ? diskSpaceMb(dir) : null;
+  return {
+    platform,
+    // Free space is left out on purpose: it moves on every write, and /settings is a
+    // memoized, ETagged read that must answer byte-identically while nothing changed.
+    total_mb: space?.total_mb ?? null,
+    small: platform === "railway" && space != null && space.total_mb < SMALL_DISK_MB,
+  };
+}

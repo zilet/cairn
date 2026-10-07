@@ -69,23 +69,22 @@ function settingsFirstMetric(row: Record<string, unknown>, ...keys: string[]): u
   return null;
 }
 
+const SETTINGS_ATTEMPT_STATUS: Record<string, [string, string, string]> = {
+  auth_required: ["connect", "actlog-auth", "Agent is not connected"],
+  quota_exhausted: ["limit", "actlog-limit", "The provider's usage limit was reached"],
+  rate_limited: ["busy", "actlog-retry", "The provider was busy"],
+  payment_required: ["credit", "actlog-limit", "The provider needs credit"],
+  permission_denied: ["permission", "actlog-retry", "A headless permission rule blocked the run"],
+  disk_full: ["disk full", "actlog-limit", "The server's disk is full"],
+  out_of_memory: ["memory", "actlog-limit", "The server ran out of memory"],
+  empty_reply: ["empty", "actlog-retry", "No assistant text returned"],
+  timeout: ["timeout", "actlog-retry", "The CLI timed out"],
+};
+
 function settingsAttemptStatus(row: Record<string, unknown>): { label: string; cls: string; title: string } {
   if (row.ok) return { label: "clean", cls: "actlog-clean", title: "Completed cleanly" };
-  const status = String(row.status || row.error_class || "");
-  if (status === "auth_required")
-    return { label: "connect", cls: "actlog-auth", title: String(row.error_message || "Agent is not connected") };
-  if (status === "quota_exhausted")
-    return { label: "limit", cls: "actlog-limit", title: String(row.error_message || "The provider's usage limit was reached") };
-  if (status === "rate_limited")
-    return { label: "busy", cls: "actlog-retry", title: String(row.error_message || "The provider was busy") };
-  if (status === "payment_required")
-    return { label: "credit", cls: "actlog-limit", title: String(row.error_message || "The provider needs credit") };
-  if (status === "permission_denied")
-    return { label: "permission", cls: "actlog-retry", title: String(row.error_message || "A headless permission rule blocked the run") };
-  if (status === "empty_reply")
-    return { label: "empty", cls: "actlog-retry", title: String(row.error_message || "No assistant text returned") };
-  if (status === "timeout")
-    return { label: "timeout", cls: "actlog-retry", title: String(row.error_message || "The CLI timed out") };
+  const known = SETTINGS_ATTEMPT_STATUS[String(row.status || row.error_class || "")];
+  if (known) return { label: known[0], cls: known[1], title: String(row.error_message || known[2]) };
   if (row.tried_json)
     return { label: "retried", cls: "actlog-retry", title: String(row.error_message || "Needed a retry") };
   return { label: "failed", cls: "actlog-retry", title: String(row.error_message || "The CLI failed") };
@@ -675,6 +674,7 @@ function agentAvailabilityChip(agent: Record<string, unknown>, now: Date): Setti
     return { cls: "agent-chip-limit", label: retry ? `Busy · retry in ${retry}` : "Busy" };
   }
   if (state === "payment_required") return { cls: "agent-chip-limit", label: "Needs credit" };
+  if (state === "disk_full") return { cls: "agent-chip-limit", label: "Server disk full · free space" };
   return null; // auth_required keeps the existing Connect → affordance
 }
 

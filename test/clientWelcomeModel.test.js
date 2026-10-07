@@ -83,9 +83,10 @@ test("Hello offers each provider by its own plan line, and a connected one says 
   const { CairnWelcomeClient: c } = load();
   const html = c.helloHtml([
     { name: "claude", label: "Claude", plan: "Claude Pro or Max", usable: false, present: false, installable: true, canLogin: true, configured: null },
-    { name: "codex", label: "ChatGPT", plan: "Sign in with ChatGPT", usable: true, present: true, installable: true, canLogin: true, configured: true },
+    { name: "codex", label: "ChatGPT", plan: "Sign in with ChatGPT", usable: true, present: true, installable: true, canLogin: true, configured: true, signedIn: true },
   ]);
   assert.match(html, /A coach that reads your whole picture\./);
+  assert.doesNotMatch(html, /small disk/, "no disk note unless the server says its disk is small");
   assert.match(html, /data-wel-pick="claude"[\s\S]*Claude Pro or Max/);
   assert.match(html, /data-wel-pick="codex"[\s\S]*Connected/);
   assert.match(html, /I don't have one yet/);
@@ -93,4 +94,12 @@ test("Hello offers each provider by its own plan line, and a connected one says 
   // "Settings → Agents" is the name of a place in the app, not machinery talk.
   const words = html.replace(/<[^>]*>/g, " ").replace(/Settings \u2192 Agents/g, "");
   assert.doesNotMatch(words, /\bCLI\b|\bagents?\b/i, "no machinery words in the primary copy");
+});
+
+test("a hosted server with a small disk says so once, calmly, on the provider picker", () => {
+  const { CairnWelcomeClient: c } = load();
+  const html = c.helloHtml([], false, { total_mb: 434 });
+  assert.match(html, /This server has a small disk \(0\.5 GB\), enough for one AI provider\. A bigger volume fits more\./);
+  assert.equal(c.diskNoteHtml(null), "");
+  assert.doesNotMatch(c.helloHtml([], true, { total_mb: 434 }), /small disk/, "not while the server is unreachable");
 });

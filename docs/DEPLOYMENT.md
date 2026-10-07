@@ -356,8 +356,10 @@ The bundled manifest pins npm versions and vendor checksums. The shell equivalen
 docker compose exec -u app cairn cairn-update-agent-clis claude codex
 ```
 
-There is no unverified-install override. Antigravity/Grok installation fails closed until a Cairn
-release carries the newly audited checksum. Existing credentials remain in `cairn-home` while a
+Antigravity and Grok install a pinned, versioned vendor build checked against its SHA-512/SHA-256;
+a mismatch installs nothing. When that build is no longer downloadable (vendors prune old releases)
+or no pin fits the host, Cairn runs the vendor's own documented installer, fetched over HTTPS from
+the vendor's host — so an older Cairn stays installable. Existing credentials remain in `cairn-home` while a
 tool is absent, so an upgrade from an older all-CLI image needs only **Install**, not a new login.
 
 ---

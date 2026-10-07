@@ -12,7 +12,7 @@ The OAuth 2.1 doors an AI app signs in through for `/mcp` (`/.well-known/oauth-*
 [OPERATIONS.md](OPERATIONS.md) "Connect an AI app (MCP)".
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**400 routes** across 134 groups.
+**401 routes** across 134 groups.
 
 ## `/activities`
 
@@ -36,6 +36,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | Method | Path | Notes |
 |---|---|---|
 | POST | `/api/agent-clis/:name/install` |  |
+| POST | `/api/agent-clis/:name/remove` | Remove one provider's CLI from the tools volume to free disk (its sign-in stays in HOME, so a later Install needs no new login). Polled on GET /agent-clis/update. |
 | GET | `/api/agent-clis/update` |  |
 | POST | `/api/agent-clis/update` | Backward-compatible bulk update: refresh only CLIs the user already installed; never turns a lean image back into an all-provider image. |
 

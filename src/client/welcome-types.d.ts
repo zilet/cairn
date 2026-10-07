@@ -14,6 +14,8 @@ type CoachLinkProvider = {
   canLogin: boolean;
   /** Signed in, as far as the server's login probe knows (null: undetectable). */
   configured: boolean | null;
+  /** POSITIVELY signed in (the probe said yes, or it answered a hello). Never from null. */
+  signedIn: boolean;
 };
 
 type CoachLinkModel = {
@@ -21,8 +23,12 @@ type CoachLinkModel = {
   /** The coach's own welcome (stage 3) has happened. Absent on an older server → true. */
   welcomed: boolean;
   providers: CoachLinkProvider[];
-  /** The providers that can coach right now. */
+  /** The providers the rotation may use (an undetectable login included). */
   usable: CoachLinkProvider[];
+  /** Usable AND positively signed in: the only ones the welcome calls connected. */
+  ready: CoachLinkProvider[];
+  /** Set when a hosted server's disk fits only about one provider (the picker says so). */
+  smallDisk?: { total_mb: number } | null;
 };
 
 type WelcomeStage = "hello" | "connect" | "meet";
@@ -92,7 +98,8 @@ type WelcomeReveal = {
 };
 
 type WelcomeClientApi = {
-  helloHtml(providers: CoachLinkProvider[], unreachable?: boolean): string;
+  helloHtml(providers: CoachLinkProvider[], unreachable?: boolean, smallDisk?: CoachLinkModel["smallDisk"]): string;
+  diskNoteHtml(smallDisk?: CoachLinkModel["smallDisk"]): string;
   connectHtml(provider: CoachLinkProvider): string;
   cairnHtml(laid: number, idPrefix: string): string;
   meetHtml(provider: CoachLinkProvider | null): string;
@@ -101,7 +108,8 @@ type WelcomeClientApi = {
   workingHtml(): string;
   phasesHtml(current: number, finished: boolean): string;
   revealHtml(reveal: WelcomeReveal): string;
-  failBubbleHtml(message: string): string;
+  /** `signIn`: the provider is signed out, so the way on is its sign-in. */
+  failBubbleHtml(message: string, signIn?: boolean): string;
   doneDockHtml(inPlace: boolean): string;
 };
 

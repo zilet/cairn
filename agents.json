@@ -11,7 +11,7 @@
     "research_note": "Headless `claude -p` has WebSearch/WebFetch available, so it can do live evidence research for the grounding layer (settings.research_enabled). Extra fields here are informational only — runAgent reads just command/args/input/env_required.",
     "login": ["auth", "login"],
     "status_check": ["auth", "status"],
-    "auth_state": [".claude.json", ".claude"],
+    "auth_state": [".claude/.credentials.json"],
     "models_list": null,
     "model_flag": ["--model", "{model}"],
     "model_classes": { "fast": "sonnet", "deep": "fable" },
@@ -28,7 +28,9 @@
     "install": {
       "method": "npm",
       "package": "@anthropic-ai/claude-code",
-      "version": "2.1.283"
+      "version": "2.1.283",
+      "size_mb": 260,
+      "size_note": "npm 2026-10-07: @anthropic-ai/claude-code-linux-x64@2.1.283 unpacks to 241.6 MB (arm64 240.9 MB); the launcher package is 0.2 MB. npm's cache lives in a deleted temp dir, not on the data volume."
     },
     "stream": {
       "format": "claude",
@@ -63,7 +65,9 @@
       "method": "npm",
       "package": "@openai/codex",
       "version": "0.157.1",
-      "args": ["--include=optional"]
+      "args": ["--include=optional"],
+      "size_mb": 400,
+      "size_note": "npm 2026-10-07: @openai/codex@0.157.1-linux-x64 unpacks to 391.1 MB (linux-arm64 345.0 MB)."
     }
   },
   "antigravity": {
@@ -75,9 +79,12 @@
     "plan": "Your Google account",
     "env_required": [],
     "login": [],
+    "login_note": "agy 1.3.1 has no login/auth subcommand (`agy --help` subcommands: agent(s), changelog, help, install, mcp, mic-serve, models, plugin(s), remote-control, update). Bare `agy` IS the sign-in: signed out, `agy models` answers 'Error: Please sign in to view available models. Launch the CLI without arguments to sign in.' Google's install docs: on a remote host the CLI prints an authorization URL, the browser shows a code, and the person pastes it into the terminal. So the empty argv is deliberate (the PTY runs bare `agy`), and the sign-in never exits on its own — the panel asks the person to say when they're done. Print mode (`-p …`) also prints the URL and a paste prompt, but its wait is a fixed 60s ('Waiting for authentication (timeout 60s)…'), too short to rely on for a human.",
     "status_check": ["-p", "/quota", "--output-format", "json"],
-    "status_note": "agy 1.1.24: `-p /quota --output-format json` answers WITHOUT an agent turn (no quota spent, no conversation left behind) and returns {status:'SUCCESS', command:{name:'usage', data:{groups:[{buckets:[{window:'weekly'|'5h', remaining_fraction, reset_time}]}]}}} — a signed-in banner AND the live limit state in one probe. Parsed by parseStatusOutput/parseAgyQuota in src/agents.ts. `agy models` (the previous probe) fetched the catalog over the network on every boot and said nothing about quota.",
-    "auth_state": [".gemini"],
+    "status_note": "Re-verified signed-OUT on agy 1.3.1 (2026-10-07): the probe no longer fails fast — it prints 'Authentication required. Please visit the URL to log in:' plus a Google OAuth URL on stdout and then WAITS up to 60s for a pasted code, so a short spawn timeout ends it with that text already on stdout (parse it as signed out; never as undetectable). agy 1.1.24: `-p /quota --output-format json` answers WITHOUT an agent turn (no quota spent, no conversation left behind) and returns {status:'SUCCESS', command:{name:'usage', data:{groups:[{buckets:[{window:'weekly'|'5h', remaining_fraction, reset_time}]}]}}} — a signed-in banner AND the live limit state in one probe. Parsed by parseStatusOutput/parseAgyQuota in src/agents.ts. `agy models` (the previous probe) fetched the catalog over the network on every boot and said nothing about quota.",
+    "auth_state": [],
+    "auth_state_note": "Deliberately empty: agy creates ~/.gemini (config/, antigravity-cli/) on ANY run, the signed-out status probe included (verified on 1.3.1 in an empty HOME), so the directory proves nothing. agy keeps its token in the OS keyring (Google's docs) and, without one, in a fallback store whose path is not documented; until that file is verified on a container, the /quota probe is the only evidence.",
+    "status_timeout_ms": 10000,
     "models_list": ["models"],
     "model_flag": ["--model", "{model}"],
     "capabilities": { "model": true, "reasoning": ["low", "medium", "high"] },
@@ -94,10 +101,19 @@
       "note": "agy 1.1.8 gained what 1.1.7 had none of: '--json-schema  Optional JSON schema string or path to a schema file to enforce structured output'. Unlike grok it does NOT imply the output format — `agy -p … --json-schema …` alone exits with '--json-schema can only be used when --output-format is json or stream-json', so the format flag is part of this template rather than a separate slot. Verified live on 1.1.8: with both flags stdout is a telemetry ENVELOPE — {conversation_id, status, response, duration_seconds, num_turns, structured_output, json_schema, usage} — so the first `{` is NOT the contract. `structured_output` carries the parsed payload and `response` the same payload as a string, hence the envelope declaration; without it an op would receive the telemetry object. Both flags ride the {schema_args} slot, so a run with no RunOpts.schema still gets plain text and the prose contract + extractJson path."
     },
     "install": {
-      "method": "script",
-      "url": "https://antigravity.google/cli/install.sh",
-      "sha256": "ee1ea43ce4e9e56356c4ab6dad907ef357ae4bdfcaadb682735909fb57c9c640",
-      "update_args": ["update"]
+      "method": "binary",
+      "version": "1.3.1",
+      "artifacts": {
+        "linux-x64": { "url": "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.3.1-4582356770750464/linux-x64/cli_linux_x64.tar.gz", "sha512": "3b8349d72678795baf8788481815e20d7acf3b80f9d2f867a607e712bc6be7fb18fd7d4fcf3aeee4ae593b0f469684c6d3497524f10a4c426a1a2bdec20b1f68", "archive": "tar.gz", "entry": "antigravity" },
+        "linux-arm64": { "url": "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.3.1-4582356770750464/linux-arm/cli_linux_arm64.tar.gz", "sha512": "c41b8cd8c526eb043fa0b019377ab8109190b547624f17f5255868ace79cd8e9195a60ac7b89478101127effbe049341c4108ed0ead4b160968704a8b79d8799", "archive": "tar.gz", "entry": "antigravity" },
+        "darwin-arm64": { "url": "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.3.1-4582356770750464/darwin-arm/cli_mac_arm64.tar.gz", "sha512": "f44ce2b9935c87966a842f45477b13e62e1ef8a22312ab1901b180bed88dd615fad5940968e80afc26540b5e02e5701b55521499e64c915ba3f736333698d69d", "archive": "tar.gz", "entry": "antigravity" },
+        "darwin-x64": { "url": "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.3.1-4582356770750464/darwin-x64/cli_mac_x64.tar.gz", "sha512": "8c45c547b6d1c405f91818125b4d9bf409689a3639ce72323ec1f9822c6eb68b360a198511f94a95e33ff651fbcc1e60b2209d9999ada8032d498ee947c99b56", "archive": "tar.gz", "entry": "antigravity" }
+      },
+      "script": "https://antigravity.google/cli/install.sh",
+      "update_args": ["update"],
+      "size_mb": 220,
+      "cleanup": [".local/bin/agy"],
+      "note": "Pinned to Google's own release manifest (https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/<platform>.json, read 2026-10-07): each platform's versioned GCS tarball and the SHA-512 that manifest publishes for it. install.sh itself is MUTABLE — it is a bootstrapper that reads that same manifest, downloads the tarball, checks its SHA-512 and copies `antigravity` to ~/.local/bin/agy — so pinning the script's own sha256 bricked setup the day Google edited it (ee1ea43c… → 62966c07…). A versioned tarball never changes under its URL, so its pin cannot go stale; when Google prunes it, or no pin fits the host (musl), scripts/install-agent-cli.mjs runs install.sh fetched over HTTPS from antigravity.google instead. Once installed, `agy update` (and agy's own background self-update) keeps it current."
     }
   },
   "grok": {
@@ -110,7 +126,8 @@
     "env_required": [],
     "login": ["login", "--device-auth"],
     "status_check": ["models"],
-    "status_note": "grok 1.0.13 has login/logout but no status subcommand. `grok models` is the cheapest authenticated call: signed in it prints 'Available models:' (and 'You are using XAI_API_KEY.' when the env key is the credential), so that banner is the positive signal; anything else falls through to auth_state (~/.grok/auth.json from the in-app device-auth login).",
+    "login_note": "Re-verified on grok 1.0.46 (2026-10-07): `grok login --device-auth` (alias --device-code) still exists and needs no TTY. It prints 'To sign in, open this URL in your browser:' + https://accounts.x.ai/oauth2/device?user_code=XXXX-XXXX, then 'Confirm this code in your browser:' + the bare code, then waits ('Waiting for authorization...'). Tokens land in ~/.grok/auth.json.",
+    "status_note": "CHANGED on grok 1.0.46 (2026-10-07): signed OUT, `grok models` exits 0 and prints 'You are not authenticated.' ABOVE 'Default model: …' and 'Available models:' — so 'Available models:' alone is no longer a signed-in signal; 'You are not authenticated' must be read first, as signed out. grok 1.0.13 has login/logout but no status subcommand. `grok models` is the cheapest authenticated call: signed in it prints 'Available models:' (and 'You are using XAI_API_KEY.' when the env key is the credential), so that banner is the positive signal; anything else falls through to auth_state (~/.grok/auth.json from the in-app device-auth login).",
     "auth_state": [".grok/auth.json"],
     "models_list": ["models"],
     "model_flag": ["--model", "{model}"],
@@ -125,10 +142,19 @@
       "note": "grok 0.2.114 --help: '--json-schema <SCHEMA>  JSON Schema for structured output. When set, the model is constrained to produce JSON matching this schema. Implies --output-format json.' That implied switch is why `envelope` exists: verified live, stdout becomes {text, thought, usage, …, structuredOutput} — the first `{` is the ENVELOPE, so without unwrapping, extractJson would hand the op a telemetry object (and `thought` would drag raw reasoning into it). Deliberately absent from `stream.args`: --json-schema would override --output-format streaming-json. Re-verified live on grok 1.0.13 (2026-09-02, a major bump): `-p` is now `-p, --single <PROMPT>`, `--cwd`, `--json-schema`, `--reasoning-effort` (alias --effort) and `-m/--model` all still exist; the json envelope keys {text, thought, structuredOutput} are unchanged; `--output-format` offers plain|json|streaming-json|streaming-messages-json and streaming-json still emits {type:\"text\"|\"thought\", data} lines, so the stream adapter in src/agents.ts is unchanged. Vendor `update` writes to ~/.grok/bin; scripts/install-agent-cli.mjs persists the newest build to .cairn-tools/bin."
     },
     "install": {
-      "method": "script",
-      "url": "https://x.ai/cli/install.sh",
-      "sha256": "7fd6fdc75d9418b2e58356726fcbf1ae849416f773925da07d0ccc7a60d3e791",
-      "update_args": ["update"]
+      "method": "binary",
+      "version": "1.0.46",
+      "artifacts": {
+        "linux-x64": { "url": "https://x.ai/cli/grok-1.0.46-linux-x86_64.gz", "sha256": "0cc2a4aa40c2bf2a7a2c7933a738ea09b7c9fdafd200b53705e1d411617cd70f", "archive": "gz" },
+        "linux-arm64": { "url": "https://x.ai/cli/grok-1.0.46-linux-aarch64.gz", "sha256": "69a7bdf9eb570435ac381213ff4648e5f31dc4e7546313758a7744fd54d8639f", "archive": "gz" },
+        "darwin-arm64": { "url": "https://x.ai/cli/grok-1.0.46-macos-aarch64.gz", "sha256": "0ed0be8365665339e9f04212431b66cb158041843ecc9dccd85a89a47e0900cc", "archive": "gz" },
+        "darwin-x64": { "url": "https://x.ai/cli/grok-1.0.46-macos-x86_64.gz", "sha256": "f03bcf6414c66beec13b4152b2b77b87c8013562a4d312545c57687e1eb8a735", "archive": "gz" }
+      },
+      "script": "https://x.ai/cli/install.sh",
+      "update_args": ["update"],
+      "size_mb": 180,
+      "cleanup": [".grok/downloads", ".grok/bin/grok", ".grok/bin/agent"],
+      "note": "xAI publishes no checksums, so these sha256 pins are Cairn's own, taken 2026-10-07 from the versioned builds install.sh resolves (https://x.ai/cli/stable → 1.0.46; grok-<version>-<os>-<arch>[.gz|.zst], the .gz unpacking to the same binary as the raw file). install.sh is a bootstrapper that verifies nothing beyond the binary running `--version`; it is mutable, so it is only the fallback for a pruned pin (xAI does prune: 0.2.93 is a 404, 1.0.13 still serves) or an unpinned host, fetched over HTTPS from x.ai. `grok update` keeps an installed CLI current."
     },
     "stream": {
       "format": "grok",

@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**309 tools.**
+**310 tools.**
 
 | Tool | Description |
 |---|---|
@@ -257,6 +257,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `record_imaging_analysis` | Store a source-grounded imaging extraction already produced by a file-capable client. Image-AI observations stay unconfirmed and cannot create follow-up recommendations. |
 | `record_movement_tolerance` | Record the athlete's pain-free or pain-present observation for one exact movement and symptom. Two distinct pain-free observations can make only that movement ready for a careful recheck under existing policy; this never resolves the symptom. |
 | `recur_training_symptom` | Reopen one symptom record when the athlete explicitly reports it returned. An optional exact movement/exercise identity scopes the reset; omitting it resets tolerance evidence for every movement linked to that symptom. |
+| `remove_agent_cli` | Remove one coaching CLI from the Cairn tools volume to free disk space. Its sign-in is kept, so installing it again needs no new login. Poll get_agent_cli_install_status for the result. |
 | `reopen_session` | Reopen a finished session to keep logging (clears its finished stamp). |
 | `report_training_symptom` | Record an athlete-explicit area that hurt or ached during training. This is a factual movement-symptom log, not a diagnosis. Pass their FULL sentence as report_text — it is stored verbatim as the record, while area_text stays the short place label the surfaces group by. Use scope 'systemic' when the report is about the whole body rather than one place; a systemic record never gates a movement. |
 | `request_plan_redraw` | Ask the coach to redraw the shape of the training week in the athlete's own words — which days they train, what the week is built around, what to drop (e.g. 'move heavy legs to Thursday', 'build my week around my six anchors', 'drop to three days'). The coach drafts the whole week in the background; under the default lead posture it lands at the next natural boundary with a one-tap Undo, and under review_everything it waits for the athlete to confirm. Asking again with the same words never builds a second week — it points back at the one already in flight. Mirrors POST /api/plan/redraw. Returns the server's own readback: ok/verified, the request row's decision_id, the posture and landing day, and the background build. |

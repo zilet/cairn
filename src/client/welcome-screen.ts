@@ -21,6 +21,13 @@
   let paintSeq = 0;
   // The last read found no server at all (a cold start offline), so Hello says so.
   let unreachable = false;
+  // Providers that answered "say hello" in this session. Meet opens only for one of
+  // these or one the server positively reads as signed in — never on a guess.
+  const answered = new Set<string>();
+
+  function canMeet(p: CoachLinkProvider | null | undefined): boolean {
+    return !!p && (answered.has(p.name) || (p.usable && p.signedIn));
+  }
 
   function urlFor(next: WelcomeStage, name: string | null): string {
     const id = name ? `?id=${encodeURIComponent(name)}` : "";
@@ -46,7 +53,7 @@
     );
   }
 
-  // Hello's three ways on: a provider (straight to Meet when it already works), the
+  // Hello's three ways on: a provider (straight to Meet when it is signed in), the
   // "I don't have one yet" explainer, and "Look around first".
   function onHelloClick(event: Event): void {
     if (stage !== "hello" || !root) return;
@@ -54,7 +61,7 @@
     const pick = target?.closest<HTMLElement>("[data-wel-pick]")?.dataset.welPick;
     if (pick) {
       const p = CairnCoachLink.peek()?.providers.find((x) => x.name === pick);
-      go(p?.usable ? "meet" : "connect", pick);
+      go(canMeet(p) ? "meet" : "connect", pick);
       return;
     }
     const none = target?.closest<HTMLButtonElement>("[data-wel-none]");
@@ -93,14 +100,24 @@
       const hit = model.providers.find((p) => p.name === name);
       if (hit) return hit;
     }
-    return model.usable[0] || null;
+    return model.ready[0] || null;
   }
 
   // A provider the model does not know yet (a cold open of /app/welcome/connect?id=x).
   function placeholder(name: string): CoachLinkProvider {
     const loginModel = (globalThis as { CairnAgentLoginModel?: AgentLoginModelApi }).CairnAgentLoginModel;
     const label = loginModel?.label(name) || name;
-    return { name, label, plan: "", usable: false, present: false, installable: false, canLogin: false, configured: null };
+    return {
+      name,
+      label,
+      plan: "",
+      usable: false,
+      present: false,
+      installable: false,
+      canLogin: false,
+      configured: null,
+      signedIn: false,
+    };
   }
 
   function focusHeading(el: HTMLElement): void {
@@ -121,7 +138,7 @@
     el.dataset.stage = next;
     el.scrollTop = 0;
     if (next === "hello") {
-      el.innerHTML = CairnWelcomeClient.helloHtml(model?.providers || [], !model && unreachable);
+      el.innerHTML = CairnWelcomeClient.helloHtml(model?.providers || [], !model && unreachable, model?.smallDisk ?? null);
     } else if (next === "connect") {
       const p = providerFor(model, name) || placeholder(name || "");
       el.innerHTML = CairnWelcomeClient.connectHtml(p);
@@ -130,17 +147,31 @@
         teardown = CairnWelcomeConnect.mount(pane, {
           provider: p,
           onSwitch: () => go("hello", null),
-          onConnected: (ready) => go("meet", ready.name, { replace: true }),
+          onConnected: (ready) => {
+            answered.add(ready.name);
+            go("meet", ready.name, { replace: true });
+          },
         });
       }
     } else {
       const p = providerFor(model, name);
+      // Meet is the coach's first conversation: it opens only through a provider that is
+      // signed in. Anything else goes to that provider's Connect (or Hello to pick one).
+      if (model && !canMeet(p)) {
+        const target = p?.name || name;
+        go(target ? "connect" : "hello", target || null, { replace: true });
+        return;
+      }
       el.innerHTML = CairnWelcomeClient.meetHtml(p);
       const pane = el.querySelector<HTMLElement>(".wel-meet");
       if (pane) {
         teardown = CairnWelcomeMeet.mount(pane, {
           provider: p,
-          onReconnect: () => go("connect", p?.name || name || null),
+          onReconnect: () => {
+            const target = p?.name || name || null;
+            if (target) answered.delete(target);
+            go(target ? "connect" : "hello", target);
+          },
           onDone: () => close({ markOnboarded: true }),
           onSkip: () => close({ markOnboarded: true }),
         });
@@ -171,8 +202,13 @@
     // re-read inside their controllers.
     void reading.then((model) => {
       if (seq !== paintSeq || !root || stage !== next || next !== "hello" || !model) return;
-      if (JSON.stringify(model.providers) === JSON.stringify(peeked.providers)) return;
       const list = root.querySelector(".wel-provs, .wel-empty");
+      // The small-disk note rides beside the list; it follows the server's own read.
+      const note = root.querySelector(".wel-disk");
+      const noteHtml = CairnWelcomeClient.diskNoteHtml(model.smallDisk ?? null);
+      if (!note && noteHtml && list) list.insertAdjacentHTML("afterend", noteHtml);
+      else if (note && !noteHtml) note.remove();
+      if (JSON.stringify(model.providers) === JSON.stringify(peeked.providers)) return;
       const fresh = document.createElement("template");
       fresh.innerHTML = CairnWelcomeClient.helloHtml(model.providers);
       const replacement = fresh.content.querySelector(".wel-provs, .wel-empty");

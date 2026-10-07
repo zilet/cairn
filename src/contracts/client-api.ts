@@ -457,6 +457,8 @@ export interface ClientAgentInfo {
   usable?: boolean;
   present?: boolean;
   configured?: boolean | null;
+  /** Positively signed in (configured === true and installed) — never inferred from an undetectable login. */
+  signed_in?: boolean;
   availability?: ClientAgentAvailability | null;
   /** Provider-reported usage buckets from the status probe (agy's /quota); [] when unreported. */
   quota?: { group: string; window: string; remaining_fraction: number; reset_time: string | null }[];
@@ -530,6 +532,8 @@ export interface ClientSettingsResponse {
   agents: ClientAgentConfig;
   route_tasks: ClientRouteTask[];
   research_auto_eligible?: boolean;
+  /** The disk provider CLIs install onto; `small` = a hosted volume that fits about one. */
+  server_disk?: { platform: string; total_mb: number | null; small: boolean } | null;
 }
 
 export interface ClientAgentStats {

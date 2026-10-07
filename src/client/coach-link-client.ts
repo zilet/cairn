@@ -6,8 +6,9 @@
 //
 // No agent means no coaching, never a fake one: Ask's composer gives way to one calm
 // connect card (instead of a "No agents enabled" error bubble), and Today carries one
-// line near the top. Once a coach is usable but has not said hello yet, Today's line
-// becomes the invitation to meet it.
+// line near the top. Once a coach is signed in but has not said hello yet, Today's line
+// becomes the invitation to meet it. "Signed in" is a positive verdict only: a login the
+// server cannot read stays a Connect, never a "your coach is connected".
 (() => {
   const KEY = "coach-link";
   const NOT_PROVIDERS = new Set(["stub"]);
@@ -23,6 +24,21 @@
 
   function label(name: string, row: AgentRow): string {
     return text(row.label) || LABELS[name] || name.charAt(0).toUpperCase() + name.slice(1);
+  }
+
+  // Positively signed in. An older server has no `signed_in`: only its explicit
+  // configured:true counts there, never an undetectable login.
+  function signedIn(row: AgentRow): boolean {
+    if (typeof row.signed_in === "boolean") return row.signed_in;
+    return row.configured === true && row.present === true;
+  }
+
+  // A hosted volume that fits about one provider (server_disk.small), else null.
+  function smallDisk(raw: unknown): CoachLinkModel["smallDisk"] {
+    const d = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
+    const total = Number(d?.total_mb);
+    if (!d || d.small !== true || !Number.isFinite(total) || total <= 0) return null;
+    return { total_mb: total };
   }
 
   /** GET /api/settings → the small model every coach-link surface reads. */
@@ -47,6 +63,7 @@
         installable: row.installable === true,
         canLogin: row.can_login === true,
         configured: typeof row.configured === "boolean" ? row.configured : null,
+        signedIn: signedIn(row),
       });
     }
     return {
@@ -56,6 +73,8 @@
       welcomed: settings.coach_welcomed !== false,
       providers,
       usable: providers.filter((p) => p.usable),
+      ready: providers.filter((p) => p.usable && p.signedIn),
+      smallDisk: smallDisk(body.server_disk),
     };
   }
 
@@ -123,7 +142,7 @@
 
   function todayKind(m: CoachLinkModel | null): "today-connect" | "today-hello" | null {
     if (!m || m.welcomed) return null;
-    return m.usable.length ? "today-hello" : "today-connect";
+    return m.ready.length ? "today-hello" : "today-connect";
   }
 
   function paintToday(slot: HTMLElement, m: CoachLinkModel | null): void {

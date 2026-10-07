@@ -946,6 +946,11 @@ export function getAgentConfig() {
       // around, not an exclusion (see src/agentAvailability.ts).
       availability: availabilityFor(name, now),
       usable: enabled && present && env_ok && configured !== false,
+      // POSITIVELY signed in: the login probe (or a real answered round trip) said
+      // yes. `usable` keeps an undetectable (null) login in the rotation so a working
+      // agent is never false-negatived out; the first-run welcome and the coach line
+      // must never call that "connected", so they read this instead.
+      signed_in: present && env_ok && configured === true,
     };
   });
 }

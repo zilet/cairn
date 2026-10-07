@@ -12,21 +12,21 @@
   "bundles": {
     "public/js/bundle-01-core.js": {
       "measured": {
-        "raw": 192076,
-        "brotli": 44059
+        "raw": 193771,
+        "brotli": 44460
       },
       "budget": {
-        "raw": 198656,
+        "raw": 199680,
         "brotli": 46080
       }
     },
     "public/js/bundle-02-today.js": {
       "measured": {
-        "raw": 552371,
-        "brotli": 112667
+        "raw": 552849,
+        "brotli": 112818
       },
       "budget": {
-        "raw": 569344,
+        "raw": 570368,
         "brotli": 116736
       }
     },
@@ -63,8 +63,8 @@
     },
     "public/js/bundle-07-boot.js": {
       "measured": {
-        "raw": 54926,
-        "brotli": 12802
+        "raw": 54925,
+        "brotli": 12807
       },
       "budget": {
         "raw": 57344,
@@ -107,30 +107,30 @@
     "public/js/bundle-15-welcome.js": {
       "lazy": "welcome",
       "measured": {
-        "raw": 54887,
-        "brotli": 14323
+        "raw": 60937,
+        "brotli": 15763
       },
       "budget": {
-        "raw": 58368,
-        "brotli": 15360
+        "raw": 63488,
+        "brotli": 16384
       }
     },
     "public/js/bundle-11-settings.js": {
       "lazy": "settings",
       "measured": {
-        "raw": 176940,
-        "brotli": 38580
+        "raw": 183315,
+        "brotli": 39875
       },
       "budget": {
-        "raw": 182272,
-        "brotli": 39936
+        "raw": 189440,
+        "brotli": 41984
       }
     },
     "public/js/bundle-12-calendar.js": {
       "lazy": "calendar",
       "measured": {
-        "raw": 59937,
-        "brotli": 14715
+        "raw": 60268,
+        "brotli": 14751
       },
       "budget": {
         "raw": 62464,
@@ -151,8 +151,8 @@
     "public/js/bundle-14-today-ahead.js": {
       "lazy": "today-ahead",
       "measured": {
-        "raw": 41813,
-        "brotli": 11110
+        "raw": 41818,
+        "brotli": 11113
       },
       "budget": {
         "raw": 44032,
@@ -162,8 +162,8 @@
     "public/js/bundle-16-auth.js": {
       "lazy": "auth",
       "measured": {
-        "raw": 12961,
-        "brotli": 3545
+        "raw": 13742,
+        "brotli": 3707
       },
       "budget": {
         "raw": 14336,
@@ -172,12 +172,12 @@
     },
     "public/styles.css": {
       "measured": {
-        "raw": 589288,
-        "brotli": 68390
+        "raw": 590866,
+        "brotli": 68614
       },
       "budget": {
-        "raw": 607232,
-        "brotli": 70656
+        "raw": 609280,
+        "brotli": 71680
       }
     },
     "public/art.js": {

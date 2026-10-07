@@ -12,10 +12,15 @@ const PROVIDERS = [
   { name: "stub", label: null, plan: null, usable: false, present: true },
 ];
 
-function settingsBody({ onboarded = false, welcomed = false, usable = [] } = {}) {
+function settingsBody({ onboarded = false, welcomed = false, usable = [], signedIn = usable } = {}) {
   return {
     settings: { onboarded, coach_welcomed: welcomed, art_enabled: false },
-    agents: PROVIDERS.map((a) => ({ ...a, usable: usable.includes(a.name) })),
+    agents: PROVIDERS.map((a) => ({
+      ...a,
+      usable: usable.includes(a.name),
+      configured: signedIn.includes(a.name) ? true : null,
+      signed_in: signedIn.includes(a.name),
+    })),
   };
 }
 
@@ -61,10 +66,16 @@ test("a fresh install opens the welcome at Hello, replacing the landing entry", 
   assert.ok(env.swr.has("coach-link"), "the coach link's model is primed for the stage's first paint");
 });
 
-test("an AI already usable on the server skips straight to meeting the coach", async () => {
+test("an AI already signed in on the server skips straight to meeting the coach", async () => {
   const env = load({ body: settingsBody({ usable: ["codex"] }) });
   await env.win.maybeOnboard();
   assert.deepEqual(env.opened, ["welcome", { stage: "meet", agent: "codex", replace: true }]);
+});
+
+test("an AI whose sign-in the server cannot read opens Hello, never Meet", async () => {
+  const env = load({ body: settingsBody({ usable: ["codex"], signedIn: [] }) });
+  await env.win.maybeOnboard();
+  assert.deepEqual(env.opened, ["welcome", { stage: "hello", replace: true }]);
 });
 
 test("an onboarded install opens nothing and remembers it on this browser", async () => {

@@ -13,6 +13,7 @@
   type WelcomeResult = {
     ok?: boolean;
     error?: string;
+    reason?: string;
     reply?: string;
     week?: unknown;
     week_state?: string;
@@ -78,9 +79,12 @@
       if (!alive) return;
       const result = (raw && typeof raw === "object" ? raw : {}) as WelcomeResult;
       if (result.ok !== true) {
-        note("job_failed");
+        const signedOut = result.reason === "not_signed_in";
+        note(signedOut ? "not_signed_in" : "job_failed");
         working?.remove();
-        fail(CairnWelcomeModel.humanMessage(result.error, `I couldn't reach ${label} just now.`));
+        // Signed out: the way on is that provider's sign-in, not the same message again.
+        fail(CairnWelcomeModel.humanMessage(result.error, `I couldn't reach ${label} just now.`), signedOut);
+        if (signedOut) CairnCoachLink.invalidate();
         return;
       }
       paintPhase(working, null, true);
@@ -115,9 +119,9 @@
       if (alive) CairnWelcomeModel.reportFailure("meet", deps.provider?.name, code);
     };
 
-    function fail(message: string): void {
+    function fail(message: string, signIn = false): void {
       if (!alive) return;
-      append(CairnWelcomeClient.failBubbleHtml(message));
+      append(CairnWelcomeClient.failBubbleHtml(message, signIn));
       setComposer(true);
     }
 

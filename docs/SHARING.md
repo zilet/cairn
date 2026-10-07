@@ -186,8 +186,10 @@ AGENT_CLI_AUTO_UPDATE_INTERVAL_HOURS=168
 Only enable automatic updates on a trusted local or tailnet deployment because it
 runs vendor installer scripts inside the container.
 
-Antigravity and Grok installs fail closed if the downloaded vendor script no longer
-matches the audited checksum. There is no unverified-install override.
+Antigravity and Grok install a pinned, versioned vendor build and refuse one whose
+checksum does not match. Only when that build is gone from the vendor (or no pin fits
+the host) does Cairn fall back to the vendor's own installer, fetched over HTTPS from
+the vendor's host.
 
 ## Publishing Images
 

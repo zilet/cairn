@@ -17,7 +17,12 @@ import { asText, type McpToolRegistrar } from "./shared.js";
 import { getDiagnostics } from "../../repo/diagnostics.js";
 import { unitsRegistryRead } from "../../repo/display-words.js";
 import { athleteUnits } from "../../repo/settings.js";
-import { getAgentCliUpdateStatus, startAgentCliUpdate, startInstalledAgentCliUpdate } from "../../agentCliUpdates.js";
+import {
+  getAgentCliUpdateStatus,
+  startAgentCliRemove,
+  startAgentCliUpdate,
+  startInstalledAgentCliUpdate,
+} from "../../agentCliUpdates.js";
 
 const ROUTABLE_TASK_LIST = ROUTABLE_TASKS.join(", ");
 const AGENT_JOB_KIND_LIST = AGENT_JOB_KINDS.join(", ");
@@ -56,6 +61,13 @@ export function registerOperatorTools(server: McpToolRegistrar) {
     "Install or update one supported coaching CLI into the persistent, regenerable Cairn tools volume. Package names, versions, URLs, and checksums come only from Cairn's bundled allowlist; the caller selects an agent name, never a command.",
     { agent: z.enum(["claude", "codex", "antigravity", "grok"]) },
     async ({ agent }) => asText(startAgentCliUpdate(agent, "mcp"))
+  );
+
+  server.tool(
+    "remove_agent_cli",
+    "Remove one coaching CLI from the Cairn tools volume to free disk space. Its sign-in is kept, so installing it again needs no new login. Poll get_agent_cli_install_status for the result.",
+    { agent: z.enum(["claude", "codex", "antigravity", "grok"]) },
+    async ({ agent }) => asText(startAgentCliRemove(agent, "mcp"))
   );
 
   server.tool(

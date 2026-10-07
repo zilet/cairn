@@ -63,8 +63,9 @@
       const matches = (lines[i] ?? "").match(URL_RE);
       if (!matches) continue;
       let url = matches[matches.length - 1] ?? "";
-      // Only a URL that ran to the line's end can continue on the next line.
-      if ((lines[i] ?? "").trimEnd().endsWith(url)) {
+      // Only a URL that ran to the line's end (its box border aside) can continue on
+      // the next line.
+      if ((lines[i] ?? "").replace(/[\s│┃|]+$/, "").endsWith(url)) {
         for (let j = i + 1; j < lines.length; j++) {
           // A wrapped URL's tail is the WHOLE line once border glyphs are gone; a line
           // that reads as words ("2. Enter this code") is the next paragraph.
@@ -226,7 +227,12 @@
             finished = true;
             host.emit({ t: "connected" });
           } else {
-            fail("incomplete", model.status("loginIncomplete"));
+            // A CLI that exits non-zero on its own (a bad flag, a refused device code)
+            // says why: the plain headline, then its own last error line.
+            const detail = typeof msg.detail === "string" ? msg.detail.trim() : "";
+            // The server ran out of disk or memory: its own headline says what to do.
+            if (detail && (msg.reason === "disk_full" || msg.reason === "out_of_memory")) fail("incomplete", detail);
+            else fail("incomplete", detail ? `${model.status("loginIncomplete")} ${model.label(name)} said: ${detail}` : model.status("loginIncomplete"));
           }
           break;
         case "busy":

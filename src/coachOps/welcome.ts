@@ -16,8 +16,16 @@ import { statedLiftDows } from "../repo/profile.js";
 import { executionProfileForOp, getSettings, interactiveTimeoutForOp, setSettings } from "../repo/settings.js";
 import { localDateISO } from "../repo/shared.js";
 import { applyDueAnnouncedDecisions } from "../domain/brain/autonomy-service.js";
-import { classifyAgentFailure, type AgentFailure } from "../agentAvailability.js";
-import { AgentFallbackError, commandPresent, invalidateAgentConfigured, loadAgents, runAgent } from "../agents.js";
+import { classifyAgentFailure, resourceFailureHeadline, type AgentFailure } from "../agentAvailability.js";
+import {
+  AgentFallbackError,
+  commandPresent,
+  invalidateAgentConfigured,
+  loadAgents,
+  recordAgentAnswered,
+  reprobeAgentConfigured,
+  runAgent,
+} from "../agents.js";
 import { isAgentBusyError } from "../agent-busy.js";
 import { runChosen } from "../runChosen.js";
 import { buildOnboardPrompt } from "../prompt/program.js";
@@ -30,7 +38,15 @@ import { composeWeek } from "./training.js";
 
 // ---------- verify: "say hello" through the real spawn path ----------
 
-export type AgentVerifyReason = "busy" | "not_signed_in" | "timeout" | "failed" | "not_installed";
+export type AgentVerifyReason =
+  | "busy"
+  | "not_signed_in"
+  | "timeout"
+  | "failed"
+  | "not_installed"
+  // The SERVER ran out of room, not the provider — the message says what to do.
+  | "disk_full"
+  | "out_of_memory";
 export type AgentVerifyResult =
   | { ok: true; agent: string; ms: number }
   | { ok: false; agent: string; reason: AgentVerifyReason; message: string };
@@ -67,6 +83,9 @@ export function verifyFailureFrom(
       return { reason: "failed", message: `${who} is busy right now. Try again in a minute.` };
     case "payment_required":
       return { reason: "failed", message: `${who} needs an active plan on that account.` };
+    case "disk_full":
+    case "out_of_memory":
+      return { reason: input.failure.state, message: resourceFailureHeadline(input.failure.state, who) || "" };
     default:
       return {
         reason: "failed",
@@ -86,6 +105,15 @@ export function verifyFailureFrom(
  * connecting a provider IS asking to use it.
  */
 export async function verifyAgent(name: string, opts: { timeoutMs?: number } = {}): Promise<AgentVerifyResult> {
+  const result = await verifyAgentOnce(name, opts);
+  // One line per hello so a hosted log shows why a connect stalled (reason class only —
+  // never the CLI's words or the prompt).
+  if (result.ok) log.info("[welcome] hello answered", { agent: name, ms: result.ms });
+  else log.warn("[welcome] hello failed", { agent: name, reason: result.reason });
+  return result;
+}
+
+async function verifyAgentOnce(name: string, opts: { timeoutMs?: number }): Promise<AgentVerifyResult> {
   const def = loadAgents()[name];
   if (!def) return { ok: false, agent: name, reason: "failed", message: "Cairn doesn't know that provider." };
   if (!commandPresent(def.command)) {
@@ -102,6 +130,9 @@ export async function verifyAgent(name: string, opts: { timeoutMs?: number } = {
       const ms = Date.now() - started;
       try {
         invalidateAgentConfigured(name);
+        // It answered: that is the strongest sign-in evidence there is, whatever the
+        // login probe can or cannot read.
+        recordAgentAnswered(name);
       } catch (err) {
         log.debug("[verify] could not refresh the agent's cached state", { error: err });
       }
@@ -117,7 +148,10 @@ export async function verifyAgent(name: string, opts: { timeoutMs?: number } = {
     return {
       ok: false,
       agent: name,
-      ...verifyFailureFrom(name, { failure: classifyAgentFailure(name, result, new Date()) }),
+      ...(await signedOutOrAsIs(
+        name,
+        verifyFailureFrom(name, { failure: classifyAgentFailure(name, result, new Date()) })
+      )),
     };
   } catch (error: any) {
     if (isAgentBusyError(error)) return { ok: false, agent: name, ...verifyFailureFrom(name, { busy: true }) };
@@ -125,14 +159,33 @@ export async function verifyAgent(name: string, opts: { timeoutMs?: number } = {
     if (/timed out/i.test(message)) return { ok: false, agent: name, ...verifyFailureFrom(name, { timedOut: true }) };
     if (/failed to launch/i.test(message))
       return { ok: false, agent: name, ...verifyFailureFrom(name, { launchFailed: true }) };
-    return {
-      ok: false,
-      agent: name,
-      ...verifyFailureFrom(name, {
-        failure: classifyAgentFailure(name, { code: null, raw: "", stderr: message }, new Date()),
-      }),
-    };
+    const failure = classifyAgentFailure(name, { code: null, raw: "", stderr: message }, new Date());
+    return { ok: false, agent: name, ...(await signedOutOrAsIs(name, verifyFailureFrom(name, { failure }))) };
   }
+}
+
+/**
+ * True when the agent's own login probe, asked again NOW, says it is signed out. A
+ * failed run whose words were not recognisable (a CLI wording Cairn has not seen, an
+ * error envelope too long to trust) is otherwise just "didn't answer" — the probe is
+ * what tells a person to sign in rather than to try the same thing again.
+ */
+export async function provedSignedOut(name: string): Promise<boolean> {
+  try {
+    return (await reprobeAgentConfigured(name)) === false;
+  } catch {
+    return false;
+  }
+}
+
+async function signedOutOrAsIs(
+  name: string,
+  failure: { reason: AgentVerifyReason; message: string }
+): Promise<{ reason: AgentVerifyReason; message: string }> {
+  if (failure.reason !== "failed") return failure;
+  return (await provedSignedOut(name))
+    ? verifyFailureFrom(name, { failure: { state: "auth_required" } as AgentFailure })
+    : failure;
 }
 
 // ---------- the welcome: the coach's first conversation ----------
@@ -181,6 +234,9 @@ export type WelcomeResult =
       error: string;
       agent: null;
       tried: { agent: string; error: string }[];
+      /** The provider is signed out: the welcome offers its sign-in again. */
+      reason?: "not_signed_in";
+      signin_agent?: string;
       agent_busy?: true;
       agent_status: string;
     };
@@ -253,14 +309,34 @@ function fuelStartFrom(
   return { target_kcal, protein_g, why };
 }
 
-function plainNoAgentError(tried: { agent: string; error: string; availability?: { state?: string } }[]): string {
+function plainNoAgentError(
+  tried: { agent: string; error: string; availability?: { state?: string } }[],
+  signedOut: string | null = null
+): string {
   const first = tried[0];
   if (!first) return "Your coach isn't connected yet.";
-  const who = agentDisplayName(first.agent);
-  if (first.availability?.state === "auth_required")
-    return `${who} isn't signed in anymore — reconnect it and try again.`;
+  const who = agentDisplayName(signedOut ?? first.agent);
+  // The server ran out of disk or memory: that, with what to do, is the whole story.
+  const resource = tried.find((t) => t.availability?.state === "disk_full" || t.availability?.state === "out_of_memory");
+  const resourceLine = resource
+    ? resourceFailureHeadline(resource.availability?.state as "disk_full" | "out_of_memory", agentDisplayName(resource.agent))
+    : null;
+  if (resourceLine) return resourceLine;
+  if (signedOut || first.availability?.state === "auth_required")
+    return `${who} isn't signed in. Sign in again, then say hello.`;
   if (/timed out/i.test(first.error)) return `${who} took too long to answer. Try again in a moment.`;
   return `${who} didn't answer just now. Try again in a moment.`;
+}
+
+// The first tried agent that is signed out: its own words said so, or (when they were
+// not recognisable) its login probe, asked again now, does.
+async function signedOutAgent(tried: { agent: string; availability?: { state?: string } }[]): Promise<string | null> {
+  for (const entry of tried) {
+    if (!entry?.agent) continue;
+    if (entry.availability?.state === "auth_required") return entry.agent;
+    if (await provedSignedOut(entry.agent)) return entry.agent;
+  }
+  return null;
 }
 
 /**
@@ -305,11 +381,13 @@ export async function welcomeCoach(agent: string | undefined, text: string, hook
   } catch (error) {
     const failure = agentFailure(error, hooks);
     const tried = error instanceof AgentFallbackError ? (error.tried as any[]) : failure.tried;
+    const signedOut = failure.agent_busy ? null : await signedOutAgent(tried);
     return {
       ok: false,
-      error: plainNoAgentError(tried),
+      error: plainNoAgentError(tried, signedOut),
       agent: null,
       tried: failure.tried,
+      ...(signedOut ? { reason: "not_signed_in" as const, signin_agent: signedOut } : {}),
       ...(failure.agent_busy ? { agent_busy: true as const } : {}),
       agent_status: agentStatusFor({ ok: false, agent: null, tried: failure.tried }),
     };

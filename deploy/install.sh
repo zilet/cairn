@@ -2218,6 +2218,8 @@ rw_print_plan() {
   say "               CAIRN_AUTH_TOKEN and CAIRN_SETTINGS_SECRET_KEY: 64 random hex chars each, sent on stdin"
   say "  Manage it:   $RW_DIR/cairn.sh (status, open, update, logs, uninstall)"
   say "  Cost:        about \$5/month on Railway's Hobby plan (check current pricing)"
+  say "  Disk:        a trial volume is 0.5 GB, enough for about one AI provider. Hobby gives 5 GB;"
+  say "               after upgrading, grow it in Railway (the volume -> Live Resize)."
 }
 
 rw_print_commands() {

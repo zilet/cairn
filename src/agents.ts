@@ -1,4 +1,4 @@
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFile, spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -12,6 +12,7 @@ import {
   availabilityHolds,
   availabilityReason,
   classifyAgentFailure,
+  resourceFailure,
   type AgentAvailabilityState,
   type AgentFailure,
 } from "./agentAvailability.js";
@@ -114,7 +115,7 @@ export interface AgentDef {
   // model visibility only. `command`/`args`/`input`/`stream` stay exactly as before.
   login?: string[] | null;        // argv to start the interactive login flow (run by the PTY bridge, Stream A)
   status_check?: string[] | null; // argv for a non-interactive login probe; its STDOUT is parsed (NEVER the exit code) — see agentConfigured
-  auth_state?: string[] | null; // HOME-relative paths whose presence is a fallback "logged in" signal when there is no status_check
+  auth_state?: string[] | null; // HOME-relative FILES only a completed login writes — the fallback "logged in" evidence when the status probe cannot answer
   models_list?: string[] | null; // argv that prints the available models (grok/agy); null ⇒ no model catalog
   model_flag?: string[] | null; // ["--model","{model}"] — expanded only at an explicit {model_args} slot
   // This provider's own name for each Cairn model class, e.g. {"fast":"sonnet","deep":"opus"}.
@@ -155,7 +156,17 @@ export interface AgentDef {
   // bundled manifest. Installed files live under the persistent app HOME.
   install?:
     | { method: "npm"; package: string; version: string; args?: string[] }
-    | { method: "script"; url: string; sha256: string; update_args?: string[] };
+    | { method: "script"; url: string; sha256: string; update_args?: string[] }
+    | {
+        // Versioned vendor builds pinned per host (`linux-x64`, `darwin-arm64`, …), with
+        // the vendor's own installer `script` as the fallback for a pruned/unpinned build.
+        // Validated and run by scripts/install-agent-cli.mjs.
+        method: "binary";
+        version: string;
+        artifacts: Record<string, { url: string; sha256?: string; sha512?: string; archive?: "none" | "gz" | "tar.gz"; entry?: string }>;
+        script?: string;
+        update_args?: string[];
+      };
 }
 
 export function loadAgents(): Record<string, AgentDef> {
@@ -270,8 +281,10 @@ function homeDir(): string {
   return process.env.HOME || process.env.USERPROFILE || "";
 }
 
-// Fallback signal when an agent has no `status_check`: any of its HOME-relative
-// auth_state paths exists. Used only where a status probe isn't available.
+// Fallback evidence when the status probe cannot answer: any of the agent's
+// HOME-relative auth_state files exists. Each must be something only a completed
+// login writes (claude's ~/.claude/.credentials.json, codex's ~/.codex/auth.json) —
+// never a config dir or file any run of the CLI creates, the probe itself included.
 function authStatePresent(def: AgentDef): boolean {
   const home = homeDir();
   if (!home || !Array.isArray(def.auth_state) || !def.auth_state.length) return false;
@@ -285,7 +298,7 @@ function authStatePresent(def: AgentDef): boolean {
 //   - claude  `auth status`  → JSON with { loggedIn: bool }
 //   - codex   `login status` → "Not logged in" when logged out, else a logged-in banner
 // A shape we don't recognize / a parse failure ⇒ null (undetectable, don't exclude).
-function parseStatusOutput(name: string, stdout: string): boolean | null {
+export function parseStatusOutput(name: string, stdout: string): boolean | null {
   const s = (stdout || "").trim();
   if (!s) return null;
   if (name === "claude") {
@@ -315,8 +328,10 @@ function parseStatusOutput(name: string, stdout: string): boolean | null {
     return null;
   }
   if (name === "grok") {
-    // `grok models` (1.0.13) has no signed-out wording we have verified, so only the
-    // POSITIVE banner counts; everything else falls through to auth_state.
+    // grok 1.0.46 (verified 2026-10-07, and live on a Railway container): signed OUT,
+    // `grok models` exits 0 and prints "You are not authenticated." ABOVE the default
+    // model and "Available models:" — so the refusal is read first, as a definite no.
+    if (/not authenticated|not (logged|signed) in/i.test(s)) return false;
     if (/available models|you are using xai_api_key/i.test(s)) return true;
     return null;
   }
@@ -376,55 +391,185 @@ export function agentQuota(name: string): AgentQuotaBucket[] {
   return quotaCache.get(name) ?? [];
 }
 
-function probeConfigured(name: string, def: AgentDef): boolean | null {
-  // 1. A status_check is the strongest signal — run it and parse stdout.
-  if (Array.isArray(def.status_check) && def.status_check.length) {
-    // Don't even spawn if the binary isn't installed (and don't false-negative —
-    // an absent binary is "present:false" territory, not "logged out").
-    if (!commandPresent(def.command)) return null;
-    try {
-      const r = spawnSync(def.command, def.status_check, {
-        ...buildAgentSpawnOptions({ kind: "status", restoreEnvKeys: def.env_required || [] }),
-        timeout: 5000,
-        encoding: "utf8",
-      });
-      // A spawn error (ENOENT / timeout) tells us nothing about login state.
-      if (r.error) return null;
-      // claude emits its JSON on stdout — parse THAT alone first so a stderr notice
-      // (update banner, deprecation warning) can't corrupt the JSON parse. Fall back
-      // to the combined stream only for the plain-text heuristics.
-      let verdict = parseStatusOutput(name, r.stdout || "");
-      if (verdict === null) verdict = parseStatusOutput(name, (r.stdout || "") + "\n" + (r.stderr || ""));
-      const quota = parseAgyQuota(r.stdout || "");
-      if (quota.length) quotaCache.set(name, quota);
-      else quotaCache.delete(name);
-      if (verdict !== null) return verdict;
-      // status_check ran but we couldn't read it — fall through to auth_state.
-    } catch { /* fall through to the fallback signals */ }
+// How long one status probe may take. A cold `claude`/`codex` launch on a small
+// container (first run after a deploy, a 512 MB Railway box) routinely takes longer
+// than the 5 s this used to allow, and a timed-out probe used to read as "can't tell"
+// — which every surface then treated as signed in.
+export const STATUS_PROBE_TIMEOUT_MS = 20_000;
+// A probe that TIMED OUT is not an answer: its null is remembered only this long, so
+// a later read asks again instead of believing "can't tell" until the next restart.
+const STATUS_PROBE_TIMEOUT_RETRY_MS = 5 * 60_000;
+
+// An agent may declare a shorter leash (agents.json `status_timeout_ms`): agy signed
+// out answers "Authentication required" within a second and then WAITS 60s for a
+// pasted code, so its probe is cut short and read as the no it already printed —
+// rather than blocking the boot probe for the full 20 s.
+function statusProbeTimeoutMs(def: AgentDef): number {
+  const own = Number((def as { status_timeout_ms?: unknown }).status_timeout_ms);
+  return Number.isFinite(own) && own >= 1000 ? Math.min(own, STATUS_PROBE_TIMEOUT_MS) : STATUS_PROBE_TIMEOUT_MS;
+}
+
+// One log line per agent per CHANGE of login verdict (not per read), so `railway logs`
+// shows when a provider flipped signed in / out / unreadable without flooding.
+const loggedVerdict = new Map<string, string>();
+function logConfiguredVerdict(name: string, verdict: boolean | null, timedOut: boolean): void {
+  const key = `${verdict}:${timedOut}`;
+  if (loggedVerdict.get(name) === key) return;
+  loggedVerdict.set(name, key);
+  const fields = { agent: name, signed_in: verdict, timed_out: timedOut };
+  if (verdict === false) log.warn("[agents] login status: signed out", fields);
+  else log.info(`[agents] login status: ${verdict === true ? "signed in" : "unreadable"}`, fields);
+}
+const configuredRetryAt = new Map<string, number>();
+
+export type StatusProbeRun = {
+  error?: (Error & { code?: string }) | undefined;
+  stdout?: string | null;
+  stderr?: string | null;
+};
+
+function probeTimedOut(r: StatusProbeRun): boolean {
+  const code = r.error?.code;
+  return code === "ETIMEDOUT" || /timed? ?out/i.test(String(r.error?.message ?? ""));
+}
+
+// Read one finished status_check run into the tri-state (null: it could not be read).
+export function readStatusProbe(name: string, r: StatusProbeRun): boolean | null {
+  if (r.error) {
+    // A spawn error (ENOENT) tells us nothing. A KILLED probe (timeout) may already
+    // have said "signed out": agy 1.3.1 signed out prints "Authentication required.
+    // Please visit the URL…" at once and then waits 60s for a pasted code. Only that
+    // NO is taken from a partial run — a cut-off "yes" is never trusted.
+    const partial = `${r.stdout || ""}\n${r.stderr || ""}`;
+    if (!partial.trim()) return null;
+    return parseStatusOutput(name, partial) === false ? false : null;
   }
-  // 2. grok has no status command. The HEADLESS path needs XAI_API_KEY; the in-app
-  //    `grok login --device-auth` flow instead writes ~/.grok/auth.json. So an env
-  //    key is a definite yes, but its absence is NOT a no — fall through to the
-  //    auth_state check below so a Connect login flips Installed → Connected.
+  // claude emits its JSON on stdout — parse THAT alone first so a stderr notice
+  // (update banner, deprecation warning) can't corrupt the JSON parse. Fall back
+  // to the combined stream only for the plain-text heuristics.
+  let verdict = parseStatusOutput(name, r.stdout || "");
+  if (verdict === null) verdict = parseStatusOutput(name, (r.stdout || "") + "\n" + (r.stderr || ""));
+  const quota = parseAgyQuota(r.stdout || "");
+  if (quota.length) quotaCache.set(name, quota);
+  else quotaCache.delete(name);
+  return verdict;
+}
+
+// The verdict when the status probe itself could not answer: grok's env key, then the
+// agent's auth_state evidence. Absence is null (NOT false — many CLIs create their
+// config dir before login, so absence is only weak evidence and never excludes).
+function fallbackConfigured(name: string, def: AgentDef): boolean | null {
+  // grok has no status command. The HEADLESS path needs XAI_API_KEY; the in-app
+  // `grok login --device-auth` flow instead writes ~/.grok/auth.json. So an env key is
+  // a definite yes, but its absence is NOT a no — the auth_state check below lets a
+  // Connect login flip Installed → Connected.
   if (name === "grok" && process.env.XAI_API_KEY) return true;
-  // 3. auth_state fallback: a known post-login file/dir exists ⇒ logged in; absent
-  //    ⇒ null (NOT false — many CLIs create the dir before login, so absence is
-  //    only weak evidence and we must never exclude on it).
+  // auth_state names files only a completed login writes (never a dir any run of the
+  // CLI creates — the status probe itself would satisfy that).
   if (authStatePresent(def)) return true;
   return null;
 }
 
+function probeConfigured(name: string, def: AgentDef): { verdict: boolean | null; timedOut: boolean } {
+  let timedOut = false;
+  // 1. A status_check is the strongest signal — run it and parse stdout.
+  if (Array.isArray(def.status_check) && def.status_check.length) {
+    // Don't even spawn if the binary isn't installed (and don't false-negative —
+    // an absent binary is "present:false" territory, not "logged out").
+    if (!commandPresent(def.command)) return { verdict: null, timedOut: false };
+    try {
+      const r = spawnSync(def.command, def.status_check, {
+        ...buildAgentSpawnOptions({ kind: "status", restoreEnvKeys: def.env_required || [] }),
+        timeout: statusProbeTimeoutMs(def),
+        encoding: "utf8",
+      });
+      timedOut = probeTimedOut(r as StatusProbeRun);
+      const verdict = readStatusProbe(name, r as StatusProbeRun);
+      if (verdict !== null) return { verdict, timedOut: false };
+      // status_check ran but we couldn't read it — fall through to the evidence.
+    } catch { /* fall through to the fallback signals */ }
+  }
+  return { verdict: fallbackConfigured(name, def), timedOut };
+}
+
 // Public tri-state: true logged-in / false logged-out / null undetectable.
 export function agentConfigured(name: string): boolean | null {
+  const retryAt = configuredRetryAt.get(name);
+  if (retryAt !== undefined && Date.now() >= retryAt) {
+    configuredRetryAt.delete(name);
+    configuredCache.delete(name);
+  }
   if (configuredCache.has(name)) return configuredCache.get(name) ?? null;
   const def = loadAgents()[name];
   let verdict: boolean | null = null;
   if (def) {
-    try { verdict = probeConfigured(name, def); } catch { verdict = null; }
+    try {
+      const probe = probeConfigured(name, def);
+      verdict = probe.verdict;
+      if (probe.timedOut && verdict === null) {
+        log.warn("[agents] login status probe timed out; will ask again", {
+          agent: name,
+          timeout_ms: STATUS_PROBE_TIMEOUT_MS,
+        });
+        configuredRetryAt.set(name, Date.now() + STATUS_PROBE_TIMEOUT_RETRY_MS);
+      }
+    } catch { verdict = null; }
   }
   configuredCache.set(name, verdict);
   bumpAgentStateGeneration();
+  logConfiguredVerdict(name, verdict, configuredRetryAt.has(name));
   return verdict;
+}
+
+/**
+ * Re-ask one agent's login state NOW, off the event loop (an async spawn, not the
+ * boot-time spawnSync), and remember the answer. A failed run whose own words were not
+ * recognisable asks this to tell "signed out" from every other failure.
+ */
+export function reprobeAgentConfigured(name: string): Promise<boolean | null> {
+  const def = loadAgents()[name];
+  if (!def) return Promise.resolve(null);
+  const remember = (verdict: boolean | null, timedOut = false): boolean | null => {
+    configuredRetryAt.delete(name);
+    configuredCache.set(name, verdict);
+    bumpAgentStateGeneration();
+    logConfiguredVerdict(name, verdict, timedOut);
+    return verdict;
+  };
+  if (!Array.isArray(def.status_check) || !def.status_check.length || !commandPresent(def.command)) {
+    return Promise.resolve(remember(fallbackConfigured(name, def)));
+  }
+  return new Promise((resolve) => {
+    try {
+      execFile(
+        def.command,
+        def.status_check as string[],
+        {
+          ...buildAgentSpawnOptions({ kind: "status", restoreEnvKeys: def.env_required || [] }),
+          timeout: statusProbeTimeoutMs(def),
+          encoding: "utf8",
+          maxBuffer: 1024 * 1024,
+        },
+        (error, stdout, stderr) => {
+          // execFile reports a non-zero exit as an error too; the exit code is never the
+          // signal (see above), so only a spawn failure or a kill counts as "no answer".
+          const spawnFailed = !!error && (typeof (error as any).code === "string" || !!(error as any).killed);
+          const run: StatusProbeRun = { error: spawnFailed ? (error as any) : undefined, stdout, stderr };
+          const verdict = readStatusProbe(name, run);
+          resolve(remember(verdict !== null ? verdict : fallbackConfigured(name, def), !!(error as any)?.killed));
+        }
+      );
+    } catch {
+      resolve(remember(fallbackConfigured(name, def)));
+    }
+  });
+}
+
+/** A real round trip through this agent just answered: that is a positive sign-in. */
+export function recordAgentAnswered(name: string): void {
+  configuredRetryAt.delete(name);
+  configuredCache.set(name, true);
+  bumpAgentStateGeneration();
 }
 
 // Drop the cached login verdict AND the derived version/model read-caches, so the
@@ -440,6 +585,7 @@ export function invalidateAgentConfigured(name?: string): void {
   for (const agent of name ? [name] : Object.keys(loadAgents())) availabilityClear(agent);
   if (name) {
     configuredCache.delete(name);
+    configuredRetryAt.delete(name);
     quotaCache.delete(name);
     modelsRawCache.delete(name);
     modelsCache.delete(name);
@@ -451,6 +597,7 @@ export function invalidateAgentConfigured(name?: string): void {
   } else {
     presenceCache.clear();
     configuredCache.clear();
+    configuredRetryAt.clear();
     quotaCache.clear();
     modelsRawCache.clear();
     modelsCache.clear();
@@ -1514,6 +1661,9 @@ export interface AgentUsage {
 
 export interface AgentResult {
   code: number | null;
+  // Set when the CLI was killed by a signal Cairn did NOT send (Cairn's own timeout and
+  // Stop reject before a result exists) — a SIGKILL here is the OOM killer.
+  signal?: NodeJS.Signals | null;
   raw: string;
   stderr: string;
   parsed: any | null;
@@ -1718,7 +1868,9 @@ export async function runAgentWithFallback(
       // denied" will say it again — re-asking it for "only the JSON" is pure
       // waste. Only a chatty-but-willing model earns the one-shot repair.
       const failure = acceptedBeforeRepair ? null : classifyAgentFailure(name, result, new Date());
-      const wasteful = !!failure && (availabilityHolds(failure.state) || failure.state === "permission_denied");
+      const wasteful =
+        !!failure &&
+        (availabilityHolds(failure.state) || failure.state === "permission_denied" || failure.state === "out_of_memory");
       // Under ENFORCED structured output the first run was already constrained, so an
       // unparseable reply means truncation or a CLI error — re-asking for "only the
       // JSON" cannot fix it and costs a full extra spawn. The CONTRACT repair still
@@ -2316,7 +2468,7 @@ function spawnAgentProcess(def: AgentDef, request: AgentSpawnRequest): Promise<A
       cleanup();
       reject(new Error(`failed to launch "${def.command}": ${e.message}`));
     });
-    child.on("close", (code) => {
+    child.on("close", (code, killSignal) => {
       cleanup();
       if (out.length < MAX_OUT) out += outDecoder.end();
       if (err.length < MAX_OUT) err += errDecoder.end();
@@ -2326,7 +2478,9 @@ function spawnAgentProcess(def: AgentDef, request: AgentSpawnRequest): Promise<A
       // or a clean exit that nonetheless produced no parseable JSON. This is what
       // a self-hoster needs to see "not logged in" / "no such model" first-run errors.
       if (code !== 0 || !parsed) debugAgentStderr(name, code, err);
-      resolve({ code, raw: out, stderr: err, parsed, usage });
+      const resource = code !== 0 || killSignal ? resourceFailure({ code, raw: out, stderr: err, signal: killSignal }) : null;
+      if (resource) log.warn(`[agents] ${name} failed: ${resource.detail.toLowerCase()}`, { agent: name, state: resource.state, code, signal: killSignal ?? null });
+      resolve({ code, signal: killSignal ?? null, raw: out, stderr: err, parsed, usage });
     });
 
     pipeAgentStdin(child, launch.stdin);
@@ -2578,7 +2732,7 @@ function spawnAgentStream(
     });
     child.stderr.on("data", (d) => { if (err.length < MAX_OUT) err += errDecoder.write(d); });
     child.on("error", (e) => { cleanup(); reject(new Error(`failed to launch "${def.command}": ${e.message}`)); });
-    child.on("close", (code) => {
+    child.on("close", (code, killSignal) => {
       cleanup();
       buf += outDecoder.end();
       if (err.length < MAX_OUT) err += errDecoder.end();
@@ -2587,7 +2741,9 @@ function spawnAgentStream(
       // Chat's success is non-empty text (not JSON); log stderr when the stream
       // came back empty or the process exited non-zero so a failure is diagnosable.
       if (code !== 0 || !text.trim()) debugAgentStderr(name, code, err);
-      resolve({ code, raw: text, stderr: err, parsed: extractJson(text), usage });
+      const resource = code !== 0 || killSignal ? resourceFailure({ code, raw: meta, stderr: err, signal: killSignal }) : null;
+      if (resource) log.warn(`[agents] ${name} failed: ${resource.detail.toLowerCase()}`, { agent: name, state: resource.state, code, signal: killSignal ?? null });
+      resolve({ code, signal: killSignal ?? null, raw: text, stderr: err, parsed: extractJson(text), usage });
     });
 
     pipeAgentStdin(child, launch.stdin);

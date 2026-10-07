@@ -468,7 +468,7 @@ test("MCP modular tool sources are discovered without duplicate names", () => {
   // Hosted installs: +1 (apply_update) in src/surfaces/mcp/system.ts — the MCP mirror of
   // POST /api/update/apply. Feedback has NO MCP tool: sending it is a person's action in
   // the app, never an agent's (POST /api/feedback stays REST-only).
-  assert.equal(tools.length, 297, "tool count changes only for reviewed MCP additions");
+  assert.equal(tools.length, 298, "tool count changes only for reviewed MCP additions");
   assert.equal(new Set(tools).size, tools.length, "MCP tool names must be unique across modules");
   assert.doesNotMatch(mcp, /server\.tool\(/, "src/mcp.ts should stay a registry, not a tool-definition file");
   assert.doesNotMatch(mcp, /server\.tool\("get_chat_history"/);

@@ -381,7 +381,7 @@ server.on("upgrade", (req, socket, head) => {
             /* a closed socket drops PTY output by design — ws.on("close") kills the session */
           }
         },
-        onExit: (code) => {
+        onExit: (code, detail, reason) => {
           // The login may have just written this agent's auth state — drop the
           // cached "configured" verdict so the next /api/settings re-probes and the
           // card flips Installed → Connected without a server restart.
@@ -391,7 +391,9 @@ server.on("upgrade", (req, socket, head) => {
             log.warn("[agent-login] could not invalidate the cached configured verdict", { agent, error: err });
           }
           try {
-            ws.send(JSON.stringify({ t: "exit", code }));
+            // `detail` is the CLI's own last error line on a non-zero exit (agentLogin.ts),
+            // so a sign-in that dies at once can say why.
+            ws.send(JSON.stringify(detail ? { t: "exit", code, detail, ...(reason ? { reason } : {}) } : { t: "exit", code }));
           } catch {
             /* peer already gone — nothing to tell it */
           }

@@ -66,6 +66,7 @@ function runIsolated(agents, body) {
         input: "arg",
         env_required: [],
         ...(spec.label ? { label: spec.label } : {}),
+        ...(spec.status ? { status_check: ["-c", spec.status] } : {}),
       };
     }
     const configPath = path.join(dataDir, "agents.json");
@@ -297,6 +298,34 @@ test("verify: host congestion is reason busy — a retry, never a verdict", () =
   assert.equal(verifyFailureFrom("claude", { failure: { state: "auth_required" } }).reason, "not_signed_in");
   assert.equal(verifyFailureFrom("claude", { failure: { state: "quota_exhausted" } }).reason, "failed");
   assert.equal(verifyFailureFrom("claude", { timedOut: true }).reason, "timeout");
+});
+
+test("verify + welcome: an unrecognised failure from a signed-out provider still reads as signed out", () => {
+  // The CLI's own words are nothing Cairn knows; its login probe, asked again, says no.
+  const out = runIsolated(
+    {
+      lapsed: {
+        command: "echo 'something unexpected happened' >&2; exit 1",
+        status: "echo 'Not logged in'",
+        label: "Claude",
+      },
+      broken: { command: "echo 'something unexpected happened' >&2; exit 1", status: "echo 'Logged in using ChatGPT'" },
+    },
+    `
+      return {
+        lapsed: await ops.verifyAgent("lapsed"),
+        broken: await ops.verifyAgent("broken"),
+        welcome: await ops.welcomeCoach("lapsed", "I want to run a half marathon."),
+      };
+    `
+  );
+  assert.deepEqual([out.lapsed.ok, out.lapsed.reason], [false, "not_signed_in"]);
+  assert.match(out.lapsed.message, /^Claude isn't signed in/);
+  assert.deepEqual([out.broken.ok, out.broken.reason], [false, "failed"], "a signed-in provider's failure stays a failure");
+  assert.equal(out.welcome.ok, false);
+  assert.equal(out.welcome.reason, "not_signed_in", "Meet offers the sign-in again");
+  assert.equal(out.welcome.signin_agent, "lapsed");
+  assert.match(out.welcome.error, /^Claude isn't signed in/);
 });
 
 // ---------- the pure pieces ----------

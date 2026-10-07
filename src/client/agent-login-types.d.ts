@@ -2,6 +2,10 @@ type AgentLoginRecord = Record<string, unknown>;
 
 type AgentLoginControlMessage = AgentLoginRecord & {
   code?: unknown;
+  /** On a non-zero `exit`: the CLI's own last error line, when it printed one. */
+  detail?: unknown;
+  /** disk_full / out_of_memory when the server ran out of room; `detail` is then the headline. */
+  reason?: unknown;
   message?: unknown;
   t?: unknown;
 };

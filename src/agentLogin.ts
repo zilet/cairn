@@ -1,7 +1,9 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { buildAgentSpawnOptions } from "./agentExecution.js";
+import { resourceFailure, resourceFailureHeadline } from "./agentAvailability.js";
 import { loadAgents } from "./agents.js";
+import { log } from "./log.js";
 
 // ---------------------------------------------------------------------------
 // In-app coaching-CLI login bridge (Stream A).
@@ -34,9 +36,48 @@ import { loadAgents } from "./agents.js";
 const FALLBACK_LOGIN: Record<string, string[]> = {
   claude: ["auth", "login"],
   codex: ["login", "--device-auth"],
-  grok: ["login", "--device-auth"],
-  antigravity: [], // bare interactive `agy`
+  grok: ["login", "--device-auth"], // re-verified on grok 1.0.46: URL + XXXX-XXXX code, no TTY needed
+  antigravity: [], // bare interactive `agy` — agy 1.3.1 has no login subcommand; launching it bare IS the sign-in
 };
+
+// How much of the PTY's recent output is kept to explain a failed exit.
+const EXIT_TAIL_CHARS = 4096;
+const EXIT_DETAIL_MAX = 200;
+
+// The one line worth showing a person when a login CLI exits non-zero: the last line
+// that reads like an error, else the last non-empty line. Terminal escapes, carriage
+// returns and box-drawing are stripped; a URL-only line (a sign-in link) never counts.
+export function loginExitDetail(output: string): string | null {
+  const plain = String(output || "")
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: terminal escapes are the point
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: terminal escapes are the point
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: terminal escapes are the point
+    .replace(/\x1b[()][A-Za-z0-9]|\x1b[=>78]/g, "");
+  const lines = plain
+    .split(/\r\n|\n|\r/)
+    .map((line) => line.replace(/[\u2500-\u257f\u2580-\u259f]+/g, " ").replace(/\s+/g, " ").trim())
+    // A bare URL (the sign-in link) or a JSON envelope (print-mode telemetry) is never
+    // the sentence to show a person.
+    .filter((line) => line && !/^https?:\/\/\S+$/.test(line) && !/^[{[]/.test(line));
+  if (!lines.length) return null;
+  const errorLine = [...lines].reverse().find((line) => /\b(error|failed|denied|expired|invalid|unauthori[sz]ed|forbidden|not found|timed out|refused)\b/i.test(line));
+  const pick = errorLine || lines[lines.length - 1];
+  return pick.length > EXIT_DETAIL_MAX ? `${pick.slice(0, EXIT_DETAIL_MAX - 1)}\u2026` : pick;
+}
+
+// A login line made safe for the SERVER LOG: sign-in links (they carry codes and
+// state), device codes and anything token-shaped are replaced. The person still sees
+// the CLI's own words in the panel; only the log is scrubbed.
+export function scrubLoginLogLine(line: string | null | undefined): string | null {
+  if (!line) return null;
+  return line
+    .replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, "[link]")
+    .replace(/\b[A-Z0-9]{3,}-[A-Z0-9]{3,}\b/g, "[code]")
+    .replace(/[A-Za-z0-9_\-.~+/=]{24,}/g, "[redacted]")
+    .slice(0, 200);
+}
 
 // Lifecycle bounds — mirror the chat-turn Stop ergonomics.
 const IDLE_TIMEOUT_MS = 5 * 60_000; // no I/O for 5 min → kill
@@ -59,7 +100,12 @@ export function clampPtySize(cols: unknown, rows: unknown): { cols: number; rows
 
 export interface LoginCallbacks {
   onData?: (chunk: Buffer) => void;
-  onExit?: (code: number | null) => void;
+  // `detail` is the CLI's own last error line when it exited non-zero on its own (a
+  // forced kill or a clean exit carries none) — so a login that dies at once can say
+  // why instead of reading as a silent "not signed in yet".
+  // `reason` is set when the SERVER ran out of disk or memory; `detail` is then the
+  // plain headline that says what to do.
+  onExit?: (code: number | null, detail?: string | null, reason?: "disk_full" | "out_of_memory" | null) => void;
   onError?: (err: Error) => void;
 }
 
@@ -208,6 +254,7 @@ export function startLoginSession(
   const child = spawn(command, args, buildLoginSpawnOptions());
 
   const id = randomUUID();
+  let outputTail = "";
 
   const session: ActiveSession = {
     id,
@@ -274,8 +321,20 @@ export function startLoginSession(
         /* already gone */
       }
     }
+    const failed = !killed && code !== 0;
+    const resource = failed ? resourceFailure({ code, raw: outputTail }) : null;
+    const reason = resource ? (resource.state as "disk_full" | "out_of_memory") : null;
+    const label = String(loadAgents()[agent]?.label || agent);
+    const detail = reason
+      ? resourceFailureHeadline(reason, label)
+      : failed && code !== null
+        ? loginExitDetail(outputTail)
+        : null;
+    const fields = { agent, code, killed, reason, detail: scrubLoginLogLine(detail) };
+    if (killed || code === 0) log.info("[agent-login] ended", fields);
+    else log.warn("[agent-login] exited without signing in", fields);
     try {
-      onExit?.(code);
+      onExit?.(code, detail, reason);
     } catch {
       /* a bad consumer must never break teardown */
     }
@@ -284,6 +343,7 @@ export function startLoginSession(
   // ---- wire child I/O ----
   const handleData = (buf: Buffer) => {
     bumpIdle(session);
+    outputTail = (outputTail + buf.toString("utf8")).slice(-EXIT_TAIL_CHARS);
     try {
       onData?.(buf);
     } catch {
@@ -314,5 +374,6 @@ export function startLoginSession(
   bumpIdle(session);
 
   active = session;
+  log.info("[agent-login] started", { agent, cols: size.cols, rows: size.rows });
   return session;
 }
