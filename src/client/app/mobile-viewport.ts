@@ -129,7 +129,7 @@
       if (!textInputEl(active)) return;
       const el: HTMLElement = active;
       if (el.closest?.(".chatview")) return;
-      const box = (el.closest?.(".chatbar, .fuel-log-composer, [data-composer], form") as HTMLElement | null) || el;
+      const box = (el.closest?.(".chatbar, .fuel-log-composer, [data-composer], .logrow, form") as HTMLElement | null) || el;
       if (typeof box.getBoundingClientRect !== "function") return;
       const rect = box.getBoundingClientRect();
       // Scroll by the MEASURED overlap with the visual viewport, never
@@ -140,6 +140,19 @@
       try {
         window.scrollBy(0, delta);
       } catch {}
+    };
+    // Moving weight -> reps -> RIR keeps the keyboard up, so no kb-up transition fires
+    // and iOS's own scroll-to-field lands somewhere arbitrary (often under the keyboard).
+    // Re-run the reveal for every field focused while the keyboard is already up, and
+    // once more after iOS's own scroll has finished fighting us.
+    const revealAfterFocus = () => {
+      if (!kbUp) return;
+      if (revealTimer) clearTimeout(revealTimer);
+      revealTimer = setTimeout(() => {
+        revealTimer = 0;
+        if (root.classList?.contains("kb-up")) revealFocusedComposer();
+      }, 140);
+      setTimeout(() => { if (root.classList?.contains("kb-up")) revealFocusedComposer(); }, 420);
     };
     const syncKeyboardUp = (geometryOpen: boolean) => {
       const up = keyboardUpState({ geometryOpen, textFocused: focusedTextInput(), scale: vv.scale });
@@ -176,7 +189,9 @@
     window.addEventListener("orientationchange", () => { vvMax = vv.height; sync(); });
     // Focus/tap is an early intent signal, not proof that the keyboard is open.
     document.addEventListener("pointerdown", (e) => { if (textInputEl(e.target)) requestKeyboard(e.target); }, true);
-    document.addEventListener("focusin", (e) => { if (focusedTextInput()) requestKeyboard(e.target); else sync(); }, true);
+    document.addEventListener("focusin", (e) => { if (focusedTextInput()) { requestKeyboard(e.target); revealAfterFocus(); } else sync(); }, true);
+    // A repaint that restores the focused field (preventScroll) calls this to re-reveal it.
+    document.addEventListener("cairn:reveal-focused", revealAfterFocus);
     document.addEventListener("focusout", () => {
       sync();
       requestAnimationFrame(() => requestAnimationFrame(sync));

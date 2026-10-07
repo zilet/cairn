@@ -649,6 +649,7 @@ type TodaySessionSetActionsApi = {
         try {
           focusEl.focus({ preventScroll: true });
           if (focused.start != null) focusEl.setSelectionRange(focused.start, focused.end ?? focused.start);
+          document.dispatchEvent(new Event("cairn:reveal-focused"));
         } catch {}
       }
     }
