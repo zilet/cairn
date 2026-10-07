@@ -68,7 +68,8 @@ type AgentLoginAssetsApi = {
   load(): Promise<void>;
 };
 
-type AgentLoginFailReason = "terminal" | "connection" | "incomplete" | "error" | "disconnected";
+/** `expired`: the CLI waited out its own sign-in window (agy: 60s) — a fresh link is needed. */
+type AgentLoginFailReason = "terminal" | "connection" | "incomplete" | "expired" | "error" | "disconnected";
 
 /** What a running sign-in session reports to whoever hosts it (the friendly panel). */
 type AgentLoginEvent =
@@ -97,6 +98,8 @@ type AgentLoginSessionHandle = {
 type AgentLoginSessionApi = {
   start(name: string, host: AgentLoginHost): Promise<AgentLoginSessionHandle | null>;
   findAuthUrl(lines: string[]): string;
+  /** The sign-in URL read whole from the raw (never-wrapping) output stream. */
+  findStreamAuthUrl(raw: string): string;
   findDeviceCode(lines: string[]): string;
 };
 
@@ -105,7 +108,7 @@ type AgentLoginPanelOptions = {
   name: string;
   /** The provider's plain name for copy ("Claude", "ChatGPT"). */
   label: string;
-  /** Open the terminal details from the start (antigravity's login is an interactive TUI). */
+  /** Open the terminal details from the start. */
   detailsOpen?: boolean;
   onConnected?(): void;
   onFailed?(message: string, reason: AgentLoginFailReason): void;
@@ -119,7 +122,7 @@ type AgentLoginPanelHandle = {
 type AgentLoginPanelApi = {
   /** Paint the friendly sign-in panel into `host` and start the session. */
   mount(host: HTMLElement, opts: AgentLoginPanelOptions): AgentLoginPanelHandle;
-  /** The provider asks for its code to be pasted back (Claude). */
+  /** The provider asks for its code to be pasted back (Claude, Google). */
   pastesCode(name: string): boolean;
 };
 

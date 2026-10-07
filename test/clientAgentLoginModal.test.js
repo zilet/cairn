@@ -51,9 +51,9 @@ test("providers read by the names people know them by", () => {
   modal.create("codex", () => {});
   assert.equal(panel.mounts[0].opts.label, "ChatGPT");
   assert.equal(panel.mounts[0].opts.name, "codex");
-  assert.equal(panel.mounts[0].opts.detailsOpen, false);
+  assert.ok(!panel.mounts[0].opts.detailsOpen);
   modal.create("antigravity", () => {});
-  assert.equal(panel.mounts[1].opts.detailsOpen, true, "Antigravity's own sign-in screen starts unfolded");
+  assert.ok(!panel.mounts[1].opts.detailsOpen, "Google's print-mode sign-in needs no terminal open");
 });
 
 for (const [way, act] of [

@@ -47,10 +47,12 @@ const AGY_PRINT_AUTH_TIMEOUT = [
   '{"conversation_id":"","status":"ERROR","response":"","error":"authentication failed or timed out"}',
 ].join("\r\n");
 
-test("shipped login argv matches the current CLIs (grok device-auth, agy bare)", () => {
+test("shipped login argv matches the current CLIs (grok device-auth, agy print mode)", () => {
   assert.deepEqual(resolveLoginArgv("grok"), ["grok", "login", "--device-auth"]);
-  // agy 1.3.1 has no login subcommand: launching it bare IS the sign-in.
-  assert.deepEqual(resolveLoginArgv("antigravity"), ["agy"]);
+  // agy 1.3.1 has no login subcommand. Print mode prints the whole URL on one line and
+  // takes the pasted code with no menu first; bare `agy` opened a numbered menu and a
+  // TUI that cut the URL on a phone.
+  assert.deepEqual(resolveLoginArgv("antigravity"), ["agy", "-p", "/quota"]);
   const agents = loadAgents();
   assert.match(agents.grok.login_note, /1\.0\.46/);
   assert.match(agents.antigravity.login_note, /1\.3\.1/);
@@ -85,6 +87,52 @@ test("loginExitDetail keeps the CLI's own last error line, plain and bounded", (
   assert.equal(loginExitDetail(""), null);
   assert.equal(loginExitDetail("\u001b[2J\u001b[H"), null);
   assert.ok(loginExitDetail(`Error: ${"x".repeat(500)}`).length <= 200);
+});
+
+// The verified print-mode sign-in, as a 40-column phone PTY delivers it: the URL is
+// ONE line in the stream; xterm soft-wraps it (isWrapped) across many rows.
+const AGY_URL =
+  "https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=1071006060591-x.apps.googleusercontent.com&code_challenge=gx6lQ2&code_challenge_method=S256&prompt=consent&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&response_type=code&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloud-platform&state=4OTX";
+const AGY_PRINT_AUTH = [
+  "Authentication required. Please visit the URL to log in:",
+  `  ${AGY_URL}`,
+  "",
+  "Waiting for authentication (timeout 60s)...",
+  "Or, paste the authorization code here and press Enter:",
+  "",
+].join("\r\n");
+
+function wrapAt(text, cols) {
+  const rows = [];
+  for (const line of text.split("\r\n")) {
+    if (!line) rows.push({ text: "", wrapped: false });
+    for (let i = 0; i < line.length; i += cols) rows.push({ text: line.slice(i, i + cols), wrapped: i > 0 });
+  }
+  return rows;
+}
+
+test("agy's print-mode URL is taken whole at 40 columns, response_type and all", () => {
+  const win = loadClientModule(["agent-login-model-client", "agent-login-session-client"], { globals: {} });
+  const session = win.CairnAgentLoginSession;
+  // The raw stream never wraps.
+  assert.equal(session.findStreamAuthUrl(`\u001b[1m${AGY_PRINT_AUTH}\u001b[0m`), AGY_URL);
+  // The terminal buffer, soft-wrapped at 40 columns, joined back by isWrapped.
+  const rows = wrapAt(AGY_PRINT_AUTH, 40);
+  const lines = [];
+  for (const row of rows) {
+    if (row.wrapped && lines.length) lines[lines.length - 1] += row.text;
+    else lines.push(row.text);
+  }
+  assert.equal(session.findAuthUrl(lines), AGY_URL);
+  // The bare TUI's failure: rows cut before response_type are never offered.
+  const cut = AGY_URL.slice(0, AGY_URL.indexOf("&response_type"));
+  assert.equal(session.findAuthUrl(["Please visit:", cut, "(1–16 of 35 lines) shift+up/down Navigate"]), "");
+  assert.equal(session.findStreamAuthUrl(`${cut}\r\n(1–16 of 35 lines)`), "");
+  // A URL still arriving (nothing after it yet) is not whole; the longer copy wins.
+  assert.equal(session.findStreamAuthUrl(`visit:\r\n  ${AGY_URL.slice(0, -4)}`), "");
+  assert.equal(session.findAuthUrl([AGY_URL, "Or, paste the code:", AGY_URL.slice(0, -5)]), AGY_URL);
+  // An OSC 8 hyperlink carries the full URI even when the visible text is cut.
+  assert.equal(session.findStreamAuthUrl(`\u001b]8;;${AGY_URL}\u0007Sign in\u001b]8;;\u0007`), AGY_URL);
 });
 
 // A minimal xterm + socket pair so the real session client runs end to end.
@@ -124,6 +172,9 @@ function sessionHarness() {
   const win = loadClientModule(["agent-login-model-client", "agent-login-session-client"], {
     globals: {
       WebSocket: FakeWebSocket,
+      // The debounced buffer rescan never fires here: the stream path must stand alone.
+      setTimeout: () => 0,
+      clearTimeout: () => {},
       location: { protocol: "http:", host: "cairn.test" },
       CairnAgentLoginAssets: { load: async () => {}, globals: () => ({ Terminal: FakeTerminal, FitAddon: { FitAddon: FakeFit } }) },
     },
@@ -131,7 +182,7 @@ function sessionHarness() {
   return { win, sockets };
 }
 
-async function runExit(frame) {
+async function runExit(frame, agent = "grok") {
   const { win, sockets } = sessionHarness();
   const events = [];
   const host = {
@@ -139,7 +190,7 @@ async function runExit(frame) {
     emit: (e) => events.push(e),
     alive: () => true,
   };
-  await win.CairnAgentLoginSession.start("grok", host);
+  await win.CairnAgentLoginSession.start(agent, host);
   assert.equal(sockets.length, 1);
   sockets[0].onmessage({ data: JSON.stringify(frame) });
   // The client runs in its own vm realm: compare plain data, not cross-realm objects.
@@ -160,4 +211,29 @@ test("a login CLI that exits at once with an error says why, in plain words firs
     { t: "failed", reason: "incomplete", message: "The sign-in didn't finish." },
   ]);
   assert.deepEqual(await runExit({ t: "exit", code: 0 }), [{ t: "connected" }]);
+});
+
+test("agy's print-mode stream yields the whole link at once, a pasted code goes in with Enter", async () => {
+  const { win, sockets } = sessionHarness();
+  const events = [];
+  const host = { termHost: win.document.createElement("div"), emit: (e) => events.push(e), alive: () => true };
+  const handle = await win.CairnAgentLoginSession.start("antigravity", host);
+  const bytes = new TextEncoder().encode(AGY_PRINT_AUTH);
+  // Split mid-URL across two frames: nothing is offered until the URL is whole.
+  const cut = AGY_PRINT_AUTH.indexOf("&state=");
+  sockets[0].onmessage({ data: bytes.slice(0, cut).buffer });
+  assert.equal(events.filter((e) => e.t === "link").length, 0);
+  sockets[0].onmessage({ data: bytes.slice(cut).buffer });
+  const links = JSON.parse(JSON.stringify(events.filter((e) => e.t === "link")));
+  assert.deepEqual(links, [{ t: "link", url: AGY_URL }]);
+  assert.equal(handle.send(" 4/0AVG-code "), true);
+  assert.equal(sockets[0].sent.at(-1), "4/0AVG-code\r");
+});
+
+test("agy's 60-second window running out reads as expired (a fresh link), not a failure", async () => {
+  const detail = loginExitDetail(AGY_PRINT_AUTH_TIMEOUT);
+  assert.deepEqual(await runExit({ t: "exit", code: 1, detail }, "antigravity"), [
+    { t: "failed", reason: "expired", message: "The sign-in didn't finish. Google said: error: authentication failed or timed out" },
+  ]);
+  assert.deepEqual(await runExit({ t: "exit", code: 0 }, "antigravity"), [{ t: "connected" }]);
 });

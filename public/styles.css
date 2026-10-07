@@ -5641,7 +5641,7 @@ a.msrow-link:active{transform:var(--press-lg)}
 .alp-status.is-err{color:var(--dawn)}
 .alp[data-alp-phase="link"] .alp-status,.alp[data-alp-phase="pasted"] .alp-status{color:var(--ink)}
 .alp-link{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-6) var(--space-10)}
-.alp-link[hidden],.alp-code[hidden],.alp-paste[hidden],.alp-done[hidden]{display:none}
+.alp [hidden]{display:none}
 .alp-open{min-height:48px;padding:0 var(--space-11);font-size:var(--text-base);text-decoration:none;animation:settlein var(--dur-2) var(--ease) both}
 .alp-open:focus-visible{outline:2px solid var(--dawn);outline-offset:2px}
 .alp-code{display:flex;flex-direction:column;gap:var(--space-3);padding:var(--space-7) var(--space-8);border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface2);animation:settlein var(--dur-2) var(--ease) both}
@@ -5655,7 +5655,8 @@ a.msrow-link:active{transform:var(--press-lg)}
 .alp-paste-in::placeholder{color:var(--muted)}
 .alp-paste-in:focus{outline:none;border-color:var(--dawn)}
 .alp-paste-send{min-height:44px;padding:0 var(--space-10)}
-.alp-done{align-self:flex-start;min-height:44px}
+.alp-hint{margin:calc(-1 * var(--space-3)) 0 0;font-size:var(--text-sm);color:var(--muted)}
+.alp-left{font-variant-numeric:tabular-nums}
 .alp-more{display:flex}
 .alp-more-btn{min-height:32px}
 .alp-details{display:grid;grid-template-rows:0fr;visibility:hidden;transition:grid-template-rows var(--dur-2) var(--ease),visibility 0s linear var(--dur-2)}

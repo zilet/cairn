@@ -76,7 +76,7 @@ test("Claude's code is pasted into a plain field and sent to the CLI as typed", 
   assert.match(env.slot.querySelector(".alp-status").textContent, /Checking the code/);
 });
 
-test("the terminal waits folded under details; Antigravity's starts unfolded", async () => {
+test("the terminal waits folded under details", async () => {
   const env = load();
   env.win.CairnAgentLoginPanel.mount(env.slot, { name: "grok", label: "Grok" });
   await flush();
@@ -89,12 +89,6 @@ test("the terminal waits folded under details; Antigravity's starts unfolded", a
   assert.equal(more.getAttribute("aria-expanded"), "true");
   assert.equal(details.classList.contains("is-open"), true);
   assert.equal(more.textContent, "Hide details");
-
-  const agy = load();
-  agy.win.CairnAgentLoginPanel.mount(agy.slot, { name: "antigravity", label: "Google", detailsOpen: true });
-  await flush();
-  assert.equal(agy.slot.querySelector(".alp-details").classList.contains("is-open"), true);
-  assert.ok(agy.slot.querySelector("[data-alp-done]"), "Antigravity never exits on its own: the person says when");
 });
 
 test("a failure is said in plain words and closing tears the session down once", async () => {
@@ -129,8 +123,121 @@ test("the session reads the sign-in URL and a device code out of terminal lines"
   assert.equal(session.findDeviceCode(lines), "WDJB-MJHT2");
   // A wrapped URL continues across a box border; words that merely look like a code do not count.
   assert.equal(
-    session.findAuthUrl(["│ https://claude.ai/oauth/authorize?code=true&client_", "│ id=9d1c250a&state=xyz │"]),
-    "https://claude.ai/oauth/authorize?code=true&client_id=9d1c250a&state=xyz"
+    session.findAuthUrl(["│ https://claude.ai/oauth/authorize?code=true&client_", "│ id=9d1c250a&response_type=code&state=xyz │"]),
+    "https://claude.ai/oauth/authorize?code=true&client_id=9d1c250a&response_type=code&state=xyz"
   );
   assert.equal(session.findDeviceCode(["Use HTTP-ONLY cookies for this flow"]), "");
+});
+
+// Google (agy print mode) waits a fixed 60s for the pasted code, so its sign-in starts
+// on the tap — never on render — and a window that closed offers a fresh one.
+function loadGoogle() {
+  const starts = [];
+  const sent = [];
+  const tabs = [];
+  const session = {
+    start: async (name, h) => {
+      const entry = { name, host: h, closed: 0 };
+      starts.push(entry);
+      return {
+        send: (text) => {
+          sent.push(text);
+          return true;
+        },
+        close: () => {
+          entry.closed += 1;
+        },
+      };
+    },
+    findAuthUrl: () => "",
+    findDeviceCode: () => "",
+  };
+  const win = loadClientModule(["html-utils", "agent-login-model-client", "agent-login-panel-client"], {
+    globals: {
+      navigator: { maxTouchPoints: 5 },
+      CairnAgentLoginSession: session,
+      setTimeout: () => 0,
+      open: (href, target) => {
+        const tab = { href, target, closed: false, opener: {}, location: { href: "about:blank" }, close() { this.closed = true; } };
+        tabs.push(tab);
+        return tab;
+      },
+    },
+  });
+  const slot = win.document.createElement("div");
+  win.document.body.appendChild(slot);
+  return { win, slot, starts, sent, tabs };
+}
+
+const GOOGLE_URL =
+  "https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=1-x.apps.googleusercontent.com&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&response_type=code&state=4OTX";
+
+test("Google's sign-in starts on the tap, opens its tab inside the tap, and takes the pasted code", async () => {
+  const env = loadGoogle();
+  const connected = [];
+  env.win.CairnAgentLoginPanel.mount(env.slot, { name: "antigravity", label: "Google", onConnected: () => connected.push(1) });
+  await flush();
+  assert.equal(env.starts.length, 0, "rendering the step never starts the 60-second CLI");
+  assert.equal(env.slot.querySelector(".alp-details").classList.contains("is-open"), false);
+  assert.equal(env.slot.querySelector("[data-alp-done]"), null, "no self-report: exit 0 is the signal");
+  const launch = env.slot.querySelector("[data-alp-launch]");
+  assert.equal(launch.textContent, "Open Google sign-in");
+  assert.equal(launch.hidden, false);
+
+  await launch.click();
+  await flush();
+  assert.equal(env.starts.length, 1, "the tap spawns the sign-in");
+  assert.equal(env.tabs.length, 1, "a blank tab opened synchronously inside the tap");
+  assert.equal(env.tabs[0].href, "");
+  assert.equal(env.tabs[0].opener, null);
+
+  env.starts[0].host.emit({ t: "link", url: GOOGLE_URL });
+  assert.equal(env.tabs[0].location.href, GOOGLE_URL, "the waiting tab is pointed at the sign-in");
+  const form = env.slot.querySelector("form.alp-paste");
+  assert.equal(form.hidden, false);
+  assert.match(form.querySelector("label").textContent, /Paste the code Google shows you/);
+  assert.equal(form.querySelector("button[type=submit]").textContent, "Sign in");
+  assert.equal(env.slot.querySelector(".alp-type"), null, "the code field replaces the terminal type line");
+  assert.equal(env.slot.querySelector(".alp-hint").hidden, false);
+  assert.match(env.slot.querySelector(".alp-hint").textContent, /about a minute/);
+  assert.match(env.slot.querySelector(".alp-left").textContent, /1:00 left|0:59 left/);
+
+  form.querySelector("input").value = "4/0AVG-code";
+  form.dispatchEvent(new env.win.Event("submit", { bubbles: true, cancelable: true }));
+  assert.deepEqual(env.sent, ["4/0AVG-code"]);
+  env.starts[0].host.emit({ t: "connected" });
+  assert.deepEqual(connected, [1]);
+});
+
+test("with no tab handle, the whole link is the button; a closed window offers a fresh one", async () => {
+  const env = loadGoogle();
+  env.win.open = () => null;
+  const failed = [];
+  env.win.CairnAgentLoginPanel.mount(env.slot, { name: "antigravity", label: "Google", onFailed: (m) => failed.push(m) });
+  await flush();
+  await env.slot.querySelector("[data-alp-launch]").click();
+  await flush();
+  env.starts[0].host.emit({ t: "link", url: GOOGLE_URL });
+  const open = env.slot.querySelector("a.alp-open");
+  assert.equal(open.hidden, false);
+  assert.equal(open.href, GOOGLE_URL);
+  assert.equal(open.textContent, "Open Google sign-in");
+  assert.equal(env.slot.querySelector('[data-alp-copy="link"]').hidden, false);
+
+  // agy's 60s ran out: the old link and code are dead.
+  env.starts[0].host.emit({ t: "failed", reason: "expired", message: "The sign-in didn't finish. Google said: error: authentication failed or timed out" });
+  assert.deepEqual(failed, [], "a closed window is not a failure to report");
+  assert.equal(env.starts[0].closed, 1);
+  assert.match(env.slot.querySelector(".alp-status").textContent, /That sign-in window closed\. Open a fresh one/);
+  assert.equal(env.slot.querySelector(".alp-status").classList.contains("is-err"), false);
+  assert.equal(env.slot.querySelector("a.alp-open").hidden, true);
+  assert.equal(env.slot.querySelector("form.alp-paste").hidden, true);
+  const launch = env.slot.querySelector("[data-alp-launch]");
+  assert.equal(launch.hidden, false);
+  await launch.click();
+  await flush();
+  assert.equal(env.starts.length, 2, "Open again spawns a fresh sign-in (a new URL)");
+  // A late frame from the dead window never repaints the fresh one.
+  env.starts[0].host.emit({ t: "link", url: "https://accounts.google.com/stale" });
+  assert.equal(env.slot.querySelector("a.alp-open").hidden, true);
 });

@@ -197,7 +197,6 @@
         panel = panelApi.mount(slot, {
           name: provider.name,
           label,
-          detailsOpen: provider.name.toLowerCase() === "antigravity",
           onConnected: () => {
             if (!alive || seq !== runSeq) return;
             panel?.close();

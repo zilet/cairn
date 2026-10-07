@@ -37,7 +37,10 @@ const FALLBACK_LOGIN: Record<string, string[]> = {
   claude: ["auth", "login"],
   codex: ["login", "--device-auth"],
   grok: ["login", "--device-auth"], // re-verified on grok 1.0.46: URL + XXXX-XXXX code, no TTY needed
-  antigravity: [], // bare interactive `agy` — agy 1.3.1 has no login subcommand; launching it bare IS the sign-in
+  // agy 1.3.1 has no login subcommand. Print mode prints the whole OAuth URL on one
+  // line, takes the pasted code, answers /quota (no agent turn) and exits 0; unanswered
+  // it gives up after a fixed 60s. The bare TUI hard-wrapped the URL on a phone.
+  antigravity: ["-p", "/quota"],
 };
 
 // How much of the PTY's recent output is kept to explain a failed exit.
@@ -196,8 +199,9 @@ export function ptyInvocationFor(
   // Linux (util-linux) and other POSIX with util-linux `script`: when `script` is
   // itself driven through pipes (our WebSocket bridge), its child PTY starts at
   // 0x0. Most login CLIs tolerate that; Antigravity waits for a usable window and
-  // therefore renders nothing.
-  return { command: "script", args: ["-qfc", cmd, "/dev/null"] };
+  // therefore renders nothing. `-e` hands back the CLI's own exit status — without
+  // it `script` exits 0 whatever the child did, and exit 0 is what reads as signed in.
+  return { command: "script", args: ["-e", "-qfc", cmd, "/dev/null"] };
 }
 
 // Build the host's PTY invocation: delegate the shape to `ptyInvocationFor` and add

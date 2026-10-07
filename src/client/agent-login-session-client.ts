@@ -57,8 +57,31 @@
     return lines;
   }
 
-  function findAuthUrl(lines: string[]): string {
-    let found = "";
+  // A link the person could open and still be refused for is worse than none: an OAuth
+  // authorization request that carries its client_id but not its response_type was cut
+  // short on screen (agy's TUI hard-wrapped Google's URL into a scroll window — Google
+  // answered "Required parameter is missing: response_type"), as is one that ends
+  // inside a percent-escape.
+  function urlLooksCut(url: string): boolean {
+    return (/[?&]client_id=/.test(url) && !/[?&]response_type=/.test(url)) || /%[0-9A-Fa-f]?$/.test(url);
+  }
+
+  // The link to offer from candidates in the order they were printed: the newest one
+  // that is not visibly cut — and of two copies of the same link (one a prefix of the
+  // other, a wrap or a half-arrived write), always the longer.
+  function pickAuthUrl(candidates: string[]): string {
+    let best = "";
+    for (const candidate of candidates) {
+      const url = String(candidate || "").replace(/[.,;:)\]]+$/, "");
+      if (!/^https:\/\//.test(url) || urlLooksCut(url)) continue;
+      if (best && best.startsWith(url)) continue;
+      best = url;
+    }
+    return best;
+  }
+
+  function authUrlCandidates(lines: string[]): string[] {
+    const found: string[] = [];
     for (let i = 0; i < lines.length; i++) {
       const matches = (lines[i] ?? "").match(URL_RE);
       if (!matches) continue;
@@ -70,13 +93,43 @@
           // A wrapped URL's tail is the WHOLE line once border glyphs are gone; a line
           // that reads as words ("2. Enter this code") is the next paragraph.
           const cont = (lines[j] ?? "").replace(/[\s│┃|]+/g, " ").trim();
-          if (!cont || cont.includes(" ") || !URL_RUN_RE.test(cont)) break;
+          // A line that starts a URL of its own is a new link, never this one's tail.
+          if (!cont || cont.includes(" ") || !URL_RUN_RE.test(cont) || /^https?:\/\//.test(cont)) break;
           url += cont;
         }
       }
-      found = url.replace(/[.,;:)\]]+$/, "");
+      found.push(url);
     }
     return found;
+  }
+
+  function findAuthUrl(lines: string[]): string {
+    return pickAuthUrl(authUrlCandidates(lines));
+  }
+
+  // The same scan over the RAW output stream, which never wraps: a CLI that prints its
+  // URL on one line has it whole here however narrow the terminal is. Colour escapes
+  // are dropped; any other escape (a cursor move, an erase) is a break, so text a TUI
+  // painted elsewhere on screen is never glued onto a URL. A URL counts only once
+  // something follows it — one still arriving is not yet whole. An OSC 8 hyperlink
+  // carries its full URI in the escape itself.
+  const STREAM_URL_RE = new RegExp("https://" + URL_CHARS + "+(?=[^A-Za-z0-9\\-._~:/?#\\[\\]@!$&*+,;=%])", "g");
+  function findStreamAuthUrl(raw: string): string {
+    const text = String(raw || "");
+    const found: string[] = [];
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: terminal escapes are the point
+    for (const m of text.matchAll(/\x1b\]8;[^;\x07\x1b]*;(https:\/\/[^\x07\x1b]+)(?:\x07|\x1b\\)/g)) found.push(m[1] ?? "");
+    const plain = text
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: terminal escapes are the point
+      .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: terminal escapes are the point
+      .replace(/\x1b\[[0-9;?]*[ -/]*m/g, "")
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: terminal escapes are the point
+      .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "\n")
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: terminal escapes are the point
+      .replace(/\x1b[()][A-Za-z0-9]|\x1b[=>78]/g, "");
+    for (const m of plain.matchAll(STREAM_URL_RE)) found.push(m[0]);
+    return pickAuthUrl(found);
   }
 
   function findDeviceCode(lines: string[]): string {
@@ -115,6 +168,10 @@
 
     let closed = false;
     let lastUrl = "";
+    // The raw output (decoded, bounded) beside the terminal's own buffer: the buffer
+    // knows box-wrapped URLs, the stream knows ones a narrow screen soft-wrapped.
+    let raw = "";
+    const decoder = typeof TextDecoder === "function" ? new TextDecoder() : null;
     let lastCode = "";
     let finished = false;
 
@@ -171,7 +228,8 @@
     // client grid mid-session (the phone keyboard opening) would only desync it.
 
     function reportUrl(url: string): void {
-      if (!/^https:\/\//.test(url) || url === lastUrl) return;
+      // Never trade a link for a shorter copy of itself (a later scan of a cut screen).
+      if (!/^https:\/\//.test(url) || lastUrl.startsWith(url)) return;
       lastUrl = url;
       host.emit({ t: "link", url });
     }
@@ -181,7 +239,7 @@
       scanTimer = null;
       try {
         const lines = bufferLines(term);
-        const url = findAuthUrl(lines);
+        const url = pickAuthUrl([findAuthUrl(lines), findStreamAuthUrl(raw)]);
         if (url) reportUrl(url);
         const code = findDeviceCode(lines);
         if (code && code !== lastCode) {
@@ -230,9 +288,12 @@
             // A CLI that exits non-zero on its own (a bad flag, a refused device code)
             // says why: the plain headline, then its own last error line.
             const detail = typeof msg.detail === "string" ? msg.detail.trim() : "";
+            // A sign-in that waited out its own window (agy gives up after 60s) needs a
+            // fresh link — its code is dead — so it says "expired", not "incomplete".
+            const reason: AgentLoginFailReason = /\b(timed out|interrupted|expired)\b/i.test(detail) ? "expired" : "incomplete";
             // The server ran out of disk or memory: its own headline says what to do.
             if (detail && (msg.reason === "disk_full" || msg.reason === "out_of_memory")) fail("incomplete", detail);
-            else fail("incomplete", detail ? `${model.status("loginIncomplete")} ${model.label(name)} said: ${detail}` : model.status("loginIncomplete"));
+            else fail(reason, detail ? `${model.status("loginIncomplete")} ${model.label(name)} said: ${detail}` : model.status("loginIncomplete"));
           }
           break;
         case "busy":
@@ -255,7 +316,15 @@
       if (typeof event.data === "string") {
         try { handleControl(JSON.parse(event.data)); } catch {}
       } else if (event.data instanceof ArrayBuffer) {
-        term.write(new Uint8Array(event.data));
+        const bytes = new Uint8Array(event.data);
+        term.write(bytes);
+        if (decoder) {
+          raw = (raw + decoder.decode(bytes, { stream: true })).slice(-32768);
+          // A whole URL in the stream is offered at once — a backgrounded tab's timers
+          // may lag, and the person is waiting on that link.
+          const streamed = findStreamAuthUrl(raw);
+          if (streamed) reportUrl(streamed);
+        }
         scheduleScan();
       }
     };
@@ -292,6 +361,7 @@
   const CAIRN_AGENT_LOGIN_SESSION: AgentLoginSessionApi = {
     start: startAgentLoginSession,
     findAuthUrl,
+    findStreamAuthUrl,
     findDeviceCode,
   };
 

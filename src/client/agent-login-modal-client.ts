@@ -75,7 +75,6 @@
       overlay._panel = panel.mount(panelHost, {
         name,
         label,
-        detailsOpen: name.toLowerCase() === "antigravity",
         onConnected: () => {
           closeBtn.textContent = "Done";
           setTimeout(() => {

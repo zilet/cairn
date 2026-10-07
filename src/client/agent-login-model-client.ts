@@ -35,7 +35,7 @@
       return `<p class="agent-login-hint">Grok also works with an xAI API key: set <code>XAI_API_KEY</code> in the server's environment instead of signing in here.</p>`;
     }
     if (provider === "antigravity") {
-      return `<p class="agent-login-hint">Antigravity signs in inside its own screen below. Choose Google, approve it in the page that opens, and once its prompt appears you're signed in &mdash; then tap <b>I've signed in</b>.</p>`;
+      return `<p class="agent-login-hint">Google's sign-in waits about a minute for the code. If it closes first, open a fresh one &mdash; each link carries its own code.</p>`;
     }
     return "";
   }

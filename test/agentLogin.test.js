@@ -35,8 +35,9 @@ test("resolveLoginArgv returns the server-chosen login argv per agent", () => {
   assert.deepEqual(resolveLoginArgv("claude"), ["claude", "auth", "login"]);
   assert.deepEqual(resolveLoginArgv("codex"), ["codex", "login", "--device-auth"]);
   assert.deepEqual(resolveLoginArgv("grok"), ["grok", "login", "--device-auth"]);
-  // antigravity logs in via the bare interactive CLI (login: []).
-  assert.deepEqual(resolveLoginArgv("antigravity"), ["agy"]);
+  // antigravity signs in through print mode: the whole OAuth URL on one line, a pasted
+  // code, then /quota answered locally and exit 0 (the bare TUI cut the URL on a phone).
+  assert.deepEqual(resolveLoginArgv("antigravity"), ["agy", "-p", "/quota"]);
   // agy 1.1.24: `-p /quota --output-format json` is answered locally by the CLI (no
   // agent turn, no quota spent) and carries the usage buckets — signed-in AND limit
   // state in one probe. `models` used to be the probe; it fetched the catalog instead.
@@ -68,7 +69,7 @@ test("ptyInvocationFor builds EVERY platform's PTY wrapper from any host OS", ()
   // Linux / Docker: initialize the piped PTY to the default window before exec.
   const linux = ptyInvocationFor("linux", argv);
   assert.equal(linux.command, "script");
-  assert.deepEqual(linux.args, ["-qfc", "stty cols 100 rows 32; exec 'claude' 'auth' 'login'", "/dev/null"]);
+  assert.deepEqual(linux.args, ["-e", "-qfc", "stty cols 100 rows 32; exec 'claude' 'auth' 'login'", "/dev/null"]);
 
   // macOS: python3 pty.spawn of an sh -c wrapper (same stty init as Linux), with
   // the command JSON-encoded into a Python list literal.
@@ -96,7 +97,7 @@ test("ptyInvocationFor bakes the client's fitted size into the PTY init", () => 
   // client measured MUST reach the stty init — agy's sign-in screen is ~27 rows,
   // and a fold at 24 hid the OAuth URL + authorization-code field entirely.
   const inv = ptyInvocationFor("linux", ["agy"], { cols: 96, rows: 41 });
-  assert.deepEqual(inv.args, ["-qfc", "stty cols 96 rows 41; exec 'agy'", "/dev/null"]);
+  assert.deepEqual(inv.args, ["-e", "-qfc", "stty cols 96 rows 41; exec 'agy'", "/dev/null"]);
   const mac = ptyInvocationFor("darwin", ["agy"], { cols: 96, rows: 41 });
   assert.match(mac.args[1], /stty cols 96 rows 41; exec 'agy'/);
 });
@@ -106,7 +107,7 @@ test("ptyInvocationFor shell-quotes a token with a space/quote/metachar (Linux i
   // when wrapped by `script -qfc "<cmd>"` (run via /bin/sh) — never word-split or inject.
   const inv = ptyInvocationFor("linux", ["my agent", "log'in", "; rm -rf /"]);
   assert.equal(inv.command, "script");
-  assert.deepEqual(inv.args, ["-qfc", "stty cols 100 rows 32; exec 'my agent' 'log'\\''in' '; rm -rf /'", "/dev/null"]);
+  assert.deepEqual(inv.args, ["-e", "-qfc", "stty cols 100 rows 32; exec 'my agent' 'log'\\''in' '; rm -rf /'", "/dev/null"]);
 });
 
 test("buildPtyInvocation wraps the login argv in a real PTY (no native module)", () => {
@@ -118,7 +119,7 @@ test("buildPtyInvocation wraps the login argv in a real PTY (no native module)",
     // shell-quoted (the command runs via /bin/sh -c) so a future agents.json entry
     // with a space/metachar can't word-split or inject.
     assert.equal(inv.command, "script");
-    assert.deepEqual(inv.args, ["-qfc", "stty cols 100 rows 32; exec 'claude' 'auth' 'login'", "/dev/null"]);
+    assert.deepEqual(inv.args, ["-e", "-qfc", "stty cols 100 rows 32; exec 'claude' 'auth' 'login'", "/dev/null"]);
   } else if (process.platform === "darwin") {
     // python3 pty.spawn — BSD `script` can't PTY with piped stdio.
     assert.equal(inv.command, "python3");

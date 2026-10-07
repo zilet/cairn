@@ -107,12 +107,12 @@
     "public/js/bundle-15-welcome.js": {
       "lazy": "welcome",
       "measured": {
-        "raw": 67169,
-        "brotli": 17264
+        "raw": 71815,
+        "brotli": 18455
       },
       "budget": {
-        "raw": 69632,
-        "brotli": 17920
+        "raw": 73728,
+        "brotli": 18944
       }
     },
     "public/js/bundle-11-settings.js": {
