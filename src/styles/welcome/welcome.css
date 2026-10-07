@@ -137,8 +137,7 @@ body:is(.welcome-open,.welcome-pending)>:is(header,#view,.tabbar){visibility:hid
 .wel-msg.is-coach{align-self:flex-start;background:var(--surface);border:1px solid var(--line);border-bottom-left-radius:var(--radius-2xs)}
 .wel-msg.is-you{align-self:flex-end;background:var(--ink);color:var(--on-ink);border-bottom-right-radius:var(--radius-2xs)}
 .wel-in{animation:settlein var(--dur-3) var(--ease) both}
-.wel-phs{list-style:none;margin:0;padding:var(--space-1) 0;display:grid;gap:var(--space-5)}
-.wel-ph{display:flex;align-items:center;gap:var(--space-5);font-size:var(--text-md);line-height:var(--leading-snug);color:var(--muted);
+.wel-ph{margin:0;display:flex;align-items:center;gap:var(--space-5);font-size:var(--text-md);line-height:var(--leading-snug);color:var(--muted);
   transition:color var(--dur-2) var(--ease)}
 .wel-ph-mk{box-sizing:border-box;flex:0 0 auto;width:14px;height:14px;border-radius:50%;border:1.5px solid var(--line-strong);
   transition:background var(--dur-2) var(--ease),border-color var(--dur-2) var(--ease)}
@@ -146,6 +145,14 @@ body:is(.welcome-open,.welcome-pending)>:is(header,#view,.tabbar){visibility:hid
 .wel-ph[data-state="working"] .wel-ph-mk{border-color:var(--line);border-top-color:var(--dawn);animation:sugspin .9s linear infinite}
 .wel-ph[data-state="done"]{color:var(--ink2)}
 .wel-ph[data-state="done"] .wel-ph-mk{background:var(--ink);border-color:var(--ink);transform:scale(.6)}
+/* the working line's quiet second line: the thinking captions, or the composer's words */
+.wel-cap{margin:var(--space-3) 0 0 calc(14px + var(--space-5));font-size:var(--text-sm);line-height:var(--leading-snug);
+  color:var(--muted);min-height:1.3em}
+.wel-cap:empty{display:none}
+.wel-cap.typing-cap{animation:settlein var(--dur-3) var(--ease) both}
+/* the starting point for food, the moment it is set */
+.wel-fuelnote .lbl{margin:0 0 var(--space-3)}
+.wel-fuelnote .wel-fuel{font-size:var(--text-md)}
 .wel-msg.is-fail{border-color:var(--line-strong)}
 .wel-fail-acts{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-8);margin-top:var(--space-6)}
 .wel-fail-acts .btn-solid{min-height:40px;padding:0 var(--space-9)}
@@ -169,6 +176,8 @@ body:is(.welcome-open,.welcome-pending)>:is(header,#view,.tabbar){visibility:hid
   border-top:1px solid var(--line)}
 .wel-wk-d{font-family:var(--font-mono);font-size:var(--text-2xs);letter-spacing:var(--tracking-mono);text-transform:uppercase;color:var(--muted)}
 .wel-wk-n{font-size:var(--text-base);color:var(--ink)}
+/* the week arrives a day at a time (reduced motion: all at once, foundation/reduced-motion.css) */
+.wel-reveal .wel-wk.reveal{animation-delay:calc(220ms + var(--i,0) * 170ms)}
 .wel-fuel{margin:0;font-family:var(--font-display);font-size:var(--text-lg);line-height:var(--leading-snug);color:var(--ink);text-wrap:balance}
 .wel-note{margin:var(--space-4) 0 0;font-size:var(--text-sm);line-height:var(--leading-normal);color:var(--muted);text-wrap:pretty}
 
@@ -194,6 +203,9 @@ body:is(.welcome-open,.welcome-pending)>:is(header,#view,.tabbar){visibility:hid
 .wel-done{display:grid;gap:var(--space-7);text-align:center}
 .wel-done-l{margin:0;font-size:var(--text-md);color:var(--ink2)}
 .wel-cta{width:100%;min-height:48px;font-size:var(--text-base)}
+.wel-wait{gap:var(--space-4);padding-bottom:var(--space-3)}
+.wel-wait .wel-done-l{font-size:var(--text-sm);color:var(--muted)}
+.wel-leave{justify-self:center;min-height:44px}
 
 /* ---- wide screens: the hero beside the words ---------------------- */
 @media (min-width:900px){

@@ -74,10 +74,27 @@ type WelcomeStepKey = "setup" | "signin" | "hello";
 type WelcomeStepState = "waiting" | "working" | "done" | "failed";
 type WelcomeWeekRow = { day: string; dayLong: string; name: string; order: number; dow: number | null };
 
+type WelcomePhaseMeta = import("../contracts/client-api.js").ClientWelcomePhaseMeta;
+
+/** What a running welcome has already landed (from its job meta). */
+type WelcomePartial = {
+  step: string;
+  /** The coach's reply, "" until the first pass is done. */
+  reply: string;
+  /** The fuel step is settled (the week is being built): `fuel` is final, null = none. */
+  fuelKnown: boolean;
+  fuel: { main: string; sub: string } | null;
+  /** The week composer's own phase words, "" when none. */
+  detail: string;
+};
+
 type WelcomeModelApi = {
   STEPS: ReadonlyArray<{ key: WelcomeStepKey; title: string }>;
   PHASES: ReadonlyArray<{ step: string; text: string }>;
   phaseIndex(job: unknown): number;
+  partial(job: unknown): WelcomePartial;
+  /** The server marked the job interrupted (a restart mid-run). */
+  interrupted(error: unknown): boolean;
   weekRows(week: unknown): WelcomeWeekRow[];
   weekNote(state: unknown, hasRows: boolean): string | null;
   landed(weekState: unknown, fuelState: unknown): boolean;
@@ -87,6 +104,8 @@ type WelcomeModelApi = {
   /** Leave one privacy-safe diagnostic (step, provider, code, status) for a failed step. */
   reportFailure(step: WelcomeFailureStep, provider: string | null | undefined, code: string, status?: unknown): boolean;
 };
+
+type WelcomeWorkingStep = "understand" | "week";
 
 type WelcomeFailureStep = "hello" | "connect.install" | "connect.signin" | "connect.verify" | "meet";
 
@@ -105,8 +124,9 @@ type WelcomeClientApi = {
   meetHtml(provider: CoachLinkProvider | null): string;
   userBubbleHtml(text: string): string;
   coachBubbleHtml(text: string): string;
-  workingHtml(): string;
-  phasesHtml(current: number, finished: boolean): string;
+  workingHtml(step?: WelcomeWorkingStep): string;
+  fuelHtml(fuel: { main: string; sub: string }): string;
+  waitDockHtml(): string;
   revealHtml(reveal: WelcomeReveal): string;
   /** `signIn`: the provider is signed out, so the way on is its sign-in. */
   failBubbleHtml(message: string, signIn?: boolean): string;
@@ -126,9 +146,33 @@ type WelcomeMeetDeps = {
   provider: CoachLinkProvider | null;
   onReconnect(): void;
   onDone(): void;
-  /** Leave the welcome for the app, marking it done (Meet's "Look around first"). */
+  /** Leave the welcome for the app, marking it done (Meet's "Look around first", and
+   *  "Look around while I finish your week" — the job carries on server-side). */
   onSkip(): void;
 };
 
 declare const CairnWelcomeConnect: { mount(host: HTMLElement, deps: WelcomeConnectDeps): () => void };
 declare const CairnWelcomeMeet: { mount(host: HTMLElement, deps: WelcomeMeetDeps): () => void };
+
+type WelcomeRunApi = {
+  create(deps: { append(html: string): HTMLElement | null; onWeekStarted(): void }): {
+    begin(): void;
+    phase(job: unknown): void;
+    reveal(result: { reply?: string; week?: unknown; week_state?: string; fuel?: unknown; fuel_state?: string }): void;
+    drop(): void;
+    stop(): void;
+    replied(): boolean;
+  };
+  watchJob(
+    id: string,
+    everyMs: number,
+    onRow: (job: { status?: string; result?: unknown; error?: unknown; [key: string]: unknown }) => void,
+    maxMs?: number
+  ): () => void;
+  /** The person left mid-week: follow the job to its end, then refresh what it touched. */
+  followAfterLeave(id: string): void;
+  /** The week landed: drop the caches it makes stale and repaint Today/Train if showing. */
+  landed(): void;
+};
+
+declare const CairnWelcomeRun: WelcomeRunApi;

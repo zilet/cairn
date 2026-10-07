@@ -170,6 +170,9 @@ const PERSISTED_KEYS = {
   // This browser has seen the install onboarded: the boot skips hiding the shell
   // while it asks whether the first-run welcome should open.
   "cairn.onboarded": ["app/onboarding", "welcome-screen", "welcome-meet-controller"],
+  // The last welcome this browser started ({id, text}), so a reload after a server
+  // restart names the interruption and offers Try again with the same words.
+  "cairn.welcome.job": ["welcome-meet-controller"],
   "cairn.app.identity.v1": ["app-identity-model"],
   "cairn.app.readd.dismissed.v1": ["app-identity-model"],
   // The five-home navigation's one-time "what moved here" line (v2 wave 5).

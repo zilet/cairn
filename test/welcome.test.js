@@ -209,6 +209,65 @@ test("welcome: understood, a first week landed today on the named weekdays, fuel
   assert.equal(out.startingOut, false, "with a week on the plan, day one's wording no longer applies");
 });
 
+test("welcome: one thing at a time — the reply and the fuel land (and ride the phase meta) before the week", () => {
+  const out = runIsolated(
+    { coach: { reply: WELCOME_REPLY, label: "Claude" } },
+    `
+      repo.setSettings({ lead_mode: "lead" });
+      const phases = [];
+      const hooks = {
+        onPhase: (phase, meta) =>
+          phases.push({
+            phase,
+            meta: JSON.parse(JSON.stringify(meta ?? null)),
+            fuelSaved: !!repo.getLatestNutritionTarget(),
+            planDays: repo.getPlan().filter((d) => Array.isArray(d.items) && d.items.length).length,
+            welcomed: repo.getSettings().coach_welcomed,
+            exchange: repo.listChatMessages(10).filter((m) => m.meta?.kind === "welcome").length,
+          }),
+      };
+      const result = await ops.welcomeCoach("coach", ${JSON.stringify(WELCOME_TEXT)}, hooks);
+      return { result, phases };
+    `
+  );
+  const r = out.result;
+  assert.equal(r.ok, true, JSON.stringify(r));
+  const steps = [...new Set(out.phases.map((p) => p.meta?.step))];
+  assert.deepEqual(steps, ["understand", "fuel", "week"], "the slow week is the last step");
+  const fuelStep = out.phases.find((p) => p.meta?.step === "fuel");
+  assert.equal(fuelStep.meta.reply, r.reply, "the coach's reply rides the phase the moment it exists");
+  const weekStep = out.phases.find((p) => p.meta?.step === "week");
+  assert.equal(weekStep.fuelSaved, true, "the starting fuel is saved before the week is composed");
+  assert.equal(weekStep.planDays, 0, "…and the week is not there yet");
+  assert.equal(weekStep.welcomed, true, "the conversation has happened: leaving now is not greeted by 'say hello'");
+  assert.equal(weekStep.exchange, 2, "the exchange is already in Ask");
+  assert.equal(weekStep.meta.reply, r.reply);
+  assert.deepEqual(weekStep.meta.fuel, r.fuel, "a reload mid-week re-paints the same fuel the result reports");
+  assert.equal(weekStep.meta.fuel_state, "set");
+  const details = out.phases.filter((p) => p.meta?.step === "week" && p.meta.detail).map((p) => p.meta.detail);
+  assert.ok(details.includes("composing your first week"), "the composer's own words pass through as detail");
+  assert.ok(
+    out.phases.every((p) => JSON.stringify(p.meta).length < 2000),
+    "phase payloads stay small"
+  );
+  assert.equal(r.week_state, "applied");
+});
+
+test("welcome: a retry after an interruption writes the exchange once and keeps its own fuel as set", () => {
+  const out = runIsolated(
+    { coach: { reply: WELCOME_REPLY } },
+    `
+      const first = await ops.welcomeCoach("coach", ${JSON.stringify(WELCOME_TEXT)});
+      const again = await ops.welcomeCoach("coach", ${JSON.stringify(WELCOME_TEXT)});
+      const exchange = repo.listChatMessages(20).filter((m) => m.meta?.kind === "welcome").length;
+      return { first: first.fuel_state, again: again.fuel_state, exchange };
+    `
+  );
+  assert.equal(out.first, "set");
+  assert.equal(out.again, "set", "a target the welcome itself set is not reported as one the person already had");
+  assert.equal(out.exchange, 2, "the same words are written to Ask once");
+});
+
 test("welcome: a plan already in place is kept, and an existing food target is reported rather than replaced", () => {
   const out = runIsolated(
     { coach: { reply: WELCOME_REPLY } },

@@ -3770,6 +3770,21 @@ export type ClientWelcomeResult =
     }
   | { ok: false; error: string; agent: null; tried: ClientAgentAttempt[]; agent_busy?: true; agent_status?: string };
 
+/**
+ * The running `welcome` job's `meta` (src/coachOps/welcome.ts WelcomePhaseMeta): the step
+ * it is on and what has already landed — the coach's reply from `fuel` on, the starting
+ * fuel from `week` on — so the Meet stage paints each piece as it exists, and a reload or
+ * a second device re-attaching shows it too. `detail` is the week composer's own words.
+ */
+export interface ClientWelcomePhaseMeta {
+  step: "understand" | "fuel" | "week";
+  frac?: { done: number; total: number };
+  reply?: string;
+  fuel?: { target_kcal: number | null; protein_g: number | null } | null;
+  fuel_state?: "set" | "existing" | "none";
+  detail?: string;
+}
+
 /** POST /api/agents/:name/verify: one "say hello" round-trip for that agent only. */
 export type ClientAgentVerifyResponse =
   | { ok: true; agent: string; ms: number }

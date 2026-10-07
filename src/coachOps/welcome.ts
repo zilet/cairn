@@ -6,7 +6,7 @@
 // never a scripted stand-in for an agent. No agent ⇒ the designed {ok:false} and nothing
 // pretends to coach.
 
-import { addChatMessage } from "../repo/chat.js";
+import { addChatMessage, listChatMessages } from "../repo/chat.js";
 import { violatesReadingGrammar } from "../repo/day-read-grammar.js";
 import { pickDayVariant } from "../repo/brain/day-read-rules.js";
 import { getLatestNutritionTarget, setNutritionTarget } from "../repo/nutrition.js";
@@ -190,11 +190,29 @@ async function signedOutOrAsIs(
 
 // ---------- the welcome: the coach's first conversation ----------
 
+// In the order they happen: the reply and the starting fuel both come from the first
+// agent pass, so they land (and show) before the slow part, the week.
 export const WELCOME_PHASES = {
   understand: "reading what you said",
-  week: "building your first week",
   fuel: "setting your starting fuel",
+  week: "building your first week",
 } as const;
+
+/**
+ * The welcome job's progress meta (job.meta, persisted on every phase): the step, and what
+ * has already landed — the coach's reply from `fuel` on, the starting fuel from `week` on —
+ * so the Meet stage paints each piece the moment it exists and a reload or a second device
+ * re-attaching shows it too. `detail` is the week composer's own phase words. Small by
+ * construction (the reply is capped at 700 characters). Client: ClientWelcomePhaseMeta.
+ */
+export interface WelcomePhaseMeta {
+  step: "understand" | "fuel" | "week";
+  frac: { done: number; total: number };
+  reply?: string;
+  fuel?: { target_kcal: number | null; protein_g: number | null } | null;
+  fuel_state?: "set" | "existing" | "none";
+  detail?: string;
+}
 
 // The calm floor for the coach's first words when the agent's own sentence is missing or
 // breaks the reading grammar. Rotated like every other deterministic sentence; each one
@@ -309,6 +327,66 @@ function fuelStartFrom(
   return { target_kcal, protein_g, why };
 }
 
+/**
+ * The starting fuel: an existing target is kept; with none, the first pass's suggestion
+ * goes through setNutritionTarget (its floors clamp it). A target an earlier, interrupted
+ * welcome already set from this same first conversation still reads as `set` — it is the
+ * welcome's own, not one the person had before.
+ */
+function welcomeFuel(parsed: any): {
+  fuel: { target_kcal: number | null; protein_g: number | null } | null;
+  fuel_state: "set" | "existing" | "none";
+} {
+  try {
+    const existing: any = getLatestNutritionTarget();
+    if (existing) {
+      return {
+        fuel: { target_kcal: existing.target_kcal ?? null, protein_g: existing.protein_g ?? null },
+        fuel_state: existing.source === "onboard" ? "set" : "existing",
+      };
+    }
+    const start = fuelStartFrom(parsed);
+    if (!start) return { fuel: null, fuel_state: "none" };
+    const saved: any = setNutritionTarget({
+      target_kcal: start.target_kcal,
+      protein_g: start.protein_g,
+      source: "onboard",
+      note: start.why ?? "A starting point from your first conversation with the coach.",
+    });
+    if (saved)
+      return {
+        fuel: { target_kcal: saved.target_kcal ?? null, protein_g: saved.protein_g ?? null },
+        fuel_state: "set",
+      };
+  } catch (err) {
+    log.warn("[welcome] the starting fuel target could not be set", { error: err });
+  }
+  return { fuel: null, fuel_state: "none" };
+}
+
+/**
+ * The exchange lands in Ask history and the install is marked onboarded + welcomed. A
+ * retry after an interruption re-sends the same words: the exchange is written once.
+ */
+function recordWelcomeExchange(raw: string, reply: string, chosen: string): void {
+  try {
+    const already = (listChatMessages(20) as any[]).some(
+      (m) => m?.role === "user" && m?.meta?.kind === "welcome" && String(m?.content ?? "") === raw
+    );
+    if (!already) {
+      addChatMessage("user", raw, null, { kind: "welcome" });
+      addChatMessage("assistant", reply, chosen, { kind: "welcome" });
+    }
+  } catch (err) {
+    log.warn("[welcome] could not save the first exchange to chat history", { error: err });
+  }
+  try {
+    setSettings({ onboarded: true, coach_welcomed: true });
+  } catch (err) {
+    log.warn("[welcome] could not mark the welcome done", { error: err });
+  }
+}
+
 function plainNoAgentError(
   tried: { agent: string; error: string; availability?: { state?: string } }[],
   signedOut: string | null = null
@@ -317,9 +395,14 @@ function plainNoAgentError(
   if (!first) return "Your coach isn't connected yet.";
   const who = agentDisplayName(signedOut ?? first.agent);
   // The server ran out of disk or memory: that, with what to do, is the whole story.
-  const resource = tried.find((t) => t.availability?.state === "disk_full" || t.availability?.state === "out_of_memory");
+  const resource = tried.find(
+    (t) => t.availability?.state === "disk_full" || t.availability?.state === "out_of_memory"
+  );
   const resourceLine = resource
-    ? resourceFailureHeadline(resource.availability?.state as "disk_full" | "out_of_memory", agentDisplayName(resource.agent))
+    ? resourceFailureHeadline(
+        resource.availability?.state as "disk_full" | "out_of_memory",
+        agentDisplayName(resource.agent)
+      )
     : null;
   if (resourceLine) return resourceLine;
   if (signedOut || first.availability?.state === "auth_required")
@@ -340,15 +423,18 @@ async function signedOutAgent(tried: { agent: string; availability?: { state?: s
 }
 
 /**
- * The coach's first conversation. Steps, each best-effort after the first:
+ * The coach's first conversation. Steps, each best-effort after the first, in the order a
+ * person can use them (each one's result rides the job's phase meta the moment it lands):
  *   a. understand — one agent pass over the person's words (the onboarding extraction,
  *      extended with the coach's reply, a starting fuel suggestion, the goal and any
  *      named lifting weekdays), applied through the onboarding writers;
- *   b. week — with no plan yet, the blank-slate composer, routed as the person's own
- *      request so it lands today with one-tap Undo rather than next Monday;
- *   c. fuel — with no nutrition target yet, the suggestion through setNutritionTarget
- *      (its floors clamp it);
- *   d. the exchange lands in Ask history and the install is marked onboarded + welcomed.
+ *   b. fuel — with no nutrition target yet, the suggestion through setNutritionTarget
+ *      (its floors clamp it); it needs nothing but step a, so it never waits on the week;
+ *   c. the exchange lands in Ask history and the install is marked onboarded + welcomed;
+ *   d. week — with no plan yet, the blank-slate composer, routed as the person's own
+ *      request so it lands today with one-tap Undo rather than next Monday. The slow
+ *      part, last: the person may leave to look around while it composes, and the job
+ *      (server-side) lands the week on Today/Train all the same.
  * Only step a can fail the op: no agent answered ⇒ {ok:false, error, tried} and nothing
  * is marked done, so the person can simply try again.
  */
@@ -366,7 +452,10 @@ export async function welcomeCoach(agent: string | undefined, text: string, hook
       agent_status: "ok",
     };
   }
-  hooks?.onPhase?.(WELCOME_PHASES.understand, { step: "understand", frac: { done: 0, total: 3 } });
+  hooks?.onPhase?.(WELCOME_PHASES.understand, {
+    step: "understand",
+    frac: { done: 0, total: 3 },
+  } satisfies WelcomePhaseMeta);
 
   let run: Awaited<ReturnType<typeof runChosen>>;
   try {
@@ -399,9 +488,25 @@ export async function welcomeCoach(agent: string | undefined, text: string, hook
   applyOnboardBase(raw, applied);
   applyOnboardParsed(parsed, applied);
   const reply = welcomeReplyFrom(parsed, today);
+  // The reply is the person's first answer: it rides the next phase so it shows the
+  // moment it exists (and survives a reload), long before the week is composed.
+  hooks?.onPhase?.(WELCOME_PHASES.fuel, {
+    step: "fuel",
+    frac: { done: 1, total: 3 },
+    reply,
+  } satisfies WelcomePhaseMeta);
 
-  // b. the first week
-  hooks?.onPhase?.(WELCOME_PHASES.week, { step: "week", frac: { done: 1, total: 3 } });
+  // b. starting fuel — depends only on step a, so it lands before the (slow) week.
+  const { fuel, fuel_state } = welcomeFuel(parsed);
+
+  // c. the exchange joins Ask history and the install is past its first run. The
+  // conversation has happened; the week is its follow-on, so a person who leaves to look
+  // around while it composes is not greeted by "say hello" again.
+  recordWelcomeExchange(raw, reply, chosen);
+
+  // d. the first week
+  const weekMeta: WelcomePhaseMeta = { step: "week", frac: { done: 2, total: 3 }, reply, fuel, fuel_state };
+  hooks?.onPhase?.(WELCOME_PHASES.week, weekMeta);
   let week: WelcomeWeekDay[] | null = null;
   let week_state: WelcomeWeekState = "none";
   if (trainingWeekExists()) {
@@ -409,12 +514,15 @@ export async function welcomeCoach(agent: string | undefined, text: string, hook
     week = welcomeWeekFrom(getPlan() as any[]);
   } else {
     try {
-      // The composer's own phase captions would replace ours mid-step; keep the
-      // welcome's three steps the only thing the waiting card says.
+      // The composer's own phase words ride as `detail`: a small second line under the
+      // welcome's step, so the waiting card keeps saying what is actually happening.
       const composed: any = await composeWeek(
         chosen,
         raw,
-        { signal: hooks?.signal },
+        {
+          signal: hooks?.signal,
+          onPhase: (detail: string) => hooks?.onPhase?.(WELCOME_PHASES.week, { ...weekMeta, detail }),
+        },
         { explicitRequest: true, priority: "interactive" }
       );
       if (composed?.agent_busy) {
@@ -442,47 +550,6 @@ export async function welcomeCoach(agent: string | undefined, text: string, hook
       log.warn("[welcome] composing the first week failed", { error });
       week_state = "failed";
     }
-  }
-
-  // c. starting fuel
-  hooks?.onPhase?.(WELCOME_PHASES.fuel, { step: "fuel", frac: { done: 2, total: 3 } });
-  let fuel: { target_kcal: number | null; protein_g: number | null } | null = null;
-  let fuel_state: "set" | "existing" | "none" = "none";
-  try {
-    const existing = getLatestNutritionTarget();
-    if (existing) {
-      fuel_state = "existing";
-      fuel = { target_kcal: (existing as any).target_kcal ?? null, protein_g: (existing as any).protein_g ?? null };
-    } else {
-      const start = fuelStartFrom(parsed);
-      if (start) {
-        const saved: any = setNutritionTarget({
-          target_kcal: start.target_kcal,
-          protein_g: start.protein_g,
-          source: "onboard",
-          note: start.why ?? "A starting point from your first conversation with the coach.",
-        });
-        if (saved) {
-          fuel_state = "set";
-          fuel = { target_kcal: saved.target_kcal ?? null, protein_g: saved.protein_g ?? null };
-        }
-      }
-    }
-  } catch (err) {
-    log.warn("[welcome] the starting fuel target could not be set", { error: err });
-  }
-
-  // d. the exchange joins Ask history; the install is past its first run.
-  try {
-    addChatMessage("user", raw, null, { kind: "welcome" });
-    addChatMessage("assistant", reply, chosen, { kind: "welcome" });
-  } catch (err) {
-    log.warn("[welcome] could not save the first exchange to chat history", { error: err });
-  }
-  try {
-    setSettings({ onboarded: true, coach_welcomed: true });
-  } catch (err) {
-    log.warn("[welcome] could not mark the welcome done", { error: err });
   }
 
   return {

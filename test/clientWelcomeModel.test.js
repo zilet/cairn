@@ -14,10 +14,31 @@ const plain = (v) => JSON.parse(JSON.stringify(v));
 test("the job's phase is read from its step first, then its words; it never invents one", () => {
   const { CairnWelcomeModel: m } = load();
   assert.equal(m.phaseIndex({ meta: { step: "understand" } }), 0);
-  assert.equal(m.phaseIndex({ meta: { step: "week" }, phase: "anything" }), 1);
-  assert.equal(m.phaseIndex({ phase: "setting your starting fuel" }), 2);
+  assert.equal(m.phaseIndex({ meta: { step: "week" }, phase: "anything" }), 2);
+  assert.equal(m.phaseIndex({ phase: "setting your starting fuel" }), 1);
   assert.equal(m.phaseIndex({ phase: "queued" }), -1);
   assert.equal(m.phaseIndex(null), -1);
+});
+
+test("what a running welcome already landed is read from its meta; the fuel is final only once the week starts", () => {
+  const { CairnWelcomeModel: m } = load();
+  assert.deepEqual(plain(m.partial({ meta: { step: "fuel", reply: " Hello there. " } })), {
+    step: "fuel",
+    reply: "Hello there.",
+    fuelKnown: false,
+    fuel: null,
+    detail: "",
+  });
+  const week = m.partial({
+    meta: { step: "week", reply: "Hi", fuel: { target_kcal: 2210, protein_g: 171 }, fuel_state: "set", detail: "composing your first week" },
+  });
+  assert.equal(week.fuelKnown, true);
+  assert.equal(week.fuel.main, "About 2,200 kcal a day, with around 170 g of protein");
+  assert.equal(week.detail, "composing your first week");
+  assert.equal(m.partial({ meta: { step: "week", fuel: null, fuel_state: "none" } }).fuel, null, "no fuel is a settled none");
+  assert.deepEqual(plain(m.partial(null)), { step: "", reply: "", fuelKnown: false, fuel: null, detail: "" });
+  assert.equal(m.interrupted("interrupted by a restart"), true);
+  assert.equal(m.interrupted({ message: "Error: background operation failed" }), false);
 });
 
 test("the first week reads Monday-first, and a week with no stated weekdays reads by day", () => {
@@ -55,7 +76,7 @@ test("the starting fuel is an estimate in words, rounded, never a score", () => 
   const { CairnWelcomeModel: m } = load();
   assert.deepEqual(plain(m.fuelLines({ target_kcal: 2384, protein_g: 148 }, "set")), {
     main: "About 2,400 kcal a day, with around 150 g of protein",
-    sub: "A starting estimate. It settles as you log meals and weigh in.",
+    sub: "A starting estimate, yours to change anytime. It settles as you log meals and weigh in.",
   });
   assert.equal(m.fuelLines({ target_kcal: null, protein_g: 120 }, "set").main, "Around 120 g of protein");
   assert.match(m.fuelLines({ target_kcal: 2000, protein_g: null }, "existing").sub, /already set/);

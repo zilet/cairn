@@ -77,6 +77,8 @@ export const WELCOME_FAILURE_CODES: ReadonlySet<string> = new Set([
   "job_failed",
   "job_error",
   "job_canceled",
+  // A server restart cut the welcome job short (the boot marks it interrupted).
+  "job_interrupted",
 ]);
 
 const SOURCES = new Set<DiagnosticSource>(["agent", "client", "api", "mcp", "process", "scheduler", "worker"]);

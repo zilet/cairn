@@ -148,16 +148,34 @@
     return `<div class="wel-msg is-coach">${paragraphs(text)}</div>`;
   }
 
-  function phasesHtml(current: number, finished: boolean): string {
-    return CairnWelcomeModel.PHASES.map((ph, i) => {
-      const state = finished || i < current ? "done" : i === current ? "working" : "waiting";
-      return `<li class="wel-ph" data-state="${state}"><span class="wel-ph-mk" aria-hidden="true"></span><span>${escHtml(ph.text)}</span></li>`;
-    }).join("");
+  // One working line at a time: what the coach is doing now, with a quiet second line
+  // (the house thinking captions, or the week composer's own words) that keeps moving.
+  const WORKING: Record<WelcomeWorkingStep, string> = {
+    understand: "Reading what you said",
+    week: "Putting together your first week",
+  };
+
+  function workingHtml(step: WelcomeWorkingStep = "understand"): string {
+    return `<div class="wel-msg is-coach is-working" data-job-anchor="welcome" data-wel-working="${step}" data-wel-run>
+      <p class="wel-ph" data-state="working"><span class="wel-ph-mk" aria-hidden="true"></span><span>${escHtml(WORKING[step])}</span></p>
+      <p class="wel-cap" aria-hidden="true"></p>
+    </div>`;
   }
 
-  function workingHtml(): string {
-    return `<div class="wel-msg is-coach is-working" data-job-anchor="welcome">
-      <ol class="wel-phs" aria-label="What your coach is doing">${phasesHtml(0, false)}</ol>
+  /** The starting fuel, the moment it is set: one small card, an estimate in words. */
+  function fuelHtml(fuel: { main: string; sub: string }): string {
+    return `<section class="wel-msg is-coach wel-fuelnote" data-wel-run data-wel-fuel aria-label="Starting fuel">
+      <p class="lbl">Starting point</p>
+      <p class="wel-fuel">${escHtml(fuel.main)}</p>
+      <p class="wel-note">${escHtml(fuel.sub)}</p>
+    </section>`;
+  }
+
+  /** While the week composes: nothing to wait for — the person can go and look around. */
+  function waitDockHtml(): string {
+    return `<div class="wel-done wel-wait reveal">
+      <p class="wel-done-l">Your week takes a minute or two. It will be on Today when it's ready.</p>
+      <button class="linkbtn-quiet wel-leave" type="button" data-wel-leave>Look around while I finish your week</button>
     </div>`;
   }
 
@@ -197,7 +215,7 @@
           <p class="wel-note">${escHtml(r.fuel.sub)}</p>
         </section>`
       : "";
-    return `<div class="wel-reveal">
+    return `<div class="wel-reveal" data-wel-run>
       <section class="wel-rv-sec reveal" style="--i:1" aria-labelledby="welWeekH">
         <h2 class="lbl" id="welWeekH">Your first week</h2>
         ${week}${weekNote}
@@ -237,7 +255,8 @@
     userBubbleHtml,
     coachBubbleHtml,
     workingHtml,
-    phasesHtml,
+    fuelHtml,
+    waitDockHtml,
     revealHtml,
     failBubbleHtml,
     doneDockHtml,

@@ -9,11 +9,12 @@
     { key: "hello", title: "Say hello" },
   ];
 
-  // The welcome job's phases, in order (server: job.meta.step, job.phase as words).
+  // The welcome job's phases, in the order they happen (server: job.meta.step, job.phase
+  // as words). The reply and the fuel come from the first pass, so the week is last.
   const PHASES: ReadonlyArray<{ step: string; text: string }> = [
     { step: "understand", text: "Reading what you said" },
-    { step: "week", text: "Building your first week" },
     { step: "fuel", text: "Setting your starting fuel" },
+    { step: "week", text: "Building your first week" },
   ];
 
   const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -28,6 +29,27 @@
     if (byStep >= 0) return byStep;
     const words = String(row.phase || "").toLowerCase();
     return PHASES.findIndex((p) => words.startsWith(p.text.toLowerCase().split(" ")[0] || "\u0000"));
+  }
+
+  /**
+   * What a running welcome has already landed, from its job meta (ClientWelcomePhaseMeta):
+   * the coach's reply, the starting fuel once the week is being built, and the week
+   * composer's own words. Anything missing or malformed reads as not-yet.
+   */
+  function partial(job: unknown): WelcomePartial {
+    const row = job && typeof job === "object" ? (job as Record<string, unknown>) : {};
+    const meta = (row.meta && typeof row.meta === "object" ? row.meta : {}) as Partial<WelcomePhaseMeta>;
+    const step = typeof meta.step === "string" ? meta.step : "";
+    const reply = typeof meta.reply === "string" ? meta.reply.trim() : "";
+    const detail = typeof meta.detail === "string" ? meta.detail.trim().slice(0, 80) : "";
+    // The fuel is settled once the week step starts, even when there is none to show.
+    const fuelKnown = step === "week";
+    return { step, reply, fuelKnown, fuel: fuelKnown ? fuelLines(meta.fuel, meta.fuel_state) : null, detail };
+  }
+
+  /** A job the server marked interrupted (a restart mid-run): a retry, never a verdict. */
+  function interrupted(error: unknown): boolean {
+    return /interrupted/i.test(typeof error === "string" ? error : String((error as { message?: unknown } | null)?.message ?? ""));
   }
 
   /** The first week as rows Monday-first; a day with no stated weekday reads "Day n". */
@@ -90,7 +112,7 @@
     const sub =
       String(state || "") === "existing"
         ? "Your target was already set, so I kept it."
-        : "A starting estimate. It settles as you log meals and weigh in.";
+        : "A starting estimate, yours to change anytime. It settles as you log meals and weigh in.";
     return { main: main.charAt(0).toUpperCase() + main.slice(1), sub };
   }
 
@@ -129,7 +151,19 @@
     return text;
   }
 
-  const CAIRN_WELCOME_MODEL: WelcomeModelApi = { STEPS, PHASES, phaseIndex, weekRows, weekNote, landed, fuelLines, reportFailure, humanMessage };
+  const CAIRN_WELCOME_MODEL: WelcomeModelApi = {
+    STEPS,
+    PHASES,
+    phaseIndex,
+    partial,
+    interrupted,
+    weekRows,
+    weekNote,
+    landed,
+    fuelLines,
+    reportFailure,
+    humanMessage,
+  };
 
   Object.assign(globalThis, { CairnWelcomeModel: CAIRN_WELCOME_MODEL });
 })();

@@ -3638,7 +3638,14 @@ connected, then letting it talk. Three server pieces:
   not_installed and a plain-words message. `busy` is the spawn cap talking, never a verdict. Success
   drops the cached login verdict (`invalidateAgentConfigured`) and switches the agent back on.
 - **`POST /api/welcome {text, agent?}`** → a durable `welcome` job (`welcomeCoach`), phases "reading
-  what you said" → "building your first week" → "setting your starting fuel". Understanding is the
+  what you said" → "setting your starting fuel" → "building your first week" — the order a person
+  can use them. Each phase's `job.meta` (`WelcomePhaseMeta` / `ClientWelcomePhaseMeta`) carries what
+  already landed (the reply from `fuel` on, the fuel from `week` on, the composer's own words as
+  `detail`), so the Meet stage paints one thing at a time and a reload re-paints it; the exchange
+  and `onboarded`/`coach_welcomed` are written BEFORE the week, so the person may leave ("Look
+  around while I finish your week") and the job lands the week server-side. A restart-interrupted
+  job reads as a calm "interrupted — try again" (the Meet stage also polls the job, since a proxy
+  can close the stream for good during a redeploy). Understanding is the
   onboarding extraction in welcome mode (`buildOnboardPrompt(text, {welcome:true})`, named in
   `ONBOARD_SCHEMA`: `goal` → `profile.goal_mode` (recomp lands as `maintain` plus a remembered goal),
   `lift_days` → the stated `strength_schedule` (named weekdays only), `welcome_reply` (held to
@@ -3646,8 +3653,7 @@ connected, then letting it talk. Three server pieces:
   runs with `explicitRequest` — the person asked in their own words, so the week lands at THEIR
   boundary (today) with Undo, not next Monday; a busy host hands it to its own durable `compose_week`
   job instead. With no nutrition target, `fuel_start` goes through `setNutritionTarget` (its floors
-  clamp). The exchange is appended to chat history and settings `onboarded` + `coach_welcomed` are
-  set. Only "no agent answered" fails the op (the designed `{ok:false, error, tried}`), and then
+  clamp). Only "no agent answered" fails the op (the designed `{ok:false, error, tried}`), and then
   nothing is marked done. `coach_welcomed` (migration 122) is backfilled true for installs that had
   already onboarded, so an upgrade never says "say hello" to a long-standing athlete.
 - **Day one** (`isStartingOut()`: no plan item AND no logged set / activity / food note / check-in —
