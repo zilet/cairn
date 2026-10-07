@@ -3730,3 +3730,25 @@ test("the chronic sleep caveat still owns a chronically short sleeper — never 
     assert.ok(!r.why.includes(variant), "the exposure caveat does not pile on");
   }
 });
+
+// The DONE debrief must describe what the session was MADE of, not what was logged
+// first: a Pull day opened with a few leg-press and calf sets was debriefed as "Lower
+// body banked". The facts hand the agent a per-area set tally and rank lifts by work.
+test("DONE debrief facts: area tally and lift order follow the work, not the logged order", async () => {
+  resetTables("sets", "sessions", "exercises");
+  repo.upsertExercise({ name: "Seated Leg Press", muscle_group: "legs" });
+  repo.upsertExercise({ name: "Standing Calf Raise", muscle_group: "calves" });
+  repo.upsertExercise({ name: "Neutral-Grip Pull-Up", muscle_group: "back" });
+  repo.upsertExercise({ name: "Single-Arm Dumbbell Row", muscle_group: "back" });
+  for (let i = 0; i < 2; i++) repo.logSetByName({ date: REF, exercise: "Seated Leg Press", weight: 220, reps: 10, rir: 3 });
+  repo.logSetByName({ date: REF, exercise: "Standing Calf Raise", weight: 90, reps: 20, rir: 3 });
+  for (let i = 0; i < 3; i++) repo.logSetByName({ date: REF, exercise: "Neutral-Grip Pull-Up", reps: 8, rir: 1 });
+  for (let i = 0; i < 3; i++) repo.logSetByName({ date: REF, exercise: "Single-Arm Dumbbell Row", weight: 70, reps: 10, rir: 1 });
+  const { buildDayReadPrompt } = await import("../dist/prompt.js");
+  const prompt = buildDayReadPrompt(undefined, { date: REF, baseline: { kind: "done", focus: null, why: "", est_minutes: null, signals: {} } });
+  const area = prompt.match(/WORK BY AREA \(working sets\)[^\n]*/)?.[0] ?? "";
+  assert.match(area, /back\/pull 6 · legs 3/, "back leads the tally");
+  assert.match(area, /MIXED/, "a mixed day is flagged so the headline names both");
+  const session = prompt.match(/- SESSION TODAY[^\n]*/)?.[0] ?? "";
+  assert.ok(session.indexOf("Pull-Up") < session.indexOf("Leg Press"), "lifts are ranked by sets, not logged order");
+});

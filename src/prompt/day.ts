@@ -17,6 +17,7 @@ import { dayFuelState } from "../repo/fuel-state.js";
 import { withFlexibleRunLookahead } from "../repo/hybrid-run-lookahead.js";
 import { INSIGHT_PROMPT_COVERED_LIMIT, INSIGHT_PROMPT_UNKEYED_LIMIT, describeInsightIntentKey, renderInsightFacetVocabulary } from "../repo/insight-intent.js";
 import { learnedModelDayLines } from "../repo/learned-models.js";
+import { canonicalGroup, classifyMuscleGroup } from "../repo/exercise-canon.js";
 import { getSessionByDate, sessionSummary } from "../repo/sessions.js";
 import { hybridDayContext } from "../repo/training-read.js";
 import type { CoachContext } from "../repo/coach-context.js";
@@ -296,6 +297,21 @@ export function roundMinutesToHalfHour(mins: number): number {
 // toward + what's due, and where fuel sits. Plain facts only — the agent turns them
 // into a warm debrief. Every read is its own try/catch so a missing surface degrades
 // to fewer facts, never throws. Returns "" when there's nothing concrete to say.
+// Canonical muscle groups folded into the few areas a person names a session by.
+const DEBRIEF_AREA: Record<string, string> = {
+  back: "back/pull",
+  "rear delts": "back/pull",
+  biceps: "arms",
+  forearms: "arms",
+  triceps: "arms",
+  chest: "chest/push",
+  shoulders: "chest/push",
+  quads: "legs",
+  hamstrings: "legs",
+  glutes: "legs",
+  calves: "legs",
+};
+
 function debriefFacts(date: string): string {
   const lines: string[] = [];
   // 1) Today's session — the top set per lift + the volume done.
@@ -322,7 +338,50 @@ function debriefFacts(date: string): string {
         }
         return "logged";
       };
-      const lifts = [...top.entries()].slice(0, 8).map(([name, s]) => `${name} ${fmtSet(s)}`);
+      // What the session was actually MADE of. The lift list below is in logged order, and
+      // a few early leg sets used to lead it — so a Pull day with a leg press up front was
+      // debriefed as "Lower body banked". Tally the working sets per body area (warm-up
+      // ramps excluded, same 55%-of-top rule as the volume model) and say which area led.
+      const setCount = new Map<string, number>();
+      const topLoad = new Map<string, number>();
+      for (const s of sets) {
+        const w = s.weight != null ? Math.abs(Number(s.weight)) : 0;
+        if (w > (topLoad.get(s.exercise) ?? 0)) topLoad.set(s.exercise, w);
+      }
+      const areaSets = new Map<string, number>();
+      for (const s of sets) {
+        setCount.set(s.exercise, (setCount.get(s.exercise) ?? 0) + 1);
+        const w = s.weight != null ? Math.abs(Number(s.weight)) : 0;
+        const peak = topLoad.get(s.exercise) ?? 0;
+        if (w > 0 && peak > 0 && w < peak * 0.55) continue; // ramp-up warm-up, not working volume
+        const g = canonicalGroup(s.muscle_group) ?? classifyMuscleGroup(String(s.exercise));
+        if (!g || g === "mobility") continue;
+        const area = DEBRIEF_AREA[g] ?? g;
+        areaSets.set(area, (areaSets.get(area) ?? 0) + 1);
+      }
+      const areas = [...areaSets.entries()].sort((a, b) => b[1] - a[1]);
+      const planned = String(sess.daily_session?.focus || sess.day_name || "").trim();
+      if (areas.length) {
+        const total = areas.reduce((n, [, c]) => n + c, 0);
+        const mix = areas.map(([a, c]) => `${a} ${c}`).join(" · ");
+        const lead = areas[0];
+        const mixed = areas.length > 1 && lead[1] / total < 0.7;
+        lines.push(
+          `WORK BY AREA (working sets): ${mix}.${planned ? ` Planned focus: ${planned}.` : ""} ${
+            mixed
+              ? `The session MIXED areas — lead with what carried most (${lead[0]}) and name the other area plainly; never name only one of them.`
+              : `${lead[0]} carried the session.`
+          } Logged ORDER is not importance — an early set of something else does not make it the headline.`
+        );
+      }
+      // Heaviest-worked lifts first (most sets, then load), not first-logged.
+      const ranked = [...top.entries()].sort(
+        (a, b) =>
+          (setCount.get(b[0]) ?? 0) - (setCount.get(a[0]) ?? 0) || (Number(b[1]._score) || 0) - (Number(a[1]._score) || 0)
+      );
+      const lifts = ranked
+        .slice(0, 10)
+        .map(([name, s]) => `${name} ${fmtSet(s)}${(setCount.get(name) ?? 1) > 1 ? ` (${setCount.get(name)} sets)` : ""}`);
       const sum: any = sessionSummary?.(sess.id) ?? null;
       const vol =
         sum && sum.tonnage > 0
@@ -619,7 +678,7 @@ export function buildDayReadPrompt(
     baseline.kind === "done"
       ? `\nDEBRIEF MODE (a real, loading session is already logged today — this is a post-session debrief, NOT a fresh suggestion):
 - Do NOT propose more training unless they ask. The day's work is in.
-- "headline": acknowledge the WORK specifically — name what they actually did (a standout lift from SESSION TODAY, or the run/ride from CARDIO TODAY with its real effort) like a friend who watched you train, e.g. "Strong push session." / "Solid 6 km — you pushed that one.". If CARDIO TODAY shows a hard effort (high avg HR), don't call it "easy".
+- "headline": acknowledge the WORK specifically and TRUTHFULLY — it must describe what most of the session was (see WORK BY AREA), never a single early or minor part of it; a mixed day is named as mixed ("Pull day, legs too."). Name what they actually did (a standout lift from SESSION TODAY, or the run/ride from CARDIO TODAY with its real effort) like a friend who watched you train, e.g. "Strong push session." / "Solid 6 km — you pushed that one.". If CARDIO TODAY shows a hard effort (high avg HR), don't call it "easy".
 - "why": for a DONE day you MAY use 2-3 short sentences (the one exception to one-sentence): (1) how today fits the week's rhythm, (2) ONE forward focus — what the next session leans toward / what's DUE, (3) a brief refuel nudge ONLY if FUEL shows a real protein gap. Warm, plain, never a number-wall or a score.
 - Output "kind":"done", "focus":null, "est_minutes":null. DONE is a factual temporal state, not another easy-day recommendation.${debriefFacts(opts.date || context.now?.date || localDateISO())}`
       : "";

@@ -381,7 +381,7 @@ export function setSessionFeedback(
 export function setsForSession(sessionId: number) {
   return db
     .prepare(
-      `SELECT ls.*, e.name AS exercise, e.mode AS mode FROM logged_sets ls
+      `SELECT ls.*, e.name AS exercise, e.mode AS mode, e.muscle_group AS muscle_group FROM logged_sets ls
        JOIN exercises e ON e.id = ls.exercise_id
        WHERE ls.session_id = ? ORDER BY ls.id`
     )
