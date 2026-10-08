@@ -126,7 +126,7 @@ type HealthMarkersControllerResponse = {
     // you can spot which stories need attention while scrolling the full catalog.
     const off = ordered.filter((marker) => CairnHealthMarkers.markerOutOfRange(marker)).length;
     const badge = off ? `<span class="hmk-headcount">${off} off</span>` : "";
-    const head = `<div class="hmk-grouphead lbl reveal" style="${deps.stagger(groupIndex)}">${deps.escapeHtml(group.label || group.key)}${badge}</div>`;
+    const head = `<div class="hmk-grouphead lbl reveal" data-occludes="top" style="${deps.stagger(groupIndex)}">${deps.escapeHtml(group.label || group.key)}${badge}</div>`;
     const note = group.key === "lipids"
       ? CairnHealthClient.lipidGroupNoteHtml(ordered, { relAge: deps.relAge })
       : "";

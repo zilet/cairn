@@ -24,6 +24,7 @@ function ensureSaveBar(): HTMLElement {
   if (bar) return bar;
   bar = document.createElement("div");
   bar.className = "savebar";
+  bar.setAttribute("data-occludes", "bottom");
   bar.setAttribute("role", "status");
   bar.setAttribute("aria-hidden", "true");
   bar.innerHTML = `

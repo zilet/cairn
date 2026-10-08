@@ -58,6 +58,11 @@ class FakeRestBar {
       ".rest-skip": { textContent: "" },
     };
     this.buttons = [];
+    this.attributes = {};
+  }
+
+  setAttribute(name, value) {
+    this.attributes[name] = String(value);
   }
 
   set innerHTML(_value) {
@@ -196,6 +201,7 @@ test("rest timer renders controls and derives the countdown from the deadline", 
 
   assert.equal(env.body.classList.contains("resting"), true);
   assert.equal(bar.classList.contains("show"), true);
+  assert.equal(bar.attributes["data-occludes"], "bottom", "the focus reveal keeps a typed-into field clear of it");
   assert.equal(bar.children[".rest-time"].textContent, "Rest 1:30");
   assert.equal(fillPercent(bar), 100);
 

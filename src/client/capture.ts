@@ -16,7 +16,10 @@ function setupWeightChip(): void {
   if (!inline || !input) return;
   const toggle = () => {
     inline.hidden = !inline.hidden;
-    if (!inline.hidden) { input.focus(); input.scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth", block: "nearest" }); }
+    if (!inline.hidden) {
+      if (typeof CairnFocusReveal !== "undefined") CairnFocusReveal.focus(input, { box: inline });
+      else input.focus();
+    }
   };
   if (chip) chip.addEventListener("click", toggle);
   if (mini) mini.addEventListener("click", toggle);

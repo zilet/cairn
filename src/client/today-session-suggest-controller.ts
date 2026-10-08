@@ -477,9 +477,9 @@ type TodaySnapshotRecovery = {
   function revealSessionComposer(deps: TodaySessionSuggestDeps): void {
     const slot = suggestSlot(deps);
     if (!slot || sessionSuggestInFlight) return;
-    CairnTodaySessionSuggest.fillSlot(slot, CairnTodaySessionSuggest.composerHtml(), deps.reducedMotion(), "center");
+    CairnTodaySessionSuggest.fillSlot(slot, CairnTodaySessionSuggest.composerHtml(), deps.reducedMotion(), null); // in place: focused in the tap, revealed once settled
     const input = slot.querySelector<HTMLInputElement>(".sug-prompt");
-    if (input && !deps.reducedMotion()) setTimeout(() => input.focus({ preventScroll: true }), 60);
+    typeof CairnFocusReveal !== "undefined" ? CairnFocusReveal.focus(input, { box: slot.querySelector(".sug-composer") }) : input?.focus();
     const go = () => {
       const constraints = (input?.value || "").trim();
       void askForSession(constraints ? { constraints } : {}, deps);

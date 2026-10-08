@@ -85,6 +85,10 @@ type TodayAddExerciseDeps = {
     el.dataset[attr] = encodeURIComponent(value);
   }
 
+  // Focus the card's field; the one settled focus reveal brings the card (or its log row) in.
+  const focusCardField = (card: HTMLElement, field: HTMLElement | null): void =>
+    typeof CairnFocusReveal !== "undefined" ? CairnFocusReveal.focus(field, { box: card }) : field?.focus();
+
   function renamePendingOffPlan(state: TodayAddExerciseState, fromName: string, toName: string, mode?: string): void {
     const list = state.pendingOffPlan?.[state.logDate];
     if (!list) return;
@@ -136,8 +140,7 @@ type TodayAddExerciseDeps = {
         forgetExMode(deps.state, typedName);
         rememberExMode(deps.state, canonical, nextMode);
         renamePendingOffPlan(deps.state, typedName, canonical, nextMode);
-        other.scrollIntoView({ behavior: "smooth", block: "center" });
-        (other.querySelector<HTMLElement>(".in-r") || other.querySelector<HTMLElement>(".in-dur"))?.focus();
+        focusCardField(other, other.querySelector<HTMLElement>(".in-r") || other.querySelector<HTMLElement>(".in-dur"));
         return other;
       }
       if (!otherHasSets) other.remove();
@@ -411,8 +414,7 @@ type TodayAddExerciseDeps = {
     if (!fresh) return null;
     existing.replaceWith(fresh);
     wireCard(fresh, cached, deps);
-    fresh.scrollIntoView({ behavior: "smooth", block: "center" });
-    (fresh.querySelector<HTMLElement>(".in-dur") || fresh.querySelector<HTMLElement>(".in-r"))?.focus();
+    focusCardField(fresh, fresh.querySelector<HTMLElement>(".in-dur") || fresh.querySelector<HTMLElement>(".in-r"));
     return fresh;
   }
 
@@ -434,8 +436,7 @@ type TodayAddExerciseDeps = {
     if (addBlock) addBlock.before(cardEl);
     else (deps.root.querySelector(".plansurface") || deps.root).appendChild(cardEl);
     wireCard(cardEl, cached, deps);
-    cardEl.scrollIntoView({ behavior: "smooth", block: "center" });
-    (cardEl.querySelector<HTMLElement>(".in-r") || cardEl.querySelector<HTMLElement>(".in-dur"))?.focus();
+    focusCardField(cardEl, cardEl.querySelector<HTMLElement>(".in-r") || cardEl.querySelector<HTMLElement>(".in-dur"));
     return cardEl;
   }
 
@@ -510,8 +511,7 @@ type TodayAddExerciseDeps = {
         const curMode = existing.dataset.mode || "reps";
         const hasSets = !!existing.querySelector(".logged .chip");
         if (curMode === mode || hasSets) {
-          existing.scrollIntoView({ behavior: "smooth", block: "center" });
-          (existing.querySelector<HTMLElement>(".in-r") || existing.querySelector<HTMLElement>(".in-dur"))?.focus();
+          focusCardField(existing, existing.querySelector<HTMLElement>(".in-r") || existing.querySelector<HTMLElement>(".in-dur"));
           resetAddForm(input, form, btn, modeWrap);
           if (curMode !== mode && hasSets) deps.toast(`${name} already has sets — delete them to change its type`);
           return;

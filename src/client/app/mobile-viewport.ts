@@ -19,16 +19,186 @@
     return !!input.geometryOpen && !!input.textFocused && !zoomed;
   }
 
-  // How far to scroll the page so a composer box sits inside the visible viewport
-  // (layout-viewport coordinates, as getBoundingClientRect reports them): its bottom
-  // just above the keyboard, or — when it is taller than what is visible — its top
-  // at the top. 0 when it is already in view.
-  function revealDelta(rect: { top: number; bottom: number }, visibleTop: number, visibleHeight: number): number {
-    const margin = 12;
-    const visibleBottom = visibleTop + visibleHeight;
-    if (rect.bottom <= visibleBottom - 8 && rect.top >= visibleTop) return 0;
-    if (rect.bottom - rect.top > visibleHeight - 2 * margin) return Math.round(rect.top - visibleTop - margin);
-    return Math.round(rect.bottom - visibleBottom + margin);
+  // A text field: what raises the soft keyboard and what the focus reveal serves.
+  const TEXTY = /^(|text|search|email|url|tel|password|number)$/;
+  const textInputEl = (el: EventTarget | Element | null | undefined): el is HTMLElement => {
+    if (!(el instanceof Element) || el === document.body) return false;
+    if (el.tagName === "TEXTAREA") return true;
+    if (el.tagName === "INPUT") return TEXTY.test((el.getAttribute("type") || "").toLowerCase());
+    return el instanceof HTMLElement && el.isContentEditable === true;
+  };
+
+  // ---------- CairnFocusReveal: the ONE "reveal the focused field" helper ----------
+  // A focused field is brought clear of the keyboard (the visual viewport) and of every
+  // element declaring `data-occludes="top|bottom"` that is pinned (fixed, or a stuck
+  // sticky): tab bar, rest bar, save bar, sticky headers, docks. The nearest scroller
+  // moves first, by the least distance, and nothing moves when the field is visible. A
+  // field in a fixed layer (chat, welcome, a sheet) never scrolls the page. The geometry
+  // is pure (getBoundingClientRect coordinates in, deltas out) so it is testable.
+  type RevealBand = { top: number; bottom: number };
+  type RevealOccluder = { side: "top" | "bottom"; rect: RevealBand; pinned: boolean };
+  // A scroller: its clip (top/bottom), where it is scrolled to (at) and how far it can go (max).
+  type RevealScroller = RevealBand & { at: number; max: number };
+  const MARGIN = 12;
+
+  // The visible band minus what pinned occluders cover; one swallowing half the band (a
+  // misdeclared layer) is ignored.
+  function occludedBand(view: RevealBand, occluders: readonly RevealOccluder[]): RevealBand {
+    let { top, bottom } = view;
+    for (const { side, rect: r, pinned } of occluders) {
+      const h = r.bottom - r.top;
+      if (!pinned || h <= 0 || h > (view.bottom - view.top) / 2 || r.bottom <= view.top || r.top >= view.bottom) continue;
+      if (side === "top") top = Math.max(top, r.bottom);
+      else bottom = Math.min(bottom, r.top);
+    }
+    return { top, bottom: Math.max(top, bottom) };
+  }
+
+  // The least scroll (positive = content up) that lands `rect` inside `band` with a breath
+  // of margin; 0 when it is already wholly visible. Too tall to fit: its top leads.
+  function revealDelta(rect: RevealBand, band: RevealBand, margin = MARGIN): number {
+    if (rect.top >= band.top && rect.bottom <= band.bottom) return 0;
+    if (rect.top < band.top || rect.bottom - rect.top > band.bottom - band.top - 2 * margin) return Math.round(rect.top - band.top - margin);
+    return Math.round(rect.bottom - band.bottom + margin);
+  }
+
+  // Per scroller, innermost first: each reveals inside its own clip, only as far as it can
+  // scroll, and leaves the rest to the one outside it.
+  function planReveal(rect: RevealBand, band: RevealBand, scrollers: readonly RevealScroller[], margin = MARGIN): number[] {
+    let { top, bottom } = rect;
+    return scrollers.map((s) => {
+      const clip = { top: Math.max(band.top, s.top), bottom: Math.min(band.bottom, s.bottom) };
+      if (clip.bottom - clip.top < 24) return 0;
+      const delta = Math.max(-s.at, Math.min(Math.max(0, s.max - s.at), revealDelta({ top, bottom }, clip, margin)));
+      top -= delta;
+      bottom -= delta;
+      return delta;
+    });
+  }
+
+  // The composer row a field belongs to comes into view with it — never a whole <form>,
+  // which on a long settings page would lead with its top and lose the field.
+  const REVEAL_BOX = "[data-reveal-box], .logrow, .fuel-log-composer";
+  const css = (el: Element) => getComputedStyle(el);
+
+  // Where the visible area starts in getBoundingClientRect coordinates. Not `offsetTop`:
+  // iOS Safari moves scrollY WITH the visual viewport as the keyboard rises (scrollY,
+  // offsetTop and pageTop all read 268 on an iPhone), so client rects are already
+  // visual-relative and adding offsetTop pushed the band a keyboard's worth down — every
+  // focus then "fixed" a field iOS had just placed, and the page bounced. pageTop − scrollY
+  // is the offset on every engine (Chrome: offsetTop; WebKit: 0).
+  function visibleTop(vv: VisualViewport): number {
+    return typeof vv.pageTop === "number" ? vv.pageTop - (window.scrollY || 0) : vv.offsetTop;
+  }
+
+  function revealNow(field: Element, opts: { box?: Element | null } = {}): number[] {
+    const f = field.getBoundingClientRect();
+    if (!f.height) return []; // detached or not rendered
+    let layer: Element | null = null;
+    const chain: Array<[Element | null, RevealScroller]> = [];
+    for (let n = field.parentElement; n && n !== document.body; n = n.parentElement) {
+      const cs = css(n);
+      if (/(auto|scroll|overlay)/.test(cs.overflowY) && n.scrollHeight > n.clientHeight + 1) {
+        const r = n.getBoundingClientRect();
+        const top = r.top + n.clientTop;
+        chain.push([n, { top, bottom: top + n.clientHeight, at: n.scrollTop, max: n.scrollHeight - n.clientHeight }]);
+      }
+      if (cs.position === "fixed") { layer = n; break; }
+    }
+    if (!layer) chain.push([null, { top: -Infinity, bottom: Infinity, at: window.scrollY || 0, max: Infinity }]);
+    const occluders: RevealOccluder[] = [];
+    for (const el of document.querySelectorAll("[data-occludes]")) {
+      const cs = css(el);
+      if (el.contains(field) || (layer && !layer.contains(el)) || cs.visibility === "hidden" || cs.opacity === "0") continue;
+      const side = el.getAttribute("data-occludes") === "top" ? "top" : "bottom";
+      const rect = el.getBoundingClientRect();
+      // A sticky header covers anything only once it is stuck at the top.
+      occluders.push({ side, rect, pinned: cs.position === "fixed" || (cs.position === "sticky" && rect.top <= parseFloat(cs.top) + 1.5) });
+    }
+    const vv = window.visualViewport;
+    const vvTop = vv ? visibleTop(vv) : 0;
+    const band = occludedBand(vv ? { top: vvTop, bottom: vvTop + vv.height } : { top: 0, bottom: window.innerHeight }, occluders);
+    let target: RevealBand = f;
+    for (const box of [opts.box, field.closest(REVEAL_BOX)]) {
+      const r = box && box.contains(field) ? box.getBoundingClientRect() : null;
+      if (r && r.bottom - r.top <= band.bottom - band.top - 2 * MARGIN) { target = r; break; }
+    }
+    const deltas = planReveal(target, band, chain.map((c) => c[1]));
+    const behavior: ScrollBehavior = reducedMotion() ? "auto" : "smooth";
+    deltas.forEach((top, i) => { if (top) (chain[i][0] || window).scrollBy({ top, behavior }); });
+    return deltas;
+  }
+
+  // ---------- when: once things have SETTLED ----------
+  // Requested on focus, on a visual-viewport resize (the keyboard rising or resizing) and
+  // when an occluder changes while a field has focus (the rest bar sliding in). It runs
+  // once the viewport and scrollers have been quiet for QUIET ms and no occluder is still
+  // animating, or at MAX_WAIT — so it corrects what the native iOS focus scroll left
+  // instead of racing it. Scrolls only postpone it.
+  const QUIET = 140;
+  const MAX_WAIT = 900;
+  let revealTimer: ReturnType<typeof setTimeout> | 0 = 0;
+  let deadline = 0; // 0: nothing pending
+  let scrolledAway = false;
+  let explicit: { field: Element; box: Element | null } | null = null;
+  const occludersMoving = () =>
+    [...document.querySelectorAll("[data-occludes]")].some((el) => el.getAnimations?.().some((a) => a.playState === "running"));
+  const quiet = () => {
+    if (!deadline) return;
+    if (revealTimer) clearTimeout(revealTimer);
+    revealTimer = setTimeout(runReveal, Math.max(0, Math.min(QUIET, deadline - Date.now())));
+  };
+  function runReveal(): void {
+    revealTimer = 0;
+    if (Date.now() < deadline && occludersMoving()) {
+      quiet();
+      return;
+    }
+    deadline = 0;
+    const target = explicit;
+    explicit = null;
+    if (target?.field.isConnected) revealNow(target.field, { box: target.box });
+    else if (textInputEl(document.activeElement)) revealNow(document.activeElement);
+  }
+  function requestReveal(auto = false): void {
+    if (auto && scrolledAway) return;
+    if (!deadline) deadline = Date.now() + MAX_WAIT;
+    quiet();
+  }
+
+  function installFocusReveal(): void {
+    const doc = document;
+    const watch = typeof MutationObserver === "function"
+      ? new MutationObserver((records) => { if (records.some((r) => (r.target as Element).hasAttribute?.("data-occludes"))) requestReveal(true); })
+      : null;
+    doc.addEventListener("focusin", (e) => {
+      if (!textInputEl(e.target)) return;
+      scrolledAway = false;
+      watch?.observe(doc.body, { subtree: true, attributes: true, attributeFilter: ["class", "style"] });
+      requestReveal();
+    }, true);
+    doc.addEventListener("focusout", () => setTimeout(() => { if (!textInputEl(doc.activeElement)) watch?.disconnect(); }, 0), true);
+    // A repaint that put the focused field back (preventScroll) asks by event.
+    doc.addEventListener("cairn:reveal-focused", () => requestReveal());
+    // The athlete's hand wins: a touch drops a pending automatic reveal (a tap that focuses
+    // a field asks again on focusin) and stops re-reveals until the next focus.
+    doc.addEventListener("touchstart", () => {
+      scrolledAway = true;
+      if (!explicit) deadline = 0;
+    }, { capture: true, passive: true });
+    window.addEventListener("scroll", quiet, { capture: true, passive: true });
+    window.visualViewport?.addEventListener("resize", () => (textInputEl(doc.activeElement) ? requestReveal(true) : quiet()));
+    window.visualViewport?.addEventListener("scroll", quiet);
+  }
+
+  // Focus without the browser's own jump, then one settled reveal; `box` (a card, a
+  // composer) comes into view with the field when it fits.
+  function focusAndReveal(field: HTMLElement | null | undefined, opts: { box?: Element | null } = {}): void {
+    if (!field) return;
+    field.focus({ preventScroll: true });
+    explicit = { field, box: opts.box ?? null };
+    scrolledAway = false;
+    requestReveal();
   }
 
   function installMobileViewportGuards(): void {
@@ -49,6 +219,8 @@
     window.addEventListener("resize", syncChatViewport);
     window.addEventListener("orientationchange", syncChatViewport);
 
+    installFocusReveal();
+
     const vv = window.visualViewport;
     if (!vv) return;
     const root = document.documentElement;
@@ -59,14 +231,7 @@
     // PWA, where the layout viewport can shrink with the visual viewport). Pointer
     // devices are excluded from the intent path so desktop chat auto-focus does not
     // briefly hide the bottom bar.
-    const TEXTY = /^(|text|search|email|url|tel|password|number)$/;
     const softKeyboard = () => !matchMedia("(hover:hover)").matches;
-    const textInputEl = (el: EventTarget | Element | null | undefined): el is HTMLElement => {
-      if (!(el instanceof Element) || el === document.body) return false;
-      if (el.tagName === "TEXTAREA") return true;
-      if (el.tagName === "INPUT") return TEXTY.test((el.getAttribute("type") || "").toLowerCase());
-      return el instanceof HTMLElement && el.isContentEditable === true;
-    };
     const focusedTextInput = () => softKeyboard() && textInputEl(document.activeElement);
     // The tallest visual viewport seen this orientation approximates the no-keyboard
     // height. Used to tell "keyboard is actually on screen" from "keyboard is gone"
@@ -121,54 +286,8 @@
       // exactly the visible area, so its bottom-docked composer rides the keyboard top.
       root.style.setProperty("--vvt", `${Math.round(Math.max(0, vv.offsetTop))}px`);
     };
-    // The focused field (and its composer) stays in view above the keyboard. The
-    // browser scrolls a focused field into view as the keyboard rises, but it measures
-    // before the tab bar steps away and does not know about a composer's send row, so
-    // once the keyboard has settled the whole composer is brought into view if any of
-    // it is still hidden. Chat owns its own column (measureChatTop), so it is skipped.
-    let kbUp = false;
-    let revealTimer: ReturnType<typeof setTimeout> | 0 = 0;
-    const revealFocusedComposer = () => {
-      const active = document.activeElement;
-      if (!textInputEl(active)) return;
-      const el: HTMLElement = active;
-      if (el.closest?.(".chatview")) return;
-      const box = (el.closest?.(".chatbar, .fuel-log-composer, [data-composer], .logrow, form") as HTMLElement | null) || el;
-      if (typeof box.getBoundingClientRect !== "function") return;
-      const rect = box.getBoundingClientRect();
-      // Scroll by the MEASURED overlap with the visual viewport, never
-      // scrollIntoView({block:"end"}): iOS WebKit keeps the layout viewport at full
-      // height under the keyboard, so "end" lines the composer up behind it.
-      const delta = revealDelta(rect, vv.offsetTop, vv.height);
-      if (!delta) return;
-      try {
-        window.scrollBy(0, delta);
-      } catch {}
-    };
-    // Moving weight -> reps -> RIR keeps the keyboard up, so no kb-up transition fires
-    // and iOS's own scroll-to-field lands somewhere arbitrary (often under the keyboard).
-    // Re-run the reveal for every field focused while the keyboard is already up, and
-    // once more after iOS's own scroll has finished fighting us.
-    const revealAfterFocus = () => {
-      if (!kbUp) return;
-      if (revealTimer) clearTimeout(revealTimer);
-      revealTimer = setTimeout(() => {
-        revealTimer = 0;
-        if (root.classList?.contains("kb-up")) revealFocusedComposer();
-      }, 140);
-      setTimeout(() => { if (root.classList?.contains("kb-up")) revealFocusedComposer(); }, 420);
-    };
     const syncKeyboardUp = (geometryOpen: boolean) => {
-      const up = keyboardUpState({ geometryOpen, textFocused: focusedTextInput(), scale: vv.scale });
-      root.classList?.toggle("kb-up", up);
-      if (up && !kbUp) {
-        if (revealTimer) clearTimeout(revealTimer);
-        revealTimer = setTimeout(() => {
-          revealTimer = 0;
-          if (root.classList?.contains("kb-up")) revealFocusedComposer();
-        }, 320);
-      }
-      kbUp = up;
+      root.classList?.toggle("kb-up", keyboardUpState({ geometryOpen, textFocused: focusedTextInput(), scale: vv.scale }));
     };
     const sync = () => {
       if (vv.height > vvMax) vvMax = vv.height;
@@ -193,9 +312,7 @@
     window.addEventListener("orientationchange", () => { vvMax = vv.height; sync(); });
     // Focus/tap is an early intent signal, not proof that the keyboard is open.
     document.addEventListener("pointerdown", (e) => { if (textInputEl(e.target)) requestKeyboard(e.target); }, true);
-    document.addEventListener("focusin", (e) => { if (focusedTextInput()) { requestKeyboard(e.target); revealAfterFocus(); } else sync(); }, true);
-    // A repaint that restores the focused field (preventScroll) calls this to re-reveal it.
-    document.addEventListener("cairn:reveal-focused", revealAfterFocus);
+    document.addEventListener("focusin", (e) => { if (focusedTextInput()) requestKeyboard(e.target); else sync(); }, true);
     document.addEventListener("focusout", () => {
       sync();
       requestAnimationFrame(() => requestAnimationFrame(sync));
@@ -231,7 +348,17 @@
   }
 
   Object.assign(globalThis, { installMobileViewportGuards });
-  Object.assign(globalThis, { CairnKeyboardState: { keyboardUpState, revealDelta } });
+  Object.assign(globalThis, {
+    CairnKeyboardState: { keyboardUpState },
+    CairnFocusReveal: {
+      focus: focusAndReveal,
+      request: () => requestReveal(),
+      revealNow,
+      occludedBand,
+      revealDelta,
+      planReveal,
+    },
+  });
 
   if (typeof window !== "undefined") {
     window.installMobileViewportGuards = installMobileViewportGuards;

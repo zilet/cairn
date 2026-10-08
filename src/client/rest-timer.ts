@@ -139,6 +139,9 @@ function ensureRestBar(): HTMLElement {
   if (!bar) {
     bar = document.createElement("div");
     bar.className = "rest";
+    // It covers the bottom of the page: the focus reveal keeps the field being typed
+    // into clear of it, and re-reveals when it slides in over a focused field.
+    bar.setAttribute("data-occludes", "bottom");
     bar.innerHTML = `<div class="rest-fill"></div>
       <div class="rest-row">
         <button class="rest-btn" data-r="-15">−15</button>

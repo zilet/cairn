@@ -473,19 +473,8 @@ test("the keyboard is up only for a focused text field, real geometry, and no pi
   );
 });
 
-test("a composer under the keyboard is scrolled by the measured overlap, never aligned to the layout viewport", () => {
-  const win = loadClientModule("app-mobile-viewport");
-  const { revealDelta } = win.CairnKeyboardState;
-  // iOS: layout viewport 844 tall, keyboard up — only 0..500 is visible.
-  assert.equal(revealDelta({ top: 300, bottom: 420 }, 0, 500), 0, "already in view: nothing moves");
-  assert.equal(revealDelta({ top: 600, bottom: 700 }, 0, 500), 212, "bottom lands 12px above the keyboard");
-  assert.equal(revealDelta({ top: 40, bottom: 640 }, 0, 500), 28, "taller than what is visible: its top leads");
-  assert.equal(
-    revealDelta({ top: -80, bottom: 20 }, 0, 500),
-    -468,
-    "scrolled above: brought back to sit on the keyboard"
-  );
-});
+// The focused-field reveal geometry (keyboard, occluders, nested scrollers) lives in
+// test/clientFocusReveal.test.js.
 
 // ---------- the SWR soft repaint waits for the athlete's hands ----------
 

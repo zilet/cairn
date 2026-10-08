@@ -117,7 +117,7 @@
       ? `<span class="sess-prog"><b>${meta.exDone}</b><span class="sess-prog-sep"> of </span>${meta.exTotal}</span>`
       : "";
     return `<div class="sess-dest${meta.fresh ? " sess-fresh" : ""}">
-    <div class="sess-topbar">
+    <div class="sess-topbar" data-occludes="top">
       <button class="sess-close" id="sessClose" type="button" aria-label="Back to today">←</button>
       <div class="sess-topbar-mid">
         <div class="sess-kicker lbl">${escHtml(meta.kicker)}</div>

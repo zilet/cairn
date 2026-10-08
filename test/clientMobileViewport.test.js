@@ -58,6 +58,10 @@ class FakeElement {
   blur() {
     this.blurCount += 1;
   }
+
+  getBoundingClientRect() {
+    return { top: 0, bottom: 0, height: 0 };
+  }
 }
 
 function loadMobileViewport(options = {}) {
@@ -83,6 +87,7 @@ function loadMobileViewport(options = {}) {
     },
     visibilityState: "visible",
     addEventListener: addListener(documentListeners),
+    querySelectorAll: () => [],
   };
   const window = {
     innerHeight: options.innerHeight ?? 800,
@@ -140,12 +145,13 @@ test("mobile viewport guard installs once and preserves bottom inset", () => {
   assert.equal(env.body.classList.contains("kb-geometry-open"), false);
   assert.equal(env.getMeasureCount(), 1);
   assert.equal(env.windowListeners.get("resize").length, 1);
-  assert.equal(env.viewportListeners.get("resize").length, 1);
-  assert.equal(env.viewportListeners.get("scroll").length, 1);
+  // One for the keyboard state, one for the focus reveal's settle watch.
+  assert.equal(env.viewportListeners.get("resize").length, 2);
+  assert.equal(env.viewportListeners.get("scroll").length, 2);
 
   install();
   assert.equal(env.windowListeners.get("resize").length, 1);
-  assert.equal(env.viewportListeners.get("resize").length, 1);
+  assert.equal(env.viewportListeners.get("resize").length, 2);
 
   env.fireWindow("resize");
   assert.equal(env.getMeasureCount(), 2);

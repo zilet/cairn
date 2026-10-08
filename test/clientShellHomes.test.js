@@ -39,7 +39,7 @@ test("the tab bar is five homes, in the order muscle memory already knows", () =
     [...routes.homes]
   );
   // The moved-here line lives in the shell header, outside #view.
-  assert.match(html, /<header>[\s\S]*<p id="movedNote" class="moved-note" hidden><\/p>[\s\S]*<\/header>/);
+  assert.match(html, /<header[^>]*>[\s\S]*<p id="movedNote" class="moved-note" hidden><\/p>[\s\S]*<\/header>/);
 });
 
 test("manifest shortcuts open v2 homes directly, never through a redirect", () => {

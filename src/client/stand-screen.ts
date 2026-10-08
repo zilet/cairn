@@ -464,7 +464,7 @@ type StandStatus = "ok" | "watch" | "warn" | "mute";
   // (never buried at the scroll bottom); the rest of the health tools sit behind a
   // quiet "⋯" menu in the same bar.
   function actionBarHtml(): string {
-    return `<div class="stand-actionbar">
+    return `<div class="stand-actionbar" data-occludes="top">
       <button class="stand-addbtn" data-tool="add" type="button"><span class="stand-addbtn-p" aria-hidden="true">＋</span>Add labs or scan</button>
       <div class="stand-more">
         <button class="stand-morebtn" type="button" aria-label="More health tools" aria-expanded="false" data-morebtn>⋯</button>

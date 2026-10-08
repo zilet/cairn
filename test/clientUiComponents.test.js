@@ -135,7 +135,7 @@ test("segmented nav component escapes items and preserves active slider contract
     ],
   });
 
-  assert.match(html, /^<div class="segwrap">/);
+  assert.match(html, /^<div class="segwrap" data-occludes="top">/);
   assert.match(html, /class="seg seg-sliding"/);
   assert.match(html, /role="group"/);
   assert.match(html, /aria-label="Section navigation"/);

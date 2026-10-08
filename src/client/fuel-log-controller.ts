@@ -65,11 +65,12 @@
           c.fill(`${typed.replace(/\s+$/, "")}\n${idea}`);
           deps.toast("Added below what you'd typed");
         }
-      } else input()?.focus();
-      const el = root();
-      if (el && typeof el.scrollIntoView === "function") {
-        el.scrollIntoView({ block: "nearest", behavior: deps.reducedMotion() ? "auto" : "smooth" });
       }
+      // Focus without the browser's own jump; the one reveal brings the composer clear
+      // of the keyboard and the tab bar once the keyboard has settled.
+      const field = input();
+      if (typeof CairnFocusReveal !== "undefined") CairnFocusReveal.focus(field, { box: root() });
+      else field?.focus();
     }
 
     function close(): void {

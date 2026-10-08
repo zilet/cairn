@@ -265,7 +265,7 @@ test("Today session-suggest controller submits composer constraints and guards d
   harness.controller.revealSessionComposer(harness.deps);
   const input = harness.slot.querySelector(".sug-prompt");
   assert.equal(input.focusCount, 1);
-  assert.equal(harness.slot.scrolls[0]?.block, "center", "composer scrolls into view below the Brief");
+  assert.equal(harness.slot.scrolls[0]?.block ?? null, null, "painted in place: the focus reveal, not the slot, scrolls");
   harness.slot.querySelector("[data-vibe]").click();
   assert.equal(input.value, "upper body");
 

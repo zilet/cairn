@@ -119,7 +119,7 @@
           `Connected through ${p ? p.label : "your AI"}. Tell me what you're training for and what a normal week looks like. A sentence is plenty.`
         )}
       </div>
-      <div class="wel-dock">
+      <div class="wel-dock" data-occludes="bottom">
         <form class="wel-compose" novalidate>
           <label class="sr-only" for="welText">Tell your coach about you</label>
           <textarea id="welText" class="wel-text" rows="1" enterkeyhint="send" autocomplete="off"

@@ -3055,6 +3055,13 @@ declare global {
       segSkeleton(active: string, seg: readonly ClientSegment[], cards?: number): string;
     };
 
+    // app/mobile-viewport.ts: the one "reveal the focused field" helper.
+    CairnFocusReveal: {
+      focus(field: HTMLElement | null | undefined, opts?: { box?: Element | null }): void;
+      request(): void;
+      revealNow(field: Element, opts?: { box?: Element | null }): number[];
+    };
+
     CairnUiActions: {
       toast(message: unknown, options?: { action?: string; onAction?: () => void }): void;
       armDelete(btn: Element | null | undefined, onConfirm: () => unknown, options?: { label?: string }): void;
@@ -5913,6 +5920,7 @@ declare global {
   declare const CairnUiReads: Window["CairnUiReads"];
   declare const CairnUiFeedback: Window["CairnUiFeedback"];
   declare const CairnUiActions: Window["CairnUiActions"];
+  declare const CairnFocusReveal: Window["CairnFocusReveal"];
   declare const CairnUiSheet: Window["CairnUiSheet"];
   declare const CairnUiChart: Window["CairnUiChart"];
   declare const CairnDecisionUndo: Window["CairnDecisionUndo"];

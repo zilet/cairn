@@ -141,7 +141,7 @@ function segmentedHtml(options: SegmentedOptions): string {
     items.findIndex(([key]) => key === options.active)
   );
   const wrap = options.wrapClass ? ` ${escAttr(options.wrapClass)}` : "";
-  return `<div class="segwrap${wrap}"><div class="seg seg-sliding${cls}"${group} style="--segn:${items.length};--segi:${idx}"><span class="seg-thumb" aria-hidden="true"></span>${buttons}</div></div>`;
+  return `<div class="segwrap${wrap}" data-occludes="top"><div class="seg seg-sliding${cls}"${group} style="--segn:${items.length};--segi:${idx}"><span class="seg-thumb" aria-hidden="true"></span>${buttons}</div></div>`;
 }
 
 // The section navigation bar (Plan, Progress, Me): the sliding variant.

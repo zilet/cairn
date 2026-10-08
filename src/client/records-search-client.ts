@@ -62,7 +62,7 @@
   }
 
   function sectionHtml(s: Section, index: number, rowIndex: { value: number }): string {
-    const head = `<div class="hmk-grouphead lbl reveal" role="heading" aria-level="3" style="--i:${Math.min(index, 12)}">${escHtml(sectionLabel(s))}${badgeHtml(s)}</div>`;
+    const head = `<div class="hmk-grouphead lbl reveal" data-occludes="top" role="heading" aria-level="3" style="--i:${Math.min(index, 12)}">${escHtml(sectionLabel(s))}${badgeHtml(s)}</div>`;
     const note =
       s.kind === "panel" && s.group === "lipids" ? CairnHealthClient.lipidGroupNoteHtml(s.markers, { relAge }) : "";
     return `<section class="hmk-section records-section" data-records-section="${escAttr(s.key)}" data-kind="${escAttr(s.kind)}">${head}${note}<div class="hmk-card">${rowsHtml(s, rowIndex)}</div></section>`;
@@ -116,7 +116,7 @@
     }
     if (state.status !== "done" || !state.items.length) return "";
     return `<section class="hmk-section records-other-sec" aria-label="Documents, notes and body readings">
-      <div class="hmk-grouphead lbl" role="heading" aria-level="3">Documents, notes and body readings</div>
+      <div class="hmk-grouphead lbl" data-occludes="top" role="heading" aria-level="3">Documents, notes and body readings</div>
       <ul class="records-hits">${state.items.map(hitHtml).join("")}</ul>
     </section>`;
   }

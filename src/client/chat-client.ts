@@ -65,7 +65,7 @@ function chatShellHtml(): string {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 10l6 6 6-6"/></svg>
         </button>
       </div>
-      <div class="chatdock">
+      <div class="chatdock" data-occludes="bottom">
         <div id="chatFuelSlot" class="chatfuel-slot"></div>
         <div id="chatPreview" class="chat-preview" hidden>
           <img alt="Attached photo">

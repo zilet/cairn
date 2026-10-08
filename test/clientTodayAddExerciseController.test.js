@@ -267,6 +267,7 @@ function loadController() {
   const logRows = [];
   let skipWires = 0;
   const toasts = [];
+  const reveals = [];
   const context = {
     Element: FakeElement,
     HTMLElement: FakeElement,
@@ -283,6 +284,8 @@ function loadController() {
       activeElement: null,
     },
     peekCached: () => null,
+    // The one focus reveal (app/mobile-viewport.ts): records which card it brought in.
+    CairnFocusReveal: { focus: (field, opts) => reveals.push({ field, box: opts?.box ?? null }) },
   };
   context.window = context;
   context.globalThis = context;
@@ -342,6 +345,7 @@ function loadController() {
 
   return {
     context,
+    reveals,
     controller: context.CairnTodayAddExerciseController,
     rootEl,
     addBlock,
@@ -473,7 +477,9 @@ test("Today add-exercise controller restores skipped exercises and protects exis
   await flushAsync();
 
   assert.deepEqual(harness.toasts, ["Push-up already has sets — delete them to change its type"]);
-  assert.equal(existing.scrolls.length, 1);
+  assert.equal(existing.scrolls.length, 0, "no smooth centring racing the focus");
+  assert.equal(harness.reveals.length, 1);
+  assert.equal(harness.reveals[0].box, existing, "the existing card is revealed with its field focused");
   assert.deepEqual(harness.modes, []);
 });
 
@@ -834,7 +840,8 @@ test("applyCanonicalExerciseName merges into an existing canonical card", () => 
 
   assert.equal(next, existing);
   assert.equal(optimistic.parentElement, null, "the typed-name card is removed");
-  assert.equal(existing.scrolls.length, 1);
+  assert.equal(existing.scrolls.length, 0);
+  assert.equal(harness.reveals.at(-1)?.box, existing, "the canonical card is revealed with its field focused");
   assert.deepEqual(plain(harness.deps.state.pendingOffPlan["2026-06-30"]), [
     { name: "Dumbbell Bench Press", mode: "reps" },
   ]);

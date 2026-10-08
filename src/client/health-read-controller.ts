@@ -29,7 +29,7 @@ type HealthReadRecoverySummary = HealthReadControllerRecord & { has_data?: unkno
     if (!c) return;
     deps.teardownReadSpy();
     c.innerHTML = `<div class="hread">
-      <nav class="hread-nav rail" aria-label="Jump to a section">
+      <nav class="hread-nav rail" data-occludes="top" aria-label="Jump to a section">
         <button type="button" class="hread-chip" data-jump="hSynthesis">The read</button>
         <button type="button" class="hread-chip" data-jump="hbDirectives">Connections</button>
         <button type="button" class="hread-chip" data-jump="hRecovery">Recovery</button>
