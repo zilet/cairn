@@ -35,6 +35,8 @@ import { addDaysISO, daysBetweenISO } from "./shared.js";
 import { getEnduranceGoal, getProfile } from "./profile.js";
 import { resolvedCurrentBodyweight } from "./bodyweight.js";
 import { presentMarkerRow } from "./lab-display.js";
+import type { LabUnitSystem } from "./lab-units.js";
+import { labUnitSystem } from "./settings.js";
 
 export type CheckupItemKind = "lab" | "dexa" | "review" | "add";
 
@@ -275,9 +277,9 @@ function toCheckupItem(
   };
 }
 
-function markerValueText(raw: MarkerLike): string | null {
+function markerValueText(raw: MarkerLike, system: LabUnitSystem): string | null {
   // In the athlete's lab-unit system (src/repo/lab-display.ts), unit always attached.
-  const m = presentMarkerRow(raw);
+  const m = presentMarkerRow(raw, system);
   const v = m.latest?.value;
   if (v == null || v === "") return null;
   const num = typeof v === "number" ? v : Number(v);
@@ -467,6 +469,7 @@ function composeFollowThrough(
   }
 
   const items: FollowThroughItem[] = [];
+  const labSystem = labUnitSystem(); // once for the whole pass
   for (const [key, { marker, via }] of acc) {
     const status = followStatus(marker);
     const rc = recheckReadFor(marker, attentionBySignal, asOf);
@@ -476,7 +479,7 @@ function composeFollowThrough(
       via,
       status,
       status_text: STATUS_TEXT[status],
-      latest_value: markerValueText(marker),
+      latest_value: markerValueText(marker, labSystem),
       latest_date: markerDate(marker),
       trend_dir: (["rising", "falling", "stable"] as const).includes(marker.trend?.dir as any)
         ? (marker.trend?.dir as any)

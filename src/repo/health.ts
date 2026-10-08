@@ -13,7 +13,7 @@ import { daysBetweenISO, localDateISO } from "./shared.js";
 import { copyDeep, requestMemo } from "./request-memo.js";
 import { listExercises } from "./exercises.js";
 import { bodyRegion, resolveGroup } from "./exercise-canon.js";
-import { normalizeMarkerReading, parseLabNumber, seriesUnitsCompatible } from "./lab-units.js";
+import { labUnitsCompatible, normalizeMarkerReading, parseLabNumber, seriesUnitsCompatible } from "./lab-units.js";
 import { canonicalMarker, canonicalMarkerForReading, isNonAnalyteMarkerName, normalizeMarkerName } from "./marker-canon.js";
 import { bumpMarkerDataVersion, currentMarkerDataVersion, resetMarkerDataVersion } from "./marker-cache.js";
 import { syncMeasuredRmrFromHealthDocs } from "./metabolism.js";
@@ -1538,6 +1538,7 @@ function computeMarkerHistory() {
         const key = resolved.key || name.toLowerCase();
         if (isAnthropometricMarkerKey(key)) flag = null;
         const bandZone = matchOptimalZone(resolved.name);
+        let unitZone = bandZone;
         let normalized = normalizeMarkerReading(name, em.value, sourceUnit, bandZone);
         if (!normalized) continue;
         // A draw the band does not apply to (a random glucose, a PM cortisol) is still
@@ -1546,22 +1547,26 @@ function computeMarkerHistory() {
         if (!bandZone) {
           const analyte = unitAnalyteZone(resolved.name);
           const unified = analyte ? normalizeMarkerReading(name, em.value, sourceUnit, analyte) : null;
-          if (unified?.unit_converted) normalized = unified;
+          if (unified?.unit_converted) {
+            normalized = unified;
+            unitZone = analyte;
+          }
         }
-        // The lab's printed reference range (source unit). Scale it by the same
-        // factor the value was converted by, so range + value stay comparable after
-        // a recognized-unit normalization; pass-through markers keep it verbatim.
-        const refFactor =
-          normalized.unit_converted &&
-          typeof normalized.value === "number" &&
-          typeof normalized.source_value === "number" &&
-          normalized.source_value !== 0
-            ? normalized.value / normalized.source_value
-            : 1;
+        // The lab's printed reference range (source unit). Each bound goes through the
+        // SAME conversion the value did — the table's own map, so an affine one (HbA1c's
+        // IFCC offset) is honoured and a string-typed value ("8.9") converts its range
+        // too. Pass-through markers keep it verbatim. A bound that cannot follow the
+        // value into its unit is dropped, never left behind in the old unit.
+        const convertedUnit = normalized.unit;
+        const unitConverted = !!normalized.unit_converted;
         const scaleRef = (v: unknown): number | null => {
           const n = Number(v);
           if (v == null || v === "" || !Number.isFinite(n)) return null;
-          return Math.round(n * refFactor * 1000) / 1000;
+          if (!unitConverted) return Math.round(n * 1000) / 1000;
+          const bound = normalizeMarkerReading(name, n, sourceUnit, unitZone);
+          if (!bound?.unit_converted || typeof bound.value !== "number") return null;
+          if (!labUnitsCompatible(bound.unit, convertedUnit)) return null;
+          return Math.round(bound.value * 1000) / 1000;
         };
         const refLow = scaleRef(em.ref_low);
         const refHigh = scaleRef(em.ref_high);

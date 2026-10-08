@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { db, repo, seedHealthDoc, marker } from "./_seed.js";
 import { publicPriorityMarkers } from "../dist/domain/health/index.js";
 import { buildHealthReviewPrompt } from "../dist/prompt.js";
+import { labRangeRead } from "../dist/repo/lab-range.js";
 
 const near = (actual, expected, tol, msg) =>
   assert.ok(Math.abs(actual - expected) <= tol, `${msg ?? ""} expected ≈${expected}, got ${actual}`);
@@ -202,4 +203,199 @@ test("the health review prompt states the lab-unit system and every value carrie
   assert.equal(ldl.unit, "mmol/L");
   assert.equal(ldl.latest, 4.14);
   assert.equal(ldl.reported, "160 mg/dL");
+});
+
+// ---- review follow-ups -------------------------------------------------------------
+
+const historyOf = (re) => repo.getMarkerHistory().markers.find((m) => re.test(m.name));
+
+test("a converted reading's reference range follows the table's own map (HbA1c is affine)", () => {
+  // IFCC mmol/mol → %: (x + 23.497) / 10.929. A single proportional factor would turn
+  // 20–42 mmol/mol into 2.96–6.22 % and misplace a 38 inside it.
+  seedHealthDoc("2025-12-01", [{ name: "HbA1c", value: 38, unit: "mmol/mol", ref_low: 20, ref_high: 42 }]);
+  const a1c = historyOf(/a1c/i);
+  assert.equal(a1c.unit, "%");
+  near(a1c.latest.value, 5.627, 0.01);
+  near(a1c.latest.ref_low, 3.98, 0.01, "20 mmol/mol");
+  near(a1c.latest.ref_high, 5.99, 0.01, "42 mmol/mol");
+  assert.equal(labRangeRead(a1c).state, "within", "38 mmol/mol sits inside its own lab's 20–42");
+});
+
+test("a string-valued reading converts its reference range too", () => {
+  // Hemoglobin "8.9" mmol/L (×1.611 → 14.3 g/dL). Its range 8.5–11 must come along into
+  // g/dL, or the converted value reads far above a range left in mmol/L.
+  seedHealthDoc("2025-12-01", [{ name: "Hemoglobin", value: "8.9", unit: "mmol/L", ref_low: 8.5, ref_high: 11 }]);
+  const hgb = historyOf(/hemoglobin/i);
+  assert.equal(hgb.unit, "g/dL");
+  near(hgb.latest.value, 14.34, 0.01);
+  near(hgb.latest.ref_low, 13.69, 0.01);
+  near(hgb.latest.ref_high, 17.72, 0.01);
+  assert.equal(labRangeRead(hgb).state, "within");
+});
+
+const addDoc = (date, markers) =>
+  repo.addHealthDocument({ kind: "bloodwork", enrichment_status: "done", doc_date: date, parsed_json: { markers } });
+
+test("dedupe: a reading with no unit, or an unknown spelling, still agrees with its converted twin", () => {
+  addDoc("2025-03-10", [
+    { name: "LDL Cholesterol", value: 3.2, unit: "mmol/L" },
+    { name: "HDL Cholesterol", value: 1.3, unit: "mmol/L" },
+  ]);
+  addDoc("2025-03-10", [
+    { name: "LDL Cholesterol", value: 3.2, unit: null },
+    { name: "HDL Cholesterol", value: "1.3", unit: "mmoL/Ltr" }, // a spelling the table does not know
+  ]);
+  assert.equal(
+    repo.dedupeHealthDocuments().merged,
+    1,
+    "the printed numbers agree; one copy dropped/misspelled the unit"
+  );
+});
+
+test("dedupe: 3.2 mmol/L and 123.7 mg/dL are one LDL reading", () => {
+  addDoc("2025-03-10", [
+    { name: "LDL Cholesterol", value: 3.2, unit: "mmol/L" },
+    { name: "HDL Cholesterol", value: 1.3, unit: "mmol/L" },
+  ]);
+  addDoc("2025-03-10", [
+    { name: "LDL Cholesterol", value: 123.7, unit: "mg/dL" },
+    { name: "HDL Cholesterol", value: 50.3, unit: "mg/dL" },
+  ]);
+  assert.equal(repo.dedupeHealthDocuments().merged, 1);
+});
+
+test("dedupe: Lp(a) 40 mg/dL and 40 nmol/L never agree", () => {
+  addDoc("2025-03-10", [
+    { name: "Lp(a)", value: 40, unit: "mg/dL" },
+    { name: "ApoB", value: 90, unit: "mg/dL" },
+  ]);
+  addDoc("2025-03-10", [
+    { name: "Lp(a)", value: 40, unit: "nmol/L" },
+    { name: "ApoB", value: 90, unit: "mg/dL" },
+  ]);
+  assert.equal(repo.dedupeHealthDocuments().merged, 0);
+});
+
+test("dedupe: a qualified '<0.5' is a bound, never the number 0.5", () => {
+  addDoc("2025-03-10", [
+    { name: "hs-CRP", value: "<0.5", unit: "mg/L" },
+    { name: "ApoB", value: 90, unit: "mg/dL" },
+  ]);
+  addDoc("2025-03-10", [
+    { name: "hs-CRP", value: 0.5, unit: "mg/L" },
+    { name: "ApoB", value: 90, unit: "mg/dL" },
+  ]);
+  assert.equal(repo.dedupeHealthDocuments().merged, 0);
+  // …while two transcriptions of the same bound still agree.
+  addDoc("2025-04-10", [
+    { name: "hs-CRP", value: "< 0.5", unit: "mg/L" },
+    { name: "ApoB", value: 90, unit: "mg/dL" },
+  ]);
+  addDoc("2025-04-10", [
+    { name: "hs-CRP", value: "<0.5", unit: "mg/L" },
+    { name: "ApoB", value: 90, unit: "mg/dL" },
+  ]);
+  assert.equal(repo.dedupeHealthDocuments().merged, 1);
+});
+
+test("switching lab units never re-surfaces a health item the athlete already saw", () => {
+  seedHealthDoc("2025-12-01", [
+    marker("ApoB", 130, { unit: "mg/dL", flag: "high" }),
+    marker("LDL-C", 190, { unit: "mg/dL", flag: "high" }),
+    marker("Calcium", 8.0, { unit: "mg/dL", flag: "low" }),
+  ]);
+  repo.deriveDirectives();
+  const healthItem = () => {
+    const agenda = repo.todayAgenda();
+    return [...agenda.primary, ...agenda.more].find((item) => item.id === "health-focus");
+  };
+  const us = healthItem();
+  assert.ok(us?.revision);
+  repo.setSettings({ lab_units: "si" });
+  assert.equal(repo.healthFocus().lead.readings[0].unit, "mmol/L", "the readings are shown in SI now");
+  assert.equal(healthItem()?.revision, us.revision, "same material evidence, same revision");
+
+  // Seen in US, then switched: still seen.
+  repo.setSettings({ lab_units: "us" });
+  assert.equal(repo.acknowledgeTodayAgendaCandidate("health-focus", us.revision).ok, true);
+  repo.setSettings({ lab_units: "si" });
+  assert.equal(healthItem(), undefined);
+});
+
+const decisionCount = () =>
+  db.prepare("SELECT COUNT(*) AS n FROM brain_decisions WHERE kind = 'health_directive'").get().n;
+
+test("directive text is stored unit-neutral and shown in the athlete's system", () => {
+  seedHealthDoc("2025-12-01", [
+    marker("Total bilirubin", 1.6, { unit: "mg/dL", flag: "high" }), // the generic (unmapped) path
+    marker("Calcium", 8.0, { unit: "mg/dL", flag: "low" }), // the albumin-correction directive
+  ]);
+  repo.deriveDirectives();
+  const stored = () => db.prepare("SELECT id, marker, directive FROM health_directives WHERE status = 'active'").all();
+  const storedBili = stored().find((d) => /bilirubin/i.test(d.marker));
+  const storedCa = stored().find((d) => /calcium/i.test(d.marker));
+  assert.match(storedBili.directive, /\(1\.6 mg\/dL\)/);
+  assert.match(storedCa.directive, /0\.8 mg\/dL .* 1 g\/dL .* 4\.0 g\/dL/);
+  const before = decisionCount();
+  assert.ok(before > 0);
+
+  repo.setSettings({ lab_units: "si" });
+  // A later, unrelated draw forces a full re-derive under the SI setting.
+  seedHealthDoc("2026-01-15", [marker("Sodium", 140, { unit: "mmol/L" })]);
+  repo.deriveDirectives();
+  assert.deepEqual(
+    stored()
+      .map((d) => d.directive)
+      .sort(),
+    [storedBili.directive, storedCa.directive].sort(),
+    "a unit switch never rewrites a stored directive"
+  );
+  assert.equal(decisionCount(), before, "and never mints a decision event");
+
+  // Shown in SI wherever a directive is read.
+  const bili = repo.listActiveDirectives().find((d) => /bilirubin/i.test(d.marker));
+  const ca = repo.listActiveDirectives().find((d) => /calcium/i.test(d.marker));
+  assert.match(bili.directive, /\(27\.4 µmol\/L\)/);
+  assert.match(ca.directive, /0\.2 mmol\/L to the calcium for every 10 g\/L your albumin sits below 40 g\/L/);
+  assert.doesNotMatch(ca.directive, /mg\/dL|g\/dL/);
+  assert.match(repo.getDirective(storedCa.id).directive, /mmol\/L/);
+  assert.match(repo.listDirectives({ all: true }).find((d) => d.id === storedCa.id).directive, /mmol\/L/);
+
+  // …and back in US conventional, exactly as stored.
+  repo.setSettings({ lab_units: "us" });
+  assert.equal(repo.listActiveDirectives().find((d) => d.id === storedCa.id).directive, storedCa.directive);
+});
+
+test("renderLabQuantities: own marker first, one named analyte, ambiguity left as written", () => {
+  assert.equal(repo.renderLabQuantities("LDL (130 mg/dL)", "LDL-C", "si"), "LDL (3.36 mmol/L)");
+  assert.equal(repo.renderLabQuantities("LDL (130 mg/dL)", "LDL-C", "us"), "LDL (130 mg/dL)");
+  // No marker and two named mg/dL analytes: which one the number belongs to is unknown.
+  assert.equal(
+    repo.renderLabQuantities("calcium and creatinine near 9 mg/dL", null, "si"),
+    "calcium and creatinine near 9 mg/dL"
+  );
+  assert.equal(repo.renderLabQuantities("about 10% lower", "HbA1c", "si"), "about 10% lower");
+  assert.equal(repo.labQuantityNeutral("from 4.14 mmol/L to 160 mg/dL"), "from # to #");
+});
+
+test("the non-HDL lever prints through the shared lab-display helpers", () => {
+  repo.setProfile({ sex: "male", age: 55, height_in: 69, weight_lb: 210, smoking: 1, bp_treated: 0, statin: 0 });
+  seedHealthDoc("2026-06-01", [
+    marker("Total Cholesterol", 240, { unit: "mg/dL", flag: "high" }),
+    marker("HDL Cholesterol", 40, { unit: "mg/dL" }),
+    marker("ApoB", 130, { unit: "mg/dL", flag: "high" }),
+    marker("eGFR", 85, { unit: "mL/min" }),
+    marker("Systolic BP", 135, { unit: "mmHg", flag: "high" }),
+  ]);
+  for (const [system, unit] of [
+    ["us", "mg/dL"],
+    ["si", "mmol/L"],
+  ]) {
+    repo.setSettings({ lab_units: system });
+    const lever = repo.cardiovascularRiskRead().prevent.projection.levers_applied.find((l) => l.key === "lipids");
+    assert.ok(lever, system);
+    assert.equal(lever.unit, `${unit} non-HDL`);
+    assert.equal(lever.from, repo.roundLabDisplay(lever.from));
+    assert.ok(lever.detail.includes(`from ${lever.from} ${unit} to ${lever.to} ${unit}.`), lever.detail);
+  }
 });
