@@ -2433,7 +2433,7 @@ rw_read_autoupdates() {
   RW_SVC_ID=$(printf '%s\n' "$RW_OUT" | json_named_id "$RW_SERVICE")
   rw_cap environment list --json || return 1
   RW_ENV_ID=$(printf '%s\n' "$RW_OUT" | json_named_id "$RW_ENV")
-  [ -n "$RW_SVC_ID" ] && [ -n "$RW_ENV_ID" ] || return 1
+  if [ -z "$RW_SVC_ID" ] || [ -z "$RW_ENV_ID" ]; then return 1; fi
   rw_cap environment config --environment "$RW_ENV" --json || return 1
   RW_AU_TYPE=$(printf '%s\n' "$RW_OUT" | json_paths | awk -F '\t' -v want="services.$RW_SVC_ID.source.autoUpdates.type" '$1 == want { print $2; exit }')
   RW_OUT=""
@@ -3046,7 +3046,7 @@ rw_tpl_verify() { # id-or-code
   RW_TPL_ID=$(rw_tpl_get 'data\.template\.id')
   RW_TPL_CODE=$(rw_tpl_get 'data\.template\.code')
   RW_TPL_STATUS=$(rw_tpl_get 'data\.template\.status')
-  [ -n "$RW_TPL_ID" ] && [ -n "$RW_TPL_CODE" ] || die "Railway returned no template for '$1'."
+  if [ -z "$RW_TPL_ID" ] || [ -z "$RW_TPL_CODE" ]; then die "Railway returned no template for '$1'."; fi
   rtv_svc='data\.template\.serializedConfig\.services\.[^.]+'
   RW_TPL_TODO=""
   rtv_bad=""
@@ -3105,7 +3105,7 @@ rw_tpl_overview() {
     return 0
   fi
   has curl || die "curl is required to fetch the template overview ($RW_TPL_OVERVIEW_URL)."
-  [ -n "${RW_TPL_WORKDIR:-}" ] && [ -d "$RW_TPL_WORKDIR" ] || die "No temporary directory for the template overview."
+  if [ -z "${RW_TPL_WORKDIR:-}" ] || [ ! -d "$RW_TPL_WORKDIR" ]; then die "No temporary directory for the template overview."; fi
   RW_TPL_OVERVIEW="$RW_TPL_WORKDIR/overview.md"
   info "Fetching the overview: $RW_TPL_OVERVIEW_URL"
   curl -fsSL --proto '=https' --tlsv1.2 "$RW_TPL_OVERVIEW_URL" -o "$RW_TPL_OVERVIEW" </dev/null \
