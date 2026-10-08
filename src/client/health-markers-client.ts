@@ -1,8 +1,7 @@
 // @ts-check
 // Pure Health marker row/chart helpers for the vanilla PWA.
 
-// `reported`: the value as its lab printed it, when that was another unit system.
-type HealthMarkersPoint = { value?: unknown; date?: unknown; flag?: unknown; reported?: unknown };
+type HealthMarkersPoint = { value?: unknown; date?: unknown; flag?: unknown; reported?: unknown /* as its lab printed it */ };
 
 type HealthMarkersBand = { low?: unknown; high?: unknown; dir?: unknown };
 

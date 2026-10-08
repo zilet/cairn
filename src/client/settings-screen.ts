@@ -155,9 +155,7 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
       update_check_enabled: wm.update_check_enabled,
       usage_ping_enabled: wm.usage_ping_enabled,
       lead_mode: wm.lead_mode,
-      run_units: wm.run_units,
-      weight_units: wm.weight_units,
-      lab_units: wm.lab_units,
+      run_units: wm.run_units, weight_units: wm.weight_units, lab_units: wm.lab_units,
     };
     // password / api-key fields: blank means "leave the configured value intact" — only
     // send a typed value (matches the old per-field placeholder behavior).
@@ -170,9 +168,8 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
     // has no budget for a row of its own), so each surface re-reads on its next paint.
     CairnFmt.set(wm);
     if (typeof CairnWriteInvalidation !== "undefined") {
-      CairnWriteInvalidation.invalidate(CairnWriteInvalidation.targetsForChatAction("revert_decision"));
-      // Lab values are printed in the lab-unit system: drop the health/marker caches too.
-      CairnWriteInvalidation.invalidate(CairnWriteInvalidation.targetsForChatAction("log_health"));
+      // Lab values print in the lab-unit system, so the health/marker caches go too.
+      for (const a of ["revert_decision", "log_health"]) CairnWriteInvalidation.invalidate(CairnWriteInvalidation.targetsForChatAction(a));
     }
     artEnabled = wm.art_enabled; // take effect on the next render, no reload
     return true;

@@ -129,12 +129,12 @@
     "public/js/bundle-12-calendar.js": {
       "lazy": "calendar",
       "measured": {
-        "raw": 60268,
-        "brotli": 14751
+        "raw": 70819,
+        "brotli": 17828
       },
       "budget": {
-        "raw": 62464,
-        "brotli": 15360
+        "raw": 73728,
+        "brotli": 18432
       }
     },
     "public/js/bundle-13-meals.js": {

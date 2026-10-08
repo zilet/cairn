@@ -212,19 +212,17 @@
     const nodes = placed
       .map((p) => {
         const stone = STONE[p.mark.kind] || "endurance";
-        const pos = `--x:${r1(p.x)}%;--y:${r1(p.y)}%;--i:${p.index}`;
         return p.mark.summit
-          ? `<span class="hjour-node is-summit stone-${stone}" style="${pos}" aria-hidden="true">${cairnGlyph()}</span>`
-          : `<span class="hjour-node is-${escAttr(p.mark.kind)} stone-${stone}${p.index === selected ? " is-on" : ""}" style="${pos}" data-hjour-node="${p.index}" aria-hidden="true"></span>`;
+          ? `<span class="hjour-node is-summit stone-${stone}" style="--x:${r1(p.x)}%;--y:${r1(p.y)}%;--i:${p.index}" aria-hidden="true">${cairnGlyph()}</span>`
+          : `<span class="hjour-node is-${escAttr(p.mark.kind)} stone-${stone}${p.index === selected ? " is-on" : ""}" style="--x:${r1(p.x)}%;--y:${r1(p.y)}%;--i:${p.index}" data-hjour-node="${p.index}" aria-hidden="true"></span>`;
       })
       .join("");
     const labels = placed
       .filter((p) => sides.has(p.index))
       .map((p) => {
         const side = sides.get(p.index) === "above" ? "is-above" : "is-below";
-        const pos = `--x:${r1(p.x)}%;--y:${r1(p.y)}%;--i:${p.index}`;
         const aria = `${p.mark.label}, ${p.mark.date_words}, ${p.mark.days_words}`;
-        return `<button type="button" class="hjour-lbl ${side} ${alignOf(p.x)}${p.mark.summit ? " is-summit" : ""}" style="${pos}" data-hjour-mark="${p.index}" aria-pressed="${p.index === selected}" aria-controls="hjourDetail" aria-label="${escAttr(aria)}"><small>${escHtml(p.mark.days_words)}</small><b>${escHtml(p.mark.short)}</b></button>`;
+        return `<button type="button" class="hjour-lbl ${side} ${alignOf(p.x)}${p.mark.summit ? " is-summit" : ""}" style="--x:${r1(p.x)}%;--y:${r1(p.y)}%;--i:${p.index}" data-hjour-mark="${p.index}" aria-pressed="${p.index === selected}" aria-controls="hjourDetail" aria-label="${escAttr(aria)}"><small>${escHtml(p.mark.days_words)}</small><b>${escHtml(p.mark.short)}</b></button>`;
       })
       .join("");
     const summit = marks.find((m) => m.summit) ?? marks[marks.length - 1];
