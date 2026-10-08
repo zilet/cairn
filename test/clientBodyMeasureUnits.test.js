@@ -1,7 +1,7 @@
 // Body measurements open in the athlete's Settings units (kg ⇒ cm, lb ⇒ in), not in a
-// per-browser memory or a locale guess of their own. The in/cm toggle on the tape is a
-// quick page-lifetime switch (CairnFmt.setLength), never stored, and a changed weight
-// unit in Settings drops it. And the first boot of a fresh install sends the device's
+// locale guess of their own. The in/cm toggle on the tape (CairnFmt.setLength) is an
+// explicit per-device choice: remembered on this device and honoured over Settings on later
+// loads, and a changed weight unit in Settings drops it. And the first boot of a fresh install sends the device's
 // locale + zone once so its units start right (src/repo/unit-system.ts decides).
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -39,7 +39,7 @@ async function openBody(ctx) {
 
 const bodyRead = (calls) => calls.find((c) => c.path.startsWith("/body-metrics"))?.path;
 
-test("CairnFmt.length follows Settings' weight unit; the toggle is a page-only override", () => {
+test("CairnFmt.length follows Settings' weight unit; an explicit toggle is a per-device override", () => {
   const ctx = loadClientModule(FMT, { globals: { Intl } });
   const F = ctx.CairnFmt;
   assert.equal(F.length(), "in", "lb (the default) tapes in inches");
@@ -53,7 +53,9 @@ test("CairnFmt.length follows Settings' weight unit; the toggle is a page-only o
   assert.equal(F.length(), "in");
   F.set({ weight_units: "kg" });
   assert.equal(F.length(), "cm", "a changed weight unit in Settings drops the toggle");
-  assert.equal(ctx.localStorage.getItem("cairn-bm-unit"), null, "nothing is remembered per browser");
+  assert.equal(ctx.localStorage.getItem("cairn-bm-unit"), null, "dropping the choice forgets it too");
+  F.setLength("cm");
+  assert.equal(ctx.localStorage.getItem("cairn-bm-unit"), "cm", "a toggle is persisted on the device");
 });
 
 test("the body screen opens in centimetres for a kg athlete, whatever the browser locale says", async () => {
@@ -74,12 +76,15 @@ test("the body screen opens in inches for a lb athlete, even on a metric-locale 
   assert.equal(bodyRead(calls), "/body-metrics?unit=in");
 });
 
-test("a stale per-browser 'cairn-bm-unit' no longer overrides Settings (and is cleared)", async () => {
-  const localStorage = createStorage({ "cairn-bm-unit": "in" });
-  const { ctx, calls } = bodyMetricsContext({ weight_units: "kg" }, { localStorage });
+test("a device's stored cm choice survives a reload for a lb athlete; no stored choice follows Settings", async () => {
+  const localStorage = createStorage({ "cairn-bm-unit": "cm" });
+  const { ctx, calls } = bodyMetricsContext({ weight_units: "lb" }, { localStorage });
   await openBody(ctx);
   assert.equal(bodyRead(calls), "/body-metrics?unit=cm");
-  assert.equal(localStorage.getItem("cairn-bm-unit"), null);
+  assert.equal(localStorage.getItem("cairn-bm-unit"), "cm");
+  const fresh = bodyMetricsContext({ weight_units: "lb" });
+  await openBody(fresh.ctx);
+  assert.equal(bodyRead(fresh.calls), "/body-metrics?unit=in");
 });
 
 function onboardingContext({ settings, language = "de-DE", hangDetect = false, timers = null }) {

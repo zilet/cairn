@@ -145,23 +145,39 @@ const FMT_DATE: Record<FmtStyle, (iso: string, o: FmtDateOpts) => string> = {
 
 type FmtUnits = { distance: "km" | "mi"; weight: "lb" | "kg" };
 let fmtUnitsMemo: FmtUnits | null = null;
-// The tape measure's unit follows the weight unit (kg ⇒ cm, lb ⇒ in; the server's
-// lengthUnitOf, src/repo/unit-system.ts). A body screen's quick in/cm toggle is a
-// page-lifetime override only — never stored — and a changed weight unit in Settings
-// drops it, so Settings is always the default a fresh page opens in.
-let fmtLengthOverride: "in" | "cm" | null = null;
+// The tape measure's unit follows the weight unit by default (kg ⇒ cm, lb ⇒ in; the
+// server's lengthUnitOf, src/repo/unit-system.ts), so Settings is what a fresh device
+// opens in. The body screen's in/cm toggle is an explicit per-DEVICE choice, though: it
+// is kept in localStorage ("cairn-bm-unit") and wins over that default on later loads (a
+// lb athlete who tapes in cm should not re-toggle on every open). This knowingly leaves
+// "units follow Settings" for a device that has toggled; changing the weight unit in
+// Settings while the page is open still drops the choice and starts over from Settings.
+const FMT_LENGTH_KEY = "cairn-bm-unit";
+function readStoredLength(): "in" | "cm" | null {
+  try {
+    const v = localStorage.getItem(FMT_LENGTH_KEY);
+    return v === "in" || v === "cm" ? v : null;
+  } catch {
+    return null; // private mode
+  }
+}
+function storeLength(unit: "in" | "cm" | null): void {
+  try {
+    if (unit) localStorage.setItem(FMT_LENGTH_KEY, unit);
+    else localStorage.removeItem(FMT_LENGTH_KEY);
+  } catch {
+    /* private mode */
+  }
+}
+let fmtLengthOverride: "in" | "cm" | null = readStoredLength();
 
 function fmtSetUnits(settings: { run_units?: unknown; weight_units?: unknown } | null | undefined): FmtUnits {
   const next: FmtUnits = { distance: runUnits(settings?.run_units), weight: settings?.weight_units === "kg" ? "kg" : "lb" };
-  if (fmtUnitsMemo && fmtUnitsMemo.weight !== next.weight) fmtLengthOverride = null;
+  if (fmtUnitsMemo && fmtUnitsMemo.weight !== next.weight) {
+    fmtLengthOverride = null;
+    storeLength(null);
+  }
   return (fmtUnitsMemo = next);
-}
-
-// The pre-Settings per-browser in/cm memory: it ignored Settings, so it is retired.
-try {
-  localStorage.removeItem("cairn-bm-unit");
-} catch {
-  /* private mode */
 }
 
 const CairnFmt = {
@@ -188,11 +204,12 @@ const CairnFmt = {
     const v = Number(value) || 0;
     return (units ?? CairnFmt.units().weight) === "kg" ? Math.round((v / KG_PER_LB) * 100) / 100 : v;
   },
-  /** Body measurements' unit (circumferences, height): the quick toggle's choice, else Settings' (kg ⇒ cm). */
+  /** Body measurements' unit (circumferences, height): this device's toggle choice, else Settings' (kg ⇒ cm). */
   length: (): "in" | "cm" => fmtLengthOverride || (CairnFmt.units().weight === "kg" ? "cm" : "in"),
-  /** The quick in/cm toggle: this page only, never stored, and dropped when Settings' weight unit changes. */
+  /** The in/cm toggle: remembered on this device, and dropped when Settings' weight unit changes. */
   setLength: (unit: "in" | "cm"): "in" | "cm" => {
     fmtLengthOverride = unit === "cm" ? "cm" : "in";
+    storeLength(fmtLengthOverride);
     return fmtLengthOverride;
   },
   /** The one door for an athlete-facing date: never an ISO string. */
