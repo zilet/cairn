@@ -635,6 +635,7 @@ test("Season: labs read GET /health-docs/draws, one row per draw; the goal line 
     extra: { "/health-docs/draws": draws, "/journey": JOURNEY, "/journey/timeline": timeline },
   });
   win.CairnHorizonController.mount(root, { today: TODAY, load: loader, navigate: () => {} });
+  await root.querySelector('[data-horizon-seg="season"]').click(); // the Season's reads wait for it
   await flush();
   await flush();
   await flush();

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { cancelAgentJob, onJobEvent } from "../agentJobs.js";
 import { getAgentJob, listActiveAgentJobs } from "../domain/person/index.js";
+import { firstWeekStatus } from "../repo/first-week.js";
 
 export const agentJobsRouter = Router();
 
@@ -8,8 +9,12 @@ export const agentJobsRouter = Router();
 // chat-turns surface: the PWA's kind-agnostic job runner can restore in-flight
 // and queued work after reloads.
 
-// Active (queued + running) jobs, oldest-first.
-agentJobsRouter.get("/", (_req, res) => res.json({ ok: true, jobs: listActiveAgentJobs() }));
+// Active (queued + running) jobs, oldest-first. `first_week` rides along (the same body as
+// GET /api/welcome/first-week) so the boot's one job read also answers "is the welcome's
+// week building / owed a notice?" without a request of its own.
+agentJobsRouter.get("/", (_req, res) =>
+  res.json({ ok: true, jobs: listActiveAgentJobs(), first_week: firstWeekStatus() })
+);
 
 // One job's current state (poll fallback when SSE is unavailable). A `done` job
 // includes job.result = the ref-hydrated contract body.

@@ -13,6 +13,8 @@ type FirstWeekApi = {
   seen(): void;
   /** The week landed: drop the caches it makes stale and repaint Today/Train if showing. */
   landed(): void;
+  /** The boot's /agent-jobs read carried the status: take it as if it had been asked for. */
+  ingest(raw: unknown): void;
   /** Re-read the status now (tests, and a surface that knows something moved). */
   refresh(): Promise<void>;
 };

@@ -2,8 +2,9 @@
 // The Horizon timeline, the controller (docs/IA.md "Horizon landing"). `mount(host, deps)`
 // opens on WEEK, always — the designed landing (horizon-week-controller.ts over
 // GET /api/week) — never on a view remembered from earlier in the session, so a cold
-// /app/horizon and a tab tap land in the same place. The race build and the season fill
-// their lane slots as their own reads land; a failed read is that lane's one calm
+// /app/horizon and a tab tap land in the same place. The race build is read at the landing
+// (it frames the switch); the Season's reads wait until Season is first shown, and each
+// lane fills its slot as its own reads land; a failed read is that lane's one calm
 // sentence, never the whole screen. The week read's frame is To the race's hero, and its
 // weight goal is the Season's one weight trend (CairnHorizonModel.withWeek), so the
 // stage and the trend are said once, the same way, on every view. A tap on a row or a
@@ -77,6 +78,7 @@
 
     function setView(view: ClientHorizonView): void {
       if (view === "week") ensureWeek();
+      if (view === "season") ensureSeason();
       host.setAttribute("data-horizon-view", view);
       for (const btn of Array.from(host.querySelectorAll<HTMLElement>("[data-horizon-seg]"))) {
         const on = btn.getAttribute("data-horizon-seg") === view;
@@ -145,7 +147,23 @@
       return null;
     }
 
+    /** The race read stays eager: it decides whether the race view exists and what it is called. */
     function load(): void {
+      void Promise.all([read("/race-build"), unitsRead]).then(([build]) => {
+        paint(CairnHorizonModel.raceLane(build, units));
+      });
+    }
+
+    /**
+     * The Season's reads (goal line, labs, season chart) are asked the first time Season is
+     * SHOWN, like the week once was: Week is the landing, so a hidden panel's five reads
+     * would be a cold open's dead weight. A failed read is that lane's calm sentence, and
+     * the next visit to the Season does not ask again within this mount.
+     */
+    let seasonAsked = false;
+    function ensureSeason(): void {
+      if (seasonAsked) return;
+      seasonAsked = true;
       const today = deps.today;
       const model = CairnHorizonModel;
       const timeline = read("/journey/timeline");
@@ -153,9 +171,6 @@
       // panels are one row, never three (repo/lab-draws.ts).
       const draws = read("/health-docs/draws");
       const checkup = read("/health/next-checkup");
-      void Promise.all([read("/race-build"), unitsRead]).then(([build]) => {
-        paint(model.raceLane(build, units));
-      });
       void Promise.all([read("/journey"), timeline]).then(([journey, rows]) =>
         paint(model.goalLane(journey, rows, today))
       );

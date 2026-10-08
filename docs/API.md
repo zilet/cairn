@@ -44,7 +44,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/agent-jobs` | Durable agent jobs are the backgrounded heavy agentic ops. This mirrors the chat-turns surface: the PWA's kind-agnostic job runner can restore in-flight and queued work after reloads. Active (queued + running) jobs, oldest-first. |
+| GET | `/api/agent-jobs` | Durable agent jobs are the backgrounded heavy agentic ops. This mirrors the chat-turns surface: the PWA's kind-agnostic job runner can restore in-flight and queued work after reloads. Active (queued + running) jobs, oldest-first. `first_week` rides along (the same body as GET /api/welcome/first-week) so the boot's one job read also answers "is the welcome's week building / owed a notice?" without a request of its own. |
 | GET | `/api/agent-jobs/:id` | One job's current state (poll fallback when SSE is unavailable). A `done` job includes job.result = the ref-hydrated contract body. |
 | POST | `/api/agent-jobs/:id/cancel` | Stop a queued or running job (drops it / SIGKILLs the live subprocess). |
 | GET | `/api/agent-jobs/:id/stream` | Live progress for one job (Server-Sent Events). An immediate `snapshot` (so a late subscriber / poll-fallback sees current state, with the result if already terminal), then every phase + the terminal event from the worker bus, then close. EventSource can't set headers, so the PWA reaches this with ?token=. |

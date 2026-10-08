@@ -555,6 +555,32 @@ function reads({ fail = [], extra = {} } = {}) {
   return { load, calls };
 }
 
+/** Open the Season view: its reads are asked the first time it is shown, not at the landing. */
+async function openSeason(root) {
+  await root.querySelector('[data-horizon-seg="season"]').click();
+  await flush();
+  await flush();
+}
+
+test("the landing reads the race build only; the Season's reads wait until Season is shown", async () => {
+  const win = load();
+  const host = createHost(win.document);
+  host.innerHTML = win.CairnHorizon.shellHtml();
+  const root = host.querySelector("[data-horizon]");
+  const { load: loader, calls } = reads();
+  win.CairnHorizonController.mount(root, { today: TODAY, load: loader, navigate: () => {} });
+  await flush();
+  await flush();
+  const season = ["/health-docs/draws", "/health/next-checkup", "/journey", "/journey/timeline", "/nutrition/goal-pace?days=180"];
+  assert.ok(calls.includes("/race-build"));
+  assert.deepEqual(calls.filter((p) => season.includes(p)), [], "a hidden view's reads are not asked at the landing");
+  await openSeason(root);
+  assert.deepEqual(calls.filter((p) => season.includes(p)).sort(), [...season].sort());
+  await root.querySelector('[data-horizon-seg="week"]').click();
+  await root.querySelector('[data-horizon-seg="season"]').click();
+  assert.equal(calls.filter((p) => p === "/journey").length, 1, "asked once per mount");
+});
+
 test("the timeline paints the three lane skeletons, then each lane as its reads land", async () => {
   const win = load();
   const host = createHost(win.document);
@@ -563,6 +589,7 @@ test("the timeline paints the three lane skeletons, then each lane as its reads 
   assert.equal(root.querySelectorAll(".horizon-lane-card.is-loading").length, 3);
   const { load: loader, calls } = reads();
   win.CairnHorizonController.mount(root, { today: TODAY, load: loader, navigate: () => {} });
+  await openSeason(root);
   await flush();
   await flush();
   assert.equal(root.querySelectorAll(".is-loading").length, 0);
@@ -581,6 +608,7 @@ test("one lane's failed read is that lane's calm line; the others still paint; r
   const root = host.querySelector("[data-horizon]");
   const { load: loader } = reads({ fail: ["/race-build"] });
   win.CairnHorizonController.mount(root, { today: TODAY, load: loader, navigate: () => {}, reducedMotion: () => true });
+  await openSeason(root);
   await flush();
   await flush();
   const race = root.querySelector('[data-horizon-lane="race"] .horizon-lane-card');
@@ -598,6 +626,7 @@ test("a lab row routes into Health through navigate; a modified click keeps the 
   const went = [];
   const { load: loader } = reads();
   win.CairnHorizonController.mount(root, { today: TODAY, load: loader, navigate: (t) => went.push(t) });
+  await openSeason(root);
   await flush();
   await flush();
   const rows = root.querySelectorAll('[data-horizon-lane="labs"] .msrow-link');
@@ -901,6 +930,7 @@ test("the goal line's held slot takes the season line, or goes when there is non
   const root = host.querySelector("[data-horizon]");
   const { load: loader } = reads({ extra: { "/nutrition/goal-pace?days=180": pace(WEIGH_INS) } });
   win.CairnHorizonController.mount(root, { today: TODAY, load: loader, navigate: () => {} });
+  await openSeason(root);
   await flush();
   await flush();
   const slot = root.querySelector("[data-horizon-season]");
@@ -914,6 +944,7 @@ test("the goal line's held slot takes the season line, or goes when there is non
   host2.innerHTML = bare.CairnHorizon.shellHtml();
   const root2 = host2.querySelector("[data-horizon]");
   bare.CairnHorizonController.mount(root2, { today: TODAY, load: reads().load, navigate: () => {} });
+  await openSeason(root2);
   await flush();
   await flush();
   assert.equal(root2.querySelector("[data-horizon-season]"), null);

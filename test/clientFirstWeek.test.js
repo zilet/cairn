@@ -56,6 +56,8 @@ const rows = (host) => [...host.querySelectorAll(".fw-day")].map((li) => li.text
 test("Today's card lists the days as they arrive, in place, then the one notice says it is ready", async () => {
   const ctx = setup({ status: { state: "building", job_id: 7, days: [], week_state: null, final: false } });
   let host = today(ctx);
+  assert.deepEqual(ctx.rec.apis, [], "painting the slot never asks: the boot's /agent-jobs list carries the status");
+  ctx.win.CairnFirstWeek.ingest(ctx.server.status);
   await settle();
   assert.match(host.textContent, /Your first week is coming together/);
   assert.match(host.textContent, /first days are on their way/);
@@ -106,7 +108,7 @@ test("Today's card lists the days as they arrive, in place, then the one notice 
 
 test("a week that landed while the app was closed is said once on the next open, wherever it opened", async () => {
   const ctx = setup({ status: { state: "ready", job_id: 3, days: DAYS, week_state: "draft", final: false } });
-  ctx.timers.tick(1500); // the quiet read a moment after boot
+  ctx.win.CairnFirstWeek.ingest(ctx.server.status); // the boot's /agent-jobs list carried it
   await settle();
   assert.equal(ctx.rec.toasts.length, 1);
   assert.equal(ctx.rec.toasts[0].message, "Your first week is ready");
@@ -116,7 +118,7 @@ test("a week that landed while the app was closed is said once on the next open,
 
   // The next open: the server has nothing owed, so the device stops asking.
   const next = setup({ status: ctx.server.status });
-  next.timers.tick(1500);
+  next.win.CairnFirstWeek.ingest(next.server.status);
   await settle();
   assert.equal(next.rec.toasts.length, 0);
   assert.equal(next.win.localStorage.getItem("cairn.firstWeek.done"), "1");
@@ -132,13 +134,13 @@ test("the welcome watching it land says nothing more, and a failed week is said 
     welcomeOpen: true,
     status: { state: "ready", job_id: 5, days: DAYS, week_state: "applied", final: false },
   });
-  open.timers.tick(1500);
+  open.win.CairnFirstWeek.ingest(open.server.status);
   await settle();
   assert.equal(open.rec.toasts.length, 0, "no notice over the welcome that showed it");
   assert.ok(open.rec.apis.includes("POST /welcome/first-week/seen"));
 
   const failed = setup({ status: { state: "failed", job_id: 6, days: [], week_state: "failed", final: false } });
-  failed.timers.tick(1500);
+  failed.win.CairnFirstWeek.ingest(failed.server.status);
   await settle();
   assert.equal(failed.rec.toasts.length, 1);
   assert.match(failed.rec.toasts[0].message, /couldn't put your first week together/);

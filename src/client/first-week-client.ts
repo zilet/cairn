@@ -202,14 +202,10 @@
     return inflight;
   }
 
-  // Ask once per page, unless this device already knows there is nothing to follow.
-  function ensure(): void {
-    if (finalKnown || inflight || status) return;
-    void refresh();
-  }
-
+  // The first read of a page rides on the boot's /agent-jobs list (ingest, below), so a
+  // surface painting its slot never asks on its own: it paints what is known and is
+  // repainted when the list lands.
   function slotHtml(): string {
-    ensure();
     const kind = status && (status.state === "building" || status.state === "ready") ? status.state : "";
     return `<div class="fw-slot" data-first-week-slot data-fw="${kind}">${cardHtml(status)}</div>`;
   }
@@ -235,6 +231,11 @@
     },
     landed,
     refresh,
+    ingest(raw) {
+      if (inflight) return; // a read of its own is already on the way and is the newer word
+      apply(normalize(raw));
+      schedule();
+    },
   };
 
   if (typeof document !== "undefined") {
@@ -242,11 +243,6 @@
       const see = event.target instanceof Element ? event.target.closest("[data-fw-see]") : null;
       if (see) openWeek(status);
     });
-    // The next open after a week landed while the app was closed: say it once, wherever
-    // the app opened. A quiet read a moment after boot, skipped once there is nothing left.
-    setTimeout(() => {
-      if (!finalKnown && !status) void refresh();
-    }, 1500);
   }
 
   Object.assign(globalThis, { CairnFirstWeek: FIRST_WEEK });

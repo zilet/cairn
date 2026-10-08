@@ -303,12 +303,15 @@ function liveImg(env, { token, src, complete = false, connected = true }) {
 test("a re-render never asks again for an image whose request is still in flight", () => {
   const imgs = [];
   const timers = [];
-  const env = loadArtController({ imgs, setTimeout: (fn) => (timers.push(fn), timers.length) });
+  const nav = { serviceWorker: { controller: null } };
+  const env = loadArtController({ imgs, navigator: nav, setTimeout: (fn) => (timers.push(fn), timers.length) });
   const first = photoLayer(env.context.artImg("exercise", "Leg Curl", "a", "<svg></svg>"));
   const src = /src="([^"]+)"/.exec(first)[1].replaceAll("&amp;", "&");
   const inFlight = liveImg(env, { token: "exercise|Leg Curl", src });
   imgs.push(inFlight);
 
+  // The worker took control mid-load: the browser can no longer share the first request.
+  nav.serviceWorker.controller = {};
   // The second render (network repaint) parks the URL instead of requesting it.
   const second = photoLayer(env.context.artImg("exercise", "Leg Curl", "a", "<svg></svg>"));
   assert.doesNotMatch(second, / src=/);
@@ -331,13 +334,27 @@ test("a re-render never asks again for an image whose request is still in flight
   assert.match(env.context.artImg("exercise", "Leg Curl", "a", "<svg></svg>"), /loading="eager"/);
 });
 
+test("under one control state a re-render just asks: the browser shares the in-flight request", () => {
+  const imgs = [];
+  const nav = { serviceWorker: { controller: {} } };
+  const env = loadArtController({ imgs, navigator: nav });
+  const first = photoLayer(env.context.artImg("exercise", "Leg Curl", "a", "<svg></svg>"));
+  const src = /src="([^"]+)"/.exec(first)[1].replaceAll("&amp;", "&");
+  imgs.push(liveImg(env, { token: "exercise|Leg Curl", src }));
+  const second = photoLayer(env.context.artImg("exercise", "Leg Curl", "a", "<svg></svg>"));
+  assert.match(second, / src=/, "no parked waiter, so no second request after the first has finished");
+  assert.doesNotMatch(second, /data-art-wait/);
+});
+
 test("an in-flight miss leaves the waiter on the SVG; a stalled request hands the waiter its own src", () => {
   const imgs = [];
   const timers = [];
-  const env = loadArtController({ imgs, setTimeout: (fn) => (timers.push(fn), timers.length) });
+  const nav = { serviceWorker: { controller: null } };
+  const env = loadArtController({ imgs, navigator: nav, setTimeout: (fn) => (timers.push(fn), timers.length) });
   const src = /src="([^"]+)"/.exec(photoLayer(env.context.artImg("exercise", "Face Pull", "a", "<svg></svg>")))[1].replaceAll("&amp;", "&");
   const inFlight = liveImg(env, { token: "exercise|Face Pull", src });
   imgs.push(inFlight);
+  nav.serviceWorker.controller = {};
   env.context.artImg("exercise", "Face Pull", "a", "<svg></svg>");
   inFlight.isConnected = false;
   const waiter = new env.FakeImage();
@@ -353,11 +370,13 @@ test("an in-flight miss leaves the waiter on the SVG; a stalled request hands th
 
   // A lazy first request that never starts: the bounded wait releases the waiter.
   const list = [];
-  const env2 = loadArtController({ imgs: list, setTimeout: (fn) => (timers.push(fn), timers.length) });
+  const nav2 = { serviceWorker: { controller: null } };
+  const env2 = loadArtController({ imgs: list, navigator: nav2, setTimeout: (fn) => (timers.push(fn), timers.length) });
   const src2 = /src="([^"]+)"/.exec(photoLayer(env2.context.artImg("exercise", "Row", "a", "<svg></svg>")))[1].replaceAll("&amp;", "&");
   const stalled = liveImg(env2, { token: "exercise|Row", src: src2 });
   list.push(stalled);
   timers.length = 0;
+  nav2.serviceWorker.controller = {};
   env2.context.artImg("exercise", "Row", "a", "<svg></svg>");
   const w = new env2.FakeImage();
   w.dataset.artPhoto = "1";

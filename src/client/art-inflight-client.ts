@@ -10,8 +10,25 @@
 // means the waiter takes the src straight from the image cache, missed means it keeps
 // the SVG. A bounded wait (the first element may be a lazy image that never starts
 // once it is detached) hands the waiter its own src.
+//
+// That is only true across a service-worker takeover. Two requests for one URL made
+// while the page is under the SAME control state (both direct, or both through the
+// worker) are one fetch: the browser hands the second <img> the first's resource, in
+// flight, with no request of its own. So a waiter is parked only when control changed
+// since the page loaded; otherwise the re-render just asks, and shares. (Waiting past a
+// finished load is worse than useless: setting the src then logs a second GET for a
+// URL the first element already fetched.)
 const ART_WAIT_MAX_MS = 6000;
 const artWatched = new WeakSet<HTMLImageElement>();
+
+function swControlled(): boolean {
+  try {
+    return !!(typeof navigator !== "undefined" && navigator.serviceWorker && navigator.serviceWorker.controller);
+  } catch {
+    return false;
+  }
+}
+const controlledAtLoad = swControlled();
 
 function artWaiters(token: string): HTMLImageElement[] {
   if (typeof document === "undefined" || typeof document.querySelectorAll !== "function") return [];
@@ -32,6 +49,7 @@ function releaseArtWaiters(token: string, loaded: boolean): void {
 }
 
 function inFlightArtImg(token: string, src: string): HTMLImageElement | null {
+  if (swControlled() === controlledAtLoad) return null; // same control state: the browser shares it
   if (typeof document === "undefined" || typeof document.querySelectorAll !== "function") return null;
   for (const img of document.querySelectorAll<HTMLImageElement>('img[data-art-photo="1"]')) {
     if (img.dataset.artkey !== token || img.dataset.artWait === "1" || img.dataset.artWaitExpired === "1") continue;

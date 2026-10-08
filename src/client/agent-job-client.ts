@@ -166,6 +166,9 @@ async function jobReconnect(opts: { reuseWithinMs?: number } = {}): Promise<void
       const row = agentJobRecords.record(await api("/agent-jobs"));
       jobs = agentJobRecords.rows(row.jobs).map(agentJobRecords.job).filter((job): job is AgentJob => !!job);
       lastJobList = { at: Date.now(), jobs };
+      // The list also carries the welcome's first-week status: the boot's one job read
+      // answers it, so the first-week card needs no request of its own.
+      (globalThis as { CairnFirstWeek?: FirstWeekApi }).CairnFirstWeek?.ingest(row.first_week);
     } catch {}
   }
 
