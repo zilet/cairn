@@ -1,0 +1,115 @@
+/* =====================================================================
+   Your road — the journey trail on Horizon's Week (journey-trail-client.ts).
+   To scale in time from where this stretch began, through today, up to the
+   furthest dated goal: the walked part in dawn over a soft ground wash,
+   drawn in ONCE on the landing's entrance; the road ahead dotted; a peak week
+   lit along the trail; each mark in its stone's hue; the summit a small
+   cairn; today breathing on the live-dot timing. The plot is a percentage
+   box: the SVG stretches (strokes do not), and every mark and label is an
+   HTML element placed at (--x, --y), so type stays crisp at token sizes.
+   Reduced motion paints it still (§30's blanket rule).
+   ===================================================================== */
+.hjour{display:grid;gap:var(--space-6);min-width:0}
+.hjour-line{margin:0;font-family:var(--font-display);font-size:var(--text-lg);line-height:var(--leading-snug);
+  color:var(--ink);text-wrap:balance;max-width:42ch}
+
+.hjour-plot{position:relative;height:168px;min-width:0}
+.hjour-svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.hjour-svg path{vector-effect:non-scaling-stroke}
+.hjour-ground{stroke:none}
+.hjour-g0{stop-color:var(--dawn);stop-opacity:.16}
+.hjour-g1{stop-color:var(--dawn);stop-opacity:0}
+.hjour-ahead{fill:none;stroke:var(--line-strong);stroke-width:2;stroke-dasharray:1 7;stroke-linecap:round}
+.hjour-walked{fill:none;stroke:var(--dawn);stroke-width:3;stroke-linecap:round;stroke-linejoin:round}
+.hjour-band{fill:none;stroke:var(--c);stroke-width:9;stroke-linecap:round;opacity:.6}
+
+/* every mark and label sits at its point on the trail */
+.hjour-node,.hjour-now,.hjour-pulse,.hjour-lbl,.hjour-today,.hjour-from{position:absolute;left:var(--x);top:var(--y)}
+.hjour-node{width:10px;height:10px;margin:-5px 0 0 -5px;border-radius:50%;background:var(--surface);
+  box-shadow:inset 0 0 0 2px var(--cd);transition:transform var(--dur-1) var(--ease),background var(--dur-1) var(--ease)}
+.hjour-node.is-race{width:14px;height:14px;margin:-7px 0 0 -7px}
+.hjour-node.is-checkup{border-radius:var(--radius-3xs);transform:rotate(45deg)}
+.hjour-node.is-start{width:7px;height:7px;margin:-3.5px 0 0 -3.5px;box-shadow:inset 0 0 0 1.5px var(--dawn)}
+.hjour-node.is-on{background:var(--c);transform:scale(1.25)}
+.hjour-node.is-checkup.is-on{transform:rotate(45deg) scale(1.25)}
+.hjour-node.is-summit{width:26px;height:28px;margin:-26px 0 0 -13px;background:none;box-shadow:none;border-radius:0}
+.hjour-cairn{display:block;width:100%;height:100%;overflow:visible}
+.hjour-cairn ellipse{fill:var(--c);stroke:var(--cd);stroke-width:1.2}
+.hjour-now{width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;background:var(--dawn);
+  box-shadow:0 0 0 3px var(--surface)}
+.hjour-pulse{width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;box-shadow:0 0 0 1.5px var(--dawn);
+  animation:hjour-breathe var(--dur-ping) var(--ease) infinite}
+@keyframes hjour-breathe{0%{transform:scale(1);opacity:.6}100%{transform:scale(2.8);opacity:0}}
+
+/* labels: a mono "when" over the mark's short word; above or below, aligned to the edge near the ends */
+.hjour-lbl{display:grid;gap:var(--space-1);padding:var(--space-2) var(--space-3);border:0;border-radius:var(--radius-2xs);
+  background:none;color:var(--ink);font:inherit;text-align:center;cursor:pointer;white-space:nowrap;
+  -webkit-tap-highlight-color:transparent;--tx:-50%;--ty:0px}
+.hjour-lbl small,.hjour-today,.hjour-from{font-family:var(--font-mono);font-size:var(--text-2xs);
+  letter-spacing:var(--tracking-mono);text-transform:uppercase;color:var(--muted);line-height:var(--leading-snug)}
+.hjour-lbl b{font-family:var(--font-display);font-weight:var(--weight-regular);font-size:var(--text-md);line-height:var(--leading-tight)}
+.hjour-lbl.is-summit b{font-size:var(--text-lead)}
+.hjour-lbl.is-above{transform:translate(var(--tx),calc(-100% - 8px))}
+.hjour-lbl.is-above.is-summit{transform:translate(var(--tx),calc(-100% - 28px))}
+.hjour-lbl.is-below{transform:translate(var(--tx),8px)}
+.hjour-lbl.is-l{--tx:-10px;text-align:left}
+.hjour-lbl.is-r{--tx:calc(-100% + 10px);text-align:right}
+.hjour-lbl[aria-pressed="true"]{background:var(--surface2)}
+.hjour-lbl[aria-pressed="true"] small{color:var(--ink2)}
+@media (hover:hover){.hjour-lbl:hover{background:var(--surface2)}}
+.hjour-lbl:focus-visible{outline:2px solid var(--dawn);outline-offset:1px}
+.hjour-today{color:var(--dawn);transform:translate(-50%,12px)}
+.hjour-today.is-l{transform:translate(-6px,12px)}
+.hjour-today.is-r{transform:translate(calc(-100% + 6px),12px)}
+.hjour-from{transform:translate(-4px,10px)}
+
+/* the ground: month ticks */
+.hjour-axis{position:relative;height:16px;margin-top:calc(var(--space-4) * -1);border-top:1px solid var(--line)}
+.hjour-tick{position:absolute;left:var(--x);top:0;transform:translateX(-50%);padding-top:var(--space-2);
+  font-family:var(--font-mono);font-size:var(--text-2xs);letter-spacing:var(--tracking-mono);text-transform:uppercase;color:var(--muted)}
+.hjour-tick::before{content:"";position:absolute;left:50%;top:-1px;width:1px;height:4px;background:var(--line-strong)}
+
+/* the opened mark's words */
+.hjour-detail{display:flex;gap:var(--space-5);align-items:flex-start;padding:var(--space-6) var(--space-7);
+  border-radius:var(--radius-sm);background:var(--surface);border:1px solid var(--line);min-width:0}
+.hjour-detail:empty{display:none}
+.hjour-d-dot{flex:none;width:10px;height:10px;margin-top:var(--space-2);border-radius:50% 50% 45% 55%;background:var(--c)}
+.hjour-d-body{display:grid;gap:var(--space-1);min-width:0}
+.hjour-d-name{font-size:var(--text-md);font-weight:var(--weight-semibold);color:var(--ink)}
+.hjour-d-when{font-family:var(--font-mono);font-size:var(--text-2xs);letter-spacing:var(--tracking-mono);text-transform:uppercase;color:var(--muted)}
+.hjour-d-why{margin-top:var(--space-2);font-size:var(--text-sm);line-height:var(--leading-normal);color:var(--ink2)}
+
+/* what already moved toward a goal */
+.hjour-behind{display:grid;gap:var(--space-3)}
+.hjour-behind-k{color:var(--muted)}
+.hjour-bs{list-style:none;margin:0;padding:0;display:grid;gap:var(--space-3)}
+.hjour-b{display:flex;gap:var(--space-4);align-items:flex-start;font-size:var(--text-sm);line-height:var(--leading-snug);color:var(--ink2)}
+.hjour-b-mark{flex:none;width:14px;height:14px;margin-top:var(--space-1);border-radius:50%;background:var(--s-endurance)}
+.hjour-b-mark path{fill:none;stroke:var(--d-endurance);stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+
+/* the entrance: the walked part draws in once, then the marks settle onto it */
+.hjour.is-drawing .hjour-walked,.hjour.is-drawing .hjour-ground{animation:hjour-walk 1.4s var(--ease) both .15s}
+@keyframes hjour-walk{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}
+.hjour.is-drawing .hjour-node,.hjour.is-drawing .hjour-lbl{animation:hjour-settle var(--dur-3) var(--ease) both;
+  animation-delay:calc(.6s + var(--i,0) * 90ms)}
+@keyframes hjour-settle{from{opacity:0}to{opacity:1}}
+
+/* ---- the starter: nothing dated ahead yet ---- */
+.hjour.is-starter{gap:var(--space-5)}
+.hjour-start-plot{position:relative;height:64px}
+.hjour-start-art{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.hjour-start-art path{vector-effect:non-scaling-stroke}
+.hjour-start-plot .hjour-now{left:8%;top:80%}
+.hjour-start-cairn{position:absolute;right:0;top:0;width:22px;height:24px;transform:translate(0,-55%);opacity:.5}
+.hjour-start-cairn .hjour-cairn ellipse{fill:var(--surface2);stroke:var(--line-strong)}
+.hjour-start-h{margin:0;font-family:var(--font-display);font-weight:var(--weight-regular);font-size:var(--text-lg);
+  line-height:var(--leading-tight);color:var(--ink)}
+.hjour-start-p,.hjour-hint{margin:0;font-size:var(--text-sm);line-height:var(--leading-normal);color:var(--ink2);max-width:60ch}
+.hjour-hint{font-size:var(--text-xs);color:var(--muted)}
+.hjour-asks{display:flex;flex-wrap:wrap;gap:var(--space-3)}
+.hjour-ask{min-height:40px;padding:var(--space-3) var(--space-7);border:1px solid var(--line-strong);border-radius:var(--radius-pill);
+  background:var(--surface);color:var(--ink);font:inherit;font-size:var(--text-sm);font-weight:var(--weight-medium);cursor:pointer;
+  transition:background var(--dur-1) var(--ease),border-color var(--dur-1) var(--ease)}
+@media (hover:hover){.hjour-ask:hover{border-color:var(--dawn);background:var(--dawn-wash)}}
+.hjour-ask:active{transform:var(--press)}
+.hjour-ask:focus-visible{outline:2px solid var(--dawn);outline-offset:2px}

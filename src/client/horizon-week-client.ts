@@ -4,13 +4,16 @@
 //
 //   1. the frame hero (CairnFrameLine): "26 days to Cambridge Half" over "Sharpen · block
 //      week 6 of 6 · push through Nov 15", the block ribbon under it;
-//   2. this week's shape (CairnWeekStrip "shape"): seven columns sized by planned dose,
+//   2. your road (CairnJourneyTrail): the trail from where this stretch began, through
+//      today, up to the furthest dated goal — what is behind, what is next, the summit;
+//      with nothing dated ahead, the starter that hands chat a first sentence;
+//   3. this week's shape (CairnWeekStrip "shape"): seven columns sized by planned dose,
 //      a fold under them a tapped column peeks into, the week's ONE sentence (Horizon
 //      owns it) and, folded, the days as rows that open each day's page;
-//   3. still open: at most two lines, each opening its day;
-//   4. next up: the next milestones beyond this week (CairnMilestoneRow, the Season's
+//   4. still open: at most two lines, each opening its day;
+//   5. next up: the next milestones beyond this week (CairnMilestoneRow, the Season's
 //      own row) and "All of the season ›";
-//   5. goals, compact (CairnGoalRow): the race estimate with its time, the weight on its
+//   6. goals, compact (CairnGoalRow): the race estimate with its time, the weight on its
 //      one trend, the anchor lift — each with its meter in words.
 //
 // Composes the shared components' strings; says nothing itself beyond section names and
@@ -64,16 +67,24 @@
     return `${list}<a class="linkbtn linkbtn-plain hwk-season" href="${escAttr(seasonHref || "#")}" data-hwk-season>All of the season ›</a>`;
   }
 
+  /** Your road: the trail, else (this week, nothing dated ahead) the starter. */
+  function roadHtml(model: ClientWeekLanding, opts: { enter?: boolean; mark?: number }): string {
+    if (typeof CairnJourneyTrail === "undefined") return "";
+    if (model.journey) return CairnJourneyTrail.trailHtml(model.journey, { enter: opts.enter, selected: opts.mark });
+    return model.this_week ? CairnJourneyTrail.starterHtml({ hasGoals: model.goals.length > 0 }) : "";
+  }
+
   /** The landing; `enter` gives it the shared settle-in once, `selected` keeps an open peek open. */
   function landingHtml(
     model: ClientWeekLanding,
-    opts: { enter?: boolean; selected?: string | null; seasonHref?: string } = {}
+    opts: { enter?: boolean; selected?: string | null; seasonHref?: string; mark?: number } = {}
   ): string {
     const hero =
       CairnFrameLine.heroHtml(model.frame, { kicker: model.range ? `This week · ${model.range}` : "This week", id: "hwkTitle" }) ||
       `<header class="frameline"><span class="lbl frameline-k">This week</span><h2 class="frameline-h" id="hwkTitle">${escHtml(model.range || "This week")}</h2></header>`;
     return `<div class="hwk${opts.enter ? " settle-in is-entering" : ""}">
       ${hero}
+      ${sectionHtml("road", "Your road", roadHtml(model, opts))}
       ${sectionHtml("shape", "This week's shape", shapeHtml(model, opts.selected || null))}
       ${sectionHtml("open", "Still open", openHtml(model.open))}
       ${sectionHtml("next", "Next up", nextHtml(model, opts.seasonHref || ""))}

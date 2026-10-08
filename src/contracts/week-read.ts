@@ -142,6 +142,43 @@ export interface WeekReadGoal {
   fit?: "fits" | "stretch" | "beyond_horizon" | null;
 }
 
+/** One dated mark on the journey trail (a milestone, with the word the trail prints beside it). */
+export interface WeekReadJourneyMark extends WeekReadMilestone {
+  /** The trail's short word: "Half", "72 kg", "48 km", "Test", "Checkup". */
+  short: string;
+  /** Days from today to the mark (0 = today). */
+  days_away: number;
+  /** "in 10 days", "tomorrow", "today". */
+  days_words: string;
+  /** True for the furthest mark: the summit the trail climbs to. */
+  summit: boolean;
+}
+
+/** Something that has already moved toward a goal since the trail began (measures, never grades). */
+export interface WeekReadJourneyBehind {
+  key: "race" | "weight" | "strength";
+  /** "Race estimate 4 min faster", "−2.1 lb", "Deadlift up 20 lb, to 285 lb". */
+  words: string;
+}
+
+/**
+ * The journey trail Horizon's Week draws: to scale in time from `start` through today to
+ * the furthest dated goal. Built over Today's path (src/repo/today-path.ts), re-deriving
+ * nothing; null when no dated mark lies ahead or the week is not this week.
+ */
+export interface WeekReadJourney {
+  start: string;
+  /** "Sep 8". */
+  start_words: string;
+  today: string;
+  /** Every dated mark ahead, ascending; the last is the summit. */
+  marks: WeekReadJourneyMark[];
+  /** What moved toward a goal since `start` (at most three); empty when nothing did. */
+  behind: WeekReadJourneyBehind[];
+  /** One calm line of where the athlete stands on the trail ("31 days walked, 10 to the race."). */
+  line: string;
+}
+
 export type WeightPaceVerdict = "on_pace" | "ahead" | "behind" | "steady";
 
 /**
@@ -205,6 +242,8 @@ export interface WeekRead {
   /** The next 2–3 milestones beyond this week. */
   next_milestones: WeekReadMilestone[];
   goals: WeekReadGoal[];
+  /** The journey trail: this week only, null with no dated mark ahead. */
+  journey: WeekReadJourney | null;
   /** The one weight-trend read behind the weight goal row. */
   weight_trend: WeightTrendRead | null;
 }
