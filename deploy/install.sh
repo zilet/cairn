@@ -3114,6 +3114,22 @@ rw_tpl_overview() {
 }
 
 rw_tpl_report() {
+  if [ "$RW_TPL_STATUS" = PUBLISHED ]; then
+    if [ -z "$RW_TPL_TODO" ]; then
+      step "Template $RW_TPL_CODE is published and matches deploy/railway/template.json"
+    else
+      step "Template $RW_TPL_CODE is published, but differs from deploy/railway/template.json"
+    fi
+    say "  Code:     $RW_TPL_CODE"
+    say "  Editor:   https://railway.com/workspace/templates/$RW_TPL_ID"
+    say "  Deploy:   https://railway.com/deploy/$RW_TPL_CODE"
+    if [ -n "$RW_TPL_TODO" ]; then
+      say ""
+      say "  To bring it in line, change these in Railway's template editor (the Editor link above), then Save:"
+      printf '%s\n' "$RW_TPL_TODO" | sed '/^$/d; s/^/    - /'
+    fi
+    return 0
+  fi
   step "Template draft ready${RW_TPL_STATUS:+ ($RW_TPL_STATUS)}"
   say "  Code:     $RW_TPL_CODE"
   say "  Editor:   https://railway.com/workspace/templates/$RW_TPL_ID"

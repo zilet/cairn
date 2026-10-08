@@ -1325,7 +1325,13 @@ function shellConst(name) {
 // (2026-10-08, CLI 5.64): every variable's default, the health check, volume and domain, but no
 // variable descriptions and no image auto updates. Options model the editor having added them,
 // or a draft that carries a fixed secret.
-function templateResponse({ descriptions = false, autoUpdates = false, fixed = {}, drop = [] } = {}) {
+function templateResponse({
+  descriptions = false,
+  autoUpdates = false,
+  fixed = {},
+  drop = [],
+  status = "UNPUBLISHED",
+} = {}) {
   const variables = {};
   for (const [k, v] of Object.entries(spec.variables)) {
     if (drop.includes(k)) continue;
@@ -1343,7 +1349,7 @@ function templateResponse({ descriptions = false, autoUpdates = false, fixed = {
           id: TPL_ID,
           code: "AbC123",
           name: "Cairn",
-          status: "UNPUBLISHED",
+          status,
           serializedConfig: {
             buckets: {},
             services: {
@@ -1432,6 +1438,26 @@ test("railway-template --dry-run prints the plan and CLI sequence, runs nothing,
     assert.notEqual(rig.go(["--dry-run", "--lan"]).code, 0);
     assert.notEqual(rig.go(["--dry-run", "--target=local"]).code, 0);
     assert.notEqual(run(["--target=railway", "--dry-run", "--publish"], { env: rig.env }).code, 0);
+  }));
+
+test("railway-template --template on an already published template says it is published, not a draft", () =>
+  withTempDir((dir) => {
+    const rig = templateRig(dir);
+    const ok = templateResponse({ descriptions: true, autoUpdates: true, status: "PUBLISHED" });
+    fs.writeFileSync(path.join(rig.state, "template_response"), ok);
+    const r = rig.go(["--template=AbC123"]);
+    assert.equal(r.code, 0, r.all);
+    assert.match(r.out, /Template AbC123 is published and matches deploy\/railway\/template\.json/);
+    assert.doesNotMatch(r.out.split("Signed in")[1], /draft|once published/i); // the plan header precedes the lookup
+    assert.match(r.out, /https:\/\/railway\.com\/deploy\/AbC123/);
+
+    // Published but drifted from the spec: still published, with the differences listed.
+    fs.writeFileSync(path.join(rig.state, "template_response"), templateResponse({ status: "PUBLISHED" }));
+    const drift = rig.go(["--template=AbC123"]);
+    assert.equal(drift.code, 0, drift.all);
+    assert.match(drift.out, /Template AbC123 is published, but differs from deploy\/railway\/template\.json/);
+    assert.match(drift.out, /Variable descriptions \(9 missing\)/);
+    assert.doesNotMatch(drift.out.split("Signed in")[1], /draft|once published/i);
   }));
 
 test("railway-template builds the draft from the spec in a scratch project, then deletes the project", () =>
