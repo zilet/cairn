@@ -2074,8 +2074,11 @@ rw_setup_paths() {
   RW_DOMAIN=$(rw_state_get RW_DOMAIN)
   RW_AU_SET=$(rw_state_get RW_AUTOUPDATES_SET)
   RW_AU=""
+  # A different --railway-project-name than the recorded one is decided once signed in:
+  # fine when the recorded project is gone, refused while it still exists (rw_ensure_project).
+  RW_PROJECT_RECORDED=""
   if [ -n "$OPT_RW_PROJECT" ] && [ -n "$RW_PROJECT" ] && [ "$OPT_RW_PROJECT" != "$RW_PROJECT" ]; then
-    die "$RW_DIR already manages the Railway project '$RW_PROJECT'. Use --name=<other> for a second install."
+    RW_PROJECT_RECORDED="$RW_PROJECT"
   fi
   RW_PROJECT="${OPT_RW_PROJECT:-${RW_PROJECT:-$NAME}}"
   RW_SERVICE="${RW_SERVICE:-$NAME}"
@@ -2186,7 +2189,47 @@ rw_find_project() {
   RW_FOUND=$(printf '%s\n' "$RW_OUT" | json_project_ids "$RW_PROJECT")
 }
 
+# The name is taken and not to be reused: ask for another (a free "<name>-N" offered),
+# or, with no terminal, say how to pass one.
+rw_pick_project_name() {
+  if ! has_tty || [ "$OPT_YES" = 1 ]; then
+    die "A Railway project named '$RW_PROJECT' already exists. Re-run with another name, e.g. curl -fsSL $ONE_LINER_URL | sh -s -- --railway-project-name=$RW_PROJECT-2"
+  fi
+  pp_base="$RW_PROJECT"
+  while :; do
+    pp_n=2
+    while :; do
+      RW_PROJECT="$pp_base-$pp_n"
+      rw_find_project
+      [ -n "$RW_FOUND" ] || break
+      pp_n=$((pp_n + 1))
+    done
+    pp_suggest="$RW_PROJECT"
+    printf '%s  ? %sName for a new Railway project [%s]: ' "$C_YELLOW" "$C_RESET" "$pp_suggest" >/dev/tty
+    pp_ans=""
+    read -r pp_ans </dev/tty || pp_ans=""
+    RW_PROJECT="${pp_ans:-$pp_suggest}"
+    case "$RW_PROJECT" in
+      *[!A-Za-z0-9._-]* | "" | -*) warn "Use letters, digits, '.', '_' or '-'."; continue ;;
+    esac
+    if [ "${#RW_PROJECT}" -gt 60 ]; then warn "Keep it under 60 characters."; continue; fi
+    rw_find_project
+    if [ -n "$RW_FOUND" ]; then warn "'$RW_PROJECT' is taken too."; pp_base="$RW_PROJECT"; continue; fi
+    RW_FOUND=""
+    return 0
+  done
+}
+
 rw_ensure_project() {
+  if [ -n "${RW_PROJECT_RECORDED:-}" ] && [ -n "$RW_PROJECT_ID" ]; then
+    ep_want="$RW_PROJECT"
+    RW_PROJECT="$RW_PROJECT_RECORDED"
+    rw_find_project
+    if printf '%s\n' "$RW_FOUND" | grep -qx "$RW_PROJECT_ID"; then
+      die "$RW_DIR already manages the Railway project '$RW_PROJECT', which still exists. For a second install add --name=<other>, e.g. curl -fsSL $ONE_LINER_URL | sh -s -- --name=$ep_want --railway-project-name=$ep_want"
+    fi
+    RW_PROJECT="$ep_want"
+  fi
   rw_find_project
   if [ -n "$RW_PROJECT_ID" ]; then
     if printf '%s\n' "$RW_FOUND" | grep -qx "$RW_PROJECT_ID"; then
@@ -2195,17 +2238,22 @@ rw_ensure_project() {
     fi
     warn "The Railway project recorded in $RW_STATE is gone; creating a new one."
     RW_PROJECT_ID=""
+    # The image an earlier run recorded belonged to that project; a new one starts on the release.
+    if [ -z "$OPT_IMAGE" ] && [ "$IMAGE" != "$DEFAULT_IMAGE" ]; then
+      info "Using $DEFAULT_IMAGE (the recorded $IMAGE went with the old project; --image= picks another)."
+      IMAGE="$DEFAULT_IMAGE"
+    fi
   fi
   rep_count=$(printf '%s\n' "$RW_FOUND" | grep -c . || true)
-  if [ "$rep_count" -gt 1 ]; then
-    die "You have $rep_count Railway projects named '$RW_PROJECT'. Pick another name with --railway-project-name=."
-  fi
-  if [ "$rep_count" = 1 ]; then
-    confirm "A Railway project named '$RW_PROJECT' already exists. Set Cairn up in it?" "n" \
-      || die "Cancelled. Use --railway-project-name=<another name> for a new project."
+  if [ "$rep_count" = 1 ] \
+    && confirm "A Railway project named '$RW_PROJECT' already exists. Set Cairn up in it?" "n"; then
     RW_PROJECT_ID="$RW_FOUND"
     ok "Railway project: $RW_PROJECT (existing)."
     return 0
+  fi
+  if [ "$rep_count" -gt 0 ]; then
+    [ "$rep_count" = 1 ] || warn "You have $rep_count Railway projects named '$RW_PROJECT'."
+    rw_pick_project_name
   fi
   info "Creating the Railway project '$RW_PROJECT'..."
   if [ -n "$OPT_RW_WORKSPACE" ]; then
@@ -2441,7 +2489,7 @@ rw_wait_health() {
 
 rw_print_plan() {
   step "Cairn on Railway: plan"
-  say "  Project:     $RW_PROJECT (created, or an existing one of that name after asking)"
+  say "  Project:     $RW_PROJECT (created; if the name is taken, you choose to reuse it or name a new one)"
   say "  Service:     $RW_SERVICE, from $IMAGE, one volume at /data, a public https domain"
   say "  Variables:   $RW_PLAIN_VARS"
   say "               CAIRN_AUTH_TOKEN and CAIRN_SETTINGS_SECRET_KEY: 64 random hex chars each, sent on stdin"
