@@ -3024,6 +3024,18 @@ athlete who travels gets both. Two layers keep that coherent:
   prints a lab value goes through it: `/markers/priority` + records search (`publicMarkerRow`),
   `/health/markers`, `health_focus` readings, the coach-context `health` docs, the health review /
   synthesis prompts (which also state `labUnitsPromptLine`), the doctor report, packet and export.
+  A per-marker loop resolves the system ONCE and passes it down (the helpers' default argument is
+  for a single call).
+- **Display units are never persisted.** Directive prose is STORED in canonical units (the generic
+  watch note's value, the calcium albumin-correction rule) and rendered per read by
+  `renderLabQuantities` (`lab-display.ts`, via `presentDirective` in `directives-read.ts` —
+  `listActiveDirectives`, `listDirectives`, `getDirective`); the reconcile, the derive signature and
+  the decision ledger read the raw table, so a unit switch rewrites no row and mints no decision.
+  Fingerprints of what the athlete SAW hash unit-neutral material too (today-agenda's health
+  revision: canonical values, stored directive text). A converted reading's printed reference range
+  goes through the same per-bound map as its value (never a single ratio — HbA1c is affine). Dedupe
+  compares printed numbers when the units match or either is missing/unknown, canonical numbers when
+  both convert and differ, and never across an inconvertible pair; a qualified `<0.5` stays text.
 
 ### How old is too old: per-marker temporal validity
 

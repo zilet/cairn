@@ -5,7 +5,8 @@
 import { db } from "../db.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { directiveStatusStamp, statusFlipIsFeedback } from "./directive-feedback.js";
-import { dedupeActiveDirectives, directiveIdentityKey, hydrateDirective } from "./directives-read.js";
+import { dedupeActiveDirectives, directiveIdentityKey, hydrateDirective, presentDirective } from "./directives-read.js";
+import { labUnitSystem } from "./settings.js";
 // Function-level cycle (doctor-loop imports listDirectives back from here);
 // scheduleDirectiveRecheck / cancelDirectiveRecheck are only called at runtime inside
 // updateDirective, so the hoisted bindings are always resolved by call time.
@@ -135,8 +136,14 @@ export function addDirective(fields: DirectiveInput = {}) {
   return getDirective(Number(info.lastInsertRowid));
 }
 
-export function getDirective(id: number) {
+// The stored row (text in canonical lab units) — what the lifecycle writes against.
+function storedDirective(id: number) {
   return hydrateDirective(db.prepare(`SELECT * FROM health_directives WHERE id = ?`).get(id) ?? null);
+}
+
+// The row as a person reads it: lab quantities in the athlete's lab-unit system.
+export function getDirective(id: number) {
+  return presentDirective(db.prepare(`SELECT * FROM health_directives WHERE id = ?`).get(id) ?? null, labUnitSystem());
 }
 
 // Defaults to the active set (what the user/coach should act on); pass
@@ -145,7 +152,8 @@ export function listDirectives(opts: { all?: boolean } = {}) {
   const rows = opts.all
     ? (db.prepare(`SELECT * FROM health_directives ORDER BY id DESC`).all() as any[])
     : (db.prepare(`SELECT * FROM health_directives WHERE status = 'active' ORDER BY id DESC`).all() as any[]);
-  const hydrated = rows.map(hydrateDirective);
+  const system = labUnitSystem();
+  const hydrated = rows.map((row) => presentDirective(row, system));
   return opts.all ? hydrated : dedupeActiveDirectives(hydrated);
 }
 
@@ -183,7 +191,7 @@ function cascadeDirectiveStatus(primary: any, status: string): number {
 }
 
 export function updateDirective(id: number, fields: DirectiveInput) {
-  const cur = getDirective(id) as any;
+  const cur = storedDirective(id) as any;
   if (!cur) return null;
   const sets: string[] = [];
   const vals: any[] = [];
@@ -297,7 +305,7 @@ export function updateDirective(id: number, fields: DirectiveInput) {
     vals.push(id);
     db.prepare(`UPDATE health_directives SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
   }
-  const updated = getDirective(id);
+  const updated = storedDirective(id);
   // A USER status flip to resolved/dismissed is feedback: bump the derive-signature
   // counter (so the next propagation pass never short-circuits past it) and cascade the
   // same verdict onto every ACTIVE twin sharing this directive's identity, so one Done
@@ -341,7 +349,7 @@ export function updateDirective(id: number, fields: DirectiveInput) {
       }
     }
   }
-  return updated;
+  return getDirective(id);
 }
 
 // Whether an existing active row already carries the desired content, so a re-derive can

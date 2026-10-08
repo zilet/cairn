@@ -29,7 +29,7 @@
 import { db } from "../db.js";
 import { canonicalMarkerForReading, isNonAnalyteMarkerName, normalizeMarkerName } from "./marker-canon.js";
 import { deleteHealthDocument, updateHealthDocFields } from "./health.js";
-import { labUnitSpec, labUnitsCompatible, normalizeLabUnit, parseLabNumber, toCanonical } from "./lab-units.js";
+import { labUnitSpec, labUnitsCompatible, normalizeLabUnit, toCanonical } from "./lab-units.js";
 import { unitAnalyteZone } from "./propagation-data.js";
 
 export const CCDA_DERIVED_TYPES = new Set(["ccda_results", "ccda_vitals"]);
@@ -62,8 +62,12 @@ interface DocRow {
 }
 
 interface Reading {
-  value: string; // comparable form (a recognized analyte's number is in its CANONICAL unit)
-  tolerance: number; // extra slack for a converted reading: half the source's last printed digit
+  value: string; // comparable form as printed ("n:3.2", "s:<0.5" — a qualified value stays text)
+  num: number | null; // the printed number in its SOURCE unit; null for text and qualified values
+  unit: string | null; // the normalized unit spelling, or null when none was printed
+  canonical: number | null; // the number in its analyte's canonical unit, when the table converts that unit
+  tolerance: number; // slack on `canonical`: half the source's last printed digit, converted
+  incommensurable: boolean; // a unit with no fixed conversion to the analyte's others (Lp(a) mg/dL)
   marker: any; // the stored marker object
 }
 
@@ -105,16 +109,30 @@ export function comparableReading(value: unknown): string | null {
   return s ? `s:${s}` : null;
 }
 
+function numbersAgree(x: number, y: number, tolerance: number): boolean {
+  const scale = Math.max(Math.abs(x), Math.abs(y));
+  if (scale === 0) return x === y;
+  return Math.abs(x - y) <= Math.max(scale * 0.005, tolerance);
+}
+
+// Two transcriptions of one reading agree when their numbers do, compared in the units
+// they can BOTH speak to:
+//   - same unit, or either side printed no unit or one the table does not know: the
+//     raw printed numbers (one draw's two copies, one of which dropped or misspelled
+//     the unit, still agree — the pre-conversion behaviour);
+//   - two different units the analyte converts between: the canonical numbers, with
+//     the slack each source's printed precision implies;
+//   - two different units one of which has no fixed conversion (Lp(a) mg/dL beside
+//     nmol/L): never, whatever the numbers say.
+// Text and qualified values ("<0.5") compare only as text, so a "<0.5" is never 0.5.
 function readingsAgree(a: Reading, b: Reading): boolean {
-  if (a.value === b.value) return true;
-  if (a.value.startsWith("n:") && b.value.startsWith("n:")) {
-    const x = Number(a.value.slice(2));
-    const y = Number(b.value.slice(2));
-    const scale = Math.max(Math.abs(x), Math.abs(y));
-    if (scale === 0) return x === y;
-    return Math.abs(x - y) <= Math.max(scale * 0.005, a.tolerance, b.tolerance);
+  if (a.num == null || b.num == null) return a.value === b.value;
+  const unitsDiffer = !!a.unit && !!b.unit && !labUnitsCompatible(a.unit, b.unit);
+  if (unitsDiffer && (a.incommensurable || b.incommensurable)) return false;
+  if (unitsDiffer && a.canonical != null && b.canonical != null) {
+    return numbersAgree(a.canonical, b.canonical, Math.max(a.tolerance, b.tolerance));
   }
-  return false;
+  return numbersAgree(a.num, b.num, 0);
 }
 
 // Digits printed after the decimal mark ("5.20" → 2, "3,2" → 1, 201 → 0).
@@ -123,28 +141,43 @@ function printedDecimals(value: unknown): number {
   return m ? m[1].length : 0;
 }
 
-// One reading in a form two labs on different unit systems agree on: a recognized
-// analyte's number is brought into its canonical unit (src/repo/lab-units.ts), so the
-// same draw printed as LDL 3.2 mmol/L and LDL 124 mg/dL is ONE reading, not a conflict.
-// A converted value carries the slack its source's own rounding implies (an HDL printed
-// "1.3 mmol/L" is anything from 1.25 to 1.35, i.e. ±1.9 mg/dL). A unit with no safe
-// conversion (Lp(a) mg/dL beside nmol/L) is tagged with its unit, so it never agrees
-// with a reading in the other one.
-function comparableMarkerReading(marker: any): { value: string; tolerance: number } | null {
-  const value = comparableReading(marker?.value);
+// The number a value prints, or null. Only a PLAIN number ("5.2", 201, a comma-decimal
+// "3,2") reads as one: a qualified "<0.5" / ">90" is a bound, not the number beside it,
+// and anything else ("1:160", "5.2 H") stays text exactly as the pre-unit compare kept it.
+function plainLabNumber(value: unknown): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  const s = String(value ?? "").trim();
+  if (!/^[+-]?(?:\d+(?:[.,]\d+)?|[.,]\d+)$/.test(s)) return null;
+  const n = Number(s.replace(",", "."));
+  return Number.isFinite(n) ? n : null;
+}
+
+// One reading with everything readingsAgree needs: its printed number and unit, and —
+// for a recognized analyte whose unit the table converts (src/repo/lab-units.ts) — the
+// same number in the canonical unit, so the same draw printed as LDL 3.2 mmol/L and LDL
+// 124 mg/dL is ONE reading, not a conflict. A converted value carries the slack its
+// source's own rounding implies (an HDL printed "1.3 mmol/L" is anything from 1.25 to
+// 1.35, i.e. ±1.9 mg/dL). A unit on a scale with no fixed conversion (Lp(a) mg/dL) is
+// marked incommensurable, so it never agrees with a reading in another unit.
+function comparableMarkerReading(marker: any): Omit<Reading, "marker"> | null {
+  const raw = marker?.value;
+  const num = plainLabNumber(raw);
+  const value = num != null ? `n:${num}` : comparableReading(raw);
   if (value == null) return null;
-  const num = parseLabNumber(marker?.value);
-  const unit = marker?.unit ?? null;
-  if (num == null || !unit) return { value, tolerance: 0 };
+  const unit = normalizeLabUnit(marker?.unit);
+  const out = { value, num, unit, canonical: null, tolerance: 0, incommensurable: false };
+  if (num == null || !unit) return out;
   const name = String(marker?.name ?? "");
-  const zone = unitAnalyteZone(canonicalMarkerForReading(name, unit).name) ?? unitAnalyteZone(name);
+  const zone = unitAnalyteZone(canonicalMarkerForReading(name, marker.unit).name) ?? unitAnalyteZone(name);
   const spec = labUnitSpec(zone?.label);
-  if (!zone || !spec || !labUnitsCompatible(spec.canonical, zone.unit)) return { value, tolerance: 0 };
+  if (!zone || !spec || !labUnitsCompatible(spec.canonical, zone.unit)) return out;
   const canonical = toCanonical(zone.label, num, unit);
-  if (canonical == null) return { value: `u:${normalizeLabUnit(unit)}:${value}`, tolerance: 0 };
-  if (labUnitsCompatible(unit, spec.canonical)) return { value: `n:${canonical}`, tolerance: 0 };
-  const lower = toCanonical(zone.label, num - 0.5 * 10 ** -printedDecimals(marker?.value), unit);
-  return { value: `n:${canonical}`, tolerance: lower == null ? 0 : Math.abs(canonical - lower) };
+  if (canonical == null) {
+    return { ...out, incommensurable: !!spec.never?.some((u) => labUnitsCompatible(u, unit)) };
+  }
+  if (labUnitsCompatible(unit, spec.canonical)) return { ...out, canonical };
+  const lower = toCanonical(zone.label, num - 0.5 * 10 ** -printedDecimals(raw), unit);
+  return { ...out, canonical, tolerance: lower == null ? 0 : Math.abs(canonical - lower) };
 }
 
 export function markerReadingKey(marker: any): string | null {

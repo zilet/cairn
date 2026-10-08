@@ -47,7 +47,7 @@ import { fuelingFollowThroughDue } from "./fueling.js";
 import { addDaysISO, clipText, localDateISO, localDayOfStamp } from "./shared.js";
 import { getCachedDayRead } from "./intelligence.js";
 import { listVisibleInsights } from "./insights.js";
-import { listActiveDirectives } from "./directives-read.js";
+import { activeDirectiveStoredText, listActiveDirectives } from "./directives-read.js";
 import { acuteGates } from "./hybrid-load.js";
 import { programAdjustments, programBalance } from "./progression.js";
 import { getWeeklyStats, vouchedRunCompliance } from "./sessions.js";
@@ -56,7 +56,8 @@ import {
   reconcileGarminStrength,
   snapshotGarminReconcileState,
 } from "./activities.js";
-import { healthFocus } from "./propagation.js";
+import { healthFocus, prioritizeMarkers } from "./propagation.js";
+import { labQuantityNeutral } from "./lab-display.js";
 // The health-standing momentum read — the SAME wins-in-motion the top-level Me→Standing
 // view shows, surfaced here as a quiet pull-only "you're trending the right way" card.
 import { standingMomentum } from "./standing.js";
@@ -81,7 +82,7 @@ import { listBrainDecisions, recordDecision, saveBrainRollback } from "./brain-d
 import { decideAutonomyTier } from "../brain/autonomy.js";
 import { specialistVoiceLine } from "../brain/specialist-voice.js";
 import { getAppState, setAppState } from "./app-state.js";
-import { getSettings } from "./settings.js";
+import { getSettings, labUnitSystem } from "./settings.js";
 
 // ---- The shared Today-agenda contract (also consumed by sibling Era-2 cards) ----
 export type TodayAgendaTier = "hero" | "primary" | "more";
@@ -591,8 +592,33 @@ function clipAgenda(value: unknown, max = 230): string {
   return clipText(value, max, { collapseWhitespace: true, ellipsis: "…" });
 }
 
+// The revision is what the athlete has SEEN, so it hashes only unit-system-independent
+// material: a reading's value is its stored canonical value (the focus readings are in
+// the athlete's display system), and a lead move hashes as its directive's STORED
+// sentence (canonical units; the shown one is rendered per system) — or, failing a match,
+// with every lab quantity neutralized. Switching lab units — or the first-run unit
+// detection — never re-surfaces a seen item.
 function healthAgendaRevision(focus: any, directives: any[]): string {
   const lead = focus?.lead ?? null;
+  const canonicalValue = new Map<string, unknown>();
+  const storedByShown = new Map<string, string>();
+  try {
+    for (const m of (prioritizeMarkers() as any)?.markers ?? []) {
+      if (m?.name != null && !canonicalValue.has(String(m.name)))
+        canonicalValue.set(String(m.name), m?.latest?.value ?? null);
+    }
+    // health-focus clips a move to 240 characters of the shown sentence.
+    for (const [shown, stored] of activeDirectiveStoredText(labUnitSystem())) {
+      if (!storedByShown.has(shown.slice(0, 240))) storedByShown.set(shown.slice(0, 240), stored.slice(0, 240));
+    }
+  } catch {
+    /* no marker history → readings hash by name/flag/trend alone; moves neutralized */
+  }
+  const moves: Record<string, string> = {};
+  for (const [domain, raw] of Object.entries(lead?.moves ?? {})) {
+    const text = String(raw ?? "");
+    moves[domain] = storedByShown.get(text) ?? labQuantityNeutral(text);
+  }
   const material = {
     group: lead?.group ?? null,
     tier: lead?.tier ?? null,
@@ -600,12 +626,12 @@ function healthAgendaRevision(focus: any, directives: any[]): string {
     readings: Array.isArray(lead?.readings)
       ? lead.readings.map((row: any) => ({
           name: row?.name ?? null,
-          value: row?.value ?? null,
+          value: canonicalValue.get(String(row?.name ?? "")) ?? null,
           flag: row?.flag ?? null,
           trend: row?.trend ?? null,
         }))
       : [],
-    moves: lead?.moves ?? {},
+    moves,
     directives: directives
       .map((row: any) => ({
         key: row?.directive_key ?? `${row?.marker ?? ""}:${row?.domain ?? ""}`,

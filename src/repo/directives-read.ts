@@ -2,8 +2,8 @@
 // Reading the ACTIVE directive set — the row hydration, the identity of a
 // directive, and the dedupe that collapses one concern said twice.
 //
-// A LEAF module by construction: it imports only `db`, the marker canon and the
-// intent classifier (both already below coach), and it must never import
+// A LEAF module by construction: it imports only `db`, the marker canon, the
+// intent classifier and the lab-unit display (all already below coach), and it must never import
 // coach.ts, propagation.ts or anything that reaches the coach context. That is
 // the whole reason it exists as its own file. Eight modules ask "what is the
 // athlete acting on right now?" — health-focus, health-export, nutrition-progress,
@@ -21,6 +21,9 @@ import { db } from "../db.js";
 import { canonicalMarker } from "./marker-canon.js";
 import { classifyDirectiveIntent } from "./propagation-data.js";
 import { isAcknowledgedDirective } from "./directive-feedback.js";
+import { renderLabQuantities } from "./lab-display.js";
+import type { LabUnitSystem } from "./lab-units.js";
+import { labUnitSystem } from "./settings.js";
 
 // hydrate a stored row: surface `uncertain` as a boolean for consumers, and whether the
 // athlete has already acknowledged it (in effect, but no longer a new item — the rule
@@ -30,10 +33,43 @@ export function hydrateDirective(row: any) {
   return { ...row, uncertain: !!row.uncertain, acknowledged: isAcknowledgedDirective(row) };
 }
 
+// A row as a PERSON (or a prompt) reads it: hydrated, with every lab quantity in its
+// sentence shown in the athlete's lab-unit system. Stored text stays in canonical units
+// (src/repo/lab-display.ts `renderLabQuantities`) — the reconcile, the derive signature
+// and the decision ledger all read the raw table, so a unit switch changes only what is
+// shown. `system` is resolved once per list by the caller.
+export function presentDirective(row: any, system: LabUnitSystem) {
+  const d = hydrateDirective(row);
+  if (!d || system !== "si") return d;
+  return {
+    ...d,
+    directive: renderLabQuantities(d.directive ?? null, d.marker, system),
+    rationale: renderLabQuantities(d.rationale ?? null, d.marker, system),
+  };
+}
+
+/**
+ * Every active row's STORED sentence keyed by that sentence as shown under `system` — so a
+ * fingerprint of what the athlete saw (today-agenda's health revision) can hash the
+ * unit-neutral text and never move when the lab-unit system does.
+ */
+export function activeDirectiveStoredText(system: LabUnitSystem): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const row of db
+    .prepare(`SELECT directive, marker FROM health_directives WHERE status = 'active'`)
+    .all() as any[]) {
+    const stored = String(row?.directive ?? "").trim();
+    const shown = String(renderLabQuantities(row?.directive ?? null, row?.marker, system) ?? "").trim();
+    if (!out.has(shown)) out.set(shown, stored);
+  }
+  return out;
+}
+
 export function listActiveDirectives() {
+  const system = labUnitSystem();
   return dedupeActiveDirectives(
-    (db.prepare(`SELECT * FROM health_directives WHERE status = 'active' ORDER BY id DESC`).all() as any[]).map(
-      hydrateDirective
+    (db.prepare(`SELECT * FROM health_directives WHERE status = 'active' ORDER BY id DESC`).all() as any[]).map((row) =>
+      presentDirective(row, system)
     )
   ).reverse();
 }

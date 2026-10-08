@@ -5,6 +5,7 @@ import { getProfile, listWeight } from "./profile.js";
 import { healthFocus, prioritizeMarkers } from "./propagation.js";
 import { getWeeklyStats } from "./sessions.js";
 import { presentMarkerRow } from "./lab-display.js";
+import { labUnitSystem } from "./settings.js";
 
 // The reference-curve machinery is shared with the performance/training-standing
 // read (src/repo/performance.ts) so strength capacity and VO2max both render in the
@@ -568,6 +569,7 @@ function balanceNote(stats: any, hasMomentum: boolean): string {
 
 export function healthStanding(opts: { referenceAge?: number } = {}) {
   const profile = getProfile() ?? {};
+  const labSystem = labUnitSystem(); // the lab-unit system, resolved once for every measure below
   const age = Number.isFinite(Number(profile.age)) ? Number(profile.age) : null;
   const sex = sexOf(profile);
   const actualAge = age ?? 40;
@@ -723,7 +725,7 @@ export function healthStanding(opts: { referenceAge?: number } = {}) {
       body: labs.out.length ? `Lead watch item: ${labs.out[0]?.name ?? "marker"}.` : labs.equivalent == null ? "Upload bloodwork to connect metabolic, lipid, hormone and inflammation signals." : `${labs.inCount} key marker${labs.inCount === 1 ? "" : "s"} are in range or optimal.`,
       measures: labs.out
         .slice(0, 3)
-        .map((raw) => presentMarkerRow(raw))
+        .map((raw) => presentMarkerRow(raw, labSystem))
         .map((m) => ({ label: m.name, value: m.latest?.value, unit: m.unit ?? "" })),
     },
     {

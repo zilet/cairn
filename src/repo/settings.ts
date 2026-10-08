@@ -855,10 +855,12 @@ export function derivedLabUnitSystem(weight: AthleteUnits["weight"]): LabUnitSys
  * explicit choice, else derived from their weight units (athleteUnits), so whatever
  * decides that default decides this one too. Display only — every comparison runs in
  * the canonical unit. An unreadable settings row reads US conventional, never throws.
+ * One settings read (`lab_units_effective` is that same resolution, made in
+ * rowToSettings); a per-marker loop still resolves it ONCE and passes it down.
  */
 export function labUnitSystem(): LabUnitSystem {
   try {
-    return validLabUnitSystem(getSettings().lab_units) ?? derivedLabUnitSystem(athleteUnits().weight);
+    return validLabUnitSystem(getSettings().lab_units_effective) ?? "us";
   } catch {
     return "us";
   }

@@ -20,6 +20,7 @@
 import {
   displayUnitFor,
   fromCanonical,
+  LAB_UNIT_TABLE,
   type LabUnitSystem,
   labUnitSpec,
   labUnitsCompatible,
@@ -186,6 +187,101 @@ export function labValueText(
   }
   const u = String(unit ?? "").trim();
   return `${raw}${raw && u ? ` ${u}` : ""}`.trim();
+}
+
+// ---------------------------------------------------------------------------
+// Lab quantities inside stored PROSE (a directive's sentence).
+//
+// Stored prose is unit-neutral: it is written in each analyte's CANONICAL unit (the
+// table's US conventional unit), never in the athlete's display system, so a unit switch
+// never rewrites a stored row, never moves the directive engine's fingerprint and never
+// mints a decision event. The athlete's system is applied when the row is READ
+// (`renderLabQuantities`, directives-read.ts), the same way a marker row is presented.
+//
+// A quantity is "<number> <canonical unit>" ("0.8 mg/dL", "4.0 g/dL"). Its analyte is
+// the row's own marker when that analyte's canonical unit matches, else the ONE analyte
+// the sentence names whose canonical unit matches ("…your albumin sits below 4.0 g/dL");
+// an ambiguous or unknown quantity is left exactly as written. Every quantity is read as
+// a level: an offset analyte (HbA1c) is only ever written as a level in prose, and every
+// other map is linear, so a step ("add ~0.8 mg/dL") converts the same way.
+// ---------------------------------------------------------------------------
+
+const CONVERTIBLE_LABELS = Object.keys(LAB_UNIT_TABLE).filter((label) => LAB_UNIT_TABLE[label].si);
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+}
+
+// "%" is left out on purpose: prose says "~10%" about everything, and a percent is never
+// unambiguously a lab level.
+const PROSE_UNITS = [
+  ...new Set(CONVERTIBLE_LABELS.map((label) => LAB_UNIT_TABLE[label].canonical).filter((u) => u !== "%")),
+].sort((a, b) => b.length - a.length);
+
+const LAB_QUANTITY_RE = new RegExp(
+  `(?<![\\w.])(\\d+(?:\\.\\d+)?) (${PROSE_UNITS.map(escapeRegExp).join("|")})(?![\\w/])`,
+  "g"
+);
+
+// Either system's spelling, for the neutral form below.
+const ANY_LAB_QUANTITY_RE = new RegExp(
+  `(?<![\\w.])\\d+(?:\\.\\d+)? (?:${[
+    ...new Set(
+      CONVERTIBLE_LABELS.flatMap((label) => [LAB_UNIT_TABLE[label].canonical, LAB_UNIT_TABLE[label].si?.unit ?? ""])
+    ),
+  ]
+    .filter((u) => u && u !== "%")
+    .sort((a, b) => b.length - a.length)
+    .map(escapeRegExp)
+    .join("|")})(?![\\w/])`,
+  "g"
+);
+
+/** The convertible analytes a row speaks about: its own marker(s) first, then any the sentence names. */
+function proseAnalytes(text: string, marker: unknown): { own: string[]; named: string[] } {
+  const own = String(marker ?? "")
+    .split("+")
+    .map((tok) => unitAnalyteZone(tok.replace(/^\s*(?:low|high|elevated|borderline|reduced|raised)\s+/i, ""))?.label)
+    .map((label) => (label ? String(label).toLowerCase() : null))
+    .filter((label): label is string => !!label && !!LAB_UNIT_TABLE[label]?.si);
+  const lc = text.toLowerCase();
+  const named = CONVERTIBLE_LABELS.filter((label) =>
+    new RegExp(`(?<![a-z0-9])${escapeRegExp(label)}(?![a-z0-9])`).test(lc)
+  );
+  return { own, named };
+}
+
+/**
+ * Stored prose (canonical units) with every recognizable lab quantity shown in the
+ * athlete's system — `system` resolved ONCE by the caller for a whole list. US prose
+ * (the canonical system) comes back untouched.
+ */
+export function renderLabQuantities(text: string, marker: unknown, system: LabUnitSystem): string;
+export function renderLabQuantities(text: string | null, marker: unknown, system: LabUnitSystem): string | null;
+export function renderLabQuantities(text: string | null, marker: unknown, system: LabUnitSystem): string | null {
+  if (text == null || system !== "si") return text;
+  LAB_QUANTITY_RE.lastIndex = 0;
+  if (!LAB_QUANTITY_RE.test(text)) return text;
+  const { own, named } = proseAnalytes(text, marker);
+  return text.replace(LAB_QUANTITY_RE, (whole, num: string, unit: string) => {
+    const fits = (label: string) => labUnitsCompatible(LAB_UNIT_TABLE[label].canonical, unit);
+    const mine = own.filter(fits);
+    const theirs = named.filter(fits);
+    const label = mine.length === 1 ? mine[0] : !mine.length && theirs.length === 1 ? theirs[0] : null;
+    if (!label) return whole;
+    const shown = fromCanonical(label, Number(num), system);
+    const shownUnit = displayUnitFor(label, system);
+    if (shown == null || !shownUnit) return whole;
+    return `${roundLabDisplay(shown)} ${shownUnit}`;
+  });
+}
+
+/**
+ * Prose with every lab quantity reduced to a placeholder — what a fingerprint of shown
+ * text hashes, so the SAME sentence read in either system hashes the same.
+ */
+export function labQuantityNeutral(text: string | null | undefined): string {
+  return String(text ?? "").replace(ANY_LAB_QUANTITY_RE, "#");
 }
 
 /** The system in words, for a heading or a prompt ("SI units (mmol/L, µmol/L, g/L)"). */

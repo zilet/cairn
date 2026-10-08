@@ -10,7 +10,8 @@ import {
   reconcileDirectives,
   updateDirective,
 } from "./directives.js";
-import { hydrateDirective, listActiveDirectives } from "./directives-read.js";
+import { hydrateDirective, listActiveDirectives, presentDirective } from "./directives-read.js";
+import { labUnitSystem } from "./settings.js";
 // The pure feedback policy (what a Done/Dismiss means for a pass) lives there; this
 // module only reads the feedback rows and writes the reconcile.
 import {
@@ -67,7 +68,6 @@ import {
   wearableTrendWindow,
 } from "./propagation-data.js";
 import { copyDeep, requestMemo } from "./request-memo.js";
-import { labValueText } from "./lab-display.js";
 
 // The sex/age snapshot the connected-brain paths thread into matchOptimalZone so a
 // woman / older adult isn't held to the male/generic default band. Null-safe: an
@@ -1325,8 +1325,11 @@ function collectGenericLongTail(
     const verdict = flagFeedbackVerdict(feedback, flag, m?.latest?.date);
     if (verdict === "suppress") continue;
     const value = m?.latest?.value;
-    // The value in the athlete's lab-unit system, unit attached (src/repo/lab-display.ts).
-    const valStr = value != null && value !== "" ? ` (${labValueText(m?.name, value, m?.unit ?? null)})` : "";
+    // STORED text is unit-neutral: the series' own value and unit (a recognized analyte's
+    // canonical unit), never the athlete's display system — that is applied when the row
+    // is read (renderLabQuantities, directives-read.ts), so a unit switch never rewrites
+    // this row or mints a decision event.
+    const valStr = value != null && value !== "" ? ` (${value}${m?.unit ? ` ${m.unit}` : ""})` : "";
     const readingDate: string | null = m?.latest?.date ?? null;
     desired.push(
       applyStaleness(
@@ -1936,6 +1939,7 @@ function directiveDisplayMarker(marker: string | null | undefined): string | nul
 }
 
 export function directiveFeedbackForCoach(limit = 12) {
+  const system = labUnitSystem();
   return (
     db
       .prepare(
@@ -1947,7 +1951,7 @@ export function directiveFeedbackForCoach(limit = 12) {
       )
       .all(limit) as any[]
   )
-    .map(hydrateDirective)
+    .map((row) => presentDirective(row, system))
     .map((d: any) => ({
       status: d.status,
       status_at: d.status_at || d.created_at,
