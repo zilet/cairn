@@ -24,6 +24,7 @@ import {
   type LabUnitSystem,
   labUnitSpec,
   labUnitsCompatible,
+  normalizeLabUnit,
   parseLabNumber,
   toCanonical,
 } from "./lab-units.js";
@@ -206,66 +207,99 @@ export function labValueText(
 }
 
 // ---------------------------------------------------------------------------
-// Lab quantities inside stored PROSE (a directive's sentence).
+// Lab quantities inside stored PROSE (a directive's sentence, a health read).
 //
-// Stored prose is unit-neutral: it is written in each analyte's CANONICAL unit (the
+// Cairn's own prose is unit-neutral: it is written in each analyte's CANONICAL unit (the
 // table's US conventional unit), never in the athlete's display system, so a unit switch
 // never rewrites a stored row, never moves the directive engine's fingerprint and never
-// mints a decision event. The athlete's system is applied when the row is READ
-// (`renderLabQuantities`, directives-read.ts), the same way a marker row is presented.
+// mints a decision event. An agent's prose (a health_review directive, the health
+// synthesis) is written in the system the athlete read at the time. Either way the
+// athlete's CURRENT system is applied when the text is READ (`renderLabQuantities`), the
+// same way a marker row is presented: a canonical quantity shows in SI for an SI reader,
+// an SI quantity in canonical units for a US reader, and one already in the reader's unit
+// stays exactly as written.
 //
-// A quantity is "<number> <canonical unit>" ("0.8 mg/dL", "4.0 g/dL") or a range of them
-// ("70-100 mg/dL", "70 to 100 mg/dL" — BOTH ends convert, or the whole range stays as
-// written). Its analyte is the NEAREST PRECEDING analyte the sentence names whose
-// canonical unit fits ("…an ApoB of 120 mg/dL" is ApoB whatever the row's own marker is);
-// with none before it, the one fitting analyte the sentence or the row names. Two
-// different analytes with the same unit joined only by "and"/"or"/a comma ("calcium and
-// creatinine near 9 mg/dL") leave the quantity exactly as written, and the row's own
-// marker is never used when the sentence names another analyte with the same unit.
-// Every quantity is read as a level: an offset analyte (HbA1c) is only ever written as a
-// level in prose, and every other map is linear, so a step ("add ~0.8 mg/dL") converts
-// the same way.
+// A quantity is "<number> <unit>" ("0.8 mg/dL", "4.0 mmol/L") or a joined pair of numbers
+// ahead of one unit ("70-100 mg/dL", "70 to 100 mg/dL", "between 70 and 100 mg/dL",
+// "160 → 130 mg/dL") — BOTH numbers convert, or the whole quantity stays as written. A
+// bare number tied to a quantity some other way ("160 down to 130 mg/dL", "130 mg/dL, from
+// 160") leaves the quantity as written, so a sentence never mixes the two systems.
+//
+// Its analyte (strict — when in doubt the quantity stays as written):
+//   1. An analyte named right AFTER it ("0.8 mg/dL to the calcium", "1 g/dL your
+//      albumin") is its subject.
+//   2. Else the NEAREST PRECEDING analyte the sentence names — any analyte the optimal
+//      zones know, Lp(a) and the non-converting ones included, so "Lp(a) 75 mg/dL" never
+//      converts by an LDL named earlier. A parenthetical aside that closed before the
+//      quantity is not the subject ("ApoB (the particle count behind LDL) is 120 mg/dL"
+//      is ApoB). Two different analytes joined only by "and"/"or"/a comma ("calcium and
+//      creatinine near 9 mg/dL") are ambiguous.
+//   3. Else, with nothing named before it, the ONE analyte the whole sentence and the
+//      row's own marker speak of — any second analyte makes it ambiguous.
+// The subject converts only when the quantity is in its canonical or SI unit. HbA1c's map
+// is affine, so a step written in prose would not convert like a level — it is never
+// converted in prose (nor is "%", which prose uses for everything).
 // ---------------------------------------------------------------------------
 
-const CONVERTIBLE_LABELS = Object.keys(LAB_UNIT_TABLE).filter((label) => LAB_UNIT_TABLE[label].si);
+/** Analytes whose quantities convert in prose: a linear SI map. */
+const PROSE_LABELS = Object.keys(LAB_UNIT_TABLE).filter((label) => {
+  const spec = LAB_UNIT_TABLE[label];
+  return !!spec.si && !spec.si.offset;
+});
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
 }
 
-// "%" is left out on purpose: prose says "~10%" about everything, and a percent is never
-// unambiguously a lab level.
-const PROSE_UNITS = [
-  ...new Set(CONVERTIBLE_LABELS.map((label) => LAB_UNIT_TABLE[label].canonical).filter((u) => u !== "%")),
-].sort((a, b) => b.length - a.length);
+// A unit as a pattern: any micro sign ("µmol/L", "μmol/L", "umol/L") reads the same.
+function unitPattern(unit: string): string {
+  return escapeRegExp(unit).replace(/µ/g, "[µμu]").replace(/^u/, "[uµμ]");
+}
 
-// "70-100", "70–100", "70 to 100" between the two ends of a range.
-const RANGE_JOIN = "(?:\\s*[-\\u2013\\u2014]\\s*|\\s+to\\s+)";
+function unitsPattern(units: string[]): string {
+  return [...new Set(units.filter((u) => u && u !== "%"))]
+    .sort((a, b) => b.length - a.length)
+    .map(unitPattern)
+    .join("|");
+}
+
+const PROSE_UNITS_RE = unitsPattern(
+  PROSE_LABELS.flatMap((label) => [LAB_UNIT_TABLE[label].canonical, LAB_UNIT_TABLE[label].si?.unit ?? ""])
+);
+
+// Between the two numbers of a pair: "70-100", "70–100", "160 → 130", "70 to 100", and
+// "and" (only after "between", checked where it matches).
+const PAIR_JOIN = "\\s*(?:[-\\u2013\\u2014\\u2192\\u21d2]|->|=>)\\s*|\\s+(?:to|and)\\s+";
 const LAB_QUANTITY_RE = new RegExp(
-  `(?<![\\w.])(\\d+(?:\\.\\d+)?)(?:${RANGE_JOIN}(\\d+(?:\\.\\d+)?))? (${PROSE_UNITS.map(escapeRegExp).join("|")})(?![\\w/])`,
+  `(?<![\\w.])(\\d+(?:\\.\\d+)?)(?:(${PAIR_JOIN})(\\d+(?:\\.\\d+)?))? (${PROSE_UNITS_RE})(?![\\w/])`,
   "g"
 );
 
 // Either system's spelling, for the neutral form below.
+const RANGE_JOIN = "(?:\\s*(?:[-\\u2013\\u2014\\u2192\\u21d2]|->|=>)\\s*|\\s+to\\s+)";
 const ANY_LAB_QUANTITY_RE = new RegExp(
-  `(?<![\\w.])\\d+(?:\\.\\d+)?(?:${RANGE_JOIN}\\d+(?:\\.\\d+)?)? (?:${[
-    ...new Set(
-      CONVERTIBLE_LABELS.flatMap((label) => [LAB_UNIT_TABLE[label].canonical, LAB_UNIT_TABLE[label].si?.unit ?? ""])
-    ),
-  ]
-    .filter((u) => u && u !== "%")
-    .sort((a, b) => b.length - a.length)
-    .map(escapeRegExp)
-    .join("|")})(?![\\w/])`,
+  `(?<![\\w.])\\d+(?:\\.\\d+)?(?:${RANGE_JOIN}\\d+(?:\\.\\d+)?)? (?:${unitsPattern(
+    Object.keys(LAB_UNIT_TABLE)
+      .filter((label) => LAB_UNIT_TABLE[label].si)
+      .flatMap((label) => [LAB_UNIT_TABLE[label].canonical, LAB_UNIT_TABLE[label].si?.unit ?? ""])
+  )})(?![\\w/])`,
   "g"
 );
 
-// What a sentence can call an analyte: its table label and the marker-name keys the
-// optimal zones match by ("ldl", "triglyceride", "25-oh", …).
+// A bare number tied to the quantity in a way the pair above does not cover.
+const BARE_LINK = "(?:[-\\u2013\\u2014\\u2192\\u21d2]|->|=>|(?:(?:down|up|back|then|now)\\s+)?(?:to|from)|and|or|vs\\.?|versus)";
+const BARE_BEFORE_RE = new RegExp(`(?<![\\w.])\\d+(?:\\.\\d+)?,?\\s*${BARE_LINK}\\s*$`, "i");
+const BARE_AFTER_RE = new RegExp(`^,?\\s*\\(?${BARE_LINK}\\s*(\\d+(?:\\.\\d+)?)(?!\\.?\\d)`, "i");
+const UNIT_AHEAD_RE = new RegExp(`^\\s?(?:${PROSE_UNITS_RE}|%|${unitsPattern(
+  Object.values(LAB_UNIT_TABLE).flatMap((spec) => [spec.canonical, spec.si?.unit ?? "", ...(spec.alt ?? []).flatMap((a) => a.units)])
+)})(?![\\w])`, "i");
+
+// What a sentence can call an analyte: every optimal zone's label and the marker-name keys
+// it matches by ("ldl", "triglyceride", "25-oh", "lp(a)", …) — converting or not.
 const MENTION_LABEL = new Map<string, string>();
 for (const zone of OPTIMAL_ZONES) {
   const label = String(zone.label ?? "").toLowerCase();
-  if (!CONVERTIBLE_LABELS.includes(label)) continue;
+  if (!label) continue;
   for (const term of [label, ...zone.keys]) if (term.length >= 3) MENTION_LABEL.set(term.toLowerCase(), label);
 }
 const MENTION_RE = new RegExp(
@@ -280,67 +314,102 @@ interface Mention {
   label: string;
   start: number;
   end: number;
+  /** Inside a parenthetical that closes at this index (an aside once the quantity is past it). */
+  asideUntil: number | null;
 }
 
 function proseMentions(text: string): Mention[] {
   const out: Mention[] = [];
   for (const m of text.matchAll(MENTION_RE)) {
     const label = MENTION_LABEL.get(m[0].toLowerCase());
-    if (label && m.index != null) out.push({ label, start: m.index, end: m.index + m[0].length });
+    if (label && m.index != null) out.push({ label, start: m.index, end: m.index + m[0].length, asideUntil: null });
+  }
+  // Parenthetical groups, ignoring the parentheses inside a name ("Lp(a)", "25(OH)D").
+  const inName = (i: number) => out.some((m) => i >= m.start && i < m.end);
+  const open: number[] = [];
+  for (let i = 0; i < text.length; i++) {
+    if (inName(i)) continue;
+    if (text[i] === "(") open.push(i);
+    else if (text[i] === ")" && open.length) {
+      const from = open.pop() as number;
+      for (const m of out) if (m.start > from && m.end <= i && m.asideUntil == null) m.asideUntil = i;
+    }
   }
   return out;
 }
 
 // Only a conjunction or punctuation between two mentions: "calcium and creatinine".
 const JOINED_RE = /^[\s,;/&+]*(?:and|or|&|\+|\/)?[\s,;]*$/i;
+// An analyte named right after a quantity: "0.8 mg/dL to the calcium", "1 g/dL your albumin".
+const FOLLOWING_RE = /^\s+(?:(?:of|to|in|for|on)\s+)?(?:(?:the|your)\s+)?/i;
 
 function ownAnalytes(marker: unknown): string[] {
   return String(marker ?? "")
     .split("+")
     .map((tok) => unitAnalyteZone(tok.replace(/^\s*(?:low|high|elevated|borderline|reduced|raised)\s+/i, ""))?.label)
     .map((label) => (label ? String(label).toLowerCase() : null))
-    .filter((label): label is string => !!label && !!LAB_UNIT_TABLE[label]?.si);
+    .filter((label): label is string => !!label);
+}
+
+/** The analyte a quantity at [at, end) belongs to, or null when that is not certain. */
+function proseSubject(text: string, at: number, end: number, mentions: Mention[], own: string[]): string | null {
+  const lead = text.slice(end).match(FOLLOWING_RE);
+  const following = lead ? mentions.find((m) => m.start === end + lead[0].length) : undefined;
+  if (following) return following.label;
+  const before = mentions.filter((m) => m.end <= at && (m.asideUntil == null || m.asideUntil > at));
+  if (before.length) {
+    const near = before[before.length - 1];
+    const prev = before[before.length - 2];
+    const joined = !!prev && prev.label !== near.label && JOINED_RE.test(text.slice(prev.end, near.start));
+    return joined ? null : near.label;
+  }
+  const named = [...new Set([...mentions.map((m) => m.label), ...own])];
+  return named.length === 1 ? named[0] : null;
 }
 
 /**
- * Stored prose (canonical units) with every recognizable lab quantity shown in the
- * athlete's system — `system` resolved ONCE by the caller for a whole list. US prose
- * (the canonical system) comes back untouched.
+ * Stored prose with every lab quantity it can attribute for certain shown in the
+ * athlete's system — `system` resolved ONCE by the caller for a whole list. A quantity
+ * already in the reader's unit, or one whose analyte is not certain, stays as written.
  */
 export function renderLabQuantities(text: string, marker: unknown, system: LabUnitSystem): string;
 export function renderLabQuantities(text: string | null, marker: unknown, system: LabUnitSystem): string | null;
 export function renderLabQuantities(text: string | null, marker: unknown, system: LabUnitSystem): string | null {
-  if (text == null || system !== "si") return text;
+  if (text == null) return text;
   LAB_QUANTITY_RE.lastIndex = 0;
   if (!LAB_QUANTITY_RE.test(text)) return text;
   const mentions = proseMentions(text);
   const own = ownAnalytes(marker);
-  return text.replace(LAB_QUANTITY_RE, (whole: string, lo: string, hi: string | undefined, unit: string, at: number) => {
-    const fits = (label: string) => labUnitsCompatible(LAB_UNIT_TABLE[label].canonical, unit);
-    let label: string | null = null;
-    const before = mentions.filter((m) => m.end <= at && fits(m.label));
-    if (before.length) {
-      const near = before[before.length - 1];
-      const prev = before[before.length - 2];
-      const adjacent = !!prev && prev.label !== near.label && JOINED_RE.test(text.slice(prev.end, near.start));
-      label = adjacent ? null : near.label;
-    } else {
-      // Nothing named before it: the one fitting analyte the sentence (or the row) speaks of.
-      const candidates = [...new Set([...mentions.map((m) => m.label), ...own].filter(fits))];
-      label = candidates.length === 1 ? candidates[0] : null;
+  return text.replace(
+    LAB_QUANTITY_RE,
+    (whole: string, lo: string, join: string | undefined, hi: string | undefined, unit: string, at: number) => {
+      const end = at + whole.length;
+      if (join && /^\s+and\s+$/i.test(join) && !/\bbetween\s+$/i.test(text.slice(0, at))) return whole;
+      if (BARE_BEFORE_RE.test(text.slice(0, at))) return whole;
+      const after = text.slice(end).match(BARE_AFTER_RE);
+      if (after && !UNIT_AHEAD_RE.test(text.slice(end + after[0].length))) return whole;
+      const label = proseSubject(text, at, end, mentions, own);
+      const spec = label && PROSE_LABELS.includes(label) ? LAB_UNIT_TABLE[label] : null;
+      const shownUnit = label ? displayUnitFor(label, system) : null;
+      // Spelled in the reader's unit already: as written ("50 ng/mL" is relabelled "50 µg/L").
+      if (!label || !spec?.si || !shownUnit || normalizeLabUnit(unit) === normalizeLabUnit(shownUnit)) return whole;
+      const fromUnit = labUnitsCompatible(unit, spec.canonical)
+        ? spec.canonical
+        : labUnitsCompatible(unit, spec.si.unit)
+          ? spec.si.unit
+          : null;
+      if (!fromUnit) return whole;
+      const one = (n: string): string | null => {
+        const canonical = toCanonical(label, Number(n), fromUnit);
+        const v = canonical == null ? null : fromCanonical(label, canonical, system);
+        return v == null ? null : String(roundLabDisplay(v));
+      };
+      const a = one(lo);
+      const b = hi == null ? null : one(hi);
+      if (a == null || (hi != null && b == null)) return whole;
+      return `${hi == null ? a : `${a}${join}${b}`} ${shownUnit}`;
     }
-    const shownUnit = label ? displayUnitFor(label, system) : null;
-    if (!label || !shownUnit) return whole;
-    const one = (n: string): string | null => {
-      const v = fromCanonical(label as string, Number(n), system);
-      return v == null ? null : String(roundLabDisplay(v));
-    };
-    const a = one(lo);
-    const b = hi == null ? null : one(hi);
-    if (a == null || (hi != null && b == null)) return whole;
-    const dash = /[–—]/.test(whole) ? "–" : whole.includes(" to ") ? " to " : "-";
-    return `${hi == null ? a : `${a}${dash}${b}`} ${shownUnit}`;
-  });
+  );
 }
 
 /**
