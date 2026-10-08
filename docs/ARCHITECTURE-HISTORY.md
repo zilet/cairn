@@ -4,6 +4,28 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-10-08 — your road, units that follow the athlete, one lab unit per analyte
+
+- **Your road** (Horizon → Week, `journey-trail-client.ts`, `GET /api/week` `journey`): the Path
+  trail that left Today in v2.0 lands where `docs/IA.md` meant it to go. It is drawn to scale in time
+  from where the stretch began, through today, to the summit goal; each mark opens its own words, and
+  "Behind you" names what already moved toward a goal. With nothing dated ahead, a starter hands chat
+  a first sentence (never sent for the athlete).
+- **Units follow Settings, and a fresh install starts from the device.** The body tape follows the
+  weight unit (kg → cm, lb → in). The cm/in toggle is a page-only override, and the old per-browser
+  `cairn-bm-unit` key is cleared. A never-onboarded install still on the defaults adopts the units its
+  locale and zone point at, once (`src/repo/unit-system.ts`, `POST /api/settings/units/detect`,
+  `app_state.units_source`). A person's change is never overridden.
+- **Lab units.** Every comparison runs in one unit per analyte (`LAB_UNIT_TABLE`, `lab-units.ts`):
+  optimal bands, trends, cross-unit dedupe, coach-context ranking and the PREVENT inputs. Before this,
+  a mmol/L total cholesterol entered PREVENT as mg/dL. Values are shown in the athlete's system
+  (`settings.lab_units`: us | si | automatic, which follows the weight unit; `lab-display.ts`), with
+  the lab's own print kept as `reported`. Lp(a) mass and molar units are never converted. Prompts
+  carry a `LAB UNITS:` line.
+- Schema: **v128** `settings.lab_units`.
+
+---
+
 ## 2026-10-04 — v2.0.0: the team decides, the record is true, five homes
 
 v2 grew out of the Atelier app rather than replacing it: every wave shipped inside the app the athlete
