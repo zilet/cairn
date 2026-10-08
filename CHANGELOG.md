@@ -5,6 +5,54 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [2.1.2] — 2026-10-08
+
+Units that follow you, your road on Horizon, and an app that opens faster: a lighter first load,
+fewer reads before the first screen, and a Today that no longer shifts while it paints. Fields you
+type in now stay above the iPhone keyboard. One migration (128) runs on boot.
+
+### Added
+
+- **Your road on Horizon.** Horizon → Week shows a trail from today to your furthest dated goal,
+  with the milestones on the way; with nothing dated ahead it offers a starter instead. Its weight
+  line is Today's own weight row.
+- **Lab results in your own units.** Settings → Units → Lab results picks US or SI, or Automatic,
+  which reads the system most of your last year of labs print in (a tie reads US). Every comparison
+  runs in one unit per analyte, so a panel printed abroad trends with the ones from home; each value
+  still keeps the lab's own print as reported. Findings, the coach's notes, the reaction model and
+  symptom links all speak your system. Migration 128 adds `settings.lab_units`.
+- **Units follow you from the first open.** A fresh install on default units adopts what the
+  device's locale and time zone point at, once; body tape follows the weight unit. Units you set are
+  never changed, and an install that already holds data keeps the ones it has been reading in.
+
+### Changed
+
+- **A lighter, faster first load.** Fuel, the calendar, body, journey and agent sign-in code load
+  when first opened instead of up front, and their styles come with them: Today's JavaScript drops
+  from 250 KB to 219 KB and its CSS from 68 KB to 58 KB, Horizon from 342 KB to 258 KB, Health from
+  396 KB to 303 KB. About 10 KB of unused CSS is gone.
+- **Fewer reads before the first screen.** The first-week status rides on the job list the app
+  already reads, Horizon reads the season only when it shows it, and pictures are no longer
+  re-requested after a service-worker update.
+- **The rest bar steps aside while you type.** While a set field has focus the rest timer hides; it
+  keeps counting and still tells you when rest is over, and returns when you leave the field.
+- Byte budgets keep headroom over the measured size, so a small honest change no longer fails them.
+
+### Fixed
+
+- **Fields stay in view above the iPhone keyboard** across the app — set entry, chat, food notes,
+  body measurements, settings and the welcome — with no random jumps and no more scroll than needed.
+- Today no longer shifts down when the week strip paints, and releases the strip's space when it
+  has nothing to show.
+- The welcome re-reads first-week status once if the first job-list read fails.
+- Body measurements keep the inches or centimetres a device chose over the Settings default.
+- TSH and fasting insulin printed in mIU/mL compare as µIU/mL again.
+- Sub-analytes (direct and indirect bilirubin, prealbumin, globulin fractions, mean cell
+  hemoglobin) no longer borrow their parent's optimal band.
+- Numbers in coach prose convert only when the analyte they belong to is certain; Lp(a) never
+  converts.
+- The installer says a published Railway template is published.
+
 ## [2.1.1] — 2026-10-08
 
 The first visit after a one-click deploy now says where your access token is, and the installer
@@ -1684,7 +1732,8 @@ landed since 0.3.0.
 - Chat strips agent tool-narration before the reply marker reaches the bubble
 - Segmented sub-nav scrolls when pills overflow (no clipped "Calendar" tab)
 
-[Unreleased]: https://github.com/zilet/cairn/compare/v2.1.1...HEAD
+[Unreleased]: https://github.com/zilet/cairn/compare/v2.1.2...HEAD
+[2.1.2]: https://github.com/zilet/cairn/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/zilet/cairn/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/zilet/cairn/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/zilet/cairn/compare/v1.9.1...v2.0.0
