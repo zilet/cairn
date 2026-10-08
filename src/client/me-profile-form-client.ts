@@ -88,37 +88,20 @@ type MeProfileFormContext = {
   }
 
   // --- units ---------------------------------------------------------------
-  // ONE unit system shared with Body Metrics (same localStorage key): "in" ⇒
-  // imperial (feet+inches / lb), "cm" ⇒ metric (cm / kg). Storage stays imperial
-  // server-side — this only changes what's shown and how entries are read. Mirrors
-  // body-metrics-client.ts's bmUnitPref()/bmSetUnitPref() so a switch in either
-  // surface follows the athlete to the other.
-  const PROF_UNIT_KEY = "cairn-bm-unit";
+  // ONE unit system shared with Body Metrics (CairnFmt.length()): "in" ⇒ imperial
+  // (feet+inches / lb), "cm" ⇒ metric (cm / kg). The default is Settings' (kg ⇒ cm,
+  // lb ⇒ in); the in/cm toggle is a page-lifetime switch shared with Body Metrics,
+  // never stored. Storage stays imperial server-side — this only changes what's
+  // shown and how entries are read.
   const LB_PER_KG = 2.2046226218;
   const round1 = (n: number): number => Math.round(n * 10) / 10;
 
   function profUnitPref(): "in" | "cm" {
-    try {
-      const saved = localStorage.getItem(PROF_UNIT_KEY);
-      if (saved === "in" || saved === "cm") return saved;
-    } catch {
-      /* private mode */
-    }
-    try {
-      // Only the US, Liberia and Myanmar default to imperial; everyone else metric.
-      const region = ((navigator.language || "").split("-")[1] || "").toUpperCase();
-      return region && !["US", "LR", "MM"].includes(region) ? "cm" : "in";
-    } catch {
-      return "in";
-    }
+    return typeof CairnFmt !== "undefined" ? CairnFmt.length() : "in";
   }
 
   function profSetUnitPref(unit: "in" | "cm"): void {
-    try {
-      localStorage.setItem(PROF_UNIT_KEY, unit);
-    } catch {
-      /* private mode */
-    }
+    if (typeof CairnFmt !== "undefined") CairnFmt.setLength(unit);
   }
 
   function massLabel(unit: "in" | "cm"): string {

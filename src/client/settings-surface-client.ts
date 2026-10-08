@@ -301,7 +301,9 @@ function settingsAutomationSliceHtml(options: SettingsAutomationSliceOptions): s
             <option value="lb" ${wm.weight_units === "lb" ? "selected" : ""}>Pounds</option>
             <option value="kg" ${wm.weight_units === "kg" ? "selected" : ""}>Kilograms</option>
           </select></div>
-        <div class="sess-line" style="color:var(--muted);margin-top:6px">Every surface and every sentence follows these. Your data stays as recorded; only the words change.</div>
+        <div class="sess-line" style="color:var(--muted);margin-top:6px">Every surface and every sentence follows these, body measurements too (centimetres with kilograms, inches with pounds). Your data stays as recorded; only the words change.${
+          s.units_source === "detected" ? " These were set from this device's region when Cairn first opened; change them any time." : ""
+        }</div>
 
         <h1 class="lbl" style="margin:22px 0 8px">How much should Cairn lead?</h1>
         <div class="field">

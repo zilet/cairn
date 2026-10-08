@@ -1324,6 +1324,8 @@ declare global {
     pace(secPerKm: unknown, units?: unknown): string;
     weight(lb: unknown, units?: unknown, bare?: boolean): string;
     toLb(value: unknown, units?: unknown): number;
+    length(): "in" | "cm";
+    setLength(unit: "in" | "cm"): "in" | "cm";
     date(iso: unknown, o?: { style?: "short" | "long" | "label" | "ago" | "age"; year?: boolean | "always"; today?: string; fmt?: Intl.DateTimeFormatOptions; utc?: boolean }): string;
     relDay(iso: unknown, today: unknown): string;
     daysBetween(later: unknown, earlier: unknown): number;

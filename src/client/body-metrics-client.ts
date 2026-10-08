@@ -114,27 +114,15 @@ const BM_TONE_TEXT: Record<BmTone, string> = {
   info: "var(--muted, #746c5c)",
 };
 
-const BM_UNIT_KEY = "cairn-bm-unit";
-
-// The saved unit, else derived from the browser locale — only the US, Liberia
-// and Myanmar tape in inches; everyone else gets centimeters.
+// The tape's unit follows Settings (kg ⇒ cm, lb ⇒ in — CairnFmt.length()); the
+// in/cm toggle here is a quick page-lifetime switch, never a stored preference of its
+// own. Storage is always inches; every read and write names its unit explicitly.
 function bmUnitPref(): BmUnit {
-  try {
-    const saved = localStorage.getItem(BM_UNIT_KEY);
-    if (saved === "in" || saved === "cm") return saved;
-  } catch {
-    /* private mode */
-  }
-  const region = ((navigator.language || "").split("-")[1] || "").toUpperCase();
-  return region && !["US", "LR", "MM"].includes(region) ? "cm" : "in";
+  return typeof CairnFmt !== "undefined" ? CairnFmt.length() : "in";
 }
 
 function bmSetUnitPref(unit: BmUnit): void {
-  try {
-    localStorage.setItem(BM_UNIT_KEY, unit);
-  } catch {
-    /* private mode */
-  }
+  if (typeof CairnFmt !== "undefined") CairnFmt.setLength(unit);
 }
 
 function bmNum(el: Element | null): number | null {
@@ -1393,6 +1381,7 @@ function summaryHtml(data: BmSummary, unit: BmUnit): string {
 }
 
 async function loadAndRender(mount: HTMLElement): Promise<void> {
+  if (typeof CairnFmt !== "undefined") await CairnFmt.ready(); // the Settings units, so the first paint opens in them
   const unit = bmUnitPref();
   // Query the unit explicitly (server treats any non-"cm" value, incl. absent, as
   // inches) so the path reads as the covered "/body-metrics", not a phantom :param.

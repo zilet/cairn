@@ -328,6 +328,7 @@
     const enduranceMode = typeof enduranceGoal.mode === "string" && enduranceGoal.mode ? enduranceGoal.mode : "none";
     const goalMode = CairnMeProfileForm.goalMode(profile, goal);
     const discipline = deps.primaryDiscipline();
+    if (typeof CairnFmt !== "undefined") await CairnFmt.ready(); // the Settings units, so the form opens in them
     const unit = CairnMeProfileForm.unitPref();
     // The client globals declaration intentionally describes only the public
     // cross-script surface; retain the narrow form helper here for TS while the
