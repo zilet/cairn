@@ -31,9 +31,9 @@
 
   /** The days as rows (the day view's row variant: Program's words), folded under the shape. */
   function rowsHtml(glances: ReadonlyArray<ClientDayGlance>): string {
-    if (!glances.length || typeof CairnDayDetailView === "undefined") return "";
+    if (!glances.length || typeof CairnDayGlanceView === "undefined") return "";
     return `<details class="hwk-days"><summary class="linkbtn-quiet hwk-days-sum">Day by day</summary>
-      <ol class="pahead-days hwk-days-list" aria-label="This week, day by day">${glances.map((g) => CairnDayDetailView.rowHtml(g)).join("")}</ol>
+      <ol class="pahead-days hwk-days-list" aria-label="This week, day by day">${glances.map((g) => CairnDayGlanceView.rowHtml(g)).join("")}</ol>
     </details>`;
   }
 

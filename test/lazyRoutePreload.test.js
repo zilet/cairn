@@ -110,13 +110,16 @@ test("a preload names the exact url ensureBundle injects, and the worker precach
   // is the week menu (/app/today/menu). Today's lower half (today-ahead) renders inside
   // the eager Today view, so it has no route; it is still precached and warmed first on
   // idle.
-  // Sign-in (auth) is opened by a 401 or a Settings tap, never a route.
-  const ROUTELESS = new Set([LAZY_BUNDLE_SRC["today-ahead"], LAZY_BUNDLE_SRC.auth]);
+  // Sign-in (auth) is opened by a 401 or a Settings tap, never a route; the welcome by
+  // the boot decision or a coach card. The AI sign-in panel (agent-login) IS preloaded:
+  // Settings → Agents depends on it.
+  const ROUTELESS = new Set([LAZY_BUNDLE_SRC["today-ahead"], LAZY_BUNDLE_SRC.auth, LAZY_BUNDLE_SRC.welcome]);
+  // …and each bundle's own stylesheet (LAZY_BUNDLE_CSS), preloaded as a style beside it.
+  const { LAZY_BUNDLE_CSS } = lazyLoader();
+  const bundles = Object.entries(LAZY_BUNDLE_SRC).filter(([, url]) => !ROUTELESS.has(url));
   assert.deepEqual(
     [...table.b].sort(),
-    Object.values(LAZY_BUNDLE_SRC)
-      .filter((url) => !ROUTELESS.has(url))
-      .sort()
+    [...bundles.map(([, url]) => url), ...bundles.flatMap(([name]) => (LAZY_BUNDLE_CSS[name] ? [LAZY_BUNDLE_CSS[name]] : []))].sort()
   );
   const sw = read("public/sw.js");
   for (const url of table.b) {
@@ -160,14 +163,14 @@ function runBoot({ pathname, profileRow, planRow, now = Date.UTC(2026, 8, 26, 12
   return { links, calls, early: context.__cairnEarly };
 }
 
-test("a Health deep link preloads Train then Me/Health and starts its leaf's one fan-in", () => {
+test("a Health deep link preloads the body bundle then Me/Health and starts its leaf's one fan-in", () => {
   const { links, calls, early } = runBoot({ pathname: "/app/you/markers" });
   assert.deepEqual(
     links.map((l) => [l.rel, l.as, l.fetchPriority, l.href]),
     [
-      // Train draws its movement rows with the day view's shared row, so its closure starts with calendar.
-      ["preload", "script", "low", "/js/bundle-12-calendar.js"],
-      ["preload", "script", "low", "/js/bundle-08-train.js"],
+      // Health reuses the body-metrics figure and the DEXA read, so its closure is the body
+      // bundle then itself: it never loads Train.
+      ["preload", "script", "low", "/js/bundle-21-body.js"],
       ["preload", "script", "low", "/js/bundle-05-me-health.js"],
     ]
   );
@@ -192,20 +195,27 @@ test("a Health deep link preloads Train then Me/Health and starts its leaf's one
 });
 
 test("Train, Horizon, Ask, Settings and the week menu preload their closure and start only the shell's reads", () => {
+  // Train draws its movement rows with the day view (glance under it), paints the
+  // journey reads and mounts body metrics; Horizon needs the glance and the journey
+  // reads but not the rest of Train (a tapped day brings the calendar).
+  const TRAIN = ["/js/bundle-18-glance.js", "/js/bundle-19-day-view.js", "/css/day-view.css", "/js/bundle-20-journey.js", "/js/bundle-21-body.js", "/js/bundle-08-train.js"];
+  const HORIZON = ["/js/bundle-18-glance.js", "/js/bundle-20-journey.js", "/js/bundle-09-horizon.js", "/css/horizon.css"];
   const cases = {
     "/app/today/menu": ["/js/bundle-13-meals.js"],
-    "/APP/Train": ["/js/bundle-12-calendar.js", "/js/bundle-08-train.js"],
-    "/app/horizon": ["/js/bundle-12-calendar.js", "/js/bundle-08-train.js", "/js/bundle-09-horizon.js"],
-    "/app/horizon/race": ["/js/bundle-12-calendar.js", "/js/bundle-08-train.js", "/js/bundle-09-horizon.js"],
-    "/app/ask": ["/js/bundle-10-ask.js"],
-    "/app/ask/changes": ["/js/bundle-10-ask.js"],
-    // Settings → Agents "Connect" mounts the welcome bundle's sign-in panel.
-    "/app/you/settings/agents": ["/js/bundle-15-welcome.js", "/js/bundle-11-settings.js"],
-    "/app/you/profile": ["/js/bundle-12-calendar.js", "/js/bundle-08-train.js", "/js/bundle-05-me-health.js"],
-    // The home-free day page (any date) preloads the calendar alone; an old alias under a
-    // home falls back to that home's closure (which carries the calendar too).
-    "/app/day/2026-10-08": ["/js/bundle-12-calendar.js"],
-    "/app/horizon/day": ["/js/bundle-12-calendar.js", "/js/bundle-08-train.js", "/js/bundle-09-horizon.js"],
+    "/APP/Train": TRAIN,
+    "/app/horizon": HORIZON,
+    "/app/horizon/race": HORIZON,
+    // Fuel is the lazy fuel bundle's; Ask's chat composer mounts the food composer, so it
+    // depends on fuel.
+    "/app/ask": ["/js/bundle-22-fuel.js", "/js/bundle-10-ask.js", "/css/ask.css"],
+    "/app/ask/changes": ["/js/bundle-22-fuel.js", "/js/bundle-10-ask.js", "/css/ask.css"],
+    // Settings → Agents "Connect" mounts the agent-login bundle's sign-in panel.
+    "/app/you/settings/agents": ["/js/bundle-17-agent-login.js", "/js/bundle-11-settings.js", "/css/settings.css"],
+    "/app/you/profile": ["/js/bundle-21-body.js", "/js/bundle-05-me-health.js"],
+    // The home-free day page (any date) preloads the calendar and the day view under it;
+    // an old alias under a home falls back to that home's closure.
+    "/app/day/2026-10-08": ["/js/bundle-18-glance.js", "/js/bundle-19-day-view.js", "/css/day-view.css", "/js/bundle-12-calendar.js"],
+    "/app/horizon/day": HORIZON,
   };
   for (const [pathname, hrefs] of Object.entries(cases)) {
     const { links, calls } = runBoot({ pathname });
@@ -223,7 +233,7 @@ test("Train, Horizon, Ask, Settings and the week menu preload their closure and 
   const program = runBoot({ pathname: "/app/train/program" });
   assert.deepEqual(
     program.links.map((l) => l.href),
-    ["/js/bundle-12-calendar.js", "/js/bundle-08-train.js"]
+    TRAIN
   );
   assert.deepEqual(
     program.calls,
@@ -239,7 +249,7 @@ test("Train, Horizon, Ask, Settings and the week menu preload their closure and 
   const plan = runBoot({ pathname: "/app/train/plan" });
   assert.deepEqual(
     plan.links.map((l) => l.href),
-    ["/js/bundle-12-calendar.js", "/js/bundle-08-train.js"]
+    TRAIN
   );
   assert.deepEqual(
     plan.calls,
@@ -273,10 +283,28 @@ test("/profile is asked early only when primeDiscipline will ask for it", () => 
   assert.ok(empty.calls.includes("/api/profile"), "an empty row does not prime");
 });
 
+test("Fuel preloads its bundle but starts no early reads (its one read carries the device's hour)", () => {
+  const { links, calls } = runBoot({ pathname: "/app/today/fuel" });
+  assert.deepEqual(links.map((l) => l.href), ["/js/bundle-22-fuel.js"]);
+  assert.deepEqual(calls, []);
+});
+
+test("a bundle's stylesheet is preloaded as a style, its scripts as scripts", () => {
+  const { links } = runBoot({ pathname: "/app/horizon" });
+  assert.deepEqual(
+    links.map((l) => [l.as, l.href]),
+    [
+      ["script", "/js/bundle-18-glance.js"],
+      ["script", "/js/bundle-20-journey.js"],
+      ["script", "/js/bundle-09-horizon.js"],
+      ["style", "/css/horizon.css"],
+    ]
+  );
+});
+
 test("eager destinations, Today and nonsense paths preload nothing", () => {
   for (const pathname of [
     "/app/today/session",
-    "/app/today/fuel",
     "/app/you",
     "/app/you/stone",
     "/constructor",
@@ -418,8 +446,12 @@ test("api() hands each early response over once, keyed by the path it is asked w
   assert.equal(context.CairnTodayPrefetch.takeEarly("/markers/priority"), undefined, "never twice");
 });
 
-test("a route's bundle string is one digit per index, and an 11th bundle url fails the build", () => {
+test("a route's bundle string is one base-36 character per index, and a 37th bundle url fails the build", () => {
   assert.equal(bundleDigits([0, 3, 9]), "039");
-  assert.throws(() => bundleDigits([1, 10]), /not one digit/);
-  assert.ok(table.b.length <= 10, "today's table fits the encoding");
+  assert.equal(bundleDigits([10, 11, 35]), "abz", "the inline script reads each character with parseInt(c, 36)");
+  assert.throws(() => bundleDigits([1, 36]), /not one base-36 digit/);
+  assert.ok(table.b.length <= 36, "today's table fits the encoding");
+  // The encoding and the inline reader agree: every route string decodes to a real url.
+  assert.match(read("public/index.html"), /T\.b\[parseInt\(b\[i\],36\)\]/);
+  for (const digits of Object.values(table.r)) for (const c of digits) assert.ok(table.b[parseInt(c, 36)], `${digits} → ${c} is a bundle url`);
 });

@@ -3,8 +3,8 @@
 // GET /api/week through the SWR cache — the last-known week paints at once, the
 // revalidated read upgrades it in place only when the JSON changed — and paints the
 // landing (horizon-week-client.ts). A column tap PEEKS the day: the fold under the shape
-// opens and the drill controller (CairnDrill, the "calendar" bundle, which horizon
-// depends on) mounts the day's compact view into it, adds ?peek= to history and ends it
+// opens and the drill controller (CairnDrill, the "calendar" bundle, loaded by that tap)
+// mounts the day's compact view into it, adds ?peek= to history and ends it
 // with "Open day ›" (the day's page, read under Horizon). Tapping the open column again,
 // its Close, or Back folds it. A row (the day-by-day rows, still open) opens the day's
 // page through `data-open-day` (day-open-client.ts → CairnDrill). "All of the season ›"
@@ -68,22 +68,26 @@
     function openDay(date: string): void {
       const fold = q("[data-hwk-fold]");
       const peekHost = q("[data-hwk-peek]");
-      const d = drill();
-      if (!fold || !peekHost || !d) return;
+      if (!fold || !peekHost) return;
       selected = date;
       markSelected();
       detailTeardown?.();
       fold.classList.add("is-open");
       fold.removeAttribute("inert");
       fold.setAttribute("aria-label", q(`[data-week-day="${date}"]`)?.getAttribute("aria-label") || "The day opened");
-      detailTeardown = d.open("day", date, {
-        mode: "peek",
-        from: "horizon",
-        host: peekHost,
-        peek: deps.peek,
-        load: deps.load,
-        onClose: () => closeDay(),
-        onShow: (id) => openDay(id),
+      // The drill is the lazy calendar bundle's: a tap that opens a day waits for it only
+      // when neither the idle warm-up nor an earlier tap has fetched it.
+      void withBundle("calendar", () => {
+        if (!live || selected !== date || !peekHost.isConnected) return;
+        detailTeardown = CairnDrill.open("day", date, {
+          mode: "peek",
+          from: "horizon",
+          host: peekHost,
+          peek: deps.peek,
+          load: deps.load,
+          onClose: () => closeDay(),
+          onShow: (id) => openDay(id),
+        });
       });
     }
 

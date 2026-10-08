@@ -2107,6 +2107,12 @@ declare global {
     }): string;
     skeletonHtml(): string;
     errorHtml(): string;
+  };
+  /**
+   * LAZY "glance" bundle (day-glance-view.ts): the day view's chip (Today's strip) and row
+   * (Program's and Horizon's week lists), over a ClientDayGlance (CairnDayDetailModel.glance*).
+   */
+  declare const CairnDayGlanceView: {
     chipHtml(glance: ClientDayGlance, opts?: { selected?: string | null; controls?: string }): string;
     rowHtml(
       glance: ClientDayGlance,
@@ -2444,7 +2450,7 @@ declare global {
   declare function primeArtManifest(): Promise<void>;
   declare function jobReconnect(opts?: { reuseWithinMs?: number }): Promise<void>;
   /** Names of the bundles index.html does NOT load eagerly (see build-client's BUNDLES). */
-  declare type ClientLazyBundleName = "me-health" | "train" | "horizon" | "ask" | "settings" | "calendar" | "meals" | "today-ahead" | "auth";
+  declare type ClientLazyBundleName = "me-health" | "train" | "horizon" | "ask" | "settings" | "glance" | "day-view" | "calendar" | "journey" | "body" | "meals" | "fuel" | "today-ahead" | "welcome" | "agent-login" | "auth";
   /** Inject a lazily-loaded app-shell bundle (and its dependencies) once; resolves after they have executed. */
   declare function ensureBundle(name: ClientLazyBundleName): Promise<void>;
   declare function bundleLoaded(name: ClientLazyBundleName): boolean;

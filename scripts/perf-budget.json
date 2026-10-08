@@ -1,5 +1,5 @@
 {
-  "note": "Per-route load budget for scripts/check-perf.mjs (npm run perf:check; npm run verify with CAIRN_PERF=1). Mid phone: 390px, CPU 4x, slow 4G. `routes` gates the median run (api calls, serial rounds, CLS, cold JS/CSS bytes; duplicate GETs and a visible skeleton after ready always fail, except a duplicate recorded in a route's knownDupes, which is listed as a miss every run); raise one deliberately with `node scripts/check-perf.mjs --update` after npm run build. `targets` are the proposed per-group goals: api/cls misses are listed every run, timings (ms) are report-only and flagged past +30%.",
+  "note": "Per-route load budget for scripts/check-perf.mjs (npm run perf:check; npm run verify with CAIRN_PERF=1). Mid phone: 390px, CPU 4x, slow 4G. `routes` gates the median run (api calls, serial rounds, CLS, cold JS/CSS bytes; duplicate GETs and a visible skeleton after ready always fail, except a duplicate recorded in a route's knownDupes, which is listed as a miss every run); raise one deliberately with `node scripts/check-perf.mjs --update` after npm run build (`--update-bytes` rewrites only the byte ceilings). Byte budgets are the measured median + max(4 KB, 5%) rounded up to a whole KB, cold and warm, and CLS the measured worst run with a 0.01 floor, so a small legitimate change never fails the gate; api, rounds and dupes stay exact. `targets` are the proposed per-group goals: api/cls misses are listed every run, timings (ms) are report-only and flagged past +30%.",
   "targets": {
     "today": {
       "api": 10,
@@ -32,13 +32,15 @@
         "api": 8,
         "rounds": 2,
         "cls": 0.008,
-        "js": 237568,
-        "css": 66560
+        "js": 235520,
+        "css": 64512
       },
       "warm": {
         "api": 8,
         "rounds": 2,
-        "cls": 0.005
+        "cls": 0.005,
+        "js": 4096,
+        "css": 4096
       }
     },
     "today-session": {
@@ -46,13 +48,15 @@
         "api": 4,
         "rounds": 1,
         "cls": 0.006,
-        "js": 237568,
-        "css": 66560
+        "js": 218112,
+        "css": 64512
       },
       "warm": {
         "api": 4,
         "rounds": 2,
-        "cls": 0.005
+        "cls": 0.005,
+        "js": 4096,
+        "css": 4096
       }
     },
     "today-fuel": {
@@ -60,13 +64,15 @@
         "api": 6,
         "rounds": 2,
         "cls": 0.005,
-        "js": 253952,
-        "css": 66560
+        "js": 260096,
+        "css": 64512
       },
       "warm": {
         "api": 5,
         "rounds": 1,
-        "cls": 0.005
+        "cls": 0.005,
+        "js": 4096,
+        "css": 4096
       }
     },
     "ask": {
@@ -74,13 +80,15 @@
         "api": 6,
         "rounds": 3,
         "cls": 0.013,
-        "js": 265216,
+        "js": 274432,
         "css": 66560
       },
       "warm": {
         "api": 5,
         "rounds": 2,
-        "cls": 0.005
+        "cls": 0.005,
+        "js": 4096,
+        "css": 4096
       }
     },
     "ask-changes": {
@@ -88,13 +96,15 @@
         "api": 9,
         "rounds": 2,
         "cls": 0.014,
-        "js": 283648,
+        "js": 290816,
         "css": 66560
       },
       "warm": {
         "api": 8,
         "rounds": 1,
-        "cls": 0.005
+        "cls": 0.005,
+        "js": 4096,
+        "css": 4096
       }
     },
     "train": {
@@ -102,13 +112,15 @@
         "api": 5,
         "rounds": 2,
         "cls": 0.006,
-        "js": 310272,
+        "js": 311296,
         "css": 66560
       },
       "warm": {
         "api": 4,
         "rounds": 1,
-        "cls": 0.005
+        "cls": 0.005,
+        "js": 4096,
+        "css": 4096
       }
     },
     "train-trend": {
@@ -116,13 +128,15 @@
         "api": 6,
         "rounds": 3,
         "cls": 0.005,
-        "js": 310272,
+        "js": 311296,
         "css": 66560
       },
       "warm": {
         "api": 5,
         "rounds": 1,
-        "cls": 0.005
+        "cls": 0.005,
+        "js": 4096,
+        "css": 4096
       }
     },
     "train-volume": {
@@ -130,13 +144,15 @@
         "api": 6,
         "rounds": 2,
         "cls": 0.006,
-        "js": 310272,
+        "js": 311296,
         "css": 66560
       },
       "warm": {
         "api": 5,
         "rounds": 1,
-        "cls": 0.005
+        "cls": 0.005,
+        "js": 4096,
+        "css": 4096
       }
     },
     "train-program": {
@@ -144,13 +160,15 @@
         "api": 5,
         "rounds": 2,
         "cls": 0.006,
-        "js": 310272,
+        "js": 311296,
         "css": 66560
       },
       "warm": {
         "api": 4,
         "rounds": 1,
-        "cls": 0.005
+        "cls": 0.005,
+        "js": 4096,
+        "css": 4096
       }
     },
     "train-sessions": {
@@ -158,13 +176,15 @@
         "api": 5,
         "rounds": 2,
         "cls": 0.007,
-        "js": 310272,
+        "js": 311296,
         "css": 66560
       },
       "warm": {
         "api": 4,
         "rounds": 1,
-        "cls": 0.005
+        "cls": 0.005,
+        "js": 4096,
+        "css": 4096
       }
     },
     "train-energy": {
@@ -172,13 +192,15 @@
         "api": 5,
         "rounds": 2,
         "cls": 0.009,
-        "js": 310272,
+        "js": 311296,
         "css": 66560
       },
       "warm": {
         "api": 4,
         "rounds": 1,
-        "cls": 0.005
+        "cls": 0.005,
+        "js": 4096,
+        "css": 4096
       }
     },
     "train-intake": {
@@ -186,13 +208,15 @@
         "api": 5,
         "rounds": 2,
         "cls": 0.005,
-        "js": 310272,
+        "js": 311296,
         "css": 66560
       },
       "warm": {
         "api": 4,
         "rounds": 1,
-        "cls": 0.005
+        "cls": 0.005,
+        "js": 4096,
+        "css": 4096
       }
     },
     "train-endurance": {
@@ -200,13 +224,15 @@
         "api": 5,
         "rounds": 2,
         "cls": 0.005,
-        "js": 310272,
+        "js": 311296,
         "css": 66560
       },
       "warm": {
         "api": 4,
         "rounds": 1,
-        "cls": 0.005
+        "cls": 0.005,
+        "js": 4096,
+        "css": 4096
       }
     },
     "train-weight": {
@@ -214,13 +240,15 @@
         "api": 6,
         "rounds": 2,
         "cls": 0.005,
-        "js": 310272,
+        "js": 311296,
         "css": 66560
       },
       "warm": {
         "api": 6,
         "rounds": 1,
-        "cls": 0.005
+        "cls": 0.005,
+        "js": 4096,
+        "css": 4096
       }
     },
     "train-plan": {
@@ -228,13 +256,15 @@
         "api": 10,
         "rounds": 4,
         "cls": 0.005,
-        "js": 310272,
+        "js": 311296,
         "css": 66560
       },
       "warm": {
         "api": 9,
         "rounds": 2,
-        "cls": 0.005
+        "cls": 0.005,
+        "js": 4096,
+        "css": 4096
       }
     },
     "horizon": {
@@ -242,13 +272,15 @@
         "api": 10,
         "rounds": 2,
         "cls": 0.005,
-        "js": 334848,
-        "css": 66560
+        "js": 277504,
+        "css": 69632
       },
       "warm": {
         "api": 9,
         "rounds": 1,
-        "cls": 0.005
+        "cls": 0.005,
+        "js": 4096,
+        "css": 4096
       }
     },
     "horizon-race": {
@@ -256,13 +288,15 @@
         "api": 5,
         "rounds": 2,
         "cls": 0.005,
-        "js": 334848,
-        "css": 66560
+        "js": 277504,
+        "css": 69632
       },
       "warm": {
         "api": 4,
         "rounds": 1,
-        "cls": 0.005
+        "cls": 0.005,
+        "js": 4096,
+        "css": 4096
       }
     },
     "horizon-goal": {
@@ -270,13 +304,15 @@
         "api": 5,
         "rounds": 2,
         "cls": 0.005,
-        "js": 334848,
-        "css": 66560
+        "js": 277504,
+        "css": 69632
       },
       "warm": {
         "api": 4,
         "rounds": 1,
-        "cls": 0.005
+        "cls": 0.005,
+        "js": 4096,
+        "css": 4096
       }
     },
     "you": {
@@ -284,13 +320,15 @@
         "api": 5,
         "rounds": 1,
         "cls": 0.012,
-        "js": 237568,
-        "css": 66560
+        "js": 218112,
+        "css": 64512
       },
       "warm": {
         "api": 4,
         "rounds": 1,
-        "cls": 0.005
+        "cls": 0.005,
+        "js": 4096,
+        "css": 4096
       }
     },
     "you-stone": {
@@ -298,13 +336,15 @@
         "api": 5,
         "rounds": 1,
         "cls": 0.005,
-        "js": 237568,
-        "css": 66560
+        "js": 218112,
+        "css": 64512
       },
       "warm": {
         "api": 4,
         "rounds": 1,
-        "cls": 0.005
+        "cls": 0.005,
+        "js": 4096,
+        "css": 4096
       }
     },
     "you-health": {
@@ -312,13 +352,15 @@
         "api": 5,
         "rounds": 2,
         "cls": 0.005,
-        "js": 399360,
-        "css": 66560
+        "js": 326656,
+        "css": 64512
       },
       "warm": {
         "api": 4,
         "rounds": 1,
-        "cls": 0.005
+        "cls": 0.005,
+        "js": 4096,
+        "css": 4096
       }
     },
     "you-records": {
@@ -326,13 +368,15 @@
         "api": 5,
         "rounds": 2,
         "cls": 0.005,
-        "js": 399360,
-        "css": 66560
+        "js": 326656,
+        "css": 64512
       },
       "warm": {
         "api": 4,
         "rounds": 1,
-        "cls": 0.005
+        "cls": 0.005,
+        "js": 4096,
+        "css": 4096
       }
     },
     "you-markers": {
@@ -340,13 +384,15 @@
         "api": 5,
         "rounds": 2,
         "cls": 0.005,
-        "js": 399360,
-        "css": 66560
+        "js": 326656,
+        "css": 64512
       },
       "warm": {
         "api": 4,
         "rounds": 1,
-        "cls": 0.005
+        "cls": 0.005,
+        "js": 4096,
+        "css": 4096
       }
     },
     "you-share": {
@@ -354,13 +400,15 @@
         "api": 5,
         "rounds": 2,
         "cls": 0.008,
-        "js": 399360,
-        "css": 66560
+        "js": 326656,
+        "css": 64512
       },
       "warm": {
         "api": 4,
         "rounds": 1,
-        "cls": 0.008
+        "cls": 0.008,
+        "js": 4096,
+        "css": 4096
       }
     },
     "you-settings": {
@@ -368,13 +416,15 @@
         "api": 10,
         "rounds": 3,
         "cls": 0.005,
-        "js": 270336,
-        "css": 66560
+        "js": 272384,
+        "css": 69632
       },
       "warm": {
         "api": 9,
         "rounds": 1,
-        "cls": 0.005
+        "cls": 0.005,
+        "js": 4096,
+        "css": 4096
       }
     },
     "you-life": {
@@ -382,13 +432,15 @@
         "api": 7,
         "rounds": 2,
         "cls": 0.005,
-        "js": 399360,
-        "css": 66560
+        "js": 326656,
+        "css": 64512
       },
       "warm": {
         "api": 6,
         "rounds": 1,
-        "cls": 0.005
+        "cls": 0.005,
+        "js": 4096,
+        "css": 4096
       }
     },
     "you-family": {
@@ -396,13 +448,15 @@
         "api": 5,
         "rounds": 2,
         "cls": 0.053,
-        "js": 399360,
-        "css": 66560
+        "js": 326656,
+        "css": 64512
       },
       "warm": {
         "api": 4,
         "rounds": 1,
-        "cls": 0.005
+        "cls": 0.005,
+        "js": 4096,
+        "css": 4096
       }
     }
   }

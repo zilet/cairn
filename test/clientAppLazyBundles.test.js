@@ -12,32 +12,51 @@ import vm from "node:vm";
 
 function fakeDom() {
   const scripts = [];
-  function makeScript() {
+  // A lazy bundle's stylesheet <link>s. By default one lands on the next tick (the
+  // precached, cache-hit case); `holdSheets` keeps them pending so a test can fire them.
+  const sheets = [];
+  const gate = { holdSheets: false };
+  function makeNode(sink, onAttach) {
     const listeners = new Map();
     const node = {
       dataset: {},
       src: "",
+      href: "",
       attached: false,
       addEventListener: (type, fn) => listeners.set(type, fn),
       remove() {
         node.attached = false;
-        const at = scripts.indexOf(node);
-        if (at >= 0) scripts.splice(at, 1);
+        const at = sink.indexOf(node);
+        if (at >= 0) sink.splice(at, 1);
       },
       fire: (type) => listeners.get(type)?.(),
     };
+    node.onAttach = onAttach;
     return node;
   }
-  const document = {
-    createElement: () => makeScript(),
-    head: {
-      appendChild(node) {
-        node.attached = true;
-        scripts.push(node);
-        return node;
-      },
+  const head = {
+    appendChild(node) {
+      node.attached = true;
+      node.parentNode = head;
+      (node.rel === "stylesheet" ? sheets : scripts).push(node);
+      node.onAttach?.(node);
+      return node;
     },
+    insertBefore(node, ref) {
+      node.attached = true;
+      node.parentNode = head;
+      sheets.splice(sheets.indexOf(ref), 0, node);
+      node.onAttach?.(node);
+      return node;
+    },
+  };
+  const document = {
+    createElement: (tag) => (tag === "link" ? makeNode(sheets, (n) => !gate.holdSheets && queueMicrotask(() => n.fire("load"))) : makeNode(scripts)),
+    head,
+    querySelectorAll: (selector) => (selector.includes("data-cairn-sheet") ? [...sheets] : []),
     querySelector(selector) {
+      const sheet = /data-cairn-sheet="([^"]+)"/.exec(selector)?.[1];
+      if (sheet) return sheets.find((l) => l.dataset.cairnSheet === sheet) || null;
       const name = /data-cairn-bundle="([^"]+)"/.exec(selector)?.[1];
       const wantLoaded = selector.includes('data-cairn-bundle-loaded="1"');
       return (
@@ -46,7 +65,7 @@ function fakeDom() {
       );
     },
   };
-  return { document, scripts };
+  return { document, scripts, sheets, gate };
 }
 
 function loadLoader(extra = {}) {
@@ -70,22 +89,22 @@ test("a bundle is injected once, with a precache-matching url", async () => {
   assert.equal(typeof env.context.ensureBundle, "function");
   assert.equal(typeof env.context.window.ensureBundle, "function");
 
-  const first = env.context.ensureBundle("ask");
-  const second = env.context.ensureBundle("ask");
+  const first = env.context.ensureBundle("meals");
+  const second = env.context.ensureBundle("meals");
   assert.equal(env.scripts.length, 1, "concurrent callers share one <script>");
 
   const script = env.scripts[0];
   // No query string, ever: Cache Storage keys on the full url, so `?token=` would
   // miss the worker's precached CORE_ASSETS entry and break the offline first open.
-  assert.equal(script.src, "/js/bundle-10-ask.js");
-  assert.equal(script.dataset.cairnBundle, "ask");
-  assert.equal(env.context.bundleLoaded("ask"), false);
+  assert.equal(script.src, "/js/bundle-13-meals.js");
+  assert.equal(script.dataset.cairnBundle, "meals");
+  assert.equal(env.context.bundleLoaded("meals"), false);
 
   script.fire("load");
   await Promise.all([first, second]);
 
-  assert.equal(env.context.bundleLoaded("ask"), true);
-  await env.context.ensureBundle("ask");
+  assert.equal(env.context.bundleLoaded("meals"), true);
+  await env.context.ensureBundle("meals");
   assert.equal(env.scripts.length, 1, "a loaded bundle is never re-injected");
 });
 
@@ -97,44 +116,158 @@ test("every lazy bundle maps to its own precached url", () => {
     horizon: "/js/bundle-09-horizon.js",
     ask: "/js/bundle-10-ask.js",
     settings: "/js/bundle-11-settings.js",
+    glance: "/js/bundle-18-glance.js",
+    "day-view": "/js/bundle-19-day-view.js",
     calendar: "/js/bundle-12-calendar.js",
+    journey: "/js/bundle-20-journey.js",
+    body: "/js/bundle-21-body.js",
     meals: "/js/bundle-13-meals.js",
+    fuel: "/js/bundle-22-fuel.js",
     "today-ahead": "/js/bundle-14-today-ahead.js",
-    // The first-run welcome and the AI sign-in panel Settings → Agents reuses.
+    // The first-run welcome, and the AI sign-in panel it and Settings → Agents share.
     welcome: "/js/bundle-15-welcome.js",
+    "agent-login": "/js/bundle-17-agent-login.js",
     auth: "/js/bundle-16-auth.js",
   });
 });
 
 test("a bundle resolves only once its dependencies have executed too", async () => {
   const env = loadLoader();
-  // Health reuses train's body-metrics figure and DEXA read.
+  // Train mounts body metrics, paints the journey reads and draws its Program rows with
+  // the day view (which draws its chip and row with the glance under it).
   let done = false;
-  const pending = env.context.ensureBundle("me-health").then(() => {
+  const pending = env.context.ensureBundle("train").then(() => {
     done = true;
   });
-  // …and train draws its movement rows with the day view's shared row (calendar).
   assert.deepEqual(env.scripts.map((s) => s.src).sort(), [
-    "/js/bundle-05-me-health.js",
     "/js/bundle-08-train.js",
-    "/js/bundle-12-calendar.js",
+    "/js/bundle-18-glance.js",
+    "/js/bundle-19-day-view.js",
+    "/js/bundle-20-journey.js",
+    "/js/bundle-21-body.js",
   ]);
-  byName(env.scripts, "me-health").fire("load");
-  await new Promise((r) => setTimeout(r, 0));
-  assert.equal(done, false, "me-health alone is not enough");
-  assert.equal(env.context.bundleLoaded("me-health"), false);
   byName(env.scripts, "train").fire("load");
   await new Promise((r) => setTimeout(r, 0));
-  assert.equal(done, false, "train's own dependency is still loading");
-  byName(env.scripts, "calendar").fire("load");
+  assert.equal(done, false, "train alone is not enough");
+  assert.equal(env.context.bundleLoaded("train"), false);
+  for (const dep of ["glance", "day-view", "journey"]) {
+    byName(env.scripts, dep).fire("load");
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(done, false, `train's dependencies are still loading after ${dep}`);
+  }
+  byName(env.scripts, "body").fire("load");
   await pending;
-  assert.equal(env.context.bundleLoaded("me-health"), true);
   assert.equal(env.context.bundleLoaded("train"), true);
-  // Horizon shares the already-loaded train bundle: only its own tag is added.
+  // Horizon shares the already-loaded day view and journey reads: only its own tag is added.
   const horizon = env.context.ensureBundle("horizon");
+  assert.equal(env.scripts.filter((s) => s.dataset.cairnBundle === "day-view").length, 1);
   assert.equal(env.scripts.filter((s) => s.dataset.cairnBundle === "train").length, 1);
   byName(env.scripts, "horizon").fire("load");
   await horizon;
+});
+
+test("Health loads the body bundle, not all of Train; Horizon the journey reads, not the rest of Train; Ask brings Fuel", async () => {
+  const health = loadLoader();
+  const pendingHealth = health.context.ensureBundle("me-health");
+  assert.deepEqual(health.scripts.map((s) => s.src).sort(), ["/js/bundle-05-me-health.js", "/js/bundle-21-body.js"]);
+  for (const s of [...health.scripts]) s.fire("load");
+  await pendingHealth;
+  assert.equal(health.context.bundleLoaded("train"), false, "Health never needed Train");
+
+  const horizon = loadLoader();
+  const pendingHorizon = horizon.context.ensureBundle("horizon");
+  assert.deepEqual(horizon.scripts.map((s) => s.src).sort(), [
+    "/js/bundle-09-horizon.js",
+    "/js/bundle-18-glance.js",
+    "/js/bundle-20-journey.js",
+  ]);
+  for (const s of [...horizon.scripts]) s.fire("load");
+  await pendingHorizon;
+  assert.equal(horizon.context.bundleLoaded("train"), false, "Horizon never needed Train");
+
+  // Ask's chat composer mounts the food composer, so Ask brings Fuel's bundle; Fuel alone
+  // (and Today) never load Ask.
+  const ask = loadLoader();
+  const pendingAsk = ask.context.ensureBundle("ask");
+  assert.deepEqual(ask.scripts.map((s) => s.src).sort(), ["/js/bundle-10-ask.js", "/js/bundle-22-fuel.js"]);
+  for (const s of [...ask.scripts]) s.fire("load");
+  await pendingAsk;
+  const fuel = loadLoader();
+  const pendingFuel = fuel.context.ensureBundle("fuel");
+  assert.deepEqual(fuel.scripts.map((s) => s.src), ["/js/bundle-22-fuel.js"]);
+  fuel.scripts[0].fire("load");
+  await pendingFuel;
+  assert.equal(fuel.context.bundleLoaded("ask"), false, "Fuel never needed Ask");
+
+  // Today's lower half draws its strip with the glance alone; a tapped day brings the rest.
+  const ahead = loadLoader();
+  const pendingAhead = ahead.context.ensureBundle("today-ahead");
+  assert.deepEqual(ahead.scripts.map((s) => s.src).sort(), ["/js/bundle-14-today-ahead.js", "/js/bundle-18-glance.js"]);
+  for (const s of [...ahead.scripts]) s.fire("load");
+  await pendingAhead;
+  assert.equal(ahead.context.bundleLoaded("calendar"), false, "the page waits for a tap");
+});
+
+test("a bundle with its own stylesheet is loaded only once script AND sheet landed", async () => {
+  const env = loadLoader();
+  env.gate.holdSheets = true;
+  let done = false;
+  const pending = env.context.ensureBundle("horizon").then(() => {
+    done = true;
+  });
+  // The sheet is requested beside the script, at its precached, query-free url.
+  const sheet = env.sheets.find((l) => l.dataset.cairnSheet === "horizon");
+  assert.ok(sheet, "the horizon bundle adds its stylesheet");
+  assert.equal(sheet.href, "/css/horizon.css");
+  assert.equal(sheet.rel, "stylesheet");
+  assert.deepEqual(env.sheets.map((l) => l.dataset.cairnSheet), ["horizon"], "a dependency without a sheet adds none");
+  for (const s of [...env.scripts]) s.fire("load");
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(done, false, "the code alone is not enough: the surface would paint unstyled");
+  assert.equal(env.context.bundleLoaded("horizon"), false);
+  sheet.fire("load");
+  await pending;
+  assert.equal(env.context.bundleLoaded("horizon"), true);
+  // A second caller finds both and adds neither.
+  await env.context.ensureBundle("horizon");
+  assert.equal(env.sheets.length, 1);
+});
+
+test("lazy sheets keep CASCADE order whatever order their bundles load in", async () => {
+  const env = loadLoader();
+  const loadAll = async (name) => {
+    const pending = env.context.ensureBundle(name);
+    for (const s of env.scripts) if (s.dataset.cairnBundleLoaded !== "1" && s.dataset.cairnScriptDone !== "1") s.fire("load");
+    await pending;
+  };
+  // The welcome (last in the cascade) lands first, then Ask, then the day view, Settings, Horizon.
+  await loadAll("welcome");
+  await loadAll("ask");
+  await loadAll("day-view");
+  await loadAll("settings");
+  await loadAll("horizon");
+  assert.deepEqual(
+    env.sheets.map((l) => l.dataset.cairnSheet),
+    ["settings", "day-view", "ask", "horizon", "welcome"],
+    "the DOM order is LAZY_STYLE_SHEETS' order, so a tie is won exactly as when one file held them"
+  );
+});
+
+test("a stylesheet that fails to load rejects, keeps the code, and a retry asks only for the sheet", async () => {
+  const env = loadLoader();
+  env.gate.holdSheets = true;
+  const attempt = env.context.ensureBundle("day-view");
+  env.sheets[0].fire("error");
+  for (const s of [...env.scripts]) s.fire("load");
+  await assert.rejects(attempt, /failed to load \/css\/day-view\.css/);
+  assert.equal(env.sheets.length, 0, "the dead link is removed");
+  assert.equal(env.scripts.length, 2, "the scripts that ran stay (glance, then the day view)");
+
+  env.gate.holdSheets = false;
+  await env.context.ensureBundle("day-view");
+  assert.equal(env.sheets.length, 1, "the retry re-requests the sheet");
+  assert.equal(env.scripts.length, 2, "and never the script");
+  assert.equal(env.context.bundleLoaded("day-view"), true);
 });
 
 test("a failed load rejects and stays retryable", async () => {
@@ -200,7 +333,7 @@ function reconnectEnv(extra = {}, newRegistrations = 1) {
 
 test("a navigation into a bundle that brought a reconnector sweeps once, after it paints", async () => {
   const { env, calls } = reconnectEnv();
-  const nav = env.context.withBundle("ask", () => {
+  const nav = env.context.withBundle("meals", () => {
     calls.push("paint");
   });
   assert.deepEqual(calls, [], "nothing runs before the script executes");
@@ -211,7 +344,7 @@ test("a navigation into a bundle that brought a reconnector sweeps once, after i
   // while its view is on screen, so the sweep follows the paint.
   assert.deepEqual(calls, ["register", "paint", "reconnect"]);
   // The owed sweep is paid once: a later visit costs no /agent-jobs round trip.
-  env.context.withBundle("ask", () => calls.push("paint"));
+  env.context.withBundle("meals", () => calls.push("paint"));
   await settle();
   assert.deepEqual(calls, ["register", "paint", "reconnect", "paint"]);
 });
@@ -311,11 +444,28 @@ test("the idle warm-up executes every lazy bundle one at a time, once", async ()
     }
     await new Promise((r) => setImmediate(r));
   }
-  // Today's lower half brings the calendar it depends on with it (the dependency's tag
-  // goes in first); train then finds it already there.
-  // Settings brings the welcome bundle (its sign-in panel) ahead of itself.
-  assert.deepEqual(order, ["calendar", "today-ahead", "train", "ask", "horizon", "me-health", "meals", "welcome", "settings"]);
-  assert.equal(env.scripts.length, 9, "one tag per bundle");
+  // Today's lower half brings the glance it depends on with it (the dependency's tag
+  // goes in first); train brings the day view, the journey reads and body metrics, and
+  // the calendar (a tapped day's page) is warmed after Horizon.
+  // Settings brings the AI sign-in panel bundle ahead of itself; the welcome follows.
+  assert.deepEqual(order, [
+    "glance",
+    "today-ahead",
+    "fuel",
+    "day-view",
+    "journey",
+    "body",
+    "train",
+    "ask",
+    "horizon",
+    "calendar",
+    "me-health",
+    "meals",
+    "agent-login",
+    "settings",
+    "welcome",
+  ]);
+  assert.equal(env.scripts.length, 15, "one tag per bundle");
 });
 
 test("the idle warm-up stands down on Save-Data", () => {
@@ -334,7 +484,7 @@ test("an owed sweep asks to reuse the boot sweep's seconds-old job list, never a
       seen.push(opts);
     },
   });
-  const nav = env.context.withBundle("ask", () => {});
+  const nav = env.context.withBundle("meals", () => {});
   env.scripts[0].fire("load");
   await nav;
   await settle();

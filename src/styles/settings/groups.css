@@ -6,11 +6,6 @@
    ------------------------------------------------------------------- */
 .set-group{margin-top:var(--space-13)}
 .set-group:first-child{margin-top:var(--space-10)}
-.set-group-title{
-  font-family:var(--font-display);font-weight:var(--weight-regular);font-size:var(--text-lg);
-  letter-spacing:var(--tracking-tight);color:var(--ink);
-  padding-bottom:var(--space-4);border-bottom:1px solid var(--line);
-}
 .set-group-sub{font-size:var(--text-sm);color:var(--muted);line-height:var(--leading);margin-top:var(--space-4)}
 
 /* per-task agent routing — a calm, collapsed-by-default advanced disclosure */
@@ -97,46 +92,6 @@
   .agent-card-ctl{flex-direction:column;align-items:stretch}
   .agent-card-actions{justify-content:flex-end}
 }
-
-/* plan surface — the launchpad, revealed when the day calls for it. A clear gap plus
-   the ruled session-head band below split the workout-logging zone off from the analysis
-   (Brief + capture) above, so Today reads as two calm zones rather than one long scroll. */
-.plansurface{margin-top:var(--space-8)}
-/* session head — the designed break that introduces the logging zone */
-.session-head{
-  display:flex;align-items:flex-end;justify-content:space-between;gap:var(--space-7);
-  padding-top:var(--space-10);margin-bottom:var(--space-7);border-top:1px solid var(--line);
-}
-.session-head-main{min-width:0}
-.session-head .session-kicker{margin-bottom:var(--space-3)}
-.session-title{
-  font-family:var(--font-display);font-variation-settings:"opsz" 40;
-  font-weight:var(--weight-medium);font-size:var(--text-xl);line-height:var(--leading-tight);margin:0;color:var(--ink);letter-spacing:var(--tracking-tight);
-}
-.session-focus{color:var(--muted);font-weight:var(--weight-regular);font-style:italic}
-.session-purpose{margin:var(--space-3) 0 0;font-size:var(--text-sm);color:var(--muted);line-height:var(--leading-normal);max-width:44ch}
-.session-head-side{display:flex;align-items:center;gap:var(--space-6);flex:none}
-.session-prog{
-  font-family:var(--font-display);font-variation-settings:"opsz" 40;
-  color:var(--ink-2);font-size:var(--text-lead);white-space:nowrap;
-}
-.session-prog b{color:var(--accent);font-weight:var(--weight-semibold)}
-.session-prog-sep{color:var(--muted);margin:0 1px}
-
-/* trajectory tier (this week) — demoted below the fold, collapsed by default */
-.weekfold{margin-top:var(--space-3);border-top:1px solid var(--line);padding-top:var(--space-3)}
-.weekfold-sum{
-  list-style:none;display:flex;align-items:center;gap:var(--space-4);cursor:pointer;
-  padding:var(--space-4) var(--space-1);color:var(--muted);user-select:none;
-}
-.weekfold-sum::-webkit-details-marker{display:none}
-.weekfold-sum .lbl{color:var(--muted)}
-.weekfold-recap{color:var(--ink-2);font-size:var(--text-xs);letter-spacing:var(--tracking-wide)}
-.weekfold-chev{margin-left:auto;font-size:var(--text-xs);color:var(--muted);
-  transition:transform var(--dur-2) var(--ease)}
-.weekfold[open] .weekfold-chev{transform:rotate(180deg)}
-.weekfold[open] .statstrip-compass{animation:rise var(--dur-3) var(--ease) both}
-
 
 /* ---- Atelier v2 (wave 6A): a source is one card — its name in serif with a mono
    tag, the live state and its one action first, the fields, then "how it works"

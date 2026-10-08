@@ -332,7 +332,6 @@
   .pweek-day.is-selected .pweek-token{transform:none}
   .pweek-detail:not([hidden]){animation:none}
 }
-.end-run-row.is-quiet{opacity:.55}
 .pweek-progress{margin-top:var(--space-5);font-size:var(--text-md);line-height:var(--leading);color:var(--ink)}
 .pweek-note{margin-top:var(--space-3);font-size:var(--text-md);line-height:var(--leading);color:var(--ink-2)}
 .prog-purpose{margin-top:var(--space-2);font-size:var(--text-sm);line-height:var(--leading-normal);color:var(--ink-2);font-style:italic}

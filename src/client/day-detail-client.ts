@@ -1,8 +1,9 @@
 // @ts-check
 // The day detail, the view: ONE view family for a day, in four variants over one model
-// (day-detail-model.ts) — `chipHtml` (a day in Today's week strip), `rowHtml` (a day in
-// a week list: Program's week ahead), the compact form (`dayDetailHtml(d, {inline})`,
-// a peek under Today's strip) and the full page (the day page, day-record-client.ts).
+// (day-detail-model.ts) — the chip (a day in Today's week strip) and the row (a day in
+// a week list: Program's week ahead), both in day-glance-view.ts (CairnDayGlanceView),
+// the compact form (`dayDetailHtml(d, {inline})`, a peek under Today's strip) and the
+// full page (the day page, day-record-client.ts).
 // The chip and the row read the same glance, so a lift or a run is said in the same
 // words wherever a week shows it. The full and compact forms, top to
 // bottom: the hero (where the day sits, the read's line naming it, the one point of

@@ -292,6 +292,15 @@ and minifies the result (comments and redundant whitespace only; one rule per li
 (`build-styles.mjs --check`) or a partial is unlisted. Edit the partials, never the output. The file
 stays committed because the Docker runtime stage and the tests read it from the checkout.
 
+**Lazy sheets.** The last partials of the cascade that ONE lazy bundle owns (the settings cards, the
+day view, Ask's ripple card, Horizon, the welcome stage) are listed in `LAZY_STYLE_SHEETS` instead and
+ship as `public/css/<name>.css`: the bundle loader adds the `<link>` beside the `<script>`
+(`LAZY_BUNDLE_CSS`, in cascade order whatever order bundles load in), a surface never paints before its
+sheet landed, `sw.js` precaches it and a deep link preloads it. A partial may move only if the rules
+that follow it in the cascade do not tie with it (the shared hit-area rings in `foundation/a11y` add
+`position` and `box-shadow`, which Settings never sets) and no eager screen names its classes; a sheet
+compresses worse alone (about 1.5x), so only a surface big enough to pay for its request moves.
+
 | Directory | Owner | Holds |
 |---|---|---|
 | `foundation/` | the foundation stream | tokens, fonts, base + type, motion, primitives, stones, cards, components, segments, loading, reduced motion, a11y |

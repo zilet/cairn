@@ -2,7 +2,7 @@
 // The day's GLANCE, the model half: one day as a chip or a row (`glance`, `glanceOfWeekDay`,
 // `glanceOfLookAheadDay`, `abbr`), split out of day-detail-model.ts and published on the
 // same CairnDayDetailModel, so a lift or a run reads in the same words wherever a week
-// shows it. Pure; no DOM, no fetch. LAZY ("calendar" bundle), loaded right after the model.
+// shows it. Pure; no DOM, no fetch. LAZY ("glance" bundle), loaded right after the model.
 {
   type GlanceWeekDay = import("../contracts/client-api.js").ClientPlanWeekDay;
   type GlanceLookAheadDay = import("../contracts/client-api.js").ClientPlanLookAheadDay;

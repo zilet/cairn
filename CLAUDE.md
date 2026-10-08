@@ -78,11 +78,18 @@ neither cached offline nor covered by the hash. Do not rename the placeholder (t
 an exact match, and `scripts/check-sw-cache.mjs` asserts it). **Art URLs carry `v=`; never strip it**
 — the SW cache-first layer keys on the full URL and evicts older `v` for the same `kind+q`.
 
-**`index.html` does not load every bundle.** Only the Today/You/Fuel shell is eager; every bundle
-marked `lazy: "<name>"` in `BUNDLES` (`scripts/build-client.mjs`) — Train, Horizon, Ask, Settings,
-Me/Health, another day's record, the meal planner — is injected on first navigation by
-`ensureBundle`/`withBundle` (`src/client/app/lazy-bundles.ts`), warmed on idle, and still precached.
-The eager JS ceiling is 220 KB brotli (`scripts/bundle-budget.json`). So eager code reaches a lazy
+**`index.html` does not load every bundle.** Only the Today/You shell (and Fuel's frame,
+`06-coach-meals`) is eager; every bundle marked `lazy: "<name>"` in `BUNDLES`
+(`scripts/build-client.mjs`) — Fuel's surface, Train, Horizon, Ask, Settings, Me/Health, a day's
+glance / view / page, the journey reads, body metrics, the welcome, the AI sign-in, the meal planner
+— is injected on first navigation by `ensureBundle`/`withBundle` (`src/client/app/lazy-bundles.ts`),
+warmed on idle, and still precached. A lazy bundle depends only on what it uses
+(`LAZY_BUNDLE_DEPS`); Horizon does not drag in Train. The eager JS ceiling is in
+`scripts/bundle-budget.json`, and a cold route's bytes are held by `npm run perf:check`. **A lazy
+bundle may own a stylesheet**: the last cascade partials listed in `LAZY_STYLE_SHEETS`
+(`scripts/build-styles.mjs`) ship as `public/css/<bundle>.css`, added by the loader (`LAZY_BUNDLE_CSS`)
+and precached in `CORE_ASSETS`; only partials no eager partial follows may move there (a tied
+rule would flip), and a small sheet compresses badly alone, so keep the eager rules eager. So eager code reaches a lazy
 global ONLY through `withBundle(name, fn)` (or a `typeof` guard), never at top level —
 `test/lazyBundleContract.test.js` enforces it. Each lazy entry also names the `views` it renders; the
 build derives `index.html`'s cold deep-link preload table from them (`scripts/lazy-route-preload.mjs`)

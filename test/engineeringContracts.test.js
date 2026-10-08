@@ -3030,9 +3030,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   );
   assert.ok(
     bootPos("/js/cardio-plan-client.js") < bootPos("/js/progress-run-plan-client.js") &&
-      bootPos("/js/cardio-plan-client.js") < bootPos("/js/plan-editor-client.js") &&
-      BUNDLES.find((b) => b.inputs.includes("public/js/cardio-plan-client.js"))?.lazy === "train",
-    "cardio-plan-client.js rides the lazy train bundle, ahead of the run plan and plan editor that read it"
+      BUNDLES.find((b) => b.inputs.includes("public/js/cardio-plan-client.js"))?.lazy === "journey" &&
+      BUNDLES.find((b) => b.inputs.includes("public/js/progress-run-plan-client.js"))?.lazy === "journey" &&
+      BUNDLES.find((b) => b.inputs.includes("public/js/plan-editor-client.js"))?.lazy === "train",
+    "cardio-plan-client.js rides the lazy journey bundle, ahead of the run plan that reads it as it loads (the plan editor, in train, reads it at call time: train depends on journey)"
   );
   assert.ok(
     bootPos("/js/cardio-sync-client.js") < bootPos("/js/03-today.js") &&
@@ -3155,12 +3156,12 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     "progress-history-client.js must load before Progress history consumers"
   );
   assert.ok(
-    bootPos("/js/progress-run-plan-client.js") > bootPos("/js/progress-history-client.js") &&
-      bootPos("/js/progress-run-plan-client.js") < bootPos("/js/progress-route-deps-client.js"),
-    "progress-run-plan-client.js must load before Progress route deps"
+    BUNDLES.find((b) => b.inputs.includes("public/js/progress-run-plan-client.js"))?.lazy === "journey" &&
+      BUNDLES.find((b) => b.inputs.includes("public/js/progress-route-deps-client.js"))?.lazy === "train",
+    "progress-run-plan-client.js rides the journey bundle (train depends on it); the Progress route deps read it at call time"
   );
   assert.ok(
-    bootPos("/js/progress-route-deps-client.js") > bootPos("/js/progress-run-plan-client.js") &&
+    bootPos("/js/progress-route-deps-client.js") > bootPos("/js/progress-history-client.js") &&
       bootPos("/js/progress-route-deps-client.js") < bootPos("/js/progress-endurance-controller.js") &&
       bootPos("/js/progress-route-deps-client.js") < bootPos("/js/05-progress.js"),
     "progress-route-deps-client.js must load before Progress route consumers"
@@ -3196,12 +3197,12 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     "progress-muscle-trajectory-client.js must load before Progress muscle trajectory consumers"
   );
   assert.ok(
-    bootPos("/js/progress-dexa-targeting-client.js") > bootPos("/js/progress-muscle-trajectory-client.js") &&
-      bootPos("/js/progress-dexa-targeting-client.js") < bootPos("/js/05-progress.js"),
-    "progress-dexa-targeting-client.js must load before Progress and Health DEXA consumers"
+    BUNDLES.find((b) => b.inputs.includes("public/js/progress-dexa-targeting-client.js"))?.lazy === "body" &&
+      BUNDLES.find((b) => b.inputs.includes("public/js/body-metrics-client.js"))?.lazy === "body",
+    "progress-dexa-targeting-client.js rides the body bundle that Progress and Health both depend on (read at call time)"
   );
   assert.ok(
-    bootPos("/js/progress-performance-client.js") > bootPos("/js/progress-dexa-targeting-client.js") &&
+    bootPos("/js/progress-performance-client.js") > bootPos("/js/progress-muscle-trajectory-client.js") &&
       bootPos("/js/progress-performance-client.js") < bootPos("/js/05-progress.js"),
     "progress-performance-client.js must load before Progress performance consumers"
   );

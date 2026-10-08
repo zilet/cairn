@@ -32,7 +32,6 @@
 /* the v2 content entrance: `in` — a .35s fade with an 8px rise. Use .anim-in on a
    block that arrives with its screen; .reveal is the staggered sibling for lists. */
 @keyframes in{from{opacity:0;transform:translateY(var(--rise))}to{opacity:1;transform:none}}
-.anim-in{animation:in var(--dur-in) var(--ease) both}
 
 /* the live ping — a dawn dot breathing outward (.ping, §05b) */
 @keyframes ping{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--dawn) 60%,transparent)}100%{box-shadow:0 0 0 9px transparent}}

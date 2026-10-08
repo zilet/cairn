@@ -39,8 +39,6 @@
   padding:var(--space-5) 0;border-top:1px solid var(--line);color:inherit;text-decoration:none;text-align:left;width:100%}
 .li:first-child{border-top:0}
 .li > .dot{margin-top:var(--space-3)}
-.li-t{display:block;font-size:var(--text-md);line-height:var(--leading-normal);color:var(--ink)}
-.li-m{display:block;font-size:var(--text-xs);line-height:var(--leading-normal);color:var(--muted);margin-top:var(--space-1)}
 .chev{color:var(--muted);align-self:center}
 a.li:active,button.li:active{transform:var(--press-lg)}
 
@@ -62,7 +60,6 @@ a.li:active,button.li:active{transform:var(--press-lg)}
 .btn:active{transform:var(--press)}
 .btn-solid{background:var(--ink);color:var(--on-ink);border-color:var(--ink)}
 .btn-solid:hover{background:color-mix(in srgb,var(--ink) 86%,var(--ground));border-color:transparent}
-.btn-dawn{background:var(--dawn);color:var(--on-accent);border-color:var(--dawn)}
 .btn:disabled{opacity:.5;cursor:default}
 
 /* ---- the primary action: solid ink, ground glyph ---- */

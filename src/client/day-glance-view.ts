@@ -1,8 +1,10 @@
 // @ts-check
 // The day view's glance variants: `chipHtml` (a day in Today's week strip) and `rowHtml`
-// (a day in Program's week list), split out of day-detail-client.ts and published on the
-// same CairnDayDetailView. Pure string builders over a ClientDayGlance; every caller string
-// goes through escHtml/escAttr. LAZY ("calendar" bundle), loaded right after the view.
+// (a day in Program's week list), published as CairnDayGlanceView. They are the GLANCE
+// half of the day view family: no body figure, no run structure, no page, so Today's
+// strip pays for this and nothing else (the "glance" bundle, with the glance model).
+// Pure string builders over a ClientDayGlance; every caller string goes through
+// escHtml/escAttr.
 {
   // ---- the glance variants: chip and row ----
 
@@ -76,5 +78,7 @@
     </li>`;
   }
 
-  Object.assign(CairnDayDetailView, { chipHtml, rowHtml });
+  const CAIRN_DAY_GLANCE_VIEW = { chipHtml, rowHtml };
+
+  Object.assign(globalThis, { CairnDayGlanceView: CAIRN_DAY_GLANCE_VIEW });
 }

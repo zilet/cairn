@@ -769,7 +769,7 @@ test("Horizon's week rows are this view's row variant over GET /api/week: rest i
     ],
   };
   const view = w.CairnWeekModel.landing(read);
-  const host = renderHtml(view.glances.map((g) => w.CairnDayDetailView.rowHtml(g)).join(""));
+  const host = renderHtml(view.glances.map((g) => w.CairnDayGlanceView.rowHtml(g)).join(""));
   const rows = host.querySelectorAll(".pahead-day");
   assert.equal(rows.length, 4);
   assert.ok(rows[0].querySelector(".pahead-tick"), "a done day is ticked");

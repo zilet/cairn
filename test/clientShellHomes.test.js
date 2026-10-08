@@ -76,12 +76,26 @@ test("streams B, C and D find their file slots already registered", () => {
     },
     "public/js/bundle-09-horizon.js": {
       lazy: "horizon",
-      stems: ["horizon-model", "horizon-labs-model", "horizon-week-client", "horizon-week-controller", "horizon-terrain-client", "horizon-chart-client", "horizon-client", "horizon-controller", "horizon-screen"],
-    },
-    // The shared time objects ride the calendar bundle horizon (and today-ahead, train) depend on.
-    "public/js/bundle-12-calendar.js": {
-      lazy: "calendar",
-      stems: ["week-model", "week-strip-client", "milestone-row-model", "milestone-row-client", "goal-row-model", "goal-row-client", "frame-line-client"],
+      stems: [
+        "horizon-model",
+        "horizon-labs-model",
+        "horizon-week-client",
+        "horizon-week-controller",
+        "horizon-terrain-client",
+        "horizon-chart-client",
+        "horizon-client",
+        "horizon-controller",
+        "horizon-screen",
+        // The shared time objects: only Horizon draws them, so they ride its bundle rather
+        // than the calendar every Today open loads.
+        "week-model",
+        "week-strip-client",
+        "milestone-row-model",
+        "milestone-row-client",
+        "goal-row-model",
+        "goal-row-client",
+        "frame-line-client",
+      ],
     },
     "public/js/bundle-10-ask.js": {
       lazy: "ask",

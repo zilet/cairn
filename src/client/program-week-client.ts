@@ -38,7 +38,7 @@
    * Today's lift is the server's one strength line, verbatim, its caveat beneath.
    */
   function rowHtml(row: Row): string {
-    return CairnDayDetailView.rowHtml(row.glance, { line: row.line, lifts: row.lift?.lifts || "", hard: row.hard });
+    return CairnDayGlanceView.rowHtml(row.glance, { line: row.line, lifts: row.lift?.lifts || "", hard: row.hard });
   }
 
   function groupHtml(group: Group): string {

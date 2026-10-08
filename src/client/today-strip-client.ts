@@ -37,7 +37,7 @@
 
   /** The seven days: the day view's CHIP variant, one per day. */
   function daysHtml(cells: Cell[], selected: string | null): string {
-    return cells.map((c) => CairnDayDetailView.chipHtml(c, { selected, controls: "tstripFold" })).join("");
+    return cells.map((c) => CairnDayGlanceView.chipHtml(c, { selected, controls: "tstripFold" })).join("");
   }
 
   /**

@@ -16,10 +16,13 @@ const CACHE = "cairn-shell-dev";
 const ART_CACHE = "cairn-art-v1";
 const CORE_ASSETS = [
   "/", "/index.html", "/styles.css",
+  // The lazy bundles' own stylesheets (src/styles LAZY_STYLE_SHEETS), fetched next to their script.
+  "/css/settings.css", "/css/day-view.css", "/css/ask.css", "/css/horizon.css", "/css/welcome.css",
   // Every bundle, eager AND lazy, in manifest order: a lazy destination's first
   // offline visit resolves from here.
-  "/js/bundle-01-core.js", "/js/bundle-02-today.js", "/js/bundle-03-capture.js", "/js/bundle-04-coach-meals.js", "/js/bundle-05-me-health.js", "/js/bundle-07-boot.js",
-  "/js/bundle-08-train.js", "/js/bundle-09-horizon.js", "/js/bundle-10-ask.js", "/js/bundle-15-welcome.js", "/js/bundle-11-settings.js", "/js/bundle-12-calendar.js", "/js/bundle-13-meals.js", "/js/bundle-14-today-ahead.js", "/js/bundle-16-auth.js",
+  "/js/bundle-01-core.js", "/js/bundle-02-today.js", "/js/bundle-03-capture.js", "/js/bundle-04-coach-meals.js", "/js/bundle-22-fuel.js", "/js/bundle-05-me-health.js", "/js/bundle-07-boot.js",
+  "/js/bundle-08-train.js", "/js/bundle-20-journey.js", "/js/bundle-21-body.js", "/js/bundle-09-horizon.js", "/js/bundle-10-ask.js", "/js/bundle-17-agent-login.js", "/js/bundle-15-welcome.js",
+  "/js/bundle-11-settings.js", "/js/bundle-18-glance.js", "/js/bundle-19-day-view.js", "/js/bundle-12-calendar.js", "/js/bundle-13-meals.js", "/js/bundle-14-today-ahead.js", "/js/bundle-16-auth.js",
   "/art.js", "/cairn-body-figure.js", "/manifest.json",
   // Self-hosted Atelier v2 faces (src/styles/foundation/fonts.css). Core, not
   // optional: an installed app offline must still set its own type.

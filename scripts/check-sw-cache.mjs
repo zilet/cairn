@@ -29,6 +29,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { BUNDLES, PRECOMPRESS_EXTRA } from "./build-client.mjs";
+import { LAZY_STYLE_SHEETS, lazySheetPath } from "./build-styles.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -171,6 +172,21 @@ function assertPublicAssetContract() {
         errors.push(`src/client/app/lazy-bundles.ts must map "${bundle.lazy}" to "${url}"`);
       }
     }
+  }
+
+  // A lazy stylesheet rides its bundle: precached, mapped by the loader to a lazy
+  // bundle that exists, and built (the loader requests exactly this url).
+  const loaderSource = readRepo("src/client/app/lazy-bundles.ts");
+  for (const name of Object.keys(LAZY_STYLE_SHEETS)) {
+    const url = servedUrl(lazySheetPath(name));
+    if (!core.includes(url)) errors.push(`sw.js CORE_ASSETS must precache the lazy sheet ${url}`);
+    if (!BUNDLES.some((bundle) => bundle.lazy === name)) errors.push(`lazy sheet "${name}" has no lazy bundle of that name in BUNDLES`);
+    if (!loaderSource.includes(`"${name}": "${url}"`)) errors.push(`src/client/app/lazy-bundles.ts LAZY_BUNDLE_CSS must map "${name}" to "${url}"`);
+  }
+  const cachedSheets = core.filter((url) => url.startsWith("/css/"));
+  const builtSheets = Object.keys(LAZY_STYLE_SHEETS).map((name) => servedUrl(lazySheetPath(name)));
+  if (JSON.stringify(cachedSheets) !== JSON.stringify(builtSheets)) {
+    errors.push(`sw.js CORE_ASSETS /css/ entries must mirror LAZY_STYLE_SHEETS (CORE_ASSETS: ${cachedSheets.join(", ")} | built: ${builtSheets.join(", ")})`);
   }
 
   const missingFiles = allCached

@@ -53,6 +53,13 @@ export const VIEW_EARLY_READS = {
   "plan:edit": ["/plan/week", "/plan/recovery-status", "/plan/upcoming", ["/plan", "plan", 3000]],
 };
 
+// Lazy views that start NO early reads, only the bundle preload. Fuel paints from one read
+// whose path carries the device's hour (`/train-home?view=fuel&date=…&hour=…`), which the
+// inline script cannot name; starting just the shell's boot reads early would finish them
+// before Fuel's own read starts and make them a separate, earlier serial round for nothing
+// (they start together once the shell has run, as they always did).
+export const NO_EARLY_READS = new Set(["plan:food"]);
+
 export const LAZY_ROUTES_MARKER = /\/\*cairn:lazy-routes\*\/[\s\S]*?\/\*end\*\//;
 
 function runClientModule(root, file, extra = {}) {
@@ -95,17 +102,17 @@ function canonicalPaths(routes) {
 }
 
 /**
- * One route's bundle indices as the string the inline script reads ONE DIGIT per index
- * (`T.b[+b[i]]`). An 11th bundle url would be index 10, read as 1 then 0 — the wrong
- * bundles, silently — so the build refuses it rather than emit it.
+ * One route's bundle indices as the string the inline script reads ONE BASE-36 CHARACTER
+ * per index (`T.b[parseInt(b[i],36)]`). A 37th bundle url would be index 36, read as
+ * "10" — the wrong bundles, silently — so the build refuses it rather than emit it.
  */
 export function bundleDigits(indices) {
   for (const i of indices) {
-    if (!Number.isInteger(i) || i < 0 || i > 9) {
-      throw new Error(`lazy bundle index ${i} is not one digit: widen index.html's preload encoding first`);
+    if (!Number.isInteger(i) || i < 0 || i > 35) {
+      throw new Error(`lazy bundle index ${i} is not one base-36 digit: widen index.html's preload encoding first`);
     }
   }
-  return indices.join("");
+  return indices.map((i) => i.toString(36)).join("");
 }
 
 // An ?id= rides along so /app/you/domain parses as the canonical id-carrying route it
@@ -125,6 +132,7 @@ export function lazyRoutePreloadTable(root, bundles) {
   const loader = runClientModule(root, "public/js/app-lazy-bundles.js", { document: undefined });
   const src = loader.LAZY_BUNDLE_SRC;
   const deps = loader.LAZY_BUNDLE_DEPS;
+  const sheets = loader.LAZY_BUNDLE_CSS || {};
   const bundleOf = viewBundleIndex(bundles);
   for (const bundle of bundles) {
     if (!bundle.lazy) continue;
@@ -150,18 +158,19 @@ export function lazyRoutePreloadTable(root, bundles) {
     const route = routes.parseRoute(routeUrl(segments));
     const lazy = bundleOf(route);
     if (!lazy) return "";
-    return bundleDigits(
-      closure(lazy).map((name) => {
-        const url = src[name];
-        if (!urls.includes(url)) urls.push(url);
-        return urls.indexOf(url);
-      })
-    );
+    // Each bundle's url, then its own stylesheet's (the loader fetches both side by side;
+    // the inline script preloads a .css as a style).
+    const indexOf = (url) => {
+      if (!urls.includes(url)) urls.push(url);
+      return urls.indexOf(url);
+    };
+    return bundleDigits(closure(lazy).flatMap((name) => [indexOf(src[name]), ...(sheets[name] ? [indexOf(sheets[name])] : [])]));
   };
   const q = [];
   const readsFor = (segments, lazy) => {
     if (!lazy) return null; // an eager destination paints without waiting on a bundle
     const route = routes.parseRoute(routeUrl(segments));
+    if (NO_EARLY_READS.has(`${route.tab}:${route.section}`)) return null;
     const own = VIEW_EARLY_READS[`${route.tab}:${route.section}`] || VIEW_EARLY_READS[route.tab] || [];
     const reads = [...SHELL_EARLY_READS, ...own];
     const at = q.findIndex((list) => JSON.stringify(list) === JSON.stringify(reads));

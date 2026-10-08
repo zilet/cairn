@@ -1,0 +1,61 @@
+/* =====================================================================
+   "What's ahead" (today-strip-client.ts): Today's ONE week view, under the
+   Brief's state line — a mast with the block clock, the week's counts in one
+   header line, seven day buttons (today ringed in dawn), a tapped day opening
+   inline below.
+   ===================================================================== */
+.tstrip-slot:empty{display:none}
+/* Reserved while the week is still on its way (the lazy bundle, then /plan/week): the strip's
+   own height, so the Brief under it never slides down. A week that has none, or fails to load,
+   releases it (data-none, set by today-strip-controller.ts). */
+.today-wrap .tstrip-slot:empty:not([data-none]){display:block;min-height:125px}
+.tstrip-slot{margin-top:var(--space-8)}
+.today-wrap .tstrip-slot{margin-top:var(--today-gap)}
+.tstrip{display:flex;flex-direction:column}
+.tstrip-mast{display:flex;align-items:flex-end;justify-content:space-between;gap:var(--space-5);min-height:32px;
+  padding-bottom:var(--space-3);border-bottom:1px solid var(--line)}
+.tstrip-title{margin:0;color:var(--muted)}
+.tstrip-block{color:var(--muted);text-align:right}
+.tstrip-block:empty{display:none}
+.tstrip-days{list-style:none;margin:var(--space-4) 0 0;padding:0;display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:var(--space-2)}
+.tstrip-cell{display:flex;min-width:0}
+.tstrip-day{flex:1;min-width:0;min-height:76px;display:flex;flex-direction:column;align-items:center;gap:var(--space-2);
+  padding:var(--space-4) var(--space-1) var(--space-5);border:1px solid transparent;border-radius:var(--radius-sm);
+  background:none;color:var(--ink);font:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent;position:relative;
+  transition:background var(--dur-1) var(--ease),border-color var(--dur-1) var(--ease)}
+.tstrip-day:active{transform:var(--press)}
+@media (hover:hover){.tstrip-day:hover{background:var(--surface2)}}
+.tstrip-day:focus-visible{outline:2px solid var(--dawn);outline-offset:2px}
+.tstrip-day.is-today{border-color:var(--dawn);background:var(--dawn-wash)}
+.tstrip-day[aria-expanded="true"]{background:var(--surface);border-color:var(--line-strong)}
+.tstrip-day.is-today[aria-expanded="true"]{border-color:var(--dawn)}
+.tstrip-day[aria-expanded="true"]::after{content:"";position:absolute;left:30%;right:30%;bottom:3px;height:2px;
+  border-radius:var(--radius-3xs);background:var(--ink)}
+.tstrip-dow{font-family:var(--font-mono);font-size:var(--text-2xs);letter-spacing:var(--tracking-mono);text-transform:uppercase;color:var(--muted)}
+.tstrip-day.is-today .tstrip-dow{color:var(--dawn)}
+.tstrip-num{position:relative;font-family:var(--font-display);font-size:var(--text-lead);line-height:var(--leading-none);color:var(--ink)}
+.tstrip-day.is-past:not(.is-today) .tstrip-num{color:var(--ink2)}
+.tstrip-tick{position:absolute;top:-4px;right:-12px;width:12px;height:12px;border-radius:50%;display:grid;place-items:center;
+  background:var(--sage-text);color:var(--on-accent);font-family:var(--font-ui);font-size:var(--text-2xs);line-height:var(--leading-none)}
+.tstrip-marks{display:flex;flex-direction:column;align-items:center;gap:var(--space-2);min-height:22px;width:100%;margin-top:var(--space-1)}
+.tstrip-lift{max-width:100%;padding:1px var(--space-2);border-radius:var(--radius-2xs);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:var(--text-2xs);font-weight:var(--weight-semibold);line-height:var(--leading-snug);color:var(--d-strength);
+  background:color-mix(in srgb,var(--s-strength) 24%,transparent)}
+.tstrip-lift.is-done{background:var(--s-strength);color:var(--on-stone)}
+.tstrip-lift.is-live{box-shadow:inset 0 0 0 1.5px var(--dawn)}
+.tstrip-lift.is-open{background:transparent;box-shadow:inset 0 0 0 1px var(--line-strong);color:var(--muted)}
+/* a run is a bar: longer for the long run, hatched for quality work, filled once done */
+.tstrip-run{display:block;width:16px;height:4px;border-radius:var(--radius-pill);box-shadow:inset 0 0 0 1.5px var(--s-endurance)}
+.tstrip-run.is-long{width:28px}
+.tstrip-run.is-quality{background:repeating-linear-gradient(90deg,var(--s-endurance) 0 3px,transparent 3px 5px)}
+.tstrip-run.is-done{background:var(--s-endurance);box-shadow:none}
+.tstrip-run.is-open{box-shadow:inset 0 0 0 1px var(--line-strong)}
+.tstrip-rest{color:var(--faint);font-size:var(--text-lead);line-height:var(--leading-none)}
+.tstrip-now{display:flex;flex-direction:column;gap:var(--space-1);margin-top:var(--space-4)}
+.tstrip-swap{font-size:var(--text-xs);color:var(--muted)}
+
+/* the fold: grid rows 0fr → 1fr, never a hand-animated height */
+.tstrip-fold{display:grid;grid-template-rows:0fr;transition:grid-template-rows var(--dur-2) var(--ease)}
+.tstrip-fold.is-open{grid-template-rows:1fr}
+.tstrip-fold-in{min-height:0;overflow:hidden}
+.tstrip-fold.is-open .tstrip-fold-in{padding:var(--space-9) 0 var(--space-2);border-bottom:1px solid var(--line)}

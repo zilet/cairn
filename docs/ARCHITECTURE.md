@@ -6219,13 +6219,18 @@ thunk, since function hoisting does NOT cross `<script>` boundaries; see
 of ordered `public/js/bundle-*.js` bundles (the `BUNDLES` manifest is the source of truth for that
 order); `index.html` loads just those bundles (`/art.js` still first) while `sw.js` precaches them —
 with one exception: a bundle carrying `lazy: "<name>"` in the manifest is **not** in `index.html`.
-Only the Today / You / Fuel / capture shell is eager (bundles 01–04 and 07; with `art.js` and
-`cairn-body-figure.js` beside them, every script `index.html` loads is held to ≤225 KB brotli in
-total by `scripts/bundle-budget.json`'s `eager` ceilings). Train (`bundle-08-train`: every Train
-view, the plan editor and its week strip, body metrics), Horizon (`bundle-09-horizon`, depends on
-train), Ask (`bundle-10-ask`: the thread, the ripple card, Changes) and Settings
-(`bundle-11-settings`, with the agent-login terminal), plus Health / About you (`bundle-05-me-health`,
-depends on train) are injected by `ensureBundle(name)` (`src/client/app/lazy-bundles.ts`), which
+Only the Today / You / capture shell is eager (bundles 01–04 and 07 — 04 is now just the proposal
+controller, Fuel's frame `06-coach-meals` and the food-note words; with `art.js` and
+`cairn-body-figure.js` beside them, every script `index.html` loads is held to the `eager` ceiling in
+`scripts/bundle-budget.json`). Fuel's surface (`bundle-22-fuel`: the day's fuel read, meal cards, the
+log composer, the food composer; Ask depends on it), Train (`bundle-08-train`: every Train view and
+the plan editor; depends on the day view, the journey reads and body metrics), Horizon
+(`bundle-09-horizon`, with the shared time objects; depends on the glance and the journey reads, not
+on Train), Ask (`bundle-10-ask`: the thread, the ripple card, Changes), Settings (`bundle-11-settings`,
+depends on the AI sign-in panel `bundle-17-agent-login`), the first-run welcome (`bundle-15-welcome`),
+a day's glance (`bundle-18-glance`: the chip and row Today's strip draws), its view (`bundle-19-day-view`)
+and its page and peek (`bundle-12-calendar`), the journey reads (`bundle-20-journey`) and body metrics
+(`bundle-21-body`), plus Health / About you (`bundle-05-me-health`, depends on body metrics) are injected by `ensureBundle(name)` (`src/client/app/lazy-bundles.ts`), which
 loads the bundle and its `LAZY_BUNDLE_DEPS`, guarantees one `<script>` per bundle, resolves after
 they execute, and rejects into the tab's error state on a failed fetch. Callers go through
 `withBundle(name, fn)`: warm, it calls `fn` synchronously (a warm tab still paints inside its view
@@ -6271,8 +6276,9 @@ through `api()`, on every open of that route; otherwise the response is never ta
 (a local one, `apiInvalidate`, or `clearRememberedApiBodies`) drops the whole table
 (`forgetReads`, `api-core.ts`): a destination tapped away from before its bundle ran never takes its
 reads, and a body requested before the write must never be handed over, or remembered, after it
-(`test/clientEarlyWriteGuard.test.js`). The route's bundle string is one digit per index into `b`, so
-the build refuses an 11th lazy bundle url (`bundleDigits`) rather than emit a wrong preload.
+(`test/clientEarlyWriteGuard.test.js`). The route's bundle string is one base-36 character per index
+into `b` (bundle urls AND their stylesheets, preloaded `as=style`), so the build refuses a 37th url
+(`bundleDigits`) rather than emit a wrong preload.
 `scripts/check-client-build-output.mjs` fails a checkout whose committed `index.html` table is stale
 (the image ships the committed shell beside siblings precompressed from the rebuilt one).
 

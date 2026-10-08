@@ -199,7 +199,6 @@
 .today-wrap .today-run-line .wrun-row{border-top:0;padding:var(--today-row) 0;border-bottom:1px solid var(--line)}
 
 /* the week row: "This week" and its recap, the weigh-in chip, the fold's chevron */
-.today-wrap .weekrow{margin:0}
 .today-wrap .weekfold{margin:0;border-top:0;padding:0}
 .today-wrap .weekfold-sum{min-height:44px;padding:var(--space-4) 0;gap:var(--space-4);border-bottom:1px solid var(--line)}
 .today-wrap .weekfold-recap{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -207,8 +206,6 @@
 .today-wrap .weekfold-sum .weekfold-chev{margin-left:0}
 .today-wrap .weekfold[open] > .statstrip{margin:var(--today-row) 0 0}
 .today-wrap .weekfold[open]{padding-bottom:var(--today-row);border-bottom:1px solid var(--line)}
-.today-wrap .weekrow > .wt-inline:not([hidden]){display:flex;gap:var(--space-3);padding:var(--today-row) 0;margin:0;
-  border-bottom:1px solid var(--line)}
 
 /* 4 · Worth a look: the mast matches Around today's, and so do its rows */
 .today-wrap .today-rail .rail-mast{margin:var(--today-gap) 0 0;min-height:44px;align-items:flex-end;

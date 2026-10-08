@@ -284,6 +284,11 @@ type PlanWeekRole = import("../contracts/client.js").ClientPlanWeekRole;
     }
   }
 
+  /** A day's page: the drill is the lazy calendar bundle's, fetched by this tap if not already. */
+  function openPweekDay(date: string): void {
+    void withBundle("calendar", () => CairnDrill.open("day", date, { mode: "page" }));
+  }
+
   if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
     document.addEventListener("click", (event) => {
       const target = event.target instanceof Element ? event.target : null;
@@ -294,7 +299,7 @@ type PlanWeekRole = import("../contracts/client.js").ClientPlanWeekRole;
       // the day itself (its record, or its preview); today's cell stays put.
       if (!isMobilePweekLayout()) {
         const date = btn.getAttribute("data-pweek-date");
-        if (date && typeof CairnDrill !== "undefined") CairnDrill.open("day", date, { mode: "page" });
+        if (date) openPweekDay(date);
         return;
       }
       const index = Number(btn.getAttribute("data-pweek-i"));

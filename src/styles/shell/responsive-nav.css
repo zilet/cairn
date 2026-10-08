@@ -54,7 +54,6 @@
 
   /* bottom sheets become centred dialogs */
   .modal{align-items:center;padding:var(--space-11)}
-  .modal-card{border-radius:var(--radius-lg);max-width:540px;max-height:88vh;animation:dlgin .22s var(--ease)}
 }
 @keyframes dlgin{from{transform:scale(.97);opacity:.4}to{transform:scale(1);opacity:1}}
 

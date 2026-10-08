@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
+  BUDGET_FLOOR,
   BUDGET_MARGIN,
   budgetFromMeasurements,
   budgetedOutputs,
@@ -23,13 +24,21 @@ const measured = [
   { output: "public/js/bundle-b.js", lazy: "b", raw: 50_000, brotli: 9_000 },
 ];
 
-test("a budget sits a small margin above the measured size, rounded up to a whole KiB", () => {
-  assert.equal(ceilingFor(100_000), Math.ceil((100_000 * (1 + BUDGET_MARGIN)) / 1024) * 1024);
-  assert.ok(ceilingFor(100_000) > 100_000);
-  assert.ok(ceilingFor(100_000) <= 100_000 * (1 + BUDGET_MARGIN) + 1024);
-  assert.equal(ceilingFor(1024, 0), 1024);
+test("a budget sits max(2 KB, 5%) above the measured size, rounded up to a whole KiB", () => {
+  assert.equal(BUDGET_FLOOR, 2048);
+  // Big: the 5% wins.
+  assert.equal(ceilingFor(100_000), Math.ceil((100_000 + 100_000 * BUDGET_MARGIN) / 1024) * 1024);
+  assert.ok(ceilingFor(100_000) >= 100_000 * 1.05);
+  assert.ok(ceilingFor(100_000) <= 100_000 * 1.05 + 1024);
+  // Small: the 2 KB floor wins, so a few hundred bytes of growth never trips the gate.
+  assert.ok(ceilingFor(5_000) >= 5_000 + 2048);
+  assert.ok(ceilingFor(5_000) <= 5_000 + 2048 + 1024);
+  assert.equal(ceilingFor(1024, 0, 0), 1024);
   const budget = budgetFromMeasurements(measured);
   assert.equal(budget.margin, BUDGET_MARGIN);
+  assert.match(budget.note, /max\(2 KB, 5%\)/, "the rule is written in the file");
+  // The eager totals are measured too: a is the only eager script here.
+  assert.equal(budget.eager.js.brotli, ceilingFor(20_000));
   assert.deepEqual(budget.bundles["public/js/bundle-a.js"].measured, { raw: 100_000, brotli: 20_000 });
   assert.equal(budget.bundles["public/js/bundle-b.js"].lazy, "b");
   assert.equal(budget.bundles["public/js/bundle-a.js"].lazy, undefined);
@@ -75,7 +84,7 @@ test("deltas read signed", () => {
   assert.equal(formatDelta(-512), "-512 B");
 });
 
-test("the checked-in budget covers exactly the BUNDLES manifest plus the stylesheet, and runs in verify", async () => {
+test("the checked-in budget covers exactly the BUNDLES manifest plus the stylesheet and the lazy sheets, and runs in verify", async () => {
   const { BUNDLES } = await import("../scripts/build-client.mjs");
   const budget = JSON.parse(read("scripts/bundle-budget.json"));
   const covered = budgetedOutputs(BUNDLES);
@@ -120,6 +129,7 @@ test("the eager totals sum what the first open downloads, and fail past their fi
 test("the checked-in eager ceilings hold the first open to the per-screen load-time targets", () => {
   const budget = JSON.parse(read("scripts/bundle-budget.json"));
   assert.ok(budget.eager.js.brotli <= DEFAULT_EAGER_BUDGET.js.brotli, "eager JS stays at or under 220 KB brotli");
+  assert.ok(budget.eager.styles.brotli <= DEFAULT_EAGER_BUDGET.styles.brotli, "the stylesheet stays at or under 70 KB brotli");
   assert.ok(DEFAULT_EAGER_BUDGET.js.brotli <= 220 * 1024);
   assert.ok(budget.eager.styles.brotli <= 85 * 1024, "the stylesheet stays at or under 85 KB brotli");
 });

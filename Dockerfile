@@ -77,6 +77,8 @@ COPY public/vendor ./public/vendor
 COPY public/fonts ./public/fonts
 COPY --from=builder /app/public/cairn-body-figure.js ./public/cairn-body-figure.js
 COPY --from=builder /app/public/js ./public/js
+# The lazy bundles' own stylesheets (and their .br/.gz), built from src/styles.
+COPY --from=builder /app/public/css ./public/css
 # Precompressed siblings of the shell files copied from git above. public/js's own
 # .br/.gz came along with the directory copy on the line before. Named explicitly,
 # so a missing sibling fails the build instead of silently shipping raw bytes.

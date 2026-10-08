@@ -25,7 +25,7 @@ test("logged food opens Fuel under Today, and shortcuts land there", () => {
   assert.match(chatFuelContext, /function chatFuelWantsSurface\(messages = chatFuelContextMessages\)/, "Chat fuel strip is gated by conversation context");
   assert.match(chatFuelContext, /if \(!chatFuelWantsSurface\(messages \|\| chatFuelContextMessages\)\) \{[\s\S]*slot\.innerHTML = "";[\s\S]*return;[\s\S]*\}/, "Unrelated chats suppress the fuel strip");
   assert.doesNotMatch(chat, /requestAnimationFrame\(measureChatTop\); \/\/ re-measure once layout\/fonts settle\s+loadChatFuel\(token\);/, "Chat fuel strip waits for hydrated messages, not the empty shell");
-  assert.match(appRenderDispatch, /jump === "food" \? renderFoodJournal\(\)/, "Plan routing can jump directly to Food");
+  assert.match(appRenderDispatch, /jump === "food" \? lazy\("fuel", \(\) => renderFoodJournal\(\)\)/, "Plan routing can jump directly to Food (the lazy fuel bundle)");
 });
 
 function loadChatFuelGate() {

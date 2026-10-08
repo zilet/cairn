@@ -4,30 +4,7 @@
 .modal{position:fixed;inset:0;z-index:var(--z-modal);background:rgba(33,29,23,.45);background:color-mix(in srgb,var(--ink) 45%,transparent);
   backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);
   display:flex;align-items:flex-end;justify-content:center;padding:0}
-.modal-card{
-  background:var(--card);border:none;border-radius:var(--radius-lg) var(--radius-lg) 0 0;width:100%;max-width:680px;
-  padding:22px 18px calc(28px + env(safe-area-inset-bottom));max-height:86vh;overflow-y:auto;
-  position:relative;box-shadow:var(--shadow-md);
-  animation:sheetup .3s var(--ease);
-}
 @keyframes sheetup{from{transform:translateY(24px);opacity:.5}to{transform:translateY(0);opacity:1}}
-.modal-x{position:absolute;top:15px;right:15px;background:var(--card-2);border:1px solid var(--line);
-  color:var(--muted);border-radius:var(--radius-pill);width:32px;height:32px;font-size:var(--text-md)}
-.modal-x:hover{color:var(--ink)}
-/* Expand the hit area to ~44px without growing the visual size (a centered
-   invisible overlay). One idiom for every sub-44px tap target — see §38
-   "Accessibility — tap-target padding", which carries the shared group. */
-.modal-x::before{content:"";position:absolute;inset:-7px;border-radius:inherit}
-.modal-title{
-  font-family:var(--font-display);font-weight:var(--weight-semibold);font-variation-settings:"opsz" 60;
-  font-size:var(--text-xl);line-height:var(--leading-tight);letter-spacing:var(--tracking-tight);padding-right:44px;
-}
-.modal-sub{font-family:var(--font-ui);color:var(--accent);font-weight:var(--weight-bold);font-size:var(--text-2xs);
-  letter-spacing:var(--tracking-widest);text-transform:uppercase;margin-top:var(--space-3)}
-.modal-section{margin-top:var(--space-8)}
-.modal-h{font-family:var(--font-ui);text-transform:uppercase;letter-spacing:var(--tracking-widest);
-  font-size:var(--text-2xs);font-weight:var(--weight-semibold);color:var(--muted);margin-bottom:var(--space-3)}
-.modal-body{font-size:var(--text-md);color:var(--ink-2);line-height:var(--leading)}
 .modal .draftbtn{margin-top:var(--space-9)}
 /* The shared overlay primitive (CairnUiSheet, ui-sheet.ts): a bottom sheet on
    phones, a centred dialog from 640px. Existing overlays keep their own classes;
@@ -47,17 +24,6 @@
    22 · Onboarding
    ------------------------------------------------------------------- */
 .ob-grid{display:grid;grid-template-columns:1fr 1fr;gap:var(--space-5)}
-.ob-in{width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);
-  border-radius:var(--radius-sm);padding:var(--space-6);font-size:var(--text-base);color-scheme:light}
-.ob-in::placeholder{font-size:var(--text-sm);letter-spacing:var(--tracking-wide)}
-.modal-card .ob-grid .field{margin-bottom:0}
-.ob-intro{width:100%;background:var(--card-2);border:1px solid var(--line);color:var(--ink);
-  border-radius:var(--radius-sm);padding:var(--space-7) var(--space-7);font:inherit;font-size:var(--text-base);line-height:var(--leading);
-  resize:vertical;min-height:64px;color-scheme:light}
-.ob-intro::placeholder{font-size:var(--text-md);line-height:var(--leading);color:var(--muted);opacity:.8}
-/* Onboarding lead: a calm sentence-case welcome line — NOT the all-caps .modal-sub
-   kicker, which turns a full sentence into a shouty wall of tracked caps. */
-.ob-lead{font-family:var(--font-ui);color:var(--muted);font-size:var(--text-base);line-height:var(--leading);margin:var(--space-4) 0 var(--space-9)}
 .ob-opt{text-transform:none;letter-spacing:var(--tracking-wide);font-weight:var(--weight-medium);opacity:.7}
 
 /* -------------------------------------------------------------------

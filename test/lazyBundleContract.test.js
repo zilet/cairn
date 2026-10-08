@@ -12,7 +12,8 @@
 //      dispatcher's lazy(<its bundle>, ...), behind a `typeof`/optional-chain
 //      guard, or is one of the few reviewed call sites below;
 //   3. a lazy bundle reaches another lazy bundle's globals only when it DEPENDS
-//      on it (LAZY_BUNDLE_DEPS), or behind a guard.
+//      on it (LAZY_BUNDLE_DEPS), behind a guard, or inside withBundle(<that bundle>, ...)
+//      (a tap that opens a heavier surface: Today's strip peeks a day through "calendar").
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
@@ -30,8 +31,13 @@ const GLOBAL_ROOT = /^(globalThis|window|self)$/;
 const REVIEWED = {
   // reconnectProposal reaches these only while horizon's #endDraftStatus is in #view.
   "coach-proposal-controller.js": ["enduranceComposerLock", "enduranceProposalOpOpts"],
-  // compressImage awaits ensureBundle("ask") first when CairnChatClient is absent.
+  // compressImage awaits ensureBundle("ask") first when CairnChatClient is absent (it rides
+  // the lazy fuel bundle, which Ask depends on, so this is the one reach the other way).
   "chat-attachment-client.js": ["CairnChatClient"],
+  // The Fuel surface's mounts: mountFuelSurface / paintFoodJournal / loadFood… run only
+  // under renderFoodJournal, which the dispatcher and the segment deps reach through
+  // lazy("fuel") / withLatestRender("fuel"); nothing else calls them.
+  "06-coach-meals.js": ["CairnFuelDeps", "CairnFuelTodayController", "CairnFuelMealsController", "CairnFuelLogController", "CairnIdeaCardController", "CairnFuelToday"],
   // Read through Array.isArray((globalThis).ME_SEG) — absent reads as "no bar yet".
   "app-tabs.js": ["ME_SEG"],
 };
@@ -224,6 +230,8 @@ test("every eager reach into a lazy bundle waits for that bundle", () => {
 test("a lazy bundle reaches another lazy bundle only through a declared dependency", () => {
   const offenders = refs
     .filter((r) => r.fromLazy && !r.guarded && !closure(r.fromLazy).has(r.defLazy))
+    .filter((r) => !(r.routed && closure(r.routed).has(r.defLazy)))
+    .filter((r) => !(REVIEWED[path.basename(r.from)] || []).includes(r.name))
     .map(where);
   assert.deepEqual(offenders, [], "add the dependency to LAZY_BUNDLE_DEPS in src/client/app/lazy-bundles.ts");
 });

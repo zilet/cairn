@@ -93,7 +93,6 @@
 /* food-note entries (Me) */
 .fnent .fnent-badge{flex:0 0 auto}
 .fnent .sess-head{align-items:center}
-.fnent-done{box-shadow:var(--shadow-sm),inset 3px 0 0 var(--sage)}
 .fn-macros{
   display:inline-block;font-family:var(--font-display);font-variation-settings:"opsz" 60;
   font-weight:var(--weight-semibold);font-size:var(--text-md);color:var(--accent);margin-top:var(--space-3);

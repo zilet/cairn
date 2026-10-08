@@ -9,10 +9,8 @@
    else enters once and stays still. Reduced motion stills all of it.
    ------------------------------------------------------------------- */
 
-/* the app behind the stage: out of reach while the welcome is open, and
-   hidden before the boot decision on a browser that has never onboarded */
-:root:has(body.welcome-open),body.welcome-open{overflow:hidden}
-body:is(.welcome-open,.welcome-pending)>:is(header,#view,.tabbar){visibility:hidden}
+/* (the gate that hides the app behind the stage lives in coach-link.css: the boot
+   sets welcome-pending long before this sheet is fetched) */
 
 .wel{position:fixed;inset:var(--vvt,0px) 0 var(--vvb,0px);z-index:calc(var(--z-tabbar) + 2);overflow-y:auto;overscroll-behavior:contain;
   background:var(--ground);color:var(--ink);-webkit-overflow-scrolling:touch}
@@ -84,11 +82,8 @@ body:is(.welcome-open,.welcome-pending)>:is(header,#view,.tabbar){visibility:hid
 .wel-sub{margin:var(--space-2) 0 0;font-size:var(--text-md);color:var(--muted)}
 
 /* a stone not laid yet is its own outline; laid, it takes its hue and settles */
-.wel-stone{transform-box:fill-box;transform-origin:50% 100%}
-.wel-stone.is-open .stone-rock{fill:transparent;stroke:var(--line-strong);stroke-dasharray:3 3}
-.wel-stone.is-open :is(.stone-sheen,.stone-under,.stone-contact){opacity:0}
+/* (the unbuilt .wel-stone outline lives in coach-link.css: Ask's connect card draws it) */
 .wel-stone.is-laid{animation:wel-settle 560ms var(--ease) both}
-.wel-stone :is(.stone-sheen,.stone-under,.stone-contact){transition:opacity var(--dur-2) var(--ease)}
 
 .wel-steps{list-style:none;margin:var(--space-13) 0 0;padding:0}
 .wel-step{position:relative;display:grid;grid-template-columns:28px minmax(0,1fr);column-gap:var(--space-7);padding-bottom:var(--space-11)}

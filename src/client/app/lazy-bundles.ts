@@ -1,6 +1,4 @@
-// "welcome" (the first-run stage and the shared AI sign-in it and Settings use) is not
-// yet in the shared ClientLazyBundleName list, so the loader widens its own name.
-type CairnLazyBundleName = ClientLazyBundleName | "welcome";
+type CairnLazyBundleName = ClientLazyBundleName;
 
 // @ts-check
 // On-demand loader for app-shell bundles index.html does NOT load eagerly.
@@ -31,42 +29,78 @@ type CairnLazyBundleName = ClientLazyBundleName | "welcome";
     "horizon": "/js/bundle-09-horizon.js",
     "ask": "/js/bundle-10-ask.js",
     "settings": "/js/bundle-11-settings.js",
-    // The calendar: the day's views (chip, row, compact, full), its page and the drill
-    // controller. Today's strip, Program and Horizon all reach it.
+    // The day's glance (chip and row): Today's strip and the week lists draw them.
+    "glance": "/js/bundle-18-glance.js",
+    // The day view's movement rows, run structure and body: Program, Horizon, the plan editor.
+    "day-view": "/js/bundle-19-day-view.js",
+    // The calendar: a day's page and peek and the drill controller. Opened on a tap.
     "calendar": "/js/bundle-12-calendar.js",
+    // The journey reads and run-plan cards Train and Horizon both paint.
+    "journey": "/js/bundle-20-journey.js",
+    // The body-metrics surface and the DEXA read: Train's Weight / Measurements and Health.
+    "body": "/js/bundle-21-body.js",
     "meals": "/js/bundle-13-meals.js",
+    // Fuel (the day's food, meal cards, the food composer): opened on a tap, warmed early.
+    "fuel": "/js/bundle-22-fuel.js",
     // Today's below-the-Brief sections (the digest, the week, Coming up, Where you're
     // heading): Today mounts them through withBundle once its frame is painted.
     "today-ahead": "/js/bundle-14-today-ahead.js",
-    // The first-run welcome and the AI sign-in panel (Settings → Agents reuses it).
+    // The first-run welcome (Hello, Connect, Meet).
     "welcome": "/js/bundle-15-welcome.js",
+    // The AI sign-in panel: the welcome's Connect step and Settings → Agents "Connect".
+    "agent-login": "/js/bundle-17-agent-login.js",
     // Sign-in and the passkey ceremonies: a signed-out device (the eager 401 door,
     // token-sheet.ts) and Settings → Devices.
     "auth": "/js/bundle-16-auth.js",
   };
 
+  // A lazy bundle's OWN stylesheet (scripts/build-styles.mjs LAZY_STYLE_SHEETS): the last
+  // partials of the cascade, shipped apart so the routes that never open the surface do
+  // not download its rules. The <link> goes in next to the <script> and the bundle counts
+  // as loaded only once both landed, so its surface never paints unstyled. Same rule as
+  // the scripts: no query string, so the url hash-matches the service worker's entry.
+  // The keys stay in CASCADE order (LAZY_STYLE_SHEETS' own): a sheet is placed before any
+  // loaded sheet that follows it, so what loads first never changes who wins a tie.
+  const LAZY_BUNDLE_CSS: Readonly<Partial<Record<CairnLazyBundleName, string>>> = {
+    "settings": "/css/settings.css",
+    "day-view": "/css/day-view.css",
+    "ask": "/css/ask.css",
+    "horizon": "/css/horizon.css",
+    "welcome": "/css/welcome.css",
+  };
+
   // What else a bundle calls into at render time. Health reuses the body-metrics
-  // figure and the DEXA targeting read (train); Horizon paints the journey reads,
-  // the run-plan cards and the plan week strip (train). Train's Program gallery draws
-  // its movement rows and its week with the day view's shared row (calendar); Today's
-  // lower half draws its week strip with the day's chip and peeks a day (calendar).
+  // figure and the DEXA targeting read (body); Horizon paints the journey reads and
+  // the run-plan cards (journey) and its week's day rows (glance). Train paints the
+  // same journey reads, mounts body metrics, and draws its Program gallery's movement
+  // rows and week with the day view's shared row (day-view). Today's lower half draws
+  // its week strip with the day's chip (glance); a tapped day (Today's strip, Horizon's
+  // week, a Program row) brings the calendar's peek and page (calendar).
   const LAZY_BUNDLE_DEPS: Readonly<Record<CairnLazyBundleName, readonly CairnLazyBundleName[]>> = {
-    "me-health": ["train"],
-    "train": ["calendar"],
-    "horizon": ["train"],
-    "ask": [],
-    // Settings → Agents "Connect" mounts the welcome bundle's sign-in panel.
-    "settings": ["welcome"],
-    calendar: [],
+    "me-health": ["body"],
+    "train": ["day-view", "journey", "body"],
+    "horizon": ["glance", "journey"],
+    // Ask's chat composer mounts the food composer.
+    "ask": ["fuel"],
+    "fuel": [],
+    // Settings → Agents "Connect" mounts the agent-login bundle's sign-in panel.
+    "settings": ["agent-login"],
+    glance: [],
+    "day-view": ["glance"],
+    calendar: ["day-view"],
+    journey: [],
+    body: [],
     meals: [],
-    "today-ahead": ["calendar"],
-    "welcome": [],
+    "today-ahead": ["glance"],
+    // The welcome's Connect step mounts the same sign-in panel.
+    "welcome": ["agent-login"],
+    "agent-login": [],
     "auth": [],
   };
 
   // Warm order after first paint: the homes a tap away first, Settings last.
   // Today's own lower half leads: it is the home every open lands on.
-  const PREFETCH_ORDER: readonly CairnLazyBundleName[] = ["today-ahead", "train", "ask", "horizon", "calendar", "me-health", "meals", "settings", "welcome"];
+  const PREFETCH_ORDER: readonly CairnLazyBundleName[] = ["today-ahead", "fuel", "train", "ask", "horizon", "calendar", "me-health", "meals", "settings", "agent-login", "welcome"];
 
   const inflight = new Map<CairnLazyBundleName, Promise<void>>();
   const executed = new Set<CairnLazyBundleName>();
@@ -105,6 +139,47 @@ type CairnLazyBundleName = ClientLazyBundleName | "welcome";
       .catch(() => {});
   }
 
+  /** The bundle's stylesheet, in once; resolves when it has loaded. Rejects on a failed fetch. */
+  function injectSheet(name: CairnLazyBundleName, href: string): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const existing = document.querySelector<HTMLLinkElement>(`link[data-cairn-sheet="${name}"]`);
+      if (existing?.dataset.cairnSheetLoaded === "1") {
+        resolve();
+        return;
+      }
+      const link = existing || document.createElement("link");
+      link.addEventListener(
+        "load",
+        () => {
+          link.dataset.cairnSheetLoaded = "1";
+          resolve();
+        },
+        { once: true }
+      );
+      link.addEventListener(
+        "error",
+        () => {
+          // Drop the tag so the next attempt re-requests it.
+          link.remove();
+          reject(new Error(`failed to load ${href}`));
+        },
+        { once: true }
+      );
+      if (!existing) {
+        link.rel = "stylesheet";
+        link.dataset.cairnSheet = name;
+        link.href = href;
+        const rank = Object.keys(LAZY_BUNDLE_CSS).indexOf(name);
+        link.dataset.cairnSheetRank = String(rank);
+        const follower = Array.from(document.querySelectorAll?.<HTMLLinkElement>("link[data-cairn-sheet]") ?? []).find(
+          (other) => Number(other.dataset.cairnSheetRank) > rank && other.parentNode
+        );
+        if (follower?.parentNode) follower.parentNode.insertBefore(link, follower);
+        else (document.head || document.documentElement).appendChild(link);
+      }
+    });
+  }
+
   function injectBundle(name: CairnLazyBundleName, src: string): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       if (typeof document === "undefined") {
@@ -118,11 +193,33 @@ type CairnLazyBundleName = ClientLazyBundleName | "welcome";
       }
       const script = existing || document.createElement("script");
       script.dataset.cairnBundle = name;
+      // The script and its sheet fetch side by side; the bundle is loaded when both are.
+      const href = LAZY_BUNDLE_CSS[name];
+      const sheet = href ? injectSheet(name, href) : Promise.resolve();
+      sheet.catch(() => {}); // handled below, once the script lands
+      const ready = (): void => {
+        sheet.then(
+          () => {
+            script.dataset.cairnBundleLoaded = "1";
+            resolve();
+          },
+          (error) => {
+            // The code is here but its styles are not: the next attempt retries the sheet.
+            inflight.delete(name);
+            reject(error);
+          }
+        );
+      };
+      // A retry after a failed sheet: the script already ran, only the sheet is owed.
+      if (existing?.dataset.cairnScriptDone === "1") {
+        ready();
+        return;
+      }
       script.addEventListener(
         "load",
         () => {
-          script.dataset.cairnBundleLoaded = "1";
-          resolve();
+          script.dataset.cairnScriptDone = "1";
+          ready();
         },
         { once: true }
       );
@@ -258,7 +355,7 @@ type CairnLazyBundleName = ClientLazyBundleName | "welcome";
     setTimeout(next, Math.max(0, options.delayMs ?? 1500));
   }
 
-  Object.assign(globalThis, { ensureBundle, bundleLoaded, withBundle, prefetchLazyBundles, LAZY_BUNDLE_SRC, LAZY_BUNDLE_DEPS });
+  Object.assign(globalThis, { ensureBundle, bundleLoaded, withBundle, prefetchLazyBundles, LAZY_BUNDLE_SRC, LAZY_BUNDLE_CSS, LAZY_BUNDLE_DEPS });
 
   if (typeof window !== "undefined") {
     window.ensureBundle = ensureBundle;

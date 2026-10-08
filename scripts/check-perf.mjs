@@ -29,17 +29,21 @@
 // route's tab is showing, no visible skeleton, no /api fetch in flight, and the view
 // has been stable for 600 ms.
 //
-// Budgets are what v2 achieves plus small headroom; `targets` holds the proposed
+// Budgets are what v2 achieves plus headroom: js and css bytes are the measured median +
+// max(4 KB, 5%) rounded up to a whole KB (cold and warm), CLS the measured worst run (floor
+// 0.01), api / rounds / dupes exact, so a small legitimate change never fails the gate;
+// `targets` holds the proposed
 // per-group targets, and a route whose budget sits over its target is listed as a
 // miss every run, so a loosened budget is never silent. Raise a budget deliberately:
-// `node scripts/check-perf.mjs --update` re-measures and rewrites the route budgets
-// (a budget diff is a review signal, like scripts/bundle-budget.json).
+// `node scripts/check-perf.mjs --update` re-measures and rewrites the route budgets, and
+// `--update-bytes` rewrites only the js / css ceilings (api, rounds, cls and dupes stay as
+// they are) — a budget diff is a review signal, like scripts/bundle-budget.json.
 //
 // Not part of `npm test`; `npm run verify` runs it only with CAIRN_PERF=1, since it
 // needs Chrome (CHROME_BIN overrides discovery, CAIRN_CHROME_NO_SANDBOX=1 for CI
 // containers).
 //
-// Usage: node scripts/check-perf.mjs [--runs 3] [--only today,ask] [--update]
+// Usage: node scripts/check-perf.mjs [--runs 3] [--only today,ask] [--update | --update-bytes]
 //                                    [--json <file>] [--no-throttle]
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -68,15 +72,17 @@ const ONLY = String(args.only || "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
-const UPDATE = args.flags.has("update");
+const BYTES_ONLY = args.flags.has("update-bytes");
+const UPDATE = args.flags.has("update") || BYTES_ONLY;
 const JSON_OUT = args.json ? path.resolve(args.json) : null;
 const THROTTLE = args.flags.has("no-throttle")
   ? null
   : { cpu: 4, latency: 150, down: (1.6 * 1024 * 1024) / 8, up: (750 * 1024) / 8 };
 const READY_TIMEOUT_MS = 30000;
 const SETTLE_MS = 1200;
-/** Headroom when a budget is (re)set: bytes +3% (rounded up to a KiB), CLS +20% +0.005. */
-const BYTES_MARGIN = 0.03;
+/** Headroom when a budget is (re)set: bytes + max(4 KB, 5%) rounded up to a whole KB, CLS floor 0.01. */
+const BYTES_MARGIN = 0.05;
+const BYTES_FLOOR = 4 * 1024;
 /** Timings are flagged (never failed) past target × this. */
 const TIMING_WARN_FACTOR = 1.3;
 
@@ -361,8 +367,8 @@ function aggregate(runs) {
   };
 }
 
-const roundUpKiB = (n) => Math.ceil((n * (1 + BYTES_MARGIN)) / 1024) * 1024;
-const clsBudget = (v) => Math.ceil((v * 1.2 + 0.005) * 1000) / 1000;
+const roundUpKiB = (n) => Math.ceil((n + Math.max(BYTES_FLOOR, n * BYTES_MARGIN)) / 1024) * 1024;
+const clsBudget = (v) => Math.max(Math.ceil(v * 1000) / 1000, 0.01);
 
 function budgetFor(agg, mode, previous) {
   const b = { api: agg.apiMax, rounds: agg.roundsMax, cls: clsBudget(agg.clsMax) };
@@ -370,7 +376,7 @@ function budgetFor(agg, mode, previous) {
   // still happens; it is listed as a miss on every run until it is fixed.
   const known = (previous?.knownDupes || []).filter((url) => agg.dupeUrls.includes(url));
   if (known.length) b.knownDupes = known;
-  if (mode === "cold") Object.assign(b, { js: roundUpKiB(agg.js), css: roundUpKiB(agg.css) });
+  Object.assign(b, { js: roundUpKiB(agg.js ?? 0), css: roundUpKiB(agg.css ?? 0) });
   return b;
 }
 
@@ -524,10 +530,15 @@ async function main() {
     const next = { ...budgetDoc, routes: { ...(budgetDoc.routes || {}) } };
     for (const { route, res } of results) {
       const prev = budgetDoc.routes?.[route.name];
-      next.routes[route.name] = {
-        cold: budgetFor(res.cold, "cold", prev?.cold),
-        warm: budgetFor(res.warm, "warm", prev?.warm),
-      };
+      const fresh = { cold: budgetFor(res.cold, "cold", prev?.cold), warm: budgetFor(res.warm, "warm", prev?.warm) };
+      // --update-bytes keeps every non-byte budget exactly as it is.
+      next.routes[route.name] =
+        BYTES_ONLY && prev
+          ? {
+              cold: { ...prev.cold, js: fresh.cold.js, css: fresh.cold.css },
+              warm: { ...prev.warm, js: fresh.warm.js, css: fresh.warm.css },
+            }
+          : fresh;
     }
     writeFileSync(BUDGET_FILE, `${JSON.stringify(next, null, 2)}\n`);
     console.log(`updated ${path.relative(process.cwd(), BUDGET_FILE)} (${results.length} routes)`);

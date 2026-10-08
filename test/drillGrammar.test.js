@@ -329,7 +329,7 @@ function loadViews() {
 test("the chip and the row read one glance: the same lift and run words, CairnFmt units, no raw dates", () => {
   const w = loadViews();
   const M = w.CairnDayDetailModel;
-  const V = w.CairnDayDetailView;
+  const V = w.CairnDayGlanceView;
   // The same Thursday from the week read (Today's strip, Horizon) and the look-ahead (Program).
   const weekDay = {
     date: DAY,

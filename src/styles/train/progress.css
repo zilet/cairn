@@ -79,13 +79,6 @@
 .gpace-read-behind{color:var(--ink-2)}
 
 /* volume by muscle group */
-.vol-total{
-  font-family:var(--font-display);font-weight:var(--weight-semibold);font-variation-settings:"opsz" 144;
-  font-size:2.1rem;color:var(--ink);line-height:1;margin-top:var(--space-2);
-  font-variant-numeric:lining-nums;letter-spacing:var(--tracking-tight);
-}
-.vol-total span{font-family:var(--font-ui);font-size:var(--text-sm);font-weight:var(--weight-semibold);color:var(--muted);
-  text-transform:uppercase;letter-spacing:var(--tracking-widest)}
 .volrow{padding:var(--space-5) 0 var(--space-6);border-top:1px solid var(--line)}
 .vol-kicker+.volrow,.volrow:first-child{border-top:0}
 .volrow-top{display:flex;justify-content:space-between;align-items:baseline;gap:var(--space-5);margin-bottom:var(--space-4)}

@@ -100,8 +100,10 @@ function foodDetailDeps(): FoodDetailControllerDeps {
   };
 }
 
+// The detail sheet (and the meal card it mounts) are the lazy fuel bundle's: a tap on a
+// food from Today waits for it only when the idle warm-up has not already fetched it.
 async function openFoodDetail(note: unknown, fromTile?: Element | null): Promise<void> {
-  return CairnFoodDetailController.openFoodDetail(note, fromTile, foodDetailDeps());
+  return withBundle("fuel", () => CairnFoodDetailController.openFoodDetail(note, fromTile, foodDetailDeps()));
 }
 function gotoChatWith(text: string): void {
   state.tab = "chat";
@@ -168,7 +170,7 @@ function uiSegmentsDeps(): UiSegmentsDeps {
     renderEnergy: () => withLatestRender("train", () => renderEnergy()),
     renderPlanEditor: () => withLatestRender("train", () => renderPlanEditor()),
     renderPlanEndurance: () => withLatestRender("horizon", () => renderPlanEndurance()),
-    renderFoodJournal: () => renderFoodJournal(),
+    renderFoodJournal: () => withLatestRender("fuel", () => renderFoodJournal()),
     renderMeals: () => renderMeals(),
     renderCoach: () => withLatestRender("ask", () => renderCoach()),
   };

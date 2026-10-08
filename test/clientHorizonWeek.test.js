@@ -53,7 +53,7 @@ const MODULES = [
 ];
 
 function load(globals = {}) {
-  return loadClientModule(MODULES, { globals: { Intl, localISO: () => TODAY, ...globals } });
+  return loadClientModule(MODULES, { globals: { Intl, localISO: () => TODAY, withBundle: (_name, fn) => fn(), ...globals } });
 }
 
 const plain = (value) => JSON.parse(JSON.stringify(value));

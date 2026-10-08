@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
 import ts from "typescript";
-import { buildStyles } from "./build-styles.mjs";
+import { buildStyles, LAZY_STYLE_SHEETS, lazySheetPath } from "./build-styles.mjs";
 import { writeLazyRouteTable } from "./lazy-route-preload.mjs";
 
 const currentFile = fileURLToPath(import.meta.url);
@@ -637,17 +637,39 @@ export const BUNDLES = [
     ],
   },  {
     output: "public/js/bundle-04-coach-meals.js",
-    label: "coach proposals + Fuel",
+    label: "coach proposals + the Fuel screen's frame",
+    // EAGER and small: the proposal controller (its job reconnector must register at
+    // boot, and Ask, Horizon and the meal planner call into it), the Fuel screen's frame
+    // (06-coach-meals: the meal keys every surface names, the Changes controls, the
+    // dispatch into the Fuel surface) and the food-note words (ui-shell and Health
+    // format with them). The Fuel surface itself is the lazy "fuel" bundle that follows.
     inputs: [
       "public/js/coach-proposal-controller.js",
       "public/js/06-coach-meals.js",
       // Food-note formatting + the food detail sheet USED to head bundle-05.
-      // They are food, not health: the Fuel surface (this bundle) and
-      // ui-shell (bundle-01) call them from the Plan/Today surfaces, which must
-      // keep working without the lazily-loaded Me/Health bundle. Moving them
-      // here keeps the canonical <script> order byte-for-byte — bundle-04 runs
-      // immediately before bundle-05, and these were its first two entries.
+      // They are food, not health: the Fuel surface and ui-shell (bundle-01) call
+      // them from the Plan/Today surfaces, which must keep working without the
+      // lazily-loaded Me/Health bundle.
       "public/js/food-note-client.js",
+      // The chat layout (viewport / keyboard geometry): chat-turn-client (Ask) reads it as
+      // it loads and the food composer (Fuel) when it mounts, so neither lazy bundle owns it.
+      "public/js/chat-layout-client.js",
+    ],
+  },
+  {
+    output: "public/js/bundle-22-fuel.js",
+    label: "Fuel (the day's food, meal cards, the food composer)",
+    // LAZY: the Fuel surface (Plan → Food, /app/today/fuel) and the pieces only it and
+    // Ask's chat composer use: the meal card (and the food detail sheet that mounts it),
+    // the day's fuel read, the meals list, the log composer, the ideas card and the food
+    // composer with the chat primitives it mounts. Today never needs it until a tap
+    // opens Fuel or a food, so it is not in the first open's bytes; the idle warm-up
+    // fetches it right after Today's lower half, and a deep link preloads it. Ask
+    // depends on it (the chat composer mounts the food composer). 06-coach-meals
+    // (eager) dispatches into it only under lazy("fuel").
+    lazy: "fuel",
+    views: ["plan:food"],
+    inputs: [
       // The meal card (v2 wave 2): the food detail sheet mounts it from inside a
       // function, and Fuel reaches it the same way.
       "public/js/meal-card-model.js",
@@ -666,12 +688,9 @@ export const BUNDLES = [
       "public/js/idea-card-client.js",
       "public/js/idea-card-controller.js",
       "public/js/fuel-deps.js",
-      // The food composer (Today → Fuel logging) and the three chat primitives it
-      // mounts USED to open the chat bundle. Fuel is eager and Ask is lazy, so they
-      // ride here, at the tail of the bundle that ran immediately before them —
-      // the canonical order of everything that stays eager is unchanged. The
-      // photo-compression constants they read (chat-client) ride the ask bundle:
-      // compressImage awaits it on the first photo.
+      // The food composer (Fuel's log, Ask's chat composer) and the chat primitives it
+      // mounts. The photo-compression constants they read (chat-client) ride the ask
+      // bundle: compressImage awaits it on the first photo.
       "public/js/chat-attachment-client.js",
       "public/js/chat-composer-focus-client.js",
       "public/js/food-composer-model.js",
@@ -679,9 +698,9 @@ export const BUNDLES = [
       "public/js/food-composer-chips-controller.js",
       "public/js/food-composer-turn-controller.js",
       "public/js/food-composer-controller.js",
-      "public/js/chat-layout-client.js",
     ],
-  },  {
+  },
+  {
     output: "public/js/bundle-05-me-health.js",
     label: "Me / Health / Records",
     // LAZY: index.html does not load this one. ~470 KB of classic script that
@@ -790,7 +809,6 @@ export const BUNDLES = [
     views: ["progress", "plan:edit"],
     inputs: [
       // Run/strength plan-item helpers: only the plan editor and the run plan read them.
-      "public/js/cardio-plan-client.js",
       "public/js/progress-data-client.js",
       "public/js/endurance-format-client.js",
       "public/js/progress-endurance-client.js",
@@ -802,15 +820,12 @@ export const BUNDLES = [
       "public/js/progress-history-model-client.js",
       "public/js/progress-history-render-client.js",
       "public/js/progress-history-client.js",
-      "public/js/progress-run-plan-client.js",
       "public/js/progress-route-deps-client.js",
-      "public/js/train-fan-in-client.js",
       "public/js/progress-endurance-controller.js",
       "public/js/progress-volume-client.js",
       "public/js/progress-intake-client.js",
       "public/js/progress-calendar-client.js",
       "public/js/progress-muscle-trajectory-client.js",
-      "public/js/progress-dexa-targeting-client.js",
       "public/js/progress-performance-client.js",
       "public/js/progress-program-adjustments-client.js",
       "public/js/progress-test-week-client.js",
@@ -821,19 +836,44 @@ export const BUNDLES = [
       "public/js/program-week-controller.js",
       "public/js/progress-exercise-suggestions-client.js",
       "public/js/progress-program-controller.js",
-      "public/js/journey-progress-client.js",
-      "public/js/journey-timeline-client.js",
       "public/js/train-focus-card-client.js",
       "public/js/progress-overview-client.js",
-      "public/js/plan-week-client.js",
-      "public/js/body-metrics-client.js",
       "public/js/progress-volume-route-client.js",
       "public/js/05-progress.js",
       "public/js/plan-editor-client.js",
       "public/js/plan-editor-form-client.js",
-      "public/js/plan-head-client.js",
       "public/js/plan-editor-controller.js",
     ],
+  },
+  {
+    output: "public/js/bundle-20-journey.js",
+    label: "The journey reads and run-plan cards (Train and Horizon both paint them)",
+    // LAZY: the journey reads (progress, timeline), the run-plan cards, the plan head's
+    // upcoming note and the train fan-in they share. Train's overview and plan editor
+    // paint them, and so does Horizon; each depends on this bundle instead of Horizon
+    // dragging in all of Train. No route renders it.
+    lazy: "journey",
+    routeless: true,
+    inputs: [
+      // Run/strength plan-item helpers: the run plan reads them (so does the plan editor).
+      "public/js/cardio-plan-client.js",
+      "public/js/progress-run-plan-client.js",
+      "public/js/train-fan-in-client.js",
+      "public/js/journey-progress-client.js",
+      "public/js/journey-timeline-client.js",
+      "public/js/plan-head-client.js",
+      "public/js/plan-week-client.js",
+    ],
+  },
+  {
+    output: "public/js/bundle-21-body.js",
+    label: "Body metrics (the muscle figure, measurements, the DEXA read)",
+    // LAZY: the body-metrics surface and the DEXA targeting read. Train's Weight and
+    // Measurements views mount it, and so does Health (Stand); each depends on this
+    // bundle, so Health does not load all of Train. No route renders it.
+    lazy: "body",
+    routeless: true,
+    inputs: ["public/js/progress-dexa-targeting-client.js", "public/js/body-metrics-client.js"],
   },
   {
     output: "public/js/bundle-09-horizon.js",
@@ -843,6 +883,18 @@ export const BUNDLES = [
     lazy: "horizon",
     views: ["horizon", "plan:endurance"],
     inputs: [
+      // The shared time objects (docs/IA.md "Component architecture"): the week's model
+      // and its shape strip, the milestone row and the goal row (Week and Season both
+      // draw them), and the frame line (Week's hero, To the race's). Only Horizon draws
+      // them today, so they ship here rather than in the calendar every Today open loads.
+      "public/js/milestone-row-model.js",
+      "public/js/milestone-row-client.js",
+      "public/js/goal-row-model.js",
+      "public/js/goal-row-client.js",
+      "public/js/frame-line-client.js",
+      "public/js/journey-trail-client.js",
+      "public/js/week-model.js",
+      "public/js/week-strip-client.js",
       "public/js/plan-endurance-model.js",
       "public/js/plan-endurance-client.js",
       "public/js/plan-endurance-briefing-client.js",
@@ -869,7 +921,7 @@ export const BUNDLES = [
     output: "public/js/bundle-10-ask.js",
     label: "Ask (chat thread + what-if ripple card)",
     // LAZY: the Ask thread. The food composer and the chat primitives it shares
-    // with Fuel stay eager in bundle-04.
+    // with Fuel ride the fuel bundle, which Ask depends on.
     lazy: "ask",
     views: ["chat", "plan:coach"],
     inputs: [
@@ -903,15 +955,13 @@ export const BUNDLES = [
     ],
   },
   {
-    output: "public/js/bundle-15-welcome.js",
-    label: "The first-run welcome + the AI sign-in panel",
-    // LAZY: the full-screen welcome (/app/welcome — Hello, Connect, Meet) and the
-    // friendly AI sign-in it shares with Settings → Agents "Connect". It renders over
-    // the app rather than as a view, so no route dispatches to it: it is opened by the
-    // boot decision (app/onboarding.ts), Today's coach line and Ask's connect card,
-    // all through CairnCoachLink.openWelcome. Listed before Settings, which depends on
-    // it, so the sign-in modules keep their place ahead of the Settings screen.
-    lazy: "welcome",
+    output: "public/js/bundle-17-agent-login.js",
+    label: "The AI sign-in panel (Settings → Agents \"Connect\" and the welcome's Connect step)",
+    // LAZY: the friendly AI sign-in (the panel, its session, the Connect modal). The
+    // welcome and Settings both depend on it (LAZY_BUNDLE_DEPS), so Settings does not pay
+    // for the first-run stage. No route dispatches to it. Listed before the welcome and
+    // Settings so the sign-in modules keep their place ahead of both.
+    lazy: "agent-login",
     routeless: true,
     inputs: [
       "public/js/agent-login-model-client.js",
@@ -920,6 +970,19 @@ export const BUNDLES = [
       "public/js/agent-login-session-client.js",
       "public/js/agent-login-panel-client.js",
       "public/js/agent-login-client.js",
+    ],
+  },
+  {
+    output: "public/js/bundle-15-welcome.js",
+    label: "The first-run welcome",
+    // LAZY: the full-screen welcome (/app/welcome — Hello, Connect, Meet). It renders
+    // over the app rather than as a view, so no route dispatches to it: it is opened by
+    // the boot decision (app/onboarding.ts), Today's coach line and Ask's connect card,
+    // all through CairnCoachLink.openWelcome. Its Connect step mounts the AI sign-in
+    // panel (the "agent-login" bundle it depends on).
+    lazy: "welcome",
+    routeless: true,
+    inputs: [
       "public/js/welcome-model.js",
       "public/js/welcome-client.js",
       "public/js/welcome-connect-controller.js",
@@ -959,37 +1022,40 @@ export const BUNDLES = [
     ],
   },
   {
+    output: "public/js/bundle-18-glance.js",
+    label: "The day's glance (the chip, the row and the words they print)",
+    // LAZY: a day as a chip (Today's "What's ahead" strip) or a row (Program's and
+    // Horizon's week lists) and the model that words it. The small half of the day view
+    // family, so Today's lower half draws its strip without the day's body figure, run
+    // structure or page (today-ahead depends on glance; the day-view and the calendar on
+    // top of it). No route renders it.
+    lazy: "glance",
+    routeless: true,
+    inputs: ["public/js/day-detail-model.js", "public/js/day-glance-model.js", "public/js/day-glance-view.js"],
+  },
+  {
+    output: "public/js/bundle-19-day-view.js",
+    label: "The day view (a day's movement rows, run structure and full body)",
+    // LAZY: the day view's movement row (shared with the Program gallery and the plan
+    // editor) and the run structure, plus the full and compact day body built from them.
+    // Train and Horizon draw their rows with it (they depend on day-view); the calendar's
+    // page and peek mount it. No route renders it.
+    lazy: "day-view",
+    routeless: true,
+    inputs: ["public/js/day-detail-run-client.js", "public/js/day-detail-client.js"],
+  },
+  {
     output: "public/js/bundle-12-calendar.js",
-    label: "The calendar (a day's page, peek and views; the drill controller)",
+    label: "The calendar (a day's page and peek; the drill controller)",
     // LAZY: any day that is not today, read-only (v2 wave 7, "Today is Home"), at its
     // home-free page /app/day/<date>. The opener (day-open-client, eager in bundle-02)
-    // injects this on the first open. It carries the ONE day view family (chip, row,
-    // compact, full) and the ONE drill controller (CairnDrill): Today's "What's ahead"
-    // strip draws its chips and peeks a day (today-ahead depends on calendar), and
-    // Train's Program draws its movement rows and week rows (train depends on calendar).
-    // It also carries the shared time objects (docs/IA.md "Component architecture"): the
-    // week's model and its shape strip, the milestone row and the goal row (Horizon's
-    // Week and Season both draw them), and the frame line (Week's hero, To the race's).
+    // injects this on the first open. It carries the ONE drill controller (CairnDrill) and
+    // the day's page over the day view (day-view, which it depends on): Today's "What's
+    // ahead" strip peeks a day through it on a tap, and Program and Horizon open a day
+    // through it. The strip's own chips are the glance bundle.
     lazy: "calendar",
     views: ["day"],
-    inputs: [
-      "public/js/day-detail-model.js",
-      "public/js/day-glance-model.js",
-      "public/js/day-detail-run-client.js",
-      "public/js/day-detail-client.js",
-      "public/js/day-glance-view.js",
-      "public/js/day-detail-controller.js",
-      "public/js/day-record-client.js",
-      "public/js/drill-controller.js",
-      "public/js/milestone-row-model.js",
-      "public/js/milestone-row-client.js",
-      "public/js/goal-row-model.js",
-      "public/js/goal-row-client.js",
-      "public/js/frame-line-client.js",
-      "public/js/journey-trail-client.js",
-      "public/js/week-model.js",
-      "public/js/week-strip-client.js",
-    ],
+    inputs: ["public/js/day-detail-controller.js", "public/js/day-record-client.js", "public/js/drill-controller.js"],
   },
   {
     output: "public/js/bundle-13-meals.js",
@@ -1247,6 +1313,8 @@ export function pruneBundleIntermediates() {
 export const PRECOMPRESS_EXTRA = [
   "public/index.html",
   "public/styles.css",
+  // The lazy bundles' own sheets (scripts/build-styles.mjs LAZY_STYLE_SHEETS).
+  ...Object.keys(LAZY_STYLE_SHEETS).map(lazySheetPath),
   "public/art.js",
   "public/cairn-body-figure.js",
   // The vendored terminal (Settings → Agents "Connect") is precached by the service

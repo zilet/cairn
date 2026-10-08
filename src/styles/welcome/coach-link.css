@@ -51,3 +51,14 @@
 .fw-d{font-family:var(--font-mono);font-size:var(--text-2xs);letter-spacing:var(--tracking-mono);text-transform:uppercase;color:var(--muted)}
 .fw-n{font-size:var(--text-base);color:var(--ink);overflow-wrap:anywhere}
 .fw-see{justify-self:start;margin-top:var(--space-3);min-height:44px;padding:0 var(--space-10)}
+
+/* ---- Shared with the welcome (whose own sheet is lazy: welcome/welcome.css) ---- */
+/* the app behind the stage: out of reach while the welcome is open, and
+   hidden before the boot decision on a browser that has never onboarded */
+:root:has(body.welcome-open),body.welcome-open{overflow:hidden}
+body:is(.welcome-open,.welcome-pending)>:is(header,#view,.tabbar){visibility:hidden}
+/* a stone not laid yet is its own outline (Ask's connect card draws three) */
+.wel-stone{transform-box:fill-box;transform-origin:50% 100%}
+.wel-stone.is-open .stone-rock{fill:transparent;stroke:var(--line-strong);stroke-dasharray:3 3}
+.wel-stone.is-open :is(.stone-sheen,.stone-under,.stone-contact){opacity:0}
+.wel-stone :is(.stone-sheen,.stone-under,.stone-contact){transition:opacity var(--dur-2) var(--ease)}

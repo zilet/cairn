@@ -61,19 +61,10 @@
   letter-spacing:var(--tracking-wider);text-transform:none;color:inherit;opacity:.75;
 }
 
-.logdate{display:flex;align-items:center;gap:var(--space-5);margin:0 0 var(--space-6)}
-.logdate-lbl{flex:0 0 auto}
 .logdate-lbl,.ql-recent-h{
   font-family:var(--font-ui);text-transform:uppercase;letter-spacing:var(--tracking-widest);
   font-size:var(--text-2xs);font-weight:var(--weight-semibold);color:var(--muted);
 }
-.logdate input[type="date"]{
-  flex:1;min-width:0;background:var(--card-2);border:1px solid var(--line);
-  color:var(--ink);border-radius:var(--radius-sm);padding:var(--space-5) var(--space-6);
-  font-family:var(--font-ui);font-size:var(--text-md);-webkit-appearance:none;color-scheme:light;
-}
-.logdate-today{margin-top:0;flex:0 0 auto;padding:var(--space-5) var(--space-7);border-style:solid;
-  border-color:var(--accent);color:var(--accent)}
 
 /* active life-context banner — Atelier v2: a quiet line under the read, not a
    card above it. A small dawn-free dot leads; the events run inline, muted. */
