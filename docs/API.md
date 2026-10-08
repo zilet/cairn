@@ -12,7 +12,7 @@ The OAuth 2.1 doors an AI app signs in through for `/mcp` (`/.well-known/oauth-*
 [OPERATIONS.md](OPERATIONS.md) "Connect an AI app (MCP)".
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**404 routes** across 134 groups.
+**405 routes** across 134 groups.
 
 ## `/activities`
 
@@ -822,6 +822,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 |---|---|---|
 | GET | `/api/settings` |  |
 | PUT | `/api/settings` |  |
+| POST | `/api/settings/units/detect` | The PWA's one-time first-run hint: its locale and zone. A fresh install that never chose units adopts the units they point at (unit-system.ts); anything else is a no-op that answers with the units in effect. Never overrides a choice the person made. |
 
 ## `/since-last`
 

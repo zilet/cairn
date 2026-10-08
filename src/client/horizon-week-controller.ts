@@ -8,7 +8,9 @@
 // with "Open day ›" (the day's page, read under Horizon). Tapping the open column again,
 // its Close, or Back folds it. A row (the day-by-day rows, still open) opens the day's
 // page through `data-open-day` (day-open-client.ts → CairnDrill). "All of the season ›"
-// hands over to the screen. Fetch + paint + delegate only; every word is the read's.
+// hands over to the screen. A journey label opens that mark's words under the trail (no
+// repaint); a starter opener hands chat its sentence (state.chatPrefill, the same hand-off
+// the health surfaces use) and switches to Ask — never sent for the athlete. Fetch + paint + delegate only; every word is the read's.
 {
   type Deps = {
     peek(key: string): { data: unknown; fresh: boolean } | null;
@@ -37,6 +39,7 @@
     let lastRaw = "";
     let model: ClientWeekLanding | null = null;
     let selected: string | null = null;
+    let mark = 0;
     let detailTeardown: (() => void) | null = null;
     const host = slot as HTMLElement;
     const q = <T extends Element = HTMLElement>(sel: string): T | null => host.querySelector<T>(sel);
@@ -120,7 +123,8 @@
       detailTeardown = null;
       selected = null;
       const calm = typeof deps.reducedMotion === "function" ? deps.reducedMotion() : false;
-      host.innerHTML = CairnHorizonWeek.landingHtml(next, { enter: enter && !calm, seasonHref: deps.seasonHref });
+      if (!next.journey || mark >= next.journey.marks.length) mark = 0;
+      host.innerHTML = CairnHorizonWeek.landingHtml(next, { enter: enter && !calm, seasonHref: deps.seasonHref, mark });
       if (keep && next.days.some((d) => d.date === keep)) openDay(keep);
     }
 
@@ -131,6 +135,30 @@
           if (!date) return;
           if (selected === date) foldDay();
           else openDay(date);
+        },
+        "hjour-mark": (el) => {
+          const i = Number(el.getAttribute("data-hjour-mark"));
+          const marks = model?.journey?.marks ?? [];
+          if (!Number.isInteger(i) || !marks[i] || typeof CairnJourneyTrail === "undefined") return;
+          mark = i;
+          host.querySelectorAll<HTMLElement>("[data-hjour-mark]").forEach((b) => {
+            b.setAttribute("aria-pressed", b === el ? "true" : "false");
+          });
+          host.querySelectorAll<HTMLElement>("[data-hjour-node]").forEach((n) => {
+            n.classList.toggle("is-on", n.getAttribute("data-hjour-node") === String(i));
+          });
+          const detail = q("[data-hjour-detail]");
+          if (detail) detail.innerHTML = CairnJourneyTrail.detailHtml(marks[i]);
+        },
+        "hjour-ask": (el) => {
+          const prompt = (el.getAttribute("data-hjour-ask") || "").replace(/\s+/g, " ").trim();
+          if (!prompt) return;
+          const g = globalThis as unknown as {
+            state?: { chatPrefill?: string | null };
+            activateTab?: (name: string) => unknown;
+          };
+          if (g.state) g.state.chatPrefill = prompt.slice(0, 600);
+          if (typeof g.activateTab === "function") g.activateTab("chat");
         },
         "hwk-season": (el, event) => {
           if (modified(event)) return;

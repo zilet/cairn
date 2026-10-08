@@ -41,6 +41,29 @@
     return { stage, agent: id || null };
   }
 
+  // A fresh install's units start from this device: its language tag and zone go to
+  // the server once (src/repo/unit-system.ts decides), so a European first open never
+  // reads in miles and pounds. The server ignores it once units were chosen or
+  // detected, or the install has onboarded; the person changes them in Settings.
+  async function hintUnits(data: unknown): Promise<void> {
+    const settings = (data as { settings?: { units_source?: unknown; onboarded?: unknown } } | null)?.settings;
+    if (!settings || settings.units_source !== null || settings.onboarded === true) return;
+    let locale = "";
+    try {
+      locale = navigator.language || "";
+    } catch {}
+    const zone = typeof deviceTimeZone === "function" ? deviceTimeZone() : "";
+    if (!locale && !zone) return;
+    try {
+      const out = (await api("/settings/units/detect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ locale, time_zone: zone }),
+      })) as { applied?: boolean; settings?: { run_units?: unknown; weight_units?: unknown } } | null;
+      if (out?.applied && out.settings && typeof CairnFmt !== "undefined") CairnFmt.set(out.settings);
+    } catch {}
+  }
+
   // The 4s fail-safe above lifts the shell, not the decision: late overlays (the
   // passkey offer) wait for `welcome-undecided` to go, whichever way the boot resolved.
   async function maybeOnboard(): Promise<void> {
@@ -57,9 +80,11 @@
       data = await api("/settings");
       const settings = (data as { settings?: Record<string, unknown> } | null)?.settings;
       if (settings && "art_enabled" in settings) artEnabled = !!settings.art_enabled;
+      if (settings && typeof CairnFmt !== "undefined") CairnFmt.set(settings);
     } catch {
       data = null;
     }
+    await hintUnits(data);
     const model = data ? CairnCoachLink.model(data) : null;
     if (model) swrSet(CairnCoachLink.KEY, model);
     const landing = landingStage();

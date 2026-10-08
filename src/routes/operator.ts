@@ -24,7 +24,7 @@ import { getDiagnostics, ingestClientDiagnosticEvents, parseClientDiagnosticBatc
 import { lastGarminStrengthExportAt } from "../repo/garmin-strength-export.js";
 import { getBuildStamp } from "../build-info.js";
 import { unitsRegistryRead } from "../repo/display-words.js";
-import { athleteUnits } from "../repo/settings.js";
+import { applyDetectedUnits, athleteUnits, unitsSource } from "../repo/settings.js";
 
 export const operatorRouter = Router();
 
@@ -74,6 +74,17 @@ operatorRouter.post("/agent-clis/:name/remove", (req, res) => {
 // a fact about whether the watch is reporting belongs next to "last synced". Derived
 // per request, never stored — a settings column would go stale the moment a night
 // landed. Best-effort: a failure here must not take down the Settings screen.
+// How the units were set rides inside `settings` too, derived (app_state, not a column):
+// "explicit" (the person chose), "detected" (the first-run device guess), or null
+// (untouched defaults — the PWA may still send its one-time hint).
+function unitsState(): { units_source: "explicit" | "detected" | null } {
+  try {
+    return { units_source: unitsSource() };
+  } catch {
+    return { units_source: null };
+  }
+}
+
 function garminInputState(): { garmin_sleep_gap_nights: number | null } {
   try {
     return { garmin_sleep_gap_nights: sleepNightsMissing() };
@@ -93,7 +104,7 @@ function serverDiskSafe(): ServerDisk | null {
 // GET /settings, as one call: the /today aggregate primes the same body.
 export function settingsResponse() {
   return {
-    settings: { ...getSettings(), ...garminInputState() },
+    settings: { ...getSettings(), ...garminInputState(), ...unitsState() },
     // The units registry with the athlete's choices (display-words.ts): the Settings
     // Units group renders from this, so a new unit kind needs no client list of its own.
     units: unitsRegistryRead(athleteUnits()),
@@ -112,13 +123,22 @@ export function settingsResponse() {
 operatorRouter.get("/settings", (_req, res) => res.json(settingsResponse()));
 operatorRouter.put("/settings", (req, res) =>
   res.json({
-    settings: { ...setSettings(req.body ?? {}), ...garminInputState() },
+    settings: { ...setSettings(req.body ?? {}), ...garminInputState(), ...unitsState() },
     units: unitsRegistryRead(athleteUnits()),
     agents: getAgentConfig(),
     route_tasks: listRoutableTasks(),
     garmin_last_export_at: lastGarminStrengthExportAt(),
   })
 );
+
+// The PWA's one-time first-run hint: its locale and zone. A fresh install that never chose
+// units adopts the units they point at (unit-system.ts); anything else is a no-op that
+// answers with the units in effect. Never overrides a choice the person made.
+operatorRouter.post("/settings/units/detect", (req, res) => {
+  const body = req.body ?? {};
+  const result = applyDetectedUnits({ locale: body.locale, timeZone: body.time_zone });
+  res.json({ ...result, settings: { ...getSettings(), ...garminInputState(), ...unitsState() } });
+});
 
 // Agent-run telemetry: ok-rate, per-agent reliability + median latency, and the
 // recent raw attempts. An operator/health view — NOT a user-facing score.

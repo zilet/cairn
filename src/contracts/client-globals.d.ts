@@ -858,6 +858,7 @@ declare global {
       | "lead_mode"
       | "run_units"
       | "weight_units"
+      | "lab_units"
     >;
     settings: Record<string, unknown>;
     data: SettingsScreenData;
@@ -1324,6 +1325,8 @@ declare global {
     pace(secPerKm: unknown, units?: unknown): string;
     weight(lb: unknown, units?: unknown, bare?: boolean): string;
     toLb(value: unknown, units?: unknown): number;
+    length(): "in" | "cm";
+    setLength(unit: "in" | "cm"): "in" | "cm";
     date(iso: unknown, o?: { style?: "short" | "long" | "label" | "ago" | "age"; year?: boolean | "always"; today?: string; fmt?: Intl.DateTimeFormatOptions; utc?: boolean }): string;
     relDay(iso: unknown, today: unknown): string;
     daysBetween(later: unknown, earlier: unknown): number;
@@ -4060,6 +4063,7 @@ declare global {
           | "lead_mode"
           | "run_units"
           | "weight_units"
+          | "lab_units"
         >;
         settings: Record<string, unknown>;
         artSpendHtml: string;
@@ -7098,6 +7102,10 @@ declare global {
     open: ClientWeekOpenRow[];
     next: ClientMilestoneRow[];
     goals: ClientGoalRow[];
+    /** The journey trail (GET /api/week `journey`); null with no dated mark ahead. */
+    journey: import("./week-read.js").WeekReadJourney | null;
+    /** The read is the week holding today (the journey and its starter belong to it alone). */
+    this_week: boolean;
   };
   /** One dated row on a line of time (milestone-row-model.ts): Horizon's Next up and the Season. */
   type ClientMilestoneRow = {
@@ -7306,10 +7314,20 @@ declare global {
       ribbonHtml(frame: import("./week-read.js").WeekReadFrame | null | undefined): string;
     };
     /** LAZY "horizon" bundle (horizon-week-client.ts): Horizon's Week landing. */
+    /** LAZY "calendar" bundle (journey-trail-client.ts): the road to the furthest dated goal. */
+    CairnJourneyTrail: {
+      trailHtml(
+        journey: import("./week-read.js").WeekReadJourney | null | undefined,
+        opts?: { selected?: number; enter?: boolean }
+      ): string;
+      detailHtml(mark: import("./week-read.js").WeekReadJourneyMark | null | undefined): string;
+      starterHtml(opts?: { hasGoals?: boolean }): string;
+      trailY(x: number): number;
+    };
     CairnHorizonWeek: {
       landingHtml(
         model: ClientWeekLanding,
-        opts?: { enter?: boolean; selected?: string | null; seasonHref?: string }
+        opts?: { enter?: boolean; selected?: string | null; seasonHref?: string; mark?: number }
       ): string;
       skeletonHtml(): string;
       errorHtml(): string;
@@ -7386,6 +7404,7 @@ declare global {
   declare const CairnGoalRow: Window["CairnGoalRow"];
   declare const CairnFrameLine: Window["CairnFrameLine"];
   declare const CairnHorizonWeek: Window["CairnHorizonWeek"];
+  declare const CairnJourneyTrail: Window["CairnJourneyTrail"];
   declare const CairnHorizonWeekController: Window["CairnHorizonWeekController"];
   declare const CairnHorizon: Window["CairnHorizon"];
   declare const CairnHorizonTerrain: Window["CairnHorizonTerrain"];

@@ -10,7 +10,8 @@ import {
   reconcileDirectives,
   updateDirective,
 } from "./directives.js";
-import { hydrateDirective, listActiveDirectives } from "./directives-read.js";
+import { hydrateDirective, listActiveDirectives, presentDirective } from "./directives-read.js";
+import { labUnitSystem } from "./settings.js";
 // The pure feedback policy (what a Done/Dismiss means for a pass) lives there; this
 // module only reads the feedback rows and writes the reconcile.
 import {
@@ -1324,6 +1325,10 @@ function collectGenericLongTail(
     const verdict = flagFeedbackVerdict(feedback, flag, m?.latest?.date);
     if (verdict === "suppress") continue;
     const value = m?.latest?.value;
+    // STORED text is unit-neutral: the series' own value and unit (a recognized analyte's
+    // canonical unit), never the athlete's display system — that is applied when the row
+    // is read (renderLabQuantities, directives-read.ts), so a unit switch never rewrites
+    // this row or mints a decision event.
     const valStr = value != null && value !== "" ? ` (${value}${m?.unit ? ` ${m.unit}` : ""})` : "";
     const readingDate: string | null = m?.latest?.date ?? null;
     desired.push(
@@ -1934,6 +1939,7 @@ function directiveDisplayMarker(marker: string | null | undefined): string | nul
 }
 
 export function directiveFeedbackForCoach(limit = 12) {
+  const system = labUnitSystem();
   return (
     db
       .prepare(
@@ -1945,7 +1951,7 @@ export function directiveFeedbackForCoach(limit = 12) {
       )
       .all(limit) as any[]
   )
-    .map(hydrateDirective)
+    .map((row) => presentDirective(row, system))
     .map((d: any) => ({
       status: d.status,
       status_at: d.status_at || d.created_at,

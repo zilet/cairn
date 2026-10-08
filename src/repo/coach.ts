@@ -125,7 +125,9 @@ import {
   recentAppliedRotations,
   upcomingBrainDecisions,
 } from "./brain-decisions.js";
-import { athleteUnits, getSettings } from "./settings.js";
+import { athleteUnits, getSettings, labUnitSystem } from "./settings.js";
+import { normalizeMarkerReading } from "./lab-units.js";
+import { presentSourceMarker } from "./lab-display.js";
 import { weekStage } from "./week-stage.js";
 import { weightTrendRead } from "./weight-trend.js";
 import { latestBrainEvaluation } from "./brain-evaluations.js";
@@ -154,6 +156,7 @@ function healthForCoach() {
   const docs = db
     .prepare(`SELECT * FROM health_documents ORDER BY doc_date DESC, id DESC LIMIT 5`)
     .all() as any[];
+  const labSystem = labUnitSystem();
   return docs.map((d) => {
     const h = hydrateHealthDoc(d);
     // A modern panel lists 100+ markers; a flat slice(0,30) in parse order can drop
@@ -161,7 +164,13 @@ function healthForCoach() {
     // because the lab printed the normal CBC first. Rank flagged (low/high) and
     // out-of-optimal markers ahead of the in-range ones, THEN cap — so the coach
     // always sees the concerning ones. Stable for ties (preserves parse order).
-    const markers = Array.isArray(h.parsed?.markers) ? rankDocMarkers(h.parsed.markers).slice(0, 30) : undefined;
+    // Ranked in canonical units, then shown in the athlete's lab-unit system (the
+    // value as the lab printed it rides along as `reported` when that differs).
+    const markers = Array.isArray(h.parsed?.markers)
+      ? rankDocMarkers(h.parsed.markers)
+          .slice(0, 30)
+          .map((m: any) => presentSourceMarker(m, labSystem))
+      : undefined;
     const clinical_facts = cleanClinicalFacts(h.parsed?.clinical_facts, 12).map((f: any) => ({
       kind: f.kind,
       date: f.date,
@@ -191,7 +200,12 @@ function rankDocMarkers(markers: any[]): any[] {
     if (flag === "low" || flag === "high") return 1000; // lab-flagged outranks everything
     const z = matchOptimalZone(m?.name);
     if (!z) return 0;
-    const v = typeof m?.value === "number" ? m.value : Number(m?.value);
+    // The band is in the analyte's canonical unit: a source printed in the other system
+    // (LDL 3.2 mmol/L) is converted first, and one with no safe conversion is unranked —
+    // never a mmol/L number measured against a mg/dL band.
+    const norm = normalizeMarkerReading(String(m?.name ?? ""), m?.value, m?.unit ?? null, z);
+    if (!norm || norm.unit_mismatch) return 0;
+    const v = typeof norm.value === "number" ? norm.value : Number(norm.value);
     if (!Number.isFinite(v)) return 0;
     // 0..1 distance from optimal → 0..100, so off-optimal sorts above in-range.
     return optimalDistance(v, z) * 100;

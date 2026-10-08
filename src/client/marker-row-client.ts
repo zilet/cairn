@@ -15,7 +15,9 @@
     key?: unknown;
     name?: unknown;
     unit?: unknown;
-    latest?: { value?: unknown; date?: unknown; flag?: unknown } | null;
+    // `reported`: the value as its lab printed it when that was another unit system
+    // (src/repo/lab-display.ts) — the shown value is in the athlete's lab units.
+    latest?: { value?: unknown; date?: unknown; flag?: unknown; reported?: unknown } | null;
     prev?: { value?: unknown } | null;
     status_basis?: unknown;
     status_note?: unknown;
@@ -87,7 +89,7 @@
       </div>
       <span class="hmk-right">
         ${deltaHtml(marker)}
-        <span class="hmk-val${valClass}">${escHtml(HM().formatMarkerNumber(latest.value))}${unit}</span>
+        <span class="hmk-val${valClass}"${latest.reported ? ` title="${escAttr(`As reported: ${String(latest.reported)}`)}"` : ""}>${escHtml(HM().formatMarkerNumber(latest.value))}${unit}</span>
         <span class="hmk-chev${exp ? "" : " hmk-chev-ghost"}" aria-hidden="true">${exp ? "▾" : ""}</span>
       </span>`;
     // A marker currently shaping training/meals/watch says so in the directive's OWN

@@ -4,6 +4,8 @@ import { cleanClinicalFacts } from "./health.js";
 import { dicomTechnicalExport, listImagingStudiesStructured } from "./imaging.js";
 import { getProfile } from "./profile.js";
 import { prioritizeMarkers } from "./propagation.js";
+import { labUnitSystemWords, presentMarkerRow } from "./lab-display.js";
+import { labUnitSystem } from "./settings.js";
 import { listSupplements } from "./supplements.js";
 
 // ---------- FHIR-inspired structured health export (F4) ----------
@@ -103,8 +105,11 @@ export function buildHealthExport() {
   // prioritizeMarkers is the superset: per-marker latest + full points[] history +
   // optimal band + in_optimal + group + trend + forecast (impact_score stripped).
   const { markers, groups, flagged_count } = prioritizeMarkers();
+  // Values in the athlete's lab-unit system (src/repo/lab-display.ts); the optimal
+  // status above was already read in canonical units, and conversion never flips it.
+  const labSystem = labUnitSystem();
 
-  const observations = markers.map((m: any) => {
+  const observations = markers.map((raw: any) => presentMarkerRow(raw, labSystem)).map((m: any) => {
     const status = exportOptimalStatus(m);
     // Every historical reading as a tiny Observation-component (ascending by date).
     const history = (Array.isArray(m.points) ? m.points : []).map((p: any) => ({
@@ -117,6 +122,7 @@ export function buildHealthExport() {
             sourceUnit: p.source_unit ?? null,
           }
         : {}),
+      ...(p.reported ? { asReported: p.reported } : {}),
     }));
     const t = m.trend || {};
     return {
@@ -128,6 +134,8 @@ export function buildHealthExport() {
       // The latest reading (FHIR "valueQuantity" + "effectiveDateTime").
       value: m.latest?.value ?? null,
       unit: m.unit ?? null,
+      ...(m.canonical_unit ? { canonicalUnit: m.canonical_unit } : {}),
+      ...(m.latest?.reported ? { asReported: m.latest.reported } : {}),
       ...(m.latest?.unit_converted || m.latest?.unit_mismatch
         ? {
             sourceValue: m.latest?.source_value ?? null,
@@ -243,6 +251,8 @@ export function buildHealthExport() {
       exportVersion: HEALTH_EXPORT_VERSION,
       generated: new Date().toISOString(),
       generatedFrom: "cairn",
+      labUnits: labSystem, // us | si — every observation value/unit/optimalRange is in this system
+      labUnitsNote: `Lab values are shown in ${labUnitSystemWords(labSystem)}; asReported is the value exactly as its lab printed it when that differs. Lp(a) mass (mg/dL) and molar (nmol/L) results are never converted into each other.`,
       note: "Optimal-zone bands are evidence-anchored longevity/preventive targets, DISTINCT from a lab's population reference interval. Informational, not medical advice. No 0-100 scores.",
       subject: {
         sex: profile.sex ?? null,

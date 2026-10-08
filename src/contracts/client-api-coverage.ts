@@ -22,6 +22,7 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/feedback",
   "/feedback/preview",
   "/settings",
+  "/settings/units/detect",
   "/agents",
   "/agent-stats",
   "/brain-diagnostics",

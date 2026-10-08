@@ -15,6 +15,9 @@
 // and names its dates in words. The load shape is a dose WORD and a relative height for
 // drawing — never a number shown, never a score. Changes nothing.
 import type {
+  WeekReadJourney,
+  WeekReadJourneyBehind,
+  WeekReadJourneyMark,
   DayChip,
   WeekDose,
   WeekRead,
@@ -23,9 +26,17 @@ import type {
   WeekReadOpen,
   WeekReadTotals,
 } from "../../contracts/week-read.js";
-import { addDaysISO, isoDate, mondayOf } from "../../lib/dates.js";
+import { addDaysISO, daysBetweenISO, isoDate, mondayOf } from "../../lib/dates.js";
 import { round1 } from "../../lib/numbers.js";
-import { dateRangeWords, dateWords, distanceOfWords, distanceWords, type AthleteUnits } from "../../repo/display-words.js";
+import {
+  dateRangeWords,
+  dateWords,
+  distanceOfWords,
+  distanceWords,
+  weightDeltaWords,
+  type AthleteUnits,
+} from "../../repo/display-words.js";
+import { pickDayVariant } from "../../repo/brain/day-read-rules.js";
 import { raceBuild, type RaceBuild } from "../../repo/race-build.js";
 import { RUN_KIND_LABELS } from "../../repo/run-edit.js";
 import { athleteUnits } from "../../repo/settings.js";
@@ -153,7 +164,8 @@ function chipOf(
         ? `${run.label} already in`
         : `${run.label}${run.distance_words ? `, ${run.distance_words}` : ""}`
     : "";
-  const words = [lift?.title ?? "", runWords].filter(Boolean).join(" · ") || (cell.status === "done" ? "Logged" : "Rest");
+  const words =
+    [lift?.title ?? "", runWords].filter(Boolean).join(" · ") || (cell.status === "done" ? "Logged" : "Rest");
   return {
     date,
     date_words: date ? dateWords(date, today, "weekday") : null,
@@ -291,7 +303,9 @@ function summaryOf(
   if (when === "future" || (when === "this" && nothingIn)) {
     const parts = [totals.lift_days_planned ? lifts(totals.lift_days_planned) : "", runAhead].filter(Boolean);
     if (!parts.length) return null;
-    return when === "future" ? `${lead} ahead: ${parts.join(" and ")}.` : `${lead}: ${parts.join(" and ")} ahead${tail}.`;
+    return when === "future"
+      ? `${lead} ahead: ${parts.join(" and ")}.`
+      : `${lead}: ${parts.join(" and ")} ahead${tail}.`;
   }
   const liftIn =
     totals.lift_days_done > 0
@@ -380,6 +394,153 @@ function goalsOf(path: TodayPath | null, weightLine: string | null): WeekReadGoa
 }
 
 // ---------------------------------------------------------------------------
+// The journey — Today's path as a trail: where it began, every dated mark ahead,
+// and what has already moved toward a goal. Re-derives nothing.
+// ---------------------------------------------------------------------------
+
+/** The most "behind you" lines the trail carries. */
+const JOURNEY_BEHIND_MAX = 3;
+
+function daysAwayWords(days: number): string {
+  if (days <= 0) return "today";
+  if (days === 1) return "tomorrow";
+  if (days >= 21) return `in ${Math.round(days / 7)} weeks`;
+  return `in ${days} days`;
+}
+
+/** The trail's short word beside a mark, from the milestone's own label (already in units). */
+function markShort(m: TodayPath["milestones"][number], path: TodayPath): string {
+  const tail = (m.label.split(" · ")[1] ?? "").split(",")[0].trim();
+  switch (m.kind) {
+    case "race": {
+      const d = path.race?.distance_label ?? "";
+      return d === "Half marathon" ? "Half" : d || "Race";
+    }
+    case "goal":
+      return path.weight?.goal_text || tail || "Goal";
+    case "peak_week":
+      return tail || "Peak";
+    case "long_run":
+      return tail ? `Long ${tail}` : "Long run";
+    case "checkpoint":
+      return "Test";
+    default:
+      return "Checkup";
+  }
+}
+
+/** A mark named inside a sentence: "the Cambridge Half", "the peak week", "your goal weight". */
+function markName(m: WeekReadJourneyMark): string {
+  switch (m.kind) {
+    case "race":
+      return m.label;
+    case "goal":
+      return "your goal weight";
+    case "peak_week":
+      return "the peak week";
+    case "long_run":
+      return "the long run";
+    case "checkpoint":
+      return "the strength checkpoint";
+    default:
+      return "the checkup";
+  }
+}
+
+function behindOf(path: TodayPath, units: AthleteUnits): WeekReadJourneyBehind[] {
+  const out: WeekReadJourneyBehind[] = [];
+  const race = path.race;
+  if (race && race.trend_delta_sec != null && race.trend_delta_sec <= -30 && race.since) {
+    const min = Math.max(1, Math.round(-race.trend_delta_sec / 60));
+    const since = race.since_words || dateWords(race.since);
+    out.push({ key: "race", words: `Race estimate ${min} min faster since ${since}` });
+  }
+  const w = path.weight;
+  const first = w?.points?.[0];
+  if (w && first && w.mode !== "maintain") {
+    const delta = w.current_lb - first.weight_lb;
+    const toward = w.mode === "lose" ? delta <= -0.5 : delta >= 0.5;
+    if (toward)
+      out.push({ key: "weight", words: `${weightDeltaWords(delta, units.weight)} since ${dateWords(first.date)}` });
+  }
+  for (const row of path.board ?? []) {
+    if (row.key !== "strength") continue;
+    if (row.reached) out.push({ key: "strength", words: `${row.label} goal reached, ${row.now_text}` });
+    else if (row.start_text && (row.progress ?? 0) > 0)
+      out.push({ key: "strength", words: `${row.label} ${row.start_text} → ${row.now_text}` });
+  }
+  return out.slice(0, JOURNEY_BEHIND_MAX);
+}
+
+/**
+ * One calm line of where the athlete stands. `walked` counts only from a real start (the
+ * race trend's own window); a default look-back window is never spoken as days walked.
+ */
+function journeyLine(walked: number | null, marks: WeekReadJourneyMark[], today: string): string {
+  const next = marks[0];
+  // The summit is the mark the road ends at (latest end), the same one journeyOf flags.
+  const summit = marks.find((m) => m.summit) ?? marks[marks.length - 1];
+  const nextPart = `${markName(next)} ${next.days_words}`;
+  const total = (walked ?? 0) + summit.days_away;
+  const share = walked != null && total > 0 ? walked / total : 0;
+  const lead =
+    share >= 0.8
+      ? pickDayVariant(["Most of this road is behind you.", "The summit is in sight."], today, "week:journey:far")
+      : share >= 0.5
+        ? pickDayVariant(
+            ["Past halfway on this road.", "More of this road is behind you than ahead."],
+            today,
+            "week:journey:half"
+          )
+        : walked != null && walked >= 7
+          ? pickDayVariant(
+              [`${walked} days on this road so far.`, `${walked} days walked on this road.`],
+              today,
+              "week:journey:early"
+            )
+          : pickDayVariant(
+              ["One week at a time.", "Steady steps add up.", "Every logged day is a step on it."],
+              today,
+              "week:journey:start"
+            );
+  const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+  if (summit === next) return `${lead} ${cap(nextPart)}.`;
+  return `${lead} Next, ${nextPart}; ${markName(summit)} ${summit.days_words}.`;
+}
+
+function journeyOf(path: TodayPath | null, today: string, units: AthleteUnits): WeekReadJourney | null {
+  if (!path) return null;
+  const ahead = (path.milestones ?? []).filter((m) => m.date >= today);
+  if (!ahead.length) return null;
+  const start = path.trail_start && path.trail_start < today ? path.trail_start : today;
+  const last = ahead.reduce((a, b) => ((b.end_date ?? b.date) > (a.end_date ?? a.date) ? b : a));
+  const marks: WeekReadJourneyMark[] = ahead.map((m) => {
+    const days = Math.max(0, daysBetweenISO(m.date, today) ?? 0);
+    return {
+      kind: m.kind,
+      label: m.label,
+      date: m.date,
+      end_date: m.end_date,
+      date_words: m.date_words ?? (m.end_date ? dateRangeWords(m.date, m.end_date) : dateWords(m.date)),
+      detail: m.detail,
+      short: markShort(m, path),
+      days_away: days,
+      days_words: daysAwayWords(days),
+      summit: m === last,
+    };
+  });
+  const walked = path.race?.since === start ? Math.max(0, daysBetweenISO(today, start) ?? 0) : null;
+  return {
+    start_date: start,
+    start_words: dateWords(start, today),
+    today,
+    marks,
+    behind: behindOf(path, units),
+    line: journeyLine(walked, marks, today),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // The read
 // ---------------------------------------------------------------------------
 
@@ -454,6 +615,7 @@ export function weekRead(start?: string, opts: { today?: string; build?: RaceBui
     still_open: stillOpen,
     next_milestones: milestonesBeyond(path, weekEnd),
     goals: goalsOf(path, trend?.line ?? null),
+    journey: thisWeek ? safe(() => journeyOf(path, today, units), null) : null,
     weight_trend: trend,
   };
 }

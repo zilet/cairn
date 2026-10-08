@@ -145,9 +145,23 @@ const FMT_DATE: Record<FmtStyle, (iso: string, o: FmtDateOpts) => string> = {
 
 type FmtUnits = { distance: "km" | "mi"; weight: "lb" | "kg" };
 let fmtUnitsMemo: FmtUnits | null = null;
+// The tape measure's unit follows the weight unit (kg ⇒ cm, lb ⇒ in; the server's
+// lengthUnitOf, src/repo/unit-system.ts). A body screen's quick in/cm toggle is a
+// page-lifetime override only — never stored — and a changed weight unit in Settings
+// drops it, so Settings is always the default a fresh page opens in.
+let fmtLengthOverride: "in" | "cm" | null = null;
 
 function fmtSetUnits(settings: { run_units?: unknown; weight_units?: unknown } | null | undefined): FmtUnits {
-  return (fmtUnitsMemo = { distance: runUnits(settings?.run_units), weight: settings?.weight_units === "kg" ? "kg" : "lb" });
+  const next: FmtUnits = { distance: runUnits(settings?.run_units), weight: settings?.weight_units === "kg" ? "kg" : "lb" };
+  if (fmtUnitsMemo && fmtUnitsMemo.weight !== next.weight) fmtLengthOverride = null;
+  return (fmtUnitsMemo = next);
+}
+
+// The pre-Settings per-browser in/cm memory: it ignored Settings, so it is retired.
+try {
+  localStorage.removeItem("cairn-bm-unit");
+} catch {
+  /* private mode */
 }
 
 const CairnFmt = {
@@ -173,6 +187,13 @@ const CairnFmt = {
   toLb: (value: unknown, units?: unknown): number => {
     const v = Number(value) || 0;
     return (units ?? CairnFmt.units().weight) === "kg" ? Math.round((v / KG_PER_LB) * 100) / 100 : v;
+  },
+  /** Body measurements' unit (circumferences, height): the quick toggle's choice, else Settings' (kg ⇒ cm). */
+  length: (): "in" | "cm" => fmtLengthOverride || (CairnFmt.units().weight === "kg" ? "cm" : "in"),
+  /** The quick in/cm toggle: this page only, never stored, and dropped when Settings' weight unit changes. */
+  setLength: (unit: "in" | "cm"): "in" | "cm" => {
+    fmtLengthOverride = unit === "cm" ? "cm" : "in";
+    return fmtLengthOverride;
   },
   /** The one door for an athlete-facing date: never an ISO string. */
   date: (iso: unknown, o: FmtDateOpts = {}): string =>

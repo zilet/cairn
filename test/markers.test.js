@@ -220,7 +220,7 @@ test("getMarkerHistory drops TNP/test-not-performed supplemental rows", () => {
 test("vitamin D nmol/L is converted before the low-side guard runs", () => {
   seedHealthDoc("2025-12-01", [marker("Vitamin D 25-OH", 50, { unit: "nmol/L" })]);
   const vd = repo.prioritizeMarkers().markers.find((m) => m.key.includes("vitamin d"));
-  assert.equal(vd.latest.value, 20);
+  assert.equal(vd.latest.value, 20.03); // 50 nmol/L ÷ 2.496 (lab-units.ts)
   assert.equal(vd.unit, "ng/mL");
   assert.equal(vd.in_optimal, false);
   repo.deriveDirectives();

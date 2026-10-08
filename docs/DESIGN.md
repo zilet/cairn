@@ -1433,7 +1433,12 @@ week as seven dose-sized stone bars, words in every label), `msrow` (`milestone-
 one dated row, a dot or a lab/scan diamond in its stone's deep hue, filled behind today and open
 ahead, an optional "Today" mark), `goalrow` (`goal-row-{model,client}.ts`: a goal's stone dot,
 name over its one line, the real number, and a meter said in a word) and `frameline`
-(`frame-line-client.ts`: the week's frame, verbatim, with the block ribbon). Horizon's Week
+(`frame-line-client.ts`: the week's frame, verbatim, with the block ribbon) and `hjour`
+(`journey-trail-client.ts`, CSS `horizon/journey.css`: "Your road", the trail to scale in time
+from where the stretch began through today to the summit goal, walked part in dawn drawn in once,
+the road ahead dotted, a peak week lit along it, each mark in its stone's hue, the summit a small
+cairn; labels are buttons that open a mark's words under it; with nothing dated ahead, the starter's
+openers hand chat a first sentence through `state.chatPrefill`). Horizon's Week
 (`hwk`, `horizon-week-{client,controller}.ts`) composes them; To the race and the Season reuse
 `frameline`, `msrow` and `goalrow`.
 

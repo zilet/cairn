@@ -1,7 +1,7 @@
 // @ts-check
 // Pure Health marker row/chart helpers for the vanilla PWA.
 
-type HealthMarkersPoint = { value?: unknown; date?: unknown; flag?: unknown };
+type HealthMarkersPoint = { value?: unknown; date?: unknown; flag?: unknown; reported?: unknown /* as its lab printed it */ };
 
 type HealthMarkersBand = { low?: unknown; high?: unknown; dir?: unknown };
 
@@ -390,6 +390,7 @@ function markerPanelHtml(marker: HealthMarkersRow | null | undefined): string {
     ? `<div class="hchart-latest">
         <span class="hchart-latest-v">${escHtml(latestValue)}${marker?.unit ? `<span class="hmk-unit">${escHtml(marker.unit)}</span>` : ""}</span>
         ${age ? `<span class="hchart-latest-when" title="${escAttr(absDate(String(latest.date)))}">latest · ${escHtml(age)}</span>` : ""}
+        ${latest.reported ? `<span class="hchart-latest-when">as reported ${escHtml(String(latest.reported))}</span>` : ""}
       </div>`
     : "";
   const ask = `<button class="linkbtn linkbtn-plain linkbtn-sm hmk-ask" type="button" data-ask="${escAttr(markerAskQuestion(marker))}">Ask the coach<span class="hmk-ask-arw" aria-hidden="true"> →</span></button>`;

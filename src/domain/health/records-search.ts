@@ -41,6 +41,9 @@ import { markerAgingClause, markerValidityClass, readingAgeDays, validityBand } 
 import { labRangeRead } from "../../repo/lab-range.js";
 import { markerGroup, markerGroupRank } from "../../repo/propagation-data.js";
 import { prioritizeMarkers } from "../../repo/propagation.js";
+import { presentMarkerRow } from "../../repo/lab-display.js";
+import { labUnitSystem } from "../../repo/settings.js";
+import type { LabUnitSystem } from "../../repo/lab-units.js";
 import { localDateISO } from "../../repo/shared.js";
 import { isoDate } from "../../lib/dates.js";
 import { markerOptimalTrusted, publicMarkerRow } from "./marker-public.js";
@@ -135,11 +138,14 @@ function snippetOf(tokens: string[], text: string): string | null {
 
 const FRESHNESS: Record<0 | 1 | 2, ClientReadingFreshness> = { 0: "current", 1: "aging", 2: "past" };
 
-function markerHit(m: any, asOf: string): ClientRecordsMarkerHit {
+// `raw` is the canonical-unit row: every judgement (trust, lab range, side) reads it, and
+// only the numbers a person sees are taken from its presentation in `system`.
+function markerHit(raw: any, asOf: string, system: LabUnitSystem): ClientRecordsMarkerHit {
+  const m = presentMarkerRow(raw, system);
   const name = String(m?.name ?? m?.key ?? "").trim();
   const value = m?.latest?.value ?? null;
-  const lab = labRangeRead(m);
-  const trusted = markerOptimalTrusted(m);
+  const lab = labRangeRead(raw);
+  const trusted = markerOptimalTrusted(raw);
   const optimal = trusted
     ? { low: Number(m.optimal.low), high: Number(m.optimal.high), dir: String(m.optimal.dir ?? "band") }
     : null;
@@ -179,7 +185,7 @@ function markerHit(m: any, asOf: string): ClientRecordsMarkerHit {
       freshness: age == null ? null : FRESHNESS[validityBand(name, age)],
       note: markerAgingClause(name, date, asOf)?.clause ?? null,
     },
-    marker: publicMarkerRow(m),
+    marker: publicMarkerRow(raw, system),
   };
 }
 
@@ -307,7 +313,8 @@ export function searchRecords(opts: { q?: unknown; group?: unknown; asOf?: strin
   } catch {
     rawMarkers = [];
   }
-  const markers = rawMarkers.filter((m) => matches(tokens, markerHaystack(m))).map((m) => markerHit(m, asOf));
+  const system = labUnitSystem();
+  const markers = rawMarkers.filter((m) => matches(tokens, markerHaystack(m))).map((m) => markerHit(m, asOf, system));
 
   let docs: any[] = [];
   try {

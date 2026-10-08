@@ -500,6 +500,8 @@ export interface ClientSettings {
   run_units?: "km" | "mi";
   /** Athlete-facing bodyweight and loads: lb or kg. Stored weights stay lb; the server's prose already speaks this unit. */
   weight_units?: "lb" | "kg";
+  /** How the units were set (DERIVED in the route): the person's choice, the first-run device guess, or untouched (null). */
+  units_source?: "explicit" | "detected" | null;
   /** Last strength write-back ATTEMPT (landed or not), and its one-line result. */
   garmin_last_export_attempt_at?: string | null;
   garmin_last_export_status?: string | null;
@@ -542,6 +544,15 @@ export interface ClientSettingsResponse {
   research_auto_eligible?: boolean;
   /** The disk provider CLIs install onto; `small` = a hosted volume that fits about one. */
   server_disk?: { platform: string; total_mb: number | null; small: boolean } | null;
+}
+
+/** POST /api/settings/units/detect: the first-run device hint's answer (src/repo/unit-system.ts). */
+export interface ClientUnitsDetectResponse {
+  /** True only when this hint set the units (a fresh install that never chose any). */
+  applied: boolean;
+  units: { distance: "km" | "mi"; weight: "lb" | "kg" };
+  source: "explicit" | "detected" | null;
+  settings: ClientSettings;
 }
 
 export interface ClientAgentStats {
@@ -4041,6 +4052,7 @@ export interface ClientApiResponses {
   "/api/feedback": ClientFeedbackResponse;
   "/api/feedback/preview": ClientFeedbackPreview;
   "/api/settings": ClientSettingsResponse;
+  "/api/settings/units/detect": ClientUnitsDetectResponse;
   "/api/agents": ClientAgentConfig;
   "/api/agent-stats": ClientAgentStats;
   "/api/brain-diagnostics": ClientBrainDiagnostics;

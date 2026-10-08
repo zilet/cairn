@@ -38,6 +38,7 @@ const MODULES = [
   "goal-row-model",
   "goal-row-client",
   "frame-line-client",
+  "journey-trail-client",
   "week-model",
   "week-strip-client",
   // the horizon bundle
@@ -665,4 +666,158 @@ test("Season: labs read GET /health-docs/draws, one row per draw; the goal line 
   const week = root.querySelector('[data-horizon-panel="week"]');
   assert.ok(week.querySelector(".msrow") && week.querySelector(".goalrow"));
   assertClean(root, "Horizon (all views)");
+});
+
+// ---------- your road: the journey trail and its starter ----------
+
+function journey() {
+  return {
+    start_date: "2026-09-08",
+    start_words: "Sep 8",
+    today: TODAY,
+    marks: [
+      {
+        kind: "peak_week",
+        label: "Peak week · 48 km",
+        date: "2026-10-12",
+        end_date: "2026-10-18",
+        date_words: "Oct 12 – Oct 18",
+        detail: "Long run 18 km.",
+        short: "48 km",
+        days_away: 6,
+        days_words: "in 6 days",
+        summit: false,
+      },
+      {
+        kind: "race",
+        label: "Cambridge Half",
+        date: "2026-11-01",
+        end_date: null,
+        date_words: "Nov 1",
+        detail: "Reads 1:52:10, inside sub-1:55.",
+        short: "Half",
+        days_away: 26,
+        days_words: "in 4 weeks",
+        summit: false,
+      },
+      {
+        kind: "goal",
+        label: "Goal weight · 154 lb",
+        date: "2026-12-15",
+        end_date: null,
+        date_words: "Dec 15",
+        detail: null,
+        short: "154 lb",
+        days_away: 70,
+        days_words: "in 10 weeks",
+        summit: true,
+      },
+    ],
+    behind: [
+      { key: "race", words: "Race estimate 4 min faster since Sep 8" },
+      { key: "weight", words: "−2.1 lb since Aug 30" },
+    ],
+    line: "28 days on this road so far. Next, the peak week in 6 days; your goal weight in 10 weeks.",
+  };
+}
+
+test("your road: the trail climbs from the start through today to the summit, the next mark open", () => {
+  const win = load();
+  const host = landing(win, { ...weekRead(), journey: journey() });
+  const road = host.querySelector(".hwk-sec.is-road .hjour");
+  assert.ok(road, "the road sits on the landing");
+  assert.equal(road.querySelector(".hjour-line").textContent, journey().line);
+  // Every mark on the trail; the summit wears the cairn.
+  assert.equal(road.querySelectorAll(".hjour-node[data-hjour-node]").length, 2);
+  assert.ok(road.querySelector(".hjour-node.is-summit .hjour-cairn"));
+  assert.ok(road.querySelector(".hjour-band"), "a peak week is lit along the trail");
+  // Labels are buttons naming when and what; the next mark is the one opened.
+  const labels = road.querySelectorAll("[data-hjour-mark]");
+  assert.ok(labels.length >= 2);
+  const summit = road.querySelector(".hjour-lbl.is-summit");
+  assert.equal(summit.querySelector("b").textContent, "154 lb");
+  assert.equal(summit.querySelector("small").textContent, "in 10 weeks");
+  assert.equal(road.querySelector('[data-hjour-mark="0"]').getAttribute("aria-pressed"), "true");
+  assert.match(
+    road.querySelector("[data-hjour-detail]").textContent,
+    /Peak week · 48 km.*Oct 12 – Oct 18 · in 6 days.*Long run 18 km\./s
+  );
+  // What already moved, in the server's words.
+  assert.deepEqual(
+    road.querySelectorAll(".hjour-b span").map((b) => b.textContent),
+    ["Race estimate 4 min faster since Sep 8", "−2.1 lb since Aug 30"]
+  );
+  assert.match(
+    road.querySelector(".hjour-plot").getAttribute("aria-label"),
+    /from Sep 8 through today to Goal weight · 154 lb, Dec 15/
+  );
+  assertClean(host, "your road");
+});
+
+test("your road: server words stay text; a label tap opens that mark without a repaint", async () => {
+  const win = load({ CairnDrill: drillStub() });
+  const j = journey();
+  j.marks[1].short = "<img src=x>";
+  j.line = "<script>x</script>";
+  const host = landing(win, { ...weekRead(), journey: j });
+  assert.equal(!!host.querySelector(".hjour img"), false);
+  assert.equal(!!host.querySelector(".hjour script"), false);
+
+  const slot = createHost(win.document);
+  win.CairnHorizonWeekController.mount(slot, {
+    peek: () => null,
+    load: () => Promise.resolve({ ...weekRead(), journey: journey() }),
+  });
+  await flush();
+  await flush();
+  const road = slot.querySelector(".hjour");
+  await slot.querySelector('[data-hjour-mark="2"]').click();
+  assert.equal(slot.querySelector(".hjour"), road, "the trail is not repainted");
+  assert.equal(slot.querySelector('[data-hjour-mark="2"]').getAttribute("aria-pressed"), "true");
+  assert.equal(slot.querySelector('[data-hjour-mark="0"]').getAttribute("aria-pressed"), "false");
+  assert.match(slot.querySelector("[data-hjour-detail]").textContent, /Goal weight · 154 lb.*Dec 15 · in 10 weeks/s);
+});
+
+test("your road, starter: nothing dated ahead opens chat with a first sentence, never sent", async () => {
+  const state = { chatPrefill: null };
+  const tabs = [];
+  const win = load({ CairnDrill: drillStub(), state, activateTab: (name) => tabs.push(name) });
+  // No goals at all: the road starts here, with openers and the plain way in (just log).
+  const fresh = landing(win, { ...weekRead(), next_milestones: [], goals: [], journey: null });
+  assert.equal(fresh.querySelector(".hjour-start-h").textContent, "Your road starts here");
+  assert.deepEqual(
+    fresh.querySelectorAll("[data-hjour-ask]").map((b) => b.textContent),
+    ["A race", "A weight goal", "A stronger lift", "Not sure yet"]
+  );
+  assert.match(fresh.querySelector(".hjour-hint").textContent, /log today/);
+  // Goals set but none dated: the ask is a date.
+  const undated = landing(win, { ...weekRead(), journey: null });
+  assert.equal(undated.querySelector(".hjour-start-h").textContent, "Give a goal a date");
+  // Another week than this one draws no road and no starter.
+  const other = landing(win, { ...weekRead(), this_week: false, journey: null });
+  assert.equal(!!other.querySelector(".hjour"), false);
+
+  const slot = createHost(win.document);
+  win.CairnHorizonWeekController.mount(slot, {
+    peek: () => null,
+    load: () => Promise.resolve({ ...weekRead(), goals: [], journey: null }),
+  });
+  await flush();
+  await flush();
+  await slot.querySelector("[data-hjour-ask]").click();
+  assert.match(String(state.chatPrefill), /^I'm training for a race\./);
+  assert.deepEqual(tabs, ["chat"]);
+});
+
+test("your road: the summit is the mark the road ends at, even when a window ends after a later start", () => {
+  const win = load();
+  const j = journey();
+  // A peak week that ends after a checkpoint that starts later: the peak week is the summit.
+  j.marks = [
+    { ...j.marks[0], date: "2026-10-12", end_date: "2026-10-18", summit: true },
+    { kind: "checkpoint", label: "Strength checkpoint", date: "2026-10-14", end_date: null, date_words: "Oct 14", detail: null, short: "Test", days_away: 8, days_words: "in 8 days", summit: false },
+  ];
+  const host = landing(win, { ...weekRead(), journey: j });
+  assert.match(host.querySelector(".hjour-plot").getAttribute("aria-label"), /to Peak week · 48 km, Oct 12 – Oct 18$/);
+  assert.equal(host.querySelectorAll(".hjour-node.is-summit").length, 1);
 });

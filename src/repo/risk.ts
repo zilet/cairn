@@ -4,6 +4,9 @@ import { matchOptimalZone } from "./propagation-data.js";
 import { currentBodyFatEstimate, getProfile } from "./profile.js";
 import { joinList } from "./shared.js";
 import { round1 } from "../lib/numbers.js";
+import { labValueText, roundLabDisplay } from "./lab-display.js";
+import { displayUnitFor, fromCanonical, type LabUnitSystem } from "./lab-units.js";
+import { labUnitSystem } from "./settings.js";
 
 type PreventAssumption = { input: string; assumed: string; reason: string };
 
@@ -54,6 +57,13 @@ function markerByZone(label: string): RiskMarker {
     const zone = matchOptimalZone(marker?.name);
     const markerLabel = zone?.label ?? marker?.name;
     if (String(markerLabel || "").toLowerCase() !== label.toLowerCase()) continue;
+    // PREVENT and every threshold here read the canonical unit. A reading whose unit could
+    // not be brought into it is not on file for that purpose — never a mmol/L number read
+    // as mg/dL. Lp(a) is the one exception: it keeps its lab's unit by design and
+    // lpaElevated branches on that unit itself.
+    if (marker?.latest?.unit_mismatch === true && label.toLowerCase() !== "lp(a)") {
+      return { label, value: null, unit: null, date: marker?.latest?.date ?? null };
+    }
     const value = asNumber(marker?.latest?.value);
     return {
       label,
@@ -73,10 +83,10 @@ function hasFamilyHistory(profile: any): boolean {
   );
 }
 
-function markerFinding(marker: RiskMarker): string {
+function markerFinding(marker: RiskMarker, system: LabUnitSystem): string {
   return marker.value == null
     ? `${marker.label} not on file`
-    : `${marker.label} ${marker.value}${marker.unit ? ` ${marker.unit}` : ""}${marker.date ? ` (${marker.date})` : ""}`;
+    : `${marker.label} ${labValueText(marker.label, marker.value, marker.unit, system)}${marker.date ? ` (${marker.date})` : ""}`;
 }
 
 function addEnhancer(out: RiskEnhancer[], condition: boolean, item: RiskEnhancer): void {
@@ -175,6 +185,7 @@ function composePreventInterpretation(args: {
 }
 
 export function cardiovascularRiskRead() {
+  const lab = labUnitSystem(); // the lab-unit system every value below is SHOWN in, resolved once
   const profile = (() => {
     try {
       return getProfile() as any;
@@ -319,9 +330,8 @@ export function cardiovascularRiskRead() {
     if (tcDerived) {
       assumptions.push({
         input: "total cholesterol",
-        assumed: `derived (${markers.total_cholesterol.value} mg/dL)`,
-        reason:
-          "No direct total cholesterol on file; PREVENT uses the Friedewald-consistent sum of LDL + HDL + triglycerides/5 (valid while triglycerides are under 400 mg/dL). Add a direct total cholesterol to remove this estimate.",
+        assumed: `derived (${labValueText("Total cholesterol", markers.total_cholesterol.value, "mg/dL", lab)})`,
+        reason: `No direct total cholesterol on file; PREVENT uses the Friedewald-consistent sum of LDL + HDL + triglycerides/5 (valid while triglycerides are under ${labValueText("Triglycerides", 400, "mg/dL", lab)}). Add a direct total cholesterol to remove this estimate.`,
       });
     }
 
@@ -379,16 +389,24 @@ export function cardiovascularRiskRead() {
       }
       if (curNonHdl > 0 && targetNonHdl < curNonHdl - 0.5) {
         targetInputs.total_chol = round1(curHdl + targetNonHdl);
+        // Shown in the athlete's lab-unit system through the shared lab-display helpers
+        // (one rounding, one unit, the same print as every other surface); the PREVENT
+        // math above stays in mg/dL.
+        // The number is rounded ONCE (roundLabDisplay) and the sentence prints that same
+        // number, so `from`/`to` and the detail never disagree in the last digit.
+        const nonHdlUnit = displayUnitFor("Non-HDL-C", lab) ?? "mg/dL";
+        const nonHdl = (v: number) => roundLabDisplay(fromCanonical("Non-HDL-C", v, lab) ?? v);
+        const nonHdlText = (v: number) => labValueText("Non-HDL-C", nonHdl(v), nonHdlUnit, lab);
         leversApplied.push({
           key: "lipids",
           label: "Lipid-lowering to target",
-          from: round1(curNonHdl),
-          to: round1(targetNonHdl),
-          unit: "mg/dL non-HDL",
+          from: nonHdl(curNonHdl),
+          to: nonHdl(targetNonHdl),
+          unit: `${nonHdlUnit} non-HDL`,
           detail:
             apob != null && apob > 80
-              ? `Bringing ApoB toward ~80 mg/dL lowers non-HDL cholesterol with it, from ${round1(curNonHdl)} to ${round1(targetNonHdl)} mg/dL.`
-              : `Bringing non-HDL cholesterol into the optimal range (≤${NON_HDL_OPTIMAL_MAX} mg/dL), from ${round1(curNonHdl)} to ${round1(targetNonHdl)} mg/dL.`,
+              ? `Bringing ApoB toward ~${labValueText("ApoB", 80, "mg/dL", lab)} lowers non-HDL cholesterol with it, from ${nonHdlText(curNonHdl)} to ${nonHdlText(targetNonHdl)}.`
+              : `Bringing non-HDL cholesterol into the optimal range (≤${nonHdlText(NON_HDL_OPTIMAL_MAX)}), from ${nonHdlText(curNonHdl)} to ${nonHdlText(targetNonHdl)}.`,
         });
       }
 
@@ -475,21 +493,21 @@ export function cardiovascularRiskRead() {
   addEnhancer(enhancers, (markers.apob.value ?? 0) > 80, {
     key: "apob",
     label: "ApoB above optimal",
-    finding: markerFinding(markers.apob),
+    finding: markerFinding(markers.apob, lab),
     why: "ApoB is the atherogenic particle count and is the most direct modifiable lipid target.",
-    lever: "Bring ApoB toward ~80 mg/dL or lower with clinician-guided lipid work plus diet/fiber support.",
+    lever: `Bring ApoB toward ~${labValueText("ApoB", 80, "mg/dL", lab)} or lower with clinician-guided lipid work plus diet/fiber support.`,
   });
   addEnhancer(enhancers, lpaElevated(markers.lpa), {
     key: "lpa",
     label: "Elevated Lp(a)",
-    finding: markerFinding(markers.lpa),
+    finding: markerFinding(markers.lpa, lab),
     why: "Lp(a) is largely genetic; it raises lifetime risk floor and makes the modifiable ApoB/LDL target more aggressive.",
     lever: "Treat it as a reason to be stricter on ApoB/LDL rather than as a lifestyle target by itself.",
   });
   addEnhancer(enhancers, (markers.hs_crp.value ?? 0) > 1, {
     key: "hs_crp",
     label: "Residual inflammation",
-    finding: markerFinding(markers.hs_crp),
+    finding: markerFinding(markers.hs_crp, lab),
     why: "Persistent hs-CRP above ~1 mg/L can add inflammatory risk, though a single value may be training or illness noise.",
     lever:
       "Recheck when recovered and pair lipid work with sleep, body-composition, and anti-inflammatory nutrition basics.",
@@ -504,7 +522,7 @@ export function cardiovascularRiskRead() {
   addEnhancer(enhancers, markers.vo2max.value != null && markers.vo2max.value < 42, {
     key: "vo2max",
     label: "Cardiorespiratory fitness below target",
-    finding: markerFinding(markers.vo2max),
+    finding: markerFinding(markers.vo2max, lab),
     why: "Higher cardiorespiratory fitness is one of the strongest protective longevity signals.",
     lever: "Keep easy aerobic volume consistent and add one quality session when recovery supports it.",
   });

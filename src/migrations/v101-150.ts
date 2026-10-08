@@ -713,4 +713,15 @@ export const MIGRATIONS_101_150: Migration[] = [
       if (hasTable(db, "settings")) addColumn(db, "settings", "model_class_bindings TEXT DEFAULT ''");
     },
   },
+  {
+    version: 128,
+    name: "settings-lab-units",
+    // The lab-value display system: 'us' (conventional, mg/dL) | 'si' (mmol/L, µmol/L)
+    // | '' = automatic, following weight_units (kg reads SI). Display only — every
+    // comparison stays in the canonical unit (repo/lab-units.ts). Two-step: also in
+    // db.ts's settings create block.
+    up: (db) => {
+      if (hasTable(db, "settings")) addColumn(db, "settings", "lab_units TEXT DEFAULT ''");
+    },
+  },
 ];

@@ -3003,6 +3003,40 @@ snapshot) among rows with `status_at IS NULL` — a machine soft-resolve, never 
 always stamps `status_at` — and never one a `resurfaced_from_id` audit chain points at; `'health_review'`
 rows are untouched entirely.
 
+### Lab units: compare canonical, show the athlete's system
+
+Labs print the same analyte in different units (US mg/dL, European mmol/L / µmol/L / g/L), and an
+athlete who travels gets both. Two layers keep that coherent:
+
+- **Compare in ONE canonical unit** — `LAB_UNIT_TABLE` (`src/repo/lab-units.ts`), keyed by the
+  `OPTIMAL_ZONES` label: each analyte's canonical unit is its optimal band's own unit, with the SI unit
+  and every other spelling a lab prints mapped into it (molar-mass factors; HbA1c is the affine IFCC
+  map). `getMarkerHistory` normalizes each reading at read time (`source_value`/`source_unit` keep the
+  printout), so optimal bands, lab ranges, trends, directives, the coach-context doc ranking and dedupe
+  agreement (`health-dedupe.ts`, with slack for the source's printed precision) all run on one scale. A
+  draw the band does not apply to (random glucose, PM cortisol) still converts via `unitAnalyteZone`.
+  **Lp(a) mass (mg/dL) and molar (nmol/L) results are never converted** (`never`) — only labelled.
+- **Show in the athlete's system** — `labUnitSystem()` (`settings.lab_units`: `us` | `si`, `''` =
+  automatic, derived from `athleteUnits().weight`, kg → SI). `src/repo/lab-display.ts`
+  (`presentMarkerRow`, `presentSourceMarker`, `labValueText`) converts value, band, range and trend
+  deltas AFTER every judgement was made canonically, keeps a reading's lab-printed value as `reported`,
+  and is idempotent (a converted row is no longer canonical, so it passes through). Every surface that
+  prints a lab value goes through it: `/markers/priority` + records search (`publicMarkerRow`),
+  `/health/markers`, `health_focus` readings, the coach-context `health` docs, the health review /
+  synthesis prompts (which also state `labUnitsPromptLine`), the doctor report, packet and export.
+  A per-marker loop resolves the system ONCE and passes it down (the helpers' default argument is
+  for a single call).
+- **Display units are never persisted.** Directive prose is STORED in canonical units (the generic
+  watch note's value, the calcium albumin-correction rule) and rendered per read by
+  `renderLabQuantities` (`lab-display.ts`, via `presentDirective` in `directives-read.ts` —
+  `listActiveDirectives`, `listDirectives`, `getDirective`); the reconcile, the derive signature and
+  the decision ledger read the raw table, so a unit switch rewrites no row and mints no decision.
+  Fingerprints of what the athlete SAW hash unit-neutral material too (today-agenda's health
+  revision: canonical values, stored directive text). A converted reading's printed reference range
+  goes through the same per-bound map as its value (never a single ratio — HbA1c is affine). Dedupe
+  compares printed numbers when the units match or either is missing/unknown, canonical numbers when
+  both convert and differ, and never across an inconvertible pair; a qualified `<0.5` stays text.
+
 ### How old is too old: per-marker temporal validity
 
 "Is this reading stale?" is answered PER MARKER, not by one blanket age rule
@@ -5313,6 +5347,22 @@ week read all speak the athlete's units; a kg athlete's loads are the nearest ha
 progression step the engine wrote in lb is rebuilt from its numbers. A plan item's stored note is
 data and stays verbatim. Machine fields stay `*_date`/`date`; a person reads the `*_words`
 companion (`changed_since[].since_words`, milestone `date_words`, …).
+
+**Body measurements and the first-run guess** (`src/repo/unit-system.ts`). There is no length
+setting: the tape follows the weight unit (`lengthUnitOf`: kg ⇒ cm, lb ⇒ in; `unitSystemOf` is the
+same weight-led "us"|"metric" read for any consumer). On the client `CairnFmt.length()` is the one
+read; the Body and Profile in/cm toggle is a page-lifetime override (`CairnFmt.setLength`), never
+stored, and dropped when Settings' weight unit changes — so a fresh page always opens in Settings'
+units (the old per-browser `cairn-bm-unit` memory is cleared). Storage stays inches. A fresh install
+takes its units from the device once: the boot (`app/onboarding.ts`) sends `navigator.language` and
+the IANA zone to `POST /api/settings/units/detect` while `settings.units_source` is null and the
+install is not onboarded; `applyDetectedUnits` adopts `detectUnits()` only when nothing was chosen
+or detected, the install never onboarded and the units are still the registry defaults. The zone
+leads when it names a country (an en-US browser on Europe/Berlin is metric); US units need a US zone
+with a non-contradicting locale, or a US/LR/MM locale with no usable zone; the UK is mi + kg;
+everywhere else km + kg. `units_source` lives in `app_state` (`explicit` once any unit is saved —
+detection never runs over it — or `detected:<locale> <zone>`), rides inside `settings` on the
+settings reads, and Settings' Units group says when the units came from the device.
 
 **One stage word per week.** `src/repo/stage-words.ts` is the vocabulary (Base / Build / Sharpen
 / Lighter week / Peak week / Taper / Race week, with `*_week_word` and phrase forms);

@@ -120,6 +120,15 @@
     return { kind, stone: kind === "lift" ? "strength" : "endurance", words, date: isoOf(row.date) };
   }
 
+  /** The journey trail as served, kept only when it has a dated mark to draw toward. */
+  function journeyOf(value: unknown): WeekRead["journey"] {
+    const j = record(value) as WeekRead["journey"];
+    if (!j || !isoOf(j.start_date) || !isoOf(j.today)) return null;
+    const marks = list<NonNullable<WeekRead["journey"]>["marks"][number]>(j.marks).filter((m) => isoOf(m.date));
+    if (!marks.length) return null;
+    return { ...j, marks, behind: list(j.behind), line: text(j.line) };
+  }
+
   /**
    * The Week page's whole model; null when the read failed (not an object with days). A
    * read with no days is an empty week: `days` is empty and the view says so in one line.
@@ -149,6 +158,8 @@
       goals: list(read.goals)
         .map((g) => CairnGoalRowModel.fromWeekRead(g))
         .filter((r): r is ClientGoalRow => !!r),
+      journey: journeyOf(read.journey),
+      this_week: read.this_week !== false,
     };
   }
 

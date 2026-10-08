@@ -43,6 +43,7 @@ type SettingsScreenWorkingModel = {
   lead_mode: "lead" | "announce_first" | "review_everything";
   run_units: "km" | "mi";
   weight_units: "lb" | "kg";
+  lab_units: "auto" | "us" | "si"; // lab-value display system; "auto" follows weight_units
 };
 
 type SettingsScreenPersistBody = {
@@ -66,6 +67,7 @@ type SettingsScreenPersistBody = {
   lead_mode: "lead" | "announce_first" | "review_everything";
   run_units: "km" | "mi";
   weight_units: "lb" | "kg";
+  lab_units: "auto" | "us" | "si"; // lab-value display system; "auto" follows weight_units
   gemini_api_key?: string;
   garmin_password?: string;
 };

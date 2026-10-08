@@ -9,6 +9,8 @@ import { markerResponseCoachLine } from "../repo/marker-response.js";
 import { listMemory } from "../repo/memory.js";
 import { getProfile } from "../repo/profile.js";
 import { prioritizeMarkers } from "../repo/propagation.js";
+import { labUnitsPromptLine, labValueText, presentMarkerList, presentMarkerRow } from "../repo/lab-display.js";
+import { labUnitSystem } from "../repo/settings.js";
 import { renderEvidencePack } from "../evidencePack.js";
 import type { CoachContext } from "../repo/coach-context.js";
 import { promptData } from "./context-projection.js";
@@ -269,7 +271,10 @@ export function buildHealthReviewPrompt(grounding?: {
   }[];
 }): string {
   const ctx = getCoachContext();
-  const markers = getMarkerHistory();
+  // Every lab value the model sees is in the athlete's lab-unit system, unit attached,
+  // and the prompt says which system that is (labUnitsPromptLine) — never a bare number.
+  const labSystem = labUnitSystem();
+  const markers = presentMarkerList(getMarkerHistory(), labSystem);
   const passages = Array.isArray(grounding?.passages) ? grounding!.passages!.slice(0, 12) : [];
   const groundingBlock = passages.length
     ? `\nRETRIEVED EVIDENCE (host-side research the system ran for you — these are real, cited sources;
@@ -319,10 +324,12 @@ ${evidencePack}\n`
     const yrs = Math.round(days / 365);
     return yrs <= 1 ? "about a year ago" : `${yrs} years ago`;
   };
-  const topMarkers = priority.markers.slice(0, 8).map((m: any) => ({
+  const topMarkers = priority.markers.slice(0, 8).map((raw: any) => presentMarkerRow(raw, labSystem)).map((m: any) => ({
     name: m.name,
     group: m.group ?? null,
     latest: m.latest?.value ?? null,
+    unit: m.unit ?? null,
+    ...(m.latest?.reported ? { reported: m.latest.reported } : {}),
     flag: m.latest?.flag ?? null,
     optimal: m.optimal ?? null,
     in_optimal: m.in_optimal ?? null,
@@ -368,7 +375,7 @@ NON-NEGOTIABLE FRAMING:
 - You MAY organize findings by health group (each marker carries a group — Lipids &
   Cardiovascular, Metabolic & Glucose, Iron & Red Blood, …) so related markers read as one story.
 - DATES: don't restate the latest panel's date in every line — the UI shows recency once. Write
-  values plainly ("LDL-C is 207 mg/dL") and only name a date when contrasting an earlier reading,
+  values plainly, with their unit ("LDL-C is ${labValueText("LDL-C", 207, "mg/dL", labSystem)}") and only name a date when contrasting an earlier reading,
   in plain month/year form ("up from 135 in Apr 2024"). Never emit raw YYYY-MM-DD dates in prose.
 
 LEAD WITH IMPACT: the PRIORITY MARKERS block below is pre-ranked by how far each value sits from its
@@ -409,6 +416,8 @@ ${learnedMarkerBlock}${evidenceBlock}${groundingBlock}${renderBodyComp(ctx)}
 ${CONTEXT_GUARDRAILS}
 
 ${renderJsonContract(HEALTH_REVIEW_SCHEMA)}
+
+${labUnitsPromptLine(labSystem)}
 
 PRIORITY MARKERS (impact-ranked: distance from OPTIMAL, most-actionable first — lead with these):
 ${JSON.stringify(topMarkers)}
@@ -557,7 +566,7 @@ const HEALTH_SYNTHESIS_SCHEMA = `{
 function renderHealthDrivers(ctx: any): string {
   const bits: string[] = [];
   try {
-    const pm: any = prioritizeMarkers();
+    const pm: any = presentMarkerList(prioritizeMarkers() as any);
     const body = (Array.isArray(pm?.markers) ? pm.markers : []).filter(
       (m: any) => m?.group === "body" || /body comp/i.test(m?.group_label || "")
     );
@@ -587,6 +596,7 @@ function renderHealthDrivers(ctx: any): string {
 export function buildHealthSynthesisPrompt(ctx?: CoachContext): string {
   const context = ctx ?? getCoachContext();
   const focus = healthFocus();
+  const labSystem = labUnitSystem();
   return `${CAIRN_PERSONA}
 
 You read bloodwork like a preventive-medicine
@@ -615,7 +625,7 @@ THE CONSTITUTION (binding):
 
 GROUND IT (this is what makes the read elite, not generic — the priorities carry the actual readings):
 - Reason from the ACTUAL numbers: name where each marker sits vs its evidence-based OPTIMAL band and
-  which way it's trending ("ApoB 148 against an optimal nearer 80, holding steady" beats "lipids are
+  which way it's trending ("ApoB ${labValueText("ApoB", 148, "mg/dL", labSystem)} against an optimal nearer ${labValueText("ApoB", 80, "mg/dL", labSystem)}, holding steady" beats "lipids are
   high"). Use the readings/optimal/trend/projection in the spine below.
 - Explain the MECHANISM that links the priorities — don't just list them. WHY does the lead lever help
   (e.g. "dropping body-fat cuts hepatic VLDL output, so ApoB and triglycerides fall while insulin
@@ -628,6 +638,7 @@ A deterministic prioritization has already TIERED the findings — trust it as y
 then track; one entry per health group, deduped from the raw directives, EACH WITH its markers' actual
 readings — value, optimal band, trend, projection):
 ${JSON.stringify(focus)}
+${labUnitsPromptLine(labSystem)}
 ${renderHealthDrivers(context)}
 ${CONTEXT_GUARDRAILS}
 ${renderConnectedBrain(context, { domains: ["nutrition", "training", "watch"] })}${renderReactionModel(context)}${renderBodyComp(context)}

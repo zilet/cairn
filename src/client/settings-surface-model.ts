@@ -100,6 +100,8 @@ function settingsWorkingModel(data: SettingsScreenData): SettingsScreenWorkingMo
     // Units: Settings is their only writer (every surface reads them through CairnFmt).
     run_units: runUnits(s.run_units),
     weight_units: s.weight_units === "kg" ? "kg" : "lb",
+    // Lab values: an explicit system, else automatic (follows the weight units).
+    lab_units: s.lab_units === "us" || s.lab_units === "si" ? s.lab_units : "auto",
     // No training_drive here on purpose: the drive is written only through the stance door
     // (PUT /api/training-drive, settings-drive-controller.ts), never by the save bar, so a
     // stale screen can never re-send a drive and end — or fake — a dated push.

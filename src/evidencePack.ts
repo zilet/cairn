@@ -61,7 +61,7 @@ const RAW_EVIDENCE_PACK: RawEvidenceEntry[] = [
     published_at: "2019-01-01",
     markers: ["ApoB", "LDL-C", "Non-HDL-C"],
     summary:
-      "Lower is better for atherogenic lipids: primary-prevention LDL-C well under 100 mg/dL (nearer 70 at higher risk); ApoB (~<80 mg/dL) tracks particle number and is the more precise target.",
+      "Lower is better for atherogenic lipids: primary-prevention LDL-C well under 100 mg/dL / 2.6 mmol/L (nearer 70 mg/dL / 1.8 mmol/L at higher risk); ApoB (~<80 mg/dL / 0.8 g/L) tracks particle number and is the more precise target.",
   },
   {
     id: "triglycerides",
@@ -71,7 +71,7 @@ const RAW_EVIDENCE_PACK: RawEvidenceEntry[] = [
     published_at: "2019-01-01",
     markers: ["Triglycerides"],
     summary:
-      "Fasting triglycerides <150 mg/dL is desirable and <100 optimal; higher values track insulin resistance and add cardiovascular risk.",
+      "Fasting triglycerides <150 mg/dL (1.7 mmol/L) is desirable and <100 mg/dL (1.1 mmol/L) optimal; higher values track insulin resistance and add cardiovascular risk.",
   },
   {
     id: "hdl",
@@ -81,7 +81,7 @@ const RAW_EVIDENCE_PACK: RawEvidenceEntry[] = [
     published_at: "2018-01-01",
     markers: ["HDL-C"],
     summary:
-      "Low HDL-C (<40 mg/dL men, <50 women) marks higher risk; it responds to aerobic activity and weight loss but is not itself a drug target.",
+      "Low HDL-C (<40 mg/dL / 1.0 mmol/L men, <50 mg/dL / 1.3 mmol/L women) marks higher risk; it responds to aerobic activity and weight loss but is not itself a drug target.",
   },
   {
     id: "lipoprotein-a",
@@ -91,7 +91,7 @@ const RAW_EVIDENCE_PACK: RawEvidenceEntry[] = [
     published_at: "2022-01-01",
     markers: ["Lp(a)"],
     summary:
-      "Lp(a) is largely genetic; <75 nmol/L (~<30 mg/dL) is desirable — it doesn't move with diet, so manage overall atherogenic risk (ApoB/LDL) harder when it's high.",
+      "Lp(a) is largely genetic; <75 nmol/L (or <30 mg/dL on a mass-reporting lab — the two are different measures, never converted) is desirable — it doesn't move with diet, so manage overall atherogenic risk (ApoB/LDL) harder when it's high.",
   },
   {
     id: "hs-crp",
@@ -111,7 +111,7 @@ const RAW_EVIDENCE_PACK: RawEvidenceEntry[] = [
     published_at: "2024-01-01",
     markers: ["HbA1c", "Fasting glucose"],
     summary:
-      "HbA1c <5.7% is normal, 5.7–6.4% prediabetes, ≥6.5% diabetes; fasting glucose 70–99 mg/dL normal, 100–125 prediabetes.",
+      "HbA1c <5.7% (39 mmol/mol) is normal, 5.7–6.4% (39–46 mmol/mol) prediabetes, ≥6.5% (48 mmol/mol) diabetes; fasting glucose 70–99 mg/dL (3.9–5.5 mmol/L) normal, 100–125 mg/dL (5.6–6.9 mmol/L) prediabetes.",
   },
   {
     id: "ferritin",
@@ -121,7 +121,7 @@ const RAW_EVIDENCE_PACK: RawEvidenceEntry[] = [
     published_at: "2020-01-01",
     markers: ["Ferritin"],
     summary:
-      "Ferritin <15 ng/mL indicates iron deficiency; ferritin is also affected by inflammation, so it is interpreted alongside other iron studies.",
+      "Ferritin <15 ng/mL (15 µg/L) indicates iron deficiency; ferritin is also affected by inflammation, so it is interpreted alongside other iron studies.",
   },
   {
     id: "vitamin-d",
@@ -131,7 +131,7 @@ const RAW_EVIDENCE_PACK: RawEvidenceEntry[] = [
     published_at: "2024-01-01",
     markers: ["Vitamin D"],
     summary:
-      "25-OH vitamin D <20 ng/mL is deficient and 20–30 insufficient; ~30–50 ng/mL is a common sufficiency target.",
+      "25-OH vitamin D <20 ng/mL (50 nmol/L) is deficient and 20–30 ng/mL (50–75 nmol/L) insufficient; ~30–50 ng/mL (75–125 nmol/L) is a common sufficiency target.",
   },
   {
     id: "blood-pressure",
@@ -181,7 +181,7 @@ const RAW_EVIDENCE_PACK: RawEvidenceEntry[] = [
     published_at: "2020-01-01",
     markers: ["Uric acid"],
     summary:
-      "When managing gout, a serum urate target <6 mg/dL reduces flares; an isolated high value without symptoms is watched, not treated.",
+      "When managing gout, a serum urate target <6 mg/dL (360 µmol/L) reduces flares; an isolated high value without symptoms is watched, not treated.",
   },
   {
     id: "testosterone",
