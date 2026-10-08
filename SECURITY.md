@@ -46,6 +46,14 @@ Cairn stores personal data, so an exposed instance is a real privacy risk:
 
 Treat both volumes as sensitive. Back them up privately and never commit them.
 
+## What leaves your install
+
+Cairn has no project-run server that holds your data. Every outbound connection the app and the
+installer make (your AI provider, the daily release check, the exercise library download, the opt-in
+usage ping, feedback you choose to send, and the installer's anonymous, opt-out install count) is
+listed with what it carries in
+[`docs/HOSTING.md` → What leaves your install](docs/HOSTING.md#what-leaves-your-install).
+
 ## Household members
 
 The Family roster inside Cairn is coaching context, not an account or access

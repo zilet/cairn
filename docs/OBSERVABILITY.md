@@ -4,7 +4,9 @@ Cairn's operator telemetry is local-first SQLite data, not engagement analytics.
 It never sends diagnostics anywhere on its own — only a feedback message the owner
 writes, with diagnostics they tick, leaves the instance (below) — and never stores
 request/response bodies, prompts, chat/domain text, health values, credentials,
-filesystem paths, or raw agent stdout/stderr.
+filesystem paths, or raw agent stdout/stderr. Every outbound connection an install makes
+(not only these two) is listed in
+[`HOSTING.md` → What leaves your install](HOSTING.md#what-leaves-your-install).
 
 ## Feedback and the usage ping
 
@@ -14,13 +16,15 @@ filesystem paths, or raw agent stdout/stderr.
   add the snapshot the sheet previews verbatim (`GET /api/feedback/preview`): version, build id,
   platform, update method, CPU arch, Node version, uptime and up to 40 coalesced issue rows from
   `diagnostic_events` — fingerprint, source, kind, level, route template, status, count, last
-  seen; never the stored message. It is capped at 32 KB. With no `CAIRN_FEEDBACK_URL`, nothing is
-  sent: the browser opens a prefilled GitHub issue (contact left out, since an issue is public).
+  seen; never the stored message. It is capped at 32 KB. It goes to the project's feedback service
+  (`DEFAULT_FEEDBACK_URL`, `https://feedback.cairn.fit`) unless `CAIRN_FEEDBACK_URL` points elsewhere.
+  With `CAIRN_FEEDBACK_URL=""`, nothing is sent: the browser opens a prefilled GitHub issue
+  (contact left out, since an issue is public).
 - **Usage ping** — off by default (`settings.usage_ping_enabled`). On, and only with a feedback
   service configured, at most once a week it sends exactly: the random install id, the Cairn
   version, the host platform, CPU architecture and Node version. Failures are silent and retried
-  no sooner than a day later; it never sits in the boot path or inside a request. The test suite has no
-  service URL, so it never sends.
+  no sooner than a day later; it never sits in the boot path or inside a request. The test suite and
+  the smoke server set `CAIRN_FEEDBACK_URL=""` and inject `fetch`, so neither ever sends.
 - The install id is a random UUID created on first use (`app_state.instance_id`); it is not
   derived from anything about the owner or the machine.
 

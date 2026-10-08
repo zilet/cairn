@@ -5,6 +5,72 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [2.1.0] — 2026-10-08
+
+Cairn 2.1 is the one you can run without being an engineer. One command, or one Railway button, puts
+it on your own account, signed in, with pictures from the first screen. Upgrading from 2.0: back up,
+pull, restart. Eight migrations (120–127) run on boot.
+
+### Added
+
+- **One-command install.** `curl -fsSL https://cairn.fit/install | sh` asks one question: Railway
+  (about $5/month, nothing to keep running) or this computer (free, Docker or Podman, nightly
+  updates that roll back on their own). It creates the project, volume, token and domain, deploys,
+  and opens Cairn signed in. A `cairn.sh` next to it handles status, open, update, logs and
+  uninstall. Guide: [`docs/HOSTING.md`](docs/HOSTING.md), every option in
+  [`docs/INSTALL.md`](docs/INSTALL.md).
+- **A "Deploy on Railway" button** (`https://cairn.fit/railway`) for people with no terminal,
+  single-volume mode (`CAIRN_SINGLE_VOLUME`) so provider sign-ins survive a redeploy, and Railway's
+  own image auto-updates.
+- **Per-device sign-in.** A browser signs in once with a passkey, a one-time pairing code
+  (**Settings → Devices → Pair a device**) or the token as recovery, then carries its own session.
+  Each device can be signed out alone.
+- **AI apps connect to `/mcp` on their own access**: a per-app key, or OAuth 2.1 with PKCE. Neither
+  ever opens `/api`.
+- **A welcome as the first run.** Hello, connect your AI subscription, then meet the coach, which
+  streams your first week (the reply, fuel, then the week) and says when it is ready.
+- **Pictures from the start.** A built-in pack of 211 exercise figures and 16 movement figures
+  installs on first boot with no image key and no cost, and exercise guides import on their own.
+  Image generation (now Nano Banana 2.1) stays an optional upgrade for anything the pack misses.
+- **Units.** Weight shows in kg or lb, and distances in km or mi, everywhere prose names them.
+- **An opt-in weekly usage ping.** It is off unless you turn it on.
+- **Anonymous install counting, opt-out.** The installer sends two anonymous events to
+  `cairn.fit` (the plan was accepted, then done or failed at a fixed step) so the project can see
+  whether installs work. The plan says so; `--no-telemetry`, `DO_NOT_TRACK=1` or
+  `CAIRN_NO_TELEMETRY=1` skips it. Every outbound connection is listed in
+  [`docs/HOSTING.md`](docs/HOSTING.md#what-leaves-your-install).
+- **Install and remove show their progress.** A provider card in **Settings → Agents** goes busy on
+  the tap and says what the server is doing (checking disk, downloading, checking it starts), with
+  the time so far; a failure stays on the card.
+
+### Changed
+
+- **AI providers use their own default model unless you pick one.** **Settings → Agents** has an
+  Everyday and a Deep work model on each card: CLI default first, then the CLI's own model list
+  (live where the CLI can list it, so it follows CLI updates), or any model id. Before, Claude was
+  pinned to sonnet/fable, which a lower plan couldn't use; to keep that, choose them there.
+  One migration (127). Effort per task is still set by Cairn.
+- **Feedback reaches the project by default.** **Send feedback** now delivers to the project's
+  feedback service (`https://feedback.cairn.fit`) instead of opening a GitHub issue. It still sends
+  only when you press Send; your contact is kept for a reply and never published.
+  `CAIRN_FEEDBACK_URL` points it elsewhere, and `CAIRN_FEEDBACK_URL=""` brings back the GitHub
+  issue. Every compose file now passes the variable through.
+- **One story across Today, Train and Horizon.** Horizon opens on a landing, each fact has one home,
+  and every past or future day opens one day page.
+- A done day is described by what the session was mostly made of.
+- AI provider setup is honest about small hosted servers: a 0.5 GB trial volume fits one
+  provider.
+
+### Fixed
+
+- **A CLI that refuses the model Cairn asks for no longer fails silently.** A refused model or
+  effort is retried once on the CLI's own default, and remembered for six hours. Every failed
+  attempt logs its exit code and a short redacted error tail, so "Agent process exited" is never the
+  whole story.
+- Impossible resting-HR readings no longer count as harm.
+- The focused set field and the welcome composer stay above the iOS keyboard.
+- Google sign-in for a provider works in print mode and starts on tap.
+
 ## [2.0.0] — 2026-10-04
 
 Cairn 2.0 turns the read into a team. The Brief still opens your day; behind it, specialists now

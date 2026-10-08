@@ -1,11 +1,12 @@
 # Deployment Guide
 
 Practical shapes for running Cairn on a network you trust: laptop, home server, VM, or
-Raspberry Pi behind **Tailscale** (or another VPN). Cairn is single-user with no built-in
-auth — see [`SECURITY.md`](../SECURITY.md).
+Raspberry Pi behind **Tailscale** (or another VPN). Cairn is single-user and asks no one to sign in
+unless `CAIRN_AUTH_TOKEN` is set — see [`SECURITY.md`](../SECURITY.md).
 
-**New here?** Run `./quickstart.sh` from the repo root — it detects Docker or Node and has you
-running in ~30 seconds. For Raspberry Pi, use `./scripts/quickstart-rpi.sh` instead.
+**New here?** `curl -fsSL https://cairn.fit/install | sh` sets up any of these shapes for you,
+token included ([`INSTALL.md`](INSTALL.md)). From a clone, `./quickstart.sh` detects Docker or Node
+and has you running in ~30 seconds. For Raspberry Pi, use `./scripts/quickstart-rpi.sh` instead.
 
 ---
 

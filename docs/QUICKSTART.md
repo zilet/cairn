@@ -16,10 +16,9 @@ access token is your recovery key. Both choices are explained in [`docs/HOSTING.
 every option in [`docs/INSTALL.md`](INSTALL.md).
 
 > **No terminal?** Deploy your own copy on Railway from the browser:
-> [![Deploy on Railway](https://railway.com/button.svg)](HOSTING.md#no-terminal-the-railway-button)
-> <!-- TODO(maintainer): point the Railway button at https://railway.com/new/template/<CODE> once
->      the template is published (deploy/railway/README.md). -->
-> A hosted Railway URL is public, so it always requires a sign-in token.
+> [![Deploy on Railway](https://railway.com/button.svg)](https://cairn.fit/railway)
+> ([what it sets up](HOSTING.md#no-terminal-the-railway-button)). A hosted Railway URL is public, so
+> it always requires a sign-in token.
 
 > **No install at all?** Open Cairn in a free cloud sandbox right from your browser —
 > [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/zilet/cairn)

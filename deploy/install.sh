@@ -22,6 +22,11 @@
 #
 # Full guide: docs/INSTALL.md. Run with --help for every option.
 #
+# Counting: an install sends cairn.fit two anonymous GETs (the target was chosen, then
+# done or failed with a fixed step code) so the project can see whether installs work.
+# Nothing else: no token, domain, project name, path or free text. DO_NOT_TRACK=1,
+# CAIRN_NO_TELEMETRY=1 or --no-telemetry turns it off (see tel_event below).
+#
 # POSIX sh on purpose (dash, busybox ash, bash, zsh-as-sh): it must also run as
 # `curl | sh`, where stdin is the script itself, so every prompt reads /dev/tty,
 # every child that might read stdin gets </dev/null, and a run with no terminal
@@ -36,6 +41,9 @@ DEFAULT_IMAGE="ghcr.io/zilet/cairn:latest"
 DEFAULT_SCRIPT_URL="https://raw.githubusercontent.com/zilet/cairn/main/deploy/install.sh"
 # The short form people type; the project site serves deploy/install.sh from main.
 ONE_LINER_URL="https://cairn.fit/install"
+# The anonymous installer funnel counter (tel_event). CAIRN_INSTALL_EVENT_URL overrides
+# it (https only); set it to "" to send nothing.
+DEFAULT_EVENT_URL="https://cairn.fit/install/event"
 DEFAULT_PORT="8787"
 MARKER="CAIRN_ONE_LINE_INSTALLER"
 # Contract with the app (CAIRN_UPDATE_METHOD=trigger-file): Settings -> "Update now"
@@ -74,7 +82,7 @@ ts() { if [ "$STAMP" = 1 ]; then date -u '+%Y-%m-%dT%H:%M:%SZ '; fi; }
 info() { printf '%s%s  ->%s %s\n' "$(ts)" "$C_CYAN" "$C_RESET" "$*"; }
 ok() { printf '%s%s  ok%s %s\n' "$(ts)" "$C_GREEN" "$C_RESET" "$*"; }
 warn() { printf '%s%s  ! %s %s\n' "$(ts)" "$C_YELLOW" "$C_RESET" "$*" >&2; }
-die() { printf '%s%s  error:%s %s\n' "$(ts)" "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
+die() { printf '%s%s  error:%s %s\n' "$(ts)" "$C_RED" "$C_RESET" "$*" >&2; tel_failed; exit 1; }
 step() { printf '\n%s%s%s\n' "$C_BOLD" "$*" "$C_RESET"; }
 say() { printf '%s\n' "$*"; }
 
@@ -114,6 +122,60 @@ confirm() {
     "") [ "${2:-n}" = "y" ] && return 0; return 1 ;;
     *) return 1 ;;
   esac
+}
+
+# ----------------------------------------------------------------------------- counting
+
+# The installer funnel: at most two anonymous GETs per install to cairn.fit's own counter,
+# `chose` once the plan is accepted, then `done` or `failed`. Every value comes from a fixed
+# set (event, target railway|local, a step code, the installer version), never from the
+# person or the machine. It never fails, prints or waits more than 3 seconds.
+# Off with DO_NOT_TRACK / CAIRN_NO_TELEMETRY (any value but "" or 0), --no-telemetry, or an
+# empty CAIRN_INSTALL_EVENT_URL. Only `install` counts, and never a --dry-run.
+TEL_ARMED=0
+TEL_STEP="other"
+
+tel_url() {
+  tu_url="${CAIRN_INSTALL_EVENT_URL-$DEFAULT_EVENT_URL}"
+  case "$tu_url" in *[!A-Za-z0-9./:_-]*) return 1 ;; https://?*) printf '%s' "$tu_url" ;; *) return 1 ;; esac
+}
+
+tel_enabled() {
+  [ "${OPT_NO_TELEMETRY:-0}" = 1 ] && return 1
+  case "${DO_NOT_TRACK:-}" in "" | 0) ;; *) return 1 ;; esac
+  case "${CAIRN_NO_TELEMETRY:-}" in "" | 0) ;; *) return 1 ;; esac
+  tel_url >/dev/null
+}
+
+# tel_event EVENT STEP: one GET, fire and forget.
+tel_event() {
+  tel_enabled || return 0
+  has curl || return 0
+  te_url=$(tel_url) || return 0
+  te_target="${TARGET:-none}"
+  te_step="${2:-none}"
+  case "$1$te_target$te_step" in *[!a-z0-9_]*) return 0 ;; esac
+  curl -fsS --max-time 3 --proto '=https' --tlsv1.2 \
+    "$te_url?e=$1&t=$te_target&s=$te_step&v=$INSTALLER_VERSION" >/dev/null 2>&1 </dev/null || true
+}
+
+# A failure from here on counts as `failed` at STEP (a fixed code).
+tel_arm() { TEL_ARMED=1; TEL_STEP="$1"; }
+tel_disarm() { TEL_ARMED=0; }
+tel_chose() { tel_event chose none; tel_arm "${1:-other}"; }
+tel_done() { tel_disarm; tel_event "done" none; }
+tel_failed() {
+  [ "${TEL_ARMED:-0}" = 1 ] || return 0
+  TEL_ARMED=0
+  tel_event failed "${TEL_STEP:-other}"
+}
+tel_plan_line() {
+  if tel_enabled; then
+    say "  Counting:    two anonymous events to cairn.fit (started; then done or failed at which step)."
+    say "               No IP kept, nothing about you or this machine. --no-telemetry skips them."
+  else
+    say "  Counting:    off"
+  fi
 }
 
 # ----------------------------------------------------------------------------- helpers
@@ -377,6 +439,8 @@ Common options:
                      timers here, or the Railway service and ~/.cairn/railway/NAME
   --image=REF        container image (default ghcr.io/zilet/cairn:latest)
   --no-browser       print the sign-in link instead of opening a browser
+  --no-telemetry     send no anonymous install counts to cairn.fit (same as DO_NOT_TRACK=1
+                     or CAIRN_NO_TELEMETRY=1)
   --dry-run          print what it would do; change nothing
 
 Railway options:
@@ -418,7 +482,7 @@ parse_args() {
   OPT_DIR=""; OPT_NAME=""; OPT_PORT=""; OPT_HTTPS=""; OPT_DOMAIN=""; OPT_EMAIL=""
   OPT_LAN=0; OPT_LOCAL=0; OPT_TZ=""; OPT_IMAGE=""; OPT_UPDATER=""
   OPT_NIGHTLY=0; OPT_IF_REQUESTED=0; OPT_FORCE=0; OPT_PURGE=0; OPT_CONFIRM_PURGE=""
-  OPT_TARGET=""; OPT_RW_PROJECT=""; OPT_RW_WORKSPACE=""; OPT_NO_BROWSER=0
+  OPT_TARGET=""; OPT_RW_PROJECT=""; OPT_RW_WORKSPACE=""; OPT_NO_BROWSER=0; OPT_NO_TELEMETRY=0
   # Any of these only makes sense on this machine, so it implies --target=local.
   OPT_LOCAL_ONLY=0
   arg_cmd_seen=0
@@ -464,6 +528,7 @@ parse_args() {
       --railway-project-name) OPT_RW_PROJECT="$arg_val" ;;
       --railway-workspace) OPT_RW_WORKSPACE="$arg_val" ;;
       --no-browser) OPT_NO_BROWSER=1 ;;
+      --no-telemetry) OPT_NO_TELEMETRY=1 ;;
       --confirm-purge) OPT_CONFIRM_PURGE="$arg_val" ;;
       *) die "Unknown option: $arg (see --help)" ;;
     esac
@@ -662,6 +727,10 @@ services:
       - CAIRN_APPLE_HEALTH_SHORTCUT_NAME=${CAIRN_APPLE_HEALTH_SHORTCUT_NAME:-Cairn Apple Health Sync}
       - CAIRN_SETTINGS_SECRET_KEY=${CAIRN_SETTINGS_SECRET_KEY:-}
       - CAIRN_BLANK_PROFILE=${CAIRN_BLANK_PROFILE:-0}
+      # Feedback (Settings -> Send feedback) and the opt-in usage ping go to the
+      # project's feedback service. Point it elsewhere, or set it to "" for none
+      # (feedback then opens a prefilled GitHub issue instead).
+      - CAIRN_FEEDBACK_URL=${CAIRN_FEEDBACK_URL-https://feedback.cairn.fit}
       # Coaching: claude/codex/antigravity use their CLI subscription login (in the
       # cairn-home volume), NOT these env keys. Only Grok headless uses XAI_API_KEY.
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
@@ -1173,6 +1242,7 @@ print_plan() {
     none) say "  Updates:     manual ($DIR/cairn.sh update)" ;;
     *) say "  Updates:     automatic via $UPDATER, nightly at $UPDATE_TIME + within 5 min of \"Update now\"" ;;
   esac
+  tel_plan_line
 }
 
 cmd_install() {
@@ -1201,7 +1271,10 @@ cmd_install() {
     fi
   fi
   if [ "$OPT_NO_START" != 1 ]; then
+    # No container engine is the likeliest stop on this path, and it comes before the plan.
+    tel_arm engine
     ensure_engine
+    tel_disarm
     ENGINE="$CLI"
     if c_exists; then
       ci_proj=$(container_project)
@@ -1219,35 +1292,43 @@ cmd_install() {
   choose_updater
   print_plan
   confirm "Install Cairn with these settings?" "y" || die "Cancelled; nothing was changed."
+  tel_chose download
 
   step "Writing configuration"
   write_config
   if [ "$OPT_NO_START" = 1 ]; then
     say ""
     ok "Configuration written (--no-start). Start it with: sh $DIR/cairn.sh install"
+    tel_done
     return 0
   fi
 
+  TEL_STEP="other"
   acquire_lock || die "An update is running right now; try again in a few minutes."
   step "Starting Cairn"
   info "Pulling the image and starting the container (the first pull can take a few minutes)..."
+  TEL_STEP="start"
   compose up -d --remove-orphans || die "Starting Cairn failed. See: cd $DIR && $COMPOSE -p $NAME logs --tail=80"
   info "Waiting for Cairn to report healthy (up to ${HEALTH_TIMEOUT}s)..."
+  TEL_STEP="health"
   wait_health || die "Cairn did not become healthy in ${HEALTH_TIMEOUT}s. See: cd $DIR && $COMPOSE -p $NAME logs --tail=80 cairn"
   ci_version=$(health_version)
   ok "Cairn ${ci_version:+v$ci_version }is healthy."
 
   TS_URL=""; TS_NOTE=""; LINGER_NOTE=""
+  TEL_STEP="other"
   if [ "$EXPOSURE" = "tailscale" ]; then step "Private HTTPS (Tailscale Serve)"; setup_tailscale
   elif [ "$E_EXPOSURE" = "tailscale" ]; then teardown_tailscale; fi
 
   step "Automatic updates"
+  TEL_STEP="updater"
   install_updater
   if [ -z "$(state_get last_result)" ]; then
     record_result current install "installed" "$ci_version" ""
   fi
   publish_status
   print_summary "$ci_version"
+  tel_done
 }
 
 print_summary() {
@@ -2220,8 +2301,9 @@ rw_print_plan() {
   say "               CAIRN_AUTH_TOKEN and CAIRN_SETTINGS_SECRET_KEY: 64 random hex chars each, sent on stdin"
   say "  Manage it:   $RW_DIR/cairn.sh (status, open, update, logs, uninstall)"
   say "  Cost:        about \$5/month on Railway's Hobby plan (check current pricing)"
-  say "  Disk:        a trial volume is 0.5 GB, enough for about one AI provider. Hobby gives 5 GB;"
+  say "  Disk:        a trial volume is 0.5 GB, enough for one AI provider. Hobby gives 5 GB;"
   say "               after upgrading, grow it in Railway (the volume -> Live Resize)."
+  tel_plan_line
 }
 
 rw_print_commands() {
@@ -2256,6 +2338,7 @@ rw_cmd_install() {
   has curl || die "curl is required (it is how this installer checks Cairn's health)."
   rw_print_plan
   confirm "Set Cairn up on your Railway account with these settings?" "y" || die "Cancelled; nothing was changed."
+  tel_chose railway_cli
   umask 077
   mkdir -p "$RW_DIR"
   chmod 700 "$RW_DIR" "$(rw_home)" 2>/dev/null || true
@@ -2267,7 +2350,9 @@ rw_cmd_install() {
   ok "Signed in to Railway."
 
   step "Setting up the Railway project"
+  TEL_STEP="download"
   install_self
+  TEL_STEP="railway_setup"
   rw_ensure_project
   rw_ensure_service
   rw_ensure_volume
@@ -2275,11 +2360,14 @@ rw_cmd_install() {
   rw_ensure_domain
 
   step "Deploying"
+  TEL_STEP="railway_deploy"
   rw_deploy
   info "Waiting for https://$RW_DOMAIN to answer (up to ${HEALTH_TIMEOUT}s)..."
+  TEL_STEP="health"
   rw_wait_health || die "Railway says the deployment succeeded, but https://$RW_DOMAIN/api/health is not answering yet. Try again in a minute: sh $RW_DIR/cairn.sh status"
   ok "Cairn ${RW_VERSION:+v$RW_VERSION }is healthy."
   rw_summary
+  tel_done
 }
 
 rw_where_token() { printf 'Railway (project %s -> service %s -> Variables -> CAIRN_AUTH_TOKEN)' "$RW_PROJECT" "$RW_SERVICE"; }

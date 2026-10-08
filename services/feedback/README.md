@@ -75,8 +75,17 @@ A daily cron (03:17 UTC) applies the retention rules above.
 
 ## Point Cairn at it
 
-Set `CAIRN_FEEDBACK_URL=https://<your-worker>.workers.dev` in the Cairn environment, or change the
-`DEFAULT_FEEDBACK_URL` constant in the app.
+Cairn already points at the project's own deployment of this service, `https://feedback.cairn.fit`
+(`DEFAULT_FEEDBACK_URL` in `src/feedback.ts`), and only ever contacts it when a person presses Send in
+the feedback sheet or has opted in to the weekly usage ping. A self-hoster can change that with
+`CAIRN_FEEDBACK_URL` in the Cairn environment:
+
+- `CAIRN_FEEDBACK_URL=https://<your-worker>.workers.dev` (or your custom domain, see the commented
+  `routes` line in `wrangler.toml`) sends feedback and pings to your own deployment instead.
+- `CAIRN_FEEDBACK_URL=""` disables the service entirely: feedback falls back to a prefilled GitHub
+  issue the person reviews in their own browser, and the usage ping never sends.
+
+Only `https://` URLs are accepted (plain `http://` only for `localhost`, for `wrangler dev`).
 
 ## Read feedback
 

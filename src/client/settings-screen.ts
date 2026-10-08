@@ -151,6 +151,7 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
       agent_routes: wm.routes,
       chat_routing_mode: wm.chat_routing_mode,
       chat_profile_bindings: wm.chat_profile_bindings,
+      model_class_bindings: wm.model_class_bindings,
       update_check_enabled: wm.update_check_enabled,
       usage_ping_enabled: wm.usage_ping_enabled,
       lead_mode: wm.lead_mode,

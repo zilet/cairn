@@ -34,6 +34,18 @@ function settingsSurfaceChatBindings(value: unknown): Record<string, Record<stri
   return bindings;
 }
 
+function settingsSurfaceModelBindings(value: unknown): Record<string, Record<string, unknown>> {
+  const bindings: Record<string, Record<string, unknown>> = {};
+  for (const [provider, classes] of Object.entries(settingsSurfaceRecord(value))) {
+    const kept: Record<string, unknown> = {};
+    for (const [cls, model] of Object.entries(settingsSurfaceRecord(classes))) {
+      if (typeof model === "string" && model.trim()) kept[cls] = model.trim();
+    }
+    if (Object.keys(kept).length) bindings[provider] = kept;
+  }
+  return bindings;
+}
+
 function settingsData(value: unknown): SettingsScreenData {
   const row = settingsSurfaceRecord(value);
   const agents = Array.isArray(row.agents)
@@ -65,6 +77,8 @@ function settingsWorkingModel(data: SettingsScreenData): SettingsScreenWorkingMo
     // Keep provider/lane entries the current UI cannot render; saving an unrelated
     // setting must not erase a future provider's profile preferences.
     chat_profile_bindings: settingsSurfaceChatBindings(s.chat_profile_bindings),
+    // The Everyday / Deep work model per provider; {} = every CLI's own default model.
+    model_class_bindings: settingsSurfaceModelBindings(s.model_class_bindings),
     enrich_enabled: settingsSurfaceBool(s.enrich_enabled),
     art_enabled: settingsSurfaceBool(s.art_enabled, true),
     research_enabled: settingsSurfaceBool(s.research_enabled),
@@ -100,6 +114,7 @@ Object.assign(globalThis, {
   settingsSurfaceNumber,
   settingsSurfaceBool,
   settingsSurfaceChatBindings,
+  settingsSurfaceModelBindings,
   settingsData,
   settingsWorkingModel,
 });

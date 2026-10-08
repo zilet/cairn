@@ -128,10 +128,21 @@ test("the welcome's week is its own op on a thinner profile; the Plan tab's comp
   assert.equal(repo.taskForOp("compose_week"), "proposal");
   assert.deepEqual(repo.TASK_EXECUTION_PROFILES.proposal, { model_class: "deep", reasoning: "xhigh" });
   const defs = JSON.parse(fs.readFileSync(path.join(root, "agents.json"), "utf8"));
-  assert.deepEqual(repo.resolveTaskExecutionProfile("welcome_week", "claude", { defs, bindings: {} }), {
-    model: "sonnet",
-    reasoning: "medium",
-  });
+  // No model by default (the CLI's own); the everyday class choice, when made, applies.
+  assert.deepEqual(
+    repo.resolveTaskExecutionProfile("welcome_week", "claude", { defs, bindings: {}, classBindings: {} }),
+    {
+      reasoning: "medium",
+    }
+  );
+  assert.deepEqual(
+    repo.resolveTaskExecutionProfile("welcome_week", "claude", {
+      defs,
+      bindings: {},
+      classBindings: { claude: { fast: "sonnet", deep: "opus" } },
+    }),
+    { model: "sonnet", reasoning: "medium" }
+  );
 });
 
 test("a streaming agent: each day rides the phase meta as it is written, and the final parse is what lands", () => {

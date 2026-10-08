@@ -19,7 +19,8 @@ Either way, the installer opens Cairn in your browser already signed in. You pai
 
 All options run the same published image (`ghcr.io/zilet/cairn:latest`). Your data stays on
 **your** Railway account or **your** hardware. The Cairn project hosts nothing and never sees your
-data.
+data; the few things that do leave an install are listed in
+[What leaves your install](#what-leaves-your-install).
 
 | | 1) Railway | 2) This computer or server | No terminal: the Railway button | Manual Docker |
 |---|---|---|---|---|
@@ -59,7 +60,7 @@ curl -fsSL https://cairn.fit/install | sh -s -- --target=railway
 
 Railway's free tier may pause your service, and its memory can be too small for the AI coach, so
 the Hobby plan (about $5/month) is the recommended choice. Check Railway's current pricing before
-you approve. A trial volume is 0.5 GB, enough for about one AI provider; Hobby allows 5 GB, which you
+you approve. A trial volume is 0.5 GB, enough for one AI provider; Hobby allows 5 GB, which you
 set on the volume with **Live Resize** after upgrading (see [How much disk](#how-much-disk)).
 
 What the installer does, in order:
@@ -111,10 +112,7 @@ company holds that data, choose option 2 and run Cairn on hardware you own.
 
 ## No terminal? The Railway button
 
-<!-- TODO(maintainer): publish the Railway template (deploy/railway/README.md), then replace the
-     link below with https://railway.com/new/template/<CODE> here, in README.md and in
-     QUICKSTART.md. Until then the button points at this section. -->
-[![Deploy on Railway](https://railway.com/button.svg)](#no-terminal-the-railway-button)
+[![Deploy on Railway](https://railway.com/button.svg)](https://cairn.fit/railway)
 
 The button builds the same setup as option 1 from Railway's website, with nothing to install.
 
@@ -214,7 +212,7 @@ ChatGPT (Codex) about 400 MB. The database itself is small.
 
 | Volume | What fits |
 |---|---|
-| 0.5 GB (Railway trial) | About one AI provider. A second one fails to install with "Your server's disk is nearly full". |
+| 0.5 GB (Railway trial) | One AI provider, whichever you pick: even ChatGPT (Codex), the largest, installs on a fresh trial volume. A second one fails to install with "Your server's disk is nearly full". |
 | 5 GB (Railway Hobby) | Every provider, with room for years of data. Recommended. |
 
 Railway's trial gives a 0.5 GB volume. After upgrading to Hobby, the volume does not grow by itself:
@@ -245,6 +243,72 @@ to free its space. Its sign-in is kept, so installing it again later needs no ne
 - **Backups contain your AI sign-ins.** In these one-volume setups, your AI provider sign-ins live on
   the same volume as your data (`/data/home`). Any copy of `/data` therefore includes them, so keep
   backups private.
+
+## What leaves your install
+
+Cairn has no server of its own that holds your data. This is the complete list of what an install
+sends, and where. Anything not listed here does not leave.
+
+**From the installer** ([`deploy/install.sh`](../deploy/install.sh)):
+
+- **Fetching `https://cairn.fit/install`.** The project site serves the script and counts the
+  download. Fetching the same file from `raw.githubusercontent.com` instead is not counted by the
+  project.
+- **Install counting, opt-out.** Two anonymous requests to `https://cairn.fit/install/event`: the
+  plan was accepted (Railway or this machine), then done or failed at a fixed step. No IP is kept and
+  nothing about you or the machine is sent. `--no-telemetry`, `DO_NOT_TRACK=1` or
+  `CAIRN_NO_TELEMETRY=1` turns it off. Exactly what is sent: [`INSTALL.md`](INSTALL.md#install-counting).
+- **Downloads.** The image from GHCR, the installer's own copy, and (only with your consent)
+  Docker's or Railway's install script. The full list: [`INSTALL.md`](INSTALL.md#what-the-installer-downloads).
+  On Railway, the Railway CLI talks to Railway with your Railway sign-in.
+- **The Railway button** links to `https://cairn.fit/railway`, a counted redirect to the Railway
+  template.
+
+**From the running app:**
+
+- **Your AI provider.** Coaching runs through the CLI you connect (Claude Code, Codex, Antigravity or
+  Grok). Each coaching task sends the part of your data that task needs to that provider (Anthropic,
+  OpenAI, Google or xAI), under your own subscription. With **research** on (Settings, on by
+  default), the provider's own web tools may look up published evidence for a health finding. With no
+  provider connected, nothing goes to any AI.
+- **Installing or updating a provider's tool** downloads it from npm (Claude Code, Codex) or from
+  the vendor's own URL (Antigravity, Grok), at the exact version and checksum pinned in
+  `agents.json`.
+- **The update check.** Once a day, one anonymous request to GitHub's Releases API
+  (`api.github.com`) for the newest release: no install id, nothing about you. On by default;
+  **Settings → Data → Check for new Cairn releases** turns it off. Installing an update pulls the
+  image from GHCR (the this-machine updater does it on your machine; on Railway, Railway does).
+- **The exercise how-to library.** Shortly after the first start, Cairn downloads the free exercise
+  library from `raw.githubusercontent.com` (yuhonas/free-exercise-db), and later the photos for the
+  exercises you open. It only downloads; it sends nothing. `CAIRN_GUIDE_AUTO_IMPORT=0` stops the
+  background download.
+- **A link you paste into chat.** Cairn fetches that page (up to three per message) so the coach can
+  read it.
+- **Gemini, only with your own key.** With `GEMINI_API_KEY` set, picture prompts go to Google's
+  Gemini API: a short description of an exercise, an activity or a meal (its name, never
+  your numbers). So does a meal photo you attach, to read the plate. The starter figures ship in the
+  image; nothing is downloaded for them.
+- **Garmin, only when you connect it.** Sync talks to Garmin Connect with your own sign-in, both ways
+  (finished strength sessions go back to Garmin).
+- **Feedback, only when you send it.** **Send feedback** delivers what you typed (kind, message, an
+  optional contact), the Cairn version and platform, and a random install id to the project's
+  feedback service at `https://feedback.cairn.fit` ([`services/feedback`](../services/feedback/)).
+  Anonymous diagnostics (error counts and route names, never your data) are added only when you tick
+  the box, and the sheet shows them first. Your contact stays in the service's own database, only for a
+  reply: it is never put in a forwarded issue or notification. `CAIRN_FEEDBACK_URL` points it at your
+  own deployment, or `CAIRN_FEEDBACK_URL=""` turns the service off; then **Send feedback** opens a
+  prefilled GitHub issue in your own browser for you to review and submit.
+- **The usage ping, opt-in.** Off by default (**Settings → Data → Share anonymous usage**). When on,
+  once a week, five fields go to the same feedback service: a random install id, the Cairn version,
+  the platform (such as `railway` or `docker`), the CPU architecture and the Node version.
+- **Error reports stay home.** When something fails in the app (a welcome step included), your
+  browser reports it to your own Cairn (`/api/telemetry/client`), as an error class and a route
+  name, never your data. It leaves only inside a feedback message, and only when you tick "Include
+  anonymous diagnostics".
+
+Apple Health data only comes in (your phone sends it to your Cairn). Cairn sends no push
+notifications, loads no web fonts or scripts from other sites, and has no analytics. Field-level
+detail for feedback and the ping: [`OBSERVABILITY.md`](OBSERVABILITY.md#feedback-and-the-usage-ping).
 
 ## Backups and moving between options
 

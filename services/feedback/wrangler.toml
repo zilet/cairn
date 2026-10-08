@@ -3,6 +3,10 @@ name = "cairn-feedback"
 main = "src/index.ts"
 compatibility_date = "2025-01-01"
 
+# Serve it on your own domain (the zone must be on the same Cloudflare account).
+# Without this, wrangler deploys it to https://cairn-feedback.<account>.workers.dev.
+# routes = [{ pattern = "feedback.example.org", custom_domain = true }]
+
 [[d1_databases]]
 binding = "DB"
 database_name = "cairn-feedback"

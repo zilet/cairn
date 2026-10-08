@@ -49,6 +49,7 @@ test("settings surface normalizes API data into the working model", () => {
       time_zone: "America/New_York",
       chat_routing_mode: "single",
       chat_profile_bindings: { hidden: { capture: { model: "keep" } }, visible: { coach: { reasoning: "medium" } } },
+      model_class_bindings: { claude: { fast: " sonnet ", deep: "opus", junk: 3 }, empty: { fast: "" } },
     },
     agents: [{ name: "claude", enabled: true }, { name: "stub", enabled: false }, { description: "missing name" }],
     research_auto_eligible: { eligible: true, reason: "web_agent_connected" },
@@ -73,6 +74,15 @@ test("settings surface normalizes API data into the working model", () => {
   assert.equal(wm.chat_routing_mode, "single");
   assert.deepEqual(JSON.parse(JSON.stringify(wm.chat_profile_bindings.hidden)), { capture: { model: "keep" } });
   assert.equal(wm.chat_profile_bindings.visible.coach.reasoning, "medium");
+  // The Everyday / Deep work choice rides the working model; a blank value is the CLI default.
+  assert.deepEqual(JSON.parse(JSON.stringify(wm.model_class_bindings)), { claude: { fast: "sonnet", deep: "opus" } });
+  assert.deepEqual(
+    JSON.parse(
+      JSON.stringify(surface.workingModel(surface.settingsData({ settings: {}, agents: [] })).model_class_bindings)
+    ),
+    {},
+    "no choice: every CLI's own default"
+  );
   assert.equal(surface.routeEligible(data).reason, "web_agent_connected");
 });
 

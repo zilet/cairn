@@ -102,6 +102,9 @@ function envFor(dir) {
     CAIRN_STARTER_ART_DIR: path.join(dir, "starter-art-none"),
     // Offline and deterministic: the background exercise-guide import never runs.
     CAIRN_GUIDE_AUTO_IMPORT: "0",
+    // Feedback defaults to the project's hosted service; "" means no service, so no
+    // test (and no scheduler tick) can POST feedback or a usage ping for real.
+    CAIRN_FEEDBACK_URL: "",
   };
 }
 

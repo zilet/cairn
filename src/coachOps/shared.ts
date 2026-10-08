@@ -5,7 +5,7 @@
 
 import { getAgentConfig, interactiveTimeoutForOp } from "../repo/settings.js";
 import type { FloorPrecheck, FloorViolation } from "../repo/verify-floors.js";
-import { AgentFallbackError, agentInfo, listAgentModels, loadAgents } from "../agents.js";
+import { AgentFallbackError, agentInfo, listAgentModelsAsync, loadAgents } from "../agents.js";
 import { agentBusyEnvelopeFields } from "../agent-busy.js";
 import type { JsonSchema } from "../json-schema.js";
 import { runChosen } from "../runChosen.js";
@@ -24,11 +24,13 @@ export function agentInfoOp(name: string) {
   return { ok: true as const, ...info };
 }
 
-// A CLI's model catalog (grok/agy). Empty list for a CLI with no `models_list`
-// or on any probe failure; ok:false only for an unknown agent.
-export function agentModelsOp(name: string) {
+// A CLI's model catalog (grok/agy/codex) — the live choices for the Settings model
+// dropdowns. Read without blocking the event loop and cached until the CLI is installed,
+// updated, removed or signed in again. Empty list for a CLI with no `models_list` or on
+// any probe failure; ok:false only for an unknown agent.
+export async function agentModelsOp(name: string) {
   if (!loadAgents()[name]) return { ok: false as const, error: `unknown agent "${name}"`, models: [] as string[] };
-  return { ok: true as const, models: listAgentModels(name) };
+  return { ok: true as const, models: await listAgentModelsAsync(name) };
 }
 
 // Agent-status contract (v35) — a calm, additive provenance hint the PWA reads to

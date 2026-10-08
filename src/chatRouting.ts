@@ -68,7 +68,33 @@ export type ChatProfileBindings = ProfileBindings<ChatLane>;
 
 export interface ResolvedChatProfile {
   model?: string;
-  reasoning: ChatReasoningLevel;
+  // Absent only on the legacy single-profile path when the person bound a model class
+  // but no lane exists to pick an effort from: the CLI keeps its own effort.
+  reasoning?: ChatReasoningLevel;
+}
+
+// Which provider-neutral model class each chat lane belongs to, so the person's ONE
+// Settings -> Agents choice (settings.model_class_bindings: Everyday = fast, Deep work =
+// deep) governs chat as well as the ops. Kept a string literal (mirrors ModelClass in
+// agents.ts) so this policy module stays free of the CLI-adapter layer. The legacy
+// single-profile path has no lane and reads the everyday class.
+export type ChatModelClass = "fast" | "deep";
+export const CHAT_LANE_MODEL_CLASS: Record<ChatLane, ChatModelClass> = {
+  capture: "fast",
+  coach: "fast",
+  deep: "deep",
+};
+export type ChatClassModelBindings = Record<string, Partial<Record<ChatModelClass, string>>>;
+
+/** The model the person bound to `modelClass` for `provider`, or undefined (CLI default). */
+export function classBoundChatModel(
+  provider: string | null | undefined,
+  modelClass: ChatModelClass,
+  classBindings: ChatClassModelBindings | null | undefined
+): string | undefined {
+  const name = String(provider ?? "").trim();
+  const value = name ? classBindings?.[name]?.[modelClass] : undefined;
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 const LANE_RANK: Record<ChatLane, number> = { capture: 0, coach: 1, deep: 2 };
@@ -371,17 +397,24 @@ export function normalizeProfileBindings<K extends string>(value: unknown, keys:
 export function normalizeChatProfileBindings(value: unknown): ChatProfileBindings {
   return normalizeProfileBindings(value, CHAT_LANES);
 }
-/** Resolve requested model/reasoning independently of any provider CLI syntax. */
+/**
+ * Resolve requested model/reasoning independently of any provider CLI syntax. The
+ * model is, in order: the advanced per-lane override (chat_profile_bindings), else the
+ * person's class choice for the lane's class (model_class_bindings), else nothing — the
+ * CLI's own default model.
+ */
 export function resolveChatProfile(
   lane: ChatLane,
   selectedProvider: string | null | undefined,
-  bindings: unknown
+  bindings: unknown,
+  classBindings?: ChatClassModelBindings | null
 ): ResolvedChatProfile {
   const normalized = normalizeChatProfileBindings(bindings);
   const provider = String(selectedProvider ?? "").trim();
   const bound = provider ? normalized[provider]?.[lane] : undefined;
+  const model = bound?.model ?? classBoundChatModel(provider, CHAT_LANE_MODEL_CLASS[lane], classBindings);
   return {
-    ...(bound?.model ? { model: bound.model } : {}),
+    ...(model ? { model } : {}),
     reasoning: bound?.reasoning ?? DEFAULT_REASONING[lane],
   };
 }

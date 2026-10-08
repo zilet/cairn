@@ -30,6 +30,13 @@ function log(message) {
   process.stdout.write(`${message}\n`);
 }
 
+// One machine-readable stdout line per real step; the server reads the LAST one as the
+// run's phase (src/agentCliUpdates.ts) so Settings can say where an install is.
+const PHASE_PREFIX = "CAIRN_PHASE ";
+function phase(name) {
+  log(`${PHASE_PREFIX}${name}`);
+}
+
 function safeArgv(value) {
   if (!Array.isArray(value)) return [];
   const out = value.filter((item) => typeof item === "string" && item.length > 0 && item.length <= 120);
@@ -423,6 +430,7 @@ export function removeAgentCli(name, options = {}) {
   const { command, label, spec } = readAgentInstall(manifestPath, name);
   const env = options.env || process.env;
   const root = cliRoot(env);
+  phase("removing");
   const before = freeMb(root);
   removeInstalledFiles(command, spec, root, env.HOME || "");
   const after = freeMb(root);
@@ -492,11 +500,13 @@ export function installAgentCli(name, options = {}) {
   const home = env.HOME || "";
   const fresh = !fs.existsSync(path.join(bin, command));
   const measure = options.freeMb || freeMb;
+  phase("checking_disk");
   const free = measure(root);
   log(`installing ${label} (${name}); ${free ?? "?"} MB free${spec.size_mb ? `, needs about ${spec.size_mb} MB` : ""}`);
 
   try {
     if (fresh && spec.size_mb && free != null && free < spec.size_mb) throw diskFullError(label, free, spec.size_mb);
+    phase("downloading");
     if (spec.method === "npm") {
       run("npm", ["install", "--global", "--prefix", root, `${spec.package}@${spec.version}`, ...spec.args], env);
     } else {
@@ -520,6 +530,7 @@ export function installAgentCli(name, options = {}) {
         }
       }
     }
+    phase("verifying");
     const check = verifyRuns(command, env);
     if (!check.ok) {
       removeInstalledFiles(command, spec, root, home);

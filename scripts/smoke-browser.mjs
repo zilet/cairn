@@ -79,7 +79,6 @@ const requiredGlobals = {
   CairnTodayAddExerciseController: "object",
   CairnTodaySessionController: "object",
   CairnChatAttachment: "object",
-  CairnMealRecipeController: "object",
   CairnFuelTodayController: "object",
   // The eager half of the lazy-bundle contract.
   ensureBundle: "function",
@@ -97,6 +96,7 @@ const lazyBundles = {
   ask: { file: "bundle-10-ask", globals: { renderChat: "function", CairnChatClient: "object", CairnRippleCardController: "object" } },
   settings: { file: "bundle-11-settings", globals: { renderSettings: "function", CairnSettingsAgents: "object" } },
   calendar: { file: "bundle-12-calendar", globals: { renderDay: "function", CairnDayRecord: "object", CairnDrill: "object" } },
+  meals: { file: "bundle-13-meals", globals: { CairnMealRecipeController: "object" } },
 };
 
 /** The lazy bundles a smoke route's destination must have injected (dependencies included). */
@@ -111,6 +111,7 @@ function lazyBundlesFor(route) {
   if (route.tab === "plan" && planSeg === "edit") return ["train"];
   if (route.tab === "plan" && planSeg === "endurance") return ["horizon", "train"];
   if (route.tab === "plan" && planSeg === "coach") return ["ask"];
+  if (route.tab === "plan" && planSeg === "meals") return ["meals"];
   return [];
 }
 
@@ -362,7 +363,9 @@ async function smokeColdTabNavigation(cdp, base) {
     await navigateAndHydrate(cdp, base, "/app/today", "today");
     await sleep(2500); // well past the warm-up's delay: nothing may have loaded itself
     const cold = await evaluate(cdp, `[...document.querySelectorAll("script[data-cairn-bundle]")].map((s) => s.dataset.cairnBundle)`);
-    ok(Array.isArray(cold) && cold.length === 0, "with the warm-up off, no lazy bundle loads on its own", JSON.stringify(cold));
+    // Today mounts its own lazy parts (the week-ahead card, the strip's day peek); nothing else may load itself.
+    const todayOwn = ["today-ahead", "calendar"];
+    ok(Array.isArray(cold) && cold.every((name) => todayOwn.includes(name)), "with the warm-up off, only Today's own lazy parts load", JSON.stringify(cold));
     const hops = [
       { home: "train", tab: "progress", bundles: ["train"] },
       { home: "horizon", tab: "horizon", bundles: ["horizon", "train"] },

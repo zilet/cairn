@@ -1010,6 +1010,7 @@ CREATE TABLE IF NOT EXISTS settings (
   chat_routing_mode TEXT DEFAULT 'adaptive',  -- adaptive | single (legacy one-profile chat path)
   chat_profile_bindings TEXT DEFAULT '',      -- JSON provider -> capture|coach|deep -> optional {model,reasoning}
   agent_profile_bindings TEXT DEFAULT '',     -- JSON provider -> task -> optional {model,reasoning}; overrides TASK_EXECUTION_PROFILES (repo/settings.ts)
+  model_class_bindings TEXT DEFAULT '',       -- JSON provider -> fast|deep -> model; empty = every CLI runs its own default model (repo/settings.ts)
   update_check_enabled INTEGER DEFAULT 1,     -- 1 = quiet daily check for a newer Cairn release (GitHub Releases API); pull-never-push, surfaced in Settings → Data
   lead_mode TEXT DEFAULT 'lead',               -- lead | announce_first | review_everything — one calm autonomy control
   training_drive TEXT DEFAULT 'steady',        -- steady | push — the athlete's standing posture toward accumulated-load rest
@@ -1600,6 +1601,7 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   chat_turn_id INTEGER,                 -- durable correlation to chat_turns.id
   attempt_index INTEGER,                -- monotonic attempt number inside the durable turn
   escalation_source TEXT,               -- capture | coach when this attempt followed/requested escalation
+  failure_tail TEXT,                    -- failed attempts: redacted single-line tail of the CLI's output (agentFailureTail.ts)
   created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_agent_runs_created ON agent_runs(created_at);

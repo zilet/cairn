@@ -222,15 +222,19 @@ args, input mode, env); which are enabled/ordered and the strategy live in `sett
 runtime with no redeploy. Health ingestion deliberately opts out of the rotation (see
 `docs/ARCHITECTURE.md`).
 
-**Model and effort are server policy, not the CLI's default.** `TASK_POLICY` in
+**Effort is server policy; the model is the CLI's own unless the person picks one.** `TASK_POLICY` in
 `src/repo/settings.ts` picks *which* agent runs an op; its sibling `TASK_EXECUTION_PROFILES` picks
-*how* — keyed by the same `taskForOp` class. Profiles are provider-neutral (`fast`/`deep`) and map to
-a CLI model **alias** via `model_classes` in `agents.json`, so they track model generations without a
-code change; a provider that declares no `model_classes` (codex/antigravity/grok) keeps its own model
-and takes only the effort. Resolution happens once at spawn time through `RunOpts.profile`, so
-`runChosen` callers need no per-call-site wiring, and the interactive timeout scales with the
-requested effort rather than a flat cap. Chat is deliberately absent from the table — its adaptive
-lane (`src/chatRouting.ts`) stays authoritative. Never pin a dated model ID; pin the alias.
+*how* — a provider-neutral class (`fast`/`deep`) and an effort, keyed by the same `taskForOp` class.
+A class names NO model by default, so no `--model` is passed and each CLI runs what its plan gives it;
+only a person's binding in Settings → Agents ("Everyday" = `fast`, "Deep work" = `deep`,
+`settings.model_class_bindings`) adds one, for ops AND chat (each chat lane maps to a class;
+`chat_profile_bindings` is the advanced per-lane override that wins). The choices are the CLI's live
+catalog (`models_list`) else `agents.json` `model_choices` aliases, plus validated free text; a model
+the account can't use falls back to the CLI default (`src/agentModelPins.ts`). Resolution happens once
+at spawn time through `RunOpts.profile` (`resolveTaskExecutionProfile`), so `runChosen` callers need no
+per-call-site wiring, and the interactive timeout scales with the requested effort. Never pin a dated
+model ID, and never ship a model pin for everyone. Details: `docs/ARCHITECTURE.md` "Agent execution
+profiles".
 
 **Chat is a durable, non-blocking turn**, not a request/response: `POST /api/chat` enqueues and
 returns immediately; a serial worker runs it, streaming token deltas over SSE when the agent supports

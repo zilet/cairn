@@ -6,8 +6,8 @@ import { getVersion } from "./version.js";
 
 // The opt-in usage ping: so the maintainer can tell how many installs exist and on
 // what, without learning anything about anyone. OFF by default
-// (settings.usage_ping_enabled), and inert unless a feedback service is configured
-// (CAIRN_FEEDBACK_URL or DEFAULT_FEEDBACK_URL). When both hold, at most once a week
+// (settings.usage_ping_enabled), and inert when no feedback service is configured
+// (CAIRN_FEEDBACK_URL="" turns off the DEFAULT_FEEDBACK_URL). When both hold, at most once a week
 // it sends exactly five fields — a random install id, the Cairn version, the host
 // platform, the CPU architecture and the Node version. Failures are silent and
 // never retried sooner than a day; nothing here can block boot or a request.

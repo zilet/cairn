@@ -34,7 +34,7 @@ operatorRouter.get("/agents", (_req, res) => res.json(getAgentConfig()));
 // every Settings open). Both return ok:false at HTTP 200, mirroring the rest of
 // Cairn's designed failure signals.
 operatorRouter.get("/agents/:name/info", (req, res) => res.json(agentInfoOp(req.params.name)));
-operatorRouter.get("/agents/:name/models", (req, res) => res.json(agentModelsOp(req.params.name)));
+operatorRouter.get("/agents/:name/models", async (req, res) => res.json(await agentModelsOp(req.params.name)));
 // "Say hello": one tiny round-trip through the real spawn path for THIS agent only, no
 // rotation. Always 200 — {ok:true, agent, ms} or {ok:false, agent, reason, message}
 // with reason busy | not_signed_in | timeout | failed | not_installed (busy = retry,

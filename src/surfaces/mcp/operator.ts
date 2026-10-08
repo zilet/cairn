@@ -44,9 +44,9 @@ export function registerOperatorTools(server: McpToolRegistrar) {
 
   server.tool(
     "list_agent_models",
-    "List the models a CLI exposes (grok/antigravity declare a catalog). Informational only — no pinning. Returns an empty list for a CLI with no catalog (claude/codex), ok:false for an unknown agent.",
+    "List the models a CLI exposes (grok/antigravity/codex declare a catalog; read once and refreshed after the CLI is installed, updated, removed or signed in again). These are the live choices for set_settings model_class_bindings, ahead of the provider's curated aliases (get_settings agents[].model_choices). Listing never pins anything. Returns an empty list for a CLI with no catalog (claude), ok:false for an unknown agent.",
     { name: z.string().describe("agent name from list_agents") },
-    async ({ name }) => asText(agentModelsOp(name))
+    async ({ name }) => asText(await agentModelsOp(name))
   );
 
   server.tool(
@@ -92,7 +92,7 @@ export function registerOperatorTools(server: McpToolRegistrar) {
 
   server.tool(
     "set_settings",
-    "Update app settings (any subset). agent_strategy: round_robin|random|priority. agent_order / disabled_agents: arrays of agent names. agent_routes is an optional per-task agent map using the server-owned route metadata returned by get_settings. coach_day(0-6)/coach_hour(0-23) control the weekly background-review cadence in the last timezone reported by the PWA. coach_enabled is retained only for legacy clients; normal background coaching does not require this opt-in.",
+    "Update app settings (any subset). agent_strategy: round_robin|random|priority. agent_order / disabled_agents: arrays of agent names. agent_routes is an optional per-task agent map using the server-owned route metadata returned by get_settings. coach_day(0-6)/coach_hour(0-23) control the weekly background-review cadence in the last timezone reported by the PWA. coach_enabled is retained only for legacy clients; normal background coaching does not require this opt-in. model_class_bindings picks a provider's Everyday (fast) / Deep work (deep) model; empty means every CLI runs its own default model.",
     {
       agent_strategy: z.enum(["round_robin", "random", "priority"]).optional(),
       agent_order: z.array(z.string()).optional(),
@@ -102,6 +102,12 @@ export function registerOperatorTools(server: McpToolRegistrar) {
         .optional()
         .describe(
           `optional per-task agent routing: a map { task -> agent } pinning one of these tasks to a specific agent: ${ROUTABLE_TASK_LIST}. Unknown tasks or unknown/disabled agents are dropped; {} clears all routing (Auto rotates as before), while omitting the field leaves the stored routing unchanged.`
+        ),
+      model_class_bindings: z
+        .record(z.string(), z.object({ fast: z.string().optional(), deep: z.string().optional() }))
+        .optional()
+        .describe(
+          "optional model choice per provider: { provider -> { fast?: model, deep?: model } } (Settings -> Agents: fast = Everyday, deep = Deep work; chat's capture/coach lanes follow fast, its deep lane deep). Empty/absent = each CLI runs its OWN default model (the default). A model must be one the provider offers (list_agent_models, or get_settings agents[].model_choices) or a short id of letters, digits and . _ : / -; unknown providers, classes or malformed ids are dropped. A model the account cannot use falls back to the CLI default at run time. {} clears every choice; omitting the field leaves them unchanged."
         ),
       coach_enabled: z.boolean().optional().describe("legacy weekly-draft compatibility flag; normal background coaching does not require it"),
       coach_day: z.number().int().optional(),

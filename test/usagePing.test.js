@@ -1,6 +1,6 @@
 // The opt-in usage ping (src/usagePing.ts): OFF by default, inert without a feedback
 // service, at most weekly, and exactly five fields. fetch is always injected — the
-// suite never reaches the network, and with no CAIRN_FEEDBACK_URL nothing would send.
+// suite never reaches the network (test/run.mjs also sets CAIRN_FEEDBACK_URL="").
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo } from "./_seed.js";
@@ -71,7 +71,11 @@ test("nothing is sent when off, or with no service configured", async () => {
   assert.equal(off.calls.length, 0);
   const noService = recorder();
   assert.equal(
-    await maybeSendUsagePing({ env: { CAIRN_PLATFORM: "docker" }, enabled: true, fetch: noService.fetch }),
+    await maybeSendUsagePing({
+      env: { CAIRN_FEEDBACK_URL: "", CAIRN_PLATFORM: "docker" },
+      enabled: true,
+      fetch: noService.fetch,
+    }),
     false
   );
   assert.equal(noService.calls.length, 0);

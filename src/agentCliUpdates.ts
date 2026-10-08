@@ -34,6 +34,22 @@ export interface AgentCliFailure {
   need_mb: number | null;
 }
 
+/** Where a running install/remove stands, as the installer reported it (never a percentage). */
+export type AgentCliPhase = "starting" | "checking_disk" | "downloading" | "verifying" | "removing";
+const PHASES = new Set<string>(["checking_disk", "downloading", "verifying", "removing"]);
+const PHASE_PREFIX = "CAIRN_PHASE ";
+
+/** The installer's newest `CAIRN_PHASE <name>` stdout line; `starting` until it prints one. */
+export function parseInstallPhase(stdout: string): AgentCliPhase {
+  const lines = String(stdout || "").split(/\r?\n/);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i].startsWith(PHASE_PREFIX)) continue;
+    const name = lines[i].slice(PHASE_PREFIX.length).trim();
+    if (PHASES.has(name)) return name as AgentCliPhase;
+  }
+  return "starting";
+}
+
 export interface AgentCliUpdateState {
   status: UpdateStatus;
   /** install / update / remove — what this run was asked to do. */
@@ -45,6 +61,10 @@ export interface AgentCliUpdateState {
   exit_code: number | null;
   error: string | null;
   failure: AgentCliFailure | null;
+  /** Only while `status` is running. */
+  phase: AgentCliPhase | null;
+  /** Seconds since start, measured by the server's clock (null unless running). */
+  elapsed_sec: number | null;
   stdout_tail: string;
   stderr_tail: string;
 }
@@ -94,6 +114,8 @@ let state: AgentCliUpdateState = {
   exit_code: null,
   error: null,
   failure: null,
+  phase: null,
+  elapsed_sec: null,
   stdout_tail: "",
   stderr_tail: "",
 };
@@ -121,7 +143,15 @@ function updateScriptPath(): string {
 }
 
 export function getAgentCliUpdateStatus(): AgentCliUpdateState {
-  return { ...state, agents: [...state.agents], failure: state.failure ? { ...state.failure } : null };
+  const running = state.status === "running";
+  const started = state.started_at ? Date.parse(state.started_at) : Number.NaN;
+  return {
+    ...state,
+    agents: [...state.agents],
+    failure: state.failure ? { ...state.failure } : null,
+    phase: running ? parseInstallPhase(state.stdout_tail) : null,
+    elapsed_sec: running && Number.isFinite(started) ? Math.max(0, Math.round((Date.now() - started) / 1000)) : null,
+  };
 }
 
 export function installableAgentNames(): string[] {
@@ -153,6 +183,8 @@ function immediate(status: UpdateStatus, agents: string[], reason: string, error
     exit_code: status === "succeeded" ? 0 : null,
     error,
     failure: null,
+    phase: null,
+    elapsed_sec: null,
     stdout_tail: status === "succeeded" ? "No installed agent CLIs to update.\n" : "",
     stderr_tail: "",
   };
@@ -202,6 +234,8 @@ function startAgentCliUpdates(
     exit_code: null,
     error: null,
     failure: null,
+    phase: null,
+    elapsed_sec: null,
     stdout_tail: "",
     stderr_tail: "",
   };

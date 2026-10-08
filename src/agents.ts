@@ -20,6 +20,8 @@ import { AgentBusyError, isAgentBusyError } from "./agent-busy.js";
 import { log } from "./log.js";
 import { resetContractRejection, takeContractRejection } from "./contractRejection.js";
 import { bumpAgentStateGeneration } from "./repo/agent-state-generation.js";
+import { failureTail, structuredErrorText } from "./agentFailureTail.js";
+import { clearRefusedPins, noteRefusedPin, pinsAfterRefusals, type PinField } from "./agentModelPins.js";
 export { AGENT_ENV_DENYLIST, agentCliPath, agentExecutionCwd, buildAgentSpawnOptions, promptReferencesDataDir, sanitizeAgentEnv } from "./agentExecution.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -47,11 +49,11 @@ function debugAgentStderr(name: string, code: number | null, stderr: string) {
 export type ReasoningLevel = "low" | "medium" | "high" | "xhigh" | "max";
 
 // Cairn's provider-NEUTRAL model classes. An operation asks for a class ("this is
-// cheap structuring" vs "this is the hard read"); each agents.json entry maps the
-// classes IT supports onto its own CLI model name via `model_classes`. Nothing in
-// src/ names a concrete model, and an agent that declares no mapping simply runs on
-// its own configured default — which is why an Anthropic alias never reaches a
-// non-Anthropic CLI.
+// cheap structuring" vs "this is the hard read"). By default a class names NO model:
+// every CLI runs on whatever model its account's plan gives it. Only when the person
+// binds a class to a model for a provider (settings.model_class_bindings, Settings ->
+// Agents "Everyday" / "Deep work") does that provider get a --model for it. Nothing
+// in src/ names a concrete model, so an Anthropic alias never reaches another CLI.
 export const MODEL_CLASSES = ["fast", "deep"] as const;
 export type ModelClass = (typeof MODEL_CLASSES)[number];
 
@@ -119,10 +121,14 @@ export interface AgentDef {
   auth_state?: string[] | null; // HOME-relative FILES only a completed login writes — the fallback "logged in" evidence when the status probe cannot answer
   models_list?: string[] | null; // argv that prints the available models (grok/agy); null ⇒ no model catalog
   model_flag?: string[] | null; // ["--model","{model}"] — expanded only at an explicit {model_args} slot
-  // This provider's own name for each Cairn model class, e.g. {"fast":"sonnet","deep":"opus"}.
-  // Pin an ALIAS, never a dated id, so a new generation ships without a code change.
-  // Omit the map (or a class) to let the CLI use whatever model it is configured with.
-  model_classes?: Partial<Record<ModelClass, string>>;
+  // The curated model ALIASES Settings offers for this provider's class bindings, e.g.
+  // ["sonnet","opus"]. Offered, never applied: with nothing chosen the CLI keeps its own
+  // default. Aliases only, never dated ids, so a new generation ships without a code
+  // change. A CLI that also declares `models_list` offers its live catalog first.
+  model_choices?: string[];
+  // How `models_list` prints its catalog: one model per line (default) or codex's JSON
+  // ({models:[{slug, visibility}]}).
+  models_format?: "lines" | "codex_json";
   capabilities?: AgentCapabilities;
   // Enforced structured output, expanded only at an explicit {schema_args} slot and
   // only when the caller supplied RunOpts.schema. Absent ⇒ this CLI can't enforce a
@@ -200,6 +206,8 @@ export function listAgents() {
     // pure config reads, surfaced so the UI can render the right affordances.
     can_login: def.login != null,
     models_list: def.models_list != null,
+    // The curated aliases offered for this provider's Everyday / Deep work model.
+    model_choices: agentModelChoices(def),
     capabilities: normalizedAgentCapabilities(def),
     installable: !!def.install,
     install_method: def.install?.method ?? null,
@@ -584,6 +592,10 @@ export function invalidateAgentConfigured(name?: string): void {
   // A completed login is exactly the event a persisted auth hold was waiting for
   // — drop it here rather than making the person wait out the re-probe leash.
   for (const agent of name ? [name] : Object.keys(loadAgents())) availabilityClear(agent);
+  // A new login or CLI may mean a new plan or a newer alias table: re-try refused pins.
+  clearRefusedPins(name);
+  // A catalog read in flight was taken from the CLI as it was before this change.
+  modelsEpoch++;
   if (name) {
     configuredCache.delete(name);
     configuredRetryAt.delete(name);
@@ -709,7 +721,7 @@ export function agentInfo(name: string): { version: string | null; model_current
 // this is intentionally conservative: only return something when a CLI exposes it
 // for free, else null (the UI shows "—"). Never makes a coaching/paid call.
 function agentModelCurrent(name: string): string | null {
-  // codex has no `models` catalog, but its CURRENT model is pinned in
+  // codex's catalog (JSON) names no default, but its CURRENT model is pinned in
   // ~/.codex/config.toml (`model = "…"`) — a free, local, read-only lookup (never a
   // coaching/paid call). null when unpinned ⇒ the UI shows "—".
   if (name === "codex") return readCodexConfigModel();
@@ -719,8 +731,8 @@ function agentModelCurrent(name: string): string | null {
   return parseDefaultModel(rawModelsOutput(name));
 }
 
-// Read codex's pinned model from ~/.codex/config.toml. codex exposes no `models`
-// catalog command, so this config read is its only free, non-interactive current-
+// Read codex's pinned model from ~/.codex/config.toml. codex's catalog JSON carries
+// no "default" marker, so this config read is its only free, non-interactive current-
 // model signal. Cached per process; null when the file or key is absent.
 let _codexModel: string | null | undefined;
 function readCodexConfigModel(): string | null {
@@ -783,6 +795,8 @@ function rawModelsOutput(name: string): string {
         ...buildAgentSpawnOptions({ kind: "models", restoreEnvKeys: def.env_required || [] }),
         timeout: 8000,
         encoding: "utf8",
+        // codex's JSON catalog runs ~650 KB, close to spawnSync's 1 MB default.
+        maxBuffer: 16 * 1024 * 1024,
       });
       if (!r.error) raw = `${r.stdout || ""}\n${r.stderr || ""}`;
     } catch { raw = ""; }
@@ -791,31 +805,135 @@ function rawModelsOutput(name: string): string {
   return raw;
 }
 
-// Read a CLI's model catalog (grok/agy declare `models_list`). Returns a clean
-// string[] (one model per line), or [] for a CLI with no catalog / on any failure.
-// Informational only — no pinning this batch.
+// Read a CLI's model catalog (grok/agy/codex declare `models_list`). Returns a clean
+// string[], or [] for a CLI with no catalog / on any failure. It feeds the Settings ->
+// Agents model dropdowns (ahead of the curated `model_choices`), so a CLI release that
+// adds a model shows up without a Cairn change; invalidateAgentConfigured drops it on
+// every install / update / remove / sign-in.
 const modelsCache = new Map<string, string[]>();
 
 export function listAgentModels(name: string): string[] {
   const def = loadAgents()[name];
   if (!def || !Array.isArray(def.models_list) || !def.models_list.length) return [];
   if (modelsCache.has(name)) return modelsCache.get(name) ?? [];
-  const models = parseModelsOutput(rawModelsOutput(name));
+  const models = parseModelsOutput(rawModelsOutput(name), def.models_format);
   modelsCache.set(name, models);
   return models;
 }
 
+// The same catalog read WITHOUT blocking the event loop: the Settings model dropdowns
+// fetch it on every first visit, and a spawnSync there would stall every request for
+// up to the probe's 8s. Shares the caches above; concurrent callers share one spawn,
+// and a read that was in flight when the CLI changed (invalidateAgentConfigured) is
+// returned to its caller but never cached.
+const modelsInflight = new Map<string, Promise<string>>();
+let modelsEpoch = 0;
+
+function rawModelsOutputAsync(name: string): Promise<string> {
+  const def = loadAgents()[name];
+  if (!def || !Array.isArray(def.models_list) || !def.models_list.length) return Promise.resolve("");
+  if (modelsRawCache.has(name)) return Promise.resolve(modelsRawCache.get(name) ?? "");
+  const pending = modelsInflight.get(name);
+  if (pending) return pending;
+  const epoch = modelsEpoch;
+  const run = new Promise<string>((resolve) => {
+    if (!commandPresent(def.command)) return resolve("");
+    try {
+      execFile(
+        def.command,
+        def.models_list as string[],
+        {
+          ...buildAgentSpawnOptions({ kind: "models", restoreEnvKeys: def.env_required || [] }),
+          timeout: 8000,
+          encoding: "utf8",
+          maxBuffer: 16 * 1024 * 1024,
+        },
+        (error, stdout, stderr) => {
+          // Same reading as the sync probe: only a spawn failure or a kill is "no catalog";
+          // a non-zero exit still printed whatever it printed.
+          const spawnFailed = !!error && (typeof (error as any).code === "string" || !!(error as any).killed);
+          resolve(spawnFailed ? "" : `${stdout || ""}\n${stderr || ""}`);
+        }
+      );
+    } catch {
+      resolve("");
+    }
+  }).then((raw) => {
+    modelsInflight.delete(name);
+    if (epoch === modelsEpoch) modelsRawCache.set(name, raw);
+    return raw;
+  });
+  modelsInflight.set(name, run);
+  return run;
+}
+
+/** listAgentModels without blocking: what the REST/MCP catalog endpoints serve. */
+export async function listAgentModelsAsync(name: string): Promise<string[]> {
+  const def = loadAgents()[name];
+  if (!def || !Array.isArray(def.models_list) || !def.models_list.length) return [];
+  if (modelsCache.has(name)) return modelsCache.get(name) ?? [];
+  const epoch = modelsEpoch;
+  const models = parseModelsOutput(await rawModelsOutputAsync(name), def.models_format);
+  if (epoch === modelsEpoch) modelsCache.set(name, models);
+  return models;
+}
+
+/** The catalog already read this process, WITHOUT spawning anything; null when not read yet. */
+export function cachedAgentModels(name: string): string[] | null {
+  return modelsCache.get(name) ?? null;
+}
+
+/** The curated aliases agents.json offers for a provider's class bindings (cleaned, capped). */
+export function agentModelChoices(def: AgentDef | undefined): string[] {
+  if (!def || !Array.isArray(def.model_choices)) return [];
+  const out: string[] = [];
+  for (const raw of def.model_choices) {
+    const v = typeof raw === "string" ? raw.trim() : "";
+    if (v && v.length <= 80 && !out.includes(v)) out.push(v);
+  }
+  return out.slice(0, 20);
+}
+
+// codex prints its catalog as one JSON object: {models:[{slug, visibility, …}]}. Only
+// listed (visibility != "hide") slugs are offered; [] when no such object is found.
+function parseCodexModelsJson(raw: string): string[] {
+  const start = (raw || "").indexOf("{");
+  if (start < 0) return [];
+  const { json } = scanBalanced(raw, start);
+  if (!json) return [];
+  let parsed: any;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  for (const m of Array.isArray(parsed?.models) ? parsed.models : []) {
+    const slug = typeof m?.slug === "string" ? m.slug.trim() : "";
+    if (!slug || slug.length > 80 || m?.visibility === "hide" || out.includes(slug)) continue;
+    out.push(slug);
+    if (out.length >= 50) break;
+  }
+  return out;
+}
+
 // Parse a `models` listing into clean entries. CLIs print one model per line
 // (sometimes with a leading bullet/marker, a trailing " (current)" note, or a
-// status/banner line first); keep the model entries, drop empties/headers/banners.
-// Conservative + capped. Informational only — no pinning this batch — so a stray
-// banner line is cosmetic, not load-bearing.
-export function parseModelsOutput(raw: string): string[] {
+// status/banner line first); keep the model entries, drop empties/headers/banners
+// and the log noise a CLI writes to stderr (glog "I1008 08:21:36…" lines, ANSI-coloured
+// tracing, "ERROR:"/"WARNING:" lines). Conservative + capped. The entries are only
+// ever OFFERED in Settings, so a stray banner line is cosmetic, not load-bearing.
+export function parseModelsOutput(raw: string, format: AgentDef["models_format"] = "lines"): string[] {
+  if (format === "codex_json") return parseCodexModelsJson(raw);
   const out: string[] = [];
   const seen = new Set<string>();
   for (const lineRaw of (raw || "").split(/\r?\n/)) {
     let line = lineRaw.trim();
     if (!line) continue;
+    // Log noise, never a model: ANSI escapes, glog-style records, error/warning lines.
+    if (line.includes("\u001b[")) continue;
+    if (/^[IWEF]\d{4} \d{2}:\d{2}:\d{2}/.test(line)) continue;
+    if (/^(error|warning|warn|fatal|panic)\b[:\s]/i.test(line)) continue;
     // Drop a common leading list marker ("- ", "* ", "• ", "› ", "→ ").
     line = line.replace(/^[-*•›→]\s+/, "").trim();
     // Skip obvious header / status / banner noise (the grok/agy listings prepend a
@@ -1102,6 +1220,10 @@ export interface RunOpts {
   // reserved above the cap. Defaults to "background" — batch lanes (jobs, enrichment,
   // the scheduler's warms) must never claim the reserved permit.
   priority?: AgentPriority;
+  // A short label for WHICH operation/lane this run serves (e.g. "day_read",
+  // "chat:coach"). Only ever a log field — it names the failing op in the one warn
+  // line a failed attempt writes; it never changes how the CLI runs.
+  op?: string;
 }
 
 /** Whether a person is waiting on this run. See the spawn cap below. */
@@ -1267,21 +1389,24 @@ function highestSupportedReasoning(
 
 /**
  * Pure: turn Cairn's provider-neutral request into the concrete `{model, reasoning}`
- * THIS agent can actually take. Never throws and never invents a value — an agent
- * with no mapping for the class, no model flag, or no reasoning support simply gets
- * that field omitted and runs on its own default. The offline stub always resolves
+ * THIS agent can actually take. Never throws and never invents a value — a class the
+ * person has not bound, an agent with no model flag, or no reasoning support simply
+ * gets that field omitted and runs on its own default. The offline stub always resolves
  * to nothing (it ignores execution profiles by contract).
  */
 export function resolveAgentProfileForClass(
   def: AgentDef | undefined,
-  want: AbstractExecutionProfile | undefined
+  want: AbstractExecutionProfile | undefined,
+  // The person's own class -> model choice for THIS provider (settings.model_class_bindings).
+  // Absent (the default) means no --model at all: the CLI runs its own default model.
+  classModels?: Partial<Record<ModelClass, string>> | null
 ): { model?: string; reasoning?: ReasoningLevel } {
   if (!def || !want) return {};
   const capabilities = normalizedAgentCapabilities(def);
   if (capabilities.execution_profile_noop) return {};
   const out: { model?: string; reasoning?: ReasoningLevel } = {};
   if (capabilities.model && Array.isArray(def.model_flag)) {
-    const model = String(want.model ?? (want.model_class ? def.model_classes?.[want.model_class] : "") ?? "").trim();
+    const model = String(want.model ?? (want.model_class ? classModels?.[want.model_class] : "") ?? "").trim();
     if (model) out.model = model;
   }
   if (want.reasoning && Array.isArray(def.reasoning_flag) && capabilities.reasoning.length) {
@@ -1683,6 +1808,15 @@ export interface AgentResult {
   stderr: string;
   parsed: any | null;
   usage?: AgentUsage;
+  // Failed runs only (non-zero exit, a signal, or nothing printed). `error_text` is the
+  // error the CLI reported inside its structured stdout — unredacted, bounded, read by
+  // the failure classifiers only, never logged or stored. `failure_tail` is the short
+  // redacted single line that IS logged and kept on the agent_runs row.
+  error_text?: string | null;
+  failure_tail?: string | null;
+  // Set when a pinned model/effort was refused (now or remembered) and this result ran
+  // on the CLI's own default for it (runWithModelAccessFallback).
+  pin_dropped?: PinField[] | null;
 }
 
 /** What a skipped/failed candidate told us, when it told us anything durable. */
@@ -1746,6 +1880,8 @@ export interface AgentRunRecord {
   output_tokens?: number | null;
   // Short machine slug for WHICH contract check refused the reply (never prose).
   reject_reason?: string | null;
+  // The redacted tail of a failed run's output (agentFailureTail.ts). Local-only row.
+  failure_tail?: string | null;
 }
 type AgentRunSink = (r: AgentRunRecord) => void;
 let agentRunSink: AgentRunSink | null = null;
@@ -1873,6 +2009,7 @@ export async function runAgentWithFallback(
         profile: o.profile,
         tools: o.tools,
         priority: o.priority,
+        op,
         // Kept on for the repair retry too: an agent that can enforce the contract is
         // exactly the one that should not be asked to re-derive it from prose. Agents
         // later in the rotation that can't enforce it simply ignore it.
@@ -1907,6 +2044,7 @@ export async function runAgentWithFallback(
             profile: o.profile,
             tools: o.tools,
             priority: o.priority,
+            op,
             schema: o.schema,
           });
         } catch {
@@ -1965,6 +2103,7 @@ export async function runAgentWithFallback(
         input_tokens: result.usage?.input_tokens ?? null,
         output_tokens: result.usage?.output_tokens ?? null,
         reject_reason: errorClass === "invalid_contract" || errorClass === "invalid_json" ? rejectReason : null,
+        failure_tail: result.failure_tail ?? null,
       });
       if (errorClass === "invalid_contract" || errorClass === "invalid_json") {
         // One line, codes only: op, agent, class, reason slug. Never the reply or any data.
@@ -2115,7 +2254,8 @@ export function runAgent(name: string, rawPrompt: string, opts: RunOpts | number
   // A bare-number call site is always a background lane (enrich.ts); only an explicit
   // opt-in claims the reserved interactive permit.
   const priority: AgentPriority = (typeof opts === "number" ? undefined : opts.priority) ?? "background";
-  return runAgentImpl(name, prompt, timeoutMs, signal, extract, mcpConfigArgs, model, reasoning, schema, priority);
+  const op = typeof opts === "number" ? undefined : opts.op;
+  return runAgentImpl(name, prompt, timeoutMs, signal, extract, mcpConfigArgs, model, reasoning, schema, priority, op);
 }
 
 // ---------- one process-wide cap on concurrent CLI subprocesses ----------
@@ -2321,6 +2461,7 @@ interface AgentSpawnRequest {
   model?: string;
   reasoning?: ReasoningLevel;
   schema?: JsonSchema;
+  op?: string;
 }
 
 async function runAgentImpl(
@@ -2333,7 +2474,8 @@ async function runAgentImpl(
   model?: string,
   reasoning?: ReasoningLevel,
   schema?: JsonSchema,
-  priority: AgentPriority = "background"
+  priority: AgentPriority = "background",
+  op?: string
 ): Promise<AgentResult> {
   const def = loadAgents()[name];
   if (!def) throw new Error(`Unknown agent "${name}"`);
@@ -2343,24 +2485,113 @@ async function runAgentImpl(
   // the same budget as the run, separately from it.
   const releaseSlot = await acquireAgentSlot(name, signal, priority, timeoutMs);
   try {
-    return await spawnAgentProcess(def, {
-      name,
-      prompt,
-      timeoutMs,
-      signal,
-      extract,
-      mcpConfigArgs,
-      model,
-      reasoning,
-      schema,
-    });
+    // The refused-pin retry runs INSIDE the permit already held: a retry that queued
+    // again could meet AgentBusyError, which must only ever mean "no permit", never a
+    // consequence of this run's own failure.
+    return await runWithModelAccessFallback(name, { model, reasoning }, op, signal, (pin) =>
+      spawnAgentProcess(def, {
+        name,
+        prompt,
+        timeoutMs,
+        signal,
+        extract,
+        mcpConfigArgs,
+        model: pin.model,
+        reasoning: pin.reasoning,
+        schema,
+        op,
+      })
+    );
   } finally {
     releaseSlot();
   }
 }
 
+// ---------- a pinned model the account can't use ----------
+// A run pinned to a model alias (or effort) the account may not use — a lower plan
+// tier asked for the top alias — exits within a second with words like "There's an
+// issue with the selected model". That is not a dead provider: the CLI answers fine on
+// its own default. So the spawn tries ONCE more with the pin dropped, and remembers the
+// refused pin (agentModelPins.ts) so the next run skips it up front instead of failing
+// first. Every spawn path goes through here (runAgent, the rotation, chat streaming).
+//
+// Only a FAILED run is read (classifyAgentFailure's model arm is itself limited to a
+// non-zero/signalled exit or an empty reply), and only a run that carried a pin is
+// retried. A refused pin fails before the model says a word, so a retried stream has
+// never shown the person any text.
+async function runWithModelAccessFallback(
+  name: string,
+  pin: { model?: string; reasoning?: ReasoningLevel },
+  op: string | undefined,
+  signal: AbortSignal | undefined,
+  spawnOnce: (pin: { model?: string; reasoning?: ReasoningLevel }) => Promise<AgentResult>
+): Promise<AgentResult> {
+  const effective = pinsAfterRefusals(name, pin);
+  const remembered = effective.dropped;
+  const first = await spawnOnce({ model: effective.model, reasoning: effective.reasoning });
+  const tagged = (r: AgentResult, dropped: PinField[]): AgentResult => (dropped.length ? { ...r, pin_dropped: dropped } : r);
+  if ((!effective.model && !effective.reasoning) || signal?.aborted) return tagged(first, remembered);
+  const failed = first.code !== 0 || !!first.signal || !String(first.raw ?? "").trim();
+  if (!failed) return tagged(first, remembered);
+  const failure = classifyAgentFailure(name, first, new Date());
+  if (failure?.state !== "model_unavailable") return tagged(first, remembered);
+  // Which pin to remember: the one the CLI's words name, else whichever was pinned.
+  const culprit: PinField =
+    /effort/i.test(failure.detail) && effective.reasoning ? "reasoning" : effective.model ? "model" : "reasoning";
+  const refusedValue = culprit === "model" ? effective.model : effective.reasoning;
+  if (refusedValue) noteRefusedPin(name, culprit, refusedValue);
+  log.warn(`[agents] ${name} refused the pinned ${culprit === "model" ? "model" : "effort"}; retrying on the CLI default`, {
+    agent: name,
+    op: op ?? null,
+    model: effective.model ?? null,
+    reasoning: effective.reasoning ?? null,
+    refused: culprit,
+  });
+  // Both pins go for the retry: whichever one was refused, the CLI's own default pair
+  // is the combination most certain to be valid for this account.
+  const retry = await spawnOnce({});
+  const dropped: PinField[] = [...remembered];
+  if (effective.model) dropped.push("model");
+  if (effective.reasoning) dropped.push("reasoning");
+  return tagged(retry, dropped);
+}
+
+/**
+ * ONE warn line per failed attempt, on every spawn path: which agent, which op, how it
+ * ended, how long it ran, and a short redacted tail of what it printed. Before this a
+ * CLI that exited non-zero with words no classifier knew left nothing in the log.
+ */
+function logFailedAttempt(
+  name: string,
+  details: {
+    op?: string;
+    code: number | null;
+    signal: NodeJS.Signals | null;
+    startedAt: number;
+    model?: string;
+    reasoning?: ReasoningLevel;
+    tail: string | null;
+    resource: AgentFailure | null;
+  }
+): void {
+  const fields = {
+    agent: name,
+    op: details.op ?? null,
+    exit: details.code,
+    signal: details.signal ?? null,
+    ms: Date.now() - details.startedAt,
+    model: details.model ?? null,
+    reasoning: details.reasoning ?? null,
+    state: details.resource?.state ?? null,
+    tail: details.tail ?? "(no output)",
+  };
+  if (details.resource) log.warn(`[agents] ${name} failed: ${details.resource.detail.toLowerCase()}`, fields);
+  else log.warn(`[agents] ${name} attempt failed`, fields);
+}
+
 function spawnAgentProcess(def: AgentDef, request: AgentSpawnRequest): Promise<AgentResult> {
-  const { name, prompt, timeoutMs, signal, extract, mcpConfigArgs, model, reasoning, schema } = request;
+  const { name, prompt, timeoutMs, signal, extract, mcpConfigArgs, model, reasoning, schema, op } = request;
+  const startedAt = Date.now();
   // Enforced structured output, when BOTH the caller supplied a schema and this agent
   // declares how to take one. Everything below is best-effort by design: an agent with
   // no declaration, an argv template with no {schema_args} slot, or a filesystem error
@@ -2502,8 +2733,15 @@ function spawnAgentProcess(def: AgentDef, request: AgentSpawnRequest): Promise<A
       // a self-hoster needs to see "not logged in" / "no such model" first-run errors.
       if (code !== 0 || !parsed) debugAgentStderr(name, code, err);
       const resource = code !== 0 || killSignal ? resourceFailure({ code, raw: out, stderr: err, signal: killSignal }) : null;
-      if (resource) log.warn(`[agents] ${name} failed: ${resource.detail.toLowerCase()}`, { agent: name, state: resource.state, code, signal: killSignal ?? null });
-      resolve({ code, signal: killSignal ?? null, raw: out, stderr: err, parsed, usage });
+      const failed = code !== 0 || !!killSignal || !out.trim();
+      let error_text: string | null = null;
+      let failure_tail: string | null = null;
+      if (failed) {
+        error_text = structuredErrorText(out) || null;
+        failure_tail = failureTail({ stderr: err, stdout: out, error_text });
+        logFailedAttempt(name, { op, code, signal: killSignal ?? null, startedAt, model, reasoning, tail: failure_tail, resource });
+      }
+      resolve({ code, signal: killSignal ?? null, raw: out, stderr: err, parsed, usage, error_text, failure_tail });
     });
 
     pipeAgentStdin(child, launch.stdin);
@@ -2639,7 +2877,12 @@ export async function runAgentStreaming(
     opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
   );
   try {
-    return await spawnAgentStream(def, name, rawPrompt, opts);
+    // Resolved once here (not inside spawnAgentStream) so the refused-pin retry can
+    // hand the spawn an explicitly EMPTY pin that a profile resolver cannot refill.
+    const pin = withResolvedProfile(name, opts);
+    return await runWithModelAccessFallback(name, pin, opts.op, opts.signal, (chosen) =>
+      spawnAgentStream(def, name, rawPrompt, { ...opts, profile: undefined, model: chosen.model, reasoning: chosen.reasoning })
+    );
   } finally {
     releaseSlot();
   }
@@ -2663,6 +2906,7 @@ function spawnAgentStream(
   // which a JSON schema would destroy — and grok's --json-schema would override its own
   // --output-format streaming-json. RunOpts.schema is therefore inert while streaming.
   const { model, reasoning } = withResolvedProfile(name, opts);
+  const startedAt = Date.now();
   const openLaunch = (forceLarge = false): AgentLaunch =>
     buildAgentLaunch(def, stream.args, prompt, {
       mcpConfigArgs: opts.mcpConfigArgs,
@@ -2765,8 +3009,17 @@ function spawnAgentStream(
       // came back empty or the process exited non-zero so a failure is diagnosable.
       if (code !== 0 || !text.trim()) debugAgentStderr(name, code, err);
       const resource = code !== 0 || killSignal ? resourceFailure({ code, raw: meta, stderr: err, signal: killSignal }) : null;
-      if (resource) log.warn(`[agents] ${name} failed: ${resource.detail.toLowerCase()}`, { agent: name, state: resource.state, code, signal: killSignal ?? null });
-      resolve({ code, signal: killSignal ?? null, raw: text, stderr: err, parsed: extractJson(text), usage });
+      // `text` holds only assistant deltas, so the CLI's own error report (claude's
+      // is_error result line) lives in `meta`. Lift it out for the classifiers.
+      const failed = code !== 0 || !!killSignal || !text.trim();
+      let error_text: string | null = null;
+      let failure_tail: string | null = null;
+      if (failed) {
+        error_text = structuredErrorText(meta) || null;
+        failure_tail = failureTail({ stderr: err, stdout: meta, error_text });
+        logFailedAttempt(name, { op: opts.op, code, signal: killSignal ?? null, startedAt, model, reasoning, tail: failure_tail, resource });
+      }
+      resolve({ code, signal: killSignal ?? null, raw: text, stderr: err, parsed: extractJson(text), usage, error_text, failure_tail });
     });
 
     pipeAgentStdin(child, launch.stdin);

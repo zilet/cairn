@@ -52,11 +52,12 @@ subscription (Claude, ChatGPT, Google or Grok) in **Settings → Agents**. Detai
 
 No terminal? Deploy the Railway template from the browser instead:
 
-<!-- TODO(maintainer): publish the Railway template (deploy/railway/README.md), then point the
-     Railway button at https://railway.com/new/template/<CODE>. -->
 <p>
-  <a href="docs/HOSTING.md#no-terminal-the-railway-button"><img src="https://railway.com/button.svg" height="32" alt="Deploy on Railway (template link: TODO)"></a>
+  <a href="https://cairn.fit/railway"><img src="https://railway.com/button.svg" height="32" alt="Deploy on Railway"></a>
 </p>
+
+What the button sets up, step by step:
+[`docs/HOSTING.md`](docs/HOSTING.md#no-terminal-the-railway-button).
 
 Already run Docker? The [Quickstart](#quickstart-30-seconds) below is one `docker run`, unchanged.
 
@@ -374,9 +375,12 @@ Everything Cairn knows about you lives in one SQLite file on your own machine �
 Cairn-run server for it to sync to. When an agentic feature runs (chat, adaptive coaching, a
 generated meal plan, a health review), your coach context goes to whichever model provider you
 connected — Anthropic, OpenAI, Google, or xAI — for that one call, and nowhere else. With no agent
-configured, the deterministic core (the Brief, logging, plans, charts, the connected brain) runs
-with zero outbound calls. Garmin and Apple Health sync talk only to those services, using your own
-credentials.
+configured, the deterministic core (the Brief, logging, plans, charts, the connected brain) sends
+none of your data anywhere. Garmin and Apple Health sync talk only to those services, using your own
+credentials. Feedback reaches the project only when you press Send, the weekly usage ping is off
+unless you turn it on, and the installer counts an install anonymously (`--no-telemetry` skips it).
+The complete list, including the daily release check:
+[What leaves your install](docs/HOSTING.md#what-leaves-your-install).
 
 ## Docs
 

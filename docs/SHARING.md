@@ -11,9 +11,11 @@ provider CLI, user credential, or shared AI subscription.
   MagicDNS, WireGuard, a VPN, or another trusted network.
 - Optional subscriptions/logins for Claude Code, Codex, Antigravity, or Grok.
 
-Cairn has no built-in user authentication. Do not expose it directly to the
-public internet. If another device can reach the port, set `CAIRN_AUTH_TOKEN`
-or put an authenticated private-network layer in front of it.
+Without `CAIRN_AUTH_TOKEN`, Cairn asks no one to sign in. Do not expose it like that
+to the public internet. If another device can reach the port, set `CAIRN_AUTH_TOKEN`
+(browsers then sign in once per device; see [`OPERATIONS.md`](OPERATIONS.md)) or put an
+authenticated private-network layer in front of it. To have it all set up for you, including a
+token, use the one-command installer ([`INSTALL.md`](INSTALL.md)).
 
 ## Install From The Published Image (Recommended — No Clone)
 
@@ -204,8 +206,9 @@ git push origin v2.0.0
 It publishes:
 
 ```text
-ghcr.io/zilet/cairn:v2.0.0
-ghcr.io/zilet/cairn:latest
+ghcr.io/zilet/cairn:v2.0.0   # exactly this release
+ghcr.io/zilet/cairn:v2.0     # follows 2.0.x patch releases
+ghcr.io/zilet/cairn:latest   # the newest release (what the installer and Railway follow)
 ```
 
 For a public repository, make sure the package visibility in GitHub Container

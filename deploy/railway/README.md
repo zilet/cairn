@@ -43,8 +43,9 @@ Right-click the service, choose **Attach Volume**, and set the mount path to:
 ```
 
 Railway allows one volume per service, which is exactly what Cairn's single-volume mode expects.
-Size matters: a trial volume is 0.5 GB, which fits about one AI provider's tool (Grok ~180 MB,
-Google ~220 MB, Claude ~260 MB, ChatGPT ~400 MB). On Hobby, 5 GB fits them all; an existing volume
+Size matters: a trial volume is 0.5 GB, which fits one AI provider's tool, whichever it is (Grok
+~180 MB, Google ~220 MB, Claude ~260 MB, ChatGPT ~400 MB; Codex was verified to install on a fresh
+trial volume). On Hobby, 5 GB fits them all; an existing volume
 grows with **Live Resize** on the volume after upgrading.
 The database, uploads, provider sign-ins and installed AI tools all live under `/data`. Do **not**
 set `RAILWAY_RUN_UID`. The image starts as root only long enough to fix the volume's ownership,
@@ -106,7 +107,7 @@ Suggested text for the template page:
 > connect your own Claude, ChatGPT, Google or Grok subscription in **Settings → Agents**. Updates
 > arrive automatically in your maintenance window (**Settings → Source → Configure Auto Updates**).
 > At least 1 GB of memory is recommended for AI coaching. A trial volume is 0.5 GB, enough for
-> about one AI provider; on Hobby, grow the volume to 5 GB (click the volume → **Live Resize**). Guide:
+> one AI provider; on Hobby, grow the volume to 5 GB (click the volume → **Live Resize**). Guide:
 > https://github.com/zilet/cairn/blob/main/docs/HOSTING.md
 
 ## 8. Publish and wire up the button
@@ -115,9 +116,11 @@ Suggested text for the template page:
    choose **Publish**).
 2. Copy the template code from the template's URL. The deploy link is
    `https://railway.com/new/template/<CODE>`.
-3. Replace the TODO Railway links with that URL in `README.md`, `docs/QUICKSTART.md` and
-   `docs/HOSTING.md` (search for `TODO(maintainer)`). The button image is
-   `https://railway.com/button.svg`.
+3. Point the project site's `/railway` redirect at that deploy link (it is set on the site, not in
+   this repo). Every Railway button in the repo (`README.md`, `docs/QUICKSTART.md`,
+   `docs/HOSTING.md`, image `https://railway.com/button.svg`) links to `https://cairn.fit/railway`,
+   a counted redirect, so the repo's links never change when the template is republished or moved.
+4. Click the README button once and check that it lands on the template's deploy page.
 
 ## 9. Smoke test, in a scratch project
 

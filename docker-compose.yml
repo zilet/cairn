@@ -37,6 +37,10 @@ services:
       # On a new household-member instance, seed only the neutral exercise
       # catalog; omit the example plan, measurements, and training history.
       - CAIRN_BLANK_PROFILE=${CAIRN_BLANK_PROFILE:-0}
+      # Feedback (Settings -> Send feedback) and the opt-in usage ping go to the
+      # project's feedback service. Point it elsewhere, or set it to "" for none
+      # (feedback then opens a prefilled GitHub issue instead).
+      - CAIRN_FEEDBACK_URL=${CAIRN_FEEDBACK_URL-https://feedback.cairn.fit}
       # Encrypt connector secrets saved through Settings. Keep this stable across
       # rebuilds; the Pi deploy helper generates it once in the preserved .env.
       - CAIRN_SETTINGS_SECRET_KEY=${CAIRN_SETTINGS_SECRET_KEY:-}

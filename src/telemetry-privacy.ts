@@ -11,6 +11,7 @@ const ERROR_CLASSES = new Set([
   "invalid_contract",
   "invalid_json",
   "invalid_output",
+  "model_unavailable",
   "process_error",
   "process_exit",
   "timeout",

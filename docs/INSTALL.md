@@ -64,7 +64,8 @@ sh install.sh
 | `--name=NAME` | Instance name. Default `cairn`. Here: the Compose project, container, volumes and timers. On Railway: the service name and the folder `~/.cairn/railway/NAME`. |
 | `--image=REF` | Image to run. For example, `ghcr.io/zilet/cairn:v2.0` follows only 2.0.x patch releases. |
 | `--no-browser` | Print the one-time sign-in link instead of opening a browser. |
-| `--dry-run` | Print what would happen. Changes nothing and prints no secret. |
+| `--no-telemetry` | Send no anonymous install counts (see [Install counting](#install-counting)). Same as `DO_NOT_TRACK=1` or `CAIRN_NO_TELEMETRY=1`. |
+| `--dry-run` | Print what would happen. Changes nothing, sends nothing and prints no secret. |
 
 ## Signing in
 
@@ -402,3 +403,39 @@ The installer downloads these, all over HTTPS:
 
 The updater never updates `cairn.sh` itself. To pick up a newer installer, run the one-line
 command again.
+
+## Install counting
+
+So the project can tell whether installs work, an install sends `https://cairn.fit/install/event` two
+anonymous GET requests: `chose` once you accept the plan, then `done` or `failed`. Each carries
+four values and nothing else: the event, where Cairn goes (`railway` or `local`), a fixed step code
+for a failure (`engine`, `download`, `start`, `health`, `updater`, `railway_cli`, `railway_setup`,
+`railway_deploy` or `other`), and the installer version. Never a token, domain, project name, path,
+host name or anything you typed. A machine with no container engine is counted as `failed` at
+`engine` without a `chose`, because that check runs before the plan. The request waits at most three
+seconds, prints nothing and can never fail the install. The plan says so on its `Counting:` line.
+
+Only `install` counts: never `--dry-run`, `update`, `status`, `open`, `logs`, `uninstall` or the
+nightly updater. To turn it off, use any of:
+
+```bash
+curl -fsSL https://cairn.fit/install | sh -s -- --no-telemetry
+curl -fsSL https://cairn.fit/install | DO_NOT_TRACK=1 sh
+curl -fsSL https://cairn.fit/install | CAIRN_NO_TELEMETRY=1 sh
+```
+
+Everything else Cairn and its installer send, and where: [What leaves your
+install](HOSTING.md#what-leaves-your-install).
+
+## Environment variables
+
+Set these in front of `sh` (for example `curl -fsSL https://cairn.fit/install | DO_NOT_TRACK=1 sh`).
+
+| Variable | What it does |
+|---|---|
+| `DO_NOT_TRACK`, `CAIRN_NO_TELEMETRY` | Any value other than empty or `0` turns [install counting](#install-counting) off. |
+| `CAIRN_INSTALL_EVENT_URL` | Where install counts go (default `https://cairn.fit/install/event`). Must be `https://`; empty sends nothing. For testing a counter of your own. |
+| `CAIRN_INSTALL_SCRIPT_URL` | Where a `curl \| sh` run fetches its own copy for `cairn.sh` (default the `main` copy on `raw.githubusercontent.com`). Must be `https://`. |
+| `CAIRN_HEALTH_TIMEOUT` | Seconds to wait for Cairn's health check after starting it (default 180). |
+| `CAIRN_RAILWAY_DEPLOY_TIMEOUT` | Seconds to follow a Railway deployment before giving up (default 600). |
+| `CAIRN_CONTAINER_TOOL` | Use this container engine (`docker` or `podman`) instead of detecting one. |

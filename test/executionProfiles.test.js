@@ -18,6 +18,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
 const distAgentsUrl = pathToFileURL(path.join(root, "dist", "agents.js")).href;
 const distRunChosenUrl = pathToFileURL(path.join(root, "dist", "runChosen.js")).href;
+const distRepoUrl = pathToFileURL(path.join(root, "dist", "repo.js")).href;
 
 async function withTempDir(fn) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cairn-execution-profile-"));
@@ -230,8 +231,8 @@ function bundledAgents() {
 }
 
 // Pure resolution against injected defs/bindings: no DB, no settings, no CLI.
-function resolve(task, agent, bindings = {}) {
-  return repo.resolveTaskExecutionProfile(task, agent, { defs: bundledAgents(), bindings });
+function resolve(task, agent, bindings = {}, classBindings = {}) {
+  return repo.resolveTaskExecutionProfile(task, agent, { defs: bundledAgents(), bindings, classBindings });
 }
 
 test("every routable task except chat declares an execution profile", () => {
@@ -245,10 +246,15 @@ test("every routable task except chat declares an execution profile", () => {
     assert.ok(["fast", "deep"].includes(profile.model_class), `${task} model class`);
     assert.ok(["low", "medium", "high", "xhigh", "max"].includes(profile.reasoning), `${task} reasoning`);
   }
-  // Model pins must stay ALIASES so a new generation ships without a code change.
-  const claude = bundledAgents().claude;
-  assert.deepEqual(claude.model_classes, { fast: "sonnet", deep: "fable" });
-  for (const model of Object.values(claude.model_classes)) assert.doesNotMatch(model, /\d/, "no dated model id");
+  // No provider pins a model for everyone any more: a class names NO model until the
+  // person chooses one. The offered choices stay ALIASES (never dated ids), so a new
+  // generation ships without a code change.
+  const agents = bundledAgents();
+  for (const [name, def] of Object.entries(agents)) {
+    assert.equal(def.model_classes, undefined, `${name} must not pin a model class for everyone`);
+  }
+  assert.deepEqual(agents.claude.model_choices, ["sonnet", "opus", "fable", "haiku"]);
+  for (const model of agents.claude.model_choices) assert.doesNotMatch(model, /\d/, "no dated model id");
 });
 
 // ROUTABLE_TASKS is the TASK_POLICY key set, so the guard above only sees ops that
@@ -285,16 +291,14 @@ test("every self-critique verify op declares an execution profile", () => {
   }
 });
 
-test("profiles are provider-aware: only agents that map a model class get --model", () => {
-  assert.deepEqual(resolve("day_read", "claude"), { model: "sonnet", reasoning: "low" });
-  assert.deepEqual(resolve("proposal", "claude"), { model: "fable", reasoning: "xhigh" });
-  assert.deepEqual(resolve("health", "claude"), { model: "fable", reasoning: "high" });
-  assert.deepEqual(resolve("enrich", "claude"), { model: "sonnet", reasoning: "low" });
-  assert.deepEqual(resolve("session_suggest", "claude"), { model: "fable", reasoning: "medium" });
-
-  // Non-Anthropic CLIs declare no model_classes: they keep their own model and take
-  // only the effort. An Anthropic alias must never reach them.
-  for (const agent of ["codex", "antigravity", "grok"]) {
+test("with no choice made, no provider gets --model: every CLI runs its own default model", () => {
+  // Effort stays server policy; the model is the CLI's own unless the person binds a class.
+  assert.deepEqual(resolve("day_read", "claude"), { reasoning: "low" });
+  assert.deepEqual(resolve("proposal", "claude"), { reasoning: "xhigh" });
+  assert.deepEqual(resolve("health", "claude"), { reasoning: "high" });
+  assert.deepEqual(resolve("enrich", "claude"), { reasoning: "low" });
+  assert.deepEqual(resolve("session_suggest", "claude"), { reasoning: "medium" });
+  for (const agent of ["claude", "codex", "antigravity", "grok"]) {
     for (const task of ["day_read", "proposal", "health"]) {
       assert.equal(resolve(task, agent).model, undefined, `${agent}/${task} must not be model-pinned`);
     }
@@ -328,26 +332,49 @@ test("a provider that tops out below the requested effort degrades instead of fa
   assert.deepEqual(resolveAgentProfileForClass({ capabilities: { reasoning: ["high"] } }, { reasoning: "high" }), {});
 });
 
+test("a class binding picks the model for that provider's class, and only there", () => {
+  const classes = { claude: { fast: "sonnet", deep: "opus" } };
+  assert.deepEqual(resolve("day_read", "claude", {}, classes), { model: "sonnet", reasoning: "low" });
+  assert.deepEqual(resolve("proposal", "claude", {}, classes), { model: "opus", reasoning: "xhigh" });
+  assert.deepEqual(resolve("health", "claude", {}, classes), { model: "opus", reasoning: "high" });
+  // One class bound, the other left on the CLI default.
+  assert.deepEqual(resolve("day_read", "claude", {}, { claude: { deep: "opus" } }), { reasoning: "low" });
+  // A choice for one provider never reaches another.
+  assert.deepEqual(resolve("proposal", "grok", {}, classes), { reasoning: "high" });
+  assert.deepEqual(resolve("proposal", "grok", {}, { grok: { deep: "grok-4.7" } }), {
+    model: "grok-4.7",
+    reasoning: "high",
+  });
+  // The offline stub ignores execution profiles even when bound.
+  assert.deepEqual(resolve("proposal", "stub", {}, { stub: { deep: "opus" } }), {});
+});
+
 test("a user binding overrides the default profile and is still clamped to the provider", () => {
   assert.deepEqual(resolve("day_read", "claude", { claude: { day_read: { model: "fable", reasoning: "max" } } }), {
     model: "fable",
     reasoning: "max",
   });
-  // Reasoning-only override keeps the class-resolved model.
+  // A per-task model wins over the class binding.
+  assert.deepEqual(
+    resolve("day_read", "claude", { claude: { day_read: { model: "haiku" } } }, { claude: { fast: "sonnet" } }),
+    { model: "haiku", reasoning: "low" }
+  );
+  // Reasoning-only override keeps the class-resolved model (none, by default).
   assert.deepEqual(resolve("day_read", "claude", { claude: { day_read: { reasoning: "high" } } }), {
-    model: "sonnet",
     reasoning: "high",
   });
+  assert.deepEqual(
+    resolve("day_read", "claude", { claude: { day_read: { reasoning: "high" } } }, { claude: { fast: "sonnet" } }),
+    { model: "sonnet", reasoning: "high" }
+  );
   // A binding for a DIFFERENT provider/task never leaks.
   assert.deepEqual(resolve("day_read", "claude", { grok: { day_read: { reasoning: "high" } } }), {
-    model: "sonnet",
     reasoning: "low",
   });
   // Over-strong binding on a three-level CLI still degrades rather than throwing.
   assert.deepEqual(resolve("day_read", "grok", { grok: { day_read: { reasoning: "max" } } }), { reasoning: "high" });
   // Garbage is dropped by the shared normalizer, leaving the declared default.
   assert.deepEqual(resolve("day_read", "claude", { claude: { day_read: { reasoning: "turbo" } } }), {
-    model: "sonnet",
     reasoning: "low",
   });
 });
@@ -356,12 +383,61 @@ test("executionProfileForOp folds ops onto their task class", () => {
   const profileFor = (op, agent) => repo.executionProfileForOp(op)(agent);
   // case_conference / conference_* -> brain_review, evolve_program -> proposal,
   // marker_reconcile -> health (the same taskForOp table the agent routing uses).
-  assert.deepEqual(profileFor("case_conference", "claude"), { model: "fable", reasoning: "xhigh" });
-  assert.deepEqual(profileFor("conference_nutrition", "claude"), { model: "fable", reasoning: "xhigh" });
-  assert.deepEqual(profileFor("evolve_program", "claude"), { model: "fable", reasoning: "xhigh" });
-  assert.deepEqual(profileFor("marker_reconcile", "claude"), { model: "fable", reasoning: "high" });
-  assert.deepEqual(profileFor("day_read", "claude"), { model: "sonnet", reasoning: "low" });
+  db.prepare("DELETE FROM settings WHERE id = 1").run();
+  assert.deepEqual(profileFor("case_conference", "claude"), { reasoning: "xhigh" });
+  assert.deepEqual(profileFor("conference_nutrition", "claude"), { reasoning: "xhigh" });
+  assert.deepEqual(profileFor("evolve_program", "claude"), { reasoning: "xhigh" });
+  assert.deepEqual(profileFor("marker_reconcile", "claude"), { reasoning: "high" });
+  assert.deepEqual(profileFor("day_read", "claude"), { reasoning: "low" });
   assert.deepEqual(profileFor("auto", "claude"), {});
+  // The live (DB-backed) resolver reads the person's class choice.
+  repo.setSettings({ model_class_bindings: { claude: { fast: "sonnet", deep: "opus" } } });
+  assert.deepEqual(profileFor("case_conference", "claude"), { model: "opus", reasoning: "xhigh" });
+  assert.deepEqual(profileFor("day_read", "claude"), { model: "sonnet", reasoning: "low" });
+  assert.deepEqual(profileFor("day_read", "codex"), { reasoning: "low" });
+  db.prepare("DELETE FROM settings WHERE id = 1").run();
+});
+
+test("model_class_bindings round-trip and validate: known provider, fast|deep, an offered or well-formed model", () => {
+  db.prepare("DELETE FROM settings WHERE id = 1").run();
+  assert.deepEqual(repo.getSettings().model_class_bindings, {}, "default: every CLI's own model");
+  const saved = repo.setSettings({
+    model_class_bindings: {
+      claude: { fast: "sonnet", deep: "opus", turbo: "haiku" }, // unknown class dropped
+      codex: { deep: "gpt-6-sol" }, // free-text id (no curated list): well-formed, kept
+      grok: { fast: "bad model; rm -rf" }, // malformed free text dropped
+      stub: { deep: "opus" }, // takes no model: dropped
+      no_such_agent: { fast: "sonnet" }, // unknown provider dropped
+      antigravity: { fast: "", deep: "default" }, // blank / "default" = CLI default
+    },
+  }).model_class_bindings;
+  assert.deepEqual(saved, { claude: { fast: "sonnet", deep: "opus" }, codex: { deep: "gpt-6-sol" } });
+  assert.deepEqual(repo.getSettings().model_class_bindings, saved);
+  // Omitting the key leaves it; {} clears it.
+  repo.setSettings({ lead_mode: "lead" });
+  assert.deepEqual(repo.getSettings().model_class_bindings, saved);
+  assert.deepEqual(repo.setSettings({ model_class_bindings: {} }).model_class_bindings, {});
+  db.prepare("DELETE FROM settings WHERE id = 1").run();
+});
+
+test("normalizeModelClassBindings accepts a live-catalog entry the free-text rule would not", () => {
+  const defs = bundledAgents();
+  const catalog = (name) => (name === "antigravity" ? ["Gemini 3.5 Flash (Medium)"] : null);
+  assert.deepEqual(
+    repo.normalizeModelClassBindings(
+      { antigravity: { fast: "Gemini 3.5 Flash (Medium)", deep: "Not In Catalog" } },
+      { defs, catalog }
+    ),
+    { antigravity: { fast: "Gemini 3.5 Flash (Medium)" } }
+  );
+  // Curated aliases are always accepted; a JSON string body is parsed.
+  assert.deepEqual(repo.normalizeModelClassBindings(JSON.stringify({ claude: { deep: "fable" } }), { defs, catalog }), {
+    claude: { deep: "fable" },
+  });
+  assert.deepEqual(repo.normalizeModelClassBindings("not json", { defs, catalog }), {});
+  assert.ok(repo.MODEL_ID_PATTERN.test("claude-opus-4-1"));
+  assert.ok(!repo.MODEL_ID_PATTERN.test("two words"));
+  assert.ok(!repo.MODEL_ID_PATTERN.test("x".repeat(81)));
 });
 
 test("the interactive leash scales with the effort the op asked for", () => {
@@ -405,6 +481,13 @@ test("op profiles reach the spawned argv, per provider, with no caller-supplied 
       "    out[name][op] = (await runChosen(name, prompt, { op, timeoutMs: 5000 })).result.parsed.argv;",
       "  }",
       "}",
+      // The person binds claude's deep class to opus: deep ops get it, fast ones stay on the default.
+      `const { setSettings } = await import(${JSON.stringify(distRepoUrl)});`,
+      "setSettings({ model_class_bindings: { claude: { deep: 'opus' } } });",
+      "out.bound = {};",
+      "for (const op of ['day_read','proposal']) {",
+      "  out.bound[op] = (await runChosen('claude', prompt, { op, timeoutMs: 5000 })).result.parsed.argv;",
+      "}",
       "process.stdout.write('__CAIRN_OP_PROFILE__'+JSON.stringify(out));",
     ].join("\n");
     const res = spawnSync(process.execPath, ["--input-type=module", "-e", runner], {
@@ -422,10 +505,13 @@ test("op profiles reach the spawned argv, per provider, with no caller-supplied 
     const at = res.stdout.lastIndexOf(marker);
     assert.ok(at >= 0, res.stdout);
     const argv = JSON.parse(res.stdout.slice(at + marker.length));
-    // fast/low vs deep/xhigh, expressed in each CLI's own flags. Only Claude maps a
-    // model class, and grok/antigravity degrade xhigh to their declared ceiling.
-    assert.deepEqual(argv.claude.day_read, ["--model", "sonnet", "--effort", "low", "-p", prompt]);
-    assert.deepEqual(argv.claude.proposal, ["--model", "fable", "--effort", "xhigh", "-p", prompt]);
+    // fast/low vs deep/xhigh, expressed in each CLI's own flags. Nobody gets --model
+    // until the person chooses one, and grok/antigravity degrade xhigh to their ceiling.
+    assert.deepEqual(argv.claude.day_read, ["--effort", "low", "-p", prompt]);
+    assert.deepEqual(argv.claude.proposal, ["--effort", "xhigh", "-p", prompt]);
+    // With deep bound to opus: the deep op carries it, the fast op still does not.
+    assert.deepEqual(argv.bound.day_read, ["--effort", "low", "-p", prompt]);
+    assert.deepEqual(argv.bound.proposal, ["--model", "opus", "--effort", "xhigh", "-p", prompt]);
     assert.deepEqual(argv.codex.day_read, [
       "exec",
       "-c",

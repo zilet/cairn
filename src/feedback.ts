@@ -14,15 +14,18 @@ import { getVersion } from "./version.js";
 // are taxonomy-only by construction (telemetry-privacy.ts): no health data, no chat
 // text, no names, no free-text error messages. Nothing is sent on a schedule.
 //
-// With no feedback service configured, nothing leaves the instance at all: the route
-// returns a prefilled GitHub new-issue URL and the person's own browser opens it.
+// Feedback goes to the project's feedback service (DEFAULT_FEEDBACK_URL) only when the
+// person presses Send. With CAIRN_FEEDBACK_URL="" no service is configured and nothing
+// leaves the instance at all: the route returns a prefilled GitHub new-issue URL and the
+// person's own browser opens it.
 
 /**
- * The project's hosted feedback service. Empty until the maintainer deploys it —
- * fill this in (e.g. "https://feedback.example.org") once the service is live.
- * CAIRN_FEEDBACK_URL always overrides it, and an empty value means "no service".
+ * The project's hosted feedback service (services/feedback, deployed by the maintainer).
+ * CAIRN_FEEDBACK_URL always overrides it: point it at your own deployment, or set it
+ * to "" for "no service" (feedback then falls back to a prefilled GitHub issue and the
+ * opt-in usage ping stays inert).
  */
-export const DEFAULT_FEEDBACK_URL = "";
+export const DEFAULT_FEEDBACK_URL = "https://feedback.cairn.fit";
 
 export const FEEDBACK_KINDS = ["bug", "idea", "praise", "other"] as const;
 export type FeedbackKind = (typeof FEEDBACK_KINDS)[number];

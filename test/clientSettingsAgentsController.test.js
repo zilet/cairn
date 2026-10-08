@@ -153,6 +153,7 @@ function loadSettingsAgentsController() {
     },
   };
   context.window = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/settings-agent-models.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/settings-agents-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/settings-agents-controller.js"), "utf8"), context);
   return context.CairnSettingsAgentsController;
@@ -311,4 +312,125 @@ test("settings agents controller owns per-agent lazy install polling", async () 
   assert.equal(deps.root.querySelector("#agentCliUpdateLog").hidden, false);
   assert.equal(deps.meta.codex.present, true);
   assert.deepEqual(harness.toasts, ["codex is ready to connect"]);
+});
+
+// A card list that also exposes the Everyday / Deep work selects and their "Other…" inputs.
+class FakeModelAgentList extends FakeAgentList {
+  set innerHTML(value) {
+    super.innerHTML = value;
+    this.modelSelects = [];
+    this.otherInputs = [];
+    const selectRe = /<select[^>]+data-model-class="([^"]*)" data-provider="([^"]*)"/g;
+    const inputRe = /<input[^>]+data-model-other="([^"]*)" data-provider="([^"]*)"/g;
+    const fields = [];
+    for (let match = selectRe.exec(value); match; match = selectRe.exec(value)) {
+      const select = new FakeElement();
+      select.dataset.modelClass = match[1];
+      select.dataset.provider = match[2];
+      fields.push(select);
+      this.modelSelects.push(select);
+    }
+    for (let match = inputRe.exec(value); match; match = inputRe.exec(value)) {
+      const input = new FakeElement();
+      input.dataset.modelOther = match[1];
+      input.dataset.provider = match[2];
+      input.hidden = true;
+      input.attrs = {};
+      input.setAttribute = (k, v) => {
+        input.attrs[k] = v;
+      };
+      input.focus = () => {
+        input.focused = true;
+      };
+      input.parentElement = { querySelector: () => null };
+      this.otherInputs.push(input);
+    }
+    // closest(".agent-model-field").querySelector("[data-model-other]") pairs a select with its input.
+    fields.forEach((select, i) => {
+      const input = this.otherInputs[i];
+      select.closest = () => ({ querySelector: () => input });
+    });
+  }
+
+  get innerHTML() {
+    return this.html;
+  }
+
+  querySelectorAll(selector) {
+    if (selector === "[data-model-class]") return this.modelSelects;
+    if (selector === "[data-model-other]") return this.otherInputs;
+    return super.querySelectorAll(selector);
+  }
+}
+
+class FakeModelRoot extends FakeRoot {
+  set innerHTML(value) {
+    super.innerHTML = value;
+    this.children.set("#agentlist", new FakeModelAgentList("agentlist"));
+  }
+
+  get innerHTML() {
+    return this.html;
+  }
+}
+
+test("the model selects save through the working model and the live catalog loads once, in the background", async () => {
+  const controller = loadSettingsAgentsController();
+  const agentCatalog = {};
+  const state = makeDeps({ root: new FakeModelRoot("root"), agentCatalog });
+  const { deps } = state;
+  deps.workingModel.model_class_bindings = {};
+  deps.meta.claude.model_choices = ["sonnet", "opus", "fable", "haiku"];
+  // Never claim a phantom install run while this test drives the selects.
+  const api = deps.api;
+  deps.api = async (path, opts) => (path === "/agent-clis/update" ? { status: "idle", agents: [] } : api(path, opts));
+
+  controller.render(deps);
+  const list = () => deps.root.querySelector("#agentlist");
+  assert.equal(list().modelSelects.length, 2, "Everyday + Deep work for claude; none for the absent codex");
+  assert.equal(agentCatalog.claude, null, "the catalog request is in flight; the curated list shows meanwhile");
+  assert.match(list().innerHTML, /<option value="fable">fable<\/option>/);
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual([...agentCatalog.claude], ["sonnet", "opus"], "the live catalog arrived");
+  assert.doesNotMatch(list().innerHTML, /<option value="fable">/, "and replaced the curated list on redraw");
+  const fetches = () => state.calls.filter(([path]) => path === "/agents/claude/models").length;
+  assert.equal(fetches(), 1);
+  controller.renderList(deps);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(fetches(), 1, "fetched once per visit, not per redraw");
+
+  const deep = list().modelSelects.find((s) => s.dataset.modelClass === "deep");
+  deep.value = "opus";
+  deep.change();
+  assert.deepEqual(JSON.parse(JSON.stringify(deps.workingModel.model_class_bindings)), { claude: { deep: "opus" } });
+  assert.equal(state.dirty, 1);
+
+  // "Other…" reveals the free-text field and changes nothing yet.
+  const fast = list().modelSelects.find((s) => s.dataset.modelClass === "fast");
+  fast.value = "__other__";
+  fast.change();
+  const other = list().otherInputs.find((i) => i.dataset.modelOther === "fast");
+  assert.equal(other.hidden, false);
+  assert.equal(other.focused, true);
+  assert.equal(state.dirty, 1);
+  other.value = "bad id!";
+  other.change();
+  assert.equal(other.attrs["aria-invalid"], "true");
+  assert.equal(state.dirty, 1, "a malformed id is not saved");
+  other.value = "claude-sonnet-x";
+  other.change();
+  assert.deepEqual(JSON.parse(JSON.stringify(deps.workingModel.model_class_bindings)), {
+    claude: { deep: "opus", fast: "claude-sonnet-x" },
+  });
+  assert.equal(state.dirty, 2);
+
+  // Back to CLI default clears the class.
+  const deepAgain = list().modelSelects.find((s) => s.dataset.modelClass === "deep");
+  deepAgain.value = "";
+  deepAgain.change();
+  assert.deepEqual(JSON.parse(JSON.stringify(deps.workingModel.model_class_bindings)), {
+    claude: { fast: "claude-sonnet-x" },
+  });
+  assert.equal(state.dirty, 3);
 });

@@ -123,6 +123,8 @@ export async function startBuiltServer({ label, authToken = "", portOffset = 0, 
       GARMIN_USERNAME: "",
       GARMIN_PASSWORD: "",
       COACH_ENABLED: "0",
+      // No feedback service: a smoke run never POSTs feedback or a usage ping for real.
+      CAIRN_FEEDBACK_URL: "",
       CAIRN_SMOKE_MODE: "1",
       CAIRN_SMOKE_MAX_RUNTIME_MS: process.env.CAIRN_SMOKE_MAX_RUNTIME_MS || String(20 * 60_000),
       ...extraEnv,

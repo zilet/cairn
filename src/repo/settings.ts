@@ -5,6 +5,11 @@ import {
   interactiveTimeoutFor,
   loadAgents,
   resolveAgentProfileForClass,
+  agentModelChoices,
+  cachedAgentModels,
+  normalizedAgentCapabilities,
+  MODEL_CLASSES,
+  type ModelClass,
   type AbstractExecutionProfile,
   type AgentProfileResolver,
   type AgentDef,
@@ -57,6 +62,7 @@ export interface Settings {
   chat_routing_mode: "adaptive" | "single"; // adaptive lane policy; single preserves the legacy one-profile path
   chat_profile_bindings: ChatProfileBindings; // provider -> capture|coach|deep -> optional model/reasoning
   agent_profile_bindings: AgentProfileBindings; // provider -> task -> optional model/reasoning override of TASK_EXECUTION_PROFILES
+  model_class_bindings: ModelClassBindings; // provider -> fast|deep -> model the person chose; {} = every CLI runs its own default model
   update_check_enabled: boolean; // quiet daily check for a newer Cairn release (pull-never-push; off ⇒ no outbound check)
   usage_ping_enabled: boolean; // opt-in weekly anonymous usage ping (install id, version, platform, arch, Node); default OFF
   lead_mode: "lead" | "announce_first" | "review_everything"; // how much Cairn leads within server policy
@@ -182,10 +188,12 @@ export function taskForOp(op: string): string {
 // home settings happen to say, so the same op ran at a different depth on a dev box
 // than on the deployed host. Every class below is decided HERE, server-side.
 //
-// Model classes are provider-neutral (see agents.json `model_classes`): "fast" is the
-// everyday read, "deep" the one worth paying for. A provider that declares no mapping
-// (codex/antigravity/grok) keeps its own configured model and only takes the effort.
-// Reasoning tops out at xhigh by default; "max" exists for a user override.
+// Model classes are provider-neutral: "fast" is the everyday read, "deep" the one worth
+// paying for. A class names NO model by default — every CLI runs whatever model its
+// account's plan gives it, and only the effort below is server policy. A model reaches
+// the CLI only when the person binds the class for that provider in Settings -> Agents
+// (`model_class_bindings`, "Everyday" / "Deep work"). Reasoning tops out at xhigh by
+// default; "max" exists for a user override.
 //
 // `chat` is deliberately ABSENT: the adaptive chat router already assigns a
 // per-message lane profile (src/chatRouting.ts). An op with no entry here inherits
@@ -267,11 +275,107 @@ export function normalizeAgentProfileBindings(value: unknown): AgentProfileBindi
   return normalizeProfileBindings(value, PROFILE_TASKS);
 }
 
+// ---------- the person's model choice per provider and class ----------
+// settings.model_class_bindings = { provider: { fast?: model, deep?: model } }. Absent or
+// empty is the default and means "the CLI's own default model" — Cairn passes no --model.
+export type ModelClassBindings = Record<string, Partial<Record<ModelClass, string>>>;
+
+// What the dropdown's free-text "Other…" accepts: a short model id or alias, no spaces.
+export const MODEL_ID_PATTERN = /^[A-Za-z0-9._:/-]{1,80}$/;
+const MODEL_CLASS_SET = new Set<string>(MODEL_CLASSES);
+
+function parseJsonObject(value: unknown): Record<string, unknown> | null {
+  let raw: unknown = value;
+  if (typeof raw === "string") {
+    if (!raw.trim()) return null;
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  return raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
+}
+
 /**
- * Resolve ONE task's execution profile for ONE agent: the declarative class above,
- * then any `agent_profile_bindings[agent][task]` override, then clamped to what that
- * CLI actually declares (a provider with no model mapping gets no --model at all, and
- * an effort above its ceiling maps down). Pure given `cfg`, so it unit-tests offline.
+ * Shape-only read of a stored binding map: a provider -> class -> non-empty string with
+ * no control characters. Read-time on purpose: a value accepted on write from a live
+ * catalog (which a restart forgets) must never vanish on the next read.
+ */
+function modelClassBindingsShape(value: unknown): ModelClassBindings {
+  const raw = parseJsonObject(value);
+  if (!raw) return {};
+  const out: ModelClassBindings = {};
+  for (const [providerRaw, classesRaw] of Object.entries(raw)) {
+    const provider = providerRaw.trim().slice(0, 80);
+    const classes = parseJsonObject(classesRaw);
+    if (!provider || !classes) continue;
+    const bound: Partial<Record<ModelClass, string>> = {};
+    for (const cls of MODEL_CLASSES) {
+      const v = typeof classes[cls] === "string" ? (classes[cls] as string).trim() : "";
+      if (v && v.length <= 160 && ![...v].some((ch) => ch.charCodeAt(0) < 32)) bound[cls] = v;
+    }
+    if (Object.keys(bound).length) out[provider] = bound;
+  }
+  return out;
+}
+
+/** The models offered for `agent`'s class bindings: its live catalog (when read) first, then curated aliases. */
+export function modelChoicesFor(agent: string, defs: Record<string, AgentDef> = loadAgents()): string[] {
+  const def = defs[agent];
+  const out: string[] = [];
+  for (const m of [...(cachedAgentModels(agent) ?? []), ...agentModelChoices(def)]) if (!out.includes(m)) out.push(m);
+  return out;
+}
+
+/** Whether `agent` can take a model at all (a model flag, and not the profile-ignoring stub). */
+export function agentTakesModel(def: AgentDef | undefined): boolean {
+  if (!def) return false;
+  const caps = normalizedAgentCapabilities(def);
+  return caps.model && !caps.execution_profile_noop && Array.isArray(def.model_flag);
+}
+
+/**
+ * Validate a model_class_bindings write: the provider must be a known agent that takes a
+ * model, the class must be fast|deep, and the model must be one it offers (its live
+ * catalog or curated aliases) or a well-formed free-text id (MODEL_ID_PATTERN). Anything
+ * else is dropped — an unavailable choice still runs, falling back to the CLI default
+ * at spawn (runWithModelAccessFallback). A blank or "default" value clears the class.
+ */
+export function normalizeModelClassBindings(
+  value: unknown,
+  opts: { defs?: Record<string, AgentDef>; catalog?: (agent: string) => string[] | null } = {}
+): ModelClassBindings {
+  const defs = opts.defs ?? loadAgents();
+  const catalog = opts.catalog ?? cachedAgentModels;
+  const raw = parseJsonObject(value);
+  if (!raw) return {};
+  const out: ModelClassBindings = {};
+  for (const [providerRaw, classesRaw] of Object.entries(raw)) {
+    const provider = providerRaw.trim();
+    const def = defs[provider];
+    const classes = parseJsonObject(classesRaw);
+    if (!agentTakesModel(def) || !classes) continue;
+    const offered = new Set([...(catalog(provider) ?? []), ...agentModelChoices(def)]);
+    const bound: Partial<Record<ModelClass, string>> = {};
+    for (const [cls, modelRaw] of Object.entries(classes)) {
+      if (!MODEL_CLASS_SET.has(cls) || typeof modelRaw !== "string") continue;
+      const model = modelRaw.trim();
+      if (!model || model === "default") continue;
+      if (offered.has(model) || MODEL_ID_PATTERN.test(model)) bound[cls as ModelClass] = model;
+    }
+    if (Object.keys(bound).length) out[provider] = bound;
+  }
+  return out;
+}
+
+/**
+ * Resolve ONE task's execution profile for ONE agent — the ONE place an op's model is
+ * decided. The declarative class above, then any `agent_profile_bindings[agent][task]`
+ * override, then the person's class choice (`model_class_bindings[agent][class]`) for
+ * the model, then clamped to what that CLI actually declares (an effort above its
+ * ceiling maps down). With no choice anywhere the result carries NO model: the CLI runs
+ * its own default. Pure given `cfg`, so it unit-tests offline.
  */
 export function resolveTaskExecutionProfile(
   task: string,
@@ -279,16 +383,25 @@ export function resolveTaskExecutionProfile(
   cfg?: {
     defs?: Record<string, AgentDef>;
     bindings?: unknown;
+    classBindings?: unknown;
     profiles?: Record<string, AbstractExecutionProfile>;
   }
 ): { model?: string; reasoning?: ReasoningLevel } {
   const want = (cfg?.profiles ?? TASK_EXECUTION_PROFILES)[task];
+  const settings = cfg?.bindings === undefined || cfg?.classBindings === undefined ? getSettings() : null;
   const bindings = normalizeAgentProfileBindings(
-    cfg?.bindings !== undefined ? cfg.bindings : getSettings().agent_profile_bindings
+    cfg?.bindings !== undefined ? cfg.bindings : settings?.agent_profile_bindings
   );
   const bound = bindings[agent]?.[task];
   if (!want && !bound) return {};
-  return resolveAgentProfileForClass((cfg?.defs ?? loadAgents())[agent], { ...want, ...(bound ?? {}) });
+  const classBindings = modelClassBindingsShape(
+    cfg?.classBindings !== undefined ? cfg.classBindings : settings?.model_class_bindings
+  );
+  return resolveAgentProfileForClass(
+    (cfg?.defs ?? loadAgents())[agent],
+    { ...want, ...(bound ?? {}) },
+    classBindings[agent]
+  );
 }
 
 /** The per-agent resolver runChosen/enrich/scheduler hand to the agent layer. */
@@ -339,6 +452,7 @@ const SETTINGS_COLUMN_REPAIRS: [string, string][] = [
   ["chat_routing_mode", "TEXT DEFAULT 'adaptive'"],
   ["chat_profile_bindings", "TEXT DEFAULT ''"],
   ["agent_profile_bindings", "TEXT DEFAULT ''"],
+  ["model_class_bindings", "TEXT DEFAULT ''"],
   ["update_check_enabled", "INTEGER DEFAULT 1"],
   ["lead_mode", "TEXT DEFAULT 'lead'"],
   ["training_drive", "TEXT DEFAULT 'steady'"],
@@ -514,6 +628,7 @@ function defaultSettings(): Settings {
     chat_routing_mode: "adaptive",
     chat_profile_bindings: {}, // empty means every provider keeps its own model defaults
     agent_profile_bindings: {}, // empty means every op uses the TASK_EXECUTION_PROFILES default
+    model_class_bindings: {}, // empty means every CLI runs its own default model (no --model)
     update_check_enabled: true, // quiet daily update check on by default (one toggle disables the outbound call)
     usage_ping_enabled: false, // the anonymous weekly usage ping is opt-in only
     lead_mode: "lead", // bounded background coaching is the default relationship
@@ -610,6 +725,7 @@ function rowToSettings(row: any): Settings {
     chat_routing_mode: row.chat_routing_mode === "single" ? "single" : "adaptive",
     chat_profile_bindings: normalizeChatProfileBindings(row.chat_profile_bindings),
     agent_profile_bindings: normalizeAgentProfileBindings(row.agent_profile_bindings),
+    model_class_bindings: modelClassBindingsShape(row.model_class_bindings),
     // NULL on old rows (column added by migration v47) defaults to ON.
     update_check_enabled: row.update_check_enabled == null ? true : !!row.update_check_enabled,
     // NULL on old rows (column added by migration v120) stays OFF: the ping is opt-in only.
@@ -755,6 +871,12 @@ export function setSettings(patch: any, opts: { keepStances?: boolean } = {}): S
       patch.agent_profile_bindings !== undefined
         ? normalizeAgentProfileBindings(patch.agent_profile_bindings)
         : cur.agent_profile_bindings,
+    // Validated against each provider's offered models (or a well-formed free-text id);
+    // unknown providers/classes and malformed ids are dropped.
+    model_class_bindings:
+      patch.model_class_bindings !== undefined
+        ? normalizeModelClassBindings(patch.model_class_bindings)
+        : cur.model_class_bindings,
     update_check_enabled:
       patch.update_check_enabled !== undefined ? !!patch.update_check_enabled : cur.update_check_enabled,
     usage_ping_enabled:
@@ -789,7 +911,7 @@ export function setSettings(patch: any, opts: { keepStances?: boolean } = {}): S
     `UPDATE settings SET agent_strategy=?, agent_order=?, disabled_agents=?, rr_cursor=?,
        coach_enabled=?, coach_day=?, coach_hour=?, onboarded=?, enrich_enabled=?, proactive_enabled=?, art_enabled=?, art_enabled_at=?, meal_prefs=?,
        garmin_username=?, garmin_password=?, garmin_password_encrypted=?, gemini_api_key=?, gemini_api_key_encrypted=?,
-       research_enabled=?, bg_ops_enabled=?, agent_routes=?, chat_routing_mode=?, chat_profile_bindings=?, agent_profile_bindings=?, update_check_enabled=?, lead_mode=?, training_drive=?, garmin_export_strength=?, run_units=?, weight_units=?, meal_plan_auto_draft=?, usage_ping_enabled=?, coach_welcomed=?, updated_at=datetime('now') WHERE id = 1`
+       research_enabled=?, bg_ops_enabled=?, agent_routes=?, chat_routing_mode=?, chat_profile_bindings=?, agent_profile_bindings=?, model_class_bindings=?, update_check_enabled=?, lead_mode=?, training_drive=?, garmin_export_strength=?, run_units=?, weight_units=?, meal_plan_auto_draft=?, usage_ping_enabled=?, coach_welcomed=?, updated_at=datetime('now') WHERE id = 1`
   ).run(
     merged.agent_strategy,
     JSON.stringify(merged.agent_order),
@@ -815,6 +937,7 @@ export function setSettings(patch: any, opts: { keepStances?: boolean } = {}): S
     merged.chat_routing_mode,
     JSON.stringify(merged.chat_profile_bindings),
     JSON.stringify(merged.agent_profile_bindings),
+    JSON.stringify(merged.model_class_bindings),
     merged.update_check_enabled ? 1 : 0,
     merged.lead_mode,
     merged.training_drive,
@@ -943,6 +1066,8 @@ export function getAgentConfig() {
       version: present ? agentVersion(name) : null,
       can_login: !!a.can_login,
       models_list: !!a.models_list,
+      // Curated aliases offered for Everyday / Deep work (the live catalog is fetched lazily).
+      model_choices: Array.isArray(a.model_choices) ? a.model_choices : [],
       installable: !!a.installable,
       install_method: a.install_method ?? null,
       install_version: a.install_version ?? null,

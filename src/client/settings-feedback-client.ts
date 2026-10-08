@@ -3,8 +3,9 @@
 // overlay primitive. Kind chips, the person's own words, an optional contact, and an
 // opt-in "Include anonymous diagnostics" whose preview shows exactly the snapshot the
 // server would attach (GET /feedback/preview — version, platform, coalesced error
-// fingerprints; never health data, chat text or names). With no feedback service the
-// server hands back a prefilled GitHub issue URL, and this sheet opens it instead.
+// fingerprints; never health data, chat text or names). It goes to the project's
+// feedback service by default; with CAIRN_FEEDBACK_URL="" the server hands back a
+// prefilled GitHub issue URL, and this sheet opens it instead.
 
 type SettingsFeedbackApi = (
   path: string,
@@ -110,6 +111,10 @@ function openFeedbackSheet(deps: SettingsFeedbackDeps): void {
       if (preview.destination === "github") {
         dest.textContent =
           "No feedback service is set up for this Cairn, so sending opens a prefilled GitHub issue you can review before submitting. Your contact stays out of it.";
+        dest.hidden = false;
+      } else if (preview.destination === "service") {
+        dest.textContent =
+          "Sending delivers it to the Cairn project's feedback service. A contact you add is only for a reply and is never published.";
         dest.hidden = false;
       }
     })

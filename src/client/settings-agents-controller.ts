@@ -116,6 +116,24 @@ function renderSettingsAgents(deps: ClientSettingsAgentsControllerDeps): void {
   wireSettingsCliUpdate(deps);
 }
 
+// The installer run this device last saw. Server truth (GET /agent-clis/update) wins on
+// every poll and on every visit to Settings, so a reload or a trip to another screen
+// lands on the true state; this is only what the cards draw from between polls.
+let settingsCli: SettingsAgentCli | null = null;
+let settingsCliFollower = 0;
+let settingsCliTicker: ReturnType<typeof setInterval> | null = null;
+
+// A progress redraw: the cards are already on screen, so they must not replay their entrance.
+let settingsCliQuiet = false;
+function redrawSettingsAgentCards(deps: ClientSettingsAgentsControllerDeps): void {
+  settingsCliQuiet = true;
+  try {
+    renderSettingsAgentList(deps);
+  } finally {
+    settingsCliQuiet = false;
+  }
+}
+
 function renderSettingsAgentList(deps: ClientSettingsAgentsControllerDeps): void {
   const wrap = settingsAgentsOptional<HTMLElement>(deps.root, "#agentlist");
   if (!wrap) return;
@@ -126,7 +144,13 @@ function renderSettingsAgentList(deps: ClientSettingsAgentsControllerDeps): void
     agentInfo: deps.agentInfo,
     agentModels: deps.agentModels,
     stagger: deps.stagger,
+    cli: settingsCli,
+    now: Date.now(),
+    reveal: !settingsCliQuiet,
+    modelClassBindings: deps.workingModel.model_class_bindings,
+    agentCatalog: CairnSettingsAgentModels.catalog(deps),
   });
+  CairnSettingsAgentModels.wire(deps, wrap, () => redrawSettingsAgentCards(deps));
 
   wrap.querySelectorAll<HTMLButtonElement>("[data-toggle]").forEach((button) => button.addEventListener("click", () => {
     const name = button.dataset.toggle || "";
@@ -207,7 +231,7 @@ function renderSettingsCliStatus(deps: ClientSettingsAgentsControllerDeps, resul
     else el.textContent = "";
     const log = settingsAgentsOptional<HTMLElement>(deps.root, "#agentCliUpdateLog");
     if (log) {
-      const output = [result.stdout_tail, result.stderr_tail]
+      const output = [(result.stdout_tail || "").replace(/^CAIRN_PHASE .*\n?/gm, ""), (result.stderr_tail || "").replace(/^CAIRN_INSTALL_FAILURE .*\n?/gm, "")]
         .filter((part): part is string => typeof part === "string" && part.trim().length > 0)
         .join("\n")
         .trim();
@@ -215,23 +239,67 @@ function renderSettingsCliStatus(deps: ClientSettingsAgentsControllerDeps, resul
       log.hidden = !log.textContent;
       if (!log.hidden) log.scrollTop = log.scrollHeight;
     }
-  const list = settingsAgentsOptional<HTMLElement>(deps.root, "#agentlist");
-  list?.querySelectorAll<HTMLButtonElement>("[data-install],[data-remove]").forEach((button) => {
-    button.disabled = result.status === "running";
-  });
 }
 
-async function pollSettingsCliStatus(deps: ClientSettingsAgentsControllerDeps): Promise<SettingsScreenCliUpdateStatus | null> {
-  if (!settingsAgentsOptional(deps.root, "#agentCliUpdateStatus")) return null;
-  let result = await deps.api("/agent-clis/update") as SettingsScreenCliUpdateStatus;
-  renderSettingsCliStatus(deps, result);
-  while (result.status === "running") {
-    await deps.sleep(2000);
-    result = await deps.api("/agent-clis/update") as SettingsScreenCliUpdateStatus;
-    if (!settingsAgentsOptional(deps.root, "#agentCliUpdateStatus")) return null;
-    renderSettingsCliStatus(deps, result);
+
+// The card-facing identity of a run: the cards redraw only when this changes, and the
+// elapsed clock ticks in place between redraws.
+function settingsCliKey(cli: SettingsAgentCli | null): string {
+  return cli ? [cli.status, cli.action, cli.phase, (cli.agents || []).join(","), cli.failure?.reason, cli.error].join("|") : "";
+}
+
+function adoptSettingsCli(deps: ClientSettingsAgentsControllerDeps, next: SettingsScreenCliUpdateStatus | null): void {
+  const before = settingsCliKey(settingsCli);
+  settingsCli = next ? { ...next, seen_at: Date.now() } : null;
+  if (settingsCliKey(settingsCli) !== before) redrawSettingsAgentCards(deps);
+  if (settingsCli?.status === "running" && !settingsCliTicker && typeof setInterval === "function") {
+    settingsCliTicker = setInterval(() => {
+      const el = deps.root.isConnected !== false ? deps.root.querySelectorAll<HTMLElement>("[data-cli-elapsed]") : [];
+      if (!el.length || settingsCli?.status !== "running") {
+        if (settingsCliTicker) clearInterval(settingsCliTicker);
+        settingsCliTicker = null;
+        return;
+      }
+      const text = CairnSettingsAgents.cliClock(CairnSettingsAgents.cliElapsedSeconds(settingsCli, Date.now()));
+      el.forEach((node) => { node.textContent = text; });
+    }, 1000);
   }
-  return result;
+}
+
+// Follow the installer run until it finishes, from a tap OR from arriving on Settings
+// mid-run. One follower at a time; when it ends the cards return to the true state.
+async function trackSettingsCli(deps: ClientSettingsAgentsControllerDeps, first?: SettingsScreenCliUpdateStatus): Promise<void> {
+  // A newer follower (a tap, or a fresh visit to Settings) supersedes the one before it.
+  const me = ++settingsCliFollower;
+  try {
+    let result = first || await deps.api("/agent-clis/update") as SettingsScreenCliUpdateStatus;
+    // A run this device started is announced when it ends even if it finished before the first poll.
+    let sawRunning = !!first;
+    while (true) {
+      if (me !== settingsCliFollower || deps.root.isConnected === false || !settingsAgentsOptional(deps.root, "#agentCliUpdateStatus")) return;
+      if (result.status === "running") sawRunning = true;
+      renderSettingsCliStatus(deps, result);
+      adoptSettingsCli(deps, result);
+      if (result.status !== "running") break;
+      await deps.sleep(2000);
+      result = await deps.api("/agent-clis/update") as SettingsScreenCliUpdateStatus;
+    }
+    if (!sawRunning) return;
+    const agent = (result.agents || [])[0] || "tool";
+    const removing = result.action === "remove";
+    if (result.status === "succeeded") {
+      delete deps.agentInfo[agent];
+      delete deps.agentModels[agent];
+      // The server dropped its catalog for this CLI too: re-read it with the new version.
+      delete CairnSettingsAgentModels.catalog(deps)[agent];
+    }
+    await refreshSettingsAgentMeta(deps).catch(() => {});
+    redrawSettingsAgentCards(deps);
+    if (result.status === "succeeded") deps.toast(removing ? `${agent} removed` : `${agent} is ready to connect`);
+    else deps.toast(removing ? `${agent} couldn't be removed` : `${agent} install failed`);
+  } catch {
+    // A dropped poll leaves the last drawn state; the next visit to Settings re-reads it.
+  }
 }
 
 async function refreshSettingsAgentMeta(deps: ClientSettingsAgentsControllerDeps): Promise<void> {
@@ -242,36 +310,34 @@ async function refreshSettingsAgentMeta(deps: ClientSettingsAgentsControllerDeps
   }
 }
 
+// Start (or attach to) an installer run: the card goes busy at once, from the tap, and
+// the server's own phase takes over from the first poll.
+async function startSettingsCliRun(deps: ClientSettingsAgentsControllerDeps, agent: string, action: "install" | "remove"): Promise<void> {
+  adoptSettingsCli(deps, { status: "running", action, agents: [agent], phase: "starting", elapsed_sec: 0 });
+  redrawSettingsAgentCards(deps);
+  try {
+    const started = await deps.api(
+      action === "remove" ? `/agent-clis/${encodeURIComponent(agent)}/remove` : `/agent-clis/${encodeURIComponent(agent)}/install`,
+      { method: "POST" }
+    ) as SettingsScreenCliUpdateStatus;
+    if (Array.isArray(started.agents) && !started.agents.includes(agent)) {
+      throw new Error(`Another tool is already ${started.action === "remove" ? "being removed" : "installing"} (${started.agents.join(", ")})`);
+    }
+    await trackSettingsCli(deps, started);
+  } catch (error) {
+    const failed = { status: "failed", action, agents: [agent], error: error instanceof Error ? error.message : "request failed" };
+    renderSettingsCliStatus(deps, failed);
+    adoptSettingsCli(deps, failed);
+    redrawSettingsAgentCards(deps);
+    deps.toast(action === "remove" ? `${agent} couldn't be removed` : `${agent} install failed`);
+  }
+}
+
 function wireSettingsCliInstallButtons(deps: ClientSettingsAgentsControllerDeps): void {
   const list = settingsAgentsOptional<HTMLElement>(deps.root, "#agentlist");
   list?.querySelectorAll<HTMLButtonElement>("[data-install]").forEach((button) => button.addEventListener("click", async () => {
     const agent = button.dataset.install || "";
-    if (!agent) return;
-    button.disabled = true;
-    renderSettingsCliStatus(deps, { status: "running", agents: [agent], started_at: new Date().toISOString() });
-    let result: SettingsScreenCliUpdateStatus | null = null;
-    try {
-      const started = await deps.api(`/agent-clis/${encodeURIComponent(agent)}/install`, { method: "POST" }) as SettingsScreenCliUpdateStatus;
-      if (Array.isArray(started.agents) && !started.agents.includes(agent)) {
-        throw new Error(`Another tool is already installing (${started.agents.join(", ")})`);
-      }
-      result = await pollSettingsCliStatus(deps);
-    } catch (error) {
-      renderSettingsCliStatus(deps, {
-        status: "failed",
-        agents: [agent],
-        error: error instanceof Error ? error.message : "request failed",
-      });
-    }
-    if (result?.status === "succeeded") {
-      delete deps.agentInfo[agent];
-      delete deps.agentModels[agent];
-      await refreshSettingsAgentMeta(deps);
-      renderSettingsAgentList(deps);
-      deps.toast(`${agent} is ready to connect`);
-    } else {
-      deps.toast(`${agent} install failed`);
-    }
+    if (agent && !button.disabled) await startSettingsCliRun(deps, agent, "install");
   }));
 }
 
@@ -281,7 +347,7 @@ function wireSettingsCliRemoveButtons(deps: ClientSettingsAgentsControllerDeps):
   const list = settingsAgentsOptional<HTMLElement>(deps.root, "#agentlist");
   list?.querySelectorAll<HTMLButtonElement>("[data-remove]").forEach((button) => button.addEventListener("click", async () => {
     const agent = button.dataset.remove || "";
-    if (!agent) return;
+    if (!agent || button.disabled) return;
     if (button.dataset.armed !== "1") {
       button.dataset.armed = "1";
       button.textContent = "tap again to remove";
@@ -292,31 +358,12 @@ function wireSettingsCliRemoveButtons(deps: ClientSettingsAgentsControllerDeps):
       }, 4000);
       return;
     }
-    button.disabled = true;
-    renderSettingsCliStatus(deps, { status: "running", action: "remove", agents: [agent], started_at: new Date().toISOString() });
-    let result: SettingsScreenCliUpdateStatus | null = null;
-    try {
-      const started = await deps.api(`/agent-clis/${encodeURIComponent(agent)}/remove`, { method: "POST" }) as SettingsScreenCliUpdateStatus;
-      if (Array.isArray(started.agents) && !started.agents.includes(agent)) {
-        throw new Error(`Another tool is busy (${started.agents.join(", ")})`);
-      }
-      result = await pollSettingsCliStatus(deps);
-    } catch (error) {
-      renderSettingsCliStatus(deps, {
-        status: "failed",
-        action: "remove",
-        agents: [agent],
-        error: error instanceof Error ? error.message : "request failed",
-      });
-    }
-    await refreshSettingsAgentMeta(deps).catch(() => {});
-    renderSettingsAgentList(deps);
-    deps.toast(result?.status === "succeeded" ? `${agent} removed` : `${agent} couldn't be removed`);
+    await startSettingsCliRun(deps, agent, "remove");
   }));
 }
 
 function wireSettingsCliUpdate(deps: ClientSettingsAgentsControllerDeps): void {
-  pollSettingsCliStatus(deps).catch(() => {});
+  trackSettingsCli(deps).catch(() => {});
 }
 
 const CAIRN_SETTINGS_AGENTS_CONTROLLER = {

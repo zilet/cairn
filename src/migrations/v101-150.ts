@@ -691,4 +691,26 @@ export const MIGRATIONS_101_150: Migration[] = [
       if (hasTable(db, "oauth_tokens")) addColumn(db, "oauth_tokens", "parent_id INTEGER");
     },
   },
+  {
+    version: 126,
+    name: "agent-run-failure-tail",
+    // A failed agent attempt keeps a short redacted tail of what the CLI printed
+    // (src/agentFailureTail.ts), so an exit no classifier recognises is diagnosable
+    // after the fact instead of leaving only "process_exit". NULL on existing rows and
+    // on every successful attempt. Two-step: also in db.ts's create block.
+    up: (db) => {
+      if (hasTable(db, "agent_runs")) addColumn(db, "agent_runs", "failure_tail TEXT");
+    },
+  },
+  {
+    version: 127,
+    name: "settings-model-class-bindings",
+    // The person's own model choice per provider and class (Settings -> Agents:
+    // Everyday = fast, Deep work = deep). '' on existing rows = every CLI runs its own
+    // default model; deliberately no backfill of the old claude sonnet/fable pins.
+    // Two-step: also in db.ts's settings create block.
+    up: (db) => {
+      if (hasTable(db, "settings")) addColumn(db, "settings", "model_class_bindings TEXT DEFAULT ''");
+    },
+  },
 ];

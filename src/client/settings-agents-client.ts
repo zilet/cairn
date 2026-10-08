@@ -11,6 +11,7 @@ type SettingsAgentsAgent = {
   models_list?: boolean;
   installable?: boolean;
   install_version?: string | null;
+  model_choices?: unknown[];
 } & Record<string, unknown>;
 
 type SettingsAgentsInfo = {
@@ -43,7 +44,71 @@ type SettingsAgentsListOptions = {
   agentInfo: Record<string, SettingsAgentsInfo | undefined>;
   agentModels: Record<string, unknown[] | undefined>;
   stagger?: (index: number) => string;
+  cli?: SettingsAgentCli | null;
+  /** Date.now() for elapsed time (injected so the render stays pure). */
+  now?: number;
+  /** false on a progress re-render: the cards are already on screen, don't replay the entrance. */
+  reveal?: boolean;
+  /** The person's model per provider and class (settings.model_class_bindings). */
+  modelClassBindings?: Record<string, Record<string, unknown>>;
+  /** Each provider's LIVE model catalog: undefined/null until it arrives (the curated list shows meanwhile). */
+  agentCatalog?: Record<string, unknown[] | null | undefined>;
 };
+
+// The installer run the server reports (GET /agent-clis/update), plus two client-only
+// fields: `seen_at` is when this device last observed it, so elapsed time never leans on
+// a device clock matching the server's.
+type SettingsAgentCli = {
+  status?: string;
+  action?: string;
+  agents?: string[];
+  phase?: string | null;
+  elapsed_sec?: number | null;
+  seen_at?: number;
+  failure?: { reason?: string; message?: string } | null;
+  error?: string;
+};
+
+type SettingsAgentCliCard =
+  | { kind: "busy"; action: "install" | "remove"; phase: string; label: string; elapsed: string }
+  | { kind: "failed"; action: "install" | "remove"; headline: string }
+  | null;
+
+const SETTINGS_CLI_PHASE_WORDS: Record<string, string> = {
+  starting: "Starting",
+  checking_disk: "Checking disk space",
+  downloading: "Downloading and installing",
+  verifying: "Checking it starts",
+  removing: "Removing",
+};
+
+function settingsCliElapsedSeconds(cli: SettingsAgentCli | null | undefined, now: number): number {
+  if (!cli) return 0;
+  const base = typeof cli.elapsed_sec === "number" && Number.isFinite(cli.elapsed_sec) ? cli.elapsed_sec : 0;
+  const seen = typeof cli.seen_at === "number" ? cli.seen_at : now;
+  return Math.max(0, Math.floor(base + (now - seen) / 1000));
+}
+
+function settingsCliClock(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
+// What one card should say about the installer run: busy only for the agent the run is
+// ABOUT, a failure headline (the installer's own classified message) until a newer run.
+function settingsCliCardState(cli: SettingsAgentCli | null | undefined, name: string, now: number): SettingsAgentCliCard {
+  if (!cli || !Array.isArray(cli.agents) || !cli.agents.includes(name)) return null;
+  const action = cli.action === "remove" ? "remove" : "install";
+  if (cli.status === "running") {
+    const phase = action === "remove" ? "removing" : cli.phase && SETTINGS_CLI_PHASE_WORDS[cli.phase] ? cli.phase : "starting";
+    return { kind: "busy", action, phase, label: `${SETTINGS_CLI_PHASE_WORDS[phase]}…`, elapsed: settingsCliClock(settingsCliElapsedSeconds(cli, now)) };
+  }
+  if (cli.status === "failed") {
+    const headline = cli.failure?.message || cli.error || `${action === "remove" ? "Remove" : "Install"} didn't finish`;
+    return { kind: "failed", action, headline: headline.slice(0, 600) };
+  }
+  return null;
+}
 
 function settingsAgentStrategyOption(current: string, value: string, label: string): string {
   return `<option value="${escAttr(value)}" ${current === value ? "selected" : ""}>${escHtml(label)}</option>`;
@@ -188,14 +253,35 @@ function settingsAgentCardHtml(options: SettingsAgentsListOptions, name: string,
   const models = options.agentModels[name];
   const modelsList = settingsAgentModelsHtml(models);
   const staggerStyle = options.stagger ? options.stagger(index) : "";
+  const cliState = settingsCliCardState(options.cli, name, options.now ?? Date.now());
+  const busy = cliState?.kind === "busy" ? cliState : null;
+  // The installer runs one job at a time: while another card's run is going, this card's
+  // install/remove wait rather than silently attaching to it.
+  const runningElsewhere = options.cli?.status === "running" && !busy;
+  const installing = busy?.action === "install";
+  const removing = busy?.action === "remove";
+  const spinner = `<span class="agent-busy-dot" aria-hidden="true"></span>`;
   const installButton = agent.installable
-    ? `<button class="ghostbtn agent-install-btn" data-install="${escAttr(name)}">${present ? "Update" : "Install"}</button>`
+    ? installing
+      ? `<button class="ghostbtn agent-install-btn is-busy" data-install="${escAttr(name)}" disabled aria-busy="true">${spinner}${present ? "Updating…" : "Installing…"}</button>`
+      : `<button class="ghostbtn agent-install-btn" data-install="${escAttr(name)}"${runningElsewhere ? " disabled" : ""}>${present ? "Update" : "Install"}</button>`
     : "";
-  return `<div class="agent-card${off ? " off" : ""} reveal" style="${escAttr(staggerStyle)}">
+  const removeButton = present && agent.installable
+    ? removing
+      ? `<button class="linkbtn-quiet agent-detail-link is-busy" data-remove="${escAttr(name)}" disabled aria-busy="true">${spinner}Removing…</button>`
+      : `<button class="linkbtn-quiet agent-detail-link" data-remove="${escAttr(name)}"${busy || runningElsewhere ? " disabled" : ""} title="Free its disk space; its sign-in is kept">remove</button>`
+    : "";
+  const statusLine = busy
+    ? `<div class="agent-cli-status" role="status" aria-live="polite"><span class="agent-cli-phase">${escHtml(busy.label)}</span> <span class="agent-cli-elapsed" data-cli-elapsed aria-hidden="true">${escHtml(busy.elapsed)}</span></div>`
+    : cliState?.kind === "failed"
+      ? `<div class="agent-cli-status is-failed" role="status" aria-live="polite">${escHtml(cliState.headline)}</div>`
+      : "";
+  return `<div class="agent-card${off ? " off" : ""}${options.reveal === false ? "" : " reveal"}" style="${escAttr(staggerStyle)}"${busy ? ` aria-busy="true"` : ""}>
         <div class="agent-card-top">
           <div class="agentmeta">
             <div class="agentname">${escHtml(name)}</div>
             <div class="agentdesc">${escHtml(agent.description || "")}</div>
+            ${statusLine}
           </div>
           <span class="agent-chip ${escAttr(chip.cls)}">${escHtml(chip.label)}</span>
         </div>
@@ -207,8 +293,8 @@ function settingsAgentCardHtml(options: SettingsAgentsListOptions, name: string,
           </div>
           <div class="agent-card-actions">
             ${installButton}
-            ${present && agent.installable ? `<button class="linkbtn-quiet agent-detail-link" data-remove="${escAttr(name)}" title="Free its disk space; its sign-in is kept">remove</button>` : ""}
-            ${present && agent.can_login ? `<button class="ghostbtn agent-connect-btn" data-connect="${escAttr(name)}">Connect</button>` : ""}
+            ${removeButton}
+            ${present && agent.can_login ? `<button class="ghostbtn agent-connect-btn" data-connect="${escAttr(name)}"${busy ? " disabled" : ""}>Connect</button>` : ""}
             ${present ? `<button class="linkbtn-quiet agent-detail-link" data-detail="${escAttr(name)}">${cached ? "details" : "check"}</button>` : ""}
             ${present && agent.models_list ? `<button class="linkbtn-quiet agent-detail-link" data-models="${escAttr(name)}">${Array.isArray(models) ? "hide models" : "view models"}</button>` : ""}
           </div>
@@ -217,6 +303,7 @@ function settingsAgentCardHtml(options: SettingsAgentsListOptions, name: string,
         ${agent.configured === false ? `<div class="agent-card-note">Not in rotation until connected${agent.can_login ? " — tap Connect" : ""}.</div>` : ""}
         ${availabilityNote ? `<div class="agent-card-note agent-card-note-limit">${escHtml(availabilityNote)}</div>` : ""}
         ${quotaNote ? `<div class="agent-card-note">${escHtml(quotaNote)}</div>` : ""}
+        ${CairnSettingsAgentModels.pickHtml(options, name)}
         ${infoLine ? `<div class="agent-info-line">${infoLine}</div>` : ""}
         ${Array.isArray(models) ? `<ul class="agent-models">${modelsList}</ul>` : ""}
       </div>`;
@@ -288,6 +375,9 @@ const CAIRN_SETTINGS_AGENTS = {
   agentStateLine,
   agentsSliceHtml: settingsAgentsSliceHtml,
   agentListHtml: settingsAgentListHtml,
+  cliCardState: settingsCliCardState,
+  cliElapsedSeconds: settingsCliElapsedSeconds,
+  cliClock: settingsCliClock,
 };
 
 Object.assign(globalThis, { CairnSettingsAgents: CAIRN_SETTINGS_AGENTS });

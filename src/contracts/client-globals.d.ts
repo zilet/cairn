@@ -882,6 +882,8 @@ declare global {
     routes: Record<string, string>;
     chat_routing_mode: "adaptive" | "single";
     chat_profile_bindings: Record<string, Record<string, Record<string, unknown>>>;
+    /** provider -> fast|deep -> model (settings.model_class_bindings); {} = every CLI's own default. */
+    model_class_bindings: Record<string, Record<string, unknown>>;
     coach_day: number;
     coach_hour: number;
     time_zone: string;
@@ -902,6 +904,8 @@ declare global {
     routeTasks: readonly ClientSettingsRouteTask[];
     agentInfo: Record<string, ClientSettingsAgentsControllerInfo | undefined>;
     agentModels: Record<string, unknown[] | undefined>;
+    /** Live model catalogs for the Everyday / Deep work selects (null while loading). */
+    agentCatalog?: Record<string, string[] | null>;
     agentHealthHtml: string;
     agentActivityHtml: string;
     noticedHtml: string;
@@ -4253,7 +4257,39 @@ declare global {
         agentInfo: Record<string, { version: unknown; model_current: unknown; update_available?: boolean } | undefined>;
         agentModels: Record<string, unknown[] | undefined>;
         stagger?: (index: number) => string;
+        cli?: SettingsAgentCli | null;
+        now?: number;
+        reveal?: boolean;
+        modelClassBindings?: Record<string, Record<string, unknown>>;
+        agentCatalog?: Record<string, unknown[] | null | undefined>;
       }): string;
+      cliCardState(cli: SettingsAgentCli | null | undefined, name: string, now: number): SettingsAgentCliCard;
+      cliElapsedSeconds(cli: SettingsAgentCli | null | undefined, now: number): number;
+      cliClock(seconds: number): string;
+    };
+
+    CairnSettingsAgentModels: {
+      pickHtml(
+        options: {
+          meta: Record<string, (Record<string, unknown> & { name: string }) | undefined>;
+          modelClassBindings?: Record<string, Record<string, unknown>>;
+          agentCatalog?: Record<string, unknown[] | null | undefined>;
+        },
+        name: string
+      ): string;
+      modelChoices(agent: (Record<string, unknown> & { name: string }) | undefined, catalog: unknown[] | null | undefined): string[];
+      modelIdValid(value: unknown): boolean;
+      agentTakesModel(agent: (Record<string, unknown> & { name: string }) | undefined): boolean;
+      applyModelChoice(
+        bindings: Record<string, Record<string, unknown>>,
+        provider: string,
+        cls: string,
+        value: string,
+        choices?: readonly string[]
+      ): boolean;
+      modelBinding(bindings: Record<string, Record<string, unknown>> | undefined, provider: string, cls: string): string;
+      catalog(deps: ClientSettingsAgentsControllerDeps): Record<string, string[] | null>;
+      wire(deps: ClientSettingsAgentsControllerDeps, wrap: HTMLElement, redraw: () => void): void;
     };
 
     CairnSettingsAgentsController: {
@@ -5973,6 +6009,7 @@ declare global {
   declare const CairnSettingsDriveController: Window["CairnSettingsDriveController"];
   declare const CairnSettingsSourcesAutomationController: Window["CairnSettingsSourcesAutomationController"];
   declare const CairnSettingsAgents: Window["CairnSettingsAgents"];
+  declare const CairnSettingsAgentModels: Window["CairnSettingsAgentModels"];
   declare const CairnSettingsAgentsController: Window["CairnSettingsAgentsController"];
   declare const CairnMarkdown: Window["CairnMarkdown"];
   declare const CairnPwaInstall: Window["CairnPwaInstall"];

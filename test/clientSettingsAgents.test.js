@@ -44,6 +44,7 @@ function loadSettingsAgents() {
     },
   };
   context.window = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/settings-agent-models.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/settings-agents-client.js"), "utf8"), context);
   return context.CairnSettingsAgents;
 }
@@ -281,4 +282,174 @@ test("Settings > Agents speaks the agent layer's current state and clears itself
     now
   );
   assert.doesNotMatch(escaped, /<b>|<x>/);
+});
+
+test("an install in flight makes its card busy, says the server's phase, and locks the rest", () => {
+  const settingsAgents = loadSettingsAgents();
+  const meta = {
+    claude: { name: "claude", installable: true, present: false },
+    codex: { name: "codex", installable: true, present: true, can_login: true },
+  };
+  const base = { order: ["claude", "codex"], disabled: new Set(), meta, agentInfo: {}, agentModels: {} };
+  const cli = { status: "running", action: "install", agents: ["claude"], phase: "downloading", elapsed_sec: 40, seen_at: 1_000 };
+  const html = settingsAgents.agentListHtml({ ...base, cli, now: 3_000 });
+  assert.match(html, /aria-busy="true"[^>]*>Installing…|Installing…/);
+  assert.match(html, /role="status" aria-live="polite"><span class="agent-cli-phase">Downloading and installing…<\/span>/);
+  assert.match(html, /data-cli-elapsed aria-hidden="true">0:42</);
+  // the other card cannot start a second run or be connected-over
+  const codex = html.slice(html.indexOf('data-install="codex"'));
+  assert.match(codex, /data-install="codex" disabled/);
+  assert.match(codex, /data-remove="codex" disabled/);
+  // a progress re-render does not replay the entrance
+  assert.doesNotMatch(settingsAgents.agentListHtml({ ...base, cli, now: 3_000, reveal: false }), /agent-card[^"]* reveal/);
+});
+
+test("a remove in flight and a failed install read from the same card state", () => {
+  const settingsAgents = loadSettingsAgents();
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(settingsAgents.cliCardState({ status: "running", action: "remove", agents: ["grok"], elapsed_sec: 3, seen_at: 0 }, "grok", 1000))),
+    { kind: "busy", action: "remove", phase: "removing", label: "Removing…", elapsed: "0:04" }
+  );
+  assert.equal(settingsAgents.cliCardState({ status: "running", action: "remove", agents: ["grok"] }, "claude", 0), null);
+  const failed = settingsAgents.cliCardState(
+    { status: "failed", action: "install", agents: ["claude"], failure: { reason: "disk_full", message: "The server's disk is full." } },
+    "claude",
+    0
+  );
+  assert.equal(failed.kind, "failed");
+  assert.equal(failed.headline, "The server's disk is full.");
+  const html = settingsAgents.agentListHtml({
+    order: ["claude"], disabled: new Set(), agentInfo: {}, agentModels: {},
+    meta: { claude: { name: "claude", installable: true, present: false } },
+    cli: { status: "failed", action: "install", agents: ["claude"], failure: { reason: "disk_full", message: "Disk <full>" } },
+  });
+  assert.match(html, /agent-cli-status is-failed" role="status" aria-live="polite">Disk &lt;full&gt;</);
+  assert.doesNotMatch(html, /Installing…/);
+  // unknown phases fall back to starting; clock formats m:ss
+  assert.equal(settingsAgents.cliCardState({ status: "running", agents: ["x"], phase: "weird" }, "x", 0).phase, "starting");
+  assert.equal(settingsAgents.cliClock(125), "2:05");
+});
+
+function loadAgentModels() {
+  const context = { Array, Object, String, escHtml, escAttr };
+  context.window = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/settings-agent-models.js"), "utf8"), context);
+  return context.CairnSettingsAgentModels;
+}
+
+// ---- Everyday / Deep work model (settings.model_class_bindings) ----
+
+function modelCard(overrides = {}) {
+  return {
+    order: ["claude"],
+    disabled: new Set(),
+    meta: {
+      claude: {
+        name: "claude",
+        present: true,
+        configured: true,
+        capabilities: { model: true, reasoning: ["low", "high"] },
+        model_choices: ["sonnet", "opus", "fable", "haiku"],
+      },
+    },
+    agentInfo: {},
+    agentModels: {},
+    ...overrides,
+  };
+}
+
+test("a provider card offers Everyday and Deep work selects, CLI default first and selected by default", () => {
+  const settingsAgents = loadSettingsAgents();
+  const html = settingsAgents.agentListHtml(modelCard());
+  assert.match(html, /<label for="agent-model-claude-fast">Everyday model<\/label>/);
+  assert.match(html, /<label for="agent-model-claude-deep">Deep work model<\/label>/);
+  const selects = html.match(/<select id="agent-model-claude-(fast|deep)"[^>]*>([\s\S]*?)<\/select>/g) || [];
+  assert.equal(selects.length, 2);
+  for (const select of selects) {
+    assert.match(
+      select,
+      /^<select[^>]*><option value="" selected>CLI default<\/option><option value="sonnet">sonnet<\/option><option value="opus">opus<\/option><option value="fable">fable<\/option><option value="haiku">haiku<\/option><option value="__other__">Other…<\/option><\/select>$/
+    );
+  }
+  assert.match(html, /CLI default uses whatever your plan gives you\. Pick a model only if your plan includes it\./);
+  assert.match(html, /role="group" aria-label="claude models"/);
+  assert.match(html, /data-model-other="fast"[^>]*hidden[^>]*aria-label="Everyday model: model name"/);
+});
+
+test("a bound class is selected; a custom id the list does not show is still offered and selected", () => {
+  const settingsAgents = loadSettingsAgents();
+  const html = settingsAgents.agentListHtml(
+    modelCard({ modelClassBindings: { claude: { fast: "sonnet", deep: "claude-opus-x-1" } } })
+  );
+  assert.match(html, /<option value="sonnet" selected>sonnet<\/option>/);
+  assert.match(html, /<option value="claude-opus-x-1" selected>claude-opus-x-1<\/option><option value="__other__">/);
+  assert.doesNotMatch(html, /<option value="" selected>CLI default/);
+});
+
+test("the live catalog replaces the curated list once it arrives; entries are escaped", () => {
+  const settingsAgents = loadSettingsAgents();
+  const models = loadAgentModels();
+  const card = modelCard();
+  card.meta.claude.model_choices = [];
+  card.meta.claude.models_list = true;
+  // Still loading (null) and empty: only CLI default + Other.
+  let html = settingsAgents.agentListHtml({ ...card, agentCatalog: { claude: null } });
+  assert.match(html, /<option value="" selected>CLI default<\/option><option value="__other__">Other…<\/option>/);
+  html = settingsAgents.agentListHtml({
+    ...card,
+    agentCatalog: { claude: ["grok-4.7", 'Gemini <3.5> "Flash"'] },
+  });
+  assert.match(html, /<option value="grok-4\.7">grok-4\.7<\/option>/);
+  assert.match(html, /<option value="Gemini &lt;3\.5&gt; &quot;Flash&quot;">Gemini &lt;3\.5&gt; "Flash"<\/option>/);
+  assert.deepEqual([...models.modelChoices({ name: "x", model_choices: ["a"] }, ["b", "b", ""])], ["b"]);
+  assert.deepEqual([...models.modelChoices({ name: "x", model_choices: ["a"] }, [])], ["a"]);
+});
+
+test("the model selects hide for a provider that takes no model, the offline stub, and an absent CLI", () => {
+  const settingsAgents = loadSettingsAgents();
+  const card = modelCard({ order: ["stub", "nomodel", "absent"] });
+  card.meta = {
+    stub: { name: "stub", present: true, capabilities: { model: false, execution_profile_noop: true } },
+    nomodel: { name: "nomodel", present: true, capabilities: { model: false, reasoning: ["low"] } },
+    absent: { name: "absent", present: false, capabilities: { model: true }, model_choices: ["x"] },
+  };
+  assert.doesNotMatch(settingsAgents.agentListHtml(card), /agent-model-pick/);
+});
+
+test("applyModelChoice sets, clears and validates a class choice without touching other providers", () => {
+  const models = loadAgentModels();
+  const bindings = { codex: { deep: "gpt-6-sol" } };
+  assert.equal(models.applyModelChoice(bindings, "claude", "deep", "opus", ["sonnet", "opus"]), true);
+  assert.deepEqual(JSON.parse(JSON.stringify(bindings)), { codex: { deep: "gpt-6-sol" }, claude: { deep: "opus" } });
+  assert.equal(models.applyModelChoice(bindings, "claude", "deep", "opus", ["opus"]), false, "unchanged");
+  assert.equal(
+    models.applyModelChoice(bindings, "claude", "deep", "__other__"),
+    false,
+    "Other… is not a value"
+  );
+  assert.equal(models.applyModelChoice(bindings, "claude", "turbo", "opus", ["opus"]), false, "unknown class");
+  assert.equal(models.applyModelChoice(bindings, "claude", "fast", "two words"), false, "malformed free text");
+  // A live-catalog entry with spaces is accepted because it was offered.
+  assert.equal(
+    models.applyModelChoice(bindings, "claude", "fast", "Gemini 3.5 Flash", ["Gemini 3.5 Flash"]),
+    true
+  );
+  assert.equal(
+    models.applyModelChoice(bindings, "claude", "fast", "my-model:v2/x_1.0"),
+    true,
+    "well-formed free text"
+  );
+  assert.equal(models.applyModelChoice(bindings, "claude", "fast", ""), true, "CLI default clears");
+  assert.equal(models.applyModelChoice(bindings, "claude", "deep", ""), true);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(bindings)),
+    { codex: { deep: "gpt-6-sol" } },
+    "an empty provider is removed"
+  );
+  assert.equal(models.applyModelChoice(bindings, "claude", "deep", ""), false, "already the default");
+  assert.equal(models.modelIdValid("sonnet"), true);
+  assert.equal(models.modelIdValid("x".repeat(81)), false);
+  assert.equal(models.modelIdValid("<script>"), false);
+  assert.equal(models.modelBinding(bindings, "codex", "deep"), "gpt-6-sol");
+  assert.equal(models.modelBinding(bindings, "codex", "fast"), "");
 });

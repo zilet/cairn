@@ -34,6 +34,10 @@ services:
       - CAIRN_APPLE_HEALTH_SHORTCUT_NAME=${CAIRN_APPLE_HEALTH_SHORTCUT_NAME:-Cairn Apple Health Sync}
       - CAIRN_SETTINGS_SECRET_KEY=${CAIRN_SETTINGS_SECRET_KEY:-}
       - CAIRN_BLANK_PROFILE=${CAIRN_BLANK_PROFILE:-0}
+      # Feedback (Settings -> Send feedback) and the opt-in usage ping go to the
+      # project's feedback service. Point it elsewhere, or set it to "" for none
+      # (feedback then opens a prefilled GitHub issue instead).
+      - CAIRN_FEEDBACK_URL=${CAIRN_FEEDBACK_URL-https://feedback.cairn.fit}
       # Coaching: claude/codex/antigravity use their CLI subscription login (in the
       # cairn-home volume), NOT these env keys. Only Grok headless uses XAI_API_KEY.
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}

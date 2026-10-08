@@ -66,7 +66,13 @@ import { setTrainingDrive } from "./domain/training/training-drive.js";
 import { recordStatedRunWeek } from "./domain/training/stated-input.js";
 import { enqueueAgentJob } from "./agentJobs.js";
 import { diagnosticErrorName, recordAsyncFailure } from "./diagnostics.js";
-import { resolveChatProfile, type ChatLane, type ChatRoutingDecision } from "./chatRouting.js";
+import {
+  CHAT_LANE_MODEL_CLASS,
+  classBoundChatModel,
+  resolveChatProfile,
+  type ChatLane,
+  type ChatRoutingDecision,
+} from "./chatRouting.js";
 import { log } from "./log.js";
 import {
   carriesPlanApplyAffirmation,
@@ -1340,6 +1346,9 @@ export type ChatAgentAttempt = {
   chat_turn_id?: number;
   attempt_index?: number;
   escalation_source?: ChatLane | null;
+  // Failed attempts only: the redacted tail of what the CLI printed (agentFailureTail.ts),
+  // kept on the local agent_runs row so a failure is diagnosable after the fact.
+  failure_tail?: string | null;
 };
 
 class ChatCompletionError extends Error {
@@ -1379,12 +1388,15 @@ function clearChatAvailability(agent: string): void {
 
 export function classifyChatAgentResult(agent: string, result: AgentResult): ChatAgentAttempt | null {
   const raw = String(result.raw || "");
-  const stderr = String(result.stderr || "");
+  // A streamed reply's `raw` is assistant text only; the CLI's own error report rides
+  // on `error_text` (lifted out of its structured stdout), so every read below sees it.
+  const stderr = [result.stderr, result.error_text].filter((s) => typeof s === "string" && s.trim()).join("\n");
   const usage = {
     exit_code: result.code,
     model: result.usage?.model ?? null,
     input_tokens: result.usage?.input_tokens ?? null,
     output_tokens: result.usage?.output_tokens ?? null,
+    failure_tail: result.failure_tail ?? null,
   };
   // Availability is read ONLY when the run did not produce a reply (or the CLI
   // emitted its machine-readable rate-limit event). A real coaching answer that
@@ -1422,6 +1434,19 @@ export function classifyChatAgentResult(agent: string, result: AgentResult): Cha
   if (!failure && isAuthFailureText(raw, stderr)) {
     failure = { state: "auth_required", window: null, resets_at: null, detail: "Not connected" };
   }
+  if (failure && failure.state === "model_unavailable") {
+    // Reaching here means the spawn ALREADY retried without the pin (agents.ts
+    // runWithModelAccessFallback) and the CLI still refused: say so plainly.
+    const label = String(loadAgents()[agent]?.label || displayAgent(agent));
+    return {
+      agent,
+      ok: false,
+      status: failure.state,
+      error_class: failure.state,
+      error_message: `Your ${label} plan can't use the model Cairn asked for, and the CLI's default didn't answer either`,
+      ...usage,
+    };
+  }
   if (failure && (availabilityHolds(failure.state) || failure.state === "permission_denied")) {
     // A limited/unpaid/signed-out provider is durable news: recording it here is
     // what lets the NEXT chat turn route around it before spawning anything.
@@ -1441,7 +1466,9 @@ export function classifyChatAgentResult(agent: string, result: AgentResult): Cha
       ok: false,
       status: "error",
       error_class: "process_exit",
-      error_message: "Agent process exited",
+      // A calm pointer to where the CLI's own words went (one redacted warn line per
+      // failed attempt, src/agents.ts logFailedAttempt) — never the raw output itself.
+      error_message: "stopped with an error; see the server log",
       ...usage,
     };
   }
@@ -1497,6 +1524,7 @@ function recordChatAttempt(attempt: ChatAgentAttempt, started: number, parsed: b
       chat_turn_id: attempt.chat_turn_id ?? null,
       attempt_index: attempt.attempt_index ?? null,
       escalation_source: attempt.escalation_source ?? null,
+      failure_tail: attempt.ok ? null : (attempt.failure_tail ?? null),
     });
   } catch {
     /* telemetry never breaks the loop */
@@ -1526,6 +1554,11 @@ function chatFailureReply(e: any): {
     const resource = attempts.find((a) => a.status === "disk_full" || a.status === "out_of_memory");
     const content = resource?.error_message
       ? resource.error_message
+      : first?.status === "model_unavailable"
+      ? // Not a reachability problem: the CLI ran and said no to the model.
+        `${first.error_message}. Settings → Agents can change the provider.`
+      : first?.error_class === "process_exit"
+      ? `The ${displayAgent(first.agent)} CLI ${first.error_message}. Settings → Agents can check the connection.`
       : first
       ? `Couldn't reach ${displayAgent(first.agent)} CLI: ${first.error_message || first.error_class || first.status}. Check Settings → Agents.`
       : `Couldn't reach a coaching agent. Tried ${summarizeChatAttempts(attempts)}. Check Settings → Agents.`;
@@ -1709,7 +1742,11 @@ export async function runChatCompletion(
   const order = orderChatProvidersByAvailability(baseOrder);
   if (!order.length) throw new Error("No agents enabled — turn one on in Settings.");
   const adaptive = !!decision;
-  const bindings = adaptive ? repo.getSettings().chat_profile_bindings : {};
+  const chatSettings = repo.getSettings();
+  const bindings = adaptive ? chatSettings.chat_profile_bindings : {};
+  // The person's Everyday / Deep work model choice governs chat too (one setting for
+  // both); empty means every provider runs its own default model.
+  const classBindings = chatSettings.model_class_bindings;
   const seen = new Set<string>();
   let attemptIndex = 0;
   let escalationSource: ChatLane | null = null;
@@ -1728,9 +1765,15 @@ export async function runChatCompletion(
   }
 
   const profileFor = (name: string): RuntimeChatProfile => {
-    if (!decision) return resolveRuntimeChatProfile(definitions[name], null);
-    const requested = resolveChatProfile(decision.lane, name, bindings);
-    const explicitlyBound = Boolean((bindings as any)?.[name]?.[decision.lane]);
+    if (!decision) {
+      // Legacy single profile: no lane, so no effort pin — only the everyday model, if chosen.
+      const model = classBoundChatModel(name, "fast", classBindings);
+      return resolveRuntimeChatProfile(definitions[name], model ? { model } : null, !!model);
+    }
+    const requested = resolveChatProfile(decision.lane, name, bindings, classBindings);
+    const explicitlyBound =
+      Boolean((bindings as any)?.[name]?.[decision.lane]) ||
+      !!classBoundChatModel(name, CHAT_LANE_MODEL_CLASS[decision.lane], classBindings);
     return resolveRuntimeChatProfile(definitions[name], requested, explicitlyBound);
   };
   const decorate = (
@@ -1829,6 +1872,7 @@ export async function runChatCompletion(
             // The athlete is watching this stream: it takes the spawn cap's reserved
             // interactive permit rather than queueing behind batch lanes.
             priority: "interactive",
+            op: lane ? `chat:${lane}` : "chat",
             ...(firstProfile.execution ?? {}),
             onProgress: stream.progress,
             onDelta: stream.push,
@@ -1943,6 +1987,7 @@ export async function runChatCompletion(
             timeoutMs: chatTurnTimeoutMs(profile),
             tools: chatTools,
             priority: "interactive",
+            op: lane ? `chat:${lane}` : "chat",
             ...(profile.execution ?? {}),
           });
           let raw = String(res.raw ?? "");
@@ -1954,6 +1999,7 @@ export async function runChatCompletion(
               timeoutMs: chatTurnTimeoutMs(profile),
               tools: chatTools,
               priority: "interactive",
+              op: lane ? `chat:${lane}` : "chat",
               ...(profile.execution ?? {}),
             });
             raw = String(res.raw ?? "");

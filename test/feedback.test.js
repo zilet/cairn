@@ -3,8 +3,10 @@
 // and delivery to a configured service (mocked fetch — the suite never reaches out).
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { db, repo } from "./_seed.js";
 import {
+  DEFAULT_FEEDBACK_URL,
   FEEDBACK_DIAGNOSTICS_MAX_BYTES,
   boundDiagnostics,
   buildFeedbackPayload,
@@ -45,11 +47,23 @@ test("parseFeedbackInput requires words, bounds sizes, and keeps diagnostics opt
 });
 
 test("feedbackBaseUrl: https (or local http) only, trailing slash trimmed; empty means no service", () => {
-  assert.equal(feedbackBaseUrl({}), null);
+  assert.equal(feedbackBaseUrl({}), DEFAULT_FEEDBACK_URL, "unset falls back to the project's service");
+  assert.equal(DEFAULT_FEEDBACK_URL, "https://feedback.cairn.fit");
   assert.equal(feedbackBaseUrl({ CAIRN_FEEDBACK_URL: "" }), null);
   assert.equal(feedbackBaseUrl(SERVICE), "https://feedback.example.org");
   assert.equal(feedbackBaseUrl({ CAIRN_FEEDBACK_URL: "http://feedback.example.org" }), null);
   assert.equal(feedbackBaseUrl({ CAIRN_FEEDBACK_URL: "http://localhost:8790" }), "http://localhost:8790");
+});
+
+test("every compose file passes CAIRN_FEEDBACK_URL through, defaulting to the same service", () => {
+  // `${VAR-default}`: unset falls back to the project's service, an explicit "" turns it off.
+  for (const file of ["docker-compose.yml", "deploy/docker-compose.release.yml", "deploy/install.sh"]) {
+    const text = fs.readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
+    assert.ok(
+      text.includes(`- CAIRN_FEEDBACK_URL=\${CAIRN_FEEDBACK_URL-${DEFAULT_FEEDBACK_URL}}`),
+      `${file} must pass CAIRN_FEEDBACK_URL through with the compiled-in default`
+    );
+  }
 });
 
 test("the anonymous diagnostics snapshot carries taxonomy only and fits 32 KB", () => {
@@ -138,7 +152,7 @@ test("sendFeedback without a service returns the GitHub URL and sends nothing", 
   const result = await sendFeedback(
     { kind: "praise", message: "Calm and useful", contact: "me@example.org", include_diagnostics: false },
     {
-      env: {},
+      env: { CAIRN_FEEDBACK_URL: "" },
       fetch: async () => {
         fetched = true;
         return { ok: true };

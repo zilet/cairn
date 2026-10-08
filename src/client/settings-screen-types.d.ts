@@ -26,6 +26,7 @@ type SettingsScreenWorkingModel = {
   routes: Record<string, string>;
   chat_routing_mode: "adaptive" | "single";
   chat_profile_bindings: Record<string, Record<string, Record<string, unknown>>>;
+  model_class_bindings: Record<string, Record<string, unknown>>;
   enrich_enabled: boolean;
   art_enabled: boolean;
   research_enabled: boolean;
@@ -59,6 +60,7 @@ type SettingsScreenPersistBody = {
   agent_routes: Record<string, string>;
   chat_routing_mode: "adaptive" | "single";
   chat_profile_bindings: Record<string, Record<string, Record<string, unknown>>>;
+  model_class_bindings: Record<string, Record<string, unknown>>;
   update_check_enabled: boolean;
   usage_ping_enabled: boolean;
   lead_mode: "lead" | "announce_first" | "review_everything";
@@ -79,6 +81,10 @@ type SettingsScreenCliUpdateStatus = {
   /** install (default) or remove. */
   action?: string;
   agents?: string[];
+  /** While running: starting | checking_disk | downloading | verifying | removing. */
+  phase?: string | null;
+  /** While running: seconds since start on the server's clock. */
+  elapsed_sec?: number | null;
   /** The installer's own classified failure: a reason code and a plain headline. */
   failure?: { reason?: string; message?: string } | null;
   started_at?: string;

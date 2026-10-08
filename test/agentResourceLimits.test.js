@@ -130,3 +130,13 @@ test("login lines are scrubbed before they reach the server log", () => {
   assert.equal(scrubLoginLogLine(null), null);
   assert.equal(loginExitDetail("Error: no space left on device"), "Error: no space left on device");
 });
+
+test("a running install's phase is the installer's newest CAIRN_PHASE line, never a guess", async () => {
+  const { parseInstallPhase } = await import("../dist/agentCliUpdates.js");
+  assert.equal(parseInstallPhase(""), "starting");
+  assert.equal(parseInstallPhase("CAIRN_PHASE checking_disk\ninstalling Claude (claude); 900 MB free\n"), "checking_disk");
+  assert.equal(parseInstallPhase("CAIRN_PHASE checking_disk\nCAIRN_PHASE downloading\nrunning npm install\n"), "downloading");
+  assert.equal(parseInstallPhase("CAIRN_PHASE downloading\nCAIRN_PHASE verifying\n"), "verifying");
+  assert.equal(parseInstallPhase("CAIRN_PHASE removing\n"), "removing");
+  assert.equal(parseInstallPhase("CAIRN_PHASE nonsense\n"), "starting");
+});

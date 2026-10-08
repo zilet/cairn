@@ -3684,20 +3684,38 @@ daily reads and background structuring at `fast`/low–medium, composition and c
 reading at `deep`/medium–high, structural change and multi-specialist review at `deep`/`xhigh`.
 
 Profiles are **provider-neutral**: an op asks for a model *class* (`fast` = the everyday read, `deep`
-= the one worth paying for), and each `agents.json` entry maps the classes IT supports onto its own
-CLI model name via `model_classes`. Nothing in `src/` names a concrete model, which is why an
-Anthropic alias never reaches a non-Anthropic CLI; pin an **alias**, never a dated id, so a new
-generation ships without a code change. A provider that declares no mapping (codex / antigravity /
-grok) keeps its own configured model and takes only the effort.
+= the one worth paying for) and an effort. **Effort is server policy; the model is not.** A class
+names NO model by default: every CLI runs whatever model its account's plan gives it, so a lower
+plan never meets a `--model` it cannot run. A model reaches a CLI only when the person binds a class
+for that provider in Settings → Agents — "Everyday model" (`fast`) / "Deep work model" (`deep`),
+stored as `settings.model_class_bindings` = `{ provider: { fast?: model, deep?: model } }` (migration
+127; absent/`{}` = the CLI default; no migration backfilled the old claude sonnet/fable pins).
+Nothing in `src/` names a concrete model; never pin a dated id.
 
-Resolution chain, all pure and unit-testable offline: the declarative class →
-`agent_profile_bindings[agent][task]` if the user set an override (migration v77, same JSON shape as
-`chat_profile_bindings`, normalized by the shared generic `normalizeProfileBindings`) →
-`resolveAgentProfileForClass`, which clamps to what that CLI actually declares. It never throws and
-never invents a value: no model mapping, no `model_flag`, or no reasoning support simply omits that
-field and the CLI runs on its own default (the offline `stub` always resolves to nothing, by
-contract). `highestSupportedReasoning` degrades rather than fails — asking a three-level CLI for
-`xhigh`/`max` lands on its own ceiling.
+**What Settings offers.** Each select is "CLI default" (always first, the default) + the provider's
+choices + "Other…" (free text, `MODEL_ID_PATTERN`: ≤80 of `[A-Za-z0-9._:/-]`). The choices are the
+CLI's **live catalog** when it declares `models_list` and returns entries (grok/agy: `models`;
+codex: `debug models`, JSON, `models_format: "codex_json"`, hidden slugs dropped), else the curated
+**aliases** in `agents.json` `model_choices` (claude: sonnet/opus/fable/haiku — aliases track each
+family's newest model; claude has no non-interactive listing). The catalog is read without blocking
+(`listAgentModelsAsync`, `GET /api/agents/:name/models`, MCP `list_agent_models`), cached per
+process, and dropped by `invalidateAgentConfigured` — which every CLI install / update / remove
+(`agentCliUpdates.ts`) and every in-app sign-in already call — so a CLI release that adds a model
+shows up without a Cairn change. The Agents card renders with the curated list and redraws when the
+catalog lands. `setSettings` validates a write (`normalizeModelClassBindings`): a known provider
+that takes a model, class `fast|deep`, and a model from the live catalog, the curated list, or a
+well-formed free-text id; anything else is dropped. A stored value is read back shape-only, so a
+catalog entry accepted on write never vanishes after a restart.
+
+Resolution chain, all pure and unit-testable offline (`resolveTaskExecutionProfile`, the ONE place an
+op's model is decided): the declarative class → `agent_profile_bindings[agent][task]` if the user set
+an override (migration v77, same JSON shape as `chat_profile_bindings`, normalized by the shared
+generic `normalizeProfileBindings`; a per-task model wins) → the person's
+`model_class_bindings[agent][class]` for the model → `resolveAgentProfileForClass`, which clamps to
+what that CLI actually declares. It never throws and never invents a value: no class binding, no
+`model_flag`, or no reasoning support simply omits that field and the CLI runs on its own default
+(the offline `stub` always resolves to nothing, by contract). `highestSupportedReasoning` degrades
+rather than fails — asking a three-level CLI for `xhigh`/`max` lands on its own ceiling.
 
 Resolution happens **once, at spawn time**, through `RunOpts.profile` — a resolver callback rather
 than a direct import, because the policy lives in `repo/settings.ts` which imports `agents.ts`.
@@ -3715,11 +3733,37 @@ ops and `chatTurnTimeoutMs(profile)` for chat. `INTERACTIVE_TIMEOUT_MS` remains 
 of that ladder — do not pass it directly.
 
 **Chat is deliberately absent from the table.** The adaptive chat router (`src/chatRouting.ts`)
-already assigns a per-message lane profile and stays authoritative for model/effort; only the timeout
-follows it, via the resolved profile rather than the task table. An op with no entry in the table
+already assigns a per-message lane profile and stays authoritative for effort; only the timeout
+follows it, via the resolved profile rather than the task table. Its MODEL follows the same one
+setting as the ops: each lane maps to a class (`CHAT_LANE_MODEL_CLASS`: capture and coach →
+`fast`, deep → `deep`), so `resolveChatProfile` takes the per-lane `chat_profile_bindings` model
+(the advanced override, which wins) else the class binding else nothing (the CLI default). The
+legacy single-profile path has no lane: it takes only the everyday model, and only when chosen. An op with no entry in the table
 inherits nothing and behaves exactly as it did before the table existed — which is what had left the
 nightly `memory_consolidation` and `about_me_growth` passes inheriting the CLI's home effort and
 landing in telemetry as `"auto"`, until both got their own `fast`/low and `fast`/medium entries.
+
+**A pin the account can't use is retried once, unpinned, and remembered.** A lower plan tier may
+not be allowed the model the person chose (say `fable` on a Pro plan), and the CLI then exits within a
+second ("There's an issue with the selected model"). `classifyAgentFailure` reads each CLI's wording
+for a refused model or effort as `model_unavailable` (`src/agentAvailability.ts`; only on a failed
+run, never off a clean coaching reply), and `runWithModelAccessFallback` (`src/agents.ts`, wrapped
+around every spawn — `runAgent`, the rotation, `runAgentStreaming`) re-spawns ONCE with no pin,
+inside the permit it already holds (so the retry can never become an `AgentBusyError`). The refused
+field — model or effort, whichever the words name — is remembered per agent for six hours
+(`src/agentModelPins.ts`, in-memory; a login or CLI update clears it) and dropped before the next
+spawn instead of failing first. It is not an availability hold: the provider answers on its default.
+If the unpinned retry is refused too, chat says the plan can't use the model.
+
+**A failed attempt leaves one redacted warn line.** Every spawn path logs a non-zero / signalled /
+empty run as `[agents] <agent> attempt failed` with `op`, `exit`, `signal`, `ms`, the pin, and
+`tail` — the last ≤400 chars of stderr (else the error the CLI reported in its structured stdout,
+`structuredErrorText`, else stdout), single-lined and scrubbed by `redactCliText`
+(`src/agentFailureTail.ts`: the denylisted env values, bearer/`sk-…`/JWT/hex/base64 runs,
+`token=…` pairs, URL queries, emails). The same tail is kept on the local `agent_runs.failure_tail`
+column (migration 126) for failed attempts only; `error_message` stays taxonomy-only. Prompts are
+never an input. A streamed run's `error_text` (the lifted error report) is what lets the chat
+classifier read claude's `is_error` result line, which its assistant-text-only `raw` never held.
 
 ---
 

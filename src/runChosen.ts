@@ -182,6 +182,7 @@ function streamingCoachRun(
           reasoning: opts.reasoning,
           profile: profileForRun(opts, op),
           priority: opts.priority,
+          op,
           onDelta: gate.push,
         });
         gate.finish();
@@ -488,6 +489,7 @@ function recordStreamedRun(
       model: res?.usage?.model ?? null,
       input_tokens: res?.usage?.input_tokens ?? null,
       output_tokens: res?.usage?.output_tokens ?? null,
+      failure_tail: accepted ? null : (res?.failure_tail ?? null),
     });
   } catch {
     /* telemetry never breaks the loop */
@@ -578,6 +580,7 @@ export async function runChosenStreaming(
           model: rest.model,
           reasoning: rest.reasoning,
           profile: profileForRun(rest, op),
+          op,
           onDelta: gate.push,
         });
         gate.finish();

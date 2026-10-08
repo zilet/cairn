@@ -29,7 +29,12 @@ export type AgentAvailabilityState =
   // child killed for memory (SIGKILL / exit 137 the CLI did not ask for). Named so
   // every surface can lead with what the person can do about it.
   | "disk_full"
-  | "out_of_memory";
+  | "out_of_memory"
+  // The account cannot use the model (or effort) Cairn PINNED for this run — a lower
+  // plan tier asked for a top-tier alias, a retired alias, an effort the model lacks.
+  // Never a hold: the provider answers fine on its own default, so the spawn retries
+  // once without the pin (src/agents.ts runWithModelAccessFallback) instead.
+  | "model_unavailable";
 
 export type AgentLimitWindow = "5h" | "7d";
 
@@ -380,6 +385,86 @@ export function classifyLimitBannerText(raw: string, stderr: string, now: Date =
   return limitOrPaymentFailure(combined, now);
 }
 
+// ---------- a pinned model or effort the account can't use ----------
+// Each CLI words this its own way; these are the shapes they print, kept specific to a
+// MODEL (or EFFORT) so ordinary failures never land here:
+//   claude  "There's an issue with the selected model (fable). It may not exist or you
+//            may not have access to it. Run /model to pick a different model."
+//           API 404 envelope: {"type":"not_found_error","message":"model: claude-…"}
+//           commander: "option '--effort <level>' argument 'max' is invalid. Allowed choices are …"
+//   codex   "The 'gpt-5.6' model is not supported when using Codex with a ChatGPT account."
+//           "The model `x` does not exist or you do not have access to it." / model_not_found
+//           "Unsupported value: 'xhigh' is not supported with the 'gpt-5' model." (reasoning.effort)
+//   agy     "models/x is not found for API version v1beta" / "Requested entity was not found."
+//   grok    "Model not found" / "The model x does not exist or your team does not have access to it"
+const MODEL_ACCESS_STRONG =
+  /\bissue with the selected model\b|\bmodel_not_found\b|\bnot_found_error\b[^\n]{0,120}\bmodel\b|\bmodels\/[\w.-]+ is not found\b/i;
+const MODEL_ACCESS_PATTERNS: RegExp[] = [
+  MODEL_ACCESS_STRONG,
+  /\bmodel\b[^\n]{0,120}?\b(?:may not exist|does not exist|doesn'?t exist|not found|(?:is )?not available|isn'?t available|is unavailable|(?:is )?not supported|unsupported|not permitted|not allowed|not enabled)\b/i,
+  /\b(?:do|does|don'?t|doesn'?t)(?: not)? have access to (?:the |this |that )?(?:requested )?model\b/i,
+  /\b(?:no|without) access to (?:the |this |that )?(?:requested )?model\b/i,
+  /\b(?:unknown|invalid|unsupported|unrecognized|unrecognised) model\b/i,
+  /\bnot supported with (?:the |this )?['"`]?[\w.:/-]+['"`]? model\b/i,
+  /\b404\b[^\n]{0,120}\bmodel\b/i,
+  /\brequested entity was not found\b/i,
+];
+// An EFFORT the CLI or model refused. Read separately so the culprit is remembered
+// precisely: a refused effort drops only the effort pin next time, never the model.
+const EFFORT_ACCESS_PATTERNS: RegExp[] = [
+  /\b(?:invalid|unsupported|unknown|unrecognized|unrecognised) (?:value for )?['"`]?(?:reasoning[._ ]?effort|effort|reasoning)\b/i,
+  /(?:reasoning[._ ]?effort|--effort|\beffort)\b[^\n]{0,80}?\b(?:is invalid|not supported|unsupported|must be one of|allowed choices)\b/i,
+  // The OpenAI error envelope names the refused parameter after the message.
+  /["']param["']\s*:\s*["']reasoning\.effort["']/i,
+];
+
+/**
+ * Which pin a model-access failure names: `reasoning` when the CLI's words are about an
+ * effort level, else `model`. Null when the text is not a model-access refusal at all.
+ */
+export function modelAccessCulprit(text: string): "model" | "reasoning" | null {
+  const t = String(text ?? "");
+  if (!t.trim()) return null;
+  if (EFFORT_ACCESS_PATTERNS.some((re) => re.test(t))) return "reasoning";
+  if (MODEL_ACCESS_PATTERNS.some((re) => re.test(t))) return "model";
+  return null;
+}
+
+/**
+ * The text a model-access read is allowed to look at. A refused pin is a FAILED run, so
+ * this only reads a non-zero/signalled exit or an empty reply — and even then trusts the
+ * reply text only while it is banner-sized: a coaching answer can say "your personal HR
+ * model is not available yet" without any CLI refusing anything. The unmistakable CLI
+ * phrases (MODEL_ACCESS_STRONG) are also read off a short clean exit.
+ */
+function modelAccessEvidence(r: { code: number | null; raw: string; stderr: string; signal?: string | null }): string {
+  const raw = String(r.raw ?? "");
+  const failed = r.code !== 0 || !!r.signal || !raw.trim();
+  const bannerSized = raw.trim().length <= AUTH_INFRA_MAX_CHARS;
+  if (failed) return `${r.stderr ?? ""}\n${bannerSized ? raw : ""}`;
+  const short = `${raw}\n${r.stderr ?? ""}`;
+  return short.trim().length <= AUTH_INFRA_MAX_CHARS && MODEL_ACCESS_STRONG.test(short) ? short : "";
+}
+
+/** The model-access arm on its own: a `model_unavailable` failure, else null. */
+export function modelAccessFailure(r: {
+  code: number | null;
+  raw: string;
+  stderr: string;
+  signal?: string | null;
+  error_text?: string | null;
+}): AgentFailure | null {
+  const stderr = [r.stderr, r.error_text].filter((s) => typeof s === "string" && s.trim()).join("\n");
+  const culprit = modelAccessCulprit(modelAccessEvidence({ ...r, stderr }));
+  if (!culprit) return null;
+  return {
+    state: "model_unavailable",
+    window: null,
+    resets_at: null,
+    detail: culprit === "reasoning" ? "This plan can't use the requested effort" : "This plan can't use the requested model",
+  };
+}
+
 /**
  * Read a FAILED run's own words. The caller decides what "failed" means (no
  * usable parse); every failure gets a class, so `process_error` /
@@ -387,11 +472,20 @@ export function classifyLimitBannerText(raw: string, stderr: string, now: Date =
  */
 export function classifyAgentFailure(
   _agent: string,
-  r: { code: number | null; raw: string; stderr: string; signal?: string | null },
+  r: {
+    code: number | null;
+    raw: string;
+    stderr: string;
+    signal?: string | null;
+    /** Error text the CLI reported inside its structured stdout (see agentFailureTail.ts). */
+    error_text?: string | null;
+  },
   now: Date = new Date()
 ): AgentFailure | null {
   const raw = String(r.raw ?? "");
-  const stderr = String(r.stderr ?? "");
+  // A streamed run's `raw` is only the assistant text, so the CLI's own error report
+  // (claude's `{"type":"result","is_error":true,…}` line) would otherwise be invisible.
+  const stderr = [r.stderr, r.error_text].filter((s) => typeof s === "string" && s.trim()).join("\n");
   const combined = `${raw}\n${stderr}`;
 
   // 0. The server itself ran out of room. Conclusive and the person's to fix, so it
@@ -420,6 +514,11 @@ export function classifyAgentFailure(
   if (isAuthFailureText(raw, stderr)) {
     return { state: "auth_required", window: null, resets_at: null, detail: "Not connected" };
   }
+
+  // 4b. The account can't use the model/effort this run pinned. The CLI is healthy;
+  //     the caller retries once on the CLI's own default (never a hold).
+  const modelAccess = modelAccessFailure({ code: r.code, raw, stderr, signal: r.signal });
+  if (modelAccess) return modelAccess;
 
   // 5. Headless permission refusal: the CLI is healthy, this OP was blocked.
   if (PERMISSION.test(combined)) {
@@ -551,6 +650,8 @@ export function availabilityReason(
       return "the server's disk is full";
     case "out_of_memory":
       return "the server ran out of memory";
+    case "model_unavailable":
+      return "the plan can't use the requested model";
     default:
       return "the CLI failed";
   }

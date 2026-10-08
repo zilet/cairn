@@ -271,10 +271,14 @@ can reach the port, and none of this applies.
 ### Feedback and the opt-in usage ping
 
 - `CAIRN_FEEDBACK_URL` — base URL of the feedback service (`POST {base}/v1/feedback`, and
-  `POST {base}/v1/ping` for the opt-in ping). Unset (and with no maintainer default compiled
-  in), **Send feedback** sends nothing: it opens a prefilled GitHub issue for you to review and
-  submit yourself, and the usage ping stays inert. What each one sends is in
-  `docs/OBSERVABILITY.md` ("Feedback and the usage ping").
+  `POST {base}/v1/ping` for the opt-in ping). Unset, it is the project's own service,
+  `https://feedback.cairn.fit` (`DEFAULT_FEEDBACK_URL` in `src/feedback.ts`; source in
+  `services/feedback/`). Point it at your own deployment, or set it to `""` for none: **Send
+  feedback** then sends nothing and opens a prefilled GitHub issue for you to review and submit
+  yourself, and the usage ping stays inert. Every compose file passes it through
+  (`${CAIRN_FEEDBACK_URL-…}`, so an explicit empty value in `.env` reaches the app). What each one
+  sends is in `docs/OBSERVABILITY.md` ("Feedback and the usage ping"); every outbound connection is
+  in `docs/HOSTING.md` ("What leaves your install").
 
 ## The Update / Deploy Flow
 

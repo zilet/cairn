@@ -1,6 +1,7 @@
 import { db } from "../db.js";
 import { getBuildInfo } from "../build-info.js";
 import { agentErrorClass, telemetryIdentifier, telemetryModelName } from "../telemetry-privacy.js";
+import { failureTail } from "../agentFailureTail.js";
 import {
   CHAT_LANES,
   CHAT_REASONING_LEVELS,
@@ -66,6 +67,8 @@ export function recordAgentRun(r: {
   chat_turn_id?: number | null;
   attempt_index?: number | null;
   escalation_source?: string | null;
+  /** Failed attempts: the redacted CLI output tail. Re-scrubbed and bounded here too. */
+  failure_tail?: string | null;
 }) {
   try {
     const status = telemetryIdentifier(r.status || (r.ok ? "ok" : "error"), 60, r.ok ? "ok" : "error");
@@ -88,8 +91,9 @@ export function recordAgentRun(r: {
          build_id, op, agent, ok, parsed, latency_ms, tried_json,
          status, error_class, error_message, exit_code, model, input_tokens, output_tokens,
          lane, policy_version, reason_codes_json, requested_model, requested_reasoning,
-         effective_reasoning, streaming, ttft_ms, chat_turn_id, attempt_index, escalation_source
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         effective_reasoning, streaming, ttft_ms, chat_turn_id, attempt_index, escalation_source,
+         failure_tail
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ) as any
     ).run(
       getBuildInfo().build_id,
@@ -120,7 +124,9 @@ export function recordAgentRun(r: {
       boundedInt(r.ttft_ms),
       boundedInt(r.chat_turn_id),
       boundedInt(r.attempt_index),
-      CHAT_LANES.includes(r.escalation_source as ChatLane) ? r.escalation_source : null
+      CHAT_LANES.includes(r.escalation_source as ChatLane) ? r.escalation_source : null,
+      // Local-only diagnostic: kept off every export and roll-up, never on a success.
+      !r.ok && typeof r.failure_tail === "string" ? failureTail({ stderr: r.failure_tail }) : null
     );
   } catch {
     /* telemetry is best-effort — never break the loop on a write error */

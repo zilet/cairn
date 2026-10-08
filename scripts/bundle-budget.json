@@ -118,12 +118,12 @@
     "public/js/bundle-11-settings.js": {
       "lazy": "settings",
       "measured": {
-        "raw": 183315,
-        "brotli": 39875
+        "raw": 194540,
+        "brotli": 42421
       },
       "budget": {
-        "raw": 189440,
-        "brotli": 41984
+        "raw": 200704,
+        "brotli": 44032
       }
     },
     "public/js/bundle-12-calendar.js": {
