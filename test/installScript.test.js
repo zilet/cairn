@@ -1539,6 +1539,8 @@ test("railway-template --publish: never with editor steps left (unless --force),
     const asked = rig.go(["--publish", "--template=AbC123"]);
     assert.notEqual(asked.code, 0, asked.all);
     assert.match(asked.err, /No terminal to ask: "Publish this template/);
+    // The re-run hint repeats this run's own arguments, not a plain install.
+    assert.match(asked.err, /sh -s -- railway-template --publish --template=AbC123 --yes/);
     assert.equal(rig.has("published"), false);
     assert.match(asked.out, /Category: {4}AI\/ML/);
     assert.match(rig.read("api_vars"), /^code=AbC123$/m);

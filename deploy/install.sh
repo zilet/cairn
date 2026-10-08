@@ -104,16 +104,25 @@ consent_script() {
   if [ "$OPT_YES" = 1 ]; then
     warn "--yes does not allow running a third-party install script. Run it yourself:"
     say "  $4"
-    die "Or let the installer run it by re-running with $3 (for example: curl -fsSL $ONE_LINER_URL | sh -s -- ${TARGET:+--target=$TARGET }--yes $3)"
+    die "Or let the installer run it by re-running with $3 (for example: curl -fsSL $ONE_LINER_URL | sh -s -- $(rerun_args)--yes $3)"
   fi
   confirm "$1" "n"
+}
+
+# The arguments this run was started with, for a copy-paste re-run hint (adds --target
+# when the target came from elsewhere). Prints them with a trailing space, or nothing.
+rerun_args() {
+  ra_out="${RERUN_ARGS:-}"
+  case " $ra_out " in *" --target="*) ;; *) [ -n "${TARGET:-}" ] && ra_out="--target=$TARGET${ra_out:+ $ra_out}" ;; esac
+  [ -n "$ra_out" ] && printf '%s ' "$ra_out"
+  return 0
 }
 
 # confirm "Question" y|n  -> 0 for yes. --yes answers yes; no terminal and no --yes dies.
 confirm() {
   if [ "$OPT_YES" = 1 ]; then return 0; fi
   if ! has_tty; then
-    die "No terminal to ask: \"$1\". Re-run non-interactively with --yes, e.g. curl -fsSL $ONE_LINER_URL | sh -s -- ${TARGET:+--target=$TARGET }--yes"
+    die "No terminal to ask: \"$1\". Re-run non-interactively with --yes, e.g. curl -fsSL $ONE_LINER_URL | sh -s -- $(rerun_args)--yes"
   fi
   if [ "${2:-n}" = "y" ]; then confirm_hint="[Y/n]"; else confirm_hint="[y/N]"; fi
   printf '%s  ? %s%s %s ' "$C_YELLOW" "$C_RESET" "$1" "$confirm_hint" >/dev/tty
@@ -3046,6 +3055,7 @@ cleanup() {
 }
 
 main() {
+  RERUN_ARGS="$*" # echoed back in the "re-run with --yes" hints
   TMP_FILES=""
   LOCK_HELD=0
   setup_colors
