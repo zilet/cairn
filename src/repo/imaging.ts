@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { db } from "../db.js";
 import { UPLOADS_DIR, safeUploadPath } from "../uploadPaths.js";
+import { bumpMarkerDataVersion } from "./marker-cache.js";
 import {
   addHealthDocument,
   getHealthDocument,
@@ -1905,6 +1906,7 @@ export function deleteImagingStudy(
     deleted = Number(db.prepare("DELETE FROM health_documents WHERE id=? AND kind='imaging'").run(id).changes);
     if (!deleted) throw new Error("imaging study disappeared during delete");
     db.exec("COMMIT");
+    bumpMarkerDataVersion(); // a derived panel can carry markers
   } catch (error: any) {
     try {
       db.exec("ROLLBACK");

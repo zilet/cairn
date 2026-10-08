@@ -8,7 +8,8 @@
 // counter (the fast, exact invalidation) together with a cheap SQL backstop. Bumped by
 // every marker-data write path; test/_isolate.mjs wipes tables out-of-band (bypassing
 // these paths) and rowids can collide across a wipe, so it calls resetMarkerHistoryCache()
-// (health.ts), which resets this counter too.
+// (health.ts), which moves this counter on too. The Automatic lab-unit verdict
+// (lab-reported-system.ts) is cached on it alone.
 let markerDataVersion = 0;
 
 export function bumpMarkerDataVersion(): void {
@@ -19,6 +20,8 @@ export function currentMarkerDataVersion(): number {
   return markerDataVersion;
 }
 
+// After an out-of-band wipe every cache keyed on the version must miss, so a reset moves
+// the version FORWARD — back to 0 it could land on a value a pre-wipe cache still holds.
 export function resetMarkerDataVersion(): void {
-  markerDataVersion = 0;
+  markerDataVersion++;
 }

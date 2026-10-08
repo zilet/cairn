@@ -3017,7 +3017,11 @@ athlete who travels gets both. Two layers keep that coherent:
   draw the band does not apply to (random glucose, PM cortisol) still converts via `unitAnalyteZone`.
   **Lp(a) mass (mg/dL) and molar (nmol/L) results are never converted** (`never`) — only labelled.
 - **Show in the athlete's system** — `labUnitSystem()` (`settings.lab_units`: `us` | `si`, `''` =
-  automatic = the system the athlete's own most recent lab draw was printed in, `lab-reported-system.ts`, majority of its readings whose unit tells the systems apart, else US; the weight unit plays no part, since kg countries print mg/dL). `src/repo/lab-display.ts`
+  automatic = the system the athlete's own labs are printed in, `lab-reported-system.ts`: the majority
+  of every reading from the last twelve months whose unit tells the systems apart, across all of that
+  year's draws (so one SI lab abroad does not flip a US athlete), else the most recent draw that has
+  one; a tie or no such reading is US; the weight unit plays no part, since kg countries print mg/dL.
+  Cached on the marker-data version every health-doc write bumps, never on `total_changes()`). `src/repo/lab-display.ts`
   (`presentMarkerRow`, `presentSourceMarker`, `labValueText`) converts value, band, range and trend
   deltas AFTER every judgement was made canonically, keeps a reading's lab-printed value as `reported`,
   and is idempotent (a converted row is no longer canonical, so it passes through). Every surface that

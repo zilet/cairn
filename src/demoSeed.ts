@@ -53,6 +53,7 @@ function wipe() {
     db.exec("COMMIT");
   } catch (e) { db.exec("ROLLBACK"); throw e; }
   db.exec("PRAGMA foreign_keys = ON");
+  repo.resetMarkerHistoryCache(); // the wipe bypassed the health-doc writers' cache bumps
 }
 
 // ---------- profile ----------

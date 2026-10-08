@@ -874,8 +874,9 @@ export function validLabUnitSystem(value: unknown): LabUnitSystem | null {
 }
 
 /**
- * The automatic lab system: the one the athlete's own most recent lab draw was printed in
- * (lab-reported-system.ts), else conventional (US). Never derived from the weight unit —
+ * The automatic lab system: the one most of the athlete's own lab readings from the last
+ * twelve months were printed in, else their most recent draw's (lab-reported-system.ts);
+ * a tie or no labs reads conventional (US). Never derived from the weight unit —
  * plenty of kilogram countries print mg/dL, and an install on kg must not change how its
  * labs read on upgrade.
  */
