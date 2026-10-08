@@ -16,7 +16,7 @@ import { dailyManualWeighIns } from "./bodyweight.js";
 import { localDateISO } from "./shared.js";
 import { injuryClosuresOn } from "./injury-symptom-link.js";
 import { copyDeep, requestMemo } from "./request-memo.js";
-import { presentMarkerRow } from "./lab-display.js";
+import { presentMarkerRow, renderLabQuantities } from "./lab-display.js";
 import type { LabUnitSystem } from "./lab-units.js";
 import { labUnitSystem } from "./settings.js";
 
@@ -568,6 +568,22 @@ export function getHealthSynthesis(): any | null {
   }
 }
 
+// The stored synthesis is the agent's prose in the lab-unit system the athlete read when
+// it was written; every string in it is shown in today's system (renderLabQuantities,
+// with the same strict attribution as a directive — a quantity it cannot place stays as
+// written). The stored row is never rewritten.
+export function presentHealthSynthesis<T>(synthesis: T, system: LabUnitSystem = labUnitSystem()): T {
+  const walk = (value: unknown): unknown => {
+    if (typeof value === "string") return renderLabQuantities(value, null, system);
+    if (Array.isArray(value)) return value.map(walk);
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, k === "drift_sig" ? v : walk(v)]));
+    }
+    return value;
+  };
+  return walk(synthesis) as T;
+}
+
 function synthesisForStalePresentation(synthesis: any, reason: "new_labs" | "drift"): any {
   const priorities = Array.isArray(synthesis?.priorities)
     ? synthesis.priorities.map((priority: any) =>
@@ -603,8 +619,9 @@ export function getHealthSynthesisView(): {
   stale: boolean;
   stale_reason: "new_labs" | "drift" | null;
 } {
-  const synthesis = getHealthSynthesis();
-  if (!synthesis) return { synthesis: null, stale: false, stale_reason: null };
+  const stored = getHealthSynthesis();
+  if (!stored) return { synthesis: null, stale: false, stale_reason: null };
+  const synthesis = presentHealthSynthesis(stored);
   // Same source of truth the synthesis was stamped against (see coachOps), so the
   // stale comparison can't drift from how source_doc_at was derived.
   const newestDoc = newestHealthDocDate();

@@ -37,7 +37,7 @@ import { getProgramState, type ProgramState } from "./program-state.js";
 // export. dayRead is always present.
 import * as intelligence from "./intelligence.js";
 import { journeyMilestones } from "./journey.js";
-import { getHealthSynthesis } from "./propagation.js";
+import { getHealthSynthesis, presentHealthSynthesis } from "./propagation.js";
 import { localDateISO } from "./shared.js";
 
 // ---------------------------------------------------------------------------
@@ -222,7 +222,7 @@ export function getTrajectory(
   const meso = programState?.mesocycle ?? null;
 
   // ---- the health synthesis "one change" as the lever milestone ----
-  const synthesis = safe<any>(() => getHealthSynthesis(), null);
+  const synthesis = safe<any>(() => presentHealthSynthesis(getHealthSynthesis()), null);
   const oneChange: string | null =
     synthesis && typeof synthesis.one_change === "string" && synthesis.one_change.trim()
       ? synthesis.one_change.trim().slice(0, 160)

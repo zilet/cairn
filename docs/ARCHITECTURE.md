@@ -3035,6 +3035,16 @@ athlete who travels gets both. Two layers keep that coherent:
   `renderLabQuantities` (`lab-display.ts`, via `presentDirective` in `directives-read.ts` —
   `listActiveDirectives`, `listDirectives`, `getDirective`); the reconcile, the derive signature and
   the decision ledger read the raw table, so a unit switch rewrites no row and mints no decision.
+  The reaction model's intervention sentence is stored canonical too (its `app_state` cache and the
+  coach-memory copy; `reactionModelForCoach` and `listMemory` present it). Agent prose — a
+  health_review directive, the health synthesis — is written in the system the athlete read at the
+  time and is presented the same way in either direction. `renderLabQuantities` converts a quantity
+  only when its analyte is certain: one named right after it, else the nearest analyte named before it
+  (any analyte, Lp(a) included; a closed parenthetical aside never counts; two joined by "and"/"or"
+  are ambiguous), else the one analyte the whole sentence speaks of; a pair of numbers ("160 → 130",
+  "70 to 100") converts whole or not at all; HbA1c and "%" never convert in prose. When in doubt the
+  quantity stays as written. A directive's trigger snapshot reaches a prompt as `trigger_reading`
+  (value and unit in the athlete's system), or not at all when its unit is not certain.
   Fingerprints of what the athlete SAW hash unit-neutral material too (today-agenda's health
   revision: canonical values, stored directive text). A converted reading's printed reference range
   goes through the same per-bound map as its value (never a single ratio — HbA1c is affine). Dedupe

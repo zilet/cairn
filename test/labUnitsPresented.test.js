@@ -38,6 +38,26 @@ test("the reaction model stores a marker's change in canonical units and speaks 
   );
 });
 
+test("agent prose written in SI reads in US conventional for a US reader, and the stored text stays", () => {
+  repo.setSettings({ lab_units: "us" });
+  const text = "Your LDL at 4.1 mmol/L sits above 2.6 mmol/L; Lp(a) 120 nmol/L is genetic.";
+  const d = repo.addDirective({ source: "health_review", domain: "watch", marker: "LDL-C", directive: text, rationale: "ApoB of 1.2 g/L agrees." });
+  const shown = repo.listActiveDirectives().find((x) => x.id === d.id);
+  assert.equal(shown.directive, "Your LDL at 159 mg/dL sits above 101 mg/dL; Lp(a) 120 nmol/L is genetic.");
+  assert.equal(shown.rationale, "ApoB of 120 mg/dL agrees.");
+  assert.equal(db.prepare(`SELECT directive FROM health_directives WHERE id = ?`).get(d.id).directive, text);
+  repo.setSettings({ lab_units: "si" });
+  assert.equal(repo.listActiveDirectives().find((x) => x.id === d.id).directive, text, "already in the SI reader's units");
+
+  // The health synthesis: every string in it, the stored row untouched.
+  repo.saveHealthSynthesis({ headline: "LDL at 4.1 mmol/L leads.", priorities: [{ the_move: "Fiber for glucose 5.6 mmol/L." }] });
+  repo.setSettings({ lab_units: "us" });
+  const view = repo.getHealthSynthesisView().synthesis;
+  assert.equal(view.headline, "LDL at 159 mg/dL leads.");
+  assert.equal(view.priorities[0].the_move, "Fiber for glucose 101 mg/dL.");
+  assert.equal(repo.getHealthSynthesis().headline, "LDL at 4.1 mmol/L leads.");
+});
+
 test("symptom links carry the reading in the athlete's lab system, side judged canonically", () => {
   const mk = (value) => ({ name: "LDL Cholesterol", unit: "mg/dL", in_optimal: false, latest: { value, flag: "high" } });
   const events = [{ kind: "life_event", title: "Wiped out lately", detail: "no energy, always tired", start_date: null, end_date: null, meta: null, archived: 0 }];

@@ -34,13 +34,14 @@ export function hydrateDirective(row: any) {
 }
 
 // A row as a PERSON (or a prompt) reads it: hydrated, with every lab quantity in its
-// sentence shown in the athlete's lab-unit system. Stored text stays in canonical units
-// (src/repo/lab-display.ts `renderLabQuantities`) — the reconcile, the derive signature
-// and the decision ledger all read the raw table, so a unit switch changes only what is
-// shown. `system` is resolved once per list by the caller.
+// sentence shown in the athlete's lab-unit system. Cairn's own text is stored in canonical
+// units; an agent's (health_review) in the system the athlete read when it was written —
+// `renderLabQuantities` (src/repo/lab-display.ts) brings either into today's system. The
+// reconcile, the derive signature and the decision ledger all read the raw table, so a
+// unit switch changes only what is shown. `system` is resolved once per list by the caller.
 export function presentDirective(row: any, system: LabUnitSystem) {
   const d = hydrateDirective(row);
-  if (!d || system !== "si") return d;
+  if (!d) return d;
   return {
     ...d,
     directive: renderLabQuantities(d.directive ?? null, d.marker, system),
