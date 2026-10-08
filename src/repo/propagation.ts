@@ -12,6 +12,8 @@ import {
 } from "./directives.js";
 import { hydrateDirective, listActiveDirectives, presentDirective } from "./directives-read.js";
 import { labUnitSystem } from "./settings.js";
+import { labValueText } from "./lab-display.js";
+import type { LabUnitSystem } from "./lab-units.js";
 // The pure feedback policy (what a Done/Dismiss means for a pass) lives there; this
 // module only reads the feedback rows and writes the reconcile.
 import {
@@ -1893,6 +1895,8 @@ export function directivesForCoach() {
       return [];
     }
   })();
+  const system = labUnitSystem();
+  const history = markerHistoryOrNull();
   return listActiveDirectives()
     .slice(0, 24)
     .map((d: any) => {
@@ -1913,7 +1917,7 @@ export function directivesForCoach() {
         citation: d.citation,
         uncertain: d.uncertain,
         directive_key: d.directive_key,
-        trigger_value: d.trigger_value,
+        trigger_reading: triggerReadingText(d, history, system),
         trigger_side: d.trigger_side,
         trigger_date: d.trigger_date,
         created_at: d.created_at,
@@ -1938,8 +1942,47 @@ function directiveDisplayMarker(marker: string | null | undefined): string | nul
   return canonicalMarker(base).name || base;
 }
 
+// A directive's trigger snapshot as words a prompt can read: the value WITH its unit, in
+// the athlete's lab-unit system. `trigger_value` is stored as a bare number — canonical for
+// a mapped lab analyte, but the lab's own unit for a generic flag (an Lp(a) mass reading, an
+// analyte Cairn does not map) — so it is spoken only when its unit is certain: a wearable
+// trend's fixed unit, or the very reading in the marker history it was taken from. Anything
+// else gives null and the prompt carries the side and date alone.
+function triggerReadingText(
+  d: any,
+  history: { markers: any[] } | null,
+  system: LabUnitSystem
+): string | null {
+  const value = Number(d?.trigger_value);
+  if (d?.trigger_value == null || d?.trigger_value === "" || !Number.isFinite(value)) return null;
+  const name = directiveDisplayMarker(d?.marker);
+  if (!name || name.includes("+")) return null;
+  const zone = matchOptimalZone(name);
+  if (zone && WEARABLE_TREND_ZONES.has(zone.label) && zone.unit) return `${value} ${zone.unit}`;
+  const key = canonicalMarker(name).key;
+  const series = (history?.markers ?? []).find(
+    (m: any) => m?.key === key || (!!zone && matchOptimalZone(String(m?.name ?? ""))?.label === zone.label)
+  );
+  if (!series?.unit || !Array.isArray(series.points)) return null;
+  const same = (a: number, b: number) => Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(a));
+  const point = series.points.find(
+    (p: any) =>
+      !p?.unit_mismatch && (!d?.trigger_date || p?.date === d.trigger_date) && Number.isFinite(p?.value) && same(p.value, value)
+  );
+  return point ? labValueText(series.name, value, series.unit, system) : null;
+}
+
+function markerHistoryOrNull(): { markers: any[] } | null {
+  try {
+    return getMarkerHistory();
+  } catch {
+    return null;
+  }
+}
+
 export function directiveFeedbackForCoach(limit = 12) {
   const system = labUnitSystem();
+  const history = markerHistoryOrNull();
   return (
     db
       .prepare(
@@ -1960,7 +2003,8 @@ export function directiveFeedbackForCoach(limit = 12) {
       directive: d.directive,
       rationale: d.rationale,
       directive_key: d.directive_key,
-      trigger_value: d.trigger_value,
+      // With its unit, in the athlete's system — never a bare canonical number beside SI prose.
+      trigger_reading: triggerReadingText(d, history, system),
       trigger_side: d.trigger_side,
       trigger_date: d.trigger_date,
     }));

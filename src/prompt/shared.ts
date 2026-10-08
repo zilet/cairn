@@ -682,7 +682,7 @@ export function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | 
     for (const d of relevantFeedback) {
       const status = d.status === "dismissed" ? "dismissed by user" : "marked done/handled";
       const marker = d.marker ? `${String(d.marker).trim()} · ` : "";
-      const snap = [d.trigger_side, d.trigger_value, d.trigger_date].filter((x: any) => x != null && x !== "").join(" ");
+      const snap = [d.trigger_side, d.trigger_reading, d.trigger_date].filter((x: any) => x != null && x !== "").join(" ");
       lines.push(`  - ${status}: ${marker}${String(d.directive ?? "").trim()}${snap ? ` (marker snapshot: ${snap})` : ""}`);
     }
   }
