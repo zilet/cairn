@@ -346,6 +346,19 @@ test("under one control state a re-render just asks: the browser shares the in-f
   assert.doesNotMatch(second, /data-art-wait/);
 });
 
+test("a worker-to-worker takeover is a changed control state too: the re-render parks a waiter", () => {
+  const imgs = [];
+  const nav = { serviceWorker: { controller: { scriptURL: "/sw.js" } } };
+  const env = loadArtController({ imgs, navigator: nav });
+  const first = photoLayer(env.context.artImg("exercise", "Leg Curl", "a", "<svg></svg>"));
+  const src = /src="([^"]+)"/.exec(first)[1].replaceAll("&amp;", "&");
+  imgs.push(liveImg(env, { token: "exercise|Leg Curl", src }));
+  nav.serviceWorker.controller = { scriptURL: "/sw.js" }; // a new worker took over
+  const second = photoLayer(env.context.artImg("exercise", "Leg Curl", "a", "<svg></svg>"));
+  assert.doesNotMatch(second, / src=/);
+  assert.match(second, /data-art-wait="1"/);
+});
+
 test("an in-flight miss leaves the waiter on the SVG; a stalled request hands the waiter its own src", () => {
   const imgs = [];
   const timers = [];

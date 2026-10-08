@@ -21,14 +21,16 @@
 const ART_WAIT_MAX_MS = 6000;
 const artWatched = new WeakSet<HTMLImageElement>();
 
-function swControlled(): boolean {
+// The controlling worker itself, not whether there is one: a worker-to-worker takeover
+// (an update activating mid-load) changes the control state too.
+function swController(): object | null {
   try {
-    return !!(typeof navigator !== "undefined" && navigator.serviceWorker && navigator.serviceWorker.controller);
+    return (typeof navigator !== "undefined" && navigator.serviceWorker && navigator.serviceWorker.controller) || null;
   } catch {
-    return false;
+    return null;
   }
 }
-const controlledAtLoad = swControlled();
+const controllerAtLoad = swController();
 
 function artWaiters(token: string): HTMLImageElement[] {
   if (typeof document === "undefined" || typeof document.querySelectorAll !== "function") return [];
@@ -49,7 +51,7 @@ function releaseArtWaiters(token: string, loaded: boolean): void {
 }
 
 function inFlightArtImg(token: string, src: string): HTMLImageElement | null {
-  if (swControlled() === controlledAtLoad) return null; // same control state: the browser shares it
+  if (swController() === controllerAtLoad) return null; // same control state: the browser shares it
   if (typeof document === "undefined" || typeof document.querySelectorAll !== "function") return null;
   for (const img of document.querySelectorAll<HTMLImageElement>('img[data-art-photo="1"]')) {
     if (img.dataset.artkey !== token || img.dataset.artWait === "1" || img.dataset.artWaitExpired === "1") continue;
