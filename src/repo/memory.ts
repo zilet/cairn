@@ -4,6 +4,8 @@ import { settledPainPlaceReader } from "./injury-symptom-link.js";
 import { addDaysISO, localDateISO } from "./shared.js";
 import { getSessionByDate, sessionSummary } from "./sessions.js";
 import { memoNeutralWrite } from "./request-memo.js";
+import { renderLabQuantities } from "./lab-display.js";
+import { labUnitSystem } from "./settings.js";
 
 export type KnownMemoryKind =
   | "note"
@@ -150,10 +152,21 @@ export function addMemory(content: string, kind: MemoryKind = "observation", sou
 // List memory, newest first. Superseded rows are HIDDEN by default (they're
 // history kept for the curation UI / export, never surfaced to the coach);
 // pass includeSuperseded for the full curate-able list.
-export function listMemory(limit = 50, opts: { includeSuperseded?: boolean } = {}): MemoryRow[] {
+// A reaction-model memory is stored in canonical lab units (reaction-model.ts) and shown
+// in the athlete's lab-unit system; `raw` reads the stored text (export, consolidation).
+export function listMemory(limit = 50, opts: { includeSuperseded?: boolean; raw?: boolean } = {}): MemoryRow[] {
   limit = Math.max(1, Math.min(500, Number(limit) || 50)); // clamp caller-supplied limit
   const where = opts.includeSuperseded ? "" : "WHERE superseded_by IS NULL";
-  return db.prepare(`SELECT * FROM memory ${where} ORDER BY id DESC LIMIT ?`).all(limit) as unknown as MemoryRow[];
+  const rows = db.prepare(`SELECT * FROM memory ${where} ORDER BY id DESC LIMIT ?`).all(limit) as unknown as MemoryRow[];
+  if (opts.raw || !rows.some(isReactionModelMemory)) return rows;
+  const system = labUnitSystem();
+  return rows.map((row) =>
+    isReactionModelMemory(row) ? { ...row, content: renderLabQuantities(String(row.content ?? ""), null, system) } : row
+  );
+}
+
+function isReactionModelMemory(row: MemoryRow): boolean {
+  return String((row as any)?.source ?? "") === "reaction-model";
 }
 
 export function getMemory(id: number): MemoryRow | null {

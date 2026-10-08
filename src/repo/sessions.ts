@@ -1980,7 +1980,7 @@ export function exportAll() {
     activities: listActivities(100000),
     // Include superseded rows in the export — they're history we MARK rather than
     // destroy, so a backup/restore is lossless.
-    memory: listMemory(100000, { includeSuperseded: true }),
+    memory: listMemory(100000, { includeSuperseded: true, raw: true }),
     suggestions: listSuggestions(100000),
     bodyweight: listWeight(100000),
     meal_plans: listMealPlans(100000),

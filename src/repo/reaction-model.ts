@@ -21,7 +21,8 @@
 
 import { db } from "../db.js";
 import { getMarkerHistory } from "./health.js";
-import { labValueText } from "./lab-display.js";
+import { labValueText, renderLabQuantities } from "./lab-display.js";
+import { labUnitSystem } from "./settings.js";
 import { activitySportWhere, RUN_SPORT_PATTERNS } from "./endurance-sports.js";
 import { normalizedExerciseKey, canonicalGroup, isMobility } from "./exercise-canon.js";
 import { getAppState, setAppState } from "./app-state.js";
@@ -740,8 +741,10 @@ function interventionMarker(): ReactionPattern | null {
         : fdir === "worsening"
           ? ", though it's since drifting the wrong way"
           : "";
-    // Read in canonical units, spoken in the athlete's own lab system, always with the unit.
-    const statement = `Since ${iv.label}, your ${m.name} has moved ${dirWord} (from ${labValueText(m.name, before.value, m.unit)} to ${labValueText(m.name, latest.value, m.unit)})${fclause}.`;
+    // Written in CANONICAL units, always with the unit: this sentence is stored (the
+    // reaction_model cache, coach memory), and stored prose is unit-neutral — the
+    // athlete's lab system is applied where it is read (presentReactionText).
+    const statement = `Since ${iv.label}, your ${m.name} has moved ${dirWord} (from ${labValueText(m.name, before.value, m.unit, "us")} to ${labValueText(m.name, latest.value, m.unit, "us")})${fclause}.`;
     return {
       id: "intervention_marker",
       kind: "intervention_response",
@@ -2234,6 +2237,14 @@ function publicPattern(p: ReactionPattern): ReactionPattern {
   return rest;
 }
 
+/**
+ * Stored reaction-model prose (a pattern's statement, canonical units; the agent's
+ * narrative, written in the system the athlete read then) as the athlete reads it now.
+ */
+export function presentReactionText(text: string, system = labUnitSystem()): string {
+  return renderLabQuantities(text, null, system);
+}
+
 export function reactionModelForCoach(): {
   patterns: ReactionPattern[];
   narrative: string | null;
@@ -2281,7 +2292,14 @@ export function reactionModelForCoach(): {
     .slice(0, 6)
     .map(publicPattern);
 
-  return { patterns: ranked, narrative, built_at: builtAt, source };
+  // Shown in the athlete's lab-unit system, resolved once; the cache stays canonical.
+  const system = labUnitSystem();
+  return {
+    patterns: ranked.map((p) => ({ ...p, statement: presentReactionText(p.statement, system) })),
+    narrative: narrative == null ? null : presentReactionText(narrative, system),
+    built_at: builtAt,
+    source,
+  };
 }
 
 // Persist (or clear) the plain-language "how your body responds" NARRATIVE — the

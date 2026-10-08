@@ -2,20 +2,40 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo, seedHealthDoc, marker } from "./_seed.js";
-import { buildReactionModel } from "../dist/repo/reaction-model.js";
+import { buildReactionModel, saveReactionModel } from "../dist/repo/reaction-model.js";
 
-test("the reaction model speaks a marker's change with its unit, in the athlete's lab system", () => {
+test("the reaction model stores a marker's change in canonical units and speaks it in the athlete's system", () => {
   seedHealthDoc("2026-03-01", [marker("LDL Cholesterol", 160, { unit: "mg/dL" })]);
+  seedHealthDoc("2026-06-01", [marker("LDL Cholesterol", 130, { unit: "mg/dL" })]);
   seedHealthDoc("2026-08-01", [marker("LDL Cholesterol", 120, { unit: "mg/dL" })]);
   db.prepare(
     `INSERT INTO health_directives (source, domain, marker, directive, status, status_at) VALUES ('markers','nutrition','LDL-C','x','resolved','2026-04-01')`
   ).run();
-  const statement = () => buildReactionModel().patterns.find((p) => p.id === "intervention_marker")?.statement;
-  repo.setSettings({ lab_units: "us" });
-  assert.match(statement(), /from 160 mg\/dL to 120 mg\/dL/);
+  const built = () => buildReactionModel().patterns.find((p) => p.id === "intervention_marker")?.statement;
+  const shown = () => repo.reactionModelForCoach().patterns.find((p) => p.id === "intervention_marker")?.statement;
+  const cached = () =>
+    JSON.parse(db.prepare(`SELECT value FROM app_state WHERE key = 'reaction_model'`).get().value).patterns.find(
+      (p) => p.id === "intervention_marker"
+    ).statement;
+  const memory = (opts) => repo.listMemory(50, opts).find((m) => m.source === "reaction-model" && /LDL/.test(m.content))?.content;
+
   repo.setSettings({ lab_units: "si" });
-  assert.match(statement(), /from 4\.14 mmol\/L to 3\.1 mmol\/L/);
-  assert.doesNotMatch(statement(), /from 160 to 120/);
+  assert.match(built(), /from 160 mg\/dL to 120 mg\/dL/, "built canonical, whatever the athlete reads");
+  saveReactionModel();
+  assert.match(cached(), /from 160 mg\/dL to 120 mg\/dL/, "the cache stores canonical prose");
+  assert.match(memory({ raw: true }), /from 160 mg\/dL to 120 mg\/dL/, "coach memory stores canonical prose");
+  assert.match(shown(), /from 4\.14 mmol\/L to 3\.1 mmol\/L/);
+  assert.match(memory(), /from 4\.14 mmol\/L to 3\.1 mmol\/L/);
+
+  repo.setSettings({ lab_units: "us" });
+  assert.match(shown(), /from 160 mg\/dL to 120 mg\/dL/);
+  assert.match(memory(), /from 160 mg\/dL to 120 mg\/dL/);
+  saveReactionModel();
+  assert.equal(
+    repo.listMemory(50, { raw: true }).filter((m) => m.source === "reaction-model" && /LDL/.test(m.content)).length,
+    1,
+    "a unit switch never mints a second memory of the same pattern"
+  );
 });
 
 test("symptom links carry the reading in the athlete's lab system, side judged canonically", () => {

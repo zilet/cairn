@@ -482,7 +482,7 @@ export async function runResearch(
  */
 export function applyMemoryConsolidation(plan: any): { merged: number; superseded: number; promoted: number } {
   const p: any = plan;
-  const rows = listMemory(200, { includeSuperseded: true }) as any[];
+  const rows = listMemory(200, { includeSuperseded: true, raw: true }) as any[];
   const idSet = new Set(rows.map((m: any) => Number(m.id)));
   const byId = new Map<number, any>(rows.map((m: any) => [Number(m.id), m]));
   let merged = 0,
