@@ -2027,7 +2027,7 @@ rw_setup_paths() {
 }
 
 # Non-secret service variables (the token and the settings key go on stdin).
-RW_PLAIN_VARS="CAIRN_SINGLE_VOLUME=1 CAIRN_REQUIRE_AUTH=1 CAIRN_BLANK_PROFILE=1 CAIRN_PLATFORM=railway CAIRN_MAX_AGENT_PROCS=1 PORT=8787"
+RW_PLAIN_VARS="CAIRN_SINGLE_VOLUME=1 CAIRN_REQUIRE_AUTH=1 CAIRN_BLANK_PROFILE=1 CAIRN_PLATFORM=railway CAIRN_MAX_AGENT_PROCS=1 PORT=8787 CAIRN_FEEDBACK_URL=https://feedback.cairn.fit"
 
 rw_ensure_cli() {
   if has railway; then return 0; fi

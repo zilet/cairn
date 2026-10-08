@@ -66,6 +66,7 @@ screen.
 | `CAIRN_PLATFORM` | `railway` | Tells Cairn how it was deployed. |
 | `CAIRN_MAX_AGENT_PROCS` | `1` | Runs one background AI task at a time to keep memory low. |
 | `PORT` | `8787` | The port Cairn listens on. |
+| `CAIRN_FEEDBACK_URL` | `https://feedback.cairn.fit` | Where **Send feedback** delivers (only when you press Send). Delete it to open a GitHub issue instead. |
 
 `secret(length)` is Railway's template-variable function. Railway fills it in once, for each
 deployer, when they deploy, so every deployer gets their own token and key.

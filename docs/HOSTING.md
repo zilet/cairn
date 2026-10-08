@@ -332,6 +332,7 @@ detail for feedback and the ping: [`OBSERVABILITY.md`](OBSERVABILITY.md#feedback
 | `CAIRN_PLATFORM` | `railway` | Tells the app how it was deployed, so it can show the right update path |
 | `CAIRN_MAX_AGENT_PROCS` | `1` | Bounds the memory used by AI tools |
 | `PORT` | `8787` | Matches the image's health check and the platform's routing |
+| `CAIRN_FEEDBACK_URL` | `https://feedback.cairn.fit` | Where Send feedback delivers; the app's default too, written out so it is visible and editable |
 
 The installer generates the token and the key as 64 random hex characters each and sends them with
 `railway variable set KEY --stdin`. Re-running it keeps both. The exact Railway CLI sequence it runs
