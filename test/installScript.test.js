@@ -687,6 +687,7 @@ cmd="$1"; shift
 case "$cmd" in
   whoami) [ -f "$S/logged_out" ] && { echo "Unauthorized. Please login" >&2; exit 1; }; echo "Logged in as Test User" ;;
   list)
+    [ -f "$S/fail_list_after_init" ] && [ -f "$S/project" ] && { echo "Error: network (fake)" >&2; exit 1; }
     printf '['
     if [ -f "$S/deleted_project" ]; then
       printf '\n  {"id": "proj-gone", "name": "%s", "deletedAt": "2026-10-10T13:25:12.286Z", "environments": {"edges": []}},' "$(cat "$S/deleted_project")"
@@ -701,7 +702,7 @@ case "$cmd" in
     printf '\n]\n' ;;
   init)
     while [ $# -gt 0 ]; do [ "$1" = --name ] && printf '%s' "$2" >"$S/project"; shift; done
-    echo '{"id":"proj-1"}' ;;
+    [ -f "$S/init_quiet" ] || echo '{"id":"proj-1"}' ;;
   link | unlink) ;;
   service)
     case "$1" in
@@ -799,6 +800,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 case "$url" in
+  https://raw.githubusercontent.com/*/overview.md) printf '# Cairn (fake overview)\n' >"$out" ;;
   https://*/api/health) printf '{"ok":true,"auth_required":true,"version":"2.1.0"}' ;;
   https://*/api/auth/pairing-codes)
     if [ -f "$S/pair_404" ]; then code=404; printf '{"error":"not_found"}' >"$out"
@@ -1330,7 +1332,7 @@ function templateResponse({ descriptions = false, autoUpdates = false, fixed = {
     variables[k] = { defaultValue: fixed[k] ?? v.value, isOptional: false };
     if (descriptions) variables[k].description = v.description;
   }
-  const svc = "c9b8b358-43e1-426f-8d30-1c0af2b68c41";
+  const svc = "00000000-0000-4000-8000-000000000000";
   const source = { image: spec.service.image };
   if (autoUpdates)
     source.autoUpdates = { type: spec.service.autoUpdates.type, schedule: spec.service.autoUpdates.schedule };
@@ -1600,7 +1602,11 @@ test("fake railway: auto updates are switched on once, never over a setting that
     const apis = (rig.read("rlog").match(/^railway api mutation/gm) || []).length;
     const off = run(["--target=railway", "--yes"], { env: rig.env });
     assert.equal(off.code, 0, off.all);
-    assert.equal((rig.read("rlog").match(/^railway api mutation/gm) || []).length, apis, "no patch over the person's choice");
+    assert.equal(
+      (rig.read("rlog").match(/^railway api mutation/gm) || []).length,
+      apis,
+      "no patch over the person's choice"
+    );
     assert.match(off.out, /Automatic updates: off in Railway, as you set them/);
     assert.match(off.out, /Automatic updates are off in Railway, as you set them/);
   }));
@@ -1631,7 +1637,10 @@ test("fake railway: a recorded project that is gone starts over on the release i
     const r = run(["--target=railway", "--yes"], { env: rig.env });
     assert.equal(r.code, 0, r.all);
     assert.match(r.all, /is gone; creating a new one/);
-    assert.match(r.all, /Using ghcr\.io\/zilet\/cairn:latest \(the recorded ghcr\.io\/zilet\/cairn:edge went with the old project/);
+    assert.match(
+      r.all,
+      /Using ghcr\.io\/zilet\/cairn:latest \(the recorded ghcr\.io\/zilet\/cairn:edge went with the old project/
+    );
     assert.match(rig.read("rlog"), /railway add --image ghcr\.io\/zilet\/cairn:latest /);
   }));
 
@@ -1640,7 +1649,10 @@ test("fake railway: --railway-project-name moves on from a recorded project only
     const rig = railwayRig(dir);
     const state = path.join(rig.stateDir, "railway.state");
     fs.mkdirSync(rig.stateDir, { recursive: true });
-    fs.writeFileSync(state, "RW_PROJECT_ID=proj-old\nRW_PROJECT_NAME=cairn\nRW_SERVICE=cairn\nRW_ENVIRONMENT=production\n");
+    fs.writeFileSync(
+      state,
+      "RW_PROJECT_ID=proj-old\nRW_PROJECT_NAME=cairn\nRW_SERVICE=cairn\nRW_ENVIRONMENT=production\n"
+    );
     const r = run(["--target=railway", "--yes", "--railway-project-name=cairn-v2"], { env: rig.env });
     assert.equal(r.code, 0, r.all);
     assert.match(rig.read("rlog"), /^railway init --name cairn-v2 --json$/m);
@@ -1672,7 +1684,7 @@ test("fake railway: a taken project name with no terminal says how to pick anoth
     const r = run(["--target=railway", "--yes"], { env: rig.env });
     assert.notEqual(r.code, 0, r.all);
     assert.match(r.err, /You have 2 Railway projects named 'cairn'/);
-    assert.match(r.err, /sh -s -- --railway-project-name=cairn-2/);
+    assert.match(r.err, /sh -s -- --target=railway --yes --railway-project-name=cairn-2$/m);
     assert.doesNotMatch(rig.read("rlog"), /^railway init/m);
   }));
 
@@ -1694,4 +1706,190 @@ test("fake railway: a project Railway is still deleting (deletedAt) is never reu
     assert.equal(t.code, 0, t.all);
     assert.match(trig.read("rlog"), /^railway delete --project proj-1 --yes --json$/m);
     assert.doesNotMatch(trig.read("rlog"), /proj-gone/);
+  }));
+
+// The argv a printed re-run hint gives when a shell runs it: everything after `sh -s -- `.
+function hintArgv(text) {
+  const m = /sh -s -- (.*)$/m.exec(text);
+  assert.ok(m, `no re-run hint in:\n${text}`);
+  const res = spawnSync(SH, ["-c", `set -- ${m[1]}; for a in "$@"; do printf '%s\\0' "$a"; done`], {
+    encoding: "utf8",
+  });
+  assert.equal(res.status, 0, res.stderr);
+  return res.stdout.split("\0").slice(0, -1);
+}
+
+// A recorded install, with its project live in the fake Railway unless `live` is false.
+function recordedRig(dir, { name = "cairn", id = "proj-1", live = true, liveName = name } = {}) {
+  const rig = railwayRig(dir);
+  if (live) fs.writeFileSync(path.join(rig.state, "project"), liveName);
+  fs.mkdirSync(rig.stateDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(rig.stateDir, "railway.state"),
+    `RW_PROJECT_ID=${id}\nRW_PROJECT_NAME=${name}\nRW_SERVICE=cairn\nRW_ENVIRONMENT=production\nRW_DOMAIN=x.up.railway.app\n`
+  );
+  return rig;
+}
+
+test("fake railway: uninstall/status under another --railway-project-name refuse; never act on the recorded project", () =>
+  withTempDir((dir) => {
+    const rig = recordedRig(dir);
+    const u = run(["--target=railway", "uninstall", "--railway-project-name=cairn-2", "--confirm-purge=cairn-2"], {
+      env: rig.env,
+    });
+    assert.notEqual(u.code, 0, u.all);
+    assert.match(u.err, /already manages the Railway project 'cairn'\. Another install is picked with --name=<other>/);
+    assert.match(u.err, /--name=cairn-2 --railway-project-name=cairn-2$/m);
+    assert.doesNotMatch(rig.read("rlog"), /^railway delete/m, "the recorded project is never deleted");
+    assert.ok(fs.existsSync(path.join(rig.stateDir, "railway.state")));
+    for (const cmd of ["status", "open", "update", "logs"]) {
+      const r = run(["--target=railway", cmd, "--railway-project-name=other"], { env: rig.env });
+      assert.notEqual(r.code, 0, `${cmd}: ${r.all}`);
+      assert.match(r.err, /already manages the Railway project 'cairn'/, cmd);
+    }
+    assert.equal(rig.read("rlog"), "", "nothing ran against Railway");
+  }));
+
+test("fake railway: the recorded project is recognised by id, also after a rename in the dashboard", () =>
+  withTempDir((dir) => {
+    const rig = recordedRig(dir, { name: "cairn-old", liveName: "cairn" });
+    const r = run(["--target=railway", "--yes"], { env: rig.env });
+    assert.equal(r.code, 0, r.all);
+    assert.doesNotMatch(rig.read("rlog"), /^railway init/m);
+    assert.doesNotMatch(r.all, /is gone/);
+    assert.match(r.out, /The Railway project 'cairn-old' is now named 'cairn' \(same project\)/);
+    assert.match(rig.read("rlog"), /^railway link --project proj-1 /m);
+    assert.match(fs.readFileSync(path.join(rig.stateDir, "railway.state"), "utf8"), /^RW_PROJECT_NAME=cairn$/m);
+
+    // Naming the project by its new name is the same install, not a second one.
+    const same = run(["--target=railway", "--yes", "--railway-project-name=cairn"], { env: rig.env });
+    assert.equal(same.code, 0, same.all);
+  }));
+
+test("fake railway: re-run hints are quoted words that give back the same arguments", () =>
+  withTempDir((dir) => {
+    // A taken name: the hint keeps --target and the other arguments and swaps in a free name.
+    const ws = "Ana Novak's Projects";
+    const rig = railwayRig(dir);
+    // Two live projects named cairn: the name is taken, not one to pick.
+    fs.writeFileSync(path.join(rig.state, "existing_project"), "cairn");
+    fs.writeFileSync(path.join(rig.state, "project"), "cairn");
+    const r = run(["--target=railway", "--yes", `--railway-workspace=${ws}`], { env: rig.env });
+    assert.notEqual(r.code, 0, r.all);
+    assert.deepEqual(hintArgv(r.err), [
+      "--target=railway",
+      "--yes",
+      `--railway-workspace=${ws}`,
+      "--railway-project-name=cairn-2",
+    ]);
+
+    // railway-template with no terminal: the --yes hint gives back the workspace word for word.
+    fs.mkdirSync(path.join(dir, "t"));
+    const tpl = run(["railway-template", "--workspace", ws], { env: railwayRig(path.join(dir, "t")).env });
+    assert.notEqual(tpl.code, 0, tpl.all);
+    assert.deepEqual(hintArgv(tpl.err), ["railway-template", "--workspace", ws, "--yes"]);
+
+    // A long taken name: the suggested <name>-2 still fits --railway-project-name.
+    const long = `c${"x".repeat(62)}`;
+    fs.writeFileSync(path.join(rig.state, "existing_project"), long);
+    fs.writeFileSync(path.join(rig.state, "project"), long);
+    const l = run(["--target=railway", "--yes", `--railway-project-name=${long}`], { env: rig.env });
+    assert.notEqual(l.code, 0, l.all);
+    const suggested = hintArgv(l.err).at(-1).replace("--railway-project-name=", "");
+    assert.match(suggested, /^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}-2$/);
+    assert.equal(suggested.length, 63);
+  }));
+
+test("fake railway: a second install's hint names a valid --name, or asks for one", () =>
+  withTempDir((dir) => {
+    const rig = recordedRig(dir);
+    const r = run(["--target=railway", "--yes", "--railway-project-name=My.Cairn_V2"], { env: rig.env });
+    assert.notEqual(r.code, 0, r.all);
+    assert.match(r.err, /which still exists\. For a second install add --name=<other>/);
+    const argv = hintArgv(r.err);
+    assert.deepEqual(argv, ["--target=railway", "--yes", "--name=my-cairn_v2", "--railway-project-name=My.Cairn_V2"]);
+    assert.match(argv[2].slice("--name=".length), /^[a-z0-9][a-z0-9_-]{0,40}$/);
+
+    // No name of its own to derive (it would be this install's): say to pick one.
+    const same = run(["--target=railway", "--yes", "--railway-project-name=Cairn"], { env: rig.env });
+    assert.notEqual(same.code, 0, same.all);
+    assert.match(same.err, /pick a --name \(lowercase letters, digits, '-' or '_'\)/);
+    assert.doesNotMatch(rig.read("rlog"), /^railway init/m);
+  }));
+
+test("--target must name a provider exactly (no pattern matching)", () => {
+  const r = run(["--target=.*", "--dry-run"]);
+  assert.notEqual(r.code, 0, r.all);
+  assert.match(r.err, /--target must be one of: railway local \(got '\.\*'\)/);
+  assert.doesNotMatch(r.all, /not found/);
+});
+
+test("fake railway: a re-run never overrides a variable you emptied or set to off", () =>
+  withTempDir((dir) => {
+    const rig = railwayRig(dir);
+    assert.equal(run(["--target=railway", "--yes"], { env: rig.env }).code, 0);
+    for (const value of ["", "off"]) {
+      const vars = rig.read("vars").replace(/^CAIRN_FEEDBACK_URL=.*$/gm, "");
+      fs.writeFileSync(path.join(rig.state, "vars"), `${vars.replace(/\n+/g, "\n")}CAIRN_FEEDBACK_URL=${value}\n`);
+      const before = rig.read("rlog").length;
+      const r = run(["--target=railway", "--yes"], { env: rig.env });
+      assert.equal(r.code, 0, r.all);
+      assert.doesNotMatch(rig.read("rlog").slice(before), /CAIRN_FEEDBACK_URL/, `kept "${value}"`);
+    }
+  }));
+
+test("railway-template --publish in the same run as the build publishes after deleting the scratch project", () =>
+  withTempDir((dir) => {
+    // From a file: the overview next to the script.
+    const rig = templateRig(dir);
+    const r = rig.go(["--yes", "--publish", "--force"]);
+    assert.equal(r.code, 0, r.all);
+    assert.equal(rig.has("published"), true);
+    assertSequence(rig.log(), [
+      "railway templates create",
+      "railway delete --project proj-1",
+      "railway templates publish",
+    ]);
+    assert.deepEqual(rig.leftovers(), []);
+
+    // As `curl | sh`: the overview is fetched into the run's own temporary directory.
+    fs.mkdirSync(path.join(dir, "pipe"));
+    const pipe = templateRig(path.join(dir, "pipe"));
+    const p = run(["railway-template", "--yes", "--publish", "--force"], { env: pipe.env, viaStdin: true });
+    assert.equal(p.code, 0, p.all);
+    assert.equal(pipe.has("published"), true);
+    const publish = pipe.log().find((l) => l.startsWith("railway templates publish"));
+    assert.match(publish, /--readme-file \S*\/cairn-railway-template\.[^/ ]+\/overview\.md --json$/);
+    assert.deepEqual(pipe.leftovers(), []);
+
+    // Editor steps left: the hint is the one-liner, not a file that does not exist.
+    fs.mkdirSync(path.join(dir, "held"));
+    const heldRig = templateRig(path.join(dir, "held"));
+    const held = run(["railway-template", "--yes", "--publish"], { env: heldRig.env, viaStdin: true });
+    assert.equal(held.code, 0, held.all);
+    assert.match(
+      held.out,
+      /^ {2}curl -fsSL https:\/\/cairn\.fit\/install \| sh -s -- railway-template --publish --template=AbC123$/m
+    );
+  }));
+
+test("railway-template: a failed project list after init still deletes the scratch project, or says it may exist", () =>
+  withTempDir((dir) => {
+    const rig = templateRig(dir);
+    fs.writeFileSync(path.join(rig.state, "fail_list_after_init"), "");
+    const r = rig.go(["--yes"]);
+    assert.notEqual(r.code, 0, r.all);
+    assert.match(r.err, /could not list your projects/);
+    assert.match(rig.read("rlog"), /^railway delete --project proj-1 --yes --json$/m, "the id init gave is deleted");
+    assert.deepEqual(rig.leftovers(), []);
+
+    // init answered no id: nothing to delete by id, so it says what may be left behind.
+    fs.mkdirSync(path.join(dir, "quiet"));
+    const quiet = templateRig(path.join(dir, "quiet"));
+    fs.writeFileSync(path.join(quiet.state, "fail_list_after_init"), "");
+    fs.writeFileSync(path.join(quiet.state, "init_quiet"), "");
+    const q = quiet.go(["--yes"]);
+    assert.notEqual(q.code, 0, q.all);
+    assert.match(q.err, /A scratch project named 'Cairn' may now exist in Railway/);
+    assert.doesNotMatch(quiet.read("rlog"), /^railway delete/m);
   }));

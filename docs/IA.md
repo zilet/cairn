@@ -1,4 +1,4 @@
-# Cairn IA + component architecture (approved by Milos, 2026-10-06)
+# Cairn IA + component architecture (approved 2026-10-06)
 
 ## Approved decisions
 1. "Your path" (race estimate, weight + deadlift goals, trail) moves from Today to the Horizon landing. Today keeps ONE glance line ("26 days to Cambridge · Sharpen, wk 6 of 6 ›") that opens Horizon.

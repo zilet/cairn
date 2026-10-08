@@ -36,7 +36,7 @@ import {
 import {
   addPasskey,
   calendarFeedToken,
-  consumePairingCode,
+  consumePairingCodePurpose,
   createDeviceSession,
   createPairingCode,
   deletePasskey,
@@ -190,13 +190,15 @@ authRouter.post("/auth/pair", (req, res) => {
   const ip = req.ip || "unknown";
   const gate = pairLimiter.check(ip);
   if (!gate.allowed) return limited(res, gate.retryAfterMs);
-  if (!consumePairingCode(req.body?.code)) {
+  const purpose = consumePairingCodePurpose(req.body?.code);
+  if (!purpose) {
     pairLimiter.fail(ip);
     return res.status(400).json({ ok: false, error: "invalid_or_expired_code" });
   }
   const { device, secret } = createDeviceSession(signInInput(req));
   setSession(req, res, secret);
-  res.json({ ok: true, device: deviceDto(device, device.id) });
+  // `first` lets the early script give the first-sign-in passkey offer its fuller copy.
+  res.json({ ok: true, device: deviceDto(device, device.id), ...(purpose === "first_sign_in" ? { first: true } : {}) });
 });
 
 // ---- links a browser opens on its own ----

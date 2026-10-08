@@ -18,7 +18,7 @@ import { createHost, createStorage, flush, loadClientModule } from "./_dom.mjs";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const html = readFileSync(join(root, "public/index.html"), "utf8");
 
-function runShell({ pathname = "/", search = "", hash = "", storage = {}, session = {}, crypto, respond = () => 200 }) {
+function runShell({ body = {}, pathname = "/", search = "", hash = "", storage = {}, session = {}, crypto, respond = () => 200 }) {
   const calls = [];
   const replaced = [];
   const localStorage = createStorage(storage);
@@ -43,7 +43,7 @@ function runShell({ pathname = "/", search = "", hash = "", storage = {}, sessio
     fetch: (url, init) => {
       calls.push({ url, init });
       const status = respond(url, init);
-      return Promise.resolve({ status, ok: status >= 200 && status < 300 });
+      return Promise.resolve({ status, ok: status >= 200 && status < 300, json: async () => body });
     },
     document: { createElement: () => ({}), head: { appendChild() {} } },
     Uint8Array,
@@ -74,6 +74,12 @@ test("a #pair= link leaves the address first, is exchanged for a session, and ho
   assert.equal(shell.localStorage.getItem("cairn.swr.v1.today"), null);
   assert.equal(shell.localStorage.getItem("cairn.other"), "keep");
   assert.equal(shell.sessionStorage.getItem("cairn.auth.offer"), "1", "the one passkey offer is armed");
+});
+
+test("a first-sign-in code (the server says `first`) arms the offer with its fuller copy", async () => {
+  const shell = runShell({ hash: "#pair=ABCD-EFGH", body: { ok: true, first: true } });
+  await shell.context.__cairnAuthReady;
+  assert.equal(shell.sessionStorage.getItem("cairn.auth.offer"), "first");
 });
 
 test("a spent pairing code is remembered for the sign-in screen, never retried", async () => {

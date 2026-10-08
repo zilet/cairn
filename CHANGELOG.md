@@ -5,8 +5,18 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [2.1.1] — 2026-10-08
+
+The first visit after a one-click deploy now says where your access token is, and the installer
+gets safer around project names, uninstall and your own settings. No new migrations.
+
 ### Added
 
+- **A first visit says where your access token is.** Until anyone has signed in, the sign-in screen
+  opens with a "First time here?" note: on Railway a button straight to the service's Variables tab,
+  for the one-line installer the `.env` next to the install, otherwise `CAIRN_AUTH_TOKEN` in your
+  server's settings, with the token box already open. The passkey offer after that first sign-in
+  says why and points at Settings → Devices → Pair a device.
 - **The Railway template is rebuildable from the repo.** `deploy/railway/template.json` declares it
   (image, volume, health check, port, auto updates, every variable with its description, the
   marketplace text), and `sh deploy/install.sh railway-template` builds it as a private draft in
@@ -14,24 +24,34 @@ Versioning](https://semver.org/) for tagged releases.
   templates create`, a check of the draft, and the scratch project deleted again, also on failure.
   `--publish` publishes a checked draft after a `[y/N]`. The two secrets are always Railway's
   per-deployer `${{secret(48)}}`; a draft that carries a fixed value is deleted, never published.
-  No one account is needed to rebuild the button's template.
-- **Hosting providers come from one table.** The installer's chooser, `--target=` and the
-  no-terminal hint read `PROVIDERS`; `deploy/README.md` says how a new host slots in.
-
+  Adding another host is documented in `deploy/README.md`.
 - **A Railway install switches on automatic updates itself.** Railway's Image Auto Updates, in the
-  Night window (02:00–06:00 UTC) the template uses, set with one environment patch and read back.
-  An existing setting is kept, and turning them off in Railway stays off on a re-run. `cairn.sh
-  status` shows the setting. No more "turn this on by hand" step.
+  Night window (02:00–06:00 UTC) the template uses. An existing setting is kept, and turning them
+  off in Railway stays off on a re-run. `cairn.sh status` shows the setting. No more "turn this on
+  by hand" step.
+- **Railway installs and the template write `CAIRN_FEEDBACK_URL`**, visible and editable in the
+  service's variables; set it to `off` to turn the feedback service off. `.env.example` now
+  documents the 2.1 settings.
 
 ### Changed
 
 - `--railway-workspace=` (now also `--workspace=`) accepts any workspace name, apostrophes included.
+- Re-run hints in the installer repeat the options you ran it with, quoted so they paste.
 
 ### Fixed
 
+- A Railway project name that is already taken now asks for a new name, offering the next free one
+  (`cairn-2`), instead of stopping. With no terminal it says how to pass one.
+- A deleted recorded Railway project no longer blocks a new name or carries its old image into the
+  new project.
 - The Railway installer no longer reuses or counts a project Railway is still deleting (`railway
   list` keeps one about 48 hours, with a `deletedAt`). Re-installing right after an uninstall now
   creates a new project instead of setting up in the one being deleted.
+- A Railway `uninstall` (or `status`, `open`, `update`, `logs`) with a `--railway-project-name`
+  other than the recorded one now refuses, instead of acting on the recorded project.
+- `railway-template --publish` works in the same run that builds the draft, and links the template
+  by the code Railway publishes it under.
+- Re-running the Railway installer keeps a `CAIRN_FEEDBACK_URL` you set to `off` or emptied.
 
 ## [2.1.0] — 2026-10-08
 
@@ -1664,7 +1684,10 @@ landed since 0.3.0.
 - Chat strips agent tool-narration before the reply marker reaches the bubble
 - Segmented sub-nav scrolls when pills overflow (no clipped "Calendar" tab)
 
-[Unreleased]: https://github.com/zilet/cairn/compare/v1.8.1...HEAD
+[Unreleased]: https://github.com/zilet/cairn/compare/v2.1.1...HEAD
+[2.1.1]: https://github.com/zilet/cairn/compare/v2.1.0...v2.1.1
+[2.1.0]: https://github.com/zilet/cairn/compare/v2.0.0...v2.1.0
+[2.0.0]: https://github.com/zilet/cairn/compare/v1.9.1...v2.0.0
 [1.8.1]: https://github.com/zilet/cairn/compare/v1.8.0...v1.8.1
 [0.7.0]: https://github.com/zilet/cairn/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/zilet/cairn/compare/v0.6.0...v0.6.1

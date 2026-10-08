@@ -71,7 +71,7 @@ What the installer does, in order:
    both work; Cairn needs no access to your GitHub).
 3. **Creates a project** named after the instance (`cairn` by default; `--name=` changes it, and
    `--railway-project-name=` picks any other name). If you
-   already have a project with that name, it asks before using it.
+   already have a project with that name, it asks whether to use it, or offers a new name.
 4. **Adds one service** from the published image, **one volume** at `/data`, the settings Cairn
    needs, a generated access token and settings key (sent to Railway on stdin, never on a command
    line), and a public `https://<name>.up.railway.app` address.
@@ -79,8 +79,8 @@ What the installer does, in order:
    secrets removed) and stops.
 6. **Opens Cairn in your browser, already signed in,** and prints your recovery key once.
 
-Then answer a few onboarding questions, connect your AI in **Settings → Agents**, and pair your
-phone from **Settings → Devices → Pair a device**.
+Then the welcome asks you to connect your AI subscription and the coach plans your first week; pair
+your phone from **Settings → Devices → Pair a device**.
 
 The installer keeps a small folder, `~/.cairn/railway/cairn/`, with the project link and a copy of
 itself. It holds no secrets: the token stays in Railway. Use it to manage the install:
@@ -129,9 +129,11 @@ link never changes.
    (02:00–06:00 UTC). To change that, open the service's **Settings → Source → Auto Updates**.
 3. **Wait until it is healthy,** then open the Railway URL for the service.
 4. **Sign in.** Cairn asks for a token. Paste the value of `CAIRN_AUTH_TOKEN`, which you find in
-   Railway under the service, then **Variables**. That token is also your recovery key.
-5. **Onboarding, AI, phone.** Answer a few questions, connect your AI in **Settings → Agents**, and
-   pair your phone from **Settings → Devices → Pair a device**.
+   Railway under the service, then **Variables**. On a fresh install the sign-in screen opens with a
+   "First time here?" note that says exactly this and links straight to that Variables tab. That
+   token is also your recovery key.
+5. **Welcome, AI, phone.** The welcome asks you to connect your AI subscription and the coach plans
+   your first week; pair your phone from **Settings → Devices → Pair a device**.
 
 ## 2) This computer or server
 
@@ -303,8 +305,8 @@ sends, and where. Anything not listed here does not leave.
   Anonymous diagnostics (error counts and route names, never your data) are added only when you tick
   the box, and the sheet shows them first. Your contact stays in the service's own database, only for a
   reply: it is never put in a forwarded issue or notification. `CAIRN_FEEDBACK_URL` points it at your
-  own deployment, or `CAIRN_FEEDBACK_URL=""` turns the service off; then **Send feedback** opens a
-  prefilled GitHub issue in your own browser for you to review and submit.
+  own deployment, or `CAIRN_FEEDBACK_URL=off` (or an empty value) turns the service off; then
+  **Send feedback** opens a prefilled GitHub issue in your own browser for you to review and submit.
 - **The usage ping, opt-in.** Off by default (**Settings → Data → Share anonymous usage**). When on,
   once a week, five fields go to the same feedback service: a random install id, the Cairn version,
   the platform (such as `railway` or `docker`), the CPU architecture and the Node version.
@@ -343,7 +345,7 @@ against it by the test suite.
 | `CAIRN_PLATFORM` | `railway` | Tells the app how it was deployed, so it can show the right update path |
 | `CAIRN_MAX_AGENT_PROCS` | `1` | Bounds the memory used by AI tools |
 | `PORT` | `8787` | Matches the image's health check and the platform's routing |
-| `CAIRN_FEEDBACK_URL` | `https://feedback.cairn.fit` | Where Send feedback delivers; the app's default too, written out so it is visible and editable |
+| `CAIRN_FEEDBACK_URL` | `https://feedback.cairn.fit` | Where Send feedback delivers; the app's default too, written out so it is visible and editable. Set it to `off` (or an empty value) to turn the feedback service off; feedback then opens a GitHub issue. A re-run of the installer keeps whatever you set |
 
 The installer generates the token and the key as 64 random hex characters each and sends them with
 `railway variable set KEY --stdin`. Re-running it keeps both. The exact Railway CLI sequence it runs

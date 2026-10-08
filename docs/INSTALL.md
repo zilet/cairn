@@ -62,7 +62,7 @@ sh install.sh
 | `--install-docker` | Allow the installer to run Docker's install script (`curl -fsSL https://get.docker.com \| sh`) when Linux has no container engine. Without it, `--yes` prints that command and exits non-zero; an interactive run asks. |
 | `--install-railway-cli` | Allow the installer to run Railway's install script (`curl -fsSL https://railway.com/install.sh \| sh`) when the Railway CLI is missing and Homebrew/npm can't install it. Same rule as above. |
 | `--name=NAME` | Instance name. Default `cairn`. Here: the Compose project, container, volumes and timers. On Railway: the service name and the folder `~/.cairn/railway/NAME`. |
-| `--image=REF` | Image to run. For example, `ghcr.io/zilet/cairn:v2.0` follows only 2.0.x patch releases. |
+| `--image=REF` | Image to run. For example, `ghcr.io/zilet/cairn:v2.1` follows only 2.1.x patch releases. |
 | `--no-browser` | Print the one-time sign-in link instead of opening a browser. |
 | `--no-telemetry` | Send no anonymous install counts (see [Install counting](#install-counting)). Same as `DO_NOT_TRACK=1` or `CAIRN_NO_TELEMETRY=1`. |
 | `--dry-run` | Print what would happen. Changes nothing, sends nothing and prints no secret. |
@@ -106,12 +106,14 @@ What it does, in order:
 2. **Sign-in.** `railway whoami`; if you are not signed in, `railway login` opens your browser. With
    no terminal it stops and asks you to run `railway login` first (or set `RAILWAY_API_TOKEN`).
 3. **The project.** It creates a project named after the instance (`cairn` by default), or the name you pass with
-   `--railway-project-name=`. If a project with that name exists, it asks before using it (`--yes`
-   counts as yes). A project Railway is still deleting (it keeps one about 48 hours, with a
+   `--railway-project-name=`. If a project with that name exists, it asks whether to use it (`--yes`
+   counts as yes). Say no and it asks for a new name, offering the next free one (`cairn-2`); with no
+   terminal, pass `--railway-project-name=`. A project Railway is still deleting (it keeps one about 48 hours, with a
    `deletedAt`) does not count. With several workspaces, add `--railway-workspace=<name or ID>`.
 4. **The service.** One service from `ghcr.io/zilet/cairn:latest`, one volume at `/data`, and
    these variables: `CAIRN_SINGLE_VOLUME=1`, `CAIRN_REQUIRE_AUTH=1`, `CAIRN_BLANK_PROFILE=1`,
-   `CAIRN_PLATFORM=railway`, `CAIRN_MAX_AGENT_PROCS=1`, `PORT=8787`. It generates
+   `CAIRN_PLATFORM=railway`, `CAIRN_MAX_AGENT_PROCS=1`, `PORT=8787`,
+   `CAIRN_FEEDBACK_URL=https://feedback.cairn.fit`. It generates
    `CAIRN_AUTH_TOKEN` and `CAIRN_SETTINGS_SECRET_KEY` (64 hex characters each) and sends them with
    `railway variable set KEY --stdin`, never on a command line.
 5. **Automatic updates.** It switches on Railway's Image Auto Updates for the service (new

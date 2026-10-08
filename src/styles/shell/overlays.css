@@ -230,3 +230,10 @@
 .signin-offer-ft{gap:var(--space-6);align-items:center}
 @media (prefers-reduced-motion:reduce){.outbox-review-ov{animation:none}.outbox-bar.outbox-actionable:hover{transform:translate(-50%,0)}}
 
+/* First visit on a never-signed-in install: where the access token lives, above the token form. */
+.signin-first{margin:0 0 var(--space-7);padding:var(--space-6);border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface2)}
+.signin-first-h{margin:0 0 var(--space-3);font-size:var(--text-md);font-weight:var(--weight-semibold)}
+.signin-first code{font-family:var(--font-mono);font-size:.92em}
+.signin-first-link{margin:0 0 var(--space-4)}
+.signin-first-btn{display:inline-flex;align-items:center;min-height:44px;text-decoration:none}
+.signin-first-token .signin-lbl{margin-bottom:var(--space-3)}

@@ -162,12 +162,12 @@
     "public/js/bundle-16-auth.js": {
       "lazy": "auth",
       "measured": {
-        "raw": 13742,
-        "brotli": 3707
+        "raw": 17507,
+        "brotli": 4772
       },
       "budget": {
-        "raw": 14336,
-        "brotli": 4096
+        "raw": 18432,
+        "brotli": 5120
       }
     },
     "public/styles.css": {

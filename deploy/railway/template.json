@@ -27,7 +27,7 @@
   "variables": {
     "CAIRN_AUTH_TOKEN": {
       "value": "${{secret(48)}}",
-      "description": "Your sign-in token. Copy it from this tab to sign in; it is also your recovery key."
+      "description": "Your sign-in token. Open the app URL and sign in with this value, copied from this tab. It is also your recovery key."
     },
     "CAIRN_SETTINGS_SECRET_KEY": {
       "value": "${{secret(48)}}",
@@ -59,7 +59,7 @@
     },
     "CAIRN_FEEDBACK_URL": {
       "value": "https://feedback.cairn.fit",
-      "description": "Where Send feedback delivers (only when you press Send). Delete it to open a GitHub issue instead."
+      "description": "Where Send feedback delivers (only when you press Send). Set it to off (or an empty value) to turn the feedback service off; feedback then opens a GitHub issue."
     }
   }
 }

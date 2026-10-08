@@ -11,10 +11,10 @@ Image auto updates are on, so new releases arrive in your maintenance window.
 
 ## How to use it
 
-1. Deploy, then open the public URL Railway gives the service.
-2. Sign in with the token Railway generated: the service's **Variables** tab, `CAIRN_AUTH_TOKEN`.
-   Keep it somewhere safe; it is your recovery key. Add a passkey or pair your phone from
-   **Settings → Devices**.
+1. Deploy, and wait until the service is healthy.
+2. Open the public URL Railway gives the service and sign in with `CAIRN_AUTH_TOKEN` from the cairn
+   service's **Variables** tab (the first screen links straight to it). Keep it somewhere safe; it
+   is your recovery key. Add a passkey or pair your phone from **Settings → Devices**.
 3. The welcome asks you to connect the AI subscription you already have (Claude, ChatGPT, Google or
    Grok). The coach then plans your first week.
 

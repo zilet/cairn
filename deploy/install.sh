@@ -109,10 +109,49 @@ consent_script() {
   confirm "$1" "n"
 }
 
+# sh_quote WORD: WORD as one shell word, copy-paste safe: as is when it is plain, else in
+# single quotes (a ' inside becomes '\''). The character list is spelled out so no locale's
+# ranges can let a special character through.
+sh_quote() {
+  case "$1" in
+    "" | *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_./:=@%+,-]*)
+      printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+# rerun_quote "SKIP OPTIONS" ARGS...: ARGS as one line of shell words (sh_quote), leaving out
+# every option named in SKIP (both --opt=value and --opt value).
+rerun_quote() {
+  rq_skip=" $1 "
+  shift
+  rq_out=""
+  rq_drop=0
+  for rq_arg in "$@"; do
+    if [ "$rq_drop" = 1 ]; then rq_drop=0; continue; fi
+    case "$rq_arg" in
+      --*)
+        case "$rq_skip" in
+          *" ${rq_arg%%=*} "*)
+            case "$rq_arg" in *=*) ;; *) rq_drop=1 ;; esac
+            continue ;;
+        esac ;;
+    esac
+    rq_out="${rq_out:+$rq_out }$(sh_quote "$rq_arg")"
+  done
+  printf '%s' "$rq_out"
+}
+
 # The arguments this run was started with, for a copy-paste re-run hint (adds --target
 # when the target came from elsewhere). Prints them with a trailing space, or nothing.
+# rerun_args noproject | noname: without --railway-project-name (and --name), for a hint
+# that supplies its own.
 rerun_args() {
-  ra_out="${RERUN_ARGS:-}"
+  case "${1:-}" in
+    noproject) ra_out="${RERUN_ARGS_NOPROJECT:-}" ;;
+    noname) ra_out="${RERUN_ARGS_NONAME:-}" ;;
+    *) ra_out="${RERUN_ARGS:-}" ;;
+  esac
   case " $ra_out " in *" --target="*) ;; *) [ -n "${TARGET:-}" ] && ra_out="--target=$TARGET${ra_out:+ $ra_out}" ;; esac
   [ -n "$ra_out" ] && printf '%s ' "$ra_out"
   return 0
@@ -1883,7 +1922,7 @@ resolve_target() {
 PROVIDERS="railway|In the cloud on Railway|about \$5/month, nothing to keep running
 local|On this computer or server|free, private, needs to stay on"
 
-is_provider() { printf '%s\n' "$PROVIDERS" | cut -d'|' -f1 | grep -qx "$1"; }
+is_provider() { printf '%s\n' "$PROVIDERS" | cut -d'|' -f1 | grep -Fqx -- "$1"; }
 provider_names() { printf '%s\n' "$PROVIDERS" | cut -d'|' -f1 | tr '\n' ' ' | sed 's/ $//'; }
 
 # provider_menu [hint]: the numbered choices; with "hint", each with its non-interactive command.
@@ -1984,6 +2023,16 @@ json_project_ids() {
     END { for (o in proj) if (nm[o] == want && id[o] != "" && !(o in gone)) print id[o] }'
 }
 
+# json_live_projects < `railway list --json`: "<id>\t<name>" of every live project.
+json_live_projects() {
+  json_flat | awk -F '\t' '
+    $2 == "id" { id[$1] = $3 }
+    $2 == "name" { nm[$1] = $3 }
+    $2 == "environments" { proj[$1] = 1 }
+    $2 == "deletedAt" && $3 != "null" && $3 != "" { gone[$1] = 1 }
+    END { for (o in proj) if (id[o] != "" && !(o in gone)) print id[o] "\t" nm[o] }'
+}
+
 # json_has_name NAME < any JSON: succeeds when some object has "name": NAME.
 json_has_name() {
   json_flat | awk -F '\t' -v want="$1" '$2 == "name" && $3 == want { found = 1 } END { exit found ? 0 : 1 }'
@@ -2059,6 +2108,26 @@ rw_state_write() {
   } | write_file "$RW_STATE" 600
 }
 
+# rw_name_for PROJECT: an instance name (--name's own rules) derived from a project name,
+# or nothing when none fits or it is this install's own name.
+rw_name_for() {
+  rnf_name=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]/-/g; s/--*/-/g; s/^[^a-z0-9]*//' | cut -c1-41)
+  if valid_re "$rnf_name" '^[a-z0-9][a-z0-9_-]{0,40}$' && [ "$rnf_name" != "$NAME" ]; then printf '%s' "$rnf_name"; fi
+}
+
+# rw_die_manages RECORDED WANTED [DETAIL]: this state directory already manages RECORDED;
+# WANTED belongs to another install, which has its own --name.
+rw_die_manages() {
+  rdm_name=$(rw_name_for "$2")
+  if [ -n "$rdm_name" ]; then
+    rdm_hint="e.g. curl -fsSL $ONE_LINER_URL | sh -s -- $(rerun_args noname)--name=$rdm_name --railway-project-name=$(sh_quote "$2")"
+  else
+    rdm_hint="pick a --name (lowercase letters, digits, '-' or '_') and re-run with it and --railway-project-name=$(sh_quote "$2")"
+  fi
+  if [ "$CMD" = "install" ]; then rdm_what="For a second install add --name=<other>"; else rdm_what="Another install is picked with --name=<other>"; fi
+  die "$RW_DIR already manages the Railway project '$1'${3:+, $3}. $rdm_what: $rdm_hint"
+}
+
 rw_setup_paths() {
   NAME="${OPT_NAME:-cairn}"
   valid_re "$NAME" '^[a-z0-9][a-z0-9_-]{0,40}$' || die "Invalid instance name '$NAME'."
@@ -2074,10 +2143,13 @@ rw_setup_paths() {
   RW_DOMAIN=$(rw_state_get RW_DOMAIN)
   RW_AU_SET=$(rw_state_get RW_AUTOUPDATES_SET)
   RW_AU=""
-  # A different --railway-project-name than the recorded one is decided once signed in:
-  # fine when the recorded project is gone, refused while it still exists (rw_ensure_project).
+  # A different --railway-project-name than the recorded one: an install decides once signed
+  # in (fine when the recorded project is gone, refused while it still exists, see
+  # rw_ensure_project). Every other command acts on the recorded project by its id, so it
+  # never runs under another project's name: uninstall would delete the recorded one.
   RW_PROJECT_RECORDED=""
   if [ -n "$OPT_RW_PROJECT" ] && [ -n "$RW_PROJECT" ] && [ "$OPT_RW_PROJECT" != "$RW_PROJECT" ]; then
+    [ "$CMD" = "install" ] || rw_die_manages "$RW_PROJECT" "$OPT_RW_PROJECT"
     RW_PROJECT_RECORDED="$RW_PROJECT"
   fi
   RW_PROJECT="${OPT_RW_PROJECT:-${RW_PROJECT:-$NAME}}"
@@ -2183,23 +2255,33 @@ rw_load_vars() {
   RW_OUT=""
 }
 rw_var() { printf '%s\n' "$RW_KV" | sed -n "s/^$1=//p" | tail -n 1; }
+rw_has_var() { printf '%s\n' "$RW_KV" | grep -q "^$1="; }
 
 rw_find_project() {
   rw_must "list your projects" list --json
   RW_FOUND=$(printf '%s\n' "$RW_OUT" | json_project_ids "$RW_PROJECT")
+  RW_LIVE=$(printf '%s\n' "$RW_OUT" | json_live_projects)
+}
+
+# Railway project names: the same rule as --railway-project-name.
+RW_PROJECT_RE='^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$'
+
+# rw_project_suggest BASE N: "BASE-N", BASE shortened so it stays a valid project name.
+rw_project_suggest() {
+  printf '%s-%s' "$(printf '%s' "$1" | cut -c1-$((62 - ${#2})))" "$2"
 }
 
 # The name is taken and not to be reused: ask for another (a free "<name>-N" offered),
 # or, with no terminal, say how to pass one.
 rw_pick_project_name() {
   if ! has_tty || [ "$OPT_YES" = 1 ]; then
-    die "A Railway project named '$RW_PROJECT' already exists. Re-run with another name, e.g. curl -fsSL $ONE_LINER_URL | sh -s -- --railway-project-name=$RW_PROJECT-2"
+    die "A Railway project named '$RW_PROJECT' already exists. Re-run with another name, e.g. curl -fsSL $ONE_LINER_URL | sh -s -- $(rerun_args noproject)--railway-project-name=$(sh_quote "$(rw_project_suggest "$RW_PROJECT" 2)")"
   fi
   pp_base="$RW_PROJECT"
   while :; do
     pp_n=2
     while :; do
-      RW_PROJECT="$pp_base-$pp_n"
+      RW_PROJECT=$(rw_project_suggest "$pp_base" "$pp_n")
       rw_find_project
       [ -n "$RW_FOUND" ] || break
       pp_n=$((pp_n + 1))
@@ -2209,10 +2291,10 @@ rw_pick_project_name() {
     pp_ans=""
     read -r pp_ans </dev/tty || pp_ans=""
     RW_PROJECT="${pp_ans:-$pp_suggest}"
-    case "$RW_PROJECT" in
-      *[!A-Za-z0-9._-]* | "" | -*) warn "Use letters, digits, '.', '_' or '-'."; continue ;;
-    esac
-    if [ "${#RW_PROJECT}" -gt 60 ]; then warn "Keep it under 60 characters."; continue; fi
+    if ! valid_re "$RW_PROJECT" "$RW_PROJECT_RE"; then
+      warn "Use up to 63 letters, digits, '.', '_' or '-', starting with a letter or digit."
+      continue
+    fi
     rw_find_project
     if [ -n "$RW_FOUND" ]; then warn "'$RW_PROJECT' is taken too."; pp_base="$RW_PROJECT"; continue; fi
     RW_FOUND=""
@@ -2221,18 +2303,20 @@ rw_pick_project_name() {
 }
 
 rw_ensure_project() {
-  if [ -n "${RW_PROJECT_RECORDED:-}" ] && [ -n "$RW_PROJECT_ID" ]; then
-    ep_want="$RW_PROJECT"
-    RW_PROJECT="$RW_PROJECT_RECORDED"
-    rw_find_project
-    if printf '%s\n' "$RW_FOUND" | grep -qx "$RW_PROJECT_ID"; then
-      die "$RW_DIR already manages the Railway project '$RW_PROJECT', which still exists. For a second install add --name=<other>, e.g. curl -fsSL $ONE_LINER_URL | sh -s -- --name=$ep_want --railway-project-name=$ep_want"
-    fi
-    RW_PROJECT="$ep_want"
-  fi
   rw_find_project
+  # The recorded project is decided by its id, never its name: one renamed in Railway's
+  # dashboard is still this install's.
   if [ -n "$RW_PROJECT_ID" ]; then
-    if printf '%s\n' "$RW_FOUND" | grep -qx "$RW_PROJECT_ID"; then
+    ep_live=$(printf '%s\n' "$RW_LIVE" | awk -F '\t' -v want="$RW_PROJECT_ID" '$1 == want { print "1\t" $2; exit }')
+    if [ -n "$ep_live" ]; then
+      ep_name=$(printf '%s\n' "$ep_live" | cut -f2)
+      if [ -n "${RW_PROJECT_RECORDED:-}" ] && [ "$ep_name" != "$RW_PROJECT" ]; then
+        rw_die_manages "${ep_name:-$RW_PROJECT_RECORDED}" "$RW_PROJECT" "which still exists"
+      fi
+      if [ -n "$ep_name" ] && [ "$ep_name" != "$RW_PROJECT" ]; then
+        info "The Railway project '$RW_PROJECT' is now named '$ep_name' (same project)."
+        RW_PROJECT="$ep_name"
+      fi
       ok "Railway project: $RW_PROJECT (already set up by this installer)."
       return 0
     fi
@@ -2314,7 +2398,9 @@ rw_ensure_vars() {
       # Always enforced: a Railway URL is public, the volume is the only disk.
       CAIRN_REQUIRE_AUTH | CAIRN_SINGLE_VOLUME | CAIRN_PLATFORM | PORT)
         [ "$(rw_var "$rv_key")" = "${rv_kv#*=}" ] || set -- "$@" "$rv_kv" ;;
-      *) [ -n "$(rw_var "$rv_key")" ] || set -- "$@" "$rv_kv" ;;
+      # The rest only fill a gap: a key that exists stays as it is, even empty or "off"
+      # (CAIRN_FEEDBACK_URL=off is how the feedback service is turned off).
+      *) rw_has_var "$rv_key" || set -- "$@" "$rv_kv" ;;
     esac
   done
   if [ $# -gt 0 ]; then
@@ -2367,6 +2453,11 @@ rw_ensure_autoupdates() {
     warn "Could not read the service's update settings from Railway; switch automatic updates on by hand (see the summary)."
     return 0
   fi
+  # "disabled" is read like "never set" until this installer has switched updates on once
+  # (RW_AU_SET): nothing here shows what Railway reports for a service whose auto updates
+  # were never touched (absent, null or "disabled"), so a "disabled" is only known to be
+  # the person's choice after our own setting was in place. The cost is one patch over a
+  # "disabled" set in the dashboard before the first install run.
   case "$RW_AU_TYPE" in
     disabled | "")
       if [ "$RW_AU_SET" = 1 ]; then
@@ -2837,9 +2928,9 @@ rw_tpl_print_commands() {
   fi
 }
 
-# Delete what this run created and has not handed over: the scratch project always, a
-# draft only while it is unchecked. Runs from the EXIT trap too, so it never dies.
-rw_tpl_cleanup() {
+# Delete what this run created in Railway and has not handed over: the scratch project
+# always, a draft only while it is unchecked. Never dies.
+rw_tpl_cleanup_railway() {
   if [ -n "${RW_TPL_UNVERIFIED:-}" ]; then
     rtc_id="$RW_TPL_UNVERIFIED"
     RW_TPL_UNVERIFIED=""
@@ -2859,6 +2950,12 @@ rw_tpl_cleanup() {
     fi
     rw unlink --yes >/dev/null 2>&1 || true
   fi
+}
+
+# rw_tpl_cleanup_railway, then the temporary directory (the CLI runs from there, so only at
+# the very end). Runs from the EXIT trap too, so it never dies.
+rw_tpl_cleanup() {
+  rw_tpl_cleanup_railway
   if [ -n "${RW_TPL_WORKDIR:-}" ]; then
     rm -rf "$RW_TPL_WORKDIR" 2>/dev/null || true
     RW_TPL_WORKDIR=""
@@ -2882,13 +2979,26 @@ rw_tpl_build() {
     rw_cap init --name "$RW_TPL_PROJECT" --json || true
   fi
   rtb_init_err="$RW_ERR"
+  # The id init answers with, unless it names a project that was already there: recorded at
+  # once, so the scratch project is deleted even when the list below fails.
+  rtb_init_id=$(printf '%s\n' "$RW_OUT" | json_flat | awk -F '\t' '$1 == 1 && $2 == "id" && $3 ~ /^[A-Za-z0-9-]+$/ { print $3; exit }')
+  if [ -n "$rtb_init_id" ] && ! printf '%s\n' "$rtb_before" | grep -Fqx -- "$rtb_init_id"; then
+    RW_SCRATCH_ID="$rtb_init_id"
+  fi
   # The project this run created is the one that was not there before: a project of the
   # same name that already existed is never touched, let alone deleted.
   rtb_new=""
   rtb_count=0
-  rw_tpl_named_projects
+  if ! rw_cap list --json; then
+    [ -z "$RW_ERR" ] || printf '%s\n' "$RW_ERR" | redact_stream >&2
+    [ -n "$RW_SCRATCH_ID" ] \
+      || warn "A scratch project named '$RW_TPL_PROJECT' may now exist in Railway. If it does, delete it in Railway, or with: railway delete --project <its id>"
+    die "Railway: could not list your projects (railway list ...)."
+  fi
+  RW_TPL_IDS=$(printf '%s\n' "$RW_OUT" | json_project_ids "$RW_TPL_PROJECT")
+  [ -z "$RW_SCRATCH_ID" ] || RW_TPL_IDS="$RW_SCRATCH_ID"
   for rtb_id in $RW_TPL_IDS; do
-    printf '%s\n' "$rtb_before" | grep -qx "$rtb_id" && continue
+    printf '%s\n' "$rtb_before" | grep -Fqx -- "$rtb_id" && continue
     rtb_new="$rtb_id"
     rtb_count=$((rtb_count + 1))
   done
@@ -2995,6 +3105,7 @@ rw_tpl_overview() {
     return 0
   fi
   has curl || die "curl is required to fetch the template overview ($RW_TPL_OVERVIEW_URL)."
+  [ -n "${RW_TPL_WORKDIR:-}" ] && [ -d "$RW_TPL_WORKDIR" ] || die "No temporary directory for the template overview."
   RW_TPL_OVERVIEW="$RW_TPL_WORKDIR/overview.md"
   info "Fetching the overview: $RW_TPL_OVERVIEW_URL"
   curl -fsSL --proto '=https' --tlsv1.2 "$RW_TPL_OVERVIEW_URL" -o "$RW_TPL_OVERVIEW" </dev/null \
@@ -3018,7 +3129,7 @@ rw_tpl_publish() {
   if [ -n "$RW_TPL_TODO" ] && [ "$OPT_FORCE" != 1 ]; then
     say ""
     say "Not publishing yet: finish the editor steps above, then publish the checked draft with:"
-    say "  sh $(rw_tpl_self) railway-template --publish --template=$RW_TPL_CODE"
+    say "  $(rw_tpl_self) railway-template --publish --template=$RW_TPL_CODE"
     say "(--force publishes without them.)"
     return 0
   fi
@@ -3045,8 +3156,12 @@ rw_tpl_publish() {
   say "  Point the project site's /railway redirect at that link to make it the README button."
 }
 
+# How to run this script again: "sh <path>" from a file, else (`curl | sh`) the one-liner.
 rw_tpl_self() {
-  case "$0" in */install.sh | install.sh | */cairn.sh | cairn.sh) printf '%s' "$0" ;; *) printf 'install.sh' ;; esac
+  case "$0" in
+    */install.sh | install.sh | */cairn.sh | cairn.sh) printf 'sh %s' "$(sh_quote "$0")" ;;
+    *) printf 'curl -fsSL %s | sh -s --' "$ONE_LINER_URL" ;;
+  esac
 }
 
 rw_tpl_main() {
@@ -3079,7 +3194,7 @@ rw_tpl_main() {
     rw_tpl_build
     rw_tpl_verify "$RW_TPL_ID"
     step "Cleaning up"
-    rw_tpl_cleanup
+    rw_tpl_cleanup_railway
   fi
   rw_tpl_report
   if [ "$OPT_PUBLISH" = 1 ]; then rw_tpl_publish; fi
@@ -3107,7 +3222,10 @@ cleanup() {
 }
 
 main() {
-  RERUN_ARGS="$*" # echoed back in the "re-run with --yes" hints
+  # Echoed back, quoted, in the "re-run with ..." hints.
+  RERUN_ARGS=$(rerun_quote "" "$@")
+  RERUN_ARGS_NOPROJECT=$(rerun_quote "--railway-project-name" "$@")
+  RERUN_ARGS_NONAME=$(rerun_quote "--railway-project-name --name" "$@")
   TMP_FILES=""
   LOCK_HELD=0
   setup_colors

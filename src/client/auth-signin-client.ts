@@ -7,8 +7,18 @@
 // Every way in ends the same: the server sets this device's HttpOnly session cookie
 // and the app reloads signed in. The access token is never stored on the device.
 //
-// Also here: the one dismissible offer to add a passkey after a sign-in this tab just
-// completed, shown once per device and never again after "Not now".
+// The one dismissible passkey offer after a sign-in lives in auth-offer-client.ts.
+
+declare const CairnSignInOffer: {
+  offerPasskeyWith(deps?: { doc?: Document; toast?: (message: string) => void }): Promise<void>;
+  offerHeldByWelcome(state: { bodyClasses: string[]; pathname: string }): boolean;
+};
+
+type FirstVisit = {
+  platform: "railway" | "installer" | "docker" | null;
+  hostSettingsUrl: string | null;
+  logCode: boolean;
+};
 
 type SignInDeps = {
   doc?: Document;
@@ -24,7 +34,6 @@ type SignInDeps = {
 
 {
   const OFFER_FLAG = "cairn.auth.offer";
-  const OFFER_DISMISSED = "cairn.auth.passkey-offer";
 
   function inStandaloneApp(): boolean {
     try {
@@ -37,10 +46,51 @@ type SignInDeps = {
     }
   }
 
-  function markOffer(): void {
+  // "first" marks a sign-in on a brand-new install: the passkey offer then says why
+  // (so the code is never needed again) and points at pairing the phone.
+  function markOffer(first = false): void {
     try {
-      sessionStorage.setItem(OFFER_FLAG, "1");
+      sessionStorage.setItem(OFFER_FLAG, first ? "first" : "1");
     } catch {}
+  }
+
+  // The server's /api/health `first_visit` object, read defensively. Only a Railway
+  // variables address is ever turned into a link.
+  function firstVisitFrom(health: Record<string, unknown> | null): FirstVisit | null {
+    const raw =
+      health && typeof health.first_visit === "object" ? (health.first_visit as Record<string, unknown> | null) : null;
+    if (!raw) return null;
+    const platform =
+      raw.platform === "railway" || raw.platform === "installer" || raw.platform === "docker" ? raw.platform : null;
+    const url = typeof raw.host_settings_url === "string" ? raw.host_settings_url : "";
+    const hostSettingsUrl =
+      platform === "railway" &&
+      /^https:\/\/railway\.com\/project\/[0-9a-f-]{36}\/service\/[0-9a-f-]{36}\/variables\?environmentId=[0-9a-f-]{36}$/i.test(
+        url
+      )
+        ? url
+        : null;
+    return { platform, hostSettingsUrl, logCode: raw.log_code === true };
+  }
+
+  function firstVisitHtml(fv: FirstVisit): string {
+    const where =
+      fv.platform === "railway"
+        ? `In Railway, open your project, then the <strong>cairn</strong> service, then <strong>Variables</strong>, and copy <code>CAIRN_AUTH_TOKEN</code>.`
+        : fv.platform === "installer"
+          ? `The installer printed it when it finished. It is also in the <code>.env</code> file next to your install (<code>cairn.sh status</code> shows where).`
+          : `It is <code>CAIRN_AUTH_TOKEN</code> in your server's settings.`;
+    const link = fv.hostSettingsUrl
+      ? `<p class="signin-first-link"><a class="token-sheet-btn signin-first-btn" href="${escAttr(fv.hostSettingsUrl)}" target="_blank" rel="noopener">Open your Railway variables &#8599;</a></p>`
+      : "";
+    const logs = fv.logCode
+      ? `<p class="token-sheet-hint">Or open the deploy logs: the first sign-in line has a one-time code you can type in the pairing code box below.</p>`
+      : "";
+    return `<section class="signin-first" aria-labelledby="signinFirstTitle">
+      <h3 class="signin-first-h" id="signinFirstTitle">First time here?</h3>
+      <p class="token-sheet-p" id="signinFirstNote">Your access token was created when Cairn was deployed. ${where}</p>
+      ${link}${logs}
+    </section>`;
   }
 
   function signInSheetHtml(opts: {
@@ -48,10 +98,15 @@ type SignInDeps = {
     standalone: boolean;
     pairFailed: boolean;
     retiredLink?: boolean;
+    firstVisit?: FirstVisit | null;
   }): string {
-    const lead = opts.standalone
-      ? `<p class="token-sheet-p signin-standalone">This Home Screen app needs its own sign-in — a passkey or a code from another device does it.</p>`
-      : `<p class="token-sheet-p">This Cairn is private. Sign this device in once and it stays signed in.</p>`;
+    const fv = opts.firstVisit || null;
+    const lead =
+      fv && !opts.standalone
+        ? ""
+        : opts.standalone
+          ? `<p class="token-sheet-p signin-standalone">This Home Screen app needs its own sign-in — a passkey or a code from another device does it.</p>`
+          : `<p class="token-sheet-p">This Cairn is private. Sign this device in once and it stays signed in.</p>`;
     const passkey = opts.passkeys
       ? `<button class="token-sheet-btn signin-passkey" type="button" data-signin-passkey>Sign in with passkey</button>`
       : "";
@@ -60,26 +115,43 @@ type SignInDeps = {
       : opts.retiredLink
         ? `<p class="signin-note" role="status">That sign-in link is retired — use a pairing code or your access token.</p>`
         : "";
+    // First visit: the visible label names the input (id + for) and the note above describes it.
+    const tokenInput = fv
+      ? `<input class="token-sheet-in" id="signinFirstToken" name="token" type="password" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" aria-describedby="signinFirstNote" placeholder="Access token">`
+      : `<input class="token-sheet-in" name="token" type="password" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" aria-label="Access token" placeholder="Access token">`;
+    const tokenForm = `<form class="signin-row" data-signin-token-form>
+        ${tokenInput}
+        <button class="token-sheet-btn" type="submit">Sign in</button>
+      </form>`;
+    const firstToken = fv
+      ? `<div class="signin-block signin-first-token"><label class="signin-lbl" for="signinFirstToken">Paste your access token</label>${tokenForm}</div>`
+      : "";
+    const recovery = fv
+      ? ""
+      : `<details class="signin-recovery">
+      <summary>Use your access token</summary>
+      <p class="token-sheet-hint">The token is CAIRN_AUTH_TOKEN in your host's settings (Railway → Variables, or the .env next to your install). It signs this device in; it isn't kept on the device.</p>
+      ${tokenForm}
+    </details>`;
     return `<h2 class="token-sheet-h" id="signinTitle">Sign in to Cairn</h2>
     ${lead}
+    ${fv ? firstVisitHtml(fv) : ""}
+    ${firstToken}
     ${passkey}
     ${pairNote}
     <form class="signin-block" data-signin-code-form>
       <label class="signin-lbl" for="signinCode">Enter a pairing code</label>
-      <p class="token-sheet-hint">On a device that&rsquo;s already signed in, open Settings → Devices → Pair a device.</p>
+      <p class="token-sheet-hint">${
+        fv
+          ? "A one-time code from the deploy logs, or from Settings → Devices → Pair a device on a signed-in device."
+          : "On a device that&rsquo;s already signed in, open Settings → Devices → Pair a device."
+      }</p>
       <div class="signin-row">
         <input class="token-sheet-in signin-code" id="signinCode" name="code" type="text" inputmode="text" autocomplete="one-time-code" autocapitalize="characters" autocorrect="off" spellcheck="false" maxlength="12" placeholder="XXXX-XXXX">
         <button class="token-sheet-btn" type="submit">Sign in</button>
       </div>
     </form>
-    <details class="signin-recovery">
-      <summary>Use your access token</summary>
-      <p class="token-sheet-hint">The token is CAIRN_AUTH_TOKEN in your host's settings (Railway → Variables, or the .env next to your install). It signs this device in; it isn't kept on the device.</p>
-      <form class="signin-row" data-signin-token-form>
-        <input class="token-sheet-in" name="token" type="password" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" aria-label="Access token" placeholder="Access token">
-        <button class="token-sheet-btn" type="submit">Sign in</button>
-      </form>
-    </details>
+    ${recovery}
     <div class="token-sheet-err" role="alert" aria-live="assertive" hidden></div>`;
   }
 
@@ -149,18 +221,20 @@ type SignInDeps = {
     const retiredLink =
       deps.retiredLink ?? !!(globalThis as { __cairnRetiredPairLink?: unknown }).__cairnRetiredPairLink;
     if (doc.querySelector(".token-sheet-ov")) return;
+    const firstVisit = firstVisitFrom(health);
     // The app is unusable signed out, so the sheet is not dismissible.
     const sheet = CairnUiSheet.open({
       overlayClass: "token-sheet-ov",
       sheetClass: "token-sheet signin-sheet",
       labelledBy: "signinTitle",
       dismissible: false,
-      initialFocus: ".signin-passkey, .signin-code",
+      initialFocus: firstVisit ? "input[name=token]" : ".signin-passkey, .signin-code",
       html: signInSheetHtml({
         passkeys: supported && methods?.passkeys === true,
         standalone: deps.standalone ?? inStandaloneApp(),
         pairFailed,
         retiredLink,
+        firstVisit,
       }),
     });
     const root = sheet.sheet;
@@ -197,7 +271,7 @@ type SignInDeps = {
       const status = await postSignIn("/auth/pair", { code });
       busy(false);
       if (status === 200) {
-        markOffer();
+        markOffer(!!firstVisit);
         return signedIn(reload, deps);
       }
       say(
@@ -225,7 +299,7 @@ type SignInDeps = {
       busy(false);
       if (input) input.value = "";
       if (status === 200) {
-        markOffer();
+        markOffer(!!firstVisit);
         return signedIn(reload, deps);
       }
       say(
@@ -239,87 +313,16 @@ type SignInDeps = {
     });
   }
 
-  // ---------- the one passkey offer ----------
-
-  function offerDismissed(): boolean {
-    try {
-      return localStorage.getItem(OFFER_DISMISSED) === "dismissed";
-    } catch {
-      return true; // no storage: we could never remember a "Not now", so never ask
-    }
-  }
-
-  async function offerPasskey(deps: { doc?: Document; toast?: (message: string) => void } = {}): Promise<void> {
-    const doc = deps.doc || (typeof document !== "undefined" ? document : null);
-    if (!doc || typeof CairnUiSheet === "undefined") return;
-    // Never stacked on another sheet (first-time setup, say): the flag waits for the
-    // next open of this tab instead.
-    if (CairnUiSheet.top()) return;
-    try {
-      sessionStorage.removeItem(OFFER_FLAG);
-    } catch {}
-    if (!CairnPasskeys.passkeysSupported() || offerDismissed()) return;
-    let device: { has_passkey?: boolean } | null = null;
-    try {
-      const status = await api("/auth/status");
-      device = status && typeof status === "object" && status.device ? status.device : null;
-    } catch {
-      return;
-    }
-    if (!device || device.has_passkey) return;
-    if (doc.querySelector(".passkey-offer-ov")) return;
-    const say = deps.toast || ((message: string) => (typeof toast === "function" ? toast(message) : undefined));
-    const rememberDismissed = (): void => {
-      try {
-        localStorage.setItem(OFFER_DISMISSED, "dismissed");
-      } catch {}
-    };
-    const sheet = CairnUiSheet.open({
-      overlayClass: "token-sheet-ov passkey-offer-ov",
-      sheetClass: "token-sheet",
-      labelledBy: "passkeyOfferTitle",
-      html: `<h2 class="token-sheet-h" id="passkeyOfferTitle">Add a passkey?</h2>
-      <p class="token-sheet-p">Add a passkey so this device signs back in with Face ID / fingerprint.</p>
-      <div class="token-sheet-err" role="alert" hidden></div>
-      <div class="token-sheet-ft signin-offer-ft">
-        <button class="linkbtn-quiet" type="button" data-offer-later>Not now</button>
-        <button class="token-sheet-btn" type="button" data-offer-add>Add a passkey</button>
-      </div>`,
-      onClose: (reason) => {
-        if (reason !== "api") rememberDismissed();
-      },
-    });
-    sheet.sheet.querySelector("[data-offer-later]")?.addEventListener("click", () => {
-      rememberDismissed();
-      sheet.close({ reason: "button" });
-    });
-    sheet.sheet.querySelector("[data-offer-add]")?.addEventListener("click", async (event) => {
-      const button = event.currentTarget as HTMLButtonElement;
-      button.disabled = true;
-      const result = await CairnPasskeys.addPasskey();
-      button.disabled = false;
-      if (result.ok) {
-        rememberDismissed();
-        sheet.close();
-        say("Passkey added. This device can sign back in with it.");
-        return;
-      }
-      if (result.reason === "failed") {
-        const err = sheet.sheet.querySelector<HTMLElement>(".token-sheet-err");
-        if (err) {
-          err.textContent = "Couldn't add the passkey. You can add one later from Settings → Devices.";
-          err.hidden = false;
-        }
-      }
-    });
-  }
-
   const CAIRN_SIGN_IN = {
     open: () => void openSignIn(),
     openSignIn,
-    offerPasskey: () => void offerPasskey(),
-    offerPasskeyWith: offerPasskey,
+    offerPasskey: () => void CairnSignInOffer.offerPasskeyWith(),
+    offerPasskeyWith: (deps?: { doc?: Document; toast?: (message: string) => void }) =>
+      CairnSignInOffer.offerPasskeyWith(deps),
     signInSheetHtml,
+    firstVisitFrom,
+    offerHeldByWelcome: (state: { bodyClasses: string[]; pathname: string }) =>
+      CairnSignInOffer.offerHeldByWelcome(state),
   };
   Object.assign(globalThis, { CairnSignIn: CAIRN_SIGN_IN });
 }

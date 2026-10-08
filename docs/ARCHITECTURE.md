@@ -6012,6 +6012,7 @@ guard is a no-op, exactly as before.
   `auth_master_used_at`, stamped once by the guard), it replaces the previous boot's unused
   `first_sign_in` code with a fresh one-hour code and returns the one log line allowed to carry a
   code. Log drains see that line; `CAIRN_FIRST_SIGNIN_LOG=0` mints and prints nothing.
+  `/api/health` carries `first_visit` (platform, a Railway variables deep link built from the project/service/environment UUIDs, `log_code`) ONLY while `neverSignedIn()` holds; the IDs are addresses, not credentials, and `/auth/pair` answers `first: true` for a spent `first_sign_in` code so the passkey offer can say why.
 - **Token rotation evicts everyone.** `applyAccessTokenEpoch()` (boot, `accessTokenEpochAtBoot`)
   keeps a salted SHA-256 fingerprint of `CAIRN_AUTH_TOKEN` in `app_state`
   (`auth_token_fingerprint`); a boot with a different token revokes every device, deletes every

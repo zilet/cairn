@@ -18,7 +18,7 @@ const MONDAY = "2026-04-20";
 const THURSDAY = "2026-04-23";
 const RACE = "2026-05-17";
 
-// Milos's own run week: Sunday long, Tuesday easy, Thursday quality, Saturday MTB.
+// The owner's run week: Sunday long, Tuesday easy, Thursday quality, Saturday MTB.
 const DAYS = [
   { dow: 0, kind: "long" },
   { dow: 2, kind: "easy" },
@@ -66,7 +66,7 @@ function seedRunner({ qualityKm = null, longKm = 13.5, easyKm = 9 } = {}) {
   }
 }
 
-function milos(quality = THRESHOLD_5K) {
+function ownerWeek(quality = THRESHOLD_5K) {
   repo.setProfile({
     age: 40,
     sex: "male",
@@ -120,7 +120,7 @@ test("normalization keeps a stated session, reads close words, clamps km and dro
 });
 
 test("a run-day-only update keeps the stated session; quality: null clears it; a quality-only update keeps the week", () => {
-  milos();
+  ownerWeek();
   assert.deepEqual(repo.getEnduranceSchedule().quality, THRESHOLD_5K);
 
   // Restating the run week (no quality key) keeps it — the same law as cross_training.
@@ -190,7 +190,7 @@ test("set_endurance_schedule and get_endurance_schedule carry the session; days 
 });
 
 test("chat can state the session alone, beside the days, or clear it", () => {
-  milos(null);
+  ownerWeek(null);
   assert.equal(repo.getEnduranceSchedule().quality, undefined);
 
   const action = normalizeChatAction({ type: "set_endurance_schedule", quality: { type: "threshold", work_km: 5 } });
@@ -227,7 +227,7 @@ test("chat can state the session alone, beside the days, or clear it", () => {
 // ---------------------------------------------------------------------------
 
 test("the stated threshold 5 km replaces the phase rotation: warm-up + 5 km + cool-down, the total as the distance", () => {
-  milos();
+  ownerWeek();
   seedRunner({ qualityKm: 9 });
   const plan = weeklyRunPlan(MONDAY, { adjustToday: false });
   const q = qualityRun(plan);
@@ -258,7 +258,7 @@ test("the stated threshold 5 km replaces the phase rotation: warm-up + 5 km + co
 });
 
 test("stated warm-up and cool-down are used as said", () => {
-  milos({ type: "threshold", work_km: 5, warm_up_km: 3, cool_down_km: 1 });
+  ownerWeek({ type: "threshold", work_km: 5, warm_up_km: 3, cool_down_km: 1 });
   seedRunner({ qualityKm: 9 });
   const sq = qualityRun(weeklyRunPlan(MONDAY, { adjustToday: false })).stated_quality;
   assert.equal(sq.warm_up_km, 3);
@@ -268,7 +268,7 @@ test("stated warm-up and cool-down are used as said", () => {
 });
 
 test("no hard session on record: the stated work opens below it and the plan says so", () => {
-  milos();
+  ownerWeek();
   seedRunner(); // no quality-graded runs at all
   const plan = weeklyRunPlan(MONDAY, { adjustToday: false });
   const sq = qualityRun(plan).stated_quality;
@@ -283,7 +283,7 @@ test("no hard session on record: the stated work opens below it and the plan say
 test("past one step beyond the longest hard session on record, the work is held and the reason named", () => {
   // 10 km of stated work is more than one step past the 7 km hard runs on record
   // (stated work within a step of them runs whole on its own authority — below).
-  milos({ type: "threshold", work_km: 10 });
+  ownerWeek({ type: "threshold", work_km: 10 });
   seedRunner({ qualityKm: 7 });
   const plan = weeklyRunPlan(MONDAY, { adjustToday: false });
   const sq = qualityRun(plan).stated_quality;
@@ -295,7 +295,7 @@ test("past one step beyond the longest hard session on record, the work is held 
 });
 
 test("a week too small for the whole session holds the work so it fits inside the week, and says so", () => {
-  milos();
+  ownerWeek();
   seedRunner({ qualityKm: 9, longKm: 4, easyKm: 4 });
   const plan = weeklyRunPlan(MONDAY, { adjustToday: false });
   const q = qualityRun(plan);
@@ -312,7 +312,7 @@ test("a week too small for the whole session holds the work so it fits inside th
 });
 
 test("past 6 km of threshold work the session becomes cruise intervals", () => {
-  milos({ type: "threshold", work_km: 8, warm_up_km: 1, cool_down_km: 1 });
+  ownerWeek({ type: "threshold", work_km: 8, warm_up_km: 1, cool_down_km: 1 });
   seedRunner({ qualityKm: 12 });
   const q = qualityRun(weeklyRunPlan(MONDAY, { adjustToday: false }));
   const sq = q.stated_quality;
@@ -331,7 +331,7 @@ const SPIKE = {
 };
 
 test("a trimmed week keeps the stated TYPE as the short set — never the rotation — and says so", () => {
-  milos();
+  ownerWeek();
   seedRunner(); // nothing hard on record and no stance: the spike's short set stands
   const plan = weeklyRunPlan(MONDAY, SPIKE);
   const q = qualityRun(plan);
@@ -346,7 +346,7 @@ test("a trimmed week keeps the stated TYPE as the short set — never the rotati
 });
 
 test("a recovery week still drops quality, stated session or not", () => {
-  milos();
+  ownerWeek();
   seedRunner({ qualityKm: 9 });
   const plan = weeklyRunPlan(MONDAY, {
     programState: {
@@ -362,14 +362,14 @@ test("a recovery week still drops quality, stated session or not", () => {
 });
 
 test("race week keeps the engine's own touch; the stated session is training", () => {
-  milos();
+  ownerWeek();
   seedRunner({ qualityKm: 9 });
   const plan = weeklyRunPlan("2026-05-11", { adjustToday: false });
   assert.ok(!plan.runs.some((r) => r.stated_quality), "no stated session in race week");
 });
 
 test("without a stated session the engine keeps its rotation", () => {
-  milos(null);
+  ownerWeek(null);
   seedRunner({ qualityKm: 9 });
   const q = qualityRun(weeklyRunPlan(MONDAY, { adjustToday: false }));
   assert.ok(q);
@@ -378,7 +378,7 @@ test("without a stated session the engine keeps its rotation", () => {
 
 test("the rolling agenda and the day detail carry the same session, its parts in km", (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-04-21T12:00:00") });
-  milos();
+  ownerWeek();
   seedRunner({ qualityKm: 9 });
   const agenda = flexibleTrainingAgenda("2026-04-21");
   const intent = agenda.intents.find((i) => i.kind === "quality");
@@ -414,7 +414,7 @@ test("the rolling agenda and the day detail carry the same session, its parts in
 
 test("the day detail carries the hold-below sentence when the week holds the work", (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-04-21T12:00:00") });
-  milos();
+  ownerWeek();
   seedRunner(); // nothing hard on record
   const read = dayDetail(THURSDAY);
   assert.ok(read?.run?.stated);
@@ -476,7 +476,7 @@ test("VO2's three-rep minimum is part of the floor, so rounding never adds work 
 });
 
 test("when even the floor is past the hard running on record, the engine's own quality session runs and says so", () => {
-  milos();
+  ownerWeek();
   // Quality-graded runs of 3 km: one step past them (3.45 km) cannot hold even the
   // stated floor of 2 km work with 1 km easy either side.
   seedRunner({ qualityKm: 3 });
@@ -527,7 +527,7 @@ test("MCP set_endurance_schedule: cross_training or a note without days never cl
 });
 
 test("chat and REST already keep the schedule when no days are said", () => {
-  milos();
+  ownerWeek();
   const { applied } = applyChatActions(
     { actions: [{ type: "set_endurance_schedule", note: "just a note" }] },
     { agent: "stub", message: "just a note", recentAthleteMessages: [], priorAssistant: { message: "" } }
@@ -577,7 +577,7 @@ function assertFull(q, why) {
 }
 
 test("the live-shaped week with the push stance open runs the stated 5 km whole", () => {
-  milos();
+  ownerWeek();
   seedRunner();
   openStance();
   const plan = weeklyRunPlan(MONDAY, LIVE);
@@ -590,7 +590,7 @@ test("the live-shaped week with the push stance open runs the stated 5 km whole"
 });
 
 test("no stance, but a hard run on record within a step of the stated work: the 5 km runs whole", () => {
-  milos();
+  ownerWeek();
   // Mid-week runs the watch graded threshold: 5 km of them.
   seedRunner({ qualityKm: 5 });
   const plan = weeklyRunPlan(MONDAY, {
@@ -601,7 +601,7 @@ test("no stance, but a hard run on record within a step of the stated work: the 
 });
 
 test("no stance and nothing hard on record: the live week holds a lower dose and says why", () => {
-  milos();
+  ownerWeek();
   seedRunner();
   const plan = weeklyRunPlan(MONDAY, LIVE);
   const q = qualityRun(plan);
@@ -622,7 +622,7 @@ const TUESDAY = "2026-04-21";
 const WEDNESDAY = "2026-04-22";
 
 test("the stance is open but the day before the quality day carried harm: the evidence holds stand", () => {
-  milos();
+  ownerWeek();
   seedRunner();
   openStance();
   harmOn(WEDNESDAY);
@@ -639,7 +639,7 @@ test("the stance is open but the day before the quality day carried harm: the ev
 // it from Wednesday, with nothing new logged — the week's prescription changed with the
 // morning it was read on.
 test("a harm day outside Thursday's own window gives every morning of the week the same Thursday", () => {
-  milos();
+  ownerWeek();
   seedRunner();
   openStance();
   harmOn(before(2)); // the Saturday before the week
@@ -686,7 +686,7 @@ test("the same Saturday harm still holds a quality day whose own window holds it
 });
 
 test("the taper keeps its smaller dose even with the stance open, and says so", () => {
-  milos();
+  ownerWeek();
   seedRunner({ qualityKm: 9 });
   openStance(before(10), RACE);
   const q = qualityRun(weeklyRunPlan("2026-05-04", { adjustToday: false }));
@@ -698,7 +698,7 @@ test("the taper keeps its smaller dose even with the stance open, and says so", 
 });
 
 test("a recovery week keeps every run easy even with the stance open", () => {
-  milos();
+  ownerWeek();
   seedRunner({ qualityKm: 9 });
   openStance();
   const plan = weeklyRunPlan(MONDAY, {
@@ -741,7 +741,7 @@ for (const [label, seed] of [
 ]) {
   test(`the Thursday threshold day (${label}) says every distance in the athlete's units`, (t) => {
     t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-04-21T12:00:00") });
-    milos();
+    ownerWeek();
     seed();
     const metric = dayDetail(THURSDAY);
     assert.ok(metric?.run?.stated, "Thursday is the stated session");

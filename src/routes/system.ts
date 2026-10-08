@@ -8,7 +8,8 @@ import { getVersion } from "../version.js";
 import { db } from "../db.js";
 import { getBuildInfo } from "../build-info.js";
 import { currentShellVersion } from "../swVersion.js";
-import { passkeyCount } from "../repo/auth-devices.js";
+import { passkeyCount, firstVisitHelp, neverSignedIn } from "../repo/auth-devices.js";
+import { detectPlatform } from "../hosting.js";
 
 export const systemRouter = Router();
 
@@ -23,10 +24,19 @@ export function healthBody() {
   } catch {
     passkeys = false; // a liveness probe never fails on an auth-table read
   }
+  // Present ONLY while nobody has ever signed in (the boot's first-sign-in condition):
+  // where to find the access token. No secret, no code.
+  let firstVisit: ReturnType<typeof firstVisitHelp> = null;
+  try {
+    firstVisit = neverSignedIn() ? firstVisitHelp({ authEnabled, platform: detectPlatform() }) : null;
+  } catch {
+    firstVisit = null;
+  }
   return {
     ok: true,
     auth_required: authEnabled,
     auth_methods: { passkeys },
+    ...(firstVisit ? { first_visit: firstVisit } : {}),
     version: getVersion(),
     build: getBuildInfo(),
     shell: currentShellVersion(),

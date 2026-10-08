@@ -245,6 +245,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/settings-pairing-client.ts", output: "public/js/settings-pairing-client.js" },
   { source: "src/client/settings-mcp-client.ts", output: "public/js/settings-mcp-client.js" },
   { source: "src/client/auth-passkey-client.ts", output: "public/js/auth-passkey-client.js" },
+  { source: "src/client/auth-offer-client.ts", output: "public/js/auth-offer-client.js" },
   { source: "src/client/auth-signin-client.ts", output: "public/js/auth-signin-client.js" },
   { source: "src/client/settings-feedback-client.ts", output: "public/js/settings-feedback-client.js" },
   { source: "src/client/settings-data-controller.ts", output: "public/js/settings-data-controller.js" },
@@ -1048,7 +1049,11 @@ export const BUNDLES = [
     lazy: "auth",
     views: [],
     routeless: true,
-    inputs: ["public/js/auth-passkey-client.js", "public/js/auth-signin-client.js"],
+    inputs: [
+      "public/js/auth-passkey-client.js",
+      "public/js/auth-offer-client.js",
+      "public/js/auth-signin-client.js",
+    ],
   },
 ];
 

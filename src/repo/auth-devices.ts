@@ -390,16 +390,22 @@ export function outstandingPairingCodeCount(now = Date.now()): number {
 
 /** Consume a code: true exactly once per live code. Atomic (one UPDATE). */
 export function consumePairingCode(value: unknown, now = Date.now()): boolean {
+  return consumePairingCodePurpose(value, now) != null;
+}
+
+/** Spends a live code and says what it was for (`first_sign_in` or `pair`); null when it was not live. */
+export function consumePairingCodePurpose(value: unknown, now = Date.now()): "pair" | "first_sign_in" | null {
   const code = normalizePairingCode(value);
-  if (!code) return false;
+  if (!code) return null;
   const stamp = iso(now);
-  const res = db
+  const row = db
     .prepare(
       `UPDATE auth_pairing_codes SET used_at = ?
-        WHERE code_hash = ? AND used_at IS NULL AND expires_at > ?`
+        WHERE code_hash = ? AND used_at IS NULL AND expires_at > ? RETURNING purpose`
     )
-    .run(stamp, sha256Hex(code), stamp);
-  return Number(res.changes) === 1;
+    .get(stamp, sha256Hex(code), stamp) as { purpose?: string } | undefined;
+  if (!row) return null;
+  return row.purpose === "first_sign_in" ? "first_sign_in" : "pair";
 }
 
 // ---------- the first device, with no terminal ----------
@@ -437,6 +443,52 @@ function installAlreadySetUp(): boolean {
   }
 }
 
+/** The one "nobody has ever signed in" condition: the boot's first-sign-in line and the sign-in screen's first-visit help both ask it. */
+export function neverSignedIn(): boolean {
+  return activeDeviceCount() === 0 && passkeyCount() === 0 && !masterTokenEverUsed() && !installAlreadySetUp();
+}
+
+const RAILWAY_ID = /^[0-9a-f-]{36}$/i;
+
+/**
+ * What the unauthenticated sign-in screen may be told while the instance has never been
+ * signed in: which host this is, where a Railway owner finds the access token, and whether
+ * a live first-sign-in code sits in the deploy logs. Never the token, never the code.
+ * Null once anyone has signed in (or auth is off).
+ */
+export function firstVisitHelp(opts: {
+  authEnabled: boolean;
+  platform: "railway" | "installer" | "docker" | "source";
+  env?: NodeJS.ProcessEnv;
+  now?: number;
+}): {
+  platform: "railway" | "installer" | "docker" | null;
+  host_settings_url: string | null;
+  log_code: boolean;
+} | null {
+  if (!opts.authEnabled || !neverSignedIn()) return null;
+  const env = opts.env ?? process.env;
+  let hostSettingsUrl: string | null = null;
+  if (opts.platform === "railway") {
+    const [p, s, e] = [env.RAILWAY_PROJECT_ID, env.RAILWAY_SERVICE_ID, env.RAILWAY_ENVIRONMENT_ID].map((v) =>
+      String(v || "").trim()
+    );
+    if (RAILWAY_ID.test(p) && RAILWAY_ID.test(s) && RAILWAY_ID.test(e)) {
+      hostSettingsUrl = `https://railway.com/project/${p}/service/${s}/variables?environmentId=${e}`;
+    }
+  }
+  const live = db
+    .prepare(
+      `SELECT 1 AS n FROM auth_pairing_codes WHERE purpose = 'first_sign_in' AND used_at IS NULL AND expires_at > ? LIMIT 1`
+    )
+    .get(new Date(opts.now ?? Date.now()).toISOString());
+  return {
+    platform: opts.platform === "source" ? null : opts.platform,
+    host_settings_url: hostSettingsUrl,
+    log_code: !!live,
+  };
+}
+
 /**
  * When the server requires a token but nobody has signed in yet — no live device, no
  * passkey, the master token never used successfully, and the install never set up (a
@@ -453,7 +505,7 @@ export function firstSignInNotice(
   if (!opts.authEnabled) return null;
   const env = opts.env ?? process.env;
   if (/^(0|false|no|off)$/i.test(String(env.CAIRN_FIRST_SIGNIN_LOG || "").trim())) return null;
-  if (activeDeviceCount() > 0 || passkeyCount() > 0 || masterTokenEverUsed() || installAlreadySetUp()) return null;
+  if (!neverSignedIn()) return null;
   db.prepare(`DELETE FROM auth_pairing_codes WHERE purpose = 'first_sign_in' AND used_at IS NULL`).run();
   const { code } = createPairingCode({ purpose: "first_sign_in", ttlMs: FIRST_SIGN_IN_CODE_TTL_MS, now: opts.now });
   const domain = String(env.RAILWAY_PUBLIC_DOMAIN || "")

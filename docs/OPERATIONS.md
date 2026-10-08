@@ -196,6 +196,11 @@ install has already been set up (an upgrade from a build before device sign-in),
 viewer, a log drain, a log shipper — so it is a live credential for its hour; set
 `CAIRN_FIRST_SIGNIN_LOG=0` to never mint or print it (then sign in with the access token).
 
+The sign-in screen also says where the token lives. Until anyone has signed in, the public
+`/api/health` carries a small `first_visit` object (the platform, a Railway link to the service's
+Variables tab, whether the log line above is on) and the screen shows a "First time here?" note from
+it. It never carries a token or a code.
+
 **Retired:** the older `/?pair=<token>` link (it put the master token in a URL). It no longer signs
 anything in: the shell strips it from the address bar at once, never sends or stores it, and the
 sign-in screen says "That sign-in link is retired — use a pairing code or your access token." If an
@@ -374,6 +379,19 @@ docker compose up -d
 
 Migrations are **forward-only**. If a schema change must be undone, restore a pre-upgrade
 backup (see Backups below) rather than trying to reverse the migration.
+
+---
+
+## Upgrading from 2.0.x to 2.1.x
+
+An in-place upgrade of the same image and volumes. Take a backup first, because migrations are
+forward-only (see Backups below), then pull the new image and restart. The migrations (120–127) run
+on boot. Two behaviours change:
+
+- **Models are now the CLI's own default.** If you relied on Cairn picking sonnet, opus or fable,
+  choose Everyday and Deep work models in **Settings → Agents** to keep them.
+- **Feedback now defaults to `https://feedback.cairn.fit`** (only when you press Send). Set
+  `CAIRN_FEEDBACK_URL=off` to turn the feedback service off; feedback then opens a GitHub issue.
 
 ---
 

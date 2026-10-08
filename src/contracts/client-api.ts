@@ -94,6 +94,14 @@ export interface ClientBuildInfo {
 export interface ClientHealthResponse {
   ok: true;
   auth_required: boolean;
+  auth_methods?: { passkeys: boolean };
+  /** Only while nobody has ever signed in: where to find the access token (no secret, no code). */
+  first_visit?: {
+    platform: "railway" | "installer" | "docker" | null;
+    host_settings_url: string | null;
+    log_code: boolean;
+  };
+  shell?: string;
   version: string;
   build: ClientBuildInfo;
 }

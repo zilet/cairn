@@ -29,7 +29,7 @@
   // until the boot decision lands, so a first open never flashes Today before the
   // welcome covers it. A fail-safe lifts it whatever happens.
   if (typeof document !== "undefined" && document.body && !knownOnboarded()) {
-    document.body.classList.add("welcome-pending");
+    document.body.classList.add("welcome-pending", "welcome-undecided");
     setTimeout(() => document.body.classList.remove("welcome-pending"), 4000);
   }
 
@@ -41,7 +41,17 @@
     return { stage, agent: id || null };
   }
 
+  // The 4s fail-safe above lifts the shell, not the decision: late overlays (the
+  // passkey offer) wait for `welcome-undecided` to go, whichever way the boot resolved.
   async function maybeOnboard(): Promise<void> {
+    try {
+      await decideOnboarding();
+    } finally {
+      document.body?.classList.remove("welcome-undecided");
+    }
+  }
+
+  async function decideOnboarding(): Promise<void> {
     let data: unknown = null;
     try {
       data = await api("/settings");

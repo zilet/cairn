@@ -44,7 +44,9 @@ What it does, in order:
 5. Deletes the scratch project, also when a step fails or you press Ctrl-C. A project that already
    had the same name is never touched.
 6. Prints the template code, its editor link, the deploy link
-   (`https://railway.com/deploy/<code>`) and what is left for the editor.
+   (`https://railway.com/deploy/<code>`) and what is left for the editor. The draft's link is a
+   draft's: Railway can give the published template a shorter code, so `--publish` prints the
+   final link.
 
 ### What Railway's generate does and does not carry
 
@@ -114,8 +116,8 @@ tools all live under `/data`.
 
 1. Deploy the draft or the published template (`railway init` in an empty folder, then
    `railway deploy -t <code>`, or the deploy link). The health check should turn green.
-2. Open the URL. Cairn should ask for a token, and the `CAIRN_AUTH_TOKEN` value from Variables
-   should sign you in.
+2. Open the URL. Cairn should open the sign-in screen with a "First time here?" note linking to the
+   service's Variables tab, and the `CAIRN_AUTH_TOKEN` value from Variables should sign you in.
 3. In **Settings → Agents**, install a provider and **Connect** it.
 4. Redeploy the service. The provider should still show **Connected**: its sign-in lives in
    `/data/home` on the volume.

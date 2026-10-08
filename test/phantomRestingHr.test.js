@@ -130,7 +130,7 @@ const RACE = "2026-05-17";
 const before = (n) => addDays(MONDAY, -n);
 const THRESHOLD_5K = { type: "threshold", work_km: 5 };
 
-function milos() {
+function ownerWeek() {
   repo.setProfile({
     age: 40,
     sex: "male",
@@ -205,7 +205,7 @@ function liveNights({ floors = true } = {}) {
 const qualityRun = (plan) => plan.runs.find((r) => r.kind_label === "quality");
 
 test("(d) the live week: phantom resting HR on an unworn Tuesday leaves Thursday's stated 5 km whole", () => {
-  milos();
+  ownerWeek();
   seedRunner();
   openStance();
   liveNights();
@@ -226,7 +226,7 @@ test("(d) the live week: phantom resting HR on an unworn Tuesday leaves Thursday
 test("(d') the same week with no same-row floors: the Tuesday reading stands and holds Thursday", () => {
   // The counterfactual that shows the floor test is what decides it: absent min_hr the
   // reading cannot be contradicted, so it brakes, as it did before the fix.
-  milos();
+  ownerWeek();
   seedRunner();
   openStance();
   liveNights({ floors: false });

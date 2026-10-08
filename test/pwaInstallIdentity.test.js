@@ -133,8 +133,8 @@ test("the bump refuses to start from places that already disagree", () => {
 // an entry here (and says which module owns it).
 const PERSISTED_KEYS = {
   cairn_token: ["api-auth", "auth-signin-client", "client-diagnostics"],
-  // The one "add a passkey" offer's "Not now", remembered per device (auth-signin-client.ts).
-  "cairn.auth.passkey-offer": ["auth-signin-client"],
+  // The one "add a passkey" offer's "Not now", remembered per device (auth-offer-client.ts).
+  "cairn.auth.passkey-offer": ["auth-offer-client"],
   // This browser's non-secret device hint: every sign-in sends it so the server reuses
   // this browser's own device row (index.html's boot script mints the same key).
   "cairn.device-hint": ["auth-passkey-client"],
