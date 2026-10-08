@@ -166,7 +166,12 @@ type TodaySlotHoldApi = {
   function settle(slot: Element | null | undefined, keep: boolean): void {
     if (!slot || !slot.hasAttribute("data-held")) return;
     observers.get(slot)?.disconnect();
-    if (!keep) slot.innerHTML = "";
+    if (!keep) {
+      slot.innerHTML = "";
+      // Emptied for good: a reserved-height slot (the week strip's) must not claim its
+      // space again for a paint that is not coming; a real write clears this.
+      slot.setAttribute("data-none", "");
+    }
     release(slot);
   }
   // The read failed: a control-free card stays up, live; one with controls clears.

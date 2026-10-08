@@ -225,7 +225,10 @@
       .load(WEEK[0], { key: WEEK[1] })
       .then((value) => paint(value))
       .catch(() => {
-        if (live && !host.firstElementChild) host.setAttribute("data-none", "");
+        // A failed read never paints: release the reserved space even while a held copy
+        // still sits in the slot (the hold's expiry empties it later, and an empty slot
+        // without data-none would show the reservation again).
+        if (live) host.setAttribute("data-none", "");
       });
     return teardown;
   }

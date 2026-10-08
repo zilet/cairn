@@ -42,9 +42,15 @@
         openHorizon: go("horizon", () => (rail.state.horizonSeg = null)),
       });
     }
-    void withBundle("today-ahead", () => {
+    // The strip slot reserves its height only while a paint is pending: any way the
+    // bundle's mount can end without painting releases it.
+    const releaseStrip = (): void => view.querySelector("#todayStripSlot")?.setAttribute("data-none", "");
+    const mounted = withBundle("today-ahead", () => {
       const main = view.querySelector(".today-main");
-      if (!opts.isCurrent() || !main) return;
+      if (!opts.isCurrent() || !main) {
+        releaseStrip();
+        return;
+      }
       CairnTodayAhead.mount(main, {
         date: opts.date,
         read: (opts.read && typeof opts.read === "object" ? opts.read : null) as never,
@@ -61,6 +67,7 @@
         invalidate: (key) => rail.invalidate(key),
       });
     });
+    Promise.resolve(mounted).catch(releaseStrip);
   }
 
   const CAIRN_TODAY_AHEAD_MOUNT = { mount: mountTodayAhead };
