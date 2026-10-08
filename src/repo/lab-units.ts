@@ -18,13 +18,29 @@ export interface NormalizedMarkerReading {
   expected_unit?: string | null;
 }
 
-export function parseLabNumber(input: unknown): number | null {
+/** True when a unit is one of the SI units the table prints (mmol/L, µmol/L, g/L, nmol/L, …). */
+function isSiLabUnit(unit: unknown): boolean {
+  const u = normUnit(unit);
+  if (!u) return false;
+  return Object.values(LAB_UNIT_TABLE).some((spec) => !!spec.si && normUnit(spec.si.unit) === u);
+}
+
+/**
+ * A lab number from the text a lab printed. `unit` is the reading's reported unit when
+ * known: a single comma in an SI reading ("5,2 mmol/L", "1,234 µmol/L") is a decimal
+ * comma. Without that hint a comma followed by exactly three digits is ambiguous and reads
+ * as a thousands separator ("1,234"), except after a leading zero, where a thousands
+ * group is impossible ("0,350" is 0.350).
+ */
+export function parseLabNumber(input: unknown, unit?: unknown): number | null {
   if (typeof input === "number") return Number.isFinite(input) ? input : null;
   if (input === null || input === undefined) return null;
   let s = String(input).trim();
   if (!s) return null;
   // Accept common lab formatting: "<1.0", "3,2 mmol/L", "1,234.5".
   s = s.replace(/^[<>≤≥=~]\s*/, "").trim();
+  const leadingZero = s.match(/^([+-]?)0,(\d+)(?![\d,.])/);
+  if (leadingZero) return Number(`${leadingZero[1]}0.${leadingZero[2]}`);
   const m = s.match(/[+-]?(?:\d{1,3}(?:[,\s]\d{3})+|\d+)(?:[.,]\d+)?|[+-]?[.,]\d+/);
   if (!m) return null;
   let n = m[0].replace(/\s/g, "");
@@ -32,7 +48,10 @@ export function parseLabNumber(input: unknown): number | null {
   const hasComma = n.includes(",");
   if (hasComma && !hasDot) {
     const parts = n.split(",");
-    n = parts.length === 2 && parts[1].length <= 2 ? `${parts[0]}.${parts[1]}` : n.replace(/,/g, "");
+    n =
+      parts.length === 2 && (parts[1].length <= 2 || isSiLabUnit(unit))
+        ? `${parts[0]}.${parts[1]}`
+        : n.replace(/,/g, "");
   } else if (hasComma && hasDot) {
     n = n.replace(/,/g, "");
   }
@@ -63,10 +82,13 @@ function normUnit(unit: unknown): string | null {
     .replace(/[[\]]/g, "") // UCUM annotations: "[IU]/L", "m[IU]/mL"
     .replace(/[μµ]/g, "u")
     .replace(/mcg/gi, "ug")
+    .replace(/mcl/gi, "ul") // "K/mcL" (Quest, LabCorp): per microlitre
+    .replace(/micromol/gi, "umol")
     .replace(/10([⁰¹²³⁴⁵⁶⁷⁸⁹]+)/g, (_m, d: string) => `10^${[...d].map((c) => SUPERSCRIPT_DIGITS[c]).join("")}`)
     .replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹]/g, (c) => SUPERSCRIPT_DIGITS[c])
     .replace(/\s+/g, "")
     .replace(/10(?:\*|e|E)(\d+)/g, "10^$1")
+    .replace(/mm3|mm\^3|cmm/gi, "ul") // cells/mm3, /mm3, cells/cmm: a cubic millimetre IS a microlitre
     .replace(/^[x×*](?=10\^)/i, "")
     .replace(/per/gi, "/")
     .replace(/litre/gi, "l")
@@ -182,6 +204,8 @@ export const LAB_UNIT_TABLE: Readonly<Record<string, LabUnitSpec>> = {
   triglycerides: { canonical: "mg/dL", si: { unit: "mmol/L", factor: 0.01129 } },
   "fasting glucose": { canonical: "mg/dL", si: { unit: "mmol/L", factor: 1 / 18.016 } },
   hba1c: { canonical: "%", si: { unit: "mmol/mol", factor: HBA1C_FACTOR, offset: -2.15 * HBA1C_FACTOR } },
+  // pmol/L → µIU/mL at 6.0 pmol per µIU (the current insulin standardization recommendation;
+  // 6.945 is the older factor from the first WHO insulin standard, still printed by some labs).
   "fasting insulin": { canonical: "uIU/mL", si: { unit: "mIU/L", factor: 1 }, alt: [{ units: ["pmol/l"], factor: 1 / 6 }] },
   creatinine: { canonical: "mg/dL", si: { unit: "µmol/L", factor: 88.42 } },
   bun: { canonical: "mg/dL", si: { unit: "mmol/L", factor: 0.357 } },
@@ -361,7 +385,7 @@ export function normalizeMarkerReading(
   zone: LabUnitZone | null,
 ): NormalizedMarkerReading | null {
   const textValue = value === null || value === undefined ? "" : String(value).trim();
-  const numeric = parseLabNumber(value);
+  const numeric = parseLabNumber(value, unit);
   if (numeric === null) {
     if (!textValue) return null;
     return { value: textValue, unit };

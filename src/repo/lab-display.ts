@@ -76,7 +76,7 @@ function presentReading(r: any, label: string, unit: string, canonicalUnit: stri
   const sourceUnit = r.source_unit ?? canonicalUnit;
   const sourceValue = r.source_unit ? r.source_value : r.value;
   const printedHere = labUnitsCompatible(sourceUnit, unit);
-  const printed = printedHere && r.source_unit ? parseLabNumber(r.source_value) : null;
+  const printed = printedHere && r.source_unit ? parseLabNumber(r.source_value, r.source_unit) : null;
   out.value = printed != null ? printed : shownValue(label, r.value, system);
   if (r.ref_low != null) out.ref_low = shownValue(label, r.ref_low, system);
   if (r.ref_high != null) out.ref_high = shownValue(label, r.ref_high, system);
@@ -146,7 +146,7 @@ export function presentSourceMarker<T>(marker: T, system: LabUnitSystem = labUni
   if (!label || !target || labUnitsCompatible(m.unit, target)) return marker;
   if (typeof m.value === "string" && /^\s*[<>≤≥]/.test(m.value)) return marker;
   const shown = (v: unknown): number | null => {
-    const n = parseLabNumber(v);
+    const n = parseLabNumber(v, m.unit);
     const canonical = n == null ? null : toCanonical(label, n, m.unit);
     const out = canonical == null ? null : fromCanonical(label, canonical, system);
     return out == null ? null : roundLabDisplay(out);

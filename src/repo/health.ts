@@ -292,7 +292,7 @@ function roundForMsg(n: number): number {
 // family we don't recognize — we only ever REJECT a clear impossibility. Unit-aware when
 // the marker is recognized + the unit is convertible.
 export function plausibleMarkerValue(name: string, value: unknown, unit?: string | null): MarkerPlausibility {
-  const num = parseLabNumber(value);
+  const num = parseLabNumber(value, unit);
   if (num === null) return { plausible: true, reason: null, value: null }; // qualitative / empty — not judged
   if (!Number.isFinite(num)) return { plausible: false, reason: "value is not a finite number", value: null };
   const zone = matchOptimalZone(name);
