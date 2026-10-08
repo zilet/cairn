@@ -424,6 +424,13 @@ function zoneNameTrustworthy(name: string): boolean {
   if (n.includes("free") && (n.includes("testosterone") || n.includes("psa"))) return false; // free-T / free-PSA are distinct measures, no total-band
   if (/\b(sex hormone binding globulin|shbg|thyroxine binding globulin)\b/.test(n)) return false; // binding globulins are not serum globulin
   if (/\b(ldl|hdl)\b/.test(n) && /\b(particle|small|medium|large|peak|number|size)\b/.test(n)) return false;
+  // Sub-analytes whose name CONTAINS a band's key but measure something else. Their US
+  // prints were already a unit mismatch; an SI print (g/L, µmol/L) now converts through
+  // the parent's table row, so without this a fraction is judged against the whole.
+  if (/pre-?\s?albumin/.test(n)) return false; // prealbumin (transthyretin) is not albumin
+  if (n.includes("bilirubin") && /\b(direct|indirect|conjugated|unconjugated)\b/.test(n)) return false; // fractions, not total
+  if (n.includes("globulin") && (/\b(alpha|beta|gamma)\b|[αβγ]/.test(n) || /immunoglobulin|thyroglobulin/.test(n))) return false; // electrophoresis fractions, Ig, Tg
+  if (/mean cell ha?emoglobin/.test(n)) return false; // MCH/MCHC by another name — never the hemoglobin band
   return true;
 }
 
