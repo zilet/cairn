@@ -18,6 +18,7 @@ import {
 import crypto from "node:crypto";
 import { normalizeUnit, unitsFrom, validUnit, UNIT_REGISTRY, type AthleteUnits } from "./display-words.js";
 import { LAB_UNIT_SYSTEMS, type LabUnitSystem } from "./lab-units.js";
+import { reportedLabSystem } from "./lab-reported-system.js";
 import { getAgentAvailability } from "./agent-availability.js";
 import { recordedClientTimeZone } from "./client-tz.js";
 import { getAppState, setAppState } from "./app-state.js";
@@ -56,7 +57,7 @@ export interface Settings {
   run_units: "km" | "mi"; // athlete-facing run distance and pace; the engine stays in km
   weight_units: "lb" | "kg"; // athlete-facing bodyweight and loads; stored data stays lb
   lab_units: LabUnitSystem | null; // the athlete's explicit lab-value system; null = automatic (labUnitSystem())
-  lab_units_effective: LabUnitSystem; // the system lab values are shown in right now (explicit, else derived from weight_units)
+  lab_units_effective: LabUnitSystem; // the system lab values are shown in right now (explicit, else the system the athlete's own labs are printed in)
   garmin_last_export_attempt_at: string | null; // UTC ISO of the last write-back ATTEMPT (landed or not)
   garmin_last_export_status: string; // short result line: "ok: 8 of 14 sets" | "failed: …"
   gemini_api_key_configured: boolean;
@@ -624,8 +625,8 @@ function defaultSettings(): Settings {
     garmin_export_strength: true, // a finished Cairn strength session goes back to the watch by default
     run_units: UNIT_REGISTRY.distance.default, // prescriptions display in km / min/km until the athlete picks miles
     weight_units: UNIT_REGISTRY.weight.default, // bodyweight and loads in lb until the athlete picks kg
-    lab_units: null, // automatic: lab values follow the weight units until the athlete picks a system
-    lab_units_effective: derivedLabUnitSystem(UNIT_REGISTRY.weight.default),
+    lab_units: null, // automatic: lab values read as the athlete's own labs print them until a system is picked
+    lab_units_effective: "us",
     garmin_last_export_attempt_at: null,
     garmin_last_export_status: "",
     gemini_api_key_configured: !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_KEY),
@@ -720,8 +721,7 @@ function rowToSettings(row: any): Settings {
     run_units: normalizeUnit("distance", row.run_units),
     weight_units: normalizeUnit("weight", row.weight_units),
     lab_units: validLabUnitSystem(row.lab_units),
-    lab_units_effective:
-      validLabUnitSystem(row.lab_units) ?? derivedLabUnitSystem(normalizeUnit("weight", row.weight_units)),
+    lab_units_effective: validLabUnitSystem(row.lab_units) ?? derivedLabUnitSystem(),
     garmin_last_export_attempt_at: String(row.garmin_last_export_attempt_at ?? "").trim() || null,
     garmin_last_export_status:
       row.garmin_last_export_status == null ? "" : String(row.garmin_last_export_status),
@@ -845,16 +845,20 @@ export function validLabUnitSystem(value: unknown): LabUnitSystem | null {
   return (LAB_UNIT_SYSTEMS as readonly string[]).includes(v) ? (v as LabUnitSystem) : null;
 }
 
-/** The automatic lab system: an athlete who weighs in kilograms reads SI labs. */
-export function derivedLabUnitSystem(weight: AthleteUnits["weight"]): LabUnitSystem {
-  return weight === "kg" ? "si" : "us";
+/**
+ * The automatic lab system: the one the athlete's own most recent lab draw was printed in
+ * (lab-reported-system.ts), else conventional (US). Never derived from the weight unit —
+ * plenty of kilogram countries print mg/dL, and an install on kg must not change how its
+ * labs read on upgrade.
+ */
+export function derivedLabUnitSystem(): LabUnitSystem {
+  return reportedLabSystem() ?? "us";
 }
 
 /**
  * The unit system lab values are SHOWN in (src/repo/lab-display.ts): the athlete's
- * explicit choice, else derived from their weight units (athleteUnits), so whatever
- * decides that default decides this one too. Display only — every comparison runs in
- * the canonical unit. An unreadable settings row reads US conventional, never throws.
+ * explicit choice, else the system their own labs are printed in (derivedLabUnitSystem).
+ * Display only — every comparison runs in the canonical unit. An unreadable settings row reads US conventional, never throws.
  * One settings read (`lab_units_effective` is that same resolution, made in
  * rowToSettings); a per-marker loop still resolves it ONCE and passes it down.
  */

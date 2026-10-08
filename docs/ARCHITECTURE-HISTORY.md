@@ -19,7 +19,7 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 - **Lab units.** Every comparison runs in one unit per analyte (`LAB_UNIT_TABLE`, `lab-units.ts`):
   optimal bands, trends, cross-unit dedupe, coach-context ranking and the PREVENT inputs. Before this,
   a mmol/L total cholesterol entered PREVENT as mg/dL. Values are shown in the athlete's system
-  (`settings.lab_units`: us | si | automatic, which follows the weight unit; `lab-display.ts`), with
+  (`settings.lab_units`: us | si | automatic, which reads as the athlete's own labs print it (US with no convertible labs); `lab-display.ts`), with
   the lab's own print kept as `reported`. Lp(a) mass and molar units are never converted. Prompts
   carry a `LAB UNITS:` line.
 - Schema: **v128** `settings.lab_units`.

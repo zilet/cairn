@@ -717,7 +717,7 @@ export const MIGRATIONS_101_150: Migration[] = [
     version: 128,
     name: "settings-lab-units",
     // The lab-value display system: 'us' (conventional, mg/dL) | 'si' (mmol/L, µmol/L)
-    // | '' = automatic, following weight_units (kg reads SI). Display only — every
+    // | '' = automatic: as the athlete's own labs print it (US when none can say). Display only — every
     // comparison stays in the canonical unit (repo/lab-units.ts). Two-step: also in
     // db.ts's settings create block.
     up: (db) => {

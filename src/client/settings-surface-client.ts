@@ -303,7 +303,7 @@ function settingsAutomationSliceHtml(options: SettingsAutomationSliceOptions): s
           </select></div>
         <div class="field"><label for="labUnits">Lab results</label>
           <select id="labUnits">
-            <option value="auto" ${wm.lab_units === "auto" ? "selected" : ""}>Automatic (${wm.weight_units === "kg" ? "SI" : "US"}, follows weight)</option>
+            <option value="auto" ${wm.lab_units === "auto" ? "selected" : ""}>Automatic — as your lab prints it</option>
             <option value="us" ${wm.lab_units === "us" ? "selected" : ""}>US conventional (mg/dL)</option>
             <option value="si" ${wm.lab_units === "si" ? "selected" : ""}>SI / international (mmol/L)</option>
           </select></div>

@@ -166,7 +166,7 @@ export function registerOperatorTools(server: McpToolRegistrar) {
         .enum(["us", "si", "auto"])
         .optional()
         .describe(
-          "how lab values are shown everywhere (Health, the doctor report, coach prompts): us = conventional (mg/dL, g/dL, ng/mL), si = SI (mmol/L, µmol/L, g/L, nmol/L), auto = follow the weight units (kg reads SI). Display only — readings from any lab are compared in one canonical unit either way, and Lp(a) mass/molar results are never converted."
+          "how lab values are shown everywhere (Health, the doctor report, coach prompts): us = conventional (mg/dL, g/dL, ng/mL), si = SI (mmol/L, µmol/L, g/L, nmol/L), auto = the system your own most recent lab draw was printed in, else conventional (the weight unit plays no part). Display only — readings from any lab are compared in one canonical unit either way, and Lp(a) mass/molar results are never converted."
         ),
       clear_gemini_api_key: z.boolean().optional().describe("clear the saved Gemini key; env fallback still applies"),
       clear_garmin_password: z

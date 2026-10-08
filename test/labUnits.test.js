@@ -152,20 +152,22 @@ test("the same draw in mg/dL and mmol/L is ONE draw for dedupe; a different draw
   assert.equal(repo.dedupeHealthDocuments().merged, 0, "one agreeing ApoB against a conflicting Lp(a) is not a match");
 });
 
-test("lab-unit preference: explicit choice wins, else derived from the weight units", () => {
-  assert.equal(repo.labUnitSystem(), "us", "a fresh install (lb) reads US conventional");
+test("lab-unit preference: explicit choice wins, else the system the athlete's own labs print", () => {
+  assert.equal(repo.labUnitSystem(), "us", "a fresh install reads US conventional");
   assert.equal(repo.getSettings().lab_units, null);
   repo.setSettings({ weight_units: "kg" });
-  assert.equal(repo.labUnitSystem(), "si", "kg follows to SI");
+  assert.equal(repo.labUnitSystem(), "us", "kg alone does not move labs to SI");
+  seedHealthDoc("2026-06-01", [marker("LDL Cholesterol", 3.4, { unit: "mmol/L" }), marker("Glucose", 5.1, { unit: "mmol/L" })]);
+  assert.equal(repo.labUnitSystem(), "si", "SI labs read SI");
   assert.equal(repo.getSettings().lab_units_effective, "si");
   repo.setSettings({ lab_units: "us" });
-  assert.equal(repo.labUnitSystem(), "us", "an explicit choice beats the derivation");
+  assert.equal(repo.labUnitSystem(), "us", "an explicit choice beats the labs");
   assert.equal(repo.getSettings().lab_units, "us");
   repo.setSettings({ lab_units: "nonsense" });
   assert.equal(repo.getSettings().lab_units, "us", "junk keeps what is stored");
   repo.setSettings({ lab_units: "auto" });
   assert.equal(repo.getSettings().lab_units, null);
-  assert.equal(repo.labUnitSystem(), "si", "auto hands it back to the weight units");
+  assert.equal(repo.labUnitSystem(), "si", "auto hands it back to the labs");
 });
 
 test("SI display: values, band and unit convert together; the printed value is kept", () => {
