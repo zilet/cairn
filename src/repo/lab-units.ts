@@ -193,6 +193,10 @@ const COUNT_ALT = [
 const MEQ_ALT = [{ units: ["meq/l"], factor: 1 }]; // monovalent ions: mEq/L ≡ mmol/L
 const ENZYME_ALT = [{ units: ["ukat/l"], factor: 60 }]; // 1 µkat/L = 60 U/L
 const HBA1C_FACTOR = 10.929;
+// "mIU/mL" is a thousand µIU/mL in general (FSH, LH — the u/l family in `sameUnit`), but a
+// TSH or a fasting insulin of thousands of µIU/mL is not physiologic: on these two
+// analytes the spelling is always a misprint of the micro-unit, so it reads 1:1.
+const MICRO_UNIT_MISPRINT_ALT = [{ units: ["miu/ml"], factor: 1 }];
 
 /** Keyed by the lowercased OPTIMAL_ZONES label. */
 export const LAB_UNIT_TABLE: Readonly<Record<string, LabUnitSpec>> = {
@@ -206,7 +210,11 @@ export const LAB_UNIT_TABLE: Readonly<Record<string, LabUnitSpec>> = {
   hba1c: { canonical: "%", si: { unit: "mmol/mol", factor: HBA1C_FACTOR, offset: -2.15 * HBA1C_FACTOR } },
   // pmol/L → µIU/mL at 6.0 pmol per µIU (the current insulin standardization recommendation;
   // 6.945 is the older factor from the first WHO insulin standard, still printed by some labs).
-  "fasting insulin": { canonical: "uIU/mL", si: { unit: "mIU/L", factor: 1 }, alt: [{ units: ["pmol/l"], factor: 1 / 6 }] },
+  "fasting insulin": {
+    canonical: "uIU/mL",
+    si: { unit: "mIU/L", factor: 1 },
+    alt: [{ units: ["pmol/l"], factor: 1 / 6 }, ...MICRO_UNIT_MISPRINT_ALT],
+  },
   creatinine: { canonical: "mg/dL", si: { unit: "µmol/L", factor: 88.42 } },
   bun: { canonical: "mg/dL", si: { unit: "mmol/L", factor: 0.357 } },
   "uric acid": { canonical: "mg/dL", si: { unit: "µmol/L", factor: 59.48 } },
@@ -230,7 +238,7 @@ export const LAB_UNIT_TABLE: Readonly<Record<string, LabUnitSpec>> = {
   estradiol: { canonical: "pg/mL", si: { unit: "pmol/L", factor: 3.671 } },
   "free t3": { canonical: "pg/mL", si: { unit: "pmol/L", factor: 1.536 } },
   "free t4": { canonical: "ng/dL", si: { unit: "pmol/L", factor: 12.87 } },
-  tsh: { canonical: "uIU/mL", si: { unit: "mIU/L", factor: 1 } },
+  tsh: { canonical: "uIU/mL", si: { unit: "mIU/L", factor: 1 }, alt: MICRO_UNIT_MISPRINT_ALT },
   "morning cortisol": { canonical: "ug/dL", si: { unit: "nmol/L", factor: 27.59 } },
   "dhea-s": { canonical: "ug/dL", si: { unit: "µmol/L", factor: 0.02714 } },
   psa: { canonical: "ng/mL", si: { unit: "µg/L", factor: 1 } },
