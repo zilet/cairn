@@ -82,12 +82,14 @@ test("a stale per-browser 'cairn-bm-unit' no longer overrides Settings (and is c
   assert.equal(localStorage.getItem("cairn-bm-unit"), null);
 });
 
-function onboardingContext({ settings, language = "de-DE" }) {
+function onboardingContext({ settings, language = "de-DE", hangDetect = false, timers = null }) {
   const calls = [];
+  const opened = [];
   const api = (path, init) => {
     calls.push({ path, init });
     if (path === "/settings") return Promise.resolve({ settings, agents: [] });
     if (path === "/settings/units/detect") {
+      if (hangDetect) return new Promise(() => {});
       return Promise.resolve({
         applied: true,
         settings: { ...settings, run_units: "km", weight_units: "kg", units_source: "detected" },
@@ -104,15 +106,15 @@ function onboardingContext({ settings, language = "de-DE" }) {
       location: { pathname: "/", search: "", href: "http://x/" },
       swrSet: () => {},
       deviceTimeZone: () => "Europe/Berlin",
-      setTimeout: () => 0,
+      setTimeout: timers ? (fn, ms) => timers.push({ fn, ms }) : () => 0,
       CairnCoachLink: {
         KEY: "k",
         model: () => ({ onboarded: !!settings.onboarded, ready: [] }),
-        openWelcome: () => {},
+        openWelcome: () => opened.push(1),
       },
     },
   });
-  return { ctx, calls };
+  return { ctx, calls, opened };
 }
 
 test("first boot of a fresh install sends the device's locale and zone once", async () => {
@@ -144,4 +146,25 @@ test("no hint once units were chosen or detected, or the install has onboarded",
     await ctx.maybeOnboard();
     assert.equal(calls.filter((c) => c.path === "/settings/units/detect").length, 0, JSON.stringify(settings));
   }
+});
+
+test("a hung units hint never holds the welcome: boot waits at most ~1.5 s for it", async () => {
+  const timers = [];
+  const { ctx, opened } = onboardingContext({
+    settings: { onboarded: false, units_source: null, run_units: "km", weight_units: "lb" },
+    hangDetect: true,
+    timers,
+  });
+  let done = false;
+  const boot = ctx.maybeOnboard().then(() => {
+    done = true;
+  });
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  assert.equal(done, false, "still waiting on the hint");
+  const cap = timers.find((t) => t.ms === 1500);
+  assert.ok(cap, "a 1.5 s cap is armed");
+  cap.fn();
+  await boot;
+  assert.equal(done, true);
+  assert.equal(opened.length, 1, "the welcome opened without the hint");
 });

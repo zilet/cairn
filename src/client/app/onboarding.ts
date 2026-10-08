@@ -41,6 +41,9 @@
     return { stage, agent: id || null };
   }
 
+  // The most boot waits on the units hint (a slow network never delays the welcome).
+  const HINT_UNITS_WAIT_MS = 1500;
+
   // A fresh install's units start from this device: its language tag and zone go to
   // the server once (src/repo/unit-system.ts decides), so a European first open never
   // reads in miles and pounds. The server ignores it once units were chosen or
@@ -84,7 +87,8 @@
     } catch {
       data = null;
     }
-    await hintUnits(data);
+    // A hung hint must never hold the welcome: the units settle whenever it lands.
+    await Promise.race([hintUnits(data), new Promise<void>((resolve) => setTimeout(resolve, HINT_UNITS_WAIT_MS))]);
     const model = data ? CairnCoachLink.model(data) : null;
     if (model) swrSet(CairnCoachLink.KEY, model);
     const landing = landingStage();
