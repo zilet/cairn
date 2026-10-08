@@ -10,7 +10,7 @@ It asks one question:
 
 ```text
 Where should Cairn live?
-  1) In the cloud on Railway  (about $5/month, nothing to keep running)
+  1) In the cloud on Railway    (about $5/month, nothing to keep running)
   2) On this computer or server (free, private, needs to stay on)
 ```
 
@@ -27,7 +27,7 @@ data; the few things that do leave an install are listed in
 | **Start** | The one command | The one command | One click in the browser | One `docker run` |
 | **Who runs the server** | Railway, on your account | You | Railway, on your account | You |
 | **Where your data lives** | One Railway volume at `/data` | Docker volumes on that machine | One Railway volume at `/data` | Docker volumes on your machine |
-| **Updates** | Railway Auto Updates (switch on once), or `cairn.sh update` | Automatic, nightly, with rollback | Railway Auto Updates | `docker pull` and re-run |
+| **Updates** | Railway Auto Updates (switched on for you), or `cairn.sh update` | Automatic, nightly, with rollback | Railway Auto Updates | `docker pull` and re-run |
 | **Rough cost** | About $5/month on the Hobby plan. Check current pricing | Free on hardware you own (or what the VPS costs) | Same as Railway | Free |
 | **Sign-in** | Opens signed in; token required | Opens signed in; token required | Token from Railway's Variables tab | Optional token on a trusted network |
 | **Guide** | [Below](#1-railway) | [`INSTALL.md`](INSTALL.md) | [Below](#no-terminal-the-railway-button) | [`QUICKSTART.md`](QUICKSTART.md) |
@@ -52,7 +52,7 @@ then `sh install.sh --dry-run` prints every step and changes nothing.
 
 ## 1) Railway
 
-Choose **1** at the prompt, or skip the question:
+The installer is the main way onto Railway. Choose **1** at the prompt, or skip the question:
 
 ```bash
 curl -fsSL https://cairn.fit/install | sh -s -- --target=railway
@@ -93,10 +93,11 @@ sh ~/.cairn/railway/cairn/cairn.sh logs        # recent logs
 sh ~/.cairn/railway/cairn/cairn.sh uninstall   # delete the Railway project (asks for its name)
 ```
 
-**Updates.** Railway's Image Auto Updates follow `:latest` and install new releases inside a
-maintenance window you choose. The installer can't switch it on for you, so it tells you to turn it
-on once: open the service in Railway, then **Settings → Source → Configure Auto Updates**, and pick
-the Night window. A new release can take a few hours to be noticed. Railway's own volume backup
+**Updates.** The installer switches on Railway's Image Auto Updates for you: they follow `:latest`
+and install new releases in the Night window (02:00–06:00 UTC), the same setting the template uses.
+To change the window or turn them off, open the service in Railway, then **Settings → Source → Auto
+Updates**; a re-run of the installer keeps what you chose. `cairn.sh status` shows the current
+setting. A new release can take a few hours to be noticed. Railway's own volume backup
 before an update is a Pro plan feature, so Cairn takes its own restore point first: just before a
 release changes the database it writes a snapshot to `/data/backups/`. See
 [Automatic pre-migration snapshots](OPERATIONS.md#automatic-pre-migration-snapshots) for how to use
@@ -114,12 +115,18 @@ company holds that data, choose option 2 and run Cairn on hardware you own.
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://cairn.fit/railway)
 
-The button builds the same setup as option 1 from Railway's website, with nothing to install.
+The button builds the same setup as option 1 from Railway's website, with nothing to install. It is
+a convenience, not a dependency: the template behind it is declared in the repo
+([`deploy/railway/template.json`](../deploy/railway/template.json)), and anyone can rebuild it into
+their own Railway workspace with one command, `sh deploy/install.sh railway-template` (see
+[`deploy/railway/README.md`](../deploy/railway/README.md)). `https://cairn.fit/railway` is a counted
+redirect that the site maintainer points at whichever published template is current, so the button's
+link never changes.
 
 1. **Deploy.** Click the button and create a Railway account. The template creates one service with
    one volume at `/data`, a generated sign-in token and the settings Cairn needs.
-2. **Switch on updates.** In the service, open **Settings → Source → Configure Auto Updates** and
-   pick the Night window.
+2. **Updates are on.** The template switches on Railway's Auto Updates in the Night window
+   (02:00–06:00 UTC). To change that, open the service's **Settings → Source → Auto Updates**.
 3. **Wait until it is healthy,** then open the Railway URL for the service.
 4. **Sign in.** Cairn asks for a token. Paste the value of `CAIRN_AUTH_TOKEN`, which you find in
    Railway under the service, then **Variables**. That token is also your recovery key.
@@ -322,12 +329,16 @@ detail for feedback and the ping: [`OBSERVABILITY.md`](OBSERVABILITY.md#feedback
 
 ## For operators: what the Railway installer and template set
 
+Both read the same values: the template is declared in
+[`deploy/railway/template.json`](../deploy/railway/template.json), and the installer's copy is checked
+against it by the test suite.
+
 | Variable | Value | Why |
 |---|---|---|
 | `CAIRN_SINGLE_VOLUME` | `1` | The platform gives one volume, so sign-ins and AI tools live under `/data/home` beside the database |
 | `CAIRN_REQUIRE_AUTH` | `1` | Refuse to boot without a token on a public URL |
-| `CAIRN_AUTH_TOKEN` | generated | The sign-in token and recovery key |
-| `CAIRN_SETTINGS_SECRET_KEY` | generated | Encrypts stored integration secrets |
+| `CAIRN_AUTH_TOKEN` | generated | The sign-in token and recovery key (the template: `${{secret(48)}}`, a new one per deployer) |
+| `CAIRN_SETTINGS_SECRET_KEY` | generated | Encrypts stored integration secrets (the template: `${{secret(48)}}`) |
 | `CAIRN_BLANK_PROFILE` | `1` | Start empty into the welcome, with no example athlete (a plain `docker run` seeds one unless this is set) |
 | `CAIRN_PLATFORM` | `railway` | Tells the app how it was deployed, so it can show the right update path |
 | `CAIRN_MAX_AGENT_PROCS` | `1` | Bounds the memory used by AI tools |

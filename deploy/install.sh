@@ -19,6 +19,8 @@
 #   logs       the last lines of Cairn's logs
 #   uninstall  local: stop and remove Cairn; your data volumes stay unless --purge.
 #              Railway: delete the Railway project (asks you to type its name)
+#   railway-template  build the "Deploy on Railway" template from deploy/railway/template.json
+#              in your own Railway workspace (a private draft; --publish after a [y/N])
 #
 # Full guide: docs/INSTALL.md. Run with --help for every option.
 #
@@ -423,6 +425,8 @@ Commands:
   logs               show the last lines of Cairn's logs
   uninstall          this machine: stop and remove Cairn; keeps your data volumes unless
                      --purge. Railway: delete the Railway project and everything in it
+  railway-template   build Cairn's "Deploy on Railway" template in YOUR Railway workspace,
+                     from deploy/railway/template.json (see "Railway template options")
 
 Where it runs (asked when neither is given):
   --target=railway   in the cloud on your own Railway account (about $5/month)
@@ -447,6 +451,16 @@ Railway options:
   --railway-project-name=NAME   Railway project to create (default cairn)
   --railway-workspace=ID|NAME   workspace for a new project (when you have several)
   --confirm-purge=PROJECT       confirm uninstall without a terminal (the project name)
+
+Railway template options (railway-template):
+  --publish          publish the draft to Railway's marketplace, after showing the plan and
+                     asking [y/N] (--yes answers). Only a draft whose check passed
+  --template=ID|CODE check (and with --publish, publish) an existing draft instead of
+                     building a new one
+  --workspace=NAME   the workspace to build it in (same as --railway-workspace)
+  --force            with --publish: publish although editor-only items are missing
+  The draft is built in a scratch project named Cairn (--railway-project-name= renames it;
+  the template takes its name), which is deleted again, also when a step fails.
 
 This-machine options (any of these implies --target=local):
   --dir=PATH         install directory (default ~/cairn, or /opt/cairn as root)
@@ -483,6 +497,7 @@ parse_args() {
   OPT_LAN=0; OPT_LOCAL=0; OPT_TZ=""; OPT_IMAGE=""; OPT_UPDATER=""
   OPT_NIGHTLY=0; OPT_IF_REQUESTED=0; OPT_FORCE=0; OPT_PURGE=0; OPT_CONFIRM_PURGE=""
   OPT_TARGET=""; OPT_RW_PROJECT=""; OPT_RW_WORKSPACE=""; OPT_NO_BROWSER=0; OPT_NO_TELEMETRY=0
+  OPT_PUBLISH=0; OPT_TEMPLATE=""
   # Any of these only makes sense on this machine, so it implies --target=local.
   OPT_LOCAL_ONLY=0
   arg_cmd_seen=0
@@ -493,12 +508,12 @@ parse_args() {
     case "$arg" in
       --*=*) arg_val="${arg#*=}"; arg="${arg%%=*}" ;;
       --dir | --name | --port | --https | --domain | --email | --tz | --image | --updater | --confirm-purge | \
-        --target | --railway-project-name | --railway-workspace)
+        --target | --railway-project-name | --railway-workspace | --workspace | --template)
         [ $# -gt 0 ] || die "$arg needs a value"
         arg_val="$1"; shift ;;
     esac
     case "$arg" in
-      install | update | status | uninstall | open | logs)
+      install | update | status | uninstall | open | logs | railway-template)
         [ "$arg_cmd_seen" = 0 ] || die "Only one command at a time (got '$CMD' and '$arg')."
         CMD="$arg"; arg_cmd_seen=1 ;;
       -h | --help | help) usage; exit 0 ;;
@@ -526,7 +541,9 @@ parse_args() {
       --purge) OPT_PURGE=1; OPT_LOCAL_ONLY=1 ;;
       --target) OPT_TARGET="$arg_val" ;;
       --railway-project-name) OPT_RW_PROJECT="$arg_val" ;;
-      --railway-workspace) OPT_RW_WORKSPACE="$arg_val" ;;
+      --railway-workspace | --workspace) OPT_RW_WORKSPACE="$arg_val" ;;
+      --publish) OPT_PUBLISH=1 ;;
+      --template) OPT_TEMPLATE="$arg_val" ;;
       --no-browser) OPT_NO_BROWSER=1 ;;
       --no-telemetry) OPT_NO_TELEMETRY=1 ;;
       --confirm-purge) OPT_CONFIRM_PURGE="$arg_val" ;;
@@ -536,14 +553,24 @@ parse_args() {
 }
 
 validate_opts() {
-  case "$OPT_TARGET" in "" | local | railway) ;; *) die "--target must be railway or local (got '$OPT_TARGET')." ;; esac
+  if [ -n "$OPT_TARGET" ] && ! is_provider "$OPT_TARGET"; then die "--target must be one of: $(provider_names) (got '$OPT_TARGET')."; fi
   if [ "$OPT_TARGET" = "railway" ] && [ "$OPT_LOCAL_ONLY" = 1 ]; then
     die "--target=railway does not take this-machine options (--dir, --port, --https, --lan, --tz, --updater, --no-start, --purge, ...). See --help."
+  fi
+  if [ "$CMD" = "railway-template" ]; then
+    case "$OPT_TARGET" in "" | railway) ;; *) die "railway-template builds a Railway template; it takes no --target=$OPT_TARGET." ;; esac
+    [ "$OPT_LOCAL_ONLY" = 0 ] || die "railway-template does not take this-machine options (--dir, --port, --https, --lan, --tz, --updater, ...). See --help."
+    if [ -n "$OPT_TEMPLATE" ] && ! valid_re "$OPT_TEMPLATE" '^[A-Za-z0-9_-]{1,64}$'; then
+      die "--template must be a template ID or code (got '$OPT_TEMPLATE')."
+    fi
+  elif [ "$OPT_PUBLISH" = 1 ] || [ -n "$OPT_TEMPLATE" ]; then
+    die "--publish and --template belong to the railway-template command (see --help)."
   fi
   if [ -n "$OPT_RW_PROJECT" ] && ! valid_re "$OPT_RW_PROJECT" '^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$'; then
     die "--railway-project-name must be letters, digits, '.', '-' or '_' (got '$OPT_RW_PROJECT')."
   fi
-  if [ -n "$OPT_RW_WORKSPACE" ] && ! valid_re "$OPT_RW_WORKSPACE" '^[A-Za-z0-9][A-Za-z0-9 _.-]{0,80}$'; then
+  # Workspace names are free text ("Ana's Projects"); the value only ever travels as one argv word.
+  if [ -n "$OPT_RW_WORKSPACE" ] && ! valid_re "$OPT_RW_WORKSPACE" '^[^[:cntrl:]-][^[:cntrl:]]{0,119}$'; then
     die "--railway-workspace must be a workspace ID or name (got '$OPT_RW_WORKSPACE')."
   fi
   if [ -n "$OPT_NAME" ] && ! valid_re "$OPT_NAME" '^[a-z0-9][a-z0-9_-]{0,40}$'; then
@@ -1840,37 +1867,58 @@ resolve_target() {
   choose_target
 }
 
+# Where Cairn can live: one line per hosting provider, "target|label|blurb". The chooser,
+# --target and the no-terminal hint all read this table. A new host adds a line here, a
+# <target>_main function (install, status, open, update, logs, uninstall) and a
+# deploy/<target>/ directory: see deploy/README.md, "Adding a hosting provider".
+PROVIDERS="railway|In the cloud on Railway|about \$5/month, nothing to keep running
+local|On this computer or server|free, private, needs to stay on"
+
+is_provider() { printf '%s\n' "$PROVIDERS" | cut -d'|' -f1 | grep -qx "$1"; }
+provider_names() { printf '%s\n' "$PROVIDERS" | cut -d'|' -f1 | tr '\n' ' ' | sed 's/ $//'; }
+
+# provider_menu [hint]: the numbered choices; with "hint", each with its non-interactive command.
+provider_menu() {
+  printf '%s\n' "$PROVIDERS" | {
+    pm_i=0
+    while IFS='|' read -r pm_target pm_label pm_blurb; do
+      pm_i=$((pm_i + 1))
+      printf '  %s) %-26s (%s)\n' "$pm_i" "$pm_label" "$pm_blurb"
+      if [ "${1:-}" = "hint" ]; then printf '       curl -fsSL %s | sh -s -- --target=%s --yes\n' "$ONE_LINER_URL" "$pm_target"; fi
+    done
+  }
+}
+
 choose_target() {
   if ! has_tty; then
     {
       say "Where should Cairn live? There is no terminal to ask, so re-run with one of:"
       say ""
-      say "  1) In the cloud on Railway  (about \$5/month, nothing to keep running)"
-      say "       curl -fsSL $ONE_LINER_URL | sh -s -- --target=railway --yes"
-      say "  2) On this computer or server (free, private, needs to stay on)"
-      say "       curl -fsSL $ONE_LINER_URL | sh -s -- --target=local --yes"
+      provider_menu hint
       say ""
       say "More options: --help, or https://github.com/zilet/cairn/blob/main/docs/INSTALL.md"
     } >&2
     exit 2
   fi
+  ct_count=$(printf '%s\n' "$PROVIDERS" | grep -c .)
   ct_tries=0
   while [ "$ct_tries" -lt 3 ]; do
     {
       printf '\n%sWhere should Cairn live?%s\n' "$C_BOLD" "$C_RESET"
-      printf '%s\n' "  1) In the cloud on Railway  (about \$5/month, nothing to keep running)"
-      printf '  2) On this computer or server (free, private, needs to stay on)\n'
-      printf '%s  ? %sChoose 1 or 2: ' "$C_YELLOW" "$C_RESET"
+      provider_menu
+      printf '%s  ? %sChoose 1-%s: ' "$C_YELLOW" "$C_RESET" "$ct_count"
     } >/dev/tty
     ct_ans=""
     read -r ct_ans </dev/tty || ct_ans=""
+    ct_ans=$(printf '%s' "$ct_ans" | tr '[:upper:]' '[:lower:]')
     case "$ct_ans" in
-      1 | railway | Railway) TARGET="railway"; return 0 ;;
-      2 | local | this) TARGET="local"; return 0 ;;
+      "" | *[!0-9]*) ;;
+      *) ct_ans=$(printf '%s\n' "$PROVIDERS" | sed -n "${ct_ans}p" | cut -d'|' -f1) ;;
     esac
+    if [ -n "$ct_ans" ] && is_provider "$ct_ans"; then TARGET="$ct_ans"; return 0; fi
     ct_tries=$((ct_tries + 1))
   done
-  die "No choice made. Re-run with --target=railway or --target=local."
+  die "No choice made. Re-run with --target=<$(provider_names | sed 's/ /|/g')>."
 }
 
 # ----------------------------------------------------------------------------- railway
@@ -1915,14 +1963,16 @@ json_flat() {
     }'
 }
 
-# json_project_ids NAME < `railway list --json`: ids of projects (objects that carry
-# "environments") named NAME, one per line.
+# json_project_ids NAME < `railway list --json`: ids of live projects (objects that carry
+# "environments") named NAME, one per line. A deleted project stays in the list with a
+# "deletedAt" until Railway removes it (about 48 hours); it is never one of ours to reuse.
 json_project_ids() {
   json_flat | awk -F '\t' -v want="$1" '
     $2 == "id" { id[$1] = $3 }
     $2 == "name" { nm[$1] = $3 }
     $2 == "environments" { proj[$1] = 1 }
-    END { for (o in proj) if (nm[o] == want && id[o] != "") print id[o] }'
+    $2 == "deletedAt" && $3 != "null" && $3 != "" { gone[$1] = 1 }
+    END { for (o in proj) if (nm[o] == want && id[o] != "" && !(o in gone)) print id[o] }'
 }
 
 # json_has_name NAME < any JSON: succeeds when some object has "name": NAME.
@@ -1996,6 +2046,7 @@ rw_state_write() {
     say "RW_ENVIRONMENT=$RW_ENV"
     say "RW_DOMAIN=$RW_DOMAIN"
     say "RW_IMAGE=$IMAGE"
+    say "RW_AUTOUPDATES_SET=$RW_AU_SET"
   } | write_file "$RW_STATE" 600
 }
 
@@ -2012,6 +2063,8 @@ rw_setup_paths() {
   RW_SERVICE=$(rw_state_get RW_SERVICE)
   RW_ENV=$(rw_state_get RW_ENVIRONMENT)
   RW_DOMAIN=$(rw_state_get RW_DOMAIN)
+  RW_AU_SET=$(rw_state_get RW_AUTOUPDATES_SET)
+  RW_AU=""
   if [ -n "$OPT_RW_PROJECT" ] && [ -n "$RW_PROJECT" ] && [ "$OPT_RW_PROJECT" != "$RW_PROJECT" ]; then
     die "$RW_DIR already manages the Railway project '$RW_PROJECT'. Use --name=<other> for a second install."
   fi
@@ -2024,6 +2077,29 @@ rw_setup_paths() {
   RW_POLL="${CAIRN_RAILWAY_POLL_SECONDS:-10}"
   RW_TOKEN=""
   RW_SECRET=""
+}
+
+# Image auto updates, the same for an install and the template: Railway redeploys the service
+# when a new image is pushed under the tag (type "patch"), only inside the window: every day of
+# the week, 02:00-06:00 UTC (Railway's Night window).
+RW_TPL_UPDATE_START=2
+RW_TPL_UPDATE_END=6
+RW_TPL_UPDATE_WINDOW="Night, 02:00-06:00 UTC"
+# One environment patch through `railway api` (the CLI has no flag for auto updates). Deploys
+# are skipped: the installer deploys on its own right after.
+# shellcheck disable=SC2016 # GraphQL variables, not shell expansions
+RW_PATCH_MUTATION='mutation($env: String!, $patch: EnvironmentConfig) { environmentPatchCommit(environmentId: $env, patch: $patch, skipDeploys: true, commitMessage: "Cairn installer") }'
+
+# The source.autoUpdates value Railway's environment config takes.
+rw_autoupdates_json() {
+  printf '{"type":"patch","schedule":['
+  rau_day=0
+  while [ "$rau_day" -le 6 ]; do
+    [ "$rau_day" = 0 ] || printf ','
+    printf '{"day":%s,"startHour":%s,"endHour":%s}' "$rau_day" "$RW_TPL_UPDATE_START" "$RW_TPL_UPDATE_END"
+    rau_day=$((rau_day + 1))
+  done
+  printf ']}'
 }
 
 # Non-secret service variables (the token and the settings key go on stdin).
@@ -2206,6 +2282,67 @@ rw_ensure_vars() {
   ok "Variables set (access token: $( [ "$RW_TOKEN_STATE" = kept ] && printf 'kept the existing one' || printf 'a new random one'))."
 }
 
+# RW_AU_TYPE: the service's image auto-update type in Railway ("" when never set, "disabled",
+# "patch", ...); returns 1 when it cannot be read. Also leaves RW_SVC_ID and RW_ENV_ID.
+rw_read_autoupdates() {
+  RW_AU_TYPE=""
+  rw_cap service list --json || return 1
+  RW_SVC_ID=$(printf '%s\n' "$RW_OUT" | json_named_id "$RW_SERVICE")
+  rw_cap environment list --json || return 1
+  RW_ENV_ID=$(printf '%s\n' "$RW_OUT" | json_named_id "$RW_ENV")
+  [ -n "$RW_SVC_ID" ] && [ -n "$RW_ENV_ID" ] || return 1
+  rw_cap environment config --environment "$RW_ENV" --json || return 1
+  RW_AU_TYPE=$(printf '%s\n' "$RW_OUT" | json_paths | awk -F '\t' -v want="services.$RW_SVC_ID.source.autoUpdates.type" '$1 == want { print $2; exit }')
+  RW_OUT=""
+  return 0
+}
+
+# Switch Railway's image auto updates on (RW_AU: on | kept | off | manual). Idempotent: an
+# existing setting is kept, and once this installer has switched them on, "disabled" is the
+# person's own choice and stays. Never fails the install: on any error it says how by hand.
+rw_ensure_autoupdates() {
+  RW_AU="manual"
+  if ! rw api --help >/dev/null 2>&1; then
+    warn "This Railway CLI has no 'railway api', so automatic updates stay off for now (see the summary)."
+    return 0
+  fi
+  if ! rw_read_autoupdates; then
+    warn "Could not read the service's update settings from Railway; switch automatic updates on by hand (see the summary)."
+    return 0
+  fi
+  case "$RW_AU_TYPE" in
+    disabled | "")
+      if [ "$RW_AU_SET" = 1 ]; then
+        RW_AU="off"
+        ok "Automatic updates: off in Railway, as you set them (left alone)."
+        return 0
+      fi ;;
+    *)
+      RW_AU="kept"
+      ok "Automatic updates: on ($RW_AU_TYPE, as set in Railway)."
+      return 0 ;;
+  esac
+  rea_file="$RW_DIR/autoupdates.json"
+  TMP_FILES="$TMP_FILES $rea_file"
+  printf '{"env":%s,"patch":{"services":{%s:{"source":{"autoUpdates":%s}}}}}\n' \
+    "$(json_str "$RW_ENV_ID")" "$(json_str "$RW_SVC_ID")" "$(rw_autoupdates_json)" | write_file "$rea_file" 600
+  if ! rw_cap api "$RW_PATCH_MUTATION" --variables "@$rea_file"; then
+    rm -f "$rea_file"
+    warn "Railway did not accept the automatic-update setting${RW_ERR:+ ($(printf '%s' "$RW_ERR" | head -n 1))}; switch it on by hand (see the summary)."
+    return 0
+  fi
+  rm -f "$rea_file"
+  # Read it back: only a setting Railway shows is reported as on.
+  if rw_read_autoupdates && [ "$RW_AU_TYPE" = "patch" ]; then
+    RW_AU="on"
+    RW_AU_SET=1
+    rw_state_write
+    ok "Automatic updates: on, in the $RW_TPL_UPDATE_WINDOW window."
+  else
+    warn "Railway took the automatic-update setting but does not show it yet; check it with: sh $RW_DIR/cairn.sh status"
+  fi
+}
+
 rw_pick_domain() { printf '%s\n' "$1" | grep -oE '[A-Za-z0-9][A-Za-z0-9.-]*\.up\.railway\.app' | head -n 1 || true; }
 
 rw_ensure_domain() {
@@ -2299,6 +2436,7 @@ rw_print_plan() {
   say "  Service:     $RW_SERVICE, from $IMAGE, one volume at /data, a public https domain"
   say "  Variables:   $RW_PLAIN_VARS"
   say "               CAIRN_AUTH_TOKEN and CAIRN_SETTINGS_SECRET_KEY: 64 random hex chars each, sent on stdin"
+  say "  Updates:     Railway Auto Updates switched on, $RW_TPL_UPDATE_WINDOW (kept as is when already set)"
   say "  Manage it:   $RW_DIR/cairn.sh (status, open, update, logs, uninstall)"
   say "  Cost:        about \$5/month on Railway's Hobby plan (check current pricing)"
   say "  Disk:        a trial volume is 0.5 GB, enough for one AI provider. Hobby gives 5 GB;"
@@ -2320,6 +2458,9 @@ rw_print_commands() {
   say "  railway volume add --mount-path /data --json"
   say "  railway variable set CAIRN_AUTH_TOKEN --stdin --service $RW_SERVICE --environment $RW_ENV --skip-deploys"
   say "  railway variable set CAIRN_SETTINGS_SECRET_KEY --stdin --service $RW_SERVICE --environment $RW_ENV --skip-deploys"
+  say "  railway service list --json; railway environment list --json"
+  say "  railway environment config --environment $RW_ENV --json      (are auto updates set already?)"
+  say "  railway api '<environmentPatchCommit>' --variables @autoupdates.json   (source.autoUpdates, only when not set)"
   say "  railway domain --port 8787 --service $RW_SERVICE --environment $RW_ENV --json"
   say "  railway redeploy --service $RW_SERVICE --environment $RW_ENV --from-source --yes --json"
   say "  railway deployment list --service $RW_SERVICE --environment $RW_ENV --limit 5 --json   (every ${RW_POLL}s, up to $((RW_DEPLOY_TIMEOUT / 60)) min)"
@@ -2357,6 +2498,7 @@ rw_cmd_install() {
   rw_ensure_service
   rw_ensure_volume
   rw_ensure_vars
+  rw_ensure_autoupdates
   rw_ensure_domain
 
   step "Deploying"
@@ -2384,7 +2526,11 @@ rw_summary() {
   say "    Settings -> Agents -> Connect signs in to Claude, Codex, Grok or Antigravity right in the app."
   say ""
   say "  ${C_BOLD}Updates${C_RESET}"
-  say "    Turn on automatic updates once in Railway: service $RW_SERVICE -> Settings -> Source -> Auto Updates (pick the Night window)."
+  case "$RW_AU" in
+    on | kept) say "    Automatic: Railway installs each new release in the $RW_TPL_UPDATE_WINDOW window (Railway Auto Updates)." ;;
+    off) say "    Automatic updates are off in Railway, as you set them (service $RW_SERVICE -> Settings -> Source -> Auto Updates)." ;;
+    *) say "    Turn on automatic updates once in Railway: service $RW_SERVICE -> Settings -> Source -> Auto Updates (pick the Night window)." ;;
+  esac
   say "    Or update now: sh $RW_DIR/cairn.sh update"
   say ""
   say "  ${C_BOLD}Manage it${C_RESET}"
@@ -2421,7 +2567,15 @@ rw_cmd_status() {
   fi
   if [ -n "$RW_DOMAIN" ]; then say "  Health:     $(rw_health_line)"; fi
   say "  Token:      in $(rw_where_token); not shown"
-  say "  Updates:    Railway Auto Updates (service -> Settings -> Source), or: sh $RW_DIR/cairn.sh update"
+  if rw_read_autoupdates; then
+    case "$RW_AU_TYPE" in
+      "" | disabled) rcs_au="automatic updates off (service -> Settings -> Source -> Auto Updates; re-running the installer switches them on unless you turned them off)" ;;
+      *) rcs_au="automatic ($RW_AU_TYPE, Railway Auto Updates)" ;;
+    esac
+  else
+    rcs_au="unknown (railway: $(printf '%s' "$RW_ERR" | head -n 1))"
+  fi
+  say "  Updates:    $rcs_au; now: sh $RW_DIR/cairn.sh update"
 }
 
 rw_cmd_open() {
@@ -2488,6 +2642,389 @@ rw_cmd_uninstall() {
   ok "Railway accepted the deletion of '$RW_PROJECT'; it finishes on their side shortly."
 }
 
+# ----------------------------------------------------------------------------- railway template
+
+# The "Deploy on Railway" template, declared in deploy/railway/template.json and kept in step
+# with it here (test/installScript.test.js fails when the two drift). Anyone can build it into
+# their own Railway workspace with `railway-template`; nothing depends on one account.
+RW_TPL_NAME="Cairn"
+RW_TPL_CATEGORY="AI/ML"
+RW_TPL_DESCRIPTION="Your own self-hosted coach for training, nutrition and longevity."
+RW_TPL_SERVICE="cairn"
+RW_TPL_MOUNT="/data"
+RW_TPL_HEALTHCHECK="/api/health"
+RW_TPL_PORT="8787"
+# Never a value: Railway's per-deployer template function, filled in separately for every
+# deployer, so no two Cairns share a token or a settings key.
+RW_SECRET_VARS="CAIRN_AUTH_TOKEN CAIRN_SETTINGS_SECRET_KEY"
+# shellcheck disable=SC2016 # a literal Railway function, not a shell expansion
+RW_SECRET_FN='${{secret(48)}}'
+RW_TPL_SPEC_URL="https://github.com/zilet/cairn/blob/main/deploy/railway/template.json"
+RW_TPL_OVERVIEW_URL="https://raw.githubusercontent.com/zilet/cairn/main/deploy/railway/overview.md"
+
+# json_paths < JSON: one line per scalar, "<dotted.path>\t<value>" (array members keep
+# their array's path). Enough to check a template's serializedConfig without jq.
+json_paths() {
+  awk '
+    function prefix(   p, i) { p = ""; for (i = 1; i <= sp; i++) if (typ[i] == "o") p = p ckey[i] "."; return p }
+    function emit(v) { if (sp > 0 && typ[sp] == "o") printf "%s\t%s\n", substr(prefix(), 1, length(prefix()) - 1), v }
+    function flush() { if (bare != "") { emit(bare); bare = "" } }
+    { doc = doc $0 "\n" }
+    END {
+      sp = 0; instr = 0; esc = 0; bare = ""
+      n = length(doc)
+      for (i = 1; i <= n; i++) {
+        c = substr(doc, i, 1)
+        if (instr) {
+          if (esc) { str = str c; esc = 0 }
+          else if (c == "\\") { str = str c; esc = 1 }
+          else if (c == "\"") {
+            instr = 0
+            if (sp > 0 && typ[sp] == "o" && want[sp] == "k") ckey[sp] = str
+            else emit(str)
+          } else str = str c
+          continue
+        }
+        if (c == "\"") { instr = 1; str = ""; continue }
+        if (c == "{") { flush(); sp++; typ[sp] = "o"; want[sp] = "k"; ckey[sp] = ""; continue }
+        if (c == "[") { flush(); sp++; typ[sp] = "a"; continue }
+        if (c == "}" || c == "]") { flush(); if (sp > 0) sp--; continue }
+        if (c == ":") { if (sp > 0) want[sp] = "v"; continue }
+        if (c == ",") { flush(); if (sp > 0 && typ[sp] == "o") want[sp] = "k"; continue }
+        if (c == " " || c == "\t" || c == "\n" || c == "\r") { flush(); continue }
+        bare = bare c
+      }
+      flush()
+    }'
+}
+
+# json_named_id NAME < JSON: the "id" of the first object whose "name" is NAME.
+json_named_id() {
+  json_flat | awk -F '\t' -v want="$1" '
+    $2 == "id" { id[$1] = $3 }
+    $2 == "name" && $3 == want { hit[$1] = 1 }
+    { if ($1 + 0 > max) max = $1 + 0 }
+    END { for (o = 1; o <= max; o++) if ((o in hit) && id[o] != "") { print id[o]; exit } }'
+}
+
+# json_member KEY < JSON: the first string/number member KEY anywhere.
+json_member() { json_flat | awk -F '\t' -v want="$1" '$2 == want && $3 != "<obj>" && $3 != "<arr>" { print $3; exit }'; }
+
+# rw_tpl_get REGEX: the value at the first path matching ^REGEX$ in RW_TPL_PATHS.
+# (The pattern travels in the environment: awk -v would eat its backslashes.)
+rw_tpl_get() { printf '%s\n' "$RW_TPL_PATHS" | RTG_RE="^$1\$" awk -F '\t' '$1 ~ ENVIRON["RTG_RE"] { print $2; exit }'; }
+
+# The environment patch that configures the scratch service the way the spec says. A plain
+# value travels as its own generator too: Railway's template generate copies a variable's
+# generator (or a ${{reference}}) as the template default and drops plain values.
+rw_tpl_patch() { # environment-id service-id
+  printf '{"env":%s,"patch":{"services":{%s:{' "$(json_str "$1")" "$(json_str "$2")"
+  printf '"source":{"image":%s,"autoUpdates":%s},' "$(json_str "$IMAGE")" "$(rw_autoupdates_json)"
+  printf '"deploy":{"healthcheckPath":%s},"variables":{' "$(json_str "$RW_TPL_HEALTHCHECK")"
+  rtp_sep=""
+  for rtp_key in $RW_SECRET_VARS; do
+    printf '%s%s:{"value":%s}' "$rtp_sep" "$(json_str "$rtp_key")" "$(json_str "$RW_SECRET_FN")"
+    rtp_sep=","
+  done
+  for rtp_kv in $RW_PLAIN_VARS; do
+    printf '%s%s:{"value":%s,"generator":%s}' "$rtp_sep" "$(json_str "${rtp_kv%%=*}")" "$(json_str "${rtp_kv#*=}")" "$(json_str "${rtp_kv#*=}")"
+  done
+  printf '}}}}}\n'
+}
+
+# shellcheck disable=SC2016
+RW_TPL_QUERY='query($id: String, $code: String) { template(id: $id, code: $code) { id code name status serializedConfig } }'
+
+rw_tpl_print_plan() {
+  step "Cairn's Railway template: plan"
+  if [ -n "$OPT_TEMPLATE" ]; then
+    say "  Template:    the existing draft $OPT_TEMPLATE, checked against the spec"
+  else
+    say "  Workspace:   ${OPT_RW_WORKSPACE:-the one your Railway CLI is signed in to}"
+    say "  Builds:      a scratch project '$RW_TPL_PROJECT' (deleted again at the end, also on failure),"
+    say "               then an unpublished template draft from it, named '$RW_TPL_PROJECT'"
+    say "  Service:     $RW_TPL_SERVICE from $IMAGE, a volume at $RW_TPL_MOUNT, a public domain on port $RW_TPL_PORT,"
+    say "               health check $RW_TPL_HEALTHCHECK, image auto updates ($RW_TPL_UPDATE_WINDOW)"
+    say "  Variables:   $RW_PLAIN_VARS"
+    for rtpp_key in $RW_SECRET_VARS; do
+      say "               $rtpp_key=$RW_SECRET_FN (Railway's per-deployer secret function, never a value)"
+    done
+  fi
+  if [ "$OPT_PUBLISH" = 1 ]; then
+    say "  Publish:     to Railway's marketplace as category $RW_TPL_CATEGORY, \"$RW_TPL_DESCRIPTION\","
+    say "               with the overview in deploy/railway/overview.md; asked [y/N] first (or --yes)"
+  else
+    say "  Publish:     no; the draft stays private (add --publish to publish it)"
+  fi
+  say "  Spec:        $RW_TPL_SPEC_URL"
+}
+
+rw_tpl_print_commands() {
+  say ""
+  say "Railway CLI commands, run from a temporary directory:"
+  say "  railway whoami"
+  say "  railway list --json"
+  say "  railway init --name $RW_TPL_PROJECT --json${OPT_RW_WORKSPACE:+ --workspace $OPT_RW_WORKSPACE}"
+  say "  railway link --project <scratch project id> --environment production"
+  say "  railway add --service $RW_TPL_SERVICE --json"
+  say "  railway service link $RW_TPL_SERVICE"
+  say "  railway volume add --mount-path $RW_TPL_MOUNT --json"
+  say "  railway domain --port $RW_TPL_PORT --service $RW_TPL_SERVICE --json"
+  say "  railway environment list --json"
+  say "  railway api '<environmentPatchCommit>' --variables @patch.json   (image, health check, auto updates, variables)"
+  say "  railway templates create --project <scratch project id> --environment production --json"
+  say "  railway api '<template serializedConfig>' --raw-var id=<template id>   (the check)"
+  say "  railway delete --project <scratch project id> --yes --json"
+  if [ "$OPT_PUBLISH" = 1 ]; then
+    say "  railway templates publish <template id> --category $RW_TPL_CATEGORY --description \"$RW_TPL_DESCRIPTION\" --readme-file overview.md --json"
+  fi
+}
+
+# Delete what this run created and has not handed over: the scratch project always, a
+# draft only while it is unchecked. Runs from the EXIT trap too, so it never dies.
+rw_tpl_cleanup() {
+  if [ -n "${RW_TPL_UNVERIFIED:-}" ]; then
+    rtc_id="$RW_TPL_UNVERIFIED"
+    RW_TPL_UNVERIFIED=""
+    if rw_cap templates delete "$rtc_id" --yes --json; then
+      ok "Deleted the unchecked template draft $rtc_id."
+    else
+      warn "Could not delete the unchecked template draft $rtc_id. Delete it yourself: railway templates delete $rtc_id"
+    fi
+  fi
+  if [ -n "${RW_SCRATCH_ID:-}" ]; then
+    rtc_id="$RW_SCRATCH_ID"
+    RW_SCRATCH_ID=""
+    if rw_cap delete --project "$rtc_id" --yes --json; then
+      ok "Deleted the scratch project '$RW_TPL_PROJECT' ($rtc_id); Railway finishes removing it on its side."
+    else
+      warn "Could not delete the scratch project '$RW_TPL_PROJECT' ($rtc_id). Delete it yourself: railway delete --project $rtc_id"
+    fi
+    rw unlink --yes >/dev/null 2>&1 || true
+  fi
+  if [ -n "${RW_TPL_WORKDIR:-}" ]; then
+    rm -rf "$RW_TPL_WORKDIR" 2>/dev/null || true
+    RW_TPL_WORKDIR=""
+  fi
+}
+
+# RW_TPL_IDS: ids of the projects named RW_TPL_PROJECT, one per line.
+rw_tpl_named_projects() {
+  rw_must "list your projects" list --json
+  RW_TPL_IDS=$(printf '%s\n' "$RW_OUT" | json_project_ids "$RW_TPL_PROJECT")
+}
+
+# Build the scratch project from the spec and turn it into a template draft.
+rw_tpl_build() {
+  rw_tpl_named_projects
+  rtb_before="$RW_TPL_IDS"
+  info "Creating the scratch project '$RW_TPL_PROJECT'..."
+  if [ -n "$OPT_RW_WORKSPACE" ]; then
+    rw_cap init --name "$RW_TPL_PROJECT" --workspace "$OPT_RW_WORKSPACE" --json || true
+  else
+    rw_cap init --name "$RW_TPL_PROJECT" --json || true
+  fi
+  rtb_init_err="$RW_ERR"
+  # The project this run created is the one that was not there before: a project of the
+  # same name that already existed is never touched, let alone deleted.
+  rtb_new=""
+  rtb_count=0
+  rw_tpl_named_projects
+  for rtb_id in $RW_TPL_IDS; do
+    printf '%s\n' "$rtb_before" | grep -qx "$rtb_id" && continue
+    rtb_new="$rtb_id"
+    rtb_count=$((rtb_count + 1))
+  done
+  if [ "$rtb_count" != 1 ]; then
+    [ -z "$rtb_init_err" ] || printf '%s\n' "$rtb_init_err" >&2
+    [ "$rtb_count" = 0 ] || die "Found $rtb_count new projects named '$RW_TPL_PROJECT' and cannot tell which is the scratch one; delete them in Railway and re-run."
+    case "$rtb_init_err" in
+      *orkspace*) die "Railway could not create the scratch project. If you have more than one workspace, add --workspace=<workspace name or ID>." ;;
+    esac
+    die "Railway could not create the scratch project '$RW_TPL_PROJECT' (see above)."
+  fi
+  RW_SCRATCH_ID="$rtb_new"
+  ok "Scratch project: $RW_TPL_PROJECT ($RW_SCRATCH_ID)."
+  rw_must "link the scratch project" link --project "$RW_SCRATCH_ID" --environment production
+  rw_must "add the service" add --service "$RW_TPL_SERVICE" --json
+  rtb_svc=$(printf '%s\n' "$RW_OUT" | json_first_id)
+  [ -n "$rtb_svc" ] || die "Railway added the service but the installer could not read its id."
+  rw_must "link the service" service link "$RW_TPL_SERVICE"
+  rw_must "attach the volume" volume add --mount-path "$RW_TPL_MOUNT" --json
+  rw_must "create a domain" domain --port "$RW_TPL_PORT" --service "$RW_TPL_SERVICE" --json
+  rw_must "read the environment" environment list --json
+  rtb_env=$(printf '%s\n' "$RW_OUT" | json_named_id production)
+  [ -n "$rtb_env" ] || die "Railway: could not find the scratch project's production environment."
+  rw_tpl_patch "$rtb_env" "$rtb_svc" | write_file "$RW_TPL_WORKDIR/patch.json" 600
+  rw_must "configure the service" api "$RW_PATCH_MUTATION" --variables "@$RW_TPL_WORKDIR/patch.json"
+  ok "Service '$RW_TPL_SERVICE' configured from the spec (no deployment)."
+  info "Creating the template draft..."
+  rw_must "create the template draft" templates create --project "$RW_SCRATCH_ID" --environment production --json
+  RW_TPL_ID=$(printf '%s\n' "$RW_OUT" | json_member id)
+  RW_TPL_CODE=$(printf '%s\n' "$RW_OUT" | json_member code)
+  [ -n "$RW_TPL_ID" ] || die "Railway created a template draft but the installer could not read its id. Check Templates in your workspace settings."
+  RW_TPL_UNVERIFIED="$RW_TPL_ID"
+  ok "Template draft: $RW_TPL_CODE ($RW_TPL_ID)."
+}
+
+# Read the draft back and compare it with the spec. A secret variable whose default is
+# anything but the secret function is a hard stop: the draft is deleted, never published.
+# Everything else that is missing is a step for Railway's template editor (RW_TPL_TODO).
+rw_tpl_verify() { # id-or-code
+  case "$1" in
+    *-*-*-*-*) rw_must "read the template draft" api "$RW_TPL_QUERY" --raw-var "id=$1" ;;
+    *) rw_must "read the template draft" api "$RW_TPL_QUERY" --raw-var "code=$1" ;;
+  esac
+  RW_TPL_PATHS=$(printf '%s\n' "$RW_OUT" | json_paths)
+  RW_TPL_ID=$(rw_tpl_get 'data\.template\.id')
+  RW_TPL_CODE=$(rw_tpl_get 'data\.template\.code')
+  RW_TPL_STATUS=$(rw_tpl_get 'data\.template\.status')
+  [ -n "$RW_TPL_ID" ] && [ -n "$RW_TPL_CODE" ] || die "Railway returned no template for '$1'."
+  rtv_svc='data\.template\.serializedConfig\.services\.[^.]+'
+  RW_TPL_TODO=""
+  rtv_bad=""
+  for rtv_key in $RW_SECRET_VARS; do
+    rtv_val=$(rw_tpl_get "$rtv_svc\\.variables\\.$rtv_key\\.defaultValue")
+    if [ "$rtv_val" = "$RW_SECRET_FN" ]; then
+      ok "$rtv_key: $RW_SECRET_FN (a separate secret for every deployer)."
+    elif [ -z "$rtv_val" ]; then
+      RW_TPL_TODO="$RW_TPL_TODO${NL}Variable $rtv_key: set it to $RW_SECRET_FN (the function itself, never a value)."
+    else
+      rtv_bad="$rtv_bad $rtv_key"
+    fi
+  done
+  if [ -n "$rtv_bad" ]; then
+    warn "The draft carries a fixed value for:$rtv_bad. Every deployer would share it."
+    die "Refusing this draft${RW_TPL_UNVERIFIED:+; it is deleted}. Each secret must be $RW_SECRET_FN in the template editor."
+  fi
+  for rtv_kv in $RW_PLAIN_VARS; do
+    rtv_key="${rtv_kv%%=*}"
+    [ "$(rw_tpl_get "$rtv_svc\\.variables\\.$rtv_key\\.defaultValue")" = "${rtv_kv#*=}" ] \
+      || RW_TPL_TODO="$RW_TPL_TODO${NL}Variable $rtv_key: set it to ${rtv_kv#*=}."
+  done
+  rtv_extra=$(printf '%s\n' "$RW_TPL_PATHS" | sed -n "s/^data\\.template\\.serializedConfig\\.services\\.[^.]*\\.variables\\.\\([A-Za-z0-9_]*\\)\\..*/\\1/p" | sort -u)
+  for rtv_key in $rtv_extra; do
+    case " $RW_SECRET_VARS $(printf '%s\n' "$RW_PLAIN_VARS" | sed 's/=[^ ]*//g') " in
+      *" $rtv_key "*) ;;
+      *) RW_TPL_TODO="$RW_TPL_TODO${NL}Variable $rtv_key is not in the spec: delete it." ;;
+    esac
+  done
+  rtv_desc=0
+  for rtv_key in $RW_SECRET_VARS $(printf '%s\n' "$RW_PLAIN_VARS" | sed 's/=[^ ]*//g'); do
+    [ -n "$(rw_tpl_get "$rtv_svc\\.variables\\.$rtv_key\\.description")" ] || rtv_desc=$((rtv_desc + 1))
+  done
+  [ "$rtv_desc" = 0 ] || RW_TPL_TODO="$RW_TPL_TODO${NL}Variable descriptions ($rtv_desc missing): copy each one from $RW_TPL_SPEC_URL"
+  [ "$(rw_tpl_get "$rtv_svc\\.name")" = "$RW_TPL_SERVICE" ] || RW_TPL_TODO="$RW_TPL_TODO${NL}Service name: $RW_TPL_SERVICE."
+  [ "$(rw_tpl_get "$rtv_svc\\.source\\.image")" = "$IMAGE" ] || RW_TPL_TODO="$RW_TPL_TODO${NL}Service source: the Docker image $IMAGE."
+  [ "$(rw_tpl_get "$rtv_svc\\.deploy\\.healthcheckPath")" = "$RW_TPL_HEALTHCHECK" ] \
+    || RW_TPL_TODO="$RW_TPL_TODO${NL}Settings -> Deploy -> Healthcheck Path: $RW_TPL_HEALTHCHECK."
+  [ "$(rw_tpl_get "$rtv_svc\\.volumeMounts\\.[^.]+\\.mountPath")" = "$RW_TPL_MOUNT" ] \
+    || RW_TPL_TODO="$RW_TPL_TODO${NL}A volume mounted at $RW_TPL_MOUNT."
+  [ "$(rw_tpl_get "$rtv_svc\\.networking\\.serviceDomains\\.[^.]+\\.port")" = "$RW_TPL_PORT" ] \
+    || RW_TPL_TODO="$RW_TPL_TODO${NL}Settings -> Networking: a public domain on port $RW_TPL_PORT."
+  case "$(rw_tpl_get "$rtv_svc\\.source\\.autoUpdates\\.type")" in
+    "" | disabled) RW_TPL_TODO="$RW_TPL_TODO${NL}Settings -> Source -> Auto Updates: on, maintenance window $RW_TPL_UPDATE_WINDOW." ;;
+  esac
+  RW_TPL_UNVERIFIED=""
+  RW_TPL_PATHS=""
+}
+
+# The overview markdown: deploy/railway/overview.md beside this script in a checkout,
+# else the copy on main.
+rw_tpl_overview() {
+  rto_dir=$(cd "$(dirname "$0")" 2>/dev/null && pwd) || rto_dir=""
+  if [ -n "$rto_dir" ] && [ -s "$rto_dir/railway/overview.md" ]; then
+    RW_TPL_OVERVIEW="$rto_dir/railway/overview.md"
+    return 0
+  fi
+  has curl || die "curl is required to fetch the template overview ($RW_TPL_OVERVIEW_URL)."
+  RW_TPL_OVERVIEW="$RW_TPL_WORKDIR/overview.md"
+  info "Fetching the overview: $RW_TPL_OVERVIEW_URL"
+  curl -fsSL --proto '=https' --tlsv1.2 "$RW_TPL_OVERVIEW_URL" -o "$RW_TPL_OVERVIEW" </dev/null \
+    || die "Could not download $RW_TPL_OVERVIEW_URL"
+  grep -q 'Cairn' "$RW_TPL_OVERVIEW" || die "$RW_TPL_OVERVIEW_URL does not look like Cairn's template overview."
+}
+
+rw_tpl_report() {
+  step "Template draft ready${RW_TPL_STATUS:+ ($RW_TPL_STATUS)}"
+  say "  Code:     $RW_TPL_CODE"
+  say "  Editor:   https://railway.com/workspace/templates/$RW_TPL_ID"
+  say "  Deploy:   https://railway.com/new/template/$RW_TPL_CODE   (for everyone once published)"
+  if [ -n "$RW_TPL_TODO" ]; then
+    say ""
+    say "  Left for Railway's template editor (the Editor link above), then Save:"
+    printf '%s\n' "$RW_TPL_TODO" | sed '/^$/d; s/^/    - /'
+  fi
+}
+
+rw_tpl_publish() {
+  if [ -n "$RW_TPL_TODO" ] && [ "$OPT_FORCE" != 1 ]; then
+    say ""
+    say "Not publishing yet: finish the editor steps above, then publish the checked draft with:"
+    say "  sh $(rw_tpl_self) railway-template --publish --template=$RW_TPL_CODE"
+    say "(--force publishes without them.)"
+    return 0
+  fi
+  rw_tpl_overview
+  step "Publish: plan"
+  say "  Template:    $RW_TPL_CODE ($RW_TPL_ID), now ${RW_TPL_STATUS:-UNPUBLISHED}"
+  say "  Category:    $RW_TPL_CATEGORY"
+  say "  Description: $RW_TPL_DESCRIPTION"
+  say "  Overview:    $RW_TPL_OVERVIEW"
+  say "  Result:      public in Railway's marketplace, under your workspace:"
+  say "               https://railway.com/new/template/$RW_TPL_CODE"
+  if [ -n "$RW_TPL_TODO" ]; then say "  Missing:     the editor steps listed above (--force)"; fi
+  confirm "Publish this template to Railway's marketplace?" "n" || {
+    say "Not published. The draft stays private: https://railway.com/workspace/templates/$RW_TPL_ID"
+    return 0
+  }
+  rw_must "publish the template" templates publish "$RW_TPL_ID" --category "$RW_TPL_CATEGORY" \
+    --description "$RW_TPL_DESCRIPTION" --readme-file "$RW_TPL_OVERVIEW" --json
+  ok "Published: https://railway.com/new/template/$RW_TPL_CODE"
+  say "  Point the project site's /railway redirect at that link to make it the README button."
+}
+
+rw_tpl_self() {
+  case "$0" in */install.sh | install.sh | */cairn.sh | cairn.sh) printf '%s' "$0" ;; *) printf 'install.sh' ;; esac
+}
+
+rw_tpl_main() {
+  IMAGE="${OPT_IMAGE:-$DEFAULT_IMAGE}"
+  RW_TPL_PROJECT="${OPT_RW_PROJECT:-$RW_TPL_NAME}"
+  RW_SCRATCH_ID=""; RW_TPL_UNVERIFIED=""; RW_TPL_WORKDIR=""; RW_TPL_ID=""; RW_TPL_CODE=""; RW_TPL_STATUS=""
+  RW_TPL_TODO=""; RW_TOKEN=""; RW_SECRET=""
+  rw_tpl_print_plan
+  if [ "$OPT_DRY_RUN" = 1 ]; then
+    rw_tpl_print_commands
+    say ""
+    say "Dry run: nothing was changed."
+    return 0
+  fi
+  if [ -z "$OPT_TEMPLATE" ]; then
+    confirm "Build the template draft in your Railway workspace?" "y" || die "Cancelled; nothing was changed."
+  fi
+  RW_TPL_WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/cairn-railway-template.XXXXXX") || die "Could not create a temporary directory."
+  RW_DIR="$RW_TPL_WORKDIR"
+  rw_ensure_cli
+  if ! rw templates create --help >/dev/null 2>&1 || ! rw api --help >/dev/null 2>&1; then
+    die "Your Railway CLI is too old (no 'railway templates create' / 'railway api'). Update it (railway upgrade, brew upgrade railway, or npm i -g @railway/cli) and re-run."
+  fi
+  rw_ensure_login
+  ok "Signed in to Railway: $(rw whoami 2>/dev/null | head -n 1)"
+  if [ -n "$OPT_TEMPLATE" ]; then
+    rw_tpl_verify "$OPT_TEMPLATE"
+  else
+    step "Building the template"
+    rw_tpl_build
+    rw_tpl_verify "$RW_TPL_ID"
+    step "Cleaning up"
+    rw_tpl_cleanup
+  fi
+  rw_tpl_report
+  if [ "$OPT_PUBLISH" = 1 ]; then rw_tpl_publish; fi
+  rw_tpl_cleanup
+}
+
 railway_main() {
   rw_setup_paths
   case "$CMD" in
@@ -2503,6 +3040,7 @@ railway_main() {
 # ----------------------------------------------------------------------------- main
 
 cleanup() {
+  rw_tpl_cleanup
   release_lock
   for cl_f in $TMP_FILES; do rm -f "$cl_f"; done
 }
@@ -2516,11 +3054,16 @@ main() {
   trap cleanup EXIT
   trap 'exit 130' INT TERM
   detect_platform
-  resolve_target
-  if [ "$TARGET" = "railway" ]; then
-    railway_main
+  if [ "$CMD" = "railway-template" ]; then
+    rw_tpl_main
     return 0
   fi
+  resolve_target
+  "${TARGET}_main"
+}
+
+# This machine (docker/podman compose), the provider named "local" in PROVIDERS.
+local_main() {
   resolve_dir
   load_existing
   case "$CMD" in

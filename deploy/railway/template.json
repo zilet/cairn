@@ -1,0 +1,65 @@
+{
+  "$comment": "The Railway template, declared. `sh deploy/install.sh railway-template` builds a template draft from it in the Railway workspace you are signed in to (see deploy/railway/README.md). deploy/install.sh carries the same values for its Railway install; test/installScript.test.js fails when the two drift.",
+  "name": "Cairn",
+  "category": "AI/ML",
+  "description": "Your own self-hosted coach for training, nutrition and longevity.",
+  "overview": "overview.md",
+  "service": {
+    "name": "cairn",
+    "image": "ghcr.io/zilet/cairn:latest",
+    "volumeMountPath": "/data",
+    "healthcheckPath": "/api/health",
+    "port": 8787,
+    "autoUpdates": {
+      "type": "patch",
+      "window": "Night, 02:00-06:00 UTC, every day",
+      "schedule": [
+        { "day": 0, "startHour": 2, "endHour": 6 },
+        { "day": 1, "startHour": 2, "endHour": 6 },
+        { "day": 2, "startHour": 2, "endHour": 6 },
+        { "day": 3, "startHour": 2, "endHour": 6 },
+        { "day": 4, "startHour": 2, "endHour": 6 },
+        { "day": 5, "startHour": 2, "endHour": 6 },
+        { "day": 6, "startHour": 2, "endHour": 6 }
+      ]
+    }
+  },
+  "variables": {
+    "CAIRN_AUTH_TOKEN": {
+      "value": "${{secret(48)}}",
+      "description": "Your sign-in token. Copy it from this tab to sign in; it is also your recovery key."
+    },
+    "CAIRN_SETTINGS_SECRET_KEY": {
+      "value": "${{secret(48)}}",
+      "description": "Encrypts stored integration passwords. Leave it as generated."
+    },
+    "CAIRN_SINGLE_VOLUME": {
+      "value": "1",
+      "description": "Keep sign-ins and AI tools on the one volume at /data."
+    },
+    "CAIRN_REQUIRE_AUTH": {
+      "value": "1",
+      "description": "Refuse to start without a token: a Railway URL is public."
+    },
+    "CAIRN_BLANK_PROFILE": {
+      "value": "1",
+      "description": "Start with an empty profile, with no demo data."
+    },
+    "CAIRN_PLATFORM": {
+      "value": "railway",
+      "description": "Tells Cairn how it was deployed."
+    },
+    "CAIRN_MAX_AGENT_PROCS": {
+      "value": "1",
+      "description": "Runs one background AI task at a time to keep memory low."
+    },
+    "PORT": {
+      "value": "8787",
+      "description": "The port Cairn listens on."
+    },
+    "CAIRN_FEEDBACK_URL": {
+      "value": "https://feedback.cairn.fit",
+      "description": "Where Send feedback delivers (only when you press Send). Delete it to open a GitHub issue instead."
+    }
+  }
+}

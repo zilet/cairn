@@ -10,7 +10,7 @@ It asks one question:
 
 ```text
 Where should Cairn live?
-  1) In the cloud on Railway  (about $5/month, nothing to keep running)
+  1) In the cloud on Railway    (about $5/month, nothing to keep running)
   2) On this computer or server (free, private, needs to stay on)
 ```
 
@@ -107,18 +107,25 @@ What it does, in order:
    no terminal it stops and asks you to run `railway login` first (or set `RAILWAY_API_TOKEN`).
 3. **The project.** It creates a project named after the instance (`cairn` by default), or the name you pass with
    `--railway-project-name=`. If a project with that name exists, it asks before using it (`--yes`
-   counts as yes). With several workspaces, add `--railway-workspace=<name or ID>`.
+   counts as yes). A project Railway is still deleting (it keeps one about 48 hours, with a
+   `deletedAt`) does not count. With several workspaces, add `--railway-workspace=<name or ID>`.
 4. **The service.** One service from `ghcr.io/zilet/cairn:latest`, one volume at `/data`, and
    these variables: `CAIRN_SINGLE_VOLUME=1`, `CAIRN_REQUIRE_AUTH=1`, `CAIRN_BLANK_PROFILE=1`,
    `CAIRN_PLATFORM=railway`, `CAIRN_MAX_AGENT_PROCS=1`, `PORT=8787`. It generates
    `CAIRN_AUTH_TOKEN` and `CAIRN_SETTINGS_SECRET_KEY` (64 hex characters each) and sends them with
    `railway variable set KEY --stdin`, never on a command line.
-5. **The address.** A public `https://<name>.up.railway.app` domain on port 8787.
-6. **The deployment.** One redeploy from the image, then it checks the deployment every 10 seconds
+5. **Automatic updates.** It switches on Railway's Image Auto Updates for the service (new
+   releases install in the Night window, 02:00–06:00 UTC), with one environment patch through
+   `railway api`, and reads the setting back. A service that already has a setting keeps it, and
+   once the installer has switched them on, turning them off in Railway is your choice: a re-run
+   leaves it off. If the patch fails, the install goes on and the summary says how to switch them on
+   by hand.
+6. **The address.** A public `https://<name>.up.railway.app` domain on port 8787.
+7. **The deployment.** One redeploy from the image, then it checks the deployment every 10 seconds
    for up to 10 minutes. If Railway reports `FAILED` or `CRASHED`, it prints the last 30 build and
    runtime log lines, drops any line that contains your token or key, and stops. Your project stays;
    fix the cause and run the same command again.
-7. **Health, then sign-in.** It waits for `https://<domain>/api/health` and opens Cairn signed in.
+8. **Health, then sign-in.** It waits for `https://<domain>/api/health` and opens Cairn signed in.
 
 Every Railway command runs from `~/.cairn/railway/<name>/` (mode 700), where the CLI keeps its
 project link. That folder holds `railway.state` (project ID, service, domain; no secrets) and a copy
@@ -137,6 +144,9 @@ railway service link cairn
 railway volume add --mount-path /data --json
 railway variable set CAIRN_AUTH_TOKEN --stdin --service cairn --environment production --skip-deploys
 railway variable set CAIRN_SETTINGS_SECRET_KEY --stdin --service cairn --environment production --skip-deploys
+railway service list --json; railway environment list --json
+railway environment config --environment production --json      (are auto updates set already?)
+railway api '<environmentPatchCommit>' --variables @autoupdates.json   (source.autoUpdates, only when not set)
 railway domain --port 8787 --service cairn --environment production --json
 railway redeploy --service cairn --environment production --from-source --yes --json
 railway deployment list --service cairn --environment production --limit 5 --json
@@ -158,10 +168,19 @@ never print it. Without a terminal, `uninstall` needs `--confirm-purge=<project 
 itself in a terminal. Deleting the project deletes its volume, and with it all of this Cairn's data.
 
 **Updates.** Railway's Image Auto Updates redeploy the service when a new `:latest` is published,
-inside a maintenance window you pick. The Railway CLI has no command to switch it on, so the
-installer tells you where: the service's **Settings → Source → Configure Auto Updates**, then the
-Night window. Until you do, `cairn.sh update` is the way to update. Cairn writes its own restore
+inside the maintenance window. The installer switches them on in the Night window (02:00–06:00
+UTC); `cairn.sh status` shows the setting, and the service's **Settings → Source → Auto Updates**
+changes it. `cairn.sh update` updates right away. Cairn writes its own restore
 point to `/data/backups/` before a release changes the database.
+
+### Building the Railway template (maintainers and forks)
+
+`sh deploy/install.sh railway-template` builds the "Deploy on Railway" template from
+[`deploy/railway/template.json`](../deploy/railway/template.json) into the workspace your Railway CLI
+is signed in to, as a private draft, through a scratch project it deletes again. `--publish` publishes
+a checked draft after a `[y/N]`; `--dry-run` prints the plan. The secrets are always Railway's
+per-deployer `${{secret(48)}}`, never a value. Details and the editor steps Railway leaves you:
+[`deploy/railway/README.md`](../deploy/railway/README.md).
 
 ## Choice 2: this computer or server
 

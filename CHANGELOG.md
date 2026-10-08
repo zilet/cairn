@@ -5,6 +5,34 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+### Added
+
+- **The Railway template is rebuildable from the repo.** `deploy/railway/template.json` declares it
+  (image, volume, health check, port, auto updates, every variable with its description, the
+  marketplace text), and `sh deploy/install.sh railway-template` builds it as a private draft in
+  whichever Railway workspace you are signed in to: a scratch project from the spec, `railway
+  templates create`, a check of the draft, and the scratch project deleted again, also on failure.
+  `--publish` publishes a checked draft after a `[y/N]`. The two secrets are always Railway's
+  per-deployer `${{secret(48)}}`; a draft that carries a fixed value is deleted, never published.
+  No one account is needed to rebuild the button's template.
+- **Hosting providers come from one table.** The installer's chooser, `--target=` and the
+  no-terminal hint read `PROVIDERS`; `deploy/README.md` says how a new host slots in.
+
+- **A Railway install switches on automatic updates itself.** Railway's Image Auto Updates, in the
+  Night window (02:00–06:00 UTC) the template uses, set with one environment patch and read back.
+  An existing setting is kept, and turning them off in Railway stays off on a re-run. `cairn.sh
+  status` shows the setting. No more "turn this on by hand" step.
+
+### Changed
+
+- `--railway-workspace=` (now also `--workspace=`) accepts any workspace name, apostrophes included.
+
+### Fixed
+
+- The Railway installer no longer reuses or counts a project Railway is still deleting (`railway
+  list` keeps one about 48 hours, with a `deletedAt`). Re-installing right after an uninstall now
+  creates a new project instead of setting up in the one being deleted.
+
 ## [2.1.0] — 2026-10-08
 
 Cairn 2.1 is the one you can run without being an engineer. One command, or one Railway button, puts

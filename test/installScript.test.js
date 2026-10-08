@@ -634,6 +634,22 @@ test("with no --target and no terminal it explains the one choice and exits non-
     assert.notEqual(bad.code, 0);
   }));
 
+test("hosting providers come from one table: each has a <target>_main and, if remote, a deploy/<target>/", () =>
+  withTempDir((dir) => {
+    const text = fs.readFileSync(script, "utf8");
+    const table = /^PROVIDERS="([^"]*)"$/m.exec(text);
+    assert.ok(table, "install.sh has no PROVIDERS table");
+    const targets = table[1].split("\n").map((line) => line.split("|")[0]);
+    assert.deepEqual(targets, ["railway", "local"]);
+    for (const t of targets) {
+      assert.match(text, new RegExp(`^${t}_main\\(\\) \\{$`, "m"), `${t}_main is missing`);
+      if (t !== "local") assert.ok(fs.statSync(path.join(root, "deploy", t)).isDirectory(), `deploy/${t}/ is missing`);
+    }
+    const bad = run(["--target=heroku"], { env: { HOME: dir } });
+    assert.notEqual(bad.code, 0);
+    assert.match(bad.err, /--target must be one of: railway local/);
+  }));
+
 test("--target=railway --dry-run prints the plan and the CLI sequence, no secrets", () =>
   withTempDir((dir) => {
     const r = run(["--target=railway", "--dry-run", "--railway-project-name=my-cairn"], { env: { HOME: dir } });
@@ -657,7 +673,7 @@ S="$FAKE_STATE"
 { printf 'railway'; for a in "$@"; do printf ' %s' "$a"; done; printf '\n'; } >>"$S/rlog"
 pwd >>"$S/rcwd"
 for a in "$@"; do
-  if printf '%s' "$a" | grep -Eq '[0-9a-f]{64}'; then touch "$S/secret_in_argv"; exit 99; fi
+  if printf '%s' "$a" | grep -Eq '[0-9a-f]{64}|^[a-z0-9]{48}$'; then touch "$S/secret_in_argv"; exit 99; fi
 done
 case "$*" in *--help*) echo "  --stdin   --from-source"; exit 0 ;; esac
 stdin_value=""
@@ -666,13 +682,23 @@ case " $* " in
   *) if [ ! -t 0 ] && [ -n "$(cat)" ]; then touch "$S/stdin_not_closed"; fi ;;
 esac
 DOMAIN="cairn-production-a1b2.up.railway.app"
+TPL_ID="11111111-2222-4333-8444-555555555555"
 cmd="$1"; shift
 case "$cmd" in
   whoami) [ -f "$S/logged_out" ] && { echo "Unauthorized. Please login" >&2; exit 1; }; echo "Logged in as Test User" ;;
   list)
+    printf '['
+    if [ -f "$S/deleted_project" ]; then
+      printf '\n  {"id": "proj-gone", "name": "%s", "deletedAt": "2026-10-10T13:25:12.286Z", "environments": {"edges": []}},' "$(cat "$S/deleted_project")"
+    fi
+    if [ -f "$S/existing_project" ]; then
+      printf '\n  {"id": "proj-0", "name": "%s", "environments": {"edges": []}}' "$(cat "$S/existing_project")"
+      [ -f "$S/project" ] && printf ','
+    fi
     if [ -f "$S/project" ]; then
-      printf '[\n  {\n    "id": "proj-1",\n    "name": "%s",\n    "environments": {"edges": [{"node": {"id": "env-1", "name": "production"}}]},\n    "services": {"edges": [{"node": {"id": "svc-9", "name": "other"}}]}\n  }\n]\n' "$(cat "$S/project")"
-    else echo "[]"; fi ;;
+      printf '\n  {\n    "id": "proj-1",\n    "name": "%s",\n    "environments": {"edges": [{"node": {"id": "env-1", "name": "production"}}]},\n    "services": {"edges": [{"node": {"id": "svc-9", "name": "other"}}]}\n  }' "$(cat "$S/project")"
+    fi
+    printf '\n]\n' ;;
   init)
     while [ $# -gt 0 ]; do [ "$1" = --name ] && printf '%s' "$2" >"$S/project"; shift; done
     echo '{"id":"proj-1"}' ;;
@@ -721,6 +747,39 @@ case "$cmd" in
     grep '^CAIRN_AUTH_TOKEN=' "$S/vars" 2>/dev/null
     echo "Error: listen EADDRINUSE (fake failure)" ;;
   delete) touch "$S/deleted"; echo '{"ok":true}' ;;
+  environment)
+    case "$1" in
+      config)
+        # source.autoUpdates as Railway shows it: $S/au_type holds the type once one is set.
+        if [ -f "$S/au_type" ]; then
+          printf '{"services":{"svc-1":{"source":{"image":"x","autoUpdates":{"type":"%s","schedule":[{"day":0,"startHour":2,"endHour":6}]}}}}}\n' "$(cat "$S/au_type")"
+        else echo '{"services":{"svc-1":{"source":{"image":"x"}}}}'; fi ;;
+      *) echo '{"environments":[{"id":"env-1","name":"production","isEphemeral":false}]}' ;;
+    esac ;;
+  api)
+    q="$1"; shift
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --variables) case "$2" in @*) cp "$(printf '%s' "$2" | cut -c2-)" "$S/patch.json" ;; esac; shift ;;
+        --raw-var) printf '%s\n' "$2" >>"$S/api_vars"; shift ;;
+      esac
+      shift
+    done
+    case "$q" in
+      mutation*)
+        [ -f "$S/fail_api_mutation" ] && { echo "Error: Not Authorized (fake)" >&2; exit 1; }
+        if grep -q '"autoUpdates"' "$S/patch.json" 2>/dev/null; then echo patch >"$S/au_type"; fi
+        echo '{"data":{"environmentPatchCommit":"commitChanges/env-1/patch-1"}}' ;;
+      *) cat "$S/template_response" 2>/dev/null || echo '{"data":{"template":null}}' ;;
+    esac ;;
+  templates)
+    sub="$1"
+    [ -f "$S/fail_templates_$sub" ] && { echo "Error: templates $sub failed (fake)" >&2; exit 1; }
+    case "$sub" in
+      create) touch "$S/template"; echo '{"code":"AbC123","editorUrl":"https://railway.com/workspace/templates/'"$TPL_ID"'","id":"'"$TPL_ID"'","name":"Cairn","status":"UNPUBLISHED"}' ;;
+      publish) touch "$S/published"; echo '{"code":"AbC123","id":"'"$TPL_ID"'","status":"PUBLISHED"}' ;;
+      delete) touch "$S/template_deleted"; echo '{"deleted":true}' ;;
+    esac ;;
   *) echo "fake railway: unhandled $cmd" >&2; exit 64 ;;
 esac
 `;
@@ -827,6 +886,11 @@ test("fake railway: --target=railway installs end to end, secrets only on stdin,
       "railway variable list --service cairn --environment production --kv",
       "railway variable set CAIRN_AUTH_TOKEN --stdin --service cairn --environment production --skip-deploys",
       "railway variable set CAIRN_SETTINGS_SECRET_KEY --stdin --service cairn --environment production --skip-deploys",
+      "railway service list --json",
+      "railway environment list --json",
+      "railway environment config --environment production --json",
+      "railway api mutation(",
+      "railway environment config --environment production --json",
       "railway domain list --service cairn",
       "railway domain --port 8787 --service cairn",
       "railway deployment list --service cairn",
@@ -848,7 +912,15 @@ test("fake railway: --target=railway installs end to end, secrets only on stdin,
     assert.match(r.out, /not printed: this output is not a terminal/);
     assert.match(r.out, /Deployment: BUILDING/);
     assert.match(r.out, /Cairn is running on Railway \(v2\.1\.0\)/);
-    assert.match(r.out, /Auto Updates/);
+    // Image auto updates: switched on with the template's window, read back, remembered.
+    const au = JSON.parse(rig.read("patch.json"));
+    assert.deepEqual(au, {
+      env: "env-1",
+      patch: { services: { "svc-1": { source: { autoUpdates: autoUpdatesSpec() } } } },
+    });
+    assert.match(r.out, /Automatic updates: on, in the Night, 02:00-06:00 UTC window/);
+    assert.match(r.out, /Automatic: Railway installs each new release in the Night, 02:00-06:00 UTC window/);
+    assert.doesNotMatch(r.out, /Turn on automatic updates once/);
 
     // Signed in: a one-time code over stdin, opened as <origin>/#pair=<code>.
     const url = "https://cairn-production-a1b2.up.railway.app/#pair=ABCD-EF12";
@@ -861,6 +933,7 @@ test("fake railway: --target=railway installs end to end, secrets only on stdin,
     // Local state: no secrets, private, and a working cairn.sh beside it.
     const st = fs.readFileSync(path.join(rig.stateDir, "railway.state"), "utf8");
     assert.match(st, /^RW_PROJECT_ID=proj-1$/m);
+    assert.match(st, /^RW_AUTOUPDATES_SET=1$/m);
     assert.match(st, /^RW_SERVICE=cairn$/m);
     assert.match(st, /^RW_DOMAIN=cairn-production-a1b2\.up\.railway\.app$/m);
     assert.doesNotMatch(st, /[0-9a-f]{64}/);
@@ -884,6 +957,7 @@ test("fake railway: --target=railway installs end to end, secrets only on stdin,
       "railway volume add",
       "railway variable set",
       "railway domain --port",
+      "railway api mutation",
     ]) {
       assert.ok(!second.some((line) => line.startsWith(never)), `re-run should not run "${never}"`);
     }
@@ -895,6 +969,7 @@ test("fake railway: --target=railway installs end to end, secrets only on stdin,
     assert.equal(status.code, 0, status.all);
     assert.match(status.out, /Deployment: SUCCESS \(dep-\d+\)/);
     assert.match(status.out, /healthy, v2\.1\.0/);
+    assert.match(status.out, /Updates: {4}automatic \(patch, Railway Auto Updates\)/);
     assert.doesNotMatch(status.all, new RegExp(token));
 
     const open = rig.cairnSh(["open"]);
@@ -1225,4 +1300,339 @@ test("counting: no container engine counts as failed at the engine step", () =>
     assert.notEqual(r.code, 0, r.all);
     const clog = fs.readFileSync(path.join(rig.env.FAKE_STATE, "clog"), "utf8");
     assert.deepEqual(eventLines(clog).map(eventQuery), [{ e: "failed", t: "local", s: "engine", v: "1" }]);
+  }));
+
+// ----------------------------------------------------------------------------- Railway template
+
+const specPath = path.join(root, "deploy", "railway", "template.json");
+const spec = JSON.parse(fs.readFileSync(specPath, "utf8"));
+// Railway's per-deployer secret function (a template string with the placeholder escaped).
+const SECRET_FN = `\${{secret(48)}}`;
+const TPL_ID = "11111111-2222-4333-8444-555555555555";
+const specSecrets = Object.keys(spec.variables).filter((k) => /^\$\{\{secret\(/.test(spec.variables[k].value));
+const specPlain = Object.entries(spec.variables).filter(([k]) => !specSecrets.includes(k));
+
+// A shell assignment from install.sh: NAME="value" or NAME='value'.
+function shellConst(name) {
+  const m = new RegExp(`^${name}=(?:"([^"]*)"|'([^']*)'|(\\S+))$`, "m").exec(fs.readFileSync(script, "utf8"));
+  assert.ok(m, `install.sh has no ${name}=`);
+  return m[1] ?? m[2] ?? m[3];
+}
+
+// What `railway api` answers for the draft: the shape Railway's template generate produced live
+// (2026-10-08, CLI 5.64): every variable's default, the health check, volume and domain, but no
+// variable descriptions and no image auto updates. Options model the editor having added them,
+// or a draft that carries a fixed secret.
+function templateResponse({ descriptions = false, autoUpdates = false, fixed = {}, drop = [] } = {}) {
+  const variables = {};
+  for (const [k, v] of Object.entries(spec.variables)) {
+    if (drop.includes(k)) continue;
+    variables[k] = { defaultValue: fixed[k] ?? v.value, isOptional: false };
+    if (descriptions) variables[k].description = v.description;
+  }
+  const svc = "c9b8b358-43e1-426f-8d30-1c0af2b68c41";
+  const source = { image: spec.service.image };
+  if (autoUpdates)
+    source.autoUpdates = { type: spec.service.autoUpdates.type, schedule: spec.service.autoUpdates.schedule };
+  return JSON.stringify(
+    {
+      data: {
+        template: {
+          id: TPL_ID,
+          code: "AbC123",
+          name: "Cairn",
+          status: "UNPUBLISHED",
+          serializedConfig: {
+            buckets: {},
+            services: {
+              [svc]: {
+                deploy: {
+                  healthcheckPath: spec.service.healthcheckPath,
+                  restartPolicyMaxRetries: 10,
+                  startCommand: null,
+                },
+                icon: null,
+                name: spec.service.name,
+                networking: { serviceDomains: { [`<hasDomain>:${spec.service.port}`]: { port: spec.service.port } } },
+                source,
+                variables,
+                volumeMounts: { [svc]: { mountPath: spec.service.volumeMountPath } },
+              },
+            },
+          },
+        },
+      },
+    },
+    null,
+    2
+  );
+}
+
+function templateRig(dir, response = templateResponse()) {
+  const rig = railwayRig(dir);
+  fs.writeFileSync(path.join(rig.state, "template_response"), response);
+  rig.env.TMPDIR = dir;
+  const go = (args, env = {}) => run(["railway-template", ...args], { env: { ...rig.env, ...env } });
+  const log = () => rig.read("rlog").trim().split("\n").filter(Boolean);
+  const has = (name) => fs.existsSync(path.join(rig.state, name));
+  const leftovers = () => fs.readdirSync(dir).filter((f) => f.startsWith("cairn-railway-template."));
+  return { ...rig, go, log, has, leftovers };
+}
+
+// No generated secret (48-char secret() output, or the installer's own 64-hex) anywhere.
+function assertNoSecretValues(text) {
+  assert.doesNotMatch(text, /[0-9a-f]{64}/);
+  assert.doesNotMatch(text, /(^|[^A-Za-z0-9])[a-z0-9]{48}([^A-Za-z0-9]|$)/m);
+}
+
+test("railway template spec: install.sh carries exactly the values in deploy/railway/template.json", () => {
+  assert.equal(shellConst("RW_PLAIN_VARS"), specPlain.map(([k, v]) => `${k}=${v.value}`).join(" "));
+  assert.equal(shellConst("RW_SECRET_VARS"), specSecrets.join(" "));
+  assert.deepEqual(specSecrets, ["CAIRN_AUTH_TOKEN", "CAIRN_SETTINGS_SECRET_KEY"]);
+  for (const k of specSecrets) assert.equal(spec.variables[k].value, SECRET_FN, `${k} must be the function`);
+  assert.equal(shellConst("RW_SECRET_FN"), SECRET_FN);
+  assert.equal(shellConst("RW_TPL_NAME"), spec.name);
+  assert.equal(shellConst("RW_TPL_CATEGORY"), spec.category);
+  assert.equal(shellConst("RW_TPL_DESCRIPTION"), spec.description);
+  assert.equal(shellConst("DEFAULT_IMAGE"), spec.service.image);
+  assert.equal(shellConst("RW_TPL_SERVICE"), spec.service.name);
+  assert.equal(shellConst("RW_TPL_MOUNT"), spec.service.volumeMountPath);
+  assert.equal(shellConst("RW_TPL_HEALTHCHECK"), spec.service.healthcheckPath);
+  assert.equal(Number(shellConst("RW_TPL_PORT")), spec.service.port);
+  assert.equal(String(spec.service.port), spec.variables.PORT.value);
+  const { schedule } = spec.service.autoUpdates;
+  assert.deepEqual(
+    schedule.map((w) => w.day),
+    [0, 1, 2, 3, 4, 5, 6]
+  );
+  for (const w of schedule) {
+    assert.equal(w.startHour, Number(shellConst("RW_TPL_UPDATE_START")));
+    assert.equal(w.endHour, Number(shellConst("RW_TPL_UPDATE_END")));
+  }
+  for (const [k, v] of Object.entries(spec.variables)) assert.ok(v.description, `${k} needs a description`);
+  assert.ok(fs.statSync(path.join(root, "deploy", "railway", spec.overview)).size > 0);
+});
+
+test("railway-template --dry-run prints the plan and CLI sequence, runs nothing, shows only the secret function", () =>
+  withTempDir((dir) => {
+    const rig = templateRig(dir);
+    const r = rig.go(["--dry-run", "--publish"]);
+    assert.equal(r.code, 0, r.all);
+    assert.match(r.out, /scratch project 'Cairn' \(deleted again at the end, also on failure\)/);
+    assert.ok(r.out.includes(`CAIRN_AUTH_TOKEN=${SECRET_FN}`));
+    assert.ok(r.out.includes(`CAIRN_SETTINGS_SECRET_KEY=${SECRET_FN}`));
+    assert.match(r.out, /railway templates create --project <scratch project id> --environment production --json/);
+    assert.match(r.out, /railway delete --project <scratch project id> --yes --json/);
+    assert.match(r.out, /railway templates publish <template id> --category AI\/ML --description/);
+    assertNoSecretValues(r.all);
+    assert.equal(rig.read("rlog"), "", "a dry run calls no railway command");
+    // It is its own command: this-machine options and a foreign --target are refused.
+    assert.notEqual(rig.go(["--dry-run", "--lan"]).code, 0);
+    assert.notEqual(rig.go(["--dry-run", "--target=local"]).code, 0);
+    assert.notEqual(run(["--target=railway", "--dry-run", "--publish"], { env: rig.env }).code, 0);
+  }));
+
+test("railway-template builds the draft from the spec in a scratch project, then deletes the project", () =>
+  withTempDir((dir) => {
+    const rig = templateRig(dir);
+    const r = rig.go(["--yes", "--workspace=Someone's Projects"]);
+    assert.equal(r.code, 0, r.all);
+    assertSequence(rig.log(), [
+      "railway whoami",
+      "railway list --json",
+      "railway init --name Cairn --workspace Someone's Projects --json",
+      "railway list --json",
+      "railway link --project proj-1 --environment production",
+      "railway add --service cairn --json",
+      "railway service link cairn",
+      "railway volume add --mount-path /data --json",
+      "railway domain --port 8787 --service cairn --json",
+      "railway environment list --json",
+      "railway api mutation(",
+      "railway templates create --project proj-1 --environment production --json",
+      "railway api query(",
+      "railway delete --project proj-1 --yes --json",
+    ]);
+    assert.ok(!rig.log().some((l) => l.startsWith("railway templates publish")), "never publishes without --publish");
+    assert.ok(!rig.log().some((l) => l.startsWith("railway templates delete")), "a checked draft is kept");
+    assert.ok(!rig.log().some((l) => /^railway (add --image|redeploy|variable set)/.test(l)), "nothing deploys");
+    assert.match(rig.read("api_vars"), new RegExp(`^id=${TPL_ID}$`, "m"));
+
+    // The patch: secrets are the per-deployer function, plain values carry themselves as the
+    // generator (what makes Railway's generate keep them), plus image, health check, updates.
+    const patch = JSON.parse(rig.read("patch.json"));
+    assert.equal(patch.env, "env-1");
+    const svc = patch.patch.services["svc-1"];
+    assert.equal(svc.source.image, spec.service.image);
+    assert.equal(svc.deploy.healthcheckPath, spec.service.healthcheckPath);
+    assert.deepEqual(svc.source.autoUpdates, {
+      type: spec.service.autoUpdates.type,
+      schedule: spec.service.autoUpdates.schedule,
+    });
+    assert.deepEqual(Object.keys(svc.variables), [...specSecrets, ...specPlain.map(([k]) => k)]);
+    for (const k of specSecrets) assert.deepEqual(svc.variables[k], { value: SECRET_FN });
+    for (const [k, v] of specPlain) assert.deepEqual(svc.variables[k], { value: v.value, generator: v.value });
+
+    assert.match(r.out, /Code: {5}AbC123/);
+    assert.ok(r.out.includes(`https://railway.com/workspace/templates/${TPL_ID}`));
+    assert.match(r.out, /https:\/\/railway\.com\/new\/template\/AbC123/);
+    assert.match(r.out, /Variable descriptions \(9 missing\)/);
+    assert.match(r.out, /Auto Updates: on, maintenance window Night/);
+    assertNoSecretValues(r.all + rig.read("rlog") + rig.read("patch.json"));
+    assert.equal(rig.has("secret_in_argv"), false);
+    assert.equal(rig.has("stdin_not_closed"), false);
+    const cwds = [...new Set(rig.read("rcwd").trim().split("\n"))];
+    assert.equal(cwds.length, 1);
+    assert.match(cwds[0], /cairn-railway-template\./);
+    assert.deepEqual(rig.leftovers(), [], "the temporary directory is removed");
+    assert.equal(fs.existsSync(path.join(dir, ".cairn")), false, "no install state is written");
+  }));
+
+test("railway-template never deletes a project it did not create, and cleans up its own on any failure", () =>
+  withTempDir((dir) => {
+    const rig = templateRig(dir);
+    fs.writeFileSync(path.join(rig.state, "existing_project"), "Cairn");
+    fs.writeFileSync(path.join(rig.state, "fail_templates_create"), "");
+    const r = rig.go(["--yes"]);
+    assert.notEqual(r.code, 0, r.all);
+    assert.match(r.err, /templates create failed \(fake\)/);
+    assert.match(rig.read("rlog"), /^railway delete --project proj-1 --yes --json$/m, "the scratch project is deleted");
+    assert.doesNotMatch(rig.read("rlog"), /delete --project proj-0/, "the existing project is untouched");
+    assert.match(r.out, /Deleted the scratch project 'Cairn' \(proj-1\)/);
+    assert.deepEqual(rig.leftovers(), []);
+  }));
+
+test("railway-template refuses and deletes a draft that carries a fixed secret", () =>
+  withTempDir((dir) => {
+    const leaked = "k3".repeat(24);
+    const rig = templateRig(dir, templateResponse({ fixed: { CAIRN_AUTH_TOKEN: leaked } }));
+    const r = rig.go(["--yes", "--publish"]);
+    assert.notEqual(r.code, 0, r.all);
+    assert.match(r.err, /fixed value for: CAIRN_AUTH_TOKEN/);
+    assert.match(rig.read("rlog"), new RegExp(`^railway templates delete ${TPL_ID} --yes --json$`, "m"));
+    assert.match(rig.read("rlog"), /^railway delete --project proj-1 --yes --json$/m);
+    assert.equal(rig.has("published"), false);
+    assert.ok(!r.all.includes(leaked), "the value is never printed");
+
+    // A missing secret is an editor step, not a leak.
+    fs.mkdirSync(path.join(dir, "two"));
+    const rig2 = templateRig(path.join(dir, "two"), templateResponse({ drop: ["CAIRN_SETTINGS_SECRET_KEY"] }));
+    const r2 = rig2.go(["--yes"]);
+    assert.equal(r2.code, 0, r2.all);
+    assert.ok(r2.out.includes(`Variable CAIRN_SETTINGS_SECRET_KEY: set it to ${SECRET_FN}`));
+    assert.equal(rig2.has("template_deleted"), false);
+  }));
+
+test("railway-template --publish: never with editor steps left (unless --force), and only after a yes", () =>
+  withTempDir((dir) => {
+    // Generate leaves descriptions and auto updates to the editor: --publish stops and says how.
+    const rig = templateRig(dir);
+    const r = rig.go(["--yes", "--publish"]);
+    assert.equal(r.code, 0, r.all);
+    assert.equal(rig.has("published"), false);
+    assert.match(r.out, /railway-template --publish --template=AbC123/);
+
+    // A checked existing draft with everything in place: no terminal and no --yes means no.
+    const done = templateResponse({ descriptions: true, autoUpdates: true });
+    fs.writeFileSync(path.join(rig.state, "template_response"), done);
+    const builtLines = rig.log().length;
+    const asked = rig.go(["--publish", "--template=AbC123"]);
+    assert.notEqual(asked.code, 0, asked.all);
+    assert.match(asked.err, /No terminal to ask: "Publish this template/);
+    assert.equal(rig.has("published"), false);
+    assert.match(asked.out, /Category: {4}AI\/ML/);
+    assert.match(rig.read("api_vars"), /^code=AbC123$/m);
+    assert.ok(
+      !rig
+        .log()
+        .slice(builtLines)
+        .some((l) => l.startsWith("railway init")),
+      "--template builds nothing"
+    );
+
+    const yes = rig.go(["--publish", "--template=AbC123", "--yes"]);
+    assert.equal(yes.code, 0, yes.all);
+    const overview = path.join(root, "deploy", "railway", "overview.md");
+    assert.ok(
+      rig
+        .log()
+        .includes(
+          `railway templates publish ${TPL_ID} --category AI/ML --description ${spec.description} --readme-file ${overview} --json`
+        ),
+      rig.read("rlog")
+    );
+    assert.match(yes.out, /Published: https:\/\/railway\.com\/new\/template\/AbC123/);
+
+    // --force publishes a draft whose only gaps are editor-only items.
+    fs.rmSync(path.join(rig.state, "published"));
+    fs.writeFileSync(path.join(rig.state, "template_response"), templateResponse());
+    const forced = rig.go(["--publish", "--template=AbC123", "--yes", "--force"]);
+    assert.equal(forced.code, 0, forced.all);
+    assert.equal(rig.has("published"), true);
+    assertNoSecretValues(yes.all + forced.all + rig.read("rlog"));
+  }));
+
+// The autoUpdates value the spec declares (what the installer and the template both set).
+function autoUpdatesSpec() {
+  return { type: spec.service.autoUpdates.type, schedule: spec.service.autoUpdates.schedule };
+}
+
+test("fake railway: auto updates are switched on once, never over a setting that exists or that you turned off", () =>
+  withTempDir((dir) => {
+    // Already configured in Railway (e.g. a minor-version policy): kept, nothing patched.
+    const rig = railwayRig(dir);
+    fs.writeFileSync(path.join(rig.state, "au_type"), "minor");
+    const kept = run(["--target=railway", "--yes"], { env: rig.env });
+    assert.equal(kept.code, 0, kept.all);
+    assert.doesNotMatch(rig.read("rlog"), /^railway api mutation/m);
+    assert.match(kept.out, /Automatic updates: on \(minor, as set in Railway\)/);
+    assert.match(fs.readFileSync(path.join(rig.stateDir, "railway.state"), "utf8"), /^RW_AUTOUPDATES_SET=$/m);
+
+    // Switched on by the installer, then turned off by the person: a re-run leaves it off.
+    fs.rmSync(path.join(rig.state, "au_type"));
+    const on = run(["--target=railway", "--yes"], { env: rig.env });
+    assert.equal(on.code, 0, on.all);
+    assert.equal(rig.read("au_type").trim(), "patch");
+    fs.writeFileSync(path.join(rig.state, "au_type"), "disabled");
+    const apis = (rig.read("rlog").match(/^railway api mutation/gm) || []).length;
+    const off = run(["--target=railway", "--yes"], { env: rig.env });
+    assert.equal(off.code, 0, off.all);
+    assert.equal((rig.read("rlog").match(/^railway api mutation/gm) || []).length, apis, "no patch over the person's choice");
+    assert.match(off.out, /Automatic updates: off in Railway, as you set them/);
+    assert.match(off.out, /Automatic updates are off in Railway, as you set them/);
+  }));
+
+test("fake railway: a refused auto-update patch never fails the install; it says how by hand", () =>
+  withTempDir((dir) => {
+    const rig = railwayRig(dir);
+    fs.writeFileSync(path.join(rig.state, "fail_api_mutation"), "");
+    const r = run(["--target=railway", "--yes"], { env: rig.env });
+    assert.equal(r.code, 0, r.all);
+    assert.match(r.err, /Railway did not accept the automatic-update setting \(Error: Not Authorized \(fake\)\)/);
+    assert.match(
+      r.out,
+      /Turn on automatic updates once in Railway: service cairn -> Settings -> Source -> Auto Updates/
+    );
+    assert.match(fs.readFileSync(path.join(rig.stateDir, "railway.state"), "utf8"), /^RW_AUTOUPDATES_SET=$/m);
+    assert.match(r.out, /Cairn is running on Railway/);
+  }));
+
+test("fake railway: a project Railway is still deleting (deletedAt) is never reused or counted", () =>
+  withTempDir((dir) => {
+    const rig = railwayRig(dir);
+    fs.writeFileSync(path.join(rig.state, "deleted_project"), "cairn");
+    const r = run(["--target=railway", "--yes"], { env: rig.env });
+    assert.equal(r.code, 0, r.all);
+    assert.match(rig.read("rlog"), /^railway init --name cairn --json$/m, "a new project, not the deleted one");
+    assert.doesNotMatch(rig.read("rlog"), /proj-gone/);
+    assert.doesNotMatch(r.all, /already exists/);
+
+    // The template build's before/after diff ignores it too.
+    fs.mkdirSync(path.join(dir, "t"));
+    const trig = templateRig(path.join(dir, "t"));
+    fs.writeFileSync(path.join(trig.state, "deleted_project"), "Cairn");
+    const t = trig.go(["--yes"]);
+    assert.equal(t.code, 0, t.all);
+    assert.match(trig.read("rlog"), /^railway delete --project proj-1 --yes --json$/m);
+    assert.doesNotMatch(trig.read("rlog"), /proj-gone/);
   }));
