@@ -858,6 +858,7 @@ declare global {
       | "lead_mode"
       | "run_units"
       | "weight_units"
+      | "lab_units"
     >;
     settings: Record<string, unknown>;
     data: SettingsScreenData;
@@ -4062,6 +4063,7 @@ declare global {
           | "lead_mode"
           | "run_units"
           | "weight_units"
+          | "lab_units"
         >;
         settings: Record<string, unknown>;
         artSpendHtml: string;

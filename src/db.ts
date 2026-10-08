@@ -1019,6 +1019,7 @@ CREATE TABLE IF NOT EXISTS settings (
   garmin_last_export_status TEXT DEFAULT '',   -- short result: "ok: 8 of 14 sets" | "failed: …"; a persistently failing PUT must be visible
   run_units TEXT DEFAULT 'km',                 -- km | mi — athlete-facing run distance and pace (engine stays km)
   weight_units TEXT DEFAULT 'lb',              -- lb | kg — athlete-facing bodyweight and loads (stored data stays lb; repo/display-words.ts)
+  lab_units TEXT DEFAULT '',                   -- us | si | '' (automatic: follows weight_units) — how lab values are SHOWN; comparisons stay canonical (repo/lab-units.ts)
   meal_plan_auto_draft INTEGER DEFAULT 0,      -- 1 = weekly + protective meal-plan drafts without being asked; 0 = drafted on request (see src/repo/meal-plan-auto-draft.ts)
   usage_ping_enabled INTEGER DEFAULT 0,        -- 1 = opt-in weekly anonymous usage ping (install id, version, platform, arch, Node — src/usagePing.ts); default OFF
   coach_welcomed INTEGER DEFAULT 0             -- 1 = the first-run welcome exchange with the coach happened (src/coachOps/welcome.ts)

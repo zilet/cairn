@@ -157,6 +157,7 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
       lead_mode: wm.lead_mode,
       run_units: wm.run_units,
       weight_units: wm.weight_units,
+      lab_units: wm.lab_units,
     };
     // password / api-key fields: blank means "leave the configured value intact" — only
     // send a typed value (matches the old per-field placeholder behavior).
@@ -170,6 +171,8 @@ function renderSettingsBundle(bundle: SettingsScreenBundle): void {
     CairnFmt.set(wm);
     if (typeof CairnWriteInvalidation !== "undefined") {
       CairnWriteInvalidation.invalidate(CairnWriteInvalidation.targetsForChatAction("revert_decision"));
+      // Lab values are printed in the lab-unit system: drop the health/marker caches too.
+      CairnWriteInvalidation.invalidate(CairnWriteInvalidation.targetsForChatAction("log_health"));
     }
     artEnabled = wm.art_enabled; // take effect on the next render, no reload
     return true;

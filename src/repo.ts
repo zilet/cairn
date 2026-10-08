@@ -51,6 +51,7 @@ export * from "./repo/meal-plan-refresh.js"; // is a weekly refresh a rotation o
 export * from "./repo/scheduler-operations.js";
 export * from "./repo/client-tz.js"; // last-seen device zone for the TZ-correct Brief warm
 export * from "./repo/lab-units.js";
+export * from "./repo/lab-display.js";
 export * from "./repo/marker-canon.js";
 export * from "./repo/health.js";
 export * from "./repo/imaging.js";

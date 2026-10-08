@@ -67,6 +67,7 @@ import {
   wearableTrendWindow,
 } from "./propagation-data.js";
 import { copyDeep, requestMemo } from "./request-memo.js";
+import { labValueText } from "./lab-display.js";
 
 // The sex/age snapshot the connected-brain paths thread into matchOptimalZone so a
 // woman / older adult isn't held to the male/generic default band. Null-safe: an
@@ -1324,7 +1325,8 @@ function collectGenericLongTail(
     const verdict = flagFeedbackVerdict(feedback, flag, m?.latest?.date);
     if (verdict === "suppress") continue;
     const value = m?.latest?.value;
-    const valStr = value != null && value !== "" ? ` (${value}${m?.unit ? ` ${m.unit}` : ""})` : "";
+    // The value in the athlete's lab-unit system, unit attached (src/repo/lab-display.ts).
+    const valStr = value != null && value !== "" ? ` (${labValueText(m?.name, value, m?.unit ?? null)})` : "";
     const readingDate: string | null = m?.latest?.date ?? null;
     desired.push(
       applyStaleness(

@@ -5,6 +5,8 @@ import { doctorLoopRead, type DoctorLoopRead } from "./doctor-loop.js";
 import { cardiovascularRiskRead } from "./risk.js";
 import { healthFocus, type HealthFocus } from "./health-focus.js";
 import { healthOutcomeAnnotations, type HealthOutcomeRead } from "./health-outcomes.js";
+import { presentMarkerRow } from "./lab-display.js";
+import { labUnitSystem } from "./settings.js";
 
 export const DOCTOR_PACKET_VERSION = 1;
 
@@ -12,7 +14,8 @@ type PacketMarker = {
   name: string;
   group: string | null;
   value: unknown;
-  unit: string | null;
+  unit: string | null; // the athlete's lab-unit system (src/repo/lab-display.ts)
+  reported: string | null; // the value exactly as its lab printed it, when that unit differs
   effective_date: string | null;
   lab_flag: string | null;
   in_optimal: boolean | null;
@@ -74,11 +77,13 @@ function packetMarkers(limit: number): PacketMarker[] {
   const read = prioritizeMarkers() as any;
   const markers = Array.isArray(read?.markers) ? read.markers : [];
   const n = Math.max(1, Math.min(20, Number(limit) || 8));
-  return markers.slice(0, n).map((m: any) => ({
+  const system = labUnitSystem();
+  return markers.slice(0, n).map((raw: any) => presentMarkerRow(raw, system)).map((m: any) => ({
     name: cleanText(m?.name, 120) ?? "Unknown marker",
     group: cleanText(m?.group_label ?? m?.group, 120),
     value: m?.latest?.value ?? null,
     unit: cleanText(m?.unit ?? m?.latest?.unit, 40),
+    reported: cleanText(m?.latest?.reported, 60),
     effective_date: dateOnly(m?.latest?.date),
     lab_flag: cleanText(m?.latest?.flag, 40),
     in_optimal: typeof m?.in_optimal === "boolean" ? m.in_optimal : null,

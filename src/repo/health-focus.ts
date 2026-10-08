@@ -16,6 +16,9 @@ import { dailyManualWeighIns } from "./bodyweight.js";
 import { localDateISO } from "./shared.js";
 import { injuryClosuresOn } from "./injury-symptom-link.js";
 import { copyDeep, requestMemo } from "./request-memo.js";
+import { presentMarkerRow } from "./lab-display.js";
+import type { LabUnitSystem } from "./lab-units.js";
+import { labUnitSystem } from "./settings.js";
 
 // ============================================================================
 // HEALTH FOCUS — the prioritization/synthesis substrate (elite-coach layer).
@@ -100,6 +103,7 @@ export interface HealthFocus {
   act_now: number;
   track: number;
   headline: string; // deterministic plain lead ("Lipids are the priority right now")
+  lab_units: LabUnitSystem; // the system every reading's value/unit/optimal is shown in (us | si) — never a guess for a prompt
 }
 
 export function healthFocus(): HealthFocus {
@@ -107,6 +111,7 @@ export function healthFocus(): HealthFocus {
 }
 
 function healthFocusRead(): HealthFocus {
+  const labSystem = labUnitSystem();
   const { markers: rankedMarkers } = prioritizeMarkers(); // ordered: flagged-first then furthest-from-optimal
   // Judge HRV / Resting HR on the SAME week the directive engine reads (wearableWeeklyMarkerRead
   // above) — a single night never drives this surface's tier/status either.
@@ -268,7 +273,10 @@ function healthFocusRead(): HealthFocus {
               ? `${named[0]?.name} has been drifting the wrong way`
               : `${named[0]?.name} is sitting outside its optimal range`;
 
-    const readings: FocusReading[] = ms.slice(0, 4).map((m: any) => ({
+    // The readings are what a person (and the coach prompt) reads: values, unit and band
+    // in the athlete's lab-unit system, after every judgement above ran in canonical units.
+    const shown = ms.slice(0, 4).map((raw: any) => presentMarkerRow(raw, labSystem));
+    const readings: FocusReading[] = shown.map((m: any) => ({
       name: m.name,
       value: m?.latest?.value ?? null,
       unit: m.unit ?? null,
@@ -318,6 +326,7 @@ function healthFocusRead(): HealthFocus {
     act_now: actNow.length,
     track: priorities.length - actNow.length,
     headline,
+    lab_units: labSystem,
   };
 }
 

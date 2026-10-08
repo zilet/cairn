@@ -34,6 +34,7 @@ import { pickDayVariant } from "./brain/day-read-rules.js";
 import { addDaysISO, daysBetweenISO } from "./shared.js";
 import { getEnduranceGoal, getProfile } from "./profile.js";
 import { resolvedCurrentBodyweight } from "./bodyweight.js";
+import { presentMarkerRow } from "./lab-display.js";
 
 export type CheckupItemKind = "lab" | "dexa" | "review" | "add";
 
@@ -274,7 +275,9 @@ function toCheckupItem(
   };
 }
 
-function markerValueText(m: MarkerLike): string | null {
+function markerValueText(raw: MarkerLike): string | null {
+  // In the athlete's lab-unit system (src/repo/lab-display.ts), unit always attached.
+  const m = presentMarkerRow(raw);
   const v = m.latest?.value;
   if (v == null || v === "") return null;
   const num = typeof v === "number" ? v : Number(v);

@@ -257,6 +257,10 @@
     settingsSourcesAutomationRequired<HTMLSelectElement>(deps.root, "#weightUnits").addEventListener("change", (event) => {
       wm.weight_units = (event.currentTarget as HTMLSelectElement).value === "kg" ? "kg" : "lb";
     });
+    settingsSourcesAutomationOptional<HTMLSelectElement>(deps.root, "#labUnits")?.addEventListener("change", (event) => {
+      const value = (event.currentTarget as HTMLSelectElement).value;
+      wm.lab_units = value === "us" || value === "si" ? value : "auto";
+    });
     settingsSourcesAutomationRequired<HTMLSelectElement>(deps.root, "#leadMode").addEventListener("change", (event) => {
       const value = (event.currentTarget as HTMLSelectElement).value;
       wm.lead_mode = (

@@ -32,6 +32,7 @@ import {
   getHealthSynthesisView,
   getLatestHealthReview,
   getMarkerHistory,
+  presentMarkerList,
   healthOutcomeAnnotations,
   cardiovascularRiskRead,
   doctorLoopRead,
@@ -101,9 +102,9 @@ export function registerConnectedBrainTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_health_markers",
-    "Marker history aggregated across every uploaded health document: per marker the latest value/flag, the previous reading, a numeric time series, and a trend ({dir: rising|falling|stable, change, span_days, n}) so you can speak to direction over time, not just the latest value. Each marker also carries its health group (group/group_label — e.g. Lipids & Cardiovascular, Metabolic & Glucose), and the top-level `groups` list gives the canonical-ordered groups present. Flagged (low/high) markers sort first.",
+    "Marker history aggregated across every uploaded health document: per marker the latest value/flag, the previous reading, a numeric time series, and a trend ({dir: rising|falling|stable, change, span_days, n}) so you can speak to direction over time, not just the latest value. Each marker also carries its health group (group/group_label — e.g. Lipids & Cardiovascular, Metabolic & Glucose), and the top-level `groups` list gives the canonical-ordered groups present. Flagged (low/high) markers sort first. Values are in the athlete's lab-unit system (Settings: US conventional or SI) with the unit on every marker; a reading printed by its lab in another unit carries `reported` (the value as printed) and `canonical_unit` names the unit comparisons run in.",
     {},
-    async () => asText(getMarkerHistory())
+    async () => asText(presentMarkerList(getMarkerHistory()))
   );
 
   server.tool(

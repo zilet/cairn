@@ -53,7 +53,7 @@ type AppleHealthUiState = {
 type SettingsAutomationSliceOptions = {
   workingModel: Pick<
     SettingsScreenWorkingModel,
-    "enrich_enabled" | "art_enabled" | "research_enabled" | "meal_plan_auto_draft" | "lead_mode" | "run_units" | "weight_units"
+    "enrich_enabled" | "art_enabled" | "research_enabled" | "meal_plan_auto_draft" | "lead_mode" | "run_units" | "weight_units" | "lab_units"
   >;
   settings: Record<string, unknown>;
   artSpendHtml: string;
@@ -301,7 +301,13 @@ function settingsAutomationSliceHtml(options: SettingsAutomationSliceOptions): s
             <option value="lb" ${wm.weight_units === "lb" ? "selected" : ""}>Pounds</option>
             <option value="kg" ${wm.weight_units === "kg" ? "selected" : ""}>Kilograms</option>
           </select></div>
-        <div class="sess-line" style="color:var(--muted);margin-top:6px">Every surface and every sentence follows these, body measurements too (centimetres with kilograms, inches with pounds). Your data stays as recorded; only the words change.${
+        <div class="field"><label for="labUnits">Lab results</label>
+          <select id="labUnits">
+            <option value="auto" ${wm.lab_units === "auto" ? "selected" : ""}>Automatic (${wm.weight_units === "kg" ? "SI" : "US"}, follows weight)</option>
+            <option value="us" ${wm.lab_units === "us" ? "selected" : ""}>US conventional (mg/dL)</option>
+            <option value="si" ${wm.lab_units === "si" ? "selected" : ""}>SI / international (mmol/L)</option>
+          </select></div>
+        <div class="sess-line" style="color:var(--muted);margin-top:6px">Every surface and every sentence follows these, body measurements too (centimetres with kilograms, inches with pounds). Your data stays as recorded; only the words change. Lab results from any lab are compared in one unit either way, and the value as your lab printed it stays one tap away.${
           s.units_source === "detected" ? " These were set from this device's region when Cairn first opened; change them any time." : ""
         }</div>
 
