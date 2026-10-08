@@ -21,6 +21,7 @@
 
 import { db } from "../db.js";
 import { getMarkerHistory } from "./health.js";
+import { labValueText } from "./lab-display.js";
 import { activitySportWhere, RUN_SPORT_PATTERNS } from "./endurance-sports.js";
 import { normalizedExerciseKey, canonicalGroup, isMobility } from "./exercise-canon.js";
 import { getAppState, setAppState } from "./app-state.js";
@@ -739,7 +740,8 @@ function interventionMarker(): ReactionPattern | null {
         : fdir === "worsening"
           ? ", though it's since drifting the wrong way"
           : "";
-    const statement = `Since ${iv.label}, your ${m.name} has moved ${dirWord} (from ${before.value} to ${latest.value})${fclause}.`;
+    // Read in canonical units, spoken in the athlete's own lab system, always with the unit.
+    const statement = `Since ${iv.label}, your ${m.name} has moved ${dirWord} (from ${labValueText(m.name, before.value, m.unit)} to ${labValueText(m.name, latest.value, m.unit)})${fclause}.`;
     return {
       id: "intervention_marker",
       kind: "intervention_response",

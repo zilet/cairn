@@ -1,5 +1,6 @@
 import { listCheckins } from "./coach.js";
 import { listContextEvents } from "./health.js";
+import { presentLabReading } from "./lab-display.js";
 import { type OptimalZone, markerSide, matchOptimalZone, prioritizeMarkers } from "./propagation.js";
 import { addDaysISO, joinList, localDateISO } from "./shared.js";
 
@@ -224,11 +225,14 @@ function findOffMarker(markers: any[], label: string, requiredSide: "high" | "lo
     const value = numericOf(m?.latest?.value);
     const side = value != null ? markerSide(value, z, flag) : (flag ?? "unknown");
     if (requiredSide !== "any" && side !== requiredSide) continue;
+    // The side was judged canonically above; the reading a person or a prompt reads is
+    // shown in the athlete's lab-unit system.
+    const shown = presentLabReading(m?.name, value != null ? value : (m?.latest?.value ?? null), m?.unit ?? null);
     return {
       name: String(m?.name ?? z.label),
-      value: value != null ? value : (m?.latest?.value ?? null),
+      value: shown.value,
       side,
-      unit: m?.unit ?? null,
+      unit: shown.unit,
       flag,
     };
   }

@@ -169,6 +169,22 @@ export function presentMarkerList<T extends { markers?: unknown[] }>(
 }
 
 /**
+ * One canonical reading as a {value, unit} pair in the athlete's system, for a structured
+ * field a person or a prompt reads (symptom links). An unrecognized analyte, a non-numeric
+ * value or a unit that is not the analyte's canonical one comes back exactly as given.
+ */
+export function presentLabReading<V>(
+  name: unknown,
+  value: V,
+  unit: string | null,
+  system: LabUnitSystem = labUnitSystem()
+): { value: V | number; unit: string | null } {
+  const label = labAnalyteFor(name, unit);
+  if (!label) return { value, unit };
+  return { value: shownValue(label, value, system) as V | number, unit: displayUnitFor(label, system) ?? unit };
+}
+
+/**
  * One lab value as words, always with its unit: "5.2 mmol/L". A recognized analyte in
  * its canonical unit is shown in the athlete's system; anything else exactly as given.
  */
