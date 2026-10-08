@@ -5314,6 +5314,22 @@ progression step the engine wrote in lb is rebuilt from its numbers. A plan item
 data and stays verbatim. Machine fields stay `*_date`/`date`; a person reads the `*_words`
 companion (`changed_since[].since_words`, milestone `date_words`, …).
 
+**Body measurements and the first-run guess** (`src/repo/unit-system.ts`). There is no length
+setting: the tape follows the weight unit (`lengthUnitOf`: kg ⇒ cm, lb ⇒ in; `unitSystemOf` is the
+same weight-led "us"|"metric" read for any consumer). On the client `CairnFmt.length()` is the one
+read; the Body and Profile in/cm toggle is a page-lifetime override (`CairnFmt.setLength`), never
+stored, and dropped when Settings' weight unit changes — so a fresh page always opens in Settings'
+units (the old per-browser `cairn-bm-unit` memory is cleared). Storage stays inches. A fresh install
+takes its units from the device once: the boot (`app/onboarding.ts`) sends `navigator.language` and
+the IANA zone to `POST /api/settings/units/detect` while `settings.units_source` is null and the
+install is not onboarded; `applyDetectedUnits` adopts `detectUnits()` only when nothing was chosen
+or detected, the install never onboarded and the units are still the registry defaults. The zone
+leads when it names a country (an en-US browser on Europe/Berlin is metric); US units need a US zone
+with a non-contradicting locale, or a US/LR/MM locale with no usable zone; the UK is mi + kg;
+everywhere else km + kg. `units_source` lives in `app_state` (`explicit` once any unit is saved —
+detection never runs over it — or `detected:<locale> <zone>`), rides inside `settings` on the
+settings reads, and Settings' Units group says when the units came from the device.
+
 **One stage word per week.** `src/repo/stage-words.ts` is the vocabulary (Base / Build / Sharpen
 / Lighter week / Peak week / Taper / Race week, with `*_week_word` and phrase forms);
 `stageKeyOf(kind, phase)` names a race rung (a build rung speaks as its PHASE, every other rung as

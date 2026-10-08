@@ -19,6 +19,8 @@ import crypto from "node:crypto";
 import { normalizeUnit, unitsFrom, validUnit, UNIT_REGISTRY, type AthleteUnits } from "./display-words.js";
 import { getAgentAvailability } from "./agent-availability.js";
 import { recordedClientTimeZone } from "./client-tz.js";
+import { getAppState, setAppState } from "./app-state.js";
+import { detectUnits, type UnitHint } from "./unit-system.js";
 import {
   normalizeChatProfileBindings,
   normalizeProfileBindings,
@@ -780,6 +782,54 @@ export function athleteUnits(): AthleteUnits {
   }
 }
 
+// Where the athlete's units came from (app_state, so no settings column): "explicit" once a
+// person saved a unit (Settings PUT, an MCP settings call), "detected" when a fresh install
+// took its first-run guess from the device (unit-system.ts), absent before either.
+const UNITS_SOURCE_KEY = "units_source";
+export type UnitsSource = "explicit" | "detected";
+
+/** How the athlete's units were set, or null while they are still the registry defaults untouched. */
+export function unitsSource(): UnitsSource | null {
+  const raw = getAppState(UNITS_SOURCE_KEY);
+  if (raw === "explicit") return "explicit";
+  if (raw?.startsWith("detected")) return "detected";
+  return null;
+}
+
+/**
+ * The first-run unit guess. A fresh install — never onboarded, units still the registry
+ * defaults, and no unit ever chosen or detected — adopts the units the device's locale
+ * and zone point at, once. Anything else is a no-op: an explicit choice is never
+ * overridden, a detection never re-runs, and an install that onboarded before this
+ * existed keeps the units it has been reading in. A hint with no usable signal leaves
+ * everything as it is, so a later boot can still try. Returns the units in effect and
+ * whether this call changed them.
+ */
+export function applyDetectedUnits(hint: UnitHint): {
+  applied: boolean;
+  units: AthleteUnits;
+  source: UnitsSource | null;
+} {
+  const cur = getSettings();
+  const now = (applied: boolean) => ({ applied, units: athleteUnits(), source: unitsSource() });
+  if (unitsSource() != null || cur.onboarded) return now(false);
+  if (cur.run_units !== UNIT_REGISTRY.distance.default || cur.weight_units !== UNIT_REGISTRY.weight.default) {
+    return now(false);
+  }
+  const detected = detectUnits(hint);
+  if (!detected) return now(false);
+  db.prepare(`UPDATE settings SET run_units = ?, weight_units = ?, updated_at = datetime('now') WHERE id = 1`).run(
+    detected.distance,
+    detected.weight
+  );
+  const why = [hint.locale, hint.timeZone]
+    .map((v) => String(v ?? "").trim().slice(0, 64))
+    .filter(Boolean)
+    .join(" ");
+  setAppState(UNITS_SOURCE_KEY, why ? `detected:${why}` : "detected");
+  return now(true);
+}
+
 export function setSettings(patch: any, opts: { keepStances?: boolean } = {}): Settings {
   ensureSettingsSchema();
   const cur = getSettings();
@@ -948,6 +998,10 @@ export function setSettings(patch: any, opts: { keepStances?: boolean } = {}): S
     merged.usage_ping_enabled ? 1 : 0,
     merged.coach_welcomed ? 1 : 0
   );
+  // A person saving a unit makes it theirs: the first-run detection never runs over it.
+  if (validUnit("distance", patch.run_units) != null || validUnit("weight", patch.weight_units) != null) {
+    if (getAppState(UNITS_SOURCE_KEY) !== "explicit") setAppState(UNITS_SOURCE_KEY, "explicit");
+  }
   if (!opts.keepStances && merged.training_drive !== cur.training_drive) {
     try {
       db.prepare(

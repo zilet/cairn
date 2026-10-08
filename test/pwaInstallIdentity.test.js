@@ -159,7 +159,9 @@ const PERSISTED_KEYS = {
   "cairn.diagnostics.v1": ["client-diagnostics"],
   "cairn.records.evw": ["evidence-wanted-controller"],
   "cairn.records.group": ["records-search-controller"],
-  "cairn-bm-unit": ["body-metrics-client", "me-profile-form-client"],
+  // Retired: the tape now opens in the Settings units (CairnFmt.length()); ui-format clears
+  // the old per-browser in/cm memory under its original name.
+  "cairn-bm-unit": ["ui-format"],
   "cairn-art-ready": ["art-controller"],
   "cairn-art-versions": ["art-memory-client"],
   cairn_phone_coach_dismissed: ["pwa-install-coach"],
