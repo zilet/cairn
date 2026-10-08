@@ -6414,10 +6414,24 @@ What the build emits, and what a deploy ships:
   requires a focused text field on a soft-keyboard device, visual-viewport geometry that shows an
   occluding keyboard, and no pinch zoom. It hides the tab bar on every surface (Chat keeps its own
   body classes and its own slide-away, so the `kb-up` snap skips `body.chat-mode`). Without it,
-  `bottom: var(--vvb)` rode the bar up onto the keyboard. Once the keyboard settles, the focused
-  composer is scrolled into view by its MEASURED overlap with the visual viewport
-  (`revealDelta`), never `scrollIntoView({block:"end"})`: iOS keeps the layout viewport full height
-  under the keyboard, so "end" would align the composer behind it.
+  `bottom: var(--vvb)` rode the bar up onto the keyboard. While `kb-up` holds, the rest bar fades
+  out too (visual only: its deadline, tick and "Rested" cue run on, and `body.resting` keeps its
+  clearance, so nothing reflows).
+- **One "reveal the focused field" helper.** `CairnFocusReveal` (`app/mobile-viewport.ts`) is the
+  only code that scrolls a focused field into view. It measures against the visual viewport (iOS
+  keeps the layout viewport full height under the keyboard, so `scrollIntoView({block:"end"})`
+  aligned fields behind it) minus every element that declares `data-occludes="top|bottom"` and is
+  pinned (fixed, or a stuck sticky): the tab bar, rest bar, save bar, Today header, Session top bar,
+  segmented bars, the chat and welcome docks. It scrolls the nearest scroll container first, by the
+  minimum distance, and never when the field is already visible; inside a fixed layer (chat,
+  welcome, a sheet) it never scrolls the page. It runs once things SETTLE: after focus, a
+  visual-viewport resize, or an occluder appearing or resizing, it waits until the viewport and
+  scrollers are quiet and no occluder is animating (900 ms at most), so it corrects whatever the
+  native iOS focus scroll left instead of racing it. A drag or wheel while typing stops the automatic
+  re-reveals until the next focus. Call sites focus through `CairnFocusReveal.focus(field, {box})`
+  (focus with `preventScroll`, then one settled reveal); a repaint that restores focus dispatches
+  `cairn:reveal-focused`. A new fixed or sticky bar that can cover content declares
+  `data-occludes`; never add a `scrollIntoView` for a focused field.
 
 ### Runs are not plan items (client)
 

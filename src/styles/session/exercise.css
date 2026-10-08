@@ -291,9 +291,18 @@
   backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
   box-shadow:0 -6px 24px rgba(72,58,35,.1);
   transform:translateY(calc(100% + 46px + env(safe-area-inset-bottom,0px) + var(--vvb,0px)));
-  transition:transform .3s var(--ease);overflow:hidden;pointer-events:none;
+  transition:transform .3s var(--ease),opacity var(--dur-1) var(--ease);overflow:hidden;pointer-events:none;
 }
 .rest.show{transform:translateY(0);pointer-events:auto}
+/* Typing a set (html.kb-up: a focused field with the soft keyboard up) the athlete is
+   on the input, not the clock: the bar steps away with a short fade and comes back,
+   still counting, the moment the keyboard goes. Visual only: the deadline, the tick
+   and the "Rested" cue run on underneath, and body.resting keeps its clearance, so
+   nothing reflows and the focused row never moves. Without a soft keyboard the bar
+   stays, declared an occluder (data-occludes), and the focus reveal keeps the row
+   being typed into clear of it. Reduced motion snaps it (foundation/reduced-motion). */
+html.kb-up .rest.show{opacity:0;transform:translateY(12px);visibility:hidden;pointer-events:none;
+  transition:opacity var(--dur-1) var(--ease),transform var(--dur-1) var(--ease),visibility 0s linear var(--dur-1)}
 /* Countdown progress as a slim line along the bottom edge — a full-height tint
    left a hard vertical seam at the fill's edge that read as the bar background
    only covering part of the width. The bar bg now stays one uniform full-width

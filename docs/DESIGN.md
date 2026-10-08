@@ -846,6 +846,13 @@ The motion vocabulary on top of the existing `.reveal` stagger:
   heading (`tabindex="-1"`). A pointer-driven switch marks it `data-focus-quiet` (no
   outline, removed on blur); `:focus:not(:focus-visible)` on `#view`/`[tabindex="-1"]`
   drops the outline too. A keyboard-activated switch keeps the ring.
+- **A focused field is never covered** — one helper, `CairnFocusReveal`
+  (`app/mobile-viewport.ts`), brings it clear of the keyboard and of every bar that declares
+  `data-occludes="top|bottom"` (tab bar, rest bar, save bar, sticky headers, chat/welcome docks),
+  by the least distance, once the keyboard has settled, smooth unless reduced motion. A new
+  fixed or sticky bar declares `data-occludes`; a surface never calls `scrollIntoView` on a
+  focused field. While the soft keyboard is up (`html.kb-up`) the rest bar fades away (visual
+  only, still counting) and comes back when the keyboard goes.
 - **Toast** slides up + settles (`translate(-50%,14px) scale(.97)` → identity).
 - **Tactile press** — every interactive surface compresses on `:active` using the
   `--press*` scale tokens above, never an ad-hoc literal. Pick by target size:

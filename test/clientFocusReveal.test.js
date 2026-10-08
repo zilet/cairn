@@ -221,7 +221,24 @@ test("once the athlete scrolls by hand, an occluder change no longer pulls them 
   same(env.windowScrolls, [{ top: 68, behavior: "smooth" }]);
 });
 
-test("a hidden occluder is not subtracted", () => {
+// ---------- the rest bar while typing ----------
+
+test("typing a set with the keyboard up, the rest bar steps away visually and nothing reflows", async () => {
+  const { readFileSync } = await import("node:fs");
+  const css = readFileSync(new URL("../src/styles/session/exercise.css", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const rule = css.match(/html\.kb-up \.rest\.show\{([^}]*)\}/);
+  assert.ok(rule, "html.kb-up hides the shown bar");
+  assert.match(rule[1], /opacity:0/);
+  assert.match(rule[1], /visibility:hidden/, "its buttons leave the tab order and the reveal stops counting it");
+  assert.match(rule[1], /pointer-events:none/);
+  assert.doesNotMatch(rule[1], /display:none|bottom:|height:/, "a fade, never a layout change");
+  assert.doesNotMatch(css, /html\.kb-up[^{]*body\.resting|html\.kb-up[^{]*\.resting\b/, "the page keeps its clearance: the focused row never moves");
+  // The built stylesheet carries it.
+  const built = readFileSync(new URL("../public/styles.css", import.meta.url), "utf8");
+  assert.match(built, /html\.kb-up \.rest\.show\{opacity:0/);
+});
+
+test("a hidden occluder (the rest bar faded out while typing) is not subtracted", () => {
   const env = phone({ html: SESSION, vvHeight: 470 });
   env.at(".logrow", rect(400, 446));
   const field = env.at(".in-r", rect(402, 444));
