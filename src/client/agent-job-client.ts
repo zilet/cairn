@@ -157,6 +157,9 @@ function openJobStream(jobId: AgentJobId, handlers: AgentJobHandlers = {}): void
 // so only a job started elsewhere in those few seconds could be missing, and the next
 // open's sweep finds it.
 let lastJobList: { at: number; jobs: AgentJob[] } | null = null;
+// The first-week status rides on that same read, so a failed read leaves it unasked: the
+// card then falls back to its own single read, once per page.
+let firstWeekFallbackTried = false;
 
 async function jobReconnect(opts: { reuseWithinMs?: number } = {}): Promise<void> {
   const held = lastJobList && Date.now() - lastJobList.at < (opts.reuseWithinMs || 0) ? lastJobList.jobs : null;
@@ -169,7 +172,12 @@ async function jobReconnect(opts: { reuseWithinMs?: number } = {}): Promise<void
       // The list also carries the welcome's first-week status: the boot's one job read
       // answers it, so the first-week card needs no request of its own.
       (globalThis as { CairnFirstWeek?: FirstWeekApi }).CairnFirstWeek?.ingest(row.first_week);
-    } catch {}
+    } catch {
+      if (!firstWeekFallbackTried) {
+        firstWeekFallbackTried = true;
+        void (globalThis as { CairnFirstWeek?: FirstWeekApi }).CairnFirstWeek?.refresh();
+      }
+    }
   }
 
   for (const job of jobs) {

@@ -11,17 +11,17 @@ import vm from "node:vm";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-function load() {
+function load(apiImpl) {
   let now = 50_000;
   const asked = [];
   const streams = [];
   const context = {
     Array, Map, Math, Number, Object, Promise, Set, String, JSON,
     Date: { now: () => now },
-    api: async (path) => {
+    api: apiImpl || (async (path) => {
       asked.push(path);
       return { jobs: [{ id: 7, kind: "health_review", status: "running" }] };
-    },
+    }),
     EventSource: class {
       constructor(url) {
         streams.push(url);
@@ -58,4 +58,21 @@ test("an owed sweep seconds after the boot sweep reuses its list; a later or pla
   assert.equal(asked.length, 2, "past the window it asks");
   await context.jobReconnect();
   assert.equal(asked.length, 3, "a plain sweep always asks");
+});
+
+test("a failed /agent-jobs read hands the first-week status its own single read; a good one adds none", async () => {
+  const calls = { ingest: 0, refresh: 0 };
+  const week = { ingest: () => calls.ingest++, refresh: async () => void calls.refresh++ };
+  const ok = load();
+  ok.context.CairnFirstWeek = week;
+  await ok.context.jobReconnect();
+  assert.deepEqual(calls, { ingest: 1, refresh: 0 }, "the success path adds no request");
+
+  const bad = load(async () => {
+    throw new Error("offline");
+  });
+  bad.context.CairnFirstWeek = week;
+  await bad.context.jobReconnect();
+  await bad.context.jobReconnect();
+  assert.deepEqual(calls, { ingest: 1, refresh: 1 }, "refreshed once, not per failed sweep");
 });
