@@ -806,11 +806,39 @@ export function unitsSource(): UnitsSource | null {
 }
 
 /**
+ * True once an install holds anything its owner put there: a weigh-in, a session or logged
+ * set, a health record, a meal note, an activity, or a profile with anything filled in.
+ * The first-run unit guess only ever suits a truly empty install — "Re-run first-time
+ * setup" flips `onboarded` back to false on a long-used one, and its units are then
+ * already the ones it has been reading in (a US user on default lb must not flip to kg).
+ */
+export function installHasData(): boolean {
+  for (const table of ["bodyweight_log", "sessions", "logged_sets", "health_documents", "food_notes", "activities"]) {
+    try {
+      if (db.prepare(`SELECT 1 AS x FROM ${table} LIMIT 1`).get()) return true;
+    } catch {
+      // A table an old schema lacks holds nothing.
+    }
+  }
+  try {
+    const p = db
+      .prepare(
+        `SELECT name, age, height_cm, height_in, weight_lb, start_weight_lb, goal_weight_lb, goal_date, about_me, notes
+         FROM profile WHERE id = 1`
+      )
+      .get() as Record<string, unknown> | undefined;
+    if (p && Object.values(p).some((v) => v != null && String(v).trim() !== "")) return true;
+  } catch {}
+  return false;
+}
+
+/**
  * The first-run unit guess. A fresh install — never onboarded, units still the registry
  * defaults, and no unit ever chosen or detected — adopts the units the device's locale
  * and zone point at, once. Anything else is a no-op: an explicit choice is never
  * overridden, a detection never re-runs, and an install that onboarded before this
- * existed keeps the units it has been reading in. A hint with no usable signal leaves
+ * existed, or holds any data of its own (installHasData), keeps the units it has been
+ * reading in — "Re-run first-time setup" included. A hint with no usable signal leaves
  * everything as it is, so a later boot can still try. Returns the units in effect and
  * whether this call changed them.
  */
@@ -821,7 +849,7 @@ export function applyDetectedUnits(hint: UnitHint): {
 } {
   const cur = getSettings();
   const now = (applied: boolean) => ({ applied, units: athleteUnits(), source: unitsSource() });
-  if (unitsSource() != null || cur.onboarded) return now(false);
+  if (unitsSource() != null || cur.onboarded || installHasData()) return now(false);
   if (cur.run_units !== UNIT_REGISTRY.distance.default || cur.weight_units !== UNIT_REGISTRY.weight.default) {
     return now(false);
   }
@@ -873,6 +901,10 @@ export function labUnitSystem(): LabUnitSystem {
 export function setSettings(patch: any, opts: { keepStances?: boolean } = {}): Settings {
   ensureSettingsSchema();
   const cur = getSettings();
+  // Re-running first-time setup re-arms nothing: the units a long-used install has been
+  // reading in are its own, whether or not anyone ever "chose" them. Stamp them before
+  // `onboarded` drops, so no later first-run guess can move them.
+  if (patch.onboarded === false && unitsSource() == null && installHasData()) setAppState(UNITS_SOURCE_KEY, "explicit");
   const raw = db
     .prepare(
       `SELECT garmin_username, garmin_password, garmin_password_encrypted, gemini_api_key, gemini_api_key_encrypted FROM settings WHERE id = 1`
