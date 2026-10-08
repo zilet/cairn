@@ -123,6 +123,12 @@ export interface TodayPathBoardRow {
   reached: boolean;
   /** One short plain line under the track ("+4.2 lb/wk", "Recheck opens Nov 16"). */
   note: string | null;
+  /**
+   * Weight row only: how far now has moved from the journey's START ("6 lb down since Aug 3"),
+   * the very text `note` carries when it says so — null with no start-anchored move of at
+   * least half a pound. Horizon's "behind you" reads this instead of re-deriving a delta.
+   */
+  moved_words?: string | null;
   /** Direction words for a marker row: toward / away / steady; null elsewhere. */
   direction: "toward" | "away" | "steady" | null;
   /** How much of the start→goal distance moved in the last ~30 days (sorting only, never shown). */

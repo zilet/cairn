@@ -476,6 +476,10 @@ function weightRow(
   const progress = start == null || span === 0 ? (reached ? 1 : null) : clamp01(moved / span);
   const since = startLb != null && startDate ? ` ${sinceWords(startDate, asOf)}` : "";
   const lbText = (n: number) => weightWords(n, units.weight);
+  const movedWords =
+    start != null && Math.abs(start - now) >= 0.5
+      ? `${weightWords(Math.abs(start - now), units.weight)} ${now < start ? "down" : "up"}${since}`
+      : null;
   return {
     key: "weight",
     id: "weight",
@@ -486,11 +490,9 @@ function weightRow(
     progress,
     reached,
     note:
-      start != null && Math.abs(start - now) >= 0.5
-        ? `${weightWords(Math.abs(start - now), units.weight)} ${now < start ? "down" : "up"}${since}`
-        : weight.trend_lb_wk != null
-          ? weightRateWords(weight.trend_lb_wk, units.weight)
-          : null,
+      movedWords ??
+      (weight.trend_lb_wk != null ? weightRateWords(weight.trend_lb_wk, units.weight) : null),
+    moved_words: movedWords,
     direction: null,
     movement: span > 0 && weight.trend_lb_wk != null ? Math.abs(weight.trend_lb_wk * MONTH_WEEKS) / span : 0,
   };

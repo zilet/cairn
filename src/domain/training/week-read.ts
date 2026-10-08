@@ -33,7 +33,6 @@ import {
   dateWords,
   distanceOfWords,
   distanceWords,
-  weightDeltaWords,
   type AthleteUnits,
 } from "../../repo/display-words.js";
 import { pickDayVariant } from "../../repo/brain/day-read-rules.js";
@@ -447,7 +446,7 @@ function markName(m: WeekReadJourneyMark): string {
   }
 }
 
-function behindOf(path: TodayPath, units: AthleteUnits): WeekReadJourneyBehind[] {
+function behindOf(path: TodayPath): WeekReadJourneyBehind[] {
   const out: WeekReadJourneyBehind[] = [];
   const race = path.race;
   if (race && race.trend_delta_sec != null && race.trend_delta_sec <= -30 && race.since) {
@@ -455,13 +454,11 @@ function behindOf(path: TodayPath, units: AthleteUnits): WeekReadJourneyBehind[]
     const since = race.since_words || dateWords(race.since);
     out.push({ key: "race", words: `Race estimate ${min} min faster since ${since}` });
   }
-  const w = path.weight;
-  const first = w?.points?.[0];
-  if (w && first && w.mode !== "maintain") {
-    const delta = w.current_lb - first.weight_lb;
-    const toward = w.mode === "lose" ? delta <= -0.5 : delta >= 0.5;
-    if (toward)
-      out.push({ key: "weight", words: `${weightDeltaWords(delta, units.weight)} since ${dateWords(first.date)}` });
+  for (const row of path.board ?? []) {
+    // Weight is Today's own row, word for word ("6 lb down since Aug 3"): never a delta
+    // re-derived from a raw window, so the two surfaces cannot disagree.
+    if (row.key === "weight" && row.moved_words && (row.progress ?? 0) > 0)
+      out.push({ key: "weight", words: row.moved_words });
   }
   for (const row of path.board ?? []) {
     if (row.key !== "strength") continue;
@@ -508,7 +505,7 @@ function journeyLine(walked: number | null, marks: WeekReadJourneyMark[], today:
   return `${lead} Next, ${nextPart}; ${markName(summit)} ${summit.days_words}.`;
 }
 
-function journeyOf(path: TodayPath | null, today: string, units: AthleteUnits): WeekReadJourney | null {
+function journeyOf(path: TodayPath | null, today: string): WeekReadJourney | null {
   if (!path) return null;
   const ahead = (path.milestones ?? []).filter((m) => m.date >= today);
   if (!ahead.length) return null;
@@ -535,7 +532,7 @@ function journeyOf(path: TodayPath | null, today: string, units: AthleteUnits): 
     start_words: dateWords(start, today),
     today,
     marks,
-    behind: behindOf(path, units),
+    behind: behindOf(path),
     line: journeyLine(walked, marks, today),
   };
 }
@@ -615,7 +612,7 @@ export function weekRead(start?: string, opts: { today?: string; build?: RaceBui
     still_open: stillOpen,
     next_milestones: milestonesBeyond(path, weekEnd),
     goals: goalsOf(path, trend?.line ?? null),
-    journey: thisWeek ? safe(() => journeyOf(path, today, units), null) : null,
+    journey: thisWeek ? safe(() => journeyOf(path, today), null) : null,
     weight_trend: trend,
   };
 }
