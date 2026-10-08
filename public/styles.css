@@ -180,6 +180,8 @@ to{transform:translateY(-6px)}
 .artimg svg{grid-area:1/1}
 .artimg .artimg-photo{grid-area:1/1;width:100%;height:100%;object-fit:cover;border-radius:50%;opacity:0;transform:scale(1.04);transition:opacity var(--dur-3) ease,transform var(--dur-3) var(--ease);-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
 .artimg .artimg-photo.on{opacity:1;transform:scale(1)}
+.artimg .artimg-generic{grid-area:1/1;width:100%;height:100%;object-fit:cover;border-radius:50%;opacity:0;transition:opacity var(--dur-3) ease;-webkit-touch-callout:none}
+.artimg .artimg-generic.on{opacity:1}
 .artimg .artimg-photo.instant{opacity:1;transform:none;transition:none}
 .art-redraw-menu{position:fixed;z-index:var(--z-detail);min-width:11rem;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:var(--radius-sm);box-shadow:var(--shadow-md);padding:var(--space-3);font-family:var(--font-ui)}
 .art-redraw-btn{appearance:none;display:block;width:100%;margin:0;border:0;background:transparent;color:var(--ink);font:inherit;font-size:var(--text-md);font-weight:var(--weight-semibold);text-align:left;padding:var(--space-4) var(--space-5);border-radius:var(--radius-xs);cursor:pointer}

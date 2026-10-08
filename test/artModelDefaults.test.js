@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { imageCostForModel, imageCostFor, IMAGE_COST_USD_BY_MODEL, GEMINI_IMAGE_MODEL, GEMINI_TEXT_MODEL, GEMINI_EXERCISE_IMAGE_MODEL } from "../dist/art.js";
+import { imageCostForModel, imageCostFor, IMAGE_COST_USD_BY_MODEL, GEMINI_IMAGE_MODEL, GEMINI_TEXT_MODEL, GEMINI_EXERCISE_IMAGE_MODEL, STYLE_REFERENCE_MODELS, exerciseStyleRefsEnabled } from "../dist/art.js";
 
 // Google's current stable Flash-tier ids (verified against the live model
 // list at the time this test was written). Only extend this list after
@@ -29,7 +29,15 @@ const KNOWN_VALID_TEXT_MODELS = [
 // https://ai.google.dev/gemini-api/docs/models (generative-media section) and
 // https://ai.google.dev/gemini-api/docs/pricing ($0.134 per 1K/2K image). It is
 // the recommended GEMINI_EXERCISE_IMAGE_MODEL, so it belongs in the allowlist.
-const KNOWN_VALID_IMAGE_MODELS = ["gemini-3.1-flash-image", "gemini-3.1-flash-lite-image", "gemini-3-pro-image"];
+// gemini-nano-banana-2.1 ("Nano Banana 2.1") checked 2026-10-07 against
+// https://ai.google.dev/gemini-api/docs/pricing ($0.0336 per 1K standard-tier image;
+// up to 14 reference images). It is the default since then.
+const KNOWN_VALID_IMAGE_MODELS = [
+  "gemini-nano-banana-2.1",
+  "gemini-3.1-flash-image",
+  "gemini-3.1-flash-lite-image",
+  "gemini-3-pro-image",
+];
 
 test("GEMINI_TEXT_MODEL default is a non-empty, currently-valid Flash-tier id", () => {
   assert.equal(typeof GEMINI_TEXT_MODEL, "string");
@@ -54,6 +62,21 @@ test("GEMINI_IMAGE_MODEL default is a non-empty, currently-valid image-generatio
     KNOWN_VALID_IMAGE_MODELS.includes(GEMINI_IMAGE_MODEL),
     `GEMINI_IMAGE_MODEL default "${GEMINI_IMAGE_MODEL}" is not a known-valid Gemini image id`,
   );
+});
+
+test("the image model default is Nano Banana 2.1, priced from the table", () => {
+  assert.equal(GEMINI_IMAGE_MODEL, "gemini-nano-banana-2.1");
+  assert.equal(IMAGE_COST_USD_BY_MODEL["gemini-nano-banana-2.1"], 0.0336);
+  assert.equal(imageCostFor("exercise"), 0.0336, "exercise art bills at the default's price with no override");
+});
+
+test("only the pro model takes style references; the default copies their pose", () => {
+  // Nano Banana 2.1 accepts reference images but drew a front squat back-racked
+  // beside a back-squat anchor (live, 2026-10-07), so the default runs without them.
+  assert.equal(STYLE_REFERENCE_MODELS.has("gemini-nano-banana-2.1"), false);
+  assert.ok(STYLE_REFERENCE_MODELS.has("gemini-3-pro-image"));
+  assert.equal(STYLE_REFERENCE_MODELS.has("gemini-3.1-flash-image"), false);
+  assert.equal(exerciseStyleRefsEnabled(), false);
 });
 
 test("the exercise-model override is unset by default", () => {

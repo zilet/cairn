@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "note": "Generic movement-pattern figures: the visible stand-in for an exercise with no figure of its own. Implement-neutral where possible. Drawn through the exercise prompt (subject + pose) by `npm run starter:art:build`; served by GET /api/art/generic, never as an exercise's real picture.",
+  "patterns": [
+    {
+      "id": "squat",
+      "subject": "a bodyweight squat",
+      "pose": "Standing with feet shoulder-width, sitting the hips down and back until the thighs are parallel to the floor, arms reaching straight forward for balance, chest up, knees tracking over the toes."
+    },
+    {
+      "id": "hinge",
+      "subject": "a hip hinge",
+      "pose": "Standing with soft knees, hips pushed far back and the flat back tilted forward to about forty-five degrees, arms hanging straight down in front of the shins, neck in line with the spine."
+    },
+    {
+      "id": "lunge",
+      "subject": "a split-stance lunge",
+      "pose": "Split stance with one foot forward and one back, both knees bent to about ninety degrees, the back knee hovering just above the floor, torso upright, hands resting on the hips."
+    },
+    {
+      "id": "horizontal_push",
+      "subject": "a push-up",
+      "pose": "Face down in a straight-body push-up position, hands under the shoulders, elbows bent so the chest is halfway to the floor, body forming one straight line from head to heels."
+    },
+    {
+      "id": "vertical_push",
+      "subject": "an overhead press",
+      "pose": "Standing tall with feet hip-width, both arms pressing straight overhead with the hands closed in loose fists above the shoulders, elbows almost locked, ribs down, gaze forward."
+    },
+    {
+      "id": "horizontal_pull",
+      "subject": "a bent-over row",
+      "pose": "Hinged forward at the hips with a flat back at about forty-five degrees, knees soft, both elbows pulled back past the torso as if rowing, fists beside the lower ribs, shoulder blades squeezed."
+    },
+    {
+      "id": "vertical_pull",
+      "subject": "a pull-up",
+      "pose": "Hanging from an overhead bar with an overhand grip slightly wider than the shoulders, elbows bent and pulled down so the chin is level with the bar, legs straight and together below."
+    },
+    {
+      "id": "arms",
+      "subject": "an arm curl",
+      "pose": "Standing tall with elbows pinned at the sides, both forearms curled up so the fists are at chest height, upper arms vertical, biceps visibly flexed, feet hip-width."
+    },
+    {
+      "id": "shoulder_raise",
+      "subject": "a lateral raise",
+      "pose": "Standing tall with both arms raised straight out to the sides to shoulder height, elbows slightly bent, palms facing down, forming a T with the torso, feet hip-width."
+    },
+    {
+      "id": "calf",
+      "subject": "a calf raise",
+      "pose": "Standing upright on the balls of both feet with the heels lifted high off the floor, legs straight, body tall, arms relaxed at the sides, ankles fully extended."
+    },
+    {
+      "id": "core",
+      "subject": "a forearm plank",
+      "pose": "Face down holding a forearm plank: elbows under the shoulders, forearms flat on the floor, legs straight with toes on the floor, body one straight line from head to heels."
+    },
+    {
+      "id": "carry",
+      "subject": "a loaded carry",
+      "pose": "Walking tall mid-stride with a heavy weight hanging in each hand at the sides, arms straight, shoulders level and pulled back, torso upright, eyes forward."
+    },
+    {
+      "id": "mobility",
+      "subject": "a mobility stretch",
+      "pose": "In a deep lunge stretch with the back knee on the floor and the front foot flat, hips pressed forward, one arm reaching overhead and the torso gently rotating toward the front leg."
+    },
+    {
+      "id": "run",
+      "subject": "running",
+      "pose": "Mid-stride running with one knee driven forward and the opposite leg extended behind, arms bent at ninety degrees swinging in opposition, torso tall with a slight forward lean."
+    },
+    {
+      "id": "ride",
+      "subject": "riding a stationary bike",
+      "pose": "Seated on a stationary bike with hands on the handlebars, torso leaning slightly forward, one leg extended at the bottom of the pedal stroke and the other bent at the top."
+    },
+    {
+      "id": "general",
+      "subject": "an athletic ready stance",
+      "pose": "Standing in an athletic ready stance with feet a little wider than the hips, knees and hips slightly bent, chest up, arms bent in front of the body, weight on the balls of the feet."
+    }
+  ]
+}

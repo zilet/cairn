@@ -14,14 +14,14 @@
 // and ffmpeg on PATH (without ffmpeg the pack is written full-size — larger, but
 // it still works). Run rarely: after changing the demo content or the art style.
 //
-// Cost/time: ~$0.039 per image, generated serially — expect a few dollars and
+// Cost/time: ~$0.034 per image (the base model's price), generated serially — expect a few dollars and
 // several minutes for the full demo set. Nothing here touches your real data/.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { seedDemo } from "./demoSeed.js";
-import { enumeratePwaArt, cacheKey, pregenerate } from "./art.js";
+import { enumeratePwaArt, cacheKey, pregenerate, imageCostForModel, GEMINI_IMAGE_MODEL } from "./art.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
@@ -63,7 +63,9 @@ async function main() {
   seedDemo();
 
   const targets = enumeratePwaArt();
-  console.log(`Generating ${targets.length} images (serial, ~$0.039 each)${haveFfmpeg ? "" : " — ffmpeg not found, pack will be full-size"} …\n`);
+  console.log(
+    `Generating ${targets.length} images (serial, ~$${imageCostForModel(GEMINI_IMAGE_MODEL)} each)${haveFfmpeg ? "" : " — ffmpeg not found, pack will be full-size"} …\n`
+  );
 
   const manifest: { key: string; kind: string; q: string }[] = [];
   let ok = 0;
@@ -102,6 +104,7 @@ async function main() {
   );
   const keep = new Set(manifest.map((m) => `${m.key}.png`));
   keep.add("manifest.json");
+  keep.add("starter"); // the starter picture pack lives beside this one (src/buildStarterArt.ts)
   for (const f of fs.readdirSync(PACK)) {
     if (!keep.has(f)) {
       try {

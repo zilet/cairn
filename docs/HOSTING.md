@@ -44,6 +44,10 @@ then `sh install.sh --dry-run` prints every step and changes nothing.
   tap **Install** on your provider, then **Connect** and follow its sign-in. Nothing to type in a
   terminal.
 - **Nothing else.** Logging, the plan, charts, lab markers and the Brief all work without an agent.
+  Exercise pictures come built in: a starter set of figures for the common movements, and a simple
+  stand-in figure for the rest. The free exercise how-to library downloads itself in the background
+  shortly after the first start. A Gemini key in **Settings** is optional; it adds a custom figure for
+  each movement the starter set doesn't cover.
 
 ## 1) Railway
 

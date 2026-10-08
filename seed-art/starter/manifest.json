@@ -1,0 +1,1827 @@
+{
+  "note": "Written by `npm run starter:art:build` (src/buildStarterArt.ts). Lists the figures actually built into exercises/ and patterns/; empty until the maintainer runs the build.",
+  "model": "gemini-nano-banana-2.1",
+  "built_at": "2026-10-08T02:10:45.752Z",
+  "downscale_px": 512,
+  "est_cost_usd": 7.9968,
+  "exercises": {
+    "back-squat": {
+      "name": "Back Squat",
+      "file": "back-squat.jpg",
+      "sha1": "5abcd2ed4b7409a1d3c7742d44ecf963d47a996e",
+      "prompt_sha1": "3178cd739df8d85ad156a3eb9af310f65cd3e9fa",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "barbell-bench-press": {
+      "name": "Barbell Bench Press",
+      "file": "barbell-bench-press.jpg",
+      "sha1": "c8483b38a678bd0cc3b0e047301814432ac862a3",
+      "prompt_sha1": "763cbe7af7ddd51f5911486d03d6806695e00710",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "lat-pulldown": {
+      "name": "Lat Pulldown",
+      "file": "lat-pulldown.jpg",
+      "sha1": "98cfbebd06c9948fbd873de82b003797d5d055ca",
+      "prompt_sha1": "de8ca62eb7d1170db45164b4e8821a6c56a04e8f",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "front-squat": {
+      "name": "Front Squat",
+      "file": "front-squat.jpg",
+      "sha1": "6771c6dcbca7fe3bb0ff9eebb42cb550916934ee",
+      "prompt_sha1": "e9718b1f6c397d7361c65eb40073c1347c9f5988",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "box-squat": {
+      "name": "Box Squat",
+      "file": "box-squat.jpg",
+      "sha1": "6c3044889bf73e1f2ec9f54a150f99e7223bd515",
+      "prompt_sha1": "40437d65211d75a0269f8595a943ce84a971a60b",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "safety-bar-squat": {
+      "name": "Safety Bar Squat",
+      "file": "safety-bar-squat.jpg",
+      "sha1": "6ab5976e3e64f59f15558e06996b4bc1a7e04ab4",
+      "prompt_sha1": "dafc6f5ed472e2ee9ff559eab1124a3485aa1adb",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "zercher-squat": {
+      "name": "Zercher Squat",
+      "file": "zercher-squat.jpg",
+      "sha1": "47ae905f5edac7ab6fae7ea16bd0f86bd80a09d7",
+      "prompt_sha1": "00d15282ac14bd106035a9a726c7730f1e30c923",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "hack-squat": {
+      "name": "Hack Squat",
+      "file": "hack-squat.jpg",
+      "sha1": "e52b3416e62a22325a7d5e8cd2de8cadbde95302",
+      "prompt_sha1": "37606952f7262bc536e212c2c78131a17d6c2f95",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "leg-press": {
+      "name": "Leg Press",
+      "file": "leg-press.jpg",
+      "sha1": "89e18ae2ea08333ee2fd675b60997cc51608cad7",
+      "prompt_sha1": "72dd559c7bbe7a8aae96601962d0458c5212a4fd",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "goblet-squat": {
+      "name": "Goblet Squat",
+      "file": "goblet-squat.jpg",
+      "sha1": "90f2bde2b4accdf854cfcc6d56a9d6307d74ae51",
+      "prompt_sha1": "0af3931545383218264c9cce74f3967f16312686",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "dumbbell-goblet-squat": {
+      "name": "DB Goblet Squat",
+      "file": "dumbbell-goblet-squat.jpg",
+      "sha1": "2ba6c03ebf7a3376dea817a6620187fd5ba72441",
+      "prompt_sha1": "88f2034ab4d0ab3f65f13d339169f2286a7a88db",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "smith-machine-squat": {
+      "name": "Smith Machine Squat",
+      "file": "smith-machine-squat.jpg",
+      "sha1": "d162dba33956c11f3d5e0e024e3bf0ed1214912e",
+      "prompt_sha1": "34b24baf91a33e12c55375542dbb993c7b7a342f",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "pause-squat": {
+      "name": "Pause Squat",
+      "file": "pause-squat.jpg",
+      "sha1": "07931035580e3d199f4639b5224ac92bef436115",
+      "prompt_sha1": "dc9943bb43e2c4304776b6b04fec79db2f043aef",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "split-squat": {
+      "name": "Split Squat",
+      "file": "split-squat.jpg",
+      "sha1": "e1947af37992d6be00626171223d5ee0b6a3c3bc",
+      "prompt_sha1": "391772cf6b1d3ff76f43861fd700b1ac167d9ffc",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "pistol-squat": {
+      "name": "Pistol Squat",
+      "file": "pistol-squat.jpg",
+      "sha1": "73e744b47689bee4a8581cbe217bdd601c6d5ae7",
+      "prompt_sha1": "c0061500d307b568e4116e9134e362f3fd0111f9",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "wall-sit": {
+      "name": "Wall Sit",
+      "file": "wall-sit.jpg",
+      "sha1": "be243814e4ed05036ec3464c9b54604610eb07a6",
+      "prompt_sha1": "ec509fe5af8aefbdd1086a0fca9c72f6c74ece42",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "sissy-squat": {
+      "name": "Sissy Squat",
+      "file": "sissy-squat.jpg",
+      "sha1": "833c44178e4ecb3cc7b3a054c1a6c5b819ab6b44",
+      "prompt_sha1": "02115197b26949d8a6d0b05e523aef9879cbef67",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "belt-squat": {
+      "name": "Belt Squat",
+      "file": "belt-squat.jpg",
+      "sha1": "0700cbde843e66a9e8f67002c409ecabd585ebba",
+      "prompt_sha1": "a3cbdbf728ea4dff02c0d60fb9ab69b94da2c955",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "single-leg-leg-press": {
+      "name": "Single-Leg Leg Press",
+      "file": "single-leg-leg-press.jpg",
+      "sha1": "1fd88c26d8d30339f71be8aafd3b075ea6f714cd",
+      "prompt_sha1": "54a3444d8425a5e4285e1759ae762324a8573c72",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "conventional-deadlift": {
+      "name": "Conventional Deadlift",
+      "file": "conventional-deadlift.jpg",
+      "sha1": "9cb8fa9ce0dfc9121afb97b0c9a788956d912139",
+      "prompt_sha1": "70449ebe1416df2cf5cbd99402c8724b6def86d4",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "romanian-deadlift": {
+      "name": "Romanian Deadlift",
+      "file": "romanian-deadlift.jpg",
+      "sha1": "6a774a13bee13563d314b21b65180dca07be2104",
+      "prompt_sha1": "c191aa5af1410f71b6d78f52a14087e2d47874f7",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "sumo-deadlift": {
+      "name": "Sumo Deadlift",
+      "file": "sumo-deadlift.jpg",
+      "sha1": "9082ffc9a1184958de20ad70fb150cb5c6473bd9",
+      "prompt_sha1": "7f4208f5ec56d6c692743a375988588cf9b35fcd",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "trap-bar-deadlift": {
+      "name": "Trap Bar Deadlift",
+      "file": "trap-bar-deadlift.jpg",
+      "sha1": "8b28a0a7d9db562163f1a2c188b44a706dfe5202",
+      "prompt_sha1": "f9cd5580e9bf9ecf596dcefc44fc2cefb1945e6d",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "stiff-leg-deadlift": {
+      "name": "Stiff-Leg Deadlift",
+      "file": "stiff-leg-deadlift.jpg",
+      "sha1": "4739f2b977cd952e8a4bdfc9da40a42eb84ca079",
+      "prompt_sha1": "44e28b24b36c749c7a54dce1134723758cedc99a",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "single-leg-romanian-deadlift": {
+      "name": "Single-Leg RDL",
+      "file": "single-leg-romanian-deadlift.jpg",
+      "sha1": "4549076b63b31c8922fa5825ba97625742dad65c",
+      "prompt_sha1": "a403bea4bd43dc63bb39181f26d9233e1aa5b094",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "good-morning": {
+      "name": "Good Morning",
+      "file": "good-morning.jpg",
+      "sha1": "41041db77e6abdc7eca21b84de7e632ee9afd8ad",
+      "prompt_sha1": "2fa96d2263b0785912f446c0ffe23ead132d16ae",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "kettlebell-swing": {
+      "name": "Kettlebell Swing",
+      "file": "kettlebell-swing.jpg",
+      "sha1": "5a8a079f280a8850b95a0bf1b936fcc97281ce57",
+      "prompt_sha1": "6bfe3ff71a85b70c92c206a2199b912408679757",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "dumbbell-romanian-deadlift": {
+      "name": "Dumbbell Romanian Deadlift",
+      "file": "dumbbell-romanian-deadlift.jpg",
+      "sha1": "4fbb4db43ce88b9e123a5dc3b32c2d4379a5eb2b",
+      "prompt_sha1": "8949df32142a3dbb04cdce453bba583a11dcd766",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "kettlebell-deadlift": {
+      "name": "Kettlebell Deadlift",
+      "file": "kettlebell-deadlift.jpg",
+      "sha1": "f7e6cc7f330d52fde67ff900651d298987d74b0e",
+      "prompt_sha1": "f882f212bea040d911e8a7fc025506fb98fb682d",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "deficit-deadlift": {
+      "name": "Deficit Deadlift",
+      "file": "deficit-deadlift.jpg",
+      "sha1": "a2f1b24ee1aca42e0013908e03179755b2224608",
+      "prompt_sha1": "746db47db70388cee5a1e52fb255c1db4a3e7265",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "rack-pull": {
+      "name": "Rack Pull",
+      "file": "rack-pull.jpg",
+      "sha1": "483b01d1f0de14e8bb84b260599a84ef1e749a59",
+      "prompt_sha1": "d8fa121846dd5595ef654660cb1729ec8696db6d",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "back-extension": {
+      "name": "Back Extension",
+      "file": "back-extension.jpg",
+      "sha1": "a620ddf9befe293aa0624c62d015f24dec7aea2e",
+      "prompt_sha1": "5ebb15f45fd5cec325c912c349c7cd871592a6fa",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "glute-ham-raise": {
+      "name": "Glute-Ham Raise",
+      "file": "glute-ham-raise.jpg",
+      "sha1": "8f13b149d135d746a08f2fc5347ddcdf5fdcdbb6",
+      "prompt_sha1": "0a53affd2ae1981b071639d3ee32d4c44707cdf5",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "seated-leg-curl": {
+      "name": "Seated Leg Curl",
+      "file": "seated-leg-curl.jpg",
+      "sha1": "7674bf079f903645a020dc4dc9140a0207247c11",
+      "prompt_sha1": "baa5f90426686bb8a801835b1c24deae2443f139",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "leg-curl": {
+      "name": "Leg Curl",
+      "file": "leg-curl.jpg",
+      "sha1": "227569edc6b91fe9b1dca7657713c4e713ce8bb0",
+      "prompt_sha1": "99857a2badc81c61fa69e3a0d7d704de850efa04",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "nordic-curl": {
+      "name": "Nordic Curl",
+      "file": "nordic-curl.jpg",
+      "sha1": "b7f3061ecf384179fd1b3174f321b419d692114e",
+      "prompt_sha1": "2c3feb8211d5726b48bac1693c9f0ef3096ea365",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "hip-thrust": {
+      "name": "Hip Thrust",
+      "file": "hip-thrust.jpg",
+      "sha1": "eb38e78843f1e782783ac5fe2cf8e6df10482eaa",
+      "prompt_sha1": "2fe32736b445969912f7b1c906a0ed2a0a10c297",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "dumbbell-hip-thrust": {
+      "name": "DB Hip Thrust",
+      "file": "dumbbell-hip-thrust.jpg",
+      "sha1": "e6d74d451581e83c0617d162497005d97b119120",
+      "prompt_sha1": "eeacaa06e72e0fa4466b1de4a00d43f579489ad2",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "glute-bridge": {
+      "name": "Glute Bridge",
+      "file": "glute-bridge.jpg",
+      "sha1": "63864642a67c852de2aaff55359ac27623bd3817",
+      "prompt_sha1": "d36f3a65627e2193057f3e1fddaa93eb11227734",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "single-leg-hip-thrust": {
+      "name": "Single-Leg Hip Thrust",
+      "file": "single-leg-hip-thrust.jpg",
+      "sha1": "fedf309c2410f1b4d742a54a1cb147377c9ce96e",
+      "prompt_sha1": "709a7e128fb8bdf68a6513b4d545f5c70745cb58",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "cable-kickback": {
+      "name": "Cable Kickback",
+      "file": "cable-kickback.jpg",
+      "sha1": "b4f0d4cb568190d9f8992786951c2ff22417fa94",
+      "prompt_sha1": "7325cdca36c8257002e83a6277fd05995d0ff952",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "donkey-kick": {
+      "name": "Donkey Kick",
+      "file": "donkey-kick.jpg",
+      "sha1": "77b4382de8458cb140316b1e829a9ebb76a1fb27",
+      "prompt_sha1": "68086efdaa5960e4f12dd4bb206dcdd7a4f86e7b",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "walking-lunge": {
+      "name": "Walking Lunge",
+      "file": "walking-lunge.jpg",
+      "sha1": "f66c64324a6536c90c0c99899c5bb00ece57077b",
+      "prompt_sha1": "83a41e5d7c8be1b4c0ff87da384b6c875936f2d1",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "bulgarian-split-squat": {
+      "name": "Bulgarian Split Squat",
+      "file": "bulgarian-split-squat.jpg",
+      "sha1": "9d7967828c0945757e78298314d389668482b796",
+      "prompt_sha1": "d6248535d713df9701fa40f9969f08a8481a2771",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "reverse-lunge": {
+      "name": "Reverse Lunge",
+      "file": "reverse-lunge.jpg",
+      "sha1": "309e0d73d5323b382603e6a6329ec83bf8a9da20",
+      "prompt_sha1": "d774da8acea822b340cdee5a742dba3f838b3cf0",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "step-up": {
+      "name": "Step-Up",
+      "file": "step-up.jpg",
+      "sha1": "acfc13f0b64b882f83d2eb2fe886494aad240aee",
+      "prompt_sha1": "9cd0b49e823b85e36b1bec706cfa3a45069d05e8",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "lateral-lunge": {
+      "name": "Lateral Lunge",
+      "file": "lateral-lunge.jpg",
+      "sha1": "c00d0b40279eeb9cfa2c5e17128a66df1d26266f",
+      "prompt_sha1": "cec11fb6b71e8383304ada469d2cd596488f4377",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "front-foot-elevated-split-squat": {
+      "name": "Front Foot Elevated Split Squat",
+      "file": "front-foot-elevated-split-squat.jpg",
+      "sha1": "cfe49d13fe0d297772850cd046a8942fa42e7827",
+      "prompt_sha1": "a82b981e0b16064203cef64cbe7c796b60960cfc",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "barbell-lunge": {
+      "name": "Barbell Lunge",
+      "file": "barbell-lunge.jpg",
+      "sha1": "125e6f3acb96a1a4da055c27a8c6705b696b94d1",
+      "prompt_sha1": "11b0ed9db7a9527070430f653942eeef3974095f",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "curtsy-lunge": {
+      "name": "Curtsy Lunge",
+      "file": "curtsy-lunge.jpg",
+      "sha1": "8bf348aef6fb2ca929c805c84928e07abd678292",
+      "prompt_sha1": "053ae33738051c8eb18da24863457c4c74924341",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "goblet-reverse-lunge": {
+      "name": "Goblet Reverse Lunge",
+      "file": "goblet-reverse-lunge.jpg",
+      "sha1": "8b3ae7eebc61e06afbdc96db3a3da1932d49b1f6",
+      "prompt_sha1": "33dd8082118bb8b07a3d966d26f058c77396ff18",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "dumbbell-bench-press": {
+      "name": "DB Bench Press",
+      "file": "dumbbell-bench-press.jpg",
+      "sha1": "0250c0bcf9f5af5abf81ad5f8191b32e0b88fd2a",
+      "prompt_sha1": "14014e8cf7ff371c75d5fc74c55706f0933424f9",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "incline-bench-press": {
+      "name": "Incline Bench Press",
+      "file": "incline-bench-press.jpg",
+      "sha1": "53ab1e9bb185d8509f993c1d26296f3cd34a18bc",
+      "prompt_sha1": "8ae073e10040951b0381dd5f9b04f78b8959ea31",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "incline-dumbbell-press": {
+      "name": "Incline DB Press",
+      "file": "incline-dumbbell-press.jpg",
+      "sha1": "a5c121dd663d089bb49289a9266209f5b900d0bb",
+      "prompt_sha1": "c34faf4583b53ecefa24bf9502d725fbe1e9ac58",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "decline-bench-press": {
+      "name": "Decline Bench Press",
+      "file": "decline-bench-press.jpg",
+      "sha1": "6acf6ccf8ccb312491ee347e0eb868375faa7b6b",
+      "prompt_sha1": "1f6dfa8b6bb9a7c7ca36e142f2e0d2e1671d58bb",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "push-up": {
+      "name": "Push-Up",
+      "file": "push-up.jpg",
+      "sha1": "f2ade4c9838e9b8210e3abbe34e7373d19b02f17",
+      "prompt_sha1": "ed208b77cbb725cfc9621feef1600b57b7c27fe5",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "cable-chest-press": {
+      "name": "Cable Chest Press",
+      "file": "cable-chest-press.jpg",
+      "sha1": "b180b61725fcef1a978e2e67125d571eb060635a",
+      "prompt_sha1": "6cff30f1df40d1de9cb2b55fe01bb4e0ae296c8d",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "machine-chest-press": {
+      "name": "Machine Chest Press",
+      "file": "machine-chest-press.jpg",
+      "sha1": "2ea3fbca6af0c2735ec3b4c0ffcaac9014d9ac19",
+      "prompt_sha1": "28d86bc47895a78c1870ba0e8a9ebd27068bdbb4",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "dumbbell-chest-fly": {
+      "name": "DB Chest Fly",
+      "file": "dumbbell-chest-fly.jpg",
+      "sha1": "0f4b6f17d8703b5d972b9dd9b1737e15cb8a535c",
+      "prompt_sha1": "0ac2545d235b40364932e61695d5e50e98f50df5",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "half-kneeling-single-arm-cable-chest-press": {
+      "name": "Half-Kneeling Single-Arm Cable Chest Press",
+      "file": "half-kneeling-single-arm-cable-chest-press.jpg",
+      "sha1": "1f68a57ada1b885039b5a4811902a2a48f767f62",
+      "prompt_sha1": "dce8b6e31d69bd475bf6d9c1743f005b36145117",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "floor-press": {
+      "name": "Floor Press",
+      "file": "floor-press.jpg",
+      "sha1": "9f50891c053ae2edefc810e7476d4e146c9ce9e8",
+      "prompt_sha1": "506cbf96be910bdfd87f7f8d4534234d9074bb41",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "cable-fly": {
+      "name": "Cable Fly",
+      "file": "cable-fly.jpg",
+      "sha1": "9b8e00ffc81c224bc0b2926da455d9495bc6b2d5",
+      "prompt_sha1": "b3c331ace78718856c9d0fee0d28f811fe067690",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "pec-deck": {
+      "name": "Pec Deck",
+      "file": "pec-deck.jpg",
+      "sha1": "c5792bafbb42dfdc7afa605d6a760ad8db2f9536",
+      "prompt_sha1": "9b6f4320364aa3889a0e05b5cb93f68ed9c118c0",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "low-to-high-cable-fly": {
+      "name": "Low-to-High Cable Fly",
+      "file": "low-to-high-cable-fly.jpg",
+      "sha1": "bdb6f80feaafad0354753da5b92f28fc96c03a0f",
+      "prompt_sha1": "e32db080f53e95d15e489a65bb4a4a6c71b67690",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "incline-push-up": {
+      "name": "Incline Push-Up",
+      "file": "incline-push-up.jpg",
+      "sha1": "baa35d05e09f144497c33682671b643c3db2658e",
+      "prompt_sha1": "3778d6c7309d5d3645ad4bb4c3a312fd9e9116c5",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "close-grip-bench-press": {
+      "name": "Close-Grip Bench Press",
+      "file": "close-grip-bench-press.jpg",
+      "sha1": "162e823caed1100b466e6abf2bfd75edde594cd5",
+      "prompt_sha1": "5c22b4c25103ddfc338219946490d80f46fe2778",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "dip": {
+      "name": "Dips",
+      "file": "dip.jpg",
+      "sha1": "98da53dc17cd010a5ed727099e041a4f2685235e",
+      "prompt_sha1": "3f3c810825ae493ea72e73b4d75d6da7b0246e21",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "barbell-overhead-press": {
+      "name": "Barbell Overhead Press",
+      "file": "barbell-overhead-press.jpg",
+      "sha1": "4368b5d3edd2f52f933143d6b0a49ed2b6de3c59",
+      "prompt_sha1": "6e1f5b4ad0806d2c20c269bffa1846add6500889",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "dumbbell-overhead-press": {
+      "name": "DB Overhead Press",
+      "file": "dumbbell-overhead-press.jpg",
+      "sha1": "d5c36bcf6befe429ca9b8947b59a45bce003e6da",
+      "prompt_sha1": "6b0ee2aa8f7a29b42bd480a903582aaa379dabf6",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "seated-dumbbell-overhead-press": {
+      "name": "Seated DB Overhead Press",
+      "file": "seated-dumbbell-overhead-press.jpg",
+      "sha1": "b815a0ca22bca00deb733f8a4a64b9502048f138",
+      "prompt_sha1": "25bfc52b9d9b19cf4dcae4d26e6a3a04816421ad",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "single-arm-dumbbell-overhead-press": {
+      "name": "Single-Arm DB Overhead Press",
+      "file": "single-arm-dumbbell-overhead-press.jpg",
+      "sha1": "18c76952ff5e50f872e3872bbdc4ea5195ff2dff",
+      "prompt_sha1": "a30c8134998ede4934f9cad3062b529950489661",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "arnold-press": {
+      "name": "Arnold Press",
+      "file": "arnold-press.jpg",
+      "sha1": "3cf49398885a5691316a63433ee3bfa608f1f2e5",
+      "prompt_sha1": "7975ee6d8ee156c6afd96c26fca730cfa329bd31",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "machine-shoulder-press": {
+      "name": "Machine Shoulder Press",
+      "file": "machine-shoulder-press.jpg",
+      "sha1": "916d678ec0cd9ee49848d27f29c80b1538951f32",
+      "prompt_sha1": "6fd0b999ea50493042f6d221aa8e50e8fac8bd1c",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "landmine-press": {
+      "name": "Landmine Press",
+      "file": "landmine-press.jpg",
+      "sha1": "95d09a451714dbb037bdbd5b151bdbde32fbf83c",
+      "prompt_sha1": "f74ead5e3bd5652ff9137b15e2a24f518f05704f",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "pike-push-up": {
+      "name": "Pike Push-Up",
+      "file": "pike-push-up.jpg",
+      "sha1": "5af45439c1af30f03537523955beec7e47cb7f33",
+      "prompt_sha1": "268b357472c8fcfec433ce704474b8267b1de5c7",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "z-press": {
+      "name": "Z Press",
+      "file": "z-press.jpg",
+      "sha1": "6bee2fe463b2435272996661776aa87e4196f285",
+      "prompt_sha1": "b423652945a49989ccb1a5c9343ce27c75c00043",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "push-press": {
+      "name": "Push Press",
+      "file": "push-press.jpg",
+      "sha1": "a07607577a83b8f615298cddb365f17851414384",
+      "prompt_sha1": "3e911e1266c596e18837635cbc10815082bf92a9",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "kettlebell-press": {
+      "name": "Kettlebell Press",
+      "file": "kettlebell-press.jpg",
+      "sha1": "1b72806d1e76e52bce24c192a61d814027223525",
+      "prompt_sha1": "5d048d51cd101aea1aeb9f20f1c33d9880442d31",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "half-kneeling-landmine-press": {
+      "name": "Half-Kneeling Landmine Press",
+      "file": "half-kneeling-landmine-press.jpg",
+      "sha1": "9ecb8644c3724cd7115a7ffa1a3dfc5213a23b6b",
+      "prompt_sha1": "779b975dd88ddb4e86801ccb7e5ab913c7e00824",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "barbell-bent-over-row": {
+      "name": "Barbell Bent-Over Row",
+      "file": "barbell-bent-over-row.jpg",
+      "sha1": "1d914002d1888e1cdbee3d3deb4b591389f04a64",
+      "prompt_sha1": "e7be3f64838e7fea482229de0941434f8a7d2ce6",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "dumbbell-row": {
+      "name": "DB Row",
+      "file": "dumbbell-row.jpg",
+      "sha1": "73d9bb651f87890196f3585bd8886d7034d3a54b",
+      "prompt_sha1": "acbe2b0557ada51a656d191b79cbeb68f1f812a1",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "single-arm-dumbbell-row": {
+      "name": "Single-Arm DB Row",
+      "file": "single-arm-dumbbell-row.jpg",
+      "sha1": "eefe2a1b09d21c150f26fe6122a1c570a04ecabe",
+      "prompt_sha1": "0ebe94a169c0d6d70ffafe53244cc9e693055cf5",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "seated-cable-row": {
+      "name": "Seated Cable Row",
+      "file": "seated-cable-row.jpg",
+      "sha1": "fd31005b567d691bec2c1ef3926813e3b82ab6cb",
+      "prompt_sha1": "49155090faf2019f1588f167a7261bc95b3e4dc2",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "t-bar-row": {
+      "name": "T-Bar Row",
+      "file": "t-bar-row.jpg",
+      "sha1": "2e11379127c523bd7fe81ee67bcd34d4138570a1",
+      "prompt_sha1": "a1ae0927c304143dd7a567ba41f6a31b69e94aae",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "chest-supported-row": {
+      "name": "Chest-Supported Row",
+      "file": "chest-supported-row.jpg",
+      "sha1": "c55aa2a850c7ee91ed3f056853c27da309c857d7",
+      "prompt_sha1": "a1049299992193f43c0bf878362cceecf03a1856",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "inverted-row": {
+      "name": "Inverted Row",
+      "file": "inverted-row.jpg",
+      "sha1": "f21e71b0c43a0bf39c2357c988be7887bb1c6972",
+      "prompt_sha1": "8d96e408e734f3d9cecab9f50688ad87b47254ec",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "pendlay-row": {
+      "name": "Pendlay Row",
+      "file": "pendlay-row.jpg",
+      "sha1": "56e7a9a52546b070ba047bb43d09467393b4fdb5",
+      "prompt_sha1": "a4a87b7d2f8d949840964a0eafcdb4730b522c46",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "meadow-row": {
+      "name": "Meadows Row",
+      "file": "meadow-row.jpg",
+      "sha1": "d711b5c633e5805af6b52d712bf9469abdd525b4",
+      "prompt_sha1": "b7e967901717f4661dda5119fd926421bf7e2379",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "machine-row": {
+      "name": "Machine Row",
+      "file": "machine-row.jpg",
+      "sha1": "cc48d20593e7ded67e1bb296fe1b6e37a30d0f74",
+      "prompt_sha1": "edb8dfdbcd14ce0b2c7ddc1906c6644b01597045",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "renegade-row": {
+      "name": "Renegade Row",
+      "file": "renegade-row.jpg",
+      "sha1": "f023bfd2199a2d2117faa64a65de9f50589946ea",
+      "prompt_sha1": "3bb2b74a3fdd345c78cdbb57d087cf33428743ee",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "face-pull": {
+      "name": "Face Pull",
+      "file": "face-pull.jpg",
+      "sha1": "c65f6f2fafc09c83ea155e11d9ae0d57061f6546",
+      "prompt_sha1": "22b0e8d388cfc23df1506d5ef72ee53f39cf2053",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "pull-up": {
+      "name": "Pull-Up",
+      "file": "pull-up.jpg",
+      "sha1": "044ba9453fbc531b1953c6807838d247201073dc",
+      "prompt_sha1": "74ded0b5c734230430393ad61a825ee54f3c5fef",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "chin-up": {
+      "name": "Chin-Up",
+      "file": "chin-up.jpg",
+      "sha1": "e0314ee93659ca6ea12c7f363540d73c869bfe41",
+      "prompt_sha1": "786e01425fe58d10b34f0a2903f3646d5c9e09bb",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "wide-grip-pulldown": {
+      "name": "Wide-Grip Pulldown",
+      "file": "wide-grip-pulldown.jpg",
+      "sha1": "c0280ce58653fcac729471c2ca81e2b34f5c94fd",
+      "prompt_sha1": "aba6af755706c976cc28d9993980033d68cb94a9",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "cable-pullover": {
+      "name": "Cable Pullover",
+      "file": "cable-pullover.jpg",
+      "sha1": "9ef902d13746aa213a6f1e07addffa882e7ff00e",
+      "prompt_sha1": "3016a12379c6584aab86d0b0d11e638751a3e657",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "assisted-pull-up": {
+      "name": "Assisted Pull-Up",
+      "file": "assisted-pull-up.jpg",
+      "sha1": "993543fe2cd0a86aeb93c00d4a45dce4ce1cefea",
+      "prompt_sha1": "56f9446002dd67719ce07461c7ec777cf4fb54d8",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "single-arm-lat-pulldown": {
+      "name": "Single-Arm Lat Pulldown",
+      "file": "single-arm-lat-pulldown.jpg",
+      "sha1": "e9bce7e0232ba871ba4312131db417dfb864749c",
+      "prompt_sha1": "cf00969d3415051cfad9b35e0d0a46a572eb96d2",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "neutral-grip-pulldown": {
+      "name": "Neutral-Grip Pulldown",
+      "file": "neutral-grip-pulldown.jpg",
+      "sha1": "e50c2c14794d34aa1d94a439bc783e5a8ab3fe3b",
+      "prompt_sha1": "f29e9f228c388888accd87e8d94decbfee784b75",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "close-grip-pulldown": {
+      "name": "Close-Grip Pulldown",
+      "file": "close-grip-pulldown.jpg",
+      "sha1": "eccb8749d4a6a35b240a064bed83e9f96b8da1d1",
+      "prompt_sha1": "b3ec578bd78d883a64f4b12f1501bc95ad93463e",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "straight-arm-pulldown": {
+      "name": "Straight-Arm Pulldown",
+      "file": "straight-arm-pulldown.jpg",
+      "sha1": "5f9a71a9420094f9d9497d686ad41c01ca3fe27f",
+      "prompt_sha1": "77cc86ccd555b8c2fcd73563e8a1a84333d8bb3b",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "weighted-pull-up": {
+      "name": "Weighted Pull-Up",
+      "file": "weighted-pull-up.jpg",
+      "sha1": "6453ee8248a4898800a715278416060eb12d5cc2",
+      "prompt_sha1": "c8f9bda0c6fada9271d8cec7feebc395c7c8cd4e",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "scapular-pull-up": {
+      "name": "Scapular Pull-Up",
+      "file": "scapular-pull-up.jpg",
+      "sha1": "a8863cb8e946e5e3d3cf4be43a9a7dc6e7a3bd44",
+      "prompt_sha1": "943c4c185787eb7499df70d3feb856aab86c72e8",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "dead-hang": {
+      "name": "Dead Hang",
+      "file": "dead-hang.jpg",
+      "sha1": "b0ca1088fa9b796a0e0e12234f4204a6ec2c8d3b",
+      "prompt_sha1": "1810d6720bef59abde9a349bfd0c8096baae1ec1",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "barbell-curl": {
+      "name": "Barbell Curl",
+      "file": "barbell-curl.jpg",
+      "sha1": "65ed3a31cd240be7e707890f7cd42da610b1d9b9",
+      "prompt_sha1": "fa6e9708e03ac331c15fd99866190a2f0b370c0a",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "dumbbell-bicep-curl": {
+      "name": "DB Bicep Curl",
+      "file": "dumbbell-bicep-curl.jpg",
+      "sha1": "e1ea9f16cada2839ca9d1d2ebbf741c30bcc5d7e",
+      "prompt_sha1": "028c5623e0da5fb8b0f98f0cfb61a2b2eeb99381",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "hammer-curl": {
+      "name": "Hammer Curl",
+      "file": "hammer-curl.jpg",
+      "sha1": "67326f8ca918ebecf12adf43d44adf37bb740434",
+      "prompt_sha1": "5d329a74f4e4a761f4f7a3a99b374eb76d2710ed",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "preacher-curl": {
+      "name": "Preacher Curl",
+      "file": "preacher-curl.jpg",
+      "sha1": "b8bc8db07b642c6505227592a1abd2214497f14f",
+      "prompt_sha1": "63e32ba69959daa81349a978be66d54f9c307ac6",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "incline-dumbbell-curl": {
+      "name": "Incline DB Curl",
+      "file": "incline-dumbbell-curl.jpg",
+      "sha1": "1f4c74db8723e139c7b8b71067122bace6fc9e8a",
+      "prompt_sha1": "cb07f14eb1ad12edb39ade8cb0bc7165688f6cc4",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "cable-curl": {
+      "name": "Cable Curl",
+      "file": "cable-curl.jpg",
+      "sha1": "3d13500b26ff6589c62c74552ea6d77e2b5c59df",
+      "prompt_sha1": "f7b34df0e67a500c6d1002cb1444ddc0090298af",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "concentration-curl": {
+      "name": "Concentration Curl",
+      "file": "concentration-curl.jpg",
+      "sha1": "8505c68706afe13efaee91f9efc60273e01218cd",
+      "prompt_sha1": "2d06be408aef7e6245f356ee84035f27583ffd98",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "ez-bar-curl": {
+      "name": "EZ Bar Curl",
+      "file": "ez-bar-curl.jpg",
+      "sha1": "f4d231223d90f64e9c35c3c459e298121e550ea2",
+      "prompt_sha1": "7ef8187230b285e772ec29cf7f00520f32b508a5",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "reverse-curl": {
+      "name": "Reverse Curl",
+      "file": "reverse-curl.jpg",
+      "sha1": "269d340ab2bd63e39c1c7b8bad2a61e65d0d9926",
+      "prompt_sha1": "18b66e228348f51a3ab61007464921bdf2f9951f",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "wrist-curl": {
+      "name": "Wrist Curl",
+      "file": "wrist-curl.jpg",
+      "sha1": "ef623d7fb9fdb01ba3d0082f5035a7bb4e85dd1b",
+      "prompt_sha1": "195881569d79e6a4d15195e1a18eafedc66318f2",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "tricep-pushdown": {
+      "name": "Tricep Pushdown",
+      "file": "tricep-pushdown.jpg",
+      "sha1": "b1664aac7945f310b35b68d45e74e0bcf275bcc8",
+      "prompt_sha1": "79fe267bc61bb6bc4beea1d0af6a309cd91cf449",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "tricep-rope-pushdown": {
+      "name": "Triceps Rope Pushdown",
+      "file": "tricep-rope-pushdown.jpg",
+      "sha1": "6ef75f83848bc81491401b3219d09c65d40714ff",
+      "prompt_sha1": "badf8f61675059a274f7bcca0eccbd0131d54620",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "skull-crusher": {
+      "name": "Skull Crusher",
+      "file": "skull-crusher.jpg",
+      "sha1": "06f93a132783a2071d2b2363fcfb51347f80d318",
+      "prompt_sha1": "4aa66772dcfa0fc6770bd58c767423038e5951a4",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "overhead-tricep-extension": {
+      "name": "Overhead Tricep Extension",
+      "file": "overhead-tricep-extension.jpg",
+      "sha1": "95a53ce024f15030ce05fc75346b0223fa0fe972",
+      "prompt_sha1": "5c7efd32d160c02128371e4da055eeaeacf015f4",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "cable-overhead-tricep-extension": {
+      "name": "Cable Overhead Tricep Extension",
+      "file": "cable-overhead-tricep-extension.jpg",
+      "sha1": "f3ed3afac5ccc7060e0d57d4cc2a43f53ae10e87",
+      "prompt_sha1": "0158829d7a907f25a4faefba26912b85c88b6fb4",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "dumbbell-kickback": {
+      "name": "DB Kickback",
+      "file": "dumbbell-kickback.jpg",
+      "sha1": "930b58f24ae508214d5ae66e87f5180dec3f9309",
+      "prompt_sha1": "158a8c6405c04ccefedb160229a76039500d1bac",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "jm-press": {
+      "name": "JM Press",
+      "file": "jm-press.jpg",
+      "sha1": "9fb44019d35499e59b8999a9cf7d0bb90cae2a48",
+      "prompt_sha1": "ba5e0f1dcae555da00b51d578041559adfe73ceb",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "bench-dip": {
+      "name": "Bench Dip",
+      "file": "bench-dip.jpg",
+      "sha1": "c150e6a0e06c579c0a22999313024cf673f5f254",
+      "prompt_sha1": "3ccdaf5b0961cb0d32c39615ffdfb39c315fd1ef",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "dumbbell-lateral-raise": {
+      "name": "Dumbbell Lateral Raise",
+      "file": "dumbbell-lateral-raise.jpg",
+      "sha1": "6a070eb3b4ef43a6eaba485d2f6a9543ea11c429",
+      "prompt_sha1": "4954ec2fad575f2ef7cd02f78314aaf0f7d291ae",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "cable-lateral-raise": {
+      "name": "Cable Lateral Raise",
+      "file": "cable-lateral-raise.jpg",
+      "sha1": "865a9ba40d006fbaa6aeaafe4e6d78447f46b3f9",
+      "prompt_sha1": "cf7a8e90bcff99840e6987439069305722a2d5be",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "machine-lateral-raise": {
+      "name": "Machine Lateral Raise",
+      "file": "machine-lateral-raise.jpg",
+      "sha1": "e76bc0ef4c992ab8cec2aca91bf2bb91400ff930",
+      "prompt_sha1": "0d71c4b85f0be2b69435ba56002ff5f91a1027ec",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "upright-row": {
+      "name": "Upright Row",
+      "file": "upright-row.jpg",
+      "sha1": "e098f181ed2f083b3ef21cc896769c9c6e59d8fc",
+      "prompt_sha1": "b1bdc990d526120aecbd3fc7611786668558d14b",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "dumbbell-front-raise": {
+      "name": "DB Front Raise",
+      "file": "dumbbell-front-raise.jpg",
+      "sha1": "c63c1bff7a12998f9899fbbc7d5a4cb0f50b204f",
+      "prompt_sha1": "a04e9edd1ab2c10c2c32e7373a4f3b42e1b87a43",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "reverse-pec-deck": {
+      "name": "Reverse Pec Deck",
+      "file": "reverse-pec-deck.jpg",
+      "sha1": "3c17329f60ea7e5e83ffbc8e50c71683d7d37873",
+      "prompt_sha1": "115b6f4c58afc416e7e6b834c359bfdb2297e4d9",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "rear-delt-fly": {
+      "name": "Rear Delt Fly",
+      "file": "rear-delt-fly.jpg",
+      "sha1": "9202a17e002b656dceeee514ab5ba585db1c4d0b",
+      "prompt_sha1": "05cb82f32108a27c418abe68f91083246ff4204f",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "cable-rear-delt-fly": {
+      "name": "Cable Rear Delt Fly",
+      "file": "cable-rear-delt-fly.jpg",
+      "sha1": "b7dd7c815fd0f9d0b36f20880d86e8230229e756",
+      "prompt_sha1": "cdd4f23085341bde6f58fc964a80a9a5eb8dffac",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "band-pull-apart": {
+      "name": "Band Pull-Apart",
+      "file": "band-pull-apart.jpg",
+      "sha1": "ffa32c139968203d65507eeca66e8bce57ba2b54",
+      "prompt_sha1": "09589a8a59ea4290e519cd24c590cec252881263",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "prone-rear-delt-raise": {
+      "name": "Prone Rear Delt Raise",
+      "file": "prone-rear-delt-raise.jpg",
+      "sha1": "70cffe8f4b75164805c2ffbbec6333a1fdc42364",
+      "prompt_sha1": "43e5176caca3605c442a35b51e18094991866a1f",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "y-raise": {
+      "name": "Y Raise",
+      "file": "y-raise.jpg",
+      "sha1": "47eb079f99ac51fa14d2dced7c50e9a98529a2be",
+      "prompt_sha1": "fb0b1818490381a57e8870a7b3f94e0923964c05",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "band-external-rotation": {
+      "name": "Band External Rotation",
+      "file": "band-external-rotation.jpg",
+      "sha1": "9a5366d01406144d401c6830af17f00de27615c2",
+      "prompt_sha1": "69873f3b87d14765607458300b0b55bb50eb0eea",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "cable-external-rotation": {
+      "name": "Cable External Rotation",
+      "file": "cable-external-rotation.jpg",
+      "sha1": "fa9ae9950ef89f3adcbd79fb79bafe314eab7f49",
+      "prompt_sha1": "5fb987bc13f0b378a6490f73878c30d07e3cd67c",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "barbell-shrug": {
+      "name": "Barbell Shrug",
+      "file": "barbell-shrug.jpg",
+      "sha1": "8ab44f92aaefdb0a89b49e5b0af448a06aba3f03",
+      "prompt_sha1": "0da5f1c158f1d2c883a5bb9c38c9800cc49087b3",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "dumbbell-shrug": {
+      "name": "Dumbbell Shrug",
+      "file": "dumbbell-shrug.jpg",
+      "sha1": "dd5e4e6d2d6a4df6cf78c84d8ae0edcb293d7412",
+      "prompt_sha1": "f4dbde953a5ea4306e6ad2e2b79b795c63396544",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "farmer-s-walk": {
+      "name": "Farmer's Walk",
+      "file": "farmer-s-walk.jpg",
+      "sha1": "e94f0f9e973ba88af0c2e96a12a2b1c6fdcb8ea5",
+      "prompt_sha1": "41551543f3b4c70a448c14fd74b53b1fa915b489",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "suitcase-carry": {
+      "name": "Suitcase Carry",
+      "file": "suitcase-carry.jpg",
+      "sha1": "d9d0ccc1ee808547cc2be1a3ebb14911be596f1f",
+      "prompt_sha1": "4383966fadad8d12bb66d8b8b646d8c8a05e5300",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "overhead-carry": {
+      "name": "Overhead Carry",
+      "file": "overhead-carry.jpg",
+      "sha1": "b5eeeb4a1cd545fc3034cae72a3b9bb26eb876d1",
+      "prompt_sha1": "6ff45a22a2ede5fc061dba5f75527ce102786126",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "double-kettlebell-carry": {
+      "name": "Double KB Carry",
+      "file": "double-kettlebell-carry.jpg",
+      "sha1": "bae357103d4abc1e874806c0a43e56b1f2a9bd77",
+      "prompt_sha1": "3586bcb70c78a3ec93ffb58507c90f739107acfc",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "standing-calf-raise": {
+      "name": "Standing Calf Raise",
+      "file": "standing-calf-raise.jpg",
+      "sha1": "9cbf6bee2ed27951847ecb320a174b81fc96315a",
+      "prompt_sha1": "91ba467a5cda9712f4c78b4fa61c0713471dc043",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "seated-calf-raise": {
+      "name": "Seated Calf Raise",
+      "file": "seated-calf-raise.jpg",
+      "sha1": "495582f040c590e0641b0c3bb05cbfd0028b12b8",
+      "prompt_sha1": "36abe3a2a0c8347a10fe1c91161430f8375ed420",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "donkey-calf-raise": {
+      "name": "Donkey Calf Raise",
+      "file": "donkey-calf-raise.jpg",
+      "sha1": "4dd33d5d5c1c279800a1a3c9028dd9ba2c2e30b4",
+      "prompt_sha1": "6d7286f56d8854929875424ebb4a01b8f0855770",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "single-leg-calf-raise": {
+      "name": "Single-Leg Calf Raise",
+      "file": "single-leg-calf-raise.jpg",
+      "sha1": "ebfce09d8d07768c2f3596c3e84345e919055fe9",
+      "prompt_sha1": "ebdd4074a91ff757de7549ad06c61a160aa5ef12",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "dumbbell-calf-raise": {
+      "name": "DB Calf Raise",
+      "file": "dumbbell-calf-raise.jpg",
+      "sha1": "2d206d2162054cb01ceb564cf8e2b325c541e040",
+      "prompt_sha1": "474c6d11a80bbf042a0a9a9040684f5abaff4bab",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "tibiali-raise": {
+      "name": "Tibialis Raise",
+      "file": "tibiali-raise.jpg",
+      "sha1": "bebcf769f82c9b148b11ab29deb52528a4d0f926",
+      "prompt_sha1": "c314bdc982d172123bea11855a2821f5811c369e",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "banded-dorsiflexion": {
+      "name": "Banded Dorsiflexion",
+      "file": "banded-dorsiflexion.jpg",
+      "sha1": "215d85f43cad091858931eb71be567db4c1e219c",
+      "prompt_sha1": "32571cf62203289a24fc0d512a856b9a3ddc4e85",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "plank": {
+      "name": "Plank",
+      "file": "plank.jpg",
+      "sha1": "c0cc42014abbb30563eb60491b886dea03faff25",
+      "prompt_sha1": "ae0d3bb8063be94cd0d62a4b924cec1c1b38fd59",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "dead-bug": {
+      "name": "Dead Bug",
+      "file": "dead-bug.jpg",
+      "sha1": "98ab913b41b3acb094e5635b34a346b7750eee75",
+      "prompt_sha1": "46d5b3871fc3fff66ef456efab9b99c2a5c6089e",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "ab-wheel-rollout": {
+      "name": "Ab Wheel Rollout",
+      "file": "ab-wheel-rollout.jpg",
+      "sha1": "988b0a22fcb3930471d7480531a522272414a06d",
+      "prompt_sha1": "d6c92984b4989f2a35c65a60927a203a0cf27d1c",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "cable-crunch": {
+      "name": "Cable Crunch",
+      "file": "cable-crunch.jpg",
+      "sha1": "2214e8be3cb6c769968417aad6b883be3f2193ba",
+      "prompt_sha1": "fdc46ff335da3043e0886a3815a6cb37991de3e8",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "hanging-leg-raise": {
+      "name": "Hanging Leg Raise",
+      "file": "hanging-leg-raise.jpg",
+      "sha1": "201a7a32220fd8a3d8e58f04345d6ac3831e6f7e",
+      "prompt_sha1": "7cd8b74db327eaf9e285eea739e4a2c7fa7cc17b",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "russian-twist": {
+      "name": "Russian Twist",
+      "file": "russian-twist.jpg",
+      "sha1": "c078dcc0c252988761b0238219d0a7b7dc55327e",
+      "prompt_sha1": "5fa237bdaa4de88203c2bc5d9f564be7a8d317af",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "pallof-press": {
+      "name": "Pallof Press",
+      "file": "pallof-press.jpg",
+      "sha1": "c61ab14f91b63d95e9df64decbcb0286e97cf824",
+      "prompt_sha1": "3e94e48592de32a7356590d78964af478f5e59df",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "side-plank": {
+      "name": "Side Plank",
+      "file": "side-plank.jpg",
+      "sha1": "18605858ef55fa0a0ce62dfe6ed00570247ef997",
+      "prompt_sha1": "827784bc26063b3bb29ba831eeb1ad4e440a3f23",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "bird-dog": {
+      "name": "Bird Dog",
+      "file": "bird-dog.jpg",
+      "sha1": "bdfba9223ad6a420d68ab6a6ae2c33e27a252b80",
+      "prompt_sha1": "646a6b0b4f11159befec9a7cc77108c9749a0dfe",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "crunch": {
+      "name": "Crunch",
+      "file": "crunch.jpg",
+      "sha1": "9fb938a1bfebf39270f310a9360854320f69911e",
+      "prompt_sha1": "71ec7669cdcfabab1a2d8470447916eb703c5626",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "bicycle-crunch": {
+      "name": "Bicycle Crunch",
+      "file": "bicycle-crunch.jpg",
+      "sha1": "630f5eca6a5944e78442c6cc1e06a26e6448ec97",
+      "prompt_sha1": "ad2954db1bcf4bad752616fd979667f79133fe1f",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "reverse-crunch": {
+      "name": "Reverse Crunch",
+      "file": "reverse-crunch.jpg",
+      "sha1": "86575ee44860c1602e82b374561bf86cb2b82c09",
+      "prompt_sha1": "f2f00fdec40c348bc2bebfb202c31b259d764889",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "hollow-hold": {
+      "name": "Hollow Hold",
+      "file": "hollow-hold.jpg",
+      "sha1": "98ff0f67a5c7a20f1bb087bbf6626a241492acbf",
+      "prompt_sha1": "e50634fe2cc779b17a196c80d0c0cf23d9549be7",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "copenhagen-plank": {
+      "name": "Copenhagen Plank",
+      "file": "copenhagen-plank.jpg",
+      "sha1": "2bdc5a70bece8326622c02a6c87124273d456aa6",
+      "prompt_sha1": "10935fa7cb44750568055271a993e11cb61fad1a",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "hanging-knee-raise": {
+      "name": "Hanging Knee Raise",
+      "file": "hanging-knee-raise.jpg",
+      "sha1": "b16f033d535daf1e4863e1d41501cd2ca2f011ef",
+      "prompt_sha1": "1fddce14186321a395428a74be4b96f879da8911",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "cable-woodchop": {
+      "name": "Cable Woodchop",
+      "file": "cable-woodchop.jpg",
+      "sha1": "cca7d2773a12144ef151610380f50fe7dfcada93",
+      "prompt_sha1": "f45506500b90638e978d17d23bef2bb81825520d",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "landmine-rotation": {
+      "name": "Landmine Rotation",
+      "file": "landmine-rotation.jpg",
+      "sha1": "3ac7c9aed507641ad7ee2404ff4d3ec7c4c16225",
+      "prompt_sha1": "dfa6c6c821af8bf531c79823b764cb6d317b10d7",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "stir-the-pot": {
+      "name": "Stir the Pot",
+      "file": "stir-the-pot.jpg",
+      "sha1": "028d657bbf78f49996cb35f223105915a853ede8",
+      "prompt_sha1": "104a7239854cb14d9d2e4800fbd38eea75b7c1a8",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "sit-up": {
+      "name": "Sit-Up",
+      "file": "sit-up.jpg",
+      "sha1": "a5f95d66310f1d92895016162f0c9922c215ada8",
+      "prompt_sha1": "f81fc2b33b0eceeee2599eb1b5c64805e037c4cf",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "v-up": {
+      "name": "V-Up",
+      "file": "v-up.jpg",
+      "sha1": "540598a26b50cfc5a2fd42fc6e0ff54fffab1be6",
+      "prompt_sha1": "6f5850f02145de569389a6a6c44cb135f5d3250f",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "l-sit": {
+      "name": "L-Sit",
+      "file": "l-sit.jpg",
+      "sha1": "a14e3bad5516f050c07850910767a6f7e84a0149",
+      "prompt_sha1": "ceb0846ee396f161a0aa1567ef5da6d1b116cef5",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "mountain-climber": {
+      "name": "Mountain Climber",
+      "file": "mountain-climber.jpg",
+      "sha1": "1d27ef52f5aa1ab877b805d2d4d03776ad2c0a33",
+      "prompt_sha1": "68900aea831b7be817cb99482a1e183730d2b9ea",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "turkish-get-up": {
+      "name": "Turkish Get-Up",
+      "file": "turkish-get-up.jpg",
+      "sha1": "01312c67a0e5a66817099242ff030afaf73321a9",
+      "prompt_sha1": "572dd6685eb557d6cd8608e0b01ec66be823dee2",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "kettlebell-clean": {
+      "name": "Kettlebell Clean",
+      "file": "kettlebell-clean.jpg",
+      "sha1": "b2dc168f05fc5d81af86dc7ca0e44b66c1797bda",
+      "prompt_sha1": "7878c5767a0758dab868d2aeff4e185b642f1dde",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "kettlebell-snatch": {
+      "name": "Kettlebell Snatch",
+      "file": "kettlebell-snatch.jpg",
+      "sha1": "3935d552f260461f41534678e29a4e52b79c933d",
+      "prompt_sha1": "5164003ec2c00431921539a2d01cc19bfcd9329c",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "sled-push": {
+      "name": "Sled Push",
+      "file": "sled-push.jpg",
+      "sha1": "8b00713a9ee8b3da4e982fa714af9f3a698e3b44",
+      "prompt_sha1": "81596d542fccfb6f34249b8aee3796f9942f8736",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "sled-pull": {
+      "name": "Sled Pull",
+      "file": "sled-pull.jpg",
+      "sha1": "8aa2aa656b9e942c45562d7d2475a7458236ed27",
+      "prompt_sha1": "e169839a4bf27ced7f6429b846ae08e82f323d59",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "burpee": {
+      "name": "Burpee",
+      "file": "burpee.jpg",
+      "sha1": "e5cf92efdfc03e950d52db8d016a2ffc8819743c",
+      "prompt_sha1": "5ed344ce75faea6cf5c3d909f66394736afaefd5",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "box-jump": {
+      "name": "Box Jump",
+      "file": "box-jump.jpg",
+      "sha1": "967a61faea28e587854d52acffc66bdd2b41d5b2",
+      "prompt_sha1": "cd8d271f93dd640661b09d9c6db5bec284e5cabb",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "broad-jump": {
+      "name": "Broad Jump",
+      "file": "broad-jump.jpg",
+      "sha1": "0e76515d3123b54363079b008d7c70afeb654907",
+      "prompt_sha1": "9fbc0e8355d7e865c85c2e6e0dfead9e3263f17d",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "jump-rope": {
+      "name": "Jump Rope",
+      "file": "jump-rope.jpg",
+      "sha1": "0b9b7caa175c980207f18f5df19114c62c0e9bb1",
+      "prompt_sha1": "bfe8ee620224e83d0248e79ceeb318caf5df1f4d",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "battle-rope": {
+      "name": "Battle Ropes",
+      "file": "battle-rope.jpg",
+      "sha1": "16e3dc37b86e8b08234c049c5cf2d619c2534220",
+      "prompt_sha1": "fa2a54834ff6e1a17c12de5c88a145e573b13dab",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "rowing-machine": {
+      "name": "Rowing Machine",
+      "file": "rowing-machine.jpg",
+      "sha1": "454a8ebe0153094d64a0a51a235ca9a607c2f1e9",
+      "prompt_sha1": "b7efa7d047bb3898b7083d95999d70e350b26a69",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "ski-erg": {
+      "name": "Ski Erg",
+      "file": "ski-erg.jpg",
+      "sha1": "6ab8adfe4baa3b501eedbb9ae310a9aa4c153754",
+      "prompt_sha1": "8e6a2231ac57f4fbbf164a89cbaca89c2ec582f1",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "assault-bike": {
+      "name": "Assault Bike",
+      "file": "assault-bike.jpg",
+      "sha1": "6c8ccca30effa3821fd8a1a61281c5d8762b9f1e",
+      "prompt_sha1": "e7653ab3ac878be04f23e9512a9b2bdd1fb8fb12",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "treadmill-run": {
+      "name": "Treadmill Run",
+      "file": "treadmill-run.jpg",
+      "sha1": "21545e592208a0ea238dc61fdf8001fbdecf9f2a",
+      "prompt_sha1": "c841c2907fb180baed0a5abf2786316f7ed27e71",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "medicine-ball-slam": {
+      "name": "Medicine Ball Slam",
+      "file": "medicine-ball-slam.jpg",
+      "sha1": "2417e32a0fae12ee94e4f2ae8d1beb6d7d734d76",
+      "prompt_sha1": "e7ac6ebae787f0826c341c21728f45c81ed12c7a",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "hip-abduction-machine": {
+      "name": "Hip Abduction Machine",
+      "file": "hip-abduction-machine.jpg",
+      "sha1": "c9e4f77d88bdbf468170f90ffe3f6cf5eccc2879",
+      "prompt_sha1": "551c03ba3b1dac2040fbe90278696ea43e7f5462",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "cable-hip-abduction": {
+      "name": "Cable Hip Abduction",
+      "file": "cable-hip-abduction.jpg",
+      "sha1": "9cc6403602808363c192daca80f3570db85ab58c",
+      "prompt_sha1": "640d04b5161d07b5470bd1e9f369eba677f4034f",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "banded-lateral-walk": {
+      "name": "Banded Lateral Walk",
+      "file": "banded-lateral-walk.jpg",
+      "sha1": "ac88affac89926d083db305840cb48f1ed05faed",
+      "prompt_sha1": "07a598dc441ec577466d7f8f988adcca1429221d",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "side-lying-leg-raise": {
+      "name": "Side-Lying Leg Raise",
+      "file": "side-lying-leg-raise.jpg",
+      "sha1": "814d9d177c0df7b2b1761fe3dd598c3bc6edaaf5",
+      "prompt_sha1": "b4d8618aee043c86ffc576ea5cb67a7b29dcda3b",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "banded-side-lying-clamshell": {
+      "name": "Banded Side-Lying Clamshell",
+      "file": "banded-side-lying-clamshell.jpg",
+      "sha1": "8d552e6db3a61b9a2fcfd4fd5ff5fed94e0f4ab9",
+      "prompt_sha1": "8125337cb89b83b1b0d11b9fa69d707ca097e4f9",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "side-lying-hip-abduction": {
+      "name": "Side-Lying Hip Abduction",
+      "file": "side-lying-hip-abduction.jpg",
+      "sha1": "5db6ce033f1cdd4f6bdd3758c36f84cb13898f44",
+      "prompt_sha1": "8d2c37c680994b1efd5bd3b7bbc18bafabe83a33",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "leg-extension": {
+      "name": "Leg Extension",
+      "file": "leg-extension.jpg",
+      "sha1": "35590bbec78d9e6b707eb7d6428e4b4647fb024a",
+      "prompt_sha1": "6d2cd5f95ccbdb4fce2015027b56632f2f08bf72",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "cat-cow": {
+      "name": "Cat-Cow",
+      "file": "cat-cow.jpg",
+      "sha1": "519ec4b987156329e1a444abb87159f907395675",
+      "prompt_sha1": "35038446560c3127c4cc3971fe857661a4e45257",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "quadruped-thoracic-rotation": {
+      "name": "Quadruped Thoracic Rotation",
+      "file": "quadruped-thoracic-rotation.jpg",
+      "sha1": "d376dddf6624a6f942b62dae907d788b7d8ba9ef",
+      "prompt_sha1": "4cd71289ecf675225e99464fee72b8ada0e3b0a2",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "90-90-breathing": {
+      "name": "90/90 Breathing",
+      "file": "90-90-breathing.jpg",
+      "sha1": "f30421588f81be4b6d96ed0174be4db4b24f9efd",
+      "prompt_sha1": "159f4658743b37ec669420e8ace38617de5a7a36",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "world-s-greatest-stretch": {
+      "name": "World's Greatest Stretch",
+      "file": "world-s-greatest-stretch.jpg",
+      "sha1": "9ce257774649f124d95679df3f32f4d9bad44de2",
+      "prompt_sha1": "e528e36383ecb7e3821f17c0d9cbfe00d52b2ea9",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "hip-flexor-stretch": {
+      "name": "Hip Flexor Stretch",
+      "file": "hip-flexor-stretch.jpg",
+      "sha1": "85508ba34a0519df00d98a29423897cca2b36bea",
+      "prompt_sha1": "3a8fbe45cf8a16809e2a37d384fd926f00b1143c",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "couch-stretch": {
+      "name": "Couch Stretch",
+      "file": "couch-stretch.jpg",
+      "sha1": "5d2ac7717f9e1406e721e84e6f16e5f8daea6f7b",
+      "prompt_sha1": "4051c2b5c3ee7dda4ccbc737018821d30ffd3f9e",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "pigeon-stretch": {
+      "name": "Pigeon Stretch",
+      "file": "pigeon-stretch.jpg",
+      "sha1": "9b3d1ce9f85ecf651e0914c82f65c3330e792173",
+      "prompt_sha1": "d39e1c1c3c9728e5607d10caf805b0a233185079",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "hamstring-stretch": {
+      "name": "Hamstring Stretch",
+      "file": "hamstring-stretch.jpg",
+      "sha1": "948b943f8c1ad7965f047248d43aaf608507b707",
+      "prompt_sha1": "d5164f02ba4239e372794f1f9af9148c640812c1",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "child-s-pose": {
+      "name": "Child's Pose",
+      "file": "child-s-pose.jpg",
+      "sha1": "6c39377dd4b7005d22d495a47af2de870ababb3b",
+      "prompt_sha1": "010e9c91279fc1af1edc92be4ac5eb5b7b1b0c0a",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "thread-the-needle": {
+      "name": "Thread the Needle",
+      "file": "thread-the-needle.jpg",
+      "sha1": "88265f2512790f227dc5606900b6a325fb9d9d48",
+      "prompt_sha1": "2647e9384582c7b3d2a84de2d27dd1e2d03dd7f3",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "thoracic-extension-on-foam-roller": {
+      "name": "Thoracic Extension on Foam Roller",
+      "file": "thoracic-extension-on-foam-roller.jpg",
+      "sha1": "1b61aea5ec7e7183aab0a6d460b5c26921756fee",
+      "prompt_sha1": "ca338d3e3b87436209ca31bf07a8f65c6781def0",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "ankle-mobility-drill": {
+      "name": "Ankle Mobility Drill",
+      "file": "ankle-mobility-drill.jpg",
+      "sha1": "e5b855a6800e83d8814c6cc470646d2563e24b8f",
+      "prompt_sha1": "acd9886c56ef5c000d98f3217e83378d74a61c2e",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "hip-car": {
+      "name": "Hip CARs",
+      "file": "hip-car.jpg",
+      "sha1": "392aed4e46c31f257c90ba98f695d7a7638b5475",
+      "prompt_sha1": "8789cf6a8befd2d2a6fc5e2b306d4801230fa33c",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "shoulder-car": {
+      "name": "Shoulder CARs",
+      "file": "shoulder-car.jpg",
+      "sha1": "c82bdca5626929a1922d03e0eeef459d95342534",
+      "prompt_sha1": "03bcae5dcaca2fea846606cce409892c690b2ce8",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "scapular-wall-slide": {
+      "name": "Scapular Wall Slide",
+      "file": "scapular-wall-slide.jpg",
+      "sha1": "5b7b8af03741988f66257007dca9d4606d449fef",
+      "prompt_sha1": "a4461b259425fc58fe8ce4081d0990c8b1a5decd",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "90-90-hip-switch": {
+      "name": "90/90 Hip Switch",
+      "file": "90-90-hip-switch.jpg",
+      "sha1": "121bdb4c5bb6369017672afb4506b6d90ba8f12c",
+      "prompt_sha1": "f74110d1da626d1d7da939f6828d322c6f9f6708",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "deep-squat-hold": {
+      "name": "Deep Squat Hold",
+      "file": "deep-squat-hold.jpg",
+      "sha1": "42b04ab6e14c923b0af844f95d6ec20dbd0ba982",
+      "prompt_sha1": "e0dd6da6a5c15faa64d01ace0caab1fe2f948725",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "leg-swing": {
+      "name": "Leg Swing",
+      "file": "leg-swing.jpg",
+      "sha1": "6c9bded6f9fae46a10a5d1b1a1e5a8cfc51e80c8",
+      "prompt_sha1": "2ef372d5be2a6406e930788acfecf4d6d850b76e",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "arm-circle": {
+      "name": "Arm Circle",
+      "file": "arm-circle.jpg",
+      "sha1": "07b859659cbfcb596bb9faec23c0d4da7f9406fb",
+      "prompt_sha1": "9621b2792fafcbb2a2d8548cdb7643e08fb13221",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "inchworm": {
+      "name": "Inchworm",
+      "file": "inchworm.jpg",
+      "sha1": "ccc817a6272704f52c586709c418a96d1722d06f",
+      "prompt_sha1": "fd384e4252997c2777e5825e11cb7b8513d47197",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    }
+  },
+  "patterns": {
+    "squat": {
+      "name": "a bodyweight squat",
+      "file": "squat.jpg",
+      "sha1": "5e04aeeef35aa2026879dae5873385833aa69cd6",
+      "prompt_sha1": "c629348aea002a699d67aeb20a16fadd4294bc3b",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "hinge": {
+      "name": "a hip hinge",
+      "file": "hinge.jpg",
+      "sha1": "602a2445efd86af205b0a132f8fcc807005c910a",
+      "prompt_sha1": "f12c66a16d95b1478b5035bf8c9066d53302ba98",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "lunge": {
+      "name": "a split-stance lunge",
+      "file": "lunge.jpg",
+      "sha1": "3a0f4c96eb7cffd1fa084e16185a1029f2397a8c",
+      "prompt_sha1": "02c482288e3345724ef4073c32a2dfcc811fce28",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "horizontal_push": {
+      "name": "a push-up",
+      "file": "horizontal_push.jpg",
+      "sha1": "dab0277b414aeb85040c77738737194130e79782",
+      "prompt_sha1": "d81a5d13809ee05f70a6759cc460f35addd9cf96",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "vertical_push": {
+      "name": "an overhead press",
+      "file": "vertical_push.jpg",
+      "sha1": "504013fe0b0edeabfca3346488e884cd9f99d271",
+      "prompt_sha1": "89ae02ae8f8bc0ed08d46434ae822c3d035610d2",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "horizontal_pull": {
+      "name": "a bent-over row",
+      "file": "horizontal_pull.jpg",
+      "sha1": "74750b13ab289a85142fcf28829803027a64de2e",
+      "prompt_sha1": "fdeba9340c0bb42ce85122d2a7fbcd2d9967f10e",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "vertical_pull": {
+      "name": "a pull-up",
+      "file": "vertical_pull.jpg",
+      "sha1": "9b8a681aca60e07f04289c059c8a205bc6c34def",
+      "prompt_sha1": "c35d000a70eb1201e15caf7928bbaf586b078c8f",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "arms": {
+      "name": "an arm curl",
+      "file": "arms.jpg",
+      "sha1": "be79b9d20f34396180fe38faa9104ddacdd4bb52",
+      "prompt_sha1": "fa5c25b024a2566599453b1bb983a642a1145904",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "shoulder_raise": {
+      "name": "a lateral raise",
+      "file": "shoulder_raise.jpg",
+      "sha1": "07e709c36d03a78b8f79d09a70a1185d4e77cbdb",
+      "prompt_sha1": "2fde8aaef8c49881b4bd80f29eae461447a48b4c",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "calf": {
+      "name": "a calf raise",
+      "file": "calf.jpg",
+      "sha1": "0166985692fc4b4b2af11d33dc4a80ce8955cec3",
+      "prompt_sha1": "557971aa9c5a8354917b1cfe27a43afdc52edbb5",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "core": {
+      "name": "a forearm plank",
+      "file": "core.jpg",
+      "sha1": "04d9ebf1cc6fb97904c0aba19ec0dd580962f5eb",
+      "prompt_sha1": "028ce9eab31af560b1a27d726016b6596ce9a30d",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "carry": {
+      "name": "a loaded carry",
+      "file": "carry.jpg",
+      "sha1": "81eccdc0bef0c5631b30960c8e4374fc24d8190c",
+      "prompt_sha1": "586df1a9012d31686fd28eac1d16ca6b38731074",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "mobility": {
+      "name": "a mobility stretch",
+      "file": "mobility.jpg",
+      "sha1": "10a33346ff374bac656f5f016c435621c82cde72",
+      "prompt_sha1": "724ce76acfbd9afffa8c158bff87f69e079a6e66",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "run": {
+      "name": "running",
+      "file": "run.jpg",
+      "sha1": "cf0df0cac8e44783e888334ef145ec1b8c3c51bf",
+      "prompt_sha1": "0fd0b24ff80060a1979cfc8a3e425eaa11456113",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "ride": {
+      "name": "riding a stationary bike",
+      "file": "ride.jpg",
+      "sha1": "e2accfd343aa758a542379a39e111be304b8547b",
+      "prompt_sha1": "b5848e47e778a5b048f0ec784187b0d4a37c23b1",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    },
+    "general": {
+      "name": "an athletic ready stance",
+      "file": "general.jpg",
+      "sha1": "3760307723532ee0c60c4265410f09feb6d8acfb",
+      "prompt_sha1": "3592bef5655893d3b29840b3e5b85182abfb3c38",
+      "references": 0,
+      "model": "gemini-nano-banana-2.1"
+    }
+  }
+}

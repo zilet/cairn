@@ -26,8 +26,12 @@ import { getExerciseDetail } from "../dist/repo/exercises.js";
 import {
   autoImportExerciseGuidesIfEmpty,
   ensureGuideImage,
+  EXERCISE_GUIDE_AUTO_IMPORT_STATE,
+  exerciseGuideAutoImportAllowed,
+  exerciseGuideAutoImportPass,
   importExerciseGuides,
 } from "../dist/domain/training/exercise-guide-use-case.js";
+import { getAppState } from "../dist/repo/app-state.js";
 import { queryTokenAllowedPath } from "../dist/auth.js";
 import { streamGuideImage } from "../dist/routes/plan-exercises.js";
 
@@ -664,4 +668,52 @@ test("deleting an exercise leaves the guide row intact and unlinked", () => {
   const row = db.prepare(`SELECT exercise_id FROM exercise_guides WHERE guide_id = 'Barbell_Curl'`).get();
   assert.equal(row.exercise_id, null);
   assert.equal(getExerciseGuide("Barbell Curl"), null);
+});
+
+// ---- the background pass: guarded off in tests, once on a real install, retryable ----
+test("the background import is never allowed inside the test harness or the smoke server", () => {
+  assert.equal(exerciseGuideAutoImportAllowed(process.env), false, "this very process is a test");
+  assert.equal(exerciseGuideAutoImportAllowed({ NODE_TEST_CONTEXT: "child-v8" }), false);
+  assert.equal(exerciseGuideAutoImportAllowed({ CAIRN_GUIDE_AUTO_IMPORT: "0" }), false);
+  assert.equal(exerciseGuideAutoImportAllowed({ CAIRN_SMOKE_MODE: "1" }), false);
+  assert.equal(exerciseGuideAutoImportAllowed({}), true, "a real install runs it");
+});
+
+test("the background pass waits for exercises, imports once, records it, and never re-fetches", async () => {
+  clearGuideFiles();
+  db.exec("DELETE FROM exercises");
+  db.prepare("DELETE FROM app_state WHERE key = ?").run(EXERCISE_GUIDE_AUTO_IMPORT_STATE);
+  const fetchImpl = stubFetch((url) => (url.endsWith("exercises.json") ? jsonResponse(DATASET) : null));
+
+  assert.equal(await exerciseGuideAutoImportPass({ fetchImpl }), "no_exercises");
+  assert.equal(fetchImpl.calls.length, 0, "nothing to match yet — no download");
+
+  seedExercises(["Barbell Curl", "Leg Extension"]);
+  assert.equal(await exerciseGuideAutoImportPass({ fetchImpl }), "imported");
+  assert.equal(fetchImpl.calls.length, 1, "metadata only — no photo is fetched");
+  assert.equal(getExerciseGuide("Leg Extension")?.guide_id, "Leg_Extensions", "linked as the import always does");
+  const state = JSON.parse(getAppState(EXERCISE_GUIDE_AUTO_IMPORT_STATE));
+  assert.equal(state.ok, true);
+  assert.equal(state.records, DATASET.length);
+
+  assert.equal(await exerciseGuideAutoImportPass({ fetchImpl }), "already");
+  assert.equal(fetchImpl.calls.length, 1, "a later pass never re-fetches");
+  clearGuideFiles();
+});
+
+test("an offline background pass fails quietly, records it, and stays retryable", async () => {
+  clearGuideFiles();
+  seedExercises(["Barbell Curl"]);
+  db.prepare("DELETE FROM app_state WHERE key = ?").run(EXERCISE_GUIDE_AUTO_IMPORT_STATE);
+  const offline = stubFetch(() => {
+    throw new Error("getaddrinfo ENOTFOUND");
+  });
+  assert.equal(await exerciseGuideAutoImportPass({ fetchImpl: offline }), "failed");
+  const state = JSON.parse(getAppState(EXERCISE_GUIDE_AUTO_IMPORT_STATE));
+  assert.equal(state.ok, false);
+  assert.match(state.error, /ENOTFOUND/);
+
+  const online = stubFetch((url) => (url.endsWith("exercises.json") ? jsonResponse(DATASET) : null));
+  assert.equal(await exerciseGuideAutoImportPass({ fetchImpl: online }), "imported", "the retry lands");
+  clearGuideFiles();
 });

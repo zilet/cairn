@@ -270,6 +270,7 @@ document.addEventListener(
   (e) => {
     const img = e.target instanceof HTMLImageElement ? e.target : null;
     if (img && img.dataset.artPhoto === "1") artPhotoLoaded(img);
+    else if (img?.dataset.artGeneric === "1") img.classList.add("on");
   },
   true
 );
@@ -282,6 +283,7 @@ document.addEventListener(
       artPhotoFailed(img);
       return;
     }
+    if (img.dataset.artGeneric === "1") CairnArtMemory.recordMiss(`generic|${img.dataset.artQ}`);
     if (img.dataset.removeOnError === "1") img.remove();
   },
   true
@@ -319,6 +321,17 @@ document.addEventListener("contextmenu", (e) => {
 // One request per image however many renders ask: the in-flight dedupe
 // (CairnArtInflight) lives in art-inflight-client.ts, loaded just before this file.
 
+// An exercise with no figure of its own yet shows the starter pack's generic
+// movement-pattern figure under the photo layer. It has its OWN URL — never
+// /api/art — so the SW's cache-first art layer can never keep it as this
+// exercise's picture; the real photo paints over it the moment one exists, and a
+// 204 (a real figure exists, or the generic was never built) just removes it.
+function artGenericLayer(kind: string, query: string): string {
+  if (kind !== "exercise" || CairnArtMemory.missedRecently(`generic|${query}`)) return "";
+  const src = withToken(`/api/art/generic?q=${encodeURIComponent(query)}`);
+  return `<img class="artimg-generic" alt="" loading="lazy" decoding="async" data-art-generic="1" data-art-q="${escAttr(query)}" data-remove-on-error="1" src="${escAttr(src)}">`;
+}
+
 // Art tile that renders the generated studio photo over a CairnArt SVG. `svg` may
 // be passed (exercise art needs muscleGroup); defaults to art(kind, q). Falls back
 // to SVG-only when artwork generation is off.
@@ -336,7 +349,11 @@ function artImg(kind: string, q: unknown, cls = "artile-md", svg: string | null 
   const ready = artReady.has(token);
   // Just answered "not drawn yet": a re-render keeps the SVG rather than asking
   // again for the same miss (the failed tile's own quiet retry still runs).
-  if (!ready && CairnArtMemory.missedRecently(token)) return `<div class="artile ${cls}">${s}</div>`;
+  if (!ready && CairnArtMemory.missedRecently(token)) {
+    const stand = artGenericLayer(kind, query);
+    return `<div class="artile${stand ? " artimg" : ""} ${cls}">${s}${stand}</div>`;
+  }
+  const generic = ready ? "" : artGenericLayer(kind, query);
   const src = artUrl(kind, query);
   const load = ready ? "eager" : "lazy";
   const attrs = `alt="${escAttr(query)}" loading="${load}" decoding="async" data-art-photo="1" data-artkey="${escAttr(token)}" data-art-kind="${escAttr(kind)}" data-art-q="${escAttr(query)}"`;
@@ -345,10 +362,10 @@ function artImg(kind: string, q: unknown, cls = "artile-md", svg: string | null 
     CairnArtInflight.watch(inFlight, token);
     // Hidden until it has a src (no `on`/`instant` yet, so no alt text or broken
     // glyph over the SVG); a ready figure still lands instantly when released.
-    return `<div class="artile artimg ${cls}">${s}<img class="artimg-photo" ${attrs} data-art-wait="1"${ready ? ' data-art-instant="1"' : ""} data-art-src="${escAttr(src)}"></div>`;
+    return `<div class="artile artimg ${cls}">${s}${generic}<img class="artimg-photo" ${attrs} data-art-wait="1"${ready ? ' data-art-instant="1"' : ""} data-art-src="${escAttr(src)}"></div>`;
   }
   const imgCls = ready ? "artimg-photo on instant" : "artimg-photo";
-  return `<div class="artile artimg ${cls}">${s}<img class="${imgCls}" ${attrs} src="${escAttr(src)}"></div>`;
+  return `<div class="artile artimg ${cls}">${s}${generic}<img class="${imgCls}" ${attrs} src="${escAttr(src)}"></div>`;
 }
 
 const CAIRN_ART_GLOBALS = {

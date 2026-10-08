@@ -1,0 +1,1513 @@
+{
+  "version": 1,
+  "note": "Curated starter picture pack: the most common exercises a Cairn program uses. Built by `npm run starter:art:build`. Matching is exact-key/alias only (src/artStarter.ts).",
+  "exercises": [
+    {
+      "name": "Back Squat",
+      "aliases": [
+        "Barbell Back Squat"
+      ],
+      "pattern": "squat",
+      "equipment": "a barbell",
+      "muscle_group": "quads",
+      "pose": "Standing with a barbell across the upper back, feet shoulder-width, then sitting the hips down and back until the thighs are parallel to the floor, chest up, knees tracking over the toes."
+    },
+    {
+      "name": "Front Squat",
+      "pattern": "squat",
+      "equipment": "a barbell",
+      "muscle_group": "quads",
+      "pose": "Standing with a barbell resting on the front of the shoulders, elbows high and pointing forward, squatting down until the thighs are parallel to the floor with an upright torso."
+    },
+    {
+      "name": "Box Squat",
+      "pattern": "squat",
+      "equipment": "a barbell",
+      "muscle_group": "quads",
+      "pose": "Barbell across the upper back, hips sitting back onto a box behind the person until the thighs are parallel to the floor, shins vertical, torso leaning slightly forward."
+    },
+    {
+      "name": "Safety Bar Squat",
+      "pattern": "squat",
+      "equipment": "a barbell",
+      "muscle_group": "quads",
+      "pose": "Standing with a cambered safety squat bar on the shoulders and handles gripped in front, squatting down until the thighs are parallel to the floor with an upright chest."
+    },
+    {
+      "name": "Zercher Squat",
+      "pattern": "squat",
+      "equipment": "a barbell",
+      "muscle_group": "quads",
+      "pose": "Barbell cradled in the crook of the elbows against the stomach, arms folded in front, squatting down until the thighs are parallel to the floor with the chest up."
+    },
+    {
+      "name": "Hack Squat",
+      "pattern": "squat",
+      "equipment": "a machine",
+      "muscle_group": "quads",
+      "pose": "Back and shoulders pressed against the angled pad of a hack squat machine, feet forward on the platform, knees bent deeply with the thighs below parallel."
+    },
+    {
+      "name": "Leg Press",
+      "pattern": "squat",
+      "equipment": "a machine",
+      "muscle_group": "quads",
+      "pose": "Seated reclined in a leg press machine with feet shoulder-width on the platform, knees bent to about ninety degrees and drawn toward the chest, lower back flat against the pad."
+    },
+    {
+      "name": "Goblet Squat",
+      "pattern": "squat",
+      "equipment": "a kettlebell",
+      "muscle_group": "quads",
+      "pose": "Standing holding a kettlebell by the horns against the chest, elbows pointing down, squatting deep with the elbows inside the knees and torso upright."
+    },
+    {
+      "name": "DB Goblet Squat",
+      "pattern": "squat",
+      "equipment": "a dumbbell",
+      "muscle_group": "quads",
+      "pose": "Standing holding one dumbbell vertically against the chest with both hands cupped under the top end, squatting deep with the elbows inside the knees and torso upright."
+    },
+    {
+      "name": "Smith Machine Squat",
+      "pattern": "squat",
+      "equipment": "a smith machine",
+      "muscle_group": "quads",
+      "pose": "Standing with a smith machine bar across the upper back and feet slightly forward of the bar, squatting down until the thighs are parallel to the floor, torso upright."
+    },
+    {
+      "name": "Pause Squat",
+      "pattern": "squat",
+      "equipment": "a barbell",
+      "muscle_group": "quads",
+      "pose": "Barbell on the upper back, holding the bottom position of a squat with the thighs below parallel, chest up, knees over the toes, body still."
+    },
+    {
+      "name": "Split Squat",
+      "pattern": "lunge",
+      "equipment": "dumbbells",
+      "muscle_group": "quads",
+      "pose": "Standing in a long staggered stance, front foot flat and back heel raised, holding a dumbbell in each hand at the sides, lowering the back knee toward the floor with an upright torso."
+    },
+    {
+      "name": "Pistol Squat",
+      "pattern": "squat",
+      "equipment": "",
+      "muscle_group": "quads",
+      "pose": "Standing on one leg with the other leg extended straight out in front, arms reaching forward, squatting down on the single leg until the hips are near the calf."
+    },
+    {
+      "name": "Wall Sit",
+      "pattern": "squat",
+      "equipment": "",
+      "muscle_group": "quads",
+      "pose": "Back flat against a wall, thighs parallel to the floor and knees bent at ninety degrees directly above the ankles, arms hanging or resting at the sides, as if sitting on an invisible chair."
+    },
+    {
+      "name": "Sissy Squat",
+      "pattern": "squat",
+      "equipment": "",
+      "muscle_group": "quads",
+      "pose": "Standing on the toes, leaning the torso back as the knees travel far forward, hips extended in a straight line from shoulders to knees, one hand holding a support."
+    },
+    {
+      "name": "Belt Squat",
+      "pattern": "squat",
+      "equipment": "a machine",
+      "muscle_group": "quads",
+      "pose": "Standing on platforms with a weighted belt hanging from the hips by a chain, squatting down with an upright torso and no load on the shoulders, hands resting on a support."
+    },
+    {
+      "name": "Single-Leg Leg Press",
+      "pattern": "squat",
+      "equipment": "a machine",
+      "muscle_group": "quads",
+      "pose": "Seated reclined in a leg press machine with one foot on the platform and the other leg held off, the working knee bent deeply toward the chest."
+    },
+    {
+      "name": "Conventional Deadlift",
+      "aliases": [
+        "Deadlift"
+      ],
+      "pattern": "hinge",
+      "equipment": "a barbell",
+      "muscle_group": "hamstrings",
+      "pose": "Bent over with a barbell on the floor against the shins, feet hip-width, hands just outside the knees, flat back, hips higher than the knees and shoulders over the bar."
+    },
+    {
+      "name": "Romanian Deadlift",
+      "pattern": "hinge",
+      "equipment": "a barbell",
+      "muscle_group": "hamstrings",
+      "pose": "Standing holding a barbell at the thighs, hips pushed far back with a slight knee bend and flat back, torso hinged forward until the bar reaches mid-shin."
+    },
+    {
+      "name": "Sumo Deadlift",
+      "pattern": "hinge",
+      "equipment": "a barbell",
+      "muscle_group": "glutes",
+      "pose": "Very wide stance with toes turned out, gripping a barbell on the floor with arms inside the knees, hips low, chest up and back flat at the start of the pull."
+    },
+    {
+      "name": "Trap Bar Deadlift",
+      "pattern": "hinge",
+      "equipment": "a trap bar",
+      "muscle_group": "glutes",
+      "pose": "Standing inside a hexagonal trap bar gripping the side handles, hips low, chest up and back flat, shins near vertical at the start of the lift."
+    },
+    {
+      "name": "Stiff-Leg Deadlift",
+      "pattern": "hinge",
+      "equipment": "dumbbells",
+      "muscle_group": "hamstrings",
+      "pose": "Standing with a dumbbell in each hand in front of the thighs and nearly straight legs, hinging the torso forward with a flat back until the dumbbells pass the knees."
+    },
+    {
+      "name": "Single-Leg RDL",
+      "pattern": "hinge",
+      "equipment": "a dumbbell",
+      "muscle_group": "hamstrings",
+      "pose": "Standing on one slightly bent leg holding a dumbbell in the opposite hand, torso hinged forward until parallel to the floor while the free leg extends straight behind in line with the torso."
+    },
+    {
+      "name": "Good Morning",
+      "pattern": "hinge",
+      "equipment": "a barbell",
+      "muscle_group": "hamstrings",
+      "pose": "Standing with a barbell across the upper back and a slight knee bend, hinging the torso forward with a flat back and hips pushed far back until the torso is near parallel to the floor."
+    },
+    {
+      "name": "Kettlebell Swing",
+      "pattern": "hinge",
+      "equipment": "a kettlebell",
+      "muscle_group": "glutes",
+      "pose": "Standing in a hip hinge holding a kettlebell with both hands, arms straight, bell swinging forward to chest height with the hips fully extended and the body upright."
+    },
+    {
+      "name": "Dumbbell Romanian Deadlift",
+      "pattern": "hinge",
+      "equipment": "dumbbells",
+      "muscle_group": "hamstrings",
+      "pose": "Standing holding a dumbbell in each hand in front of the thighs, hips pushed back with a flat back and soft knees, dumbbells sliding down the legs to mid-shin."
+    },
+    {
+      "name": "Kettlebell Deadlift",
+      "pattern": "hinge",
+      "equipment": "a kettlebell",
+      "muscle_group": "hamstrings",
+      "pose": "Feet hip-width with a kettlebell on the floor between the feet, hips hinged back and flat back, both hands gripping the handle with arms straight at the start of the lift."
+    },
+    {
+      "name": "Deficit Deadlift",
+      "pattern": "hinge",
+      "equipment": "a barbell",
+      "muscle_group": "hamstrings",
+      "pose": "Standing on a raised plate platform gripping a barbell on the floor below, hips low, chest up and back flat, with a deeper starting position than a standard deadlift."
+    },
+    {
+      "name": "Rack Pull",
+      "pattern": "hinge",
+      "equipment": "a barbell",
+      "muscle_group": "back",
+      "pose": "Standing hinged at the hips gripping a barbell resting on safety pins at knee height, flat back, chest up, arms straight."
+    },
+    {
+      "name": "Back Extension",
+      "pattern": "hinge",
+      "equipment": "a machine",
+      "muscle_group": "glutes",
+      "pose": "Face down on an angled back extension bench with hips on the pad and feet anchored, torso hinging down at the waist then rising until the body forms a straight line."
+    },
+    {
+      "name": "Glute-Ham Raise",
+      "pattern": "hinge",
+      "equipment": "a machine",
+      "muscle_group": "hamstrings",
+      "pose": "Kneeling on a glute-ham developer with the feet locked in, body straight from knees to head, lowering the torso forward then curling it back up using the hamstrings."
+    },
+    {
+      "name": "Seated Leg Curl",
+      "pattern": "hinge",
+      "equipment": "a machine",
+      "muscle_group": "hamstrings",
+      "pose": "Seated in a leg curl machine with the thigh pad across the lap, legs curled back so the heels are pulled down under the seat, knees bent to about ninety degrees."
+    },
+    {
+      "name": "Leg Curl",
+      "pattern": "hinge",
+      "equipment": "a machine",
+      "muscle_group": "hamstrings",
+      "pose": "Lying face down on a leg curl machine with the pad resting on the back of the ankles, heels curled up toward the glutes with the knees bent past ninety degrees."
+    },
+    {
+      "name": "Nordic Curl",
+      "pattern": "hinge",
+      "equipment": "",
+      "muscle_group": "hamstrings",
+      "pose": "Kneeling on a pad with the ankles anchored, body straight from knees to head, lowering the torso slowly toward the floor with the hands out in front to catch."
+    },
+    {
+      "name": "Hip Thrust",
+      "pattern": "hinge",
+      "equipment": "a barbell",
+      "muscle_group": "glutes",
+      "pose": "Upper back resting against a bench, barbell across the hips, knees bent to ninety degrees at the top with the hips fully extended and the torso parallel to the floor."
+    },
+    {
+      "name": "DB Hip Thrust",
+      "pattern": "hinge",
+      "equipment": "a dumbbell",
+      "muscle_group": "glutes",
+      "pose": "Upper back against a bench with a dumbbell resting across the hips, feet flat and knees bent to ninety degrees, hips fully raised so the torso is parallel to the floor."
+    },
+    {
+      "name": "Glute Bridge",
+      "pattern": "hinge",
+      "equipment": "",
+      "muscle_group": "glutes",
+      "pose": "Lying face up on the floor with knees bent and feet flat, hips lifted so the body forms a straight line from shoulders to knees, arms on the floor at the sides."
+    },
+    {
+      "name": "Single-Leg Hip Thrust",
+      "pattern": "hinge",
+      "equipment": "a bench",
+      "muscle_group": "glutes",
+      "pose": "Upper back on a bench with one foot flat on the floor and the other leg extended straight forward, hips lifted until the torso is parallel to the floor."
+    },
+    {
+      "name": "Cable Kickback",
+      "pattern": "hinge",
+      "equipment": "a cable machine",
+      "muscle_group": "glutes",
+      "pose": "Standing facing a cable stack with an ankle strap on one leg, torso hinged slightly forward holding the frame, kicking that leg straight back and up behind the body."
+    },
+    {
+      "name": "Donkey Kick",
+      "pattern": "hinge",
+      "equipment": "",
+      "muscle_group": "glutes",
+      "pose": "On all fours with hands under the shoulders and knees under the hips, one knee bent at ninety degrees, driving that heel up toward the ceiling with the thigh in line with the back."
+    },
+    {
+      "name": "Walking Lunge",
+      "pattern": "lunge",
+      "equipment": "dumbbells",
+      "muscle_group": "quads",
+      "pose": "Stepping forward into a lunge holding a dumbbell in each hand at the sides, front thigh parallel to the floor and back knee just above the ground, torso upright."
+    },
+    {
+      "name": "Bulgarian Split Squat",
+      "pattern": "lunge",
+      "equipment": "dumbbells",
+      "muscle_group": "quads",
+      "pose": "Rear foot elevated on a bench behind, holding a dumbbell in each hand, front thigh lowered to parallel with the torso upright and front knee over the toes."
+    },
+    {
+      "name": "Reverse Lunge",
+      "pattern": "lunge",
+      "equipment": "dumbbells",
+      "muscle_group": "quads",
+      "pose": "Stepping one foot back into a lunge holding a dumbbell in each hand at the sides, front thigh parallel to the floor, back knee hovering just above the ground."
+    },
+    {
+      "name": "Step-Up",
+      "pattern": "lunge",
+      "equipment": "dumbbells",
+      "muscle_group": "quads",
+      "pose": "Standing with one foot on a box in front, holding a dumbbell in each hand, driving up so the body stands fully on the box with the free knee raised."
+    },
+    {
+      "name": "Lateral Lunge",
+      "pattern": "lunge",
+      "equipment": "a dumbbell",
+      "muscle_group": "quads",
+      "pose": "Stepping wide to one side and sitting back into that hip with the leg bent and the other leg straight, holding a dumbbell at the chest, torso leaning slightly forward."
+    },
+    {
+      "name": "Front Foot Elevated Split Squat",
+      "pattern": "lunge",
+      "equipment": "dumbbells",
+      "muscle_group": "quads",
+      "pose": "Staggered split stance with the front foot on a low plate, holding a dumbbell in each hand, lowering the back knee toward the floor with the front knee traveling over the toes."
+    },
+    {
+      "name": "Barbell Lunge",
+      "pattern": "lunge",
+      "equipment": "a barbell",
+      "muscle_group": "quads",
+      "pose": "Barbell across the upper back, stepped into a long split stance, front thigh parallel to the floor and back knee just above the ground, torso upright."
+    },
+    {
+      "name": "Curtsy Lunge",
+      "pattern": "lunge",
+      "equipment": "dumbbells",
+      "muscle_group": "glutes",
+      "pose": "Standing holding dumbbells at the sides, one leg stepped diagonally behind and across the other like a curtsy, front knee bent and the torso upright."
+    },
+    {
+      "name": "Goblet Reverse Lunge",
+      "pattern": "lunge",
+      "equipment": "a kettlebell",
+      "muscle_group": "quads",
+      "pose": "Holding a kettlebell at the chest by the horns, stepping one leg back into a lunge with the front thigh parallel to the floor and the back knee just above the ground."
+    },
+    {
+      "name": "Barbell Bench Press",
+      "aliases": [
+        "Bench Press"
+      ],
+      "pattern": "horizontal_push",
+      "equipment": "a barbell",
+      "muscle_group": "chest",
+      "pose": "Lying face up on a flat bench with feet planted, gripping a barbell slightly wider than the shoulders, bar touching the mid-chest with the elbows angled about forty-five degrees from the torso."
+    },
+    {
+      "name": "DB Bench Press",
+      "pattern": "horizontal_push",
+      "equipment": "dumbbells",
+      "muscle_group": "chest",
+      "pose": "Lying face up on a flat bench holding a dumbbell in each hand at chest level, elbows bent below the bench line, palms facing forward."
+    },
+    {
+      "name": "Incline Bench Press",
+      "pattern": "horizontal_push",
+      "equipment": "a barbell",
+      "muscle_group": "chest",
+      "pose": "Lying on a bench inclined about thirty degrees, gripping a barbell slightly wider than the shoulders, the bar touching the upper chest with the elbows tucked."
+    },
+    {
+      "name": "Incline DB Press",
+      "pattern": "horizontal_push",
+      "equipment": "dumbbells",
+      "muscle_group": "chest",
+      "pose": "Lying on a bench inclined about thirty degrees holding a dumbbell in each hand at upper-chest level, elbows bent below the bench line, palms facing forward."
+    },
+    {
+      "name": "Decline Bench Press",
+      "pattern": "horizontal_push",
+      "equipment": "a barbell",
+      "muscle_group": "chest",
+      "pose": "Lying on a decline bench with the legs secured, gripping a barbell slightly wider than the shoulders, the bar touching the lower chest."
+    },
+    {
+      "name": "Push-Up",
+      "aliases": [
+        "Pushup"
+      ],
+      "pattern": "horizontal_push",
+      "equipment": "",
+      "muscle_group": "chest",
+      "pose": "In a high plank with hands under the shoulders, body in a rigid straight line, lowering the chest to just above the floor with the elbows angled back about forty-five degrees."
+    },
+    {
+      "name": "Cable Chest Press",
+      "pattern": "horizontal_push",
+      "equipment": "a cable machine",
+      "muscle_group": "chest",
+      "pose": "Standing in a split stance facing away from two cable stacks at chest height, holding a handle in each hand with the elbows bent beside the chest, then pressing the hands forward together."
+    },
+    {
+      "name": "Machine Chest Press",
+      "pattern": "horizontal_push",
+      "equipment": "a machine",
+      "muscle_group": "chest",
+      "pose": "Seated upright against the pad of a chest press machine with the handles at mid-chest height, arms pressed forward and nearly straight."
+    },
+    {
+      "name": "DB Chest Fly",
+      "pattern": "horizontal_push",
+      "equipment": "dumbbells",
+      "muscle_group": "chest",
+      "pose": "Lying face up on a flat bench with a dumbbell in each hand, arms out wide in a gentle arc with a slight elbow bend and palms facing inward, stretching across the chest."
+    },
+    {
+      "name": "Half-Kneeling Single-Arm Cable Chest Press",
+      "pattern": "horizontal_push",
+      "equipment": "a cable machine",
+      "muscle_group": "chest",
+      "pose": "Half-kneeling with the inside knee up, facing away from a cable stack set at chest height, one hand pressing the handle straight forward from the chest, torso tall and braced."
+    },
+    {
+      "name": "Floor Press",
+      "pattern": "horizontal_push",
+      "equipment": "dumbbells",
+      "muscle_group": "triceps",
+      "pose": "Lying face up on the floor with knees bent, holding a dumbbell in each hand with the upper arms resting on the floor and the forearms vertical."
+    },
+    {
+      "name": "Cable Fly",
+      "pattern": "horizontal_push",
+      "equipment": "a cable machine",
+      "muscle_group": "chest",
+      "pose": "Standing in a split stance between two high cable stacks holding a handle in each hand, arms sweeping in a wide arc with soft elbows until the hands meet in front of the chest."
+    },
+    {
+      "name": "Pec Deck",
+      "pattern": "horizontal_push",
+      "equipment": "a machine",
+      "muscle_group": "chest",
+      "pose": "Seated upright in a pec deck machine with the forearms against the pads and elbows at shoulder height, arms squeezed together in front of the chest."
+    },
+    {
+      "name": "Low-to-High Cable Fly",
+      "pattern": "horizontal_push",
+      "equipment": "a cable machine",
+      "muscle_group": "chest",
+      "pose": "Standing in a split stance between two low cable stacks, arms sweeping upward in an arc with soft elbows until the hands meet in front of the upper chest."
+    },
+    {
+      "name": "Incline Push-Up",
+      "pattern": "horizontal_push",
+      "equipment": "a bench",
+      "muscle_group": "chest",
+      "pose": "Hands on the edge of a bench with the body in a straight diagonal line from head to heels, chest lowered toward the bench with the elbows angled back."
+    },
+    {
+      "name": "Close-Grip Bench Press",
+      "pattern": "horizontal_push",
+      "equipment": "a barbell",
+      "muscle_group": "triceps",
+      "pose": "Lying on a flat bench gripping a barbell with hands shoulder-width apart, elbows tucked tightly against the sides, the bar touching the lower chest."
+    },
+    {
+      "name": "Dips",
+      "pattern": "horizontal_push",
+      "equipment": "parallel bars",
+      "muscle_group": "triceps",
+      "pose": "Supported above parallel bars on straight arms, then lowering the body with the torso leaning slightly forward until the upper arms are parallel to the floor, legs crossed behind."
+    },
+    {
+      "name": "Barbell Overhead Press",
+      "aliases": [
+        "Overhead Press"
+      ],
+      "pattern": "vertical_push",
+      "equipment": "a barbell",
+      "muscle_group": "shoulders",
+      "pose": "Standing tall holding a barbell overhead with arms locked out, glutes tight, bar directly over the mid-foot and the head pushed slightly through the arms."
+    },
+    {
+      "name": "DB Overhead Press",
+      "pattern": "vertical_push",
+      "equipment": "dumbbells",
+      "muscle_group": "shoulders",
+      "pose": "Standing tall with a dumbbell in each hand pressed overhead with arms locked out, palms facing forward and the biceps beside the ears."
+    },
+    {
+      "name": "Seated DB Overhead Press",
+      "pattern": "vertical_push",
+      "equipment": "dumbbells",
+      "muscle_group": "shoulders",
+      "pose": "Seated on an upright bench with back support, a dumbbell in each hand pressed overhead with arms nearly straight and palms facing forward."
+    },
+    {
+      "name": "Single-Arm DB Overhead Press",
+      "pattern": "vertical_push",
+      "equipment": "a dumbbell",
+      "muscle_group": "shoulders",
+      "pose": "Standing tall with one dumbbell pressed straight overhead, the other arm relaxed at the side, torso braced and upright."
+    },
+    {
+      "name": "Arnold Press",
+      "pattern": "vertical_push",
+      "equipment": "dumbbells",
+      "muscle_group": "shoulders",
+      "pose": "Seated holding dumbbells with the palms facing the body at chin level, rotating the wrists outward as the weights press overhead so the palms face forward at the top."
+    },
+    {
+      "name": "Machine Shoulder Press",
+      "pattern": "vertical_push",
+      "equipment": "a machine",
+      "muscle_group": "shoulders",
+      "pose": "Seated upright against the pad of a shoulder press machine with the handles at shoulder height, arms pressed overhead."
+    },
+    {
+      "name": "Landmine Press",
+      "pattern": "vertical_push",
+      "equipment": "a landmine",
+      "muscle_group": "shoulders",
+      "pose": "Standing in a split stance holding the end of a landmine barbell with one hand at the shoulder, pressing the bar diagonally up and forward until the arm is straight."
+    },
+    {
+      "name": "Pike Push-Up",
+      "pattern": "vertical_push",
+      "equipment": "",
+      "muscle_group": "shoulders",
+      "pose": "Hips piked high with the body forming an inverted V, hands and feet on the floor, head lowering toward the ground between the hands with the elbows bent."
+    },
+    {
+      "name": "Z Press",
+      "pattern": "vertical_push",
+      "equipment": "a barbell",
+      "muscle_group": "shoulders",
+      "pose": "Sitting on the floor with the legs straight out in front and no back support, barbell pressed overhead with arms locked out and torso tall."
+    },
+    {
+      "name": "Push Press",
+      "pattern": "vertical_push",
+      "equipment": "a barbell",
+      "muscle_group": "shoulders",
+      "pose": "Standing with a barbell racked on the front of the shoulders, knees dipped in a quarter squat as the bar drives overhead with the legs extending."
+    },
+    {
+      "name": "Kettlebell Press",
+      "pattern": "vertical_push",
+      "equipment": "a kettlebell",
+      "muscle_group": "shoulders",
+      "pose": "Standing tall with one kettlebell pressed overhead with the arm locked out and the bell resting along the back of the forearm, the other arm at the side."
+    },
+    {
+      "name": "Half-Kneeling Landmine Press",
+      "pattern": "vertical_push",
+      "equipment": "a landmine",
+      "muscle_group": "shoulders",
+      "pose": "Half-kneeling with one knee down, holding the end of a landmine barbell with one hand at the shoulder, pressing it up and forward with a tall torso."
+    },
+    {
+      "name": "Barbell Bent-Over Row",
+      "pattern": "horizontal_pull",
+      "equipment": "a barbell",
+      "muscle_group": "back",
+      "pose": "Torso hinged forward to about forty-five degrees with a flat back and soft knees, barbell pulled to the lower ribs with the elbows driving back."
+    },
+    {
+      "name": "DB Row",
+      "pattern": "horizontal_pull",
+      "equipment": "dumbbells",
+      "muscle_group": "back",
+      "pose": "Torso hinged forward with a flat back, a dumbbell in each hand pulled to the sides of the lower ribs with the elbows driving back."
+    },
+    {
+      "name": "Single-Arm DB Row",
+      "pattern": "horizontal_pull",
+      "equipment": "a dumbbell",
+      "muscle_group": "back",
+      "pose": "One knee and hand supported on a bench, back flat, the free arm rowing a dumbbell up to the hip with the elbow close to the body."
+    },
+    {
+      "name": "Seated Cable Row",
+      "pattern": "horizontal_pull",
+      "equipment": "a cable machine",
+      "muscle_group": "back",
+      "pose": "Seated on a cable row station with feet on the plates and knees slightly bent, torso upright, a handle pulled to the abdomen with the elbows tight to the sides."
+    },
+    {
+      "name": "T-Bar Row",
+      "pattern": "horizontal_pull",
+      "equipment": "a landmine",
+      "muscle_group": "back",
+      "pose": "Straddling a loaded landmine barbell with the torso hinged forward and a flat back, a handle beneath the bar pulled up to the chest with the elbows back."
+    },
+    {
+      "name": "Chest-Supported Row",
+      "pattern": "horizontal_pull",
+      "equipment": "dumbbells",
+      "muscle_group": "back",
+      "pose": "Lying face down on an inclined bench with the chest against the pad, a dumbbell in each hand pulled up beside the ribs with the elbows driving back."
+    },
+    {
+      "name": "Inverted Row",
+      "pattern": "horizontal_pull",
+      "equipment": "a barbell set low in a rack",
+      "muscle_group": "back",
+      "pose": "Lying face up underneath a barbell racked at hip height, hanging from it with an overhand grip, body straight from heels to shoulders with the heels on the floor, chest pulled up to the bar. Body below the bar, face up."
+    },
+    {
+      "name": "Pendlay Row",
+      "pattern": "horizontal_pull",
+      "equipment": "a barbell",
+      "muscle_group": "back",
+      "pose": "Torso nearly parallel to the floor with a flat back, a barbell resting on the floor then pulled explosively to the lower chest with the elbows back."
+    },
+    {
+      "name": "Meadows Row",
+      "pattern": "horizontal_pull",
+      "equipment": "a landmine",
+      "muscle_group": "back",
+      "pose": "Standing in a staggered stance perpendicular to a landmine barbell, torso hinged forward, gripping the end sleeve with one hand and rowing it up to the hip."
+    },
+    {
+      "name": "Machine Row",
+      "pattern": "horizontal_pull",
+      "equipment": "a machine",
+      "muscle_group": "back",
+      "pose": "Seated with the chest against the pad of a row machine, handles pulled back to the sides of the torso with the elbows behind the body and shoulder blades squeezed."
+    },
+    {
+      "name": "Renegade Row",
+      "pattern": "horizontal_pull",
+      "equipment": "dumbbells",
+      "muscle_group": "back",
+      "pose": "In a high plank with the hands on two dumbbells and feet wide, rowing one dumbbell up to the hip while the other arm holds the plank, hips level."
+    },
+    {
+      "name": "Face Pull",
+      "pattern": "shoulder_raise",
+      "equipment": "a cable machine",
+      "muscle_group": "rear delts",
+      "pose": "Standing facing a high cable with a rope, pulling the rope toward the face with the elbows flared high and wide and the hands ending beside the ears."
+    },
+    {
+      "name": "Pull-Up",
+      "aliases": [
+        "Pullup"
+      ],
+      "pattern": "vertical_pull",
+      "equipment": "a pull-up bar",
+      "muscle_group": "back",
+      "pose": "Hanging from a bar with an overhand grip slightly wider than the shoulders, then pulled up until the chin clears the bar with the chest lifted."
+    },
+    {
+      "name": "Chin-Up",
+      "aliases": [
+        "Chinup"
+      ],
+      "pattern": "vertical_pull",
+      "equipment": "a pull-up bar",
+      "muscle_group": "back",
+      "pose": "Hanging from a bar with an underhand shoulder-width grip, pulled up until the chin clears the bar with the elbows driven down to the ribs."
+    },
+    {
+      "name": "Lat Pulldown",
+      "pattern": "vertical_pull",
+      "equipment": "a cable machine",
+      "muscle_group": "back",
+      "pose": "Seated at a lat pulldown machine, thighs under the pads, a wide bar pulled down IN FRONT of the face to the upper chest, never behind the neck, torso leaning slightly back, elbows driving down."
+    },
+    {
+      "name": "Wide-Grip Pulldown",
+      "pattern": "vertical_pull",
+      "equipment": "a cable machine",
+      "muscle_group": "back",
+      "pose": "Seated at a pulldown station gripping a long bar well beyond shoulder width, pulling it down IN FRONT of the face to the collarbone, never behind the neck, chest lifted, elbows flared out."
+    },
+    {
+      "name": "Cable Pullover",
+      "pattern": "vertical_pull",
+      "equipment": "a cable machine",
+      "muscle_group": "back",
+      "pose": "Standing facing a high cable with a straight bar, torso hinged slightly forward, straight arms sweeping the bar from overhead down to the thighs."
+    },
+    {
+      "name": "Assisted Pull-Up",
+      "pattern": "vertical_pull",
+      "equipment": "a machine",
+      "muscle_group": "back",
+      "pose": "Kneeling on the pad of an assisted pull-up machine and gripping the handles overhead, pulling up until the chin clears the bar."
+    },
+    {
+      "name": "Single-Arm Lat Pulldown",
+      "pattern": "vertical_pull",
+      "equipment": "a cable machine",
+      "muscle_group": "back",
+      "pose": "Seated at a cable station gripping a single handle overhead with one hand, pulling it down to the shoulder with the elbow driving to the ribs."
+    },
+    {
+      "name": "Neutral-Grip Pulldown",
+      "pattern": "vertical_pull",
+      "equipment": "a cable machine",
+      "muscle_group": "back",
+      "pose": "Seated at a pulldown station with palms facing each other on a parallel-grip handle, pulling it to the upper chest with the elbows tucked."
+    },
+    {
+      "name": "Close-Grip Pulldown",
+      "pattern": "vertical_pull",
+      "equipment": "a cable machine",
+      "muscle_group": "back",
+      "pose": "Seated at a pulldown station gripping a V-handle with the palms facing each other, pulling it down to the upper chest with the torso leaning slightly back."
+    },
+    {
+      "name": "Straight-Arm Pulldown",
+      "pattern": "vertical_pull",
+      "equipment": "a cable machine",
+      "muscle_group": "back",
+      "pose": "Standing facing a high cable with a straight bar, torso hinged slightly forward, straight arms pressing the bar down from head height to the thighs."
+    },
+    {
+      "name": "Weighted Pull-Up",
+      "pattern": "vertical_pull",
+      "equipment": "a pull-up bar",
+      "muscle_group": "back",
+      "pose": "Hanging from a bar with an overhand grip and a weight belt with a plate hanging between the legs, pulled up until the chin clears the bar."
+    },
+    {
+      "name": "Scapular Pull-Up",
+      "pattern": "vertical_pull",
+      "equipment": "a pull-up bar",
+      "muscle_group": "back",
+      "pose": "Hanging from a bar with straight arms and an overhand grip, shoulders pulled down and back so the body rises a few inches without bending the elbows."
+    },
+    {
+      "name": "Dead Hang",
+      "pattern": "vertical_pull",
+      "equipment": "a pull-up bar",
+      "muscle_group": "forearms",
+      "pose": "Hanging from a bar with straight arms and an overhand shoulder-width grip, feet off the floor, body still and elongated."
+    },
+    {
+      "name": "Barbell Curl",
+      "pattern": "arms",
+      "equipment": "a barbell",
+      "muscle_group": "biceps",
+      "pose": "Standing tall holding a barbell with an underhand shoulder-width grip, elbows pinned at the sides, bar curled up to chest height."
+    },
+    {
+      "name": "DB Bicep Curl",
+      "pattern": "arms",
+      "equipment": "dumbbells",
+      "muscle_group": "biceps",
+      "pose": "Standing tall with a dumbbell in each hand, elbows pinned at the sides, palms facing up, the weights curled half-way up toward the shoulders."
+    },
+    {
+      "name": "Hammer Curl",
+      "pattern": "arms",
+      "equipment": "dumbbells",
+      "muscle_group": "biceps",
+      "pose": "Standing tall with a dumbbell in each hand with palms facing each other, elbows pinned at the sides, the weights curled half-way up toward the shoulders."
+    },
+    {
+      "name": "Preacher Curl",
+      "pattern": "arms",
+      "equipment": "an EZ bar",
+      "muscle_group": "biceps",
+      "pose": "Seated at a preacher bench with the upper arms resting on the angled pad, an EZ bar curled up toward the chin."
+    },
+    {
+      "name": "Incline DB Curl",
+      "pattern": "arms",
+      "equipment": "dumbbells",
+      "muscle_group": "biceps",
+      "pose": "Seated back on a bench inclined to about sixty degrees, arms hanging straight down behind the torso, a dumbbell in each hand curled up with palms facing up."
+    },
+    {
+      "name": "Cable Curl",
+      "pattern": "arms",
+      "equipment": "a cable machine",
+      "muscle_group": "biceps",
+      "pose": "Standing facing a low cable with a straight bar, elbows pinned at the sides, the bar curled up to chest height."
+    },
+    {
+      "name": "Concentration Curl",
+      "pattern": "arms",
+      "equipment": "a dumbbell",
+      "muscle_group": "biceps",
+      "pose": "Seated on a bench with legs wide, the elbow of the curling arm braced against the inner thigh, a dumbbell curled up toward the shoulder."
+    },
+    {
+      "name": "EZ Bar Curl",
+      "pattern": "arms",
+      "equipment": "an EZ bar",
+      "muscle_group": "biceps",
+      "pose": "Standing tall holding an EZ bar on its angled grips with palms up, elbows pinned at the sides, bar curled up to chest height."
+    },
+    {
+      "name": "Reverse Curl",
+      "pattern": "arms",
+      "equipment": "an EZ bar",
+      "muscle_group": "forearms",
+      "pose": "Standing tall holding an EZ bar with an overhand grip, elbows pinned at the sides, bar curled up to chest height with the wrists straight."
+    },
+    {
+      "name": "Wrist Curl",
+      "pattern": "arms",
+      "equipment": "a barbell",
+      "muscle_group": "forearms",
+      "pose": "Seated with the forearms resting on the thighs and wrists hanging past the knees, palms up, holding a barbell that is curled up by flexing the wrists."
+    },
+    {
+      "name": "Tricep Pushdown",
+      "pattern": "arms",
+      "equipment": "a cable machine",
+      "muscle_group": "triceps",
+      "pose": "Standing facing a high cable with a straight bar, elbows pinned at the sides, forearms pushed down until the arms are fully straight."
+    },
+    {
+      "name": "Triceps Rope Pushdown",
+      "pattern": "arms",
+      "equipment": "a cable machine",
+      "muscle_group": "triceps",
+      "pose": "Standing facing a high cable with a rope, elbows pinned at the sides, forearms pushed down with the rope ends split apart at the thighs and arms straight."
+    },
+    {
+      "name": "Skull Crusher",
+      "pattern": "arms",
+      "equipment": "an EZ bar",
+      "muscle_group": "triceps",
+      "pose": "Lying face up on a flat bench holding an EZ bar over the face with the upper arms vertical, elbows bent so the bar lowers to just above the forehead."
+    },
+    {
+      "name": "Overhead Tricep Extension",
+      "pattern": "arms",
+      "equipment": "a dumbbell",
+      "muscle_group": "triceps",
+      "pose": "Standing or seated holding one dumbbell with both hands overhead, upper arms vertical beside the ears, elbows bent so the weight hangs behind the head."
+    },
+    {
+      "name": "Cable Overhead Tricep Extension",
+      "pattern": "arms",
+      "equipment": "a cable machine",
+      "muscle_group": "triceps",
+      "pose": "Standing facing away from a cable with a rope held overhead, upper arms vertical beside the ears, elbows bent with the rope behind the head."
+    },
+    {
+      "name": "DB Kickback",
+      "pattern": "arms",
+      "equipment": "a dumbbell",
+      "muscle_group": "triceps",
+      "pose": "Torso hinged forward with a flat back and the upper arm held parallel to the torso, the forearm extended straight back holding a dumbbell."
+    },
+    {
+      "name": "JM Press",
+      "pattern": "arms",
+      "equipment": "a barbell",
+      "muscle_group": "triceps",
+      "pose": "Lying on a flat bench with a barbell held over the chest with a close grip, elbows bent forward so the bar lowers toward the chin and upper chest."
+    },
+    {
+      "name": "Bench Dip",
+      "pattern": "arms",
+      "equipment": "a bench",
+      "muscle_group": "triceps",
+      "pose": "Hands gripping the edge of a bench behind the body, legs extended forward, hips off the bench and elbows bent back to lower the body."
+    },
+    {
+      "name": "Dumbbell Lateral Raise",
+      "aliases": [
+        "Lateral Raise"
+      ],
+      "pattern": "shoulder_raise",
+      "equipment": "dumbbells",
+      "muscle_group": "shoulders",
+      "pose": "Standing tall with a dumbbell in each hand, arms raised out to the sides to shoulder height with a slight elbow bend and the palms facing down."
+    },
+    {
+      "name": "Cable Lateral Raise",
+      "pattern": "shoulder_raise",
+      "equipment": "a cable machine",
+      "muscle_group": "shoulders",
+      "pose": "Standing side-on to a low cable with the handle in the far hand, arm raised out to the side to shoulder height with a slight elbow bend."
+    },
+    {
+      "name": "Machine Lateral Raise",
+      "pattern": "shoulder_raise",
+      "equipment": "a machine",
+      "muscle_group": "shoulders",
+      "pose": "Seated in a lateral raise machine with the forearms against the pads, elbows lifted out to the sides until the upper arms are at shoulder height."
+    },
+    {
+      "name": "Upright Row",
+      "pattern": "shoulder_raise",
+      "equipment": "a barbell",
+      "muscle_group": "shoulders",
+      "pose": "Standing tall holding a barbell with a narrow overhand grip, pulled up along the torso to chest height with the elbows flaring above the hands."
+    },
+    {
+      "name": "DB Front Raise",
+      "pattern": "shoulder_raise",
+      "equipment": "dumbbells",
+      "muscle_group": "shoulders",
+      "pose": "Standing tall holding a dumbbell in each hand, arms raised straight in front to shoulder height with the palms facing down."
+    },
+    {
+      "name": "Reverse Pec Deck",
+      "pattern": "shoulder_raise",
+      "equipment": "a machine",
+      "muscle_group": "rear delts",
+      "pose": "Seated facing the pad of a pec deck machine with the chest supported, arms swept out wide to the sides at shoulder height, elbows slightly bent."
+    },
+    {
+      "name": "Rear Delt Fly",
+      "pattern": "shoulder_raise",
+      "equipment": "dumbbells",
+      "muscle_group": "rear delts",
+      "pose": "Torso hinged forward nearly parallel to the floor, a dumbbell in each hand with arms swept out to the sides at shoulder height, elbows slightly bent."
+    },
+    {
+      "name": "Cable Rear Delt Fly",
+      "pattern": "shoulder_raise",
+      "equipment": "a cable machine",
+      "muscle_group": "rear delts",
+      "pose": "Standing between two high cable stacks holding the opposite handles crossed in front, arms swept out wide to the sides at shoulder height."
+    },
+    {
+      "name": "Band Pull-Apart",
+      "pattern": "shoulder_raise",
+      "equipment": "a resistance band",
+      "muscle_group": "rear delts",
+      "pose": "Standing tall holding a resistance band in front at chest height with straight arms, pulled apart until the arms form a T and the band touches the chest."
+    },
+    {
+      "name": "Prone Rear Delt Raise",
+      "pattern": "shoulder_raise",
+      "equipment": "dumbbells",
+      "muscle_group": "rear delts",
+      "pose": "Lying face down on an incline bench with the chest on the pad, dumbbells raised out to the sides to shoulder height with a slight elbow bend."
+    },
+    {
+      "name": "Y Raise",
+      "pattern": "shoulder_raise",
+      "equipment": "dumbbells",
+      "muscle_group": "rear delts",
+      "pose": "Lying face down on an incline bench with the chest on the pad, arms raised overhead and out in a Y shape with the thumbs pointing up."
+    },
+    {
+      "name": "Band External Rotation",
+      "pattern": "shoulder_raise",
+      "equipment": "a resistance band",
+      "muscle_group": "rear delts",
+      "pose": "Standing with the elbow pinned to the side at ninety degrees, holding a band anchored beside the body, rotating the forearm outward away from the stomach."
+    },
+    {
+      "name": "Cable External Rotation",
+      "pattern": "shoulder_raise",
+      "equipment": "a cable machine",
+      "muscle_group": "rear delts",
+      "pose": "Standing side-on to a cable with the elbow pinned to the side at ninety degrees, rotating the forearm outward until it points straight ahead."
+    },
+    {
+      "name": "Barbell Shrug",
+      "pattern": "carry",
+      "equipment": "a barbell",
+      "muscle_group": "back",
+      "pose": "Standing tall holding a barbell at the thighs with straight arms, shoulders elevated straight up toward the ears."
+    },
+    {
+      "name": "Dumbbell Shrug",
+      "pattern": "carry",
+      "equipment": "dumbbells",
+      "muscle_group": "back",
+      "pose": "Standing tall with a dumbbell in each hand at the sides and straight arms, shoulders elevated straight up toward the ears."
+    },
+    {
+      "name": "Farmer's Walk",
+      "aliases": [
+        "Farmer's Carry"
+      ],
+      "pattern": "carry",
+      "equipment": "dumbbells",
+      "muscle_group": "forearms",
+      "pose": "Walking tall holding a heavy dumbbell in each hand at the sides with straight arms, shoulders back and the chest up."
+    },
+    {
+      "name": "Suitcase Carry",
+      "pattern": "carry",
+      "equipment": "a dumbbell",
+      "muscle_group": "core",
+      "pose": "Walking tall with one heavy dumbbell held at the side in one hand, torso upright and not leaning, the other arm relaxed."
+    },
+    {
+      "name": "Overhead Carry",
+      "pattern": "carry",
+      "equipment": "a dumbbell",
+      "muscle_group": "shoulders",
+      "pose": "Walking tall with one dumbbell held locked out straight overhead, the ribs stacked over the hips and the other arm at the side."
+    },
+    {
+      "name": "Double KB Carry",
+      "pattern": "carry",
+      "equipment": "a kettlebell",
+      "muscle_group": "forearms",
+      "pose": "Walking tall with a kettlebell held at the sides in each hand with straight arms, shoulders back and the chest up."
+    },
+    {
+      "name": "Standing Calf Raise",
+      "pattern": "calf",
+      "equipment": "a machine",
+      "muscle_group": "calves",
+      "pose": "Standing with the shoulders under the pads of a calf raise machine, balls of the feet on the platform, heels raised as high as possible with straight legs."
+    },
+    {
+      "name": "Seated Calf Raise",
+      "pattern": "calf",
+      "equipment": "a machine",
+      "muscle_group": "calves",
+      "pose": "Seated with the knees bent under the pad of a seated calf raise machine, balls of the feet on the platform, heels raised as high as possible."
+    },
+    {
+      "name": "Donkey Calf Raise",
+      "pattern": "calf",
+      "equipment": "a machine",
+      "muscle_group": "calves",
+      "pose": "Standing bent forward at the hips with the torso parallel to the floor, hands braced on a support and a weight across the lower back, balls of the feet on a block with the heels raised."
+    },
+    {
+      "name": "Single-Leg Calf Raise",
+      "pattern": "calf",
+      "equipment": "",
+      "muscle_group": "calves",
+      "pose": "Standing on the ball of one foot at the edge of a step, the other foot lifted, holding a support, heel raised as high as possible."
+    },
+    {
+      "name": "DB Calf Raise",
+      "pattern": "calf",
+      "equipment": "a dumbbell",
+      "muscle_group": "calves",
+      "pose": "Standing on the balls of the feet on a low block holding a dumbbell in one hand at the side, heels raised as high as possible with straight legs."
+    },
+    {
+      "name": "Tibialis Raise",
+      "pattern": "calf",
+      "equipment": "",
+      "muscle_group": "calves",
+      "pose": "Standing with the back against a wall and heels about a foot out from the wall, the toes pulled up toward the shins as high as possible."
+    },
+    {
+      "name": "Banded Dorsiflexion",
+      "pattern": "calf",
+      "equipment": "a resistance band",
+      "muscle_group": "calves",
+      "pose": "Seated with the legs extended, a resistance band looped over the top of the foot and anchored in front, the toes pulled up toward the shin against the band."
+    },
+    {
+      "name": "Plank",
+      "pattern": "core",
+      "equipment": "",
+      "muscle_group": "core",
+      "pose": "Face down in a forearm plank with elbows under the shoulders, body in a rigid straight line from head to heels, hips level."
+    },
+    {
+      "name": "Dead Bug",
+      "pattern": "core",
+      "equipment": "",
+      "muscle_group": "core",
+      "pose": "Lying face up with the arms extended straight toward the ceiling and the knees bent at ninety degrees over the hips, one arm lowering overhead as the opposite leg extends, lower back flat."
+    },
+    {
+      "name": "Ab Wheel Rollout",
+      "pattern": "core",
+      "equipment": "an ab wheel",
+      "muscle_group": "core",
+      "pose": "Kneeling holding an ab wheel with straight arms, rolled far forward with the hips extended so the torso stretches out nearly parallel to the floor."
+    },
+    {
+      "name": "Cable Crunch",
+      "pattern": "core",
+      "equipment": "a cable machine",
+      "muscle_group": "core",
+      "pose": "Kneeling below a high cable with a rope held beside the head, the spine rounded and the elbows drawn down toward the knees."
+    },
+    {
+      "name": "Hanging Leg Raise",
+      "pattern": "core",
+      "equipment": "a pull-up bar",
+      "muscle_group": "core",
+      "pose": "Hanging from a bar with straight arms, the legs raised straight in front until they are at or above hip height, torso still."
+    },
+    {
+      "name": "Russian Twist",
+      "pattern": "core",
+      "equipment": "a medicine ball",
+      "muscle_group": "core",
+      "pose": "Seated with the knees bent and heels off the floor, torso leaning back about forty-five degrees, holding a medicine ball rotated to one side of the body."
+    },
+    {
+      "name": "Pallof Press",
+      "pattern": "core",
+      "equipment": "a cable machine",
+      "muscle_group": "core",
+      "pose": "Standing side-on to a cable at chest height with feet shoulder-width, a handle held at the chest then pressed straight out in front with both arms while the torso resists rotation."
+    },
+    {
+      "name": "Side Plank",
+      "pattern": "core",
+      "equipment": "",
+      "muscle_group": "core",
+      "pose": "Lying on one side supported on one forearm with the elbow under the shoulder, the body in a straight line from head to feet with the hips lifted."
+    },
+    {
+      "name": "Bird Dog",
+      "pattern": "core",
+      "equipment": "",
+      "muscle_group": "core",
+      "pose": "On all fours with the back flat, one arm extended straight forward and the opposite leg extended straight back, both in line with the torso."
+    },
+    {
+      "name": "Crunch",
+      "pattern": "core",
+      "equipment": "",
+      "muscle_group": "core",
+      "pose": "Lying face up with the knees bent and feet flat, hands beside the head, shoulder blades curled off the floor toward the knees."
+    },
+    {
+      "name": "Bicycle Crunch",
+      "pattern": "core",
+      "equipment": "",
+      "muscle_group": "core",
+      "pose": "Lying face up with hands beside the head, one elbow driving across to meet the opposite bent knee while the other leg extends straight out low to the floor."
+    },
+    {
+      "name": "Reverse Crunch",
+      "pattern": "core",
+      "equipment": "",
+      "muscle_group": "core",
+      "pose": "Lying face up with the arms at the sides and knees bent over the hips, the hips curled up off the floor so the knees move toward the chest."
+    },
+    {
+      "name": "Hollow Hold",
+      "pattern": "core",
+      "equipment": "",
+      "muscle_group": "core",
+      "pose": "Lying face up with the arms extended overhead and legs straight, the shoulders and legs lifted off the floor so the body forms a shallow banana shape with the lower back pressed down."
+    },
+    {
+      "name": "Copenhagen Plank",
+      "pattern": "core",
+      "equipment": "a bench",
+      "muscle_group": "core",
+      "pose": "In a side plank with the top leg resting on a bench and the bottom leg hanging below, supported on the forearm, the body in a straight line."
+    },
+    {
+      "name": "Hanging Knee Raise",
+      "pattern": "core",
+      "equipment": "a pull-up bar",
+      "muscle_group": "core",
+      "pose": "Hanging from a bar with straight arms, the knees drawn up toward the chest with the thighs above hip height."
+    },
+    {
+      "name": "Cable Woodchop",
+      "pattern": "core",
+      "equipment": "a cable machine",
+      "muscle_group": "core",
+      "pose": "Standing side-on to a high cable with both hands gripping the handle, pulling it diagonally down across the body to the opposite hip with the torso rotating."
+    },
+    {
+      "name": "Landmine Rotation",
+      "pattern": "core",
+      "equipment": "a landmine",
+      "muscle_group": "core",
+      "pose": "Standing with feet wide holding the end of a landmine barbell at chest height with straight arms, swinging the bar in an arc from one hip to the other with the torso rotating."
+    },
+    {
+      "name": "Stir the Pot",
+      "pattern": "core",
+      "equipment": "a stability ball",
+      "muscle_group": "core",
+      "pose": "In a forearm plank with the elbows on a stability ball, the forearms making small circles on the ball while the body stays rigid."
+    },
+    {
+      "name": "Sit-Up",
+      "aliases": [
+        "Situp"
+      ],
+      "pattern": "core",
+      "equipment": "",
+      "muscle_group": "core",
+      "pose": "Lying face up with the knees bent and feet flat, the torso curled all the way up to a seated position with the arms reaching toward the knees."
+    },
+    {
+      "name": "V-Up",
+      "pattern": "core",
+      "equipment": "",
+      "muscle_group": "core",
+      "pose": "Lying face up with arms extended overhead and legs straight, simultaneously lifting the torso and legs so the hands reach toward the toes in a V shape."
+    },
+    {
+      "name": "L-Sit",
+      "pattern": "core",
+      "equipment": "parallel bars",
+      "muscle_group": "core",
+      "pose": "Supported above parallel bars on straight arms with the shoulders pressed down, the legs held straight out in front level with the hips."
+    },
+    {
+      "name": "Mountain Climber",
+      "pattern": "general",
+      "equipment": "",
+      "muscle_group": "core",
+      "pose": "In a high plank with the hands under the shoulders and body straight, one knee driven forward toward the chest while the other leg stays extended back."
+    },
+    {
+      "name": "Turkish Get-Up",
+      "pattern": "general",
+      "equipment": "a kettlebell",
+      "muscle_group": "core",
+      "pose": "Seated on the floor propped on one hand with the other arm pointing straight up holding a kettlebell, the hips lifted and one leg tucked beneath, midway through rising to stand."
+    },
+    {
+      "name": "Kettlebell Clean",
+      "pattern": "general",
+      "equipment": "a kettlebell",
+      "muscle_group": "glutes",
+      "pose": "Standing in a slight hip hinge then rising tall with a kettlebell racked against the forearm in front of the shoulder, elbow tucked to the ribs."
+    },
+    {
+      "name": "Kettlebell Snatch",
+      "pattern": "general",
+      "equipment": "a kettlebell",
+      "muscle_group": "shoulders",
+      "pose": "Standing tall with one arm locked out straight overhead holding a kettlebell, the shoulder packed and the body upright after the bell has been swung up."
+    },
+    {
+      "name": "Sled Push",
+      "pattern": "general",
+      "equipment": "a sled",
+      "muscle_group": "quads",
+      "pose": "Leaning forward at a steep angle with both arms extended onto the posts of a loaded sled, driving one knee up while the other leg pushes off the floor."
+    },
+    {
+      "name": "Sled Pull",
+      "pattern": "general",
+      "equipment": "a sled",
+      "muscle_group": "back",
+      "pose": "Walking backward leaning back against a rope attached to a loaded sled, arms pulling the rope hand over hand in front of the body."
+    },
+    {
+      "name": "Burpee",
+      "pattern": "general",
+      "equipment": "",
+      "muscle_group": "quads",
+      "pose": "Dropping the body to the floor from standing, chest and thighs touching the ground in a flat push-up position, hands beside the chest and feet behind."
+    },
+    {
+      "name": "Box Jump",
+      "pattern": "general",
+      "equipment": "a box",
+      "muscle_group": "quads",
+      "pose": "Standing on top of a box after jumping up, hips and knees fully extended, arms swung forward and feet landed softly flat in the middle of the box."
+    },
+    {
+      "name": "Broad Jump",
+      "pattern": "general",
+      "equipment": "",
+      "muscle_group": "quads",
+      "pose": "Mid-air in a standing long jump with the body extended forward, arms swung forward and knees bent ready to land."
+    },
+    {
+      "name": "Jump Rope",
+      "pattern": "general",
+      "equipment": "",
+      "muscle_group": "calves",
+      "pose": "Standing tall on the balls of the feet a couple of inches off the ground, elbows tucked at the sides and wrists turning a rope that arcs overhead."
+    },
+    {
+      "name": "Battle Ropes",
+      "pattern": "general",
+      "equipment": "",
+      "muscle_group": "shoulders",
+      "pose": "Standing in a quarter squat holding the end of a heavy rope in each hand, arms alternately whipping the ropes into waves on the floor ahead."
+    },
+    {
+      "name": "Rowing Machine",
+      "pattern": "general",
+      "equipment": "a rowing machine",
+      "muscle_group": "back",
+      "pose": "Seated on an indoor rower with the feet strapped in, mid-stroke with the legs extended and the handle pulled to the lower ribs, torso leaning slightly back."
+    },
+    {
+      "name": "Ski Erg",
+      "pattern": "general",
+      "equipment": "a machine",
+      "muscle_group": "back",
+      "pose": "Standing facing a ski erg machine with the handles gripped overhead, torso hinged forward and arms pulling down toward the hips with the knees bent."
+    },
+    {
+      "name": "Assault Bike",
+      "pattern": "ride",
+      "equipment": "a stationary bike",
+      "muscle_group": "quads",
+      "pose": "Seated on a fan bike, hands gripping the moving handles with one arm pushing and the other pulling, legs pedaling, torso upright."
+    },
+    {
+      "name": "Treadmill Run",
+      "pattern": "run",
+      "equipment": "a treadmill",
+      "muscle_group": "quads",
+      "pose": "Running tall on a treadmill belt in an upright posture with a slight forward lean, arms bent at ninety degrees swinging, one knee driven forward."
+    },
+    {
+      "name": "Medicine Ball Slam",
+      "pattern": "general",
+      "equipment": "a medicine ball",
+      "muscle_group": "core",
+      "pose": "Standing tall on the toes with a medicine ball held overhead with straight arms, about to be slammed to the floor."
+    },
+    {
+      "name": "Hip Abduction Machine",
+      "pattern": "general",
+      "equipment": "a machine",
+      "muscle_group": "glutes",
+      "pose": "Seated in a hip abduction machine with the knees pressed against the outer pads, the thighs pushed wide apart while the back stays against the seat."
+    },
+    {
+      "name": "Cable Hip Abduction",
+      "pattern": "general",
+      "equipment": "a cable machine",
+      "muscle_group": "glutes",
+      "pose": "Standing side-on to a low cable with an ankle strap on the outer leg, that straight leg lifted out to the side while holding the frame for balance."
+    },
+    {
+      "name": "Banded Lateral Walk",
+      "pattern": "general",
+      "equipment": "a resistance band",
+      "muscle_group": "glutes",
+      "pose": "Standing in a quarter squat with a resistance band looped above the knees, stepping sideways with the feet kept wide and tension held in the band."
+    },
+    {
+      "name": "Side-Lying Leg Raise",
+      "pattern": "general",
+      "equipment": "",
+      "muscle_group": "glutes",
+      "pose": "Lying on one side with the legs stacked and straight, the top leg raised toward the ceiling while the hips stay stacked."
+    },
+    {
+      "name": "Banded Side-Lying Clamshell",
+      "pattern": "general",
+      "equipment": "a resistance band",
+      "muscle_group": "glutes",
+      "pose": "Lying on one side with the knees bent and a resistance band above the knees, the top knee opened like a clamshell while the feet stay together."
+    },
+    {
+      "name": "Side-Lying Hip Abduction",
+      "pattern": "general",
+      "equipment": "",
+      "muscle_group": "glutes",
+      "pose": "Lying on one side with the body in a straight line, the top leg lifted up and slightly back with the toes pointing forward."
+    },
+    {
+      "name": "Leg Extension",
+      "pattern": "squat",
+      "equipment": "a machine",
+      "muscle_group": "quads",
+      "pose": "Seated in a leg extension machine with the pad on the lower shins, the legs raised until the knees are fully straight."
+    },
+    {
+      "name": "Cat-Cow",
+      "pattern": "mobility",
+      "equipment": "",
+      "muscle_group": "mobility",
+      "pose": "On all fours with the hands under the shoulders and knees under the hips, the spine rounded up toward the ceiling with the head tucked down."
+    },
+    {
+      "name": "Quadruped Thoracic Rotation",
+      "pattern": "mobility",
+      "equipment": "",
+      "muscle_group": "mobility",
+      "pose": "On all fours with one hand behind the head, the elbow rotating up toward the ceiling and the chest opening to that side."
+    },
+    {
+      "name": "90/90 Breathing",
+      "pattern": "mobility",
+      "equipment": "",
+      "muscle_group": "mobility",
+      "pose": "Lying face up with the feet flat on a wall and the hips and knees bent at ninety degrees, the lower back flat on the floor and the ribcage down."
+    },
+    {
+      "name": "World's Greatest Stretch",
+      "pattern": "mobility",
+      "equipment": "",
+      "muscle_group": "mobility",
+      "pose": "Deep lunge with one hand on the floor inside the front foot, the other arm rotated up toward the ceiling with the chest open and the back leg straight."
+    },
+    {
+      "name": "Hip Flexor Stretch",
+      "pattern": "mobility",
+      "equipment": "",
+      "muscle_group": "mobility",
+      "pose": "Half-kneeling in a lunge with the back knee on the floor, hips pushed forward, torso upright and the arm on the back-leg side reaching overhead."
+    },
+    {
+      "name": "Couch Stretch",
+      "pattern": "mobility",
+      "equipment": "",
+      "muscle_group": "mobility",
+      "pose": "Kneeling with the back foot elevated against a wall behind and the shin vertical, the other foot forward in a lunge, the torso upright and hips tucked."
+    },
+    {
+      "name": "Pigeon Stretch",
+      "pattern": "mobility",
+      "equipment": "",
+      "muscle_group": "mobility",
+      "pose": "On the floor with one shin folded across the body in front, the other leg extended straight behind, the torso folded forward over the front shin."
+    },
+    {
+      "name": "Hamstring Stretch",
+      "pattern": "mobility",
+      "equipment": "",
+      "muscle_group": "mobility",
+      "pose": "Seated on the floor with one leg extended straight and the other foot tucked to the inner thigh, torso folded forward over the straight leg with a flat back."
+    },
+    {
+      "name": "Child's Pose",
+      "pattern": "mobility",
+      "equipment": "",
+      "muscle_group": "mobility",
+      "pose": "Kneeling with the hips sitting back onto the heels and the torso folded forward, arms stretched out long on the floor and the forehead resting down."
+    },
+    {
+      "name": "Thread the Needle",
+      "pattern": "mobility",
+      "equipment": "",
+      "muscle_group": "mobility",
+      "pose": "On all fours, one arm threaded under the body to the opposite side with the shoulder and ear resting on the floor and the other arm reaching long."
+    },
+    {
+      "name": "Thoracic Extension on Foam Roller",
+      "pattern": "mobility",
+      "equipment": "a foam roller",
+      "muscle_group": "mobility",
+      "pose": "Lying face up with a foam roller beneath the upper back, hands behind the head and hips on the floor, the chest arched back over the roller."
+    },
+    {
+      "name": "Ankle Mobility Drill",
+      "pattern": "mobility",
+      "equipment": "",
+      "muscle_group": "mobility",
+      "pose": "Half-kneeling facing a wall with the front foot flat a few inches from it, the front knee driving forward over the toes to touch the wall with the heel down."
+    },
+    {
+      "name": "Hip CARs",
+      "pattern": "mobility",
+      "equipment": "",
+      "muscle_group": "mobility",
+      "pose": "Standing on one leg holding a support, the other knee lifted and rotated in a slow large circle outward at the hip, torso still."
+    },
+    {
+      "name": "Shoulder CARs",
+      "pattern": "mobility",
+      "equipment": "",
+      "muscle_group": "mobility",
+      "pose": "Standing tall with one arm making a slow large circle from the front, overhead and behind with the elbow straight, torso still."
+    },
+    {
+      "name": "Scapular Wall Slide",
+      "pattern": "mobility",
+      "equipment": "",
+      "muscle_group": "mobility",
+      "pose": "Standing with the back, elbows and wrists against a wall, forearms sliding up the wall overhead while the back stays flat."
+    },
+    {
+      "name": "90/90 Hip Switch",
+      "pattern": "mobility",
+      "equipment": "",
+      "muscle_group": "mobility",
+      "pose": "Seated on the floor with both knees bent at ninety degrees and falling to one side, the front shin in front and the back shin to the side, torso upright."
+    },
+    {
+      "name": "Deep Squat Hold",
+      "pattern": "mobility",
+      "equipment": "",
+      "muscle_group": "mobility",
+      "pose": "Holding the bottom of a deep bodyweight squat with the feet shoulder-width, hips below the knees, heels down, hands pressed together at the chest and elbows pushing the knees apart."
+    },
+    {
+      "name": "Leg Swing",
+      "pattern": "mobility",
+      "equipment": "",
+      "muscle_group": "mobility",
+      "pose": "A standing figure, one hand resting on a plain upright post for balance, the standing leg planted, the other leg straight and swung forward to hip height mid-swing."
+    },
+    {
+      "name": "Arm Circle",
+      "pattern": "mobility",
+      "equipment": "",
+      "muscle_group": "mobility",
+      "pose": "Standing tall with the arms extended out to the sides at shoulder height, making large circles with the straight arms."
+    },
+    {
+      "name": "Inchworm",
+      "pattern": "mobility",
+      "equipment": "",
+      "muscle_group": "mobility",
+      "pose": "Bent over with the hands on the floor and the hips high, walking the hands forward until the body is in a long straight plank with the legs straight."
+    }
+  ]
+}

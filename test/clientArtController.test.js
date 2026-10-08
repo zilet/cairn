@@ -15,6 +15,13 @@ function escAttr(value) {
     .replaceAll('"', "&quot;");
 }
 
+// The starter pack's generic stand-in layer (its own /api/art/generic URL) sits
+// under the photo for an exercise not known to be ready. These cases are about the
+// PHOTO layer's requests, so they read the tile without it.
+function photoLayer(html) {
+  return String(html).replace(/<img class="artimg-generic"[^>]*>/g, "").replace(' class="artile artimg ', ' class="artile ');
+}
+
 function loadArtController(options = {}) {
   const listeners = new Map();
   const storage = new Map(options.storage || []);
@@ -250,7 +257,7 @@ test("a just-missed (204) image is not asked for again by a re-render", () => {
   img.dataset.artkey = "exercise|Leg Curl";
   img.isConnected = false; // the re-render replaced it
   env.listeners.get("error")({ target: img });
-  const again = env.context.artImg("exercise", "Leg Curl", "artile-sm", "<svg></svg>");
+  const again = photoLayer(env.context.artImg("exercise", "Leg Curl", "artile-sm", "<svg></svg>"));
   assert.doesNotMatch(again, /<img/);
   assert.equal(again, '<div class="artile artile-sm"><svg></svg></div>');
   // A different figure is unaffected.
@@ -268,7 +275,7 @@ test("a miss survives the reload that re-renders it (tab-scoped), and a ready ma
 
   // The reloaded page's first (warm) render does not re-ask for the miss.
   const reloaded = loadArtController({ session, manifest: { enabled: true, ready: ["exercise|Back Squat"] } });
-  assert.doesNotMatch(reloaded.context.artImg("exercise", "Back Squat", "a", "<svg></svg>"), /<img/);
+  assert.doesNotMatch(photoLayer(reloaded.context.artImg("exercise", "Back Squat", "a", "<svg></svg>")), /<img/);
   // Once the boot read says it is drawn, it renders at once.
   await reloaded.context.primeArtManifest();
   assert.match(reloaded.context.artImg("exercise", "Back Squat", "a", "<svg></svg>"), /<img[^>]+instant/);
@@ -297,13 +304,13 @@ test("a re-render never asks again for an image whose request is still in flight
   const imgs = [];
   const timers = [];
   const env = loadArtController({ imgs, setTimeout: (fn) => (timers.push(fn), timers.length) });
-  const first = env.context.artImg("exercise", "Leg Curl", "a", "<svg></svg>");
+  const first = photoLayer(env.context.artImg("exercise", "Leg Curl", "a", "<svg></svg>"));
   const src = /src="([^"]+)"/.exec(first)[1].replaceAll("&amp;", "&");
   const inFlight = liveImg(env, { token: "exercise|Leg Curl", src });
   imgs.push(inFlight);
 
   // The second render (network repaint) parks the URL instead of requesting it.
-  const second = env.context.artImg("exercise", "Leg Curl", "a", "<svg></svg>");
+  const second = photoLayer(env.context.artImg("exercise", "Leg Curl", "a", "<svg></svg>"));
   assert.doesNotMatch(second, / src=/);
   assert.match(second, /data-art-wait="1"/);
   assert.match(second, /data-art-src="[^"]*q=Leg%20Curl/);
@@ -328,7 +335,7 @@ test("an in-flight miss leaves the waiter on the SVG; a stalled request hands th
   const imgs = [];
   const timers = [];
   const env = loadArtController({ imgs, setTimeout: (fn) => (timers.push(fn), timers.length) });
-  const src = /src="([^"]+)"/.exec(env.context.artImg("exercise", "Face Pull", "a", "<svg></svg>"))[1].replaceAll("&amp;", "&");
+  const src = /src="([^"]+)"/.exec(photoLayer(env.context.artImg("exercise", "Face Pull", "a", "<svg></svg>")))[1].replaceAll("&amp;", "&");
   const inFlight = liveImg(env, { token: "exercise|Face Pull", src });
   imgs.push(inFlight);
   env.context.artImg("exercise", "Face Pull", "a", "<svg></svg>");
@@ -342,12 +349,12 @@ test("an in-flight miss leaves the waiter on the SVG; a stalled request hands th
   const before = waiter.src;
   inFlight.fire("error"); // 204: not drawn yet
   assert.equal(waiter.src, before, "no second request for a miss");
-  assert.doesNotMatch(env.context.artImg("exercise", "Face Pull", "a", "<svg></svg>"), /<img/);
+  assert.doesNotMatch(photoLayer(env.context.artImg("exercise", "Face Pull", "a", "<svg></svg>")), /<img/);
 
   // A lazy first request that never starts: the bounded wait releases the waiter.
   const list = [];
   const env2 = loadArtController({ imgs: list, setTimeout: (fn) => (timers.push(fn), timers.length) });
-  const src2 = /src="([^"]+)"/.exec(env2.context.artImg("exercise", "Row", "a", "<svg></svg>"))[1].replaceAll("&amp;", "&");
+  const src2 = /src="([^"]+)"/.exec(photoLayer(env2.context.artImg("exercise", "Row", "a", "<svg></svg>")))[1].replaceAll("&amp;", "&");
   const stalled = liveImg(env2, { token: "exercise|Row", src: src2 });
   list.push(stalled);
   timers.length = 0;
@@ -382,4 +389,31 @@ test("food and activity URLs carry the server's v= too, so a re-pointed picture 
   assert.match(env.context.artImg("food", "half a pear", "a", "<svg></svg>"), /q=half%20a%20pear&(amp;)?v=1790000000/);
   assert.match(env.context.artImg("activity", "running", "a", "<svg></svg>"), /v=1780000000/);
   assert.doesNotMatch(env.context.artImg("food", "unlisted meal", "a", "<svg></svg>"), /v=/, "no version, no v=");
+});
+
+test("an exercise not known to be drawn shows the generic stand-in from its OWN url, never /api/art", async () => {
+  const env = loadArtController({ manifest: { enabled: true, ready: ["exercise|Back Squat"] } });
+  const html = env.context.artImg("exercise", "Zercher <Squat>", "a", "<svg></svg>");
+  const generic = /<img class="artimg-generic"[^>]*>/.exec(html)?.[0];
+  assert.ok(generic, "the stand-in layer is there");
+  assert.match(generic, /src="\/api\/art\/generic\?q=Zercher%20%3CSquat%3E/);
+  assert.doesNotMatch(generic, /\/api\/art\?/, "never the cache-first art URL");
+  assert.doesNotMatch(generic, /data-art-photo/, "not a photo: never marked ready, never redrawn");
+  assert.match(generic, /data-remove-on-error="1"/);
+  assert.ok(html.indexOf("artimg-generic") < html.indexOf("artimg-photo"), "the photo paints over it");
+
+  // A figure known to be drawn needs no stand-in; food and activity never get one.
+  await env.context.primeArtManifest();
+  assert.doesNotMatch(env.context.artImg("exercise", "Back Squat", "a", "<svg></svg>"), /artimg-generic/);
+  assert.doesNotMatch(env.context.artImg("food", "oats", "a", "<svg></svg>"), /artimg-generic/);
+
+  // A stand-in that 204s (no generic built, or a real figure exists) is dropped and
+  // not asked for again by the next re-render.
+  const img = new env.FakeImage();
+  img.dataset.artGeneric = "1";
+  img.dataset.artQ = "Zercher <Squat>";
+  img.dataset.removeOnError = "1";
+  env.listeners.get("error")({ target: img });
+  assert.equal(img.removed, true);
+  assert.doesNotMatch(env.context.artImg("exercise", "Zercher <Squat>", "a", "<svg></svg>"), /artimg-generic/);
 });

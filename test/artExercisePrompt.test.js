@@ -37,7 +37,7 @@ test("stylePrompt('exercise') without context is unchanged (existing cache keys/
   const bare = stylePrompt("exercise", "Bench Press");
   const explicitlyEmpty = stylePrompt("exercise", "Bench Press", null);
   assert.equal(bare, explicitlyEmpty);
-  assert.match(bare, /performing Bench Press, terracotta and warm earthen tones/);
+  assert.match(bare, /performing Bench Press, the figure and every piece of equipment sculpted from the same matte terracotta clay, warm earthen tones/);
   assert.doesNotMatch(bare, /exercise using/, "no context clause leaks into the name-only prompt");
 });
 
@@ -73,7 +73,7 @@ test("stylePrompt('exercise') leads with the pose so it is not buried under stud
     p,
     /^The pose: Stand side-on to a low pulley holding the handle in the outside hand\. Raise the straight arm out to the side to shoulder height\. Hand-sculpted/
   );
-  assert.match(p, /performing Cable Lateral Raise — a shoulders exercise using a cable machine, terracotta/);
+  assert.match(p, /performing Cable Lateral Raise — a shoulders exercise using a cable machine, the figure and every piece of equipment sculpted from the same matte terracotta clay/);
   assert.match(p, /clay figurine/, "still the same clay-figurine studio style");
 });
 

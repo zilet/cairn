@@ -22,6 +22,7 @@
     "seed": "tsx src/seed.ts",
     "seed:demo": "tsx src/demoSeed.ts",
     "seed:art:build": "mkdir -p data/seed-art-build && DATA_DIR=data/seed-art-build DB_PATH=data/seed-art-build/cairn.db tsx src/buildSeedArt.ts",
+    "starter:art:build": "mkdir -p data/starter-art-build && DATA_DIR=data/starter-art-build DB_PATH=data/starter-art-build/cairn.db tsx src/buildStarterArt.ts",
     "garmin:sync": "tsx src/garmin.ts",
     "reset": "rm -f data/cairn.db data/cairn.db-* && npm run seed",
     "migrate": "tsx src/migrate.ts",

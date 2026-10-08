@@ -12,7 +12,7 @@ The OAuth 2.1 doors an AI app signs in through for `/mcp` (`/.well-known/oauth-*
 [OPERATIONS.md](OPERATIONS.md) "Connect an AI app (MCP)".
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**403 routes** across 134 groups.
+**404 routes** across 134 groups.
 
 ## `/activities`
 
@@ -78,7 +78,8 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/art` | Cache hit -> the cached image, immutable-cached, ETag = asset key. The URL is versioned (`v=`) so immutable stays honest. Miss -> 204 immediately. Exercise misses never fire a name-only generate: they enqueue `exercise_art` (or produce from classifyMuscleGroup / detectImplement when no row exists). |
+| GET | `/api/art` | Cache hit -> the cached image, immutable-cached, ETag = asset key. The URL is versioned (`v=`) so immutable stays honest. Miss -> 204 immediately. An exercise miss first asks the starter picture pack (src/artStarter.ts): a figure for exactly this exercise is installed as a real asset and served, with no generation queued. Otherwise exercise misses never fire a name-only generate: they enqueue `exercise_art` (or produce from classifyMuscleGroup / detectImplement when no row exists). The generic movement-pattern stand-in is NEVER served here — it has its own URL (/art/generic, below), so the cache-first service worker can never file it as this exercise's picture. |
+| GET | `/api/art/generic` | The visible stand-in while an exercise has no figure of its own: the starter pack's generic movement-pattern figure (a squat, a horizontal pull…), classified from the stored row (group, mode) or the deterministic name classifiers. The PWA layers it UNDER the real /api/art photo, which paints over it the moment a real figure exists. Its own URL is the whole design: the service worker's cache-first art layer keys on /api/art only, so a stand-in can never be cached as that exercise's real picture. A 204 (no-store) when the exercise already has — or the pack holds — a real figure, or when the generic image was never built. |
 | GET | `/api/art/manifest` | Which PWA art queries already have a cached image, as "kind\|q" tokens. Not cached because readiness changes as the background queue produces images. |
 | POST | `/api/art/regenerate` | Repair path for an image that came back wrong. Drops the parked failure, bumps `art_index.version`, and generates under a new pose-aware key with the richest prompt we can build. A repeat within 60s or while a regen is in flight returns {ok:true, regenerated:false, reason}. Designed-failure convention: {ok:false} at HTTP 200 when generation is unavailable. |
 | GET | `/api/art/state` | The boot read: ready tokens + enabled + exercise versions in one call (the two routes above stay for older clients). Not cached — readiness and versions move as the background queue draws. |

@@ -96,6 +96,12 @@ function envFor(dir) {
     ART_EXERCISE_STYLE_REFS: "",
     ART_IMAGE_COST_USD: "",
     ART_EXERCISE_IMAGE_COST_USD: "",
+    // The starter picture pack ships real figures once a maintainer builds it; a
+    // test that asserts "an exercise miss queues a generation" must not start
+    // hitting it. Tests that exercise the pack point this at their own fixture dir.
+    CAIRN_STARTER_ART_DIR: path.join(dir, "starter-art-none"),
+    // Offline and deterministic: the background exercise-guide import never runs.
+    CAIRN_GUIDE_AUTO_IMPORT: "0",
   };
 }
 

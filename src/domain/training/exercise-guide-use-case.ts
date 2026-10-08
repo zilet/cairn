@@ -1,5 +1,6 @@
 // Importing the exercise guide library — the only place in Cairn that reaches out
-// to the free-exercise-db dataset, and only when the athlete asks it to.
+// to the free-exercise-db dataset: when the athlete asks, and once in the
+// background on a real install (exerciseGuideAutoImportPass, the scheduler).
 //
 // Two stages, deliberately split so neither blocks the other:
 //   1. import — pull the ~1 MB metadata JSON once, cache it under DATA_DIR, store
@@ -32,6 +33,8 @@ import {
   upsertGuideRecords,
   usableGuideRecords,
 } from "../../repo/exercise-guide.js";
+import { getAppState, setAppState } from "../../repo/app-state.js";
+import { listExercises } from "../../repo/exercises.js";
 
 /** Injectable so the test suite stays offline and deterministic. */
 export type GuideFetch = (url: string, init?: { signal?: AbortSignal }) => Promise<Response>;
@@ -169,6 +172,70 @@ export async function autoImportExerciseGuidesIfEmpty(
 ): Promise<ExerciseGuideImportResult | null> {
   if (exerciseGuideStatus().imported) return null; // already has guides — nothing to do
   return importExerciseGuides(options);
+}
+
+/** app_state key recording the background import's outcome (`{ok, at, …}`). */
+export const EXERCISE_GUIDE_AUTO_IMPORT_STATE = "exercise_guide_auto_import";
+/** How long a failed background import (offline, upstream down) waits before trying again. */
+export const EXERCISE_GUIDE_AUTO_IMPORT_RETRY_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * Whether this process may reach out for the library on its own. Never inside the
+ * test harness (offline and deterministic: `node --test` marks every child with
+ * NODE_TEST_CONTEXT, and test/run.mjs also sets CAIRN_GUIDE_AUTO_IMPORT=0), never
+ * in the smoke server, and never when the operator switched it off.
+ */
+export function exerciseGuideAutoImportAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (String(env.CAIRN_GUIDE_AUTO_IMPORT ?? "").trim() === "0") return false;
+  if (env.NODE_TEST_CONTEXT) return false;
+  if (env.CAIRN_SMOKE_MODE === "1") return false;
+  return true;
+}
+
+export type ExerciseGuideAutoImportOutcome = "imported" | "already" | "no_exercises" | "failed";
+
+/**
+ * One background pass of the library import: metadata only (photos stay lazy), and
+ * only once there is something to match it against. The outcome is recorded in
+ * app_state so a later pass (and an operator reading the table) knows whether it
+ * already landed; a failure is recorded too and answers "failed", which tells the
+ * scheduler to try again later rather than wait for the next boot. Never throws.
+ */
+export async function exerciseGuideAutoImportPass(
+  options: ExerciseGuideImportOptions = {}
+): Promise<ExerciseGuideAutoImportOutcome> {
+  try {
+    if (exerciseGuideStatus().imported) {
+      if (!getAppState(EXERCISE_GUIDE_AUTO_IMPORT_STATE)) {
+        setAppState(
+          EXERCISE_GUIDE_AUTO_IMPORT_STATE,
+          JSON.stringify({ ok: true, at: new Date().toISOString(), by: "existing" })
+        );
+      }
+      return "already";
+    }
+    if (!(listExercises() as unknown[]).length) return "no_exercises";
+    const result = await autoImportExerciseGuidesIfEmpty(options);
+    if (!result) return "already";
+    if (result.ok) {
+      setAppState(
+        EXERCISE_GUIDE_AUTO_IMPORT_STATE,
+        JSON.stringify({ ok: true, at: new Date().toISOString(), records: result.records, linked: result.linked })
+      );
+      return "imported";
+    }
+    setAppState(
+      EXERCISE_GUIDE_AUTO_IMPORT_STATE,
+      JSON.stringify({ ok: false, at: new Date().toISOString(), error: String(result.error).slice(0, 200) })
+    );
+    return "failed";
+  } catch (error: any) {
+    setAppState(
+      EXERCISE_GUIDE_AUTO_IMPORT_STATE,
+      JSON.stringify({ ok: false, at: new Date().toISOString(), error: String(error?.message ?? error).slice(0, 200) })
+    );
+    return "failed";
+  }
 }
 
 /**

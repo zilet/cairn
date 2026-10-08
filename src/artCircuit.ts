@@ -250,7 +250,7 @@ export function forgetArtCircuitCache(): void {
   cache = null;
 }
 
-/** Test-only: clear both the cache and the durable row. */
+/** Clear both the cache and the durable row (tests, and the starter-art builder on start). */
 export function resetArtCircuit(): void {
   cache = {};
   setAppState(ART_CIRCUIT_KEY, JSON.stringify({ models: {} }));

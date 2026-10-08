@@ -48,6 +48,13 @@
   -webkit-touch-callout:none;-webkit-user-select:none;user-select:none;
 }
 .artimg .artimg-photo.on{opacity:1;transform:scale(1)}
+/* the starter pack's generic movement figure: a stand-in between the SVG and the
+   real photo (which paints over it); its own URL, never the exercise's picture */
+.artimg .artimg-generic{
+  grid-area:1/1;width:100%;height:100%;object-fit:cover;border-radius:50%;
+  opacity:0;transition:opacity var(--dur-3) ease;-webkit-touch-callout:none;
+}
+.artimg .artimg-generic.on{opacity:1}
 /* already-generated art (known ready) paints straight over the SVG — no fade,
    no scale — so a re-render or reload never flashes the wire placeholder */
 .artimg .artimg-photo.instant{opacity:1;transform:none;transition:none}

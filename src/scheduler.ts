@@ -50,7 +50,11 @@ import {
 } from "./repo/meal-refresh-retry.js";
 import { mealPlanAutoDraftEnabled, retirePendingMealRefresh } from "./repo/meal-plan-auto-draft.js";
 import { PLAN_PROPOSAL_SCHEMA, isPlanProposalResult } from "./agent-contracts.js";
-import { autoImportExerciseGuidesIfEmpty } from "./domain/training/exercise-guide-use-case.js";
+import {
+  EXERCISE_GUIDE_AUTO_IMPORT_RETRY_MS,
+  exerciseGuideAutoImportAllowed,
+  exerciseGuideAutoImportPass,
+} from "./domain/training/exercise-guide-use-case.js";
 import { hasLoggedHistory } from "./repo/first-run.js";
 import { createHash } from "node:crypto";
 import { log } from "./log.js";
@@ -1634,16 +1638,24 @@ export function startScheduler() {
   // Round W2.2: the exercise-guide library used to wait on a manual tap in Settings
   // before any how-to section existed at all — a bounded (~1 MB), idempotent
   // download that never overwrites a hand-confirmed link or refusal (both survive
-  // re-import). Run it once at boot, only while the table is genuinely empty; the
-  // Settings button remains the explicit re-import.
-  setTimeout(
-    inOwnerTimeZone(() => {
-      autoImportExerciseGuidesIfEmpty()
-        .then((result) => {
-          if (result?.ok) log.info(`[exercise-guide] auto-imported ${result.records} movements at boot.`);
+  // re-import). Run it in the background, only while the table is genuinely empty
+  // and there are exercises to match (metadata only — photos stay lazy). A failure
+  // (offline, upstream down) retries every few hours instead of waiting for the next
+  // boot; the outcome is recorded in app_state. Never in the test harness or the
+  // smoke server (exerciseGuideAutoImportAllowed). The Settings button remains the
+  // explicit re-import.
+  if (exerciseGuideAutoImportAllowed()) {
+    const guidePass = () => {
+      exerciseGuideAutoImportPass()
+        .then((outcome) => {
+          if (outcome === "imported")
+            log.info("[exercise-guide] auto-imported the movement library in the background.");
+          if (outcome === "failed" || outcome === "no_exercises") {
+            setTimeout(inOwnerTimeZone(guidePass), EXERCISE_GUIDE_AUTO_IMPORT_RETRY_MS).unref?.();
+          }
         })
         .catch((error) => recordSchedulerFailure("exercise_guide_auto_import", error));
-    }),
-    10_000
-  );
+    };
+    setTimeout(inOwnerTimeZone(guidePass), 10_000).unref?.();
+  }
 }

@@ -13,8 +13,10 @@ import {
   buildExerciseArtContext,
   exercisePoseFor,
   assetKeyFromPath,
+  exerciseArtPath,
   type ArtContext,
 } from "../art.js";
+import { genericFigureFor, starterFigureFor } from "../artStarter.js";
 import { getArtStats } from "../domain/operator/index.js";
 import { exerciseArtPending, findExercise } from "../domain/training/index.js";
 import { getExerciseDetail } from "../repo.js";
@@ -33,7 +35,8 @@ function exerciseContextFor(q: string): ArtContext {
   return buildExerciseArtContext(q);
 }
 
-function sendArtFile(file: string, res: import("express").Response): void {
+/** The image's real type from its magic bytes — pack files are JPEG in a .png name. */
+function sniffArtMime(file: string): string {
   let mime = "image/png";
   try {
     const fd = fs.openSync(file, "r");
@@ -45,7 +48,11 @@ function sendArtFile(file: string, res: import("express").Response): void {
   } catch {
     /* sniffing is a nicety — the default mime already set above stands */
   }
-  res.setHeader("Content-Type", mime);
+  return mime;
+}
+
+function sendArtFile(file: string, res: import("express").Response): void {
+  res.setHeader("Content-Type", sniffArtMime(file));
   res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
   res.setHeader("ETag", `"${assetKeyFromPath(file)}"`);
   res.setHeader("X-Content-Type-Options", "nosniff");
@@ -59,15 +66,20 @@ function sendArtFile(file: string, res: import("express").Response): void {
 // ---- generated artwork (Gemini image cache; see src/art.ts) ----
 // Cache hit -> the cached image, immutable-cached, ETag = asset key. The URL is
 // versioned (`v=`) so immutable stays honest. Miss -> 204 immediately.
-// Exercise misses never fire a name-only generate: they enqueue `exercise_art`
-// (or produce from classifyMuscleGroup / detectImplement when no row exists).
+// An exercise miss first asks the starter picture pack (src/artStarter.ts): a
+// figure for exactly this exercise is installed as a real asset and served, with
+// no generation queued. Otherwise exercise misses never fire a name-only
+// generate: they enqueue `exercise_art` (or produce from classifyMuscleGroup /
+// detectImplement when no row exists). The generic movement-pattern stand-in is
+// NEVER served here — it has its own URL (/art/generic, below), so the
+// cache-first service worker can never file it as this exercise's picture.
 artRouter.get("/art", (req, res) => {
   const kind = String(req.query.kind ?? "");
   const q = String(req.query.q ?? "").trim();
   if (!isArtKind(kind)) return res.status(400).json({ error: "kind must be food|exercise|activity" });
   if (!q || q.length > 200) return res.status(400).json({ error: "q required, max 200 chars" });
 
-  const file = cachedArtPath(kind, q);
+  const file = kind === "exercise" ? exerciseArtPath(q) : cachedArtPath(kind, q);
   if (file) return sendArtFile(file, res);
 
   if (kind === "exercise") {
@@ -87,6 +99,47 @@ artRouter.get("/art", (req, res) => {
 
   requestArt(kind, q);
   res.status(204).end();
+});
+
+// The visible stand-in while an exercise has no figure of its own: the starter
+// pack's generic movement-pattern figure (a squat, a horizontal pull…), classified
+// from the stored row (group, mode) or the deterministic name classifiers. The PWA
+// layers it UNDER the real /api/art photo, which paints over it the moment a real
+// figure exists. Its own URL is the whole design: the service worker's cache-first
+// art layer keys on /api/art only, so a stand-in can never be cached as that
+// exercise's real picture. A 204 (no-store) when the exercise already has — or the
+// pack holds — a real figure, or when the generic image was never built.
+artRouter.get("/art/generic", (req, res) => {
+  const q = String(req.query.q ?? "").trim();
+  if (!q || q.length > 200) return res.status(400).json({ error: "q required, max 200 chars" });
+  const none = () => {
+    res.setHeader("Cache-Control", "no-store");
+    return res.status(204).end();
+  };
+  if (cachedArtPath("exercise", q) || starterFigureFor(q)) return none();
+  const generic = genericFigureFor(q);
+  if (!generic) return none();
+  res.setHeader("Content-Type", sniffArtMime(generic.file));
+  // Short and revalidating, never immutable: the stand-in for a name can change
+  // (a re-classified row, a newly built pattern figure), and it is never the
+  // picture a phone should keep.
+  res.setHeader("Cache-Control", "private, max-age=86400");
+  let etag = `"generic-${generic.pattern}"`;
+  try {
+    const stat = fs.statSync(generic.file);
+    etag = `"generic-${generic.pattern}-${stat.size}-${Math.floor(stat.mtimeMs)}"`;
+  } catch {
+    /* the read below answers for a vanished file */
+  }
+  res.setHeader("ETag", etag);
+  res.setHeader("X-Cairn-Art-Generic", generic.pattern);
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  if (req.headers["if-none-match"] === etag) return res.status(304).end();
+  fs.createReadStream(generic.file)
+    .on("error", () => {
+      if (!res.headersSent) none();
+    })
+    .pipe(res);
 });
 
 // Warm the art cache: enqueue generation for everything the PWA will ask for.

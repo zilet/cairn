@@ -3956,9 +3956,10 @@ authoritative. Adding a new `src/surfaces/mcp/*.ts` module needs no update to th
 
 ## Generated artwork (`src/art.ts`)
 
-Photoreal/stylized images for foods, exercises and activities via Google's `gemini-3.1-flash-image`
-(override with `GEMINI_IMAGE_MODEL`; needs `GEMINI_API_KEY`), cached in `data/art/` as PNGs named by
-asset key. A strictly serial in-process queue (mirrors the `enrich.ts` pattern: in-flight dedup by
+Photoreal/stylized images for foods, exercises and activities via Google's `gemini-nano-banana-2.1`
+("Nano Banana 2.1", default since 2026-10-07; override with `GEMINI_IMAGE_MODEL`; needs
+`GEMINI_API_KEY`), cached in `data/art/` as PNGs named by asset key. Exercises also have a no-key
+floor — the starter picture pack, below. A strictly serial in-process queue (mirrors the `enrich.ts` pattern: in-flight dedup by
 cache key, a throwing job never breaks the drain loop, plus an in-memory negative cache so failed
 keys aren't retried until the durable circuit breaker closes) generates on cache miss while `GET
 /api/art` returns 204 immediately. It's a **direct REST call** (global fetch, 60s AbortController
@@ -4026,20 +4027,26 @@ regenerate and when enrichment lands so a better prompt gets its attempt. The ci
 
 **Spend telemetry.** Every paid call (and every avoided generation) is recorded via
 `repo.recordArtUsage` into `art_usage` — actions `generate` (per-image cost from a model-keyed price table, `IMAGE_COST_USD_BY_MODEL` in
-`src/art.ts`: lite $0.0336, flash $0.067, pro $0.134; `ART_IMAGE_COST_USD` overrides), `canonicalize` (token-priced via `usageMetadata` at
+`src/art.ts`: Nano Banana 2.1 $0.0336, lite $0.0336, flash $0.067, pro $0.134 — an id not in the table
+is priced at the flash rate, a deliberate over- rather than under-estimate; `ART_IMAGE_COST_USD` overrides), `canonicalize` (token-priced via `usageMetadata` at
 `ART_TEXT_IN_USD_PER_M`/`ART_TEXT_OUT_USD_PER_M`, defaulting from `TEXT_USD_PER_M_BY_MODEL`), `reuse` (carries `est_saved_usd`), `fail`.
 Surfaced by `GET /api/art/stats` / MCP `get_art_stats` with a since-`art_enabled_at` window plus
 all-time.
 
 **Per-kind image model.** `imageModelFor(kind)` picks the model per request:
 `GEMINI_EXERCISE_IMAGE_MODEL` (unset by default; recommended `gemini-3-pro-image`) applies to the
-exercise kind only, everything else uses `GEMINI_IMAGE_MODEL`. **Setting that override is itself the
-opt-in to style references** — not a `/pro/` sniff of the model id: with it set,
+exercise kind only, everything else uses `GEMINI_IMAGE_MODEL`. **Setting that override is itself an
+opt-in to style references, and so is an exercise model on the `STYLE_REFERENCE_MODELS` allowlist**
+(`gemini-3-pro-image` only) — never a `/pro/`
+sniff of the model id: with either,
 `styleReferenceParts()` attaches up to 3 already-cached exercise PNGs to the same `generateContent`
 request as `inlineData` parts with an instruction to match their sculptural style — so successive
 figurines read as one series instead of restarting the look each time. `ART_EXERCISE_STYLE_REFS=0`
-opts back out without giving up the override. The default flash tier deliberately gets no reference
-parts: sending them would change a working request shape for every user. `pregenerate()` (the
+opts back out. The default, Nano Banana 2.1, accepts references but is deliberately OFF the list: it
+copies the references' POSE despite the instruction not to (verified live 2026-10-07 — a front squat
+drawn beside a back-squat anchor came out back-racked, a pulldown went behind the neck). Series
+consistency comes from the prompt instead: the figure and every piece of equipment are "sculpted
+from the same matte terracotta clay", which keeps 2.1 from drawing iron plates. `pregenerate()` (the
 seed-pack builder) always forces the base model with no references, so the shipped pack stays
 reproducible regardless of one builder's local env. Cost follows the model: `imageCostFor(kind)`
 bills exercise images at `ART_EXERCISE_IMAGE_COST_USD` when the override is set (falling back to
@@ -4080,6 +4087,51 @@ own — and rides in `getArtStats().health`, which the Settings artwork card ren
 (only when art is enabled and a key is configured; a fresh install has nothing to report). That read
 *intentionally* advances the breaker: looking at health closes a cooldown that has already lapsed,
 rather than showing a pause that expired hours ago.
+
+**The starter picture pack (`src/artStarter.ts`, `seed-art/starter/`).** Most installs have no Gemini
+key, so a committed pack of pre-baked figures — ~210 of the most common exercises Cairn programs use
+(`exercises.json`: name, aliases, movement pattern, equipment, muscle group, a ≤360-char pose) plus 16
+generic movement-pattern figures (`patterns.json`: squat, hinge, lunge, horizontal/vertical push and
+pull, arms, shoulder raise, calf, core, carry, mobility, run, ride, general) — ships in the Docker image
+(`.dockerignore` allowlists `seed-art/**`). It is independent of `installSeedArt()` (the demo pack).
+Built rarely by a maintainer: `npm run starter:art:build` (`src/buildStarterArt.ts`; `--limit N`,
+`--only <name|pattern:id>`, `--force`, `--dry-run`) draws each entry through
+`pregenerateExerciseFigure` — the runtime's own `stylePrompt("exercise", name, ctx)` with the entry's
+`ArtContext`, pose leading — so a pack figure and a later bespoke one read as one set. Three anchors
+in three different body positions (Back Squat, Barbell Bench Press, Lat Pulldown) are drawn first; they ride along as style references on the rest only when the model is on
+`STYLE_REFERENCE_MODELS` (not the 2.1 default — see above). Resumable (skips files already in the pack, and reuses a
+figure already paid for in the work dir), serial, stops when the breaker opens, ffmpeg-downscaled
+512px JPEGs, `manifest.json` the inventory. Until it runs, the pack holds only the lists and everything below is a
+no-op.
+
+- **A pack hit is a real figure.** On an exercise cache miss (`GET /api/art` via `exerciseArtPath`,
+  `requestExerciseArt` — so boot `warmArt()` lands the pack for a keyless install too — and the
+  producer's non-forced path), `installStarterFigure` copies the pack file into `data/art/` under its
+  own asset key (`sha1` of the pack namespace, slug and the file's bytes, so a rebuilt figure is a new
+  asset), adds an `art_assets` row and points the name's `art_index` row at it at
+  `exerciseTargetVersion` — the same versioned URL contract as any figure. **It never queues a paid
+  generation and records nothing in `art_usage`** (the ledger is spend; a file copy neither costs nor
+  saves a Gemini call on an install that may have no key). "Redraw this figure" still bumps the
+  version and generates bespoke when a key exists.
+- **Matching is as timid as the guide matcher.** `starterFigureFor` keys the pack by
+  `expandedExerciseKey` of each name and curated alias; the candidates for a query are the query, the
+  stored name `resolveExerciseName` resolves it to, and explicit `exercise_aliases` links in either
+  direction. Every candidate must land on ONE entry — two entries (or a pack key two entries claim) is
+  ambiguous and answers nothing. Never a "similar" movement.
+- **The generic figure is a stand-in, never the picture.** With no pack hit, `GET /api/art` keeps
+  today's behavior (204 + queue when generation is possible). The PWA's `artImg` layers
+  `<img class="artimg-generic" src="/api/art/generic?q=…">` between the SVG and the photo for an
+  exercise it doesn't know to be ready. That URL is the whole design: the service worker's cache-first
+  art layer matches `/api/art` exactly, so the stand-in can never be cached as the exercise's real
+  image (keyed by full URL incl. `v`), and the photo — which keeps its 204/quiet-retry/poll semantics
+  untouched — paints over it the moment a real figure exists (key added, generation finished). The
+  generic route classifies through `movementPatternFor` (run/ride/conditioning words, the row's group,
+  `classifyPattern`, the group floor; `general` last), answers `private, max-age=86400` + a size/mtime
+  ETag, and a `no-store` 204 when the exercise already has (or the pack holds) a real figure or the
+  pattern figure was never built — the client then drops the layer (`data-remove-on-error`) and
+  remembers the miss for the usual short window. It is on the `queryTokenAllowedPath` allowlist (exact
+  path), like `/api/art`. The test harness points `CAIRN_STARTER_ART_DIR` at an empty dir, so a built
+  pack never changes what the existing art tests assert.
 
 **Warming.** `warmArt()` pre-queues every image the PWA will ask for (exercise names; the current
 non-discarded meal plan + draft's meals; ~30 recent food notes; distinct recent activity types via a
@@ -4236,9 +4288,16 @@ from **free-exercise-db** (873 movements, released into the public domain under 
 Complementary to `src/art.ts` — the generated clay-figurine tile stays the aesthetic identity of an
 exercise everywhere, and the photographs appear only *inside* the detail overlay.
 
-**Nothing is committed and nothing is fetched until the athlete asks.** The dataset is NOT vendored
-into the repo; `POST /api/exercise-guides/import` pulls the ~1 MB metadata once into
-`DATA_DIR/exercise-guides/dataset.json` and stores every row in `exercise_guides`. Photos are pulled
+**Nothing is committed; the metadata arrives on its own, the photos only on view.** The dataset is NOT
+vendored into the repo; `POST /api/exercise-guides/import` (the Settings button) pulls the ~1 MB
+metadata once into `DATA_DIR/exercise-guides/dataset.json` and stores every row in `exercise_guides`.
+A real install does the same by itself: the scheduler's background pass (`exerciseGuideAutoImportPass`,
+~10s after boot) imports once while the table is empty and there are exercises to match, records the
+outcome in `app_state.exercise_guide_auto_import`, and on a failure (offline, upstream down) quietly
+retries every 6 hours instead of waiting for the next boot. It never runs in the test harness
+(`NODE_TEST_CONTEXT`, and `test/run.mjs` sets `CAIRN_GUIDE_AUTO_IMPORT=0`), the smoke server
+(`CAIRN_SMOKE_MODE`), or when an operator sets `CAIRN_GUIDE_AUTO_IMPORT=0`, and never blocks boot.
+Linking runs as part of the import, exactly as for the button. Photos are pulled
 **lazily, one frame at a time**, on first view of a guide that actually matched something the athlete
 trains — the full library is ~1,750 photos (~65 MB), while a real exercise list needs a few dozen of
 them. Absence is the ordinary state: an un-imported library, an unmatched movement, or a photo that

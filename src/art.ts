@@ -33,13 +33,15 @@ import { exercisePoseFromExplanation, getCachedExerciseExplanation } from "./coa
 import { listFoodNotes, listMealPlans } from "./repo/nutrition.js";
 import { getGeminiApiKey, getSettings } from "./repo/settings.js";
 import { artCircuitOpen, noteArtFailure, noteArtSuccess, onArtCircuitClose } from "./artCircuit.js";
+import { starterAssetKey, starterFigureFor } from "./artStarter.js";
 import { log } from "./log.js";
 
 // Generated artwork service: photoreal/stylized PNGs for foods, exercises, and
-// activities via Google's gemini-3.1-flash-image ("nano banana 2"), cached on
+// activities via Google's gemini-nano-banana-2.1 ("Nano Banana 2.1"), cached on
 // disk under data/art/. Entirely optional — without a Gemini key (Settings,
 // GEMINI_API_KEY, or GOOGLE_AI_KEY), or with settings.art_enabled off, every
-// miss is a quiet 204 and nothing runs.
+// miss is a quiet 204 and nothing runs. Exercises have a no-key floor: the
+// starter picture pack (src/artStarter.ts) installs a pre-baked figure on a miss.
 //
 // This is a DIRECT REST call (global fetch), NOT an agents.json CLI run, and a
 // strictly serial in-process queue with in-flight dedup, mirroring enrich.ts:
@@ -59,7 +61,11 @@ const SEED_ART_DIR = path.join(__dirname, "..", "seed-art");
 // any image generation (see resolveConcept below).
 // Exported (read-only) so a regression test can pin these defaults without a
 // live network call — see test/artModelDefaults.test.js.
-export const GEMINI_IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || "gemini-3.1-flash-image";
+// gemini-nano-banana-2.1 ("Nano Banana 2.1"): Google's stable image model, checked
+// 2026-10-07 against https://ai.google.dev/gemini-api/docs/pricing — $0.0336 per 1K
+// standard-tier image, same models.generateContent request shape as the 3.x image
+// models, and it accepts up to 14 reference images (see styleReferenceParts).
+export const GEMINI_IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || "gemini-nano-banana-2.1";
 // gemini-3.6-flash: the current stable Gemini Flash-tier model.
 export const GEMINI_TEXT_MODEL = process.env.GEMINI_TEXT_MODEL || "gemini-3.6-flash";
 // Optional per-kind override for EXERCISE art only. Unset (the default) means
@@ -69,9 +75,18 @@ export const GEMINI_TEXT_MODEL = process.env.GEMINI_TEXT_MODEL || "gemini-3.6-fl
 // when successive figures share a sculptural language, and the pro image model
 // both holds style better and accepts reference images (see styleReferenceParts).
 export const GEMINI_EXERCISE_IMAGE_MODEL = process.env.GEMINI_EXERCISE_IMAGE_MODEL || "";
-// Setting the override is the opt-in to style references; this is the escape
-// hatch for an override model that doesn't take them.
+// Setting the override is the opt-in to style references, and so is a default
+// model documented to take them (STYLE_REFERENCE_MODELS); this is the escape
+// hatch for a model that turns out not to.
 const EXERCISE_STYLE_REFS_ENABLED = process.env.ART_EXERCISE_STYLE_REFS !== "0";
+// Image models Google documents as accepting reference images for style/subject
+// consistency. An explicit allowlist, never a sniff of the id: a capable model
+// named otherwise is added here deliberately, and a future id that merely
+// contains "pro" gets nothing by accident. gemini-nano-banana-2.1 accepts
+// references but copies their POSE despite being told not to (verified live
+// 2026-10-07: a front squat drawn beside a back-squat anchor came out back-racked,
+// and the pulldown went behind the neck), so it is deliberately left off.
+export const STYLE_REFERENCE_MODELS: ReadonlySet<string> = new Set(["gemini-3-pro-image"]);
 const GEMINI_TEXT_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_TEXT_MODEL}:generateContent`;
 const GENERATE_TIMEOUT_MS = 60_000;
 const TEXT_TIMEOUT_MS = 20_000;
@@ -97,11 +112,14 @@ function imageUrlFor(model: string): string {
 
 // Cost estimates for the spend ledger (art_usage). Defaults follow the selected
 // model from the list-price tables below (Google's published Gemini API pricing,
-// checked 2026-10-04, 1K standard-tier images); an unlisted model id falls back
-// to the flash-image rate. An env override always wins: ART_IMAGE_COST_USD,
+// checked 2026-10-07, 1K standard-tier images); an unlisted model id falls back
+// to the flash-image rate — deliberately the mid-tier price, not the default's: the
+// fallback only ever prices an id that is NOT in this table (so never the default),
+// and an unknown model is better over- than under-estimated on the spend card. An env override always wins: ART_IMAGE_COST_USD,
 // ART_EXERCISE_IMAGE_COST_USD, ART_TEXT_IN_USD_PER_M / ART_TEXT_OUT_USD_PER_M.
 // NOTE: Google doubles Gemini 3.x text prices on 2027-01-01; update the table then.
 export const IMAGE_COST_USD_BY_MODEL: Record<string, number> = {
+  "gemini-nano-banana-2.1": 0.0336,
   "gemini-3.1-flash-lite-image": 0.0336,
   "gemini-3.1-flash-image": 0.067,
   "gemini-3-pro-image": 0.134,
@@ -132,7 +150,7 @@ const TEXT_IN_USD_PER_M = positiveEnv("ART_TEXT_IN_USD_PER_M") || TEXT_PRICE.in;
 const TEXT_OUT_USD_PER_M = positiveEnv("ART_TEXT_OUT_USD_PER_M") || TEXT_PRICE.out;
 
 // Up to this many already-generated exercise images ride along as style
-// references when the pro image model is in play.
+// references when a reference-capable image model is in play.
 const STYLE_REFERENCE_LIMIT = 3;
 const STYLE_REFERENCE_MAX_BYTES = 2_000_000;
 
@@ -200,7 +218,7 @@ export function stylePrompt(kind: ArtKind, text: string, context?: ArtContext | 
       return `Professional studio food photography of ${text}. Plated on simple cream ceramic, centered, soft diffused natural light, photographed against a seamless warm cream studio background (#F4EFE6), gentle soft shadow beneath the dish, slightly elevated three-quarter angle, appetizing, hyper-detailed, no text, no hands, no props other than the dish. Square 1:1.`;
     case "exercise": {
       const poseLead = exercisePoseLead(context);
-      return `${poseLead}Hand-sculpted matte clay figurine of a person performing ${text}${exerciseContextClause(context)}, terracotta and warm earthen tones, minimalist studio product photograph on a seamless warm cream background (#F4EFE6), soft diffused light, gentle shadow, editorial, no text. Square 1:1.`;
+      return `${poseLead}Hand-sculpted matte clay figurine of a person performing ${text}${exerciseContextClause(context)}, the figure and every piece of equipment sculpted from the same matte terracotta clay, warm earthen tones, minimalist studio product photograph on a seamless warm cream background (#F4EFE6), soft diffused light, gentle shadow, editorial, no text. Square 1:1.`;
     }
     case "activity":
       return `Hand-sculpted matte clay figurine of a person doing ${text}, terracotta and warm earthen tones, minimalist studio product photograph on a seamless warm cream background (#F4EFE6), soft diffused light, gentle shadow, editorial, no text. Square 1:1.`;
@@ -476,10 +494,14 @@ function requestExerciseArt(text: string, settle?: (produced: boolean) => void):
   };
   const name = String(text ?? "").trim();
   if (!name) return refuse();
+  if (cachedArtPath("exercise", name)) return refuse();
+  // The starter pack's figure for exactly this exercise is installed instead —
+  // key or no key, and never as a paid generation. (Before the key gate, so the
+  // boot warm-up lands the pack for a keyless install too.)
+  if (installStarterFigure(name)) return refuse();
   if (!getGeminiApiKey()) return refuse();
   if (!getSettings().art_enabled) return refuse();
   if (artCircuitOpen(imageModelFor("exercise"))) return refuse();
-  if (cachedArtPath("exercise", name)) return refuse();
   const ctx = buildExerciseArtContext(name);
   const key = exerciseAssetKey(name, ctx, exerciseTargetVersion(name, false));
   if (failed.has(key)) return refuse();
@@ -742,6 +764,9 @@ async function warmExerciseUnderName(
   } else {
     if (failed.has(key)) return false;
     if (currentFile) return false; // already generated — regenerateArt is the repair path
+    // A starter-pack figure for exactly this exercise beats a paid generation; only
+    // the explicit redraw (force) goes past it to a bespoke figure.
+    if (installStarterFigure(text)) return false;
     const reused = findReusableExerciseAsset(text, key);
     if (reused) {
       setArtIndex("exercise", q, reused.key, version);
@@ -1374,6 +1399,89 @@ export async function pregenerate(kind: ArtKind, text: string, opts: { force?: b
   return file;
 }
 
+/**
+ * The starter-pack builder's generator (src/buildStarterArt.ts): one exercise
+ * figure through the SAME prompt the runtime producer sends — stylePrompt with the
+ * exercise's ArtContext, pose leading — so a pack figure and a later bespoke one
+ * read as one series. Written under the context's own v1 asset key in this
+ * process's DATA_DIR/art (the builder's throwaway dir); returns that path, throws
+ * on failure. `refFiles` are the pack's anchor figures, sent as style references
+ * when the model takes them; an empty list sends none.
+ */
+export async function pregenerateExerciseFigure(
+  name: string,
+  context: ArtContext,
+  opts: { refFiles?: string[]; model?: string } = {}
+): Promise<string> {
+  const text = String(name ?? "").trim();
+  if (!text) throw new Error("exercise name required");
+  const key = exerciseAssetKey(text, context, 1);
+  const model = opts.model || GEMINI_IMAGE_MODEL;
+  if (artCircuitOpen(model)) throw new Error(`art generation is paused: ${model} circuit is open`);
+  const refFiles = STYLE_REFERENCE_MODELS.has(model) && EXERCISE_STYLE_REFS_ENABLED ? (opts.refFiles ?? []) : [];
+  try {
+    await generate({ key, kind: "exercise", text, context }, { model, refFiles });
+  } catch (e) {
+    noteArtFailure(model, artErrorCode(e));
+    throw e;
+  }
+  noteArtSuccess(model);
+  return fileForKey(key);
+}
+
+// ---- starter picture pack (offline, no key) ----
+
+/**
+ * Install the starter pack's figure for this exercise into data/art/ as a real
+ * asset and point the name's art_index row at it. Returns the installed file, or
+ * null when the pack holds no figure for exactly this exercise (src/artStarter.ts
+ * is as timid as the guide matcher: expanded key, resolved stored name, or an
+ * explicit exercise_aliases link — never a similar movement).
+ *
+ * Never a generation, so it records nothing in art_usage: the spend ledger is
+ * about Gemini calls, and a file copy neither costs nor saves one on an install
+ * that may have no key at all. The version is the one the next figure for this
+ * name would land under (exerciseTargetVersion), so a name the alias repair
+ * re-pointed still moves to a fresh URL, and "Redraw this figure" later bumps past
+ * it to a bespoke generation exactly as it would for any other figure.
+ */
+export function installStarterFigure(text: string): string | null {
+  const name = String(text ?? "").trim();
+  if (!name) return null;
+  let hit: ReturnType<typeof starterFigureFor> = null;
+  try {
+    hit = starterFigureFor(name);
+  } catch {
+    return null;
+  }
+  if (!hit) return null;
+  try {
+    const key = starterAssetKey(hit);
+    const dst = fileForKey(key);
+    if (!fs.existsSync(dst)) {
+      fs.mkdirSync(ART_DIR, { recursive: true });
+      const tmp = `${dst}.tmp-${process.pid}-${crypto.randomUUID()}`;
+      fs.copyFileSync(hit.file, tmp);
+      fs.renameSync(tmp, dst);
+    }
+    // Re-stamping an existing asset row would move its created_at (addArtAsset's
+    // conflict branch), so a second name sharing this figure leaves it alone.
+    if (!getArtAsset(key)) addArtAsset(key, "exercise", hit.entry.name);
+    const q = indexQuery(name);
+    if (getArtIndex("exercise", q)?.asset_key !== key)
+      setArtIndex("exercise", q, key, exerciseTargetVersion(name, false));
+    return dst;
+  } catch (e: any) {
+    log.warn(`[art] starter figure for "${name}" could not be installed: ${e?.message ?? e}`);
+    return null;
+  }
+}
+
+/** A cached exercise figure, else the starter pack's (installed on the way). */
+export function exerciseArtPath(text: string): string | null {
+  return cachedArtPath("exercise", text) ?? installStarterFigure(text);
+}
+
 // ---- upstream failure diagnosis ----
 // The pipeline once failed for weeks emitting only "gemini responded 400": the
 // response BODY was never captured, so the cause was undiagnosable from the
@@ -1472,23 +1580,37 @@ function sniffImageMime(buf: Buffer): string | null {
  * `{ inlineData: { mimeType, data } }` with base64 `data` — see
  * https://ai.google.dev/api/generate-content.
  *
- * The gate is the OPT-IN itself: references ride along only when
- * GEMINI_EXERCISE_IMAGE_MODEL is set, because setting it is the deliberate act of
- * choosing a model for the figurine series. (It used to sniff /pro/i out of the
- * model id, which both missed a capable model named otherwise and would have
- * fired on any future id containing "pro".) The default flash tier deliberately
- * gets none: it is not documented to take reference images for style transfer,
- * and sending them would change a currently working request shape for every
- * user. ART_EXERCISE_STYLE_REFS=0 opts back out without giving up the override.
+ * The gate is an OPT-IN: references ride along when GEMINI_EXERCISE_IMAGE_MODEL
+ * is set (setting it is the deliberate act of choosing a model for the figurine
+ * series), or when the exercise model is on the STYLE_REFERENCE_MODELS allowlist —
+ * Nano Banana 2.1, the default since 2026-10-07, takes up to 14 reference images,
+ * and with the starter pack's figures installed in data/art a bespoke figure must
+ * join that set rather than restart the look. (It once sniffed /pro/i out of the
+ * model id, which both missed a capable model named otherwise and would have fired
+ * on any future id containing "pro".) A model off the list — the older flash tier —
+ * still gets none. ART_EXERCISE_STYLE_REFS=0 opts back out entirely.
  */
+export function exerciseStyleRefsEnabled(): boolean {
+  if (!EXERCISE_STYLE_REFS_ENABLED) return false;
+  return !!GEMINI_EXERCISE_IMAGE_MODEL || STYLE_REFERENCE_MODELS.has(imageModelFor("exercise"));
+}
+
 function styleReferenceParts(kind: ArtKind, excludeKey: string): any[] {
-  if (kind !== "exercise" || !GEMINI_EXERCISE_IMAGE_MODEL || !EXERCISE_STYLE_REFS_ENABLED) return [];
-  const parts: any[] = [];
+  if (kind !== "exercise" || !exerciseStyleRefsEnabled()) return [];
+  const files: string[] = [];
   for (const asset of listArtAssets("exercise", 24)) {
-    if (parts.length >= STYLE_REFERENCE_LIMIT) break;
     if (asset.key === excludeKey || !isArtAssetKey(asset.key)) continue;
+    files.push(fileForKey(asset.key));
+  }
+  return styleReferencePartsFromFiles(files);
+}
+
+/** Up to STYLE_REFERENCE_LIMIT readable images from `files`, introduced as style guidance. */
+function styleReferencePartsFromFiles(files: string[]): any[] {
+  const parts: any[] = [];
+  for (const file of files) {
+    if (parts.length >= STYLE_REFERENCE_LIMIT) break;
     try {
-      const file = fileForKey(asset.key);
       if (!fs.existsSync(file)) continue;
       const stat = fs.statSync(file);
       if (!stat.size || stat.size > STYLE_REFERENCE_MAX_BYTES) continue;
@@ -1513,13 +1635,22 @@ function styleReferenceParts(kind: ArtKind, excludeKey: string): any[] {
   ];
 }
 
-// `opts` exists for the seed-pack builder, which pins the base model and refuses
-// style references so the shipped images are reproducible (see pregenerate).
-async function generate(job: Job, opts: { model?: string; styleRefs?: boolean } = {}): Promise<void> {
+// `opts` exists for the pack builders: the seed pack pins the base model and
+// refuses style references so the shipped images are reproducible (see
+// pregenerate); the starter pack hands in its own anchor figures as the
+// references (`refFiles`, see pregenerateExerciseFigure).
+async function generate(
+  job: Job,
+  opts: { model?: string; styleRefs?: boolean; refFiles?: string[] } = {}
+): Promise<void> {
   const apiKey = getGeminiApiKey();
   if (!apiKey) throw new Error("Gemini API key missing");
   const model = opts.model ?? imageModelFor(job.kind);
-  const refs = opts.styleRefs === false ? [] : styleReferenceParts(job.kind, job.key);
+  const refs = opts.refFiles
+    ? styleReferencePartsFromFiles(opts.refFiles)
+    : opts.styleRefs === false
+      ? []
+      : styleReferenceParts(job.kind, job.key);
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), GENERATE_TIMEOUT_MS);

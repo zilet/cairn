@@ -51,9 +51,10 @@ services:
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - XAI_API_KEY=${XAI_API_KEY:-}
-      # Generated ARTWORK only (src/art.ts, gemini-3.1-flash-image) — this is NOT a
-      # coaching agent; Cairn strips it from the agent subprocess env. Without it the
-      # PWA falls back to the built-in SVG illustrations.
+      # Generated ARTWORK only (src/art.ts, gemini-nano-banana-2.1) — this is NOT a
+      # coaching agent; Cairn strips it from the agent subprocess env. Without it
+      # exercises still show the bundled starter figures, and everything else falls
+      # back to the built-in SVG illustrations.
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       # Optional artwork model/cost overrides (src/art.ts; documented in
       # .env.example). Unset = the code's pinned defaults. Without these

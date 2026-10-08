@@ -109,6 +109,9 @@ export function queryTokenAllowedPath(p: string, method = "GET"): boolean {
   // The PWA renders generated artwork via <img src=…?token=…>; an <img> can't set
   // request headers, so the query token is its only auth path. (204/PNG GET only.)
   if (p === "/api/art") return true;
+  // The generic movement-pattern stand-in layered under an exercise figure (same
+  // <img> constraint; exact path, GET-only, a starter-pack image or a 204).
+  if (p === "/api/art/generic") return true;
   // Demonstration photos in the exercise "How to" sheet render via <img> as well.
   // Both segments are exact: a dataset slug and a single-digit frame index, so no
   // broader guide path (import, attach) is reachable with a query token.
