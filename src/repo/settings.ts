@@ -160,6 +160,8 @@ export const TASK_POLICY: Record<RoutableTask, "accuracy" | "rotation"> = {
 //     coach-draft op (`proposal`) — all three shape a plan change, and the composer
 //     is the most consequential of them (it writes the whole week), so it inherits
 //     the same deep/xhigh execution profile rather than declaring a thinner one.
+//     (The welcome's first week runs as its own op, `welcome_week`, with its own
+//     thinner profile — see TASK_EXECUTION_PROFILES.)
 //   - marker reconciliation (`marker_reconcile`) shares the "health" task — it's
 //     the same accuracy-critical lab-data domain as document ingestion.
 // Extending this table is the only thing needed when a future op should share an
@@ -222,6 +224,12 @@ export const TASK_EXECUTION_PROFILES: Record<string, AbstractExecutionProfile> =
   onboard: { model_class: "deep", reasoning: "medium" },
   // The connect step's "say hello": a one-line round-trip that proves the CLI answers.
   agent_hello: { model_class: "fast", reasoning: "low" },
+  // The welcome's first week (src/coachOps/welcome.ts → composeWeek, op "welcome_week").
+  // Deliberately thinner than `proposal`, which the Plan tab's / MCP compose keeps: this
+  // is a STARTING week the evolution loop refines from what the person actually logs,
+  // and the person is sitting in front of the screen waiting for it (the deep/xhigh run
+  // measured ~4 minutes live). It still travels the same contract parse and autonomy path.
+  welcome_week: { model_class: "fast", reasoning: "medium" },
   exercise_reconcile: { model_class: "deep", reasoning: "medium" },
   // Self-critique passes. The NUMERIC half of each verify is no longer a model
   // call at all: `src/repo/verify-floors.ts` computes the kcal / protein / fiber

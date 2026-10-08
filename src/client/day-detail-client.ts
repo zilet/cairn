@@ -94,8 +94,9 @@
     return /^[+−-]/.test(String(load.change).trim()) ? String(load.change).trim() : "";
   }
 
-  function exerciseRowsHtml(lift: DayDetailLift): string {
-    return lift.exercises
+  /** A day's movements as the gallery draws them (the day page, and Program's undated rows opened in place). */
+  function exerciseListHtml(exercises: readonly DayDetailExercise[]): string {
+    return exercises
       .map((ex) =>
         exerciseRowHtml({
           name: ex.name,
@@ -108,6 +109,10 @@
         })
       )
       .join("");
+  }
+
+  function exerciseRowsHtml(lift: DayDetailLift): string {
+    return exerciseListHtml(lift.exercises);
   }
 
   // ---- hero ----
@@ -345,7 +350,7 @@
     return `<p class="ddv-empty" role="status">This day couldn't be opened just now.</p>`;
   }
 
-  const CAIRN_DAY_DETAIL_VIEW = { dayDetailHtml, exerciseRowHtml, skeletonHtml, errorHtml };
+  const CAIRN_DAY_DETAIL_VIEW = { dayDetailHtml, exerciseRowHtml, exerciseListHtml, skeletonHtml, errorHtml };
 
   Object.assign(globalThis, { CairnDayDetailView: CAIRN_DAY_DETAIL_VIEW });
 }

@@ -1037,6 +1037,8 @@ export interface ClientPlanLookAheadLift {
   more: number;
   /** Logged already (today's row only). */
   done: boolean;
+  /** `order` mode only: the plan day's exercises with their next prescription. */
+  exercises?: import("./day-detail.js").DayDetailExercise[];
 }
 
 export interface ClientPlanLookAheadRun {
@@ -3783,6 +3785,22 @@ export interface ClientWelcomePhaseMeta {
   fuel?: { target_kcal: number | null; protein_g: number | null } | null;
   fuel_state?: "set" | "existing" | "none";
   detail?: string;
+  /** The first week's days as they are written — a preview, at most 7 rows. */
+  days_so_far?: ClientWelcomeWeekDay[];
+}
+
+/**
+ * GET /api/welcome/first-week (and POST …/seen, which answers the status after): the
+ * welcome's first week as the rest of the app sees it (src/repo/first-week.ts) —
+ * `building` with the days written so far, a one-shot `ready`/`failed` until some
+ * surface has said so, else `none`. `final`: nothing is building or owed.
+ */
+export interface ClientFirstWeekStatus {
+  state: "building" | "ready" | "failed" | "none";
+  job_id: number | null;
+  days: ClientWelcomeWeekDay[];
+  week_state: string | null;
+  final: boolean;
 }
 
 /** POST /api/agents/:name/verify: one "say hello" round-trip for that agent only. */
@@ -4215,6 +4233,8 @@ export interface ClientApiResponses {
   "/api/supplements/understand": { ok: true; supplements: ClientSupplement[] };
   "/api/onboard": ClientOkResponse;
   "/api/welcome": ClientWelcomeQueuedResponse;
+  "/api/welcome/first-week": ClientFirstWeekStatus;
+  "/api/welcome/first-week/seen": ClientFirstWeekStatus;
   "/api/chat": ClientChatMessage[] | ClientChatPostResponse;
   "/api/chat/sessions": ClientChatSessionSummary[];
   "/api/chat/sessions/:sessionId": ClientChatMessage[];

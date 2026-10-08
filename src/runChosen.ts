@@ -529,10 +529,20 @@ export interface StreamingRunDeps {
 export async function runChosenStreaming(
   agent: string | undefined,
   prompt: string,
-  opts: RunOpts & { op?: string; onDelta?: (chunk: string) => void; boundedReads?: boolean } = {},
+  opts: RunOpts & {
+    op?: string;
+    onDelta?: (chunk: string) => void;
+    boundedReads?: boolean;
+    /**
+     * Hand `onDelta` the model's RAW text instead of the marker-gated prose — for a
+     * JSON-only op that previews its own structure as it streams (the welcome's first
+     * week, src/streamedJsonArray.ts). The final parse is unchanged either way.
+     */
+    rawDeltas?: boolean;
+  } = {},
   deps: StreamingRunDeps = {}
 ) {
-  const { onDelta, boundedReads, ...rest } = opts;
+  const { onDelta, boundedReads, rawDeltas, ...rest } = opts;
   const op = rest.op ?? "auto";
   const runOneShot = deps.runOneShot ?? runChosen;
   const runBounded = deps.runBounded ?? runChosenWithCoachReads;
@@ -556,12 +566,14 @@ export async function runChosenStreaming(
           stream: { onDelta, first, runStreaming, supportsStream },
         });
       }
-      const gate = createJobStreamFilter(onDelta);
+      const gate = rawDeltas ? { push: onDelta, finish: () => {} } : createJobStreamFilter(onDelta);
       const started = Date.now();
       try {
         const res = await runStreaming(first, prompt, {
           signal: rest.signal,
           timeoutMs: rest.timeoutMs,
+          // Who is waiting decides the spawn queue, streamed or not (absent = background).
+          ...(rest.priority ? { priority: rest.priority } : {}),
           mcpConfigArgs: rest.mcpConfigArgs,
           model: rest.model,
           reasoning: rest.reasoning,

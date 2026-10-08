@@ -31,7 +31,10 @@ import {
   onboardFromText,
   whatIf,
   welcomeCoach,
+  welcomeWeekFrom,
+  welcomeWeekPreview,
 } from "./coachOps.js";
+import { recordFirstWeekOutcome } from "./repo/first-week.js";
 import { readToday } from "./domain/brain/day-read-use-case.js";
 import { runCaseConference } from "./domain/brain/case-conference.js";
 import { applyDueAnnouncedDecisions, applyProposalWithAutonomy } from "./domain/brain/autonomy-service.js";
@@ -362,6 +365,35 @@ const runner = createSerialRunner(processAgentJob, (id, e) => {
   log.error(`[jobs] job#${id} failed (${diagnosticErrorName(e)})`);
 });
 
+// The welcome's week, finished by the compose job a busy host handed it to: the same
+// one-shot "ready" notice the welcome itself records (src/repo/first-week.ts).
+function recordHandedOffWeek(id: number, result: any): void {
+  try {
+    const landed = (repo.getPlan() as any[]).some((d) => Array.isArray(d?.items) && d.items.length > 0);
+    const composed = !!result?.ok && Number(result?.days) > 0;
+    const announced = !!result?.autonomy?.announced;
+    const weekState = !composed ? "failed" : landed ? "applied" : announced ? "announced" : "draft";
+    const week = landed ? welcomeWeekFrom(repo.getPlan() as any[]) : welcomeWeekFrom(result?.proposal?.parsed?.days);
+    recordFirstWeekOutcome(id, weekState, week);
+  } catch (err) {
+    recordAsyncFailure("agent_jobs", "welcome_week_notice", err);
+  }
+}
+
+// Boot recovery's per-kind resume hook. A `welcome` cut short during its WEEK (the reply,
+// fuel and exchange already landed — the phase meta says step "week") is put back in the
+// queue to finish only the week; composeWeek refuses a second week, so a week that landed
+// just before the restart reads as the welcome's own. Bounded, so a job that keeps taking
+// the server down with it is not resumed forever. Every other kind stays interrupted.
+export const WELCOME_RESUME_LIMIT = 2;
+export function interruptedJobResume(job: { kind?: string; meta?: any; input?: any }): any | null {
+  if (job?.kind !== "welcome" || job?.meta?.step !== "week") return null;
+  const input = job.input && typeof job.input === "object" ? job.input : {};
+  const resumes = Number(input.resume_count) || 0;
+  if (!String(input.text ?? "").trim() || resumes >= WELCOME_RESUME_LIMIT) return null;
+  return { ...input, resume_week: true, resume_count: resumes + 1 };
+}
+
 export function enqueueAgentJob(id: number): void {
   runner.enqueue(id);
 }
@@ -498,12 +530,21 @@ async function processAgentJob(id: number): Promise<void> {
         // `explicit_request` is set only by the first-run welcome handing its week here when
         // the host was too busy to compose it inline: the person asked for this week in
         // their own words, so it lands at their boundary (today) like their other asks.
+        // It is still the welcome's week, so it runs as the welcome's op (the thinner
+        // profile) and streams its days into this job's meta for Today's card.
         const explicitRequest = input.explicit_request === true;
         result = await composeWeek(
           agent,
           input.instruction != null ? String(input.instruction) : undefined,
           hooks,
-          explicitRequest ? { explicitRequest: true } : undefined
+          explicitRequest
+            ? {
+                explicitRequest: true,
+                welcome: true,
+                onDays: (days) =>
+                  onPhase("composing your first week", { step: "week", days_so_far: welcomeWeekPreview(days) }),
+              }
+            : undefined
         );
         chosen = result?.agent ?? null;
         if (result?.proposal?.id) ref = { ref_table: "plan_proposals", ref_id: result.proposal.id };
@@ -514,6 +555,7 @@ async function processAgentJob(id: number): Promise<void> {
             recordAsyncFailure("agent_jobs", "welcome_week_land_now", err);
           }
         }
+        if (explicitRequest && !isAgentBusyResult(result)) recordHandedOffWeek(id, result);
         break;
       }
       case "meal_plan": {
@@ -661,7 +703,14 @@ async function processAgentJob(id: number): Promise<void> {
         // The coach's first conversation (src/coachOps/welcome.ts). A week the busy host
         // could not compose inline becomes its own durable compose job, which defers and
         // retries on congestion like every other job instead of being dropped.
-        result = await welcomeCoach(agent, String(input.text ?? ""), hooks);
+        // A welcome a restart cut short during its week resumes with only the week
+        // (recoverAgentJobs re-queued it with `resume_week`; job.meta holds what landed).
+        result = await welcomeCoach(
+          agent,
+          String(input.text ?? ""),
+          hooks,
+          input.resume_week === true ? { resume: job.meta ?? {} } : undefined
+        );
         chosen = result?.agent ?? null;
         if (result?.ok && result.week_state === "queued") {
           try {
@@ -675,6 +724,13 @@ async function processAgentJob(id: number): Promise<void> {
           } catch (err) {
             recordAsyncFailure("agent_jobs", "welcome_week_queue", err);
             result = { ...result, week_state: "failed" };
+          }
+        }
+        if (result?.ok) {
+          try {
+            recordFirstWeekOutcome(id, result.week_state, result.week);
+          } catch (err) {
+            recordAsyncFailure("agent_jobs", "welcome_week_notice", err);
           }
         }
         break;
@@ -793,19 +849,23 @@ export function abortAllJobs() {
 
 // Crash recovery (boot): mark interrupted 'running' jobs errored (their coachOp
 // may have partially persisted a draft — re-running risks duplicates) and
-// re-enqueue the 'queued' ones that never started. Mirrors recoverChatTurns.
+// re-enqueue the 'queued' ones that never started. Mirrors recoverChatTurns. The one
+// exception is a kind with a resume hook (interruptedJobResume: a welcome cut short
+// during its week), which goes back in the queue to finish idempotently.
 export function recoverAgentJobs(): {
   requeued: number;
   interrupted: number;
   structure_resumed: number;
   structure_settled: number;
+  resumed: number;
 } {
-  const { requeue, interrupted } = repo.recoverAgentJobs();
+  const { requeue, interrupted, resumed } = repo.recoverAgentJobs(interruptedJobResume);
   if (interrupted) recordAsyncFailure("agent_jobs", "restart_interruption", new Error("interrupted"));
   for (const id of requeue) enqueueAgentJob(id);
   if (requeue.length || interrupted) {
     log.info(`[jobs] recovered ${requeue.length} queued + ${interrupted} interrupted job(s).`);
   }
+  if (resumed.length) log.info(`[jobs] resuming ${resumed.length} interrupted welcome week(s).`);
   // A chat structure request rides on one of those jobs, and the flag it wrote is only
   // ever settled by the worker. An interruption therefore left the ask holding a dead
   // job id and no outcome — invisible, unbuildable, and re-asking those exact words
@@ -827,6 +887,7 @@ export function recoverAgentJobs(): {
     interrupted,
     structure_resumed: structure.resumed.length,
     structure_settled: structure.settled.length,
+    resumed: resumed.length,
   };
 }
 

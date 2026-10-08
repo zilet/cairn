@@ -50,6 +50,7 @@ export function recordAgentRun(r: {
   status?: string | null;
   error_class?: string | null;
   error_message?: string | null;
+  reject_reason?: string | null;
   exit_code?: number | null;
   model?: string | null;
   input_tokens?: number | null;
@@ -100,7 +101,11 @@ export function recordAgentRun(r: {
       r.tried_json ? 1 : 0,
       String(status).slice(0, 60),
       classifiedError,
-      classifiedError ? `${classifiedError}: agent attempt failed` : null,
+      classifiedError
+        ? r.reject_reason
+          ? `${classifiedError}: ${telemetryIdentifier(r.reject_reason, 60)}`
+          : `${classifiedError}: agent attempt failed`
+        : null,
       exitCode != null && Number.isFinite(exitCode) ? Math.round(exitCode) : null,
       telemetryModelName(r.model),
       inputTokens != null && Number.isFinite(inputTokens) ? Math.round(inputTokens) : null,
@@ -341,7 +346,11 @@ export function getAgentStats(opts: { recent?: number; days?: number } = {}) {
       tried_json: !!r.tried_json,
       status: r.status || (r.ok ? "ok" : "error"),
       error_class: r.error_class ?? null,
-      error_message: r.error_class ? `${r.error_class}: agent attempt failed` : null,
+      error_message: r.error_class
+        ? typeof r.error_message === "string" && r.error_message.startsWith(`${r.error_class}: `)
+          ? r.error_message.slice(0, 120)
+          : `${r.error_class}: agent attempt failed`
+        : null,
       exit_code: r.exit_code == null ? null : Number(r.exit_code),
       model: r.model ?? null,
       input_tokens: r.input_tokens == null ? null : Number(r.input_tokens),

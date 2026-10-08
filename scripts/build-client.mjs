@@ -95,6 +95,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/today-worth-client.ts", output: "public/js/today-worth-client.js" },
   { source: "src/client/day-open-client.ts", output: "public/js/day-open-client.js" },
   { source: "src/client/coach-link-client.ts", output: "public/js/coach-link-client.js" },
+  { source: "src/client/first-week-client.ts", output: "public/js/first-week-client.js" },
   { source: "src/client/day-detail-model.ts", output: "public/js/day-detail-model.js" },
   { source: "src/client/day-glance-model.ts", output: "public/js/day-glance-model.js" },
   { source: "src/client/day-detail-run-client.ts", output: "public/js/day-detail-run-client.js" },
@@ -594,6 +595,9 @@ export const BUNDLES = [
       // The coach link (EAGER, tiny): is a coach connected, Today's one line and Ask's
       // connect card. The welcome it opens is the lazy "welcome" bundle.
       "public/js/coach-link-client.js",
+      // The welcome's first week outside the welcome (EAGER, small): Today's "coming
+      // together" card and the one-shot "ready" notice, wherever the app is open.
+      "public/js/first-week-client.js",
       // Train's energy read (and the hero it paints with) stays EAGER: Fuel paints
       // it (#energyCard) and it owns the nutrition_checkin job reconnector, which
       // must register at boot.

@@ -527,8 +527,11 @@ async function paintPlanEditor(reuseHeads?: PlanHeadReads): Promise<void> {
     // "+ Add day" — mirrors the Train tab's start entry (dayPicked=false →
     // openSession on today) so an empty plan is never a dead end.
     if (!model.length) {
+      // The welcome's first week is being composed right now: show it coming together
+      // rather than offering to compose a second one beside it (first-week-client.ts).
+      const firstWeek = (globalThis as { CairnFirstWeek?: FirstWeekApi }).CairnFirstWeek;
       root.innerHTML = `<div class="plan-empty reveal">
-        ${composeWeekEntryHtml(false)}
+        ${firstWeek?.building() ? firstWeek.slotHtml() : composeWeekEntryHtml(false)}
         <p class="plan-empty-line plan-empty-alt">Or build the days yourself below — or just start training and log as you go.</p>
         <button class="draftbtn plan-empty-start" type="button" id="planEmptyStart">Start training anyway →</button>
       </div>`;

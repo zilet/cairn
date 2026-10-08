@@ -173,6 +173,8 @@ const PERSISTED_KEYS = {
   // The last welcome this browser started ({id, text}), so a reload after a server
   // restart names the interruption and offers Try again with the same words.
   "cairn.welcome.job": ["welcome-meet-controller"],
+  // This device knows the welcome's first week has nothing left to follow (first-week-client.ts).
+  "cairn.firstWeek.done": ["first-week-client"],
   "cairn.app.identity.v1": ["app-identity-model"],
   "cairn.app.readd.dismissed.v1": ["app-identity-model"],
   // The five-home navigation's one-time "what moved here" line (v2 wave 5).

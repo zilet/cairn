@@ -259,6 +259,8 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/supplements/understand",
   "/onboard",
   "/welcome",
+  "/welcome/first-week",
+  "/welcome/first-week/seen",
   "/chat",
   "/chat/search",
   "/chat/sessions",

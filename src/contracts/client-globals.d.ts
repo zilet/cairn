@@ -2088,6 +2088,7 @@ declare global {
    */
   declare const CairnDayDetailView: {
     dayDetailHtml(detail: import("./day-detail.js").DayDetail, opts?: { inline?: boolean; titleId?: string }): string;
+    exerciseListHtml(exercises: readonly import("./day-detail.js").DayDetailExercise[]): string;
     exerciseRowHtml(row: {
       name: string;
       muscleGroup?: string | null;
@@ -7450,7 +7451,7 @@ declare global {
   type ClientProgramWeekView = {
     mode: "calendar" | "order" | "empty";
     groups: ClientProgramWeekGroup[];
-    order: Array<{ title: string; lifts: string }>;
+    order: Array<{ title: string; lifts: string; exercises: import("./day-detail.js").DayDetailExercise[] }>;
   };
   type ClientProgramWeekDeps = {
     peekCached<T = unknown>(key: string): { data: T; fresh: boolean } | null;

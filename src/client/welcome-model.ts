@@ -44,7 +44,9 @@
     const detail = typeof meta.detail === "string" ? meta.detail.trim().slice(0, 80) : "";
     // The fuel is settled once the week step starts, even when there is none to show.
     const fuelKnown = step === "week";
-    return { step, reply, fuelKnown, fuel: fuelKnown ? fuelLines(meta.fuel, meta.fuel_state) : null, detail };
+    // The week's days as the composer writes them: a preview, painted row by row.
+    const days = step === "week" ? weekRows(meta.days_so_far).slice(0, 7) : [];
+    return { step, reply, fuelKnown, fuel: fuelKnown ? fuelLines(meta.fuel, meta.fuel_state) : null, detail, days };
   }
 
   /** A job the server marked interrupted (a restart mid-run): a retry, never a verdict. */

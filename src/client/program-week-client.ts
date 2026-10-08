@@ -51,17 +51,24 @@
 
   const LIFT_DAYS_ASK = "The days I lift each week are: ";
 
+  /**
+   * A lifting day with no date yet (no lifting weekdays known): its row opens in place to
+   * the day's movements, the gallery the day page draws, since there is no day page to open.
+   */
+  function orderRowHtml(lift: ClientProgramWeekView["order"][number], i: number): string {
+    const head = `<span class="pahead-item is-strength"><span class="pahead-lift-t">${escHtml(lift.title)}</span>${
+      lift.lifts ? `<span class="pahead-lifts">${escHtml(lift.lifts)}</span>` : ""
+    }</span>`;
+    const k = `<span class="pahead-order-k lbl">${i === 0 ? "Next" : "Then"}</span>`;
+    if (!lift.exercises.length) return `<li class="pahead-order-row">${k}${head}</li>`;
+    return `<li class="pahead-order-row">${k}<details class="pahead-open">
+        <summary aria-label="${escAttr(`${lift.title}, show its exercises`)}">${head}<span class="pahead-open-go" aria-hidden="true">›</span></summary>
+        <div class="pahead-open-body">${CairnDayDetailView.exerciseListHtml(lift.exercises)}</div>
+      </details></li>`;
+  }
+
   function orderHtml(view: ClientProgramWeekView): string {
-    const rows = view.order
-      .map(
-        (lift, i) => `<li class="pahead-order-row">
-        <span class="pahead-order-k lbl">${i === 0 ? "Next" : "Then"}</span>
-        <span class="pahead-item is-strength"><span class="pahead-lift-t">${escHtml(lift.title)}</span>${
-          lift.lifts ? `<span class="pahead-lifts">${escHtml(lift.lifts)}</span>` : ""
-        }</span>
-      </li>`
-      )
-      .join("");
+    const rows = view.order.map(orderRowHtml).join("");
     // The lifting weekdays have one setter, the conversation: the lede offers it, prefilled.
     return `<p class="pahead-lede">No lifting weekdays are set yet, so your lifting days simply come round in this order. <button class="linkbtn" type="button" data-pahead-ask="${escAttr(LIFT_DAYS_ASK)}">Tell the coach which days you lift</button></p>
       <ol class="pahead-order">${rows}</ol>`;

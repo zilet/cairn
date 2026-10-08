@@ -27,6 +27,7 @@ import {
   violatesReadingGrammar,
 } from "./repo/day-read.js";
 import { log } from "./log.js";
+import { noteContractRejection } from "./contractRejection.js";
 
 // The PWA drives every request with its LOCAL calendar date (state.logDate), so
 // the cache key — and the nightly precompute — must use the server's local date
@@ -539,7 +540,7 @@ export function clampAgentEstMinutes(
   return rounded;
 }
 
-export function isValidDayReadAgentResult(
+export function dayReadAgentRejection(
   value: any,
   baseline?: { kind?: unknown; signals?: Record<string, any> },
   // The trainingSignals rollup, for a caller holding it directly. Omitted (every
@@ -548,8 +549,8 @@ export function isValidDayReadAgentResult(
   trainingSignals?: Record<string, any> | null,
   // The athlete's own steer exempts the named-brake rule (agentCautionLacksBrake).
   opts: { override?: boolean } = {}
-): boolean {
-  if (!matchesJsonSchema(DAY_READ_SCHEMA, value, { coerce: true })) return false;
+): string | null {
+  if (!matchesJsonSchema(DAY_READ_SCHEMA, value, { coerce: true })) return "schema_mismatch";
   const validShape = !!(
     value &&
     typeof value === "object" &&
@@ -560,14 +561,20 @@ export function isValidDayReadAgentResult(
     (value.focus == null || typeof value.focus === "string") &&
     (value.est_minutes == null || Number.isFinite(Number(value.est_minutes)))
   );
-  if (!validShape) return false;
+  if (!validShape) {
+    if (value?.kind === "coach_read") return "coach_read_as_final";
+    if (!(value?.kind === "train" || value?.kind === "easy" || value?.kind === "rest" || value?.kind === "done"))
+      return "bad_field:kind";
+    if (typeof value?.why !== "string" || !value.why.trim()) return "missing_field:why";
+    return "bad_shape";
+  }
   // Entities are decoded by decodeDayReadAgentProse before this predicate sees the
   // value, so anything still matching here survived a decode pass — double-escaped
   // prose, which is rejected rather than unwrapped (see the note above). The `focus`
   // field is checked too: it is rendered in the headline.
   for (const field of ["headline", "why", "focus"] as const) {
     const raw = (value as Record<string, unknown>)[field];
-    if (typeof raw === "string" && HTML_ENTITY.test(raw)) return false;
+    if (typeof raw === "string" && HTML_ENTITY.test(raw)) return `html_entity:${field}`;
   }
   // The reading grammar (VISION.md Amendment 2) applies to the layer that can actually
   // break it. The deterministic vocabulary has been held to these four rules for a
@@ -578,18 +585,32 @@ export function isValidDayReadAgentResult(
   // rejecting here is exactly right, because acceptParsed retries and the fallback
   // ladder can still land a compliant sentence (and the deterministic floor, which
   // passes this predicate by construction, is the worst case).
-  if (violatesReadingGrammar(value.headline)) return false;
-  if (violatesReadingGrammar(value.why)) return false;
-  if (dayReadProseConsistencyIssue(value, baseline?.signals, trainingSignals)) return false;
+  const headlineRule = violatesReadingGrammar(value.headline);
+  if (headlineRule) return `grammar:${headlineRule}:headline`;
+  const whyRule = violatesReadingGrammar(value.why);
+  if (whyRule) return `grammar:${whyRule}:why`;
+  if (dayReadProseConsistencyIssue(value, baseline?.signals, trainingSignals)) return "prose_inconsistent";
   // Whether meaningful training is already DONE is a server-owned fact, not a
   // nuance the prose layer may reinterpret. Reject a mismatch before fallback
   // stops so the same agent can repair it or the next healthy agent can answer.
-  if (baseline?.kind === "done") return value.kind === "done";
-  if (baseline?.kind != null && value.kind === "done") return false;
+  if (baseline?.kind === "done") return value.kind === "done" ? null : "kind_vs_done_baseline";
+  if (baseline?.kind != null && value.kind === "done") return "done_without_baseline";
   // Quieter than a train baseline only on a NAMED, FRESH brake — rejected here, like
   // the grammar, so acceptParsed can retry and the next agent can answer compliantly.
-  if (!opts.override && agentCautionLacksBrake(value, baseline)) return false;
-  return true;
+  if (!opts.override && agentCautionLacksBrake(value, baseline)) return "caution_without_brake";
+  return null;
+}
+
+/** Boolean form of {@link dayReadAgentRejection}; a rejection's code is noted for telemetry. */
+export function isValidDayReadAgentResult(
+  value: any,
+  baseline?: { kind?: unknown; signals?: Record<string, any> },
+  trainingSignals?: Record<string, any> | null,
+  opts: { override?: boolean } = {}
+): boolean {
+  const rejection = dayReadAgentRejection(value, baseline, trainingSignals, opts);
+  if (rejection) noteContractRejection(rejection);
+  return rejection === null;
 }
 
 function agentIssueFor(error: unknown): "invalid_response" | "unreachable" {

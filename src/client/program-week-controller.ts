@@ -3,7 +3,8 @@
 // Program landing painted (its `[data-pahead-body]` slot) from GET /api/plan/look-ahead:
 // the SWR cache first (a warm open never flashes a skeleton), then a quiet revalidate
 // that repaints only when the read changed. Each day row opens through the app's one
-// delegated `data-open-day` opener, so this wires only the empty state's two doors.
+// delegated `data-open-day` opener, so this wires only the empty state's two doors (and
+// the exercise names of an undated day opened in place).
 // Idempotent per host through CairnUiActions.mount; returns the teardown.
 {
   const KEY = "plan:look-ahead";
@@ -19,6 +20,12 @@
       if (!target) return;
       painted = true;
       target.innerHTML = CairnProgramWeek.bodyHtml(CairnProgramWeekModel.programWeekModel(data));
+      // An undated day opened in place lists its movements; each name opens its exercise detail.
+      if (typeof wireGuides === "function") {
+        try {
+          wireGuides(target);
+        } catch {}
+      }
     };
 
     const teardown = CairnUiActions.mount(host, "pahead", ({ delegate }) => {

@@ -615,7 +615,10 @@ function paintTrainOverview(data: TovData): void {
   if (!hasAny) {
     // Nothing trained yet — lead with the journey line so a fresh install still
     // opens to something, not an empty screen.
+    // The welcome's first week, while it comes together (first-week-client.ts, eager).
+    const firstWeek = (globalThis as { CairnFirstWeek?: FirstWeekApi }).CairnFirstWeek;
     view.innerHTML = head + `<div class="tov-empty">` +
+      (firstWeek?.slotHtml() ?? "") +
       tovStartHtml() +
       tovJourneyPointerHtml(data) +
       emptyStateHtml(art("exercise", "barbell row"), "Log a session and this becomes your training map — what's trained, what's due, and where to push next.") +

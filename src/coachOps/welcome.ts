@@ -212,7 +212,16 @@ export interface WelcomePhaseMeta {
   fuel?: { target_kcal: number | null; protein_g: number | null } | null;
   fuel_state?: "set" | "existing" | "none";
   detail?: string;
+  /**
+   * The first week's days as the composer writes them (welcomeWeekPreview): a PREVIEW
+   * the Meet stage and Today's "coming together" card paint row by row. The applied
+   * week is the final result's `week`. At most WELCOME_PREVIEW_MAX_DAYS rows.
+   */
+  days_so_far?: WelcomeWeekDay[];
 }
+
+/** The most rows a phase meta's `days_so_far` carries (a week, with room to spare). */
+export const WELCOME_PREVIEW_MAX_DAYS = 7;
 
 // The calm floor for the coach's first words when the agent's own sentence is missing or
 // breaks the reading grammar. Rotated like every other deterministic sentence; each one
@@ -302,6 +311,24 @@ export function welcomeWeekFrom(days: any[] | null | undefined): WelcomeWeekDay[
     }
   }
   return lifting.map((d) => ({ dow: null, day_number: d.day_number, name: d.name }));
+}
+
+/**
+ * The days that have arrived so far, in the reveal's shape. The weekday map fills a
+ * short pool by repeating it (a 2-day pool over 4 named weekdays lifts both twice), and
+ * that is right for a finished week but would show a day twice while the rest are still
+ * being written — so each plan day keeps only its first weekday here.
+ */
+export function welcomeWeekPreview(days: any[] | null | undefined): WelcomeWeekDay[] {
+  const seen = new Set<number>();
+  const out: WelcomeWeekDay[] = [];
+  for (const day of welcomeWeekFrom(days) ?? []) {
+    if (seen.has(day.day_number)) continue;
+    seen.add(day.day_number);
+    out.push(day);
+    if (out.length >= WELCOME_PREVIEW_MAX_DAYS) break;
+  }
+  return out;
 }
 
 export function welcomeReplyFrom(parsed: any, date = localDateISO()): string {
@@ -438,11 +465,19 @@ async function signedOutAgent(tried: { agent: string; availability?: { state?: s
  * Only step a can fail the op: no agent answered ⇒ {ok:false, error, tried} and nothing
  * is marked done, so the person can simply try again.
  */
-export async function welcomeCoach(agent: string | undefined, text: string, hooks?: OpHooks): Promise<WelcomeResult> {
+export async function welcomeCoach(
+  agent: string | undefined,
+  text: string,
+  hooks?: OpHooks,
+  // A restart cut this welcome short during its week (src/agentJobs.ts boot recovery):
+  // steps a–c already landed, so only the week runs, from the job's last phase meta.
+  opts: { resume?: Partial<WelcomePhaseMeta> | null } = {}
+): Promise<WelcomeResult> {
   const raw = String(text ?? "")
     .trim()
     .slice(0, 4000);
   const today = localDateISO();
+  if (raw && opts.resume) return resumeWelcomeWeek(agent, raw, opts.resume, today, hooks);
   if (!raw) {
     return {
       ok: false,
@@ -506,51 +541,7 @@ export async function welcomeCoach(agent: string | undefined, text: string, hook
 
   // d. the first week
   const weekMeta: WelcomePhaseMeta = { step: "week", frac: { done: 2, total: 3 }, reply, fuel, fuel_state };
-  hooks?.onPhase?.(WELCOME_PHASES.week, weekMeta);
-  let week: WelcomeWeekDay[] | null = null;
-  let week_state: WelcomeWeekState = "none";
-  if (trainingWeekExists()) {
-    week_state = "existing";
-    week = welcomeWeekFrom(getPlan() as any[]);
-  } else {
-    try {
-      // The composer's own phase words ride as `detail`: a small second line under the
-      // welcome's step, so the waiting card keeps saying what is actually happening.
-      const composed: any = await composeWeek(
-        chosen,
-        raw,
-        {
-          signal: hooks?.signal,
-          onPhase: (detail: string) => hooks?.onPhase?.(WELCOME_PHASES.week, { ...weekMeta, detail }),
-        },
-        { explicitRequest: true, priority: "interactive" }
-      );
-      if (composed?.agent_busy) {
-        week_state = "queued"; // the job runner hands it to its own durable compose job
-      } else if (composed?.ok && Number(composed?.days) > 0) {
-        if (composed?.autonomy?.announced && composed?.autonomy?.effective_date === today) {
-          try {
-            applyDueAnnouncedDecisions(today);
-          } catch (err) {
-            log.warn("[welcome] the first week could not land today", { error: err });
-          }
-        }
-        if (trainingWeekExists()) {
-          week_state = "applied";
-          week = welcomeWeekFrom(getPlan() as any[]);
-        } else {
-          week_state = composed?.autonomy?.announced ? "announced" : "draft";
-          week = welcomeWeekFrom(composed?.proposal?.parsed?.days);
-        }
-      } else {
-        week_state = "failed";
-      }
-    } catch (error) {
-      if (hooks?.signal?.aborted) throw error;
-      log.warn("[welcome] composing the first week failed", { error });
-      week_state = "failed";
-    }
-  }
+  const { week, week_state } = await welcomeWeek(chosen, raw, weekMeta, today, hooks);
 
   return {
     ok: true,
@@ -563,5 +554,113 @@ export async function welcomeCoach(agent: string | undefined, text: string, hook
     agent: chosen,
     tried: run.tried,
     agent_status: agentStatusFor({ ok: true, agent: chosen, tried: run.tried }),
+  };
+}
+
+/**
+ * Step d on its own: the first week, composed as the welcome's own op (the thinner
+ * `welcome_week` profile) and streamed where the agent can, each day riding the phase
+ * meta as `days_so_far` the moment it is written. `resumed`: a restart interrupted this
+ * week, so a week already on the plan is the welcome's own, landed before the restart.
+ */
+async function welcomeWeek(
+  chosen: string | undefined,
+  raw: string,
+  weekMeta: WelcomePhaseMeta,
+  today: string,
+  hooks?: OpHooks,
+  resumed = false
+): Promise<{ week: WelcomeWeekDay[] | null; week_state: WelcomeWeekState; agent: string | null }> {
+  hooks?.onPhase?.(WELCOME_PHASES.week, weekMeta);
+  if (trainingWeekExists()) {
+    return { week: welcomeWeekFrom(getPlan() as any[]), week_state: resumed ? "applied" : "existing", agent: null };
+  }
+  // The composer's own phase words ride as `detail` (a small second line under the
+  // welcome's step); the arriving days ride beside them. Each phase carries both, so
+  // whichever lands last never drops the other.
+  let detail: string | undefined;
+  let days: WelcomeWeekDay[] | undefined;
+  const publish = () =>
+    hooks?.onPhase?.(WELCOME_PHASES.week, {
+      ...weekMeta,
+      ...(detail ? { detail } : {}),
+      ...(days?.length ? { days_so_far: days } : {}),
+    });
+  try {
+    const composed: any = await composeWeek(
+      chosen,
+      raw,
+      {
+        signal: hooks?.signal,
+        onPhase: (words: string) => {
+          detail = words;
+          publish();
+        },
+      },
+      {
+        explicitRequest: true,
+        priority: "interactive",
+        welcome: true,
+        onDays: (arrived) => {
+          const next = welcomeWeekPreview(arrived);
+          if (next.length === (days?.length ?? 0)) return;
+          days = next;
+          publish();
+        },
+      }
+    );
+    const agent = typeof composed?.agent === "string" ? composed.agent : null;
+    // the job runner hands a busy host's week to its own durable compose job
+    if (composed?.agent_busy) return { week: null, week_state: "queued", agent };
+    if (!composed?.ok || !(Number(composed?.days) > 0)) return { week: null, week_state: "failed", agent };
+    if (composed?.autonomy?.announced && composed?.autonomy?.effective_date === today) {
+      try {
+        applyDueAnnouncedDecisions(today);
+      } catch (err) {
+        log.warn("[welcome] the first week could not land today", { error: err });
+      }
+    }
+    if (trainingWeekExists()) return { week: welcomeWeekFrom(getPlan() as any[]), week_state: "applied", agent };
+    return {
+      week: welcomeWeekFrom(composed?.proposal?.parsed?.days),
+      week_state: composed?.autonomy?.announced ? "announced" : "draft",
+      agent,
+    };
+  } catch (error) {
+    if (hooks?.signal?.aborted) throw error;
+    log.warn("[welcome] composing the first week failed", { error });
+    return { week: null, week_state: "failed", agent: null };
+  }
+}
+
+/**
+ * Finish a welcome a restart interrupted during its week. The reply, the fuel and the
+ * exchange already landed (and the install is marked welcomed), so only the week runs;
+ * the reveal reports what the job's last phase meta carried.
+ */
+async function resumeWelcomeWeek(
+  agent: string | undefined,
+  raw: string,
+  resume: Partial<WelcomePhaseMeta>,
+  today: string,
+  hooks?: OpHooks
+): Promise<WelcomeResult> {
+  const reply = typeof resume.reply === "string" && resume.reply.trim() ? resume.reply : welcomeReplyFrom(null, today);
+  const { fuel, fuel_state } = welcomeFuel(null);
+  const weekMeta: WelcomePhaseMeta = { step: "week", frac: { done: 2, total: 3 }, reply, fuel, fuel_state };
+  log.info("[welcome] resuming the first week after a restart");
+  const { week, week_state, agent: ran } = await welcomeWeek(agent, raw, weekMeta, today, hooks, true);
+  const chosen = ran ?? agent ?? "";
+  return {
+    ok: true,
+    reply,
+    week,
+    week_state,
+    fuel,
+    fuel_state,
+    applied: emptyOnboardApplied(),
+    agent: chosen,
+    tried: [],
+    agent_status: agentStatusFor({ ok: true, agent: chosen, tried: [] }),
   };
 }

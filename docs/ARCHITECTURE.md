@@ -3643,9 +3643,20 @@ connected, then letting it talk. Three server pieces:
   already landed (the reply from `fuel` on, the fuel from `week` on, the composer's own words as
   `detail`), so the Meet stage paints one thing at a time and a reload re-paints it; the exchange
   and `onboarded`/`coach_welcomed` are written BEFORE the week, so the person may leave ("Look
-  around while I finish your week") and the job lands the week server-side. A restart-interrupted
-  job reads as a calm "interrupted — try again" (the Meet stage also polls the job, since a proxy
-  can close the stream for good during a redeploy). Understanding is the
+  around while I finish your week") and the job lands the week server-side. A restart that cuts a
+  job short DURING its week (meta step `week`) re-queues the same row at boot to finish only the
+  week (`interruptedJobResume`, `src/agentJobs.ts`, at most twice; `welcomeCoach({resume})` skips
+  understanding and the exchange); one cut short earlier reads as a calm "interrupted — try again"
+  (the Meet stage also polls the job, since a proxy can close the stream for good during a
+  redeploy). The week runs as its own op, `welcome_week` (a thinner `fast`/medium profile than the
+  Plan tab's `proposal` compose — a starting week the evolution loop refines), and STREAMS where the
+  agent can: `src/streamedJsonArray.ts` reads each `days[i]` as its closing brace lands and the
+  phase meta carries them as `days_so_far` (a preview; the applied week is still the final parse —
+  a schema is inert while streaming). Outside the welcome, `GET /api/welcome/first-week`
+  (`src/repo/first-week.ts`) answers building (those days) / a one-shot ready / none, and the eager
+  `first-week-client.ts` paints Today's (and Train's empty states') "coming together" card and says
+  "Your first week is ready" ONCE in-app — on the next open if the app was closed — then
+  `POST …/seen`. Never an OS notification. Understanding is the
   onboarding extraction in welcome mode (`buildOnboardPrompt(text, {welcome:true})`, named in
   `ONBOARD_SCHEMA`: `goal` → `profile.goal_mode` (recomp lands as `maintain` plus a remembered goal),
   `lift_days` → the stated `strength_schedule` (named weekdays only), `welcome_reply` (held to

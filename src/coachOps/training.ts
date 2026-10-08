@@ -32,6 +32,7 @@ import { pickDayVariant } from "../repo/brain/day-read-rules.js";
 import { trainingBackstopSignature } from "../repo/training-cache.js";
 import type { AgentPriority, FallbackResult } from "../agents.js";
 import { runChosen, runChosenStreaming } from "../runChosen.js";
+import { createStreamedArrayReader } from "../streamedJsonArray.js";
 import { buildCoachPrompt, buildProgramEvolutionPrompt, buildWeekComposePrompt, buildSessionPrompt, buildDailyCompositionPrompt, buildExerciseExplanationPrompt, buildWeekAheadPrompt, buildSessionVerifyPrompt, buildPlanDraftVerifyPrompt, buildExerciseReconcilePrompt } from "../prompt.js";
 import { applyProposalWithAutonomy } from "../domain/brain/autonomy-service.js";
 import { DAILY_SESSION_SUGGESTION_NORMALIZATION, EXERCISE_EXPLANATION_SCHEMA, EXERCISE_RECONCILE_SCHEMA, PLAN_PROPOSAL_SCHEMA, SESSION_SUGGESTION_SCHEMA, WEEK_AHEAD_SCHEMA, hasPlanProposalActions, isExerciseExplanationResult, isPlanProposalResult, isReconciliationResult, isSessionSuggestionResult, isWeekAheadResult, normalizeSessionSuggestionResult } from "../agent-contracts.js";
@@ -675,7 +676,18 @@ export async function composeWeek(
   // it at THEIR boundary (today) the way a chat restructure does, instead of the next
   // Monday; `priority` lets the run take the interactive spawn lane. Both default off,
   // so the Plan tab's compose and the MCP tool behave exactly as before.
-  opts: { explicitRequest?: boolean; priority?: AgentPriority } = {}
+  // `welcome` runs it as the welcome's own op ("welcome_week": a thinner execution
+  // profile, src/repo/settings.ts) and, with `onDays`, STREAMS the reply where the agent
+  // can: each `days[i]` is handed over the moment it is complete, as a preview. The
+  // applied week is still the final parse of the whole reply (a schema is inert while
+  // streaming, so the prose contract + acceptParsed stay the authority); an agent that
+  // cannot stream simply runs the ordinary single call.
+  opts: {
+    explicitRequest?: boolean;
+    priority?: AgentPriority;
+    welcome?: boolean;
+    onDays?: (days: any[]) => void;
+  } = {}
 ) {
   // The one choke point both surfaces share, so the bound is server policy rather
   // than something the route and the MCP tool each remember to do. The athlete's
@@ -704,13 +716,32 @@ export async function composeWeek(
   hooks?.onPhase?.("composing your first week");
   let run: FallbackResult;
   try {
-    run = await runChosen(agent, prompt, {
-      op: "compose_week",
+    const runOpts = {
+      op: opts.welcome ? "welcome_week" : "compose_week",
       signal: hooks?.signal,
       acceptParsed: isPlanProposalResult,
       schema: PLAN_PROPOSAL_SCHEMA,
       ...(opts.priority ? { priority: opts.priority } : {}),
-    });
+    };
+    const onDays = opts.onDays;
+    if (onDays) {
+      const reader = createStreamedArrayReader("days", { maxItems: 14 });
+      run = await runChosenStreaming(agent, prompt, {
+        ...runOpts,
+        rawDeltas: true,
+        onDelta: (chunk: string) => {
+          if (reader.push(chunk).length) {
+            try {
+              onDays([...reader.items]);
+            } catch {
+              /* a preview never breaks the compose */
+            }
+          }
+        },
+      });
+    } else {
+      run = await runChosen(agent, prompt, runOpts);
+    }
   } catch (error) {
     const failure = agentFailure(error, hooks);
     return {

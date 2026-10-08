@@ -28,6 +28,7 @@ test("what a running welcome already landed is read from its meta; the fuel is f
     fuelKnown: false,
     fuel: null,
     detail: "",
+    days: [],
   });
   const week = m.partial({
     meta: { step: "week", reply: "Hi", fuel: { target_kcal: 2210, protein_g: 171 }, fuel_state: "set", detail: "composing your first week" },
@@ -36,7 +37,16 @@ test("what a running welcome already landed is read from its meta; the fuel is f
   assert.equal(week.fuel.main, "About 2,200 kcal a day, with around 170 g of protein");
   assert.equal(week.detail, "composing your first week");
   assert.equal(m.partial({ meta: { step: "week", fuel: null, fuel_state: "none" } }).fuel, null, "no fuel is a settled none");
-  assert.deepEqual(plain(m.partial(null)), { step: "", reply: "", fuelKnown: false, fuel: null, detail: "" });
+  assert.deepEqual(plain(m.partial(null)), { step: "", reply: "", fuelKnown: false, fuel: null, detail: "", days: [] });
+  const arriving = m.partial({
+    meta: { step: "week", days_so_far: [{ dow: 4, day_number: 2, name: "Upper" }, { dow: 1, day_number: 1, name: "Lower" }, { name: "" }] },
+  });
+  assert.deepEqual(
+    plain(arriving.days).map((r) => `${r.day} ${r.name}`),
+    ["Mon Lower", "Thu Upper"],
+    "the streamed days read like the reveal's rows: named ones only, Monday-first"
+  );
+  assert.deepEqual(plain(m.partial({ meta: { step: "fuel", days_so_far: [{ dow: 1, name: "x" }] } }).days), [], "days belong to the week step");
   assert.equal(m.interrupted("interrupted by a restart"), true);
   assert.equal(m.interrupted({ message: "Error: background operation failed" }), false);
 });

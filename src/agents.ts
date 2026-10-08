@@ -18,6 +18,7 @@ import {
 } from "./agentAvailability.js";
 import { AgentBusyError, isAgentBusyError } from "./agent-busy.js";
 import { log } from "./log.js";
+import { resetContractRejection, takeContractRejection } from "./contractRejection.js";
 import { bumpAgentStateGeneration } from "./repo/agent-state-generation.js";
 export { AGENT_ENV_DENYLIST, agentCliPath, agentExecutionCwd, buildAgentSpawnOptions, promptReferencesDataDir, sanitizeAgentEnv } from "./agentExecution.js";
 
@@ -1643,14 +1644,28 @@ const CONTRACT_REPAIR_SUFFIX =
   "\n\nYour previous JSON did not satisfy the exact response contract requested above. " +
   "Re-emit ONLY one JSON object matching that contract exactly — no prose, no markdown fences.";
 
+// Sets `lastContractRejection` on a refusal: the predicate's own noted code when it
+// names one, else a generic slug. Read it right after the call that failed.
+let lastContractRejection: string | null = null;
 function acceptsParsed(result: AgentResult, acceptParsed?: (parsed: any) => boolean): boolean {
-  if (!result.parsed) return false;
-  if (!acceptParsed) return true;
-  try {
-    return acceptParsed(result.parsed) === true;
-  } catch {
+  lastContractRejection = null;
+  if (!result.parsed) {
+    lastContractRejection = "no_json";
     return false;
   }
+  if (!acceptParsed) return true;
+  resetContractRejection();
+  try {
+    if (acceptParsed(result.parsed) === true) {
+      resetContractRejection();
+      return true;
+    }
+    lastContractRejection = takeContractRejection() ?? "accept_parsed_false";
+  } catch {
+    resetContractRejection();
+    lastContractRejection = "accept_parsed_threw";
+  }
+  return false;
 }
 
 export interface AgentUsage {
@@ -1729,6 +1744,8 @@ export interface AgentRunRecord {
   model?: string | null;
   input_tokens?: number | null;
   output_tokens?: number | null;
+  // Short machine slug for WHICH contract check refused the reply (never prose).
+  reject_reason?: string | null;
 }
 type AgentRunSink = (r: AgentRunRecord) => void;
 let agentRunSink: AgentRunSink | null = null;
@@ -1917,6 +1934,7 @@ export async function runAgentWithFallback(
         return { agent: name, result, tried };
       }
       breakerNoteFail(name);
+      const rejectReason = lastContractRejection;
       const parsed = !!result.parsed;
       // A second run after the repair can fail for a NEW reason; re-read it.
       const finalFailure = triedJson ? classifyAgentFailure(name, result, new Date()) : failure;
@@ -1946,7 +1964,12 @@ export async function runAgentWithFallback(
         model: result.usage?.model ?? null,
         input_tokens: result.usage?.input_tokens ?? null,
         output_tokens: result.usage?.output_tokens ?? null,
+        reject_reason: errorClass === "invalid_contract" || errorClass === "invalid_json" ? rejectReason : null,
       });
+      if (errorClass === "invalid_contract" || errorClass === "invalid_json") {
+        // One line, codes only: op, agent, class, reason slug. Never the reply or any data.
+        log.warn("[agents] reply rejected", { op, agent: name, error_class: errorClass, reason: rejectReason });
+      }
       const entry: AgentTriedEntry = { agent: name, error };
       if (!parsed && finalFailure) {
         if (availabilityHolds(finalFailure.state)) availabilityNote(name, finalFailure, op);

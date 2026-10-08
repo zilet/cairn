@@ -12,7 +12,7 @@ The OAuth 2.1 doors an AI app signs in through for `/mcp` (`/.well-known/oauth-*
 [OPERATIONS.md](OPERATIONS.md) "Connect an AI app (MCP)".
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**401 routes** across 134 groups.
+**403 routes** across 134 groups.
 
 ## `/activities`
 
@@ -1065,6 +1065,8 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | Method | Path | Notes |
 |---|---|---|
 | POST | `/api/welcome` | The coach's first conversation: the person's own words → understood, a first week and a starting food target put in place, the exchange saved to Ask. Agentic, so it always queues a durable `welcome` job ({ok:true, job}); the job's result is the reveal ({ok, reply, week, week_state, fuel, fuel_state, applied, agent, tried}) or the designed {ok:false, error, tried} when no agent answered (src/coachOps/welcome.ts). |
+| GET | `/api/welcome/first-week` | The first week, for the app outside the welcome (src/repo/first-week.ts): while it is being built, the days written so far (Today's "coming together" card); once it lands, a one-shot `ready` (or `failed`) the app says once, in-app, then marks seen. Never an OS notification. `final` tells a client there is nothing left to ask about. |
+| POST | `/api/welcome/first-week/seen` |  |
 
 ## `/what-if`
 

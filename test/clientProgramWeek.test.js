@@ -230,6 +230,53 @@ test("nothing planned, no calendar, or a failed read each say one calm line", ()
   assert.match(bodyHtml(programWeekModel({ error: "boom" })), /couldn't be read just now/);
 });
 
+// With no lifting weekdays known there is no day page to open, so each lifting day opens
+// in place to its movements — the same gallery the day page draws, each name a guide.
+test("an undated lifting day opens in place to its exercises", () => {
+  const ctx = load();
+  const { programWeekModel } = ctx.CairnProgramWeekModel;
+  const { bodyHtml } = ctx.CairnProgramWeek;
+  const exercise = (name, extra = {}) => ({
+    name,
+    muscle_group: "chest",
+    mode: "reps",
+    sets: 3,
+    rep_low: 6,
+    rep_high: 8,
+    target_seconds: null,
+    prescription: "3 × 6–8",
+    load: { weight: 135, text: "135 lb", source: "progression", change: "+5 lb", action: "increase" },
+    anchor: false,
+    note: null,
+    ...extra,
+  });
+  const html = bodyHtml(
+    programWeekModel({
+      ...lookAhead(),
+      mode: "order",
+      weeks: [],
+      order: [
+        {
+          title: "Push",
+          focus: null,
+          lifts: ["Bench"],
+          more: 1,
+          done: false,
+          exercises: [exercise("Bench <Press>", { anchor: true }), exercise("Dip", { load: null })],
+        },
+        { title: "Pull", focus: null, lifts: [], more: 0, done: false },
+      ],
+    })
+  );
+  assert.match(html, /<details class="pahead-open">\s*<summary aria-label="Push, show its exercises">/);
+  assert.match(html, /data-guide="Bench%20%3CPress%3E">Bench &lt;Press&gt;</, "each name opens its guide, escaped");
+  assert.match(html, /3 × 6–8[\s\S]*135 lb[\s\S]*\+5 lb/);
+  assert.match(html, /data-guide="Dip"/);
+  // A day with no exercises to show stays a plain row, never an empty fold.
+  assert.match(html, /Then<\/span><span class="pahead-item is-strength"><span class="pahead-lift-t">Pull</);
+  assert.equal((html.match(/<details/g) || []).length, 1);
+});
+
 function fakeHost() {
   const body = { innerHTML: "", firstElementChild: null };
   return {

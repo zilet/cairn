@@ -89,7 +89,11 @@
     if (read.mode === "order") {
       const order = list<LookAheadLift>(read.order)
         .filter((lift) => text(lift?.title))
-        .map((lift) => ({ title: text(lift.title), lifts: liftsText(lift) }));
+        .map((lift) => ({
+          title: text(lift.title),
+          lifts: liftsText(lift),
+          exercises: list<NonNullable<LookAheadLift["exercises"]>[number]>(lift.exercises).filter((ex) => text(ex?.name)),
+        }));
       return order.length ? { mode: "order", groups: [], order } : { mode: "empty", groups: [], order: [] };
     }
     const groups: ClientProgramWeekGroup[] = list<LookAhead["weeks"][number]>(read.weeks)

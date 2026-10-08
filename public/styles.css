@@ -3529,6 +3529,15 @@ button.prow-name:hover{color:var(--accent)}
 .pahead-order-row{display:grid;grid-template-columns:44px minmax(0,1fr);gap:var(--space-5);align-items:baseline;padding:var(--space-5) 0;border-top:1px solid var(--line)}
 .pahead-order-row:first-child{border-top:0}
 .pahead-order-k{color:var(--muted)}
+.pahead-open{min-width:0}
+.pahead-open>summary{list-style:none;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:baseline;gap:var(--space-3);cursor:pointer;border-radius:var(--radius-sm)}
+.pahead-open>summary::-webkit-details-marker{display:none}
+.pahead-open>summary:focus-visible{outline:2px solid var(--ink);outline-offset:4px}
+.pahead-open-go{align-self:center;color:var(--faint);font-size:var(--text-lead);line-height:var(--leading-none);transition:transform var(--dur-1) var(--ease)}
+.pahead-open[open] .pahead-open-go{transform:rotate(90deg)}
+@media (hover:hover){.pahead-open>summary:hover .pahead-open-go{color:var(--ink)}
+}
+.pahead-open-body{margin-top:var(--space-4)}
 .pahead-skel{display:grid;gap:var(--space-5)}
 .pahead-skel .hshimmer{margin:0}
 .pahead-skel-k{width:28%}
@@ -5635,6 +5644,20 @@ a.msrow-link:active{transform:var(--press-lg)}
 .clink-t{margin:0;font-family:var(--font-display);font-weight:var(--weight-regular);font-size:var(--text-lg);line-height:var(--leading-snug);color:var(--ink)}
 .clink-s{margin:0;font-size:var(--text-md);line-height:var(--leading-normal);color:var(--ink2)}
 .clink-go{margin-top:var(--space-4);min-height:44px;padding:0 var(--space-11)}
+.fw-slot:empty{display:none}
+.fw-slot{margin-bottom:var(--space-10)}
+.plan-empty .fw-slot,.tov-empty .fw-slot{margin-bottom:var(--space-8)}
+.fw-card{display:grid;gap:var(--space-4);padding:var(--space-7) var(--space-8);border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface)}
+.fw-t{margin:0;display:flex;align-items:center;gap:var(--space-5);font-size:var(--text-md);line-height:var(--leading-snug);color:var(--ink)}
+.fw-mk{flex:0 0 auto;box-sizing:border-box;width:12px;height:12px;border-radius:50%;border:1.5px solid var(--line);border-top-color:var(--dawn);animation:sugspin .9s linear infinite}
+.fw-card.is-ready .fw-mk{border:0;background:var(--dawn);animation:none;transform:scale(.7)}
+.fw-s{margin:0;font-size:var(--text-sm);line-height:var(--leading-normal);color:var(--muted)}
+.fw-days{list-style:none;margin:0;padding:0}
+.fw-day{display:grid;grid-template-columns:3.2rem minmax(0,1fr);align-items:baseline;gap:var(--space-6);padding:var(--space-4) 0;border-top:1px solid var(--line)}
+.fw-day.reveal{animation-delay:calc(var(--i,0) * 120ms)}
+.fw-d{font-family:var(--font-mono);font-size:var(--text-2xs);letter-spacing:var(--tracking-mono);text-transform:uppercase;color:var(--muted)}
+.fw-n{font-size:var(--text-base);color:var(--ink);overflow-wrap:anywhere}
+.fw-see{justify-self:start;margin-top:var(--space-3);min-height:44px;padding:0 var(--space-10)}
 .alp{display:flex;flex-direction:column;gap:var(--space-7)}
 .alp-status{display:flex;align-items:center;gap:var(--space-4);margin:0;font-size:var(--text-md);line-height:var(--leading-normal);color:var(--ink2)}
 .alp-status.is-ok{color:var(--sage-text);font-weight:var(--weight-semibold)}
@@ -5798,6 +5821,8 @@ body:is(.welcome-open,.welcome-pending)>:is(header,#view,.tabbar){visibility:hid
 .wel-wk-d{font-family:var(--font-mono);font-size:var(--text-2xs);letter-spacing:var(--tracking-mono);text-transform:uppercase;color:var(--muted)}
 .wel-wk-n{font-size:var(--text-base);color:var(--ink)}
 .wel-reveal .wel-wk.reveal{animation-delay:calc(220ms + var(--i,0) * 170ms)}
+.wel-week-live{margin:var(--space-6) 0 0 calc(14px + var(--space-5))}
+.wel-week-live .wel-wk.reveal{animation-delay:calc(var(--i,0) * 120ms)}
 .wel-fuel{margin:0;font-family:var(--font-display);font-size:var(--text-lg);line-height:var(--leading-snug);color:var(--ink);text-wrap:balance}
 .wel-note{margin:var(--space-4) 0 0;font-size:var(--text-sm);line-height:var(--leading-normal);color:var(--muted);text-wrap:pretty}
 .wel-dock{position:sticky;bottom:0;margin:0 calc(-1 * var(--gutter));padding:var(--space-6) var(--gutter) calc(env(safe-area-inset-bottom) + 14px);background:linear-gradient(to top,var(--ground) 72%,color-mix(in srgb,var(--ground) 0%,transparent))}

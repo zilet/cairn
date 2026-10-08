@@ -178,6 +178,9 @@ body:is(.welcome-open,.welcome-pending)>:is(header,#view,.tabbar){visibility:hid
 .wel-wk-n{font-size:var(--text-base);color:var(--ink)}
 /* the week arrives a day at a time (reduced motion: all at once, foundation/reduced-motion.css) */
 .wel-reveal .wel-wk.reveal{animation-delay:calc(220ms + var(--i,0) * 170ms)}
+/* …and while it is being written, under "Putting together your first week" */
+.wel-week-live{margin:var(--space-6) 0 0 calc(14px + var(--space-5))}
+.wel-week-live .wel-wk.reveal{animation-delay:calc(var(--i,0) * 120ms)}
 .wel-fuel{margin:0;font-family:var(--font-display);font-size:var(--text-lg);line-height:var(--leading-snug);color:var(--ink);text-wrap:balance}
 .wel-note{margin:var(--space-4) 0 0;font-size:var(--text-sm);line-height:var(--leading-normal);color:var(--muted);text-wrap:pretty}
 

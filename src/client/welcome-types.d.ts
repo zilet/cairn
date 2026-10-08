@@ -86,6 +86,8 @@ type WelcomePartial = {
   fuel: { main: string; sub: string } | null;
   /** The week composer's own phase words, "" when none. */
   detail: string;
+  /** The first week's days written so far (job meta `days_so_far`), a preview. */
+  days: WelcomeWeekRow[];
 };
 
 type WelcomeModelApi = {
@@ -128,6 +130,8 @@ type WelcomeClientApi = {
   fuelHtml(fuel: { main: string; sub: string }): string;
   waitDockHtml(): string;
   revealHtml(reveal: WelcomeReveal): string;
+  /** One day of the first week; `i` staggers its arrival. */
+  weekRowHtml(row: WelcomeWeekRow, i: number): string;
   /** `signIn`: the provider is signed out, so the way on is its sign-in. */
   failBubbleHtml(message: string, signIn?: boolean): string;
   doneDockHtml(inPlace: boolean): string;
@@ -169,7 +173,7 @@ type WelcomeRunApi = {
     onRow: (job: { status?: string; result?: unknown; error?: unknown; [key: string]: unknown }) => void,
     maxMs?: number
   ): () => void;
-  /** The person left mid-week: follow the job to its end, then refresh what it touched. */
+  /** The person left mid-week: the app's first-week card (CairnFirstWeek) follows it from here. */
   followAfterLeave(id: string): void;
   /** The week landed: drop the caches it makes stale and repaint Today/Train if showing. */
   landed(): void;

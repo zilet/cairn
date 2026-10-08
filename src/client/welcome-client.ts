@@ -198,14 +198,13 @@
       .join("")}</ol>`;
   }
 
+  function weekRowHtml(row: WelcomeWeekRow, i: number): string {
+    return `<li class="wel-wk reveal" style="--i:${i}"><span class="wel-wk-d" title="${escAttr(row.dayLong)}">${escHtml(row.day)}</span><span class="wel-wk-n">${escHtml(row.name)}</span></li>`;
+  }
+
   function revealHtml(r: WelcomeReveal): string {
     const week = r.week.length
-      ? `${weekStripHtml(r.week)}<ul class="wel-week">${r.week
-          .map(
-            (row, i) =>
-              `<li class="wel-wk reveal" style="--i:${i + 2}"><span class="wel-wk-d" title="${escAttr(row.dayLong)}">${escHtml(row.day)}</span><span class="wel-wk-n">${escHtml(row.name)}</span></li>`
-          )
-          .join("")}</ul>`
+      ? `${weekStripHtml(r.week)}<ul class="wel-week">${r.week.map((row, i) => weekRowHtml(row, i + 2)).join("")}</ul>`
       : "";
     const weekNote = r.weekNote ? `<p class="wel-note">${escHtml(r.weekNote)}</p>` : "";
     const fuel = r.fuel
@@ -258,6 +257,7 @@
     fuelHtml,
     waitDockHtml,
     revealHtml,
+    weekRowHtml,
     failBubbleHtml,
     doneDockHtml,
   };

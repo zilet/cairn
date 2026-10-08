@@ -54,6 +54,7 @@
     let replyShown = false;
     let fuelShown = false;
     let lastDetail = "";
+    let dayKeys: string[] = [];
     const nodes: HTMLElement[] = [];
 
     const keep = (node: HTMLElement | null): HTMLElement | null => {
@@ -102,6 +103,32 @@
       if (cap) cap.textContent = `${detail.charAt(0).toUpperCase()}${detail.slice(1)}…`;
     }
 
+    // The week, day by day as the composer writes it: rows under "Putting together your
+    // first week". Only new rows are added (each with its own stagger), so a phase that
+    // repeats what is already there paints nothing; an order that changed starts over.
+    function showDays(rows: WelcomeWeekRow[]): void {
+      if (!rows.length || workingStep !== "week" || !working?.isConnected) return;
+      let list = working.querySelector<HTMLElement>(".wel-week-live");
+      if (!list) {
+        working.insertAdjacentHTML(
+          "beforeend",
+          `<ul class="wel-week wel-week-live" aria-label="Your first week so far"></ul>`
+        );
+        list = working.querySelector<HTMLElement>(".wel-week-live");
+        dayKeys = [];
+      }
+      if (!list) return;
+      const keys = rows.map((row) => `${row.day}|${row.name}`);
+      if (!dayKeys.every((key, i) => keys[i] === key)) {
+        list.innerHTML = "";
+        dayKeys = [];
+      }
+      for (let i = dayKeys.length; i < rows.length; i++) {
+        list.insertAdjacentHTML("beforeend", CairnWelcomeClient.weekRowHtml(rows[i], i - dayKeys.length));
+      }
+      dayKeys = keys;
+    }
+
     return {
       begin() {
         work("understand");
@@ -116,6 +143,7 @@
             deps.onWeekStarted();
           }
           showDetail(p.detail);
+          showDays(p.days);
         }
       },
       reveal(result) {
@@ -141,6 +169,7 @@
         replyShown = false;
         fuelShown = false;
         lastDetail = "";
+        dayKeys = [];
       },
       stop() {
         stopCaption();
@@ -185,38 +214,21 @@
 
   /**
    * The person left to look around while the week composes. The job carries on on the
-   * server; when it ends (and the compose job a busy host handed the week to, if any), the
-   * caches the week makes stale are dropped and the screen they are on repaints.
+   * server; the app's first-week card (first-week-client.ts, eager) follows it from here —
+   * Today shows the days as they arrive, and one calm notice says when it is ready —
+   * including the compose job a busy host handed the week to.
    */
-  function followAfterLeave(id: string): void {
-    watchJob(id, 5000, (job) => {
-      if (String(job.status) !== "done") return;
-      const result = (job.result && typeof job.result === "object" ? job.result : {}) as { week_job_id?: unknown };
-      landed();
-      const next = Number(result.week_job_id);
-      if (Number.isInteger(next) && next > 0) followAfterLeave(String(next));
-    });
+  function followAfterLeave(_id: string): void {
+    firstWeek()?.track();
   }
 
+  /** The week landed: drop the caches it makes stale and repaint Today/Train if showing. */
   function landed(): void {
-    const root = globalThis as {
-      CairnWriteInvalidation?: { invalidateWrite?(name: string): unknown };
-      renderTab?: (tab: string) => unknown;
-      state?: { tab?: string };
-    };
-    try {
-      root.CairnWriteInvalidation?.invalidateWrite?.("proposal_apply");
-    } catch {}
-    try {
-      CairnCoachLink.invalidate();
-    } catch {}
-    const tab = root.state?.tab;
-    // Today and Train (the "plan" view) are where a new week shows.
-    if (tab === "today" || tab === "plan") {
-      try {
-        root.renderTab?.(tab);
-      } catch {}
-    }
+    firstWeek()?.landed();
+  }
+
+  function firstWeek(): FirstWeekApi | undefined {
+    return (globalThis as { CairnFirstWeek?: FirstWeekApi }).CairnFirstWeek;
   }
 
   Object.assign(globalThis, { CairnWelcomeRun: { create: createRun, watchJob, followAfterLeave, landed } });

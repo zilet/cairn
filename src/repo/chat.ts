@@ -840,16 +840,41 @@ export function cancelAgentJob(id: number) {
 // may have PARTIALLY persisted a draft, so re-running risks a duplicate; mark it
 // 'error'. A 'queued' job never started → safe to re-enqueue. Returns the queued
 // ids for the worker to re-drain. Mirrors recoverChatTurns.
-export function recoverAgentJobs(): { requeue: number[]; interrupted: number } {
+//
+// `resume` is the per-kind exception (src/agentJobs.ts interruptedJobResume): handed each
+// interrupted job (its raw input and last meta), it returns the input to re-queue it with
+// — the job stays the SAME row, so a client watching it simply sees it run again — or
+// null to mark it interrupted as before. Resumed ids are part of `requeue`, not counted
+// as interrupted.
+export function recoverAgentJobs(
+  resume?: (job: { id: number; kind: string; input: any; meta: any }) => any | null
+): { requeue: number[]; interrupted: number; resumed: number[] } {
   // Retention: terminal job rows are pure telemetry once read — prune anything
   // finished >30 days ago so agent_jobs never grows unbounded (mirrors the
   // ai_cache 30-day discipline; the rows are ephemeral + regenerable).
   db.prepare(`DELETE FROM agent_jobs WHERE status IN ('done','error','canceled')
                 AND finished_at IS NOT NULL AND finished_at < datetime('now','-30 days')`).run();
-  const interrupted = db.prepare(`SELECT id FROM agent_jobs WHERE status='running'`).all() as any[];
-  for (const r of interrupted) failAgentJob(r.id, "interrupted by a restart");
+  const running = db
+    .prepare(`SELECT id, kind, input_json, meta FROM agent_jobs WHERE status='running'`)
+    .all() as any[];
+  const resumed: number[] = [];
+  for (const r of running) {
+    let input: any = null;
+    try {
+      const parse = (v: any) => (v ? JSON.parse(v) : null);
+      const next = resume?.({ id: r.id, kind: String(r.kind), input: parse(r.input_json), meta: parse(r.meta) });
+      input = next && typeof next === "object" ? next : null;
+    } catch {
+      input = null;
+    }
+    if (input) {
+      db.prepare(`UPDATE agent_jobs SET status='queued', phase='queued', started_at=NULL, error=NULL, input_json=?
+                  WHERE id=? AND status='running'`).run(JSON.stringify(input), r.id);
+      resumed.push(Number(r.id));
+    } else failAgentJob(r.id, "interrupted by a restart");
+  }
   const queued = db.prepare(`SELECT id FROM agent_jobs WHERE status='queued' ORDER BY id ASC`).all() as any[];
-  return { requeue: queued.map((r) => r.id), interrupted: interrupted.length };
+  return { requeue: queued.map((r) => r.id), interrupted: running.length - resumed.length, resumed };
 }
 
 // ---------- AI result cache (serve-stale-then-revalidate) ----------

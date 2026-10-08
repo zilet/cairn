@@ -500,27 +500,20 @@ function liftWatch(
   return out;
 }
 
-function buildLift(
+/**
+ * A plan day's exercises as a day reads them. A day AHEAD reads the progression
+ * engine's next prescription; a day already lived keeps the plan's stored target (the
+ * progression has already moved on to the next exposure).
+ */
+function planDayExercisesOf(
+  dayNumber: number,
   date: string,
-  status: DayDetailStatus,
-  cell: PlanWeekDay | null,
-  ctx: DayContext,
-  done: DayDetailDone | null,
+  ahead: boolean,
   phase: string | null,
-  todayLine: PlanWeek["strength_line"] | null,
   units: WeightUnit
-): { lift: DayDetailLift; watch: DayDetailWatch[] } | null {
-  const plan = strengthOf(cell);
-  const session = done?.session ?? null;
-  const title = text(plan?.name) || text(session?.title);
-  if (!title) return null;
-
-  const items = plan ? planItemsFor(plan.day_number) : [];
-  // The engine's next prescription is a day AHEAD's load; a day already lived keeps the
-  // plan's stored target (the progression has already moved on to the next exposure).
-  const ahead = status === "today" || status === "upcoming";
-  const progression =
-    plan && ahead ? safe(() => planDayProgression(plan.day_number, { readDate: date }), [] as Prescription[]) : [];
+): { items: PlanItem[]; exercises: DayDetailExercise[]; byName: Map<string, Prescription> } {
+  const items = planItemsFor(dayNumber);
+  const progression = ahead ? safe(() => planDayProgression(dayNumber, { readDate: date }), [] as Prescription[]) : [];
   const byItem = new Map<number, Prescription>();
   const byName = new Map<string, Prescription>();
   for (const p of progression) {
@@ -542,6 +535,38 @@ function buildLift(
       )
     )
     .filter((e) => e.name);
+  return { items, exercises, byName };
+}
+
+/**
+ * The exercises of a plan day still ahead with no date to place it on (the Program
+ * look-ahead's `order` mode, before any lifting weekday is known): the next
+ * prescription as of `date`, each in the athlete's units.
+ */
+export function planDayExercisesAhead(dayNumber: number, date: string): DayDetailExercise[] {
+  const phase = safe(() => resolvedBlockPhase(date), null);
+  return planDayExercisesOf(dayNumber, date, true, phase, athleteUnits().weight).exercises;
+}
+
+function buildLift(
+  date: string,
+  status: DayDetailStatus,
+  cell: PlanWeekDay | null,
+  ctx: DayContext,
+  done: DayDetailDone | null,
+  phase: string | null,
+  todayLine: PlanWeek["strength_line"] | null,
+  units: WeightUnit
+): { lift: DayDetailLift; watch: DayDetailWatch[] } | null {
+  const plan = strengthOf(cell);
+  const session = done?.session ?? null;
+  const title = text(plan?.name) || text(session?.title);
+  if (!title) return null;
+
+  const ahead = status === "today" || status === "upcoming";
+  const { items, exercises, byName } = plan
+    ? planDayExercisesOf(plan.day_number, date, ahead, phase, units)
+    : { items: [] as PlanItem[], exercises: [] as DayDetailExercise[], byName: new Map<string, Prescription>() };
   const anchor = exercises.find((e) => e.anchor) ?? null;
   const anchorP = anchor ? byName.get(anchor.name.toLowerCase()) : undefined;
   const totalSets = exercises.filter((e) => e.mode !== "mobility").reduce((n, e) => n + (e.sets ?? 0), 0);

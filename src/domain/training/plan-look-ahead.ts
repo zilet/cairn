@@ -26,6 +26,9 @@ import { athleteUnits } from "../../repo/settings.js";
 import { rungStage } from "../../repo/week-stage.js";
 import { localDateISO } from "../../repo/shared.js";
 import { todayStrengthLine, type TodayStrengthLine } from "../../repo/today-strength-line.js";
+import type { DayDetailExercise } from "../../contracts/day-detail.js";
+// A function-level cycle (day-detail reads lookAheadWeekAsOf): neither module touches the other at load.
+import { planDayExercisesAhead } from "./day-detail.js";
 import { planWeek, type PlanWeek, type PlanWeekDay } from "./plan-week.js";
 
 /** How many of a lift day's movements a row names; the rest are counted. */
@@ -41,6 +44,11 @@ export interface PlanLookAheadLift {
   more: number;
   /** Logged already (today's row only; a future day is never done). */
   done: boolean;
+  /**
+   * `order` mode only (a row with no date to open a day page on): the plan day's
+   * exercises with their next prescription, opened in place on the Program landing.
+   */
+  exercises?: DayDetailExercise[];
 }
 
 export interface PlanLookAheadRun {
@@ -252,12 +260,17 @@ function weekMarkers(
 }
 
 /** The lifting days in the order they come round, the one up next first (no calendar). */
-function ringOrder(week: PlanWeek, items: Map<number, PlanDayItems>): PlanLookAheadLift[] {
+function ringOrder(week: PlanWeek, items: Map<number, PlanDayItems>, today: string): PlanLookAheadLift[] {
   const lifts = week.days.filter((d) => d.plan_day?.role === "strength");
   const next = lifts.findIndex((d) => d.status === "today" || d.status === "upcoming");
   const start = next >= 0 ? next : 0;
   return [...lifts.slice(start), ...lifts.slice(0, start)]
-    .map((d) => liftOf({ ...d, session: null }, items, false))
+    .map((d) => {
+      const lift = liftOf({ ...d, session: null }, items, false);
+      const dayNumber = d.plan_day?.day_number;
+      if (!lift || dayNumber == null) return lift;
+      return { ...lift, exercises: safe(() => planDayExercisesAhead(dayNumber, today), []) };
+    })
     .filter((lift): lift is PlanLookAheadLift => !!lift);
 }
 
@@ -271,7 +284,7 @@ export function planLookAhead(date?: string): PlanLookAhead {
 
   const dated = !!thisWeek?.days.some((d) => d.date);
   if (!thisWeek || !dated) {
-    const order = thisWeek ? ringOrder(thisWeek, items) : [];
+    const order = thisWeek ? ringOrder(thisWeek, items, today) : [];
     return { ...base, mode: order.length ? "order" : "empty", weeks: [], order };
   }
 

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { onboardFromText } from "../coachOps.js";
 import { backgroundOp } from "./background-op.js";
+import { firstWeekStatus, markFirstWeekSeen } from "../repo/first-week.js";
 import { contextTagVocab } from "../repo/context-tag-effects.js";
 import {
   addContextEvent,
@@ -184,4 +185,15 @@ personContextRouter.post("/welcome", (req, res) => {
   if (!text) return res.status(400).json({ ok: false, error: "text required", tried: [] });
   const agent = typeof b.agent === "string" && b.agent.trim() && b.agent !== "auto" ? b.agent.trim() : null;
   backgroundOp(res, "welcome", { text: text.slice(0, 4000) }, agent);
+});
+
+// The first week, for the app outside the welcome (src/repo/first-week.ts): while it is
+// being built, the days written so far (Today's "coming together" card); once it lands,
+// a one-shot `ready` (or `failed`) the app says once, in-app, then marks seen. Never an
+// OS notification. `final` tells a client there is nothing left to ask about.
+personContextRouter.get("/welcome/first-week", (_req, res) => {
+  res.json(firstWeekStatus());
+});
+personContextRouter.post("/welcome/first-week/seen", (_req, res) => {
+  res.json(markFirstWeekSeen());
 });

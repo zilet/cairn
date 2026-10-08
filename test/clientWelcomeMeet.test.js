@@ -16,6 +16,7 @@ const MODULES = [
   "welcome-client",
   "welcome-meet-run",
   "welcome-meet-controller",
+  "first-week-client",
 ];
 const PROVIDER = {
   name: "claude",
@@ -34,7 +35,9 @@ const WORDS = "General longevity, keeping muscle mass, staying movable, flexible
 
 function setup({ list = [], jobs = {}, stored = null } = {}) {
   const timers = createFakeTimers();
-  const rec = { enqueued: [], streams: [], torn: 0, apis: [], invalidated: [], rendered: [], skipped: 0 };
+  const rec = { enqueued: [], streams: [], torn: 0, apis: [], invalidated: [], rendered: [], skipped: 0, toasts: [] };
+  // The app's first-week status (GET /api/welcome/first-week), as the test sets it.
+  const firstWeek = { status: { state: "none", job_id: null, days: [], week_state: null, final: true } };
   const win = loadClientModule(MODULES, {
     globals: {
       ...timers,
@@ -43,6 +46,11 @@ function setup({ list = [], jobs = {}, stored = null } = {}) {
       api: async (path) => {
         rec.apis.push(path);
         if (path === "/agent-jobs") return { ok: true, jobs: list };
+        if (path === "/welcome/first-week") return firstWeek.status;
+        if (path === "/welcome/first-week/seen") {
+          firstWeek.status = { ...firstWeek.status, state: "none", final: true };
+          return firstWeek.status;
+        }
         const m = /^\/agent-jobs\/(\d+)$/.exec(path);
         if (m) return { ok: true, job: jobs[m[1]] ?? null };
         throw new Error(`unexpected ${path}`);
@@ -62,6 +70,7 @@ function setup({ list = [], jobs = {}, stored = null } = {}) {
       CairnCoachLink: { invalidate: () => rec.invalidated.push("coach-link") },
       CairnWriteInvalidation: { invalidateWrite: (name) => rec.invalidated.push(name) },
       renderTab: (tab) => rec.rendered.push(tab),
+      toast: (message, opts) => rec.toasts.push({ message, action: opts?.action ?? null }),
       state: { tab: "today" },
     },
   });
@@ -75,7 +84,7 @@ function setup({ list = [], jobs = {}, stored = null } = {}) {
       rec.skipped += 1;
     },
   });
-  return { win, host, timers, rec, unmount, jobs };
+  return { win, host, timers, rec, unmount, jobs, firstWeek };
 }
 
 async function settle(times = 4) {
@@ -209,26 +218,59 @@ test("when the stream goes quiet for good, a light read still finds the interrup
   assert.equal(ctx.host.querySelector(".is-working"), null);
 });
 
-test("leaving while the week composes keeps the job, and the week then refreshes Today", async () => {
+test("leaving while the week composes keeps the job; the app's first-week card follows it and Today refreshes once it lands", async () => {
   const ctx = setup();
   await settle();
   await send(ctx);
   ctx.rec.streams[0].handlers.onPhase(weekPhase);
+  ctx.firstWeek.status = { state: "building", job_id: 42, days: [], week_state: null, final: false };
   await fire(ctx.host.querySelector("[data-wel-leave]"), "click");
   assert.equal(ctx.rec.skipped, 1, "the welcome closes (marked onboarded)");
   ctx.unmount();
+  await settle();
   assert.ok(!ctx.rec.apis.some((p) => /cancel/.test(p)), "nothing stops the job");
+  assert.equal(ctx.win.CairnFirstWeek.building(), true, "the app now follows the week");
 
-  ctx.jobs["42"] = { id: 42, kind: "welcome", status: "running", meta: weekPhase.meta };
-  ctx.timers.tick(5000);
+  ctx.firstWeek.status = { ...ctx.firstWeek.status, days: [result.week[0]] };
+  ctx.timers.tick(4000);
   await settle();
   assert.equal(ctx.rec.rendered.length, 0, "nothing repaints while the week is still composing");
+  assert.equal(ctx.rec.toasts.length, 0);
 
-  ctx.jobs["42"] = { id: 42, kind: "welcome", status: "done", result };
-  ctx.timers.tick(5000);
+  ctx.firstWeek.status = { state: "ready", job_id: 42, days: result.week, week_state: "applied", final: false };
+  ctx.timers.tick(4000);
   await settle();
   assert.ok(ctx.rec.invalidated.includes("proposal_apply"));
   assert.deepEqual(ctx.rec.rendered, ["today"], "Today repaints with the week on it");
+  assert.deepEqual(ctx.rec.toasts, [{ message: "Your first week is ready", action: "See it" }], "said once, in-app");
+  assert.ok(ctx.rec.apis.includes("/welcome/first-week/seen"), "and marked said, so the next open stays quiet");
+});
+
+test("streamed days paint as rows under the working line, each once, before the week is done", async () => {
+  const ctx = setup();
+  await settle();
+  await send(ctx);
+  const { handlers } = ctx.rec.streams[0];
+  handlers.onPhase(weekPhase);
+  assert.equal(ctx.host.querySelector(".wel-week-live"), null, "no list until a day exists");
+  const one = { ...weekPhase.meta, days_so_far: [result.week[0]] };
+  handlers.onPhase({ status: "running", meta: one });
+  const rows = () => [...ctx.host.querySelectorAll(".is-working .wel-week-live .wel-wk")].map((li) => li.textContent);
+  assert.deepEqual(rows(), ["MonFull body A"]);
+  const first = ctx.host.querySelector(".wel-week-live .wel-wk");
+  handlers.onPhase({ status: "running", meta: { ...one, days_so_far: result.week } });
+  assert.deepEqual(rows(), ["MonFull body A", "ThuFull body B"]);
+  assert.equal(ctx.host.querySelector(".wel-week-live .wel-wk"), first, "a day already shown is not painted again");
+  handlers.onPhase({ status: "running", meta: { ...one, days_so_far: result.week } });
+  assert.equal(rows().length, 2, "a repeat snapshot adds nothing");
+  assert.ok(
+    ctx.host.querySelector(".wel-week-live").innerHTML.includes("Full body B"),
+    "rows are escaped text from the meta"
+  );
+  handlers.onDone(result);
+  assert.equal(ctx.host.querySelector(".wel-week-live"), null, "the reveal replaces the preview");
+  assert.equal(ctx.host.querySelectorAll(".wel-reveal .wel-wk").length, 2);
+  assert.ok(ctx.rec.apis.includes("/welcome/first-week/seen"), "watched land here: the app says nothing more");
 });
 
 test("a reload mid-week re-attaches and repaints what already landed from the job's meta", async () => {

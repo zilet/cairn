@@ -10,8 +10,9 @@
 // conversation simply continues there.
 //
 // A reload mid-job finds the running job (GET /api/agent-jobs) and re-attaches; the
-// job's phase meta repaints whatever already landed. A job a server restart cut short
-// (the boot marks it interrupted) says so calmly and offers Try again with the same words.
+// job's phase meta repaints whatever already landed. A restart during the week re-queues
+// the same job to finish it (the boot's resume), so it simply re-attaches; one cut short
+// earlier (the boot marks it interrupted) says so calmly and offers Try again with the same words.
 (() => {
   type WelcomeResult = {
     ok?: boolean;
@@ -146,6 +147,8 @@
         localStorage.setItem("cairn.onboarded", "1");
       } catch {}
       CairnWelcomeRun.landed();
+      // They watched it land right here: the app's one-shot "ready" notice is said.
+      (globalThis as { CairnFirstWeek?: FirstWeekApi }).CairnFirstWeek?.seen();
       run.reveal(result);
       if (dock)
         dock.innerHTML = CairnWelcomeClient.doneDockHtml(

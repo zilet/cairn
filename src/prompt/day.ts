@@ -73,6 +73,12 @@ const DAY_READ_SCHEMA = `{
   "brake": "<ONLY when the baseline is train and you read today easy or rest: the field name of the fresh brake you acted on, exactly as listed under NAMED BRAKE RULE; otherwise null>"
 }`;
 
+// The server rejects a headline/why that breaks the reading grammar
+// (src/repo/day-read-grammar.ts: isValidDayReadAgentResult). A brand-new user has no data,
+// and the natural way to say so ("no baseline yet", "no readiness signal", "starting_out")
+// is exactly the vocabulary that rule set refuses — so the model is told the words up front.
+export const DAY_READ_WORDING_RULE = `WORDING RULE for "headline" and "why" (a reply that breaks it is thrown away): plain friend's words only. Never write the words baseline, posture, policy, override, directive, boundary, fingerprint, deterministic, "readiness signal" or "acute warning"; never an underscore or a snake_case name; never a number followed by %, /100, points or score; never "you must", "do not train" or "forbidden". With little or no data yet, say so simply ("I'm still getting to know you", "nothing on record yet").`;
+
 // A compact, deterministic read of the training history so the agent grasps the
 // RHYTHM (frequency, freshness, recent emphasis, sore/joint flags) without having
 // to reconstruct it from the raw session blob — this is what makes the Brief feel
@@ -725,6 +731,7 @@ RECENT TRAINING (most recent first): ${sessionLine}.
 TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${pathLine}${renderRecentReads(feltDate)}${renderReadOutcomes(context, baseline)}${renderPeriodization(feltDate)}${doneBlock}${lastNightLine}${oneNightLine}${fuelDemandLine}
 ${CONTEXT_GUARDRAILS}
 ${renderSignalState(context)}${renderCoachingFocus(context, { brief: true })}${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderRunZones(context)}${renderRunPlan(context)}${renderStrengthSchedule(context)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderMuscleGroups(context)}${renderPerformance(context, { brief: true })}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderHealthLead(context)}${renderReactionModel(context)}${renderTrajectory(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${renderTrainingConstraints(context)}${feltBlock}${learnedBlock}${backedBlock}${driveBlock}${todayHoldBlock}${namedBrakeBlock}${currentWordingBlock}${overrideBlock}
+${DAY_READ_WORDING_RULE}
 ${renderJsonContract(DAY_READ_SCHEMA)}
 
 DATA:

@@ -60,8 +60,10 @@ type TodayMainShellApi = {
     void deps;
     // #coachLinkSlot: one quiet line ahead of the Brief while no AI coach is connected
     // (or one is, and has not said hello yet) — coach-link-client.ts fills it; empty,
-    // it collapses. It leads because it is the one next step a fresh install has.
-    return `${options.isToday ? `<div id="coachLinkSlot" class="clink-slot"></div>` : ""}${options.briefHtml}
+    // it collapses. It leads because it is the one next step a fresh install has. After
+    // it, the welcome's first week while it comes together (first-week-client.ts).
+    const firstWeek = (globalThis as { CairnFirstWeek?: FirstWeekApi }).CairnFirstWeek;
+    return `${options.isToday ? `<div id="coachLinkSlot" class="clink-slot"></div>${firstWeek?.slotHtml() ?? ""}` : ""}${options.briefHtml}
     <div id="ctxBanner"><div id="ctxEvents"></div><div id="ctxHealth"></div></div>
     ${options.conductorHtml ? `<div class="cfocus-slot cfocus-thread-slot" id="cfocusSlot">${options.conductorHtml}</div>` : `<div class="cfocus-slot" id="cfocusSlot"></div>`}
     <div id="attentionLead" class="card-stack"></div>

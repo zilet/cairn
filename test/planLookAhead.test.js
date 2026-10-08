@@ -169,6 +169,17 @@ test("no lifting weekdays known: the lifting days read in the order they come ro
   assert.deepEqual(read.weeks, []);
   const names = repo.getPlan().map((d) => d.name);
   assert.deepEqual([...read.order.map((l) => l.title)].sort(), [...names].sort(), "every lifting day, once");
+  // No date to open a day page on, so each lifting day carries its movements to open in place.
+  for (const lift of read.order) {
+    const plan = repo.getPlan().find((d) => d.name === lift.title);
+    const items = plan.items.filter((i) => i.kind !== "cardio").map((i) => i.exercise);
+    assert.deepEqual(
+      lift.exercises.map((e) => e.name),
+      items,
+      `${lift.title}: every movement, in plan order`
+    );
+    for (const e of lift.exercises) assert.equal(typeof e.prescription, "string");
+  }
 });
 
 test("nothing planned reads as empty, never as a failure", (t) => {
