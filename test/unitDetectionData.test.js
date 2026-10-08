@@ -35,3 +35,28 @@ test("a filled-in profile counts as data", () => {
   assert.equal(installHasData(), true);
 });
 
+
+test("check-ins, a plan, a chat, a memory and synced watch days each count as data", () => {
+  const rows = [
+    ["checkins", () => repo.addCheckin(localDaysAgo(1), { energy: 4 })],
+    ["plan_days", () => db.prepare(`INSERT INTO plan_days (day_number, name, focus) VALUES (1, 'Lower', 'Legs')`).run()],
+    ["chat_messages", () => db.prepare(`INSERT INTO chat_messages (role, content) VALUES ('user', 'hi')`).run()],
+    ["memory", () => repo.addMemory("Prefers morning runs", "preference")],
+    [
+      "garmin_daily_metrics",
+      () => {
+        // A connected source alone is not data; a synced day is.
+        const source = db.prepare(`INSERT INTO garmin_sources (label) VALUES ('watch')`).run().lastInsertRowid;
+        assert.equal(installHasData(), false);
+        db.prepare(`INSERT INTO garmin_daily_metrics (source_id, date) VALUES (?, ?)`).run(source, localDaysAgo(1));
+      },
+    ],
+    ["food_notes", () => db.prepare(`INSERT INTO food_notes (date, meal) VALUES (?, 'oats')`).run(localDaysAgo(1))],
+  ];
+  for (const [table, write] of rows) {
+    for (const t of [...rows.map((r) => r[0]), "garmin_sources"]) db.prepare(`DELETE FROM ${t}`).run();
+    assert.equal(installHasData(), false, `empty before ${table}`);
+    write();
+    assert.equal(installHasData(), true, table);
+  }
+});

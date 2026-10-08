@@ -805,17 +805,34 @@ export function unitsSource(): UnitsSource | null {
   return null;
 }
 
+// Tables a fresh install leaves empty (seedIfEmpty's blank seed writes only the exercise
+// catalog) and that only the owner's use fills.
+const OWNER_DATA_TABLES = [
+  "bodyweight_log",
+  "sessions",
+  "logged_sets",
+  "plan_days",
+  "health_documents",
+  "food_notes",
+  "activities",
+  "checkins",
+  "chat_messages",
+  "memory",
+  "garmin_daily_metrics",
+] as const;
+
 /**
  * True once an install holds anything its owner put there: a weigh-in, a session or logged
- * set, a health record, a meal note, an activity, or a profile with anything filled in.
+ * set, a plan, a health record, a meal note, an activity, a check-in, a chat, a memory,
+ * synced watch days, or a profile with anything filled in.
  * The first-run unit guess only ever suits a truly empty install — "Re-run first-time
  * setup" flips `onboarded` back to false on a long-used one, and its units are then
  * already the ones it has been reading in (a US user on default lb must not flip to kg).
  */
 export function installHasData(): boolean {
-  for (const table of ["bodyweight_log", "sessions", "logged_sets", "health_documents", "food_notes", "activities"]) {
+  for (const table of OWNER_DATA_TABLES) {
     try {
-      if (db.prepare(`SELECT 1 AS x FROM ${table} LIMIT 1`).get()) return true;
+      if ((db.prepare(`SELECT EXISTS (SELECT 1 FROM ${table}) AS x`).get() as { x?: number } | undefined)?.x) return true;
     } catch {
       // A table an old schema lacks holds nothing.
     }
