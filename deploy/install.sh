@@ -2958,7 +2958,7 @@ rw_tpl_report() {
   step "Template draft ready${RW_TPL_STATUS:+ ($RW_TPL_STATUS)}"
   say "  Code:     $RW_TPL_CODE"
   say "  Editor:   https://railway.com/workspace/templates/$RW_TPL_ID"
-  say "  Deploy:   https://railway.com/new/template/$RW_TPL_CODE   (for everyone once published)"
+  say "  Deploy:   https://railway.com/deploy/$RW_TPL_CODE   (for everyone once published)"
   if [ -n "$RW_TPL_TODO" ]; then
     say ""
     say "  Left for Railway's template editor (the Editor link above), then Save:"
@@ -2981,7 +2981,7 @@ rw_tpl_publish() {
   say "  Description: $RW_TPL_DESCRIPTION"
   say "  Overview:    $RW_TPL_OVERVIEW"
   say "  Result:      public in Railway's marketplace, under your workspace:"
-  say "               https://railway.com/new/template/$RW_TPL_CODE"
+  say "               https://railway.com/deploy/$RW_TPL_CODE"
   if [ -n "$RW_TPL_TODO" ]; then say "  Missing:     the editor steps listed above (--force)"; fi
   confirm "Publish this template to Railway's marketplace?" "n" || {
     say "Not published. The draft stays private: https://railway.com/workspace/templates/$RW_TPL_ID"
@@ -2989,7 +2989,11 @@ rw_tpl_publish() {
   }
   rw_must "publish the template" templates publish "$RW_TPL_ID" --category "$RW_TPL_CATEGORY" \
     --description "$RW_TPL_DESCRIPTION" --readme-file "$RW_TPL_OVERVIEW" --json
-  ok "Published: https://railway.com/new/template/$RW_TPL_CODE"
+  # Publishing can give the template a new, shorter code (Railway named ours "cairn"):
+  # the draft's code then 404s, so the link comes from the publish answer.
+  rp_code=$(printf '%s\n' "$RW_OUT" | sed -n 's/.*"code"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9_-]*\)".*/\1/p' | head -n 1)
+  [ -z "$rp_code" ] || RW_TPL_CODE="$rp_code"
+  ok "Published: https://railway.com/deploy/$RW_TPL_CODE"
   say "  Point the project site's /railway redirect at that link to make it the README button."
 }
 

@@ -44,7 +44,7 @@ What it does, in order:
 5. Deletes the scratch project, also when a step fails or you press Ctrl-C. A project that already
    had the same name is never touched.
 6. Prints the template code, its editor link, the deploy link
-   (`https://railway.com/new/template/<code>`) and what is left for the editor.
+   (`https://railway.com/deploy/<code>`) and what is left for the editor.
 
 ### What Railway's generate does and does not carry
 

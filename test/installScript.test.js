@@ -777,7 +777,7 @@ case "$cmd" in
     [ -f "$S/fail_templates_$sub" ] && { echo "Error: templates $sub failed (fake)" >&2; exit 1; }
     case "$sub" in
       create) touch "$S/template"; echo '{"code":"AbC123","editorUrl":"https://railway.com/workspace/templates/'"$TPL_ID"'","id":"'"$TPL_ID"'","name":"Cairn","status":"UNPUBLISHED"}' ;;
-      publish) touch "$S/published"; echo '{"code":"AbC123","id":"'"$TPL_ID"'","status":"PUBLISHED"}' ;;
+      publish) touch "$S/published"; echo '{"code":"cairn","id":"'"$TPL_ID"'","status":"PUBLISHED"}' ;;
       delete) touch "$S/template_deleted"; echo '{"deleted":true}' ;;
     esac ;;
   *) echo "fake railway: unhandled $cmd" >&2; exit 64 ;;
@@ -1475,7 +1475,7 @@ test("railway-template builds the draft from the spec in a scratch project, then
 
     assert.match(r.out, /Code: {5}AbC123/);
     assert.ok(r.out.includes(`https://railway.com/workspace/templates/${TPL_ID}`));
-    assert.match(r.out, /https:\/\/railway\.com\/new\/template\/AbC123/);
+    assert.match(r.out, /https:\/\/railway\.com\/deploy\/AbC123/);
     assert.match(r.out, /Variable descriptions \(9 missing\)/);
     assert.match(r.out, /Auto Updates: on, maintenance window Night/);
     assertNoSecretValues(r.all + rig.read("rlog") + rig.read("patch.json"));
@@ -1563,7 +1563,8 @@ test("railway-template --publish: never with editor steps left (unless --force),
         ),
       rig.read("rlog")
     );
-    assert.match(yes.out, /Published: https:\/\/railway\.com\/new\/template\/AbC123/);
+    // Publishing can rename the code (Railway gave ours "cairn"): the link follows the publish answer.
+    assert.match(yes.out, /Published: https:\/\/railway\.com\/deploy\/cairn\n/);
 
     // --force publishes a draft whose only gaps are editor-only items.
     fs.rmSync(path.join(rig.state, "published"));
