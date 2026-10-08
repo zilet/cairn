@@ -36,10 +36,11 @@
 
 ## Horizon landing (Week segment — default always)
 1. Frame hero: "26 days to Cambridge Half"; one line under: "Sharpen · block week 6 of 6 · push through Nov 15" (single source of stage words).
-2. This week's shape: 7 columns with stone-coloured bars sized by planned dose; today pinned/outlined, done ticked, open key sessions hollow; the week's one summary sentence under it (owned here). Column tap -> day peek; row tap/"Open day" -> day page.
-3. Still open this week: at most 2 lines.
-4. Next up: next 2-3 milestones beyond this week (same milestone-row component as Season). "All of the season ›".
-5. Goals compact: race estimate WITH its time, weight trend, deadlift (goal-row moved from Today's Path card).
+2. Your road (journey-trail-client.ts, GET /api/week `journey`): the Path trail, moved here from Today — to scale in time from where the stretch began, through today, to the furthest dated goal (the summit). One calm line of where the athlete stands, tappable marks (the next one open), "Behind you" (what already moved toward a goal). Nothing dated ahead (this week only): a starter with one-tap openers that hand chat a first sentence, never sent for the athlete.
+3. This week's shape: 7 columns with stone-coloured bars sized by planned dose; today pinned/outlined, done ticked, open key sessions hollow; the week's one summary sentence under it (owned here). Column tap -> day peek; row tap/"Open day" -> day page.
+4. Still open this week: at most 2 lines.
+5. Next up: next 2-3 milestones beyond this week (same milestone-row component as Season). "All of the season ›".
+6. Goals compact: race estimate WITH its time, weight trend, deadlift (goal-row moved from Today's Path card).
 Segments: Week = shape of this week; To the race = week-by-week ramp (keeps the ladder chart; KM/MI toggle removed; hero replaced by the shared frame line); Season = months: goal line, labs, scans (dedupe lab rows: one per draw).
 Relation to Today: Today shows the week strip glance + one Horizon glance line; Horizon never shows session detail, the Brief or Fuel.
 

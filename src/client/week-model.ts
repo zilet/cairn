@@ -123,7 +123,7 @@
   /** The journey trail as served, kept only when it has a dated mark to draw toward. */
   function journeyOf(value: unknown): WeekRead["journey"] {
     const j = record(value) as WeekRead["journey"];
-    if (!j || !isoOf(j.start) || !isoOf(j.today)) return null;
+    if (!j || !isoOf(j.start_date) || !isoOf(j.today)) return null;
     const marks = list<NonNullable<WeekRead["journey"]>["marks"][number]>(j.marks).filter((m) => isoOf(m.date));
     if (!marks.length) return null;
     return { ...j, marks, behind: list(j.behind), line: text(j.line) };

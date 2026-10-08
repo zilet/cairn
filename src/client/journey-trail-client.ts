@@ -54,7 +54,7 @@
   /** The trail's height at x: a steady climb with a gentle meander, flattening at the top. */
   function trailY(x: number): number {
     const t = Math.max(0, Math.min(1, (x - X0) / (X1 - X0)));
-    const climb = 1 - (1 - t) ** 1.6;
+    const climb = 1 - (1 - t) ** 1.5;
     return Y_LOW - (Y_LOW - Y_HIGH) * climb + 4.5 * Math.sin(t * Math.PI * 2.4 + 0.3) * (1 - t * 0.6);
   }
 
@@ -73,7 +73,17 @@
   /** Which marks get a label, and on which side: summit and next first, then race, goal, the rest. */
   function placeLabels(placed: Placed[], xNow: number, xFrom: number | null): Map<number, "above" | "below"> {
     const rank = (p: Placed): number =>
-      p.mark.summit ? 0 : p.index === 0 ? 1 : p.mark.kind === "race" ? 2 : p.mark.kind === "goal" ? 3 : p.mark.kind === "peak_week" ? 4 : 5;
+      p.mark.summit
+        ? 0
+        : p.index === 0
+          ? 1
+          : p.mark.kind === "race"
+            ? 2
+            : p.mark.kind === "goal"
+              ? 3
+              : p.mark.kind === "peak_week"
+                ? 4
+                : 5;
     const taken: Record<"above" | "below", number[]> = { above: [], below: xFrom == null ? [xNow] : [xNow, xFrom] };
     const out = new Map<number, "above" | "below">();
     for (const p of [...placed].sort((a, b) => rank(a) - rank(b) || a.x - b.x)) {
@@ -148,7 +158,7 @@
   function trailHtml(journey: Journey | null | undefined, opts: { selected?: number; enter?: boolean } = {}): string {
     const marks = journey?.marks ?? [];
     if (!journey || !marks.length) return "";
-    const start = dayNumber(journey.start);
+    const start = dayNumber(journey.start_date);
     const today = dayNumber(journey.today);
     const end = Math.max(...marks.map((m) => dayNumber(m.end_date || m.date)));
     if (!Number.isFinite(start) || !Number.isFinite(today) || !(end > start)) return "";
@@ -178,9 +188,20 @@
         return `<path class="hjour-band stone-${STONE[m.kind]}" d="${pathD(a, b)}"/>`;
       })
       .join("");
-    const ground = `${pathD(X0, xNow)} L${r1(xNow)} 100 L${X0} 100 Z`;
+    // The ground wash lies under the whole trail, lit under the walked part and fading
+    // out just past today, so the road ahead reads as open ground.
+    const ground = `${pathD(X0, X1)} L${X1} 100 L${X0} 100 Z`;
+    const nowAt = (xNow - X0) / (X1 - X0);
+    const stops = [
+      [0, "hjour-g1"],
+      [Math.max(0, nowAt * 0.35), "hjour-g0"],
+      [nowAt, "hjour-g0"],
+      [Math.min(1, nowAt + 0.14), "hjour-g1"],
+    ]
+      .map(([o, c]) => `<stop offset="${r1(Number(o) * 100)}%" class="${c}"/>`)
+      .join("");
     const svg = `<svg class="hjour-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-      <defs><linearGradient id="hjourGround" x1="0" y1="0" x2="0" y2="1"><stop offset="0" class="hjour-g0"/><stop offset="1" class="hjour-g1"/></linearGradient></defs>
+      <defs><linearGradient id="hjourGround" x1="0" y1="0" x2="1" y2="0">${stops}</linearGradient></defs>
       <path class="hjour-ground" d="${ground}" fill="url(#hjourGround)"/>
       <path class="hjour-ahead" d="${pathD(xNow, X1)}"/>
       ${bands}

@@ -162,18 +162,18 @@ export interface WeekReadJourneyBehind {
 }
 
 /**
- * The journey trail Horizon's Week draws: to scale in time from `start` through today to
+ * The journey trail Horizon's Week draws: to scale in time from `start_date` through today to
  * the furthest dated goal. Built over Today's path (src/repo/today-path.ts), re-deriving
  * nothing; null when no dated mark lies ahead or the week is not this week.
  */
 export interface WeekReadJourney {
-  start: string;
+  start_date: string;
   /** "Sep 8". */
   start_words: string;
   today: string;
   /** Every dated mark ahead, ascending; the last is the summit. */
   marks: WeekReadJourneyMark[];
-  /** What moved toward a goal since `start` (at most three); empty when nothing did. */
+  /** What moved toward a goal since `start_date` (at most three); empty when nothing did. */
   behind: WeekReadJourneyBehind[];
   /** One calm line of where the athlete stands on the trail ("31 days walked, 10 to the race."). */
   line: string;

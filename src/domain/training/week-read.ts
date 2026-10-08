@@ -164,7 +164,8 @@ function chipOf(
         ? `${run.label} already in`
         : `${run.label}${run.distance_words ? `, ${run.distance_words}` : ""}`
     : "";
-  const words = [lift?.title ?? "", runWords].filter(Boolean).join(" · ") || (cell.status === "done" ? "Logged" : "Rest");
+  const words =
+    [lift?.title ?? "", runWords].filter(Boolean).join(" · ") || (cell.status === "done" ? "Logged" : "Rest");
   return {
     date,
     date_words: date ? dateWords(date, today, "weekday") : null,
@@ -302,7 +303,9 @@ function summaryOf(
   if (when === "future" || (when === "this" && nothingIn)) {
     const parts = [totals.lift_days_planned ? lifts(totals.lift_days_planned) : "", runAhead].filter(Boolean);
     if (!parts.length) return null;
-    return when === "future" ? `${lead} ahead: ${parts.join(" and ")}.` : `${lead}: ${parts.join(" and ")} ahead${tail}.`;
+    return when === "future"
+      ? `${lead} ahead: ${parts.join(" and ")}.`
+      : `${lead}: ${parts.join(" and ")} ahead${tail}.`;
   }
   const liftIn =
     totals.lift_days_done > 0
@@ -457,7 +460,8 @@ function behindOf(path: TodayPath, units: AthleteUnits): WeekReadJourneyBehind[]
   if (w && first && w.mode !== "maintain") {
     const delta = w.current_lb - first.weight_lb;
     const toward = w.mode === "lose" ? delta <= -0.5 : delta >= 0.5;
-    if (toward) out.push({ key: "weight", words: `${weightDeltaWords(delta, units.weight)} since ${dateWords(first.date)}` });
+    if (toward)
+      out.push({ key: "weight", words: `${weightDeltaWords(delta, units.weight)} since ${dateWords(first.date)}` });
   }
   for (const row of path.board ?? []) {
     if (row.key !== "strength") continue;
@@ -482,14 +486,22 @@ function journeyLine(walked: number | null, marks: WeekReadJourneyMark[], today:
     share >= 0.8
       ? pickDayVariant(["Most of this road is behind you.", "The summit is in sight."], today, "week:journey:far")
       : share >= 0.5
-        ? pickDayVariant(["Past halfway on this road.", "More of this road is behind you than ahead."], today, "week:journey:half")
+        ? pickDayVariant(
+            ["Past halfway on this road.", "More of this road is behind you than ahead."],
+            today,
+            "week:journey:half"
+          )
         : walked != null && walked >= 7
           ? pickDayVariant(
               [`${walked} days on this road so far.`, `${walked} days walked on this road.`],
               today,
               "week:journey:early"
             )
-          : pickDayVariant(["One week at a time.", "Steady steps add up.", "Every logged day is a step on it."], today, "week:journey:start");
+          : pickDayVariant(
+              ["One week at a time.", "Steady steps add up.", "Every logged day is a step on it."],
+              today,
+              "week:journey:start"
+            );
   const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
   if (summit === next) return `${lead} ${cap(nextPart)}.`;
   return `${lead} Next, ${nextPart}; ${markName(summit)} ${summit.days_words}.`;
@@ -518,7 +530,7 @@ function journeyOf(path: TodayPath | null, today: string, units: AthleteUnits): 
   });
   const walked = path.race?.since === start ? Math.max(0, daysBetweenISO(today, start) ?? 0) : null;
   return {
-    start,
+    start_date: start,
     start_words: dateWords(start, today),
     today,
     marks,

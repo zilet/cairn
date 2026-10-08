@@ -39,7 +39,8 @@
 
   function shapeHtml(model: ClientWeekLanding, selected: string | null): string {
     const shape = CairnWeekStrip.shapeHtml(model.days, { selected, controls: PEEK_ID });
-    if (!shape) return `<p class="hwk-empty">Nothing planned this week yet. A lifting plan in Train or run days in chat fill it in.</p>`;
+    if (!shape)
+      return `<p class="hwk-empty">Nothing planned this week yet. A lifting plan in Train or run days in chat fill it in.</p>`;
     const open = !!selected;
     return `${shape}
       <div class="hwk-fold${open ? " is-open" : ""}" id="${PEEK_ID}" data-hwk-fold${open ? "" : " inert"} role="region" aria-label="The day opened"><div class="hwk-fold-in" data-hwk-peek></div></div>
@@ -80,7 +81,10 @@
     opts: { enter?: boolean; selected?: string | null; seasonHref?: string; mark?: number } = {}
   ): string {
     const hero =
-      CairnFrameLine.heroHtml(model.frame, { kicker: model.range ? `This week · ${model.range}` : "This week", id: "hwkTitle" }) ||
+      CairnFrameLine.heroHtml(model.frame, {
+        kicker: model.range ? `This week · ${model.range}` : "This week",
+        id: "hwkTitle",
+      }) ||
       `<header class="frameline"><span class="lbl frameline-k">This week</span><h2 class="frameline-h" id="hwkTitle">${escHtml(model.range || "This week")}</h2></header>`;
     return `<div class="hwk${opts.enter ? " settle-in is-entering" : ""}">
       ${hero}

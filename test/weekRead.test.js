@@ -24,7 +24,13 @@ const ISO = /\b\d{4}-\d{2}-\d{2}\b/;
 function seedRace() {
   seedDemo();
   repo.setProfile({
-    endurance_goal: { mode: "race", event: "Riverside Half", date: "2026-10-18", distance_km: 21.1, target: "sub-1:45" },
+    endurance_goal: {
+      mode: "race",
+      event: "Riverside Half",
+      date: "2026-10-18",
+      distance_km: 21.1,
+      target: "sub-1:45",
+    },
   });
 }
 
@@ -157,4 +163,35 @@ test("GET /api/week and get_week answer one body; /plan/week stays the strip's c
   assert.equal(weekReadStart(undefined), localDateISO());
   assert.equal(weekReadStart("2026-09-24"), "2026-09-24");
   assert.equal(weekReadStart("Sept"), null);
+});
+
+test("the journey: every dated mark ahead to the summit, behind-you movement, one line; this week only", (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: NOW });
+  seedRace();
+  const today = localDateISO();
+  const read = weekRead();
+  const j = read.journey;
+  assert.ok(j, "a race ahead draws a road");
+  assert.equal(j.today, today);
+  assert.ok(j.start_date <= today);
+  assert.ok(j.marks.length >= 1);
+  assert.deepEqual(
+    j.marks.map((m) => m.date),
+    [...j.marks.map((m) => m.date)].sort(),
+    "marks run in date order"
+  );
+  assert.ok(j.marks.every((m) => m.date >= today && m.short && m.days_words && !ISO.test(m.date_words)));
+  assert.equal(j.marks.filter((m) => m.summit).length, 1, "one summit");
+  const race = j.marks.find((m) => m.kind === "race");
+  assert.ok(race, "the race is on the road");
+  assert.equal(race.short, "Half");
+  assert.ok(j.line && !ISO.test(j.line));
+  assert.ok(Array.isArray(j.behind) && j.behind.length <= 3);
+  assert.equal(weekRead(addDaysISO(today, 7)).journey, null, "another week draws no road");
+});
+
+test("the journey is null with nothing dated ahead", (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: NOW });
+  // A fresh install: no goal, no race, no plan — the client draws the starter instead.
+  assert.equal(weekRead().journey, null);
 });
