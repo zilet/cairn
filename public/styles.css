@@ -3159,6 +3159,7 @@ button.hmk-row:active{background:var(--card-2)}
 .you-intro{margin:var(--space-1) var(--space-1) 0;font-size:var(--text-md);line-height:var(--leading);color:var(--muted);max-width:56ch}
 .you-list-h{margin:var(--space-9) var(--space-1) var(--space-4)}
 .you-add{margin-top:var(--space-9)}
+#flist:empty+.you-add{display:none}
 .you-add-sum{list-style:none;cursor:pointer;display:inline-flex;align-items:center;gap:var(--space-4);padding:var(--space-4) var(--space-7) var(--space-4) var(--space-6);border:1px solid var(--line);border-radius:var(--radius-pill);background:var(--surface);font-size:var(--text-md);font-weight:var(--weight-medium);color:var(--ink);transition:transform .15s var(--ease),border-color var(--dur-1) var(--ease)}
 .you-add-sum::-webkit-details-marker{display:none}
 .you-add-sum:hover{border-color:var(--line-strong)}
@@ -5184,6 +5185,7 @@ to{transform:scaleX(1)}
 .ddv-inline .ddv-today{margin-top:calc(-1 * var(--space-4))}
 .dayrec.has-detail>.ddv{gap:var(--space-11)}
 .tstrip-slot:empty{display:none}
+.today-wrap .tstrip-slot:empty:not([data-none]){display:block;min-height:125px}
 .tstrip-slot{margin-top:var(--space-8)}
 .today-wrap .tstrip-slot{margin-top:var(--today-gap)}
 .tstrip{display:flex;flex-direction:column}

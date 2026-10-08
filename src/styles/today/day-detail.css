@@ -161,6 +161,10 @@
    inline below.
    ===================================================================== */
 .tstrip-slot:empty{display:none}
+/* Reserved while the week is still on its way (the lazy bundle, then /plan/week): the strip's
+   own height, so the Brief under it never slides down. A week that has none, or fails to load,
+   releases it (data-none, set by today-strip-controller.ts). */
+.today-wrap .tstrip-slot:empty:not([data-none]){display:block;min-height:125px}
 .tstrip-slot{margin-top:var(--space-8)}
 .today-wrap .tstrip-slot{margin-top:var(--today-gap)}
 .tstrip{display:flex;flex-direction:column}

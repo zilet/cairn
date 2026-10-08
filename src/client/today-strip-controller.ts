@@ -79,6 +79,7 @@
       if (!cells) {
         closeDay(false);
         host.innerHTML = "";
+        host.setAttribute("data-none", ""); // nothing to show: release the reserved space
         lastDays = "";
         lastNow = "";
         return;
@@ -89,6 +90,7 @@
         // This mount's first paint owns the whole strip (a carried or held node's old
         // markup is not ours — its listeners died with it).
         first = false;
+        host.removeAttribute("data-none");
         const head = header();
         host.innerHTML = CairnTodayStrip.stripHtml(week, deps.date, null, head);
         lastDays = CairnTodayStrip.daysHtml(cells, null);
@@ -222,7 +224,9 @@
     deps
       .load(WEEK[0], { key: WEEK[1] })
       .then((value) => paint(value))
-      .catch(() => {});
+      .catch(() => {
+        if (live && !host.firstElementChild) host.setAttribute("data-none", "");
+      });
     return teardown;
   }
 
