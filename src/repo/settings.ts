@@ -1037,7 +1037,12 @@ export function setSettings(patch: any, opts: { keepStances?: boolean } = {}): S
     merged.coach_welcomed ? 1 : 0
   );
   // A person saving a unit makes it theirs: the first-run detection never runs over it.
-  if (validUnit("distance", patch.run_units) != null || validUnit("weight", patch.weight_units) != null) {
+  // The Settings screen re-sends every field on any save, so once units were DETECTED an
+  // unchanged unit is not a new choice — only a changed one is (the region note stays true).
+  const runSent = validUnit("distance", patch.run_units);
+  const weightSent = validUnit("weight", patch.weight_units);
+  const changed = (runSent != null && runSent !== cur.run_units) || (weightSent != null && weightSent !== cur.weight_units);
+  if (changed || ((runSent != null || weightSent != null) && unitsSource() == null)) {
     if (getAppState(UNITS_SOURCE_KEY) !== "explicit") setAppState(UNITS_SOURCE_KEY, "explicit");
   }
   // The lab-value system: 'us' | 'si' sets it; 'auto' / '' / null hands it back to the

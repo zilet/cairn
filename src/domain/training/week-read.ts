@@ -478,7 +478,8 @@ function behindOf(path: TodayPath, units: AthleteUnits): WeekReadJourneyBehind[]
  */
 function journeyLine(walked: number | null, marks: WeekReadJourneyMark[], today: string): string {
   const next = marks[0];
-  const summit = marks[marks.length - 1];
+  // The summit is the mark the road ends at (latest end), the same one journeyOf flags.
+  const summit = marks.find((m) => m.summit) ?? marks[marks.length - 1];
   const nextPart = `${markName(next)} ${next.days_words}`;
   const total = (walked ?? 0) + summit.days_away;
   const share = walked != null && total > 0 ? walked / total : 0;

@@ -172,7 +172,8 @@
         : xNow + ((d - today) / Math.max(1, end - today)) * (X1 - xNow);
     const yNow = trailY(xNow);
     const placed: Placed[] = marks.map((mark, index) => {
-      const x = xOf(dayNumber(mark.date));
+      // The summit stands where the road ends: a window's last day, else its own date.
+      const x = xOf(dayNumber(mark.summit ? mark.end_date || mark.date : mark.date));
       return { mark, index, x, y: trailY(x) };
     });
     // The start's date sits under the start only when today is far enough along not to crowd it.
@@ -226,7 +227,8 @@
         return `<button type="button" class="hjour-lbl ${side} ${alignOf(p.x)}${p.mark.summit ? " is-summit" : ""}" style="${pos}" data-hjour-mark="${p.index}" aria-pressed="${p.index === selected}" aria-controls="hjourDetail" aria-label="${escAttr(aria)}"><small>${escHtml(p.mark.days_words)}</small><b>${escHtml(p.mark.short)}</b></button>`;
       })
       .join("");
-    const aria = `Your road from ${journey.start_words} through today to ${marks[marks.length - 1].label}, ${marks[marks.length - 1].date_words}`;
+    const summit = marks.find((m) => m.summit) ?? marks[marks.length - 1];
+    const aria = `Your road from ${journey.start_words} through today to ${summit.label}, ${summit.date_words}`;
     return `<div class="hjour${opts.enter ? " is-drawing" : ""}" data-hjour>
       ${journey.line ? `<p class="hjour-line">${escHtml(journey.line)}</p>` : ""}
       <div class="hjour-plot" role="img" aria-label="${escAttr(aria)}">

@@ -158,3 +158,13 @@ test("REST: a settings save that sends no unit leaves detection pending", async 
   await call("PUT", "/settings", { meal_plan_auto_draft: true });
   assert.equal((await call("GET", "/settings")).settings.units_source, null);
 });
+
+test("re-saving detected units unchanged keeps them detected; a changed unit makes them explicit", () => {
+  applyDetectedUnits({ locale: "de-DE", timeZone: "Europe/Berlin" });
+  assert.equal(unitsSource(), "detected");
+  // The Settings screen re-sends every field on any save.
+  setSettings({ run_units: "km", weight_units: "kg", meal_plan_auto_draft: true });
+  assert.equal(unitsSource(), "detected");
+  setSettings({ run_units: "mi", weight_units: "kg" });
+  assert.equal(unitsSource(), "explicit");
+});

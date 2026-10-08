@@ -807,3 +807,16 @@ test("your road, starter: nothing dated ahead opens chat with a first sentence, 
   assert.match(String(state.chatPrefill), /^I'm training for a race\./);
   assert.deepEqual(tabs, ["chat"]);
 });
+
+test("your road: the summit is the mark the road ends at, even when a window ends after a later start", () => {
+  const win = load();
+  const j = journey();
+  // A peak week that ends after a checkpoint that starts later: the peak week is the summit.
+  j.marks = [
+    { ...j.marks[0], date: "2026-10-12", end_date: "2026-10-18", summit: true },
+    { kind: "checkpoint", label: "Strength checkpoint", date: "2026-10-14", end_date: null, date_words: "Oct 14", detail: null, short: "Test", days_away: 8, days_words: "in 8 days", summit: false },
+  ];
+  const host = landing(win, { ...weekRead(), journey: j });
+  assert.match(host.querySelector(".hjour-plot").getAttribute("aria-label"), /to Peak week · 48 km, Oct 12 – Oct 18$/);
+  assert.equal(host.querySelectorAll(".hjour-node.is-summit").length, 1);
+});
