@@ -41,6 +41,8 @@ import { markerAgingClause, markerValidityClass, readingAgeDays, validityBand } 
 import { labRangeRead } from "../../repo/lab-range.js";
 import { markerGroup, markerGroupRank } from "../../repo/propagation-data.js";
 import { prioritizeMarkers } from "../../repo/propagation.js";
+import { presentMarkerRow } from "../../repo/lab-display.js";
+import { labUnitSystem } from "../../repo/settings.js";
 import { localDateISO } from "../../repo/shared.js";
 import { isoDate } from "../../lib/dates.js";
 import { markerOptimalTrusted, publicMarkerRow } from "./marker-public.js";
@@ -307,7 +309,10 @@ export function searchRecords(opts: { q?: unknown; group?: unknown; asOf?: strin
   } catch {
     rawMarkers = [];
   }
-  const markers = rawMarkers.filter((m) => matches(tokens, markerHaystack(m))).map((m) => markerHit(m, asOf));
+  const system = labUnitSystem();
+  const markers = rawMarkers
+    .filter((m) => matches(tokens, markerHaystack(m)))
+    .map((m) => markerHit(presentMarkerRow(m, system), asOf));
 
   let docs: any[] = [];
   try {

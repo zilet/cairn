@@ -20,6 +20,8 @@ import { round1 } from "./lib/numbers.js";
 import { LB_PER_KG } from "./repo/display-words.js";
 import { optimalTrustworthy } from "./repo/optimal-trust.js";
 import { labRangeRead } from "./repo/lab-range.js";
+import { labUnitSystemWords, presentMarkerRow } from "./repo/lab-display.js";
+import { labUnitSystem } from "./repo/settings.js";
 import type {
   ClientHealthReportJson,
   ClientReportGroup,
@@ -649,7 +651,10 @@ function toMarkerView(m: any, asOfISO: string): ReportMarker {
     latestDate,
     trendDir: t.dir ?? null,
     trendText,
-    methodNote: methodNote(name),
+    // A value its lab printed in another unit system says so, beside the shown value.
+    methodNote: m?.latest?.reported
+      ? appendNote(methodNote(name), `As reported: ${String(m.latest.reported)}.`)
+      : methodNote(name),
     sourceNames: sourceNames(m, name),
     estimated: false,
     dateLabel: null,
@@ -959,7 +964,11 @@ export function buildClinicalReportData(opts: ClinicalReportOptions = {}): Clini
     bodyMetricRead = null;
   }
 
+  // Shown in the athlete's lab-unit system (src/repo/lab-display.ts); every judgement on
+  // the row (lab range, optimal band) was already made in canonical units.
+  const labSystem = labUnitSystem();
   const markerViews = (Array.isArray(markers) ? markers : [])
+    .map((raw) => presentMarkerRow(raw, labSystem))
     .map((m) => {
       const groupKey = m?.group || "other";
       const groupName = m?.group_label || "Other Markers";
@@ -1105,7 +1114,7 @@ export function buildClinicalReportData(opts: ClinicalReportOptions = {}): Clini
     sources,
     sections,
     visitQuestions,
-    disclaimer: REPORT_DISCLAIMER,
+    disclaimer: `${REPORT_DISCLAIMER} Lab values are in ${labUnitSystemWords(labSystem)}; a value its lab printed in another unit is noted as reported.`,
   };
 }
 

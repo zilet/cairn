@@ -40,16 +40,34 @@ export function parseLabNumber(input: unknown): number | null {
   return Number.isFinite(out) ? out : null;
 }
 
+// One spelling per unit, so "µmol/L", "umol/l", "μmol / L" and UCUM's "umol/L" compare
+// equal, and the count spellings ("10*9/L", "×10⁹/L", "x10e9/L") all read "10^9/l".
+const SUPERSCRIPT_DIGITS: Record<string, string> = {
+  "⁰": "0",
+  "¹": "1",
+  "²": "2",
+  "³": "3",
+  "⁴": "4",
+  "⁵": "5",
+  "⁶": "6",
+  "⁷": "7",
+  "⁸": "8",
+  "⁹": "9",
+};
+
 function normUnit(unit: unknown): string | null {
   if (unit === null || unit === undefined) return null;
   const raw = String(unit).trim();
   if (!raw) return null;
   return raw
+    .replace(/[[\]]/g, "") // UCUM annotations: "[IU]/L", "m[IU]/mL"
     .replace(/[μµ]/g, "u")
     .replace(/mcg/gi, "ug")
-    .replace(/\u00b3/g, "3")
-    .replace(/\u00b2/g, "2")
+    .replace(/10([⁰¹²³⁴⁵⁶⁷⁸⁹]+)/g, (_m, d: string) => `10^${[...d].map((c) => SUPERSCRIPT_DIGITS[c]).join("")}`)
+    .replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹]/g, (c) => SUPERSCRIPT_DIGITS[c])
     .replace(/\s+/g, "")
+    .replace(/10(?:\*|e|E)(\d+)/g, "10^$1")
+    .replace(/^[x×*](?=10\^)/i, "")
     .replace(/per/gi, "/")
     .replace(/litre/gi, "l")
     .replace(/liter/gi, "l")
@@ -66,16 +84,20 @@ function sameUnit(a: unknown, b: unknown): boolean {
     ["mmol/l"],
     ["ng/ml", "ug/l"],
     ["pg/ml", "ng/l"],
-    ["uiu/ml", "miu/l", "miu/ml", "iu/l", "mu/l", "mu/ml"],
-    ["u/l", "iu/l"],
+    // Micro-units per millilitre ARE milli-units per litre (TSH, insulin)...
+    ["uiu/ml", "miu/l", "mu/l", "uu/ml"],
+    // ...and milli-units per millilitre are WHOLE units per litre (FSH, LH, enzymes) —
+    // a thousand times the row above, so the two families never compare equal.
+    ["u/l", "iu/l", "miu/ml", "mu/ml"],
     ["ml/min", "ml/min/1.73m2", "ml/min/1.73m^2"],
     ["mg/l"],
     ["nmol/l"],
     ["umol/l"],
     ["pmol/l"],
     ["%"],
-    ["m/ul", "million/ul", "10^6/ul", "10e6/ul", "x10^6/ul", "x10e6/ul"],
-    ["k/ul", "th/ul", "thou/ul", "thousand/ul", "10^3/ul", "10e3/ul", "x10^3/ul", "x10e3/ul"],
+    // 10^6/µL is exactly 10^12/L, and 10^3/µL exactly 10^9/L.
+    ["m/ul", "million/ul", "10^6/ul", "10e6/ul", "x10^6/ul", "x10e6/ul", "10^12/l"],
+    ["k/ul", "th/ul", "thou/ul", "thousand/ul", "10^3/ul", "10e3/ul", "x10^3/ul", "x10e3/ul", "10^9/l"],
     ["g/dl"],
     ["mcg/dl", "ug/dl"],
     ["pg"],
@@ -99,69 +121,185 @@ function roundLabValue(n: number): number {
   return Math.round(n * scale) / scale;
 }
 
+// ---------------------------------------------------------------------------
+// The ONE conversion table.
+//
+// Every recognized analyte has ONE canonical unit — the unit its optimal band is written
+// in (OPTIMAL_ZONES, propagation-data.ts; US conventional). Every comparison (optimal
+// band, lab range, trend, dedupe agreement, directives) runs in that unit, so a reading
+// from a lab on the other system is comparable the moment it is read. The table also
+// names the analyte's SI unit, which is what a person who reads SI labs is SHOWN
+// (`fromCanonical`, src/repo/lab-display.ts), and any other spelling a lab prints (`alt`).
+//
+// A map is linear: target = value × factor + offset. Factors are molar-mass based:
+//   glucose mg/dL ÷ 18.016 = mmol/L; total/LDL/HDL/non-HDL cholesterol × 0.02586;
+//   triglycerides × 0.01129; creatinine × 88.42 = µmol/L; vitamin D ng/mL × 2.496 =
+//   nmol/L; testosterone ng/dL × 0.03467 = nmol/L; HbA1c IFCC mmol/mol = (% − 2.15) ×
+//   10.929; ApoB mg/dL ÷ 100 = g/L; hemoglobin g/dL × 10 = g/L.
+// Lp(a) is deliberately NOT convertible: mg/dL ↔ nmol/L has no fixed factor (the apo(a)
+// isoform size changes the mass per particle), so a reading in the other unit is only
+// ever LABELLED, never converted (`never`).
+// ---------------------------------------------------------------------------
+
+export type LabUnitSystem = "us" | "si";
+
+export const LAB_UNIT_SYSTEMS: readonly LabUnitSystem[] = ["us", "si"];
+
+interface LinearMap {
+  factor: number;
+  offset?: number;
+}
+
+export interface LabUnitSpec {
+  /** The unit every comparison runs in — the optimal band's own unit (US conventional). */
+  canonical: string;
+  /** The SI unit and the canonical → SI map. Absent: both systems print the canonical unit. */
+  si?: LinearMap & { unit: string };
+  /** Other spellings a lab prints, each with its map INTO the canonical unit. */
+  alt?: Array<LinearMap & { units: string[] }>;
+  /** Units that measure the analyte on a scale with no fixed conversion (labelled, never converted). */
+  never?: string[];
+}
+
+const LIPID_SI = { unit: "mmol/L", factor: 0.02586 };
+const PROTEIN_SI = { unit: "g/L", factor: 10 };
+const COUNT_SI = { unit: "×10⁹/L", factor: 1 };
+const COUNT_ALT = [
+  { units: ["g/l", "giga/l"], factor: 1 }, // "G/L" (giga per litre) on French/German counts
+  { units: ["cells/ul", "cell/ul", "/ul"], factor: 0.001 },
+];
+const MEQ_ALT = [{ units: ["meq/l"], factor: 1 }]; // monovalent ions: mEq/L ≡ mmol/L
+const ENZYME_ALT = [{ units: ["ukat/l"], factor: 60 }]; // 1 µkat/L = 60 U/L
+const HBA1C_FACTOR = 10.929;
+
+/** Keyed by the lowercased OPTIMAL_ZONES label. */
+export const LAB_UNIT_TABLE: Readonly<Record<string, LabUnitSpec>> = {
+  apob: { canonical: "mg/dL", si: { unit: "g/L", factor: 0.01 }, alt: [{ units: ["mg/l"], factor: 0.1 }] },
+  "ldl-c": { canonical: "mg/dL", si: LIPID_SI },
+  "hdl-c": { canonical: "mg/dL", si: LIPID_SI },
+  "non-hdl-c": { canonical: "mg/dL", si: LIPID_SI },
+  "total cholesterol": { canonical: "mg/dL", si: LIPID_SI },
+  triglycerides: { canonical: "mg/dL", si: { unit: "mmol/L", factor: 0.01129 } },
+  "fasting glucose": { canonical: "mg/dL", si: { unit: "mmol/L", factor: 1 / 18.016 } },
+  hba1c: { canonical: "%", si: { unit: "mmol/mol", factor: HBA1C_FACTOR, offset: -2.15 * HBA1C_FACTOR } },
+  "fasting insulin": { canonical: "uIU/mL", si: { unit: "mIU/L", factor: 1 }, alt: [{ units: ["pmol/l"], factor: 1 / 6 }] },
+  creatinine: { canonical: "mg/dL", si: { unit: "µmol/L", factor: 88.42 } },
+  bun: { canonical: "mg/dL", si: { unit: "mmol/L", factor: 0.357 } },
+  "uric acid": { canonical: "mg/dL", si: { unit: "µmol/L", factor: 59.48 } },
+  magnesium: { canonical: "mg/dL", si: { unit: "mmol/L", factor: 0.4114 } },
+  calcium: { canonical: "mg/dL", si: { unit: "mmol/L", factor: 0.2495 } },
+  "total bilirubin": { canonical: "mg/dL", si: { unit: "µmol/L", factor: 17.1 } },
+  albumin: { canonical: "g/dL", si: PROTEIN_SI },
+  "total protein": { canonical: "g/dL", si: PROTEIN_SI },
+  globulin: { canonical: "g/dL", si: PROTEIN_SI },
+  hemoglobin: { canonical: "g/dL", si: PROTEIN_SI, alt: [{ units: ["mmol/l"], factor: 1.611 }] },
+  mchc: { canonical: "g/dL", si: PROTEIN_SI },
+  hematocrit: { canonical: "%", alt: [{ units: ["l/l"], factor: 100 }] },
+  "serum iron": { canonical: "mcg/dL", si: { unit: "µmol/L", factor: 0.1791 } },
+  tibc: { canonical: "mcg/dL", si: { unit: "µmol/L", factor: 0.1791 } },
+  transferrin: { canonical: "mg/dL", si: { unit: "g/L", factor: 0.01 } },
+  ferritin: { canonical: "ng/mL", si: { unit: "µg/L", factor: 1 } },
+  "vitamin d": { canonical: "ng/mL", si: { unit: "nmol/L", factor: 2.496 } },
+  "vitamin b12": { canonical: "pg/mL", si: { unit: "pmol/L", factor: 0.738 } },
+  folate: { canonical: "ng/mL", si: { unit: "nmol/L", factor: 2.266 } },
+  testosterone: { canonical: "ng/dL", si: { unit: "nmol/L", factor: 0.03467 }, alt: [{ units: ["ng/ml"], factor: 100 }] },
+  estradiol: { canonical: "pg/mL", si: { unit: "pmol/L", factor: 3.671 } },
+  "free t3": { canonical: "pg/mL", si: { unit: "pmol/L", factor: 1.536 } },
+  "free t4": { canonical: "ng/dL", si: { unit: "pmol/L", factor: 12.87 } },
+  tsh: { canonical: "uIU/mL", si: { unit: "mIU/L", factor: 1 } },
+  "morning cortisol": { canonical: "ug/dL", si: { unit: "nmol/L", factor: 27.59 } },
+  "dhea-s": { canonical: "ug/dL", si: { unit: "µmol/L", factor: 0.02714 } },
+  psa: { canonical: "ng/mL", si: { unit: "µg/L", factor: 1 } },
+  "hs-crp": { canonical: "mg/L", alt: [{ units: ["mg/dl"], factor: 10 }] },
+  alt: { canonical: "U/L", alt: ENZYME_ALT },
+  ast: { canonical: "U/L", alt: ENZYME_ALT },
+  ggt: { canonical: "U/L", alt: ENZYME_ALT },
+  "alkaline phosphatase": { canonical: "U/L", alt: ENZYME_ALT },
+  sodium: { canonical: "mmol/L", alt: MEQ_ALT },
+  potassium: { canonical: "mmol/L", alt: MEQ_ALT },
+  chloride: { canonical: "mmol/L", alt: MEQ_ALT },
+  co2: { canonical: "mmol/L", alt: MEQ_ALT },
+  "anion gap": { canonical: "mmol/L", alt: MEQ_ALT },
+  rbc: { canonical: "M/uL", si: { unit: "×10¹²/L", factor: 1 }, alt: [{ units: ["t/l", "tera/l"], factor: 1 }] },
+  wbc: { canonical: "K/uL", si: COUNT_SI, alt: COUNT_ALT },
+  platelets: { canonical: "K/uL", si: COUNT_SI, alt: COUNT_ALT },
+  "absolute neutrophils": { canonical: "K/uL", si: COUNT_SI, alt: COUNT_ALT },
+  "absolute lymphocytes": { canonical: "K/uL", si: COUNT_SI, alt: COUNT_ALT },
+  "absolute monocytes": { canonical: "K/uL", si: COUNT_SI, alt: COUNT_ALT },
+  "absolute eosinophils": { canonical: "K/uL", si: COUNT_SI, alt: COUNT_ALT },
+  "absolute basophils": { canonical: "K/uL", si: COUNT_SI, alt: COUNT_ALT },
+  "absolute immature granulocytes": { canonical: "K/uL", si: COUNT_SI, alt: COUNT_ALT },
+  "absolute nrbc": { canonical: "K/uL", si: COUNT_SI, alt: COUNT_ALT },
+  // Lp(a): nmol/L (particle count) is the band's unit; a mass reading (mg/dL, mg/L) is
+  // a different measure with no fixed factor — kept as reported, flagged, never converted.
+  "lp(a)": { canonical: "nmol/L", never: ["mg/dl", "mg/l"] },
+};
+
+/** The conversion spec for an analyte (its OPTIMAL_ZONES label), or null when unknown. */
+export function labUnitSpec(label: string | null | undefined): LabUnitSpec | null {
+  if (!label) return null;
+  return LAB_UNIT_TABLE[String(label).toLowerCase()] ?? null;
+}
+
+function applyMap(value: number, map: LinearMap): number {
+  return value * map.factor + (map.offset ?? 0);
+}
+
+/**
+ * A value in `fromUnit` brought into the analyte's canonical unit, or null when the unit
+ * is not one this analyte converts from (unknown, or a `never` scale like Lp(a) mg/dL).
+ * Unrounded — callers round for storage/display.
+ */
+export function toCanonical(label: string | null | undefined, value: number, fromUnit: unknown): number | null {
+  const spec = labUnitSpec(label);
+  if (!spec || !Number.isFinite(value)) return null;
+  const from = normUnit(fromUnit);
+  if (!from) return null;
+  if (spec.never?.some((u) => sameUnit(u, from))) return null;
+  if (sameUnit(from, spec.canonical)) return value;
+  if (spec.si && sameUnit(from, spec.si.unit)) return (value - (spec.si.offset ?? 0)) / spec.si.factor;
+  for (const alt of spec.alt ?? []) {
+    if (alt.units.some((u) => sameUnit(u, from))) return applyMap(value, alt);
+  }
+  return null;
+}
+
+/** The unit an analyte is SHOWN in under a unit system (the canonical unit when the system has no other). */
+export function displayUnitFor(label: string | null | undefined, system: LabUnitSystem): string | null {
+  const spec = labUnitSpec(label);
+  if (!spec) return null;
+  return system === "si" && spec.si ? spec.si.unit : spec.canonical;
+}
+
+/**
+ * A canonical value in the display unit of `system`. A delta (a trend's change, a weekly
+ * slope) scales by the factor alone — an offset (HbA1c's IFCC map) never applies to a
+ * difference. Unrounded.
+ */
+export function fromCanonical(
+  label: string | null | undefined,
+  value: number,
+  system: LabUnitSystem,
+  opts: { delta?: boolean } = {}
+): number | null {
+  const spec = labUnitSpec(label);
+  if (!spec || !Number.isFinite(value)) return null;
+  if (system !== "si" || !spec.si) return value;
+  return opts.delta ? value * spec.si.factor : applyMap(value, spec.si);
+}
+
 function convertByZone(value: number, fromUnit: string | null, zone: LabUnitZone): { value: number; converted: boolean } | null {
-  const label = String(zone.label ?? "").toLowerCase();
   const expected = zone.unit ?? null;
   const from = normUnit(fromUnit);
   const to = normUnit(expected);
   if (!to) return { value, converted: false };
   if (!from) return { value, converted: false };
   if (sameUnit(from, to)) return { value, converted: from !== to };
-
-  const mgDl = ["apob", "ldl-c", "non-hdl-c", "hdl-c", "triglycerides", "fasting glucose", "creatinine", "magnesium", "uric acid"];
-  if (mgDl.includes(label) && to !== "mg/dl") return null;
-
-  if (label === "apob") {
-    if (from === "g/l") return { value: value * 100, converted: true };
-    if (from === "mg/l") return { value: value / 10, converted: true };
-  }
-  if (["ldl-c", "non-hdl-c", "hdl-c"].includes(label) && from === "mmol/l") {
-    return { value: value * 38.67, converted: true };
-  }
-  if (label === "triglycerides" && from === "mmol/l") return { value: value * 88.57, converted: true };
-  if (label === "fasting glucose" && from === "mmol/l") return { value: value * 18.0182, converted: true };
-  if (label === "creatinine" && from === "umol/l") return { value: value / 88.4, converted: true };
-  if (label === "magnesium" && from === "mmol/l") return { value: value / 0.4114, converted: true };
-  if (label === "uric acid" && from === "umol/l") return { value: value / 59.48, converted: true };
-
-  if (label === "vitamin d") {
-    if (from === "nmol/l") return { value: value * 0.4, converted: true };
-    if (sameUnit(from, "ug/l")) return { value, converted: true };
-  }
-  if (label === "free t3" && from === "pmol/l") return { value: value / 1.536, converted: true };
-  if (label === "free t4" && from === "pmol/l") return { value: value / 12.87, converted: true };
-  if (label === "vitamin b12" && from === "pmol/l") return { value: value / 0.738, converted: true };
-  if (label === "folate" && from === "nmol/l") return { value: value / 2.266, converted: true };
-  if (label === "testosterone") {
-    if (from === "nmol/l") return { value: value / 0.0347, converted: true };
-    if (from === "ng/ml") return { value: value * 100, converted: true };
-  }
-  if (label === "estradiol" && from === "pmol/l") return { value: value / 3.671, converted: true };
-  if (label === "hs-crp" && from === "mg/dl") return { value: value * 10, converted: true };
-  if (["alt", "ast", "ggt"].includes(label) && from === "ukat/l") return { value: value * 60, converted: true };
-  if (
-    [
-      "wbc",
-      "platelets",
-      "absolute neutrophils",
-      "absolute lymphocytes",
-      "absolute monocytes",
-      "absolute eosinophils",
-      "absolute basophils",
-      "absolute immature granulocytes",
-      "absolute nrbc",
-    ].includes(label) &&
-    to === "k/ul" &&
-    (from === "cells/ul" || from === "cell/ul" || from === "/ul")
-  ) {
-    return { value: value / 1000, converted: true };
-  }
-  if (["tsh", "fasting insulin"].includes(label) && sameUnit(from, expected)) {
-    return { value, converted: from !== to };
-  }
-  // Lp(a) is intentionally absent: mg/dL<->nmol/L has no reliable fixed
-  // conversion because apo(a) isoform size changes the particle-to-mass ratio.
-  return null;
+  const spec = labUnitSpec(zone.label);
+  // The table's canonical unit must BE the band's unit, or its maps point somewhere else.
+  if (!spec || !sameUnit(spec.canonical, expected)) return null;
+  const canonical = toCanonical(zone.label, value, from);
+  return canonical == null ? null : { value: canonical, converted: true };
 }
 
 function isBodyWeightName(name: string): boolean {

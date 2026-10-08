@@ -17,6 +17,7 @@ import {
 } from "../agents.js";
 import crypto from "node:crypto";
 import { normalizeUnit, unitsFrom, validUnit, UNIT_REGISTRY, type AthleteUnits } from "./display-words.js";
+import { LAB_UNIT_SYSTEMS, type LabUnitSystem } from "./lab-units.js";
 import { getAgentAvailability } from "./agent-availability.js";
 import { recordedClientTimeZone } from "./client-tz.js";
 import {
@@ -52,6 +53,8 @@ export interface Settings {
   garmin_export_strength: boolean; // send finished Cairn strength sessions back to Garmin (default ON; Garmin stays the input for runs/recovery)
   run_units: "km" | "mi"; // athlete-facing run distance and pace; the engine stays in km
   weight_units: "lb" | "kg"; // athlete-facing bodyweight and loads; stored data stays lb
+  lab_units: LabUnitSystem | null; // the athlete's explicit lab-value system; null = automatic (labUnitSystem())
+  lab_units_effective: LabUnitSystem; // the system lab values are shown in right now (explicit, else derived from weight_units)
   garmin_last_export_attempt_at: string | null; // UTC ISO of the last write-back ATTEMPT (landed or not)
   garmin_last_export_status: string; // short result line: "ok: 8 of 14 sets" | "failed: …"
   gemini_api_key_configured: boolean;
@@ -461,6 +464,7 @@ const SETTINGS_COLUMN_REPAIRS: [string, string][] = [
   ["garmin_last_export_status", "TEXT DEFAULT ''"],
   ["run_units", "TEXT DEFAULT 'km'"],
   ["weight_units", "TEXT DEFAULT 'lb'"],
+  ["lab_units", "TEXT DEFAULT ''"],
   ["usage_ping_enabled", "INTEGER DEFAULT 0"],
   ["coach_welcomed", "INTEGER DEFAULT 0"],
 ];
@@ -618,6 +622,8 @@ function defaultSettings(): Settings {
     garmin_export_strength: true, // a finished Cairn strength session goes back to the watch by default
     run_units: UNIT_REGISTRY.distance.default, // prescriptions display in km / min/km until the athlete picks miles
     weight_units: UNIT_REGISTRY.weight.default, // bodyweight and loads in lb until the athlete picks kg
+    lab_units: null, // automatic: lab values follow the weight units until the athlete picks a system
+    lab_units_effective: derivedLabUnitSystem(UNIT_REGISTRY.weight.default),
     garmin_last_export_attempt_at: null,
     garmin_last_export_status: "",
     gemini_api_key_configured: !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_KEY),
@@ -711,6 +717,9 @@ function rowToSettings(row: any): Settings {
     garmin_export_strength: row.garmin_export_strength == null ? true : !!row.garmin_export_strength,
     run_units: normalizeUnit("distance", row.run_units),
     weight_units: normalizeUnit("weight", row.weight_units),
+    lab_units: validLabUnitSystem(row.lab_units),
+    lab_units_effective:
+      validLabUnitSystem(row.lab_units) ?? derivedLabUnitSystem(normalizeUnit("weight", row.weight_units)),
     garmin_last_export_attempt_at: String(row.garmin_last_export_attempt_at ?? "").trim() || null,
     garmin_last_export_status:
       row.garmin_last_export_status == null ? "" : String(row.garmin_last_export_status),
@@ -777,6 +786,31 @@ export function athleteUnits(): AthleteUnits {
     return unitsFrom(getSettings() as unknown as Record<string, unknown>);
   } catch {
     return unitsFrom(null);
+  }
+}
+
+/** A stored/sent lab-unit system when it is one, else null ('' / 'auto' / junk = automatic). */
+export function validLabUnitSystem(value: unknown): LabUnitSystem | null {
+  const v = String(value ?? "").trim().toLowerCase();
+  return (LAB_UNIT_SYSTEMS as readonly string[]).includes(v) ? (v as LabUnitSystem) : null;
+}
+
+/** The automatic lab system: an athlete who weighs in kilograms reads SI labs. */
+export function derivedLabUnitSystem(weight: AthleteUnits["weight"]): LabUnitSystem {
+  return weight === "kg" ? "si" : "us";
+}
+
+/**
+ * The unit system lab values are SHOWN in (src/repo/lab-display.ts): the athlete's
+ * explicit choice, else derived from their weight units (athleteUnits), so whatever
+ * decides that default decides this one too. Display only — every comparison runs in
+ * the canonical unit. An unreadable settings row reads US conventional, never throws.
+ */
+export function labUnitSystem(): LabUnitSystem {
+  try {
+    return validLabUnitSystem(getSettings().lab_units) ?? derivedLabUnitSystem(athleteUnits().weight);
+  } catch {
+    return "us";
   }
 }
 
@@ -851,6 +885,10 @@ export function setSettings(patch: any, opts: { keepStances?: boolean } = {}): S
     // in display-words.ts is the one list of options).
     run_units: validUnit("distance", patch.run_units) ?? cur.run_units,
     weight_units: validUnit("weight", patch.weight_units) ?? cur.weight_units,
+    // Lab units are written by their own UPDATE below (validLabUnitSystem); the returned
+    // settings are re-read, so these placeholders never reach the caller.
+    lab_units: cur.lab_units,
+    lab_units_effective: cur.lab_units_effective,
     // Write-back status is read-only here too — recorded by setGarminExportStatus().
     garmin_last_export_attempt_at: cur.garmin_last_export_attempt_at,
     garmin_last_export_status: cur.garmin_last_export_status,
@@ -948,6 +986,13 @@ export function setSettings(patch: any, opts: { keepStances?: boolean } = {}): S
     merged.usage_ping_enabled ? 1 : 0,
     merged.coach_welcomed ? 1 : 0
   );
+  // The lab-value system: 'us' | 'si' sets it; 'auto' / '' / null hands it back to the
+  // automatic default; an absent field (or junk) keeps what is stored.
+  if (patch.lab_units !== undefined) {
+    const lab = validLabUnitSystem(patch.lab_units);
+    const clear = patch.lab_units === null || ["", "auto"].includes(String(patch.lab_units).trim().toLowerCase());
+    if (lab || clear) db.prepare(`UPDATE settings SET lab_units = ? WHERE id = 1`).run(lab ?? "");
+  }
   if (!opts.keepStances && merged.training_drive !== cur.training_drive) {
     try {
       db.prepare(

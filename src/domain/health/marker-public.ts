@@ -10,6 +10,8 @@
 //     evidence-wanted apply), so a row's "outside optimal" mark and the packet agree.
 //   - "Out of range" per the LAB arrives finished (`lab_range`, `lab_out_of_range`,
 //     `lab_out_of_range_side`, src/repo/lab-range.ts), so no renderer re-derives it.
+//   - Values arrive in the athlete's lab-unit system (src/repo/lab-display.ts), converted
+//     only AFTER every read above was made in the canonical unit.
 //
 // The lab's range and the optimal band stay two separate facts on the row.
 
@@ -17,6 +19,9 @@ import { optimalTrustworthy } from "../../repo/optimal-trust.js";
 import { labRangeFields } from "../../repo/lab-range.js";
 import { wearableWeeklyMarkerRead } from "../../repo/health-focus.js";
 import { prioritizeMarkers } from "../../repo/propagation.js";
+import { presentMarkerRow } from "../../repo/lab-display.js";
+import { labUnitSystem } from "../../repo/settings.js";
+import type { LabUnitSystem } from "../../repo/lab-units.js";
 
 /** Whether this row's optimal band is one the surfaces may speak about. */
 export function markerOptimalTrusted(m: any): boolean {
@@ -25,14 +30,17 @@ export function markerOptimalTrusted(m: any): boolean {
   return hasBand && optimalTrustworthy(String(m?.name ?? m?.key ?? ""), m?.latest?.value);
 }
 
-export function publicMarkerRow(m: any): Record<string, unknown> {
+export function publicMarkerRow(m: any, system: LabUnitSystem = labUnitSystem()): Record<string, unknown> {
   const { impact_score: _impact, distance: _distance, ...rest } = m ?? {};
   const trusted = markerOptimalTrusted(m);
-  return {
-    ...rest,
-    ...(trusted ? {} : { optimal: null, in_optimal: null }),
-    ...labRangeFields(m),
-  };
+  return presentMarkerRow(
+    {
+      ...rest,
+      ...(trusted ? {} : { optimal: null, in_optimal: null }),
+      ...labRangeFields(m),
+    },
+    system
+  );
 }
 
 // The priority-marker catalog as both surfaces hand it out (GET /api/markers/priority
@@ -41,8 +49,10 @@ export function publicMarkerRow(m: any): Record<string, unknown> {
 // every row goes through publicMarkerRow.
 export function publicPriorityMarkers(): Record<string, unknown> & { markers: Record<string, unknown>[] } {
   const priority = prioritizeMarkers() as any;
+  const system = labUnitSystem();
   return {
     ...priority,
-    markers: (priority.markers ?? []).map((m: any) => publicMarkerRow(wearableWeeklyMarkerRead(m))),
+    unit_system: system,
+    markers: (priority.markers ?? []).map((m: any) => publicMarkerRow(wearableWeeklyMarkerRead(m), system)),
   };
 }

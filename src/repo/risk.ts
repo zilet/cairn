@@ -4,6 +4,9 @@ import { matchOptimalZone } from "./propagation-data.js";
 import { currentBodyFatEstimate, getProfile } from "./profile.js";
 import { joinList } from "./shared.js";
 import { round1 } from "../lib/numbers.js";
+import { labValueText } from "./lab-display.js";
+import { fromCanonical, displayUnitFor } from "./lab-units.js";
+import { labUnitSystem } from "./settings.js";
 
 type PreventAssumption = { input: string; assumed: string; reason: string };
 
@@ -54,6 +57,13 @@ function markerByZone(label: string): RiskMarker {
     const zone = matchOptimalZone(marker?.name);
     const markerLabel = zone?.label ?? marker?.name;
     if (String(markerLabel || "").toLowerCase() !== label.toLowerCase()) continue;
+    // PREVENT and every threshold here read the canonical unit. A reading whose unit could
+    // not be brought into it is not on file for that purpose — never a mmol/L number read
+    // as mg/dL. Lp(a) is the one exception: it keeps its lab's unit by design and
+    // lpaElevated branches on that unit itself.
+    if (marker?.latest?.unit_mismatch === true && label.toLowerCase() !== "lp(a)") {
+      return { label, value: null, unit: null, date: marker?.latest?.date ?? null };
+    }
     const value = asNumber(marker?.latest?.value);
     return {
       label,
@@ -76,7 +86,7 @@ function hasFamilyHistory(profile: any): boolean {
 function markerFinding(marker: RiskMarker): string {
   return marker.value == null
     ? `${marker.label} not on file`
-    : `${marker.label} ${marker.value}${marker.unit ? ` ${marker.unit}` : ""}${marker.date ? ` (${marker.date})` : ""}`;
+    : `${marker.label} ${labValueText(marker.label, marker.value, marker.unit)}${marker.date ? ` (${marker.date})` : ""}`;
 }
 
 function addEnhancer(out: RiskEnhancer[], condition: boolean, item: RiskEnhancer): void {
@@ -319,7 +329,7 @@ export function cardiovascularRiskRead() {
     if (tcDerived) {
       assumptions.push({
         input: "total cholesterol",
-        assumed: `derived (${markers.total_cholesterol.value} mg/dL)`,
+        assumed: `derived (${labValueText("Total cholesterol", markers.total_cholesterol.value, "mg/dL")})`,
         reason:
           "No direct total cholesterol on file; PREVENT uses the Friedewald-consistent sum of LDL + HDL + triglycerides/5 (valid while triglycerides are under 400 mg/dL). Add a direct total cholesterol to remove this estimate.",
       });
@@ -379,16 +389,23 @@ export function cardiovascularRiskRead() {
       }
       if (curNonHdl > 0 && targetNonHdl < curNonHdl - 0.5) {
         targetInputs.total_chol = round1(curHdl + targetNonHdl);
+        // Shown in the athlete's lab-unit system; the PREVENT math above stays in mg/dL.
+        const lab = labUnitSystem();
+        const nonHdl = (v: number) => {
+          const shown = fromCanonical("Non-HDL-C", v, lab) ?? v;
+          return lab === "si" ? Math.round(shown * 100) / 100 : round1(shown);
+        };
+        const nonHdlUnit = displayUnitFor("Non-HDL-C", lab) ?? "mg/dL";
         leversApplied.push({
           key: "lipids",
           label: "Lipid-lowering to target",
-          from: round1(curNonHdl),
-          to: round1(targetNonHdl),
-          unit: "mg/dL non-HDL",
+          from: nonHdl(curNonHdl),
+          to: nonHdl(targetNonHdl),
+          unit: `${nonHdlUnit} non-HDL`,
           detail:
             apob != null && apob > 80
-              ? `Bringing ApoB toward ~80 mg/dL lowers non-HDL cholesterol with it, from ${round1(curNonHdl)} to ${round1(targetNonHdl)} mg/dL.`
-              : `Bringing non-HDL cholesterol into the optimal range (≤${NON_HDL_OPTIMAL_MAX} mg/dL), from ${round1(curNonHdl)} to ${round1(targetNonHdl)} mg/dL.`,
+              ? `Bringing ApoB toward ~${labValueText("ApoB", 80, "mg/dL", lab)} lowers non-HDL cholesterol with it, from ${nonHdl(curNonHdl)} to ${nonHdl(targetNonHdl)} ${nonHdlUnit}.`
+              : `Bringing non-HDL cholesterol into the optimal range (≤${labValueText("Non-HDL-C", NON_HDL_OPTIMAL_MAX, "mg/dL", lab)}), from ${nonHdl(curNonHdl)} to ${nonHdl(targetNonHdl)} ${nonHdlUnit}.`,
         });
       }
 
@@ -477,7 +494,7 @@ export function cardiovascularRiskRead() {
     label: "ApoB above optimal",
     finding: markerFinding(markers.apob),
     why: "ApoB is the atherogenic particle count and is the most direct modifiable lipid target.",
-    lever: "Bring ApoB toward ~80 mg/dL or lower with clinician-guided lipid work plus diet/fiber support.",
+    lever: `Bring ApoB toward ~${labValueText("ApoB", 80, "mg/dL")} or lower with clinician-guided lipid work plus diet/fiber support.`,
   });
   addEnhancer(enhancers, lpaElevated(markers.lpa), {
     key: "lpa",

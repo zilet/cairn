@@ -4,6 +4,7 @@ import { bpRead, listBloodPressureReadings } from "./health.js";
 import { getProfile, listWeight } from "./profile.js";
 import { healthFocus, prioritizeMarkers } from "./propagation.js";
 import { getWeeklyStats } from "./sessions.js";
+import { presentMarkerRow } from "./lab-display.js";
 
 // The reference-curve machinery is shared with the performance/training-standing
 // read (src/repo/performance.ts) so strength capacity and VO2max both render in the
@@ -720,7 +721,10 @@ export function healthStanding(opts: { referenceAge?: number } = {}) {
       tone: labs.equivalent == null ? "missing" : labs.out.length ? "watch" : "strong",
       headline: labs.equivalent == null ? "No lab anchors yet" : labs.out.length ? `${labs.out.length} marker${labs.out.length === 1 ? "" : "s"} to tighten` : "Key labs look well placed",
       body: labs.out.length ? `Lead watch item: ${labs.out[0]?.name ?? "marker"}.` : labs.equivalent == null ? "Upload bloodwork to connect metabolic, lipid, hormone and inflammation signals." : `${labs.inCount} key marker${labs.inCount === 1 ? "" : "s"} are in range or optimal.`,
-      measures: labs.out.slice(0, 3).map((m) => ({ label: m.name, value: m.latest?.value, unit: m.unit ?? "" })),
+      measures: labs.out
+        .slice(0, 3)
+        .map((raw) => presentMarkerRow(raw))
+        .map((m) => ({ label: m.name, value: m.latest?.value, unit: m.unit ?? "" })),
     },
     {
       id: "body",

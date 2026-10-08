@@ -449,11 +449,18 @@ export function matchOptimalZone(name: string, profile?: ZoneProfile | null): Op
   return personalizeZone(best, profile);
 }
 
-function unpersonalizedZone(n: string): OptimalZone | null {
-  // A ratio / urine / pattern / free-T / lipoprotein-subfraction name must not be held
-  // to a serum concentration band it was never measured against (the clinically-wrong
-  // directive guard). Checked first so nothing downstream sees a mis-routed zone.
+// The analyte a name measures, for UNIT handling only (src/repo/lab-units.ts): the same
+// longest-key match behind the same analyte-identity guard (a ratio, a urine specimen,
+// free-T is a different measure), but WITHOUT the draw-context guards below. A random
+// glucose is not held to the fasting band, yet it is still glucose — a mmol/L reading of
+// it converts exactly as a fasting one does, so its series stays in one unit.
+export function unitAnalyteZone(name: string): OptimalZone | null {
+  const n = String(name ?? "").toLowerCase();
   if (!zoneNameTrustworthy(n)) return null;
+  return longestKeyZone(n);
+}
+
+function longestKeyZone(n: string): OptimalZone | null {
   // Prefer the most specific (longest key) match so "non-hdl" doesn't read as "hdl".
   let best: OptimalZone | null = null;
   let bestLen = 0;
@@ -462,6 +469,15 @@ function unpersonalizedZone(n: string): OptimalZone | null {
       if (n.includes(k) && k.length > bestLen) { best = z; bestLen = k.length; }
     }
   }
+  return best;
+}
+
+function unpersonalizedZone(n: string): OptimalZone | null {
+  // A ratio / urine / pattern / free-T / lipoprotein-subfraction name must not be held
+  // to a serum concentration band it was never measured against (the clinically-wrong
+  // directive guard). Checked first so nothing downstream sees a mis-routed zone.
+  if (!zoneNameTrustworthy(n)) return null;
+  const best = longestKeyZone(n);
   // A non-fasting glucose substring-matched the FASTING band — don't hold it to a
   // fasting target it shouldn't be judged against (protects the physician report).
   if (suppressFastingGlucoseZone(n, best)) return null;

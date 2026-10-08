@@ -3003,6 +3003,28 @@ snapshot) among rows with `status_at IS NULL` — a machine soft-resolve, never 
 always stamps `status_at` — and never one a `resurfaced_from_id` audit chain points at; `'health_review'`
 rows are untouched entirely.
 
+### Lab units: compare canonical, show the athlete's system
+
+Labs print the same analyte in different units (US mg/dL, European mmol/L / µmol/L / g/L), and an
+athlete who travels gets both. Two layers keep that coherent:
+
+- **Compare in ONE canonical unit** — `LAB_UNIT_TABLE` (`src/repo/lab-units.ts`), keyed by the
+  `OPTIMAL_ZONES` label: each analyte's canonical unit is its optimal band's own unit, with the SI unit
+  and every other spelling a lab prints mapped into it (molar-mass factors; HbA1c is the affine IFCC
+  map). `getMarkerHistory` normalizes each reading at read time (`source_value`/`source_unit` keep the
+  printout), so optimal bands, lab ranges, trends, directives, the coach-context doc ranking and dedupe
+  agreement (`health-dedupe.ts`, with slack for the source's printed precision) all run on one scale. A
+  draw the band does not apply to (random glucose, PM cortisol) still converts via `unitAnalyteZone`.
+  **Lp(a) mass (mg/dL) and molar (nmol/L) results are never converted** (`never`) — only labelled.
+- **Show in the athlete's system** — `labUnitSystem()` (`settings.lab_units`: `us` | `si`, `''` =
+  automatic, derived from `athleteUnits().weight`, kg → SI). `src/repo/lab-display.ts`
+  (`presentMarkerRow`, `presentSourceMarker`, `labValueText`) converts value, band, range and trend
+  deltas AFTER every judgement was made canonically, keeps a reading's lab-printed value as `reported`,
+  and is idempotent (a converted row is no longer canonical, so it passes through). Every surface that
+  prints a lab value goes through it: `/markers/priority` + records search (`publicMarkerRow`),
+  `/health/markers`, `health_focus` readings, the coach-context `health` docs, the health review /
+  synthesis prompts (which also state `labUnitsPromptLine`), the doctor report, packet and export.
+
 ### How old is too old: per-marker temporal validity
 
 "Is this reading stale?" is answered PER MARKER, not by one blanket age rule

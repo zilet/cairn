@@ -30,6 +30,7 @@ import {
   getHealthSynthesisView,
   getLatestHealthReview,
   getMarkerHistory,
+  presentMarkerList,
   healthOutcomeAnnotations,
   cardiovascularRiskRead,
   doctorLoopRead,
@@ -54,7 +55,7 @@ import { disputeBelief, listBeliefs, undisputeBelief } from "../repo.js";
 export const connectedBrainRouter = Router();
 
 // ---- health insights (marker history + whole-picture agentic review) ----
-connectedBrainRouter.get("/health/markers", (_req, res) => res.json(getMarkerHistory()));
+connectedBrainRouter.get("/health/markers", (_req, res) => res.json(presentMarkerList(getMarkerHistory())));
 
 // Carries `user_explanation` — the conductor's own athlete-facing sentence, which the
 // case conference has always written and nothing has ever read.

@@ -33,6 +33,7 @@ import {
   optimalDistance,
   presentGroups,
 } from "./propagation.js";
+import { unitAnalyteZone } from "./propagation-data.js";
 
 // A modern comprehensive panel (e.g. Function Health) lists 100+ markers. Cap
 // generously so a complete transcription is never silently clipped, while still
@@ -1536,8 +1537,17 @@ function computeMarkerHistory() {
         const resolved = canonicalMarkerForReading(name, sourceUnit);
         const key = resolved.key || name.toLowerCase();
         if (isAnthropometricMarkerKey(key)) flag = null;
-        const normalized = normalizeMarkerReading(name, em.value, sourceUnit, matchOptimalZone(resolved.name));
+        const bandZone = matchOptimalZone(resolved.name);
+        let normalized = normalizeMarkerReading(name, em.value, sourceUnit, bandZone);
         if (!normalized) continue;
+        // A draw the band does not apply to (a random glucose, a PM cortisol) is still
+        // the same analyte: bring it into the canonical unit when the table converts it,
+        // so its own series never splits across labs on two unit systems.
+        if (!bandZone) {
+          const analyte = unitAnalyteZone(resolved.name);
+          const unified = analyte ? normalizeMarkerReading(name, em.value, sourceUnit, analyte) : null;
+          if (unified?.unit_converted) normalized = unified;
+        }
         // The lab's printed reference range (source unit). Scale it by the same
         // factor the value was converted by, so range + value stay comparable after
         // a recognized-unit normalization; pass-through markers keep it verbatim.
