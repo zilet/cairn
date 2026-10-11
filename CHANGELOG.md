@@ -5,6 +5,28 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [2.1.3] — 2026-10-11
+
+Train's "Where to focus" card says what its numbers count. No migrations.
+
+### Fixed
+
+- **One clock per headline.** "Week 6 of 6, 21 days to …" put the lifting block's week beside the
+  race countdown with no label, so it read as the race's weeks. With a race in view the headline
+  now leads with the countdown alone; otherwise it names "Lifting block week N of M". The block line
+  under it names its clock too ("Sharpen · Lifting block week 6 of 6 — …"), and the race item no
+  longer repeats the countdown.
+- **The lever's next rung is the est. 1RM it sits at** ("Next rung: an est. 1RM of 120 lb is
+  advanced for your 40s"), not "Target: about +25 lb on Barbell Overhead Press reaches advanced",
+  which read as 25 lb more on the bar.
+- **What moved says since when.** The date at the end of a row was the comparison point but read as
+  the day it happened; it now reads "since Monday" / "since Sep 28", once, and a faster race
+  estimate's arrow is announced as faster.
+- **Held re-tests say when.** Inside a race's last four weeks the lift re-tests wait for race day;
+  the window now reads as the week after it instead of "due now" beside "hold".
+- **The health item reads as a sentence**: "Bring your lipids toward optimal", not "Move your
+  lipids & cardiovascular".
+
 ## [2.1.2] — 2026-10-08
 
 Units that follow you, your road on Horizon, and an app that opens faster: a lighter first load,
@@ -1732,7 +1754,8 @@ landed since 0.3.0.
 - Chat strips agent tool-narration before the reply marker reaches the bubble
 - Segmented sub-nav scrolls when pills overflow (no clipped "Calendar" tab)
 
-[Unreleased]: https://github.com/zilet/cairn/compare/v2.1.2...HEAD
+[Unreleased]: https://github.com/zilet/cairn/compare/v2.1.3...HEAD
+[2.1.3]: https://github.com/zilet/cairn/compare/v2.1.2...v2.1.3
 [2.1.2]: https://github.com/zilet/cairn/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/zilet/cairn/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/zilet/cairn/compare/v2.0.0...v2.1.0
