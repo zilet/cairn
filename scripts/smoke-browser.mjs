@@ -78,8 +78,6 @@ const requiredGlobals = {
   "CairnRoutes.parseRoute": "function",
   CairnTodayAddExerciseController: "object",
   CairnTodaySessionController: "object",
-  CairnChatAttachment: "object",
-  CairnFuelTodayController: "object",
   // The eager half of the lazy-bundle contract.
   ensureBundle: "function",
   withBundle: "function",
@@ -97,20 +95,25 @@ const lazyBundles = {
   settings: { file: "bundle-11-settings", globals: { renderSettings: "function", CairnSettingsAgents: "object" } },
   calendar: { file: "bundle-12-calendar", globals: { renderDay: "function", CairnDayRecord: "object", CairnDrill: "object" } },
   meals: { file: "bundle-13-meals", globals: { CairnMealRecipeController: "object" } },
+  // The body-metrics surface (Health and Train both mount it; neither drags in the other).
+  body: { file: "bundle-21-body", globals: { CairnBodyMetrics: "object" } },
+  // Fuel's surface and the food composer's chat primitives (Ask depends on it).
+  fuel: { file: "bundle-22-fuel", globals: { CairnFuelTodayController: "object", CairnChatAttachment: "object" } },
 };
 
 /** The lazy bundles a smoke route's destination must have injected (dependencies included). */
 function lazyBundlesFor(route) {
   const planSeg = route.expectedState?.planSeg;
-  if (route.tab === "stand" || route.tab === "me") return ["me-health", "train"];
+  if (route.tab === "stand" || route.tab === "me") return ["me-health", "body"];
   if (route.tab === "progress") return ["train"];
-  if (route.tab === "horizon") return ["horizon", "train"];
-  if (route.tab === "chat") return ["ask"];
+  if (route.tab === "horizon") return ["horizon"];
+  if (route.tab === "chat") return ["ask", "fuel"];
   if (route.tab === "settings") return ["settings"];
   if (route.tab === "day") return ["calendar"];
   if (route.tab === "plan" && planSeg === "edit") return ["train"];
-  if (route.tab === "plan" && planSeg === "endurance") return ["horizon", "train"];
-  if (route.tab === "plan" && planSeg === "coach") return ["ask"];
+  if (route.tab === "plan" && planSeg === "endurance") return ["horizon"];
+  if (route.tab === "plan" && planSeg === "coach") return ["ask", "fuel"];
+  if (route.tab === "plan" && planSeg === "food") return ["fuel"];
   if (route.tab === "plan" && planSeg === "meals") return ["meals"];
   return [];
 }
@@ -363,8 +366,8 @@ async function smokeColdTabNavigation(cdp, base) {
     await navigateAndHydrate(cdp, base, "/app/today", "today");
     await sleep(2500); // well past the warm-up's delay: nothing may have loaded itself
     const cold = await evaluate(cdp, `[...document.querySelectorAll("script[data-cairn-bundle]")].map((s) => s.dataset.cairnBundle)`);
-    // Today mounts its own lazy parts (the week-ahead card, the strip's day peek); nothing else may load itself.
-    const todayOwn = ["today-ahead", "calendar"];
+    // Today mounts its own lazy parts (the week-ahead card and the glance its strip draws with, the strip's day peek); nothing else may load itself.
+    const todayOwn = ["today-ahead", "glance", "calendar"];
     ok(Array.isArray(cold) && cold.every((name) => todayOwn.includes(name)), "with the warm-up off, only Today's own lazy parts load", JSON.stringify(cold));
     const hops = [
       { home: "train", tab: "progress", bundles: ["train"] },
