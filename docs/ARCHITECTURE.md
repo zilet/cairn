@@ -1856,8 +1856,10 @@ dimension rather than the day's whole posture.
 **The conductor reads the WEEK; today is a day state.** A completed day (`posture: done`) is not a
 lever: it rides on `coaching_focus.day_state` and the week's lever leads (rest / easy still own the
 card — they are protective — and also report themselves on `day_state`). The headline is the week's
-through-line anchored in the block and the race ("Week 6 of 6, 26 days to …: your overhead press leads
-this week, with … alongside"), never the performance hero line — the strength standing is a supporting
+through-line anchored in ONE clock — the race countdown when a race is within 16 weeks ("26 days to …:
+your overhead press leads this week, with … alongside"), else the lifting block's week ("Lifting block
+week 2 of 5: …"); two bare clocks side by side read as one, and the block line names its clock too
+("Sharpen · Lifting block week 6 of 6 — …") — never the performance hero line — the strength standing is a supporting
 fact on the lead only when strength IS the lever. Around the choice, `src/repo/coaching-focus-read.ts`
 (pure) supplies `block` (week N of M, the phase the week runs as through `coachBlockSummary`, and the
 deload decision — a push athlete's set-aside deload is SAID, never "the deload is in sight"),

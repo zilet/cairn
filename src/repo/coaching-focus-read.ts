@@ -314,7 +314,10 @@ export function blockRead(inp: CoachingFocusInput): BlockReadResult | null {
   const weekOf = str(b?.week_of);
   if (!weekOf) return null;
   const { week, of } = parseWeekOf(weekOf);
-  const wk = cap(weekOf);
+  // The block is the LIFTING program's clock (plan days hold strength only); the race
+  // has its own countdown and stage word. Named, so "week 6 of 6" never reads as the
+  // race's weeks.
+  const wk = week != null && of != null ? `Lifting block week ${week} of ${of}` : cap(weekOf);
   const phase = lc(b?.phase) || null;
   const focus = lc(b?.focus);
   const skipped = b?.scheduled_deload_skipped === true;
@@ -584,15 +587,24 @@ export function raceMove(r: RaceRead): string {
   return bits.join(" ");
 }
 
+/** The headline names the race countdown up to this many days out (16 weeks). */
+export const RACE_HEADLINE_MAX_DAYS = 112;
+
 /** The race build's lead/parallel item prose — specific to this week. */
 export function raceItem(r: RaceRead): { title: string; why: string; move: string; noun: string } {
   const days = r.daysTo;
   const name = raceName(r);
   const focusShort = str(r.current?.focus_short);
+  // After a colon the week's words run on in lower case ("…: threshold work"), unless
+  // they open on an acronym ("VO2 intervals").
+  const after = /^[A-Z][a-z]/.test(focusShort) ? `${focusShort.charAt(0).toLowerCase()}${focusShort.slice(1)}` : focusShort;
+  // Inside the headline's window the countdown is the headline's to say; the item names
+  // the race and the week, never a second "21 days".
+  const counted = days != null && days >= 0 && days <= RACE_HEADLINE_MAX_DAYS;
   const title =
-    days != null
-      ? `${name}, ${days} day${days === 1 ? "" : "s"} out${focusShort ? `: ${focusShort}` : ""}`
-      : `${cap(name)}${focusShort ? `: ${focusShort}` : ""}`;
+    days != null && !counted
+      ? `${name}, ${days} day${days === 1 ? "" : "s"} out${after ? `: ${after}` : ""}`
+      : `${cap(name)}${after ? `: ${after}` : ""}`;
   const shape =
     r.estimateSec != null
       ? `Current shape reads about ${clock(r.estimateSec)}${r.estimatePace ? ` (${r.estimatePace})` : ""}${raceFitWords(r) ? `, ${raceFitWords(r)}` : ""}.`
@@ -666,6 +678,18 @@ export function leverFacts(l: LeverLift, units: AthleteUnits = unitsFrom(null)):
     move = " It has held steady lately.";
   }
   return `${head}${move}`.trim();
+}
+
+/** The lever's next rung as the est. 1RM it sits at: "Next rung: an est. 1RM of 120 lb
+ *  is advanced for your 40s." Said as the 1RM, never "+25 lb on <lift>", which reads as
+ *  25 lb more on the bar. "" when the lift has no next rung. */
+export function leverTargetWords(l: LeverLift, units: AthleteUnits = unitsFrom(null)): string {
+  const e1rm = fin(l.cap.est_1rm);
+  const nextLb = fin(l.cap.to_next?.lb);
+  const nextLevel = lc(l.cap.to_next?.level);
+  if (e1rm == null || nextLb == null || !nextLevel) return "";
+  const band = str(l.cap.age_band);
+  return `Next rung: an est. 1RM of ${loadWords(Math.round(e1rm + nextLb), units.weight)} is ${nextLevel}${band ? ` for your ${band}` : ""}.`;
 }
 
 /** What the block phase asks of the lever lift this week (progression policy, in words). */

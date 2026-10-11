@@ -19,9 +19,11 @@ function cfocusDomainDot(domain: unknown): string {
   return `<span class="tfc-dot tfc-dot-${cfocusDomainKey(domain)}" aria-hidden="true"></span>`;
 }
 
-function cfocusDirectionMark(direction: unknown): string {
-  if (direction === "up") return `<span class="tfc-dir tfc-dir-up" role="img" aria-label="up">↑</span>`;
-  if (direction === "down") return `<span class="tfc-dir tfc-dir-down" role="img" aria-label="down">↓</span>`;
+// `label` names what the arrow means when "down" alone misleads (a race time going down
+// is faster). The arrow stays the value's direction, never a verdict.
+function cfocusDirectionMark(direction: unknown, label?: string): string {
+  if (direction === "up") return `<span class="tfc-dir tfc-dir-up" role="img" aria-label="${escAttr(label || "up")}">↑</span>`;
+  if (direction === "down") return `<span class="tfc-dir tfc-dir-down" role="img" aria-label="${escAttr(label || "down")}">↓</span>`;
   if (direction === "steady") return `<span class="tfc-dir tfc-dir-steady" role="img" aria-label="steady">→</span>`;
   return `<span class="tfc-dir" aria-hidden="true">·</span>`;
 }
@@ -48,9 +50,15 @@ function cfocusMovedHtml(focus: ClientCoachingFocus): string {
   const rows = changes
     .map((c) => {
       const text = cfocusText(c.text);
-      // The comparison date as a short date ("Sep 30"), the same words as the stance's "through Nov 15".
-      const since = cfocusDayWords(c.since) || cfocusText(c.since);
-      return `<li class="tfc-moved-item">${cfocusDirectionMark(cfocusChangeDirection(c, evidence))}<span class="tfc-moved-text">${escHtml(text)}</span>${since ? `<span class="tfc-moved-since">${escHtml(since)}</span>` : ""}</li>`;
+      // The comparison point in the server's words ("since Monday", "since Sep 13"): a
+      // bare date at the row's end read as the day the change happened. Said once — a
+      // text that already names it carries no second copy.
+      const dayWords = cfocusDayWords(c.since);
+      const sinceWords = cfocusText(c.since_words) || (dayWords ? `since ${dayWords}` : cfocusText(c.since));
+      const since = sinceWords && !text.toLowerCase().includes(sinceWords.toLowerCase()) ? sinceWords : "";
+      const dir = cfocusChangeDirection(c, evidence);
+      const label = c.kind === "race_estimate" ? (dir === "down" ? "faster" : dir === "up" ? "slower" : "") : "";
+      return `<li class="tfc-moved-item">${cfocusDirectionMark(dir, label)}<span class="tfc-moved-text">${escHtml(text)}</span>${since ? `<span class="tfc-moved-since">${escHtml(since)}</span>` : ""}</li>`;
     })
     .join("");
   return `<div class="tfc-moved"><span class="tfc-lbl lbl">What moved</span><ul class="tfc-moved-list">${rows}</ul></div>`;

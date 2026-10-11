@@ -99,7 +99,7 @@ test("plan-shaping prompts LEAD with the prioritized focus (not a flat directive
   const cf = repo.getCoachContext().coaching_focus;
   assert.ok(cf?.available && cf.lead, "this seed produces a real conductor lead (sanity, not the fix under test)");
   assert.match(meal, /THIS BLOCK'S ONE FOCUS:/, "the meal prompt renders the conductor's brief lead");
-  assert.match(meal, /Move your lipids/i, "and names the SAME lead the conductor chose");
+  assert.match(meal, /Bring your lipids toward optimal/i, "and names the SAME lead the conductor chose");
 });
 
 // A DEXA older than ~3 weeks stops describing the athlete once bodyweight has moved since

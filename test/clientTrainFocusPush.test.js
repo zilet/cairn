@@ -163,6 +163,19 @@ test("What moved: a change's own direction wins; absent, the evidence label stil
   assert.equal(marks[2].getAttribute("aria-hidden"), "true");
 });
 
+test("What moved: a race estimate going down is named faster, not just down", () => {
+  const win = load();
+  const host = card(win, {
+    ...base,
+    changed_since: [
+      { domain: "running", kind: "race_estimate", text: "Half estimate 8 min faster since Sep 13", since: "2026-09-13", since_words: "since Sep 13", direction: "down" },
+    ],
+  });
+  const row = host.querySelector(".tfc-moved-item");
+  assert.equal(row.querySelector(".tfc-dir").getAttribute("aria-label"), "faster");
+  assert.equal(row.querySelector(".tfc-moved-since"), null, "the text already says since when");
+});
+
 test("What moved: an ISO `since` reads as a short date, and every row is the same arrow · text · date shape", () => {
   const win = load();
   const host = card(win, {
@@ -187,7 +200,7 @@ test("What moved: an ISO `since` reads as a short date, and every row is the sam
     assert.deepEqual(kids, ["tfc-dir", "tfc-moved-text", "tfc-moved-since"]);
   }
   const dates = rows.map((row) => row.querySelector(".tfc-moved-since").textContent);
-  assert.deepEqual(dates, ["Sep 30", "Oct 1", "since <Mon>"], "an ISO date is a short date; other words stay as said");
+  assert.deepEqual(dates, ["since Sep 30", "since Oct 1", "since <Mon>"], "an ISO date reads as since + a short date; other words stay as said");
   assert.doesNotMatch(host.innerHTML, /2026-09-30|2026-10-01/, "no raw ISO date reaches the card");
   // The row is a three-column grid (arrow, wrapping text, date), not a wrapping flex row
   // that can strand the arrow on a line of its own.

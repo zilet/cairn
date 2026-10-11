@@ -39,12 +39,12 @@ test("the conductor's block line leads with the week's stage word, and says a se
     programBlock: { phase: "accumulation", week_of: "week 3 of 5" },
     weekStage: { word: "Build", week_word: "Build week" },
   }).block_line;
-  assert.equal(line, "Build · Week 3 of 5 — building volume.");
+  assert.equal(line, "Build · Lifting block week 3 of 5 — building volume.");
   const skipped = coachingFocus({
     programBlock: { phase: "intensification", week_of: "week 6 of 6", scheduled_deload_skipped: true },
     weekStage: { word: "Sharpen" },
   });
-  assert.ok(skipped.block_line.startsWith("Sharpen · Week 6 of 6 — the scheduled deload is set aside"));
+  assert.ok(skipped.block_line.startsWith("Sharpen · Lifting block week 6 of 6 — the scheduled deload is set aside"));
   // The line says the set-aside; the decision beside it never says it again.
   assert.doesNotMatch(skipped.block.decision, /set aside/i);
   // Train prints the two side by side: the reason (the loaded weeks) and the move
@@ -55,7 +55,7 @@ test("the conductor's block line leads with the week's stage word, and says a se
   // Without a stage the line keeps its old shape.
   assert.equal(
     coachingFocus({ programBlock: { phase: "accumulation", week_of: "week 3 of 5" } }).block_line,
-    "Week 3 of 5 — building volume."
+    "Lifting block week 3 of 5 — building volume."
   );
 });
 

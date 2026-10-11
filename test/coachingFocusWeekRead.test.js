@@ -25,16 +25,21 @@ test("live shape: a finished day is a day_state, and the week's lever leads", ()
   assert.match(out.lead.why, /87 lb/, "the lever is said in values");
   assert.match(out.lead.why, /climbing about 1\.2 lb a week/);
   assert.match(out.lead.move, /top set/i, "the move is what this week's phase asks of the lift");
+  // The next rung is the est. 1RM it sits at — never "+25 lb on <lift>", which reads as bar load.
+  assert.match(out.lead.move, /Next rung: an est\. 1RM of \d+ lb is \w+ for your/);
+  assert.doesNotMatch(out.lead.move, /Target: about \+/);
   // (a) The strength standing is NOT the headline; it is a supporting fact on the lever.
   assert.doesNotMatch(out.headline, /intermediate lifter/i);
   assert.ok(out.lead.based_on.some((l) => /intermediate lifter overall/i.test(l)));
   // The headline is the week's through-line, anchored in the block and the race.
-  assert.match(out.headline, /^Week 6 of 6, 26 days to Cambridge Half Marathon:/);
+  assert.match(out.headline, /^26 days to Cambridge Half Marathon:/);
   assert.match(out.headline, /overhead press leads this week/);
   // The race build and the lipids ride alongside, specific to this week.
   const run = out.parallel.find((p) => p.domain === "running");
   assert.ok(run, "the half build rides alongside");
-  assert.match(run.title, /Cambridge Half Marathon, 26 days out/);
+  assert.match(run.title, /^Cambridge Half Marathon: (?![A-Z][a-z])/, "the countdown is the headline's; the item names the race and the week");
+  assert.doesNotMatch(run.title, /days out/);
+  assert.doesNotMatch(out.headline, /Week 6 of 6/, "one clock per headline");
   assert.match(run.why, /1:53:52/);
   assert.match(run.why, /inside the 2:00 target/);
   assert.match(run.move, /15 km long run/);
@@ -49,7 +54,7 @@ test("live shape: the block read says what the deload decision is (block-phase s
   const out = coachingFocus(liveShaped());
   // (c) Never "the deload is in sight" on a week the prescriptions run as a push.
   assert.doesNotMatch(out.block_line, /in sight/i);
-  assert.match(out.block_line, /^Week 6 of 6 — the scheduled deload is set aside/);
+  assert.match(out.block_line, /^Lifting block week 6 of 6 — the scheduled deload is set aside/);
   assert.equal(out.block.deload, "set_aside");
   assert.equal(out.block.phase, "intensification");
   assert.equal(out.block.scheduled_phase, "deload");
@@ -102,6 +107,8 @@ test("live shape: evidence is values and directions; changed_since is dated", ()
   assert.ok(out.connections.some((c) => /trail MTB comes the day before the long run/.test(c)));
   // Lift re-tests wait for race day.
   assert.match(out.retest.why, /after race day \(Nov 1\)/);
+  // …so the window is the week after race day, never "due now" beside "hold".
+  assert.ok(out.retest.in_weeks >= 4, `held re-tests land after the race (got ${out.retest.in_weeks})`);
 });
 
 test("the card moves with the week: a peak week puts even a supporting race in the lead", () => {
@@ -112,7 +119,7 @@ test("the card moves with the week: a peak week puts even a supporting race in t
     })
   );
   assert.equal(out.lead.domain, "running");
-  assert.match(out.lead.title, /19 days out: A new weekly high/);
+  assert.match(out.lead.title, /Cambridge Half Marathon: a new weekly high/i);
   assert.equal(out.day_state, null, "an ordinary training day carries no day state");
   // Strength rides alongside while the race shapes the week.
   assert.ok(out.parallel.some((p) => p.domain === "training") || out.later.some((l) => l.domain === "training"));
@@ -146,10 +153,10 @@ test("lift-only athlete: no race, an accumulation block, the lever in values", (
   assert.match(out.lead.why, /est\. 1RM of 87 lb — novice for your 40s, about 10 lb from intermediate/);
   assert.match(out.lead.why, /held/i, "a flat lift says so");
   assert.match(out.lead.move, /one more clean rep/i, "accumulation asks for reps before load");
-  assert.equal(out.block_line, "Week 2 of 5 — building volume.");
+  assert.equal(out.block_line, "Lifting block week 2 of 5 — building volume.");
   assert.equal(out.block.deload, "later");
   assert.match(out.block.decision, /intensity takes over from week 4/);
-  assert.match(out.headline, /^Week 2 of 5: your overhead press leads this week/);
+  assert.match(out.headline, /^Lifting block week 2 of 5: your overhead press leads this week/);
   assert.ok(!out.evidence.some((e) => e.domain === "running"), "no running evidence for a lifter");
   assert.ok(!out.parallel.some((p) => p.domain === "running"));
 });
@@ -190,7 +197,7 @@ test("deload week and an applied recovery week say so, and the recovery lead sta
     performance: PERFORMANCE,
     programState: { mesocycle: { phase: "deload" }, lifts: [] },
   });
-  assert.match(scheduled.block_line, /^Week 5 of 5 — a deload week/);
+  assert.match(scheduled.block_line, /^Lifting block week 5 of 5 — a deload week/);
   assert.equal(scheduled.block.deload, "deload_week");
   assert.match(scheduled.lead.move, /Deload week: hold the load on the overhead press/);
 
@@ -222,7 +229,7 @@ test("deload week and an applied recovery week say so, and the recovery lead sta
     programBlock: { phase: "intensification", week_of: "week 4 of 5", next_week_deload_runs: true },
     performance: PERFORMANCE,
   });
-  assert.equal(next.block_line, "Week 4 of 5 — pushing intensity; the deload is next week.");
+  assert.equal(next.block_line, "Lifting block week 4 of 5 — pushing intensity; the deload is next week.");
   const ifEarned = coachingFocus({
     programBlock: { phase: "intensification", week_of: "week 4 of 5", next_week_deload_runs: false },
     performance: PERFORMANCE,

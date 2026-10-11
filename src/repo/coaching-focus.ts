@@ -44,9 +44,11 @@ import {
   joinAnd,
   leverFacts,
   leverLift,
+  leverTargetWords,
   paceRelation,
   phaseMoveFor,
   raceItem,
+  RACE_HEADLINE_MAX_DAYS,
   raceName,
   raceRead,
   raceShapesTheWeek,
@@ -915,7 +917,9 @@ function trainingCandidate(inp: CoachingFocusInput): Candidate | null {
     // words), then the standing target.
     const block = blockRead(inp)?.read ?? null;
     const phaseMove = phaseMoveFor(block?.phase ?? null, lifted?.label ?? "", block?.deload === "set_aside");
-    const target = lever.target ? `Target: ${String(lever.target).replace(/\.$/, "")}.` : "";
+    const target =
+      (lifted ? leverTargetWords(lifted, unitsOfInput(inp)) : "") ||
+      (lever.target ? `Target: ${String(lever.target).replace(/\.$/, "")}.` : "");
     const move = [phaseMove, target].filter(Boolean).join(" ");
     const hero = String(inp.performance?.hero?.headline ?? "").trim();
     return {
@@ -1156,7 +1160,9 @@ function healthCandidate(inp: CoachingFocusInput): Candidate | null {
     slot: "parallel",
     item: {
       domain: viaNutrition ? "nutrition" : "health",
-      title: `Move your ${group}`,
+      // "Bring your lipids toward optimal", not "Move your lipids & cardiovascular": the
+      // group's lead noun, and the direction the in/out-of-optimal read speaks in.
+      title: `Bring your ${group.split(/\s*&\s*|\s+and\s+/)[0] || group} toward optimal`,
       why: clip(why, 260),
       move: move ? clip(`${move.replace(/[.\s]+$/, "")}. Informational, not medical advice.`, 260) : undefined,
       based_on: [`Health lead: ${lead.group}`, lead.tier ? `Tier: ${lead.tier}` : "Connected-brain health focus"],
@@ -1652,8 +1658,11 @@ function buildRetest(inp: CoachingFocusInput): CoachingRetest | null {
   // the lifts wait for race day, the labs can book any time.
   const race = raceRead(inp);
   const raceClose = race?.raceDate && race.daysTo != null && race.daysTo <= 28 && dedup.length > 0;
+  // Held for the race, the lift re-tests land the week after race day — never "due now"
+  // beside a line that says to wait (the labs keep their own "any time").
+  const heldWeeks = raceClose && race?.daysTo != null ? Math.max(1, Math.ceil((race.daysTo + 1) / 7)) : null;
   return {
-    in_weeks: dueNow ? 0 : 1,
+    in_weeks: heldWeeks ?? (dueNow ? 0 : 1),
     focus: dedup,
     labs: dedupLabs,
     why: raceClose
@@ -2216,8 +2225,11 @@ function composeHeadline(args: {
   const { lead, parallel, deferred, block, race } = args;
   if (!lead) return "Log a few sessions and Cairn will set your focus for the block.";
   const anchorParts: string[] = [];
-  if (block?.week != null && block.of != null) anchorParts.push(`Week ${block.week} of ${block.of}`);
-  if (race?.daysTo != null && race.daysTo >= 0 && race.daysTo <= 112) {
+  const counted = race?.daysTo != null && race.daysTo >= 0 && race.daysTo <= RACE_HEADLINE_MAX_DAYS;
+  // One clock per headline: the race countdown when a race is in view, else the lifting
+  // block's week. Two bare clocks side by side ("Week 6 of 6, 21 days to …") read as one.
+  if (!counted && block?.week != null && block.of != null) anchorParts.push(`Lifting block week ${block.week} of ${block.of}`);
+  if (race && counted && race.daysTo != null) {
     anchorParts.push(
       race.daysTo === 0
         ? `race day for ${raceName(race)}`
