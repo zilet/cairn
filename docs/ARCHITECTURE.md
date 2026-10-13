@@ -3716,14 +3716,33 @@ connected, then letting it talk. Three server pieces:
   `POST …/seen`. Never an OS notification. Understanding is the
   onboarding extraction in welcome mode (`buildOnboardPrompt(text, {welcome:true})`, named in
   `ONBOARD_SCHEMA`: `goal` → `profile.goal_mode` (recomp lands as `maintain` plus a remembered goal),
-  `lift_days` → the stated `strength_schedule` (named weekdays only), `welcome_reply` (held to
-  `violatesReadingGrammar`, else a rotating calm floor), `fuel_start`). With no plan, `composeWeek`
+  `lift_days` → the stated `strength_schedule` (named weekdays only), `lift_split` → that schedule's
+  `split` in their words (`src/repo/stated-split.ts`: the composer's binding STATED SPLIT line, and a
+  `stated_split` plan-quality WARNING when a restructure departs from a split whose words name parts),
+  `endurance_schedule` → the stated run days (so the engine places the runs where they said),
+  `welcome_reply` (held to `violatesReadingGrammar`, else a rotating calm floor, and never naming a
+  run weekday they did not), `fuel_start`). The composer gets the person's WHOLE first message as
+  its task (a 240-character cut once dropped a split said after a race), and may name a run weekday
+  only when it is stated. With no plan, `composeWeek`
   runs with `explicitRequest` — the person asked in their own words, so the week lands at THEIR
   boundary (today) with Undo, not next Monday; a busy host hands it to its own durable `compose_week`
   job instead. With no nutrition target, `fuel_start` goes through `setNutritionTarget` (its floors
   clamp). Only "no agent answered" fails the op (the designed `{ok:false, error, tried}`), and then
   nothing is marked done. `coach_welcomed` (migration 122) is backfilled true for installs that had
   already onboarded, so an upgrade never says "say hello" to a long-standing athlete.
+- **The one follow-up** (`src/coachOps/welcome-follow-up.ts`): read after the first message lands,
+  `welcomeRunFollowUp` asks ONE question — only when running or a race was mentioned and the run
+  days (or, with a goal to anchor it, the weekly distance) are still unsaid. It rides the phase meta
+  and result as `follow_up`; Meet paints it after the reply and the composer answers it while the
+  week composes. `POST /api/welcome/follow-up {text}` reads the answer deterministically (weekday
+  names, a distance with its unit) and applies it through the existing setters — the stated
+  `endurance_schedule` (never over one already stated) and the goal's `weekly_km` (the race
+  build's starting anchor) — answering `{ok, reply, applied, week}` at once.
+- **The reveal** shows the WHOLE landed week as Today's calendar holds it (`welcomeCalendarWeek`,
+  `src/coachOps/welcome-calendar.ts`, over `planWeek`): lifts and the run engine's runs on the
+  weekdays they land; a week with no weekdays to stand on keeps the lift-only, plan-order rows. A
+  Meet opened straight away (a provider already signed in) names the provider in one quiet line
+  with a way to change it.
 - **Day one** (`isStartingOut()`: no plan item AND no logged set / activity / food note / check-in —
   bodyweight alone is not a record) reads as `starting_out_day`, not the unprogrammed floor: its own
   `why` set and a `signals.starting_out` headline flavour (kind stays `easy` for the safety ladder),

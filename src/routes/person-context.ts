@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { onboardFromText } from "../coachOps.js";
+import { answerWelcomeFollowUp, onboardFromText } from "../coachOps.js";
 import { backgroundOp } from "./background-op.js";
 import { firstWeekStatus, markFirstWeekSeen } from "../repo/first-week.js";
 import { contextTagVocab } from "../repo/context-tag-effects.js";
@@ -185,6 +185,16 @@ personContextRouter.post("/welcome", (req, res) => {
   if (!text) return res.status(400).json({ ok: false, error: "text required", tried: [] });
   const agent = typeof b.agent === "string" && b.agent.trim() && b.agent !== "auto" ? b.agent.trim() : null;
   backgroundOp(res, "welcome", { text: text.slice(0, 4000) }, agent);
+});
+
+// The welcome's one follow-up answer (src/coachOps/welcome-follow-up.ts): the run days and
+// weekly distance the person wrote, read from their words and applied through the
+// existing setters — never an agent, so it answers at once, while the week composes.
+// Always {ok:true, reply, applied, week}; what could not be read is said back plainly.
+personContextRouter.post("/welcome/follow-up", (req, res) => {
+  const text = typeof req.body?.text === "string" ? req.body.text.trim() : "";
+  if (!text) return res.status(400).json({ ok: false, error: "text required" });
+  res.json(answerWelcomeFollowUp(text.slice(0, 600)));
 });
 
 // The first week, for the app outside the welcome (src/repo/first-week.ts): while it is

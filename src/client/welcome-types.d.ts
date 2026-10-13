@@ -97,6 +97,8 @@ type WelcomePartial = {
   detail: string;
   /** The first week's days written so far (job meta `days_so_far`), a preview. */
   days: WelcomeWeekRow[];
+  /** The one follow-up question (job meta `follow_up`), "" when none is asked. */
+  followUp: string;
 };
 
 type WelcomeModelApi = {
@@ -110,6 +112,8 @@ type WelcomeModelApi = {
   weekNote(state: unknown, hasRows: boolean): string | null;
   landed(weekState: unknown, fuelState: unknown): boolean;
   fuelLines(fuel: unknown, state: unknown): { main: string; sub: string } | null;
+  /** The follow-up question's words from a meta/result `follow_up`, "" when none. */
+  followUpQuestion(raw: unknown): string;
   /** A server message when it already reads as plain words, else the calm fallback. */
   humanMessage(raw: unknown, fallback: string): string;
   /** Leave one privacy-safe diagnostic (step, provider, code, status) for a failed step. */
@@ -170,10 +174,24 @@ declare const CairnWelcomeConnect: { mount(host: HTMLElement, deps: WelcomeConne
 declare const CairnWelcomeMeet: { mount(host: HTMLElement, deps: WelcomeMeetDeps): () => void };
 
 type WelcomeRunApi = {
-  create(deps: { append(html: string): HTMLElement | null; onWeekStarted(): void }): {
+  create(deps: {
+    append(html: string): HTMLElement | null;
+    onWeekStarted(): void;
+    /** The follow-up question arrived; false when it was already answered (not painted). */
+    onFollowUp?(question: string): boolean;
+  }): {
     begin(): void;
     phase(job: unknown): void;
-    reveal(result: { reply?: string; week?: unknown; week_state?: string; fuel?: unknown; fuel_state?: string }): void;
+    reveal(result: {
+      reply?: string;
+      week?: unknown;
+      week_state?: string;
+      fuel?: unknown;
+      fuel_state?: string;
+      follow_up?: unknown;
+    }): void;
+    /** Repaint the revealed week (the follow-up's answer moved the runs). */
+    rereveal(week: unknown): void;
     drop(): void;
     stop(): void;
     replied(): boolean;
@@ -188,6 +206,12 @@ type WelcomeRunApi = {
   followAfterLeave(id: string): void;
   /** The week landed: drop the caches it makes stale and repaint Today/Train if showing. */
   landed(): void;
+  /** The Meet composer as the follow-up's answer box (`asking`), or back to the welcome's. */
+  composerAsks(host: HTMLElement, asking: boolean): void;
+  /** This device already answered the follow-up for that welcome job. */
+  followUpAnswered(id: string | null): boolean;
+  /** Send the follow-up answer; resolves with the coach's reply and the week as it now stands. */
+  answerFollowUp(id: string | null, text: string): Promise<{ reply: string; week: unknown }>;
 };
 
 declare const CairnWelcomeRun: WelcomeRunApi;

@@ -177,6 +177,9 @@ const PERSISTED_KEYS = {
   // The last welcome this browser started ({id, text}), so a reload after a server
   // restart names the interruption and offers Try again with the same words.
   "cairn.welcome.job": ["welcome-meet-controller"],
+  // The welcome job whose one follow-up question this browser already answered, so a
+  // reload that re-attaches does not ask it again.
+  "cairn.welcome.followup": ["welcome-meet-run"],
   // This device knows the welcome's first week has nothing left to follow (first-week-client.ts).
   "cairn.firstWeek.done": ["first-week-client"],
   "cairn.app.identity.v1": ["app-identity-model"],

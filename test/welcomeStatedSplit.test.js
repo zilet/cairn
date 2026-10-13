@@ -151,7 +151,7 @@ test("welcome: a split said after a long race sentence still reaches the compose
       "const out = await (async () => {",
       `  repo.setSettings({ lead_mode: "lead" });`,
       `  const result = await ops.welcomeCoach("coach", ${JSON.stringify(text)});`,
-      "  return { ok: result.ok, week_state: result.week_state, applied: result.applied };",
+      "  return { ok: result.ok, week_state: result.week_state, applied: result.applied, follow_up: result.follow_up ?? null };",
       "})();",
       `process.stdout.write(${JSON.stringify(SENTINEL)} + JSON.stringify(out));`,
       "process.exit(0);",
@@ -166,6 +166,11 @@ test("welcome: a split said after a long race sentence still reaches the compose
     const out = JSON.parse(res.stdout.slice(res.stdout.lastIndexOf(SENTINEL) + SENTINEL.length));
     assert.equal(out.ok, true);
     assert.equal(out.applied.lift_split, "upper/lower");
+    assert.deepEqual(
+      out.follow_up?.asks,
+      ["days"],
+      "a race was mentioned and no run days said: the one follow-up asks them"
+    );
     const composed = fs
       .readdirSync(prompts)
       .map((f) => fs.readFileSync(path.join(prompts, f), "utf8"))

@@ -23,6 +23,7 @@
     week_state?: string;
     fuel?: unknown;
     fuel_state?: string;
+    follow_up?: unknown;
   };
   type StreamHandlers = {
     guard?: () => boolean;
@@ -59,6 +60,9 @@
     let lastText = "";
     let jobId: string | null = null;
     let settled = false;
+    // The one follow-up question, while it is owed: the composer answers it (and stays in
+    // the dock beside "look around") instead of starting a second welcome.
+    let followUp: string | null = null;
     let stopWatch: () => void = () => {};
     const log = host.querySelector<HTMLElement>(".wel-log");
     const dock = host.querySelector<HTMLElement>(".wel-dock");
@@ -103,6 +107,11 @@
     let composerHome: Node | null = null;
     function dockWaiting(): void {
       if (!dock || !form || dock.querySelector("[data-wel-leave]")) return;
+      // A follow-up still owed keeps the composer, with "look around" beneath it.
+      if (followUp) {
+        dock.insertAdjacentHTML("beforeend", CairnWelcomeClient.waitDockHtml());
+        return;
+      }
       composerHome = form;
       form.remove();
       dock.insertAdjacentHTML("beforeend", CairnWelcomeClient.waitDockHtml());
@@ -114,7 +123,35 @@
       composerHome = null;
     }
 
-    const run = CairnWelcomeRun.create({ append, onWeekStarted: dockWaiting });
+    // The follow-up arrived: the composer becomes its answer box (unless this device
+    // already answered it for this job).
+    function askFollowUp(question: string): boolean {
+      if (CairnWelcomeRun.followUpAnswered(jobId)) return false;
+      followUp = question;
+      CairnWelcomeRun.composerAsks(host, true);
+      setComposer(true);
+      return true;
+    }
+
+    async function answerFollowUp(text: string): Promise<void> {
+      setComposer(false);
+      append(CairnWelcomeClient.userBubbleHtml(text));
+      const { reply, week } = await CairnWelcomeRun.answerFollowUp(jobId, text);
+      if (!alive) return;
+      followUp = null;
+      append(CairnWelcomeClient.coachBubbleHtml(reply));
+      if (week) run.rereveal(week);
+      // The composer, answered: gone while the week composes or once it landed (the dock
+      // then holds "look around" or Open Today), else simply off until it is needed.
+      CairnWelcomeRun.composerAsks(host, false);
+      if (dock && form && (settled || dock.querySelector("[data-wel-leave]"))) {
+        composerHome = form;
+        form.remove();
+      } else setComposer(false);
+      scrollToEnd();
+    }
+
+    const run = CairnWelcomeRun.create({ append, onWeekStarted: dockWaiting, onFollowUp: askFollowUp });
 
     const note = (code: string): void => {
       if (alive) CairnWelcomeModel.reportFailure("meet", deps.provider?.name, code);
@@ -150,10 +187,16 @@
       // They watched it land right here: the app's one-shot "ready" notice is said.
       (globalThis as { CairnFirstWeek?: FirstWeekApi }).CairnFirstWeek?.seen();
       run.reveal(result);
-      if (dock)
+      if (dock) {
         dock.innerHTML = CairnWelcomeClient.doneDockHtml(
           CairnWelcomeModel.landed(result.week_state, result.fuel_state)
         );
+        // Still owed: the answer box stays above Open Today.
+        if (followUp && form) {
+          dock.prepend(form);
+          setComposer(true);
+        }
+      }
       // Focus moves to the next step quietly: a ring only for keyboard users.
       dock
         ?.querySelector<HTMLButtonElement>("[data-wel-today]")
@@ -207,6 +250,7 @@
 
     async function start(text: string): Promise<void> {
       lastText = text;
+      followUp = null;
       setComposer(false);
       if (jobId) teardownJobs((id: string) => id === jobId);
       stopWatch();
@@ -246,6 +290,12 @@
       event.preventDefault();
       const text = input.value.trim();
       if (!text || input.disabled) return;
+      if (followUp) {
+        input.value = "";
+        autosize();
+        void answerFollowUp(text);
+        return;
+      }
       append(CairnWelcomeClient.userBubbleHtml(text));
       input.value = "";
       autosize();
@@ -309,6 +359,8 @@
         if (running && running.id != null) {
           resume(typeof running.input?.text === "string" ? running.input.text : "");
           run.begin();
+          // The job id first: a follow-up this device already answered is not re-asked.
+          jobId = String(running.id);
           run.phase(running);
           attach(String(running.id));
           return;

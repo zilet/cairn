@@ -46,7 +46,14 @@
     const fuelKnown = step === "week";
     // The week's days as the composer writes them: a preview, painted row by row.
     const days = step === "week" ? weekRows(meta.days_so_far).slice(0, 7) : [];
-    return { step, reply, fuelKnown, fuel: fuelKnown ? fuelLines(meta.fuel, meta.fuel_state) : null, detail, days };
+    const followUp = followUpQuestion(meta.follow_up);
+    return { step, reply, fuelKnown, fuel: fuelKnown ? fuelLines(meta.fuel, meta.fuel_state) : null, detail, days, followUp };
+  }
+
+  /** The one follow-up question's words (ClientWelcomeFollowUp), "" when none is asked. */
+  function followUpQuestion(raw: unknown): string {
+    const row = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+    return typeof row.question === "string" ? row.question.trim().slice(0, 300) : "";
   }
 
   /** A job the server marked interrupted (a restart mid-run): a retry, never a verdict. */
@@ -169,6 +176,7 @@
     weekNote,
     landed,
     fuelLines,
+    followUpQuestion,
     reportFailure,
     humanMessage,
   };

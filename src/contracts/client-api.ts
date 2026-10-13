@@ -3785,6 +3785,7 @@ export type ClientWelcomeResult =
       week_job_id?: number | null;
       fuel: { target_kcal: number | null; protein_g: number | null } | null;
       fuel_state: "set" | "existing" | "none";
+      follow_up?: ClientWelcomeFollowUp;
       applied: {
         about_me: boolean;
         profile: boolean;
@@ -3819,6 +3820,22 @@ export interface ClientWelcomePhaseMeta {
   detail?: string;
   /** The first week's days as they are written — a preview, at most 7 rows. */
   days_so_far?: ClientFirstWeekDay[];
+  /** The one follow-up question (run days / weekly distance), from `fuel` on. */
+  follow_up?: ClientWelcomeFollowUp;
+}
+
+/** The welcome's one follow-up question: what it asks about, and the words. */
+export interface ClientWelcomeFollowUp {
+  asks: Array<"days" | "volume">;
+  question: string;
+}
+
+/** POST /api/welcome/follow-up: the answer read and applied, the coach's reply, the week now. */
+export interface ClientWelcomeFollowUpResponse {
+  ok: true;
+  reply: string;
+  applied: { run_days: number[]; weekly_km: number | null };
+  week: ClientWelcomeWeekDay[] | null;
 }
 
 /**
@@ -4266,6 +4283,7 @@ export interface ClientApiResponses {
   "/api/supplements/understand": { ok: true; supplements: ClientSupplement[] };
   "/api/onboard": ClientOkResponse;
   "/api/welcome": ClientWelcomeQueuedResponse;
+  "/api/welcome/follow-up": ClientWelcomeFollowUpResponse;
   "/api/welcome/first-week": ClientFirstWeekStatus;
   "/api/welcome/first-week/seen": ClientFirstWeekStatus;
   "/api/chat": ClientChatMessage[] | ClientChatPostResponse;

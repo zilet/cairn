@@ -19,6 +19,8 @@
     append(html: string): HTMLElement | null;
     /** The week is being built: the composer gives way to "look around". */
     onWeekStarted(): void;
+    /** The follow-up question arrived; false when it was already answered (not painted). */
+    onFollowUp?(question: string): boolean;
   };
 
   type WelcomeRunResult = {
@@ -27,12 +29,15 @@
     week_state?: string;
     fuel?: unknown;
     fuel_state?: string;
+    follow_up?: unknown;
   };
 
   type WelcomeRun = {
     begin(): void;
     phase(job: unknown): void;
     reveal(result: WelcomeRunResult): void;
+    /** Repaint the revealed week (the follow-up's answer moved the runs). */
+    rereveal(week: unknown): void;
     /** Remove every bubble this run painted (a retry starts clean). */
     drop(): void;
     stop(): void;
@@ -52,7 +57,10 @@
     let workingStep: WelcomeWorkingStep | null = null;
     let stopCaption: () => void = () => {};
     let replyShown = false;
+    let followShown = false;
     let fuelShown = false;
+    let revealNode: HTMLElement | null = null;
+    let revealNote: string | null = null;
     let lastDetail = "";
     let dayKeys: string[] = [];
     const nodes: HTMLElement[] = [];
@@ -86,6 +94,21 @@
       replyShown = true;
       clearWorking();
       keep(deps.append(CairnWelcomeClient.coachBubbleHtml(text)));
+    }
+
+    // The one follow-up question, right after the reply: the person can answer it while
+    // the week composes. Painted once, and only while it is still owed.
+    function showFollowUp(question: string): void {
+      if (followShown || !question || !replyShown) return;
+      followShown = true;
+      if (deps.onFollowUp && !deps.onFollowUp(question)) return;
+      const node = keep(deps.append(CairnWelcomeClient.coachBubbleHtml(question)));
+      node?.setAttribute("data-wel-followup", "");
+    }
+
+    function revealMarkup(weekRaw: unknown): string {
+      const week = CairnWelcomeModel.weekRows(weekRaw);
+      return CairnWelcomeClient.revealHtml({ reply: "", week, weekNote: revealNote, fuel: null });
     }
 
     function showFuel(fuel: { main: string; sub: string } | null): void {
@@ -136,6 +159,7 @@
       phase(job) {
         const p = CairnWelcomeModel.partial(job);
         if (p.reply) showReply(p.reply);
+        if (p.followUp) showFollowUp(p.followUp);
         if (p.fuelKnown) {
           showFuel(p.fuel);
           if (workingStep !== "week") {
@@ -150,24 +174,31 @@
         clearWorking();
         // Whatever the live phases did not get to paint, in the same order.
         showReply(String(result.reply || ""));
+        showFollowUp(CairnWelcomeModel.followUpQuestion(result.follow_up));
         showFuel(CairnWelcomeModel.fuelLines(result.fuel, result.fuel_state));
         const week = CairnWelcomeModel.weekRows(result.week);
-        keep(
-          deps.append(
-            CairnWelcomeClient.revealHtml({
-              reply: "",
-              week,
-              weekNote: CairnWelcomeModel.weekNote(result.week_state, week.length > 0),
-              fuel: null,
-            })
-          )
-        );
+        revealNote = CairnWelcomeModel.weekNote(result.week_state, week.length > 0);
+        revealNode = keep(deps.append(revealMarkup(result.week)));
+      },
+      rereveal(weekRaw) {
+        if (!revealNode?.isConnected || !CairnWelcomeModel.weekRows(weekRaw).length) return;
+        const box = document.createElement("div");
+        box.innerHTML = revealMarkup(weekRaw).trim();
+        const fresh = box.firstElementChild as HTMLElement | null;
+        if (!fresh) return;
+        fresh.setAttribute("data-wel-run", "");
+        revealNode.replaceWith(fresh);
+        nodes[nodes.indexOf(revealNode)] = fresh;
+        revealNode = fresh;
       },
       drop() {
         clearWorking();
         for (const node of nodes.splice(0)) node.remove();
         replyShown = false;
+        followShown = false;
         fuelShown = false;
+        revealNode = null;
+        revealNote = null;
         lastDetail = "";
         dayKeys = [];
       },
@@ -177,6 +208,58 @@
       },
       replied: () => replyShown,
     };
+  }
+
+  /** The Meet composer as the follow-up's answer box (`asking`), or back to the welcome's. */
+  function composerAsks(host: HTMLElement, asking: boolean): void {
+    const input = host.querySelector<HTMLTextAreaElement>(".wel-text");
+    const label = host.querySelector<HTMLElement>('label[for="welText"]');
+    if (!input) return;
+    if (asking && input.dataset.welPh == null) {
+      input.dataset.welPh = input.placeholder;
+      if (label) input.dataset.welLbl = label.textContent || "";
+    }
+    input.placeholder = asking ? "Your run days, and roughly how far a week…" : (input.dataset.welPh ?? input.placeholder);
+    if (label) label.textContent = asking ? "Answer your coach's question" : (input.dataset.welLbl ?? label.textContent);
+    if (asking) input.value = "";
+  }
+
+  // The welcome job whose follow-up question this browser already answered, so a reload
+  // that re-attaches does not ask it again. Per-device convenience only.
+  const ANSWERED_KEY = "cairn.welcome.followup";
+  function followUpAnswered(id: string | null): boolean {
+    try {
+      return !!id && localStorage.getItem(ANSWERED_KEY) === id;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Send the person's answer to the one follow-up (POST /api/welcome/follow-up — read and
+   * applied at once, no agent) and remember it is answered. Always resolves: a failed
+   * send still gets a calm reply pointing at Ask.
+   */
+  async function answerFollowUp(id: string | null, text: string): Promise<{ reply: string; week: unknown }> {
+    type Answered = { ok?: boolean; reply?: unknown; week?: unknown };
+    let res: Answered | null = null;
+    try {
+      res = (await api("/welcome/follow-up", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      })) as Answered;
+    } catch {
+      res = null;
+    }
+    try {
+      if (id) localStorage.setItem(ANSWERED_KEY, id);
+    } catch {}
+    const reply =
+      typeof res?.reply === "string" && res.reply.trim()
+        ? res.reply.trim()
+        : "I couldn't save that just now. Tell me your run days any time in Ask.";
+    return { reply, week: res?.week ?? null };
   }
 
   type JobRow = { status?: string; result?: unknown; error?: unknown; [key: string]: unknown };
@@ -231,5 +314,7 @@
     return (globalThis as { CairnFirstWeek?: FirstWeekApi }).CairnFirstWeek;
   }
 
-  Object.assign(globalThis, { CairnWelcomeRun: { create: createRun, watchJob, followAfterLeave, landed } });
+  Object.assign(globalThis, {
+    CairnWelcomeRun: { create: createRun, watchJob, followAfterLeave, landed, followUpAnswered, answerFollowUp, composerAsks },
+  });
 })();

@@ -16,7 +16,6 @@ import { statedLiftDows } from "../repo/profile.js";
 import { executionProfileForOp, getSettings, interactiveTimeoutForOp, setSettings } from "../repo/settings.js";
 import { localDateISO } from "../repo/shared.js";
 import { applyDueAnnouncedDecisions } from "../domain/brain/autonomy-service.js";
-import { planWeek } from "../domain/training/plan-week.js";
 import { classifyAgentFailure, resourceFailureHeadline, type AgentFailure } from "../agentAvailability.js";
 import {
   AgentFallbackError,
@@ -36,6 +35,10 @@ import { agentFailure, agentStatusFor } from "./shared.js";
 import type { OpHooks } from "./shared.js";
 import { applyOnboardBase, applyOnboardParsed, emptyOnboardApplied, type OnboardApplied } from "./memory.js";
 import { composeWeek } from "./training.js";
+import { welcomeCalendarWeek, type WelcomeWeekDay } from "./welcome-calendar.js";
+import { welcomeRunFollowUp, type WelcomeFollowUp } from "./welcome-follow-up.js";
+
+export { welcomeCalendarWeek, type WelcomeWeekDay };
 
 // ---------- verify: "say hello" through the real spawn path ----------
 
@@ -219,6 +222,11 @@ export interface WelcomePhaseMeta {
    * week is the final result's `week`. At most WELCOME_PREVIEW_MAX_DAYS rows.
    */
   days_so_far?: WelcomeWeekDay[];
+  /**
+   * The one follow-up question (welcome-follow-up.ts), from `fuel` on: asked only when
+   * the person mentioned running or a race and has not said their run days or volume.
+   */
+  follow_up?: WelcomeFollowUp;
 }
 
 /** The most rows a phase meta's `days_so_far` carries (a week, with room to spare). */
@@ -233,16 +241,6 @@ export const WELCOME_REPLY_FALLBACKS: readonly string[] = [
   "That's plenty to start with. A first week and a food starting point are going in now, and everything stays easy to change.",
 ];
 
-export interface WelcomeWeekDay {
-  /** 0 = Sunday; null when no lifting weekdays were stated (the plan's ring order only). */
-  dow: number | null;
-  /** The plan day lifted on this weekday; null on a run-only day. */
-  day_number: number | null;
-  /** The lift's name, or on a run-only day the run's ("Long run"). */
-  name: string;
-  /** The run the calendar places on this weekday, when there is one (the reveal only). */
-  run?: string;
-}
 
 export type WelcomeWeekState = "applied" | "announced" | "draft" | "existing" | "queued" | "failed" | "none";
 
@@ -256,6 +254,8 @@ export type WelcomeResult =
       week_job_id?: number | null;
       fuel: { target_kcal: number | null; protein_g: number | null } | null;
       fuel_state: "set" | "existing" | "none";
+      /** The one follow-up question still worth asking, else absent. */
+      follow_up?: WelcomeFollowUp;
       applied: OnboardApplied;
       agent: string;
       tried: { agent: string; error: string }[];
@@ -316,36 +316,6 @@ export function welcomeWeekFrom(days: any[] | null | undefined): WelcomeWeekDay[
     }
   }
   return lifting.map((d) => ({ dow: null, day_number: d.day_number, name: d.name }));
-}
-
-/**
- * The week the reveal shows once it is on the plan: the WHOLE week as Today's calendar
- * holds it (planWeek — the strip's own source), lifts and the run engine's runs on the
- * weekdays they actually land, so the reveal can never show a run day the calendar won't.
- * Null when the week has no weekdays to stand on (no lifting or run days known): the
- * caller's lift-only, plan-order rows are then the honest answer.
- */
-export function welcomeCalendarWeek(today = localDateISO()): WelcomeWeekDay[] | null {
-  try {
-    const week = planWeek(today);
-    const rows: WelcomeWeekDay[] = [];
-    for (const day of week.days) {
-      if (day.dow == null) return null;
-      const lift = day.plan_day && day.plan_day.day_type !== "rest" ? day.plan_day : null;
-      const run = day.run && !day.run.rested ? String(day.run.label || "").trim() : "";
-      if (!lift && !run) continue;
-      rows.push({
-        dow: day.dow,
-        day_number: lift ? lift.day_number : null,
-        name: (lift ? String(lift.name || `Day ${lift.day_number}`) : run).trim().slice(0, 60),
-        ...(run ? { run: run.slice(0, 60) } : {}),
-      });
-    }
-    return rows.length ? rows : null;
-  } catch (err) {
-    log.debug("[welcome] the calendar week could not be read for the reveal", { error: err });
-    return null;
-  }
 }
 
 /** The landed week for the reveal: the calendar's whole week, else the lift-only rows. */
@@ -564,12 +534,17 @@ export async function welcomeCoach(
   applyOnboardBase(raw, applied);
   applyOnboardParsed(parsed, applied);
   const reply = welcomeReplyFrom(parsed, today);
+  // The one follow-up, read after the first message landed so nothing it said is asked
+  // again. It rides with the reply, so the person can answer while the week composes.
+  const followUp = welcomeRunFollowUp(raw, today);
+  const asked = followUp ? { follow_up: followUp } : {};
   // The reply is the person's first answer: it rides the next phase so it shows the
   // moment it exists (and survives a reload), long before the week is composed.
   hooks?.onPhase?.(WELCOME_PHASES.fuel, {
     step: "fuel",
     frac: { done: 1, total: 3 },
     reply,
+    ...asked,
   } satisfies WelcomePhaseMeta);
 
   // b. starting fuel — depends only on step a, so it lands before the (slow) week.
@@ -581,8 +556,11 @@ export async function welcomeCoach(
   recordWelcomeExchange(raw, reply, chosen);
 
   // d. the first week
-  const weekMeta: WelcomePhaseMeta = { step: "week", frac: { done: 2, total: 3 }, reply, fuel, fuel_state };
+  const weekMeta: WelcomePhaseMeta = { step: "week", frac: { done: 2, total: 3 }, reply, fuel, fuel_state, ...asked };
   const { week, week_state } = await welcomeWeek(chosen, raw, weekMeta, today, hooks);
+  // Answered while the week composed: the question is no longer owed.
+  const later = followUp ? welcomeRunFollowUp(raw, today) : null;
+  const stillAsked = later ? { follow_up: later } : {};
 
   return {
     ok: true,
@@ -591,6 +569,7 @@ export async function welcomeCoach(
     week_state,
     fuel,
     fuel_state,
+    ...stillAsked,
     applied,
     agent: chosen,
     tried: run.tried,
