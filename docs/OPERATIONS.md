@@ -668,8 +668,9 @@ from an older version.
 
 The dev loop's cost is the server `tsc` build, the per-file client transpile, the client
 typecheck, and the test suite — all incremental (`.tsbuildcache/*`) and parallel
-(`scripts/run-verify.mjs` runs independent gates in staged groups; `test/run.mjs` shards
-test files across worker processes). Alternatives were evaluated empirically so the
+(`scripts/run-verify.mjs` runs independent gates in staged groups; `test/run.mjs` runs test
+files off one longest-first queue across worker processes, ordered by the previous run's
+per-file times in `node_modules/.cache/cairn-test/timings.json`). Alternatives were evaluated empirically so the
 question doesn't get re-litigated:
 
 - **Turborepo / Nx** — not applicable. Cairn is a single npm package, not a monorepo, so
@@ -735,6 +736,6 @@ Every script under `scripts/`, one line each (from its own header comment):
 | `quickstart-rpi.sh` | Guided Cairn setup for a Raspberry Pi (arm64); strongly recommends a container engine over direct Node, since the Pi's host Node is usually too old. |
 | `run-verify.mjs` | Runs `npm run verify`'s independent gates (docs, actions, launch safety, and more) in parallel staged groups. |
 | `setup-phone.sh` | Puts Cairn on your phone privately in one step via Tailscale Serve, degrading gracefully to manual instructions if anything is missing. |
-| `smoke-browser.mjs` | Dependency-free browser smoke test for the generated PWA app shell via local Chrome + CDP; a release/manual gate, not part of `npm run verify`. |
+| `smoke-browser.mjs` | Dependency-free browser smoke test for the generated PWA app shell via local Chrome + CDP; not part of `npm run verify` (it needs Chrome), so it runs as its own CI job and in `npm run release:check`. |
 | `smoke-server.mjs` | Shared helper module (server entrypoint, `withServer`, the offline agents table and the demo race seed) imported by `test/smoke.mjs`, `smoke-browser.mjs`, `capture-screens.mjs` and `check-perf.mjs`; not run directly. |
 | `update-agent-clis.sh` | Stable `cairn-update-agent-clis` entrypoint wrapper that execs `install-agent-cli.mjs`, so every install/update command is an argv array with no shell interpolation. |

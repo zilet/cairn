@@ -1,5 +1,5 @@
 {
-  "$comment": "The Railway template, declared. `sh deploy/install.sh railway-template` builds a template draft from it in the Railway workspace you are signed in to (see deploy/railway/README.md). deploy/install.sh carries the same values for its Railway install; test/installScript.test.js fails when the two drift.",
+  "$comment": "The Railway template, declared. `sh deploy/install.sh railway-template` builds a template draft from it in the Railway workspace you are signed in to (see deploy/railway/README.md). deploy/install.sh carries the same values for its Railway install; test/installScriptRailwayTemplate.test.js fails when the two drift.",
   "name": "Cairn",
   "category": "AI/ML",
   "description": "Your own self-hosted coach for training, nutrition and longevity.",

@@ -64,6 +64,14 @@ class FakeElement {
   }
 }
 
+// The controller's own timers (a saved flash, a settle delay) outlive the test that
+// started them; unref'd, they never hold the test process open after the last test.
+function unrefTimeout(fn, ms, ...args) {
+  const timer = setTimeout(fn, ms, ...args);
+  timer.unref();
+  return timer;
+}
+
 function loadMobileViewport(options = {}) {
   const source = readFileSync(new URL("../public/js/app-mobile-viewport.js", import.meta.url), "utf8");
   const windowListeners = listenerMap();
@@ -111,7 +119,7 @@ function loadMobileViewport(options = {}) {
       measureCount += 1;
     },
     requestAnimationFrame: (fn) => fn(),
-    setTimeout,
+    setTimeout: unrefTimeout,
     state: { tab: options.tab ?? "chat" },
     window,
   };

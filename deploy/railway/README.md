@@ -13,7 +13,7 @@ The template is the no-terminal path. The main path is the one-command installer
 (`curl -fsSL https://cairn.fit/install | sh`, choice 1, or `--target=railway`), which builds the same
 service with the Railway CLI. Both read the same values: `RW_PLAIN_VARS`, `RW_SECRET_VARS` and the
 `RW_TPL_*` constants in [`deploy/install.sh`](../install.sh) carry what `template.json` declares, and
-`test/installScript.test.js` fails when the two drift. To change a variable, change both. The
+`test/installScriptRailwayTemplate.test.js` fails when the two drift. To change a variable, change both. The
 install also switches on the same image auto updates (`RW_TPL_UPDATE_*`, the Night window) with the
 same kind of environment patch, so an installed Cairn and a template-deployed one update alike.
 

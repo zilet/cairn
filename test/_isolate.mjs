@@ -13,13 +13,72 @@
 // pristine floor, so correctness is independent of file order, shard count, and
 // added test files. Per-file `resetTables` calls stay valid (they just delete
 // already-empty tables) — this is the belt over their suspenders.
+import { readFileSync } from "node:fs";
+import { registerHooks } from "node:module";
+import path from "node:path";
 import { beforeEach } from "node:test";
-import { db } from "../dist/db.js";
-import { resetMarkerHistoryCache } from "../dist/repo/health.js";
-import { resetDayReadRefresh } from "../dist/dayread-refresh.js";
-import { resetDayReadComputeCoalescing } from "../dist/dayread.js";
-import { resetBrainEventsForTest } from "../dist/brainEvents.js";
-import { resetTrainingDataCache } from "../dist/repo/training-cache.js";
+
+// In-process memos and timers that must not leak from one test into the next.
+const dist = (rel) => new URL(rel, import.meta.url).href;
+const watched = new Map(
+  [
+    ["../dist/repo/health.js", "resetMarkerHistoryCache"],
+    ["../dist/dayread-refresh.js", "resetDayReadRefresh"],
+    ["../dist/dayread.js", "resetDayReadComputeCoalescing"],
+    ["../dist/brainEvents.js", "resetBrainEventsForTest"],
+    ["../dist/repo/training-cache.js", "resetTrainingDataCache"],
+  ].map(([rel, name]) => [dist(rel), { url: dist(rel), name, reset: null }])
+);
+const loaded = new Set();
+registerHooks({
+  load(url, context, nextLoad) {
+    const entry = watched.get(url);
+    if (entry) loaded.add(entry);
+    return nextLoad(url, context);
+  },
+});
+// Resolve a loaded module's reset once; the module is already in the cache by then.
+async function resetIfLoaded(url) {
+  const entry = watched.get(url);
+  if (!loaded.has(entry)) return;
+  entry.reset ??= (await import(entry.url))[entry.name];
+  entry.reset();
+}
+
+// A third of the suite (client, script and contract tests) never loads dist/, and
+// importing the server graph here cost each such file ~150 ms of process start. So a test
+// file that never names dist — itself or in the relative modules it imports —
+// loads only the DB; a module never loaded has no state to reset, and the hook above
+// still notices one that loads late. Every other file keeps the full, ordered graph
+// import below: dist/ has import cycles whose evaluation order this preload has always
+// fixed (load dist/repo/signal-state.js first and it hits a TDZ error), so a dist test
+// must not start from a different module than it always has.
+const RELATIVE_IMPORT = /(?:\bfrom\s*|\bimport\s*\(?\s*)["'](\.{1,2}\/[^"']+)["']/g;
+function reachesDist(file, seen = new Set()) {
+  if (seen.has(file)) return false;
+  seen.add(file);
+  let source;
+  try {
+    source = readFileSync(file, "utf8");
+  } catch {
+    return true;
+  }
+  // Conservative: any mention of dist (a built path, an import by URL) counts.
+  if (/\bdist\b/.test(source)) return true;
+  for (const [, spec] of source.matchAll(RELATIVE_IMPORT)) {
+    const target = path.resolve(path.dirname(file), spec);
+    if (target.split(path.sep).includes("dist")) return true;
+    if (/\.m?js$/.test(target) && reachesDist(target, seen)) return true;
+  }
+  return false;
+}
+const testFiles = process.argv.slice(1).filter((arg) => /\.test\.m?js$/.test(arg));
+const lightweight = testFiles.length > 0 && !testFiles.some((file) => reachesDist(path.resolve(file)));
+
+const { db } = await import("../dist/db.js");
+if (!lightweight) {
+  for (const url of watched.keys()) await import(url);
+}
 
 // The schema is fixed for the life of the process, so enumerate + prepare once.
 const tables = db
@@ -40,7 +99,7 @@ const hasSqliteSequence = !!db
   .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sqlite_sequence'")
   .get();
 
-beforeEach(() => {
+beforeEach(async () => {
   // Single transaction with deferred FK checks: intermediate deletes may briefly
   // violate foreign keys, but every table is empty at COMMIT so nothing trips.
   // `DELETE FROM <t>` with no WHERE uses SQLite's truncate optimization, so an
@@ -61,18 +120,18 @@ beforeEach(() => {
   }
   // The wipe bypasses every repo write path (and thus the getMarkerHistory write
   // counter), and rowids can collide across a wipe — so the in-process marker-history
-  // memo could otherwise serve a prior test's markers. Drop it explicitly here.
-  resetMarkerHistoryCache();
+  // memo could otherwise serve a prior test's markers. Drop it explicitly here (when loaded).
+  await resetIfLoaded(dist("../dist/repo/health.js"));
   // A brain-signal write in one test arms a debounced day-read recompute timer; clear
   // it (and restore default hooks) so it can never leak into — or spawn a CLI during —
   // a later test.
-  resetDayReadRefresh();
+  await resetIfLoaded(dist("../dist/dayread-refresh.js"));
   // And the canonical-recompute lane: an unsettled run left by one test must never
   // be joined by the next one, whose DB has just been wiped out from under it.
-  resetDayReadComputeCoalescing();
-  resetBrainEventsForTest();
+  await resetIfLoaded(dist("../dist/dayread.js"));
+  await resetIfLoaded(dist("../dist/brainEvents.js"));
   // Same hazard for the training memos (getProgramState / getWeeklyStats /
   // estimateExpenditure): reset their counters to 0 and drop every registered memo so a
   // same-shape next test can't land on a colliding key and read a prior test's read.
-  resetTrainingDataCache();
+  await resetIfLoaded(dist("../dist/repo/training-cache.js"));
 });

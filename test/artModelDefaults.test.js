@@ -91,7 +91,16 @@ test(".env.example never recommends a model id that isn't on the verified list",
   // against Google's model list. A recommendation in the file a user copies IS
   // a default, so it answers to the same allowlist.
   const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
-  const env = fs.readFileSync(path.join(root, ".env.example"), "utf8");
+  let env;
+  try {
+    env = fs.readFileSync(path.join(root, ".env.example"), "utf8");
+  } catch (err) {
+    // An agent sandbox's secrets guard can deny every .env* path, .env.example included.
+    if (err?.code === "EPERM") {
+      assert.fail("this environment denies reading .env.example (an agent sandbox's secrets guard?) — run unsandboxed; this is not a regression");
+    }
+    throw err;
+  }
   const recommended = [...env.matchAll(/^#\s*GEMINI\w*_IMAGE_MODEL=(\S+)\s*$/gm)].map((m) => m[1]);
   assert.ok(recommended.length, "the art model overrides are still documented");
   for (const id of recommended) {

@@ -609,15 +609,9 @@ test("Enter in a grams field saves in place: focus and the live region stay put"
 });
 
 // The card's PUT body run through the server's own recompute: the number the card
-// shows before the request is the number the save comes back with. Needs the
-// row-edit recompute in src/foodCapture.ts (wave 2 stream A); skipped until it is on
-// the branch, and live from the merge on.
-test("the optimistic totals equal the server's recompute of the card's PUT body", async (t) => {
+// shows before the request is the number the save comes back with.
+test("the optimistic totals equal the server's recompute of the card's PUT body", async () => {
   const capture = await import("../dist/foodCapture.js");
-  if (typeof capture.recomputeFoodIngredients !== "function") {
-    t.skip("recomputeFoodIngredients (wave 2 stream A) is not on this branch yet");
-    return;
-  }
   const win = load();
   const M = win.CairnMealCardModel;
   const note = pastedNote();

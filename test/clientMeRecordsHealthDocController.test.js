@@ -221,6 +221,14 @@ function addDocControls(row, status = "done") {
   if (status === "pending") row.appendChild(new FakeElement("span", { className: "enr-pending" }));
 }
 
+// The controller's own timers (a saved flash, a settle delay) outlive the test that
+// started them; unref'd, they never hold the test process open after the last test.
+function unrefTimeout(fn, ms, ...args) {
+  const timer = setTimeout(fn, ms, ...args);
+  timer.unref();
+  return timer;
+}
+
 function loadController() {
   const document = new FakeDocument();
   const localStorage = new Map();
@@ -235,7 +243,7 @@ function loadController() {
     Object,
     Promise,
     String,
-    setTimeout,
+    setTimeout: unrefTimeout,
     window: null,
     globalThis: null,
     document,

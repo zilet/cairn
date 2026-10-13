@@ -55,6 +55,8 @@ before(async () => {
 
 after(() => {
   globalThis.fetch = realFetch;
+  // fetch keeps its socket alive for a few seconds; drop it so close() returns at once.
+  server?.closeAllConnections();
   server?.close();
 });
 

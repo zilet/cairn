@@ -25,8 +25,8 @@ Railway is one convenient host, not a dependency. A new host slots in the same w
 3. **A `deploy/<target>/` folder** with whatever the host declares declaratively (a template or app
    spec as data, with the same variables as the installer) and a `README.md` on how anyone rebuilds
    it into their own account.
-4. **Tests** in `test/installScript.test.js`, against a fake of the host's CLI on `PATH` (see
-   `FAKE_RAILWAY`): the command sequence, secrets never in argv, and a spec-to-installer sync check.
+4. **Tests** in `test/installScript*.test.js` (one file per area; the shared rig is
+   `test/_installer.mjs`), against a fake of the host's CLI on `PATH` (see `FAKE_RAILWAY`): the command sequence, secrets never in argv, and a spec-to-installer sync check.
    The suite already asserts that every target in `PROVIDERS` has its `<target>_main` and, for a
    remote host, its folder.
 5. **Docs:** a section in [`docs/HOSTING.md`](../docs/HOSTING.md) and the options in

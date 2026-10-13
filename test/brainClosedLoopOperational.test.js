@@ -99,7 +99,12 @@ async function runJob(id) {
     });
   });
   enqueueAgentJob(id);
-  return Promise.race([done, new Promise((_, reject) => setTimeout(() => reject(new Error("job timeout")), 3_000))]);
+  // Clear the guard once the job settles, so a finished job never holds the process open.
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error("job timeout")), 3_000);
+  });
+  return Promise.race([done, timeout]).finally(() => clearTimeout(timer));
 }
 
 test("learned training response changes the real next target but never overrides an injury constraint", () => {

@@ -2793,7 +2793,7 @@ rw_cmd_uninstall() {
 # ----------------------------------------------------------------------------- railway template
 
 # The "Deploy on Railway" template, declared in deploy/railway/template.json and kept in step
-# with it here (test/installScript.test.js fails when the two drift). Anyone can build it into
+# with it here (test/installScriptRailwayTemplate.test.js fails when the two drift). Anyone can build it into
 # their own Railway workspace with `railway-template`; nothing depends on one account.
 RW_TPL_NAME="Cairn"
 RW_TPL_CATEGORY="AI/ML"

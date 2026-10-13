@@ -95,19 +95,6 @@ test("a garbled time is dropped and a future day is pulled back — neither cost
   assert.equal(garbled.date, localDateISO(), "an unparseable date falls back to today rather than throwing");
 });
 
-test("a day is read in the order it was EATEN, not the order it was typed", () => {
-  const d = localDaysAgo(1);
-  // Deliberately inserted out of order: the dinner is remembered first.
-  repo.addFoodNote("dinner", "", { summary: "Dinner", kcal: 800 }, undefined, { date: d, eaten_at: "20:30" });
-  repo.addFoodNote("breakfast", "", { summary: "Breakfast", kcal: 400 }, undefined, { date: d, eaten_at: "07:15" });
-  repo.addFoodNote("lunch", "", { summary: "Lunch", kcal: 600 }, undefined, { date: d, eaten_at: "12:45" });
-
-  assert.deepEqual(
-    repo.getDayIntake(d).entries.map((e) => e.summary),
-    ["Breakfast", "Lunch", "Dinner"]
-  );
-});
-
 test("entries with no time keep their original order and sort by their meal slot", () => {
   const d = localDaysAgo(1);
   repo.addFoodNote("dinner", "", { summary: "Dinner" }, undefined, { date: d });

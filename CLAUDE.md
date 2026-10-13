@@ -150,8 +150,8 @@ dedupes pure reads inside one request, invalidated by SQLite's `total_changes()`
 exempts two bookkeeping writes (a memory stamp, a queued week-ahead job). Never route a write a memoized read can see through it, and key a read
 that consults a re-entrancy guard by that guard. Details: `docs/ARCHITECTURE.md` "HTTP caching".
 
-**Tests wipe the DB before every single test.** `test/run.mjs` shards files across workers (each with
-its own throwaway temp `DATA_DIR`/`DB_PATH`) and injects `test/_isolate.mjs` via `--import` — a root
+**Tests wipe the DB before every single test.** `test/run.mjs` runs files off one longest-first queue
+across workers (each with its own throwaway temp `DATA_DIR`/`DB_PATH`) and injects `test/_isolate.mjs` via `--import` — a root
 `beforeEach` that wipes the whole DB. So correctness is independent of file order and shard count,
 and a bare `node --test` invocation SKIPS that wipe. The suite is deterministic and offline: no agent
 CLI, no network. The `stub` agent in `agents.json` is the offline smoke path for propose/apply. Each
@@ -159,7 +159,8 @@ worker also runs with its own `agents.offline.json` (`AGENTS_CONFIG`): every non
 is rewritten to a nonexistent binary, so a real machine's installed CLIs are never probed or spawned by
 a test that picks an agent.
 
-When verifying by hand, run **one file per invocation with its own `mktemp -d`**. Passing several
+When verifying by hand, prefer `node test/run.mjs <files>` (it also applies the offline agents table);
+with bare `node --test`, run **one file per invocation with its own `mktemp -d`**. Passing several
 files to a single `node --test` with one `DB_PATH` runs them as *parallel* child processes against
 one SQLite file; the loser throws `database is locked` at the WAL pragma during module load and the
 whole file reports failed with no test-level detail. That is a phantom, not a regression —
