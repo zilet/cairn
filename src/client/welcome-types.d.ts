@@ -72,7 +72,16 @@ declare const CairnWelcome: WelcomeApi;
 
 type WelcomeStepKey = "setup" | "signin" | "hello";
 type WelcomeStepState = "waiting" | "working" | "done" | "failed";
-type WelcomeWeekRow = { day: string; dayLong: string; name: string; order: number; dow: number | null };
+/** One day of the first week: a lift (`lift`), the calendar's run (`run`), or both. */
+type WelcomeWeekRow = {
+  day: string;
+  dayLong: string;
+  name: string;
+  order: number;
+  dow: number | null;
+  lift: boolean;
+  run: string | null;
+};
 
 type WelcomePhaseMeta = import("../contracts/client-api.js").ClientWelcomePhaseMeta;
 

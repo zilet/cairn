@@ -169,11 +169,13 @@
 .wel-strip-dot::before{content:"";width:5px;height:5px;border-radius:50%;background:var(--line-strong)}
 .wel-strip-l{font-family:var(--font-mono);font-size:var(--text-2xs);color:var(--muted)}
 .wel-strip-d.is-lift .wel-strip-l{color:var(--d-strength)}
+.wel-strip-d.is-run .wel-strip-l{color:var(--d-endurance)}
 .wel-week{list-style:none;margin:0;padding:0}
 .wel-wk{display:grid;grid-template-columns:3.2rem minmax(0,1fr);align-items:baseline;gap:var(--space-6);padding:var(--space-5) 0;
   border-top:1px solid var(--line)}
 .wel-wk-d{font-family:var(--font-mono);font-size:var(--text-2xs);letter-spacing:var(--tracking-mono);text-transform:uppercase;color:var(--muted)}
 .wel-wk-n{font-size:var(--text-base);color:var(--ink)}
+.wel-wk-r,.wel-wk.is-run .wel-wk-n{color:var(--ink2)}
 /* the week arrives a day at a time (reduced motion: all at once, foundation/reduced-motion.css) */
 .wel-reveal .wel-wk.reveal{animation-delay:calc(220ms + var(--i,0) * 170ms)}
 /* …and while it is being written, under "Putting together your first week" */

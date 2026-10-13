@@ -3756,6 +3756,16 @@ export type ClientWelcomeQueuedResponse =
 /** One lifting day in the welcome's first week. `dow` 0 = Sunday; null when no lifting weekdays were stated. */
 export interface ClientWelcomeWeekDay {
   dow: number | null;
+  /** null on a run-only day (the reveal's whole week). */
+  day_number: number | null;
+  name: string;
+  /** The run the calendar places on this weekday (the reveal only). */
+  run?: string;
+}
+
+/** One lifting day of the first week as it is written (a preview: always a plan day). */
+export interface ClientFirstWeekDay {
+  dow: number | null;
   day_number: number;
   name: string;
 }
@@ -3808,7 +3818,7 @@ export interface ClientWelcomePhaseMeta {
   fuel_state?: "set" | "existing" | "none";
   detail?: string;
   /** The first week's days as they are written — a preview, at most 7 rows. */
-  days_so_far?: ClientWelcomeWeekDay[];
+  days_so_far?: ClientFirstWeekDay[];
 }
 
 /**
@@ -3820,7 +3830,7 @@ export interface ClientWelcomePhaseMeta {
 export interface ClientFirstWeekStatus {
   state: "building" | "ready" | "failed" | "none";
   job_id: number | null;
-  days: ClientWelcomeWeekDay[];
+  days: ClientFirstWeekDay[];
   week_state: string | null;
   final: boolean;
 }

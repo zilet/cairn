@@ -188,7 +188,8 @@
   }
 
   function weekStripHtml(rows: WelcomeWeekRow[]): string {
-    // Monday-first, one pebble per day: a lifting day is a stone, the rest a quiet mark.
+    // Monday-first, one pebble per day: a lifting day is a strength stone, a run-only day
+    // an endurance stone, the rest a quiet mark.
     const byDow = new Map<number, WelcomeWeekRow>();
     for (const r of rows) if (r.dow != null) byDow.set(r.dow, r);
     if (!byDow.size) return "";
@@ -198,16 +199,20 @@
     return `<ol class="wel-strip" aria-hidden="true">${days
       .map((dow) => {
         const hit = byDow.get(dow);
-        const mark = hit
-          ? `<span class="wel-strip-stone" style="--i:${lifted++}">${CairnStone.pebbleSvg("strength", { idPrefix: `welWk${dow}` })}</span>`
+        const stone = hit ? (hit.lift ? "strength" : "endurance") : null;
+        const mark = stone
+          ? `<span class="wel-strip-stone" style="--i:${lifted++}">${CairnStone.pebbleSvg(stone, { idPrefix: `welWk${dow}` })}</span>`
           : `<span class="wel-strip-dot"></span>`;
-        return `<li class="wel-strip-d${hit ? " is-lift" : ""}">${mark}<span class="wel-strip-l">${letters[dow]}</span></li>`;
+        const cls = stone ? (stone === "strength" ? " is-lift" : " is-run") : "";
+        return `<li class="wel-strip-d${cls}">${mark}<span class="wel-strip-l">${letters[dow]}</span></li>`;
       })
       .join("")}</ol>`;
   }
 
   function weekRowHtml(row: WelcomeWeekRow, i: number): string {
-    return `<li class="wel-wk reveal" style="--i:${i}"><span class="wel-wk-d" title="${escAttr(row.dayLong)}">${escHtml(row.day)}</span><span class="wel-wk-n">${escHtml(row.name)}</span></li>`;
+    // A day carrying both names the run after the lift; a run-only day is named for its run.
+    const also = row.lift && row.run ? `<span class="wel-wk-r"> · ${escHtml(row.run)}</span>` : "";
+    return `<li class="wel-wk${row.lift ? "" : " is-run"} reveal" style="--i:${i}"><span class="wel-wk-d" title="${escAttr(row.dayLong)}">${escHtml(row.day)}</span><span class="wel-wk-n">${escHtml(row.name)}${also}</span></li>`;
   }
 
   function revealHtml(r: WelcomeReveal): string {

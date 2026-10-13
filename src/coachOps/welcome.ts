@@ -16,6 +16,7 @@ import { statedLiftDows } from "../repo/profile.js";
 import { executionProfileForOp, getSettings, interactiveTimeoutForOp, setSettings } from "../repo/settings.js";
 import { localDateISO } from "../repo/shared.js";
 import { applyDueAnnouncedDecisions } from "../domain/brain/autonomy-service.js";
+import { planWeek } from "../domain/training/plan-week.js";
 import { classifyAgentFailure, resourceFailureHeadline, type AgentFailure } from "../agentAvailability.js";
 import {
   AgentFallbackError,
@@ -235,8 +236,12 @@ export const WELCOME_REPLY_FALLBACKS: readonly string[] = [
 export interface WelcomeWeekDay {
   /** 0 = Sunday; null when no lifting weekdays were stated (the plan's ring order only). */
   dow: number | null;
-  day_number: number;
+  /** The plan day lifted on this weekday; null on a run-only day. */
+  day_number: number | null;
+  /** The lift's name, or on a run-only day the run's ("Long run"). */
   name: string;
+  /** The run the calendar places on this weekday, when there is one (the reveal only). */
+  run?: string;
 }
 
 export type WelcomeWeekState = "applied" | "announced" | "draft" | "existing" | "queued" | "failed" | "none";
@@ -314,6 +319,41 @@ export function welcomeWeekFrom(days: any[] | null | undefined): WelcomeWeekDay[
 }
 
 /**
+ * The week the reveal shows once it is on the plan: the WHOLE week as Today's calendar
+ * holds it (planWeek — the strip's own source), lifts and the run engine's runs on the
+ * weekdays they actually land, so the reveal can never show a run day the calendar won't.
+ * Null when the week has no weekdays to stand on (no lifting or run days known): the
+ * caller's lift-only, plan-order rows are then the honest answer.
+ */
+export function welcomeCalendarWeek(today = localDateISO()): WelcomeWeekDay[] | null {
+  try {
+    const week = planWeek(today);
+    const rows: WelcomeWeekDay[] = [];
+    for (const day of week.days) {
+      if (day.dow == null) return null;
+      const lift = day.plan_day && day.plan_day.day_type !== "rest" ? day.plan_day : null;
+      const run = day.run && !day.run.rested ? String(day.run.label || "").trim() : "";
+      if (!lift && !run) continue;
+      rows.push({
+        dow: day.dow,
+        day_number: lift ? lift.day_number : null,
+        name: (lift ? String(lift.name || `Day ${lift.day_number}`) : run).trim().slice(0, 60),
+        ...(run ? { run: run.slice(0, 60) } : {}),
+      });
+    }
+    return rows.length ? rows : null;
+  } catch (err) {
+    log.debug("[welcome] the calendar week could not be read for the reveal", { error: err });
+    return null;
+  }
+}
+
+/** The landed week for the reveal: the calendar's whole week, else the lift-only rows. */
+function landedWeek(today: string): WelcomeWeekDay[] | null {
+  return welcomeCalendarWeek(today) ?? welcomeWeekFrom(getPlan() as any[]);
+}
+
+/**
  * The days that have arrived so far, in the reveal's shape. The weekday map fills a
  * short pool by repeating it (a 2-day pool over 4 named weekdays lifts both twice), and
  * that is right for a finished week but would show a day twice while the rest are still
@@ -323,8 +363,9 @@ export function welcomeWeekPreview(days: any[] | null | undefined): WelcomeWeekD
   const seen = new Set<number>();
   const out: WelcomeWeekDay[] = [];
   for (const day of welcomeWeekFrom(days) ?? []) {
-    if (seen.has(day.day_number)) continue;
-    seen.add(day.day_number);
+    const n = Number(day.day_number);
+    if (seen.has(n)) continue;
+    seen.add(n);
     out.push(day);
     if (out.length >= WELCOME_PREVIEW_MAX_DAYS) break;
   }
@@ -573,7 +614,7 @@ async function welcomeWeek(
 ): Promise<{ week: WelcomeWeekDay[] | null; week_state: WelcomeWeekState; agent: string | null }> {
   hooks?.onPhase?.(WELCOME_PHASES.week, weekMeta);
   if (trainingWeekExists()) {
-    return { week: welcomeWeekFrom(getPlan() as any[]), week_state: resumed ? "applied" : "existing", agent: null };
+    return { week: landedWeek(today), week_state: resumed ? "applied" : "existing", agent: null };
   }
   // The composer's own phase words ride as `detail` (a small second line under the
   // welcome's step); the arriving days ride beside them. Each phase carries both, so
@@ -620,7 +661,7 @@ async function welcomeWeek(
         log.warn("[welcome] the first week could not land today", { error: err });
       }
     }
-    if (trainingWeekExists()) return { week: welcomeWeekFrom(getPlan() as any[]), week_state: "applied", agent };
+    if (trainingWeekExists()) return { week: landedWeek(today), week_state: "applied", agent };
     return {
       week: welcomeWeekFrom(composed?.proposal?.parsed?.days),
       week_state: composed?.autonomy?.announced ? "announced" : "draft",

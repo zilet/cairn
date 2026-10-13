@@ -54,7 +54,11 @@
     return /interrupted/i.test(typeof error === "string" ? error : String((error as { message?: unknown } | null)?.message ?? ""));
   }
 
-  /** The first week as rows Monday-first; a day with no stated weekday reads "Day n". */
+  /**
+   * The first week as rows Monday-first; a day with no stated weekday reads "Day n". A
+   * landed week carries the calendar's runs too (`run`; a run-only day has no
+   * day_number and is named for its run), so the reveal shows the whole week.
+   */
   function weekRows(week: unknown): WelcomeWeekRow[] {
     if (!Array.isArray(week)) return [];
     const rows: WelcomeWeekRow[] = [];
@@ -63,12 +67,14 @@
       const name = String(row.name || "").trim();
       if (!name) continue;
       const dow = typeof row.dow === "number" && row.dow >= 0 && row.dow <= 6 ? row.dow : null;
-      const n = Number(row.day_number);
+      const n = row.day_number == null ? Number.NaN : Number(row.day_number);
+      const run = typeof row.run === "string" && row.run.trim() ? row.run.trim() : null;
+      const lift = Number.isFinite(n) || !run;
       if (dow != null) {
-        rows.push({ day: DOW[dow] || "", dayLong: DOW_LONG[dow] || "", name, order: (dow + 6) % 7, dow });
+        rows.push({ day: DOW[dow] || "", dayLong: DOW_LONG[dow] || "", name, order: (dow + 6) % 7, dow, lift, run });
       } else {
         const label = Number.isFinite(n) && n > 0 ? `Day ${n}` : `Day ${rows.length + 1}`;
-        rows.push({ day: label, dayLong: label, name, order: 10 + (Number.isFinite(n) ? n : rows.length), dow: null });
+        rows.push({ day: label, dayLong: label, name, order: 10 + (Number.isFinite(n) ? n : rows.length), dow: null, lift, run });
       }
     }
     return rows.sort((a, b) => a.order - b.order);
