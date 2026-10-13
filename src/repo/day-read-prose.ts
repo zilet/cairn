@@ -520,6 +520,17 @@ export const TRAIN_UNREAD_WHY: readonly string[] = [
   "The session's on today. There's no recovery history to read yet, so your own sense of the day leads.",
   "Today's session is due, and there's nothing on the record yet to read — how you feel is the best guide.",
 ];
+// The same clear day for someone WITH a record and nothing current on it — back after
+// time away, or a wearable gap over an unlogged stretch. TRAIN_UNREAD_WHY's "nothing yet"
+// would deny a history they can see; TRAIN_CLEAR_WHY would vouch for a recovery nothing
+// recent shows. So: the session is due, nothing RECENT is there to read, and how they
+// feel leads. Never about their logging — the read's confidence, not a rebuke.
+export const TRAIN_QUIET_WHY: readonly string[] = [
+  "The session's due. There's nothing recent to read recovery from, so let how you feel set the pace.",
+  "Today's session is up. Nothing has come in lately to read, so go by how you feel today and ease back in.",
+  "The session's on today. It's been a while since there was anything to read, so your own sense of the day leads.",
+  "Today's session is due, and there's nothing recent to read — how you feel is the best guide.",
+];
 // The clear day's louder sibling, for the day the evidence positively BACKS rather
 // than merely permits (signal_state.action.support === "backed"). Until this set
 // existed the floor could only ever get quieter: the arbitration had rest, easy and
@@ -1276,6 +1287,8 @@ export const DAY_READ_WHY_VARIANTS: Readonly<Record<string, readonly string[]>> 
   // The clear day with nothing on record — keeps the `planned_training` ledger code for
   // the same reason the push set below does; only the words differ.
   planned_training_unread: TRAIN_UNREAD_WHY,
+  // …and the clear day with a record but nothing current on it; same ledger code.
+  planned_training_quiet: TRAIN_QUIET_WHY,
   // The backed train day. It keeps the `planned_training` LEDGER code — the decision
   // is the same one, and a second code would split the adherence history of the most
   // common read in two — and carries its own registered vocabulary, keyed off
@@ -1370,6 +1383,9 @@ export const DAY_READ_REQUIRED_CONCEPT: Readonly<Record<string, RegExp>> = {
   // Both halves: the session stands, AND nothing is on record to read yet. A phrasing
   // that drops the second half is TRAIN_CLEAR_WHY claiming a recovery it never saw.
   planned_training_unread: /\b(?:due|session)\b(?=[\s\S]*\b(?:nothing|no)\b)/i,
+  // Both halves again, with the second one about RECENCY: a phrasing that says
+  // "nothing yet" denies a history the athlete can see.
+  planned_training_quiet: /\b(?:due|session)\b(?=[\s\S]*\b(?:recent|lately|a while)\b)/i,
   // A push read that forgets to offer the reach is just a clear day with extra words.
   planned_training_push: /\b(?:more|reach(?:ing)?|push(?:ing)?)\b/i,
   unprogrammed_easy_day: /\b(?:nothing|no session|open)\b/i,

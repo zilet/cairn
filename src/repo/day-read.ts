@@ -55,7 +55,7 @@ import { getRecentSessions } from "./sessions.js";
 import { PUSH_STANCE_CONSEC_CEILING, type PushStance, trainingDriveState } from "./training-drive.js";
 import { pushStanceHarmFree } from "./push-stance-open.js";
 import { getPlan } from "./plan.js";
-import { isStartingOut } from "./first-run.js";
+import { hasLoggedHistory, hasRecoveryHistory, isStartingOut } from "./first-run.js";
 import { planItemsOutOfOrder } from "../domain/training/plan-item-order.js";
 import { planDayPurposeLine, type PlanPurposePhase } from "./plan-day-purpose.js";
 import { getActiveBlock } from "./program-blocks.js";
@@ -180,6 +180,7 @@ import {
   TEMPLATE_REST_DAY_WHY,
   TRAIN_CAVEAT_LEAD,
   TRAIN_CLEAR_WHY,
+  TRAIN_QUIET_WHY,
   TRAIN_UNREAD_WHY,
   TRAIN_HOLD_LEAD,
   TRAIN_NOTED_LEAD,
@@ -2011,11 +2012,21 @@ function computeDayRead(
   // (the same gate as the thin-coverage sentence below: an override's narrower state
   // says nothing about the athlete's actual week). A clear day then has no recovery
   // to vouch for, so it must not say "recovery looks fine" (TRAIN_UNREAD_WHY).
-  const nothingOnRecord =
+  //
+  // Thin coverage means nothing CURRENT, not nothing EVER: an athlete back after weeks
+  // away has a long record and an empty board. "Nothing on record yet" would deny the
+  // history they can see, so that day says there is nothing RECENT to read
+  // (TRAIN_QUIET_WHY) — and neither day vouches for a recovery it never saw. Published
+  // as `recovery_unread` so the agent's sentence is held to the same truth
+  // (dayReadProseConsistencyIssue).
+  const nothingCurrent =
     recovery === undefined &&
     unifiedState === undefined &&
     underfuelingSnapshot === undefined &&
     thinSignalCoverage(signalState.dimensions);
+  const nothingOnRecord = nothingCurrent && !hasLoggedHistory() && !hasRecoveryHistory();
+  const nothingRecent = nothingCurrent && !nothingOnRecord;
+  if (nothingCurrent) (signals as any).recovery_unread = nothingOnRecord ? "nothing_on_record" : "nothing_recent";
   // What tomorrow already holds, published whichever rule ends up winning today. It is
   // a FACT about the calendar, not a property of the read, so — like the health
   // work-around probe below — it is derived once here rather than inside the one rule
@@ -3188,7 +3199,9 @@ function computeDayRead(
                 ? pickDayVariant(TRAIN_PUSH_WHY, d, "planned_training_push")
                 : nothingOnRecord
                   ? pickDayVariant(TRAIN_UNREAD_WHY, d, "planned_training_unread")
-                  : pickDayVariant(TRAIN_CLEAR_WHY, d, "planned_training");
+                  : nothingRecent
+                    ? pickDayVariant(TRAIN_QUIET_WHY, d, "planned_training_quiet")
+                    : pickDayVariant(TRAIN_CLEAR_WHY, d, "planned_training");
         return {
           outcome: recoveryWeek ? DAY_READ_OUTCOMES.planned_reduced_training : DAY_READ_OUTCOMES.planned_training,
           read: { kind: "train", focus: sd.focus, why, est_minutes: commitmentPressure ? 40 : 60, signals },
@@ -3560,6 +3573,7 @@ function computeDayRead(
     unifiedState === undefined &&
     // The unread clear day already said there is nothing to read; a second sentence
     // about a "thin week" would describe a week that does not exist yet.
+    !TRAIN_QUIET_WHY.includes(base.why) &&
     !TRAIN_UNREAD_WHY.includes(base.why) &&
     underfuelingSnapshot === undefined &&
     thinSignalCoverage(signalState.dimensions);

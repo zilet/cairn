@@ -800,7 +800,9 @@ test("a recovery-metrics-only sync does not churn a warm agentic read", async ()
   repo.saveDayRead(date, {
     ...baseline,
     headline: "Lower body.",
-    why: "You're recovered and due — bar speed honest, stop a rep shy.",
+    // No recovery claim: a d-1 row is the night before last, so nothing current is on
+    // the board and a sentence vouching for recovery would be refused on its own.
+    why: "Lower body is due — bar speed honest, stop a rep shy.",
     source: "agent",
     agent: "claude",
     override: null,

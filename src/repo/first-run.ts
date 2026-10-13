@@ -32,6 +32,16 @@ export function hasLoggedHistory(): boolean {
   );
 }
 
+/**
+ * Has a wearable or health app ever synced a recovery day (sleep, HRV, resting HR,
+ * readiness)? Not part of "logged history" above — a synced watch is not something the
+ * person logged — but it IS a record: a morning with an old sync and nothing current
+ * has "nothing recent" to read, not "nothing yet".
+ */
+export function hasRecoveryHistory(): boolean {
+  return exists(`SELECT 1 FROM daily_metrics LIMIT 1`) || exists(`SELECT 1 FROM garmin_daily_metrics LIMIT 1`);
+}
+
 /** Day one: no week on the plan and nothing logged yet. */
 export function isStartingOut(): boolean {
   return !hasPlannedTraining() && !hasLoggedHistory();

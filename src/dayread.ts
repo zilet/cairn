@@ -85,7 +85,18 @@ function policyDecision(
 
 export type DayReadProseConsistencyIssue =
   | { code: "completed_load_understated"; classified_load: "moderate" | "hard"; evidence: string }
-  | { code: "felt_quality_understated"; evidence: string };
+  | { code: "felt_quality_understated"; evidence: string }
+  | { code: "recovery_claimed_unread"; evidence: string };
+
+// ---- a recovery vouched for with nothing current to read it from ----
+//
+// The deterministic read publishes `signals.recovery_unread` when nothing current is on
+// the board (nothing ever, or nothing recent). Absent data is never "fine", so on that
+// day a sentence asserting a recovery state is a claim about evidence that does not
+// exist. Deliberately an ASSERTION list: "go by how you feel" and "ease back in" carry
+// none of these shapes.
+const RECOVERY_CLAIM =
+  /\brecovery\s+(?:looks|reads|is|seems|feels)\s+(?:fine|good|great|solid|clear|strong)\b|\byou(?:'re|\s+are)\s+(?:well\s+|fully\s+|all\s+)?recovered\b|\b(?:everything|all)\s+(?:looks|reads)\s+(?:fine|good|clear)\b|\bwell[- ]rested\b/i;
 
 const COMPLETED_ACTIVITY =
   /\b(?:that|this|today(?:'s)?|the|your)\s+(?:run|ride|session|workout|lift|training|activity|effort|work)\b/gi;
@@ -196,8 +207,14 @@ export function dayReadProseConsistencyIssue(
     (classifiedLoad === "moderate" || classifiedLoad === "hard") &&
     (signals?.trained_today === true || read?.kind === "done");
   const qualityIsChecked = feltStrongWithNoBrake(signals, trainingSignals);
+  const recoveryIsUnread =
+    signals?.recovery_unread === "nothing_on_record" || signals?.recovery_unread === "nothing_recent";
 
   for (const sentence of sentences) {
+    if (recoveryIsUnread) {
+      const claim = RECOVERY_CLAIM.exec(sentence);
+      if (claim) return { code: "recovery_claimed_unread", evidence: sentence.slice(0, 240) };
+    }
     if (loadIsChecked && !NEGATED_EASY.test(sentence)) {
       const evidence = claimsAboutSubject(sentence, COMPLETED_ACTIVITY, EASY_DESCRIPTOR, FUTURE_OR_RECOVERY_CUE);
       if (evidence)

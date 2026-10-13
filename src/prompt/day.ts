@@ -660,6 +660,16 @@ export function buildDayReadPrompt(
     readiness?.current != null
       ? `\nREADINESS: current ${Math.round(Number(readiness.current))} (${readiness.current_date || "date unknown"}; ${readiness.freshness || "unknown freshness"})${readiness.window_average != null ? ` vs ${Math.round(Number(readiness.window_average))} window average` : ""}${readiness.sample_count != null && readiness.window_days != null ? ` from ${readiness.sample_count}/${readiness.window_days} days` : ""}. Treat only a FRESH current reading as a today-decision signal; an average or stale/sparse reading is context, never a gate.`
       : `\nREADINESS: no current readiness reading. A window average, if present in DATA, is context only and must not be described as today's state.`;
+  // Nothing current to read recovery from (the server's `recovery_unread`): the same
+  // truth the floor holds, said up front so the sentence is not thrown away for it
+  // (src/dayread.ts dayReadProseConsistencyIssue refuses a recovery claim on this day).
+  const unread: unknown = baseline.signals && (baseline.signals as any).recovery_unread;
+  const recoveryUnreadLine =
+    unread === "nothing_on_record"
+      ? `\nNOTHING ON RECORD: nothing has been logged or synced yet, so there is no recovery to read. Never say or imply recovery looks fine, they're recovered, or everything reads clear — say there is nothing to read yet and let how they feel lead.`
+      : unread === "nothing_recent"
+        ? `\nNOTHING RECENT: they have a training history, but nothing current has come in to read recovery from (time away, or a gap). Never say or imply recovery looks fine, they're recovered, or everything reads clear, and never call them new — say there is nothing recent to read and let how they feel lead.`
+        : "";
   // Does TODAY carry bigger work than an ordinary day (a long run, a quality session,
   // a heavy lower day, a strength+run double)? Forward-looking only, and only while the
   // work is still ahead: once the day is logged, a line about fueling it could only read
@@ -728,7 +738,7 @@ ${JSON.stringify(baseline.signals)}
 A rules-only baseline suggested: kind="${baseline.kind}", focus=${JSON.stringify(baseline.focus)}.
 You MAY disagree with the baseline when the whole picture warrants it — it is a floor, not a ceiling${namedBrakeBlock ? " — but a train baseline is read quieter only under the NAMED BRAKE RULE below" : ""}.
 RECENT TRAINING (most recent first): ${sessionLine}.
-TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${pathLine}${renderRecentReads(feltDate)}${renderReadOutcomes(context, baseline)}${renderPeriodization(feltDate)}${doneBlock}${lastNightLine}${oneNightLine}${fuelDemandLine}
+TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${pathLine}${renderRecentReads(feltDate)}${renderReadOutcomes(context, baseline)}${renderPeriodization(feltDate)}${doneBlock}${lastNightLine}${oneNightLine}${recoveryUnreadLine}${fuelDemandLine}
 ${CONTEXT_GUARDRAILS}
 ${renderSignalState(context)}${renderCoachingFocus(context, { brief: true })}${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderRunZones(context)}${renderRunPlan(context)}${renderStrengthSchedule(context)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderMuscleGroups(context)}${renderPerformance(context, { brief: true })}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderHealthLead(context)}${renderReactionModel(context)}${renderTrajectory(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${renderTrainingConstraints(context)}${feltBlock}${learnedBlock}${backedBlock}${driveBlock}${todayHoldBlock}${namedBrakeBlock}${currentWordingBlock}${overrideBlock}
 ${DAY_READ_WORDING_RULE}
