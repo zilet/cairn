@@ -215,6 +215,39 @@ test("a fresh install owes no catch-up on the agentic weekly passes or the week-
   assert.deepEqual(enqueued, []);
 });
 
+// Installed on the coach day itself, before the coach hour: the slot then current was
+// LAST week's, so seeding it left this evening's slot owed — the weekly read, health
+// synthesis, team review and evolution all ran a few hours after install, over a week
+// that had not happened. Today's slot counts as taken; the first pass is next week's.
+test("a fresh install on the coach day before the coach hour waits a full week for its first weekly pass", () => {
+  const s = repo.getSettings();
+  const coachHour = Math.max(1, Number(s.coach_hour) || 18);
+  const coachDay = weeklySlotStamp(new Date(), s.coach_day, s.coach_hour);
+  const pad = (n) => String(n).padStart(2, "0");
+  const morning = new Date(`${coachDay}T${pad(coachHour - 1)}:00:00`);
+  const evening = new Date(`${coachDay}T${pad(coachHour)}:30:00`);
+  const settings = { proactive_enabled: true, coach_day: s.coach_day, coach_hour: coachHour };
+  repo.setSettings({ coach_hour: coachHour });
+
+  seedMemorySlotOnFreshInstall(morning);
+  const tonight = weeklySlotStamp(evening, s.coach_day, coachHour);
+  assert.equal(tonight, coachDay, "the slot that comes due this evening is dated today");
+  for (const key of FRESH_INSTALL_WEEKLY_SLOTS)
+    assert.equal(repo.getAppState(key), tonight, `${key}: tonight is taken`);
+
+  repo.savePlanDay(1, "Upper A", null, [{ exercise: "Bench Press", sets: 3, rep_low: 6, rep_high: 8 }]);
+  const enqueued = [];
+  assert.equal(
+    enqueueTeamReviewIfDue(evening, settings, (id) => enqueued.push(id)),
+    null
+  );
+  assert.deepEqual(enqueued, [], "no team review the evening of install");
+
+  // A week on, the slot is owed as usual.
+  const nextWeek = new Date(evening.getTime() + 7 * 864e5);
+  assert.notEqual(weeklySlotStamp(nextWeek, s.coach_day, coachHour), tonight);
+});
+
 test("an upgraded database keeps its weekly catch-up", async () => {
   const now = new Date(`${localDateISO()}T10:00:00`);
   await repo.runSchedulerOperation("some_other_daily_job", localDateISO(), async () => ({ outcome: "succeeded" }));

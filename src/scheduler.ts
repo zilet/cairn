@@ -275,7 +275,12 @@ export function seedMemorySlotOnFreshInstall(now = new Date()) {
   if (!repo.getAppState(MEMORY_MAINT_STATE_KEY)) repo.setAppState(MEMORY_MAINT_STATE_KEY, today);
   for (const key of FRESH_INSTALL_DAILY_SLOTS) if (!repo.getAppState(key)) repo.setAppState(key, today);
   const s = repo.getSettings();
-  const week = weeklySlotStamp(now, s.coach_day, s.coach_hour);
+  // The slot stamp read as if the coach hour were midnight: on any other day it is the
+  // slot already passed, as before; on the coach day itself, before the coach hour, it is
+  // TONIGHT's — which the real stamp would still call last week's, leaving this evening's
+  // weekly passes owed a few hours after install, over a week that has not happened. So
+  // the first weekly pass is the coach slot after the install day.
+  const week = weeklySlotStamp(now, s.coach_day, 0);
   for (const key of FRESH_INSTALL_WEEKLY_SLOTS) if (!repo.getAppState(key)) repo.setAppState(key, week);
 }
 
