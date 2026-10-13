@@ -180,6 +180,7 @@ import {
   TEMPLATE_REST_DAY_WHY,
   TRAIN_CAVEAT_LEAD,
   TRAIN_CLEAR_WHY,
+  TRAIN_UNREAD_WHY,
   TRAIN_HOLD_LEAD,
   TRAIN_NOTED_LEAD,
   TRAIN_PUSH_CAVEAT_LEAD,
@@ -2006,6 +2007,15 @@ function computeDayRead(
       completedToday: (trainedToday || !!bigActivity) && (todayLoad === "hard" || todayLoad === "moderate"),
     });
   (signals as any).signal_state = signalState;
+  // Nothing on record at all — every dimension empty — on the bare Brief-serving call
+  // (the same gate as the thin-coverage sentence below: an override's narrower state
+  // says nothing about the athlete's actual week). A clear day then has no recovery
+  // to vouch for, so it must not say "recovery looks fine" (TRAIN_UNREAD_WHY).
+  const nothingOnRecord =
+    recovery === undefined &&
+    unifiedState === undefined &&
+    underfuelingSnapshot === undefined &&
+    thinSignalCoverage(signalState.dimensions);
   // What tomorrow already holds, published whichever rule ends up winning today. It is
   // a FACT about the calendar, not a property of the read, so — like the health
   // work-around probe below — it is derived once here rather than inside the one rule
@@ -3176,7 +3186,9 @@ function computeDayRead(
                 )}${caveatRun}.`
               : pushBias
                 ? pickDayVariant(TRAIN_PUSH_WHY, d, "planned_training_push")
-                : pickDayVariant(TRAIN_CLEAR_WHY, d, "planned_training");
+                : nothingOnRecord
+                  ? pickDayVariant(TRAIN_UNREAD_WHY, d, "planned_training_unread")
+                  : pickDayVariant(TRAIN_CLEAR_WHY, d, "planned_training");
         return {
           outcome: recoveryWeek ? DAY_READ_OUTCOMES.planned_reduced_training : DAY_READ_OUTCOMES.planned_training,
           read: { kind: "train", focus: sd.focus, why, est_minutes: commitmentPressure ? 40 : 60, signals },
@@ -3546,6 +3558,9 @@ function computeDayRead(
     (base.signals as any)?.starting_out !== true &&
     recovery === undefined &&
     unifiedState === undefined &&
+    // The unread clear day already said there is nothing to read; a second sentence
+    // about a "thin week" would describe a week that does not exist yet.
+    !TRAIN_UNREAD_WHY.includes(base.why) &&
     underfuelingSnapshot === undefined &&
     thinSignalCoverage(signalState.dimensions);
   const withThinness = thin
