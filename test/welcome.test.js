@@ -41,7 +41,9 @@ import { STARTING_OUT_DAY } from "../dist/repo/brain/day-read-rules.js";
 import { hasLoggedHistory, hasPlannedTraining, isStartingOut } from "../dist/repo/first-run.js";
 import { personContextRouter } from "../dist/routes/person-context.js";
 import { operatorRouter } from "../dist/routes/operator.js";
-import { localDateISO } from "../dist/repo/shared.js";
+import { addDaysISO, localDateISO } from "../dist/repo/shared.js";
+import { buildOnboardPrompt } from "../dist/prompt/program.js";
+const shiftISO = (iso, n) => addDaysISO(iso, n);
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
@@ -453,6 +455,49 @@ test("onboarding applies the stated goal and the named lifting weekdays — reco
   applyOnboardParsed({ goal: "bulk-ish", lift_days: [] }, again);
   assert.equal(repo.getProfile().goal_mode, "maintain", "an unrecognized goal word changes nothing");
   assert.equal(again.goal, null);
+});
+
+test("onboarding applies a stated race as the endurance goal, so the run engine plans from the first week", () => {
+  // A real first-run walk: "Half marathon on Nov 15, want to go under 1:50" landed only as
+  // a life event, and the first week's runs never reached the calendar.
+  const raceDate = shiftISO(localDateISO(), 33);
+  const applied = emptyOnboardApplied();
+  applyOnboardParsed(
+    {
+      endurance_goal: {
+        mode: "race",
+        event: "Half marathon",
+        date: raceDate,
+        distance_km: 21.1,
+        target: "sub-1:50",
+        weekly_sessions: 3,
+      },
+    },
+    applied
+  );
+  assert.equal(applied.endurance_goal, "race");
+  const goal = repo.getEnduranceGoal();
+  assert.equal(goal.mode, "race");
+  assert.equal(goal.date, raceDate);
+  assert.equal(goal.distance_km, 21.1);
+  assert.equal(goal.target, "sub-1:50");
+  assert.equal(goal.weekly_sessions, 3);
+
+  // A race with no date can't be periodized: nothing changes, and nothing is claimed.
+  const undated = emptyOnboardApplied();
+  applyOnboardParsed({ endurance_goal: { mode: "race", event: "Some half", date: null } }, undated);
+  assert.equal(undated.endurance_goal, null);
+  assert.equal(repo.getEnduranceGoal().date, raceDate, "the stated race stands");
+
+  const none = emptyOnboardApplied();
+  applyOnboardParsed({ endurance_goal: null }, none);
+  assert.equal(none.endurance_goal, null);
+});
+
+test("the onboarding prompt carries today's date and the endurance-goal field", () => {
+  const prompt = buildOnboardPrompt("Half marathon on Nov 15.", { welcome: true, today: "2026-10-13" });
+  assert.match(prompt, /"endurance_goal"/);
+  assert.match(prompt, /today, 2026-10-13/);
 });
 
 // ---------- day one ----------

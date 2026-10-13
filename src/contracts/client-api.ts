@@ -3779,6 +3779,7 @@ export type ClientWelcomeResult =
         about_me: boolean;
         profile: boolean;
         goal: string | null;
+        endurance_goal: "race" | "standing" | null;
         lift_days: number[];
         supplements: number;
         memories: number;

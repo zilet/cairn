@@ -1127,6 +1127,23 @@ export const ONBOARD_SCHEMA: JsonSchema = {
     // Weekdays (0 = Sunday) the person NAMED for lifting — applied as the stated
     // strength_schedule, never invented from a bare count of days.
     lift_days: { type: ["array", "null"], items: { type: "integer" } },
+    // A running goal they STATED — a dated race, or a standing readiness target — applied
+    // as the profile's endurance goal (the same fact chat's set_endurance_goal records),
+    // so the run engine and the race build see it from the first week on.
+    endurance_goal: {
+      type: ["object", "null"],
+      additionalProperties: true,
+      properties: {
+        mode: { type: ["string", "null"] },
+        event: { type: ["string", "null"] },
+        date: { type: ["string", "null"] },
+        label: { type: ["string", "null"] },
+        distance_km: { type: ["number", "null"] },
+        target: { type: ["string", "null"] },
+        weekly_km: { type: ["number", "null"] },
+        weekly_sessions: { type: ["integer", "null"] },
+      },
+    },
     // The first-run welcome's own fields (buildOnboardPrompt(text, { welcome: true })).
     // Optional here so the plain onboard contract is unchanged; named so constrained
     // decoding never drops them.

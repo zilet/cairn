@@ -10,7 +10,7 @@ import { addInsight, isDuplicateInsight, recentInsightTexts, upvotedInsightTexts
 import { planWeeklyRead, storeWeeklyRead, weeklyReadGuardTexts } from "../repo/weekly-read-repeat.js";
 import type { WeeklyReadPlan } from "../repo/weekly-read-repeat.js";
 import { addMemory, listMemory, supersedeMemory, updateMemory } from "../repo/memory.js";
-import { getProfile, setProfile } from "../repo/profile.js";
+import { getProfile, normalizeEnduranceGoal, setProfile } from "../repo/profile.js";
 import { movementConsiderationsRead } from "../repo/movement-considerations.js";
 import { reactionModelForCoach, setReactionNarrative } from "../repo/reaction-model.js";
 import { interactiveTimeoutForOp, setSettings } from "../repo/settings.js";
@@ -268,6 +268,8 @@ export interface OnboardApplied {
   memories: number;
   context_events: number;
   movement_considerations: number;
+  /** The stated running goal's mode, when one landed ("race" | "standing"). */
+  endurance_goal: "race" | "standing" | null;
 }
 
 export function emptyOnboardApplied(): OnboardApplied {
@@ -275,6 +277,7 @@ export function emptyOnboardApplied(): OnboardApplied {
     about_me: false,
     profile: false,
     goal: null,
+    endurance_goal: null,
     lift_days: [],
     supplements: 0,
     memories: 0,
@@ -352,6 +355,19 @@ export function applyOnboardParsed(p: any, applied: OnboardApplied): void {
         applied.lift_days = days.sort((a, b) => a - b);
       } catch (err) { log.warn("[onboard] could not store the stated lifting weekdays", { error: err }); }
     }
+  }
+  // A running goal they STATED is the profile's endurance goal — the same fact chat's
+  // set_endurance_goal records — so the run engine and the race build plan from it. A
+  // first-run walk said "half marathon on Nov 15, under 1:50": without this it landed
+  // only as a dated life event, and the first week talked about a quality run the
+  // calendar never showed. An unusable shape (a race with no date) changes nothing.
+  const enduranceGoal = p.endurance_goal ? normalizeEnduranceGoal(p.endurance_goal) : null;
+  if (enduranceGoal) {
+    try {
+      setProfile({ endurance_goal: enduranceGoal });
+      applied.endurance_goal = enduranceGoal.mode;
+      applied.profile = true;
+    } catch (err) { log.warn("[onboard] could not store the stated running goal", { error: err }); }
   }
   if (Array.isArray(p.supplements) && p.supplements.length) {
     let n = 0;

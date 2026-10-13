@@ -3,6 +3,7 @@
 // Imported from the module, not the repo barrel: the mapper is pure (a static FIT
 // catalog + token math, no db), so the prompt layer can ask it directly.
 import { garminCandidatesForPrompt, mapExerciseToGarmin } from "../repo/garmin-exercise-map.js";
+import { localDateISO } from "../repo/shared.js";
 import { CAIRN_PERSONA, renderJsonContract } from "./shared.js";
 
 const EXERCISE_EXPLANATION_SCHEMA = `{
@@ -21,6 +22,7 @@ const ONBOARD_FIELDS = `
   "profile": { "sex": "male|female|null", "age": <int|null>, "height_cm": <number|null>, "weight_lb": <number|null>, "goal_weight_lb": <number|null>, "goal_date": "YYYY-MM-DD|null", "days_per_week": <int|null> },
   "goal": "lose|maintain|gain|recomp|null",
   "lift_days": [ <weekday number 0-6, 0 = Sunday, ONLY for weekdays they named as lifting / gym days> ],
+  "endurance_goal": { "mode": "race|standing", "event": "<race name or kind, race mode>", "date": "YYYY-MM-DD (race mode)", "label": "<readiness label, e.g. 10k-ready, standing mode>", "distance_km": <number|null>, "target": "<their stated time or aim, e.g. sub-1:50|null>", "weekly_km": <number|null>, "weekly_sessions": <runs per week they said|null> } | null,
   "supplements": [ { "name": "Creatine monohydrate", "dose": "5 g", "frequency": "daily", "category": "performance", "related_markers": ["eGFR"] } ],
   "memories": [ { "content": "<durable preference or fact, e.g. trains fasted in the mornings>", "kind": "preference|constraint|decision|goal|observation" } ],
   "context_events": [ { "kind": "injury|trip|life_event", "title": "<short>", "detail": "<optional>", "meta": { "area": "<injury area>", "severity": "mild|moderate|severe" } } ],
@@ -36,8 +38,9 @@ const WELCOME_SCHEMA = `{${ONBOARD_FIELDS},
   "fuel_start": { "target_kcal": <int|null>, "protein_g": <int|null>, "why": "<one plain sentence: what this starting point is based on>" }
 }`;
 
-export function buildOnboardPrompt(text: string, opts: { welcome?: boolean } = {}): string {
+export function buildOnboardPrompt(text: string, opts: { welcome?: boolean; today?: string } = {}): string {
   const welcome = opts.welcome === true;
+  const today = opts.today ?? localDateISO();
   const welcomeRules = welcome
     ? `
 This is also your FIRST CONVERSATION with them. Write "welcome_reply": 2-4 warm, plain sentences that show
@@ -62,7 +65,10 @@ an injury is something that HURTS or is healing. A lasting structural/postural c
 movement_considerations, NOT context_events; set wants_addressed only when they say they want it worked
 on. Never infer a condition they did not state. No medical advice. Fill "lift_days" only with weekdays
 they actually named for lifting or the gym; a count of days alone ("three days a week") is
-profile.days_per_week, never invented weekdays.
+profile.days_per_week, never invented weekdays. Fill "endurance_goal" only for a running goal they
+stated: a race with a date is mode "race" (resolve the date against today, ${today}, to the next
+such day; a race with no date at all is not a race goal), an ongoing aim with no date ("stay 10k-ready")
+is mode "standing"; a half marathon is 21.1 km, a marathon 42.2 km. Otherwise null.
 ${welcomeRules}
 ${renderJsonContract(welcome ? WELCOME_SCHEMA : ONBOARD_SCHEMA)}
 
