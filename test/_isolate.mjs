@@ -52,9 +52,8 @@ async function resetIfLoaded(url) {
 // file that never names dist — itself or in the relative modules it imports —
 // loads only the DB; a module never loaded has no state to reset, and the hook above
 // still notices one that loads late. Every other file keeps the full, ordered graph
-// import below: dist/ has import cycles whose evaluation order this preload has always
-// fixed (load dist/repo/signal-state.js first and it hits a TDZ error), so a dist test
-// must not start from a different module than it always has.
+// import below, so a dist test starts from the same module it always has (any cycle
+// member loading first is safe on its own — test/moduleLoadOrder.test.js holds that).
 const RELATIVE_IMPORT = /(?:\bfrom\s*|\bimport\s*\(?\s*)["'](\.{1,2}\/[^"']+)["']/g;
 function reachesDist(file, seen = new Set()) {
   if (seen.has(file)) return false;
