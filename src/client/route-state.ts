@@ -250,6 +250,23 @@ type CairnRouteRoot = typeof globalThis & { CairnRoutes?: CairnRoutesApi };
     else if (VALID_TABS.has(parts[0]) || HOMES.has(parts[0])) segs = parts;
     else segs = [cleanSegment(firstParam(params, "tab"))];
     const [first = "", section = "", nested = ""] = segs;
+    // The welcome's own addresses (/app/welcome, /app/welcome/<stage>?id=) are canonical
+    // as they stand: the welcome (welcome-screen.ts) owns them and writes them itself. The
+    // app beneath it is Today, but the address is never rewritten to /app/today — a
+    // reload in the moment before the welcome opened would otherwise lose the stage.
+    if (parts[0] === APP_PATH_SEGMENT && first === "welcome") {
+      return {
+        home: DEFS.defaults.home,
+        tab: DEFS.defaults.tab,
+        section: null,
+        healthSection: null,
+        date: null,
+        id: null,
+        session: null,
+        jump: null,
+        legacy: false,
+      };
+    }
     // The home-free day page: /app/day/<date> (also /app/day?date=, written over).
     const dayPage = first === "day";
 

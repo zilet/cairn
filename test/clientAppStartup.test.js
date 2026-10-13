@@ -162,3 +162,29 @@ test("a v1 entry re-entered through history is rewritten in place too", () => {
 
   assert.deepEqual(plain(env.calls.at(-1)), ["activateTab", "chat", { replace: true }]);
 });
+
+// A cold /app/welcome/connect through the REAL route parser: the shell activates Today
+// beneath the welcome and writes no address of its own, so the stage survives a reload.
+test("app startup leaves a /app/welcome address exactly as it is", () => {
+  const routeContext = { window: {}, URL, URLSearchParams };
+  vm.runInNewContext(readFileSync(new URL("../public/js/route-state.js", import.meta.url), "utf8"), routeContext);
+  const routes = routeContext.window.CairnRoutes;
+  for (const [pathname, search] of [
+    ["/app/welcome", ""],
+    ["/app/welcome/connect", "?id=claude"],
+    ["/app/welcome/meet", ""],
+  ]) {
+    const env = loadStartup({
+      href: `http://cairn.local${pathname}${search}`,
+      pathname,
+      search,
+      routeApi: routes,
+    });
+    env.context.startAppShell();
+    assert.deepEqual(
+      plain(env.calls.find(([kind]) => kind === "activateTab")),
+      ["activateTab", "today", { replace: false, syncRoute: false }],
+      pathname
+    );
+  }
+});

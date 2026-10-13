@@ -344,3 +344,26 @@ test("homeOf maps every view (and each Plan section) to its tab-bar home", () =>
   assert.equal(routes.viewFor("ask"), "chat");
   assert.equal(routes.viewFor("bogus"), "today");
 });
+
+// The welcome owns /app/welcome and its stages. They used to parse as a legacy Today
+// address, so the shell rewrote a cold /app/welcome/connect to /app/today ~45 ms into
+// boot — before the welcome (which waits on /api/settings) wrote its stage back — and a
+// reload in that window lost the welcome.
+test("the welcome addresses are canonical: Today beneath, never rewritten", () => {
+  const routes = loadRoutes();
+  for (const url of [
+    "/app/welcome",
+    "/app/welcome/",
+    "/app/welcome/connect?id=claude",
+    "/app/welcome/meet",
+    "/app/welcome/meet?id=codex",
+  ]) {
+    const r = routes.parseRoute(url);
+    assert.equal(r.legacy, false, url);
+    assert.equal(r.tab, "today", url);
+    assert.equal(r.home, "today", url);
+    assert.equal(r.id, null, `${url}: the provider id is the welcome's, not a route id`);
+  }
+  // A look-alike outside /app is not the welcome.
+  assert.equal(routes.parseRoute("/welcome").legacy, true);
+});
