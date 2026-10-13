@@ -19,6 +19,7 @@ import {
   trainingBackstopSignature,
 } from "./training-cache.js";
 import { PlanQualityError, pressSlotKey, qualityIssueKey, validateTrainingPlan } from "./plan-quality.js";
+import { statedLiftSplit } from "./stated-split.js";
 import { readVolumeFloorContext } from "./volume-floor-context.js";
 import { type PrescriptionWriter, restampSlot, stampForWrite, stampNow } from "./prescription-authorship.js";
 import { afterSqliteCommit, withSqliteSavepoint } from "./sqlite-savepoint.js";
@@ -1230,8 +1231,11 @@ export function validatePlanPressSlots(days: Array<{ day_number?: unknown; items
   return { ok: collisions.length === 0, collisions };
 }
 
+// The stored week's quality report, as GET /api/plan/quality and get_plan_quality show
+// it. It carries the stated-split check too (stated-split.ts): a week that departs from
+// the split the athlete named reads as a `stated_split` WARNING here, never an error.
 export function getPlanQuality() {
-  return validateTrainingPlan(getPlan(), { volumeFloor: readVolumeFloorContext() });
+  return validateTrainingPlan(getPlan(), { volumeFloor: readVolumeFloorContext(), statedSplit: statedLiftSplit() });
 }
 
 function planModeQualityError(

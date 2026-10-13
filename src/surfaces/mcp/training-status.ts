@@ -197,17 +197,35 @@ export function registerTrainingStatusTools(server: McpToolRegistrar) {
 
   server.tool(
     "set_strength_schedule",
-    "Set or clear the athlete's stated lifting weekdays. Only weekdays they named — never invent a day. days is [{dow: 0-6 (0=Sunday)}]. Pass days: null (or omit) to clear the schedule; days: [] clears it too. A duplicate weekday is kept once.",
+    "Set or clear the athlete's stated lifting weekdays, and the split they named. Only weekdays they named — never invent a day. days is [{dow: 0-6 (0=Sunday)}]. split is the split in their words ('upper/lower', 'push/pull/legs', 'full body'): a string sets it, null clears it, omitted keeps the stored one; every composed week is held to it (a plan-quality warning, never a refusal). Pass days: null (or omit days and split) to clear the schedule; days: [] clears it too, and clearing the days clears the split. A split with days omitted changes only the split on the stored weekdays. A duplicate weekday is kept once.",
     {
       days: z
         .array(z.object({ dow: z.number().int().min(0).max(6).describe("0=Sunday … 6=Saturday") }))
         .nullable()
         .optional()
-        .describe("omit or pass null to clear the whole schedule"),
+        .describe("omit (with no split) or pass null to clear the whole schedule"),
+      split: z
+        .string()
+        .max(60)
+        .nullable()
+        .optional()
+        .describe("the split they named, in their words; null clears it; omit to keep the stored one"),
       note: z.string().optional(),
     },
     async (input) => {
-      if (input.days == null) return asText(setProfile({ strength_schedule: null }));
+      const statesSplit = input.split !== undefined;
+      const split = statesSplit ? { split: input.split ?? null } : {};
+      if (input.days == null) {
+        // A split-only change lands on the stored weekdays; with none stated there is no
+        // week to hold it to yet.
+        if (input.days === undefined && typeof input.split === "string") {
+          const stored = getStrengthSchedule();
+          if (!stored?.days.length)
+            return asText({ ok: false, error: "a split needs stated lifting weekdays; send days with it" });
+          return asText(setProfile({ strength_schedule: { ...stored, ...split } }));
+        }
+        return asText(setProfile({ strength_schedule: null }));
+      }
       const schedule = normalizeStrengthSchedule({ days: input.days, note: input.note, source: "athlete" });
       if (!schedule) {
         return asText({
@@ -215,7 +233,7 @@ export function registerTrainingStatusTools(server: McpToolRegistrar) {
           error: "strength_schedule requires days to be a list of {dow: 0-6} (an empty list clears it)",
         });
       }
-      return asText(setProfile({ strength_schedule: schedule }));
+      return asText(setProfile({ strength_schedule: { ...schedule, ...split } }));
     }
   );
 }

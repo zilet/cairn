@@ -3717,8 +3717,13 @@ connected, then letting it talk. Three server pieces:
   onboarding extraction in welcome mode (`buildOnboardPrompt(text, {welcome:true})`, named in
   `ONBOARD_SCHEMA`: `goal` → `profile.goal_mode` (recomp lands as `maintain` plus a remembered goal),
   `lift_days` → the stated `strength_schedule` (named weekdays only), `lift_split` → that schedule's
-  `split` in their words (`src/repo/stated-split.ts`: the composer's binding STATED SPLIT line, and a
-  `stated_split` plan-quality WARNING when a restructure departs from a split whose words name parts),
+  `split` in their words (`src/repo/stated-split.ts`: the composer's binding STATED SPLIT line is
+  what holds a composed week to it; the check is a `stated_split` WARNING — never an error, a refusal
+  or a hold — on `getPlanQuality()` (`GET /api/plan/quality`, `get_plan_quality`) and on the `quality`
+  an applied plan proposal returns, for a split whose words name parts). The person changes it in
+  their words: chat's `set_strength_schedule` and the MCP `set_strength_schedule` / `set_profile`
+  carry `split` (words set it, `null` clears it, omitted keeps it; a split-only change lands on the
+  stored weekdays), and clearing the lifting days (`days: []`) clears the split with them.
   `endurance_schedule` → the stated run days (so the engine places the runs where they said),
   `welcome_reply` (held to `violatesReadingGrammar`, else a rotating calm floor, and never naming a
   run weekday they did not), `fuel_start`). The composer gets the person's WHOLE first message as

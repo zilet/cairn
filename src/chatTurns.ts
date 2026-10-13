@@ -2412,12 +2412,28 @@ export function applyChatActions(
           break;
         }
         case "set_strength_schedule": {
-          const schedule = repo.normalizeStrengthSchedule({ days: a.days, note: a.note, source: "chat" });
+          const statesSplit = Object.hasOwn(a, "split");
+          // A split-only turn ("I'm moving to PPL") lays the new split on the stored
+          // lifting weekdays; with none stated there is no week to hold it to yet.
+          const stored = Array.isArray(a.days) ? null : repo.getStrengthSchedule();
+          const days = Array.isArray(a.days) ? a.days : stored?.days;
+          if (!days?.length && !Array.isArray(a.days)) {
+            applied.push({ type: a.type, error: "a split needs the lifting weekdays first" });
+            break;
+          }
+          const note = a.note ?? stored?.note;
+          const schedule = repo.normalizeStrengthSchedule({ days, note, source: "chat" });
           if (!schedule) {
             applied.push({ type: a.type, error: "invalid strength_schedule" });
             break;
           }
-          applied.push({ type: a.type, result: repo.setProfile({ strength_schedule: schedule }) });
+          // `split` present → set (words) or cleared (null); absent → the stored one stands.
+          applied.push({
+            type: a.type,
+            result: repo.setProfile({
+              strength_schedule: statesSplit ? { ...schedule, split: a.split ?? null } : schedule,
+            }),
+          });
           break;
         }
         case "set_movement_considerations": {

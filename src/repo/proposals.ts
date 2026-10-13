@@ -1439,7 +1439,11 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
       .filter(Number.isFinite)
   );
   const priorIssues = new Set(beforeQuality.errors.map(qualityIssueKey));
-  const quality = validateTrainingPlan(getPlan(), { volumeFloor: readVolumeFloorContext() });
+  // Warnings ride the result; only a NEW error blocks. The stated split is a warning.
+  const quality = validateTrainingPlan(getPlan(), {
+    volumeFloor: readVolumeFloorContext(),
+    statedSplit: statedLiftSplit(),
+  });
   const blockingQuality = quality.errors.filter(
     (entry) =>
       !priorIssues.has(qualityIssueKey(entry)) || (entry.day_number != null && touchedDays.has(entry.day_number))

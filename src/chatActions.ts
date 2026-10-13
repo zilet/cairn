@@ -125,8 +125,11 @@ export interface SetEnduranceScheduleAction extends ChatActionBase {
 
 export interface SetStrengthScheduleAction extends ChatActionBase {
   type: "set_strength_schedule";
-  days: Array<{ dow: number }>;
+  /** Omitted on a split-only turn ("I'm moving to PPL"): the stored weekdays stand. */
+  days?: Array<{ dow: number }>;
   note?: unknown;
+  /** The split they named, in their words ("push/pull/legs"); null clears it; omitted keeps it. */
+  split?: string | null;
 }
 
 export interface SetMovementConsiderationsAction extends ChatActionBase {
@@ -545,15 +548,20 @@ export const CHAT_ACTION_PROMPT_SPECS = {
     shape: `// The athlete's LIFTING WEEKDAYS, in their own words. This is how the
     // lifting week gets set — there is no settings form for it, so when they say it
     // in chat, write it. dow: 0=Sunday … 6=Saturday. NO kind: which split lands on
-    // which day is the plan's business, not the schedule's. Pass days: [] to clear.
+    // which day is the plan's business, not the schedule's. Pass days: [] to clear
+    // (that clears the split too). "split" is the split they NAMED, in their words
+    // ("upper/lower", "push/pull/legs", "full body"); null clears it; omit it to keep
+    // the stored one. A turn that changes only the split omits "days".
     { "type": "set_strength_schedule",
       "days": [{ "dow": 1 }, { "dow": 2 }, { "dow": 3 }, { "dow": 4 }, { "dow": 5 }],
+      "split": "<optional: the split they named, e.g. upper/lower>",
       "note": "<optional short restatement of their words>" }`,
     guidance: [
       `Emit set_strength_schedule whenever the athlete says which weekdays they lift, however casually — this is the ONLY way the lifting week gets set, so a plain sentence in passing is enough and you should not ask them to repeat it as a formal answer.`,
       `Read the ordinary phrasings as what they are. "My strength trainings are on all workdays (mon-fri)", "I lift weekdays", "strength on all workdays", "gym Mon-Fri", "I train every workday" are all dows 1-5. "I lift Monday, Wednesday and Friday" / "MWF" is 1, 3, 5. "Tue/Thu/Sat" is 2, 4, 6. "every day" is 0-6. "three days a week" names no weekday and is NOT a schedule — ask which days.`,
       `A sentence can carry both halves: "gym Mon-Fri, weekends are the long run and MTB" states the lifting days (1-5) AND, separately, run days for set_endurance_schedule (6 and 0). Emit both actions. But "weekends are for the long run and mountain biking" ALONE says nothing about which weekdays they lift — never infer lifting days from what they said about running, resting, or the weekend.`,
       `Map only weekdays they actually named, and never fill in a day to round the week out. When they name a range ("Monday through Thursday"), every weekday in the range counts. When they revise ("actually I skip Wednesdays now"), send the full corrected list, not a delta. When they ask you to stop assuming, send days: [] to clear it.`,
+      `The SPLIT is the week's shape in their words — DATA.strength_schedule.split holds the stated one, and every composed week is held to it. When they name a new one ("I'm moving to PPL", "switching to upper/lower", "full body from now on"), send "split" with their words ("PPL" → "push/pull/legs"); with no weekdays in the turn, omit "days" and the stored lifting days stay. When they drop it ("no set split any more", "you pick the split"), send "split": null. Never set a split they did not name, and never infer one from the plan's current day names. A changed split reshapes the week only through a plan redraw, which the athlete asks for or accepts as usual.`,
     ],
   },
   set_movement_considerations: {
@@ -1003,12 +1011,23 @@ export function normalizeChatAction(value: unknown): ChatAction | null {
       };
     }
     case "set_strength_schedule": {
+      // The split they named: words → carried, explicit null → the clear, omitted (or
+      // blank) → not carried, so the stored split stands (profile.ts serializeStrengthSchedule).
+      const splitWords =
+        typeof value.split === "string" ? value.split.replace(/\s+/g, " ").trim().slice(0, 60) : "";
+      const split = value.split === null ? { split: null } : splitWords ? { split: splitWords } : {};
+      // A turn that states only the split ("I'm moving to PPL") carries no days[]: the
+      // stored lifting weekdays stand.
+      if (!Array.isArray(value.days)) {
+        return Object.hasOwn(split, "split") ? { type: "set_strength_schedule", ...split } : null;
+      }
       const schedule = normalizeStrengthSchedule({ ...value, source: "chat" });
       if (!schedule) return null;
       return {
         type: "set_strength_schedule",
         days: schedule.days,
         note: schedule.note,
+        ...split,
       };
     }
     case "set_movement_considerations": {

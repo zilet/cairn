@@ -39,8 +39,11 @@ personRouter.get("/profile", (_req, res) => res.json(getProfile()));
 personRouter.get("/profile/endurance-schedule", (_req, res) => res.json(getEnduranceSchedule()));
 // The athlete's stated LIFTING weekdays. days[] is {dow: 0-6 (0=Sunday)} — no kind,
 // because which split lands on which day is the plan's business. The weekday ring lays
-// the plan's strength days onto exactly these weekdays. null when unset.
-// MCP: get_strength_schedule.
+// the plan's strength days onto exactly these weekdays. `split` is the split they named,
+// in their words ("upper/lower"); composed weeks are held to it. Set through PUT
+// /profile `strength_schedule` ({days, split?}: a split string sets it, `split: null`
+// clears it, omitted keeps it; `days: []` clears the days and the split). null when
+// unset. MCP: get_strength_schedule.
 personRouter.get("/profile/strength-schedule", (_req, res) => res.json(getStrengthSchedule()));
 // The athlete's stated movement considerations: lasting, painless conditions in their own
 // words ({items:[{label, detail?, wants_addressed, source, stated_on}]}). They shape plan

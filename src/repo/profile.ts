@@ -979,9 +979,11 @@ function serializeStrengthSchedule(
   if (!g) return null;
   // A weekday update that says nothing about the split keeps the stated one, exactly as
   // a run-day update keeps the stated quality session: "I lift Mon/Wed/Fri now" is not
-  // "forget my upper/lower". Only an explicit `split: null` clears it.
+  // "forget my upper/lower". An explicit `split: null` clears it, and so does clearing
+  // the lifting days (`days: []`): a split with no week to lay it on holds nothing.
   const raw = typeof input === "string" ? null : input;
-  if (!(raw && typeof raw === "object" && Object.hasOwn(raw, "split"))) {
+  if (!g.days.length) delete g.split;
+  else if (!(raw && typeof raw === "object" && Object.hasOwn(raw, "split"))) {
     const kept = normalizeStrengthSchedule(current ?? null)?.split;
     if (kept) g.split = kept;
   }

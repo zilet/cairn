@@ -161,13 +161,21 @@ export function registerPersonTools(server: McpToolRegistrar) {
       strength_schedule: z
         .object({
           days: z.array(z.object({ dow: z.number().int().min(0).max(6).describe("0=Sunday … 6=Saturday") })),
+          split: z
+            .string()
+            .max(60)
+            .nullable()
+            .optional()
+            .describe(
+              "the split they named, in their words ('upper/lower', 'push/pull/legs'); null clears it, omit to keep the stored one"
+            ),
           note: z.string().optional(),
           source: z.enum(["athlete", "chat"]).optional(),
         })
         .nullable()
         .optional()
         .describe(
-          "stated LIFTING weekdays the weekday ring lays the plan's strength days onto; only weekdays the athlete named, no kind. days: [] clears, null clears. Never invent days they did not say"
+          "stated LIFTING weekdays the weekday ring lays the plan's strength days onto; only weekdays the athlete named, no kind. days: [] clears (and clears the split), null clears. Never invent days they did not say"
         ),
       movement_considerations: z
         .object({
