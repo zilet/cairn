@@ -49,9 +49,46 @@ jobs:
       - name: Runtime smoke
         run: npm run smoke
 
+  browser-smoke:
+    # The PWA in a real headless Chrome against the tagged commit (scripts/smoke-browser.mjs),
+    # the same job as CI's: every route boots and the core workflows run without a runtime
+    # error. `npm run verify` cannot see script order, lazy-bundle injection or a missing
+    # global, and a release that only verified once shipped a broken browser smoke — so no
+    # image, :latest or GitHub release is published unless it passes here too.
+    name: Browser smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        # actions/checkout v7.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Set up Node 26
+        # actions/setup-node v6.4.0
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Browser smoke
+        env:
+          # The hosted Ubuntu image ships Google Chrome (found at its standard path).
+          # Ubuntu 24.04 restricts the unprivileged user namespaces Chrome's own
+          # sandbox needs, and the page it loads is this job's local build.
+          CAIRN_CHROME_NO_SANDBOX: "1"
+        run: npm run smoke:browser:built
+
   build:
     name: Build ${{ matrix.arch }}
-    needs: verify
+    # Both gates must pass for the tagged commit before any image layer is pushed.
+    needs: [verify, browser-smoke]
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false

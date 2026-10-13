@@ -2,7 +2,7 @@ name: CI
 
 # Offline test gate. Runs on pushes to main and on every PR. Tag pushes are
 # intentionally excluded because the release workflow runs the same npm test gate
-# before building and publishing the image.
+# and browser smoke before building and publishing the image.
 on:
   push:
     branches: [main]
