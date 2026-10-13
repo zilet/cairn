@@ -1,4 +1,5 @@
 import { db } from "../../db.js";
+import { UNDO_NOT_NOW, UNDO_UNAVAILABLE, UndoRefusal } from "./undo-refusal.js";
 import {
   clinicianFloorHolds,
   decideAutonomyTier,
@@ -4094,7 +4095,7 @@ export function revertDecision(id: number, reason = "user veto"): { ok: boolean;
         if (mealPlanId > 0 && (getMealPlan(mealPlanId) as any)?.status === "draft")
           setMealPlanStatus(mealPlanId, "superseded", { recordDecision: false });
         const canceled = transitionBrainDecision(id, "canceled");
-        if (!canceled) throw new Error("the announced decision could not be canceled");
+        if (!canceled) throw new UndoRefusal(UNDO_NOT_NOW);
         // A user "Hold this" on an announced plan-proposal change is a deliberate
         // veto, not a system supersede. (1) Retire the underlying draft so orphan
         // adoption can never silently re-adopt it — through setProposalStatus, which
@@ -4125,7 +4126,7 @@ export function revertDecision(id: number, reason = "user veto"): { ok: boolean;
         return { ok: true, decision: canceled };
       });
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      return undoFailure(error, id);
     }
   }
   if (!decision || decision.status !== "applied" || !decision.reversible)
@@ -4264,16 +4265,18 @@ export function revertDecision(id: number, reason = "user veto"): { ok: boolean;
       return { ok: true, decision: reverted };
     });
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    return undoFailure(error, id);
   }
 }
 
 // The Undo's refusals are read by the athlete — the PWA toasts `error` as it stands — so
-// they are said in their words, never the restore layer's. The ownership guards in the
-// other modules already speak this way; these are the ones this function owns.
-const UNDO_UNAVAILABLE = "This change can no longer be undone.";
-const UNDO_NOT_NOW = "This change couldn't be undone just now, so nothing was changed.";
-class UndoRefusal extends Error {}
+// only an UndoRefusal (src/domain/brain/undo-refusal.ts, also thrown by the ownership
+// guards in the other modules) reaches them in its own words; anything else is a fault.
+function undoFailure(error: unknown, id: number): { ok: false; error: string } {
+  if (error instanceof UndoRefusal && error.message) return { ok: false, error: error.message };
+  log.warn("[brain] undo failed", { decision_id: id, error });
+  return { ok: false, error: UNDO_NOT_NOW };
+}
 
 // A plan write that fails mid-Undo is an engineering fault, not a sentence for the
 // athlete: log what broke and refuse in plain words (the savepoint rolls it all back).

@@ -16,6 +16,7 @@
  * It records nothing when nothing changed, and it never decides anything: whether the
  * stated quality runs in a given week stays the run engine's call (run-progression.ts).
  */
+import { UNDO_UNAVAILABLE, UndoRefusal } from "../brain/undo-refusal.js";
 import { recordDecision, saveBrainRollback } from "../../repo/brain-decisions.js";
 import { invalidateDayRead } from "../../repo/day-read-cache.js";
 import {
@@ -222,12 +223,12 @@ export function recordStatedRunWeek(input: {
  */
 export function revertStatedRunWeek(payload: unknown, today: string = localDateISO()): void {
   const p = payload as RunWeekRollback | null;
-  if (!p || p.version !== 1) throw new Error("rollback snapshot unavailable");
+  if (!p || p.version !== 1) throw new UndoRefusal(UNDO_UNAVAILABLE);
   const stored = getEnduranceSchedule();
   if (!same(canonical(stored), p.applied))
-    throw new Error("your run week has changed since — your newer word stands");
+    throw new UndoRefusal("Your run week has changed since, so your newer word stands.");
   if (p.applied_words !== undefined && !same(ownedWords(stored), p.applied_words))
-    throw new Error("your run week's note has changed since — your newer word stands");
+    throw new UndoRefusal("Your run week's note has changed since, so your newer word stands.");
   const prev = p.previous;
   if (!prev) {
     setProfile({ endurance_schedule: null });

@@ -15,6 +15,7 @@
  * at PUSH_STANCE_MAX_DAYS so the athlete re-states it rather than living under a stale ask.
  * What a stance licenses — and what it can never touch — is training-drive.ts's header.
  */
+import { UNDO_UNAVAILABLE, UndoRefusal } from "../brain/undo-refusal.js";
 import {
   patchBrainDecision,
   saveBrainRollback,
@@ -343,13 +344,13 @@ export function revertTrainingStance(
   undoneDecisionId: number | null = null
 ): void {
   const p = payload as StanceRollback | null;
-  if (!p || p.version !== 1 || !p.applied || !p.previous) throw new Error("rollback snapshot unavailable");
+  if (!p || p.version !== 1 || !p.applied || !p.previous) throw new UndoRefusal(UNDO_UNAVAILABLE);
   const standing: TrainingDriveValue = getSettings().training_drive === "push" ? "push" : "steady";
   const open = latestOpenStance();
   const holdsApplied =
     standing === p.applied.drive &&
     (p.applied.stance_id == null ? open == null || open.until < today : open?.id === p.applied.stance_id);
-  if (!holdsApplied) throw new Error("the training drive has changed since — your newer choice stands");
+  if (!holdsApplied) throw new UndoRefusal("Your training drive has changed since, so your newer choice stands.");
   if (p.applied.stance_id != null) endOpenStances("undone", p.applied.stance_id);
   setSettings(
     { training_drive: p.previous.drive === "push" || p.previous.stance_id != null ? "push" : "steady" },

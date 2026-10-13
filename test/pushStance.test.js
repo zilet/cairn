@@ -489,3 +489,30 @@ test("chat intent: inability, pain narration and a 'back to normal' about sleep 
   ])
     assert.equal(hasExplicitTrainingDriveIntent(yes), true, yes);
 });
+
+// The Undo's `error` is toasted as it stands, so it is only ever the athlete's words.
+test("an Undo that cannot run says so in plain words, never the restore layer's", () => {
+  const set = setTrainingDrive({ drive: "push", until: addDaysISO(today(), 7) });
+  // A rollback snapshot that no longer reads (a stale or partial write).
+  db.prepare("UPDATE brain_rollbacks SET payload_json = ? WHERE decision_id = ?").run(
+    JSON.stringify({ version: 1 }),
+    set.decision_id
+  );
+  const refused = revertDecision(set.decision_id);
+  assert.equal(refused.ok, false);
+  assert.equal(refused.error, "This change can no longer be undone.");
+
+  // An engineering fault mid-Undo (here: the decision ledger refuses the write) is
+  // logged, and the athlete reads only that nothing changed.
+  const second = setTrainingDrive({ drive: "push", until: addDaysISO(today(), 12) });
+  db.exec(
+    "CREATE TEMP TRIGGER undo_fault BEFORE UPDATE ON brain_decisions BEGIN SELECT RAISE(ABORT, 'SQLITE internal fault'); END"
+  );
+  try {
+    const failed = revertDecision(second.decision_id);
+    assert.equal(failed.ok, false);
+    assert.equal(failed.error, "This change couldn't be undone just now, so nothing was changed.");
+  } finally {
+    db.exec("DROP TRIGGER IF EXISTS undo_fault");
+  }
+});

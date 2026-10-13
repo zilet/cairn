@@ -206,7 +206,8 @@ test("Undo restores neither plan nor ledger when its decision transition fails",
   try {
     const result = revertDecision(applied.decision.id, "fault injection");
     assert.equal(result.ok, false);
-    assert.match(result.error, /revert transition unavailable/i);
+    // The fault is logged; the athlete reads only that nothing changed (never the SQL).
+    assert.equal(result.error, "This change couldn't be undone just now, so nothing was changed.");
     assert.equal(repo.getPlanDay(1).items[0].target_weight, 120);
     assert.equal(repo.getBrainDecision(applied.decision.id).status, "applied");
     assert.equal(repo.listBrainExpectations({ decisionId: applied.decision.id })[0].status, expectation.status);
