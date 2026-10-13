@@ -161,8 +161,9 @@ a test that picks an agent.
 
 When verifying by hand, prefer `node test/run.mjs <files>`. A run that skips it is still offline:
 `test/_offline.mjs` (loaded by `_isolate.mjs` and `_seed.js`) fills an unset `DATA_DIR`/`DB_PATH`/
-`AGENTS_CONFIG` with a throwaway dir and the offline agents table, and under `node:test` `src/db.ts`
-/ `src/agents.ts` themselves refuse the real `data/` and an unset `AGENTS_CONFIG`. Wait on the enrich
+`AGENTS_CONFIG` with a throwaway dir and the offline agents table, and under `node:test`
+`src/dataDir.ts` (every path under `data/`) / `src/agents.ts` themselves refuse the real `data/` and
+an unset `AGENTS_CONFIG`. Wait on the enrich
 queue with `whenEnrichQueueIdle()` (`src/enrich.ts`), never a sleep. With bare `node --test`, run **one file per invocation with its own `mktemp -d`**. Passing several
 files to a single `node --test` with one `DB_PATH` runs them as *parallel* child processes against
 one SQLite file; the loser throws `database is locked` at the WAL pragma during module load and the

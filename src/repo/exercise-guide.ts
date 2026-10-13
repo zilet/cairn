@@ -16,9 +16,9 @@
 // on a dumbbell lateral raise. So a guide is auto-linked ONLY on an unambiguous name
 // match (see matchGuide below). Anything looser is stored as an unlinked candidate
 // the athlete can confirm — never rendered as though it were the answer.
+import { DATA_DIR } from "../dataDir.js";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { db } from "../db.js";
 import {
   expandExerciseAbbreviations,
@@ -30,8 +30,6 @@ import {
 } from "./exercise-canon.js";
 import { withSqliteSavepoint } from "./sqlite-savepoint.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "..", "..", "data");
 
 export const EXERCISE_GUIDES_DIR = path.join(DATA_DIR, "exercise-guides");
 export const EXERCISE_GUIDE_DATASET_PATH = path.join(EXERCISE_GUIDES_DIR, "dataset.json");

@@ -1,3 +1,4 @@
+import { DATA_DIR } from "./dataDir.js";
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -48,7 +49,6 @@ import { log } from "./log.js";
 // one generation at a time, and a throwing job never breaks the drain loop.
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "..", "data");
 const ART_DIR = path.join(DATA_DIR, "art");
 // Pre-baked, downscaled images shipped in the repo (seed-art/) so a fresh seed or
 // the demo renders real studio photos with NO Gemini key at runtime. installSeedArt()

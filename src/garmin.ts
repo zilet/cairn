@@ -1,6 +1,7 @@
+import { DATA_DIR } from "./dataDir.js";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { emitBrainEvent } from "./brainEvents.js";
 import { flushGarminSyncDeferral, garminLapsStored, garminSourceLabel, getGarminCoachSummary, isStrengthGarminType, newGarminSyncDeferral, normalizeGarminHrvStatus, reconcileGarminStrength, upsertGarminActivity, upsertGarminDailyMetrics, upsertGarminSource } from "./repo/activities.js";
 import { runWithBrainSnapshot } from "./brain/snapshot.js";
@@ -21,8 +22,6 @@ import { localDateISO } from "./repo/shared.js";
 import { log } from "./log.js";
 import { round1 } from "./lib/numbers.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "..", "data");
 const TOKEN_DIR = process.env.GARMIN_TOKEN_DIR || path.join(DATA_DIR, "garmin-token");
 
 // How many recent activities to enrich with a per-activity HR-time-in-zone fetch

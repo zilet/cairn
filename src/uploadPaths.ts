@@ -1,9 +1,8 @@
+import { DATA_DIR } from "./dataDir.js";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "..", "data");
+export { DATA_DIR };
 export const UPLOADS_DIR = path.join(DATA_DIR, "uploads");
 
 export function safeUploadPath(filePath: unknown, root = UPLOADS_DIR): string | null {

@@ -7,6 +7,8 @@ test("probe", async () => {
   if (process.env.PROBE_SEED === "1") await import("./_seed.js");
   const { loadAgents } = await import("../dist/agents.js");
   const { db } = await import("../dist/db.js");
+  const { UPLOADS_DIR } = await import("../dist/uploadPaths.js");
+  const { EXERCISE_GUIDES_DIR } = await import("../dist/repo/exercise-guide.js");
   const agents = loadAgents();
   const main = db
     .prepare("PRAGMA database_list")
@@ -17,6 +19,8 @@ test("probe", async () => {
     JSON.stringify({
       agents: Object.fromEntries(Object.entries(agents).map(([name, def]) => [name, def.command])),
       dbFile: main.file,
+      // Everything else written under DATA_DIR, from the one shared resolution.
+      files: [UPLOADS_DIR, EXERCISE_GUIDES_DIR],
     })
   );
 });

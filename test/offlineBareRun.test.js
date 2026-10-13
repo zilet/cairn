@@ -30,6 +30,11 @@ function runProbe({ args = [], env = {} } = {}) {
 
 function assertThrowawayDb(seen) {
   assert.ok(!path.resolve(seen.dbFile).startsWith(realData + path.sep), `opened the real data dir: ${seen.dbFile}`);
+  // Uploads, guides (and art / the Garmin token, same resolution) never land in data/ either.
+  for (const dir of seen.files ?? []) {
+    assert.ok(!path.resolve(dir).startsWith(realData + path.sep), `wrote under the real data dir: ${dir}`);
+  }
+  assert.ok((seen.files ?? []).length > 0, "the probe reports where files would land");
 }
 
 function assertOffline(seen) {
