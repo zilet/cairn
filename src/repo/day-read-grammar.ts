@@ -46,8 +46,14 @@ export const DAY_READ_GRAMMAR_RULES: ReadonlyArray<{ rule: string; pattern: RegE
   // measured intake/adherence/dose against a target), so a negative lookahead
   // excuses ONLY that shape. A bare or dangling percentage — nothing after it, or
   // anything other than "of" — still reads as a grade and stays caught, same as
-  // "/100", "N points" and "N score(s)" always have.
-  { rule: "score", pattern: /\b\d{1,3}\s*(?:\/\s*100\b|%(?!\s+of\b)|points?\b|scores?\b)/i },
+  // "/100", "N points" and "N score(s)" always have. A food's own composition is the same
+  // kind of fact — "95% lean beef", "2% milk", "70% dark chocolate", "0% Greek yogurt" —
+  // a property of the food, never a grade of the person (a live meal suggestion tripped it).
+  {
+    rule: "score",
+    pattern:
+      /\b\d{1,3}\s*(?:\/\s*100\b|%(?!\s+(?:of|lean|fat|dark|cocoa|cacao|milk|greek|yogurt|whole|juice|abv|alcohol)\b)|points?\b|scores?\b)/i,
+  },
   // A suggestion, never a gate.
   { rule: "gate", pattern: /\byou must\b|\bdo not train\b|\bforbidden\b/i },
 ];

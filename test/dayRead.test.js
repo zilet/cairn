@@ -2322,6 +2322,11 @@ test("the score rule passes a factual percentage of a real, named quantity", () 
     "That's 60% of planned volume banked this week.",
     "Fiber lands around 75% of the daily target most days.",
     "You're already at 100% of your protein target for today.",
+    // A food's own composition is a property of the food, never a grade.
+    "Have the 95% lean beef with rice tonight.",
+    "A glass of 2% milk with breakfast is plenty.",
+    "A square of 70% dark chocolate after dinner is fine.",
+    "Try 0% Greek yogurt with berries.",
   ];
   for (const text of mustPass) {
     assert.equal(violatesReadingGrammar(text), null, `should pass as a real quantity: ${JSON.stringify(text)}`);
