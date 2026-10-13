@@ -5,8 +5,10 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
-A first run that listens, a calmer day one, and releases that cannot ship a broken screen. No
-migrations.
+## [2.1.5] — 2026-10-13
+
+A first run that listens, a calmer day one, faster answers from every AI app at the effort each job
+actually needs, and releases that cannot ship a broken screen. No migrations.
 
 ### Added
 
@@ -21,6 +23,19 @@ migrations.
 - **A stated split binds.** "Upper/lower" said at the start shapes the first week, chat and AI apps
   can change it later ("I'm moving to PPL"), and the plan check notes a week that drifts from it.
 
+- **Low effort by default, depth where it pays.** Everyday reads, coaching chat and composition
+  now run at low effort; the self-check passes, a week of meals and lab transcription at medium; health
+  reviews, plan proposals and the case conference at high (no longer the highest setting). Measured
+  first on all four CLIs and graded blind: low matched or beat medium and answered faster on each.
+  Effort steps up on its own for a risky moment (fresh pain, a race two weeks out, a new nutrition
+  finding) and for the one retry of a reply that missed its contract, and the run log now records the
+  effort every job used. A setting you chose in Settings always wins.
+- **Faster chat on Claude.** A turn that needs no tools starts Claude Code without its tool
+  schemas, MCP servers, skills or a saved session: about 30K fewer prompt tokens a turn and a second
+  or more off the start. A two-sentence reply streamed its first words in about 2.4 s.
+- **Antigravity chat streams.** Replies on agy now appear as they are written instead of all at once
+  when the run ends.
+
 ### Fixed
 
 - **No agent runs before the welcome.** A fresh install no longer spends its AI on catch-up weekly
@@ -34,6 +49,25 @@ migrations.
   first week" now actually removes it.
 - **Welcome addresses survive a reload** instead of being rewritten to Today, and Settings no longer
   waits on a slow AI-app login check.
+- **The coach no longer tells you you're eating too little when you aren't.** It took a three-week
+  average and set it beside a target that started that day. Now only Cairn's own fuel read can say you
+  are under-eating; insights and the weekly read that claim it anyway are dropped, and chat is told the
+  same rule.
+- **"95% lean beef" is food, not a score.** A food's own percentage (lean, milk fat, dark chocolate,
+  Greek yogurt) no longer trips the no-scores rule.
+- **An Undo that can't run says so in plain words**, never an internal message.
+- **Codex runs structured work again.** codex's schema flag is OpenAI strict mode, which refused
+  every Cairn contract (HTTP 400) in about 3 s; the failure read as "rate limited" and held the
+  provider. Each contract is now sent in its strict reading (every field named, optional ones
+  nullable, the forced nulls removed from the answer), and one strict mode cannot express keeps the
+  written contract. Verified live: 28 of 29 contracts accepted, and codex went from 0 to 11 of 12 on
+  the everyday ops. A provider's refusal of a request is never read as throttling again.
+- **A suggested session's items are closed to strength or cardio**, so a model can no longer label a
+  drill "mobility" and lose the whole session.
+- A CLI Cairn stopped itself (its timeout, a Stop) is no longer logged as out of memory.
+- **Settings never waits on an AI app's version check either.** The installed-app and version reads
+  answer from a PATH lookup and a background probe, and every agent pick peeks the login state
+  instead of running a CLI on the server's event loop.
 - Week-strip initials skip qualifiers ("LA", not "LA("); no benchmark praise with nothing measured;
   labelled plan fields; no stray scrollbar around the sign-in terminal.
 
@@ -43,6 +77,8 @@ migrations.
   are now counted by dependency wave, identical run to run.
 - **Load order can't crash boot.** Three import cycles that only worked in the usual load order are
   broken, and a test loads every cycle member first in a fresh process.
+- **Every path under data/ resolves in one place** (`src/dataDir.ts`), so a bare test run never
+  writes uploads, art, guides or a Garmin token into the real data folder either.
 - **Tests are offline however they're run**: a bare `node --test` gets a throwaway database and no
   real AI CLIs. The enrich queue exposes an idle signal, so tests wait on it instead of sleeping.
 
@@ -1821,7 +1857,8 @@ landed since 0.3.0.
 - Chat strips agent tool-narration before the reply marker reaches the bubble
 - Segmented sub-nav scrolls when pills overflow (no clipped "Calendar" tab)
 
-[Unreleased]: https://github.com/zilet/cairn/compare/v2.1.4...HEAD
+[Unreleased]: https://github.com/zilet/cairn/compare/v2.1.5...HEAD
+[2.1.5]: https://github.com/zilet/cairn/compare/v2.1.4...v2.1.5
 [2.1.4]: https://github.com/zilet/cairn/compare/v2.1.3...v2.1.4
 [2.1.3]: https://github.com/zilet/cairn/compare/v2.1.2...v2.1.3
 [2.1.2]: https://github.com/zilet/cairn/compare/v2.1.1...v2.1.2
