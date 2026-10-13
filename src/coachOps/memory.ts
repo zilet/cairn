@@ -16,7 +16,9 @@ import {
   getStrengthSchedule,
   normalizeEnduranceGoal,
   setProfile,
+  type EnduranceGoal,
 } from "../repo/profile.js";
+import { namedWeekdays, statesRunningGoal } from "../repo/run-words.js";
 import { movementConsiderationsRead } from "../repo/movement-considerations.js";
 import { reactionModelForCoach, setReactionNarrative } from "../repo/reaction-model.js";
 import { interactiveTimeoutForOp, setSettings } from "../repo/settings.js";
@@ -320,9 +322,34 @@ export function applyOnboardBase(raw: string, applied: OnboardApplied): void {
   } catch (err) { log.debug("[onboard] no supplements understood from the text", { error: err }); }
 }
 
+// A running goal already stated, restated in new words: the fields the new words did
+// not carry stand. The weekly volume and session count are about the person's running,
+// not one race, so they always carry; the race's own details (its distance, target,
+// name) carry only when it is the same race (same date or name) or the same standing aim.
+function mergeStatedEnduranceGoal(stored: EnduranceGoal, said: EnduranceGoal): EnduranceGoal | null {
+  const sameAim =
+    stored.mode === said.mode &&
+    (said.mode !== "race" ||
+      stored.date === said.date ||
+      (!!stored.event && !!said.event && stored.event.trim().toLowerCase() === said.event.trim().toLowerCase()));
+  const merged: Record<string, unknown> = { ...said };
+  const keep = sameAim
+    ? (["weekly_km", "weekly_sessions", "distance_km", "target", "event", "label"] as const)
+    : (["weekly_km", "weekly_sessions"] as const);
+  for (const key of keep) if (merged[key] == null && stored[key] != null) merged[key] = stored[key];
+  return normalizeEnduranceGoal(merged);
+}
+
 // Apply one parsed onboarding extraction (ONBOARD_SCHEMA) through the existing repo
 // writers. Each field is best-effort on its own: one bad row never costs the rest.
-export function applyOnboardParsed(p: any, applied: OnboardApplied): void {
+//
+// `raw` is the person's own text. On an install that already holds a stated running goal
+// or run week (the MCP `onboard` tool and POST /api/onboard run on existing installs too),
+// the extraction may change them only where the words EXPLICITLY state them: a race or
+// event distance for the goal (run-words.ts statesRunningGoal), and every run weekday
+// named in the text for the run week. Otherwise the stated facts stand; nothing is ever
+// wiped by an extraction that carried nothing. Without `raw`, a stored one always stands.
+export function applyOnboardParsed(p: any, applied: OnboardApplied, opts: { raw?: string } = {}): void {
   if (!p || typeof p !== "object") return;
   if (typeof p.about_me === "string" && p.about_me.trim()) {
     try {
@@ -398,7 +425,12 @@ export function applyOnboardParsed(p: any, applied: OnboardApplied): void {
       const days = runDays
         .map((d: any) => ({ dow: Number(d?.dow), kind: typeof d?.kind === "string" ? d.kind : "any" }))
         .filter((d: { dow: number }) => Number.isInteger(d.dow) && d.dow >= 0 && d.dow <= 6);
-      if (days.length && days.length < 7) {
+      // A run week already stated changes only when the text names EVERY day the
+      // extraction read; one it cannot see in their words keeps the stored week whole.
+      const stored = getEnduranceSchedule();
+      const named = new Set(namedWeekdays(opts.raw ?? "").days.map((d) => d.dow));
+      const explicit = days.every((d: { dow: number }) => named.has(d.dow));
+      if (days.length && days.length < 7 && (!stored?.days.length || explicit)) {
         setProfile({ endurance_schedule: { days, source: "chat" } });
         applied.run_days = getEnduranceSchedule()?.days.map((d) => d.dow) ?? [];
       }
@@ -409,12 +441,22 @@ export function applyOnboardParsed(p: any, applied: OnboardApplied): void {
   // first-run walk said "half marathon on Nov 15, under 1:50": without this it landed
   // only as a dated life event, and the first week talked about a quality run the
   // calendar never showed. An unusable shape (a race with no date) changes nothing.
+  // A goal already stated is replaced only when the words state a running goal, and then
+  // merged so what the new words left out stands (mergeStatedEnduranceGoal).
   const enduranceGoal = p.endurance_goal ? normalizeEnduranceGoal(p.endurance_goal) : null;
   if (enduranceGoal) {
     try {
-      setProfile({ endurance_goal: enduranceGoal });
-      applied.endurance_goal = enduranceGoal.mode;
-      applied.profile = true;
+      const stored = normalizeEnduranceGoal(getProfile()?.endurance_goal_json);
+      const next = !stored
+        ? enduranceGoal
+        : statesRunningGoal(opts.raw ?? "")
+          ? mergeStatedEnduranceGoal(stored, enduranceGoal)
+          : null;
+      if (next) {
+        setProfile({ endurance_goal: next });
+        applied.endurance_goal = next.mode;
+        applied.profile = true;
+      }
     } catch (err) { log.warn("[onboard] could not store the stated running goal", { error: err }); }
   }
   if (Array.isArray(p.supplements) && p.supplements.length) {
@@ -512,7 +554,7 @@ export async function onboardFromText(
     const p: any = result.parsed;
     if (p && typeof p === "object") {
       source = "agent";
-      applyOnboardParsed(p, applied);
+      applyOnboardParsed(p, applied, { raw });
     }
   } catch (error) {
     if (hooks?.signal?.aborted) throw error;

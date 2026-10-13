@@ -3739,10 +3739,21 @@ connected, then letting it talk. Three server pieces:
   `welcomeRunFollowUp` asks ONE question — only when running or a race was mentioned and the run
   days (or, with a goal to anchor it, the weekly distance) are still unsaid. It rides the phase meta
   and result as `follow_up`; Meet paints it after the reply and the composer answers it while the
-  week composes. `POST /api/welcome/follow-up {text}` reads the answer deterministically (weekday
-  names, a distance with its unit) and applies it through the existing setters — the stated
-  `endurance_schedule` (never over one already stated) and the goal's `weekly_km` (the race
-  build's starting anchor) — answering `{ok, reply, applied, week}` at once.
+  week composes. `POST /api/welcome/follow-up {text}` reads the answer deterministically and applies
+  it through the existing setters — the stated `endurance_schedule` (never over one already stated)
+  and the goal's `weekly_km` (the race build's starting anchor) — answering `{ok, reply, applied,
+  week}` at once. The reading (`src/repo/run-words.ts`) is bounded on purpose: weekdays as whole
+  words, with the abbreviations that are ordinary words (sat, sun, wed, mon) counted only inside a
+  day list or range ("Tue, Thu and Sun", "Mon-Fri") or capitalised after "on"; a day under a negation
+  ("not Mondays", "Monday is rest") never lands. A distance is the week's only when stated per week
+  at the distance ("30 km a week", "weekly mileage of 30 km") — never a long run, a race or an event
+  distance ("training for a 10k"); "3x a week, 5 km each" is read as 15 km only when it is the
+  answer's one distance. Running intent itself is the same module: "run a tight ship" and "I don't
+  run" ask nothing. Unsure → nothing stored, and the reply says only what actually landed (or that
+  the run days were already set). The onboard path (`applyOnboardParsed`, MCP `onboard` / `POST
+  /api/onboard`, which run on existing installs too) changes a stated running goal or run week only
+  when the text explicitly states it — a race or event distance for the goal (merged, so a stated
+  weekly volume or target stands), every extracted run weekday named in the words for the week.
 - **The reveal** shows the WHOLE landed week as Today's calendar holds it (`welcomeCalendarWeek`,
   `src/coachOps/welcome-calendar.ts`, over `planWeek`): lifts and the run engine's runs on the
   weekdays they land; a week with no weekdays to stand on keeps the lift-only, plan-order rows. A

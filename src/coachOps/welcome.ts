@@ -532,7 +532,7 @@ export async function welcomeCoach(
 
   const applied = emptyOnboardApplied();
   applyOnboardBase(raw, applied);
-  applyOnboardParsed(parsed, applied);
+  applyOnboardParsed(parsed, applied, { raw });
   const reply = welcomeReplyFrom(parsed, today);
   // The one follow-up, read after the first message landed so nothing it said is asked
   // again. It rides with the reply, so the person can answer while the week composes.
