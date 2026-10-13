@@ -151,9 +151,11 @@ function writeDayRead(date: string, read: any, expectedStaleOverride?: CachedOve
     read.agent ?? null,
     override
   );
-  // Keep the table to a rolling few weeks — old reads are never served.
+  // Keep the table to a rolling few weeks — old reads are never served. Measured from
+  // Cairn's own local day, never SQLite's UTC 'now', so the window agrees with the
+  // date every read is keyed by.
   try {
-    db.prepare(`DELETE FROM day_reads WHERE date < date('now','-21 days')`).run();
+    db.prepare(`DELETE FROM day_reads WHERE date < date(?, '-21 days')`).run(localDateISO());
   } catch { /* bounding the table is housekeeping — never fail the read it rode in on */ }
   // Persist the recommendation as a bounded, outcome-addressable decision carrying
   // a falsifiable read-adherence expectation. This runs after the canonical cache
