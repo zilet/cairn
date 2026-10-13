@@ -13,6 +13,7 @@ import {
   welcomeRunFollowUp,
 } from "../dist/coachOps.js";
 import { getEnduranceGoal, getEnduranceSchedule, setProfile } from "../dist/repo/profile.js";
+import { setSettings } from "../dist/repo/settings.js";
 import { violatesReadingGrammar } from "../dist/repo/day-read-grammar.js";
 import { personContextRouter } from "../dist/routes/person-context.js";
 import { addDaysISO, localDateISO } from "../dist/repo/shared.js";
@@ -55,6 +56,104 @@ test("running mentioned without a goal asks only the days (the distance has nowh
   assert.ok(WELCOME_FOLLOW_UP_QUESTIONS.days.includes(ask.question));
 });
 
+test("only genuine running or race intent asks; an idiom or a negation does not", () => {
+  for (const words of [
+    "I don't run and have no races planned",
+    "I run a tight ship at work and want to get stronger",
+    "In the long run I want to be strong",
+    "I'm running late most days, so short lifts please",
+    "I run my own company, three lifting days",
+    "I walk 10k steps a day and lift Mon/Wed/Fri",
+  ]) {
+    assert.equal(welcomeRunFollowUp(words), null, words);
+  }
+  for (const words of [
+    "Half marathon in November",
+    "I jog on weekends and lift three days",
+    "Not a runner, but I want to do a 5k",
+    "Lifting four days, and I run 3x a week",
+    "Training for a 10k",
+  ]) {
+    assert.ok(welcomeRunFollowUp(words), words);
+  }
+});
+
+// The reviewer's table: each answer must read exactly this, and nothing more.
+const ANSWERS = [
+  // A long run's distance is never the week's volume.
+  ["I run 4 days a week; my long run is 15 km", [], null],
+  // Count times a per-run distance, when it is the answer's one distance.
+  ["3x a week, 5 km each", [], 15],
+  ["twice a week, 8k each, plus a 15k long run", [], null],
+  // A race distance is not a volume.
+  ["Tuesdays and Sundays, training for a 10k", [2, 0], null],
+  // "sat" the verb and "sun" the noun are not days.
+  ["I sat out most of last month but usually Tue and Thu", [2, 4], null],
+  ["in the sun on weekends", [6, 0], null],
+  // A ruled-out day never lands.
+  ["Not Mondays — Tue, Thu and Sun", [2, 4, 0], null],
+  ["I don't run on Mondays, but Tue/Thu", [2, 4], null],
+  ["Monday is rest, Tue/Thu/Sat", [2, 4, 6], null],
+  ["Mon-Fri except Wednesday", [1, 2, 4, 5], null],
+  // Ranges.
+  ["Mon-Fri easy", [1, 2, 3, 4, 5], null],
+  ["Monday to Friday", [1, 2, 3, 4, 5], null],
+  // Per-week distances, said at the distance.
+  ["20 miles a week", [], 32.2],
+  ["I run 30 km a week", [], 30],
+  ["20-30 km per week", [], 25],
+  ["weekly mileage of about 25 km", [], 25],
+  ["long run on Sun, a 40k week", [0], 40],
+  ["sat/sun", [6, 0], null],
+  ["not sure yet", [], null],
+];
+
+test("the answer table: days and weekly volume read exactly as said", () => {
+  for (const [words, dows, weekly] of ANSWERS) {
+    const read = parseRunFollowUpAnswer(words);
+    assert.deepEqual(plain(read.days.map((d) => d.dow)), dows, `days of: ${words}`);
+    assert.equal(read.weekly_km, weekly, `weekly of: ${words}`);
+  }
+  assert.ok(
+    parseRunFollowUpAnswer("Mon-Fri easy").days.every((d) => d.kind === "easy"),
+    "a range keeps the kind its clause gave"
+  );
+});
+
+test("a weekly distance in miles lands in km and is said back in miles", () => {
+  race();
+  setSettings({ run_units: "mi" });
+  const out = answerWelcomeFollowUp("Tuesdays and Saturdays, 20 miles a week");
+  assert.equal(getEnduranceGoal().weekly_km, 32.2);
+  assert.match(out.reply, /20 mi a week/);
+});
+
+test("the reply says what landed, and only that", () => {
+  race();
+  const daysOnly = answerWelcomeFollowUp("Tuesdays and Saturdays, training for a 10k");
+  assert.deepEqual(plain(daysOnly.applied.run_days), [2, 6]);
+  assert.equal(daysOnly.applied.weekly_km, null);
+  assert.doesNotMatch(daysOnly.reply, /either/);
+  assert.match(daysOnly.reply, /You can change the days/);
+  assert.match(daysOnly.reply, /didn't catch a weekly distance/);
+  assert.equal(violatesReadingGrammar(daysOnly.reply), null);
+
+  const volumeOnly = answerWelcomeFollowUp("about 30 km a week");
+  assert.equal(volumeOnly.applied.weekly_km, 30);
+  assert.doesNotMatch(volumeOnly.reply, /either/);
+  assert.match(volumeOnly.reply, /You can change that distance/);
+  assert.equal(violatesReadingGrammar(volumeOnly.reply), null);
+});
+
+test("days already set: the reply says they stay, never that it could not pick them out", () => {
+  setProfile({ endurance_schedule: { days: [{ dow: 2, kind: "any" }], source: "athlete" } });
+  const out = answerWelcomeFollowUp("Fridays and Sundays");
+  assert.deepEqual(plain(out.applied.run_days), []);
+  assert.match(out.reply, /already set/);
+  assert.doesNotMatch(out.reply, /couldn't pick out/);
+  assert.equal(violatesReadingGrammar(out.reply), null);
+});
+
 test("every phrasing holds the reading grammar and asks one question", () => {
   for (const set of Object.values(WELCOME_FOLLOW_UP_QUESTIONS)) {
     assert.ok(set.length >= 3);
@@ -73,9 +172,9 @@ test("the answer is read from their words: weekdays with the kind they gave, and
     { dow: 0, kind: "long" },
   ]);
   assert.equal(a.weekly_km, 40.2);
-  const b = parseRunFollowUpAnswer("weekends, 30k", ["days", "volume"]);
+  const b = parseRunFollowUpAnswer("weekends, 30k");
   assert.deepEqual(plain(b.days.map((d) => d.dow)), [6, 0]);
-  assert.equal(b.weekly_km, 30);
+  assert.equal(b.weekly_km, null, "a bare distance is not said to be the week's");
   const c = parseRunFollowUpAnswer("Saturdays, my long run is 16 km");
   assert.equal(c.weekly_km, null, "the long run's distance is not the week's");
   const d = parseRunFollowUpAnswer("not sure yet");

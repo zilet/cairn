@@ -11,9 +11,10 @@
 //     build starts from when nothing is logged yet (only when there is a goal to hold it).
 //
 // Already said (in the first message, or by an earlier answer) → not asked. The answer
-// is read deterministically from the person's own words: weekday names they wrote, and a
-// distance with its unit. Nothing they did not write is invented; what cannot be read is
-// said back plainly, with Ask as the place to tell it later.
+// is read deterministically from the person's own words (src/repo/run-words.ts): weekday
+// names they wrote, and a distance they said was the week's. Nothing they did not write
+// is invented; what cannot be read is said back plainly, with Ask as the place to tell it
+// later. When unsure, nothing is stored.
 import { pickDayVariant } from "../repo/brain/day-read-rules.js";
 import {
   getEnduranceGoal,
@@ -25,6 +26,7 @@ import {
 import { distanceWords, kmFromMiles } from "../repo/display-words.js";
 import { athleteUnits } from "../repo/settings.js";
 import { localDateISO } from "../repo/shared.js";
+import { mentionsRunningIntent, namedWeekdays } from "../repo/run-words.js";
 import { log } from "../log.js";
 import { welcomeCalendarWeek, type WelcomeWeekDay } from "./welcome-calendar.js";
 
@@ -53,9 +55,15 @@ const ASK_VOLUME: readonly string[] = [
 ];
 export const WELCOME_FOLLOW_UP_QUESTIONS = { both: ASK_BOTH, days: ASK_DAYS, volume: ASK_VOLUME } as const;
 
-// Running in the person's own words: the activity, or a race distance.
-const RUNNING_WORDS =
-  /\b(?:run|runs|running|runner|ran|jog|jogging|race|racing|marathon|half[\s-]*marathon|ultra|parkrun|5\s?k|10\s?k|\d+\s?(?:km|k)\s+race)\b/i;
+// What is still unsaid, read off the profile: the run days (none stated), and the weekly
+// volume (only when a goal is there to hold it and it has none).
+function stillUnsaid(date: string): WelcomeFollowUpAsk[] {
+  const goal = getEnduranceGoal(date);
+  const asks: WelcomeFollowUpAsk[] = [];
+  if (!getEnduranceSchedule()?.days.length) asks.push("days");
+  if (goal && !(Number(goal.weekly_km) > 0)) asks.push("volume");
+  return asks;
+}
 
 /**
  * The follow-up this welcome should ask, or null. Read AFTER the first message was
@@ -64,35 +72,22 @@ const RUNNING_WORDS =
  */
 export function welcomeRunFollowUp(raw: string, date = localDateISO()): WelcomeFollowUp | null {
   let goal: ReturnType<typeof getEnduranceGoal> = null;
-  let runDays = 0;
+  let asks: WelcomeFollowUpAsk[] = [];
   try {
     goal = getEnduranceGoal(date);
-    runDays = getEnduranceSchedule()?.days.length ?? 0;
+    asks = stillUnsaid(date);
   } catch {
     return null;
   }
-  if (!goal && !RUNNING_WORDS.test(String(raw ?? ""))) return null;
-  const asks: WelcomeFollowUpAsk[] = [];
-  if (!runDays) asks.push("days");
-  // The volume has somewhere to go only when there is a goal to anchor (weekly_km).
-  if (goal && !(Number(goal.weekly_km) > 0)) asks.push("volume");
+  // Running as something they do or want — "run a tight ship" is not running, and "I
+  // don't run and have no races planned" is not intent (run-words.ts).
+  if (!goal && !mentionsRunningIntent(raw)) return null;
   if (!asks.length) return null;
   const set = asks.length === 2 ? ASK_BOTH : asks[0] === "days" ? ASK_DAYS : ASK_VOLUME;
   return { asks, question: pickDayVariant(set, date, `welcome_follow_up:${asks.join("+")}`) };
 }
 
 // ---------- reading the answer ----------
-
-const DAY_WORDS: ReadonlyArray<[RegExp, number[]]> = [
-  [/\bweekends?\b/i, [6, 0]],
-  [/\bsun(?:day)?s?\b/i, [0]],
-  [/\bmon(?:day)?s?\b/i, [1]],
-  [/\btue(?:s|sday)?s?\b/i, [2]],
-  [/\bwed(?:s|nesday)?s?\b/i, [3]],
-  [/\bthu(?:r|rs|rsday)?s?\b/i, [4]],
-  [/\bfri(?:day)?s?\b/i, [5]],
-  [/\bsat(?:urday)?s?\b/i, [6]],
-];
 
 type RunKind = "easy" | "quality" | "long" | "any";
 
@@ -108,38 +103,69 @@ function clauseKind(clause: string): RunKind {
 const DISTANCE =
   /(\d+(?:\.\d+)?)(?:\s*(?:-|–|to)\s*(\d+(?:\.\d+)?))?\s*(km|k|kms|kilometers?|kilometres?|mi|mile|miles)\b/gi;
 
+// A distance is the WEEK's only when the words say so right at it: "30 km a week",
+// "20 miles per week", "25k/wk", "30 km weekly", "a 40k week", "weekly mileage of 30 km",
+// "30 km in a normal week". "A week" elsewhere in the answer ("3x a week, 5 km each")
+// does not make a distance weekly.
+const PER_WEEK_AFTER =
+  /^\s*(?:(?:in\s+)?total\s+|or\s+so\s+|-?ish\s+|altogether\s+)?(?:(?:a|per|each|every|\/)\s*(?:week|wk)\b|weekly\b|(?:week|wk)s?\b|in\s+an?\s+(?:(?:normal|typical|usual|average|regular|good)\s+)?(?:week|wk)\b)/i;
+const PER_WEEK_BEFORE =
+  /\bweekly(?:\s+(?:mileage|volume|distance|total|running|km|miles))?\s*(?:is|of|=|:|at)?\s*(?:around|about|roughly|approx(?:imately)?|~)?\s*$/i;
+// A distance that is ONE run's, never the week's: the long run, a race or an event
+// distance ("training for a 10k"), or a per-run amount ("5 km each").
+const LONG_BEFORE = /\blong(?:est)?(?:\s+(?:run|one))?\s*(?:is|of|=|:|at|was)?\s*(?:around|about|roughly|~)?\s*$/i;
+const EVENT_BEFORE = /\b(?:a|an|the|my)\s+$|\brace\s+(?:is\s+)?(?:an?\s+)?$/i;
+const EVENT_AFTER = /^\s*(?:races?|run\b|pb|pr|time|event)/i;
+const PER_RUN_AFTER =
+  /^\s*(?:each|per\s+(?:run|session|outing)|every\s+(?:run|time)|a\s+(?:run|go|session)|each\s+time)\b/i;
+// How many runs a week they said: "3x a week", "four days a week", "twice a week".
+const COUNT_WORDS: Record<string, number> = {
+  one: 1,
+  once: 1,
+  two: 2,
+  twice: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+};
+const RUNS_PER_WEEK =
+  /\b(\d{1,2}|one|two|three|four|five|six|seven|once|twice)\s*(?:x|×|times|days|runs|sessions)?\s*(?:a|per|each|every|\/)\s*(?:week|wk)\b/i;
+
 export interface RunFollowUpAnswer {
   days: Array<{ dow: number; kind: RunKind }>;
   weekly_km: number | null;
 }
 
 /**
- * What the answer SAYS: the weekdays it names (with a run kind when the same clause says
- * one — "long run Sunday"), and a weekly distance. A distance counts as weekly when the
- * words around it say so ("a week", "weekly", "per week"), or when it is the only
- * distance in an answer to a volume question and is not the long run's.
+ * What the answer SAYS: the weekdays it names (run-words.ts — whole words only, the
+ * ambiguous abbreviations only in a day context, a ruled-out day never), each with a
+ * run kind when its clause says one ("long run Sunday"); and a weekly distance.
+ *
+ * The weekly distance is read in exactly two ways, and nothing else counts:
+ *   1. a distance stated per week, at the distance ("30 km a week", "20 miles per week",
+ *      "weekly mileage of 30 km") — never a long run's, a race's or a per-run one;
+ *   2. a per-run distance times a stated run count, when that is the ONLY distance in
+ *      the answer: "3x a week, 5 km each" is 15 km. The person said both numbers, the
+ *      product is what they described, and the reply says it back, so a wrong reading
+ *      is one sentence from corrected. A second distance anywhere (a long run, a race)
+ *      makes the week's total unknowable, so nothing is stored.
+ * A bare distance ("weekends, 30k") is not read as the week's: when unsure, null.
  */
-export function parseRunFollowUpAnswer(
-  text: unknown,
-  asks: readonly WelcomeFollowUpAsk[] = ["days", "volume"]
-): RunFollowUpAnswer {
+export function parseRunFollowUpAnswer(text: unknown): RunFollowUpAnswer {
   const words = typeof text === "string" ? text.slice(0, 600) : "";
   const byDow = new Map<number, RunKind>();
-  for (const clause of words.split(/[,;.\n]|\bthen\b/i)) {
-    const kind = clauseKind(clause);
-    for (const [pattern, dows] of DAY_WORDS) {
-      if (!pattern.test(clause)) continue;
-      for (const dow of dows) {
-        const prior = byDow.get(dow);
-        byDow.set(dow, prior && prior !== "any" ? prior : kind);
-      }
-    }
+  for (const mention of namedWeekdays(words).days) {
+    const kind = clauseKind(mention.clause);
+    const prior = byDow.get(mention.dow);
+    byDow.set(mention.dow, prior && prior !== "any" ? prior : kind);
   }
   const days = [...byDow.entries()]
     .sort((a, b) => ((a[0] + 6) % 7) - ((b[0] + 6) % 7))
     .map(([dow, kind]) => ({ dow, kind }));
 
-  const found: Array<{ km: number; weekly: boolean; long: boolean }> = [];
+  const found: Array<{ km: number; weekly: boolean; perRun: boolean }> = [];
   for (const match of words.matchAll(DISTANCE)) {
     const low = Number(match[1]);
     const high = match[2] != null ? Number(match[2]) : low;
@@ -147,18 +173,29 @@ export function parseRunFollowUpAnswer(
     const raw = (low + high) / 2;
     const km = unit.startsWith("m") ? kmFromMiles(raw) : raw;
     const at = match.index ?? 0;
-    const before = words.slice(Math.max(0, at - 24), at);
-    const after = words.slice(at + match[0].length, at + match[0].length + 24);
+    // The words around a distance stop at a clause break, so one clause never
+    // qualifies another clause's distance.
+    const head = words.slice(Math.max(0, at - 40), at);
+    const before = head.slice(head.search(/[^.;!?\n,]*$/));
+    const after = words.slice(at + match[0].length, at + match[0].length + 40).split(/[.;!?\n,]/)[0];
+    const long = LONG_BEFORE.test(before);
+    const event = EVENT_BEFORE.test(before) || EVENT_AFTER.test(after);
+    const statedWeekly = PER_WEEK_AFTER.test(after) || PER_WEEK_BEFORE.test(before);
+    // "a 40k week" is a week even with the article in front of it.
+    const weekNoun = /^\s*(?:week|wk)s?\b/i.test(after);
     found.push({
       km,
-      weekly: /\b(?:weekly|a week|per week|each week|every week|\/\s?w(?:ee)?k|wk)\b/i.test(`${before} ${after}`),
-      long: /\blong\b/i.test(`${before} ${after}`),
+      weekly: !long && statedWeekly && (weekNoun || !event),
+      perRun: !long && !event && PER_RUN_AFTER.test(after),
     });
   }
-  const weekly =
-    found.find((d) => d.weekly) ??
-    (asks.includes("volume") && found.length === 1 && !found[0].long ? found[0] : undefined);
-  const weekly_km = weekly && weekly.km >= 1 && weekly.km <= 400 ? Math.round(weekly.km * 10) / 10 : null;
+  let weeklyKm: number | null = found.find((d) => d.weekly)?.km ?? null;
+  if (weeklyKm == null && found.length === 1 && found[0].perRun) {
+    const count = RUNS_PER_WEEK.exec(words)?.[1]?.toLowerCase();
+    const runs = count == null ? Number.NaN : (COUNT_WORDS[count] ?? Number(count));
+    if (Number.isInteger(runs) && runs >= 1 && runs <= 14) weeklyKm = found[0].km * runs;
+  }
+  const weekly_km = weeklyKm != null && weeklyKm >= 1 && weeklyKm <= 400 ? Math.round(weeklyKm * 10) / 10 : null;
   return { days, weekly_km };
 }
 
@@ -180,6 +217,50 @@ function listWords(items: string[]): string {
 }
 
 /**
+ * The reply, about exactly what happened: what landed (and that it can change), what
+ * was asked but not read (calmly, with Ask as the place to say it), and — when the run
+ * days were already stated — that they stay as they are, never "I couldn't pick out
+ * days".
+ */
+function followUpReply(input: {
+  runDays: number[];
+  weeklyKm: number | null;
+  missing: WelcomeFollowUpAsk[];
+  daysKept: boolean;
+}): string {
+  const landed: string[] = [];
+  if (input.runDays.length) {
+    const ordered = [...input.runDays].sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7));
+    landed.push(`your runs go on ${listWords(ordered.map((dow) => WEEKDAY_NAMES[dow]))}`);
+  }
+  if (input.weeklyKm != null) {
+    // In the athlete's own units (display-words.ts is the one formatter).
+    const distance = distanceWords(input.weeklyKm, athleteUnits().distance, { whole: true });
+    landed.push(`the build starts from around ${distance} a week`);
+  }
+  const missingWords =
+    input.missing.length === 2
+      ? "your run days or a weekly distance"
+      : input.missing[0] === "days"
+        ? "which days you run"
+        : "a weekly distance";
+  const kept = "Your run days were already set, so they stay as they are.";
+  if (landed.length) {
+    const sentences = [`Got it: ${listWords(landed)}.`];
+    if (input.daysKept) sentences.push(kept);
+    if (input.missing.length) sentences.push(`I didn't catch ${missingWords} there; tell me in Ask any time.`);
+    const what = landed.length === 2 ? "either" : input.runDays.length ? "the days" : "that distance";
+    sentences.push(`You can change ${what} by just telling me.`);
+    return sentences.join(" ");
+  }
+  if (input.daysKept && !input.missing.length) return `${kept} Tell me in Ask if they've changed.`;
+  if (input.missing.length) {
+    return `${input.daysKept ? `${kept} ` : ""}I couldn't pick out ${missingWords} there, so I've left that for now. Tell me any time in Ask and I'll set it.`;
+  }
+  return "I couldn't pick out days or a distance there. Tell me any time in Ask and I'll set them.";
+}
+
+/**
  * Apply the person's answer through the existing setters: their run weekdays as the
  * stated endurance_schedule (only when none is stated yet — the follow-up never
  * overwrites a schedule they gave), and the weekly distance onto the endurance goal's
@@ -189,10 +270,20 @@ function listWords(items: string[]): string {
 export function answerWelcomeFollowUp(text: unknown, date = localDateISO()): WelcomeFollowUpResult {
   const answer = parseRunFollowUpAnswer(text);
   const applied: WelcomeFollowUpResult["applied"] = { run_days: [], weekly_km: null };
+  let asked: WelcomeFollowUpAsk[] = [];
   try {
-    if (answer.days.length && answer.days.length < 7 && !getEnduranceSchedule()?.days.length) {
-      setProfile({ endurance_schedule: { days: answer.days, source: "chat" } });
-      applied.run_days = getEnduranceSchedule()?.days.map((d) => d.dow) ?? [];
+    asked = stillUnsaid(date);
+  } catch {
+    asked = [];
+  }
+  let daysKept = false;
+  try {
+    if (answer.days.length && answer.days.length < 7) {
+      if (getEnduranceSchedule()?.days.length) daysKept = true;
+      else {
+        setProfile({ endurance_schedule: { days: answer.days, source: "chat" } });
+        applied.run_days = getEnduranceSchedule()?.days.map((d) => d.dow) ?? [];
+      }
     }
   } catch (err) {
     log.warn("[welcome] could not store the run days from the follow-up", { error: err });
@@ -209,18 +300,9 @@ export function answerWelcomeFollowUp(text: unknown, date = localDateISO()): Wel
   } catch (err) {
     log.warn("[welcome] could not store the weekly volume from the follow-up", { error: err });
   }
-  const parts: string[] = [];
-  if (applied.run_days.length) {
-    const ordered = [...applied.run_days].sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7));
-    parts.push(`your runs go on ${listWords(ordered.map((dow) => WEEKDAY_NAMES[dow]))}`);
-  }
-  if (applied.weekly_km != null) {
-    // In the athlete's own units (display-words.ts is the one formatter).
-    const distance = distanceWords(applied.weekly_km, athleteUnits().distance, { whole: true });
-    parts.push(`the build starts from around ${distance} a week`);
-  }
-  const reply = parts.length
-    ? `Got it: ${listWords(parts)}. You can change either by just telling me.`
-    : "I couldn't pick out days or a distance there. Tell me any time in Ask and I'll set them.";
+  const missing = asked.filter((ask) =>
+    ask === "days" ? !applied.run_days.length && !daysKept : applied.weekly_km == null
+  );
+  const reply = followUpReply({ runDays: applied.run_days, weeklyKm: applied.weekly_km, missing, daysKept });
   return { ok: true, reply, applied, week: welcomeCalendarWeek(date) };
 }
