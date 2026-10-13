@@ -8,6 +8,10 @@ import {
   MEMORY_MAINT_STATE_KEY,
   memoryMaintenanceDue,
   seedMemorySlotOnFreshInstall,
+  FRESH_INSTALL_DAILY_SLOTS,
+  FRESH_INSTALL_WEEKLY_SLOTS,
+  weeklySlotStamp,
+  enqueueTeamReviewIfDue,
 } from "../dist/scheduler.js";
 import { localDateISO } from "../dist/repo/shared.js";
 import { brainRevisionSlotStamp } from "../dist/scheduler.js";
@@ -181,6 +185,42 @@ test("a fresh install booted after the memory hour waits for the next one; an up
   seedMemorySlotOnFreshInstall(new Date(`${slot}T09:00:00`));
   assert.notEqual(repo.getAppState(MEMORY_MAINT_STATE_KEY), slot, "an upgraded DB must keep its catch-up");
   assert.equal(memoryMaintenanceDue(new Date(`${slot}T09:01:00`)), true);
+});
+
+test("a fresh install owes no catch-up on the agentic weekly passes or the week-ahead warm-up", () => {
+  // A real first-run walk: booted on a Tuesday, the miss-tolerant weekly slots read last
+  // Sunday as owed and spawned the provider over an empty record before the person had
+  // said a word. The boot seed acknowledges the current slots instead. Booted the
+  // morning after the coach slot, inside the team review's one-day grace.
+  const s = repo.getSettings();
+  const lastSlot = weeklySlotStamp(new Date(), s.coach_day, s.coach_hour);
+  const nextDay = new Date(Date.parse(`${lastSlot}T12:00:00Z`) + 864e5).toISOString().slice(0, 10);
+  const now = new Date(`${nextDay}T10:00:00`);
+  seedMemorySlotOnFreshInstall(now);
+  const week = weeklySlotStamp(now, s.coach_day, s.coach_hour);
+  assert.equal(week, lastSlot);
+  for (const key of FRESH_INSTALL_WEEKLY_SLOTS) assert.equal(repo.getAppState(key), week, key);
+  for (const key of FRESH_INSTALL_DAILY_SLOTS) assert.equal(repo.getAppState(key), nextDay, key);
+  for (const key of ["weekly_read_last_slot", "weekly_health_synthesis_last_slot", "team_review_last_slot"])
+    assert.ok(FRESH_INSTALL_WEEKLY_SLOTS.includes(key), `${key} is seeded`);
+  // The team review's own gate reads the seeded stamp: nothing is enqueued this week,
+  // even once the welcome has composed a plan.
+  repo.savePlanDay(1, "Upper A", null, [{ exercise: "Bench Press", sets: 3, rep_low: 6, rep_high: 8 }]);
+  const enqueued = [];
+  const settings = { proactive_enabled: true, coach_day: s.coach_day, coach_hour: s.coach_hour };
+  assert.equal(
+    enqueueTeamReviewIfDue(now, settings, (id) => enqueued.push(id)),
+    null
+  );
+  assert.deepEqual(enqueued, []);
+});
+
+test("an upgraded database keeps its weekly catch-up", async () => {
+  const now = new Date(`${localDateISO()}T10:00:00`);
+  await repo.runSchedulerOperation("some_other_daily_job", localDateISO(), async () => ({ outcome: "succeeded" }));
+  seedMemorySlotOnFreshInstall(now);
+  for (const key of [...FRESH_INSTALL_WEEKLY_SLOTS, ...FRESH_INSTALL_DAILY_SLOTS])
+    assert.ok(!repo.getAppState(key), `${key} stays owed on an upgraded DB`);
 });
 
 test("legacy weekly coach rotates parseable wrong-shape JSON through its semantic contract", async () => {

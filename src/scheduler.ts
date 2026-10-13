@@ -55,7 +55,7 @@ import {
   exerciseGuideAutoImportAllowed,
   exerciseGuideAutoImportPass,
 } from "./domain/training/exercise-guide-use-case.js";
-import { hasLoggedHistory } from "./repo/first-run.js";
+import { hasLoggedHistory, isStartingOut } from "./repo/first-run.js";
 import { createHash } from "node:crypto";
 import { log } from "./log.js";
 // Stream 2 (self-updating memory): quiet nightly memory housekeeping + outcome
@@ -250,10 +250,33 @@ export function memoryMaintenanceDue(now: Date): boolean {
 // first paint. Acknowledging today makes the first pass wait for the next
 // memory hour, as it always did. An upgraded database has scheduler history,
 // so a genuinely missed hour still catches up.
+//
+// The same holds for the agentic WEEKLY passes and the daily week-ahead warm-up. Their
+// slots are miss-tolerant, so on a fresh install the coach slot that already passed
+// (last Sunday evening) read as owed: within a minute of first boot — before the person
+// had said a word — Cairn spawned the provider for a weekly read, a health synthesis and
+// a week ahead over an empty record (a real walk: four agent runs, one an ERROR retry),
+// and those runs took the spawn permit the welcome's own hello and first conversation
+// wait on. A fresh install meets its first weekly pass at the NEXT coach slot, when
+// there is a week to read.
+export const FRESH_INSTALL_WEEKLY_SLOTS = [
+  "coach_last_slot",
+  "weekly_read_last_slot",
+  "weekly_health_synthesis_last_slot",
+  "nutrition_checkin_last_slot",
+  "program_evolution_last_slot",
+  "team_review_last_slot",
+] as const;
+export const FRESH_INSTALL_DAILY_SLOTS = ["week_ahead_warm_date"] as const;
+
 export function seedMemorySlotOnFreshInstall(now = new Date()) {
-  if (repo.getAppState(MEMORY_MAINT_STATE_KEY)) return;
   if (repo.hasSchedulerHistory()) return;
-  repo.setAppState(MEMORY_MAINT_STATE_KEY, localToday(now));
+  const today = localToday(now);
+  if (!repo.getAppState(MEMORY_MAINT_STATE_KEY)) repo.setAppState(MEMORY_MAINT_STATE_KEY, today);
+  for (const key of FRESH_INSTALL_DAILY_SLOTS) if (!repo.getAppState(key)) repo.setAppState(key, today);
+  const s = repo.getSettings();
+  const week = weeklySlotStamp(now, s.coach_day, s.coach_hour);
+  for (const key of FRESH_INSTALL_WEEKLY_SLOTS) if (!repo.getAppState(key)) repo.setAppState(key, week);
 }
 
 // ---- THE ORPHAN-DRAFT SWEEP GATE ----
@@ -1626,7 +1649,13 @@ export function startScheduler() {
   setTimeout(
     inOwnerTimeZone(() => {
       const today = warmToday();
-      if (!repo.getCachedDayRead(today)) {
+      // Day one (no week, nothing logged — a fresh install before its welcome) reads by
+      // its own deterministic rule; there is nothing for an agent to write about yet,
+      // so the boot warm is the floor and spends no provider run.
+      if (!repo.getCachedDayRead(today) && isStartingOut()) {
+        precomputeDayReadFloor(today);
+        log.info(`[brief] warmed the deterministic floor for ${today} (day one).`);
+      } else if (!repo.getCachedDayRead(today)) {
         precomputeDayRead(today)
           .then(() => log.info(`[brief] warmed today's day-read for ${today}.`))
           .catch((error) => recordSchedulerFailure("day_read_boot_warm", error));

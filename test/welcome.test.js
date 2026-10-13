@@ -530,6 +530,18 @@ test("the monthly whole-person revision waits for a record: the tick checks hist
   assert.ok(claim > guard, "and it does so before any slot is claimed or job queued");
 });
 
+test("the boot warm of a day-one Brief is the deterministic floor, never a provider run", () => {
+  // A real first-run walk: 26 s after a fresh boot, before anyone opened the app, the
+  // boot warm spent a provider run writing prose about a day with nothing on it.
+  const src = fs.readFileSync(path.join(root, "src/scheduler.ts"), "utf8");
+  const warm = src.slice(src.indexOf("// Boot warm: if today's read isn't cached yet"));
+  const dayOne = warm.indexOf("isStartingOut()");
+  const floor = warm.indexOf("precomputeDayReadFloor(today)");
+  const agent = warm.indexOf("precomputeDayRead(today)");
+  assert.ok(dayOne > 0 && floor > dayOne, "day one warms the floor");
+  assert.ok(agent > floor, "the agent warm is the other branch");
+});
+
 // ---------- the REST surface ----------
 
 function routeHandler(router, method, routePath) {
