@@ -120,3 +120,13 @@ test("an RDL is not graded as a conventional deadlift; an assisted pull-up isn't
     "both surface a 'log the true lift' prompt"
   );
 });
+
+test("day one: with nothing benchmarked the rounding-out lever never affirms benchmarks it has not read", () => {
+  // A first-run walk: the welcome composed a week, nothing was logged, and Today's block
+  // line said "Your benchmarks are all at least solid for your age" over zero benchmarks.
+  const p = repo.performanceStanding(REF, { balance: { due: ["chest"] } });
+  assert.deepEqual(p.capacities, [], "nothing is benchmarked yet");
+  assert.equal(p.lever?.headline, "Round out chest");
+  assert.doesNotMatch(p.lever.why, /benchmark/i);
+  assert.match(p.lever.why, /^Chest is the group that's lightest in your week/);
+});

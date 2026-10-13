@@ -701,12 +701,16 @@ function performanceLever(
     };
   }
   // Everything benchmarked is at least steady — point at the most-due group as a
-  // rounding-out move, or simply affirm.
+  // rounding-out move, or simply affirm. With NOTHING benchmarked yet (day one, a
+  // composed first week and no logged lift) there is no standing to affirm: the line
+  // says only what the week shows, never "your benchmarks are all solid".
   const due = balance.due?.[0];
   if (due)
     return {
       headline: `Round out ${due}`,
-      why: `Your benchmarks are all at least solid for your age — ${due} is the group that's lightest right now, so it's the cleanest place to add.`,
+      why: caps.length
+        ? `Your benchmarks are all at least solid for your age — ${due} is the group that's lightest right now, so it's the cleanest place to add.`
+        : `${due.charAt(0).toUpperCase()}${due.slice(1)} is the group that's lightest in your week right now, so it's the cleanest place to add.`,
     };
   return null;
 }
