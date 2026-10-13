@@ -12,7 +12,12 @@ import {
   type ClientBrainChangeState,
   type ClientBrainSetAside,
 } from "../../contracts/brain-changes.js";
-import { getBrainRollback, listBrainDecisions, listBrainExpectations } from "../../repo/brain-decisions.js";
+import {
+  getBrainRollback,
+  listBrainDecisions,
+  listBrainExpectations,
+  rollbackBuiltOnEmptyPlan,
+} from "../../repo/brain-decisions.js";
 import { latestBrainEvaluation } from "../../repo/brain-evaluations.js";
 import { getAppState, setAppState } from "../../repo/app-state.js";
 import { getProposal } from "../../repo/proposals.js";
@@ -783,7 +788,10 @@ function restoreLabel(decision: BrainDecision, what: Touched): string {
     case "exercise_rotation":
       return what.swaps.length === 1 ? `Bring back ${what.swaps[0].from}` : "Restore previous exercises";
     case "training_structure":
-      return "Restore your previous week";
+      // A first week composed onto an empty plan has no previous week: its Undo clears it.
+      return decision.id && rollbackBuiltOnEmptyPlan(decision.id)
+        ? "Remove this first week"
+        : "Restore your previous week";
     case "nutrition_target":
       return "Restore previous calorie target";
     case "goal_change":

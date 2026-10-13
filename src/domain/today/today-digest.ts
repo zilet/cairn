@@ -19,7 +19,7 @@ import type {
 } from "../../contracts/today-digest.js";
 import type { BrainDecision } from "../../brain/decision-contract.js";
 import { brainChangesRead } from "../brain/index.js";
-import { getBrainDecision } from "../../repo/brain-decisions.js";
+import { getBrainDecision, rollbackBuiltOnEmptyPlan } from "../../repo/brain-decisions.js";
 import { athleteLine } from "../../repo/brain/clinician-ask.js";
 import { type PlanPrescription, planPrescriptionKey, planPrescriptionSnapshot } from "../../repo/plan.js";
 import { getProposal } from "../../repo/proposals.js";
@@ -186,6 +186,10 @@ export function overnightDigest(date?: string, opts: { now?: Date } = {}): Today
       let moves: TodayDigestMove[] = [];
       try {
         const decision = getBrainDecision(change.id);
+        // The first week, composed onto an empty plan (the welcome), is not news about a
+        // change: every lift would read "added" under "Overnight · N lifts moved". The
+        // person watched it land; Ask › Changes still carries it with its Undo.
+        if (decision?.kind === "training_structure" && rollbackBuiltOnEmptyPlan(change.id)) continue;
         if (decision) moves = movesOf(decision, livePlan);
       } catch {
         moves = [];

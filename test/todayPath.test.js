@@ -12,6 +12,7 @@ import { repo, seedWeight } from "./_seed.js";
 import { todayPath, todayPathPromptView } from "../dist/repo/today-path.js";
 import { liftMoveOf, overnightDigest } from "../dist/domain/today/today-digest.js";
 import { brainChangesRead } from "../dist/domain/brain/changes-feed.js";
+import { rollbackBuiltOnEmptyPlan, saveBrainRollback } from "../dist/repo/brain-decisions.js";
 import { contextTagEffect, contextTagVocab } from "../dist/repo/context-tag-effects.js";
 import { CONTEXT_TAG_VOCAB } from "../dist/contextTags.js";
 import { localDateISO } from "../dist/repo/shared.js";
@@ -309,4 +310,66 @@ test("each context tag says what it changes, worded from what the server does wi
   for (const tag of vocab) assert.match(tag.effect, /isn't judged on it\.$/, tag.key);
   // Travel reads as a fueling disruption in the active-context engine: food targets hold.
   assert.match(contextTagEffect("travel", TODAY), /^Food targets hold/);
+});
+
+function recordWeekStructure(summary, before) {
+  const id = repo.recordDecision({
+    effective_date: TODAY,
+    kind: "training_structure",
+    domain: "training",
+    summary,
+    rationale: null,
+    source: "test",
+    source_ref_type: null,
+    source_ref_key: null,
+    status: "applied",
+    autonomy_tier: "announce",
+    risk_class: "moderate",
+    reversible: true,
+    input_fingerprint: null,
+    context: null,
+    action: {
+      changes: [
+        { day_number: 1, exercise: "Barbell Bench Press", sets: 4, rep_low: 6, rep_high: 8, change: "added", before: null },
+        { day_number: 2, exercise: "Leg Press", sets: 3, rep_low: 10, rep_high: 12, change: "added", before: null },
+      ],
+    },
+    specialist: null,
+    applied_at: `${TODAY}T09:00:00.000Z`,
+    reverted_at: null,
+    superseded_by: null,
+    evaluator_version: null,
+  });
+  const decisionId = Number(id.decision.id);
+  saveBrainRollback(decisionId, "training_plan", { version: 2, before, after: [] });
+  return decisionId;
+}
+
+test("the first week composed onto an empty plan is not overnight news, and its Undo never promises a previous week", () => {
+  // A real first-run walk: two minutes after the welcome revealed the first week, Today
+  // read "Overnight · 24 lifts moved" with every lift "added" and a "Restore your previous
+  // week" Undo — on an install that had never had a week.
+  const id = recordWeekStructure("Your four lifting days stay where you train.", []);
+  assert.equal(rollbackBuiltOnEmptyPlan(id), true);
+  const digest = overnightDigest(TODAY);
+  assert.equal(digest.changes.length, 0, "the first week is not a change to report");
+  assert.equal(digest.headline, null);
+  const row = brainChangesRead({ days: 3, asOf: TODAY })
+    .days.flatMap((day) => day.changes)
+    .find((change) => change.id === id);
+  assert.ok(row, "Ask › Changes still carries it");
+  assert.equal(row.undo.available, true);
+  assert.equal(row.undo.label, "Remove this first week");
+});
+
+test("a restructure of an existing week stays in the digest with its restore Undo", () => {
+  const before = [{ day_number: 1, name: "Full Body", items: [{ exercise: "Back Squat", sets: 3 }] }];
+  const id = recordWeekStructure("A new split.", before);
+  assert.equal(rollbackBuiltOnEmptyPlan(id), false);
+  const digest = overnightDigest(TODAY);
+  assert.equal(digest.changes.length, 1);
+  const row = brainChangesRead({ days: 3, asOf: TODAY })
+    .days.flatMap((day) => day.changes)
+    .find((change) => change.id === id);
+  assert.equal(row.undo.label, "Restore your previous week");
 });

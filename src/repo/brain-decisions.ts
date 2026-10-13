@@ -775,6 +775,20 @@ export function getBrainRollback(decisionId: number): { kind: BrainRollbackKind;
   }
 }
 
+/**
+ * True when a decision's training-plan snapshot shows there was NO plan to lift from
+ * before it — the first week, composed onto an empty plan (the welcome). Such a week is
+ * not a change to an earlier one: there is no "previous week" to restore, and it is not
+ * overnight news on Today. v2 payloads carry `before`; a legacy v1 payload IS the before.
+ */
+export function rollbackBuiltOnEmptyPlan(decisionId: number): boolean {
+  const rollback = getBrainRollback(decisionId);
+  if (!rollback || rollback.kind !== "training_plan") return false;
+  const before = Array.isArray(rollback.payload) ? rollback.payload : rollback.payload?.before;
+  if (!Array.isArray(before)) return false;
+  return !before.some((day: any) => Array.isArray(day?.items) && day.items.length > 0);
+}
+
 // ---------------------------------------------------------------------------
 // Rollback evidence (W3.2): `brain_rollbacks` is written on every reversible
 // decision but, until now, was only ever READ BACK to perform the undo itself —
