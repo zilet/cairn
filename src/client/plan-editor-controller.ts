@@ -120,7 +120,7 @@ function planRedrawComposerHtml(
     <summary><span class="lbl plan-upcoming-strip">Redraw my week</span></summary>
     <div class="plan-redraw-body">
       <p class="plan-redraw-line">${escHtml(planRedrawGuidance(posture))}</p>
-      <textarea id="planRedrawText" class="form-textarea plan-redraw-text" rows="2" maxlength="${max}" placeholder="e.g. move heavy legs to Thursday, or build the week around my six anchors">${escHtml(draft)}</textarea>
+      <textarea id="planRedrawText" class="form-textarea plan-redraw-text" rows="2" maxlength="${max}" aria-label="How to redraw your week" placeholder="e.g. move heavy legs to Thursday, or build the week around my six anchors">${escHtml(draft)}</textarea>
       ${error ? `<p class="plan-redraw-error">${escHtml(error)}</p>` : ""}
       <button class="logbtn plan-redraw-go" type="button" id="planRedrawGo" data-posture="${escAttr(posture)}" data-max="${max}">Redraw</button>
     </div>
@@ -307,7 +307,7 @@ function planEditorRecord(value: unknown): Record<string, unknown> {
 function composeWeekEntryHtml(hasDays: boolean): string {
   const opening = hasDays ? "Your plan days are still empty." : "No days in your plan yet.";
   return `<p class="plan-empty-line">${opening} Your team can shape a first week around your goal, whatever you've already logged, and any running you do.</p>
-      <input id="planComposeNote" class="form-input plan-empty-note" type="text" maxlength="240" autocomplete="off" placeholder="Anything your coach should know? (optional) — e.g. I can only train 3 days…">
+      <input id="planComposeNote" class="form-input plan-empty-note" type="text" maxlength="240" autocomplete="off" aria-label="Anything your coach should know (optional)" placeholder="Anything your coach should know? (optional) — e.g. I can only train 3 days…">
       <button class="draftbtn plan-empty-compose" type="button" id="planComposeWeek">Shape my first week →</button>
       <div id="planComposeCap" class="plan-empty-cap job-cap lbl"></div>`;
 }

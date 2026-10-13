@@ -221,7 +221,7 @@ function paintPlanEndurance(
       <div class="end-shape">
         <p class="end-shape-sub">Tell the coach what you want — it picks it up in chat, where it can move your run days and read how you're doing. Your lifting plan is never touched.</p>
         <div class="end-chips">${chips}</div>
-        <textarea id="endInstr" class="form-textarea" rows="2" placeholder="e.g. ease my long run, my knee's cranky — or find a tempo opening later this week"></textarea>
+        <textarea id="endInstr" class="form-textarea" rows="2" aria-label="What you want from this week's runs" placeholder="e.g. ease my long run, my knee's cranky — or find a tempo opening later this week"></textarea>
         <button id="endDraftBtn" class="logbtn" style="width:100%;height:44px;letter-spacing:.05em">ASK THE COACH</button>
         <div id="endDraftStatus" class="end-shape-status"></div>
         <div id="endDraft"></div>

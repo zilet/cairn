@@ -170,18 +170,18 @@ function pitemHtml(item: PlanEditorItem, dayIndex: number, itemIndex: number, la
       </div>`;
   return `<div class="pitem" data-d="${dayIndex}" data-i="${itemIndex}" data-kind="strength">
         <div class="pi-row1">
-          <input class="pi-ex" value="${escAttr(item.exercise)}" placeholder="Exercise" list="exerciseNames">
+          <input class="pi-ex" value="${escAttr(item.exercise)}" placeholder="Exercise" aria-label="Exercise" list="exerciseNames">
           ${ord}
         </div>
         <div class="pi-nums">
-          <input class="pi-sets" type="number" inputmode="numeric" value="${item.sets ?? ""}" placeholder="sets">
-          <input class="pi-lo" type="number" inputmode="numeric" value="${item.rep_low ?? ""}" placeholder="lo">
-          <input class="pi-hi" type="number" inputmode="numeric" value="${item.rep_high ?? ""}" placeholder="hi">
-          <input class="pi-tw" type="number" inputmode="decimal" value="${item.target_weight ?? ""}" placeholder="wt">
-          <input class="pi-wu" type="number" inputmode="numeric" value="${item.warmup_sets ?? ""}" placeholder="WU">
+          <input class="pi-sets" type="number" inputmode="numeric" value="${item.sets ?? ""}" placeholder="sets" aria-label="Sets">
+          <input class="pi-lo" type="number" inputmode="numeric" value="${item.rep_low ?? ""}" placeholder="lo" aria-label="Reps, low end">
+          <input class="pi-hi" type="number" inputmode="numeric" value="${item.rep_high ?? ""}" placeholder="hi" aria-label="Reps, high end">
+          <input class="pi-tw" type="number" inputmode="decimal" value="${item.target_weight ?? ""}" placeholder="wt" aria-label="Target weight">
+          <input class="pi-wu" type="number" inputmode="numeric" value="${item.warmup_sets ?? ""}" placeholder="WU" aria-label="Warm-up sets">
           <button class="delbtn" data-delitem="${dayIndex}:${itemIndex}">✕</button>
         </div>
-        <input class="pi-note" value="${escAttr(item.note || "")}" placeholder="Note (optional)">
+        <input class="pi-note" value="${escAttr(item.note || "")}" placeholder="Note (optional)" aria-label="Note (optional)">
       </div>`;
 }
 
@@ -189,11 +189,11 @@ function pdayHtml(day: PlanEditorDay, dayIndex: number): string {
   const items = strengthPlanItems(Array.isArray(day.items) ? day.items : []);
   return `<div class="pday" data-d="${dayIndex}">
         <div class="pday-head">
-          <input class="pday-name" value="${escAttr(day.name)}" placeholder="Day name">
+          <input class="pday-name" value="${escAttr(day.name)}" placeholder="Day name" aria-label="Day name">
           <button class="ghostbtn pday-done" data-doneday="${dayIndex}">Done</button>
           <button class="delbtn" data-delday="${dayIndex}">✕</button>
         </div>
-        <input class="pday-focus" value="${escAttr(day.focus)}" placeholder="Focus (optional)">
+        <input class="pday-focus" value="${escAttr(day.focus)}" placeholder="Focus (optional)" aria-label="Focus (optional)">
         ${items.map((item, itemIndex) => pitemHtml(item, dayIndex, itemIndex, items.length - 1)).join("")}
         <div class="pday-add">
           <button class="ghostbtn" data-additem="${dayIndex}">+ exercise</button>
