@@ -43,14 +43,19 @@ interface Notice {
   seen: boolean;
 }
 
-/** The compact day rows, bounded: a day needs a name; at most a week of them. */
+/**
+ * The compact day rows, bounded: a day needs a name and a real plan day number; at most a
+ * week of them. The reveal's week also carries run-only weekdays (`day_number: null`), and
+ * Number(null) is 0 — those are not plan days, so they never reach this list.
+ */
 export function firstWeekDays(raw: unknown): FirstWeekDay[] {
   if (!Array.isArray(raw)) return [];
   const out: FirstWeekDay[] = [];
   for (const row of raw) {
     const name = typeof row?.name === "string" ? row.name.trim().slice(0, 60) : "";
-    const n = Number(row?.day_number);
-    if (!name || !Number.isFinite(n)) continue;
+    const value = row?.day_number;
+    const n = typeof value === "number" || (typeof value === "string" && value.trim()) ? Number(value) : Number.NaN;
+    if (!name || !Number.isInteger(n) || n < 1) continue;
     const dow = Number.isInteger(row?.dow) && row.dow >= 0 && row.dow <= 6 ? Number(row.dow) : null;
     out.push({ dow, day_number: n, name });
     if (out.length >= MAX_DAYS) break;

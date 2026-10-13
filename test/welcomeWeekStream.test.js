@@ -281,3 +281,28 @@ test("GET /welcome/first-week and POST …/seen are on the person-context router
   assert.ok(routes.includes("get /welcome/first-week"));
   assert.ok(routes.includes("post /welcome/first-week/seen"));
 });
+
+// The reveal's week carries run-only weekdays too (`day_number: null`, a run label), and
+// Number(null) is 0 — so they rode into the "Your first week is ready" card as plan day 0,
+// breaking ClientFirstWeekDay's "always a plan day" contract.
+test("the first-week notice carries plan days only — never a run-only weekday", () => {
+  recordFirstWeekOutcome(7, "applied", [
+    { dow: 0, day_number: 1, name: "Upper" },
+    { dow: 1, day_number: null, name: "Tuesday", run: "Easy run" },
+    { dow: 2, day_number: 2, name: "Lower" },
+    { dow: 3, name: "Thursday", run: "Long run" },
+    { dow: 4, day_number: "", name: "Friday" },
+    { dow: 5, day_number: 0, name: "Saturday" },
+  ]);
+  const status = firstWeekStatus();
+  assert.equal(status.state, "ready");
+  assert.deepEqual(
+    status.days.map((day) => [day.day_number, day.name]),
+    [
+      [1, "Upper"],
+      [2, "Lower"],
+    ]
+  );
+  for (const day of status.days) assert.ok(Number.isInteger(day.day_number) && day.day_number >= 1);
+  markFirstWeekSeen();
+});
