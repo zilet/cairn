@@ -451,6 +451,16 @@ test("the strip: seven real buttons, today ringed, done ticked, lift short names
   );
   assert.equal(w.CairnTodayStrip.abbr("Full Body"), "FB");
   assert.equal(w.CairnTodayStrip.abbr("Pull"), "Pull");
+  // A composed first week names days with a qualifier: punctuation is never an initial.
+  assert.equal(w.CairnTodayStrip.abbr("Lower A (lighter)"), "LA");
+  assert.equal(w.CairnTodayStrip.abbr("Lower B (heavier)"), "LB");
+  assert.equal(w.CairnTodayStrip.abbr("Push / Pull"), "PP");
+  assert.equal(w.CairnTodayStrip.abbr("Upper A — Press"), "UA");
+  assert.equal(w.CairnTodayStrip.abbr("Upper B — Pull + Overhead"), "UB");
+  assert.equal(w.CairnTodayStrip.abbr("Lower — Strength"), "Lower");
+  assert.equal(w.CairnTodayStrip.abbr("Day 2: Legs"), "D2");
+  assert.equal(w.CairnTodayStrip.abbr("Upper-Lower"), "UL");
+  assert.equal(w.CairnTodayStrip.abbr("(Deload)"), "Del");
 });
 
 test("tapping a day peeks it through the drill: ?peek= in history, one 'Open day ›', Back folds it", async () => {

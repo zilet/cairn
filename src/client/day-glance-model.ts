@@ -47,8 +47,17 @@
   const GLANCE_ISO = /^\d{4}-\d{2}-\d{2}$/;
 
   /** A plan day's name short enough for a seventh of a phone: "Pull", "LB" (Lower B), "FB". */
+  // A qualifier — "(lighter)", or a subtitle after a dash or colon ("Upper A — Press") —
+  // is not part of the name's shape, and punctuation never becomes an initial: a
+  // composed first week read "LA(" and "UA—" on the strip; these are "LA" and "UA".
   function abbr(name: string): string {
-    const words = text(name).split(" ").filter(Boolean);
+    const wordsOf = (s: string) => s.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+    const bare = wordsOf(
+      text(name)
+        .replace(/\([^)]*\)/g, " ")
+        .replace(/\s+[—–-]\s.*$|\s*:\s.*$/, "")
+    );
+    const words = bare.length ? bare : wordsOf(text(name));
     if (!words.length) return "";
     if (words.length === 1) return words[0].length <= 5 ? words[0] : words[0].slice(0, 3);
     return words
