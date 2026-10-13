@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runMigrations } from "./migrate.js";
@@ -7,7 +8,13 @@ import { migrationSnapshotRequired, snapshotBeforeMigrations } from "./migration
 import { localDateISO } from "./repo/shared.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "..", "data");
+// Under node:test (NODE_TEST_CONTEXT is set only in its child processes) with no DATA_DIR,
+// a run that skipped test/run.mjs must never open the real data/cairn.db: use a throwaway.
+const DATA_DIR =
+  process.env.DATA_DIR ||
+  (process.env.NODE_TEST_CONTEXT
+    ? fs.mkdtempSync(path.join(os.tmpdir(), "cairn-test-"))
+    : path.join(__dirname, "..", "data"));
 const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, "cairn.db");
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });

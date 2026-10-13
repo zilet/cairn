@@ -30,6 +30,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // one first (a test that points AGENTS_CONFIG at a fixture would silently get the
 // bundled manifest). Production sets it before boot either way.
 function configPath(): string {
+  // Under node:test (NODE_TEST_CONTEXT is set only in its child processes) an unset
+  // AGENTS_CONFIG means the run skipped test/run.mjs and would probe, even spawn, the
+  // developer's real agent CLIs. Fail closed (loadAgents reads that as no agents) and say
+  // why (test/_offline.mjs sets it for every harness-loaded run).
+  if (process.env.NODE_TEST_CONTEXT && !process.env.AGENTS_CONFIG) {
+    const why = "AGENTS_CONFIG is unset under node:test; run `node test/run.mjs <file>` so real agent CLIs stay offline.";
+    log.error(`[agents] ${why}`);
+    throw new Error(why);
+  }
   return process.env.AGENTS_CONFIG || path.join(__dirname, "..", "agents.json");
 }
 

@@ -17,6 +17,8 @@ import { readFileSync } from "node:fs";
 import { registerHooks } from "node:module";
 import path from "node:path";
 import { beforeEach } from "node:test";
+// Offline floor for a run started without test/run.mjs; must precede any dist import.
+import "./_offline.mjs";
 
 // In-process memos and timers that must not leak from one test into the next.
 const dist = (rel) => new URL(rel, import.meta.url).href;

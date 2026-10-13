@@ -18,6 +18,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, 
 import { availableParallelism, tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { offlineAgentsConfig } from "./_env.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
@@ -113,16 +114,6 @@ const queue = testFiles
 // real CLIs point at commands that do not exist, so they read "not installed" everywhere;
 // names, args and capabilities are untouched, and the offline `stub` stays as it is.
 // A test that needs its own agent table still sets AGENTS_CONFIG itself.
-function offlineAgentsConfig(dir) {
-  const agents = JSON.parse(readFileSync(path.join(root, "agents.json"), "utf8"));
-  for (const [name, def] of Object.entries(agents)) {
-    if (name !== "stub" && def && typeof def === "object") def.command = `cairn-test-offline-${name}`;
-  }
-  const file = path.join(dir, "agents.offline.json");
-  writeFileSync(file, JSON.stringify(agents));
-  return file;
-}
-
 function envFor(dir) {
   return {
     ...process.env,
@@ -163,11 +154,11 @@ function envFor(dir) {
 // unregistered. One extra process start per file is the price of a crash failing.
 function runFile(file, env) {
   const start = performance.now();
-  const child = spawn(
-    process.execPath,
-    ["--import", isolateImport, "--test", `--test-reporter=${reporter}`, file],
-    { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] }
-  );
+  const child = spawn(process.execPath, ["--import", isolateImport, "--test", `--test-reporter=${reporter}`, file], {
+    cwd: root,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   let output = "";
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");

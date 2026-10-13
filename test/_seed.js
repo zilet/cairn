@@ -3,6 +3,7 @@
 // pointed at a throwaway temp file via DATA_DIR/DB_PATH. Tests reset the tables
 // they touch at the start of each case so files can run in any order in the one
 // shared process the node:test runner gives us.
+import "./_offline.mjs";
 import { db } from "../dist/db.js";
 import * as repo from "../dist/repo.js";
 import { localDateISO } from "../dist/repo/shared.js";
@@ -53,7 +54,11 @@ export function tsDaysAgo(n) {
 // Wipe the tables a given suite depends on so each run starts from a known floor.
 export function resetTables(...tables) {
   for (const t of tables) {
-    try { db.prepare(`DELETE FROM ${t}`).run(); } catch { /* table may not exist */ }
+    try {
+      db.prepare(`DELETE FROM ${t}`).run();
+    } catch {
+      /* table may not exist */
+    }
   }
 }
 
