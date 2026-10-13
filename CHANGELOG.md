@@ -5,6 +5,47 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+A first run that listens, a calmer day one, and releases that cannot ship a broken screen. No
+migrations.
+
+### Added
+
+- **Meet asks about your running, once.** When someone mentions running or a race, the first
+  conversation asks one short question (which days, roughly how far a week) and the answer sets the
+  run days and the race build's starting volume. Answers are read only as said: "not Mondays",
+  "Mon–Fri", a long run's distance and a race's distance never land as something else.
+- **The first-week reveal shows the whole week**, runs where the calendar places them, not just
+  lifts.
+- **Meet names its provider.** Opened straight away because an AI app is already signed in, it says
+  "Connected through Claude · change".
+- **A stated split binds.** "Upper/lower" said at the start shapes the first week, chat and AI apps
+  can change it later ("I'm moving to PPL"), and the plan check notes a week that drifts from it.
+
+### Fixed
+
+- **No agent runs before the welcome.** A fresh install no longer spends its AI on catch-up weekly
+  passes (or a review per plan day) before the person has typed a word.
+- **A race said in the first conversation becomes the running goal**, and onboarding never wipes a
+  goal or run week already on record.
+- **Day one reads honestly.** The Brief never calls recovery fine with nothing on record, a returning
+  athlete hears "nothing recent to read" rather than "nothing yet", and a focus headline is a
+  sentence ("Upper body today."), never a bare word.
+- **The first week is not overnight news**, never lists a run-only day as a plan day, and "Remove this
+  first week" now actually removes it.
+- **Welcome addresses survive a reload** instead of being rewritten to Today, and Settings no longer
+  waits on a slow AI-app login check.
+- Week-strip initials skip qualifiers ("LA", not "LA("); no benchmark praise with nothing measured;
+  labelled plan fields; no stray scrollbar around the sign-in terminal.
+
+### Internal
+
+- **Releases are gated on the browser smoke**, and the perf budget is a blocking CI check: API rounds
+  are now counted by dependency wave, identical run to run.
+- **Load order can't crash boot.** Three import cycles that only worked in the usual load order are
+  broken, and a test loads every cycle member first in a fresh process.
+- **Tests are offline however they're run**: a bare `node --test` gets a throwaway database and no
+  real AI CLIs. The enrich queue exposes an idle signal, so tests wait on it instead of sleeping.
+
 ## [2.1.4] — 2026-10-13
 
 Fuel's today page leads with what you ate, the Brief cache keeps its own calendar, and a faster
