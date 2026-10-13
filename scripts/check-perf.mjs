@@ -10,19 +10,27 @@
 // (the second visit, once the service worker controls the page and the SWR cache is
 // filled, every SWR row aged past its freshness window so the visit paints from cache
 // and revalidates the same way on any machine). Each route is measured `--runs` times
-// (default 3).
+// (default 3). The idle warm-up of the other homes' lazy bundles is off for every load
+// (CAIRN_NO_WARMUP): it raced the service worker's precache for the same files, so
+// which of the two paid a bundle's bytes — and so a route's cold js — moved with the
+// machine's speed.
 //
 // GATE — deterministic measures only, against the checked-in scripts/perf-budget.json:
 //   - api      /api calls per load (art images, telemetry and event streams excluded)
 //   - dupes    duplicate GET URLs the page asks for within one load — 0, except a URL a
 //              route's budget records under `knownDupes` (listed as a miss every run)
-//   - rounds   serial /api request rounds: a call's round is 1 + the deepest round of
-//              any call that FINISHED before it started (the dependency depth read from
-//              start/end order, never from a time threshold)
+//   - rounds   dependency-chained /api waves, cold and warm, from one extra load per
+//              mode with every /api response HELD until the page is quiescent and then
+//              released a whole wave at once (measureWaves): a call is in wave N+1 only
+//              if the page could not make it before a wave-N answer arrived. Read from
+//              start/end overlap of a real load it was not deterministic — a slow main
+//              thread issued an independent call after an earlier one had come back,
+//              and the call counted a round deeper (the hosted runner's "3/2").
 //   - cls      cumulative layout shift
 //   - js / css bytes transferred on the cold load (the route's eager + lazy bundles)
 //   - skeleton no visible skeleton left once the route reads "ready"
-// The gate reads the MEDIAN run per measure, so one noisy run does not fail it.
+// The gate reads the MEDIAN run per measure (rounds: the one gated load), so one noisy
+// run does not fail it.
 //
 // REPORT-ONLY — FCP, first content and ready (median of the runs), printed beside the
 // proposed targets and flagged (never failed) past a wide margin. "Ready" is: the
@@ -80,6 +88,9 @@ const THROTTLE = args.flags.has("no-throttle")
   : { cpu: 4, latency: 150, down: (1.6 * 1024 * 1024) / 8, up: (750 * 1024) / 8 };
 const READY_TIMEOUT_MS = 30000;
 const SETTLE_MS = 1200;
+/** The rounds load (measureWaves): poll cadence, and how long the page must sit quiescent before a wave is released. */
+const WAVE_POLL_MS = 100;
+const WAVE_QUIET_MS = 300;
 /** Headroom when a budget is (re)set: bytes + max(4 KB, 5%) rounded up to a whole KB, CLS floor 0.01. */
 const BYTES_MARGIN = 0.05;
 const BYTES_FLOOR = 4 * 1024;
@@ -137,6 +148,12 @@ const INSTRUMENT = `(() => {
   window.__perfVisibleSkel = visibleSkel;
   try { new PerformanceObserver((l) => { for (const e of l.getEntries()) if (!e.hadRecentInput) { P.cls += e.value; P.shifts.push([Math.round(e.startTime), +e.value.toFixed(4)]); } }).observe({ type: "layout-shift", buffered: true }); } catch {}
   try { new PerformanceObserver((l) => { for (const e of l.getEntries()) P.paints[e.name] = Math.round(e.startTime); }).observe({ type: "paint", buffered: true }); } catch {}
+  // The wave gate (window.__perfWaves, the rounds load only): a tracked call's response
+  // is held — downloaded in full, then parked — until the driver releases the whole wave
+  // at once, so a call is in wave N+1 exactly when the page could only issue it after a
+  // wave-N response reached the page. P.wave is the wave a call issued now belongs to.
+  Object.assign(P, { wave: 1, waveLog: [], held: [], unsettled: 0, issued: 0 });
+  P.release = () => { const h = P.held; P.held = []; P.wave++; for (const f of h) f(); return h.length; };
   const of = window.fetch;
   window.fetch = function (input, init) {
     const raw = typeof input === "string" ? input : (input && input.url) || "";
@@ -144,8 +161,18 @@ const INSTRUMENT = `(() => {
     const track = p0.startsWith("/api/") && !untracked.test(p0);
     if (track) P.inflight++;
     const p = of.apply(this, arguments);
-    if (track) p.then((r) => r.clone().text().catch(() => null), () => null).finally(() => { P.inflight--; });
-    return p;
+    const body = track ? p.then((r) => r.clone().text().catch(() => null), () => null) : null;
+    if (!track || !window.__perfWaves) {
+      if (track) body.finally(() => { P.inflight--; });
+      return p;
+    }
+    P.waveLog.push({ url: p0, wave: P.wave });
+    P.issued++;
+    P.unsettled++;
+    return new Promise((resolve, reject) => {
+      const park = (settle) => body.finally(() => { P.unsettled--; P.held.push(() => { P.inflight--; settle(); }); });
+      p.then((r) => park(() => resolve(r)), (e) => park(() => reject(e)));
+    });
   };
   const start = () => {
     const view = document.querySelector("#view");
@@ -189,6 +216,10 @@ async function openContextPage(cdp) {
   await send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 3, mobile: true });
   await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
   await send("Page.addScriptToEvaluateOnNewDocument", { source: INSTRUMENT });
+  // No idle warm-up of the other homes' lazy bundles: it races the service worker's
+  // precache for the same files (whichever asks first pays the bytes), so with it on a
+  // route's cold js moved with machine speed. The route's own bundles still load.
+  await send("Page.addScriptToEvaluateOnNewDocument", { source: "window.CAIRN_NO_WARMUP = true;" });
   return { send, sessionId, browserContextId };
 }
 
@@ -227,21 +258,6 @@ async function ageSwrCache(send) {
 }
 
 // ---------- one load ----------
-/** Serial /api rounds: each call's round is 1 + the deepest round of a call that ended before it began. */
-export function serialRounds(calls) {
-  const sorted = [...calls].sort((a, b) => a.start - b.start);
-  const round = new Map();
-  for (const q of sorted) {
-    let r = 1;
-    for (const p of sorted) {
-      if (p === q || !round.has(p) || p.end == null) continue;
-      if (p.end <= q.start) r = Math.max(r, round.get(p) + 1);
-    }
-    round.set(q, r);
-  }
-  return Math.max(0, ...round.values());
-}
-
 async function measureLoad(cdp, page, base, route) {
   const { send, sessionId } = page;
   const reqs = new Map();
@@ -250,6 +266,9 @@ async function measureLoad(cdp, page, base, route) {
     const p = msg.params || {};
     if (msg.method === "Network.requestWillBeSent") {
       reqs.set(p.requestId, { url: p.request.url, method: p.request.method, type: p.type, t0: p.timestamp });
+    } else if (msg.method === "Network.responseReceived") {
+      const r = reqs.get(p.requestId);
+      if (r) Object.assign(r, { cached: !!(p.response.fromDiskCache || p.response.fromServiceWorker || p.response.fromPrefetchCache), status: p.response.status, clen: Number(p.response.headers?.["content-length"] ?? p.response.headers?.["Content-Length"]) || null });
     } else if (msg.method === "Network.loadingFinished") {
       const r = reqs.get(p.requestId);
       if (r) Object.assign(r, { bytes: p.encodedDataLength, t1: p.timestamp });
@@ -283,6 +302,9 @@ async function measureLoad(cdp, page, base, route) {
         type: r.type,
         bytes: r.bytes ?? 0,
         failed: r.failed || null,
+        cached: r.cached || false,
+        status: r.status ?? null,
+        clen: r.clen ?? null,
         start: Math.round((r.t0 - docStart) * 1000),
         end: r.t1 ? Math.round((r.t1 - docStart) * 1000) : null,
       }));
@@ -300,7 +322,6 @@ async function measureLoad(cdp, page, base, route) {
       api: api.length,
       dupes,
       dupeUrls,
-      rounds: serialRounds(api),
       cls: +perf.cls.toFixed(4),
       js: bytesOf("Script"),
       css: bytesOf("Stylesheet"),
@@ -314,6 +335,94 @@ async function measureLoad(cdp, page, base, route) {
     };
   } finally {
     off();
+  }
+}
+
+/**
+ * The rounds load: the route opened with the wave gate on, unthrottled. Every tracked
+ * /api response is held until the page is QUIESCENT — no gated call still downloading,
+ * no other request (a lazy bundle, a stylesheet) in flight, the main thread idle and
+ * no new call for WAVE_QUIET_MS — and then the whole wave is released at once. So a
+ * call the page can make without an /api answer always lands in wave 1 however slow
+ * the machine or its CPU throttle, and a call lands in wave N+1 only if it needed a
+ * wave-N answer. Rounds is the deepest wave a call landed in: a structural count of the
+ * route's dependency chain, never a reading of how the clocks happened to overlap
+ * (the start/end order of a real load put an independent call a round deeper whenever
+ * a slow main thread issued it after an earlier call had already come back).
+ */
+async function measureWaves(cdp, page, base, route) {
+  const { send, sessionId } = page;
+  const busy = new Map();
+  const off = cdp.on((msg) => {
+    if (msg.sessionId !== sessionId) return;
+    const p = msg.params || {};
+    if (msg.method === "Network.requestWillBeSent") {
+      let pathname = "";
+      try { pathname = new URL(p.request.url).pathname; } catch {}
+      // The gated calls are tracked in the page; art, telemetry and streams never settle a wave.
+      if (!pathname.startsWith("/api/") && p.type !== "EventSource" && p.type !== "WebSocket") busy.set(p.requestId, p.request.url);
+    } else if (msg.method === "Network.loadingFinished" || msg.method === "Network.loadingFailed") {
+      busy.delete(p.requestId);
+    }
+  });
+  const state = () =>
+    evaluate(
+      send,
+      `new Promise((r) => { const P = window.__perf; const s = () => r(P ? { issued: P.issued, unsettled: P.unsettled, held: P.held.length, ready: P.ready } : null); (window.requestIdleCallback || setTimeout)(s, { timeout: 1000 }); })`
+    ).catch(() => null);
+  try {
+    await send("Page.addScriptToEvaluateOnNewDocument", { source: `window.__wantTab = ${JSON.stringify(route.tab)}; window.__perfWaves = true;` });
+    await send("Page.navigate", { url: base + route.path });
+    const deadline = Date.now() + READY_TIMEOUT_MS;
+    let last = null;
+    let quietSince = null;
+    let timedOut = true;
+    while (Date.now() < deadline) {
+      await sleep(WAVE_POLL_MS);
+      const s = await state();
+      const now = Date.now();
+      const quiet = s && s.unsettled === 0 && busy.size === 0 && last && s.issued === last.issued;
+      last = s;
+      if (!quiet) {
+        quietSince = null;
+        continue;
+      }
+      quietSince ??= now;
+      if (s.held > 0) {
+        if (now - quietSince >= WAVE_QUIET_MS) {
+          await evaluate(send, "window.__perf.release()");
+          last = null;
+          quietSince = null;
+        }
+      } else if (s.ready != null && now - quietSince >= SETTLE_MS) {
+        timedOut = false;
+        break;
+      }
+    }
+    const log = (await evaluate(send, "window.__perf ? window.__perf.waveLog : []").catch(() => null)) || [];
+    // A URL's FIRST ask sets its depth. A held answer can let a second render ask the
+    // same URL again after the release (on a real load it would ride the first, still in
+    // flight); that re-ask is a re-render, not a dependency, and duplicates are the
+    // dupes gate's business on the real loads.
+    const firstAsk = new Map();
+    for (const e of log) if (!firstAsk.has(e.url)) firstAsk.set(e.url, e.wave);
+    return { rounds: Math.max(0, ...firstAsk.values()), waves: log, timedOut };
+  } finally {
+    off();
+  }
+}
+
+/** Rounds for one route, cold and warm, each from its own wave-gated load (see measureWaves). */
+async function measureRouteRounds(cdp, base, route) {
+  const page = await openContextPage(cdp);
+  try {
+    const cold = await measureWaves(cdp, page, base, route);
+    await waitForServiceWorker(page.send);
+    await ageSwrCache(page.send);
+    const warm = await measureWaves(cdp, page, base, route);
+    return { cold, warm };
+  } finally {
+    await cdp.command("Target.disposeBrowserContext", { browserContextId: page.browserContextId }).catch(() => {});
   }
 }
 
@@ -351,8 +460,6 @@ function aggregate(runs) {
   return {
     api: median(pick("api")),
     apiMax: maxOf(pick("api")),
-    rounds: median(pick("rounds")),
-    roundsMax: maxOf(pick("rounds")),
     cls: median(pick("cls")),
     clsMax: maxOf(pick("cls")),
     js: median(pick("js")),
@@ -385,6 +492,7 @@ function gate(name, mode, agg, budget) {
   const fails = [];
   if (!budget) return [`${name} ${mode}: no budget in scripts/perf-budget.json (run with --update)`];
   if (!agg.tabOk) fails.push(`${name} ${mode}: did not hydrate as its tab`);
+  if (agg.roundsSettled === false) fails.push(`${name} ${mode}: the rounds load never settled (no wave release left it ready)`);
   for (const key of ["api", "rounds", "cls", "js", "css"]) {
     if (budget[key] == null || agg[key] == null) continue;
     if (agg[key] > budget[key]) fails.push(`${name} ${mode}: ${key} ${fmt(key, agg[key])} over budget ${fmt(key, budget[key])}`);
@@ -507,7 +615,13 @@ async function main() {
       const runs = [];
       for (let i = 0; i < RUNS; i++) runs.push(await measureRoute(cdp, server.base, route));
       const res = { cold: aggregate(runs.map((r) => r.cold)), warm: aggregate(runs.map((r) => r.warm)) };
-      results.push({ route, res, runs });
+      // Rounds come from one wave-gated load per mode (measureWaves): a structural count,
+      // the same on every run, so it is measured once rather than per run.
+      const waves = await measureRouteRounds(cdp, server.base, route);
+      for (const mode of ["cold", "warm"]) {
+        Object.assign(res[mode], { rounds: waves[mode].rounds, roundsMax: waves[mode].rounds, roundsSettled: !waves[mode].timedOut });
+      }
+      results.push({ route, res, runs, waves });
       process.stdout.write(`  · ${route.name}\n`);
     }
   } catch (error) {
@@ -522,7 +636,7 @@ async function main() {
   }
 
   if (JSON_OUT) {
-    writeFileSync(JSON_OUT, JSON.stringify(results.map(({ route, res, runs }) => ({ route: route.name, res, runs })), null, 1));
+    writeFileSync(JSON_OUT, JSON.stringify(results.map(({ route, res, runs, waves }) => ({ route: route.name, res, runs, waves })), null, 1));
     console.log(`raw measurements: ${JSON_OUT}`);
   }
 

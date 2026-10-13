@@ -1,5 +1,5 @@
 {
-  "note": "Per-route load budget for scripts/check-perf.mjs (npm run perf:check; npm run verify with CAIRN_PERF=1). Mid phone: 390px, CPU 4x, slow 4G. `routes` gates the median run (api calls, serial rounds, CLS, cold JS/CSS bytes; duplicate GETs and a visible skeleton after ready always fail, except a duplicate recorded in a route's knownDupes, which is listed as a miss every run); raise one deliberately with `node scripts/check-perf.mjs --update` after npm run build (`--update-bytes` rewrites only the byte ceilings). Byte budgets are the measured median + max(4 KB, 5%) rounded up to a whole KB, cold and warm, and CLS the measured worst run with a 0.01 floor, so a small legitimate change never fails the gate; api, rounds and dupes stay exact. `targets` are the proposed per-group goals: api/cls misses are listed every run, timings (ms) are report-only and flagged past +30%.",
+  "note": "Per-route load budget for scripts/check-perf.mjs (npm run perf:check; npm run verify with CAIRN_PERF=1). Mid phone: 390px, CPU 4x, slow 4G. `routes` gates the median run (api calls, serial rounds, CLS, cold JS/CSS bytes; duplicate GETs and a visible skeleton after ready always fail, except a duplicate recorded in a route's knownDupes, which is listed as a miss every run); raise one deliberately with `node scripts/check-perf.mjs --update` after npm run build (`--update-bytes` rewrites only the byte ceilings). Byte budgets are the measured median + max(4 KB, 5%) rounded up to a whole KB, cold and warm, and CLS the measured worst run with a 0.01 floor, so a small legitimate change never fails the gate; api, rounds and dupes stay exact (rounds is the /api dependency depth from one wave-gated load per route, which holds every answer until the page is quiescent, so it does not move with machine speed). `targets` are the proposed per-group goals: api/cls misses are listed every run, timings (ms) are report-only and flagged past +30%.",
   "targets": {
     "today": {
       "api": 10,
@@ -78,7 +78,7 @@
     "ask": {
       "cold": {
         "api": 6,
-        "rounds": 3,
+        "rounds": 2,
         "cls": 0.013,
         "js": 274432,
         "css": 66560
@@ -94,7 +94,7 @@
     "ask-changes": {
       "cold": {
         "api": 9,
-        "rounds": 2,
+        "rounds": 1,
         "cls": 0.014,
         "js": 290816,
         "css": 66560
@@ -110,7 +110,7 @@
     "train": {
       "cold": {
         "api": 5,
-        "rounds": 2,
+        "rounds": 1,
         "cls": 0.006,
         "js": 311296,
         "css": 66560
@@ -126,7 +126,7 @@
     "train-trend": {
       "cold": {
         "api": 6,
-        "rounds": 3,
+        "rounds": 2,
         "cls": 0.005,
         "js": 311296,
         "css": 66560
@@ -142,7 +142,7 @@
     "train-volume": {
       "cold": {
         "api": 6,
-        "rounds": 2,
+        "rounds": 1,
         "cls": 0.006,
         "js": 311296,
         "css": 66560
@@ -158,7 +158,7 @@
     "train-program": {
       "cold": {
         "api": 5,
-        "rounds": 2,
+        "rounds": 1,
         "cls": 0.006,
         "js": 311296,
         "css": 66560
@@ -174,7 +174,7 @@
     "train-sessions": {
       "cold": {
         "api": 5,
-        "rounds": 2,
+        "rounds": 1,
         "cls": 0.007,
         "js": 311296,
         "css": 66560
@@ -190,7 +190,7 @@
     "train-energy": {
       "cold": {
         "api": 5,
-        "rounds": 2,
+        "rounds": 1,
         "cls": 0.009,
         "js": 311296,
         "css": 66560
@@ -206,7 +206,7 @@
     "train-intake": {
       "cold": {
         "api": 5,
-        "rounds": 2,
+        "rounds": 1,
         "cls": 0.005,
         "js": 311296,
         "css": 66560
@@ -222,7 +222,7 @@
     "train-endurance": {
       "cold": {
         "api": 5,
-        "rounds": 2,
+        "rounds": 1,
         "cls": 0.005,
         "js": 311296,
         "css": 66560
@@ -238,7 +238,7 @@
     "train-weight": {
       "cold": {
         "api": 6,
-        "rounds": 2,
+        "rounds": 1,
         "cls": 0.005,
         "js": 311296,
         "css": 66560
@@ -254,14 +254,14 @@
     "train-plan": {
       "cold": {
         "api": 10,
-        "rounds": 4,
+        "rounds": 2,
         "cls": 0.005,
         "js": 311296,
         "css": 66560
       },
       "warm": {
         "api": 9,
-        "rounds": 2,
+        "rounds": 1,
         "cls": 0.005,
         "js": 4096,
         "css": 4096
@@ -270,7 +270,7 @@
     "horizon": {
       "cold": {
         "api": 10,
-        "rounds": 2,
+        "rounds": 1,
         "cls": 0.005,
         "js": 277504,
         "css": 69632
@@ -286,7 +286,7 @@
     "horizon-race": {
       "cold": {
         "api": 5,
-        "rounds": 2,
+        "rounds": 1,
         "cls": 0.005,
         "js": 277504,
         "css": 69632
@@ -302,7 +302,7 @@
     "horizon-goal": {
       "cold": {
         "api": 5,
-        "rounds": 2,
+        "rounds": 1,
         "cls": 0.005,
         "js": 277504,
         "css": 69632
@@ -350,7 +350,7 @@
     "you-health": {
       "cold": {
         "api": 5,
-        "rounds": 2,
+        "rounds": 1,
         "cls": 0.005,
         "js": 326656,
         "css": 64512
@@ -366,7 +366,7 @@
     "you-records": {
       "cold": {
         "api": 5,
-        "rounds": 2,
+        "rounds": 1,
         "cls": 0.005,
         "js": 326656,
         "css": 64512
@@ -382,7 +382,7 @@
     "you-markers": {
       "cold": {
         "api": 5,
-        "rounds": 2,
+        "rounds": 1,
         "cls": 0.005,
         "js": 326656,
         "css": 64512
@@ -398,7 +398,7 @@
     "you-share": {
       "cold": {
         "api": 5,
-        "rounds": 2,
+        "rounds": 1,
         "cls": 0.008,
         "js": 326656,
         "css": 64512
@@ -414,7 +414,7 @@
     "you-settings": {
       "cold": {
         "api": 10,
-        "rounds": 3,
+        "rounds": 2,
         "cls": 0.005,
         "js": 272384,
         "css": 69632
@@ -430,7 +430,7 @@
     "you-life": {
       "cold": {
         "api": 7,
-        "rounds": 2,
+        "rounds": 1,
         "cls": 0.005,
         "js": 326656,
         "css": 64512
@@ -446,7 +446,7 @@
     "you-family": {
       "cold": {
         "api": 5,
-        "rounds": 2,
+        "rounds": 1,
         "cls": 0.053,
         "js": 326656,
         "css": 64512
