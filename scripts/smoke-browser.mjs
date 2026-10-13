@@ -1,8 +1,8 @@
 // Dependency-free browser smoke for the generated PWA app shell.
 //
 // This intentionally stays outside `npm run verify`: it needs a local Chrome
-// binary and loopback CDP, so it is a release/manual gate rather than a fast
-// deterministic unit gate. It catches the runtime class that static checks
+// binary and loopback CDP, so it runs as its own CI job (.github/workflows/ci.yml)
+// and in `npm run release:check` rather than as a fast deterministic unit gate. It catches the runtime class that static checks
 // cannot: syntax errors, broken script order, missing globals, and route boot
 // failures in a real browser.
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
