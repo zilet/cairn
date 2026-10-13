@@ -27,6 +27,7 @@
 import { db } from "../db.js";
 import { addDaysISO, daysBetweenISO, mondayOf } from "../lib/dates.js";
 import { getActiveBlock } from "./program-blocks.js";
+import { PUSH_STANCE_ENDED_SAY_DAYS } from "./push-stance-limits.js";
 import { copyDeep, requestMemo } from "./request-memo.js";
 import { getSettings } from "./settings.js";
 import { localDateISO } from "./shared.js";
@@ -64,20 +65,16 @@ export interface TrainingDriveState {
 }
 
 // ---- the widened licenses, one constant each, so tests and docs can name them ----
-
-/** Days a stance may run at most before the athlete re-states it. */
-export const PUSH_STANCE_MAX_DAYS = 84;
-/** The stance's length when the athlete names neither a date nor the block. */
-export const PUSH_STANCE_DEFAULT_DAYS = 28;
-/** The stacked loading-day count at which an uncorroborated stack reads easy (5 without a stance). */
-export const PUSH_STANCE_CONSEC_CEILING = 7;
-/** Challenge top sets a reach day may seat (1 without a stance), each on a different movement pattern. */
-export const PUSH_STANCE_REACH_HOSTS = 2;
-/** Reserve (reps in hand at the ceiling) that still counts a top set as strong (2 without a stance). */
-export const PUSH_STANCE_RIR_RESERVE = 1;
-/** Days after a stance's last day that its end is still SAID (the Brief's line, the prompts'
- * "their push ended"). Past it the fall-back drive simply stands, with nothing to announce. */
-export const PUSH_STANCE_ENDED_SAY_DAYS = 7;
+// Declared in push-stance-limits.ts (a leaf, so a module can read one at load time from
+// any import order); re-exported here, where the stance itself is.
+export {
+  PUSH_STANCE_CONSEC_CEILING,
+  PUSH_STANCE_DEFAULT_DAYS,
+  PUSH_STANCE_ENDED_SAY_DAYS,
+  PUSH_STANCE_MAX_DAYS,
+  PUSH_STANCE_REACH_HOSTS,
+  PUSH_STANCE_RIR_RESERVE,
+} from "./push-stance-limits.js";
 
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
 

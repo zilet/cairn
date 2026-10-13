@@ -66,6 +66,13 @@ delegated to Express's finalhandler rather than answered twice.
 
 - Prompt builders and coaching ops must import concrete `src/repo/<module>.js`, never the
   `src/repo.ts` barrel — one barrel import pulls an edge to every repo module and re-closes the cycle.
+- Import cycles still exist (the repo layer is one large one), so no module may read a cycle-mate's
+  binding at LOAD time — that read works only in the order the usual entry happens to evaluate, and
+  any other first import throws a TDZ `ReferenceError` at boot. `test/moduleLoadOrder.test.js` finds
+  every cycle in the built graph and imports each member first in its own process. A value read at
+  load lives in a module outside the cycle, re-exported from its old address: the signal voice
+  (`src/repo/signal-voice.ts`), the push-stance limits (`push-stance-limits.ts`), the hybrid
+  forward-projection slot (`hybrid-forward-projection.ts`).
 - The shared date and number helpers have exactly one definition each, with a small allowlist naming
   the divergence each surviving private copy depends on.
 - Adding a column takes the two-step (a migration entry AND the `CREATE TABLE IF NOT EXISTS` block),
@@ -1846,7 +1853,7 @@ The Brief is not the only reader of `SIGNAL_VOICE`. The coaching-focus **conduct
 focus" card on Stand's overview, Me → Health → Standing, and Progress → Program
 (`src/repo/coaching-focus.ts`; Today suppresses only its day-posture lead there, as duplicate
 narration once the Brief has printed it — other conductor threads still render on Today) — speaks
-through the same `spokenSignalVoice(ref, date, key)` entry point (`src/repo/signal-state.ts`), on the
+through the same `spokenSignalVoice(ref, date, key)` entry point (`src/repo/signal-voice.ts`), on the
 same `SIGNAL_VOICE_KEYS` (`protect`/`injury`/`fueling`/`schedule`) and the same
 `UnifiedSignalState.date`, so one signal reads as one observation rather than two differently-worded
 notes about the same morning a tab apart. `SignalDimensionState.voice` sits alongside each

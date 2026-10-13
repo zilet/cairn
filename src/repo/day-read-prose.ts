@@ -10,7 +10,7 @@
 // calendar date through pickDayVariant. Add a phrasing to the set; never a literal.
 import { pickDayVariant, type DayReadRuleOutcome } from "./brain/day-read-rules.js";
 import { mondayOf } from "../lib/dates.js";
-import { SIGNAL_VOICE_REGISTRY, signalVoice, type SignalVoiceRef } from "./signal-state.js";
+import { SIGNAL_VOICE_REGISTRY, signalVoice, type SignalVoiceRef } from "./signal-voice.js";
 import type { MesoPhase, MesocycleState } from "./program-state.js";
 import type { getEnduranceGoal } from "./profile.js";
 // Type-only, therefore erased at build time: the week-ahead DTO stays with the engine

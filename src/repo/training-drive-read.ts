@@ -33,7 +33,8 @@ import {
 } from "./push-offer.js";
 import { activeRecoveryWeek } from "./recovery-week.js";
 import { addDaysISO, localDateISO } from "./shared.js";
-import { PUSH_STANCE_CONSEC_CEILING, type PushStance, stanceDaysLeft, trainingDriveState } from "./training-drive.js";
+import { PUSH_STANCE_CONSEC_CEILING } from "./push-stance-limits.js";
+import { type PushStance, stanceDaysLeft, trainingDriveState } from "./training-drive.js";
 
 // ---- the words ----
 

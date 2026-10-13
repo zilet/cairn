@@ -21,7 +21,7 @@ import { loadAtOrAbove } from "./outcome-comparability.js";
 import { type EnduranceScheduleKind, getEnduranceSchedule } from "./profile.js";
 import { programBalance } from "./progression.js";
 import { liftDows } from "./strength-schedule.js";
-import { registerHybridForwardProjection } from "./training-read.js";
+import { registerHybridForwardProjection } from "./hybrid-forward-projection.js";
 import { daysBetweenISO, joinList, localDateISO } from "./shared.js";
 import { copyDeep, copyRows, memoKey, requestMemo } from "./request-memo.js";
 

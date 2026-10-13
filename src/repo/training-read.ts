@@ -28,6 +28,7 @@ import {
   resolveExerciseName,
 } from "./exercise-canon.js";
 import { CARDIO_GRADE, HARD_EFFORT, sawSessionEffort } from "./heavy-load.js";
+import { registeredHybridForwardProjection } from "./hybrid-forward-projection.js";
 import { activeRecoveryWeekLedger } from "./recovery-week-ledger.js";
 import type { HrModel } from "./hr-model.js";
 import {
@@ -1203,20 +1204,6 @@ export interface HybridDayContext {
   heavy_lower_next: { date: string; focus: string | null } | null;
 }
 
-// The forward half of the hybrid read (the next stated run, the next heavy-lower day)
-// needs the athlete's schedules and the lifting week's weekday map, which live above
-// this leaf module. plan-selection registers the projector when it loads — the same
-// registration shape training-cache uses — so importing it here would not close a cycle.
-// Unregistered (a bare unit import), both projections read null: absence is neutral.
-type HybridForwardProjection = (
-  date: string
-) => Pick<HybridDayContext, "planned_run_next" | "heavy_lower_next">;
-let hybridForwardProjection: HybridForwardProjection | null = null;
-
-export function registerHybridForwardProjection(fn: HybridForwardProjection): void {
-  hybridForwardProjection = fn;
-}
-
 // The deterministic hybrid-sequencing read for a date. Cheap + null-safe end to end: any
 // sub-query that throws degrades that field to null, never the whole read.
 export function hybridDayContext(date?: string): HybridDayContext {
@@ -1258,12 +1245,12 @@ export function hybridDayContext(date?: string): HybridDayContext {
   // Forward projections — best-effort heads-ups, never a committed calendar. The run is
   // the athlete's stated run weekday (the run engine lays its week on exactly those) and
   // the heavy-lower day is wherever the lifting week's map lands a squat/hinge day; both
-  // are answered by plan-selection, which registers the projector (this module stays a
-  // leaf — see registerHybridForwardProjection).
+  // are answered by plan-selection, which registers the projector (see
+  // hybrid-forward-projection.ts).
   let planned_run_next: HybridDayContext["planned_run_next"] = null;
   let heavy_lower_next: HybridDayContext["heavy_lower_next"] = null;
   try {
-    const projected = hybridForwardProjection ? hybridForwardProjection(d) : null;
+    const projected = registeredHybridForwardProjection()?.(d) ?? null;
     planned_run_next = projected?.planned_run_next ?? null;
     heavy_lower_next = projected?.heavy_lower_next ?? null;
   } catch {
