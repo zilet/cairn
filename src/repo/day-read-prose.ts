@@ -1007,14 +1007,34 @@ export const DAY_READ_HEADLINE_VARIANTS: Readonly<Record<string, readonly string
   train: ["Good to train.", "Good day to train.", "You're clear to train.", "Today's a training day."],
 };
 
-// A train day that knows its focus makes the FOCUS the headline ("Lower body."), so
-// the rotation moves the frame around it instead of replacing it — the plain form
-// stays first, and every phrasing still names the focus.
+// A train day that knows its focus makes the FOCUS the headline ("Lower body today."),
+// so the rotation moves the frame around it instead of replacing it — and every
+// phrasing still names the focus. There is no bare `${focus}.` form: a focus is
+// whatever the plan day was called, and a one-word label ("upper") printed alone is a
+// fragment, not a headline.
 const TRAIN_FOCUS_HEADLINE: ReadonlyArray<(focus: string) => string> = [
-  (focus) => `${focus}.`,
   (focus) => `${focus} today.`,
   (focus) => `${focus} is on today.`,
+  (focus) => `${focus} is up today.`,
 ];
+
+// The focus as the headline's opening words. A plan day's focus is free text — the
+// composer's, the agent's or the person's own — so it arrives as "upper", "Lower body",
+// "lower — strength." or "  push ". Every headline form OPENS with it, so it is
+// sentence-cased (first letter only: "Lower — Strength" keeps its own capitals), its
+// trailing punctuation is dropped (each form closes the sentence itself), and the three
+// region shorthands a split is named by read as the body region they mean. Nothing
+// else is rewritten: any other label is the person's own word.
+const REGION_SHORTHAND = /^(?:upper|lower|full|total)$/i;
+export function focusHeadlinePhrase(focus: string): string {
+  let phrase = focus
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[\s.,;:!?—–-]+$/u, "")
+    .trim();
+  if (REGION_SHORTHAND.test(phrase)) phrase = `${phrase} body`;
+  return phrase ? phrase.charAt(0).toUpperCase() + phrase.slice(1) : "";
+}
 
 // The BACKED train day's headline sets — its own rather than a fifth `kind` entry in
 // DAY_READ_HEADLINE_VARIANTS above, because the read's kind really is `train` (the
@@ -1062,7 +1082,7 @@ export function dayReadHeadline(
   date: string
 ): string {
   const kind = String(read?.kind ?? "");
-  const focus = typeof read?.focus === "string" ? read.focus.trim() : "";
+  const focus = typeof read?.focus === "string" ? focusHeadlinePhrase(read.focus) : "";
   const push = kind === "train" && !!read?.signals?.push_bias;
   // The drive read is checked FIRST because the two flags can co-occur (a backed day
   // is one of the two ways the drive gate can be satisfied), and when they do, the
