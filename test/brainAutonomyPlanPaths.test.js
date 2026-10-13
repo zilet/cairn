@@ -590,3 +590,48 @@ test("a legacy plan rollback restores the old week and resurrects no rest row", 
   assert.equal(repo.getPlanDay(3).day_type, "training");
   assert.equal(repo.getPlanDay(3).items[0].target_weight, 80, "the untouched strength day survives the Undo");
 });
+
+// The welcome composes a first week onto an EMPTY plan; its Undo is labelled "Remove this
+// first week". The three-way merge of before=[] / after=week / current=week is [], and
+// replacePlan refuses an empty week on purpose — so the Undo threw "replacePlan needs a
+// non-empty days array" and the PWA toasted it verbatim.
+test("the Undo of a first week built on an empty plan removes it, in the athlete's words when it can't", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  assert.equal(repo.getPlan().length, 0, "no plan yet");
+  const proposal = repo.createProposal("auto", repo.AUTO_EVOLUTION_INSTRUCTION, "", {
+    summary: "Your first week",
+    days: [
+      {
+        day_number: 1,
+        name: "Upper",
+        focus: "Upper",
+        items: [{ exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 115 }],
+      },
+      {
+        day_number: 2,
+        name: "Lower",
+        focus: "Lower",
+        items: [{ exercise: "Back Squat", sets: 3, rep_low: 6, rep_high: 8, target_weight: 185 }],
+      },
+    ],
+  });
+  const out = applyProposalWithAutonomy(proposal.id);
+  const id = out.decision.id;
+  if (out.announced) applyDueAnnouncedDecisions(out.effective_date);
+  assert.equal(repo.getPlan().length, 2, "the first week landed");
+  assert.equal(repo.rollbackBuiltOnEmptyPlan(id), true);
+
+  const undone = revertDecision(id, "remove this first week");
+  assert.equal(undone.ok, true, undone.error);
+  assert.equal(repo.getPlan().length, 0, "the Undo cleared the plan it built");
+  assert.equal(repo.getBrainDecision(id).status, "reverted");
+
+  // A second tap on a decision that is no longer reversible refuses in plain words.
+  const again = revertDecision(id, "again");
+  assert.equal(again.ok, false);
+  assert.doesNotMatch(String(again.error), /replacePlan|snapshot|reversible|rollback|transition|days array/i);
+});
+
+test("an empty restore is never reachable through replacePlan itself", () => {
+  assert.throws(() => repo.replacePlan([]), /non-empty/);
+});

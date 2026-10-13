@@ -2257,3 +2257,38 @@ export function replacePlan(
   );
   return result;
 }
+
+// Put the plan back to EMPTY — the one deliberate restore to no week at all, for the
+// Undo of a first week composed onto an empty plan ("Remove this first week"). replacePlan
+// refuses an empty week on purpose, so a caller's bad payload can never wipe a plan; this
+// is the separate, explicit door, and only the brain's revert walks through it (after
+// checking the decision's own snapshot says there was nothing to restore). Logged
+// sessions keep their history — deletePlanDay only drops the link.
+export function restoreEmptyPlan(): { removed: number } {
+  const removed = withSqliteSavepoint("restore_empty_plan", () => {
+    const existing = db.prepare(`SELECT day_number FROM plan_days`).all() as any[];
+    let count = 0;
+    for (const e of existing) {
+      count += Number(
+        deletePlanDay(e.day_number, {
+          deferTrainingVersionBump: true,
+          deferDayReadInvalidation: true,
+          deferBrainEvent: true,
+        }).deleted
+      );
+    }
+    return count;
+  });
+  invalidateDayRead();
+  afterSqliteCommit(bumpTrainingDataVersion);
+  afterSqliteCommit(() =>
+    emitBrainEvent({
+      kind: "plan_changed",
+      domain: "training",
+      date: localDateISO(),
+      subject_key: "full-plan",
+      material: true,
+    })
+  );
+  return { removed };
+}

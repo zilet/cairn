@@ -45,6 +45,7 @@ import {
   getBrainRollback,
   patchBrainDecision,
   recordDecision,
+  rollbackBuiltOnEmptyPlan,
   saveBrainRollback,
   supersedeReviewDecisionsForProposal,
   transitionBrainDecision,
@@ -65,7 +66,7 @@ import {
   validateMealPlanForPersistence,
 } from "../../repo/nutrition.js";
 import { mealPlanDraftUnseen, mealPlanRefreshShape } from "../../repo/meal-plan-refresh.js";
-import { getPlan, replacePlan } from "../../repo/plan.js";
+import { getPlan, replacePlan, restoreEmptyPlan } from "../../repo/plan.js";
 import { stampsByPlanKey } from "../../repo/prescription-authorship.js";
 import { movementKey, normalizeExerciseName, normalizedExerciseKey } from "../../repo/exercise-canon.js";
 import { cancelRecoveryCycle, getRecoveryCycle } from "../../repo/recovery-cycles.js";
@@ -4128,7 +4129,7 @@ export function revertDecision(id: number, reason = "user veto"): { ok: boolean;
     }
   }
   if (!decision || decision.status !== "applied" || !decision.reversible)
-    return { ok: false, error: "decision is not reversible" };
+    return { ok: false, error: UNDO_UNAVAILABLE };
   const rollback = getBrainRollback(id);
   const personSuperseded = personSupersededMarker(decision.context);
   try {
@@ -4136,9 +4137,12 @@ export function revertDecision(id: number, reason = "user veto"): { ok: boolean;
       if (rollback?.kind === "training_plan" && Array.isArray(rollback.payload)) {
         // A legacy whole-plan snapshot cannot leave part of the plan alone, so it never
         // runs over an item the athlete has saved themselves since.
-        if (personSuperseded) throw new Error("the athlete has since saved this plan themselves");
+        if (personSuperseded)
+          throw new UndoRefusal("You've changed this week yourself since, so it stays as you have it.");
         // Legacy snapshots remain reversible. New writes use a three-way snapshot below.
-        replacePlan(withCurrentDayTypes(rollback.payload));
+        // An empty snapshot is a first week built on no plan: its Undo clears it.
+        if (rollback.payload.length === 0) restoreEmptyPlan();
+        else restorePlanWeek(() => replacePlan(withCurrentDayTypes(rollback.payload)));
       } else if (
         rollback?.kind === "training_plan" &&
         rollback.payload?.version === 2 &&
@@ -4161,15 +4165,25 @@ export function revertDecision(id: number, reason = "user veto"): { ok: boolean;
               return isPersonSuperseded(personSuperseded, key) || (key != null && mismatched.has(key));
             })()
         );
-        const restored = withRestoredStamps(
-          merged,
-          rollback.payload.before,
-          rollback.payload.before_stamps,
-          rollback.payload.after_stamps
-        );
-        replacePlan(restored, {
-          restoreStamps: true,
-        });
+        // A first week composed onto an empty plan merges back to nothing: before held no
+        // week, and everything still on the plan is this decision's own. That Undo is
+        // "Remove this first week", so it takes the explicit empty-plan door — replacePlan
+        // refuses an empty week for every other caller, on purpose.
+        if (merged.length === 0 && rollbackBuiltOnEmptyPlan(id)) {
+          restoreEmptyPlan();
+        } else {
+          const restored = withRestoredStamps(
+            merged,
+            rollback.payload.before,
+            rollback.payload.before_stamps,
+            rollback.payload.after_stamps
+          );
+          restorePlanWeek(() =>
+            replacePlan(restored, {
+              restoreStamps: true,
+            })
+          );
+        }
       } else if (rollback?.kind === "nutrition_target") {
         const appliedTargetId = Number(decision.source_ref_type === "nutrition_target" ? decision.source_ref_key : 0);
         const activeBeforeUndo = getActiveNutritionTarget();
@@ -4209,7 +4223,7 @@ export function revertDecision(id: number, reason = "user veto"): { ok: boolean;
           Number(action?.plan_proposal_id) === proposalId &&
           Number(cycle?.overlay?.source_proposal_id) === proposalId &&
           Number(cycle?.overlay?.source_decision_id) === id;
-        if (!ownsCycle) throw new Error("recovery-cycle rollback ownership no longer matches");
+        if (!ownsCycle) throw new UndoRefusal("That recovery week has changed since, so it stays as it is.");
         cancelRecoveryCycle(cycleId, localDateISO());
       } else if (rollback?.kind === "training_stance" && rollback.payload?.version === 1) {
         // The athlete's own drive / push stance. Ownership-guarded inside: a newer stance
@@ -4226,7 +4240,7 @@ export function revertDecision(id: number, reason = "user veto"): { ok: boolean;
         // batch, since a partial undo across several days is still useful.
         revertGarminReconcile(rollback.payload);
       } else {
-        throw new Error("rollback snapshot unavailable");
+        throw new UndoRefusal(UNDO_UNAVAILABLE);
       }
       if (rollback.kind === "training_plan" || rollback.kind === "recovery_cycle") {
         const proposalId = Number((decision.action as any)?.plan_proposal_id ?? (decision.action as any)?.proposal_id);
@@ -4246,10 +4260,28 @@ export function revertDecision(id: number, reason = "user veto"): { ok: boolean;
         } catch (err) { log.debug("[brain] could not close the expectation on a user veto", { error: err }); }
       }
       const reverted = transitionBrainDecision(id, "reverted");
-      if (!reverted) throw new Error("the decision could not transition to reverted");
+      if (!reverted) throw new UndoRefusal(UNDO_NOT_NOW);
       return { ok: true, decision: reverted };
     });
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+// The Undo's refusals are read by the athlete — the PWA toasts `error` as it stands — so
+// they are said in their words, never the restore layer's. The ownership guards in the
+// other modules already speak this way; these are the ones this function owns.
+const UNDO_UNAVAILABLE = "This change can no longer be undone.";
+const UNDO_NOT_NOW = "This change couldn't be undone just now, so nothing was changed.";
+class UndoRefusal extends Error {}
+
+// A plan write that fails mid-Undo is an engineering fault, not a sentence for the
+// athlete: log what broke and refuse in plain words (the savepoint rolls it all back).
+function restorePlanWeek(write: () => unknown): void {
+  try {
+    write();
+  } catch (error) {
+    log.warn("[brain] plan undo could not restore the week", { error });
+    throw new UndoRefusal("This week couldn't be put back as it was, so nothing was changed.");
   }
 }
