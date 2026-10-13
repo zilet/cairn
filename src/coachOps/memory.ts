@@ -10,7 +10,13 @@ import { addInsight, isDuplicateInsight, recentInsightTexts, upvotedInsightTexts
 import { planWeeklyRead, storeWeeklyRead, weeklyReadGuardTexts } from "../repo/weekly-read-repeat.js";
 import type { WeeklyReadPlan } from "../repo/weekly-read-repeat.js";
 import { addMemory, listMemory, supersedeMemory, updateMemory } from "../repo/memory.js";
-import { getProfile, normalizeEnduranceGoal, setProfile } from "../repo/profile.js";
+import {
+  getEnduranceSchedule,
+  getProfile,
+  getStrengthSchedule,
+  normalizeEnduranceGoal,
+  setProfile,
+} from "../repo/profile.js";
 import { movementConsiderationsRead } from "../repo/movement-considerations.js";
 import { reactionModelForCoach, setReactionNarrative } from "../repo/reaction-model.js";
 import { interactiveTimeoutForOp, setSettings } from "../repo/settings.js";
@@ -264,6 +270,10 @@ export interface OnboardApplied {
   profile: boolean;
   goal: string | null;
   lift_days: number[];
+  /** The split they named for the lifting week ("upper/lower"), when one landed. */
+  lift_split: string | null;
+  /** The weekdays they named for running (0 = Sunday), when they landed. */
+  run_days: number[];
   supplements: number;
   memories: number;
   context_events: number;
@@ -279,6 +289,8 @@ export function emptyOnboardApplied(): OnboardApplied {
     goal: null,
     endurance_goal: null,
     lift_days: [],
+    lift_split: null,
+    run_days: [],
     supplements: 0,
     memories: 0,
     context_events: 0,
@@ -347,14 +359,50 @@ export function applyOnboardParsed(p: any, applied: OnboardApplied): void {
   }
   // Weekdays they NAMED for lifting are the stated strength schedule — the same fact chat
   // records — so the first week lands on real weekdays. A bare count stays a memory below.
+  // A split they NAMED rides on the same schedule, in their words, so the first week is
+  // held to it (the composer's STATED SPLIT line, the plan-quality stated_split check).
+  const split = typeof p.lift_split === "string" ? p.lift_split.replace(/\s+/g, " ").trim().slice(0, 60) : "";
   if (Array.isArray(p.lift_days) && p.lift_days.length) {
     const days = [...new Set(p.lift_days.map((d: any) => Number(d)).filter((d: number) => Number.isInteger(d) && d >= 0 && d <= 6))] as number[];
     if (days.length && days.length < 7) {
       try {
-        setProfile({ strength_schedule: { days: days.map((dow) => ({ dow })), source: "chat" } });
+        setProfile({
+          strength_schedule: { days: days.map((dow) => ({ dow })), source: "chat", ...(split ? { split } : {}) },
+        });
         applied.lift_days = days.sort((a, b) => a - b);
+        if (split) applied.lift_split = split;
       } catch (err) { log.warn("[onboard] could not store the stated lifting weekdays", { error: err }); }
     }
+  }
+  if (split && !applied.lift_split) {
+    // No weekdays named this time: a stored lifting week carries the split; with none,
+    // it is remembered in their words (the composer reads memory) rather than inventing
+    // a week of weekdays to hang it on.
+    try {
+      const stored = getStrengthSchedule();
+      if (stored?.days.length) setProfile({ strength_schedule: { ...stored, split } });
+      else {
+        addMemory(`Lifts a ${split} split`, "preference", "onboard");
+        applied.memories++;
+      }
+      applied.lift_split = split;
+    } catch (err) { log.warn("[onboard] could not store the stated split", { error: err }); }
+  }
+  // Weekdays they NAMED for running are the stated endurance schedule — the same fact
+  // chat's set_endurance_schedule records — so the run engine places the runs where they
+  // said. Without it the engine fits the runs around the lifting week, and a first week
+  // that said "quality run Wednesday" showed intervals on a lifting Tuesday.
+  const runDays = Array.isArray(p.endurance_schedule?.days) ? p.endurance_schedule.days : [];
+  if (runDays.length) {
+    try {
+      const days = runDays
+        .map((d: any) => ({ dow: Number(d?.dow), kind: typeof d?.kind === "string" ? d.kind : "any" }))
+        .filter((d: { dow: number }) => Number.isInteger(d.dow) && d.dow >= 0 && d.dow <= 6);
+      if (days.length && days.length < 7) {
+        setProfile({ endurance_schedule: { days, source: "chat" } });
+        applied.run_days = getEnduranceSchedule()?.days.map((d) => d.dow) ?? [];
+      }
+    } catch (err) { log.warn("[onboard] could not store the stated run days", { error: err }); }
   }
   // A running goal they STATED is the profile's endurance goal — the same fact chat's
   // set_endurance_goal records — so the run engine and the race build plan from it. A

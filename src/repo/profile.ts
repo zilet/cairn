@@ -186,7 +186,9 @@ export function setProfile(p: any) {
       p.strength_schedule !== undefined
         ? p.strength_schedule == null
           ? null
-          : (serializeStrengthSchedule(p.strength_schedule) ?? cur.strength_schedule_json ?? null)
+          : (serializeStrengthSchedule(p.strength_schedule, "athlete", cur.strength_schedule_json) ??
+            cur.strength_schedule_json ??
+            null)
         : (cur.strength_schedule_json ?? null),
     // Stated movement considerations (v107). Same contract: undefined leaves intact,
     // null or an empty list clears, an unreadable shape preserves what is stored.
@@ -908,6 +910,11 @@ export function nextScheduledRunWeekday(asOf: string, kind?: EnduranceScheduleKi
 // "I lift Monday through Friday" is a statement about the CALENDAR, not about which
 // split lands where. Inventing a kind here would put the plan's shape in the
 // schedule, where nothing could keep the two honest with each other.
+//
+// The one exception is a split the athlete NAMED — "upper/lower, Mon/Tue/Thu/Fri" —
+// carried whole as `split`, in their own words. It names the week's shape, never a
+// weekday's: which day lands where stays the plan's rotation, and the composer and the
+// plan-quality check (src/repo/stated-split.ts) hold the plan to the words.
 export type StrengthScheduleSource = EnduranceScheduleSource;
 export type StrengthScheduleDay = {
   dow: 0 | 1 | 2 | 3 | 4 | 5 | 6; // 0 = Sunday
@@ -915,6 +922,8 @@ export type StrengthScheduleDay = {
 export type StrengthSchedule = {
   days: StrengthScheduleDay[];
   note?: string;
+  /** The split they named for the week, in their own words ("upper/lower"). */
+  split?: string;
   source: StrengthScheduleSource;
   updated_at: string;
 };
@@ -954,15 +963,29 @@ export function normalizeStrengthSchedule(
     ? (sourceRaw as StrengthScheduleSource)
     : (opts?.source ?? "athlete");
   const note = capStr(raw.note, 240);
+  const split = capStr(raw.split, 60);
   const updatedRaw = typeof raw.updated_at === "string" ? raw.updated_at.trim().slice(0, 40) : "";
   const updated_at = updatedRaw || new Date().toISOString();
-  return { days, ...(note ? { note } : {}), source, updated_at };
+  return { days, ...(note ? { note } : {}), ...(split ? { split } : {}), source, updated_at };
 }
 
-function serializeStrengthSchedule(input: any, sourceDefault: StrengthScheduleSource = "athlete"): string | null {
+function serializeStrengthSchedule(
+  input: any,
+  sourceDefault: StrengthScheduleSource = "athlete",
+  current?: string | null
+): string | null {
   if (input == null) return null;
   const g = normalizeStrengthSchedule(input, { source: sourceDefault });
-  return g ? JSON.stringify({ ...g, updated_at: new Date().toISOString() }) : null;
+  if (!g) return null;
+  // A weekday update that says nothing about the split keeps the stated one, exactly as
+  // a run-day update keeps the stated quality session: "I lift Mon/Wed/Fri now" is not
+  // "forget my upper/lower". Only an explicit `split: null` clears it.
+  const raw = typeof input === "string" ? null : input;
+  if (!(raw && typeof raw === "object" && Object.hasOwn(raw, "split"))) {
+    const kept = normalizeStrengthSchedule(current ?? null)?.split;
+    if (kept) g.split = kept;
+  }
+  return JSON.stringify({ ...g, updated_at: new Date().toISOString() });
 }
 
 export function getStrengthSchedule(): StrengthSchedule | null {

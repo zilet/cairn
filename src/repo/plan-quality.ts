@@ -9,6 +9,7 @@ import {
 import { classifyPattern, indirectGroupsForExercise, type MovementPattern } from "./exercise-variations.js";
 import { finite } from "../lib/numbers.js";
 import { type VolumeFloorContext, weeklySetTargets } from "./volume-floor.js";
+import { statedSplitIssues } from "./stated-split.js";
 
 export type PlanQualitySeverity = "error" | "warning";
 
@@ -35,6 +36,9 @@ export interface PlanQualityDay {
   // none of those: emptiness is what a rest day is FOR.
   day_type?: unknown;
   items?: unknown;
+  // What the day is called — read only by the stated-split check below.
+  name?: unknown;
+  focus?: unknown;
 }
 
 // Implement-agnostic slot for loaded horizontal chest presses. This intentionally
@@ -75,6 +79,11 @@ export interface PlanQualityOptions {
    * fixture, an import) gets. The compiler stays pure: callers resolve it.
    */
   volumeFloor?: VolumeFloorContext | null;
+  /**
+   * The split the athlete named, in their words (stated-split.ts). Omitted or null → no
+   * split check. A week that departs from it is a WARNING, never a refusal.
+   */
+  statedSplit?: string | null;
 }
 
 /** Effective planned weekly sets per canonical group — direct sets plus half credit for indirect work. */
@@ -335,6 +344,19 @@ function validateTrainingPlanInternal(
             { muscle_group: target.group }
           )
         );
+    }
+  }
+  if (opts.statedSplit) {
+    const liftingDays = (Array.isArray(days) ? days : []).filter(
+      (day) =>
+        String(day?.day_type ?? "training").toLowerCase() !== "rest" &&
+        Array.isArray(day?.items) &&
+        (day.items as any[]).some((item) => String(item?.kind ?? "strength") !== "cardio")
+    );
+    for (const found of statedSplitIssues(liftingDays, opts.statedSplit)) {
+      warnings.push(
+        issue("warning", found.code, found.message, found.day_number == null ? {} : { day_number: found.day_number })
+      );
     }
   }
   return { report: { ok: errors.length === 0, errors, warnings }, groupSets };

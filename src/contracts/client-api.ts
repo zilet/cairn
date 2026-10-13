@@ -3781,6 +3781,8 @@ export type ClientWelcomeResult =
         goal: string | null;
         endurance_goal: "race" | "standing" | null;
         lift_days: number[];
+        lift_split: string | null;
+        run_days: number[];
         supplements: number;
         memories: number;
         context_events: number;

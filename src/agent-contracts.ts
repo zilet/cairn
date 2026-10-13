@@ -1127,6 +1127,26 @@ export const ONBOARD_SCHEMA: JsonSchema = {
     // Weekdays (0 = Sunday) the person NAMED for lifting — applied as the stated
     // strength_schedule, never invented from a bare count of days.
     lift_days: { type: ["array", "null"], items: { type: "integer" } },
+    // The split they NAMED ("upper/lower"), in their words — carried on the stated
+    // strength schedule so the composer and the plan-quality check hold the week to it.
+    lift_split: { type: ["string", "null"] },
+    // Weekdays they NAMED for running (0 = Sunday), with the run's kind when they said
+    // it — applied as the stated endurance_schedule, so the run engine places the runs
+    // where they said rather than where the lifting week leaves room.
+    endurance_schedule: {
+      type: ["object", "null"],
+      additionalProperties: true,
+      properties: {
+        days: {
+          type: ["array", "null"],
+          items: {
+            type: "object",
+            additionalProperties: true,
+            properties: { dow: { type: "integer" }, kind: { type: ["string", "null"] } },
+          },
+        },
+      },
+    },
     // A running goal they STATED — a dated race, or a standing readiness target — applied
     // as the profile's endurance goal (the same fact chat's set_endurance_goal records),
     // so the run engine and the race build see it from the first week on.

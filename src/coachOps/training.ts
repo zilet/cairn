@@ -696,10 +696,14 @@ export async function composeWeek(
   // either sees it. 240 matches what the PWA field accepts.
   // slice() cuts UTF-16 code units, so the 240 boundary can split an emoji and
   // leave a lone lead surrogate that round-trips as U+FFFD; drop it, don't store it.
+  // The welcome hands over the person's whole first message (already bounded at 4000 by
+  // its route): cutting it at 240 dropped the split they named whenever a race came
+  // first in the same breath, and the composer then wrote a week that ignored it.
+  const askedMax = opts.welcome ? 4000 : 240;
   const asked =
     (typeof instruction === "string" ? instruction : "")
       .trim()
-      .slice(0, 240)
+      .slice(0, askedMax)
       .replace(/[\uD800-\uDBFF]$/, "") || undefined;
   if (trainingWeekExists()) {
     return {

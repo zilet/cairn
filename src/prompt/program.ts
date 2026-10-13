@@ -22,6 +22,8 @@ const ONBOARD_FIELDS = `
   "profile": { "sex": "male|female|null", "age": <int|null>, "height_cm": <number|null>, "weight_lb": <number|null>, "goal_weight_lb": <number|null>, "goal_date": "YYYY-MM-DD|null", "days_per_week": <int|null> },
   "goal": "lose|maintain|gain|recomp|null",
   "lift_days": [ <weekday number 0-6, 0 = Sunday, ONLY for weekdays they named as lifting / gym days> ],
+  "lift_split": "<the split they NAMED for their lifting week, in their own words, e.g. upper/lower, push/pull/legs, full body — null if they named none>",
+  "endurance_schedule": { "days": [ { "dow": <weekday number 0-6, 0 = Sunday, ONLY a weekday they named for running>, "kind": "easy|quality|long|any" } ] } | null,
   "endurance_goal": { "mode": "race|standing", "event": "<race name or kind, race mode>", "date": "YYYY-MM-DD (race mode)", "label": "<readiness label, e.g. 10k-ready, standing mode>", "distance_km": <number|null>, "target": "<their stated time or aim, e.g. sub-1:50|null>", "weekly_km": <number|null>, "weekly_sessions": <runs per week they said|null> } | null,
   "supplements": [ { "name": "Creatine monohydrate", "dose": "5 g", "frequency": "daily", "category": "performance", "related_markers": ["eGFR"] } ],
   "memories": [ { "content": "<durable preference or fact, e.g. trains fasted in the mornings>", "kind": "preference|constraint|decision|goal|observation" } ],
@@ -47,6 +49,8 @@ This is also your FIRST CONVERSATION with them. Write "welcome_reply": 2-4 warm,
 you understood what they are training for and what their week looks like, and say you are putting a first
 week and a starting food target in place that they can change by just telling you. Second person, calm,
 no exclamation marks, no numbers about their body, no scores or grades, never "you must" or "you need to".
+Never name a weekday for a run they did not name themselves: Cairn places the runs on their calendar
+after this conversation, so a weekday you guess here may not be the one it shows.
 Write "fuel_start" only from what they said: protein_g from their bodyweight when they gave one (about
 0.7-1 g per lb, toward the top when cutting or building), target_kcal only when their weight and goal
 make a sensible estimate possible (a modest deficit for "lose", maintenance for "maintain"/"recomp", a
@@ -65,7 +69,11 @@ an injury is something that HURTS or is healing. A lasting structural/postural c
 movement_considerations, NOT context_events; set wants_addressed only when they say they want it worked
 on. Never infer a condition they did not state. No medical advice. Fill "lift_days" only with weekdays
 they actually named for lifting or the gym; a count of days alone ("three days a week") is
-profile.days_per_week, never invented weekdays. Fill "endurance_goal" only for a running goal they
+profile.days_per_week, never invented weekdays. Fill "lift_split" only with a split they named
+("upper/lower", "PPL", "full body"), in their words; never infer one from a count of days. Fill
+"endurance_schedule" only with weekdays they named for running; a day's "kind" is what they said that
+run is (a long run on Sunday is "long"), else "any" — never invent run days, and leave it null when
+they gave none. Fill "endurance_goal" only for a running goal they
 stated: a race with a date is mode "race" (resolve the date against today, ${today}, to the next
 such day; a race with no date at all is not a race goal), an ongoing aim with no date ("stay 10k-ready")
 is mode "standing"; a half marathon is 21.1 km, a marathon 42.2 km. Otherwise null.

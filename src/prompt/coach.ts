@@ -440,6 +440,14 @@ HOW TO COMPOSE IT:
   they have an endurance sport or a race but have not named their run days, say in the summary
   which weekdays you composed the lifting around, so they can tell Cairn the run days in chat. If
   the data shows NO endurance sport, no race and no runs, compose the lifting week alone.
+- NEVER PROMISE A RUN WEEKDAY THE CALENDAR WON'T SHOW. Name a weekday for a run (in the summary,
+  the notes or a day's note) ONLY when DATA.endurance_schedule states that weekday. Without stated
+  run days the run engine places the runs after this week lands, around the lifting days you
+  write, so a weekday you guess for a run is not the one their calendar shows. Speak of those runs
+  by kind instead ("a quality run mid-week", "the long run late in the week").
+- THE SPLIT THEY NAMED IS THE WEEK'S SHAPE. When a STATED SPLIT is in the data, every lifting day
+  is one part of it, named for that part, and the parts rotate evenly across the stated lifting
+  weekdays. A race or a running goal reshapes the runs and the dose, never the split.
 - NO TWO HARD DAYS BACK TO BACK, on the ring. A heavy lower day, the long run and the quality run
   are the hard days. Never place the heaviest lower-body work (squat / hinge / heavy unilateral)
   the day BEFORE or the day AFTER the long run or the quality run — the legs cannot give their

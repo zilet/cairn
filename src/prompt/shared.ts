@@ -1659,6 +1659,7 @@ export function renderStrengthSchedule(ctx: PartialCoachContext): string {
     source?: string;
     weeks_seen?: number;
     weeks_window?: number;
+    split?: string;
   } | null;
   const days = Array.isArray(schedule?.days) ? schedule.days : [];
   if (!days.length) return "";
@@ -1694,7 +1695,13 @@ export function renderStrengthSchedule(ctx: PartialCoachContext): string {
     const evidence = Number.isFinite(seen) && seen > 0 ? `${seen} of the last ${window} weeks` : `the last ${window} weeks`;
     return `\nOBSERVED LIFTING DAYS (from the log, ${evidence} — they have not said, this is what they DO): ${stated}. Treat these as the week's real shape: keep a strength session on each unless you have a reason, and say the reason. This is a pattern, not a declaration — never tell them they asked for it.${shared}\n`;
   }
-  return `\nSTATED LIFTING DAYS: ${stated}. Every stated lifting weekday carries a strength session; never place a strength session on an unstated weekday.${shared}\n`;
+  // The split they NAMED, in their words (src/repo/stated-split.ts holds the plan to it).
+  // It binds the week's SHAPE: a race or a run goal changes the runs, never the split.
+  const split = typeof schedule?.split === "string" ? schedule.split.replace(/\s+/g, " ").trim().slice(0, 60) : "";
+  const splitLine = split
+    ? ` STATED SPLIT: "${split}" — their own words, and binding. Every strength day is one part of that split and is named for it, and the parts share the stated lifting weekdays evenly in rotation (an upper/lower split over four days is two upper days and two lower days, alternating). A race or a running goal changes the runs, never the split: leg work the race calls for lives inside the split's own lower/leg days.`
+    : "";
+  return `\nSTATED LIFTING DAYS: ${stated}. Every stated lifting weekday carries a strength session; never place a strength session on an unstated weekday.${shared}${splitLine}\n`;
 }
 
 // renderMovementConsiderations: a lasting, painless condition the athlete STATED (v107),

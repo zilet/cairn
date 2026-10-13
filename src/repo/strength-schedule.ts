@@ -46,6 +46,8 @@ export interface StrengthScheduleRead {
    */
   weeks_seen: number;
   weeks_window: number;
+  /** The split they NAMED ("upper/lower"), stated reads only — never inferred from the log. */
+  split?: string;
 }
 
 const EMPTY: StrengthScheduleRead = { days: [], source: null, weeks_seen: 0, weeks_window: OBSERVED_WEEKS_WINDOW };
@@ -127,7 +129,13 @@ export function strengthScheduleRead(asOf?: string): StrengthScheduleRead {
 function strengthScheduleReadUncached(asOf?: string): StrengthScheduleRead {
   const stated = getStrengthSchedule();
   if (stated?.days.length) {
-    return { days: stated.days, source: "stated", weeks_seen: 0, weeks_window: OBSERVED_WEEKS_WINDOW };
+    return {
+      days: stated.days,
+      source: "stated",
+      weeks_seen: 0,
+      weeks_window: OBSERVED_WEEKS_WINDOW,
+      ...(stated.split ? { split: stated.split } : {}),
+    };
   }
   if (stated) return EMPTY; // explicitly cleared — a deliberate silence, not an opening
   const { dows, weeks_seen } = observedLiftDows(asOf);
