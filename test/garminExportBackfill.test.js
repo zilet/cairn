@@ -3,6 +3,7 @@
 // observed by what the serial queue actually sent, in what order.
 import { test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import { whenEnrichQueueIdle } from "../dist/enrich.js";
 import { garminExportBackfill } from "../dist/garminExportBackfill.js";
 import { exportSessionToGarmin, setGarminStrengthApiForTests } from "../dist/garminExport.js";
 import { db, repo } from "./_seed.js";
@@ -45,9 +46,15 @@ function seedFinishedSession(date, sets = 2, exercise = "Back Squat") {
   return session.id;
 }
 
-// The queue drains on its own; give it turns until it settles.
+// The queue drains on its own; wait for it to go idle. finishSession reaches the queue
+// through a dynamic `import("../enrich.js").then(enqueue)`, so the job lands a few loop
+// turns AFTER the call: yield those turns first, then wait for the drain itself.
+const nextTurn = () => new Promise((resolve) => setImmediate(resolve));
 async function drainQueue() {
-  for (let i = 0; i < 40; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+  for (let i = 0; i < 3; i++) {
+    await nextTurn();
+    await whenEnrichQueueIdle();
+  }
 }
 
 beforeEach(() => {

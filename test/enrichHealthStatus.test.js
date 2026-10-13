@@ -5,10 +5,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { repo } from "./_seed.js";
-import { applyHealthIngestResult, enqueueEnrich, settleStaleImagingJob } from "../dist/enrich.js";
+import { applyHealthIngestResult, enqueueEnrich, settleStaleImagingJob, whenEnrichQueueIdle } from "../dist/enrich.js";
 import { UPLOADS_DIR } from "../dist/uploadPaths.js";
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function addImagingFile(studyId, suffix) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -77,23 +75,15 @@ test("health reanalysis keeps an existing structured ingest when the agent retur
     enrichment_status: "pending",
     summary: "Garmin ECG recording shows sinus rhythm at an average heart rate of 57 bpm.",
     parsed_json: {
-      markers: [
-        { name: "Average Heart Rate", value: 57, unit: "bpm", flag: null },
-      ],
-      clinical_facts: [
-        { kind: "procedure", date: "2026-06-30", name: "ECG Recording", status: "completed" },
-      ],
+      markers: [{ name: "Average Heart Rate", value: 57, unit: "bpm", flag: null }],
+      clinical_facts: [{ kind: "procedure", date: "2026-06-30", name: "ECG Recording", status: "completed" }],
     },
   });
 
   enqueueEnrich("health", doc.id);
 
-  let after = repo.getHealthDocument(doc.id);
-  for (let i = 0; i < 80; i++) {
-    after = repo.getHealthDocument(doc.id);
-    if (!["pending", "in_progress"].includes(after.enrichment_status)) break;
-    await sleep(50);
-  }
+  await whenEnrichQueueIdle();
+  const after = repo.getHealthDocument(doc.id);
   fs.rmSync(fp, { force: true });
 
   assert.equal(after.enrichment_status, "done");
@@ -154,12 +144,8 @@ Follow-up:
 
   enqueueEnrich("health", doc.id);
 
-  let after = repo.getHealthDocument(doc.id);
-  for (let i = 0; i < 80; i++) {
-    after = repo.getHealthDocument(doc.id);
-    if (!["pending", "in_progress"].includes(after.enrichment_status)) break;
-    await sleep(50);
-  }
+  await whenEnrichQueueIdle();
+  const after = repo.getHealthDocument(doc.id);
   fs.rmSync(fp, { force: true });
 
   assert.equal(after.enrichment_status, "done");
@@ -178,5 +164,8 @@ Follow-up:
   assert.equal(resolvedEvent.resolved_at, "2026-07-07");
   assert.equal(resolvedEvent.meta.matched_health_doc.id, doc.id);
   assert.equal(resolvedEvent.meta.matched_health_doc.kind, "visit_note");
-  assert.equal(repo.listContextEvents({ activeOnly: true }).some((e) => e.id === event.id), false);
+  assert.equal(
+    repo.listContextEvents({ activeOnly: true }).some((e) => e.id === event.id),
+    false
+  );
 });

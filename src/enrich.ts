@@ -161,6 +161,7 @@ interface HealthSource {
 
 const queue: Job[] = [];
 let draining = false;
+const idleWaiters: Array<() => void> = [];
 
 export function staleImagingWorkerAction(reason: "attachments_changed" | "user_state_changed"): {
   status: "pending" | "retry_needed";
@@ -432,6 +433,16 @@ export function enqueueEnrich(kind: Kind, id: number, opts: { front?: boolean } 
   if (!draining) void drain();
 }
 
+/**
+ * Resolves once nothing is queued and no job is running. A queue resting on agent
+ * congestion (its retry timer pending) is not idle, so this waits for that retry too.
+ * Lets a caller wait on the drain itself instead of guessing with a sleep.
+ */
+export function whenEnrichQueueIdle(): Promise<void> {
+  if (!draining && queue.length === 0) return Promise.resolve();
+  return new Promise((resolve) => idleWaiters.push(resolve));
+}
+
 /** The jobs still WAITING, in the order they will run. Queue shape, for tests only. */
 export function pendingEnrichJobsForTests(): Array<{ kind: Kind; id: number }> {
   return queue.map((job) => ({ kind: job.kind, id: job.id }));
@@ -522,6 +533,7 @@ async function drain(): Promise<void> {
     }
   } finally {
     draining = false;
+    if (queue.length === 0) for (const resolve of idleWaiters.splice(0)) resolve();
     // Resume after the rest. Unref'd so a queue waiting on congestion never holds the
     // process open, and guarded by `draining` so a fresh enqueue in the meantime wins.
     if (congested && queue.length) setTimeout(() => { if (!draining) void drain(); }, AGENT_BUSY_RETRY_MS).unref?.();
