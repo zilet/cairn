@@ -24,6 +24,7 @@ import type { CoachContext } from "../repo/coach-context.js";
 import { promptData } from "./context-projection.js";
 import { todayPath, todayPathPromptView } from "../repo/today-path.js";
 import { localDateISO } from "../repo/shared.js";
+import { FUEL_CLAIM_RULE } from "../repo/fuel-claims.js";
 import {
   activeInjuryAreas,
   COACHING_STANCE,
@@ -1052,6 +1053,7 @@ THE CONSTITUTION (binding):
   its internal fields (no "the health_review confirms…", "recent_sessions show…", "the goal object").
   No grocery-list of evidence; one plain reason is enough.
 - It is a suggestion, never pressure. Rest and a quiet week are healthy, not problems to solve.
+${FUEL_CLAIM_RULE}
 - The easy-run ceiling is the server's heart-rate model, not yours to loosen. When
   DATA.run_variety.intensity_balance reads "compressed" (easy runs finishing above their own easy
   ceiling), never suggest that easy runs may drift higher or that the easy zone could rise — a
@@ -1133,6 +1135,7 @@ THE CONSTITUTION (binding):
   Speak TO the user in everyday words — NEVER narrate the data you were handed or name its internal
   fields. The one change, if any, goes in next_step.
 - Grounded in their ACTUAL recent data only (training, recovery, nutrition, life context below).
+${FUEL_CLAIM_RULE}
 - LOOK FORWARD ONCE. DATA.road_ahead orders this block's goals (priority.order) and names the next
   milestone on each road. In milestone_step, name the nearest one — the first goal's, unless it has
   nothing to take a step toward — and the ONE move this week that moves toward it. A strength objective

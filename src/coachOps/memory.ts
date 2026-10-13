@@ -27,6 +27,8 @@ import type { FallbackResult } from "../agents.js";
 import { runChosen, runChosenStreaming } from "../runChosen.js";
 import { buildInsightPrompt, buildWeeklyReadPrompt, buildMemoryConsolidationPrompt, buildAboutMeGrowthPrompt, buildChatDistillPrompt, buildOnboardPrompt, buildReactionNarrativePrompt } from "../prompt.js";
 import { researchEvidence } from "../research.js";
+import { claimsUnderEating, underEatingSupported } from "../repo/fuel-claims.js";
+import { underfuelingRead } from "../repo/underfueling.js";
 import { INSIGHT_SCHEMA, ABOUT_ME_GROWTH_SCHEMA, CHAT_DISTILL_SCHEMA, MEMORY_CONSOLIDATION_SCHEMA, ONBOARD_SCHEMA, REACTION_NARRATIVE_SCHEMA, isInsightResult, isReactionNarrativeResult, isChatDistillResult, isMemoryConsolidationResult } from "../agent-contracts.js";
 import { log } from "../log.js";
 import { agentFailure, agentStatusFor } from "./shared.js";
@@ -62,11 +64,14 @@ export function insightVerdict(opts: {
   kind: string;
   keyCorpus: string[];
   recentTexts: string[];
+  /** false when the fuel read does not back an under-eating claim; undefined skips the check. */
+  underEatingSupported?: boolean;
 }): InsightVerdict {
   const p: any = opts.parsed;
   if (!p || typeof p !== "object") return { accept: false, agent_ran: false };
   const text = String(p.text ?? "").trim();
   if (p.found === false || !text) return { accept: false, agent_ran: true };
+  if (unbackedFuelClaim(p, opts.underEatingSupported)) return { accept: false, agent_ran: true };
   const keyed = opts.kind === "connection";
   const named = keyed
     ? resolveInsightIntent(p.connection, text, p.rationale)
@@ -92,10 +97,23 @@ export function insightVerdict(opts: {
 //      every downvoted text stay in.
 export type WeeklyReadVerdict = { accept: true; plan: WeeklyReadPlan } | { accept: false; agent_ran: boolean };
 
-export function weeklyReadVerdict(opts: { parsed: unknown; recentTexts?: string[]; today?: string }): WeeklyReadVerdict {
+// "You're eating too little" is the fuel read's call (src/repo/fuel-claims.ts): prose that
+// claims it while the read does not back it is the same calm silence as any other miss.
+function unbackedFuelClaim(p: any, underEatingSupported: boolean | undefined): boolean {
+  if (underEatingSupported !== false) return false;
+  return [p?.text, p?.rationale, p?.next_step, p?.headline, p?.suggestion].some((field) => claimsUnderEating(field));
+}
+
+export function weeklyReadVerdict(opts: {
+  parsed: unknown;
+  recentTexts?: string[];
+  today?: string;
+  underEatingSupported?: boolean;
+}): WeeklyReadVerdict {
   const p: any = opts.parsed;
   if (!p || typeof p !== "object") return { accept: false, agent_ran: false };
   if (p.found === false || !String(p.text ?? "").trim()) return { accept: false, agent_ran: true };
+  if (unbackedFuelClaim(p, opts.underEatingSupported)) return { accept: false, agent_ran: true };
   const plan = planWeeklyRead(p, opts.today);
   if (!plan) return { accept: false, agent_ran: true };
   if (plan.mode === "repeat") return { accept: true, plan };
@@ -103,6 +121,15 @@ export function weeklyReadVerdict(opts: { parsed: unknown; recentTexts?: string[
     return { accept: false, agent_ran: true };
   }
   return { accept: true, plan };
+}
+
+// The fuel read's answer, or undefined when it cannot be read (then nothing is judged).
+function fuelReadBacksUnderEating(): boolean | undefined {
+  try {
+    return underEatingSupported(underfuelingRead());
+  } catch {
+    return undefined;
+  }
 }
 
 // Run ONE agentic pass over the whole picture for a single genuine cross-domain
@@ -165,10 +192,11 @@ export async function generateInsight(
     };
   }
   const p: any = result.parsed;
+  const underEating = fuelReadBacksUnderEating();
   const verdict =
     k === "weekly_read"
-      ? weeklyReadVerdict({ parsed: p })
-      : insightVerdict({ parsed: p, kind: k, keyCorpus: corpus.keys, recentTexts: recent });
+      ? weeklyReadVerdict({ parsed: p, underEatingSupported: underEating })
+      : insightVerdict({ parsed: p, kind: k, keyCorpus: corpus.keys, recentTexts: recent, underEatingSupported: underEating });
   if (!verdict.accept) {
     // Distinguish "no agent configured / every attempt failed" from a legitimate
     // quiet answer (the agent ran and genuinely found nothing new). When the agent

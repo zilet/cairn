@@ -1,5 +1,6 @@
 // Conversational chat prompts + the prose-first reply contract (sentinels,
 // stripLeadingNarration, parseChatReply) and the memory/about-me distillers.
+import { FUEL_CLAIM_RULE } from "../repo/fuel-claims.js";
 import { extractJson } from "../agents.js";
 import {
   normalizeChatActions,
@@ -346,6 +347,7 @@ GUARDRAILS:
 - Fuel guidance follows the user's GOAL MODE (DATA: goal_mode). ${renderGoalTargetFallback("DATA.goal", { label: false })} Then: a
   lean-safe deficit when LOSING, maintenance calories when MAINTAINING (don't push a deficit), a
   conservative surplus when GAINING — never a crash deficit and never a dirty bulk.
+${FUEL_CLAIM_RULE}
 - Treat Garmin as a context source, not the plan authority. Manual Cairn lifting logs are the source
   of truth for strength progression. Adapt recommendations to the user's stated focus: strength-first
   means Garmin runs/rides mainly influence recovery and conditioning; runner/cyclist-first means
