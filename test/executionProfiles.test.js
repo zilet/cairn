@@ -294,16 +294,16 @@ test("every self-critique verify op declares an execution profile", () => {
 test("with no choice made, no provider gets --model: every CLI runs its own default model", () => {
   // Effort stays server policy; the model is the CLI's own unless the person binds a class.
   assert.deepEqual(resolve("day_read", "claude"), { reasoning: "low" });
-  assert.deepEqual(resolve("proposal", "claude"), { reasoning: "xhigh" });
-  assert.deepEqual(resolve("health", "claude"), { reasoning: "high" });
+  assert.deepEqual(resolve("proposal", "claude"), { reasoning: "high" });
+  assert.deepEqual(resolve("health", "claude"), { reasoning: "medium" });
   assert.deepEqual(resolve("enrich", "claude"), { reasoning: "low" });
-  assert.deepEqual(resolve("session_suggest", "claude"), { reasoning: "medium" });
+  assert.deepEqual(resolve("session_suggest", "claude"), { reasoning: "low" });
   for (const agent of ["claude", "codex", "antigravity", "grok"]) {
     for (const task of ["day_read", "proposal", "health"]) {
       assert.equal(resolve(task, agent).model, undefined, `${agent}/${task} must not be model-pinned`);
     }
   }
-  assert.deepEqual(resolve("proposal", "codex"), { reasoning: "xhigh" });
+  assert.deepEqual(resolve("proposal", "codex"), { reasoning: "high" });
 
   // No entry (chat), unknown op, and the offline stub all resolve to "no profile".
   assert.deepEqual(resolve("chat", "claude"), {});
@@ -315,8 +315,8 @@ test("with no choice made, no provider gets --model: every CLI runs its own defa
 test("a provider that tops out below the requested effort degrades instead of failing", () => {
   // antigravity/grok declare low|medium|high.
   for (const agent of ["antigravity", "grok"]) {
-    assert.deepEqual(resolve("proposal", agent), { reasoning: "high" }, `${agent} xhigh -> high`);
-    assert.deepEqual(resolve("health", agent), { reasoning: "high" });
+    assert.deepEqual(resolve("proposal", agent), { reasoning: "high" });
+    assert.deepEqual(resolve("health_review", agent), { reasoning: "high" });
     assert.deepEqual(resolve("day_read", agent), { reasoning: "low" });
   }
   // The ladder is general, not an xhigh special case.
@@ -335,8 +335,8 @@ test("a provider that tops out below the requested effort degrades instead of fa
 test("a class binding picks the model for that provider's class, and only there", () => {
   const classes = { claude: { fast: "sonnet", deep: "opus" } };
   assert.deepEqual(resolve("day_read", "claude", {}, classes), { model: "sonnet", reasoning: "low" });
-  assert.deepEqual(resolve("proposal", "claude", {}, classes), { model: "opus", reasoning: "xhigh" });
-  assert.deepEqual(resolve("health", "claude", {}, classes), { model: "opus", reasoning: "high" });
+  assert.deepEqual(resolve("proposal", "claude", {}, classes), { model: "opus", reasoning: "high" });
+  assert.deepEqual(resolve("health", "claude", {}, classes), { model: "opus", reasoning: "medium" });
   // One class bound, the other left on the CLI default.
   assert.deepEqual(resolve("day_read", "claude", {}, { claude: { deep: "opus" } }), { reasoning: "low" });
   // A choice for one provider never reaches another.
@@ -384,15 +384,15 @@ test("executionProfileForOp folds ops onto their task class", () => {
   // case_conference / conference_* -> brain_review, evolve_program -> proposal,
   // marker_reconcile -> health (the same taskForOp table the agent routing uses).
   db.prepare("DELETE FROM settings WHERE id = 1").run();
-  assert.deepEqual(profileFor("case_conference", "claude"), { reasoning: "xhigh" });
-  assert.deepEqual(profileFor("conference_nutrition", "claude"), { reasoning: "xhigh" });
-  assert.deepEqual(profileFor("evolve_program", "claude"), { reasoning: "xhigh" });
-  assert.deepEqual(profileFor("marker_reconcile", "claude"), { reasoning: "high" });
+  assert.deepEqual(profileFor("case_conference", "claude"), { reasoning: "high" });
+  assert.deepEqual(profileFor("conference_nutrition", "claude"), { reasoning: "high" });
+  assert.deepEqual(profileFor("evolve_program", "claude"), { reasoning: "high" });
+  assert.deepEqual(profileFor("marker_reconcile", "claude"), { reasoning: "medium" });
   assert.deepEqual(profileFor("day_read", "claude"), { reasoning: "low" });
   assert.deepEqual(profileFor("auto", "claude"), {});
   // The live (DB-backed) resolver reads the person's class choice.
   repo.setSettings({ model_class_bindings: { claude: { fast: "sonnet", deep: "opus" } } });
-  assert.deepEqual(profileFor("case_conference", "claude"), { model: "opus", reasoning: "xhigh" });
+  assert.deepEqual(profileFor("case_conference", "claude"), { model: "opus", reasoning: "high" });
   assert.deepEqual(profileFor("day_read", "claude"), { model: "sonnet", reasoning: "low" });
   assert.deepEqual(profileFor("day_read", "codex"), { reasoning: "low" });
   db.prepare("DELETE FROM settings WHERE id = 1").run();
@@ -440,13 +440,12 @@ test("normalizeModelClassBindings accepts a live-catalog entry the free-text rul
   assert.ok(!repo.MODEL_ID_PATTERN.test("x".repeat(81)));
 });
 
-test("the interactive leash scales with the effort the op asked for", () => {
-  assert.equal(repo.interactiveTimeoutForOp("day_read"), 90_000); // low: unchanged
-  assert.equal(repo.interactiveTimeoutForOp("session_suggest"), 150_000);
+test("the interactive leash scales with the effort the op asked for, never below the floor", () => {
+  assert.equal(repo.interactiveTimeoutForOp("day_read"), 90_000); // the Brief keeps its own short leash
+  assert.equal(repo.interactiveTimeoutForOp("session_suggest"), 150_000); // low, held at the floor
   assert.equal(repo.interactiveTimeoutForOp("health_review"), 240_000);
-  assert.equal(repo.interactiveTimeoutForOp("evolve_program"), 300_000); // xhigh, capped at the default
-  assert.equal(repo.interactiveTimeoutForOp("chat"), 90_000); // no entry -> today's leash
-  assert.equal(repo.interactiveTimeoutForOp("not_a_real_op"), 90_000);
+  assert.equal(repo.interactiveTimeoutForOp("evolve_program"), 240_000); // high
+  assert.equal(repo.interactiveTimeoutForOp("not_a_real_op"), 150_000);
 });
 
 test("agent_profile_bindings round-trip through settings and drop unknown keys", () => {
@@ -505,13 +504,15 @@ test("op profiles reach the spawned argv, per provider, with no caller-supplied 
     const at = res.stdout.lastIndexOf(marker);
     assert.ok(at >= 0, res.stdout);
     const argv = JSON.parse(res.stdout.slice(at + marker.length));
-    // fast/low vs deep/xhigh, expressed in each CLI's own flags. Nobody gets --model
-    // until the person chooses one, and grok/antigravity degrade xhigh to their ceiling.
-    assert.deepEqual(argv.claude.day_read, ["--effort", "low", "-p", prompt]);
-    assert.deepEqual(argv.claude.proposal, ["--effort", "xhigh", "-p", prompt]);
+    // fast/low vs deep/high, expressed in each CLI's own flags. Nobody gets --model
+    // until the person chooses one.
+    // A no-tools prompt also starts claude lean (agents.json no_tools_args).
+    const lean = providerConfig().claude.no_tools_args ?? [];
+    assert.deepEqual(argv.claude.day_read, [...lean, "--effort", "low", "-p", prompt]);
+    assert.deepEqual(argv.claude.proposal, [...lean, "--effort", "high", "-p", prompt]);
     // With deep bound to opus: the deep op carries it, the fast op still does not.
-    assert.deepEqual(argv.bound.day_read, ["--effort", "low", "-p", prompt]);
-    assert.deepEqual(argv.bound.proposal, ["--model", "opus", "--effort", "xhigh", "-p", prompt]);
+    assert.deepEqual(argv.bound.day_read, [...lean, "--effort", "low", "-p", prompt]);
+    assert.deepEqual(argv.bound.proposal, [...lean, "--model", "opus", "--effort", "high", "-p", prompt]);
     assert.deepEqual(argv.codex.day_read, [
       "exec",
       "-c",
@@ -524,7 +525,7 @@ test("op profiles reach the spawned argv, per provider, with no caller-supplied 
     assert.deepEqual(argv.codex.proposal, [
       "exec",
       "-c",
-      "model_reasoning_effort=xhigh",
+      "model_reasoning_effort=high",
       "--sandbox",
       "read-only",
       "--skip-git-repo-check",

@@ -4,10 +4,12 @@
 // Each entry must equal what its own route still answers (the fan-in is a request
 // count optimization, never a second source of truth), a fan-in is never memoized
 // past the reads it replaces, and the health-bearing ones are never stored.
-import { test, after } from "node:test";
+import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import express from "express";
+import { settleAgentLoginChecks } from "../dist/agents.js";
 import { api, apiCacheControlFor } from "../dist/api.js";
+import { getAgentConfig } from "../dist/repo/settings.js";
 import { resetResponseMemo } from "../dist/routes/response-memo.js";
 import { localDateISO } from "../dist/repo/shared.js";
 import { repo, isoDaysAgo, seedHealthDoc, marker } from "./_seed.js";
@@ -29,6 +31,13 @@ async function listener() {
 }
 
 after(() => server?.close());
+
+// /settings peeks the CLI probes and fills them in the background; warm them first so
+// a probe landing between the fan-in and its own route never reads as a difference.
+before(async () => {
+  getAgentConfig({ loginProbe: "peek" });
+  await settleAgentLoginChecks(10_000);
+});
 
 async function get(path) {
   const url = await listener();

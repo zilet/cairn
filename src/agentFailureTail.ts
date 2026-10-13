@@ -124,6 +124,20 @@ export function structuredErrorText(stdout: string): string {
       }
       continue;
     }
+    // agy stream-json: the terminal {"event":"result"} names a status other than SUCCESS.
+    if (o.event === "result" && o.result && typeof o.result === "object") {
+      const r = o.result;
+      if (String(r.status ?? "").toUpperCase() !== "SUCCESS") {
+        const msg = pickMessage(r.error) ?? pickMessage(r.message) ?? pickMessage(r.response) ?? String(r.status ?? "");
+        if (msg) found.push(msg);
+      }
+      continue;
+    }
+    if (o.event === "error") {
+      const msg = pickMessage(o.error) ?? pickMessage(o.message);
+      if (msg) found.push(msg);
+      continue;
+    }
     if (o.type === "assistant") {
       if (o.error) {
         const msg = [pickMessage(o.error), assistantText(o.message)].filter(Boolean).join(": ");

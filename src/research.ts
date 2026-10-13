@@ -84,7 +84,7 @@ export function researchAutoEligible(agents?: Array<{ name: string; usable: bool
   let usable: string[] = [];
   try {
     // The usable set = enabled + binary present + env ok + not known-logged-out.
-    usable = (agents ?? getAgentConfig()).filter((a: any) => a.usable).map((a: any) => a.name);
+    usable = (agents ?? getAgentConfig({ loginProbe: "peek" })).filter((a: any) => a.usable).map((a: any) => a.name);
   } catch {
     usable = [];
   }

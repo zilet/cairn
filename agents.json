@@ -1,7 +1,7 @@
 {
   "claude": {
     "command": "claude",
-    "args": ["{file_access_args}", "{mcp_config_args}", "{model_args}", "{reasoning_args}", "{schema_args}", "-p", "{prompt}"],
+    "args": ["{file_access_args}", "{mcp_config_args}", "{no_tools_args}", "{model_args}", "{reasoning_args}", "{schema_args}", "-p", "{prompt}"],
     "input": "arg",
     "description": "Claude Code (Anthropic Pro/Max). Auth: ~/.claude.",
     "label": "Claude",
@@ -19,6 +19,7 @@
     "capabilities": { "model": true, "reasoning": ["low", "medium", "high", "xhigh", "max"] },
     "reasoning_flag": ["--effort", "{reasoning}"],
     "file_access_args": ["--add-dir", "{data_dir}"],
+    "no_tools_args": ["--tools", "", "--strict-mcp-config", "--setting-sources", "user", "--disable-slash-commands", "--no-session-persistence"],
     "large_prompt": { "via": "stdin" },
     "structured_output": {
       "flag": ["--json-schema", "{schema}"],
@@ -34,7 +35,7 @@
     },
     "stream": {
       "format": "claude",
-      "args": ["{file_access_args}", "{mcp_config_args}", "{model_args}", "{reasoning_args}", "-p", "{prompt}", "--output-format", "stream-json", "--include-partial-messages", "--verbose"]
+      "args": ["{file_access_args}", "{mcp_config_args}", "{no_tools_args}", "{model_args}", "{reasoning_args}", "-p", "{prompt}", "--output-format", "stream-json", "--include-partial-messages", "--verbose"]
     }
   },
   "codex": {
@@ -59,6 +60,7 @@
     "structured_output": {
       "flag": ["--output-schema", "{schema_file}"],
       "arg": "file",
+      "dialect": "openai_strict",
       "note": "codex 0.145.0 `exec --help`: '--output-schema <FILE>  Path to a JSON Schema file describing the model's final response shape'. It takes a PATH, not inline JSON, so runAgentImpl writes a 0600 temp file per run and unlinks it on close. Verified live under --sandbox read-only: the final agent message is the bare payload (the banner it precedes carries no braces, so extractJson still anchors correctly). Only valid on the `exec` subcommand."
     },
     "model_note": "No curated model_choices: codex model names are versioned (gpt-5.6-terra, gpt-6-sol…), not aliases, so a curated list would date itself. Instead the Settings dropdown reads the CLI's own catalog: `codex debug models` (verified on codex-cli 0.160.0, 2026-10-08: non-interactive, prints {models:[{slug, visibility, …}]} as JSON, ~650 KB, refreshed from the account's catalog with the bundled one as its fallback) — models_format codex_json keeps only listed (visibility != hide) slugs. With nothing chosen codex runs on its own configured model and Cairn only sets effort. Consequence: 'max' is declared per-model in the CLI's own catalog (gpt-5.6-* accept it; gpt-5.5 and older top out at xhigh), so a codex that resolves an older model rejects 'max' at request time, not config-parse time. Nothing in TASK_EXECUTION_PROFILES requests 'max', so this is reachable only via a user profile binding.",
@@ -74,6 +76,10 @@
   "antigravity": {
     "command": "agy",
     "args": ["{file_access_args}", "{model_args}", "{reasoning_args}", "{schema_args}", "-p", "{prompt}", "--print-timeout", "5m"],
+    "stream": {
+      "format": "agy",
+      "args": ["{file_access_args}", "{model_args}", "{reasoning_args}", "-p", "{prompt}", "--print-timeout", "5m", "--output-format", "stream-json"]
+    },
     "input": "arg",
     "description": "Google Antigravity CLI 'agy' (the successor to the Gemini CLI; Google account). Auth: ~/.gemini.",
     "label": "Google",

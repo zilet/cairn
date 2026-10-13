@@ -101,9 +101,12 @@ const LANE_RANK: Record<ChatLane, number> = { capture: 0, coach: 1, deep: 2 };
 const LANE_SET = new Set<string>(CHAT_LANES);
 const REASON_SET = new Set<string>(CHAT_ROUTING_REASON_CODES);
 const REASONING_SET = new Set<string>(CHAT_REASONING_LEVELS);
+// Coaching chat answers at low: measured live on all four CLIs (2026-10-13), low matched
+// or beat medium on a coaching question and answered faster. The deep lane keeps high —
+// it is where clinical, injury, lab, medication, goal and plan-restructure turns go.
 const DEFAULT_REASONING: Record<ChatLane, ChatReasoningLevel> = {
   capture: "low",
-  coach: "medium",
+  coach: "low",
   deep: "high",
 };
 

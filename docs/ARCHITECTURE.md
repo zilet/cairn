@@ -758,6 +758,16 @@ the signed scale: bodyweight sets beside an assisted finisher are the working se
 floor (`unassistedProvenSessions`, `exercises.ts`) the assist target is retired to bodyweight through
 the ordinary re-ground proposal (`ASSIST_RETIRED_*`) — never past bodyweight in one step.
 
+**"You're eating too little" is the fuel read's call, never a model's arithmetic.** Live
+(2026-10-13), two CLIs set a 21-day intake average beside a target that took effect that morning and
+told a well-fuelled athlete to "eat closer to your target", while `underfuelingRead()` itself read
+`insufficient_signal` (no credible day was ever compared against that target) and every channel it
+weighs supported the intake. So an under-eating claim is spoken only when the read's state is
+`execution_gap`, `prescription_strain` or `persistent_strain` (`underEatingSupported`,
+`src/repo/fuel-claims.ts`): the insight, weekly-read and chat prompts carry `FUEL_CLAIM_RULE`, and the
+insight / weekly-read acceptance (`insightVerdict` / `weeklyReadVerdict`) drops an unbacked claim
+(`claimsUnderEating`) as the same calm silence as any other miss.
+
 **Travel confounds the recovery response, and rest already taken is the recovery dose.** The
 `persistent_strain` gate needs an athlete response dated strictly AFTER the upward correction; a
 subdued `sleep_feel` or high `soreness` on a day inside a `trip` context-event window is the travel
@@ -3561,6 +3571,15 @@ Everything else — every `DATA:` block, the coach-read protocol (a prompt proto
 answers from the prompt. Add a new op that genuinely needs the CLI's own tools by passing
 `tools: "provider"` at its call site; never by weakening the preamble.
 
+**Claude starts lean behind the preamble.** claude is the one CLI whose flags DO switch tools off
+cleanly, so its `{no_tools_args}` slot (`agents.json` `no_tools_args`: `--tools "" --strict-mcp-config
+--setting-sources user --disable-slash-commands --no-session-persistence`) expands exactly when the
+prompt leads with the preamble and the run hands it no files and no MCP servers. Measured
+2026-10-13 on a one-line reply: ~34K prompt tokens of tool schemas and user context down to ~3K, and a
+second or more off every start; `--json-schema` structured output still works with tools off. The
+preamble stays — the flags only make the CLI agree with it. `--bare` is NOT usable: it skips the
+OAuth login a Pro/Max plan runs on. `--tools` takes a list, so a flag must follow its `""`.
+
 Two operational corollaries. `DATA_DIR/.agent-workspaces/<kind>` is the cwd for ordinary runs and is
 what an exploring CLI reads first — keep it empty (a stray CLI core dump or `*_output.json` there is
 fuel). And the `permission_denied` class is deliberately NOT a holding state: the CLI is healthy, that
@@ -3771,9 +3790,27 @@ connected, then letting it talk. Three server pieces:
 *Which* agent runs an op is `TASK_POLICY`; *how* it runs is `TASK_EXECUTION_PROFILES`, its sibling in
 `src/repo/settings.ts`, keyed by the same `taskForOp` class so the two policies read side by side.
 Without it, effort was inherited from whatever the CLI's home settings happened to say — the same op
-ran at a different depth on a dev box than on the deployed host. Every class is decided server-side:
-daily reads and background structuring at `fast`/low–medium, composition and clinical-adjacent
-reading at `deep`/medium–high, structural change and multi-specialist review at `deep`/`xhigh`.
+ran at a different depth on a dev box than on the deployed host. Every class is decided server-side.
+
+**Low is the default; depth is the exception.** Measured live on all four CLIs (2026-10-13: chat,
+insight, week ahead, session, meal swap, nutrition check-in at medium vs low, graded blind), low
+matched or beat medium — better in 9 of 30 pairs, worse in 2 — and answered faster on every CLI
+(grok at medium ran past its leash). So everyday reads, chat's coach lane, composition and
+background structuring run `low`; the verify passes (judgement that fails open), a week of meals and
+lab transcription run `medium`; clinical-adjacent reading, plan proposals and the case conference
+run `high`. `xhigh`/`max` are only ever a person's explicit choice. Three things raise effort on
+their own, each ONE step and never past high:
+- **A risky moment** (`effortRiskFor`, `src/repo/effort-risk.ts`): pain stated in a place within two
+  weeks, or a race two weeks out, for the ops that compose or check training; a nutrition finding new
+  within two weeks for the ops that compose food. A standing finding is the ordinary case. Applied to
+  the default only — a person's own effort binding always wins.
+- **A missed contract** (`repairReasoningStep`, `src/agents.ts`): the one repair retry of a reply
+  that failed its contract runs one declared step up, so only the runs that fail pay for depth.
+- **The deep chat lane**, which the router already picks for clinical, injury, lab, medication,
+  goal and plan-restructure turns.
+Every op's run-log row records `requested_reasoning` and `effective_reasoning`, so the trade can be
+re-measured from live data. Lowering an op's effort never shortens its leash: every interactive op
+but the Brief keeps a 150 s floor (`INTERACTIVE_LEASH_FLOOR_MS`), as does chat.
 
 Profiles are **provider-neutral**: an op asks for a model *class* (`fast` = the everyday read, `deep`
 = the one worth paying for) and an effort. **Effort is server policy; the model is not.** A class

@@ -652,7 +652,10 @@ const SESSION_ITEM_SCHEMA: JsonSchema = {
   type: "object",
   additionalProperties: true,
   properties: {
-    kind: { type: ["string", "null"] },
+    // Closed to what normalizePrescriptionItem accepts: an open string let a model label a
+    // drill "mobility" and burn the run (codex, measured live 2026-10-13). A mobility drill
+    // is a strength-kind item; exerciseInputFor() reads it as mobility from its name.
+    kind: { type: ["string", "null"], enum: ["strength", "cardio", null] },
     exercise: { type: "string" },
     sets: { type: ["integer", "null"], exclusiveMinimum: 0 },
     rep_low: { type: ["integer", "null"], exclusiveMinimum: 0 },
@@ -664,7 +667,7 @@ const SESSION_ITEM_SCHEMA: JsonSchema = {
     // picks it). Never a `minimum`. Server-derived `load_basis` disambiguates.
     target_weight: { type: ["number", "null"] },
     target_seconds: { type: ["number", "null"], exclusiveMinimum: 0 },
-    mode: { type: ["string", "null"] },
+    mode: { type: ["string", "null"], enum: ["reps", "timed", null] },
     note: { type: ["string", "null"] },
     // A heavier top set / re-test on the SAME lift. One item per exercise —
     // never a second row. Sets/reps here are exclusiveMinimum 0 for the same

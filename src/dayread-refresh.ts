@@ -61,7 +61,7 @@ const DEFAULT_HOOKS: DayReadRefreshHooks = {
   agentsAvailable: async () => {
     // Lazy import so this module never statically pulls in the repo barrel.
     const { getAgentConfig } = await import("./repo/settings.js");
-    return getAgentConfig().some((a) => a.usable);
+    return getAgentConfig({ loginProbe: "peek" }).some((a) => a.usable);
   },
   recompute: async () => {
     // Lazy import breaks the module cycle (repo/day-read -> here -> dayread) and

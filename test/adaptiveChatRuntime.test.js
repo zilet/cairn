@@ -220,10 +220,10 @@ test("a chat attempt's leash follows the lane's effort, so a deep turn is not ki
   const agents = loadAgents();
   // The whole chain, lane -> profile -> leash. A deep-lane turn runs at high effort;
   // under the old flat 90s cap it was killed mid-think and the rotation handed the
-  // question to another agent. capture stays exactly where it was.
+  // question to another agent. A low-effort lane keeps the 150 s floor a slow CLI needs.
   const leashFor = (lane) =>
     chatTurnTimeoutMs(resolveRuntimeChatProfile(agents.claude, resolveChatProfile(lane, "claude", {}), false));
-  assert.equal(leashFor("capture"), 90_000);
+  assert.equal(leashFor("capture"), 150_000);
   assert.equal(leashFor("coach"), 150_000);
   assert.equal(leashFor("deep"), 240_000);
 
@@ -247,8 +247,8 @@ test("a chat attempt's leash follows the lane's effort, so a deep turn is not ki
   assert.equal(rejected.execution, null);
   assert.match(rejected.unsupported, /does not support/i);
   assert.equal(chatTurnTimeoutMs(rejected), 240_000);
-  // Nothing known at all (legacy/no profile) keeps today's leash.
-  assert.equal(chatTurnTimeoutMs({ execution: null, requested: null }), 90_000);
+  // Nothing known at all (legacy/no profile) still gets the chat floor.
+  assert.equal(chatTurnTimeoutMs({ execution: null, requested: null }), 150_000);
 });
 
 test("legacy custom providers run with provider defaults when adaptive defaults are unsupported", () => {

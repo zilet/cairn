@@ -12,7 +12,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import "./_seed.js";
-import { invalidateAgentConfigured, refreshAgentConfigured, settleAgentLoginChecks } from "../dist/agents.js";
+import {
+  invalidateAgentConfigured,
+  refreshAgentConfigured,
+  refreshAgentVersion,
+  refreshCommandPresent,
+  settleAgentLoginChecks,
+} from "../dist/agents.js";
 import { getAgentConfig } from "../dist/repo/settings.js";
 import { operatorRouter, settingsResponse } from "../dist/routes/operator.js";
 
@@ -99,4 +105,53 @@ test("a warm cache answers at once with the verdict and nothing checking", async
     assert.equal(row.configured, true);
     assert.equal(row.login_checking, false);
   });
+});
+
+// The same law for the presence and version probes: each was a `<cmd> --version`
+// spawnSync (4 s and 5 s leashes) inside the settings read on a cold cache. The fixture
+// CLI here takes SLOW_MS to print its version; the read answers presence from a PATH
+// lookup at once and the version once the background probe has landed.
+test("a slow --version never holds the settings read: present at once, the version after", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cairn-version-probe-"));
+  const cli = path.join(dir, "slow-cli");
+  fs.writeFileSync(
+    cli,
+    `#!${process.execPath}\nif (process.argv.includes("--version")) setTimeout(() => console.log("slow-cli 9.8.7"), ${SLOW_MS});\n`
+  );
+  fs.chmodSync(cli, 0o755);
+  const configPath = path.join(dir, "agents.json");
+  fs.writeFileSync(
+    configPath,
+    JSON.stringify({ claude: { command: cli, args: [], input: "arg", description: "fixture", env_required: [] } })
+  );
+  const previous = process.env.AGENTS_CONFIG;
+  process.env.AGENTS_CONFIG = configPath;
+  invalidateAgentConfigured();
+  try {
+    const started = Date.now();
+    const cold = getAgentConfig({ loginProbe: "peek" }).find((row) => row.name === "claude");
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed < SLOW_MS / 2, `answered in ${elapsed} ms, not after the --version probe`);
+    assert.equal(cold.present, true, "the PATH lookup answers presence without a spawn");
+    assert.equal(cold.version, null, "no version until the probe prints one");
+
+    const [present, version] = await Promise.all([refreshCommandPresent(cli), refreshAgentVersion("claude")]);
+    assert.equal(present, true);
+    assert.equal(version, "9.8.7");
+    const warm = getAgentConfig({ loginProbe: "peek" }).find((row) => row.name === "claude");
+    assert.equal(warm.present, true);
+    assert.equal(warm.version, "9.8.7");
+  } finally {
+    await settleAgentLoginChecks(SLOW_MS * 3);
+    if (previous == null) delete process.env.AGENTS_CONFIG;
+    else process.env.AGENTS_CONFIG = previous;
+    invalidateAgentConfigured();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a binary that is not there reads absent from the peek and the probe alike", async () => {
+  const missing = path.join(os.tmpdir(), "cairn-no-such-cli-" + process.pid);
+  invalidateAgentConfigured();
+  assert.equal(await refreshCommandPresent(missing), false);
 });

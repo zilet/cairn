@@ -32,11 +32,11 @@ test("each chat lane belongs to a model class: capture and coach are everyday, d
 
 test("a chat lane takes no model by default, follows the class binding, and a per-lane override wins", () => {
   // Default: the CLI's own model, lane effort only.
-  assert.deepEqual(resolveChatProfile("coach", "claude", {}, {}), { reasoning: "medium" });
+  assert.deepEqual(resolveChatProfile("coach", "claude", {}, {}), { reasoning: "low" });
   assert.deepEqual(resolveChatProfile("deep", "claude", {}), { reasoning: "high" });
   const classes = { claude: { fast: "sonnet", deep: "opus" } };
   assert.deepEqual(resolveChatProfile("capture", "claude", {}, classes), { model: "sonnet", reasoning: "low" });
-  assert.deepEqual(resolveChatProfile("coach", "claude", {}, classes), { model: "sonnet", reasoning: "medium" });
+  assert.deepEqual(resolveChatProfile("coach", "claude", {}, classes), { model: "sonnet", reasoning: "low" });
   assert.deepEqual(resolveChatProfile("deep", "claude", {}, classes), { model: "opus", reasoning: "high" });
   // A class binding for one provider never reaches another.
   assert.deepEqual(resolveChatProfile("deep", "grok", {}, classes), { reasoning: "high" });
@@ -83,12 +83,12 @@ async function chatSpawnOpts(turnOverrides = {}) {
 test("chat spawns with NO --model when nothing is chosen, only the lane's effort", async () => {
   const spawn = await chatSpawnOpts();
   assert.equal(spawn.model, undefined);
-  assert.equal(spawn.reasoning, "medium");
+  assert.equal(spawn.reasoning, "low");
 });
 
 test("chat follows the person's class choice: coach -> Everyday, deep -> Deep work", async () => {
   repo.setSettings({ model_class_bindings: { claude: { fast: "sonnet", deep: "opus" } } });
-  assert.deepEqual(await chatSpawnOpts(), { name: "claude", model: "sonnet", reasoning: "medium" });
+  assert.deepEqual(await chatSpawnOpts(), { name: "claude", model: "sonnet", reasoning: "low" });
   assert.deepEqual(await chatSpawnOpts({ routing: coachDecision("deep") }), {
     name: "claude",
     model: "opus",
@@ -101,7 +101,7 @@ test("a chat_profile_bindings lane override wins over the class binding", async 
     model_class_bindings: { claude: { fast: "sonnet", deep: "opus" } },
     chat_profile_bindings: { claude: { coach: { model: "haiku" } } },
   });
-  assert.deepEqual(await chatSpawnOpts(), { name: "claude", model: "haiku", reasoning: "medium" });
+  assert.deepEqual(await chatSpawnOpts(), { name: "claude", model: "haiku", reasoning: "low" });
 });
 
 test("legacy single-profile chat takes only the everyday model, and only when chosen", async () => {

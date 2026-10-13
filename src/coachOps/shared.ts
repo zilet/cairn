@@ -55,7 +55,7 @@ export function agentStatusFor(
     // round-robin strategy — a read path writing settings, which used to expire the
     // whole coach-context memo on every Brief open. Same predicate, no side effect
     // (the same read src/dayread-refresh.ts already uses for its side-effect-free gate).
-    configured = getAgentConfig().some((a) => a.usable);
+    configured = getAgentConfig({ loginProbe: "peek" }).some((a) => a.usable);
   } catch {
     configured = true;
   }

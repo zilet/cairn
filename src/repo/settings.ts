@@ -2,6 +2,7 @@ import { db } from "../db.js";
 import {
   listAgents,
   agentVersion,
+  peekAgentVersion,
   interactiveTimeoutFor,
   loadAgents,
   resolveAgentProfileForClass,
@@ -21,6 +22,7 @@ import { LAB_UNIT_SYSTEMS, type LabUnitSystem } from "./lab-units.js";
 import { reportedLabSystem } from "./lab-reported-system.js";
 import { getAgentAvailability } from "./agent-availability.js";
 import { recordedClientTimeZone } from "./client-tz.js";
+import { effortRiskFor, type EffortRisk } from "./effort-risk.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { detectUnits, type UnitHint } from "./unit-system.js";
 import {
@@ -205,71 +207,69 @@ export function taskForOp(op: string): string {
 // per-message lane profile (src/chatRouting.ts). An op with no entry here inherits
 // nothing and behaves exactly as it did before this table existed.
 export const TASK_EXECUTION_PROFILES: Record<string, AbstractExecutionProfile> = {
+  // LOW is the default for everyday work. Measured live on all four CLIs (claude, codex,
+  // agy, grok; 2026-10-13, chat / insight / week ahead / session / meal swap / nutrition
+  // check-in, current vs low, graded blind): low was better in 9 of 30 pairs, medium in 2,
+  // the rest equivalent — and faster on every CLI (grok at medium ran past the
+  // interactive leash). Depth is spent where a wrong answer costs more than a slow one,
+  // and a risky moment earns one more step on its own (src/repo/effort-risk.ts).
+  //
   // Daily reads — high-frequency, prose over an already-deterministic core.
-  // day_read is the app's front door and runs under the shortest leash, so it stays
-  // at the cheapest setting that still writes a good sentence.
   day_read: { model_class: "fast", reasoning: "low" },
-  insight: { model_class: "fast", reasoning: "medium" },
-  weekly_read: { model_class: "fast", reasoning: "medium" },
-  nutrition_checkin: { model_class: "fast", reasoning: "medium" },
-  week_ahead: { model_class: "fast", reasoning: "medium" },
+  insight: { model_class: "fast", reasoning: "low" },
+  weekly_read: { model_class: "fast", reasoning: "low" },
+  nutrition_checkin: { model_class: "fast", reasoning: "low" },
+  week_ahead: { model_class: "fast", reasoning: "low" },
   // The what-if (Ask): one proposed change and its ripple, read and never applied.
-  what_if: { model_class: "fast", reasoning: "medium" },
-  reaction_narrative: { model_class: "fast", reasoning: "medium" },
+  what_if: { model_class: "fast", reasoning: "low" },
+  reaction_narrative: { model_class: "fast", reasoning: "low" },
   exercise_explanation: { model_class: "fast", reasoning: "low" },
   chat_distill: { model_class: "fast", reasoning: "low" },
-  // Nightly memory passes — non-interactive, small structured payloads. Named here so
-  // they stop inheriting the CLI's home effort and stop landing in telemetry as "auto".
+  // Nightly memory passes — non-interactive, small structured payloads.
   memory_consolidation: { model_class: "fast", reasoning: "low" },
-  about_me_growth: { model_class: "fast", reasoning: "medium" },
+  about_me_growth: { model_class: "fast", reasoning: "low" },
   // Background structuring — high volume, tight contracts, nothing to reason about.
   enrich: { model_class: "fast", reasoning: "low" },
-  research: { model_class: "fast", reasoning: "medium" },
+  research: { model_class: "fast", reasoning: "low" },
   // The deep pass: a flagged (outside-reference) lab finding is researched here from
   // the start, and any question whose fast pass yields no verified claim escalates
   // here once (src/research.ts) — a clinical-adjacent citation is worth the depth.
   research_deep: { model_class: "deep", reasoning: "high" },
-  // Composition — a real plan the athlete will follow; worth the deeper model.
-  session_suggest: { model_class: "deep", reasoning: "medium" },
-  session_compose: { model_class: "deep", reasoning: "medium" },
+  // Composition — a real session or meal the athlete will follow. The deeper model class
+  // stays; the effort is low because the numbers are checked in code (verify-floors)
+  // and the verify pass below reads the draft against the person's constraints.
+  session_suggest: { model_class: "deep", reasoning: "low" },
+  session_compose: { model_class: "deep", reasoning: "low" },
+  meal_swap: { model_class: "deep", reasoning: "low" },
+  recipe: { model_class: "deep", reasoning: "low" },
+  onboard: { model_class: "deep", reasoning: "low" },
+  // A whole week of meals holds many constraints at once; medium until measured.
   meal_plan: { model_class: "deep", reasoning: "medium" },
-  meal_swap: { model_class: "deep", reasoning: "medium" },
-  recipe: { model_class: "deep", reasoning: "medium" },
-  onboard: { model_class: "deep", reasoning: "medium" },
   // The connect step's "say hello": a one-line round-trip that proves the CLI answers.
   agent_hello: { model_class: "fast", reasoning: "low" },
-  // The welcome's first week (src/coachOps/welcome.ts → composeWeek, op "welcome_week").
-  // Deliberately thinner than `proposal`, which the Plan tab's / MCP compose keeps: this
-  // is a STARTING week the evolution loop refines from what the person actually logs,
-  // and the person is sitting in front of the screen waiting for it (the deep/xhigh run
-  // measured ~4 minutes live). It still travels the same contract parse and autonomy path.
-  welcome_week: { model_class: "fast", reasoning: "medium" },
-  exercise_reconcile: { model_class: "deep", reasoning: "medium" },
-  // Self-critique passes. The NUMERIC half of each verify is no longer a model
-  // call at all: `src/repo/verify-floors.ts` computes the kcal / protein / fiber
-  // floors and the session time budget deterministically before the prompt exists,
-  // and the pre-check outranks the model's verdict. So a cheap or truncated verify
-  // can no longer degrade into no arithmetic check — that part now survives the
-  // agent being down entirely.
-  // What is left IS the reason for the pin: reading a free-text injury or dietary
-  // constraint against a concrete plan, and repairing a draft without corrupting
-  // its mechanics encoding. That is judgement, it fails OPEN (a dead verify ships
-  // the draft with those checks unmade), and a weak model does it badly while
-  // still returning well-formed JSON. Effort matches the composition op each one
-  // guards rather than exceeding it: both run inline inside a user-facing request,
-  // and a verify with a longer leash than the draft it checks would make the slow
-  // path the checking, not the work.
+  // The welcome's first week (src/coachOps/welcome.ts → composeWeek, op "welcome_week"):
+  // a STARTING week the evolution loop refines from what the person actually logs, with
+  // the person waiting in front of the screen (the deep/xhigh run measured ~4 minutes).
+  welcome_week: { model_class: "fast", reasoning: "low" },
+  exercise_reconcile: { model_class: "deep", reasoning: "low" },
+  // Self-critique passes. The NUMERIC half of each verify is not a model call at all:
+  // `src/repo/verify-floors.ts` computes the kcal / protein / fiber floors and the
+  // session time budget before the prompt exists, and the pre-check outranks the
+  // model's verdict. What is left is judgement — reading a free-text injury or dietary
+  // constraint against a concrete plan — and it fails OPEN (a dead verify ships the
+  // draft unchecked), so it keeps medium: the one place a low composition is caught.
   session_verify: { model_class: "deep", reasoning: "medium" },
   meal_plan_verify: { model_class: "deep", reasoning: "medium" },
   plan_verify: { model_class: "deep", reasoning: "medium" },
-  // Clinical-adjacent reading — a curated or plausible-but-wrong result is costly.
-  health: { model_class: "deep", reasoning: "high" },
+  // Lab and document transcription: faithfulness, not deliberation.
+  health: { model_class: "deep", reasoning: "medium" },
+  // The special items — clinical-adjacent reading, structural plan change and the
+  // multi-specialist review. A plausible-but-wrong answer here is the costly kind.
   health_review: { model_class: "deep", reasoning: "high" },
   health_synthesis: { model_class: "deep", reasoning: "high" },
-  // Structural change and multi-specialist review — the most consequential work.
-  proposal: { model_class: "deep", reasoning: "xhigh" },
-  coach_draft: { model_class: "deep", reasoning: "xhigh" },
-  brain_review: { model_class: "deep", reasoning: "xhigh" },
+  proposal: { model_class: "deep", reasoning: "high" },
+  coach_draft: { model_class: "deep", reasoning: "high" },
+  brain_review: { model_class: "deep", reasoning: "high" },
 };
 
 // The closed key set for a user override (same shape as chat_profile_bindings).
@@ -383,6 +383,17 @@ export function normalizeModelClassBindings(
  * ceiling maps down). With no choice anywhere the result carries NO model: the CLI runs
  * its own default. Pure given `cfg`, so it unit-tests offline.
  */
+// The leash every interactive op except the Brief had before effort went low (medium's).
+export const INTERACTIVE_LEASH_FLOOR_MS = 150_000;
+
+// One step up the effort ladder for a risky moment, never past high: xhigh and max stay
+// a person's explicit choice.
+function riskStep(level: ReasoningLevel): ReasoningLevel {
+  if (level === "low") return "medium";
+  if (level === "medium") return "high";
+  return level;
+}
+
 export function resolveTaskExecutionProfile(
   task: string,
   agent: string,
@@ -391,6 +402,8 @@ export function resolveTaskExecutionProfile(
     bindings?: unknown;
     classBindings?: unknown;
     profiles?: Record<string, AbstractExecutionProfile>;
+    // Injected by tests; production reads it (src/repo/effort-risk.ts).
+    risk?: EffortRisk | null;
   }
 ): { model?: string; reasoning?: ReasoningLevel } {
   const want = (cfg?.profiles ?? TASK_EXECUTION_PROFILES)[task];
@@ -403,9 +416,12 @@ export function resolveTaskExecutionProfile(
   const classBindings = modelClassBindingsShape(
     cfg?.classBindings !== undefined ? cfg.classBindings : settings?.model_class_bindings
   );
+  // A risky moment earns the DEFAULT one more step; the person's own effort choice wins.
+  const risk = cfg?.risk !== undefined ? cfg.risk : want?.reasoning && !bound?.reasoning ? effortRiskFor(task) : null;
+  const stepped = risk && want?.reasoning ? { ...want, reasoning: riskStep(want.reasoning) } : want;
   return resolveAgentProfileForClass(
     (cfg?.defs ?? loadAgents())[agent],
-    { ...want, ...(bound ?? {}) },
+    { ...stepped, ...(bound ?? {}) },
     classBindings[agent]
   );
 }
@@ -426,7 +442,12 @@ export function executionProfileForOp(op: string): AgentProfileResolver {
  * class (not a per-provider override), so it is stable and side-effect free.
  */
 export function interactiveTimeoutForOp(op: string): number {
-  return interactiveTimeoutFor(TASK_EXECUTION_PROFILES[taskForOp(op)]?.reasoning);
+  const task = taskForOp(op);
+  const leash = interactiveTimeoutFor(TASK_EXECUTION_PROFILES[task]?.reasoning);
+  // Lowering an op's effort never shortens its leash: the leash is also what a slow CLI
+  // on a small host needs (a Pi's week-ahead peaks past two minutes). The Brief keeps its
+  // own short one — it was always low, and it never awaits an agent on open.
+  return task === "day_read" ? leash : Math.max(leash, INTERACTIVE_LEASH_FLOOR_MS);
 }
 
 const SETTINGS_COLUMN_REPAIRS: [string, string][] = [
@@ -1228,7 +1249,7 @@ export function getAgentConfig(opts: { loginProbe?: "sync" | "peek" } = {}) {
       // The login probe is still answering (a peek on a cold cache): ask again shortly.
       login_checking: a.login_checking === true,
       // installed CLI version (cached --version probe; null when absent/unreadable)
-      version: present ? agentVersion(name) : null,
+      version: present ? (opts.loginProbe === "peek" ? peekAgentVersion(name) : agentVersion(name)) : null,
       can_login: !!a.can_login,
       models_list: !!a.models_list,
       // Curated aliases offered for Everyday / Deep work (the live catalog is fetched lazily).
@@ -1278,7 +1299,7 @@ export function resolveAgentForTask(
   // production we use the usable set (CLI presence included).
   const enabled =
     cfg?.enabled ??
-    getAgentConfig()
+    getAgentConfig({ loginProbe: "peek" })
       .filter((a) => a.usable)
       .map((a) => a.name);
   return enabled.includes(pinned) ? pinned : requested;
@@ -1290,7 +1311,7 @@ export function resolveAgentForTask(
 // estimate without spending a pick. The reason says which of the two is missing.
 export function backgroundEstimateAvailability(): { ok: true } | { ok: false; reason: "enrichment_off" | "no_agent" } {
   if (!getSettings().enrich_enabled) return { ok: false, reason: "enrichment_off" };
-  return getAgentConfig().some((a) => a.usable) ? { ok: true } : { ok: false, reason: "no_agent" };
+  return getAgentConfig({ loginProbe: "peek" }).some((a) => a.usable) ? { ok: true } : { ok: false, reason: "no_agent" };
 }
 
 // The order in which to try agents for an "auto" run, per the configured strategy.
@@ -1302,9 +1323,12 @@ export function backgroundEstimateAvailability(): { ok: true } | { ok: false; re
 // CLI installed this returns [], which callers treat as "unconfigured" (the agent
 // loop throws a calm "No agents enabled — turn one on in Settings", surfaced as the
 // designed ok:false / graceful-degradation path, NEVER fake coaching).
+// Every picker PEEKS the CLI probes (never a spawnSync on the event loop): a cold login
+// verdict reads null, which already keeps an agent in the rotation, and a signed-out
+// CLI's failed run re-asks its login and falls through to the next agent.
 export function pickAgentOrder(): string[] {
   const s = getSettings();
-  const enabled = getAgentConfig()
+  const enabled = getAgentConfig({ loginProbe: "peek" })
     .filter((a) => a.usable)
     .map((a) => a.name);
   if (enabled.length <= 1) return enabled;
@@ -1341,7 +1365,7 @@ export function pickHealthAgentOrder(
 ): string[] {
   const enabled =
     cfg?.enabled ??
-    getAgentConfig()
+    getAgentConfig({ loginProbe: "peek" })
       .filter((a) => a.usable)
       .map((a) => a.name);
   if (enabled.length <= 1) return enabled;
@@ -1362,7 +1386,7 @@ export function pickHealthAgentOrder(
 export function pickResearchAgentOrder(cfg?: { agents?: { name: string; web_access?: boolean }[] }): string[] {
   const all =
     cfg?.agents ??
-    getAgentConfig()
+    getAgentConfig({ loginProbe: "peek" })
       .filter((a) => a.usable)
       .map((a) => ({ name: a.name, web_access: !!a.web_access }));
   const enabled = all.map((a) => a.name);
@@ -1390,7 +1414,7 @@ export function pickAgentOrderForTask(
   task: string,
   cfg?: { enabled?: string[]; routes?: Record<string, string> }
 ): string[] {
-  const enabled = cfg?.enabled ?? getAgentConfig().filter((a) => a.usable).map((a) => a.name);
+  const enabled = cfg?.enabled ?? getAgentConfig({ loginProbe: "peek" }).filter((a) => a.usable).map((a) => a.name);
   const routed = resolveAgentForTask(task, "auto", { routes: cfg?.routes ?? getSettings().agent_routes, enabled });
   const accuracy = TASK_POLICY[task as RoutableTask] === "accuracy";
   if (routed && routed !== "auto") {

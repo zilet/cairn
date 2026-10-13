@@ -301,6 +301,9 @@ const RATE_EXPLICIT =
 // failed (non-zero / signalled exit) or an explicit phrase already anchored it.
 const RATE_WEAK = /\b429\b|\b529\b|\b503\b|\boverloaded\b|\bover capacity\b|\bcapacity\b|\btry again later\b|\bservice unavailable\b/i;
 
+// A provider's own refusal of the request shape (OpenAI's 400 envelope, as codex prints it).
+const INVALID_REQUEST = /"type"\s*:\s*"invalid_request_error"|\binvalid_json_schema\b/;
+
 /** HTTP statuses the provider's own result line reports as throttling. */
 const RATE_STATUSES = new Set([429, 503, 529]);
 
@@ -528,6 +531,13 @@ export function classifyAgentFailure(
       resets_at: null,
       detail: "Blocked by a headless permission rule",
     };
+  }
+
+  // 5b. The provider refused the REQUEST itself (HTTP 400: a schema or argument it does
+  //     not accept). Never throttling, whatever else the run's prompt echo happens to say
+  //     ("capacity" is coaching vocabulary): a hold would only bench a healthy provider.
+  if (INVALID_REQUEST.test(combined)) {
+    return { state: "process_error", window: null, resets_at: null, detail: "The provider rejected the request" };
   }
 
   // 6. Temporary overload — a retry, not a hold on the provider. The weak arm

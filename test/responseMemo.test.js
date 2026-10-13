@@ -3,7 +3,7 @@
 // the stored body — and If-None-Match answers 304 — BEFORE the read is computed; and
 // every write the athlete makes (a set, a meal, a weigh-in, an Undo, a directive
 // flipped) plus a day rollover moves the ETag and the body. Freshness beats speed.
-import { test, after, mock } from "node:test";
+import { test, before, after, mock } from "node:test";
 import assert from "node:assert/strict";
 import express from "express";
 import { api, apiCacheControlFor } from "../dist/api.js";
@@ -15,7 +15,8 @@ import { setAppState } from "../dist/repo/app-state.js";
 import { localDateISO } from "../dist/repo/shared.js";
 import * as repo from "../dist/repo.js";
 import { db } from "../dist/db.js";
-import { invalidateAgentConfigured } from "../dist/agents.js";
+import { invalidateAgentConfigured, settleAgentLoginChecks } from "../dist/agents.js";
+import { getAgentConfig } from "../dist/repo/settings.js";
 
 let server = null;
 let base = "";
@@ -70,6 +71,13 @@ function seedPlan(weight = 100) {
 }
 
 // ---------- the memo itself ----------
+
+// /settings peeks the CLI probes and fills them in the background; warm them first so a
+// probe landing mid-test never moves the agent-state generation or a fan-in's body.
+before(async () => {
+  getAgentConfig({ loginProbe: "peek" });
+  await settleAgentLoginChecks(10_000);
+});
 
 test("a repeat read is served from the memo and If-None-Match answers 304 without computing", async () => {
   resetResponseMemo();
@@ -128,10 +136,13 @@ test("the freshness key moves on bookkeeping a read consults, and ignores the he
   assert.equal(responseFreshnessKey(), k1, "re-writing the same value is not");
 });
 
-test("the freshness key moves when the in-memory agent state does (a CLI login, install or update)", () => {
+test("the freshness key moves when the in-memory agent state does (a CLI login, install or update)", async () => {
   const k0 = responseFreshnessKey();
   invalidateAgentConfigured();
   assert.notEqual(responseFreshnessKey(), k0, "/settings and agent_status read that state");
+  // Re-warm what it cleared, so no later test races a background probe.
+  getAgentConfig({ loginProbe: "peek" });
+  await settleAgentLoginChecks(10_000);
 });
 
 test("onHit replays a read's side effects on a memo hit, and only then", async () => {

@@ -214,10 +214,10 @@ test("a composed week routes as a STRUCTURAL change: it announces first, then la
 
 test("compose_week shares the proposal task class with the coach draft and the evolution", () => {
   // Writing the whole week is the most consequential of the three plan-shaping ops,
-  // so it inherits `proposal`'s deep/xhigh profile rather than declaring a thinner one.
+  // so it inherits `proposal`'s deep/high profile rather than declaring a thinner one.
   assert.equal(repo.taskForOp("compose_week"), "proposal");
   assert.equal(repo.taskForOp("evolve_program"), "proposal");
-  assert.deepEqual(repo.TASK_EXECUTION_PROFILES.proposal, { model_class: "deep", reasoning: "xhigh" });
+  assert.deepEqual(repo.TASK_EXECUTION_PROFILES.proposal, { model_class: "deep", reasoning: "high" });
   assert.deepEqual(
     repo.resolveTaskExecutionProfile(repo.taskForOp("compose_week"), "claude"),
     repo.resolveTaskExecutionProfile(repo.taskForOp("evolve_program"), "claude"),

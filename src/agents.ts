@@ -21,6 +21,7 @@ import { log } from "./log.js";
 import { resetContractRejection, takeContractRejection } from "./contractRejection.js";
 import { bumpAgentStateGeneration } from "./repo/agent-state-generation.js";
 import { failureTail, structuredErrorText } from "./agentFailureTail.js";
+import { stripStrictNulls, toOpenAiStrictSchema } from "./schema-dialects.js";
 import { clearRefusedPins, noteRefusedPin, pinsAfterRefusals, type PinField } from "./agentModelPins.js";
 export { AGENT_ENV_DENYLIST, agentCliPath, agentExecutionCwd, buildAgentSpawnOptions, promptReferencesDataDir, sanitizeAgentEnv } from "./agentExecution.js";
 
@@ -96,6 +97,12 @@ export interface AgentStructuredOutput {
    * telemetry object instead of its contract.
    */
   envelope?: { structured_key: string; text_key?: string };
+  /**
+   * The schema dialect the CLI enforces. "openai_strict" (codex): the contract is sent in
+   * its strict-mode reading and the forced nulls are stripped from the answer; a contract
+   * strict mode cannot express is sent without enforcement (src/schema-dialects.ts).
+   */
+  dialect?: "openai_strict";
 }
 
 /**
@@ -147,11 +154,17 @@ export interface AgentDef {
   // Optional headless token-streaming. When present, the chat path can run the CLI
   // in its NDJSON streaming mode (separate args) and render the reply live. `format`
   // selects the per-CLI event adapter (see streamDelta). Absent → one-shot only.
-  stream?: { format: "claude" | "grok"; args: string[] };
+  stream?: { format: "claude" | "grok" | "agy"; args: string[] };
   // Args expanded only when a prompt references DATA_DIR (uploads / extracted
   // health docs). This keeps normal chats isolated while giving file-aware CLIs
   // explicit read access to the uploaded file tree.
   file_access_args?: string[];
+  // Args expanded at `{no_tools_args}` only when the run opted into no tools (the prompt
+  // leads with NO_TOOLS_PREAMBLE) and hands the CLI no files and no MCP servers: the CLI
+  // then starts without its tool schemas, user MCP servers, skills or a saved session —
+  // about 30K fewer prompt tokens and a second off every Claude Code start. The preamble
+  // still leads the prompt; these flags only make the CLI agree with it.
+  no_tools_args?: string[];
   // Args repeated for every uploaded image path found in a DATA_DIR prompt.
   // Codex supports `--image <file>`, which is more reliable than asking it to
   // discover a JPEG through shell tools inside its own sandbox.
@@ -209,7 +222,7 @@ export function listAgents(opts: { loginProbe?: "sync" | "peek" } = {}) {
     // usable if no env requirement (subscription/cred-based) OR the env var is present
     env_ok: !def.env_required?.length || def.env_required.every((k) => !!process.env[k]),
     // whether the agent's CLI binary is actually installed/on PATH (cached probe)
-    present: commandPresent(def.command),
+    present: peek ? peekCommandPresent(def.command) : commandPresent(def.command),
     // tri-state login/connected probe (true logged-in / false logged-out / null
     // undetectable). Only `false` excludes from the rotation — see agentConfigured.
     configured: peek ? peekAgentConfigured(name).verdict : agentConfigured(name),
@@ -287,6 +300,53 @@ export function commandPresent(cmd: string): boolean {
   presenceCache.set(cmd, present);
   bumpAgentStateGeneration();
   return present;
+}
+
+// The presence answer for a read that must never wait on a CLI launch (the settings
+// peek): the cached verdict when there is one, else a PATH scan — no spawn, the same
+// fallback the probe itself trusts — while ONE background `--version` (an async spawn,
+// off the event loop) fills the cache with the authoritative answer.
+const presenceInFlight = new Map<string, Promise<boolean>>();
+
+export function peekCommandPresent(cmd: string): boolean {
+  if (!cmd) return false;
+  const cached = presenceCache.get(cmd);
+  if (cached !== undefined) return cached;
+  void refreshCommandPresent(cmd);
+  return lookupOnPath(cmd);
+}
+
+/** commandPresent's probe as an async spawn; concurrent callers share the run. */
+export function refreshCommandPresent(cmd: string): Promise<boolean> {
+  const running = presenceInFlight.get(cmd);
+  if (running) return running;
+  // A login or CLI update cleared the caches mid-probe: that answer is from before it.
+  const epoch = modelsEpoch;
+  const run = new Promise<boolean>((resolve) => {
+    const remember = (present: boolean) => {
+      if (epoch === modelsEpoch) presenceCache.set(cmd, present);
+      bumpAgentStateGeneration();
+      resolve(present);
+    };
+    try {
+      execFile(
+        cmd,
+        ["--version"],
+        { ...buildAgentSpawnOptions({ kind: "probe" }), timeout: 4000, maxBuffer: 1024 * 1024 },
+        (error) => {
+          // A non-zero exit still launched the binary (a numeric code); only a spawn
+          // failure (a string code) or a kill is no answer — ENOENT alone means absent.
+          const err = error as (NodeJS.ErrnoException & { killed?: boolean }) | null;
+          if (!err || (typeof err.code !== "string" && !err.killed)) return remember(true);
+          remember(err.code === "ENOENT" ? false : lookupOnPath(cmd));
+        }
+      );
+    } catch {
+      remember(lookupOnPath(cmd));
+    }
+  }).finally(() => presenceInFlight.delete(cmd));
+  presenceInFlight.set(cmd, run);
+  return run;
 }
 
 // ---------- connected-state probe (rotation eligibility) ----------
@@ -563,7 +623,9 @@ export function reprobeAgentConfigured(name: string): Promise<boolean | null> {
     logConfiguredVerdict(name, verdict, timedOut);
     return verdict;
   };
-  if (!Array.isArray(def.status_check) || !def.status_check.length || !commandPresent(def.command)) {
+  // Presence without a spawn: this is the off-the-event-loop path, and an absent binary
+  // the PATH scan missed fails the execFile below with ENOENT, which reads the same.
+  if (!Array.isArray(def.status_check) || !def.status_check.length || !peekCommandPresent(def.command)) {
     return Promise.resolve(remember(fallbackConfigured(name, def)));
   }
   return new Promise((resolve) => {
@@ -626,7 +688,7 @@ export function peekAgentConfigured(name: string): { known: boolean; verdict: bo
 
 /** Wait at most `maxMs` for the background login probes now running; never rejects. */
 export async function settleAgentLoginChecks(maxMs: number): Promise<void> {
-  const running = [...configuredInFlight.values()];
+  const running = [...configuredInFlight.values(), ...presenceInFlight.values(), ...versionInFlight.values()];
   if (!running.length || !(maxMs > 0)) return;
   let timer: ReturnType<typeof setTimeout> | undefined;
   await Promise.race([
@@ -766,6 +828,58 @@ export function agentVersion(name: string): string | null {
   }
   versionCache.set(cmd, version);
   return version;
+}
+
+// The version for a read that must never wait on a CLI launch (the settings peek): the
+// cached print, else null while ONE background `--version` (an async spawn) fills it.
+const versionInFlight = new Map<string, Promise<string | null>>();
+
+export function peekAgentVersion(name: string): string | null {
+  const def = loadAgents()[name];
+  if (!def) return null;
+  if (versionCache.has(def.command)) return versionCache.get(def.command) ?? null;
+  void refreshAgentVersion(name);
+  return null;
+}
+
+/** agentVersion's probe as an async spawn; concurrent callers share the run. */
+export function refreshAgentVersion(name: string): Promise<string | null> {
+  const def = loadAgents()[name];
+  if (!def) return Promise.resolve(null);
+  const cmd = def.command;
+  const running = versionInFlight.get(cmd);
+  if (running) return running;
+  const epoch = modelsEpoch;
+  const run = new Promise<string | null>((resolve) => {
+    const remember = (version: string | null) => {
+      if (epoch === modelsEpoch) versionCache.set(cmd, version);
+      bumpAgentStateGeneration();
+      resolve(version);
+    };
+    if (!peekCommandPresent(cmd)) return remember(null);
+    try {
+      execFile(
+        cmd,
+        ["--version"],
+        {
+          ...buildAgentSpawnOptions({ kind: "version", restoreEnvKeys: def.env_required || [] }),
+          timeout: 5000,
+          encoding: "utf8",
+          maxBuffer: 1024 * 1024,
+        },
+        (error, stdout, stderr) => {
+          // agentVersion reads any exit that launched; only a spawn failure or a kill is no print.
+          const err = error as (NodeJS.ErrnoException & { killed?: boolean }) | null;
+          const spawnFailed = !!err && (typeof err.code === "string" || !!err.killed);
+          remember(spawnFailed ? null : cleanVersion(`${stdout || ""}${stderr || ""}`));
+        }
+      );
+    } catch {
+      remember(null);
+    }
+  }).finally(() => versionInFlight.delete(cmd));
+  versionInFlight.set(cmd, run);
+  return run;
 }
 
 // Best-effort "what's running" probe for the Settings info line. `version` is
@@ -1480,6 +1594,23 @@ export function resolveAgentProfileForClass(
   return out;
 }
 
+/**
+ * The effort a contract repair runs at: one declared step above the first run's, never
+ * past high (xhigh and max stay a person's explicit choice). null keeps the first run's —
+ * a run on the CLI's own default effort has nothing known to step from.
+ */
+export function repairReasoningStep(def: AgentDef | undefined, current: ReasoningLevel | undefined): ReasoningLevel | null {
+  if (!def || !current) return null;
+  const declared = normalizedAgentCapabilities(def).reasoning;
+  const from = REASONING_LEVELS.indexOf(current);
+  const ceiling = REASONING_LEVELS.indexOf("high");
+  for (const level of REASONING_LEVELS) {
+    const rank = REASONING_LEVELS.indexOf(level);
+    if (rank > from && rank <= ceiling && declared.includes(level)) return level;
+  }
+  return null;
+}
+
 // Fold a caller-supplied profile resolver into this run's opts. An explicit
 // model/reasoning always wins per field; a throwing or absent resolver is simply
 // no profile (a policy lookup must never break a coaching run).
@@ -1604,6 +1735,12 @@ function expandAgentArgs(
     }
     if (arg === "{mcp_config_args}") {
       out.push(...mcpConfigArgs.filter((value) => typeof value === "string" && value.length > 0));
+      continue;
+    }
+    if (arg === "{no_tools_args}") {
+      const toolless = prompt.startsWith(NO_TOOLS_PREAMBLE) && !needsFileAccess && mcpConfigArgs.length === 0;
+      // Pushed verbatim: `--tools ""` is how claude says "no tools", so an empty value is meant.
+      if (toolless && Array.isArray(def.no_tools_args)) out.push(...def.no_tools_args);
       continue;
     }
     if (arg === "{schema_args}") {
@@ -1946,6 +2083,10 @@ export interface AgentRunRecord {
   reject_reason?: string | null;
   // The redacted tail of a failed run's output (agentFailureTail.ts). Local-only row.
   failure_tail?: string | null;
+  // The effort the op asked for, and the one the run that answered actually used (the
+  // contract repair runs one step up, see repairReasoningStep).
+  requested_reasoning?: string | null;
+  effective_reasoning?: string | null;
 }
 type AgentRunSink = (r: AgentRunRecord) => void;
 let agentRunSink: AgentRunSink | null = null;
@@ -2062,6 +2203,10 @@ export async function runAgentWithFallback(
     const timeoutMs = isProbe ? Math.min(baseTimeout, BREAKER_PROBE_TIMEOUT_MS) : baseTimeout;
     const started = Date.now();
     let triedJson = false;
+    // The profile this agent resolves to, once, so the repair can step from it and the
+    // run log can say what effort each run actually used.
+    const first = withResolvedProfile(name, o);
+    let usedReasoning = first.reasoning ?? null;
     try {
       let result = await runAgent(name, prompt, {
         timeoutMs,
@@ -2097,20 +2242,23 @@ export async function runAgentWithFallback(
       const worthRepair = parsedBeforeRepair || !structured;
       if (!acceptedBeforeRepair && !wasteful && worthRepair && !signal?.aborted) {
         triedJson = true;
+        // A reply that missed its contract gets ONE more step of thinking on the repair:
+        // low by default is cheap, and only the runs that fail pay for the extra depth.
+        const repairReasoning = repairReasoningStep(loadAgents()[name], first.reasoning);
         try {
           result = await runAgent(name, prompt + (parsedBeforeRepair ? CONTRACT_REPAIR_SUFFIX : JSON_REPAIR_SUFFIX), {
             timeoutMs,
             signal,
             extract: o.extract,
             mcpConfigArgs: o.mcpConfigArgs,
-            model: o.model,
-            reasoning: o.reasoning,
-            profile: o.profile,
+            model: first.model,
+            reasoning: repairReasoning ?? first.reasoning,
             tools: o.tools,
             priority: o.priority,
             op,
             schema: o.schema,
           });
+          usedReasoning = repairReasoning ?? first.reasoning ?? null;
         } catch {
           /* keep the first (unparsed) result; fall through below */
         }
@@ -2132,6 +2280,8 @@ export async function runAgentWithFallback(
           model: result.usage?.model ?? null,
           input_tokens: result.usage?.input_tokens ?? null,
           output_tokens: result.usage?.output_tokens ?? null,
+          requested_reasoning: first.reasoning ?? null,
+          effective_reasoning: usedReasoning,
         });
         return { agent: name, result, tried };
       }
@@ -2168,6 +2318,8 @@ export async function runAgentWithFallback(
         output_tokens: result.usage?.output_tokens ?? null,
         reject_reason: errorClass === "invalid_contract" || errorClass === "invalid_json" ? rejectReason : null,
         failure_tail: result.failure_tail ?? null,
+        requested_reasoning: first.reasoning ?? null,
+        effective_reasoning: usedReasoning,
       });
       if (errorClass === "invalid_contract" || errorClass === "invalid_json") {
         // One line, codes only: op, agent, class, reason slug. Never the reply or any data.
@@ -2211,6 +2363,8 @@ export async function runAgentWithFallback(
         status: errorClass === "process_error" ? "error" : errorClass,
         error_class: errorClass,
         error_message: e?.message,
+        requested_reasoning: first.reasoning ?? null,
+        effective_reasoning: usedReasoning,
       });
       const entry: AgentTriedEntry = { agent: name, error: e.message };
       if (failure && availabilityHolds(failure.state)) {
@@ -2670,7 +2824,10 @@ function spawnAgentProcess(def: AgentDef, request: AgentSpawnRequest): Promise<A
   let schemaDir: string | null = null;
   let structuredArgs: string[] = [];
   let envelope: NonNullable<AgentStructuredOutput["envelope"]> | null = null;
-  if (structured && structuredActive) {
+  // The schema as THIS CLI must receive it; null = the CLI cannot be handed this contract.
+  const sentSchema = structured?.dialect === "openai_strict" && schema ? toOpenAiStrictSchema(schema) : schema;
+  const strictNulls = structured?.dialect === "openai_strict" && !!sentSchema;
+  if (structured && structuredActive && sentSchema) {
     try {
       let substitution: string;
       if (structured.arg === "file") {
@@ -2678,9 +2835,9 @@ function spawnAgentProcess(def: AgentDef, request: AgentSpawnRequest): Promise<A
         // schema off a predictable path and makes cleanup a single recursive remove.
         schemaDir = fs.mkdtempSync(path.join(os.tmpdir(), "cairn-schema-"));
         substitution = path.join(schemaDir, "schema.json");
-        fs.writeFileSync(substitution, JSON.stringify(schema), { mode: 0o600 });
+        fs.writeFileSync(substitution, JSON.stringify(sentSchema), { mode: 0o600 });
       } else {
-        substitution = JSON.stringify(schema);
+        substitution = JSON.stringify(sentSchema);
       }
       structuredArgs = structured.flag.map((value) =>
         value.replaceAll("{schema}", substitution).replaceAll("{schema_file}", substitution)
@@ -2699,7 +2856,9 @@ function spawnAgentProcess(def: AgentDef, request: AgentSpawnRequest): Promise<A
   // A provider whose schema flag rewrites stdout into an envelope needs unwrapping
   // BEFORE the operation's contract check; every other provider keeps the caller's
   // extractor byte-for-byte.
-  const baseExtract = extract ?? extractJson;
+  const callerExtract = extract ?? extractJson;
+  const baseExtract =
+    strictNulls && structuredArgs.length ? (text: string) => stripStrictNulls(callerExtract(text), schema) as any : callerExtract;
   const activeEnvelope = envelope;
   const parseOut = activeEnvelope
     ? (text: string) => unwrapStructuredEnvelope(baseExtract(text), activeEnvelope)
@@ -2762,7 +2921,11 @@ function spawnAgentProcess(def: AgentDef, request: AgentSpawnRequest): Promise<A
     // replacement glyphs before chat/markdown ever sees it.
     const outDecoder = new StringDecoder("utf8");
     const errDecoder = new StringDecoder("utf8");
+    // Set when Cairn itself killed the child (its timeout, a Stop): that SIGKILL is ours,
+    // never the kernel's memory kill.
+    let killedByUs = false;
     const timer = setTimeout(() => {
+      killedByUs = true;
       child.kill("SIGKILL");
       reject(new Error(`agent "${name}" timed out after ${timeoutMs}ms`));
     }, timeoutMs);
@@ -2770,6 +2933,7 @@ function spawnAgentProcess(def: AgentDef, request: AgentSpawnRequest): Promise<A
     // the worker isn't left waiting on a now-unwanted run.
     const onAbort = () => {
       clearTimeout(timer);
+      killedByUs = true;
       try { child.kill("SIGKILL"); } catch { /* already gone */ }
       reject(new Error(`agent "${name}" canceled`));
     };
@@ -2788,6 +2952,8 @@ function spawnAgentProcess(def: AgentDef, request: AgentSpawnRequest): Promise<A
     });
     child.on("close", (code, killSignal) => {
       cleanup();
+      // Already rejected as a timeout or a cancel; nothing about this exit is the provider's.
+      if (killedByUs) return;
       if (out.length < MAX_OUT) out += outDecoder.end();
       if (err.length < MAX_OUT) err += errDecoder.end();
       const parsed = parseOut(out);
@@ -2871,7 +3037,26 @@ export function streamDelta(format: string, line: string): string | null {
     }
     return null;
   }
+  if (format === "agy") {
+    // agy 1.3.x stream-json: {"event":"step_update","step_update":{"step_type":"agent_response",
+    // "text_delta":"…"}} carries the reply; the user_input step and the init/result
+    // events carry none (the result's `response` is the whole reply again, see streamFinalText).
+    const step = obj?.event === "step_update" ? obj.step_update : null;
+    if (step?.step_type === "agent_response" && typeof step.text_delta === "string") return step.text_delta;
+    return null;
+  }
   return null;
+}
+
+// The whole reply a stream's terminal event restates, for a run whose deltas never
+// arrived (a CLI that answered in one piece). Used only when no delta text accumulated,
+// so it can never double a streamed reply.
+export function streamFinalText(format: string, line: string): string | null {
+  if (format !== "agy") return null;
+  let obj: any;
+  try { obj = JSON.parse(line.trim()); } catch { return null; }
+  const result = obj?.event === "result" ? obj.result : null;
+  return result?.status === "SUCCESS" && typeof result.response === "string" ? result.response : null;
 }
 
 export function streamProgress(format: string, line: string): string | null {
@@ -3024,12 +3209,17 @@ function spawnAgentStream(
     // contain U+FFFD replacement characters by the time streamDelta reads it.
     const outDecoder = new StringDecoder("utf8");
     const errDecoder = new StringDecoder("utf8");
+    // Set when Cairn itself killed the child (its timeout, the person's Stop). That SIGKILL
+    // is ours, so the close below must never read it as the kernel's memory kill.
+    let killedByUs = false;
     const timer = setTimeout(() => {
+      killedByUs = true;
       child.kill("SIGKILL");
       reject(new Error(`agent "${name}" timed out after ${timeoutMs}ms`));
     }, timeoutMs);
     const onAbort = () => {
       clearTimeout(timer);
+      killedByUs = true;
       try { child.kill("SIGKILL"); } catch { /* already gone */ }
       reject(new Error(`agent "${name}" canceled`));
     };
@@ -3047,7 +3237,8 @@ function spawnAgentStream(
       if (progress) {
         try { opts.onProgress?.(progress); } catch { /* a bad consumer must never kill the stream */ }
       }
-      const piece = streamDelta(format, line);
+      const final = text.trim() ? null : streamFinalText(format, line);
+      const piece = final ?? streamDelta(format, line);
       if (piece == null || text.length >= MAX_OUT) return;
       text += piece;
       try { onDelta?.(piece); } catch { /* a bad consumer must never kill the stream */ }
@@ -3065,6 +3256,8 @@ function spawnAgentStream(
     child.on("error", (e) => { cleanup(); reject(new Error(`failed to launch "${def.command}": ${e.message}`)); });
     child.on("close", (code, killSignal) => {
       cleanup();
+      // Already rejected as a timeout or a cancel; nothing about this exit is the provider's.
+      if (killedByUs) return;
       buf += outDecoder.end();
       if (err.length < MAX_OUT) err += errDecoder.end();
       if (buf.trim()) consume(buf); // flush a trailing line with no newline

@@ -112,8 +112,11 @@ export function resolveRuntimeChatProfile(
 // no profile flags, or a binding it rejected): we could not pin the effort, but the
 // question was still a deep one, so the leash tracks the ambition of the turn.
 export function chatTurnTimeoutMs(profile: Pick<RuntimeChatProfile, "execution" | "requested">): number {
-  return interactiveTimeoutFor(profile.execution?.reasoning ?? profile.requested?.reasoning);
+  // A low-effort turn keeps the leash a slow CLI needs (grok's chat runs ~100 s on a Pi).
+  return Math.max(interactiveTimeoutFor(profile.execution?.reasoning ?? profile.requested?.reasoning), CHAT_LEASH_FLOOR_MS);
 }
+
+const CHAT_LEASH_FLOOR_MS = 150_000;
 
 export function chatExecutionAttemptKey(
   lane: ChatLane | null,
