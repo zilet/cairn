@@ -5,6 +5,32 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [2.1.4] — 2026-10-13
+
+Fuel's today page leads with what you ate, the Brief cache keeps its own calendar, and a faster
+test suite with the browser smoke now in CI. No migrations.
+
+### Changed
+
+- **Logged today comes first.** On Fuel's today page what you logged now sits right under the
+  composer; this week's menu follows, folded to one line ("Today · 4 meals · ~2,410 kcal") that
+  opens on a tap and remembers whether you left it open.
+
+### Fixed
+
+- **A saved Brief is no longer pruned on the day it is written.** Trimming the Brief cache to its
+  three-week window measured from SQLite's UTC clock rather than Cairn's own local day, so the two
+  could disagree about which reads were old.
+
+### Internal
+
+- **The test suite runs far faster.** Workers pull files from one shared queue, longest first
+  (timed off the previous run), files that never touch the server code skip loading it, the
+  installer suite is split six ways, and a few files no longer idle on open timers after their last
+  test. Exact duplicate tests were removed.
+- **CI runs the browser smoke** (every route and workflow in headless Chrome), so a broken smoke can
+  no longer ship unnoticed.
+
 ## [2.1.3] — 2026-10-11
 
 Train's "Where to focus" card says what its numbers count. No migrations.
@@ -1754,7 +1780,8 @@ landed since 0.3.0.
 - Chat strips agent tool-narration before the reply marker reaches the bubble
 - Segmented sub-nav scrolls when pills overflow (no clipped "Calendar" tab)
 
-[Unreleased]: https://github.com/zilet/cairn/compare/v2.1.3...HEAD
+[Unreleased]: https://github.com/zilet/cairn/compare/v2.1.4...HEAD
+[2.1.4]: https://github.com/zilet/cairn/compare/v2.1.3...v2.1.4
 [2.1.3]: https://github.com/zilet/cairn/compare/v2.1.2...v2.1.3
 [2.1.2]: https://github.com/zilet/cairn/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/zilet/cairn/compare/v2.1.0...v2.1.1
