@@ -2078,6 +2078,9 @@ export function savePlanDay(
     by?: PrescriptionWriter;
     // An Undo restoring a snapshot: a stamp the item carries comes back as it was.
     restoreStamps?: boolean;
+    // replacePlan emits ONE full-plan event for the whole write; a per-day event per
+    // day would each become its own brain review (one agent run per day).
+    deferBrainEvent?: boolean;
   } = {}
 ) {
   const dayType = resolvePlanDayType(opts.day_type);
@@ -2144,15 +2147,16 @@ export function savePlanDay(
   // plan_days count feeds getWeeklyStats.week_planned; bump covers a same-count in-place
   // day rewrite too (replacePlan reaches here, so it is covered as well).
   if (!opts.deferTrainingVersionBump) afterSqliteCommit(bumpTrainingDataVersion);
-  afterSqliteCommit(() =>
-    emitBrainEvent({
-      kind: "plan_changed",
-      domain: "training",
-      date: localDateISO(),
-      entity_id: dayId,
-      subject_key: `day:${day_number}`,
-    })
-  );
+  if (!opts.deferBrainEvent)
+    afterSqliteCommit(() =>
+      emitBrainEvent({
+        kind: "plan_changed",
+        domain: "training",
+        date: localDateISO(),
+        entity_id: dayId,
+        subject_key: `day:${day_number}`,
+      })
+    );
   return getPlanDay(day_number);
 }
 
@@ -2174,7 +2178,7 @@ export interface RunPrescription {
 
 export function deletePlanDay(
   day_number: number,
-  opts: { deferTrainingVersionBump?: boolean; deferDayReadInvalidation?: boolean } = {}
+  opts: { deferTrainingVersionBump?: boolean; deferDayReadInvalidation?: boolean; deferBrainEvent?: boolean } = {}
 ) {
   const d = db.prepare(`SELECT id FROM plan_days WHERE day_number = ?`).get(day_number) as any;
   if (!d) return { deleted: 0, day_number };
@@ -2182,7 +2186,7 @@ export function deletePlanDay(
   const r = db.prepare(`DELETE FROM plan_days WHERE id = ?`).run(d.id); // plan_items cascade
   if (r.changes && !opts.deferTrainingVersionBump) afterSqliteCommit(bumpTrainingDataVersion); // removing a day changes week_planned
   if (r.changes && !opts.deferDayReadInvalidation) invalidateDayRead();
-  if (r.changes)
+  if (r.changes && !opts.deferBrainEvent)
     afterSqliteCommit(() =>
       emitBrainEvent({
         kind: "plan_changed",
@@ -2216,13 +2220,18 @@ export function replacePlan(
     const existing = db.prepare(`SELECT day_number FROM plan_days`).all() as any[];
     for (const e of existing) {
       if (!keep.has(e.day_number)) {
-        deletePlanDay(e.day_number, { deferTrainingVersionBump: true, deferDayReadInvalidation: true });
+        deletePlanDay(e.day_number, {
+          deferTrainingVersionBump: true,
+          deferDayReadInvalidation: true,
+          deferBrainEvent: true,
+        });
       }
     }
     normalized.forEach((d, i) =>
       savePlanDay(d.day_number, d.name || `Day ${i + 1}`, d.focus ?? null, d.items, {
         deferTrainingVersionBump: true,
         deferDayReadInvalidation: true,
+        deferBrainEvent: true,
         by: opts.by,
         restoreStamps: opts.restoreStamps,
       })
