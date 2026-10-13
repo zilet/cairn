@@ -97,11 +97,40 @@ type MealMenuCardModel =
     return "";
   }
 
-  function headHtml(badge: string): string {
-    return `<div class="mmenu-head">
+  // Collapsed by default; the choice is remembered per viewer, and the card renders
+  // fine (closed) when storage is unavailable.
+  const OPEN_KEY = "cairn.fuel.menuOpen";
+  function menuOpen(): boolean {
+    try {
+      return localStorage.getItem(OPEN_KEY) === "1";
+    } catch {
+      return false;
+    }
+  }
+  function setMenuOpen(open: boolean): void {
+    try {
+      localStorage.setItem(OPEN_KEY, open ? "1" : "0");
+    } catch {
+      // storage unavailable: the choice just doesn't persist
+    }
+  }
+
+  // One quiet line under the title while the card is closed.
+  function summaryText(model: Extract<MealMenuCardModel, { kind: "week" }>): string {
+    if (model.needsRefresh) return "Needs a fresh draft";
+    if (!model.meals.length) return "Nothing planned today";
+    const total = model.meals.reduce((sum, m) => sum + (m.kcal || 0), 0);
+    const count = `${model.meals.length} ${model.meals.length === 1 ? "meal" : "meals"}`;
+    return `Today · ${count}${total > 0 ? ` · ~${total.toLocaleString("en-US")} kcal` : ""}`;
+  }
+
+  // Inside the fold's <summary> the head is phrasing content around its one heading
+  // (a summary allows nothing else), so it is a span there and a div everywhere else.
+  function headHtml(badge: string, tag: "div" | "span" = "div"): string {
+    return `<${tag} class="mmenu-head">
       <h2 class="lbl mmenu-title" id="mmenuTitle">This week's menu</h2>
       ${badge}
-    </div>`;
+    </${tag}>`;
   }
 
   // The draft status host rides every state of the card, so a week the team is still
@@ -135,11 +164,18 @@ type MealMenuCardModel =
       : model.meals.length
         ? `${day}<ul class="mmenu-list">${model.meals.map(mealRowHtml).join("")}</ul>`
         : `<p class="mmenu-quiet">Nothing on the menu for today. The rest of the week is a tap away.</p>`;
-    return `<section class="mmenu" aria-labelledby="mmenuTitle">
-      ${headHtml(badge)}
-      ${noteHtml(model)}
-      ${list}
-      <button class="linkbtn mmenu-week" type="button" data-mmenu-open="week">See the week <span aria-hidden="true">›</span></button>
+    return `<section class="mmenu mmenu-fold" aria-labelledby="mmenuTitle">
+      <details class="mmenu-details" data-mmenu-details${menuOpen() ? " open" : ""}>
+        <summary class="mmenu-summary">
+          <span class="mmenu-summary-main">
+            ${headHtml(badge, "span")}
+            <span class="mmenu-peek">${escHtml(summaryText(model))}</span>
+          </span>
+        </summary>
+        ${noteHtml(model)}
+        ${list}
+        <button class="linkbtn mmenu-week" type="button" data-mmenu-open="week">See the week <span aria-hidden="true">›</span></button>
+      </details>
       ${STATUS_HOST}
     </section>`;
   }
@@ -148,7 +184,7 @@ type MealMenuCardModel =
     return `<section class="mmenu mmenu-skel" aria-hidden="true">${headHtml("")}${skelLines(2)}</section>`;
   }
 
-  const CAIRN_MEAL_MENU_CARD = { model: menuCardModel, cardHtml: menuCardHtml, skeletonHtml };
+  const CAIRN_MEAL_MENU_CARD = { model: menuCardModel, cardHtml: menuCardHtml, skeletonHtml, menuOpen, setMenuOpen };
 
   Object.assign(globalThis, { CairnMealMenuCard: CAIRN_MEAL_MENU_CARD });
 })();

@@ -111,8 +111,8 @@ function paintFoodJournal(token: number, date: string, today: string, isToday: b
     `<section class="meal-energy food-journal fuel" id="mealEnergy">
       <div id="dayFuelSlot" class="fuel-slot"></div>
       ${isToday ? `<div id="fuelLogSlot" class="fuel-slot"></div>` : ""}
-      ${isToday ? `<div id="fuelMenuSlot" class="fuel-slot"></div>` : ""}
       <div id="fuelMealsSlot" class="fuel-slot"></div>
+      ${isToday ? `<div id="fuelMenuSlot" class="fuel-slot"></div>` : ""}
       ${isToday ? `<div id="fuelIdeasSlot" class="fuel-slot"></div>` : ""}
       <div id="energyCard">${loadingState("Reading your trend…")}</div>
       <div id="energyHero"></div>

@@ -221,3 +221,21 @@ test("refresh repaints in place; a card whose Fuel paint is stale writes nothing
   await handle.refresh();
   assert.match(host.innerHTML, /Salmon rice plate/, "a stale card is left alone");
 });
+
+test("the menu renders collapsed behind an accessible summary, and remembers an open choice", async () => {
+  const { win, host, mount } = load({ peek: [week()], fetched: [week()] });
+  const card = win.CairnMealMenuCard;
+  const html = card.cardHtml(card.model([week()], WEDNESDAY));
+  assert.match(html, /<details class="mmenu-details" data-mmenu-details>/, "closed by default");
+  assert.match(html, /<summary class="mmenu-summary">[\s\S]*This week's menu[\s\S]*Today · 3 meals · ~2,000 kcal/);
+  mount();
+  await flush();
+  const details = host.querySelector("[data-mmenu-details]");
+  assert.equal(details.open, false);
+  assert.ok(details.querySelector("summary"), "a native summary is the toggle");
+  assert.ok(host.querySelector("#mealDraftStatus"), "the draft status host stays outside the fold");
+  details.open = true;
+  details.dispatchEvent(new win.Event("toggle"));
+  assert.equal(win.localStorage.getItem("cairn.fuel.menuOpen"), "1");
+  assert.match(card.cardHtml(card.model([week()], WEDNESDAY)), /data-mmenu-details open>/);
+});

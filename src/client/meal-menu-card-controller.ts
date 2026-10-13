@@ -56,7 +56,17 @@ type MealMenuCardHandle = (() => void) & {
         "mmenu-draft": () => CairnMealPlannerJobs.draftWeeklyMeals(),
       });
     });
-    return Object.assign(teardown, { refresh: load, ready: load() });
+    // `toggle` does not bubble, so listen in the capture phase on the host.
+    const onToggle = (event: Event): void => {
+      const el = event.target as HTMLDetailsElement | null;
+      if (el?.matches?.("[data-mmenu-details]")) CairnMealMenuCard.setMenuOpen(el.open);
+    };
+    host.addEventListener("toggle", onToggle, true);
+    const stop = (): void => {
+      host.removeEventListener("toggle", onToggle, true);
+      teardown();
+    };
+    return Object.assign(stop, { refresh: load, ready: load() });
   }
 
   const CAIRN_MEAL_MENU_CARD_CONTROLLER = { mount: mountMealMenuCard };

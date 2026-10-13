@@ -5588,6 +5588,8 @@ declare global {
           };
       cardHtml(model: ReturnType<Window["CairnMealMenuCard"]["model"]>): string;
       skeletonHtml(): string;
+      menuOpen(): boolean;
+      setMenuOpen(open: boolean): void;
     };
 
     CairnMealMenuCardController: {

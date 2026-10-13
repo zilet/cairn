@@ -145,6 +145,8 @@ const PERSISTED_KEYS = {
   restSec: ["rest-timer"],
   "cairn.fuelLogDraft": ["fuel-deps"],
   "cairn.fuelLogRetry.v1": ["fuel-deps"],
+  // Whether this viewer left Fuel's week menu open (meal-menu-card-client.ts).
+  "cairn.fuel.menuOpen": ["meal-menu-card-client"],
   "cairn.sessnotes.": ["today-session-controller"],
   "cairn.swr.v1.": ["swr-cache"],
   "cairn.brief.v1": ["today-brief-cache-client", "write-invalidation-client"],
@@ -338,7 +340,15 @@ test("an outbox written by v1 still drains, in order, with its own idempotency k
   assert.ok(touched.has("cairn.outbox.v1.lock"), "the cross-tab lease key keeps its name");
 });
 
-function loadWorker({ fetchImpl, cached = {}, setTimeoutImpl = setTimeout } = {}) {
+// The worker races the manifest fetch against a 4 s timer it never clears (harmless in a
+// browser). Unref'd here, so a won race does not hold this test process open for 4 s.
+function unrefTimeout(fn, ms, ...args) {
+  const timer = setTimeout(fn, ms, ...args);
+  timer.unref();
+  return timer;
+}
+
+function loadWorker({ fetchImpl, cached = {}, setTimeoutImpl = unrefTimeout } = {}) {
   const handlers = {};
   const stores = new Map();
   const cacheFor = (name) => {

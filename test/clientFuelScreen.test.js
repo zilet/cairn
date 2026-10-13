@@ -153,12 +153,12 @@ test("Fuel paints its shell under Today and mounts every component into its slot
   assert.equal(view.querySelector("#fuelHistory").hasAttribute("open"), false, "history stays folded");
 });
 
-test("This week's menu mounts from the lazy meals bundle into its own slot, above the day's journal", () => {
+test("This week's menu mounts from the lazy meals bundle into its own slot, below what was logged today", () => {
   const { win, view, bundles, bundleReturns, menuCards, mounts } = load();
   win.renderFoodJournal();
   const slots = [...view.querySelectorAll(".fuel-slot")].map((el) => el.id);
-  assert.ok(slots.indexOf("fuelMenuSlot") < slots.indexOf("fuelMealsSlot"), "the menu sits above what was logged");
-  assert.ok(slots.indexOf("fuelLogSlot") < slots.indexOf("fuelMenuSlot"), "logging stays first");
+  assert.ok(slots.indexOf("fuelMealsSlot") < slots.indexOf("fuelMenuSlot"), "what was logged today comes before the menu");
+  assert.ok(slots.indexOf("fuelLogSlot") < slots.indexOf("fuelMealsSlot"), "logging stays ahead of the logged list");
   assert.deepEqual(bundles, ["meals"], "only the card reaches the planner bundle; the fold stays unpainted");
   assert.equal(menuCards.length, 1);
   assert.equal(menuCards[0].host, view.querySelector("#fuelMenuSlot"));
