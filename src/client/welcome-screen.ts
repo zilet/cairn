@@ -24,6 +24,10 @@
   // Providers that answered "say hello" in this session. Meet opens only for one of
   // these or one the server positively reads as signed in — never on a guess.
   const answered = new Set<string>();
+  // The person reached Meet by choosing (a pick on Hello, or Connect's hello). Opened
+  // straight to Meet instead — a provider already signed in on first open — Meet names
+  // the provider with a way to switch.
+  let chose = false;
 
   function canMeet(p: CoachLinkProvider | null | undefined): boolean {
     return !!p && (answered.has(p.name) || (p.usable && p.signedIn));
@@ -60,6 +64,7 @@
     const target = event.target instanceof Element ? event.target : null;
     const pick = target?.closest<HTMLElement>("[data-wel-pick]")?.dataset.welPick;
     if (pick) {
+      chose = true;
       const p = CairnCoachLink.peek()?.providers.find((x) => x.name === pick);
       go(canMeet(p) ? "meet" : "connect", pick);
       return;
@@ -148,6 +153,7 @@
           provider: p,
           onSwitch: () => go("hello", null),
           onConnected: (ready) => {
+            chose = true;
             answered.add(ready.name);
             go("meet", ready.name, { replace: true });
           },
@@ -162,8 +168,12 @@
         go(target ? "connect" : "hello", target || null, { replace: true });
         return;
       }
-      el.innerHTML = CairnWelcomeClient.meetHtml(p);
+      el.innerHTML = CairnWelcomeClient.meetHtml(p, { switchable: !chose });
       const pane = el.querySelector<HTMLElement>(".wel-meet");
+      pane?.querySelector("[data-wel-change]")?.addEventListener("click", () => {
+        chose = true;
+        go("hello", null);
+      });
       if (pane) {
         teardown = CairnWelcomeMeet.mount(pane, {
           provider: p,

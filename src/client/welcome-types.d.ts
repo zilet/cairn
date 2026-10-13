@@ -123,7 +123,9 @@ type WelcomeClientApi = {
   diskNoteHtml(smallDisk?: CoachLinkModel["smallDisk"]): string;
   connectHtml(provider: CoachLinkProvider): string;
   cairnHtml(laid: number, idPrefix: string): string;
-  meetHtml(provider: CoachLinkProvider | null): string;
+  /** `opts.switchable`: Meet was opened straight away (a provider already signed in), so it
+   *  names the provider in one quiet line with a way to pick another. */
+  meetHtml(provider: CoachLinkProvider | null, opts?: { switchable?: boolean }): string;
   userBubbleHtml(text: string): string;
   coachBubbleHtml(text: string): string;
   workingHtml(step?: WelcomeWorkingStep): string;

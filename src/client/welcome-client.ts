@@ -107,17 +107,25 @@
 
   const sendIcon = `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></svg>`;
 
-  function meetHtml(p: CoachLinkProvider | null): string {
+  // Meet opened straight away because a provider was already signed in: the person never
+  // saw Hello or Connect, so one quiet line says which AI this runs through and how to pick
+  // another (back to Hello). The coach's opener then skips saying it twice.
+  function viaHtml(p: CoachLinkProvider): string {
+    return `<p class="wel-via">Connected through ${escHtml(p.label)} · <button class="linkbtn-quiet wel-via-change" type="button" data-wel-change aria-label="${escAttr(`Change from ${p.label}`)}">change</button></p>`;
+  }
+
+  function meetHtml(p: CoachLinkProvider | null, opts: { switchable?: boolean } = {}): string {
+    const via = !!(opts.switchable && p);
+    const opener = "Tell me what you're training for and what a normal week looks like. A sentence is plenty.";
     return `<div class="wel-pane wel-meet">
       <div class="wel-meet-hd">
         <div class="wel-mini" aria-hidden="true">${cairnHtml(3, "welAvatar")}</div>
         <h1 class="wel-h1 wel-h1-sm" tabindex="-1">Meet your coach</h1>
+        ${via && p ? viaHtml(p) : ""}
         <button class="linkbtn-quiet wel-skip" type="button" data-wel-skip>Look around first</button>
       </div>
       <div class="wel-log" role="log" aria-live="polite" aria-label="Your first conversation">
-        ${coachBubbleHtml(
-          `Connected through ${p ? p.label : "your AI"}. Tell me what you're training for and what a normal week looks like. A sentence is plenty.`
-        )}
+        ${coachBubbleHtml(via ? opener : `Connected through ${p ? p.label : "your AI"}. ${opener}`)}
       </div>
       <div class="wel-dock" data-occludes="bottom">
         <form class="wel-compose" novalidate>
