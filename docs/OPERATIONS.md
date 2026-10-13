@@ -697,15 +697,18 @@ twin of the bundle byte budget. It boots the built server on a throwaway data di
 seed and offline agents, then opens every home and leaf route in headless Chrome at a 390px
 viewport with CPU 4x and slow 4G, cold (fresh browser context) and warm (the service worker
 installed), three runs each. It **gates** only on measures that do not move with machine speed —
-`/api` calls per load, zero duplicate GET URLs, serial request rounds (the dependency depth read
-from request start/end order), CLS, the JS/CSS bytes a cold load transfers, and no visible
+`/api` calls per load, zero duplicate GET URLs, serial request rounds (the `/api` dependency
+depth, from one extra load per route that holds every answer until the page is quiescent and
+releases it a wave at once — read from start/end overlap it moved with CPU speed), CLS, the
+JS/CSS bytes a cold load transfers (the idle warm-up of other homes' bundles is off, since it
+raced the service worker's precache for the same files), and no visible
 skeleton left once the route reads ready — against the median run and the checked-in
 `scripts/perf-budget.json`. FCP, first content and ready are **reported** beside the proposed
 per-group targets and only flagged past +30%. A route whose budget sits above its target is
 listed as a miss on every run, so a loosened budget is never silent; raise one deliberately with
 `node scripts/check-perf.mjs --update`. `--only today,ask`, `--runs 1` and `--json <file>`
 narrow or keep a run. It needs Chrome (`CHROME_BIN` overrides discovery), so `npm run verify`
-runs it only with `CAIRN_PERF=1`, and CI runs it as its own non-blocking job.
+runs it only with `CAIRN_PERF=1`, and CI runs it as its own blocking job.
 
 One gotcha: the `npm run format` script hardcodes `biome format --write .` (the whole
 repo, which is not biome-clean at rest) — to format only the files you touched, run

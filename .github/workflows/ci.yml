@@ -107,11 +107,11 @@ jobs:
   perf:
     # Per-route load budget (scripts/check-perf.mjs): real headless Chrome on a
     # throttled mid-phone profile against the demo seed. Its own job because it needs
-    # Chrome and ~15 minutes; non-blocking while the budgets, set on a developer
-    # machine, settle on the hosted runner.
+    # Chrome and ~15 minutes. Blocking: the gate reads only measures that do not move
+    # with the runner's speed (rounds come from a wave-gated load, bytes with the idle
+    # bundle warm-up off); timings are report-only.
     name: Perf budget
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 30
     steps:
       - name: Checkout
