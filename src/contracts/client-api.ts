@@ -467,6 +467,8 @@ export interface ClientAgentInfo {
   configured?: boolean | null;
   /** Positively signed in (configured === true and installed) — never inferred from an undetectable login. */
   signed_in?: boolean;
+  /** The login probe is still answering (a cold server): `configured` reads null meanwhile; ask again shortly. */
+  login_checking?: boolean;
   availability?: ClientAgentAvailability | null;
   /** Provider-reported usage buckets from the status probe (agy's /quota); [] when unreported. */
   quota?: { group: string; window: string; remaining_fraction: number; reset_time: string | null }[];

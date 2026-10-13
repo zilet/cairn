@@ -193,7 +193,11 @@ export function loadAgents(): Record<string, AgentDef> {
   }
 }
 
-export function listAgents() {
+// `loginProbe: "peek"` reads the login verdict without spawning (peekAgentConfigured):
+// a cold one reads `configured: null` with `login_checking: true` while it is probed in
+// the background. The default keeps the synchronous probe every other caller relies on.
+export function listAgents(opts: { loginProbe?: "sync" | "peek" } = {}) {
+  const peek = opts.loginProbe === "peek";
   return Object.entries(loadAgents()).map(([name, def]) => ({
     name,
     description: def.description || "",
@@ -208,7 +212,9 @@ export function listAgents() {
     present: commandPresent(def.command),
     // tri-state login/connected probe (true logged-in / false logged-out / null
     // undetectable). Only `false` excludes from the rotation — see agentConfigured.
-    configured: agentConfigured(name),
+    configured: peek ? peekAgentConfigured(name).verdict : agentConfigured(name),
+    // true only on a peek whose verdict is still being probed (configured reads null meanwhile)
+    login_checking: peek && !configuredCache.has(name),
     // provider usage buckets read by the status probe (agy's /quota today); [] elsewhere
     quota: agentQuota(name),
     // whether this agent declares an interactive login flow / a model catalog —
@@ -548,7 +554,10 @@ export function reprobeAgentConfigured(name: string): Promise<boolean | null> {
   const def = loadAgents()[name];
   if (!def) return Promise.resolve(null);
   const remember = (verdict: boolean | null, timedOut = false): boolean | null => {
-    configuredRetryAt.delete(name);
+    // A probe that timed out is not an answer: like the synchronous path, its null is
+    // remembered only for the retry leash, so a later read asks again.
+    if (timedOut && verdict === null) configuredRetryAt.set(name, Date.now() + STATUS_PROBE_TIMEOUT_RETRY_MS);
+    else configuredRetryAt.delete(name);
     configuredCache.set(name, verdict);
     bumpAgentStateGeneration();
     logConfiguredVerdict(name, verdict, timedOut);
@@ -581,6 +590,52 @@ export function reprobeAgentConfigured(name: string): Promise<boolean | null> {
       resolve(remember(fallbackConfigured(name, def)));
     }
   });
+}
+
+// The login verdict for a read that must never wait on a CLI (GET /api/settings, the
+// aggregates that prime it): the cached answer when there is one, else "not known yet"
+// while ONE background probe per agent (an async spawn, off the event loop) fills the
+// cache. agentConfigured's spawnSync could hold the settings request for up to the
+// 20 s probe leash per agent on a cold cache — the welcome's boot waits on that body.
+const configuredInFlight = new Map<string, Promise<boolean | null>>();
+
+/** Refresh one agent's login verdict in the background; concurrent callers share the run. */
+export function refreshAgentConfigured(name: string): Promise<boolean | null> {
+  const running = configuredInFlight.get(name);
+  if (running) return running;
+  const run = reprobeAgentConfigured(name)
+    .catch(() => null)
+    .finally(() => configuredInFlight.delete(name));
+  configuredInFlight.set(name, run);
+  return run;
+}
+
+/** The cached verdict without spawning; `known: false` means a background probe is answering it. */
+export function peekAgentConfigured(name: string): { known: boolean; verdict: boolean | null } {
+  const retryAt = configuredRetryAt.get(name);
+  if (retryAt !== undefined && Date.now() >= retryAt) {
+    configuredRetryAt.delete(name);
+    configuredCache.delete(name);
+  }
+  if (configuredCache.has(name)) return { known: true, verdict: configuredCache.get(name) ?? null };
+  void refreshAgentConfigured(name);
+  // An agent with no status command answers from its evidence at once.
+  if (configuredCache.has(name)) return { known: true, verdict: configuredCache.get(name) ?? null };
+  return { known: false, verdict: null };
+}
+
+/** Wait at most `maxMs` for the background login probes now running; never rejects. */
+export async function settleAgentLoginChecks(maxMs: number): Promise<void> {
+  const running = [...configuredInFlight.values()];
+  if (!running.length || !(maxMs > 0)) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    Promise.allSettled(running),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, maxMs);
+    }),
+  ]);
+  if (timer) clearTimeout(timer);
 }
 
 /** A real round trip through this agent just answered: that is a positive sign-in. */

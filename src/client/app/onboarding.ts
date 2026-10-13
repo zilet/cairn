@@ -77,6 +77,13 @@
     }
   }
 
+  function loginStillChecking(data: unknown): boolean {
+    const body = data as { settings?: { onboarded?: unknown }; agents?: unknown } | null;
+    if (!body || body.settings?.onboarded === true || !Array.isArray(body.agents)) return false;
+    const rows = body.agents as Array<{ login_checking?: unknown }>;
+    return rows.some((row) => row?.login_checking === true) && CairnCoachLink.model(data).ready.length === 0;
+  }
+
   async function decideOnboarding(): Promise<void> {
     let data: unknown = null;
     try {
@@ -89,6 +96,14 @@
     }
     // A hung hint must never hold the welcome: the units settle whenever it lands.
     await Promise.race([hintUnits(data), new Promise<void>((resolve) => setTimeout(resolve, HINT_UNITS_WAIT_MS))]);
+    // A server that came up moments ago may still be reading a provider's login
+    // (`login_checking`): ask once more before choosing Hello over Meet, so a signed-in
+    // provider is not offered as one still to connect.
+    if (loginStillChecking(data)) {
+      try {
+        data = (await api("/settings")) ?? data;
+      } catch {}
+    }
     const model = data ? CairnCoachLink.model(data) : null;
     if (model) swrSet(CairnCoachLink.KEY, model);
     const landing = landingStage();

@@ -24,7 +24,8 @@ function settingsBody({ onboarded = false, welcomed = false, usable = [], signed
   };
 }
 
-function load({ body = settingsBody(), pathname = "/", search = "", knownOnboarded = false } = {}) {
+function load({ body = settingsBody(), bodies = null, pathname = "/", search = "", knownOnboarded = false } = {}) {
+  let settingsReads = 0;
   const opened = [];
   const swr = new Map();
   const timers = [];
@@ -32,7 +33,7 @@ function load({ body = settingsBody(), pathname = "/", search = "", knownOnboard
     globals: {
       location: { pathname, search, href: `http://cairn.local${pathname}${search}` },
       api: async (path) => {
-        if (path === "/settings") return body;
+        if (path === "/settings") return bodies ? bodies[Math.min(settingsReads++, bodies.length - 1)] : body;
         throw new Error(`unexpected ${path}`);
       },
       artEnabled: true,
@@ -53,7 +54,7 @@ function load({ body = settingsBody(), pathname = "/", search = "", knownOnboard
     },
   });
   if (knownOnboarded) win.localStorage.setItem("cairn.onboarded", "1");
-  return { win, opened, swr, timers };
+  return { win, opened, swr, timers, reads: () => settingsReads };
 }
 
 test("a fresh install opens the welcome at Hello, replacing the landing entry", async () => {
@@ -76,6 +77,24 @@ test("an AI whose sign-in the server cannot read opens Hello, never Meet", async
   const env = load({ body: settingsBody({ usable: ["codex"], signedIn: [] }) });
   await env.win.maybeOnboard();
   assert.deepEqual(env.opened, ["welcome", { stage: "hello", replace: true }]);
+});
+
+// A server that came up moments ago answers GET /settings before its login probes have
+// (`login_checking`, configured null): the boot asks once more rather than offering a
+// signed-in provider as one still to connect.
+test("a login still being read is asked once more before choosing Hello over Meet", async () => {
+  const checking = settingsBody({ usable: ["codex"], signedIn: [] });
+  checking.agents = checking.agents.map((a) => (a.name === "codex" ? { ...a, login_checking: true } : a));
+  const env = load({ bodies: [checking, settingsBody({ usable: ["codex"] })] });
+  await env.win.maybeOnboard();
+  assert.equal(env.reads(), 2);
+  assert.deepEqual(env.opened, ["welcome", { stage: "meet", agent: "codex", replace: true }]);
+});
+
+test("nothing still being read is never asked twice", async () => {
+  const env = load({ bodies: [settingsBody({ usable: ["codex"], signedIn: [] })] });
+  await env.win.maybeOnboard();
+  assert.equal(env.reads(), 1);
 });
 
 test("an onboarded install opens nothing and remembers it on this browser", async () => {

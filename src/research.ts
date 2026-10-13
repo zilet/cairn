@@ -78,11 +78,13 @@ export interface ResearchAutoEligibility {
 // given login can actually browse right now. It's a hint to surface the toggle, not
 // a guarantee; the researchEvidence firewall (URL validation, sourceless-claim
 // discard) is what actually protects against a non-browsing agent.
-export function researchAutoEligible(): ResearchAutoEligibility {
+// `agents` lets a caller that already read the agent config (GET /settings, without
+// waiting on a login probe) pass it rather than probe again.
+export function researchAutoEligible(agents?: Array<{ name: string; usable: boolean }>): ResearchAutoEligibility {
   let usable: string[] = [];
   try {
     // The usable set = enabled + binary present + env ok + not known-logged-out.
-    usable = getAgentConfig().filter((a: any) => a.usable).map((a: any) => a.name);
+    usable = (agents ?? getAgentConfig()).filter((a: any) => a.usable).map((a: any) => a.name);
   } catch {
     usable = [];
   }

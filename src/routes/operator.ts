@@ -7,7 +7,7 @@ import {
   startAgentCliUpdate,
   startInstalledAgentCliUpdate,
 } from "../agentCliUpdates.js";
-import { loadAgents } from "../agents.js";
+import { loadAgents, settleAgentLoginChecks } from "../agents.js";
 import { serverDiskRead, type ServerDisk } from "../hosting.js";
 import { agentInfoOp, agentModelsOp, verifyAgent } from "../coachOps.js";
 import {
@@ -103,29 +103,49 @@ function serverDiskSafe(): ServerDisk | null {
 
 // GET /settings, as one call: the /today aggregate primes the same body.
 export function settingsResponse() {
+  // Never waits on a cold CLI login probe: the welcome's boot and the /today
+  // aggregates wait on this body, and one probe may take its full 20 s leash.
+  const agents = getAgentConfig({ loginProbe: "peek" });
   return {
     settings: { ...getSettings(), ...garminInputState(), ...unitsState() },
     // The units registry with the athlete's choices (display-words.ts): the Settings
     // Units group renders from this, so a new unit kind needs no client list of its own.
     units: unitsRegistryRead(athleteUnits()),
-    agents: getAgentConfig(),
+    agents,
     // The disk the provider CLIs install onto: the welcome warns when a hosted volume
     // fits only about one provider. Best-effort — a failed read is simply absent.
     server_disk: serverDiskSafe(),
     route_tasks: listRoutableTasks(),
-    research_auto_eligible: researchAutoEligible(),
+    research_auto_eligible: researchAutoEligible(agents),
     // Quiet state for the strength write-back toggle. Derived, not a settings column,
     // so it rides alongside `settings` rather than inside it.
     garmin_last_export_at: lastGarminStrengthExportAt(),
   };
 }
 
-operatorRouter.get("/settings", (_req, res) => res.json(settingsResponse()));
+// How long GET /settings lets a cold login probe answer before replying "checking"
+// (`login_checking`): long enough for a warm CLI, short enough that a slow one never
+// holds the welcome. The probe keeps running and the next read has its verdict.
+export const SETTINGS_LOGIN_WAIT_MS = 1500;
+
+operatorRouter.get("/settings", (_req, res) => {
+  const first = settingsResponse();
+  if (!first.agents.some((agent) => agent.login_checking)) return res.json(first);
+  void settleAgentLoginChecks(SETTINGS_LOGIN_WAIT_MS).then(() => {
+    let body = first;
+    try {
+      body = settingsResponse();
+    } catch {
+      /* the first read stands */
+    }
+    res.json(body);
+  });
+});
 operatorRouter.put("/settings", (req, res) =>
   res.json({
     settings: { ...setSettings(req.body ?? {}), ...garminInputState(), ...unitsState() },
     units: unitsRegistryRead(athleteUnits()),
-    agents: getAgentConfig(),
+    agents: getAgentConfig({ loginProbe: "peek" }),
     route_tasks: listRoutableTasks(),
     garmin_last_export_at: lastGarminStrengthExportAt(),
   })

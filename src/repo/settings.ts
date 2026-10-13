@@ -1194,10 +1194,13 @@ function availabilityFor(name: string, now: Date) {
 // `models_list` and `capabilities` are read-only visibility fields (computed here,
 // never persisted). `listAgents()` already normalizes capabilities to the small
 // public contract, so do not expose the underlying CLI definition or argv here.
-export function getAgentConfig() {
+// `loginProbe: "peek"` never waits on a CLI login probe (see listAgents): a cold login
+// reads `configured: null` with `login_checking: true` — signed in is still only ever a
+// positive verdict — while the probe answers in the background.
+export function getAgentConfig(opts: { loginProbe?: "sync" | "peek" } = {}) {
   const s = getSettings();
   const now = new Date();
-  const all = listAgents() as any[];
+  const all = listAgents(opts) as any[];
   const byName = new Map(all.map((a) => [a.name, a]));
   const ordered: string[] = [];
   for (const n of s.agent_order) if (byName.has(n) && !ordered.includes(n)) ordered.push(n);
@@ -1222,6 +1225,8 @@ export function getAgentConfig() {
       present,
       enabled,
       configured,
+      // The login probe is still answering (a peek on a cold cache): ask again shortly.
+      login_checking: a.login_checking === true,
       // installed CLI version (cached --version probe; null when absent/unreadable)
       version: present ? agentVersion(name) : null,
       can_login: !!a.can_login,
