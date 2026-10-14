@@ -5,6 +5,28 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [2.1.6] — 2026-10-14
+
+Logging a workout on a bad signal stays put, and Cairn sits quietly when it is left open. No
+migrations.
+
+### Fixed
+
+- **The session no longer goes blank when a set syncs.** A set saved offline used to bring back
+  the loading placeholder over the whole workout for as long as the network took to answer, which
+  read as the screen flashing to its background and the interface disappearing. The workout now
+  stays on screen and refreshes in place.
+- **Nothing redraws under your fingers.** A refresh that arrives while you are typing a weight,
+  reps or RIR, or while a finger is on the screen, waits until you finish that entry. The keyboard
+  stays up and what you typed stays put.
+- **Log works on the first tap.** Tapping Log right after typing used to close the keyboard first,
+  the button moved and the tap was lost. Log now registers on the first touch and puts the keyboard
+  away once the set is in.
+- **Less work while Cairn sits open.** Decorative looping motion (the drifting stones, breathing
+  markers) pauses while the window is in the background or untouched for a while, and resumes when
+  you come back. Loading indicators keep moving. A saved item that needs your attention shows a
+  still dot instead of a pulsing one.
+
 ## [2.1.5] — 2026-10-13
 
 A first run that listens, a calmer day one, faster answers from every AI app at the effort each job
