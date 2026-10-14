@@ -11,10 +11,13 @@ class FakeRoot {
   constructor() {
     this.innerHTML = "";
     this.hasTodayWrap = false;
+    this.hasSessionSurface = false;
   }
 
   querySelector(selector) {
-    if (selector === ".today-wrap" && this.hasTodayWrap) return {};
+    const wanted = selector.split(",").map((part) => part.trim());
+    if (wanted.includes(".today-wrap") && this.hasTodayWrap) return {};
+    if (wanted.includes(".sess-dest") && this.hasSessionSurface) return {};
     return null;
   }
 }
@@ -104,6 +107,21 @@ test("Today data loader uses the aggregate on a cold path and primes slice cache
     "exercises",
   ]);
   assert.equal(result.revalidations.length, 0);
+});
+
+test("a cold read never wipes a Session surface on screen with the Today skeleton", async () => {
+  // Every synced set invalidates the session + stats slices, so the repaint that
+  // follows is cold. On a slow network the skeleton used to hold the whole
+  // workout hostage for as long as the GET took.
+  const loader = loadDataLoader();
+  const rootEl = new FakeRoot();
+  rootEl.hasSessionSurface = true;
+  rootEl.innerHTML = "<div class=\"sess-dest\">workout</div>";
+  const { deps } = makeDeps({ root: rootEl });
+
+  await loader.load({}, deps);
+
+  assert.equal(rootEl.innerHTML, "<div class=\"sess-dest\">workout</div>");
 });
 
 test("Today data loader lets a fresh aggregate replace warm-but-stale slices", async () => {

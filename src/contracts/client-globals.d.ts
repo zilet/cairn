@@ -1659,6 +1659,14 @@ declare global {
     recoveryBannerHtml(rs: import("./client-api.js").ClientRecoveryWeekStatus): string;
     loadRecoveryBanner(token: number, pending?: Promise<unknown>): void;
   };
+  declare const CairnSessionEntry: {
+    tapWithoutBlur(button: HTMLElement, act: () => unknown): void;
+    gate<O extends { soft?: boolean; fresh?: boolean }>(
+      host: HTMLElement,
+      surfaceSelector: string,
+      paint: (opts: O) => Promise<void>,
+    ): (opts?: O) => Promise<void>;
+  };
   declare const CairnSessionSnapshot: {
     KEY: string;
     stamp(date: string, peek: (key: string) => { data: unknown } | null): string | null;

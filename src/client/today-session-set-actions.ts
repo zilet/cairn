@@ -439,7 +439,7 @@ type TodaySessionSetActionsApi = {
         input.dataset.dirty = "1";
       });
     });
-    logBtn.addEventListener("click", async () => {
+    CairnSessionEntry.tapWithoutBlur(logBtn, async () => { // never blurs the field first: session-entry-client.ts
       if (logBtn.disabled || row.dataset.logging === "1") return;
       if (!surfaceStillCurrent(deps, surfaceDate, surfaceTab)) return;
       const actionDate = surfaceDate;
@@ -483,11 +483,10 @@ type TodaySessionSetActionsApi = {
       // key and write a second row.
       row.dataset.logging = "1";
       logBtn.disabled = true;
-      const rearmLog = () => {
-        row.dataset.logging = "";
-        logBtn.disabled = false;
-      };
+      const rearmLog = () => { row.dataset.logging = ""; logBtn.disabled = false; };
       const rearmTimer = typeof setTimeout === "function" ? setTimeout(rearmLog, 400) : 0;
+      const typing = typeof document !== "undefined" ? document.activeElement : null; // registered: let the keyboard go
+      if (typing instanceof HTMLElement && row.contains(typing)) typing.blur();
 
       // OPTIMISTIC: the set is on the card, the rest timer is running and the row
       // is ready for the next set BEFORE the write leaves the device. A set the

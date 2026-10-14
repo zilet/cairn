@@ -41,7 +41,62 @@
     installMobileViewportGuards();
     installDayRolloverWatcher();
     installWakeLockWatcher();
+    installMotionRest();
     scheduleLazyBundleWarmup();
+  }
+
+  // Ambient loops (a drifting stone, a breathing marker) pause while nobody is
+  // looking: "away" when the window is blurred or hidden, "idle" after a quiet
+  // spell with no input. A desktop PWA left open behind other windows counts as
+  // visible, so without this a paint-bound loop (an SVG stone's drift) repaints
+  // every frame for hours. Only INFINITE animations pause — an entrance landing
+  // behind another window still finishes, so a background refresh never leaves
+  // content faded out. While merely idle, the working vocabulary (spinner,
+  // filament, typing dots) keeps moving, so a long agent call never reads frozen.
+  const MOTION_IDLE_MS = 90_000;
+  const WORKING_LOOPS = new Set([
+    "sugspin", "enrspin", "atelier-filament", "typingdot", "hshine", "syncpulse",
+    "agent-busy-breathe", "mealpulse", "recoveryOptWork",
+  ]);
+  function installMotionRest(): void {
+    if (typeof document === "undefined" || typeof document.getAnimations !== "function") return;
+    let mode: "away" | "idle" | null = null;
+    let paused: Animation[] = [];
+    let idleTimer: ReturnType<typeof setTimeout> | 0 = 0;
+    const pauseLoops = () => {
+      for (const anim of document.getAnimations()) {
+        if (anim.playState !== "running" || anim.effect?.getTiming().iterations !== Infinity) continue;
+        if (mode === "idle" && WORKING_LOOPS.has((anim as CSSAnimation).animationName)) continue;
+        anim.pause();
+        paused.push(anim);
+      }
+    };
+    const rest = (next: "away" | "idle") => {
+      mode = next;
+      pauseLoops();
+    };
+    const away = () => document.visibilityState === "hidden" || !document.hasFocus();
+    const wake = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      if (away()) {
+        idleTimer = 0;
+        rest("away");
+        return;
+      }
+      if (mode) {
+        mode = null;
+        for (const anim of paused) if (anim.playState === "paused") anim.play();
+        paused = [];
+      }
+      idleTimer = setTimeout(() => rest("idle"), MOTION_IDLE_MS);
+    };
+    // A loop that starts while resting (a repaint behind another window) rests too.
+    document.addEventListener("animationstart", () => { if (mode) pauseLoops(); }, true);
+    window.addEventListener("blur", wake);
+    window.addEventListener("focus", wake);
+    document.addEventListener("visibilitychange", wake);
+    for (const type of ["pointerdown", "keydown", "wheel"]) window.addEventListener(type, wake, { passive: true, capture: true });
+    wake();
   }
 
   // Train, Horizon, Ask, Settings and Health load on first navigation. Once the

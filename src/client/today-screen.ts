@@ -1332,7 +1332,7 @@ async function openSession(date?: string | null, options: OpenSessionOptions = {
 }
 
 function rerenderTraining(opts?: Record<string, unknown>): Promise<unknown> | unknown {
-  return todayState.tab === "session" ? renderSession(opts) : renderToday(opts);
+  return todayState.tab === "session" ? CairnSessionEntry.gate(todayView, ".sess-dest", renderSession)(opts) : renderToday(opts);
 }
 
 // Today's run line: the run the agenda opened for today, painted outside the lift
@@ -1620,7 +1620,7 @@ Object.assign(globalThis, {
   postExerciseMode,
   reconnectDayReadOverride,
   reconnectSessionSuggest,
-  renderSession,
+  renderSession: (opts?: any) => CairnSessionEntry.gate(todayView, ".sess-dest", renderSession)(opts),
   renderToday,
   reshapeToday,
   refreshTodayBrief,
@@ -1632,7 +1632,7 @@ if (typeof window !== "undefined") {
     postExerciseMode,
     reconnectDayReadOverride,
     reconnectSessionSuggest,
-    renderSession,
+    renderSession: (opts?: any) => CairnSessionEntry.gate(todayView, ".sess-dest", renderSession)(opts),
     renderToday,
     reshapeToday,
     refreshTodayBrief,

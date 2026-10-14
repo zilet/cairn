@@ -112,7 +112,7 @@
 .outbox-bar.outbox-actionable:focus-visible{outline:2px solid var(--warn);outline-offset:3px}
 .outbox-dot{width:6px;height:6px;border-radius:50%;background:var(--sage);
   flex:0 0 auto;animation:offlinepulse 1.8s var(--ease) infinite}
-.outbox-actionable .outbox-dot{background:var(--warn)}
+.outbox-actionable .outbox-dot{background:var(--warn);animation:none} /* waiting on a person, not working: still */
 @media (min-width:960px){ .outbox-bar{left:calc(50% + 124px)} }
 
 .outbox-review-ov{

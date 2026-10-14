@@ -184,7 +184,10 @@ type TodayDataLoaderApi = {
     };
 
     // Intentional: a cold skeleton wipe happens before captureExDrafts in renderToday.
-    if (!warm && !deps.root.querySelector(".today-wrap")) deps.root.innerHTML = deps.todaySkeleton();
+    // Only an EMPTY host takes it: a Session surface on screen (.sess-dest) is
+    // repainted in place once the reads land. Wiping it here blanked the whole
+    // workout for as long as a slow network took — every set's sync goes cold.
+    if (!warm && !deps.root.querySelector(".today-wrap, .sess-dest")) deps.root.innerHTML = deps.todaySkeleton();
 
     const isToday = deps.state.logDate === deps.localISO();
     const aggregateKey = "today:aggregate:" + deps.state.logDate;
