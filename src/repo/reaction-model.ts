@@ -24,7 +24,7 @@ import { getMarkerHistory } from "./health.js";
 import { labValueText, renderLabQuantities } from "./lab-display.js";
 import { labUnitSystem } from "./settings.js";
 import { activitySportWhere, RUN_SPORT_PATTERNS } from "./endurance-sports.js";
-import { normalizedExerciseKey, canonicalGroup, isMobility } from "./exercise-canon.js";
+import { normalizedExerciseKey, canonicalGroup, isMobility, sameLiftName } from "./exercise-canon.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { addMemory } from "./memory.js";
 import { addDaysISO, localDateISO, metricLabel } from "./shared.js";
@@ -2445,8 +2445,12 @@ export function liftLedgerRead(exercise: string): LiftLedgerRead {
     // reportDroppedModifiers above: a cap may bind, but never silently.
     log.warn(`[reaction-model] liftLedgerRead hit its 200-row ceiling; older verdicts for "${name}" may be unread`);
   }
+  // …and through the exercise resolver too, so an alias spelling ("Incline DB Press")
+  // files its verdict under the stored lift it names.
   const verdicts = rows
-    .filter((row) => normalizedExerciseKey(String(row.subject_key ?? "")) === key)
+    .filter(
+      (row) => normalizedExerciseKey(String(row.subject_key ?? "")) === key || sameLiftName(row.subject_key, name)
+    )
     .slice(0, LIFT_LEDGER_MAX_VERDICTS)
     .map((row) => ({
       outcome: (row.verdict === "not_aligned" ? "missed" : "aligned") as "aligned" | "missed",

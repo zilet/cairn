@@ -86,6 +86,27 @@ test("settings surface normalizes API data into the working model", () => {
   assert.equal(surface.routeEligible(data).reason, "web_agent_connected");
 });
 
+test("a stored coach model (API-only, no select of its own) rides the working model back on save", () => {
+  // Settings -> Agents renders only Everyday / Deep work, but set_settings can bind
+  // model_class_bindings[provider].coach; the save bar re-sends wm.model_class_bindings, so
+  // dropping the key here would silently undo the athlete's coaching model on any save.
+  const surface = loadSettingsSurface();
+  const wm = surface.workingModel(
+    surface.settingsData({
+      settings: { model_class_bindings: { claude: { fast: "sonnet", coach: "opus", deep: "opus" } } },
+      agents: [{ name: "claude", enabled: true }],
+    })
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify(wm.model_class_bindings)), {
+    claude: { fast: "sonnet", coach: "opus", deep: "opus" },
+  });
+  // The persisted body is the working model's map as-is (settings-screen.ts persistSettings).
+  const screen = readFileSync(join(root, "src/client/settings-screen.ts"), "utf8");
+  assert.match(screen, /model_class_bindings: wm\.model_class_bindings,/);
+  // And agent_class_order is never in the save body, so a UI save keeps what is stored.
+  assert.doesNotMatch(screen, /agent_class_order/);
+});
+
 test("settings surface renders source and automation slices without echoing secrets", () => {
   const surface = loadSettingsSurface();
   const wm = {

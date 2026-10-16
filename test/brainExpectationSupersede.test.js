@@ -42,14 +42,16 @@ function decision(seed, overrides = {}) {
 }
 
 // A completion expectation with every OTHER source of doubt switched off, so the
-// only thing that can hold a verdict back is an overlapping window.
+// only thing that can hold a verdict back is an overlapping window. It names the
+// prescription logLift meets (1 x 8 @ 95): a completion target with nothing to
+// complete is inconclusive by contract, never a free pass.
 function completion(overrides = {}) {
   return {
     metric_key: "exercise_target_completion",
     subject_key: LIFT,
     direction: "complete",
     baseline: null,
-    target: { value: 1 },
+    target: { value: 1, sets: 1, rep_low: 8, target_weight: 95 },
     window_start: "2026-01-01",
     window_end: "2026-01-15",
     minimum_data: null,

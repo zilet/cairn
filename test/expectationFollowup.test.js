@@ -310,6 +310,17 @@ test("a missed prediction files exactly one calm note, and re-running files none
   assert.equal(listAttentionBySource("expectation-followup").length, 1);
 });
 
+test("a miss on a window that closed weeks ago teaches the ledger but files no note", () => {
+  // A verdict reached late — late evidence, or an evaluator fixed after the fact — is
+  // still a verdict, but a "that change hasn't landed" note about last month is not.
+  const recorded = appliedTrainingExpectation();
+  const evaluation = missVerdict(recorded.expectations[0].id);
+  assert.deepEqual(surfaceExpectationMisses([evaluation], "2026-03-01"), []);
+  assert.equal(getAttentionSchedule(`training:change-check:d${recorded.decision.id}`), null);
+  // …while a window that closed inside the note's standing period still speaks.
+  assert.equal(surfaceExpectationMisses([evaluation], "2026-02-05").length, 1);
+});
+
 test("several missed predictions on one change are still one note", () => {
   const recorded = appliedTrainingExpectation();
   const evaluation = missVerdict(recorded.expectations[0].id);

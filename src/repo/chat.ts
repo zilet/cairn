@@ -680,11 +680,15 @@ const WEEK_AHEAD_FAILURE_BACKOFF_MINUTES = 30;
 // The week-ahead cache warm/refresh is fired from two independent callers (a
 // user-facing GET on a cold/stale cache, and the scheduler's day-rollover
 // warm) that can race. Deduplicate against any 'week_ahead' job for the exact
-// same cacheKey (day + plan + goal + training-reality fingerprint) still
+// same cacheKey (day + plan + material-input fingerprint, repo/refresh-gate.ts) still
 // queued or running, so a burst never spawns more than one coaching CLI —
 // and, on the same match, against one that FAILED inside the backoff window
-// above, so a coach that cannot run is not asked again on every open. A job
-// that finished cleanly is NOT a match, nor is an older failure: the caller
+// above, so a coach that cannot run is not asked again on every open. "Failed"
+// includes a job that finished `done` carrying `refresh_failed` — weekAheadRead
+// never throws on an unavailable coach (it answers the stale cache or the floor,
+// which MCP callers read), so the job row alone would otherwise always look clean
+// and the backoff would never engage. A job that finished cleanly with a real
+// answer is NOT a match, nor is an older failure: the caller
 // only asks when the cache is missing or stale, so the next miss/staleness
 // starts a fresh dedup window.
 export function createWeekAheadAgentJob(input: { cacheKey: string; agent?: string | null }): {
@@ -698,7 +702,10 @@ export function createWeekAheadAgentJob(input: { cacheKey: string; agent?: strin
       `SELECT id, input_json FROM agent_jobs
         WHERE kind = 'week_ahead'
           AND (status IN ('queued','running')
-               OR (status = 'error' AND COALESCE(finished_at, created_at) >= datetime('now', ?)))
+               OR ((status = 'error'
+                    OR (status = 'done' AND json_valid(result_json)
+                        AND json_extract(result_json, '$.refresh_failed') = 1))
+                   AND COALESCE(finished_at, created_at) >= datetime('now', ?)))
         ORDER BY id DESC LIMIT 50`
     )
     .all(`-${WEEK_AHEAD_FAILURE_BACKOFF_MINUTES} minutes`) as any[];

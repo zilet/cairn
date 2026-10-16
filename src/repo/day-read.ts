@@ -31,11 +31,14 @@ import {
   harmEvidenceOnDay,
   trainsAnywayWithoutHarm,
   withMorningReadiness,
+  CALENDAR_DOSE_WINDOW_DAYS,
+  calendarDoseTolerance,
+  type CalendarDoseTolerance,
 } from "./brain/read-adherence.js";
 import { getCheckinByDate, getRecoverySummary, latestSleep, trainingSignals } from "./coach.js";
 import { RECOVERY_SAMPLE_FLOOR, recoveryTrendBars } from "./recovery-trend.js";
 import { activeContextEffect, contextEventIsRestTrade, REST_TRADE_META_KEY } from "./context-effect.js";
-import { listActiveDirectives } from "./directives-read.js";
+import { isEnduranceHoldDirective, listActiveDirectives } from "./directives-read.js";
 import { estimateExpenditure } from "./expenditure.js";
 import { flexibleTrainingAgenda } from "./flexible-training-agenda.js";
 import type { RunDayIntensity } from "./run-day-intensity.js";
@@ -70,7 +73,7 @@ import {
   selectAdaptivePlanDay,
   calendarDayRead,
 } from "./plan-selection.js";
-import { liftDows } from "./strength-schedule.js";
+import { liftDows, strengthScheduleRead } from "./strength-schedule.js";
 import { getEnduranceGoal, getEnduranceSchedule, getPrimaryDiscipline, WEEKDAY_NAMES } from "./profile.js";
 import { RUN_KIND_LABELS } from "./run-edit.js";
 import { activeRecoveryWeek } from "./recovery-week.js";
@@ -177,6 +180,9 @@ import {
   LIFT_OPEN_AFTER_ACTIVITY_EASY_WHY,
   activityNoun,
   STATED_RUN_DAY_WHY,
+  STATED_KEY_RUN_DOSE_WHY,
+  STATED_KEY_QUALITY_DOSE_WHY,
+  STATED_LIFT_DOSE_LEAD,
   TEMPLATE_REST_DAY_WHY,
   TRAIN_CAVEAT_LEAD,
   TRAIN_CLEAR_WHY,
@@ -1292,7 +1298,69 @@ const LEARNED_TRAIN_CODES: ReadonlySet<string> = new Set([
 const RECORD_OPENED_CODES: ReadonlySet<string> = new Set([
   DAY_READ_OUTCOMES.learned_train_anyway.code,
   DAY_READ_OUTCOMES.outcome_feedback_open.code,
+  // A stated day the calendar kept as training with a dose (see THE CALENDAR OWNS WHAT
+  // THE DAY IS FOR): every brake on that board is a soft one the dose already answers,
+  // so citing it would hand the agent back the quiet read the calendar just dosed.
+  DAY_READ_OUTCOMES.stated_key_run_dosed.code,
+  DAY_READ_OUTCOMES.stated_lift_dosed.code,
 ]);
+
+// ---------- THE CALENDAR OWNS WHAT THE DAY IS FOR (2026-10-16) ----------
+// On a day the athlete's own stated week gives a KEY run (quality / long) or a stated
+// lifting day, a soft brake no longer flips the day's KIND to easy: the read stays
+// "train" and the brake becomes the DOSE — "the long run as planned, kept
+// conversational, HRV is below your usual" (the run engine's own adjustment,
+// runDayIntensity), "Lower as planned, loads held" (the envelope's caps). Before this, a
+// lone HRV dip on the Sunday the week put its long run read "easy day", the athlete ran
+// the long run anyway (as written), and the ledger scored the read as overridden.
+//
+// SOFT = these fresh deciding-brake fields only — the body's trend readings and the
+// week's own load arithmetic. Anything else on the board keeps the old quiet read.
+const CALENDAR_SOFT_DOSE_FIELDS: ReadonlySet<string> = new Set([
+  "hrv",
+  "resting_hr",
+  "training_readiness",
+  "acute_load",
+  "hybrid_interference",
+  "run_intensity_discipline",
+  "generic_activity_load",
+]);
+// Deliberately NOT soft: `mesocycle` (a deload the loaded weeks have EARNED is structure,
+// answered by a recovery week, never dosed through morning by morning), `session_quality`
+// and `felt_*` (the athlete's own rating or tap), and everything on health_constraints,
+// energy_fueling and life_capacity.
+// The run engine's floors that are the athlete's own word or a hard floor: a run day
+// carrying one keeps its quiet read (HARD_RUN_FLOORS plus a short night, a run-down
+// check-in, high soreness).
+const CALENDAR_RUN_HARD_FLOORS: ReadonlySet<string> = new Set([
+  "rest_grade_readiness",
+  "illness",
+  "pain_or_injury",
+  "short_night",
+  "felt_run_down",
+  "high_soreness",
+  // A week whose running jumped well past the athlete's recent weeks is never sent to
+  // its key run as a training day (the owner's spike ruling, pinned in eliteRunAdapt).
+  "volume_spike",
+  // Legs still deep in the last lower session, and yesterday's work showing a cost: the
+  // body's own answer, kept strict exactly as the lifting side keeps `legs_deep`.
+  "legs_deep",
+  "harm_yesterday",
+]);
+// The quiet reads the calendar may dose instead of taking the day. Never a floor: the
+// rest-grade reading, the corroborated short night, the dose overrun, a felt tap, the
+// athlete's claimed day and every clinical shape keep their own rules above.
+//   acute_signal_protection  — only at posture EASY (a rest posture is a heavier fact),
+//                              and only when every deciding brake is SOFT;
+//   endurance_volume_spike   — the run engine already turns that into the run's dose;
+//   accumulated_load_rest    — only its REST arm, only on soft corroboration, and only
+//                              while the stated-week tolerance reads WIDE (B2 below).
+// LEARNED_TRAIN_CODES / SOFTENABLE_EASY_CODES deliberately do NOT gain `stated_run_day`,
+// `logged_light_work_today` or `template_rest_day`: a stated run day's quiet read is a
+// hard floor (rest) or an easy run day (nothing to open — plan days hold strength only),
+// light work is commentary on work already logged (never judged, read-adherence.ts), and
+// the template rest day is structure the athlete built (owner ruling, 2026-08-28). The
+// stated-week calibration is `calendarDoseTolerance` instead — what this rule reads.
 
 export function dayReadCitableBrakes(
   baseline: { kind?: unknown; decision?: { rule_code?: unknown } | null; signals?: Record<string, any> } | null | undefined
@@ -2279,6 +2347,109 @@ function computeDayRead(
   const schedulePressure =
     signalState.action.posture === "train" && signalState.action.directives.schedule === "compress";
   const commitmentPressure = schedulePressure && lifeCapacityIsCommitment(signalState);
+  // ---- THE CALENDAR OWNS WHAT THE DAY IS FOR (2026-10-16; see CALENDAR_SOFT_DOSE_FIELDS) ----
+  // What the athlete's STATED week puts on today: a key run (quality / long, the run
+  // engine's own planned kind, never a hard-floor rest) or a stated lifting day with a
+  // plan day due. Null on any other day — an observed (unstated) week never owns a day,
+  // and a day already moved on belongs to the done / light-work rules. Memoized.
+  type StatedCalendarDay =
+    | { day: "key_run"; run_kind: "quality" | "long"; label: string; adjustment: RunDayIntensity | null }
+    | { day: "lift"; plan_day: number; label: string | null };
+  let statedDayMemo: StatedCalendarDay | null | undefined;
+  function statedCalendarDay(): StatedCalendarDay | null {
+    if (statedDayMemo !== undefined) return statedDayMemo;
+    statedDayMemo = null;
+    if (trainedToday || bigActivity) return statedDayMemo;
+    const statedRuns = signalInput(() => (getEnduranceSchedule()?.days?.length ?? 0) > 0, false);
+    const schedule = signalInput(() => strengthScheduleRead(d), null);
+    if (!statedRuns && schedule?.source !== "stated") return statedDayMemo;
+    const run = calendarRunToday();
+    if (run) {
+      const planned = run.adjustment?.planned_kind ?? run.kind;
+      if (statedRuns && (planned === "quality" || planned === "long") && run.adjustment?.dose !== "rest")
+        statedDayMemo = { day: "key_run", run_kind: planned, label: run.label, adjustment: run.adjustment ?? null };
+      return statedDayMemo;
+    }
+    if (schedule?.source !== "stated") return statedDayMemo;
+    const dow = new Date(`${d}T00:00:00Z`).getUTCDay();
+    if (!schedule.days.some((day) => day.dow === dow)) return statedDayMemo;
+    const planDay = suggestedPlanDay();
+    if (!planDay) return statedDayMemo;
+    statedDayMemo = { day: "lift", plan_day: planDay.day_number, label: planDay.focus };
+    return statedDayMemo;
+  }
+  // The stated week's own tolerance, learned from how its dosed days went (B2,
+  // read-adherence.ts calendarDoseTolerance). Asked only on a stated day a quiet rule is
+  // about to take (it reads six weeks of the ledger); fail-soft to neutral.
+  let toleranceMemo: CalendarDoseTolerance | null | undefined;
+  function calendarTolerance(): CalendarDoseTolerance | null {
+    if (toleranceMemo !== undefined) return toleranceMemo;
+    toleranceMemo = signalInput(
+      () =>
+        brainSignal(`calendar_dose_tolerance:${d}`, () =>
+          calendarDoseTolerance(
+            readAdherenceModel(d, CALENDAR_DOSE_WINDOW_DAYS + 2, CALENDAR_DOSE_WINDOW_DAYS + 2),
+            d
+          )
+        ),
+      null
+    );
+    return toleranceMemo;
+  }
+  const decidingBrakeFields: string[] = signalInput(() => freshDecidingBrakeFields(signalState.dimensions), []);
+  const softBrakesOnly = decidingBrakeFields.every((field) => CALENDAR_SOFT_DOSE_FIELDS.has(field));
+  // The FLOOR that keeps the quiet read on a stated day, or null. Every one of these
+  // stays exactly as strict as it was: the calendar may dose a soft brake, never this.
+  function calendarDoseFloor(): string | null {
+    if (restGradeReadiness) return "rest_grade_readiness";
+    if (corroboratedLowSleep || freshShortSleep) return "short_night";
+    if (lowSubjective || feltEnergyLow) return "athlete_word";
+    if (clinicallyDriven(signalState, healthWorkaround)) return "clinical";
+    if (freshSafetyOverride(signalState)) return "safety_override";
+    if (recoveryWeek) return "recovery_week";
+    // A doctor-governed endurance hold (a lab finding that limits endurance) is a
+    // clinical shape even where it only rides as an advisory brake.
+    if (signalInput(() => listActiveDirectives().some(isEnduranceHoldDirective), true)) return "health_hold";
+    if (runNoveltyYesterday) return "longest_run";
+    if (yesterdayRecoveryOverdose) return "dose_overrun";
+    const fuel = signalState.dimensions.energy_fueling;
+    if ((fuel.deciding.status === "constrained" || fuel.deciding.status === "watch") && !dimensionIsAdviceOnly(fuel))
+      return "fueling_hold";
+    if (holdsToday.length || tomorrowClinical) return "calendar_hold";
+    if (!softBrakesOnly) return "non_dose_brake";
+    // The hard ceiling on consecutive loading days is a bound the push drive and the
+    // look-ahead already respect; the calendar may not walk past it either (at the
+    // ceiling the day reads its easy, whatever the stated week says).
+    if (stackedLoadingRest && atHardCeiling) return "hard_ceiling";
+    const day = statedCalendarDay();
+    if (day?.day === "key_run" && (day.adjustment?.floors ?? []).some((code) => CALENDAR_RUN_HARD_FLOORS.has(code)))
+      return "run_floor";
+    if (day?.day === "lift" && signalInput(() => planDayAcutelySaturated(day.plan_day, d), true)) return "legs_deep";
+    if (calendarTolerance()?.level === "tight") return "tolerance_tight";
+    return null;
+  }
+  // The quiet rule the calendar stood in front of, once one has (the first wins).
+  // (A holder rather than a bare `let`: the rules assign it from inside closures, which
+  // control-flow narrowing cannot see.)
+  const calendar: { step: { stepped_aside: string } | null } = { step: null };
+  function calendarTakesDay(code: string): boolean {
+    if (calendar.step) return true;
+    if (!statedCalendarDay()) return false;
+    if (calendarDoseFloor()) return false;
+    calendar.step = { stepped_aside: code };
+    return true;
+  }
+  // The brake the dose answers, in the athlete's register: the first deciding dimension
+  // in the hold order, its own voice (never the machine `reason`). Null when none.
+  function calendarBrakeVoice(): (typeof signalState.dimensions)[SignalDimension]["voice"] | null {
+    const order: readonly SignalDimension[] = ["recovery_capacity", "training_load_tolerance"];
+    for (const dimension of order) {
+      const state = signalState.dimensions[dimension];
+      const braking = state.deciding.status === "watch" || state.deciding.status === "constrained";
+      if (braking && state.voice) return state.voice;
+    }
+    return null;
+  }
   const rules: DayReadRule[] = [
     {
       resolve: () => {
@@ -2378,6 +2549,11 @@ function computeDayRead(
         )
           return null;
         const kind = feltRest ? ("rest" as const) : signalState.action.posture;
+        // A stated key-run or lifting day with only SOFT brakes on the board keeps its
+        // training; the brake becomes the dose (the rules below speak it). Never a rest
+        // posture, never a felt tap — those keep this rule.
+        if (kind === "easy" && !feltLight && calendarTakesDay(DAY_READ_OUTCOMES.acute_signal_protection.code))
+          return null;
         const voice = feltRest
           ? {
               ...signalState.action.voice,
@@ -2686,9 +2862,29 @@ function computeDayRead(
         // At the hard-day ceiling with nothing corroborating, the read is easy under
         // the same accumulated_load_rest code — not rest, and not another train day
         // the drive preference can keep opening.
-        const stackedRest = stackedLoadingRest && stackedLoadCorroborated;
+        // On a stated day the calendar already keeps (the protect rule above stood aside
+        // for it), a stacked-days rest that only SOFT signals corroborate — and the
+        // scoped path's subdued-readiness rest — are the same soft brakes again, so they
+        // stand aside too rather than turning that day into rest. With the week's
+        // tolerance WIDE, the calendar may claim the soft-corroborated stack on its own.
+        const stackedSoftOnly =
+          stackedLoadingRest &&
+          stackedLoadCorroborated &&
+          softBrakesOnly &&
+          !runNoveltyYesterday &&
+          !feltRestCorroborated;
+        const stackedDosed =
+          stackedSoftOnly &&
+          !atHardCeiling &&
+          (calendar.step != null ||
+            (!!statedCalendarDay() &&
+              calendarTolerance()?.level === "wide" &&
+              calendarTakesDay(DAY_READ_OUTCOMES.accumulated_load_rest.code)));
+        const lowReadinessDosed = lowReadiness && calendar.step != null;
+        const stackedRest = stackedLoadingRest && stackedLoadCorroborated && !stackedDosed;
         const stackedCeilingEasy = stackedLoadingRest && atHardCeiling && !stackedLoadCorroborated;
-        if (!(yesterdayRecoveryOverdose || stackedRest || stackedCeilingEasy || lowSubjective || lowReadiness))
+        const lowReadinessRest = lowReadiness && !lowReadinessDosed;
+        if (!(yesterdayRecoveryOverdose || stackedRest || stackedCeilingEasy || lowSubjective || lowReadinessRest))
           return null;
         // Each branch reports the outcome that matches its own words. Before the
         // reason moved onto the rule, a low check-in or a low readiness reading was
@@ -2739,7 +2935,7 @@ function computeDayRead(
             },
           };
         }
-        if (lowReadiness) {
+        if (lowReadinessRest) {
           return {
             outcome: DAY_READ_OUTCOMES.low_readiness_rest,
             read: {
@@ -2843,6 +3039,10 @@ function computeDayRead(
         // yesterday was already a recovery/easy day, the spike has been answered — don't
         // stack easy on easy, let them train (the spike still rides as a caveat below).
         if (!(volumeSpike && consec >= 1)) return null;
+        // On a stated LIFTING day the lifting is not the running: the day keeps its
+        // session (the spike rides as the planned-training caveat). A stated key-run day
+        // never steps aside here — a spike is a run floor (CALENDAR_RUN_HARD_FLOORS).
+        if (calendarTakesDay(DAY_READ_OUTCOMES.endurance_volume_spike.code)) return null;
         return {
           outcome: DAY_READ_OUTCOMES.endurance_volume_spike,
           read: {
@@ -2888,6 +3088,46 @@ function computeDayRead(
         // on the card at all: the read is rest, with no session named in the focus slot
         // — the same answer the Today run line and Endurance print that morning.
         const floorRest = adj?.dose === "rest";
+        // ---- the calendar owns the key run (2026-10-16) ----
+        // A stated LONG run the morning SHORTENED on a soft floor (HRV / resting HR past
+        // his band, legs still carrying the lifting, yesterday's work) — or a key run the
+        // engine kept that a soft brake would otherwise have read as an easy day — stays
+        // the day's TRAINING: the run engine's adjustment is the dose and its sentence
+        // says so. Any floor the calendar may not dose keeps the old read
+        // (calendarDoseFloor): a short night, a run-down check-in, soreness, pain,
+        // illness, a rest-grade morning, a mileage spike, a clinical shape, a recovery
+        // week, a longest run. A quality session the run engine itself turned into an easy run stays the easy
+        // run it now is: the engine decided its intensity, and a spiking week never reads
+        // as a hard session (eliteRunAdapt). The calendar keeps the SHORTENED long run (it
+        // is still the long run) and a key run the engine kept while the signal state's
+        // soft brakes alone would have quieted the day.
+        const stated = statedCalendarDay();
+        const engineKeptKind = !adj || adj.kind === adj.planned_kind;
+        const calendarKeeps =
+          !floorRest &&
+          stated?.day === "key_run" &&
+          (floorShortened || (calendar.step != null && engineKeptKind)) &&
+          !calendarDoseFloor();
+        if (calendarKeeps) {
+          (signals as any).stated_run_day.calendar_dosed = true;
+          const dose =
+            stated.run_kind === "long"
+              ? pickDayVariant(STATED_KEY_RUN_DOSE_WHY, d, "stated_key_run_dosed")("long run")
+              : pickDayVariant(STATED_KEY_QUALITY_DOSE_WHY, d, "stated_key_run_dosed:quality")("quality session");
+          const brakeVoice = calendarBrakeVoice();
+          // The run engine names its own cause and dose when it moved the run; when it
+          // did not (the brake was one only the signal state saw), the brake speaks first.
+          const why =
+            adj?.why && adj.brakes.length
+              ? adj.why
+              : calendar.step && brakeVoice
+                ? `${endStopped(spokenSignalVoice(brakeVoice, d, "stated_key_run_dosed:brake"))} ${dose}`
+                : dose;
+          return {
+            outcome: DAY_READ_OUTCOMES.stated_key_run_dosed,
+            read: { kind: "train" as const, focus: runDay.label, why, est_minutes: null, signals },
+          };
+        }
         return {
           outcome: DAY_READ_OUTCOMES.stated_run_day,
           read: {
@@ -3035,6 +3275,12 @@ function computeDayRead(
         else if (freshShortSleep)
           caveats.push(pickDayVariant(SLEEP_EXPOSURE_CAVEAT, d, "planned_training:sleep_exposure"));
         const holdAggression = signalState.action.directives.training === "hold_aggression";
+        // The stated lifting day the calendar kept (a soft brake would otherwise have
+        // read the day easy): the session stays, at a held dose. The brake LEADS in its
+        // own voice when it is one the signal state spoke; no reach rides on it.
+        const calendarDosed = calendar.step != null && statedCalendarDay()?.day === "lift";
+        if (calendarDosed) pushVetoes.push("calendar_dose");
+        const calendarVoice = calendarDosed ? calendarBrakeVoice() : null;
         // Same rule as the protect read above: the athlete hears the athlete voice,
         // never the machine-facing summary. This is the second (and only other) path by
         // which the signal state's own words reach a `why` — it LEADS the read here
@@ -3181,6 +3427,20 @@ function computeDayRead(
             ? ` ${earnPathClause(notedVoice, d)}`
             : "";
         const caveatRun = caveats.length ? ` — ${caveats.join("; and ")}` : "";
+        if (calendarDosed) {
+          const lead = calendarVoice ? `${spokenSignalVoice(calendarVoice, d, "stated_lift_dosed:brake")} ` : "";
+          const earn = calendarVoice ? ` ${earnPathClause(calendarVoice, d)}` : "";
+          return {
+            outcome: DAY_READ_OUTCOMES.stated_lift_dosed,
+            read: {
+              kind: "train",
+              focus: sd.focus,
+              why: `${lead}${pickDayVariant(STATED_LIFT_DOSE_LEAD, d, "stated_lift_dosed:lead")}${caveatRun}.${earn}`,
+              est_minutes: commitmentPressure ? 40 : 60,
+              signals,
+            },
+          };
+        }
         const why = holdAggression
           ? `${holdLead} ${pickDayVariant(TRAIN_HOLD_LEAD, d, "planned_training:hold_lead")}${caveatRun}.${earnPath}`
           : notedWatch
@@ -3229,6 +3489,23 @@ function computeDayRead(
   ];
 
   const resolved = resolveDayReadRule(rules);
+  // What the calendar did today, in the machine register — the evidence the stated-week
+  // tolerance reads back tomorrow (calendarDoseTolerance keys on `applied`).
+  {
+    const code = resolved?.outcome.code;
+    const applied =
+      code === DAY_READ_OUTCOMES.stated_key_run_dosed.code || code === DAY_READ_OUTCOMES.stated_lift_dosed.code;
+    if (applied || calendar.step) {
+      const day = statedCalendarDay();
+      (signals as any).calendar_dose = {
+        applied,
+        day: day?.day ?? null,
+        stepped_aside: calendar.step?.stepped_aside ?? null,
+        brakes: decidingBrakeFields,
+        tolerance: calendarTolerance()?.level ?? "neutral",
+      };
+    }
+  }
   // Day one — no week on the plan and nothing logged — is not the unprogrammed floor:
   // nobody has started, so there is nothing for an "easy day on thin evidence" to be
   // about. It gets its own outcome and words (STARTING_OUT_DAY), and `starting_out`

@@ -1,6 +1,8 @@
 import { db } from "../db.js";
 import { getBuildInfo } from "../build-info.js";
+import { refreshGateStats } from "./refresh-gate.js";
 import { agentErrorClass, telemetryIdentifier, telemetryModelName } from "../telemetry-privacy.js";
+import { getSettings, taskForOp, TASK_EXECUTION_PROFILES } from "./settings.js";
 import { failureTail } from "../agentFailureTail.js";
 import {
   CHAT_LANES,
@@ -17,6 +19,17 @@ const WRITES_PER_CAP_CHECK = 250;
 let nextPruneAt = 0;
 let writesUntilCapCheck = WRITES_PER_CAP_CHECK;
 let capPressure = false;
+
+// A REQUESTED model is usually a CLI alias ("sonnet", "opus", "opus[1m]"), which the
+// strict reported-model check rejects (it wants a dated claude-*/gpt-* id). An alias is a
+// short identifier the person typed into Settings, never prose, so it is safe to keep.
+function requestedModelName(value: unknown): string | null {
+  const strict = telemetryModelName(value);
+  if (strict) return strict;
+  if (typeof value !== "string") return null;
+  const v = value.trim();
+  return /^[A-Za-z][A-Za-z0-9._:/-]{0,59}(?:\[[0-9a-z]{1,8}\])?$/.test(v) ? v : null;
+}
 
 export function pruneAgentRuns(now = Date.now(), force = false): void {
   if (!force && now < nextPruneAt) return;
@@ -117,7 +130,7 @@ export function recordAgentRun(r: {
       lane,
       r.policy_version === CHAT_ROUTING_POLICY_VERSION ? CHAT_ROUTING_POLICY_VERSION : null,
       reasons.length ? JSON.stringify(reasons) : null,
-      telemetryModelName(r.requested_model),
+      requestedModelName(r.requested_model),
       reasoning(r.requested_reasoning),
       reasoning(r.effective_reasoning),
       r.streaming == null ? null : r.streaming ? 1 : 0,
@@ -381,17 +394,71 @@ export function getAgentStats(opts: { recent?: number; days?: number } = {}) {
       created_at: r.created_at,
     }));
 
+  // Which model ran at what effort, from the run log: `by_model` per requested/reported
+  // model, `by_op_effort` per op x requested model x effort. A null requested_model is a
+  // run on the CLI's own default. Operator telemetry only, never an athlete-facing grade.
+  const modelRows = db
+    .prepare(`SELECT op, agent, ok, latency_ms, model, requested_model, requested_reasoning FROM agent_runs ${where}`)
+    .all(...bind) as any[];
+  const rollup = (key: (r: any) => Record<string, unknown>) => {
+    const groups = new Map<string, { key: Record<string, unknown>; rows: any[] }>();
+    for (const r of modelRows) {
+      const k = key(r);
+      const id = JSON.stringify(k);
+      const g = groups.get(id) ?? { key: k, rows: [] };
+      g.rows.push(r);
+      groups.set(id, g);
+    }
+    return [...groups.values()]
+      .map(({ key: k, rows }) => {
+        const okN = rows.filter((r) => r.ok).length;
+        const lats = rows
+          .map((r) => (r.latency_ms == null ? NaN : Number(r.latency_ms)))
+          .filter(Number.isFinite)
+          .sort((a, b) => a - b);
+        return {
+          ...k,
+          runs: rows.length,
+          ok: okN,
+          ok_rate: Number((okN / rows.length).toFixed(3)),
+          p50_ms: lats.length ? lats[Math.floor((lats.length - 1) / 2)] : null,
+        };
+      })
+      .sort((a, b) => b.runs - a.runs);
+  };
+  // The material-change gate (repo/refresh-gate.ts): background reads it declined to
+  // re-run because nothing material had moved, per op, since this process started.
+  const gate = refreshGateStats();
+
+  const by_model = rollup((r) => ({
+    agent: r.agent,
+    requested_model: r.requested_model ?? null,
+    model: r.model ?? null,
+  }));
+  const by_op_effort = rollup((r) => ({
+    op: r.op,
+    requested_model: r.requested_model ?? null,
+    effort: r.requested_reasoning ?? null,
+  }));
+
   return {
     build_id: buildId,
     runs,
     ok_rate: runs ? Number((okCount / runs).toFixed(3)) : null,
     by_agent,
     by_op,
+    by_model,
+    by_op_effort,
+    model_bindings: unreachedModelBindings(modelRows),
     by_lane,
     chat_turns,
     ...latencySummary(latencyRows),
     recent,
     current: currentAgentHealth(),
+    // In-process like `build_id` scope; additive, never written to agent_runs (a skip is
+    // not a provider attempt and must not move ok_rate or the breaker).
+    skipped_unchanged: { week_ahead: gate.week_ahead.skipped_unchanged, insight: gate.insight.skipped_unchanged },
+    refresh_gate: gate,
   };
 }
 
@@ -444,3 +511,35 @@ export function currentAgentHealth(): CurrentAgentHealth {
 }
 
 export const AGENT_RUN_LIMITS = { retention_days: AGENT_RUN_RETENTION_DAYS, row_cap: AGENT_RUN_ROW_CAP };
+
+/**
+ * Operator signal: a model the person bound in Settings (model_class_bindings) that did
+ * not reach a spawn. Counts runs of a bound provider whose op's profile names a class
+ * that provider has a model for, yet requested_model is null. `unreached` empty = the
+ * bindings are landing. Chat ops carry their own lane routing and are not judged here.
+ */
+export function unreachedModelBindings(rows: Array<{ op: string; agent: string; requested_model: string | null }>) {
+  try {
+    const bindings = (getSettings().model_class_bindings ?? {}) as Record<string, Record<string, string>>;
+    const bound = Object.entries(bindings)
+      .filter(([, classes]) => classes && Object.values(classes).some(Boolean))
+      .map(([agent, classes]) => ({ agent, classes }));
+    const unreached = new Map<string, { agent: string; op: string; model_class: string; runs: number }>();
+    for (const r of rows) {
+      if (r.requested_model != null || r.op.startsWith("chat")) continue;
+      const entry = bound.find((b) => b.agent === r.agent);
+      const cls = TASK_EXECUTION_PROFILES[taskForOp(r.op)]?.model_class;
+      if (!entry || !cls || !entry.classes[cls]) continue;
+      const id = `${r.agent}|${r.op}`;
+      const g = unreached.get(id) ?? { agent: r.agent, op: r.op, model_class: cls, runs: 0 };
+      g.runs++;
+      unreached.set(id, g);
+    }
+    return {
+      bound: bound.map((b) => ({ agent: b.agent, ...b.classes })),
+      unreached: [...unreached.values()].sort((a, b) => b.runs - a.runs),
+    };
+  } catch {
+    return { bound: [], unreached: [] };
+  }
+}

@@ -41,7 +41,7 @@ import {
   isConclusiveDayReadCall,
 } from "./day-read-call.js";
 import { getEnduranceGoal, getEnduranceSchedule, isoDow } from "../profile.js";
-import { closedRunIntentOn, type FlexibleRunKind } from "../flexible-training-agenda.js";
+import { closedRunIntentOn, type FlexibleRunKind, weekRunClosures } from "../flexible-training-agenda.js";
 import { withoutShadowActivities } from "../activity-shadow.js";
 import { activeRecoveryWeek } from "../recovery-week.js";
 import { impactFamily, isKnownCrossTrainingDate } from "../cross-training-day.js";
@@ -69,9 +69,25 @@ import {
   type TrainingLoad,
 } from "../training-read.js";
 import { copyDeep, copyFlat, requestMemo } from "../request-memo.js";
+import type { HrModel } from "../hr-model.js";
+import { personalRunReadForRow, usablePersonalHrModel } from "../run-intensity.js";
+import { isStatedEasyRpe } from "../stated-effort.js";
 
 export const DAY_READ_ADHERENCE_METRIC = "day_read_adherence";
-export const DAY_READ_ADHERENCE_EVALUATOR_VERSION = "day-read-adherence-v1";
+// ---------- TWO ERAS OF ONE METRIC (2026-10-16) ----------
+// v1 verdicts written before the 2026-09-25 owner ruling (day-read-call.ts) judged the
+// ATHLETE's behaviour — "did more than the read said" was `not_aligned` — and carry no
+// `read_call`. Verdicts since judge the READ. Both shipped under one version string, so
+// an operator could not tell a legacy behavioural miss from a read that was off. v2 is
+// the judge-the-read era with the measurement fixes of this round (the true morning
+// read, harm that can be UNKNOWN and looks 48 hours out, the stated week's own dose).
+// Legacy rows are labelled `legacy_behavioural` wherever they are counted
+// (brain-diagnostics-use-case.ts), never as an unrecorded call.
+export const DAY_READ_ADHERENCE_EVALUATOR_VERSION = "day-read-adherence-v2";
+export const DAY_READ_ADHERENCE_LEGACY_EVALUATOR_VERSION = "day-read-adherence-v1";
+// The era tag stored on every v2 verdict's `actual` (`evaluator_era`).
+export const DAY_READ_JUDGED_ERA = "judged_read";
+export const DAY_READ_LEGACY_ERA = "legacy_behavioural";
 
 // The reads that make a claim about the day. `done` is an acknowledgement of work
 // that ALREADY happened, so it predicts nothing and never earns an expectation.
@@ -212,11 +228,34 @@ export interface DayTrainingTruth {
   // Work was logged but nothing in it could be graded, so "did it stay easy?"
   // has no honest answer. Never treated as adherence OR divergence.
   ungraded_work: boolean;
+  // ---- THE WEEK'S OWN DOSE (2026-10-16) ----
+  // What part of the day was the athlete's STATED week executed as planned: the run
+  // that closed a stated run day (`closedRunIntentOn`) taken at the effort its slot asks
+  // for — graded by his personal HR model or his own stated effort, never raw watch
+  // zones — or the habitual cross-training outing on its habitual weekday
+  // (knownCrossTrainingDose). Null when none. Optional so a hand-built truth (tests,
+  // older callers) reads as "no own dose".
+  own_dose?: OwnDose | null;
+  // `above_easy` with the own-dose outing(s) taken out: the day still graded above easy
+  // on everything ELSE that was logged (a heavy lift on top, a second hard run). Equal
+  // to `above_easy` when there is no own dose.
+  above_easy_beyond_own_dose?: boolean;
+}
+
+export type OwnDoseKind = "stated_long_run" | "stated_quality_run" | "stated_easy_run" | "habitual_cross_training";
+
+export interface OwnDose {
+  kinds: OwnDoseKind[];
+  activity_ids: number[];
 }
 
 export interface DayTrainingTruthOptions {
   countsCardio?: boolean;
   cardioLoadMedian?: number | null;
+  // The morning read's own signals, when the caller holds them: they say whether that
+  // morning's run engine had already eased the stated quality session (a stated quality
+  // day run hard against an eased morning is not the plan, so it is not exempt).
+  morningSignals?: Record<string, unknown> | null;
 }
 
 function configuredEnduranceCountsAsTraining(): boolean {
@@ -237,8 +276,11 @@ export function dayTrainingTruth(date: string, opts: DayTrainingTruthOptions = {
   // day's activity count (compared against a stored fingerprint downstream).
   const activityRows = withoutShadowActivities(
     db
-      .prepare(`SELECT date, type, source, external_id, duration_min, distance_km FROM activities WHERE date = ? LIMIT 100`)
+      .prepare(
+        `SELECT id, date, type, source, external_id, duration_min, distance_km FROM activities WHERE date = ? LIMIT 100`
+      )
       .all(date) as Array<{
+      id: number;
       date: string;
       type: string | null;
       source: string | null;
@@ -258,6 +300,30 @@ export function dayTrainingTruth(date: string, opts: DayTrainingTruthOptions = {
   }
   const trained = sets > 0 || realActivities > 0;
   const aboveEasy = load === "hard" || load === "moderate";
+  // The own-dose question is asked only of a day that graded above easy — a day that
+  // stayed easy has nothing to exempt.
+  // Every caller sees the SAME morning: a caller that holds the morning read's signals
+  // passes them, every other one (the waiting check, the outcome lock, the re-open test)
+  // reads them off the judged morning read here, so none of them judges a different day.
+  const ownDose =
+    aboveEasy && realActivities > 0
+      ? safeOwnDoseOn(date, opts.morningSignals !== undefined ? opts.morningSignals : morningSignalsFor(date))
+      : null;
+  let aboveEasyBeyondOwnDose = aboveEasy;
+  if (ownDose) {
+    const excluded = new Set(ownDose.activity_ids);
+    let rest = dayLoad(date, { countsCardio, recoveryWeekActive, excludeActivityIds: excluded });
+    // The strength-led bump asks the whole day's cardio; it may only speak for what is
+    // left once the own dose is out — an outing that is not part of the week.
+    if (rest !== "hard" && !countsCardio) {
+      const others = activityRows.filter((row) => !excluded.has(Number(row.id)));
+      if (others.length) {
+        const median = opts.cardioLoadMedian !== undefined ? opts.cardioLoadMedian : recentCardioLoadMedian(date);
+        if (hardCardioDay(date, median)) rest = "moderate";
+      }
+    }
+    aboveEasyBeyondOwnDose = rest === "hard" || rest === "moderate";
+  }
   return {
     date,
     sets,
@@ -267,7 +333,205 @@ export function dayTrainingTruth(date: string, opts: DayTrainingTruthOptions = {
     trained,
     above_easy: aboveEasy,
     ungraded_work: trained && load === "none",
+    own_dose: ownDose,
+    above_easy_beyond_own_dose: aboveEasyBeyondOwnDose,
   };
+}
+
+// ---------- THE STATED WEEK'S OWN DOSE IS NOT A DIVERGENCE (2026-10-16) ----------
+//
+// An easy read on the Sunday the athlete's own week puts its long run, followed by that
+// long run taken conversationally, is not the athlete going past the read: it is the
+// week happening as he wrote it. The grade alone cannot see that — a long run is a heavy
+// dose BY LENGTH (cardioEffort's own-length bar), so a conversational 18 km reads `hard`
+// and the morning's easy read was scored as overridden. Live, that is most of the
+// "too cautious" evidence on run days.
+//
+// So the run that closed a STATED run day (closedRunIntentOn — the week's own matcher,
+// so a moved key run is still the planned run) is exempt when it was taken at the effort
+// its slot asks for, judged the one way CLAUDE.md allows: his personal HR model
+// (personalRunReadForRow) or his own stated effort (activities.rpe ≤ 4), never training
+// effect, te_label or watch zones. Per slot:
+//   • long    — the run that closed the long slot, exempt unless his model read it hard. Unknown
+//               effort (no HR, no model, no stated word) is NOT exempt: silence never
+//               vouches.
+//   • quality — hard is what the slot is for, so it is exempt — unless the morning read
+//               recorded that the run engine had already eased it (a threshold run
+//               against an eased morning is not the plan).
+//   • easy    — exempt only when it read easy.
+// And the habitual cross-training outing on its habitual weekday (stated, else observed
+// 2 of 6 weeks — knownCrossTrainingDose) is the week's own dose the same way the harm
+// law already treats it; a hard RUN on that day is never excused by it.
+//
+// What is NOT exempt: anything else logged that day. `above_easy_beyond_own_dose` asks
+// the grade again with the own dose taken out, so a heavy lift on top still counts.
+function safeOwnDoseOn(date: string, morningSignals: Record<string, unknown> | null): OwnDose | null {
+  try {
+    return ownDoseOn(date, morningSignals);
+  } catch {
+    return null;
+  }
+}
+
+type OwnDoseRunRow = {
+  id: number;
+  date: string;
+  type: string | null;
+  source: string | null;
+  external_id: string | null;
+  duration_min: number | null;
+  distance_km: number | null;
+  rpe: number | null;
+  raw_text: string | null;
+  avg_hr: number | null;
+  hr_minutes: number | null;
+  g_name: string | null;
+  zones: string | null;
+  structure: string | null;
+  laps: string | null;
+};
+
+// The judged morning read's own signals (first-write state, see recordDayReadDecision),
+// or null when the date has no morning read.
+function morningSignalsFor(date: string): Record<string, unknown> | null {
+  try {
+    const decision = morningDecisionsByDate(date, date).get(date);
+    if (!decision || decision.commentaryOnly) return null;
+    const signals = (decision.context as Record<string, unknown> | null)?.signals;
+    return signals && typeof signals === "object" ? (signals as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+// WAS THE MORNING QUIET FOR A FLOOR? The own-dose exemption is about a quiet read the
+// stated week outranks — never about one a floor produced. A morning whose own signals
+// carry a health work-around (an injury, an illness, a painful joint), the athlete's
+// run-down or very sore tap, a short night, a rest-grade reading, an applied recovery
+// week, or the run engine's no-run floor is a morning the week's dose was NOT the plan:
+// running it is a real divergence and is asked the harm test like any other.
+// (Unknown signals — a legacy row with none — exempt nothing either way: the stated
+// slot's own effort test above still applies.)
+function morningQuietWasFloor(signals: Record<string, unknown> | null): boolean {
+  if (!signals) return false;
+  const s = signals as any;
+  if (s.health_workaround) return true;
+  const checkin = s.checkin;
+  if (checkin && typeof checkin === "object") {
+    if (checkin.energy != null && Number(checkin.energy) <= 2) return true;
+    if (checkin.sleep_feel != null && Number(checkin.sleep_feel) <= 2) return true;
+    if (checkin.soreness != null && Number(checkin.soreness) >= 4) return true;
+  }
+  const lastNight = Number(s.last_night?.total_min);
+  if (Number.isFinite(lastNight) && lastNight > 0 && lastNight < 360) return true;
+  const readiness = s.fatigue?.readiness;
+  if (readiness?.freshness === "fresh" && readsRestGradeReadiness(readingNumber(readiness.current))) return true;
+  if (s.recovery_week && typeof s.recovery_week === "object" && s.recovery_week.state === "applied") return true;
+  if (s.stated_run_day?.dose === "rest") return true;
+  if (s.signal_state?.action?.posture === "rest") return true;
+  return false;
+}
+
+function morningEasedQuality(signals: Record<string, unknown> | null): boolean {
+  const stated = (signals as any)?.stated_run_day;
+  if (!stated || typeof stated !== "object") return false;
+  if (stated.planned_kind !== "quality") return false;
+  return stated.run_kind === "easy" || stated.dose === "rest";
+}
+
+function ownDoseOn(date: string, morningSignals: Record<string, unknown> | null): OwnDose | null {
+  const kinds: OwnDoseKind[] = [];
+  const ids: number[] = [];
+  if (morningQuietWasFloor(morningSignals)) return null;
+  const schedule = (() => {
+    try {
+      return getEnduranceSchedule();
+    } catch {
+      return null;
+    }
+  })();
+  if (schedule?.days?.length) {
+    // WHICH run closed WHICH stated slot is the week's own matcher (weekRunClosures, the
+    // read closedRunIntentOn and the agenda share — cycle-free), so a moved key run is
+    // still the planned run and an extra run on the day closes nothing.
+    let closures: Array<{ activity_id: number; closed: FlexibleRunKind }> = [];
+    try {
+      const dow = new Date(`${date}T00:00:00Z`).getUTCDay();
+      const monday = addDaysISO(date, -((dow + 6) % 7)) ?? date;
+      const sunday = addDaysISO(monday, 6) ?? date;
+      closures = weekRunClosures(monday, sunday)
+        .filter((closure) => closure.date === date && closure.closed != null)
+        .map((closure) => ({ activity_id: Number(closure.activity_id), closed: closure.closed as FlexibleRunKind }));
+    } catch {
+      closures = [];
+    }
+    if (closures.length) {
+      const rows = new Map(
+        (
+          db
+            .prepare(
+              `SELECT a.id AS id, a.date, a.type, a.source, a.external_id, a.duration_min, a.distance_km, a.rpe, a.raw_text,
+                      MAX(ga.avg_hr) AS avg_hr,
+                      MAX(COALESCE(ga.moving_min, ga.duration_min)) AS hr_minutes,
+                      MAX(ga.name) AS g_name,
+                      MAX(ga.hr_zones_json) AS zones,
+                      MAX(ga.structure_json) AS structure,
+                      MAX(ga.laps_json) AS laps
+                 FROM activities a LEFT JOIN garmin_activities ga ON ga.activity_id = a.id
+                WHERE a.date = ?
+                GROUP BY a.id`
+            )
+            .all(date) as OwnDoseRunRow[]
+        ).map((row) => [Number(row.id), row] as const)
+      );
+      let model: HrModel | null | undefined;
+      const personalModel = (): HrModel | null => (model === undefined ? (model = usablePersonalHrModel(date)) : model);
+      // His effort on one run, by his model or his word; null when neither speaks.
+      const effortOf = (row: OwnDoseRunRow): "easy" | "steady" | "hard" | null => {
+        if (isStatedEasyRpe(row.rpe)) return "easy";
+        const personal = personalRunReadForRow(row, personalModel);
+        if (!personal) return null;
+        if (personal.hard) return "hard";
+        return personal.effort === "easy" ? "easy" : "steady";
+      };
+      for (const closure of closures) {
+        const row = rows.get(closure.activity_id);
+        if (!row) continue;
+        const effort = effortOf(row);
+        const kind: OwnDoseKind | null =
+          closure.closed === "long"
+            ? effort != null && effort !== "hard"
+              ? "stated_long_run"
+              : null
+            : closure.closed === "quality"
+              ? morningEasedQuality(morningSignals)
+                ? null
+                : "stated_quality_run"
+              : effort === "easy"
+                ? "stated_easy_run"
+                : null;
+        if (!kind) continue;
+        ids.push(Number(row.id));
+        if (!kinds.includes(kind)) kinds.push(kind);
+      }
+    }
+  }
+  if (knownCrossTrainingDose(date)) {
+    try {
+      const known = isKnownCrossTrainingDate(date);
+      if (known) {
+        for (const impact of recentEnduranceImpacts(1, date)) {
+          if (impact.date !== date || impact.family === "run" || impact.activity_id == null) continue;
+          if (impactFamily(impact) !== known.sport_family) continue;
+          ids.push(Number(impact.activity_id));
+          if (!kinds.includes("habitual_cross_training")) kinds.push("habitual_cross_training");
+        }
+      }
+    } catch {
+      /* an unreadable cross-training read exempts nothing */
+    }
+  }
+  return ids.length ? { kinds, activity_ids: [...new Set(ids)] } : null;
 }
 
 // The training truth, or null if it could not be read. A ledger write must never fail
@@ -314,7 +578,9 @@ export function readAdherenceOutcome(kind: string, truth: DayTrainingTruth): Rea
     case "train":
       return truth.trained ? "followed" : "diverged";
     case "easy":
-      if (truth.above_easy) return "diverged";
+      // The stated week's own dose, executed as planned, is not a divergence: only
+      // what was logged BEYOND it can take the day past the easy read (see ownDoseOn).
+      if (easyReadPassed(truth)) return "diverged";
       if (truth.ungraded_work) return "unclear";
       return "followed";
     default:
@@ -342,9 +608,14 @@ export function dayReadCallFromVerdict(verdict: unknown, actual: unknown): Concl
   if (!isPredictiveDayReadKind(kind)) return null;
   if (verdict === "aligned") return "held";
   if (kind === "train") return "not_taken";
+  // A legacy quiet read the day went past is asked the harm test NOW — and only an
+  // ANSWERED test may name its call: an unmeasured day (harm `unknown`) derives nothing,
+  // rather than inventing a "too cautious" out of silence.
   const date = String(stored?.read_date ?? "");
-  const harm = /^\d{4}-\d{2}-\d{2}$/.test(date) ? harmEvidenceOnDay(date) : null;
-  const call = dayReadCall(kind, "diverged", harm);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  const harm = harmVerdictOnDay(date);
+  if (harm.status === "unknown") return null;
+  const call = dayReadCall(kind, "diverged", harm.evidence);
   return isConclusiveDayReadCall(call) ? call : null;
 }
 
@@ -369,7 +640,14 @@ export function dayReadCallFromVerdict(verdict: unknown, actual: unknown): Concl
 // on the days nothing happened.
 export function dayReadOutcomeLocked(kind: unknown, truth: DayTrainingTruth): boolean {
   if (!isPredictiveDayReadKind(kind)) return false;
-  return kind === "easy" ? truth.above_easy : truth.trained;
+  return kind === "easy" ? easyReadPassed(truth) : truth.trained;
+}
+
+// Did the day go past an EASY read? Above easy on what was logged beyond the stated
+// week's own dose (ownDoseOn) — identical to `above_easy` on a day without one.
+export function easyReadPassed(truth: DayTrainingTruth): boolean {
+  if (!truth.above_easy) return false;
+  return truth.own_dose ? truth.above_easy_beyond_own_dose !== false : true;
 }
 
 // The same question asked of a stored expectation, for the ONE evaluator branch that
@@ -423,9 +701,17 @@ export function dayReadExpectationAwaitingMorning(
   const subject = dayReadExpectationSubject(expectation);
   if (!subject) return false;
   const morningAfter = addDaysISO(subject.date, 1);
-  if (!morningAfter || asOf > morningAfter) return false;
+  const secondMorning = addDaysISO(subject.date, 2);
+  if (!morningAfter || !secondMorning || asOf > secondMorning) return false;
   try {
-    return dayReadCallNeedsHarm(subject.kind, readAdherenceOutcome(subject.kind, dayTrainingTruth(subject.date)));
+    if (!dayReadCallNeedsHarm(subject.kind, readAdherenceOutcome(subject.kind, dayTrainingTruth(subject.date))))
+      return false;
+    // Until the morning after has closed, always wait. Once it has, wait one more night
+    // only while the answer is still UNKNOWN — the 48-hour arm and a late-synced night
+    // can still speak (harmVerdictOnDay). Past the second morning, an unknown stays
+    // unknown and the verdict says so (inconclusive), never "no harm".
+    if (asOf <= morningAfter) return true;
+    return harmVerdictOnDay(subject.date).status === "unknown";
   } catch {
     return false;
   }
@@ -449,10 +735,13 @@ export function dayReadExpectationAwaitingMorning(
 //   "morning"      this expectation's decision IS that read — judge it, whatever
 //                  superseded it later (a post-training recompute is commentary).
 //   "not_morning"  another read was the one given — close this one as canceled.
+//   "commentary_only"  every predictive read of the date was written after training
+//                  had started (or itself records work already logged) — there was no
+//                  morning read, so nothing of this date is judged (2026-10-16).
 //   null           not a day-read question, the day's read cannot be determined, or
 //                  the given read carries no question of its own (a legacy row) — the
 //                  caller keeps its pre-existing rule.
-export type DayReadExpectationRole = "morning" | "not_morning";
+export type DayReadExpectationRole = "morning" | "not_morning" | "commentary_only";
 
 export function dayReadExpectationRole(
   expectation: { metric_key?: unknown; subject_key?: unknown; baseline?: unknown },
@@ -460,6 +749,11 @@ export function dayReadExpectationRole(
 ): DayReadExpectationRole | null {
   const subject = dayReadExpectationSubject(expectation);
   if (!subject) return null;
+  try {
+    if (morningDecisionsByDate(subject.date, subject.date).get(subject.date)?.commentaryOnly) return "commentary_only";
+  } catch {
+    return null;
+  }
   const judged = judgedDayReadDecisionId(subject.date);
   if (judged == null) return null;
   return judged === Number(decisionId) ? "morning" : "not_morning";
@@ -487,7 +781,7 @@ function judgedDayReadDecisionId(date: string): number | null {
   } catch {
     return null;
   }
-  if (!given) return null;
+  if (!given || given.commentaryOnly) return null;
   let judged = Number(given.id);
   try {
     const rows = db
@@ -784,8 +1078,14 @@ function adherenceFactsChanged(actual: unknown, truth: DayTrainingTruth): boolea
   // The read's call also rests on the harm test for a quiet read the day went past — a
   // session rated poorly after the fact moves it just as surely as a late set does.
   // Only verdicts that recorded a call carry this fact, so older rows are untouched.
-  if (!dayReadCallRestsOnHarm(stored.read_call)) return false;
-  return (stored.harm_kind ?? null) !== (harmEvidenceOnDay(truth.date)?.kind ?? null);
+  // An `unclear` call that rested on an UNKNOWN harm answer is re-asked too: a night
+  // that synced late can still turn it into a real verdict.
+  const restedOnUnknown = stored.read_call === "unclear" && stored.harm_status === "unknown";
+  if (!dayReadCallRestsOnHarm(stored.read_call) && !restedOnUnknown) return false;
+  const verdict = harmVerdictOnDay(truth.date);
+  return (
+    (stored.harm_kind ?? null) !== (verdict.evidence?.kind ?? null) || (stored.harm_status ?? null) !== verdict.status
+  );
 }
 
 // Work logged for a day that has ALREADY been judged re-opens that judgement.
@@ -889,6 +1189,19 @@ export interface ReadAdherenceDay {
   // to train, or eased from rest to easy? Keeps that loop's own mornings in its
   // evidence once it acts (see learnedQuietMorning). Optional: absent reads as false.
   learned_opened?: boolean;
+  // The day went past the EASY bar on what was logged beyond the stated week's own dose
+  // (easyReadPassed). Optional: absent falls back to the load grade, as before.
+  passed_easy?: boolean;
+  // An easy read whose day graded above easy ONLY on the stated week's own dose,
+  // executed as planned (ownDoseOn). Followed, by the measurement — and evidence for
+  // neither direction of any ladder: the week happening as written says nothing about
+  // whether the quiet reads are too cautious, and it is not the athlete taking a quiet
+  // day either.
+  own_dose?: boolean;
+  // The morning read was a stated day the calendar kept as training with a dose
+  // (day-read.ts, `signals.calendar_dose.applied`) — the evidence calendarDoseTolerance
+  // reads. Optional: absent reads as false.
+  calendar_dosed?: boolean;
 }
 
 export interface ReadAdherenceModel {
@@ -906,6 +1219,12 @@ export interface MorningRead {
   softened: boolean;
   easySoftened: boolean;
   learnedOpened: boolean;
+  // The pieces of the morning's signals the own-dose read needs (ownDoseOn: the
+  // stated-run-day call and the floor fields morningQuietWasFloor reads).
+  ownDoseSignals?: Record<string, unknown> | null;
+  // The calendar dose this morning applied (signals.calendar_dose), read back by the
+  // stated-week tolerance (calendarDoseTolerance).
+  calendarDose?: unknown;
 }
 
 // ---------- WHICH READ THE ATHLETE ACTUALLY OPENED TO ----------
@@ -947,6 +1266,9 @@ interface MorningDecisionRow {
   date: string;
   created_at: string;
   kind: PredictiveDayReadKind;
+  // The read's own signals say training was already logged when it was written
+  // (`signals.trained_today`): commentary on work done, whatever its timestamp says.
+  saw_training: boolean;
 }
 
 export interface MorningDecision extends MorningRead {
@@ -956,6 +1278,12 @@ export interface MorningDecision extends MorningRead {
   // the date came after the work — commentary on it, whose readiness may be the
   // post-workout sync.
   beforeTraining: boolean;
+  // Every predictive read of the date was COMMENTARY — written after the first
+  // training, or itself recording that work was already logged. The date then has no
+  // morning read at all: the chosen row is kept only as the ledger's closest snapshot
+  // of the morning (ledgerMorningSnapshot), never judged and never counted by the
+  // rolling model (2026-10-16).
+  commentaryOnly: boolean;
   // The read's own context blob, already parsed. `null` when the column was empty or
   // unparseable — never a partial object.
   context: Record<string, unknown> | null;
@@ -978,17 +1306,50 @@ export interface MorningDecision extends MorningRead {
 // (they rated it, or skipped their way through it) has no set instant to use, and
 // the row's own stamp is then the closest thing to a training instant that exists.
 //
-// A run-only day gets no cutoff, and deliberately keeps the pre-existing behavior
-// (the last predictive read of the date wins). Neither cardio table carries an
-// instant this comparison can trust: `activities.created_at` is when the sync
-// IMPORTED the run — the scheduler backfills yesterday's runs at the rollover, so
-// it is routinely hours or days off the effort — and `garmin_activities.start_time`
-// is the watch's `startTimeLocal` when it has one and `startTimeGMT` when it does
-// not (src/garmin.ts), so its zone is unknowable while every stamp compared here is
-// UTC. An unknowable instant is worse than no cutoff: it would silently shift the
-// boundary by the UTC offset and exclude real morning reads. Sets stay the signal.
+// A RUN counts too (2026-10-16), but only by an instant that is unambiguous: the
+// watch payload's own `beginTimestamp` (epoch ms) or `startTimeGMT`. The other cardio
+// stamps stay untrusted exactly as before — `activities.created_at` is when the sync
+// IMPORTED the run (the rollover backfills yesterday's), and
+// `garmin_activities.start_time` is local-or-GMT depending on what the watch sent
+// (src/garmin.ts). Before this, a morning run followed by a lift put the cutoff at the
+// first SET, so the read judged was the post-run recompute ("you've moved today — let
+// the rest stay easy"): commentary on the run, scored as the morning's call. A run
+// whose start cannot be placed (a hand-logged one carries only a date) adds no cutoff
+// here; the read's OWN record of having seen training (`signals.trained_today`,
+// morningDecisionsByDate) is what keeps a recompute after it from standing as the
+// morning read.
 function firstTrainingInstantByDate(from: string, to: string): Map<string, string> {
   const out = new Map<string, string>();
+  const take = (date: string, at: string | null) => {
+    if (!at) return;
+    const prior = out.get(date);
+    if (!prior || at < prior) out.set(date, at);
+  };
+  try {
+    // A real outing only — twenty minutes or more, or a logged distance on anything but a
+    // walk or hike (every watch walk carries a distance): an incidental short walk at
+    // 07:00 is not training the read lost to.
+    const rows = db
+      .prepare(
+        `SELECT a.date AS date,
+                CASE WHEN json_valid(ga.raw_json) THEN json_extract(ga.raw_json, '$.beginTimestamp') END AS begin_ms,
+                CASE WHEN json_valid(ga.raw_json) THEN json_extract(ga.raw_json, '$.startTimeGMT') END AS start_gmt
+           FROM activities a JOIN garmin_activities ga ON ga.activity_id = a.id
+          WHERE a.date >= ? AND a.date <= ?
+            AND ((a.duration_min IS NOT NULL AND a.duration_min >= 20)
+                 OR (a.distance_km IS NOT NULL AND lower(COALESCE(a.type, '')) NOT LIKE '%walk%'
+                     AND lower(COALESCE(a.type, '')) NOT LIKE '%hike%'))`
+      )
+      .all(from, to) as Array<{ date: string; begin_ms: unknown; start_gmt: unknown }>;
+    for (const row of rows) {
+      const begin = Number(row.begin_ms);
+      const ms = Number.isFinite(begin) && begin > 0 ? begin : parseUtcInstant(row.start_gmt);
+      if (ms == null) continue;
+      take(String(row.date), sqliteUtcStamp(ms));
+    }
+  } catch {
+    /* an unreadable activity table adds no cutoff, never a wrong one */
+  }
   try {
     const rows = db
       .prepare(
@@ -998,7 +1359,7 @@ function firstTrainingInstantByDate(from: string, to: string): Map<string, strin
           GROUP BY s.date`
       )
       .all(from, to) as Array<{ date: string; first_at: string | null }>;
-    for (const row of rows) if (row.first_at) out.set(String(row.date), String(row.first_at));
+    for (const row of rows) if (row.first_at) take(String(row.date), String(row.first_at));
   } catch {
     /* an unreadable logged_sets table means no cutoff, not a wrong one */
   }
@@ -1015,6 +1376,8 @@ function firstTrainingInstantByDate(from: string, to: string): Map<string, strin
     for (const row of rows) {
       if (!row.first_at) continue;
       const date = String(row.date);
+      // Still a fallback for a set-less session: it never moves a cutoff another
+      // source already placed (a run's start, or the date's sets on another session).
       if (!out.has(date)) out.set(date, String(row.first_at));
     }
   } catch {
@@ -1030,7 +1393,8 @@ function firstTrainingInstantByDate(from: string, to: string): Map<string, strin
 function morningDecisionsByDate(from: string, to: string): Map<string, MorningDecision> {
   const rows = db
     .prepare(
-      `SELECT id, source_ref_key AS date, created_at, action_json
+      `SELECT id, source_ref_key AS date, created_at, action_json,
+              CASE WHEN json_valid(context_json) THEN json_extract(context_json, '$.signals.trained_today') END AS saw_training
          FROM brain_decisions
         WHERE kind = 'day_read' AND source_ref_type = 'day_read'
           AND source_ref_key >= ? AND source_ref_key <= ?
@@ -1041,6 +1405,7 @@ function morningDecisionsByDate(from: string, to: string): Map<string, MorningDe
     date: string;
     created_at: string | null;
     action_json: string | null;
+    saw_training: unknown;
   }>;
   const byDate = new Map<string, MorningDecisionRow[]>();
   for (const row of rows) {
@@ -1053,24 +1418,38 @@ function morningDecisionsByDate(from: string, to: string): Map<string, MorningDe
     if (!isPredictiveDayReadKind(kind)) continue;
     const date = String(row.date);
     const list = byDate.get(date) ?? [];
-    list.push({ id: Number(row.id), date, created_at: String(row.created_at ?? ""), kind });
+    list.push({
+      id: Number(row.id),
+      date,
+      created_at: String(row.created_at ?? ""),
+      kind,
+      saw_training: row.saw_training === 1 || row.saw_training === true || row.saw_training === "true",
+    });
     byDate.set(date, list);
   }
 
   const trained = firstTrainingInstantByDate(from, to);
   const chosen = new Map<string, MorningDecisionRow>();
   const chosenBeforeTraining = new Set<string>();
+  const commentaryOnly = new Set<string>();
   for (const [date, list] of byDate) {
     const cutoff = trained.get(date) ?? null;
     // `<=`, not `<`: these stamps are second-granular, so a read and a set written in
     // the same second cannot be ordered, and the morning read is overwhelmingly the
     // earlier writer of the two.
     const before = cutoff ? list.filter((row) => row.created_at <= cutoff) : list;
-    // Nothing before the first set means every predictive read of the day is
+    // ONLY A TRUE MORNING READ MAY STAND FOR THE DAY (2026-10-16). A read that itself
+    // records training already logged ("you've moved today — let the rest stay easy")
+    // is commentary however its timestamp falls: a hand-logged run carries no instant,
+    // and a sync can land before the stamp a cutoff could see.
+    const morning = before.filter((row) => !row.saw_training);
+    // Nothing before the first training means every predictive read of the day is
     // commentary on finished work. The earliest of them is then the closest thing to
-    // a morning read that exists, which is also what the old first-write rule picked.
-    chosen.set(date, before.at(-1) ?? list[0]!);
+    // a morning read that exists — kept for the readiness snapshot only; the date is
+    // marked so neither the verdict nor the rolling model treats it as the morning's.
+    chosen.set(date, morning.at(-1) ?? before.at(-1) ?? list[0]!);
     if (before.length) chosenBeforeTraining.add(date);
+    if (!morning.length) commentaryOnly.add(date);
   }
 
   const out = new Map<string, MorningDecision>();
@@ -1098,24 +1477,43 @@ function morningDecisionsByDate(from: string, to: string): Map<string, MorningDe
     out.set(date, {
       id: row.id,
       beforeTraining: chosenBeforeTraining.has(date),
+      commentaryOnly: commentaryOnly.has(date),
       kind: row.kind,
       softened: signals?.outcome_feedback?.applied === true,
       easySoftened: signals?.easy_outcome_feedback?.applied === true,
       learnedOpened: signals?.learned_train_anyway?.applied === true,
+      ownDoseSignals: signals
+        ? {
+            stated_run_day: signals.stated_run_day ?? null,
+            health_workaround: signals.health_workaround ?? null,
+            checkin: signals.checkin ?? null,
+            last_night: signals.last_night ? { total_min: signals.last_night.total_min ?? null } : null,
+            fatigue: signals.fatigue?.readiness ? { readiness: signals.fatigue.readiness } : null,
+            recovery_week: signals.recovery_week ?? null,
+            signal_state: signals.signal_state?.action ? { action: { posture: signals.signal_state.action.posture } } : null,
+          }
+        : null,
+      calendarDose: signals?.calendar_dose ?? null,
       context,
     });
   }
   return out;
 }
 
+// The MORNING reads only: a date whose every predictive read was commentary on work
+// already done has no morning read, so the rolling model, the ladders and the morning
+// review never count it (it predicted nothing the day could answer).
 function morningReadsByDate(from: string, to: string): Map<string, MorningRead> {
   const out = new Map<string, MorningRead>();
   for (const [date, decision] of morningDecisionsByDate(from, to)) {
+    if (decision.commentaryOnly) continue;
     out.set(date, {
       kind: decision.kind,
       softened: decision.softened,
       easySoftened: decision.easySoftened,
       learnedOpened: decision.learnedOpened,
+      ownDoseSignals: decision.ownDoseSignals,
+      calendarDose: decision.calendarDose,
     });
   }
   return out;
@@ -1182,12 +1580,17 @@ export function readAdherenceModel(
     const read = morning.kind;
     let truth: DayTrainingTruth | null = null;
     try {
-      truth = dayTrainingTruth(date, { countsCardio, cardioLoadMedian });
+      truth = dayTrainingTruth(date, {
+        countsCardio,
+        cardioLoadMedian,
+        morningSignals: morning.ownDoseSignals ?? null,
+      });
     } catch {
       truth = null;
     }
     if (!truth) continue;
     const outcome = readAdherenceOutcome(read, truth);
+    const passedEasy = easyReadPassed(truth);
     const stat = stats.get(read)!;
     stat.days++;
     if (outcome === "followed") stat.followed++;
@@ -1202,6 +1605,9 @@ export function readAdherenceModel(
       softened: morning.softened,
       easy_softened: morning.easySoftened,
       learned_opened: morning.learnedOpened,
+      passed_easy: passedEasy,
+      own_dose: read === "easy" && truth.above_easy && !passedEasy,
+      calendar_dosed: (morning.calendarDose as { applied?: unknown } | null | undefined)?.applied === true,
     });
   }
 
@@ -1422,6 +1828,13 @@ function ledgerMorningSnapshot(morning: string): { value: number; beforeTraining
 // Never a post-exercise or real-time recompute, and never a reading at or after the
 // work. An activity whose start cannot be placed in time (a hand-logged run carries only
 // a date) makes the ordering unknowable, and unknowable is absent.
+// Epoch ms as the 'YYYY-MM-DD HH:MM:SS' UTC stamp SQLite's datetime('now') writes, so
+// a watch instant compares as a string against `created_at` columns.
+function sqliteUtcStamp(ms: number): string | null {
+  const date = new Date(ms);
+  return Number.isFinite(date.getTime()) ? date.toISOString().slice(0, 19).replace("T", " ") : null;
+}
+
 function parseUtcInstant(value: unknown): number | null {
   const text = String(value ?? "").trim();
   if (!text) return null;
@@ -2235,11 +2648,158 @@ function harmEvidenceOnDayRead(date: string, running: boolean): HarmEvidence | n
   }
 }
 
-// The boolean form, kept as the name every existing caller uses (restOverrideSoftening,
-// easyOverrideSoftening, and morningReview — which asks the same question about a
-// single divergence rather than a rolling window of them).
+// ---------- HARM CAN BE UNKNOWN, AND THE BODY CAN ANSWER LATE (2026-10-16) ----------
+//
+// harmEvidenceOnDay answers "did anything say it cost them?" and, by the law it was
+// written under, silence is no harm. That is right for the questions its many callers
+// ask (may a license widen, may a key run clear an earlier harm day) and it stays
+// exactly as it is. But the LEARNING loops and the read's verdict ask a different
+// question — "was this day positively fine?" — and there silence is not an answer.
+// Live: 2026-10-08..11 carried no overnight HRV or resting HR at all, and every day of
+// it read as "trained without harm", calibrating the quiet reads looser off four days
+// nobody measured. And a dip that lands two mornings after a big effort (2026-10-12,
+// HRV 34 after the weekend) was invisible to a test that only reads the next morning.
+//
+// So the verdict has three answers:
+//   harm     — harmEvidenceOnDay found a cost (unchanged), or the 48-HOUR arm below did;
+//   clean    — the first morning after that SPOKE (a placeable readiness, or a night of
+//              HRV / resting HR dated it) spoke clean: no rest-grade reading and no
+//              overnight arm braking, onset or carried over (nextMorningClean's bar);
+//   unknown  — nothing after the day spoke, for an athlete who normally wears the
+//              sensor (OVERNIGHT_HABIT_*), or the morning that spoke was still inside a
+//              dip that began before the work.
+// `unknown` is NEITHER: it never counts as a clean day (so it can never ease a quiet
+// read) and never as a cost (so it never vindicates one or tightens anything). For an
+// athlete with no wearing habit the old law stands — absence is clean — because there
+// is no answer that was missed. Deterministic, and the exclusion set is the one
+// harmEvidenceOnDay already applies; nothing here can soften a floor.
+//
+// THE 48-HOUR ARM charges an overnight brake that first reads on the SECOND morning
+// after the day (onset, the same per-athlete band and meaningful-miss rule as the next
+// morning's arm) to the day — but only when the morning between cannot claim it: that
+// morning carried no overnight reading of its own (the dip may already have begun
+// there, unseen), or the day between carried no training of its own (nothing else it
+// could be about). When the day between trained and was measured, its own next-morning
+// test owns the brake, so one episode is never charged twice to two measured days.
+export type HarmStatus = "harm" | "clean" | "unknown";
+
+export interface HarmVerdict {
+  date: string;
+  status: HarmStatus;
+  evidence: HarmEvidence | null;
+  // Which morning answered: "same_day" for the facts about the day itself (a rating, a
+  // novel longest run, an unabsorbed hard effort), "24h"/"48h" for the body's answer,
+  // null when nothing answered.
+  window: "same_day" | "24h" | "48h" | null;
+  // Machine register: why an unknown is unknown ("no_overnight_reading" | "carried_dip").
+  unknown_reason?: "no_overnight_reading" | "carried_dip";
+}
+
+// A wearing HABIT: overnight HRV or resting HR on at least this many of the nights in
+// the window before the day. Below it the athlete does not wear the sensor at night,
+// and a missing night is not a missed answer.
+export const OVERNIGHT_HABIT_WINDOW_DAYS = 14;
+export const OVERNIGHT_HABIT_MIN_NIGHTS = 4;
+
+function overnightHabit(date: string): boolean {
+  const from = addDaysISO(date, -OVERNIGHT_HABIT_WINDOW_DAYS);
+  const to = addDaysISO(date, -1);
+  if (!from || !to) return false;
+  let nights = 0;
+  for (const night of overnightNights(from, to).values()) {
+    if (night.hrv_ms != null || night.resting_hr != null) nights++;
+  }
+  return nights >= OVERNIGHT_HABIT_MIN_NIGHTS;
+}
+
+// Did `morning` speak at all — a placeable readiness, or a night of HRV / resting HR
+// dated it?
+function morningSpoke(morning: string): boolean {
+  const night = overnightNights(morning, morning).get(morning);
+  return morningReadiness(morning) != null || (!!night && (night.hrv_ms != null || night.resting_hr != null));
+}
+
+function nightHasOvernightReading(morning: string): boolean {
+  const night = overnightNights(morning, morning).get(morning);
+  return !!night && (night.hrv_ms != null || night.resting_hr != null);
+}
+
+// The 48-hour arm (see above). Null when the second morning does not brake at onset,
+// or the morning between can claim it.
+function delayedPhysiologyBrake(date: string): HarmEvidence | null {
+  const between = addDaysISO(date, 1);
+  const second = addDaysISO(date, 2);
+  if (!between || !second) return null;
+  const overnight = overnightPhysiology(second);
+  const charged = (arm: OvernightArm | null): boolean => !!arm && arm.brake && arm.onset;
+  const onset = charged(overnight.hrv) ? overnight.hrv : charged(overnight.rhr) ? overnight.rhr : null;
+  if (!onset) return null;
+  const betweenMeasured = nightHasOvernightReading(between);
+  if (betweenMeasured && workLoggedOn(between)) return null;
+  return { date, kind: "physiology_brake", detail: `${onset.detail} (second morning after)` };
+}
+
+export function harmVerdictOnDay(date: string, opts: HarmEvidenceOptions = {}): HarmVerdict {
+  const running = opts.domain === "running";
+  return requestMemo(
+    `harm_verdict:${date}:${running ? "running" : ""}`,
+    () => harmVerdictOnDayRead(date, opts),
+    copyDeep
+  );
+}
+
+function harmVerdictOnDayRead(date: string, opts: HarmEvidenceOptions): HarmVerdict {
+  const base = harmEvidenceOnDay(date, opts);
+  if (base) {
+    const bodyAnswer = base.kind === "physiology_brake" || base.kind === "readiness_rest_grade";
+    return { date, status: "harm", evidence: base, window: bodyAnswer ? "24h" : "same_day" };
+  }
+  try {
+    const delayed = delayedPhysiologyBrake(date);
+    if (delayed) return { date, status: "harm", evidence: delayed, window: "48h" };
+  } catch {
+    /* a failed read finds no harm — and then cannot vouch either (below) */
+  }
+  const first = addDaysISO(date, 1);
+  const second = addDaysISO(date, 2);
+  let habit = false;
+  try {
+    habit = overnightHabit(date);
+  } catch {
+    habit = false;
+  }
+  // No wearing habit: there was no answer to miss, and absence is the old "no harm".
+  if (!habit) return { date, status: "clean", evidence: null, window: null };
+  for (const morning of [first, second]) {
+    if (!morning) continue;
+    let spoke = false;
+    try {
+      spoke = morningSpoke(morning);
+    } catch {
+      spoke = false;
+    }
+    if (!spoke) continue;
+    // The first morning that spoke decides: clean only on nextMorningClean's bar (no
+    // rest-grade reading, no overnight arm braking, onset or carried over).
+    const day = addDaysISO(morning, -1);
+    let clean = false;
+    try {
+      clean = !!day && nextMorningClean(day);
+    } catch {
+      clean = false;
+    }
+    return clean
+      ? { date, status: "clean", evidence: null, window: morning === first ? "24h" : "48h" }
+      : { date, status: "unknown", evidence: null, window: null, unknown_reason: "carried_dip" };
+  }
+  return { date, status: "unknown", evidence: null, window: null, unknown_reason: "no_overnight_reading" };
+}
+
+// The boolean form, kept as the name the ladders use (restOverrideSoftening,
+// easyOverrideSoftening, trainsAnywayWithoutHarm). It now asks for a POSITIVELY fine
+// day (harmVerdictOnDay: `clean`) — an unmeasured day can no longer ease a quiet read.
 export function trainedWithoutHarm(date: string): boolean {
-  return harmEvidenceOnDay(date) == null;
+  return harmVerdictOnDay(date).status === "clean";
 }
 
 // Which mornings this signal is allowed to reason about at all. Two kinds, and the
@@ -2262,6 +2822,7 @@ export function trainedWithoutHarm(date: string): boolean {
 // (An easy morning the LONG loop eased from rest — `learned_opened` on an easy read —
 // is the same fact as a softened one and is counted the same way, here and below.)
 function softeningRelevant(day: ReadAdherenceDay): boolean {
+  if (day.own_dose === true) return false;
   return day.read === "rest" || (day.read === "easy" && (day.softened || day.learned_opened === true));
 }
 
@@ -2357,6 +2918,8 @@ const NO_EASY_SOFTENING: EasyOverrideSoftening = Object.freeze({
 // neither. It belongs to that ladder's evidence, and counting it here would compose the
 // two into a single rest → train step that neither rule is allowed to take.
 function easySofteningRelevant(day: ReadAdherenceDay): boolean {
+  // The stated week's own dose executed as planned is evidence for neither direction.
+  if (day.own_dose === true) return false;
   return (
     (day.read === "easy" && !day.softened && day.learned_opened !== true) ||
     (day.read === "train" && day.easy_softened)
@@ -2369,6 +2932,7 @@ function easySofteningRelevant(day: ReadAdherenceDay): boolean {
 // come apart. `trained` alone is deliberately not enough: a twenty-minute mobility
 // flush satisfies "trained" and is exactly what an easy read asks for.
 function wentAboveEasy(day: ReadAdherenceDay): boolean {
+  if (typeof day.passed_easy === "boolean") return day.passed_easy;
   return day.load === "hard" || day.load === "moderate";
 }
 
@@ -2472,6 +3036,7 @@ export function learnedQuietStep(kind: unknown, weight: number): "train" | "easy
 // days, they stop reading quiet, the window empties and the read relapses on a cycle —
 // the defect the short ladders' `softened` flags were written to fix.
 function learnedQuietMorning(day: ReadAdherenceDay): boolean {
+  if (day.own_dose === true) return false;
   return day.read === "rest" || day.read === "easy" || (day.read === "train" && day.learned_opened === true);
 }
 
@@ -2491,7 +3056,13 @@ export function trainsAnywayWithoutHarm(model: ReadAdherenceModel | null, asOf: 
     .filter((day) => day.date >= from && day.date <= lastClosed && learnedQuietMorning(day))
     .sort((a, b) => a.date.localeCompare(b.date));
   const diverged = quiet.filter(divergedFromQuietRead).map((day) => day.date);
-  const clean = diverged.filter(trainedWithoutHarm);
+  // Each trained-through morning's answer, once (harmVerdictOnDay is memoized per
+  // request too). An UNKNOWN day — nothing after it spoke — is neither clean nor a
+  // cost: it leaves the second factor's denominator rather than counting against the
+  // read or for it (2026-10-16).
+  const verdicts = new Map(diverged.map((date) => [date, harmVerdictOnDay(date).status] as const));
+  const clean = diverged.filter((date) => verdicts.get(date) === "clean");
+  const answered = diverged.filter((date) => verdicts.get(date) !== "unknown");
   const recency = (date: string): number => {
     const age = daysBetweenISO(asOf, date);
     return age == null ? 0 : 0.5 ** (Math.max(0, age) / LEARNED_TRAIN_HALF_LIFE_DAYS);
@@ -2501,7 +3072,7 @@ export function trainsAnywayWithoutHarm(model: ReadAdherenceModel | null, asOf: 
   const quietMass = mass(quiet.map((day) => day.date));
   const divergedMass = mass(diverged);
   const raw = floorMet
-    ? (divergedMass / (quietMass + LEARNED_TRAIN_PRIOR)) * (mass(clean) / (divergedMass + LEARNED_TRAIN_PRIOR))
+    ? (divergedMass / (quietMass + LEARNED_TRAIN_PRIOR)) * (mass(clean) / (mass(answered) + LEARNED_TRAIN_PRIOR))
     : 0;
   const weight = Math.round(Math.max(0, Math.min(1, raw)) * 100) / 100;
   return {
@@ -2511,5 +3082,105 @@ export function trainsAnywayWithoutHarm(model: ReadAdherenceModel | null, asOf: 
     quiet_mornings: quiet.length,
     trained_through: diverged.length,
     trained_without_harm: clean,
+  };
+}
+
+// ---------- the stated week's own tolerance (2026-10-16) ----------
+//
+// The calendar keeps a stated key run or lifting day as training and turns a soft brake
+// into the DOSE (day-read.ts, THE CALENDAR OWNS WHAT THE DAY IS FOR). Whether that is
+// the right call for THIS athlete is an outcome question, and the answer moves the rule
+// in both directions — bounded, decaying, and never near a floor:
+//
+//   • every dosed morning the athlete trained on is asked harmVerdictOnDay (24 AND 48
+//     hours): `clean` widens, `harm` tightens — a cost counting TWICE what a clean day
+//     does, because a wrong quiet read is cheaper than a wrong loud one — and `unknown`
+//     counts for neither;
+//   • each morning weighs by recency (half-life CALENDAR_DOSE_HALF_LIFE_DAYS) inside
+//     CALENDAR_DOSE_WINDOW_DAYS, with a PRIOR of imagined neutral mornings, so a thin
+//     record sits at neutral and an old cost fades out on its own;
+//   • three levels only. TIGHT (two or more costly mornings and the weight at or under
+//     CALENDAR_DOSE_TIGHT_WEIGHT): the calendar stops dosing and the quiet read returns.
+//     WIDE (CALENDAR_DOSE_WIDE_MIN_CLEAN clean mornings, no cost, weight at or over
+//     CALENDAR_DOSE_WIDE_WEIGHT): the calendar may also dose a stacked-days rest that
+//     only soft signals corroborate. NEUTRAL otherwise — the default, and where a new
+//     athlete starts.
+// The floors never reach this: day-read checks every one of them before the tolerance
+// is consulted, and no level can open a day a floor holds. MACHINE register — never
+// rendered to the athlete as a number.
+export const CALENDAR_DOSE_WINDOW_DAYS = 42;
+export const CALENDAR_DOSE_HALF_LIFE_DAYS = 21;
+const CALENDAR_DOSE_PRIOR = 2;
+export const CALENDAR_DOSE_TIGHT_WEIGHT = -0.25;
+export const CALENDAR_DOSE_WIDE_WEIGHT = 0.5;
+export const CALENDAR_DOSE_WIDE_MIN_CLEAN = 4;
+
+export type CalendarDoseLevel = "tight" | "neutral" | "wide";
+
+export interface CalendarDoseTolerance {
+  level: CalendarDoseLevel;
+  // -1..1, two decimals. Machine register only.
+  weight: number;
+  window_days: number;
+  dosed_mornings: number;
+  clean: string[];
+  costly: string[];
+  unknown: string[];
+}
+
+const NEUTRAL_CALENDAR_TOLERANCE: CalendarDoseTolerance = Object.freeze({
+  level: "neutral",
+  weight: 0,
+  window_days: CALENDAR_DOSE_WINDOW_DAYS,
+  dosed_mornings: 0,
+  clean: [],
+  costly: [],
+  unknown: [],
+}) as CalendarDoseTolerance;
+
+export function calendarDoseTolerance(model: ReadAdherenceModel | null, asOf: string): CalendarDoseTolerance {
+  if (!model || !Array.isArray(model.recent)) return NEUTRAL_CALENDAR_TOLERANCE;
+  const lastClosed = addDaysISO(asOf, -1);
+  const from = addDaysISO(asOf, -CALENDAR_DOSE_WINDOW_DAYS);
+  if (!lastClosed || !from) return NEUTRAL_CALENDAR_TOLERANCE;
+  const dosed = model.recent.filter((day) => day.date >= from && day.date <= lastClosed && day.calendar_dosed === true);
+  const clean: string[] = [];
+  const costly: string[] = [];
+  const unknown: string[] = [];
+  for (const day of dosed) {
+    if (!day.trained) continue;
+    let status: HarmStatus = "unknown";
+    try {
+      status = harmVerdictOnDay(day.date).status;
+    } catch {
+      status = "unknown";
+    }
+    if (status === "clean") clean.push(day.date);
+    else if (status === "harm") costly.push(day.date);
+    else unknown.push(day.date);
+  }
+  const recency = (date: string): number => {
+    const age = daysBetweenISO(asOf, date);
+    return age == null ? 0 : 0.5 ** (Math.max(0, age) / CALENDAR_DOSE_HALF_LIFE_DAYS);
+  };
+  const mass = (dates: string[]) => dates.reduce((sum, date) => sum + recency(date), 0);
+  const cleanMass = mass(clean);
+  const costMass = mass(costly);
+  const raw = (cleanMass - 2 * costMass) / (cleanMass + costMass + CALENDAR_DOSE_PRIOR);
+  const weight = Math.round(Math.max(-1, Math.min(1, raw)) * 100) / 100;
+  const level: CalendarDoseLevel =
+    costly.length >= 2 && weight <= CALENDAR_DOSE_TIGHT_WEIGHT
+      ? "tight"
+      : !costly.length && clean.length >= CALENDAR_DOSE_WIDE_MIN_CLEAN && weight >= CALENDAR_DOSE_WIDE_WEIGHT
+        ? "wide"
+        : "neutral";
+  return {
+    level,
+    weight,
+    window_days: CALENDAR_DOSE_WINDOW_DAYS,
+    dosed_mornings: dosed.length,
+    clean,
+    costly,
+    unknown,
   };
 }

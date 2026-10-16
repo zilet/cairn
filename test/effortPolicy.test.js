@@ -34,10 +34,8 @@ const resolve = (task, extra = {}) =>
 test("everyday work is low; depth is kept for the special items", () => {
   for (const task of [
     "day_read",
-    "insight",
     "weekly_read",
     "week_ahead",
-    "nutrition_checkin",
     "session_suggest",
     "meal_swap",
     "recipe",
@@ -46,7 +44,7 @@ test("everyday work is low; depth is kept for the special items", () => {
   ]) {
     assert.equal(TASK_EXECUTION_PROFILES[task].reasoning, "low", task);
   }
-  for (const task of ["session_verify", "meal_plan_verify", "plan_verify", "meal_plan", "health"]) {
+  for (const task of ["session_verify", "meal_plan_verify", "plan_verify", "meal_plan", "health", "insight", "nutrition_checkin", "what_if"]) {
     assert.equal(TASK_EXECUTION_PROFILES[task].reasoning, "medium", task);
   }
   for (const task of [

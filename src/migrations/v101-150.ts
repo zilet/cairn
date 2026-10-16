@@ -724,4 +724,15 @@ export const MIGRATIONS_101_150: Migration[] = [
       if (hasTable(db, "settings")) addColumn(db, "settings", "lab_units TEXT DEFAULT ''");
     },
   },
+  {
+    version: 129,
+    name: "settings-agent-class-order",
+    // The agents tried FIRST for an op of each model class ({ fast?: [...], deep?: [...] }),
+    // ahead of the strategy order, which stays the fallthrough tail (repo/settings.ts
+    // pickAgentOrderForTask). '' on existing rows = the strategy order everywhere, exactly
+    // as before. Two-step: also in db.ts's settings create block.
+    up: (db) => {
+      if (hasTable(db, "settings")) addColumn(db, "settings", "agent_class_order TEXT DEFAULT ''");
+    },
+  },
 ];

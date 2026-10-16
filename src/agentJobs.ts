@@ -274,7 +274,18 @@ function conferenceIncompleteReason(input: any, result: any): string | null {
   if (result?.degraded === true) return "degraded conductor envelope";
   if (normalizeStrictCaseConferenceDecision(result?.decision) === null) return "no valid decision";
   if (!Array.isArray(result?.opinions) || !Array.isArray(result?.unavailable)) return "malformed result";
-  if (result.unavailable.length > 0) return `unavailable: ${result.unavailable.join(",")}`;
+  if (result.unavailable.length > 0) {
+    // Each missing seat with its reason code (host_busy / deadline / providers_exhausted /
+    // …), so a retry's recorded cause names what actually went wrong.
+    const reasons =
+      result.unavailable_reasons && typeof result.unavailable_reasons === "object" ? result.unavailable_reasons : {};
+    return `unavailable: ${result.unavailable
+      .map((domain: unknown) => {
+        const reason = reasons[String(domain)];
+        return typeof reason === "string" ? `${domain}(${reason})` : String(domain);
+      })
+      .join(",")}`;
+  }
   if (!Array.isArray(result?.unresolved_conflicts)) return "malformed result";
   const blocking = result.unresolved_conflicts.filter((conflict: unknown) => conflict !== "clinical_autonomy");
   if (blocking.length > 0) return `unresolved: ${blocking.join(",")}`;
@@ -615,7 +626,11 @@ async function processAgentJob(id: number): Promise<void> {
       }
       case "insight":
       case "weekly_read": {
-        result = await generateInsight(agent, job.kind === "weekly_read" ? "weekly_read" : "connection", hooks);
+        // An explicit ask (the PWA button, MCP generate_insight) always runs; the
+        // material-change gate is for the automatic callers (brain reviews, the nightly slot).
+        result = await generateInsight(agent, job.kind === "weekly_read" ? "weekly_read" : "connection", hooks, {
+          gate: false,
+        });
         chosen = result?.agent ?? null;
         if (result?.insight?.id) ref = { ref_table: "insights", ref_id: result.insight.id };
         break;

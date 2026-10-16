@@ -374,19 +374,26 @@ test("a late set on an already-judged PAST day re-opens the verdict even though 
   const timer = armCounter();
   configureDayReadRefresh({ today: () => localDaysAgo(0), ...timer.hooks });
   seedPlan();
-  logLightSession(date, 3);
 
-  // Save the live read, so the cached row's fingerprint matches what a recompute
-  // produces — the precondition for the guard's early return — and so the ledger
-  // gets a real decision + expectation through the production path.
+  // Save the live MORNING read — written before the day's training, because only a
+  // read the athlete was given before training is ever judged (a read computed after
+  // the sets is commentary on them, read-adherence.ts) — so the ledger gets a real
+  // decision + expectation through the production path.
   const judged = repo.dayRead(date);
   repo.saveDayRead(date, { ...judged, source: "agent", agent: "claude", override: null });
   const expectation = dayExpectation(date);
   assert.ok(expectation, "precondition: a predictive read leaves a falsifiable expectation");
+  logLightSession(date, 3);
+  // Re-save the read as it stands after the session, so the cached row's fingerprint
+  // matches what a recompute produces — the precondition for the guard's early return.
+  const settled = repo.dayRead(date);
+  repo.saveDayRead(date, { ...settled, source: "agent", agent: "claude", override: null });
 
-  // The nightly sweep matures and closes it.
+  // The nightly sweep matures and closes it. (Asked of the MORNING read's own question:
+  // the post-session recompute is commentary and closes as canceled.)
+  const statusOf = (id) => db.prepare(`SELECT status FROM brain_expectations WHERE id = ?`).get(id)?.status;
   evaluateMatureExpectations(localDaysAgo(0));
-  assert.equal(dayExpectation(date).status, "evaluated", "precondition: the day has been judged");
+  assert.equal(statusOf(expectation.id), "evaluated", "precondition: the day has been judged");
 
   const fingerprintBefore = repo.getCachedDayRead(date).input_fingerprint;
 
@@ -400,7 +407,7 @@ test("a late set on an already-judged PAST day re-opens the verdict even though 
   assert.ok(cached, "the read-cache economy still applies — the warm read survives");
   assert.equal(cached.input_fingerprint, fingerprintBefore, "and the fingerprint genuinely did not move");
   assert.equal(
-    dayExpectation(date).status,
+    statusOf(expectation.id),
     "pending",
     "but the verdict must be re-opened: gating this on the fingerprint turns a diverged day into a stale aligned one"
   );

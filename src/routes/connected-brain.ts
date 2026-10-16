@@ -423,7 +423,7 @@ connectedBrainRouter.post("/insights/generate", async (req, res, next) => {
   const kind = req.body?.kind === "weekly_read" ? "weekly_read" : "insight";
   if (backgroundOp(res, kind, { agent: agent ?? null, kind: req.body?.kind }, agent)) return;
   try {
-    res.json(await generateInsight(agent, req.body?.kind));
+    res.json(await generateInsight(agent, req.body?.kind, undefined, { gate: false }));
   } catch (e) {
     // One error path: the shared handler logs it privately and answers the fixed
     // {ok:false,error:'internal error'} envelope instead of leaking e.message.

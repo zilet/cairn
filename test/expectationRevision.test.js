@@ -162,6 +162,38 @@ test("one revision per failed change, ever — re-evaluation queues nothing", ()
   );
 });
 
+test("a lift's own est-1RM miss steps back only that lift, never the others the change moved", () => {
+  const decision = landBenchStep([
+    { day_number: 1, exercise: "Barbell Bench Press", target_weight: 120 },
+    { day_number: 1, exercise: "Cable Row", target_weight: 95 },
+  ]);
+  assert.equal(targetOf(1, "Cable Row").target_weight, 95, "both targets moved");
+  const outcomes = queueExpectationRevisions(
+    [
+      attachMiss(decision.id, {
+        metric_key: "exercise_est_1rm_trend",
+        subject_key: "Barbell Bench Press",
+        target: { value: 150 },
+        minimum_data: { exposures: 3 },
+        evaluator: "exercise_est_1rm",
+        evaluator_version: "lift-progression-hold-v2",
+      }),
+    ],
+    ASOF
+  );
+  assert.equal(outcomes[0].status, "queued");
+  assert.equal(targetOf(1, "Barbell Bench Press").target_weight, 115, "the lift that missed steps back");
+  assert.equal(targetOf(1, "Cable Row").target_weight, 95, "the row's own outcome was never judged");
+});
+
+test("a miss on a window that closed weeks ago queues no step back and records no attempt", () => {
+  const decision = landBenchStep();
+  const outcomes = queueExpectationRevisions([attachMiss(decision.id)], "2026-03-01");
+  assert.deepEqual(outcomes, []);
+  assert.equal(targetOf(1, "Barbell Bench Press").target_weight, 120, "nothing about last month is walked back");
+  assert.equal(getBrainDecision(decision.id).context?.revision, undefined);
+});
+
 test("several failed predictions on one change are still one step back", () => {
   const decision = landBenchStep();
   const outcomes = queueExpectationRevisions([attachMiss(decision.id), attachMiss(decision.id)], ASOF);

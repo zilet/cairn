@@ -201,6 +201,32 @@ function weeklySlotDue(now: Date, day: number, hour: number, stateKey: string): 
   return repo.schedulerOperationDue(stateKey, slotStamp, now);
 }
 
+// The local hour past which the week-ahead warm stops waiting for last night to sync
+// (a watch left on the charger must not cost the athlete the warm cache all day).
+export const WEEK_AHEAD_WARM_NIGHT_CUTOFF_HOUR = 12;
+
+/**
+ * Should the day's week-ahead warm wait for the night to sync? Only for an athlete whose
+ * watch reported YESTERDAY's night (so one is expected), only while today's has not
+ * landed, and only before the cutoff hour. An athlete with no wearable never waits —
+ * the same "no sentence about a night that has not synced" posture as the Brief's
+ * small-hours precompute, which warms only its floor until the night exists.
+ */
+export function weekAheadWarmAwaitsNight(
+  today: string,
+  now: Date,
+  hasNight: (date: string) => boolean = sleepRowExistsFor
+): boolean {
+  try {
+    if (nowContext(now).hour >= WEEK_AHEAD_WARM_NIGHT_CUTOFF_HOUR) return false;
+    if (hasNight(today)) return false;
+    const yesterday = addDaysISO(today, -1);
+    return !!yesterday && hasNight(yesterday);
+  } catch {
+    return false; // never let the wait itself cost the warm
+  }
+}
+
 function dailySlotDue(now: Date, stateKey: string): boolean {
   const slotStamp = localToday(now);
   if (repo.getAppState(stateKey) === slotStamp) return false;
@@ -1580,11 +1606,17 @@ export function startScheduler() {
   //      open. Enqueue-only — the task body never awaits the agent computation
   //      itself (ensureWeekAheadJob just creates/joins the durable job row and
   //      returns), so a slow or hung CLI can never hold up this tick.
+  //      For an athlete whose watch reports nights, the warm waits for the night it
+  //      would otherwise be sketched without (weekAheadWarmAwaitsNight): a new night
+  //      is MATERIAL to the week-ahead gate, so a midnight warm was always followed by
+  //      a second run the moment the morning sync landed. The slot is left untouched
+  //      while it waits, so the minute tick picks it up as soon as the night is in.
   let weekAheadWarmBusy = false;
   const weekAheadWarmTick = async () => {
     if (weekAheadWarmBusy) return;
     const now = new Date();
     if (!dailySlotDue(now, "week_ahead_warm_date")) return;
+    if (weekAheadWarmAwaitsNight(localToday(now), now)) return;
     weekAheadWarmBusy = true;
     try {
       await runScheduled("week_ahead_warm_date", localToday(now), "week_ahead_warm_date", () => {

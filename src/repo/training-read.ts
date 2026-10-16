@@ -647,7 +647,14 @@ export function cardioEffort(
 // days are "loading" days that stack toward a rest read.
 export function dayLoad(
   date: string,
-  opts: { countsCardio: boolean; recoveryWeekActive?: boolean }
+  opts: {
+    countsCardio: boolean;
+    recoveryWeekActive?: boolean;
+    // Activities left out of the grade — the stated week's own dose executed as planned
+    // (read-adherence.ts `dayTrainingTruth`), so the day can be asked how it graded on
+    // everything ELSE. Absent: every activity grades, exactly as before.
+    excludeActivityIds?: ReadonlySet<number>;
+  }
 ): TrainingLoad | "none" {
   let best: TrainingLoad | null = null;
   const bump = (l: TrainingLoad | null) => {
@@ -664,7 +671,7 @@ export function dayLoad(
     // shadow can never contribute a grade of its own.
     const rows = db
       .prepare(
-        `SELECT a.date, a.source, a.external_id, a.type, a.duration_min, a.distance_km, a.rpe, a.raw_text,
+        `SELECT a.id AS id, a.date, a.source, a.external_id, a.type, a.duration_min, a.distance_km, a.rpe, a.raw_text,
               MAX(ga.training_effect) AS training_effect,
               MAX(ga.aerobic_te) AS aerobic_te,
               MAX(ga.anaerobic_te) AS anaerobic_te,
@@ -684,6 +691,7 @@ export function dayLoad(
     const personalModel = (): HrModel | null => (model === undefined ? (model = usablePersonalHrModel(date)) : model);
     let bars: RunLengthBars | undefined;
     for (const a of withoutShadowActivities(rows)) {
+      if (opts.excludeActivityIds?.has(Number(a.id))) continue;
       const isRun = canonicalEnduranceSport(a.type).key === "run";
       if (isRun && !bars) bars = runLengthBars(date, { min: CARDIO_GRADE.hardMin, km: CARDIO_GRADE.hardKm });
       bump(

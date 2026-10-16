@@ -70,7 +70,8 @@ export interface Settings {
   chat_routing_mode: "adaptive" | "single"; // adaptive lane policy; single preserves the legacy one-profile path
   chat_profile_bindings: ChatProfileBindings; // provider -> capture|coach|deep -> optional model/reasoning
   agent_profile_bindings: AgentProfileBindings; // provider -> task -> optional model/reasoning override of TASK_EXECUTION_PROFILES
-  model_class_bindings: ModelClassBindings; // provider -> fast|deep -> model the person chose; {} = every CLI runs its own default model
+  model_class_bindings: ModelClassBindings; // provider -> fast|deep|coach -> model the person chose; {} = every CLI runs its own default model
+  agent_class_order: AgentClassOrder; // fast|deep -> agents tried FIRST for that class's ops; {} = the strategy order everywhere
   update_check_enabled: boolean; // quiet daily check for a newer Cairn release (pull-never-push; off ⇒ no outbound check)
   usage_ping_enabled: boolean; // opt-in weekly anonymous usage ping (install id, version, platform, arch, Node); default OFF
   lead_mode: "lead" | "announce_first" | "review_everything"; // how much Cairn leads within server policy
@@ -216,12 +217,16 @@ export const TASK_EXECUTION_PROFILES: Record<string, AbstractExecutionProfile> =
   //
   // Daily reads — high-frequency, prose over an already-deterministic core.
   day_read: { model_class: "fast", reasoning: "low" },
-  insight: { model_class: "fast", reasoning: "low" },
+  // Insight and the nutrition check-in make CAUSAL or NUMERIC claims over the athlete's
+  // own data, which is where low failed live (2026-10-16: an insight read a slower
+  // running partner's easy pace as carb-limited fitness drift). One step, still the
+  // fast model; every prose-over-a-deterministic-core read below stays low.
+  insight: { model_class: "fast", reasoning: "medium" },
   weekly_read: { model_class: "fast", reasoning: "low" },
-  nutrition_checkin: { model_class: "fast", reasoning: "low" },
+  nutrition_checkin: { model_class: "fast", reasoning: "medium" },
   week_ahead: { model_class: "fast", reasoning: "low" },
   // The what-if (Ask): one proposed change and its ripple, read and never applied.
-  what_if: { model_class: "fast", reasoning: "low" },
+  what_if: { model_class: "fast", reasoning: "medium" },
   reaction_narrative: { model_class: "fast", reasoning: "low" },
   exercise_explanation: { model_class: "fast", reasoning: "low" },
   chat_distill: { model_class: "fast", reasoning: "low" },
@@ -282,13 +287,18 @@ export function normalizeAgentProfileBindings(value: unknown): AgentProfileBindi
 }
 
 // ---------- the person's model choice per provider and class ----------
-// settings.model_class_bindings = { provider: { fast?: model, deep?: model } }. Absent or
-// empty is the default and means "the CLI's own default model" — Cairn passes no --model.
-export type ModelClassBindings = Record<string, Partial<Record<ModelClass, string>>>;
+// settings.model_class_bindings = { provider: { fast?: model, deep?: model, coach?: model } }.
+// Absent or empty is the default and means "the CLI's own default model" — Cairn passes no
+// --model. `coach` is a binding key only, never an op class: it is read by chat's coach lane
+// alone and, unbound, falls back to that provider's `fast` model (src/chatRouting.ts
+// classBoundChatModel), so nothing changes for anyone who never sets it.
+export const MODEL_BINDING_CLASSES = [...MODEL_CLASSES, "coach"] as const;
+export type ModelBindingClass = (typeof MODEL_BINDING_CLASSES)[number];
+export type ModelClassBindings = Record<string, Partial<Record<ModelBindingClass, string>>>;
 
 // What the dropdown's free-text "Other…" accepts: a short model id or alias, no spaces.
 export const MODEL_ID_PATTERN = /^[A-Za-z0-9._:/-]{1,80}$/;
-const MODEL_CLASS_SET = new Set<string>(MODEL_CLASSES);
+const MODEL_CLASS_SET = new Set<string>(MODEL_BINDING_CLASSES);
 
 function parseJsonObject(value: unknown): Record<string, unknown> | null {
   let raw: unknown = value;
@@ -316,8 +326,8 @@ function modelClassBindingsShape(value: unknown): ModelClassBindings {
     const provider = providerRaw.trim().slice(0, 80);
     const classes = parseJsonObject(classesRaw);
     if (!provider || !classes) continue;
-    const bound: Partial<Record<ModelClass, string>> = {};
-    for (const cls of MODEL_CLASSES) {
+    const bound: Partial<Record<ModelBindingClass, string>> = {};
+    for (const cls of MODEL_BINDING_CLASSES) {
       const v = typeof classes[cls] === "string" ? (classes[cls] as string).trim() : "";
       if (v && v.length <= 160 && ![...v].some((ch) => ch.charCodeAt(0) < 32)) bound[cls] = v;
     }
@@ -343,7 +353,7 @@ export function agentTakesModel(def: AgentDef | undefined): boolean {
 
 /**
  * Validate a model_class_bindings write: the provider must be a known agent that takes a
- * model, the class must be fast|deep, and the model must be one it offers (its live
+ * model, the class must be fast|deep|coach, and the model must be one it offers (its live
  * catalog or curated aliases) or a well-formed free-text id (MODEL_ID_PATTERN). Anything
  * else is dropped — an unavailable choice still runs, falling back to the CLI default
  * at spawn (runWithModelAccessFallback). A blank or "default" value clears the class.
@@ -363,16 +373,79 @@ export function normalizeModelClassBindings(
     const classes = parseJsonObject(classesRaw);
     if (!agentTakesModel(def) || !classes) continue;
     const offered = new Set([...(catalog(provider) ?? []), ...agentModelChoices(def)]);
-    const bound: Partial<Record<ModelClass, string>> = {};
+    const bound: Partial<Record<ModelBindingClass, string>> = {};
     for (const [cls, modelRaw] of Object.entries(classes)) {
       if (!MODEL_CLASS_SET.has(cls) || typeof modelRaw !== "string") continue;
       const model = modelRaw.trim();
       if (!model || model === "default") continue;
-      if (offered.has(model) || MODEL_ID_PATTERN.test(model)) bound[cls as ModelClass] = model;
+      if (offered.has(model) || MODEL_ID_PATTERN.test(model)) bound[cls as ModelBindingClass] = model;
     }
     if (Object.keys(bound).length) out[provider] = bound;
   }
   return out;
+}
+
+// ---------- class-aware agent order ----------
+// settings.agent_class_order = { fast?: [agent…], deep?: [agent…] }: the agents tried FIRST
+// for an op of that model class (TASK_EXECUTION_PROFILES[task].model_class) — say agy for
+// everyday reads and claude for deep work. It is a PREFERENCE, never exclusive: every other
+// usable agent follows in the athlete's normal strategy order as the fallthrough tail, so a
+// dead CLI is skipped exactly as in the plain rotation. Absent or {} (the default) changes
+// nothing anywhere. An `agent_routes` pin still wins, and an accuracy-policy task keeps its
+// claude -> codex floor (pickAgentOrderForTask).
+export type AgentClassOrder = Partial<Record<ModelClass, string[]>>;
+const AGENT_CLASS_ORDER_MAX = 16;
+
+/** Shape-only read of a stored class order: fast|deep -> unique non-empty agent names. */
+function agentClassOrderShape(value: unknown): AgentClassOrder {
+  const raw = parseJsonObject(value);
+  if (!raw) return {};
+  const out: AgentClassOrder = {};
+  for (const cls of MODEL_CLASSES) {
+    const list = raw[cls];
+    if (!Array.isArray(list)) continue;
+    const names: string[] = [];
+    for (const v of list) {
+      const name = typeof v === "string" ? v.trim() : "";
+      if (name && name.length <= 80 && !names.includes(name)) names.push(name);
+    }
+    if (names.length) out[cls] = names.slice(0, AGENT_CLASS_ORDER_MAX);
+  }
+  return out;
+}
+
+/** Validate an agent_class_order write: known classes only, unknown agents dropped (agents.json is the source of truth). */
+export function normalizeAgentClassOrder(value: unknown, known?: Iterable<string>): AgentClassOrder {
+  const knownSet = new Set(known ?? Object.keys(loadAgents()));
+  const shaped = agentClassOrderShape(value);
+  const out: AgentClassOrder = {};
+  for (const cls of MODEL_CLASSES) {
+    const names = (shaped[cls] ?? []).filter((n) => knownSet.has(n));
+    if (names.length) out[cls] = names;
+  }
+  return out;
+}
+
+/** The model class an op's task runs at (fast|deep), or null for an op with no profile (chat, research). */
+export function modelClassForTask(task: string): ModelClass | null {
+  return TASK_EXECUTION_PROFILES[taskForOp(task)]?.model_class ?? null;
+}
+
+/**
+ * Put `cls`'s preferred agents first, in their stated order, keeping only those already in
+ * `base` (so usability and enablement still decide who can run); every other agent of
+ * `base` follows in its own order. No class or no preference returns `base` untouched.
+ */
+export function orderForModelClass(
+  cls: ModelClass | null | undefined,
+  base: string[],
+  classOrder?: AgentClassOrder
+): string[] {
+  if (!cls || base.length <= 1) return base;
+  const preferred = (classOrder ?? getSettings().agent_class_order)[cls];
+  if (!preferred?.length) return base;
+  const head = preferred.filter((n) => base.includes(n));
+  return [...head, ...base.filter((n) => !head.includes(n))];
 }
 
 /**
@@ -480,6 +553,7 @@ const SETTINGS_COLUMN_REPAIRS: [string, string][] = [
   ["chat_profile_bindings", "TEXT DEFAULT ''"],
   ["agent_profile_bindings", "TEXT DEFAULT ''"],
   ["model_class_bindings", "TEXT DEFAULT ''"],
+  ["agent_class_order", "TEXT DEFAULT ''"],
   ["update_check_enabled", "INTEGER DEFAULT 1"],
   ["lead_mode", "TEXT DEFAULT 'lead'"],
   ["training_drive", "TEXT DEFAULT 'steady'"],
@@ -659,6 +733,7 @@ function defaultSettings(): Settings {
     chat_profile_bindings: {}, // empty means every provider keeps its own model defaults
     agent_profile_bindings: {}, // empty means every op uses the TASK_EXECUTION_PROFILES default
     model_class_bindings: {}, // empty means every CLI runs its own default model (no --model)
+    agent_class_order: {}, // empty means every class runs in the strategy order
     update_check_enabled: true, // quiet daily update check on by default (one toggle disables the outbound call)
     usage_ping_enabled: false, // the anonymous weekly usage ping is opt-in only
     lead_mode: "lead", // bounded background coaching is the default relationship
@@ -758,6 +833,8 @@ function rowToSettings(row: any): Settings {
     chat_profile_bindings: normalizeChatProfileBindings(row.chat_profile_bindings),
     agent_profile_bindings: normalizeAgentProfileBindings(row.agent_profile_bindings),
     model_class_bindings: modelClassBindingsShape(row.model_class_bindings),
+    // NULL/'' on old rows (column added by migration v129) parses to {} — the strategy order.
+    agent_class_order: agentClassOrderShape(row.agent_class_order),
     // NULL on old rows (column added by migration v47) defaults to ON.
     update_check_enabled: row.update_check_enabled == null ? true : !!row.update_check_enabled,
     // NULL on old rows (column added by migration v120) stays OFF: the ping is opt-in only.
@@ -1042,6 +1119,9 @@ export function setSettings(patch: any, opts: { keepStances?: boolean } = {}): S
       patch.model_class_bindings !== undefined
         ? normalizeModelClassBindings(patch.model_class_bindings)
         : cur.model_class_bindings,
+    // Known classes and agents only; {} clears it, an absent field keeps what is stored.
+    agent_class_order:
+      patch.agent_class_order !== undefined ? normalizeAgentClassOrder(patch.agent_class_order) : cur.agent_class_order,
     update_check_enabled:
       patch.update_check_enabled !== undefined ? !!patch.update_check_enabled : cur.update_check_enabled,
     usage_ping_enabled:
@@ -1076,7 +1156,7 @@ export function setSettings(patch: any, opts: { keepStances?: boolean } = {}): S
     `UPDATE settings SET agent_strategy=?, agent_order=?, disabled_agents=?, rr_cursor=?,
        coach_enabled=?, coach_day=?, coach_hour=?, onboarded=?, enrich_enabled=?, proactive_enabled=?, art_enabled=?, art_enabled_at=?, meal_prefs=?,
        garmin_username=?, garmin_password=?, garmin_password_encrypted=?, gemini_api_key=?, gemini_api_key_encrypted=?,
-       research_enabled=?, bg_ops_enabled=?, agent_routes=?, chat_routing_mode=?, chat_profile_bindings=?, agent_profile_bindings=?, model_class_bindings=?, update_check_enabled=?, lead_mode=?, training_drive=?, garmin_export_strength=?, run_units=?, weight_units=?, meal_plan_auto_draft=?, usage_ping_enabled=?, coach_welcomed=?, updated_at=datetime('now') WHERE id = 1`
+       research_enabled=?, bg_ops_enabled=?, agent_routes=?, chat_routing_mode=?, chat_profile_bindings=?, agent_profile_bindings=?, model_class_bindings=?, agent_class_order=?, update_check_enabled=?, lead_mode=?, training_drive=?, garmin_export_strength=?, run_units=?, weight_units=?, meal_plan_auto_draft=?, usage_ping_enabled=?, coach_welcomed=?, updated_at=datetime('now') WHERE id = 1`
   ).run(
     merged.agent_strategy,
     JSON.stringify(merged.agent_order),
@@ -1103,6 +1183,7 @@ export function setSettings(patch: any, opts: { keepStances?: boolean } = {}): S
     JSON.stringify(merged.chat_profile_bindings),
     JSON.stringify(merged.agent_profile_bindings),
     JSON.stringify(merged.model_class_bindings),
+    JSON.stringify(merged.agent_class_order),
     merged.update_check_enabled ? 1 : 0,
     merged.lead_mode,
     merged.training_drive,
@@ -1405,18 +1486,37 @@ export function pickResearchAgentOrder(cfg?: { agents?: { name: string; web_acce
 // "accuracy", the ordinary rotation for "rotation"/unknown); there is no separate
 // "(3) global rotation" step because the rotation policy already IS pickAgentOrder().
 //
+// The person's class order (`agent_class_order`, keyed by the task's model class) then
+// shapes the unpinned order: a ROTATION task tries that class's agents first and the rest
+// of the rotation after them; an ACCURACY task keeps its claude -> codex floor and lets the
+// class order reorder only the tail behind it (so "agy for deep work" never jumps a lab
+// transcription ahead of claude/codex). Absent, both paths are exactly the policy order.
+//
 // This is the single source of truth consulted by BOTH runChosen (op-labeled calls,
 // via taskForOp) and callers that bypass runChosen entirely (the background
 // enrichment queue, the legacy scheduled coach-draft) — so a pin/policy behaves
 // identically no matter which path reaches an agent. `cfg` lets tests inject the
-// usable set + routes without touching the DB or the round-robin cursor.
+// usable set + routes + class order without touching the DB or the round-robin cursor.
 export function pickAgentOrderForTask(
   task: string,
-  cfg?: { enabled?: string[]; routes?: Record<string, string> }
+  cfg?: { enabled?: string[]; routes?: Record<string, string>; classOrder?: AgentClassOrder }
 ): string[] {
   const enabled = cfg?.enabled ?? getAgentConfig({ loginProbe: "peek" }).filter((a) => a.usable).map((a) => a.name);
   const routed = resolveAgentForTask(task, "auto", { routes: cfg?.routes ?? getSettings().agent_routes, enabled });
   const accuracy = TASK_POLICY[task as RoutableTask] === "accuracy";
+  const cls = modelClassForTask(task);
+  const classOrder = cfg?.classOrder ?? getSettings().agent_class_order;
+  // The accuracy default order: claude -> codex (the floor, when usable), then the rest —
+  // which a configured class order may reorder, and nothing else may.
+  const accuracyOrder = (): string[] => {
+    // route:"" suppresses pickHealthAgentOrder's OWN internal `agent_routes.health`
+    // lookup — the pin check above already resolved (or didn't find) a route for
+    // THIS task, and pickHealthAgentOrder must not fall back to a DIFFERENT task's
+    // (health's) pin for e.g. brain_review or health_review.
+    const order = pickHealthAgentOrder(["claude", "codex"], { enabled, route: "" });
+    const floor = order.length > 1 ? ["claude", "codex"].filter((n) => order.includes(n)) : [];
+    return [...floor, ...orderForModelClass(cls, order.slice(floor.length), classOrder)];
+  };
   if (routed && routed !== "auto") {
     // Asymmetric pin semantics by policy. A ROTATION-policy pin is exclusive ("only this
     // agent"), matching resolveAgentForTask everywhere else. But an ACCURACY-critical pin
@@ -1424,22 +1524,14 @@ export function pickAgentOrderForTask(
     // fallthrough tail — these paths must never hard-fail on a dead pinned CLI, because an
     // un-transcribed lab is worse than a downgraded-but-faithful transcriber. The tail is
     // the same accuracy default order (Claude→Codex→rest), minus the pin itself.
-    if (accuracy) {
-      const tail = pickHealthAgentOrder(["claude", "codex"], { enabled, route: "" }).filter((n) => n !== routed);
-      return [routed, ...tail];
-    }
+    if (accuracy) return [routed, ...accuracyOrder().filter((n) => n !== routed)];
     return [routed];
   }
-  if (accuracy) {
-    // route:"" suppresses pickHealthAgentOrder's OWN internal `agent_routes.health`
-    // lookup — the pin check above already resolved (or didn't find) a route for
-    // THIS task, and pickHealthAgentOrder must not fall back to a DIFFERENT task's
-    // (health's) pin for e.g. brain_review or health_review.
-    return pickHealthAgentOrder(["claude", "codex"], { enabled, route: "" });
-  }
+  if (accuracy) return accuracyOrder();
   if (enabled.length <= 1) return enabled;
   // rotation policy, no pin: cfg-injected calls (tests) get the given set as-is —
   // there's no live settings/cursor to rotate in a test double. Real callers get
-  // the ordinary rotation (round-robin/random/priority + cursor advance).
-  return cfg ? enabled : pickAgentOrder();
+  // the ordinary rotation (round-robin/random/priority + cursor advance). The class
+  // order then lifts its agents to the front; the rest stay the fallthrough tail.
+  return orderForModelClass(cls, cfg ? enabled : pickAgentOrder(), classOrder);
 }

@@ -1966,6 +1966,8 @@ test("every planned-training lead is a calm capitalised opener, several per set"
       // real but unseconded, and the lead for a backed day carrying only bookkeeping.
       "planned_training:noted_lead",
       "planned_training:push_caveats",
+      // …and the stated lifting day the calendar keeps at a held dose (2026-10-16).
+      "stated_lift_dosed:lead",
     ].sort()
   );
   for (const [key, variants] of sets) {
@@ -3767,4 +3769,38 @@ test("DONE debrief facts: area tally and lift order follow the work, not the log
   assert.match(area, /MIXED/, "a mixed day is flagged so the headline names both");
   const session = prompt.match(/- SESSION TODAY[^\n]*/)?.[0] ?? "";
   assert.ok(session.indexOf("Pull-Up") < session.indexOf("Leg Press"), "lifts are ranked by sets, not logged order");
+});
+
+// ---------- the calendar's dose is not the agent's to take back (2026-10-16) ----------
+// A stated key-run or lifting day the calendar kept as training dosed the SOFT brakes on
+// its board already; letting the day-read agent cite one of them to read the day quieter
+// would hand back the quiet read the calendar just answered — the same law as a day the
+// athlete's own record opened.
+test("a calendar-dosed train day leaves the agent no brake to cite", async () => {
+  const { dayReadCitableBrakes } = await import("../dist/repo/day-read.js");
+  const dimensions = {
+    recovery_capacity: {
+      evidence: [{ field: "hrv", direction: "caution", freshness: "fresh", dimension: "recovery_capacity" }],
+    },
+  };
+  for (const code of ["stated_key_run_dosed", "stated_lift_dosed"]) {
+    assert.ok(DAY_READ_OUTCOMES[code], `${code} is a registered outcome`);
+    const baseline = { kind: "train", decision: { rule_code: code }, signals: { signal_state: { dimensions } } };
+    assert.deepEqual(dayReadCitableBrakes(baseline), [], code);
+  }
+});
+
+// The two new rules speak only registered, grammar-clean words that keep their meaning.
+test("the calendar-dose vocabulary is registered and holds the reading grammar", () => {
+  for (const code of ["stated_key_run_dosed", "stated_lift_dosed"]) {
+    for (const reason of DAY_READ_OUTCOMES[code].reasons) {
+      holdsTheConstitution(reason, code);
+      assert.match(reason, DAY_READ_REQUIRED_CONCEPT[code]);
+    }
+  }
+  for (const why of DAY_READ_WHY_VARIANTS.stated_key_run_dosed) {
+    holdsTheConstitution(why, "stated_key_run_dosed");
+    assert.doesNotMatch(why, /\d/, "no number in the athlete's sentence");
+  }
+  for (const lead of DAY_READ_LEAD_VARIANTS["stated_lift_dosed:lead"]) holdsTheConstitution(lead, "stated_lift_dosed");
 });

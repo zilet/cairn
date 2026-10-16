@@ -14,6 +14,7 @@ import {
   DEFAULT_TIMEOUT_MS,
   runAgentWithFallback,
   runAgentStreaming,
+  withResolvedProfile,
   agentSupportsStream,
   type RunOpts,
   type StreamRunOpts,
@@ -149,6 +150,12 @@ export interface CoachReadRunOptions extends RunOpts {
   runId?: string;
   /** Integrator-owned sub-budget; never raises the mode ceiling. */
   maxCalls?: number;
+  /**
+   * Cap on ONE turn's CLI leash (and so on its spawn-permit wait). Without it every turn
+   * may spend whatever is left of `timeoutMs`, so a wedged first turn burns the whole run
+   * and no fallback agent ever gets a turn. Never raises `timeoutMs`.
+   */
+  turnTimeoutMs?: number;
   /** Opts the run into streaming its final turn through the bounded loop. */
   stream?: CoachReadStreamConfig;
 }
@@ -173,6 +180,11 @@ function streamingCoachRun(
       const op = opts.op ?? "auto";
       const started = Date.now();
       const gate = makeGate(config.onDelta);
+      const requested = withResolvedProfile(streamAgent, {
+        model: opts.model,
+        reasoning: opts.reasoning,
+        profile: profileForRun(opts, op),
+      });
       try {
         const res = await runStreaming(streamAgent, prompt, {
           signal: opts.signal,
@@ -196,18 +208,18 @@ function streamingCoachRun(
           }
         }
         if (accepted) {
-          recordStreamedRun(op, streamAgent, started, true, true, res);
+          recordStreamedRun(op, streamAgent, started, true, true, res, undefined, requested);
           return { agent: streamAgent, result: { ...res, parsed }, tried: [] };
         }
         // Missing JSON / contract miss → the non-streaming rotation owns repair + fallthrough.
-        recordStreamedRun(op, streamAgent, started, !!parsed, false, res);
+        recordStreamedRun(op, streamAgent, started, !!parsed, false, res, undefined, requested);
       } catch (e: any) {
         if (opts.signal?.aborted) throw e; // a deliberate Stop — never retry elsewhere
         // No spawn permit is a fact about the HOST, not about this agent or streaming:
         // the one-shot rotation below would queue for the same process-wide permit and
         // wait just as long. Hand the caller the typed busy error to defer on.
         if (isAgentBusyError(e)) throw e;
-        recordStreamedRun(op, streamAgent, started, false, false, null, e?.message ?? String(e));
+        recordStreamedRun(op, streamAgent, started, false, false, null, e?.message ?? String(e), requested);
       }
     }
     return fallback(agent, prompt, opts);
@@ -315,12 +327,25 @@ export async function runChosenWithCoachReads(
   const requestedTimeout = Number(opts.timeoutMs);
   const totalTimeoutMs =
     Number.isFinite(requestedTimeout) && requestedTimeout > 0 ? Math.floor(requestedTimeout) : DEFAULT_TIMEOUT_MS;
+  const requestedTurn = Number(opts.turnTimeoutMs);
+  const turnCapMs = Number.isFinite(requestedTurn) && requestedTurn > 0 ? Math.floor(requestedTurn) : Infinity;
   const started = now();
   const deadline = started + totalTimeoutMs;
   const runId = opts.runId?.trim().slice(0, 120) || (deps.createRunId ?? randomUUID)();
   const op = opts.op ?? "auto";
   const signals = [opts.signal, hooks.signal].filter((signal): signal is AbortSignal => !!signal);
   const externalSignal = signals.length > 1 ? AbortSignal.any(signals) : signals[0];
+  // THE DEADLINE KILLS WHAT IT ABANDONS. The bounded wait below used to reject at the
+  // deadline and leave the turn running: the CLI kept its spawn permit, ran to the end,
+  // and the rotation even moved on to the next agent — all for a reply nobody would
+  // read. Live, 29 case-conference specialist opinions finished after their seat had
+  // already been written off, holding permits the seats behind them were queued for.
+  // So every turn runs under this run's own controller, aborted when the deadline
+  // fires; the caller's signal stays the only thing that reads as "canceled".
+  const deadlineController = new AbortController();
+  const runSignal = externalSignal
+    ? AbortSignal.any([externalSignal, deadlineController.signal])
+    : deadlineController.signal;
   const completed: CompletedCoachRead[] = [];
   let totalBytes = 0;
   let calls = 0;
@@ -352,7 +377,14 @@ export async function runChosenWithCoachReads(
         fn();
       };
       const onAbort = () => finish(() => reject(new Error("canceled")));
-      const timer = setTimeout(() => finish(() => reject(new Error("coach read run timed out"))), remaining);
+      const timer = setTimeout(
+        () =>
+          finish(() => {
+            deadlineController.abort();
+            reject(new Error("coach read run timed out"));
+          }),
+        remaining
+      );
       timer.unref?.();
       externalSignal?.addEventListener("abort", onAbort, { once: true });
       Promise.resolve(work).then(
@@ -387,8 +419,8 @@ export async function runChosenWithCoachReads(
     return awaitBounded(
       run(chosenAgent, nextPrompt, {
         op,
-        signal: externalSignal,
-        timeoutMs: remaining,
+        signal: runSignal,
+        timeoutMs: Math.max(1, Math.min(remaining, turnCapMs)),
         extract: opts.extract,
         acceptParsed,
         mcpConfigArgs: [...COACH_READ_STRICT_MCP_ARGS],
@@ -466,7 +498,8 @@ function recordStreamedRun(
   parsed: boolean,
   accepted: boolean,
   res: AgentResult | null,
-  error?: string
+  error?: string,
+  requested?: { model?: string; reasoning?: string }
 ): void {
   try {
     recordAgentRun({
@@ -490,6 +523,9 @@ function recordStreamedRun(
       input_tokens: res?.usage?.input_tokens ?? null,
       output_tokens: res?.usage?.output_tokens ?? null,
       failure_tail: accepted ? null : (res?.failure_tail ?? null),
+      requested_model: requested?.model ?? null,
+      requested_reasoning: requested?.reasoning ?? null,
+      effective_reasoning: requested?.reasoning ?? null,
     });
   } catch {
     /* telemetry never breaks the loop */
@@ -570,6 +606,11 @@ export async function runChosenStreaming(
       }
       const gate = rawDeltas ? { push: onDelta, finish: () => {} } : createJobStreamFilter(onDelta);
       const started = Date.now();
+      const requested = withResolvedProfile(first, {
+        model: rest.model,
+        reasoning: rest.reasoning,
+        profile: profileForRun(rest, op),
+      });
       try {
         const res = await runStreaming(first, prompt, {
           signal: rest.signal,
@@ -594,19 +635,19 @@ export async function runChosenStreaming(
           }
         }
         if (accepted) {
-          recordStreamedRun(op, first, started, true, true, res);
+          recordStreamedRun(op, first, started, true, true, res, undefined, requested);
           return { agent: first, result: { ...res, parsed }, tried: [] as { agent: string; error: string }[] };
         }
         // Missing JSON or a semantic contract miss → fall through to the one-shot
         // rotation, which owns repair + cross-agent fallback.
-        recordStreamedRun(op, first, started, !!parsed, false, res);
+        recordStreamedRun(op, first, started, !!parsed, false, res, undefined, requested);
         streamedTried.push({
           agent: first,
           error: parsed ? "streamed JSON missed the operation contract" : "streamed reply had no valid JSON",
         });
       } catch (e: any) {
         if (rest.signal?.aborted) throw e; // a deliberate Stop — never retry elsewhere
-        recordStreamedRun(op, first, started, false, false, null, e?.message ?? String(e));
+        recordStreamedRun(op, first, started, false, false, null, e?.message ?? String(e), requested);
         streamedTried.push({ agent: first, error: `streaming failed: ${e?.message ?? String(e)}` });
         // transport failure → fall through to the one-shot rotation
       }

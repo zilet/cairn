@@ -2,9 +2,16 @@ import { db } from "../../db.js";
 import { listBrainDecisions, listBrainExpectations } from "../../repo/brain-decisions.js";
 import { latestBrainEvaluation, listBrainToolCalls } from "../../repo/brain-evaluations.js";
 import { normalizeStrictCaseConferenceDecision } from "../../brain/case-conference-contract.js";
-import { DAY_READ_ADHERENCE_METRIC, readAdherenceModel } from "../../repo/brain/read-adherence.js";
+import {
+  DAY_READ_ADHERENCE_METRIC,
+  DAY_READ_JUDGED_ERA,
+  DAY_READ_LEGACY_ERA,
+  dayReadCallFromVerdict,
+  readAdherenceModel,
+} from "../../repo/brain/read-adherence.js";
 import { staleOpenEndedContextEvents } from "../brain/evaluation-service.js";
 import { RETIRED_EXPECTATION_STATUSES } from "../../repo/brain/expectation-arbitration.js";
+import { inconclusiveReasons } from "../../brain/inconclusive-reasons.js";
 import { localDateISO } from "../../repo/shared.js";
 
 const METRIC_WINDOW_DAYS = 90;
@@ -83,7 +90,7 @@ function expectationHealth() {
     .all() as any[];
   const latest = db
     .prepare(
-      `SELECT v.expectation_id, v.verdict, v.evaluated_at
+      `SELECT v.expectation_id, v.verdict, v.evaluated_at, v.confounders_json
          FROM brain_evaluations v
          JOIN (SELECT expectation_id, MAX(id) AS id FROM brain_evaluations GROUP BY expectation_id) newest
            ON newest.id = v.id`
@@ -109,6 +116,7 @@ function expectationHealth() {
     : null;
 
   const metricKeys = [...new Set(rows.map((row) => String(row.metric_key)))].sort();
+  const reasons = inconclusiveReasonBreakdown(rows, verdictByExpectation);
   return {
     as_of: today,
     total: rows.length,
@@ -132,6 +140,11 @@ function expectationHealth() {
           days_overdue: daysOverdue,
         }
       : null,
+    // WHY the live inconclusive verdicts are inconclusive, by machine reason code
+    // (src/brain/inconclusive-reasons.ts). Multi-label: one verdict silenced by both a
+    // thin sample and an unmatched movement counts under each. A loop where one code
+    // dominates every metric is a loop with one bug, not one with no evidence.
+    inconclusive_reasons: reasons,
     by_metric: metricKeys.map((metricKey) => {
       const forMetric = rows.filter((row) => String(row.metric_key) === metricKey);
       const forMetricEvaluated = forMetric.filter((row) => verdictByExpectation.has(Number(row.id)));
@@ -146,22 +159,55 @@ function expectationHealth() {
           (row) => String(row.window_end) <= today && !RETIRED_STATUSES.has(String(row.status))
         ).length,
         evaluated: forMetricEvaluated.length,
+        matured_unevaluated: maturedUnevaluated.filter((row) => String(row.metric_key) === metricKey).length,
         conclusive: (metricVerdicts.aligned ?? 0) + (metricVerdicts.not_aligned ?? 0),
+        ...(reasons.by_metric[metricKey] ? { inconclusive_reasons: reasons.by_metric[metricKey] } : {}),
         latest_verdicts: metricVerdicts,
         // Day reads only: WHICH WAY each judged read's call went (held / too_cautious /
         // vindicated / not_taken), because the verdict alone cannot say whether a
         // not_aligned was a read too cautious for the day or a training read met quiet.
-        ...(metricKey === DAY_READ_ADHERENCE_METRIC ? { read_calls: dayReadCallCounts() } : {}),
+        // The two ERAS are reported apart (dayReadEras): a legacy verdict judged the
+        // athlete's behaviour, a judged-era verdict judges the read, and one count over
+        // both made a behavioural miss read as the read being off.
+        ...(metricKey === DAY_READ_ADHERENCE_METRIC
+          ? { read_calls: dayReadCallCounts(), read_eras: dayReadEras() }
+          : {}),
       };
     }),
   };
 }
 
+// Retired rows are out for the same reason they are out of `matured`: a superseded or
+// canceled window is not a question still waiting on evidence.
+function inconclusiveReasonBreakdown(rows: any[], verdictByExpectation: Map<number, any>) {
+  const byReason: Record<string, number> = {};
+  const byMetric: Record<string, Record<string, number>> = {};
+  let inconclusive = 0;
+  for (const row of rows) {
+    if (RETIRED_STATUSES.has(String(row.status))) continue;
+    const latest = verdictByExpectation.get(Number(row.id));
+    if (!latest || latest.verdict !== "inconclusive") continue;
+    inconclusive++;
+    const metric = String(row.metric_key);
+    const confounders = parsed(latest.confounders_json);
+    for (const code of inconclusiveReasons(Array.isArray(confounders) ? confounders.map(String) : [])) {
+      byReason[code] = (byReason[code] ?? 0) + 1;
+      byMetric[metric] = byMetric[metric] ?? {};
+      byMetric[metric][code] = (byMetric[metric][code] ?? 0) + 1;
+    }
+  }
+  return { inconclusive, by_reason: byReason, by_metric: byMetric };
+}
+
+// Which way each judged read's call went. A verdict that carries no `read_call` is a
+// LEGACY behavioural verdict (written before 2026-09-25, when a day the athlete did more
+// than the read said was stored `not_aligned`) and is counted as `legacy_behavioural` —
+// never as an unrecorded call, which read as the instrument having lost data.
 function dayReadCallCounts(): Record<string, number> {
   try {
     const rows = db
       .prepare(
-        `SELECT COALESCE(json_extract(v.actual_json, '$.read_call'), 'unrecorded') AS call, COUNT(*) AS n
+        `SELECT COALESCE(json_extract(v.actual_json, '$.read_call'), '${DAY_READ_LEGACY_ERA}') AS call, COUNT(*) AS n
            FROM brain_evaluations v
            JOIN brain_expectations x ON x.id = v.expectation_id
            JOIN (SELECT expectation_id, MAX(id) AS id FROM brain_evaluations GROUP BY expectation_id) newest
@@ -171,6 +217,58 @@ function dayReadCallCounts(): Record<string, number> {
       )
       .all(DAY_READ_ADHERENCE_METRIC) as Array<{ call: string; n: number }>;
     return Object.fromEntries(rows.map((row) => [String(row.call), Number(row.n)]));
+  } catch {
+    return {};
+  }
+}
+
+// The two eras of `day_read_adherence`, apart. COUNTS ONLY — operator diagnostics, never
+// a rate or a grade, and nothing here reaches the athlete.
+//   judged_read         every verdict that judged the READ (it carries `read_call`):
+//                       aligned (held / vindicated), not_aligned (too_cautious /
+//                       not_taken) and inconclusive, plus how many were written by the v2
+//                       evaluator (`evaluator_era` on the verdict).
+//   legacy_behavioural  the pre-ruling verdicts that judged behaviour. Each is read back
+//                       through dayReadCallFromVerdict ONLY where that is honest — an
+//                       aligned legacy day was followed (`held`), a not_aligned train
+//                       read was `not_taken`, and a not_aligned quiet read is asked the
+//                       harm test now; a day whose harm answer is UNKNOWN derives
+//                       nothing and is counted `underivable`. Derived at read time; no
+//                       stored verdict is rewritten.
+function dayReadEras(): Record<string, unknown> {
+  try {
+    const rows = db
+      .prepare(
+        `SELECT v.verdict AS verdict, v.actual_json AS actual_json
+           FROM brain_evaluations v
+           JOIN brain_expectations x ON x.id = v.expectation_id
+           JOIN (SELECT expectation_id, MAX(id) AS id FROM brain_evaluations GROUP BY expectation_id) newest
+             ON newest.id = v.id
+          WHERE x.metric_key = ? AND v.verdict IN ('aligned', 'not_aligned', 'inconclusive')`
+      )
+      .all(DAY_READ_ADHERENCE_METRIC) as Array<{ verdict: string; actual_json: string | null }>;
+    const judged = { aligned: 0, not_aligned: 0, inconclusive: 0, by_v2_evaluator: 0 };
+    const legacy = { aligned: 0, not_aligned: 0, derived_calls: {} as Record<string, number>, underivable: 0 };
+    for (const row of rows) {
+      let actual: Record<string, unknown> | null = null;
+      try {
+        actual = row.actual_json ? (JSON.parse(row.actual_json) as Record<string, unknown>) : null;
+      } catch {
+        actual = null;
+      }
+      const verdict = String(row.verdict);
+      if (actual && typeof actual.read_call === "string") {
+        if (verdict === "aligned" || verdict === "not_aligned" || verdict === "inconclusive") judged[verdict]++;
+        if (actual.evaluator_era === DAY_READ_JUDGED_ERA) judged.by_v2_evaluator++;
+        continue;
+      }
+      if (verdict !== "aligned" && verdict !== "not_aligned") continue;
+      legacy[verdict]++;
+      const call = dayReadCallFromVerdict(verdict, actual);
+      if (call) legacy.derived_calls[call] = (legacy.derived_calls[call] ?? 0) + 1;
+      else legacy.underivable++;
+    }
+    return { [DAY_READ_JUDGED_ERA]: judged, [DAY_READ_LEGACY_ERA]: legacy };
   } catch {
     return {};
   }
@@ -282,8 +380,35 @@ function brainAggregateMetrics() {
   let specialistsRequested = 0;
   let specialistsAvailable = 0;
   let conferenceDoneUnsuccessful = 0;
+  // WHY seats went missing, per conference result (specialist_outcomes, case-conference.ts).
+  // The agent_runs counts below cannot answer it: a seat that never got a spawn permit, or
+  // whose opinion landed after its deadline, writes no failed run at all — which is how 39
+  // of 40 missing opinions hid behind a 57.9% yield. Older rows carry no reason: "unrecorded".
+  const unavailableReasons: Record<string, number> = {};
+  const conductorOutcomes: Record<string, number> = {};
+  let specialistBusyDeferrals = 0;
+  let conductorBusyDeferrals = 0;
+  let belowQuorum = 0;
   for (const row of conferenceRows) {
     const result = parsed(row.result_json);
+    if (result && Array.isArray(result.unavailable)) {
+      const reasons =
+        result.unavailable_reasons && typeof result.unavailable_reasons === "object" ? result.unavailable_reasons : {};
+      for (const domain of result.unavailable) {
+        const reason = typeof reasons[String(domain)] === "string" ? String(reasons[String(domain)]) : "unrecorded";
+        unavailableReasons[reason] = (unavailableReasons[reason] ?? 0) + 1;
+      }
+    }
+    if (Array.isArray(result?.specialist_outcomes)) {
+      for (const outcome of result.specialist_outcomes)
+        specialistBusyDeferrals += Math.max(0, Math.trunc(Number(outcome?.busy_deferrals)) || 0);
+    }
+    if (result?.conductor_outcome && typeof result.conductor_outcome === "object") {
+      const reason = String(result.conductor_outcome.reason ?? "unrecorded");
+      conductorOutcomes[reason] = (conductorOutcomes[reason] ?? 0) + 1;
+      conductorBusyDeferrals += Math.max(0, Math.trunc(Number(result.conductor_outcome.busy_deferrals)) || 0);
+      if (result.conductor_outcome.detail === "below_quorum") belowQuorum += 1;
+    }
     if (result?.ok === true) {
       conferenceSuccessful += 1;
       const complete =
@@ -318,6 +443,12 @@ function brainAggregateMetrics() {
   const specialistKnownFailures =
     specialistContractFailures + specialistParseFailures + specialistProviderProcessFailures;
   const specialistOtherFailures = specialistAgentRuns.filter((row) => !row.ok).length - specialistKnownFailures;
+  // Every failed specialist attempt by its real class — the "other" bucket above was
+  // quota_exhausted / rate_limited / payment_required (availability holds) live.
+  const specialistFailureCauses = countBy(
+    specialistAgentRuns.filter((row) => !row.ok).map((row) => ({ cause: row.error_class ?? row.status ?? "unknown" })),
+    "cause"
+  );
 
   const latestVerdicts = evaluatedMatured.map((row) => latestByExpectation.get(Number(row.id))).filter(Boolean);
   // The *_pct fields below are OPERATOR TELEMETRY (system coverage/revert rates),
@@ -400,6 +531,16 @@ function brainAggregateMetrics() {
       specialist_parse_failures: specialistParseFailures,
       specialist_provider_process_failures: specialistProviderProcessFailures,
       specialist_other_failures: Math.max(0, specialistOtherFailures),
+      // Additive failure-cause breakdown (monitorable). Attempt-level: every failed
+      // specialist agent run by error class. Seat-level: every missing opinion by the
+      // conference's own reason code (host_busy / deadline / providers_exhausted /
+      // invalid_opinion / not_convened / error; "unrecorded" on older rows).
+      specialist_failure_causes: specialistFailureCauses,
+      specialist_unavailable_reasons: unavailableReasons,
+      specialist_busy_deferrals: specialistBusyDeferrals,
+      conductor_outcomes: conductorOutcomes,
+      conductor_busy_deferrals: conductorBusyDeferrals,
+      below_quorum: belowQuorum,
       // Deprecated compatibility aliases. These measure valid-opinion yield,
       // never raw provider availability; keep them until installed clients move.
       specialists_available: specialistsAvailable,

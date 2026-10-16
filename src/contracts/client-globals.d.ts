@@ -883,7 +883,7 @@ declare global {
     routes: Record<string, string>;
     chat_routing_mode: "adaptive" | "single";
     chat_profile_bindings: Record<string, Record<string, Record<string, unknown>>>;
-    /** provider -> fast|deep -> model (settings.model_class_bindings); {} = every CLI's own default. */
+    /** provider -> fast|deep|coach -> model (settings.model_class_bindings; coach is API-only and rides through untouched); {} = every CLI's own default. */
     model_class_bindings: Record<string, Record<string, unknown>>;
     coach_day: number;
     coach_hour: number;

@@ -6,7 +6,7 @@
 // estimate) stays in chatTurns.ts, which composes these gates with the reads they need.
 //
 // chatTurns.ts re-exports every public name below, so existing importers are unchanged.
-import { chatMessageRequestsCoaching, type ChatRoutingDecision } from "./chatRouting.js";
+import { chatMessageIsNarrative, chatMessageRequestsCoaching, type ChatRoutingDecision } from "./chatRouting.js";
 
 const INSTANT_FOOD_ALLOWED_REASONS = new Set(["explicit_food_log", "photo_food_default", "explicit_fast_request"]);
 const QUESTION_LEAD_RE = /^(?:what|why|how|when|where|who|which|did|does|do|is|are|was|were|should|could|would|can)\b/i;
@@ -27,7 +27,8 @@ const QUESTION_LEAD_RE = /^(?:what|why|how|when|where|who|which|did|does|do|is|a
 const MENTIONS_WHEN_RE = new RegExp(
   [
     // named days and relative days
-    String.raw`\b(?:yesterday|last\s+night|tonight|this\s+morning|this\s+afternoon|this\s+evening|earlier|later)\b`,
+    String.raw`\b(?:yesterday|last\s+night|tonight|today|tomorrow|this\s+morning|this\s+afternoon|this\s+evening|in\s+the\s+(?:morning|afternoon|evening)|earlier|later)\b`,
+    String.raw`\b(?:\d+|a|an|a\s+couple(?:\s+of)?|a\s+few|several)\s+(?:min(?:ute)?s?|hours?|hrs?)\s+(?:before|after|later|earlier)\b`,
     String.raw`\b(?:last|past|previous)\s+(?:night|evening|monday|tuesday|wednesday|thursday|friday|saturday|sunday|week)\b`,
     String.raw`\b(?:on\s+)?(?:mon|tues?|wed(?:nes)?|thur?s?|fri|sat(?:ur)?|sun)(?:day)?\b`,
     // elapsed time ("a couple hours ago", "20 min ago")
@@ -57,7 +58,7 @@ export function isInstantFoodCaptureDecision(
   if (!reasons.includes("explicit_food_log")) return false;
   if (reasons.some((reason) => !INSTANT_FOOD_ALLOWED_REASONS.has(reason))) return false;
   const text = String(message ?? "").trim();
-  if (chatMessageRequestsCoaching(text)) return false;
+  if (chatMessageRequestsCoaching(text) || chatMessageIsNarrative(text)) return false;
   if (text && (text.includes("?") || QUESTION_LEAD_RE.test(text))) return false;
   // A meal placed in time is a remembering, not a receipt — let the agent read it.
   if (mentionsWhen(text)) return false;

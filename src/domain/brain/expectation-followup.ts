@@ -17,6 +17,7 @@ import {
 import { pickDayVariant } from "../../repo/brain/day-read-rules.js";
 import { createProposal, setProposalStatus } from "../../repo/proposals.js";
 import { getPlan } from "../../repo/plan.js";
+import { sameLiftName } from "../../repo/exercise-canon.js";
 import { addDaysISO, clipText, localDateISO } from "../../repo/shared.js";
 import { applyProposalWithAutonomy } from "./autonomy-service.js";
 import { log } from "../../log.js";
@@ -38,6 +39,21 @@ import { log } from "../../log.js";
 
 // How long one note is allowed to stand before it goes quiet by itself.
 const FOLLOWUP_STANDING_DAYS = 21;
+
+// A verdict ACTS — a note, a step-back — only while its window closed recently. A
+// verdict reached late (late evidence, or an evaluator fixed after the fact) on a
+// window that closed weeks ago still teaches the ledger and the lift's progression,
+// but turning it into a note or a plan change about a change from last month is
+// neither calm nor coaching: a fixed evaluator's first night would otherwise file a
+// wave of "that change hasn't landed" notes about August and step back targets the
+// athlete has long since trained past. The horizon is the note's own standing
+// window: a verdict acts only while a note about it could still be standing.
+const VERDICT_ACTIONABLE_DAYS = FOLLOWUP_STANDING_DAYS;
+
+function verdictStillActionable(windowEnd: string, asOf: string): boolean {
+  const cutoff = addDaysISO(asOf, -VERDICT_ACTIONABLE_DAYS);
+  return !cutoff || String(windowEnd) >= cutoff;
+}
 
 // The metrics that describe the EFFECT of a change the coach made. day_read_adherence
 // is deliberately absent: it is the daily heartbeat of whether a morning read was
@@ -128,6 +144,7 @@ export function surfaceExpectationMisses(
     try {
       const expectation = getBrainExpectation(Number(evaluation.expectation_id));
       if (!expectation || !CHANGE_EFFECT_METRICS.has(expectation.metric_key)) continue;
+      if (!verdictStillActionable(expectation.window_end, asOf)) continue;
       const decision = getBrainDecision(expectation.decision_id);
       if (!decision?.id || !FOLLOWUP_DOMAINS.has(decision.domain)) continue;
       // Only a change that actually LANDED can have missed. A held or advisory
@@ -337,7 +354,15 @@ function currentPlanSnapshot(): any[] {
  * touched. Returns the changes to make, or the machine reason nothing can be
  * rebuilt — never a guess.
  */
-function reconstructStepBack(decision: any, asOf: string): { changes: StepBackChange[] } | { reason: string } {
+function reconstructStepBack(
+  decision: any,
+  asOf: string,
+  // The ONE lift the failed prediction was about, when it was about one. A lift's own
+  // est-1RM missing says nothing about the other lifts the same proposal moved, so only
+  // that lift's targets are walked back; a subject-less guard (session feedback, joint
+  // pain) still speaks for the whole change.
+  subject: string | null = null
+): { changes: StepBackChange[] } | { reason: string } {
   const action = (decision?.action ?? {}) as any;
   // A restructure or a rotation is not a bounded target step. Reversing either
   // means reasoning about a plan shape rather than a number, and a wrong guess
@@ -353,9 +378,18 @@ function reconstructStepBack(decision: any, asOf: string): { changes: StepBackCh
   }
 
   const touched = (Array.isArray(action.changes) ? action.changes : []).filter(
-    (entry: any) => Number.isFinite(Number(entry?.day_number)) && String(entry?.exercise ?? "").trim()
+    (entry: any) =>
+      Number.isFinite(Number(entry?.day_number)) &&
+      String(entry?.exercise ?? "").trim() &&
+      (!subject || sameLiftName(entry.exercise, subject))
   );
-  if (!touched.length) return { reason: "the change recorded no affected prescriptions" };
+  if (!touched.length) {
+    return {
+      reason: subject
+        ? `the change recorded no prescription for ${clipText(subject, 60, { ellipsis: "..." })}`
+        : "the change recorded no affected prescriptions",
+    };
+  }
 
   const current = currentPlanSnapshot();
   const changes: StepBackChange[] = [];
@@ -467,6 +501,7 @@ export function queueExpectationRevisions(
     try {
       const expectation = getBrainExpectation(Number(evaluation.expectation_id));
       if (!expectation || !REVISABLE_METRICS.has(expectation.metric_key)) continue;
+      if (!verdictStillActionable(expectation.window_end, asOf)) continue;
       const decision = getBrainDecision(expectation.decision_id);
       if (!decision?.id || decision.domain !== "training") continue;
       // Only a change actually IN FORCE can be stepped back. An announced or held
@@ -503,7 +538,11 @@ export function queueExpectationRevisions(
         continue;
       }
 
-      const rebuilt = reconstructStepBack(decision, asOf);
+      const rebuilt = reconstructStepBack(
+        decision,
+        asOf,
+        expectation.metric_key === "exercise_est_1rm_trend" ? (expectation.subject_key ?? null) : null
+      );
       if ("reason" in rebuilt) {
         const outcome: RevisionOutcome = { ...base, status: "skipped", reason: rebuilt.reason };
         markRevisionAttempt(decision, outcome);

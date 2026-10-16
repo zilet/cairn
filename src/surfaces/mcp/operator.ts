@@ -79,7 +79,7 @@ export function registerOperatorTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_settings",
-    "Get app settings: agent selection strategy (round_robin/random/priority), agent order, disabled agents, per-task route metadata, the timezone-aware weekly background-review cadence, and Garmin sync status (garmin_last_sync_at/garmin_last_sync_status). `units` is the units registry (distance km|mi as run_units, weight lb|kg as weight_units) with the current choice. `settings.lab_units` is the explicit lab-value system (us|si, null = automatic) and `settings.lab_units_effective` the system lab values are shown in right now. Includes the merged agent list.",
+    "Get app settings: agent selection strategy (round_robin/random/priority), agent order, disabled agents, per-task route metadata, the timezone-aware weekly background-review cadence, and Garmin sync status (garmin_last_sync_at/garmin_last_sync_status). `units` is the units registry (distance km|mi as run_units, weight lb|kg as weight_units) with the current choice. `settings.lab_units` is the explicit lab-value system (us|si, null = automatic) and `settings.lab_units_effective` the system lab values are shown in right now. `settings.model_class_bindings` is the model per provider and class (fast|deep|coach) and `settings.agent_class_order` the agents tried first per class. Includes the merged agent list.",
     {},
     async () =>
       asText({
@@ -92,7 +92,7 @@ export function registerOperatorTools(server: McpToolRegistrar) {
 
   server.tool(
     "set_settings",
-    "Update app settings (any subset). agent_strategy: round_robin|random|priority. agent_order / disabled_agents: arrays of agent names. agent_routes is an optional per-task agent map using the server-owned route metadata returned by get_settings. coach_day(0-6)/coach_hour(0-23) control the weekly background-review cadence in the last timezone reported by the PWA. coach_enabled is retained only for legacy clients; normal background coaching does not require this opt-in. model_class_bindings picks a provider's Everyday (fast) / Deep work (deep) model; empty means every CLI runs its own default model.",
+    "Update app settings (any subset). agent_strategy: round_robin|random|priority. agent_order / disabled_agents: arrays of agent names. agent_routes is an optional per-task agent map using the server-owned route metadata returned by get_settings. coach_day(0-6)/coach_hour(0-23) control the weekly background-review cadence in the last timezone reported by the PWA. coach_enabled is retained only for legacy clients; normal background coaching does not require this opt-in. model_class_bindings picks a provider's Everyday (fast) / Deep work (deep) model, plus an optional coach model for chat's coaching lane; empty means every CLI runs its own default model. agent_class_order names the agents tried first for everyday (fast) and deep ops, ahead of the strategy order.",
     {
       agent_strategy: z.enum(["round_robin", "random", "priority"]).optional(),
       agent_order: z.array(z.string()).optional(),
@@ -104,10 +104,19 @@ export function registerOperatorTools(server: McpToolRegistrar) {
           `optional per-task agent routing: a map { task -> agent } pinning one of these tasks to a specific agent: ${ROUTABLE_TASK_LIST}. Unknown tasks or unknown/disabled agents are dropped; {} clears all routing (Auto rotates as before), while omitting the field leaves the stored routing unchanged.`
         ),
       model_class_bindings: z
-        .record(z.string(), z.object({ fast: z.string().optional(), deep: z.string().optional() }))
+        .record(
+          z.string(),
+          z.object({ fast: z.string().optional(), deep: z.string().optional(), coach: z.string().optional() })
+        )
         .optional()
         .describe(
-          "optional model choice per provider: { provider -> { fast?: model, deep?: model } } (Settings -> Agents: fast = Everyday, deep = Deep work; chat's capture/coach lanes follow fast, its deep lane deep). Empty/absent = each CLI runs its OWN default model (the default). A model must be one the provider offers (list_agent_models, or get_settings agents[].model_choices) or a short id of letters, digits and . _ : / -; unknown providers, classes or malformed ids are dropped. A model the account cannot use falls back to the CLI default at run time. {} clears every choice; omitting the field leaves them unchanged."
+          "optional model choice per provider: { provider -> { fast?: model, deep?: model, coach?: model } } (Settings -> Agents: fast = Everyday, deep = Deep work; chat's capture lane follows fast, its deep lane deep, and its coach lane `coach` when set, else fast — e.g. claude { fast: sonnet, coach: opus, deep: opus } coaches on Opus while quick logging stays on Sonnet; `coach` changes only chat's coaching MODEL, never which agent runs or any op). Empty/absent = each CLI runs its OWN default model (the default). A model must be one the provider offers (list_agent_models, or get_settings agents[].model_choices) or a short id of letters, digits and . _ : / -; unknown providers, classes or malformed ids are dropped. A model the account cannot use falls back to the CLI default at run time. {} clears every choice; omitting the field leaves them unchanged."
+        ),
+      agent_class_order: z
+        .object({ fast: z.array(z.string()).optional(), deep: z.array(z.string()).optional() })
+        .optional()
+        .describe(
+          "optional agents tried FIRST per model class: { fast?: [agent…], deep?: [agent…] } — every op runs at a class (fast = everyday reads, enrichment, the Brief; deep = composition, verify passes, proposals, health review), and chat's capture/coach lanes use fast, its deep lane deep. E.g. { fast: [\"antigravity\"], deep: [\"claude\"] } with model_class_bindings antigravity { fast: gemini-3.8-flash } runs everyday work on Flash and deep work on Claude. Never exclusive: every other enabled agent follows in agent_strategy order, so a dead or held CLI falls through. An agent_routes pin still wins for its task, and accuracy tasks (health, health_review, health_synthesis, brain_review) keep claude then codex first — the deep list reorders only the agents behind them. Unknown agents are dropped; {} clears it; omitting the field leaves it unchanged."
         ),
       coach_enabled: z.boolean().optional().describe("legacy weekly-draft compatibility flag; normal background coaching does not require it"),
       coach_day: z.number().int().optional(),

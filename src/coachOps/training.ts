@@ -30,6 +30,16 @@ import { planDraftFloorPrecheck, sessionFloorPrecheck } from "../repo/verify-flo
 import { localDateISO } from "../repo/shared.js";
 import { pickDayVariant } from "../repo/brain/day-read-rules.js";
 import { trainingBackstopSignature } from "../repo/training-cache.js";
+import {
+  WEEK_AHEAD_DRIFT_MIN_MS,
+  noteRefreshVerdict,
+  noteWeekAheadLegacyComputed,
+  noteWeekAheadServedWithoutRun,
+  refreshVerdict,
+  weekAheadDriftInputs,
+  weekAheadMaterialFingerprint,
+  type RefreshVerdict,
+} from "../repo/refresh-gate.js";
 import type { AgentPriority, FallbackResult } from "../agents.js";
 import { runChosen, runChosenStreaming } from "../runChosen.js";
 import { createStreamedArrayReader } from "../streamedJsonArray.js";
@@ -1060,25 +1070,52 @@ function sanitizeWeekAhead(input: any): { days: any[]; summary: string } | null 
 
 // A calm sketch of the next several days (lift / run / mixed / rest), the day-read
 // projected forward. Agentic with the deterministic plan-rotation floor as the
-// always-available fallback; cached per day+plan+goal (serve-stale-then-revalidate).
+// always-available fallback; cached per day + plan + MATERIAL inputs
+// (serve-stale-then-revalidate).
+//
+// When it asks the coach again is the material-change gate (src/repo/refresh-gate.ts):
+//   • a MATERIAL move (a finished session, a logged run, a new night, a check-in, a
+//     symptom or life-context change, a plan/target/goal/schedule edit, a new lab, a
+//     new day) changes the cache KEY, so the next open serves the deterministic floor
+//     and kicks a run at once — the athlete never reads yesterday's sketch of a picture
+//     that has since moved;
+//   • a DRIFT-only move (a weigh-in, Garmin's training-status label, today's session
+//     still in progress) keeps the key and refreshes once the answer on hand is older
+//     than WEEK_AHEAD_DRIFT_MIN_MS;
+//   • nothing material and no drift: the answer on hand stands until its TTL.
+// The drift fingerprint the answer was computed from rides inside the cached blob
+// (`gate.drift`); the serve and the background read decide with the SAME verdict, so a
+// kicked job never finds "fresh" and returns without the run the serve asked for.
 //
 // `cacheKey` is passed by the background job runner, which was handed the key the
 // enqueue deduped on. It must be the SAME slot: re-deriving it here off today's
 // localDateISO() would let a run started before a midnight rollover fill a key
 // nothing is waiting for, leaving the guarded one permanently cold.
 export async function weekAheadRead(agent: string | undefined, hooks?: OpHooks, cacheKeyOverride?: string) {
+  const date = localDateISO();
   const floor = weekAheadPlan();
-  const floorResult = {
-    ok: true as const,
+  const floorResult: {
+    ok: true;
+    days: ReturnType<typeof weekAheadPlan>["days"];
+    summary: string;
+    source: "deterministic";
+    cached: false;
+    refresh_failed?: true;
+  } = {
+    ok: true,
     days: floor.days,
     summary: floor.summary,
-    source: "deterministic" as const,
-    cached: false as const,
+    source: "deterministic",
+    cached: false,
   };
   const cacheKey = cacheKeyOverride?.trim() || weekAheadCacheKey(floor);
   const cached = getAiCache(WEEK_AHEAD_KIND, cacheKey);
   const cachedSane = sanitizeWeekAhead(cached?.result);
-  if (cached && cachedSane && !cached.stale) {
+  // What this run will have seen, read BEFORE the prompt is built: a drift input that
+  // moves while the agent is thinking reads as a difference next time, never as covered.
+  const drift = weekAheadDriftFingerprint(date);
+  const verdict = weekAheadCacheVerdict(cached, cachedSane, drift);
+  if (cached && cachedSane && !verdict.refresh) {
     hooks?.onPhase?.("served from cache");
     return {
       ok: true as const,
@@ -1089,6 +1126,7 @@ export async function weekAheadRead(agent: string | undefined, hooks?: OpHooks, 
     };
   }
 
+  noteRefreshVerdict(WEEK_AHEAD_KIND, verdict);
   hooks?.onPhase?.("sketching your week");
   try {
     const prompt = buildWeekAheadPrompt();
@@ -1104,12 +1142,17 @@ export async function weekAheadRead(agent: string | undefined, hooks?: OpHooks, 
       const out = { ok: true as const, ...sane, source: "agent" as const, cached: false as const, agent: chosen };
       try {
         saveAiCache(WEEK_AHEAD_KIND, cacheKey, {
-          result: out,
+          result: { ...out, gate: { drift } },
           chosen_agent: chosen,
           freshForMs: WEEK_AHEAD_FRESH_MS,
         });
       } catch {
         /* cache write never breaks the op */
+      }
+      try {
+        noteWeekAheadLegacyComputed(weekAheadLegacyKey(floor, date));
+      } catch {
+        /* observability never breaks the op */
       }
       return out;
     }
@@ -1119,6 +1162,10 @@ export async function weekAheadRead(agent: string | undefined, hooks?: OpHooks, 
     if (hooks?.signal?.aborted) throw error;
     /* fall through to a stale-cache or the deterministic floor */
   }
+  // No usable answer. `refresh_failed` is what lets createWeekAheadAgentJob hold the
+  // door on this key for its backoff: the job itself still finishes `done` (MCP callers
+  // read the stale/floor body), so without the marker every Today open re-enqueued the
+  // same doomed run as soon as it landed.
   if (cachedSane)
     return {
       ok: true as const,
@@ -1127,11 +1174,36 @@ export async function weekAheadRead(agent: string | undefined, hooks?: OpHooks, 
       cached: true as const,
       stale: true as const,
       agent: cached?.chosen_agent ?? null,
+      refresh_failed: true as const,
     };
-  return floorResult;
+  return { ...floorResult, refresh_failed: true as const };
 }
 
+// The cache slot: the read day, the floor's plan shape, and the MATERIAL fingerprint.
+// No process counter, no sync bookkeeping — a restart or a Garmin pass that rewrites
+// the same numbers lands on the same key.
 export function weekAheadCacheKey(floor: ReturnType<typeof weekAheadPlan>, date = localDateISO()): string {
+  return fingerprint({
+    op: WEEK_AHEAD_KIND,
+    v: 2,
+    date,
+    plan: floor.days.map((d) => `${d.kind}:${d.label}`),
+    material: weekAheadMaterialFingerprint(date),
+  });
+}
+
+function weekAheadDriftFingerprint(date: string): string {
+  try {
+    return weekAheadDriftInputs(date);
+  } catch {
+    return `unreadable:${Date.now()}`; // never-matching: a refresh rather than a hidden change
+  }
+}
+
+// The key the week-ahead used BEFORE the gate (the in-process training counter plus the
+// whole training backstop). Kept only so the gate can count, honestly, the runs it no
+// longer spends — see refresh-gate.ts noteWeekAheadServedWithoutRun. Never a cache key.
+function weekAheadLegacyKey(floor: ReturnType<typeof weekAheadPlan>, date: string): string {
   const profile: any = getProfile();
   return fingerprint({
     op: WEEK_AHEAD_KIND,
@@ -1140,6 +1212,36 @@ export function weekAheadCacheKey(floor: ReturnType<typeof weekAheadPlan>, date 
     goal: { gw: profile?.goal_weight_lb ?? null, gd: profile?.goal_date ?? null },
     trainingReality: coachingCacheFreshnessFingerprint(date),
   });
+}
+
+function sqliteUtcMs(value: unknown): number {
+  const s = typeof value === "string" ? value.trim() : "";
+  if (!s) return Number.NaN;
+  const iso = s.includes("T") ? s : s.replace(" ", "T");
+  return Date.parse(/[zZ]|[+-]\d\d:\d\d$/.test(iso) ? iso : `${iso}Z`);
+}
+
+/**
+ * Should the answer on hand under this key be served, or refreshed? ONE decision for
+ * the serve and the background read. A missing/unusable row or a past-TTL row always
+ * refreshes; otherwise refreshVerdict decides on the drift fingerprint the row was
+ * computed from (a row written before the gate carries none and reads as drifted, so it
+ * is replaced once it is older than the drift interval — never sooner).
+ */
+export function weekAheadCacheVerdict(
+  cached: AiCacheHit | null,
+  cachedSane: ReturnType<typeof sanitizeWeekAhead>,
+  drift: string,
+  now = Date.now()
+): RefreshVerdict {
+  if (!cached || !cachedSane) return { refresh: true, reason: "material" };
+  if (cached.stale) return { refresh: true, reason: "expired" };
+  const storedDrift = typeof cached.result?.gate?.drift === "string" ? cached.result.gate.drift : "";
+  return refreshVerdict(
+    { material: "key", drift: storedDrift, at: sqliteUtcMs(cached.computed_at), outcome: "answered" },
+    { material: "key", drift },
+    { driftMinMs: WEEK_AHEAD_DRIFT_MIN_MS, now }
+  );
 }
 
 // Synchronous, agent-free counterpart to weekAheadRead for the HTTP GET: a cold
@@ -1151,8 +1253,13 @@ export function weekAheadCacheKey(floor: ReturnType<typeof weekAheadPlan>, date 
 // weekAheadRead computation and fills the cache for next time. `computing:
 // true` marks a floor/stale answer a background read is already chasing; the
 // PWA's today-week-ahead-client only reads ok/days/summary and ignores it.
+// Read-only: the gate's verdict and counters never write a row (a Today open stays
+// memo-neutral).
 export function weekAheadServe(date = localDateISO()): {
-  response: Awaited<ReturnType<typeof weekAheadRead>> & {
+  response: (
+    | Awaited<ReturnType<typeof weekAheadRead>>
+    | { ok: true; days: ReturnType<typeof weekAheadPlan>["days"]; summary: string; source: "deterministic"; cached: false }
+  ) & {
     computing?: true;
     race?: ReturnType<typeof weekAheadRaceLine>;
   };
@@ -1172,7 +1279,15 @@ export function weekAheadServe(date = localDateISO()): {
   } catch {
     race = null;
   }
-  if (cached && cachedSane && !cached.stale) {
+  const verdict = weekAheadCacheVerdict(cached, cachedSane, weekAheadDriftFingerprint(date));
+  if (cached && cachedSane && !verdict.refresh) {
+    if (verdict.reason !== "failure_backoff") {
+      try {
+        noteWeekAheadServedWithoutRun(weekAheadLegacyKey(floor, date), verdict.reason);
+      } catch {
+        /* observability never breaks the serve */
+      }
+    }
     return {
       response: { ok: true, ...cachedSane, source: "agent", cached: true, agent: cached.chosen_agent, race },
       needsRefresh: false,

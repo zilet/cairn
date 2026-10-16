@@ -799,3 +799,39 @@ test("the brake and the positive note are mutually exclusive by construction", a
   assert.doesNotMatch(prompt, /SESSION QUALITY/);
   assert.match(prompt, /AUTOREGULATION/);
 });
+
+// ---------- an unmeasured day is never evidence for a ladder (2026-10-16) ----------
+// For an athlete who wears the sensor at night, a morning with no overnight reading is
+// UNKNOWN (harmVerdictOnDay), not "trained without harm": three easy reads trained
+// through with nothing synced after any of them must not open a fourth.
+test("the easy ladder does not open on days nothing measured", async () => {
+  const { easyOverrideSoftening, readAdherenceModel, harmEvidenceOnDay, harmVerdictOnDay } = await import(
+    "../dist/repo/brain/read-adherence.js"
+  );
+  resetTables(...WORLD, "brain_decisions", "brain_expectations", "day_reads", "exercises");
+  const days = [5, 4, 3].map((n) => localDaysAgo(n));
+  const addDays = (iso, n) => new Date(Date.parse(`${iso}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
+  for (let back = 1; back <= 20; back++)
+    repo.upsertGarminDailyMetric({ date: addDays(days[0], -back), hrv_ms: [40, 44, 48][back % 3], resting_hr: 52 });
+  repo.upsertExercise({ name: "Test Squat", muscle_group: "legs" });
+  for (const date of days) {
+    repo.saveDayRead(date, {
+      kind: "easy",
+      headline: "Easy today.",
+      why: "A calm sentence about the day.",
+      focus: null,
+      est_minutes: 20,
+      signals: {},
+      source: "deterministic",
+      override: null,
+    });
+    for (let n = 0; n < 5; n++) repo.logSetByName({ date, exercise: "Test Squat", weight: 225, reps: 5, rir: 1 });
+  }
+  for (const date of days) {
+    assert.equal(harmEvidenceOnDay(date), null, "the license law is unchanged");
+    assert.equal(harmVerdictOnDay(date).status, "unknown");
+  }
+  const ladder = easyOverrideSoftening(readAdherenceModel(REF, 12), REF);
+  assert.deepEqual(ladder.overridden_and_fine, []);
+  assert.equal(ladder.active, false);
+});

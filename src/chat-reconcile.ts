@@ -825,3 +825,135 @@ function withoutLeadingProse(reply: string, proposedReply: string, correction: s
   if (!split?.receipts) return correction;
   return appendReceipt(correction, split.receipts);
 }
+
+// ── the day's running total is the server's arithmetic, never the model's ───────
+// A food log is written AFTER the reply is generated, so a coach turn that says "that
+// brings you to about 1,180 kcal" is adding this meal's estimate to the context's
+// total in its head. Measured live (2026-10-16): it was wrong twice in one afternoon
+// (said 1,090 when the day stood at 596; said 1,180 / 100 g when it was 1,324 / 132 g),
+// and the athlete had to catch it. So once a food log has landed, a sentence that
+// states a DAY-level figure is kept when ANY figure in it matches the day as the server
+// reads it (today's total, what is left, the target, or the pre-meal total) and dropped
+// only when it states day figures and none of them match; the server's own line then
+// follows. A per-meal figure ("the steak was about 700 kcal") carries no day cue and is
+// never judged. A reply that claims no total is returned untouched.
+const INTAKE_DAY_CUE =
+  /\b(?:so far|for the day|today so far|(?:day|daily|running) total|your total|brings? you|bring(?:s|ing)? (?:it|that|the day)|you(?:['’]re| are)\s+(?:now\s+)?(?:at|around|roughly|about)|you(?:['’]ve| have)\s+(?:had|eaten|logged)|(?:kcal|calories|protein)\s+(?:left|remaining|to go)|(?:left|remaining|room)\s+(?:for|to)|leav(?:es|ing)\s+(?:you|roughly|about)|to go for the day|adds? up to)\b/i;
+const INTAKE_KCAL_FIGURE = /(\d[\d,]*(?:\.\d+)?)\s*(?:k?cals?\b|calories\b)/gi;
+const INTAKE_PROTEIN_FIGURE = /(\d[\d,]*(?:\.\d+)?)\s*g\s*(?:of\s+)?protein\b/gi;
+const INTAKE_LINE_VARIANTS: ((t: string) => string)[] = [
+  (t) => `For the record, the day stands at ${t}.`,
+  (t) => `Counting what is logged, today stands at ${t}.`,
+];
+// A list item, heading or table row is one unit: never split into "sentences".
+const INTAKE_BLOCK_LINE = /^\s*(?:[-*•>]|\d+[.)]|#{1,6}\s|\|)/;
+// A sentence ends at . ! ? after a real word (two+ letters, so "1." and "e.g." never split).
+const INTAKE_SENTENCE_BREAK = /(?<=\b\w{2,}[.!?])\s+(?=[A-Z"'“(])/;
+
+type IntakeTruth = {
+  kcal: number;
+  protein_g: number;
+  before_kcal?: number | null;
+  before_protein_g?: number | null;
+  remaining_kcal?: number | null;
+  remaining_protein_g?: number | null;
+  target_kcal?: number | null;
+  target_protein_g?: number | null;
+};
+
+function figures(sentence: string, re: RegExp): number[] {
+  return [...sentence.matchAll(new RegExp(re.source, re.flags))]
+    .map((m) => Number(m[1].replace(/,/g, "")))
+    .filter((n) => Number.isFinite(n));
+}
+
+function near(value: number, truths: number[], tolerance: number): boolean {
+  return truths.some((t) => Math.abs(value - t) <= tolerance);
+}
+
+/** Does this sentence state day-level figures that the server's day contradicts (none match)? */
+export function sentenceContradictsIntake(sentence: string, intake: IntakeTruth): boolean {
+  if (!INTAKE_DAY_CUE.test(sentence)) return false;
+  const kcal = figures(sentence, INTAKE_KCAL_FIGURE).filter((n) => n >= 100);
+  const protein = figures(sentence, INTAKE_PROTEIN_FIGURE).filter((n) => n >= 20);
+  if (!kcal.length && !protein.length) return false;
+  const nums = (...v: Array<number | null | undefined>) => v.filter((n): n is number => typeof n === "number");
+  const kcalTruths = nums(intake.kcal, intake.before_kcal, intake.remaining_kcal, intake.target_kcal);
+  const proteinTruths = nums(intake.protein_g, intake.before_protein_g, intake.remaining_protein_g, intake.target_protein_g);
+  const kcalOk = kcal.some((n) => near(n, kcalTruths, Math.max(25, n * 0.03)));
+  const proteinOk = protein.some((n) => near(n, proteinTruths, Math.max(3, n * 0.04)));
+  // Any matching day figure means the sentence is about the day and got it right; a
+  // stray meal figure beside it is not a contradiction.
+  return !kcalOk && !proteinOk;
+}
+
+function filterIntakeLine(line: string, intake: IntakeTruth): { text: string; dropped: boolean } {
+  const units = INTAKE_BLOCK_LINE.test(line) ? [line] : line.split(INTAKE_SENTENCE_BREAK);
+  let dropped = false;
+  const kept = units.filter((unit) => {
+    if (!sentenceContradictsIntake(unit, intake)) return true;
+    dropped = true;
+    return false;
+  });
+  return { text: kept.join(" "), dropped };
+}
+
+export function reconcileChatIntakeReply(
+  reply: string,
+  applied: Array<{ type: ChatActionType; result?: unknown; error?: string }>,
+  readDay: (date?: string) => any = (date) => repo.getDayIntake(date)
+): string {
+  const logs = applied.filter((entry) => entry.type === "log_food" && !entry.error);
+  if (!logs.length) return reply;
+  // The day the meal was logged on. getDayIntake() reads TODAY by default, so a meal
+  // remembered for another day is never judged against today's figures.
+  const today = localDateISO();
+  let loggedKcal = 0;
+  for (const entry of logs) {
+    const result = recordOrNull(entry.result);
+    const date = typeof result?.date === "string" ? result.date : null;
+    if (date && date !== today) return reply;
+    const kcal = Number(recordOrNull(result?.food)?.kcal);
+    if (Number.isFinite(kcal)) loggedKcal += kcal;
+  }
+  let day: any;
+  try {
+    day = readDay(today);
+  } catch {
+    return reply;
+  }
+  const totals = day?.totals;
+  if (!totals || !Number.isFinite(Number(totals.kcal))) return reply;
+  const round = (v: unknown) => (v != null && Number.isFinite(Number(v)) ? Math.round(Number(v)) : null);
+  const intake: IntakeTruth = {
+    kcal: Math.round(Number(totals.kcal)),
+    protein_g: Math.round(Number(totals.protein_g) || 0),
+    // The day as the model saw it, before this turn's meal landed.
+    before_kcal: Math.round(Number(totals.kcal) - loggedKcal),
+    remaining_kcal: round(day?.remaining?.kcal),
+    remaining_protein_g: round(day?.remaining?.protein_g),
+    target_kcal: round(day?.target?.kcal),
+    target_protein_g: round(day?.target?.protein_g),
+  };
+  let dropped = false;
+  const lines = reply.split("\n").map((line) => {
+    const out = filterIntakeLine(line, intake);
+    if (out.dropped) dropped = true;
+    return out.dropped && !out.text.trim() ? null : out.text;
+  });
+  if (!dropped) return reply;
+  const prose = lines
+    .filter((line): line is string => line !== null)
+    .join("\n")
+    .replace(/\n{3,}/g, RECEIPT_JOIN)
+    .trim();
+  const fmt = (n: number) => n.toLocaleString("en-US");
+  const parts = [`${fmt(intake.kcal)} kcal and ${intake.protein_g} g protein`];
+  if (intake.remaining_kcal != null && intake.target_kcal != null) {
+    const left = [`${fmt(Math.max(0, intake.remaining_kcal))} kcal`];
+    if (intake.remaining_protein_g != null) left.push(`${Math.max(0, intake.remaining_protein_g)} g protein`);
+    parts.push(`about ${left.join(" and ")} left of ${fmt(intake.target_kcal)}`);
+  }
+  const line = pickDayVariant(INTAKE_LINE_VARIANTS, today, "chat-intake-total")(parts.join(", "));
+  return appendReceipt(prose, line);
+}

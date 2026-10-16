@@ -161,4 +161,73 @@ test("brain diagnostics aggregate accountability, autonomy, tools, and conferenc
   assert.equal(diagnostics.metrics.conferences.specialist_parse_failures, 1);
   assert.equal(diagnostics.metrics.conferences.specialist_provider_process_failures, 1);
   assert.equal(diagnostics.metrics.conferences.specialist_availability_pct, 75);
+  // The additive failure-cause breakdown: every failed attempt by its class, and every
+  // missing seat by the conference's reason code ("unrecorded" on an older row).
+  assert.deepEqual(diagnostics.metrics.conferences.specialist_failure_causes, {
+    invalid_contract: 1,
+    process_error: 1,
+    invalid_json: 1,
+  });
+  assert.deepEqual(diagnostics.metrics.conferences.specialist_unavailable_reasons, { unrecorded: 1 });
+});
+
+test("conference diagnostics break missing seats and failed attempts down by cause", () => {
+  const job = (result) =>
+    db
+      .prepare(
+        `INSERT INTO agent_jobs (status, kind, result_json, finished_at)
+         VALUES ('done', 'case_conference', ?, datetime('now'))`
+      )
+      .run(JSON.stringify(result));
+  job({
+    ok: true,
+    degraded: true,
+    opinions: [{ domain: "training" }, { domain: "nutrition" }, { domain: "health" }],
+    unavailable: ["recovery", "lifestyle"],
+    unavailable_reasons: { recovery: "deadline", lifestyle: "host_busy" },
+    specialist_outcomes: [
+      { domain: "training", reason: "ok", busy_deferrals: 0 },
+      { domain: "nutrition", reason: "ok", busy_deferrals: 1 },
+      { domain: "health", reason: "ok", busy_deferrals: 0 },
+      { domain: "recovery", reason: "deadline", busy_deferrals: 0 },
+      { domain: "lifestyle", reason: "host_busy", busy_deferrals: 3 },
+    ],
+    conductor_outcome: { reason: "invalid_decision", detail: null, busy_deferrals: 1 },
+    conflicts: [],
+    unresolved_conflicts: [],
+  });
+  job({
+    ok: false,
+    opinions: [{ domain: "training" }],
+    unavailable: ["nutrition", "recovery"],
+    unavailable_reasons: { nutrition: "providers_exhausted", recovery: "providers_exhausted" },
+    conductor_outcome: { reason: "not_convened", detail: "below_quorum", busy_deferrals: 0 },
+    conflicts: [],
+    unresolved_conflicts: [],
+  });
+  for (const [errorClass, status] of [
+    ["rate_limited", "rate_limited"],
+    ["rate_limited", "rate_limited"],
+    ["quota_exhausted", "quota_exhausted"],
+    ["timeout", "timeout"],
+  ]) {
+    db.prepare(
+      `INSERT INTO agent_runs (op, agent, ok, parsed, tried_json, status, error_class)
+       VALUES ('conference_recovery', 'stub', 0, 0, 0, ?, ?)`
+    ).run(status, errorClass);
+  }
+
+  const conferences = getBrainDiagnostics(5).metrics.conferences;
+  assert.deepEqual(conferences.specialist_unavailable_reasons, {
+    deadline: 1,
+    host_busy: 1,
+    providers_exhausted: 2,
+  });
+  assert.deepEqual(conferences.specialist_failure_causes, { rate_limited: 2, quota_exhausted: 1, timeout: 1 });
+  // The pre-existing buckets are unchanged: availability holds still land in "other".
+  assert.equal(conferences.specialist_other_failures, 3);
+  assert.equal(conferences.specialist_busy_deferrals, 4);
+  assert.deepEqual(conferences.conductor_outcomes, { invalid_decision: 1, not_convened: 1 });
+  assert.equal(conferences.conductor_busy_deferrals, 1);
+  assert.equal(conferences.below_quorum, 1);
 });

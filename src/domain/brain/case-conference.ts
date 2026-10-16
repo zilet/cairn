@@ -47,6 +47,8 @@ import { MAX_DEFERRED_EXPECTATIONS } from "../../repo/brain/change-expectations.
 import { createProposal } from "../../repo/proposals.js";
 import { changesOnlyEaseLoad, changesReduceSets } from "../../repo/volume-guard.js";
 import { runChosen, runChosenWithCoachReads } from "../../runChosen.js";
+import { AgentFallbackError, agentSlotStats, DEFAULT_TIMEOUT_MS, dominantTriedState } from "../../agents.js";
+import { AGENT_BUSY_MAX_DEFERRALS, AGENT_BUSY_RETRY_MS, AgentBusyError, isAgentBusyError } from "../../agent-busy.js";
 import { applyProposalWithAutonomy } from "./autonomy-service.js";
 import { conferenceClinicianNotes, recordConferenceClinicianNotes } from "./conference-clinician-notes.js";
 import { specialistCharter } from "./specialist-charters.js";
@@ -121,11 +123,128 @@ function painStateLine(state: ConferencePainState | null | undefined): string {
   return ` PAIN STATE (the symptom lifecycle — it outranks memory and older notes): open now: ${open}. Resolved — history, not current: ${resolved}. A resolved pain never caps, holds or excludes a load and is never a reason to protect a place; only an open symptom or an open injury can.`;
 }
 
+// ---------- convening the seats under the host's spawn cap ----------
+// Live (90 days to 2026-10-16), 40 of 95 requested specialist opinions never reached the
+// conductor, and 39 of those 40 were the conference's own scheduling, not a provider:
+// every seat fanned out at once against a process-wide cap of two CLI permits, and each
+// seat's single 300 s bounded-read deadline started at the FAN-OUT, so seats three to five
+// spent it in the permit queue. 29 of them produced a valid opinion anyway — after their
+// seat had been written off, still holding a permit (the deadline abandoned the run
+// without killing it) — and 10 never got a permit at all. One was a genuine CLI timeout.
+//
+// So the seats are convened through a pool no wider than the cap, each seat's clock starts
+// when IT is convened, a turn is leashed to the background ceiling (a high-effort turn on a
+// Pi ran 140–310 s live), and no permit is a deferral, never a failure (agent-busy.ts).
+//
+// THE BOUND, per conference: at most min(seats, cap) specialist CLIs at once; each seat at
+// most CONFERENCE_SPECIALIST_BUDGET_MS of wall clock per attempt (a hard kill — the bounded
+// read loop aborts what it abandons); a congested seat re-queued at most
+// AGENT_BUSY_MAX_DEFERRALS times (a deferral spawns nothing); and the whole specialist
+// phase at most ceil(seats / concurrency) × the seat budget + one congestion allowance
+// (AGENT_BUSY_MAX_DEFERRALS × (turn leash + rest)) — a seat that would not fit is recorded
+// `not_convened`, never started late. Defaults, 5 seats on a cap of 2: ≤ 2 specialist CLIs
+// at once, ≤ 10 min per seat, ≤ 46.5 min for the phase (typical live: ~3–4 min a seat).
+// The conductor keeps its own rotation leash, plus the same bounded busy deferrals.
+
+/** One specialist turn's leash: the background ceiling the effort ladder tops out at. */
+export const CONFERENCE_SPECIALIST_TURN_MS = DEFAULT_TIMEOUT_MS;
+/** One seat's whole bounded-read run: a full turn plus one more (a read round, or a fallback agent). */
+export const CONFERENCE_SPECIALIST_BUDGET_MS = 2 * DEFAULT_TIMEOUT_MS;
+
+/** Why a seat did or did not deliver — one code per requested specialist, on every result. */
+export type SpecialistOutcomeReason =
+  | "ok"
+  // No spawn permit even after the bounded deferrals: the HOST was congested. Never a
+  // statement about any provider.
+  | "host_busy"
+  // The seat's own budget ran out mid-run (its CLI was killed, not orphaned).
+  | "deadline"
+  // Every agent in the rotation failed; `detail` names the state most of them reported.
+  | "providers_exhausted"
+  // A reply came back but was not a valid opinion for this seat.
+  | "invalid_opinion"
+  // The specialist phase had no room left for this seat; it was never started.
+  | "not_convened"
+  | "error";
+
+export interface SpecialistOutcome {
+  domain: SpecialistDomain;
+  reason: SpecialistOutcomeReason;
+  detail: string | null;
+  /** Runs of this seat that were started (a busy re-queue counts: it asked for a permit). */
+  attempts: number;
+  busy_deferrals: number;
+  elapsed_ms: number;
+}
+
+export type ConductorOutcomeReason =
+  | "ok"
+  | "invalid_decision"
+  | "host_busy"
+  | "deadline"
+  | "providers_exhausted"
+  | "not_convened"
+  | "error";
+
+export interface ConductorOutcome {
+  reason: ConductorOutcomeReason;
+  detail: string | null;
+  busy_deferrals: number;
+}
+
+/** A seat count below which the conductor is not convened: reconciling a minority of the
+ * team is running blind, so the deterministic floors hold instead. */
+export function conferenceQuorum(requested: number): number {
+  return Math.max(1, Math.ceil(requested / 2));
+}
+
+function failureOutcome(error: unknown): { reason: SpecialistOutcomeReason; detail: string | null } {
+  if (error instanceof AgentFallbackError) {
+    // What most of the rotation said: an availability state when the providers named one
+    // (quota_exhausted, rate_limited, …), "timeout" when every agent ran past its turn
+    // leash, otherwise nothing more specific than the reason itself.
+    const tried = error.tried;
+    const detail = tried.some((entry) => entry.availability)
+      ? dominantTriedState(tried)
+      : tried.length && tried.every((entry) => /timed out/i.test(entry.error))
+        ? "timeout"
+        : null;
+    return { reason: "providers_exhausted", detail };
+  }
+  const message = String((error as { message?: unknown })?.message ?? error ?? "");
+  if (/timed out/i.test(message)) return { reason: "deadline", detail: null };
+  if (/invalid specialist opinion/i.test(message)) return { reason: "invalid_opinion", detail: null };
+  // Taxonomy only — never raw CLI output.
+  return { reason: "error", detail: null };
+}
+
+function restFor(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    timer.unref?.();
+    function onAbort() {
+      clearTimeout(timer);
+      reject(new Error("canceled"));
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 export interface CaseConferenceResult {
   ok: boolean;
   snapshot_id: string;
   opinions: SpecialistOpinion[];
   unavailable: SpecialistDomain[];
+  /** Why each requested seat did or did not deliver (additive; absent on older job rows). */
+  specialist_outcomes?: SpecialistOutcome[];
+  /** `unavailable` with its reason codes: domain -> reason. */
+  unavailable_reasons?: Partial<Record<SpecialistDomain, SpecialistOutcomeReason>>;
+  conductor_outcome?: ConductorOutcome;
+  quorum?: number;
   conflicts: ConferenceConflictKey[];
   unresolved_conflicts: ConferenceConflictKey[];
   decision: CaseConferenceDecision | null;
@@ -150,9 +269,18 @@ export interface CaseConferenceDeps {
     prompt: string,
     domain: SpecialistDomain,
     snapshot: ImmutableBrainSnapshot,
-    maxCalls: number
+    maxCalls: number,
+    leash?: { timeoutMs: number; turnTimeoutMs: number }
   ) => Promise<unknown>;
   conductorRun?: (agent: string | undefined, prompt: string) => Promise<unknown>;
+  /** How many seats run at once. Defaults to the host's spawn cap (agentSlotStats().limit). */
+  concurrency?: number;
+  /** Rest before a congested seat (or the conductor) asks for a permit again. */
+  busyRestMs?: number;
+  /** One seat's wall-clock budget per attempt (CONFERENCE_SPECIALIST_BUDGET_MS). */
+  specialistBudgetMs?: number;
+  /** Monotonic clock for the phase budget (tests). */
+  clock?: () => number;
   chosenWithReads?: typeof runChosenWithCoachReads;
   chosen?: typeof runChosen;
   /** Active area-scoped symptom labels — evidence the coach context cannot carry. */
@@ -473,7 +601,8 @@ function fallbackConferenceDecision(
   opinions: SpecialistOpinion[],
   conflicts: ConferenceConflictKey[],
   unavailable: SpecialistDomain[],
-  priority: readonly PriorityTrack[] = []
+  priority: readonly PriorityTrack[] = [],
+  unavailableReasons: Partial<Record<SpecialistDomain, SpecialistOutcomeReason>> = {}
 ): CaseConferenceDecision {
   const preferred =
     opinions.find((opinion) => conflicts.includes("deficit_recovery") && opinion.domain === "nutrition") ??
@@ -501,7 +630,10 @@ function fallbackConferenceDecision(
     resolved_conflicts: [],
     deferred: [
       ...conflicts.map((conflict) => `${conflict}: held for conservative review`),
-      ...unavailable.map((domain) => `${domain} specialist unavailable`),
+      ...unavailable.map(
+        (domain) =>
+          `${domain} specialist unavailable${unavailableReasons[domain] ? ` (${unavailableReasons[domain]})` : ""}`
+      ),
     ].slice(0, 10),
     expectations,
     review_window: "Review at the next material signal or within two weeks.",
@@ -616,14 +748,26 @@ export async function runCaseConference(
       return [];
     }
   })();
+  const requestedBudget = Math.trunc(Number(deps.specialistBudgetMs));
+  const specialistBudgetMs = requestedBudget > 0 ? requestedBudget : CONFERENCE_SPECIALIST_BUDGET_MS;
+  // A seat's budget is two turns by construction, so a congested first turn's permit
+  // wait (bounded by its leash) surfaces as agent_busy BEFORE the seat's own deadline.
+  const turnTimeoutMs = Math.max(1, Math.min(CONFERENCE_SPECIALIST_TURN_MS, Math.ceil(specialistBudgetMs / 2)));
+  const busyRestMs = Number.isFinite(Number(deps.busyRestMs))
+    ? Math.max(0, Number(deps.busyRestMs))
+    : AGENT_BUSY_RETRY_MS;
   const specialistRun =
     deps.specialistRun ??
-    (async (chosen, prompt, domain, snap, maxCalls) => {
+    (async (chosen, prompt, domain, snap, maxCalls, leash) => {
       const out = await (deps.chosenWithReads ?? runChosenWithCoachReads)(chosen, prompt, {
         op: `conference_${domain}`,
         mode: "conference",
         maxCalls,
         runId: `${snap.id}:${domain}`,
+        // The seat's clock, started when the seat is convened (see the pool below) —
+        // and a per-turn leash, so a wedged first turn leaves a fallback agent a turn.
+        timeoutMs: leash?.timeoutMs,
+        turnTimeoutMs: leash?.turnTimeoutMs,
         acceptParsed: (parsed) => isSpecialistOpinion(parsed) && parsed.domain === domain,
         // Forwarded for the protocol turn as well as the final opinion (one schema
         // for the whole loop), which is why it carries the coach_read protocol.
@@ -632,27 +776,104 @@ export async function runCaseConference(
       });
       return out.result.parsed;
     });
-  const settled = await Promise.allSettled(
-    domains.map(async (domain) => {
-      const value = await specialistRun(
-        agent,
-        specialistPrompt(domain, question, snapshot, conflicts, painState, statedLine),
+
+  // THE POOL: never more seats in flight than the host has background permits, so the
+  // conference no longer queues against itself; each seat's budget starts when IT starts.
+  const clock = deps.clock ?? Date.now;
+  const concurrency = Math.max(
+    1,
+    Math.min(Math.max(1, domains.length), Math.trunc(Number(deps.concurrency)) || agentSlotStats().limit)
+  );
+  const phaseStarted = clock();
+  // Every seat one full budget, in waves; plus ONE congestion episode's allowance (each
+  // deferral costs at most a turn's permit wait and a rest).
+  const phaseBudgetMs =
+    Math.ceil(domains.length / concurrency) * specialistBudgetMs +
+    AGENT_BUSY_MAX_DEFERRALS * (turnTimeoutMs + busyRestMs);
+  // A seat (or a congested seat's retry) starts only when a whole seat budget still fits.
+  const fitsInPhase = () => clock() - phaseStarted + specialistBudgetMs <= phaseBudgetMs;
+  type Seat = { opinion: SpecialistOpinion | null; outcome: SpecialistOutcome };
+  const convene = async (domain: SpecialistDomain): Promise<Seat> => {
+    const seatStarted = clock();
+    let attempts = 0;
+    let busy = 0;
+    const seat = (
+      opinion: SpecialistOpinion | null,
+      reason: SpecialistOutcomeReason,
+      detail: string | null = null
+    ) => ({
+      opinion,
+      outcome: {
         domain,
-        snapshot,
-        perSpecialistCalls
-      );
+        reason,
+        detail,
+        attempts,
+        busy_deferrals: busy,
+        elapsed_ms: Math.max(0, clock() - seatStarted),
+      },
+    });
+    const prompt = specialistPrompt(domain, question, snapshot, conflicts, painState, statedLine);
+    for (;;) {
+      assertActive();
+      if (!fitsInPhase()) return seat(null, busy ? "host_busy" : "not_convened");
+      attempts += 1;
+      let value: unknown;
+      try {
+        value = await specialistRun(agent, prompt, domain, snapshot, perSpecialistCalls, {
+          timeoutMs: specialistBudgetMs,
+          turnTimeoutMs,
+        });
+      } catch (error) {
+        if (deps.signal?.aborted) throw new Error("canceled");
+        // NO PERMIT IS NOT A FAILED SEAT (CLAUDE.md, agent-busy.ts). The CLI never
+        // started, so nothing about this specialist or any provider is known: rest, then
+        // ask again — a bounded number of times. Never rotate, never mark the seat down.
+        if (isAgentBusyError(error)) {
+          if (busy < AGENT_BUSY_MAX_DEFERRALS) {
+            busy += 1;
+            await restFor(busyRestMs, deps.signal);
+            continue;
+          }
+          return seat(null, "host_busy");
+        }
+        const failure = failureOutcome(error);
+        return seat(null, failure.reason, failure.detail);
+      }
       const opinion = isSpecialistOpinion(value) ? normalizeSpecialistOpinion(value) : null;
-      if (!opinion || opinion.domain !== domain) throw new Error("invalid specialist opinion");
-      return opinion;
+      if (!opinion || opinion.domain !== domain) return seat(null, "invalid_opinion");
+      return seat(opinion, "ok");
+    }
+  };
+  const seats: Seat[] = new Array(domains.length);
+  let cursor = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, domains.length) }, async () => {
+      while (cursor < domains.length) {
+        const index = cursor++;
+        seats[index] = await convene(domains[index]);
+      }
     })
   );
   assertActive();
   const opinions: SpecialistOpinion[] = [];
   const unavailable: SpecialistDomain[] = [];
-  settled.forEach((result, index) =>
-    result.status === "fulfilled" ? opinions.push(result.value) : unavailable.push(domains[index])
-  );
-  if (!opinions.length)
+  const specialistOutcomes: SpecialistOutcome[] = [];
+  const unavailableReasons: Partial<Record<SpecialistDomain, SpecialistOutcomeReason>> = {};
+  seats.forEach((seat, index) => {
+    specialistOutcomes.push(seat.outcome);
+    if (seat.opinion) opinions.push(seat.opinion);
+    else {
+      unavailable.push(domains[index]);
+      unavailableReasons[domains[index]] = seat.outcome.reason;
+    }
+  });
+  const quorum = conferenceQuorum(domains.length);
+  // Congestion on EVERY seat is a non-event for the whole job: nothing ran, so the job
+  // runner defers it (deferBusyAgentJob) instead of recording an empty conference.
+  if (!opinions.length && specialistOutcomes.length && specialistOutcomes.every((o) => o.reason === "host_busy"))
+    throw new AgentBusyError(agent ?? "auto", null, "case conference: no spawn permit for any specialist");
+  const seatReport = { specialist_outcomes: specialistOutcomes, unavailable_reasons: unavailableReasons, quorum };
+  if (opinions.length < quorum)
     return {
       ok: false,
       snapshot_id: snapshot.id,
@@ -661,39 +882,61 @@ export async function runCaseConference(
       conflicts,
       unresolved_conflicts: conflicts,
       decision: null,
-      error: "specialists unavailable; use deterministic floors",
+      ...seatReport,
+      conductor_outcome: { reason: "not_convened", detail: "below_quorum", busy_deferrals: 0 },
+      // Reconciling a minority of the team is running blind; the deterministic floors
+      // (the daily envelope, progression, the clamps) keep holding instead.
+      error: opinions.length
+        ? `quorum not met (${opinions.length} of ${domains.length} specialists); deterministic floors hold`
+        : "specialists unavailable; use deterministic floors",
     };
   const conductorRun =
     deps.conductorRun ??
-    (async (chosen, prompt) => {
-      try {
-        return (
-          await (deps.chosen ?? runChosen)(chosen, prompt, {
-            op: "case_conference",
-            acceptParsed: (parsed) => normalizeStrictCaseConferenceDecision(parsed) !== null,
-            schema: CASE_CONFERENCE_DECISION_SCHEMA,
-            signal: deps.signal,
-          })
-        ).result.parsed;
-      } catch {
-        if (deps.signal?.aborted) throw new Error("canceled");
-        // Valid specialist findings remain useful even when every conductor
-        // provider/process/contract attempt fails. The advice-only fallback below
-        // cannot mutate anything and keeps every conflict unresolved.
-        return null;
+    (async (chosen, prompt) =>
+      (
+        await (deps.chosen ?? runChosen)(chosen, prompt, {
+          op: "case_conference",
+          acceptParsed: (parsed) => normalizeStrictCaseConferenceDecision(parsed) !== null,
+          schema: CASE_CONFERENCE_DECISION_SCHEMA,
+          signal: deps.signal,
+        })
+      ).result.parsed);
+  const conductorOutcome: ConductorOutcome = { reason: "ok", detail: null, busy_deferrals: 0 };
+  const conductorText = conductorPrompt(question, snapshot, opinions, conflicts, priority, painState, statedLine);
+  let rawDecision: unknown = null;
+  for (;;) {
+    try {
+      rawDecision = await conductorRun(agent, conductorText);
+      break;
+    } catch (error) {
+      if (deps.signal?.aborted) throw new Error("canceled");
+      // The conductor's permit is the same host fact as a seat's: defer, bounded.
+      if (isAgentBusyError(error) && conductorOutcome.busy_deferrals < AGENT_BUSY_MAX_DEFERRALS) {
+        conductorOutcome.busy_deferrals += 1;
+        await restFor(busyRestMs, deps.signal);
+        continue;
       }
-    });
-  const rawDecision = await conductorRun(
-    agent,
-    conductorPrompt(question, snapshot, opinions, conflicts, priority, painState, statedLine)
-  );
+      // Valid specialist findings remain useful even when every conductor
+      // provider/process/contract attempt fails. The advice-only fallback below
+      // cannot mutate anything and keeps every conflict unresolved — and it says why.
+      const failure = isAgentBusyError(error) ? { reason: "host_busy" as const, detail: null } : failureOutcome(error);
+      conductorOutcome.reason =
+        failure.reason === "invalid_opinion" || failure.reason === "not_convened" ? "error" : failure.reason;
+      conductorOutcome.detail = failure.detail;
+      rawDecision = null;
+      break;
+    }
+  }
   assertActive();
   const normalizedDecision = normalizeStrictCaseConferenceDecision(rawDecision);
   const degraded = normalizedDecision == null;
+  if (degraded && conductorOutcome.reason === "ok") conductorOutcome.reason = "invalid_decision";
   // Valid specialist work must never disappear because the conductor emitted a
   // malformed envelope. Preserve one conservative, advice-only voice, leave all
   // conflicts unresolved, and hold it for review. No mutation is synthesized.
-  const decision = normalizedDecision ?? fallbackConferenceDecision(opinions, conflicts, unavailable, priority);
+  const decision =
+    normalizedDecision ?? fallbackConferenceDecision(opinions, conflicts, unavailable, priority, unavailableReasons);
+  const outcomeReport = { ...seatReport, conductor_outcome: conductorOutcome };
   // The clinical floor the server ENFORCES is judged against the revision itself: an
   // act-now finding gates only a change that acts on what it governs (same domain and
   // area, or the change names the marker). The pre-revision rule above was the
@@ -825,6 +1068,9 @@ export async function runCaseConference(
       // the context moves on.
       conflict_inputs: conflictInputs,
       unavailable,
+      // WHY each missing seat is missing, so a degraded reading says so on its own record.
+      unavailable_reasons: unavailableReasons,
+      conductor_outcome: conductorOutcome.reason,
       review_window: decision.review_window,
       // The floor as the SERVER read it, beside what the conductor and specialists said.
       deterministic_clinical: deterministicClinical,
@@ -932,6 +1178,7 @@ export async function runCaseConference(
         snapshot_id: snapshot.id,
         opinions,
         unavailable,
+        ...outcomeReport,
         conflicts: enforcedConflicts,
         unresolved_conflicts: unresolvedConflicts,
         decision,
@@ -1004,6 +1251,7 @@ export async function runCaseConference(
       snapshot_id: snapshot.id,
       opinions,
       unavailable,
+      ...outcomeReport,
       conflicts: enforcedConflicts,
       unresolved_conflicts: unresolvedConflicts,
       decision,
@@ -1078,6 +1326,7 @@ export async function runCaseConference(
     snapshot_id: snapshot.id,
     opinions,
     unavailable,
+    ...outcomeReport,
     conflicts: enforcedConflicts,
     unresolved_conflicts: unresolvedConflicts,
     decision,

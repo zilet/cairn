@@ -453,3 +453,13 @@ test("applyModelChoice sets, clears and validates a class choice without touchin
   assert.equal(models.modelBinding(bindings, "codex", "deep"), "gpt-6-sol");
   assert.equal(models.modelBinding(bindings, "codex", "fast"), "");
 });
+
+test("changing or clearing Everyday / Deep work keeps a coach model the screen does not render", () => {
+  const models = loadAgentModels();
+  const bindings = { claude: { fast: "sonnet", coach: "opus" } };
+  assert.equal(models.applyModelChoice(bindings, "claude", "fast", "haiku", ["haiku"]), true);
+  assert.deepEqual(JSON.parse(JSON.stringify(bindings)), { claude: { fast: "haiku", coach: "opus" } });
+  assert.equal(models.applyModelChoice(bindings, "claude", "fast", ""), true);
+  assert.deepEqual(JSON.parse(JSON.stringify(bindings)), { claude: { coach: "opus" } }, "the provider stays while coach is set");
+  assert.equal(models.applyModelChoice(bindings, "claude", "coach", "fable", ["fable"]), false, "no coach select in the UI");
+});

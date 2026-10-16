@@ -31,6 +31,7 @@ import {
   plainGroupWords,
   progressionLineageIds,
   resolveExerciseName,
+  sameLiftName,
   trainingRowsSignature,
 } from "./exercise-canon.js";
 import {
@@ -619,9 +620,10 @@ export function trainingModifierFor(
   response: CoachWhatWorksForYou | null = whatWorksForYou()
 ): CoachPersonalModifier | null {
   if (!response) return null;
-  const name = exerciseName.trim().toLowerCase();
   const candidates = response.modifiers.filter((modifier) => modifier.target === "training_progression_step");
-  const own = candidates.find((modifier) => modifier.subject_key?.trim().toLowerCase() === name) ?? null;
+  // Matched on exercise IDENTITY, not a lowercase literal: the modifier's subject is
+  // the spelling the expectation was written under, which is often an alias.
+  const own = candidates.find((modifier) => sameLiftName(modifier.subject_key, exerciseName)) ?? null;
   const wholeAthlete = candidates.find((modifier) => modifier.subject_key == null) ?? null;
   if (!own) return wholeAthlete;
   // …with ONE exception to the lift-first preference, and it turns on provenance.

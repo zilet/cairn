@@ -667,6 +667,24 @@ export function resolveExerciseName(name: string): ResolvedExerciseName {
   return requestMemo(`resolve_exercise_name:${name}`, () => resolveExerciseNameRead(name), copyFlat);
 }
 
+/**
+ * Do two spellings name the same lift? Equal resolver keys (the same stored row, or
+ * the same movement key when neither is stored), or equal conservative keys. For a
+ * reader matching a STORED subject — an expectation's `subject_key`, a learned
+ * modifier's — against today's exercise name, where a lowercase literal compare left
+ * every alias-spelled subject ("Incline DB Press") permanently unmatched.
+ */
+export function sameLiftName(a: string | null | undefined, b: string | null | undefined): boolean {
+  const left = String(a ?? "").trim();
+  const right = String(b ?? "").trim();
+  if (!left || !right) return false;
+  if (left.toLowerCase() === right.toLowerCase()) return true;
+  const leftKey = resolveExerciseName(left).key;
+  if (leftKey && leftKey === resolveExerciseName(right).key) return true;
+  const leftNorm = normalizedExerciseKey(left);
+  return !!leftNorm && leftNorm === normalizedExerciseKey(right);
+}
+
 function resolveExerciseNameRead(name: string): ResolvedExerciseName {
   const raw = String(name ?? "").trim();
   const norm = normalizeExerciseName(raw);

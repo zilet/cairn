@@ -68,6 +68,7 @@ import { enqueueAgentJob } from "./agentJobs.js";
 import { diagnosticErrorName, recordAsyncFailure } from "./diagnostics.js";
 import {
   CHAT_LANE_MODEL_CLASS,
+  chatLaneBindingClass,
   classBoundChatModel,
   resolveChatProfile,
   type ChatLane,
@@ -95,6 +96,7 @@ import {
 import {
   recordOrNull,
   reconcileChatPlanReply,
+  reconcileChatIntakeReply,
   reconcileChatRevertReply,
   reconcileChatRunReply,
   reconcileGoalIdentityReply,
@@ -153,6 +155,7 @@ export {
   PLAN_UNTOUCHED_BY_QUESTION_VARIANTS,
   PLAN_WRITE_UNVERIFIED_VARIANTS,
   reconcileChatPlanReply,
+  reconcileChatIntakeReply,
   reconcileChatRevertReply,
   reconcileChatRunReply,
   reconcileGoalIdentityReply,
@@ -418,7 +421,8 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
     const goalReply = reconcileGoalIdentityReply(objectiveReply, droppedGoalFields, appliedGoalPatch);
     const structureReply = reconcileTrainingStructureReply(goalReply, applied);
     const activityReply = reconcileMisfiledActivityReply(structureReply, misfiledCaptures, applied);
-    const reply = reconcileChatRevertReply(activityReply, applied, refusedReverts, proposedReply);
+    const intakeReply = reconcileChatIntakeReply(activityReply, applied);
+    const reply = reconcileChatRevertReply(intakeReply, applied, refusedReverts, proposedReply);
     const failedAttempts = attempts.filter((a) => !a.ok);
     const meta: {
       applied: typeof applied;
@@ -1726,7 +1730,12 @@ export async function runChatCompletion(
   // picture, and an autonomous CLI otherwise explores its cwd until the timeout);
   // only a current-research turn is allowed to reach for live web search.
   const chatTools: "none" | "provider" = wantsWeb ? "provider" : "none";
+  // The person's class order (settings.agent_class_order) for the lane's class: capture
+  // and coach are everyday (fast), deep is deep; the legacy single path reads fast. It is
+  // read for the lane the turn STARTS on — an escalation keeps the order it began with.
+  const laneClass = decision ? CHAT_LANE_MODEL_CLASS[decision.lane] : "fast";
   const baseOrder = buildChatProviderOrder(chosen, repo.pickAgentOrder(), {
+    classFirst: repo.getSettings().agent_class_order[laneClass],
     preferWeb: wantsWeb,
     // A named provider is an explicit athlete choice. A Settings route pin is
     // still eligible as fallback, but current research starts with an enabled
@@ -1770,10 +1779,10 @@ export async function runChatCompletion(
       const model = classBoundChatModel(name, "fast", classBindings);
       return resolveRuntimeChatProfile(definitions[name], model ? { model } : null, !!model);
     }
-    const requested = resolveChatProfile(decision.lane, name, bindings, classBindings);
+    const requested = resolveChatProfile(decision.lane, name, bindings, classBindings, decision.reason_codes);
     const explicitlyBound =
       Boolean((bindings as any)?.[name]?.[decision.lane]) ||
-      !!classBoundChatModel(name, CHAT_LANE_MODEL_CLASS[decision.lane], classBindings);
+      !!classBoundChatModel(name, chatLaneBindingClass(decision.lane), classBindings);
     return resolveRuntimeChatProfile(definitions[name], requested, explicitlyBound);
   };
   const decorate = (

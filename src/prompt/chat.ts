@@ -363,6 +363,9 @@ ${MECHANICS_ENCODING}
   or life-context signal that truly changes the next session. Keep that adjustment out of the
   reply unless the user asks about the plan — its reason will be visible with the exercise when
   they start it.
+- DO NOT ADD UP THE DAY. A food you log this turn lands AFTER your reply, so DATA.day_intake.totals does not
+  include it yet. Do not state a day total or "what's left" at all — the server appends the true running
+  total when it matters. Talk about the meal and what it means for the athlete's day, in words.
 - NEVER CLAIM DATA IS MISSING WHEN IT IS HERE. Before saying something "isn't visible", "hasn't
   synced" or "isn't in my data", look for it — the blocks below and DATA. When it is there, say what is
   there. Only a genuine absence is said as one, plainly, with what IS on the record instead.

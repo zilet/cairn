@@ -9,9 +9,11 @@ import {
 } from "./expectation-contract.js";
 import { isoDate, type JsonObject } from "./contract-utils.js";
 import {
+  DAY_READ_ADHERENCE_EVALUATOR_VERSION,
+  DAY_READ_JUDGED_ERA,
   READ_ADHERENCE_MEASURES,
   dayTrainingTruth,
-  harmEvidenceOnDay,
+  harmVerdictOnDay,
   isPredictiveDayReadKind,
   readAdherenceOutcome,
 } from "../repo/brain/read-adherence.js";
@@ -31,7 +33,11 @@ import { lsqSlopePerDay } from "../repo/health.js";
 import { addDaysISO } from "../repo/shared.js";
 import { robustWeightEvidence } from "../repo/weight-evidence.js";
 import { verifiedTopSetInWindow } from "../repo/calibration.js";
+import { normalizedExerciseKey, resolveExerciseName } from "../repo/exercise-canon.js";
+import { getBrainRollback } from "../repo/brain-decisions.js";
 import { coerceFinite as finite } from "../lib/numbers.js";
+import { INCONCLUSIVE_REASON_TEXT } from "./inconclusive-reasons.js";
+import { attributePain, statedPainOccasions } from "../repo/brain/pain-reports.js";
 
 export const MATURITY_EVALUATOR_VERSION = "brain-maturity-v1";
 
@@ -44,12 +50,29 @@ export interface MetricObservation {
   // "landed / did not land within the expectation" line. Only a metric whose verdict
   // is rendered back to the athlete needs one (day_read_adherence).
   verdict_explanation?: string;
+  // The evaluator's OWN comparison, for a metric whose stored target cannot be read by
+  // the generic compareExpectation without losing what it says (a prescription to
+  // complete N times, an agent-authored est-1RM floor). `aligned: null` is "this
+  // target cannot be judged as a pass" and its `reason` becomes a confounder — never a
+  // silent fallback to the generic reading, which is what made those targets vacuous.
+  comparison?: { aligned: boolean | null; reason?: string };
+}
+
+// One stretch of days a material context event (a trip, an injury, an athlete tag)
+// covered inside the window. For the EXPOSURE-scoped metrics the evaluation service
+// hands these to the evaluator instead of confounding the whole window: an exposure
+// dated inside one is set aside, every other exposure still counts.
+export interface ContextExclusion {
+  label: string;
+  start: string;
+  end: string;
 }
 
 export interface EvaluatorContext {
   expectation: BrainExpectation;
   decision: BrainDecision;
   as_of: string;
+  context_exclusions?: ContextExclusion[];
 }
 
 export interface MetricEvaluator {
@@ -235,16 +258,30 @@ function intakeObservation(context: EvaluatorContext): MetricObservation {
   };
 }
 
-function exerciseId(subject: string | null): number | null {
-  if (!subject) return null;
+// The movement an expectation is about, resolved through the ONE exercise-identity
+// ladder (exact → alias hop → key → unique expanded key) every other lift fact uses.
+// A raw `lower(name)` match here left every expectation written under an alias
+// spelling ("Incline DB Press", "Lateral Raise", "DB Bench Press") permanently
+// "could not be matched", while the lift was being logged under its stored name the
+// whole time. A catalog that still holds a same-key duplicate (a plural, a "timed"
+// suffix) contributes both rows' history — the same fold the lift ledger reads by.
+function exerciseIds(subject: string | null): number[] {
+  if (!subject) return [];
   const numeric = Number(subject);
-  const row =
-    Number.isInteger(numeric) && numeric > 0
-      ? (db.prepare(`SELECT id FROM exercises WHERE id = ?`).get(numeric) as { id: number } | undefined)
-      : (db.prepare(`SELECT id FROM exercises WHERE lower(name) = lower(?)`).get(subject) as
-          | { id: number }
-          | undefined);
-  return row?.id ?? null;
+  if (Number.isInteger(numeric) && numeric > 0) {
+    const row = db.prepare(`SELECT id FROM exercises WHERE id = ?`).get(numeric) as { id: number } | undefined;
+    return row ? [Number(row.id)] : [];
+  }
+  const resolved = resolveExerciseName(subject);
+  if (resolved.exercise_id == null) return [];
+  const key = normalizedExerciseKey(resolved.canonical);
+  const ids = new Set<number>([resolved.exercise_id]);
+  if (key) {
+    for (const row of db.prepare(`SELECT id, name FROM exercises`).all() as Array<{ id: number; name: string }>) {
+      if (normalizedExerciseKey(String(row.name)) === key) ids.add(Number(row.id));
+    }
+  }
+  return [...ids];
 }
 
 interface ExerciseSetRow {
@@ -254,20 +291,307 @@ interface ExerciseSetRow {
   weight: number | null;
   reps: number | null;
   duration_sec: number | null;
+  /** When the work was done: the session's finish, else the set's own write. */
+  done_at: string | null;
 }
 
-function exerciseSets(context: EvaluatorContext): { rows: ExerciseSetRow[]; issue: string | null } {
-  const id = exerciseId(context.expectation.subject_key);
-  if (id == null) return { rows: [], issue: "The expected exercise could not be matched to a known movement." };
+// An SQLite `datetime('now')` stamp ("YYYY-MM-DD HH:MM:SS", UTC) or an ISO instant.
+function stampMs(value: unknown): number | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const text = value.includes("T") ? value : `${value.trim().replace(" ", "T")}Z`;
+  const ms = Date.parse(text);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+// WORK DONE BEFORE THE CHANGE IS NOT A TEST OF IT.
+//
+// An expectation's window opens on the decision's own date, and most training changes
+// are applied the moment a session FINISHES — the session that earned the step is
+// logged a second before the step exists. Counting it handed every completion and
+// est-1RM verdict one free exposure: the very sets the change was derived from,
+// graded against the change. A catch-up to "your real working weight" then completed
+// itself by construction, and a hold claim's best estimate could be the triggering
+// session's own number. So work finished at or before the change landed is set aside
+// (and counted on the verdict); a row with no usable stamp is kept, since its date is
+// already inside the window.
+function afterTheChange<T extends { done_at?: string | null; session_id?: number; id?: number }>(
+  context: EvaluatorContext,
+  rows: T[]
+): { rows: T[]; pre_change_exposures: number } {
+  const landed = stampMs(context.decision?.applied_at) ?? stampMs(context.decision?.created_at);
+  if (landed == null) return { rows, pre_change_exposures: 0 };
+  const kept: T[] = [];
+  const before = new Set<string>();
+  for (const row of rows) {
+    const done = stampMs(row.done_at);
+    if (done != null && done <= landed) before.add(String(row.session_id ?? row.id));
+    else kept.push(row);
+  }
+  return { rows: kept, pre_change_exposures: before.size };
+}
+
+// Which context event, if any, covers this date. First match wins; the label is only
+// provenance.
+function exclusionFor(context: EvaluatorContext, date: string): ContextExclusion | null {
+  for (const range of context.context_exclusions ?? []) {
+    if (date >= range.start && date <= range.end) return range;
+  }
+  return null;
+}
+
+interface ContextFiltered<T> {
+  rows: T[];
+  /** Distinct exposures (sessions) set aside because a context event covered their date. */
+  excluded_exposures: number;
+  excluded_by: string[];
+  /** Distinct exposures finished before the change landed (see afterTheChange). */
+  pre_change_exposures: number;
+}
+
+// The two exposure filters every exposure-scoped evaluator applies, in order: work
+// done before the change is not about it, and work inside a context event is not
+// clean evidence of it.
+function withoutContextDays<T extends { date: string; done_at?: string | null; session_id?: number; id?: number }>(
+  context: EvaluatorContext,
+  allRows: T[]
+): ContextFiltered<T> {
+  const after = afterTheChange(context, allRows);
+  const rows = after.rows;
+  const pre_change_exposures = after.pre_change_exposures;
+  if (!context.context_exclusions?.length)
+    return { rows, excluded_exposures: 0, excluded_by: [], pre_change_exposures };
+  const kept: T[] = [];
+  const excludedSessions = new Set<string>();
+  const labels = new Set<string>();
+  for (const row of rows) {
+    const range = exclusionFor(context, String(row.date));
+    if (!range) {
+      kept.push(row);
+      continue;
+    }
+    excludedSessions.add(String(row.session_id ?? row.id ?? row.date));
+    labels.add(range.label);
+  }
+  return {
+    rows: kept,
+    excluded_exposures: excludedSessions.size,
+    excluded_by: [...labels].slice(0, 6),
+    pre_change_exposures,
+  };
+}
+
+// Exclusion provenance on the verdict itself, plus the one issue that names the case
+// where nothing was left: an athlete who only trained the lift on a trip has given
+// no clean exposure, which is a different statement from "never trained it".
+function exclusionFields(filtered: {
+  excluded_exposures: number;
+  excluded_by: string[];
+  pre_change_exposures: number;
+}): JsonObject {
+  return {
+    ...(filtered.excluded_exposures
+      ? { context_excluded_exposures: filtered.excluded_exposures, context_excluded_by: filtered.excluded_by }
+      : {}),
+    ...(filtered.pre_change_exposures ? { pre_change_exposures: filtered.pre_change_exposures } : {}),
+  };
+}
+
+function exclusionIssues(filtered: { rows: unknown[]; excluded_exposures: number; excluded_by: string[] }): string[] {
+  return filtered.excluded_exposures && !filtered.rows.length
+    ? [`${INCONCLUSIVE_REASON_TEXT.context_excluded_all} (${filtered.excluded_by.join(", ")})`]
+    : [];
+}
+
+function exerciseSets(
+  context: EvaluatorContext
+): ContextFiltered<ExerciseSetRow> & { issue: string | null; ids: number[] } {
+  const ids = exerciseIds(context.expectation.subject_key);
+  if (!ids.length)
+    return {
+      rows: [],
+      excluded_exposures: 0,
+      excluded_by: [],
+      pre_change_exposures: 0,
+      ids,
+      issue: "The expected exercise could not be matched to a known movement.",
+    };
   const rows = db
     .prepare(
-      `SELECT ls.id, ls.session_id, s.date, ls.weight, ls.reps, ls.duration_sec
+      `SELECT ls.id, ls.session_id, s.date, ls.weight, ls.reps, ls.duration_sec,
+              COALESCE(s.finished_at, ls.created_at) AS done_at
        FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
-      WHERE ls.exercise_id = ? AND s.date BETWEEN ? AND ?
+      WHERE ls.exercise_id IN (${ids.map(() => "?").join(", ")}) AND s.date BETWEEN ? AND ?
       ORDER BY s.date, s.id, ls.set_number LIMIT 1000`
     )
-    .all(id, context.expectation.window_start, windowEnd(context)) as unknown as ExerciseSetRow[];
-  return { rows, issue: null };
+    .all(...ids, context.expectation.window_start, windowEnd(context)) as unknown as ExerciseSetRow[];
+  return { ...withoutContextDays(context, rows), ids, issue: null };
+}
+
+// ---- what "completing the prescription" is measured against ------------------
+//
+// A completion expectation asks whether the athlete could do the work the change
+// prescribed. The plan-proposal writer stores only `{ exposures: 2 }` as its target, so
+// the old evaluator — which looked for sets/reps/weight on the TARGET alone — found no
+// requirement at all and counted every exposure as complete: any session that merely
+// touched the lift was a "pass". That verdict would have been vacuous, and only the
+// blanket context confounder kept it from ever being written.
+//
+// The prescription is never guessed. It is read, field by field, from three sources
+// in rising precedence:
+//   1. the decision's own AFTER-snapshot (brain_rollbacks, v2) — the full plan item as
+//      it stood once the change landed, which carries the fields a change left alone
+//      (a load step records `sets: null` because it did not move them);
+//   2. the decision's `action.changes[]` entry for the lift (its non-null fields);
+//   3. explicit fields on the expectation's own target (an agent-authored target).
+// No reps, no load and no time anywhere → there is nothing to complete, and the
+// verdict says so (inconclusive), rather than passing an empty bar.
+interface Prescription {
+  sets: number | null;
+  rep_low: number | null;
+  weight: number | null;
+  seconds: number | null;
+  source: string[];
+}
+
+function sameLift(name: unknown, ids: number[], subject: string | null): boolean {
+  const text = String(name ?? "").trim();
+  if (!text) return false;
+  const resolved = resolveExerciseName(text);
+  if (resolved.exercise_id != null && ids.includes(resolved.exercise_id)) return true;
+  return !!subject && normalizedExerciseKey(text) === normalizedExerciseKey(subject);
+}
+
+function liftChange(context: EvaluatorContext, ids: number[]): any | null {
+  const action = (context.decision?.action ?? {}) as any;
+  return (
+    (Array.isArray(action.changes) ? action.changes : []).find((entry: any) =>
+      sameLift(entry?.exercise, ids, context.expectation.subject_key)
+    ) ?? null
+  );
+}
+
+// The lift's plan item in the decision's before/after snapshot, on the change's own
+// day when the change names one.
+function liftSnapshotItem(context: EvaluatorContext, ids: number[], side: "before" | "after"): any | null {
+  try {
+    const rollback = context.decision?.id ? getBrainRollback(Number(context.decision.id)) : null;
+    const days =
+      rollback?.kind === "training_plan" && Array.isArray(rollback.payload?.[side]) ? rollback.payload[side] : [];
+    const dayNumber = finite(liftChange(context, ids)?.day_number);
+    for (const day of dayNumber == null ? days : days.filter((d: any) => Number(d?.day_number) === dayNumber)) {
+      const item = (Array.isArray(day?.items) ? day.items : []).find((entry: any) =>
+        sameLift(entry?.exercise, ids, context.expectation.subject_key)
+      );
+      if (item) return item;
+    }
+  } catch {
+    // A missing or unreadable snapshot is silence, never a requirement.
+  }
+  return null;
+}
+
+const PRESCRIPTION_FIELDS = ["sets", "rep_low", "rep_high", "target_weight", "target_seconds"] as const;
+
+function samePrescriptionValue(a: unknown, b: unknown): boolean {
+  const left = finite(a);
+  const right = finite(b);
+  return left == null || right == null ? left == null && right == null : left === right;
+}
+
+/**
+ * Did this decision actually MOVE the lift's prescription? `false` only when the
+ * decision's own record PROVES nothing moved — its before/after snapshot items agree on
+ * every prescription field, or its change entry's `before` matches what it wrote. A
+ * change the record cannot settle answers `null` and is judged as before.
+ *
+ * It matters because both exercise metrics are CHANGE-EFFECT claims (the follow-up
+ * note says "that change hasn't landed"; the lift ledger files the verdict against the
+ * lift's progression). A plan proposal lists every item it touched — including ones it
+ * re-wrote to the same numbers — and a verdict about one of those is a verdict about a
+ * change that never happened.
+ */
+function changeMovedLift(context: EvaluatorContext, ids: number[]): boolean | null {
+  const before = liftSnapshotItem(context, ids, "before");
+  const after = liftSnapshotItem(context, ids, "after");
+  if (before && after) return PRESCRIPTION_FIELDS.some((field) => !samePrescriptionValue(before[field], after[field]));
+  const change = liftChange(context, ids);
+  const prior = change?.before;
+  if (change && prior && typeof prior === "object") {
+    // In a change entry a null field means "left alone", so only a written value can move.
+    return PRESCRIPTION_FIELDS.some(
+      (field) => change[field] != null && !samePrescriptionValue(change[field], prior[field])
+    );
+  }
+  return null;
+}
+
+function prescriptionFor(context: EvaluatorContext, ids: number[]): Prescription {
+  const { expectation } = context;
+  const out: Prescription = { sets: null, rep_low: null, weight: null, seconds: null, source: [] };
+  const take = (
+    item: any,
+    source: string,
+    keys: { sets: string[]; reps: string[]; weight: string[]; seconds: string[] }
+  ) => {
+    if (!item || typeof item !== "object") return;
+    const pick = (names: string[]) => {
+      for (const name of names) {
+        const value = finite(item[name]);
+        if (value != null) return value;
+      }
+      return null;
+    };
+    const sets = pick(keys.sets);
+    const reps = pick(keys.reps);
+    const weight = pick(keys.weight);
+    const seconds = pick(keys.seconds);
+    if (sets == null && reps == null && weight == null && seconds == null) return;
+    if (sets != null) out.sets = sets;
+    if (reps != null) out.rep_low = reps;
+    if (weight != null) out.weight = weight;
+    if (seconds != null) out.seconds = seconds;
+    out.source.push(source);
+  };
+  const planKeys = {
+    sets: ["sets"],
+    reps: ["rep_low"],
+    weight: ["target_weight"],
+    seconds: ["target_seconds"],
+  };
+  const change = liftChange(context, ids);
+  take(liftSnapshotItem(context, ids, "after"), "decision_after_snapshot", planKeys);
+  take(change, "decision_change", planKeys);
+  // Agent-authored targets name the floor they will accept (`floor_sets`, `min_sets`)
+  // beside the written set count; the writer's own stated minimum is what it asked.
+  take(expectation.target, "expectation_target", {
+    sets: ["floor_sets", "min_sets", "sets", "target_sets"],
+    reps: ["rep_low", "reps_low", "reps", "target_reps"],
+    weight: ["weight", "target_weight", "weight_lb"],
+    seconds: ["duration_sec", "target_seconds"],
+  });
+  return out;
+}
+
+// Logged loads round-trip through unit conversion (a kg plate logged in lb, a Garmin
+// import) — 1% or half a pound, whichever is larger, absorbs that rounding and nothing
+// more: it is well under one plate step on any implement.
+function loadMet(logged: number | null, required: number): boolean {
+  if (logged == null) return false;
+  return logged >= required - Math.max(0.5, Math.abs(required) * 0.01);
+}
+
+function setMeetsPrescription(row: ExerciseSetRow, rx: Prescription): boolean {
+  const reps = finite(row.reps);
+  const seconds = finite(row.duration_sec);
+  // A 0 (or absent) load target is bodyweight work: no load criterion. A NEGATIVE
+  // target is an assist, and "at least" still reads correctly on the signed number —
+  // -25 is less assistance than -30 — with an unloaded set (null) read as no assist at
+  // all, which is harder than any assisted target.
+  const weight = finite(row.weight) ?? (rx.weight != null && rx.weight < 0 ? 0 : null);
+  if (rx.rep_low != null && rx.rep_low > 0 && (reps == null || reps < rx.rep_low)) return false;
+  if (rx.weight != null && rx.weight !== 0 && !loadMet(weight, rx.weight)) return false;
+  if (rx.seconds != null && rx.seconds > 0 && (seconds == null || seconds < rx.seconds)) return false;
+  return true;
 }
 
 function exerciseCompletionObservation(context: EvaluatorContext): MetricObservation {
@@ -275,32 +599,65 @@ function exerciseCompletionObservation(context: EvaluatorContext): MetricObserva
   const read = exerciseSets(context);
   const bySession = new Map<number, ExerciseSetRow[]>();
   for (const row of read.rows) bySession.set(row.session_id, [...(bySession.get(row.session_id) ?? []), row]);
-  const requiredSets = numberFrom(expectation.target, ["sets", "target_sets"]);
-  const requiredReps = numberFrom(expectation.target, ["reps", "rep_low", "target_reps"]);
-  const requiredWeight = numberFrom(expectation.target, ["weight", "target_weight"]);
-  const requiredSeconds = numberFrom(expectation.target, ["duration_sec", "target_seconds"]);
+  const rx = prescriptionFor(context, read.ids);
+  const hasRequirement =
+    (rx.rep_low != null && rx.rep_low > 0) ||
+    (rx.weight != null && rx.weight !== 0) ||
+    (rx.seconds != null && rx.seconds > 0);
+  // A session completes the prescription when it logged at least the prescribed number
+  // of sets that EACH met the reps/load/time — one heavy single beside two light sets
+  // is not three working sets at the target. RIR is never required: its absence is not
+  // weakness (progression-voice.ts).
+  const requiredSets = Math.max(1, Math.round(rx.sets ?? 1));
   let completed = 0;
   for (const rows of bySession.values()) {
-    const setCountOk = requiredSets == null || rows.length >= requiredSets;
-    const repsOk =
-      requiredReps == null || rows.some((row) => finite(row.reps) != null && Number(row.reps) >= requiredReps);
-    const weightOk =
-      requiredWeight == null || rows.some((row) => finite(row.weight) != null && Number(row.weight) >= requiredWeight);
-    const secondsOk =
-      requiredSeconds == null ||
-      rows.some((row) => finite(row.duration_sec) != null && Number(row.duration_sec) >= requiredSeconds);
-    if (setCountOk && repsOk && weightOk && secondsOk) completed++;
+    if (rows.filter((row) => setMeetsPrescription(row, rx)).length >= requiredSets) completed++;
   }
   const exposures = bySession.size;
   const completionRate = exposures ? rounded(completed / exposures) : 0;
+  // `{ exposures: N }` (or `sessions: N`) is the writer's own claim: the new
+  // prescription is met in at least N sessions of the window. Read literally — N
+  // completions, not "every exposure" — so one off day among four does not turn a
+  // change that is working into a miss, and two exposures that both fell short do.
+  // A target that names a rate instead keeps the generic completion-rate reading.
+  const requiredCompletions = finite(expectation.target?.exposures) ?? finite(expectation.target?.sessions);
+  const comparison: MetricObservation["comparison"] =
+    hasRequirement && requiredCompletions != null && requiredCompletions > 0
+      ? { aligned: completed >= requiredCompletions }
+      : undefined;
   return {
-    actual: { value: completionRate, completion_rate: completionRate, exposures, completed_exposures: completed },
+    actual: {
+      value: completionRate,
+      completion_rate: completionRate,
+      exposures,
+      completed_exposures: completed,
+      required_completions: requiredCompletions ?? null,
+      prescription: {
+        sets: rx.sets,
+        rep_low: rx.rep_low,
+        target_weight: rx.weight,
+        target_seconds: rx.seconds,
+        source: rx.source.join("+") || "none",
+      },
+      ...exclusionFields(read),
+    },
     evidence_keys: stableEvidence("logged_sets", read.rows, expectation.window_start, windowEnd(context)),
-    counts: { exposures, sessions: exposures, data_points: read.rows.length },
+    counts: {
+      exposures,
+      sessions: exposures,
+      data_points: read.rows.length,
+      context_excluded_exposures: read.excluded_exposures,
+    },
     issues: [
       ...(read.issue ? [read.issue] : []),
-      ...(exposures ? [] : ["The affected movement was not exposed during the evaluation window."]),
+      ...(exposures || read.excluded_exposures
+        ? []
+        : ["The affected movement was not exposed during the evaluation window."]),
+      ...exclusionIssues(read),
+      ...(read.issue || hasRequirement ? [] : [INCONCLUSIVE_REASON_TEXT.no_prescription]),
+      ...(read.ids.length && changeMovedLift(context, read.ids) === false ? [INCONCLUSIVE_REASON_TEXT.no_change] : []),
     ],
+    ...(comparison ? { comparison } : {}),
   };
 }
 
@@ -336,6 +693,59 @@ function est1rmVerification(context: EvaluatorContext): Est1rmVerification {
     }
   }
   return { verified: false, verified_on: null, basis: "none" };
+}
+
+// AGENT-AUTHORED est-1RM targets. The lift-progression writer stores `{ value: x }`,
+// which compareExpectation reads directly; a case conference writes its floor in its
+// own words — `est_1rm_lb`, `min_est_1rm_lb`, `est_1rm_min` — which the generic
+// comparison could never find, so every such claim fell to "could not be compared".
+// This is spelling tolerance over a CLOSED list, never inference:
+//   • a floor alias is "the window's best estimate should be at least this";
+//   • a bare `est_1rm_lb` is a floor only under at_least/increase — under `maintain`
+//     it could mean "stay near", which has no tolerance to read, so it stays unjudged;
+//   • any OTHER criterion the target names (a trend, a status, "no grinding reps") is
+//     one this evaluator cannot check, so it can still FAIL the target (a missed floor
+//     fails it whatever else was asked) but can never PASS it.
+const EST1RM_STANDARD_KEYS = ["value", "target", "target_value", "min", "minimum", "min_value", "max", "maximum"];
+const EST1RM_FLOOR_ALIASES = ["est_1rm_lb_at_least", "min_est_1rm_lb", "est_1rm_lb_min", "est_1rm_min"];
+// Prose and provenance fields an agent writes beside its number. They describe the
+// claim; they are not part of it.
+const EST1RM_ANNOTATION_KEYS = new Set([
+  "note",
+  "meaning",
+  "basis",
+  "floor_basis",
+  "step_earned_if",
+  "earns_next_load_lb",
+  "earns_next_step",
+  "tolerance_lb",
+]);
+
+function est1rmAliasComparison(expectation: BrainExpectation, best: number | null): MetricObservation["comparison"] {
+  const target = expectation.target ?? {};
+  if (EST1RM_STANDARD_KEYS.some((key) => finite(target[key]) != null)) return undefined;
+  const floorKey =
+    EST1RM_FLOOR_ALIASES.find((key) => finite(target[key]) != null) ??
+    (["at_least", "increase"].includes(expectation.direction) && finite(target.est_1rm_lb) != null
+      ? "est_1rm_lb"
+      : null);
+  if (!floorKey || best == null) return undefined;
+  const floor = Number(finite(target[floorKey]));
+  const unchecked = Object.keys(target).filter(
+    (key) =>
+      key !== floorKey &&
+      !EST1RM_FLOOR_ALIASES.includes(key) &&
+      key !== "est_1rm_lb" &&
+      !EST1RM_ANNOTATION_KEYS.has(key)
+  );
+  if (best < floor) return { aligned: false };
+  if (unchecked.length) {
+    return {
+      aligned: null,
+      reason: `${INCONCLUSIVE_REASON_TEXT.unchecked_criteria} (${unchecked.slice(0, 4).join(", ")})`,
+    };
+  }
+  return { aligned: true };
 }
 
 function exerciseEst1rmObservation(context: EvaluatorContext): MetricObservation {
@@ -383,6 +793,7 @@ function exerciseEst1rmObservation(context: EvaluatorContext): MetricObservation
   // ceiling, and the thing that makes a stored evaluation still readable years
   // later as "this was measured" rather than "this was extrapolated".
   const verification = est1rmVerification(context);
+  const comparison = est1rmAliasComparison(expectation, best);
 
   return {
     actual:
@@ -401,6 +812,7 @@ function exerciseEst1rmObservation(context: EvaluatorContext): MetricObservation
             estimate_verified: verification.verified,
             estimate_verified_on: verification.verified_on,
             estimate_basis: verification.basis,
+            ...exclusionFields(read),
           },
     evidence_keys: [
       ...stableEvidence("logged_sets", read.rows, expectation.window_start, windowEnd(context)),
@@ -414,45 +826,58 @@ function exerciseEst1rmObservation(context: EvaluatorContext): MetricObservation
       exposures: points.length,
       data_points: points.length,
       verified_exposures: verification.verified ? 1 : 0,
+      context_excluded_exposures: read.excluded_exposures,
     },
     issues: [
       ...(read.issue ? [read.issue] : []),
       ...(points.length < 2 ? ["At least two comparable loaded exercise exposures are needed."] : []),
+      ...exclusionIssues(read),
+      ...(read.ids.length && changeMovedLift(context, read.ids) === false ? [INCONCLUSIVE_REASON_TEXT.no_change] : []),
     ],
+    ...(comparison ? { comparison } : {}),
   };
 }
 
 interface SessionFeedbackRow {
   id: number;
   date: string;
+  done_at: string | null;
   performance: number | null;
   soreness: number | null;
   joint_pain: string | null;
 }
 
-function sessionFeedbackRows(context: EvaluatorContext): SessionFeedbackRow[] {
-  const id = exerciseId(context.expectation.subject_key);
-  if (id == null) {
-    return db
+// Sessions a session-level safety floor reads, with the days a material context event
+// covered set aside (see ContextExclusion) — a trip's hotel-gym session or a session
+// inside an injury says nothing clean about whether the CHANGE moved how training
+// felt, but every session outside it still does.
+function sessionFeedbackRows(context: EvaluatorContext): ContextFiltered<SessionFeedbackRow> {
+  const ids = exerciseIds(context.expectation.subject_key);
+  if (!ids.length) {
+    const rows = db
       .prepare(
-        `SELECT s.id, s.date, s.performance, s.soreness, s.joint_pain
+        `SELECT s.id, s.date, s.performance, s.soreness, s.joint_pain, COALESCE(s.finished_at, s.created_at) AS done_at
          FROM sessions s WHERE s.date BETWEEN ? AND ?
         ORDER BY s.date, s.id LIMIT 500`
       )
       .all(context.expectation.window_start, windowEnd(context)) as unknown as SessionFeedbackRow[];
+    return withoutContextDays(context, rows);
   }
-  return db
+  const rows = db
     .prepare(
-      `SELECT s.id, s.date, s.performance, s.soreness, s.joint_pain
+      `SELECT s.id, s.date, s.performance, s.soreness, s.joint_pain, COALESCE(s.finished_at, s.created_at) AS done_at
        FROM sessions s WHERE s.date BETWEEN ? AND ?
-        AND EXISTS (SELECT 1 FROM logged_sets ls WHERE ls.session_id = s.id AND ls.exercise_id = ?)
+        AND EXISTS (SELECT 1 FROM logged_sets ls WHERE ls.session_id = s.id
+                     AND ls.exercise_id IN (${ids.map(() => "?").join(", ")}))
       ORDER BY s.date, s.id LIMIT 500`
     )
-    .all(context.expectation.window_start, windowEnd(context), id) as unknown as SessionFeedbackRow[];
+    .all(context.expectation.window_start, windowEnd(context), ...ids) as unknown as SessionFeedbackRow[];
+  return withoutContextDays(context, rows);
 }
 
 function performanceObservation(context: EvaluatorContext): MetricObservation {
-  const rows = sessionFeedbackRows(context).filter((row) => finite(row.performance) != null);
+  const read = sessionFeedbackRows(context);
+  const rows = read.rows.filter((row) => finite(row.performance) != null);
   const ratings = rows.map((row) => Number(row.performance));
   const average = ratings.length ? rounded(ratings.reduce((sum, value) => sum + value, 0) / ratings.length) : null;
   const half = Math.max(1, Math.floor(ratings.length / 2));
@@ -467,35 +892,155 @@ function performanceObservation(context: EvaluatorContext): MetricObservation {
       : null;
   return {
     actual:
-      average == null ? null : { value: average, average_rating: average, delta: delta ?? 0, exposures: rows.length },
+      average == null
+        ? null
+        : {
+            value: average,
+            average_rating: average,
+            delta: delta ?? 0,
+            exposures: rows.length,
+            ...exclusionFields(read),
+          },
     evidence_keys: stableEvidence("sessions", rows, context.expectation.window_start, windowEnd(context)),
-    counts: { exposures: rows.length, sessions: rows.length, data_points: rows.length },
-    issues: rows.length ? [] : ["No session performance feedback was recorded in the evaluation window."],
+    counts: {
+      exposures: rows.length,
+      sessions: rows.length,
+      data_points: rows.length,
+      context_excluded_exposures: read.excluded_exposures,
+    },
+    issues: [
+      ...(rows.length ? [] : ["No session performance feedback was recorded in the evaluation window."]),
+      ...exclusionIssues(read),
+    ],
   };
 }
 
+// What a pain guard's target may say, as a COUNT of stated pain occasions. The guard
+// writer stores `{ max: N }`; an agent-authored guard often says something a report
+// count cannot measure — a severity ("max_level: mild"), a soreness scale ("unit:
+// scale_1_to_5"), a condition ("flank_pain_on_squat_session: none"). The generic
+// comparison used to read whatever number it found there as a report count, so a
+// 1-5 soreness ceiling of 2 passed a window with a real pain report in it, and "no
+// progression beyond mild" failed on a report nobody had graded. Any key outside this
+// closed vocabulary makes the target unjudgeable by this evaluator — both ways.
+const PAIN_COUNT_KEYS = ["max", "maximum", "max_value"];
+const PAIN_COUNT_ALIASES = [
+  "joint_pain_episodes",
+  "pain_days",
+  "tolerable_pain_days",
+  "pain_sessions",
+  "pain_reports",
+  "max_pain_reports",
+  "occurrences",
+  "max_occurrences",
+];
+const PAIN_ANNOTATION_KEYS = new Set(["meaning", "note", "basis"]);
+const TARGET_UNCOMPARABLE = "The stored target could not be compared deterministically without guessing.";
+
+function painGuardThreshold(expectation: BrainExpectation): number | null {
+  if (!["avoid", "at_most"].includes(expectation.direction)) return null;
+  const target = expectation.target ?? {};
+  const countKeys = [
+    ...PAIN_COUNT_KEYS,
+    ...(expectation.direction === "avoid" ? ["value", "target"] : []),
+    ...PAIN_COUNT_ALIASES,
+  ];
+  if (Object.keys(target).some((key) => !countKeys.includes(key) && !PAIN_ANNOTATION_KEYS.has(key))) return null;
+  for (const key of countKeys) {
+    const value = finite(target[key]);
+    if (value != null) return value;
+  }
+  // `avoid` with no number is "none at all" — compareExpectation's own default.
+  return expectation.direction === "avoid" ? 0 : null;
+}
+
+// "Joint pain does not become more frequent." The OUTCOME is a stated pain — read
+// from where pain is reported now (statedPainOccasions: the verbatim reports plus the
+// legacy session box), never from the retired box alone, which made every window read
+// as pain-free. Three deliberate rules:
+//   • A context event never sets a pain report aside. An injury overlapping the window
+//     is not a confounder of a pain guard — it IS the outcome — and the old window-level
+//     rule silenced exactly the windows where pain happened, so the guard could only
+//     ever pass. Context still sets aside SESSIONS (the exposure floor), as for every
+//     exposure-scoped metric.
+//   • A report made before the change landed is not about it.
+//   • A pain the evaluator cannot place against the subject (attributePain → unknown)
+//     can still FAIL the claim when the attributable count is already over the bar, but
+//     can never let it PASS: "no pain here" is not readable beside a pain we can't place.
 function symptomObservation(context: EvaluatorContext): MetricObservation {
-  const allRows = sessionFeedbackRows(context);
+  const { expectation } = context;
+  const read = sessionFeedbackRows(context);
+  const allRows = read.rows;
+  const ids = exerciseIds(expectation.subject_key);
+  const exercise = ids.length
+    ? ((db.prepare(`SELECT name, muscle_group FROM exercises WHERE id = ?`).get(ids[0]) as
+        | { name: string; muscle_group: string | null }
+        | undefined) ?? null)
+    : null;
+  const subject = {
+    exercise: exercise ? { name: String(exercise.name), muscle_group: exercise.muscle_group ?? null } : null,
+    area: exercise ? null : (expectation.subject_key ?? "").trim() || null,
+  };
+  const landed = stampMs(context.decision?.applied_at) ?? stampMs(context.decision?.created_at);
+  const occasions = statedPainOccasions(expectation.window_start, windowEnd(context)).filter((occasion) => {
+    const said = stampMs(occasion.reported_at);
+    return landed == null || said == null || said > landed;
+  });
+  const attributed = occasions.filter((occasion) => attributePain(occasion, subject) === "attributed");
+  const unplaced = occasions.filter((occasion) => attributePain(occasion, subject) === "unknown");
+  const painReports = attributed.length;
   const rows = allRows.filter((row) => row.soreness != null || !!row.joint_pain);
-  const painReports = allRows.filter((row) => !!String(row.joint_pain ?? "").trim()).length;
   const soreness = rows.map((row) => finite(row.soreness)).filter((value): value is number => value != null);
   const average = soreness.length ? rounded(soreness.reduce((sum, value) => sum + value, 0) / soreness.length) : null;
+  const sessionIds = new Set(rows.map((row) => Number(row.id)));
+  // A stated pain is feedback in its own right; one not already on a counted session adds an entry.
+  const feedbackEntries =
+    rows.length + attributed.filter((o) => o.session_id == null || !sessionIds.has(o.session_id)).length;
+  const threshold = painGuardThreshold(expectation);
+  const comparison: MetricObservation["comparison"] =
+    threshold == null
+      ? { aligned: null, reason: TARGET_UNCOMPARABLE }
+      : painReports > threshold
+        ? { aligned: false }
+        : unplaced.length
+          ? {
+              aligned: null,
+              reason: `${INCONCLUSIVE_REASON_TEXT.unplaced_pain} (${unplaced
+                .map((o) => o.date)
+                .slice(0, 4)
+                .join(", ")})`,
+            }
+          : { aligned: true };
   return {
     actual: {
       value: painReports,
       occurrences: painReports,
       joint_pain_reports: painReports,
+      unplaced_pain_reports: unplaced.length,
       average_soreness: average ?? 0,
       exposures: allRows.length,
+      ...exclusionFields(read),
     },
-    evidence_keys: stableEvidence("sessions", allRows, context.expectation.window_start, windowEnd(context)),
+    evidence_keys: [
+      ...stableEvidence("sessions", allRows, expectation.window_start, windowEnd(context)),
+      ...(attributed.length
+        ? [`symptom_reports:${expectation.window_start}..${windowEnd(context)}:pain_occasions=${attributed.length}`]
+        : []),
+    ],
     counts: {
       exposures: allRows.length,
       sessions: allRows.length,
-      feedback_entries: rows.length,
-      data_points: rows.length,
+      feedback_entries: feedbackEntries,
+      data_points: feedbackEntries,
+      context_excluded_exposures: read.excluded_exposures,
     },
-    issues: allRows.length ? [] : ["The affected movement or session was not exposed during the evaluation window."],
+    issues: [
+      ...(allRows.length || read.excluded_exposures
+        ? []
+        : ["The affected movement or session was not exposed during the evaluation window."]),
+      ...exclusionIssues(read),
+    ],
+    ...(comparison ? { comparison } : {}),
   };
 }
 
@@ -575,12 +1120,20 @@ function dayReadAdherenceObservation(context: EvaluatorContext): MetricObservati
       issues: ["The day had not closed yet, so what was logged on it is still incomplete."],
     };
   }
-  const truth = dayTrainingTruth(readDate);
+  // The morning read's own signals ride in: they say whether that morning's run engine
+  // had already eased a stated quality session (the own-dose read, dayTrainingTruth).
+  const morningSignals = (context.decision?.context as Record<string, unknown> | null | undefined)?.signals as unknown;
+  const truth = dayTrainingTruth(readDate, {
+    morningSignals:
+      morningSignals && typeof morningSignals === "object" ? (morningSignals as Record<string, unknown>) : null,
+  });
   const outcome = readAdherenceOutcome(readKind, truth);
-  // The SAME harm test the softening ladders read, so the verdict and the ladders
-  // cannot disagree about which quiet mornings were trained through harmlessly.
-  const harm = dayReadCallNeedsHarm(readKind, outcome) ? harmEvidenceOnDay(readDate) : null;
-  const call = dayReadCall(readKind, outcome, harm);
+  // The SAME harm verdict the softening ladders read, so the verdict and the ladders
+  // cannot disagree about which quiet mornings were trained through harmlessly — and
+  // an UNMEASURED day is `unknown` there and `unclear` here, never "no harm".
+  const harmVerdict = dayReadCallNeedsHarm(readKind, outcome) ? harmVerdictOnDay(readDate) : null;
+  const harm = harmVerdict?.evidence ?? null;
+  const call = dayReadCall(readKind, outcome, harm, harmVerdict?.status === "unknown");
   const readOff = dayReadCallWasOff(call) ? 1 : 0;
   const actual: JsonObject = {
     // `value` serves the `at_least` train comparison; `occurrences` serves the
@@ -601,6 +1154,16 @@ function dayReadAdherenceObservation(context: EvaluatorContext): MetricObservati
     // day went past; null everywhere else.
     harm_kind: harm?.kind ?? null,
     harm_detail: harm?.detail ?? null,
+    // harm / clean / unknown, and which morning answered (24h / 48h / same_day) — null
+    // when the harm test was not asked.
+    harm_status: harmVerdict?.status ?? null,
+    harm_window: harmVerdict?.window ?? null,
+    // The stated week's own dose that kept a loading day inside an easy read (ownDoseOn).
+    own_dose: truth.own_dose ? truth.own_dose.kinds : null,
+    // Which era of this metric wrote the verdict (read-adherence.ts) — legacy v1 rows
+    // judged behaviour and carry neither field.
+    evaluator_era: DAY_READ_JUDGED_ERA,
+    day_read_evaluator: DAY_READ_ADHERENCE_EVALUATOR_VERSION,
     trained: truth.trained,
     load: truth.load,
     logged_sets: truth.sets,
@@ -624,7 +1187,9 @@ function dayReadAdherenceObservation(context: EvaluatorContext): MetricObservati
     issues:
       outcome === "unclear"
         ? ["Work was logged that could not be graded, so whether the day stayed easy can't be read."]
-        : [],
+        : call === "unclear"
+          ? ["Nothing after the day showed how the body took it, so whether the read was too cautious can't be read."]
+          : [],
     ...(call !== "unclear" ? { verdict_explanation: DAY_READ_CALL_EXPLANATION[call] } : {}),
   };
 }
@@ -787,7 +1352,7 @@ function recoveryRows(start: string, end: string): Array<Record<string, unknown>
     .all(start, end) as Array<Record<string, unknown>>;
   const garmin = db
     .prepare(
-      `SELECT id, date, sleep_min, resting_hr, hrv_ms, synced_at FROM garmin_daily_metrics
+      `SELECT id, date, sleep_min, resting_hr, hrv_ms, updated_at FROM garmin_daily_metrics
       WHERE date BETWEEN ? AND ? ORDER BY date, id LIMIT 500`
     )
     .all(start, end) as Array<Record<string, unknown>>;
@@ -970,7 +1535,13 @@ export const EVALUATOR_REGISTRY: Readonly<Record<BrainMetricKey, MetricEvaluator
   session_performance_feedback: entry("session_performance_feedback", "session_feedback", performanceObservation),
   joint_pain_or_soreness: entry("joint_pain_or_soreness", "symptom_load", symptomObservation),
   plan_day_adherence: entry("plan_day_adherence", "plan_adherence", planAdherenceObservation),
-  day_read_adherence: entry("day_read_adherence", "day_read_adherence", dayReadAdherenceObservation),
+  // The judge-the-read era carries its own version on the evaluation row
+  // (read-adherence.ts DAY_READ_ADHERENCE_EVALUATOR_VERSION), so a v2 verdict is told
+  // from a legacy behavioural one by the column alone.
+  day_read_adherence: Object.freeze({
+    ...entry("day_read_adherence", "day_read_adherence", dayReadAdherenceObservation),
+    version: `${MATURITY_EVALUATOR_VERSION}/day_read_adherence@${DAY_READ_ADHERENCE_EVALUATOR_VERSION}`,
+  }),
   run_volume_adherence: entry("run_volume_adherence", "run_volume_adherence", runVolumeAdherenceObservation),
   vo2max_trend: entry("vo2max_trend", "vo2max_trend", vo2maxTrendObservation),
   recovery_hrv_delta: entry("recovery_hrv_delta", "recovery_delta", recoveryObservation),
@@ -1118,9 +1689,13 @@ export function evaluateMetricObservation(
   let verdict: BrainEvaluationVerdict = "inconclusive";
   let explanation = "The available window does not support a clean conclusion yet.";
   if (!allConfounders.length && observation.actual) {
-    const aligned = compareExpectation(expectation, observation.actual);
+    const aligned = observation.comparison
+      ? observation.comparison.aligned
+      : compareExpectation(expectation, observation.actual);
     if (aligned == null) {
-      allConfounders.push("The stored target could not be compared deterministically without guessing.");
+      allConfounders.push(
+        observation.comparison?.reason ?? "The stored target could not be compared deterministically without guessing."
+      );
     } else if (observation.evidence_keys.length === 0) {
       // The evaluation contract refuses a decisive verdict without evidence, so
       // an evidence-free comparison must stay inconclusive rather than throw at insert.

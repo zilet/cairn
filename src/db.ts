@@ -1010,7 +1010,8 @@ CREATE TABLE IF NOT EXISTS settings (
   chat_routing_mode TEXT DEFAULT 'adaptive',  -- adaptive | single (legacy one-profile chat path)
   chat_profile_bindings TEXT DEFAULT '',      -- JSON provider -> capture|coach|deep -> optional {model,reasoning}
   agent_profile_bindings TEXT DEFAULT '',     -- JSON provider -> task -> optional {model,reasoning}; overrides TASK_EXECUTION_PROFILES (repo/settings.ts)
-  model_class_bindings TEXT DEFAULT '',       -- JSON provider -> fast|deep -> model; empty = every CLI runs its own default model (repo/settings.ts)
+  model_class_bindings TEXT DEFAULT '',       -- JSON provider -> fast|deep|coach -> model; empty = every CLI runs its own default model (repo/settings.ts)
+  agent_class_order TEXT DEFAULT '',          -- JSON fast|deep -> [agent…] tried first for that class's ops; empty = the strategy order (repo/settings.ts)
   update_check_enabled INTEGER DEFAULT 1,     -- 1 = quiet daily check for a newer Cairn release (GitHub Releases API); pull-never-push, surfaced in Settings → Data
   lead_mode TEXT DEFAULT 'lead',               -- lead | announce_first | review_everything — one calm autonomy control
   training_drive TEXT DEFAULT 'steady',        -- steady | push — the athlete's standing posture toward accumulated-load rest

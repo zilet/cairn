@@ -164,7 +164,7 @@ test("provider bindings normalize shape and resolve lane defaults without provid
   assert.deepEqual(resolveChatProfile("capture", "claude", bindings), { model: "haiku", reasoning: "low" });
   assert.deepEqual(resolveChatProfile("deep", "claude", bindings), { model: "opus", reasoning: "high" });
   assert.deepEqual(resolveChatProfile("capture", "unbound", bindings), { reasoning: "low" });
-  assert.deepEqual(resolveChatProfile("coach", "unbound", bindings), { reasoning: "low" });
+  assert.deepEqual(resolveChatProfile("coach", "unbound", bindings), { reasoning: "medium" });
   assert.deepEqual(resolveChatProfile("deep", "unbound", bindings), { reasoning: "high" });
 });
 

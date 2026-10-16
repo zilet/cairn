@@ -151,6 +151,9 @@ export interface AgentDef {
   // schema, and the run degrades to the prose contract + extractJson.
   structured_output?: AgentStructuredOutput | null;
   reasoning_flag?: string[] | null; // e.g. ["--effort","{reasoning}"] at {reasoning_args}
+  // This CLI also names models WITH their effort ("gemini-4-argon-low") and refuses such a
+  // name alongside its effort flag, so a suffixed model runs without one (agy).
+  model_effort_suffix?: boolean;
   // Optional headless token-streaming. When present, the chat path can run the CLI
   // in its NDJSON streaming mode (separate args) and render the reply live. `format`
   // selects the per-CLI event adapter (see streamDelta). Absent → one-shot only.
@@ -1281,13 +1284,21 @@ function firstTokenCount(obj: any, keys: string[]): number | null {
   return null;
 }
 
+function firstModelUsageKey(modelUsage: unknown): string | undefined {
+  if (!modelUsage || typeof modelUsage !== "object" || Array.isArray(modelUsage)) return undefined;
+  return Object.keys(modelUsage as object)[0];
+}
+
 function usageEnvelope(obj: any): { usage: any; model: unknown } | null {
   if (!obj || typeof obj !== "object" || Array.isArray(obj)) return null;
   // Only provider/CLI protocol envelopes are telemetry. A coaching result is
   // arbitrary business JSON and root fields such as model/input_tokens may be
   // user-authored domain data, even when they happen to look provider-shaped.
   if (obj.type === "result" && typeof obj.subtype === "string" && obj.usage && typeof obj.usage === "object")
-    return { usage: obj.usage, model: obj.model ?? obj.usage.model };
+    return { usage: obj.usage, model: obj.model ?? obj.usage.model ?? firstModelUsageKey(obj.modelUsage) };
+  // claude stream-json opens with {type:"system",subtype:"init",model}: the model it ACTUALLY ran.
+  if (obj.type === "system" && obj.subtype === "init" && typeof obj.model === "string")
+    return { usage: {}, model: obj.model };
   if (obj.type === "message_start" && obj.message && typeof obj.message === "object")
     return { usage: obj.message.usage, model: obj.message.model };
   if (obj.type === "message_delta" && obj.usage && typeof obj.usage === "object")
@@ -1528,7 +1539,11 @@ export function resolveAgentExecutionProfile(
     }
     profile.effective.model = model;
   }
-  if (reasoning) {
+  if (reasoning && model && modelNameCarriesEffort(def, model)) {
+    // agy: "--model gemini-4-argon-low conflicts with --effort". The name already says the
+    // effort, so the run passes the model alone rather than failing at spawn.
+    profile.adjustments.push(`reasoning ${reasoning} dropped: model ${model} names its own effort`);
+  } else if (reasoning) {
     if (!Array.isArray(def.reasoning_flag) || !capabilities.reasoning.length) {
       throw new Error("Agent does not support a per-run reasoning profile");
     }
@@ -1540,6 +1555,14 @@ export function resolveAgentExecutionProfile(
     }
   }
   return profile;
+}
+
+const EFFORT_SUFFIXED_MODEL = /-(?:low|medium|high)$/i;
+
+/** A model name with the effort baked in, on a CLI that refuses it beside its effort flag. */
+export function modelNameCarriesEffort(def: AgentDef, model: string): boolean {
+  const cli = path.basename(String(def.command ?? ""));
+  return (def.model_effort_suffix === true || cli === "agy") && EFFORT_SUFFIXED_MODEL.test(model.trim());
 }
 
 /**
@@ -1614,7 +1637,7 @@ export function repairReasoningStep(def: AgentDef | undefined, current: Reasonin
 // Fold a caller-supplied profile resolver into this run's opts. An explicit
 // model/reasoning always wins per field; a throwing or absent resolver is simply
 // no profile (a policy lookup must never break a coaching run).
-function withResolvedProfile(
+export function withResolvedProfile(
   name: string,
   opts: Pick<RunOpts, "model" | "reasoning" | "profile">
 ): { model?: string; reasoning?: ReasoningLevel } {
@@ -2087,6 +2110,9 @@ export interface AgentRunRecord {
   // contract repair runs one step up, see repairReasoningStep).
   requested_reasoning?: string | null;
   effective_reasoning?: string | null;
+  // The --model the spawn asked for (null = the CLI ran its own default model). `model`
+  // above is what the CLI REPORTED it ran; comparing the two audits a binding.
+  requested_model?: string | null;
 }
 type AgentRunSink = (r: AgentRunRecord) => void;
 let agentRunSink: AgentRunSink | null = null;
@@ -2280,6 +2306,7 @@ export async function runAgentWithFallback(
           model: result.usage?.model ?? null,
           input_tokens: result.usage?.input_tokens ?? null,
           output_tokens: result.usage?.output_tokens ?? null,
+          requested_model: first.model ?? null,
           requested_reasoning: first.reasoning ?? null,
           effective_reasoning: usedReasoning,
         });
@@ -2318,6 +2345,7 @@ export async function runAgentWithFallback(
         output_tokens: result.usage?.output_tokens ?? null,
         reject_reason: errorClass === "invalid_contract" || errorClass === "invalid_json" ? rejectReason : null,
         failure_tail: result.failure_tail ?? null,
+        requested_model: first.model ?? null,
         requested_reasoning: first.reasoning ?? null,
         effective_reasoning: usedReasoning,
       });
@@ -2363,6 +2391,7 @@ export async function runAgentWithFallback(
         status: errorClass === "process_error" ? "error" : errorClass,
         error_class: errorClass,
         error_message: e?.message,
+        requested_model: first.model ?? null,
         requested_reasoning: first.reasoning ?? null,
         effective_reasoning: usedReasoning,
       });

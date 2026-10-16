@@ -13,7 +13,12 @@
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo, resetTables, localDaysAgo } from "./_seed.js";
-import { harmEvidenceOnDay, watchWakeReadiness, withMorningReadiness } from "../dist/repo/brain/read-adherence.js";
+import {
+  harmEvidenceOnDay,
+  harmVerdictOnDay,
+  watchWakeReadiness,
+  withMorningReadiness,
+} from "../dist/repo/brain/read-adherence.js";
 import { nightPastBand, overnightBrakes, personalBand } from "../dist/repo/overnight-band.js";
 import { SWC_SD_FRACTION } from "../dist/repo/recovery-science.js";
 import { SUPPORTIVE_READINESS } from "../dist/repo/readiness-bands.js";
@@ -383,4 +388,40 @@ test("a no-sleep wake-up score of 77 still vouches for a hard day; a restated 17
   bumpTrainingDataVersion();
   const harm = harmEvidenceOnDay(day);
   assert.equal(harm?.kind, "hard_cardio", "absent never vouches, so the hard day stands on its own");
+});
+
+// ── the verdict: 24 AND 48 hours, and an unmeasured morning is unknown (2026-10-16) ──
+
+test("a meaningful miss on the SECOND morning is harm when the morning between went unmeasured", () => {
+  const day = localDaysAgo(5);
+  const second = localDaysAgo(3);
+  liftedOn(day);
+  ownNights(day, 20);
+  const band = bandFor(second);
+  repo.upsertGarminDailyMetric({ date: second, hrv_ms: Math.round((band.line - band.width) * 10) / 10 });
+  assert.equal(harmEvidenceOnDay(day), null, "the next-morning arm alone cannot see it");
+  const verdict = harmVerdictOnDay(day);
+  assert.equal(verdict.status, "harm");
+  assert.equal(verdict.window, "48h");
+});
+
+test("a hair-past second morning is a caveat there too — never harm, and it still speaks clean", () => {
+  const day = localDaysAgo(5);
+  const second = localDaysAgo(3);
+  liftedOn(day);
+  ownNights(day, 20);
+  const band = bandFor(second);
+  repo.upsertGarminDailyMetric({ date: second, hrv_ms: Math.round((band.line - 0.2) * 10) / 10 });
+  const verdict = harmVerdictOnDay(day);
+  assert.equal(verdict.status, "clean", JSON.stringify(verdict));
+});
+
+test("with a wearing habit and nothing after the day, the verdict is unknown — never harm, never clean", () => {
+  const day = localDaysAgo(5);
+  liftedOn(day);
+  ownNights(day, 20);
+  const verdict = harmVerdictOnDay(day);
+  assert.equal(verdict.status, "unknown");
+  assert.equal(verdict.evidence, null);
+  assert.equal(harmEvidenceOnDay(day), null);
 });

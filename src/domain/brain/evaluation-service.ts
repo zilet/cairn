@@ -11,7 +11,9 @@ import {
   MATURITY_EVALUATOR_VERSION,
   evaluateMetricObservation,
   observeExpectation,
+  type ContextExclusion,
 } from "../../brain/evaluators.js";
+import { INCONCLUSIVE_REASON_TEXT } from "../../brain/inconclusive-reasons.js";
 import { isoDate } from "../../brain/contract-utils.js";
 import { getBrainDecision, getBrainExpectation, setBrainExpectationStatus } from "../../repo/brain-decisions.js";
 import {
@@ -144,6 +146,8 @@ export interface EvaluationRunSummary {
   skipped_unchanged: number;
   skipped_not_ready: number;
   errors: number;
+  /** Expectations whose evaluator threw this pass, and why — never a silent count. */
+  failures: Array<{ expectation_id: number; error: string }>;
   evaluations: BrainEvaluation[];
 }
 
@@ -216,7 +220,13 @@ function overlappingDecisionConfounders(expectation: BrainExpectation): string[]
   return rows.map((row) => `Decision ${row.decision_id} also targeted this outcome during the evaluation window.`);
 }
 
-function contextEventConfounders(expectation: BrainExpectation): string[] {
+interface MaterialContextEvent {
+  label: string;
+  start: string;
+  end: string;
+}
+
+function materialContextEvents(expectation: BrainExpectation): MaterialContextEvent[] {
   if (expectation.confounder_policy === "none") return [];
   const rows = db
     .prepare(
@@ -255,12 +265,61 @@ function contextEventConfounders(expectation: BrainExpectation): string[] {
   return material.map((row) => {
     const kind = String(row.kind ?? "");
     const label =
-      kind === "tag" && isContextTagKey(row.title) ? contextTagLabel(String(row.title)) : String(row.title ?? row.kind ?? "context event").trim();
-    return `Context event '${label.slice(0, 100)}' overlapped the evaluation window.`;
+      kind === "tag" && isContextTagKey(row.title)
+        ? contextTagLabel(String(row.title))
+        : String(row.title ?? row.kind ?? "context event").trim();
+    // An event with no start date has been running since before anyone wrote it down,
+    // so it covers the window from its first day.
+    return {
+      label: label.slice(0, 100),
+      start: isoDate(row.start_date) ?? expectation.window_start,
+      end: contextEventEffectiveEnd(row) ?? expectation.window_end,
+    };
   });
 }
 
+function contextEventConfounders(expectation: BrainExpectation): string[] {
+  return materialContextEvents(expectation).map(
+    (event) => `Context event '${event.label}' overlapped the evaluation window.`
+  );
+}
+
+// METRICS WHOSE EVIDENCE IS A SET OF DATED EXPOSURES, so a context event confounds
+// the EXPOSURES it covered — not the whole window.
+//
+// The window-level rule is right for a trend: a trip through the middle of a weight
+// window bends the line every point sits on. It is wrong for a lift. A live audit found
+// every matured exercise expectation of a quarter inconclusive, every one of them
+// silenced by an overlapping event — a four-day camping weekend, a one-day work-crunch
+// tag, a mild flank niggle — while sessions before and after the event were perfectly
+// clean evidence of whether the change landed. The brain kept changing training with
+// no evidence it worked.
+//
+// So for these metrics an exposure dated inside a material event is SET ASIDE (and
+// counted on the verdict), and every other exposure still counts toward the
+// expectation's own minimum. Nothing is fabricated: an exposure inside a trip is never
+// read as a pass or a miss, and a window left without enough clean exposures stays
+// inconclusive under its own minimum-data rule.
+const EXPOSURE_SCOPED_CONTEXT_METRICS: ReadonlySet<string> = new Set([
+  "exercise_target_completion",
+  "exercise_est_1rm_trend",
+  "session_performance_feedback",
+  "joint_pain_or_soreness",
+]);
+
+function contextExclusions(expectation: BrainExpectation): ContextExclusion[] {
+  return materialContextEvents(expectation).map((event) => ({
+    label: event.label,
+    start: event.start < expectation.window_start ? expectation.window_start : event.start,
+    end: event.end,
+  }));
+}
+
 const NOT_THE_GIVEN_READ = "Another read of this day was the one given before training, so only that read is judged.";
+// Every read of the day came after training had started — commentary on work already
+// done, never the morning's call — so the day has no read to judge (2026-10-16).
+const NO_MORNING_READ =
+  "Every read of this day came after training had started, so there was no morning read to judge.";
 
 function canceledEvaluation(
   expectation: BrainExpectation,
@@ -305,6 +364,7 @@ export function evaluateExpectation(
   // two verdicts. `null` (any other metric, or a legacy day) keeps the rule above as is.
   const role = date >= expectation.window_end ? dayReadExpectationRole(expectation, decision.id) : null;
   if (role === "not_morning") return canceledEvaluation(expectation, decision, NOT_THE_GIVEN_READ);
+  if (role === "commentary_only") return canceledEvaluation(expectation, decision, NO_MORNING_READ);
   if (role !== "morning" && decisionCanceled(decision) && !dayReadExpectationOutcomeLocked(expectation)) {
     return canceledEvaluation(expectation, decision);
   }
@@ -313,13 +373,25 @@ export function evaluateExpectation(
   // after — wait for it to close rather than read an unsynced morning as "no harm".
   if (dayReadExpectationAwaitingMorning(expectation, date)) return null;
 
-  const observation = observeExpectation({ expectation, decision, as_of: date });
-  const confounders = [...overlappingDecisionConfounders(expectation), ...contextEventConfounders(expectation)];
+  const exposureScoped = EXPOSURE_SCOPED_CONTEXT_METRICS.has(expectation.metric_key);
+  const observation = observeExpectation({
+    expectation,
+    decision,
+    as_of: date,
+    ...(exposureScoped ? { context_exclusions: contextExclusions(expectation) } : {}),
+  });
+  const confounders = [
+    ...overlappingDecisionConfounders(expectation),
+    ...(exposureScoped ? [] : contextEventConfounders(expectation)),
+  ];
   // Honor the stored policy: a require_exposure expectation must not reach a
-  // decisive verdict from a window in which the subject never appeared at all.
+  // decisive verdict from a window in which the subject never appeared at all. A
+  // window whose exposures were all set aside for context already says so in its own
+  // words (context_excluded_all) — it was exposed, just never cleanly.
   if (expectation.confounder_policy === "require_exposure") {
     const exposure = observation.counts.exposures ?? observation.counts.sessions ?? observation.counts.data_points ?? 0;
-    if (!exposure) confounders.push("The expectation requires exposure and none was observed in the window.");
+    if (!exposure && !observation.counts.context_excluded_exposures)
+      confounders.push("The expectation requires exposure and none was observed in the window.");
   }
   return evaluateMetricObservation(
     expectation,
@@ -370,10 +442,17 @@ function candidateExpectationIds(asOf: string, limit: number): number[] {
         -- maturations need. Long-window metrics are deliberately untouched: they are
         -- precisely the ones late evidence still reaches.
         ${terminalClause}
-      -- Never let a backlog of old inconclusive rechecks starve a newly matured
-      -- expectation. Fresh pending/mature/canceled work is exhausted first;
-      -- inconclusive late-data probes use the remaining bounded capacity.
-      ORDER BY CASE WHEN expectation.status = 'evaluated' THEN 1 ELSE 0 END,
+        -- A canceled row that already carries its canceled verdict has given its final
+        -- answer: the decision behind it was undone, and the only path that revives
+        -- one (a reopened stance) puts the row back to 'pending' first. Re-asking it
+        -- nightly only grew a backlog that sorted AHEAD of genuinely new maturations
+        -- and could starve them out of the bounded budget below, forever.
+        AND NOT (expectation.status = 'canceled' AND COALESCE(latest.verdict, '') = 'canceled')
+      -- Never let a backlog of old rechecks starve a newly matured expectation. A row
+      -- that has NEVER been evaluated goes first, oldest window first, so an overdue
+      -- one cannot be skipped indefinitely; other pending/mature/canceled work is
+      -- next; inconclusive late-data probes use the remaining bounded capacity.
+      ORDER BY CASE WHEN latest.id IS NULL THEN 0 WHEN expectation.status = 'evaluated' THEN 2 ELSE 1 END,
                expectation.window_end, expectation.id LIMIT ?`
     )
     .all(asOf, ...terminalKeys, limit) as Array<{ id: number }>;
@@ -400,6 +479,7 @@ export function evaluateMatureExpectations(
     skipped_unchanged: 0,
     skipped_not_ready: 0,
     errors: 0,
+    failures: [],
     evaluations: [],
   };
 
@@ -411,7 +491,31 @@ export function evaluateMatureExpectations(
         summary.errors++;
         continue;
       }
-      const next = evaluateExpectation(expectation, decision, date);
+      let next: Omit<BrainEvaluation, "id" | "evaluated_at"> | null;
+      try {
+        next = evaluateExpectation(expectation, decision, date);
+      } catch (error) {
+        // An evaluator that throws used to be one more anonymous `errors++`, and the row
+        // stayed matured-unevaluated forever — the recovery evaluator read a column
+        // garmin_daily_metrics never had, and every HRV/RHR/sleep expectation sat overdue
+        // for two months with nothing anywhere saying why. The failure is now RECORDED
+        // as an inconclusive verdict that names it: honest (nothing was concluded),
+        // visible on the diagnostics card under `evaluator_error`, and re-probed on the
+        // next pass like any other inconclusive row, so a fixed evaluator reaches it.
+        const message = String((error as Error)?.message ?? error).slice(0, 120);
+        summary.errors++;
+        summary.failures.push({ expectation_id: id, error: message });
+        next = {
+          expectation_id: id,
+          verdict: "inconclusive",
+          actual: null,
+          evidence_keys: [],
+          confounders: [`${INCONCLUSIVE_REASON_TEXT.evaluator_error}: ${message}`],
+          explanation: "The evaluator could not read this window, so nothing was concluded.",
+          evaluator_version:
+            EVALUATOR_REGISTRY[expectation.metric_key]?.version ?? `${MATURITY_EVALUATOR_VERSION}/error`,
+        };
+      }
       if (!next) {
         summary.skipped_not_ready++;
         continue;
@@ -433,9 +537,10 @@ export function evaluateMatureExpectations(
       const stored = insertBrainEvaluation(next);
       summary.evaluations.push(stored);
       summary.evaluated++;
-    } catch {
+    } catch (error) {
       // A malformed historical row or one evaluator must not stop the nightly pass.
       summary.errors++;
+      summary.failures.push({ expectation_id: id, error: String((error as Error)?.message ?? error).slice(0, 120) });
     }
   }
   return summary;

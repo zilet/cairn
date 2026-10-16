@@ -435,6 +435,12 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   `item.reach` persists only for server-derived items. A hold keeps the progression's own target,
   never an older log, and `earned_floor` is the only composition raise — see `docs/ARCHITECTURE.md`
   "Composition never moves the prescription".
+- **On a STATED key-run or lifting day a soft brake is the dose, never the kind** — the read stays
+  `train` (`stated_key_run_dosed` / `stated_lift_dosed`); every floor (`calendarDoseFloor`) keeps the
+  quiet read, and a learned tolerance can only hand it back. The day-read verdict judges only the
+  true morning read, and harm there can be `unknown` (`harmVerdictOnDay` — never clean, never a
+  cost; `harmEvidenceOnDay` itself is unchanged). Details: `docs/ARCHITECTURE.md` "The calendar owns
+  what the day is for" and "The measurement fixes of 2026-10-16".
 - **Consecutive loading days are a caveat, never a brake of their own** — `daily_decision_v7`,
   `src/repo/day-read.ts`/`daily-decision.ts`. Details in `docs/ARCHITECTURE.md`.
 - **The rest trade is carried by the CALENDAR; the ring is never touched** — `tradeRestDay`,

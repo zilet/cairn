@@ -32,10 +32,17 @@ export function buildChatProviderOrder(
     preferWeb?: boolean;
     preserveSelectedFirst?: boolean;
     definitions?: Record<string, Pick<AgentDef, "web_access"> | undefined>;
+    // The person's class order for the lane's class (settings.agent_class_order): those
+    // of the auto order go first, in this order, the rest of the auto order after them.
+    // A selected/pinned provider still leads; absent = the auto order unchanged.
+    classFirst?: string[];
   } = {}
 ): string[] {
   const selected = String(chosen ?? "").trim();
-  const base = [...new Set([...(selected && selected !== "auto" ? [selected] : []), ...autoOrder.filter(Boolean)])];
+  const auto = autoOrder.filter(Boolean);
+  const head = (options.classFirst ?? []).filter((name) => auto.includes(name));
+  const ordered = head.length ? [...head, ...auto.filter((name) => !head.includes(name))] : auto;
+  const base = [...new Set([...(selected && selected !== "auto" ? [selected] : []), ...ordered])];
   if (!options.preferWeb) return base;
   const web = base.filter((name) => options.definitions?.[name]?.web_access === true);
   if (!web.length) return base;

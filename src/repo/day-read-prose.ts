@@ -58,6 +58,27 @@ export const DAY_READ_OUTCOMES = {
       "Today belongs to the run your week sets here.",
     ],
   },
+  // The stated week's KEY run (quality or long), kept on with a dose (2026-10-16): a
+  // soft brake shapes how the run is taken, never whether the day is a training day.
+  // Every floor above it still wins and keeps its own words (day-read.ts, THE CALENDAR
+  // OWNS WHAT THE DAY IS FOR).
+  stated_key_run_dosed: {
+    code: "stated_key_run_dosed",
+    reasons: [
+      "Your week puts a key run here, so it stays on — today's signals shape how it is run.",
+      "The run your week sets for today stays in the plan, taken at a gentler dose.",
+      "Today keeps its run; what the morning says sets the effort, not the day.",
+    ],
+  },
+  // The stated lifting day, kept on with a dose: the same law for the lifting.
+  stated_lift_dosed: {
+    code: "stated_lift_dosed",
+    reasons: [
+      "Today is one of your lifting days, so the session stays on — today's signals shape the dose.",
+      "Your week lifts today, and the session keeps its place with the loads held back.",
+      "The lifting day your week sets stays a training day, at a gentler dose.",
+    ],
+  },
   acute_sleep_corroborated: {
     code: "acute_sleep_corroborated",
     reasons: [
@@ -565,6 +586,23 @@ export const TRAIN_HOLD_LEAD: readonly string[] = [
   "Keep today's effort in check",
 ];
 
+// …and the quality session the run engine KEPT on a morning a soft brake would have read
+// quiet: the session stands as planned, and the dose is how it is run — never
+// "conversational", which would contradict the work the Endurance plan still prescribes.
+export const STATED_KEY_QUALITY_DOSE_WHY: ReadonlyArray<(run: string) => string> = [
+  (run) => `The ${run} stays on, as your week has it — run the work by feel and ease off if the effort climbs early.`,
+  (run) => `Your week puts the ${run} here, so it stays — settle into the run and let today's signals cap the effort.`,
+  (run) => `Keep the ${run} in the plan today, held a touch gentler — run the reps controlled rather than chasing pace.`,
+];
+// The stated LIFTING day kept on with a dose: a lead clause (no terminal punctuation —
+// the caveat run follows, exactly like TRAIN_HOLD_LEAD), spoken after the brake's voice.
+export const STATED_LIFT_DOSE_LEAD: readonly string[] = [
+  "Your lifting day stays on, held lighter",
+  "The session keeps its place in your week, with the loads held back",
+  "Today still lifts, at a gentler dose",
+  "Keep the session, and ease the loads",
+];
+
 // The hold lead's softer sibling, for the caution that is REAL but unseconded — one
 // dimension at watch on a board where nothing else is pulling (see the second-opinion
 // bar in planningDirectives, owner ruling 2026-08-17). That caution used to counsel
@@ -597,6 +635,7 @@ export const TRAIN_PUSH_CAVEAT_LEAD: readonly string[] = [
 // same pickDayVariant rotation key the rule passes, with the shape rules that follow
 // from sitting at the FRONT of a composed sentence. Guards in test/dayRead.test.js.
 export const DAY_READ_LEAD_VARIANTS: Readonly<Record<string, readonly string[]>> = {
+  "stated_lift_dosed:lead": STATED_LIFT_DOSE_LEAD,
   "planned_training:caveats": TRAIN_CAVEAT_LEAD,
   "planned_training:hold_lead": TRAIN_HOLD_LEAD,
   "planned_training:noted_lead": TRAIN_NOTED_LEAD,
@@ -607,6 +646,8 @@ export const DAY_READ_LEAD_VARIANTS: Readonly<Record<string, readonly string[]>>
 // fragments: the green-light lead has to still read as a green light, and the hold
 // lead has to still ask for restraint.
 export const DAY_READ_LEAD_CONCEPT: Readonly<Record<string, RegExp>> = {
+  // The day stays a lifting day AND the dose comes down — both halves, every phrasing.
+  "stated_lift_dosed:lead": /\b(?:lifting day|session|lifts)\b[\s\S]*\b(?:lighter|held back|gentler|ease)\b/i,
   "planned_training:caveats": /\b(?:train|session|green light)\b/i,
   "planned_training:hold_lead": /\b(?:conservative|measured|in check)\b/i,
   // A noted caution must leave the day OPEN — that is the whole difference between it
@@ -1241,6 +1282,15 @@ export const TEMPLATE_REST_DAY_WHY: readonly string[] = [
   "No lift and no run in your week today, so it is open — an easy walk is the whole ask, and even that is optional.",
 ];
 
+// The stated KEY run kept on with a dose (2026-10-16). Spoken after the brake's own
+// voice when the run engine had nothing of its own to say about the morning; the run
+// noun is "long run" or "quality session". A suggestion, never a gate, no number.
+export const STATED_KEY_RUN_DOSE_WHY: ReadonlyArray<(run: string) => string> = [
+  (run) => `The ${run} stays on, as your week has it — keep it conversational and let the effort come to you.`,
+  (run) => `Your week puts the ${run} here, so it stays — run it by feel, on the gentle side of the effort.`,
+  (run) => `Keep the ${run} in the plan today, just held gentler — an even, talking pace is the dose.`,
+];
+
 // The stated run day. The run itself — its distance and effort — lives on the
 // Endurance plan; these words only say that today is its day and the lifting waits.
 export const STATED_RUN_DAY_WHY: readonly string[] = [
@@ -1253,6 +1303,10 @@ export const STATED_RUN_DAY_WHY: readonly string[] = [
 export const DAY_READ_WHY_VARIANTS: Readonly<Record<string, readonly string[]>> = {
   template_rest_day: TEMPLATE_REST_DAY_WHY,
   stated_run_day: STATED_RUN_DAY_WHY,
+  stated_key_run_dosed: [
+    ...STATED_KEY_RUN_DOSE_WHY.map((render) => render("long run")),
+    ...STATED_KEY_QUALITY_DOSE_WHY.map((render) => render("quality session")),
+  ],
   logged_loading_work_today: DONE_WHY.map((render) => render("session")),
   acute_sleep_corroborated: ACUTE_SLEEP_WHY,
   recovery_dose_overrun: DOSE_OVERRUN_WHY,
@@ -1322,6 +1376,10 @@ export const DAY_READ_REQUIRED_CONCEPT: Readonly<Record<string, RegExp>> = {
   // The run is this read's whole basis: a phrasing that stops naming it is an
   // unexplained quiet day on the morning the week asked for a run.
   stated_run_day: /\brun\b/i,
+  // The run stays on: every phrasing names the run and keeps it in the day.
+  stated_key_run_dosed: /\brun\b/i,
+  // The lifting day stays a lifting day.
+  stated_lift_dosed: /\b(?:lift|lifting|lifts|session)\b/i,
   logged_loading_work_today: /\b(?:in today|done|books|covered|logged)\b/i,
   acute_sleep_corroborated: /\b(?:sleep|night|nights)\b/i,
   acute_signal_protection: /\b(?:protect|protecting|protection|recovery|guarding)\b/i,

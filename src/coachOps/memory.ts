@@ -31,6 +31,18 @@ import { claimsUnderEating, underEatingSupported } from "../repo/fuel-claims.js"
 import { underfuelingRead } from "../repo/underfueling.js";
 import { INSIGHT_SCHEMA, ABOUT_ME_GROWTH_SCHEMA, CHAT_DISTILL_SCHEMA, MEMORY_CONSOLIDATION_SCHEMA, ONBOARD_SCHEMA, REACTION_NARRATIVE_SCHEMA, isInsightResult, isReactionNarrativeResult, isChatDistillResult, isMemoryConsolidationResult } from "../agent-contracts.js";
 import { log } from "../log.js";
+import { getAppState, setAppState } from "../repo/app-state.js";
+import {
+  INSIGHT_DRIFT_MIN_MS,
+  INSIGHT_FAILURE_BACKOFF_MS,
+  insightCorpusFingerprint,
+  insightDataInputs,
+  noteRefreshVerdict,
+  refreshVerdict,
+  type RefreshAnswer,
+  type RefreshInputs,
+} from "../repo/refresh-gate.js";
+import { localDateISO } from "../repo/shared.js";
 import { agentFailure, agentStatusFor } from "./shared.js";
 import type { OpHooks } from "./shared.js";
 
@@ -140,7 +152,36 @@ export async function generateInsight(
   agent: string | undefined,
   kind?: string,
   hooks?: OpHooks,
-  opts?: { freshForMs?: number }
+  opts?: { freshForMs?: number; gate?: boolean }
+) {
+  if (kind === "weekly_read") return generateInsightOnce(agent, kind, hooks, opts);
+  // Connection asks run one at a time in this process: two signals landing together
+  // (a weigh-in and a Garmin pass) would otherwise both pass the gate before either
+  // recorded its answer, and spend two runs on one picture. A waiting ask re-reads the
+  // gate once the first has answered.
+  while (connectionAskInFlight) {
+    try {
+      await connectionAskInFlight;
+    } catch {
+      /* the earlier ask's failure is its own; this one still decides for itself */
+    }
+  }
+  const ask = generateInsightOnce(agent, kind, hooks, opts);
+  connectionAskInFlight = ask;
+  try {
+    return await ask;
+  } finally {
+    if (connectionAskInFlight === ask) connectionAskInFlight = null;
+  }
+}
+
+let connectionAskInFlight: Promise<unknown> | null = null;
+
+async function generateInsightOnce(
+  agent: string | undefined,
+  kind?: string,
+  hooks?: OpHooks,
+  opts?: { freshForMs?: number; gate?: boolean }
 ) {
   const k = kind === "weekly_read" ? "weekly_read" : "connection";
   const recent = recentInsightTexts(12);
@@ -159,6 +200,50 @@ export async function generateInsight(
     hooks?.onPhase?.("served from cache");
     return cached.result;
   }
+  // The material-change gate (connection pass only — the weekly read has its own
+  // once-a-week slot). The DATA half is read here, before the prompt, so a change that
+  // lands while the agent thinks reads as news next time. Automatic callers (a brain
+  // signal's review, the nightly slot) are gated; an explicit ask (the PWA's "look for
+  // a connection", MCP generate_insight — `gate: false`) always runs, and is recorded
+  // like any other answer so the next automatic ask knows the picture was just read.
+  const gateDate = localDateISO();
+  const data = k === "connection" ? readInsightData(gateDate) : null;
+  if (data && opts?.gate !== false) {
+    const verdict = refreshVerdict(
+      readInsightAnswer(),
+      { material: insightMaterial(data, recent, corpus.keys), drift: data.drift },
+      { driftMinMs: INSIGHT_DRIFT_MIN_MS, failureBackoffMs: INSIGHT_FAILURE_BACKOFF_MS }
+    );
+    noteRefreshVerdict("insight", verdict);
+    if (!verdict.refresh) {
+      // The same calm silence as a found:false — this picture was already read and
+      // nothing material has moved since. No agent ran, so nothing was tried.
+      return {
+        ok: false as const,
+        error: "no genuine new insight",
+        agent: null,
+        tried: [] as { agent: string; error: string }[],
+        agent_status: "ok" as const,
+        skipped: verdict.reason,
+      };
+    }
+  }
+  // Recorded after the run with the corpus as it stands THEN: the generator's own new
+  // insight is part of what it has already said, never news to itself.
+  const recordAnswer = (outcome: RefreshAnswer["outcome"]) => {
+    if (!data) return;
+    try {
+      const after = k === "connection" ? insightIntentCorpus() : corpus;
+      writeInsightAnswer({
+        material: insightMaterial(data, recentInsightTexts(12), after.keys),
+        drift: data.drift,
+        at: Date.now(),
+        outcome,
+      });
+    } catch {
+      /* the gate's bookkeeping never fails the op */
+    }
+  };
   hooks?.onPhase?.(k === "weekly_read" ? "reading your week" : "looking for a connection");
   const prompt =
     k === "weekly_read"
@@ -183,7 +268,8 @@ export async function generateInsight(
     result = run.result;
     tried = run.tried;
   } catch (error) {
-    const failure = agentFailure(error, hooks);
+    const failure = agentFailure(error, hooks); // re-throws an explicit Stop: nothing is recorded
+    recordAnswer("failed");
     return {
       ok: false as const,
       error: "no genuine new insight",
@@ -202,6 +288,7 @@ export async function generateInsight(
     // quiet answer (the agent ran and genuinely found nothing new). When the agent
     // DID parse a result, it succeeded — found:false is calm 'ok'.
     const status = verdict.agent_ran ? ("ok" as const) : agentStatusFor({ ok: false, agent: chosen, tried });
+    recordAnswer(verdict.agent_ran ? "answered" : "failed");
     return { ok: false as const, error: "no genuine new insight", agent: chosen, tried, agent_status: status };
   }
   // A weekly read stores through its own path: ONE suggestion per read (a change the
@@ -219,6 +306,7 @@ export async function generateInsight(
           status: "new",
           intent_key: verdict.key,
         });
+  recordAnswer("answered");
   const out = { ok: true as const, insight, agent: chosen, tried, agent_status: "ok" as const };
   // Short freshness by default (a quiet insight should refresh within the hour);
   // the nightly scheduler passes a longer window so the morning open is a fresh hit.
@@ -235,6 +323,40 @@ export async function generateInsight(
     /* cache write never breaks the op */
   }
   return out;
+}
+
+// ---------- the insight gate's durable answer ----------
+// One app_state row: the inputs the generator last answered for, when, and whether it
+// actually answered. Written only from the agent path (a job worker or the scheduler),
+// never from a GET, so it never disturbs a request memo; restart-stable by design,
+// because the waste it stops spans deploys.
+const INSIGHT_GATE_STATE_KEY = "insight_refresh_gate";
+
+function readInsightData(date: string): RefreshInputs | null {
+  try {
+    return insightDataInputs(date);
+  } catch {
+    return null; // an unreadable picture never gates — the ask simply runs
+  }
+}
+
+function insightMaterial(data: RefreshInputs, recent: string[], keys: string[]): string {
+  return `${data.material}:${insightCorpusFingerprint(recent, keys)}`;
+}
+
+function readInsightAnswer(): RefreshAnswer | null {
+  try {
+    const raw = getAppState(INSIGHT_GATE_STATE_KEY);
+    const v = raw ? JSON.parse(raw) : null;
+    if (!v || typeof v.material !== "string" || typeof v.drift !== "string" || !Number.isFinite(v.at)) return null;
+    return { material: v.material, drift: v.drift, at: Number(v.at), outcome: v.outcome === "failed" ? "failed" : "answered" };
+  } catch {
+    return null;
+  }
+}
+
+function writeInsightAnswer(answer: RefreshAnswer): void {
+  setAppState(INSIGHT_GATE_STATE_KEY, JSON.stringify(answer));
 }
 
 // Fingerprint an insight pass: the kind + a coarse hour bucket + the dedup floor —

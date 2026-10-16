@@ -2010,6 +2010,54 @@ call existed are read back through `dayReadCallFromVerdict` (harm asked now). Th
 every athlete-facing wording for it live in one pure module, `src/repo/brain/day-read-call.ts`; the
 ledger-backed helpers stay in `read-adherence.ts`.
 
+**The measurement fixes of 2026-10-16** (`read-adherence.ts`, evaluator `day-read-adherence-v2`).
+*Eras*: the judge-the-read era stamps `actual.evaluator_era = "judged_read"` and its own evaluation
+`evaluator_version`; a verdict with no `read_call` is a LEGACY behavioural verdict, counted as
+`legacy_behavioural` in operator diagnostics (`read_calls`, and `read_eras` with the judged era's
+aligned / not_aligned / inconclusive counts apart). Legacy rows are read back through
+`dayReadCallFromVerdict` at read time only where honest — an unknown harm answer derives nothing; no
+stored verdict is rewritten. *The true morning read*: the cutoff is the first logged set OR the first
+real run placed by the watch's own `beginTimestamp`/`startTimeGMT`, and a read whose own signals
+record `trained_today` is commentary whatever its timestamp; a date with no read before training has
+NO morning read (`commentary_only` — its questions close canceled, the rolling model skips it).
+*Harm can be unknown*: `harmVerdictOnDay` (harm / clean / unknown) wraps the unchanged
+`harmEvidenceOnDay` with a 48-hour arm (a second-morning overnight brake at onset, charged to the
+day only when the morning between was unmeasured or carried no training) and, for an athlete with a
+wearing habit (`OVERNIGHT_HABIT_*`), reads an unmeasured morning as `unknown` — never clean (so it
+never eases a quiet read: the ladders and the long loop count only `clean`) and never a cost (the
+verdict is `unclear` → inconclusive, and the judge waits one more night while it is unknown). The
+license readers (push stance, push offer, run capacity, stated rhythm) keep `harmEvidenceOnDay` as
+it was. *The stated week's own dose*: `dayTrainingTruth` exempts the run that closed a stated run day
+taken at its slot's effort (his personal HR model or his stated RPE, never watch zones; an unread
+effort is not exempt) and the habitual cross-training outing — never on a morning a FLOOR made quiet
+(the morning read's own signals: a health work-around, a run-down / very sore tap, a short night, a
+rest-grade reading, a recovery week, a no-run floor, a rest posture); an easy read is passed only by
+what was logged beyond it (`easyReadPassed`), and such an own-dose day is evidence for no ladder.
+Every caller judges the same morning: without signals passed in, the own-dose read looks up the
+judged morning read's own.
+
+**The calendar owns what the day is for** (`day-read.ts`, 2026-10-16). On a STATED key-run day
+(quality / long, the run engine's planned kind) or a STATED lifting day with a plan day due, a soft
+brake — only the fields in `CALENDAR_SOFT_DOSE_FIELDS` (HRV, resting HR, a subdued readiness
+reading, acute load, hybrid interference, run-intensity discipline, generic activity load) — no
+longer flips the day to easy: the protect rule (at posture easy, never a felt tap), the volume-spike
+easy read on a lifting day, and a stacked-days rest corroborated only by soft signals stand aside,
+and `stated_key_run_dosed` (the run engine's own shortened-long-run sentence, or the brake's voice +
+`STATED_KEY_RUN_DOSE_WHY`) / `stated_lift_dosed` (the brake's voice + `STATED_LIFT_DOSE_LEAD`, no
+reach) speak instead. `calendarDoseFloor` keeps every floor exactly as strict: rest-grade readiness,
+a short night, a felt tap, anything clinical or a safety override, a recovery week, a
+doctor-governed endurance hold, a novel longest run, a dose overrun, a fueling hold, a calendar
+hold, any non-soft deciding brake (a deload-due `mesocycle` included), the hard ceiling of loading
+days, the run engine's hard / word floors plus a volume spike, legs still deep and harm yesterday,
+deep leg saturation on a lifting day — and a TIGHT tolerance. A quality session the run
+engine eased stays the easy run it now is. The tolerance (`calendarDoseTolerance`, read-adherence.ts)
+reads how the dosed days went (24 h + 48 h harm, a cost weighing double, recency half-life 21 days,
+a prior of two neutral mornings): tight hands the quiet read back; wide also lets the calendar claim a
+soft-corroborated stacked rest. The agent may not cite a dosed board's brakes to quieten the day
+(`RECORD_OPENED_CODES`). `LEARNED_TRAIN_CODES` / `SOFTENABLE_EASY_CODES` deliberately do not gain
+`stated_run_day`, `logged_light_work_today` or `template_rest_day` (see the note beside
+`CALENDAR_RUN_HARD_FLOORS`).
+
 `writeDayRead()`'s ledger write is now `recordDayReadDecision()` (same module), whose identity is
 the read's own decision fingerprint — kind, focus, override, and the existing
 `dayReadInputFingerprint` — instead of the whole mutable `signals` blob the old inline write
@@ -3795,8 +3843,13 @@ ran at a different depth on a dev box than on the deployed host. Every class is 
 **Low is the default; depth is the exception.** Measured live on all four CLIs (2026-10-13: chat,
 insight, week ahead, session, meal swap, nutrition check-in at medium vs low, graded blind), low
 matched or beat medium — better in 9 of 30 pairs, worse in 2 — and answered faster on every CLI
-(grok at medium ran past its leash). So everyday reads, chat's coach lane, composition and
-background structuring run `low`; the verify passes (judgement that fails open), a week of meals and
+(grok at medium ran past its leash). So everyday reads, composition and background structuring run
+`low`; **chat's coach lane, `insight`, `nutrition_checkin` and `what_if` run `medium`** — that
+benchmark graded advice prose, and it missed what low then got wrong live on 2026-10-16 (the coach
+lane mis-added the day's calories twice; an insight read a slower running partner's pace as carb-limited
+fitness drift). Effort follows what a wrong answer costs: a causal or numeric claim over the athlete's
+own data earns a step, prose over a deterministic core does not. The coach lane drops back to `low`
+only when the athlete asked for quick (`explicit_fast_request`). The verify passes (judgement that fails open), a week of meals and
 lab transcription run `medium`; clinical-adjacent reading, plan proposals and the case conference
 run `high`. `xhigh`/`max` are only ever a person's explicit choice. Three things raise effort on
 their own, each ONE step and never past high:
@@ -3817,7 +3870,7 @@ Profiles are **provider-neutral**: an op asks for a model *class* (`fast` = the 
 names NO model by default: every CLI runs whatever model its account's plan gives it, so a lower
 plan never meets a `--model` it cannot run. A model reaches a CLI only when the person binds a class
 for that provider in Settings → Agents — "Everyday model" (`fast`) / "Deep work model" (`deep`),
-stored as `settings.model_class_bindings` = `{ provider: { fast?: model, deep?: model } }` (migration
+stored as `settings.model_class_bindings` = `{ provider: { fast?: model, deep?: model, coach?: model } }` (migration
 127; absent/`{}` = the CLI default; no migration backfilled the old claude sonnet/fable pins).
 Nothing in `src/` names a concrete model; never pin a dated id.
 
@@ -3867,10 +3920,46 @@ follows it, via the resolved profile rather than the task table. Its MODEL follo
 setting as the ops: each lane maps to a class (`CHAT_LANE_MODEL_CLASS`: capture and coach →
 `fast`, deep → `deep`), so `resolveChatProfile` takes the per-lane `chat_profile_bindings` model
 (the advanced override, which wins) else the class binding else nothing (the CLI default). The
-legacy single-profile path has no lane: it takes only the everyday model, and only when chosen. An op with no entry in the table
+coach lane alone reads an optional third binding key first, `model_class_bindings[provider].coach`
+(`chatLaneBindingClass`), and falls back to that provider's `fast` when it is unbound — so
+"Sonnet for capture, Opus for coaching" is `claude: { fast: "sonnet", coach: "opus" }`, and nobody
+who never sets it sees a change. `coach` is a binding key, never an op class (`MODEL_CLASSES` stays
+`fast|deep`): no op reads it, and the lane's agent ORDER still follows `fast`. Settings → Agents
+renders only Everyday / Deep work; `coach` is set through `set_settings` / `PUT /api/settings`, and
+the screen's working model carries every stored class key back on save, so a UI save never drops
+it. The legacy single-profile path has no lane: it takes only the everyday model, and only when chosen. An op with no entry in the table
 inherits nothing and behaves exactly as it did before the table existed — which is what had left the
 nightly `memory_consolidation` and `about_me_growth` passes inheriting the CLI's home effort and
 landing in telemetry as `"auto"`, until both got their own `fast`/low and `fast`/medium entries.
+
+**Which agent runs a class: `agent_class_order`.** The model binding picks a provider's model per
+class; `settings.agent_class_order` = `{ fast?: [agent…], deep?: [agent…] }` (migration 129;
+absent/`{}` = the strategy order everywhere, byte-for-byte as before) picks which providers are
+tried FIRST for an op of that class — e.g. `{ fast: ["antigravity"], deep: ["claude"] }` with agy's
+`fast` bound to Gemini Flash runs the everyday reads on Flash and composition / verify / proposals on
+Claude. `pickAgentOrderForTask` resolves it from `TASK_EXECUTION_PROFILES[taskForOp(task)].model_class`
+(`modelClassForTask`; an op with no profile — chat via this path, research — has no class) through
+`orderForModelClass`: the listed agents that are usable, in their stated order, then every other
+usable agent in the strategy order as the fallthrough tail. It is a preference, never exclusive — a
+dead, disabled or signed-out CLI is simply absent from the usable set, and availability holds and
+the circuit breaker still reorder inside `runAgentWithFallback`. Precedence: an `agent_routes` pin
+still wins exactly as before (exclusive for a rotation task, pin-first for an accuracy task). An
+ACCURACY task (`health`, `health_review`, `health_synthesis`, `brain_review`) keeps claude → codex
+as its floor whenever they are usable; the class order reorders only the agents behind that floor,
+so a "deep work on agy" preference never moves a lab transcription ahead of the faithful
+transcribers. Chat applies the same order for the lane the turn starts on (capture/coach → `fast`,
+deep → `deep`; `buildChatProviderOrder`'s `classFirst`), after a selected or pinned provider and
+before the current-research web preference and the availability sort. Written via `set_settings` /
+`PUT /api/settings` (`normalizeAgentClassOrder`: known classes, agents named in `agents.json`,
+duplicates dropped); the Settings screen never sends it, so a UI save keeps it.
+
+**An effort-suffixed agy model never travels with `--effort`.** agy takes an alias plus effort
+(`--model gemini-4-argon --effort high`) or a name with the effort baked in (`gemini-4-argon-low`),
+and refuses the two together ("--model X conflicts with --effort"). Bind the bare alias so the
+server's effort policy applies; a suffixed name (`-low|-medium|-high`, on a CLI declaring
+`model_effort_suffix` in `agents.json`) runs without the effort flag (`modelNameCarriesEffort`,
+`resolveAgentExecutionProfile`) instead of failing at spawn. No other effort logic changed: effort is
+requested abstractly and clamped per provider as above.
 
 **A pin the account can't use is retried once, unpinned, and remembered.** A lower plan tier may
 not be allowed the model the person chose (say `fable` on a Pro plan), and the CLI then exits within a
@@ -4648,6 +4737,29 @@ opens never spawns more than one CLI per day; the job runs the real agentic read
 cache for the next open. A once-per-local-day scheduler tick (`week_ahead_warm_date`) runs the same
 serve+ensure pair so the forward look is usually already warm before the first open of the morning.
 That tick is enqueue-only — it never awaits the agent computation, so a hung CLI cannot hold it up.
+For an athlete whose watch reported yesterday's night it waits (until local noon) for today's to
+sync (`weekAheadWarmAwaitsNight`, `src/scheduler.ts`), since a new night is material and a midnight
+warm was always followed by a second run at the morning sync.
+
+**The material-change gate (week-ahead and the connection insight).** Both background reads ask a
+coach only when something they turn on has moved (`src/repo/refresh-gate.ts`). Each reads two
+restart-stable, VALUE-based fingerprints over durable state — no in-process counter, no
+`updated_at`/`synced_at`: MATERIAL (plan + targets, profile/goals/schedules, finished sessions,
+logged activities, nights of sleep, check-ins, symptoms, life context, directives/labs; plus targets,
+supplements, measurements and the said-corpus for the insight) refreshes at once; DRIFT (a weigh-in,
+Garmin's training-status label, today's in-progress session/composition, and the food log for the
+insight) refreshes only once the answer on hand is older than the op's interval (4 h week-ahead,
+3 h insight). For the week-ahead the material fingerprint IS the cache key, so a material move
+serves the deterministic floor until the new run lands (never the old sketch); the drift the answer
+was computed from rides in the cached blob (`gate.drift`), and serve and worker decide with the one
+`weekAheadCacheVerdict`. The insight's last answer lives in `app_state.insight_refresh_gate`; brain
+reviews and the nightly slot are gated, an explicit ask (`gate:false`: the PWA button, MCP
+`generate_insight`) always runs and is recorded. A failure never storms: a week-ahead run with no
+usable answer finishes `done` with `refresh_failed`, which `createWeekAheadAgentJob`'s 30-minute
+backoff now matches; a failed insight holds the same inputs for 30 minutes (never a material move).
+What the gate saved is in `getAgentStats().skipped_unchanged` / `.refresh_gate` (in-process, since
+start; the week-ahead count is the distinct input states the old counter-keyed rule would have spent
+a run on).
 
 The scheduler also drives the whole-person trajectory's monthly / phase-boundary /
 unexplained-regression revision conferences.
@@ -4715,6 +4827,27 @@ retiring the older ones it overtook — fall out of the same query), and left un
 is what makes the migration idempotent. The `vo2max_trend` write-side guard above still runs first and is
 deliberately wider, so it keeps suppressing a duplicate aerobic window before this is ever reached.
 
+**An exercise verdict reads clean, post-change exposures against the prescription itself.** For the
+four exposure-scoped metrics (`exercise_target_completion`, `exercise_est_1rm_trend`,
+`session_performance_feedback`, `joint_pain_or_soreness`) a material context event no longer confounds
+the whole window: `evaluateExpectation` hands its dates to the evaluator, which sets aside only the
+exposures inside it (`context_excluded_exposures` on the verdict) and stays inconclusive under the
+expectation's own minimum when too few clean ones remain. Work finished at or before the decision
+landed is set aside too (`pre_change_exposures`) — changes are applied the second a session finishes,
+and that session is the evidence the change came from, not a test of it. The subject resolves through
+`resolveExerciseName`. Completion is measured against a real prescription (the decision's after-snapshot
+⊕ its `changes[]` entry ⊕ explicit target fields), set by set, with `{exposures: N}` read literally as
+"met in N sessions"; no prescription, or a change that provably did not move the lift, is inconclusive.
+Agent-authored targets are read only through closed vocabularies (est-1RM floor spellings; pain-report
+counts) — an unrecognized criterion can fail a target but never pass it. The pain guard reads stated
+pain where it is reported now (`statedPainOccasions`, `src/repo/brain/pain-reports.ts` — the verbatim
+`symptom_reports` plus the legacy session box), and an injury never sets a pain report aside: it is the
+outcome. Every inconclusive verdict classifies to a machine reason (`src/brain/inconclusive-reasons.ts`,
+derived from the stored confounders, so historical rows read the same way), surfaced as
+`expectation_health.inconclusive_reasons` on `get_brain_diagnostics`; an evaluator that throws is
+recorded as an inconclusive `evaluator_error` verdict rather than an anonymous error count, and a
+never-evaluated row is scanned first, so nothing overdue is skipped silently.
+
 `src/domain/brain/expectation-followup.ts` turns a genuine `not_aligned`
 verdict on a change-effect metric into ONE quiet in-app note per DECISION (never per-prediction),
 released after three weeks or the moment the change behind it is no longer in force — nothing
@@ -4729,7 +4862,11 @@ alone rather than overwritten — and drafts the reverse as an ordinary proposal
 model discretion to launder), and the step-back gets no special standing: `decideAutonomyTier` still
 picks the posture, `lead_mode` still governs, and it spends the same surprise budget as any other
 change. One attempt per failed change, ever, recorded on the decision either way; a step-back that
-itself misses spawns nothing but the note — a machine revising its own revision is not coaching.
+itself misses spawns nothing but the note — a machine revising its own revision is not coaching. A
+lift's own `exercise_est_1rm_trend` miss walks back only THAT lift's targets, never the other lifts the
+same proposal moved. Both the note and the step-back act only on a window that closed within the
+note's standing period (`VERDICT_ACTIONABLE_DAYS`): a verdict reached late still teaches the ledger,
+but never files a note or a plan change about last month.
 
 Two metric families are allowed to ACCELERATE, each to its own ceiling and its own bar — an unreachable
 declared ceiling is a promise the model never has to keep. `training_progression_step`
@@ -4874,6 +5011,30 @@ retrying would spend the month's whole budget arriving at the same clinician-dir
 already recorded and already waiting for the human. `conferenceIncompleteReason()` (`src/agentJobs.ts`)
 therefore treats it as a clean terminal outcome — the month signature is stamped and the run stops —
 while every OTHER unresolved conflict keeps its retry and is now recorded under its real cause.
+
+**A conference convenes its seats under the spawn cap.** Live (90 days to 2026-10-16) only 55 of 95
+requested opinions reached the conductor, and 39 of the 40 missing were the conference's own
+scheduling: every seat fanned out at once against the process-wide cap of two permits, with ONE 300 s
+bounded-read deadline that started at the fan-out, so seats three to five spent it in the permit queue
+(29 produced a valid opinion after being written off; 10 never spawned; one was a real CLI timeout).
+Worse, the bounded-read loop's deadline abandoned a turn without killing it, so the orphaned CLI kept
+its permit, finished, and its rotation even moved on to the next agent. Now (`runCaseConference`,
+`src/domain/brain/case-conference.ts`): seats run through a pool no wider than
+`agentSlotStats().limit`; each seat's budget (`CONFERENCE_SPECIALIST_BUDGET_MS`, two turns of the
+300 s background ceiling) starts when the seat starts, and each turn is leashed to half of it
+(`turnTimeoutMs`, `runChosenWithCoachReads`), so a congested first turn surfaces as `agent_busy`
+before the seat's deadline; `agent_busy` re-queues the seat (bounded by `AGENT_BUSY_MAX_DEFERRALS`,
+never a failed seat), and all seats congested throws it to the job runner to defer; the bounded-read
+deadline ABORTS the turn it abandons (every op, not just the conference). Every result carries
+`specialist_outcomes` / `unavailable_reasons` (`ok | host_busy | deadline | providers_exhausted |
+invalid_opinion | not_convened | error`) and `conductor_outcome`; the decision's context keeps the
+reasons and the scheduler's retry names them. Below `conferenceQuorum()` (a majority of the requested
+seats) the conductor is not convened and the deterministic floors hold. The bound: ≤ min(seats, cap)
+specialist CLIs at once, ≤ one seat budget per attempt (a hard kill), and a specialist phase of
+≤ ceil(seats / pool) × budget + one congestion allowance — a seat that would not fit is recorded
+`not_convened`, never started late. `get_brain_diagnostics` → `conferences` adds
+`specialist_failure_causes`, `specialist_unavailable_reasons`, `conductor_outcomes`,
+`specialist_busy_deferrals`, `conductor_busy_deferrals` and `below_quorum`.
 
 `applyDueAnnouncedDecisions()` handles THREE action types, not two: `proposal_id`, `meal_plan_id`,
 and a `goal_date_adaptation` (see the goal-date path in `docs/ELITE-BRAIN-IMPLEMENTATION.md`), which
@@ -6681,3 +6842,18 @@ the Chat tab (`chatTeardownMonitor` in `switchTab`/`activateTab`). Messages grou
 with older days collapsed behind "Show earlier"; starter chips show when the conversation is empty;
 the header "fresh start" button hits `POST /api/chat/reset`. Enrichment polling guards against
 stale-tab writes via a `pollToken` bumped on every (re-)render.
+
+## Chat routing: narratives never take the receipt lane
+
+`decideChatRouting` (`src/chatRouting.ts`) keeps a message's capture reasons when it logs a fact, but a
+message that REPORTS or ASKS (`chatMessageIsNarrative`: a question, a feeling/pace/effort cue, or a long
+free-text account) goes to the coach lane so a real reply is written — "just did it 2 hours after the
+big steak I had and felt flat" is a training narrative, not a snack. The receipt-only instant lane
+(`isInstantFoodCaptureDecision`, `src/chat-intent.ts`) additionally refuses any narrative and any message
+placed in time ("today", "in the afternoon", "2 hours after"). `test/chatNarrativeRouting.test.js` is the
+decision matrix (lane, instant, effort per message); extend it with every misroute.
+
+**The day's running total is the server's arithmetic.** A food log lands after the reply is generated, so
+the model cannot know the new total. `reconcileChatIntakeReply` (`src/chat-reconcile.ts`) drops a
+sentence that states a day total or what is left when its figures disagree with `getDayIntake()` and
+appends the server's own line; a reply with no total claim, or a correct one, is untouched.

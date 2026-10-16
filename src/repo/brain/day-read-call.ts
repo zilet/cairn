@@ -52,12 +52,21 @@ export function isConclusiveDayReadCall(value: unknown): value is ConclusiveDayR
 }
 
 // The one mapping from behaviour + harm to the read's call. `harm` is consulted only
-// for a quiet read that was trained through; pass null anywhere else.
-export function dayReadCall(kind: string, outcome: ReadAdherenceOutcome, harm: HarmEvidence | null): DayReadCall {
+// for a quiet read that was trained through; pass null anywhere else. `harmUnknown`
+// (2026-10-16): nothing after the day spoke for an athlete who normally wears the
+// sensor (harmVerdictOnDay) — the read can be called neither too cautious nor
+// vindicated, so the call is `unclear` (an inconclusive verdict), never a guess.
+export function dayReadCall(
+  kind: string,
+  outcome: ReadAdherenceOutcome,
+  harm: HarmEvidence | null,
+  harmUnknown = false
+): DayReadCall {
   if (outcome === "unclear") return "unclear";
   if (outcome === "followed") return "held";
   if (kind === "train") return "not_taken";
-  return harm ? "vindicated" : "too_cautious";
+  if (harm) return "vindicated";
+  return harmUnknown ? "unclear" : "too_cautious";
 }
 
 // Does judging this read's call need the harm test? Only a quiet read the day went

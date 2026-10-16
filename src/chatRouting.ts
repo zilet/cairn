@@ -84,31 +84,58 @@ export const CHAT_LANE_MODEL_CLASS: Record<ChatLane, ChatModelClass> = {
   coach: "fast",
   deep: "deep",
 };
-export type ChatClassModelBindings = Record<string, Partial<Record<ChatModelClass, string>>>;
+// The coach lane's MODEL may have its own binding (`model_class_bindings[provider].coach`,
+// "Opus for coaching, Sonnet for capture"); unbound it reads `fast`, exactly as before. The
+// lane's AGENT ORDER and everything else still follow CHAT_LANE_MODEL_CLASS (coach = fast).
+export type ChatBindingClass = ChatModelClass | "coach";
+export type ChatClassModelBindings = Record<string, Partial<Record<ChatBindingClass, string>>>;
 
-/** The model the person bound to `modelClass` for `provider`, or undefined (CLI default). */
+/** The binding key a lane's model is read from: the coach lane its own `coach` key, every other lane its class. */
+export function chatLaneBindingClass(lane: ChatLane): ChatBindingClass {
+  return lane === "coach" ? "coach" : CHAT_LANE_MODEL_CLASS[lane];
+}
+
+/** The model the person bound to `modelClass` for `provider`, or undefined (CLI default). An unbound `coach` reads `fast`. */
 export function classBoundChatModel(
   provider: string | null | undefined,
-  modelClass: ChatModelClass,
+  modelClass: ChatBindingClass,
   classBindings: ChatClassModelBindings | null | undefined
 ): string | undefined {
   const name = String(provider ?? "").trim();
-  const value = name ? classBindings?.[name]?.[modelClass] : undefined;
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  const read = (cls: ChatBindingClass): string | undefined => {
+    const value = name ? classBindings?.[name]?.[cls] : undefined;
+    return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  };
+  return read(modelClass) ?? (modelClass === "coach" ? read("fast") : undefined);
 }
 
 const LANE_RANK: Record<ChatLane, number> = { capture: 0, coach: 1, deep: 2 };
 const LANE_SET = new Set<string>(CHAT_LANES);
 const REASON_SET = new Set<string>(CHAT_ROUTING_REASON_CODES);
 const REASONING_SET = new Set<string>(CHAT_REASONING_LEVELS);
-// Coaching chat answers at low: measured live on all four CLIs (2026-10-13), low matched
-// or beat medium on a coaching question and answered faster. The deep lane keeps high —
-// it is where clinical, injury, lab, medication, goal and plan-restructure turns go.
+// Effort follows what a wrong answer costs, not what is cheapest. Capture is a receipt
+// and stays low. A coach turn reads the athlete's numbers (intake, pace, load) and
+// answers in words about them, and on 2026-10-16 the same low lane mis-added the day's
+// calories twice and treated a social run's pace as lost fitness; so coach is medium
+// unless the athlete asked for quick (`explicit_fast_request`). The deep lane keeps high.
 const DEFAULT_REASONING: Record<ChatLane, ChatReasoningLevel> = {
   capture: "low",
-  coach: "low",
+  coach: "medium",
   deep: "high",
 };
+
+// The deep lane exists for risk AND for structure. High effort is for the first kind only:
+// a clinical, injury, lab or medication turn is where a plausible-but-wrong answer costs
+// most. A plan restructure, a goal change, a research or multi-constraint ask is a harder
+// question, not a riskier one, and medium holds it (measured 2026-10-16: no op that passed
+// at medium needed high). With no reasons given, the lane keeps its high default.
+const HIGH_EFFORT_DEEP_REASONS: readonly string[] = ["clinical_or_injury", "lab_or_imaging", "medication_interaction"];
+
+function laneReasoning(lane: ChatLane, reasonCodes?: readonly string[]): ChatReasoningLevel {
+  if (lane === "coach" && reasonCodes?.includes("explicit_fast_request")) return "low";
+  if (lane === "deep" && reasonCodes?.length && !reasonCodes.some((r) => HIGH_EFFORT_DEEP_REASONS.includes(r))) return "medium";
+  return DEFAULT_REASONING[lane];
+}
 
 const CLINICAL_OR_INJURY =
   /\b(?:clinical|clinician|doctor|physician|diagnos(?:e|is|ed)|symptom|injur(?:y|ed)|pain|rehab|surgery|infection|disease|condition|sore|swollen|swelling|chest pain|severe (?:abdominal )?pain|(?:can(?:not|'t)|unable to) bear weight|(?:can(?:not|'t)|unable to) walk|popped|pop(?:ped)?|stress fracture|unsafe|as fast as possible)\b/i;
@@ -150,6 +177,26 @@ const ADDITION_PHRASE =
   /^\s*(?:(?:oh|oops|ah|wait)[\s,!.]+)?and\b|\b(?:on|in|with)\s+(?:the|my|that|this|it)\s+(?:plate|bowl|side|top)\b|\bon top\b|\bwith it\b|\bas well\b|\btoo\s*[.!]*\s*$/i;
 const NEW_LOG_VERB = /\b(?:log|track|record|save|enter)\b/i;
 const CORRECTION_VERB = /\b(?:correct(?:ion)?|fix|edit|update|change|actually|remove|forgot|don'?t log)\b/i;
+
+// A message that REPORTS or ASKS rather than logs. "just did it 2 hours after the big
+// steak that I had and I felt it" carries a food word and an activity verb, so the
+// capture regexes fire on it, but nothing in it is a request to write a row: it is a
+// training narrative, and answering it with "Logged your snack" is the one reply that
+// is wrong. A narrative keeps its capture reasons (the coach lane can still log a
+// meal it names) but never takes the receipt-only lane, which has no agent to read it.
+const NARRATIVE_QUESTION_LEAD = /^(?:what|why|how|when|where|who|which|should|could|would|can|is|are|was|were|does)\b/i;
+const NARRATIVE_CUES =
+  /\b(?:felt|feel(?!-)|feels|feeling|energy(?!\s+(?:gel|drink|bar|chews?|shot))|tired|sluggish|drained|bonk(?:ed)?|heavy legs?|dizzy|conversational|compared?|versus|explain|evaluate|but overall)\b/i;
+const NARRATIVE_MAX_WORDS = 40;
+
+export function chatMessageIsNarrative(message: unknown): boolean {
+  const text = String(message ?? "").trim();
+  if (!text) return false;
+  if (text.includes("?") || NARRATIVE_QUESTION_LEAD.test(text)) return true;
+  // An explicit "Log food: …" paste (the Fuel composer's frame) is long because the meal is.
+  if (!/^log\b/i.test(text) && text.split(/\s+/).length > NARRATIVE_MAX_WORDS) return true;
+  return NARRATIVE_CUES.test(text);
+}
 
 function addReason(reasons: Set<ChatRoutingReasonCode>, reason: ChatRoutingReasonCode): void {
   reasons.add(reason);
@@ -260,7 +307,7 @@ export function decideChatRouting(input: ChatRoutingInput): ChatRoutingDecision 
   // A single message may both capture a fact and ask for useful coaching. Keep
   // the capture reason (so the normal action path can log it), but do not take
   // the receipt-only instant lane and discard the requested answer.
-  if (captures.length > 0 && chatMessageRequestsCoaching(message)) {
+  if (captures.length > 0 && (chatMessageRequestsCoaching(message) || chatMessageIsNarrative(message))) {
     lane = "coach";
     addReason(reasons, "routine_coaching");
   }
@@ -403,21 +450,22 @@ export function normalizeChatProfileBindings(value: unknown): ChatProfileBinding
 /**
  * Resolve requested model/reasoning independently of any provider CLI syntax. The
  * model is, in order: the advanced per-lane override (chat_profile_bindings), else the
- * person's class choice for the lane's class (model_class_bindings), else nothing — the
- * CLI's own default model.
+ * person's class choice for the lane's class (model_class_bindings; the coach lane reads
+ * its own `coach` key first, then `fast`), else nothing — the CLI's own default model.
  */
 export function resolveChatProfile(
   lane: ChatLane,
   selectedProvider: string | null | undefined,
   bindings: unknown,
-  classBindings?: ChatClassModelBindings | null
+  classBindings?: ChatClassModelBindings | null,
+  reasonCodes?: readonly string[]
 ): ResolvedChatProfile {
   const normalized = normalizeChatProfileBindings(bindings);
   const provider = String(selectedProvider ?? "").trim();
   const bound = provider ? normalized[provider]?.[lane] : undefined;
-  const model = bound?.model ?? classBoundChatModel(provider, CHAT_LANE_MODEL_CLASS[lane], classBindings);
+  const model = bound?.model ?? classBoundChatModel(provider, chatLaneBindingClass(lane), classBindings);
   return {
     ...(model ? { model } : {}),
-    reasoning: bound?.reasoning ?? DEFAULT_REASONING[lane],
+    reasoning: bound?.reasoning ?? laneReasoning(lane, reasonCodes),
   };
 }

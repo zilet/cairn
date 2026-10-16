@@ -95,6 +95,8 @@
     "model_flag": ["--model", "{model}"],
     "capabilities": { "model": true, "reasoning": ["low", "medium", "high"] },
     "reasoning_flag": ["--effort", "{reasoning}"],
+    "model_effort_suffix": true,
+    "model_effort_suffix_note": "agy accepts both an alias plus --effort (`--model gemini-4-argon --effort high`) and a name with the effort baked in (`gemini-4-argon-low`), but refuses the two together ('--model gemini-4-argon-low conflicts with --effort', verified 2026-10-16). Bind the bare alias so server effort policy applies; a suffixed name runs WITHOUT --effort (resolveAgentExecutionProfile, src/agents.ts).",
     "file_access_args": ["--add-dir", "{data_dir}"],
     "large_prompt": { "via": "stdin_plain" },
     "structured_output": {

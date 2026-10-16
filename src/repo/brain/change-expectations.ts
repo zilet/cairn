@@ -5,6 +5,7 @@ import {
 } from "../../brain/expectation-contract.js";
 import { addDaysISO } from "../shared.js";
 import { verifiedStrengthAnchor } from "../calibration.js";
+import { statedPainOccasions } from "./pain-reports.js";
 
 // The "did this change actually help?" writers.
 //
@@ -86,7 +87,11 @@ export function sessionFeedbackBaseline(asOf: string, lookbackDays = LOOKBACK_DA
     (row) =>
       (row.soreness != null && Number.isFinite(Number(row.soreness))) || !!String(row.joint_pain ?? "").trim()
   ).length;
-  const painSessions = rows.filter((row) => !!String(row.joint_pain ?? "").trim()).length;
+  // The SAME count the guard is evaluated on (statedPainOccasions): the verbatim pain
+  // reports plus the legacy session box. Read from the box alone, the baseline said
+  // "no pain" for an athlete who reports pain in words, and the guard was written with
+  // no room for the pain that was already there.
+  const painSessions = statedPainOccasions(start, end).length;
   return {
     rated_sessions: ratings.length,
     average_rating: ratings.length ? rounded(ratings.reduce((sum, value) => sum + value, 0) / ratings.length) : null,
