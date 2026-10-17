@@ -1203,6 +1203,10 @@ function weekAheadDriftFingerprint(date: string): string {
 // The key the week-ahead used BEFORE the gate (the in-process training counter plus the
 // whole training backstop). Kept only so the gate can count, honestly, the runs it no
 // longer spends — see refresh-gate.ts noteWeekAheadServedWithoutRun. Never a cache key.
+let lastLegacyNoteAt = 0;
+// Read per call so a test (or an operator) can set CAIRN_REFRESH_NOTE_GAP_MS=0 to count every serve.
+const legacyNoteGapMs = (): number => Number(process.env.CAIRN_REFRESH_NOTE_GAP_MS ?? 60_000);
+
 function weekAheadLegacyKey(floor: ReturnType<typeof weekAheadPlan>, date: string): string {
   const profile: any = getProfile();
   return fingerprint({
@@ -1281,7 +1285,11 @@ export function weekAheadServe(date = localDateISO()): {
   }
   const verdict = weekAheadCacheVerdict(cached, cachedSane, weekAheadDriftFingerprint(date));
   if (cached && cachedSane && !verdict.refresh) {
-    if (verdict.reason !== "failure_backoff") {
+    // The "skipped" counter prices a counterfactual (the old counter-keyed rule), which costs a
+    // multi-table fingerprint. It is observability only, so it is sampled: at most once a minute
+    // per process, never on every Today open.
+    if (verdict.reason !== "failure_backoff" && Date.now() - lastLegacyNoteAt >= legacyNoteGapMs()) {
+      lastLegacyNoteAt = Date.now();
       try {
         noteWeekAheadServedWithoutRun(weekAheadLegacyKey(floor, date), verdict.reason);
       } catch {

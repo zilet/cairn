@@ -59,7 +59,7 @@ test("a per-meal sentence that merely says 'today' carries no day cue", () => {
 });
 
 test("the pre-meal total (what the model saw) is a true figure, not a contradiction", () => {
-  const entry = [{ type: "log_food", result: { id: 1, date: new Date().toLocaleDateString("en-CA"), food: { kcal: 728 } } }];
+  const entry = [{ type: "log_food", result: { id: 1, date: new Date().toLocaleDateString("en-CA"), parsed: { kcal: 728 } } }];
   const reply = "Before this meal you were at 596 kcal so far today.";
   assert.equal(reconcileChatIntakeReply(reply, entry, day(1324, 132)), reply);
 });
@@ -115,4 +115,28 @@ test("an amended meal's wrong running total is corrected too, with no guessed 'b
   const out = reconcileChatIntakeReply("Added. That brings you to 1,100 kcal so far today.", amended, day(1420, 160));
   assert.doesNotMatch(out, /1,100/);
   assert.match(out, /1,420 kcal and 160 g protein/);
+});
+
+test("the pre-meal total survives when the logged meal arrives in its real in-memory shape (parsed, not food)", () => {
+  const entry = [{ type: "log_food", result: { id: 1, parsed: { kcal: 728 } } }];
+  const reply = "Before this meal you were at 596 kcal so far today.";
+  assert.equal(reconcileChatIntakeReply(reply, entry, day(1324, 132)), reply);
+});
+
+test("a per-meal sentence that only sounds like a total is never deleted", () => {
+  for (const reply of [
+    "That adds up to about 700 kcal and 55 g protein, a solid post-lift meal.",
+    "That brings you 55 g of protein in one sitting.",
+    "You've logged 700 kcal for that steak alone.",
+  ]) assert.equal(reconcileChatIntakeReply(reply, logged, day(1324, 132)), reply, reply);
+});
+
+test("a plan claim beside a lone food write is still corrected", () => {
+  const out = reconcileChatPlanReply(
+    "Logged. I've updated your plan so tomorrow's session is lighter.",
+    "had 2 eggs, and make tomorrow lighter",
+    [{ type: "log_food", result: { id: 9 } }],
+    []
+  );
+  assert.doesNotMatch(out, /I've updated your plan/);
 });

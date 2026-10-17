@@ -337,6 +337,9 @@ const NON_PLAN_WRITE_ACTIONS: ReadonlySet<ChatActionType> = new Set<ChatActionTy
   "supersede_memory",
 ]);
 
+const REPLY_NAMES_THE_PLAN =
+  /\b(?:plan|program|programme|session|workout|split|schedule|template|routine|week|lift|exercise|run|ride|bench|squat|deadlift|press|row|sets?|reps?)\b/i;
+
 export function reconcileChatPlanReply(
   reply: string,
   message: string | null | undefined,
@@ -376,7 +379,14 @@ export function reconcileChatPlanReply(
   if (!planEntries.length) {
     // A turn that logged or amended food, weight, a supplement or the like and never asked
     // for a plan edit has no plan claim to police: its "I've added…" is about that write.
-    if (!explicit && !restructureDraft && applied.some((entry) => NON_PLAN_WRITE_ACTIONS.has(entry.type) && !entry.error)) {
+    // The guard holds only while the reply says nothing about the plan itself: "Logged. I've
+    // updated your plan so tomorrow is lighter" beside a lone food write is still a false claim.
+    if (
+      !explicit &&
+      !restructureDraft &&
+      !REPLY_NAMES_THE_PLAN.test(reply) &&
+      applied.some((entry) => NON_PLAN_WRITE_ACTIONS.has(entry.type) && !entry.error)
+    ) {
       return reply;
     }
     // A run edit IS this turn's plan change; reconcileChatRunReply owns its receipt.
@@ -858,8 +868,15 @@ function withoutLeadingProse(reply: string, proposedReply: string, correction: s
 // only when it states day figures and none of them match; the server's own line then
 // follows. A per-meal figure ("the steak was about 700 kcal") carries no day cue and is
 // never judged. A reply that claims no total is returned untouched.
-const INTAKE_DAY_CUE =
-  /\b(?:so far|for the day|today so far|(?:day|daily|running) total|your total|brings? you|bring(?:s|ing)? (?:it|that|the day)|you(?:['’]re| are)\s+(?:now\s+)?(?:at|around|roughly|about)|you(?:['’]ve| have)\s+(?:had|eaten|logged)|(?:kcal|calories|protein)\s+(?:left|remaining|to go)|(?:left|remaining|room)\s+(?:for|to)|leav(?:es|ing)\s+(?:you|roughly|about)|to go for the day|adds? up to)\b/i;
+// STRONG cues are about the DAY and are judged wherever they appear. WEAK cues ("brings you
+// to", "you're at") also introduce per-meal figures ("that brings you 55 g of protein"), so they
+// count only when the sentence does not point at a meal.
+const INTAKE_STRONG_CUE =
+  /\b(?:so far|for the day|today so far|(?:day|daily|running) total|your total|(?:kcal|calories|protein)\s+(?:left|remaining|to go)|(?:left|remaining|room)\s+(?:for|to)|to go for the day)\b/i;
+const INTAKE_WEAK_CUE =
+  /\b(?:brings? you to|bring(?:s|ing)? (?:it|that|the day) to|you(?:['’]re| are)\s+(?:now\s+)?(?:at|around|roughly|about)|leav(?:es|ing)\s+you)\b/i;
+const INTAKE_MEAL_REF =
+  /\b(?:this|that|the|your|a)\s+(?:\w+\s+){0,2}(?:meal|lunch|dinner|breakfast|snack|plate|steak|bowl|shake|serving|portion|sandwich|burger)\b/i;
 const INTAKE_KCAL_FIGURE = /(\d[\d,]*(?:\.\d+)?)\s*(?:k?cals?\b|calories\b)/gi;
 const INTAKE_PROTEIN_FIGURE = /(\d[\d,]*(?:\.\d+)?)\s*g\s*(?:of\s+)?protein\b/gi;
 const INTAKE_LINE_VARIANTS: ((t: string) => string)[] = [
@@ -894,7 +911,7 @@ function near(value: number, truths: number[], tolerance: number): boolean {
 
 /** Does this sentence state day-level figures that the server's day contradicts (none match)? */
 export function sentenceContradictsIntake(sentence: string, intake: IntakeTruth): boolean {
-  if (!INTAKE_DAY_CUE.test(sentence)) return false;
+  if (!(INTAKE_STRONG_CUE.test(sentence) || (INTAKE_WEAK_CUE.test(sentence) && !INTAKE_MEAL_REF.test(sentence)))) return false;
   const kcal = figures(sentence, INTAKE_KCAL_FIGURE).filter((n) => n >= 100);
   const protein = figures(sentence, INTAKE_PROTEIN_FIGURE).filter((n) => n >= 20);
   if (!kcal.length && !protein.length) return false;
@@ -937,7 +954,9 @@ export function reconcileChatIntakeReply(
     const date = typeof result?.date === "string" ? result.date : null;
     if (date && date !== today) return reply;
     // Only a NEW log has a knowable "before" (the total minus the meal); an amendment's delta is unknown.
-    const kcal = Number(recordOrNull(result?.food)?.kcal);
+    // The in-memory result is the hydrated food_notes row (`parsed.kcal`); `food` is only
+    // stamped onto the STORED message after the reconcilers run (repo/chat.ts stampCaptureFood).
+    const kcal = Number(recordOrNull(result?.parsed)?.kcal ?? recordOrNull(result?.food)?.kcal);
     if (entry.type === "log_food" && Number.isFinite(kcal)) loggedKcal += kcal;
     else if (entry.type === "update_food_note") knownBefore = false;
   }

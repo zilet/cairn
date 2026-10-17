@@ -244,9 +244,12 @@ function dayReadEras(): Record<string, unknown> {
            JOIN brain_expectations x ON x.id = v.expectation_id
            JOIN (SELECT expectation_id, MAX(id) AS id FROM brain_evaluations GROUP BY expectation_id) newest
              ON newest.id = v.id
-          WHERE x.metric_key = ? AND v.verdict IN ('aligned', 'not_aligned', 'inconclusive')`
+          WHERE x.metric_key = ? AND v.verdict IN ('aligned', 'not_aligned', 'inconclusive')
+            AND x.created_at >= datetime('now', ?)`
       )
-      .all(DAY_READ_ADHERENCE_METRIC) as Array<{ verdict: string; actual_json: string | null }>;
+      // The same window every neighbouring metric reads: the legacy derivation runs a harm
+      // verdict per row, so an unbounded history would cost more on every diagnostics call.
+      .all(DAY_READ_ADHERENCE_METRIC, `-${METRIC_WINDOW_DAYS} days`) as Array<{ verdict: string; actual_json: string | null }>;
     const judged = { aligned: 0, not_aligned: 0, inconclusive: 0, by_v2_evaluator: 0 };
     const legacy = { aligned: 0, not_aligned: 0, derived_calls: {} as Record<string, number>, underivable: 0 };
     for (const row of rows) {

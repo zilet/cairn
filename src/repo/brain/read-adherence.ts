@@ -1326,9 +1326,10 @@ function firstTrainingInstantByDate(from: string, to: string): Map<string, strin
     if (!prior || at < prior) out.set(date, at);
   };
   try {
-    // A real outing only — twenty minutes or more, or a logged distance on anything but a
-    // walk or hike (every watch walk carries a distance): an incidental short walk at
-    // 07:00 is not training the read lost to.
+    // A real outing only. A run, ride or other session counts at twenty minutes or with a
+    // logged distance; a WALK or HIKE counts only from an hour (every watch walk carries a
+    // distance and a 25-minute stroll at 07:00 is not training the read lost to — it used to
+    // cancel that morning's read as "written after training").
     const rows = db
       .prepare(
         `SELECT a.date AS date,
@@ -1336,9 +1337,10 @@ function firstTrainingInstantByDate(from: string, to: string): Map<string, strin
                 CASE WHEN json_valid(ga.raw_json) THEN json_extract(ga.raw_json, '$.startTimeGMT') END AS start_gmt
            FROM activities a JOIN garmin_activities ga ON ga.activity_id = a.id
           WHERE a.date >= ? AND a.date <= ?
-            AND ((a.duration_min IS NOT NULL AND a.duration_min >= 20)
-                 OR (a.distance_km IS NOT NULL AND lower(COALESCE(a.type, '')) NOT LIKE '%walk%'
-                     AND lower(COALESCE(a.type, '')) NOT LIKE '%hike%'))`
+            AND ((a.duration_min IS NOT NULL AND a.duration_min >= 60)
+                 OR (lower(COALESCE(a.type, '')) NOT LIKE '%walk%'
+                     AND lower(COALESCE(a.type, '')) NOT LIKE '%hike%'
+                     AND ((a.duration_min IS NOT NULL AND a.duration_min >= 20) OR a.distance_km IS NOT NULL)))`
       )
       .all(from, to) as Array<{ date: string; begin_ms: unknown; start_gmt: unknown }>;
     for (const row of rows) {

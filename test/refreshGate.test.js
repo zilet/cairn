@@ -9,6 +9,8 @@
 //   • every MATERIAL change spawns it exactly once, immediately;
 //   • a DRIFT-only change waits for the minimum interval, then spawns it once;
 //   • a failed run never turns into a retry storm.
+// Every serve is counted in these tests; production samples the counterfactual once a minute.
+process.env.CAIRN_REFRESH_NOTE_GAP_MS = "0";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
