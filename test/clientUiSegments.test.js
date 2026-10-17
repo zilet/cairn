@@ -280,7 +280,7 @@ test("Train nav is one level: landings wear the group bar, deeper leaves a step 
   // Leaf → group mapping: Program holds the program you run (the plan editor and
   // the program read); Fuel the nutrition trends.
   assert.deepEqual(segmentKeys(api.PROGRESS_GROUPS), ["train", "program", "fuel", "body"]);
-  assert.deepEqual(segmentLabels(api.PROGRESS_GROUPS), ["Train", "Program", "Fuel", "Body"]);
+  assert.deepEqual(segmentLabels(api.PROGRESS_GROUPS), ["Train", "Program", "Intake", "Body"]);
   assert.equal(api.progressGroupOf("sessions"), "train");
   assert.equal(api.progressGroupOf("program"), "program");
   assert.equal(api.progressGroupOf("plan"), "program");
@@ -303,7 +303,7 @@ test("Train nav is one level: landings wear the group bar, deeper leaves a step 
   const volumeNav = controller.segBar("volume", PROGRESS_SEG);
   assert.doesNotMatch(volumeNav, /data-proggroup|data-seg=/);
   assert.match(volumeNav, /class="home-back linkbtn linkbtn-plain train-crumb"[^>]*data-train-leaf="overview">‹ Train</);
-  assert.match(controller.segBar("energy", PROGRESS_SEG), /data-train-leaf="intake">‹ Fuel</);
+  assert.match(controller.segBar("energy", PROGRESS_SEG), /data-train-leaf="intake">‹ Intake</);
   assert.match(controller.segBar("measurements", PROGRESS_SEG), /data-train-leaf="weight">‹ Body</);
   // The editor paints the same nav: one step back to the Program read.
   assert.match(controller.segBar("plan", PROGRESS_SEG), /data-train-leaf="program">‹ Program</);
@@ -315,6 +315,7 @@ test("Train nav is one level: landings wear the group bar, deeper leaves a step 
   assert.doesNotMatch(trainRows, /data-train-leaf="endurance"/);
   assert.match(api.progressDeeperHtml("program"), /data-train-leaf="plan"/);
   assert.match(api.progressDeeperHtml("intake"), /data-train-leaf="energy"/);
+  assert.match(api.progressDeeperHtml("intake"), /More in Intake/);
   assert.match(api.progressDeeperHtml("weight"), /data-train-leaf="measurements"/);
   assert.equal(api.progressDeeperHtml("volume"), "");
 
@@ -419,43 +420,17 @@ test("Progress top-group buttons route to the group's default leaf", async () =>
   assert.ok(calls.some((call) => call[0] === "syncRouteFromState"));
 });
 
-// v2 wave 5: Fuel logging moved to Today (/app/today/fuel). Train's Fuel group keeps
-// the trends and carries one "Log food" line there; no other group does.
-test("Train's Fuel group carries a Log food line to Today's Fuel, and only the Fuel group", () => {
+test("Train's Intake group carries a primary Log a meal button and composer slot under the header", () => {
   const context = loadSegments();
-  Object.assign(context, { URL, URLSearchParams });
-  vm.runInNewContext(readFileSync(join(root, "public/js/route-state.js"), "utf8"), context);
-  context.routeApi = () => context.window.CairnRoutes;
   const { controller } = createController(context);
   const PROGRESS_SEG = context.CairnUiSegments.PROGRESS_SEG;
   for (const leaf of ["intake", "energy"]) {
     const html = controller.segBar(leaf, PROGRESS_SEG);
-    assert.match(html, /<a class="train-fuel-link" href="\/app\/today\/fuel" data-fuel-log-point>Log food on Today's Fuel /, leaf);
-    // A quiet link, never the card row that read as a second place to log.
-    assert.doesNotMatch(html, /tov-jpoint/, leaf);
-    assert.match(html, />Log food on Today.s Fuel </);
+    assert.match(html, /<button class="btn btn-solid train-fuel-log-btn" type="button" data-intake-log-btn aria-expanded="false" aria-controls="intakeLogSlot">Log a meal<\/button>/, leaf);
+    assert.match(html, /id="intakeLogSlot" class="train-fuel-log-slot" data-intake-log-slot/, leaf);
+    assert.doesNotMatch(html, /Log food on Today's Fuel|train-fuel-link/, leaf);
   }
   for (const leaf of ["overview", "sessions", "program", "weight"]) {
-    assert.doesNotMatch(controller.segBar(leaf, PROGRESS_SEG), /data-fuel-log-point/, leaf);
+    assert.doesNotMatch(controller.segBar(leaf, PROGRESS_SEG), /data-intake-log-btn/, leaf);
   }
-
-  const link = {
-    listeners: {},
-    addEventListener(type, fn) {
-      this.listeners[type] = fn;
-    },
-  };
-  const view = {
-    querySelectorAll: (selector) => (selector === "[data-fuel-log-point]" ? [link] : []),
-  };
-  const wired = createController(context, { view });
-  wired.controller.wireSeg(wired.controller.progressHandlers);
-  // A modified click keeps the link's own behaviour (a new tab).
-  link.listeners.click({ button: 0, metaKey: true, preventDefault: () => assert.fail("not intercepted") });
-  assert.deepEqual(plain(wired.calls), []);
-  let prevented = false;
-  link.listeners.click({ button: 0, preventDefault: () => (prevented = true) });
-  assert.equal(prevented, true);
-  assert.equal(wired.state.planJump, "food");
-  assert.deepEqual(plain(wired.calls), [["activateTab", "plan"]]);
 });

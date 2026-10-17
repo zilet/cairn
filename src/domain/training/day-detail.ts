@@ -560,7 +560,9 @@ function buildLift(
 ): { lift: DayDetailLift; watch: DayDetailWatch[] } | null {
   const plan = strengthOf(cell);
   const session = done?.session ?? null;
-  const title = text(plan?.name) || text(session?.title);
+  // A logged day names what was done (src/repo/session-day.ts), the same words the
+  // headline's "<title> — done." and the strip say.
+  const title = text(session?.title) || text(plan?.name);
   if (!title) return null;
 
   const ahead = status === "today" || status === "upcoming";

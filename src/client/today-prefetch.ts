@@ -133,7 +133,12 @@ type TodayFanInDeps = {
         paths.push(`/today-agenda?date=${q(date)}`, "/coaching-focus", `/today-side?date=${q(date)}`, "/context-tags/vocab",
           `/context-tags?date=${q(deps.localISO())}`, "/directives", "/brain/changes",
           `/today-path?date=${q(date)}`, `/today-digest?date=${q(date)}`);
-        if (date === deps.localISO()) paths.push(`/training-agenda?date=${q(date)}`, "/plan/week", "/recovery/baseline");
+        if (date === deps.localISO()) {
+          paths.push(`/training-agenda?date=${q(date)}`, "/plan/week", "/recovery/baseline", `/nutrition/day?date=${q(date)}`);
+          // The Fuel glance's ideas, asked for the device's hour exactly as the glance spells
+          // them (today-fuel-glance-client.ts); a fan-in framed in another hour leaves it out.
+          paths.push(`/fuel/ideas?date=${q(date)}&hour=${new Date().getHours()}`);
+        }
       }
       const aggregate = deps.api(CairnTodayDataLoader.aggregatePath(date, surface));
       apiPrime(paths, aggregate.then((value) => (value as { responses?: unknown } | null)?.responses ?? null));

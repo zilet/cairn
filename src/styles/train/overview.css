@@ -34,6 +34,7 @@
 .tov-dot-idle{background:var(--line)}
 /* Per-muscle rows: name + verdict chip, a you-are-here band, one honest note. */
 .tov-kicker{margin:var(--space-11) 0 var(--space-1)}
+.tov-rows-note{margin:var(--space-2) var(--space-1) var(--space-3);font-size:var(--text-sm);color:var(--ink-2);line-height:var(--leading-normal)}
 /* Muscle rows: hairline-divided on the ground, never a stack of cards. */
 .tov-rows{display:grid}
 .tov-row{

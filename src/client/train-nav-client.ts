@@ -22,7 +22,7 @@ type TrainNavApi = {
 const TRAIN_NAV_GROUPS: readonly TrainNavSegment[] = [
   ["train", "Train"],
   ["program", "Program"],
-  ["fuel", "Fuel"],
+  ["fuel", "Intake"],
   ["body", "Body"],
 ];
 // Each group's leaves, its landing first.
@@ -61,15 +61,10 @@ function trainNavGroupLabel(group: string): string {
   return (TRAIN_NAV_GROUPS.find(([key]) => key === group) || TRAIN_NAV_GROUPS[0])[1];
 }
 
-// The Fuel group reads the trends (Intake, Energy); logging is a same-day act that
-// Today's Fuel owns. One quiet text link leads there, so the trends never strand
-// someone who came to log — a link, not a card: it must not read as a second place
-// to log. It rides in the nav row (beside the crumb or group bar) as a wayfinding
-// line, never as content of its own above the read.
+// The Intake group carries a primary "Log a meal" action directly under the header
+// that mounts Today's Fuel composer in place via withBundle("fuel", ...).
 function trainNavFuelPointerHtml(): string {
-  const routes = typeof routeApi === "function" ? routeApi() : null;
-  const href = routes?.routeToUrl({ tab: "plan", section: "food" }) || "/app/today/fuel";
-  return `<a class="train-fuel-link" href="${escAttr(href)}" data-fuel-log-point>Log food on Today's Fuel <span aria-hidden="true">›</span></a>`;
+  return `<div class="train-fuel-log" data-intake-log-wrap><button class="btn btn-solid train-fuel-log-btn" type="button" data-intake-log-btn aria-expanded="false" aria-controls="intakeLogSlot">Log a meal</button><div id="intakeLogSlot" class="train-fuel-log-slot" data-intake-log-slot></div></div>`;
 }
 
 // A landing wears the group bar (its buttons carry data-proggroup) plus a hidden

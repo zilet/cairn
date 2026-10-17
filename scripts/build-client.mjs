@@ -32,6 +32,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/format-utils.ts", output: "public/js/format-utils.js" },
   { source: "src/client/ui-format.ts", output: "public/js/ui-format.js" },
   { source: "src/client/client-diagnostics.ts", output: "public/js/client-diagnostics.js" },
+  { source: "src/client/ui-view-counter.ts", output: "public/js/ui-view-counter.js" },
   { source: "src/client/token-sheet.ts", output: "public/js/token-sheet.js" },
   { source: "src/client/api-cache.ts", output: "public/js/api-cache.js" },
   { source: "src/client/api-reach.ts", output: "public/js/api-reach.js" },
@@ -258,6 +259,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/settings-screen.ts", output: "public/js/settings-screen.js" },
   { source: "src/client/capture-macros-client.ts", output: "public/js/capture-macros-client.js" },
   { source: "src/client/chat-client.ts", output: "public/js/chat-client.js" },
+  { source: "src/client/chat-capture-chips-client.ts", output: "public/js/chat-capture-chips-client.js" },
   { source: "src/client/chat-attachment-client.ts", output: "public/js/chat-attachment-client.js" },
   { source: "src/client/chat-composer-focus-client.ts", output: "public/js/chat-composer-focus-client.js" },
   { source: "src/client/food-composer-model.ts", output: "public/js/food-composer-model.js" },
@@ -499,6 +501,7 @@ export const BUNDLES = [
       "public/js/offline-state-client.js",
       "public/js/app-update-gate.js",
       "public/js/app-sw-recovery.js",
+      "public/js/ui-view-counter.js",
       "public/js/01-core.js",
       "public/js/art-memory-client.js",
       "public/js/art-inflight-client.js",
@@ -931,6 +934,7 @@ export const BUNDLES = [
       "public/js/markdown-client.js",
       "public/js/capture-macros-client.js",
       "public/js/chat-client.js",
+      "public/js/chat-capture-chips-client.js",
       // Ask → Changes (the calm asks + the history-first feed with Undo, and the
       // screen itself: renderCoach, dispatched through lazy("ask")/withLatestRender).
       "public/js/changes-feed-client.js",

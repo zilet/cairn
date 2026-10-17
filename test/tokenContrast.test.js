@@ -75,6 +75,7 @@ const TEXT = [
   "--muted",
   "--dawn",
   "--dawn-deep",
+  "--dawn-ink",
   "--sage-text",
   "--gold-deep",
   "--d-strength",
@@ -100,6 +101,25 @@ test("every text token clears AA on every neutral, in both themes", () => {
     }
   }
   assert.deepEqual(misses, []);
+});
+
+function washRgb(tokens) {
+  const base = resolve(tokens, "var(--ground)");
+  const wash = tokens["--dawn-wash"];
+  const m = /rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([\d.]+)\s*\)/.exec(wash);
+  assert.ok(m, `dawn wash parses: ${wash}`);
+  const alpha = Number(m[4]);
+  const ink = [Number(m[1]), Number(m[2]), Number(m[3])];
+  return base.map((c, i) => Math.round(c * (1 - alpha) + ink[i] * alpha));
+}
+
+test("today's weekday ink clears AA on the dawn wash", () => {
+  for (const [theme, tokens] of Object.entries(THEMES)) {
+    const fg = luminance(resolve(tokens, "var(--dawn-ink)"));
+    const bg = luminance(washRgb(tokens));
+    const r = (Math.max(fg, bg) + 0.05) / (Math.min(fg, bg) + 0.05);
+    assert.ok(r >= 4.5, `${theme} --dawn-ink on the dawn wash: ${r.toFixed(2)}`);
+  }
 });
 
 test("text on an accent fill clears AA in both themes", () => {

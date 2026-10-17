@@ -350,7 +350,9 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
 - **Today's lift has ONE server line** — `todayStrengthLine()` (`src/repo/today-strength-line.ts`): plan
   day NAME, state off the log, a rest/easy read as a caveat (never a replacement title). The Brief,
   Session header, week strip and Train overview print it verbatim; never derive a today state in a
-  renderer. Details in `docs/ARCHITECTURE.md`.
+  renderer. Details in `docs/ARCHITECTURE.md`. **A logged session's name has ONE resolver**,
+  `loggedSessionDay()` (`src/repo/session-day.ts`): the log decides, never a plan-day row renamed by a
+  later redraw, and dated surfaces show plan-day names through `planDayDisplayName` (no week-count claims).
 - **Plan days hold STRENGTH only; runs and rest are the calendar's** (migration 110). A run is never a
   plan item (`savePlanDay` strips it, `replacePlan` drops a day with nothing to lift) and a rest day is
   never a plan row (`day_type:'rest'` is refused). Runs come from the stated run days + `weeklyRunPlan`

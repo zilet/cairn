@@ -8,7 +8,8 @@ import { classifyRunEffort } from "./hr-model.js";
 import { getOrCreateSession, getSessionDetail, setsForSession } from "./sessions.js";
 import { getSettings } from "./settings.js";
 import { bumpTrainingDataVersion } from "./training-cache.js";
-import { deriveSessionTitle } from "./training-read.js";
+import { loggedSessionTitle, sessionDayCandidates } from "./session-day.js";
+import type { PlanDayCandidate } from "./plan-selection.js";
 import { addDaysISO, localDateISO, chatHistoryTimeLabel } from "./shared.js";
 import { round1 } from "../lib/numbers.js";
 import {
@@ -367,7 +368,8 @@ export function recentTraining(limit = 6): FeedRow[] {
     )
     .all(pull) as any[];
 
-  const sessions: FeedRow[] = sessRows.map(_strengthFeedRow);
+  const candidates = sessionDayCandidates();
+  const sessions: FeedRow[] = sessRows.map((s) => _strengthFeedRow(s, candidates));
 
   // --- cardio / free-text activities, enriched from the linked Garmin row ---
   const actRows = db.prepare(`${ACTIVITY_FEED_SELECT} ORDER BY a.date DESC, a.id DESC LIMIT ?`).all(pull) as any[];
@@ -399,7 +401,11 @@ export function trainingOnDate(date: string): FeedRow[] {
     )
     .all(d) as any[];
   const actRows = db.prepare(`${ACTIVITY_FEED_SELECT} WHERE a.date = ? ORDER BY a.id DESC`).all(d) as any[];
-  return _mergeFeed(sessRows.map(_strengthFeedRow), withoutShadowActivities(actRows).map(_activityFeedRow));
+  const candidates = sessionDayCandidates();
+  return _mergeFeed(
+    sessRows.map((s) => _strengthFeedRow(s, candidates)),
+    withoutShadowActivities(actRows).map(_activityFeedRow)
+  );
 }
 
 const ACTIVITY_FEED_SELECT = `SELECT a.id, a.date, a.type, a.raw_text, a.notes, a.duration_min, a.distance_km, a.pace, a.rpe, a.source,
@@ -422,7 +428,7 @@ function _mergeFeed(sessions: FeedRow[], activities: FeedRow[]): FeedRow[] {
   });
 }
 
-function _strengthFeedRow(s: any): FeedRow {
+function _strengthFeedRow(s: any, candidates: PlanDayCandidate[]): FeedRow {
   // Read this session's sets ONCE — stats, meta, and the movement breakdown all
   // derive from the same fetch (was two identical setsForSession queries).
   const setRows = setsForSession(s.id) as any[];
@@ -462,7 +468,7 @@ function _strengthFeedRow(s: any): FeedRow {
     at: s.finished_at ? String(s.finished_at).replace(" ", "T") + "Z" : null,
     // Content-true title: a session whose logged work diverged from its plan day
     // is named from what was actually trained (not the stale plan-day label).
-    title: deriveSessionTitle(s.id, s.plan_day_id, s.day_name),
+    title: loggedSessionTitle(s.id, s.plan_day_id, candidates),
     stats,
     note: g && g.summary ? String(g.summary) : null,
     source: g ? "garmin" : null,

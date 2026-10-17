@@ -232,6 +232,16 @@ type TabSwitchOptions = {
   // screen and hard-swapping after. The renderer's async remainder runs on outside
   // the swap (the transition never waits on the network), and a skeleton it later
   // replaces hydrates with its own crossfade (armHydrate).
+  // Screen-open counter. Route sync notes tab and section changes; this covers
+  // the activation that does not sync (boot on a canonical URL, Back/Forward).
+  function noteUiViewOpen(): void {
+    try {
+      (globalThis as { CairnUiViewCounter?: { noteActive?(): void } }).CairnUiViewCounter?.noteActive?.();
+    } catch {
+      /* counting a screen must never break opening it */
+    }
+  }
+
   function switchTab(tab: unknown, opts: TabSwitchOptions = {}): void {
     const next = normalizeTabName(tab);
     const moveFocus = opts.focusView === true && state.tab !== next;
@@ -246,6 +256,7 @@ type TabSwitchOptions = {
     state.tab = next;
     highlightHome(next);
     if (opts.syncRoute !== false) syncRouteFromState(opts.replace ? "replace" : "push");
+    else noteUiViewOpen();
     // Started exactly once — inside the swap when it runs, or after it if the swap
     // itself failed before calling back.
     let rendered: Promise<unknown> | null = null;

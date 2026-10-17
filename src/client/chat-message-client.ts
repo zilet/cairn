@@ -31,19 +31,6 @@ function chatMessageString(value: unknown): string {
   return value == null ? "" : String(value);
 }
 
-function chatAgentCheckHtml(attemptsValue: unknown): string {
-  const failed = chatMessageAgentAttempts(attemptsValue).filter((row) => row.ok === false);
-  if (!failed.length) return "";
-  const first = failed[0];
-  const agent = chatMessageString(first.agent) || "agent";
-  const status = chatMessageString(first.status || first.error_class).replace(/_/g, " ") || "needs attention";
-  const more = failed.length > 1 ? ` +${failed.length - 1}` : "";
-  return `<button class="agentcheck" type="button" data-agent-check="1" title="Open Settings → Agents">
-    <span class="agentcheck-dot" aria-hidden="true"></span>
-    <span>Agent check · ${escHtml(agent)} ${escHtml(status)}${escHtml(more)}</span>
-  </button>`;
-}
-
 function openAgentSettings(): void {
   try {
     state.setSeg = "agents";
@@ -120,13 +107,16 @@ const COPY_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" st
 // lands. A plan change that did not go live says WHICH — scheduled for a named day, or
 // not applied at all — because a "✓" over a change that has not happened is the chip
 // telling the athlete the opposite of the truth. Every other action keeps the plain tag.
-function chatAppliedTagHtml(a: ChatScreenAppliedAction): string {
+function chatAppliedTagHtml(a: ChatScreenAppliedAction, opts: FoodTagOpts = {}): string {
   const info = CairnChatClient.captureFoodInfo(a);
   if (info && !info.missing) {
     const active = CairnChatClient.captureFoodActive(info.status);
-    return `<span class="bubble-tag capture-food${active ? " pending" : ""}" data-capture-note="${escAttr(info.id)}">${CairnChatClient.captureFoodTagInner(info.status, info.food)}</span>`;
+    const among = opts.among ? ` data-capture-among="1"` : "";
+    const prefer = opts.among && opts.preferThing ? ` data-capture-prefer="1"` : "";
+    const tagOpts = opts.among ? { among: true, preferThing: !!opts.preferThing } : undefined;
+    return `<span class="bubble-tag capture-food${active ? " pending" : ""}" data-capture-note="${escAttr(info.id)}"${among}${prefer}>${CairnChatClient.captureFoodTagInner(info.status, info.food, tagOpts)}</span>`;
   }
-  const amendedTag = CairnChatClient.amendedFoodTag(a); // "✓ Lunch updated · 780 kcal"
+  const amendedTag = CairnChatClient.amendedFoodTag(a, opts.among ? { among: true } : undefined); // "✓ Lunch updated · 780 kcal"
   if (amendedTag) return `<span class="bubble-tag capture-food">${escHtml(amendedTag)}</span>`;
   const landing = CairnChatClient.planLandingTag(a);
   if (landing) return `<span class="bubble-tag">${escHtml(landing.text)}</span>`;
@@ -153,7 +143,12 @@ function applyCaptureFoodRow(id: number, row: unknown): void {
   if (!(tag instanceof HTMLElement)) return;
   const { status, food } = CairnChatClient.captureFoodFromRow(row);
   tag.classList.toggle("pending", CairnChatClient.captureFoodActive(status));
-  tag.innerHTML = CairnChatClient.captureFoodTagInner(status, food);
+  const among = tag.dataset.captureAmong === "1";
+  tag.innerHTML = CairnChatClient.captureFoodTagInner(
+    status,
+    food,
+    among ? { among: true, preferThing: tag.dataset.capturePrefer === "1" } : undefined,
+  );
   const review = document.querySelector(`.capture-review[data-capture-review="${id}"]`);
   if (!(review instanceof HTMLElement)) return;
   const inner = CairnChatClient.captureFoodReviewInner(status, food);
@@ -266,7 +261,8 @@ function appendMsg(
   // the affected exercise, where it is useful when the athlete starts the session.
   const applied = chatMessageApplied(meta.applied).filter((a) => chatMessageRecord((a as Record<string, unknown>).result).background !== true);
   if (applied.length) {
-    extra += `<div class="bubble-meta">${applied.map(chatAppliedTagHtml).join("")}</div>`;
+    const foodOpts = CairnChatClient.foodTagOpts(applied);
+    extra += `<div class="bubble-meta">${applied.map((a, i) => chatAppliedTagHtml(a, foodOpts[i])).join("")}</div>`;
     extra += applied.map(chatCaptureReviewHtml).join("");
   }
   const drafts = chatMessageDrafts(meta.drafts);
@@ -299,7 +295,7 @@ function appendMsg(
       return `<button class="draftbtn" data-confirm-lab="${escAttr(l.id)}">${escHtml(label)}</button>`;
     }).join("");
   }
-  extra += chatAgentCheckHtml(meta.agent_attempts);
+  extra += CairnChatClient.agentCheckHtml(meta.agent_attempts);
   const hideText = !!meta.image && (!m.content || m.content === "(photo)");
   const body = hideText ? "" : role === "assistant"
     ? `<div class="bubble-text md">${mdToHtml(m.content)}</div>`

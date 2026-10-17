@@ -171,11 +171,11 @@ function planDayContentTitle(planDayId: number): string | null {
 // names the work it prescribed.
 function compositionForSession(
   sessionId: number
-): { title: string; items: string[]; plan_day_id: number | null } | null {
+): { title: string; items: string[]; plan_day_id: number | null; source: string } | null {
   try {
     const row = db
       .prepare(
-        `SELECT title, items_json, plan_day_id FROM daily_session_compositions
+        `SELECT title, items_json, plan_day_id, source FROM daily_session_compositions
           WHERE session_id = ?
           ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, version DESC
           LIMIT 1`
@@ -190,7 +190,12 @@ function compositionForSession(
     } catch {
       items = [];
     }
-    return { title, items, plan_day_id: row?.plan_day_id == null ? null : Number(row.plan_day_id) };
+    return {
+      title,
+      items,
+      plan_day_id: row?.plan_day_id == null ? null : Number(row.plan_day_id),
+      source: String(row?.source ?? ""),
+    };
   } catch {
     return null;
   }
@@ -228,23 +233,70 @@ export function deriveSessionTitle(sessionId: number, planDayId?: number | null,
 
   const loggedTitle = contentTitle(bucketCounts(rows));
   const identity = (name: unknown) => exerciseIdentityKey(String(name ?? "")) || String(name ?? "").toLowerCase();
+  // What the plan day prescribes NOW, read only when a test below needs it. A
+  // restructure rewrites a day in place (savePlanDay keeps the row id), so the name a
+  // caller passes is the row as it reads today, not necessarily the day it was lifted from.
+  let plannedRead: Set<string> | null = null;
+  const planned = (): Set<string> => {
+    if (plannedRead) return plannedRead;
+    plannedRead =
+      planDayId && planDayName
+        ? new Set(
+            (
+              db
+                .prepare(
+                  `SELECT e.name AS name FROM plan_items pi JOIN exercises e ON e.id = pi.exercise_id WHERE pi.plan_day_id = ?`
+                )
+                .all(planDayId) as any[]
+            ).map((r) => identity(r.name))
+          )
+        : new Set<string>();
+    return plannedRead;
+  };
+  // The plan-day test: the logged work still IS that day — at least half its prescribed
+  // movements present, or the same character (robust to renames).
+  let isPlanDayRead: boolean | null = null;
+  const isPlanDay = (): boolean => {
+    if (isPlanDayRead != null) return isPlanDayRead;
+    let still = false;
+    if (planDayId && planDayName) {
+      const p = planned();
+      if (p.size && rows.filter((r) => p.has(identity(r.name))).length / rows.length >= 0.5) still = true;
+      else still = !!loggedTitle && loggedTitle === planDayContentTitle(planDayId);
+    }
+    isPlanDayRead = still;
+    return still;
+  };
 
   // The session's OWN accepted prescription comes first — it names the day the
   // athlete chose, and it is the only name a composition-only session has. Held to
   // the SAME divergence test as the plan-day name below, so a composition whose work
   // was swapped out wholesale still reads content-true.
   const composition = compositionForSession(sessionId);
+  // A composition built from the session's own plan day goes by that day's NAME —
+  // its stored title is the focus sentence, and the strip, the Brief and the
+  // Session header all say "Push", never "Shoulders, chest, triceps & core".
+  const ownDay = !!planDayName && planDayId != null && composition?.plan_day_id === Number(planDayId);
+  // ...but only while that day still prescribes some of what the card held. Monday's
+  // "Lower" card, linked to day 1, read "Pull" once a mid-week redraw made day 1 the
+  // Pull day — the frozen card's items matched the log, and the name was the row's
+  // new one (2026-10-16: the strip and Horizon's week swapped Monday and Wednesday).
+  const rewritten =
+    ownDay && !!composition && planned().size > 0 && !composition.items.some((name) => planned().has(identity(name)));
+  // A card the PLAN built (not one the athlete or a suggestion chose) for another plan
+  // day than the one passed in yields to that day when the log IS that day. Otherwise
+  // it still names the work it prescribed, as it always did — a session whose plan has
+  // since moved on keeps its own title.
+  const otherPlanDay =
+    !ownDay &&
+    composition?.plan_day_id != null &&
+    (composition.source === "adaptive_plan" || composition.source === "manual_plan");
+  if (otherPlanDay && isPlanDay()) return planDayName as string;
   // An EMPTY composition (a rest read's "Rest day", an open "choose as you go") holds
   // no prescription to measure the log against — once sets are logged, the work that
   // was done names the session, never "Rest day" over a lifted session.
-  if (composition && composition.items.length) {
-    // A composition built from the session's own plan day goes by that day's NAME —
-    // its stored title is the focus sentence, and the strip, the Brief and the
-    // Session header all say "Push", never "Shoulders, chest, triceps & core".
-    const named =
-      planDayName && planDayId != null && composition.plan_day_id === Number(planDayId)
-        ? planDayName
-        : composition.title;
+  if (composition && composition.items.length && !rewritten) {
+    const named = ownDay ? (planDayName as string) : composition.title;
     const prescribed = new Set(composition.items.map(identity));
     const hits = rows.filter((r) => prescribed.has(identity(r.name))).length;
     if (hits / rows.length >= 0.5) return named;
@@ -254,23 +306,7 @@ export function deriveSessionTitle(sessionId: number, planDayId?: number | null,
     if (loggedTitle && loggedTitle === prescribedTitle) return named;
   }
 
-  if (planDayId && planDayName) {
-    const planned = new Set(
-      (
-        db
-          .prepare(
-            `SELECT e.name AS name FROM plan_items pi JOIN exercises e ON e.id = pi.exercise_id WHERE pi.plan_day_id = ?`
-          )
-          .all(planDayId) as any[]
-      ).map((r) => identity(r.name))
-    );
-    if (planned.size) {
-      const hits = rows.filter((r) => planned.has(identity(r.name))).length;
-      if (hits / rows.length >= 0.5) return planDayName; // still that day (by name)
-    }
-    // Same character as the day prescribes → still that day (robust to renames).
-    if (loggedTitle && loggedTitle === planDayContentTitle(planDayId)) return planDayName;
-  }
+  if (isPlanDay()) return planDayName as string; // still that day
 
   return loggedTitle || planDayName || "Session";
 }

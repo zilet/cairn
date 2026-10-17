@@ -30,7 +30,7 @@
 .cairn-stack-pile{position:relative;margin:var(--space-2) 0 var(--space-8)}
 .cairn-stack-pile .stone-cairn{display:block;width:100%;height:auto;max-width:420px}
 .stack-pile-leader{fill:none;stroke:var(--line);stroke-width:1;vector-effect:non-scaling-stroke}
-.stack-pile-name{font-family:var(--font-mono);font-size:9.5px;letter-spacing:var(--tracking-mono);fill:var(--muted)}
+.stack-pile-name{font-family:var(--font-mono);font-size:11px;letter-spacing:var(--tracking-mono);fill:var(--muted)}
 .stack-pile-flag{fill:var(--dawn);font-size:7px}
 .stack-pile-word{font-family:var(--font-display);font-size:16.5px;fill:var(--ink)}
 .cairn-stack-rock{-webkit-tap-highlight-color:transparent}

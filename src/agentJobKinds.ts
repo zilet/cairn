@@ -25,6 +25,10 @@ export const AGENT_JOB_KINDS = [
   "onboard",
   "what_if",
   "welcome",
+  // Not agentic: a Garmin Connect pull. It is a job so the request returns at once and
+  // the PWA can follow it, and it runs on its own lane (src/agentJobs.ts), never
+  // behind a CLI agent.
+  "garmin_sync",
 ] as const;
 
 export type AgentJobKind = (typeof AGENT_JOB_KINDS)[number];

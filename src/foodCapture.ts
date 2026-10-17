@@ -966,7 +966,12 @@ export function amendFoodIngredients(
 //     is split on commas/semicolons instead ("oats 60 g, milk 250 ml, a banana"), but
 //     never inside a number ("1,5 kg");
 //   - a line that is only a meal heading ("Breakfast:") is not a row, and a short
-//     lead-in before a colon ("Log lunch: …", "I had: …") is not part of the first one;
+//     lead-in before a colon ("Log lunch: …", "I had: …") is not part of the first one —
+//     nor is a meal label leading the words without one ("breakfast 30g oats …",
+//     "Lunch - rice …"; see mealLabelLead);
+//   - a run of written quantities with no punctuation between them ("30g oats 15g chia
+//     180g skyr 20 grapes") is one row per quantity, but only when the words START with
+//     a quantity, so "oats 60 g" keeps its trailing amount;
 //   - a quantity the athlete wrote — leading ("60 g oats", "2 eggs") or trailing
 //     ("oats 60g", "rice - 150 g", "chicken (205 g)", "toast x2") — goes into `amount`
 //     as they wrote it; the rest of their words is the item;
@@ -1016,7 +1021,9 @@ const FOOD_UNIT_WORDS = [
   "bars",
 ];
 const UNIT_RE = `(?:${FOOD_UNIT_WORDS.join("|")})`;
-const NUM_RE = String.raw`(?:~\s*)?\d+(?:[.,]\d+)?(?:\s*\/\s*\d+)?`;
+// "~30 g", "about 150 g", "around 2": the approximation stays part of the amount the
+// athlete wrote (parseFoodQuantity reads past it).
+const NUM_RE = String.raw`(?:(?:~|about|around|approx\.?)\s*)?\d+(?:[.,]\d+)?(?:\s*\/\s*\d+)?`;
 const LEADING_UNIT = new RegExp(String.raw`^(${NUM_RE}\s*${UNIT_RE})\.?(?:\s+of)?\s+(.+)$`, "i");
 const LEADING_ARTICLE_UNIT = new RegExp(String.raw`^(?:a|an|one)\s+(?:small\s+)?(?:cut[- ]?out\s+)?(${UNIT_RE})\s+of\s+(.+)$`, "i");
 const LEADING_COUNT = new RegExp(String.raw`^(${NUM_RE}|½|¼|¾)\s+(.+)$`, "i");
@@ -1024,7 +1031,91 @@ const TRAILING_UNIT = new RegExp(String.raw`^(.+?)[\s,:\-–—(]+(${NUM_RE}\s*$
 const TRAILING_TIMES = /^(.+?)\s*[x×]\s*(\d+)$/i;
 const BULLET_RE = /^\s*(?:[-*•·–—]+|\d+[.)])\s+/;
 const CONTINUATION_CONJ_RE = /^(?:and|\+)\s+/i;
-const MEAL_HEADING_RE = /^(?:breakfast|brunch|lunch|dinner|supper|snacks?|meal|pre-?workout|post-?workout)\s*:?\s*$/i;
+const TRAILING_CONJ_RE = /\s+(?:and|with|plus|in|on|over|\+|&)$/i;
+const MEAL_HEADING_RE =
+  /^(?:breakfast|brunch|lunch|dinner|supper|snacks?|meal|pre-?workout|post-?workout)\s*[:\-–—]?\s*$/i;
+// Where a written quantity starts: a number with a food unit ("30g", "180 ml", "2
+// slices") or a bare count before a word ("2 eggs"). "2% milk" is not one (the number
+// is part of the food's name).
+const QUANTITY_START = String.raw`(?:${NUM_RE}\s*${UNIT_RE}\b|${NUM_RE}\s+(?=[a-z])|[½¼¾]\s+(?=[a-z]))`;
+const QUANTITY_START_RE = new RegExp(String.raw`^${QUANTITY_START}`, "i");
+// Where a run is CUT is narrower than where a quantity may start. Inside a run only a
+// number with a measurement unit ("… 15g chia"), or a bare count before a food that is
+// counted ("… 20 grapes", "… 2 eggs"), opens a new row — never a number inside a food's
+// name ("2 percent milk", "12 grain bread", "3 bean chili", "5 spice") and never one
+// that follows "of", an article or an approximation ("3 slices of 12 grain bread",
+// "about 150 g").
+const COUNTED_FOOD = String.raw`(?:eggs?|egg\s+whites?|bananas?|apples?|oranges?|clementines?|mandarins?|tangerines?|pears?|peach(?:es)?|plums?|nectarines?|kiwis?|grapes|strawberr(?:y|ies)|raspberr(?:y|ies)|blueberr(?:y|ies)|cherr(?:y|ies)|dates|figs|prunes|apricots?|olives|almonds|walnuts|cashews|pecans|peanuts|pistachios|crackers?|cookies?|biscuits?|rice\s+cakes?|tortillas?|wraps?|pancakes?|waffles?|muffins?|bagels?|croissants?|dumplings|meatballs|sausages?|nuggets|wings|shrimps?|prawns|tacos?)`;
+// An approximation travels with the count it qualifies ("… skyr around 20 grapes"), so
+// the cut falls BEFORE it, exactly as for "about 150 g".
+const RUN_CUT = String.raw`(?:${NUM_RE}\s*${UNIT_RE}\b|${NUM_RE}\s+${COUNTED_FOOD}\b|[½¼¾]\s+${COUNTED_FOOD}\b)`;
+const QUANTITY_BOUNDARY_RE = new RegExp(
+  String.raw`(?<!~|\b(?:about|around|approx\.?|of|a|an|the))\s+(?=${RUN_CUT})`,
+  "gi"
+);
+
+// A meal label leading the athlete's words, with or without punctuation after it:
+// "breakfast 30g oats", "Lunch - rice", "afternoon snack: apple", "dinner was salmon".
+// Without a colon or dash the label counts only when a quantity follows it, so a food
+// whose NAME starts with a meal word ("breakfast burrito", "snack bar 40g") keeps it.
+const MEAL_LABEL_LEAD_RE =
+  /^\s*(?:(?:my|for)\s+)?(?:(?:morning|afternoon|evening|late|light|quick|small|second|2nd)\s+)?(breakfast|brunch|lunch|dinner|supper|snacks?)(?:\s+(?:was|is))?(?:\s*[:–—]\s*|\s+-\s*|\s+(?=(?:(?:~|about|around|approx\.?)\s*)?\d|[½¼¾]))/i;
+
+/**
+ * The meal label that leads `text` and the words after it ("breakfast 30g oats" →
+ * breakfast / "30g oats"), or null when the words do not open on a meal label. PURE.
+ * Chat routing reads the same shape (chatRouting.ts readsAsMealList), so the router
+ * and the row splitter can never disagree about what a label lead is.
+ */
+export function mealLabelLead(text: unknown): { label: string; rest: string } | null {
+  const raw = String(text ?? "");
+  const m = raw.match(MEAL_LABEL_LEAD_RE);
+  if (!m) return null;
+  const rest = raw.slice(m[0].length).trim();
+  return rest ? { label: m[1].toLowerCase().replace(/^snacks$/, "snack"), rest } : null;
+}
+
+/** Does `text` open on a written quantity ("30g oats", "2 eggs", "½ avocado")? PURE. */
+export function startsWithFoodQuantity(text: unknown): boolean {
+  return QUANTITY_START_RE.test(String(text ?? "").trim());
+}
+
+// The trailing form of a run: "rice 150g chicken 120g" → ["rice 150g", "chicken 120g"]. It
+// splits only when the words are ENTIRELY <food words> <amount with a unit> pairs — two or
+// more, each food part with letters and no number of its own, and nothing after the last
+// amount; anything else is returned whole, exactly as before.
+const UNIT_AMOUNT_RE = new RegExp(String.raw`${NUM_RE}\s*${UNIT_RE}\b\.?\)?`, "gi");
+const PAIR_LEAD_CONJ_RE = /^(?:and|with|plus|\+|&)\s+/i;
+
+function splitTrailingPairs(segment: string): string[] {
+  const text = segment.replace(/\s+/g, " ").trim();
+  const pieces: string[] = [];
+  let last = 0;
+  for (const m of text.matchAll(UNIT_AMOUNT_RE)) {
+    const end = (m.index ?? 0) + m[0].length;
+    pieces.push(text.slice(last, end).trim().replace(PAIR_LEAD_CONJ_RE, ""));
+    last = end;
+  }
+  if (pieces.length < 2 || text.slice(last).trim()) return [segment];
+  const foodPart = (piece: string) => piece.replace(new RegExp(UNIT_AMOUNT_RE.source, "i"), "");
+  const pairs = pieces.every(
+    (piece) => TRAILING_UNIT.test(piece) && /[a-z]{2,}/i.test(foodPart(piece)) && !/\d/.test(foodPart(piece))
+  );
+  return pairs ? pieces : [segment];
+}
+
+// "30g oats 15g chia 20 grapes" → ["30g oats", "15g chia", "20 grapes"]. Only a segment
+// that opens on a quantity and carries a second one is split this way (a trailing-form
+// run goes through splitTrailingPairs); anything else is returned whole, exactly as before.
+function splitQuantityRun(segment: string): string[] {
+  if (!QUANTITY_START_RE.test(segment)) return splitTrailingPairs(segment);
+  const parts = segment
+    .replace(/\s+/g, " ")
+    .split(QUANTITY_BOUNDARY_RE)
+    .map((part) => part.replace(TRAILING_CONJ_RE, "").trim())
+    .filter(Boolean);
+  return parts.length > 1 ? parts : [segment];
+}
 const LEAD_IN_RE = /^[^:\d\n]{1,40}:\s*(?=\S)/;
 const SPOKEN_LEAD_RE =
   /^(?:i\s+)?(?:just\s+)?(?:had|ate|eaten|drank|log(?:ged)?)\b(?:\s+(?:for\s+)?(?:breakfast|brunch|lunch|dinner|supper|a\s+snack|snack))?\s*:?\s*/i;
@@ -1062,8 +1153,9 @@ export function foodRowsFromWords(text: unknown): FoodIngredient[] {
     .map((line) => line.replace(BULLET_RE, "").trim())
     .filter((line) => line && !MEAL_HEADING_RE.test(line));
   if (!lines.length) return [];
-  // A short lead-in on the first line ("Log lunch: …", "I had: …") is not something eaten.
-  const first = lines[0].replace(LEAD_IN_RE, "").replace(SPOKEN_LEAD_RE, "").trim();
+  // A short lead-in on the first line ("Log lunch: …", "I had: …", "breakfast 30g …") is
+  // not something eaten.
+  const first = lines[0].replace(LEAD_IN_RE, "").replace(MEAL_LABEL_LEAD_RE, "").replace(SPOKEN_LEAD_RE, "").trim();
   lines = (first ? [first, ...lines.slice(1)] : lines.slice(1)).map((line, idx) =>
     idx > 0 ? line.replace(CONTINUATION_CONJ_RE, "").trim() : line
   );
@@ -1075,6 +1167,7 @@ export function foodRowsFromWords(text: unknown): FoodIngredient[] {
           .filter(Boolean)
       : lines;
   return segments
+    .flatMap(splitQuantityRun)
     .map(foodRowFromWords)
     .filter((row): row is FoodIngredient => !!row)
     .slice(0, MAX_INGREDIENTS);

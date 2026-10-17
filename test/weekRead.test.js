@@ -8,7 +8,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { repo } from "./_seed.js";
 import { seedDemo } from "../dist/demoSeed.js";
-import { weekRead, weekReadStart } from "../dist/domain/training/week-read.js";
+import { raceFasterSince, weekRead, weekReadStart } from "../dist/domain/training/week-read.js";
 import { planWeek } from "../dist/domain/training/plan-week.js";
 import { weekStage } from "../dist/repo/week-stage.js";
 import { addDaysISO, mondayOf } from "../dist/lib/dates.js";
@@ -187,7 +187,18 @@ test("the journey: every dated mark ahead to the summit, behind-you movement, on
   assert.equal(race.short, "Half");
   assert.ok(j.line && !ISO.test(j.line));
   assert.ok(Array.isArray(j.behind) && j.behind.length <= 3);
+  for (const row of j.behind) assert.doesNotMatch(row.words, /\b([A-Za-z]+)\s+\1\b/i);
   assert.equal(weekRead(addDaysISO(today, 7)).journey, null, "another week draws no road");
+});
+
+test("a race estimate never says since twice", () => {
+  const line = raceFasterSince(7, "since Sep 19", "2026-09-19");
+  assert.equal(line, "Race estimate 7 min faster since Sep 19");
+  assert.doesNotMatch(line, /\b([A-Za-z]+)\s+\1\b/i);
+  assert.equal(raceFasterSince(7, "since yesterday", "2026-09-18"), "Race estimate 7 min faster since yesterday");
+  assert.equal(raceFasterSince(7, "", "2026-09-19"), "Race estimate 7 min faster since Sep 19");
+  assert.equal(raceFasterSince(7, null, "2026-09-19"), "Race estimate 7 min faster since Sep 19");
+  assert.equal(raceFasterSince(7, "since since Sep 19", "2026-09-19"), "Race estimate 7 min faster since Sep 19");
 });
 
 test("the journey is null with nothing dated ahead", (t) => {

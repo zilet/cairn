@@ -29,7 +29,7 @@ export const DIAGNOSTIC_ROUTE_FAMILIES = [
   "sets", "settings", "since-last", "stats", "strength-journey", "suggestions", "supplements",
   "symptom-links", "team-week", "telemetry", "test-week", "today", "today-agenda", "today-plan-day",
   "today-read", "today-side", "today-strength-line", "training-agenda", "training-symptoms", "trajectory",
-  "turns", "update", "update-check", "update-status", "version", "volume", "week-ahead", "week-wins", "welcome", "whole-person-trajectory",
+  "turns", "ui-views", "update", "update-check", "update-status", "version", "volume", "week-ahead", "week-wins", "welcome", "whole-person-trajectory",
 ] as const;
 
 export const DIAGNOSTIC_ROUTE_FAMILY_SET: ReadonlySet<string> = new Set<string>(DIAGNOSTIC_ROUTE_FAMILIES);

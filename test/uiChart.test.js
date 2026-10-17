@@ -87,6 +87,18 @@ test("gauge: the band and a toned dot, only the edge labels given", () => {
   assert.equal(win.CairnUiChart.gaugeSvg({ value: Number.NaN, low: 0, high: 1 }), "");
 });
 
+test("gauge: a second edge label that would collide with the first yields", () => {
+  const win = load();
+  const host = renderHtml(
+    win.CairnUiChart.gaugeSvg({ value: 105, low: 79, high: 80, tone: "ok", lowLabel: "79", highLabel: "80" }),
+    { document: win.document }
+  );
+  assert.deepEqual(
+    [...host.querySelectorAll("svg.hgauge text")].map((t) => t.textContent),
+    ["79"]
+  );
+});
+
 test("zone bar: toned bands, the optimal band stronger, now and pace dots, one accessible name", () => {
   const win = load();
   const svg = win.CairnUiChart.zoneBarSvg({
@@ -116,6 +128,10 @@ test("zone bar: toned bands, the optimal band stronger, now and pace dots, one a
     ]
   );
   assert.equal(root.querySelector(".zonebar-optimal").textContent, "optimal");
+  // 11px text with a baseline at y=25 needs room below it for descenders.
+  const box = root.getAttribute("viewBox").split(" ").map(Number);
+  const baseline = Number(root.querySelector(".zonebar-optimal").getAttribute("y"));
+  assert.equal(box[3] - baseline >= 4, true);
   assert.ok(root.querySelector("circle.zonebar-now"));
   assert.ok(root.querySelector("line.zonebar-pace") && root.querySelector("circle.zonebar-ahead"));
 

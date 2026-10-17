@@ -61,10 +61,10 @@ function captureFoodMacrosHtml(row: CaptureMacroRow): string {
   const tags = captureFoodSignatureMacros(row);
   if (!tags.length) return "";
   const body = tags
-    .map(
-      (t) =>
-        `<span class="capture-macro" title="${escAttr(`${t.grams} g ${t.label}`)}"><span class="capture-macro-k">${escHtml(t.key)}</span>${t.grams}</span>`,
-    )
+    .map((t) => {
+      const said = `${t.grams} g ${t.label}`;
+      return `<span class="capture-macro" title="${escAttr(said)}"><span class="sr-only">${escHtml(said)}</span><span aria-hidden="true"><span class="capture-macro-k">${escHtml(t.key)}</span>${t.grams}</span></span>`;
+    })
     .join("");
   return `<span class="capture-item-macros">${body}</span>`;
 }

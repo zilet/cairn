@@ -27,11 +27,11 @@
    A deeper leaf wears one quiet step back to its landing (the .home-back look);
    a landing lists its deeper leaves as hairline rows: name, one muted line, chevron. */
 .train-crumb{display:inline-block;margin:0 0 var(--space-5)}
-/* the Fuel trends' one quiet way to logging (Fuel owns it): a text link, never a card */
-.train-fuel-link{display:inline-block;margin:0 0 var(--space-7);font-size:var(--text-sm);color:var(--ink2);
-  text-decoration:underline;text-underline-offset:var(--link-offset);text-decoration-color:var(--line-strong)}
-.train-crumb+.train-fuel-link{margin-left:var(--space-7)}
-.train-fuel-link:hover{color:var(--ink);text-decoration-color:var(--ink)}
+/* the Intake group's primary Log a meal action and in-place composer slot */
+.train-fuel-log{margin:0 0 var(--space-7)}
+.train-fuel-log-btn{min-height:44px;padding:var(--space-4) var(--space-8)}
+.train-fuel-log-slot .fuel-log{margin-top:var(--space-5)}
+.train-fuel-log-slot .fuel-log:not(.is-open){display:none}
 .train-deeper{margin:var(--space-11) 0 var(--space-4)}
 .train-deeper-kick{display:block;margin:0 0 var(--space-1)}
 .train-deeper-row{width:100%;display:flex;align-items:center;gap:var(--space-6);text-align:left;color:inherit;font:inherit;

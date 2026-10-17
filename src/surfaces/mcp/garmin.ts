@@ -28,15 +28,21 @@ export function registerGarminTools(server: McpToolRegistrar) {
     async () => asText(listGarminSources()));
 
   server.tool("sync_garmin",
-    "Run a manual Garmin Connect sync using local GARMIN_USERNAME/GARMIN_PASSWORD or stored token files. Experimental unofficial connector. The scheduler also auto-syncs ~every 6h when configured; the result is recorded as garmin_last_sync_at/garmin_last_sync_status (visible via get_settings).",
+    "Run a manual Garmin Connect sync using local GARMIN_USERNAME/GARMIN_PASSWORD or stored token files. Experimental unofficial connector. Waits for the sync and returns its result. A sync of the same window already running (the scheduler's, or the app's Sync now) is joined rather than run twice; a different window waits for it to finish, then runs. A sync that runs past its 4-minute deadline returns {ok:false, error:'Garmin sync timed out', code:'timed_out'}, and the next call starts afresh. The scheduler also auto-syncs ~every 6h when configured; the result is recorded as garmin_last_sync_at/garmin_last_sync_status (visible via get_settings).",
     {
       days: z.number().int().optional().describe("Backfill window, default 30, max 180"),
       limit: z.number().int().optional().describe("Activity list fetch limit, default 100, max 200"),
       daily: z.boolean().optional().describe("Whether to sync daily metrics; default true"),
     },
     async (opts) => {
-      const { syncGarmin } = await import("../../garmin.js");
-      return asText(await syncGarmin(opts));
+      const { GarminSyncAbandonedError, syncGarmin } = await import("../../garmin.js");
+      try {
+        return asText(await syncGarmin(opts));
+      } catch (e) {
+        // A pass given up on is an answer, not a tool failure: say so in the result.
+        if (e instanceof GarminSyncAbandonedError) return asText({ ok: false, error: e.message, code: e.code });
+        throw e;
+      }
     });
 
   server.tool("garmin_export_backfill",

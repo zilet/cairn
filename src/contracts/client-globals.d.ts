@@ -2384,6 +2384,7 @@ declare global {
     explanation?: { setup?: unknown; move?: unknown; feel?: unknown; avoid?: unknown } | null
   ): void;
   declare function openFoodDetail(note: unknown, fromTile?: Element | null): Promise<void>;
+  declare function mountFuelLog(host: Element, onLogged: () => void): Promise<ClientFuelLogHandle>;
   declare function wireCardioSync(root: ParentNode, onDone?: () => unknown): void;
   declare function measureChatTop(): void;
   declare function ensureRestBar(): HTMLElement;
@@ -2677,11 +2678,14 @@ declare global {
         | { id: number; status: string; food: Record<string, unknown>; missing: boolean }
         | null;
       captureFoodFromRow(row: unknown): { status: string; food: Record<string, unknown> };
-      captureFoodTagInner(status: unknown, food: unknown): string;
+      captureFoodAmongLead(food: unknown, opts?: { preferThing?: boolean }): string;
+      captureFoodTagInner(status: unknown, food: unknown, opts?: { among?: boolean; preferThing?: boolean }): string;
       captureFoodReviewInner(status: unknown, food: unknown): string;
       amendedFoodRow(action: unknown): { id: number; row: Record<string, unknown> } | null;
-      amendedFoodTag(action: unknown): string | null;
+      amendedFoodTag(action: unknown, opts?: { among?: boolean; preferThing?: boolean }): string | null;
       planLandingTag(action: unknown): { text: string; scheduled: boolean } | null;
+      foodTagOpts(applied: ChatScreenAppliedAction[]): Array<{ among?: boolean; preferThing?: boolean }>;
+      agentCheckHtml(attempts: unknown): string;
     };
 
     CairnChatHeaderController: {
@@ -4628,6 +4632,14 @@ declare global {
       configured(settings: Record<string, unknown> | null | undefined): boolean;
       lineHtml(settings: Record<string, unknown> | null | undefined, opts?: { expectingRun?: unknown }): string;
       wire(root?: ParentNode | null, onDone?: () => unknown): void;
+      sync(deps?: {
+        api?: (
+          path: string,
+          opts?: { method?: string; cache?: RequestCache; acceptErrorBody?: boolean }
+        ) => Promise<unknown>;
+        wait?: (ms: number) => Promise<void>;
+        readTimeoutMs?: number;
+      }): Promise<import("./client-api.js").ClientGarminSyncResult | null>;
       zoneColors: readonly string[];
     };
 

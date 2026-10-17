@@ -1,3 +1,5 @@
+import { foodRowsFromWords, mealLabelLead, startsWithFoodQuantity } from "./foodCapture.js";
+
 export const CHAT_ROUTING_POLICY_VERSION = "chat-routing-v1" as const;
 
 export const CHAT_LANES = ["capture", "coach", "deep"] as const;
@@ -144,7 +146,7 @@ const LAB_OR_IMAGING =
 const MEDICATION =
   /\b(?:medication|medicine|prescription|dosage|dose|drug|side effect|interaction|insulin|warfarin|antibiotics?|metformin|statin|ssri|blood pressure medicine)\b/i;
 const GOAL_IDENTITY =
-  /\b(?:(?:change|switch|replace|rethink|set|reset|choose)\s+(?:a |my )?(?:new\s+)?goal|goal\s+(?:is|should be|mode)|(?:lose|gain)\s+(?:weight|fat|muscle)|bulk(?:ing)?|cut(?:ting)?|maintenance\s+goal|new goal)\b/i;
+  /\b(?:(?:change|switch|replace|rethink|set|reset|choose)\s+(?:a |my )?(?:new\s+)?goal|goal\s+(?:is|should be|mode)|(?:lose|gain)\s+(?:weight|fat|muscle)|bulk(?:ing)?|(?<!steel[- ])cut(?:ting)?(?![- ]?out\s+(?:blocks?|squares?|pieces?|strips?|bites?)\b)|maintenance\s+goal|new goal)\b/i;
 const PLAN_RESTRUCTURE =
   /\b(?:restructure|overhaul|redesign|rebuild|rewrite|replace)\s+(?:my\s+)?(?:whole\s+)?(?:training\s+)?(?:plan|program|split|week|meals?)|\b(?:change|switch)\s+(?:my\s+)?(?:training\s+)?(?:split|plan|program)\b|\bswitch me from\b|\bmove\s+(?:all|my)\s+.*\bday(?:s)?\b/i;
 const CURRENT_RESEARCH =
@@ -194,7 +196,8 @@ export function chatMessageIsNarrative(message: unknown): boolean {
   if (!text) return false;
   if (text.includes("?") || NARRATIVE_QUESTION_LEAD.test(text)) return true;
   // An explicit "Log food: …" paste (the Fuel composer's frame) is long because the meal is.
-  if (!/^log\b/i.test(text) && text.split(/\s+/).length > NARRATIVE_MAX_WORDS) return true;
+  // So is a meal written as a list (readsAsMealList): a ten-item breakfast is not a story.
+  if (!/^log\b/i.test(text) && text.split(/\s+/).length > NARRATIVE_MAX_WORDS && !readsAsMealList(text)) return true;
   return NARRATIVE_CUES.test(text);
 }
 
@@ -258,6 +261,85 @@ export function messageNeedsPriorTurn(message: unknown): boolean {
   if (!text) return false;
   if (PRIOR_LEAD.test(text)) return true;
   return PRIOR_REFERENT.test(text) && !namesConcreteFood(text);
+}
+
+// ---- Doubt about a food log ----------------------------------------------------------
+// The receipt lane writes a row that NO agent reads, and that row feeds intake, TDEE and
+// the adaptive targets. So a food message carrying any sign that it is not simply "this
+// is what I ate" goes to the agent, which can read it: a correction ("not 200g", "make it
+// 200g", "sorry, I meant…"), a question or a comparison without its "?" ("is that enough
+// protein", "200g rice or 300g potatoes", "if I eat…"), a nutrition lookup ("calories in
+// 200g rice"), or food that was someone else's or shared ("for my wife", "I had about a
+// third"). A wrong negative costs one agent turn; a wrong positive corrupts the log.
+const FOOD_LOG_DOUBT_CUES = [
+  // a correction or an amendment of an earlier entry
+  String.raw`\b(?:not|no|nope|make\s+it|sorry|instead|rather|chang(?:e|ed|ing)|swap\w*|replac\w*|oops|wrong|meant|mistake|actually|only)\b`,
+  // a question, a comparison or a hypothetical, with or without its "?"
+  String.raw`\b(?:or|vs\.?|versus|if|enough|too\s+(?:much|many)|am\s+i|should\s+i|can\s+i|could\s+i|is\s+(?:that|it|this)|compar\w*|better|worse)\b`,
+  // a nutrition lookup rather than a meal
+  String.raw`\b(?:calories|cals?|kcal|macros?|protein|carbs?|fats?|fib(?:er|re)|sugars?)\s+(?:in|for|of)\b`,
+  // someone else's food, or a shared dish
+  String.raw`\b(?:wife|husband|partner|girlfriend|boyfriend|kids?|children|son|daughter|family|friends?|guests?|team|mom|mum|dad|parents?|baby|everyone|we|they|us)\b`,
+  String.raw`\b(?:a\s+third|a\s+quarter|half\s+of|some\s+of|shared?|split\s+(?:it|with|between))\b`,
+];
+const FOOD_LOG_DOUBT_RE = new RegExp(FOOD_LOG_DOUBT_CUES.join("|"), "i");
+
+/** The message carries a correction, a question, a lookup or someone else's food: never a receipt-only log. */
+export function foodLogDoubtCue(message: unknown): boolean {
+  return FOOD_LOG_DOUBT_RE.test(String(message ?? "").replace(/[‘’]/g, "'"));
+}
+
+// ---- A meal written as a list ---------------------------------------------------------
+// The commonest food message carries no verb at all: "breakfast 30g rolled oats 15g chia
+// 3g psyllium 180g non fat skyr 20 grapes", "Snack: 20g almonds", "2 eggs, 2 slices toast".
+// It is a meal label leading food words, words that open on a written quantity, or a
+// comma/line list ("oats 60g, milk 250ml, banana") — and nothing else: no doubt cue above,
+// no request, plan or future word, nothing that amends an earlier entry, no other logging
+// domain, one meal. The router does not guess the rows: it runs foodCapture.ts's own
+// splitter and takes the meal only when EVERY row it yields is food-shaped (two or more,
+// or one under a meal label), so what the router accepts is exactly what gets stored.
+// Short of all of that, the message keeps the routing it had before (an agent reads it).
+const MEAL_LIST_NOT_A_LOG =
+  /\b(?:ideas?|options?|suggest\w*|recommend\w*|recipes?|alternatives?|substitut\w*|instead|plan(?:s|ned|ning)?|prep(?:ping)?|tomorrow|next|should|could|would|want(?:ed)?|wanna|going\s+to|gonna|i'?ll|will|crav\w*|think(?:ing)?|target|goal|budget|left|remaining|burn(?:ed|t)?|every|daily|usually|always|often|how|what|why|just|made|i)\b/i;
+const MEAL_LIST_ACTIVITY_VERB = /\b(?:ran|walked|hiked|swam|rowed|cycled|biked|rode|lifted|worked\s+out|trained)\b/i;
+const MEAL_LIST_AMENDS = /\b(?:add(?:ed|ing)?|also|more|same|usual|again|rest\s+of|other\s+half)\b/i;
+const MEAL_LABEL_WORD = /\b(breakfast|brunch|lunch|dinner|supper|snack)s?\b/gi;
+// Words that make a row a sentence rather than a food: "rice is that", "chicken for".
+const ROW_FUNCTION_WORD =
+  /\b(?:is|are|was|were|be|been|that|this|it|or|vs|versus|for|am|i|if|enough|we|they|he|she|you|my|her|his|their|our|not|no|should|could|would|can|will|did|do|does|had|have|has|ate|eat|eaten|than|then|but|so|because|what|how|why|when|think|maybe)\b/i;
+const ROW_MAX_WORDS = 8;
+
+function foodShapedRow(row: { item?: unknown; amount?: unknown }): boolean {
+  const item = String(row?.item ?? "").trim();
+  if (!/[a-z]{2,}/i.test(item) || ROW_FUNCTION_WORD.test(item)) return false;
+  if (item.split(/\s+/).length > ROW_MAX_WORDS) return false;
+  // A row with no written amount must at least name a food.
+  return Boolean(String(row?.amount ?? "").trim()) || namesConcreteFood(item);
+}
+
+/** A single meal written as a list of foods, whose every split row is food-shaped. */
+export function readsAsMealList(message: unknown): boolean {
+  const text = String(message ?? "").trim();
+  if (!text) return false;
+  if (foodLogDoubtCue(text)) return false;
+  if (MEAL_LIST_NOT_A_LOG.test(text) || MEAL_LIST_AMENDS.test(text) || CORRECTION_VERB.test(text)) return false;
+  if (ACTIVITY_NOUN.test(text) || MEAL_LIST_ACTIVITY_VERB.test(text)) return false;
+  if (WEIGHT_NOUN.test(text) || SUPPLEMENT_NOUN.test(text)) return false;
+  if (foodIntakeNegated(text) || messageNeedsPriorTurn(text)) return false;
+  const labels = new Set([...text.matchAll(MEAL_LABEL_WORD)].map((m) => m[1].toLowerCase()));
+  if (labels.size > 1) return false;
+  const lead = mealLabelLead(text);
+  if (!lead && !startsWithFoodQuantity(text) && !/[,;\n]/.test(text)) return false;
+  const rows = foodRowsFromWords(text);
+  if (!rows.length || !rows.every(foodShapedRow)) return false;
+  // An amount still glued inside a food's name ("rice 150g chicken", "7 grain toast") is a
+  // row the receipt would show wrong: the agent reads it instead.
+  if (rows.some((row) => /\d/.test(String(row.item)))) return false;
+  // Two or more rows, or a single food under its meal label ("lunch 150g rice"). A bare
+  // amount ("150g", "150g rice") alone is more often an answer than a meal.
+  if (rows.length < 2 && !lead) return false;
+  // Something in it is food by name, or every row carries the athlete's own amount.
+  return rows.some((row) => namesConcreteFood(String(row.item))) || rows.every((row) => !!row.amount);
 }
 
 /** How many DIFFERENT meals are headed in one message ("morning snack: … breakfast: …"). */
@@ -334,6 +416,8 @@ function captureReasons(
   // Natural-language capture stays intentionally narrow: a concrete completed
   // event is eligible, while a general question about food/training is not.
   if (readsAsIntake(message) || /\b(?:breakfast|lunch|dinner)\s*(?:was|:)/i.test(message)) addReason(reasons, "explicit_food_log");
+  // A meal written as a list with no verb ("breakfast 30g oats 15g chia 180g skyr") is a log.
+  if (readsAsMealList(message)) addReason(reasons, "explicit_food_log");
   if (/\b(?:i\s+)?(?:ran|walked|hiked|swam|rowed|cycled|biked|rode|lifted|worked out|did|finished)\b(?:\s+(?:my\s+)?(?:strength\s+)?(?:workout|training|session))?(?:\s+(?:for\s+)?\d)?/i.test(message) && (ACTIVITY_NOUN.test(message) || /\b(?:swam|ran|walked|hiked|rowed|cycled|biked|rode)\b/i.test(message))) {
     addReason(reasons, "explicit_activity_log");
   }
@@ -355,13 +439,16 @@ function captureReasons(
   // can reach the existing row. Plain log verbs ("log/track/record…") are
   // excluded so a genuinely new entry keeps its instant receipt, and the other
   // logging domains keep priority: an activity/weight/supplement-shaped message
-  // never rides this branch.
+  // never rides this branch. A bare list with no meal label of its own ("150g rice")
+  // is the same question: right after a capture it may be more of that meal, so the
+  // agent reads it; "lunch 150g rice" names its meal and stays a new entry.
   if (
     recentFoodCapture &&
     (AMENDMENT_VERB.test(message) ||
       ADDITION_PHRASE.test(message) ||
       hasCorrectionVerb ||
-      messageNeedsPriorTurn(message)) &&
+      messageNeedsPriorTurn(message) ||
+      (readsAsMealList(message) && !mealLabelLead(message))) &&
     !NEW_LOG_VERB.test(message) &&
     !ACTIVITY_NOUN.test(message) &&
     !WEIGHT_NOUN.test(message) &&

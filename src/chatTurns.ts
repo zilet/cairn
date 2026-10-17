@@ -84,6 +84,7 @@ import {
 } from "./chatRouting.js";
 import { log } from "./log.js";
 import {
+  foodListAnswersCoachQuestion,
   carriesPlanApplyAffirmation,
   foodCaptureWords,
   hasExplicitGoalIntentInContext,
@@ -127,6 +128,7 @@ import {
 // modules. They are re-exported here so every existing importer, route and test keeps
 // resolving them from "./chatTurns.js".
 export {
+  foodListAnswersCoachQuestion,
   carriesPlanApplyAffirmation,
   draftsSessionPrescription,
   foodCaptureWords,
@@ -305,6 +307,25 @@ export function instantCaptureReply(meal: string, photo: boolean, note: any): st
   return `Logged your ${meal}${items}, in your words. ${why}, so the numbers stay blank until you add them.`;
 }
 
+// How recent the coach's question must be for a meal list to read as its answer
+// (foodListAnswersCoachQuestion). Measured between the two stored messages, never against
+// the clock, so a replay of the same turn takes the same lane.
+const COACH_QUESTION_ANSWER_WINDOW_MS = 3 * 60 * 60_000;
+
+function answersCoachQuestion(turn: any): boolean {
+  const userMessageId = Number(turn?.user_message_id);
+  if (!Number.isSafeInteger(userMessageId) || userMessageId <= 0) return false;
+  const prior = repo.listChatMessagesBefore(userMessageId, 1)[0] as any;
+  if (prior?.role !== "assistant" || !foodListAnswersCoachQuestion(turn.message, prior.content)) return false;
+  const asked = parseDbTime(prior.created_at)?.getTime();
+  const sent = parseDbTime((repo.getChatMessage(userMessageId) as any)?.created_at)?.getTime();
+  // An unreadable stamp keeps the conservative reading: the agent sees the question.
+  if (asked === undefined || sent === undefined) return true;
+  return sent - asked <= COACH_QUESTION_ANSWER_WINDOW_MS;
+}
+
+// The receipt lane: write the food note and its receipt with no agent. Null when the turn
+// is not (or no longer) an instant capture, so the caller runs the ordinary agent turn.
 export function completeInstantFoodCapture(id: number, rawMessage?: string) {
   const turn = repo.getChatTurn(id) as any;
   if (!turn) return null;
@@ -312,6 +333,7 @@ export function completeInstantFoodCapture(id: number, rawMessage?: string) {
     return { turn, message: repo.getChatMessage(Number(turn.assistant_message_id)), note: null };
   }
   if (!isInstantFoodCaptureDecision(turn.routing, turn.message)) return null;
+  if (answersCoachQuestion(turn)) return null;
   const photo = turn.routing.reason_codes.includes("photo_food_default") && !!turn.image_path;
   // The food row keeps the athlete's words, never the "Log food:" framing a food
   // surface put on the turn for routing (frameFoodCaptureMessage).
@@ -355,8 +377,8 @@ async function processChatTurn(id: number): Promise<void> {
 }
 
 async function processChatTurnInner(id: number, turn: any): Promise<void> {
-  if (isInstantFoodCaptureDecision(turn.routing, turn.message)) {
-    completeInstantFoodCapture(id, turn.message ?? "");
+  // A receipt the lane declines (completeInstantFoodCapture -> null) runs as an ordinary turn.
+  if (isInstantFoodCaptureDecision(turn.routing, turn.message) && completeInstantFoodCapture(id, turn.message ?? "")) {
     return;
   }
   repo.markChatTurnRunning(id);

@@ -16,13 +16,12 @@ import { planItemsOutOfOrder } from "./plan-item-order.js";
 import { flexibleTrainingAgenda } from "../../repo/flexible-training-agenda.js";
 import { getEnduranceSchedule, statedRunDows, WEEKDAY_NAMES, isoDow } from "../../repo/profile.js";
 import {
-  planDayCandidates,
   planDayRole,
-  resolveSessionPlanDay,
   selectAdaptivePlanDay,
   thisWeekPlanDayMap,
   type WeekdayPlanDayRole,
 } from "../../repo/plan-selection.js";
+import { loggedSessionDay, planDayTitle, sessionDayCandidates } from "../../repo/session-day.js";
 import { activitySportWhere, RUN_SPORT_PATTERNS } from "../../repo/endurance-sports.js";
 import { withoutShadowActivities } from "../../repo/activity-shadow.js";
 import { weekWins } from "../../repo/sessions.js";
@@ -32,7 +31,7 @@ import { weekLayoutClosed } from "../../repo/week-layout-closed.js";
 import { athleteUnits } from "../../repo/settings.js";
 import { distanceWords, type DistanceUnit } from "../../repo/display-words.js";
 import { localDateISO } from "../../repo/shared.js";
-import { deriveSessionTitle, planDayStrengthGroups } from "../../repo/training-read.js";
+import { planDayStrengthGroups } from "../../repo/training-read.js";
 import { todayStrengthLine, type TodayStrengthLine } from "../../repo/today-strength-line.js";
 
 export type PlanWeekStatus = "done" | "today" | "upcoming" | "rest" | "open";
@@ -146,8 +145,12 @@ type WeekSessionRow = {
   day_number: number | null;
   day_name: string | null;
   finished: boolean;
-  /** The plan day this session actually WAS — linked, or resolved off what was lifted. */
+  /** The plan day this session actually WAS (src/repo/session-day.ts); null when it shows as itself. */
   resolved_day_number: number | null;
+  /** The plan day the logged work resolves to, whatever it is called — where a ring-ordered week files it. */
+  placed_day_number: number | null;
+  /** Its display name — the same answer the session lists and the today line print. */
+  title: string;
 };
 
 function shortWeekday(dow: number): string {
@@ -179,7 +182,9 @@ function toPlanWeekPlanDay(day: TemplateDay): PlanWeekPlanDay {
   const role = planDayRole({ day_number: day.day_number, day_type, names: day.names ?? [] });
   return {
     day_number: day.day_number,
-    name: String(day.name || `Day ${day.day_number}`),
+    // The one label (src/repo/session-day.ts): the today line and the session lists say
+    // the same words, a "Day 3" the athlete never named reading as its focus everywhere.
+    name: planDayTitle({ name: String(day.name || `Day ${day.day_number}`), focus: day.focus ?? null, day_number: day.day_number }),
     focus: day.focus ?? null,
     purpose: day.purpose ?? null,
     day_type,
@@ -202,21 +207,14 @@ function weekSessions(weekStart: string, weekEnd: string): WeekSessionRow[] {
           ORDER BY s.date ASC, s.id ASC`
       )
       .all(weekStart, weekEnd) as any[];
-    let candidates: ReturnType<typeof planDayCandidates> = [];
-    try {
-      candidates = planDayCandidates();
-    } catch {
-      candidates = [];
-    }
+    const candidates = sessionDayCandidates();
     return rows.map((r) => {
       const id = Number(r.id);
       const plan_day_id = r.plan_day_id == null ? null : Number(r.plan_day_id);
-      let resolved_day_number: number | null = null;
-      try {
-        resolved_day_number = resolveSessionPlanDay(id, plan_day_id, candidates)?.day_number ?? null;
-      } catch {
-        resolved_day_number = null;
-      }
+      // One answer for the cell's plan day AND its title: the strip printed the title,
+      // Horizon the plan day, and a redraw that rewrote a row in place made them
+      // two different days (src/repo/session-day.ts).
+      const logged = loggedSessionDay(id, plan_day_id, candidates);
       return {
         id,
         date: String(r.date),
@@ -224,7 +222,9 @@ function weekSessions(weekStart: string, weekEnd: string): WeekSessionRow[] {
         day_number: r.day_number == null ? null : Number(r.day_number),
         day_name: r.day_name == null ? null : String(r.day_name),
         finished: !!r.finished_at,
-        resolved_day_number,
+        resolved_day_number: logged.day_number,
+        placed_day_number: logged.placed_day_number,
+        title: logged.title,
       };
     });
   } catch {
@@ -265,15 +265,23 @@ function sessionForDate(rows: WeekSessionRow[], date: string): WeekSessionRow | 
 function toPlanWeekSession(hit: WeekSessionRow): PlanWeekSession {
   return {
     id: hit.id,
-    title: deriveSessionTitle(hit.id, hit.plan_day_id, hit.day_name),
+    title: hit.title,
     date: hit.date,
     finished: hit.finished,
   };
 }
 
-function sessionForPlanDay(rows: WeekSessionRow[], dayNumber: number): PlanWeekSession | null {
-  const hit = rows.find((r) => (r.resolved_day_number ?? r.day_number) === dayNumber);
-  return hit ? toPlanWeekSession(hit) : null;
+/**
+ * Template mode: the session this plan day's cell holds — one the logged work resolves
+ * to the day, whatever it ended up called (the cell sits by WHERE, its title says WHAT).
+ * Never the raw link: a redraw rewrites a row in place, so the link can name a day the
+ * session never was. `taken` keeps one session to one cell.
+ */
+function sessionForPlanDay(rows: WeekSessionRow[], dayNumber: number, taken: Set<number>): PlanWeekSession | null {
+  const hit = rows.find((r) => !taken.has(r.id) && r.placed_day_number === dayNumber);
+  if (!hit) return null;
+  taken.add(hit.id);
+  return toPlanWeekSession(hit);
 }
 
 function statusForCell(opts: {
@@ -606,10 +614,13 @@ export function planWeek(date?: string): PlanWeek {
     // dated today already reads "today" (statusForCell's session rule); the
     // todayDayNumber fallback below must not also crown a second cell "today" for
     // whichever day number the ring points at — the log outranks it.
+    // Every session this week holds a cell (one with no plan day to sit on gets its own,
+    // below), so an unfinished one today always IS the today cell.
     const todayClaimedBySession = sessions.some((s) => s.date === asOf && !s.finished);
+    const taken = new Set<number>();
     for (const templateDay of template) {
       const plan_day = toPlanWeekPlanDay(templateDay);
-      const session = sessionForPlanDay(sessions, plan_day.day_number);
+      const session = sessionForPlanDay(sessions, plan_day.day_number, taken);
       const intent = intents.find((i) => Number(i.provisional_day_number) === plan_day.day_number) ?? null;
       const run = intent ? toPlanWeekRun(intent) : null;
       days.push({
@@ -629,6 +640,24 @@ export function planWeek(date?: string): PlanWeek {
         session,
         run,
         hard: isHard(plan_day, run),
+      });
+    }
+    // A session the plan cannot place (nothing it lifted is on any plan day), or a second
+    // one on a day already holding one, still happened: it shows as itself, after the
+    // plan's days, and never disappears from the week.
+    for (const row of sessions) {
+      if (taken.has(row.id)) continue;
+      taken.add(row.id);
+      const session = toPlanWeekSession(row);
+      days.push({
+        date: null,
+        weekday: null,
+        dow: null,
+        status: statusForCell({ date: null, asOf, planDay: null, session, run: null, todayDayNumber }),
+        plan_day: null,
+        session,
+        run: null,
+        hard: false,
       });
     }
   }

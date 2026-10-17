@@ -132,7 +132,9 @@ function chipOf(
 ): DayChip {
   const date = cell.date;
   const heavyLower = cell.plan_day != null && heavy.has(cell.plan_day.day_number);
-  const liftTitle = text(cell.plan_day?.name) || text(cell.session?.title);
+  // A day with a logged session names what was DONE — the cell's session title, the
+  // same answer Today's strip prints (src/repo/session-day.ts); the plan day names the rest.
+  const liftTitle = text(cell.session?.title) || text(cell.plan_day?.name);
   const covered =
     !!cell.run && cell.run.status === "completed" && !!cell.run.completion_date && cell.run.completion_date !== date;
   const lift = liftTitle
@@ -446,13 +448,35 @@ function markName(m: WeekReadJourneyMark): string {
   }
 }
 
+/**
+ * Date words inside a "since …" sentence. `since_words` already begins with "since"
+ * ("since Sep 19", "since yesterday"); a bare ISO falls back to `dateWords`.
+ */
+function sinceDateWords(words: string | null | undefined, iso: string | null | undefined): string {
+  let said = String(words ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  while (/^since\s+/i.test(said)) said = said.replace(/^since\s+/i, "").trim();
+  return said || dateWords(iso || "") || "";
+}
+
+/** "Race estimate 7 min faster since Sep 19". Empty when the date cannot be named. */
+export function raceFasterSince(
+  min: number,
+  sinceWords: string | null | undefined,
+  sinceIso: string | null | undefined
+): string {
+  const since = sinceDateWords(sinceWords, sinceIso);
+  return since ? `Race estimate ${min} min faster since ${since}` : "";
+}
+
 function behindOf(path: TodayPath): WeekReadJourneyBehind[] {
   const out: WeekReadJourneyBehind[] = [];
   const race = path.race;
   if (race && race.trend_delta_sec != null && race.trend_delta_sec <= -30 && race.since) {
     const min = Math.max(1, Math.round(-race.trend_delta_sec / 60));
-    const since = race.since_words || dateWords(race.since);
-    out.push({ key: "race", words: `Race estimate ${min} min faster since ${since}` });
+    const words = raceFasterSince(min, race.since_words, race.since);
+    if (words) out.push({ key: "race", words });
   }
   for (const row of path.board ?? []) {
     // Weight is Today's own row, word for word ("6 lb down since Aug 3"): never a delta

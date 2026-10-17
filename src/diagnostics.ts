@@ -17,7 +17,7 @@ import {
 const DEFAULT_SLOW_REQUEST_MS = 2_000;
 const INTERNAL_TELEMETRY_ROUTES = new Set([
   "/api/health", "/api/ready", "/api/diagnostics", "/api/agent-stats",
-  "/api/brain-diagnostics", "/api/art/stats", "/api/telemetry/client",
+  "/api/brain-diagnostics", "/api/art/stats", "/api/telemetry/client", "/api/ui-views",
 ]);
 const requestIds = new WeakMap<Request, string>();
 const unexpectedErrorRequests = new WeakSet<Request>();

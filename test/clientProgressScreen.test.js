@@ -382,3 +382,80 @@ test("a warm Volume open paints the bars and the balance from their peeks at onc
   assert.match(view.innerHTML, /id="volBalanceSlot"/);
   assert.ok(slot.innerHTML.length > 0);
 });
+
+test("renderIntake titles the header Intake and wires Log a meal to the shell's fuel composer mount", async () => {
+  const context = loadProgressScreen();
+  let clickHandler = null;
+  let openState = false;
+  let mounted = 0;
+  let opened = 0;
+  let closed = 0;
+  const bundles = [];
+  const btn = {
+    attrs: {},
+    setAttribute(k, v) {
+      this.attrs[k] = v;
+    },
+    addEventListener(type, fn) {
+      if (type === "click") clickHandler = fn;
+    },
+  };
+  const slot = {
+    isConnected: true,
+    querySelector(sel) {
+      if (sel === ".fuel-log.is-open") return openState ? {} : null;
+      return null;
+    },
+  };
+  context.headerTitle = { textContent: "" };
+  context.state = { tab: "progress", progressSeg: "" };
+  context.segBar = () => `<button data-intake-log-btn></button><div data-intake-log-slot></div>`;
+  context.PROGRESS_SEG = [];
+  context.PROGRESS_HANDLERS = {};
+  context.peekCached = () => null;
+  context.loadingState = (msg) => msg;
+  context.wireSeg = () => {};
+  context.cachedApi = () => Promise.resolve({});
+  context.swrInvalidate = () => {};
+  // The shell (eager) owns the reach into the lazy fuel bundle; Train only calls mountFuelLog.
+  context.mountFuelLog = (host, onLogged) => {
+    bundles.push("fuel");
+    assert.equal(host === slot, true);
+    assert.equal(typeof onLogged, "function");
+    mounted += 1;
+    const teardown = () => {};
+    return Promise.resolve(
+      Object.assign(teardown, {
+        open() {
+          opened += 1;
+          openState = true;
+        },
+        close() {
+          closed += 1;
+          openState = false;
+        },
+      })
+    );
+  };
+  context.view = {
+    innerHTML: "",
+    querySelector(sel) {
+      if (sel === "[data-intake-log-btn]") return btn;
+      if (sel === "[data-intake-log-slot]") return slot;
+      return null;
+    },
+  };
+  void context.renderIntake();
+  assert.equal(context.headerTitle.textContent, "Intake");
+  assert.ok(clickHandler, "Log a meal button is wired");
+  clickHandler();
+  clickHandler(); // a second tap while the bundle is still loading is ignored
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(bundles, ["fuel"]);
+  assert.equal(mounted, 1);
+  assert.equal(opened, 1);
+  assert.equal(btn.attrs["aria-expanded"], "true");
+  clickHandler();
+  assert.equal(closed, 1);
+  assert.equal(btn.attrs["aria-expanded"], "false");
+});

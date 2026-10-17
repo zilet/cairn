@@ -44,7 +44,8 @@ import { flexibleTrainingAgenda, sessionPrimer } from "../repo.js";
 import { contextTagVocab } from "../repo/context-tag-effects.js";
 import { todayPath } from "../repo/today-path.js";
 import { getRecoveryBaselineRead } from "../repo/baseline-bands.js";
-import { localDateISO } from "../repo/shared.js";
+import { fuelIdeas } from "../repo/fuel-ideas.js";
+import { localDateISO, localHourFraction } from "../repo/shared.js";
 import { directivesResponse } from "./connected-brain.js";
 import { weekAheadResponse } from "./day-coach.js";
 import { fuelingFollowupResponse, nutritionDayResponse } from "./nutrition.js";
@@ -168,10 +169,17 @@ export function todaySurfaceResponses(
   if (isToday) {
     put(out, "/plan/week", () => planWeek());
     put(out, "/recovery/baseline", () => getRecoveryBaselineRead());
+    // The Fuel glance under the Brief draws on every Today open for today
+    // (today-fuel-glance-client.ts): the day's intake and the ideas for the device's
+    // hour, spelled as the glance asks. The hour is the local one in the device zone
+    // this request runs in; a glance that reads another hour just asks its own.
+    put(out, `/nutrition/day?date=${q(date)}`, () => nutritionDayResponse(date));
+    const hour = Math.floor(localHourFraction());
+    put(out, `/fuel/ideas?date=${q(date)}&hour=${hour}`, () => fuelIdeas(date, { hour, exclude: [] }));
   }
   // The rail: only the cards this agenda names (see the header).
   const cards = agendaCards(opts.agenda);
-  if (cards.has("fuel")) put(out, `/nutrition/day?date=${q(date)}`, () => nutritionDayResponse(date));
+  if (!isToday && cards.has("fuel")) put(out, `/nutrition/day?date=${q(date)}`, () => nutritionDayResponse(date));
   if (cards.has("fueling-followup")) put(out, "/nutrition/fueling-followup", () => fuelingFollowupResponse());
   if (cards.has("week-ahead")) put(out, "/week-ahead", () => weekAheadResponse(undefined, opts.onWeekAheadRefresh));
   if (cards.has("program-adjustments")) put(out, "/program/adjustments", () => programAdjustments());

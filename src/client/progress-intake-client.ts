@@ -180,10 +180,11 @@ type IntakeNutrient = import("../contracts/client.js").ClientNutritionProgressNu
       ["Mineral signals", mineralRead],
     ];
     return `<section class="nprog-health nprog-quality"><div class="lbl">Food quality estimates</div>
+      <p>Estimates from a sample of entries</p>
       <ul>${rows
         .map(
           ([label, value]) =>
-            `<li class="nprog-healthrow"><div class="nprog-healthtop"><span>${escHtml(label)}</span><span class="level-chip">sample only</span></div><p>${escHtml(value)}</p></li>`
+            `<li class="nprog-healthrow"><div class="nprog-healthtop"><span>${escHtml(label)}</span></div><p>${escHtml(value)}</p></li>`
         )
         .join("")}</ul>
       <div class="nprog-frame">${escHtml(estimates.note)} Preparation details and user-reported oils take priority when available; these remain estimates.</div>

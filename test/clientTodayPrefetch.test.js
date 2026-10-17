@@ -13,6 +13,15 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 function load(files, extra = {}) {
   let now = 1000;
+  // The clock the modules read: Date.now() and `new Date()` both follow `advance`.
+  class FakeDate extends Date {
+    constructor(...args) {
+      super(...(args.length ? args : [now]));
+    }
+    static now() {
+      return now;
+    }
+  }
   const context = {
     Array,
     Map,
@@ -22,7 +31,7 @@ function load(files, extra = {}) {
     Promise,
     Set,
     String,
-    Date: { now: () => now },
+    Date: FakeDate,
     ...extra,
   };
   context.window = context;
@@ -186,14 +195,18 @@ test("primeFanIn primes every Today path from ONE widened aggregate, and skips a
     "/directives",
     "/brain/changes",
     "/settings",
+    // The Fuel glance under the Brief: the day, and the ideas for the device's hour.
+    "/nutrition/day?date=2026-09-26",
+    `/fuel/ideas?date=2026-09-26&hour=${new Date(1000).getHours()}`,
   ]) {
     assert.ok(paths.includes(path), path);
   }
   assert.deepEqual(JSON.parse(JSON.stringify(await primed[0].source)), { "/directives": { directives: [] } });
 
-  // A past date has no run line: its agenda is not asked for.
+  // A past date has no run line and no Fuel glance: neither is asked for.
   context.CairnTodayPrefetch.primeFanIn("2026-09-20", deps);
   assert.equal(primed[1].paths.some((p) => p.startsWith("/training-agenda")), false);
+  assert.equal(primed[1].paths.some((p) => p.startsWith("/nutrition/day") || p.startsWith("/fuel/ideas")), false);
 
   // This page primed the same date seconds ago (a soft repaint): those primes stand.
   context.CairnTodayPrefetch.primeFanIn("2026-09-20", deps);

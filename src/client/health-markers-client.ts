@@ -338,7 +338,7 @@ function wireMarkerChart(svg: SVGElement | null | undefined): void {
   const setIdx = (index: number, snap: boolean) => {
     if ((index !== tgt.idx || snap) && tipText && tipRect) {
       tipText.textContent = pts[index].t;
-      tipW = (tipText.getComputedTextLength ? tipText.getComputedTextLength() : pts[index].t.length * 5.2) + 16;
+      tipW = (tipText.getComputedTextLength ? tipText.getComputedTextLength() : pts[index].t.length * 12 * 0.55 /* the tip text is 12px */) + 16;
       tipRect.setAttribute("width", tipW.toFixed(1));
       if (index !== tgt.idx && !snap) cur.pop = 1;
     }

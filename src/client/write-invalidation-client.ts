@@ -137,6 +137,18 @@ type WriteInvalidationApi = {
     push_offer_accept: CHAT_ACTION_TARGETS.set_training_drive,
     // POST /training-drive/offer/dismiss: the offer rides the Brief and the conductor.
     push_offer_dismiss: t(DAY, ["settings:screen"]),
+    // A Garmin sync finished (POST /garmin/sync's background job): new activities, a
+    // watch strength session merged into its day, last night's sleep and readiness,
+    // the wearable findings, the energy the watch measured, and the sync status line.
+    garmin_sync: t(DAY, TRAINING, [
+      "today:session:",
+      "@endurance",
+      "recovery:",
+      "health:",
+      "progress:energy",
+      "fuel:band:",
+      "settings:screen",
+    ]),
   });
 
   const snapshots = new Map<string, () => void>();

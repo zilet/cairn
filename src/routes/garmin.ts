@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { ensureGarminSyncJob } from "../agentJobs.js";
 import {
   getGarminCoachSummary,
   listGarminActivities,
@@ -17,10 +18,20 @@ export const garminRouter = Router();
 
 // ---- Garmin source data (normalized ingest boundary) ----
 garminRouter.get("/garmin/sources", (_req, res) => res.json(listGarminSources()));
+// A sync is a few dozen Garmin Connect round trips (15 s typical, 50 s at worst), so
+// the request does not wait for it: it answers at once with the background job, and
+// the PWA follows GET /api/agent-jobs/:id to the job's `done`, whose result is the
+// body this route used to return. A second POST while a sync is queued or running
+// gets the SAME job (`joined: true`), never a second pull. MCP sync_garmin still
+// waits for the result, and joins a sync already in progress.
 garminRouter.post("/garmin/sync", async (req, res, next) => {
   try {
-    const { syncGarmin } = await import("../garmin.js");
-    res.json(await syncGarmin(req.body ?? {}));
+    const { garminSyncWindow } = await import("../garmin.js");
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const { job, created } = ensureGarminSyncJob(
+      garminSyncWindow({ days: body.days, limit: body.limit, daily: body.daily })
+    );
+    res.json({ ok: true, queued: true, joined: !created, job_id: Number(job.id), job });
   } catch (e) {
     // One error path: the shared handler logs it privately and answers the fixed
     // {ok:false,error:'internal error'} envelope instead of leaking e.message.

@@ -108,13 +108,27 @@
     const pick = own.length ? own : holding;
     const out: Chip[] = [];
     for (const hold of pick) {
+      const spoken = text(hold.words);
       for (const label of chipLabels(hold, kind)) {
         const short = label.length > 32 ? `${label.slice(0, 31).trimEnd()}…` : label;
-        if (short && !out.some((c) => c.label.toLowerCase() === short.toLowerCase()) && out.length < 3)
-          out.push({ label: short, words: text(hold.words) });
+        if (!short || out.length >= 3) continue;
+        if (out.some((c) => c.label.toLowerCase() === short.toLowerCase())) continue;
+        out.push({ label: short, words: spoken });
       }
     }
     return out;
+  }
+
+  /**
+   * Accessible name: the visible chip first, then the fuller sentence when it adds
+   * something, then the tap hint. The name has to contain the words on the chip.
+   */
+  function chipName(c: Chip): string {
+    const label = c.label;
+    const words = text(c.words);
+    const extra = words && words.toLowerCase() !== label.toLowerCase() ? words : "";
+    if (extra && extra.toLowerCase().startsWith(label.toLowerCase())) return `${extra} — tap to see why`;
+    return extra ? `${label} — ${extra} — tap to see why` : `${label} — tap to see why`;
   }
 
   /** "two heavier top sets" from the day's licensed hosts. */
@@ -147,7 +161,7 @@
       ? `<div class="tpush-chips" role="group" aria-label="What is holding today back">${chips
           .map(
             (c) =>
-              `<button type="button" class="tpush-chip" data-tpush-why aria-expanded="false" aria-label="${escAttr(`${c.words || c.label} — tap to see why`)}"><span class="tpush-chip-t">${escHtml(c.label)}</span></button>`
+              `<button type="button" class="tpush-chip" data-tpush-why aria-expanded="false" aria-label="${escAttr(chipName(c))}"><span class="tpush-chip-t">${escHtml(c.label)}</span></button>`
           )
           .join("")}</div>`
       : "";

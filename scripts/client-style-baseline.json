@@ -1,37 +1,28 @@
 {
   "note": "Ratchet for scripts/check-client-style.mjs. Numbers may only go down; run it with --update after one does.",
   "totals": {
-    "hex": 240,
-    "style": 354,
-    "over400": 29,
-    "over600": 12
+    "hex": 210,
+    "style": 328,
+    "over400": 25,
+    "over600": 11
   },
   "files": {
-    "src/client/agent-login-modal-client.ts": {
-      "hex": 29
-    },
     "src/client/agent-login-session-client.ts": {
-      "hex": 12
-    },
-    "src/client/app/onboarding.ts": {
-      "style": 3
+      "hex": 11
     },
     "src/client/body-metrics-client.ts": {
-      "lines": 1730,
+      "lines": 1719,
       "hex": 110,
       "style": 111
     },
     "src/client/capture-read-cards-client.ts": {
-      "lines": 419
+      "lines": 417
     },
     "src/client/cardio-sync-client.ts": {
       "hex": 5
     },
-    "src/client/chat-client.ts": {
-      "lines": 506
-    },
     "src/client/coaching-focus-client.ts": {
-      "lines": 599,
+      "lines": 448,
       "style": 1
     },
     "src/client/exercise-detail-render-client.ts": {
@@ -43,7 +34,7 @@
     },
     "src/client/family-controller.ts": {
       "hex": 2,
-      "style": 12
+      "style": 8
     },
     "src/client/food-note-client.ts": {
       "style": 2
@@ -89,20 +80,17 @@
       "style": 10
     },
     "src/client/life-controller.ts": {
-      "style": 6
+      "style": 2
     },
     "src/client/life-timeline-actions.ts": {
       "style": 1
     },
     "src/client/me-memory-controller.ts": {
-      "style": 3
+      "style": 1
     },
     "src/client/me-profile-form-client.ts": {
-      "lines": 450,
+      "lines": 433,
       "style": 40
-    },
-    "src/client/meal-plan-client.ts": {
-      "lines": 419
     },
     "src/client/outbox-queue.ts": {
       "lines": 562
@@ -111,7 +99,7 @@
       "style": 4
     },
     "src/client/plan-editor-controller.ts": {
-      "lines": 867,
+      "lines": 734,
       "style": 2
     },
     "src/client/plan-endurance-client.ts": {
@@ -132,18 +120,18 @@
       "style": 2
     },
     "src/client/progress-overview-client.ts": {
-      "lines": 700,
+      "lines": 697,
       "hex": 20
     },
     "src/client/progress-program-controller.ts": {
-      "lines": 828,
+      "lines": 739,
       "style": 1
     },
     "src/client/progress-run-plan-client.ts": {
       "lines": 541
     },
     "src/client/progress-screen.ts": {
-      "lines": 641,
+      "lines": 574,
       "hex": 13
     },
     "src/client/proposal-client.ts": {
@@ -160,17 +148,16 @@
       "style": 13
     },
     "src/client/settings-screen.ts": {
-      "lines": 439,
+      "lines": 438,
       "style": 1
     },
     "src/client/settings-surface-client.ts": {
-      "lines": 447,
       "hex": 1,
-      "style": 37
+      "style": 28
     },
     "src/client/stand-screen.ts": {
-      "lines": 1344,
-      "style": 3
+      "lines": 1343,
+      "style": 2
     },
     "src/client/today-add-exercise-controller.ts": {
       "lines": 592
@@ -179,20 +166,17 @@
       "style": 1
     },
     "src/client/today-brief-client.ts": {
-      "lines": 806
+      "lines": 718
     },
     "src/client/today-brief-controller.ts": {
-      "lines": 411
-    },
-    "src/client/today-data-loader.ts": {
-      "lines": 404
+      "lines": 410
     },
     "src/client/today-lately-client.ts": {
       "hex": 5,
       "style": 1
     },
     "src/client/today-plan-surface-client.ts": {
-      "style": 4
+      "style": 1
     },
     "src/client/today-plan-surface-renderer.ts": {
       "lines": 417
@@ -204,7 +188,7 @@
       "lines": 671
     },
     "src/client/today-session-status-client.ts": {
-      "lines": 584
+      "lines": 573
     },
     "src/client/today-session-suggest-controller.ts": {
       "lines": 668

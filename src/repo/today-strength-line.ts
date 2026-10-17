@@ -25,16 +25,15 @@ import { activitySportWhere, RUN_SPORT_PATTERNS } from "./endurance-sports.js";
 import { withoutShadowActivities } from "./activity-shadow.js";
 import {
   calendarDayRead,
-  planDayCandidates,
-  planDayLabel,
   planDayRole,
-  resolveSessionPlanDay,
   selectedPlanDayForDate,
   type CalendarDayRead,
   type PlanDayCandidate,
   type WeekdayPlanDayRole,
 } from "./plan-selection.js";
+import { planDayDisplayName } from "./plan-day-name.js";
 import { RUN_KIND_LABELS } from "./run-edit.js";
+import { loggedSessionDay, planDayTitle, sessionDayCandidates, type LoggedSessionDay } from "./session-day.js";
 import { localDateISO } from "./shared.js";
 
 export type TodayStrengthState = "not_started" | "in_progress" | "logged" | "rest_day" | "no_lift" | "none";
@@ -142,7 +141,12 @@ function acceptedComposition(date: string): AcceptedComposition {
       decisionKind = null;
     }
     const source = String(row.source ?? "");
-    const title = String(row.title ?? "").trim();
+    // A title the athlete TYPED (athlete_override) is theirs and prints exactly as
+    // typed. A suggestion's title is agent-authored, so it reads through the same
+    // display rule as a plan day's name: a count of the week ("Lower — the week's one
+    // leg day") is dropped, since the calendar can contradict it (src/repo/plan-day-name.ts).
+    const stored = String(row.title ?? "").trim();
+    const title = source === "agent_suggest" ? planDayDisplayName(stored) : stored;
     const chosen =
       (source === "agent_suggest" || source === "athlete_override") && title
         ? {
@@ -230,12 +234,8 @@ function lineText(title: string | null, state: TodayStrengthState, run: boolean,
 
 export function todayStrengthLine(date?: string): TodayStrengthLine {
   const d = String(date || localDateISO()).slice(0, 10);
-  let candidates: PlanDayCandidate[] = [];
-  try {
-    candidates = planDayCandidates();
-  } catch {
-    candidates = [];
-  }
+  // The plan once per request, the same read the week strip's cells resolve against.
+  const candidates: PlanDayCandidate[] = sessionDayCandidates();
   const session = (() => {
     try {
       return todaySession(d);
@@ -269,12 +269,14 @@ export function todayStrengthLine(date?: string): TodayStrengthLine {
       text: lineText(chosen.title, state, !!run, chosen.title),
     };
   }
-  // The logged session owns the day, the same way it owns its week-strip cell.
+  // The logged session owns the day, the same way it owns its week-strip cell — through
+  // the same answer (src/repo/session-day.ts), so the line and the cell name one day.
   let day: PlanDayCandidate | null = null;
+  let logged: LoggedSessionDay | null = null;
   if (session) {
     try {
-      const resolved = resolveSessionPlanDay(session.id, session.plan_day_id, candidates);
-      day = resolved ? (candidates.find((c) => c.day_number === resolved.day_number) ?? null) : null;
+      logged = loggedSessionDay(session.id, session.plan_day_id, candidates);
+      day = logged.day_number != null ? (candidates.find((c) => c.day_number === logged!.day_number) ?? null) : null;
     } catch {
       day = null;
     }
@@ -313,7 +315,7 @@ export function todayStrengthLine(date?: string): TodayStrengthLine {
   const calendarRole: WeekdayPlanDayRole | null =
     calendar?.kind === "run" && !readSaysRest ? "endurance" : calendar ? (calendar.kind === "lift" ? null : "rest") : null;
   const role = day ? planDayRole(day) : calendarRole;
-  const name = day ? planDayLabel(day) : null;
+  const name = day ? planDayTitle(day) : null;
   // A run day is named for its run, the way the athlete stated it ("Long run").
   const runDayTitle =
     calendarRole === "endurance" ? (RUN_KIND_LABELS[String(calendar?.run_kind ?? "")] ?? "Run day") : null;
@@ -332,7 +334,7 @@ export function todayStrengthLine(date?: string): TodayStrengthLine {
       ? `${name}, reshaped`
       : name
     : session
-      ? "Today's session"
+      ? logged?.title || "Today's session"
       : runDayTitle;
   const suggestion =
     state === "not_started" || state === "in_progress" ? suggestionFor(d, composition.decisionKind) : null;

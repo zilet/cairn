@@ -105,6 +105,11 @@ function foodDetailDeps(): FoodDetailControllerDeps {
 async function openFoodDetail(note: unknown, fromTile?: Element | null): Promise<void> {
   return withBundle("fuel", () => CairnFoodDetailController.openFoodDetail(note, fromTile, foodDetailDeps()));
 }
+// Intake's "Log a meal" mounts the food composer. The composer is the lazy fuel bundle's and the
+// shell reaches it, so Train never declares (or downloads) fuel just to offer the button.
+async function mountFuelLog(host: Element, onLogged: () => void): Promise<ClientFuelLogHandle> {
+  return withBundle("fuel", () => CairnFuelLogController.mount(host, CairnFuelDeps.log(onLogged)));
+}
 function gotoChatWith(text: string): void {
   state.tab = "chat";
   // The shell owns which tab-bar home is lit (chat lives under Ask); it is
@@ -335,6 +340,7 @@ const CAIRN_UI_SHELL_GLOBALS = {
   homeBackHtml,
   wireHomeBack,
   openFoodDetail,
+  mountFuelLog,
   segBar,
   wireSeg,
   aboutYouSegBar,

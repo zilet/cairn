@@ -26,6 +26,7 @@ import { appleHealthRouter } from "./routes/apple-health.js";
 import { authRouter } from "./routes/auth.js";
 import { mcpClientsRouter } from "./routes/mcp-clients.js";
 import { screensRouter } from "./routes/screens.js";
+import { uiViewsRouter } from "./routes/ui-views.js";
 import { diagnosticErrorName, diagnosticStackFrames, recordUnexpectedApiError, requestId } from "./diagnostics.js";
 import { telemetryRequestPathLabel } from "./telemetry-privacy.js";
 import { log } from "./log.js";
@@ -104,6 +105,7 @@ const API_MOUNTS: ApiMount[] = [
   { name: "auth", prefix: "/", router: authRouter },
   { name: "mcp-clients", prefix: "/", router: mcpClientsRouter },
   { name: "screens", prefix: "/", router: screensRouter },
+  { name: "ui-views", prefix: "/", router: uiViewsRouter },
   { name: "chat", prefix: "/chat", router: chatRouter },
   { name: "agent-jobs", prefix: "/agent-jobs", router: agentJobsRouter },
   { name: "health-docs", prefix: "/health-docs", router: healthDocsRouter },

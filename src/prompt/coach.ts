@@ -385,7 +385,7 @@ const WEEK_COMPOSE_SCHEMA = `{
   "as_of_date": "<YYYY-MM-DD date this week was composed>",
   "summary": "one or two sentences on the shape of this week and why it starts here",
   "days": [
-    { "day_number": <1-7>, "name": "<day name, e.g. Lower>", "focus": "<focus, e.g. lower>", "items": [
+    { "day_number": <1-7>, "name": "<short day name, e.g. Lower — never a count of the week such as 'one leg day'>", "focus": "<focus, e.g. lower>", "items": [
       { "exercise": "<name>", "sets": <n>, "rep_low": <n>, "rep_high": <n>, "target_weight": <number|null>, "superset_group": <int|null — same value pairs two items as a superset>, "note": "<optional cue, e.g. 'NEW — start light, log actual'>" },
       { "exercise": "<name>", "sets": <n>, "target_seconds": <n>, "note": "<ONLY for a held/timed movement — omit reps; target_weight only for a loaded carry/hold>" }
     ] }

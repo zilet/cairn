@@ -84,10 +84,21 @@ type RouteSyncMode = "push" | "replace";
     });
   }
 
+  // One note per activation. Tab changes and in-view section changes both come
+  // through here. Boot and Back/Forward skip the sync and are noted from switchTab.
+  function noteUiViewOpen(): void {
+    try {
+      (globalThis as { CairnUiViewCounter?: { noteActive?(): void } }).CairnUiViewCounter?.noteActive?.();
+    } catch {
+      /* counting a screen must never break opening it */
+    }
+  }
+
   function routeSyncFromState(mode: RouteSyncMode = "push"): void {
     // A section change inside a view can move it to another home (Plan's race view
     // is Horizon's, its Fuel is Today's), so the lit tab follows every URL sync.
     if (typeof highlightHome === "function") highlightHome(state.tab);
+    noteUiViewOpen();
     window.CairnAppRouter.syncRouteFromState({
       mode,
       routes: routeSyncApi(),

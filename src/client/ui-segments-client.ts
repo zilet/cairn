@@ -223,15 +223,6 @@ function createUiSegments(deps: UiSegmentsDeps): UiSegmentsController {
         if (handler) drive(row, handler);
       })
     );
-    // The Fuel group's "Log food" line leaves Train for Today's Fuel; a modified
-    // click keeps the link's own behaviour.
-    deps.root.querySelectorAll<HTMLElement>("[data-fuel-log-point]").forEach((link) =>
-      link.addEventListener("click", (event: MouseEvent) => {
-        if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
-        event.preventDefault();
-        openPlan("food");
-      })
-    );
     deps.root.querySelectorAll(".seg").forEach(fitSeg);
   }
 

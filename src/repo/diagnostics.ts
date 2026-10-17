@@ -5,6 +5,7 @@ import {
 import { db } from "../db.js";
 import { getBuildInfo } from "../build-info.js";
 import { getRequestPerformance, normalizeServerApiRouteTemplate, REQUEST_METRIC_LIMITS } from "./request-metrics.js";
+import { pruneUiViewCounts, uiViewSummary } from "./ui-views.js";
 
 export type DiagnosticSource = "agent" | "client" | "api" | "mcp" | "process" | "scheduler" | "worker";
 export type DiagnosticLevel = "info" | "warning" | "error";
@@ -357,6 +358,8 @@ export function pruneDiagnosticEvents(now = Date.now()): void {
     if (Number(capped.changes) > 0) capPressure = true;
     else if (capPressure)
       capPressure = Number((db.prepare(`SELECT COUNT(*) AS n FROM diagnostic_events`).get() as any)?.n ?? 0) >= DIAGNOSTIC_ROW_CAP;
+    // Screen-open counts share this housekeeping pass: days older than 90 go.
+    pruneUiViewCounts(now);
   } catch {
     /* diagnostics must never break product paths */
   } finally {
@@ -678,6 +681,8 @@ export function getDiagnostics(opts: { recent?: number; days?: number } = {}) {
       slow: currentSlow,
     },
     performance: getRequestPerformance(days),
+    // Fixed 30-day window, independent of `days`: which screens were opened.
+    ui_views: uiViewSummary(),
     storage: {
       diagnostic_events: {
         rows: Number((db.prepare(`SELECT COUNT(*) AS n FROM diagnostic_events`).get() as any)?.n ?? 0),

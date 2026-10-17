@@ -373,4 +373,8 @@ test("the chip and the row read one glance: the same lift and run words, CairnFm
   // Escaped everywhere.
   const hostile = M.glanceOfWeekDay({ ...weekDay, plan_day: { ...weekDay.plan_day, name: "<b>x</b>" } }, TODAY, "km");
   assert.doesNotMatch(V.chipHtml(hostile, {}) + V.rowHtml(hostile, {}), /<b>x/);
+  // A day with no date number never leaves a doubled space in its name.
+  const numless = { ...M.glanceOfWeekDay(weekDay, TODAY, "km"), num: undefined };
+  const name = /data-tstrip-day[^>]*aria-label="([^"]*)"/.exec(V.chipHtml(numless, {}))[1];
+  assert.equal(/\s{2,}/.test(name), false, name);
 });

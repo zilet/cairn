@@ -203,12 +203,15 @@ test("intake renderer leads with meaning, shows honest gaps, and escapes server 
   assert.match(html, /Recorded &lt;energy&gt; is useful context/);
   assert.match(html, /Record coverage is sparse/);
   assert.match(html, /data-intake-nutrient="kcal"/);
-  assert.match(html, /Jul 22: unlogged day/);
+  // dateLabel follows the host locale (month-day or day-month).
+  assert.match(html, /(?:Jul 22|22 Jul): unlogged day/);
   assert.match(html, /class="nprog-day gap"/);
   assert.match(html, /Daily marks follow the accepted reference effective on each date/);
   assert.doesNotMatch(html, /javascript:alert/);
   assert.match(html, /&lt;ApoB&gt;/);
   assert.match(html, /Food quality estimates/);
+  assert.equal((html.match(/Estimates from a sample of entries/g) || []).length, 1);
+  assert.doesNotMatch(html, /sample only/i);
   assert.match(html, /4\.2 g saturated and 11\.8 g unsaturated estimated average per sampled entry across 1 entry/);
   assert.match(html, /Entry estimates from &lt;2 of 7&gt;; not extrapolated/);
   assert.doesNotMatch(html, /whole month|all 3 days/i);

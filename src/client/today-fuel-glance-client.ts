@@ -99,14 +99,16 @@
     const body = meters
       ? `<div class="tfuel-meters">${meters}</div>`
       : `<p class="tfuel-empty">Nothing logged yet today.</p>`;
-    const idea = model.idea
-      ? `<button class="tfuel-idea" type="button" data-tfuel-open aria-label="${escAttr(`An idea for later: ${model.idea.title}. Open Fuel`)}">
+    let idea = "";
+    if (model.idea) {
+      const visible = ["An idea for later", model.idea.title, model.idea.nums].filter((part) => !!part).join(" ");
+      idea = `<button class="tfuel-idea" type="button" data-tfuel-open aria-label="${escAttr(`${visible}. Open Fuel`)}">
           <span class="tfuel-idea-k lbl">An idea for later</span>
           <span class="tfuel-idea-t">${escHtml(model.idea.title)}</span>
           ${model.idea.nums ? `<span class="tfuel-idea-n">${escHtml(model.idea.nums)}</span>` : ""}
           <span class="tfuel-idea-go" aria-hidden="true">›</span>
-        </button>`
-      : "";
+        </button>`;
+    }
     return `<section class="tfuel" aria-label="Fuel today">
       <div class="tfuel-head"><span class="lbl">Fuel today</span><button class="tfuel-log" type="button" data-tfuel-open>Log a meal</button></div>
       ${body}${idea}
@@ -171,7 +173,9 @@
       paint();
     } else {
       const lastHadIdea =
-        !!warmIdeas && isIdeas(warmIdeas.data) && !!warmIdeas.data.ideas?.some((idea) => idea && typeof idea.title === "string" && idea.title.trim());
+        !!warmIdeas &&
+        isIdeas(warmIdeas.data) &&
+        !!warmIdeas.data.ideas?.some((idea) => idea && typeof idea.title === "string" && idea.title.trim());
       host.innerHTML = skeletonHtml({ idea: warmIdeas ? lastHadIdea : true });
     }
 

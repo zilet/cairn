@@ -6940,6 +6940,15 @@ big steak I had and felt flat" is a training narrative, not a snack. The receipt
 placed in time ("today", "in the afternoon", "2 hours after"). `test/chatNarrativeRouting.test.js` is the
 decision matrix (lane, instant, effort per message); extend it with every misroute.
 
+**The meal-list lane.** A verbless or label-led meal list ("breakfast 30g rolled oats 15g chia 180g skyr 20
+grapes") is a food log, not a question: `readsAsMealList` (`src/chatRouting.ts`) adds `explicit_food_log`, so it
+takes the instant lane and `foodRowsFromWords` stores one row per food (confidence low, basis `user_report`, no
+invented macros; enrichment fills them). It is refused on question, plan, future/idea, correction ("more",
+"actually"), supplement/activity/weight nouns, a second meal label, or a bare list that answers the coach's last
+question (`bareFoodListAnswersQuestion`, `src/chat-intent.ts`, measured between the two stored messages). When
+the instant lane declines, the turn falls through to the normal agent turn rather than staying queued.
+`test/chatInstantMealList.test.js` holds the matrix.
+
 **The day's running total is the server's arithmetic.** A food log lands after the reply is generated, so
 the model cannot know the new total. `reconcileChatIntakeReply` (`src/chat-reconcile.ts`) drops a
 sentence that states a day total or what is left when its figures disagree with `getDayIntake()` and

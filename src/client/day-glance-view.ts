@@ -9,6 +9,27 @@
   // ---- the glance variants: chip and row ----
 
   /**
+   * Accessible name for a strip day. The weekday is uppercased because the chip
+   * draws it that way (`text-transform`), and the visible pieces lead so the name
+   * contains the text a person sees. The model's sentence stays after them.
+   */
+  function stripName(g: ClientDayGlance): string {
+    const visible = [
+      String(g.weekday || "").toUpperCase(),
+      g.num,
+      g.done ? "✓" : "",
+      g.lift?.abbr || (!g.lift && !g.run ? "·" : ""),
+    ]
+      .map((part) => (part == null ? "" : String(part).trim()))
+      .filter((part) => part !== "")
+      .join(" ");
+    const extra = String(g.aria || "").trim();
+    if (!extra) return visible;
+    if (extra.toLowerCase().startsWith(visible.toLowerCase())) return extra;
+    return `${visible}. ${extra}`;
+  }
+
+  /**
    * One day as a chip of a week strip (Today's "What's ahead"): a real button with the
    * weekday, the date, the lift's short name in the strength hue and the run as a bar in
    * the endurance hue (longer for the long run, hatched for quality work), ticked once
@@ -30,7 +51,7 @@
     const marks = lift || run ? `${lift}${run}` : `<span class="tstrip-rest">·</span>`;
     const tick = g.done ? `<span class="tstrip-tick">✓</span>` : "";
     const controls = opts.controls ? ` aria-controls="${escAttr(opts.controls)}"` : "";
-    return `<li class="tstrip-cell"><button type="button" class="${cls}" data-tstrip-day="${escAttr(g.date)}" aria-expanded="${open ? "true" : "false"}"${controls} aria-label="${escAttr(g.aria)}"${g.today ? ` aria-current="date"` : ""}>
+    return `<li class="tstrip-cell"><button type="button" class="${cls}" data-tstrip-day="${escAttr(g.date)}" aria-expanded="${open ? "true" : "false"}"${controls} aria-label="${escAttr(stripName(g))}"${g.today ? ` aria-current="date"` : ""}>
       <span class="tstrip-dow" aria-hidden="true">${escHtml(g.weekday)}</span>
       <span class="tstrip-num" aria-hidden="true">${escHtml(g.num)}${tick}</span>
       <span class="tstrip-marks" aria-hidden="true">${marks}</span>

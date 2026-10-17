@@ -192,18 +192,18 @@
 .zonebar-seg-watch{fill:var(--gold)}
 .zonebar-seg-warn{fill:var(--warn)}
 .zonebar-seg-info{fill:var(--muted)}
-.zonebar-optimal{font-size:9px;font-weight:var(--weight-semibold);fill:var(--sage-text)}
+.zonebar-optimal{font-size:11px;font-weight:var(--weight-semibold);fill:var(--sage-text)}
 .zonebar-pace{stroke:var(--ink);stroke-width:1.2;stroke-dasharray:3 3;opacity:.55}
 .zonebar-ahead{fill:var(--card);stroke:var(--ink);stroke-width:1.4;stroke-dasharray:2 2}
 .zonebar-now{fill:var(--ink)}
-.hchart-txt{font-family:var(--font-ui);font-size:9px;letter-spacing:var(--tracking-mono);fill:var(--muted)}
+.hchart-txt{font-family:var(--font-ui);font-size:11px;letter-spacing:var(--tracking-mono);fill:var(--muted)}
 .hchart-cap{margin:0 0 var(--space-6);color:var(--muted);letter-spacing:var(--tracking-wide);font-size:var(--text-xs);line-height:var(--leading-normal)}
 /* scrub overlay (hover/drag a marker chart to read past values) — hidden until active */
 .hchart-guide{stroke:var(--ink);stroke-width:1;stroke-dasharray:3 3;opacity:0;pointer-events:none;transition:opacity .12s var(--ease)}
 .hchart-cursor{fill:var(--accent);stroke:var(--card);stroke-width:1.6;opacity:0;pointer-events:none;transition:opacity .12s var(--ease)}
 .hchart-tip{opacity:0;pointer-events:none;transition:opacity .12s var(--ease)}
 .hchart-tip rect{fill:var(--ink)}
-.hchart-tip text{fill:var(--paper);font-family:var(--font-ui);font-size:10px;font-weight:var(--weight-semibold);letter-spacing:var(--tracking-wide)}
+.hchart-tip text{fill:var(--paper);font-family:var(--font-ui);font-size:12px;font-weight:var(--weight-semibold);letter-spacing:var(--tracking-wide)}
 .hchart.scrubbing .hchart-guide,.hchart.scrubbing .hchart-cursor,.hchart.scrubbing .hchart-tip{opacity:1}
 
 /* share — report/export utilities separated from the marker catalog */

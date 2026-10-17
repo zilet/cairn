@@ -437,7 +437,8 @@ test("the strip: seven real buttons, today ringed, done ticked, lift short names
   assert.equal(days[3].querySelector(".tstrip-lift").textContent, "LB");
   assert.ok(days[3].querySelector(".tstrip-run.is-quality"));
   assert.ok(days[5].querySelector(".tstrip-run.is-long"));
-  assert.match(days[1].getAttribute("aria-label"), /^Tuesday 6, today: Pull <i>, planned/);
+  assert.match(days[1].getAttribute("aria-label"), /^TUE 6 PI\. Tuesday 6, today: Pull <i>, planned/);
+  assert.match(days[0].getAttribute("aria-label"), /^MON 5 ✓ Push\. Monday 5: Push, done/);
   assert.equal(host.querySelector(".tstrip-lift i"), null, "names are escaped");
   // Today's strength line is the Brief's (said once, right above the strip): the strip
   // only adds the swap, quietly.

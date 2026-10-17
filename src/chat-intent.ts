@@ -10,14 +10,21 @@ import {
   chatMessageIsNarrative,
   chatMessageRequestsCoaching,
   foodIntakeNegated,
+  foodLogDoubtCue,
   hasFoodEvidence,
   mealHeadingCount,
   messageNeedsPriorTurn,
+  readsAsMealList,
   type ChatRoutingDecision,
 } from "./chatRouting.js";
+import { foodRowsFromWords, mealLabelLead } from "./foodCapture.js";
 
 const INSTANT_FOOD_ALLOWED_REASONS = new Set(["explicit_food_log", "photo_food_default", "explicit_fast_request"]);
 const QUESTION_LEAD_RE = /^(?:what|why|how|when|where|who|which|did|does|do|is|are|was|were|should|could|would|can)\b/i;
+
+// A number followed by a portion or a counted food is an amount, not a clock ("about 30 g",
+// "around two slices", "around 20 grapes"), so the hour patterns below never read one as a time.
+const PORTION_UNIT = String.raw`\s*(?:g|gr|grams?|ml|oz|kcal|cals?|calories|tbsp|tsp|cups?|slices?|pieces?|scoops?|servings?|bowls?|squares?|blocks?|bars?|handfuls?|eggs?|grapes|dates|almonds|nuts|olives|berries|cherries|crackers|cookies|bananas|apples)\b`;
 
 // Does this message place the meal in TIME at all? Deliberately a coarse "is there
 // a when here", NOT a parser — the actual resolution of "last night" into a date and
@@ -43,9 +50,10 @@ const MENTIONS_WHEN_RE = new RegExp(
     String.raw`\b(?:\d+|a|an|a\s+couple(?:\s+of)?|a\s+few|several)\s+(?:min(?:ute)?s?|hours?|hrs?|days?)\s+ago\b`,
     String.raw`\b(?:half\s+an?\s+hour|an?\s+hour\s+or\s+so|a\s+while)\s+ago\b|\bthe\s+(?:night|morning|day)\s+before\b|\b(?:noon|midnight)\b`,
     // a spelled-out clock hour ("at seven", "around nine")
-    String.raw`\b(?:at|around|about|by)\s+(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b`,
-    // explicit clock times ("at 8", "around 9pm", "8:30")
-    String.raw`\b(?:at|around|about|near|by|before|after|since)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm|o'?clock)?\b`,
+    String.raw`\b(?:at|around|about|by)\s+(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b(?!${PORTION_UNIT})`,
+    // explicit clock times ("at 8", "around 9pm", "8:30") — never a portion: "about 30 g
+    // of rice", "around 2 slices" are amounts, not hours
+    String.raw`\b(?:at|around|about|near|by|before|after|since)\s+\d{1,2}(?::\d{2})?(?!\d|[.,]\d|${PORTION_UNIT})\s*(?:am|pm|o'?clock)?\b`,
     String.raw`\b\d{1,2}:\d{2}\s*(?:am|pm)?\b`,
     String.raw`\b\d{1,2}\s*(?:am|pm)\b`,
     // an explicit calendar date
@@ -80,11 +88,63 @@ export function isInstantFoodCaptureDecision(
   // "Log this meal" is its referent, so a photo turn is exempt from the referent test.
   if (foodIntakeNegated(text)) return false;
   if (mealHeadingCount(text) > 1) return false;
+  // A correction, a question without its "?", a lookup or someone else's food is never a
+  // row nobody reads (chatRouting.ts foodLogDoubtCue).
+  if (foodLogDoubtCue(text)) return false;
   if (!reasons.includes("photo_food_default")) {
     if (messageNeedsPriorTurn(text)) return false;
     if (text && !hasFoodEvidence(text)) return false;
   }
   return true;
+}
+
+// Does the coach's message end by ASKING something? Its last sentence carries a "?", or
+// reads as a question without one ("Roughly how much."), or follows one ("Did you have rice
+// with it? Roughly how much.").
+const QUESTION_SENTENCE_LEAD_RE =
+  /^(?:(?:and|so|roughly|about)\s+)?(?:how|what|which|did|do|does|was|were|is|are|any|roughly)\b/i;
+
+export function coachMessageAsks(message: string | null | undefined): boolean {
+  const sentences = String(message ?? "")
+    .trim()
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+  const last = sentences.at(-1) ?? "";
+  if (last.includes("?") || /\bhow\s+(?:much|many)\b/i.test(last) || QUESTION_SENTENCE_LEAD_RE.test(last)) return true;
+  return sentences.length > 1 && (sentences.at(-2) ?? "").includes("?") && last.length <= 60;
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// A meal written as a list straight after the coach ASKED something is most likely the
+// answer ("how much rice was that?") — an amendment to the meal the question is about. The
+// receipt lane can only write a new note, so that reply goes to the agent, which reads the
+// question. A bare list ("150g rice", "30g oats 200ml milk") answers any question; one under
+// its own meal label is a new entry unless the question was about that meal or one of its
+// foods ("how much rice was in lunch?" → "lunch 150g rice"). A message that says "log" is a
+// new entry whatever came before it. `priorCoachMessage` is the coach's message
+// immediately before this one.
+export function foodListAnswersCoachQuestion(
+  message: string | null | undefined,
+  priorCoachMessage: string | null | undefined
+): boolean {
+  const text = String(message ?? "").trim();
+  if (!text || /^log\b/i.test(text) || !readsAsMealList(text)) return false;
+  const prior = String(priorCoachMessage ?? "");
+  if (!coachMessageAsks(prior)) return false;
+  const lead = mealLabelLead(text);
+  if (!lead) return true;
+  if (new RegExp(String.raw`\b${lead.label}s?\b`, "i").test(prior)) return true;
+  return foodRowsFromWords(lead.rest).some((row) =>
+    String(row.item)
+      .toLowerCase()
+      .split(/[^a-z]+/)
+      .filter((word) => word.length >= 3)
+      .some((word) => new RegExp(String.raw`\b${escapeRegExp(word)}\b`, "i").test(prior))
+  );
 }
 
 // A surface opened to log food (Fuel's composer) sends the athlete's words as they

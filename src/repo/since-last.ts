@@ -2,6 +2,7 @@ import { db } from "../db.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { recordedClientTimeZone } from "./client-tz.js";
 import { latestJourneyMilestoneSince } from "./journey.js";
+import { memoNeutralWrite } from "./request-memo.js";
 import { localDateISO } from "./shared.js";
 import { withoutShadowActivities } from "./activity-shadow.js";
 import type { TodayAgendaCandidate } from "./today-agenda.js";
@@ -351,11 +352,18 @@ export function sinceLastLookedCandidate(_date?: string): TodayAgendaCandidate |
 // don't keep wiping the window. The integrator calls this at the END of the
 // GET /api/today-agenda handler (after the candidate is computed). Best-effort —
 // never throws into the request path.
+//
+// The stamp is bookkeeping no request-memoized read consults (only this candidate and
+// the meal-plan draft check read it, neither memoized), and it lands mid-request — the
+// aggregate marks right after its agenda, before the conductor and the fan-in. So it
+// runs through memoNeutralWrite (request-memo.ts): on the first open after the debounce
+// it no longer retires every read the request has memoized so far. The response memo
+// still hears it (its freshness key counts app_state), so that open is never stored.
 export function markTodaySeen(): void {
   try {
     const prev = parseSqlTs(getAppState(TODAY_LAST_SEEN_KEY));
     if (prev != null && Date.now() - prev < MARK_DEBOUNCE_MS) return; // within the window — leave it
-    setAppState(TODAY_LAST_SEEN_KEY, sqlNow());
+    memoNeutralWrite(() => setAppState(TODAY_LAST_SEEN_KEY, sqlNow()));
   } catch {
     /* best-effort */
   }

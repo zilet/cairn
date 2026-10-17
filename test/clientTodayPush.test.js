@@ -75,9 +75,73 @@ test("the push line: 'Push · until Nov 15 — holding today:' with at most thre
     ["short night", "HRV", "chest <b> still recovering"]
   );
   assert.ok(chips.every((c) => c.getAttribute("type") === "button" && c.getAttribute("aria-expanded") === "false"));
-  assert.match(chips[0].getAttribute("aria-label"), /a short night and last night's HRV/);
+  // The signal's two clauses stay two chips: each names a different thing.
+  assert.match(chips[0].getAttribute("aria-label"), /^short night — a short night and last night's HRV/);
+  assert.match(chips[0].getAttribute("aria-label"), /tap to see why$/);
   assert.equal(host.querySelector(".tpush-chip b"), null, "escaped");
   assert.doesNotMatch(host.innerHTML, /\d+\s*\/\s*100|score/i);
+});
+
+test("two holds that say the same thing collapse to one chip", () => {
+  const w = load();
+  const twice = drive({
+    today: {
+      date: TODAY,
+      reaching: false,
+      reach_hosts: 0,
+      holding: [
+        { code: "signal", words: "a short night" },
+        { code: "signal", words: "a short night" },
+      ],
+      line: "Holding.",
+    },
+  });
+  const host = renderHtml(w.CairnTodayPush.stateHtml(twice, "train"));
+  const chips = [...host.querySelectorAll("button.tpush-chip")];
+  assert.deepEqual(
+    chips.map((c) => c.textContent),
+    ["short night"]
+  );
+});
+
+test("a signal's two clauses are two chips, and the name starts with the words on it", () => {
+  const w = load();
+  const rough = drive({
+    today: {
+      date: TODAY,
+      reaching: false,
+      reach_hosts: 0,
+      holding: [{ code: "signal", words: "the rough night you tapped in and the fatigue you reported" }],
+      line: "Holding.",
+    },
+  });
+  const host = renderHtml(w.CairnTodayPush.stateHtml(rough, "train"));
+  const chips = [...host.querySelectorAll("button.tpush-chip")];
+  assert.deepEqual(
+    chips.map((c) => c.textContent),
+    ["rough night you tapped in", "fatigue you reported"]
+  );
+  assert.match(
+    chips[0].getAttribute("aria-label"),
+    /^rough night you tapped in — the rough night you tapped in and the fatigue you reported — tap to see why$/
+  );
+
+  const harm = drive({
+    today: {
+      date: TODAY,
+      reaching: false,
+      reach_hosts: 0,
+      holding: [{ code: "stance_harm", words: "a recent session came in under par" }],
+      line: "Holding.",
+    },
+  });
+  const harmHost = renderHtml(w.CairnTodayPush.stateHtml(harm, "train"));
+  const harmChip = harmHost.querySelector("button.tpush-chip");
+  assert.equal(harmChip.textContent, "a recent day cost something");
+  assert.match(
+    harmChip.getAttribute("aria-label"),
+    /^a recent day cost something — a recent session came in under par — tap to see why$/
+  );
 });
 
 test("the push line says the reach when the day has room, and the quiet day alone becomes the chip", () => {

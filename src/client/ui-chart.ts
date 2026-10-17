@@ -183,11 +183,18 @@
       label == null || String(label) === ""
         ? ""
         : `<text class="hchart-txt" x="${at.toFixed(1)}" y="${H - 6}" text-anchor="middle">${escHtml(label)}</text>`;
+    // 11px labels: when the two edges sit too close for both to fit, the second yields.
+    const textW = (label: unknown) => String(label ?? "").length * 6;
+    const lowAt = bx;
+    const highAt = bx + bw;
+    const highFits =
+      !String(options.lowLabel ?? "") ||
+      highAt - lowAt >= (textW(options.lowLabel) + textW(options.highLabel)) / 2 + 4;
     return `<svg class="hchart hgauge" viewBox="0 0 ${W} ${H}" aria-hidden="true">
       <line class="hgauge-track" x1="${L}" y1="${cy}" x2="${W - R}" y2="${cy}"/>
       <rect class="hchart-band" x="${bx.toFixed(1)}" y="${cy - 7}" width="${bw.toFixed(1)}" height="14" rx="4"/>
       <circle class="hchart-dot hchart-dot-${options.tone === "watch" ? "watch" : "ok"}" cx="${x(value).toFixed(1)}" cy="${cy}" r="5"/>
-      ${edge(bx, options.lowLabel)}${edge(bx + bw, options.highLabel)}
+      ${edge(lowAt, options.lowLabel)}${highFits ? edge(highAt, options.highLabel) : ""}
     </svg>`;
   }
 
@@ -198,7 +205,7 @@
   // Words and position, never a score.
   function zoneBarSvg(options: UiChartZoneOptions): string {
     const W = 300,
-      H = 26,
+      H = 30, // 11px "optimal" text: baseline at 25 leaves room for descenders
       PAD = 8,
       barY = 6,
       barH = 8,

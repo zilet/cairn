@@ -158,8 +158,9 @@ function planDayItems(): Map<number, PlanDayItems> {
 function liftOf(day: PlanWeekDay, items: Map<number, PlanDayItems>, isToday: boolean): PlanLookAheadLift | null {
   const plan = day.plan_day;
   const strength = plan && plan.role === "strength" ? plan : null;
-  // A session logged today the plan cannot place still names itself.
-  const title = text(strength?.name) || (isToday ? text(day.session?.title) : "");
+  // A session logged today names what was done (src/repo/session-day.ts), the same
+  // words Today's strip says; one the plan cannot place still names itself.
+  const title = (isToday ? text(day.session?.title) : "") || text(strength?.name);
   if (!title) return null;
   const names = strength ? (items.get(strength.day_number)?.names ?? []) : [];
   return {

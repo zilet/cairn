@@ -54,6 +54,10 @@ test("a logged day shows protein then energy against the day's numbers, and one 
   assert.equal(host.querySelectorAll(".tfuel-idea").length, 1, "one idea, never a list");
   assert.equal(host.querySelector(".tfuel-idea-t").textContent, "Steak & eggs <hash>");
   assert.equal(host.querySelector(".tfuel-idea-n").textContent, "42 g protein · ~560 kcal");
+  assert.equal(
+    host.querySelector(".tfuel-idea").getAttribute("aria-label"),
+    "An idea for later Steak & eggs <hash> 42 g protein · ~560 kcal. Open Fuel"
+  );
   assert.doesNotMatch(win.CairnTodayFuelGlance.html(model), /<hash>/, "the idea's words are escaped");
   assert.doesNotMatch(win.CairnTodayFuelGlance.html(model), /score|%|low\b|behind/i);
 });

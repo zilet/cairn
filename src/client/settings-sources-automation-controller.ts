@@ -66,7 +66,10 @@
     );
 
     // Manual Garmin sync: pulse while the connector runs, then re-pull /settings so the
-    // status line shows exactly what the server recorded.
+    // status line shows exactly what the server recorded. The sync is a background job
+    // on the server; the shared runner (cardio-sync-client.ts, eager) follows it to its
+    // end and joins one Today already started. A sync that did not land is told by the
+    // status line alone (the server recorded it), and the button is the retry.
     settingsSourcesAutomationRequired<HTMLButtonElement>(deps.root, "#garminSyncBtn").addEventListener(
       "click",
       async () => {
@@ -76,9 +79,16 @@
         btn.textContent = "Syncing…";
         status.innerHTML = deps.garminStatusLine(null, true);
         let result: SettingsScreenGarminSyncResponse | null = null;
-        try {
-          result = (await deps.api("/garmin/sync", { method: "POST" })) as SettingsScreenGarminSyncResponse;
-        } catch {}
+        if (typeof CairnCardioSync !== "undefined" && typeof CairnCardioSync.sync === "function") {
+          result = await CairnCardioSync.sync({ api: deps.api });
+        } else {
+          // Without the shared runner only an inline answer can be read; a job handle
+          // is not an outcome, so it reads as nothing landed and the status line tells.
+          try {
+            const posted = (await deps.api("/garmin/sync", { method: "POST" })) as SettingsScreenGarminSyncResponse;
+            result = posted && !posted.job ? posted : null;
+          } catch {}
+        }
         let fresh: unknown = deps.settings;
         try {
           fresh = CairnSettingsSurface.settingsData(await deps.api("/settings")).settings;
@@ -87,11 +97,10 @@
         status.innerHTML = deps.garminStatusLine(fresh, false);
         btn.disabled = false;
         btn.textContent = "Sync now";
-        deps.toast(
-          result && result.ok
-            ? `Garmin synced · ${result.activities} activit${result.activities === 1 ? "y" : "ies"}`
-            : "Garmin sync failed"
-        );
+        // The shared run has already refreshed every read the sync fed.
+        if (result && result.ok) {
+          deps.toast(`Garmin synced · ${result.activities} activit${result.activities === 1 ? "y" : "ies"}`);
+        }
       }
     );
 

@@ -47,7 +47,7 @@ import {
   registerTrainingCacheClear,
   trainingBackstopSignature,
 } from "./training-cache.js";
-import { deriveSessionTitle } from "./training-read.js";
+import { loggedSessionTitle, sessionDayCandidates } from "./session-day.js";
 import { weightWords } from "./display-words.js";
 import { canonicalBodyweightSeries, resolvedCurrentBodyweight } from "./bodyweight.js";
 import {
@@ -91,11 +91,13 @@ export function getRecentSessions(limit = 10, opts: { through?: string } = {}) {
               ${through ? "WHERE s.date <= ?" : ""}
               ORDER BY s.date DESC, s.id DESC LIMIT ?`)
     .all(...(through ? [through] : []), limit) as any[];
-  // `title` is the content-true display name (see deriveSessionTitle); `day_name`
-  // stays the raw plan-day label so existing consumers are untouched.
+  // `title` is the content-true display name — the one session-day answer the week
+  // strip and Horizon's week also print (src/repo/session-day.ts); `day_name` stays
+  // the raw plan-day label so existing consumers are untouched.
+  const candidates = sessionDayCandidates();
   return sessions.map((s) => ({
     ...hydrateSession(s),
-    title: deriveSessionTitle(s.id, s.plan_day_id, s.day_name),
+    title: loggedSessionTitle(s.id, s.plan_day_id, candidates),
     daily_session: getActiveDailySessionForSession(s.id),
     sets: setsForSession(s.id),
     skips: skipsForSession(s.id),
@@ -115,7 +117,7 @@ export function getSessionByDate(date: string) {
   if (!s) return null;
   return {
     ...hydrateSession(s),
-    title: deriveSessionTitle(s.id, s.plan_day_id, s.day_name),
+    title: loggedSessionTitle(s.id, s.plan_day_id),
     daily_session: getActiveDailySessionForSession(s.id),
     sets: setsForSession(s.id),
     skips: skipsForSession(s.id),
@@ -132,7 +134,7 @@ export function getSessionDetail(id: number) {
   if (!s) return null;
   return {
     ...hydrateSession(s),
-    title: deriveSessionTitle(s.id, s.plan_day_id, s.day_name),
+    title: loggedSessionTitle(s.id, s.plan_day_id),
     daily_session: getActiveDailySessionForSession(s.id),
     sets: setsForSession(id),
     skips: skipsForSession(id),

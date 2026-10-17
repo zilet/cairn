@@ -157,7 +157,7 @@ and `CairnStone` (`src/client/ui-stone.ts`, SVG strings), CSS in `src/styles/fou
 - **Segments:** `.seg` is a surface pill track; the selected `.segbtn` (or the sliding
   `.seg-thumb`) is ink with ground text. A rail that scrolls (`.seg-scroll`) fades the edge that
   still has more behind it (`.seg-fade-l` / `.seg-fade-r`, set by `fitSeg`), so it never looks clipped.
-- **Train is one navigation level:** the group bar (Train · Program · Fuel · Body) sits only on each
+- **Train is one navigation level:** the group bar (Train · Program · Intake · Body) sits only on each
   group's landing (Overview, the Program read, Intake, Weight). Every other leaf is one tap deeper —
   a `.train-deeper-row` (name, one muted line, chevron) on its landing — and wears a single
   `.train-crumb` step back ("‹ Train") instead of a second tab row. Routes stay
@@ -981,7 +981,7 @@ scroll (translate + fade, JS, reduced-motion-gated). `.prbadge` is the gold PR p
 
 The week menu over the current weekly meal plan (prefers an accepted/applied/kept
 plan, falls back to the newest adequate draft). It opens from Fuel's "This week's menu"
-card and from Train → Fuel's "This week's menu" row, steps back "‹ Fuel", and `/app/plan/meals`
+card and from Train → Intake's "This week's menu" row, steps back "‹ Fuel", and `/app/plan/meals`
 redirects to it. A second draft (a fresh week asked for while a kept one stays current)
 waits under it for Keep/Discard; every other past week lives in Fuel's "Earlier meal plans" fold.
 

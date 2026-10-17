@@ -58,10 +58,25 @@ npm run garmin:sync -- --days=30 --limit=100
 
 REST/MCP:
 
-- `POST /api/garmin/sync` with `{ "days": 30, "limit": 100 }`
+- `POST /api/garmin/sync` with `{ "days": 30, "limit": 100 }` — answers at once with a
+  background `garmin_sync` job (`{ok, queued, joined, job_id, job}`); follow
+  `GET /api/agent-jobs/:id` until it is `done`, when `job.result` is the sync's own
+  `{ok, activities, daily_metrics, …}` (or `{ok:false, error}`). A second POST while a
+  sync of the same window is queued or running gets the same job (`joined:true`).
+  The job runs on its own lane, never behind a CLI agent job.
 - `GET /api/garmin/summary`
-- MCP tools: `sync_garmin`, `get_garmin_summary`, `upsert_garmin_activity`,
-  `upsert_garmin_daily_metric`
+- MCP tools: `sync_garmin` (waits and returns the result), `get_garmin_summary`,
+  `upsert_garmin_activity`, `upsert_garmin_daily_metric`
+
+Inside the server every path into a sync — the scheduler's 6-hourly pass, the job above,
+MCP — goes through one single-flight `syncGarmin()` (`npm run garmin:sync` is its own
+process and is not covered): a call for a window already queued or running joins it, and a different
+window waits for the running pass to finish before it starts. A pass has a hard
+4-minute deadline (`GARMIN_SYNC_DEADLINE_MS`; garmin-connect sets no timeout of its own):
+past it, every waiter gets a `timed out` failure (the job ends as an ordinary failed job,
+MCP answers `{ok:false, code:"timed_out"}`), the status line reads `failed: timed out`,
+and the next call starts a fresh pass. Stopping the job (`POST /api/agent-jobs/:id/cancel`)
+abandons the pass the same way. An abandoned pass stops before its next write.
 
 The connector stores token files under the data volume so rebuilds keep the session.
 If Garmin changes login, MFA, or anti-automation behavior, the unofficial connector may

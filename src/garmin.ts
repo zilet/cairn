@@ -4,7 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { emitBrainEvent } from "./brainEvents.js";
 import { flushGarminSyncDeferral, garminLapsStored, garminStoredFetchState, garminSourceLabel, getGarminCoachSummary, isStrengthGarminType, newGarminSyncDeferral, normalizeGarminHrvStatus, reconcileGarminStrength, upsertGarminActivity, upsertGarminDailyMetrics, upsertGarminSource } from "./repo/activities.js";
-import { runWithBrainSnapshot } from "./brain/snapshot.js";
+import { runWithFreshBrainSnapshot } from "./brain/snapshot.js";
 import type { GarminActivityInput, GarminDailyMetricInput } from "./repo/activities.js";
 import { detectRunCalibration } from "./repo/calibration.js";
 import {
@@ -719,11 +719,18 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
   return out;
 }
 
-async function syncDailyMetrics(client: any, sourceId: number, days: number, displayName: string | null) {
+async function syncDailyMetrics(
+  client: any,
+  sourceId: number,
+  days: number,
+  displayName: string | null,
+  signal?: AbortSignal
+) {
   const unavailable = new Set<string>();
   // Each day is independent of the others, so up to three go out together; the rows keep
   // their oldest-to-newest order (the newest one carries the slow-moving metrics below).
   const buildDay = async (i: number): Promise<{ iso: string; metric: GarminDailyMetricInput } | null> => {
+    stopIfAbandoned(signal);
     const date = new Date(Date.now() - i * 864e5);
     const iso = localDateISO(date);
     const metric: GarminDailyMetricInput = { date: iso };
@@ -900,6 +907,7 @@ async function syncDailyMetrics(client: any, sourceId: number, days: number, dis
   // after the batch — and the batch writer likewise bumps the training-data version
   // and asks the day-read question ONCE for the whole pass instead of once per day.
   const metrics = rows.map(({ metric }) => metric);
+  stopIfAbandoned(signal);
   upsertGarminDailyMetrics(metrics, sourceId, { emitEvent: false });
   return rows.length;
 }
@@ -1008,6 +1016,129 @@ async function fetchExerciseSets(client: any, activityId: string | number): Prom
 }
 
 export type GarminSyncOptions = { days?: number; limit?: number; daily?: boolean };
+export type GarminSyncWindow = { days: number; limit: number; daily: boolean };
+export type GarminSyncResult =
+  | { ok: true; source_id: number; days: number; activities: number; daily_metrics: number }
+  | { ok: false; source_id: number; error: string };
+
+function boundedSyncCount(value: unknown, fallback: unknown, max: number): number {
+  const n = Number(value ?? fallback);
+  const fallbackN = Number(fallback);
+  const picked = Number.isFinite(n) ? n : Number.isFinite(fallbackN) ? fallbackN : max;
+  return Math.max(1, Math.min(max, Math.trunc(picked)));
+}
+
+/**
+ * The window a sync actually covers, from whatever a caller passed (a REST body, an
+ * MCP call, nothing at all). Two calls that resolve to the same window are the same
+ * sync, which is what lets a second one join the first instead of running again.
+ */
+export function garminSyncWindow(options: GarminSyncOptions | null | undefined = {}): GarminSyncWindow {
+  const o = options ?? {};
+  return {
+    days: boundedSyncCount(o.days, process.env.GARMIN_SYNC_DAYS ?? 30, 180),
+    limit: boundedSyncCount(o.limit, process.env.GARMIN_SYNC_LIMIT ?? 100, 200),
+    daily: o.daily !== false,
+  };
+}
+
+/**
+ * The longest one pass may run. A pass measured 15 s typical and 53 s at worst, and
+ * garmin-connect sets no timeout of its own, so a connection that stalls mid-response
+ * would otherwise hold the single-flight below — and with it every later sync, the
+ * scheduler's included — until a restart.
+ */
+export const GARMIN_SYNC_DEADLINE_MS = 4 * 60_000;
+
+/** Why a pass was given up on: it ran past the deadline, or its caller stopped it. */
+export class GarminSyncAbandonedError extends Error {
+  readonly code: "timed_out" | "canceled";
+  constructor(code: "timed_out" | "canceled") {
+    super(code === "timed_out" ? "Garmin sync timed out" : "Garmin sync canceled");
+    this.name = "GarminSyncAbandonedError";
+    this.code = code;
+  }
+}
+
+/** Between steps: a pass that has been given up on stops before its next write. */
+function stopIfAbandoned(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw signal.reason ?? new GarminSyncAbandonedError("canceled");
+}
+
+type GarminSyncPass = (window: GarminSyncWindow, signal: AbortSignal) => Promise<GarminSyncResult>;
+type PendingSync = {
+  promise: Promise<GarminSyncResult>;
+  abandon: (code: "timed_out" | "canceled") => void;
+};
+
+// One sync at a time, process-wide. The scheduler's 6-hourly pass, a "Sync now" tap,
+// a second tap, the Settings button and MCP sync_garmin all reach syncGarmin, and two
+// passes at once fetch everything twice and interleave the same upserts. A call for a
+// window that is already queued or running JOINS that pass and gets its result; a
+// different window waits for the running pass to finish, then runs.
+//
+// A pass that outlives GARMIN_SYNC_DEADLINE_MS, or whose caller stops it, is ABANDONED:
+// everyone waiting on it gets a GarminSyncAbandonedError, its entry leaves the map and
+// the chain moves on, so the next call starts a fresh pass. The abandoned pass's own
+// promise is left to finish on its own; it sees its signal at the next step and stops
+// before writing anything more, and whatever it wrote before that is an idempotent
+// upsert. It can never touch a newer pass's entry: removal is by identity.
+const pendingSyncs = new Map<string, PendingSync>();
+let syncChain: Promise<unknown> = Promise.resolve();
+let syncPassForTests: GarminSyncPass | null = null;
+let syncDeadlineMs = GARMIN_SYNC_DEADLINE_MS;
+
+/**
+ * Replace the network pass with a fake (the suite is offline), and optionally the
+ * deadline. The single-flight, the deadline and the snapshot scope around the pass
+ * stay real, so tests drive exactly what callers see. Pass null to restore both.
+ */
+export function setGarminSyncPassForTests(pass: GarminSyncPass | null, opts: { deadlineMs?: number } = {}): void {
+  syncPassForTests = pass;
+  syncDeadlineMs = pass && opts.deadlineMs != null ? opts.deadlineMs : GARMIN_SYNC_DEADLINE_MS;
+}
+
+function startSyncPass(key: string, window: GarminSyncWindow): PendingSync {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let rejectAbandoned: (error: GarminSyncAbandonedError) => void = () => {};
+  const abandoned = new Promise<never>((_, reject) => {
+    rejectAbandoned = reject;
+  });
+  let settled = false;
+  const abandon = (code: "timed_out" | "canceled") => {
+    if (settled || controller.signal.aborted) return;
+    const error = new GarminSyncAbandonedError(code);
+    controller.abort(error);
+    if (code === "timed_out") {
+      log.warn(`[garmin] sync gave up after ${Math.round(syncDeadlineMs / 1000)}s`);
+      try {
+        setGarminSyncStatus("failed: timed out");
+      } catch {
+        /* the status line is a courtesy; the caller still gets the failure */
+      }
+    }
+    rejectAbandoned(error);
+  };
+  const pass = syncChain.then(() => {
+    stopIfAbandoned(controller.signal); // stopped while it was still waiting its turn
+    timer = setTimeout(() => abandon("timed_out"), syncDeadlineMs);
+    timer.unref?.();
+    return runWithFreshBrainSnapshot(() => (syncPassForTests ?? syncGarminPass)(window, controller.signal));
+  });
+  // An abandoned pass finishing (or failing) later is nobody's answer any more.
+  pass.catch(() => {});
+  const entry: PendingSync = { abandon, promise: undefined as unknown as Promise<GarminSyncResult> };
+  entry.promise = Promise.race([pass, abandoned]).finally(() => {
+    settled = true;
+    clearTimeout(timer);
+    if (pendingSyncs.get(key) === entry) pendingSyncs.delete(key);
+  });
+  pendingSyncs.set(key, entry);
+  // The chain only orders passes; one that threw or was abandoned must not stop the next.
+  syncChain = entry.promise.catch(() => {});
+  return entry;
+}
 
 /**
  * One sync pass, under ONE brain-signal snapshot.
@@ -1025,14 +1156,41 @@ export type GarminSyncOptions = { days?: number; limit?: number; daily?: boolean
  * drop the memoized keys they invalidate (see invalidateDayReadIfDecisionChanged), and
  * the before/after recovery summaries the material-transition check compares are
  * direct calls that were deliberately never memoized — so the transition still fires.
+ *
+ * The scope is always the pass's OWN. A manual sync now runs as a background job
+ * (src/agentJobs.ts), which inherits the async context of the request that queued it
+ * — and of every job the same drain picks up after it — so joining whatever snapshot
+ * happens to be ambient would hand the pass a finished request's memo.
+ *
+ * Single-flight and the deadline: see `pendingSyncs` above. It rejects with a
+ * GarminSyncAbandonedError when the pass ran out of time or `signal` (the caller's
+ * Stop) fired; a Stop abandons the shared pass for everyone waiting on it, since a
+ * pass nobody can stop is exactly what holds every later sync.
  */
-export async function syncGarmin(options: GarminSyncOptions = {}) {
-  return runWithBrainSnapshot(() => syncGarminPass(options));
+export function syncGarmin(
+  options: GarminSyncOptions = {},
+  opts: { signal?: AbortSignal } = {}
+): Promise<GarminSyncResult> {
+  const window = garminSyncWindow(options);
+  const key = `${window.days}:${window.limit}:${window.daily ? 1 : 0}`;
+  const entry = pendingSyncs.get(key) ?? startSyncPass(key, window);
+  const signal = opts.signal;
+  if (signal) {
+    if (signal.aborted) entry.abandon("canceled");
+    else {
+      const stop = () => entry.abandon("canceled");
+      signal.addEventListener("abort", stop, { once: true });
+      entry.promise.then(
+        () => signal.removeEventListener("abort", stop),
+        () => signal.removeEventListener("abort", stop)
+      );
+    }
+  }
+  return entry.promise;
 }
 
-async function syncGarminPass(options: GarminSyncOptions = {}) {
-  const days = Math.max(1, Math.min(180, options.days ?? Number(process.env.GARMIN_SYNC_DAYS ?? 30)));
-  const limit = Math.max(1, Math.min(200, options.limit ?? Number(process.env.GARMIN_SYNC_LIMIT ?? 100)));
+async function syncGarminPass(window: GarminSyncWindow, signal?: AbortSignal): Promise<GarminSyncResult> {
+  const { days, limit } = window;
   const source = upsertGarminSource({
     label: garminSourceLabel(),
     mode: "unofficial",
@@ -1040,9 +1198,11 @@ async function syncGarminPass(options: GarminSyncOptions = {}) {
   }) as any;
   try {
     const client = await makeClient();
+    stopIfAbandoned(signal);
     upsertGarminSource({ label: source.label, mode: "unofficial", auth_status: "connected" });
     const since = isoDaysAgo(days);
     const rows = await client.getActivities(0, limit);
+    stopIfAbandoned(signal);
     let activities = 0;
     let zoneFetches = 0;
     let strengthFetches = 0;
@@ -1092,6 +1252,7 @@ async function syncGarminPass(options: GarminSyncOptions = {}) {
         fetchLapsNow ? fetchLaps(client, input.external_id) : null,
         wantsSets ? fetchExerciseSets(client, input.external_id) : null,
       ]);
+      stopIfAbandoned(signal);
       if (detail) {
         // Fill, never blank: the detail's summaryDTO answered null for running
         // dynamics the list payload carried, and that null used to be the only
@@ -1138,11 +1299,15 @@ async function syncGarminPass(options: GarminSyncOptions = {}) {
         })
         .catch(() => {});
     }
-    const beforeRecovery = options.daily === false ? null : getGarminCoachSummary(Math.min(days, 14));
-    const displayName = options.daily === false ? null : await getDisplayName(client, rows || []);
-    const daily =
-      options.daily === false ? 0 : await syncDailyMetrics(client, source.id, Math.min(days, 14), displayName);
-    if (options.daily !== false) {
+    const beforeRecovery = window.daily ? getGarminCoachSummary(Math.min(days, 14)) : null;
+    const displayName = window.daily ? await getDisplayName(client, rows || []) : null;
+    const daily = window.daily
+      ? await syncDailyMetrics(client, source.id, Math.min(days, 14), displayName, signal)
+      : 0;
+    // The last await: past this line the pass only writes synchronously, so a pass
+    // given up on never stamps its status over a newer one's.
+    stopIfAbandoned(signal);
+    if (window.daily) {
       const afterRecovery = getGarminCoachSummary(Math.min(days, 14));
       emitMaterialGarminRecoveryTransition(beforeRecovery, afterRecovery, source.id);
       // A new night moves the week an HRV / resting-HR directive reads, so re-derive the
@@ -1182,6 +1347,9 @@ async function syncGarminPass(options: GarminSyncOptions = {}) {
     }
     return { ok: true, source_id: source.id, days, activities, daily_metrics: daily };
   } catch (e: any) {
+    // Given up on: the caller already has its failure (and the deadline its status
+    // line); recording anything now could only overwrite a newer pass's.
+    if (signal?.aborted) throw e;
     const msg = e?.message ?? String(e);
     upsertGarminSource({ label: source.label, mode: "unofficial", auth_status: "failed" });
     setGarminSyncStatus(`failed: ${msg}`);

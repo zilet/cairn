@@ -107,16 +107,16 @@ ul.packet-rows{list-style:none;padding-left:0}
   font-family:Georgia,"Iowan Old Style","Times New Roman",serif;font-size:12px;line-height:var(--leading)}
 .packet-paper .packet-pv-head{font-family:inherit;font-size:11px;color:var(--paper-muted)}
 .packet-paper .packet-pv-title{margin:0 0 var(--space-2);padding-bottom:var(--space-2);border-bottom:1px solid var(--paper-rule);
-  font-family:var(--font-ui);font-size:9.5px;font-weight:var(--weight-semibold);letter-spacing:var(--tracking-widest);color:var(--paper-muted)}
+  font-family:var(--font-ui);font-size:11px;font-weight:var(--weight-semibold);letter-spacing:var(--tracking-widest);color:var(--paper-muted)}
 .packet-paper .packet-rows{gap:0;padding-left:0}
 .packet-paper ol.packet-rows{padding-left:var(--space-8)}
 .packet-paper .packet-row{font-size:12px;color:var(--paper-ink);padding:var(--space-2) 0;border-top:1px dotted var(--paper-rule)}
 .packet-paper .packet-row:first-child{border-top:0}
-.packet-paper .packet-row-meta{font-size:10.5px;color:var(--paper-muted)}
-.packet-paper .packet-flag,.packet-paper .packet-opt{font-family:var(--font-ui);font-size:9.5px;padding:0;background:none;border:0}
+.packet-paper .packet-row-meta{font-size:11px;color:var(--paper-muted)}
+.packet-paper .packet-flag,.packet-paper .packet-opt{font-family:var(--font-ui);font-size:11px;padding:0;background:none;border:0}
 .packet-paper .packet-flag{color:#a3372c;font-weight:var(--weight-bold);text-transform:uppercase;letter-spacing:var(--tracking-wider)}
 .packet-paper .packet-opt{color:#8a5a12}
-.packet-paper .packet-more,.packet-paper .packet-empty-line{font-size:10.5px;color:var(--paper-muted)}
+.packet-paper .packet-more,.packet-paper .packet-empty-line{font-size:12px;color:var(--paper-muted)}
 .packet-actions{gap:var(--space-4)}
 .hshare-card .packet-act.logbtn{width:auto;flex:1 1 auto;height:auto;min-height:42px;font-size:var(--text-md);font-weight:var(--weight-medium);padding:0 var(--space-9)}
 .hshare-card .packet-act.ghostbtn{width:auto;flex:1 1 auto;margin-top:0}

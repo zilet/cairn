@@ -195,3 +195,46 @@ test("a tap on a folded muscle opens its fold and finds its row", () => {
   assert.equal(ctx.tovOpenRow(view, "neck"), null);
   assert.equal(ctx.tovOpenRow(view, ""), null);
 });
+
+test("tovGroupVerdictSummary quiets the muscle list when more than half the visible rows share a status pill", () => {
+  const ctx = loadRoadFold();
+  const stalledMajority = [
+    tovRow("chest", "ok", { verdict: "stalling", sets: 10 }),
+    tovRow("back", "ok", { verdict: "stalling", sets: 12 }),
+    tovRow("shoulders", "ok", { verdict: "stalling", sets: 8 }),
+    tovRow("quads", "ok", { verdict: "advancing", sets: 9 }),
+    tovRow("hamstrings", "ok", { verdict: "", sets: 6 }),
+  ];
+  const summary = ctx.tovGroupVerdictSummary(stalledMajority);
+  assert.equal(summary.majorityVerdict, "stalling");
+  assert.equal(summary.note, "Most groups have paused — progress has stalled for now");
+  assert.deepEqual(
+    summary.rows.map((r) => [r.group, r.showPill]),
+    [
+      ["chest", false],
+      ["back", false],
+      ["shoulders", false],
+      ["quads", true],
+      ["hamstrings", false],
+    ]
+  );
+
+  const html = ctx.tovRowsHtml(stalledMajority);
+  assert.match(html, /class="tov-rows-note[^"]*"[^>]*data-tov-verdict-summary="stalling">Most groups have paused — progress has stalled for now<\/p>/);
+  assert.doesNotMatch(html, /tov-chip-stall/, "majority stalling pill is not repeated on individual rows");
+  assert.match(html, /tov-chip-adv[^>]*>advancing ↗<\/span>/, "differing row keeps its pill");
+  // Every row keeps its sentence.
+  assert.match(html, /10 sets this week · volume is in range, progress has stalled/);
+  assert.match(html, /9 sets this week · in the productive range/);
+
+  // Exactly half (2 of 4) does not collapse into a majority note.
+  const halfOnly = ctx.tovGroupVerdictSummary([
+    tovRow("chest", "ok", { verdict: "stalling" }),
+    tovRow("back", "ok", { verdict: "stalling" }),
+    tovRow("shoulders", "ok", { verdict: "advancing" }),
+    tovRow("quads", "ok", { verdict: "building" }),
+  ]);
+  assert.equal(halfOnly.majorityVerdict, null);
+  assert.equal(halfOnly.note, "");
+  assert.ok(halfOnly.rows.every((r) => r.showPill));
+});

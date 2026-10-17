@@ -398,7 +398,23 @@ function tovLoadBandHtml(data: TovData): string {
   return `<div class="tov-loadband reveal" role="group" aria-label="${escAttr(`${label}: ${phrase}`)}" style="${stagger(3)}">${row}</div>`;
 }
 
-function tovVerdictChip(row: TovRow): string {
+const TOV_VERDICT_SUMMARY_NOTE: Record<string, string> = {
+  stalling: "Most groups have paused — progress has stalled for now", advancing: "Most groups are advancing", building: "Most groups are building a baseline",
+};
+const tovPillVerdict = (row: Pick<TovRow, "verdict">): string =>
+  row.verdict === "advancing" || row.verdict === "stalling" || row.verdict === "building" ? row.verdict : "";
+function tovGroupVerdictSummary(rows: ReadonlyArray<Pick<TovRow, "group" | "verdict">>) {
+  const counts: Record<string, number> = {};
+  for (const row of rows) { const v = tovPillVerdict(row); if (v) counts[v] = (counts[v] || 0) + 1; }
+  const hit = rows.length >= 2 ? Object.entries(counts).find(([, c]) => c * 2 > rows.length) : undefined;
+  const majorityVerdict = hit ? hit[0] : null;
+  const showRowPill = (row: Pick<TovRow, "verdict">): boolean => { const v = tovPillVerdict(row); return Boolean(v && v !== majorityVerdict); };
+  const note = majorityVerdict ? TOV_VERDICT_SUMMARY_NOTE[majorityVerdict] || "" : "";
+  return { majorityVerdict, note, rows: rows.map((row) => ({ group: row.group, verdict: tovPillVerdict(row), showPill: showRowPill(row) })), showRowPill };
+}
+
+function tovVerdictChip(row: TovRow, showPill = true): string {
+  if (!showPill) return "";
   if (row.verdict === "advancing") return `<span class="tov-chip tov-chip-adv">advancing ↗</span>`;
   if (row.verdict === "stalling") return `<span class="tov-chip tov-chip-stall">stalling</span>`;
   if (row.verdict === "building") return `<span class="tov-chip">building</span>`;
@@ -450,12 +466,12 @@ function tovMapHtml(rows: TovRow[]): string {
   </div>`;
 }
 
-function tovRowHtml(row: TovRow, i: number): string {
+function tovRowHtml(row: TovRow, i: number, showPill = true): string {
   return `
     <button class="tov-row reveal" type="button" data-tovgo="program" data-group="${escAttr(row.group)}" style="${stagger(Math.min(i + 2, 12))}">
       <span class="tov-row-dot tov-dot-${row.tone === "none" ? "idle" : row.tone}"></span>
       <span class="tov-row-main">
-        <span class="tov-row-top"><span class="tov-row-name">${escHtml(tovCapitalize(row.label))}</span>${tovVerdictChip(row)}</span>
+        <span class="tov-row-top"><span class="tov-row-name">${escHtml(tovCapitalize(row.label))}</span>${tovVerdictChip(row, showPill)}</span>
         ${tovBandBar(row)}
         <span class="tov-row-note">${escHtml(tovRowNote(row) || "nothing logged yet")}</span>
       </span>
@@ -468,13 +484,15 @@ function tovRowHtml(row: TovRow, i: number): string {
 function tovRowsHtml(rows: TovRow[]): string {
   const visible = rows.filter((r) => r.tone !== "none" || TOV_GROUP_ORDER.includes(r.group));
   if (!visible.length) return "";
+  const summary = tovGroupVerdictSummary(visible);
   const lead = visible.filter((r) => r.tone === "due" || r.tone === "high" || r.verdict === "stalling");
   for (const row of visible) if (lead.length < 3 && !lead.includes(row)) lead.push(row);
   const rest = visible.filter((r) => !lead.includes(r));
   const hint = rest.slice(0, 3).map((r) => tovCapitalize(r.label)).join(", ") + (rest.length > 3 ? "…" : "");
-  const more = rest.length ? `<details class="tov-more"><summary class="tov-more-sum"><span>${rest.length} more muscle group${rest.length === 1 ? "" : "s"}</span><span class="tov-more-hint">${escHtml(hint)}</span></summary><div class="tov-rows">${rest.map((row, i) => tovRowHtml(row, lead.length + i)).join("")}</div></details>` : "";
+  const more = rest.length ? `<details class="tov-more"><summary class="tov-more-sum"><span>${rest.length} more muscle group${rest.length === 1 ? "" : "s"}</span><span class="tov-more-hint">${escHtml(hint)}</span></summary><div class="tov-rows">${rest.map((row, i) => tovRowHtml(row, lead.length + i, summary.showRowPill(row))).join("")}</div></details>` : "";
+  const noteHtml = summary.note ? `<p class="tov-rows-note reveal" style="${stagger(2)}" data-tov-verdict-summary="${escAttr(summary.majorityVerdict || "")}">${escHtml(summary.note)}</p>` : "";
   return `<div class="tov-kicker lbl reveal" style="${stagger(2)}">Working sets per week, against your productive range</div>
-    <div class="tov-rows">${lead.map((row, i) => tovRowHtml(row, i)).join("")}</div>${more}`;
+    ${noteHtml}<div class="tov-rows">${lead.map((row, i) => tovRowHtml(row, i, summary.showRowPill(row))).join("")}</div>${more}`;
 }
 
 /** A muscle's row, with its fold opened when it sits among the quiet groups. */
@@ -675,5 +693,5 @@ function paintTrainOverview(data: TovData): void {
   });
 }
 
-Object.assign(globalThis, { renderTrainOverview, tovJourneyPointerHtml, tovRowsHtml, tovOpenRow });
-if (typeof window !== "undefined") Object.assign(window, { renderTrainOverview, tovJourneyPointerHtml, tovRowsHtml, tovOpenRow });
+Object.assign(globalThis, { renderTrainOverview, tovJourneyPointerHtml, tovRowsHtml, tovGroupVerdictSummary, tovOpenRow });
+if (typeof window !== "undefined") Object.assign(window, { renderTrainOverview, tovJourneyPointerHtml, tovRowsHtml, tovGroupVerdictSummary, tovOpenRow });

@@ -394,7 +394,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | GET | `/api/garmin/sources` |  |
 | POST | `/api/garmin/sources` |  |
 | GET | `/api/garmin/summary` |  |
-| POST | `/api/garmin/sync` |  |
+| POST | `/api/garmin/sync` | A sync is a few dozen Garmin Connect round trips (15 s typical, 50 s at worst), so the request does not wait for it: it answers at once with the background job, and the PWA follows GET /api/agent-jobs/:id to the job's `done`, whose result is the body this route used to return. A second POST while a sync is queued or running gets the SAME job (`joined: true`), never a second pull. MCP sync_garmin still waits for the result, and joins a sync already in progress. |
 | GET | `/api/garmin/unreconciled` | Synced Garmin strength activities not yet linked to a Cairn session — the watch logged a lift Cairn doesn't know about. Drives the calm "reconcile?" Today card; [] when Garmin isn't configured (no rows). Reconciling (POST /garmin/reconcile) clears the list. |
 
 ## `/goal`

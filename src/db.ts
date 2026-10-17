@@ -1653,6 +1653,18 @@ CREATE INDEX IF NOT EXISTS idx_diagnostic_events_created ON diagnostic_events(cr
 CREATE INDEX IF NOT EXISTS idx_diagnostic_events_issue ON diagnostic_events(fingerprint, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_diagnostic_events_route ON diagnostic_events(route, created_at DESC);
 
+-- Anonymous per-day counts of which screens were opened. Counts only: the day,
+-- a closed view key, and how many times it was opened. No clock time, session,
+-- device, duration, or screen content. Operator diagnostics, never an athlete
+-- score, and never copied into the feedback snapshot. Rows older than 90 days
+-- are deleted by pruneDiagnosticEvents.
+CREATE TABLE IF NOT EXISTS ui_view_counts (
+  day TEXT NOT NULL,
+  view TEXT NOT NULL,
+  opens INTEGER NOT NULL,
+  PRIMARY KEY (day, view)
+);
+
 -- Hourly, low-cardinality request histograms. Successful API/MCP calls are
 -- aggregated rather than retained as raw request rows; percentile reads are
 -- approximate bucket upper bounds and never contain bodies or query values.

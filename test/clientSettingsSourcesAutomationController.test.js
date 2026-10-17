@@ -110,9 +110,13 @@ class FakeElement {
 
 class FakeRoot extends FakeElement {}
 
-function loadSettingsSourcesAutomationController() {
-  const context = { Object, Array, Set, String, Number, RegExp, JSON, URLSearchParams, escHtml, escAttr };
+function loadSettingsSourcesAutomationController(extra = {}) {
+  const context = { Object, Array, Set, String, Number, RegExp, JSON, URLSearchParams, escHtml, escAttr, ...extra };
   context.window = context;
+  // The shared Sync now runner is eager in the browser; a test that wants it loads it.
+  if (extra.withCardioSync) {
+    vm.runInNewContext(readFileSync(join(root, "public/js/cardio-sync-client.js"), "utf8"), context);
+  }
   // The controller hands the real date helpers to the surface, so the connection
   // rows are rendered here exactly as the browser renders them.
   vm.runInNewContext(readFileSync(join(root, "public/js/date-utils.js"), "utf8"), context);
@@ -374,4 +378,72 @@ test("settings automation controller owns enrichment and research toggles", () =
   assert.match(rootEl.innerHTML, /id="driveCard"[^>]*data-save-ignore/);
   assert.equal(rootEl.querySelector("#driveCard").hidden, true);
   assert.equal(wm.gemini_api_key, "gemini-key");
+});
+
+test("Settings Sync now follows the background job: a toast when it lands, the status line when it does not", async () => {
+  for (const landed of [true, false]) {
+    const writes = [];
+    const controller = loadSettingsSourcesAutomationController({
+      withCardioSync: true,
+      // Next-macrotask timers: the poll's wait fires, and a read that answers always
+      // beats its own deadline.
+      setTimeout: (fn) => setImmediate(fn),
+      clearTimeout: (handle) => clearImmediate(handle),
+      CairnWriteInvalidation: { invalidateWrite: (name) => writes.push(name) },
+    });
+    const rootEl = new FakeRoot("root");
+    const wm = {
+      garmin_username: "",
+      garmin_password: "",
+      garmin_export_strength: true,
+      enrich_enabled: false,
+      art_enabled: false,
+      research_enabled: false,
+      gemini_api_key: "",
+      lead_mode: "lead",
+    };
+    const harness = baseDeps(rootEl, wm);
+    const plainApi = harness.deps.api;
+    harness.deps.api = async (path, opts = {}) => {
+      if (path === "/garmin/sync") {
+        harness.calls.push([path, opts.method || "GET"]);
+        return {
+          ok: true,
+          queued: true,
+          joined: false,
+          job_id: 9,
+          job: { id: 9, kind: "garmin_sync", status: "queued" },
+        };
+      }
+      if (path === "/agent-jobs/9") {
+        harness.calls.push([path, opts.method || "GET"]);
+        const result = landed ? { ok: true, activities: 3 } : { ok: false, error: "auth" };
+        return { ok: true, job: { id: 9, kind: "garmin_sync", status: "done", result } };
+      }
+      if (path === "/settings") {
+        harness.calls.push([path, "GET"]);
+        return { settings: { garmin_last_sync_status: landed ? "ok: 3" : "failed: auth" }, agents: [] };
+      }
+      return plainApi(path, opts);
+    };
+
+    await controller.renderSources(harness.deps);
+    await rootEl.querySelector("#garminSyncBtn").click();
+
+    assert.ok(
+      harness.calls.some(([path]) => path === "/agent-jobs/9"),
+      "the job is followed to its end"
+    );
+    assert.equal(rootEl.querySelector("#garminSyncBtn").disabled, false);
+    assert.equal(rootEl.querySelector("#garminSyncBtn").textContent, "Sync now");
+    if (landed) {
+      assert.deepEqual(harness.toasts, ["Garmin synced · 3 activities"]);
+      assert.deepEqual(writes, ["garmin_sync"]);
+      assert.equal(rootEl.querySelector("#garminStatus").innerHTML, "status:ok: 3:false");
+    } else {
+      assert.deepEqual(harness.toasts, [], "no failure toast — the status line carries it");
+      assert.deepEqual(writes, []);
+      assert.equal(rootEl.querySelector("#garminStatus").innerHTML, "status:failed: auth:false");
+    }
+  }
 });

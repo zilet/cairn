@@ -45,13 +45,25 @@ paths are collapsed to a closed API route family; server-side paths use matched
 templates. SSE lifetime is excluded, while health/readiness probes are counted
 separately from product throughput. Buckets are retained for 30
   days and capped at 50,000.
+- `ui_view_counts`: anonymous per-day counts of which screens were opened
+  (`POST /api/ui-views`). One row per local day and view key — a home, a view,
+  or a section such as `train/intake` or `settings/agents`. What is stored is
+  the day, that key, and how many times it was opened. What is never stored is
+  a clock time, a session or device id, a duration, or anything on the screen
+  (no date in a day-page key, no stone id, no document id). Rows older than 90
+  days are deleted on the same housekeeping pass as the other diagnostic
+  tables. The browser does not count when Do Not Track is `1`, and a count it
+  cannot deliver is dropped rather than queued. Nothing here is sent off the host.
 
 `GET /api/diagnostics` and MCP `get_diagnostics` return the build identity,
 release-scoped grouped issues, recent sanitized events, slow operations,
 current-build performance aggregates, and storage limits. The response preserves
 all-build history while `current_build` isolates the running build's issue count,
 groups, recent events, and slow requests so an older release cannot color current
-deployment health. `GET /api/ready` adds
+deployment health. The same payload includes `ui_views`: screens opened over
+the last 30 days (`[{view, opens}]`, highest first, at most 25). That list is
+an operator read, not an athlete-facing score, and it is not part of the
+feedback snapshot. `GET /api/ready` adds
 queue age, recent terminal failures, and
 scheduler-heartbeat freshness. Optional coaching agents never gate readiness.
 

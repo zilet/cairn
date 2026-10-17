@@ -200,6 +200,8 @@ export interface ClientDiagnosticsResponse {
     diagnostic_events: { rows: number; retention_days: number; row_cap: number };
     request_metric_buckets: { rows: number; retention_days: number; row_cap: number };
   };
+  /** Anonymous per-screen open counts over the recent window, most-opened first. */
+  ui_views: Array<{ view: string; opens: number }>;
 }
 
 export interface ClientVersionResponse {
@@ -1488,13 +1490,26 @@ export interface ClientGarminReconcileResponse extends ClientOkResponse {
   sessions: ClientTrainingSession[];
 }
 
-export interface ClientGarminSyncResponse extends ClientOkResponse {
+/** What a Garmin sync finishes with: the `result` of its `garmin_sync` job. */
+export interface ClientGarminSyncResult extends ClientOkResponse {
   ok: boolean;
   source_id?: number | null;
   days?: number;
   activities?: number;
   daily_metrics?: number;
   error?: string;
+}
+
+/**
+ * POST /api/garmin/sync: the background sync it queued, or the one already running
+ * (`joined`). The sync's own outcome is the job's `result` once it is `done`. The
+ * result fields stay optional here for a server that still answered inline.
+ */
+export interface ClientGarminSyncResponse extends ClientGarminSyncResult {
+  queued?: boolean;
+  joined?: boolean;
+  job_id?: number;
+  job?: ClientAgentJob;
 }
 
 export interface ClientVolumeByMuscleRow {

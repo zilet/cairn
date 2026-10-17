@@ -62,7 +62,7 @@ const CLIENT_API_ROUTE_FAMILIES = [
   "sets", "settings", "since-last", "stats", "strength-journey", "suggestions", "supplements",
   "symptom-links", "team-week", "telemetry", "test-week", "today", "today-agenda", "today-plan-day",
   "today-read", "today-side", "today-strength-line", "training-agenda", "training-symptoms", "trajectory",
-  "turns", "update", "update-check", "update-status", "version", "volume", "week-ahead", "week-wins", "welcome", "whole-person-trajectory",
+  "turns", "ui-views", "update", "update-check", "update-status", "version", "volume", "week-ahead", "week-wins", "welcome", "whole-person-trajectory",
 ];
 const CLIENT_API_ROUTE_FAMILY_SET = new Set(CLIENT_API_ROUTE_FAMILIES);
 // Same bound as the contract's DIAGNOSTIC_ROUTE_SEGMENT: an unknown family is

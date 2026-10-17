@@ -361,7 +361,7 @@ function deferBusyAgentJob(id: number): boolean {
   return true;
 }
 
-const runner = createSerialRunner(processAgentJob, (id, e) => {
+function agentJobBackstop(id: number, e: any): void {
   // A failing job must never break the loop. processAgentJob already persists its
   // own failure; this is the last-resort backstop.
   if (isAgentBusyError(e) && deferBusyAgentJob(id)) return;
@@ -376,7 +376,16 @@ const runner = createSerialRunner(processAgentJob, (id, e) => {
   }
   recordAsyncFailure("agent_jobs", "runner_backstop", e);
   log.error(`[jobs] job#${id} failed (${diagnosticErrorName(e)})`);
-});
+}
+
+const runner = createSerialRunner(processAgentJob, agentJobBackstop);
+
+// The jobs that spawn no CLI agent drain on a lane of their own. The agent lane is
+// one-at-a-time and its jobs run for minutes, so a Garmin pull queued behind a health
+// review would make "Sync now" wait for the review. Same processor, same row
+// lifecycle, same bus — only the queue differs.
+const IO_LANE_KINDS = new Set<string>(["garmin_sync"]);
+const ioRunner = createSerialRunner(processAgentJob, agentJobBackstop);
 
 // The welcome's week, finished by the compose job a busy host handed it to: the same
 // one-shot "ready" notice the welcome itself records (src/repo/first-week.ts).
@@ -408,7 +417,8 @@ export function interruptedJobResume(job: { kind?: string; meta?: any; input?: a
 }
 
 export function enqueueAgentJob(id: number): void {
-  runner.enqueue(id);
+  const kind = String((repo.getAgentJob(id) as any)?.kind ?? "");
+  (IO_LANE_KINDS.has(kind) ? ioRunner : runner).enqueue(id);
 }
 
 // The boundary pass (domain/brain/autonomy-service.ts) cannot import this module without
@@ -424,6 +434,26 @@ export function ensureWeekAheadJob(agent: string | undefined, cacheKey: string):
   const { job, created } = repo.createWeekAheadAgentJob({ cacheKey, agent: agent ?? null });
   if (created) enqueueAgentJob(Number(job.id));
   return { job, created };
+}
+
+// Start (or join) the background Garmin sync for this window. POST /api/garmin/sync
+// answers with the job at once; a second tap while one is queued or running gets the
+// SAME job back rather than a second pull (syncGarmin itself is single-flight too, so
+// the scheduler's pass and MCP sync_garmin join the same work). A finished job — done
+// or failed — never blocks: the next ask starts fresh, which is the retry.
+export function ensureGarminSyncJob(window: { days: number; limit: number; daily: boolean }): {
+  job: any;
+  created: boolean;
+} {
+  const input = { days: window.days, limit: window.limit, daily: window.daily };
+  for (const job of repo.listActiveAgentJobs() as any[]) {
+    if (job?.kind !== "garmin_sync") continue;
+    const at = job.input ?? {};
+    if (at.days === input.days && at.limit === input.limit && at.daily === input.daily) return { job, created: false };
+  }
+  const job = repo.createAgentJob({ kind: "garmin_sync", phase: "queued to sync with Garmin", input }) as any;
+  enqueueAgentJob(Number(job.id));
+  return { job, created: true };
 }
 
 async function processAgentJob(id: number): Promise<void> {
@@ -779,6 +809,25 @@ async function processAgentJob(id: number): Promise<void> {
         result = await readToday({ date, override, agent, recordOutcome: true });
         chosen = result?.agent ?? null;
         ref = { ref_table: "day_reads", ref_id: null };
+        break;
+      }
+      case "garmin_sync": {
+        // Not agentic. syncGarmin never throws for a Garmin-side failure: it records
+        // the status the sync line reads and answers {ok:false}, which lands as this
+        // job's `done` result like any other op's designed failure. A pass that ran
+        // past its deadline THROWS, so the job ends as an ordinary failed job — never
+        // left running, and the next ask is a fresh job. Stop reaches the pass through
+        // the job's signal, which frees this lane and the sync behind it.
+        onPhase("syncing with Garmin");
+        const { syncGarmin } = await import("./garmin.js");
+        result = await syncGarmin(
+          {
+            days: input.days != null ? Number(input.days) : undefined,
+            limit: input.limit != null ? Number(input.limit) : undefined,
+            daily: input.daily !== false,
+          },
+          { signal: controller.signal }
+        );
         break;
       }
       case "chat_distill": {

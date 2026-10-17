@@ -65,6 +65,7 @@ const TIMESTAMP_ALLOWLIST = {
   "settings-agents-client.ts": "an agent job's device timestamp",
   "outbox-ui.ts": "a queued write's device timestamp",
   "client-diagnostics.ts": "the IANA time-zone probe, not a date word",
+  "ui-view-counter.ts": "the IANA time-zone probe, not a date word",
   "api-core.ts": "the IANA time-zone probe, not a date word",
 };
 
