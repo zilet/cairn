@@ -321,6 +321,22 @@ function splitAppendedReceipts(reply: string, head: string): { head: string; rec
   return { head: prose, receipts: rest.slice(RECEIPT_JOIN.length).trim() };
 }
 
+// Writes that are not a plan change. A successful one means "I've added/updated…" in the
+// reply is about THAT write, never a claim the plan moved.
+const NON_PLAN_WRITE_ACTIONS: ReadonlySet<ChatActionType> = new Set<ChatActionType>([
+  "log_food",
+  "update_food_note",
+  "log_weight",
+  "log_blood_pressure",
+  "log_supplement",
+  "log_measurement",
+  "log_checkin",
+  "log_health",
+  "add_memory",
+  "update_memory",
+  "supersede_memory",
+]);
+
 export function reconcileChatPlanReply(
   reply: string,
   message: string | null | undefined,
@@ -358,6 +374,11 @@ export function reconcileChatPlanReply(
   }
 
   if (!planEntries.length) {
+    // A turn that logged or amended food, weight, a supplement or the like and never asked
+    // for a plan edit has no plan claim to police: its "I've added…" is about that write.
+    if (!explicit && !restructureDraft && applied.some((entry) => NON_PLAN_WRITE_ACTIONS.has(entry.type) && !entry.error)) {
+      return reply;
+    }
     // A run edit IS this turn's plan change; reconcileChatRunReply owns its receipt.
     // Without this the athlete would read "No plan change was saved" directly above
     // the verified run receipt.
@@ -903,18 +924,22 @@ export function reconcileChatIntakeReply(
   applied: Array<{ type: ChatActionType; result?: unknown; error?: string }>,
   readDay: (date?: string) => any = (date) => repo.getDayIntake(date)
 ): string {
-  const logs = applied.filter((entry) => entry.type === "log_food" && !entry.error);
+  // A new log AND an amendment both move the day's total after the reply was written.
+  const logs = applied.filter((entry) => (entry.type === "log_food" || entry.type === "update_food_note") && !entry.error);
   if (!logs.length) return reply;
   // The day the meal was logged on. getDayIntake() reads TODAY by default, so a meal
   // remembered for another day is never judged against today's figures.
   const today = localDateISO();
   let loggedKcal = 0;
+  let knownBefore = true;
   for (const entry of logs) {
     const result = recordOrNull(entry.result);
     const date = typeof result?.date === "string" ? result.date : null;
     if (date && date !== today) return reply;
+    // Only a NEW log has a knowable "before" (the total minus the meal); an amendment's delta is unknown.
     const kcal = Number(recordOrNull(result?.food)?.kcal);
-    if (Number.isFinite(kcal)) loggedKcal += kcal;
+    if (entry.type === "log_food" && Number.isFinite(kcal)) loggedKcal += kcal;
+    else if (entry.type === "update_food_note") knownBefore = false;
   }
   let day: any;
   try {
@@ -929,7 +954,7 @@ export function reconcileChatIntakeReply(
     kcal: Math.round(Number(totals.kcal)),
     protein_g: Math.round(Number(totals.protein_g) || 0),
     // The day as the model saw it, before this turn's meal landed.
-    before_kcal: Math.round(Number(totals.kcal) - loggedKcal),
+    before_kcal: knownBefore ? Math.round(Number(totals.kcal) - loggedKcal) : null,
     remaining_kcal: round(day?.remaining?.kcal),
     remaining_protein_g: round(day?.remaining?.protein_g),
     target_kcal: round(day?.target?.kcal),

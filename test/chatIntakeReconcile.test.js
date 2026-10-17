@@ -93,3 +93,26 @@ test("sentence check needs a totalling cue, so a plain meal estimate is never ju
   assert.equal(sentenceContradictsIntake("The steak is roughly 640 kcal.", intake), false);
   assert.equal(sentenceContradictsIntake("That brings you to 1,090 kcal so far today.", intake), true);
 });
+
+// ── 2026-10-17: a correct food amendment was rewritten to "training split unchanged" ──────
+import { reconcileChatPlanReply } from "../dist/chat-reconcile.js";
+
+test("a food amendment's 'I've added…' is never rewritten into a plan-untouched boilerplate", () => {
+  const reply =
+    "Done — I've added the extra 20 g of shrimp (now 230 g) and 30 g of the homemade semolina French toast to your dinner, so it comes to about 511 kcal.";
+  const applied = [{ type: "update_food_note", result: { id: 534 } }];
+  assert.equal(reconcileChatPlanReply(reply, "Add20g more shrimps and 30g home made French toast", applied, []), reply);
+});
+
+test("a real plan claim with nothing applied is still corrected", () => {
+  const out = reconcileChatPlanReply("I've updated your plan so Thursday's run is easier.", "how about an easier Thursday?", [], []);
+  assert.doesNotMatch(out, /I've updated your plan/);
+  assert.match(out, /plan|unchanged|written|saved/i);
+});
+
+test("an amended meal's wrong running total is corrected too, with no guessed 'before' figure", () => {
+  const amended = [{ type: "update_food_note", result: { id: 534, food: { kcal: 511 } } }];
+  const out = reconcileChatIntakeReply("Added. That brings you to 1,100 kcal so far today.", amended, day(1420, 160));
+  assert.doesNotMatch(out, /1,100/);
+  assert.match(out, /1,420 kcal and 160 g protein/);
+});
