@@ -1711,7 +1711,10 @@ cmd_uninstall() {
 
   step "Removing Cairn ($NAME)"
   remove_updater
-  teardown_tailscale
+  # Only undo the Serve mapping this instance's own install set up (CAIRN_EXPOSURE=tailscale in its
+  # .env). A machine whose Serve points at the same port because its owner configured it by hand
+  # keeps that mapping: uninstalling must never turn off HTTPS the installer did not create.
+  if [ "$E_EXPOSURE" = "tailscale" ]; then teardown_tailscale; fi
   if resolve_engine && [ -n "$COMPOSE" ] && [ -f "$DIR/docker-compose.yml" ]; then
     if [ "$OPT_PURGE" = 1 ]; then
       compose down --volumes --remove-orphans || warn "compose down reported an error."

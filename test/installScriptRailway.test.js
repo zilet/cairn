@@ -14,6 +14,7 @@ import {
   assertSequence,
   scriptConsentRig,
   autoUpdatesSpec,
+  hermetic,
 } from "./_installer.mjs";
 
 test("fake railway: --target=railway installs end to end, secrets only on stdin, signs in with #pair=", () =>
@@ -223,14 +224,14 @@ test("railway CLI: --yes alone prints the command and never runs railway.com/ins
     const go = (extra) => {
       const res = spawnSync(SH, [copy, "--target=railway", "--yes", ...extra], {
         encoding: "utf8",
-        env: {
+        env: hermetic({
           CAIRN_NO_TTY: "1",
           CAIRN_INSTALL_OS: "Linux",
           CAIRN_INSTALL_ARCH: "x86_64",
           CAIRN_INSTALL_LONG_BIT: "64",
           CAIRN_NO_TELEMETRY: "1",
           ...rig.env,
-        },
+        }),
       });
       return { code: res.status, all: `${res.stdout}\n${res.stderr}` };
     };

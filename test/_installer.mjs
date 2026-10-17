@@ -15,6 +15,65 @@ export const script = path.join(root, "deploy", "install.sh");
 // (e.g. /bin/dash, busybox sh) to run the whole file under another POSIX shell.
 export const SH = process.env.CAIRN_INSTALLER_TEST_SH || "sh";
 
+// No installer test may ever reach this machine's real Tailscale node or container engine.
+//
+// Why: the installer's uninstall path runs `tailscale serve --https=443 off` and, for a purge,
+// `docker compose down --volumes` for the instance named "cairn". On a host that really serves
+// Cairn (a Pi with the live `cairn` stack and a Serve mapping on the default port 8787) a bare
+// PATH let a plain test run switch that mapping off, and an uninstall test with a real engine on
+// PATH removed the live container AND its data volumes. So every spawn gets a stand-in directory
+// FIRST on PATH:
+//   tailscale                       reports "not connected" (like a CI box) and records calls in
+//                                   $CAIRN_TEST_TS_LOG; $CAIRN_TEST_TS_SERVES=<port> makes it report a
+//                                   Serve mapping to that port, for the tests that look at teardown.
+//   docker, podman, *-compose       refuse, unless the next one on PATH is a test fake living under
+//                                   the temp dir (FAKE_DOCKER rigs put theirs in <tmp>/…/bin).
+// Wrap an env with hermetic(env); run() already does.
+export const FAKE_TAILSCALE = String.raw`#!/bin/sh
+[ -n "$CAIRN_TEST_TS_LOG" ] && printf '%s\n' "$*" >> "$CAIRN_TEST_TS_LOG"
+if [ -n "$CAIRN_TEST_TS_SERVES" ]; then
+  case "$1 $2" in
+    "serve status") printf 'https://fake.example.ts.net (tailnet only)\n|-- / proxy http://127.0.0.1:%s\n' "$CAIRN_TEST_TS_SERVES"; exit 0 ;;
+    "serve --bg"|"serve --https=443") exit 0 ;;
+  esac
+  case "$1" in status) exit 0 ;; serve) exit 0 ;; esac
+fi
+exit 1
+`;
+export const ENGINE_GUARD = `#!/bin/sh
+# Container-engine guard: only a fake that lives under the test temp dir may run.
+me=$(basename "$0")
+here=$(cd "$(dirname "$0")" && pwd -P)
+for d in $(printf '%s' "$PATH" | tr ':' ' '); do
+  real=$(cd "$d" 2>/dev/null && pwd -P) || continue
+  [ "$real" = "$here" ] && continue
+  if [ -x "$real/$me" ] && [ -n "$CAIRN_TEST_TMP" ]; then
+    case "$real" in "$CAIRN_TEST_TMP"/*) exec "$real/$me" "$@" ;; esac
+  fi
+done
+echo "$me: refused: the installer tests never touch a real container engine" >&2
+exit 1
+`;
+let stubDir = null;
+function stubDirectory() {
+  if (!stubDir) {
+    stubDir = fs.mkdtempSync(path.join(os.tmpdir(), "cairn-installer-stubs-"));
+    fs.writeFileSync(path.join(stubDir, "tailscale"), FAKE_TAILSCALE, { mode: 0o755 });
+    for (const engine of ["docker", "podman", "docker-compose", "podman-compose"]) {
+      fs.writeFileSync(path.join(stubDir, engine), ENGINE_GUARD, { mode: 0o755 });
+    }
+    process.on("exit", () => fs.rmSync(stubDir, { recursive: true, force: true }));
+  }
+  return stubDir;
+}
+export function hermetic(env) {
+  return {
+    ...env,
+    CAIRN_TEST_TMP: fs.realpathSync(os.tmpdir()),
+    PATH: `${stubDirectory()}:${env.PATH ?? process.env.PATH}`,
+  };
+}
+
 export function withTempDir(fn) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cairn-installer-"));
   try {
@@ -33,7 +92,7 @@ export function run(args, { env = {}, input, viaStdin = false } = {}) {
   const res = spawnSync(SH, argv, {
     encoding: "utf8",
     input: viaStdin ? fs.readFileSync(script, "utf8") : input,
-    env: {
+    env: hermetic({
       PATH: process.env.PATH,
       HOME: env.HOME || os.tmpdir(),
       TZ: "Europe/Berlin",
@@ -43,7 +102,7 @@ export function run(args, { env = {}, input, viaStdin = false } = {}) {
       CAIRN_INSTALL_LONG_BIT: "64",
       CAIRN_NO_TELEMETRY: "1",
       ...env,
-    },
+    }),
   });
   // The installer writes `<target>/.env`. An agent sandbox's secrets guard can refuse any
   // file named .env (EPERM, "Operation not permitted"); the script then dies mid-install and
@@ -328,13 +387,13 @@ export function railwayRig(dir) {
   const cairnSh = (args) => {
     const res = spawnSync(SH, [path.join(stateDir, "cairn.sh"), ...args], {
       encoding: "utf8",
-      env: {
+      env: hermetic({
         ...env,
         CAIRN_NO_TTY: "1",
         CAIRN_INSTALL_OS: "Linux",
         CAIRN_INSTALL_ARCH: "x86_64",
         CAIRN_INSTALL_LONG_BIT: "64",
-      },
+      }),
     });
     return { code: res.status, out: res.stdout, err: res.stderr, all: `${res.stdout}\n${res.stderr}` };
   };

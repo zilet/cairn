@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
-import { root, script, SH, withTempDir, run, section, envKeys, FAKE_DOCKER, FAKE_CURL } from "./_installer.mjs";
+import { root, script, SH, withTempDir, run, section, envKeys, hermetic, FAKE_DOCKER, FAKE_CURL } from "./_installer.mjs";
 
 test("installer parses as POSIX sh and stays shellcheck-clean when shellcheck exists", (t) => {
   const syntax = spawnSync(SH, ["-n", script], { encoding: "utf8" });
@@ -309,14 +309,14 @@ test("fake engine: install, update, roll back, hold back, Update-now trigger, un
     const cairnSh = (args) => {
       const res = spawnSync(SH, [path.join(target, "cairn.sh"), ...args], {
         encoding: "utf8",
-        env: {
+        env: hermetic({
           ...env,
           CAIRN_NO_TTY: "1",
           TZ: "UTC",
           CAIRN_INSTALL_OS: "Linux",
           CAIRN_INSTALL_ARCH: "x86_64",
           CAIRN_INSTALL_LONG_BIT: "64",
-        },
+        }),
       });
       return { code: res.status, all: `${res.stdout}\n${res.stderr}` };
     };
@@ -461,13 +461,13 @@ test("fake engine: a local install ends signed in through a one-time pairing lin
     // `cairn.sh open` mints a fresh code later.
     const open = spawnSync(SH, [path.join(target, "cairn.sh"), "open"], {
       encoding: "utf8",
-      env: {
+      env: hermetic({
         ...env,
         CAIRN_NO_TTY: "1",
         CAIRN_INSTALL_OS: "Linux",
         CAIRN_INSTALL_ARCH: "x86_64",
         CAIRN_INSTALL_LONG_BIT: "64",
-      },
+      }),
     });
     assert.equal(open.status, 0, open.stdout + open.stderr);
     assert.equal(fs.readFileSync(path.join(state, "opened"), "utf8").trim().split("\n").length, 2);
