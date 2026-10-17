@@ -5,6 +5,55 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [2.1.7] — 2026-10-17
+
+Chat that understands what you said, day totals you can trust, and a brain that finally learns from
+what it changes. One migration (129, a settings column).
+
+### Fixed
+
+- **A message that tells a story gets an answer.** "…did my run two hours after the big steak and
+  felt a bit flat" used to be filed as a snack and answered with "Logged". A message that asks a
+  question, or describes how something felt, now goes to the coach, which can still log a meal it
+  names.
+- **The day's running total is the server's arithmetic.** A food you log lands after the reply is
+  written, so the coach was adding it up by hand and got it wrong. A sentence that states a day
+  total or what is left is checked against the real day, and a wrong one is replaced by the true
+  figure. A per-meal figure is never touched.
+- **A food amendment is no longer answered with "nothing was written".** "Add 20 g more shrimp"
+  updated the meal correctly but the reply was rewritten into "your training split is unchanged".
+- **Exercise outcomes finally reach verdicts.** Every exercise expectation had been silenced by
+  one trip or injury anywhere in its window, a completion check would have passed almost anything,
+  the change's own session was graded against it, alias names never matched their lift, and the
+  pain guard read a field filled once in four months. Each is fixed, and every inconclusive verdict
+  now says why. Recovery outcomes had never evaluated at all (a column that does not exist).
+- **The case conference completes.** Its five specialists all started at once under a spawn cap of
+  two, so the late ones spent their whole deadline waiting; a timed-out run kept its permit and ran
+  on. Seats now run under the cap, wait politely when the host is busy, and every missing seat has a
+  reason.
+- **Fewer wasted background runs.** The week-ahead sketch and the quiet insight re-ran seven to
+  twelve times a day, mostly after a sync or a restart that changed nothing. They now run when
+  something they read has changed, and a failed run backs off.
+- **The Brief's adherence measure judges the read, not you.** Old and new verdicts are told apart,
+  only the true morning read is judged, a short morning walk no longer cancels it, a morning with no
+  overnight data is "unknown" rather than "no harm", and a stated run you ran as planned is not a
+  miss.
+
+### Changed
+
+- **The stated week owns the day.** On a stated key-run or lifting day, a soft brake (HRV, resting
+  heart rate, load) shapes the dose instead of flipping the day to easy. Rest-grade readiness,
+  injury or symptoms, a short night, a health finding, a fueling hold and every other hard floor are
+  unchanged, and a learned tolerance widens or tightens from how dosed days went.
+- **Effort follows what a wrong answer costs.** Coaching chat runs at medium (low only when you
+  ask for quick); the heavy ops run at medium and step up to high only when the server sees a risk
+  (open pain, a race window, a new health finding). Measured across four CLIs on tasks taken from
+  real misses: nothing that passed at medium needed high.
+- **You choose the model per job, and the order.** A coach-only model binding, a class-aware agent
+  order, and Gemini 3.8 Flash / 4 Argon work through the Antigravity CLI with a safe effort flag.
+  Every run records which model and effort it ran, so a binding that does not reach a spawn is
+  visible.
+
 ## [2.1.6] — 2026-10-14
 
 Logging a workout on a bad signal stays put, and Cairn sits quietly when it is left open. No
