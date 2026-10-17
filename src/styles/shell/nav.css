@@ -27,3 +27,16 @@ header:has(> .hdr-chat-actions) > .moved-note{grid-column:1 / -1;grid-row:2}
 .you-group:first-child{margin-top:0}
 .you-group-h{margin:0 0 var(--space-5)}
 
+/* The header's search entry (#hdrSearch, src/client/ui-shell.ts): a quiet 44px icon at the
+   header's top-right, beside the title and clear of the notch. It opens the You home's
+   search, so it steps aside on You itself, in the chat thread (which has its own header
+   cluster) and in a live session (no header). The title keeps clear of it. */
+.hdr-search{position:absolute;top:calc(env(safe-area-inset-top) + var(--space-4));right:calc(var(--gutter) - var(--space-6));
+  display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;padding:0;
+  background:none;border:0;border-radius:var(--radius-pill);color:var(--ink2);cursor:pointer}
+.hdr-search:hover{color:var(--ink)}
+.hdr-search:active{transform:var(--press)}
+.hdr-search:focus-visible{outline:2px solid var(--dawn);outline-offset:-2px}
+body:is([data-tab="you"],[data-tab="chat"],[data-tab="session"]) .hdr-search{display:none}
+header:has(> .hdr-search) > #header-title{padding-right:var(--space-15)}
+@media (min-width:960px){ .hdr-search{top:var(--space-12);right:calc(var(--space-15) - var(--space-6))} }

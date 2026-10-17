@@ -90,6 +90,11 @@
 <body>
   <header data-occludes="top">
     <h1 id="header-title">Today</h1>
+    <!-- One discreet way into search from every tab: opens the You home with its
+         search field focused (openHeaderSearch, src/client/ui-shell.ts). Hidden on You. -->
+    <button id="hdrSearch" class="hdr-search" type="button" aria-label="Search">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" width="20" height="20"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
+    </button>
     <!-- One quiet, once-per-home line naming what moved here in the five-home
          navigation (src/client/app/moved-note.ts). Empty and hidden otherwise. -->
     <p id="movedNote" class="moved-note" hidden></p>

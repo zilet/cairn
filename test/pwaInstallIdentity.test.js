@@ -164,6 +164,9 @@ const PERSISTED_KEYS = {
   // Retired: the tape now opens in the Settings units (CairnFmt.length()); ui-format clears
   // the old per-browser in/cm memory under its original name.
   "cairn-bm-unit": ["ui-format"],
+  // The last Settings-confirmed distance/weight units: the first paint of a distance or weight word
+  // uses them until the network answers, so a cold open never flashes km/lb for a mi/lb athlete.
+  "cairn-units": ["ui-format"],
   "cairn-art-ready": ["art-controller"],
   "cairn-art-versions": ["art-memory-client"],
   cairn_phone_coach_dismissed: ["pwa-install-coach"],

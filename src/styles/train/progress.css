@@ -92,3 +92,7 @@
 .vol-kicker{display:block;margin:0 var(--space-1) var(--space-6)}
 
 
+/* Intake's "Log a meal" button is the one toggle: while the composer is open its own
+   "Close" link steps aside (the button keeps aria-expanded in step), so the screen never
+   offers two controls for one thing. */
+[data-intake-log-slot] .fuel-log.is-open .fuel-log-toggle{display:none}

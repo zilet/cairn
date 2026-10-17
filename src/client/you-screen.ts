@@ -170,6 +170,16 @@ type YouLandingGroup = { key: string; title: string; rows: readonly YouLandingRo
     });
   }
 
+  // The header's search button asks the landing to focus its search row. One shot, in
+  // memory, and only good for a few seconds: a request the landing never rendered for
+  // (a failed switch) must not focus the field on some later visit.
+  let searchFocusAt = 0;
+  function takeSearchFocus(): boolean {
+    const fresh = searchFocusAt > 0 && Date.now() - searchFocusAt < 5000;
+    searchFocusAt = 0;
+    return fresh;
+  }
+
   function renderLanding(): void {
     view.innerHTML = `<div class="you-landing">
       <div class="you-lede reveal"><p class="voice voice-sm you-voice">Six parts of you, read together.</p>
@@ -184,6 +194,7 @@ type YouLandingGroup = { key: string; title: string; rows: readonly YouLandingRo
           openYouRow(button.dataset.youView || "", button.dataset.youSection || "")
         )
       );
+    if (takeSearchFocus()) view.querySelector<HTMLElement>(".you-search")?.focus({ preventScroll: true });
     const slot = view.querySelector("#cairnStackSlot");
     if (slot) teardown = CairnStackController.mount(slot, { ...readDeps(), openStone });
   }
@@ -223,5 +234,13 @@ type YouLandingGroup = { key: string; title: string; rows: readonly YouLandingRo
     );
   }
 
-  Object.assign(globalThis, { renderYou, CairnYouLanding: { html: youLandingHtml, groups: YOU_LANDING_GROUPS } });
+  Object.assign(globalThis, {
+    renderYou,
+    CairnYouLanding: { html: youLandingHtml, groups: YOU_LANDING_GROUPS },
+    CairnYouSearchFocus: {
+      request: () => {
+        searchFocusAt = Date.now();
+      },
+    },
+  });
 }

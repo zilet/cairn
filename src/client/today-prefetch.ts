@@ -141,7 +141,13 @@ type TodayFanInDeps = {
         }
       }
       const aggregate = deps.api(CairnTodayDataLoader.aggregatePath(date, surface));
-      apiPrime(paths, aggregate.then((value) => (value as { responses?: unknown } | null)?.responses ?? null));
+      const responses = aggregate.then((value) => (value as { responses?: unknown } | null)?.responses ?? null);
+      apiPrime(paths, responses);
+      // The fan-in carries Settings: hand the athlete's units over the moment it lands.
+      void responses.then((r) => {
+        const settings = (r as { "/settings"?: { settings?: { run_units?: unknown; weight_units?: unknown } } } | null)?.["/settings"]?.settings;
+        if (settings && typeof CairnFmt !== "undefined") CairnFmt.set(settings);
+      }, () => {});
     } catch {
       /* every loader simply asks for its own path */
     }

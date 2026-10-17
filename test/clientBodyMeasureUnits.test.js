@@ -173,3 +173,16 @@ test("a hung units hint never holds the welcome: boot waits at most ~1.5 s for i
   assert.equal(done, true);
   assert.equal(opened.length, 1, "the welcome opened without the hint");
 });
+
+test("a cold load already speaks the athlete's last-known units; km / lb only for a device that never heard", () => {
+  const cold = (storage) => loadClientModule(FMT, { globals: { Intl, api: () => Promise.reject(new Error("offline")), localStorage: storage } });
+  const fresh = cold(createStorage({}));
+  assert.equal(fresh.CairnFmt.distance(10), "10 km", "never heard: the default");
+  fresh.CairnFmt.set({ run_units: "mi", weight_units: "lb" });
+  const stored = fresh.localStorage.getItem("cairn-units");
+  const again = cold(createStorage({ "cairn-units": stored }));
+  assert.ok(!/km/.test(again.CairnFmt.distance(20.8)), "first paint, before any network answer, is not km");
+  assert.ok(/mi/.test(again.CairnFmt.distance(20.8)));
+  const mangled = cold(createStorage({ "cairn-units": "{nope" }));
+  assert.equal(mangled.CairnFmt.units().distance, "km", "a mangled value is ignored");
+});

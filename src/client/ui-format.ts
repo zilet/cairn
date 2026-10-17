@@ -171,8 +171,32 @@ function storeLength(unit: "in" | "cm" | null): void {
 }
 let fmtLengthOverride: "in" | "cm" | null = readStoredLength();
 
+// The units last confirmed by Settings, kept on this device so the FIRST paint of a cold
+// load already speaks them (km / lb is only what a device that has never heard says). A
+// seed, not the memo: ready() still asks Settings once, so a change made elsewhere lands.
+const FMT_UNITS_KEY = "cairn-units";
+function readStoredUnits(): FmtUnits | null {
+  try {
+    const v = JSON.parse(localStorage.getItem(FMT_UNITS_KEY) || "null") as { distance?: unknown; weight?: unknown } | null;
+    return v && (v.distance === "mi" || v.distance === "km") && (v.weight === "kg" || v.weight === "lb")
+      ? { distance: v.distance, weight: v.weight }
+      : null;
+  } catch {
+    return null; // private mode, or a mangled value
+  }
+}
+function storeUnits(units: FmtUnits): void {
+  try {
+    localStorage.setItem(FMT_UNITS_KEY, JSON.stringify(units));
+  } catch {
+    /* private mode */
+  }
+}
+const fmtUnitsSeed: FmtUnits | null = readStoredUnits();
+
 function fmtSetUnits(settings: { run_units?: unknown; weight_units?: unknown } | null | undefined): FmtUnits {
   const next: FmtUnits = { distance: runUnits(settings?.run_units), weight: settings?.weight_units === "kg" ? "kg" : "lb" };
+  if (settings) storeUnits(next); // an empty answer is not the athlete's word
   if (fmtUnitsMemo && fmtUnitsMemo.weight !== next.weight) {
     fmtLengthOverride = null;
     storeLength(null);
@@ -181,8 +205,8 @@ function fmtSetUnits(settings: { run_units?: unknown; weight_units?: unknown } |
 }
 
 const CairnFmt = {
-  /** The athlete's units now (km / lb until the settings read lands). */
-  units: (): FmtUnits => fmtUnitsMemo || { distance: "km", weight: "lb" },
+  /** The athlete's units now (this device's last-known units, else km / lb, until the settings read lands). */
+  units: (): FmtUnits => fmtUnitsMemo || fmtUnitsSeed || { distance: "km", weight: "lb" },
   /** The settings read behind units(), once per memo; a failed read leaves km / lb. */
   ready: (): Promise<FmtUnits> =>
     fmtUnitsMemo

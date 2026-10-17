@@ -634,6 +634,7 @@ body.resting{padding-bottom:calc(152px + max(env(safe-area-inset-bottom),6px) + 
 .volbar-fill{height:100%;background:var(--d-strength);border-radius:var(--radius-pill);transition:width var(--dur-3) var(--ease)}
 .volrow-meta b{font-weight:var(--weight-semibold);font-size:var(--text-sm);color:var(--ink)}
 .vol-kicker{display:block;margin:0 var(--space-1) var(--space-6)}
+[data-intake-log-slot] .fuel-log.is-open .fuel-log-toggle{display:none}
 .mp-card{border-radius:var(--radius);padding:var(--space-8) var(--space-9);margin-bottom:var(--space-7)}
 .mp-hero{display:block;padding-bottom:var(--space-6)}
 .mp-hero-head{display:flex;align-items:center;justify-content:space-between;gap:var(--space-5);margin-bottom:var(--space-6)}
@@ -4834,6 +4835,14 @@ header:has(> .hdr-chat-actions) > .moved-note{grid-column:1 / -1;grid-row:2}
 .you-group{margin-top:var(--space-11)}
 .you-group:first-child{margin-top:0}
 .you-group-h{margin:0 0 var(--space-5)}
+.hdr-search{position:absolute;top:calc(env(safe-area-inset-top) + var(--space-4));right:calc(var(--gutter) - var(--space-6));display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;padding:0;background:none;border:0;border-radius:var(--radius-pill);color:var(--ink2);cursor:pointer}
+.hdr-search:hover{color:var(--ink)}
+.hdr-search:active{transform:var(--press)}
+.hdr-search:focus-visible{outline:2px solid var(--dawn);outline-offset:-2px}
+body:is([data-tab="you"],[data-tab="chat"],[data-tab="session"]) .hdr-search{display:none}
+header:has(> .hdr-search) > #header-title{padding-right:var(--space-15)}
+@media (min-width:960px){.hdr-search{top:var(--space-12);right:calc(var(--space-15) - var(--space-6))}
+}
 .clink-slot:empty{display:none}
 .clink-slot{margin-bottom:var(--space-10)}
 .clink-today{appearance:none;display:flex;align-items:center;gap:var(--space-6);width:100%;min-height:48px;box-sizing:border-box;padding:var(--space-5) var(--space-7);border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface);color:var(--ink2);font:inherit;font-size:var(--text-md);line-height:var(--leading-snug);text-align:left;cursor:pointer;transition:border-color var(--dur-1) var(--ease),transform var(--dur-1) var(--ease)}

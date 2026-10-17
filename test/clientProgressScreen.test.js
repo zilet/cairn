@@ -36,6 +36,7 @@ function loadProgressScreen() {
   vm.runInNewContext(readFileSync(join(root, "public/js/progress-data-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/05-progress.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/progress-volume-route-client.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/progress-intake-log-client.js"), "utf8"), context);
   return context;
 }
 
@@ -458,4 +459,85 @@ test("renderIntake titles the header Intake and wires Log a meal to the shell's 
   clickHandler();
   assert.equal(closed, 1);
   assert.equal(btn.attrs["aria-expanded"], "false");
+});
+
+test("leaving Intake releases the mounted composer; the Log a meal button stays the one toggle", async () => {
+  const context = loadProgressScreen();
+  let clickHandler = null;
+  let watcher = null;
+  let released = 0;
+  const btn = {
+    setAttribute() {},
+    addEventListener(type, fn) {
+      if (type === "click") clickHandler = fn;
+    },
+  };
+  const slot = {
+    isConnected: true,
+    querySelector: () => null,
+  };
+  context.MutationObserver = class {
+    constructor(fn) {
+      this.fn = fn;
+      watcher = this;
+    }
+    observe() {}
+    disconnect() {
+      this.gone = true;
+    }
+  };
+  context.state = { tab: "progress", progressSeg: "intake" };
+  context.view = {
+    querySelector(sel) {
+      if (sel === "[data-intake-log-btn]") return btn;
+      if (sel === "[data-intake-log-slot]") return slot;
+      return null;
+    },
+  };
+  context.mountFuelLog = () =>
+    Promise.resolve(
+      Object.assign(
+        () => {
+          released += 1;
+        },
+        { open() {}, close() {} }
+      )
+    );
+  context.wireIntakeLog(0);
+  clickHandler();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  watcher.fn(); // the view repainted but the slot is still on screen
+  assert.equal(released, 0);
+  slot.isConnected = false; // another screen replaced #view
+  watcher.fn();
+  assert.equal(released, 1, "the composer is released when the screen is left");
+  assert.equal(watcher.gone, true);
+  watcher.fn();
+  assert.equal(released, 1, "released once");
+});
+
+test("a composer that finishes loading after the screen was left is released, not kept", async () => {
+  const context = loadProgressScreen();
+  let clickHandler = null;
+  let released = 0;
+  const btn = { setAttribute() {}, addEventListener: (t, fn) => { clickHandler = fn; } };
+  const slot = { isConnected: true, querySelector: () => null };
+  context.state = { tab: "progress", progressSeg: "intake" };
+  context.view = {
+    querySelector: (sel) => (sel === "[data-intake-log-btn]" ? btn : sel === "[data-intake-log-slot]" ? slot : null),
+  };
+  context.mountFuelLog = () =>
+    new Promise((resolve) =>
+      setTimeout(() => resolve(Object.assign(() => { released += 1; }, { open() {}, close() {} })), 0)
+    );
+  context.wireIntakeLog(0);
+  clickHandler();
+  context.wireIntakeLog(0); // a re-wire (the next screen) before the bundle arrives
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(released, 1);
+});
+
+test("the open composer's own Close link steps aside inside Intake's slot", () => {
+  const css = readFileSync(join(root, "src/styles/train/progress.css"), "utf8");
+  assert.match(css, /\[data-intake-log-slot\] \.fuel-log\.is-open \.fuel-log-toggle\{display:none\}/);
 });

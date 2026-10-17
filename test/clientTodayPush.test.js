@@ -126,6 +126,10 @@ test("a signal's two clauses are two chips, and the name starts with the words o
     /^rough night you tapped in — the rough night you tapped in and the fatigue you reported — tap to see why$/
   );
 
+  const names = chips.map((c) => c.getAttribute("aria-label"));
+  assert.ok(names[0] !== names[1], "two chips never share one accessible name");
+  assert.ok(names.every((n, i) => n.startsWith(chips[i].textContent)), "each name contains its own visible label");
+
   const harm = drive({
     today: {
       date: TODAY,

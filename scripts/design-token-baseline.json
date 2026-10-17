@@ -1,7 +1,7 @@
 {
   "totals": {
-    "space": 16,
-    "font": 25,
+    "space": 15,
+    "font": 24,
     "weight": 0,
     "radius": 0,
     "tracking": 0,
@@ -44,9 +44,6 @@
     "src/styles/shell/detail.css": {
       "font": 1
     },
-    "src/styles/shell/overlays.css": {
-      "space": 1
-    },
     "src/styles/shell/responsive-nav.css": {
       "space": 3
     },
@@ -61,7 +58,7 @@
     },
     "src/styles/train/progress.css": {
       "space": 3,
-      "font": 2
+      "font": 1
     },
     "src/styles/you/cairn.css": {
       "font": 4

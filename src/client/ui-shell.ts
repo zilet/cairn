@@ -110,6 +110,22 @@ async function openFoodDetail(note: unknown, fromTile?: Element | null): Promise
 async function mountFuelLog(host: Element, onLogged: () => void): Promise<ClientFuelLogHandle> {
   return withBundle("fuel", () => CairnFuelLogController.mount(host, CairnFuelDeps.log(onLogged)));
 }
+// The header's search entry: the You home, its search field focused. You owns the field and
+// the hint (a one-shot, in memory: CairnYouSearchFocus in you-screen.ts), so a cold You or a
+// missing field degrades to just landing on You. The bundles behind the field load on the
+// tap that opens it, as ever.
+function openHeaderSearch(): void {
+  (globalThis as { CairnYouSearchFocus?: { request(): void } }).CairnYouSearchFocus?.request();
+  state.youSeg = null;
+  state.youStone = null;
+  activateTab("you");
+}
+if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+  document.addEventListener("click", (event) => {
+    const target = event.target as Element | null;
+    if (target && typeof target.closest === "function" && target.closest("#hdrSearch")) openHeaderSearch();
+  });
+}
 function gotoChatWith(text: string): void {
   state.tab = "chat";
   // The shell owns which tab-bar home is lit (chat lives under Ask); it is
