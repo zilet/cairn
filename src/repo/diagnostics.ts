@@ -691,9 +691,3 @@ export function getDiagnostics(opts: { recent?: number; days?: number } = {}) {
     },
   };
 }
-
-export const DIAGNOSTIC_LIMITS = {
-  retention_days: DIAGNOSTIC_RETENTION_DAYS,
-  row_cap: DIAGNOSTIC_ROW_CAP,
-  coalesce_minutes: COALESCE_MINUTES,
-};

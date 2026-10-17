@@ -5,8 +5,6 @@ import {
   cleanText,
   enumValue,
   isoDate,
-  normalizeJsonObject,
-  type JsonObject,
   type JsonValue,
 } from "./contract-utils.js";
 import { BRAIN_DECISION_KINDS, type BrainDecisionKind } from "./decision-contract.js";
@@ -265,26 +263,4 @@ export function normalizeCoachReadToolRequest(value: unknown): CoachReadToolRequ
       return activityId ? { tool, args: { activity_id: activityId } } : null;
     }
   }
-}
-
-export function normalizeCoachReadToolResult(value: unknown): CoachReadToolResult | null {
-  const input = asRecord(value);
-  if (!input) return null;
-  const tool = enumValue(input.tool, COACH_READ_TOOL_NAMES);
-  const rowsReturned = boundedInteger(input.rows_returned, 0, 10_000);
-  const wrapped = normalizeJsonObject({ data: input.data });
-  if (
-    !tool ||
-    rowsReturned == null ||
-    rowsReturned > COACH_READ_TOOL_CATALOG[tool].max_rows ||
-    typeof input.truncated !== "boolean" ||
-    !wrapped ||
-    !("data" in wrapped)
-  )
-    return null;
-  return { tool, data: wrapped.data, rows_returned: rowsReturned, truncated: input.truncated };
-}
-
-export function coachReadToolArgsSummary(request: CoachReadToolRequest): JsonObject {
-  return normalizeJsonObject(request.args) ?? {};
 }

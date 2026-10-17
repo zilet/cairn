@@ -12,6 +12,7 @@ import { recordAgentRun } from "./repo/agent-telemetry.js";
 import { executionProfileForOp, pickAgentOrderForTask, pickResearchAgentOrder, taskForOp } from "./repo/settings.js";
 import {
   DEFAULT_TIMEOUT_MS,
+  agentAvailabilityHold,
   runAgentWithFallback,
   runAgentStreaming,
   withResolvedProfile,
@@ -33,6 +34,7 @@ import type { OpHooks } from "./coachOps.js";
 import { extractMarkedJson } from "./prompt.js";
 import { createJobStreamFilter } from "./jobStreamFilter.js";
 import { isAgentBusyError } from "./agent-busy.js";
+import { noteContractRejection } from "./contractRejection.js";
 
 // Pick the agent order for an op left "auto"/blank by the caller — generalized over
 // EVERY task class via repo.pickAgentOrderForTask, which itself resolves a pin
@@ -176,7 +178,8 @@ function streamingCoachRun(
   const makeGate = config.makeGate ?? createJobStreamFilter;
   return async (agent, prompt, opts) => {
     const streamAgent = agent && agent !== "auto" ? agent : config.first;
-    if (streamAgent && supportsStream(streamAgent)) {
+    // A held provider is never spawned, streamed or not: the rotation below skips it.
+    if (streamAgent && supportsStream(streamAgent) && !agentAvailabilityHold(streamAgent)) {
       const op = opts.op ?? "auto";
       const started = Date.now();
       const gate = makeGate(config.onDelta);
@@ -408,7 +411,11 @@ export async function runChosenWithCoachReads(
     // normalizer reads). Pinning a final-only schema would drop `requests` under
     // constrained decoding and silently kill depth-on-demand.
     const acceptParsed = (parsed: unknown): boolean => {
-      if (isCoachReadQueryTurn(parsed)) return normalizeCoachReadQueryTurn(parsed) !== null;
+      if (isCoachReadQueryTurn(parsed)) {
+        if (normalizeCoachReadQueryTurn(parsed) !== null) return true;
+        noteContractRejection("coach_read_malformed");
+        return false;
+      }
       if (!opts.acceptParsed) return true;
       try {
         return opts.acceptParsed(parsed) === true;
@@ -423,6 +430,10 @@ export async function runChosenWithCoachReads(
         timeoutMs: Math.max(1, Math.min(remaining, turnCapMs)),
         extract: opts.extract,
         acceptParsed,
+        // The op's own reading of a content rejection rides every turn: which rule the
+        // repair names, and whether a refused final payload rotates or floors.
+        contractRepairHint: opts.contractRepairHint,
+        onContractRejection: opts.onContractRejection,
         mcpConfigArgs: [...COACH_READ_STRICT_MCP_ARGS],
         model: opts.model,
         reasoning: opts.reasoning,
@@ -589,7 +600,9 @@ export async function runChosenStreaming(
     const supportsStream = deps.supportsStream ?? agentSupportsStream;
     const runStreaming = deps.runStreaming ?? runAgentStreaming;
     const first = (deps.resolveOrder ?? resolveOrder)(agent, op)[0];
-    if (first && supportsStream(first)) {
+    // A held first provider never streams: its hold lapses on its own clock, and the
+    // one-shot rotation below skips it (or fails fast when everything is held).
+    if (first && supportsStream(first) && !agentAvailabilityHold(first)) {
       // Option C: a stream-capable run that also opted into depth-on-demand streams its
       // final turn THROUGH the bounded loop — read-request protocol turns produce no
       // deltas (no reply marker in the job gate), then the final prose/JSON streams. The

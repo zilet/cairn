@@ -117,6 +117,8 @@ type WriteInvalidationApi = {
     flag_training_structure: t(DAY, PLAN),
     // A revert puts back whatever the decision changed: it can be any of the above.
     revert_decision: t(DAY, PLAN, TRAINING, FOOD, BODY, GOAL, LIFE, ["meals:plans"]),
+    // A remark lands on the session notes the Today card and history both read.
+    add_session_note: t(["today:session:", "history:sessions"]),
   });
 
   // Writes the PWA makes itself, from surfaces that are not chat.

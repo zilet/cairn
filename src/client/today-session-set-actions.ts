@@ -576,6 +576,7 @@ type TodaySessionSetActionsApi = {
       // The Finish block only exists once the session has a set, so bringing it in
       // is the one repaint the first set of the day still owes.
       if (finishSurfaceMissing) refreshFinishStat(deps);
+      if (result.weight_check) CairnTodaySessionSetModel.showWeightCheck(card, result);
       if (result.pr) {
         deps.toast("🏆 New PR!");
         if (typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate([60, 40, 120]);

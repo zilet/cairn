@@ -11,7 +11,8 @@
 // view, fingerprinted by error class so a repeated failure reads as one issue with a
 // count rather than fifty, and a one-line status on `settings` that the PWA's sync
 // surfaces can speak. Routine no-ops — the toggle off, no credentials — write neither:
-// a feature that is switched off is not an outcome.
+// a feature that is switched off is not an outcome. An "unchanged" skip writes the
+// status line only.
 import { recordDiagnosticEvent } from "./diagnostics.js";
 import { setGarminExportStatus } from "./settings.js";
 
@@ -75,6 +76,9 @@ export function recordGarminExportOutcome(sessionId: number, outcome: GarminExpo
     if (outcome.skipped && CONFIGURATION_SKIPS.has(outcome.skipped)) return;
     const errorClass = outcome.ok ? null : garminExportErrorClass(outcome.error);
     setGarminExportStatus(statusLine(outcome));
+    // An unchanged session is a no-op heartbeat (every re-sync of a finished session
+    // lands here): the status line above says it, a diagnostic row per attempt is noise.
+    if (outcome.ok && outcome.skipped === "unchanged") return;
     recordDiagnosticEvent({
       source: "worker",
       kind: "garmin_export",

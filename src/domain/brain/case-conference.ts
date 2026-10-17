@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { db } from "../../db.js";
 import { CASE_CONFERENCE_DECISION_SCHEMA, SPECIALIST_OPINION_SCHEMA } from "../../agent-contracts.js";
 import { decideAutonomyTier, leadModelCeiling } from "../../brain/autonomy.js";
@@ -12,6 +13,7 @@ import {
   EXPECTATION_CONFOUNDER_POLICIES,
   EXPECTATION_DIRECTIONS,
   EXPECTATION_EVALUATORS,
+  expectationConcludabilityIssue,
 } from "../../brain/expectation-contract.js";
 import { normalizeJsonObject } from "../../brain/contract-utils.js";
 import { createImmutableBrainSnapshot, type ImmutableBrainSnapshot } from "../../brain/snapshot-id.js";
@@ -38,7 +40,7 @@ import {
 import { getCoachContext } from "../../repo/coach.js";
 import { projectCoachContext } from "../../prompt/context-projection.js";
 import { renderStatedInputLine } from "../../prompt/shared.js";
-import { localDateISO } from "../../repo/shared.js";
+import { addDaysISO, localDateISO } from "../../repo/shared.js";
 import { listTrainingSymptoms } from "../../repo/training-symptoms.js";
 import { recentlySettledPlaces } from "../../repo/injury-symptom-link.js";
 import { getSettings } from "../../repo/settings.js";
@@ -165,6 +167,9 @@ export type SpecialistOutcomeReason =
   | "invalid_opinion"
   // The specialist phase had no room left for this seat; it was never started.
   | "not_convened"
+  // Not convened on purpose: nothing in the seat's domain moved since its last opinion,
+  // which is carried forward (see THE CONFERENCE EARNS ITS COST).
+  | "carried_forward"
   | "error";
 
 export interface SpecialistOutcome {
@@ -260,6 +265,233 @@ export interface CaseConferenceResult {
   };
   degraded?: boolean;
   error?: string;
+  /** What the conference's input looked like, for the next one's gate (machine register). */
+  input_signal?: ConferenceInputSignal;
+  /** Seats whose last opinion was carried forward instead of convened. */
+  carried_forward?: SpecialistDomain[];
+  /** The whole conference was a no-op: nothing material moved since the last one. */
+  skipped?: "unchanged_input";
+}
+
+// ---------- THE CONFERENCE EARNS ITS COST (2026-10-17) ----------
+//
+// A conference is the most expensive thing the brain does — five specialist seats and a
+// conductor, 100-250 s each, about half of them failing in production — and every run
+// convened every seat afresh: the weekly team review over a week in which nothing in a
+// domain was logged, and each RETRY of an incomplete conference (agentJobs re-runs a
+// conference that missed a seat) re-asking the four seats that had already answered.
+//
+// So each conference records what its input looked like (`input_signal`): one CONTENT
+// fingerprint per specialist domain over the tables that domain reads (every column of
+// every row in the lookback — any new, edited or deleted record moves it, including the
+// in-place edits: a directive's status, a resolved trip, a session rating, a run's RPE),
+// plus a GLOBAL signature of what the whole team argues inside (the conflict set, the
+// trajectory's phase and unexplained regressions, the lead mode, and the standing
+// inputs: profile goals and schedules, the training drive and stances, the program
+// block, the strength objectives). The next conference:
+//   • carries a seat's last opinion forward instead of convening it, when its domain's
+//     watermark has not moved, the global signature is the same, and that opinion is no
+//     older than CONFERENCE_CARRY_MAX_AGE_DAYS — a seat with no new signal has nothing
+//     new to say, and its opinion is still in front of the conductor;
+//   • is a NO-OP when every requested seat would be carried and the last conference
+//     concluded cleanly (a valid decision, no blocking conflict left unresolved): it
+//     returns `skipped: "unchanged_input"`, which the scheduler records as `no_op`.
+// An unresolved material change — a conflict that appeared or cleared, a phase change, a
+// new regression — moves the global signature and convenes everyone. The clinician floor
+// and every conflict check run exactly as before: the gate decides only whether to SPEND.
+export const CONFERENCE_CARRY_MAX_AGE_DAYS = 14;
+
+export interface ConferenceInputSignal {
+  version: 1;
+  global: string;
+  watermarks: Partial<Record<SpecialistDomain, string>>;
+  // The local date each domain's opinion was actually formed (a carried one keeps its own).
+  opinion_dates: Partial<Record<SpecialistDomain, string>>;
+}
+
+// The tables each seat reads its domain from. A table that does not exist reads as
+// absent rather than failing the watermark.
+const DOMAIN_SIGNAL_TABLES: Readonly<Record<SpecialistDomain, readonly string[]>> = Object.freeze({
+  training: ["logged_sets", "sessions", "plan_items", "plan_proposals", "session_skips", "training_symptom_events"],
+  endurance: ["activities", "garmin_activities"],
+  nutrition: ["food_notes", "bodyweight_log", "nutrition_targets", "meal_plans", "fueling_feedback"],
+  recovery: ["garmin_daily_metrics", "daily_metrics", "checkins", "recovery_cycles"],
+  health: [
+    "health_documents",
+    "health_directives",
+    "supplements",
+    "blood_pressure_readings",
+    "symptom_reports",
+    "training_symptom_events",
+  ],
+  lifestyle: ["context_events", "checkins", "journey_phases", "body_measurements"],
+});
+
+// A CONTENT fingerprint, not a row counter (review, 2026-10-17). Most of these tables
+// are edited IN PLACE with no updated_at — a directive's status flips, a trip is
+// resolved, a session is rated, a run's RPE is set, a set is corrected — so COUNT/MAX
+// cannot see the edits that matter most. Every column of every row is hashed, bounded
+// to WATERMARK_LOOKBACK_DAYS on a table that carries a `date` (the generous end of what
+// any seat reads; the large wearable JSON lives only on dated tables). A column whose
+// only job is sync bookkeeping is left out. When in doubt the hash is BROADER: a false
+// "changed" costs one conference, a false "unchanged" serves stale advice.
+const WATERMARK_LOOKBACK_DAYS = 180;
+const WATERMARK_SKIP_COLUMNS: ReadonlySet<string> = new Set(["synced_at"]);
+
+function tableFingerprint(table: string, since: string): string {
+  try {
+    const columns = (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((c) => c.name);
+    if (!columns.length) return `${table}:absent`;
+    const kept = columns.filter((name) => !WATERMARK_SKIP_COLUMNS.has(name));
+    const dated = columns.includes("date");
+    const hash = createHash("sha256");
+    let rows = 0;
+    // Keyset pages through `.all()`: the repo never calls `iterate()` (a half-stepped statement
+    // pins the connection; see the statement-cache note in src/db.ts), and a page keeps the
+    // wearable JSON columns from sitting in memory all at once.
+    const statement = db.prepare(
+      `SELECT rowid AS "__rid", ${kept.map((name) => `"${name}"`).join(", ")} FROM ${table} WHERE rowid > ?${
+        dated ? " AND date >= ?" : ""
+      } ORDER BY rowid LIMIT 200`
+    );
+    let after = 0;
+    for (;;) {
+      const page = (dated ? statement.all(after, since) : statement.all(after)) as Array<Record<string, unknown>>;
+      if (!page.length) break;
+      for (const row of page) {
+        rows++;
+        hash.update(JSON.stringify(kept.map((name) => row[name] ?? null)));
+        hash.update("\n");
+      }
+      after = Number(page[page.length - 1].__rid);
+    }
+    const total = db.prepare(`SELECT COUNT(*) AS n, MAX(rowid) AS m FROM ${table}`).get() as any;
+    return `${table}:${rows}:${total?.n ?? 0}:${total?.m ?? 0}:${hash.digest("hex").slice(0, 24)}`;
+  } catch {
+    return `${table}:unreadable`;
+  }
+}
+
+export function conferenceDomainWatermarks(
+  domains: readonly SpecialistDomain[],
+  today: string = localDateISO()
+): Partial<Record<SpecialistDomain, string>> {
+  const since = addDaysISO(today, -WATERMARK_LOOKBACK_DAYS) ?? today;
+  const out: Partial<Record<SpecialistDomain, string>> = {};
+  for (const domain of domains) {
+    const parts = (DOMAIN_SIGNAL_TABLES[domain] ?? []).map((table) => tableFingerprint(table, since));
+    out[domain] = createHash("sha256").update(parts.join("|")).digest("hex").slice(0, 32);
+  }
+  return out;
+}
+
+// What EVERY seat argues inside, so any change convenes the whole team: the athlete's
+// goals and stated week (the whole profile row — goal weight and mode, the endurance
+// goal and schedule, the strength schedule), the training drive and the stances behind
+// it, the program block, and the strength objectives. Hashed whole, for the same
+// reason as tableFingerprint: broader is the safe direction.
+const STANDING_INPUT_TABLES = ["profile", "program_blocks", "strength_objectives", "training_stances"] as const;
+
+export function conferenceStandingInputs(): string {
+  const parts: string[] = STANDING_INPUT_TABLES.map((table) => tableFingerprint(table, ""));
+  try {
+    const settings = getSettings() as any;
+    parts.push(`training_drive:${String(settings?.training_drive ?? "")}`);
+  } catch {
+    parts.push("training_drive:unreadable");
+  }
+  return createHash("sha256").update(parts.join("|")).digest("hex").slice(0, 32);
+}
+
+export function conferenceGlobalSignature(input: {
+  conflicts: readonly string[];
+  trajectory?: unknown;
+  leadMode?: unknown;
+  standing?: string;
+}): string {
+  const trajectory = (input.trajectory ?? null) as any;
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        conflicts: [...input.conflicts].map(String).sort(),
+        phase: trajectory?.phase ?? null,
+        unexplained: Array.isArray(trajectory?.unexplained_worse) ? [...trajectory.unexplained_worse].map(String).sort() : [],
+        lead: String(input.leadMode ?? ""),
+        standing: String(input.standing ?? ""),
+      })
+    )
+    .digest("hex")
+    .slice(0, 32);
+}
+
+export interface PriorConference {
+  signal: ConferenceInputSignal;
+  opinions: SpecialistOpinion[];
+  // The last conference reached a clean conclusion (or was itself a no-op over one).
+  concluded: boolean;
+}
+
+// The newest finished conference that recorded its input. Fail-soft: null.
+function lastConferenceRecord(excludeJobId: number | null): PriorConference | null {
+  try {
+    const row = db
+      .prepare(
+        `SELECT result_json FROM agent_jobs
+          WHERE kind = 'case_conference' AND status = 'done' AND result_json IS NOT NULL
+            AND (? IS NULL OR id <> ?)
+          ORDER BY id DESC LIMIT 1`
+      )
+      .get(excludeJobId, excludeJobId) as { result_json?: string } | undefined;
+    const result = row?.result_json ? JSON.parse(row.result_json) : null;
+    const signal = result?.input_signal;
+    if (!signal || signal.version !== 1 || typeof signal.global !== "string") return null;
+    const opinions = (Array.isArray(result.opinions) ? result.opinions : [])
+      .map((opinion: unknown) => (isSpecialistOpinion(opinion) ? normalizeSpecialistOpinion(opinion) : null))
+      .filter((opinion: SpecialistOpinion | null): opinion is SpecialistOpinion => !!opinion);
+    const blocking = (Array.isArray(result.unresolved_conflicts) ? result.unresolved_conflicts : []).filter(
+      (conflict: unknown) => conflict !== "clinical_autonomy"
+    );
+    const concluded =
+      result.ok === true &&
+      result.degraded !== true &&
+      blocking.length === 0 &&
+      (result.skipped === "unchanged_input" || normalizeStrictCaseConferenceDecision(result.decision) !== null);
+    return {
+      signal: {
+        version: 1,
+        global: signal.global,
+        watermarks: signal.watermarks && typeof signal.watermarks === "object" ? signal.watermarks : {},
+        opinion_dates: signal.opinion_dates && typeof signal.opinion_dates === "object" ? signal.opinion_dates : {},
+      },
+      opinions,
+      concluded,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// Which requested seats the last conference's opinion can stand for (see above).
+export function carriedSeats(input: {
+  domains: readonly SpecialistDomain[];
+  prior: PriorConference | null;
+  global: string;
+  watermarks: Partial<Record<SpecialistDomain, string>>;
+  today: string;
+}): Map<SpecialistDomain, { opinion: SpecialistOpinion; formed_on: string }> {
+  const out = new Map<SpecialistDomain, { opinion: SpecialistOpinion; formed_on: string }>();
+  const prior = input.prior;
+  if (!prior || prior.signal.global !== input.global) return out;
+  const oldest = addDaysISO(input.today, -CONFERENCE_CARRY_MAX_AGE_DAYS) ?? input.today;
+  for (const domain of input.domains) {
+    const mark = input.watermarks[domain];
+    if (!mark || prior.signal.watermarks[domain] !== mark) continue;
+    const formedOn = String(prior.signal.opinion_dates[domain] ?? "");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(formedOn) || formedOn < oldest) continue;
+    const opinion = prior.opinions.find((candidate) => candidate.domain === domain);
+    if (opinion) out.set(domain, { opinion, formed_on: formedOn });
+  }
+  return out;
 }
 
 export interface CaseConferenceDeps {
@@ -290,6 +522,12 @@ export interface CaseConferenceDeps {
   now?: () => Date;
   /** Running durable job, excluded when counting prior daily attempts. */
   jobId?: number;
+  /** The per-domain input watermarks (conferenceDomainWatermarks); tests inject. */
+  watermarks?: (domains: readonly SpecialistDomain[]) => Partial<Record<SpecialistDomain, string>>;
+  /** The standing-input fingerprint (conferenceStandingInputs); tests inject. */
+  standingInputs?: () => string;
+  /** The last conference's recorded input and opinions (lastConferenceRecord); tests inject. */
+  priorConference?: () => PriorConference | null;
   signal?: AbortSignal;
 }
 
@@ -732,6 +970,46 @@ export async function runCaseConference(
   // What the athlete SAID (a push stance and what holds against it, a stated quality
   // session), read from the FULL context like the conflicts — the seats argue inside it.
   const statedLine = renderStatedInputLine(fullContext);
+  // THE CONFERENCE EARNS ITS COST: carry forward a seat with nothing new; spend nothing
+  // when no seat has anything new and the last conference concluded cleanly.
+  const watermarks = deps.watermarks ? deps.watermarks(domains) : conferenceDomainWatermarks(domains, conferenceDay);
+  const globalSignature = conferenceGlobalSignature({
+    standing: (deps.standingInputs ?? conferenceStandingInputs)(),
+    conflicts,
+    trajectory: (fullContext as any)?.whole_person_trajectory ?? input.trajectory ?? null,
+    leadMode: (() => {
+      try {
+        return getSettings().lead_mode;
+      } catch {
+        return null;
+      }
+    })(),
+  });
+  const prior = (deps.priorConference ?? (() => lastConferenceRecord(deps.jobId ?? null)))();
+  const carried = carriedSeats({ domains, prior, global: globalSignature, watermarks, today: conferenceDay });
+  const opinionDates: Partial<Record<SpecialistDomain, string>> = {};
+  for (const domain of domains) opinionDates[domain] = carried.get(domain)?.formed_on ?? conferenceDay;
+  const inputSignal: ConferenceInputSignal = {
+    version: 1,
+    global: globalSignature,
+    watermarks,
+    opinion_dates: opinionDates,
+  };
+  if (domains.length && carried.size === domains.length && prior?.concluded) {
+    return {
+      ok: true,
+      snapshot_id: snapshot.id,
+      opinions: domains.map((domain) => carried.get(domain)!.opinion),
+      unavailable: [],
+      conflicts,
+      unresolved_conflicts: [],
+      decision: null,
+      input_signal: inputSignal,
+      carried_forward: [...domains],
+      skipped: "unchanged_input",
+    };
+  }
+  const convened = domains.filter((domain) => !carried.has(domain));
   const perSpecialistCalls = Math.max(
     1,
     Math.min(Math.floor(12 / Math.max(1, domains.length)), Math.trunc(Number(input.maxCallsPerSpecialist)) || 12)
@@ -782,13 +1060,13 @@ export async function runCaseConference(
   const clock = deps.clock ?? Date.now;
   const concurrency = Math.max(
     1,
-    Math.min(Math.max(1, domains.length), Math.trunc(Number(deps.concurrency)) || agentSlotStats().limit)
+    Math.min(Math.max(1, convened.length), Math.trunc(Number(deps.concurrency)) || agentSlotStats().limit)
   );
   const phaseStarted = clock();
   // Every seat one full budget, in waves; plus ONE congestion episode's allowance (each
   // deferral costs at most a turn's permit wait and a rest).
   const phaseBudgetMs =
-    Math.ceil(domains.length / concurrency) * specialistBudgetMs +
+    Math.ceil(convened.length / concurrency) * specialistBudgetMs +
     AGENT_BUSY_MAX_DEFERRALS * (turnTimeoutMs + busyRestMs);
   // A seat (or a congested seat's retry) starts only when a whole seat budget still fits.
   const fitsInPhase = () => clock() - phaseStarted + specialistBudgetMs <= phaseBudgetMs;
@@ -845,12 +1123,21 @@ export async function runCaseConference(
     }
   };
   const seats: Seat[] = new Array(domains.length);
+  domains.forEach((domain, index) => {
+    const carry = carried.get(domain);
+    if (carry)
+      seats[index] = {
+        opinion: carry.opinion,
+        outcome: { domain, reason: "carried_forward", detail: carry.formed_on, attempts: 0, busy_deferrals: 0, elapsed_ms: 0 },
+      };
+  });
+  const toConvene = convened.map((domain) => ({ domain, index: domains.indexOf(domain) }));
   let cursor = 0;
   await Promise.all(
-    Array.from({ length: Math.min(concurrency, domains.length) }, async () => {
-      while (cursor < domains.length) {
-        const index = cursor++;
-        seats[index] = await convene(domains[index]);
+    Array.from({ length: Math.min(concurrency, toConvene.length) }, async () => {
+      while (cursor < toConvene.length) {
+        const next = toConvene[cursor++]!;
+        seats[next.index] = await convene(next.domain);
       }
     })
   );
@@ -872,7 +1159,13 @@ export async function runCaseConference(
   // runner defers it (deferBusyAgentJob) instead of recording an empty conference.
   if (!opinions.length && specialistOutcomes.length && specialistOutcomes.every((o) => o.reason === "host_busy"))
     throw new AgentBusyError(agent ?? "auto", null, "case conference: no spawn permit for any specialist");
-  const seatReport = { specialist_outcomes: specialistOutcomes, unavailable_reasons: unavailableReasons, quorum };
+  const seatReport = {
+    specialist_outcomes: specialistOutcomes,
+    unavailable_reasons: unavailableReasons,
+    quorum,
+    input_signal: inputSignal,
+    ...(carried.size ? { carried_forward: [...carried.keys()] } : {}),
+  };
   if (opinions.length < quorum)
     return {
       ok: false,
@@ -921,7 +1214,9 @@ export async function runCaseConference(
       // cannot mutate anything and keeps every conflict unresolved — and it says why.
       const failure = isAgentBusyError(error) ? { reason: "host_busy" as const, detail: null } : failureOutcome(error);
       conductorOutcome.reason =
-        failure.reason === "invalid_opinion" || failure.reason === "not_convened" ? "error" : failure.reason;
+        failure.reason === "invalid_opinion" || failure.reason === "not_convened" || failure.reason === "carried_forward"
+          ? "error"
+          : failure.reason;
       conductorOutcome.detail = failure.detail;
       rawDecision = null;
       break;
@@ -937,6 +1232,26 @@ export async function runCaseConference(
   const decision =
     normalizedDecision ?? fallbackConferenceDecision(opinions, conflicts, unavailable, priority, unavailableReasons);
   const outcomeReport = { ...seatReport, conductor_outcome: conductorOutcome };
+  // ONLY PREDICTIONS THAT CAN CONCLUDE ARE RECORDED (2026-10-17). The windows and
+  // subjects here are the agents' own, and an unanswerable one — already closed, too
+  // short for its metric, an exercise prediction with no exercise — came back
+  // inconclusive forever and was re-probed nightly (103 of 104 conference verdicts).
+  // Each window also starts no earlier than today: an advisory row has no applied_at,
+  // so the evaluator's pre-change filter cannot keep the days before the conference
+  // out of a prediction about what follows it. What was dropped, and why, stays on
+  // the record (`dropped_expectations`).
+  // The conference's own clock (deps.now), on the local day.
+  const expectationDay = localDateISO(now);
+  const droppedExpectations: Array<{ metric_key: string; subject_key: string | null; reason: string }> = [];
+  decision.expectations = decision.expectations
+    .map((expectation) =>
+      expectation.window_start < expectationDay ? { ...expectation, window_start: expectationDay } : expectation
+    )
+    .filter((expectation) => {
+      const reason = expectationConcludabilityIssue(expectation, expectationDay);
+      if (reason) droppedExpectations.push({ metric_key: expectation.metric_key, subject_key: expectation.subject_key, reason });
+      return !reason;
+    });
   // The clinical floor the server ENFORCES is judged against the revision itself: an
   // act-now finding gates only a change that acts on what it governs (same domain and
   // area, or the change names the marker). The pre-revision rule above was the
@@ -1079,6 +1394,7 @@ export async function runCaseConference(
       lead_ceiling_eased: leadCeilingEased,
       conductor_reversible: conductorReversible,
       clinician_note_count: clinicianNotes.length,
+      ...(droppedExpectations.length ? { dropped_expectations: droppedExpectations.slice(0, 10) } : {}),
       trajectory,
       optimizes: boundedStrings(focus.optimizes),
       parks: boundedStrings(focus.parks),

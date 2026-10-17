@@ -401,6 +401,19 @@ export function evaluateExpectation(
   );
 }
 
+// ---------- A CLOSED WINDOW SETTLES (2026-10-17) ----------
+// Every long-window expectation was re-asked every night FOREVER: only the same-day
+// metric was terminal, so a row whose window closed in July — answered or not — kept
+// its place in the bounded nightly budget and was re-evaluated against evidence that
+// had long stopped arriving (production: 275 of 492 evaluations inconclusive, nearly all
+// on windows that could never fill). Late evidence is real —
+// a wearable backfills, a session is logged a few days on — but it arrives within days,
+// not months. So once a window closed more than this long ago and has an answer on
+// record, it has given its final one and leaves the candidate set. The one exception is
+// a `next_draw` prediction, which is by design read up to TODAY (the follow-up lab draw
+// is the evidence it waits for): it settles only once it has concluded.
+export const LATE_EVIDENCE_GRACE_DAYS = 14;
+
 function candidateExpectationIds(asOf: string, limit: number): number[] {
   const terminalKeys = TERMINAL_ONCE_EVALUATED_METRICS as readonly string[];
   // Emptying the list must degrade to "nothing is terminal", not to `NOT IN ()`,
@@ -448,6 +461,16 @@ function candidateExpectationIds(asOf: string, limit: number): number[] {
         -- nightly only grew a backlog that sorted AHEAD of genuinely new maturations
         -- and could starve them out of the bounded budget below, forever.
         AND NOT (expectation.status = 'canceled' AND COALESCE(latest.verdict, '') = 'canceled')
+        -- A window closed past the late-evidence grace that already carries an answer
+        -- has given its final one (A CLOSED WINDOW SETTLES, above). The same-day metric
+        -- keeps its own rule (and reopenDayReadAdherence its way back in).
+        AND NOT (
+          latest.id IS NOT NULL
+          AND expectation.status IN ('pending', 'mature', 'evaluated')
+          AND expectation.window_end < ?
+          AND expectation.metric_key <> 'day_read_adherence'
+          AND (expectation.confounder_policy <> 'next_draw' OR latest.verdict IN ('aligned', 'not_aligned'))
+        )
       -- Never let a backlog of old rechecks starve a newly matured expectation. A row
       -- that has NEVER been evaluated goes first, oldest window first, so an overdue
       -- one cannot be skipped indefinitely; other pending/mature/canceled work is
@@ -455,7 +478,7 @@ function candidateExpectationIds(asOf: string, limit: number): number[] {
       ORDER BY CASE WHEN latest.id IS NULL THEN 0 WHEN expectation.status = 'evaluated' THEN 2 ELSE 1 END,
                expectation.window_end, expectation.id LIMIT ?`
     )
-    .all(asOf, ...terminalKeys, limit) as Array<{ id: number }>;
+    .all(asOf, ...terminalKeys, addDaysISO(asOf, -LATE_EVIDENCE_GRACE_DAYS) ?? asOf, limit) as Array<{ id: number }>;
   return rows.map((row) => Number(row.id)).filter((id) => Number.isInteger(id) && id > 0);
 }
 

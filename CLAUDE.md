@@ -54,6 +54,10 @@ Every agent spawn goes through one process-wide semaphore (`CAIRN_MAX_AGENT_PROC
 a runner that catches this must defer-and-retry, never fail the row or rotate to the next agent.
 Details: `docs/ARCHITECTURE.md` "The process-wide agent spawn cap".
 
+**A chat reply's claims are checked against the actions that landed.** `groundReply` (`src/chatGrounding.ts`) is
+the one place a "done it" sentence is held to what the server applied; extend that module, never add a
+per-case claim patch elsewhere. Details: `docs/ARCHITECTURE.md` "Chat routing".
+
 **Chat's DATA block must not travel in argv.** Linux `MAX_ARG_STRLEN` is 32 × page size (512 KiB on
 a 16K-page Pi 5, 128 KiB on 4K-page hosts). A chat prompt that inlines there throws `E2BIG` at spawn
 in ~5 ms and every rotated agent "process failed". `buildAgentLaunch` keeps small prompts on `{prompt}`
@@ -145,8 +149,8 @@ schema is inert while streaming or for `stub` — the prose `OUTPUT CONTRACT` st
 everywhere. Details: `docs/ARCHITECTURE.md`'s "Enforced structured output" section.
 
 **A request memo serves only while nothing was written.** `requestMemo` (`src/repo/request-memo.ts`)
-dedupes pure reads inside one request, invalidated by SQLite's `total_changes()` and any ROLLBACK
-(so every rollback must go through `db.exec`); `memoNeutralWrite`
+dedupes pure reads inside one request (and, under 5 s old with no write, across back-to-back requests),
+invalidated by SQLite's `total_changes()` and any ROLLBACK (so every rollback must go through `db.exec`); `memoNeutralWrite`
 exempts two bookkeeping writes (a memory stamp, a queued week-ahead job). Never route a write a memoized read can see through it, and key a read
 that consults a re-entrancy guard by that guard. Details: `docs/ARCHITECTURE.md` "HTTP caching".
 
@@ -173,7 +177,7 @@ worker.
 
 ## Architecture: two protocol surfaces over one shared layer
 
-REST endpoints are **defined** in two dozen routers under `src/routes/*.ts` (`src/api.ts` only *mounts*
+REST endpoints are **defined** in the routers under `src/routes/*.ts` (`src/api.ts` only *mounts*
 them). MCP tools are **defined** in `src/surfaces/mcp/*.ts` (`src/mcp.ts` only *registers* them).
 Both call the same layer beneath: use-case services in `src/domain/*` and data/domain modules in
 `src/repo/*` (barrelled by `src/repo.ts`), with prompt builders in `src/prompt/*` (barrelled by

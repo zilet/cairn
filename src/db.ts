@@ -1867,6 +1867,11 @@ CREATE INDEX IF NOT EXISTS idx_chat_turns_build_created
 CREATE INDEX IF NOT EXISTS idx_insights_intent_key ON insights(intent_key);
 CREATE INDEX IF NOT EXISTS idx_exercise_guides_exercise ON exercise_guides(exercise_id);
 CREATE INDEX IF NOT EXISTS idx_exercise_guides_name_key ON exercise_guides(name_key);
+-- A logged activity's synced row: every endurance read LEFT JOINs it, hundreds of
+-- times per Today open, and without this SQLite built a throwaway index over
+-- garmin_activities for each call. Only the join's inner side uses it, so no read's
+-- row order moves.
+CREATE INDEX IF NOT EXISTS idx_garmin_activities_activity ON garmin_activities(activity_id);
 `);
 
 // ---------- prepared-statement cache ----------

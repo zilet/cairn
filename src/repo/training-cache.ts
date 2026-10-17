@@ -56,16 +56,6 @@ export function currentFoodDataVersion(): number {
   return foodDataVersion;
 }
 
-/**
- * The manual escape hatch for the coach-context memo. The SQL backstop below sees every
- * insert, delete and update to the tables the context reads, so almost nothing needs
- * this — it is here for a coach input that lives OUTSIDE those tables (an in-process
- * model, a file on disk) and for a writer that wants to force a rebuild explicitly.
- */
-export function bumpCoachContextVersion(): void {
-  coachContextVersion++;
-}
-
 export function currentCoachContextVersion(): number {
   return coachContextVersion;
 }

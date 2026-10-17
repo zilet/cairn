@@ -934,7 +934,16 @@ export function getCachedExerciseExplanation(name: string) {
   };
 }
 
-export async function explainExercise(agent: string | undefined, name: string, hooks?: OpHooks) {
+// Exercises whose stale how-to is being rewritten in the background right now, so a
+// burst of opens never starts a second concurrent refresh for the same movement.
+const explanationRefreshing = new Set<number>();
+
+export async function explainExercise(
+  agent: string | undefined,
+  name: string,
+  hooks?: OpHooks,
+  opts?: { serveStale?: boolean }
+) {
   const detail: any = getExerciseDetail(name);
   if (!detail?.found) return { ok: false as const, found: false as const, exercise: name, error: "exercise not found" };
   const cacheKey = exerciseExplanationCacheKey(detail);
@@ -952,6 +961,28 @@ export async function explainExercise(agent: string | undefined, name: string, h
       stale: false as const,
       agent: hit.cached.chosen_agent,
       computed_at: hit.cached.computed_at,
+    };
+  }
+
+  // A stale how-to is still the right cues: hand it back now and rewrite it off the
+  // request (serve-stale-then-revalidate). A busy host just leaves it for the next open.
+  if (hit && opts?.serveStale) {
+    const id = Number(detail.id) || 0;
+    if (!explanationRefreshing.has(id)) {
+      explanationRefreshing.add(id);
+      void explainExercise(agent, name)
+        .catch(() => undefined)
+        .finally(() => explanationRefreshing.delete(id));
+    }
+    return {
+      ok: true as const,
+      found: true as const,
+      exercise: detail.name,
+      explanation: hit.explanation,
+      cached: true as const,
+      stale: true as const,
+      agent: cached?.chosen_agent ?? null,
+      computed_at: cached?.computed_at ?? null,
     };
   }
 

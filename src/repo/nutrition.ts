@@ -2108,22 +2108,34 @@ function invalidateDayReadForDate(d: string): void {
   if (d !== localDateISO()) invalidateDayRead();
 }
 
-function scheduleFoodNoteEffects(row: any, enrichKind: "food" | "food_photo" | null): void {
+function scheduleFoodNoteEffects(row: any, enrichKind: "food" | "food_photo" | null, defer = false): void {
   afterSqliteCommit(() => {
-    bumpFoodDataVersion(); // a new food entry moves the intake average → expenditure read
-    const d = row.date || localDateISO();
-    queueBrainEvent({ kind: "food_logged", domain: "nutrition", date: d, entity_id: row.id });
-    // A new food entry can change what today's Brief should say (fuel target,
-    // "already logged" reads).
-    invalidateDayReadForDate(d);
-    // Lazy import to avoid a circular dependency (enrich.ts imports repo.ts).
-    // A photographed meal is a read the athlete is waiting on in chat, so it goes
-    // ahead of background housekeeping in the serial queue; a text note is not.
-    if (enrichKind)
-      import("../enrich.js")
-        .then((m) => m.enqueueEnrich(enrichKind, row.id, { front: enrichKind === "food_photo" }))
-        .catch(() => {});
+    if (defer)
+      setImmediate(() => {
+        try {
+          runFoodNoteEffects(row, enrichKind);
+        } catch {
+          /* best-effort bookkeeping off the response path; the next open recomputes anyway */
+        }
+      });
+    else runFoodNoteEffects(row, enrichKind);
   });
+}
+
+function runFoodNoteEffects(row: any, enrichKind: "food" | "food_photo" | null): void {
+  bumpFoodDataVersion(); // a new food entry moves the intake average → expenditure read
+  const d = row.date || localDateISO();
+  queueBrainEvent({ kind: "food_logged", domain: "nutrition", date: d, entity_id: row.id });
+  // A new food entry can change what today's Brief should say (fuel target,
+  // "already logged" reads).
+  invalidateDayReadForDate(d);
+  // Lazy import to avoid a circular dependency (enrich.ts imports repo.ts).
+  // A photographed meal is a read the athlete is waiting on in chat, so it goes
+  // ahead of background housekeeping in the serial queue; a text note is not.
+  if (enrichKind)
+    import("../enrich.js")
+      .then((m) => m.enqueueEnrich(enrichKind, row.id, { front: enrichKind === "food_photo" }))
+      .catch(() => {});
 }
 
 // `opts` is a trailing options object so every existing positional caller keeps
@@ -2154,6 +2166,9 @@ export function addChatCaptureFoodNote(input: {
   // same defaults as addFoodNote; omitted means today with no stated time.
   date?: string;
   eaten_at?: string;
+  // The caller's response does not need the follow-on effects (day-read invalidation,
+  // brain event, enrich enqueue): run them right after the response is handed back.
+  deferEffects?: boolean;
 }) {
   const turnId = Number(input.turn_id);
   if (!Number.isSafeInteger(turnId) || turnId <= 0) throw new Error("invalid chat turn id");
@@ -2181,7 +2196,11 @@ export function addChatCaptureFoodNote(input: {
                   WHERE id = ? AND capture_food_note_id IS NULL AND status IN ('queued','running')`)
       .run(row.id, turnId);
     if (Number(linked.changes) !== 1) throw new Error("chat food capture link was not written");
-    scheduleFoodNoteEffects(row, status === "pending" ? (input.kind === "photo" ? "food_photo" : "food") : null);
+    scheduleFoodNoteEffects(
+      row,
+      status === "pending" ? (input.kind === "photo" ? "food_photo" : "food") : null,
+      input.deferEffects === true
+    );
     return row;
   });
 }
@@ -2227,10 +2246,15 @@ export function foodNoteEditedByPerson(id: number): boolean {
 // Overwrite the parsed_json blob with the enricher's structured estimate. The ONLY
 // writer the enrichment passes use. Refuses (returns null, writes nothing) on a note
 // a person has edited — see foodNoteEditedByPerson.
-export function updateFoodNoteParsed(id: number, parsed: any) {
-  const wrote = db
-    .prepare(`UPDATE food_notes SET parsed_json = ? WHERE id = ? AND person_edited_at IS NULL`)
-    .run(parsed ? JSON.stringify(parsed) : null, id);
+export function updateFoodNoteParsed(id: number, parsed: any, meal?: string) {
+  const nextMeal = meal && String(meal).trim() ? String(meal).trim().slice(0, 40) : null;
+  const wrote = nextMeal
+    ? db
+        .prepare(`UPDATE food_notes SET parsed_json = ?, meal = ? WHERE id = ? AND person_edited_at IS NULL`)
+        .run(parsed ? JSON.stringify(parsed) : null, nextMeal, id)
+    : db
+        .prepare(`UPDATE food_notes SET parsed_json = ? WHERE id = ? AND person_edited_at IS NULL`)
+        .run(parsed ? JSON.stringify(parsed) : null, id);
   if (Number(wrote.changes) !== 1) {
     log.info(`[food] note#${id}: kept the person's edit; a late enrichment estimate was not written.`);
     return null;

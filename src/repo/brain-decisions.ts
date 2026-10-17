@@ -720,14 +720,6 @@ export function patchBrainDecision(id: number, patch: Partial<BrainDecision>): B
   return getBrainDecision(id);
 }
 
-export function moveBrainExpectations(fromDecisionId: number, toDecisionId: number): number {
-  if (!getBrainDecision(toDecisionId)) throw new Error(`No brain decision ${toDecisionId}`);
-  return Number(
-    db.prepare(`UPDATE brain_expectations SET decision_id = ? WHERE decision_id = ?`).run(toDecisionId, fromDecisionId)
-      .changes
-  );
-}
-
 // The undo snapshot kinds. 'goal_date' joined them with heads-up autonomy: a goal date
 // that adapts from the signals is only allowed to announce because putting it back is
 // one tap, so the rollback has to exist before the write does.

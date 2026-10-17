@@ -510,8 +510,6 @@ export function currentAgentHealth(): CurrentAgentHealth {
   }
 }
 
-export const AGENT_RUN_LIMITS = { retention_days: AGENT_RUN_RETENTION_DAYS, row_cap: AGENT_RUN_ROW_CAP };
-
 /**
  * Operator signal: a model the person bound in Settings (model_class_bindings) that did
  * not reach a spawn. Counts runs of a bound provider whose op's profile names a class

@@ -826,6 +826,9 @@ export interface DayReadForLedger {
   headline?: unknown;
   source?: unknown;
   signals?: Record<string, unknown> | null;
+  // The read's own decision record (day-read.ts / dayread.ts). Only its call — the rule,
+  // the deterministic kind under it, and the brake an agent named — reaches the ledger.
+  decision?: { rule_code?: unknown; baseline_kind?: unknown; brake?: unknown } | null;
 }
 
 // A same-day window that matures the NEXT morning: window_start is the read's own
@@ -897,6 +900,16 @@ export interface DayReadLedgerEntry {
 }
 
 const MAX_FINGERPRINT_HOPS = 20;
+
+function ledgerDecision(decision: DayReadForLedger["decision"]): { decision?: Record<string, string> } {
+  if (!decision || typeof decision !== "object") return {};
+  const out: Record<string, string> = {};
+  for (const key of ["rule_code", "baseline_kind", "brake"] as const) {
+    const value = decision[key];
+    if (typeof value === "string" && value.trim()) out[key] = value.trim();
+  }
+  return Object.keys(out).length ? { decision: out } : {};
+}
 
 // Persist the read as a bounded, outcome-addressable decision, idempotent for an
 // unchanged read. Returns null when the write could not be made addressable — the
@@ -976,7 +989,10 @@ export function recordDayReadDecision(
       // that ended in a session reads back as `done` there). Anything asking "what
       // did the brain see when it made this call?" wants this column; anything
       // asking "how did the day end?" must not use it.
-      context: { signals: read.signals ?? {}, override },
+      // `decision` is the CALL's provenance (rule, the deterministic kind under it, the
+      // brake an agent named): what the per-signal calibration keys a quiet morning on
+      // (quietReadKeys) and what tells an agent's quieter read from the server's own.
+      context: { signals: read.signals ?? {}, override, ...ledgerDecision(read.decision) },
       action: {
         kind,
         focus,
@@ -1202,6 +1218,13 @@ export interface ReadAdherenceDay {
   // (day-read.ts, `signals.calendar_dose.applied`) — the evidence calendarDoseTolerance
   // reads. Optional: absent reads as false.
   calendar_dosed?: boolean;
+  // The SIGNAL a quiet read stood on (quietReadKeys) — the brake the agent named, else
+  // the fresh deciding brakes the read published — and whether the per-signal
+  // calibration itself opened this train morning (quiet-read-calibration.ts). ABSENT keys
+  // mean a morning written before reads published their brakes (signal unknown), which
+  // is not the same fact as `[]` (no brake under the read).
+  quiet_keys?: string[];
+  calibrated?: boolean;
 }
 
 export interface ReadAdherenceModel {
@@ -1225,6 +1248,50 @@ export interface MorningRead {
   // The calendar dose this morning applied (signals.calendar_dose), read back by the
   // stated-week tolerance (calendarDoseTolerance).
   calendarDose?: unknown;
+  // What the per-signal calibration reads back (see ReadAdherenceDay.quiet_keys); null
+  // when the morning predates published brakes.
+  quietKeys?: string[] | null;
+  calibrated?: boolean;
+}
+
+// A train morning is evidence for a retired brake ONLY when the calibration itself opened
+// it (`quiet_read_calibration.applied` — the learned open the calibration drove). A train
+// read some other law decided — the calendar's dose on a stated day, the plan, the long
+// loop — with the retired brake merely still on its board is NOT: counting it let a run
+// of stated dosed days keep a brake retired with no quiet read ever being outrun
+// (review, 2026-10-17). Such a morning carries no calibration key at all. Every other
+// morning is keyed on what its read stood on.
+function calibrationEvidence(
+  kind: PredictiveDayReadKind,
+  context: Record<string, unknown> | null
+): { quietKeys: string[] | null; calibrated: boolean } {
+  if (kind === "train") {
+    const signals = (context as any)?.signals;
+    const calibration = signals?.quiet_read_calibration;
+    const retired = calibration?.retired;
+    const calibrationOpened =
+      calibration?.applied === true && signals?.calendar_dose?.applied !== true && Array.isArray(retired) && retired.length > 0;
+    return calibrationOpened
+      ? { quietKeys: retired.filter((key: unknown) => typeof key === "string" && key), calibrated: true }
+      : { quietKeys: [], calibrated: false };
+  }
+  return { quietKeys: quietReadKeys(context), calibrated: false };
+}
+
+// The signal a morning's read stood on, for the per-signal calibration
+// (quiet-read-calibration.ts). The brake an agent NAMED when it read a train day quieter
+// is the most specific answer (the ledger row's `decision.brake`); otherwise the fresh
+// DECIDING brakes the read published (`signals.deciding_brakes`, day-read.ts — the one
+// predicate the posture ladder and the agent's citable list use). Published flat on
+// purpose: the ledger's context is depth-bounded (contract-utils normalizeJsonObject),
+// so the signal state's own evidence lists never survive into it. Null when the morning
+// carries neither (written before either was recorded): its signal is unknown.
+export function quietReadKeys(context: Record<string, unknown> | null): string[] | null {
+  const cited = (context as any)?.decision?.brake;
+  if (typeof cited === "string" && cited.trim()) return [cited.trim()];
+  const published = (context as any)?.signals?.deciding_brakes;
+  if (!Array.isArray(published)) return null;
+  return published.filter((field: unknown): field is string => typeof field === "string" && !!field);
 }
 
 // ---------- WHICH READ THE ATHLETE ACTUALLY OPENED TO ----------
@@ -1496,6 +1563,7 @@ function morningDecisionsByDate(from: string, to: string): Map<string, MorningDe
           }
         : null,
       calendarDose: signals?.calendar_dose ?? null,
+      ...calibrationEvidence(row.kind, context),
       context,
     });
   }
@@ -1516,6 +1584,8 @@ function morningReadsByDate(from: string, to: string): Map<string, MorningRead> 
       learnedOpened: decision.learnedOpened,
       ownDoseSignals: decision.ownDoseSignals,
       calendarDose: decision.calendarDose,
+      quietKeys: decision.quietKeys,
+      calibrated: decision.calibrated,
     });
   }
   return out;
@@ -1610,6 +1680,8 @@ export function readAdherenceModel(
       passed_easy: passedEasy,
       own_dose: read === "easy" && truth.above_easy && !passedEasy,
       calendar_dosed: (morning.calendarDose as { applied?: unknown } | null | undefined)?.applied === true,
+      ...(Array.isArray(morning.quietKeys) ? { quiet_keys: morning.quietKeys } : {}),
+      ...(morning.calibrated ? { calibrated: true } : {}),
     });
   }
 

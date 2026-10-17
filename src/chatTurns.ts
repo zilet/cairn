@@ -26,6 +26,8 @@ import { chatHistoryTimeLabel, localDateISO, mealLabelForTime, nowContext, parse
 import { runWithTimeZone } from "./tz.js";
 import {
   availabilityHolds,
+  availabilityReason,
+  splitHeldProviders,
   classifyAgentFailure,
   classifyLimitBannerText,
   isAuthFailureText,
@@ -42,6 +44,7 @@ import {
   type AgentResult,
 } from "./agents.js";
 import { createChatStreamFilter, type LiveReplyEvent } from "./chatStreamFilter.js";
+import { groundReply } from "./chatGrounding.js";
 import type { MemoryKind } from "./repo/memory.js";
 import {
   chatCheckinDate,
@@ -53,7 +56,12 @@ import {
   type LogFoodAction,
   type SetRunAction,
 } from "./chatActions.js";
-import { amendFoodIngredients, normalizeFoodCaptureParsed } from "./foodCapture.js";
+import {
+  amendFoodIngredients,
+  explicitFoodMealLabel,
+  isObviouslySnackCapture,
+  normalizeFoodCaptureParsed,
+} from "./foodCapture.js";
 import { recordBloodPressureReading } from "./domain/health/blood-pressure.js";
 import { pickDayVariant } from "./repo/brain/day-read-rules.js";
 import { applyProposalWithAutonomy, revertDecision } from "./domain/brain/autonomy-service.js";
@@ -268,9 +276,9 @@ export function enqueueChatTurn(id: number): void {
 // rather than a stretched dinner. Time → label only: no time is ever stored from this.
 export function inferCaptureMeal(message: string | null | undefined, hour = nowContext().hour): string {
   const text = String(message ?? "");
-  for (const meal of ["breakfast", "lunch", "dinner", "snack"] as const) {
-    if (new RegExp(`\\b${meal}\\b`, "i").test(text)) return meal;
-  }
+  const explicit = explicitFoodMealLabel(text);
+  if (explicit) return explicit;
+  if (isObviouslySnackCapture(text)) return "snack";
   const h = Math.trunc(Number(hour));
   const label = Number.isFinite(h) ? mealLabelForTime(`${String(((h % 24) + 24) % 24).padStart(2, "0")}:00`) : null;
   return label ?? "meal";
@@ -315,9 +323,12 @@ export function completeInstantFoodCapture(id: number, rawMessage?: string) {
     turn_id: id,
     meal,
     raw: photo ? "" : exactText,
-    parsed: { summary },
+    // meal_inferred: the slot came from the clock/food, not the athlete's words, so a later
+    // estimate may still refine it (refinedSnackMeal); an explicit label is never touched.
+    parsed: explicitFoodMealLabel(turn.message) ? { summary } : { summary, meal_inferred: true },
     image_path: photo ? turn.image_path : null,
     kind: photo ? "photo" : "text",
+    deferEffects: true,
   }) as any;
   const routing = (repo.getChatTurn(id) as any)?.routing ?? turn.routing;
   const result = { id: note.id, meal: note.meal, enrichment_status: note.enrichment_status ?? null };
@@ -422,7 +433,19 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
     const structureReply = reconcileTrainingStructureReply(goalReply, applied);
     const activityReply = reconcileMisfiledActivityReply(structureReply, misfiledCaptures, applied);
     const intakeReply = reconcileChatIntakeReply(activityReply, applied);
-    const reply = reconcileChatRevertReply(intakeReply, applied, refusedReverts, proposedReply);
+    const reconciledReply = reconcileChatRevertReply(intakeReply, applied, refusedReverts, proposedReply);
+    // Last word: any state-change claim the reconcilers above do not own is held to what
+    // actually landed, and a stated day total to the server's figure (chatGrounding.ts).
+    const grounded = groundReply({
+      reply: reconciledReply,
+      applied,
+      ctx: { message: turn.message, proposedReply, drafts, droppedGoalFields, appliedGoalPatch },
+    });
+    if (grounded.notes.length) {
+      const kinds = grounded.notes.map((n) => (n.kind === "claim" ? n.class : n.kind));
+      log.info(`[chat] turn#${id} grounded: ${kinds.join(", ")}`);
+    }
+    const reply = grounded.reply;
     const failedAttempts = attempts.filter((a) => !a.ok);
     const meta: {
       applied: typeof applied;
@@ -1743,12 +1766,29 @@ export async function runChatCompletion(
     preserveSelectedFirst: Boolean(turn.agent && turn.agent !== "auto"),
     definitions,
   });
-  // A provider that just told us it is out of quota / credit / signed out moves
-  // BEHIND the healthy ones, so the streaming primary and the rotation both skip
-  // it without spawning. It is still in the list: if every healthy provider
-  // fails, it becomes the only remaining option and gets probed — a hold is a
-  // prediction, never an exclusion.
-  const order = orderChatProvidersByAvailability(baseOrder);
+  // A provider that just told us it is out of quota / credit / signed out sits out
+  // until its hold lapses (src/agentAvailability.ts splitHeldProviders, the rule the
+  // job rotation shares): never spawned, and past `hold_until` the next turn probes
+  // it again. With EVERY provider held the turn fails fast with the calm reply below
+  // instead of spawning each one to hear the same refusal.
+  const { open: order, held } = splitHeldProviders(orderChatProvidersByAvailability(baseOrder), (name) =>
+    repo.getAgentAvailability(name)
+  );
+  if (!order.length && held.length) {
+    throw new ChatCompletionError(
+      held.map(({ agent, hold }) => ({
+        agent,
+        ok: false,
+        status: hold.state,
+        error_class: hold.state,
+        error_message: availabilityReason({
+          state: hold.state as AgentFailure["state"],
+          resets_at: hold.resets_at,
+          window: hold.window,
+        }),
+      }))
+    );
+  }
   if (!order.length) throw new Error("No agents enabled — turn one on in Settings.");
   const adaptive = !!decision;
   const chatSettings = repo.getSettings();
@@ -2238,9 +2278,10 @@ function foodAmendment(id: number, a: { ingredients?: unknown; remove_items?: un
   const hasRows = Array.isArray(parsed.ingredients) && parsed.ingredients.length > 0;
   const base =
     !hasRows && Array.isArray(parsed.items)
-      ? { ingredients: parsed.items.map((item: unknown) => ({ item: String(item ?? "") })) }
+      ? { ...parsed, ingredients: parsed.items.map((item: unknown) => ({ item: String(item ?? "") })) }
       : parsed;
-  return amendFoodIngredients(base, changes, remove);
+  const amended = amendFoodIngredients(base, changes, remove);
+  return amended;
 }
 
 // ---------- action application ----------
@@ -2546,6 +2587,17 @@ export function applyChatActions(
             summary: (a.summary ?? a.name ?? foodCaptureWords(message, !!ctx.imagePath)).toString(),
             fallbackBasis: "estimated_from_foods",
           });
+          const explicitMeal = explicitFoodMealLabel(message);
+          if (!explicitMeal) parsedNote.meal_inferred = true;
+          const noteKcal = Number(parsedNote.kcal);
+          const candidateMeal = String(a.meal || "meal").trim().toLowerCase();
+          const mealSlot =
+            !explicitMeal &&
+            (candidateMeal === "breakfast" || candidateMeal === "lunch" || candidateMeal === "dinner" || candidateMeal === "meal") &&
+            (!Number.isFinite(noteKcal) || noteKcal <= 180) &&
+            (isObviouslySnackCapture(message) || isObviouslySnackCapture(parsedNote.summary))
+              ? "snack"
+              : String(a.meal || "meal");
           applied.push({
             type: a.type,
             // `lenient` throughout this lane: the model resolved when the meal
@@ -2553,7 +2605,7 @@ export function applyChatActions(
             // today and the food is still logged. Never lose a meal over a clock.
             // The meal SLOT is left to addFoodNote, which names an unstated label
             // from the stated time — one implementation, so REST and MCP get it too.
-            result: repo.addFoodNote(String(a.meal || "meal"), "", parsedNote, ctx.imagePath ?? undefined, {
+            result: repo.addFoodNote(mealSlot, "", parsedNote, ctx.imagePath ?? undefined, {
               date: stringOrUndefined(a.date),
               eaten_at: stringOrUndefined(a.eaten_at),
               lenient: true,
@@ -2562,8 +2614,9 @@ export function applyChatActions(
           break;
         }
         case "update_food_note": {
+          const existingNote = repo.getFoodNote(Number(a.id)) as any;
           const rows = foodAmendment(Number(a.id), a);
-          const result = repo.updateFoodNote(Number(a.id), {
+          let result = repo.updateFoodNote(Number(a.id), {
             meal: a.meal,
             summary: a.summary,
             // Rows re-derive the flat items list; a stale one sent beside them must not win.
@@ -2584,7 +2637,31 @@ export function applyChatActions(
             // chat even though the repo supports it and the action contract offers it.
             eaten_at: stringOrNullOrUndefined(a.eaten_at),
             lenient: true,
-          });
+          }) as any;
+          if (result && !result.error) {
+            const currentMeal = String(result.meal ?? "").trim().toLowerCase();
+            const updatedKcal = Number(result.parsed?.kcal);
+            const rawWords = [
+              existingNote?.raw_output,
+              result.parsed?.summary,
+              ...(Array.isArray(result.parsed?.items) ? result.parsed.items : []),
+            ]
+              .filter(Boolean)
+              .join(" ");
+            if (
+              (currentMeal === "breakfast" || currentMeal === "lunch" || currentMeal === "dinner") &&
+              existingNote?.parsed?.meal_inferred === true &&
+              a.meal == null &&
+              !explicitFoodMealLabel(existingNote?.raw_output) &&
+              !explicitFoodMealLabel(message) &&
+              Number.isFinite(updatedKcal) &&
+              updatedKcal > 0 &&
+              updatedKcal <= 180 &&
+              isObviouslySnackCapture(rawWords)
+            ) {
+              result = repo.updateFoodNote(Number(a.id), { meal: "snack", lenient: true }) ?? result;
+            }
+          }
           applied.push({ type: a.type, result: result ?? { error: "not found", id: a.id } });
           break;
         }
@@ -2853,6 +2930,16 @@ export function applyChatActions(
             result: revertDecision(Number(a.id), stringOrUndefined(a.reason) ?? "user veto"),
           });
           break;
+        case "add_session_note": {
+          // A question, a pain report, and a plan change each have their own door.
+          // A mis-fired note action does not file those as session notes.
+          if (sessionRemarkBlock(message, a.text)) break;
+          applied.push({
+            type: a.type,
+            result: repo.appendSessionRemark(a.text, { date: a.date }),
+          });
+          break;
+        }
         default: {
           const _exhaustive: never = a;
           void _exhaustive;
@@ -2872,4 +2959,27 @@ export function applyChatActions(
     explicitPlanEdit,
     misfiledCaptures: misfiled,
   };
+}
+
+// Ordinary session asides append. A question, a pain report, and a plan edit do
+// not — those stay a prose reply, report_training_symptom, and plan_update.
+function sessionRemarkBlock(message: string, text: string): "question" | "symptom" | "plan" | null {
+  const asks = (value: string) => {
+    const t = value.trim();
+    return t.includes("?") || isLeadingQuestion(t);
+  };
+  const pain =
+    /\b(?:pain|painful|ache|aching|aches|hurt|hurts|hurting|sore|soreness|niggle|injury|injured|discomfort)\b/i;
+  // The remark is the model's own `text`; a question elsewhere in a longer message does not void it.
+  if (asks(text) || isLeadingQuestion(message.trim())) return "question";
+  if (pain.test(text)) return "symptom";
+  if (
+    hasExplicitPlanEditIntent(message) ||
+    hasExplicitPlanEditIntent(text) ||
+    hasSelfContainedPlanEditIntent(message) ||
+    hasSelfContainedPlanEditIntent(text)
+  ) {
+    return "plan";
+  }
+  return null;
 }

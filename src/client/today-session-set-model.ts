@@ -46,6 +46,8 @@ type TodaySessionSetModelApi = {
   ): string;
   currentSetScoreFromRow(row: HTMLElement, deps: ClientTodaySessionControllerDeps): number | null;
   wireLastSetLine(row: Element | null | undefined, lastSet: TodayLastSetData, deps: ClientTodaySessionControllerDeps): void;
+  weightCheckLine(kind: unknown, weight: unknown): string | null;
+  showWeightCheck(card: HTMLElement | null, result: Record<string, unknown>): void;
 };
 
 (() => {
@@ -314,6 +316,62 @@ type TodaySessionSetModelApi = {
     }
   }
 
+  // No number in the copy: the chip already shows the load, and this is not a verdict.
+  function weightCheckLine(kind: unknown, weight: unknown): string | null {
+    const assist = typeof weight === "number" && weight < 0;
+    if (kind === "unusually_high") {
+      return assist ? "Less assistance than your recent sets — fine if that's right" : "Heavier than your recent sets — fine if that's right";
+    }
+    if (kind === "unusually_low") {
+      return assist ? "More assistance than your recent sets — fine if that's right" : "Lighter than your recent sets — fine if that's right";
+    }
+    return null;
+  }
+
+  // Retries once: the first set of a session repaints, and the line has to land on the new card.
+  function showWeightCheck(card: HTMLElement | null, result: Record<string, unknown>): void {
+    const check = result.weight_check;
+    const kind = check && typeof check === "object" ? (check as { kind?: unknown }).kind : null;
+    const text = weightCheckLine(kind, result.weight);
+    if (!text) return;
+    const paint = (): boolean => {
+      let host: HTMLElement | null = card?.isConnected ? card : null;
+      if (!host) {
+        const id = result.id == null ? "" : String(result.id);
+        const found = /^\d+$/.test(id) && typeof document !== "undefined" ? document.querySelector(`[data-set="${id}"]`)?.closest(".ex") : null;
+        host = found instanceof HTMLElement ? found : null;
+      }
+      if (!host) return false;
+      host.querySelector("[data-weight-check]")?.remove();
+      const line = document.createElement("div");
+      line.className = "ex-note";
+      line.dataset.weightCheck = "1";
+      const span = document.createElement("span");
+      span.textContent = text;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "linkbtn linkbtn-quiet";
+      button.textContent = "Dismiss";
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        line.remove();
+      });
+      line.append(span, document.createTextNode(" "), button);
+      const anchor = host.querySelector(".logrow");
+      if (anchor?.parentElement) anchor.parentElement.insertBefore(line, anchor);
+      else host.appendChild(line);
+      return true;
+    };
+    if (paint() || typeof setTimeout !== "function") return;
+    let tries = 0;
+    const again = () => {
+      if (paint() || ++tries >= 20) return;
+      setTimeout(again, 50);
+    };
+    setTimeout(again, 50);
+  }
+
   const CAIRN_TODAY_SESSION_SET_MODEL: TodaySessionSetModelApi = {
     responseRecord,
     rememberMutationSessionId,
@@ -327,6 +385,8 @@ type TodaySessionSetModelApi = {
     lastSetLineText,
     currentSetScoreFromRow,
     wireLastSetLine,
+    weightCheckLine,
+    showWeightCheck,
   };
 
   Object.assign(globalThis, { CairnTodaySessionSetModel: CAIRN_TODAY_SESSION_SET_MODEL });

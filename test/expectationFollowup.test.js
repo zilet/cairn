@@ -49,6 +49,19 @@ const conferenceExpectation = {
   evaluator_version: "case-conference-v1",
 };
 
+// A conference only records a prediction that can still conclude (window open and long
+// enough for its metric — expectationConcludabilityIssue), so the conductor's window runs
+// from today rather than from a fixed past date.
+const isoPlus = (days) => {
+  const [y, m, d] = localDateISO().split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+};
+const liveConferenceExpectation = () => ({
+  ...conferenceExpectation,
+  window_start: isoPlus(0),
+  window_end: isoPlus(14),
+});
+
 function conductorDecision(overrides = {}) {
   return {
     kind: "case_conference",
@@ -61,7 +74,7 @@ function conductorDecision(overrides = {}) {
     parallel_actions: [],
     resolved_conflicts: [],
     deferred: [],
-    expectations: [conferenceExpectation],
+    expectations: [liveConferenceExpectation()],
     review_window: "Review in two weeks.",
     user_explanation: "I made one bounded change and will review the response.",
     revision: null,
@@ -488,4 +501,30 @@ test("the aerobic phrasing is a rotating variant set that holds the reading gram
     );
   }
   assert.ok(seen.size >= 3, `a variant set, never one literal (saw ${seen.size})`);
+});
+
+test("a conference records only the predictions that can still conclude, and says what it dropped", async () => {
+  seedPlan();
+  repo.setSettings({ lead_mode: "lead" });
+  const closed = { ...conferenceExpectation, window_start: "2026-01-01", window_end: "2026-01-15" };
+  const tooShort = { ...liveConferenceExpectation(), metric_key: "vo2max_trend", evaluator: "vo2max_trend", window_end: isoPlus(5) };
+  const noSubject = {
+    ...liveConferenceExpectation(),
+    metric_key: "exercise_est_1rm_trend",
+    evaluator: "exercise_est_1rm",
+    subject_key: null,
+    window_end: isoPlus(21),
+  };
+  const result = await conference("What should I be watching?", {
+    revision: null,
+    expectations: [closed, tooShort, noSubject, liveConferenceExpectation()],
+  });
+  const recorded = getBrainDecision(result.recorded_decision_id);
+  const live = listBrainExpectations({ decisionId: recorded.id });
+  assert.deepEqual(live.map((e) => e.metric_key), ["plan_day_adherence"]);
+  assert.equal(live[0].window_start, isoPlus(0), "never earlier than the conference");
+  assert.deepEqual(
+    recorded.context.dropped_expectations.map((d) => `${d.metric_key}:${d.reason}`),
+    ["plan_day_adherence:window_closed", "vo2max_trend:window_too_short", "exercise_est_1rm_trend:subject_missing"]
+  );
 });

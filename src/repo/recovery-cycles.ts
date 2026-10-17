@@ -283,30 +283,6 @@ export function activateRecoveryCycle(id: number, on = localDateISO()): Recovery
   return getRecoveryCycle(id, activationOn);
 }
 
-export function markRecoveryCycleRecheck(id: number, on = localDateISO()): RecoveryCycle | null {
-  const readOn = date(on, "on");
-  const existing = getRecoveryCycle(id, readOn);
-  if (!existing || existing.status === "completed" || existing.status === "canceled") return existing;
-  if (readOn < existing.recheck_on || readOn >= existing.exit_on) {
-    throw new Error("recheck transition must occur within the recheck window");
-  }
-  db.prepare(`UPDATE recovery_cycles SET status = 'recheck', updated_at = datetime('now') WHERE id = ?`).run(
-    Number(id)
-  );
-  return getRecoveryCycle(id, readOn);
-}
-
-export function markRecoveryCycleExitReview(id: number, on = localDateISO()): RecoveryCycle | null {
-  const readOn = date(on, "on");
-  const existing = getRecoveryCycle(id, readOn);
-  if (!existing || existing.status === "completed" || existing.status === "canceled") return existing;
-  if (readOn < existing.exit_on) throw new Error("exit review cannot begin before exit_on");
-  db.prepare(`UPDATE recovery_cycles SET status = 'exit_review', updated_at = datetime('now') WHERE id = ?`).run(
-    Number(id)
-  );
-  return getRecoveryCycle(id, readOn);
-}
-
 export function completeRecoveryCycle(id: number, on = localDateISO()): RecoveryCycle | null {
   const completedOn = date(on, "on");
   const existing = getRecoveryCycle(id, completedOn);

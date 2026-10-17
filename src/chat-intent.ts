@@ -6,7 +6,15 @@
 // estimate) stays in chatTurns.ts, which composes these gates with the reads they need.
 //
 // chatTurns.ts re-exports every public name below, so existing importers are unchanged.
-import { chatMessageIsNarrative, chatMessageRequestsCoaching, type ChatRoutingDecision } from "./chatRouting.js";
+import {
+  chatMessageIsNarrative,
+  chatMessageRequestsCoaching,
+  foodIntakeNegated,
+  hasFoodEvidence,
+  mealHeadingCount,
+  messageNeedsPriorTurn,
+  type ChatRoutingDecision,
+} from "./chatRouting.js";
 
 const INSTANT_FOOD_ALLOWED_REASONS = new Set(["explicit_food_log", "photo_food_default", "explicit_fast_request"]);
 const QUESTION_LEAD_RE = /^(?:what|why|how|when|where|who|which|did|does|do|is|are|was|were|should|could|would|can)\b/i;
@@ -33,6 +41,9 @@ const MENTIONS_WHEN_RE = new RegExp(
     String.raw`\b(?:on\s+)?(?:mon|tues?|wed(?:nes)?|thur?s?|fri|sat(?:ur)?|sun)(?:day)?\b`,
     // elapsed time ("a couple hours ago", "20 min ago")
     String.raw`\b(?:\d+|a|an|a\s+couple(?:\s+of)?|a\s+few|several)\s+(?:min(?:ute)?s?|hours?|hrs?|days?)\s+ago\b`,
+    String.raw`\b(?:half\s+an?\s+hour|an?\s+hour\s+or\s+so|a\s+while)\s+ago\b|\bthe\s+(?:night|morning|day)\s+before\b|\b(?:noon|midnight)\b`,
+    // a spelled-out clock hour ("at seven", "around nine")
+    String.raw`\b(?:at|around|about|by)\s+(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b`,
     // explicit clock times ("at 8", "around 9pm", "8:30")
     String.raw`\b(?:at|around|about|near|by|before|after|since)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm|o'?clock)?\b`,
     String.raw`\b\d{1,2}:\d{2}\s*(?:am|pm)?\b`,
@@ -62,6 +73,17 @@ export function isInstantFoodCaptureDecision(
   if (text && (text.includes("?") || QUESTION_LEAD_RE.test(text))) return false;
   // A meal placed in time is a remembering, not a receipt — let the agent read it.
   if (mentionsWhen(text)) return false;
+  // The receipt lane runs no agent, so it takes only a sentence that stands alone and is
+  // plainly one food log. Eating nothing, a sentence that needs the turn before it ("I had
+  // 75g of it", "no, this is lunch"), two meals in one message, and a "had" with no
+  // food-shaped object ("I had my usual") are each the agent's to read. A photo's own
+  // "Log this meal" is its referent, so a photo turn is exempt from the referent test.
+  if (foodIntakeNegated(text)) return false;
+  if (mealHeadingCount(text) > 1) return false;
+  if (!reasons.includes("photo_food_default")) {
+    if (messageNeedsPriorTurn(text)) return false;
+    if (text && !hasFoodEvidence(text)) return false;
+  }
   return true;
 }
 

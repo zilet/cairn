@@ -1382,6 +1382,18 @@ export interface RunOpts {
   // (kind/why/etc.). When supplied, a parseable response that fails this check
   // gets one contract-repair retry and then falls through to the next agent.
   acceptParsed?: (parsed: any) => boolean;
+  // The words the contract-repair retry adds for the check that refused the reply,
+  // keyed by the predicate's noted reason code (src/contractRejection.ts). A repair
+  // that only says "match the contract" re-sends the prompt that produced the miss;
+  // one that names the broken rule is what makes a compliant answer the easy path.
+  // Return null to keep the generic repair. Threaded as a callback (no repo import).
+  contractRepairHint?: (reason: string) => string | null;
+  // What a CONTENT rejection (parseable JSON the acceptParsed check refused, after the
+  // same agent's repair) does to the rotation. "rotate" (the default) tries the next
+  // agent. "stop" ends the rotation there with an AgentFallbackError so the caller's
+  // own floor answers: the next agent receives the SAME prompt, and live the same miss
+  // was rejected from all four CLIs in turn (~90 s and four subscription calls).
+  onContractRejection?: "rotate" | "stop";
   // Capability-scoped CLI arguments supplied by the caller for this run only
   // (for example Claude's --mcp-config pointing at the loopback read-only coach
   // adapter). Expanded only at an explicit {mcp_config_args} slot.
@@ -1993,6 +2005,21 @@ const CONTRACT_REPAIR_SUFFIX =
   "\n\nYour previous JSON did not satisfy the exact response contract requested above. " +
   "Re-emit ONLY one JSON object matching that contract exactly — no prose, no markdown fences.";
 
+// The contract repair, naming the broken rule when the caller can put it in words.
+// A hint that throws or comes back empty leaves the generic repair untouched.
+function contractRepairSuffix(reason: string | null, hint?: (reason: string) => string | null): string {
+  if (!reason || !hint) return CONTRACT_REPAIR_SUFFIX;
+  let words: string | null = null;
+  try {
+    words = hint(reason);
+  } catch {
+    words = null;
+  }
+  const said = typeof words === "string" ? words.trim() : "";
+  if (!said) return CONTRACT_REPAIR_SUFFIX;
+  return `${CONTRACT_REPAIR_SUFFIX}\nWhat was wrong, and the rule to follow this time: ${said}`;
+}
+
 // Sets `lastContractRejection` on a refusal: the predicate's own noted code when it
 // names one, else a generic slug. Read it right after the call that failed.
 let lastContractRejection: string | null = null;
@@ -2145,7 +2172,16 @@ export function setAgentAvailabilitySink(sink: AgentAvailabilitySink | null) {
 function availabilityHeld(name: string, now: Date): AgentAvailabilityHold | null {
   try { return availabilitySink.held(name, now); } catch { return null; }
 }
+/** The live hold on one agent, for a spawn path outside the rotation (the streamed first turn). */
+export function agentAvailabilityHold(name: string, now: Date = new Date()): AgentAvailabilityHold | null {
+  return availabilityHeld(name, now);
+}
 function availabilityNote(name: string, failure: AgentFailure, op: string): void {
+  // A run that started before a concurrent one learned this same hold (the case
+  // conference's seats start together) is not new evidence: re-noting it would
+  // climb the back-off ladder once per seat in a single minute.
+  const live = availabilityHeld(name, new Date());
+  if (live && live.state === failure.state) return;
   try { availabilitySink.noteFailure(name, failure, op); } catch { /* never breaks the loop */ }
 }
 function availabilityClear(name: string): void {
@@ -2189,10 +2225,14 @@ export function dominantTriedState(tried: AgentTriedEntry[]): AgentAvailabilityS
 // Try each agent in `order` until one returns a usable result: JSON-parseable,
 // and (when the operation supplies `acceptParsed`) semantically valid too.
 // Powers "auto" agent selection: a dead login or timeout falls through to the
-// next. Hardened: a circuit-broken agent is skipped while others remain (probed
+// next. Hardened: a HELD agent is never spawned while its hold is live (all held =
+// fail fast, no spawn); a circuit-broken agent is skipped while others remain (probed
 // on a short leash when it's the only option left); an agent that RAN but didn't
-// parse gets ONE JSON-repair retry before we move on. Every attempt is recorded
-// to the telemetry sink (failure-safe). `op` labels the run for agent-stats.
+// parse gets ONE JSON-repair retry before we move on, and one whose JSON missed the
+// contract gets ONE repair naming the broken rule (`contractRepairHint`) — after
+// which `onContractRejection: "stop"` hands the caller its floor instead of the next
+// agent. Every attempt is recorded to the telemetry sink (failure-safe). `op` labels
+// the run for agent-stats.
 export async function runAgentWithFallback(
   order: string[],
   prompt: string,
@@ -2210,22 +2250,35 @@ export async function runAgentWithFallback(
   const startedAt = new Date();
 
   // Availability first, breaker second. A HELD provider (out of quota, out of
-  // credit, throttled, signed out) is not spawned at all while any other
-  // candidate remains — re-asking a rate-limited CLI costs seconds of this op's
-  // timeout and cannot succeed. But a hold is a PREDICTION: if every other
-  // candidate fails, the held ones become the only remaining option and are
-  // probed anyway, which is how a wrong hold self-corrects.
+  // credit, throttled, signed out) is not spawned at all until its hold lapses —
+  // the provider's own reset, or the back-off TTL (agentAvailability.holdUntil).
+  // It used to be probed anyway once every other candidate had failed, and that is
+  // how a provider at its limit for weeks (live: codex, 7 answers in 67 runs) was
+  // spawned on most ops: any rotation that ran out of healthy answers fell through
+  // to it, ~5 s and one more failure each time. The hold self-corrects on its own
+  // clock instead: past `hold_until` the provider is an ordinary candidate again
+  // (the next op or chat turn probes it), and a login or a Settings hello clears it.
+  // With nothing but held providers the rotation fails FAST, spawning nothing.
   const holds = new Map<string, AgentAvailabilityHold | null>();
   for (const n of order) holds.set(n, availabilityHeld(n, startedAt));
   const isHeld = (n: string) => !!holds.get(n);
   const healthy = order.filter((n) => !isHeld(n) && !breakerIsOpen(n));
   const trippedOnly = order.filter((n) => !isHeld(n) && breakerIsOpen(n));
   const heldAgents = order.filter(isHeld);
+  // Set when a content rejection ends the rotation (onContractRejection: "stop").
+  const stop: { onContract: { agent: string; reason: string | null } | null } = { onContract: null };
+  const skipHeld = (name: string, hold: AgentAvailabilityHold) => {
+    tried.push({
+      agent: name,
+      error: availabilityReason({ state: hold.state, resets_at: hold.resets_at }),
+      availability: { ...hold },
+    });
+  };
 
   const attempt = async (name: string): Promise<FallbackResult | null> => {
     if (signal?.aborted) throw new Error("canceled");
-    const isProbe = breakerIsOpen(name) || isHeld(name);
-    // A tripped/held agent is probed only on a short leash.
+    const isProbe = breakerIsOpen(name);
+    // A tripped agent is probed only on a short leash.
     const timeoutMs = isProbe ? Math.min(baseTimeout, BREAKER_PROBE_TIMEOUT_MS) : baseTimeout;
     const started = Date.now();
     let triedJson = false;
@@ -2252,6 +2305,8 @@ export async function runAgentWithFallback(
       });
       const parsedBeforeRepair = !!result.parsed;
       const acceptedBeforeRepair = acceptsParsed(result, o.acceptParsed);
+      // Which check refused the first reply — read now, the repair's check overwrites it.
+      const firstRejection = acceptedBeforeRepair ? null : lastContractRejection;
       // Why the output is missing decides whether a retry is worth anything. A
       // provider that said "weekly limit" / "402" / "not logged in" / "permission
       // denied" will say it again — re-asking it for "only the JSON" is pure
@@ -2272,7 +2327,10 @@ export async function runAgentWithFallback(
         // low by default is cheap, and only the runs that fail pay for the extra depth.
         const repairReasoning = repairReasoningStep(loadAgents()[name], first.reasoning);
         try {
-          result = await runAgent(name, prompt + (parsedBeforeRepair ? CONTRACT_REPAIR_SUFFIX : JSON_REPAIR_SUFFIX), {
+          const repairSuffix = parsedBeforeRepair
+            ? contractRepairSuffix(firstRejection, o.contractRepairHint)
+            : JSON_REPAIR_SUFFIX;
+          result = await runAgent(name, prompt + repairSuffix, {
             timeoutMs,
             signal,
             extract: o.extract,
@@ -2364,6 +2422,12 @@ export async function runAgentWithFallback(
         };
       }
       tried.push(entry);
+      // A content rejection — this agent answered in JSON and the op's own check
+      // refused it, before or after the repair that named the rule. The next agent
+      // would be handed the same prompt; the caller asked for its floor instead.
+      if ((parsed || parsedBeforeRepair) && o.onContractRejection === "stop") {
+        stop.onContract = { agent: name, reason: rejectReason ?? firstRejection };
+      }
       return null;
     } catch (e: any) {
       if (signal?.aborted) throw e; // canceled mid-run — stop the rotation
@@ -2410,35 +2474,33 @@ export async function runAgentWithFallback(
     }
   };
 
-  // Pass 1: everything not currently held. A held provider is recorded as
-  // skipped (never spawned) for as long as a non-held candidate remains, so a
-  // caller that succeeds elsewhere can still say WHY the preferred agent sat out.
+  // Everything not currently held, in order. A held provider is recorded as skipped
+  // (never spawned), so a caller that succeeds elsewhere — or fails over to its floor —
+  // can still say WHY it sat out, and when it is expected back (`hold_until`).
   const openCandidates = [...healthy, ...trippedOnly];
-  if (openCandidates.length) {
-    for (const name of heldAgents) {
-      const hold = holds.get(name)!;
-      tried.push({
-        agent: name,
-        error: availabilityReason({ state: hold.state, resets_at: hold.resets_at }),
-        availability: { ...hold },
-      });
-    }
-  }
+  for (const name of heldAgents) skipHeld(name, holds.get(name)!);
   for (const name of openCandidates) {
+    // Re-read the hold at the moment of the spawn: a run that started alongside this
+    // one (the conference's seats, a chat turn) may have just learned it.
+    const learned = availabilityHeld(name, new Date());
+    if (learned) {
+      skipHeld(name, learned);
+      continue;
+    }
     const hit = await attempt(name);
     if (hit) return hit;
+    if (stop.onContract) break;
   }
-  // Pass 2: nothing else answered, so the held providers are now the only
-  // remaining option and the prediction gets tested. A stale hold can never
-  // strand an operation.
-  if (heldAgents.length) {
-    for (let i = tried.length - 1; i >= 0; i--) {
-      if (heldAgents.includes(tried[i].agent) && !openCandidates.includes(tried[i].agent)) tried.splice(i, 1);
-    }
-    for (const name of heldAgents) {
-      const hit = await attempt(name);
-      if (hit) return hit;
-    }
+
+  if (stop.onContract) {
+    // Not an availability event (the provider answered), so no rotation-exhausted
+    // warning: the reject reason is already on the run's own agent_runs row.
+    throw new AgentFallbackError(
+      order,
+      tried,
+      `${stop.onContract.agent} ran but returned JSON outside the requested contract` +
+        `${stop.onContract.reason ? ` (${stop.onContract.reason})` : ""}; a content rejection is not rotated`
+    );
   }
 
   const dominant = dominantTriedState(tried);

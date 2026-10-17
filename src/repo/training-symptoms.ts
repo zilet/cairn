@@ -567,10 +567,6 @@ export function listTrainingSymptoms(
   return rows.map((row) => hydrate(row, on)).filter((event): event is TrainingSymptomLifecycle => event != null);
 }
 
-export function movementToleranceReadiness(symptomEventId: number, on = localDateISO()): MovementToleranceReadiness[] {
-  return getTrainingSymptom(symptomEventId, on)?.movement_readiness ?? [];
-}
-
 // Which of a whole session's movements a currently active symptom plausibly
 // loads — one read for one session render, so no surface has to ask per card and
 // none of them carries a client-side copy of the pain→movement map. An imported

@@ -63,6 +63,7 @@ export const CHAT_ACTION_TYPES = [
   "set_activity_effort",
   "flag_training_structure",
   "revert_decision",
+  "add_session_note",
 ] as const;
 
 export type ChatActionType = (typeof CHAT_ACTION_TYPES)[number];
@@ -402,6 +403,14 @@ export interface RevertDecisionAction extends ChatActionBase {
   reason?: unknown;
 }
 
+// An ordinary aside about the session already underway — how a lift felt, a
+// setup tweak. Not a set, not a symptom, not a plan change.
+export interface AddSessionNoteAction extends ChatActionBase {
+  type: "add_session_note";
+  text: string;
+  date?: string;
+}
+
 export type ChatAction =
   | LogActivityAction
   | LogSetAction
@@ -434,7 +443,8 @@ export type ChatAction =
   | LogCheckinAction
   | SetActivityEffortAction
   | FlagTrainingStructureAction
-  | RevertDecisionAction;
+  | RevertDecisionAction
+  | AddSessionNoteAction;
 
 const CHAT_ACTION_TYPE_SET = new Set<string>(CHAT_ACTION_TYPES);
 
@@ -482,6 +492,7 @@ export const CHAT_ACTION_PROMPT_SPECS = {
     shape: `{ "type": "set_profile", "weight_lb": 176, "goal_weight_lb": 165, "goal_date": "YYYY-MM-DD", "goal_mode": "lose|maintain|gain" }`,
     guidance: [
       `Goal fields (goal_weight_lb, goal_date, goal_mode) persist ONLY when the athlete's own message states the goal explicitly, or plainly confirms a goal THEY stated earlier in this conversation. Never write them from a coach suggestion the athlete has not affirmed, and never claim a goal is locked without emitting this action.`,
+      `A goal floated rather than stated ("I think 154 could be a good weight to go for", "maybe 150 by summer") is a proposal, and a goal always waits on the athlete's own word. Never answer it with an acknowledgement that sounds saved ("Got it — 154 lb, no rush"). Say plainly what you would save and that it is waiting on them: "Want 154 lb as your goal? Say 'set my goal to 154 lb' and I'll save it." The server replaces a goal acknowledgement that carries no saved goal.`,
     ],
   },
   set_training_intent: {
@@ -516,6 +527,9 @@ export const CHAT_ACTION_PROMPT_SPECS = {
       "event": "<race name — race mode>", "date": "YYYY-MM-DD — race mode",
       "label": "<readiness label, e.g. '10k-ready' — standing mode>",
       "distance_km": <number|null>, "target": "<e.g. 'sub-1:45'|null>", "weekly_km": <number|null>, "weekly_sessions": <number|null> }`,
+    guidance: [
+      `A running goal is the athlete's identity, the same as a weight goal: emit set_endurance_goal only for a goal THEY state ("I want to run the Spring Half on Nov 1"), never for one you suggested. A race or target they are only weighing ("maybe a half in the spring?") is a proposal: say what you would set and that it waits on their yes — never "I've set that as your goal" without this action.`,
+    ],
   },
   set_endurance_schedule: {
     type: "set_endurance_schedule",
@@ -627,7 +641,7 @@ export const CHAT_ACTION_PROMPT_SPECS = {
       ${FOOD_PROVENANCE_SCHEMA},
       "date": "YYYY-MM-DD|omit", "eaten_at": "HH:MM (24h, local)|omit" }`,
     guidance: [
-      `log_food records a meal estimate (food note) — use it when the user reports something they ate or attaches a plate photo. Estimate macros from ordinary serving sizes; null when too unsure.`,
+      `log_food records a meal estimate (food note) — use it when the user reports something they ate or attaches a plate photo. Estimate macros from ordinary serving sizes; null when too unsure. Choose "meal" by what the food actually is, not just the clock: coffee/tea or a small bite (like a square/block of dark chocolate and pour-over coffee at 6 AM, a piece of fruit, or a handful of nuts) is "snack", not "breakfast"/"lunch"/"dinner", unless the user explicitly calls it that meal.`,
       `When you emit log_food, the app shows a FOOD RECEIPT card right under your reply with the dish, every ingredient row and its kcal/protein/carbs/fat — and the day's fuel line updates with it. So the prose must NOT restate any of it: no calories or grams, no macro list or bullets ("Energy ~403 kcal, Protein ~53 g…"), no ingredient list. Write one or two sentences of MEANING instead — what this meal does for their day or their goal, or the one assumption worth checking ("I counted the rice as one cup").`,
       `A QUESTION about food is not a log. "Should I eat this?", "how much protein is in that?", "is X a good dinner?", "what would that do to my day?" are asking for an answer, not for a row — answer them and emit nothing. Only a report of something actually EATEN gets a log_food. If it is genuinely ambiguous ("having the salmon"), answer the question and leave the log alone; an unlogged meal is recoverable, an invented one silently becomes intake evidence.`,
       ...FOOD_CAPTURE_GUARDRAILS,
@@ -647,8 +661,8 @@ export const CHAT_ACTION_PROMPT_SPECS = {
       "date": "YYYY-MM-DD|omit", "eaten_at": "HH:MM (24h, local)|null|omit" }`,
     guidance: [
       `A follow-up about a meal already logged — "oh and I had 40 g of avocado on the plate", "actually it was two slices", "there was no cheese" — AMENDS that entry with update_food_note on its id. Never a second log_food: a duplicate meal silently doubles the day's intake.`,
-      `Amend in ROWS, and only the rows that change: "ingredients" carries a new row with its own estimate, or an existing row (its item name exactly as logged) with the new "amount" — omit its macros when only the amount moved and the server scales the stored estimate. "remove_items" names rows that were not there. Every row you do not name stays as logged. When you send ingredients or remove_items, OMIT kcal/protein_g/carbs_g/fat_g/fiber_g — the server rebuilds the meal totals from the rows.`,
-      `An amended meal does NOT get the full receipt card — only a one-line chip naming the meal with its new calories and protein ("Lunch updated · 780 kcal · 65g protein"). So the prose may briefly name what changed, in words: the corrected item or amount ("made it two slices", "took the cheese off"). Still no macro list, bullets or calorie/gram tally — the day's fuel line carries the new totals.`,
+      `Amend in ROWS, and only the rows that change: "ingredients" carries a new row with its own estimate, or an existing row (its item name exactly as logged) with the new "amount" — omit its macros when only the amount moved in the SAME unit ("1 slice" → "2 slices", "100 g" → "150 g") and the server scales the stored estimate, or INCLUDE row-level kcal/protein_g/carbs_g/fat_g/fiber_g on that ingredient row whenever the unit changes ("1 bar" → "1 square") or the stored row had a mis-estimated portion ("not the whole bar, just one piece"). "remove_items" names rows that were not there. Every row you do not name stays as logged. When you send ingredients or remove_items, OMIT kcal/protein_g/carbs_g/fat_g/fiber_g at the top level — the server rebuilds the meal totals from the rows.`,
+      `An amended meal does NOT get the full receipt card — only a one-line chip naming the meal with its new calories and protein ("Lunch updated · 780 kcal · 65g protein"). So the prose may briefly name what changed, in words: the corrected item or amount ("made it two slices", "took the cheese off"). If the entry was mis-slotted by the clock (e.g. coffee and a square of chocolate logged as "breakfast"), pass "meal": "snack" so the chip and log reflect that it is a snack. Still no macro list, bullets or calorie/gram tally — the day's fuel line carries the new totals.`,
       `update_food_note also corrects WHEN something was eaten: "that was actually yesterday" moves the entry to that day, and "that was more like 9" fixes the time. Send "eaten_at": null to clear a time that turned out to be wrong. Omit both fields when only the food itself is being corrected.`,
     ],
   },
@@ -810,6 +824,7 @@ export const CHAT_ACTION_PROMPT_SPECS = {
     shape: `{ "type": "set_activity_effort", "rpe": 1-10, "note": "<their own words, verbatim>", "date": "YYYY-MM-DD|omit", "activity_id": <id from recent_activities|omit> }`,
     guidance: [
       `Use set_activity_effort when the athlete tells you how a run or other cardio effort they ALREADY DID felt — "I kept that run conversational, it didn't take a toll", "the long run was brutal", "tempo felt controlled". rpe is their felt effort, 1 (nothing) to 10 (all out): conversational / could talk the whole way / super easy / no toll → 2-3; comfortable but working → 4-5; comfortably hard, tempo → 6-7; hard → 8; all out → 9-10. note is their sentence copied verbatim. date is the day of that effort (omit for today); give activity_id only when that exact activity is in recent_activities. Their word on how it felt outranks the watch's training-effect label and zones — never argue it with the heart rate. How they feel today overall is still log_checkin; emit both when they said both.`,
+      `A passing report counts, even inside other news and with no number: "this morning's run felt super hard — it was humid and I didn't feel strong" → set_activity_effort rpe 8 with that sentence as the note. Heat, humidity, a bad night or a hilly route are context that rides in the note; they never lower the rating or make the report too vague to record. When the activity came from the watch (it is in DATA.recent_activities or the recent cardio block), give its activity_id; otherwise give the date and the server attaches it to that day's activity. Only an effort they have not finished yet, or a question ("was that run too hard?"), gets no set_activity_effort.`,
     ],
   },
   flag_training_structure: {
@@ -828,6 +843,15 @@ export const CHAT_ACTION_PROMPT_SPECS = {
     shape: `{ "type": "revert_decision", "id": <reversible id from DATA.recent_decisions>, "reason": "<what did not work>" }`,
     guidance: [
       `Only when the user directly says “put it back”, “undo/revert that”, “cancel/stop that scheduled change”, or explicitly asks to keep the current plan/split instead of its announced replacement, emit revert_decision with that exact reversible id from DATA.recent_decisions. A question, request for explanation, hypothetical about Undo, or “that didn't work for me” without a direct revert command is not authority to mutate. Never invent an id and never use this for a clinical observation.`,
+    ],
+  },
+  add_session_note: {
+    type: "add_session_note",
+    applyMode: "immediate",
+    shape: `{ "type": "add_session_note", "text": "<their remark, verbatim>", "date": "YYYY-MM-DD|omit" }`,
+    guidance: [
+      `Use add_session_note when the athlete makes an ordinary remark about the session they are in or just finished — how a lift felt, a grip or setup tweak ("bench felt smooth", "moved in to a closer grip on the last sets"). It appends one dated line to that session's notes. Omit date for today. The set log is separate: do not also emit log_set unless they gave a weight and reps to record.`,
+      `Do NOT use add_session_note for a question (anything asking what to do, or any sentence with a question mark — answer in prose and emit no action), for pain, an ache, soreness, or an injury (that stays report_training_symptom), or for a change to the plan or the program (that stays plan_update, or flag_training_structure when you cannot make it from here). Do not emit it when they are not in a session, never invent a remark they did not say, and do not send the same remark twice.`,
     ],
   },
 } as const satisfies { [K in ChatActionType]: ChatActionPromptSpec<K> };
@@ -877,6 +901,7 @@ export function renderChatActionPromptProse(types: readonly ChatActionType[] = C
     : "";
   return `ACTIONS — only when the user clearly asks to log or change something:
 - ${immediateTypes.join(", ")} are ROUTED immediately. Safe captures apply now; coached plan changes follow the server's apply/schedule/review autonomy result.
+- Every sentence that says you logged, moved, added, swapped, put on their timeline, or set something is checked against the actions this turn actually carries. One with no matching action is replaced with a plain "that hasn't happened yet", so a change you are only suggesting is written as a suggestion ("I'd move the easy run to your Pull day — want me to?"), never as done.
 ${renderActionGuidance(immediateTypes)}
 ${draftSection}
 - If they're just asking a question, write ONLY the prose reply — no actions block at all.`;
@@ -1193,6 +1218,12 @@ export function normalizeChatAction(value: unknown): ChatAction | null {
     }
     case "revert_decision":
       return finiteId(value.id) ? { ...value, type: "revert_decision", id: value.id } : null;
+    case "add_session_note": {
+      const text = nonBlank(value.text) ? value.text.replace(/\s+/g, " ").trim().slice(0, 280) : "";
+      if (!text) return null;
+      const date = chatCheckinDate(value.date);
+      return date ? { type: "add_session_note", text, date } : { type: "add_session_note", text };
+    }
   }
   const _exhaustive: never = value.type;
   return _exhaustive;
@@ -1273,8 +1304,4 @@ export function rerouteMisfiledCaptures(
     }
   }
   return { actions: out, notes };
-}
-
-export function chatActionTypeList(): ChatActionType[] {
-  return [...CHAT_ACTION_TYPES];
 }

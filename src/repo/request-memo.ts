@@ -5,7 +5,8 @@
 // race ladder, the agenda, the program state) re-derives its inputs on its own.
 //
 // The memo lives in the brain snapshot scope (src/brain/snapshot.ts) that server.ts
-// opens around every /api and /mcp request, so nothing here outlives a request — and
+// opens around every /api and /mcp request — plus a few seconds' window that lets the
+// requests one screen fires together reuse each other's reads (see SHARE_MS) — and
 // outside a scope (the scheduler, the tests, a script) every call computes, exactly
 // as before.
 //
@@ -35,6 +36,8 @@ import { db, sqliteRollbackCount } from "../db.js";
 import { activeSnapshotMemos } from "../brain/snapshot.js";
 import { activeTimeZone } from "../tz.js";
 import { raceLadderWalkGuard } from "./race-ladder-hook.js";
+import { runDaySteerKey } from "./run-day-steer.js";
+import { registerTrainingCacheClear } from "./training-cache.js";
 
 const MAX_AGE_MS = 60_000;
 
@@ -140,11 +143,114 @@ export function requestMemo<T>(key: string, compute: () => T, copy: (value: T) =
     replayedGuardReads++;
     return copy(guarded.value as T);
   }
+  // Not held by this request yet: the last few seconds' requests may already have read it.
+  // A steered Brief read (run-day-steer.ts) answers from its own fresh scope only.
+  const shareable = runDaySteerKey() === "";
+  const recent = shareable ? recentEntry(key, guardedKey, state, gen, rollbacks, tz, now) : undefined;
+  if (recent !== undefined) {
+    memos.set(recent.guard === null ? key : guardedKey, recent);
+    if (recent.guard !== null) replayedGuardReads++;
+    return copy(recent.value as T);
+  }
+  countCompute(memos, key, plain !== undefined || guarded !== undefined);
   const readsBefore = guardReads();
   const value = compute();
   const guard = guardReads() === readsBefore ? null : state;
-  memos.set(guard === null ? key : guardedKey, { gen, rollbacks, tz, at: now, guard, value } satisfies MemoEntry);
+  const entry: MemoEntry = { gen, rollbacks, tz, at: now, guard, value };
+  memos.set(guard === null ? key : guardedKey, entry);
+  if (shareable) share(guard === null ? key : guardedKey, entry);
   return copy(value);
+}
+
+// ACROSS REQUESTS, for a few seconds. The Brief's early fetch (index.html) fires
+// /today-read, /daily-session/preview and /today together, and node runs them one after
+// another, each in its own scope — so each rebuilt the same harm ledger, HR models and
+// program state the one before it had just read, and the athlete waited for all three.
+// An entry is exactly as valid in the next request as later in its own (the odometer,
+// the rollback count, the zone and the guard state are the whole proof), so the latest
+// write generation's entries are kept here and a scope that misses may take one. Kept
+// tighter than an in-request hit: younger than SHARE_MS, never from a clock that went
+// backwards, and never across a quarter-hour boundary (every zone's midnight is one), so
+// a read that frames "today" off the clock is never handed yesterday's. Only scoped
+// requests share (outside a scope nothing is memoized at all), and never a steered
+// Brief read: its fresh scope hears a steer no key names, so it neither takes nor gives.
+const SHARE_MS = 5_000;
+const SHARE_BUCKET_MS = 15 * 60_000;
+const recentEntries = new Map<string, MemoEntry>();
+let recentGen = -1;
+let recentRollbacks = -1;
+let recentTimer: ReturnType<typeof setTimeout> | null = null;
+registerTrainingCacheClear(() => recentEntries.clear());
+
+function sharedIsFresh(entry: MemoEntry, gen: number, rollbacks: number, tz: string | undefined, now: number): boolean {
+  return (
+    entryIsFresh(entry, gen, rollbacks, tz, now) &&
+    now >= entry.at &&
+    now - entry.at < SHARE_MS &&
+    Math.floor(entry.at / SHARE_BUCKET_MS) === Math.floor(now / SHARE_BUCKET_MS)
+  );
+}
+
+function recentEntry(
+  key: string,
+  guardedKey: string,
+  state: string,
+  gen: number,
+  rollbacks: number,
+  tz: string | undefined,
+  now: number
+): MemoEntry | undefined {
+  const plain = recentEntries.get(key);
+  if (plain !== undefined && plain.guard === null && sharedIsFresh(plain, gen, rollbacks, tz, now)) return plain;
+  const guarded = recentEntries.get(guardedKey);
+  if (guarded !== undefined && guarded.guard === state && sharedIsFresh(guarded, gen, rollbacks, tz, now))
+    return guarded;
+  return undefined;
+}
+
+// Keep only the newest write generation: an entry from an older one can never be served.
+function share(slot: string, entry: MemoEntry): void {
+  if (entry.gen !== recentGen || entry.rollbacks !== recentRollbacks) {
+    if (entry.gen < recentGen || (entry.gen === recentGen && entry.rollbacks < recentRollbacks)) return;
+    recentEntries.clear();
+    recentGen = entry.gen;
+    recentRollbacks = entry.rollbacks;
+  }
+  recentEntries.set(slot, entry);
+  // Dropped once nothing could use them, so an idle process holds no request's reads.
+  if (recentTimer === null) {
+    recentTimer = setTimeout(() => {
+      recentTimer = null;
+      recentEntries.clear();
+    }, SHARE_MS);
+    recentTimer.unref?.();
+  }
+}
+
+// How many times each read was COMPUTED inside one scope (a hit is not counted), keyed
+// by the read's name — the key up to its first ':' — and how many of those computes
+// replaced an entry a write had made stale. One counter per compute, never per hit.
+type MemoComputeStats = { computes: Map<string, number>; stale: number };
+const scopeStats = new WeakMap<Map<string, unknown>, MemoComputeStats>();
+
+function countCompute(memos: Map<string, unknown>, key: string, stale: boolean): void {
+  let stats = scopeStats.get(memos);
+  if (!stats) scopeStats.set(memos, (stats = { computes: new Map(), stale: 0 }));
+  const colon = key.indexOf(":");
+  const name = colon < 0 ? key : key.slice(0, colon);
+  stats.computes.set(name, (stats.computes.get(name) ?? 0) + 1);
+  if (stale) stats.stale++;
+}
+
+/**
+ * The active scope's compute counts (see countCompute), or null outside a scope. For the
+ * guard tests that pin how often a request recomputes its hot reads.
+ */
+export function activeRequestMemoStats(): { computes: Record<string, number>; stale: number } | null {
+  const memos = activeSnapshotMemos();
+  if (!memos) return null;
+  const stats = scopeStats.get(memos);
+  return { computes: Object.fromEntries(stats?.computes ?? []), stale: stats?.stale ?? 0 };
 }
 
 /**

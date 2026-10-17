@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { emitBrainEvent } from "./brainEvents.js";
-import { flushGarminSyncDeferral, garminLapsStored, garminSourceLabel, getGarminCoachSummary, isStrengthGarminType, newGarminSyncDeferral, normalizeGarminHrvStatus, reconcileGarminStrength, upsertGarminActivity, upsertGarminDailyMetrics, upsertGarminSource } from "./repo/activities.js";
+import { flushGarminSyncDeferral, garminLapsStored, garminStoredFetchState, garminSourceLabel, getGarminCoachSummary, isStrengthGarminType, newGarminSyncDeferral, normalizeGarminHrvStatus, reconcileGarminStrength, upsertGarminActivity, upsertGarminDailyMetrics, upsertGarminSource } from "./repo/activities.js";
 import { runWithBrainSnapshot } from "./brain/snapshot.js";
 import type { GarminActivityInput, GarminDailyMetricInput } from "./repo/activities.js";
 import { detectRunCalibration } from "./repo/calibration.js";
@@ -704,10 +704,26 @@ function foldReadiness(tr: any, m: GarminDailyMetricInput) {
   m.training_readiness = pickNonNegNum(row, ["score"]);
 }
 
+// Run `fn` over `items` with at most `limit` in flight; results keep the input order.
+// The first rejection stops further starts and rejects the whole run, like the serial loop did.
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const at = next++;
+      out[at] = await fn(items[at]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
 async function syncDailyMetrics(client: any, sourceId: number, days: number, displayName: string | null) {
   const unavailable = new Set<string>();
-  const rows: { iso: string; metric: GarminDailyMetricInput }[] = [];
-  for (let i = days - 1; i >= 0; i--) {
+  // Each day is independent of the others, so up to three go out together; the rows keep
+  // their oldest-to-newest order (the newest one carries the slow-moving metrics below).
+  const buildDay = async (i: number): Promise<{ iso: string; metric: GarminDailyMetricInput } | null> => {
     const date = new Date(Date.now() - i * 864e5);
     const iso = localDateISO(date);
     const metric: GarminDailyMetricInput = { date: iso };
@@ -802,14 +818,33 @@ async function syncDailyMetrics(client: any, sourceId: number, days: number, dis
       }
     } catch (err) { log.debug("[garmin] weight unavailable for this day", { date: iso, error: err }); }
 
-    if (Object.keys(metric).length > 1) rows.push({ iso, metric });
-  }
+    return Object.keys(metric).length > 1 ? { iso, metric } : null;
+  };
+  const rows = (await mapLimit(
+    Array.from({ length: days }, (_, k) => days - 1 - k),
+    3,
+    buildDay
+  )).filter((r): r is { iso: string; metric: GarminDailyMetricInput } => r != null);
 
   // Slow-moving fitness metrics (VO2max, fitness age, training status) — fetch
   // once for the most recent day and stamp it on that row, rather than per day.
   if (rows.length) {
     const latest = rows[rows.length - 1];
-    const maxmet = await rawGet(client, `/metrics-service/metrics/maxmet/latest/${latest.iso}`);
+    // The six reads are independent of each other; fetch them three at a time, then fold
+    // in the original order (the dedicated fitness-age read overrides the maxmet one).
+    const [maxmet, fa, status, racePred, endur, hill] = await mapLimit(
+      [
+        () => rawGet(client, `/metrics-service/metrics/maxmet/latest/${latest.iso}`),
+        () => rawGet(client, `/fitnessage-service/fitnessage/${latest.iso}`),
+        () => rawGet(client, `/metrics-service/metrics/trainingstatus/aggregated/${latest.iso}`),
+        () =>
+          displayName ? rawGet(client, `/metrics-service/metrics/racepredictions/latest/${displayName}`) : null,
+        () => rawGet(client, `/metrics-service/metrics/endurancescore?calendarDate=${latest.iso}`),
+        () => rawGet(client, `/metrics-service/metrics/hillscore?calendarDate=${latest.iso}`),
+      ],
+      3,
+      async (read) => read()
+    );
     if (maxmet) {
       const fit = extractGarminFitnessMetrics(maxmet);
       latest.metric.vo2max = fit.vo2max;
@@ -818,7 +853,6 @@ async function syncDailyMetrics(client: any, sourceId: number, days: number, dis
     }
     // Fitness age has its OWN endpoint; the maxmet payload only carries VO2max, so
     // the old maxmet read returned null almost always. Prefer the dedicated source.
-    const fa = await rawGet(client, `/fitnessage-service/fitnessage/${latest.iso}`);
     if (fa) {
       const v = pickNum(fa, ["biologicalAge", "fitnessAge", "achievableFitnessAge"]);
       if (v != null && v >= 10 && v <= 100) latest.metric.fitness_age = Math.round(v);
@@ -827,7 +861,6 @@ async function syncDailyMetrics(client: any, sourceId: number, days: number, dis
     // old code made a SECOND call to `/metrics/trainingloadbalance/latest/{name}` for
     // the balance phrase, which 404'd every sync — that endpoint doesn't exist; the
     // balance ships inside this same trainingstatus aggregate (see extractTrainingStatus).
-    const status = await rawGet(client, `/metrics-service/metrics/trainingstatus/aggregated/${latest.iso}`);
     if (status) {
       const ts = extractTrainingStatus(status);
       latest.metric.training_status = ts.training_status;
@@ -842,7 +875,6 @@ async function syncDailyMetrics(client: any, sourceId: number, days: number, dis
     if (displayName) {
       // `/racepredictions/latest/{displayName}` returns a single latest object (or, on
       // some accounts, a one-element list). Field names match python-garminconnect.
-      const racePred = await rawGet(client, `/metrics-service/metrics/racepredictions/latest/${displayName}`);
       if (racePred) {
         const rp = Array.isArray(racePred) ? racePred[racePred.length - 1] : racePred;
         latest.metric.race_predict_5k_sec = pickNumDeep(rp, ["time5K", "raceTime5K", "fiveK"]);
@@ -859,9 +891,7 @@ async function syncDailyMetrics(client: any, sourceId: number, days: number, dis
     // python-garminconnect's get_endurance_score / get_hill_score single-day form).
     // The old paramless calls returned nothing. Scores can nest under a DTO, so search
     // the tree (overallScore is the headline value, ahead of any sub-component).
-    const endur = await rawGet(client, `/metrics-service/metrics/endurancescore?calendarDate=${latest.iso}`);
     if (endur) latest.metric.endurance_score = pickNumDeep(endur, ["overallScore", "enduranceScore", "score", "avg"]);
-    const hill = await rawGet(client, `/metrics-service/metrics/hillscore?calendarDate=${latest.iso}`);
     if (hill) latest.metric.hill_score = pickNumDeep(hill, ["overallScore", "hillScore", "score", "strengthScore"]);
   }
 
@@ -1033,41 +1063,47 @@ async function syncGarminPass(options: GarminSyncOptions = {}) {
       const input = garminActivityInput(row);
       if (input.date && input.date < since) continue;
       const strength = isStrengthGarminType(sourceType(row));
+      // A FINISHED activity (dated before yesterday) already stored WITH a field never
+      // gets that field fetched again: detail / HR zones / exercise sets of a closed
+      // activity do not move, and the upsert keeps a stored value when the input omits
+      // it. Today's and yesterday's activities (possibly still syncing from the watch,
+      // or just edited) are always re-fetched. Skips do not spend the bounded budgets.
+      const stored = input.date && input.date < isoDaysAgo(1) ? garminStoredFetchState(input.external_id) : null;
       // Per-activity detail (bounded): training load + running dynamics. The list
       // payload omits both; activityTrainingLoad lives in the detail's summaryDTO.
-      if (detailFetches < DETAIL_LIMIT) {
-        const detail = await fetchActivityDetail(client, input.external_id);
-        if (detail) {
-          // Fill, never blank: the detail's summaryDTO answered null for running
-          // dynamics the list payload carried, and that null used to be the only
-          // value ever written — so ground contact read empty on every run.
-          if (detail.training_load != null) input.training_load = detail.training_load;
-          input.avg_ground_contact_ms ??= detail.avg_ground_contact_ms;
-          input.avg_vertical_osc_cm ??= detail.avg_vertical_osc_cm;
-          input.avg_vertical_ratio ??= detail.avg_vertical_ratio;
-        }
-        detailFetches++;
-      }
+      const wantsDetail = detailFetches < DETAIL_LIMIT && !stored?.detail;
       // Enrich the most recent activities with HR-time-in-zone (bounded calls).
-      if (zoneFetches < HR_ZONE_LIMIT) {
-        const zones = await fetchHrZones(client, input.external_id);
-        if (zones) input.hr_zones = zones;
-        zoneFetches++;
-      }
+      const wantsZones = zoneFetches < HR_ZONE_LIMIT && !stored?.zones;
       // Per-lap detail for recent endurance activities that HAVE laps (bounded,
       // and skipped once stored — a saved activity's laps never change).
       const wantsLaps = !strength && Number(input.lap_count ?? 0) > 1;
-      if (wantsLaps && lapFetches < LAPS_LIMIT && !garminLapsStored(input.external_id)) {
-        const laps = await fetchLaps(client, input.external_id);
-        if (laps) input.laps = laps;
-        lapFetches++;
-      }
+      const fetchLapsNow = wantsLaps && lapFetches < LAPS_LIMIT && !garminLapsStored(input.external_id);
       // Pull detected exercise sets for recent strength activities (bounded calls).
-      if (strength && strengthFetches < STRENGTH_LIMIT) {
-        const sets = await fetchExerciseSets(client, input.external_id);
-        if (sets) input.exercise_sets = sets;
-        strengthFetches++;
+      const wantsSets = strength && strengthFetches < STRENGTH_LIMIT && !stored?.sets;
+      if (wantsDetail) detailFetches++;
+      if (wantsZones) zoneFetches++;
+      if (fetchLapsNow) lapFetches++;
+      if (wantsSets) strengthFetches++;
+      // The independent calls for one activity go out together (at most three: detail,
+      // zones, and laps OR sets); each only fills its own fields of `input`.
+      const [detail, zones, laps, sets] = await Promise.all([
+        wantsDetail ? fetchActivityDetail(client, input.external_id) : null,
+        wantsZones ? fetchHrZones(client, input.external_id) : null,
+        fetchLapsNow ? fetchLaps(client, input.external_id) : null,
+        wantsSets ? fetchExerciseSets(client, input.external_id) : null,
+      ]);
+      if (detail) {
+        // Fill, never blank: the detail's summaryDTO answered null for running
+        // dynamics the list payload carried, and that null used to be the only
+        // value ever written — so ground contact read empty on every run.
+        if (detail.training_load != null) input.training_load = detail.training_load;
+        input.avg_ground_contact_ms ??= detail.avg_ground_contact_ms;
+        input.avg_vertical_osc_cm ??= detail.avg_vertical_osc_cm;
+        input.avg_vertical_ratio ??= detail.avg_vertical_ratio;
       }
+      if (zones) input.hr_zones = zones;
+      if (laps) input.laps = laps;
+      if (sets) input.exercise_sets = sets;
       const saved = upsertGarminActivity(input, source.id, { defer }) as any;
       if (strength && saved?.id) strengthIds.push(saved.id);
       if (!strength && saved?.id && /run/i.test(String(saved.type ?? input.type ?? ""))) runIds.push(Number(saved.id));

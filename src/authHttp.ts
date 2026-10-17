@@ -416,8 +416,3 @@ export class FailureLimiter {
     }
   }
 }
-
-/** A random WebAuthn-safe challenge (base64url of 32 bytes) — used by tests and as a fallback. */
-export function randomChallenge(): string {
-  return crypto.randomBytes(32).toString("base64url");
-}

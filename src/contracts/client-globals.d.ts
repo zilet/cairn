@@ -421,6 +421,8 @@ declare global {
       lastSet: unknown,
       deps: Pick<ClientTodaySessionControllerDeps, "parseDur">
     ): void;
+    weightCheckLine(kind: unknown, weight: unknown): string | null;
+    showWeightCheck(card: HTMLElement | null, result: Record<string, unknown>): void;
   };
   // What one repaint of a logging surface must NOT cost the athlete: the values
   // typed into each card's log row, and the caret sitting in one of them.

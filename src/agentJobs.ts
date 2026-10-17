@@ -271,6 +271,8 @@ function conferenceSchedulerClaim(input: any): repo.SchedulerOperationClaim | nu
  */
 function conferenceIncompleteReason(input: any, result: any): string | null {
   if (result?.ok !== true) return "no usable result";
+  // Nothing in any seat's domain moved since a conference that concluded: complete work.
+  if (result?.skipped === "unchanged_input") return null;
   if (result?.degraded === true) return "degraded conductor envelope";
   if (normalizeStrictCaseConferenceDecision(result?.decision) === null) return "no valid decision";
   if (!Array.isArray(result?.opinions) || !Array.isArray(result?.unavailable)) return "malformed result";
@@ -327,7 +329,7 @@ export function applyCaseConferenceSchedulerSuccess(input: any, result: any): bo
   }
   if (!input?.scheduler_success || typeof input.scheduler_success !== "object") return false;
   const claim = conferenceSchedulerClaim(input);
-  if (claim && !repo.completeSchedulerOperation(claim, "succeeded")) return false;
+  if (claim && !repo.completeSchedulerOperation(claim, result?.skipped ? "no_op" : "succeeded")) return false;
   let stamped = false;
   for (const [key, raw] of Object.entries(input.scheduler_success)) {
     if (!CONFERENCE_SUCCESS_STATE_KEYS.has(key) || typeof raw !== "string") continue;

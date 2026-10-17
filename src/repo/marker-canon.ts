@@ -399,10 +399,6 @@ export function listMarkerAliases(): Array<{ raw_norm: string; canonical_key: st
   return aliasStore.list();
 }
 
-export function clearMarkerAlias(rawNorm: string) {
-  aliasStore.clear(normalizeMarkerName(rawNorm));
-}
-
 const BARE_DIFFERENTIAL_NAMES = new Set([
   "neutrophil",
   "neutrophils",

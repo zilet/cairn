@@ -9,6 +9,7 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { repo, resetTables } from "./_seed.js";
+import { mealWindowsAhead } from "../dist/repo/shared.js";
 import { foodRowsFromWords, withWordRows } from "../dist/foodCapture.js";
 import { completeInstantFoodCapture, instantCaptureReply } from "../dist/chatTurns.js";
 import { classifyChatRoute } from "../dist/chatRouting.js";
@@ -171,3 +172,17 @@ test("a capture that already carries an estimate never gets word rows", () => {
   assert.equal(withEstimate.parsed.ingredients, undefined);
   assert.equal(withEstimate.parsed.kcal, 520);
 });
+
+test("a square/block of dark chocolate and pour-over coffee at 5:48 AM is logged as a snack, not breakfast, and splits cleanly into two word rows", () => {
+  const raw = "I had a block of Lindt excellenece dark chocolate with raspberry\n\nand pour over coffee.";
+  assert.deepEqual(foodRowsFromWords(raw), [
+    { item: "Lindt excellenece dark chocolate with raspberry", amount: "1 block" },
+    { item: "pour over coffee" },
+  ]);
+  const finished = instantFoodCapture(raw);
+  const note = repo.getFoodNote(finished.note.id);
+  assert.equal(note.meal, "snack", "coffee + a square of dark chocolate at 5:48 AM is a snack, never breakfast");
+  assert.match(finished.message.content, /^Logged your snack\b/);
+  assert.deepEqual(mealWindowsAhead(6, [{ meal: note.meal, eaten_at: "05:48" }]), ["breakfast", "lunch", "dinner"]);
+});
+

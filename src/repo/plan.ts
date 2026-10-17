@@ -1207,30 +1207,6 @@ export interface PlanChange {
   swap?: { from?: string | null; to?: string | null } | null;
 }
 
-// Implement-agnostic slot for loaded horizontal chest presses. Deliberately excludes
-// OHP, flyes, push-ups, close-grip variants, and ambiguous "DB Press" so the guard
-// blocks accidental same-angle duplicates without flattening distinct movements.
-export function validatePlanPressSlots(days: Array<{ day_number?: unknown; items?: unknown }>): {
-  ok: boolean;
-  collisions: Array<{ day_number: number; slot: string; exercises: string[] }>;
-} {
-  const collisions: Array<{ day_number: number; slot: string; exercises: string[] }> = [];
-  for (const day of Array.isArray(days) ? days : []) {
-    const bySlot = new Map<string, string[]>();
-    for (const raw of Array.isArray(day?.items) ? day.items : []) {
-      if (!raw || typeof raw !== "object" || String((raw as any).kind ?? "strength") === "cardio") continue;
-      const exercise = String((raw as any).exercise ?? "").trim();
-      const slot = pressSlotKey(exercise);
-      if (!slot) continue;
-      bySlot.set(slot, [...(bySlot.get(slot) ?? []), exercise]);
-    }
-    for (const [slot, exercises] of bySlot) {
-      if (exercises.length > 1) collisions.push({ day_number: Number(day.day_number), slot, exercises });
-    }
-  }
-  return { ok: collisions.length === 0, collisions };
-}
-
 // The stored week's quality report, as GET /api/plan/quality and get_plan_quality show
 // it. It carries the stated-split check too (stated-split.ts): a week that departs from
 // the split the athlete named reads as a `stated_split` WARNING here, never an error.

@@ -153,15 +153,21 @@ export function methodNotAllowed(_req: Request, res: Response) {
     duration_ms: 0,
     scope: "internal",
   });
-  recordDiagnosticEvent({
-    source: "mcp",
-    kind: "http_error",
-    level: "warning",
-    operation: telemetryIdentifier(_req.method, 20, "UNKNOWN"),
-    status: 405,
-    fingerprint: `mcp:http_error:${telemetryIdentifier(_req.method, 20, "UNKNOWN")}:405`,
-    message: "HTTP 405",
-    release: getBuildStamp(),
-  });
+  // A GET is a Streamable HTTP client probing for a server-initiated SSE stream; 405 is
+  // the spec-correct answer from a stateless server, so it is neither a defect nor worth
+  // a diagnostic row (the request metric above still counts it). Any other method is
+  // still recorded, but as the expected outcome it is, not a warning.
+  if (_req.method !== "GET") {
+    recordDiagnosticEvent({
+      source: "mcp",
+      kind: "http_error",
+      level: "info",
+      operation: telemetryIdentifier(_req.method, 20, "UNKNOWN"),
+      status: 405,
+      fingerprint: `mcp:http_error:${telemetryIdentifier(_req.method, 20, "UNKNOWN")}:405`,
+      message: "HTTP 405",
+      release: getBuildStamp(),
+    });
+  }
   res.status(405).json({ jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed." }, id: null });
 }

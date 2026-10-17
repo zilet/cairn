@@ -565,14 +565,6 @@ export function getExerciseGuideByExerciseId(exerciseId: number): ExerciseGuide 
   return hydrate(row);
 }
 
-export function getGuideById(guideId: string): ExerciseGuide | null {
-  if (!isValidGuideId(guideId)) return null;
-  const row = db.prepare(`SELECT * FROM exercise_guides WHERE guide_id = ? LIMIT 1`).get(guideId) as
-    | ExerciseGuideRow
-    | undefined;
-  return hydrate(row);
-}
-
 /**
  * Confirm a guide by hand — the door out of a low-confidence suggestion. ok:false at
  * the call site (never an HTTP error) when either side is missing.

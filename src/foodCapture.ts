@@ -154,6 +154,7 @@ export const FOOD_PROVENANCE_SCHEMA = `"confidence": "${FOOD_CONFIDENCE_SCHEMA}"
 // may name a cooking method) and adds these.
 export const FOOD_CAPTURE_GUARDRAILS = [
   `Break the meal into ingredient ROWS and put the quantity in "amount" as its own field — "205 g" belongs in amount, never folded into the item name. Estimate each row's macros INCLUDING fiber_g so the meal total is built up from its parts instead of guessed from the top down; null any row value you genuinely cannot estimate rather than inventing one.`,
+  `Read everyday portion words in context: "a block", "a square", or "a piece" of a chocolate bar means ONE single square/piece broken off the bar (~10 g, ~50–55 kcal), never the whole 100 g bar, unless the athlete says "whole bar/block" or states the bar's full weight.`,
   `"confidence" and "basis" record HOW the numbers were obtained and must be honest: "label" = read off a package or menu label, "user_report" = the athlete stated the quantity or the macros, "estimated_from_foods" = inferred from ordinary serving sizes, "photo" = inferred from the picture. A stated or weighed quantity is high confidence; anything you inferred is low or medium. An estimate must never be made to look like a measurement.`,
   `Give an ingredient row its own "basis" only when it differs from the meal's — a weighed chicken breast next to an eyeballed scoop of rice is exactly the case worth recording. Otherwise leave it null.`,
   `Use nutrition_pattern for COARSE bands, not invented micronutrient milligrams. Alcohol and caffeine stay null unless the meal actually identifies them.`,
@@ -549,19 +550,112 @@ function amountKey(amount: unknown): string {
     .replace(/\s+/g, " ");
 }
 
-// Whether two free-text amounts describe the same quantity ("200 g" and "200g" do).
+// A parenthesized weight or volume at the end of an amount ("1 bar (100 g)",
+// "1 square (~10 g)", "1 handful (~30 g)"). Kept separate from parseFoodQuantity so
+// the meal card's grams field (which only opens on a bare mass amount) and its parity
+// test stay unchanged, while server-side scaling can compare "1 bar (100 g)" against
+// "1 square (10 g)" or "40 g".
+function bracketedFoodQuantity(amount: unknown): FoodQuantity | null {
+  const m = String(amount ?? "").match(
+    /\(\s*((?:~|about|approx\.?|approximately|around|≈)?\s*\d+(?:[.,]\d+)?(?:\s*\/\s*\d+)?\s*[a-z]+)\s*\)\s*$/i
+  );
+  if (!m) return null;
+  const q = parseFoodQuantity(m[1]);
+  return q && (q.unit === "g" || q.unit === "ml") ? q : null;
+}
+
+// Whether two free-text amounts describe the same quantity ("200 g" and "200g" do,
+// while "1 square (100 g)" and "1 square (10 g)" do not).
 function sameAmount(a: unknown, b: unknown): boolean {
+  const ba = bracketedFoodQuantity(a);
+  const bb = bracketedFoodQuantity(b);
+  if (ba || bb) {
+    if (!ba || !bb || ba.unit !== bb.unit || Math.abs(ba.value - bb.value) > 1e-6) return false;
+  }
   const qa = parseFoodQuantity(a);
   const qb = parseFoodQuantity(b);
   if (qa && qb) return qa.unit === qb.unit && Math.abs(qa.value - qb.value) <= 1e-6;
   return amountKey(a) === amountKey(b);
 }
 
-// Ratio new/old when both amounts parse to the same unit; null when they cannot be compared.
-function quantityRatio(from: unknown, to: unknown): number | null {
-  const a = parseFoodQuantity(from);
-  const b = parseFoodQuantity(to);
-  return a && b && a.unit === b.unit ? b.value / a.value : null;
+// "block" is deliberately not a piece unit: "a block of chocolate" is a whole bar as often as a cut-out
+// square, so a change TO "1 block" is never scaled by guess (the model states the macros).
+const BAR_PIECE_UNITS = new Set(["square", "piece", "strip", "bite"]);
+const BAR_WHOLE_UNITS = new Set(["bar", "block", "package", "pack", "tablet", "slab"]);
+const CHOCOLATE_BAR_ITEM_RE = /\b(?:chocolate|lindt|cacao|ghirardelli|ritter|toblerone|cadbury|milka|godiva|bark)\b/i;
+// A chocolate-NAMED item that is not a bar ("chocolate croissant", "chocolate chip cookie"):
+// its "1 piece" can honestly carry 250+ kcal, so the bar rules never touch it.
+const NOT_A_BAR_ITEM_RE =
+  /\b(?:croissants?|cookies?|cake|brownies?|muffins?|donuts?|doughnuts?|milk|ice\s+cream|cereal|bread|pudding|mousse|latte|mocha|shake|protein|granola|chips?|covered|dipped|truffles?|pie|tart|waffles?|pancakes?)\b/i;
+// Units that can never honestly carry a bar's worth of calories: a stored "1 square" at
+// 250+ kcal is a mis-estimate even when the amendment restates the same amount.
+const SMALL_PIECE_UNITS = new Set(["square", "strip", "bite"]);
+
+// When a chocolate bar row was logged at whole-bar calories (~500+ kcal for ~100 g,
+// whether labeled "1 bar", "1 block", "100 g", or even mis-labeled "1 square" with
+// the full bar's macros) and is amended to 1–4 squares/pieces (~10 g each), scale
+// to the single-piece share of the bar.
+function barPieceScaleRatio(
+  item: unknown,
+  fromAmount: unknown,
+  toAmount: unknown,
+  refMacros?: Partial<Record<FoodMacroKey, number>>
+): number | null {
+  const itemText = String(item ?? "");
+  if (!CHOCOLATE_BAR_ITEM_RE.test(itemText) || NOT_A_BAR_ITEM_RE.test(itemText)) return null;
+  if (bracketedFoodQuantity(toAmount)) return null;
+  const toQty = parseFoodQuantity(toAmount);
+  if (!toQty || !BAR_PIECE_UNITS.has(toQty.unit) || toQty.value <= 0 || toQty.value > 4) return null;
+  // The same amount restated is NOT an amendment: a carried-over row ("add a coffee" resends
+  // every stored row) must keep its numbers. Only an implausible small-piece estimate heals.
+  if (sameAmount(fromAmount, toAmount)) {
+    const kcal = refMacros?.kcal;
+    return SMALL_PIECE_UNITS.has(toQty.unit) && kcal !== undefined && kcal >= 250 * toQty.value
+      ? (toQty.value * 10) / 100
+      : null;
+  }
+  const pieceGrams = toQty.value * 10;
+  const fromBracket = bracketedFoodQuantity(fromAmount);
+  if (fromBracket && fromBracket.unit === "g" && fromBracket.value >= 40) {
+    return pieceGrams / fromBracket.value;
+  }
+  const fromQty = parseFoodQuantity(fromAmount);
+  if (fromQty && fromQty.unit === "g" && fromQty.value >= 40) {
+    return pieceGrams / fromQty.value;
+  }
+  const refKcal = refMacros?.kcal;
+  if (fromQty && BAR_WHOLE_UNITS.has(fromQty.unit) && (refKcal === undefined || refKcal >= 200)) {
+    return pieceGrams / (fromQty.value * 100);
+  }
+  // Stored row already said "1 square" / "1 piece" / "1 block" (or had no unit)
+  // while carrying whole-bar calories (>= 250 kcal per single piece).
+  if (refKcal !== undefined && refKcal >= 250 * toQty.value) {
+    return pieceGrams / 100;
+  }
+  return null;
+}
+
+// Ratio new/old when both amounts parse to the same unit (or share a comparable
+// mass/volume via bracketed weight, or scale a whole chocolate bar down to squares);
+// null when they cannot be compared.
+function quantityRatio(
+  from: unknown,
+  to: unknown,
+  item?: unknown,
+  refMacros?: Partial<Record<FoodMacroKey, number>>
+): number | null {
+  const qa = parseFoodQuantity(from);
+  const qb = parseFoodQuantity(to);
+  const ba = bracketedFoodQuantity(from);
+  const bb = bracketedFoodQuantity(to);
+  const ma = ba ?? (qa && (qa.unit === "g" || qa.unit === "ml") ? qa : null);
+  const mb = bb ?? (qb && (qb.unit === "g" || qb.unit === "ml") ? qb : null);
+  if (ma && mb && ma.unit === mb.unit) return mb.value / ma.value;
+  if (qa && qb && qa.unit === qb.unit && Math.abs(qb.value - qa.value) > 1e-6) return qb.value / qa.value;
+  const barRatio = barPieceScaleRatio(item, from, to, refMacros);
+  if (barRatio != null) return barRatio;
+  if (qa && qb && qa.unit === qb.unit) return qb.value / qa.value;
+  return null;
 }
 
 /**
@@ -659,12 +753,13 @@ export function recomputeFoodIngredients(
         : hasEditMacros
           ? { amount: base.amount, macros: editMacros, basis: base.basis }
           : null;
-    const refQty = parseFoodQuantity(ref?.amount);
-    const newQty = parseFoodQuantity(amount);
     // A brand-new row that states its macros but no amount of its own describes the
     // grams it was given; there is nothing to scale from.
     const ownUnstatedRef = !!ref && !hasTwinMacros && !String(base.amount ?? "").trim();
-    const quantityChanged = !!ref && !ownUnstatedRef && !sameAmount(ref.amount, amount);
+    const oversizedBarRatio =
+      ref && !ownUnstatedRef ? barPieceScaleRatio(base.item, ref.amount, amount, ref.macros) : null;
+    const quantityChanged =
+      !!ref && !ownUnstatedRef && (!sameAmount(ref.amount, amount) || oversizedBarRatio != null);
 
     const row: FoodIngredientRow = { item: base.item };
     if (amount) row.amount = amount;
@@ -675,8 +770,8 @@ export function recomputeFoodIngredients(
       macros = editMacros;
       basis = base.basis ?? "user_report";
     } else if (ref && quantityChanged) {
-      if (refQty && newQty && refQty.unit === newQty.unit) {
-        const ratio = newQty.value / refQty.value;
+      const ratio = quantityRatio(ref.amount, amount, base.item, ref.macros);
+      if (ratio != null && Number.isFinite(ratio) && ratio > 0) {
         macros = {};
         for (const key of FOOD_MACRO_KEYS) {
           const n = ref.macros[key];
@@ -700,7 +795,7 @@ export function recomputeFoodIngredients(
     // number of its own for, follows the edit.
     let kcalFollowed = false;
     if (twin) {
-      const ratio = amountChanged ? quantityRatio(twin.amount, amount) : 1;
+      const ratio = amountChanged ? quantityRatio(twin.amount, amount, base.item, twinMacros) : 1;
       for (const key of FOOD_MACRO_KEYS) {
         if (twinMacros[key] !== undefined) continue;
         const share = shareOf[key]?.get(twinIndex);
@@ -766,6 +861,36 @@ export function recomputeFoodIngredients(
 //   - `remove` drops the named stored rows (their share leaves the total, rule 5).
 // PURE. Stored rows the coercion cannot read are dropped the way recompute drops them.
 
+const ITEM_STOP_WORDS = new Set(["with", "and", "the", "for", "from", "into", "over", "under"]);
+
+function itemTokens(item: unknown): string[] {
+  return itemKey(item)
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length >= 3 && !ITEM_STOP_WORDS.has(w));
+}
+
+function itemsMatchLoosely(storedItem: unknown, candidateItem: unknown): boolean {
+  const a = itemKey(storedItem);
+  const b = itemKey(candidateItem);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  // Never by substring: "butter" is not "peanut butter", "cheese" is not "cream cheese". A typo or a
+  // shortened name shares most of its WORDS, and both names must have at least two of them.
+  const ta = itemTokens(a);
+  const tb = itemTokens(b);
+  if (ta.length < 2 || tb.length < 2) return false;
+  const setB = new Set(tb);
+  const shared = ta.filter((t) => setB.has(t)).length;
+  return shared >= 2 && shared / Math.min(ta.length, tb.length) >= 0.6;
+}
+
+// The ONE stored name a typo'd or shortened name refers to; null when none or when it is ambiguous.
+function uniqueLooseMatch(keys: Set<string>, candidate: string): string | null {
+  const hits = [...keys].filter((k) => itemsMatchLoosely(k, candidate));
+  return hits.length === 1 ? hits[0] : null;
+}
+
 function removalKeys(remove: unknown): Set<string> {
   const list = Array.isArray(remove) ? remove : remove == null ? [] : [remove];
   return new Set(
@@ -786,11 +911,16 @@ export function amendFoodIngredients(
   const out: FoodIngredientRow[] = [];
   const at = new Map<string, number>();
   const stored = Array.isArray(previous?.ingredients) ? (previous.ingredients as unknown[]).slice(0, MAX_INGREDIENTS) : [];
+  const storedKeys = new Set<string>();
+  for (const raw of stored) {
+    const row = coerceFoodIngredients([raw])?.[0] as FoodIngredientRow | undefined;
+    if (row) storedKeys.add(itemKey(row.item));
+  }
   for (const raw of stored) {
     const row = coerceFoodIngredients([raw])?.[0] as FoodIngredientRow | undefined;
     if (!row) continue;
     const key = itemKey(row.item);
-    if (drop.has(key)) continue;
+    if (drop.has(key) || [...drop].some((d) => !storedKeys.has(d) && uniqueLooseMatch(storedKeys, d) === key)) continue;
     if (raw && typeof raw === "object" && (raw as Record<string, unknown>).confidence === "low") row.confidence = "low";
     if (!at.has(key)) at.set(key, out.length);
     out.push(row);
@@ -799,7 +929,11 @@ export function amendFoodIngredients(
     const edit = coerceFoodIngredients([raw])?.[0];
     if (!edit) continue;
     const key = itemKey(edit.item);
-    const index = at.get(key);
+    let index = at.get(key);
+    if (index === undefined) {
+      const looseKey = uniqueLooseMatch(new Set(out.map((r) => itemKey(r.item))), key);
+      if (looseKey !== null) index = out.findIndex((r) => itemKey(r.item) === looseKey);
+    }
     if (index === undefined) {
       if (out.length >= MAX_INGREDIENTS) continue;
       at.set(key, out.length);
@@ -862,6 +996,12 @@ const FOOD_UNIT_WORDS = [
   "pieces",
   "pc",
   "pcs",
+  "square",
+  "squares",
+  "block",
+  "blocks",
+  "strip",
+  "strips",
   "serving",
   "servings",
   "handful",
@@ -878,25 +1018,29 @@ const FOOD_UNIT_WORDS = [
 const UNIT_RE = `(?:${FOOD_UNIT_WORDS.join("|")})`;
 const NUM_RE = String.raw`(?:~\s*)?\d+(?:[.,]\d+)?(?:\s*\/\s*\d+)?`;
 const LEADING_UNIT = new RegExp(String.raw`^(${NUM_RE}\s*${UNIT_RE})\.?(?:\s+of)?\s+(.+)$`, "i");
+const LEADING_ARTICLE_UNIT = new RegExp(String.raw`^(?:a|an|one)\s+(?:small\s+)?(?:cut[- ]?out\s+)?(${UNIT_RE})\s+of\s+(.+)$`, "i");
 const LEADING_COUNT = new RegExp(String.raw`^(${NUM_RE}|½|¼|¾)\s+(.+)$`, "i");
 const TRAILING_UNIT = new RegExp(String.raw`^(.+?)[\s,:\-–—(]+(${NUM_RE}\s*${UNIT_RE})\.?\)?$`, "i");
 const TRAILING_TIMES = /^(.+?)\s*[x×]\s*(\d+)$/i;
 const BULLET_RE = /^\s*(?:[-*•·–—]+|\d+[.)])\s+/;
+const CONTINUATION_CONJ_RE = /^(?:and|\+)\s+/i;
 const MEAL_HEADING_RE = /^(?:breakfast|brunch|lunch|dinner|supper|snacks?|meal|pre-?workout|post-?workout)\s*:?\s*$/i;
 const LEAD_IN_RE = /^[^:\d\n]{1,40}:\s*(?=\S)/;
 const SPOKEN_LEAD_RE =
-  /^(?:i\s+)?(?:just\s+)?(?:had|ate|eaten|log(?:ged)?)\b(?:\s+(?:for\s+)?(?:breakfast|brunch|lunch|dinner|supper|a\s+snack))?\s*:?\s*/i;
+  /^(?:i\s+)?(?:just\s+)?(?:had|ate|eaten|drank|log(?:ged)?)\b(?:\s+(?:for\s+)?(?:breakfast|brunch|lunch|dinner|supper|a\s+snack|snack))?\s*:?\s*/i;
 
 function foodRowFromWords(words: string): FoodIngredient | null {
-  const text = words.replace(/\s+/g, " ").trim();
+  const text = words.replace(/\s+/g, " ").replace(/[.!]+$/, "").trim();
   if (!text || MEAL_HEADING_RE.test(text)) return null;
   const row = (item: string, amount?: string): FoodIngredient | null => {
-    const it = item.replace(/^[\s,:\-–—]+|[\s,:\-–—]+$/g, "").slice(0, TEXT_CAP);
+    const it = item.replace(/^[\s,:\-–—]+|[\s,:\-–—.]+$/g, "").slice(0, TEXT_CAP);
     if (!it) return amount ? { item: amount.slice(0, TEXT_CAP) } : null;
     return amount ? { item: it, amount: amount.trim().slice(0, TEXT_CAP) } : { item: it };
   };
   let m = text.match(LEADING_UNIT);
   if (m) return row(m[2], m[1]);
+  m = text.match(LEADING_ARTICLE_UNIT);
+  if (m) return row(m[2], `1 ${m[1].toLowerCase()}`);
   m = text.match(TRAILING_UNIT);
   if (m) return row(m[1], m[2]);
   m = text.match(TRAILING_TIMES);
@@ -920,7 +1064,9 @@ export function foodRowsFromWords(text: unknown): FoodIngredient[] {
   if (!lines.length) return [];
   // A short lead-in on the first line ("Log lunch: …", "I had: …") is not something eaten.
   const first = lines[0].replace(LEAD_IN_RE, "").replace(SPOKEN_LEAD_RE, "").trim();
-  lines = first ? [first, ...lines.slice(1)] : lines.slice(1);
+  lines = (first ? [first, ...lines.slice(1)] : lines.slice(1)).map((line, idx) =>
+    idx > 0 ? line.replace(CONTINUATION_CONJ_RE, "").trim() : line
+  );
   const segments =
     lines.length === 1
       ? lines[0]
@@ -932,6 +1078,64 @@ export function foodRowsFromWords(text: unknown): FoodIngredient[] {
     .map(foodRowFromWords)
     .filter((row): row is FoodIngredient => !!row)
     .slice(0, MAX_INGREDIENTS);
+}
+
+// ---- meal-slot intelligence (snack / pre-breakfast vs main meal) --------------
+//
+// The clock's meal windows (05–11 breakfast, 11–15 lunch, 17–22 dinner) are a sensible
+// default when someone logs an actual meal without naming the slot. They are NOT a rule
+// that everything eaten at 5:48 AM is "breakfast": a square/block of dark chocolate with
+// a pour-over coffee, a morning espresso, a piece of fruit, or a pre-workout bite is a
+// snack (or pre-breakfast bite), and calling it "breakfast" both mis-speaks the receipt
+// and marks the morning's breakfast window as already eaten.
+
+const EXPLICIT_SNACK_SLOT_RE =
+  /\b(?:snacks?|pre[- ]?breakfast|before\s+breakfast|after\s+dinner|before\s+bed|mid[- ]?morning|mid[- ]?afternoon|late\s+bite|quick\s+bite|small\s+bite|little\s+bite|light\s+bite)\b/i;
+
+const NEGATED_MEAL_RE =
+  /\b(?:skipp(?:ed|ing)|skip|missed|no|without|nothing\s+for|didn'?t\s+(?:have|eat)|did\s+not\s+(?:have|eat))\s+(?:my\s+|the\s+|any\s+)?(?:breakfast|lunch|dinner)\b/gi;
+
+// Around a workout the cue only makes a SNACK when the food itself is snack-shaped.
+const AROUND_WORKOUT_RE = /\b(?:pre|post)[- ]?workout\b/i;
+
+const MAIN_MEAL_FOOD_RE =
+  /\b(?:eggs?|omelet(?:te)?s?|scrambl(?:e|ed)|frittata|oatmeal|oats|porridge|pancakes?|waffles?|french\s+toast|bagels?|toast|cereal|granola|hash|bacon|sausages?|burritos?|tacos?|quesadillas?|sandwich(?:es)?|subs?|paninis?|wraps?|burgers?|pizzas?|pasta|spaghetti|noodles?|ramen|pho|rice|risotto|quinoa|couscous|chicken|turkey|steak|beef|brisket|pork|ham|lamb|salmon|tuna|cod|halibut|fish|shrimp|prawns|tofu|tempeh|seitan|lentils?|beans|chili|curry|stir[- ]?fry|stew|soup|chowder|salads?|bowls?|plates?|platters?|entr[eé]es?|casseroles?|lasagna|sushi|poke|avocado\s+toast|overnight\s+oats|chia\s+pudding|english\s+muffins?|croissants?|yogurt|skyr|cottage\s+cheese|smoothies?|shakes?|potato(?:es)?|sweet\s+potato(?:es)?)\b/i;
+
+const OBVIOUS_SNACK_FOOD_RE =
+  /\b(?:coffee|pour[- ]?over|espresso|americano|macchiato|cortado|cappuccino|latte|flat\s+white|cold\s+brew|iced\s+coffee|mocha|tea|matcha|chai|herbal\s+tea|green\s+tea|black\s+tea|hot\s+chocolate|cocoa|electrolytes?|kombucha|chocolates?|lindt|cacao|cand(?:y|ies)|gumm(?:y|ies)|mints?|cookies?|biscuits?|crackers?|pretzels?|chips|crisps|popcorn|rice\s+cakes?|nuts?|almonds?|walnuts?|cashews?|pecans?|peanuts?|pistachios?|macadamias?|trail\s+mix|dried\s+fruit|raisins?|dates?|figs?|apricots?|apples?|bananas?|oranges?|clementines?|mandarins?|tangerines?|pears?|peach(?:es)?|plums?|nectarines?|berries|strawberr(?:y|ies)|blueberr(?:y|ies)|raspberr(?:y|ies)|blackberr(?:y|ies)|cherries|grapes?|kiwis?|mangos?|mangoes|melon|watermelon|pineapple|grapefruit|protein\s+bars?|energy\s+bars?|granola\s+bars?|snack\s+bars?|quest\s+bars?|rxbars?|clif\s+bars?|gels?|chews?|popsicles?|ice\s+cream|sorbet|gelato|brownies?|donuts?|doughnuts?|macarons?)\b|\b(?:(?:a|an|one|1|two|2|few|couple(?:\s+of)?|small)\s+(?:small\s+)?(?:cut[- ]?out\s+)?(?:blocks?|squares?|pieces?|bites?|strips?|handfuls?)\b)/i;
+
+/**
+ * The meal slot the athlete explicitly stated in `text`, or null when none was named.
+ * Pre-meal / between-meal qualifiers ("pre-breakfast", "before breakfast", "after dinner",
+ * "pre-workout", "late bite") resolve to "snack" before the bare main-meal words are checked.
+ */
+export function explicitFoodMealLabel(text: unknown): "breakfast" | "lunch" | "dinner" | "snack" | null {
+  const raw = String(text ?? "");
+  if (!raw.trim()) return null;
+  // "skipped breakfast", "no lunch", "didn't have dinner" name a meal that did NOT happen.
+  const s = raw.replace(NEGATED_MEAL_RE, " ");
+  // A named main meal beats a snack cue ("had lunch after a pre-workout shake" is lunch).
+  for (const meal of ["breakfast", "lunch", "dinner"] as const) {
+    if (new RegExp(`(?<!pre[- ]|before\\s+|after\\s+)\\b${meal}\\b`, "i").test(s)) return meal;
+  }
+  if (EXPLICIT_SNACK_SLOT_RE.test(s)) return "snack";
+  return null;
+}
+
+/**
+ * True when an unlabeled food note or capture message is manifestly a small snack,
+ * beverage/coffee, or pre-meal bite rather than a main meal (breakfast/lunch/dinner).
+ */
+export function isObviouslySnackCapture(text: unknown): boolean {
+  const s = String(text ?? "").trim();
+  if (!s) return false;
+  const explicit = explicitFoodMealLabel(s);
+  if (explicit === "snack") return true;
+  if (explicit === "breakfast" || explicit === "lunch" || explicit === "dinner") return false;
+  const cleaned = s.replace(LEAD_IN_RE, "").replace(SPOKEN_LEAD_RE, "").trim();
+  if (!cleaned) return false;
+  if (MAIN_MEAL_FOOD_RE.test(cleaned)) return false;
+  return OBVIOUS_SNACK_FOOD_RE.test(cleaned) || AROUND_WORKOUT_RE.test(cleaned);
 }
 
 /** True when a stored blob carries no estimate at all: no rows, no items, no numbers. */

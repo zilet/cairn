@@ -35,9 +35,6 @@ function parseLevel(raw: string | undefined): LogLevel {
 const THRESHOLD = LEVELS[parseLevel(process.env.CAIRN_LOG_LEVEL)];
 const AS_JSON = process.env.CAIRN_LOG_JSON === "1";
 
-/** The level this process was started at. Exported for diagnostics/tests only. */
-export const activeLogLevel: LogLevel = parseLevel(process.env.CAIRN_LOG_LEVEL);
-
 /** A value is quoted only when it would otherwise break `key=value` grepping. */
 function renderValue(value: unknown): string {
   if (value instanceof Error) return JSON.stringify(value.name);

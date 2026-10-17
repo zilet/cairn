@@ -3,7 +3,6 @@ import {
   cleanIdentifier,
   cleanText,
   enumValue,
-  hasOwnProperties,
   isoDateTime,
   normalizeJsonObject,
   normalizeStringList,
@@ -53,21 +52,4 @@ export function normalizeBrainEvaluation(value: unknown): BrainEvaluation | null
     explanation,
     evaluator_version: evaluatorVersion,
   };
-}
-
-export function isBrainEvaluation(value: unknown): value is BrainEvaluation {
-  const input = asRecord(value);
-  return (
-    !!input &&
-    normalizeBrainEvaluation(value) !== null &&
-    hasOwnProperties(input, [
-      "expectation_id",
-      "verdict",
-      "actual",
-      "evidence_keys",
-      "confounders",
-      "explanation",
-      "evaluator_version",
-    ])
-  );
 }

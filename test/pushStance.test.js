@@ -66,8 +66,9 @@ test("a push stance is dated, recorded, and in force through its last day", () =
 });
 
 test("the stance carries falsifiable expectations when the athlete logs the signals", () => {
-  // Two rated sessions with feedback in the lookback → the feedback guards can mature.
-  for (const back of [3, 5]) {
+  // Four rated sessions with feedback in the lookback → the 14-day window can be expected
+  // to hold the guards' two-entry minimum, so they can mature.
+  for (const back of [3, 5, 8, 11]) {
     const session = repo.getOrCreateSession(addDaysISO(today(), -back), null);
     db.prepare(`UPDATE sessions SET performance = 4, soreness = 2 WHERE id = ?`).run(session.id);
   }

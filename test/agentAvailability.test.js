@@ -7,6 +7,7 @@ import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 
 import {
+  classifyLimitBannerText,
   availabilityHolds,
   availabilityReason,
   classifyAgentFailure,
@@ -15,6 +16,7 @@ import {
   parseResetsPhrase,
   parseStreamRateLimitEvent,
   parseTryAgainPhrase,
+  splitHeldProviders,
 } from "../dist/agentAvailability.js";
 import { agentErrorClass } from "../dist/telemetry-privacy.js";
 import {
@@ -166,6 +168,41 @@ test("grok's 402 is payment_required with no reset to wait for", () => {
   assert.equal(f.detail, "Provider needs credit");
 });
 
+test("a clean exit's own prose is never a payment failure (a 24 h hold on a healthy agent)", () => {
+  const prose = "That plate is about 402 kcal, and billing for the clinic visit is a separate matter.";
+  const f = classifyAgentFailure("claude", { code: 0, raw: prose, stderr: "" }, NOW);
+  assert.notEqual(f?.state, "payment_required");
+  // The same words in a real failure still count: error text, a non-zero exit, a result envelope.
+  assert.equal(classifyAgentFailure("grok", { code: 1, raw: "", stderr: "402 Payment Required" }, NOW).state, "payment_required");
+  assert.equal(
+    classifyAgentFailure("claude", { code: 0, raw: "", stderr: "", error_text: "Payment required (402)" }, NOW).state,
+    "payment_required"
+  );
+  assert.equal(
+    classifyAgentFailure("claude", { code: 0, raw: '{"is_error":true,"result":"402 payment required"}', stderr: "" }, NOW).state,
+    "payment_required"
+  );
+});
+
+test("an exit-0 reply's prose never holds a provider, even with unrelated stderr", () => {
+  const limitProse = "You've hit your limit for heavy lower-body work this week.";
+  assert.notEqual(classifyAgentFailure("claude", { code: 0, raw: limitProse, stderr: "" }, NOW)?.state, "quota_exhausted");
+  const glog = classifyAgentFailure("claude", { code: 0, raw: "That plate is about 402 kcal.", stderr: "[info] billing sync ok" }, NOW);
+  assert.notEqual(glog?.state, "payment_required");
+  // A real clean-exit limit banner still classifies.
+  assert.equal(classifyAgentFailure("claude", { code: 0, raw: "You've hit your limit · resets 8am", stderr: "" }, NOW).state, "quota_exhausted");
+});
+
+test("the chat banner read never turns a short coaching reply into a provider hold", () => {
+  assert.equal(classifyLimitBannerText("About 402 kcal — mostly the rice.", "", NOW), null);
+  assert.equal(classifyLimitBannerText("Keep it to a 45-minute session limit today.", "", NOW), null);
+  assert.equal(classifyLimitBannerText("Billing the clinic is separate.", "", NOW), null);
+  // A real banner still classifies.
+  assert.equal(classifyLimitBannerText("You've hit your weekly limit · resets 8am", "", NOW).state, "quota_exhausted");
+  assert.equal(classifyLimitBannerText("Session limit reached · resets 2:40 PM", "", NOW).state, "quota_exhausted");
+  assert.equal(classifyLimitBannerText("402 Payment Required", "", NOW).state, "payment_required");
+});
+
 test("antigravity's headless permission refusal is op-level, never a provider hold", () => {
   const f = classifyAgentFailure("antigravity", { code: 0, raw: "", stderr: AGY_STDERR }, NOW);
   assert.equal(f.state, "permission_denied");
@@ -206,7 +243,11 @@ test("hold policy: quota waits for the provider's own reset, throttling backs of
   const rate = { state: "rate_limited", window: null, resets_at: null, detail: "x" };
   assert.equal(holdUntil(rate, 0, NOW), new Date(NOW.getTime() + 5 * 60000).toISOString());
   assert.equal(holdUntil(rate, 2, NOW), new Date(NOW.getTime() + 20 * 60000).toISOString());
-  assert.equal(holdUntil(rate, 40, NOW), new Date(NOW.getTime() + 3600000).toISOString());
+  // A throttle that keeps repeating with no answer in between is not a burst: the
+  // ladder keeps doubling past the hour (live, codex answered 429 for weeks) to 6 h.
+  assert.equal(holdUntil(rate, 4, NOW), new Date(NOW.getTime() + 80 * 60000).toISOString());
+  assert.equal(holdUntil(rate, 6, NOW), new Date(NOW.getTime() + 320 * 60000).toISOString());
+  assert.equal(holdUntil(rate, 40, NOW), new Date(NOW.getTime() + 6 * 3600000).toISOString());
 
   assert.equal(
     holdUntil({ state: "payment_required", resets_at: null, detail: "x" }, 0, NOW),
@@ -386,14 +427,76 @@ test("the rotation learns a limit once, then routes around it WITHOUT spawning i
     assert.ok(skipped.availability.hold_until);
   }));
 
-test("a held provider is still probed when it is the only option — a hold is a prediction", () =>
+test("a held provider is never spawned while held: all-held fails FAST, and it is probed again once the hold lapses", () =>
   withFixtureAgents(async ({ spawns }) => {
     wireRepoSink();
+    // The first failure of a holding class is what teaches the hold.
     await assert.rejects(() => runAgentWithFallback(["limited"], "hi", { timeoutMs: 8000, op: "day_read" }));
     assert.equal(spawns(), 1);
+    assert.equal(repo.getAgentAvailability("limited").state, "quota_exhausted");
+
+    // Everything held → no spawn at all, and the same AgentFallbackError ledger the
+    // exhausted rotation has always thrown, naming why and until when.
+    const started = Date.now();
+    await assert.rejects(
+      () => runAgentWithFallback(["limited"], "hi", { timeoutMs: 8000, op: "day_read" }),
+      (err) => {
+        assert.equal(err.name, "AgentFallbackError");
+        assert.match(err.message, /limited: (weekly|usage) limit, resets /);
+        assert.equal(err.tried.length, 1);
+        assert.equal(err.tried[0].availability.state, "quota_exhausted");
+        assert.ok(err.tried[0].availability.hold_until, "the ledger says when it is expected back");
+        return true;
+      }
+    );
+    assert.equal(spawns(), 1, "a held provider is not probed just because it is the last option");
+    assert.ok(Date.now() - started < 2000, "all-held fails fast");
+
+    // Past its hold the provider is an ordinary candidate again: the next op probes it.
+    const lapsed = new Date(Date.now() - 3 * 86_400_000);
+    repo.clearAgentAvailability("limited");
+    repo.noteAgentFailure(
+      "limited",
+      { state: "rate_limited", window: null, resets_at: null, detail: "busy" },
+      "day_read",
+      lapsed
+    );
+    assert.equal(repo.getAgentAvailability("limited"), null, "the fixture hold has lapsed");
     await assert.rejects(() => runAgentWithFallback(["limited"], "hi", { timeoutMs: 8000, op: "day_read" }));
-    assert.equal(spawns(), 2, "with nothing else to try, the held provider is probed anyway");
+    assert.equal(spawns(), 2, "a lapsed hold is re-probed");
   }));
+
+test("a hold a concurrent run learns mid-rotation is honoured before the spawn", () =>
+  withFixtureAgents(async ({ spawns }) => {
+    // (limited_codex: no earlier test has failed it, so its process-local breaker is shut.)
+    // At the rotation's start nothing is held; by the time `limited_codex` comes up, a
+    // parallel run (the conference's seats start together) has recorded its limit.
+    const hold = { state: "quota_exhausted", detail: "x", hold_until: "2099-01-01T00:00:00.000Z", resets_at: null };
+    let reads = 0;
+    setAgentAvailabilitySink({
+      held: (name) => (name === "limited_codex" && ++reads > 1 ? hold : null),
+      noteFailure: () => {},
+      clear: () => {},
+    });
+    const r = await runAgentWithFallback(["limited_codex", "healthy"], "hi", {
+      timeoutMs: 8000,
+      op: "case_conference",
+    });
+    assert.equal(r.agent, "healthy");
+    assert.equal(spawns(), 0, "the newly held provider was skipped, not spawned");
+    assert.equal(r.tried.find((t) => t.agent === "limited_codex")?.availability?.state, "quota_exhausted");
+  }));
+
+test("splitHeldProviders keeps the order and treats an unreadable hold as no hold", () => {
+  const held = { state: "rate_limited" };
+  const out = splitHeldProviders(["a", "b", "c", "d"], (n) => {
+    if (n === "b") return held;
+    if (n === "d") throw new Error("db gone");
+    return null;
+  });
+  assert.deepEqual(out.open, ["a", "c", "d"]);
+  assert.deepEqual(out.held, [{ agent: "b", hold: held }]);
+});
 
 test("a success clears the hold, and an exhausted rotation files ONE taxonomy-only warning", () =>
   withFixtureAgents(async () => {
@@ -420,15 +523,18 @@ test("a success clears the hold, and an exhausted rotation files ONE taxonomy-on
       message: "no provider available (quota_exhausted)",
     });
 
+    // A row whose hold has lapsed: the provider is probed again, and its answer
+    // clears the row outright (streak and all).
     repo.noteAgentFailure(
       "healthy",
       { state: "rate_limited", window: null, resets_at: null, detail: "busy" },
-      "insight"
+      "insight",
+      new Date(Date.now() - 3 * 86_400_000)
     );
-    assert.ok(repo.getAgentAvailability("healthy"));
+    assert.ok(repo.readAgentAvailabilityRow("healthy"));
     const ok = await runAgentWithFallback(["healthy"], "hi", { timeoutMs: 8000, op: "insight" });
     assert.equal(ok.agent, "healthy");
-    assert.equal(repo.getAgentAvailability("healthy"), null, "a success is proof the provider answers");
+    assert.equal(repo.readAgentAvailabilityRow("healthy"), null, "a success is proof the provider answers");
   }));
 
 test("the rotation-exhausted warning is filed against the dominant state", () => {

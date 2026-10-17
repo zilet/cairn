@@ -184,6 +184,18 @@ function feltStrongWithNoBrake(
   return active.includes("session_quality") && !active.includes("felt_fatigue");
 }
 
+// The load grade of work ALREADY DONE today that the easy-descriptor guard checks
+// against, or null when nothing completed today is moderate/hard. Shared by the guard
+// and the prompt's reply checks so the two can never disagree about which days apply.
+function checkedCompletedLoad(
+  signals: Record<string, any> | null | undefined,
+  kind?: unknown
+): "moderate" | "hard" | null {
+  const load = String(signals?.today_load ?? "").toLowerCase();
+  if (load !== "moderate" && load !== "hard") return null;
+  return signals?.trained_today === true || kind === "done" ? load : null;
+}
+
 // Structured, deliberately conservative semantic guard for the one contradiction
 // that materially changes the athlete's read: a completed moderate/hard effort
 // described as easy. It does NOT reject forward-looking recovery advice such as
@@ -202,10 +214,8 @@ export function dayReadProseConsistencyIssue(
     .map((sentence) => sentence.trim())
     .filter(Boolean);
 
-  const classifiedLoad = String(signals?.today_load ?? "").toLowerCase();
-  const loadIsChecked =
-    (classifiedLoad === "moderate" || classifiedLoad === "hard") &&
-    (signals?.trained_today === true || read?.kind === "done");
+  const classifiedLoad = checkedCompletedLoad(signals, read?.kind);
+  const loadIsChecked = classifiedLoad != null;
   const qualityIsChecked = feltStrongWithNoBrake(signals, trainingSignals);
   const recoveryIsUnread =
     signals?.recovery_unread === "nothing_on_record" || signals?.recovery_unread === "nothing_recent";
@@ -599,21 +609,22 @@ export function dayReadAgentRejection(
   // held to nothing, so `{headline:"Readiness 38/100 — rest.", why:"…you must not
   // train today."}` validated and rendered verbatim as the Brief's headline and `why`.
   // The prompt already forbids both, twice, so a violation is model non-compliance:
-  // rejecting here is exactly right, because acceptParsed retries and the fallback
-  // ladder can still land a compliant sentence (and the deterministic floor, which
-  // passes this predicate by construction, is the worst case).
+  // rejecting here is exactly right, because the same agent gets one repair that names
+  // the broken rule (dayReadRepairHint) and the deterministic floor, which passes this
+  // predicate by construction, is the worst case.
   const headlineRule = violatesReadingGrammar(value.headline);
   if (headlineRule) return `grammar:${headlineRule}:headline`;
   const whyRule = violatesReadingGrammar(value.why);
   if (whyRule) return `grammar:${whyRule}:why`;
-  if (dayReadProseConsistencyIssue(value, baseline?.signals, trainingSignals)) return "prose_inconsistent";
+  const proseIssue = dayReadProseConsistencyIssue(value, baseline?.signals, trainingSignals);
+  if (proseIssue) return `prose_inconsistent:${proseIssue.code}`;
   // Whether meaningful training is already DONE is a server-owned fact, not a
-  // nuance the prose layer may reinterpret. Reject a mismatch before fallback
-  // stops so the same agent can repair it or the next healthy agent can answer.
+  // nuance the prose layer may reinterpret. Reject a mismatch so the same agent can
+  // repair it, or the floor answers.
   if (baseline?.kind === "done") return value.kind === "done" ? null : "kind_vs_done_baseline";
   if (baseline?.kind != null && value.kind === "done") return "done_without_baseline";
   // Quieter than a train baseline only on a NAMED, FRESH brake — rejected here, like
-  // the grammar, so acceptParsed can retry and the next agent can answer compliantly.
+  // the grammar, so the repair can name the citable brakes (or keep the day training).
   if (!opts.override && agentCautionLacksBrake(value, baseline)) return "caution_without_brake";
   return null;
 }
@@ -628,6 +639,125 @@ export function isValidDayReadAgentResult(
   const rejection = dayReadAgentRejection(value, baseline, trainingSignals, opts);
   if (rejection) noteContractRejection(rejection);
   return rejection === null;
+}
+
+// ---------- a content rejection is repaired ONCE, by the same agent, by name ----------
+// Live (2026-10), a fifth of day_read runs ended in the floor, and the misses were
+// sequential across every CLI on the same prompt: agy, grok and claude each refused
+// as `invalid_contract`, then codex at its limit — the same reply contract broken four
+// times in ~50 s, which is a prompt/contract mismatch, not a flaky provider. So the
+// read now (1) states the checks that apply to TODAY up front (dayReadReplyChecks),
+// (2) on a miss asks the SAME agent once more naming the check it broke
+// (dayReadRepairHint), and (3) then serves the deterministic floor instead of handing
+// the next CLI the same prompt (onContractRejection: "stop").
+
+// The grammar in words. Each banned word is the reading grammar's own
+// (src/repo/day-read-grammar.ts) — test/dayReadRepair.test.js holds every one of them
+// to violatesReadingGrammar, so this sentence cannot promise a rule the server lacks.
+export const DAY_READ_GRAMMAR_WORDS = [
+  "baseline",
+  "posture",
+  "policy",
+  "override",
+  "directive",
+  "boundary",
+  "fingerprint",
+  "deterministic",
+] as const;
+
+const GRAMMAR_RULE_WORDS: Record<string, string> = {
+  engineering_prose: `used an internal word or a field name. No underscores or snake_case names, and none of: ${DAY_READ_GRAMMAR_WORDS.join(", ")}. Say it in a friend's plain words.`,
+  device_jargon: 'used device jargon ("readiness signal", "acute warning"). Say what it means in plain words.',
+  score: "gave a score. No number followed by %, /100, points or score; describe the state in words.",
+  gate: 'read as an order ("you must", "do not train", "forbidden"). Offer it as a suggestion they can take or leave.',
+};
+
+const PROSE_ISSUE_WORDS: Record<string, string> = {
+  completed_load_understated:
+    "described work already done today as easy or light, but it was a real loading session. Credit it as the work it was.",
+  felt_quality_understated:
+    "said recent work felt heavy, flat or sluggish, but their own latest rating says it came back strong. Do not contradict it.",
+  recovery_claimed_unread:
+    "claimed their recovery looks fine, but nothing current on record reads it. Say nothing about how recovered they are.",
+};
+
+/**
+ * The words the contract repair adds for one day_read rejection code
+ * (dayReadAgentRejection), or null for a code it has nothing specific to say about.
+ * `baseline` lets the brake repair list the brakes that can actually be cited today.
+ */
+export function dayReadRepairHint(
+  reason: string,
+  baseline?: { kind?: unknown; signals?: Record<string, any> } | null
+): string | null {
+  const code = String(reason ?? "");
+  const [head, rule, field] = code.split(":");
+  const where = field === "headline" ? '"headline"' : '"why"';
+  if (head === "grammar" && rule && GRAMMAR_RULE_WORDS[rule]) return `Your ${where} ${GRAMMAR_RULE_WORDS[rule]}`;
+  if (head === "prose_inconsistent") {
+    const words = rule ? PROSE_ISSUE_WORDS[rule] : null;
+    return words ? `Your sentence ${words}` : "Your sentence contradicted a fact the server already knows about today.";
+  }
+  if (head === "html_entity")
+    return `Your ${rule === "focus" ? '"focus"' : rule === "headline" ? '"headline"' : '"why"'} carried an HTML entity (like &amp;). Write plain characters.`;
+  switch (head) {
+    case "caution_without_brake": {
+      const brakes = baseline ? dayReadCitableBrakes(baseline as any) : [];
+      return brakes.length
+        ? `You read a training day as easy or rest without naming the brake. Either keep "kind":"train" with "brake":null, or set "brake" to exactly one of: ${brakes.join(", ")}.`
+        : 'Nothing fresh is braking today, so this stays a training day: "kind":"train", "brake":null. Voice any caution as a caveat inside the session.';
+    }
+    case "kind_vs_done_baseline":
+      return 'Real training is already logged today, so "kind" must be "done", with "focus":null and "est_minutes":null.';
+    case "done_without_baseline":
+      return 'Nothing logged today counts as the day\'s training yet, so "kind" cannot be "done". Use "train", "easy" or "rest".';
+    case "coach_read_as_final":
+    case "coach_read_malformed":
+      return 'Either return the final read now ("kind" one of train, easy, rest, done, with a "why"), or request a read in exactly the coach_read shape shown, with a tool from the list.';
+    case "missing_field":
+    case "bad_field":
+    case "schema_mismatch":
+    case "bad_shape":
+      return '"kind" must be one of train, easy, rest, done; "why" must be one non-empty plain sentence; "est_minutes" a number or null.';
+    default:
+      return null;
+  }
+}
+
+/**
+ * The checks the server will run on THIS day's reply, said up front so a compliant
+ * answer is the easy path. Only the checks that can fire today are listed: the done
+ * rule follows the baseline, the brake rule appears on an unsteered train day, and
+ * each prose guard only when its own trigger is live (the same helpers the guards use).
+ */
+export function dayReadReplyChecks(
+  baseline: { kind?: unknown; signals?: Record<string, any> } | null | undefined,
+  opts: { override?: boolean } = {}
+): string {
+  const signals = baseline?.signals ?? {};
+  const lines: string[] = [
+    `- "headline" and "why": plain friend's words. No underscores or snake_case names; none of the words ${DAY_READ_GRAMMAR_WORDS.join(", ")}, "readiness signal" or "acute warning"; no number followed by %, /100, points or score; never "you must", "do not train" or "forbidden"; no HTML entities.`,
+    baseline?.kind === "done"
+      ? '- "kind" is "done": real training is already logged today.'
+      : '- "kind" is never "done" today: nothing logged yet counts as the day\'s training.',
+  ];
+  if (baseline?.kind === "train" && !opts.override) {
+    const brakes = dayReadCitableBrakes(baseline as any);
+    lines.push(
+      brakes.length
+        ? `- Reading this training day easy or rest needs "brake" set to one of: ${brakes.join(", ")}. Otherwise keep "kind":"train", "brake":null.`
+        : '- This stays a training day ("kind":"train", "brake":null): nothing fresh is braking it.'
+    );
+  }
+  const load = checkedCompletedLoad(signals, baseline?.kind);
+  if (load) lines.push(`- Work already done today graded ${load}: never call it easy, light or gentle.`);
+  if (feltStrongWithNoBrake(signals))
+    lines.push("- Their latest rated session came back strong: never say recent work felt heavy, flat or sluggish.");
+  if (signals.recovery_unread === "nothing_on_record" || signals.recovery_unread === "nothing_recent")
+    lines.push(
+      "- Nothing current on record reads their recovery: never say recovery looks fine or that they are recovered."
+    );
+  return `\n\nREPLY CHECKS (the server runs these on your JSON; a reply that fails one is thrown away):\n${lines.join("\n")}`;
 }
 
 function agentIssueFor(error: unknown): "invalid_response" | "unreachable" {
@@ -730,7 +860,9 @@ export async function computeDayRead(
       cached && !cached.curated && !cached.override && typeof cached.why === "string" && cached.why.trim()
         ? { headline: cached.headline ?? null, why: cached.why }
         : null;
-    const prompt = buildDayReadPrompt(undefined, { override, date, baseline, currentWording });
+    const prompt =
+      buildDayReadPrompt(undefined, { override, date, baseline, currentWording }) +
+      dayReadReplyChecks(baseline, { override: steered });
     // Interactive (the Brief is on the morning-open path) → the short leash, which
     // the bounded-read loop treats as the TOTAL deadline across all query rounds, so
     // the timeout envelope is unchanged. An agent that just answers makes exactly one
@@ -752,6 +884,10 @@ export async function computeDayRead(
       signal,
       acceptParsed: (parsed) =>
         isValidDayReadAgentResult(decodeDayReadAgentProse(parsed), baseline, undefined, { override: steered }),
+      // A refused reply gets ONE repair from the same agent naming the broken check,
+      // then the floor below — never the next CLI with the same prompt.
+      contractRepairHint: (reason) => dayReadRepairHint(reason, baseline),
+      onContractRejection: "stop",
       schema: DAY_READ_SCHEMA,
     });
     // Decoded HERE, once, before both the predicate and the write — so what is

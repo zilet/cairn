@@ -46,6 +46,24 @@ function painTargetForWindow(painSessions: number, windowDays = FEEDBACK_WINDOW_
   return Math.max(0, Math.round(scaled));
 }
 
+// ---------- A PREDICTION MUST BE ABLE TO REACH ITS OWN MINIMUM (2026-10-17) ----------
+// Each writer below used to gate on "the athlete logs this at all" over the 28-day
+// lookback — two rated sessions, one loaded set — and then ask its evaluator for a
+// MINIMUM inside a shorter window: two rated sessions in 14 days, three loaded exposures
+// in 21. An athlete exactly at the gate is expected to supply half of that minimum, so
+// the prediction comes back "Only 1 session was available; 2 were required" and stays
+// inconclusive for good (the production ledger: 93 of 101 training_target verdicts
+// inconclusive). The gate is now the minimum itself, expressed at the athlete's own
+// trailing rate: the count the window can be EXPECTED to hold must reach it. Below that,
+// nothing is written — a prediction that cannot conclude is noise, not caution.
+function expectedInWindow(lookbackCount: number, windowDays: number, lookbackDays = LOOKBACK_DAYS): number {
+  return Math.max(0, lookbackCount) * (windowDays / lookbackDays);
+}
+
+const FEEDBACK_MIN_SESSIONS = 2;
+const LIFT_HOLD_WINDOW_DAYS = 21;
+const LIFT_HOLD_MIN_EXPOSURES = 3;
+
 function rounded(value: number, digits = 2): number {
   const factor = 10 ** digits;
   return Math.round(value * factor) / factor;
@@ -120,7 +138,10 @@ export function buildTrainingFeedbackExpectations(
 ): ProposedExpectation[] {
   const windowEnd = addDaysISO(asOf, FEEDBACK_WINDOW_DAYS) ?? asOf;
   const out: ProposedExpectation[] = [];
-  if (baseline.rated_sessions >= 2 && baseline.average_rating != null) {
+  if (
+    expectedInWindow(baseline.rated_sessions, FEEDBACK_WINDOW_DAYS) >= FEEDBACK_MIN_SESSIONS &&
+    baseline.average_rating != null
+  ) {
     out.push({
       metric_key: "session_performance_feedback",
       subject_key: null,
@@ -135,14 +156,14 @@ export function buildTrainingFeedbackExpectations(
       target: { value: rounded(Math.max(1, baseline.average_rating - 0.5)) },
       window_start: asOf,
       window_end: windowEnd,
-      minimum_data: { sessions: 2 },
+      minimum_data: { sessions: FEEDBACK_MIN_SESSIONS },
       confounder_policy: "exclude_context_events",
       confidence: "tentative",
       evaluator: "session_feedback",
       evaluator_version: "session-feedback-guard-v1",
     });
   }
-  if (baseline.feedback_sessions >= 2) {
+  if (expectedInWindow(baseline.feedback_sessions, FEEDBACK_WINDOW_DAYS) >= FEEDBACK_MIN_SESSIONS) {
     out.push({
       metric_key: "joint_pain_or_soreness",
       subject_key: null,
@@ -159,7 +180,7 @@ export function buildTrainingFeedbackExpectations(
       target: { max: painTargetForWindow(baseline.pain_sessions) },
       window_start: asOf,
       window_end: windowEnd,
-      minimum_data: { feedback_entries: 2 },
+      minimum_data: { feedback_entries: FEEDBACK_MIN_SESSIONS },
       confounder_policy: "exclude_context_events",
       confidence: "tentative",
       evaluator: "symptom_load",
@@ -195,6 +216,20 @@ export function recentEst1rm(exerciseId: number, asOf: string, lookbackDays = LO
     best = Math.max(best, weight * (1 + reps / 30));
   }
   return best > 0 ? rounded(best, 1) : null;
+}
+
+// Distinct days in the lookback with a LOADED set of this lift — the exposure unit the
+// est-1RM evaluator counts (one best set per day).
+function loadedExposureDays(exerciseId: number, asOf: string, lookbackDays = LOOKBACK_DAYS): number {
+  const end = addDaysISO(asOf, -1) ?? asOf;
+  const start = addDaysISO(asOf, -Math.max(1, Math.trunc(lookbackDays))) ?? asOf;
+  const row = db
+    .prepare(
+      `SELECT COUNT(DISTINCT s.date) AS n FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+       WHERE ls.exercise_id = ? AND s.date BETWEEN ? AND ? AND ls.weight > 0 AND ls.reps > 0`
+    )
+    .get(exerciseId, start, end) as { n?: number } | undefined;
+  return Number(row?.n ?? 0);
 }
 
 export interface LiftProgressionSubject {
@@ -242,6 +277,10 @@ export function liftProgressionSubjects(exercises: string[], asOf: string, limit
     // No loaded history at all means nothing to predict about, whatever the
     // calibration ladder remembers — the data-presence gate is unchanged.
     if (estimated == null) continue;
+    // …and a lift trained too rarely to reach the hold's own minimum inside its window
+    // carries no prediction (see A PREDICTION MUST BE ABLE TO REACH ITS OWN MINIMUM).
+    if (expectedInWindow(loadedExposureDays(Number(row.id), asOf), LIFT_HOLD_WINDOW_DAYS) < LIFT_HOLD_MIN_EXPOSURES)
+      continue;
     const verified = attemptedAnchor(String(row.name), asOf);
     out.push({
       exercise: String(row.name),
@@ -281,7 +320,7 @@ export function buildLiftProgressionExpectations(
   subjects: LiftProgressionSubject[],
   asOf: string
 ): ProposedExpectation[] {
-  const windowEnd = addDaysISO(asOf, 21) ?? asOf;
+  const windowEnd = addDaysISO(asOf, LIFT_HOLD_WINDOW_DAYS) ?? asOf;
   return subjects.map((subject) => ({
     metric_key: "exercise_est_1rm_trend",
     subject_key: subject.exercise,
@@ -295,7 +334,7 @@ export function buildLiftProgressionExpectations(
     target: { value: rounded(subject.baseline_est_1rm * 0.97, 1) },
     window_start: asOf,
     window_end: windowEnd,
-    minimum_data: { exposures: 3 },
+    minimum_data: { exposures: LIFT_HOLD_MIN_EXPOSURES },
     confounder_policy: "require_exposure",
     confidence: "tentative",
     evaluator: "exercise_est_1rm",

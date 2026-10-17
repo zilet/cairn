@@ -332,13 +332,3 @@ export function genericFigureFor(name: string): { pattern: StarterPattern; file:
   const general = starterPatternFile("general");
   return pattern !== "general" && fileExists(general) ? { pattern: "general", file: general } : null;
 }
-
-/** How many pack figures are actually built on disk (Settings honesty, the builder's summary). */
-export function starterPackCounts(): { exercises: number; built: number; patterns: number } {
-  const p = pack();
-  return {
-    exercises: p.exercises.length,
-    built: p.exercises.filter((entry) => fileExists(starterExerciseFile(entry))).length,
-    patterns: STARTER_PATTERNS.filter((id) => fileExists(starterPatternFile(id))).length,
-  };
-}

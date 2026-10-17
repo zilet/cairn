@@ -169,7 +169,7 @@ const SUPPLEMENT_NOUN =
 const FOOD_ITEM =
   /\b(?:pizza|slice(?:s)?|sandwich|tacos?|banana|oatmeal|yogurt|berries|chicken|rice|broccoli|salmon|potatoes|asparagus|latte|cookie|eggs?|pasta|smoothie)\b/i;
 const CAPTURE_VERB = /\b(?:log|track|record|add|save|enter)\b/i;
-const AMENDMENT_VERB = /\b(?:add|include|also|plus)\b/i;
+const AMENDMENT_VERB = /\b(?:add(?:ed|ing)?|include[ds]?|also|plus)\b|\b\d+(?:[.,]\d+)?\s*(?:g|gr|grams?|ml|oz|slices?|pieces?)?\s+more\b/i;
 // The other way people add to the meal they just logged: no verb at all, just "oh
 // and …", "… on the plate", "… with it", "… too". Only read as an amendment right
 // after a food capture (the branch below), never on its own.
@@ -196,6 +196,88 @@ export function chatMessageIsNarrative(message: unknown): boolean {
   // An explicit "Log food: …" paste (the Fuel composer's frame) is long because the meal is.
   if (!/^log\b/i.test(text) && text.split(/\s+/).length > NARRATIVE_MAX_WORDS) return true;
   return NARRATIVE_CUES.test(text);
+}
+
+// ---- What a "had/ate" sentence is actually about -------------------------------------
+// A bare "had"/"ate" is not a food log: "I had a great run", "had a rough night, only
+// slept 5 hours" and "I had no lunch, was in meetings" all carry the verb. The natural-
+// language capture and the receipt-only lane (no agent reads the sentence) both want a
+// food-shaped OBJECT, and a sentence that needs the previous turn to be understood ("I had
+// 75g of it", "no, not the snack, this is lunch") belongs to the agent, which can see it.
+const MEAL_LABEL = /\b(?:breakfast|brunch|lunch|dinner|supper|snack|meal)\b/i;
+const CONCRETE_FOOD =
+  /\b(?:eggs?|toast|bread|bagels?|oats?|oatmeal|porridge|cereal|granola|milk|cheese|butter|avocado|apples?|pears?|peach(?:es)?|oranges?|grapes?|strawberr(?:y|ies)|blueberr(?:y|ies)|raspberr(?:y|ies)|fruits?|watermelon|melon|mango|pineapple|kiwi|salad|soup|steaks?|beef|pork|bacon|sausages?|ham|turkey|tuna|shrimp|prawns?|fish|wings?|burgers?|fries|chips|noodles?|quinoa|beans?|lentils?|tofu|hummus|nuts?|almonds?|peanuts?|jam|honey|sugar|chocolate|lindt|candy|ice\s*cream|cake|bars?|gel|whey|juice|tea|water|beer|wine|soda|cola|kefir|skyr|cottage|wraps?|burritos?|sushi|curry|stew|sauce|dressing|pancakes?|waffles?|muffins?|croissants?|donuts?|doughnuts?|pie|ribs|lamb|sprouts|spinach|carrots?|tomato(?:es)?|cucumbers?|peppers?|onions?|mushrooms?|corn|vegetables?|veggies|treat|sweets?|crackers?|popcorn|pretzels?|cookies?|brownies?|espresso|latte|cappuccino|flat\s+white|americano|matcha|creatine|whey)\b/i;
+// Food-sized units only: kg/lb/l read as body weight or distance, never as a meal.
+const QUANTITY_UNIT =
+  /\b\d+(?:[.,/]\d+)?\s*(?:g|gr|grams?|ml|oz|kcal|cals?|calories|tbsp|tsp|cups?|slices?|pieces?|scoops?|servings?|bowls?)\b/i;
+// "I had a great run", "had a rough night", "had a call": the object is not food.
+const NON_FOOD_OBJECT =
+  /\b(?:had|have)\s+(?:(?:a|an|the|my|some|one|two|three|four|five|six|several|a\s+few|a\s+couple\s+of|\d+)\s+)?(?:(?:great|good|bad|rough|long|hard|tough|nice|fun|easy|terrible|awful|short|busy|solid|decent|weird|quick|slow|back[- ]to[- ]back)\s+)*(?:run|ride|walk|hike|swim|workout|session|night|day|week|weekend|time|sleep|nap|meeting|call|chat|talk|class|review|interview|appointment|headache|cold|fever|cramp|pain|idea|question|problem|feeling|thought|look|go|trouble|stomach|issue|injury|surgery|massage|shower|bath|physio|lift|race|game|match|moment|chance|laugh)(?:s|es)?\b|\bhad\s+a\s+bit\s+of\s+a\b|\bonly\s+slept\b|\bslept\b/i;
+// Eating NOTHING is not eating: "had no lunch", "had nothing for breakfast", "didn't eat",
+// "skipped lunch", "no breakfast". The negation is read before anything else.
+const INTAKE_NEGATED =
+  /\b(?:had|ate|eaten|have|eat|eating|having)\s+(?:absolutely\s+|really\s+)?(?:no|nothing|none|zero)\b|\b(?:didn'?t|did\s+not|haven'?t|have\s+not|hasn'?t|never|won'?t|not)\s+(?:yet\s+)?(?:have|had|eat|ate|eaten)\b|\bskipp?(?:ed|ing)\b|\bfasted\b|\bno\s+(?:breakfast|brunch|lunch|dinner|supper|snack|food|meal)\b|\bwithout\s+(?:breakfast|lunch|dinner|eating)\b/i;
+// Words that point at something said before ("it", "that", "the snack", "my usual").
+const PRIOR_REFERENT =
+  /\b(?:it|that|this|these|those|them|same\s+as|(?:my|the)\s+usual|usual|the\s+(?:snack|meal|breakfast|lunch|dinner|rest|other|first|last|previous))\b/i;
+const PRIOR_LEAD =
+  /^\s*(?:(?:oh|ok|okay|no|nope|wait|actually)[\s,.!]+)*(?:not\s+the\b|this\s+(?:is|was)\b|that\s+(?:is|was)\b|that'?s\b|it\s+(?:is|was)\b|it'?s\b|the\s+(?:snack|meal|breakfast|lunch|dinner)\s+(?:is|was)\b)/i;
+const MEAL_HEADING = /\b(breakfast|brunch|lunch|dinner|supper|snack)\s*[:\-–—]/gi;
+
+// Negation belongs to its CLAUSE: "skipped breakfast but had eggs and toast" skipped one
+// meal and ate another. Clauses split on but/and/then/so, commas, semicolons, full stops
+// and dashes.
+const CLAUSE_SPLIT = /\b(?:but|and|then|so|though|however)\b|[,;.!—–]|\s-\s/i;
+function clauses(message: string): string[] {
+  return message.split(CLAUSE_SPLIT).map((c) => c.trim()).filter(Boolean);
+}
+
+/** Some clause says it did NOT eat ("had no lunch", "skipped breakfast", "didn't eat"). */
+export function foodIntakeNegated(message: unknown): boolean {
+  return INTAKE_NEGATED.test(String(message ?? ""));
+}
+
+/** A food noun, a quantity with a unit, or a meal label: something food-shaped to log. */
+export function hasFoodEvidence(message: unknown): boolean {
+  const text = String(message ?? "");
+  return CONCRETE_FOOD.test(text) || FOOD_ITEM.test(text) || FOOD_NOUN.test(text) || QUANTITY_UNIT.test(text) || MEAL_LABEL.test(text);
+}
+
+/** The message names a food of its own (not just a meal label, a quantity or a pronoun). */
+function namesConcreteFood(text: string): boolean {
+  return CONCRETE_FOOD.test(text) || FOOD_ITEM.test(text);
+}
+
+/**
+ * The sentence cannot be understood without the turn before it: it opens on a referent
+ * ("This is lunch", "No, not the snack"), or it points at something ("75g of it", "my
+ * usual", "same as yesterday") while naming no food of its own.
+ */
+export function messageNeedsPriorTurn(message: unknown): boolean {
+  const text = String(message ?? "").trim();
+  if (!text) return false;
+  if (PRIOR_LEAD.test(text)) return true;
+  return PRIOR_REFERENT.test(text) && !namesConcreteFood(text);
+}
+
+/** How many DIFFERENT meals are headed in one message ("morning snack: … breakfast: …"). */
+export function mealHeadingCount(message: unknown): number {
+  const labels = new Set<string>();
+  for (const m of String(message ?? "").matchAll(MEAL_HEADING)) labels.add(m[1].toLowerCase());
+  return labels.size;
+}
+
+// A "had/ate" sentence that reads as eating: some NON-negated clause has the verb and is
+// either food-shaped or a short "had a/the/my <something>" whose object is not obviously a
+// run, a night or a call. A bare number ("had two") is never enough without a food noun or a
+// food-sized quantity, so "I had two meetings" is not a meal.
+function readsAsIntake(message: string): boolean {
+  return clauses(message).some((clause) => {
+    if (!/\b(?:ate|drank|had)\b/i.test(clause) || INTAKE_NEGATED.test(clause)) return false;
+    if (hasFoodEvidence(clause)) return true;
+    if (NON_FOOD_OBJECT.test(clause)) return false;
+    return /\b(?:ate|drank|had)\s+(?:a|an|some|the|my|one)\b/i.test(clause);
+  });
 }
 
 function addReason(reasons: Set<ChatRoutingReasonCode>, reason: ChatRoutingReasonCode): void {
@@ -231,13 +313,27 @@ function captureReasons(
   const hasCorrectionVerb = CORRECTION_VERB.test(message);
 
   if ((hasCaptureVerb || hasCorrectionVerb) && (FOOD_NOUN.test(message) || FOOD_ITEM.test(message))) addReason(reasons, "explicit_food_log");
+  // "Log 100g watermelon": an explicit log verb with a food-sized quantity or a food noun
+  // outside the short lists above is still a food log (never when another domain owns the verb).
+  if (
+    hasCaptureVerb &&
+    (CONCRETE_FOOD.test(message) || QUANTITY_UNIT.test(message)) &&
+    !ACTIVITY_NOUN.test(message) &&
+    !WEIGHT_NOUN.test(message) &&
+    !SUPPLEMENT_NOUN.test(message)
+  ) {
+    addReason(reasons, "explicit_food_log");
+  }
+  // Two headed meals in one message ("Breakfast - …  Snack - …") are a food log the agent
+  // can split into two entries.
+  if (mealHeadingCount(message) > 1 && hasFoodEvidence(message)) addReason(reasons, "explicit_food_log");
   if (hasCaptureVerb && ACTIVITY_NOUN.test(message)) addReason(reasons, "explicit_activity_log");
   if (hasCaptureVerb && WEIGHT_NOUN.test(message)) addReason(reasons, "explicit_weight_log");
   if (hasCaptureVerb && SUPPLEMENT_NOUN.test(message)) addReason(reasons, "explicit_supplement_log");
 
   // Natural-language capture stays intentionally narrow: a concrete completed
   // event is eligible, while a general question about food/training is not.
-  if (/\b(?:i\s+)?(?:ate|drank|had)\b/i.test(message) || /\b(?:breakfast|lunch|dinner)\s*(?:was|:)/i.test(message)) addReason(reasons, "explicit_food_log");
+  if (readsAsIntake(message) || /\b(?:breakfast|lunch|dinner)\s*(?:was|:)/i.test(message)) addReason(reasons, "explicit_food_log");
   if (/\b(?:i\s+)?(?:ran|walked|hiked|swam|rowed|cycled|biked|rode|lifted|worked out|did|finished)\b(?:\s+(?:my\s+)?(?:strength\s+)?(?:workout|training|session))?(?:\s+(?:for\s+)?\d)?/i.test(message) && (ACTIVITY_NOUN.test(message) || /\b(?:swam|ran|walked|hiked|rowed|cycled|biked|rode)\b/i.test(message))) {
     addReason(reasons, "explicit_activity_log");
   }
@@ -262,7 +358,10 @@ function captureReasons(
   // never rides this branch.
   if (
     recentFoodCapture &&
-    (AMENDMENT_VERB.test(message) || ADDITION_PHRASE.test(message) || hasCorrectionVerb) &&
+    (AMENDMENT_VERB.test(message) ||
+      ADDITION_PHRASE.test(message) ||
+      hasCorrectionVerb ||
+      messageNeedsPriorTurn(message)) &&
     !NEW_LOG_VERB.test(message) &&
     !ACTIVITY_NOUN.test(message) &&
     !WEIGHT_NOUN.test(message) &&

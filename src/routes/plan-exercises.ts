@@ -267,7 +267,7 @@ planExercisesRouter.get("/exercise/:name/explanation", (req, res) => {
 
 planExercisesRouter.post("/exercise/:name/explanation", async (req, res) => {
   try {
-    res.json(await explainExercise(req.body?.agent, decodeURIComponent(req.params.name)));
+    res.json(await explainExercise(req.body?.agent, decodeURIComponent(req.params.name), undefined, { serveStale: true }));
   } catch (e: any) {
     res.json({ ok: false, error: e.message });
   }

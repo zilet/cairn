@@ -1,10 +1,10 @@
 import { db } from "../db.js";
-import { plausibleRir } from "../lib/numbers.js";
+import { median, plausibleRir } from "../lib/numbers.js";
 import { emitBrainEvent } from "../brainEvents.js";
 import { detectStrengthCalibration } from "./calibration.js";
 import { reconcileDailySessionSafe } from "./daily-reconciliation.js";
 import { sessionNoteSuggestsFatigue } from "./training-fatigue.js";
-import { localDateISO } from "./shared.js";
+import { localDateISO, localHourFraction } from "./shared.js";
 import {
   isStrengthGarminType,
   listActivities,
@@ -298,6 +298,94 @@ export function updateSessionNotes(sessionId: number, notes: string | null) {
   return getSessionDetail(sessionId);
 }
 
+// A mid-workout aside ("bench felt smooth", "closer grip on the last sets") has
+// nowhere to land unless someone opens the notes field. Chat appends one dated
+// line onto the session that already exists — it never opens a session just to
+// hold a sentence, and a repeat of the same words is a no-op. Pain stays on the
+// symptom report; this writer does not derive one.
+const SESSION_NOTES_MAX = 1000;
+const SESSION_REMARK_MAX = 280;
+
+function remarkStamp(now: Date): string {
+  const date = localDateISO(now);
+  const fraction = localHourFraction(now);
+  let hour = Math.floor(fraction + 1e-6);
+  let minute = Math.round((fraction - hour) * 60);
+  if (minute >= 60) {
+    minute = 0;
+    hour += 1;
+  }
+  hour = Math.min(23, Math.max(0, hour));
+  minute = Math.min(59, Math.max(0, minute));
+  return `${date} ${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+const REMARK_LINE = /^\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2})?\s*[—–-]\s*/;
+
+function remarkBody(line: string): string {
+  return line.replace(/^\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2})?\s*[—–-]\s*/, "").trim();
+}
+
+export function appendSessionRemark(
+  text: string,
+  opts: { date?: string; now?: Date } = {}
+): {
+  ok: true;
+  appended: boolean;
+  reason?: "empty" | "no_session" | "duplicate" | "session_closed" | "notes_full";
+  session_id?: number;
+  notes?: string | null;
+} {
+  const now = opts.now ?? new Date();
+  const clean = String(text ?? "").replace(/\s+/g, " ").trim().slice(0, SESSION_REMARK_MAX);
+  if (!clean) return { ok: true, appended: false, reason: "empty" };
+  const today = localDateISO(now);
+  const requested = typeof opts.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(opts.date) ? opts.date : today;
+  const session = getAuthoritativeSessionRow(requested);
+  if (!session) return { ok: true, appended: false, reason: "no_session" };
+  // An open session can still take a remark. A finished one can too, but only
+  // on today's session — yesterday's wrap-up is already closed.
+  if (session.finished_at != null && String(session.date) !== today) {
+    return {
+      ok: true,
+      appended: false,
+      reason: "session_closed",
+      session_id: session.id,
+      notes: session.notes ?? null,
+    };
+  }
+  const existing = session.notes == null ? "" : String(session.notes);
+  if (existing.split("\n").some((line) => remarkBody(line) === clean)) {
+    return { ok: true, appended: false, reason: "duplicate", session_id: session.id, notes: existing.trim() || null };
+  }
+  const line = `${remarkStamp(now)} — ${clean}`;
+  const parts = existing.trim() ? [...existing.trim().split("\n"), line] : [line];
+  // Make room by retiring the oldest REMARK lines only. A line the athlete typed themselves is never
+  // shifted out to fit an aside: when only theirs is left, the aside is not stored.
+  while (parts.join("\n").length > SESSION_NOTES_MAX) {
+    const oldest = parts.findIndex((l, i) => i < parts.length - 1 && REMARK_LINE.test(l));
+    if (oldest < 0) return { ok: true, appended: false, reason: "notes_full", session_id: session.id, notes: existing.trim() || null };
+    parts.splice(oldest, 1);
+  }
+  const notes = parts.join("\n");
+  db.prepare(`UPDATE sessions SET notes = ? WHERE id = ?`).run(notes, session.id);
+  bumpTrainingDataVersion();
+  if (sessionNoteSuggestsFatigue(clean)) {
+    const date = String(session.date || today);
+    invalidateDayRead(date);
+    emitBrainEvent({
+      kind: "session_feedback",
+      domain: "training",
+      date,
+      entity_id: session.id,
+      subject_key: `session:${session.id}`,
+      reason: "session remark reports performance fatigue",
+      material: true,
+    });
+  }
+  return { ok: true, appended: true, session_id: session.id, notes };
+}
+
 // Optional per-session autoregulation feedback (Phase 3B): 1-tap soreness /
 // performance (clamped 1-5) and a free-text joint/area flag. Only the fields
 // provided are written; the session is created for `date` if it doesn't exist.
@@ -582,6 +670,9 @@ function insertSetByName(
   // is not — stored as absent, never as a number the progression engine would read.
   const storedRir = plausibleRir(input.rir);
   const rirIgnored = input.rir != null && storedRir == null;
+  // Advisory only, computed from the sets already stored. The row below is written
+  // either way — a mistyped load is still the log until the athlete corrects it.
+  const weightCheck = sameSignWeightCheck(Number(ex.id), storedWeight, Number(session.id), date);
   const info = db
     .prepare(
       `INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps, rir, note, duration_sec)
@@ -662,7 +753,60 @@ function insertSetByName(
     pr,
     ...(normalized ? { normalized } : {}),
     ...(rirIgnored ? { rir_ignored: true } : {}),
+    ...(weightCheck ? { weight_check: weightCheck } : {}),
   };
+}
+
+// A logged load more than 60% off the same lift's recent TOP working weight: the
+// median of each prior session's heaviest same-sign set, so warm-ups never move the
+// reference and an ordinary top set is not "heavier than your recent sets". Fewer
+// than four prior sessions with the lift says nothing (a new lift has no median),
+// and only the last ~10 weeks count. Assist and loaded history stay apart: a −30
+// and a +115 are not one distribution (for a negative load the top is the least
+// assist, which is MAX). Never a gate.
+const WEIGHT_CHECK_MIN_SESSIONS = 4;
+const WEIGHT_CHECK_RECENT_SESSIONS = 8;
+const WEIGHT_CHECK_WINDOW_DAYS = 70;
+
+function sameSignWeightCheck(
+  exerciseId: number,
+  storedWeight: number | null,
+  sessionId: number,
+  date: string
+): { recent_median: number; kind: "unusually_high" | "unusually_low" } | null {
+  if (storedWeight == null || !Number.isFinite(storedWeight) || storedWeight === 0) return null;
+  const rows = db
+    .prepare(
+      `SELECT MAX(ls.weight) AS weight
+         FROM logged_sets ls
+         JOIN sessions s ON s.id = ls.session_id
+        WHERE ls.exercise_id = ?
+          AND s.id != ?
+          AND s.date <= ? AND s.date >= date(?, ?)
+          AND ls.weight IS NOT NULL AND ls.weight != 0
+          AND ((? > 0 AND ls.weight > 0) OR (? < 0 AND ls.weight < 0))
+        GROUP BY s.id
+        ORDER BY s.date DESC, s.id DESC
+        LIMIT ?`
+    )
+    .all(
+      exerciseId,
+      sessionId,
+      date,
+      date,
+      `-${WEIGHT_CHECK_WINDOW_DAYS} days`,
+      storedWeight,
+      storedWeight,
+      WEIGHT_CHECK_RECENT_SESSIONS
+    ) as Array<{ weight: number }>;
+  const values = rows.map((row) => Number(row.weight)).filter((w) => Number.isFinite(w) && w !== 0);
+  if (values.length < WEIGHT_CHECK_MIN_SESSIONS) return null;
+  const mid = median(values);
+  if (mid == null || mid === 0) return null;
+  // 3/5 = 0.6, compared in scaled integers so an exact 60% step does not flag
+  // on a binary rounding of 0.6.
+  if (!(Math.abs(storedWeight - mid) * 5 > Math.abs(mid) * 3)) return null;
+  return { recent_median: mid, kind: storedWeight > mid ? "unusually_high" : "unusually_low" };
 }
 
 // `enrich` is set by the surfaces a human logs through (POST /api/sets, the log_set

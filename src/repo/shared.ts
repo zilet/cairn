@@ -233,6 +233,7 @@ export function mealWindowsAhead(
 ): string[] {
   const covered = new Set<string>();
   for (const entry of logged) {
+    if (String(entry?.meal ?? "").trim().toLowerCase() === "snack") continue;
     const byTime = mealLabelForTime(entry?.eaten_at);
     if (byTime) covered.add(byTime);
     const byLabel = mealLabelForTime(approxTimeForMealLabel(entry?.meal));

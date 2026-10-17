@@ -35,6 +35,12 @@ import {
   calendarDoseTolerance,
   type CalendarDoseTolerance,
 } from "./brain/read-adherence.js";
+import {
+  CALIBRATABLE_BRAKE_FIELDS,
+  brakeRetired,
+  calibrationRetiresAll,
+  quietReadCalibration,
+} from "./brain/quiet-read-calibration.js";
 import { getCheckinByDate, getRecoverySummary, latestSleep, trainingSignals } from "./coach.js";
 import { RECOVERY_SAMPLE_FLOOR, recoveryTrendBars } from "./recovery-trend.js";
 import { activeContextEffect, contextEventIsRestTrade, REST_TRADE_META_KEY } from "./context-effect.js";
@@ -81,7 +87,6 @@ import { getProgramState, runVolumeSpikeRead, type MesocycleState } from "./prog
 import { runIntensityDiscipline } from "./run-progression.js";
 import { programBalance } from "./progression.js";
 import { addDaysISO, daysBetweenISO, localDateISO, nowContext } from "./shared.js";
-import { requestMemo } from "./request-memo.js";
 import { coachContextBackstopSignature, registerTrainingCacheClear } from "./training-cache.js";
 import { getTrainingIntent, isStrengthLedIntent } from "./training-intent.js";
 import { listTrainingSymptoms } from "./training-symptoms.js";
@@ -1369,8 +1374,12 @@ export function dayReadCitableBrakes(
   if (RECORD_OPENED_CODES.has(String(baseline.decision?.rule_code ?? ""))) return [];
   const dimensions = baseline.signals?.signal_state?.dimensions;
   if (!dimensions || typeof dimensions !== "object") return [];
+  // A brake the athlete's own record has retired (signals.quiet_read_calibration,
+  // quiet-read-calibration.ts) rides as a caveat on this morning, never a cited brake.
+  const retired: unknown = baseline.signals?.quiet_read_calibration?.retired;
+  const retiredSet = new Set(Array.isArray(retired) ? retired.map(String) : []);
   try {
-    return freshDecidingBrakeFields(dimensions);
+    return freshDecidingBrakeFields(dimensions).filter((field) => !retiredSet.has(field));
   } catch {
     return [];
   }
@@ -2397,6 +2406,10 @@ function computeDayRead(
     return toleranceMemo;
   }
   const decidingBrakeFields: string[] = signalInput(() => freshDecidingBrakeFields(signalState.dimensions), []);
+  // Published flat (machine register): the ledger keeps a depth-bounded copy of the
+  // morning's signals, so the signal state's own evidence never survives into it, and
+  // the per-signal calibration (quiet-read-calibration.ts) keys a quiet morning on this.
+  (signals as any).deciding_brakes = decidingBrakeFields;
   const softBrakesOnly = decidingBrakeFields.every((field) => CALENDAR_SOFT_DOSE_FIELDS.has(field));
   // The FLOOR that keeps the quiet read on a stated day, or null. Every one of these
   // stays exactly as strict as it was: the calendar may dose a soft brake, never this.
@@ -3568,8 +3581,28 @@ function computeDayRead(
         null
       )
     : null;
-  const learnedStep =
-    trainAnyway && !freshStatementHold(d, checkin) ? learnedQuietStep(ruleRead.kind, trainAnyway.weight) : null;
+  // ---- the per-signal calibration (quiet-read-calibration.ts) ----
+  // The same question asked of the SIGNAL under the read: has the athlete outrun this
+  // brake, at no cost, often enough that it no longer predicts a quiet day for him? Asked
+  // only on a morning whose deciding brakes are all soft and no floor holds
+  // (calendarDoseFloor — the same floors the calendar's dose respects), so nothing it says
+  // can reach rest-grade readiness, a short night, his own word, anything clinical or an
+  // applied recovery week. A retired brake stops being one the agent may cite to read a
+  // train day quieter (dayReadCitableBrakes), and an easy read standing on retired brakes
+  // ALONE takes the learned open below — the same path, the same holds, the same words.
+  const quietCalibration =
+    decidingBrakeFields.length > 0 &&
+    decidingBrakeFields.every((field) => CALIBRATABLE_BRAKE_FIELDS.has(field)) &&
+    (ruleRead.kind === "train" || (ruleRead.kind === "easy" && learnedEligible)) &&
+    !calendarDoseFloor()
+      ? signalInput(() => brainSignal(`quiet_read_calibration:${d}`, () => quietReadCalibration(d)), null)
+      : null;
+  const retiredBrakes = decidingBrakeFields.filter((field) => brakeRetired(quietCalibration, field));
+  const calibratedStep =
+    ruleRead.kind === "easy" && calibrationRetiresAll(quietCalibration, decidingBrakeFields) ? ("train" as const) : null;
+  const pooledStep = trainAnyway ? learnedQuietStep(ruleRead.kind, trainAnyway.weight) : null;
+  const candidateStep = pooledStep ?? calibratedStep;
+  const learnedStep = candidateStep && !freshStatementHold(d, checkin) ? candidateStep : null;
   const learnedDay = learnedStep === "train" ? suggestedPlanDay() : null;
   const learnedOpen =
     learnedDay != null &&
@@ -3581,6 +3614,17 @@ function computeDayRead(
       ...trainAnyway,
       applied: learnedOpen || learnedEase,
       step: learnedOpen ? "train" : learnedEase ? "easy" : null,
+    };
+  }
+  if (retiredBrakes.length) {
+    // Machine register. `retired` is read by dayReadCitableBrakes (published whenever a
+    // retired brake is on the board). `applied` — the brake-only easy read the calibration
+    // itself opened — is the ONLY thing tomorrow's calibration reads back as evidence
+    // (read-adherence.ts calibrationEvidence): a train day another law decided never
+    // feeds it.
+    (signals as any).quiet_read_calibration = {
+      retired: retiredBrakes,
+      applied: learnedOpen && pooledStep == null,
     };
   }
   const softenRest =

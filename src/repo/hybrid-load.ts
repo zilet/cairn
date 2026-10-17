@@ -295,105 +295,136 @@ function recentEnduranceImpactsRead(days: number, date: string): EnduranceImpact
         WHERE a.date >= ? AND a.date <= ?
         ORDER BY a.date DESC, a.id DESC`
     ).all(since, today) as any[];
-    // The personal model per day, read once and only when a run with heart rate is
-    // there to judge (run-intensity.ts).
-    const models = new Map<string, HrModel | null>();
-    const modelFor = (date: string) => () => {
-      if (!models.has(date)) models.set(date, usablePersonalHrModel(date));
-      return models.get(date) ?? null;
-    };
-    const lengthBars = new Map<string, RunLengthBars>();
-    const barsFor = (date: string, region: EnduranceModality): RunLengthBars => {
-      if (!lengthBars.has(date)) lengthBars.set(date, runLengthBars(date, { min: region.heavyMin, km: region.heavyKm }));
-      return lengthBars.get(date) as RunLengthBars;
-    };
-    // A hand-logged shadow of a synced effort is one endurance dose, not two legs
-    // of residual for the same run.
-    return withoutShadowActivities(acts)
-      .map((a): EnduranceImpact | null => {
-        const region = matchEnduranceModality(
-          String(a.type || ""),
-          `${a.raw_text || ""} ${a.notes || ""} ${a.garmin_type || ""} ${a.garmin_name || ""}`,
-        );
-        if (!region) return null;
-        const dur = a.duration_min != null ? Number(a.duration_min) : null;
-        const km = a.distance_km != null ? Number(a.distance_km) : null;
-        const ate = a.ate != null ? Number(a.ate) : null;
-        const anate = a.anate != null ? Number(a.anate) : null;
-        const trainingLoad = a.training_load != null ? Number(a.training_load) : null;
-        const ascent = a.ascent_m != null ? Number(a.ascent_m) : null;
-        const descent = a.elevation_loss_m != null ? Number(a.elevation_loss_m) : null;
-        const z45 = z45Seconds(a.hr_zones_json);
-        const load = classifyImpactLoad(
-          region,
-          dur,
-          km,
-          ate,
-          anate,
-          trainingLoad,
-          a.te_label ?? null,
-          z45,
-          Number.isFinite(ascent) ? ascent : null,
-          Number.isFinite(descent) ? descent : null,
-          (() => {
-            const statedEasy = isStatedEasyRpe(a.rpe);
-            const day = String(a.date).slice(0, 10);
-            return {
-              run_length: region.mode === "run" ? { bars: barsFor(day, region), date: day } : null,
-              stated_easy: statedEasy,
-              rpe: a.rpe,
-              personal:
-                statedEasy || region.mode !== "run"
-                  ? null
-                  : personalRunReadForRow({ ...a, type: "run" }, modelFor(String(a.date).slice(0, 10))),
-            };
-          })(),
-        );
-        const detail = durPhrase(dur, km);
-        const aerobicVolume =
-          region.loadCharacter === "technical-eccentric" || region.loadCharacter === "eccentric"
-            ? "limited"
-            : region.loadCharacter === "mixed-terrain"
-              ? "mixed"
-              : "full";
-        return {
-          activity_id: a.id != null && Number.isFinite(Number(a.id)) ? Number(a.id) : null,
-          date: String(a.date),
-          days_ago: dAgo(String(a.date)),
-          type: String(a.type || region.label),
-          label: region.label,
-          family: region.family,
-          known_sport: region.family !== "whole_body",
-          duration_min: Number.isFinite(dur) ? dur : null,
-          distance_km: Number.isFinite(km) ? km : null,
-          aerobic_te: Number.isFinite(ate) ? ate : null,
-          anaerobic_te: Number.isFinite(anate) ? anate : null,
-          training_load: Number.isFinite(trainingLoad) ? trainingLoad : null,
-          ascent_m: Number.isFinite(ascent) ? ascent : null,
-          elevation_loss_m: Number.isFinite(descent) ? descent : null,
-          intensity: load.intensity,
-          load: load.load,
-          stated_easy: isStatedEasyRpe(a.rpe),
-          load_character: region.loadCharacter,
-          aerobic_volume: aerobicVolume,
-          regions: region.regions,
-          detail,
-          why: load.why,
-          heavy_ratio: Math.max(
-            1,
-            dur != null && region.heavyMin > 0 ? dur / region.heavyMin : 0,
-            km != null && region.heavyKm > 0 ? km / region.heavyKm : 0
-          ),
-        };
-      })
-      .filter((x): x is EnduranceImpact => !!x)
-      .sort((a, b) => {
-        const weight = { heavy: 0, moderate: 1, light: 2 };
-        return weight[a.load] - weight[b.load] || a.days_ago - b.days_ago;
-      });
+    // Every grade below reads ONE calendar day alone: a shadow pairs only with a row of
+    // its own day, and the HR model and the run-length bars are the activity day's. So
+    // a day grades the same in every window that holds it, and the dozens of windows one
+    // request asks for (each morning of the six-week cross-training read, each day of the
+    // harm ledger) grade each day once. Only `days_ago`, the one field relative to the
+    // window, is stamped here. The key carries the day's row ids, so a day is never
+    // answered from a window that held a different set of its rows.
+    const byDay = new Map<string, any[]>();
+    for (const a of acts) {
+      const day = String(a.date).slice(0, 10);
+      const rows = byDay.get(day);
+      if (rows) rows.push(a);
+      else byDay.set(day, [a]);
+    }
+    const impacts: EnduranceImpact[] = [];
+    for (const [day, rows] of byDay) {
+      const ids = rows.map((a) => a.id).join(",");
+      const graded = requestMemo(`endurance_impacts_on:${day}:${ids}`, () => gradeEnduranceDay(rows), copyImpacts);
+      for (const impact of graded) {
+        impact.days_ago = dAgo(impact.date);
+        impacts.push(impact);
+      }
+    }
+    return impacts.sort((a, b) => {
+      const weight = { heavy: 0, moderate: 1, light: 2 };
+      return weight[a.load] - weight[b.load] || a.days_ago - b.days_ago;
+    });
   } catch {
     return [];
   }
+}
+
+function copyImpacts(impacts: EnduranceImpact[]): EnduranceImpact[] {
+  return impacts.map((impact) => ({ ...impact, regions: [...impact.regions] }));
+}
+
+// One day's rows (recentEnduranceImpactsRead's order) graded, `days_ago` left at 0.
+function gradeEnduranceDay(acts: any[]): EnduranceImpact[] {
+  // The personal model per day, read once and only when a run with heart rate is
+  // there to judge (run-intensity.ts).
+  const models = new Map<string, HrModel | null>();
+  const modelFor = (date: string) => () => {
+    if (!models.has(date)) models.set(date, usablePersonalHrModel(date));
+    return models.get(date) ?? null;
+  };
+  const lengthBars = new Map<string, RunLengthBars>();
+  const barsFor = (date: string, region: EnduranceModality): RunLengthBars => {
+    if (!lengthBars.has(date)) lengthBars.set(date, runLengthBars(date, { min: region.heavyMin, km: region.heavyKm }));
+    return lengthBars.get(date) as RunLengthBars;
+  };
+  // A hand-logged shadow of a synced effort is one endurance dose, not two legs
+  // of residual for the same run.
+  return withoutShadowActivities(acts)
+    .map((a): EnduranceImpact | null => {
+      const region = matchEnduranceModality(
+        String(a.type || ""),
+        `${a.raw_text || ""} ${a.notes || ""} ${a.garmin_type || ""} ${a.garmin_name || ""}`,
+      );
+      if (!region) return null;
+      const dur = a.duration_min != null ? Number(a.duration_min) : null;
+      const km = a.distance_km != null ? Number(a.distance_km) : null;
+      const ate = a.ate != null ? Number(a.ate) : null;
+      const anate = a.anate != null ? Number(a.anate) : null;
+      const trainingLoad = a.training_load != null ? Number(a.training_load) : null;
+      const ascent = a.ascent_m != null ? Number(a.ascent_m) : null;
+      const descent = a.elevation_loss_m != null ? Number(a.elevation_loss_m) : null;
+      const z45 = z45Seconds(a.hr_zones_json);
+      const load = classifyImpactLoad(
+        region,
+        dur,
+        km,
+        ate,
+        anate,
+        trainingLoad,
+        a.te_label ?? null,
+        z45,
+        Number.isFinite(ascent) ? ascent : null,
+        Number.isFinite(descent) ? descent : null,
+        (() => {
+          const statedEasy = isStatedEasyRpe(a.rpe);
+          const day = String(a.date).slice(0, 10);
+          return {
+            run_length: region.mode === "run" ? { bars: barsFor(day, region), date: day } : null,
+            stated_easy: statedEasy,
+            rpe: a.rpe,
+            personal:
+              statedEasy || region.mode !== "run"
+                ? null
+                : personalRunReadForRow({ ...a, type: "run" }, modelFor(String(a.date).slice(0, 10))),
+          };
+        })(),
+      );
+      const detail = durPhrase(dur, km);
+      const aerobicVolume =
+        region.loadCharacter === "technical-eccentric" || region.loadCharacter === "eccentric"
+          ? "limited"
+          : region.loadCharacter === "mixed-terrain"
+            ? "mixed"
+            : "full";
+      return {
+        activity_id: a.id != null && Number.isFinite(Number(a.id)) ? Number(a.id) : null,
+        date: String(a.date),
+        days_ago: 0,
+        type: String(a.type || region.label),
+        label: region.label,
+        family: region.family,
+        known_sport: region.family !== "whole_body",
+        duration_min: Number.isFinite(dur) ? dur : null,
+        distance_km: Number.isFinite(km) ? km : null,
+        aerobic_te: Number.isFinite(ate) ? ate : null,
+        anaerobic_te: Number.isFinite(anate) ? anate : null,
+        training_load: Number.isFinite(trainingLoad) ? trainingLoad : null,
+        ascent_m: Number.isFinite(ascent) ? ascent : null,
+        elevation_loss_m: Number.isFinite(descent) ? descent : null,
+        intensity: load.intensity,
+        load: load.load,
+        stated_easy: isStatedEasyRpe(a.rpe),
+        load_character: region.loadCharacter,
+        aerobic_volume: aerobicVolume,
+        regions: region.regions,
+        detail,
+        why: load.why,
+        heavy_ratio: Math.max(
+          1,
+          dur != null && region.heavyMin > 0 ? dur / region.heavyMin : 0,
+          km != null && region.heavyKm > 0 ? km / region.heavyKm : 0
+        ),
+      };
+    })
+    .filter((x): x is EnduranceImpact => !!x);
 }
 
 // ---- the temporal muscle model: a per-group decaying residual ---------------
@@ -753,12 +784,6 @@ export function acuteGates(date = localDateISO()): Map<MuscleGroup, AcuteGateRea
 // The athlete-facing / prompt-facing gate: saturated groups only, with the INTERNAL
 // residual/bar stripped. Callers that need the float read acuteGate() directly.
 export type AcuteGatePublic = Omit<AcuteGateReading, "residual" | "bar" | "deep">;
-
-export function saturatedGates(date = localDateISO()): AcuteGatePublic[] {
-  return [...acuteGates(date).values()]
-    .filter((g) => g.saturated)
-    .map(({ residual: _residual, bar: _bar, deep: _deep, ...rest }) => rest);
-}
 
 // What the Train overview (and MCP) consume: the recency window PLUS any group the
 // gate is still holding, so a Saturday ride still reads recovering on Monday even

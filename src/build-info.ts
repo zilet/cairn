@@ -46,7 +46,3 @@ export function getBuildStamp(): string {
   const build = getBuildInfo();
   return `${build.version}@${build.build_id}`.slice(0, 80);
 }
-
-export function resetBuildInfoForTest(): void {
-  cached = null;
-}

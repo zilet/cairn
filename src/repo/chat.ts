@@ -159,8 +159,10 @@ function stampCaptureFood(meta: any): void {
       parsed = null;
     }
     const review = captureReviewRows(parsed);
+    const liveMeal = row.meal ?? (result as any).meal ?? null;
+    (result as any).meal = liveMeal;
     (result as any).food = {
-      meal: (result as any).meal ?? row.meal ?? null,
+      meal: liveMeal,
       summary: parsed && typeof parsed.summary === "string" ? parsed.summary : null,
       kcal: foodNoteMacro(parsed?.kcal),
       protein_g: foodNoteMacro(parsed?.protein_g),

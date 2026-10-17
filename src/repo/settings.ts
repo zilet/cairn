@@ -340,14 +340,6 @@ function modelClassBindingsShape(value: unknown): ModelClassBindings {
   return out;
 }
 
-/** The models offered for `agent`'s class bindings: its live catalog (when read) first, then curated aliases. */
-export function modelChoicesFor(agent: string, defs: Record<string, AgentDef> = loadAgents()): string[] {
-  const def = defs[agent];
-  const out: string[] = [];
-  for (const m of [...(cachedAgentModels(agent) ?? []), ...agentModelChoices(def)]) if (!out.includes(m)) out.push(m);
-  return out;
-}
-
 /** Whether `agent` can take a model at all (a model flag, and not the profile-ignoring stub). */
 export function agentTakesModel(def: AgentDef | undefined): boolean {
   if (!def) return false;
@@ -463,6 +455,12 @@ export function orderForModelClass(
 // The leash every interactive op except the Brief had before effort went low (medium's).
 export const INTERACTIVE_LEASH_FLOOR_MS = 150_000;
 
+// Ops whose OBSERVED runtime outgrows that floor on the Pi. The week ahead's p95 was
+// 149 s against a 150 s leash (Sept–Oct 2026 agent_runs) — the leash, not the work,
+// was setting the tail, and every cut-off run counted as a failed agent. It is a
+// background agent job (a progress line, never a blocked screen), so the high leash.
+const OBSERVED_LEASH_FLOOR_MS: Readonly<Record<string, number>> = Object.freeze({ week_ahead: 240_000 });
+
 // One step up the effort ladder for a risky moment, never past high: xhigh and max stay
 // a person's explicit choice.
 function riskStep(level: ReasoningLevel): ReasoningLevel {
@@ -524,7 +522,7 @@ export function interactiveTimeoutForOp(op: string): number {
   // Lowering an op's effort never shortens its leash: the leash is also what a slow CLI
   // on a small host needs (a Pi's week-ahead peaks past two minutes). The Brief keeps its
   // own short one — it was always low, and it never awaits an agent on open.
-  return task === "day_read" ? leash : Math.max(leash, INTERACTIVE_LEASH_FLOOR_MS);
+  return task === "day_read" ? leash : Math.max(leash, INTERACTIVE_LEASH_FLOOR_MS, OBSERVED_LEASH_FLOOR_MS[task] ?? 0);
 }
 
 const SETTINGS_COLUMN_REPAIRS: [string, string][] = [

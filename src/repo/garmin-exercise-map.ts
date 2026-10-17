@@ -348,11 +348,6 @@ export function unresolvedGarminNameAliases(): string[] {
   return Object.keys(GYM_NAME_ALIASES).filter((name) => !aliasRows.has(tokenKey(tokenSet(name))));
 }
 
-/** Every category the catalog knows, in catalog order. */
-export function garminExerciseCategories(): string[] {
-  return [...exercisesByCategory.keys()];
-}
-
 /**
  * Is this a reference Garmin will actually accept? The category must be one the
  * catalog knows, and the sub-exercise must either be absent (category-only, always

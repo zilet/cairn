@@ -12,9 +12,12 @@
 // which is pure AsyncLocalStorage. Persistence lives in
 // src/repo/agent-availability.ts; the rotation reaches it through a sink.
 //
-// A hold is a PREDICTION, never a verdict: a held agent is skipped only while a
-// healthier candidate remains. When it is the only option left it is probed
-// anyway, and a success clears the hold immediately.
+// A hold is a PREDICTION with an expiry, never a verdict: a held agent is not
+// spawned until `hold_until` (the provider's own reset, else the back-off below),
+// after which it is an ordinary candidate again and the next op probes it; a
+// success, a completed login or a Settings hello clears it outright. It is no longer
+// probed early just because it is the last option left — that turned a provider at
+// its limit for weeks into one failed spawn on most ops (see runAgentWithFallback).
 import { activeTimeZone } from "./tz.js";
 
 export type AgentAvailabilityState =
@@ -286,6 +289,10 @@ const USAGE_LIMIT = /\bhit your usage limit\b|\busage limit (reached|exceeded)\b
 const SHORT_LIMIT = /\bsession limit\b|\b5-?\s?hour limit\b|\bfive[- ]hour limit\b|\bhit your limit\b/i;
 const PAYMENT =
   /\b402\b|\bpayment required\b|\bbalance exhausted\b|\binsufficient (credit|credits|funds|balance)\b|\bbilling\b|\bupgrade to (plus|pro)\b.{0,40}\bpayment\b/i;
+// What a limit banner says, with no bare number or noun ("402 kcal", "billing") that ordinary prose carries.
+const PAYMENT_PHRASE =
+  /\bpayment required\b|\bbalance exhausted\b|\binsufficient (credit|credits|funds|balance)\b|\bupgrade to (plus|pro)\b.{0,40}\bpayment\b/i;
+const SHORT_LIMIT_CONFIRM = /\bresets?\b|\blimit (reached|exceeded)\b|\btry again\b/i;
 const PERMISSION =
   /\bno output produced\b|\bauto-denied\b|\bauto denied\b|\bpermission\b.{0,80}\bheadless\b|\bheadless\b.{0,80}\bpermission\b/i;
 // Throttling reads in two strengths, because `rate_limited` is a HOLDING state
@@ -356,7 +363,11 @@ function limitDetail(window: AgentLimitWindow | null, resetsAt: string | null, n
 }
 
 /** The limit / payment arms, shared by the failure classifier and the chat banner read. */
-function limitOrPaymentFailure(combined: string, now: Date): AgentFailure | null {
+function limitOrPaymentFailure(
+  combined: string,
+  now: Date,
+  opts: { payment?: boolean; banner?: boolean; paymentText?: string } = {}
+): AgentFailure | null {
   if (WEEKLY_LIMIT.test(combined)) {
     const resets_at = parseResetsPhrase(combined, now) ?? parseTryAgainPhrase(combined, now);
     return { state: "quota_exhausted", window: "7d", resets_at, detail: limitDetail("7d", resets_at, now) };
@@ -365,11 +376,13 @@ function limitOrPaymentFailure(combined: string, now: Date): AgentFailure | null
     const resets_at = parseTryAgainPhrase(combined, now) ?? parseResetsPhrase(combined, now);
     return { state: "quota_exhausted", window: null, resets_at, detail: limitDetail(null, resets_at, now) };
   }
-  if (SHORT_LIMIT.test(combined)) {
+  // A banner read runs over a clean exit's short text, which can be the model's own prose
+  // ("a 45-minute session limit"): a bare "session limit" needs a reset or reached phrase too.
+  if (SHORT_LIMIT.test(combined) && (!opts.banner || SHORT_LIMIT_CONFIRM.test(combined))) {
     const resets_at = parseResetsPhrase(combined, now) ?? parseTryAgainPhrase(combined, now);
     return { state: "quota_exhausted", window: "5h", resets_at, detail: limitDetail("5h", resets_at, now) };
   }
-  if (PAYMENT.test(combined)) {
+  if (opts.payment !== false && (opts.banner ? PAYMENT_PHRASE : PAYMENT).test(opts.paymentText ?? combined)) {
     return { state: "payment_required", window: null, resets_at: null, detail: "Provider needs credit" };
   }
   return null;
@@ -385,7 +398,7 @@ function limitOrPaymentFailure(combined: string, now: Date): AgentFailure | null
 export function classifyLimitBannerText(raw: string, stderr: string, now: Date = new Date()): AgentFailure | null {
   const combined = `${raw ?? ""}\n${stderr ?? ""}`;
   if (combined.trim().length > AUTH_INFRA_MAX_CHARS) return null;
-  return limitOrPaymentFailure(combined, now);
+  return limitOrPaymentFailure(combined, now, { banner: true });
 }
 
 // ---------- a pinned model or effort the account can't use ----------
@@ -510,7 +523,12 @@ export function classifyAgentFailure(
   // 2-3. A named usage/weekly limit is a QUOTA, even when the same line offers an
   //      upgrade link — the primary condition is the limit, not the payment. Money
   //      before throttling: a 402 never clears on its own.
-  const limit = limitOrPaymentFailure(combined, now);
+  //      A clean exit is the model's own prose ("402 kcal", "billing", "hit your limit for heavy
+  //      lower-body work"): it reads with the strict banner patterns, and a payment is read only out
+  //      of the CLI's own error text (stderr), never out of the prose. A payment hold is 24 h and a
+  //      held provider is not probed early, so a wrong read here strands a healthy agent.
+  const proseExit = r.code === 0 && !/"is_error"\s*:\s*true|"api_error_status"/.test(raw);
+  const limit = limitOrPaymentFailure(combined, now, { banner: proseExit, paymentText: proseExit ? stderr : undefined });
   if (limit) return limit;
 
   // 4. Signed out.
@@ -604,6 +622,7 @@ export function resourceFailureHeadline(state: AgentAvailabilityState, label: st
 }
 
 const HOLD_CAP_MS = 8 * 86_400_000;
+const RATE_LIMIT_HOLD_MAX_MS = 6 * 3_600_000;
 
 /**
  * How long to believe a failure. Quota holds until the provider's own reset,
@@ -622,8 +641,12 @@ export function holdUntil(f: AgentFailure, streak: number, now: Date = new Date(
       return new Date(Math.min(at, n + HOLD_CAP_MS)).toISOString();
     }
     case "rate_limited": {
-      const steps = Math.max(0, Math.min(Number.isFinite(streak) ? streak : 0, 4));
-      return cap(Math.min(5 * 60_000 * 2 ** steps, 3_600_000));
+      // 5 → 10 → 20 → 40 → 80 → 160 → 320 min, then 6 h. The streak only grows while
+      // the SAME throttle repeats with no answer in between, so a long one is not a
+      // burst: live, codex answered 429 on 47 of 67 runs for weeks, and an hour's cap
+      // re-spawned it on nearly every op once holds stopped being probed early.
+      const steps = Math.max(0, Math.min(Number.isFinite(streak) ? streak : 0, 7));
+      return cap(Math.min(5 * 60_000 * 2 ** steps, RATE_LIMIT_HOLD_MAX_MS));
     }
     case "payment_required":
       return cap(24 * 3_600_000);
@@ -633,6 +656,33 @@ export function holdUntil(f: AgentFailure, streak: number, now: Date = new Date(
     default:
       return null;
   }
+}
+
+/**
+ * Split a provider order into the ones that may be spawned now and the ones sitting
+ * out a live hold, order preserved. The rotation (agents.ts) and the chat turn read
+ * the same rule through this: a held provider is skipped until its hold lapses, and
+ * an order with nothing but held providers fails fast without spawning anything.
+ * `lookup` returns the live hold (null once expired); a lookup that throws never
+ * holds anything — availability is advisory.
+ */
+export function splitHeldProviders<H extends { state: string }>(
+  order: string[],
+  lookup: (name: string) => H | null | undefined
+): { open: string[]; held: Array<{ agent: string; hold: H }> } {
+  const open: string[] = [];
+  const held: Array<{ agent: string; hold: H }> = [];
+  for (const agent of order) {
+    let hold: H | null | undefined = null;
+    try {
+      hold = lookup(agent);
+    } catch {
+      hold = null;
+    }
+    if (hold) held.push({ agent, hold });
+    else open.push(agent);
+  }
+  return { open, held };
 }
 
 /** How a held provider is named in an error ledger: "claude: weekly limit, resets Tue 8:00 AM". */

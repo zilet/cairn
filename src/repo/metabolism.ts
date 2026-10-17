@@ -49,12 +49,15 @@ export function syncMeasuredRmrFromHealthDocs(): MeasuredRmrReading | null {
     // A deleted/reclassified source must not leave a ghost measurement behind.
     // Only clear values owned by this importer; a future explicit/manual source
     // remains authoritative.
-    db.prepare(
-      `UPDATE profile
-          SET measured_rmr_kcal = NULL, measured_rmr_date = NULL, measured_rmr_source = NULL,
-              updated_at = datetime('now')
-        WHERE id = 1 AND measured_rmr_source = 'metabolic_test'`
-    ).run();
+    // Check first: this runs on read paths, and a no-op UPDATE still takes the write lock.
+    const owned = db.prepare(`SELECT 1 FROM profile WHERE id = 1 AND measured_rmr_source = 'metabolic_test'`).get();
+    if (owned)
+      db.prepare(
+        `UPDATE profile
+            SET measured_rmr_kcal = NULL, measured_rmr_date = NULL, measured_rmr_source = NULL,
+                updated_at = datetime('now')
+          WHERE id = 1 AND measured_rmr_source = 'metabolic_test'`
+      ).run();
     return null;
   }
   db.prepare(

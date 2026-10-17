@@ -537,15 +537,6 @@ export function reconcileMeasurementRequestAttention(asOf: string, surfacedId: s
   });
 }
 
-// Exported for the tests and for any surface that wants to know what is currently
-// being asked for without producing a card. Read-only.
-export function openMeasurementRequestKeys(): string[] {
-  return NEED_ORDER.map((need) => signalKeyFor(need)).filter((key) => {
-    const entry = getAttentionSchedule(key);
-    return !!entry && entry.tier !== "released";
-  });
-}
-
 // Kept beside the ladder so a caller reasoning about a need can name its row
 // without re-deriving the key format.
 export function measurementRequestSignalKey(need: MeasurementNeedKey): string {

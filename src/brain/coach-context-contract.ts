@@ -1,5 +1,5 @@
 import type { CoachingFocus } from "../repo/coaching-focus.js";
-import type { MemoryKind, MemoryRow, RecentLearning } from "../repo/memory.js";
+import type { MemoryRow, RecentLearning } from "../repo/memory.js";
 import type { UnifiedSignalState } from "../repo/signal-state.js";
 import type { EnduranceCapacityRead } from "../repo/endurance-capacity.js";
 import type { ResolvedTrainingIntent } from "../repo/training-intent.js";
@@ -576,10 +576,6 @@ export function isCoachMemory(value: unknown): value is CoachMemory {
   return isCoachRecord(value) && typeof value.id === "number" && typeof value.content === "string";
 }
 
-export function isCoachLearning(value: unknown): value is CoachLearning {
-  return isCoachMemory(value) && value.kind === "learning";
-}
-
 export function isCoachContextEnvelope(value: unknown): value is CoachContextEnvelope {
   if (!isCoachRecord(value)) return false;
   for (const key of COACH_CONTEXT_REQUIRED_KEYS) {
@@ -601,8 +597,4 @@ export function isCoachContextEnvelope(value: unknown): value is CoachContextEnv
     Array.isArray((value.program_state as CoachRecord).lifts) &&
     isCoachRecord(value.coaching_focus)
   );
-}
-
-export function normalizeMemoryKind(value: unknown, fallback: MemoryKind = "observation"): MemoryKind {
-  return typeof value === "string" && value.trim() ? (value.trim() as MemoryKind) : fallback;
 }

@@ -221,46 +221,6 @@ export function evidenceSummary(): EvidenceSummary {
   return { research_enabled, total, by_marker };
 }
 
-// Topics whose newest evidence row is review-due/expired (or predates the legacy
-// TTL when metadata is absent). The scheduler/research path can refresh these
-// without treating an old source as current grounding in the meantime.
-export function staleEvidence(ttlDays = 90) {
-  const ttl = Number.isFinite(ttlDays) ? Math.max(1, Number(ttlDays)) : 90;
-  const rows = db
-    .prepare(
-      `SELECT * FROM evidence_cache WHERE topic IS NOT NULL
-     ORDER BY topic, marker, retrieved_at DESC, id DESC`
-    )
-    .all() as any[];
-  const seen = new Set<string>();
-  const out: {
-    topic: string;
-    marker: string | null;
-    age_days: number;
-    freshness: EvidenceFreshness;
-    source_scope: EvidenceSourceScope;
-  }[] = [];
-  for (const r of rows) {
-    const key = `${r.topic}\u0000${String(r.marker ?? "").toLowerCase()}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const governed = governedEvidenceRow(r);
-    const t = Date.parse(String(r.retrieved_at ?? "").replace(" ", "T") + "Z");
-    if (!Number.isFinite(t)) continue;
-    const ageDays = Math.floor((Date.now() - t) / 86_400_000);
-    if (["review_due", "expired", "unknown"].includes(governed.freshness) || ageDays >= ttl) {
-      out.push({
-        topic: r.topic,
-        marker: r.marker ?? null,
-        age_days: ageDays,
-        freshness: governed.freshness,
-        source_scope: governed.source_scope,
-      });
-    }
-  }
-  return out.sort((a, b) => b.age_days - a.age_days);
-}
-
 // ---------- citation verification ----------
 // Recognized guideline / evidence bodies. This is now only a classification hint
 // for the explicit "organization_only" downgrade — naming one never verifies a

@@ -67,12 +67,6 @@ export const UNIT_REGISTRY = {
 
 export type UnitKindKey = keyof typeof UNIT_REGISTRY;
 
-/** The default units: what a fresh install (or an unreadable setting) speaks in. */
-export const DEFAULT_UNITS: AthleteUnits = {
-  distance: UNIT_REGISTRY.distance.default,
-  weight: UNIT_REGISTRY.weight.default,
-};
-
 /** A stored value for `kind`, or the kind's default when it is not one of its options. */
 export function normalizeUnit<K extends UnitKindKey>(kind: K, value: unknown): AthleteUnits[K] {
   const entry = UNIT_REGISTRY[kind];
@@ -185,15 +179,6 @@ export function raceDistanceName(km: number, units: DistanceUnit = "km"): string
 // Pace and clock
 // ---------------------------------------------------------------------------
 
-/** Seconds as m:ss ("6:11"); h:mm:ss past the hour. */
-export function clockWords(sec: number): string {
-  const s = Math.round(sec);
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const r = s % 60;
-  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}` : `${m}:${String(r).padStart(2, "0")}`;
-}
-
 /** A pace's clock in the athlete's unit, no suffix ("6:11" per km → "9:57" per mile). */
 export function paceClock(secPerKm: number, units: DistanceUnit = "km"): string {
   const perUnit = units === "mi" ? secPerKm * KM_PER_MI : secPerKm;
@@ -216,11 +201,6 @@ export function paceBandWords(fastSecPerKm: number, slowSecPerKm: number, units:
 // ---------------------------------------------------------------------------
 // Weight
 // ---------------------------------------------------------------------------
-
-/** A canonical lb value in the athlete's weight unit (one decimal). */
-export function weightValue(lb: number, units: WeightUnit = "lb"): number {
-  return round1(units === "kg" ? lb / LB_PER_KG : lb);
-}
 
 /** A kg value back to canonical lb (two decimals) — input parsing only. */
 export function lbFromKg(kg: number): number {
@@ -267,11 +247,6 @@ export function loadChangeWords(fromLb: number | null, toLb: number | null, unit
   if (Math.abs(d) < 0.01) return `hold ${loadWords(toLb, units)}`;
   const n = units === "kg" ? kgLoad(Math.abs(d)) : plain(Math.abs(d));
   return `${d > 0 ? "+" : "−"}${n} ${units}`;
-}
-
-/** A weight change, signed: "−0.9 lb", "+0.4 kg". */
-export function weightDeltaWords(lb: number, units: WeightUnit = "lb"): string {
-  return `${signedWords(units === "kg" ? lb / LB_PER_KG : lb)} ${units}`;
 }
 
 /** A weekly rate, signed: "−0.9 lb/wk", "−0.4 kg/wk". One rounding for every surface. */
@@ -365,9 +340,4 @@ export function sinceWords(iso: string | null | undefined, today?: string | null
 export function countdownWords(days: number, what: string): string {
   if (days <= 0) return `${what} is today`;
   return `${days} ${days === 1 ? "day" : "days"} to ${what}`;
-}
-
-/** True when the text carries a machine date (YYYY-MM-DD) — athlete prose must not. */
-export function hasIsoDate(text: string): boolean {
-  return /\b\d{4}-\d{2}-\d{2}\b/.test(String(text ?? ""));
 }

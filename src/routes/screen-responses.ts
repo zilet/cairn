@@ -32,7 +32,6 @@ import {
   getProgramState,
   getRecentSessions,
   getStrengthJourneys,
-  getWeeklyStats,
   muscleGroupTrajectory,
   muscleLoadPayload,
   performanceStanding,

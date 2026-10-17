@@ -12,7 +12,6 @@
 //     unit, so "−0.9 lb/wk" on one surface is "−0.4 kg/wk" on all of them.
 // Stored values stay lb. Information, never a verdict on the person; no score.
 import type { WeightPaceVerdict, WeightTrendRead } from "../contracts/week-read.js";
-import { daysBetweenISO } from "../lib/dates.js";
 import { round1 } from "../lib/numbers.js";
 import {
   dateWords,
@@ -185,9 +184,4 @@ export function weightTrendRead(asOf?: string, opts: { units?: WeightUnit; pace?
         : null,
     week_change: weekChange(pace, today, units),
   };
-}
-
-/** Days until the goal date, or null. */
-export function weightGoalDaysLeft(read: WeightTrendRead): number | null {
-  return read.goal?.date ? daysBetweenISO(read.goal.date, read.as_of) : null;
 }

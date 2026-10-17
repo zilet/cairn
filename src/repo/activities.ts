@@ -944,6 +944,17 @@ export function garminLapsStored(externalId: string): boolean {
     .get(String(externalId));
 }
 
+/** Which per-activity fetches a stored activity already holds (the sync skips those for a finished one). */
+export function garminStoredFetchState(externalId: string): { detail: boolean; zones: boolean; sets: boolean } | null {
+  const row = db
+    .prepare(
+      `SELECT training_load IS NOT NULL AS detail, hr_zones_json IS NOT NULL AS zones, exercise_sets_json IS NOT NULL AS sets
+         FROM garmin_activities WHERE external_id = ? LIMIT 1`
+    )
+    .get(String(externalId)) as any;
+  return row ? { detail: !!row.detail, zones: !!row.zones, sets: !!row.sets } : null;
+}
+
 // Did the caller STATE null for this key (clear it), or just not mention it (leave it)?
 // An explicitly-`undefined` key reads as "not mentioned" — that is what a spread of an
 // optional field produces, and it must not clear anything.
@@ -1362,9 +1373,6 @@ export function normalizeGarminHrvStatus(value: unknown): string | null {
 // COVERAGE fact, never a judgement, and it counts EVERY source — a night Apple Health
 // supplied is a night that is not missing.
 export const SLEEP_COVERAGE_WINDOW_NIGHTS = 7;
-/** Under this many missing nights the surface says nothing: a stray night is normal. */
-export const SLEEP_COVERAGE_GAP_MIN = 3;
-
 export function sleepNightsMissing(
   windowNights: number = SLEEP_COVERAGE_WINDOW_NIGHTS,
   asOf: string = localDateISO()

@@ -3,7 +3,6 @@ import {
   cleanOptionalText,
   cleanText,
   enumValue,
-  hasOwnProperties,
   isoDate,
   isoDateTime,
   normalizeJsonObject,
@@ -154,34 +153,4 @@ export function normalizeBrainDecision(value: unknown): BrainDecision | null {
     superseded_by: supersededBy,
     evaluator_version: cleanOptionalText(input.evaluator_version, 80),
   };
-}
-
-export function isBrainDecision(value: unknown): value is BrainDecision {
-  const input = asRecord(value);
-  return (
-    !!input &&
-    normalizeBrainDecision(value) !== null &&
-    hasOwnProperties(input, [
-      "effective_date",
-      "kind",
-      "domain",
-      "summary",
-      "rationale",
-      "source",
-      "source_ref_type",
-      "source_ref_key",
-      "status",
-      "autonomy_tier",
-      "risk_class",
-      "reversible",
-      "input_fingerprint",
-      "context",
-      "action",
-      "specialist",
-      "applied_at",
-      "reverted_at",
-      "superseded_by",
-      "evaluator_version",
-    ])
-  );
 }

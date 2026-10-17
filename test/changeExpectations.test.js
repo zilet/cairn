@@ -44,7 +44,10 @@ function rateSession(date, { performance = null, soreness = null, joint_pain = n
   return session;
 }
 
-function benchWithHistory(weights = [[24, 175], [17, 180], [10, 185]]) {
+// Four loaded exposures in the 28-day lookback: the 21-day hold window can then be
+// expected to reach its own three-exposure minimum (A PREDICTION MUST BE ABLE TO REACH
+// ITS OWN MINIMUM, change-expectations.ts).
+function benchWithHistory(weights = [[24, 175], [17, 180], [10, 185], [3, 180]]) {
   repo.upsertExercise({ name: "Barbell Bench Press", muscle_group: "chest" });
   repo.savePlanDay(1, "Push", "Chest", [
     { exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 185 },
@@ -90,7 +93,7 @@ function expectationsForProposal(proposalId) {
 
 test("an applied training change predicts session feel and joint pain once the athlete logs them", () => {
   benchWithHistory();
-  for (const daysAgo of [24, 17, 10]) {
+  for (const daysAgo of [24, 17, 10, 3]) {
     rateSession(isoDaysAgo(daysAgo), { performance: 4, soreness: 2, joint_pain: null });
   }
   const proposal = applyBenchStep();
@@ -118,6 +121,7 @@ test("pain already being reported is not held against the change that follows it
   rateSession(isoDaysAgo(24), { performance: 3, soreness: 3, joint_pain: "left shoulder" });
   rateSession(isoDaysAgo(17), { performance: 3, soreness: 3, joint_pain: "left shoulder" });
   rateSession(isoDaysAgo(10), { performance: 3, soreness: 2 });
+  rateSession(isoDaysAgo(3), { performance: 3, soreness: 2 });
   const proposal = applyBenchStep();
   const { rows } = expectationsForProposal(proposal.id);
   const pain = rows.find((row) => row.metric_key === "joint_pain_or_soreness");
@@ -137,6 +141,8 @@ test("the pain guard keeps its floor: one occurrence in the lookback still permi
   benchWithHistory();
   rateSession(isoDaysAgo(20), { performance: 3, soreness: 3, joint_pain: "left shoulder" });
   rateSession(isoDaysAgo(12), { performance: 3, soreness: 2 });
+  rateSession(isoDaysAgo(6), { performance: 3, soreness: 2 });
+  rateSession(isoDaysAgo(2), { performance: 3, soreness: 2 });
   const proposal = applyBenchStep();
   const { rows } = expectationsForProposal(proposal.id);
   const pain = rows.find((row) => row.metric_key === "joint_pain_or_soreness");
@@ -309,9 +315,9 @@ test("each newly wired metric reaches a decisive verdict on mature synthetic evi
 
   const feel = storedExpectation(
     buildTrainingFeedbackExpectations("2026-01-01", {
-      rated_sessions: 3,
+      rated_sessions: 4,
       average_rating: 4,
-      feedback_sessions: 3,
+      feedback_sessions: 4,
       pain_sessions: 0,
     })[0]
   );
@@ -321,9 +327,9 @@ test("each newly wired metric reaches a decisive verdict on mature synthetic evi
 
   const pain = storedExpectation(
     buildTrainingFeedbackExpectations("2026-01-01", {
-      rated_sessions: 3,
+      rated_sessions: 4,
       average_rating: 4,
-      feedback_sessions: 3,
+      feedback_sessions: 4,
       pain_sessions: 0,
     })[1],
     { summary: "A second bounded step, judged on joint pain." }
@@ -666,6 +672,7 @@ test("a confirmed heavy set is what the hold prediction is written against, not 
     [20, 100, 5], // running estimate 116.7
     [15, 110, 3], // 110 clears 92% of 116.7 — a heavy set genuinely stood behind 121
     [5, 105, 8], // ordinary work, extrapolating to 133 on the formula alone
+    [2, 60, 5], // a light day: a fourth exposure, nowhere near any estimate
   ]) {
     const session = repo.getOrCreateSession(isoDaysAgo(daysAgo), null);
     dbInsertSet(session.id, exercise.id, { weight, reps });
@@ -691,6 +698,8 @@ test("a lift no heavy set has confirmed keeps the estimated baseline it always h
   for (const [daysAgo, weight, reps] of [
     [20, 100, 5],
     [10, 60, 5], // never near the running estimate, so nothing verifies it
+    [6, 60, 5],
+    [2, 60, 5],
   ]) {
     const session = repo.getOrCreateSession(isoDaysAgo(daysAgo), null);
     dbInsertSet(session.id, exercise.id, { weight, reps });
@@ -755,4 +764,31 @@ test("an unverified window still reaches its verdict, and says that it was unver
   assert.equal(verdict.verdict, "not_aligned", JSON.stringify(verdict.confounders));
   assert.equal(verdict.actual.estimate_verified, false);
   assert.equal(verdict.actual.estimate_basis, "none");
+});
+
+test("a prediction is written only when its window can be expected to reach its own minimum", () => {
+  // Two rated sessions a month is one a fortnight: the 14-day guards could never see the
+  // two they need, so nothing is written. Four a month is two a fortnight: they are.
+  const thin = buildTrainingFeedbackExpectations("2026-01-01", {
+    rated_sessions: 3,
+    average_rating: 4,
+    feedback_sessions: 3,
+    pain_sessions: 0,
+  });
+  assert.deepEqual(thin, []);
+  const enough = buildTrainingFeedbackExpectations("2026-01-01", {
+    rated_sessions: 4,
+    average_rating: 4,
+    feedback_sessions: 4,
+    pain_sessions: 0,
+  });
+  assert.deepEqual(enough.map((e) => e.metric_key), ["session_performance_feedback", "joint_pain_or_soreness"]);
+
+  // A lift pressed three times in four weeks is about two times in the 21-day window —
+  // short of the hold's three exposures — so it carries no est-1RM prediction.
+  benchWithHistory([[24, 175], [17, 180], [10, 185]]);
+  assert.deepEqual(liftProgressionSubjects(["Barbell Bench Press"], localDateISO()), []);
+  const session = repo.getOrCreateSession(isoDaysAgo(3), null);
+  dbInsertSet(session.id, repo.findExercise("Barbell Bench Press").id, { weight: 180, reps: 8 });
+  assert.equal(liftProgressionSubjects(["Barbell Bench Press"], localDateISO()).length, 1);
 });

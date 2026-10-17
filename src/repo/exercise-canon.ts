@@ -747,11 +747,6 @@ function resolveExerciseNameRead(name: string): ResolvedExerciseName {
   return miss();
 }
 
-/** The stored exercise id a name resolves to, or null. Thin sugar over resolveExerciseName. */
-export function resolveExerciseId(name: string): number | null {
-  return resolveExerciseName(name).exercise_id;
-}
-
 /** The identity key two names can be compared on. Thin sugar over resolveExerciseName. */
 export function exerciseIdentityKey(name: string): string {
   return resolveExerciseName(name).key;

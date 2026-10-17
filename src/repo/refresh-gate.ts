@@ -299,11 +299,6 @@ function sharedDrift(date: string): Record<string, unknown> {
   };
 }
 
-/** The week-ahead sketch's material + drift fingerprints for the read day. */
-export function weekAheadRefreshInputs(date: string): RefreshInputs {
-  return { material: weekAheadMaterialFingerprint(date), drift: weekAheadDriftInputs(date) };
-}
-
 /** The week-ahead MATERIAL fingerprint alone (it is part of the cache key). */
 export function weekAheadMaterialFingerprint(date: string): string {
   return fingerprint({ op: "week_ahead", v: 1, ...sharedMaterial(date) });

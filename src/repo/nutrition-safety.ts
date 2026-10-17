@@ -442,10 +442,6 @@ const DIET_RULES: DietRule[] = [
 
 const UNVERIFIABLE_DIETS = [{ label: "keto" }, { label: "paleo" }, { label: "carnivore" }];
 
-export function explicitDietaryTaskDeclarations(value: unknown): string {
-  return canonicalHardDietKeys(value, "instruction").join(" ");
-}
-
 function dietRulesFor(declared: DietaryDeclarations): DietRule[] {
   const keys = new Set<HardDietKey>([
     ...canonicalHardDietKeys(declared?.restrictions, "authoritative"),

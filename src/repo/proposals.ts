@@ -406,22 +406,6 @@ function isInternalApplyFault(error: unknown): boolean {
 export const RUNS_ARE_NOT_PLAN_ITEMS =
   "Runs aren't part of the lifting plan any more — they follow your stated run days, and each week's runs update on their own.";
 
-// A fresh weekly run-plan draft retires any prior un-applied one (agent
-// 'auto-run-plan'), so re-running the run-plan apply never stacks duplicates in the
-// Coach list — system 'superseded', not a user 'discarded'. Returns how many retired.
-export function supersedeAutoRunPlanDrafts() {
-  const drafts = db
-    .prepare(`SELECT id FROM plan_proposals WHERE status = 'draft' AND agent = 'auto-run-plan'`)
-    .all() as any[];
-  let retired = 0;
-  for (const d of drafts) {
-    // Through setProposalStatus so a standing announced/pending decision is canceled too.
-    setProposalStatus(Number(d.id), "superseded");
-    retired++;
-  }
-  return retired;
-}
-
 // A fresh auto-progression draft for a day RETIRES any prior un-applied one for the
 // SAME day, so tapping "apply to my plan" on Today repeatedly never piles up duplicate
 // drafts in the Coach list (each new draft reflects the latest logged sets; the stale

@@ -1874,9 +1874,3 @@ export const RUN_DAY_CARD_NOTE: readonly string[] = [
   "A run day in your week, so there's nothing to lift. Find today's run on the Endurance plan.",
   "Your week puts a run here and no lift. The run's distance and effort are on the Endurance plan.",
 ];
-
-// Keep the wire marker a literal here: adaptive-session imports this module to
-// build envelope-backed plan snapshots, so eagerly reading its exported constant
-// would create an ESM initialization cycle. The normalizer function is only
-// invoked after both modules finish evaluating.
-export const DAILY_COMPOSITION_NORMALIZATION = "daily_session_v1";

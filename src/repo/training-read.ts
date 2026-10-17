@@ -706,11 +706,6 @@ export function dayLoad(
   return best ?? "none";
 }
 
-export function isLoadingDay(date: string, opts: { countsCardio: boolean }): boolean {
-  const l = dayLoad(date, opts);
-  return l === "hard" || l === "moderate";
-}
-
 // ---------- genuinely HARD cardio (discipline-independent earned-rest) ----------
 // The earned-rest / consecutive-training-days read only counts an athlete's cardio
 // when their discipline is endurance/hybrid (dayLoad's `countsCardio`). But a

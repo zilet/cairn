@@ -238,3 +238,75 @@ test("the original chat message's compact summary reads the amended meal", () =>
     ["Chicken breast", "Sourdough toast", "Cheddar", "Mixed greens", "Olive oil", "Avocado"]
   );
 });
+
+test("'no no not the whole bar ... one piece' scales a 530 kcal chocolate bar row down to one square (~53 kcal) and refines a clock-slotted breakfast to snack", () => {
+  const note = repo.addFoodNote(
+    "breakfast",
+    "I had a block of Lindt excellenece dark chocolate with raspberry\n\nand pour over coffee.",
+    {
+      summary: "Lindt dark chocolate with raspberry and pour over coffee",
+      meal_inferred: true, // chat capture stamps the slot the clock chose
+      ingredients: [
+        {
+          item: "Lindt Excellence dark chocolate with raspberry",
+          amount: "1 bar (100 g)",
+          kcal: 530,
+          protein_g: 7,
+          carbs_g: 48,
+          fat_g: 31,
+          fiber_g: 6,
+        },
+        { item: "Pour over coffee", amount: "1 cup", kcal: 2, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0 },
+      ],
+      kcal: 532,
+      protein_g: 7,
+      carbs_g: 48,
+      fat_g: 31,
+      fiber_g: 6,
+      basis: "estimated_from_foods",
+      confidence: "medium",
+    }
+  );
+  const message = repo.addChatMessage("assistant", "Logged your breakfast.", "stub", {
+    applied: [{ type: "log_food", result: { id: note.id, meal: "breakfast" } }],
+  });
+
+  // Even when the model omits row-level macros on the amended row (or slightly varies the item name),
+  // the server scales the 100 g bar down to 1 square (10 g) and refines the slot from breakfast to snack.
+  const { applied } = applyChatActions(
+    {
+      actions: [
+        {
+          type: "update_food_note",
+          id: note.id,
+          ingredients: [{ item: "Lindt excellenece dark chocolate with raspberry", amount: "1 square" }],
+        },
+      ],
+    },
+    { agent: "stub", message: "no no not the whole bar ... one piece, one small cut out block of the bar." }
+  );
+
+  assert.equal(applied[0].result.meal, "snack");
+  assert.equal(applied[0].result.parsed.kcal, 55);
+  assert.equal(applied[0].result.parsed.protein_g, 1);
+
+  const updated = repo.getFoodNote(note.id);
+  assert.equal(updated.meal, "snack");
+  assert.equal(updated.parsed.kcal, 55);
+  assert.equal(updated.parsed.ingredients[0].amount, "1 square");
+  assert.equal(updated.parsed.ingredients[0].kcal, 53);
+
+  const hydrated = repo.getChatMessage(message.id).meta.applied[0].result;
+  assert.equal(hydrated.meal, "snack");
+  assert.equal(hydrated.food.meal, "snack");
+  assert.equal(hydrated.food.kcal, 55);
+  assert.equal(hydrated.food.protein_g, 1);
+});
+
+
+test("enrichment never re-slots a meal the person picked (no meal_inferred stamp)", async () => {
+  const { applyFoodEstimate } = await import("../dist/enrich.js");
+  const note = repo.addFoodNote("breakfast", "black coffee", { summary: "black coffee" });
+  applyFoodEstimate(note.id, { kcal: 5, protein_g: 0, carbs_g: 0, fat_g: 0, summary: "black coffee" });
+  assert.equal(repo.getFoodNote(note.id).meal, "breakfast");
+});

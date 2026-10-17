@@ -2347,6 +2347,35 @@ e.g. a pinned sentence whose cited brake (`decision.brake`) stopped firing — b
 train read (`agent_caution_without_brake`, empty reason). The prompt's NAMED BRAKE RULE lists the same
 fields. An athlete override is exempt; the pin and prose identity are untouched.
 
+**Calibration from the athlete's own history: per SIGNAL, not per read (2026-10-17,
+`src/repo/brain/quiet-read-calibration.ts`).** The ladders and the long loop pool every quiet morning;
+none of them could say WHICH brake the athlete keeps outrunning, so the agent could cite the same
+fresh HRV dip on the ninth easy morning it had cited on eight overridden ones. Production (83 judged
+dates, 2026-07-26..10-16): 36 easy reads, 29 trained through at no cost; 31 of the 33 easy reads
+before the named-brake law above were the agent's, quieter than a deterministic baseline the loops
+had already opened. Each read now publishes its deciding brakes flat (`signals.deciding_brakes` — the
+ledger's context is depth-bounded, so the signal state's evidence never survives into it) and the
+ledger row keeps the agent's named brake (`context.decision.brake`); `quietReadKeys` reads them back
+per DATE. `calibrateQuietReads` counts, per brake field over `QUIET_CALIBRATION_WINDOW_DAYS` (56),
+the comparable easy mornings and how each answered — the SAME `harmVerdictOnDay` test (clean override /
+costly override / honored / unknown, the last counting for neither). A brake RETIRES only with ≥ 8
+answered mornings, a rate shrunk toward a coin flip by 4 imagined mornings at ≥ ⅔, NO cost in the
+window, and the newest answered morning an override; only the soft fields
+(`CALIBRATABLE_BRAKE_FIELDS`, the calendar's soft-dose set) can retire. A retired brake is no longer
+citable (`dayReadCitableBrakes` drops `signals.quiet_read_calibration.retired`), and an easy read
+standing on retired brakes alone takes the learned open (`learned_train_anyway` — same holds, same
+words). It is asked only after `calendarDoseFloor()` returns null (rest-grade readiness, a short
+night, the athlete's word, anything clinical, a fresh safety override, an applied recovery week, an
+endurance-hold directive, a dose overrun, a longest run, a fueling or calendar hold) — it never reaches
+a floor. A train morning the calibration itself opened (`quiet_read_calibration.applied`) stays
+evidence for its brakes (so it keeps counting once it acts, and an honored or costly opened morning
+hands the brake back); a train day any other law decided — a stated day the calendar dosed, the plan,
+the long loop — is never evidence, even with the retired brake still on its board. Mornings written
+before reads recorded their signal form one pooled `legacy_unkeyed` record that answers for a brake
+only until that brake has a keyed answer of its own; the window ages it out. Replayed on the
+production ledger shape (`test/quietReadCalibration.test.js`): easy reads held 7/36 → 20/36, one
+honored morning would have read train, no cost case moved. Machine register only.
+
 **A caveat is classified where it is raised; only SAFETY caveats veto the push.** The planned-training
 read's push and its caveat run used to be mutually exclusive (`!caveats.length`), so a backed day
 carrying nothing worse than bookkeeping lost its reach. The test is now subject, not severity — does
@@ -3703,14 +3732,25 @@ here now; `chatTurns.classifyChatAgentResult` calls into it rather than keeping 
 `detail` is short and user-safe: recognized phrases only, never raw CLI text.
 
 `holdUntil(failure, streak, now)` is the policy: quota waits for the provider's own reset (capped at
-8 days; +1 h when unknown), rate limiting backs off 5 min × 2^streak to 1 h, payment 24 h, auth
-30 min. Everything else returns `null` — the process-local circuit breaker in `agents.ts` still owns
+8 days; +1 h when unknown), rate limiting backs off 5 min × 2^streak up to 6 h (the streak only grows while the same throttle
+repeats with no answer in between), payment 24 h, auth 30 min. Everything else returns `null` — the process-local circuit breaker in `agents.ts` still owns
 transient noise and is deliberately unchanged.
 
 **The hold is persisted** in `agent_availability` (`src/repo/agent-availability.ts`, one row per
 agent) because a weekly limit outlives a container restart, which the breaker deliberately does not.
 Reads return `null` once `hold_until` passes; any success — or a completed in-app login, via
 `invalidateAgentConfigured` — deletes the row.
+
+**A held agent is never spawned until `hold_until`.** The rotation (`runAgentWithFallback`) and the chat
+turn both split their order through `splitHeldProviders`: held agents sit out (they still appear in
+`tried` with their reason), the hold is re-read just before each spawn so one a parallel run just
+recorded is honoured, and an order with nothing but held agents fails fast with no spawn and the usual
+"Couldn't reach a coaching agent" message. A hold lapses on its own (the next op probes the agent), on a
+success, or on a login / Settings hello. `classifyAgentFailure` never reads a payment failure out of a
+clean exit with no error text — a model's own prose ("402 kcal", "billing") must not hold a healthy
+agent for 24 h. A content rejection is not a provider failure: `RunOpts.onContractRejection: "stop"`
+(day_read) makes the rotation do one repair retry on the SAME agent — `contractRepairHint` names the
+violated rule — and then stop for the deterministic floor, instead of burning every agent.
 
 **The rotation reaches it through sinks**, the same pattern as `setAgentRunSink` and for the same
 circular-import reason: `setAgentAvailabilitySink` and `setAgentDiagnosticSink`, both registered in
@@ -4634,6 +4674,11 @@ offered an undo. Both answer through `POST /api/exercise-guides/attach` / `…/d
 
 ---
 
+**A stale exercise explanation is served at once and rewritten in the background.** `POST
+/api/exercise/:name/explanation` calls `explainExercise(…, { serveStale: true })` (`coachOps/training.ts`):
+a cached how-to whose key has moved is returned immediately with `stale:true` while one refresh per
+exercise runs off the request (`explanationRefreshing`); only a miss waits for the agent.
+
 ## The scheduler (`src/scheduler.ts`)
 
 The optional proactive coaching cadence: a 60s `setInterval` reads `settings` each tick (so the
@@ -4796,6 +4841,33 @@ and `recordAppliedProposalDecision()` (`src/repo/proposals.ts`) thaws a parked s
 the moment the proposal is finally applied; an advice-only conference keeps its predictions live
 throughout, since an advisory read is checkable against where the picture actually heads regardless of
 whether any change lands.
+
+**A prediction is written only if it can conclude, and a closed window settles (2026-10-17).** The
+production ledger was 275 inconclusive of 492 evaluations (conference 103/104, training_target 93/101).
+Three causes, three fixes: (1) the feedback guards and the est-1RM hold gated on "logs it at all" over
+28 days but asked their evaluator for a minimum inside a 14/21-day window, so an athlete at the gate
+supplied half of it — the gate is now the minimum at the athlete's own trailing rate
+(`expectedInWindow`: four rated sessions a month for the 14-day guards, four loaded days for the 21-day
+hold); (2) a conference's agent-chosen windows and subjects were never checked — `expectationConcludabilityIssue`
+(`src/brain/expectation-contract.ts`: window closed, shorter than `METRIC_MIN_WINDOW_DAYS`, a subject
+missing) drops them before recording (`context.dropped_expectations` says what and why), and every
+conference window starts no earlier than the conference (an advisory row has no `applied_at` for the
+pre-change filter); (3) only the same-day metric was terminal, so every other row was re-asked nightly
+forever — a window closed more than `LATE_EVIDENCE_GRACE_DAYS` (14) ago with an answer on record now
+leaves the candidate set (`evaluation-service.ts`), except a `next_draw` prediction still waiting for
+its draw. NOT changed: an advisory conference's prediction is still confounded by an applied decision
+on the same metric (whether a forecast should be is a ruling for the owner, not a fix).
+
+**The conference earns its cost (2026-10-17, `case-conference.ts`).** Each conference records
+`input_signal` on its job result: a watermark per specialist domain over the tables it reads (row
+count, newest row, newest update) and a global signature (the conflict set, the trajectory's phase and
+unexplained regressions, the lead mode). The next one carries a seat's last opinion forward
+(`reason: "carried_forward"`, never convened) when that domain's watermark and the global signature
+are unchanged and the opinion is ≤ `CONFERENCE_CARRY_MAX_AGE_DAYS` (14) old — so a retry after a
+missing seat re-asks only that seat — and returns `skipped: "unchanged_input"` (no spawn at all,
+recorded by the scheduler as `no_op`) when every seat would be carried over a conference that concluded
+cleanly. Every conflict check and the clinician floor run exactly as before; the gate only decides
+whether to spend.
 
 **A long-horizon prediction belongs on the decision whose own lifetime outlives the window.**
 `vo2max_trend`'s evaluator refuses to read a slope off fewer than 4 readings spanning 21 days, so its
@@ -5782,6 +5854,10 @@ summary + memory.
   or enqueues that backlog batched and oldest-first, calling the exporter's own
   `planGarminExportTarget` for its prediction rather than restating the decision tree — one
   seam, so a preview cannot drift from what the job does.
+  **The sync skips re-fetching what a closed activity already holds**: an activity dated before yesterday
+  whose detail / HR zones / strength sets are already stored (`garminStoredFetchState`) is not fetched for
+  that field again, and the skip does not spend the bounded per-pass budgets; today's and yesterday's
+  activities are always re-fetched.
 
 ### Health ingestion is completeness-first
 
@@ -6196,6 +6272,10 @@ REST, MCP, and chat all pass a `FoodNoteWhen` (`{date?, eaten_at?, lenient?}`) t
   and losing the whole meal over a mis-resolved guess would be a far worse failure than filing it on
   the wrong day.
 
+`addChatCaptureFoodNote({deferEffects})` (set by the chat worker) writes and links the note at once and runs
+the follow-on effects (day-read invalidation, brain event, enrich enqueue) right after the reply is handed
+back, so the receipt is not held behind them.
+
 `addFoodNote`/`addChatCaptureFoodNote` take the optional `date`/`eaten_at` behind a trailing options
 object, so every pre-existing positional call site is unaffected. `updateFoodNote` can MOVE an entry
 between days: `date`/`eaten_at` are each applied only when the caller actually sent them (`undefined`
@@ -6433,8 +6513,11 @@ guard is a no-op, exactly as before.
   has run since (`sqliteRollbackCount()`, counted by the `db.exec` wrapper in `src/db.ts` — the
   counter never goes back down when a rollback undoes rows), in the same device
   zone, under 60 s, and every caller gets a deep copy. A value that consulted a re-entrancy guard
-  (the race ladder's `walking`, run compliance's `composing`) is keyed by that guard's state. Outside
-  a snapshot (scheduler, tests, scripts) it computes every time. `memoNeutralWrite` keeps TWO
+  (the race ladder's `walking`, run compliance's `composing`) is keyed by that guard's state. A miss may also take an entry the
+  PREVIOUS request stored under the latest write generation, if it is under 5 s old, passes the same
+  odometer / rollback / zone / guard checks, no clock went backwards and no quarter-hour boundary lies
+  between (so no zone's midnight); a steered Brief read never takes from or adds to that shared store.
+  Outside a snapshot (scheduler, tests, scripts) it computes every time. `memoNeutralWrite` keeps TWO
   bookkeeping writes off the counter (`memory.last_referenced_at`, and the week-ahead card's queued
   `agent_jobs` row, a table no memoized read consults) — a write any memoized read can see must never
   go through it.
@@ -6861,3 +6944,30 @@ decision matrix (lane, instant, effort per message); extend it with every misrou
 the model cannot know the new total. `reconcileChatIntakeReply` (`src/chat-reconcile.ts`) drops a
 sentence that states a day total or what is left when its figures disagree with `getDayIntake()` and
 appends the server's own line; a reply with no total claim, or a correct one, is untouched.
+
+**Reply grounding is the one owner of "I've done it" claims** (`groundReply`, `src/chatGrounding.ts`,
+called in `chatTurns.ts` after every action and reconciler has run). It reads the model's own sentences
+and sorts a state-change CLAIM into a class (plan, timeline, goal, food, log, memory); a claim is grounded
+by what the sentence NAMES (a Pull day, a city, a figure), held against the actions that landed, not by
+the turn merely applying something. An ungrounded claim becomes a calm rotating "that hasn't happened
+yet" sentence; offers, questions and a future "I'll" are never judged, and a server-written receipt is
+never rewritten. It leans toward NOT rewriting (a wrong rewrite of a true reply is worse than a missed
+claim), and it is also the day-total backstop on a turn that logged no food. Extend the module's
+class tables for a new claim shape; never patch one claim in another file.
+
+**Instant-lane precision** (`chatRouting.ts`, `chat-intent.ts`): the receipt-only lane needs a
+food-shaped OBJECT (`hasFoodEvidence`: "had a great run" and "only slept 5 hours" are not meals), reads
+negation per clause (`foodIntakeNegated`: "skipped lunch but had eggs" ate one meal), refuses a sentence
+that needs the previous turn (`messageNeedsPriorTurn`: "75g of it", "no, this is lunch"), a message
+with several meal headings, and any stated time; all of those go to the agent lane.
+
+**Session remarks** (`add_session_note` -> `appendSessionRemark`, `src/repo/sessions.ts`) append one
+dated line to the session's `notes` (today's session, or the open one); a duplicate is a no-op. Room is
+made by retiring the oldest REMARK lines only, never a line the athlete typed: when only theirs is left
+the aside is not stored (`reason:"notes_full"`). A question, pain or plan change keeps its own door
+(`sessionRemarkBlock`).
+
+**The advisory `weight_check`** on a logged set (`sameSignWeightCheck`, `sessions.ts`) compares the
+load with the median of each of the last 8 prior sessions' TOP same-sign working weight for the lift
+(at least 4 such sessions in the last ~10 weeks), flagging more than 60% off. Warm-ups never move the
+reference, the set is always saved, and a new lift says nothing.

@@ -281,6 +281,69 @@ export function normalizeProposedExpectation(value: unknown): ProposedExpectatio
   };
 }
 
+// ---------- CAN THIS PREDICTION EVER CONCLUDE? (2026-10-17) ----------
+//
+// An AGENT-authored expectation (a conference's conductor or a specialist) chooses its
+// own window and subject, and nothing checked whether the evaluator could ever answer
+// it: a window that had already closed, a two-day window over a metric that needs three
+// weeks of readings, an exercise prediction with no exercise. Every one of those comes
+// back `inconclusive` forever (production: 103 of 104 conference verdicts) and is
+// re-probed nightly. These are the shortest windows each evaluator can conclude in —
+// the span its own minimum needs at an ordinary cadence (vo2max: four readings across
+// three weeks; recovery: six nights; a marker: a follow-up draw) — and the metrics that
+// cannot be read without a subject. A deterministic writer already sizes its windows;
+// this is the check for the ones nobody sized.
+export const METRIC_MIN_WINDOW_DAYS: Readonly<Record<BrainMetricKey, number>> = Object.freeze({
+  weight_trend_lb_wk: 14,
+  intake_to_weight_response: 14,
+  exercise_target_completion: 7,
+  exercise_est_1rm_trend: 14,
+  session_performance_feedback: 7,
+  joint_pain_or_soreness: 7,
+  plan_day_adherence: 7,
+  day_read_adherence: 1,
+  run_volume_adherence: 7,
+  vo2max_trend: 21,
+  recovery_hrv_delta: 7,
+  recovery_rhr_delta: 7,
+  sleep_duration_delta: 7,
+  marker_direction: 28,
+  body_measurement_direction: 14,
+});
+
+const SUBJECT_REQUIRED_METRICS: ReadonlySet<string> = new Set([
+  "exercise_target_completion",
+  "exercise_est_1rm_trend",
+  "marker_direction",
+  "body_measurement_direction",
+]);
+
+function isoDayNumber(iso: string): number {
+  return Math.floor(Date.parse(`${iso}T00:00:00Z`) / 864e5);
+}
+
+/**
+ * Why `expectation` could never reach a verdict if it were recorded on `asOf`, or null
+ * when it can. Only what can be known at write time: the window, its span from the day
+ * it is recorded, and a subject where the metric needs one.
+ */
+export function expectationConcludabilityIssue(
+  expectation: Pick<ProposedExpectation, "metric_key" | "subject_key" | "window_start" | "window_end">,
+  asOf: string
+): string | null {
+  const today = isoDate(asOf);
+  const start = isoDate(expectation.window_start);
+  const end = isoDate(expectation.window_end);
+  if (!today || !start || !end) return "window_unreadable";
+  if (end <= today) return "window_closed";
+  const from = start > today ? start : today;
+  const needed = METRIC_MIN_WINDOW_DAYS[expectation.metric_key] ?? 7;
+  if (isoDayNumber(end) - isoDayNumber(from) < needed) return "window_too_short";
+  if (SUBJECT_REQUIRED_METRICS.has(expectation.metric_key) && !String(expectation.subject_key ?? "").trim())
+    return "subject_missing";
+  return null;
+}
+
 export function normalizeBrainExpectation(value: unknown): BrainExpectation | null {
   const input = asRecord(value);
   const proposed = normalizeProposedExpectation(value);
@@ -318,15 +381,5 @@ export function isProposedExpectation(value: unknown): value is ProposedExpectat
       "evaluator",
       "evaluator_version",
     ])
-  );
-}
-
-export function isBrainExpectation(value: unknown): value is BrainExpectation {
-  const input = asRecord(value);
-  return (
-    !!input &&
-    isProposedExpectation(value) &&
-    normalizeBrainExpectation(value) !== null &&
-    hasOwnProperties(input, ["decision_id", "status"])
   );
 }

@@ -36,17 +36,18 @@ npm run reset    # delete data/cairn.db* and re-seed a fresh DB
   When you import a sibling `.ts` module, write `from "./repo.js"`, **not**
   `"./repo"`. Match this in every new file.
 
-## Architecture: two surfaces over one repo layer
+## Architecture: two protocol surfaces over one shared layer
 
-The most important structural fact: **`src/api.ts` (REST) and `src/mcp.ts` (MCP)
-are both thin, parallel adapters over the same `src/repo.ts`.** (`repo.ts` is now
-a barrel that re-exports the domain modules under `src/repo/` — add new logic to the
-matching module, exported through the barrel.) Business logic
-belongs in `repo.ts` (or `src/prompt.ts` for prompt construction) — the two
-surfaces should stay near-mirror wrappers.
+REST endpoints are **defined** in the routers under `src/routes/*.ts` (`src/api.ts` only
+mounts them) and MCP tools in `src/surfaces/mcp/*.ts` (`src/mcp.ts` only registers them).
+Both are thin, near-mirror wrappers over the same layer beneath: use-case services in
+`src/domain/*` and data/domain modules in `src/repo/*` (barrelled by `src/repo.ts`), with
+prompt construction in `src/prompt/*` (barrelled by `src/prompt.ts`). Business logic
+belongs in `domain`/`repo`/`prompt`, never in the wrappers.
 
-> When you add a capability, expect to touch **all three**: `repo.ts` (the
-> logic) plus both `api.ts` and `mcp.ts` (the wrappers). Keep them in sync.
+> When you add a capability, expect to touch **all three**: the `repo`/`domain` logic, the
+> matching `src/routes/*` router, and the matching `src/surfaces/mcp/*` module. Keep the
+> two surfaces in sync.
 
 ### Where does my change go?
 
@@ -70,16 +71,16 @@ Put new data-access / domain logic in the matching module (don't grow the barrel
 
 Cross-cutting orchestration lives at the top of `src/`, not in `repo/`:
 
-- **Prompt construction** → `src/prompt.ts` (every plan-shaping prompt; bound to the
+- **Prompt construction** → `src/prompt.ts` and `src/prompt/*` (every plan-shaping prompt; bound to the
   `docs/VISION.md` constitution).
 - **Multi-step agentic ops both surfaces call** (session-suggest, nutrition check-in,
-  meal swap, recipe, health review, insight) → `src/coachOps.ts`. The shared
+  meal swap, recipe, health review, insight) → `src/coachOps.ts` (modules in `src/coachOps/*`). The shared
   `runChosen(agent, prompt)` dispatch lives in `src/runChosen.ts`.
 - **Agent subprocess plumbing** (spawn, JSON extraction, streaming, fallback, the
   in-app login bridge) → `src/agents.ts`, `src/agentLogin.ts`, `src/chatTurns.ts`.
 - **Background work** → `src/enrich.ts` (free-text/health enrichment), `src/scheduler.ts`
   (proactive precompute), `src/garmin.ts` (sync).
-- **Schema** → `src/db.ts` (tables) + `src/migrate.ts` (column migrations).
+- **Schema** → `src/db.ts` (tables) + `src/migrations/*` (column migrations; `src/migrate.ts` is only the runner).
 
 After adding a capability, regenerate the reference indexes and let the gates check
 you wired it everywhere:
@@ -99,7 +100,8 @@ schema lives there as `CREATE TABLE IF NOT EXISTS`.
 - **New column on an existing table:** two steps —
   1. Add the column to the matching `CREATE TABLE IF NOT EXISTS` in `src/db.ts`
      (so fresh DBs get it), **and**
-  2. Append a new entry to the `MIGRATIONS` array in `src/migrate.ts` with the
+  2. Append a new entry to the range file under `src/migrations/` that covers the
+     next integer (`v001-050.ts`, `v051-100.ts` or `v101-150.ts`) with the
      **next integer `version`** and an idempotent `up(db)` that runs the
      `ALTER TABLE … ADD COLUMN` inside a `try/catch` (so it's a no-op on DBs
      that already have the column).

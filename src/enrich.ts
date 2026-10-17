@@ -42,7 +42,9 @@ import {
   coerceFoodItems,
   coerceFoodProvenance,
   coerceNutritionPattern,
+  explicitFoodMealLabel,
   foodMacroTotalsFrom,
+  isObviouslySnackCapture,
 } from "./foodCapture.js";
 import {
   SYMPTOM_CAPTURE_JSON_SCHEMA,
@@ -1830,7 +1832,8 @@ function mimeForImage(fp: string): string {
 // agent never runs in the harness).
 export function applyFoodPhoto(id: number, parsed: any): boolean {
   if (foodNoteEditedByPerson(id)) return false; // a person's edit wins (repo/nutrition.ts)
-  const cur = (getFoodNote(id) as any)?.parsed ?? {};
+  const curRow = getFoodNote(id) as any;
+  const cur = curRow?.parsed ?? {};
   const merged: Record<string, any> = { ...cur };
   let changed = false;
   let usableMacro = false;
@@ -1890,8 +1893,23 @@ export function applyFoodPhoto(id: number, parsed: any): boolean {
     merged.basis = provenance.basis;
   }
 
-  if (changed) return updateFoodNoteParsed(id, merged) != null;
+  if (changed) return updateFoodNoteParsed(id, merged, refinedSnackMeal(curRow, merged)) != null;
   return changed;
+}
+
+function refinedSnackMeal(curRow: any, merged: Record<string, any>): string | undefined {
+  const curMeal = String(curRow?.meal ?? "").trim().toLowerCase();
+  if (curMeal !== "breakfast" && curMeal !== "lunch" && curMeal !== "dinner") return undefined;
+  // Only a slot the clock chose (chat capture stamps meal_inferred); a meal the person picked
+  // in the composer or sent through REST/MCP is theirs.
+  if (curRow?.parsed?.meal_inferred !== true) return undefined;
+  if (explicitFoodMealLabel(curRow?.raw_output)) return undefined;
+  const kcal = Number(merged.kcal);
+  if (!Number.isFinite(kcal) || kcal <= 0 || kcal > 180) return undefined;
+  const text = [merged.summary, ...(Array.isArray(merged.items) ? merged.items : []), curRow?.raw_output]
+    .filter(Boolean)
+    .join(", ");
+  return isObviouslySnackCapture(text) ? "snack" : undefined;
 }
 
 function isImageAccessFailureNote(v: any): boolean {
@@ -2431,7 +2449,8 @@ export function applyFoodEstimate(id: number, structured: any): boolean {
   // food: merge the agent's coerced estimate over the existing parsed_json blob,
   // through the SHARED food-capture coercion (src/foodCapture.ts) so this path, the
   // photo path and chat's log_food agree on one shape.
-  const cur = (getFoodNote(job.id) as any)?.parsed ?? {};
+  const curRow = getFoodNote(job.id) as any;
+  const cur = curRow?.parsed ?? {};
   const merged: Record<string, any> = { ...cur };
   let changed = false;
   // Meal totals are BUILT UP from the ingredient rows when the agent gave no
@@ -2494,7 +2513,7 @@ export function applyFoodEstimate(id: number, structured: any): boolean {
     merged.confidence = provenance.confidence;
     merged.basis = provenance.basis;
   }
-  if (changed) return updateFoodNoteParsed(job.id, merged) != null;
+  if (changed) return updateFoodNoteParsed(job.id, merged, refinedSnackMeal(curRow, merged)) != null;
   return changed;
 }
 
