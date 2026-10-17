@@ -44,19 +44,15 @@ test("everyday work is low; depth is kept for the special items", () => {
   ]) {
     assert.equal(TASK_EXECUTION_PROFILES[task].reasoning, "low", task);
   }
-  for (const task of ["session_verify", "meal_plan_verify", "plan_verify", "meal_plan", "health", "insight", "nutrition_checkin", "what_if"]) {
+  for (const task of [
+    "session_verify", "meal_plan_verify", "plan_verify", "meal_plan", "health", "insight", "nutrition_checkin", "what_if",
+    // The special items run medium and earn ONE step to high only on a server-seen risk.
+    "health_review", "health_synthesis", "proposal", "coach_draft", "brain_review",
+  ]) {
     assert.equal(TASK_EXECUTION_PROFILES[task].reasoning, "medium", task);
   }
-  for (const task of [
-    "health_review",
-    "health_synthesis",
-    "research_deep",
-    "proposal",
-    "coach_draft",
-    "brain_review",
-  ]) {
-    assert.equal(TASK_EXECUTION_PROFILES[task].reasoning, "high", task);
-  }
+  // The one standing high: a flagged lab finding researched against the evidence.
+  assert.equal(TASK_EXECUTION_PROFILES.research_deep.reasoning, "high", "research_deep");
   assert.ok(
     !Object.values(TASK_EXECUTION_PROFILES).some((p) => p.reasoning === "xhigh" || p.reasoning === "max"),
     "xhigh/max are a person's choice"
@@ -167,4 +163,12 @@ test("end to end: the repair run carries the stepped effort, and the run log say
     invalidateAgentConfigured();
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("the heavy ops run medium and a server-seen risk lifts them one step, never past high", () => {
+  for (const task of ["proposal", "coach_draft", "brain_review", "health_review", "health_synthesis"]) {
+    assert.equal(resolve(task).reasoning, "medium", `${task} defaults to medium`);
+    assert.equal(resolve(task, { risk: "open_pain" }).reasoning, "high", `${task} steps once on a risk`);
+  }
+  assert.equal(resolve("research_deep", { risk: "open_pain" }).reasoning, "high", "never past high");
 });

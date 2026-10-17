@@ -3850,12 +3850,16 @@ lane mis-added the day's calories twice; an insight read a slower running partne
 fitness drift). Effort follows what a wrong answer costs: a causal or numeric claim over the athlete's
 own data earns a step, prose over a deterministic core does not. The coach lane drops back to `low`
 only when the athlete asked for quick (`explicit_fast_request`). The verify passes (judgement that fails open), a week of meals and
-lab transcription run `medium`; clinical-adjacent reading, plan proposals and the case conference
-run `high`. `xhigh`/`max` are only ever a person's explicit choice. Three things raise effort on
+lab transcription run `medium`; so do clinical-adjacent reading, plan proposals and the case
+conference (measured 2026-10-16 across four CLIs: nothing that passed at medium needed high). Only
+`research_deep` stands at `high`; the rest earn that step through the risk bump below.
+`xhigh`/`max` are only ever a person's explicit choice. Three things raise effort on
 their own, each ONE step and never past high:
 - **A risky moment** (`effortRiskFor`, `src/repo/effort-risk.ts`): pain stated in a place within two
-  weeks, or a race two weeks out, for the ops that compose or check training; a nutrition finding new
-  within two weeks for the ops that compose food. A standing finding is the ordinary case. Applied to
+  weeks, or a race two weeks out, for the ops that compose or check training (now including plan
+  proposals, coach drafts and the case conference); a nutrition finding new within two weeks for the
+  ops that compose food; a health finding new within two weeks for the health review, synthesis and
+  case conference. A standing finding is the ordinary case. Applied to
   the default only — a person's own effort binding always wins.
 - **A missed contract** (`repairReasoningStep`, `src/agents.ts`): the one repair retry of a reply
   that failed its contract runs one declared step up, so only the runs that fail pay for depth.

@@ -269,12 +269,16 @@ export const TASK_EXECUTION_PROFILES: Record<string, AbstractExecutionProfile> =
   // Lab and document transcription: faithfulness, not deliberation.
   health: { model_class: "deep", reasoning: "medium" },
   // The special items — clinical-adjacent reading, structural plan change and the
-  // multi-specialist review. A plausible-but-wrong answer here is the costly kind.
-  health_review: { model_class: "deep", reasoning: "high" },
-  health_synthesis: { model_class: "deep", reasoning: "high" },
-  proposal: { model_class: "deep", reasoning: "high" },
-  coach_draft: { model_class: "deep", reasoning: "high" },
-  brain_review: { model_class: "deep", reasoning: "high" },
+  // multi-specialist review. A plausible-but-wrong answer here is the costly kind, but
+  // depth is spent where the risk is: these run MEDIUM and earn ONE step to high only when
+  // the server sees a risk (src/repo/effort-risk.ts: open pain or a race window for the
+  // plan ops, a new health finding for the health ops). Measured 2026-10-16 across four
+  // CLIs: nothing that passed at medium needed high, and high fixed one constraint miss.
+  health_review: { model_class: "deep", reasoning: "medium" },
+  health_synthesis: { model_class: "deep", reasoning: "medium" },
+  proposal: { model_class: "deep", reasoning: "medium" },
+  coach_draft: { model_class: "deep", reasoning: "medium" },
+  brain_review: { model_class: "deep", reasoning: "medium" },
 };
 
 // The closed key set for a user override (same shape as chat_profile_bindings).

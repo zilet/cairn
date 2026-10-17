@@ -20,7 +20,18 @@ import { daysBetweenISO, localDateISO } from "./shared.js";
 export type EffortRisk = "open_pain" | "race_window" | "new_finding";
 
 const RISK_WINDOW_DAYS = 14;
-const TRAINING_TASKS = new Set(["session_suggest", "session_compose", "week_ahead", "session_verify", "plan_verify"]);
+const TRAINING_TASKS = new Set([
+  "session_suggest",
+  "session_compose",
+  "week_ahead",
+  "session_verify",
+  "plan_verify",
+  "proposal",
+  "coach_draft",
+  "brain_review",
+]);
+// Clinical-adjacent reading: a health finding new within the window is the only risk it adds.
+const HEALTH_TASKS = new Set(["health_review", "health_synthesis", "brain_review"]);
 const NUTRITION_TASKS = new Set(["meal_plan", "meal_swap", "recipe", "nutrition_checkin", "meal_plan_verify"]);
 
 function openPain(today: string): boolean {
@@ -51,6 +62,18 @@ function raceWindow(today: string): boolean {
   return days != null && days >= 0 && days <= RISK_WINDOW_DAYS;
 }
 
+function newHealthFinding(today: string): boolean {
+  const row = db
+    .prepare(
+      `SELECT 1 FROM health_directives
+        WHERE status = 'active' AND COALESCE(uncertain, 0) = 0
+          AND date(created_at) >= date(?, '-${RISK_WINDOW_DAYS} days')
+        LIMIT 1`
+    )
+    .get(today);
+  return !!row;
+}
+
 function newFinding(today: string): boolean {
   const row = db
     .prepare(
@@ -71,6 +94,7 @@ export function effortRiskFor(task: string, today: string = localDateISO()): Eff
       if (raceWindow(today)) return "race_window";
     }
     if (NUTRITION_TASKS.has(task) && newFinding(today)) return "new_finding";
+    if (HEALTH_TASKS.has(task) && newHealthFinding(today)) return "new_finding";
   } catch {
     /* a policy read never breaks a coaching run */
   }

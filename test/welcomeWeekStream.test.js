@@ -126,7 +126,7 @@ test("the welcome's week is its own op on a thinner profile; the Plan tab's comp
   assert.deepEqual(repo.TASK_EXECUTION_PROFILES.welcome_week, { model_class: "fast", reasoning: "low" });
   assert.equal(repo.taskForOp("welcome_week"), "welcome_week", "its own class, not folded into proposal");
   assert.equal(repo.taskForOp("compose_week"), "proposal");
-  assert.deepEqual(repo.TASK_EXECUTION_PROFILES.proposal, { model_class: "deep", reasoning: "high" });
+  assert.deepEqual(repo.TASK_EXECUTION_PROFILES.proposal, { model_class: "deep", reasoning: "medium" });
   const defs = JSON.parse(fs.readFileSync(path.join(root, "agents.json"), "utf8"));
   // No model by default (the CLI's own); the everyday class choice, when made, applies.
   assert.deepEqual(
