@@ -1,6 +1,6 @@
 // @ts-check
 // The day view's glance variants: `chipHtml` (a day in Today's week strip) and `rowHtml`
-// (a day in Program's week list), published as CairnDayGlanceView. They are the GLANCE
+// (a day in a week list: Program's week ahead and Train's This week), published as CairnDayGlanceView. They are the GLANCE
 // half of the day view family: no body figure, no run structure, no page, so Today's
 // strip pays for this and nothing else (the "glance" bundle, with the glance model).
 // Pure string builders over a ClientDayGlance; every caller string goes through
@@ -65,12 +65,16 @@
     lifts?: string;
     /** The read's "harder day" flag. */
     hard?: boolean;
+    /** The server's one line on why this day differs from its usual slot, printed verbatim. */
+    note?: string;
   };
 
   /**
-   * One day as a row of a week list (Program's week ahead): the weekday and date, the
-   * lift and the run in the glance's words with a tick when done, and the way into the
-   * day's page (`data-open-day`, the drill controller's).
+   * One day as a row of a week list (Program's week ahead, Train's This week): the
+   * weekday and date, the lift and the run in the glance's words with a tick when done
+   * (a lived day says what was logged), and the way into the day's page (`data-open-day`,
+   * the drill controller's). A lived day carries `is-past` (and `is-done` when its work
+   * is in), so a week that starts on Monday reads settled behind today.
    */
   function rowHtml(g: ClientDayGlance, opts: RowOpts = {}): string {
     let lift = "";
@@ -91,10 +95,11 @@
     const rest = !lift && !run;
     const body = rest ? `<span class="pahead-rest">Rest</span>` : `<span class="pahead-what">${lift}${run}</span>`;
     const hard = opts.hard && !rest ? `<span class="pahead-hard">A harder day</span>` : "";
-    const cls = `pahead-day${g.today ? " is-today" : ""}${rest ? " is-rest" : ""}${opts.hard ? " is-hard" : ""}`;
+    const note = opts.note ? `<span class="pahead-note">${escHtml(opts.note)}</span>` : "";
+    const cls = `pahead-day${g.today ? " is-today" : ""}${g.past ? " is-past" : ""}${g.done ? " is-done" : ""}${rest ? " is-rest" : ""}${opts.hard ? " is-hard" : ""}`;
     return `<li class="${cls}" data-open-day="${escAttr(g.date)}" role="link" tabindex="0"${g.today ? ` aria-current="date"` : ""}>
       <span class="pahead-when">${escHtml(g.weekday.toUpperCase())}<b>${escHtml(g.num)}</b>${g.today ? `<span class="sr-only">, today</span>` : ""}</span>
-      <span class="pahead-main">${body}${hard}</span>
+      <span class="pahead-main">${body}${hard}${note}</span>
       <span class="pahead-go" aria-hidden="true">›</span>
     </li>`;
   }

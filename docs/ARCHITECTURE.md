@@ -471,7 +471,8 @@ Brief last said — else the deterministic floor when no row exists at all, else
 composition's decision) is a `caveat` on that plan day, never a replacement title, with a short
 `suggestion_label` ("lighter today" / "rest suggested") that `planWeek()` stamps onto TODAY's cell as
 `suggestion` so the strip and the Brief name one day with one voice; both resolve quietly once the day is
-logged; a run logged today rides beside it ("Run in · Pull still open"); an accepted session
+logged; a run logged today rides beside it as one calm sentence from a variant set ("Your run's in.
+Pull is still there if you want it."); an accepted session
 whose slots are mostly `substitution_for` reads "Pull, reshaped" and carries the plan day's `original`
 list. It rides on every Brief response (`attachDayReadContext`), the Today aggregate, `planWeek()`, and
 `GET /api/today-strength-line` (Session header, Train overview), and every client prints `text`/`caveat`
@@ -502,8 +503,23 @@ lives on the gallery card); a lift day that also holds a run names both ("Upper 
 run", "Pull · run in"). `progress` is the week so far in counts — lifting days
 done vs stated, runs and km logged, open intents, trailing-seven-day bests — and `progress.line` is
 composed from those counts, so a stable week never prints one literal. `weekLayoutRead` rides along as
-a quiet suggestion line. The race build's `leg_map` reads strength through the same
-`thisWeekPlanDayMap`, so the two week rows on the Endurance segment agree. **The layout read has two
+a quiet suggestion line. Which plan day sits on which date THIS week is ONE placement,
+`weekStrengthPlacement()` (`src/repo/week-strength-placement.ts`): the log owns a logged date, today
+names the strength line's day (only for the real today — a week read as of a later Monday is the
+map's forecast and computes no day read; the placement asks only `todayStrengthLineDay`, never the
+full line), and every DISPLACED day — the map's day for a lived date that a logged session (or
+today's line) took, held nowhere else this week — is re-placed (`moves`): into the later weekday that
+held the day which took its date, else the nearest later one whose day the week already holds, a
+heavy-lower day never onto a quality/long run day and preferring a slot clear of one; else it is
+named as not fitting this week (`unplaced_day_number`). A day already logged this week is never placed
+again (unless the pool repeats it), a missed date displaces nothing, and an extra session on an
+unstated weekday displaces nothing. A logged date files under `placed_day_number` for the leg map's heavy-lower
+read even when the session shows as itself. Internal readers of only rung kinds (`weekStage`, the
+look-ahead) pass `templateRing`; the live ring's re-entrancy guard is a registered memo guard. The strip's cells, the race build's current-week `leg_map` / `heavy_lower_days` / this week's
+`with_lifting`, and `planDayDatesAhead` (where a coach change lands) all read it, so Train, Horizon
+and the day page name one week. A cell that is moved or swapped AND leg-trimmed keeps one note with
+the trim closed onto it (`withLegTrimClause`), and the cell's focus carries the trim (`legTrimFocus`,
+idempotent) exactly as the day page does. **The layout read has two
 spaces** (`WeekLayoutRead.space`): handed `weekdayMap` (the strip, the race build and the coach context
 all pass it) it judges the CALENDAR — a heavy template day the ring lands on Friday is Friday's, and a
 strength day the ring reaches twice in a five-day lifting week is heavy on both weekdays; with no map
@@ -1256,6 +1272,8 @@ week-kind read (never a second race-phase read); `runPlacement` (now exported fr
 `src/domain/training/week-layout.ts`) is read through `weeklyRunPlan`, never the raw stated schedule
 (which may name two long-run days). Rules, in precedence order — the first that applies is the only one
 that speaks:
+0. **The days after the race** (`post_race_recovery`): every group on the card reduced — see "The days
+   after a race" below.
 1. **Taper week** (`race_taper_legs`): every lower-body group on today's card is REDUCED (the existing
    2-set cap, ×0.9 load) — upper body untouched. These leg trims are the only lifting change a race
    makes for a strength-led athlete (`race-strength.ts`): their block never becomes a race `peak`
@@ -1306,6 +1324,70 @@ substitution bug: `saturated-substitution.ts`'s `substitutionGroups` used to tre
 group as recovering tissue needing a stand-in; now a `calendarOnly` set (`envelope.stress.sole_reduced`)
 is excluded from that swap, so a taper/race-week/key-run-eve trim stays on the card, trimmed in place,
 never swapped away as if it were an acute-recovery gate.
+
+### The days after a race (`src/repo/race-recovery.ts`, 2026-10-20)
+
+Before this, the morning after a race every race-scoped read switched off (`raceBuild` unavailable,
+the stress budget's race read empty, `raceRamp` null, scoped plan adaptations restored) and lifting
+and the run engine resumed at full. Now ONE read, `raceRecoveryWindow(date)` →
+`{race, day_index, days, ends_on, back_on, kind}` | null, names the post-race recovery window: the
+race's distance sets its length (≤10 km → 2 days, ≤ a half → 4, longer → 7), counted from the race
+EFFORT's day + 1; a race not yet run, race day itself, a standing goal or no goal is null. The athlete
+keeps TRAINING inside it — lower volume, not so heavy — and every consumer reads this one module, so
+the day after `ends_on` is ordinary again with nothing lingering.
+
+**Which race, and when** (`src/repo/race-results.ts`). The race is its logged EFFORT, never the goal
+slot's date: a run within `RACE_DATE_SLACK_DAYS` (2) of the goal date at ≥ `RACE_EFFORT_MIN_SHARE`
+(85%) of the goal distance (a half needs ~18 km) — the goal-date run first, else the nearest; off the
+goal date a SHORT race (≤10 km) must also be race-paced against the month's runs when that can be
+read. As of a date (the window), a run before the goal date counts only once the goal date has come,
+and with nothing race-like synced the goal date stands in PROVISIONALLY until goal + 2 (a slow
+sync), then nothing: no race logged, no window. In hindsight (a race day for harm, capacity and the
+ladder: `isRaceDay(date)`, `raceRunDates`) only a matched effort counts — nothing logged, nothing
+blanked. And the race OUTLIVES the goal: the athlete sets the next race the morning after, so
+`setProfile` keeps an outgoing dated race in the `completed_races` table (`keepCompletedRace`) when
+its effort is logged (with the matched activity) or its date has come (matched later, when it syncs);
+every reader resolves those rows alongside the live goal, so a new 5k set on race + 1 keeps the open
+window and the race day's exclusions.
+
+- **Lifting** — the stress budget's rule 0, `post_race_recovery`, ahead of taper/race week/eve: EVERY
+  group on the card (the upper body included) joins the ordinary `reduced` list, nothing is excluded
+  (legs stay on, light). So composition's reduced-area clamp is the dose — 2 working sets, ×0.9 on the
+  lift's own grid — and the candidate's reduced-group hold means no load step; it also stands the
+  weekly lower guarantee down. The envelope adds what a reduced week does: `caps.volume` reduced,
+  `caps.intensity` hold (so no top set or reach), no weekly dose fill, and a push stance never opens
+  (`stanceOpen` false). A rest read stays the read's; the window never makes one. It fires whatever the
+  endurance role. Item notes `POST_RACE_RECOVERY_ITEM_NOTES`. The calendar half
+  (`stressBudgetCalendarTrim`) carries it, so a day ahead (plan day-detail, week strip, today's
+  strength line via `planDayLegTrimOn` / `legTrimFocus`) says "Lighter — recovering from the race."
+  A race-scoped plan adaptation restored on race + 1 does not fight it: the restored prescription is
+  simply dosed lighter on the card; the stored plan is never written.
+- **Running** — every run of the week that lands inside the window becomes an easy one capped at
+  `POST_RACE_EASY_CAP_KM` (no quality, no long run; the morning's stated-quality opening is shut
+  too), so the agenda, which places from `weeklyRunPlan`, agrees. EVERY week planned off a closed
+  week that held the race or any day of its window (`raceEffortBefore`, `raceRecoverySpan`) steps off
+  that week WITHOUT the race's kilometres, resumes toward the floor demonstrated going INTO the race
+  (`preRaceRunCapacity`: `demonstratedRunCapacity` at the race day, race excluded) inside the ACWR
+  ceiling (`capacityResumeKm`, the race's km out of the month) and holds there (factor 1.0). So the
+  restart week's capped days — a marathon's whole capped week — never become the next base: the first
+  week whose runs sit outside the window resumes toward the pre-race floor again. The long-run ladder
+  across the window steps off `preRaceRunCapacity.long_km`, the longest run of the eight weeks before
+  the race taken well (race excluded), never a taper long or a 6 km shake-out.
+- **The race is not training** — `run-capacity.ts`'s `runDays` drops the race effort's day's runs (no
+  demonstrated volume, no longest-run-taken-well, no week set aside), the engine's
+  `anchorLongestKm` leaves the race day out (the race never sets the long-run ladder), and
+  `harmEvidenceOnDay` treats race day as a planned dose (the longest-run and hard-cardio arms stand
+  aside; only the next morning can say it cost them). The day read never counts the race as
+  yesterday's "longest in months".
+- **The read** — a training day said lighter: the planned-training rule adds the SAFETY caveat
+  `planned_training:post_race` (it vetoes the push) and ships `planned_post_race_training`; a soft
+  brake from the race's own load on a stated lift day is the dose (`stated_lift_dosed`), and every
+  real floor stands.
+- **The surfaces** — said once through the existing readers, variant set `RACE_RECOVERY_LINES`:
+  the week frame's headline/glance (`weekFrameLine`), the race lane and race page (`raceBuild`'s
+  empty `reason`) and the race countdown's reason — "Recovering from Cambridge Half · back to full
+  on Thu". After the window they are quiet as before.
+
 
 ### Selection by response (`src/repo/lift-response.ts`, `progression.ts`, 2026-09-24)
 
@@ -2641,7 +2723,7 @@ already logged and no set is (`liftDayStillOpen`), `planned_training` leads its 
 `RUN_IN_LIFT_OPEN_CAVEAT` (`planned_training:run_in`), and an EASY read that still has a plan day due
 appends `LIFT_OPEN_AFTER_ACTIVITY_EASY_WHY` (the run done, the lift left, held light).
 `attachDayReadContext` drops the generic recovery menu (walk/mobility/core) on an easy read whose
-strength line is an open lift with `run_in` — the line itself ("Run in · Push still open", "held
+strength line is an open lift with `run_in` — the line itself ("Your run's in. Push is still there if you want it.", "held
 light") is the offer. A rest read keeps its menu.
 
 Only an ADVISORY easy read may make that offer (review, 2026-10-06): the stacked ceiling, a mileage
@@ -5598,9 +5680,13 @@ new profile fields, and `{available:false, reason}` for everyone else. `raceBuil
   rung's focus follows the week the engine actually prescribed: all-easy runs read as an aerobic
   week, never as the phase's threshold session. `quality_hint` / `strength_hint` stay the machine
   register the prompts read.
-- **`leg_map`** — the seven-day ring (Mon–Sun plan template): the run per day, the strength day
-  with `heavy_lower` from `lowerBodyPlanDayNumbers()`, and the habitual ride. A ring with nothing on
-  it goes out empty, never as seven blank columns.
+- **`leg_map`** — THIS week's seven days as placed (`liveWeekRing`): strength off
+  `weekStrengthPlacement()` (the strip's own answer, today's swap included), runs where the agenda
+  dated them (completed on the day run, open on the day suggested, extras on their day), with
+  `heavy_lower` per plan day and the habitual ride. Later rungs' `with_lifting` read the TEMPLATE ring
+  (the week as the plan deals it). An internal caller that reads only the week's kind passes
+  `templateRing: true` (the stress budget, the volume floor), and a nested build inside the placement
+  read takes the template ring, so the read terminates. A ring with nothing on it goes out empty.
 - **`strength`** — the phase's strength principle, from ONE intent-aware source
   (`raceStrengthPrinciple`, `src/repo/race-strength.ts`, which also writes each rung's
   `strength_hint` and the race prompt's LIFTING line). A **strength-led** athlete
@@ -5792,6 +5878,64 @@ It is a composition, never a second engine:
   efforts.
 
 Every repeating sentence rotates through `pickDayVariant(date, "day-detail:…")`. No score, no grade.
+
+## Change notes and receipts (v2 wave 2, "say what changed and why")
+
+Every change the server makes is said once, in finished words a renderer prints verbatim
+(`escHtml`), and every reason is READ from the module that decided it — never re-derived.
+
+- **The plan-week cell note** (`plan_day.note`, `attachPlanWeekNotes` in
+  `src/domain/training/plan-week.ts`): one line per cell saying why a day differs from its usual
+  slot, in priority order — `swap`/`after_run` (today's one strength line handed the day to another
+  plan day; a run logged this morning is the `after_run` cause), `moved` (the bumped day's new
+  weekday, said on both cells), `taper` (the race build's leg trim), `trip` (a trip day,
+  `src/repo/travel-days.ts`). Garnish: an unreadable input drops the note, never the strip.
+- **One leg-trim wording.** A dated plan day's trim is read by ONE function,
+  `planDayLegTrimOn(date, day_number, {today})` (`src/repo/plan-day-trim.ts`: this morning's
+  envelope stress code, else the stress budget's calendar half), and worded by ONE set,
+  `legTrimNote` / `legTrimFocus` (`src/repo/plan-day-focus.ts`). The plan-week taper note and the
+  day detail's dated focus both speak through them.
+- **The change receipt** (`ChangeReceipt`, `src/contracts/change-receipt.ts`; built in
+  `src/repo/change-receipt.ts` from a `brain_decisions` or `plan_adaptations` row, never model
+  prose): what changed, from when, until when, its status (`applied`/`scheduled`/`undone`/
+  `not_landed`) with `status_words` in the Changes feed's own wording (`src/repo/change-status-words.ts`:
+  "Lands Thursday", "Put back", "Held before it landed"; "Ended" for an adaptation that ran its
+  course, "Didn't land" for a stored receipt whose decision was later refused or held), and the
+  server-owned Undo — drawn as "Hold" while a change is scheduled. A `kept` adaptation stays applied. A chat assistant message carries `receipts` — exactly what LANDED that turn,
+  stored on `meta.receipts` and re-read against the ledger on every read (`withChangeReceipts`, at
+  the chat routes, the MCP chat tools and the turn worker), so Tuesday's "applied" reads "undone"
+  after an Undo. Each Changes feed item carries the same `receipt`. Undo is the one decision path,
+  `POST /api/brain/decisions/:id/revert`; `kind:"plan_adaptation"` is reserved and never emitted.
+  Client: `src/client/change-receipt-client.ts`.
+- **One race countdown.** `raceCountdown(asOf, raceDate)` (`src/repo/race-build.ts`) is the only
+  countdown wording: days inside two weeks ("12 days out"), "Race week" in the race's own calendar
+  week, "Tomorrow", whole weeks (floored) beyond ("3 wks out"). The race build carries it as
+  `race.countdown` (words + `span` for sentences), each ladder rung as `countdown_words`, and the
+  day-by-day read (`src/domain/training/race-days.ts`) as each row's `out_words`. Every client
+  surface — the race view's head, ladder rows and THIS WEEK kicker, the Train run-plan card, the
+  day detail — prints those; a rung's `weeks_to_race` is the engine's calendar count to race week
+  and is never printed as a countdown (only as a fallback for an older read).
+- **The Brief's quiet questions** (`src/domain/today/brief-asks.ts`, contract
+  `src/contracts/brief-asks.ts`; `GET /api/today-asks`, `POST /api/today-asks/answer`, MCP
+  `get_today_asks` / `answer_today_ask`; client `src/client/today-brief-client.ts`). Pull, never
+  push; each asked at most once; never a gate.
+  - `trip_lift`: the evening before a planned lift day inside a trip, "Lifting on the trip?" —
+    yes (nothing changes), easier (a one-day plan adaptation that expires by itself: each lift with
+    a bodyweight twin swaps to it in a bodyweight rep range, the rest stay a set lighter, and the
+    answer names which), skip (the day held as rest through a `claims_day` context event, the ring
+    untouched). The answer is remembered on the trip, per day. The evening is the DEVICE zone's
+    hour (`nowContext`), never the host clock. "Easier" is a LAYER (`plan_adaptations.layer =
+    'trip'`): it never re-scopes a race adaptation on the same slot — its `before` is the
+    race-adapted slot, its restore returns there, a race row that comes due beneath it waits for it
+    (its end moves to the layer's), it is never "for the race", and it lands through
+    `applyAnsweredProposal` so its Undo exists and cancels only the trip rows.
+  - `adaptation_return`: a race adaptation made around pain asks for its return instead of
+    landing it (`askForAdaptationRestore`, `src/domain/brain/autonomy-service.ts`). Its hold carries
+    the reason code `adaptation_return_ask`, a thaw floor (`THAW_FLOOR_REASON_CODES`), so the
+    lead-mode thaw never re-offers or applies it. Its lifecycle is the settle pass's
+    (`src/repo/plan-adaptation-asks.ts`): unanswered, it comes back on the Brief ONCE
+    (`ASK_RESURFACE_AFTER_DAYS`), then settles to keeping the adaptation (`ASK_SETTLE_AFTER_DAYS`),
+    recorded on the rows; an answer anywhere settles it at once.
 
 ## Background enrichment (`src/enrich.ts`)
 
@@ -6980,3 +7124,20 @@ the aside is not stored (`reason:"notes_full"`). A question, pain or plan change
 load with the median of each of the last 8 prior sessions' TOP same-sign working weight for the lift
 (at least 4 such sessions in the last ~10 weeks), flagging more than 60% off. Warm-ups never move the
 reference, the set is always saved, and a new lift says nothing.
+
+## Coach changes on dates: day-level vs week-level
+
+`coachChangesRead()` (`src/domain/training/day-changes.ts`) places the Changes feed's rows on the
+calendar. A change to a plan day's prescription lands on the dates that plan day holds
+(`decisionAffectedDates` over `planDayDatesAhead`, this week as placed). A WHOLE-WEEK layout
+(`training_structure` carrying the plan's `days`, Undo "Restore your previous week") is scoped to the
+week it was made for (`weekLayoutWeekOf`: the week it took effect in; a Sunday landing opens the next
+week): it touches no day of any other week, so a later week never offers an Undo that rolls back an
+earlier one, and only the newest layout of a week stands — an APPLIED one outranking a newer ANNOUNCED
+one, because an announced whole-week layout has no dates until it lands (it is placed only from its
+`effective_date`), so until then the applied layout and its Undo stay the week's. The feed is read
+back far enough for every still-active race-scoped adaptation (at least the countdown's 21 days), and
+every landed day is the stamp's LOCAL day (`localDayOfStamp`), never a UTC slice. Horizon says it ONCE on that week's heading
+(`RaceDaysWeek.changes`), never per day; the day page of a day in that week carries it after the day's
+own changes. The feed reads agent markdown as words (`plainInline`, `src/lib/plain-text.ts`) for every
+title and why, so no surface prints asterisks.

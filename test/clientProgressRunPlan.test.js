@@ -32,6 +32,7 @@ function loadRunPlan() {
     absDate: (date) => `ABS:${date}`,
     humanDate: (date) => `HUMAN:${date}`,
   });
+  vm.runInNewContext(readFileSync(join(root, "public/js/race-countdown-words-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/progress-run-plan-client.js"), "utf8"), context);
   return context.CairnProgressRunPlan;
 }
@@ -97,7 +98,7 @@ test("progress run plan renders goal, compliance, and coach lead", () => {
   });
   assert.match(goal, /Sharpening/);
   assert.match(goal, /City 10k &lt;A&gt;/);
-  assert.match(goal, /10 days to go/);
+  assert.match(goal, /10 days out/, "the one countdown wording, the race build's own");
   assert.match(goal, /ABS:2026-08-01/);
 
   const standing = runPlan.enduranceGoalCard({ mode: "standing", label: "trail-ready", distance_km: 21, weekly_km: 40 });
@@ -309,17 +310,17 @@ test("rolling training agenda renders movable openings and actual completion evi
 
 test("race build card states the countdown once when placed directly under a goal card", () => {
   const runPlan = loadRunPlan();
-  const build = { available: true, race: { weeks_to_race: 4, phase: "build" } };
+  const build = { available: true, race: { weeks_to_race: 4, days_to_race: 30, phase: "build", countdown: { words: "4 wks out", days: 30 } } };
 
   const standalone = runPlan.raceBuildCard(build);
-  assert.match(standalone, /4 weeks to go/);
+  assert.match(standalone, /4 wks out/);
   assert.match(standalone, /Building/);
 
   // Plan -> Endurance (and Progress -> Endurance) paint the goal card
   // immediately above this one, which already states the countdown + phase —
   // repeating it here would be the same fact twice.
   const underGoal = runPlan.raceBuildCard(build, { underGoal: true });
-  assert.doesNotMatch(underGoal, /4 weeks to go/);
+  assert.doesNotMatch(underGoal, /4 wks out/);
   assert.doesNotMatch(underGoal, /wrun-mix/);
   assert.match(underGoal, /Race build/);
 });
@@ -363,14 +364,52 @@ test("the easy and long pace bands carry the personal easy ceiling beside the pa
   assert.doesNotMatch(html, /5:08 \/km · under/);
 });
 
-test("race build card head uses singular/race-week wording at the countdown's edges", () => {
+test("race build card head prints the server's one countdown — days, never the ladder's calendar weeks", () => {
   const runPlan = loadRunPlan();
 
-  const oneWeekOut = runPlan.raceBuildCard({ available: true, race: { weeks_to_race: 1, phase: "sharpen" } });
-  assert.match(oneWeekOut, /1 week to go/);
-  assert.doesNotMatch(oneWeekOut, /1 weeks to go/);
+  // Twelve days out is the ladder's "1" calendar week to race week: the head says days.
+  const twelve = runPlan.raceBuildCard({
+    available: true,
+    race: { weeks_to_race: 1, days_to_race: 12, phase: "taper", countdown: { words: "12 days out", days: 12 } },
+  });
+  assert.match(twelve, /12 days out/);
+  assert.doesNotMatch(twelve, /1 weeks? (to go|out)|1 wk out/);
 
-  const raceWeek = runPlan.raceBuildCard({ available: true, race: { weeks_to_race: 0, phase: "sharpen" } });
-  assert.match(raceWeek, /race week/);
-  assert.doesNotMatch(raceWeek, /0 weeks to go/);
+  // A read from before `countdown` counts the same days the server would.
+  const legacy = runPlan.raceBuildCard({ available: true, race: { weeks_to_race: 1, days_to_race: 12, date: "2026-11-01", phase: "taper" } });
+  assert.match(legacy, /12 days out/);
+  const raceWeek = runPlan.raceBuildCard({ available: true, race: { weeks_to_race: 0, days_to_race: 5, date: "2026-11-01", phase: "taper" } });
+  assert.match(raceWeek, /Race week/);
+  const tomorrow = runPlan.raceBuildCard({ available: true, race: { weeks_to_race: 0, days_to_race: 1, date: "2026-11-01", phase: "taper" } });
+  assert.match(tomorrow, /Tomorrow/);
+});
+
+test("the ladder's rows say each rung's countdown words, never 'N wk out' off the calendar-week count", () => {
+  const runPlan = loadRunPlan();
+  const rung = (over) => ({
+    week_start: "2026-10-19",
+    weeks_to_race: 1,
+    phase: "taper",
+    kind: "taper",
+    km: 24,
+    long_km: 12,
+    quality_hint: "Short and sharp.",
+    strength_hint: "",
+    focus: "",
+    focus_short: "",
+    with_lifting: "",
+    current: true,
+    ...over,
+  });
+  const html = runPlan.raceBuildCard({
+    available: true,
+    race: { weeks_to_race: 1, days_to_race: 12, phase: "taper", countdown: { words: "12 days out", days: 12 } },
+    weeks: [
+      rung({ countdown_words: "12 days out" }),
+      rung({ week_start: "2026-10-26", weeks_to_race: 0, kind: "race", current: false, countdown_words: "Race week" }),
+    ],
+  });
+  assert.match(html, /<span class="wrun-kind">12 days out<\/span>/);
+  assert.match(html, /<span class="wrun-kind">Race week<\/span>/);
+  assert.doesNotMatch(html, /wk out/);
 });

@@ -45,8 +45,14 @@
    * adapted to another plan day. The strength line itself is the Brief's (said once,
    * right above the strip), so it is never repeated here.
    */
-  function nowHtml(_week: PlanWeek | null | undefined, cells: Cell[]): string {
+  function nowHtml(week: PlanWeek | null | undefined, cells: Cell[]): string {
     const today = cells.find((c) => c.today);
+    // The server's own line on why today differs from its usual slot says it all; no second sentence.
+    const day = (Array.isArray(week?.days) ? week!.days : []).find((d) => d?.date === today?.date) as
+      | { note?: { text?: unknown } | null; plan_day?: { note?: { text?: unknown } | null } | null }
+      | undefined;
+    const note = String(day?.note?.text ?? day?.plan_day?.note?.text ?? "").replace(/\s+/g, " ").trim();
+    if (note) return `<div class="tstrip-now"><span class="tstrip-swap tstrip-note">${escHtml(note)}</span></div>`;
     return today?.swappedFrom && today.lift && today.swappedFrom !== today.lift.name
       ? `<div class="tstrip-now"><span class="tstrip-swap">${escHtml(`${today.lift.name} in place of ${today.swappedFrom}`)}</span></div>`
       : "";

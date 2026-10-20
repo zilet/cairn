@@ -31,6 +31,7 @@ import { frameFoodCaptureMessage } from "../chat-intent.js";
 import { hasRecentFoodNote } from "../domain/nutrition/index.js";
 import { UPLOADS_DIR } from "../uploadPaths.js";
 import { extForMime, isAcceptedMime } from "../uploadMime.js";
+import { withChangeReceipts } from "../repo/change-receipt.js";
 
 export const chatRouter = Router();
 
@@ -59,7 +60,11 @@ function resumePersistedChatTurn(turn: any) {
   return getChatTurn(Number(turn.id));
 }
 
-chatRouter.get("/", (req, res) => res.json(listChatMessages(req.query.limit ? Number(req.query.limit) : 50)));
+// Each assistant message carries `receipts` — the changes that landed that turn, re-read
+// against the ledger so an Undo pressed since reads as undone (src/repo/change-receipt.ts).
+chatRouter.get("/", (req, res) =>
+  res.json(listChatMessages(req.query.limit ? Number(req.query.limit) : 50).map(withChangeReceipts))
+);
 
 // Chat is now a DURABLE, non-blocking turn (see src/chatTurns.ts): we persist the
 // user message + a chat_turn and hand it to the serial worker, returning at once.
@@ -175,7 +180,9 @@ chatRouter.get("/search", (req, res) =>
 chatRouter.get("/sessions", (req, res) =>
   res.json(listArchivedSessions(req.query.limit ? Number(req.query.limit) : 50))
 );
-chatRouter.get("/sessions/:sessionId", (req, res) => res.json(getArchivedConversation(req.params.sessionId)));
+chatRouter.get("/sessions/:sessionId", (req, res) =>
+  res.json(getArchivedConversation(req.params.sessionId).map(withChangeReceipts))
+);
 
 // "Clear" archives rather than deletes (repo.clearChat -> archiveChat): chat is
 // part of the user's history/export, so nothing is hard-deleted anymore.
@@ -249,7 +256,7 @@ chatRouter.get("/turns/:id/stream", (req, res) => {
   // the reply prose streamed so far if it's still running (a reconnecting client —
   // iOS kills the EventSource on backgrounding — REPLACES its bubble with this so
   // an interrupted stream comes back filled, not hollow).
-  const assistantMsg = turn.assistant_message_id ? getChatMessage(turn.assistant_message_id) : null;
+  const assistantMsg = turn.assistant_message_id ? withChangeReceipts(getChatMessage(turn.assistant_message_id)) : null;
   const partialReply = getTurnPartialReply(id);
   send("snapshot", { turn, message: assistantMsg, partial_reply: partialReply || undefined });
   if (["done", "error", "canceled"].includes(turn.status)) return res.end();

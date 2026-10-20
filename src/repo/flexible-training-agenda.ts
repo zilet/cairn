@@ -15,6 +15,7 @@ import { addDaysISO, daysBetweenISO, localDateISO } from "./shared.js";
 import { copyDeep, memoKey, requestMemo } from "./request-memo.js";
 import { mondayOf } from "../lib/dates.js";
 import { dowToDayNumber, getEnduranceSchedule, isoDow, nextScheduledRunWeekday } from "./profile.js";
+import { travelOn } from "./travel-days.js";
 import { crossTrainingLoadsLegs, crossTrainingNoun, impactFamily, isKnownCrossTrainingDate } from "./cross-training-day.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
 
@@ -896,6 +897,8 @@ function crossTrainingLongCaveat(suggested: string, asOf: string, cardio: { nonR
   if (before <= asOf && !cardio.nonRun.has(before)) return null;
   const known = safeKnownCrossTraining(before, asOf);
   if (!known) return null;
+  // An optional day that falls inside a trip is not taken: nothing sits in the legs.
+  if (known.optional && !cardio.nonRun.has(before) && safeTravelOn(before)) return null;
   const legs = crossTrainingLoadsLegs(known.sport_family);
   return pickDayVariant(
     legs ? CROSS_TRAINING_LONG_CAVEATS : CROSS_TRAINING_LONG_NEUTRAL,
@@ -904,6 +907,14 @@ function crossTrainingLongCaveat(suggested: string, asOf: string, cardio: { nonR
   )
     .replaceAll("{weekday}", known.weekday)
     .replaceAll("{noun}", crossTrainingNoun(known.sport_family));
+}
+
+function safeTravelOn(date: string) {
+  try {
+    return travelOn(date);
+  } catch {
+    return null;
+  }
 }
 
 function safeKnownCrossTraining(date: string, asOf: string) {

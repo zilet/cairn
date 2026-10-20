@@ -306,6 +306,7 @@ button.prow-name:hover{color:var(--accent)}
   color:var(--ink);line-height:var(--leading-snug);overflow-wrap:anywhere}
 .pahead-run-t{font-weight:var(--weight-medium)}
 .pahead-item .strength-line{display:block;padding:0}
+.pahead-note,.tstrip-note{display:block;font-size:var(--text-xs);color:var(--muted);line-height:var(--leading-normal)}
 .pahead-caveat{font-size:var(--text-xs);color:var(--ink-2);line-height:var(--leading-normal)}
 .pahead-lifts{font-size:var(--text-sm);color:var(--muted);line-height:var(--leading-normal);overflow-wrap:anywhere}
 .pahead-tick{margin-left:var(--space-3);font-size:var(--text-xs);font-weight:var(--weight-regular);color:var(--ink-2)}
@@ -341,3 +342,48 @@ button.prow-name:hover{color:var(--accent)}
   line-height:var(--leading-tight);letter-spacing:var(--tracking-tight);color:var(--ink)}
 .prog-lifts-fact{display:block;margin-top:var(--space-3);color:var(--muted)}
 .prog-focus-fold{margin-bottom:var(--space-8)}
+
+
+/* -------------------------------------------------------------------
+   This week — Train's landing (train-week-client.ts). The next session
+   opened up as the one card (its movements, sets × reps and load; its
+   run's distance, zone or pace and parts), then the week a row a day
+   (the .pahead-day rows Program's week ahead draws), then next week
+   behind one quiet fold. Words and prescriptions; no scores.
+   ------------------------------------------------------------------- */
+.twk{display:grid;gap:var(--space-11);min-width:0;margin-bottom:var(--space-11)}
+.twk-next{display:grid;gap:var(--space-5);min-width:0}
+.twk-next-k{color:var(--dawn)}
+.twk-next-t{margin:0;font-family:var(--font-display);font-weight:var(--weight-regular);font-size:var(--text-xl);
+  line-height:var(--leading-tight);letter-spacing:var(--tracking-tight);color:var(--ink);overflow-wrap:anywhere}
+.twk-lift{display:grid;gap:var(--space-4);min-width:0}
+.twk-caveat,.twk-lifts,.twk-done,.twk-none{margin:0;font-size:var(--text-sm);color:var(--ink-2);line-height:var(--leading-normal)}
+.twk-done{color:var(--muted)}
+.twk-none .linkbtn{font-size:inherit}
+.twk-exs{list-style:none;margin:0;padding:0;display:grid}
+.twk-ex{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:var(--space-1) var(--space-5);
+  padding:var(--space-4) 0;border-top:1px solid var(--line);min-width:0}
+.twk-ex:first-child{border-top:0;padding-top:0}
+.twk-ex-n{display:inline-flex;align-items:baseline;gap:var(--space-4);font-size:var(--text-base);color:var(--ink);min-width:0;overflow-wrap:anywhere}
+.twk-ex.is-anchor .twk-ex-n{font-weight:var(--weight-semibold)}
+.twk-anchor{color:var(--d-strength)}
+.twk-ex-rx{font-size:var(--text-sm);color:var(--ink-2);white-space:nowrap}
+.twk-run{--c:var(--s-endurance);display:grid;grid-template-columns:8px minmax(0,1fr);column-gap:var(--space-4);
+  align-items:baseline;row-gap:var(--space-2);min-width:0}
+.twk-run::before{content:"";width:8px;height:8px;border-radius:var(--radius-pill);background:var(--c);align-self:center}
+.twk-run>*{grid-column:2;min-width:0}
+.twk-run-t{font-size:var(--text-base);font-weight:var(--weight-medium);color:var(--ink)}
+.twk-run-m{font-size:var(--text-sm);color:var(--ink-2)}
+.twk-run-s{font-size:var(--text-sm);color:var(--muted);line-height:var(--leading-normal);overflow-wrap:anywhere}
+.twk-acts{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-4) var(--space-8);margin-top:var(--space-2)}
+.twk-open{min-height:44px;display:inline-flex;align-items:center}
+.twk-week{display:grid;min-width:0}
+.twk-line{margin:0 0 var(--space-4);font-size:var(--text-sm);color:var(--ink-2);line-height:var(--leading-normal)}
+.pahead-day.is-past.is-done .pahead-lift-t,.pahead-day.is-past.is-done .pahead-run-t{color:var(--ink-2)}
+.twk-fold{min-width:0;border-top:1px solid var(--line)}
+.twk-fold-sum{display:flex;align-items:center;gap:var(--space-4);min-height:44px;list-style:none;cursor:pointer;
+  color:var(--muted);-webkit-tap-highlight-color:transparent}
+.twk-fold-sum::-webkit-details-marker{display:none}
+.twk-fold-sum:focus-visible{outline:2px solid var(--ink);outline-offset:4px}
+.twk-fold-go{margin-left:auto;color:var(--faint);font-size:var(--text-lead);line-height:var(--leading-none);transition:transform var(--dur-2) var(--ease)}
+.twk-fold[open] .twk-fold-go{transform:rotate(90deg)}

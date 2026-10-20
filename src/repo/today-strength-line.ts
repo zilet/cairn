@@ -31,9 +31,12 @@ import {
   type PlanDayCandidate,
   type WeekdayPlanDayRole,
 } from "./plan-selection.js";
+import { datedPlanDayFocus, legTrimFocus, type LegTrim } from "./plan-day-focus.js";
+import { planDayLegTrimOn } from "./plan-day-trim.js";
 import { planDayDisplayName } from "./plan-day-name.js";
 import { RUN_KIND_LABELS } from "./run-edit.js";
 import { loggedSessionDay, planDayTitle, sessionDayCandidates, type LoggedSessionDay } from "./session-day.js";
+import { copyDeep, requestMemo } from "./request-memo.js";
 import { localDateISO } from "./shared.js";
 
 export type TodayStrengthState = "not_started" | "in_progress" | "logged" | "rest_day" | "no_lift" | "none";
@@ -43,8 +46,14 @@ export interface TodayStrengthLine {
   day_number: number | null;
   /** The plan day's NAME ("Pull") — the label everywhere; "Pull, reshaped" when most slots moved. */
   title: string | null;
-  /** The plan day's focus sentence — secondary text only. */
+  /**
+   * The plan day's focus sentence — secondary text only. On a day the race build trims
+   * the legs (taper, race week, a key run's eve) it says so beside the stored focus
+   * ("… Lighter on the legs — taper week."); the title stays the plan day's NAME.
+   */
   focus: string | null;
+  /** The stress budget's leg trim on today's plan day (plan-day-trim.ts), or null. */
+  trim?: LegTrim | null;
   role: WeekdayPlanDayRole | null;
   state: TodayStrengthState;
   /** The read's suggestion for today, carried as a caveat on the plan day. */
@@ -213,16 +222,60 @@ function caveatFor(suggestion: "easy" | "rest", name: string, date: string): str
   return variant(name);
 }
 
-function lineText(title: string | null, state: TodayStrengthState, run: boolean, name: string | null): string {
+// The run is in and the lift is still to come: a calm sentence, never the clipped
+// "Run in · Push B — overhead support still open" (2026-10-20, under "An easy day
+// today."). The lift stays the athlete's to take; rotated by date so a stable morning
+// never prints one literal for weeks.
+const RUN_IN_LIFT_OPEN: ReadonlyArray<(name: string) => string> = [
+  (name) => `Your run's in. ${name} is still there if you want it.`,
+  (name) => `Run done. ${name} is still on for today, whenever you're ready.`,
+  (name) => `The run's in; ${name} is still there if you want it.`,
+];
+// The lift is logged and the run is in: a calm sentence, never the clipped
+// "Push B — overhead support · logged · run in" (2026-10-20). Rotated by date.
+const LOGGED_RUN_IN: ReadonlyArray<(title: string) => string> = [
+  (title) => `${title} is done, and the run's in.`,
+  (title) => `${title} is logged, and so is the run.`,
+  (title) => `The run's in and ${title} is done.`,
+];
+// The lift is under way and the run is in: the same calm register.
+const IN_PROGRESS_RUN_IN: ReadonlyArray<(title: string) => string> = [
+  (title) => `${title} is under way, and the run's in.`,
+  (title) => `The run's in, and ${title} is under way.`,
+  (title) => `${title} is in progress, with the run already in.`,
+];
+const RESHAPED_TODAY: readonly string[] = ["It's reshaped for today.", "It's been shaped for today."];
+
+function lineText(
+  title: string | null,
+  state: TodayStrengthState,
+  run: boolean,
+  name: string | null,
+  date: string
+): string {
   switch (state) {
     case "not_started":
-      // "Run in · Pull still open", never "Pull, reshaped still open".
-      if (run) return `Run in · ${name ?? title} still open${title !== name ? " · reshaped for today" : ""}`;
+      // One sentence for the run in and the lift still open, never "Pull, reshaped still open".
+      if (run) {
+        const lift = String(name ?? title ?? "the lift").replace(/[.\s]+$/, "");
+        const lead = pickDayVariant(RUN_IN_LIFT_OPEN, date, "strength_line:run_in_open")(lift);
+        return title !== name
+          ? `${lead} ${pickDayVariant(RESHAPED_TODAY, date, "strength_line:reshaped")}`
+          : lead;
+      }
       return `${title} · not started`;
     case "in_progress":
-      return `${title} · in progress${run ? " · run in" : ""}`;
+      if (run) {
+        const going = String(title ?? "Today's session").replace(/[.\s]+$/, "");
+        return pickDayVariant(IN_PROGRESS_RUN_IN, date, "strength_line:in_progress_run_in")(going);
+      }
+      return `${title} · in progress`;
     case "logged":
-      return `${title} · logged${run ? " · run in" : ""}`;
+      if (run) {
+        const done = String(title ?? "Today's session").replace(/[.\s]+$/, "");
+        return pickDayVariant(LOGGED_RUN_IN, date, "strength_line:logged_run_in")(done);
+      }
+      return `${title} · logged`;
     case "rest_day":
       return run ? "Rest day · run in" : "Rest day";
     case "no_lift":
@@ -232,8 +285,18 @@ function lineText(title: string | null, state: TodayStrengthState, run: boolean,
   }
 }
 
-export function todayStrengthLine(date?: string): TodayStrengthLine {
-  const d = String(date || localDateISO()).slice(0, 10);
+// What owns today, before anything else is composed: a session the athlete CHOSE (it
+// names no plan day), else the logged session's plan day, else the day today's selection
+// resolves to. One answer for the full line and for the day-only read below.
+type LineDay = {
+  chosen: ChosenSession | null;
+  composition: AcceptedComposition;
+  session: { id: number; plan_day_id: number | null; finished: boolean } | null;
+  day: PlanDayCandidate | null;
+  logged: LoggedSessionDay | null;
+};
+
+function lineDay(d: string): LineDay {
   // The plan once per request, the same read the week strip's cells resolve against.
   const candidates: PlanDayCandidate[] = sessionDayCandidates();
   const session = (() => {
@@ -249,26 +312,7 @@ export function todayStrengthLine(date?: string): TodayStrengthLine {
     composition.chosen && (!session || composition.chosen.sessionId == null || composition.chosen.sessionId === session.id)
       ? composition.chosen
       : null;
-  if (chosen) {
-    const state: TodayStrengthState = session ? (session.finished ? "logged" : "in_progress") : "not_started";
-    const suggestion = state === "logged" ? null : suggestionFor(d, composition.decisionKind);
-    const run = runLoggedOn(d);
-    return {
-      date: d,
-      day_number: null,
-      title: chosen.title,
-      focus: chosen.focus,
-      role: "strength",
-      state,
-      suggestion,
-      suggestion_label: suggestion ? SUGGESTION_LABEL[suggestion] : null,
-      caveat: suggestion ? caveatFor(suggestion, chosen.title, d) : null,
-      run_in: run,
-      reshaped: false,
-      original: [],
-      text: lineText(chosen.title, state, !!run, chosen.title),
-    };
-  }
+  if (chosen) return { chosen, composition, session, day: null, logged: null };
   // The logged session owns the day, the same way it owns its week-strip cell — through
   // the same answer (src/repo/session-day.ts), so the line and the cell name one day.
   let day: PlanDayCandidate | null = null;
@@ -288,6 +332,56 @@ export function todayStrengthLine(date?: string): TodayStrengthLine {
     } catch {
       day = null;
     }
+  }
+  return { chosen: null, composition, session, day, logged };
+}
+
+/**
+ * The plan day the strength line for `date` names — its `day_number` when its role is
+ * strength, else null — WITHOUT composing the rest of the line (no read's suggestion, no
+ * leg trim, no run, no calendar). For a caller that needs only which day (the week
+ * placement, src/repo/week-strength-placement.ts): the full line computes a day read and a
+ * race build to say its caveat and trim, which the placement never prints.
+ * Request-memoized: a Today open asks it from several reads.
+ */
+export function todayStrengthLineDay(date?: string): number | null {
+  const d = String(date || localDateISO()).slice(0, 10);
+  return requestMemo(
+    `strength_line_day:${d}`,
+    () => {
+      const { day } = lineDay(d);
+      return day && planDayRole(day) === "strength" ? day.day_number : null;
+    },
+    (n) => n
+  );
+}
+
+export function todayStrengthLine(date?: string): TodayStrengthLine {
+  const d = String(date || localDateISO()).slice(0, 10);
+  return requestMemo(`today_strength_line:${d}`, () => todayStrengthLineRead(d), copyDeep);
+}
+
+function todayStrengthLineRead(d: string): TodayStrengthLine {
+  const { chosen, composition, session, day, logged } = lineDay(d);
+  if (chosen) {
+    const state: TodayStrengthState = session ? (session.finished ? "logged" : "in_progress") : "not_started";
+    const suggestion = state === "logged" ? null : suggestionFor(d, composition.decisionKind);
+    const run = runLoggedOn(d);
+    return {
+      date: d,
+      day_number: null,
+      title: chosen.title,
+      focus: datedPlanDayFocus(chosen.focus, d),
+      role: "strength",
+      state,
+      suggestion,
+      suggestion_label: suggestion ? SUGGESTION_LABEL[suggestion] : null,
+      caveat: suggestion ? caveatFor(suggestion, chosen.title, d) : null,
+      run_in: run,
+      reshaped: false,
+      original: [],
+      text: lineText(chosen.title, state, !!run, chosen.title, d),
+    };
   }
   const run = runLoggedOn(d);
   // No plan day and no session: the CALENDAR says what today is. Plan days hold
@@ -338,11 +432,24 @@ export function todayStrengthLine(date?: string): TodayStrengthLine {
       : runDayTitle;
   const suggestion =
     state === "not_started" || state === "in_progress" ? suggestionFor(d, composition.decisionKind) : null;
+  const trim =
+    day && role === "strength"
+      ? (() => {
+          try {
+            return planDayLegTrimOn(d, day.day_number);
+          } catch {
+            return null;
+          }
+        })()
+      : null;
   return {
     date: d,
     day_number: day ? day.day_number : null,
     title,
-    focus: day?.focus ? String(day.focus).trim() || null : null,
+    // Read for today's date: a stored calendar claim never outlives the week it was written
+    // for, and a trimmed day says its trim beside the focus (never instead of the title).
+    focus: legTrimFocus(day?.focus ? datedPlanDayFocus(String(day.focus).trim() || null, d) : null, trim, d),
+    trim,
     role,
     state,
     suggestion,
@@ -351,6 +458,6 @@ export function todayStrengthLine(date?: string): TodayStrengthLine {
     run_in: run,
     reshaped,
     original: reshaped && day ? [...day.names] : [],
-    text: lineText(title, state, !!run, name),
+    text: lineText(title, state, !!run, name, d),
   };
 }

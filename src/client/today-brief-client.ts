@@ -495,8 +495,8 @@ type TodayBriefHtmlOptions = {
     const updated = todayBriefUpdatedHtml(read, kind, options.isToday !== false);
     // Today only, under the state line and the check-in: "What's ahead" (the week's days)
     // then the one Horizon glance line, then the push offer when the coach has one open; the push state
-    // line rides under the why. All filled by the lazy today-ahead bundle; aria-live off, like fuel.
-    const pathSlot = today ? `<div id="todayStripSlot" class="tstrip-slot" aria-live="off"></div><div id="todayPathSlot" class="tpath-slot" aria-live="off"></div><div id="todayPushOfferSlot" class="tpush-offer-slot" aria-live="off"></div>` : "";
+    // line rides under the why. The lazy today-ahead bundle fills them (aria-live off, like fuel); the evening "Tomorrow: …" line leads (train-week-tomorrow-client.ts).
+    const pathSlot = today ? `<div class="brief-tomorrow-slot" data-brief-tomorrow>${(globalThis as { CairnTrainWeekTomorrow?: { heldHtml(): string } }).CairnTrainWeekTomorrow?.heldHtml() ?? ""}</div><div id="todayStripSlot" class="tstrip-slot" aria-live="off"></div><div id="todayPathSlot" class="tpath-slot" aria-live="off"></div><div id="todayPushOfferSlot" class="tpush-offer-slot" aria-live="off"></div>` : "";
     const pushSlot = today ? `<div id="todayPushSlot" class="tpush-slot" aria-live="off"></div>` : "";
     const reason = todayBriefReasonHtml(read, kind);
     const lookBack = todayBriefLookBackHtml(read, options.isToday !== false);
@@ -632,7 +632,7 @@ type TodayBriefHtmlOptions = {
       ${pushSlot}
       ${stateLine}
       ${checkinSlot}
-      ${pathSlot}
+      ${pathSlot}${(globalThis as unknown as { CairnTodayBriefAsks?: { slotFor(r: unknown, today: boolean): string } }).CairnTodayBriefAsks?.slotFor(read, today) ?? "" /* the quiet questions, today-brief-asks-client.ts */}
       ${weekWins}
       ${recovery}
       ${quietDay ? now : ""}

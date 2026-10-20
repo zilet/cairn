@@ -843,6 +843,13 @@ test("gather: the race read is memoized, and a change to the stored race is read
 test("gather end to end: Wednesday owes the week's legs, so Thursday's quality run trims nothing", () => {
   seedAthlete();
   seedRuns("2026-09-30");
+  // Monday's Push and Tuesday's Pull are logged, so the week has no clean slot left to
+  // trade Lower A onto (Thursday is the quality run, Friday the eve of the long runs):
+  // it stays on Thursday's eve, which is the morning under test.
+  for (let i = 0; i < 3; i++) {
+    repo.logSetByName({ date: "2026-09-28", exercise: "Barbell Bench Press", weight: 135, reps: 6, day_number: 1 });
+    repo.logSetByName({ date: "2026-09-29", exercise: "Pendlay Row", weight: 150, reps: 7, day_number: 2 });
+  }
   const snap = gatherDailyDecisionSnapshot("2026-09-30");
   assert.equal(snap.plan.day_number, 3, "Lower A");
   assert.deepEqual(snap.weekly_lower, { last_chance: false });

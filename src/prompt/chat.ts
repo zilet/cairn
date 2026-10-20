@@ -9,6 +9,7 @@ import {
   type ChatAction,
 } from "../chatActions.js";
 import { getCoachContext } from "../repo/coach.js";
+import { datedWeek, type DatedWeek } from "../domain/training/dated-week.js";
 import { listMemory, memoryPainHistory, memoryPromptContent } from "../repo/memory.js";
 import { getFoodNote, mealPlanConstraintSnapshot } from "../repo/nutrition.js";
 import type { ChatLane } from "../chatRouting.js";
@@ -137,6 +138,8 @@ export interface BuildChatPromptOptions {
   lane?: ChatLane;
   /** Pages Cairn already fetched from URLs in this turn — the agent must not browse. */
   linkedPages?: ChatLinkedPage[];
+  /** The turn's dated week, built once per turn by the caller (chatTurns.ts runChatCompletion). */
+  datedWeek?: () => DatedWeek | null;
 }
 
 const CAPTURE_ACTION_TYPES = [
@@ -334,6 +337,10 @@ USER'S MESSAGE: ${message}
 CAPTURE DATA (bounded; no training or clinical history):
 ${JSON.stringify(captureContext(ctx))}`;
   }
+  // Which session lands on which date. Computed here rather than in getCoachContext (the
+  // `today_path` precedent): only chat carries it, so no other build pays for it. Null
+  // when the athlete has no calendar week — the plan is then a ring with no dates.
+  const data = { ...ctx, dated_week: chatDatedWeek(options.datedWeek) };
   return `${CAIRN_PERSONA}
 
 You're chatting with the user inside their app. You can SEE all their data (DATA section) and can ACT by emitting actions.
@@ -353,6 +360,14 @@ ${FUEL_CLAIM_RULE}
   means Garmin runs/rides mainly influence recovery and conditioning; runner/cyclist-first means
   endurance progression is central and lifting supports it.
 ${MECHANICS_ENCODING}
+- WHICH SESSION IS ON WHICH DAY comes ONLY from DATA.dated_week: one row per date, today through next
+  Sunday — \`lift.day\` is the plan day_number that date carries and \`lift.name\` its name, \`heavy_lower\`
+  marks the leg day, \`run\` the run, \`trip\` a travel day. DATA.plan is the TEMPLATE: its day_numbers are
+  the ring's order, NOT weekdays (Day 2 is not Tuesday — the week deals the ring from the last logged
+  session). Never name a weekday's or a date's session from the plan list. When DATA.dated_week is null
+  there is no calendar to claim: speak in plan order, never in weekdays. A weekday-and-session line in
+  your reply is checked against this block, and one that contradicts it is corrected under your reply.
+  A plan_update meant for a particular day names that day's "date".
 - Keep training fresh: when the user sounds bored or an accessory has stalled for weeks, suggest
   swapping in a new same-muscle exercise (within their constraints, conservative starting load)
   rather than grinding the same movement forever.
@@ -429,7 +444,15 @@ ${convo || "(new conversation)"}
 USER'S MESSAGE: ${message}
 
 DATA:
-${promptData(ctx, "chat")}`;
+${promptData(data, "chat")}`;
+}
+
+function chatDatedWeek(read: () => DatedWeek | null = datedWeek): Record<string, unknown> | null {
+  try {
+    return read() as unknown as Record<string, unknown> | null;
+  } catch {
+    return null;
+  }
 }
 
 const DISTILL_SCHEMA = `{

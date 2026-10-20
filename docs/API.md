@@ -12,7 +12,7 @@ The OAuth 2.1 doors an AI app signs in through for `/mcp` (`/.well-known/oauth-*
 [OPERATIONS.md](OPERATIONS.md) "Connect an AI app (MCP)".
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**406 routes** across 134 groups.
+**409 routes** across 135 groups.
 
 ## `/activities`
 
@@ -186,7 +186,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | Method | Path | Notes |
 |---|---|---|
 | DELETE | `/api/chat` | "Clear" archives rather than deletes (repo.clearChat -> archiveChat): chat is part of the user's history/export, so nothing is hard-deleted anymore. |
-| GET | `/api/chat` |  |
+| GET | `/api/chat` | Each assistant message carries `receipts` — the changes that landed that turn, re-read against the ledger so an Undo pressed since reads as undone (src/repo/change-receipt.ts). |
 | POST | `/api/chat` | Chat is now a DURABLE, non-blocking turn (see src/chatTurns.ts): we persist the user message + a chat_turn and hand it to the serial worker, returning at once. The PWA streams progress over GET /api/chat/turns/:id/stream and rebuilds the in-flight + queued thread from GET /api/chat/turns on (re)load — so a follow-up queued mid-think, or a turn interrupted by navigation/reload/restart, survives. |
 | POST | `/api/chat/reset` | "Fresh start": ARCHIVE the live conversation immediately (so the composer is usable at once — no blocking on the agent), then distill durable facts from the pre-archive history into memory in the BACKGROUND as a chat_distill job. The PWA settles a "remembered" pill when the job lands; a message typed during the distill just queues as a normal chat turn (archive-before-enqueue keeps the ordering). This always queues: resetting chat never waits on a coaching CLI. |
 | GET | `/api/chat/search` | Read-only history: browse past conversations (archived by "fresh start") and search across everything. These never mutate — nothing is hard-deleted. |
@@ -719,6 +719,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/race-build` | The RACE-BUILD layer over the run plan: an estimated finish/pace for the dated race and how it is moving, per-session pace bands off the target, the week-by-week ladder to race week, and the seven-day leg map (runs + heavy-lower days + the habitual ride) with where heavy squats belong in this phase; this week actual-first (every run logged, extras included, a server recap, and whether the week is already closed). Suggestion only; {available:false, reason} without a dated race with a distance. |
+| GET | `/api/race-build/days` | The race COUNTDOWN: today through race day, one row a day (the run with its distance, pace band and quality parts, the lift with a legs-lighter mark, travel, the coach's changes on the day), grouped by the build's weeks. Only within three weeks of a dated race — {available:false, reason} otherwise. `?through=race` (the default) or a YYYY-MM-DD that stops earlier. Read-only; src/domain/training/race-days.ts. |
 
 ## `/reaction-model`
 
@@ -918,6 +919,13 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | GET | `/api/today-agenda` | The Today salience arbiter: ONE ranking + budget pass over the whole Today surface, so only the 1-2 things that matter most today render inline and the rest collapse behind a quiet "more". Marking "seen" at the end (debounced) powers the "since you last looked" continuity line. |
 | POST | `/api/today-agenda/ack` | Presentation acknowledgement only: health-focus retires its current semantic revision without resolving/dismissing the underlying directives; the fast-loss-attention item retires the current cut-quality episode for 14 days. Materially new evidence can create a new revision and surface either item sooner. |
 | POST | `/api/today-agenda/dismiss` | A dismiss is DIFFERENT from an ack: ack is a presentation-only revision retire (health-focus / fast-loss-attention only, and it can 409 stale). Dismiss is the generic "hide this card" affordance every dismissible agenda candidate already has client-side — this just also records the evidence row (surface_dismissals) so a REPEATED dismissal of the same card can, over time, feed the same soft suppression a thumbs-down already drives for insights. Fire-and-forget from the client; always 200 (recording is best-effort, never blocks the dismiss itself). |
+
+## `/today-asks`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/today-asks` | The Brief's quiet questions (src/domain/today/brief-asks.ts): the trip-eve "Lifting on the trip?" and an unanswered race-adaptation return, back ONCE. Pull, never push — the Brief reads this when it opens; nothing notifies. Not memoized: the evening edge and an answer both move it. The answer writes through existing paths and returns `{ok:false, error}` at HTTP 200 when it cannot land (the designed failure signal). |
+| POST | `/api/today-asks/answer` |  |
 
 ## `/today-digest`
 

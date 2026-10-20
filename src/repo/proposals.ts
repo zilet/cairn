@@ -56,6 +56,16 @@ import {
   proposalEvidenceSnapshot,
   verifyProposalEvidenceFreshness,
 } from "./proposal-truth.js";
+import {
+  adaptationDecisionWords,
+  adaptationUntil,
+  linkPlanAdaptationsToDecision,
+  planAdaptationLayer,
+  planDayRowsForAdaptation,
+  recordPlanAdaptation,
+  refreshPlanAdaptationDays,
+  supersedePlanAdaptationsForRequest,
+} from "./plan-adaptations.js";
 
 // ---------- proposals ----------
 export function createProposal(agent: string, instruction: string, raw: string, parsed: any) {
@@ -878,9 +888,41 @@ function recordAppliedProposalDecision(
       nutrition && applyContext.boundaryTrimmed && Number.isFinite(Number(accepted?.target_kcal))
         ? Number(accepted.target_kcal)
         : null;
-    const summary =
-      trimmedTargetKcal == null ? shape.summary : revalidatedTargetSummary(trimmedTargetKcal, nutritionEffectiveDate);
-    const rationale = trimmedTargetKcal == null ? shape.rationale : revalidatedTargetNote(trimmedTargetKcal);
+    // A change scoped to a date is said as what it is — adapted for the race until a day,
+    // with the regular plan coming back after — never as a lift "removed" or "dropped"
+    // (plan-adaptations.ts). The latest end date names the whole change.
+    // Only the scoped subset is said as an adaptation; lasting changes in the same
+    // proposal keep the ordinary register beside it, never called temporary.
+    const scoped = affected.filter((item: any) => typeof item?.until === "string" && item.until);
+    const lasting = affected.filter((item: any) => !(typeof item?.until === "string" && item.until));
+    const scopedUntil = scoped.map((item: any) => String(item.until)).sort().at(-1) ?? null;
+    const adaptation = scopedUntil
+      ? adaptationDecisionWords({
+          until: scopedUntil,
+          exercises: scoped.map((item: any) => String(item?.exercise ?? "")),
+          reasons: scoped.map((item: any) => String(item?.reason ?? "")),
+          today,
+          // A trip version laid over the slot is never the race's adaptation, whatever
+          // week it falls in (plan-adaptations.ts layers).
+          layered: scoped.every((item: any) => planAdaptationLayer(item?.layer) != null),
+          lasting: lasting.length
+            ? {
+                exercises: lasting.map((item: any) => String(item?.exercise ?? "")),
+                reasons: lasting.map((item: any) => String(item?.reason ?? "")),
+              }
+            : null,
+        })
+      : null;
+    const summary = adaptation
+      ? adaptation.summary
+      : trimmedTargetKcal == null
+        ? shape.summary
+        : revalidatedTargetSummary(trimmedTargetKcal, nutritionEffectiveDate);
+    const rationale = adaptation
+      ? adaptation.rationale
+      : trimmedTargetKcal == null
+        ? shape.rationale
+        : revalidatedTargetNote(trimmedTargetKcal);
     // Close the lab loop: when this plan/nutrition change is applied while a marker-sourced
     // directive is active in its domain, anchor a falsifiable "<marker> should move toward
     // optimal at the next reading" expectation to THIS intervention (the primary driver; the
@@ -982,7 +1024,17 @@ function recordAppliedProposalDecision(
               change: item?.action === "added" ? "added" : "updated",
               reason: item?.reason ?? null,
               reason_provenance: item?.reason_provenance ?? null,
+              ...(item?.until ? { until: String(item.until) } : {}),
             })),
+            ...(adaptation && scopedUntil
+              ? {
+                  plan_adaptation: {
+                    until: scopedUntil,
+                    restores_on: adaptation.restores_on,
+                    for_race: adaptation.for_race,
+                  },
+                }
+              : {}),
             // Rotations keep their from/to shape (changes[] flattens it away) so the
             // ledger can answer "was lift X recently rotated out" without string-parsing.
             swaps: (Array.isArray(p.parsed?.changes) ? p.parsed.changes : [])
@@ -999,7 +1051,16 @@ function recordAppliedProposalDecision(
     // change that lowered `sets` has to leave behind the value it owes back. The
     // record lives here, on the decision that made the cut — the same row that
     // owns its Undo (src/repo/volume-guard.ts).
-    const volumeRestore = nutrition || recoveryCycle || restructure ? [] : volumeRestoreLedger(affected, p.parsed);
+    // A cut scoped to the race owes nothing back step by step: the whole slot comes back
+    // the day after it ends (plan-adaptations.ts), and a catch-up climbing it back inside
+    // the taper would undo the taper.
+    const volumeRestore =
+      nutrition || recoveryCycle || restructure
+        ? []
+        : volumeRestoreLedger(
+            affected.filter((item: any) => !item?.until),
+            p.parsed
+          );
     const action = {
       ...baseAction,
       ...(volumeRestore.length ? { volume_restore: volumeRestore } : {}),
@@ -1104,8 +1165,10 @@ function recordAppliedProposalDecision(
         const key = `${expectation.metric_key}|${expectation.subject_key}|${expectation.window_end}`;
         if (!stored.has(key)) insertBrainExpectation(existingDecisionId, expectation);
       }
+      if (adaptation) linkPlanAdaptationsToDecision(Number(p.id), existingDecisionId);
     } else {
-      recordDecision(decisionInput, expectations);
+      const recorded = recordDecision(decisionInput, expectations);
+      if (adaptation && recorded?.decision?.id) linkPlanAdaptationsToDecision(Number(p.id), Number(recorded.decision.id));
     }
   } catch (error) {
     if (required) throw error;
@@ -1175,6 +1238,10 @@ export interface ProposalApplyOptions {
   // narrower than the reviewed number the draft carries — the caller has already refused
   // the change outright when the re-clamp would have taken it to a no-op.
   revalidatedTargetKcal?: number;
+  // The athlete's own request (explicit_user_request: their words in chat, their own
+  // apply). A slot it touches that a race adaptation holds is theirs now: that slot's
+  // after-the-race restore is superseded (plan-adaptations.ts).
+  byPersonRequest?: boolean;
 }
 
 function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
@@ -1375,6 +1442,11 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
       // applyPlanChange UPSERTS: it updates the matching prescription, or ADDS the
       // movement when it isn't on that day yet (an UPDATE that matched zero rows used
       // to be silently reported as "applied" — that lie is fixed here + below).
+      // A change scoped to a date (`until`) is read against the day as it stands BEFORE
+      // the write, so the slot can come back exactly as it was (plan-adaptations.ts). An
+      // end date already behind us refuses the part rather than landing it for good.
+      const until = adaptationUntil(c?.until);
+      const dayBefore = until ? planDayRowsForAdaptation(Number(c?.day_number)) : null;
       const r = applyPlanChange(c, {
         clamp: true,
         defer_cache_bump: true,
@@ -1384,9 +1456,22 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
         // per entry and strip an item several sets inside one apply.
         revision_baseline: prescriptionsBefore,
       });
+      if (until && dayBefore) {
+        recordPlanAdaptation({
+          proposal_id: Number(id),
+          day_number: Number(c.day_number),
+          until,
+          reason: c?.reason ?? null,
+          result: r,
+          dayBefore,
+          layer: planAdaptationLayer(c?.layer),
+        });
+      }
       if (Array.isArray(r.clamped)) clamped.push(...r.clamped);
-      if (r.action === "added") added.push({ ...c, ...r });
-      else applied.push({ ...c, ...r });
+      const entry = { ...c, ...r, ...(until ? { until } : {}) };
+      if (!planAdaptationLayer(entry.layer)) delete entry.layer;
+      if (r.action === "added") added.push(entry);
+      else applied.push(entry);
     } catch (e: any) {
       if (e instanceof PlanQualityError || (e?.name === "PlanQualityError" && e?.report)) {
         caughtQuality = e.report as PlanQualityReport;
@@ -1471,6 +1556,11 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
     };
   }
   db.exec(`RELEASE ${savepoint}`);
+  // A race adaptation on a day this proposal touched: a person's own request wins the
+  // slots it names, and every row still in force reads the day as this whole proposal
+  // left it — its parts, scoped or not, are one agreed change (plan-adaptations.ts).
+  if (opts.byPersonRequest) supersedePlanAdaptationsForRequest(Number(id), parsed.changes);
+  refreshPlanAdaptationDays(touchedDays);
   cancelAnnouncementsForProposal(id, opts.decisionId, opts.requireDecisionLedger === true);
   setProposalStatus(id, "applied", { deferTrainingVersionBump: true });
   stampRecoveryWeekIfApplies(p, opts.requireDecisionLedger === true);

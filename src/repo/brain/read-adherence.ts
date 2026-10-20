@@ -68,6 +68,7 @@ import {
   recentCardioLoadMedian,
   type TrainingLoad,
 } from "../training-read.js";
+import { isRaceDay } from "../race-recovery.js";
 import { copyDeep, copyFlat, requestMemo } from "../request-memo.js";
 import type { HrModel } from "../hr-model.js";
 import { personalRunReadForRow, usablePersonalHrModel } from "../run-intensity.js";
@@ -2685,8 +2686,16 @@ function harmEvidenceOnDayRead(date: string, running: boolean): HarmEvidence | n
     // A longest run the race build is climbing toward, on the athlete's own long-run
     // day, is the build's DOSE, not news about the body: only the next morning below
     // can say it cost them. A run past the build's ceiling, or on another day, stays.
+    // The RACE is the build's own dose too, and the biggest: a race-day longest (or a
+    // race graded hard) is what the build was for. Only the next morning can say it
+    // cost them, and the post-race recovery window (race-recovery.ts) is the answer to
+    // the days after — never a race week set aside as harm.
+    const raceDay = isRaceDay(date);
     const plannedLong =
-      planned.long && planned.long_ceiling_km != null && (novelty == null || novelty.distance_km <= planned.long_ceiling_km);
+      raceDay ||
+      (planned.long &&
+        planned.long_ceiling_km != null &&
+        (novelty == null || novelty.distance_km <= planned.long_ceiling_km));
     if (novelty && !plannedLong) {
       return {
         date,

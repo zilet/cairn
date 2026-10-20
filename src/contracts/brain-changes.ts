@@ -11,7 +11,10 @@
 // coefficient, tier or number-as-grade ever crosses this contract.
 //
 // Self-contained on purpose: src/client/** reads these types through
-// `import("../contracts/brain-changes.js")`, and this module imports nothing.
+// `import("../contracts/brain-changes.js")`, and this module imports nothing but the
+// sibling receipt contract's types (src/contracts/change-receipt.ts, itself import-free).
+
+import type { ChangeReceipt } from "./change-receipt.js";
 
 /** The four fixed outcome phrases (docs/DESIGN.md "Coach-change rationale and outcome language"). */
 export const BRAIN_CHANGE_OUTCOME_PHRASES = {
@@ -74,6 +77,18 @@ export interface ClientBrainChange {
    * Y and `why` opening on the quote. Absent on a change the team decided.
    */
   said?: string | null;
+  /**
+   * The first date (today through the end of next week) carrying a plan day this change
+   * adapted — the weekday map's date, never a Mon=Day 1 guess. The row links the day.
+   * Absent when the change touched no dated plan day.
+   */
+  open_day?: string;
+  /**
+   * The same change as one uniform receipt (src/contracts/change-receipt.ts) — what, from
+   * when, until when, where it stands, and its Undo — the shape a chat reply carries for a
+   * change that landed that turn, so one change reads the same in both places.
+   */
+  receipt?: ChangeReceipt;
 }
 
 export interface ClientBrainChangeDay {

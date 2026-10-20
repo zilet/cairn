@@ -40,13 +40,14 @@ import { addDaysISO, daysBetweenISO, isoDaysAgo, mondayOf } from "../lib/dates.j
 import { round1 } from "../lib/numbers.js";
 import { distanceWords, type DistanceUnit } from "./display-words.js";
 import { withoutShadowActivities } from "./activity-shadow.js";
+import { raceRunDates } from "./race-recovery.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { harmEvidenceOnDay, nextMorningClean, type HarmEvidence } from "./brain/read-adherence.js";
 import { activitySportWhere, RUN_SPORT_PATTERNS } from "./endurance-sports.js";
 import { getEnduranceSchedule, isoDow } from "./profile.js";
 import { DEMONSTRATED_CAPACITY_WEEKS } from "./run-ramp.js";
 import { tripCoversDay } from "./underfueling.js";
-import { copyDeep, memoKey, requestMemo } from "./request-memo.js";
+import { copyDeep, copyFlat, memoKey, requestMemo } from "./request-memo.js";
 
 export interface DemonstratedRunCapacity {
   /** The closed-week anchor the read is taken at (the Sunday a week closed on). */
@@ -84,9 +85,13 @@ function runDays(from: string | null, to: string): RunDay[] {
         )
         .all(...(from ? [from, to] : [to]), ...sport.params) as any[]
     );
+    // The RACE is not training capacity (race-recovery.ts): a race day's running — the
+    // logged race effort's day, whatever the goal slot says now — is neither a week's
+    // demonstrated volume, nor the longest run taken well, nor harm that sets a week aside.
+    const races = raceRunDates(from, to);
     return rows
       .map((r) => ({ date: String(r.date).slice(0, 10), km: Number(r.distance_km) }))
-      .filter((r) => Number.isFinite(r.km) && r.km > 0);
+      .filter((r) => Number.isFinite(r.km) && r.km > 0 && !races.has(r.date));
   } catch {
     return [];
   }
@@ -236,9 +241,9 @@ export function closedWeekRunHarm(dateISO: string): HarmEvidence | null {
  * and the long-run peak never lands under it. A longest the body paid for is not
  * counted; the next-longest that it took well is. Null when none.
  */
-export function demonstratedLongKm(asOf: string, runs: { date: string; km: number }[]): number | null {
+export function demonstratedLongKm(asOf: string, runs: { date: string; km: number }[], days = 28): number | null {
   const recent = runs
-    .filter((r) => r.km > 0 && r.date <= asOf && (daysBetweenISO(asOf, r.date) ?? 99) <= 28)
+    .filter((r) => r.km > 0 && r.date <= asOf && (daysBetweenISO(asOf, r.date) ?? 99) <= days)
     .sort((a, b) => b.km - a.km);
   for (const r of recent) {
     if (runningHarmOnDay(r.date) == null) return round1(r.km);
@@ -299,6 +304,29 @@ function demonstratedRunCapacityRead(anchor: string): DemonstratedRunCapacity {
       allRuns.filter((r) => r.date >= isoDaysAgo(closedEnd, 28))
     ),
   };
+}
+
+/**
+ * What the running had demonstrated going INTO a race (`raceRunDate`, the race effort's
+ * day — race-recovery.ts): the capacity floor the closed weeks up to it carried without
+ * harm, and the longest run of the eight weeks before it taken well — the race's own
+ * kilometres never in either (runDays). The weeks after the race resume toward THIS
+ * (run-progression.ts): a recovery window's capped week is never the next base, and the
+ * long-run ladder steps off the long run built before it, not a shake-out.
+ */
+export function preRaceRunCapacity(raceRunDate: string): { floor_km: number | null; long_km: number | null } {
+  const race = String(raceRunDate).slice(0, 10);
+  return requestMemo(
+    `pre_race_run_capacity:${race}`,
+    () => {
+      const shown = demonstratedRunCapacity(race);
+      const before = addDaysISO(race, -1) ?? race;
+      const days = DEMONSTRATED_CAPACITY_WEEKS * 7;
+      const long = demonstratedLongKm(before, runDays(isoDaysAgo(before, days), before), days);
+      return { floor_km: shown.floor_km, long_km: long };
+    },
+    copyFlat
+  );
 }
 
 // ---------- SAYING WHY A BIG WEEK IS NOT COUNTED (2026-09-29) ----------

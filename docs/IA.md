@@ -1,7 +1,7 @@
 # Cairn IA + component architecture (approved 2026-10-06)
 
 ## Approved decisions
-1. "Your path" (race estimate, weight + deadlift goals, trail) moves from Today to the Horizon landing. Today keeps ONE glance line ("26 days to Cambridge · Sharpen, wk 6 of 6 ›") that opens Horizon.
+1. "Your path" (race estimate, weight + deadlift goals, trail) moves from Today to the Horizon landing. Today keeps ONE glance line ("26 days to Cambridge · Sharpen week ›") that opens Horizon.
 2. The KM/MI toggle leaves Horizon. ALL units are controlled from Settings (one Units group). Distance (km/mi) exists; add weight (lb/kg) and design the foundation so any further unit (height, pace-per-unit, temperature, energy) is a one-place change.
 3. Today keeps the "What's ahead" week strip as a quick GLANCE (no summary line owned by it — Horizon owns the week summary sentence). Tap a chip -> day peek inline.
 4. Horizon keeps three segments (Week, To the race, Season); WEEK is always the default landing (never remembered per session) and is a DESIGNED page with real information + visualization (frame hero, week shape bars by planned load, still-open sessions, next milestones, compact goals). Richer visuals welcome (race ladder, load shape, goal progress) — calm, no numeric scores.

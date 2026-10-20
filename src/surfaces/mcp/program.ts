@@ -37,6 +37,7 @@ import {
   updateBlock,
   weeklyRunPlan,
 } from "../../domain/training/index.js";
+import { raceDays } from "../../domain/training/race-days.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 import { flexibleTrainingAgenda } from "../../repo.js";
 
@@ -316,6 +317,13 @@ export function registerProgramTools(server: McpToolRegistrar) {
     "The RACE-BUILD layer over get_run_plan for a dated race: an estimated finish time / pace for the goal distance (the watch's own predictor, Riegel-adjusted, else a conservative read off the best recent run) and how it has moved; per-session pace bands (easy / long / tempo / threshold / VO2) derived from the stated target; the week-by-week ladder from this week to race week (volume, long run, down weeks, peak, taper, quality + strength hints); the seven-day leg map (runs, strength days with heavy-lower flagged, the habitual ride read off the log) with where heavy squats belong in this phase and one sentence about where the weekly ride sits. Each week also carries its coaching sentence (focus, focus_short) and how the lifting fits it (with_lifting). running says what the athlete runs: race (a dated build), runs (no race: available:false with a reason, but this_week and the closed-week review still read, never a ladder or an estimate) or none (a lifting-only athlete: nothing to show). this_week is actual-first: runs lists every run logged this week (km, pace, effort graded by the athlete's stated effort and personal HR model, title, the planned run it answered, or extra:true for a run that closed no intention, plus an actual_line and a quiet plan_line), headline + detail are the server's recap of the week, and closed says the week's running is already done (on its Sunday, the last stated run day run or every intention completed) — the ladder and capacity then read it as a closed week today, stepping off it as run exactly as next Monday's engine will, and adapted says in one sentence how the ladder moved. Suggestion only — a fit, never a grade.",
     { date: z.string().optional() },
     async ({ date }) => asText(raceBuild(date, { describeRunning: true }))
+  );
+
+  server.tool(
+    "get_race_days",
+    "The race COUNTDOWN for a dated race within three weeks: today through race day, one row a day, grouped by the build's weeks (each with its stage word, focus_short, focus and how the lifting fits). Each day: days_out, the run (kind easy|quality|long, label, km with a miles twin, distance_text and pace_text in the athlete's run units, a quality session's parts on one structure_text line, race:true on race day), the lift (the plan day the weekday map puts there, heavy_lower, legs_lighter when the taper / race-week / key-run-eve leg trim applies or a coach change adapted a heavy-leg day, done), rest, travel when a trip covers the date, and changes[] — the coach changes in effect on that day (decision_id, title, why, state applied|announced, status_line, reversible, undo). race carries the event, date, distance, the athlete's target and the race-pace band. {available:false, reason} with no dated race or more than three weeks out. Pure read, mirrors GET /api/race-build/days. `through` (YYYY-MM-DD) stops before race day.",
+    { through: z.string().optional() },
+    async ({ through }) => asText(raceDays({ through: through && through !== "race" ? through : undefined }))
   );
 
   server.tool(

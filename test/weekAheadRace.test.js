@@ -78,7 +78,7 @@ test("weekAheadRaceLine: a race next Monday, read on a Tuesday, is '1 week out' 
   const line = weekAheadRaceLine(raceGoal({ date: "2026-09-21", days_to_race: 6, phase: "taper" }), "2026-09-15");
   assert.ok(line);
   assert.equal(line.weeks_to_race, 1);
-  assert.equal(line.text, "Half marathon · 1 week out · tapering");
+  assert.equal(line.text, "Half marathon · race week is next week · tapering");
   assert.ok(!/1 weeks/.test(line.text), "singular, not '1 weeks'");
 });
 

@@ -83,6 +83,7 @@ import { liftDows, strengthScheduleRead } from "./strength-schedule.js";
 import { getEnduranceGoal, getEnduranceSchedule, getPrimaryDiscipline, WEEKDAY_NAMES } from "./profile.js";
 import { RUN_KIND_LABELS } from "./run-edit.js";
 import { activeRecoveryWeek } from "./recovery-week.js";
+import { isRaceDay, raceRecoveryWindow } from "./race-recovery.js";
 import { getProgramState, runVolumeSpikeRead, type MesocycleState } from "./program-state.js";
 import { runIntensityDiscipline } from "./run-progression.js";
 import { programBalance } from "./progression.js";
@@ -172,6 +173,7 @@ import {
   QUIET_STREAK_GUARDED_WHY,
   QUIET_STREAK_WHY,
   RECOVERY_WEEK_CAVEAT,
+  POST_RACE_CAVEAT,
   REST_GRADE_READINESS_WHY,
   RUN_DOWN_WHY,
   FELT_LOW_ENERGY_EASY_WHY,
@@ -1517,6 +1519,16 @@ export function dayRead(
   return value;
 }
 
+// How many day reads were COMPUTED (a memo hit is not counted), per date, in this
+// process — for the cost tests that pin which reads may pay for a day read at all (a
+// race build for a later Monday must not: src/repo/week-strength-placement.ts).
+const dayReadComputes = new Map<string, number>();
+
+/** Day reads computed so far, per date (see dayReadComputes). */
+export function dayReadComputeCounts(): Record<string, number> {
+  return Object.fromEntries(dayReadComputes);
+}
+
 function computeDayRead(
   date?: string,
   recovery?: any,
@@ -1524,7 +1536,12 @@ function computeDayRead(
   underfuelingSnapshot?: UnderfuelingRead
 ): DayRead {
   const d = date || localDateISO();
+  if (dayReadComputes.size >= 64 && !dayReadComputes.has(d)) dayReadComputes.clear();
+  dayReadComputes.set(d, (dayReadComputes.get(d) ?? 0) + 1);
   const recoveryWeek = activeRecoveryWeek(d);
+  // The days after a dated race (race-recovery.ts — the one read): a training day said
+  // lighter, never a rest by itself. Fail-soft: no window.
+  const raceRecovery = signalInput(() => raceRecoveryWindow(d), null);
   // The athlete's standing posture toward an accumulated-load rest. A PREFERENCE, and
   // read like one: it can only ever select among reads the evidence already permits
   // (see the drive rule below), never produce one on its own. Fail-soft to the floor's
@@ -2218,9 +2235,13 @@ function computeDayRead(
   // from opening ANOTHER run tomorrow (see the softening guard below).
   const yesterdayIso = addDaysISO(d, -1);
   const hardCardioYesterday = !!yesterdayIso && signalInput(() => hardCardioDay(yesterdayIso, cardioLoadMedian), false);
-  const runNoveltyYesterday: LongestRunNovelty | null = yesterdayIso
-    ? signalInput(() => longestRunNovelty(yesterdayIso), null)
-    : null;
+  // The RACE is the build's own dose, never news: a race-day "longest in months" is what
+  // the build was for, and the post-race recovery window (race-recovery.ts) is the one
+  // answer to it — lighter days, never a second brake stacked on them.
+  const runNoveltyYesterday: LongestRunNovelty | null =
+    yesterdayIso && !signalInput(() => isRaceDay(yesterdayIso, d), false)
+      ? signalInput(() => longestRunNovelty(yesterdayIso), null)
+      : null;
   if (hardCardioYesterday || runNoveltyYesterday) {
     (signals as any).endurance_yesterday = {
       hard_cardio: hardCardioYesterday,
@@ -3223,6 +3244,11 @@ function computeDayRead(
         if (recoveryWeek) {
           caveats.push(pickDayVariant(RECOVERY_WEEK_CAVEAT, d, "planned_training:recovery_week"));
           pushVetoes.push("recovery_week");
+        } else if (raceRecovery) {
+          // SAFETY, like the recovery week: the days after a race are a deliberately
+          // lighter dose, and reaching inside them is reaching against the structure.
+          caveats.push(pickDayVariant(POST_RACE_CAVEAT, d, "planned_training:post_race"));
+          pushVetoes.push("post_race_recovery");
         }
         if (reduceItem) {
           caveats.push(
@@ -3476,7 +3502,11 @@ function computeDayRead(
                     ? pickDayVariant(TRAIN_QUIET_WHY, d, "planned_training_quiet")
                     : pickDayVariant(TRAIN_CLEAR_WHY, d, "planned_training");
         return {
-          outcome: recoveryWeek ? DAY_READ_OUTCOMES.planned_reduced_training : DAY_READ_OUTCOMES.planned_training,
+          outcome: recoveryWeek
+            ? DAY_READ_OUTCOMES.planned_reduced_training
+            : raceRecovery
+              ? DAY_READ_OUTCOMES.planned_post_race_training
+              : DAY_READ_OUTCOMES.planned_training,
           read: { kind: "train", focus: sd.focus, why, est_minutes: commitmentPressure ? 40 : 60, signals },
         };
       },

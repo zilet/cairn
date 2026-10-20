@@ -8,6 +8,7 @@
 import { db } from "../db.js";
 import { mondayOf } from "../lib/dates.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
+import { datedPlanDayFocus } from "./plan-day-focus.js";
 import {
   canonicalGroup,
   classifyMuscleGroup,
@@ -81,6 +82,13 @@ export function planDayFocus(day: Pick<PlanDayCandidate, "name" | "focus" | "day
   return String(day.focus || day.name || `Day ${day.day_number}`)
     .replace(/\s+/g, " ")
     .trim();
+}
+
+// The focus as it reads on `date`: a stored calendar claim ("on the threshold-run day")
+// is dropped for the real calendar's words (src/repo/plan-day-focus.ts). Falls back to
+// the label when a claim was all the focus said.
+export function planDayFocusOn(day: Pick<PlanDayCandidate, "name" | "focus" | "day_number">, date: string): string {
+  return datedPlanDayFocus(planDayFocus(day), date) ?? planDayLabel(day);
 }
 
 // The label a plan day goes by everywhere a person reads it: its NAME ("Pull"). A
@@ -542,23 +550,128 @@ export function weekdayPlanDayMap<T extends WeekdayMappablePlanDay>(
   return map;
 }
 
+// ---------- key runs: the heavy-lower day keeps its distance ----------
+//
+// The deal above is the athlete's rotation, phased off what they logged — and it is
+// blind to the run calendar. Whatever weekday the ring happens to hand the leg day is
+// the leg day, so a week phased one slot over put "the week's one leg day" on the
+// morning after the threshold run, the same day as the easy run, the travel day
+// (2026-10-19). The rotation stays; only its PLACEMENT inside the week learns the
+// key runs: a heavy-lower day dealt onto a stated quality or long run day, or the day
+// either side of one, trades weekdays with the nearest still-open non-lower day that
+// sits clear of every key run (and of every other leg day). An easy run is not a key run. No clean slot, no trade —
+// the stack note stays the voice. Nothing logged ever moves, and nothing lands on a
+// weekday the athlete did not name, because the trade is between two of their own
+// lifting weekdays.
+
+export interface KeyRunSwap {
+  day_number: number;
+  /** The weekday the deal laid the heavy-lower day on (0 = Sunday). */
+  from_dow: number;
+  /** The clean weekday it trades onto; the day that held it takes `from_dow`. */
+  to_dow: number;
+}
+
+/** Whether `dow` is a key-run day or the day either side of one (the week wraps). */
+function nearKeyRun(dow: number, keyRuns: ReadonlySet<number>): boolean {
+  return keyRuns.has(dow) || keyRuns.has((dow + 1) % 7) || keyRuns.has((dow + 6) % 7);
+}
+
 /**
- * This week's weekday → plan-day map with the real ring phase (anchor-aware).
- * Empty `map` when no lift schedule is known — callers then fall back to template
- * order rather than inventing Mon=Day1 weekdays.
+ * Trade each heavy-lower day the deal laid near a key run onto the nearest open,
+ * non-lower, key-run-clear weekday that does not sit beside another leg day. Pure: no DB, no clock; the input map is not
+ * mutated. `open` is the weekdays still free to move (unlogged, still ahead in the
+ * log); a weekday outside it neither gives nor takes. Ties go to the earlier weekday.
+ */
+export function keyRunAwarePlacement<T extends WeekdayMappablePlanDay>(
+  map: ReadonlyMap<number, T>,
+  opts: {
+    keyRunDows: readonly number[];
+    open: Iterable<number>;
+    isLower: (day: T) => boolean;
+    // Weekdays of this week already lived: what the deal laid there is not what
+    // happened, so it says nothing about a leg day beside a slot.
+    lived?: Iterable<number>;
+    // Weekdays of this week already lived with a heavy-lower session LOGGED — a lifting
+    // weekday or not (an extra leg session on a Saturday is still a leg day).
+    loggedLower?: Iterable<number>;
+  }
+): { map: Map<number, T>; swaps: KeyRunSwap[] } {
+  const out = new Map(map);
+  const swaps: KeyRunSwap[] = [];
+  const keyRuns = new Set(normalizeDows(opts.keyRunDows));
+  if (!keyRuns.size) return { map: out, swaps };
+  const open = normalizeDows([...opts.open]).filter((dow) => out.has(dow));
+  const lived = new Set(normalizeDows([...(opts.lived ?? [])]));
+  const loggedLower = new Set(normalizeDows([...(opts.loggedLower ?? [])]));
+  // A leg day on `n`: the one logged there, else (for a day still ahead) the one dealt.
+  const lowerOn = (n: number): boolean =>
+    loggedLower.has(n) || (!lived.has(n) && !!out.get(n) && opts.isLower(out.get(n)!));
+  for (const from of open) {
+    const day = out.get(from);
+    if (!day || !opts.isLower(day) || !nearKeyRun(from, keyRuns)) continue;
+    // A slot beside ANOTHER leg day is no slot: trading off the key run only to stack
+    // two leg days back to back moves the problem rather than solving it — and that
+    // includes a leg session already logged this week, not only the ones dealt.
+    const besideOtherLower = (to: number): boolean =>
+      [(to + 1) % 7, (to + 6) % 7].some((n) => n !== from && lowerOn(n));
+    const target = open
+      .filter((to) => {
+        const other = out.get(to);
+        return (
+          to !== from && !!other && !opts.isLower(other) && !nearKeyRun(to, keyRuns) && !besideOtherLower(to)
+        );
+      })
+      .sort(
+        (a, b) =>
+          Math.abs(weekdayOrder(a) - weekdayOrder(from)) - Math.abs(weekdayOrder(b) - weekdayOrder(from)) ||
+          weekdayOrder(a) - weekdayOrder(b)
+      )[0];
+    if (target == null) continue;
+    const other = out.get(target)!;
+    out.set(target, day);
+    out.set(from, other);
+    swaps.push({ day_number: day.day_number, from_dow: from, to_dow: target });
+  }
+  return { map: out, swaps };
+}
+
+/** The stated quality and long run weekdays — the key runs the leg day keeps off. */
+export function statedKeyRunDows(): number[] {
+  try {
+    return (getEnduranceSchedule()?.days ?? [])
+      .filter((day) => day.kind === "quality" || day.kind === "long")
+      .map((day) => day.dow);
+  } catch {
+    return []; // a schedule we cannot read is a schedule we do not have
+  }
+}
+
+/**
+ * This week's weekday → plan-day map with the real ring phase (anchor-aware) and the
+ * leg day kept off the key runs. Empty `map` when no lift schedule is known — callers
+ * then fall back to template order rather than inventing Mon=Day1 weekdays.
  */
 export function thisWeekPlanDayMap(date = localDateISO()): {
   map: Map<number, PlanDayCandidate>;
   lift_dows: number[];
   strength_start: number;
+  /** Heavy-lower days the week moved off a key run (omitted when none moved). */
+  key_run_swaps?: KeyRunSwap[];
 } {
   return requestMemo(`this_week_plan_day_map:${date}`, () => thisWeekPlanDayMapRead(date), copyDeep);
+}
+
+/** The ISO date of a dow inside the Monday-first week starting at day-index `monday`. */
+function weekDateOf(monday: number, dow: number): string {
+  return new Date((monday + weekdayOrder(dow)) * 86_400_000).toISOString().slice(0, 10);
 }
 
 function thisWeekPlanDayMapRead(date: string): {
   map: Map<number, PlanDayCandidate>;
   lift_dows: number[];
   strength_start: number;
+  key_run_swaps?: KeyRunSwap[];
 } {
   const candidates = planDayCandidates();
   const lift = normalizeDows(liftDows(date));
@@ -566,11 +679,65 @@ function thisWeekPlanDayMapRead(date: string): {
     return { map: new Map(), lift_dows: [], strength_start: 0 };
   }
   const anchors = recentSessionAnchors(date, candidates);
-  const anchor = anchors.find((a) => a.resolved) ?? null;
   const pool = candidates.filter((day) => planDayRole(day) === "strength");
-  const strength_start = strengthStartForWeek(date, lift, pool, anchor);
-  const map = weekdayPlanDayMap(candidates, lift, strength_start);
-  return { map, lift_dows: lift, strength_start };
+  const dateIndex = dayIndexOf(date);
+  if (dateIndex == null) {
+    const anchor = anchors.find((a) => a.resolved) ?? null;
+    const strength_start = strengthStartForWeek(date, lift, pool, anchor);
+    return { map: weekdayPlanDayMap(candidates, lift, strength_start), lift_dows: lift, strength_start };
+  }
+  const monday = dateIndex - ((dateIndex + EPOCH_DOW + 6) % 7);
+  const mondayIso = weekDateOf(monday, 1);
+  const keyRunDows = statedKeyRunDows();
+  // The week is REPLAYED off its own log, oldest first. The phase starts from the last
+  // session before this Monday; a logged day that matches what the week laid there
+  // (the swap included) keeps the week as laid, and one that does not re-phases the
+  // rest of the week off it — exactly the old latest-anchor rule, except that following
+  // a moved leg day no longer re-deals the days after it. Each (re)phase moves only the
+  // weekdays after the anchor it phases from, so a day already lived never moves.
+  const inWeek = anchors.filter((a) => a.date >= mondayIso).sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id);
+  const preWeekAnchor = anchors.find((a) => a.resolved && a.date < mondayIso) ?? null;
+  const placeFrom = (anchor: SessionAnchor | null) => {
+    const start = strengthStartForWeek(date, lift, pool, anchor);
+    const open = lift.filter((dow) => !anchor || anchor.date < mondayIso || weekDateOf(monday, dow) > anchor.date);
+    // The week's days already lived, and the leg sessions logged on them (any weekday):
+    // a trade never lands beside a leg day the athlete has already done.
+    const livedAnchors = anchor && anchor.date >= mondayIso ? inWeek.filter((a) => a.date <= anchor.date) : [];
+    const dowOf = (iso: string) => new Date(`${iso}T00:00:00Z`).getUTCDay();
+    const lived = anchor && anchor.date >= mondayIso ? lift.filter((dow) => weekDateOf(monday, dow) <= anchor.date) : [];
+    const loggedLower = livedAnchors
+      .filter((a) => {
+        const did = a.resolved ? candidates.find((c) => c.day_number === a.resolved!.day_number) : null;
+        return !!did && isHeavyLowerPlanDay(did);
+      })
+      .map((a) => dowOf(a.date));
+    const placed = keyRunAwarePlacement(weekdayPlanDayMap(candidates, lift, start), {
+      keyRunDows,
+      open,
+      isLower: isHeavyLowerPlanDay,
+      lived,
+      loggedLower,
+    });
+    return { start, ...placed };
+  };
+  let placed = placeFrom(preWeekAnchor);
+  const logged = new Map<number, PlanDayCandidate>();
+  for (const anchor of inWeek) {
+    if (!anchor.resolved) continue;
+    const dow = new Date(`${anchor.date}T00:00:00Z`).getUTCDay();
+    const did = candidates.find((c) => c.day_number === anchor.resolved!.day_number);
+    if (did && lift.includes(dow)) logged.set(dow, did);
+    if (placed.map.get(dow)?.day_number !== anchor.resolved.day_number) placed = placeFrom(anchor);
+  }
+  // The log is the truth for a day already lived.
+  const map = new Map(placed.map);
+  for (const [dow, did] of logged) map.set(dow, did);
+  return {
+    map,
+    lift_dows: lift,
+    strength_start: placed.start,
+    ...(placed.swaps.length ? { key_run_swaps: placed.swaps } : {}),
+  };
 }
 
 // ---------- the calendar day: lift, run, or rest ----------
@@ -663,8 +830,8 @@ export function trainAnywayPlanDay(date: string): PlanDayCandidate | null {
       const iso = new Date((index + ahead) * 86_400_000).toISOString().slice(0, 10);
       const dow = new Date(`${iso}T00:00:00Z`).getUTCDay();
       if (!lift.includes(dow)) continue;
-      const start = strengthStartForWeek(iso, lift, pool, anchor);
-      const day = weekdayPlanDayMap(candidates, lift, start).get(dow);
+      const mapped = thisWeekPlanDayMap(iso).map.get(dow);
+      const day = mapped ? candidates.find((c) => c.day_number === mapped.day_number) : null;
       if (day) return day;
     }
   }
@@ -754,19 +921,16 @@ interface ScheduledPlanDay {
  * an empty map means every caller falls back to the positional ring, which is exactly
  * the old behavior.
  */
-function scheduledPlanDay(
-  candidates: PlanDayCandidate[],
-  date: string,
-  anchor: SessionAnchor | null
-): ScheduledPlanDay | null {
+function scheduledPlanDay(candidates: PlanDayCandidate[], date: string): ScheduledPlanDay | null {
   const dow = new Date(date + "T00:00:00Z").getUTCDay();
   try {
-    const lift = normalizeDows(liftDows(date));
-    if (!lift.length) return null;
-    const pool = candidates.filter((day) => planDayRole(day) === "strength");
-    const strength_start = strengthStartForWeek(date, lift, pool, anchor);
-    const day = weekdayPlanDayMap(candidates, lift, strength_start).get(dow);
-    return day ? { day, lift_dows: lift, strength_start } : null;
+    // The one weekly placement every surface reads (thisWeekPlanDayMap): the ring phase
+    // and the leg day's distance from the key runs come from the same answer.
+    const week = thisWeekPlanDayMap(date);
+    if (!week.lift_dows.length) return null;
+    const mapped = week.map.get(dow);
+    const day = mapped ? (candidates.find((c) => c.day_number === mapped.day_number) ?? null) : null;
+    return day ? { day, lift_dows: week.lift_dows, strength_start: week.strength_start } : null;
   } catch {
     return null; // a schedule we cannot read is a schedule we do not have
   }
@@ -1132,7 +1296,7 @@ export function selectAdaptivePlanDay(date: string): AdaptivePlanDayPick | null 
   // so consulting the week only when no anchor exists leaves it permanently inert. The
   // anchor still sets the ring's PHASE (strengthStartForWeek); it no longer overrides
   // which weekday gets a session.
-  const scheduled = scheduledPlanDay(candidates, date, anchor);
+  const scheduled = scheduledPlanDay(candidates, date);
   const rotation =
     scheduled?.day ??
     (anchor?.resolved
@@ -1242,8 +1406,8 @@ export function selectAdaptivePlanDay(date: string): AdaptivePlanDayPick | null 
     if (pick && !isHeavyLowerPlanDay(pick)) {
       const lastLowerOpen = (() => {
         try {
-          const map = weekdayPlanDayMap(candidates, scheduled.lift_dows, scheduled.strength_start);
-          return laterLowerDatesThisWeek(date, map).length === 0 && fullLoadLowerSessionThisWeek(date) == null;
+          const later = laterLowerDatesThisWeek(date, thisWeekPlanDayMap(date).map);
+          return later.length === 0 && fullLoadLowerSessionThisWeek(date) == null;
         } catch {
           return false; // an unreadable week keeps the scorer's answer
         }
@@ -1260,11 +1424,11 @@ export function selectAdaptivePlanDay(date: string): AdaptivePlanDayPick | null 
 
   return {
     day_number: selected.day_number,
-    focus: planDayFocus(selected),
+    focus: planDayFocusOn(selected, date),
     day_type: selected.day_type,
     selection: {
-      selected: { day_number: selected.day_number, focus: planDayFocus(selected) },
-      rotation: { day_number: rotation.day_number, focus: planDayFocus(rotation) },
+      selected: { day_number: selected.day_number, focus: planDayFocusOn(selected, date) },
+      rotation: { day_number: rotation.day_number, focus: planDayFocusOn(rotation, date) },
       adapted,
       reason,
       // Omit-when-idle: present only on the morning the week's last lower day was kept.
@@ -1308,12 +1472,12 @@ export function selectedPlanDayForDate(date: string): SelectedPlanDay | null {
       date,
       plan_day_id: sessionDay.id,
       day_number: sessionDay.day_number,
-      focus: planDayFocus(sessionDay),
+      focus: planDayFocusOn(sessionDay, date),
       day_type: sessionDay.day_type,
       selection: {
         selected: {
           day_number: sessionDay.day_number,
-          focus: planDayFocus(sessionDay),
+          focus: planDayFocusOn(sessionDay, date),
           day_type: sessionDay.day_type,
         },
       },
@@ -1343,7 +1507,7 @@ export function selectedPlanDayForDate(date: string): SelectedPlanDay | null {
         date,
         plan_day_id: day.id,
         day_number: day.day_number,
-        focus: planDayFocus(day),
+        focus: planDayFocusOn(day, date),
         // Read from the LIVE plan row, never from the cached selection blob: the
         // template may have been edited since the Brief was written, and the day's
         // type is the one thing in here that changes what today IS.
@@ -1362,7 +1526,7 @@ export function selectedPlanDayForDate(date: string): SelectedPlanDay | null {
     date,
     plan_day_id: day.id,
     day_number: day.day_number,
-    focus: planDayFocus(day),
+    focus: planDayFocusOn(day, date),
     day_type: day.day_type,
     selection: selected.selection,
     source: "adaptive",
@@ -1445,7 +1609,7 @@ function projectHybridForward(date: string): {
       const week = weeks.get(monday) ?? thisWeekPlanDayMap(fd);
       weeks.set(monday, week);
       const day = strengthPlanDayOn(fd, { candidates, weekMap: week });
-      if (day && isHeavyLowerPlanDay(day)) heavy_lower_next = { date: fd, focus: planDayFocus(day) };
+      if (day && isHeavyLowerPlanDay(day)) heavy_lower_next = { date: fd, focus: planDayFocusOn(day, fd) };
     }
   }
   return { planned_run_next, heavy_lower_next };

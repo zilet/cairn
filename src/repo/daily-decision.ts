@@ -175,6 +175,9 @@ export const DAILY_DECISION_REASONS = [
   "race_taper_legs",
   // Race week: the heavy leg work sits out; calves and core stay light.
   "race_week_legs",
+  // The days after a dated race (race-recovery.ts): every group on the card lighter —
+  // fewer sets, an eased load, a hold rather than a step, no reach. Legs stay on.
+  "post_race_recovery",
   // The athlete's DATED push stance is in force and widened today (training-drive.ts):
   // a preference hold lifted, a second reach host, a recovering main lift no longer
   // parking the reach. Never fires over a deciding brake or a harmed recent day.
@@ -2082,7 +2085,11 @@ export function buildDailySessionDecision(
   // it widens the reach below. Every signal hold (readiness, soreness, an underpowered
   // session, a deload, a recovery cycle, train-anyway from rest) keeps its own cap.
   const stance = snapshot.signal_support?.training_drive === "push" ? snapshot.signal_support.push_stance : undefined;
+  // Inside the post-race recovery window (stress-budget.ts `race_recovery`) the stance
+  // never widens anything: the days after a race are a deliberately lighter dose.
+  const postRaceRecovery = snapshot.stress_budget?.race_recovery != null;
   const stanceOpen =
+    !postRaceRecovery &&
     stance != null &&
     stance.harm_free === true &&
     !decidingBrake(snapshot) &&
@@ -2720,6 +2727,7 @@ export function buildDailySessionDecision(
     sorenessSoftensDay ||
     trainAnywayKeepsReduced ||
     snapshot.day_read.recovery_week ||
+    postRaceRecovery ||
     longevityEase ||
     planComplexityEase ||
     // A lifting day reopened after its morning run is bounded while a genuine fresh
@@ -2747,7 +2755,9 @@ export function buildDailySessionDecision(
             (liftStillDue && (!stackLicensed || morningRunHeavy)) ||
             // The clock opens; the LOAD does not. A brake the log answered still holds
             // aggression for the day it was answered on.
-            quietDayOpened
+            quietDayOpened ||
+            // The days after a race: never a load step, never a challenge set.
+            postRaceRecovery
           ? "hold"
           : "normal";
   let duration: number | null;
@@ -2959,7 +2969,7 @@ export function buildDailySessionDecision(
   // …and a lift held after this morning's hard or longest run parks its reach too: a
   // challenge top set is the opposite of the held load the card just promised.
   const { reach, trimmed: reachTrimmed } =
-    quietDayOpened || runDay || morningRunHeavy
+    quietDayOpened || runDay || morningRunHeavy || postRaceRecovery
       ? { reach: EMPTY_REACH, trimmed: false }
       : resolveReach(snapshot, kind, deepGroups, rhythmLicensed, stanceOpen);
   if (reach.level === "push") {
@@ -3012,7 +3022,8 @@ export function buildDailySessionDecision(
         caps,
         muscles,
         candidates,
-        recoveryWeek: snapshot.day_read.recovery_week,
+        // The days after a race fill nothing extra, exactly as a recovery week does.
+        recoveryWeek: snapshot.day_read.recovery_week || postRaceRecovery,
         mesocyclePhase: snapshot.program.mesocycle_phase,
         stanceOpen,
         snapshot,

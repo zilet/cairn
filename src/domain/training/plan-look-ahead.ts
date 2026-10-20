@@ -291,7 +291,9 @@ export function planLookAhead(date?: string): PlanLookAhead {
 
   const nextMonday = addDaysISO(mondayOf(today), 7) ?? today;
   const nextWeek = safe(() => planWeek(lookAheadWeekAsOf(nextMonday, today)), null);
-  const race = safe(() => raceBuild(today), null);
+  // Only the rungs' kinds and short words are read here: the template ring, never this
+  // week's placement (which would recompute today's strength line for nothing).
+  const race = safe(() => raceBuild(today, { templateRing: true }), null);
 
   const weeks: PlanLookAheadWeek[] = [];
   const thisDays = thisWeek.days

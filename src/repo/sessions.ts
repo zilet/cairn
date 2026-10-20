@@ -2098,6 +2098,27 @@ function exportBrainTable(
   return rows;
 }
 
+// Race-scoped plan changes (src/repo/plan-adaptations.ts). Every status is history a
+// backup keeps — active, restored, cancelled, superseded — the same lossless rule as
+// superseded memories. `before` / `after` are the stored item snapshots, hydrated the
+// way the brain tables hydrate their JSON columns.
+function exportPlanAdaptations(): any[] {
+  let rows: any[] = [];
+  try {
+    rows = db.prepare(`SELECT * FROM plan_adaptations ORDER BY id`).all() as any[];
+  } catch {
+    return [];
+  }
+  return rows.map((row) => {
+    const { before_json, after_json, ...rest } = row;
+    return {
+      ...rest,
+      before: parseExportJson(before_json),
+      after: parseExportJson(after_json),
+    };
+  });
+}
+
 export function exportAll() {
   const dailyMetrics = (db.prepare(`SELECT * FROM daily_metrics ORDER BY date DESC, id DESC`).all() as any[]).map(
     (row) => {
@@ -2116,6 +2137,7 @@ export function exportAll() {
     profile: getProfile(),
     settings: getSettings(),
     plan: getPlan(),
+    plan_adaptations: exportPlanAdaptations(),
     exercises: listExercises(),
     sessions: getRecentSessions(100000),
     daily_session_compositions: listDailySessionCompositions(),

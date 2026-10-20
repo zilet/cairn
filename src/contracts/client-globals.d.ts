@@ -2126,7 +2126,7 @@ declare global {
     chipHtml(glance: ClientDayGlance, opts?: { selected?: string | null; controls?: string }): string;
     rowHtml(
       glance: ClientDayGlance,
-      opts?: { line?: import("./client-api.js").ClientTodayStrengthLine | null; lifts?: string; hard?: boolean }
+      opts?: { line?: import("./client-api.js").ClientTodayStrengthLine | null; lifts?: string; hard?: boolean; note?: string }
     ): string;
   };
   /** LAZY "calendar" bundle (day-detail-run-client.ts): the day's run section and its structure bar. */
@@ -6929,6 +6929,40 @@ declare global {
     /** This week's training agenda: the runs behind the bar when the build carries none. */
     agenda?: import("./client-api.js").ClientFlexibleTrainingAgenda | null;
     reducedMotion?(): boolean;
+    /** GET /api/race-build/days?through=race — the day-by-day countdown, within three weeks of the race. */
+    loadDays?(): Promise<unknown>;
+  };
+  // ---- The race countdown (race-countdown-*): today to race day, a row a day ----
+  type ClientRaceCountdownRow = {
+    date: string;
+    /** "Mon Oct 19". */
+    when: string;
+    /** "13 days out", "Today · 13 days out", "Race day". */
+    out: string;
+    today: boolean;
+    race: boolean;
+    done: boolean;
+    rest: boolean;
+    run: { title: string; figure: string; structure: string; done: boolean; kind: string } | null;
+    lift: { name: string; marks: string[]; heavy: boolean } | null;
+    /** "Travelling · Clearwater"; "" with no trip. */
+    travel: string;
+    /** The coach changes' titles on the day ("Adapted" rows). */
+    adapted: string[];
+  };
+  type ClientRaceCountdownWeek = {
+    week_start: string;
+    /** "Taper week · Easy runs and strides". */
+    title: string;
+    focus: string;
+    lifting: string;
+    /** A whole-week layout's title, said once on the week's heading (never on each day). */
+    adapted: string[];
+    rows: ClientRaceCountdownRow[];
+  };
+  type ClientRaceCountdownModel = {
+    race: { event: string; when: string; distance: string; target: string; pace: string };
+    weeks: ClientRaceCountdownWeek[];
   };
   interface Window {
     CairnPlanEnduranceBriefing: {
@@ -7024,7 +7058,7 @@ declare global {
     CairnRaceView: {
       viewHtml(
         model: ClientRaceViewModel,
-        opts?: { enter?: boolean; sessionsHtml?: string; nextWeekHtml?: string; units?: "km" | "mi" }
+        opts?: { enter?: boolean; sessionsHtml?: string; nextWeekHtml?: string; units?: "km" | "mi"; countdown?: boolean }
       ): string;
       thisWeekHtml(week: ClientRaceThisWeek | null, opts?: { sessionsHtml?: string; focus?: string; units?: "km" | "mi" }): string;
       /** "9.7 of 19.5 km", or the week's volume alone before anything is run; never a zero. */
@@ -7037,6 +7071,21 @@ declare global {
     CairnRaceViewController: {
       mount(host: Element, deps: ClientRaceViewDeps): () => void;
     };
+    CairnRaceCountdownModel: {
+      WINDOW_DAYS: number;
+      /** "Mon Oct 19". */
+      dayDate(iso: unknown): string;
+      outText(day: { days_out: number; race_day: boolean; today: boolean }): string;
+      /** A /race-build read with a dated race inside the countdown's window. */
+      shows(build: unknown): boolean;
+      countdownModel(value: unknown): ClientRaceCountdownModel | null;
+    };
+    CairnRaceCountdown: {
+      /** `whatIf`: each day still to come offers "What if I move this?" (the race view). */
+      countdownHtml(model: ClientRaceCountdownModel | null, opts?: { whatIf?: boolean }): string;
+      skeletonHtml(): string;
+      rowHtml(row: ClientRaceCountdownRow, model: ClientRaceCountdownModel, opts?: { whatIf?: boolean }): string;
+    };
   }
   declare const CairnPlanEnduranceBriefing: Window["CairnPlanEnduranceBriefing"];
   declare const CairnRaceWeekModel: Window["CairnRaceWeekModel"];
@@ -7047,6 +7096,8 @@ declare global {
   declare const CairnRaceEstimate: Window["CairnRaceEstimate"];
   declare const CairnRaceView: Window["CairnRaceView"];
   declare const CairnRaceViewController: Window["CairnRaceViewController"];
+  declare const CairnRaceCountdownModel: Window["CairnRaceCountdownModel"];
+  declare const CairnRaceCountdown: Window["CairnRaceCountdown"];
   // ---- Wave 5 stream C: the Horizon timeline (horizon-*) ----
   /** Where a Horizon row or link goes: a view-keyed route the app's router applies. */
   type ClientHorizonTarget = { tab: ClientTabName; section: string | null; id?: string | null };

@@ -490,7 +490,9 @@ test("a SHORT race keeps the original, tighter phase windows", () => {
   assert.equal(repo.getEnduranceGoal("2026-09-06").phase, "build");
 });
 
-test("a race with a time inside sixteen weeks opens an endurance block, not off-season strength", () => {
+test("a race with a time inside sixteen weeks opens an endurance block, not off-season strength", (t) => {
+  // Twelve weeks out: inside sixteen, well before peak — pinned so the race date never drifts into a peak.
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-08-30T12:00:00Z") });
   resetTables("program_blocks");
   repo.setProfile({
     endurance_goal: { mode: "race", event: "Riverside Half", date: "2026-11-22", distance_km: HALF_KM, target: "1:50" },

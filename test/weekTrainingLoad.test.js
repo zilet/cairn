@@ -257,5 +257,6 @@ test("week-training-load re-derives nothing: no SQL, no type regexes, no watch t
     "sessions",
     "shared",
     "training-read",
+    "travel-days",
   ]);
 });

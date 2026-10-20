@@ -120,6 +120,8 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/today-add-exercise-controller.ts", output: "public/js/today-add-exercise-controller.js" },
   { source: "src/client/today-brief-voice-client.ts", output: "public/js/today-brief-voice-client.js" },
   { source: "src/client/today-brief-run-leg-client.ts", output: "public/js/today-brief-run-leg-client.js" },
+  { source: "src/client/train-week-tomorrow-client.ts", output: "public/js/train-week-tomorrow-client.js" },
+  { source: "src/client/today-brief-asks-client.ts", output: "public/js/today-brief-asks-client.js" },
   { source: "src/client/today-brief-client.ts", output: "public/js/today-brief-client.js" },
   { source: "src/client/today-brief-signals-client.ts", output: "public/js/today-brief-signals-client.js" },
   { source: "src/client/today-brief-override-client.ts", output: "public/js/today-brief-override-client.js" },
@@ -189,6 +191,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/progress-history-model-client.ts", output: "public/js/progress-history-model-client.js" },
   { source: "src/client/progress-history-render-client.ts", output: "public/js/progress-history-render-client.js" },
   { source: "src/client/progress-history-client.ts", output: "public/js/progress-history-client.js" },
+  { source: "src/client/race-countdown-words-client.ts", output: "public/js/race-countdown-words-client.js" },
   { source: "src/client/progress-run-plan-client.ts", output: "public/js/progress-run-plan-client.js" },
   { source: "src/client/progress-route-deps-client.ts", output: "public/js/progress-route-deps-client.js" },
   { source: "src/client/train-fan-in-client.ts", output: "public/js/train-fan-in-client.js" },
@@ -215,6 +218,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/progress-overview-snapshot-client.ts", output: "public/js/progress-overview-snapshot-client.js" },
   { source: "src/client/train-focus-card-client.ts", output: "public/js/train-focus-card-client.js" },
   { source: "src/client/progress-overview-client.ts", output: "public/js/progress-overview-client.js" },
+  { source: "src/client/train-week-client.ts", output: "public/js/train-week-client.js" },
   // v2 wave 5 slots (stream A pre-registered them; B fills You, the stack, the stone detail).
   { source: "src/client/cairn-stack-model.ts", output: "public/js/cairn-stack-model.js" },
   { source: "src/client/cairn-stack-client.ts", output: "public/js/cairn-stack-client.js" },
@@ -291,6 +295,8 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/race-view-model.ts", output: "public/js/race-view-model.js" },
   { source: "src/client/race-estimate-client.ts", output: "public/js/race-estimate-client.js" },
   { source: "src/client/race-ladder-client.ts", output: "public/js/race-ladder-client.js" },
+  { source: "src/client/race-countdown-model.ts", output: "public/js/race-countdown-model.js" },
+  { source: "src/client/race-countdown-client.ts", output: "public/js/race-countdown-client.js" },
   { source: "src/client/race-view-client.ts", output: "public/js/race-view-client.js" },
   { source: "src/client/race-view-controller.ts", output: "public/js/race-view-controller.js" },
   // v2 wave 5 slots (stream A pre-registered them; C fills Horizon, D the ripple card).
@@ -412,6 +418,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/app/discipline-primer.ts", output: "public/js/app-discipline-primer.js" },
   { source: "src/client/app/onboarding.ts", output: "public/js/app-onboarding.js" },
   { source: "src/client/app/startup.ts", output: "public/js/app-startup.js" },
+  { source: "src/client/change-receipt-client.ts", output: "public/js/change-receipt-client.js" },
   { source: "src/client/changes-feed-client.ts", output: "public/js/changes-feed-client.js" },
   { source: "src/client/changes-feed-controller.ts", output: "public/js/changes-feed-controller.js" },
   { source: "src/client/ask-card-client.ts", output: "public/js/ask-card-client.js" },
@@ -556,6 +563,8 @@ export const BUNDLES = [
       "public/js/today-add-exercise-controller.js",
       "public/js/today-brief-voice-client.js",
       "public/js/today-brief-run-leg-client.js",
+      "public/js/train-week-tomorrow-client.js",
+      "public/js/today-brief-asks-client.js",
       "public/js/today-brief-client.js",
       "public/js/today-brief-signals-client.js",
       "public/js/today-brief-override-client.js",
@@ -704,6 +713,9 @@ export const BUNDLES = [
       "public/js/food-composer-chips-controller.js",
       "public/js/food-composer-turn-controller.js",
       "public/js/food-composer-controller.js",
+      // Train › Intake's read: it paints beside the log composer above (renderIntake awaits
+      // this bundle), and Train's landing never needs its bytes.
+      "public/js/progress-intake-client.js",
     ],
   },
   {
@@ -807,7 +819,7 @@ export const BUNDLES = [
   },  {
     output: "public/js/bundle-08-train.js",
     label: "Train (Progress views, plan editor, body metrics)",
-    // LAZY: every Train view (overview, 1RM, volume, program, sessions, energy,
+    // LAZY: every Train view (This week, overview, 1RM, volume, program, sessions, energy,
     // intake, endurance, weight, measurements, calendar), the plan editor and its
     // week strip, the journey reads Horizon also paints, and the body-metrics
     // figure Health reuses. Horizon and me-health list it as a dependency.
@@ -829,7 +841,6 @@ export const BUNDLES = [
       "public/js/progress-route-deps-client.js",
       "public/js/progress-endurance-controller.js",
       "public/js/progress-volume-client.js",
-      "public/js/progress-intake-client.js",
       "public/js/progress-calendar-client.js",
       "public/js/progress-muscle-trajectory-client.js",
       "public/js/progress-performance-client.js",
@@ -844,6 +855,8 @@ export const BUNDLES = [
       "public/js/progress-program-controller.js",
       "public/js/train-focus-card-client.js",
       "public/js/progress-overview-client.js",
+      // Train's landing, This week: the next session, the week's days, next week (over the glance rows).
+      "public/js/train-week-client.js",
       "public/js/progress-volume-route-client.js",
       "public/js/progress-intake-log-client.js",
       "public/js/05-progress.js",
@@ -862,8 +875,11 @@ export const BUNDLES = [
     lazy: "journey",
     routeless: true,
     inputs: [
+      // Horizon's frame line (the week hero, To the race's): Horizon loads this bundle anyway.
+      "public/js/frame-line-client.js",
       // Run/strength plan-item helpers: the run plan reads them (so does the plan editor).
       "public/js/cardio-plan-client.js",
+      "public/js/race-countdown-words-client.js",
       "public/js/progress-run-plan-client.js",
       "public/js/train-fan-in-client.js",
       "public/js/journey-progress-client.js",
@@ -898,7 +914,6 @@ export const BUNDLES = [
       "public/js/milestone-row-client.js",
       "public/js/goal-row-model.js",
       "public/js/goal-row-client.js",
-      "public/js/frame-line-client.js",
       "public/js/journey-trail-client.js",
       "public/js/week-model.js",
       "public/js/week-strip-client.js",
@@ -911,6 +926,8 @@ export const BUNDLES = [
       "public/js/race-view-model.js",
       "public/js/race-estimate-client.js",
       "public/js/race-ladder-client.js",
+      "public/js/race-countdown-model.js",
+      "public/js/race-countdown-client.js",
       "public/js/race-view-client.js",
       "public/js/race-view-controller.js",
       "public/js/horizon-model.js",
@@ -939,6 +956,7 @@ export const BUNDLES = [
       "public/js/chat-capture-chips-client.js",
       // Ask → Changes (the calm asks + the history-first feed with Undo, and the
       // screen itself: renderCoach, dispatched through lazy("ask")/withLatestRender).
+      "public/js/change-receipt-client.js",
       "public/js/changes-feed-client.js",
       "public/js/changes-feed-controller.js",
       "public/js/ask-card-client.js",

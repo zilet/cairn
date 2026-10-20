@@ -10,9 +10,8 @@ import { addChatMessage, listChatMessages } from "../repo/chat.js";
 import { violatesReadingGrammar } from "../repo/day-read-grammar.js";
 import { pickDayVariant } from "../repo/brain/day-read-rules.js";
 import { getLatestNutritionTarget, setNutritionTarget } from "../repo/nutrition.js";
+import { placeFirstWeekLifts } from "../repo/first-week.js";
 import { getPlan } from "../repo/plan.js";
-import { weekdayPlanDayMap } from "../repo/plan-selection.js";
-import { statedLiftDows } from "../repo/profile.js";
 import { executionProfileForOp, getSettings, interactiveTimeoutForOp, setSettings } from "../repo/settings.js";
 import { localDateISO } from "../repo/shared.js";
 import { applyDueAnnouncedDecisions } from "../domain/brain/autonomy-service.js";
@@ -284,38 +283,13 @@ function trainingWeekExists(): boolean {
 /**
  * The week the reveal shows: each lifting day's NAME, on the weekday it lands when the
  * person named their lifting weekdays (the stated strength_schedule — the same map the
- * week strip uses), else in plan order with no weekday. Never an invented Mon=Day 1.
+ * week strip uses, including the key-run trade), else in plan order with no weekday.
+ * Never an invented Mon=Day 1.
  */
 export function welcomeWeekFrom(days: any[] | null | undefined): WelcomeWeekDay[] | null {
-  const lifting = (Array.isArray(days) ? days : [])
-    .filter((d) => Number.isFinite(Number(d?.day_number)) && Array.isArray(d?.items) && d.items.length > 0)
-    .filter((d) => d.items.some((it: any) => String(it?.kind ?? "strength") !== "cardio"))
-    .map((d) => ({
-      day_number: Number(d.day_number),
-      name: String(d.name || d.focus || `Day ${Number(d.day_number)}`)
-        .trim()
-        .slice(0, 60),
-      names: d.items
-        .filter((it: any) => String(it?.kind ?? "strength") !== "cardio")
-        .map((it: any) => String(it?.exercise ?? "")),
-    }))
-    .sort((a, b) => a.day_number - b.day_number);
-  if (!lifting.length) return null;
-  let liftDows: number[] = [];
-  try {
-    liftDows = statedLiftDows();
-  } catch {
-    liftDows = [];
-  }
-  if (liftDows.length) {
-    const map = weekdayPlanDayMap(lifting, liftDows);
-    if (map.size) {
-      return [...map.entries()]
-        .sort((a, b) => ((a[0] + 6) % 7) - ((b[0] + 6) % 7))
-        .map(([dow, day]) => ({ dow, day_number: day.day_number, name: day.name }));
-    }
-  }
-  return lifting.map((d) => ({ dow: null, day_number: d.day_number, name: d.name }));
+  const placed = placeFirstWeekLifts(days);
+  if (!placed) return null;
+  return placed.map((day) => ({ dow: day.dow, day_number: day.day_number, name: day.name }));
 }
 
 /** The landed week for the reveal: the calendar's whole week, else the lift-only rows. */

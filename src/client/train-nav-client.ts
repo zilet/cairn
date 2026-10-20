@@ -1,11 +1,12 @@
 // @ts-check
 // Train's navigation is ONE level. The Progress views fold into 4 top GROUPS, and
-// each group has one LANDING leaf that wears the group bar (Train → Overview,
-// Program → the Program read, Fuel → Intake, Body → Weight). Every other leaf sits
+// each group has one LANDING leaf that wears the group bar (Train → This week, the
+// dated agenda; Program → the Program read, Fuel → Intake, Body → Weight). Every other leaf sits
 // one tap deeper: its landing lists it as a hairline row, and the leaf itself wears
 // one quiet "‹ Group" step back instead of a second row of tabs. The ROUTE stays the
-// leaf (/app/train/<leaf>), so every deep link is unchanged. ui-segments-client.ts
-// wires what this module builds.
+// leaf (/app/train/<leaf>), so every deep link is unchanged: the old landing, the
+// overview (/app/train/overview), is the Progress leaf now, listed first under This
+// week. ui-segments-client.ts wires what this module builds.
 
 type TrainNavSegment = readonly [string, string];
 type TrainNavApi = {
@@ -27,7 +28,7 @@ const TRAIN_NAV_GROUPS: readonly TrainNavSegment[] = [
 ];
 // Each group's leaves, its landing first.
 const TRAIN_NAV_GROUP_LEAVES: Record<string, readonly string[]> = {
-  train: ["overview", "sessions", "trend", "volume", "endurance", "calendar"],
+  train: ["week", "overview", "sessions", "trend", "volume", "endurance", "calendar"],
   program: ["program", "plan"],
   // "menu" is a cross-view row (like Program's "plan"): it opens the week menu on Today.
   fuel: ["intake", "energy", "menu"],
@@ -36,6 +37,7 @@ const TRAIN_NAV_GROUP_LEAVES: Record<string, readonly string[]> = {
 // A deeper leaf's row on its landing: a plain name and one muted line on what sits
 // behind it. Words only; the numbers live one tap deeper.
 const TRAIN_NAV_DEEPER_ROWS: Record<string, readonly [string, string]> = {
+  overview: ["Progress", "Where to focus, what moved, muscle by muscle"],
   sessions: ["History", "Every session, lift by lift"],
   trend: ["Lift trends", "Estimated 1RM over time, one lift at a time"],
   volume: ["Volume", "Working sets by muscle, the last 30 days"],

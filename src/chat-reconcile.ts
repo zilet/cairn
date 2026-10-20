@@ -15,7 +15,11 @@ import {
 import { pickDayVariant } from "./repo/brain/day-read-rules.js";
 import type { StoredRun } from "./repo/run-edit.js";
 import { localDateISO } from "./repo/shared.js";
+import { isoDow, WEEKDAY_NAMES } from "./repo/profile.js";
 import { describeLandingDay } from "./domain/brain/structure-request.js";
+import { brainChangeReceipt, isBrainChangeKind } from "./domain/brain/changes-feed.js";
+import { getBrainDecision } from "./repo/brain-decisions.js";
+import type { ChangeReceipt } from "./contracts/change-receipt.js";
 
 export function recordOrNull(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
@@ -37,6 +41,26 @@ function replyClaimsPlanSuccess(reply: string): boolean {
   return /\b(?:i(?:['’]ve| have)?\s+(?:now\s+)?(?:updated|adjusted|saved|applied|pushed|changed|removed|added)|(?:updated|adjusted|saved|applied|pushed|changed)\s+(?:your|today['’]?s|the)\s+(?:live\s+)?(?:plan|program|session|workout)|(?:plan|program|session|workout)\s+is\s+(?:now\s+)?(?:updated|saved|live))\b/i.test(
     reply
   );
+}
+
+// The reply with every sentence that claims a plan write removed, everything else word
+// for word. Judged sentence by sentence inside each line, so a bulleted answer keeps its
+// shape; a line left empty goes with its claim.
+const CLAIM_SENTENCE_BREAK = /(?<=[.!?])\s+(?=\S)/;
+export function withoutPlanSuccessClaims(reply: string): string {
+  return String(reply ?? "")
+    .split("\n")
+    .map((line) => {
+      if (!replyClaimsPlanSuccess(line)) return line;
+      const kept = line.split(CLAIM_SENTENCE_BREAK).filter((sentence) => !replyClaimsPlanSuccess(sentence));
+      const text = kept.join(" ");
+      // A list marker or heading left with nothing after it is not a line.
+      return /^[\s*_>#\-–—•\d.)]*$/.test(text) ? null : text;
+    })
+    .filter((line): line is string => line !== null)
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 // ── CHAT_REFUSAL_VARIANTS ────────────────────────────────────────────────────
@@ -340,7 +364,223 @@ const NON_PLAN_WRITE_ACTIONS: ReadonlySet<ChatActionType> = new Set<ChatActionTy
 const REPLY_NAMES_THE_PLAN =
   /\b(?:plan|program|programme|session|workout|split|schedule|template|routine|week|lift|exercise|run|ride|bench|squat|deadlift|press|row|sets?|reps?)\b/i;
 
+// ── what a DATED plan_update did with each part ─────────────────────────────
+// A change addressed by date is aimed by the server's dated week (chatTurns.ts
+// resolveDatedPlanChanges): a part may land on another session than the model guessed
+// (retargeted), or not land at all (skipped — a liftless or past date, a lift that is
+// not on that date's session, an unreadable date or end date). Those outcomes lived only
+// on result.date_resolution, so a reply could say "done" over a part that never happened.
+// Each such part now gets ONE calm receipt line under the reply, in the athlete's terms;
+// a skipped part is never described as done, and a retarget is said as where it landed.
+type DateWords = (when: string) => string;
+
+export const DATED_SKIP_NO_LIFT_VARIANTS: ReadonlyArray<DateWords> = [
+  (when) => `${when} has no lifting session, so nothing changed there.`,
+  (when) => `There's no lifting session on ${when}, so that part didn't change anything.`,
+  (when) => `${when} isn't a lifting day on your plan, so nothing changed for it.`,
+  (when) => `Nothing changed for ${when} — there's no lifting session on it.`,
+];
+
+export const DATED_SKIP_PAST_VARIANTS: ReadonlyArray<DateWords> = [
+  (when) => `${when} has already passed, so nothing changed for it.`,
+  (when) => `${when} is already behind us, so that part didn't change anything.`,
+  (when) => `Nothing changed for ${when} — that day has already gone by.`,
+  (when) => `${when} is in the past, so I left that part as it was.`,
+];
+
+export const DATED_SKIP_NO_CALENDAR_VARIANTS: ReadonlyArray<DateWords> = [
+  (when) => `There's no lifting week on your calendar to place ${when} on, so nothing changed there.`,
+  (when) =>
+    `Your plan has no weekdays set for lifting, so I couldn't tell which session ${when} is — nothing changed there.`,
+  (when) => `Nothing changed for ${when}: without lifting days on your calendar, no session is tied to that date.`,
+  (when) =>
+    `I couldn't place ${when} on a session — your lifting days aren't on the calendar — so that part didn't change.`,
+];
+
+export const DATED_SKIP_LIFT_NOT_THERE_VARIANTS: ReadonlyArray<(lift: string, session: string) => string> = [
+  (lift, session) => `${lift} isn't part of ${session}, so nothing changed there.`,
+  (lift, session) => `${session} doesn't have ${lift} in it, so I left that part alone.`,
+  (lift, session) => `Nothing changed for ${lift}: it isn't on ${session}.`,
+  (lift, session) => `${lift} isn't in ${session}, so that part didn't change anything.`,
+];
+
+export const DATED_SKIP_DATE_UNREADABLE_VARIANTS = [
+  "I couldn't tell which day one of those changes was for, so that part didn't change anything.",
+  "One change didn't name a day I could read, so I left it out.",
+  "Nothing changed for one part — I couldn't tell which day it was meant for.",
+  "One of those changes had a day I couldn't place, so it didn't go through.",
+] as const;
+
+export const DATED_SKIP_END_UNREADABLE_VARIANTS = [
+  "One change had an end date that isn't a day ahead, so I left it out rather than make it permanent.",
+  "I didn't make one of those changes: its end date isn't a day still to come, and it shouldn't stay for good.",
+  "One part was meant to end on a date that isn't ahead of us, so I left it out instead of making it permanent.",
+  "Nothing changed for one part — its end date didn't read as a day ahead, and I won't make a temporary change permanent.",
+] as const;
+
+export const DATED_RETARGET_LANDED_VARIANTS: ReadonlyArray<(when: string, session: string) => string> = [
+  (when, session) => `That change landed on ${when}'s session, ${session} — the session that day carries.`,
+  (when, session) => `${when} carries ${session}, so that's the session the change landed on.`,
+  (when, session) => `The change went onto ${session}, the session on ${when}.`,
+  (when, session) => `On your plan ${when} is ${session}, and that's where the change landed.`,
+];
+
+export const DATED_RETARGET_AIMED_VARIANTS: ReadonlyArray<(when: string, session: string) => string> = [
+  (when, session) => `That change is aimed at ${when}'s session, ${session} — the session that day carries.`,
+  (when, session) => `${when} carries ${session}, so that's the session the change is for.`,
+  (when, session) => `The change is for ${session}, the session on ${when}.`,
+  (when, session) => `On your plan ${when} is ${session}, and that's the session the change goes to.`,
+];
+
+const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const MAX_DATED_RECEIPTS = 4;
+
+function datedWhen(date: unknown): string | null {
+  const iso = String(date ?? "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return null;
+  const weekday = WEEKDAY_NAMES[isoDow(iso)];
+  const month = MONTH_SHORT[Number(iso.slice(5, 7)) - 1];
+  return weekday && month ? `${weekday}, ${month} ${Number(iso.slice(8, 10))}` : null;
+}
+
+function datedSkipLine(skip: Record<string, unknown>, today: string, i: number): string | null {
+  const reason = String(skip.reason ?? "");
+  const key = `chat-dated-${reason}:${i}`;
+  if (reason === "until_invalid") return pickDayVariant(DATED_SKIP_END_UNREADABLE_VARIANTS, today, key);
+  const when = datedWhen(skip.date);
+  if (reason === "date_invalid" || !when) return pickDayVariant(DATED_SKIP_DATE_UNREADABLE_VARIANTS, today, key);
+  if (reason === "date_past") return pickDayVariant(DATED_SKIP_PAST_VARIANTS, today, key)(when);
+  if (reason === "no_calendar") return pickDayVariant(DATED_SKIP_NO_CALENDAR_VARIANTS, today, key)(when);
+  if (reason === "exercise_not_on_date") {
+    const lift = String(skip.exercise ?? "").trim() || "That lift";
+    const name = String(skip.name ?? "").trim();
+    const session = name ? `${when}'s session, ${name}` : `${when}'s session`;
+    return pickDayVariant(DATED_SKIP_LIFT_NOT_THERE_VARIANTS, today, key)(lift, session);
+  }
+  return pickDayVariant(DATED_SKIP_NO_LIFT_VARIANTS, today, key)(when);
+}
+
+/** One receipt line per skipped or retargeted dated part, in the order the parts came. */
+export function datedPlanChangeReceipts(
+  applied: ReadonlyArray<{ type: ChatActionType; result?: unknown }>,
+  today: string = localDateISO()
+): string[] {
+  const lines: string[] = [];
+  let i = 0;
+  for (const entry of applied) {
+    if (entry.type !== "plan_update") continue;
+    const result = recordOrNull(entry.result);
+    const resolution = recordOrNull(result?.date_resolution);
+    if (!result || !resolution) continue;
+    // A retarget is said only for a part the server took: where it landed, or where it
+    // is aimed while it waits. A failed write's own receipt says what happened instead.
+    const retargetWords =
+      result.ok === true
+        ? result.verified === true
+          ? DATED_RETARGET_LANDED_VARIANTS
+          : DATED_RETARGET_AIMED_VARIANTS
+        : null;
+    for (const raw of Array.isArray(resolution.retargeted) ? resolution.retargeted : []) {
+      const retarget = recordOrNull(raw);
+      const when = datedWhen(retarget?.date);
+      const name = String(retarget?.name ?? "").trim();
+      // A change the model gave no day_number for was not re-aimed; nothing to say.
+      if (!retargetWords || !retarget || retarget.from == null || !when || !name) continue;
+      lines.push(pickDayVariant(retargetWords, today, `chat-dated-retarget:${i++}`)(when, name));
+    }
+    for (const raw of Array.isArray(resolution.skipped) ? resolution.skipped : []) {
+      const skip = recordOrNull(raw);
+      const line = skip ? datedSkipLine(skip, today, i++) : null;
+      if (line) lines.push(line);
+    }
+  }
+  return [...new Set(lines)].slice(0, MAX_DATED_RECEIPTS);
+}
+
+// ---------- structured receipts: the changes that LANDED this turn ----------
+//
+// The prose receipts above (datedPlanChangeReceipts and the reconcilers) stay the one
+// voice of the reply; this is the same turn's outcome as data — one ChangeReceipt
+// (src/contracts/change-receipt.ts) per ledger decision the turn landed, scheduled, or put
+// back — so the bubble can end on a uniform "what changed, until when, Undo" block.
+// Built from the LEDGER, never from the model's words: a part the server refused, failed
+// or held for review leaves no applied/announced decision and so no receipt (and
+// groundReply, chatGrounding.ts, still owns every claim the prose makes).
+
+const MAX_CHAT_RECEIPTS = 6;
+
+function decisionIdOf(result: Record<string, unknown> | null): number | null {
+  if (!result) return null;
+  const decision = recordOrNull(result.decision);
+  const id = Number(decision?.id ?? result.decision_id);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+/**
+ * The receipts for one chat turn: every coaching-change decision the turn's writes left
+ * (`createdDecisionIds` — the ledger rows written while the actions ran — plus any
+ * decision an action result names), as it stands after the turn. A change put back by
+ * this turn's own Undo reads `undone`; anything not applied or waiting is left out.
+ */
+export function chatChangeReceipts(
+  applied: ReadonlyArray<{ type: ChatActionType; result?: unknown; error?: string }>,
+  createdDecisionIds: readonly number[] = [],
+  today: string = localDateISO()
+): ChangeReceipt[] {
+  const landed = new Set<number>(createdDecisionIds.filter((id) => Number.isSafeInteger(id) && id > 0));
+  const undone = new Set<number>();
+  for (const entry of applied) {
+    if (entry.error) continue;
+    const result = recordOrNull(entry.result);
+    if (!result || result.ok === false) continue;
+    const id = decisionIdOf(result);
+    if (id == null) continue;
+    if (entry.type === "revert_decision") undone.add(id);
+    else landed.add(id);
+  }
+  const out: ChangeReceipt[] = [];
+  for (const id of [...new Set([...landed, ...undone])].sort((a, b) => a - b)) {
+    let decision: ReturnType<typeof getBrainDecision> = null;
+    try {
+      decision = getBrainDecision(id);
+    } catch {
+      decision = null;
+    }
+    if (!decision || !isBrainChangeKind(decision.kind)) continue;
+    const receipt = brainChangeReceipt(decision, today);
+    if (!receipt) continue;
+    // "undone" only for this turn's own Undo — a row something else cancelled is not news here.
+    if (receipt.status === "undone" && !undone.has(id)) continue;
+    if (receipt.status !== "undone" && undone.has(id) && !landed.has(id)) continue;
+    out.push(receipt);
+  }
+  return out.slice(0, MAX_CHAT_RECEIPTS);
+}
+
+// Every plan_update part was refused by its date before anything was proposed.
+function everyDatedPartSkipped(results: ReadonlyArray<Record<string, unknown>>): boolean {
+  return (
+    results.length > 0 &&
+    results.every((result) => {
+      const skipped = recordOrNull(result.date_resolution)?.skipped;
+      return result.ok === false && result.persisted === false && Array.isArray(skipped) && skipped.length > 0;
+    })
+  );
+}
+
 export function reconcileChatPlanReply(
+  reply: string,
+  message: string | null | undefined,
+  applied: Array<{ type: ChatActionType; result?: unknown; error?: string }>,
+  drafts: unknown[],
+  explicitPlanEdit?: boolean
+): string {
+  const out = reconcilePlanReplyCore(reply, message, applied, drafts, explicitPlanEdit);
+  const receipts = datedPlanChangeReceipts(applied).filter((line) => !out.includes(line));
+  return receipts.length ? appendReceipt(out, receipts.join(" ")) : out;
+}
+
+function reconcilePlanReplyCore(
   reply: string,
   message: string | null | undefined,
   applied: Array<{ type: ChatActionType; result?: unknown; error?: string }>,
@@ -404,12 +644,21 @@ export function reconcileChatPlanReply(
       return appendReceipt(reply, note);
     }
     if (replyClaimsPlanSuccess(reply)) {
-      return pickDayVariant(PLAN_UNTOUCHED_BY_QUESTION_VARIANTS, today, "chat-plan-question-no-op");
+      // A question answered is still an answer. Only the sentence that claims a write is
+      // false; the rest of the prose is what the athlete asked for, so it stays and the
+      // honest note follows it. (Replacing the whole reply threw away a first-turn
+      // answer and left the athlete with one canned line, 2026-10-19.)
+      const note = pickDayVariant(PLAN_UNTOUCHED_BY_QUESTION_VARIANTS, today, "chat-plan-question-no-op");
+      const kept = withoutPlanSuccessClaims(reply);
+      return kept ? appendReceipt(kept, note) : note;
     }
     return reply;
   }
 
   const results = planEntries.map((entry) => recordOrNull(entry.result) ?? {});
+  // Nothing was proposed: every part was refused by its date. The answer stays, minus any
+  // sentence claiming the change was made; the per-part receipts (above) say why.
+  if (everyDatedPartSkipped(results)) return withoutPlanSuccessClaims(reply);
   const verifiedResults = results.filter((result) => result.ok === true && result.verified === true);
   const verified = results.length > 0 && verifiedResults.length === results.length;
   // Nothing landed, but nothing FAILED either — the server accepted the change and it

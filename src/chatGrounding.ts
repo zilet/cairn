@@ -23,6 +23,13 @@
 // The same pass is the backstop for a stated day figure on a turn that logged no food
 // (reconcileChatIntakeReply owns the turns that did): "you're at roughly 1,090 kcal so
 // far" over a day that stands at 596 drops the sentence and appends the server's own.
+//
+// The same pass holds a reply's SCHEDULE to the server's week: a line that pairs a
+// weekday with a session ("Tuesday: Strength — Lower") is read against the dated week
+// (dated-week.ts — the Plan strip's own week), and a clear contradiction gets one calm
+// correction naming what the plan actually has that day. The chat agent once guessed
+// weekdays off the plan's day_numbers and told the athlete Lower was Tuesday when the
+// week had it on Friday (2026-10-19).
 import {
   ACTIVITY_NOT_LOGGED_VARIANTS,
   GOAL_NONE_SAVED_VARIANTS,
@@ -31,6 +38,8 @@ import {
   STRENGTH_OBJECTIVE_NONE_SAVED_VARIANTS,
   STRENGTH_OBJECTIVE_NOT_SAVED_VARIANTS,
 } from "./chat-reconcile.js";
+import { datedWeek, type DatedWeek, type DatedWeekDay } from "./domain/training/dated-week.js";
+import { addDaysISO, mondayOf } from "./lib/dates.js";
 import { pickDayVariant } from "./repo/brain/day-read-rules.js";
 import { getDayIntake } from "./repo/nutrition.js";
 import { localDateISO } from "./repo/shared.js";
@@ -50,7 +59,8 @@ export type StateClaim = {
 
 export type GroundingNote =
   | { kind: "claim"; class: ClaimClass; sentence: string }
-  | { kind: "intake"; sentence: string; server_kcal: number };
+  | { kind: "intake"; sentence: string; server_kcal: number }
+  | { kind: "schedule"; sentence: string; date: string; said: string; plan: string };
 
 export type GroundReplyContext = {
   /** The athlete's message this turn (anchors a goal acknowledgement to their number). */
@@ -63,6 +73,8 @@ export type GroundReplyContext = {
   today?: string;
   /** Test seam: the day's intake as the server reads it (repo getDayIntake). */
   readDay?: (date: string) => any;
+  /** Test seam: the dated week (dated-week.ts datedWeek); null = no calendar week. */
+  week?: DatedWeek | null;
 };
 
 // ── the honest sentences ─────────────────────────────────────────────────────
@@ -692,6 +704,247 @@ function joinClauses(clauses: readonly string[]): string {
   return body ? `${body.charAt(0).toUpperCase()}${body.slice(1)}.` : "";
 }
 
+// ── the schedule a reply states ──────────────────────────────────────────────
+// Conservative by construction: only a line that PAIRS a weekday with a session in a
+// list or "is" form ("Tuesday: Strength — Lower", "**Fri** — easy run + Upper Pull",
+// "Wednesday is Pull") is read, only for a weekday whose date is unambiguous (this week
+// from today on, or "next <weekday>"), and only a clear contradiction is corrected: a
+// lower day said where the plan has an upper one, an upper day where it has the leg day,
+// another plan day's own name, or a lift on a date the plan holds none. A suggestion, a
+// what-if, a past day and a negation are never judged — those are not claims about
+// what the week holds.
+export const SCHEDULE_CORRECTION_VARIANTS: ReadonlyArray<(when: string, plan: string) => string> = [
+  (when, plan) => `One correction from your plan: ${when} is ${plan}.`,
+  (when, plan) => `To keep the week straight — on your plan, ${when} is ${plan}.`,
+  (when, plan) => `Checking that against your plan: ${when} is actually ${plan}.`,
+  (when, plan) => `A quick fix on the days: your plan has ${when} as ${plan}.`,
+];
+
+const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"] as const;
+const WEEKDAY_ABBR: Record<string, number> = {
+  sun: 0,
+  mon: 1,
+  tue: 2,
+  tues: 2,
+  wed: 3,
+  thu: 4,
+  thur: 4,
+  thurs: 4,
+  fri: 5,
+  sat: 6,
+};
+// The weekday, its optional "next", a date aside, and the separator that makes the rest
+// of the segment the day's session: a list colon/dash, "is", or "'s session is". The date
+// aside is CAPTURED — "(Oct 30)" in group 3, ", Oct 30" / "10/30" in group 4 — because a
+// line that names its date is a claim about THAT date, not about this week's weekday.
+const SCHEDULE_HEAD = new RegExp(
+  String.raw`(?:^|[\s*_>(•\-–—|])(next\s+|this\s+)?[*_]*(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tues?|wed|thu(?:rs?)?|fri|sat|sun)\b[*_]*\.?(?:\s*\(([^)]{0,24})\)|,?\s+((?:oct|nov|dec|jan|feb|mar|apr|may|jun|jul|aug|sep)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?|\d{1,2}\/\d{1,2}))?[*_]*\s*(?:[:—–]|-\s|=|\s+is\s+|['’]s\s+(?:session|lift|workout|lifting|strength(?:\s+day)?)\s+is\s+)`,
+  "gi"
+);
+// A heading that opens a week's section ("Next week:", "**Next week**", "### This week
+// (Oct 19–25)"): the weekday lines under it belong to that week until the next heading.
+const WEEK_SECTION_HEADING = /^[\s#>*_•\-–—]*(next|this)\s+week\b[\s*_]*(?:\([^)]{0,40}\))?[\s*_]*(?::|$)/i;
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"] as const;
+
+// The month and day a date aside names ("Oct 30", "October 30th", "10/30", "2026-10-30"),
+// or null when the aside is not a date ("(travel day)").
+function asideMonthDay(aside: string | undefined): { md: string; iso: string | null } | null {
+  const text = String(aside ?? "")
+    .trim()
+    .toLowerCase();
+  if (!text) return null;
+  const iso = text.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
+  if (iso) return { md: `${iso[2]}-${iso[3]}`, iso: `${iso[1]}-${iso[2]}-${iso[3]}` };
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const named = text.match(/\b([a-z]{3})[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b/);
+  if (named) {
+    const month = MONTHS.indexOf(named[1] as (typeof MONTHS)[number]);
+    const day = Number(named[2]);
+    if (month >= 0 && day >= 1 && day <= 31) return { md: `${pad(month + 1)}-${pad(day)}`, iso: null };
+  }
+  const slashed = text.match(/\b(\d{1,2})\/(\d{1,2})\b/);
+  if (slashed) {
+    const month = Number(slashed[1]);
+    const day = Number(slashed[2]);
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) return { md: `${pad(month)}-${pad(day)}`, iso: null };
+  }
+  return null;
+}
+const SCHEDULE_SKIP_LINE =
+  /\b(?:if|could|would|might|instead|rather|move|moving|moved|swap|swapping|swapped|shift|shifting|switch|switching|option|options|consider|prefer|suggest|suggests|maybe|perhaps|did|was|were|last|yesterday|logged|trained|done|completed|went|alternatively)\b|\?\s*$/i;
+const SCHEDULE_CLAIM_END =
+  /[.;!?(]|\b(?:keep|keeps|so|to|for|because|since|after|before|then|but|while|with|ahead|leaving|which|that|and\s+then|plus\s+recovery)\b/i;
+const SCHEDULE_NEGATION = /\b(?:no|not|without|skip|skipping|off|nothing|zero)\b/i;
+// The claim is read as PARTS ("Strength — Lower", "easy run + Upper Pull"), and a part
+// names a session only as a whole: "lower" or "Lower B" is a day, "lower intensity" and
+// "legs stay fresh" are not.
+const CLAIM_PART_BREAK = /\s*(?:\+|&|\/|—|–|\s-\s|,|\band\b)\s*/i;
+const LOWER_PART = /^(?:(?:heavy\s+)?lower(?:\s+(?:body|day|session|[ab12]))?|legs?(?:\s+day)?)$/;
+const UPPER_PART =
+  /^(?:upper(?:\s+(?:body|day|session|push|pull|back|[ab12]))?|push(?:\s+(?:day|[ab12]))?|pull(?:\s+(?:day|[ab12]))?)$/;
+const LIFT_PART = /^(?:strength(?:\s+(?:day|session))?|lift(?:ing)?(?:\s+(?:day|session))?)$/;
+
+function lowerName(name: string): boolean {
+  return /\b(?:lower|legs?)\b/i.test(name);
+}
+
+function norm(text: string): string {
+  return text.toLowerCase().replace(/[*_`]/g, "").replace(/\s+/g, " ").trim();
+}
+
+// The date a stated weekday names in this window, or null when it is ambiguous: a
+// weekday already past this week (did they mean the one gone or next week's?) is never
+// judged unless it says "next".
+function weekdayDate(week: DatedWeek, dow: number, next: boolean): DatedWeekDay | null {
+  const today = week.from;
+  const nextMonday = addDaysISO(mondayOf(today), 7) ?? today;
+  const pool = week.days.filter((d) => new Date(`${d.date}T00:00:00Z`).getUTCDay() === dow);
+  if (next) return pool.find((d) => d.date >= nextMonday) ?? null;
+  const first = pool[0] ?? null;
+  return first && first.date < nextMonday ? first : null;
+}
+
+// The row a dated line names: exactly that date inside the dated window, and only when
+// the weekday it is paired with is that date's own ("Fri Oct 30" over a Friday). A date
+// outside the window, or a weekday that disagrees with its date, is not judged.
+function statedDate(week: DatedWeek, dow: number, aside: { md: string; iso: string | null }): DatedWeekDay | null {
+  const hits = week.days.filter((d) => (aside.iso ? d.date === aside.iso : d.date.slice(5) === aside.md));
+  if (hits.length !== 1) return null;
+  const day = hits[0];
+  return new Date(`${day.date}T00:00:00Z`).getUTCDay() === dow ? day : null;
+}
+
+function datedWhenWords(date: string, weekday: string): string {
+  const month = MONTHS[Number(date.slice(5, 7)) - 1] ?? "";
+  return month ? `${weekday}, ${month.charAt(0).toUpperCase()}${month.slice(1)} ${Number(date.slice(8, 10))}` : weekday;
+}
+
+type ScheduleContradiction = { date: string; when: string; said: string; plan: string; sentence: string };
+
+function planWords(day: DatedWeekDay): string {
+  if (!day.lift) return "a day with no lifting session";
+  return lowerName(day.lift.name) || day.lift.heavy_lower
+    ? lowerName(day.lift.name)
+      ? `${day.lift.name}, your leg day`
+      : `${day.lift.name} (the leg day)`
+    : day.lift.name;
+}
+
+/** Does the session this line pairs with `day` contradict what the plan holds then? */
+function claimContradicts(claim: string, day: DatedWeekDay, names: readonly string[]): boolean {
+  const said = norm(claim);
+  if (!said || SCHEDULE_NEGATION.test(said)) return false;
+  const parts = said
+    .split(CLAIM_PART_BREAK)
+    .map((part) => part.replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, ""))
+    .filter(Boolean);
+  const lift = day.lift;
+  if (!lift) {
+    // A lift said on a date the plan holds none — only when a part plainly names one.
+    return parts.some(
+      (part) => LIFT_PART.test(part) || LOWER_PART.test(part) || UPPER_PART.test(part) || names.includes(part)
+    );
+  }
+  const actual = norm(lift.name);
+  if (actual && (said.includes(actual) || parts.some((part) => part.includes(actual)))) return false;
+  const actualLower = !!lift.heavy_lower || lowerName(lift.name);
+  const saysLower = parts.some((part) => LOWER_PART.test(part));
+  const saysUpper = parts.some((part) => UPPER_PART.test(part));
+  if (saysLower && !saysUpper && !actualLower) return true;
+  if (saysUpper && !saysLower && actualLower) return true;
+  // Another plan day's own name, whole ("Push A" over Push B), never a fragment of this one's.
+  return parts.some((part) => part !== actual && names.includes(part) && !actual.includes(part));
+}
+
+export function scheduleContradictions(
+  reply: string,
+  week: DatedWeek,
+  isModelAuthored: (line: string) => boolean = () => true
+): ScheduleContradiction[] {
+  const names = [...new Set(week.days.map((d) => (d.lift ? norm(d.lift.name) : "")).filter((n) => n.length >= 3))];
+  type Head = {
+    line: string;
+    dow: number;
+    next: boolean;
+    aside: { md: string; iso: string | null } | null;
+    claim: string;
+  };
+  const heads: Head[] = [];
+  // Which week the lines under a heading belong to ("Next week:" → next).
+  let section: "this" | "next" | null = null;
+  for (const line of String(reply ?? "").split("\n")) {
+    const heading = line.match(WEEK_SECTION_HEADING);
+    if (heading) section = heading[1].toLowerCase() === "next" ? "next" : "this";
+    if (!line.trim() || !isModelAuthored(line) || SCHEDULE_SKIP_LINE.test(line)) continue;
+    const found = [...line.matchAll(new RegExp(SCHEDULE_HEAD.source, SCHEDULE_HEAD.flags))];
+    for (let i = 0; i < found.length; i++) {
+      const head = found[i];
+      const word = String(head[2] ?? "").toLowerCase();
+      const full = WEEKDAYS.indexOf(word as (typeof WEEKDAYS)[number]);
+      const dow = full >= 0 ? full : WEEKDAY_ABBR[word];
+      if (dow == null) continue;
+      // An abbreviation reads as a weekday only as a list head ("Tue:"), never in prose.
+      if (full < 0 && !/[:—–=]|-\s/.test(head[0].slice(head[0].toLowerCase().lastIndexOf(word)))) continue;
+      const start = (head.index ?? 0) + head[0].length;
+      const end = i + 1 < found.length ? (found[i + 1].index ?? line.length) : line.length;
+      const segment = line.slice(start, end);
+      const cut = segment.search(SCHEDULE_CLAIM_END);
+      const claim = (cut >= 0 ? segment.slice(0, cut) : segment).replace(/[,\s—–-]+$/, "");
+      // "next Tuesday", "**Next Tuesday**:" — read off the words just before the weekday;
+      // "this Tuesday" overrides a "Next week" section.
+      const at = (head.index ?? 0) + head[0].toLowerCase().indexOf(word);
+      const before = line.slice(Math.max(0, at - 10), at);
+      const next = /\bnext[\s*_]*$/i.test(before) || (section === "next" && !/\bthis[\s*_]*$/i.test(before));
+      heads.push({ line, dow, next, aside: asideMonthDay(head[3] ?? head[4]), claim });
+    }
+  }
+  // The same weekday stated twice with no date to tell them apart (two Fridays in a
+  // fortnight's list) — which one each means is a guess, so neither is judged.
+  const undatedCount = new Map<string, number>();
+  for (const h of heads) {
+    if (h.aside) continue;
+    const key = `${h.dow}:${h.next}`;
+    undatedCount.set(key, (undatedCount.get(key) ?? 0) + 1);
+  }
+  const out: ScheduleContradiction[] = [];
+  const seen = new Set<string>();
+  for (const h of heads) {
+    if (!h.aside && (undatedCount.get(`${h.dow}:${h.next}`) ?? 0) > 1) continue;
+    const day = h.aside ? statedDate(week, h.dow, h.aside) : weekdayDate(week, h.dow, h.next);
+    if (!day || seen.has(day.date) || !claimContradicts(h.claim, day, names)) continue;
+    seen.add(day.date);
+    const weekday = WEEKDAYS[h.dow].charAt(0).toUpperCase() + WEEKDAYS[h.dow].slice(1);
+    out.push({
+      date: day.date,
+      when: h.aside ? datedWhenWords(day.date, weekday) : h.next ? `next ${weekday}` : weekday,
+      said: h.claim.trim(),
+      plan: planWords(day),
+      sentence: h.line.trim(),
+    });
+  }
+  return out;
+}
+
+// Plan-shaped writes that can move what a weekday holds: the reply may describe the
+// week they make, so it is not held to the week as it stood.
+const WEEK_MOVING_TYPES: ReadonlySet<string> = new Set<string>([
+  "plan_restructure",
+  "set_strength_schedule",
+  "set_endurance_schedule",
+  "trade_rest_day",
+]);
+
+function readWeek(ctx: GroundReplyContext, today: string): DatedWeek | null {
+  if (ctx.week !== undefined) return ctx.week;
+  try {
+    return datedWeek(today);
+  } catch {
+    return null;
+  }
+}
+
+const MAX_SCHEDULE_CORRECTIONS = 3;
+
 // ── the pass ─────────────────────────────────────────────────────────────────
 const RECEIPT_JOIN = "\n\n";
 
@@ -805,13 +1058,54 @@ export function groundReply(input: { reply: string; applied: readonly AppliedEnt
     changed = true;
     return kept.length ? kept.join(" ") : null;
   });
-  if (!changed) return { reply, notes };
-  let out = lines
-    .filter((line): line is string => line !== null)
-    .join("\n")
-    .replace(/\n{3,}/g, RECEIPT_JOIN)
-    .trim();
+  let out = changed
+    ? lines
+        .filter((line): line is string => line !== null)
+        .join("\n")
+        .replace(/\n{3,}/g, RECEIPT_JOIN)
+        .trim()
+    : reply;
   const day = intakeDropped ? truth() : null;
   if (day) out = out ? `${out}${RECEIPT_JOIN}${day.line}` : day.line;
-  return { reply: out, notes };
+  const schedule = groundSchedule(out, applied, ctx, today, modelAuthored);
+  if (schedule.notes.length) {
+    notes.push(...schedule.notes);
+    out = out ? `${out}${RECEIPT_JOIN}${schedule.line}` : schedule.line;
+    changed = true;
+  }
+  return changed ? { reply: out, notes } : { reply, notes };
+}
+
+// The weekday→session lines of a reply held to the dated week: one calm sentence per
+// contradicted day, appended after the prose (the line itself is the model's and stays,
+// so the correction reads as a correction rather than a silent rewrite).
+function groundSchedule(
+  reply: string,
+  applied: readonly AppliedEntry[],
+  ctx: GroundReplyContext,
+  today: string,
+  modelAuthored: (unit: string) => boolean
+): { notes: GroundingNote[]; line: string } {
+  const none = { notes: [] as GroundingNote[], line: "" };
+  // The week is read only for a reply that actually pairs a weekday with something.
+  if (!new RegExp(SCHEDULE_HEAD.source, "i").test(reply)) return none;
+  if (applied.some((entry) => WEEK_MOVING_TYPES.has(entry.type) && landed(entry))) return none;
+  if ((ctx.drafts ?? []).some((draft: any) => Array.isArray(draft?.parsed?.days))) return none;
+  const week = readWeek(ctx, today);
+  if (!week?.days.length) return none;
+  const found = scheduleContradictions(reply, week, modelAuthored).slice(0, MAX_SCHEDULE_CORRECTIONS);
+  if (!found.length) return none;
+  const lines = found.map((c, i) =>
+    pickDayVariant(SCHEDULE_CORRECTION_VARIANTS, today, `chat-ground-schedule:${i}`)(c.when, c.plan)
+  );
+  return {
+    notes: found.map((c) => ({
+      kind: "schedule" as const,
+      sentence: c.sentence,
+      date: c.date,
+      said: c.said,
+      plan: c.plan,
+    })),
+    line: lines.join(" "),
+  };
 }

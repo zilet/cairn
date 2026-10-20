@@ -45,7 +45,7 @@ export const FACT_OWNERS: Readonly<Record<FactKey, FactOwner>> = {
   today_lift_line: {
     owner: "today.brief",
     screen: "today",
-    glances: ["today.week-strip", "horizon.week-shape", "train.program-week", "you.strength-stone"],
+    glances: ["today.week-strip", "horizon.week-shape", "train.program-week", "train.week", "you.strength-stone"],
     says: "today's lift in the server's one line (todayStrengthLine)",
   },
   new_bests: {

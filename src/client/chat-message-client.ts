@@ -23,10 +23,6 @@ function chatMessageDrafts(value: unknown): ChatScreenDraft[] {
   return chatMessageRows<ChatScreenDraft>(value);
 }
 
-function chatMessageAgentAttempts(value: unknown): Array<Record<string, unknown>> {
-  return chatMessageRows<Record<string, unknown>>(value);
-}
-
 function chatMessageString(value: unknown): string {
   return value == null ? "" : String(value);
 }
@@ -295,6 +291,9 @@ function appendMsg(
       return `<button class="draftbtn" data-confirm-lab="${escAttr(l.id)}">${escHtml(label)}</button>`;
     }).join("");
   }
+  // What LANDED this turn, one calm row each with its way back (change-receipt-client.ts).
+  const receiptHtml = CairnChangeReceipt.listHtml(m.receipts ?? meta.receipts, { readonly });
+  extra += receiptHtml;
   extra += CairnChatClient.agentCheckHtml(meta.agent_attempts);
   const hideText = !!meta.image && (!m.content || m.content === "(photo)");
   const body = hideText ? "" : role === "assistant"
@@ -341,6 +340,7 @@ function appendMsg(
       if (hasClamped) done.insertAdjacentHTML("afterend", clampNoteHtml(clamped));
     });
   });
+  if (receiptHtml && !readonly) CairnChangeReceipt.mount(el);
   el.querySelectorAll("[data-agent-check]").forEach((b) => {
     const btn = b instanceof HTMLButtonElement ? b : null;
     if (btn) btn.addEventListener("click", openAgentSettings);

@@ -467,14 +467,18 @@ test("the week-layout collision law still reads a lift the day before a long run
       { dow: 6, kind: "long" },
     ],
   });
+  // The raw deal lands Lower B on Friday, the eve of Saturday's long run — the collision
+  // the law reads. (The live week trades it onto Monday, clear of the key run.)
+  const dealt = weekdayPlanDayMap(planDayCandidates(), [1, 2, 3, 4, 5], 0);
+  assert.match(dealt.get(5).name, /Lower/, "the ring deals a lower day onto Friday this week");
   const week = thisWeekPlanDayMap(WED);
-  const friday = week.map.get(5);
-  assert.match(friday.name, /Lower/, "the ring lands a lower day on Friday this week");
+  assert.doesNotMatch(week.map.get(5).name, /Lower/, "the live week moves it off the long run's eve");
+  assert.match(week.map.get(1).name, /Lower B/, "onto Monday, away from Wednesday's Lower A");
   const read = weekLayoutRead(WED, {
     runPlan: weeklyRunPlan(WED),
     strengthDows: [1, 2, 3, 4, 5],
     enduranceDows: [2, 6],
-    weekdayMap: new Map([...week.map].map(([dow, d]) => [dow, d.day_number])),
+    weekdayMap: new Map([...dealt].map(([dow, d]) => [dow, d.day_number])),
   });
   assert.equal(read.source, "run_plan");
   assert.equal(read.long_run_day, 6, "the long run comes from the engine, on Saturday");

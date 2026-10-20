@@ -40,7 +40,8 @@ const UI_VIEW_KEY = /^[a-z][a-z0-9]*(\/[a-z][a-z0-9]*)?$/;
 
 function uiViewSection(prefix: string, section: unknown, bare: string): string {
   const seg = typeof section === "string" ? section : "";
-  if (!seg || (seg === "overview" && prefix === "train")) return bare;
+  // Train's landing (This week) is the bare home; the old landing, overview, is its Progress leaf.
+  if (!seg || (seg === "week" && prefix === "train")) return bare;
   if (!UI_VIEW_TOKEN.test(seg)) return bare;
   return `${prefix}/${seg}`;
 }

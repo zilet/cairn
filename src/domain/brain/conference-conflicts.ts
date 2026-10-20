@@ -546,8 +546,39 @@ function revisionScope(revision: unknown): { domain: "training" | "nutrition" | 
   return { domain: "training", areas };
 }
 
+// A parenthetical that QUALIFIES a marker rather than naming it: "Lean Mass (Total)",
+// "LDL-C (Direct)", "Testosterone (Free)". It is not the marker's name on its own, so it
+// never stands alone as a term. Live (2026-10-19), "Fat Mass (Total)" and "Lean Mass
+// (Total)" made the bare word "total" a marker, and a taper run's "7.5–8.0 km total"
+// put a bench step and a squat hold on the clinician floor (decision 27824), where it sat
+// waiting for a clinician who is not in the loop.
+const QUALIFIER_ALIASES = new Set([
+  "total",
+  "direct",
+  "calculated",
+  "calc",
+  "measured",
+  "estimated",
+  "free",
+  "bound",
+  "serum",
+  "plasma",
+  "whole blood",
+  "urine",
+  "fasting",
+  "random",
+  "ratio",
+  "percent",
+  "absolute",
+  "relative",
+  "index",
+  "level",
+  "levels",
+]);
+
 function markerTerms(name: string): string[] {
-  const alias = /\(([^)]+)\)/.exec(name)?.[1] ?? "";
+  const rawAlias = (/\(([^)]+)\)/.exec(name)?.[1] ?? "").trim().toLowerCase();
+  const alias = QUALIFIER_ALIASES.has(rawAlias) ? "" : rawAlias;
   const bare = name.replace(/\([^)]*\)/g, "").trim();
   return [bare, alias, bare.replace(/-c$/i, "")].map((t) => t.trim().toLowerCase()).filter((t) => t.length >= 3);
 }

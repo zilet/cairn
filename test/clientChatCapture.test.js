@@ -382,7 +382,7 @@ test("the review fills the ORIGINAL message in place — a slot on render, fille
 
 function loadMessageClient() {
   const document = createDocument();
-  const w = loadClientModule(["html-utils", "capture-macros-client", "chat-client", "chat-capture-chips-client", "chat-message-client"], {
+  const w = loadClientModule(["html-utils", "capture-macros-client", "chat-client", "chat-capture-chips-client", "change-receipt-client", "chat-message-client"], {
     document,
     globals: {
       $: () => null,

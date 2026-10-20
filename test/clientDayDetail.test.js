@@ -851,3 +851,18 @@ test("the day view opens the shared detail, and a past day keeps its record's fu
   const alone = renderHtml(w.CairnDayRecord.composedHtml(record, null, opts));
   assert.match(alone.querySelector(".dayrec-kicker").textContent, /the day's record/);
 });
+
+test("the day page's context line counts the race in the server's one span, never the ladder's weeks", () => {
+  const w = load();
+  const M = w.CairnDayDetailModel;
+  const week = (race) => ({ week: { week_start: "2026-10-19", race, block: null } });
+  const taper = { event: "Clearwater Half", kind: "taper", word: "Taper week", focus: "", weeks_to_race: 1, days_to_race: 12 };
+  assert.equal(M.contextLine(week({ ...taper, countdown: { span: "12 days", words: "12 days out", days: 12 } })), "Taper week · 12 days to Clearwater Half");
+  // A read without the span counts days the same way the server does.
+  assert.equal(M.contextLine(week(taper)), "Taper week · 12 days to Clearwater Half");
+  assert.equal(
+    M.contextLine(week({ ...taper, kind: "build", word: "Build week", weeks_to_race: 3, days_to_race: 19 })),
+    "Build week · 2 weeks to Clearwater Half"
+  );
+  assert.doesNotMatch(M.contextLine(week(taper)), /1 week/);
+});

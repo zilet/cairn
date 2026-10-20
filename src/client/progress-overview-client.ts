@@ -1,6 +1,6 @@
 // @ts-check
-// ---------- Progress: the Train overview (the training home) ----------
-// The landing view of the Train tab: one glanceable, whole-picture read of the
+// ---------- Progress: the Train overview (where the training stands) ----------
+// Train's Progress leaf (/app/train/overview, under This week): one glanceable, whole-picture read of the
 // week's training — how the week is going, which muscle groups are due /
 // productive / running high / recovering (the front+back muscle map), where the
 // conductor says to focus, the handful of week-by-week moves the engine noticed,
@@ -150,7 +150,7 @@ async function tovFetch(): Promise<{ data: TovData; refresh: Promise<TovData | n
 // happens only when the payload actually changed, so a quiet revalidate never
 // re-runs the entrance stagger.
 async function renderTrainOverview(): Promise<void> {
-  headerTitle.textContent = "Train";
+  headerTitle.textContent = "Progress"; // a deeper leaf names itself; This week is Train's landing
   state.progressSeg = "overview";
   const token = ++tovToken;
   const known = CairnTrainSnapshot.load() as TovData | null; // last-known read (progress-overview-snapshot-client.ts)
@@ -650,7 +650,7 @@ function paintTrainOverview(data: TovData): void {
   // then the week's load (the voice line, the load band, the muscle map and the groups
   // asking for a look). The week-by-week moves, the latest sessions and the deeper
   // views follow; the journey is one line that opens Horizon's goal line. Today's lift
-  // and the week's session count are not here: the Brief and Horizon own them.
+  // and the week's session count are not here: the Brief and Horizon own them (the days, This week).
   view.innerHTML = head +
     tovFocusHtml(data) +
     tovMastHtml(data, rows) +

@@ -213,7 +213,7 @@
     const why = text(detail.why);
     const race = detail.week?.race;
     if (!why || !race) return why;
-    const lead = why.match(/^[^.]*·[^.]*\bweeks? to\b[^.]*\.\s*/);
+    const lead = why.match(/^[^.]*·[^.]*\b(?:weeks?|days?) to\b[^.]*\.\s*/);
     return lead ? why.slice(lead[0].length).trim() : why;
   }
 
@@ -223,16 +223,32 @@
     const race = detail.week?.race;
     if (race) {
       const weeks = Number(race.weeks_to_race);
+      // The countdown's one span, the server's (raceCountdown): "12 days", "3 weeks". The
+      // rung's weeks_to_race is calendar weeks to RACE WEEK, so "1 week to" a race 13 days
+      // out would be untrue; it is only the last fallback for a read without the span.
+      const days = race.days_to_race == null ? NaN : Number(race.days_to_race);
+      const span = text(race.countdown?.span);
+      const away = span
+        ? span
+        : Number.isFinite(days) && days > 0
+          ? days <= 13
+            ? `${days} day${days === 1 ? "" : "s"}`
+            : `${Math.floor(days / 7)} weeks`
+          : Number.isFinite(weeks) && weeks > 0
+            ? `${weeks} week${weeks === 1 ? "" : "s"}`
+            : "";
       const to =
         race.kind === "race"
           ? text(race.event) || "Race week"
-          : Number.isFinite(weeks) && weeks > 0 && race.event
-            ? `${weeks} week${weeks === 1 ? "" : "s"} to ${text(race.event)}`
+          : away && race.event
+            ? `${away} to ${text(race.event)}`
             : text(race.event);
       bits.push([text(race.word), to].filter(Boolean).join(" · "));
     }
     const block = detail.week?.block;
-    if (block && Number(block.total_weeks) > 0) bits.push(`Block week ${block.week_index} of ${block.total_weeks}`);
+    // A taper or race week is the race's: no block-week count beside it.
+    const raceLeads = race?.kind === "taper" || race?.kind === "race";
+    if (block && Number(block.total_weeks) > 0 && !raceLeads) bits.push(`Block week ${block.week_index} of ${block.total_weeks}`);
     return bits.filter(Boolean).join(" · ");
   }
 

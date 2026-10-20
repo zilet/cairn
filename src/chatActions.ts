@@ -694,11 +694,19 @@ export const CHAT_ACTION_PROMPT_SPECS = {
       { "day_number": 1, "exercise": "Incline Barbell Bench Press", "remove": true, "reason": "duplicate incline pattern" },
       // SWAP in place; supplied prescription fields configure the incoming movement.
       { "day_number": 1, "swap": { "from": "Incline Barbell Bench Press", "to": "Flat Barbell Bench Press" }, "sets": 2, "rep_low": 8, "rep_high": 10, "target_weight": 105, "reason": "keep one flat and one incline pattern" },
-      // ADD a movement: a change whose exercise isn't on that day yet is ADDED to it.
-      // Include sets + rep_low/rep_high (and the starting target_weight) so it lands complete.
-      { "day_number": 1, "exercise": "Single-Arm DB Row", "sets": 3, "rep_low": 10, "rep_high": 12, "target_weight": 55, "reason": "adds back volume" } ] }`,
+      // ADD a movement: "add": true, with sets + rep_low/rep_high (and the starting target_weight) so it lands complete.
+      { "day_number": 1, "add": true, "exercise": "Single-Arm DB Row", "sets": 3, "rep_low": 10, "rep_high": 12, "target_weight": 55, "reason": "adds back volume" },
+      // ADDRESS BY DATE: the session on that calendar day (DATA.dated_week); the server resolves its day_number.
+      // A dated change is for THAT DAY only unless it says otherwise.
+      { "date": "<YYYY-MM-DD>", "exercise": "<a lift on that date's session>", "sets": 2, "reason": "travel day" },
+      // UNTIL: an adaptation that ends on that date and returns the plan to normal.
+      { "date": "<YYYY-MM-DD>", "exercise": "<a lift on that date's session>", "sets": 2, "until": "<YYYY-MM-DD>", "reason": "race taper" },
+      // LASTING: a permanent change to that session going forward.
+      { "date": "<YYYY-MM-DD>", "exercise": "<a lift on that date's session>", "rep_low": 6, "rep_high": 8, "lasting": true, "reason": "..." } ] }`,
     guidance: [
       `plan_update is a SMALL, safety-checked adjustment to the existing plan. Use it when the user explicitly asks to fix today's/next session, or when this turn supplies a material training, recovery, pain, or life-context signal that changes the next session. A change can update load AND sets/rep_low/rep_high, add an absent movement, remove one with remove:true, or atomically swap {from,to} in place. NEVER use sets:0 to mean remove. Include every requested change in ONE plan_update so the server can apply the bounded edit as a unit. NEVER emit it for a food-only log, meal photo, or a general nutrition question.`,
+      `A change about a particular day carries that day's "date" ("YYYY-MM-DD", from DATA.dated_week): the server resolves which plan day that date holds and the date wins over any day_number you give. A date with no lifting session on it is skipped, and so is a change to a lift that is not on that date's session (check its lifts in DATA.plan for that day_number) — unless it is an addition marked "add": true. Never pick a day_number from a weekday — the plan's day_numbers are not weekdays.`,
+      `A dated change is a one-day adaptation of that date's session: with no "until" it ends on its own date and the plan returns to normal the next day. "until": "YYYY-MM-DD" on a change marks an adaptation that ends on that date and returns the plan to normal — use it for a race taper or any temporary change (a trip, a niggle week). "lasting": true on a dated change means a permanent change to that session going forward; use it only when the athlete asks for that. An undated change is lasting.`,
     ],
   },
   plan_restructure: {
@@ -959,6 +967,67 @@ export function chatBloodPressureMeasuredAt(value: unknown, today: string = loca
   return `${date}T${match[2]}:${match[3]}`;
 }
 
+// A real calendar YYYY-MM-DD in either direction ("2026-02-30" and "next Tuesday" are not).
+export function chatCalendarDate(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const raw = value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return undefined;
+  const [year, month, day] = raw.split("-").map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  if (parsed.getUTCFullYear() !== year || parsed.getUTCMonth() !== month - 1 || parsed.getUTCDate() !== day) {
+    return undefined;
+  }
+  return raw;
+}
+
+// A plan_update change's two dates. `date` addresses the change to the session on that
+// calendar day (the server resolves its day_number from the dated week — chatTurns.ts);
+// any real date survives here, and the resolver judges a past or liftless one. `until`
+// ends an adaptation on that date, returning the plan to normal (the apply layer owns
+// the expiry, plan-adaptations.ts); a real date on or after today (and on or after the
+// change's own `date`). Neither field is ever invented — but neither is ever DROPPED:
+// an unreadable date is how a change fell back to the model's guessed day_number, and a
+// dropped `until` silently made a scoped change permanent. So an invalid value stays on
+// the change, flagged (`date_invalid` / `until_invalid`), and the resolver refuses that
+// part with its reason.
+//
+// A DATED change with no `until` is a one-day adaptation of that date's session: "make
+// Friday lighter, I'm travelling" changes Friday, not every Lower from here on. Only
+// `lasting: true` (the athlete wants that session changed going forward) keeps it open.
+// Undated changes are untouched. Idempotent: the reply parser and the apply path both run it.
+export function normalizePlanChangeDates(change: unknown, today: string = localDateISO()): unknown {
+  if (!change || typeof change !== "object" || Array.isArray(change)) return change;
+  const row = change as Record<string, unknown>;
+  if (!("date" in row) && !("until" in row) && !("lasting" in row)) return change;
+  const out: Record<string, unknown> = { ...row };
+  const given = (value: unknown) => value != null && !(typeof value === "string" && value.trim() === "");
+  delete out.date_invalid;
+  delete out.until_invalid;
+  if (out.lasting === true) out.lasting = true;
+  else delete out.lasting;
+  let date: string | undefined;
+  if (given(row.date)) {
+    date = chatCalendarDate(row.date);
+    if (date) out.date = date;
+    else {
+      out.date = String(row.date).trim().slice(0, 40);
+      out.date_invalid = true;
+    }
+  } else delete out.date;
+  if (given(row.until)) {
+    const until = chatCalendarDate(row.until);
+    if (until && until >= today && (!date || until >= date)) out.until = until;
+    else {
+      out.until = String(row.until).trim().slice(0, 40);
+      out.until_invalid = true;
+    }
+  } else {
+    delete out.until;
+    if (date && date >= today && out.lasting !== true) out.until = date;
+  }
+  return out;
+}
+
 function finiteId(value: unknown): value is number | string {
   if (typeof value === "number") return Number.isFinite(value) && value > 0;
   if (typeof value !== "string" || value.trim() === "") return false;
@@ -1118,7 +1187,7 @@ export function normalizeChatAction(value: unknown): ChatAction | null {
       };
     }
     case "plan_update": {
-      const changes = arrayOrEmpty(value.changes);
+      const changes = arrayOrEmpty(value.changes).map((change) => normalizePlanChangeDates(change));
       return changes.length ? { ...value, type: "plan_update", changes } : null;
     }
     case "plan_restructure": {

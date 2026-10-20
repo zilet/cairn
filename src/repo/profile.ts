@@ -15,6 +15,7 @@ import { serializeTrainingIntent } from "./training-intent.js";
 import { normalizeLocationText } from "./location-context.js";
 import { parseMovementConsiderations, serializeMovementConsiderations } from "./movement-considerations.js";
 import { copyDeep, copyFlat, requestMemo } from "./request-memo.js";
+import { keepCompletedRace } from "./race-results.js";
 
 // ---------- profile ----------
 export function getProfile(): any {
@@ -216,6 +217,13 @@ export function setProfile(p: any) {
     bp_treated: p.bp_treated !== undefined ? coerceFlag(p.bp_treated) : (cur.bp_treated ?? null),
     statin: p.statin !== undefined ? coerceFlag(p.statin) : (cur.statin ?? null),
   };
+  // A race the goal is moving AWAY from is kept, not forgotten (race-results.ts): the
+  // athlete sets the next race the morning after this one, and the recovery window and
+  // the race day's harm/capacity exclusions must outlive the goal slot.
+  if ((merged.endurance_goal_json ?? null) !== (cur.endurance_goal_json ?? null)) {
+    const outgoing = normalizeEnduranceGoal(cur.endurance_goal_json);
+    if (outgoing?.mode === "race" && outgoing.date) keepCompletedRace(outgoing, localDateISO());
+  }
   db.prepare(
     `INSERT INTO profile (id, name, home_location, sex, age, height_cm, height_in, weight_lb, start_weight_lb, start_date, goal_weight_lb, goal_bodyfat_pct, goal_date, goal_mode, activity_factor, notes, about_me, allergies, dietary_restrictions, primary_discipline, endurance_sport, endurance_goal_json, endurance_schedule_json, strength_schedule_json, movement_considerations_json, training_intent_json, smoking, bp_treated, statin, updated_at)
      VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))

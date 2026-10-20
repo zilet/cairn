@@ -224,6 +224,15 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
   border-color:color-mix(in srgb,var(--on-ink) 22%,transparent);background:color-mix(in srgb,var(--on-ink) 14%,transparent);color:color-mix(in srgb,var(--on-ink) 84%,var(--ink));
 }
 
+/* change receipts: what landed this turn, how long it lasts, the way back */
+.rcpt-list{list-style:none;margin:var(--space-4) 0 0;padding:0;display:grid;gap:var(--space-2)}
+.rcpt{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 var(--space-2);font-size:var(--text-xs);line-height:var(--leading-normal);color:var(--ink-2)}
+.rcpt-what{color:var(--ink)}
+.rcpt-until,.rcpt-state{color:var(--muted)}
+.rcpt .rcpt-undo{min-height:44px;display:inline-flex;align-items:center;margin:calc(var(--space-4) * -1) 0;padding:0 var(--space-3)}
+.rcpt .rcpt-undo:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+.rcpt.is-undone .rcpt-what{text-decoration:line-through;text-decoration-color:var(--line-2)}
+
 /* photo attached to a chat turn (plate shots) */
 .bubble-img{max-width:min(220px,70vw);max-height:240px;border-radius:var(--radius-sm);display:block;margin-bottom:var(--space-3)}
 .bubble.user .bubble-img{margin-left:auto}

@@ -807,7 +807,7 @@ test("the head frames the race: its name, the ladder's own weeks to race, and ra
   assert.match(week.querySelector(".race-view-when").textContent, /^Race week/);
   // The taper Monday: 13 days out, the server's ceil says 2, the ladder says 1 wk out.
   const one = paint(win, build({ weeks: at(6), race: { ...build().race, weeks_to_race: 2, days_to_race: 13 } }));
-  assert.match(one.querySelector(".race-view-when").textContent, /^1 week to race/);
+  assert.match(one.querySelector(".race-view-when").textContent, /^Race week is next week/);
   // No rung is this week: the race's own count is the fallback.
   const none = paint(win, build({ weeks: [], race: { ...build().race, weeks_to_race: 3, days_to_race: 20 } }));
   assert.match(none.querySelector(".race-view-when").textContent, /^3 weeks to race/);
@@ -815,6 +815,26 @@ test("the head frames the race: its name, the ladder's own weeks to race, and ra
   assert.match(today.querySelector(".race-view-when").textContent, /^Race day is today/);
   const unnamed = paint(win, build({ race: { ...build().race, event: null } }));
   assert.equal(unnamed.querySelector(".race-view-event").textContent, "Your half marathon");
+});
+
+test("a read carrying the server's countdown: the head, the ladder row and the kicker all print it", () => {
+  const win = load();
+  const at = (i, words) => WEEKS.map((w, j) => ({ ...w, current: j === i, countdown_words: j === i ? words : w.countdown_words }));
+  // 13 days out on the taper Monday: the server says days, so nothing says "1 wk out".
+  const countdown = { days: 13, words: "13 days out", span: "13 days", race_week: false };
+  const data = build({ weeks: at(6, "13 days out"), race: { ...build().race, weeks_to_race: 2, days_to_race: 13, countdown } });
+  const host = paint(win, data);
+  assert.match(host.querySelector(".race-view-when").textContent, /^13 days to race · /);
+  assert.equal(host.querySelector(".is-current .race-ladder-out").textContent, "13 days out");
+  assert.equal(win.CairnRaceWeekRuns.thisWeekModel(data).kicker, "This week · Taper · 13 days out");
+  assert.doesNotMatch(host.textContent, /1 wk out|Race week is next week/);
+  // Race week and the eve speak the server's own words.
+  const week = { days: 5, words: "Race week", span: "5 days", race_week: true };
+  const inWeek = paint(win, build({ weeks: at(7, "Race week"), race: { ...build().race, days_to_race: 5, countdown: week } }));
+  assert.match(inWeek.querySelector(".race-view-when").textContent, /^Race week · /);
+  const eve = { days: 1, words: "Tomorrow", span: "1 day", race_week: true };
+  const tomorrow = paint(win, build({ weeks: at(7, "Tomorrow"), race: { ...build().race, days_to_race: 1, countdown: eve } }));
+  assert.match(tomorrow.querySelector(".race-view-when").textContent, /^Tomorrow · /);
 });
 
 test("the head carries the estimate in one line: where it reads, its place against the target, the trend", () => {
@@ -1000,9 +1020,11 @@ function seedRealBuild(asOf) {
   return JSON.parse(JSON.stringify(raceBuild(asOf)));
 }
 
+// The head and the current rung print the server's one countdown (raceCountdown): days
+// inside two weeks, whole weeks (floored) beyond, "Race week" in the race's own week.
 for (const [asOf, head, currentOut] of [
-  ["2026-09-16", "6 weeks to race", "6 wk out"], // a Wednesday: ceil(46 / 7) would say 7
-  ["2026-10-19", "1 week to race", "1 wk out"], // the taper Monday: ceil(13 / 7) would say 2
+  ["2026-09-16", "6 weeks to race", "6 wks out"], // a Wednesday: ceil(46 / 7) would say 7
+  ["2026-10-19", "13 days to race", "13 days out"], // the taper Monday: never "1 wk out" for 13 days
   ["2026-10-27", "Race week", "Race week"], // race week, Tuesday: ceil(5 / 7) would say 1
 ]) {
   test(`a real raceBuild(${asOf}) paints its own ladder, and the head counts what the ladder counts`, () => {

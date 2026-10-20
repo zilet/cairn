@@ -284,7 +284,9 @@
       kicker: [
         "This week",
         stage,
-        out == null || opts.countdownShown ? "" : out === 0 || rung?.kind === "race" ? "Race week" : `${out} wk out`,
+        out == null || opts.countdownShown
+          ? ""
+          : rung?.countdown_words || (out === 0 || rung?.kind === "race" ? "Race week" : `${out} wk out`),
       ]
         .filter(Boolean)
         .join(" · "),

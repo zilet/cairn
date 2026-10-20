@@ -735,4 +735,14 @@ export const MIGRATIONS_101_150: Migration[] = [
       if (hasTable(db, "settings")) addColumn(db, "settings", "agent_class_order TEXT DEFAULT ''");
     },
   },
+  {
+    version: 130,
+    name: "plan-adaptations-layer",
+    // A one-day trip version (brief-asks.ts "Easier") is an OVERLAY on the slot, never a
+    // re-scope of the race adaptation beneath it (plan-adaptations.ts). NULL on existing
+    // rows = an ordinary scoped change. Two-step: also in db.ts's create block.
+    up: (db) => {
+      if (hasTable(db, "plan_adaptations")) addColumn(db, "plan_adaptations", "layer TEXT");
+    },
+  },
 ];

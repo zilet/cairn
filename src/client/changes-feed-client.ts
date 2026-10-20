@@ -102,6 +102,23 @@
     });
   }
 
+  const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+  /**
+   * The day the change adapted (`open_day`, the server's weekday-map date): a link that
+   * opens that day's page, where the change shows on the day itself. "" when the change
+   * touched no dated day.
+   */
+  function dayLinkHtml(change: BrainChange): string {
+    const day = text(change.open_day);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return "";
+    const d = new Date(`${day}T00:00:00Z`);
+    const name = WEEKDAY_NAMES[d.getUTCDay()];
+    const label = name ? `${name}, ${MONTH_NAMES[d.getUTCMonth()]} ${d.getUTCDate()}` : "the day";
+    return `<button class="linkbtn-quiet chfeed-day" type="button" data-open-day="${escAttr(day)}">See ${escHtml(label)}</button>`;
+  }
+
   function metaHtml(change: BrainChange): string {
     const status = text(change.status_line);
     const confidence = text(change.confidence);
@@ -160,6 +177,8 @@
     const stagger =
       !options.enter && options.index != null ? ` style="--i:${Math.max(0, Math.trunc(options.index))}"` : "";
     const why = whyAfterSaid(text(change.why), said);
+    // The change's receipt (what · how long · its state); the row's own server-labelled Undo stays the way back.
+    const receipt = change.receipt;
     const fresh = change.new === true ? `<span class="chfeed-new">New</span>` : "";
     const folds = why.length > WHY_FOLD_CHARS;
     const whyHtml = why
@@ -174,7 +193,8 @@
       ${whyHtml}
       ${outcomeHtml(change)}
       ${metaHtml(change)}
-      <div class="chfeed-acts">${undoHtml(change)}${talk}</div>
+      ${receipt && typeof CairnChangeReceipt !== "undefined" ? CairnChangeReceipt.listHtml([receipt], { readonly: true }) : ""}
+      <div class="chfeed-acts">${undoHtml(change)}${dayLinkHtml(change)}${talk}</div>
     </li>`;
   }
 

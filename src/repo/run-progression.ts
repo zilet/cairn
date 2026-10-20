@@ -51,6 +51,13 @@ import {
   type EnduranceScheduleQuality,
   type StatedQualityType,
 } from "./profile.js";
+import {
+  POST_RACE_EASY_CAP_KM,
+  raceEffortBefore,
+  raceRecoverySpan,
+  raceRecoveryWindow,
+  raceRunDates,
+} from "./race-recovery.js";
 import { applyPersonalResponseModifier, personalResponseModifierFor } from "./reaction-model.js";
 import {
   acwrCeilingKm,
@@ -107,10 +114,29 @@ import {
   capacitySetAsideLine,
   closedWeekRunHarm,
   demonstratedRunCapacity,
+  preRaceRunCapacity,
   type DemonstratedRunCapacity,
 } from "./run-capacity.js";
 import { isoDaysAgo, mondayOf } from "../lib/dates.js";
 import { copyDeep, memoKey, requestMemo } from "./request-memo.js";
+
+// The run kilometres logged on one date (the race day's, for the restart above).
+function runKmOn(dateISO: string): number {
+  try {
+    const sport = activitySportWhere("activities", RUN_SPORT_PATTERNS);
+    const rows = db
+      .prepare(
+        `SELECT date, type, source, external_id, duration_min, distance_km FROM activities
+          WHERE date = ? AND distance_km > 0 AND (${sport.sql})`
+      )
+      .all(dateISO, ...sport.params) as any[];
+    // A hand log shadowing the watch's row of the same run never counts twice.
+    const km = withoutShadowActivities(rows).reduce((sum, row) => sum + (Number(row.distance_km) || 0), 0);
+    return Number.isFinite(km) && km > 0 ? km : 0;
+  } catch {
+    return 0;
+  }
+}
 
 function shiftDaysISO(dateISO: string, n: number): string {
   return isoDaysAgo(dateISO, -n);
@@ -854,6 +880,25 @@ export const RESET_RESUME_LINE =
 
 // The week after ANY lighter week resumes toward the best week already run well
 // (capacityResumeKm, run-ramp.ts). Plain words; the number is the athlete's own week.
+// The days after a dated race (race-recovery.ts). Rotated per week / run date.
+export const POST_RACE_WINDOW_VARIANTS: readonly string[] = [
+  "The days right after the race are easy and short — no quality session or long run until the legs have settled.",
+  "Recovering from the race: every run in the next few days stays easy and short, and the hard sessions wait.",
+  "Easy, short running while the race settles — the quality and long runs come back once the recovery days are done.",
+];
+export const POST_RACE_EASY_RUN_NOTES: ReadonlyArray<(zone: string) => string> = [
+  (zone) => `Easy and short at ${zone} — the race is still settling, so keep it relaxed.`,
+  (zone) => `A short, easy shake-out at ${zone} while you recover from the race.`,
+  (zone) => `Recovery running at ${zone}: short, conversational, nothing more.`,
+];
+export const POST_RACE_RESTART_VARIANTS: ReadonlyArray<(race: string) => string> = [
+  (race) =>
+    `After ${race}, the week picks up from the running you'd already built — the race itself doesn't set the volume.`,
+  (race) =>
+    `${race} is done; this week restarts from your recent training weeks rather than the race's kilometres, held there for now.`,
+  (race) =>
+    `Back from ${race}: the volume restarts where your training had it, a steady week before the build moves again.`,
+];
 export const RUN_CAPACITY_RESUME_VARIANTS: ReadonlyArray<(km: number) => string> = [
   (km) =>
     `Picking the build up from the ~${km} km week you've already run well — a lighter week since doesn't take that ground away.`,
@@ -1848,8 +1893,76 @@ function weeklyRunPlanRead(
   // What the CLOSED week actually carried, kept before the starter default below
   // overwrites it — this is evidence, and the default is a guess. The detraining gate
   // reads it further down to tell a real drop-off from an empty trailing window.
-  const closedWeekKm = Math.max(anchorActualKm, baseKm);
+  //
+  // The RACE is not training volume (race-recovery.ts): a week planned after a closed
+  // week that held a race — or any day of its recovery window — steps off that week
+  // WITHOUT the race's own kilometres (a 21 km race on top of a taper is not the base the
+  // next build grows from) and resumes toward the running demonstrated going INTO the
+  // race (below). The race is its logged effort, read from race-recovery.ts — never the
+  // goal slot, which the athlete resets to the next race the morning after.
+  const lastRace = (() => {
+    try {
+      return raceEffortBefore(d);
+    } catch {
+      return null;
+    }
+  })();
+  const raceSpan = lastRace ? raceRecoverySpan(lastRace) : null;
+  const anchorWeekStart = mondayOf(volumeAnchor);
+  // Every week whose closed week touched the race or its window: the restart week, and —
+  // for a window that ran on past that week's Monday — the week after it too, so a
+  // window-capped week never becomes the next base.
+  const postRaceResume =
+    !!lastRace && !!raceSpan && lastRace.run_date <= volumeAnchor && raceSpan.to >= anchorWeekStart;
+  // The race day whose running never sets the long-run ladder or a week's volume. A
+  // provisional race (nothing race-like synced yet) has no running of its own to remove.
+  const raceDateDone = lastRace && !lastRace.provisional ? lastRace.run_date : null;
+  const raceKmTotal = raceDateDone ? runKmOn(raceDateDone) : 0;
+  const raceWeeksBack = raceDateDone
+    ? Math.round((daysBetweenISO(anchorWeekStart, mondayOf(raceDateDone)) ?? -1) / 7)
+    : -1;
+  const raceDayKm = postRaceResume && raceWeeksBack === 0 ? raceKmTotal : 0;
+  const closedWeekKm = Math.max(0, Math.max(anchorActualKm, baseKm) - raceDayKm);
   let anchorKm = closedWeekKm;
+  // …and resumes toward what he had built going INTO the race (preRaceRunCapacity: the
+  // harm-free floor of the closed weeks up to it, race excluded) inside the ACWR ceiling
+  // of the month — the same resume a light week takes mid-build. Held there for the week
+  // (the factor below), never a step on top of it. Read for EVERY week the window
+  // touched, so a marathon's capped recovery week (or the capped days of a half's) is
+  // never treated as delivered.
+  const preRace =
+    postRaceResume && lastRace
+      ? (() => {
+          try {
+            return preRaceRunCapacity(lastRace.run_date);
+          } catch {
+            return null;
+          }
+        })()
+      : null;
+  if (postRaceResume && lastRace) {
+    if (preRace?.floor_km != null && preRace.floor_km > anchorKm + 0.05) {
+      anchorKm = capacityResumeKm(
+        anchorKm,
+        preRace.floor_km,
+        [3, 2, 1, 0].map((b) =>
+          Math.max(0, recordedWeeklyKm(volumeAnchor, b, RUN_SPORT_PATTERNS) - (b === raceWeeksBack ? raceKmTotal : 0))
+        ),
+        ENDURANCE_CHRONIC_FLOOR_KM
+      );
+    }
+    rationale.push(
+      pickDayVariant(
+        POST_RACE_RESTART_VARIANTS,
+        week_start,
+        "run-post-race-restart"
+      )(
+        String(lastRace.event ?? "")
+          .trim()
+          .slice(0, 60) || "the race"
+      )
+    );
+  }
   if (anchorKm <= 0) {
     anchorKm = goal?.weekly_km && goal.weekly_km > 0 ? Math.min(goal.weekly_km, 20) : 15;
     rationale.push(`No mileage logged yet — starting conservatively around ${Math.round(anchorKm)} km.`);
@@ -1915,13 +2028,23 @@ function weeklyRunPlanRead(
       ? (() => {
           try {
             const sport = activitySportWhere("activities", RUN_SPORT_PATTERNS);
+            // The race is not a training long run: a 21 km race day never sets the
+            // ladder the next weeks climb from (race-recovery.ts, the logged efforts).
+            const from = isoDaysAgo(volumeAnchor, 27);
+            const races = [...raceRunDates(from, volumeAnchor)];
             const row = db
               .prepare(
                 `SELECT MAX(distance_km) AS km FROM activities
-                  WHERE date >= ? AND date <= ? AND (${sport.sql})`
+                  WHERE date >= ? AND date <= ?${races.length ? ` AND date NOT IN (${races.map(() => "?").join(", ")})` : ""}
+                    AND (${sport.sql})`
               )
-              .get(isoDaysAgo(volumeAnchor, 27), volumeAnchor, ...sport.params) as any;
-            return row?.km != null ? round1(Number(row.km)) : null;
+              .get(from, volumeAnchor, ...races, ...sport.params) as any;
+            const longest = row?.km != null ? round1(Number(row.km)) : null;
+            // Across a race's recovery window the ladder steps off the long run built
+            // going INTO the race (eight weeks of it, taken well), never a taper long or
+            // a capped shake-out that happens to be the month's longest.
+            const built = preRace?.long_km ?? null;
+            return built != null && built > (longest ?? 0) ? built : longest;
           } catch {
             return null;
           }
@@ -2130,6 +2253,9 @@ function weeklyRunPlanRead(
   } else if (downWeek) {
     factor = 0.8;
     rationale.push("Scheduled down week — a lighter reset before the next build.");
+  } else if (postRaceResume) {
+    // A week after the race holds the resumed level (said above), no step on top of it.
+    factor = 1.0;
   } else if (spiking) {
     // The one input allowed to move a week from inside it, and only DOWNWARD: the live
     // arm of `spiking` is a trailing-7-day acute read with no week boundary, so a big
@@ -2923,6 +3049,41 @@ function weeklyRunPlanRead(
     rationale.push("Race day is this week's long run — no separate long run, and the other runs stay light around it.");
   }
 
+  // ---- the days after the race: easy and short only (race-recovery.ts) ----
+  // Every run this week that lands inside the post-race recovery window becomes an easy
+  // one, capped short — no quality session, no long run. A run after the window ends is
+  // the week's own again. The race itself is never touched.
+  let recoveryBackOn: string | null = null;
+  for (let i = 0; i < runs.length; i++) {
+    const r = runs[i];
+    if (r.race) continue;
+    const runDate = shiftDaysISO(week_start, r.day_number - 1);
+    let win: ReturnType<typeof raceRecoveryWindow> = null;
+    try {
+      win = raceRecoveryWindow(runDate);
+    } catch {
+      win = null;
+    }
+    if (!win) continue;
+    recoveryBackOn = win.back_on;
+    const planned = r.target_distance_km != null ? Number(r.target_distance_km) : null;
+    if (r.kind_label === "easy" && planned != null && planned <= POST_RACE_EASY_CAP_KM) continue;
+    const km = planned != null ? Math.min(planned, POST_RACE_EASY_CAP_KM) : POST_RACE_EASY_CAP_KM;
+    runs[i] = {
+      day_number: r.day_number,
+      label: "Easy run",
+      kind_label: "easy",
+      target_distance_km: round1(km),
+      target_duration_min: null,
+      target_zone: z2,
+      note: pickDayVariant(POST_RACE_EASY_RUN_NOTES, runDate, "run-post-race-easy")(z2),
+      day_name: "Easy run",
+      focus: "Endurance",
+      interval: null,
+    };
+  }
+  if (recoveryBackOn) rationale.push(pickDayVariant(POST_RACE_WINDOW_VARIANTS, week_start, "run-post-race-window"));
+
   // De-dupe day slots (an easy slot must never collide with the quality/long days).
   // On a stated schedule the remaining days are already exclusive — never spill
   // onto an unscheduled weekday to resolve a collision.
@@ -2943,7 +3104,8 @@ function weeklyRunPlanRead(
   const placedEasyCount = runs.filter((r) => r.kind_label === "easy").length;
   const easyLabel = `${placedEasyCount} easy`;
   const qualityPlaced = !!qualityRun && runs.some((r) => r.kind_label === "quality");
-  const mix_summary = `${easyLabel} + ${raceThisWeek ? "race" : "1 long"}${qualityPlaced ? ` + 1 ${qualityShort ? "short " : ""}${qualityType}` : ""}`;
+  const longPlaced = runs.some((r) => r.kind_label === "long");
+  const mix_summary = `${easyLabel}${raceThisWeek ? " + race" : longPlaced ? " + 1 long" : ""}${qualityPlaced ? ` + 1 ${qualityShort ? "short " : ""}${qualityType}` : ""}`;
   // The race phase in the ONE stage vocabulary (stage-words.ts), never the raw key.
   const stageKey = goal?.is_race ? stageKeyOfRacePhase(goal.phase) : null;
   const phaseWord = stageKey ? STAGE_WORD[stageKey].toLowerCase() : "steady";
@@ -3111,7 +3273,9 @@ function weeklyRunPlanRead(
           !!statedQualityDow &&
           !runs.some((r) => r.kind_label === "quality") &&
           !raceThisWeek &&
-          !supportingConstrained;
+          !supportingConstrained &&
+          // The days after a race open nothing (race-recovery.ts).
+          !raceRecoveryWindow(d);
         let qualityRunForDay: Partial<RunPlanPrescription> | null = null;
         // The athlete's own session, as a short set sized INSIDE today's easy distance —
         // or, when even its floor cannot fit there, the engine's own short set below.

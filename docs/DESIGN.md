@@ -158,7 +158,9 @@ and `CairnStone` (`src/client/ui-stone.ts`, SVG strings), CSS in `src/styles/fou
   `.seg-thumb`) is ink with ground text. A rail that scrolls (`.seg-scroll`) fades the edge that
   still has more behind it (`.seg-fade-l` / `.seg-fade-r`, set by `fitSeg`), so it never looks clipped.
 - **Train is one navigation level:** the group bar (Train · Program · Intake · Body) sits only on each
-  group's landing (Overview, the Program read, Intake, Weight). Every other leaf is one tap deeper —
+  group's landing (This week — the next session opened up, then the week a `.pahead-day` row a day —,
+  the Program read, Intake, Weight). Progress (the old overview, `/app/train/overview`) is Train's
+  first deeper row. Every other leaf is one tap deeper —
   a `.train-deeper-row` (name, one muted line, chevron) on its landing — and wears a single
   `.train-crumb` step back ("‹ Train") instead of a second tab row. Routes stay
   `/app/train/<leaf>`.
@@ -481,7 +483,7 @@ it is on, what to do now, what the team did, and what is coming. Top to bottom:
 - **The Horizon glance line** (`a.tglance`, `today-path-client.ts` + `today-path-controller.ts`, eager;
   GET `/api/today-path` `frame.glance`) sits in `#todayPathSlot` under What's ahead and rides the
   Brief's in-place upgrade (`carryBriefSlots`): ONE quiet row, the server's own words ("26 days to
-  Cambridge · Sharpen, wk 6 of 6") and a "›", opening Horizon on its Week. The Path card (trail,
+  Cambridge · Sharpen week") and a "›", opening Horizon on its Week. The Path card (trail,
   threads, lever) and Coming up left Today (docs/IA.md decision 1): the race estimate, the goals and
   the dated road ahead are Horizon's in full.
 - **NOW** (the lift card) keeps Start / Ask / "Not quite right?". Its meta line carries the anchor (or
@@ -755,7 +757,7 @@ reduced-motion discipline); where a consumer makes one tappable it layers the pr
   allowlist (unknown → `stable`). The direction is words, never an arrow on a score.
 - **`.strength-line` — today's lift.** The server's one line (`GET /api/today-strength-line`, and the
   same object on the Brief, the Today aggregate and the week projection) printed VERBATIM: an optional
-  `.lbl` `.strength-line-k` kicker, the `.strength-line-t` line ("Run in · Pull still open"), a quiet
+  `.lbl` `.strength-line-k` kicker, the `.strength-line-t` line ("Your run's in. Pull is still there if you want it."), a quiet
   `.strength-line-caveat` for a rest/easy read, and — on a reshaped day — a folded
   `.strength-line-orig` `<details>` holding the plan's own list. `data-strength-state` carries the state
   (a `logged` line reads sage). Renderer `strengthLineHtml(line, {kicker, compact})`; `compact` drops the

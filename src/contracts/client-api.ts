@@ -22,6 +22,7 @@ import type { ClientFuelIdeas, ClientIntakeBand } from "./fuel.js";
 import type { TodayStonesRead } from "./today-stones.js";
 import type { DayRecord } from "./day-record.js";
 import type { DayDetail } from "./day-detail.js";
+import type { RaceCountdown, RaceDays } from "./race-days.js";
 import type { WeekRead } from "./week-read.js";
 import type {
   ClientPushOfferAnswerResponse,
@@ -959,6 +960,20 @@ export interface ClientPlanWeekPlanDay {
   out_of_order: boolean;
   /** Today's cell only: the weekday map's day, when today's selection adapted to another. */
   swapped_from?: { day_number: number; name: string };
+  /**
+   * One server-authored, athlete-facing line saying why this day differs from its usual
+   * slot ("Push B today — the run is already in. Lower moves to Friday." / "Lower, lighter
+   * — taper week." / "Trip day — lift if you can, skip it freely."). One per cell, in the
+   * priority swap/after_run > moved > taper > trip. Print `text` verbatim (escHtml).
+   */
+  note?: ClientPlanWeekNote | null;
+}
+
+export type ClientPlanWeekNoteKind = "swap" | "moved" | "taper" | "trip" | "after_run";
+
+export interface ClientPlanWeekNote {
+  kind: ClientPlanWeekNoteKind;
+  text: string;
 }
 
 export interface ClientPlanWeekSession {
@@ -1002,6 +1017,8 @@ export interface ClientPlanWeekDay {
   session: ClientPlanWeekSession | null;
   run: ClientPlanWeekRun | null;
   hard: boolean;
+  /** Inside a trip (a context event): where he is that date, else null. */
+  travel: { title: string; location: string | null } | null;
   /** Today's cell only: the day read's suggestion, from the one strength line. */
   suggestion?: { kind: "easy" | "rest"; label: string; caveat: string | null };
 }
@@ -1047,6 +1064,14 @@ export interface ClientPlanWeek {
   strength_line?: ClientTodayStrengthLine | null;
   /** The athlete's run units (settings.run_units); the server's word, so a header never guesses km. */
   run_units?: "km" | "mi";
+  /** Plan days displaced this week that no later weekday could take, each with one server sentence (printed verbatim). */
+  unplaced?: ClientPlanWeekUnplaced[];
+}
+
+export interface ClientPlanWeekUnplaced {
+  day_number: number;
+  name: string;
+  text: string;
 }
 
 /** One lift day ahead in the Program look-ahead (GET /api/plan/look-ahead). */
@@ -1663,9 +1688,14 @@ export interface ClientRacePaceBand {
   text: string;
   hr_ceiling_bpm?: number | null;
 }
+/** THE race countdown (raceCountdown, src/repo/race-build.ts): every surface prints `words`. */
+export type ClientRaceCountdown = RaceCountdown;
 export interface ClientRaceBuildWeek {
   week_start: ISODateString | string;
+  /** Calendar weeks to race week — sets `kind`; never printed as a countdown. */
   weeks_to_race: number;
+  /** This rung's countdown in the one wording (raceCountdown): "12 days out", "Race week", "3 wks out". */
+  countdown_words?: string;
   phase: "base" | "build" | "sharpen" | "taper" | "past";
   kind: "build" | "down" | "peak" | "taper" | "race";
   km: number;
@@ -1742,6 +1772,8 @@ export interface ClientRaceBuild {
     distance_km: number;
     days_to_race: number;
     weeks_to_race: number;
+    /** How far off the race is from `as_of`, in the one wording every surface prints (raceCountdown). */
+    countdown?: ClientRaceCountdown | null;
     phase: "base" | "build" | "sharpen" | "taper" | "past";
     target: { sec: number; pace_sec_per_km: number; raw: string; kind: "time" | "pace" } | null;
     /** The faster milestone named beside the target ("…; 1:50 stretch"); absent/null with none. */
@@ -4205,6 +4237,8 @@ export interface ClientApiResponses {
   "/api/today-agenda": ClientTodayAgenda;
   "/api/today-agenda/ack": ClientTodayAgendaAckResponse;
   "/api/today-agenda/dismiss": ClientTodayAgendaDismissResponse;
+  "/api/today-asks": import("./brief-asks.js").BriefAsks;
+  "/api/today-asks/answer": import("./brief-asks.js").BriefAskAnswerResult;
   "/api/today/stones": TodayStonesRead;
   "/api/today-path": import("./today-path.js").TodayPath;
   "/api/today-digest": import("./today-digest.js").TodayDigest;
@@ -4251,6 +4285,7 @@ export interface ClientApiResponses {
   "/api/performance": ClientPerformanceStanding;
   "/api/run-plan": ClientWeeklyRunPlan;
   "/api/race-build": ClientRaceBuild;
+  "/api/race-build/days": RaceDays;
   "/api/horizon-race": ClientApiFanIn;
   "/api/train-home": ClientApiFanIn;
   "/api/you-health": ClientApiFanIn;

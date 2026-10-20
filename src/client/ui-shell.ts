@@ -178,6 +178,7 @@ function uiSegmentsDeps(): UiSegmentsDeps {
     // reached at call time). Warm, they call straight through; cold, a segment tap
     // paints only if no newer paint of #view (a tab switch) has claimed it since
     // (withLatestRender, app/render-dispatch.ts).
+    renderTrainWeek: () => withLatestRender("train", () => renderTrainWeek()),
     renderTrainOverview: () => withLatestRender("train", () => renderTrainOverview()),
     renderProgress: () => withLatestRender("train", () => renderProgress()),
     renderVolume: () => withLatestRender("train", () => renderVolume()),

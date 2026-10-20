@@ -58,7 +58,11 @@ import { getHrModel } from "../../repo/hr-model.js";
 import { getPlan } from "../../repo/plan.js";
 import { isoDow, WEEKDAY_NAMES } from "../../repo/profile.js";
 import { planDayProgression, type Prescription } from "../../repo/progression.js";
-import { paceKeyForQuality, raceBuild, type PaceBand, type RaceBuild } from "../../repo/race-build.js";
+import { planDayAdaptations } from "../../repo/plan-adaptations.js";
+import { legTrimFocus, type LegTrim } from "../../repo/plan-day-focus.js";
+import { planDayLegTrimOn } from "../../repo/plan-day-trim.js";
+import { raceTrimForPlanDay } from "../../repo/race-taper-card.js";
+import { paceKeyForQuality, raceBuild, raceCountdown as raceCountdownOn, type PaceBand, type RaceBuild } from "../../repo/race-build.js";
 import { RUN_KIND_LABELS } from "../../repo/run-edit.js";
 import { activeRecoveryWeek } from "../../repo/recovery-week.js";
 import { runZones, weeklyRunPlan, type RunPlanPrescription, type RunZones } from "../../repo/run-progression.js";
@@ -77,6 +81,7 @@ import { localDateISO } from "../../repo/shared.js";
 import { planDayStrengthGroups } from "../../repo/training-read.js";
 import { trainingSymptomsForMovements } from "../../repo/training-symptoms.js";
 import { dayRecord, dayRecordDate } from "../today/day-record.js";
+import { dayChangesOn } from "./day-changes.js";
 import { isPrepPlanItem, PLAN_ITEM_EFFECT_TIER, planItemEffectTier } from "./plan-item-order.js";
 import { lookAheadWeekAsOf } from "./plan-look-ahead.js";
 import { planWeek, type PlanWeek, type PlanWeekDay } from "./plan-week.js";
@@ -134,10 +139,6 @@ function shortWeekday(date: string): string {
 
 function longWeekday(date: string): string {
   return WEEKDAY_NAMES[isoDow(date)] ?? date;
-}
-
-function withArticle(phrase: string): string {
-  return `${/^[aeiou]/i.test(phrase) ? "an" : "a"} ${phrase}`;
 }
 
 function listWords(items: string[]): string {
@@ -393,6 +394,23 @@ const POINT_PHASE: Record<string, readonly string[]> = {
     "Realization week — a few heavy, clean sets that show the work.",
   ],
 };
+// A taper / race-week day whose legs the race build trims: the point is the race week's,
+// never the lifting block's ("Volume is the job this block" on a taper Friday read as the
+// opposite of what the card does, 2026-10-20).
+const POINT_RACE_WEEK: Partial<Record<LegTrim, readonly string[]>> = {
+  race_taper_legs: [
+    "Taper week: lighter legs and crisp reps, so they arrive at the race fresh.",
+    "The taper leads this week — smooth sets, a lighter leg dose, nothing ground out.",
+  ],
+  race_week_legs: [
+    "Race week: the heavy leg work sits out — move well and keep the legs fresh.",
+    "Race week is about staying sharp, not adding work: easy on the legs, clean reps.",
+  ],
+  post_race_recovery: [
+    "Recovering from the race: the same lifts, fewer sets and easier weights, nothing ground out.",
+    "The days after the race keep you moving — a lighter dose, smooth reps, plenty in the tank.",
+  ],
+};
 const POINT_PLAIN: readonly ((what: string) => string)[] = [
   (what) => `${cap(what)} work — steady sets, form first.`,
   (what) => `Keep ${lower(what)} moving forward: good reps, nothing ground out.`,
@@ -403,12 +421,14 @@ function liftPoint(
   anchor: DayDetailExercise | null,
   p: Prescription | undefined,
   phase: string | null,
-  what: string
+  what: string,
+  trim: LegTrim | null = null
 ): string {
   const parts: string[] = [];
   if (anchor && p && !p.starting_idea) {
     const step = anchor.load?.change ?? (text(p.delta_text) || null);
-    if (p.action === "overload" && step)
+    // The days after a race take no step: the anchor holds, lighter (race-recovery.ts).
+    if (p.action === "overload" && step && trim !== "post_race_recovery")
       parts.push(pickDayVariant(POINT_OVERLOAD, date, "day-detail:point:overload")(anchor.name, step));
     else if (p.action === "deload")
       parts.push(pickDayVariant(POINT_DELOAD, date, "day-detail:point:deload")(anchor.name));
@@ -421,8 +441,10 @@ function liftPoint(
         )(anchor.name, anchor.load && anchor.load.weight != null ? anchor.load.text : "")
       );
   }
+  const raceLines = trim ? POINT_RACE_WEEK[trim] : undefined;
   const phaseLines = phase ? POINT_PHASE[phase] : null;
-  if (phaseLines) parts.push(pickDayVariant(phaseLines, date, `day-detail:point:phase:${phase}`));
+  if (raceLines) parts.push(pickDayVariant(raceLines, date, `day-detail:point:race:${trim}`));
+  else if (phaseLines) parts.push(pickDayVariant(phaseLines, date, `day-detail:point:phase:${phase}`));
   if (!parts.length) parts.push(pickDayVariant(POINT_PLAIN, date, "day-detail:point:plain")(what));
   return parts.join(" ");
 }
@@ -524,17 +546,46 @@ function planDayExercisesOf(
   // The week resolves as a deload only on the block's own deload week or a running
   // recovery week; every other week's stored back-off note is another week's words.
   const weekDeload = phase === "deload" || !!safe(() => activeRecoveryWeek(date), null);
+  const prescriptionOf = (item: PlanItem) => byItem.get(Number(item.id)) ?? byName.get(text(item.exercise).toLowerCase());
   const exercises = items
-    .map((item, i) =>
-      exerciseOf(
-        item,
-        byItem.get(Number(item.id)) ?? byName.get(text(item.exercise).toLowerCase()),
-        i === anchorAt,
-        units,
-        weekDeload
-      )
-    )
+    .map((item, i) => exerciseOf(item, prescriptionOf(item), i === anchorAt, units, weekDeload))
     .filter((e) => e.name);
+  // A taper or race week day AHEAD shows the card that morning will carry: the race
+  // build's leg trim, from the stress budget and composition's own clamp
+  // (src/repo/race-taper-card.ts) — never the untrimmed prescription. A trimmed lift's
+  // progression step is not that day's story, so its engine words step aside.
+  const trim = ahead
+    ? safe(
+        () =>
+          raceTrimForPlanDay(date, items, (item: PlanItem) => {
+            const s = prescriptionOf(item)?.suggested as any;
+            return {
+              sets: num(s?.sets) ?? num(item.sets),
+              target_weight: s && "weight" in s && s.weight !== undefined ? num(s.weight) : num(item.target_weight),
+              target_seconds: num(s?.seconds) ?? num(item.target_seconds),
+            };
+          }),
+        null
+      )
+    : null;
+  for (const e of trim ? exercises : []) {
+    const slot = trim?.get(e.name.toLowerCase());
+    if (!slot || e.mode === "mobility") continue;
+    byName.delete(e.name.toLowerCase());
+    e.race_trim = slot.code;
+    e.note = slot.note ?? e.note;
+    if (slot.excluded) {
+      e.sets = 0;
+      e.prescription = "Sits out this week";
+      e.load = null;
+      continue;
+    }
+    e.sets = slot.sets;
+    e.target_seconds = e.mode === "reps" ? null : slot.target_seconds;
+    e.prescription = prescriptionText(e.mode, e.sets, e.rep_low, e.rep_high, e.target_seconds);
+    if (e.load && slot.target_weight != null)
+      e.load = { ...e.load, weight: slot.target_weight, text: loadWords(slot.target_weight, units), change: null };
+  }
   return { items, exercises, byName };
 }
 
@@ -580,12 +631,19 @@ function buildLift(
       ? { kind: cell.suggestion.kind, label: cell.suggestion.label, caveat: cell.suggestion.caveat }
       : null;
 
+  // The race build's leg trim — READ through the one read every dated plan-day surface
+  // asks (planDayLegTrimOn: today's envelope first, the key-run eve included, then the
+  // calendar's taper / race-week trim), so this page and the week strip never disagree.
+  const trim = plan && ahead ? planDayLegTrimOn(date, plan.day_number, { today: ctx.today, planItems: items }) : null;
   const lift: DayDetailLift = {
     day_number: plan?.day_number ?? null,
     title,
-    focus: text(plan?.focus) || null,
+    // The focus follows the trim: a taper / race-week / key-run-eve day says so beside
+    // its stored focus ("… Lighter on the legs — taper week."), never a new title.
+    focus: legTrimFocus(text(plan?.focus) || null, trim, date),
+    trim,
     intent: plan ? liftIntent(date, exercises, anchor) : "A session off the plan — what was lifted is below.",
-    point: plan ? liftPoint(date, anchor, anchorP, phase, what) : "The log is the record of this one.",
+    point: plan ? liftPoint(date, anchor, anchorP, phase, what, trim) : "The log is the record of this one.",
     anchor: anchor?.name ?? null,
     exercises,
     total_sets: totalSets,
@@ -1073,6 +1131,8 @@ function weekOf(date: string, today: string, build: RaceBuild | null): DayDetail
           phrase: stage.phrase,
           focus: text(rung.focus),
           weeks_to_race: rung.weeks_to_race,
+          days_to_race: daysUntil(date, build?.race?.date),
+          countdown: raceCountdownOn(date, build?.race?.date),
         }
       : null;
   // The block's week as the week actually runs it. A later week is the block's next
@@ -1092,20 +1152,46 @@ function weekOf(date: string, today: string, build: RaceBuild | null): DayDetail
   return { week_start: weekStart, race, block };
 }
 
+/** Whole days from `date` to the race (null when the race has no date). */
+function daysUntil(date: string, raceDate: unknown): number | null {
+  const to = Date.parse(`${String(raceDate ?? "").slice(0, 10)}T00:00:00Z`);
+  const from = Date.parse(`${date}T00:00:00Z`);
+  return Number.isFinite(to) && Number.isFinite(from) ? Math.round((to - from) / 864e5) : null;
+}
+
+/**
+ * How far off the race is, in words that are true of the DAY — the countdown's one span
+ * (raceCountdown, src/repo/race-build.ts): "12 days", "3 weeks". Never the rung's
+ * `weeks_to_race`, which counts calendar weeks to RACE WEEK (1 for the whole week before
+ * it), so "1 week to the race" over a race 13 days out would lie.
+ */
+function raceCountdown(race: {
+  weeks_to_race: number;
+  days_to_race?: number | null;
+  countdown?: { span: string | null } | null;
+}): string {
+  const span = race.countdown?.span;
+  if (span) return span;
+  const days = race.days_to_race;
+  if (days != null && days >= 0) return days <= 13 ? `${days} ${days === 1 ? "day" : "days"}` : `${Math.floor(days / 7)} weeks`;
+  const weeks = race.weeks_to_race;
+  return `${weeks} ${weeks === 1 ? "week" : "weeks"}`;
+}
+
 const WHY_RUN_RACE: readonly ((
   word: string,
   focus: string,
   toGo: string,
   event: string,
-  weeks: number,
+  away: string,
   raceWeek: boolean,
   phrase: string
 ) => string)[] = [
   (word, focus, toGo) => `${word}${toGo}. ${focus}`,
-  (_word, focus, _toGo, event, weeks, raceWeek, phrase) =>
+  (_word, focus, _toGo, event, away, raceWeek, phrase) =>
     raceWeek
       ? `${focus} ${cap(event)} is this week.`
-      : `${focus} ${cap(event)} is ${weeks} ${weeks === 1 ? "week" : "weeks"} out — ${phrase}.`,
+      : `${focus} ${cap(event)} is ${away} out — ${phrase}.`,
 ];
 
 const ORDINAL_WORDS = ["first", "second", "third", "fourth", "fifth", "sixth", "seventh"];
@@ -1134,7 +1220,7 @@ function whyLine(
         ? race.event
           ? `, ${race.event}`
           : ""
-        : ` · ${race.weeks_to_race} ${race.weeks_to_race === 1 ? "week" : "weeks"} to ${event}`;
+        : ` · ${raceCountdown(race)} to ${event}`;
     if (run && race.focus) {
       parts.push(
         pickDayVariant(WHY_RUN_RACE, date, "day-detail:why:race")(
@@ -1142,7 +1228,7 @@ function whyLine(
           race.focus,
           toGo,
           event,
-          race.weeks_to_race,
+          raceCountdown(race),
           race.kind === "race",
           race.phrase ?? lower(race.word)
         )
@@ -1155,7 +1241,10 @@ function whyLine(
       parts.push(aboutToday ? `${race.word}${toGo}. ${withLifting}` : `${race.word}${toGo}.`);
     }
   }
-  if (lift && week.block) {
+  // A taper or race week leads with the race; the block's accumulation/intensification
+  // count would claim a build the week is not doing, so the block line stays out of it.
+  const raceLeads = race?.kind === "taper" || race?.kind === "race";
+  if (lift && week.block && !raceLeads) {
     const b = week.block;
     // One stage per week: with a race rung naming the week, the block line names only
     // where in the block it sits; with none, the block's phase is the week's stage.
@@ -1308,7 +1397,14 @@ function runPhrase(run: DayDetailRun): string {
   return `the quality session (${runNoun(run.label)})`;
 }
 
+const HEAD_LIFT: readonly ((lift: string) => string)[] = [(lift) => `${lift}.`, (lift) => `The lift: ${lift}.`];
+const HEAD_LIFT_RUN: readonly ((lift: string, run: string) => string)[] = [
+  (lift, run) => `${lift}, then ${run}.`,
+  (lift, run) => `${lift} first, then ${run}.`,
+];
+
 function headlineOf(
+  date: string,
   status: DayDetailStatus,
   lift: DayDetailLift | null,
   run: DayDetailRun | null,
@@ -1326,8 +1422,9 @@ function headlineOf(
     if (ran) return `${cap(ran)} — done.`;
     return "Logged.";
   }
-  if (lift && run) return `${cap(withArticle(lift.title))} day, then ${runWords}.`;
-  if (lift) return `${cap(withArticle(lift.title))} day.`;
+  const title = lift ? lift.title.replace(/[.\s]+$/, "") : "";
+  if (lift && run) return pickDayVariant(HEAD_LIFT_RUN, date, "day-detail:headline:lift-run")(cap(title), runWords);
+  if (lift) return pickDayVariant(HEAD_LIFT, date, "day-detail:headline:lift")(cap(title));
   if (run) return `${cap(runWords)}.`;
   if (status === "open") return "Nothing was logged this day.";
   return past ? "A rest day." : "A rest day. Nothing is planned.";
@@ -1455,7 +1552,7 @@ export function dayDetail(date: string, opts: { today?: string } = {}): DayDetai
     status,
     placed,
     focus: focusLine(lift, run, status),
-    headline: headlineOf(status, lift, run, done, day < today),
+    headline: headlineOf(day, status, lift, run, done, day < today),
     why: whyLine(day, asOf, weekRead, lift, run, covered, build, liftSlot, runUnits),
     week: weekRead,
     lift,
@@ -1464,7 +1561,9 @@ export function dayDetail(date: string, opts: { today?: string } = {}): DayDetai
     stack,
     done,
     caveats: caveatsOf(day),
+    changes: safe(() => dayChangesOn(day, today), []),
     run_units: runUnits,
     weight_units: units.weight,
+    adaptations: planDayAdaptations(lift?.day_number, day),
   };
 }

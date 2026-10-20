@@ -23,6 +23,7 @@
 // Self-contained apart from the day record's logged shapes: src/client/** reads these
 // types through `import("../contracts/day-detail.js")`.
 import type { DayRecordActivity, DayRecordSession } from "./day-record.js";
+import type { DayDetailChange } from "./day-changes.js";
 
 /**
  * Where the day sits. `done` work was logged (a finished session, a run, or a past day
@@ -76,6 +77,13 @@ export interface DayDetailExercise {
    * exercise's constraint note.
    */
   note: string | null;
+  /**
+   * A day ahead in a race build's taper or race week: the stress budget's leg trim that
+   * morning's card will carry is already applied to `sets` / `load` / `prescription`
+   * (src/repo/race-taper-card.ts) — and so, the days after a race, is the post-race
+   * recovery window's lighter dose (`post_race_recovery`). Absent on any other day.
+   */
+  race_trim?: "race_taper_legs" | "race_week_legs" | "post_race_recovery";
 }
 
 export type DayDetailWatchKind = "symptom" | "constraint" | "recent_best" | "progression" | "untested";
@@ -110,6 +118,12 @@ export interface DayDetailLift {
   today_line: string | null;
   /** Today only: the day read's suggestion carried as a caveat on the plan day. */
   suggestion: { kind: "easy" | "rest"; label: string; caveat: string | null } | null;
+  /**
+   * The race build's leg trim on this day (stress-budget.ts, read — never re-derived):
+   * taper week's lighter legs, race week's heavy legs sitting out, or the eve of a key
+   * run (today only: that morning's envelope says it). `focus` already says it in words.
+   */
+  trim?: "race_taper_legs" | "race_week_legs" | "key_run_eve" | "post_race_recovery" | null;
 }
 
 /** One part of a run. Quality work reads warm-up → main → cool-down. */
@@ -252,7 +266,16 @@ export interface DayDetailWeek {
     phrase?: string;
     /** The rung's one coaching sentence. */
     focus: string;
+    /** Calendar weeks to RACE WEEK (the ladder's count; 1 for the whole week before it). */
     weeks_to_race: number;
+    /** Whole days from this day to race day — what the day's words count in when near. */
+    days_to_race?: number | null;
+    /**
+     * How far off the race is from THIS day, in the countdown's one wording
+     * (raceCountdown, src/repo/race-build.ts) — `span` ("12 days", "3 weeks") is what
+     * "… to <race>" says. Every surface prints this, never `weeks_to_race`.
+     */
+    countdown?: import("./race-days.js").RaceCountdown | null;
   } | null;
   /** The active block's week, as the week actually runs it (block-phase.ts). */
   block: {
@@ -299,7 +322,22 @@ export interface DayDetail {
   done: DayDetailDone | null;
   /** Life-context events active that day, by title (a trip, an illness logged as context). */
   caveats: string[];
+  /** Coach changes that adapted this day (today through the end of next week), in the feed's words with its Undo. */
+  changes?: DayDetailChange[];
   run_units: "km" | "mi";
   /** The athlete's weight unit; every load `text` / `change` here is already in it. */
   weight_units?: "lb" | "kg";
+  /**
+   * Plan changes on this day's plan day scoped to a date ("adapted for the race until
+   * Nov 1") that are still in force; each goes back to the regular plan the day after
+   * `until` (src/repo/plan-adaptations.ts). Empty when none.
+   */
+  adaptations?: Array<{
+    day_number: number;
+    exercise: string;
+    kind: "updated" | "removed" | "added" | "swapped";
+    until: string;
+    reason: string | null;
+    decision_id: number | null;
+  }>;
 }

@@ -253,6 +253,24 @@ type DayRecordDetail = import("../contracts/day-detail.js").DayDetail;
       state.dayPickedOn = null;
       void openSession(date, { trigger: log, provenance: { entry: "day_record" } });
     });
+    // "The coach adapted this day": its Undo is the server's own revert (decision-undo);
+    // once it lands the day is read again, so the page shows the day as it now stands.
+    if (typeof CairnDecisionUndoController !== "undefined") {
+      CairnDecisionUndoController.mount(
+        root,
+        { api, toast },
+        {
+          "ddv-undo": {
+            reason: "one-tap undo from the day it adapted",
+            success: "Put that change back",
+            stale: "This change can no longer be undone.",
+            failed: "Could not undo that change",
+            after: () => renderDay(),
+          },
+        },
+        "ddv-undo"
+      );
+    }
   }
 
   async function renderDay(): Promise<void> {

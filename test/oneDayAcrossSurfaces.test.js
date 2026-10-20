@@ -39,7 +39,7 @@ for (const [name, role] of [
     assert.equal(line.state, "not_started");
     assert.ok(line.run_in, "the run is in");
     assert.ok(line.day_number != null && line.title, "a plan day is named");
-    assert.match(line.text, new RegExp(`^Run in · ${line.title} still open`));
+    assert.match(line.text, new RegExp(`^(?:Your run's in\\. |Run done\\. |The run's in; )${line.title} is still (?:there|on for today)`));
 
     // The Brief.
     const read = repo.dayRead(REF);

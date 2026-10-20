@@ -408,7 +408,9 @@ test("more strength days than lifting weekdays: the surplus opens the NEXT week,
   assert.deepEqual(picks(WEEK_1.slice(0, 5)), [1, 2, 3, 4, 5]);
   // The athlete lifts S5 on Friday, closing the week where the plan said it would.
   repo.logSetByName({ date: "2026-04-24", exercise: "Overhead Press", weight: 95, reps: 8 });
-  assert.deepEqual(picks(WEEK_2.slice(0, 5)), [6, 1, 2, 3, 4], "S6 opens the following Monday");
+  // (Friday's S4 is a Romanian deadlift on the eve of Saturday's long run, so the week
+  // trades it with Thursday's S3 — the key-run placement, not the surplus rotation.)
+  assert.deepEqual(picks(WEEK_2.slice(0, 5)), [6, 1, 2, 4, 3], "S6 opens the following Monday");
 
   // The law, over the whole fortnight: a weekend day is the long run (Saturday) or the
   // calendar's rest (Sunday) — never a plan day.
@@ -472,7 +474,10 @@ test("a recovering split day walks forward to the next fresh day, not a distant 
   ]);
   repo.setProfile({
     strength_schedule: WORKDAYS,
-    endurance_schedule: { days: [{ dow: 0, kind: "long" }] },
+    // Stated as an easy run day: a stated LONG run would trade Monday's Lower B onto
+    // Tuesday before the scorer ever saw it (the key-run placement). The logged 16 km
+    // below is what still loads the legs, which is what this test is about.
+    endurance_schedule: { days: [{ dow: 0, kind: "easy" }] },
   });
   repo.logSetByName({ date: "2026-04-24", exercise: "Chest-Supported Row", weight: 35, reps: 10 });
   repo.addActivity({

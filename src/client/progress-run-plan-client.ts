@@ -178,7 +178,7 @@ function raceBuildCard(build: RaceBuild | null | undefined, opts?: { underGoal?:
     ? `<div class="wrun-rows rbuild-ladder">${build.weeks
         .map((w) => `<div class="wrun-row ${w.kind === "peak" || w.kind === "build" ? "wrun-quality" : "wrun-easy"}${w.current ? " is-current" : ""}">
             <div class="wrun-row-head">
-              <span class="wrun-kind">${escHtml(w.weeks_to_race === 0 ? "Race week" : `${w.weeks_to_race} wk out`)}</span>
+              <span class="wrun-kind">${escHtml(raceWeekOutWords(w))}</span>
               <span class="wrun-label">${escHtml(RACE_WEEK_KIND_WORD[w.kind] || w.kind)}${w.current ? " · this week" : ""}</span>
               <span class="numeral rbuild-week-km">${escHtml(`${raceDist(w.km, units)} · long ${raceDist(w.long_km, units)}`)}</span>
             </div>
@@ -196,13 +196,9 @@ function raceBuildCard(build: RaceBuild | null | undefined, opts?: { underGoal?:
   const whyBits = [build.why, ...strengthBits].filter(Boolean);
 
   const phaseLabel = { base: "Base", build: "Building", sharpen: "Sharpening", taper: "Tapering", past: "Done" }[race.phase] || "";
-  // Match the ladder's own label at the edges: 0 weeks out is "race week", 1
-  // is singular ("1 week to go") — never "1 weeks to go".
-  const countdownWord = race.weeks_to_race === 0
-    ? "race week"
-    : race.weeks_to_race === 1
-      ? "1 week to go"
-      : `${race.weeks_to_race} weeks to go`;
+  // The countdown's one wording, the same words the ladder rows and the day-by-day
+  // countdown print ("12 days out", "Race week", "Tomorrow").
+  const countdownWord = raceCountdownWords(race);
   // The goal card directly above already states the countdown + phase — when
   // this card is placed right under it (Plan -> Endurance, and Progress ->
   // Endurance which also stacks goal then race build), don't say it twice.
@@ -311,16 +307,9 @@ function enduranceGoalCard(goal: EnduranceGoal | null | undefined, opts?: { unit
   const dist = goal.distance_km ? raceDist(goal.distance_km, units) : null;
   if (goal.mode === "race") {
     const days = typeof goal.days_to_race === "number" ? goal.days_to_race : null;
-    const when =
-      days == null
-        ? ""
-        : days < 0
-          ? "race day passed"
-          : days === 0
-            ? "race day"
-            : days <= 14
-              ? `${days} day${days === 1 ? "" : "s"} to go`
-              : `${goal.weeks_to_race} weeks to go`;
+    // The same count the race build's head and ladder print (raceCountdown): days to two
+    // weeks, then whole weeks — never the goal's own rounded-up week count.
+    const when = days == null ? "" : days < 0 ? "Race day passed" : raceCountdownFallback(days, goal.date);
     const phaseLabels: Record<NonNullable<EnduranceGoal["phase"]>, string> = {
       base: "Base building",
       build: "Building",

@@ -21,9 +21,15 @@ import {
 import { latestBrainEvaluation } from "../../repo/brain-evaluations.js";
 import { getAppState, setAppState } from "../../repo/app-state.js";
 import { getProposal } from "../../repo/proposals.js";
+import { planAdaptationTitle } from "../../repo/plan-adaptations.js";
 import { athleteLine } from "../../repo/brain/clinician-ask.js";
+import { plainInline } from "../../lib/plain-text.js";
 import { type PlanPrescription, planPrescriptionKey, planPrescriptionSnapshot } from "../../repo/plan.js";
 import { pickDayVariant } from "../../repo/brain/day-read-rules.js";
+import { decisionOpenDay } from "../training/plan-day-dates.js";
+import { receiptFromBrainDecision } from "../../repo/change-receipt.js";
+import { CHANGE_WEEKDAYS, changeDayWord, changeStatusLine } from "../../repo/change-status-words.js";
+import type { ChangeReceipt } from "../../contracts/change-receipt.js";
 import {
   addDaysISO,
   clipText,
@@ -65,6 +71,11 @@ const CHANGE_KINDS: ReadonlySet<string> = new Set<BrainDecisionKind>([
   "goal_change",
 ]);
 const TEAM_TIERS: ReadonlySet<string> = new Set(["quiet_apply", "announce"]);
+
+/** A coaching kind that changes what the athlete does (the feed's own CHANGE_KINDS). */
+export function isBrainChangeKind(kind: unknown): boolean {
+  return CHANGE_KINDS.has(String(kind));
+}
 
 // The app_state key holding the ISO instant the athlete last opened the feed.
 export const BRAIN_CHANGES_SEEN_KEY = "brain_changes_seen_at";
@@ -326,7 +337,9 @@ function sameText(a: unknown, b: unknown): boolean {
 }
 
 function spoken(text: unknown, max: number, draft: Draft | null = null): string | null {
-  const value = athleteLine(text, max);
+  // An agent's markdown ("**Monday: Push A.**") is read as its words: every surface that
+  // prints a row (the feed, the day page, Horizon) escapes it verbatim.
+  const value = athleteLine(typeof text === "string" ? plainInline(text) : text, max);
   if (!value) return null;
   // The decision's rationale falls back to the draft's `instruction` when the draft
   // wrote no rationale — the producer's label ("day 1 progression", "swap A → B",
@@ -630,6 +643,9 @@ function statedTitle(decision: BrainDecision, voice: RowVoice): string | null {
 function changeTitle(decision: BrainDecision, what: Touched, draft: Draft | null, voice: RowVoice): string {
   const stated = statedTitle(decision, voice);
   if (stated) return stated;
+  // A change scoped to the race is titled as one, with its end date (plan-adaptations.ts).
+  const adapted = planAdaptationTitle(decision.action);
+  if (adapted) return adapted;
   const written = writtenTitle(decision, draft);
   const undated = written ? withoutAbsoluteDates(written, voice) : null;
   if (undated) return undated;
@@ -777,6 +793,9 @@ function confidenceWord(expectation: BrainExpectation | null): ClientBrainChange
 
 function restoreLabel(decision: BrainDecision, what: Touched): string {
   if (what.recoveryCycle) return "Return to your regular week";
+  // The after-the-race return (plan-adaptations.ts): its Undo keeps the adaptation a week.
+  if ((decision.context as Record<string, unknown> | null)?.plan_adaptation_restore === true)
+    return "Keep the race adaptation one more week";
   // The athlete's own push / steady statement (src/domain/training/training-drive.ts).
   if ((decision.context as Record<string, unknown> | null)?.training_drive_stance === true)
     return "Go back to your previous drive";
@@ -840,41 +859,17 @@ function undoFor(decision: BrainDecision, state: ClientBrainChangeState, what: T
 }
 
 // ---------- day words ----------
+// The day word and the status line are shared with the change receipt
+// (src/repo/change-status-words.ts), so a change reads the same in both places.
 
-const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-function weekday(day: string): string {
-  const ms = Date.parse(`${day}T12:00:00Z`);
-  return Number.isFinite(ms) ? WEEKDAYS[new Date(ms).getUTCDay()] : day;
-}
-
-function monthDay(day: string): string {
-  const ms = Date.parse(`${day}T12:00:00Z`);
-  if (!Number.isFinite(ms)) return day;
-  const date = new Date(ms);
-  return `${MONTHS[date.getUTCMonth()]} ${date.getUTCDate()}`;
-}
-
-function dayWord(day: string, asOf: string): string {
-  if (day === asOf) return "today";
-  if (day === addDaysISO(asOf, -1)) return "yesterday";
-  if (day === addDaysISO(asOf, 1)) return "tomorrow";
-  const nearPast = (addDaysISO(asOf, -6) ?? asOf) <= day && day < asOf;
-  const nearFuture = asOf < day && day <= (addDaysISO(asOf, 6) ?? asOf);
-  return nearPast || nearFuture ? weekday(day) : monthDay(day);
-}
+const WEEKDAYS = CHANGE_WEEKDAYS;
+const dayWord = changeDayWord;
 
 function capitalize(text: string): string {
   return text ? text[0].toUpperCase() + text.slice(1) : text;
 }
 
-function statusLine(state: ClientBrainChangeState, day: string, landsOn: string | null, asOf: string): string {
-  if (state === "announced") return landsOn ? `Lands ${dayWord(landsOn, asOf)}` : "Lands soon";
-  if (state === "reverted") return "Put back";
-  if (state === "held") return "Held before it landed";
-  return `Landed ${dayWord(day, asOf)}`;
-}
+const statusLine = changeStatusLine;
 
 // ---------- drafts set aside ----------
 //
@@ -1009,23 +1004,55 @@ function projectDecision(decision: BrainDecision, read: ReadContext, floor: stri
   const landsOn = state === "announced" ? String(decision.effective_date ?? "").slice(0, 10) || null : null;
   const said = statedWords(decision);
   const why = changeWhy(decision, draft, what, voice);
+  const title = plainInline(changeTitle(decision, what, draft, voice));
+  const openDay = decisionOpenDay(decision, asOf);
+  const receipt = receiptFromBrainDecision(decision, { what: title, when: openDay.open_day ?? null, asOf });
   return {
     id: decision.id,
     day,
     state,
     domain: String(decision.domain),
-    title: changeTitle(decision, what, draft, voice),
+    title,
     // "You said X → the brain changed Y": the quote leads the why, the change follows.
     why: said ? capStatedWhy(said, why) : why,
     ...(said ? { said } : {}),
+    // The first date the change adapted, when it changed a dated plan day (the feed links it).
+    ...openDay,
     status_line: statusLine(state, day, landsOn, asOf),
     lands_on: landsOn,
     outcome: { key, phrase: BRAIN_CHANGE_OUTCOME_PHRASES[key] },
     confidence: confidenceWord(expectation),
     undo: undoFor(decision, state, what),
     new: Number.isFinite(surfacedMs) && surfacedMs > seenFrom && !athleteAsked(decision),
+    ...(receipt ? { receipt } : {}),
     event_at: eventAt,
   };
+}
+
+/**
+ * One decision as a change receipt in the feed's own words — its title and open day —
+ * for a surface outside the feed (a chat reply's receipts for the changes that landed that
+ * turn), so one change reads the same in both places. Null when the row is not a change
+ * that landed, waits to land, or was put back.
+ */
+export function brainChangeReceipt(
+  decision: BrainDecision | null | undefined,
+  asOf: string = localDateISO()
+): ChangeReceipt | null {
+  if (!decision || decision.id == null) return null;
+  let title: string | null = null;
+  let openDay: string | null = null;
+  try {
+    let livePlan: Map<string, PlanPrescription> | null = null;
+    const read: ReadContext = { asOf, livePlan: () => (livePlan ??= planPrescriptionSnapshot()) };
+    const draft = draftOf(decision);
+    const day = String(decision.effective_date ?? "").slice(0, 10) || localDayOfStamp(decision.applied_at) || asOf;
+    title = plainInline(changeTitle(decision, touched(decision, draft, read), draft, { day, asOf }));
+    openDay = decisionOpenDay(decision, asOf).open_day ?? null;
+  } catch {
+    title = null; // the receipt falls back to the decision's own words
+  }
+  return receiptFromBrainDecision(decision, { what: title, when: openDay, asOf });
 }
 
 function dayGroupLabel(day: string, asOf: string): string {

@@ -24,6 +24,7 @@
 // one athlete-facing string (`next_48h.line`) rotates through pickDayVariant.
 import { mondayOf } from "../lib/dates.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
+import { travelOn } from "./travel-days.js";
 import { crossTrainingDays, type CrossTrainingDay } from "./cross-training-day.js";
 import type { LoadFamily } from "./endurance-sports.js";
 import { canonicalGroup, isMobility, type MuscleGroup } from "./exercise-canon.js";
@@ -297,7 +298,9 @@ function plannedOn(
     weekday: weekdayOf(date),
     run_kind,
     strength_title: day?.name ?? null,
-    cross_training: crossDay != null && crossDay.dow === isoDow(date),
+    // An optional day inside a trip is not projected: the week does not lean on it.
+    cross_training:
+      crossDay != null && crossDay.dow === isoDow(date) && !(crossDay.optional && safe(() => travelOn(date), null)),
   };
 }
 

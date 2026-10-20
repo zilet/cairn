@@ -6,6 +6,7 @@ import { canonicalGroup, classifyMuscleGroup } from "./exercise-canon.js";
 import { strengthPlanDayOn } from "./plan-selection.js";
 import { dowToDayNumber, getEnduranceGoal, isoDow } from "./profile.js";
 import { raceBuild } from "./race-build.js";
+import { raceRecoveryWindow, weekdayShort } from "./race-recovery.js";
 import { runDaySteerKey } from "./run-day-steer.js";
 import { type WeeklyRunPlan, weeklyRunPlan } from "./run-progression.js";
 import { localDateISO } from "./shared.js";
@@ -75,10 +76,23 @@ import type { EnduranceRole } from "./training-intent.js";
 // (`stressBudgetSuspendsWeeklyLower`): "heavy lower once a week" is the build's law, and
 // the race build's own law for those two weeks is light legs, then legs off.
 //
+// 0. THE DAYS AFTER THE RACE (code `post_race_recovery`, ahead of every rule above):
+//    inside the post-race recovery window (race-recovery.ts `raceRecoveryWindow`, the
+//    one read — 2 / 4 / 7 days by distance) EVERY group on today's card is reduced, the
+//    upper body included: the athlete keeps training, at lower volume and not so heavy
+//    (fewer sets, the eased load, a hold rather than a step, never a reach host). Legs
+//    stay ON the card — nothing is excluded. It also stands the weekly lower guarantee
+//    down, as taper and race week do. It applies whatever the endurance role: the race
+//    was run either way.
+//
 // Must never: touch the anchor lift itself on a key-run eve, change a load or a set count
-// directly (that is composition's, via the muscle lists), or touch upper-body groups.
+// directly (that is composition's, via the muscle lists), or touch upper-body groups
+// outside the post-race window.
 
-export type StressBudgetReason = Extract<DailyDecisionReason, "key_run_eve" | "race_taper_legs" | "race_week_legs">;
+export type StressBudgetReason = Extract<
+  DailyDecisionReason,
+  "key_run_eve" | "race_taper_legs" | "race_week_legs" | "post_race_recovery"
+>;
 
 // Every lower-body group the budget speaks for (daily-decision's LOWER_BODY_GROUPS).
 const LOWER_GROUPS: ReadonlySet<string> = new Set(["quads", "hamstrings", "glutes", "calves"]);
@@ -98,6 +112,9 @@ export interface StressBudgetSnapshot {
   days_to_race?: number;
   // The next PLACED key run when today is the last lift day before it (≤ two days out).
   key_run?: { kind: "quality" | "long"; in_days: 1 | 2 };
+  // Inside the post-race recovery window (race-recovery.ts): the day of it, its length
+  // and the first ordinary day again. When present, nothing else is on the slice.
+  race_recovery?: { day_index: number; days: number; back_on: string; event: string | null };
 }
 
 export interface StressBudgetGatherContext {
@@ -149,10 +166,24 @@ registerTrainingCacheClear(() => {
 
 /** Gather half. `undefined` = nothing to say (the key stays off the snapshot). */
 export function stressBudgetSnapshot(date: string, ctx: StressBudgetGatherContext): StressBudgetSnapshot | undefined {
-  if (ctx.enduranceRole === "none") return undefined;
   const groups = new Set(
     (Array.isArray(ctx.planItems) ? ctx.planItems : []).map(itemGroup).filter((g): g is string => g != null)
   );
+  // The days after the race come first, for every role and every group on the card.
+  if (groups.size) {
+    const recovery = safeRead(() => raceRecoveryWindow(date));
+    if (recovery) {
+      return {
+        race_recovery: {
+          day_index: recovery.day_index,
+          days: recovery.days,
+          back_on: recovery.back_on,
+          event: recovery.race.event,
+        },
+      };
+    }
+  }
+  if (ctx.enduranceRole === "none") return undefined;
   const lowerOnCard = [...groups].some((g) => LOWER_GROUPS.has(g));
   if (!lowerOnCard && !groups.has("core")) return undefined;
   const key = `${date}|${lowerOnCard ? "legs" : "core"}|${localDateISO()}|${runDaySteerKey()}|${coachContextBackstopSignature()}`;
@@ -175,7 +206,7 @@ function stressRaceRead(date: string, lowerOnCard: boolean): StressBudgetSnapsho
   if (!goal?.is_race || !goal.date) return undefined;
 
   const weekPlan = safeRead(() => weeklyRunPlan(date, { adjustToday: false }));
-  const build = raceBuild(date, { runPlan: weekPlan, weekLayout: null });
+  const build = raceBuild(date, { runPlan: weekPlan, weekLayout: null, templateRing: true });
   if (!build.available || !build.race) return undefined;
   const week = build.weeks.find((w) => w.current) ?? null;
   if (!week) return undefined;
@@ -211,12 +242,52 @@ function stressRaceRead(date: string, lowerOnCard: boolean): StressBudgetSnapsho
 }
 
 /**
+ * The CALENDAR half of the budget for a day ahead: what taper or race week (or the days
+ * after the race) does to a plan day on `date`, decided by the same gather + decide halves daily-decision runs —
+ * never a second gate. Only rules 0, 1 and 2 (the post-race window, taper, race week):
+ * they depend on nothing but the date and the card, so a read surface showing next Friday
+ * can print them today. The key-run eve depends on that morning's weekly-lower guarantee
+ * and safety floor, so it stays the morning's to say. Null when none applies.
+ */
+export function stressBudgetCalendarTrim(
+  date: string,
+  planItems: readonly any[],
+  enduranceRole: EnduranceRole
+): (StressBudgetDecision & { code: StressBudgetCalendarCode }) | null {
+  const items = (Array.isArray(planItems) ? planItems : []).filter((it) => it && String(it.kind ?? "") !== "cardio");
+  const snapshot = stressBudgetSnapshot(date, { dayType: "training", planItems: items, enduranceRole });
+  if (!stressBudgetSuspendsWeeklyLower(snapshot)) return null;
+  const decision = stressBudgetDecision(snapshot, {
+    date,
+    kind: "train",
+    baseKind: "train",
+    trainAnyway: false,
+    lowerWeekHolds: false,
+    weekHeldGroups: new Set(),
+    lowerSafetyFloor: false,
+    anchor: null,
+    planItems: items.map((it) => ({ ...it, muscle_group: itemGroup(it) })) as DailyDecisionSnapshot["plan_items"],
+    injuryExcluded: [],
+    enduranceRole,
+    snapshot: {} as DailyDecisionSnapshot,
+  });
+  return decision.code === "race_taper_legs" ||
+    decision.code === "race_week_legs" ||
+    decision.code === "post_race_recovery"
+    ? (decision as StressBudgetDecision & { code: StressBudgetCalendarCode })
+    : null;
+}
+
+/** The calendar rules — the ones a day ahead can already be read for. */
+export type StressBudgetCalendarCode = "race_taper_legs" | "race_week_legs" | "post_race_recovery";
+
+/**
  * Taper and race week stand the weekly lower guarantee down: the race build's own
  * strength law for those weeks is light legs, then legs off. daily-decision asks this
  * before it resolves `lowerWeekHolds`.
  */
 export function stressBudgetSuspendsWeeklyLower(snapshot: StressBudgetSnapshot | undefined | null): boolean {
-  return snapshot?.race_week_kind === "taper" || snapshot?.race_week_kind === "race";
+  return snapshot?.race_week_kind === "taper" || snapshot?.race_week_kind === "race" || snapshot?.race_recovery != null;
 }
 
 // The envelope's `stress` field: which rule spoke and the groups it named.
@@ -345,8 +416,29 @@ export const KEY_RUN_EVE_ITEM_NOTES: readonly [string, ...string[]] = [
   "Shorter today at your usual weight, so the legs keep something for the key run.",
 ];
 
+// The days after the race: the whole card lighter, the athlete still training.
+type RecoveryLine = (race: string, back: string) => string;
+export const POST_RACE_RECOVERY_RATIONALE: readonly [RecoveryLine, ...RecoveryLine[]] = [
+  (race, back) =>
+    `Recovering from ${race}: the lifting stays on the card at a lighter dose — fewer sets, easier weights — and back to full on ${back}.`,
+  (race, back) =>
+    `${race} is behind you, so today's session keeps its movements with fewer sets and a little less weight. Back to full on ${back}.`,
+  (race, back) =>
+    `A lighter session while the body recovers from ${race}: same lifts, shorter and easier, with full sessions back on ${back}.`,
+  (race, back) =>
+    `Still training, just lighter — ${race} asked a lot, so sets and weights come down a touch until ${back}.`,
+];
+
+export const POST_RACE_RECOVERY_ITEM_NOTES: readonly [string, ...string[]] = [
+  "Lighter and shorter while you recover from the race.",
+  "Fewer sets at an easier weight — recovering from the race.",
+  "A recovery dose after the race: keep it smooth and leave plenty in the tank.",
+  "Kept light this week so the race can settle; full sessions come back soon.",
+];
+
 /** The per-item note set for a stress-budget-only reduction, by the rule that spoke. */
 export function stressBudgetItemNotes(code: unknown): readonly [string, ...string[]] | null {
+  if (code === "post_race_recovery") return POST_RACE_RECOVERY_ITEM_NOTES;
   if (code === "race_taper_legs") return RACE_TAPER_ITEM_NOTES;
   if (code === "race_week_legs") return RACE_WEEK_ITEM_NOTES;
   if (code === "key_run_eve") return KEY_RUN_EVE_ITEM_NOTES;
@@ -367,7 +459,7 @@ export function stressBudgetDecision(
   snapshot: StressBudgetSnapshot | undefined,
   ctx: StressBudgetDecisionContext
 ): StressBudgetDecision {
-  if (!snapshot || ctx.kind === "rest" || ctx.enduranceRole === "none") return EMPTY;
+  if (!snapshot || ctx.kind === "rest") return EMPTY;
   const injured = new Set(ctx.injuryExcluded.map((g) => String(g).toLowerCase()));
   const dayGroups = [
     ...new Set(
@@ -376,6 +468,26 @@ export function stressBudgetDecision(
         .map((it) => String(it.muscle_group).toLowerCase())
     ),
   ].filter((g) => !injured.has(g));
+
+  // ---- 0. the days after the race: the whole card lighter, nothing excluded ----
+  const recovery = snapshot.race_recovery;
+  if (recovery) {
+    if (!dayGroups.length) return EMPTY;
+    const race = recovery.event ? String(recovery.event) : "the race";
+    const back = weekdayShort(recovery.back_on) || "the weekend";
+    const line = pickDayVariant(POST_RACE_RECOVERY_RATIONALE, ctx.date, "stress_budget:post_race")(race, back);
+    return {
+      code: "post_race_recovery",
+      reduced: dayGroups,
+      excluded: [],
+      rationale: line.charAt(0).toUpperCase() + line.slice(1),
+      soft:
+        `Day ${recovery.day_index} of ${recovery.days} after the race — every lift lighter, fewer sets, no load step` +
+        ` (${dayGroups.join(", ")}); back to full on ${recovery.back_on}`,
+      excluded_note: null,
+    };
+  }
+  if (ctx.enduranceRole === "none") return EMPTY;
   const lowerOnDay = dayGroups.filter((g) => LOWER_GROUPS.has(g));
 
   if (snapshot.race_week_kind === "taper") {

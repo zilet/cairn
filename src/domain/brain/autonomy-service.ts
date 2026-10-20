@@ -72,7 +72,7 @@ import { stampsByPlanKey } from "../../repo/prescription-authorship.js";
 import { movementKey, normalizeExerciseName, normalizedExerciseKey } from "../../repo/exercise-canon.js";
 import { cancelRecoveryCycle, getRecoveryCycle } from "../../repo/recovery-cycles.js";
 import { computeGoalCheck, getProfile, setProfile } from "../../repo/profile.js";
-import { applyProposal, getProposal, isProposalRefusal, listProposals, listReviewHeldProposals, proposalStatus, ProposalRefusedError, setProposalStatus, type NormalizedProposalApplyPayload, type OrphanSiblingCleanup } from "../../repo/proposals.js";
+import { applyProposal, createProposal, getProposal, isProposalRefusal, listProposals, listReviewHeldProposals, proposalStatus, ProposalRefusedError, setProposalStatus, type NormalizedProposalApplyPayload, type OrphanSiblingCleanup } from "../../repo/proposals.js";
 import { RECOVERY_WEEK_INSTRUCTION_PREFIX, revertRecoveryWeekIfOwned } from "../../repo/recovery-week.js";
 import { MEAL_REFRESH_REQUEST_KEY } from "../../repo/meal-refresh-retry.js";
 import { mealPlanAutoDraftEnabled } from "../../repo/meal-plan-auto-draft.js";
@@ -83,7 +83,28 @@ import { settledPainPlaceReader, type SettledPainPlace } from "../../repo/injury
 import { buildRunPlanProposal } from "../../repo/run-progression.js";
 import { capProtectiveRaise, cutReaffirmation, deriveCutTarget } from "../../repo/cut-target.js";
 import { getSettings } from "../../repo/settings.js";
-import { registerTrainingCacheClear, trainingBackstopSignature } from "../../repo/training-cache.js";
+import {
+  bumpTrainingDataVersion,
+  registerTrainingCacheClear,
+  trainingBackstopSignature,
+} from "../../repo/training-cache.js";
+import {
+  adaptationRowIsForRace,
+  askedRestoreWords,
+  cancelPlanAdaptationsForProposal,
+  keptOneMoreWeekWords,
+  markPlanAdaptationsAsked,
+  proposalHasPlanAdaptations,
+  reactivatePlanAdaptationsForUndoneRestore,
+  refreshPlanAdaptationDays,
+  restoreChangesForAsk,
+  restoreDecisionWords,
+  restoreDuePlanAdaptations,
+  stampRestoreDecision,
+  withPlanAdaptationWritesOwned,
+  type PlanAdaptationRestoreOutcome,
+} from "../../repo/plan-adaptations.js";
+import { invalidateDayRead } from "../../repo/intelligence.js";
 import {
   draftIsRegenerationProduct,
   regenerableProducer,
@@ -105,7 +126,7 @@ import {
 import { revertGarminReconcile } from "../../repo/activities.js";
 import { revertTrainingStance } from "../training/training-drive.js";
 import { revertStatedRunWeek } from "../training/stated-input.js";
-import { withSqliteSavepoint } from "../../repo/sqlite-savepoint.js";
+import { afterSqliteCommit, withSqliteSavepoint } from "../../repo/sqlite-savepoint.js";
 import {
   captureNutritionProposalEvidence,
   captureProposalEvidence,
@@ -314,7 +335,11 @@ type ProposalReviewReasonCode =
   | "user_lock"
   | "review_posture"
   | "requested_review"
-  | "domain_policy";
+  | "domain_policy"
+  // The asked return of a race adaptation made around pain (askForAdaptationRestore):
+  // the athlete's own question, whose lifecycle the settle pass owns
+  // (src/repo/plan-adaptation-asks.ts) — a thaw floor, never re-offered or applied.
+  | "adaptation_return_ask";
 // NOTE: "budget_review" is deliberately gone. A spent surprise budget no longer parks a
 // change for review at all (2026-08-17 ruling) — it delays to the next natural boundary —
 // so the code that produced this reason code has no remaining caller. Keeping the member
@@ -1610,6 +1635,7 @@ export function applyProposalWithAutonomy(
         orphanSiblingCleanup: input.orphan_sibling_cleanup,
         normalizedApplyPayload: input.normalized_apply_payload,
         requireDecisionLedger: true,
+        byPersonRequest: explicitRequest,
       }) as any;
       if (!result?.ok) return { ...result, tier: policy.tier };
       const decision = decisionForAppliedProposal(proposalId, result);
@@ -1967,7 +1993,15 @@ type ParkedDecision = ReturnType<typeof listBrainDecisions>[number];
 // a deliberate refusal by a safety, lock, or clinical rule. The thaw never touches it.
 // The clinician floor is deterministic and cannot be attested away (docs/VISION.md
 // Amendment 1), and a user lock is the athlete's own word on the matter.
-const THAW_FLOOR_REASON_CODES = new Set(["clinical", "clinical_ceiling", "safety_floor", "user_lock"]);
+// An asked adaptation return is the athlete's question about a change made around pain:
+// only their answer (the Brief, or the draft by hand) or the settle pass ends it.
+const THAW_FLOOR_REASON_CODES = new Set([
+  "clinical",
+  "clinical_ceiling",
+  "safety_floor",
+  "user_lock",
+  "adaptation_return_ask",
+]);
 
 // A decision parked by applyDueAnnouncedDecisions' own failure path carries the
 // PENDING CHANGE in `action` rather than behind a plan_proposal row — a meal plan
@@ -3995,6 +4029,7 @@ export function applyDueAnnouncedDecisions(
               : undefined,
           decisionId: announced.id!,
           requireDecisionLedger: true,
+          byPersonRequest: decisionWasTheAthletesRequest(announced),
           freshnessCheckedAt: asOf,
           revalidatedTargetKcal,
         }) as any;
@@ -4086,7 +4121,10 @@ export function applyDueAnnouncedDecisions(
 // domain to announce-first) and the expectation closes as 'canceled'. One veto
 // deliberately does NOT become a reaction-model "personality fact" — the plan's
 // causal-hygiene rule (learn policies, not anecdotes) wins over single events.
-export function revertDecision(id: number, reason = "user veto"): { ok: boolean; decision?: any; error?: string } {
+export function revertDecision(
+  id: number,
+  reason = "user veto"
+): { ok: boolean; decision?: any; error?: string; message?: string; kept_until?: string } {
   const decision = getBrainDecision(id);
   if (decision?.status === "announced") {
     try {
@@ -4133,8 +4171,16 @@ export function revertDecision(id: number, reason = "user veto"): { ok: boolean;
     return { ok: false, error: UNDO_UNAVAILABLE };
   const rollback = getBrainRollback(id);
   const personSuperseded = personSupersededMarker(decision.context);
+  // A race adaptation's own story (plan-adaptations.ts): the Undo of the change that
+  // carried it, or of the after-the-race restore. Their plan writes are the adaptation's
+  // own, never a restructure that should supersede a live row.
+  const restoreUndo =
+    decision.source === "plan_adaptation" && (decision.context as any)?.plan_adaptation_restore === true;
+  const adaptationProposalId = decision.source_ref_type === "plan_proposal" ? Number(decision.source_ref_key) : 0;
+  const adaptationOwned = restoreUndo || proposalHasPlanAdaptations(adaptationProposalId);
+  const owned = <T,>(run: () => T): T => (adaptationOwned ? withPlanAdaptationWritesOwned(run) : run());
   try {
-    return withSqliteSavepoint(`revert_decision_${id}`, () => {
+    return withSqliteSavepoint(`revert_decision_${id}`, () => owned(() => {
       if (rollback?.kind === "training_plan" && Array.isArray(rollback.payload)) {
         // A legacy whole-plan snapshot cannot leave part of the plan alone, so it never
         // runs over an item the athlete has saved themselves since.
@@ -4262,10 +4308,235 @@ export function revertDecision(id: number, reason = "user veto"): { ok: boolean;
       }
       const reverted = transitionBrainDecision(id, "reverted");
       if (!reverted) throw new UndoRefusal(UNDO_NOT_NOW);
+      // An Undo of a change scoped to the race already put its slots back: nothing is
+      // left for the after-the-race restore to do (plan-adaptations.ts). Any other
+      // adaptation still in force on those days reads the day as the Undo left it.
+      if (decision.source_ref_type === "plan_proposal" && adaptationProposalId > 0) {
+        cancelPlanAdaptationsForProposal(adaptationProposalId);
+        const days = (Array.isArray((decision.action as any)?.changes) ? (decision.action as any).changes : [])
+          .map((change: any) => Number(change?.day_number))
+          .filter(Number.isFinite);
+        refreshPlanAdaptationDays(days);
+      }
+      // The Undo of the after-the-race restore: the athlete wants the adaptation longer.
+      // It is back in force for one more week (user decision 2: it still ends by itself),
+      // and the record says so.
+      if (restoreUndo) {
+        const until = addDaysISO(localDateISO(), 7) ?? localDateISO();
+        const kept = reactivatePlanAdaptationsForUndoneRestore(id, until);
+        if (kept.length) {
+          const forRace = /after the race/i.test(String(decision.summary ?? ""));
+          const note = keptOneMoreWeekWords(until, forRace);
+          const patched = patchBrainDecision(id, {
+            rationale: `${note} ${String(decision.rationale ?? "").replace(/ Undo keeps.*$/, "")}`.trim().slice(0, 1_500),
+            context: {
+              ...((reverted.context as Record<string, unknown>) ?? {}),
+              plan_adaptation_kept_until: until,
+              plan_adaptation_kept_ids: kept.map((row) => row.id),
+              undo_note: note,
+            },
+          });
+          return { ok: true, decision: patched ?? reverted, message: note, kept_until: until };
+        }
+      }
       return { ok: true, decision: reverted };
-    });
+    }));
   } catch (error) {
     return undoFailure(error, id);
+  }
+}
+
+// ---- a draft the athlete answered for directly, with its one-tap Undo -------------
+//
+// A Brief answer ("Easier — bodyweight" on a trip day) is the athlete's own choice for
+// a day, so it lands now through the ordinary apply — and carries the same server-owned
+// rollback every autonomous plan apply carries, so the change it made has an Undo on
+// the Changes feed and on its receipt. The Undo of a scoped change cancels its own
+// adaptation rows only (revertDecision): a race adaptation beneath a trip layer stays.
+export function applyAnsweredProposal(proposalId: number): { result: any; decision_id: number | null } {
+  const before = trainingPlanSnapshot();
+  const beforeStamps = stampsByPlanKey();
+  return withSqliteSavepoint(`answered_apply_${Math.trunc(Number(proposalId))}`, () => {
+    const result = applyProposal(proposalId);
+    if (result?.ok === false || proposalStatus(proposalId) !== "applied") return { result, decision_id: null };
+    const row = db
+      .prepare(
+        `SELECT id FROM brain_decisions
+          WHERE source_ref_type = 'plan_proposal' AND source_ref_key = ? AND status = 'applied'
+          ORDER BY id DESC LIMIT 1`
+      )
+      .get(String(proposalId)) as { id?: unknown } | undefined;
+    const decisionId = Number(row?.id);
+    if (!(decisionId > 0)) return { result, decision_id: null };
+    if (saveBrainRollback(decisionId, "training_plan", trainingRollbackPayload(before, beforeStamps))) {
+      const decision = getBrainDecision(decisionId);
+      patchBrainDecision(decisionId, {
+        reversible: true,
+        context: { ...((decision?.context as Record<string, unknown>) ?? {}), rollback_available: true },
+      });
+    }
+    return { result, decision_id: decisionId };
+  });
+}
+
+// ---- after the race: scoped plan changes go back to the regular plan ---------------
+//
+// A plan change that carried `until` (plan-adaptations.ts) is restored on the first day
+// after that date, by the scheduler's daily boundary pass. The restore is one ledger row
+// for the day — "Back to the regular plan after the race: …" — applied, with the same
+// server-owned three-way rollback every autonomous plan apply carries, so its one-tap
+// Undo puts the race adaptation back if the athlete wants it longer. It is announced
+// rather than asked: the athlete agreed to a change WITH an end, and the end arriving is
+// not a new decision. Idempotent (each row resolves in this savepoint) and durable.
+//
+// One exception: a change made around pain (a clinical decision, or a reason tied to a
+// training symptom) is not the date's to undo. Its return is ASKED — an ordinary draft
+// held for the athlete's yes, the slots untouched until then (`ask`).
+export function expirePlanAdaptations(today: string = localDateISO()): PlanAdaptationRestoreOutcome & {
+  decision: any | null;
+  ask?: any | null;
+} {
+  const before = trainingPlanSnapshot();
+  const beforeStamps = stampsByPlanKey();
+  const result = withSqliteSavepoint("plan_adaptation_expiry", () => {
+    const restoredOutcome = restoreDuePlanAdaptations(today);
+    const ask = restoredOutcome.asked.length ? askForAdaptationRestore(restoredOutcome.asked) : null;
+    const outcome = { ...restoredOutcome, ask };
+    if (!outcome.restored.length) {
+      // Nothing came back because the athlete's own edits won: say so once, as a note.
+      if (!outcome.skipped.length) return { ...outcome, decision: null };
+      const ids = outcome.skipped.map((row) => row.id);
+      const noted = recordDecision({
+        effective_date: today,
+        kind: "training_target",
+        domain: "training",
+        summary: `The race adaptation has ended; ${outcome.skipped.map((row) => row.note).join("; ")}.`.slice(0, 300),
+        rationale: null,
+        source: "plan_adaptation",
+        source_ref_type: null,
+        source_ref_key: null,
+        status: "observed",
+        autonomy_tier: "observe",
+        risk_class: "low",
+        reversible: false,
+        input_fingerprint: `plan_adaptation_skip:${ids.join(",")}`,
+        context: { plan_adaptation_ids: ids, plan_adaptation_restore: false },
+        action: { plan_adaptation_ids: ids },
+        specialist: null,
+        applied_at: null,
+        reverted_at: null,
+        superseded_by: null,
+        evaluator_version: null,
+      });
+      return { ...outcome, decision: noted.decision };
+    }
+    const forRace = outcome.restored.some(adaptationRowIsForRace);
+    const words = restoreDecisionWords(outcome.restored, forRace);
+    const ids = outcome.restored.map((row) => row.id);
+    const recorded = recordDecision({
+      effective_date: today,
+      kind: "training_target",
+      domain: "training",
+      summary: words.summary,
+      rationale: words.rationale,
+      source: "plan_adaptation",
+      source_ref_type: null,
+      source_ref_key: null,
+      status: "applied",
+      autonomy_tier: "announce",
+      risk_class: "low",
+      reversible: false,
+      input_fingerprint: `plan_adaptation_restore:${ids.join(",")}`,
+      context: {
+        plan_adaptation_restore: true,
+        plan_adaptation_ids: ids,
+        restored_from_decision_ids: [...new Set(outcome.restored.map((row) => row.decision_id).filter((v) => v != null))],
+        skipped: outcome.skipped.map((row) => ({ id: row.id, exercise: row.exercise, note: row.note })),
+        evidence_keys: ids.map((rowId) => `plan_adaptation:${rowId}`),
+        evidence_observed_at: new Date().toISOString(),
+      },
+      action: {
+        plan_adaptation_ids: ids,
+        changes: outcome.restored.map((row) => {
+          const back = row.kind === "added" ? null : row.before;
+          return {
+            day_number: row.day_number,
+            exercise: back?.exercise ?? row.exercise,
+            sets: back?.sets ?? null,
+            rep_low: back?.rep_low ?? null,
+            rep_high: back?.rep_high ?? null,
+            target_weight: back?.target_weight ?? null,
+            target_seconds: back?.target_seconds ?? null,
+            change: row.kind === "added" ? "race_only_ended" : "restored",
+            reason: words.rationale,
+          };
+        }),
+      },
+      specialist: null,
+      applied_at: new Date().toISOString(),
+      reverted_at: null,
+      superseded_by: null,
+      evaluator_version: null,
+    });
+    const decisionId = Number(recorded?.decision?.id);
+    if (!(decisionId > 0)) throw new Error("the after-the-race restore decision was not stored");
+    if (!saveBrainRollback(decisionId, "training_plan", trainingRollbackPayload(before, beforeStamps))) {
+      throw new Error("the after-the-race restore rollback was not stored");
+    }
+    const finalized = patchBrainDecision(decisionId, {
+      reversible: true,
+      context: { ...(recorded.decision.context ?? {}), rollback_available: true },
+    });
+    stampRestoreDecision(ids, decisionId);
+    afterSqliteCommit(bumpTrainingDataVersion);
+    return { ...outcome, decision: finalized ?? recorded.decision };
+  });
+  if (result.restored.length) {
+    invalidateDayRead();
+    try {
+      refreshPreparedDayForPlanChange({
+        date: today,
+        day_numbers: [...new Set(result.restored.map((row) => row.day_number))],
+      });
+    } catch (err) {
+      recordAsyncFailure("apply", "refresh_prepared_day", err);
+    }
+  }
+  return result;
+}
+
+// The return of race adaptations made around pain, as a draft held for the athlete's yes.
+// Its own savepoint: an ask that cannot be built leaves those rows in force for the next
+// pass, and never sinks the plain restores beside it.
+function askForAdaptationRestore(rows: PlanAdaptationRestoreOutcome["asked"]): any | null {
+  try {
+    return withSqliteSavepoint("plan_adaptation_ask", () => {
+      const forRace = rows.some(adaptationRowIsForRace);
+      const words = askedRestoreWords(rows, forRace);
+      const changes = restoreChangesForAsk(rows, "The race adaptation has ended: back to the regular plan.");
+      if (!changes.length) return null;
+      const proposal = createProposal("plan-adaptation", "Back to the regular plan after a race adaptation made around pain", "", {
+        summary: words.summary,
+        rationale: words.rationale,
+        changes,
+      });
+      const held = holdProposalForReview(proposal, proposalShape(proposal), {
+        code: "adaptation_return_ask",
+        reasons: ["This adaptation was made around pain, so its end waits for your yes rather than landing by itself."],
+        tier: "ask",
+      });
+      const decisionId = Number(held?.decision?.id);
+      if (!(decisionId > 0)) throw new Error("the asked restore was not recorded");
+      markPlanAdaptationsAsked(
+        rows.map((row) => row.id),
+        decisionId,
+        "made around pain: the return to the regular plan waits for your yes"
+      );
+      return held.decision;
+    });
+  } catch (error) {
+    log.warn("[brain] could not ask for the return of a race adaptation", { error });
+    return null;
   }
 }
 

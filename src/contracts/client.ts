@@ -814,6 +814,8 @@ export interface ClientChatMessage {
   meta?: unknown;
   session_id?: string | null;
   archived_at?: string | null;
+  /** An assistant reply's changes that LANDED that turn, read against the ledger now. */
+  receipts?: import("./change-receipt.js").ChangeReceipt[];
 }
 
 export interface ClientChatSearchHit {
@@ -839,4 +841,5 @@ export * from "./client-api.js";
 export * from "./client-api-coverage.js";
 export * from "./client-routes.js";
 export * from "./brain-changes.js";
+export * from "./change-receipt.js";
 export * from "./training-drive.js";

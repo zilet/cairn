@@ -135,10 +135,14 @@
    * build week by week, how the lifting fits, then the estimate's basis and the paces.
    * No chart here: the terrain is Horizon's glance, and the ladder below is the same
    * build as a table. `enter` settles it in once.
+   *
+   * `countdown` (within three weeks of the race): the day-by-day countdown leads right
+   * under the race — its slot, filled by the controller from /race-build/days — and next
+   * week's own section stands down, the countdown's rows already saying it day by day.
    */
   function viewHtml(
     model: ClientRaceViewModel,
-    opts: { enter?: boolean; sessionsHtml?: string; nextWeekHtml?: string; units?: "km" | "mi" } = {}
+    opts: { enter?: boolean; sessionsHtml?: string; nextWeekHtml?: string; units?: "km" | "mi"; countdown?: boolean } = {}
   ): string {
     const when = [model.countdown, model.race_day].filter(Boolean).join(" · ");
     const ladder = CairnRaceLadder.ladderHtml(model.ladder, { reveal: false });
@@ -152,8 +156,9 @@
         ${when ? `<p class="race-view-when">${escHtml(when)}</p>` : ""}
         ${model.fit_text ? `<p class="race-view-fit${model.estimate.fit ? ` is-${escAttr(model.estimate.fit)}` : ""}">${escHtml(model.fit_text)}</p>` : ""}
       </header>
+      ${opts.countdown ? `<div class="race-countdown-slot" data-race-countdown>${typeof CairnRaceCountdown !== "undefined" ? CairnRaceCountdown.skeletonHtml() : ""}</div>` : ""}
       ${thisWeekHtml(model.this_week, { sessionsHtml: opts.sessionsHtml })}
-      ${opts.nextWeekHtml || ""}
+      ${opts.nextWeekHtml ? `<div data-race-nextweek>${opts.nextWeekHtml}</div>` : ""}
       ${ladder ? `<section class="race-section" aria-label="The build, week by week">${ladder}</section>` : ""}
       ${liftingHtml(model.lifting)}
       ${estimate ? `<section class="race-section">${estimate}</section>` : ""}

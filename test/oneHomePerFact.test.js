@@ -447,7 +447,7 @@ test("Today: no 8+ word sentence twice, no owner's sentence it does not own, and
 
 test("Train: no Today card, no week count; Where to focus and What moved lead; each fact said once", async () => {
   const { chunks, asked, view, headerTitle } = await renderTrain();
-  assert.equal(headerTitle.textContent, "Train");
+  assert.equal(headerTitle.textContent, "Progress");
   assert.deepEqual(duplicateSentences(chunks), []);
   assert.deepEqual(strayOwnerSentences(chunks), []);
   assert.deepEqual(ownersSay("train", chunks), []);

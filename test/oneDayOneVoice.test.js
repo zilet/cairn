@@ -72,11 +72,13 @@ function seedWeek() {
       source: "athlete",
       updated_at: "2026-09-01",
     },
-    // Runs Tue/Thu/Sat/Sun, as stated.
+    // Runs Tue/Thu/Sat/Sun, as stated. Thursday is easy here: with a Thursday quality
+    // run the week trades Wednesday's Lower A onto Tuesday (plan-selection's key-run
+    // placement), and this file is about the Pull morning that week actually had.
     endurance_schedule: {
       days: [
         { dow: 2, kind: "easy" },
-        { dow: 4, kind: "quality" },
+        { dow: 4, kind: "easy" },
         { dow: 6, kind: "easy" },
         { dow: 0, kind: "long" },
       ],

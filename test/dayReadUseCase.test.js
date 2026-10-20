@@ -724,7 +724,10 @@ test("a run-only done read names the still-open lift through the today strength 
   assert.equal(read.focus, null, "done never carries a same-day prescription");
   // The lift the run did not do is still today's, and the today strength line says so;
   // the forward line no longer repeats it as "Next".
-  assert.match(String(read.strength_line?.text || ""), /^Run in · (Push|Pull) still open$/);
+  assert.match(
+    String(read.strength_line?.text || ""),
+    /^(?:Your run's in\. |Run done\. |The run's in; )(Push|Pull) is still (?:there if you want it|on for today, whenever you're ready)\.$/
+  );
   assert.doesNotMatch(String(read.forward || ""), /Next: /);
 });
 

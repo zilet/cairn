@@ -64,19 +64,22 @@
   }
 
   /**
-   * The head's countdown, in the ladder's own count. The current rung's
-   * `weeks_to_race` is the server's CALENDAR-week count to race week (the one the
-   * ladder labels and the engine prescribes by), so the head can never say "2 weeks
-   * to race" over a row that reads "1 wk out". `race.weeks_to_race` is a rounded-up
-   * day count and is only the fallback when no rung is this week.
+   * The head's countdown, in the one wording every surface prints (`race.countdown`,
+   * raceCountdown): "12 days to race", "6 weeks to race", "Race week", "Tomorrow", so the
+   * head and the ladder row beneath it count the same days. An older read without it
+   * falls back to the current rung's calendar-week count (never the rounded-up day count).
    */
   function countdownText(race: NonNullable<RaceBuild["race"]>, weeks: RaceWeek[]): string {
     if (num(race.days_to_race) === 0) return "Race day is today";
+    const said = race.countdown;
+    if (said?.words) return said.span && !said.race_week && said.days > 1 ? `${said.span} to race` : said.words;
     const here = weeks.find((week) => week.current === true);
     const count = here ? num(here.weeks_to_race) : num(race.weeks_to_race);
     const out = Math.max(0, Math.round(count ?? 0));
     if (here?.kind === "race" || out === 0) return "Race week";
-    return out === 1 ? "1 week to race" : `${out} weeks to race`;
+    // The count is calendar weeks to RACE WEEK: for the whole week before it, the race is
+    // 8–13 days off, so "1 week to race" would be untrue.
+    return out === 1 ? "Race week is next week" : `${out} weeks to race`;
   }
 
   function eventName(race: NonNullable<RaceBuild["race"]>): string {

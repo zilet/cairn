@@ -37,7 +37,7 @@ export interface WeekReadFrame {
   headline: string | null;
   /** "Sharpen · block week 6 of 6 · push through Nov 15". */
   line: string | null;
-  /** Today's one link into Horizon: "26 days to Cambridge · Sharpen, wk 6 of 6". */
+  /** Today's one link into Horizon: "26 days to Cambridge · Sharpen week". */
   glance: string | null;
 }
 

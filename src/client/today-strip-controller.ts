@@ -75,6 +75,7 @@
     function paint(value: unknown): void {
       if (!live || !slot.isConnected) return;
       week = value && typeof value === "object" ? (value as PlanWeek) : null;
+      paintTomorrow();
       const cells = CairnTodayStrip.cellsOf(week, deps.date);
       if (!cells) {
         closeDay(false);
@@ -116,6 +117,16 @@
         lastNow = nextNow;
       }
       paintHeader();
+    }
+
+    // The Brief's evening "Tomorrow: …" line (train-week-tomorrow-client.ts, eager) reads this
+    // same week; a Brief painted before the week landed gets it here, rewritten only on a change.
+    function paintTomorrow(): void {
+      const line = slot.closest?.(".brief")?.querySelector<HTMLElement>("[data-brief-tomorrow]");
+      const tomorrow = (globalThis as { CairnTrainWeekTomorrow?: { html(week: unknown): string } }).CairnTrainWeekTomorrow;
+      if (!line || !tomorrow) return;
+      const html = tomorrow.html(week);
+      if (line.innerHTML !== html) line.innerHTML = html;
     }
 
     function markSelected(): void {

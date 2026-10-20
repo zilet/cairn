@@ -35,6 +35,8 @@ import { RUN_KIND_LABELS } from "../../repo/run-edit.js";
 import { getSessionByDate } from "../../repo/sessions.js";
 import { athleteUnits } from "../../repo/settings.js";
 import { localDateISO } from "../../repo/shared.js";
+import { legTrimFocus } from "../../repo/plan-day-focus.js";
+import { planDayLegTrimOn } from "../../repo/plan-day-trim.js";
 import { lookAheadWeekAsOf } from "../training/plan-look-ahead.js";
 import { planWeek, type PlanWeekDay } from "../training/plan-week.js";
 
@@ -150,10 +152,13 @@ function calendarDay(date: string, today: string): PlanWeekDay | null {
   return week?.days.find((d) => d.date === date) ?? null;
 }
 
-function liftOf(day: PlanWeekDay | null): DayRecordPlannedLift | null {
+function liftOf(day: PlanWeekDay | null, date: string, today: string): DayRecordPlannedLift | null {
   const plan = day?.plan_day;
   if (!plan || plan.role !== "strength" || !text(plan.name)) return null;
-  return { title: text(plan.name), focus: text(plan.focus) || null, purpose: text(plan.purpose) || null };
+  // The focus follows the race build's leg trim on the day (plan-day-trim.ts reads it;
+  // plan-day-focus.ts words it): "… Lighter on the legs — taper week."
+  const trim = safe(() => planDayLegTrimOn(date, Number(plan.day_number), { today }), null);
+  return { title: text(plan.name), focus: legTrimFocus(text(plan.focus) || null, trim, date), purpose: text(plan.purpose) || null };
 }
 
 function runOf(day: PlanWeekDay | null): DayRecordPlannedRun | null {
@@ -247,7 +252,7 @@ export function dayRecord(date: string, opts: { today?: string } = {}): DayRecor
 
   // ---- the calendar (a future day and today) ----
   const day = relation === "past" ? null : calendarDay(date, today);
-  const lift = relation === "past" ? null : liftOf(day);
+  const lift = relation === "past" ? null : liftOf(day, date, today);
   const run = relation === "past" ? null : runOf(day);
 
   return {

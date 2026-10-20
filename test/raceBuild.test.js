@@ -255,7 +255,13 @@ test("raceBuild is quiet for a race without a distance, and after the race", () 
   });
   assert.match(raceBuild(TODAY).reason, /no distance/);
   seedRaceProfile();
+  // No race effort logged: past the slow-sync grace the race is simply behind you.
   assert.match(raceBuild("2026-11-05").reason, /behind you/);
+  // Inside the post-race recovery window of a race RUN, the race lane says that, once
+  // (race-recovery.ts); after it, quiet as before.
+  repo.addActivity({ type: "run", duration_min: 110, distance_km: 21.2, date: RACE });
+  assert.match(raceBuild("2026-11-05").reason, /^(Recovering from|Easing back after) /);
+  assert.match(raceBuild("2026-11-09").reason, /behind you/);
 });
 
 test("raceBuild lays out the half: estimate from the watch, fit against the target, paces, ladder, leg map, ride", () => {

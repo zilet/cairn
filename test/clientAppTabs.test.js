@@ -153,15 +153,15 @@ test("tab controller skips warm skeletons and tears down chat when leaving", asy
   ]);
 });
 
-test("tab controller lands Progress on the Train overview by default", async () => {
+test("tab controller lands Progress on Train's This week by default", async () => {
   const env = loadTabs();
 
   env.context.switchTab("progress", { syncRoute: false });
   await flush();
 
   assert.equal(env.context.state.tab, "progress");
-  assert.equal(env.context.defaultProgressSeg(), "overview");
-  assert.match(env.view.innerHTML, /^seg:overview:/);
+  assert.equal(env.context.defaultProgressSeg(), "week");
+  assert.match(env.view.innerHTML, /^seg:week:/);
 });
 
 test("while a tab loads, <main> is named for the destination, never the tab just left", async () => {

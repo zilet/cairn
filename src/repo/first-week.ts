@@ -11,6 +11,9 @@
 
 import { getAppState, setAppState } from "./app-state.js";
 import { listActiveAgentJobs } from "./chat.js";
+import { canonicalGroup, classifyMuscleGroup, type MuscleGroup } from "./exercise-canon.js";
+import { isHeavyLowerPlanDay, keyRunAwarePlacement, weekdayPlanDayMap } from "./plan-selection.js";
+import { getEnduranceSchedule, statedLiftDows } from "./profile.js";
 import { getSettings } from "./settings.js";
 
 const NOTICE_KEY = "first_week_notice";
@@ -41,6 +44,85 @@ interface Notice {
   week_state: string | null;
   days: FirstWeekDay[];
   seen: boolean;
+}
+
+interface PreviewLift {
+  day_number: number;
+  name: string;
+  day_type: "training";
+  names: string[];
+  groups: MuscleGroup[];
+}
+
+function groupsFor(items: any[]): MuscleGroup[] {
+  const groups: MuscleGroup[] = [];
+  for (const item of items) {
+    const exercise = String(item?.exercise ?? "");
+    const stored = item?.muscle_group == null || item.muscle_group === "" ? null : String(item.muscle_group);
+    const group = canonicalGroup(stored) ?? classifyMuscleGroup(exercise);
+    if (group && group !== "mobility" && !groups.includes(group)) groups.push(group);
+  }
+  return groups;
+}
+
+/** Quality and long run weekdays — the key runs a heavy-lower day keeps off. */
+function statedKeyRunDows(): number[] {
+  try {
+    return (getEnduranceSchedule()?.days ?? [])
+      .filter((day) => day.kind === "quality" || day.kind === "long")
+      .map((day) => day.dow);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Lay the welcome preview's strength days on the stated lifting weekdays, then trade a
+ * heavy-lower day off a quality or long run (and the days beside them) with the same
+ * `keyRunAwarePlacement` the live week uses. Nothing logged on a first week, so every
+ * lifting weekday is still open — the same inputs the real week uses before a session
+ * lands. No stated lifting weekdays: plan order, no weekday.
+ */
+export function placeFirstWeekLifts(days: any[] | null | undefined): FirstWeekDay[] | null {
+  const lifting: PreviewLift[] = (Array.isArray(days) ? days : [])
+    .filter((d) => Number.isFinite(Number(d?.day_number)) && Array.isArray(d?.items) && d.items.length > 0)
+    .map((d) => ({
+      day: d,
+      items: d.items.filter((it: any) => String(it?.kind ?? "strength") !== "cardio"),
+    }))
+    .filter((d) => d.items.length > 0)
+    .map((d) => ({
+      day_number: Number(d.day.day_number),
+      name: String(d.day.name || d.day.focus || `Day ${Number(d.day.day_number)}`)
+        .trim()
+        .slice(0, 60),
+      day_type: "training" as const,
+      names: d.items.map((it: any) => String(it?.exercise ?? "")),
+      groups: groupsFor(d.items),
+    }))
+    .sort((a, b) => a.day_number - b.day_number);
+  if (!lifting.length) return null;
+  let liftDows: number[] = [];
+  try {
+    liftDows = statedLiftDows();
+  } catch {
+    liftDows = [];
+  }
+  if (!liftDows.length) {
+    return lifting.map((d) => ({ dow: null, day_number: d.day_number, name: d.name }));
+  }
+  const dealt = weekdayPlanDayMap(lifting, liftDows);
+  if (!dealt.size) {
+    return lifting.map((d) => ({ dow: null, day_number: d.day_number, name: d.name }));
+  }
+  const placed = keyRunAwarePlacement(dealt, {
+    keyRunDows: statedKeyRunDows(),
+    open: dealt.keys(),
+    isLower: (day) => isHeavyLowerPlanDay(day),
+  }).map;
+  return [...placed.entries()]
+    .sort((a, b) => ((a[0] + 6) % 7) - ((b[0] + 6) % 7))
+    .map(([dow, day]) => ({ dow, day_number: day.day_number, name: day.name }));
 }
 
 /**

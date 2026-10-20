@@ -563,7 +563,12 @@ export const PROMPT_CONTEXT_SITES = {
   // shared bundle: only chat's PROGRESSIVE UNDERSTANDING text names it (the thing
   // it must consult before asking when the athlete trains), so no other site earns
   // it under this file's own allowlist rule.
-  chat: { keys: [...ALL_KEYS, "typical_training_hour"], sessions: SESSIONS_FULL },
+  //
+  // `dated_week` likewise: which session lands on which DATE (today through next
+  // Sunday). Without it the agent read the plan's day_numbers as weekdays and edited
+  // the wrong day (2026-10-19). The chat builder computes it itself (the `today_path`
+  // precedent), so getCoachContext never pays for it; compact keys, no prose.
+  chat: { keys: [...ALL_KEYS, "typical_training_hour", "dated_week"], sessions: SESSIONS_FULL },
 
   // The lab review. Leads with its own PRIORITY MARKERS + MARKER HISTORY blocks, and
   // reasons across labs, body composition, training, nutrition, goals and life context.

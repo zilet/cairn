@@ -1175,6 +1175,18 @@ test("a model restructure action cannot mutate or schedule from a non-edit train
     /your current training split is unchanged/i,
     "an off-contract success claim is corrected truthfully"
   );
+  // The answer itself survives: only the false claim sentence goes (2026-10-19 — a
+  // first-turn answer was replaced whole by the canned line).
+  const answered = reconcileChatPlanReply(
+    "Your split runs push, lower, upper back, push, pull.\n\nI've updated your plan to spare the legs before the race. Lower stays your one leg day.",
+    message,
+    out.applied,
+    out.drafts
+  );
+  assert.match(answered, /^Your split runs push, lower, upper back, push, pull\./, "the answer leads, word for word");
+  assert.match(answered, /Lower stays your one leg day\./, "the sentence beside the claim stays");
+  assert.doesNotMatch(answered, /I've updated your plan/, "the false claim is dropped");
+  assert.match(answered, /your current training split is unchanged/i, "and the honest note follows");
 });
 
 test("review-everything still holds a current chat restructure as an explicit review decision", () => {

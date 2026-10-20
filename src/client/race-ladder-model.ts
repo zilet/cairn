@@ -125,7 +125,9 @@
         weeks_to_race: out,
         kind: week.kind,
         kind_word: KIND_WORD[week.kind] || "Build",
-        out_word: out === 0 ? "Race week" : `${out} wk out`,
+        // The server's one countdown wording (raceCountdown): "12 days out", "Race week",
+        // "3 wks out". The calendar-week count is only the fallback for an older read.
+        out_word: week.countdown_words || (out === 0 ? "Race week" : `${out} wk out`),
         date_word: shortDate(week.week_start),
         km,
         km_text: kmWords,

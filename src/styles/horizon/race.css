@@ -196,6 +196,50 @@
 .race-view-error{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2) var(--space-6)}
 .race-view-error-line{margin:0;font-size:var(--text-sm);color:var(--ink-2)}
 .race-view-retry{min-height:44px}
+/* ---- the countdown: today to race day, a row a day (race-countdown-*) ----
+   Three weeks out the page leads with the days. Each week heads its rows in the
+   build's own words; a row is the date and days out on the left, what the day holds on
+   the right. Today wears the dawn wash ("you are here", like the ladder's week); race
+   day carries the endurance ink edge. Marks are words, never a colour alone. */
+.race-countdown{gap:var(--space-6)}
+.race-cd-week{display:grid;gap:var(--space-3);min-width:0}
+.race-cd-week-head{display:grid;gap:var(--space-1)}
+.race-cd-week-title{margin:0;font-size:var(--text-md);font-weight:var(--weight-semibold);color:var(--ink);overflow-wrap:anywhere}
+.race-cd-week-focus,.race-cd-week-lift{margin:0;font-size:var(--text-sm);line-height:var(--leading-normal);color:var(--ink-2)}
+.race-cd-week-lift{font-size:var(--text-xs);color:var(--muted)}
+.race-cd-days{list-style:none;margin:0;padding:0;display:grid}
+.race-cd-day{display:grid;gap:var(--space-2);padding:var(--space-4) var(--space-3);border-top:1px solid var(--line);
+  box-sizing:border-box;border-radius:var(--radius-sm)}
+.race-cd-day:first-child{border-top:0}
+.race-cd-open{display:grid;grid-template-columns:5.4rem minmax(0,1fr);gap:var(--space-2) var(--space-5);min-height:44px;
+  cursor:pointer;border-radius:var(--radius-sm)}
+.race-cd-open:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.race-cd-day.is-today{background:var(--dawn-wash);border-top-color:transparent}
+.race-cd-day.is-race{box-shadow:inset 3px 0 0 var(--d-endurance);background:var(--card-2)}
+.race-cd-when{display:grid;gap:var(--space-1);align-content:start;min-width:0}
+.race-cd-date{font-family:var(--font-mono);font-size:var(--text-2xs);letter-spacing:var(--tracking-mono);text-transform:uppercase;
+  color:var(--ink-2);white-space:nowrap}
+.race-cd-out{font-size:var(--text-2xs);color:var(--muted);font-variant-numeric:lining-nums tabular-nums}
+.race-cd-day.is-today .race-cd-date{color:var(--dawn)}
+.race-cd-body{display:grid;gap:var(--space-2);min-width:0}
+.race-cd-whatif{justify-self:start;min-height:44px;margin:calc(var(--space-2) * -1) 0 calc(var(--space-3) * -1) calc(5.4rem + var(--space-5));
+  font-size:var(--text-xs)}
+.race-cd-whatif:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+.race-cd-line{margin:0;font-size:var(--text-sm);line-height:var(--leading-normal);color:var(--ink);overflow-wrap:anywhere}
+.race-cd-what{font-weight:var(--weight-semibold)}
+.race-cd-fig{color:var(--ink-2);font-variant-numeric:lining-nums tabular-nums}
+.race-cd-parts{margin:0;font-size:var(--text-xs);line-height:var(--leading-normal);color:var(--ink-2);font-variant-numeric:lining-nums tabular-nums}
+.race-cd-lift .race-cd-what{font-weight:var(--weight-regular)}
+.race-cd-rest,.race-cd-travel{color:var(--muted)}
+.race-cd-adapted{font-size:var(--text-xs);color:var(--ink-2)}
+.race-cd-mark{display:inline-flex;align-items:center;border-radius:var(--radius-pill);padding:0 var(--space-3);
+  font-size:var(--text-2xs);line-height:var(--leading-normal);border:1px solid var(--line-2);color:var(--ink-2);white-space:nowrap}
+.race-cd-mark.is-adapted{color:var(--accent-deep);border-color:currentColor}
+.race-cd-mark.is-done{color:var(--sage-text);background:var(--sage-bg);border-color:var(--sage-bg)}
+.race-cd-day.is-done .race-cd-what{color:var(--ink-2)}
+.race-cd-facts{margin:0;display:flex;flex-wrap:wrap;gap:var(--space-1) var(--space-5);font-size:var(--text-sm);color:var(--ink-2)}
+.race-cd-skel{display:grid;gap:var(--space-3)}
+.race-cd-skel-row{height:var(--space-8)}
 @media (prefers-reduced-motion:reduce){
   .race-view.is-entering .race-ladder-bar,.race-view.is-entering .race-ladder-logged,.race-view.is-entering .race-week-seg{animation:none}
   .race-view.settle-in{animation:none}

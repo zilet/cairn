@@ -252,6 +252,15 @@ export const DAY_READ_OUTCOMES = {
       "The lighter version of today's session is what this week asks for.",
     ],
   },
+  // The days after a dated race (race-recovery.ts): the session stays, lighter.
+  planned_post_race_training: {
+    code: "planned_post_race_training",
+    reasons: [
+      "The race is behind you, so today's session is the lighter recovery version.",
+      "A lighter session while the body recovers from the race.",
+      "Still training, just lighter, in the days after the race.",
+    ],
+  },
   planned_training: {
     code: "planned_training",
     reasons: [
@@ -741,6 +750,14 @@ export const RECOVERY_WEEK_CAVEAT: readonly string[] = [
   "you're inside a reduced week, so treat the prescription as a ceiling and leave a couple of reps in reserve",
   "this is the lighter recovery-week dose, so it should still feel easy on the way out",
 ];
+// The days after a dated race (race-recovery.ts): said like the recovery week, about the
+// race. SAFETY — it vetoes the push.
+export const POST_RACE_CAVEAT: readonly string[] = [
+  "it's a lighter day while you recover from the race, so fewer sets, easier weights and nothing near failure",
+  "you're recovering from the race, so keep it lighter, with fewer sets and a little less weight",
+  "the race is still in the legs, so today's session is the lighter version, with smooth reps and plenty left in the tank",
+  "this is a lighter post-race day, so treat the card as a ceiling and leave reps in reserve",
+];
 // Templated on the injury title, following the same renderer-array pattern as
 // RECOVERY_WEEK_TRAIN_WHY / QUIET_STREAK_WHY. The subject arrives already lowercased.
 export const INJURY_CAVEAT: ReadonlyArray<(subject: string) => string> = [
@@ -910,6 +927,7 @@ export const LIFE_PRESSURE_CAVEAT: readonly string[] = [
 // (correctly) reject them. Their own guards live beside those, in test/dayRead.test.js.
 export const DAY_READ_CAVEAT_VARIANTS: Readonly<Record<string, readonly string[]>> = {
   "planned_training:recovery_week": RECOVERY_WEEK_CAVEAT,
+  "planned_training:post_race": POST_RACE_CAVEAT,
   "planned_training:injury": INJURY_CAVEAT.map((render) => render("a sore left knee")),
   "planned_training:ease_around": EASE_AROUND_CAVEAT,
   "planned_training:anticipate_deload": ANTICIPATE_DELOAD_CAVEAT,
@@ -930,6 +948,7 @@ export const DAY_READ_CAVEAT_VARIANTS: Readonly<Record<string, readonly string[]
 // DAY_READ_REQUIRED_CONCEPT applies to the `why` vocabulary.
 export const DAY_READ_CAVEAT_CONCEPT: Readonly<Record<string, RegExp>> = {
   "planned_training:recovery_week": /\b(?:recovery week|recovery-week|reduced|lighter)\b/i,
+  "planned_training:post_race": /\brace\b(?=[\s\S]*\blighter\b)|\blighter\b(?=[\s\S]*\brace\b)/i,
   "planned_training:injury": /\bwork(?:ing)? around\b/i,
   "planned_training:ease_around": /\beas(?:e|ing) around\b/i,
   "planned_training:anticipate_deload": /\brecovery(?:'s)?\b/i,
@@ -1437,6 +1456,7 @@ export const DAY_READ_REQUIRED_CONCEPT: Readonly<Record<string, RegExp>> = {
   // Both halves of the day: the activity already in, and the lift still left — light.
   lift_open_after_activity: /\b(?:run|ride|walk|hike|swim|row|cardio)\b(?=[\s\S]*\blift\b)(?=[\s\S]*\blight(?:er)?\b)/i,
   planned_reduced_training: /\b(?:reduced|light|lighter)\b/i,
+  planned_post_race_training: /\blighter\b/i,
   planned_training: /\b(?:due|train|session)\b/i,
   // Both halves: the session stands, AND nothing is on record to read yet. A phrasing
   // that drops the second half is TRAIN_CLEAR_WHY claiming a recovery it never saw.
@@ -1560,7 +1580,10 @@ export function weekAheadRaceLine(
   const weeksWord = weeks === 1 ? "week" : "weeks";
   const text = isRaceWeek
     ? `${label} · race week`
-    : `${label} · ${weeks} ${weeksWord} out · ${WEEK_AHEAD_RACE_PHASE_WORD[phase]}`;
+    : weeks === 1
+      ? // Calendar weeks to RACE WEEK: "1 week out" would be untrue of a race 8-13 days off.
+        `${label} · race week is next week · ${WEEK_AHEAD_RACE_PHASE_WORD[phase]}`
+      : `${label} · ${weeks} ${weeksWord} out · ${WEEK_AHEAD_RACE_PHASE_WORD[phase]}`;
   return {
     label,
     date: goal.date as string,

@@ -8,6 +8,7 @@ import {
   getCachedDayRead,
 } from "../domain/brain/index.js";
 import { dexaTargeting } from "../domain/health/index.js";
+import { raceDays } from "../domain/training/race-days.js";
 import {
   advanceBlockWeek,
   applyProposal,
@@ -302,6 +303,15 @@ programRouter.get("/run-plan", (req, res) =>
 programRouter.get("/race-build", (req, res) =>
   res.json(raceBuild(req.query.date ? String(req.query.date) : undefined, { describeRunning: true }))
 );
+// The race COUNTDOWN: today through race day, one row a day (the run with its distance,
+// pace band and quality parts, the lift with a legs-lighter mark, travel, the coach's
+// changes on the day), grouped by the build's weeks. Only within three weeks of a dated
+// race — {available:false, reason} otherwise. `?through=race` (the default) or a
+// YYYY-MM-DD that stops earlier. Read-only; src/domain/training/race-days.ts.
+programRouter.get("/race-build/days", (req, res) => {
+  const through = typeof req.query.through === "string" && req.query.through !== "race" ? req.query.through : undefined;
+  res.json(raceDays({ through }));
+});
 // Rolling weekly run intentions: actual compatible logs close intentions and
 // suggested openings move around real strength/endurance load. Any completed
 // run occupies its actual date; moderate/hard cross-training also reserves its

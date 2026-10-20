@@ -714,6 +714,42 @@ CREATE TABLE IF NOT EXISTS training_stances (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
+-- A plan change scoped to a date ("adapted for the race until Nov 1"): the change landed
+-- on the template at once, and this row remembers what the slot held before it so the
+-- first day AFTER until_date puts it back (src/repo/plan-adaptations.ts, run by the
+-- scheduler's daily boundary pass). before_json is the whole prior item (position and
+-- neighbours too, so a lift set aside comes back where it stood); after_json is what
+-- the change left. status: active | restored | skipped (a person's edit won, or the slot
+-- is gone) | cancelled (the change itself was undone) | superseded (a newer adaptation
+-- of the same slot carries this row's before forward, a restructure rebuilt the day, or
+-- a person's own request changed the slot since) | asked (the return waits for a yes)
+-- | kept (an asked return settled to keeping the change). layer 'trip': a one-day trip
+-- version laid over whatever the slot held (a race adaptation included) — it never
+-- re-scopes the row beneath it, and its restore returns to that row's prescription.
+CREATE TABLE IF NOT EXISTS plan_adaptations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  proposal_id INTEGER,
+  decision_id INTEGER,
+  day_number INTEGER NOT NULL,
+  plan_day_id INTEGER,                    -- the day the change landed on, by row id
+  day_name TEXT,                          -- and by name: a rebuilt day is not this day
+  day_fingerprint TEXT,                   -- the day's movement set as the change left it
+  exercise TEXT NOT NULL,
+  exercise_id INTEGER,
+  kind TEXT NOT NULL,                     -- updated | removed | added | swapped
+  until_date TEXT NOT NULL,
+  reason TEXT,
+  before_json TEXT,
+  after_json TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  resolved_at TEXT,
+  resolution_note TEXT,
+  restore_decision_id INTEGER,
+  layer TEXT,                             -- NULL | 'trip': a short overlay ON TOP of what is in force
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_plan_adaptations_status ON plan_adaptations(status, until_date);
+
 CREATE TABLE IF NOT EXISTS brain_expectations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   decision_id INTEGER NOT NULL REFERENCES brain_decisions(id) ON DELETE CASCADE,
@@ -1848,6 +1884,27 @@ CREATE INDEX IF NOT EXISTS idx_surface_dismissals_lookup
 -- whatWorksForYou) filters it out by checking this table, and the induction
 -- that produced a disputed learned/felt pattern will not resurrect the exact
 -- same statement verbatim on its next rebuild (see beliefWouldResurface).
+-- A race that was RUN (src/repo/race-results.ts). The endurance goal is one mutable
+-- slot and the athlete sets the next race the morning after this one, so the race's
+-- identity cannot live there: when the goal changes away from a dated race whose
+-- effort was logged (a run within two days of its date at ~its distance) or whose date
+-- has already come, it is kept here. The post-race recovery window and the race day's
+-- harm/capacity exclusions (race-recovery.ts) read these rows alongside the live goal.
+-- run_date / activity_id are the matched race effort; NULL while it has not synced.
+CREATE TABLE IF NOT EXISTS completed_races (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  goal_date TEXT NOT NULL,      -- the goal's stated race date
+  distance_km REAL NOT NULL,    -- the goal's race distance
+  event TEXT,
+  run_date TEXT,                -- the logged race effort's date (may differ from goal_date)
+  activity_id INTEGER,          -- activities.id of that effort
+  run_km REAL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_completed_races_goal
+  ON completed_races(goal_date, distance_km);
+
 CREATE TABLE IF NOT EXISTS belief_dispositions (
   id TEXT PRIMARY KEY,          -- e.g. 'learned_model:sleep_fuel_correlation'
   source TEXT NOT NULL,         -- learned_model | felt_signal | personal_modifier

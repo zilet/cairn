@@ -327,7 +327,11 @@ test("the feed shows only the team's changes, in the athlete's register, with no
     "id",
     "lands_on",
     "new",
+    // The date the change adapted, when one of the days ahead carries its plan day.
+    "open_day",
     "outcome",
+    // The same change as one uniform receipt (src/contracts/change-receipt.ts).
+    "receipt",
     "state",
     "status_line",
     "title",

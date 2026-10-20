@@ -44,6 +44,29 @@
     let last = "";
     const date = String(deps.date || "");
     const target = host as HTMLElement;
+    // The Undo on "The coach adapted this day" belongs to this host (Horizon's peek has no
+    // Today root above it): the server's own revert, then the day is read again.
+    let unmountUndo: (() => void) | null = null;
+    if (typeof CairnDecisionUndoController !== "undefined" && typeof api === "function" && typeof toast === "function") {
+      unmountUndo = CairnDecisionUndoController.mount(
+        host,
+        { api, toast },
+        {
+          "ddv-undo": {
+            reason: "one-tap undo from the day it adapted",
+            success: "Put that change back",
+            stale: "This change can no longer be undone.",
+            failed: "Could not undo that change",
+            after: () =>
+              deps
+                .load(pathOf(date), { key: keyOf(date) })
+                .then((value) => paint(value))
+                .catch(() => {}),
+          },
+        },
+        "ddv-undo"
+      );
+    }
     const paint = (value: unknown): void => {
       if (!live || !host.isConnected) return;
       const detail = isDetail(value) ? value : null;
@@ -65,6 +88,7 @@
       paint(null);
       return () => {
         live = false;
+        unmountUndo?.();
       };
     }
     const warm = deps.peek(keyOf(date));
@@ -82,6 +106,7 @@
       });
     return () => {
       live = false;
+      unmountUndo?.();
     };
   }
 

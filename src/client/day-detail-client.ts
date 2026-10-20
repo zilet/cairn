@@ -189,6 +189,42 @@
     </aside>`;
   }
 
+  /**
+   * The coach adapted this day: each change the team made that lands on it (the Changes
+   * feed's own title and why), with the feed's server-labelled Undo. The full page wires
+   * `data-ddv-undo` (day-record-client.ts); the compact form (Today's strip, Horizon's peek)
+   * carries the same attribute, wired by the day-detail controller on its own host. "" with none.
+   */
+  function changesHtml(detail: DayDetail, opts: ViewOpts): string {
+    const changes = Array.isArray(detail.changes) ? detail.changes : [];
+    const rows = changes
+      .map((change) => {
+        const title = String(change?.title ?? "").trim();
+        if (!title) return "";
+        const why = String(change?.why ?? "").trim();
+        const undo =
+          change.undo?.available === true && typeof CairnDecisionUndo !== "undefined"
+            ? CairnDecisionUndo.buttonHtml({
+                id: change.decision_id,
+                label: change.undo.label,
+                attr: "ddv-undo",
+                className: "linkbtn-quiet ddv-adapted-undo",
+              })
+            : "";
+        return `<li class="ddv-adapted-row" data-ddv-change="${escAttr(change.decision_id)}">
+          <p class="ddv-stack-t">${escHtml(title)}</p>
+          ${why ? `<p class="ddv-why-t">${escHtml(why)}</p>` : ""}
+          ${change.status_line || undo ? `<p class="ddv-adapted-meta">${change.status_line ? `<span class="lbl">${escHtml(change.status_line)}</span>` : ""}${undo}</p>` : ""}
+        </li>`;
+      })
+      .filter(Boolean);
+    if (!rows.length) return "";
+    return `<aside class="ddv-adapted well-accent-sm" aria-label="The coach adapted this day">
+      <h3 class="lbl ddv-h">The coach adapted this day</h3>
+      <ul class="ddv-adapted-rows">${rows.join("")}</ul>
+    </aside>`;
+  }
+
   // ---- what was done ----
 
   function doneHtml(detail: DayDetail): string {
@@ -331,6 +367,7 @@
     return `<article class="ddv ddv-${escAttr(detail.status)}${opts.inline ? " ddv-inline" : ""}">
       ${heroHtml(detail, opts)}
       ${todayHtml(detail)}
+      ${changesHtml(detail, opts)}
       ${stackHtml(detail)}
       ${body}
       ${watchHtml(detail.watch)}

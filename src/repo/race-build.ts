@@ -31,6 +31,7 @@
 // ============================================================================
 
 import { db } from "../db.js";
+import type { RaceCountdown } from "../contracts/race-days.js";
 import { addDaysISO, daysBetweenISO, isoDaysAgo, mondayOf } from "../lib/dates.js";
 import { round1 } from "../lib/numbers.js";
 import { withoutShadowActivities } from "./activity-shadow.js";
@@ -38,8 +39,11 @@ import { weekLayoutRead, type WeekLayoutRead } from "../domain/training/week-lay
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { matchEnduranceModality } from "./heavy-load.js";
 import { easyCeiling, getHrModel } from "./hr-model.js";
+import { travelDaysIn, type TravelDay } from "./travel-days.js";
 import { crossTrainingDays, crossTrainingLoadsLegs, crossTrainingNoun } from "./cross-training-day.js";
+import { datedPlanDayFocus } from "./plan-day-focus.js";
 import { heavyLowerWeekdaySlots, thisWeekPlanDayMap } from "./plan-selection.js";
+import { weekStrengthPlacement } from "./week-strength-placement.js";
 import { getEnduranceGoal, isoDow, statedRunDows } from "./profile.js";
 import { strengthScheduleRead } from "./strength-schedule.js";
 import {
@@ -87,9 +91,10 @@ import { athleteUnits } from "./settings.js";
 import { STAGE_WEEK_WORD, stageKeyOf } from "./stage-words.js";
 import { planDayStrengthGroups } from "./training-read.js";
 import { registerRaceLadderPeak, type RaceLadderPlanDraft } from "./race-ladder-hook.js";
+import { raceRecoveryLine } from "./race-recovery.js";
 import { type RaceStrengthLead, raceStrengthLead, raceStrengthPrinciple } from "./race-strength.js";
 import { getTrainingIntent } from "./training-intent.js";
-import { copyFlat, memoKey, requestMemo } from "./request-memo.js";
+import { copyFlat, memoKey, registerMemoGuard, requestMemo } from "./request-memo.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -142,7 +147,14 @@ export interface PaceBand {
 
 export interface RaceBuildWeek {
   week_start: string;
+  /** Calendar weeks to RACE WEEK — the engine's arrival count, which sets `kind`. Never printed as a countdown. */
   weeks_to_race: number;
+  /**
+   * How far off the race is from this rung, in the countdown's one wording
+   * (raceCountdown): the current week from `as_of`, a later week from its Monday —
+   * "12 days out", "Race week", "3 wks out". The ladder's row label.
+   */
+  countdown_words?: string;
   phase: RacePhase;
   kind: RaceWeekKind;
   km: number;
@@ -233,6 +245,8 @@ export interface LegMapDay {
   ride: boolean;
   /** The day reads as one of the week's hard days (quality, long, heavy lower, ride). */
   hard: boolean;
+  /** The athlete is away this date (a trip): where, so the ring can say so. */
+  travel: TravelDay | null;
 }
 
 export interface RidePattern {
@@ -249,6 +263,10 @@ export interface RidePattern {
   source: "stated" | "observed";
   /** The load family of the day (ride, paddle, swim, walk, …): the field keeps its name. */
   sport_family: string;
+  /** The athlete's named day is optional (always true for a stated one). */
+  optional: boolean;
+  /** Set when this week's date of the day falls inside a trip: it stands aside, never counted as a hard leg day. */
+  away: TravelDay | null;
 }
 
 /**
@@ -276,6 +294,8 @@ export interface RaceBuild {
     distance_km: number;
     days_to_race: number;
     weeks_to_race: number;
+    /** How far off the race is from `as_of`, in the one wording every surface prints. */
+    countdown: RaceCountdown;
     phase: RacePhase;
     target: RaceTarget | null;
     /**
@@ -357,6 +377,45 @@ export interface RaceBuild {
 
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as const;
 export const weekdayOfDayNumber = (n: number): string => WEEKDAYS[n - 1] ?? `day ${n}`;
+
+/** A row a day counts in days as far out as the day-by-day countdown reaches (RACE_DAYS_WINDOW). */
+const RACE_COUNTDOWN_DAY_ROWS = 21;
+
+/**
+ * THE race countdown: how far off `raceDate` is from `asOf`, in days, in the one set of
+ * words every surface prints. Near races speak in days ("12 days out"); the race's own
+ * calendar week is "Race week"; the eve is "Tomorrow"; two weeks and more speak in whole
+ * weeks ("3 wks out", floored, so never a week closer than it is). Null with no date.
+ */
+export function raceCountdown(
+  asOf: string,
+  raceDate: string | null | undefined,
+  opts: { byDay?: boolean } = {}
+): RaceCountdown | null {
+  const race = String(raceDate ?? "").slice(0, 10);
+  const from = String(asOf ?? "").slice(0, 10);
+  const days = race && from ? daysBetweenISO(race, from) : null;
+  if (days == null) return null;
+  const raceWeek = days >= 0 && mondayOf(from) === mondayOf(race);
+  const weeks = Math.floor(days / 7);
+  // `byDay`: a row a day (the countdown calendar) — every row counts its own days, so
+  // race week's rows are told apart ("5 days out", "Tomorrow") rather than all "Race week".
+  const inDays = opts.byDay === true ? days <= RACE_COUNTDOWN_DAY_ROWS : days <= 13;
+  const words =
+    days < 0
+      ? "Race run"
+      : days === 0
+        ? "Race day"
+        : days === 1
+          ? "Tomorrow"
+          : raceWeek && opts.byDay !== true
+            ? "Race week"
+            : inDays
+              ? `${days} days out`
+              : `${weeks} wks out`;
+  const span = days <= 0 ? null : days <= 13 ? `${days} ${days === 1 ? "day" : "days"}` : `${weeks} weeks`;
+  return { days, words, span, race_week: raceWeek };
+}
 
 /** Riegel's endurance model: T2 = T1 · (D2/D1)^1.06. */
 export function riegel(knownSec: number, knownKm: number, targetKm: number): number {
@@ -1112,7 +1171,7 @@ function weeklyReview(asOf: string, runs: RunRow[], includeThisWeek = false): Ra
 // two of the last six weeks. Only efforts that load the legs make a pattern worth
 // placing runs around (a light e-bike commute never wins the weekday). The field keeps
 // its `ride` name for the client; `sport_family` says what it is.
-function ridePattern(asOf: string): Omit<RidePattern, "placement"> | null {
+function ridePattern(asOf: string): Omit<RidePattern, "placement" | "away"> | null {
   const day = (safe(() => crossTrainingDays(asOf)) ?? [])[0];
   if (!day) return null;
   return {
@@ -1126,6 +1185,7 @@ function ridePattern(asOf: string): Omit<RidePattern, "placement"> | null {
     typical_load: day.typical_load ?? "moderate",
     source: day.source,
     sport_family: day.sport_family,
+    optional: day.optional,
   };
 }
 
@@ -1160,8 +1220,14 @@ function fillRide(template: string, ride: { label: string; weekday: string; spor
 const nextDay = (d: number): number => (d === 7 ? 1 : d + 1);
 const prevDay = (d: number): number => (d === 1 ? 7 : d - 1);
 
+const RIDE_AWAY_VARIANTS = [
+  "You are away that day ({where}), so the optional {label} just waits — nothing to make up.",
+  "{weekday} falls inside the trip ({where}). The optional {label} stays optional; the week does not lean on it.",
+  "Away on {weekday} ({where}) — the {label} is off the week this time, and the long run is not changed by it.",
+] as const;
+
 function ridePlacement(
-  ride: Omit<RidePattern, "placement">,
+  ride: Omit<RidePattern, "placement" | "away">,
   longDay: number | null,
   qualityDay: number | null,
   heavyLower: Set<number>,
@@ -1211,10 +1277,16 @@ function ridePlacement(
 // ---------------------------------------------------------------------------
 
 // {km} and {long} arrive already said in the athlete's run units ("31 km", "8.1 mi").
+// `{span}` is the countdown's own span (raceCountdown): "12 days", "3 weeks" — never the
+// ladder's calendar-week count, which said "1 weeks" twelve days out.
 const WHY_VARIANTS = [
-  "{weeks} weeks to {event}: this week is {km} with a {long} long run. {estimate}",
-  "{event} is {weeks} weeks out. The week asks for {km}, long run {long}. {estimate}",
-  "Building toward {event}, {weeks} weeks away — {km} this week, {long} long. {estimate}",
+  "{span} to {event}: this week is {km} with a {long} long run. {estimate}",
+  "{event} is {span} out. The week asks for {km}, long run {long}. {estimate}",
+  "Building toward {event}, {span} away — {km} this week, {long} long. {estimate}",
+] as const;
+const WHY_RACE_DAY_VARIANTS = [
+  "Race day for {event}. {estimate}",
+  "{event} is today. {estimate}",
 ] as const;
 
 function estimateSentence(p: RacePrediction | null, t: RaceTarget | null, units: DistanceUnit = "km"): string {
@@ -1486,6 +1558,12 @@ export function raceBuild(
     agenda?: FlexibleTrainingAgenda | null;
     /** The units the sentences speak (default: the athlete's, athleteUnits()). */
     units?: DistanceUnit;
+    /**
+     * Lay this week's leg map off the template ring instead of the week as placed
+     * (liveWeekRing). For an internal caller that reads only the week's kind and phase
+     * (the stress budget), which then never pays for today's strength line.
+     */
+    templateRing?: boolean;
   }
 ): RaceBuild {
   const asOf = date || localDateISO();
@@ -1535,7 +1613,11 @@ export function raceBuild(
   if (!goal || !goal.is_race || !goal.date) return empty("No dated race yet. Set one and the build lays out week by week.");
   const distance = Number(goal.distance_km);
   if (!(distance > 0)) return empty("The race has no distance yet — add it and the build can be laid out.");
-  if (goal.phase === "past" || (goal.days_to_race ?? 0) < 0) return empty("The race is behind you. A new date starts a new build.");
+  if (goal.phase === "past" || (goal.days_to_race ?? 0) < 0) {
+    // The days after the race say so, once (race-recovery.ts); after them, quiet as before.
+    const recovering = safe(() => raceRecoveryLine(asOf));
+    return empty(recovering ? `${recovering}.` : "The race is behind you. A new date starts a new build.");
+  }
   const weeksToRace = Math.max(0, goal.weeks_to_race ?? 0);
   const phase: RacePhase = goal.phase ?? phaseForWeeks(weeksToRace, distance);
 
@@ -1607,18 +1689,41 @@ export function raceBuild(
   // Runs are the engine's week (never plan rows); strength is the lifting week laid onto
   // its weekdays. `heavyLower` is therefore WEEKDAY slots (Mon = 1), the same axis the
   // runs and the ride sit on — never a plan day number.
-  const heavyLower = safe(() => heavyLowerWeekdaySlots(asOf)) ?? new Set<number>();
   const strengthDays = new Map<number, { name: string; heavy_lower: boolean }>();
   for (const g of safe(() => planDayStrengthGroups()) ?? []) {
     if (!g.groups.length) continue;
     strengthDays.set(g.day_number, { name: planDayName(g.day_number) ?? g.focus ?? "Strength", heavy_lower: g.heavy_lower });
   }
+  // THIS week as the athlete will live it — the same placement the Plan tab's week strip
+  // lays (week-strength-placement.ts: the log owns a logged day, today names the strength
+  // line's day, a swapped day trades into the later weekday) and the runs where the
+  // agenda dated them (completed on the day run, open on the day suggested). The leg map
+  // and this week's heavy-leg days read it; later weeks keep the template ring.
+  const live = liveWeekRing(asOf, thisMonday, agenda, strengthDays, opts);
+  const heavyLower = live?.heavy_lower ?? safe(() => heavyLowerWeekdaySlots(asOf)) ?? new Set<number>();
   const rideBase = ridePattern(asOf);
-  const longDay = longRun?.day_number ?? null;
-  const qualityDay = qualityRun?.day_number ?? null;
-  const easyDays = new Set(runs.filter((r) => r.kind_label === "easy").map((r) => r.day_number));
+  const longDay = live?.runs ? slotOfKind(live.runs, "long") : (longRun?.day_number ?? null);
+  const qualityDay = live?.runs ? slotOfKind(live.runs, "quality") : (qualityRun?.day_number ?? null);
+  const easyDays = live?.runs
+    ? new Set([...live.runs].filter(([, r]) => r.kind === "easy").map(([slot]) => slot))
+    : new Set(runs.filter((r) => r.kind_label === "easy").map((r) => r.day_number));
+  // Away dates this week (a trip). An OPTIONAL ride on one stands aside: it reserves
+  // nothing, is not a hard leg day and gets no "day before the long run" sentence. Runs
+  // stay on their stated days — he can run while away.
+  const travel = safe(() => travelDaysIn(thisMonday, addDaysISO(thisMonday, 6) ?? thisMonday)) ?? new Map<string, TravelDay>();
+  const dateOfDay = (d: number): string => addDaysISO(thisMonday, d - 1) ?? thisMonday;
+  const rideAway = rideBase && rideBase.optional ? (travel.get(dateOfDay(rideBase.day_number)) ?? null) : null;
   const ride: RidePattern | null = rideBase
-    ? { ...rideBase, placement: ridePlacement(rideBase, longDay, qualityDay, heavyLower, easyDays, asOf) }
+    ? {
+        ...rideBase,
+        away: rideAway,
+        placement: rideAway
+          ? fillRide(pickDayVariant(RIDE_AWAY_VARIANTS, asOf, "race-build:ride-away"), rideBase).replaceAll(
+              "{where}",
+              rideAway.location ?? rideAway.title
+            )
+          : ridePlacement(rideBase, longDay, qualityDay, heavyLower, easyDays, asOf),
+      }
     : null;
   // The run engine's slots are weekday-numbered (Mon=1) once a schedule is stated,
   // but the strength template's day_number is a ring index — the athlete's lifting
@@ -1627,22 +1732,57 @@ export function raceBuild(
   // lifting week stated the plain Mon=Day1 convention is the only honest fallback.
   const weekMap = safe(() => thisWeekPlanDayMap(asOf).map) ?? new Map<number, { day_number: number }>();
   const weekdayMap = new Map([...weekMap].map(([dow, c]) => [dow, c.day_number]));
-  const leg_map: LegMapDay[] = [];
-  for (let d = 1; d <= 7; d++) {
-    const run = runs.find((r) => r.day_number === d) ?? null;
-    const mapped = weekMap.size ? weekMap.get(d === 7 ? 0 : d) ?? null : null;
-    const strengthDayNumber = weekMap.size ? (mapped ? mapped.day_number : null) : d;
-    const strength = strengthDayNumber == null ? null : strengthDays.get(strengthDayNumber) ?? null;
-    const isRide = ride?.day_number === d;
-    leg_map.push({
-      day_number: d,
-      weekday: weekdayOfDayNumber(d),
-      run: run ? { kind: run.kind_label, label: run.label || `${run.kind_label} run`, km: run.target_distance_km != null ? Number(run.target_distance_km) : null } : null,
-      strength,
-      ride: isRide,
-      hard: !!(run && run.kind_label !== "easy") || !!strength?.heavy_lower || (isRide && ride?.typical_load !== "light"),
-    });
-  }
+  // The ring laid two ways: the TEMPLATE ring (the week as the plan deals it — every
+  // later rung of the ladder is this ring) and THIS week's ring as placed (`live`). The
+  // published leg map is this week's; with no live read the two are one.
+  const ringOf = (placed: LiveWeekRing | null): LegMapDay[] => {
+    const out: LegMapDay[] = [];
+    for (let d = 1; d <= 7; d++) {
+      const planRun = runs.find((r) => r.day_number === d) ?? null;
+      const run: LegMapDay["run"] = placed?.runs
+        ? (placed.runs.get(d) ?? null)
+        : planRun
+          ? {
+              kind: planRun.kind_label,
+              label: planRun.label || `${planRun.kind_label} run`,
+              km: planRun.target_distance_km != null ? Number(planRun.target_distance_km) : null,
+            }
+          : null;
+      const mapped = weekMap.size ? weekMap.get(d === 7 ? 0 : d) ?? null : null;
+      const strengthDayNumber = placed?.strength
+        ? (placed.strength.get(d) ?? null)
+        : weekMap.size
+          ? mapped
+            ? mapped.day_number
+            : null
+          : d;
+      const stored = strengthDayNumber == null ? null : strengthDays.get(strengthDayNumber) ?? null;
+      // A name that fell back to the stored focus reads for this weekday's date
+      // (src/repo/plan-day-focus.ts); a plain name ("Lower") passes through untouched.
+      const legDate = addDaysISO(thisMonday, d - 1);
+      // A logged session that shows as itself keeps its own name, as on the strip.
+      const ownTitle = placed?.titles?.get(d) ?? null;
+      const strength = stored
+        ? { ...stored, name: ownTitle ?? datedPlanDayFocus(stored.name, legDate) ?? stored.name }
+        : null;
+      // A ride that stands aside for a trip is not on the ring at all.
+      const isRide = ride?.day_number === d && !ride.away;
+      out.push({
+        day_number: d,
+        weekday: weekdayOfDayNumber(d),
+        run,
+        strength,
+        ride: isRide,
+        hard: !!(run && run.kind !== "easy") || !!strength?.heavy_lower || (isRide && ride?.typical_load !== "light"),
+        travel: travel.get(dateOfDay(d)) ?? null,
+      });
+    }
+    // A ring with nothing on it (no run placed, nothing lifted, no ride) is no map: it
+    // goes out empty rather than as seven blank columns.
+    return out.some((d) => d.run || d.strength || d.ride) ? out : [];
+  };
+  const templateRing = ringOf(null);
+  const leg_map: LegMapDay[] = live ? ringOf(live) : templateRing;
   // This week's focus speaks to the week the engine actually prescribed: a build week
   // whose runs are all easy (no quality run on the card) is an aerobic week, and says
   // so, rather than asking for the phase's threshold session the week does not hold.
@@ -1658,13 +1798,11 @@ export function raceBuild(
     }
     newHighWords(currentRung);
   }
-  // A ring with nothing on it (no run placed, nothing lifted, no ride) is no map: it
-  // goes out empty rather than as seven blank columns.
-  if (!leg_map.some((d) => d.run || d.strength || d.ride)) leg_map.length = 0;
-  // Every rung speaks to the same ring: how lifting and running fit, week by week — and
-  // carries the ONE stage word every surface names that week with.
+  // Every rung speaks to its ring: how lifting and running fit, week by week — this week
+  // off the week as placed, every later week off the template ring it will be dealt —
+  // and carries the ONE stage word every surface names that week with.
   for (const week of weeks) {
-    week.with_lifting = liftingLine(week, leg_map, strengthLead);
+    week.with_lifting = liftingLine(week, week.current ? leg_map : templateRing, strengthLead);
     const stage = stageKeyOf(week.kind, week.phase);
     if (stage) week.stage_word = STAGE_WEEK_WORD[stage];
   }
@@ -1689,6 +1827,8 @@ export function raceBuild(
     // Same map as the leg map: with a stated lifting week a template day's weekday is
     // wherever the ring lands it, not its number. Unmapped (a day the week does not
     // reach) is left out rather than given a weekday it will not be trained on.
+    // This week's: read off the same placement as the leg map, so a swapped heavy day
+    // is named where it now sits.
     heavy_lower_days: [...heavyLower].sort((a, b) => a - b).map(weekdayOfDayNumber),
     // The current rung's kind — calendar weeks to race week, the ladder's own count
     // (a taper week is the taper for a strength-led athlete; an endurance-led one reads
@@ -1703,8 +1843,22 @@ export function raceBuild(
   };
 
   const event = goal.event || `your ${distanceWords(distance, units)} race`;
-  const why = pickDayVariant(WHY_VARIANTS, asOf, "race-build:why")
-    .replace("{weeks}", String(weeksToRace))
+  const countdown = raceCountdown(asOf, goal.date) ?? {
+    days: goal.days_to_race ?? 0,
+    words: "Race day",
+    span: null,
+    race_week: true,
+  };
+  for (const w of weeks) {
+    w.countdown_words =
+      w.kind === "race" && !w.current ? "Race week" : (raceCountdown(w.current ? asOf : w.week_start, goal.date)?.words ?? "");
+  }
+  const whyTemplate = countdown.span
+    ? pickDayVariant(WHY_VARIANTS, asOf, "race-build:why")
+    : pickDayVariant(WHY_RACE_DAY_VARIANTS, asOf, "race-build:why:race-day");
+  const why = whyTemplate
+    .replace("{span}", countdown.span ?? "")
+    .replace(/^\{event\}/, event[0] ? event[0].toUpperCase() + event.slice(1) : event)
     .replace("{event}", event)
     .replace("{km}", distanceWords(weekKm || review.weeks.at(-1)?.km || 0, units, { whole: true }))
     .replace("{long}", distanceWords(longKm != null ? longKm : (weeks[0]?.long_km ?? 0), units))
@@ -1722,6 +1876,7 @@ export function raceBuild(
       distance_km: distance,
       days_to_race: goal.days_to_race ?? 0,
       weeks_to_race: weeksToRace,
+      countdown,
       phase,
       target,
       stretch: stretchTarget
@@ -1958,6 +2113,112 @@ function planDayName(dayNumber: number): string | null {
     return row?.name ? String(row.name) : null;
   } catch {
     return null;
+  }
+}
+
+// ---------- this week's ring, as placed ----------
+
+interface LiveWeekRing {
+  /**
+   * Weekday slot (Mon = 1) → plan day number; a slot absent carries no lift. Null: no
+   * lifting week to place. A logged date carries the plan day its work FILES under
+   * (`placed_day_number`), so a session titled as itself still marks its heavy-lower day.
+   */
+  strength: Map<number, number> | null;
+  /** Weekday slot → a logged session's own title, where it shows as itself rather than as its plan day. */
+  titles: Map<number, string> | null;
+  /** Weekday slot → the run on it, from the agenda's dates. Null: no agenda to read. */
+  runs: Map<number, NonNullable<LegMapDay["run"]>> | null;
+  /** Weekday slots of this week's heavy-lower days, as placed. Null when strength is unplaced. */
+  heavy_lower: Set<number> | null;
+}
+
+const slotOfDate = (date: string): number => ((isoDow(date) + 6) % 7) + 1;
+const RUN_WEIGHT: Record<string, number> = { long: 3, quality: 2, easy: 1 };
+
+function slotOfKind(runs: Map<number, NonNullable<LegMapDay["run"]>>, kind: "long" | "quality"): number | null {
+  for (const [slot, run] of runs) if (run.kind === kind) return slot;
+  return null;
+}
+
+// Re-entrancy: the placement reads which day today's strength line names
+// (todayStrengthLineDay — only for the real today), whose selection reads (the stress
+// budget, the volume floor) ask raceBuild for the week's KIND. Those nested
+// builds take the template ring — they never read the leg map — so the read terminates.
+// Registered as a memo guard (request-memo.ts): a memoized read whose compute asked for
+// the live ring answers with the template ring inside a placement, so it is only ever
+// served back under the same state.
+let liveRingDepth = 0;
+let liveRingReads = 0;
+registerMemoGuard(() => ({ active: liveRingDepth > 0, reads: liveRingReads }));
+
+/**
+ * This week's ring as the athlete will live it: strength off the one week placement
+ * (week-strength-placement.ts — the same answer the Plan tab's strip lays), runs off the
+ * agenda's own dates. Null for an internal build (`templateRing`, the stress budget's),
+ * inside a nested build, or when nothing can be read.
+ */
+function liveWeekRing(
+  asOf: string,
+  thisMonday: string,
+  agenda: FlexibleTrainingAgenda | null,
+  strengthDays: Map<number, { name: string; heavy_lower: boolean }>,
+  opts: { templateRing?: boolean } | undefined
+): LiveWeekRing | null {
+  if (opts?.templateRing) return null;
+  liveRingReads++;
+  if (liveRingDepth > 0) return null;
+  liveRingDepth++;
+  try {
+    let strength: Map<number, number> | null = null;
+    let titles: Map<number, string> | null = null;
+    const placement = safe(() => weekStrengthPlacement(asOf));
+    if (placement?.lifting_week) {
+      strength = new Map();
+      titles = new Map();
+      for (const day of placement.days) {
+        if (day.placed_day_number == null) continue;
+        strength.set(slotOfDate(day.date), day.placed_day_number);
+        if (day.logged_title) titles.set(slotOfDate(day.date), day.logged_title);
+      }
+    }
+    let runs: Map<number, NonNullable<LegMapDay["run"]>> | null = null;
+    if (agenda?.available && Array.isArray(agenda.intents)) {
+      runs = new Map();
+      const put = (date: string | null | undefined, run: NonNullable<LegMapDay["run"]>) => {
+        if (!date || mondayOf(date) !== thisMonday) return;
+        const slot = slotOfDate(date);
+        const held = runs?.get(slot);
+        if (!held || (RUN_WEIGHT[run.kind] ?? 0) > (RUN_WEIGHT[held.kind] ?? 0)) runs?.set(slot, run);
+      };
+      for (const intent of agenda.intents) {
+        const done = intent.status === "completed" && intent.completion;
+        const km = done ? intent.completion?.distance_km : intent.target_distance_km;
+        // Where the agenda dated it: the day it was run, else the day it suggests. An open
+        // run with no clean day left stays off the ring, as it stays off the strip.
+        put(done ? intent.completion?.date : intent.suggested_date, {
+          kind: intent.kind,
+          label: intent.label || `${intent.kind} run`,
+          km: km != null && Number.isFinite(Number(km)) ? round1(Number(km)) : null,
+        });
+      }
+      // A run the week did not plan still happened, on its day.
+      for (const extra of Array.isArray(agenda.extras) ? agenda.extras : []) {
+        if (runs.has(slotOfDate(extra.date))) continue;
+        put(extra.date, {
+          kind: "easy",
+          label: "Run",
+          km: extra.distance_km != null && Number.isFinite(Number(extra.distance_km)) ? round1(Number(extra.distance_km)) : null,
+        });
+      }
+    }
+    if (!strength && !runs) return null;
+    const heavy_lower = strength
+      ? new Set([...strength].filter(([, n]) => strengthDays.get(n)?.heavy_lower).map(([slot]) => slot))
+      : null;
+    return { strength, titles, runs, heavy_lower };
+  } finally {
+    liveRingDepth--;
   }
 }
 

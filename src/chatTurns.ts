@@ -45,6 +45,10 @@ import {
 } from "./agents.js";
 import { createChatStreamFilter, type LiveReplyEvent } from "./chatStreamFilter.js";
 import { groundReply } from "./chatGrounding.js";
+import { datedWeek, datedWeekDay, type DatedWeek } from "./domain/training/dated-week.js";
+import { strengthPlanDayOn, thisWeekPlanDayMap } from "./repo/plan-selection.js";
+import { sameLiftName } from "./repo/exercise-canon.js";
+import { isoDow, WEEKDAY_NAMES } from "./repo/profile.js";
 import type { MemoryKind } from "./repo/memory.js";
 import {
   chatCheckinDate,
@@ -83,6 +87,8 @@ import {
   type ChatRoutingDecision,
 } from "./chatRouting.js";
 import { log } from "./log.js";
+import type { ChangeReceipt } from "./contracts/change-receipt.js";
+import { brainDecisionIdFloor, brainDecisionIdsAfter, withChangeReceipts } from "./repo/change-receipt.js";
 import {
   foodListAnswersCoachQuestion,
   carriesPlanApplyAffirmation,
@@ -103,6 +109,7 @@ import {
   isLeadingQuestion,
 } from "./chat-intent.js";
 import {
+  chatChangeReceipts,
   recordOrNull,
   reconcileChatPlanReply,
   reconcileChatIntakeReply,
@@ -164,6 +171,7 @@ export {
   PLAN_TODAY_SCOPED_NOT_APPLIED_VARIANTS,
   PLAN_UNTOUCHED_BY_QUESTION_VARIANTS,
   PLAN_WRITE_UNVERIFIED_VARIANTS,
+  chatChangeReceipts,
   reconcileChatPlanReply,
   reconcileChatIntakeReply,
   reconcileChatRevertReply,
@@ -330,7 +338,11 @@ export function completeInstantFoodCapture(id: number, rawMessage?: string) {
   const turn = repo.getChatTurn(id) as any;
   if (!turn) return null;
   if (turn.assistant_message_id) {
-    return { turn, message: repo.getChatMessage(Number(turn.assistant_message_id)), note: null };
+    return {
+      turn,
+      message: withChangeReceipts(repo.getChatMessage(Number(turn.assistant_message_id))),
+      note: null,
+    };
   }
   if (!isInstantFoodCaptureDecision(turn.routing, turn.message)) return null;
   if (answersCoachQuestion(turn)) return null;
@@ -401,7 +413,7 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
   controllers.set(id, controller);
 
   try {
-    const { agent, raw, attempts } = await runChatCompletion(id, turn, history, controller.signal);
+    const { agent, raw, attempts, datedWeek: turnWeek } = await runChatCompletion(id, turn, history, controller.signal);
     const { reply: replyText, actions } = parseChatReply(raw);
     // Clearing a hold is a claim that the provider ANSWERED, so it waits for the
     // reply to actually come out of the raw output. A run that returned only a
@@ -423,6 +435,10 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
     // and skip the normal log_food application so the photo never double-logs.
     const photoFood = turn.image_path ? logPhotoFood(actions, turn) : null;
 
+    // The ledger as it stood before this turn wrote anything: applyChatActions is
+    // synchronous, so every decision row written between here and its return is this
+    // turn's own — the source of the reply's structured receipts.
+    const ledgerFloor = brainDecisionIdFloor();
     const {
       applied,
       drafts,
@@ -441,9 +457,20 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
         skipLogFood: !!photoFood,
         turnId: id,
         userMessageId: beforeId,
+        ...(turnWeek !== undefined ? { datedWeek: turnWeek } : {}),
       }
     );
     if (photoFood) applied.unshift({ type: "log_food", result: photoFood });
+    // What LANDED this turn, as data (chat-reconcile.ts chatChangeReceipts): read off the
+    // ledger, so a refused or failed part never earns one.
+    const receipts = (() => {
+      try {
+        return chatChangeReceipts(applied, brainDecisionIdsAfter(ledgerFloor));
+      } catch (err) {
+        recordAsyncFailure("chat_turns", "change_receipts", err);
+        return [];
+      }
+    })();
     // The SAME reading the apply path used. Reconciling on a second, per-message-only
     // reading is how a go-ahead that really did authorize a change still read as a
     // question to the receipt.
@@ -461,7 +488,14 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
     const grounded = groundReply({
       reply: reconciledReply,
       applied,
-      ctx: { message: turn.message, proposedReply, drafts, droppedGoalFields, appliedGoalPatch },
+      ctx: {
+        message: turn.message,
+        proposedReply,
+        drafts,
+        droppedGoalFields,
+        appliedGoalPatch,
+        ...(turnWeek !== undefined ? { week: turnWeek } : {}),
+      },
     });
     if (grounded.notes.length) {
       const kinds = grounded.notes.map((n) => (n.kind === "claim" ? n.class : n.kind));
@@ -476,10 +510,12 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
       agent_attempts?: ChatAgentAttempt[];
       clinical_lineage?: ClinicalConversationLineage;
       routing?: ChatRoutingDecision;
+      receipts?: ChangeReceipt[];
     } = {
       applied,
       drafts: drafts.map(proposalMeta),
     };
+    if (receipts.length) meta.receipts = receipts;
     const finalRouting = repo.getChatTurnRouting(id);
     if (finalRouting) meta.routing = finalRouting;
     // A substantial pasted lab awaits one-tap confirmation before it writes to Health.
@@ -493,7 +529,7 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
     });
     const clinicalLineage = clinicalLineageForTurn(applied, id, directTurnClinical);
     if (clinicalLineage) meta.clinical_lineage = clinicalLineage;
-    const assistant = repo.addChatMessage("assistant", reply, agent, meta);
+    const assistant = withChangeReceipts(repo.addChatMessage("assistant", reply, agent, meta));
     const finished = repo.finishChatTurn(id, {
       reply,
       chosen_agent: agent,
@@ -925,6 +961,9 @@ function todayPlanUpdateChanges(message: string | null | undefined, changes: unk
     (change): change is Record<string, unknown> => !!change && typeof change === "object" && !Array.isArray(change)
   );
   if (!rows.length || rows.length !== changes.length) return changes;
+  // A change addressed by date was already resolved against the dated week; the date
+  // is the athlete's day, and the today-scope reading never re-aims it.
+  if (rows.some((change) => typeof change.date === "string")) return changes;
   const namedDays = new Set(rows.map((change) => Number(change.day_number)).filter((day) => Number.isFinite(day)));
   // Multi-day actions are structural work. Do not silently collapse them onto one
   // session just because the prose happened to mention today.
@@ -932,6 +971,236 @@ function todayPlanUpdateChanges(message: string | null | undefined, changes: unk
   const selected = repo.selectedPlanDayForDate(localDateISO());
   if (!selected) return changes;
   return rows.map((change) => ({ ...change, day_number: selected.day_number }));
+}
+
+// ── plan_update addressed by date ────────────────────────────────────────────
+// The plan's day_numbers are the ring's order, not weekdays: the week deals the ring
+// from the last LOGGED session, so "Day 2 Lower" can land on any weekday. A model that
+// guessed a weekday's day_number edited the wrong session (2026-10-19: the Tuesday edit
+// landed on Friday's Lower). So a change may carry `date`, and the SERVER says which
+// plan day that date holds — the same dated week chat was shown (dated-week.ts). The
+// date wins over a model-supplied day_number; the disagreement is kept on the outcome.
+export type PlanChangeDateSkipReason =
+  | "date_past"
+  | "no_lift_on_date"
+  | "no_calendar"
+  | "date_invalid"
+  | "until_invalid"
+  | "exercise_not_on_date";
+
+export type PlanChangeDateResolution = {
+  changes: unknown[];
+  /** `name` is the plan day the date carries (the athlete-facing receipt names it). */
+  retargeted: { date: string; exercise: string | null; from: number | null; to: number; name?: string }[];
+  /** `date` is null only for an undated change refused for its `until`. */
+  skipped: {
+    date: string | null;
+    exercise: string | null;
+    reason: PlanChangeDateSkipReason;
+    day?: number;
+    name?: string;
+  }[];
+};
+
+function changeExerciseLabel(change: Record<string, unknown>): string | null {
+  const swap = change.swap && typeof change.swap === "object" ? (change.swap as Record<string, unknown>) : null;
+  const name = String(change.exercise ?? swap?.from ?? swap?.to ?? "").trim();
+  return name || null;
+}
+
+// The plan day a date past the dated week's window carries: the same weekday map the
+// Plan strip reads, phased for that date's own week. Null without a lifting week known —
+// the positional ring is not a calendar, and no date may be claimed from it.
+function liftDayBeyondWindow(date: string): number | null | "no_calendar" {
+  const week = thisWeekPlanDayMap(date);
+  if (!week.lift_dows.length) return "no_calendar";
+  return strengthPlanDayOn(date, { weekMap: week })?.day_number ?? null;
+}
+
+// ── is the lift on the session the date resolved to? ──
+// applyPlanChange UPSERTS: an update naming a lift the day does not hold ADDS it. So a
+// change aimed by date at a session that does not carry its lift is a mis-aim, not an
+// edit ("lighter on Tuesday's legs" → {Tue, Back Squat} → Back Squat added to Push B).
+// An update, a removal or a swap must name a lift ON that session (resolved through the
+// exercise-name resolver, and rewritten to the stored spelling so the apply layer's own
+// match lands on it). Only an addition stays allowed: one marked `add: true`, or one in
+// the action's own add shape (a complete prescription) for a lift that no other plan day
+// carries — a lift living on another session is the mis-aim, never a new movement.
+type PlanDayLifts = Map<number, string[]>;
+
+function readPlanDayLifts(): PlanDayLifts {
+  const out: PlanDayLifts = new Map();
+  try {
+    for (const day of (repo.getPlan() as any[]) ?? []) {
+      const n = Number(day?.day_number);
+      if (!Number.isFinite(n)) continue;
+      out.set(
+        n,
+        (Array.isArray(day?.items) ? day.items : [])
+          .filter((item: any) => String(item?.kind ?? "") !== "cardio")
+          .map((item: any) => String(item?.exercise ?? "").trim())
+          .filter(Boolean)
+      );
+    }
+  } catch {
+    /* no plan read: every lift reads as absent, so nothing is mis-aimed onto a day */
+  }
+  return out;
+}
+
+function liftOnDay(lifts: readonly string[] | undefined, name: unknown): string | null {
+  const wanted = String(name ?? "").trim();
+  if (!wanted || !lifts?.length) return null;
+  return (
+    lifts.find((lift) => lift.toLowerCase() === wanted.toLowerCase()) ??
+    lifts.find((lift) => sameLiftName(lift, wanted)) ??
+    null
+  );
+}
+
+function completeAddShape(change: Record<string, unknown>): boolean {
+  const n = (v: unknown) => v != null && v !== "" && Number.isFinite(Number(v)) && Number(v) > 0;
+  return n(change.sets) && ((n(change.rep_low) && n(change.rep_high)) || n(change.target_seconds));
+}
+
+/** The change re-aimed at the resolved day's own spelling, or null when it names no lift there. */
+function aimedAtDayLift(
+  change: Record<string, unknown>,
+  day: number,
+  lifts: PlanDayLifts
+): Record<string, unknown> | null {
+  const onDay = lifts.get(day);
+  const swap = change.swap && typeof change.swap === "object" ? (change.swap as Record<string, unknown>) : null;
+  if (swap && (swap.from || swap.to)) {
+    const from = liftOnDay(onDay, swap.from);
+    return from ? { ...change, swap: { ...swap, from } } : null;
+  }
+  const stored = liftOnDay(onDay, change.exercise);
+  if (stored) return { ...change, exercise: stored };
+  if (change.remove === true || Number(change.sets) === 0) return null;
+  if (change.add === true) return change;
+  const elsewhere = [...lifts].some(([n, other]) => n !== day && !!liftOnDay(other, change.exercise));
+  return !elsewhere && completeAddShape(change) ? change : null;
+}
+
+export function resolveDatedPlanChanges(
+  changes: unknown[],
+  opts: { today?: string; week?: DatedWeek | null } = {}
+): PlanChangeDateResolution {
+  const today = opts.today ?? localDateISO();
+  const out: PlanChangeDateResolution = { changes: [], retargeted: [], skipped: [] };
+  let week: DatedWeek | null | undefined = opts.week;
+  const readWeek = (): DatedWeek | null => {
+    if (week === undefined) {
+      try {
+        week = datedWeek(today);
+      } catch {
+        week = null;
+      }
+    }
+    return week;
+  };
+  let lifts: PlanDayLifts | null = null;
+  const planLifts = () => (lifts ??= readPlanDayLifts());
+  for (const change of changes) {
+    const row =
+      change && typeof change === "object" && !Array.isArray(change) ? (change as Record<string, unknown>) : null;
+    const dateGiven = !!row && typeof row.date === "string";
+    const date = dateGiven ? String(row?.date) : null;
+    // A scoped change never lands permanently: an end date that does not read as a
+    // real day ahead refuses the part, dated or not (normalizePlanChangeDates flags it).
+    if (row?.until_invalid === true) {
+      out.skipped.push({ date, exercise: changeExerciseLabel(row), reason: "until_invalid" });
+      continue;
+    }
+    if (!row || date == null) {
+      out.changes.push(change);
+      continue;
+    }
+    const exercise = changeExerciseLabel(row);
+    // A date that does not parse never falls back to the model's day_number — that
+    // guess is exactly what aimed the 2026-10-19 edit at the wrong session.
+    if (row.date_invalid === true) {
+      out.skipped.push({ date, exercise, reason: "date_invalid" });
+      continue;
+    }
+    if (date < today) {
+      out.skipped.push({ date, exercise, reason: "date_past" });
+      continue;
+    }
+    const dated = readWeek();
+    let resolved: number | null | "no_calendar";
+    let name: string | undefined;
+    if (dated && date <= dated.to) {
+      const lift = datedWeekDay(dated, date)?.lift;
+      resolved = lift?.day ?? null;
+      name = lift?.name;
+    } else {
+      try {
+        resolved = liftDayBeyondWindow(date);
+      } catch {
+        resolved = "no_calendar";
+      }
+    }
+    const given = Number(row.day_number);
+    const modelDay = Number.isInteger(given) && given > 0 ? given : null;
+    if (resolved === "no_calendar") {
+      // No calendar to read the date against: the model's own day_number is all there
+      // is. Without one the change names nothing and is skipped.
+      if (modelDay == null) {
+        out.skipped.push({ date, exercise, reason: "no_calendar" });
+        continue;
+      }
+      resolved = modelDay;
+    }
+    if (resolved == null) {
+      out.skipped.push({ date, exercise, reason: "no_lift_on_date" });
+      continue;
+    }
+    if (!name) {
+      try {
+        name = String((repo.getPlanDay(resolved) as any)?.name ?? "").trim() || undefined;
+      } catch {
+        name = undefined;
+      }
+    }
+    const aimed = aimedAtDayLift({ ...row, day_number: resolved }, resolved, planLifts());
+    if (!aimed) {
+      out.skipped.push({
+        date,
+        exercise,
+        reason: "exercise_not_on_date",
+        day: resolved,
+        ...(name ? { name } : {}),
+      });
+      continue;
+    }
+    if (modelDay !== resolved) {
+      out.retargeted.push({ date, exercise, from: modelDay, to: resolved, ...(name ? { name } : {}) });
+    }
+    out.changes.push(aimed);
+  }
+  return out;
+}
+
+function datedAwayFromToday(change: unknown): boolean {
+  const date = change && typeof change === "object" ? (change as Record<string, unknown>).date : null;
+  return typeof date === "string" && date !== localDateISO();
+}
+
+function datedSkipReason(skip: PlanChangeDateResolution["skipped"][number]): string {
+  if (skip.reason === "until_invalid") {
+    return "that change's end date is not a real day ahead, so it was not made — a change meant to end is never made for good.";
+  }
+  if (skip.reason === "date_invalid" || !skip.date) return "that change's date could not be read as a calendar day.";
+  const day = WEEKDAY_NAMES[isoDow(skip.date)] ?? "";
+  const when = day ? `${day} (${skip.date})` : skip.date;
+  if (skip.reason === "date_past") return `${when} has already passed.`;
+  if (skip.reason === "no_calendar") return `there is no lifting week on the calendar to place ${when} on.`;
+  if (skip.reason === "exercise_not_on_date") {
+    return `${skip.exercise ?? "that lift"} is not on ${when}'s session${skip.name ? ` (${skip.name})` : ""}.`;
+  }
+  return `${when} has no lifting session on it.`;
 }
 
 function planItemMatch(items: any[], name: unknown): any | null {
@@ -1753,8 +2022,23 @@ export async function runChatCompletion(
   history: { role: string; content: string; at?: string }[],
   signal: AbortSignal,
   deps: ChatCompletionDeps = {}
-): Promise<{ agent: string; raw: string; attempts: ChatAgentAttempt[] }> {
+): Promise<{ agent: string; raw: string; attempts: ChatAgentAttempt[]; datedWeek?: DatedWeek | null }> {
   const runAgentDep = deps.runAgent ?? runAgent;
+  // The dated week is built ONCE per turn (two planWeek reads) and only when a lane's
+  // prompt actually carries it; the same week then aims the turn's dated plan_update and
+  // judges its reply's weekday lines (processChatTurnInner) — the week the reply was
+  // written from. Undefined (a capture-lane turn) leaves those readers to build their own.
+  let turnWeek: DatedWeek | null | undefined;
+  const readTurnWeek = (): DatedWeek | null => {
+    if (turnWeek === undefined) {
+      try {
+        turnWeek = datedWeek();
+      } catch {
+        turnWeek = null;
+      }
+    }
+    return turnWeek;
+  };
   const runStreamingDep = deps.runAgentStreaming ?? runAgentStreaming;
   const supportsStream = deps.supportsStream ?? agentSupportsStream;
   const executeCoachRead = deps.executeCoachRead ?? executeCoachReadTool;
@@ -1912,6 +2196,7 @@ export async function runChatCompletion(
       {
         ...(lane ? { lane } : {}),
         ...(linkedPages.length ? { linkedPages } : {}),
+        datedWeek: readTurnWeek,
       }
     );
 
@@ -2024,7 +2309,7 @@ export async function runChatCompletion(
           );
           recordChatAttempt(attempt, started, !classified, false);
           attempts.push(attempt);
-          if (!classified) return { agent: first, raw, attempts };
+          if (!classified) return { agent: first, raw, attempts, datedWeek: turnWeek };
         } catch (e: any) {
           if (signal.aborted) throw e;
           const attempt = decorate(classifyChatException(first, e), firstProfile, true, ttft);
@@ -2140,7 +2425,7 @@ export async function runChatCompletion(
           );
           recordChatAttempt(attempt, started, !classified, retriedEmpty);
           attempts.push(attempt);
-          if (!classified) return { agent: name, raw, attempts };
+          if (!classified) return { agent: name, raw, attempts, datedWeek: turnWeek };
           lastErr = new Error(`${name}: ${classified.error_message || classified.error_class || classified.status}`);
         } catch (e: any) {
           if (signal.aborted) throw e;
@@ -2333,6 +2618,10 @@ export function applyChatActions(
     // Test seam: how a structure request's build job is handed to the agent-job
     // runner. Omitted in the real flow, where it is enqueueAgentJob.
     enqueueJob?: (id: number) => void;
+    // The dated week the reply was written from (runChatCompletion builds it once per
+    // turn for the prompt). A dated plan_update is aimed by THIS week; omitted (tests,
+    // direct callers), it is read fresh.
+    datedWeek?: DatedWeek | null;
   }
 ): {
   applied: Array<{ type: ChatActionType; result?: unknown; error?: string }>;
@@ -2906,16 +3195,48 @@ export function applyChatActions(
           {
             const clinicalProvenance =
               clinicalPlanProvenance({ message, action: a, imagePath: ctx.imagePath }) ?? inheritedClinical;
+            // A dated change is aimed by the server's week, never the model's day_number.
+            const dated = resolveDatedPlanChanges(
+              a.changes,
+              ctx.datedWeek !== undefined ? { week: ctx.datedWeek } : {}
+            );
+            const dateResolution =
+              dated.retargeted.length || dated.skipped.length
+                ? { date_resolution: { retargeted: dated.retargeted, skipped: dated.skipped } }
+                : {};
+            if (!dated.changes.length) {
+              const error = datedSkipReason(dated.skipped[0]);
+              applied.push({
+                type: a.type,
+                result: {
+                  ok: false,
+                  background: !explicitPlanEdit,
+                  explicit_user_request: explicitPlanEdit,
+                  persisted: false,
+                  committed: false,
+                  verified: false,
+                  error,
+                  verification: { ok: false, checks: [], days: [], runs: [], errors: [error] },
+                  ...dateResolution,
+                },
+              });
+              break;
+            }
+            const result = applyBackgroundPlanUpdate(
+              ctx.agent,
+              a.summary,
+              todayPlanUpdateChanges(message, dated.changes, explicitPlanEdit),
+              explicitPlanEdit,
+              clinicalProvenance,
+              // A change dated to another day is not today's, whatever the sentence said.
+              planUpdateTodayScoped && !dated.changes.some((change) => datedAwayFromToday(change))
+            );
             applied.push({
               type: a.type,
-              result: applyBackgroundPlanUpdate(
-                ctx.agent,
-                a.summary,
-                todayPlanUpdateChanges(message, a.changes, explicitPlanEdit),
-                explicitPlanEdit,
-                clinicalProvenance,
-                planUpdateTodayScoped
-              ),
+              result:
+                result && typeof result === "object" && !Array.isArray(result)
+                  ? { ...(result as Record<string, unknown>), ...dateResolution }
+                  : result,
             });
           }
           break;

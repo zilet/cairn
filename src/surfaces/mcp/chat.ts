@@ -8,12 +8,13 @@ import {
   searchChatMessages,
 } from "../../domain/person/index.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
+import { withChangeReceipts } from "../../repo/change-receipt.js";
 
 export function registerChatTools(server: McpToolRegistrar) {
   server.tool("get_chat_history",
-    "Read the live coaching chat log (the PWA's Chat tab; archived turns excluded) — useful context on what the user has recently asked or been told.",
+    "Read the live coaching chat log (the PWA's Chat tab; archived turns excluded) — useful context on what the user has recently asked or been told. An assistant message whose turn changed something carries `receipts` [{key, what, when, until, until_words, undo:{kind:'brain_decision', id}|null, status:'applied'|'waiting'|'undone'}] — exactly the changes that landed, read against the ledger now; Undo posts that id to revert_brain_decision.",
     { limit: z.number().int().optional() },
-    async ({ limit }) => asText(listChatMessages(limit ?? 50)));
+    async ({ limit }) => asText(listChatMessages(limit ?? 50).map(withChangeReceipts)));
 
   server.tool("list_chat_sessions",
     "List past (archived) coaching conversations, newest first — each is a thread a 'fresh start' archived, with its message count, time span, and a one-line preview. Browse history without deleting anything.",
@@ -26,7 +27,8 @@ export function registerChatTools(server: McpToolRegistrar) {
       session_id: z.string().optional().describe("the stable session_id value from list_chat_sessions"),
       archived_at: z.string().optional().describe("legacy archived_at value from list_chat_sessions"),
     },
-    async ({ session_id, archived_at }) => asText(getArchivedConversation(session_id || archived_at || "")));
+    async ({ session_id, archived_at }) =>
+      asText(getArchivedConversation(session_id || archived_at || "").map(withChangeReceipts)));
 
   server.tool("search_chat",
     "Keyword-search the whole coaching history (live + archived turns). Returns matches with a snippet and the session they belong to (session_id for archived, null for live).",

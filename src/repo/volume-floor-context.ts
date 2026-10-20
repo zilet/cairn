@@ -54,7 +54,7 @@ export function lightWeekExemption(today: string): VolumeFloorExemption | null {
   if (attempt(() => getProgramState(today).mesocycle?.phase === "deload-due")) return "deload_due";
   if (
     attempt(() => {
-      const build = raceBuild(today);
+      const build = raceBuild(today, { templateRing: true });
       if (!build?.available) return false;
       const current = build.weeks.findIndex((week) => week.current);
       const window = current >= 0 ? build.weeks.slice(current, current + 2) : build.weeks.slice(0, 1);

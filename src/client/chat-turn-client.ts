@@ -235,6 +235,7 @@ type ChatTurnRoot = typeof globalThis & {
               (typeof row.error === "string" && row.error) ||
               "(no reply)",
             meta: row.meta,
+            receipts: row.receipts,
             created_at: row.finished_at,
             id: row.assistant_message_id,
           };

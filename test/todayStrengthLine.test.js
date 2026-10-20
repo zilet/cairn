@@ -4,6 +4,7 @@ import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { db, localDaysAgo, repo, resetTables } from "./_seed.js";
 import { todayStrengthLine } from "../dist/repo/today-strength-line.js";
+import { violatesReadingGrammar } from "../dist/repo/day-read-grammar.js";
 import { planWeek } from "../dist/domain/training/plan-week.js";
 import { forwardLook } from "../dist/repo/day-read.js";
 import { deriveSessionTitle } from "../dist/repo/training-read.js";
@@ -53,7 +54,23 @@ test("a run on a lifting day leaves the lift open, named by the plan day's NAME"
   assert.equal(line.focus, "Back, biceps & rear delts");
   assert.equal(line.state, "not_started");
   assert.deepEqual(line.run_in, { km: 4.1 });
-  assert.equal(line.text, "Run in · Pull still open");
+  // One calm sentence (a variant set rotated by date), never "Run in · Pull still open".
+  assert.match(line.text, /^(?:Your run's in\. |Run done\. |The run's in; )Pull is still (?:there|on for today)/);
+  assert.doesNotMatch(line.text, /·|still open/);
+  assert.ok(!violatesReadingGrammar(line.text), line.text);
+});
+
+test("the run-in line is a sentence on every morning it is said", () => {
+  const seen = new Set();
+  for (const day of ["2026-04-20", "2026-04-21", "2026-04-22", "2026-04-23", "2026-04-24", "2026-04-27", "2026-04-28"]) {
+    repo.addActivity({ type: "run", date: day, duration_min: 25, distance_km: 4.1 });
+    const line = todayStrengthLine(day);
+    if (line.state !== "not_started" || !line.run_in) continue;
+    assert.match(line.text, /^[A-Z].*[.]$/, line.text);
+    assert.doesNotMatch(line.text, /·/, line.text);
+    seen.add(line.text.split(/[.;]/)[0]);
+  }
+  assert.ok(seen.size >= 1, "the run-in mornings each read as a sentence");
 });
 
 test("a rest/easy read is a caveat on the plan day, never a replacement title", () => {
@@ -104,6 +121,29 @@ test("the state is read off the log: in progress, then logged", () => {
   assert.equal(done.state, "logged");
   assert.equal(done.text, "Pull · logged");
   assert.equal(done.caveat, null);
+});
+
+test("a run in beside the lift reads as one calm sentence, in progress and logged", () => {
+  db.prepare(`INSERT INTO activities (date, type, duration_min, distance_km) VALUES (?, 'running', 38, 6.6)`).run(TUE);
+  repo.logSetByName({ date: TUE, exercise: "Barbell Row", weight: 135, reps: 8, day_number: 2 });
+  const open = todayStrengthLine(TUE);
+  assert.equal(open.state, "in_progress");
+  assert.ok(open.run_in);
+  const session = db.prepare(`SELECT id FROM sessions WHERE date = ?`).get(TUE);
+  repo.finishSession(Number(session.id));
+  const done = todayStrengthLine(TUE);
+  assert.equal(done.state, "logged");
+  for (const [line, word] of [
+    [open, /under way|in progress/],
+    [done, /done|logged/],
+  ]) {
+    assert.ok(line.text.includes("Pull"), line.text);
+    assert.match(line.text, /\brun\b/i, line.text);
+    assert.match(line.text, word, line.text);
+    assert.doesNotMatch(line.text, / · /, `never the clipped form: ${line.text}`);
+    assert.match(line.text, /\.$/, line.text);
+    assert.ok(!violatesReadingGrammar(line.text), line.text);
+  }
 });
 
 test("most slots substituted → '<name>, reshaped' with the plan's own list kept", () => {
@@ -180,7 +220,7 @@ test("a session the athlete chose owns the line instead of the plan day", () => 
   assert.equal(line.focus, "Upper back, triceps & core");
   assert.equal(line.day_number, null, "no plan day to offer or start over the choice");
   assert.equal(line.state, "not_started");
-  assert.equal(line.text, "Run in · Upper Body & Core still open");
+  assert.match(line.text, /^(?:Your run's in\. |Run done\. |The run's in; )Upper Body & Core is still (?:there|on for today)/);
 });
 
 test("a chosen session logged reads as that session, not the plan day the ring lands on", () => {

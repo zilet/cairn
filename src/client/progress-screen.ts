@@ -440,7 +440,7 @@ async function renderIntake() {
     if (token !== pollToken || state.progressSeg !== "intake") return;
     const mount = view.querySelector("#intakeProgress");
     const progress = data as import("../contracts/client.js").ClientNutritionProgress;
-    if (mount) CairnProgressIntake.render(mount, progress);
+    if (mount) void withBundle("fuel", () => CairnProgressIntake.render(mount, progress));
     for (const id of progress.coverage.pending_entry_ids || []) {
       if (_intakeWatched.has(id)) continue;
       _intakeWatched.add(id);
@@ -489,7 +489,7 @@ async function renderIntake() {
     if (peek && !peek.fresh) markRefreshing(false);
     if (!peek && token === pollToken && state.progressSeg === "intake") {
       const mount = view.querySelector("#intakeProgress");
-      if (mount) mount.innerHTML = CairnProgressIntake.unavailableHtml();
+      if (mount) void withBundle("fuel", () => (mount.innerHTML = CairnProgressIntake.unavailableHtml()));
     }
   });
 }

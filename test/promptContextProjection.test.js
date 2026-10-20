@@ -153,6 +153,8 @@ const SITES = [
       // The last week of runs read the way a coach reads one — the chat coach once told
       // the athlete his morning run's numbers were "not visible" with the raw row in DATA.
       "recent_cardio",
+      // Which session lands on which date — the chat builder's own key.
+      "dated_week",
     ],
     dropped: [],
   },
@@ -250,7 +252,13 @@ test("every prompt site emits well-formed JSON carrying exactly its allowlisted 
     const parsed = JSON.parse(payload);
     // `today_path` is the one key a builder adds itself (buildDayReadPrompt computes
     // the Brief's path; getCoachContext never does), so it rides only the Brief.
-    const added = site === "day_read" && Object.hasOwn(parsed, "today_path") ? ["today_path"] : [];
+    // `dated_week` is chat's own (buildChatPrompt computes it) for the same reason.
+    const added =
+      site === "day_read" && Object.hasOwn(parsed, "today_path")
+        ? ["today_path"]
+        : site === "chat" && Object.hasOwn(parsed, "dated_week")
+          ? ["dated_week"]
+          : [];
     const expected = [...PROMPT_CONTEXT_SITES[site].keys.filter((key) => Object.hasOwn(full, key)), ...added];
     assert.deepEqual(
       Object.keys(parsed).sort(),

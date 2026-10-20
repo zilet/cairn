@@ -19,6 +19,7 @@ import { resolvedBlockPhase } from "./block-phase.js";
 import { countdownWords, dateWords, raceDistanceName } from "./display-words.js";
 import { activeBlockContext } from "./program-blocks.js";
 import { raceBuild, type RaceBuild } from "./race-build.js";
+import { raceRecoveryLine, raceRecoveryWindow } from "./race-recovery.js";
 import { localDateISO } from "./shared.js";
 import {
   STAGE_PHRASE,
@@ -61,11 +62,18 @@ export interface WeekFrame {
   } | null;
   /** A dated push stance covering the week ("push through Nov 15"). */
   push: { until: string; until_words: string; words: string } | null;
-  /** The frame's headline: the countdown, else the stage's week word. */
+  /**
+   * The frame's headline: the countdown, else — the days after a race — the recovery
+   * window said once ("Recovering from Cambridge Half · back to full on Thu",
+   * race-recovery.ts), else the stage's week word.
+   */
   headline: string | null;
   /** "Sharpen · block week 6 of 6 · push through Nov 15" — the line under the headline. */
   line: string | null;
-  /** Today's one link into Horizon: "26 days to Cambridge · Sharpen, wk 6 of 6". */
+  /**
+   * Today's one link into Horizon: "26 days to Cambridge · Sharpen week" — a race-named
+   * week by its race word alone; a block-named one "Build, wk 3 of 5".
+   */
   glance: string | null;
 }
 
@@ -102,7 +110,7 @@ function weekOffset(date: string, asOf: string): number {
  */
 export function weekStage(date: string, opts: { build?: RaceBuild | null; asOf?: string } = {}): WeekStage | null {
   const asOf = opts.asOf ?? date;
-  const build = opts.build !== undefined ? opts.build : safe(() => raceBuild(asOf), null);
+  const build = opts.build !== undefined ? opts.build : safe(() => raceBuild(asOf, { templateRing: true }), null);
   if (build?.available) {
     const rung = (build.weeks ?? []).find((w) => w.week_start === mondayOf(date));
     const fromRung = rungStage(rung);
@@ -147,7 +155,7 @@ function shortEvent(event: string): string {
 export function weekFrameLine(date?: string, opts: { build?: RaceBuild | null; asOf?: string } = {}): WeekFrame {
   const d = String(date || localDateISO()).slice(0, 10);
   const asOf = opts.asOf ?? d;
-  const build = opts.build !== undefined ? opts.build : safe(() => raceBuild(asOf), null);
+  const build = opts.build !== undefined ? opts.build : safe(() => raceBuild(asOf, { templateRing: true }), null);
   const stage = safe(() => weekStage(d, { build, asOf }), null);
 
   // The block's week, the week as it runs (a later week is the block's next one).
@@ -185,16 +193,32 @@ export function weekFrameLine(date?: string, opts: { build?: RaceBuild | null; a
     push = { until: stance.until, until_words: untilWords, words: `push through ${untilWords}` };
   }
 
+  // The days after a race (race-recovery.ts): said once, for the week still holding them.
+  const recovery = countdown ? null : safe(() => raceRecoveryWindow(asOf), null);
+  const recoveryHere = recovery != null && mondayOf(d) <= recovery.ends_on && weekEnd >= asOf;
+  const recoveryLine = recoveryHere ? safe(() => raceRecoveryLine(asOf, recovery), null) : null;
+
   const lineParts = [stage?.word ?? null, block?.words ?? null, push?.words ?? null].filter(Boolean) as string[];
   const line = lineParts.length ? lineParts.join(" · ") : null;
-  const headline = countdown?.words ?? stage?.week_word ?? null;
-  const glanceStage = stage ? `${stage.word}${block ? `, wk ${block.week} of ${block.of}` : ""}` : block ? `Block week ${block.week} of ${block.of}` : null;
+  const headline = countdown?.words ?? recoveryLine ?? stage?.week_word ?? null;
+  // A race-named week glances by its race word alone ("12 days to Cambridge · Taper
+  // week"): the lifting block's "wk 1 of 6" beside a race phase read as the race's own
+  // count (2026-10-20, "Taper, wk 1 of 6" twelve days out). The block's week stays in
+  // `line`, where it is named as the block's.
+  const glanceStage =
+    stage?.source === "race"
+      ? stage.week_word
+      : stage
+        ? `${stage.word}${block ? `, wk ${block.week} of ${block.of}` : ""}`
+        : block
+          ? `Block week ${block.week} of ${block.of}`
+          : null;
   const glanceLead = countdown
     ? countdown.days === 0
       ? `${shortEvent(countdown.event)} is today`
       : `${countdown.days} ${countdown.days === 1 ? "day" : "days"} to ${shortEvent(countdown.event)}`
     : null;
-  const glance = [glanceLead, glanceStage].filter(Boolean).join(" · ") || null;
+  const glance = (recoveryLine ?? [glanceLead, glanceStage].filter(Boolean).join(" · ")) || null;
 
   return { date: d, week_start: mondayOf(d), stage, block, countdown, push, headline, line, glance };
 }

@@ -27,6 +27,7 @@ import { type ReasonProvenance, normalizeHistoricalReason, validReasonProvenance
 import { isItemSpecificChangeReason } from "../domain/training/exercise-notes.js";
 import { orderPlanItemsForEffect, planItemsOutOfOrder } from "../domain/training/plan-item-order.js";
 import { changeMatchesPrescription, isPersonSuperseded, personSupersededMarker } from "./plan-annotation-release.js";
+import { planDayRewriteGuard, supersedePlanAdaptationsForDeletedDay } from "./plan-adaptations.js";
 
 export { PlanQualityError, pressSlotKey, validateTrainingPlan } from "./plan-quality.js";
 
@@ -1205,6 +1206,13 @@ export interface PlanChange {
   // (the vary/rotate intent) — replaces the matching plan item's exercise while
   // keeping its slot + rep scheme, starting the new movement light (log actual).
   swap?: { from?: string | null; to?: string | null } | null;
+  // A change SCOPED TO A DATE (YYYY-MM-DD): it lands now, and the first day after it the
+  // slot goes back to what it held before (src/repo/plan-adaptations.ts). The proposal
+  // apply records the restoration; applyPlanChange itself writes the change as any other.
+  until?: string | null;
+  // With `until`: a short overlay ON TOP of whatever the slot holds ('trip', the Brief's
+  // one-day easier version) — it never re-scopes a race adaptation beneath it.
+  layer?: "trip" | null;
 }
 
 // The stored week's quality report, as GET /api/plan/quality and get_plan_quality show
@@ -2065,6 +2073,9 @@ export function savePlanDay(
 ) {
   const dayType = resolvePlanDayType(opts.day_type);
   const list = strengthItemsOnly(items);
+  // A day rewritten under a live race adaptation: a rebuilt day (or a restructure that
+  // rewrites what the adaptation stands on) supersedes it (plan-adaptations.ts).
+  const adaptationGuard = planDayRewriteGuard(day_number);
   const existing = db.prepare(`SELECT id FROM plan_days WHERE day_number = ?`).get(day_number) as any;
   let dayId: number;
   // The day's slots as they stood, by movement — what each rewrite is stamped against.
@@ -2121,6 +2132,7 @@ export function savePlanDay(
       ),
     });
   });
+  adaptationGuard?.settle(opts.by ?? "brain");
   // A changed plan day can change what "today" points at (focus/frequency) — refresh
   // the cached Brief so an applied edit isn't read against the old day from any surface.
   if (!opts.deferDayReadInvalidation) invalidateDayRead();
@@ -2164,6 +2176,7 @@ export function deletePlanDay(
   if (!d) return { deleted: 0, day_number };
   db.prepare(`UPDATE sessions SET plan_day_id = NULL WHERE plan_day_id = ?`).run(d.id); // keep history, drop the link
   const r = db.prepare(`DELETE FROM plan_days WHERE id = ?`).run(d.id); // plan_items cascade
+  if (r.changes) supersedePlanAdaptationsForDeletedDay(day_number); // nothing left to return to
   if (r.changes && !opts.deferTrainingVersionBump) afterSqliteCommit(bumpTrainingDataVersion); // removing a day changes week_planned
   if (r.changes && !opts.deferDayReadInvalidation) invalidateDayRead();
   if (r.changes && !opts.deferBrainEvent)

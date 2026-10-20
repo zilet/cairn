@@ -58,7 +58,7 @@ export const CLIENT_ROUTE_DEFINITIONS = {
   tabs: ["today", "session", "stand", "plan", "progress", "chat", "me", "settings", "horizon", "you", "day"],
   sections: {
     plan: ["edit", "endurance", "food", "meals", "coach"],
-    progress: ["overview", "trend", "volume", "endurance", "weight", "measurements", "calendar", "sessions", "program", "intake", "energy"],
+    progress: ["week", "overview", "trend", "volume", "endurance", "weight", "measurements", "calendar", "sessions", "program", "intake", "energy"],
     // Health (the Stand view) is every health tool as a first-class sub-view of
     // You. "me" health sections survive only as parse targets that redirect here.
     // "domain" is the one section that carries a payload: the opened marker-domain

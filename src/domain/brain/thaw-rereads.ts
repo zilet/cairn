@@ -39,7 +39,9 @@ export function thawRequestedTier(context: Record<string, any>, leadMode: CairnL
 
 // The one-off re-read of a conference-marked clinician floor (see the thaw). Versioned so
 // a later rule change can re-read again without a migration.
-export const CONFERENCE_FLOOR_REREAD_VERSION = 1;
+// v2 (2026-10-19): a qualifier alias ("Lean Mass (Total)") no longer names a marker, so
+// rows a bare "total" put on the floor are re-read once more.
+export const CONFERENCE_FLOOR_REREAD_VERSION = 2;
 
 export function conferenceFloorNeedsReread(
   decision: BrainDecision,

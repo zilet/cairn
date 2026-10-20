@@ -10,6 +10,7 @@
 // Changes nothing. Suggestion voice only — no scores, no gates.
 
 import { db } from "../../db.js";
+import { travelDaysIn } from "../../repo/travel-days.js";
 import { addDaysISO, mondayOf } from "../../lib/dates.js";
 import { statedWeekdayNames, weekLayoutRead } from "./week-layout.js";
 import { planItemsOutOfOrder } from "./plan-item-order.js";
@@ -18,10 +19,19 @@ import { getEnduranceSchedule, statedRunDows, WEEKDAY_NAMES, isoDow } from "../.
 import {
   planDayRole,
   selectAdaptivePlanDay,
+  selectedPlanDayForDate,
   thisWeekPlanDayMap,
   type WeekdayPlanDayRole,
 } from "../../repo/plan-selection.js";
-import { loggedSessionDay, planDayTitle, sessionDayCandidates } from "../../repo/session-day.js";
+import { planDayTitle } from "../../repo/session-day.js";
+import {
+  sessionForDate,
+  strengthLineDayNumber,
+  weekSessions,
+  weekStrengthPlacement,
+  type PlacementMove,
+  type WeekSessionRow,
+} from "../../repo/week-strength-placement.js";
 import { activitySportWhere, RUN_SPORT_PATTERNS } from "../../repo/endurance-sports.js";
 import { withoutShadowActivities } from "../../repo/activity-shadow.js";
 import { weekWins } from "../../repo/sessions.js";
@@ -33,6 +43,9 @@ import { distanceWords, type DistanceUnit } from "../../repo/display-words.js";
 import { localDateISO } from "../../repo/shared.js";
 import { planDayStrengthGroups } from "../../repo/training-read.js";
 import { todayStrengthLine, type TodayStrengthLine } from "../../repo/today-strength-line.js";
+import { datedPlanDayFocus, legTrimFocus, legTrimNote, legTrimClause, withLegTrimClause, type LegTrim } from "../../repo/plan-day-focus.js";
+import { pickDayVariant } from "../../repo/brain/day-read-rules.js";
+import { planDayLegTrimOn } from "../../repo/plan-day-trim.js";
 
 export type PlanWeekStatus = "done" | "today" | "upcoming" | "rest" | "open";
 
@@ -51,6 +64,23 @@ export interface PlanWeekPlanDay {
    * the athlete will actually be offered; this keeps the map's day one field away.
    */
   swapped_from?: { day_number: number; name: string };
+  /**
+   * One server-authored line saying why this day differs from its usual slot — a swap
+   * (today's selection handed the day to another plan day, `after_run` when a run
+   * logged today is the cause), the bumped day's new weekday (`moved`, said on both
+   * cells), a race-build leg trim (`taper`), or a trip day (`trip`). One note per cell,
+   * in that priority — but a swapped / moved cell that is also trimmed carries the trim
+   * in the same sentence ("Lower lands here this week, lighter for the taper."), so the
+   * taper is never lost behind the move. Absent when the day reads as itself. Printed verbatim.
+   */
+  note?: PlanWeekNote | null;
+}
+
+export type PlanWeekNoteKind = "swap" | "moved" | "taper" | "trip" | "after_run";
+
+export interface PlanWeekNote {
+  kind: PlanWeekNoteKind;
+  text: string;
 }
 
 export interface PlanWeekSession {
@@ -100,6 +130,8 @@ export interface PlanWeekDay {
   session: PlanWeekSession | null;
   run: PlanWeekRun | null;
   hard: boolean;
+  /** Inside a trip (a context event): where he is that date. Absent date (template mode) is null. */
+  travel: { title: string; location: string | null } | null;
   /**
    * TODAY's cell only: the day read's suggestion, carried from the one strength line
    * so the strip and the Brief say the same thing about one day ("Pull · lighter
@@ -125,6 +157,17 @@ export interface PlanWeek {
   strength_line: TodayStrengthLine | null;
   /** The athlete's run units (settings.run_units): every `km` here is printed in them. */
   run_units: "km" | "mi";
+  /**
+   * Plan days displaced this week that no later weekday could take (week-strength-placement.ts
+   * `unplaced`) — said, never silently dropped. One calm server sentence each, printed verbatim.
+   */
+  unplaced: PlanWeekUnplaced[];
+}
+
+export interface PlanWeekUnplaced {
+  day_number: number;
+  name: string;
+  text: string;
 }
 
 type TemplateDay = {
@@ -136,21 +179,6 @@ type TemplateDay = {
   day_type?: string | null;
   items?: unknown[];
   names?: string[];
-};
-
-type WeekSessionRow = {
-  id: number;
-  date: string;
-  plan_day_id: number | null;
-  day_number: number | null;
-  day_name: string | null;
-  finished: boolean;
-  /** The plan day this session actually WAS (src/repo/session-day.ts); null when it shows as itself. */
-  resolved_day_number: number | null;
-  /** The plan day the logged work resolves to, whatever it is called — where a ring-ordered week files it. */
-  placed_day_number: number | null;
-  /** Its display name — the same answer the session lists and the today line print. */
-  title: string;
 };
 
 function shortWeekday(dow: number): string {
@@ -193,45 +221,6 @@ function toPlanWeekPlanDay(day: TemplateDay): PlanWeekPlanDay {
   };
 }
 
-function weekSessions(weekStart: string, weekEnd: string): WeekSessionRow[] {
-  try {
-    const rows = db
-      .prepare(
-        `SELECT s.id AS id, s.date AS date, s.plan_day_id AS plan_day_id,
-                pd.day_number AS day_number, pd.name AS day_name,
-                s.finished_at AS finished_at
-           FROM sessions s
-           LEFT JOIN plan_days pd ON pd.id = s.plan_day_id
-          WHERE s.date >= ? AND s.date <= ?
-            AND EXISTS (SELECT 1 FROM logged_sets l WHERE l.session_id = s.id)
-          ORDER BY s.date ASC, s.id ASC`
-      )
-      .all(weekStart, weekEnd) as any[];
-    const candidates = sessionDayCandidates();
-    return rows.map((r) => {
-      const id = Number(r.id);
-      const plan_day_id = r.plan_day_id == null ? null : Number(r.plan_day_id);
-      // One answer for the cell's plan day AND its title: the strip printed the title,
-      // Horizon the plan day, and a redraw that rewrote a row in place made them
-      // two different days (src/repo/session-day.ts).
-      const logged = loggedSessionDay(id, plan_day_id, candidates);
-      return {
-        id,
-        date: String(r.date),
-        plan_day_id,
-        day_number: r.day_number == null ? null : Number(r.day_number),
-        day_name: r.day_name == null ? null : String(r.day_name),
-        finished: !!r.finished_at,
-        resolved_day_number: logged.day_number,
-        placed_day_number: logged.placed_day_number,
-        title: logged.title,
-      };
-    });
-  } catch {
-    return [];
-  }
-}
-
 type WeekRunLog = { date: string; km: number | null };
 
 /** Runs actually logged this week through `through` — the log is the truth for "did". */
@@ -256,10 +245,6 @@ function weekRunLog(weekStart: string, through: string): WeekRunLog[] {
   } catch {
     return [];
   }
-}
-
-function sessionForDate(rows: WeekSessionRow[], date: string): WeekSessionRow | null {
-  return rows.find((r) => r.date === date) ?? null;
 }
 
 function toPlanWeekSession(hit: WeekSessionRow): PlanWeekSession {
@@ -496,10 +481,7 @@ export function planWeek(date?: string): PlanWeek {
       return null;
     }
   })();
-  const lineDayNumber =
-    strengthLine && strengthLine.role === "strength" && strengthLine.day_number != null
-      ? Number(strengthLine.day_number)
-      : null;
+  const lineDayNumber = strengthLineDayNumber(strengthLine);
 
   let todayDayNumber: number | null = lineDayNumber;
   if (todayDayNumber == null) {
@@ -508,6 +490,24 @@ export function planWeek(date?: string): PlanWeek {
     } catch {
       todayDayNumber = null;
     }
+  }
+
+  // Which plan day sits on which date — the ONE placement the race build's leg map also
+  // reads (src/repo/week-strength-placement.ts): the log owns a logged date, today names
+  // the strength line's day, and when that line handed today a different day than the
+  // map laid, the two trade places (2026-10-20: a morning run turned Tuesday's Lower into
+  // Push B, and Friday read Push B too).
+  const placement = weekStrengthPlacement(asOf, { map, sessions, strengthLine });
+  const movedTo = placement.moved_to;
+  const moves = placement.moves;
+  const unplaced: PlanWeekUnplaced[] = [];
+  for (const u of placement.unplaced) {
+    const templateDay = byNumber.get(u.day_number);
+    if (!templateDay) continue;
+    const name = toPlanWeekPlanDay(templateDay).name;
+    const set = u.key_runs ? UNPLACED_KEY_RUNS : UNPLACED_NO_SLOT;
+    const text = pickDayVariant(set, asOf, `plan_week_unplaced:${u.key_runs ? "key_runs" : "no_slot"}`)(name);
+    unplaced.push({ day_number: u.day_number, name, text });
   }
 
   const isHard = (plan_day: PlanWeekPlanDay | null, run: PlanWeekRun | null): boolean =>
@@ -532,28 +532,22 @@ export function planWeek(date?: string): PlanWeek {
       const sessionRow = sessionForDate(sessions, cellDate);
       // The logged session owns its cell. A session the resolver cannot place on the
       // plan (a freestyle day, a session on the rest day) shows as itself, with no
-      // plan-day name borrowed from the forecast.
-      let templateDay: TemplateDay | null;
-      if (sessionRow) {
-        templateDay =
-          sessionRow.resolved_day_number != null ? (byNumber.get(sessionRow.resolved_day_number) ?? null) : null;
-      } else {
-        const candidate = map.get(dow) ?? null;
-        templateDay = candidate ? (byNumber.get(candidate.day_number) ?? null) : null;
+      // plan-day name borrowed from the forecast. Today, nothing logged yet, on a
+      // lifting weekday: the cell names the strength line's day, and the map's own day
+      // rides along as `swapped_from` when they differ.
+      const placed = placement.on(cellDate);
+      const mappedDay =
+        placed && !placed.logged && placed.mapped_day_number != null ? (byNumber.get(placed.mapped_day_number) ?? null) : null;
+      const templateDay: TemplateDay | null =
+        (placed?.day_number != null ? byNumber.get(placed.day_number) : null) ?? (placed?.logged ? null : mappedDay);
+      const plan_day = templateDay ? toPlanWeekPlanDay(templateDay) : null;
+      if (plan_day && mappedDay && mappedDay.day_number !== plan_day.day_number) {
+        const mapped = toPlanWeekPlanDay(mappedDay);
+        plan_day.swapped_from = { day_number: mapped.day_number, name: mapped.name };
       }
-      let plan_day = templateDay ? toPlanWeekPlanDay(templateDay) : null;
-      // Today, nothing logged yet, on a lifting weekday: the cell names the strength
-      // line's day. The map's own day rides along as `swapped_from` when they differ.
-      if (!sessionRow && cellDate === asOf && map.has(dow) && lineDayNumber != null) {
-        const lineDay = byNumber.get(lineDayNumber) ?? null;
-        if (lineDay) {
-          const mapped = plan_day;
-          plan_day = toPlanWeekPlanDay(lineDay);
-          if (mapped && mapped.day_number !== plan_day.day_number) {
-            plan_day.swapped_from = { day_number: mapped.day_number, name: mapped.name };
-          }
-        }
-      }
+      // The focus as it reads on THIS date: a stored "on the threshold-run day" written
+      // for another layout never rides onto a weekday it is not true of.
+      if (plan_day) plan_day.focus = datedPlanDayFocus(plan_day.focus, cellDate);
       const session = sessionRow ? toPlanWeekSession(sessionRow) : null;
       // Runs are dated by the agenda: a completion on this date, or an open intent
       // suggested for it. An intent with no date stays off the calendar — putting it
@@ -607,6 +601,7 @@ export function planWeek(date?: string): PlanWeek {
         session,
         run,
         hard: isHard(plan_day, run),
+        travel: null,
       });
     }
   } else {
@@ -640,6 +635,7 @@ export function planWeek(date?: string): PlanWeek {
         session,
         run,
         hard: isHard(plan_day, run),
+        travel: null,
       });
     }
     // A session the plan cannot place (nothing it lifted is on any plan day), or a second
@@ -658,6 +654,7 @@ export function planWeek(date?: string): PlanWeek {
         session,
         run: null,
         hard: false,
+        travel: null,
       });
     }
   }
@@ -732,6 +729,45 @@ export function planWeek(date?: string): PlanWeek {
     }
   }
 
+  // Away dates, said on the cell (the plan itself is untouched — a trip is information).
+  try {
+    const away = travelDaysIn(weekStart, weekEnd);
+    for (const cell of days) cell.travel = cell.date ? (away.get(cell.date) ?? null) : null;
+  } catch {
+    for (const cell of days) cell.travel = null;
+  }
+
+  // The race build's leg trim on each lift day still ahead — read ONCE per cell, through
+  // the one dated trim read (planDayLegTrimOn: this morning's envelope, else the stress
+  // budget's calendar half). The cell's focus says it the way the day page and the
+  // today line do (legTrimFocus), so Train's strip and the day page read one day; the
+  // note below composes it with any swap / move on the same cell.
+  const trims = new Map<string, LegTrim>();
+  for (const cell of days) {
+    const planDay = cell.plan_day;
+    if (!planDay || planDay.role !== "strength" || !cell.date || cell.date < asOf || cell.status === "done") continue;
+    let trim: LegTrim | null = null;
+    try {
+      trim = planDayLegTrimOn(cell.date, planDay.day_number, {
+        today: asOf,
+        planItems: byNumber.get(planDay.day_number)?.items ?? [],
+      });
+    } catch {
+      trim = null;
+    }
+    if (!trim) continue;
+    trims.set(cell.date, trim);
+    planDay.focus = legTrimFocus(planDay.focus, trim, cell.date);
+  }
+
+  // Why a day differs from its usual slot — one line per cell. Garnish: the week
+  // stands without it, so an unreadable input drops the note, never the strip.
+  try {
+    attachPlanWeekNotes(days, { asOf, strengthLine, byNumber, movedTo, moves, trims });
+  } catch {
+    /* no notes */
+  }
+
   return {
     as_of: asOf,
     week_start: weekStart,
@@ -745,7 +781,204 @@ export function planWeek(date?: string): PlanWeek {
     schedule,
     strength_line: strengthLine,
     run_units: runUnits,
+    unplaced,
   };
+}
+
+// ---------- the cell note: why this day differs from its usual slot ----------
+//
+// Every reason is READ, never re-derived: the swap is today's one strength line against
+// the weekday map (and the selection's own reason, plan-selection.ts), the bump is the
+// trade the strip already made above, the leg trim is the one dated trim read
+// (planDayLegTrimOn, plan-day-trim.ts) in the one trim wording (legTrimNote,
+// plan-day-focus.ts), and the trip is travel-days.ts. A cell that is BOTH swapped / moved
+// and trimmed keeps one note, its lead fact closed with the trim's clause
+// (withLegTrimClause) — "Lower lands here this week, lighter for the taper." — so the
+// taper is never lost behind the move. A stable week fires the same rule for days, so every
+// line is a variant set rotated by date (pickDayVariant). Suggestion voice: a trip day
+// is the athlete's to skip, a trim is a lighter dose, never a gate.
+
+const SWAP_WITH_REASON: ReadonlyArray<(day: string, mapped: string, reason: string) => string> = [
+  (day, mapped, reason) => `${day} in place of ${mapped} — ${reason}.`,
+  (day, mapped, reason) => `Today is ${day} rather than ${mapped}: ${reason}.`,
+  (day, mapped, reason) => `${day} today instead of ${mapped} — ${reason}.`,
+];
+const SWAP_PLAIN: ReadonlyArray<(day: string, mapped: string) => string> = [
+  (day, mapped) => `${day} today in place of ${mapped}.`,
+  (day, mapped) => `Today is ${day} rather than ${mapped}.`,
+  (day, mapped) => `${day} steps in for ${mapped} today.`,
+];
+const AFTER_RUN: ReadonlyArray<(day: string) => string> = [
+  (day) => `${day} today, since you've already run.`,
+  (day) => `${day} today — the run is already in.`,
+  (day) => `With the run already in, today is ${day}.`,
+];
+const MOVES_TO: ReadonlyArray<(mapped: string, weekday: string) => string> = [
+  (mapped, weekday) => `${mapped} moves to ${weekday}.`,
+  (mapped, weekday) => `${mapped} shifts to ${weekday}.`,
+  (mapped, weekday) => `${mapped} picks up on ${weekday}.`,
+];
+const MOVED_HERE: ReadonlyArray<(mapped: string, from: string, day: string) => string> = [
+  (mapped, from, day) => `${mapped} moved here from ${from}, which went to ${day}.`,
+  (mapped, from, day) => `${mapped} lands here this week — ${from} went to ${day}.`,
+  (mapped, from, day) => `Moved from ${from}: ${day} took that day, so ${mapped} is here.`,
+];
+// The moved day that is also trimmed: one sentence, the move then the trim's clause.
+// A displaced day with no later weekday to take it: said, never silently dropped — and
+// the athlete's to place, never a gate.
+const UNPLACED_KEY_RUNS: ReadonlyArray<(name: string) => string> = [
+  (name) => `${name} didn't fit this week — the key runs took its days. Say the word and I'll find it a spot.`,
+  (name) => `The key runs left no clean day for ${name} this week. Say the word and I'll find it a spot.`,
+  (name) => `${name} has no open day left around this week's key runs. Say the word and I'll find it a spot.`,
+];
+const UNPLACED_NO_SLOT: ReadonlyArray<(name: string) => string> = [
+  (name) => `${name} didn't fit this week — the other days are spoken for. Say the word and I'll find it a spot.`,
+  (name) => `No open day is left for ${name} this week. Say the word and I'll find it a spot.`,
+  (name) => `${name} has no day left this week. Say the word and I'll find it a spot.`,
+];
+
+// A moved day whose date was taken by a session that names no plan day.
+const MOVED_HERE_PLAIN: ReadonlyArray<(mapped: string, from: string) => string> = [
+  (mapped, from) => `${mapped} moved here from ${from}.`,
+  (mapped, from) => `${mapped} lands here this week, moved from ${from}.`,
+  (mapped, from) => `Moved from ${from}, so ${mapped} is here.`,
+];
+const MOVED_HERE_PLAIN_TRIMMED: ReadonlyArray<(mapped: string, from: string, clause: string) => string> = [
+  (mapped, from, clause) => `${mapped} moved here from ${from}, ${clause}.`,
+  (mapped, _from, clause) => `${mapped} lands here this week, ${clause}.`,
+  (mapped, from, clause) => `Moved from ${from}, ${mapped} is here, ${clause}.`,
+];
+const MOVED_HERE_TRIMMED: ReadonlyArray<(mapped: string, from: string, day: string, clause: string) => string> = [
+  (mapped, from, _day, clause) => `${mapped} moved here from ${from}, ${clause}.`,
+  (mapped, _from, _day, clause) => `${mapped} lands here this week, ${clause}.`,
+  (mapped, from, day, clause) => `${from} went to ${day}, so ${mapped} is here, ${clause}.`,
+];
+const TRIP_DAY: ReadonlyArray<(day: string, where: string | null) => string> = [
+  (_day, where) => `Trip day${where ? ` (${where})` : ""} — lift if you can, skip it freely.`,
+  (day, where) => `You're away${where ? ` in ${where}` : ""} — ${day} is there if it fits, and fine to skip.`,
+  (day) => `Travel day: ${day} if the day allows, and no catch-up if not.`,
+];
+
+interface NoteContext {
+  asOf: string;
+  strengthLine: TodayStrengthLine | null;
+  byNumber: Map<number, TemplateDay>;
+  movedTo: string | null;
+  /** Every displaced day the placement re-placed (week-strength-placement.ts), today's included. */
+  moves: readonly PlacementMove[];
+  /** The leg trim per lift-day date still ahead (planDayLegTrimOn), read once by planWeek. */
+  trims: Map<string, LegTrim>;
+}
+
+function weekdayName(iso: string): string {
+  return WEEKDAY_NAMES[isoDow(iso)] ?? iso;
+}
+
+// The selection's own athlete-facing reason for today's swap (plan-selection.ts
+// selectionReason) — its lead clause only: a strip cell names why, not an inventory.
+function swapReason(asOf: string, dayNumber: number): string | null {
+  try {
+    const selected = selectedPlanDayForDate(asOf);
+    if (!selected || Number(selected.selection?.selected?.day_number ?? selected.day_number) !== dayNumber) return null;
+    const raw = String(selected.selection?.reason ?? "").trim();
+    if (!raw) return null;
+    const lead = raw
+      .split(/,\s+while\s+/)[0]
+      .replace(/[.;:,\s]+$/, "")
+      .trim();
+    return lead || null;
+  } catch {
+    return null;
+  }
+}
+
+function attachPlanWeekNotes(days: PlanWeekDay[], ctx: NoteContext): void {
+  const { asOf } = ctx;
+
+  // 1. The swap on today's cell, and the bumped day's new weekday on both cells.
+  const today = days.find((cell) => cell.date === asOf && cell.plan_day?.swapped_from);
+  if (today?.plan_day?.swapped_from) {
+    const day = today.plan_day.name;
+    const mapped = today.plan_day.swapped_from.name;
+    const movedCell = ctx.movedTo ? days.find((cell) => cell.date === ctx.movedTo) : null;
+    const movedLanded =
+      !!movedCell?.date &&
+      !!movedCell.plan_day &&
+      movedCell.plan_day.day_number === today.plan_day.swapped_from.day_number;
+    const ranToday = !!ctx.strengthLine?.run_in;
+    let lead: string;
+    if (ranToday) {
+      lead = pickDayVariant(AFTER_RUN, asOf, "plan_week_note:after_run")(day);
+    } else {
+      const reason = swapReason(asOf, today.plan_day.day_number);
+      lead = reason
+        ? pickDayVariant(SWAP_WITH_REASON, asOf, "plan_week_note:swap_reason")(day, mapped, reason)
+        : pickDayVariant(SWAP_PLAIN, asOf, "plan_week_note:swap")(day, mapped);
+    }
+    const moves =
+      movedLanded && movedCell?.date
+        ? ` ${pickDayVariant(MOVES_TO, asOf, "plan_week_note:moves_to")(mapped, weekdayName(movedCell.date))}`
+        : "";
+    // Today's day trimmed too (the morning's envelope, or the taper's calendar trim):
+    // the lead closes with the trim, still one note.
+    const todayTrim = ctx.trims.get(asOf) ?? null;
+    if (todayTrim) lead = withLegTrimClause(lead, todayTrim, asOf);
+    today.plan_day.note = { kind: ranToday ? "after_run" : "swap", text: `${lead}${moves}` };
+    if (movedLanded && movedCell?.plan_day && movedCell.date) {
+      const movedTrim = ctx.trims.get(movedCell.date) ?? null;
+      const clause = movedTrim ? legTrimClause(movedTrim, movedCell.date) : null;
+      movedCell.plan_day.note = {
+        kind: "moved",
+        text: clause
+          ? pickDayVariant(MOVED_HERE_TRIMMED, movedCell.date, "plan_week_note:moved")(mapped, weekdayName(asOf), day, clause)
+          : pickDayVariant(MOVED_HERE, movedCell.date, "plan_week_note:moved")(mapped, weekdayName(asOf), day),
+      };
+    }
+  }
+
+  // 1b. Every other displaced day where it landed: a day logged in place of the one the
+  // map laid (2026-10-20: Push B logged on Tuesday's Lower put Lower on Friday). The cell
+  // that took the date is done, and says nothing; the cell the day landed on says why.
+  for (const move of ctx.moves) {
+    const movedCell = days.find((cell) => cell.date === move.to_date);
+    const planDay = movedCell?.plan_day;
+    if (!movedCell?.date || !planDay || planDay.note || planDay.day_number !== move.day_number) continue;
+    if (movedCell.status === "done") continue;
+    const fromCell = days.find((cell) => cell.date === move.from_date);
+    const tookIt = fromCell?.session?.title || fromCell?.plan_day?.name || null;
+    const from = weekdayName(move.from_date);
+    const trim = ctx.trims.get(movedCell.date) ?? null;
+    const clause = trim ? legTrimClause(trim, movedCell.date) : null;
+    const key = "plan_week_note:moved";
+    const text = tookIt
+      ? clause
+        ? pickDayVariant(MOVED_HERE_TRIMMED, movedCell.date, key)(planDay.name, from, tookIt, clause)
+        : pickDayVariant(MOVED_HERE, movedCell.date, key)(planDay.name, from, tookIt)
+      : clause
+        ? pickDayVariant(MOVED_HERE_PLAIN_TRIMMED, movedCell.date, key)(planDay.name, from, clause)
+        : pickDayVariant(MOVED_HERE_PLAIN, movedCell.date, key)(planDay.name, from);
+    planDay.note = { kind: "moved", text };
+  }
+
+  // 2. The race build's leg trim, then 3. a trip day — on the lift days still ahead.
+  for (const cell of days) {
+    const planDay = cell.plan_day;
+    if (!planDay || planDay.note || planDay.role !== "strength" || !cell.date || cell.date < asOf) continue;
+    if (cell.status === "done") continue;
+    // The leg trim in the one wording every dated plan day prints (plan-day-focus.ts),
+    // read once above off the one trim read (plan-day-trim.ts).
+    const trimText = legTrimNote(planDay.name, ctx.trims.get(cell.date) ?? null, cell.date);
+    if (trimText) {
+      planDay.note = { kind: "taper", text: trimText };
+      continue;
+    }
+    if (cell.travel) {
+      planDay.note = {
+        kind: "trip",
+        text: pickDayVariant(TRIP_DAY, cell.date, "plan_week_note:trip")(planDay.name, cell.travel.location),
+      };
+    }
+  }
 }
 
 /** The athlete's run units (athleteUnits(), km when settings cannot be read). */

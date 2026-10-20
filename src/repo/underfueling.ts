@@ -185,17 +185,17 @@ function hasAthleteResponse(families: Set<CausalFamily>): boolean {
 // neither is capped at `OPEN_TRIP_MAX_DAYS` from its start, so a trip nobody closed
 // cannot blind the recovery read forever.
 export const OPEN_TRIP_MAX_DAYS = 21;
-function tripWindowEnd(row: any): string | null {
+export function tripWindowEnd(row: any): string | null {
   const start = row?.start_date ? String(row.start_date) : null;
   const ends = [row?.end_date, row?.resolved_at].filter(Boolean).map(String);
   if (!ends.length) return start ? addDaysISO(start, OPEN_TRIP_MAX_DAYS) : null;
   return ends.sort()[0];
 }
-function tripRows(from: string, to: string): any[] {
+export function tripRows(from: string, to: string): any[] {
   try {
     return db
       .prepare(
-        `SELECT start_date, end_date, resolved_at FROM context_events
+        `SELECT title, meta_json, start_date, end_date, resolved_at FROM context_events
           WHERE kind = 'trip' AND (archived IS NULL OR archived = 0)
             AND (start_date IS NULL OR start_date <= ?)
             AND (end_date IS NULL OR end_date >= ?)

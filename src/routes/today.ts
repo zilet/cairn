@@ -13,6 +13,8 @@ import {
   todayStrengthLine,
 } from "../domain/training/index.js";
 import {
+  answerBriefAsk,
+  briefAsks,
   dayRecord,
   dayRecordDate,
   markTodayAgendaSeen,
@@ -184,6 +186,23 @@ todayRouter.post("/today-agenda/dismiss", (req, res) => {
   if (!id) return res.status(400).json({ ok: false, error: "id required" });
   recordDismissal("today_agenda", id);
   res.json({ ok: true, id });
+});
+
+// The Brief's quiet questions (src/domain/today/brief-asks.ts): the trip-eve "Lifting
+// on the trip?" and an unanswered race-adaptation return, back ONCE. Pull, never push —
+// the Brief reads this when it opens; nothing notifies. Not memoized: the evening edge
+// and an answer both move it. The answer writes through existing paths and returns
+// `{ok:false, error}` at HTTP 200 when it cannot land (the designed failure signal).
+todayRouter.get("/today-asks", (req, res) => {
+  res.json(briefAsks({ date: req.query.date ? String(req.query.date) : undefined }));
+});
+todayRouter.post("/today-asks/answer", (req, res) => {
+  const b = req.body ?? {};
+  try {
+    res.json(answerBriefAsk({ key: b.key, answer: b.answer, date: b.date }));
+  } catch (error: any) {
+    res.json({ ok: false, key: String(b.key ?? ""), error: error?.message ?? String(error) });
+  }
 });
 
 // The team's-week digest — the deterministic "here's what your team did this

@@ -7,6 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { repo } from "./_seed.js";
 import { dayDetail, dayDetailRunStructure, dayDetailWeekAsOf } from "../dist/domain/training/day-detail.js";
+import { createBlock } from "../dist/repo/program-blocks.js";
 import { planDayProgression } from "../dist/repo/progression.js";
 import { planWeek } from "../dist/domain/training/plan-week.js";
 import { planExercisesRouter } from "../dist/routes/plan-exercises.js";
@@ -332,7 +333,8 @@ test("a lift and a key run on the same day share one note", (t) => {
   assert.ok(read.stack, "one note for the shared day");
   assert.deepEqual(read.stack.neighbours, [], "the same day, no neighbour");
   assert.match(read.stack.text, /Lower A/);
-  assert.match(read.headline, /^A Lower A day, then the quality session \(/);
+  assert.match(read.headline, /^(Lower A, then|Lower A first, then) the quality session \(/);
+  assert.doesNotMatch(read.headline, /^An? |\bday\b/);
   assert.equal(read.focus, `Lower A · ${read.run.label}`);
 });
 
@@ -379,4 +381,27 @@ test("GET /api/plan/day-detail and get_plan_day_detail answer the same read", as
   const far = await call({ date: "2026-06-01" });
   assert.equal(far.status, 200);
   assert.equal(far.body, null, "single-row absent: 200 + null");
+});
+
+test("a taper week 11 days out counts the race in days, and the race leads over the block line", (t) => {
+  seedHybridWeek(t);
+  repo.setProfile({
+    endurance_goal: { mode: "race", event: "Riverside Half", date: "2026-05-03", distance_km: 21.1, target: "sub-1:50" },
+  });
+  createBlock({ focus: "hypertrophy", weeks: 6, start_date: MONDAY });
+  const read = dayDetail(WEDNESDAY);
+  assert.equal(read.week.race?.kind, "taper");
+  assert.equal(read.week.race.days_to_race, 11);
+  assert.match(read.why, /11 days to Riverside Half/);
+  assert.doesNotMatch(read.why, /1 week/);
+  assert.doesNotMatch(read.why, /hypertrophy|of the .* block/, "a taper week prints no accumulation claim");
+  assert.match(read.headline, /^(The lift: )?Lower A\.$/);
+});
+
+test("outside the taper the block line still names its week", (t) => {
+  seedHybridWeek(t);
+  createBlock({ focus: "hypertrophy", weeks: 6, start_date: MONDAY });
+  const read = dayDetail(WEDNESDAY);
+  assert.notEqual(read.week.race?.kind, "taper");
+  assert.match(read.why, /Week 1 of 6 of the hypertrophy block/);
 });

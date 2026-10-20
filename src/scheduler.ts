@@ -24,11 +24,13 @@ import {
   orphanSweepSignature,
   applyDueAnnouncedDecisions,
   applyProposalWithAutonomy,
+  expirePlanAdaptations,
   newRequestTellBudget,
   TEAM_REVIEW_QUESTION_LEAD,
   type RequestTellBudget,
 } from "./domain/brain/autonomy-service.js";
 import { registerTrainingCacheClear } from "./repo/training-cache.js";
+import { settleAskedAdaptations } from "./repo/plan-adaptation-asks.js";
 import { enqueueAgentJob, ensureWeekAheadJob } from "./agentJobs.js";
 import {
   BoundaryApplyError,
@@ -655,6 +657,31 @@ export function startScheduler() {
     runOrphanSweepIfDue(Date.now(), tells);
     if (boundaryApplyDate === today) return;
     boundaryApplyDate = today;
+    // First, the plan changes scoped to a date that has passed go back to the regular
+    // plan, so anything landing at today's boundary lands on the plan as it now stands.
+    // Its own try: a failed restore keeps its rows active for tomorrow's pass and never
+    // holds up the announced changes below.
+    try {
+      const expired = expirePlanAdaptations(today);
+      if (expired.restored.length)
+        log.info(`[brain] ${expired.restored.length} race-scoped plan adaptation(s) returned to the regular plan.`);
+      if (expired.skipped.length)
+        log.info(`[brain] ${expired.skipped.length} plan adaptation(s) ended without a restore (a newer edit stands).`);
+    } catch (e: any) {
+      recordSchedulerFailure("plan_adaptation_expiry", e);
+      log.error(`[brain] plan adaptation expiry failed`, { error: e });
+    }
+    // An asked return (a race adaptation made around pain) never re-asks: answered asks
+    // settle their rows, an unanswered one comes back ONCE on the Brief, and one past its
+    // window settles to keeping the adaptation (plan-adaptation-asks.ts). Its own try.
+    try {
+      const asks = settleAskedAdaptations(today);
+      if (asks.settled.length)
+        log.info(`[brain] ${asks.settled.length} unanswered adaptation return(s) settled — the adaptation stays.`);
+    } catch (e: any) {
+      recordSchedulerFailure("plan_adaptation_asks", e);
+      log.error(`[brain] plan adaptation ask settle failed`, { error: e });
+    }
     try {
       const result = applyDueAnnouncedDecisions(today, { tells });
       if (result.applied.length)

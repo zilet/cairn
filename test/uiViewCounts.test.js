@@ -241,7 +241,8 @@ test("screen keys name the home or section and never a date or an id", () => {
   const { uiViewKey } = loadCounter();
   assert.equal(uiViewKey({ tab: "today" }), "today");
   assert.equal(uiViewKey({ tab: "progress" }), "train");
-  assert.equal(uiViewKey({ tab: "progress", progressSeg: "overview" }), "train");
+  assert.equal(uiViewKey({ tab: "progress", progressSeg: "week" }), "train");
+  assert.equal(uiViewKey({ tab: "progress", progressSeg: "overview" }), "train/overview");
   assert.equal(uiViewKey({ tab: "progress", progressSeg: "intake" }), "train/intake");
   assert.equal(uiViewKey({ tab: "chat" }), "ask");
   assert.equal(uiViewKey({ tab: "horizon" }), "horizon");

@@ -120,6 +120,13 @@
 .tpush-offer-said{margin:0;font-size:var(--text-sm);color:var(--ink2)}
 .tpush-offer-slot>.tpush-offer-said{padding:var(--space-4) 0}
 
+/* the Brief's quiet questions (today-brief-client.ts): the push offer's calm pull card,
+   one open question at a time — trip eve, an unanswered adaptation return back once */
+.brief-asks-slot:empty{display:none}
+.today-wrap .brief-asks-slot{margin-top:var(--today-gap)}
+.brief-asks-slot{display:grid;gap:var(--space-5)}
+.brief-ask[aria-busy="true"]{border-color:var(--line-strong);opacity:.8}
+
 /* the week-wins reassurance on a rest/easy Brief — same sentence + rules as the
    done card's week footnote (.done-week), just repositioned here. */
 .brief-week.done-week{margin:var(--space-5) 0 0;font-size:var(--text-sm)}
@@ -158,6 +165,9 @@
 .brief-forward:hover{color:var(--ink-2)}
 .brief-forward:hover .brief-forward-txt{text-decoration-color:var(--sage)}
 .brief-forward:active{transform:var(--press-xs)}
+/* the evening "Tomorrow: …" line (train-week-tomorrow-client.ts): the same quiet link, empty until the day is in */
+.brief-tomorrow-slot:empty{display:none}
+.brief-tomorrow{min-height:44px;align-items:center;margin-top:var(--space-5)}
 .brief-clocks{
   display:flex;flex-direction:column;align-items:flex-start;gap:var(--space-3);
   margin-top:var(--space-7);padding-top:var(--space-6);border-top:1px solid var(--line);

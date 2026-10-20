@@ -94,9 +94,10 @@ test("streams B, C and D find their file slots already registered", () => {
         "milestone-row-client",
         "goal-row-model",
         "goal-row-client",
-        "frame-line-client",
       ],
     },
+    // Horizon's frame line rides the journey bundle Horizon already loads (Horizon was over its budget).
+    "public/js/bundle-20-journey.js": { lazy: "journey", stems: ["frame-line-client"] },
     "public/js/bundle-10-ask.js": {
       lazy: "ask",
       stems: ["ripple-card-model", "ripple-card-client", "ripple-card-controller"],

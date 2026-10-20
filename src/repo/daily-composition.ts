@@ -182,6 +182,45 @@ function compositionNoteFor(
   return pickDayVariant(variants, date, `daily-composition:${code}:${normalizedExerciseKey(String(exercise ?? ""))}`);
 }
 
+/**
+ * The reduced-area clamp for ONE item whose group only the race build's stress budget
+ * reduced (taper / race week: `stressBudgetDecision`, load not held) — the same set cap,
+ * the same eased load on the lift's own grid and the same rotated note this module puts
+ * on the composed card. For read surfaces that show a day AHEAD (the plan day-detail):
+ * they print the card that day will carry, from these numbers, never a second copy of
+ * them. Day-level caps (the morning's easy/deload, the session set budget) are that
+ * morning's to decide and are not applied here.
+ */
+export function stressReducedItemDose(
+  item: {
+    exercise: unknown;
+    muscle_group?: unknown;
+    mode?: unknown;
+    sets?: unknown;
+    target_weight?: unknown;
+    target_seconds?: unknown;
+    note?: unknown;
+  },
+  date: string,
+  code: unknown
+): { sets: number | null; target_weight: number | null; target_seconds: number | null; note: string | null } {
+  const sets = finite(item.sets);
+  const timed = String(item.mode ?? "") === "timed";
+  const seconds = finite(item.target_seconds);
+  const weight = finite(item.target_weight);
+  const group = item.muscle_group == null ? null : String(item.muscle_group);
+  const notes = stressBudgetItemNotes(code);
+  const prep = isPrepCompositionItem({ exercise: item.exercise, muscle_group: group });
+  return {
+    sets: sets == null ? null : Math.max(1, Math.min(sets, REDUCED_ITEM_SET_CAP)),
+    target_weight: timed && seconds != null ? weight : easedLoad(weight, REDUCED_INTENSITY_FACTOR, item.exercise, group),
+    target_seconds:
+      timed && seconds != null ? Math.max(1, Math.round(seconds * REDUCED_INTENSITY_FACTOR)) : seconds,
+    note:
+      notes && !prep ? adaptationNote(item.note, compositionNoteFor(notes, date, "stress", item.exercise)) : null,
+  };
+}
+
 // A hold/deload already has a progression why on the card. Prepending a second
 // hold sentence is the double-speak this module used to print every morning.
 function itemAlreadyHasProgressionHoldWhy(

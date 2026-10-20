@@ -6,6 +6,7 @@ import {
   previewAdaptiveDailySessionUseCase,
 } from "../../domain/training/index.js";
 import { tradeRestDay } from "../../domain/brain/index.js";
+import { answerBriefAsk, briefAsks } from "../../domain/today/brief-asks.js";
 import {
   dailyOutcomeRead,
   decideDailySession,
@@ -36,6 +37,24 @@ export function registerDayCoachTools(server: McpToolRegistrar) {
     "Trade today's quiet day forward: keep today as a training day and claim TOMORROW as the rest instead. Writes one calendar event for tomorrow (the plan's rotation is untouched) and returns today's re-derived read with train_anyway. Allowed only when today reads easy, is the accumulated-load quiet day, or is the week's own rest day; a rest grounded in the athlete — a rest-grade readiness reading, a reported symptom, anything clinical — comes back ok:false with the reason. Idempotent per date, and at most one trade open at a time.",
     { date: z.string().optional().describe("YYYY-MM-DD; the day being KEPT for training. Defaults to today") },
     async ({ date }) => asText(tradeRestDay({ date }))
+  );
+
+  server.tool(
+    "get_today_asks",
+    "The Brief's quiet questions for a day (mirror of GET /api/today-asks): the evening before a planned lift day inside a trip, 'Lifting on the trip?' (answers yes / easier / skip); and an unanswered return of a race adaptation made around pain, back ONCE on the day it was stamped for (answers bring_back / keep). Pull-only — each is asked at most once and nothing is a gate.",
+    { date: z.string().optional().describe("YYYY-MM-DD; defaults to today") },
+    async ({ date }) => asText(briefAsks({ date }))
+  );
+
+  server.tool(
+    "answer_today_ask",
+    "Answer one Brief question by its key (mirror of POST /api/today-asks/answer). trip_lift: yes changes nothing, skip holds that day as rest (a claims_day calendar event), easier lands a one-day lighter version — each lift with a bodyweight twin swaps to it in a bodyweight rep range, every other lift stays a set lighter (the message names which) — laid over any race adaptation, which stays in force; the plan as it stood comes back the day after. adaptation_return: bring_back applies the held return, keep discards it (the adaptation stays); only a return the Brief actually asked answers. Answer only with the athlete's own answer. ok:false with the reason when it cannot land.",
+    {
+      key: z.string().describe("the ask's key, e.g. 'trip_lift:2026-10-23' or 'adaptation_return:812'"),
+      answer: z.enum(["yes", "easier", "skip", "bring_back", "keep"]),
+      date: z.string().optional().describe("YYYY-MM-DD; today, the day the answer is given"),
+    },
+    async ({ key, answer, date }) => asText(answerBriefAsk({ key, answer, date }))
   );
 
   server.tool(

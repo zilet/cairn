@@ -347,6 +347,16 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   is a `fits`/`stretch`/`beyond_horizon` FIT, never a grade. The weekly ride (`ride`, any non-run family)
   is the cross-training day: stated first, else observed (2 of 6 weeks); a known one the day before
   the long run never strips the long run's date. Details in `docs/ARCHITECTURE.md`.
+- **The days after a race are ONE read, and the race is never training** — `raceRecoveryWindow()`
+  (`src/repo/race-recovery.ts`: 2 / 4 / 7 days by distance from race day + 1) is the only source of
+  the post-race window; it lightens through the stress budget's ordinary `reduced` list
+  (`post_race_recovery`, every group, nothing excluded) and easy-only runs, never a rest of its own.
+  The race is its logged EFFORT (a run within 2 days of the goal date at ≥85% of its distance,
+  `src/repo/race-results.ts`), never the goal slot, and it outlives the goal: `setProfile` keeps an
+  outgoing race in `completed_races`, so a new goal set on race + 1 keeps the window. No effort logged
+  → no window (past a 2-day slow-sync grace) and nothing blanked. That day's runs are not demonstrated
+  capacity, not the long-run ladder, and not harm; the weeks the window touched resume toward the
+  PRE-race floor (`preRaceRunCapacity`). Details in `docs/ARCHITECTURE.md` "The days after a race".
 - **Today's lift has ONE server line** — `todayStrengthLine()` (`src/repo/today-strength-line.ts`): plan
   day NAME, state off the log, a rest/easy read as a caveat (never a replacement title). The Brief,
   Session header, week strip and Train overview print it verbatim; never derive a today state in a

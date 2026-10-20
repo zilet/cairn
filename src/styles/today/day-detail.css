@@ -49,6 +49,13 @@
   font-size:var(--text-2xs);letter-spacing:var(--tracking-mono);text-transform:uppercase;color:var(--muted)}
 .ddv-stack-n::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--c)}
 .ddv-stack-n.is-heavy_lower{--c:var(--s-strength)}
+/* The coach adapted this day: the change in the feed's words, its timing and Undo. */
+.ddv-adapted{display:grid;gap:var(--space-3);padding:var(--space-6) var(--space-7);background:var(--surface)}
+.ddv-adapted-rows{list-style:none;margin:0;padding:0;display:grid;gap:var(--space-5)}
+.ddv-adapted-row .ddv-why-t{margin-top:var(--space-2);font-size:var(--text-sm)}
+.ddv-adapted-meta{margin:var(--space-3) 0 0;display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2) var(--space-5)}
+.ddv-adapted-meta .lbl{color:var(--muted)}
+.ddv-adapted-undo{min-height:44px}
 
 /* --- sections --- */
 .ddv-sec{display:flex;flex-direction:column}

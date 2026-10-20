@@ -490,6 +490,12 @@ export interface CoachContextEnvelope {
   // week's one lever. Set ONLY by the Brief's prompt builder (buildDayReadPrompt) —
   // getCoachContext never computes it. Additive + optional, like `tomorrow_holds`.
   today_path?: CoachRecord | null;
+  // Which session lands on which DATE, today through next Sunday
+  // (src/domain/training/dated-week.ts, a projection of the Plan strip's own week). Set
+  // ONLY by the chat prompt builder (buildChatPrompt) — getCoachContext never computes
+  // it, so no other build pays for two weeks of planWeek. Additive + optional, like
+  // `today_path`.
+  dated_week?: CoachRecord | null;
   // Round W2.2: the most common hour recent sessions were logged, bucketed into a
   // plain part-of-day label. Derived from session timestamps so chat (and any other
   // site that carries it) can answer "when do they usually train?" itself instead of

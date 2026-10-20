@@ -167,7 +167,7 @@ test("a clean stack on the athlete's own week is a training day: the count is ad
   const line = todayStrengthLine(REF);
   assert.equal(line.state, "not_started");
   assert.ok(line.run_in, "the run is named beside the lift");
-  assert.match(line.text, /^Run in · .+ still open/);
+  assert.match(line.text, /^(?:Your run's in\. |Run done\. |The run's in; ).+ is still (?:there|on for today)/);
   assert.equal(line.suggestion, null, "a training read leaves no easy/rest caveat on the line");
   assert.equal(r.signals.plan_selection?.selected?.day_number, line.day_number, "the Brief and the line name one day");
 });
@@ -260,7 +260,9 @@ test("today's plan-week cell names the strength line's day, with the map's day k
 
   // The Brief's persisted selection adapted today to another strength day (live: the map
   // laid "Lower B" on Tuesday, the selection handed the morning to "Push").
-  const adaptedTo = mapped.day_number === 1 ? 4 : 1;
+  // Adapted to a day the map laid later this week, so the trade has somewhere to land.
+  const adaptedTo = plain.days.find((d) => d.date > WEEK_REF && d.plan_day && d.plan_day.day_number !== mapped.day_number)
+    .plan_day.day_number;
   db.prepare(
     `INSERT INTO day_reads (date, kind, headline, why, focus, signals, source) VALUES (?, 'train', 'x', 'y', NULL, ?, 'deterministic')`
   ).run(WEEK_REF, JSON.stringify({ plan_selection: { selected: { day_number: adaptedTo } } }));
@@ -272,12 +274,20 @@ test("today's plan-week cell names the strength line's day, with the map's day k
   assert.equal(today.plan_day.name, week.strength_line.title);
   assert.deepEqual(today.plan_day.swapped_from, { day_number: mapped.day_number, name: mapped.name });
   assert.equal(today.status, "today");
-  // The rest of the week keeps the map's forecast; only today moved.
+  // The two days trade places: the later weekday that held the line's day takes the
+  // map's day, so no day shows twice and none drops out; every other cell keeps the map.
+  const later = plain.days.find((d) => d.date > WEEK_REF && d.plan_day?.day_number === adaptedTo);
   for (const cell of week.days.filter((d) => d.date !== WEEK_REF)) {
     const before = plain.days.find((d) => d.date === cell.date);
-    assert.equal(cell.plan_day?.day_number ?? null, before.plan_day?.day_number ?? null, cell.date);
+    const expected = later && cell.date === later.date ? mapped.day_number : (before.plan_day?.day_number ?? null);
+    assert.equal(cell.plan_day?.day_number ?? null, expected, cell.date);
     assert.equal(cell.plan_day?.swapped_from, undefined);
   }
+  assert.ok(later, "the fixture's week holds the line's day later on");
+  assert.ok(
+    week.days.some((d) => d.date > WEEK_REF && d.plan_day?.day_number === mapped.day_number),
+    "the map's day is not dropped from the week"
+  );
   // A logged session owns the cell again, whatever the selection said.
   repo.logSetByName({ date: WEEK_REF, exercise: "Barbell Row", weight: 135, reps: 8, day_number: 2 });
   const logged = planWeek(WEEK_REF).days.find((d) => d.date === WEEK_REF);
