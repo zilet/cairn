@@ -1406,6 +1406,22 @@ function planDayAcutelySaturated(dayNumber: number, date: string): boolean {
   return groups.some((group) => gates.get(group)?.deep === true);
 }
 
+// Does recent endurance work land on THIS plan day at all? The hybrid-interference
+// caution is about the groups the runs and rides loaded (program-state's hybrid read,
+// `affected_groups` — legs, almost always); a pull day that touches none of them is
+// not the session it is warning about (owner ruling, 2026-10-21: a leg residual must
+// never rest or ease an upper-body day). Unknown either way reads as overlapping.
+function planDayClearOfEndurance(dayNumber: number, date: string): boolean {
+  const groups = planDayStrengthGroups().find((day) => day.day_number === dayNumber)?.groups ?? [];
+  if (!groups.length) return false;
+  const live = date === localDateISO();
+  const state: any = brainSignal(live ? "program_state" : `program_state:${date}`, () => getProgramState(date));
+  const affected: unknown = state?.hybrid?.affected_groups;
+  if (!Array.isArray(affected) || !affected.length) return false;
+  const loaded = new Set(affected.map(String));
+  return !groups.some((group) => loaded.has(group));
+}
+
 // ---------- the athlete's own morning outranks a fortnight of history ----------
 // `clinicallyDriven` above is the ONLY floor the outcome-softening ladders used to
 // consult, and it probes `health_constraints` — which is not where a morning check-in
@@ -2338,6 +2354,16 @@ function computeDayRead(
         (feltRestCorroborated || !FELT_CHECKIN_FIELDS.has(item.field))
     );
   const tomorrowClinical = holdsTomorrow.some((hold) => hold.clinical === true);
+  // The same exemption for a different reason: the endurance caution is about the legs
+  // the runs loaded, and the session due today never touches them — so it is not news
+  // about THIS day and cannot turn the stack into rest (planDayClearOfEndurance).
+  const dueDayClearOfEndurance =
+    signalState.dimensions.training_load_tolerance.evidence.some((item) => item.field === "hybrid_interference") &&
+    signalInput(() => {
+      const due = suggestedPlanDay();
+      return due != null && planDayClearOfEndurance(due.day_number, d);
+    }, false);
+  if (dueDayClearOfEndurance) (signals as any).endurance_off_due_day = true;
   const stackedLoadCorroborated =
     lowReadiness ||
     // A first — the longest run in months, done yesterday — is a CURRENT fact about
@@ -2358,7 +2384,7 @@ function computeDayRead(
     // read; it just does not rest the whole day.
     hasFreshDecidingBrake(signalState.dimensions, {
       exceptFelt: !feltRestCorroborated,
-      ...(rhythmOwnsDose ? { exceptFields: RHYTHM_OWN_DOSE_FIELDS } : {}),
+      ...(rhythmOwnsDose || dueDayClearOfEndurance ? { exceptFields: RHYTHM_OWN_DOSE_FIELDS } : {}),
     }) ||
     recoveryCapacityFreshBrake ||
     clinicallyDriven(signalState, healthWorkaround) ||
@@ -3313,11 +3339,18 @@ function computeDayRead(
         // second veto here would be the one finding charged twice.
         else if (freshShortSleep)
           caveats.push(pickDayVariant(SLEEP_EXPOSURE_CAVEAT, d, "planned_training:sleep_exposure"));
-        const holdAggression = signalState.action.directives.training === "hold_aggression";
+        // A leg-only endurance caution over a session that never touches the legs is not
+        // a reason to hold or dose it (planDayClearOfEndurance): the lift runs as written and
+        // the endurance notes ride as caveats, the way any other lifting day reads.
+        const legOnlyBrake =
+          dueDayClearOfEndurance &&
+          decidingBrakeFields.length > 0 &&
+          decidingBrakeFields.every((field) => RHYTHM_OWN_DOSE_FIELDS.has(field));
+        const holdAggression = signalState.action.directives.training === "hold_aggression" && !legOnlyBrake;
         // The stated lifting day the calendar kept (a soft brake would otherwise have
         // read the day easy): the session stays, at a held dose. The brake LEADS in its
         // own voice when it is one the signal state spoke; no reach rides on it.
-        const calendarDosed = calendar.step != null && statedCalendarDay()?.day === "lift";
+        const calendarDosed = calendar.step != null && statedCalendarDay()?.day === "lift" && !legOnlyBrake;
         if (calendarDosed) pushVetoes.push("calendar_dose");
         const calendarVoice = calendarDosed ? calendarBrakeVoice() : null;
         // Same rule as the protect read above: the athlete hears the athlete voice,
@@ -3446,7 +3479,7 @@ function computeDayRead(
         const fuelAdvice = dimensionIsAdviceOnly(signalState.dimensions.energy_fueling);
         if (fuelAdvice) caveats.push(pickDayVariant(FUEL_AROUND_TRAINING_CAVEAT, d, "planned_training:fuel_around"));
         const notedWatch =
-          holdAggression || pushVetoes.length
+          holdAggression || pushVetoes.length || legOnlyBrake
             ? null
             : (HOLD_DIMENSIONS.find(
                 (dimension) =>

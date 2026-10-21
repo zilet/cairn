@@ -184,12 +184,14 @@ test("on the athlete's own week the endurance dose it already counts never corro
   assert.equal(r.signals.stacked_on_rhythm?.own_dose_exempt, true);
   assert.equal(r.kind, "train", `got ${r.kind}: ${r.why}`);
   assert.equal(r.decision.rule_code, "planned_training");
-  // Off the week, the same caution still corroborates the stack exactly as before.
+  // Off the week the caution would corroborate the stack — but the lift due today is an
+  // upper-body day the runs never loaded, so a leg residual still does not rest it
+  // (2026-10-21, test/dayReadLegFreeLift.test.js).
   resetTables(...WORLD);
   seedLiveWeek({ goal: "maintain", rideWeeks: 1 });
   const off = repo.dayRead(REF);
-  assert.equal(off.kind, "rest");
-  assert.equal(off.decision.rule_code, "accumulated_load_rest");
+  assert.equal(off.signals.endurance_off_due_day, true);
+  assert.notEqual(off.kind, "rest", `got ${off.kind}: ${off.why}`);
 });
 
 test("the signal state never calls a run-only lifting weekday complete", () => {

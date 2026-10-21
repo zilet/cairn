@@ -1151,7 +1151,7 @@ test("Today Brief keeps the generic label and hides the trade below two overridd
 
   assert.match(html, /Train anyway/);
   assert.doesNotMatch(html, /data-tradetomorrow/);
-  assert.doesNotMatch(html, /Pull day/);
+  assert.doesNotMatch(html, /Start Pull/);
 });
 
 test("Today Brief names the plan day and offers the trade after two overridden mornings", () => {
@@ -1161,11 +1161,33 @@ test("Today Brief names the plan day and offers the trade after two overridden m
     planDayName: "Pull",
   });
 
-  assert.match(html, /brief-redirect-primary" data-redirect="reveal-plan">Pull day · your plan</);
+  assert.match(html, /brief-redirect-primary" data-redirect="reveal-plan">Start Pull</);
   assert.match(html, /data-tradetomorrow>Train today, rest tomorrow</);
   assert.doesNotMatch(html, /Train anyway/);
   // "Ask for a session" stays, and stays last.
   assert.ok(html.indexOf("data-tradetomorrow") < html.indexOf('data-redirect="ask-session"'));
+});
+
+test("Today Brief leads with the plan day's start when the athlete trains through quiet mornings", () => {
+  const brief = loadTodayBrief();
+  const read = overriddenRead(["2026-03-12", "2026-03-13"], {
+    recovery: {
+      line: "None of this is an assignment; pick one only if you feel like it.",
+      options: [{ label: "Easy spin", minutes: 25, detail: "Zone 1." }],
+    },
+  });
+  const html = brief.briefHtml(read, { isToday: true, planDayName: "Pull" });
+  const start = html.indexOf('data-redirect="reveal-plan"');
+  const menu = html.indexOf("Easy spin");
+  assert.ok(start > 0 && menu > 0 && start < menu, "the plan day's start sits above the lighter menu");
+
+  // Below two overridden mornings the quiet day's own menu still leads.
+  const quiet = brief.briefHtml(overriddenRead(["2026-03-13"], { recovery: read.recovery }), {
+    isToday: true,
+    planDayName: "Pull",
+  });
+  const quietMenu = quiet.indexOf("Easy spin");
+  assert.ok(quietMenu > 0 && quietMenu < quiet.indexOf("Train anyway"));
 });
 
 test("Today Brief leaves the plan-day label off when no plan day resolved, and still offers the trade", () => {
@@ -1176,15 +1198,14 @@ test("Today Brief leaves the plan-day label off when no plan day resolved, and s
   assert.match(html, /data-tradetomorrow/);
 });
 
-test("Today Brief escapes a plan-day name and never repeats the word day", () => {
+test("Today Brief escapes a plan-day name in its start button", () => {
   const brief = loadTodayBrief();
   const html = brief.briefHtml(overriddenRead(["2026-03-12", "2026-03-13"]), {
     isToday: true,
     planDayName: "Recovery day <x>",
   });
 
-  assert.match(html, /Recovery day &lt;x&gt; · your plan/);
-  assert.doesNotMatch(html, /day day/);
+  assert.match(html, /Start Recovery day &lt;x&gt;</);
 });
 
 test("Today Brief treats crossing the second overridden morning as a material difference", () => {
@@ -1206,7 +1227,7 @@ test("Today Brief drops the trade once the server has refused it, keeping the pl
 
   assert.doesNotMatch(html, /data-tradetomorrow/, "a refused trade is not re-offered on the next paint");
   // The earned default is untouched — the refusal is about tomorrow, not today.
-  assert.match(html, /data-redirect="reveal-plan">Pull day · your plan</);
+  assert.match(html, /data-redirect="reveal-plan">Start Pull</);
   assert.match(html, /data-redirect="ask-session"/);
 });
 

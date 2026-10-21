@@ -370,7 +370,16 @@ function todayAnswer(
       const stored = getLatestDailySessionDecision(d);
       return stored && stored.input_fingerprint === fresh.input_fingerprint ? stored : fresh;
     }, null);
-  const brakeFields = safe(() => freshDecidingBrakeFields(dayPlanningSignalState(d).dimensions), [] as string[]);
+  // The endurance caution is not a hold on a session that never touches the groups the
+  // runs loaded (the day read's `endurance_off_due_day`), so it is not named as one.
+  const offDueDay = (read?.signals as any)?.endurance_off_due_day === true;
+  const brakeFields = safe(
+    () =>
+      freshDecidingBrakeFields(dayPlanningSignalState(d).dimensions).filter(
+        (field) => !(offDueDay && field === "hybrid_interference")
+      ),
+    [] as string[]
+  );
   const consecutive = Number((read?.signals as any)?.consecutive_training_days);
   const holding = pushHolds({
     envelope,

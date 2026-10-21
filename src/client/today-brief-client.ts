@@ -429,13 +429,11 @@ type TodayBriefHtmlOptions = {
     return days.length;
   }
 
-  // "Push" → "Push day"; a name that already says day is left alone.
+  // The plan day's own name, as the start button says it ("Start Pull").
   function todayBriefPlanDayLabel(name: unknown): string {
-    const trimmed = String(name ?? "")
+    return String(name ?? "")
       .trim()
       .slice(0, 60);
-    if (!trimmed) return "";
-    return /\bdays?\b/i.test(trimmed) ? trimmed : `${trimmed} day`;
   }
 
   // The plan day held light under a rest/easy read, in the server's own words beside
@@ -548,7 +546,7 @@ type TodayBriefHtmlOptions = {
     } else if (!options.showPlan) {
       actions.push(
         planDay
-          ? todayBriefRedirect("reveal-plan", `${planDay} · your plan`, true)
+          ? todayBriefRedirect("reveal-plan", `Start ${planDay}`, true)
           : todayBriefRedirect("reveal-plan", "Train anyway", false)
       );
     }
@@ -604,11 +602,13 @@ type TodayBriefHtmlOptions = {
     const nowCard = !!voice?.nowHtml && kind === "train" && !!(sessionFold || live);
     // THE STATE LINE leads under the why: on a train/done day it is the NOW card (or the
     // bare lift line with its one action); on a rest/easy day the lift line alone (the
-    // plan day held light), and the quiet day's own actions wait below its menu.
+    // plan day held light), and the quiet day's own actions wait below its menu — unless they train
+    // through these mornings (`planDay`): then starting the plan day leads, the menu follows.
+    const liftLeads = quietDay && !!planDay;
     const now = nowCard
       ? voice!.nowHtml({ line: todayBriefStrengthLineHtml(read, kind, ""), focus, title: line?.title, live, fold: sessionFold, idle: fold && !fold.started && !live ? Number(fold.count) || 0 : 0, launch })
-      : `<div class="brief-now">${quietDay ? "" : strengthLine}${live}${sessionFold}${launch}</div>`;
-    const stateLine = quietDay ? strengthLine : now;
+      : `<div class="brief-now">${quietDay && !liftLeads ? "" : strengthLine}${live}${sessionFold}${launch}</div>`;
+    const stateLine = quietDay && !liftLeads ? strengthLine : now;
     // Today's own Brief has no "Around today" (Coming up and This week carry it now).
     const context =
       options.isToday === true
@@ -635,7 +635,7 @@ type TodayBriefHtmlOptions = {
       ${pathSlot}${(globalThis as unknown as { CairnTodayBriefAsks?: { slotFor(r: unknown, today: boolean): string } }).CairnTodayBriefAsks?.slotFor(read, today) ?? "" /* the quiet questions, today-brief-asks-client.ts */}
       ${weekWins}
       ${recovery}
-      ${quietDay ? now : ""}
+      ${quietDay && !liftLeads ? now : ""}
       ${steer}
       ${context}
     </section>`;

@@ -3067,7 +3067,7 @@ export function buildDailySessionDecision(
         ? "Today reads as a rest day — recovery earns tomorrow's work."
         : kind === "easy"
           ? "Today reads as an easy day — keep it light and short."
-          : `Today reads as a training day${snapshot.plan.focus ? ` · ${snapshot.plan.focus}` : ""}.`,
+          : `Today reads as a training day${snapshot.plan.focus ? ` · ${String(snapshot.plan.focus).replace(/[.\s]+$/, "")}` : ""}.`,
   });
   if (liftStillDue) {
     rationale.push({

@@ -2718,6 +2718,16 @@ The widening is BOUNDED (review, 2026-10-06), and `signals.stacked_on_rhythm` sa
   `hybrid_interference` caution still rests the stacked day, as off the week. Pinned by
   `test/ownWeekBounds.test.js`.
 
+**A leg residual never quiets a lift that does not touch the legs (2026-10-21).** The
+`hybrid_interference` caution is about the groups recent runs/rides loaded (program-state's
+`hybrid.affected_groups`). When the plan day due shares none of them (`planDayClearOfEndurance`,
+published as `signals.endurance_off_due_day`), that caution does not corroborate the stacked-days
+rest, and — when it is the ONLY deciding brake — it neither holds, dose-steps (`stated_lift_dosed`) nor
+leads the train read; the run's own caveats still ride. The push drive's "holding today" list drops it
+too (`training-drive-read.ts`). A leg day due keeps the old behaviour. Pinned by
+`test/dayReadLegFreeLift.test.js`. On a quiet read the athlete has trained through twice, the Brief's
+"Start <plan day>" button and the lift line lead above the lighter recovery menu.
+
 **A run in and a lift still open is one story (2026-10-06).** On a lifting weekday where a run/ride is
 already logged and no set is (`liftDayStillOpen`), `planned_training` leads its caveat run with
 `RUN_IN_LIFT_OPEN_CAVEAT` (`planned_training:run_in`), and an EASY read that still has a plan day due
