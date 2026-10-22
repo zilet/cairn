@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7.0
 
-ARG NODE_IMAGE=node:26-bookworm-slim
+ARG NODE_IMAGE=node:26.12.1-bookworm-slim
 
 # ---- builder: compile TypeScript ----
 FROM ${NODE_IMAGE} AS builder

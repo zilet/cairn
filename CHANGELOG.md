@@ -5,6 +5,36 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [2.1.8] — 2026-10-22
+
+A Node.js security update, plus a week that adapts to what you logged. One migration (130, a
+column on plan adaptations).
+
+### Security
+
+- **Node.js 26.12.1.** The image now builds on `node:26.12.1-bookworm-slim` (Node's October 21
+  security release: a Brotli decompression flaw, TLS hostname-check bypasses, and the eMudhra CA
+  distrust). CI pins 24.22.1 and 26.12.1, and the minimum supported Node is now 24.22.1.
+
+### Added
+
+- **The week follows your log.** A displaced day moves rather than vanishing, every changed day
+  says why, changes made from chat carry a receipt with Undo, and one race countdown reads the same
+  everywhere. After a race, a recovery window sized to its distance eases the following days.
+- **Search from the header**, a meal composer that tidies up after itself, and your units known
+  on first paint (no more km flashing before miles).
+- **Instant meal lists.** A plain gram-listed meal logs at once, one row per food; questions and
+  corrections still go to the coach. Garmin sync runs in the background with a Stop button.
+
+### Fixed
+
+- **A leg-heavy run no longer quiets an upper-body lifting day.** The Brief leads with the day's
+  session after a trained-through quiet morning.
+- **Chat and the day read are grounded in what actually happened**: tighter food routing, replies
+  checked against the actions that landed, and steadier day reads.
+- **Installer tests are hermetic.** They can no longer switch off a real Tailscale Serve mapping or
+  reach a real container engine.
+
 ## [2.1.7] — 2026-10-17
 
 Chat that understands what you said, day totals you can trust, and a brain that finally learns from
@@ -1928,7 +1958,7 @@ landed since 0.3.0.
 - Chat strips agent tool-narration before the reply marker reaches the bubble
 - Segmented sub-nav scrolls when pills overflow (no clipped "Calendar" tab)
 
-[Unreleased]: https://github.com/zilet/cairn/compare/v2.1.5...HEAD
+[Unreleased]: https://github.com/zilet/cairn/compare/v2.1.8...HEAD
 [2.1.5]: https://github.com/zilet/cairn/compare/v2.1.4...v2.1.5
 [2.1.4]: https://github.com/zilet/cairn/compare/v2.1.3...v2.1.4
 [2.1.3]: https://github.com/zilet/cairn/compare/v2.1.2...v2.1.3
