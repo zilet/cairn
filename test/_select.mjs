@@ -11,10 +11,14 @@
 //     followed only through the names an importer actually uses — a named import's
 //     bindings, or the `ns.name` reads of a namespace import (and of a namespace another
 //     module hands on, like test/_seed.js's `repo`). Any other use of a namespace (passed
-//     around, destructured, indexed) follows the whole barrel.
-//   - file references: string literals that name an existing repo path (`"src/repo/x.ts"`,
-//     `path.join(root, "src", "routes")`, `new URL("../dist/x.js", …)`), including a
-//     directory (everything under it) — the contract tests that read sources.
+//     around, destructured, indexed) follows the whole barrel. This pruning assumes a
+//     re-exported module's load-time side effects are covered by its own tests.
+//   - path references in tests and scripts: a literal that names an EXECUTABLE module —
+//     built output (`"./dist/coachOps.js"`, `path.join(root, "dist", "x.js")`, mapped to its
+//     source) or a .js/.mjs script or test module — is an import edge, so the walk goes on
+//     through what a spawned child loads. A literal naming any other repo path (a source
+//     read as text, `"src/repo/x.ts"`; a fixture; a directory, meaning everything under it)
+//     is a leaf — the contract tests that read sources.
 //   - client code: a test that loads `public/js/<name>.js` (by path or by the bare name
 //     test/_dom.mjs takes) depends on the src/client module(s) built into it
 //     (scripts/build-client.mjs CLIENT_OUTPUTS and BUNDLES); public/styles.css and
@@ -22,7 +26,9 @@
 // Everything a test process loads regardless of the file (test/run.mjs, test/_isolate.mjs
 // and the offline floor, package.json, tsconfig, the build scripts, agents.json, the
 // selector itself) is "infrastructure": a change there selects the whole suite, as does
-// a missing src/ or a git that cannot answer. test/_isolate.mjs also imports dist/db.js
+// a missing src/, a git that cannot answer, or a changed file the graph cannot see at all
+// (no module, no reference, no directory read over it — a CI workflow, an ignore file);
+// only a doc nothing names may select nothing. test/_isolate.mjs also imports dist/db.js
 // for every file, so db.ts and its graph are a root of every test. (It imports a few
 // stateful modules too, only to reset them between tests; a test that never imports
 // one cannot observe its behaviour, and test/moduleLoadOrder.test.js holds load order.)
@@ -88,8 +94,70 @@ const EXPORT_DECL_RE =
   /\bexport\s+(?:declare\s+)?(?:default\s+)?(?:async\s+)?(function\*?|const|let|var|class|enum|type|interface|namespace)\s+([\w$]+)/g;
 const EXPORT_LIST_RE = /\bexport\s+(type\s+)?\{([^}]*)\}(?!\s*from)/g;
 
+// Comments out, strings and regex literals kept: a scanner, so a `/*` inside a // comment
+// (scripts/check-bundle-budget.mjs: "`public/css/*.css`") or a `//` inside a string never
+// swallows the code after it.
 function stripComments(source) {
-  return source.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:"'`\\\w])\/\/[^\n]*/g, "$1");
+  const parts = [];
+  let segment = 0; // start of the code not yet copied
+  let i = 0;
+  const n = source.length;
+  let prev = ""; // the last significant character class: "" (start), "a" (operand), or the char
+  while (i < n) {
+    const ch = source.charCodeAt(i);
+    if (ch === 47 /* / */) {
+      const next = source.charCodeAt(i + 1);
+      if (next === 47 || next === 42) {
+        parts.push(source.slice(segment, i), " ");
+        if (next === 47) {
+          const end = source.indexOf("\n", i);
+          i = end === -1 ? n : end;
+        } else {
+          const end = source.indexOf("*/", i + 2);
+          i = end === -1 ? n : end + 2;
+        }
+        segment = i;
+        continue;
+      }
+      // A regex literal can only start where an expression can.
+      if (prev === "" || "(,=:[!&|?{};+-*%<>~^".includes(prev)) {
+        let inClass = false;
+        for (i++; i < n; i++) {
+          const c = source[i];
+          if (c === "\\") i++;
+          else if (c === "\n") break;
+          else if (c === "[") inClass = true;
+          else if (c === "]") inClass = false;
+          else if (c === "/" && !inClass) break;
+        }
+        i++;
+        prev = "a";
+        continue;
+      }
+      prev = "/";
+      i++;
+      continue;
+    }
+    if (ch === 34 || ch === 39 || ch === 96) {
+      const quote = source[i];
+      for (i++; i < n; i++) {
+        const c = source[i];
+        if (c === "\\") i++;
+        else if (c === quote) break;
+        else if (c === "\n" && quote !== "`") break;
+      }
+      i++;
+      prev = "a";
+      continue;
+    }
+    if (ch > 32) {
+      const word = (ch >= 48 && ch <= 57) || (ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122);
+      prev = word || ch === 95 || ch === 36 || ch === 41 || ch === 93 ? "a" : source[i];
+    }
+    i++;
+  }
+  parts.push(source.slice(segment));
+  return parts.join("");
 }
 
 // `{ a, b as c, type T }` → [{ imported: "a", local: "a" }, { imported: "b", local: "c" }]
@@ -207,7 +275,9 @@ function parseModule(file, source) {
     nsExports,
     barrel,
     body: statements,
-    refs: file.startsWith("src/") ? new Set() : fileRefs(code),
+    // From the code minus its static import/export statements: an import specifier is an
+    // edge with its own names, never a path reference that would load the whole module.
+    refs: file.startsWith("src/") ? new Set() : fileRefs(statements),
   };
 }
 
@@ -296,10 +366,22 @@ export function buildGraph(root) {
       for (let d = path.posix.dirname(name); d !== "."; d = path.posix.dirname(d)) dirs.add(d);
     }
   }
+  // Root files, dotfiles included (.gitignore, .dockerignore, .env.example: tests read them),
+  // and the dot-directories a test may read (.github/workflows). Names only — never contents.
+  const PRIVATE = new Set(["node_modules", ".git", ".tsbuildcache", ".claude", ".local", ".cursor"]);
   for (const name of readdirSync(root)) {
-    if (name === "node_modules" || name.startsWith(".")) continue;
+    if (PRIVATE.has(name)) continue;
     try {
-      if (statSync(path.join(root, name)).isFile()) known.add(name);
+      const stat = statSync(path.join(root, name));
+      if (stat.isFile()) known.add(name);
+      else if (stat.isDirectory() && name.startsWith(".")) {
+        dirs.add(name);
+        for (const abs of walk(path.join(root, name), [], () => true)) {
+          const file = rel(abs);
+          known.add(file);
+          for (let d = path.posix.dirname(file); d !== "."; d = path.posix.dirname(d)) dirs.add(d);
+        }
+      }
     } catch {}
   }
   for (const top of ["src", "test", "scripts", "public", "dist", "docs", "deploy"]) dirs.add(top);
@@ -358,6 +440,9 @@ export function buildGraph(root) {
       }
     }
     resolveRefs(graph, mod);
+    // A path this module runs (a child process importing dist/x.js, a script it spawns) is
+    // an import in all but syntax: the walk continues through it.
+    for (const target of mod.refExec) addEdge(name, target, "all");
   }
   graph.importers = importers;
   graph.reexporters = reexporters;
@@ -372,6 +457,7 @@ function resolveRefs(graph, mod) {
   const { modules, known, dirs, toSource, client } = graph;
   const files = new Set();
   const prefixes = new Set();
+  const exec = new Set();
   const fromSrc = mod.file.startsWith("src/");
   for (const raw of mod.refs) {
     const joined = raw.startsWith(JOINED);
@@ -382,7 +468,15 @@ function resolveRefs(graph, mod) {
       c = c.replace(/^\/+/, "").replace(/\/+$/, "");
       if (!c || c === mod.file) continue;
       const source = toSource(c);
-      if (modules.has(source)) files.add(source);
+      if (modules.has(source)) {
+        // Executable — built output (dist/…, mapped to its source) or a script/test module
+        // by its .js/.mjs path — continues the walk; a source file read as text
+        // (`src/x.ts`) is a leaf.
+        const plain = c.replace(/^\.\//, "");
+        const executable = plain.startsWith("dist/") || /\.m?js$/.test(plain);
+        if (executable && !fromSrc) exec.add(source);
+        else files.add(source);
+      }
       if (fromSrc) continue;
       if (known.has(c)) files.add(c);
       // A directory counts when named as a path (`"src/repo"`) or by a join/resolve run;
@@ -399,6 +493,7 @@ function resolveRefs(graph, mod) {
   }
   mod.refFiles = files;
   mod.refPrefixes = [...prefixes];
+  mod.refExec = exec;
 }
 
 // Every name `name` exports at runtime (its own declarations and its re-exports).
@@ -542,6 +637,26 @@ export function selectTests({ root, changed, testFiles, graph: prebuilt = null }
   } catch (error) {
     return full(`full suite: the import graph could not be built (${error.message})`);
   }
+  // A changed file the graph knows nothing about — not a module, named by no test or
+  // script, under no directory one reads — is a file whose readers the walk cannot see
+  // (a workflow, an ignore file read through a variable): run everything and say which.
+  // Docs are the exception: a doc no test names is one nothing reads.
+  const refFiles = new Set();
+  const refPrefixes = new Set();
+  for (const mod of graph.modules.values()) {
+    for (const f of mod.refFiles) refFiles.add(f);
+    for (const p of mod.refPrefixes) refPrefixes.add(p);
+  }
+  const seen = (f) =>
+    graph.modules.has(f) ||
+    graph.importers.has(f) ||
+    graph.reexporters.has(f) ||
+    refFiles.has(f) ||
+    [...refPrefixes].some((p) => f === p || f.startsWith(`${p}/`));
+  const deletedTest = (f) => /^test\/[^/]+\.test\.js$/.test(f) && !existsSync(path.join(root, f));
+  const unseen = relevant.filter((f) => !seen(f) && !deletedTest(f) && !(f.startsWith("docs/") || f.endsWith(".md")));
+  if (unseen.length) return full(`full suite: no test's import graph or path references reach ${list(unseen)}`);
+
   const reached = new Set();
   for (const file of relevant) for (const name of reachers(graph, file)) reached.add(name);
   const selected = testFiles.filter((abs) => reached.has(rel(abs)));

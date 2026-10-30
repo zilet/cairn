@@ -30,6 +30,33 @@ if (rssFile) {
     } catch {}
   });
 }
+// The lifeline. test/run.mjs starts each file's `node --test` process as the leader of its
+// own process group, so a runner killed outright (SIGKILL: no handler runs) would leave
+// every running group orphaned. The `--test` process never evaluates this module (it only
+// passes --import on to the file's process), so the FILE'S process keeps the watch: once
+// the runner is gone it takes its group — its parent, itself and whatever it started —
+// down. Only when the runner set CAIRN_TEST_RUNNER_PID, this is the file's process
+// (NODE_TEST_CONTEXT), and its parent really leads a process group (a group with the
+// parent's pid as its id exists) — so a bare `node --test`, or one a test starts inside
+// its own group, never signals a group that is not a runner's.
+const runnerPid = Number(process.env.CAIRN_TEST_RUNNER_PID);
+if (runnerPid > 0 && process.env.NODE_TEST_CONTEXT && process.platform !== "win32") {
+  let parentLeads = false;
+  try {
+    process.kill(-process.ppid, 0);
+    parentLeads = process.ppid !== runnerPid && process.ppid > 1;
+  } catch {}
+  if (parentLeads) {
+    setInterval(() => {
+      try {
+        process.kill(runnerPid, 0);
+      } catch (error) {
+        if (error.code === "ESRCH") process.kill(0, "SIGKILL");
+      }
+    }, 500).unref();
+  }
+}
+
 // Where the runner cannot sample other processes (an OS sandbox refusing `ps`), the test
 // file's own process watches its RSS from a worker thread — a thread, so a main thread
 // stuck in a synchronous runaway is still caught — and past the budget leaves the figure

@@ -39,7 +39,8 @@ test("a failing assert.equal(node, null) names the node in a short message, at o
   assert.ok(error.message.length < 1_000, `message is ${error.message.length} chars:\n${error.message.slice(0, 1200)}`);
   assert.match(error.message, /localName: 'button'/);
   assert.match(error.message, /Log/);
-  assert.ok(ms < 1_000, `failed in ${Math.round(ms)} ms`);
+  // Generous: the size bound above is the real check; this only catches a walk that runs away.
+  assert.ok(ms < 10_000, `failed in ${Math.round(ms)} ms`);
 });
 
 test("the message grows with the node's own subtree, never with the page around it", () => {

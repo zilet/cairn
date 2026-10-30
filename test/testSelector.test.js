@@ -53,13 +53,31 @@ const FILES = {
   "test/_dom.mjs": "export function loadClientModule() {}\n",
   "test/reads.test.js":
     'import fs from "node:fs";\nimport path from "node:path";\nfs.readFileSync(path.join(root, "src", "c.ts"), "utf8");\n',
+  // A child process that imports the built module: the walk goes on through it.
+  "test/spawn.test.js":
+    'import { spawnSync } from "node:child_process";\nimport path from "node:path";\n' +
+    'const target = path.join(root, "dist", "b.js");\n' +
+    'spawnSync(process.execPath, ["-e", "import(" + JSON.stringify(target) + ")"]);\n',
+  // A `/*` inside a // comment must not swallow the import after it.
+  "test/comment.test.js": '// reads `public/css/*.css` too\nimport { d } from "../dist/d.js";\nd({ n: 2 });\n',
+  // A dot-directory file a test reads by path, and one nothing names.
+  ".github/workflows/ci.yml": "on: push\n",
+  ".dockerignore": "node_modules\n",
+  "test/ci.test.js":
+    'import fs from "node:fs";\nimport path from "node:path";\nfs.readFileSync(path.join(root, ".github", "workflows", "ci.yml"), "utf8");\n',
 };
+const TEST_COUNT = Object.keys(FILES).filter((f) => f.endsWith(".test.js")).length;
 
 test("each kind of edge selects the tests behind it, and nothing else", (t) => {
   const repo = fixture(FILES);
   t.after(repo.done);
-  // Through a concrete import, a barrel's used name, a namespace handed on, and a path read.
-  assert.deepEqual(repo.pick("src/c.ts").names, ["b", "c", "reads"]);
+  // Through a concrete import, a barrel's used name, a namespace handed on, a path read,
+  // and a child process that imports dist/b.js (b imports c).
+  assert.deepEqual(repo.pick("src/c.ts").names, ["b", "c", "reads", "spawn"]);
+  // An import after a comment holding "/*" is still an import.
+  assert.deepEqual(repo.pick("src/d.ts").names, ["comment", "d"]);
+  // A dot-directory file a test reads selects that test.
+  assert.deepEqual(repo.pick(".github/workflows/ci.yml").names, ["ci"]);
   // A type-only import carries no edge: d.ts does not load c.ts.
   assert.ok(!repo.pick("src/c.ts").names.includes("d"));
   // test/_seed.js's own use of repo.a reaches every file that imports the helper.
@@ -91,9 +109,13 @@ test("infrastructure, the schema, or a graph it cannot build means the whole sui
   ]) {
     const result = repo.pick(changed, "src/a.ts");
     assert.equal(result.full, true, changed);
-    assert.equal(result.names.length, 6, changed);
+    assert.equal(result.names.length, TEST_COUNT, changed);
     assert.match(result.reason, why);
   }
+  // A changed file no test's graph or path references reach: run everything, and say which.
+  const unseen = repo.pick(".dockerignore", "src/a.ts");
+  assert.equal(unseen.full, true);
+  assert.match(unseen.reason, /reach \.dockerignore/);
   fs.rmSync(path.join(repo.root, "src"), { recursive: true, force: true });
   const noSrc = repo.pick("src/a.ts");
   assert.equal(noSrc.full, true);
@@ -105,7 +127,8 @@ test("on the real repo the graph builds fast and a change selects its importers,
   const graph = buildGraph(repoRoot);
   const buildMs = performance.now() - started;
   assert.ok(graph.modules.size > 1000, `parsed ${graph.modules.size} modules`);
-  assert.ok(buildMs < 2_000, `graph built in ${Math.round(buildMs)} ms`);
+  // A runaway guard, not a benchmark (it builds in ~0.35 s alone; this runs beside 8 others).
+  assert.ok(buildMs < 15_000, `graph built in ${Math.round(buildMs)} ms`);
 
   const testDir = path.join(repoRoot, "test");
   const testFiles = fs
@@ -123,6 +146,13 @@ test("on the real repo the graph builds fast and a change selects its importers,
   for (const f of direct) assert.ok(names.has(path.basename(f)), `${path.basename(f)} imports the route`);
   assert.ok(!names.has("savebarUi.test.js"), "a client-only test cannot load a route");
   assert.ok(route.selected.length < testFiles.length / 4, `${route.selected.length} of ${testFiles.length}`);
+
+  // A coach op that tests load only in a child process (spawned against dist/coachOps.js).
+  const nutrition = new Set(pick("src/coachOps/nutrition.ts").selected.map((f) => path.basename(f)));
+  for (const name of ["nutritionCheckinVetoCooldown.test.js", "nutritionCheckinProtectiveGuard.test.js"]) {
+    assert.ok(nutrition.has(name), `${name} spawns a child importing dist/coachOps.js`);
+  }
+  assert.ok(new Set(pick("src/routes/health-metrics.ts").selected.map((f) => path.basename(f))).has("auth.test.js"));
 
   // A stylesheet partial selects the tests that read the built CSS (and the ones that scan
   // all of src/), not the rest.

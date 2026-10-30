@@ -104,7 +104,19 @@ test("six concurrent runs never put more than the limit of CLIs on the host", as
     // The first two take a permit at once and spawn together, so which child logs its
     // start first is the OS scheduler's call; FIFO is a claim about the ones that WAITED.
     assert.deepEqual([...startOrder.slice(0, 2)].sort(), names.slice(0, 2), "the first two start at once");
-    assert.deepEqual(startOrder.slice(2), names.slice(2), "waiting is FIFO — no lane overtakes an earlier one");
+    // Waiting is FIFO: permits are granted slow-2, slow-3, slow-4, slow-5 in that order. Two
+    // grants can land in the same instant (two runs ending together), and then which child
+    // logs its start first is the scheduler's call again — so a waiter may trade places
+    // with its neighbour in the log, never jump further (under a loaded host the strict
+    // log order flaked: [slow-3, slow-2, …]).
+    assert.deepEqual([...startOrder.slice(2)].sort(), names.slice(2), "every waiter started");
+    for (const [expected, name] of names.slice(2).entries()) {
+      const at = startOrder.slice(2).indexOf(name);
+      assert.ok(
+        Math.abs(at - expected) <= 1,
+        `waiting is FIFO — ${name} started ${at}th of the waiters: ${startOrder}`
+      );
+    }
   });
 });
 

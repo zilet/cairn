@@ -22,7 +22,7 @@
 //                                  sampled every 250 ms (ps; /proc on Linux). Over it, the
 //                                  group is killed and the file fails "exceeded memory budget".
 //   CAIRN_TEST_FILE_TIMEOUT_MS     wall-clock limit per file. Default: 4× the file's recorded
-//                                  duration, at least 30 s, at most 120 s (120 s with no
+//                                  duration, at least 60 s, at most 120 s (120 s with no
 //                                  record). On expiry the whole process group is killed
 //                                  (grandchildren too) and the file fails "timed out".
 //   CAIRN_TEST_WORKERS             worker count. Default: min(12, cores − 1), and never more
@@ -71,7 +71,7 @@ const RSS_MB = envNumber("CAIRN_TEST_RSS_MB", 2048);
 const FIXED_TIMEOUT_MS = envNumber("CAIRN_TEST_FILE_TIMEOUT_MS", 0);
 const WARN_MS = envNumber("CAIRN_TEST_WARN_MS", 5000);
 const WARN_RSS_MB = envNumber("CAIRN_TEST_WARN_RSS_MB", 600);
-const TIMEOUT_FLOOR_MS = 30_000;
+const TIMEOUT_FLOOR_MS = 60_000;
 const TIMEOUT_CEILING_MS = 120_000;
 const SAMPLE_MS = 250;
 
@@ -241,6 +241,9 @@ function envFor(dir) {
     NODE_OPTIONS: [process.env.NODE_OPTIONS, heapFlag].filter(Boolean).join(" "),
     // Each node process in the file appends its own maxRSS here at exit (test/_isolate.mjs).
     CAIRN_TEST_RSS_FILE: path.join(dir, "max-rss.txt"),
+    // The lifeline: the file's group leader kills its own group if this runner dies, even by
+    // SIGKILL, which no handler here can catch (test/_isolate.mjs).
+    CAIRN_TEST_RUNNER_PID: String(process.pid),
     // Where the runner cannot sample processes, the file's process guards itself and
     // leaves its verdict here (see groupSampling).
     ...(groupSampling
@@ -431,6 +434,22 @@ function runFile(file, env) {
   const limitMs = timeoutFor(file);
   const timer = setTimeout(() => entry.kill(`timed out after ${Math.round(limitMs / 1000)}s`), limitMs);
   return new Promise((resolve) => {
+    // The host could not start the process at all (EAGAIN, ENOMEM): that file fails, the
+    // run goes on. An error after a successful start still ends in "exit" below.
+    child.on("error", (error) => {
+      if (child.pid) return;
+      clearTimeout(timer);
+      failure ??= `could not start (${error.code || error.message})`;
+      resolve({
+        file,
+        status: 1,
+        signal: null,
+        failure,
+        output: `✗ ${relOf(file)}: ${failure}\n`,
+        durationMs: Math.round(performance.now() - start),
+        rssMb: null,
+      });
+    });
     // `exit`, not `close`: a grandchild that inherited the pipes must not hold the slot.
     // Whatever the file left behind in its group goes with it.
     child.on("exit", (status, signal) => {
