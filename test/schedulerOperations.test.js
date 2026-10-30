@@ -243,8 +243,10 @@ test("a fresh install on the coach day before the coach hour waits a full week f
   );
   assert.deepEqual(enqueued, [], "no team review the evening of install");
 
-  // A week on, the slot is owed as usual.
-  const nextWeek = new Date(evening.getTime() + 7 * 864e5);
+  // A week on, the slot is owed as usual. A calendar week, never 7 × 24 h: across a DST
+  // fall-back that lands an hour early, before the coach hour.
+  const nextWeek = new Date(evening);
+  nextWeek.setDate(nextWeek.getDate() + 7);
   assert.notEqual(weeklySlotStamp(nextWeek, s.coach_day, coachHour), tonight);
 });
 
