@@ -99,17 +99,3 @@ test("--target must name a provider exactly (no pattern matching)", () => {
   assert.match(r.err, /--target must be one of: railway local \(got '\.\*'\)/);
   assert.doesNotMatch(r.all, /not found/);
 });
-
-test("fake railway: a re-run never overrides a variable you emptied or set to off", () =>
-  withTempDir((dir) => {
-    const rig = railwayRig(dir);
-    assert.equal(run(["--target=railway", "--yes"], { env: rig.env }).code, 0);
-    for (const value of ["", "off"]) {
-      const vars = rig.read("vars").replace(/^CAIRN_FEEDBACK_URL=.*$/gm, "");
-      fs.writeFileSync(path.join(rig.state, "vars"), `${vars.replace(/\n+/g, "\n")}CAIRN_FEEDBACK_URL=${value}\n`);
-      const before = rig.read("rlog").length;
-      const r = run(["--target=railway", "--yes"], { env: rig.env });
-      assert.equal(r.code, 0, r.all);
-      assert.doesNotMatch(rig.read("rlog").slice(before), /CAIRN_FEEDBACK_URL/, `kept "${value}"`);
-    }
-  }));

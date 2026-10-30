@@ -354,11 +354,58 @@ export function fire(target, type, init = {}) {
 // ---------------------------------------------------------------------------
 // Nodes
 
+// How a fake node prints. Every node points at its document and its parent, so walking
+// a node's own properties walks the whole circular page graph — and node:assert builds a
+// failing assertion's message with util.inspect over exactly that (customInspect OFF,
+// depth 1000, getters on). One failing `assert.equal(node, null)` once grew a test process
+// to 29 GB before it was killed. Two guards:
+//  - the links that lead OUT of a node's subtree (ownerDocument, parentNode, a document's
+//    defaultView and active element) and the derived views (classList, dataset, style)
+//    are non-enumerable own properties: reads and writes are unchanged, but inspect and
+//    deepEqual only ever walk the node's own attributes, properties and children;
+//  - util.inspect / console.log print one bounded line (`<FakeElement div#id.cls "…">`).
+const INSPECT = Symbol.for("nodejs.util.inspect.custom");
+const DESCRIBE_TEXT_MAX = 40;
+function describeText(text) {
+  const flat = String(text ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return flat.length > DESCRIBE_TEXT_MAX ? `${flat.slice(0, DESCRIBE_TEXT_MAX)}…` : flat;
+}
+function describeNode(node) {
+  const kind = node?.constructor?.name || "FakeNode";
+  let label = "";
+  if (node.nodeType === 1) {
+    const id = node.getAttribute("id");
+    const classes = (node.getAttribute("class") || "").split(/\s+/).filter(Boolean).slice(0, 4);
+    label = `${node.localName}${id ? `#${id}` : ""}${classes.map((c) => `.${c}`).join("")}`;
+  } else if (node.nodeType === 9) {
+    label = "#document";
+  } else if (node.nodeType === 11) {
+    label = `#document-fragment (${node.childNodes.length} children)`;
+  } else if (node.nodeType === 8) {
+    label = "#comment";
+  }
+  let text = "";
+  try {
+    text = node.nodeType === 9 ? "" : describeText(node.textContent);
+  } catch {}
+  return `<${kind}${label ? ` ${label}` : ""}${text ? ` ${JSON.stringify(text)}` : ""}>`;
+}
+
+function hidden(obj, values) {
+  for (const [key, value] of Object.entries(values)) {
+    Object.defineProperty(obj, key, { value, writable: true, enumerable: false, configurable: true });
+  }
+}
+
 export class FakeNode {
   constructor(ownerDocument) {
-    this.ownerDocument = ownerDocument;
-    this.parentNode = null;
+    hidden(this, { ownerDocument, parentNode: null });
     this.childNodes = [];
+  }
+  [INSPECT]() {
+    return describeNode(this);
   }
   get parentElement() {
     return this.parentNode?.nodeType === 1 ? this.parentNode : null;
@@ -716,9 +763,7 @@ export class FakeElement extends FakeNode {
     this.localName = namespaceURI === HTML_NS ? String(tagName).toLowerCase() : String(tagName);
     this._attrs = new Map();
     this._props = {};
-    this.classList = makeClassList(this);
-    this.dataset = makeDataset(this);
-    this.style = makeStyle(this);
+    hidden(this, { classList: makeClassList(this), dataset: makeDataset(this), style: makeStyle(this) });
   }
   get tagName() {
     return this.namespaceURI === HTML_NS ? this.localName.toUpperCase() : this.localName;
@@ -989,8 +1034,7 @@ export class FakeDocument extends FakeNode {
     super(null);
     this.nodeType = 9;
     this.nodeName = "#document";
-    this.defaultView = null;
-    this._active = null;
+    hidden(this, { defaultView: null, _active: null });
     this.readyState = "complete";
     this.visibilityState = "visible";
     this.hidden = false;

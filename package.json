@@ -46,6 +46,8 @@
     "pretest": "npm run build",
     "test": "node test/run.mjs",
     "test:built": "node test/run.mjs",
+    "pretest:changed": "npm run build",
+    "test:changed": "node test/run.mjs --changed",
     "test:serial": "node test/run.mjs --workers=1 --reporter=spec",
     "prebrain:eval": "npm run build",
     "brain:eval": "node --test --test-reporter=spec test/brain-scenarios/brain-scenarios.test.mjs",

@@ -8,6 +8,7 @@ import { latestMeasuredRmr } from "../dist/repo/metabolism.js";
 import { completeInstantFoodCapture } from "../dist/chatTurns.js";
 import { classifyChatRoute } from "../dist/chatRouting.js";
 import { explainExercise } from "../dist/coachOps.js";
+import { agentSlotStats } from "../dist/agents.js";
 
 beforeEach(() => {
   resetTables("chat_turns", "chat_messages", "food_notes", "ai_cache", "exercises", "garmin_activities", "day_reads");
@@ -99,9 +100,15 @@ test("a stale how-to is served at once while the rewrite runs off the request", 
   assert.equal(out.stale, true);
   assert.equal(out.cached, true);
   assert.deepEqual(out.explanation, explanation);
-  // Let the background rewrite settle so it cannot land in the next test.
-  for (let i = 0; i < 50; i++) {
-    await new Promise((r) => setTimeout(r, 100));
+  // Let the background rewrite settle so it cannot land in the next test. The offline
+  // stub never writes a usable how-to, so waiting for a second cache row alone waited the
+  // whole 5 s cap every run: the rewrite is done once no agent permit is held or queued
+  // across a few consecutive polls (it spawns under the process-wide cap).
+  let idle = 0;
+  for (let i = 0; i < 250 && idle < 3; i++) {
+    await new Promise((r) => setTimeout(r, 20));
     if (db.prepare(`SELECT COUNT(*) AS n FROM ai_cache WHERE kind='exercise_explanation'`).get().n > 1) break;
+    const slots = agentSlotStats();
+    idle = slots.active === 0 && slots.waiting === 0 ? idle + 1 : 0;
   }
 });

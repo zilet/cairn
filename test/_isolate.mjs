@@ -13,12 +13,44 @@
 // pristine floor, so correctness is independent of file order, shard count, and
 // added test files. Per-file `resetTables` calls stay valid (they just delete
 // already-empty tables) — this is the belt over their suspenders.
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import { registerHooks } from "node:module";
 import path from "node:path";
 import { beforeEach } from "node:test";
 // Offline floor for a run started without test/run.mjs; must precede any dist import.
 import "./_offline.mjs";
+
+// test/run.mjs records each file's peak memory: every node process of the file (the
+// `--test` runner and the file's own process) appends its maxRSS, in KB, at exit.
+const rssFile = process.env.CAIRN_TEST_RSS_FILE;
+if (rssFile) {
+  process.once("exit", () => {
+    try {
+      appendFileSync(rssFile, `${process.resourceUsage().maxRSS}\n`);
+    } catch {}
+  });
+}
+// Where the runner cannot sample other processes (an OS sandbox refusing `ps`), the test
+// file's own process watches its RSS from a worker thread — a thread, so a main thread
+// stuck in a synchronous runaway is still caught — and past the budget leaves the figure
+// for the runner and kills itself. Only the file's process (NODE_TEST_CONTEXT), not the
+// `--test` runner above it.
+const guardMb = Number(process.env.CAIRN_TEST_RSS_GUARD_MB);
+if (guardMb > 0 && process.env.CAIRN_TEST_RSS_GUARD_FILE && process.env.NODE_TEST_CONTEXT) {
+  const { Worker } = await import("node:worker_threads");
+  const guard = new Worker(
+    `const { workerData } = require("node:worker_threads");
+     const fs = require("node:fs");
+     setInterval(() => {
+       const mb = process.memoryUsage.rss() / 2 ** 20;
+       if (mb <= workerData.mb) return;
+       try { fs.writeFileSync(workerData.file, String(Math.round(mb))); } catch {}
+       process.kill(process.pid, "SIGKILL");
+     }, 100);`,
+    { eval: true, workerData: { mb: guardMb, file: process.env.CAIRN_TEST_RSS_GUARD_FILE } }
+  );
+  guard.unref();
+}
 
 // In-process memos and timers that must not leak from one test into the next.
 const dist = (rel) => new URL(rel, import.meta.url).href;

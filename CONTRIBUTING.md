@@ -160,6 +160,9 @@ against throwaway temp databases, and does not call agent CLIs or the network:
 npm test
 ```
 
+While iterating, `npm run test:changed` runs only the test files your change can reach; the
+per-file budgets and knobs are in `docs/OPERATIONS.md` "Running tests".
+
 Please make sure `npm test` passes before opening a PR. Keep this suite
 **deterministic, offline, and fast** — it must not spawn a server or reach the
 network.

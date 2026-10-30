@@ -4,8 +4,10 @@
 // A cold read now answers `configured: null` + `login_checking: true` while ONE
 // background probe per agent fills the cache; the next read has the verdict.
 //
-// The fixture agent is this very Node binary, told to take a few seconds to say it is
-// signed in — no real CLI is ever probed or spawned.
+// The fixture agent is this very Node binary, held at a GATE: its probe cannot answer
+// until the test opens the gate, so "the read answered before the probe" is a fact of
+// the fixture, not a race against a clock. (It used to sleep 3 s per probe, four times:
+// 12.7 s of waiting.) No real CLI is ever probed or spawned.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -20,12 +22,30 @@ import {
   settleAgentLoginChecks,
 } from "../dist/agents.js";
 import { getAgentConfig } from "../dist/repo/settings.js";
-import { operatorRouter, settingsResponse } from "../dist/routes/operator.js";
+import { operatorRouter, SETTINGS_LOGIN_WAIT_MS, settingsResponse } from "../dist/routes/operator.js";
 
-const SLOW_MS = 3000;
+// A read that answers "at once" does so in milliseconds; this bound only has to sit
+// well below the probe's own leash on a loaded machine.
+const PROMPT_MS = 2_000;
+// The probe's fallback deadline: a gate nobody opens never leaves a process behind.
+const GATE_GIVE_UP_MS = 15_000;
+
+// A Node snippet that prints `line` once `gatePath` exists (polling every 10 ms).
+function gated(gatePath, line) {
+  return (
+    `const fs = require("fs"); const t = setInterval(() => { if (fs.existsSync(${JSON.stringify(gatePath)})) ` +
+    `{ clearInterval(t); console.log(${JSON.stringify(line)}); } }, 10); ` +
+    `setTimeout(() => process.exit(1), ${GATE_GIVE_UP_MS}).unref?.();`
+  );
+}
+function makeGate(dir) {
+  const gatePath = path.join(dir, "gate-open");
+  return { gatePath, open: () => fs.writeFileSync(gatePath, "") };
+}
 
 async function withSlowLoginAgent(fn) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cairn-login-probe-"));
+  const gate = makeGate(dir);
   const configPath = path.join(dir, "agents.json");
   fs.writeFileSync(
     configPath,
@@ -36,7 +56,7 @@ async function withSlowLoginAgent(fn) {
         input: "arg",
         description: "fixture",
         env_required: [],
-        status_check: ["-e", `setTimeout(() => console.log(JSON.stringify({ loggedIn: true })), ${SLOW_MS})`],
+        status_check: ["-e", gated(gate.gatePath, JSON.stringify({ loggedIn: true }))],
       },
     })
   );
@@ -44,10 +64,11 @@ async function withSlowLoginAgent(fn) {
   process.env.AGENTS_CONFIG = configPath;
   invalidateAgentConfigured();
   try {
-    return await fn();
+    return await fn(gate);
   } finally {
     // Let any probe still running land before the config it read goes away.
-    await settleAgentLoginChecks(SLOW_MS * 3);
+    gate.open();
+    await settleAgentLoginChecks(GATE_GIVE_UP_MS);
     if (previous == null) delete process.env.AGENTS_CONFIG;
     else process.env.AGENTS_CONFIG = previous;
     invalidateAgentConfigured();
@@ -62,15 +83,16 @@ function getSettingsRoute() {
 }
 
 test("a cold login probe never holds the settings read: it says checking, then the verdict", async () => {
-  await withSlowLoginAgent(async () => {
+  await withSlowLoginAgent(async (gate) => {
     const started = Date.now();
     const cold = getAgentConfig({ loginProbe: "peek" }).find((row) => row.name === "claude");
-    assert.ok(Date.now() - started < SLOW_MS / 2, `answered in ${Date.now() - started} ms, not after the probe`);
+    assert.ok(Date.now() - started < PROMPT_MS, `answered in ${Date.now() - started} ms, not after the probe`);
     assert.equal(cold.present, true);
     assert.equal(cold.configured, null, "unknown while it is read, never a guess");
     assert.equal(cold.login_checking, true);
     assert.equal(cold.signed_in, false, "signed in stays a positive verdict only");
 
+    gate.open();
     assert.equal(await refreshAgentConfigured("claude"), true);
     const warm = getAgentConfig({ loginProbe: "peek" }).find((row) => row.name === "claude");
     assert.equal(warm.configured, true);
@@ -83,14 +105,19 @@ test("the settings body and GET /settings answer before a slow probe finishes", 
   await withSlowLoginAgent(async () => {
     let started = Date.now();
     const body = settingsResponse();
-    assert.ok(Date.now() - started < SLOW_MS / 2, "the aggregate-primed body never spawns synchronously");
+    assert.ok(Date.now() - started < PROMPT_MS, "the aggregate-primed body never spawns synchronously");
     assert.equal(body.agents.find((row) => row.name === "claude").login_checking, true);
 
     invalidateAgentConfigured();
     started = Date.now();
     const sent = await new Promise((resolve) => getSettingsRoute()({}, { json: (value) => resolve(value) }));
     const elapsed = Date.now() - started;
-    assert.ok(elapsed < SLOW_MS - 500, `GET /settings replied in ${elapsed} ms, before the probe`);
+    // The route gives a cold probe its designed grace (SETTINGS_LOGIN_WAIT_MS), then replies
+    // "checking" — the held probe proves the reply never waited for the verdict.
+    assert.ok(
+      elapsed < SETTINGS_LOGIN_WAIT_MS + PROMPT_MS,
+      `GET /settings replied in ${elapsed} ms, while the probe was held`
+    );
     const row = sent.agents.find((agent) => agent.name === "claude");
     assert.equal(row.login_checking, true);
     assert.equal(row.configured, null);
@@ -98,7 +125,8 @@ test("the settings body and GET /settings answer before a slow probe finishes", 
 });
 
 test("a warm cache answers at once with the verdict and nothing checking", async () => {
-  await withSlowLoginAgent(async () => {
+  await withSlowLoginAgent(async (gate) => {
+    gate.open();
     await refreshAgentConfigured("claude");
     const sent = await new Promise((resolve) => getSettingsRoute()({}, { json: (value) => resolve(value) }));
     const row = sent.agents.find((agent) => agent.name === "claude");
@@ -109,14 +137,15 @@ test("a warm cache answers at once with the verdict and nothing checking", async
 
 // The same law for the presence and version probes: each was a `<cmd> --version`
 // spawnSync (4 s and 5 s leashes) inside the settings read on a cold cache. The fixture
-// CLI here takes SLOW_MS to print its version; the read answers presence from a PATH
-// lookup at once and the version once the background probe has landed.
+// CLI here prints its version only once the gate opens; the read answers presence from a
+// PATH lookup at once and the version once the background probe has landed.
 test("a slow --version never holds the settings read: present at once, the version after", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cairn-version-probe-"));
+  const gate = makeGate(dir);
   const cli = path.join(dir, "slow-cli");
   fs.writeFileSync(
     cli,
-    `#!${process.execPath}\nif (process.argv.includes("--version")) setTimeout(() => console.log("slow-cli 9.8.7"), ${SLOW_MS});\n`
+    `#!${process.execPath}\nif (process.argv.includes("--version")) { ${gated(gate.gatePath, "slow-cli 9.8.7")} }\n`
   );
   fs.chmodSync(cli, 0o755);
   const configPath = path.join(dir, "agents.json");
@@ -131,10 +160,11 @@ test("a slow --version never holds the settings read: present at once, the versi
     const started = Date.now();
     const cold = getAgentConfig({ loginProbe: "peek" }).find((row) => row.name === "claude");
     const elapsed = Date.now() - started;
-    assert.ok(elapsed < SLOW_MS / 2, `answered in ${elapsed} ms, not after the --version probe`);
+    assert.ok(elapsed < PROMPT_MS, `answered in ${elapsed} ms, not after the --version probe`);
     assert.equal(cold.present, true, "the PATH lookup answers presence without a spawn");
     assert.equal(cold.version, null, "no version until the probe prints one");
 
+    gate.open();
     const [present, version] = await Promise.all([refreshCommandPresent(cli), refreshAgentVersion("claude")]);
     assert.equal(present, true);
     assert.equal(version, "9.8.7");
@@ -142,7 +172,8 @@ test("a slow --version never holds the settings read: present at once, the versi
     assert.equal(warm.present, true);
     assert.equal(warm.version, "9.8.7");
   } finally {
-    await settleAgentLoginChecks(SLOW_MS * 3);
+    gate.open();
+    await settleAgentLoginChecks(GATE_GIVE_UP_MS);
     if (previous == null) delete process.env.AGENTS_CONFIG;
     else process.env.AGENTS_CONFIG = previous;
     invalidateAgentConfigured();

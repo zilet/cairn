@@ -163,7 +163,8 @@ worker also runs with its own `agents.offline.json` (`AGENTS_CONFIG`): every non
 is rewritten to a nonexistent binary, so a real machine's installed CLIs are never probed or spawned by
 a test that picks an agent.
 
-When verifying by hand, prefer `node test/run.mjs <files>`. A run that skips it is still offline:
+When verifying by hand, prefer `node test/run.mjs <files>` (or `npm run test:changed`): it enforces per-file heap,
+RSS and time budgets — see `docs/OPERATIONS.md` "Running tests". A run that skips it is still offline:
 `test/_offline.mjs` (loaded by `_isolate.mjs` and `_seed.js`) fills an unset `DATA_DIR`/`DB_PATH`/
 `AGENTS_CONFIG` with a throwaway dir and the offline agents table, and under `node:test`
 `src/dataDir.ts` (every path under `data/`) / `src/agents.ts` themselves refuse the real `data/` and
