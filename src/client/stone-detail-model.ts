@@ -19,7 +19,7 @@
 
   // Each stone's homes, in the order they are offered. Titles are the surfaces' own
   // names; the targets are views the router already knows (the shell maps each onto
-  // its home: plan/edit → Train, plan/endurance → Horizon, plan/food → Today).
+  // its home: plan/edit → Train, plan/endurance → Horizon, progress/intake → Train).
   const STONE_HOMES: Readonly<Record<ClientStoneKey, readonly ClientStoneHome[]>> = {
     strength: [
       home("overview", "Train", "How your lifts are moving", { tab: "progress", section: "overview" }),
@@ -30,8 +30,7 @@
       home("runs", "Endurance", "Your runs and what they add up to", { tab: "progress", section: "endurance" }),
     ],
     fuel: [
-      home("fuel", "Fuel", "Log today's food and see the day so far", { tab: "plan", section: "food" }),
-      home("intake", "Intake", "What you have eaten, week over week", { tab: "progress", section: "intake" }),
+      home("intake", "Intake", "Today's food so far, then the weeks before it", { tab: "progress", section: "intake" }),
       home("energy", "Energy", "What you burn, read from your own log", { tab: "progress", section: "energy" }),
     ],
     recovery: [

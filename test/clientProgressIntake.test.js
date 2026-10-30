@@ -3,12 +3,14 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import vm from "node:vm";
 
-function load() {
+// `extra` lands after the modules run, so a test can pin the device's today (localISO).
+function load(extra = {}) {
   const context = { window: {}, URL, console };
   vm.runInNewContext(readFileSync(new URL("../public/js/date-utils.js", import.meta.url), "utf8"), context);
   vm.runInNewContext(readFileSync(new URL("../public/js/ui-format.js", import.meta.url), "utf8"), context);
   vm.runInNewContext(readFileSync(new URL("../public/js/html-utils.js", import.meta.url), "utf8"), context);
   vm.runInNewContext(readFileSync(new URL("../public/js/progress-intake-client.js", import.meta.url), "utf8"), context);
+  Object.assign(context, extra);
   return context.window.CairnProgressIntake;
 }
 
@@ -219,13 +221,25 @@ test("intake renderer leads with meaning, shows honest gaps, and escapes server 
 });
 
 test("intake timelines expose accepted historical targets and never coerce null into a value", () => {
-  const intake = load();
+  const intake = load({ localISO: () => "2026-07-23" });
   const html = intake.intakeChartHtml(fixture(), "carbs_g");
-  assert.match(html, /bottom:67\.7%/); // 205 relative to the 303 ceiling
+  assert.match(html, /bottom:85\.4%/); // 205 relative to the 240 ceiling (today's 303 is the card's, not a bar)
   assert.match(html, /Carbs unknown|unlogged day/);
   assert.doesNotMatch(html, /2026-07-22: 0 g recorded/);
   assert.match(html, /current 303 g/);
   assert.doesNotMatch(html, />2026-07-\d{2}</);
+});
+
+test("the days-before-today bars end yesterday: today is the card above, never a second bar", () => {
+  // The device's today is the read's last day.
+  const html = load({ localISO: () => "2026-07-23" }).intakeChartHtml(fixture(), "kcal");
+  assert.equal((html.match(/class="nprog-day/g) || []).length, 2, "two closed days, today dropped");
+  assert.doesNotMatch(html, /(?:Jul 23|23 Jul):/);
+  assert.match(html, /<span>[^<]*(?:Jul 22|22 Jul)<\/span><\/div>\s*<\/section>/, "the axis ends yesterday");
+  // The device's own today wins: read the day after, the read's last day is a closed day.
+  const later = load({ localISO: () => "2026-07-24" }).intakeChartHtml(fixture(), "kcal");
+  assert.equal((later.match(/class="nprog-day/g) || []).length, 3);
+  assert.match(later, /(?:Jul 23|23 Jul): 470 kcal recorded/);
 });
 
 test("intake timelines name a formula-derived protein reference honestly", () => {

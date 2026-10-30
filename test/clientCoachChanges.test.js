@@ -49,11 +49,11 @@ test("meal-plan Hold and Undo use the durable decision rollback path", () => {
   assert.match(journal, /await repaintMealHistory\(\)/);
   assert.match(journal, /Undo recorded — showing your current meals/);
   assert.doesNotMatch(journal + source, /Put back the previous meal plan/);
-  // The week menu and Fuel's past-weeks fold reach the journal through withBundle.
-  assert.match(source, /withBundle\("meals", \(\) => CairnMealJournal\.paintMenu\(token, slot, peek, focus\)\)/);
+  // The week menu and its past-weeks fold reach the journal through withBundle.
+  assert.match(source, /withBundle\("meals", \(\) => CairnMealJournal\.paintMenu\(token, slot, peek\)\)/);
   // The week menu's page frame is the bundle's too: the eager screen only wires its hooks.
   assert.match(source, /view\.innerHTML = CairnMealJournal\.menuPageHtml\(\)/);
-  for (const hook of ["data-mmenu-back", "data-mmenu-history", 'id="mealMenuSlot"', "‹ Fuel"]) {
+  for (const hook of ["data-mmenu-back", 'id="fuelHistory"', 'id="mealMenuSlot"', "‹ Intake"]) {
     assert.ok(journal.includes(hook), `menuPageHtml carries ${hook}`);
   }
   assert.match(source, /withBundle\("meals", \(\) => CairnMealJournal\.paintHistory\(token, slot, peek\)\)/);

@@ -133,7 +133,7 @@ type YouLandingGroup = { key: string; title: string; rows: readonly YouLandingRo
   }
 
   // A stone's home is a view the router already knows: route it exactly as a deep
-  // link would (so plan/food lands on Fuel, stand/domain on the domain drill-in),
+  // link would (so progress/intake lands on Intake, stand/domain on the domain drill-in),
   // then open it. Leaving the detail forgets it, so the You tab reopens the landing.
   function openStoneHome(target: ClientYouTarget): void {
     state.youSeg = null;

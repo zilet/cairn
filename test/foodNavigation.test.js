@@ -5,27 +5,30 @@ import vm from "node:vm";
 
 const file = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 
-test("logged food opens Fuel under Today, and shortcuts land there", () => {
+test("today's food has ONE home, Train › Intake, and every way in lands there", () => {
   const ui = file("public/js/02-ui.js");
   const uiSegments = file("public/js/ui-segments-client.js");
   const meals = file("public/js/06-coach-meals.js");
   const todayRailLoaders = file("src/client/today-rail-loaders-client.ts");
+  const glance = file("src/client/today-fuel-glance-client.ts");
   const chat = file("public/js/09-plan-chat.js");
   const chatFuelContext = file("public/js/chat-fuel-context-client.js");
   const appRenderDispatch = file("public/js/app-render-dispatch.js");
 
   assert.doesNotMatch(uiSegments, /function planSeg|planHandlers/, "no Plan seg bar survives Horizon's race view");
   assert.doesNotMatch(ui, /planSeg\(\)|PLAN_HANDLERS/, "the UI shell carries no Plan bar");
-  assert.match(meals, /homeBackHtml\("today", "Today"\)/, "Fuel steps back to Today, its home");
-  assert.doesNotMatch(meals, /segBar\("food", planSeg\(\)\)/, "Fuel no longer wears the Plan bar");
-  assert.match(meals, /class="meal-energy food-journal fuel"/, "Food tab owns the Fuel surface and the energy read");
-  assert.match(todayRailLoaders, /deps\.state\.planJump = "food"; deps\.activateTab\("plan"\)/, "Today logged-fuel card opens Food");
-  assert.match(chat, /state\.planJump = "food"; activateTab\("plan"\)/, "Chat fuel strip opens Food");
+  assert.match(ui, /function openIntake\(\)\s*\{\s*state\.progressSeg = "intake";\s*activateTab\("progress"\);/, "one opener for today's food");
+  assert.doesNotMatch(meals, /renderFoodJournal|food-journal/, "the separate Fuel view is gone");
+  assert.match(todayRailLoaders, /addEventListener\("click", \(\) => openIntake\(\)\)/, "Today's logged-fuel card opens Intake");
+  assert.match(glance, /open: \(\) => openIntake\(\)/, "Today's Fuel glance opens Intake");
+  assert.match(chat, /openFoodReview: \(\) => openIntake\(\)/, "Chat's fuel strip opens Intake");
+  for (const source of [todayRailLoaders, glance, chat]) assert.doesNotMatch(source, /planJump = "food"/);
   assert.match(chat, /chatFuelContextApi\(\)\.wants\(messages\)/, "Chat screen delegates fuel gating to the context helper");
   assert.match(chatFuelContext, /function chatFuelWantsSurface\(messages = chatFuelContextMessages\)/, "Chat fuel strip is gated by conversation context");
   assert.match(chatFuelContext, /if \(!chatFuelWantsSurface\(messages \|\| chatFuelContextMessages\)\) \{[\s\S]*slot\.innerHTML = "";[\s\S]*return;[\s\S]*\}/, "Unrelated chats suppress the fuel strip");
   assert.doesNotMatch(chat, /requestAnimationFrame\(measureChatTop\); \/\/ re-measure once layout\/fonts settle\s+loadChatFuel\(token\);/, "Chat fuel strip waits for hydrated messages, not the empty shell");
-  assert.match(appRenderDispatch, /jump === "food" \? lazy\("fuel", \(\) => renderFoodJournal\(\)\)/, "Plan routing can jump directly to Food (the lazy fuel bundle)");
+  assert.match(appRenderDispatch, /if \(state\.progressSeg === "intake"\)\s*return lazy\("fuel", \(\) => renderIntake\(\)\)/, "Intake renders from the lazy fuel bundle");
+  assert.doesNotMatch(appRenderDispatch, /jump === "food"/, "no Plan → Food jump survives");
 });
 
 function loadChatFuelGate() {

@@ -80,7 +80,7 @@ function createController(context, overrides = {}) {
     renderEnergy: () => calls.push(["renderEnergy"]),
     renderPlanEditor: () => calls.push(["renderPlanEditor"]),
     renderPlanEndurance: () => calls.push(["renderPlanEndurance"]),
-    renderFoodJournal: () => calls.push(["renderFoodJournal"]),
+    renderIntake: () => calls.push(["renderIntake"]),
     renderMeals: () => calls.push(["renderMeals"]),
     renderCoach: () => calls.push(["renderCoach"]),
     activateTab: (name) => calls.push(["activateTab", name]),
@@ -428,11 +428,14 @@ test("Progress top-group buttons route to the group's default leaf", async () =>
   assert.ok(calls.some((call) => call[0] === "syncRouteFromState"));
 });
 
-test("Train's Intake group carries a primary Log a meal button and composer slot under the header", () => {
+test("Intake's deeper Energy leaf carries a Log a meal button; the landing holds the composer itself", () => {
   const context = loadSegments();
   const { controller } = createController(context);
   const PROGRESS_SEG = context.CairnUiSegments.PROGRESS_SEG;
-  for (const leaf of ["intake", "energy"]) {
+  // The Intake landing opens on today's food with the composer in it (intake-screen.ts),
+  // so it wears no second "Log a meal" above it.
+  assert.doesNotMatch(controller.segBar("intake", PROGRESS_SEG), /data-intake-log-btn/, "intake");
+  for (const leaf of ["energy"]) {
     const html = controller.segBar(leaf, PROGRESS_SEG);
     assert.match(html, /<button class="btn btn-solid train-fuel-log-btn" type="button" data-intake-log-btn aria-expanded="false" aria-controls="intakeLogSlot">Log a meal<\/button>/, leaf);
     assert.match(html, /id="intakeLogSlot" class="train-fuel-log-slot" data-intake-log-slot/, leaf);

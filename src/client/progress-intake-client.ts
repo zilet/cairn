@@ -1,6 +1,7 @@
 // @ts-check
-// Progress → Fuel → Intake. Pure, escaped rendering over the deterministic
-// nutrition-progress read; missing days/nutrients remain visible gaps.
+// Train › Intake's second section, the days before today (intake-screen.ts mounts it
+// under today's card). Pure, escaped rendering over the deterministic nutrition-progress
+// read; missing days/nutrients remain visible gaps.
 
 type IntakeProgress = import("../contracts/client.js").ClientNutritionProgress;
 type IntakeNutrient = import("../contracts/client.js").ClientNutritionProgressNutrient;
@@ -84,9 +85,23 @@ type IntakeNutrient = import("../contracts/client.js").ClientNutritionProgressNu
     return `<div class="empty">The intake read isn't available right now. Your recorded food is still safe.</div>`;
   }
 
+  // The device's today: Intake's card above already shows it, so the bars stop the day before.
+  function deviceToday(progress: IntakeProgress): string {
+    const local = (globalThis as { localISO?: () => string }).localISO;
+    return typeof local === "function" ? local() : progress.through;
+  }
+
+  /** The read's days before today, oldest first: today is the card's, never a second bar. */
+  function closedSeries(progress: IntakeProgress): IntakeProgress["series"] {
+    const today = deviceToday(progress);
+    return (Array.isArray(progress.series) ? progress.series : []).filter((day) => day.date < today);
+  }
+
   function intakeChartHtml(progress: IntakeProgress, selected: IntakeNutrient): string {
     const summary = progress.nutrients.find((item) => item.nutrient === selected);
-    const points = progress.series
+    const series = closedSeries(progress);
+    const through = series.length ? series[series.length - 1].date : progress.through;
+    const points = series
       .map((day) => day.nutrients[selected])
       .filter((value): value is number => value != null && Number.isFinite(Number(value)));
     const targetFor = (day: IntakeProgress["series"][number]): number | null => {
@@ -94,9 +109,9 @@ type IntakeNutrient = import("../contracts/client.js").ClientNutritionProgressNu
       const value = day.target?.[selected as "kcal" | "protein_g" | "carbs_g" | "fat_g"];
       return value != null && Number.isFinite(Number(value)) ? Number(value) : null;
     };
-    const targets = progress.series.map(targetFor).filter((value): value is number => value != null);
+    const targets = series.map(targetFor).filter((value): value is number => value != null);
     const ceiling = Math.max(1, ...points.map(Number), ...targets);
-    const bars = progress.series
+    const bars = series
       .map((day) => {
         const value = day.nutrients[selected];
         const known = value != null && Number.isFinite(Number(value));
@@ -128,7 +143,7 @@ type IntakeNutrient = import("../contracts/client.js").ClientNutritionProgressNu
       <div class="nprog-chart" role="group" aria-label="${escAttr(`${SHORT[selected]} by day; gaps are unlogged or unknown, never zero`)}">
         <div class="nprog-bars">${bars}</div>
       </div>
-      <div class="nprog-axis"><span>${escHtml(intakeDate(progress.since))}</span><span>visible gaps = unknown</span><span>${escHtml(intakeDate(progress.through))}</span></div>
+      <div class="nprog-axis"><span>${escHtml(intakeDate(progress.since))}</span><span>visible gaps = unknown</span><span>${escHtml(intakeDate(through))}</span></div>
     </section>`;
   }
 
@@ -245,13 +260,14 @@ type IntakeNutrient = import("../contracts/client.js").ClientNutritionProgressNu
       (nutrient) =>
         `<button class="nprog-pick${nutrient === active ? " active" : ""}" type="button" data-intake-nutrient="${nutrient}" aria-pressed="${nutrient === active ? "true" : "false"}">${SHORT[nutrient]}</button>`
     ).join("");
-    // First view: ONE spoken line about what was eaten. The coverage read, its
-    // bookkeeping and the next move are the server's careful register; they sit one
-    // tap deeper, never as the wall the screen opens on.
+    // Under today's card, the days before it: ONE spoken line about what was eaten,
+    // then the daily bars. The coverage read, its bookkeeping and the next move are the
+    // server's careful register, and the balance, food-quality and bloodwork reads are
+    // the long view; each sits one tap deeper, never as the wall Intake opens on.
     return `<div class="nprog">
-      <section class="nprog-read reveal" style="--i:0">
-        <div class="lbl">Recorded intake · ${progress.window_days} days</div>
-        <h1 class="nprog-voice">${escHtml(intakeVoiceLine(progress))}</h1>
+      <section class="nprog-read reveal" style="--i:1" aria-labelledby="intakeWeeksTitle">
+        <h2 class="lbl" id="intakeWeeksTitle">Before today · ${progress.window_days} days</h2>
+        <p class="nprog-voice">${escHtml(intakeVoiceLine(progress))}</p>
         <details class="nprog-more">
           <summary>How complete this is</summary>
           <p class="nprog-more-read">${escHtml(progress.read)}</p>
@@ -261,14 +277,23 @@ type IntakeNutrient = import("../contracts/client.js").ClientNutritionProgressNu
       </section>
       <nav class="nprog-picks rail" aria-label="Choose nutrient timeline">${selector}</nav>
       ${intakeChartHtml(progress, active)}
-      ${intakeBalanceHtml(progress)}
-      ${intakeFoodQualityHtml(progress)}
-      ${intakeHealthHtml(progress)}
+      <details class="nprog-more nprog-long">
+        <summary>Balance, food quality and bloodwork context</summary>
+        ${intakeBalanceHtml(progress)}
+        ${intakeFoodQualityHtml(progress)}
+        ${intakeHealthHtml(progress)}
+      </details>
     </div>`;
   }
 
   function render(root: Element, progress: IntakeProgress, selected: IntakeNutrient = "kcal"): void {
+    // A nutrient pick (or a fresher read) repaints in place; a fold left open stays open.
+    const folds = () => Array.from(root.querySelectorAll<HTMLElement>("details.nprog-more"));
+    const open = folds().map((fold) => fold.hasAttribute("open"));
     root.innerHTML = intakeBodyHtml(progress, selected);
+    folds().forEach((fold, i) => {
+      if (open[i]) fold.setAttribute("open", "");
+    });
     root.querySelectorAll<HTMLElement>("[data-intake-nutrient]").forEach((button) =>
       button.addEventListener("click", () => {
         const nutrient = button.dataset.intakeNutrient as IntakeNutrient;

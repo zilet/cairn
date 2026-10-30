@@ -318,7 +318,7 @@
 .symptom-history-row:first-child{border-top:0}
 .symptom-history-row .linkbtn{flex:0 0 auto;min-height:30px;padding:var(--space-3) 1px}
 
-/* Energy Balance (Progress, and Fuel's foot) — a calm editorial read, never a
+/* Energy Balance (Train › Energy) — a calm editorial read, never a
    dashboard. Atelier v2: one surface card, a mono kicker behind a small dot, the
    read in the serif voice. A lever read (dropping faster than lean-safe) says so
    with a dawn dot in the kicker, never a painted edge. */
@@ -367,12 +367,14 @@
   border-radius:var(--radius-sm);padding:var(--space-7) var(--space-8);
 }
 
-/* Progress → Fuel → Intake — meaning first, one selectable timeline, visible
-   unknowns, and a bounded clinical-context footnote rather than a dashboard. */
+/* Train › Intake, the days before today (under today's card) — meaning first, one
+   selectable timeline, visible unknowns, and the long view folded rather than a dashboard. */
 .nprog{display:flex;flex-direction:column;gap:var(--space-8);padding-bottom:var(--space-11)}
 .nprog-read{padding:var(--space-9) var(--space-1) var(--space-1)}
-.nprog-read h1{font-family:var(--font-display);font-size:var(--text-xl);font-weight:var(--weight-medium);line-height:var(--leading-snug);
-  max-width:28ch;margin:var(--space-4) 0;color:var(--ink)}
+.nprog-read .nprog-voice{font-family:var(--font-display);font-size:var(--text-lead);font-weight:var(--weight-medium);line-height:var(--leading-snug);
+  max-width:32ch;margin:var(--space-4) 0;color:var(--ink)}
+.nprog-long>summary{margin-bottom:var(--space-2)}
+.nprog-long[open]{display:flex;flex-direction:column;gap:var(--space-8)}
 .nprog-read>p{max-width:62ch;margin:0;color:var(--ink-2);font-size:var(--text-md);line-height:var(--leading)}
 .nprog-more{margin-top:var(--space-2)}
 .nprog-more>summary{cursor:pointer;list-style:none;display:inline-block;font-size:var(--text-sm);color:var(--ink-2);

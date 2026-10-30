@@ -2242,10 +2242,8 @@ declare global {
       provenance?: Record<string, unknown>;
     }
   ): Promise<boolean>;
-  declare function renderFoodJournal(options?: { history?: boolean }): unknown;
   declare function renderMeals(): unknown;
   declare function renderCoach(): unknown;
-  declare function rerenderFoodSurface(): void;
   declare function repaintMealHistory(): Promise<unknown>;
   declare function loadTrainingProvenance(isToday?: boolean): unknown;
   declare function loadMealProvenance(): unknown;
@@ -2385,6 +2383,7 @@ declare global {
   ): void;
   declare function openFoodDetail(note: unknown, fromTile?: Element | null): Promise<void>;
   declare function mountFuelLog(host: Element, onLogged: () => void): Promise<ClientFuelLogHandle>;
+  declare function openIntake(): void;
   declare function wireCardioSync(root: ParentNode, onDone?: () => unknown): void;
   declare function measureChatTop(): void;
   declare function ensureRestBar(): HTMLElement;
@@ -5571,16 +5570,15 @@ declare global {
     };
 
     CairnMealJournal: {
-      /** The week menu's page frame: back link, lede, the menu slot, the history link. */
+      /** The week menu's page frame: back link, lede, the menu slot, the past weeks' fold. */
       menuPageHtml(): string;
-      /** The week menu (/app/today/menu) into its slot; "today" scrolls to today's day once. */
+      /** The week menu (/app/today/menu) into its slot. */
       paintMenu(
         token: number,
         slot: HTMLElement,
         peek: SwrPeek<import("./client-api.js").ClientMealPlan[]> | null,
-        focus?: "today" | "week",
       ): Promise<unknown>;
-      /** Past weeks (every week but the current menu, the scheduled one and the fresh draft it offers) into Fuel's fold. */
+      /** Past weeks (every week but the current menu, the scheduled one and the fresh draft it offers) into the menu's fold. */
       paintHistory(
         token: number,
         slot: HTMLElement,
@@ -5593,32 +5591,6 @@ declare global {
         drafts: Record<string, unknown>[];
         past: Record<string, unknown>[];
       };
-    };
-
-    CairnMealMenuCard: {
-      model(
-        plans: unknown,
-        now?: unknown,
-      ):
-        | { kind: "empty" }
-        | {
-            kind: "week";
-            status: "review" | "coming" | "kept";
-            needsRefresh: boolean;
-            dayName: string;
-            meals: Array<{ slot: string; name: string; items: string; kcal: number | null; query: string }>;
-          };
-      cardHtml(model: ReturnType<Window["CairnMealMenuCard"]["model"]>): string;
-      skeletonHtml(): string;
-      menuOpen(): boolean;
-      setMenuOpen(open: boolean): void;
-    };
-
-    CairnMealMenuCardController: {
-      mount(
-        host: HTMLElement,
-        deps: { isCurrent(): boolean; openMenu(focus: "today" | "week"): void },
-      ): (() => void) & { refresh(): Promise<void>; ready: Promise<void> };
     };
 
     CairnCaptureCheckin: {
@@ -6067,8 +6039,6 @@ declare global {
   declare const CairnCaptureReads: Window["CairnCaptureReads"];
   declare const CairnCaptureVoice: Window["CairnCaptureVoice"];
   declare const CairnMealJournal: Window["CairnMealJournal"];
-  declare const CairnMealMenuCard: Window["CairnMealMenuCard"];
-  declare const CairnMealMenuCardController: Window["CairnMealMenuCardController"];
   declare const CairnTodaySessionSuggest: Window["CairnTodaySessionSuggest"];
   declare const CairnTodaySessionSuggestController: Window["CairnTodaySessionSuggestController"];
   declare const CairnProgressData: Window["CairnProgressData"];
@@ -6350,7 +6320,7 @@ declare global {
   // The mount's teardown, carrying the composer's controls.
   type FoodComposerHandle = (() => void) & FoodComposerControls;
 
-  // ---- v2 wave 2 · the Fuel surface (fuel-today-*, fuel-meals-*, fuel-log-*, idea-card-*) ----
+  // ---- v2 wave 2 · Train › Intake's today (fuel-today-*, fuel-meals-*, fuel-log-*, idea-card-*) ----
   type ClientFuelSwrDeps = {
     peekCached<T = unknown>(key: string): { data: T; fresh: boolean } | null;
     cachedApi(
@@ -6362,17 +6332,17 @@ declare global {
     markRefreshing?(on: boolean): void;
     skeleton?(): string;
   };
-  /** "in progress" (today, food logged), "nothing logged", or no word (a past day with food). */
-  type ClientFuelDayState = "in progress" | "nothing logged" | null;
+  /** "in progress" (food logged today) or "nothing logged". */
+  type ClientFuelDayState = "in progress" | "nothing logged";
   type ClientFuelMacro = { value: number | null; known: boolean };
   type ClientFuelTodayModel = {
     date: string;
-    isToday: boolean;
     count: number;
     pending: number;
     state: ClientFuelDayState;
     protein: ClientFuelMacro & { anchor: number | null; toGo: number | null; aboutThere: boolean };
-    energy: ClientFuelMacro;
+    /** `of`: the day's own energy number (the target the Today glance reads), when there is one. */
+    energy: ClientFuelMacro & { of: number | null };
     carbs: ClientFuelMacro;
     fat: ClientFuelMacro;
     fiber: ClientFuelMacro;
@@ -6436,6 +6406,8 @@ declare global {
     date: string;
     api(path: string, init?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
     hour(): number;
+    /** How many ideas the set shows at once (Intake shows ONE); all the read carries when unset. */
+    limit?: number;
     /** "Start from this": fill the composer. Never logs. */
     onStart(prefill: string, idea: import("./fuel.js").ClientFuelIdea): void;
   };
@@ -6445,7 +6417,7 @@ declare global {
       MEAL_LABEL: Record<string, string>;
       mealLabel(meal: unknown): string;
       mealMeta(entry: Record<string, unknown>): string;
-      dayState(count: number, isToday: boolean): ClientFuelDayState;
+      dayState(count: number): ClientFuelDayState;
       todayModel(day: unknown, band: unknown, opts: { today: string }): ClientFuelTodayModel;
       entryNote(entry: unknown): ClientFuelMealNote;
       mealModel(entry: unknown): ClientFuelMeal | null;
@@ -6487,10 +6459,10 @@ declare global {
       mount(host: Element, deps: ClientFuelLogDeps): ClientFuelLogHandle;
     };
     CairnIdeaCard: {
-      ideasHtml(data: import("./fuel.js").ClientFuelIdeas, opts?: { reveal?: boolean }): string;
+      ideasHtml(data: import("./fuel.js").ClientFuelIdeas, opts?: { reveal?: boolean; limit?: number }): string;
       ideaCardHtml(idea: import("./fuel.js").ClientFuelIdea, opts?: { index?: number; enter?: boolean }): string;
       numsText(idea: import("./fuel.js").ClientFuelIdea): string;
-      errorHtml(): string;
+      errorHtml(limit?: number): string;
     };
     CairnFuelDeps: {
       draft(): { load(): string; save(value: string): void };
@@ -6499,7 +6471,10 @@ declare global {
       meals(date: string, today: string, token: number, onChanged: () => void): ClientFuelMealsDeps;
       log(onLogged: (logged: FoodComposerLogged) => void): ClientFuelLogDeps;
       ideas(date: string, onStart: ClientIdeaCardDeps["onStart"]): ClientIdeaCardDeps;
-      firstPaint(date: string, isToday: boolean): Promise<void> | null;
+      /** Intake's week read: its path and SWR key. */
+      PROGRESS_PATH: "/nutrition/progress?days=35";
+      PROGRESS_KEY: string;
+      firstPaint(date: string): Promise<void> | null;
     };
     CairnIdeaCardController: {
       key(date: string): string;

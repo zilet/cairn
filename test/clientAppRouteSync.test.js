@@ -19,8 +19,8 @@ function loadRouteSync(options = {}) {
   const routes =
     options.routes === undefined
       ? {
-          parseRoute: () => ({ tab: "plan", section: "food" }),
-          planSections: ["edit", "food", "meals", "coach"],
+          parseRoute: () => ({ tab: "plan", section: "meals" }),
+          planSections: ["edit", "meals", "coach"],
           routeToUrl: (route) => `/app/${route.tab}/${route.section || ""}`.replace(/\/$/, ""),
         }
       : options.routes;
@@ -76,7 +76,7 @@ function loadRouteSync(options = {}) {
               settingsSections: deps.settingsSections,
             },
           ]);
-          return { tab: deps.state.tab, section: "sessions" };
+          return { tab: deps.state.tab, section: options.section || "sessions" };
         },
         routeKey: (key, items, fallback) => {
           calls.push(["routeKey", key, items, fallback]);
@@ -91,6 +91,7 @@ function loadRouteSync(options = {}) {
               routes: !!deps.routes,
             },
           ]);
+          calls.historyStates = [...(calls.historyStates || []), deps.historyState];
           deps.history[deps.mode === "replace" ? "replaceState" : "pushState"]({ cairn: true }, "", "/app/synced");
           return "/app/synced";
         },
@@ -109,14 +110,14 @@ test("route sync wrapper exposes route API and applies parsed routes with app se
   assert.equal(typeof env.context.routeApi, "function");
   assert.equal(typeof env.context.window.routeApi, "function");
   assert.equal(env.context.routeApi(), env.context.window.CairnRoutes);
-  assert.equal(env.context.applyRouteState({ tab: "plan", section: "food" }), "plan");
+  assert.equal(env.context.applyRouteState({ tab: "plan", section: "meals" }), "plan");
 
   assert.deepEqual(plain(env.calls), [
     [
       "applyRouteState",
-      { tab: "plan", section: "food" },
+      { tab: "plan", section: "meals" },
       {
-        planSections: ["edit", "food", "meals", "coach"],
+        planSections: ["edit", "meals", "coach"],
         progressSections: [
           ["sessions", "History"],
           ["program", "Program"],
@@ -138,7 +139,7 @@ test("route sync wrapper derives current state and delegates browser history syn
       "currentRouteState",
       {
         defaultProgressSection: "sessions",
-        planSections: ["edit", "food", "meals", "coach"],
+        planSections: ["edit", "meals", "coach"],
         settingsSections: [
           ["agents", "Agents"],
           ["data", "Data"],
@@ -149,7 +150,7 @@ test("route sync wrapper derives current state and delegates browser history syn
       "currentRouteState",
       {
         defaultProgressSection: "sessions",
-        planSections: ["edit", "food", "meals", "coach"],
+        planSections: ["edit", "meals", "coach"],
         settingsSections: [
           ["agents", "Agents"],
           ["data", "Data"],
@@ -194,4 +195,18 @@ test("every route sync re-lights the home the current view lives under", () => {
   env.context.syncRouteFromState();
   assert.deepEqual(lit, ["plan"]);
   assert.equal(env.calls.at(-1)[0], "pushState");
+});
+
+// The week menu opened by an in-app tap marks its entry, so its back link can step back
+// to the opener (coach-meals-screen.ts mealMenuOpenedInApp); a cold or replaced entry never does.
+test("an in-app push to the week menu marks its history entry for the back link", () => {
+  const pushed = loadRouteSync({ tab: "plan", section: "meals" });
+  pushed.context.syncRouteFromState("push");
+  assert.deepEqual(plain(pushed.calls.historyStates), [{ back: 1 }]);
+  const replaced = loadRouteSync({ tab: "plan", section: "meals" });
+  replaced.context.syncRouteFromState("replace");
+  assert.deepEqual(plain(replaced.calls.historyStates), [null]);
+  const other = loadRouteSync({ tab: "progress", section: "intake" });
+  other.context.syncRouteFromState("push");
+  assert.deepEqual(plain(other.calls.historyStates), [null]);
 });

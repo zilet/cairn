@@ -101,10 +101,10 @@ type TabSwitchOptions = {
       return segSkeleton(seg, PROGRESS_SEG, seg === "endurance" ? 2 : 3);
     }
     if (tab === "plan") {
-      // Fuel, Changes and the race view (Horizon's) carry no seg bar; the editor
-      // wears Train's group nav.
+      // The week menu, Changes and the race view (Horizon's) carry no seg bar; the
+      // editor wears Train's group nav.
       const activePlan = state.planJump || state.planSeg || "edit";
-      if (activePlan === "food" || activePlan === "meals" || activePlan === "coach" || activePlan === "endurance")
+      if (activePlan === "meals" || activePlan === "coach" || activePlan === "endurance")
         return skelLines(2) + skelLines(3);
       return segSkeleton("plan", PROGRESS_SEG, 3);
     }
@@ -129,7 +129,7 @@ type TabSwitchOptions = {
     if (tab === "progress") return defaultProgressSeg() === "sessions" ? "history:sessions" : null;
     if (tab === "plan") {
       const activePlan = state.planJump || state.planSeg;
-      return activePlan === "coach" || activePlan === "food" ? null : activePlan === "meals" ? MEALS_KEY : "plan";
+      return activePlan === "coach" ? null : activePlan === "meals" ? MEALS_KEY : "plan";
     }
     return null;
   }
@@ -323,6 +323,9 @@ type TabSwitchOptions = {
         // goal-line visit from Train would otherwise stick). Reset here, in the
         // eager shell, so it holds before the lazy Horizon bundle has ever loaded.
         if (tab.dataset.tab === "horizon") state.horizonSeg = null;
+        // Intake is where today's food lives (openIntake: Today's glance, chat's fuel
+        // card), never the Train button's landing: the button opens Train's default.
+        if (tab.dataset.tab === "train" && state.progressSeg === "intake") state.progressSeg = undefined;
         // A keyboard-activated button click reports detail 0; a tap or mouse click ≥ 1.
         switchTab(tab.dataset.tab, { focusView: true, focusRing: !!event && event.detail === 0 });
       });

@@ -229,7 +229,6 @@ test("Fuel's retry store keeps a live envelope per viewer and drops an expired o
 function fuelDepsWin({ peeks, fresh = new Set(), asked = [], answers = [], primed = [], fanIns = [], bundles = [] }) {
   return loadClientModule(["fuel-deps"], {
     globals: {
-      MEALS_KEY: "meals:plans",
       CairnFuelTodayController: {
         dayKey: (d) => `food:day:${d}`,
         bandKey: (d) => `fuel:band:${d}`,
@@ -250,71 +249,65 @@ function fuelDepsWin({ peeks, fresh = new Set(), asked = [], answers = [], prime
       apiWriteGeneration: () => 0,
       api: (path) => {
         fanIns.push(path);
-        return Promise.resolve({ responses: { "/mealplans?limit=12": [] } });
+        return Promise.resolve({ responses: {} });
       },
       apiPrime: (paths, source) => primed.push({ paths: [...paths], source }),
     },
   });
 }
 
-test("Fuel's first paint asks the top slots' reads together, by the slots' own keys, and is null once all are warm", async () => {
+const PROGRESS = "/nutrition/progress?days=35";
+
+test("Intake's first paint asks its slots' reads together, by the slots' own keys, and is null once all are warm", async () => {
   const asked = [];
   const peeks = new Set();
   const answers = [];
   const bundles = [];
   const win = fuelDepsWin({ peeks, asked, answers, bundles });
-  const cold = win.CairnFuelDeps.firstPaint("2026-04-25", true);
+  const cold = win.CairnFuelDeps.firstPaint("2026-04-25");
   assert.ok(cold, "a cold open waits on the reads");
-  // Today's Fuel also waits on the week-menu card's read and its lazy bundle, so the
-  // card paints in the same frame as the slots around it instead of pushing them down.
-  assert.deepEqual(asked, ["food:day:2026-04-25", "fuel:band:2026-04-25", "fuel:ideas:2026-04-25", "meals:plans"]);
-  assert.deepEqual(bundles, ["meals"]);
+  // Today's day, the band and the idea: written in one frame, so no slot pushes another
+  // down as it lands. The weeks below the fold and other bundles are never waited on.
+  assert.deepEqual(asked, ["food:day:2026-04-25", "fuel:band:2026-04-25", "fuel:ideas:2026-04-25"]);
+  assert.deepEqual(bundles, []);
   for (const resolve of answers) resolve({});
   await cold;
 
-  // Another day asks no ideas and no menu; and once every read is warm there is nothing to wait for.
-  asked.length = 0;
-  bundles.length = 0;
-  void win.CairnFuelDeps.firstPaint("2026-04-20", false);
-  assert.deepEqual(asked, ["food:day:2026-04-20", "fuel:band:2026-04-20"]);
-  assert.deepEqual(bundles, []);
-  for (const key of ["food:day:2026-04-25", "fuel:band:2026-04-25", "fuel:ideas:2026-04-25", "meals:plans"]) peeks.add(key);
-  assert.equal(win.CairnFuelDeps.firstPaint("2026-04-25", true), null);
+  // Once every read is warm there is nothing to wait for.
+  for (const key of ["food:day:2026-04-25", "fuel:band:2026-04-25", "fuel:ideas:2026-04-25"]) peeks.add(key);
+  assert.equal(win.CairnFuelDeps.firstPaint("2026-04-25"), null);
 });
 
-test("today's Fuel asks its slots' reads in ONE /train-home?view=fuel, once per open, and never when every peek still serves", async () => {
+test("Intake asks its slots' reads in ONE /train-home?view=fuel, once per open, and never when every peek still serves", async () => {
   const peeks = new Set();
   const fresh = new Set();
   const primed = [];
   const fanIns = [];
   const win = fuelDepsWin({ peeks, fresh, primed, fanIns });
   const hour = new Date().getHours();
-  void win.CairnFuelDeps.firstPaint("2026-04-25", true);
+  void win.CairnFuelDeps.firstPaint("2026-04-25");
   assert.deepEqual(fanIns, [`/train-home?view=fuel&date=2026-04-25&hour=${hour}`]);
   assert.deepEqual(primed[0].paths, [
     "/nutrition/day?date=2026-04-25",
     "/nutrition/intake-band?date=2026-04-25",
     `/fuel/ideas?date=2026-04-25&hour=${hour}`,
-    "/mealplans?limit=12",
   ]);
-  assert.deepEqual(JSON.parse(JSON.stringify(await primed[0].source)), { "/mealplans?limit=12": [] });
+  assert.ok(!primed[0].paths.includes(PROGRESS), "the weeks ask for themselves");
 
   // A repaint seconds later rides the standing primes.
-  void win.CairnFuelDeps.firstPaint("2026-04-25", true);
+  void win.CairnFuelDeps.firstPaint("2026-04-25");
   assert.equal(fanIns.length, 1);
 
-  // A warm open whose peeks are stale still revalidates through the fan-in; another day never asks it.
-  for (const key of ["food:day:2026-04-26", "fuel:band:2026-04-26", "fuel:ideas:2026-04-26", "meals:plans"]) peeks.add(key);
-  assert.equal(win.CairnFuelDeps.firstPaint("2026-04-26", true), null);
-  assert.equal(fanIns.length, 2);
-  void win.CairnFuelDeps.firstPaint("2026-04-20", false);
+  // A warm open whose peeks are stale still revalidates through the fan-in.
+  for (const key of ["food:day:2026-04-26", "fuel:band:2026-04-26", "fuel:ideas:2026-04-26"]) peeks.add(key);
+  assert.equal(win.CairnFuelDeps.firstPaint("2026-04-26"), null);
   assert.equal(fanIns.length, 2);
 
   // Every peek young enough to serve without asking: no slot asks, so neither does the fan-in.
-  for (const key of ["food:day:2026-04-27", "fuel:band:2026-04-27", "fuel:ideas:2026-04-27", "meals:plans"]) {
+  for (const key of ["food:day:2026-04-27", "fuel:band:2026-04-27", "fuel:ideas:2026-04-27"]) {
     peeks.add(key);
     fresh.add(key);
   }
-  assert.equal(win.CairnFuelDeps.firstPaint("2026-04-27", true), null);
+  assert.equal(win.CairnFuelDeps.firstPaint("2026-04-27"), null);
   assert.equal(fanIns.length, 2);
 });

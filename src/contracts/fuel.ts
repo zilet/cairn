@@ -1,6 +1,6 @@
 // The Fuel contract (v2 wave 2, "Food, the logging already done every day, made editable").
 //
-// Three server-owned reads the Fuel surface paints and the coach reads:
+// Three server-owned reads Train › Intake paints and the coach reads:
 //   - the PROTEIN ANCHOR — the day's protein target, which always comes first;
 //   - the OBSERVED INTAKE BAND — where this athlete's weight turned, read only off the
 //     days `classifyIntakeDay` calls complete plus the bodyweight response over the same

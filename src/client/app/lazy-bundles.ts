@@ -3,8 +3,8 @@ type CairnLazyBundleName = ClientLazyBundleName;
 // @ts-check
 // On-demand loader for app-shell bundles index.html does NOT load eagerly.
 //
-// Only Today, You, Fuel, capture and the shell are eager. Train, Horizon, Ask,
-// Settings, the calendar (a day's page, peek and views, the drill controller), the meal planner (Fuel's history fold) and the
+// Only Today, You, capture and the shell are eager. Train, Horizon, Ask,
+// Settings, the calendar (a day's page, peek and views, the drill controller), the meal planner (the week menu), today's food (Train › Intake) and the
 // Me / Health / Records surfaces are injected on first
 // navigation to a destination that needs them, and warmed on idle after the
 // first paint (prefetchLazyBundles) so a tab switch does not wait on the network.

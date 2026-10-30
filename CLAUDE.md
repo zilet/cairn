@@ -82,9 +82,9 @@ neither cached offline nor covered by the hash. Do not rename the placeholder (t
 an exact match, and `scripts/check-sw-cache.mjs` asserts it). **Art URLs carry `v=`; never strip it**
 — the SW cache-first layer keys on the full URL and evicts older `v` for the same `kind+q`.
 
-**`index.html` does not load every bundle.** Only the Today/You shell (and Fuel's frame,
+**`index.html` does not load every bundle.** Only the Today/You shell (and the week menu's frame,
 `06-coach-meals`) is eager; every bundle marked `lazy: "<name>"` in `BUNDLES`
-(`scripts/build-client.mjs`) — Fuel's surface, Train, Horizon, Ask, Settings, Me/Health, a day's
+(`scripts/build-client.mjs`) — Train › Intake (today's food, the `fuel` bundle), Train, Horizon, Ask, Settings, Me/Health, a day's
 glance / view / page, the journey reads, body metrics, the welcome, the AI sign-in, the meal planner
 — is injected on first navigation by `ensureBundle`/`withBundle` (`src/client/app/lazy-bundles.ts`),
 warmed on idle, and still precached. A lazy bundle depends only on what it uses

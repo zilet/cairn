@@ -53,12 +53,12 @@ export const VIEW_EARLY_READS = {
   "plan:edit": ["/plan/week", "/plan/recovery-status", "/plan/upcoming", ["/plan", "plan", 3000]],
 };
 
-// Lazy views that start NO early reads, only the bundle preload. Fuel paints from one read
-// whose path carries the device's hour (`/train-home?view=fuel&date=…&hour=…`), which the
-// inline script cannot name; starting just the shell's boot reads early would finish them
-// before Fuel's own read starts and make them a separate, earlier serial round for nothing
-// (they start together once the shell has run, as they always did).
-export const NO_EARLY_READS = new Set(["plan:food"]);
+// Lazy views that start NO early reads, only the bundle preload. Train › Intake paints from
+// one read whose path carries the device's hour (`/train-home?view=fuel&date=…&hour=…`),
+// which the inline script cannot name; starting just the shell's boot reads early would
+// finish them before Intake's own read starts and make them a separate, earlier serial
+// round for nothing (they start together once the shell has run, as they always did).
+export const NO_EARLY_READS = new Set(["progress:intake"]);
 
 export const LAZY_ROUTES_MARKER = /\/\*cairn:lazy-routes\*\/[\s\S]*?\/\*end\*\//;
 

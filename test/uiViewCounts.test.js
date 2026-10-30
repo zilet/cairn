@@ -95,6 +95,13 @@ test("a batch is rejected whole on a bad entry, an unknown key, or a broken cap"
     },
     { views: Array.from({ length: 21 }, () => ({ view: "today", n: 1 })) },
   ];
+  // A shell from before the Fuel view folded into Intake still sends its old keys: they
+  // count as Intake rather than rejecting the whole batch, and no current key is one.
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(parseUiViewBatch({ views: [{ view: "plan/food", n: 2 }, { view: "today/food", n: 1 }, { view: "today", n: 1 }] }))),
+    [{ view: "train/intake", n: 2 }, { view: "train/intake", n: 1 }, { view: "today", n: 1 }]
+  );
+  assert.ok(!uiViewKeys().includes("plan/food") && !uiViewKeys().includes("today/food"), "never emitted");
   for (const body of bad) {
     assert.equal(parseUiViewBatch(body), null);
     const res = post(body);
@@ -252,7 +259,7 @@ test("screen keys name the home or section and never a date or an id", () => {
   assert.equal(uiViewKey({ tab: "settings", setSeg: "agents" }), "settings/agents");
   assert.equal(uiViewKey({ tab: "day", dayDate: "2026-01-02" }), "day");
   assert.equal(uiViewKey({ tab: "stand", standSeg: "domain", standDomain: "lipids" }), "stand/domain");
-  assert.equal(uiViewKey({ tab: "plan", planSeg: "food" }), "plan/food");
+  assert.equal(uiViewKey({ tab: "plan", planSeg: "meals" }), "plan/meals");
   assert.equal(uiViewKey({ tab: "" }), null);
 });
 

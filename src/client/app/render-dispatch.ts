@@ -59,16 +59,20 @@
     if (tab === "plan") {
       const jump = state.planJump || state.planSeg || "edit";
       state.planJump = null;
-      // Fuel is the lazy fuel bundle's (its frame, 06-coach-meals, is eager); Meals opens
-      // Fuel with the meal-plan journal (the lazy meals bundle) open, Changes mounts the
-      // ask bundle's feed, the editor is Train's, the race view Horizon's.
-      return jump === "food" ? lazy("fuel", () => renderFoodJournal())
-        : jump === "meals" ? lazy("meals", () => renderMeals())
+      // Meals is the week menu (the lazy meals bundle), Changes mounts the ask bundle's
+      // feed, the editor is Train's, the race view Horizon's.
+      return jump === "meals" ? lazy("meals", () => renderMeals())
         : jump === "coach" ? lazy("ask", () => renderCoach())
         : jump === "endurance" ? lazy("horizon", () => renderPlanEndurance())
         : lazy("train", () => renderPlanEditor());
     }
-    if (tab === "progress") return lazy("train", () => (PROGRESS_HANDLERS[defaultProgressSeg()] || renderHistory)());
+    // Train › Intake, today's food then the weeks, is the lazy fuel bundle's own screen
+    // (the composer, the meal cards and the day's read all live there); every other
+    // Train leaf is the train bundle's.
+    if (tab === "progress") {
+      if (state.progressSeg === "intake") return lazy("fuel", () => renderIntake());
+      return lazy("train", () => (PROGRESS_HANDLERS[defaultProgressSeg()] || renderHistory)());
+    }
     if (tab === "chat") return lazy("ask", () => renderChat());
     // The You landing lives in the EAGER bundle-02, so it never waits; only a tap
     // into Health or About you loads me-health.

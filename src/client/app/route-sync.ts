@@ -99,14 +99,23 @@ type RouteSyncMode = "push" | "replace";
     // is Horizon's, its Fuel is Today's), so the lit tab follows every URL sync.
     if (typeof highlightHome === "function") highlightHome(state.tab);
     noteUiViewOpen();
+    const route = routeSyncCurrent();
+    // The week menu opened in-app (Intake's row, Today, the coaching focus, Energy) marks
+    // its entry, so its back link steps back to that opener; a cold link has no mark.
+    const menuOpened = mode === "push" && state.tab === "plan" && route.section === "meals";
     window.CairnAppRouter.syncRouteFromState({
       mode,
       routes: routeSyncApi(),
-      route: routeSyncCurrent(),
+      route,
       location,
       history,
       // A day page remembers its opener in its own entry (drill-controller.ts).
-      historyState: state.tab === "day" ? { from: state.drillFrom || null, drill: state.drillBack ? 1 : 0 } : null,
+      historyState:
+        state.tab === "day"
+          ? { from: state.drillFrom || null, drill: state.drillBack ? 1 : 0 }
+          : menuOpened
+            ? { back: 1 }
+            : null,
     });
   }
 

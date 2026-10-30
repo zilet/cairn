@@ -122,7 +122,11 @@ type AppRouterRoot = typeof globalThis & { CairnAppRouter?: ClientAppRouterApi }
     // day's record or preview, never Today wearing another date, and a day link that
     // names today IS Today.
     const today = localToday();
-    const dayWanted = requested === "day" || (requested === "today" && !!route.date && !isLocalToday(route.date));
+    // Intake is today's food (/app/train/intake); a dated link to another day — the
+    // old Fuel view's /app/today/fuel?date= — opens that day's own page, where its
+    // food is read.
+    const datedHome = requested === "today" || (requested === "progress" && route.section === "intake");
+    const dayWanted = requested === "day" || (datedHome && !!route.date && !isLocalToday(route.date));
     const tab: ClientTabName =
       dayWanted && route.date && !isLocalToday(route.date) ? "day" : requested === "day" ? "today" : requested;
     if (tab === "day") {
@@ -204,7 +208,6 @@ type AppRouterRoot = typeof globalThis & { CairnAppRouter?: ClientAppRouterApi }
     } else if (tab === "plan") {
       const section = routeKey(state.planJump || state.planSeg, options.planSections, "edit");
       route.section = section as AppRoute["section"];
-      if (section === "food" && state.logDate && !isLocalToday(state.logDate)) route.date = state.logDate;
     } else if (tab === "progress") {
       route.section = routeKey(state.progressSeg || options.defaultProgressSection, options.progressSections, options.defaultProgressSection) as AppRoute["section"];
     } else if (tab === "stand") {

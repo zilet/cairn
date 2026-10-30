@@ -2,13 +2,14 @@
 // Fuel today, the glance on Today (Atelier v2, the reference phone's "Fuel today"):
 // under the NOW card, one compact card — protein then energy as slim meters with the
 // logged amount beside the day's number, and ONE idea for the rest of the day. The
-// numbers are the day's own (GET /api/nutrition/day, the Fuel view's SWR key), the
-// idea is the first of GET /api/fuel/ideas (the same deterministic read the Fuel
-// view's idea cards paint), so opening Fuel after this never refetches.
+// numbers are the day's own (GET /api/nutrition/day, Train › Intake's SWR key), the
+// idea is the first of GET /api/fuel/ideas (the same deterministic read Intake's idea
+// card paints), so opening Intake after this never refetches.
 //
 // Laws: a day with nothing logged is ABSENT, never low — no meters are drawn at zero,
 // only a quiet line and the way in. No score: a value beside its number, nothing
-// graded. Every tap opens Fuel, where logging and the full ideas live.
+// graded. Every tap opens Train › Intake, today's food's one home, where logging,
+// the meals and their corrections live.
 {
   type Day = import("../contracts/client.js").ClientDayIntake;
   type Ideas = import("../contracts/fuel.js").ClientFuelIdeas;
@@ -102,7 +103,7 @@
     let idea = "";
     if (model.idea) {
       const visible = ["An idea for later", model.idea.title, model.idea.nums].filter((part) => !!part).join(" ");
-      idea = `<button class="tfuel-idea" type="button" data-tfuel-open aria-label="${escAttr(`${visible}. Open Fuel`)}">
+      idea = `<button class="tfuel-idea" type="button" data-tfuel-open aria-label="${escAttr(`${visible}. Open Intake`)}">
           <span class="tfuel-idea-k lbl">An idea for later</span>
           <span class="tfuel-idea-t">${escHtml(model.idea.title)}</span>
           ${model.idea.nums ? `<span class="tfuel-idea-n">${escHtml(model.idea.nums)}</span>` : ""}
@@ -218,12 +219,9 @@
   /**
    * Today's one mount: makes (or reuses) `#todayFuelSlot` inside the Brief, under the
    * NOW card, and paints the glance into it. Today only — a past date's fuel is read
-   * on the Fuel view, where it can be corrected.
+   * on that day's own page.
    */
-  function mountToday(
-    root: ParentNode,
-    deps: { date: string; activateTab(tab: string): unknown; state: { planJump?: string | null } }
-  ): () => void {
+  function mountToday(root: ParentNode, deps: { date: string }): () => void {
     const brief = root.querySelector(".brief");
     if (!brief || !deps.date) return () => {};
     let slot = root.querySelector("#todayFuelSlot");
@@ -241,10 +239,7 @@
       date: deps.date,
       peek: <T>(key: string) => peekCached<T>(key),
       load: <T>(path: string, options: { key: string }) => cachedApi(path, options) as Promise<T>,
-      open: () => {
-        deps.state.planJump = "food";
-        deps.activateTab("plan");
-      },
+      open: () => openIntake(),
     });
   }
 

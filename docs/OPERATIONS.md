@@ -422,10 +422,10 @@ re-enter, but take a backup first, because migrations are forward-only.
 
 **What changes for the person using it**
 
-- **Navigation is five homes:** Today, Train, Horizon, Ask and You. Session, Fuel and any other
-  day open from Today; the plan editor is Train's; the race view and goal line are Horizon's;
+- **Navigation is five homes:** Today, Train, Horizon, Ask and You. Session, the week menu and any
+  other day open from Today; today's food is Train › Intake; the plan editor is Train's; the race view and goal line are Horizon's;
   Changes is in Ask. Every v1 link still works: `/app/<tab>/<section>` URLs are recognised and
-  rewritten in place to their v2 form (for example `/app/plan/food` becomes `/app/today/fuel`,
+  rewritten in place to their v2 form (for example `/app/plan/food` and `/app/today/fuel` become `/app/train/intake`,
   `/app/progress/weight` becomes `/app/train/weight`, `/app/plan/coach` becomes `/app/ask/changes`).
   The table is `src/contracts/client-routes.ts` and is pinned by `test/routeState.test.js`.
 - **Meal-plan auto-drafts are off.** Cairn no longer drafts a weekly meal plan on its own; ideas

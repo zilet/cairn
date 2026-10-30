@@ -3,7 +3,7 @@
 // `mount(host, deps)` paints the button and, on the first open, mounts the ONE food
 // composer (CairnFoodComposer, injected as `deps.mountComposer`) under it in food
 // mode. The composer follows its own send to the food rows it logged and hands them
-// to `deps.onLogged`, so a meal logged here lands in Fuel's list without leaving the
+// to `deps.onLogged`, so a meal logged here lands in Intake's list without leaving the
 // screen; the panel then closes. Closing only hides the composer — a send still
 // being followed keeps going — and the composer is torn down with this mount.
 //

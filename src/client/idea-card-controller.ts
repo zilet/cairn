@@ -52,9 +52,9 @@
       const sig = JSON.stringify([data.ideas, data.words]);
       if (sig === painted) return;
       painted = sig;
-      shown = data.ideas.slice();
+      shown = deps.limit && deps.limit > 0 ? data.ideas.slice(0, deps.limit) : data.ideas.slice();
       for (const idea of shown) seen.add(idea.key);
-      host.innerHTML = CairnIdeaCard.ideasHtml(data, opts);
+      host.innerHTML = CairnIdeaCard.ideasHtml(data, { ...opts, limit: deps.limit });
     }
 
     function load(): Promise<void> {
@@ -74,7 +74,7 @@
         })
         .catch(() => {
           if (gen === generation) setRefreshing(false);
-          if (live(gen) && !painted) host.innerHTML = CairnIdeaCard.errorHtml();
+          if (live(gen) && !painted) host.innerHTML = CairnIdeaCard.errorHtml(deps.limit);
         });
     }
 

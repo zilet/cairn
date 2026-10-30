@@ -57,11 +57,6 @@
 .shop-chip{cursor:pointer;border:1px solid var(--line-2);transition:opacity var(--dur-1) ease}
 .shop-chip.chip-done{text-decoration:line-through;opacity:.45}
 
-/* Energy Balance — the Food tab uses it flush under the journal; other nutrition
-   placements can use the divided section treatment. */
-.meal-energy{margin-top:var(--space-11);padding-top:var(--space-9);border-top:1px solid var(--line)}
-.food-journal{margin-top:0;padding-top:0;border-top:0}
-
 /* collapsed history of past plans */
 .mp-history{margin-top:var(--space-9);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
 .mp-history > summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:var(--space-3);min-height:44px;color:var(--muted)}

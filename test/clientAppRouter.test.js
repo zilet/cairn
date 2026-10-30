@@ -19,8 +19,8 @@ function plain(value) {
 }
 
 const deps = {
-  routeApi: { planSections: ["edit", "food", "meals", "coach"] },
-  planSections: [["edit", "Training"], ["food", "Food"], ["meals", "Meals"], ["coach", "Coach"]],
+  routeApi: { planSections: ["edit", "meals", "coach"] },
+  planSections: [["edit", "Training"], ["meals", "Meals"], ["coach", "Coach"]],
   progressSections: [["sessions", "History"], ["program", "Program"], ["intake", "Intake"], ["energy", "Energy"]],
   standSections: ["records", "share", "learned", "connections", "markers", "body", "recovery", "supplements", "age", "domain"],
   meSections: [["standing", "Standing"], ["profile", "Profile"], ["health", "Health"]],
@@ -113,7 +113,12 @@ test("a parsed v1 URL applies to the same state its v2 twin does", () => {
   const pairs = [
     ["/app/train/program", "/app/train/program"],
     ["/app/you/settings/data", "/app/you/settings/data"],
-    ["/app/plan/food?date=2026-06-30", "/app/today/fuel?date=2026-06-30"],
+    // The old Fuel view (v1 Plan → Food, v2 /app/today/fuel) is Train › Intake now, and a
+    // dated link to another day opens that day's own page.
+    ["/app/plan/food", "/app/train/intake"],
+    ["/app/today/fuel", "/app/train/intake"],
+    ["/app/plan/food?date=2026-06-30", "/app/day/2026-06-30"],
+    ["/app/today/fuel?date=2026-06-30", "/app/day/2026-06-30"],
     ["/app/me/health/records?id=7", "/app/you/records?id=7"],
     ["/app/me/standing", "/app/you/age"],
     ["/app/chat?session=s1", "/app/ask?session=s1"],
@@ -143,12 +148,19 @@ test("app router applies canonical route state without rendering", () => {
   };
 
   assert.equal(
-    router.applyRouteState({ tab: "plan", section: "food", date: "2026-06-30" }, { state, ...deps }),
+    router.applyRouteState({ tab: "plan", section: "meals", date: "2026-06-30" }, { state, ...deps }),
     "plan",
   );
   assert.equal(state.logDate, "2026-06-30");
-  assert.equal(state.planSeg, "food");
-  assert.equal(state.planJump, "food");
+  assert.equal(state.planSeg, "meals");
+  assert.equal(state.planJump, "meals");
+
+  // Intake reads TODAY's food; a dated link to another day is that day's own page.
+  assert.equal(
+    router.applyRouteState({ tab: "progress", section: "intake", date: "2026-06-30" }, { state, ...deps }),
+    "day",
+  );
+  assert.equal(state.dayDate, "2026-06-30");
 
   assert.equal(
     router.applyRouteState({ tab: "progress", section: "energy" }, { state, ...deps }),

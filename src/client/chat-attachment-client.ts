@@ -27,7 +27,7 @@ function chatAttachmentPreviewImage(value: Element | null | undefined): HTMLImag
 // instead of letting Express reject the whole JSON body with a generic 413.
 async function chatAttachmentCompressImage(file: File): Promise<ChatAttachmentImagePayload> {
   // The image-size policy lives in chat-client, which rides the lazy ask bundle.
-  // Fuel's photo log is eager, so its first photo loads that bundle (precached,
+  // Intake's photo log never loads it, so its first photo loads that bundle (precached,
   // so this works offline too) before reading the policy.
   if (typeof CairnChatClient === "undefined" && typeof ensureBundle === "function") await ensureBundle("ask");
   const url = URL.createObjectURL(file);

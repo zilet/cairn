@@ -102,7 +102,7 @@ const CLIPS = [
     title: "Food, in your words.",
     sub: "Type it like you'd say it. Every meal comes back editable.",
     steps: [
-      { go: "/app/today/fuel", tab: "plan" },
+      { go: "/app/train/intake", tab: "progress" },
       { hold: 2400 },
       { scroll: 420, ms: 1800 },
       { hold: 1400 },

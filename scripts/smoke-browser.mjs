@@ -23,7 +23,8 @@ const routes = [
   { path: "/", tab: "today", home: "today" },
   { path: "/app/today", tab: "today", home: "today" },
   // The v2 grammar, /app/<home>/<section>.
-  { path: "/app/today/fuel", tab: "plan", home: "today", expectedState: { planSeg: "food" } },
+  // Today's food has one home, Train › Intake (it opens on today).
+  { path: "/app/train/intake", tab: "progress", home: "train", expectedState: { progressSeg: "intake" } },
   // The week menu: the current meal plan's days, meals, swaps and recipes.
   { path: "/app/today/menu", tab: "plan", home: "today", expectedState: { planSeg: "meals" } },
   { path: "/app/train/energy", tab: "progress", home: "train", expectedState: { progressSeg: "energy" } },
@@ -46,7 +47,9 @@ const routes = [
   { path: "/app/you/settings/data", tab: "settings", home: "you", expectedState: { setSeg: "data" } },
   { path: "/app/you/settings/agents", tab: "settings", home: "you", expectedState: { setSeg: "agents" } },
   // v1 paths land on the same surface and are rewritten to v2.
-  { path: "/app/plan/food", tab: "plan", home: "today", expectedHref: "/app/today/fuel", expectedState: { planSeg: "food" } },
+  // The old Fuel view's links (v1 Plan → Food, v2 /app/today/fuel) land on Intake.
+  { path: "/app/plan/food", tab: "progress", home: "train", expectedHref: "/app/train/intake", expectedState: { progressSeg: "intake" } },
+  { path: "/app/today/fuel", tab: "progress", home: "train", expectedHref: "/app/train/intake", expectedState: { progressSeg: "intake" } },
   // Plan → Meals lands on the week menu.
   { path: "/app/plan/meals", tab: "plan", home: "today", expectedHref: "/app/today/menu", expectedState: { planSeg: "meals" } },
   { path: "/app/plan/coach", tab: "plan", home: "ask", expectedHref: "/app/ask/changes", expectedState: { planSeg: "coach" } },
@@ -97,7 +100,7 @@ const lazyBundles = {
   meals: { file: "bundle-13-meals", globals: { CairnMealRecipeController: "object" } },
   // The body-metrics surface (Health and Train both mount it; neither drags in the other).
   body: { file: "bundle-21-body", globals: { CairnBodyMetrics: "object" } },
-  // Fuel's surface and the food composer's chat primitives (Ask depends on it).
+  // Train › Intake (today's food) and the food composer's chat primitives (Ask depends on it).
   fuel: { file: "bundle-22-fuel", globals: { CairnFuelTodayController: "object", CairnChatAttachment: "object" } },
 };
 
@@ -105,6 +108,8 @@ const lazyBundles = {
 function lazyBundlesFor(route) {
   const planSeg = route.expectedState?.planSeg;
   if (route.tab === "stand" || route.tab === "me") return ["me-health", "body"];
+  // Train › Intake (today's food) is the fuel bundle's screen, never Train's.
+  if (route.tab === "progress" && route.expectedState?.progressSeg === "intake") return ["fuel"];
   if (route.tab === "progress") return ["train"];
   if (route.tab === "horizon") return ["horizon"];
   if (route.tab === "chat") return ["ask", "fuel"];
@@ -113,7 +118,6 @@ function lazyBundlesFor(route) {
   if (route.tab === "plan" && planSeg === "edit") return ["train"];
   if (route.tab === "plan" && planSeg === "endurance") return ["horizon"];
   if (route.tab === "plan" && planSeg === "coach") return ["ask", "fuel"];
-  if (route.tab === "plan" && planSeg === "food") return ["fuel"];
   if (route.tab === "plan" && planSeg === "meals") return ["meals"];
   return [];
 }
@@ -774,11 +778,11 @@ async function smokeProgressSegmentNavigation(cdp, base) {
     await evaluate(cdp, `(() => {
       if (document.querySelector(".segbtn[data-proggroup]")) throw new Error("a deeper leaf wears no group bar");
       const back = document.querySelector('.train-crumb[data-train-leaf="intake"]');
-      if (!back) throw new Error("missing Energy's step back to Fuel");
+      if (!back) throw new Error("missing Energy's step back to Intake");
       back.click();
       return true;
     })()`);
-    await waitForCondition(cdp, "Energy's step back lands on Fuel's landing (Intake)", `(() => {
+    await waitForCondition(cdp, "Energy's step back lands on Intake", `(() => {
       const activeGroup = document.querySelector('.segbtn.active[data-proggroup="fuel"]');
       return {
         ok: Boolean(activeGroup && window.state?.progressSeg === "intake" && location.pathname === "/app/train/intake"),
@@ -815,11 +819,12 @@ async function smokeProgressSegmentNavigation(cdp, base) {
       btn.click();
       return true;
     })()`);
-    await waitForCondition(cdp, "Train's Fuel group opens Intake, with Energy one row deeper", `(() => {
+    await waitForCondition(cdp, "Train's Intake group opens on today's food, with Energy one row deeper", `(() => {
       const activeGroup = document.querySelector('.segbtn.active[data-proggroup="fuel"]');
       const row = document.querySelector('.train-deeper-row[data-train-leaf="energy"]');
+      const today = document.querySelector("#dayFuelSlot");
       return {
-        ok: Boolean(activeGroup && row && window.state?.progressSeg === "intake" && location.pathname === "/app/train/intake"),
+        ok: Boolean(activeGroup && row && today && window.state?.progressSeg === "intake" && location.pathname === "/app/train/intake"),
         href: location.pathname,
         progressSeg: window.state && window.state.progressSeg,
         hasRow: Boolean(row)
@@ -827,11 +832,11 @@ async function smokeProgressSegmentNavigation(cdp, base) {
     })()`);
     await evaluate(cdp, `(() => {
       const row = document.querySelector('.train-deeper-row[data-train-leaf="energy"]');
-      if (!row) throw new Error("missing Fuel's Energy row");
+      if (!row) throw new Error("missing Intake's Energy row");
       row.click();
       return true;
     })()`);
-    await waitForCondition(cdp, "Fuel's Energy row opens Energy", `(() => ({
+    await waitForCondition(cdp, "Intake's Energy row opens Energy", `(() => ({
       ok: Boolean(window.state?.progressSeg === "energy" && location.pathname === "/app/train/energy" && document.querySelector("#energyCard")),
       href: location.pathname,
       progressSeg: window.state && window.state.progressSeg,
@@ -843,29 +848,29 @@ async function smokeProgressSegmentNavigation(cdp, base) {
   }
 }
 
-// The Plan view split across three homes (v2 wave 5): Fuel is Today's, Changes is
-// Ask's and the editor is Train's (Program → Plan). None wears the old Plan bar;
-// Fuel and Changes step back to their home, and the editor rides Train's nav.
+// The Plan view split across homes (v2 wave 5): the week menu is Today's, Changes is
+// Ask's and the editor is Train's (Program → Plan). None wears the old Plan bar; the
+// old Fuel view's link lands on Train › Intake, and the editor rides Train's nav.
 async function smokePlanSegmentNavigation(cdp, base) {
   const { failures, off } = collectFailures(cdp, base);
   const lit = `document.querySelector(".tab.active")?.dataset.tab`;
   try {
-    await navigateAndHydrate(cdp, base, "/app/today/fuel", "plan");
+    await navigateAndHydrate(cdp, base, "/app/today/fuel", "progress");
     await assertGlobals(cdp);
-    await waitForCondition(cdp, "Fuel lives under Today: history fold, no Plan bar, a way back", `(() => {
-      const fold = document.querySelector("#fuelHistory");
+    await waitForCondition(cdp, "the old Fuel link opens Train › Intake on today's food", `(() => {
       const planBar = document.querySelector('.segbtn[data-seg="food"], .segbtn[data-seg="coach"]');
-      const back = document.querySelector('[data-home-back="today"]');
       return {
-        ok: Boolean(fold && !planBar && back && ${lit} === "today" && document.querySelector("#dayFuelSlot")),
-        hasFold: Boolean(fold), hasPlanBar: Boolean(planBar), hasBack: Boolean(back), lit: ${lit}
+        ok: Boolean(
+          !planBar &&
+          window.state?.progressSeg === "intake" &&
+          location.pathname === "/app/train/intake" &&
+          ${lit} === "train" &&
+          document.querySelector("#dayFuelSlot") &&
+          document.querySelector("#fuelLogSlot")
+        ),
+        href: location.pathname, hasPlanBar: Boolean(planBar), lit: ${lit}
       };
     })()`, 15000);
-    await evaluate(cdp, `(() => { document.querySelector('[data-home-back="today"]').click(); return true; })()`);
-    await waitForCondition(cdp, "Fuel's back link returns to Today", `(() => ({
-      ok: Boolean(window.state?.tab === "today" && location.pathname === "/app/today" && ${lit} === "today"),
-      href: location.pathname, tab: window.state && window.state.tab
-    }))()`);
 
     await navigateAndHydrate(cdp, base, "/app/ask/changes", "plan");
     await waitForCondition(cdp, "Changes lives under Ask with a way back", `(() => ({

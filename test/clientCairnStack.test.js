@@ -177,10 +177,10 @@ test("the stack never reads as a score, and hostile server text stays text", () 
   const bad = renderHtml(win.CairnStack.html(win.CairnStackModel.model(hostile, { hrefFor })), {
     document: win.document,
   });
-  assert.equal(bad.querySelector("b"), null);
-  assert.equal(bad.querySelector("img"), null);
-  assert.equal(bad.querySelector("script"), null);
-  assert.equal(bad.querySelector("i"), null);
+  assert.equal(!!bad.querySelector("b"), false);
+  assert.equal(!!bad.querySelector("img"), false);
+  assert.equal(!!bad.querySelector("script"), false);
+  assert.equal(!!bad.querySelector("i"), false);
   assert.equal(bad.querySelector(".cairn-stack-word").textContent, "<b>bold</b>");
 });
 
@@ -231,7 +231,7 @@ test("a cold mount shows the skeleton, then the server's stack; a failed cold re
   assert.ok(host.querySelector(".cairn-stack-skel"));
   gate.resolve(read());
   await flush();
-  assert.equal(host.querySelector(".cairn-stack-skel"), null);
+  assert.equal(!!host.querySelector(".cairn-stack-skel"), false);
   assert.equal(host.querySelectorAll(".cairn-stack-row").length, 6);
 
   const cold = createHost(win.document);
@@ -273,7 +273,8 @@ test("each stone links to its homes; the decade view is Heart's and nobody else'
   assert.deepEqual(plain(Object.keys(homes)), ["strength", "endurance", "fuel", "recovery", "body", "heart"]);
   assert.deepEqual(flat("strength"), ["progress/overview", "plan/edit"]);
   assert.deepEqual(flat("endurance"), ["plan/endurance", "progress/endurance"]);
-  assert.deepEqual(flat("fuel"), ["plan/food", "progress/intake", "progress/energy"]);
+  // Today's food has one home, Train › Intake (today first, then the weeks).
+  assert.deepEqual(flat("fuel"), ["progress/intake", "progress/energy"]);
   assert.deepEqual(flat("recovery"), ["stand/recovery"]);
   assert.deepEqual(flat("body"), ["stand/body", "progress/weight", "progress/measurements"]);
   assert.deepEqual(flat("heart"), ["stand/", "stand/domain?id=heart", "stand/age"]);
@@ -312,7 +313,7 @@ test("the detail model: the server's stone verbatim, the name before the read, n
   const bare = win.CairnStoneDetailModel.model("fuel", null);
   assert.equal(bare.stone, null);
   assert.equal(bare.name, "Fuel");
-  assert.equal(bare.links.length, 3, "the homes need no read");
+  assert.equal(bare.links.length, 2, "the homes need no read");
   assert.equal(win.CairnStoneDetailModel.model("toString", read()), null);
   assert.equal(win.CairnStoneDetailModel.model("spleen", read()), null);
   assert.equal(win.CairnStoneDetailModel.isStone("heart"), true);
@@ -330,7 +331,7 @@ test("the detail paints its name and homes before the read, then the word and li
   assert.ok(host.querySelector(".stone-detail-ghost"), "a ghost where the word will land");
   gate.resolve(read());
   await flush();
-  assert.equal(host.querySelector(".stone-detail-ghost"), null);
+  assert.equal(!!host.querySelector(".stone-detail-ghost"), false);
   assert.equal(host.querySelector(".stone-detail-word").textContent, "worth noting");
   assert.equal(host.querySelector(".stone-detail-line").textContent, "One lab finding is worth a look.");
   const article = host.querySelector(".stone-detail");
@@ -348,8 +349,8 @@ test("a failed read keeps the name and homes and says nothing; reduced motion sk
     stone: "body",
   });
   await flush();
-  assert.equal(host.querySelector(".stone-detail-ghost"), null);
-  assert.equal(host.querySelector(".stone-detail-word"), null);
+  assert.equal(!!host.querySelector(".stone-detail-ghost"), false);
+  assert.equal(!!host.querySelector(".stone-detail-word"), false);
   assert.equal(host.querySelector(".stone-detail-h").textContent, "Body");
   assert.equal(host.querySelectorAll(".stone-detail-link").length, 3);
 
@@ -456,11 +457,11 @@ test("a stone route renders its detail; a home tap routes like a deep link and f
   const { win, tabs, state } = loadYou({ youSeg: "stone", youStone: "fuel" });
   win.renderYou();
   assert.equal(win.view.querySelector(".stone-detail-h").textContent, "Fuel");
-  assert.equal(win.view.querySelector(".cairn-stack"), null);
-  await fire(win.view.querySelector('[data-stone-detail-go="fuel"]'), click());
+  assert.equal(!!win.view.querySelector(".cairn-stack"), false);
+  await fire(win.view.querySelector('[data-stone-detail-go="intake"]'), click());
   assert.deepEqual(state.applied, {
-    tab: "plan",
-    section: "food",
+    tab: "progress",
+    section: "intake",
     healthSection: null,
     date: null,
     id: null,
@@ -469,7 +470,7 @@ test("a stone route renders its detail; a home tap routes like a deep link and f
   });
   assert.equal(state.youSeg, null);
   assert.equal(state.youStone, null);
-  assert.deepEqual(tabs, ["plan"]);
+  assert.deepEqual(tabs, ["progress"]);
 });
 
 test("an unknown stone is the landing, rewritten in place; the You tab always reopens the landing", () => {

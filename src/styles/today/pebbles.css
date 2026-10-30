@@ -49,7 +49,7 @@
    Fuel today — the glance under the NOW card (today-fuel-glance-client.ts):
    protein and energy as slim meters in the fuel hue with the logged amount
    beside the day's number, and ONE idea for later as a hairline row. No
-   meters on an unlogged day (absent, never low). Every tap opens Fuel.
+   meters on an unlogged day (absent, never low). Every tap opens Train › Intake.
    ===================================================================== */
 .tfuel-slot:empty{display:none}
 .tfuel-slot{margin-top:var(--space-6)}

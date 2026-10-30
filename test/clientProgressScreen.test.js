@@ -384,7 +384,9 @@ test("a warm Volume open paints the bars and the balance from their peeks at onc
   assert.ok(slot.innerHTML.length > 0);
 });
 
-test("renderIntake titles the header Intake and wires Log a meal to the shell's fuel composer mount", async () => {
+// Intake itself (today's food) is the lazy fuel bundle's screen (test/clientIntakeScreen.test.js);
+// its deeper Energy leaf keeps the one "Log a meal" toggle over the shell's composer mount.
+test("renderEnergy titles the header Energy and wires Log a meal to the shell's fuel composer mount", async () => {
   const context = loadProgressScreen();
   let clickHandler = null;
   let openState = false;
@@ -446,8 +448,10 @@ test("renderIntake titles the header Intake and wires Log a meal to the shell's 
       return null;
     },
   };
-  void context.renderIntake();
-  assert.equal(context.headerTitle.textContent, "Intake");
+  context.markRefreshing = () => {};
+  void context.renderEnergy();
+  assert.equal(context.headerTitle.textContent, "Energy");
+  assert.equal(typeof context.renderIntake, "undefined", "Intake is not the train bundle's");
   assert.ok(clickHandler, "Log a meal button is wired");
   clickHandler();
   clickHandler(); // a second tap while the bundle is still loading is ignored
