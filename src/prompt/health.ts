@@ -68,7 +68,7 @@ const HEALTH_INGEST_SCHEMA = `{
   "imaging_studies": [
     // Radiology/imaging reports found in a MyChart/export bundle. Each entry uses
     // the imaging_study shape from Cairn's imaging contract; [] when none exist.
-    { "imaging_study": { "schema_version": 1, "report_status": "final|preliminary|amended|corrected|unknown", "study": { "modality": "<normalized>", "raw_modality": "<verbatim>", "procedure": "<verbatim>", "accession": null, "study_instance_uid": null, "study_date": "YYYY-MM-DD|null", "issued_at": null, "facility": null, "ordering_clinician": null, "interpreting_clinician": null }, "anatomy": { "clinical_system": "<system|unknown>", "body_region": "<hierarchical region|unknown>", "verbatim_site": null, "laterality": "left|right|bilateral|midline|not_applicable|unknown", "code": null }, "report": { "history": null, "technique": null, "comparison": null, "findings": null, "impression": null, "addendum": null }, "findings": [], "recommendations": [], "provenance": { "source_kind": "mychart", "extraction": "mychart", "extractor": "health-ingest", "source_doc_id": null, "source_hash": null, "confidence": "unknown" }, "verification": { "needs_confirmation": true, "user_confirmed": false, "clinician_confirmed": false, "user_confirmed_at": null, "clinician_confirmed_at": null, "corrected_at": null, "notes": null }, "dicom": { "study_instance_uid": null, "series": [] } } }
+    { "imaging_study": { "schema_version": 1, "report_status": "final|preliminary|amended|corrected|unknown", "study": { "modality": "<normalized>", "raw_modality": "<verbatim>", "procedure": "<verbatim>", "accession": null, "study_instance_uid": null, "study_date": "YYYY-MM-DD|null", "issued_at": "ISO timestamp|null", "facility": null, "ordering_clinician": null, "interpreting_clinician": null }, "anatomy": { "clinical_system": "<system|unknown>", "body_region": "<hierarchical region|unknown>", "verbatim_site": null, "laterality": "left|right|bilateral|midline|not_applicable|unknown", "code": null }, "report": { "history": null, "technique": null, "comparison": null, "findings": null, "impression": null, "addendum": null }, "findings": [], "recommendations": [], "provenance": { "source_kind": "mychart", "extraction": "mychart", "extractor": "health-ingest", "source_doc_id": null, "source_hash": null, "confidence": "unknown" }, "verification": { "needs_confirmation": true, "user_confirmed": false, "clinician_confirmed": false, "user_confirmed_at": null, "clinician_confirmed_at": null, "corrected_at": null, "notes": null }, "dicom": { "study_instance_uid": null, "series": [] } } }
   ],
   "summary": "<1-3 sentence read across the WHOLE import: span of dates, what stands out>",
   "memory": [
@@ -179,6 +179,12 @@ PRESERVE IMAGING REPORTS AS FIRST-CLASS STUDIES:
 - Transcribe the report sections faithfully. The written radiologist report is authoritative;
   use source="mychart" for report findings/recommendations and preserve source-stated severity,
   certainty, measurements, negation and follow-up. Never invent a diagnosis or recommendation.
+- report.impression (and any summary of the study) states THIS patient's result in the report's own
+  words, e.g. "Calcium score 0 (CAC-DRS A0); 3 mm left upper lobe nodule". A reference legend,
+  scoring scale, category table (every CAC-DRS / BI-RADS / Fleischner row), guideline boilerplate or
+  portal notice ("marked as needing follow-up", "Dear Patient…") is NOT the impression — leave it out.
+- Fill study.study_date with the scan/exam date when the report shows one, and study.issued_at with
+  the signed/final-report timestamp when shown.
 - A prose-only imaging report is valid even when findings[] is empty. Leave reserved DICOM UIDs
   null unless the export explicitly states them. Every derived study remains linked to this source.
 - Set imaging_studies_complete=true only after the entire source was successfully read and every

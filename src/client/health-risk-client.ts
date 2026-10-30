@@ -6,6 +6,8 @@ type CardiovascularRiskHorizon = import("../contracts/client-api.js").ClientRisk
 type CardiovascularRiskEnhancer = import("../contracts/client-api.js").ClientRiskEnhancer;
 type CardiovascularRiskProjection = import("../contracts/client-api.js").ClientRiskProjection;
 type CardiovascularRiskAssumption = import("../contracts/client-api.js").ClientPreventAssumption;
+type CardiovascularRiskAge = import("../contracts/client-api.js").ClientRiskAge;
+type CardiovascularRiskFactor = import("../contracts/client-api.js").ClientRiskProtectiveFactor;
 
 (() => {
   function riskPct(fraction: unknown): string | null {
@@ -38,12 +40,77 @@ type CardiovascularRiskAssumption = import("../contracts/client-api.js").ClientP
   </div>`;
   }
 
+  const HRISK_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+  // A reading's date as words ("Jun 11, 2026"); "" when there is none.
+  function hrisk_dateText(value: unknown): string {
+    const m = String(value ?? "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (!m) return "";
+    return `${HRISK_MONTHS[Number(m[2]) - 1] ?? m[2]} ${Number(m[3])}, ${m[1]}`;
+  }
+
+  // The calm "may no longer describe you" line, when the server attached one.
+  function hrisk_recheck(text: unknown): string {
+    return text ? `<p class="hrisk-recheck">${escHtml(String(text))}</p>` : "";
+  }
+
   function hrisk_enhancerRow(enhancer: CardiovascularRiskEnhancer): string {
     return `<div class="hrisk-enh-row">
     <div class="hrisk-enh-top"><b>${escHtml(enhancer.label)}</b><span class="hrisk-enh-find">${escHtml(enhancer.finding)}</span></div>
     <p class="hrisk-enh-why">${escHtml(enhancer.why)}</p>
     ${enhancer.lever ? `<p class="hrisk-enh-lever"><span class="lbl">The move</span>${escHtml(enhancer.lever)}</p>` : ""}
+    ${hrisk_recheck(enhancer.recheck)}
   </div>`;
+  }
+
+  // What each age reads, its source and its date — under the vascular age, and for the
+  // ages beside it.
+  function hrisk_ageMeta(age: CardiovascularRiskAge): string {
+    const date = hrisk_dateText(age.date);
+    return `<p class="hrisk-age-reads">${escHtml(age.reads)} <span class="hrisk-age-src">${escHtml(age.source)}${date ? ` · ${escHtml(date)}` : ""}</span></p>${hrisk_recheck(age.recheck)}`;
+  }
+
+  // The other ages side by side with PREVENT's: the bloodwork age and the fitness age.
+  function hrisk_agesHtml(data: CardiovascularRiskRead): string {
+    const others = (data.ages ?? []).filter((age) => age.key !== "vascular");
+    if (!others.length) return "";
+    return `<div class="hrisk-ages">${others
+      .map(
+        (age) =>
+          `<div class="hrisk-age"><div class="hrisk-age-top"><b class="hrisk-age-num">${escHtml(String(age.value))}</b><span class="hrisk-age-label">${escHtml(age.label.toLowerCase())}</span></div>${hrisk_ageMeta(age)}</div>`
+      )
+      .join("")}</div>`;
+  }
+
+  function hrisk_factorRow(factor: CardiovascularRiskFactor): string {
+    const date = hrisk_dateText(factor.date);
+    return `<div class="hrisk-enh-row hrisk-work-row">
+    <div class="hrisk-enh-top"><b>${escHtml(factor.label)}</b>${date ? `<span class="hrisk-enh-find">${escHtml(date)}</span>` : ""}</div>
+    <p class="hrisk-enh-why">${escHtml(factor.finding)}</p>
+    ${hrisk_recheck(factor.recheck)}
+  </div>`;
+  }
+
+  // "Working for you" — protective factors on file, listed beside the enhancers, never
+  // netted against them.
+  function hrisk_workingHtml(data: CardiovascularRiskRead): string {
+    const factors = data.working_for_you ?? [];
+    if (!factors.length) return "";
+    return `<div class="hrisk-enh hrisk-work"><span class="lbl">Working for you</span>${factors.map(hrisk_factorRow).join("")}</div>`;
+  }
+
+  // Cardiovascular imaging on file, as dated facts beside the lipid picture.
+  function hrisk_imagingHtml(data: CardiovascularRiskRead): string {
+    const studies = data.imaging ?? [];
+    if (!studies.length) return "";
+    const rows = studies
+      .map((study) => {
+        const date = hrisk_dateText(study.date);
+        const head = [date, study.procedure].filter(Boolean).join(" · ");
+        return `<li><b>${escHtml(head || "Imaging study")}</b>${study.impression ? ` <span>${escHtml(study.impression)}</span>` : ""}${study.note ? `<p class="hrisk-imaging-note">${escHtml(study.note)}</p>` : ""}</li>`;
+      })
+      .join("");
+    return `<div class="hrisk-imaging"><span class="lbl">Imaging on file</span><ul>${rows}</ul></div>`;
   }
 
   // The vascular age is derived from PREVENT's base inputs alone — it does NOT see
@@ -229,6 +296,9 @@ type CardiovascularRiskAssumption = import("../contracts/client-api.js").ClientP
         ? `<ul class="hrisk-missing-list">${missing.map((item) => `<li>${escHtml(item)}</li>`).join("")}</ul>`
         : `<p class="hrisk-missing-note">Check back after your next lab or vitals reading.</p>`
     }
+    ${hrisk_agesHtml(data)}
+    ${hrisk_workingHtml(data)}
+    ${hrisk_imagingHtml(data)}
   </section>`;
   }
 
@@ -241,11 +311,12 @@ type CardiovascularRiskAssumption = import("../contracts/client-api.js").ClientP
     const hasVascular = vascularAge != null;
     const showsTension = hasVascular && age != null && vascularAge < age && enhancers.length > 0;
 
+    const vascularMeta = (data.ages ?? []).find((entry) => entry.key === "vascular");
     const vageHtml = hasVascular
       ? `<div class="hrisk-vage">
         <b class="hrisk-vage-num">${escHtml(String(Math.round(vascularAge)))}</b>
         <span class="hrisk-vage-label">vascular age${age != null ? `<span class="hrisk-vage-sub">vs. ${escHtml(String(age))} calendar</span>` : ""}</span>
-      </div>`
+      </div>${vascularMeta ? hrisk_ageMeta(vascularMeta) : ""}`
       : "";
 
     const stats = `<div class="hrisk-stats">
@@ -278,7 +349,10 @@ type CardiovascularRiskAssumption = import("../contracts/client-api.js").ClientP
     return `<section class="hrisk">
     <span class="lbl">Cardiovascular risk read</span>
     ${vageHtml}
+    ${hrisk_agesHtml(data)}
     ${enhancersHtml}
+    ${hrisk_workingHtml(data)}
+    ${hrisk_imagingHtml(data)}
     ${stats}
     ${interpHtml}
     ${vizHtml}

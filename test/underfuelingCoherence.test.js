@@ -40,6 +40,9 @@ function seedCoherentPrescriptionStrain() {
   db.prepare(
     `INSERT INTO garmin_daily_metrics (source_id, date, body_fat_pct) VALUES (?, ?, 18)`,
   ).run(source.lastInsertRowid, day(-1));
+  // Body fat has one estimate and a home scale only gives the direction (body-fat-estimate.ts):
+  // a tape reading of ~21% (range ~18–25) puts the cut in the same leaner band the scale's 18% once did.
+  repo.addBodyMeasurement(day(-1), { waist_in: 37.5, neck_in: 16 }, null, "test");
   repo.addCheckin(day(-1), { mood: 3, energy: 1, sleep_feel: 1 });
   repo.addCheckin(day(-2), { mood: 3, energy: 1, sleep_feel: 1 });
 

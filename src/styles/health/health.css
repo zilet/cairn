@@ -300,6 +300,22 @@ body[data-tab="me"] .segwrap:not(.hsegwrap):not(.prog-subwrap){display:none}
 .hrisk-enh-lever{font-size:var(--text-sm);color:var(--ink);margin:var(--space-4) 0 0;background:var(--card);
   border-radius:var(--radius-sm);padding:var(--space-4) var(--space-6)}
 .hrisk-enh-lever .lbl{display:block;margin-bottom:var(--space-2);color:var(--accent-deep)}
+/* what each age reads + its date; the other ages sit side by side with PREVENT's */
+.hrisk-age-reads{font-size:var(--text-xs);line-height:var(--leading);color:var(--ink-2);margin:0}
+.hrisk-age-src{color:var(--muted)}
+.hrisk-ages{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:var(--space-6)}
+.hrisk-age{border-top:1px solid var(--line);padding-top:var(--space-5);display:grid;gap:var(--space-2)}
+.hrisk-age-top{display:flex;align-items:baseline;gap:var(--space-4)}
+.hrisk-age-num{font-family:var(--font-display);font-weight:var(--weight-semibold);font-size:var(--text-xl);color:var(--ink)}
+.hrisk-age-label{font-size:var(--text-sm);color:var(--ink-2)}
+/* a reading that may no longer describe the person — calm, never an alarm */
+.hrisk-recheck{font-size:var(--text-xs);line-height:var(--leading);color:var(--muted);margin:var(--space-3) 0 0}
+/* imaging on file — dated facts beside the lipid picture */
+.hrisk-imaging{display:grid;gap:var(--space-3)}
+.hrisk-imaging ul{margin:0;padding:0;list-style:none;display:grid;gap:var(--space-4)}
+.hrisk-imaging li{font-size:var(--text-sm);line-height:var(--leading);color:var(--ink-2)}
+.hrisk-imaging li b{color:var(--ink);font-weight:var(--weight-semibold)}
+.hrisk-imaging-note{font-size:var(--text-xs);color:var(--muted);margin:var(--space-2) 0 0}
 /* the clinical read: total-CVD leads (primary), ASCVD + heart-failure secondary */
 .hrisk-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:var(--space-6)}
 .hrisk-stat{border-top:1px solid var(--line);padding-top:var(--space-5);display:flex;flex-direction:column;gap:var(--space-1)}

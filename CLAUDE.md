@@ -486,6 +486,10 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   `spokenSignalVoice(ref, date, key)` instead — fix a voice problem there, never by rewriting
   `summary`/`reason` in place (that would silently change what the model is shown). Details in
   `docs/ARCHITECTURE.md`.
+- **Body fat has ONE estimate** — `bodyFatEstimate()` (`src/repo/body-fat-estimate.ts`): every source in one
+  error table (DEXA anchor, calibrated tape, scale = direction only), a range; display reads the central value,
+  anything protective (loss-rate caps, cut planning) reads `low` via `protectiveBodyFatPct` (fallback included); a
+  milestone/goal/percentile needs `measured`. Never read a raw tape/scale/DEXA number as "the" body fat.
 - **Optimal-zone ≠ lab range.** `OPTIMAL_ZONES` are evidence-anchored longevity target bands, which
   is not the lab's population reference interval — a value can read "in range" yet sit far from
   optimal. `prioritizeMarkers()` ranks by an INTERNAL `impact_score`; **never surface that number**.

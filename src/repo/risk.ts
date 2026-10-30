@@ -1,8 +1,17 @@
 import { getMarkerHistory } from "./health.js";
 import { estimatePreventRisk, type PreventInputs } from "./prevent.js";
 import { matchOptimalZone } from "./propagation-data.js";
-import { currentBodyFatEstimate, getProfile } from "./profile.js";
-import { joinList } from "./shared.js";
+import { getProfile } from "./profile.js";
+import {
+  recheckNote,
+  riskAges,
+  riskReadingContext,
+  vo2maxBelowTarget,
+  vo2maxTarget,
+  workingForYou,
+} from "./risk-context.js";
+import { joinList, localDateISO } from "./shared.js";
+import { copyDeep, requestMemo } from "./request-memo.js";
 import { round1 } from "../lib/numbers.js";
 import { labValueText, roundLabDisplay } from "./lab-display.js";
 import { displayUnitFor, fromCanonical, type LabUnitSystem } from "./lab-units.js";
@@ -15,6 +24,7 @@ type RiskMarker = {
   value: number | null;
   unit: string | null;
   date: string | null;
+  source?: string | null;
 };
 
 type RiskEnhancer = {
@@ -23,6 +33,9 @@ type RiskEnhancer = {
   finding: string;
   why: string;
   lever: string | null;
+  // When the reading behind the finding may no longer describe the person (past its
+  // validity window, or taken before a material weight change): a calm recheck line.
+  recheck?: string | null;
 };
 
 type RiskProjection = {
@@ -184,7 +197,14 @@ function composePreventInterpretation(args: {
   return lead;
 }
 
-export function cardiovascularRiskRead() {
+// A pure read, memoized for the request (src/repo/request-memo.ts): getCoachContext and
+// the doctor packet build it beside the card, and it reads imaging, the weigh-in log,
+// recovery and BP. Any write in between invalidates the memo.
+export function cardiovascularRiskRead(): ReturnType<typeof cardiovascularRiskReadUncached> {
+  return requestMemo(`cardiovascular_risk:${localDateISO()}`, cardiovascularRiskReadUncached, copyDeep);
+}
+
+function cardiovascularRiskReadUncached() {
   const lab = labUnitSystem(); // the lab-unit system every value below is SHOWN in, resolved once
   const profile = (() => {
     try {
@@ -200,7 +220,10 @@ export function cardiovascularRiskRead() {
     asNumber(profile?.height_in) ?? (asNumber(profile?.height_cm) != null ? asNumber(profile.height_cm)! / 2.54 : null);
   const bmi =
     weightLb != null && heightIn != null && heightIn > 0 ? round1((weightLb / (heightIn * heightIn)) * 703) : null;
-  const bodyFat = currentBodyFatEstimate(profile);
+  // VO2max, body fat and the bloodwork age come from the ONE source chain the standing
+  // read uses (src/repo/standing.ts via risk-context.ts), so the two cards never disagree.
+  const context = riskReadingContext(profile, age);
+  const bodyFat = context.bodyFat;
 
   const markers = {
     total_cholesterol: markerByZone("Total cholesterol"),
@@ -214,7 +237,9 @@ export function cardiovascularRiskRead() {
     hba1c: markerByZone("HbA1c"),
     egfr: markerByZone("eGFR"),
     systolic_bp: markerByZone("Systolic BP"),
-    vo2max: markerByZone("VO2max"),
+    vo2max: context.vo2
+      ? { label: "VO2max", value: context.vo2.value, unit: "mL/kg/min", date: context.vo2.date, source: context.vo2.source }
+      : ({ label: "VO2max", value: null, unit: null, date: null } as RiskMarker),
   };
 
   // Total cholesterol is a required PREVENT input. When it isn't on file directly
@@ -512,14 +537,16 @@ export function cardiovascularRiskRead() {
     lever:
       "Recheck when recovered and pair lipid work with sleep, body-composition, and anti-inflammatory nutrition basics.",
   });
-  addEnhancer(enhancers, bodyFat?.body_fat_pct != null && bodyFat.body_fat_pct > 25, {
+  // Only a measured level (a scan or a tape) names an adiposity lever — never the wide
+  // height/weight fallback, which would flag every heavier-built person.
+  addEnhancer(enhancers, !!bodyFat?.measured && bodyFat.value > 25, {
     key: "body_fat",
     label: "Adiposity lever",
-    finding: `Body fat ${bodyFat?.body_fat_pct}%${bodyFat?.date ? ` (${bodyFat.date})` : ""}`,
+    finding: `Body fat ${bodyFat?.value}%${bodyFat?.source ? `, ${bodyFat.source}` : ""}${bodyFat?.date ? ` (${bodyFat.date})` : ""}`,
     why: "Body composition is a shared lever for blood pressure, inflammation, insulin sensitivity, and long-run cardiovascular risk.",
     lever: "Continue the lean-safe cut while preserving training performance and protein.",
   });
-  addEnhancer(enhancers, markers.vo2max.value != null && markers.vo2max.value < 42, {
+  addEnhancer(enhancers, vo2maxBelowTarget(context), {
     key: "vo2max",
     label: "Cardiorespiratory fitness below target",
     finding: markerFinding(markers.vo2max, lab),
@@ -556,7 +583,7 @@ export function cardiovascularRiskRead() {
     {
       key: "body_fat",
       label: "Body-composition phase",
-      current: bodyFat?.body_fat_pct ?? null,
+      current: bodyFat?.measured ? bodyFat.value : null,
       target: 20,
       unit: "%",
       expected_direction: "lower",
@@ -566,12 +593,32 @@ export function cardiovascularRiskRead() {
       key: "vo2max",
       label: "Aerobic capacity",
       current: markers.vo2max.value,
-      target: 42,
+      target: vo2maxTarget(profile, age),
       unit: markers.vo2max.unit ?? "mL/kg/min",
       expected_direction: "higher",
       why: "A higher VO2max improves the protective fitness side of the risk picture.",
     },
   ];
+
+  // A target already reached is not a lever: a projection whose current value sits on the
+  // far side of its target (body fat already under 20%, VO2max already past 42) is dropped
+  // rather than pointing the person backwards.
+  const openProjections = projections.filter(
+    (p) => p.current == null || (p.expected_direction === "lower" ? p.current > p.target : p.current < p.target)
+  );
+
+  // Each lipid/inflammation finding says when its reading may no longer describe the person.
+  const markerByKey: Record<string, RiskMarker> = { apob: markers.apob, lpa: markers.lpa, hs_crp: markers.hs_crp, vo2max: markers.vo2max };
+  for (const enhancer of enhancers) {
+    const marker = markerByKey[enhancer.key];
+    const recheck = marker ? recheckNote(marker.label, marker.date, context.weights) : null;
+    if (recheck) enhancer.recheck = recheck;
+  }
+
+  // PREVENT's vascular age is dated by the lipid draw it reads.
+  const vascularDate = markers.total_cholesterol.date ?? markers.hdl_c.date ?? null;
+  const ages = riskAges(context, { value: prevent?.vascular_age ?? null, date: vascularDate });
+  const working_for_you = workingForYou(context, profile);
 
   const remainingAssumptions = prevent?.assumptions.map((a) => a.input).join(", ") ?? "";
   return {
@@ -595,15 +642,25 @@ export function cardiovascularRiskRead() {
       age,
       sex,
       bmi,
-      body_fat_pct: bodyFat?.body_fat_pct ?? null,
+      body_fat_pct: bodyFat?.value ?? null,
       body_fat_source: bodyFat?.source ?? null,
+      body_fat_date: bodyFat?.date ?? null,
       diabetes_by_a1c: diabetesByA1c,
       markers,
       missing_inputs,
     },
     prevent,
+    // The ages side by side, each labelled with what it reads and its date. The vascular
+    // age is PREVENT's own, never adjusted for fitness.
+    ages,
     enhancers,
-    projections,
+    // Protective factors on file, each dated — listed beside the enhancers, never netted
+    // against them.
+    working_for_you,
+    projections: openProjections,
+    // Cardiovascular imaging on file, as dated facts beside the lipid picture. Never a
+    // PREVENT input, and never a reason to soften a lipid finding.
+    imaging: context.imaging,
     frame:
       "Informational, not medical advice. The `prevent` block is the clinical risk read (AHA PREVENT 2023); these enhancers and projections name the cross-domain levers — ApoB, Lp(a), inflammation, body composition, fitness — that shape it beyond what the base equation captures.",
   };

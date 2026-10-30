@@ -5,6 +5,7 @@ import { getProfile, listWeight, setProfile } from "./profile.js";
 import { localDateISO } from "./shared.js";
 import { dailyManualWeighIns } from "./bodyweight.js";
 import { dailySiteSeries } from "./measurement-series.js";
+import { bodyFatEstimate, bodyFatRangeText, navyBodyFatPct, profileSex } from "./body-fat-estimate.js";
 
 // ---------------------------------------------------------------------------
 // Body measurements + derived indicators.
@@ -92,6 +93,13 @@ export interface BodyIndicator {
   read: string; // one plain-language sentence
   estimate?: boolean; // true for the tape-based body-fat estimate
   needs?: MeasurementSite[] | string[]; // what to log to unlock it
+  // Body fat only, on the CURRENT read: the one estimate's range and the person-specific
+  // tape calibration (src/repo/body-fat-estimate.ts).
+  low?: number;
+  high?: number;
+  calibration_offset?: number | null;
+  // False when only the height/weight fallback sets the number: no zone, no lever.
+  measured?: boolean;
 }
 
 export interface SiteTrend {
@@ -293,9 +301,11 @@ function latestWeightLb(profile?: any): number | null {
   return Number.isFinite(v) ? v : null;
 }
 
+// One sex reading for every body formula (shared with the body-fat estimate): "f…" is
+// female; anything else — male or unset — takes the male Navy arm, as it always has.
 function isFemale(profile?: any): boolean {
   const p = profile ?? getProfile();
-  return String(p?.sex || "male").toLowerCase().startsWith("f");
+  return profileSex(p) === "female";
 }
 
 // --- CRUD ---------------------------------------------------------------------
@@ -601,8 +611,66 @@ export function getBodyIndicators(measurement?: BodyMeasurementRow | null, profi
     bmiIndicator(heightIn, weightLb),
     whtrIndicator(heightIn, waist),
     whrIndicator(waist, hip, female),
-    navyBodyFat(heightIn, neck, waist, hip, female),
+    currentBodyFatIndicator(navyBodyFat(heightIn, neck, waist, hip, female), m, p, female),
   ];
+}
+
+// Body fat has ONE estimate. On the current read (the latest measurement) the indicator is
+// that estimate — tape calibrated to an anchor when one overlaps, carried by the weight log
+// — never the raw Navy number; a historical measurement keeps its own tape read.
+function currentBodyFatIndicator(
+  navy: BodyIndicator,
+  m: BodyMeasurementRow | null | undefined,
+  p: any,
+  female: boolean
+): BodyIndicator {
+  const latest = latestKnownMeasurement();
+  const current = !m || !latest || String(m.date ?? "") >= String(latest.date ?? "");
+  if (!current) return navy;
+  const est = (() => {
+    try {
+      return bodyFatEstimate(p);
+    } catch {
+      return null;
+    }
+  })();
+  if (!est) return navy;
+  // A formula-only number (height, weight, age) is shown, but it claims no band: no zone,
+  // a neutral tone, and so no body-fat lever downstream.
+  const band = est.measured ? bodyFatBand(est.value, female) : null;
+  return {
+    key: "bodyfat",
+    label: "Body fat",
+    unit: "%",
+    estimate: true,
+    value: est.value,
+    low: est.low,
+    high: est.high,
+    calibration_offset: est.tape_offset,
+    measured: est.measured,
+    zone: band ? band[1] : null,
+    tone: band ? band[2] : "info",
+    read: `Body fat ${bodyFatRangeText(est)}${band ? ` (${band[1]})` : ""}. ${est.basis_line}${est.sharpen_hint ? ` ${est.sharpen_hint}` : ""}`,
+  };
+}
+
+function bodyFatBand(value: number, female: boolean): [number, string, BodyTone] {
+  const bands: [number, string, BodyTone][] = female
+    ? [
+        [14, "very lean", "info"],
+        [21, "athletic", "ok"],
+        [25, "fit", "ok"],
+        [32, "average", "info"],
+        [Infinity, "high", "watch"],
+      ]
+    : [
+        [6, "very lean", "info"],
+        [14, "athletic", "ok"],
+        [18, "fit", "ok"],
+        [25, "average", "info"],
+        [Infinity, "high", "watch"],
+      ];
+  return bands.find(([ceil]) => value < ceil) ?? bands[bands.length - 1];
 }
 
 // --- trends -------------------------------------------------------------------
@@ -787,15 +855,17 @@ export function getBodyCompFocus(unit: MeasureUnit = "in"): BodyCompFocus {
           { from: 25, to: 35, label: "high", tone: "watch" },
         ];
     const optimal = female ? { from: 14, to: 25 } : { from: 6, to: 18 };
-    // Project by recomputing the Navy formula with the projected waist (neck/hips held).
+    // Project the CHANGE the waist trend makes to the Navy read, on top of the current
+    // value: projected = current + (Navy(projected waist) − Navy(current waist)), neck and
+    // hips held. So a falling waist never projects upward, whatever sets the current level.
     let projected: number | null = null;
-    if (waistProj != null && heightIn != null && m?.neck_in != null && (!female || m?.hip_in != null)) {
-      const inner = female ? waistProj + (m.hip_in as number) - (m.neck_in as number) : waistProj - (m.neck_in as number);
-      if (inner > 0) {
-        const bf = female
-          ? 163.205 * Math.log10(inner) - 97.684 * Math.log10(heightIn) - 78.387
-          : 86.01 * Math.log10(inner) - 70.041 * Math.log10(heightIn) + 36.76;
-        projected = clampToScale(Math.round(bf * 10) / 10, bands[0].from, bands[bands.length - 1].to);
+    if (waistProj != null && ind?.value != null && m?.waist_in != null) {
+      const navyAt = (waistIn: number) =>
+        navyBodyFatPct({ heightIn, waistIn, neckIn: m?.neck_in ?? null, hipIn: m?.hip_in ?? null, female });
+      const now = navyAt(m.waist_in as number);
+      const then = navyAt(waistProj);
+      if (now != null && then != null) {
+        projected = clampToScale(Math.round((Number(ind.value) + (then - now)) * 10) / 10, bands[0].from, bands[bands.length - 1].to);
       }
     }
     scales.push({
@@ -893,7 +963,7 @@ export function getBodyCompFocus(unit: MeasureUnit = "in"): BodyCompFocus {
       label: whtr.label,
       line: "You're on the lean edge — the lever now is building, not cutting: protect the surplus-side fuel and let the arms/thigh tape climb while the waist holds.",
     };
-  } else if (bf.value != null && bf.value > bf.optimal.to) {
+  } else if (bf.value != null && bf.value > bf.optimal.to && byKey.bodyfat?.measured !== false) {
     focus = {
       key: "bodyfat",
       label: bf.label,
@@ -981,7 +1051,16 @@ export function getBodyMetricsSummary(days = 365, unit: MeasureUnit = "in"): Bod
 export function bodyMetricsContextSlice(): {
   latest_date: string;
   measurements: Partial<Record<MeasurementSite, number>>;
-  indicators: { label: string; value: number | null; unit: string; zone: string | null; estimate: boolean }[];
+  indicators: {
+    label: string;
+    value: number | null;
+    unit: string;
+    zone: string | null;
+    estimate: boolean;
+    low?: number;
+    high?: number;
+    read?: string;
+  }[];
   waist_trend: string | null;
   height_in: number | null;
   focus_line: string | null;
@@ -994,7 +1073,15 @@ export function bodyMetricsContextSlice(): {
   if (latest) for (const site of MEASUREMENT_SITES) if (latest[site] != null) measurements[site] = latest[site] as number;
   const indicators = getBodyIndicators(latest)
     .filter((i) => i.value != null)
-    .map((i) => ({ label: i.label, value: i.value, unit: i.unit, zone: i.zone, estimate: !!i.estimate }));
+    .map((i) => ({
+      label: i.label,
+      value: i.value,
+      unit: i.unit,
+      zone: i.zone,
+      estimate: !!i.estimate,
+      // The one body-fat estimate's range and basis, so the coach reads the same number.
+      ...(i.low != null && i.high != null ? { low: i.low, high: i.high, read: i.read } : {}),
+    }));
   const waistTrend = getBodyMetricTrends(180).sites.find((s) => s.key === "waist_in");
   // The deterministic where-you-stand read — the SAME lever + heading the PWA's
   // zone bars show, so the coach and the card literally speak from one source.

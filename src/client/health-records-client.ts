@@ -34,11 +34,33 @@ type HealthRecordDocument = import("../contracts/client-api.js").ClientHealthDoc
       : [];
   }
 
+  // A pasted/uploaded report whose only output is its imaging studies (the ingest marks it
+  // `imaging_only`) is that study's source, not a record of its own: one thing, one card.
+  // It folds into its study card, which carries its "view file"; a source with markers or
+  // facts, or whose studies are not on the list, keeps its own card.
+  function imagingOnlySource(doc: HealthRecordDocument): boolean {
+    const parsed = doc.parsed;
+    if (doc.kind === "imaging" || !parsed || parsed.imaging_only !== true) return false;
+    const markers = Array.isArray(parsed.markers) ? parsed.markers : [];
+    const facts = Array.isArray(parsed.clinical_facts) ? parsed.clinical_facts : [];
+    return !markers.length && !facts.length;
+  }
+
   function recordsListHtml(docsInput: unknown): string {
     const docs = normalizeDocuments(docsInput);
     if (!docs.length) return recordsEmptyHtml();
-    const ordinary = docs.filter((doc) => doc.kind !== "imaging");
-    const imaging = docs.filter((doc) => doc.kind === "imaging");
+    const studies = docs.filter((doc) => doc.kind === "imaging");
+    const folded = new Map<string, HealthRecordDocument>();
+    for (const doc of docs) {
+      if (imagingOnlySource(doc) && studies.some((study) => String(study.source_doc_id ?? "") === String(doc.id))) {
+        folded.set(String(doc.id), doc);
+      }
+    }
+    const ordinary = docs.filter((doc) => doc.kind !== "imaging" && !folded.has(String(doc.id)));
+    const imaging = studies.map((study) => {
+      const source = folded.get(String(study.source_doc_id ?? ""));
+      return source?.has_file ? { ...study, source_file_id: source.id } : study;
+    });
     const grouped = new Map<string, HealthRecordDocument[]>();
     for (const doc of imaging) {
       const study = CairnImaging.imagingStudy(doc);

@@ -3331,6 +3331,81 @@ trend direction + reading recency so the coach speaks to trajectory ("rising ove
 the latest value. Reading recency renders human via `relAge()`/`absDate()` (see `docs/DESIGN.md`),
 never a bare month-year.
 
+### Report-only imaging, scans on file, and the cardiovascular card's context
+
+A pasted or uploaded radiology report (CT, MRI, ultrasound, echo, CTA …) whose health ingest yields
+only `imaging_studies[]` lands as ONE thing. The derived study is filed under its stated
+`study_date`, else the report's signed `issued_at` day (`imagingStudyFiledDate`,
+`src/repo/imaging.ts`; a date the person set always wins). The source row gets a short summary, the
+study's date and `parsed_json.imaging_only`, and Records folds it into the study card, which carries
+its "view file" (`health-records-client.ts`). Deleting that study's card deletes an otherwise-empty
+source with it (`deleteImagingStudy`); a source with markers, facts or another derived row stays.
+The coach view orders a study's total/overall/percentile measurements first, so a per-artery table
+keeps its total under the cap.
+
+`src/repo/scans-on-file.ts` is one small table of which records answer which scan topic (CAC,
+carotid, echo, DEXA, ECG), matched on what a study IS (procedure, modality wording, anatomy, and
+measurement names for a calcium score) — never on impression prose. A clinical ask's scan topic
+leaves its visit question only once a matching record with an UNREMARKABLE result (a calcium score
+of 0; no finding graded abnormal and no follow-up still open) is on file dated on/after the ask
+(`answeredScanTopics`, `clinician-ask.ts`); a positive result keeps the question. The answered
+scan's phrase leaves the text before topic coverage, so "a CAC scan and a knee MRI" still asks
+about imaging. The same module lists the cardiovascular imaging on file for
+`cardiovascularRiskRead().imaging` — dated facts with a fixed informational note for a calcium
+score (only the newest one counts as working for you), never a PREVENT input and never a reason
+to soften a lipid finding.
+
+Beside PREVENT's vascular age (never adjusted for fitness), the risk read carries `ages` (bloodwork
+age, fitness age off the FRIEND curve), `working_for_you` (dated protective factors) and a `recheck`
+line on any reading past its validity class or taken before a material weight change. Every number
+comes from the standing read's ONE source chain (`vo2maxReading`, `bodyFatReading`,
+`bloodworkAgeReading`, `src/repo/standing.ts`, via `src/repo/risk-context.ts`), and the weight-change
+rule is one table (`weightChangeStaleness`, `src/repo/propagation.ts`: body composition, then the
+lab classes bodyweight moves). A projection whose target is already reached is dropped, and VO2max
+is "below target" only under the 40th FRIEND percentile for the person's age and sex
+(`VO2MAX_BELOW_TARGET_PERCENTILE`). The read is request-memoized.
+
+### Body fat: one estimate
+
+Most people never get a DEXA and a home scale is a poor judge of the level, so `bodyFatEstimate()`
+(`src/repo/body-fat-estimate.ts`) combines every measurement through ONE error table
+(`BODY_FAT_SOURCE_TIERS`):
+
+| Source | Error (1σ) | Used as |
+|---|---|---|
+| DEXA document, or a Bod Pod / hydrostatic test named as one | ±2, widening 0.1 per lb moved and 0.2 per month (+1.5 when the scan weight is unknown) | anchor, projected onto today's weight (lean mass held; scan weight from its own Total Mass row, else the nearest weigh-in) |
+| Navy tape | ±3.5 | level with no anchor |
+| Navy tape, calibrated | ±1.5 ⊕ the anchor's error at calibration | level: a person-specific offset (anchor projected to the tape row nearest it, within 60 days, minus that day's Navy read) applied to the latest tape |
+| Home bioimpedance scale, or any other "Body fat %" printout (InBody etc.) | — | direction only (6-week slope); never the level |
+| Height / weight / age / sex (Deurenberg) | ±6 | the level when nothing else exists, and a hand-off when every measured level has aged past ±6 |
+
+Only the TOTAL body-fat row counts (the canonical zone keys; regional DEXA rows never). Each level is
+carried from its date to today on the canonical bodyweight series (manual + the watch's scale, the
+series `resolvedCurrentBodyweight` reads), averaged over the last week so a daily wobble never flips
+a band. A calibrated tape replaces its anchor rather than counting it twice. Levels combine by
+inverse variance; disagreement beyond their errors inflates the range (Birge ratio), the range always
+spans every measured level, and it is never narrower than the best single source.
+Display (the risk card, "How you compare", the Body indicator, journey milestones) reads the central
+value with its range and `basis_line`; anything protective — `leannessAwareLossRates` callers, the
+cut target's lean-safe cap, the recomposition stage — reads `low`, the leaner end, so a wide range
+keeps a cut gentle until measurements narrow it — the height/weight fallback included (a rough
+estimate is protective by default). That `low` reaches `get_goal_check` as
+`leanness_rate.planning_body_fat_pct`, never as a second "body fat". Anything that CLAIMS a result
+— a body-fat milestone, "goal reached", a stored phase target, the standing percentile and age
+composite, the adiposity lever — needs `measured` (a scan or a tape), never the fallback alone. One
+documented exception to "never a faster cap than before": a raw Navy tape that read leaner than the
+person's own calibration (the old cap trusted the raw tape; calibrated, it reads higher). `measured`
+turns false once the fallback carries the level (an aged scan that has handed off), and a
+formula-only Body indicator carries no zone and drives no body-fat lever. The body-composition read
+(`bodyCompositionRead`, `standing.ts`) is built from the estimate's chosen `anchor` — its document's
+own rows for regional detail, its scan weight, "At DEXA" / "fat off since your scan" from the anchor
+against the estimate on the canonical current weight — never a raw marker; a bioimpedance printout is
+never an anchor. Only the current anchor scan, while measured, may fire the "Body fat" zone directive
+(`bodyFatMarkerMayDirect`, `propagation.ts`). The Body card's projection moves the current estimate by
+the Navy change the waist trend implies, so a falling waist never projects upward. Sex is read once
+(`profileSex`): unset sex takes Deurenberg's midpoint with a wider error, and the male Navy arm. `currentBodyFatEstimate()` (`profile.ts`) is the
+adapter that keeps the long-standing shape; `protectiveBodyFatPct()` names the protective read.
+
 ---
 
 ## The Today path, the overnight digest and the tag effects (the Today redesign)

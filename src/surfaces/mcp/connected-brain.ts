@@ -121,7 +121,7 @@ export function registerConnectedBrainTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_cardiovascular_risk",
-    "Cardiovascular risk input/enhancer read: collects PREVENT/PCE inputs, names missing clinical inputs, surfaces ApoB/Lp(a)/hs-CRP/body-fat/VO2max/family-history risk enhancers, and gives counterfactual lever projections. It does not emit a risk percentage unless sourced coefficients are vendored.",
+    "Cardiovascular risk input/enhancer read: collects PREVENT/PCE inputs, names missing clinical inputs, surfaces ApoB/Lp(a)/hs-CRP/body-fat/VO2max/family-history risk enhancers, and gives counterfactual lever projections (a target already reached is dropped). Beside the PREVENT vascular age, `ages` lists the bloodwork age and the fitness age (VO2max against FRIEND standards), each with what it reads, its date and a recheck line when the reading may no longer describe the person; `working_for_you` lists dated protective factors (VO2max for age, optimal home BP, a coronary calcium score of 0, low visceral fat); `imaging` lists the cardiovascular imaging on file (date, procedure, impression, a coronary-calcium study's total Agatston score and percentile, a fixed informational note). Imaging and protective factors are dated facts: never PREVENT inputs, never a reason to soften a lipid finding. It does not emit a risk percentage unless sourced coefficients are vendored.",
     {},
     async () => asText(cardiovascularRiskRead())
   );

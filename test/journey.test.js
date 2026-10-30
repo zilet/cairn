@@ -44,15 +44,20 @@ test("profile persists journey baseline and body-fat target fields", () => {
 
 test("computeGoalCheck tapers the loss ceiling when tape body-fat estimate is lean", () => {
   seedProfile({ weight_lb: 180, goal_weight_lb: 170 });
+  // With no body-fat measurement the one estimate falls back to height/weight/age, with a
+  // wide range; the cap reads its LEANER end (a rough estimate is protective by default and
+  // loosens as measurements narrow it), so the ceiling sits below the plain 1%/wk.
   const noBf = repo.computeGoalCheck();
-  assert.equal(noBf.safe_max_rate_lb, 1.8, "baseline ceiling remains 1%/wk without BF data");
-  assert.equal(noBf.recommended.weekly_rate_lb, 1.35);
+  assert.equal(noBf.leanness_rate.body_fat_source, "anthropometric");
+  assert.equal(noBf.safe_max_rate_lb, 1.08, "the fallback's leaner end tapers the ceiling");
+  assert.ok(noBf.recommended.weekly_rate_lb <= noBf.safe_max_rate_lb);
 
   repo.addBodyMeasurement(isoDaysAgo(0), { waist_in: 31, neck_in: 15 }, null, "test");
   const lean = repo.computeGoalCheck();
 
   assert.equal(lean.leanness_rate.body_fat_source, "tape");
-  assert.ok(lean.leanness_rate.body_fat_pct < 15, `expected lean estimate, got ${lean.leanness_rate.body_fat_pct}`);
+  assert.ok(lean.leanness_rate.planning_body_fat_pct < 15, `expected lean estimate, got ${lean.leanness_rate.planning_body_fat_pct}`);
+  assert.equal(lean.leanness_rate.body_fat_pct, undefined, "no second number called body fat");
   assert.equal(lean.safe_max_rate_lb, 0.63, "very-lean ceiling tapers below 1%/wk");
   assert.equal(lean.recommended.weekly_rate_lb, 0.45, "recommended pace tapers harder below ~15% BF");
   assert.match(lean.leanness_rate.reason, /very lean/i);

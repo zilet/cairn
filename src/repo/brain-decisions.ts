@@ -15,7 +15,8 @@ import {
 } from "../brain/expectation-contract.js";
 import { withSqliteSavepoint } from "./sqlite-savepoint.js";
 import { clinicianFloorHolds } from "../brain/autonomy.js";
-import { clinicianAskVoice } from "./brain/clinician-ask.js";
+import { answeredScanTopics, clinicianAskVoice } from "./brain/clinician-ask.js";
+import { unremarkableScanDatesOnFile } from "./scans-on-file.js";
 import { retireSupersededExpectations } from "./brain/expectation-arbitration.js";
 import { copyDeep, memoKey, requestMemo } from "./request-memo.js";
 
@@ -311,7 +312,8 @@ function awaitingEntry(
   explanation: string,
   effectiveDate: string,
   decidedDate: string,
-  forClinician: boolean
+  forClinician: boolean,
+  scansOnFile: () => ReadonlyMap<string, string>
 ): AwaitingBrainDecision {
   const entry: AwaitingBrainDecision = {
     id,
@@ -330,7 +332,9 @@ function awaitingEntry(
   // team — a clinician's note about the athlete in the third person reached the ask card
   // and the visit questions verbatim. Every surface reads the athlete-register projection;
   // the ledger row keeps what the agent wrote.
-  const voice = clinicianAskVoice(d);
+  // A scan the ask names that the record now holds, dated on or after the ask, is
+  // answered: it leaves the question (and an ask whose every topic is answered asks nothing).
+  const voice = clinicianAskVoice(d, answeredScanTopics(decidedDate, scansOnFile()));
   return { ...entry, summary: voice.line, explanation: voice.explanation, clinician_question: voice.question };
 }
 
@@ -349,6 +353,16 @@ function forTheDoctor(d: BrainDecision): boolean {
 
 export function awaitingBrainDecisions(limit = 20): AwaitingBrainDecision[] {
   const out: AwaitingBrainDecision[] = [];
+  let scans: ReadonlyMap<string, string> | null = null;
+  const scansOnFile = (): ReadonlyMap<string, string> => {
+    if (scans) return scans;
+    try {
+      scans = unremarkableScanDatesOnFile();
+    } catch {
+      scans = new Map();
+    }
+    return scans;
+  };
   // `review` only. An `observed` row is an advisory the brain noted and chose not to
   // act on — a report, not a question — and under a "Waiting on you" mast it reads as
   // a task with no door (two July conference readings surfaced that way in September).
@@ -369,7 +383,7 @@ export function awaitingBrainDecisions(limit = 20): AwaitingBrainDecision[] {
     }
     const decided = String(d.effective_date ?? "").slice(0, 10) || stampDay(d.created_at);
     if (!decided) continue;
-    out.push(awaitingEntry(d, id, explanation, String(d.effective_date ?? decided), decided, forTheDoctor(d)));
+    out.push(awaitingEntry(d, id, explanation, String(d.effective_date ?? decided), decided, forTheDoctor(d), scansOnFile));
   }
   const noteFloor = addDaysISO(localDateISO(), -CLINICIAN_NOTE_WINDOW_DAYS) ?? "";
   const seenNotes = new Set<string>();
@@ -383,7 +397,7 @@ export function awaitingBrainDecisions(limit = 20): AwaitingBrainDecision[] {
     const key = explanation.toLowerCase();
     if (seenNotes.has(key)) continue;
     seenNotes.add(key);
-    out.push(awaitingEntry(d, id, explanation, decided, decided, true));
+    out.push(awaitingEntry(d, id, explanation, decided, decided, true, scansOnFile));
   }
   const cap = Math.max(1, Math.trunc(Number(limit)) || 20);
   return out.sort((a, b) => b.decided_date.localeCompare(a.decided_date) || b.id - a.id).slice(0, cap);

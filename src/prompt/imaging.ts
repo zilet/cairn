@@ -68,6 +68,8 @@ CLINICAL AUTHORITY AND SAFETY:
 - Preserve source distinctions and include short source_spans only with the owned file_id/page that supports them. Never emit a span without file_id, cite another study's file, or include a path in output.
 - DICOM technical identity is server-owned. Preserve the EXISTING STUDY's dicom object exactly; never infer, copy, reveal, or alter UIDs from a preview.
 - A prose-only written report is valid: populate report findings/impression even when findings[] or measurements[] is empty.
+- report.impression states THIS patient's result in the report's own words (e.g. "Calcium score 0 (CAC-DRS A0); 3 mm left upper lobe nodule"). A reference legend, scoring scale, category table (every CAC-DRS / BI-RADS / Fleischner row), guideline boilerplate or portal notice ("marked as needing follow-up", "Dear Patient…") is not the impression — leave it out.
+- Use study_date for the scan/exam date when shown and issued_at for the signed/final-report timestamp when shown.
 - Verification is server-owned: always emit clinician_confirmed=false and clinician_confirmed_at=null. Do not infer verification from report signatures or prose.
 - Use unknown/other instead of guessing anatomy or clinical system. Use source-stated severity/certainty only.
 

@@ -178,13 +178,15 @@ function hstandBodyCompHtml(bodyComp: HealthStandingPrimitiveBodyComp | null | u
       <div class="hstand-empty">A DEXA or a compatible scale anchors this — then it tracks live as your weight moves.</div>
     </div>`;
   }
+  // The ONE body-fat estimate leads; the DEXA read rides along for its regional detail.
+  const est = bodyComp.estimate || null;
   const estimated = bodyComp.estimated;
-  const measured = bodyComp.measured || {};
+  const measured: { value?: number | null; date?: string | null } = bodyComp.measured || {};
   const fat = bodyComp.fat_mass;
   const lost = fat && fat.delta_lbs != null && Number(fat.delta_lbs) < 0
     ? Math.abs(Math.round(Number(fat.delta_lbs)))
     : null;
-  const big = estimated ? `~${estimated.value}` : measured.value != null ? `${measured.value}` : "—";
+  const big = est ? `~${Math.round(est.value)}` : estimated ? `~${estimated.value}` : measured.value != null ? `${measured.value}` : "—";
   const regional = bodyComp.regional;
   const regionalHtml = regional && Array.isArray(regional.notes) && regional.notes.length
     ? `<div class="hstand-bc-regional">${regional.notes.map((note) => {
@@ -193,13 +195,13 @@ function hstandBodyCompHtml(bodyComp: HealthStandingPrimitiveBodyComp | null | u
       }).join("")}</div>`
     : "";
   return `<div class="hstand-panel hstand-bodycomp">
-    <div class="hstand-panel-head"><span class="lbl">Body composition</span>${estimated ? `<span class="lbl">live estimate</span>` : ""}</div>
-    <div class="hstand-bc-big"><b>${escHtml(String(big))}</b><span class="hstand-bc-unit">% body fat${estimated ? " · est. now" : ""}</span></div>
-    ${estimated && measured.value != null ? `<div class="hstand-bc-from">from <b>${escHtml(String(measured.value))}%</b> at your DEXA${measured.date ? ` · <span title="${escAttr(absDate(String(measured.date)))}">${escHtml(relAge(String(measured.date)))}</span>` : ""}</div>` : ""}
+    <div class="hstand-panel-head"><span class="lbl">Body composition</span>${est || estimated ? `<span class="lbl">live estimate</span>` : ""}</div>
+    <div class="hstand-bc-big"><b>${escHtml(String(big))}</b><span class="hstand-bc-unit">% body fat${est ? ` (${escHtml(String(Math.round(est.low)))}–${escHtml(String(Math.round(est.high)))})` : estimated ? " · est. now" : ""}</span></div>
+    ${(est || estimated) && measured.value != null ? `<div class="hstand-bc-from">from <b>${escHtml(String(measured.value))}%</b> at your ${escHtml(String(bodyComp.anchor_label || "scan"))}${measured.date ? ` · <span title="${escAttr(absDate(String(measured.date)))}">${escHtml(relAge(String(measured.date)))}</span>` : ""}</div>` : ""}
     ${lost != null ? `<div class="hstand-bc-win">≈ ${lost} lb of fat off since the scan</div>` : ""}
     ${bodyComp.trunk_fat_pct != null && !regionalHtml ? `<div class="hstand-bc-note">Trunk fat ${escHtml(String(bodyComp.trunk_fat_pct))}% — the metabolic one, and what a cut trims first.</div>` : ""}
     ${regionalHtml}
-    ${bodyComp.note ? `<div class="hstand-source lbl">${escHtml(bodyComp.note)}</div>` : ""}
+    ${est ? `<div class="hstand-source lbl">${escHtml(est.basis_line)}${est.sharpen_hint ? ` ${escHtml(est.sharpen_hint)}` : ""}</div>` : bodyComp.note ? `<div class="hstand-source lbl">${escHtml(bodyComp.note)}</div>` : ""}
   </div>`;
 }
 

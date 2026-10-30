@@ -2818,8 +2818,20 @@ export interface ClientHealthStandingRegionalNote {
   text: string;
 }
 
+// The ONE body-fat estimate (src/repo/body-fat-estimate.ts): central value, its range,
+// and what it rests on.
+export interface ClientBodyFatEstimate {
+  value: number;
+  low: number;
+  high: number;
+  date: string | null;
+  basis_line: string;
+  sharpen_hint: string | null;
+}
+
 export interface ClientHealthStandingBodyComp {
-  measured: { value: number; date: ISODateString | string | null };
+  // null when no DEXA is on file and the card carries the estimate alone.
+  measured: { value: number; date: ISODateString | string | null } | null;
   estimated: { value: number; as_of: string } | null;
   fat_mass: { dexa: number | null; est_now: number | null; delta_lbs: number | null } | null;
   trunk_fat_pct: number | null;
@@ -2840,6 +2852,9 @@ export interface ClientHealthStandingBodyComp {
     [key: string]: unknown;
   } | null;
   effective?: number;
+  estimate?: ClientBodyFatEstimate | null;
+  // What the anchoring scan is called ("DEXA", "Bod Pod", "hydrostatic test").
+  anchor_label?: string | null;
 }
 
 export interface ClientHealthStandingBloodPressurePoint {
@@ -2989,6 +3004,7 @@ export interface ClientRiskEnhancer {
   finding: string;
   why: string;
   lever: string | null;
+  recheck?: string | null;
 }
 
 export interface ClientRiskProjection {
@@ -3006,6 +3022,37 @@ export interface ClientRiskMarker {
   value: number | null;
   unit: string | null;
   date: string | null;
+  source?: string | null;
+}
+
+// One age beside PREVENT's vascular age, labelled with what it reads and its date.
+export interface ClientRiskAge {
+  key: "vascular" | "bloodwork" | "fitness";
+  label: string;
+  value: number;
+  date: string | null;
+  source: string;
+  reads: string;
+  recheck: string | null;
+}
+
+// A protective factor on file ("Working for you"), dated.
+export interface ClientRiskProtectiveFactor {
+  key: string;
+  label: string;
+  finding: string;
+  date: string | null;
+  recheck: string | null;
+}
+
+// A cardiovascular imaging study on file, as a dated fact (never a PREVENT input).
+export interface ClientCardiovascularImaging {
+  study_id: number;
+  date: string | null;
+  procedure: string | null;
+  impression: string | null;
+  coronary_calcium: { agatston_total: number | null; percentile: string | null } | null;
+  note: string | null;
 }
 
 export interface ClientCardiovascularRisk {
@@ -3021,13 +3068,17 @@ export interface ClientCardiovascularRisk {
     bmi: number | null;
     body_fat_pct: number | null;
     body_fat_source: string | null;
+    body_fat_date?: string | null;
     diabetes_by_a1c: boolean | null;
     markers: Record<string, ClientRiskMarker>;
     missing_inputs: string[];
   };
   prevent: ClientPreventEstimate | null;
+  ages?: ClientRiskAge[];
   enhancers: ClientRiskEnhancer[];
+  working_for_you?: ClientRiskProtectiveFactor[];
   projections: ClientRiskProjection[];
+  imaging?: ClientCardiovascularImaging[];
   frame: string;
 }
 
@@ -3185,12 +3236,19 @@ export interface ClientHealthDocument {
   parsed_json?: unknown;
   parsed?: ClientHealthDocumentParsed | null;
   study_files?: ClientImagingStudyFile[];
+  source_doc_id?: number | null;
+  has_file?: boolean;
+  // Records only: the imaging-only source folded into this study card, whose file it shows.
+  source_file_id?: number | null;
   [key: string]: unknown;
 }
 
 export interface ClientHealthDocumentParsed {
   imaging_study?: ClientImagingStudy;
   markers?: ClientHealthMarker[];
+  clinical_facts?: unknown[];
+  // A source whose only output is its imaging studies (a pasted radiology report).
+  imaging_only?: boolean;
   [key: string]: unknown;
 }
 export interface ClientDicomImportJob {

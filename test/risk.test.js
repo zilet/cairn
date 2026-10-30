@@ -29,7 +29,7 @@ test("cardiovascular risk read collects inputs, enhancers, and lever projections
     marker("HbA1c", 5.3, { unit: "%" }),
     marker("eGFR", 98, { unit: "mL/min" }),
     marker("Systolic BP", 120, { unit: "mmHg" }),
-    marker("VO2max", 35, { unit: "mL/kg/min" }),
+    marker("VO2max", 28, { unit: "mL/kg/min" }),
   ]);
 
   const risk = repo.cardiovascularRiskRead();

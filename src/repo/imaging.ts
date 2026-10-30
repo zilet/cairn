@@ -4,8 +4,10 @@ import path from "node:path";
 import { db } from "../db.js";
 import { UPLOADS_DIR, safeUploadPath } from "../uploadPaths.js";
 import { bumpMarkerDataVersion } from "./marker-cache.js";
+import { localDateISO } from "./shared.js";
 import {
   addHealthDocument,
+  deleteHealthDocument,
   getHealthDocument,
   getHealthDocumentRaw,
   setHealthDocEnrichStatus,
@@ -124,6 +126,27 @@ function isoStamp(value: unknown): string | null {
   const out = text(value, 40);
   if (!out || !Number.isFinite(Date.parse(out))) return null;
   return new Date(out).toISOString();
+}
+
+// The date a study is filed under: the study date the report states, else the day the
+// report was signed (issued_at, read in the local zone) — a report that carries a signed
+// date never reads as "Set date". `rawIssued` is the issued value as the source wrote it,
+// before coercion turned it into an instant: a bare date there ("2026-09-02") is that day
+// as written, never shifted a day back by the zone; a real timestamp — midnight UTC
+// included — is read in the local zone.
+export function imagingStudyFiledDate(imaging: any, rawIssued?: unknown): string | null {
+  const stated = isoDate(imaging?.study?.study_date);
+  if (stated) return stated;
+  const bare = isoDate(rawIssued);
+  if (bare) return bare;
+  const issued = isoStamp(imaging?.study?.issued_at);
+  return issued ? localDateISO(new Date(issued)) : null;
+}
+
+// The issued value exactly as a raw (pre-coercion) study payload wrote it.
+function rawIssuedOf(raw: any): unknown {
+  const study = raw?.imaging_study ?? raw;
+  return study?.study && typeof study.study === "object" ? study.study.issued_at : undefined;
 }
 
 function choice(value: unknown, choices: Set<string>, fallback: string): string {
@@ -999,7 +1022,8 @@ export function applyImagingAnalysisResult(
     parsed_json: { imaging_study: imaging },
     summary,
     kind: "imaging",
-    doc_date: imaging.study.study_date ?? row.doc_date ?? null,
+    // A date the person set (or a prior pass filed) outranks the signed-date fallback.
+    doc_date: imaging.study.study_date ?? row.doc_date ?? imagingStudyFiledDate(imaging, rawIssuedOf(candidate)),
   });
   setHealthDocEnrichStatus(id, "done");
   return { status: "applied", study: getImagingStudy(id) };
@@ -1099,6 +1123,9 @@ export function replaceDerivedImagingStudies(
 ) {
   const rawList = Array.isArray(rawStudies) ? rawStudies.slice(0, 100) : [];
   if (!rawList.length) return [];
+  const rawIssued = new WeakMap<object, unknown>();
+  // Never derive a study from a source that is gone (deleted while its ingest ran).
+  if (!getHealthDocumentRaw(sourceDocId)) return [];
   const candidates = rawList.map((raw) => {
     const rawStudy = raw?.imaging_study ?? raw;
     const myChartStudy =
@@ -1133,6 +1160,7 @@ export function replaceDerivedImagingStudies(
     imaging.verification.user_confirmed_at = null;
     imaging.verification.corrected_at = null;
     imaging.verification.notes = null;
+    rawIssued.set(imaging, rawIssuedOf(raw));
     return imaging;
   });
   if (candidates.some((candidate) => !candidate)) return [];
@@ -1202,7 +1230,7 @@ export function replaceDerivedImagingStudies(
   const createCandidate = (candidate: any) => {
     const row = addHealthDocument({
       kind: "imaging",
-      doc_date: candidate.study.study_date,
+      doc_date: imagingStudyFiledDate(candidate, rawIssued.get(candidate)),
       original_name: originalName ?? null,
       parsed_json: { imaging_study: candidate },
       summary: candidate.report.impression ?? candidate.findings[0]?.finding_text ?? "Imported imaging report",
@@ -1231,7 +1259,8 @@ export function replaceDerivedImagingStudies(
               ? match.current
               : preserveUserState(match.current, candidate);
           updateHealthDocFields(Number(match.row.id), {
-            doc_date: imaging.study.study_date ?? match.row.doc_date,
+            doc_date:
+              imaging.study.study_date ?? match.row.doc_date ?? imagingStudyFiledDate(imaging, rawIssued.get(candidate)),
             summary: imaging.report.impression ?? imaging.findings[0]?.finding_text ?? match.row.summary,
             parsed_json: { imaging_study: imaging },
           });
@@ -1331,6 +1360,24 @@ export function dicomTechnicalExport(studyId: number) {
   }));
 }
 
+// A per-site table (a calcium score per artery, a lesion per segment) prints its total
+// LAST; a plain cap kept the sites and cut the one row the reader needs. Summary rows —
+// a total, an overall or combined value, a percentile — lead; everything else keeps the
+// report's order.
+const SUMMARY_MEASUREMENT = /\b(?:total|overall|combined|aggregate|global|summary)\b|\bpercentile\b/i;
+
+export function isSummaryImagingMeasurement(name: unknown): boolean {
+  return SUMMARY_MEASUREMENT.test(String(name ?? ""));
+}
+
+function summaryMeasurementsFirst<T extends { name?: unknown }>(measurements: readonly T[]): T[] {
+  const list = Array.isArray(measurements) ? measurements : [];
+  return [
+    ...list.filter((m) => isSummaryImagingMeasurement(m?.name)),
+    ...list.filter((m) => !isSummaryImagingMeasurement(m?.name)),
+  ];
+}
+
 export function imagingForCoach(): any {
   const studies = listImagingStudiesStructured();
   const index = studies.slice(0, 100).map((s) => ({
@@ -1367,7 +1414,7 @@ export function imagingForCoach(): any {
         ...finding,
         finding_text: text(finding.finding_text, 400),
         verbatim_site: text(finding.verbatim_site, 120),
-        measurements: finding.measurements.slice(0, 5).map((measurement: any) => ({
+        measurements: summaryMeasurementsFirst(finding.measurements).slice(0, 5).map((measurement: any) => ({
           ...measurement,
           name: text(measurement.name, 80),
           value_text: text(measurement.value_text, 80),
@@ -1376,7 +1423,7 @@ export function imagingForCoach(): any {
         })),
         source_spans: undefined,
       })),
-      measurements: s.measurements.slice(0, 10).map((measurement: any) => ({
+      measurements: summaryMeasurementsFirst(s.measurements).slice(0, 10).map((measurement: any) => ({
         ...measurement,
         name: text(measurement.name, 80),
         value_text: text(measurement.value_text, 80),
@@ -1935,11 +1982,50 @@ export function deleteImagingStudy(
   } catch {
     cleanupPending = true;
   }
+  const sourceDeleted = deleteEmptyImagingSource(row.source_doc_id ?? null);
   return {
     deleted,
     derived,
     files: manifest.mappings.length,
     jobs_canceled: jobs.length,
+    ...(sourceDeleted ? { source_deleted: sourceDeleted } : {}),
     ...(cleanupPending ? { cleanup_pending: true } : {}),
   };
+}
+
+/**
+ * True for a source upload whose only output is the imaging studies it produced — a
+ * pasted or uploaded radiology report. The health ingest marks it (`imaging_only`), and
+ * Records shows it folded into its study card instead of as an empty record of its own.
+ */
+export function isImagingOnlySource(row: any): boolean {
+  if (!row || row.kind === "imaging") return false;
+  let parsed: any = row.parsed ?? null;
+  if (!parsed && row.parsed_json) {
+    try {
+      parsed = typeof row.parsed_json === "string" ? JSON.parse(row.parsed_json) : row.parsed_json;
+    } catch {
+      parsed = null;
+    }
+  }
+  if (parsed?.imaging_only !== true) return false;
+  const markers = Array.isArray(parsed.markers) ? parsed.markers : [];
+  const facts = Array.isArray(parsed.clinical_facts) ? parsed.clinical_facts : [];
+  return !markers.length && !facts.length;
+}
+
+// The study card is the only door to an imaging-only source, so deleting the last record
+// it produced removes the source too — never one that still carries markers, facts or
+// another derived record (a superseded study kept for audit included).
+function deleteEmptyImagingSource(sourceId: unknown): number {
+  const id = Number(sourceId);
+  if (!Number.isInteger(id) || id <= 0) return 0;
+  const source = getHealthDocumentRaw(id) as any;
+  if (!isImagingOnlySource(source)) return 0;
+  if (db.prepare("SELECT 1 FROM health_documents WHERE source_doc_id=? LIMIT 1").get(id)) return 0;
+  try {
+    return Number((deleteHealthDocument(id) as any)?.deleted ?? 0);
+  } catch {
+    return 0; // the study is gone either way; the source stays reachable as its own card
+  }
 }

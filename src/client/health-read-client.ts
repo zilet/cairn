@@ -218,7 +218,8 @@ function recoveryHtml(summary: HealthReadRecovery | null | undefined): string {
   if ((Number.isFinite(weightKg) && weightKg > 0) || (Number.isFinite(bodyFatPct) && bodyFatPct > 0)) {
     const sub = [
       Number.isFinite(weightKg) && weightKg > 0 ? `${Math.round(weightKg * 10) / 10} kg` : null,
-      Number.isFinite(bodyFatPct) && bodyFatPct > 0 ? `${Math.round(bodyFatPct * 10) / 10}% fat` : null,
+      // A home scale's body fat is direction only, never the level (body-fat-estimate.ts).
+      Number.isFinite(bodyFatPct) && bodyFatPct > 0 ? `scale fat ${Math.round(bodyFatPct * 10) / 10}% (direction only)` : null,
       Number.isFinite(muscleMassKg) && muscleMassKg > 0 ? `${Math.round(muscleMassKg * 10) / 10} kg muscle` : null,
     ].filter(Boolean).join(" · ");
     lines.push(recoveryLineHtml("Body composition", sub));

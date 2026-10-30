@@ -9,7 +9,7 @@
 // their effort on the cases that write NOTHING.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { db, repo, resetTables, localDaysAgo } from "./_seed.js";
+import { db, repo, resetTables, localDaysAgo, marker, seedHealthDoc } from "./_seed.js";
 import { observeExpectation, evaluateMetricObservation, EVALUATOR_REGISTRY } from "../dist/brain/evaluators.js";
 
 beforeEach(() =>
@@ -26,6 +26,10 @@ beforeEach(() =>
 
 // A cutting athlete: computeGoalCheck lands a negative predicted weekly trend, which is
 // what makes "the waist should not go up" a claim the change actually makes.
+// Body fat has one estimate, and a cut cap reads its leaner end — with no measurement at all,
+// the height/weight fallback's wide range reads leaner and tapers the cap. This fixture is
+// about the cut-target arithmetic, not the leanness taper, so it carries a recent DEXA in
+// the standard (unrestricted) band.
 function seedCuttingProfile() {
   repo.setProfile({
     age: 40,
@@ -37,6 +41,7 @@ function seedCuttingProfile() {
     activity_factor: 1.5,
     goal_mode: "lose",
   });
+  seedHealthDoc(localDaysAgo(2), [marker("Body Fat %", 30, { unit: "%" }), marker("Total Mass", 200, { unit: "lb" })], "dexa");
 }
 
 function logWaist(daysAgo, waistIn) {

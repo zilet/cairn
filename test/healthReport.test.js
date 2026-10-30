@@ -140,7 +140,7 @@ test("future-dated readings are clamped to the local generated day in report ren
   assert.doesNotMatch(text, /Jul 7, 2026|Jul 7 '26/);
 });
 
-test("findings include dates and tape body composition wins over DEXA projection", () => {
+test("findings include dates and the one body-fat estimate (tape calibrated to the DEXA) leads", () => {
   repo.setProfile({ age: 44, sex: "male", height_cm: 170, weight_lb: 175.5 });
   const scanDate = localDaysAgo(30);
   const tapeDate = localDaysAgo(4);
@@ -184,14 +184,15 @@ test("findings include dates and tape body composition wins over DEXA projection
   assert.match(String(bmi.methodNote), /screening measure/);
   assert.ok(bf?.estimated, "body-fat row is an estimate");
   assert.equal(bf.dateLabel, "tape est.");
-  assert.ok(Number(bf.value) > 25.5 && Number(bf.value) < 26.5, `expected ~26%, got ${bf.value}`);
+  // The raw Navy read is ~26%; calibrated to this person's own DEXA it reads ~32%.
+  assert.ok(Number(bf.value) > 31.5 && Number(bf.value) < 33.5, `expected ~32%, got ${bf.value}`);
   assert.equal(bf.latestDate, tapeDate, "body-fat date is the tape measurement date");
-  assert.match(String(bf.methodNote), /Tape-based Navy body-fat estimate/);
+  assert.match(String(bf.methodNote), /Cairn's body-fat estimate ~[\d.]+% \(range [\d.]+–[\d.]+%\): Tape .* calibrated to your .* DEXA/);
   assert.match(String(bf.methodNote), /DEXA measured 35\.6%/);
   assert.equal(bf.flag, null, "a tape estimate does not inherit the DEXA lab flag");
   assert.equal(bf.inOptimal, false, "the estimate can still be outside the optimal band");
   assert.ok(fatMass?.estimated, "fat-mass row is derived from tape plus current weight");
-  assert.ok(Number(fatMass.value) > 45 && Number(fatMass.value) < 46.2, `expected ~45.6 lb, got ${fatMass.value}`);
+  assert.ok(Number(fatMass.value) > 55 && Number(fatMass.value) < 59, `expected ~57 lb, got ${fatMass.value}`);
   assert.equal(fatMass.latestDate, today, "fat-mass date follows the current weight used");
   assert.equal(fatMass.abnormal, false, "derived fat mass does not inherit the DEXA high flag");
   assert.ok(!data.findings.some((f) => f.name === fatMass.name), "derived fat mass is supporting context, not a headline finding without a target");

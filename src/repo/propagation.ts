@@ -49,6 +49,7 @@ import { invalidateDayRead } from "./intelligence.js";
 import { canonicalMarker } from "./marker-canon.js";
 import { maybeRequestMealRefreshForDirectives } from "./meal-directive-trigger.js";
 import { getProfile, listWeight } from "./profile.js";
+import { bodyFatEstimate } from "./body-fat-estimate.js";
 import { addDaysISO, localDateISO } from "./shared.js";
 import { brainDecisionFingerprint, recordDecision } from "./brain-decisions.js";
 import type { ProposedExpectation } from "../brain/expectation-contract.js";
@@ -825,9 +826,23 @@ function outsideHeldZones(held: Set<string>, profile: ZoneProfile | null): ((row
 // signature short-circuits the whole pass when nothing that affects derivation moved.
 // Leaves the 'health_review' source untouched. INFORMATIONAL, not medical advice.
 // Return shape kept as { source:'markers', derived, directives } for back-compat.
+// Body fat has ONE estimate (body-fat-estimate.ts). The "Body fat" zone fires off a raw
+// marker, so it may only fire off the reading the estimate stands on: the current anchor
+// scan, while that scan (not the height/weight fallback) sets the level. A bioimpedance
+// printout, a superseded scan or a formula-only estimate never raises a body-fat directive.
+function bodyFatMarkerMayDirect(marker: any): boolean {
+  if (matchOptimalZone(String(marker?.name ?? ""))?.label !== "Body fat") return true;
+  try {
+    const est = bodyFatEstimate(getProfile() ?? {});
+    return !!est?.measured && est.anchor != null && Number(marker?.latest?.doc_id) === est.anchor.doc_id;
+  } catch {
+    return false;
+  }
+}
+
 export function deriveDirectives() {
   const SOURCE = "markers";
-  const { markers } = prioritizeMarkers();
+  const markers = prioritizeMarkers().markers.filter(bodyFatMarkerMayDirect);
   const profile = zoneProfile(); // sex/age-personalized optimal bands (null-safe default)
   // Active medications, read ONCE — so the brain can reason WITH a treatment (a marker
   // still off-optimal despite a med that targets it is a dose/adherence conversation,
@@ -1769,18 +1784,84 @@ export function bodyCompStaleness(
   today?: string
 ): { stale: boolean; reason: string | null; delta_lb: number | null } {
   if (!isBodyCompDirective(d?.marker)) return { stale: false, reason: null, delta_lb: null };
-  const anchor = d?.trigger_date || d?.created_at || null;
+  return readingStaleness(WEIGHT_SENSITIVE_READINGS[0], d?.trigger_date || d?.created_at || null, weights, today);
+}
+
+// ---------- weight-change staleness, one table ----------
+// A reading whose value genuinely moves with bodyweight stops describing the person once
+// the weight has moved enough since it was taken. Body composition is the first row (its
+// own scan cadence and threshold, bodyCompStaleness above); the lab classes a sustained
+// weight change moves — lipids, glucose/HbA1c/insulin, hs-CRP, liver enzymes, and a
+// bloodwork age built from them — are the second. Extend the table, never add a
+// per-marker branch. Informational only: a stale verdict says a recheck is worth
+// considering; it never softens, clears or rewrites a finding.
+interface WeightSensitiveReading {
+  key: "body_comp" | "labs";
+  pattern: RegExp;
+  min_age_days: number; // younger than this, the reading is current whatever the scale says
+  move_lb: number; // the weight must have moved at least this much …
+  move_pct: number; // … and at least this fraction of the weight at the reading
+  reason: (weeks: number, dir: "down" | "up", delta: number) => string;
+}
+
+const WEIGHT_SENSITIVE_READINGS: readonly WeightSensitiveReading[] = [
+  {
+    key: "body_comp",
+    pattern: /body fat|body composition|body comp|dexa|fat mass|lean mass|visceral|almi|ffmi/i,
+    min_age_days: BODY_COMP_STALE_DAYS,
+    move_lb: BODY_COMP_MOVE_LB,
+    move_pct: 0,
+    reason: (weeks, dir, delta) =>
+      `Based on a body-composition scan ~${weeks} weeks old; your weight is ${dir} ~${delta} lb since, so treat the number as provisional — a fresh scan would confirm before acting on it.`,
+  },
+  {
+    key: "labs",
+    pattern:
+      /apo ?b|\bldl|\bhdl|cholesterol|triglycer|lipid|\bglucose|a1c|\binsulin|homa|hs-?crp|c-reactive|\balt\b|\bast\b|\bggt\b|liver enzyme|phenoage|bloodwork age|vascular age/i,
+    min_age_days: 28,
+    move_lb: 5,
+    move_pct: 0.04,
+    reason: (weeks, dir, delta) =>
+      `Drawn ~${weeks} weeks ago, and your weight is ${dir} ~${delta} lb since — these readings move with bodyweight, so a fresh panel would show where you are now.`,
+  },
+];
+
+function readingStaleness(
+  rule: WeightSensitiveReading,
+  anchor: unknown,
+  weights: any[],
+  today?: string
+): { stale: boolean; reason: string | null; delta_lb: number | null } {
   const t = anchor ? Date.parse(String(anchor)) : Number.NaN;
   if (!Number.isFinite(t)) return { stale: false, reason: null, delta_lb: null };
   const now = today ? Date.parse(today) : Date.now();
   const ageDays = Math.floor((now - t) / 864e5);
-  if (ageDays <= BODY_COMP_STALE_DAYS) return { stale: false, reason: null, delta_lb: null };
+  if (ageDays <= rule.min_age_days) return { stale: false, reason: null, delta_lb: null };
   const delta = weightDeltaSince(String(anchor).slice(0, 10), weights);
-  if (delta == null || Math.abs(delta) < BODY_COMP_MOVE_LB) return { stale: false, reason: null, delta_lb: delta };
+  const latest = Number(weights?.[weights.length - 1]?.weight_lb);
+  const atReading = delta != null && Number.isFinite(latest) ? latest - delta : Number.NaN;
+  const pctFloor = Number.isFinite(atReading) ? rule.move_pct * atReading : 0;
+  if (delta == null || Math.abs(delta) < Math.max(rule.move_lb, pctFloor)) {
+    return { stale: false, reason: null, delta_lb: delta };
+  }
   const weeks = Math.max(3, Math.round(ageDays / 7));
-  const dirWord = delta < 0 ? "down" : "up";
-  const reason = `Based on a body-composition scan ~${weeks} weeks old; your weight is ${dirWord} ~${Math.abs(delta)} lb since, so treat the number as provisional — a fresh scan would confirm before acting on it.`;
-  return { stale: true, reason, delta_lb: delta };
+  return { stale: true, reason: rule.reason(weeks, delta < 0 ? "down" : "up", Math.abs(delta)), delta_lb: delta };
+}
+
+/**
+ * Whether a reading of `marker` taken on `readingDate` still describes the person, given
+ * the weigh-in log: stale when the reading is past its table row's minimum age AND the
+ * weight has moved materially since. Markers no row names never go stale here.
+ */
+export function weightChangeStaleness(
+  marker: string | null | undefined,
+  readingDate: string | null | undefined,
+  weights: any[],
+  today?: string
+): { stale: boolean; reason: string | null; delta_lb: number | null } {
+  const rule = WEIGHT_SENSITIVE_READINGS.find((row) => row.pattern.test(String(marker ?? "")));
+  if (!rule) return { stale: false, reason: null, delta_lb: null };
+  return readingStaleness(rule, readingDate, weights, today);
 }
 
 // Annotate directive rows with their freshness verdict (acute / age_days / stale),

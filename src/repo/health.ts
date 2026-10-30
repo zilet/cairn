@@ -1361,11 +1361,16 @@ function markerHistorySignature(): string {
            (SELECT COUNT(*) FROM blood_pressure_readings) AS bc,
            (SELECT COALESCE(MAX(id), 0) FROM blood_pressure_readings) AS bm,
            (SELECT COUNT(*) FROM marker_aliases) AS ac,
-           (SELECT COALESCE(MAX(rowid), 0) FROM marker_aliases) AS am`
+           (SELECT COALESCE(MAX(rowid), 0) FROM marker_aliases) AS am,
+           (SELECT COUNT(*) FROM bodyweight_log) AS wc,
+           (SELECT COALESCE(MAX(id), 0) FROM bodyweight_log) AS wm,
+           (SELECT COALESCE(SUM(weight_lb), 0) FROM bodyweight_log) AS ws`
       )
       .get() as any;
     const p = db.prepare(`SELECT sex, age FROM profile WHERE id = 1`).get() as any;
-    return `${currentMarkerDataVersion()}|${r?.dc ?? 0}|${r?.dm ?? 0}|${r?.bc ?? 0}|${r?.bm ?? 0}|${r?.ac ?? 0}|${r?.am ?? 0}|${p?.sex ?? ""}|${p?.age ?? ""}`;
+    // The history carries the Body Weight series off bodyweight_log, so a weigh-in moves
+    // the signature too — else a history read between two weigh-ins served the first.
+    return `${currentMarkerDataVersion()}|${r?.dc ?? 0}|${r?.dm ?? 0}|${r?.bc ?? 0}|${r?.bm ?? 0}|${r?.ac ?? 0}|${r?.am ?? 0}|${r?.wc ?? 0}|${r?.wm ?? 0}|${r?.ws ?? 0}|${p?.sex ?? ""}|${p?.age ?? ""}`;
   } catch {
     return `nocache:${currentMarkerDataVersion()}:${Math.random()}`;
   }

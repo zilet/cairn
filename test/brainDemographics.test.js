@@ -38,14 +38,16 @@ test("a woman's mid-cycle estradiol does NOT fire 'high estradiol'", () => {
 
 test("a fit woman at 28% body fat is NOT flagged 'above optimal'", () => {
   repo.setProfile({ sex: "female", age: 38 });
-  seedHealthDoc("2025-12-01", [marker("Total Body Fat", 28, { unit: "%" })]);
+  seedHealthDoc("2025-12-01", [marker("Total Body Fat", 28, { unit: "%" })], "dexa");
   repo.deriveDirectives();
   assert.equal(anyMarkerMatch(/body fat/i).length, 0, "female body-fat band [18,33] keeps 28% in range");
 });
 
 test("a man at 28% body fat still gets the body-fat lever (control)", () => {
   repo.setProfile({ sex: "male", age: 38 });
-  seedHealthDoc("2025-12-01", [marker("Total Body Fat", 28, { unit: "%" })]);
+  // A scan: the body-fat directive fires only off the estimate's anchor (a DEXA), never a
+  // body-fat row on a bloodwork printout (bioimpedance, direction only).
+  seedHealthDoc("2025-12-01", [marker("Total Body Fat", 28, { unit: "%" })], "dexa");
   repo.deriveDirectives();
   assert.ok(anyMarkerMatch(/body fat/i).length >= 1, "male band [10,25] flags 28%");
 });

@@ -1469,10 +1469,13 @@ function getCoachContextFromSnapshot(): CoachContext {
       const weights = listWeight(1) as any[];
       const latestWeight = Array.isArray(weights) && weights.length ? weights[weights.length - 1] : null;
       const asOf = latestWeight?.date ? String(latestWeight.date).slice(0, 10) : today;
+      // Anchored on the ONE body-fat estimate: its `effective` IS the estimate, never a
+      // second current number (bodyCompositionRead, standing.ts).
       return bodyCompositionRead(
         Array.isArray(priority?.markers) ? priority.markers : [],
         profile?.weight_lb ?? null,
-        asOf
+        asOf,
+        profile
       );
     } catch {
       return null;

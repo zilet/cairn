@@ -20,12 +20,20 @@
 //   - A refusal is not an error, and a four-calorie "change" is not a change.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { repo, resetTables, localDaysAgo } from "./_seed.js";
+import { repo, resetTables, localDaysAgo, marker, seedHealthDoc } from "./_seed.js";
 import { applyDueAnnouncedDecisions, applyProposalWithAutonomy } from "../dist/domain/brain/autonomy-service.js";
 import { localDateISO } from "../dist/repo/shared.js";
 
 // The shape this derivation is built for: mid-cut, a goal below the current weight, and no open
 // goal check-in — so cutReaffirmation reads the cut as the athlete's own.
+// Body fat has one estimate, and a cut cap reads its leaner end — with no measurement at all,
+// the height/weight fallback's wide range reads leaner and tapers the cap. This fixture is
+// about the cut-target arithmetic, not the leanness taper, so it carries a recent DEXA in
+// the standard (unrestricted) band.
+function seedStandardBodyFat(weightLb) {
+  seedHealthDoc(localDaysAgo(2), [marker("Body Fat %", 30, { unit: "%" }), marker("Total Mass", weightLb, { unit: "lb" })], "dexa");
+}
+
 function seedReaffirmedCut() {
   repo.setSettings({ lead_mode: "lead" });
   repo.setProfile({
@@ -39,6 +47,7 @@ function seedReaffirmedCut() {
     goal_mode: "lose",
     goal_weight_lb: 164,
   });
+  seedStandardBodyFat(168);
 }
 
 // The record that makes the energy-balance read admissible: complete logged days
@@ -309,6 +318,9 @@ test("a review-due target is not the number in force — the boundary reads the 
     goal_mode: "lose",
     goal_weight_lb: 145,
   });
+  // A measured body fat in the standard band, so the lean-safe floor does not lift the
+  // stale row at write time (a formula-only estimate reads leaner and would).
+  seedHealthDoc(localDaysAgo(61), [marker("Body Fat %", 30, { unit: "%" }), marker("Total Mass", 150, { unit: "lb" })], "dexa");
   const staleKcal = 1_500;
   repo.setNutritionTarget({
     target_kcal: staleKcal,
@@ -329,6 +341,7 @@ test("a review-due target is not the number in force — the boundary reads the 
     goal_mode: "lose",
     goal_weight_lb: 200,
   });
+  seedStandardBodyFat(215);
   for (let i = 1; i <= 28; i++) {
     repo.addFoodNote("breakfast", "", { kcal: 800, protein_g: 60 }, undefined, { date: localDaysAgo(i) });
     repo.addFoodNote("dinner", "", { kcal: 1_050, protein_g: 80 }, undefined, { date: localDaysAgo(i) });

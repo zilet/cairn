@@ -761,7 +761,9 @@ export function renderConnectedBrain(ctx: any, opts: { domains?: ("nutrition" | 
     if (rec.avg_vigorous_min != null && rec.avg_vigorous_min > 0) bits.push(`~${Math.round(rec.avg_vigorous_min)} vigorous min/day`);
     const body: string[] = [];
     if (rec.weight_kg != null) body.push(`weight ${rec.weight_kg} kg`);
-    if (rec.body_fat_pct != null) body.push(`body fat ${rec.body_fat_pct}%`);
+    // A home bioimpedance scale is good for DIRECTION, not the level (the one body-fat
+    // estimate, src/repo/body-fat-estimate.ts, never takes its number) — say so.
+    if (rec.body_fat_pct != null) body.push(`scale body fat ${rec.body_fat_pct}% (home scale: direction only, not the level)`);
     if (rec.muscle_mass_kg != null) body.push(`muscle ${rec.muscle_mass_kg} kg`);
     if (bits.length) lines.push(`RECOVERY (last ${ctx.recovery.days}d, ${(ctx.recovery.sources || []).join("+") || "no source"}): ${bits.join(", ")} — read the WHOLE picture; bias toward recovery when sleep/HRV/readiness are low or resting HR/stress are elevated vs their norm.`);
     // Acute-vs-chronic baseline: the last 7 days against the 30-day norm, so the
@@ -1855,28 +1857,30 @@ export function renderBodyComp(ctx: any): string {
   const bc = ctx?.body_composition;
   if (!bm && !bc) return "";
   const lines: string[] = [];
-  const hasTapeBodyFat = Array.isArray(bm?.indicators)
-    && bm.indicators.some((ind: any) => String(ind?.label || "").toLowerCase() === "body fat" && ind?.estimate && ind?.value != null);
+  // Body fat has ONE estimate (src/repo/body-fat-estimate.ts). When the Body indicator
+  // carries it (its range), the indicator line below prints it; the scan is only ever a
+  // dated anchor, never a second "current" figure.
+  const indicatorCarriesEstimate = Array.isArray(bm?.indicators)
+    && bm.indicators.some((ind: any) => String(ind?.label || "").toLowerCase() === "body fat" && ind?.low != null && ind?.value != null);
   if (bc) {
     const measured = bc.measured ?? {};
-    const estimated = bc.estimated ?? null;
     const fat = bc.fat_mass ?? null;
     const weight = bc.weight ?? null;
-    if (estimated?.value != null && !hasTapeBodyFat) {
-      lines.push(`  - DEXA-derived current estimate: ~${estimated.value}% body fat${estimated.as_of ? ` as of ${estimated.as_of}` : ""}; anchored to measured ${measured.value ?? "?"}%${measured.date ? ` on ${measured.date}` : ""}.`);
-    } else if (measured?.value != null) {
-      const tapeNote = hasTapeBodyFat ? " Use the tape estimate below as the between-scan current signal." : " Treat as historical if weight has moved since then.";
-      lines.push(`  - DEXA body fat anchor: ${measured.value}%${measured.date ? ` measured on ${measured.date}` : ""}.${tapeNote}`);
+    const scan = String(bc.anchor_label || "DEXA");
+    if (measured?.value != null) {
+      lines.push(`  - ${scan} body fat anchor: ${measured.value}%${measured.date ? ` measured on ${measured.date}` : ""}. Use the body-fat estimate as the current signal.`);
     }
-    if (!hasTapeBodyFat && (fat?.est_now != null || fat?.dexa != null)) {
-      lines.push(`  - Fat mass: ${fat.est_now != null ? `~${fat.est_now} lb current estimate` : ""}${fat.est_now != null && fat.dexa != null ? "; " : ""}${fat.dexa != null ? `${fat.dexa} lb at DEXA` : ""}${fat.delta_lbs != null ? ` (${fat.delta_lbs >= 0 ? "+" : ""}${fat.delta_lbs} lb vs DEXA)` : ""}.`);
-    } else if (hasTapeBodyFat && fat?.dexa != null) {
-      lines.push(`  - DEXA fat mass anchor: ${fat.dexa} lb${measured.date ? ` measured on ${measured.date}` : ""}; do not treat this as current if tape/weight have moved.`);
+    // No Body indicator to print it (no height on file): the estimate itself, never a raw projection.
+    const est = bc.estimate ?? null;
+    if (!indicatorCarriesEstimate && est?.value != null) {
+      lines.push(`  - Body fat: ~${est.value}% (range ${est.low}–${est.high}) — the one body-fat ESTIMATE (${String(est.basis_line || "").trim()}); trust the trend, not the decimal.`);
+    }
+    if (fat?.dexa != null) {
+      lines.push(`  - ${scan} fat mass anchor: ${fat.dexa} lb${measured.date ? ` measured on ${measured.date}` : ""}; do not treat this as current if tape/weight have moved.`);
     }
     if (weight?.current != null || weight?.at_scan != null) {
       lines.push(`  - Weight context: ${weight.current != null ? `${weight.current} lb current` : ""}${weight.current != null && weight.at_scan != null ? "; " : ""}${weight.at_scan != null ? `${weight.at_scan} lb at scan` : ""}.`);
     }
-    if (bc.note && !hasTapeBodyFat) lines.push(`  - Estimate note: ${String(bc.note).trim()}`);
   }
   const m = bm?.measurements ?? {};
   const parts: string[] = [];
@@ -1898,6 +1902,13 @@ export function renderBodyComp(ctx: any): string {
   for (const ind of Array.isArray(bm?.indicators) ? bm.indicators : []) {
     if (ind?.value == null) continue;
     const zone = ind.zone ? ` (${ind.zone})` : "";
+    if (ind.low != null && ind.high != null) {
+      // The one body-fat estimate: central value, its range, and what it rests on.
+      lines.push(
+        `  - ${ind.label}: ~${ind.value}${ind.unit || ""} (range ${ind.low}–${ind.high})${zone} — the one body-fat ESTIMATE (${String(ind.read || "").replace(/^Body fat [^.]*\.\s*/, "").trim()}); trust the trend, not the decimal.`
+      );
+      continue;
+    }
     const est = ind.estimate ? " — a tape ESTIMATE; trust the trend, not the decimal" : "";
     lines.push(`  - ${ind.label}: ${ind.value}${ind.unit || ""}${zone}${est}.`);
   }

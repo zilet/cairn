@@ -410,8 +410,13 @@ test("renderBodyComp feeds DEXA projection dates to the brain even without tape"
   const ctx = repo.getCoachContext();
   assert.ok(ctx.body_composition?.estimated, "coach context carries the current body-comp estimate");
   const block = renderBodyComp(ctx);
-  assert.match(block, /DEXA-derived current estimate/);
-  assert.match(block, new RegExp(today));
+  // Body fat has one estimate: the DEXA is its dated anchor, the indicator the current number.
+  assert.match(block, /DEXA body fat anchor: 35\.6%/);
+  assert.match(block, /the one body-fat ESTIMATE \(Your .+ DEXA, projected onto your current weight\.\)/);
+  // The printed number is the one estimate, carried to today's 175.5 lb.
+  const est = repo.currentBodyFatEstimate(repo.getProfile());
+  assert.match(block, new RegExp(`Body fat: ~${est.body_fat_pct}%`));
+  assert.ok(est.body_fat_pct < 35.6, "projected leaner than the scan as the weight came off");
   assert.match(block, new RegExp(scanDate));
   assert.match(block, /175\.5 lb current/);
 });
@@ -430,8 +435,13 @@ test("renderBodyComp prefers tape estimate over DEXA projection when both exist"
   repo.addBodyMeasurement(tapeDate, { waist_in: 38, neck_in: 15, hip_in: 42 });
 
   const block = renderBodyComp(repo.getCoachContext());
-  assert.doesNotMatch(block, /DEXA-derived current estimate/, "DEXA projection is suppressed when tape estimate exists");
+  // ONE current body-fat number reaches the coach, and it is the estimate's; the scan is
+  // only ever a dated anchor.
+  const est = repo.currentBodyFatEstimate(repo.getProfile());
+  const current = block.split("\n").filter((line) => /Body fat: ~|current estimate|est\. now/i.test(line));
+  assert.equal(current.length, 1, `exactly one current body-fat line:\n${block}`);
+  assert.match(current[0], new RegExp(`Body fat: ~${est.body_fat_pct}%`));
   assert.match(block, /DEXA body fat anchor/);
-  assert.match(block, /Body fat: /);
-  assert.match(block, /tape ESTIMATE/);
+  assert.match(block, /Body fat: ~/);
+  assert.match(block, /one body-fat ESTIMATE \(Tape .+ calibrated to your .+ DEXA/);
 });

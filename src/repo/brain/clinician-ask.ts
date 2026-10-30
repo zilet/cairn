@@ -60,7 +60,13 @@ interface AskTopic {
   phrase: string;
   pattern: RegExp;
   coveredBy?: readonly string[];
+  // A scan topic's whole noun phrase ("carotid ultrasound imaging", "coronary calcium
+  // scan"). When the record answers the topic, this phrase leaves the text, so a generic
+  // topic it covered comes back only when the text names ANOTHER scan ("… and a knee MRI").
+  span?: RegExp;
 }
+
+const SCAN_NOUN = String.raw`(?:\s+(?:artery|arteries|doppler|duplex|ultrasounds?|us|imaging|scans?|scoring|score|ct|tests?|study|studies|intima[- ]media thickness))*`;
 
 const SPECIALISTS = ["lipid_specialist", "cardiology", "endocrinology", "nephrology", "hematology"];
 const SCANS = ["cac", "carotid", "dexa", "echo"];
@@ -79,11 +85,36 @@ const ASK_TOPICS: readonly AskTopic[] = [
     pattern: /\bmedications?\b|\bmedicines?\b|\bdrugs?\b|\bpharmac|\bdosage\b|\bprescription\b/i,
     coveredBy: ["statin", "lipid_drug"],
   },
-  { key: "cac", phrase: "a coronary calcium (CAC) scan", pattern: /\bcac\b|coronary (?:artery )?calcium/i },
-  { key: "carotid", phrase: "a carotid ultrasound", pattern: /\bcarotid\b/i },
-  { key: "dexa", phrase: "a DEXA scan", pattern: /\bdexa\b|\bdxa\b/i },
-  { key: "ecg", phrase: "an ECG", pattern: /\b(?:ecg|ekg)\b|\belectrocardiogra/i },
-  { key: "echo", phrase: "an echocardiogram", pattern: /\bechocardiogra/i },
+  {
+    key: "cac",
+    phrase: "a coronary calcium (CAC) scan",
+    pattern: /\bcac\b|coronary (?:artery )?calcium/i,
+    span: new RegExp(String.raw`(?:\bcac\b|coronary (?:artery )?calcium)${SCAN_NOUN}`, "gi"),
+  },
+  {
+    key: "carotid",
+    phrase: "a carotid ultrasound",
+    pattern: /\bcarotid\b/i,
+    span: new RegExp(String.raw`\bcarotid${SCAN_NOUN}`, "gi"),
+  },
+  {
+    key: "dexa",
+    phrase: "a DEXA scan",
+    pattern: /\bdexa\b|\bdxa\b/i,
+    span: new RegExp(String.raw`\b(?:dexa|dxa)${SCAN_NOUN}`, "gi"),
+  },
+  {
+    key: "ecg",
+    phrase: "an ECG",
+    pattern: /\b(?:ecg|ekg)\b|\belectrocardiogra/i,
+    span: new RegExp(String.raw`(?:\b(?:ecg|ekg)\b|\belectrocardiogra\w*)${SCAN_NOUN}`, "gi"),
+  },
+  {
+    key: "echo",
+    phrase: "an echocardiogram",
+    pattern: /\bechocardiogra/i,
+    span: new RegExp(String.raw`\bechocardiogra\w*${SCAN_NOUN}`, "gi"),
+  },
   { key: "stress_test", phrase: "a stress test", pattern: /\bstress test/i },
   {
     key: "imaging",
@@ -127,20 +158,45 @@ export const CLINICIAN_ASK_BASIS = "The team flagged this for a clinician rather
 /** The ask card's sentence when nothing athlete-facing survives. */
 export const CLINICIAN_ASK_FALLBACK = "The team flagged something here for your doctor rather than deciding it.";
 
-/** The athlete-register topics a clinical text names, in question order. */
-export function clinicianAskTopics(texts: readonly unknown[]): string[] {
-  const hay = texts.map((text) => String(text ?? "")).join("\n");
+// The topics a clinical text names. An answered scan topic's whole phrase leaves the text
+// first, so a generic topic it covered ("imaging") stays down when the text named only that
+// scan, and comes back when it names another one too ("a CAC scan and a knee MRI").
+function namedTopics(texts: readonly unknown[], answered: ReadonlySet<string> = new Set()): AskTopic[] {
+  let hay = texts.map((text) => String(text ?? "")).join("\n");
   if (!hay.trim()) return [];
-  const matched = ASK_TOPICS.filter((topic) => topic.pattern.test(hay));
+  for (const topic of ASK_TOPICS) {
+    if (answered.has(topic.key) && topic.span) hay = hay.replace(topic.span, " ");
+  }
+  const matched = ASK_TOPICS.filter((topic) => !answered.has(topic.key) && topic.pattern.test(hay));
   const keys = new Set(matched.map((topic) => topic.key));
-  return matched
-    .filter((topic) => !topic.coveredBy?.some((key) => keys.has(key)))
+  return matched.filter((topic) => !topic.coveredBy?.some((key) => keys.has(key)));
+}
+
+/** The athlete-register topics a clinical text names, in question order. */
+export function clinicianAskTopics(texts: readonly unknown[], answered: ReadonlySet<string> = new Set()): string[] {
+  return namedTopics(texts, answered)
     .map((topic) => topic.phrase)
     .slice(0, MAX_TOPICS);
 }
 
-function topicQuestion(texts: readonly unknown[]): string | null {
-  const topics = clinicianAskTopics(texts);
+/**
+ * The scan topics a record on file already answers for an ask raised on `askDate`: a
+ * matching record dated on or after the ask (`scansOnFile`: topic key → newest record
+ * date, src/repo/scans-on-file.ts). A scan from before the ask leaves the topic standing.
+ */
+export function answeredScanTopics(
+  askDate: string | null | undefined,
+  scansOnFile: ReadonlyMap<string, string> | null | undefined
+): Set<string> {
+  const out = new Set<string>();
+  const day = String(askDate ?? "").slice(0, 10);
+  if (!day || !scansOnFile) return out;
+  for (const [topic, date] of scansOnFile) if (date >= day) out.add(topic);
+  return out;
+}
+
+function topicQuestion(texts: readonly unknown[], answered: ReadonlySet<string> = new Set()): string | null {
+  const topics = clinicianAskTopics(texts, answered);
   // One sentence, never clipped: a topic that does not fit is left off, never cut.
   while (topics.length) {
     const question = `Should we talk about ${joinList(topics)}?`;
@@ -192,8 +248,15 @@ export interface ClinicianAskVoice {
   explanation: string;
 }
 
-/** The athlete-register projection of a decision held for the athlete and their doctor. */
-export function clinicianAskVoice(decision: ClinicianAskDecisionLike): ClinicianAskVoice {
+/**
+ * The athlete-register projection of a decision held for the athlete and their doctor.
+ * `answered` names topic keys the record already answers (answeredScanTopics): they leave
+ * the question, and an ask whose every topic is answered asks nothing.
+ */
+export function clinicianAskVoice(
+  decision: ClinicianAskDecisionLike,
+  answered: ReadonlySet<string> = new Set()
+): ClinicianAskVoice {
   const action = (decision.action ?? {}) as Record<string, unknown>;
   const spoken = String(action.user_explanation ?? "")
     .replace(/\s+/g, " ")
@@ -201,8 +264,12 @@ export function clinicianAskVoice(decision: ClinicianAskDecisionLike): Clinician
   const notes = Array.isArray(action.clinician_notes) ? action.clinician_notes.map((note) => String(note ?? "")) : [];
   const agentTexts = [spoken, ...notes];
   const title = athleteTitle(decision.summary, agentTexts);
-  const question =
-    topicQuestion([...notes, spoken, decision.summary]) ?? (title ? `Can we talk about ${lowerLead(title)}?` : null);
+  const texts = [...notes, spoken, decision.summary];
+  // Every topic the text named is answered by the record, and nothing else is left.
+  const allAnswered = namedTopics(texts).length > 0 && namedTopics(texts, answered).length === 0;
+  const question = allAnswered
+    ? null
+    : (topicQuestion(texts, answered) ?? (title ? `Can we talk about ${lowerLead(title)}?` : null));
   // A sentence written to the athlete stays theirs to read, whole; one written about them
   // for someone else is replaced by the question.
   const athleteSentence =

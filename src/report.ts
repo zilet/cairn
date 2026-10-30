@@ -346,6 +346,11 @@ interface BodyMetricEstimate {
   fatMassLb: number | null;
   heightIn: number | null;
   measurements: Record<string, number>;
+  // The one body-fat estimate's range and basis (src/repo/body-fat-estimate.ts), when the
+  // indicator carries them — the report then names that estimate, not a raw tape read.
+  low: number | null;
+  high: number | null;
+  basis: string | null;
 }
 
 interface CurrentBodyContext {
@@ -380,6 +385,9 @@ function bodyMetricEstimate(bodyMetrics: any, currentWeightLb: unknown, weightDa
     fatMassLb,
     heightIn: Number.isFinite(h) ? round1(h) : null,
     measurements,
+    low: Number.isFinite(Number(bf?.low)) ? Number(bf.low) : null,
+    high: Number.isFinite(Number(bf?.high)) ? Number(bf.high) : null,
+    basis: bf?.read ? String(bf.read).replace(/^Body fat [^.]*\.\s*/, "").trim() || null : null,
   };
 }
 
@@ -556,7 +564,10 @@ function applyBodyMetricEstimate(m: ReportMarker, estimate: BodyMetricEstimate |
   const measuredPct = Number(bodyComp?.measured?.value);
   const dexaFat = Number(bodyComp?.fat_mass?.dexa);
   const parts = measurementParts(estimate);
-  const fromTape = `Tape-based Navy body-fat estimate from measurements on ${fmtDate(estimate.measurementDate)}${parts ? ` (${parts})` : ""}${estimate.heightIn != null ? ` and height ${fmtVal(estimate.heightIn)} in` : ""}`;
+  const fromTape =
+    estimate.basis && estimate.low != null && estimate.high != null
+      ? `Cairn's body-fat estimate ~${fmtVal(estimate.bodyFatPct)}% (range ${fmtVal(estimate.low)}–${fmtVal(estimate.high)}%): ${estimate.basis.replace(/\.$/, "")}; latest measurements on ${fmtDate(estimate.measurementDate)}${parts ? ` (${parts})` : ""}`
+      : `Tape-based Navy body-fat estimate from measurements on ${fmtDate(estimate.measurementDate)}${parts ? ` (${parts})` : ""}${estimate.heightIn != null ? ` and height ${fmtVal(estimate.heightIn)} in` : ""}`;
   const freshness = findingFreshness(m.name, estimate.measurementDate, dayISO(asOfISO) || reportTodayISO());
 
   if (isBodyFatPctName(m.name)) {

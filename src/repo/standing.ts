@@ -2,6 +2,8 @@ import { getRecoverySummary } from "./coach.js";
 import { parseDexaRegional } from "./dexa-canon.js";
 import { bpRead, listBloodPressureReadings } from "./health.js";
 import { getProfile, listWeight } from "./profile.js";
+import { bodyFatEstimate, bodyFatRangeText } from "./body-fat-estimate.js";
+import { resolvedCurrentBodyweight } from "./bodyweight.js";
 import { healthFocus, prioritizeMarkers } from "./propagation.js";
 import { getWeeklyStats } from "./sessions.js";
 import { presentMarkerRow } from "./lab-display.js";
@@ -339,64 +341,48 @@ function dexaRegional(markers: any[]) {
   return { visceral_fat_lbs, almi, ffmi, bmd_total, t_score, z_score, android_gynoid, fat, lean, notes };
 }
 
-export function bodyCompositionRead(markers: any[], currentWeightLb: number | null, nowISO: string) {
-  const bfMarker = findMarker(markers, /^body fat\b|body fat %|fat percentage/i);
-  const measuredBf = plausibleNumber(latestNumber(bfMarker), 3, 70);
-  if (measuredBf == null) return null;
-  const dexaDate = bfMarker?.latest?.date ?? null;
-  const leanTotal = plausibleNumber(latestNumber(findMarker(markers, /lean mass \(total\)|^lean mass total/i)), 40, 400);
-  const bmc = plausibleNumber(latestNumber(findMarker(markers, /bone mineral content|\bbmc\b/i)), 1, 20);
-  const fatTotal = plausibleNumber(latestNumber(findMarker(markers, /fat mass \(total\)|^fat mass total/i)), 5, 300);
-  const totalMassMarker = findMarker(markers, /\btotal mass\b/i);
-  const totalMass = plausibleNumber(latestNumberFromSource(totalMassMarker, /\btotal mass\b/i) ?? latestNumber(totalMassMarker), 60, 500);
-  const trunkFatPct = plausibleNumber(latestNumber(findMarker(markers, /body fat - trunk|trunk body fat/i)), 3, 70);
-
-  const scanWeight = totalMass ?? currentWeightLb ?? null;
-  // Fat-free mass measured at the scan: lean + bone, else derived from BF% × scan weight.
-  let ffm: number | null = null;
-  if (leanTotal != null) ffm = leanTotal + (bmc ?? 0);
-  else if (scanWeight != null) ffm = scanWeight * (1 - measuredBf / 100);
-  const dexaFatMass = fatTotal ?? (scanWeight != null ? scanWeight * (measuredBf / 100) : null);
-
-  const w = currentWeightLb;
-  let estimated: { value: number; as_of: string } | null = null;
-  let fat_mass: { dexa: number | null; est_now: number | null; delta_lbs: number | null } | null = null;
-  // Only project when we have a measured anchor AND the weight has actually moved since
-  // the scan — otherwise the estimate is just the measured value restated.
-  const weightMoved = ffm != null && w != null && (scanWeight == null || Math.abs(w - scanWeight) >= 1);
-  if (ffm != null && w != null && w > ffm && weightMoved) {
-    const estFat = w - ffm;
-    const estBf = Math.max(3, Math.min(70, (estFat / w) * 100));
-    estimated = { value: Math.round(estBf * 10) / 10, as_of: nowISO };
-    fat_mass = {
-      dexa: dexaFatMass != null ? Math.round(dexaFatMass * 10) / 10 : null,
-      est_now: Math.round(estFat * 10) / 10,
-      delta_lbs: dexaFatMass != null ? Math.round((estFat - dexaFatMass) * 10) / 10 : null,
-    };
-  }
-
-  const deltaBf = estimated ? estimated.value - measuredBf : 0;
-  const trend = !estimated ? null : deltaBf <= -0.4 ? "falling" : deltaBf >= 0.4 ? "rising" : "steady";
-  const lost = fat_mass?.delta_lbs != null && fat_mass.delta_lbs < 0 ? Math.abs(fat_mass.delta_lbs) : null;
-  const note = estimated
-    ? lost != null && lost >= 1
-      ? "Estimated from your DEXA lean mass held steady as the weight comes off — early loss carries some water, but the direction is real."
-      : "Estimated from your DEXA, projected onto your current weight."
-    : "From your latest DEXA.";
-
+// The body-composition read rides on the ONE body-fat estimate (body-fat-estimate.ts):
+// its chosen anchor (a DEXA, Bod Pod or hydrostatic test — never a bioimpedance printout)
+// is the dated scan, the estimate is the current value, and the fat-off delta is the
+// scan's fat mass against the estimate on the canonical current weight. No anchor, no
+// read. `_markers`/`_currentWeightLb` are kept for old callers; the estimate owns both.
+export function bodyCompositionRead(_markers: any[], _currentWeightLb: number | null, nowISO: string, profileArg?: any) {
+  const profile = profileArg ?? (() => { try { return getProfile() ?? {}; } catch { return {}; } })();
+  const est = (() => { try { return bodyFatEstimate(profile); } catch { return null; } })();
+  const anchor = est?.anchor;
+  if (!est || !anchor) return null;
+  // The scan document's own rows, shaped like marker-history entries for the shared finders.
+  const docMarkers = anchor.markers.map((m) => ({ name: m.name, latest: { value: m.value, date: anchor.date } }));
+  const fatTotal = plausibleNumber(latestNumber(findMarker(docMarkers, /fat mass \(total\)|^fat mass total|^total (?:body )?fat mass/i)), 5, 300);
+  const trunkFatPct = plausibleNumber(latestNumber(findMarker(docMarkers, /body fat - trunk|trunk body fat/i)), 3, 70);
+  const scanWeight = anchor.scan_lb;
+  const scanFat = fatTotal ?? (scanWeight != null ? scanWeight * (anchor.value / 100) : null);
+  const w = est.weight_lb;
+  const fatNow = w != null ? w * (est.value / 100) : null;
+  const fat_mass =
+    scanFat != null || fatNow != null
+      ? {
+          dexa: scanFat != null ? Math.round(scanFat * 10) / 10 : null,
+          est_now: fatNow != null ? Math.round(fatNow * 10) / 10 : null,
+          delta_lbs: scanFat != null && fatNow != null ? Math.round((fatNow - scanFat) * 10) / 10 : null,
+        }
+      : null;
+  const deltaBf = est.value - anchor.value;
   return {
-    measured: { value: measuredBf, date: dexaDate },
-    estimated,
+    measured: { value: anchor.value, date: anchor.date },
+    // What the scan is called wherever it is named ("at your DEXA", "since your Bod Pod").
+    anchor_label: anchor.label,
+    estimated: { value: est.value, as_of: nowISO },
     fat_mass,
     trunk_fat_pct: trunkFatPct,
     weight: { current: w, at_scan: scanWeight },
-    trend,
-    note,
-    // The regional DEXA detail — visceral fat, ALMI/FFMI, bone density, and where fat &
-    // lean sit — so the whole scan is read, not just one body-fat number.
-    regional: dexaRegional(markers),
-    // the value the rest of the read should USE: live when we can project, else measured.
-    effective: estimated ? estimated.value : measuredBf,
+    trend: deltaBf <= -0.4 ? "falling" : deltaBf >= 0.4 ? "rising" : "steady",
+    note: est.basis_line,
+    // The regional detail of a DEXA (visceral fat, ALMI/FFMI, bone, where fat & lean sit).
+    regional: anchor.kind === "dexa" ? dexaRegional(docMarkers) : null,
+    // The ONE body-fat estimate — the only "current" number any reader of this sees.
+    effective: est.value,
+    estimate: { value: est.value, low: est.low, high: est.high, date: est.date, basis_line: est.basis_line, sharpen_hint: est.sharpen_hint },
   };
 }
 
@@ -428,7 +414,9 @@ function bioAge(markers: any[], calendarAge: number | null) {
 export function levinePhenoAge(
   markers: any[],
   calendarAge: number | null,
-): { value: number; delta: number; direction: "younger" | "older" | "aligned"; note: string } | null {
+): { value: number; delta: number; direction: "younger" | "older" | "aligned"; note: string; date: string | null } | null {
+  // The panel's date: the newest of the nine readings it is built from.
+  let date: string | null = null;
   const pick = (re: RegExp, min: number, max: number, exclude?: RegExp): number | null => {
     const m = markers.find((x) => {
       const name = String(x?.name ?? "");
@@ -436,7 +424,10 @@ export function levinePhenoAge(
       if (exclude && exclude.test(name)) return false;
       return true;
     });
-    return plausibleNumber(latestNumber(m), min, max);
+    const value = plausibleNumber(latestNumber(m), min, max);
+    const day = value != null ? String(m?.latest?.date ?? "").slice(0, 10) : "";
+    if (/^\d{4}-\d{2}-\d{2}$/.test(day) && (!date || day > date)) date = day;
+    return value;
   };
   const albumin = pick(/\balbumin\b/i, 2, 6, /urine|micro|globulin|ratio|\//i);   // g/dL
   const creat = pick(/\bcreatinine\b/i, 0.3, 2.0, /urine|clearance|egfr|ratio|\//i); // mg/dL
@@ -483,7 +474,7 @@ export function levinePhenoAge(
     : direction === "younger"
       ? `Your bloodwork is reading ${soft === "right in line with" ? "in line with" : `${soft} younger than`} your calendar age — the panel's aging markers are in a good place.`
       : `Your bloodwork is reading ${soft === "right in line with" ? "in line with" : `${soft} older than`} your calendar age — a few panel markers are worth tightening.`;
-  return { value, delta, direction, note };
+  return { value, delta, direction, note, date };
 }
 
 // The single highest-leverage move — reuses the connected brain's one voice
@@ -534,15 +525,15 @@ export function standingMomentum(
   const profile = opts.profile ?? getProfile() ?? {};
   const markers = opts.markers ?? (() => { try { return (prioritizeMarkers() as any).markers || []; } catch { return []; } })();
   const weights = opts.weights ?? (() => { try { return listWeight(60); } catch { return []; } })();
-  const lastW = weights.length ? Number(weights[weights.length - 1]?.weight_lb) : Number.NaN;
-  const currentWeight = Number.isFinite(lastW) ? lastW : plausibleNumber(profile.weight_lb, 60, 600);
+  // The canonical current bodyweight (manual + the watch's scale), the one every read uses.
+  const currentWeight = currentWeightLb(profile, weights);
   const stats = (opts.weeklyStats ?? (() => { try { return getWeeklyStats(); } catch { return null; } })()) as any;
-  const comp = opts.bodyComp ?? bodyCompositionRead(markers, currentWeight, new Date().toISOString());
+  const comp = opts.bodyComp ?? bodyCompositionRead(markers, currentWeight, new Date().toISOString(), profile);
   const bp = opts.bp ?? bpRead((() => { try { return listBloodPressureReadings(12); } catch { return []; } })());
 
   const chips: { kind: string; text: string; dir: string }[] = [];
   if (comp?.fat_mass?.delta_lbs != null && comp.fat_mass.delta_lbs <= -1) {
-    chips.push({ kind: "fat", text: `~${Math.abs(Math.round(comp.fat_mass.delta_lbs))} lb of fat off since your DEXA`, dir: "good" });
+    chips.push({ kind: "fat", text: `~${Math.abs(Math.round(comp.fat_mass.delta_lbs))} lb of fat off since your ${comp.anchor_label ?? "scan"}`, dir: "good" });
   }
   const trend = stats ? Number(stats.trend_lb_wk) : Number.NaN;
   const goalMode = goalModeOf(stats, profile);
@@ -567,6 +558,107 @@ function balanceNote(stats: any, hasMomentum: boolean): string {
   return "This works best woven around a real life — family, friends, the occasional off-plan night. Aim for the direction of travel, not a perfect week.";
 }
 
+// ---------- shared readings: ONE source per number for every health read ----------
+// The standing read and the cardiovascular risk read (src/repo/risk.ts) both speak to
+// VO2max, body fat and the bloodwork age. Each number has one source chain, here, so
+// the two cards can never disagree about the same person.
+
+export interface HealthReading {
+  value: number;
+  source: string;
+  date: string | null;
+}
+
+/** VO2max: a marker on file (a lab test, or the watch's folded-in reading), else the watch's latest. */
+export function vo2maxReading(markers: any[], rec: any): HealthReading | null {
+  const marker = findMarker(markers, /\bvo2\s?max|vo₂max/i);
+  const fromMarker = plausibleNumber(latestNumber(marker), 10, 100);
+  if (fromMarker != null) {
+    const kind = String(marker?.latest?.kind ?? "").toLowerCase();
+    const source = /garmin|watch|wearable/.test(kind) ? "Garmin estimate" : kind === "lab" || kind === "" ? "lab measure" : String(marker.latest.kind);
+    return { value: fromMarker, source, date: marker?.latest?.date ? String(marker.latest.date).slice(0, 10) : null };
+  }
+  const fromWatch = plausibleNumber(rec?.vo2max, 10, 100);
+  if (fromWatch == null) return null;
+  const date = rec?.quality?.vo2max?.latest_date ?? null;
+  return { value: fromWatch, source: "Garmin estimate", date: date ? String(date).slice(0, 10) : null };
+}
+
+/** The current bodyweight: the latest weigh-in, else the profile's. */
+export function currentWeightLb(profile: any, weights?: any[]): number | null {
+  // The canonical current bodyweight (manual weigh-ins plus the watch's scale) — the same
+  // weight the body-fat estimate and the goal check read. A passed manual log is a fallback.
+  const resolved = (() => { try { return resolvedCurrentBodyweight(profile); } catch { return null; } })();
+  if (resolved && resolved.source !== "profile") return resolved.weight_lb;
+  const rows = weights ?? (() => { try { return listWeight(60); } catch { return []; } })();
+  const last = rows.length ? Number(rows[rows.length - 1]?.weight_lb) : Number.NaN;
+  return Number.isFinite(last) ? last : plausibleNumber(profile?.weight_lb, 60, 600);
+}
+
+export interface BodyFatReading extends HealthReading {
+  estimated: boolean;
+  low: number;
+  high: number;
+  basis_line: string;
+  sharpen_hint: string | null;
+  /** True when a real measurement (a scan or a tape) sets the level — false for the height/weight fallback. */
+  measured: boolean;
+  /** The DEXA read (regional detail, fat-mass change) when one is on file — never the level. */
+  body_comp: ReturnType<typeof bodyCompositionRead>;
+}
+
+/**
+ * Body fat: the ONE estimate (src/repo/body-fat-estimate.ts) — every measurement weighed
+ * by its error and carried by the weight log. The DEXA read rides along for its regional
+ * notes; its own projection is one input to the estimate, not the answer.
+ */
+export function bodyFatReading(markers: any[], profile: any, _rec: any, opts: { weightLb?: number | null; nowISO?: string; weights?: any[] } = {}): BodyFatReading | null {
+  const nowISO = opts.nowISO ?? new Date().toISOString();
+  const weight = opts.weightLb !== undefined ? opts.weightLb : currentWeightLb(profile, opts.weights);
+  const comp = bodyCompositionRead(markers, weight ?? null, nowISO, profile);
+  const est = (() => { try { return bodyFatEstimate(profile); } catch { return null; } })();
+  if (!est) return null;
+  return {
+    value: est.value,
+    low: est.low,
+    high: est.high,
+    source: est.basis_line,
+    date: est.date,
+    estimated: true,
+    basis_line: est.basis_line,
+    sharpen_hint: est.sharpen_hint,
+    measured: est.measured,
+    body_comp: { ...(comp ?? { measured: null, estimated: null, fat_mass: null, trunk_fat_pct: null, trend: null, note: est.basis_line, regional: null }), effective: est.value, estimate: { value: est.value, low: est.low, high: est.high, date: est.date, basis_line: est.basis_line, sharpen_hint: est.sharpen_hint } } as any,
+  };
+}
+
+export interface BloodworkAgeReading extends HealthReading {
+  delta: number | null;
+  kind: "lab" | "phenoage";
+}
+
+/** The bloodwork age: a lab-reported biological age, else the Levine PhenoAge off the panel. */
+export function bloodworkAgeReading(markers: any[], age: number | null): BloodworkAgeReading | null {
+  const lab = bioAge(markers, age);
+  if (lab) return { value: lab.value, delta: lab.delta, source: "biological age reported by your lab", date: lab.date ? String(lab.date).slice(0, 10) : null, kind: "lab" };
+  const pheno = levinePhenoAge(markers, age);
+  if (pheno) return { value: pheno.value, delta: pheno.delta, source: "PhenoAge from your bloodwork", date: pheno.date, kind: "phenoage" };
+  return null;
+}
+
+/** The VO2max at a given FRIEND percentile for this person's age band and sex. */
+export function vo2AtPercentile(profile: any, age: number | null, pct: number): number {
+  const sex = sexOf(profile);
+  const points = VO2_CURVE.bands[sex][decade(age ?? 40)] ?? VO2_CURVE.bands[sex][40];
+  return Math.round(valueAt(points, pct) * 10) / 10;
+}
+
+/** VO2max against the FRIEND age/sex reference standards: percentile for age and the age the value reads like. */
+export function fitnessComparison(vo2: HealthReading, profile: any, age: number | null) {
+  const c = compareCurve(VO2_CURVE, vo2.value, sexOf(profile), age ?? 40, 20);
+  return { percentile: c.percentile, age_band: c.actual_age_band, equivalent_age: c.equivalent_age, verb: c.verb, source: VO2_CURVE.source };
+}
+
 export function healthStanding(opts: { referenceAge?: number } = {}) {
   const profile = getProfile() ?? {};
   const labSystem = labUnitSystem(); // the lab-unit system, resolved once for every measure below
@@ -582,14 +674,15 @@ export function healthStanding(opts: { referenceAge?: number } = {}) {
   const nowISO = new Date().toISOString();
   const stats = (() => { try { return getWeeklyStats(); } catch { return null; } })() as any;
   const weights = (() => { try { return listWeight(60); } catch { return []; } })();
-  const lastW = weights.length ? Number(weights[weights.length - 1]?.weight_lb) : Number.NaN;
-  const currentWeight = Number.isFinite(lastW) ? lastW : plausibleNumber(profile.weight_lb, 60, 600);
+  const currentWeight = currentWeightLb(profile, weights);
 
-  const vo2Marker = findMarker(markers, /\bvo2\s?max|vo₂max/i);
-  const vo2 = plausibleNumber(latestNumber(vo2Marker), 10, 100) ?? plausibleNumber(rec.vo2max, 10, 100);
-  // Live body composition — the DEXA anchor projected onto current weight (progress, not a stale snapshot).
-  const bodyComp = bodyCompositionRead(markers, currentWeight ?? null, nowISO);
-  const bodyFat = bodyComp ? bodyComp.effective : plausibleNumber(rec.body_fat_pct, 3, 70);
+  const vo2Reading = vo2maxReading(markers, rec);
+  const vo2 = vo2Reading?.value ?? null;
+  // Live body composition — the DEXA anchor projected onto current weight (progress, not a
+  // stale snapshot) — through the one body-fat source the risk read uses too.
+  const bodyFatRead = bodyFatReading(markers, profile, rec, { weightLb: currentWeight ?? null, nowISO, weights });
+  const bodyComp = bodyFatRead?.body_comp ?? null;
+  const bodyFat = bodyFatRead?.value ?? null;
   const bioAgeInfo = bioAge(markers, age);
   const rhrMarker = findMarker(markers, /resting hr|resting heart/i);
   const rhr = plausibleNumber(latestNumber(rhrMarker), 25, 120) ?? plausibleNumber(rec.avg_resting_hr, 25, 120);
@@ -602,18 +695,19 @@ export function healthStanding(opts: { referenceAge?: number } = {}) {
     const c = compareCurve(VO2_CURVE, vo2, sex, actualAge, referenceAge) as any;
     // Provenance: VO2max is most often a Garmin estimate (only refreshed on hard runs),
     // so naming the source + recency lets the athlete weigh how current it is.
-    const vo2FromMarker = plausibleNumber(latestNumber(vo2Marker), 10, 100) != null;
-    const vo2Kind = String(vo2Marker?.latest?.kind ?? "").toLowerCase();
-    c.reading = vo2FromMarker
-      ? { source: /garmin|watch|wearable/.test(vo2Kind) ? "Garmin estimate" : vo2Kind === "lab" || vo2Kind === "" ? "lab measure" : vo2Marker.latest.kind, date: vo2Marker?.latest?.date ?? null }
-      : { source: "Garmin estimate", date: null };
+    c.reading = { source: vo2Reading?.source ?? "Garmin estimate", date: vo2Reading?.date ?? null };
     comparisons.push(c);
     ageInputs.push({ age: c.equivalent_age, weight: 1.4 });
   }
-  if (bodyFat != null) {
+  // A percentile (and the age composite) claims a result: it needs a measured level, never
+  // the height/weight fallback, which would read a heavy frame as "75".
+  if (bodyFat != null && bodyFatRead?.measured) {
     const c = compareCurve(BODY_FAT_CURVE, bodyFat, sex, actualAge, referenceAge) as any;
-    if (bodyComp?.estimated) { c.estimated = true; c.measured_value = bodyComp.measured.value; c.as_of = bodyComp.estimated.as_of; }
-    c.reading = { source: "DEXA", date: bodyComp?.measured?.date ?? null };
+    c.estimated = true;
+    c.range = { low: bodyFatRead?.low ?? null, high: bodyFatRead?.high ?? null };
+    if (bodyComp?.measured) c.measured_value = bodyComp.measured.value;
+    c.as_of = nowISO;
+    c.reading = { source: bodyFatRead?.basis_line ?? null, date: bodyFatRead?.date ?? null };
     comparisons.push(c);
     // Body comp is a lever that's MOVING, not an age anchor — lighter weight, so it never
     // alone drags the read old while the athlete is actively leaning out.
@@ -731,17 +825,17 @@ export function healthStanding(opts: { referenceAge?: number } = {}) {
     {
       id: "body",
       label: "Body composition",
-      tone: bodyFat == null ? "missing" : bandForPercentile(comparisons.find((c) => c.key === "body_fat_pct")?.percentile),
-      headline: bodyFat == null ? "No DEXA/body-fat anchor yet"
-        : bodyComp?.estimated ? `~${bodyComp.estimated.value}% body fat · est. now`
-          : `${Math.round(bodyFat * 10) / 10}% body fat`,
-      body: bodyComp?.estimated && bodyComp.fat_mass?.delta_lbs != null && bodyComp.fat_mass.delta_lbs < 0
-        ? `Down from ${bodyComp.measured.value}% at your DEXA — roughly ${Math.abs(Math.round(bodyComp.fat_mass.delta_lbs))} lb of fat off. ${bodyComp.note}`
-        : bodyFat == null ? "A DEXA or compatible scale makes this comparison much sharper."
-          : "Body composition is a lever — it moves BP, glucose, lipids and hormones together.",
+      // A number shown from height and weight alone is neutral ("steady"), never "missing"
+      // and never a percentile tone.
+      tone: bodyFat == null ? "missing" : bodyFatRead?.measured ? bandForPercentile(comparisons.find((c) => c.key === "body_fat_pct")?.percentile) : "steady",
+      headline: bodyFat == null || !bodyFatRead ? "No body-fat estimate yet"
+        : `${bodyFatRangeText(bodyFatRead)} body fat`,
+      body: bodyFatRead
+        ? `${bodyFatRead.basis_line}${bodyFatRead.sharpen_hint ? ` ${bodyFatRead.sharpen_hint}` : ""}`
+        : "A tape measurement (waist and neck) or a DEXA makes this comparison much sharper.",
       measures: bodyFat != null ? [
-        { label: bodyComp?.estimated ? "Body fat · est." : "Body fat", value: Math.round(bodyFat * 10) / 10, unit: "%" },
-        bodyComp?.estimated ? { label: "At DEXA", value: bodyComp.measured.value, unit: "%" } : null,
+        { label: "Body fat · est.", value: Math.round(bodyFat * 10) / 10, unit: "%" },
+        bodyComp?.measured ? { label: `At ${bodyComp.anchor_label ?? "scan"}`, value: bodyComp.measured.value, unit: "%" } : null,
       ].filter(Boolean) : [],
     },
     {

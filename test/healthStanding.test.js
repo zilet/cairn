@@ -26,9 +26,11 @@ test("healthStanding compares actual age against a selectable reference decade",
   repo.setProfile({ age: 44, sex: "male", height_cm: 180, weight_lb: 185, goal_mode: "maintain" });
   seedHealthDoc("2026-06-20", [
     marker("VO2max", 48, { unit: "mL/kg/min" }),
-    marker("Body Fat %", 18, { unit: "%" }),
     marker("ApoB", 78, { unit: "mg/dL", flag: "normal" }),
   ]);
+  // Body fat comes from a scan: a "Body Fat %" on a bloodwork printout is bioimpedance,
+  // direction only, and never sets the level (body-fat-estimate.ts).
+  seedHealthDoc("2026-06-20", [marker("Body Fat %", 18, { unit: "%" })], "dexa");
   repo.addBloodPressureReading({ measured_at: "2026-06-24T07:15", systolic: 116, diastolic: 72, pulse: 58 });
   seedTrainingDay(localDaysAgo(0));
   seedTrainingDay(localDaysAgo(2));

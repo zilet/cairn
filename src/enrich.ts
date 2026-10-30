@@ -2261,8 +2261,51 @@ function foldDuplicateHealthPanels(id: number): void {
   }
 }
 
+// A pasted or uploaded report whose only output is its imaging studies is that study's
+// source, not a record of its own: it gets a short summary and the study's date (so an
+// export or a search never reads a blank "Other" row) and the `imaging_only` mark Records
+// folds it into the study card by (health-records-client.ts). A source that already
+// carries markers or facts is a mixed import and is never rewritten by an imaging-only pass.
+function fileImagingOnlySource(id: number, row: any, studies: any[]): void {
+  let current: any = null;
+  try {
+    current = row?.parsed_json ? JSON.parse(row.parsed_json) : null;
+  } catch {
+    current = null;
+  }
+  const has = (list: unknown) => Array.isArray(list) && list.length > 0;
+  if (has(current?.markers) || has(current?.clinical_facts)) return;
+  const label = (study: any): string | null => {
+    const s = study?.parsed?.imaging_study?.study ?? {};
+    return asStr(s.procedure) ?? asStr(s.raw_modality) ?? asStr(s.modality) ?? null;
+  };
+  const labels = [...new Set(studies.map(label).filter((x): x is string => !!x))];
+  const summary =
+    studies.length === 1
+      ? [label(studies[0]), asStr(studies[0]?.summary)].filter(Boolean).join(" — ") || "Imaging report"
+      : `${studies.length} imaging reports${labels.length ? `: ${labels.slice(0, 4).join("; ")}` : ""}`;
+  const dates = studies.map((study) => asStr(study?.doc_date)).filter((d): d is string => !!d).sort();
+  const text = summary.slice(0, 1000);
+  // The summary is ours to rewrite only while it is empty or still the one this function
+  // wrote (remembered on `imaging_only_summary`); a summary anyone else wrote stays.
+  const ownSummary = !row?.summary || (current?.imaging_only_summary != null && row.summary === current.imaging_only_summary);
+  updateHealthDocFields(id, {
+    parsed_json: {
+      ...(current && typeof current === "object" ? current : {}),
+      markers: [],
+      imaging_only: true,
+      imaging_only_summary: ownSummary ? text : (current?.imaging_only_summary ?? null),
+    },
+    ...(ownSummary ? { summary: text } : {}),
+    // A date the person set on the upload is theirs; only an undated source takes the study's.
+    ...(!row?.doc_date && dates.length ? { doc_date: dates[dates.length - 1] } : {}),
+  });
+}
+
 function applyHealthIngestNonImaging(id: number, parsed: any, ccda?: CcdaHealthExtraction | null): boolean {
   const row = getHealthDocumentRaw(id) as any;
+  // The source was deleted while its read was in flight: nothing may be derived from it.
+  if (!row) return false;
   // MyChart/CCDA bundles may carry radiology reports alongside labs. Persist
   // those as derived first-class imaging records linked to the source artifact;
   // they are never flattened into lab panels or markers.
@@ -2348,7 +2391,10 @@ function applyHealthIngestNonImaging(id: number, parsed: any, ccda?: CcdaHealthE
   // A health-document result with only prose is not an ingest. This catches agent
   // sandbox/file-access failures like "I could not read the upload" before they
   // overwrite a previously valid marker panel with {"markers":[]}.
-  if (!markerCount && !clinicalFacts.length) return derivedImaging.length > 0;
+  if (!markerCount && !clinicalFacts.length) {
+    if (derivedImaging.length) fileImagingOnlySource(id, row, derivedImaging);
+    return derivedImaging.length > 0;
+  }
   if (!cleaned.length) {
     const summary = asStr(parsed?.summary) ?? null;
     const out: Record<string, any> = { markers: [] };

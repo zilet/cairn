@@ -38,7 +38,7 @@
 
 import { db } from "../db.js";
 import { estimateExpenditure } from "./expenditure.js";
-import { currentBodyFatEstimate, effectiveGoalMode, getProfile, KCAL_PER_LB, leannessAwareLossRates } from "./profile.js";
+import { currentBodyFatEstimate, effectiveGoalMode, getProfile, KCAL_PER_LB, leannessAwareLossRates, protectiveBodyFatPct } from "./profile.js";
 import { getAttentionSchedule } from "./attention.js";
 import { activeBlockContext } from "./program-blocks.js";
 import { getProgramState, strengthBlockPeaking } from "./program-state.js";
@@ -639,7 +639,8 @@ export function cutTargetState(
 
   let bodyFat: number | null = null;
   try {
-    bodyFat = finite(currentBodyFatEstimate(profile)?.body_fat_pct);
+    // The cut's lean-safe cap reads the leaner end of the one body-fat estimate.
+    bodyFat = finite(protectiveBodyFatPct(currentBodyFatEstimate(profile)));
   } catch {
     bodyFat = null;
   }

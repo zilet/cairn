@@ -10,7 +10,7 @@ import { bumpTrainingDataVersion } from "./training-cache.js";
 import { BODYFAT_TOLERANCE_PCT, GOAL_DIRECTED_PHASE_KINDS, WEIGHT_TOLERANCE_LB } from "./goal-consistency.js";
 import { canonicalBodyweightSeries, recentIdenticalWeighIn, resolvedCurrentBodyweight } from "./bodyweight.js";
 import { classifyRecompositionStage } from "./recomposition-stage.js";
-import { dailySiteSeries } from "./measurement-series.js";
+import { bodyFatEstimate, type BodyFatSourceKind } from "./body-fat-estimate.js";
 import { serializeTrainingIntent } from "./training-intent.js";
 import { normalizeLocationText } from "./location-context.js";
 import { parseMovementConsiderations, serializeMovementConsiderations } from "./movement-considerations.js";
@@ -1107,68 +1107,47 @@ export const KCAL_PER_LB = 3500;
 export const KCAL_ABSOLUTE_FLOOR = 1500; // never advise a target below this for this user (mirrors buildMealPlanPrompt)
 
 export interface BodyFatEstimate {
+  /** The central estimate — for display. */
   body_fat_pct: number;
-  source: "tape" | "garmin" | "profile";
+  /** The leaner end of the range — for anything protective (loss-rate caps, cut planning). */
+  low: number;
+  high: number;
+  source: BodyFatSourceKind;
   date: string | null;
   estimated: boolean;
+  /** True when a real measurement (a scan or a tape) sets the level — never the fallback alone. */
+  measured: boolean;
+  basis_line: string;
 }
 
-function heightInFor(p: any): number | null {
-  const hin = Number(p?.height_in);
-  if (Number.isFinite(hin) && hin >= 24 && hin <= 108) return hin;
-  const hcm = Number(p?.height_cm);
-  if (Number.isFinite(hcm) && hcm >= 60 && hcm <= 275) return hcm / 2.54;
-  return null;
-}
-
-function navyTapeBodyFat(p: any): BodyFatEstimate | null {
-  const heightIn = heightInFor(p);
-  if (heightIn == null) return null;
-  // The latest tape DAY, one value per site (measurement-series.ts): a same-day
-  // re-entry that corrects only the waist keeps that day's earlier neck and hip.
-  const row = db.prepare(`SELECT MAX(date) AS date FROM body_measurements`).get() as any;
-  if (!row?.date) return null;
-  const onDay = (site: string) => {
-    const reading = dailySiteSeries(site, { since: row.date, through: row.date }).at(-1);
-    return reading ? reading.value : Number.NaN;
-  };
-  const waist = onDay("waist_in");
-  const neck = onDay("neck_in");
-  const hip = onDay("hip_in");
-  const female = String(p?.sex || "male").toLowerCase() === "female";
-  let value: number | null = null;
-  if (!female && Number.isFinite(waist) && Number.isFinite(neck) && waist > neck && heightIn > 0) {
-    value = 86.01 * Math.log10(waist - neck) - 70.041 * Math.log10(heightIn) + 36.76;
-  } else if (
-    female &&
-    Number.isFinite(waist) &&
-    Number.isFinite(hip) &&
-    Number.isFinite(neck) &&
-    waist + hip > neck &&
-    heightIn > 0
-  ) {
-    value = 163.205 * Math.log10(waist + hip - neck) - 97.684 * Math.log10(heightIn) - 78.387;
-  }
-  if (value == null || !Number.isFinite(value)) return null;
-  value = Math.max(3, Math.min(70, Math.round(value * 10) / 10));
-  return { body_fat_pct: value, source: "tape", date: row.date ?? null, estimated: true };
-}
-
-function latestGarminBodyFat(): BodyFatEstimate | null {
-  const row = db
-    .prepare(
-      `SELECT date, body_fat_pct FROM garmin_daily_metrics WHERE body_fat_pct IS NOT NULL ORDER BY date DESC, id DESC LIMIT 1`
-    )
-    .get() as any;
-  const value = Number(row?.body_fat_pct);
-  if (!Number.isFinite(value) || value < 3 || value > 70) return null;
-  return { body_fat_pct: Math.round(value * 10) / 10, source: "garmin", date: row.date ?? null, estimated: false };
-}
-
+// Body fat has ONE estimate (src/repo/body-fat-estimate.ts): every measurement weighed by
+// its known error, carried on the canonical bodyweight series. This adapter keeps the
+// long-standing shape. A milestone, a "goal reached" or a percentile needs `measured`.
 export function currentBodyFatEstimate(prof?: any): BodyFatEstimate | null {
   const p = prof ?? getProfile();
   if (!p) return null;
-  return navyTapeBodyFat(p) ?? latestGarminBodyFat();
+  const est = bodyFatEstimate(p);
+  if (!est) return null;
+  return {
+    body_fat_pct: est.value,
+    low: est.low,
+    high: est.high,
+    source: est.primary,
+    date: est.date,
+    estimated: true,
+    measured: est.measured,
+    basis_line: est.basis_line,
+  };
+}
+
+/**
+ * The body-fat figure a protective cap reads: the leaner end of the one estimate —
+ * whatever the estimate rests on, the height/weight fallback included. A rough estimate
+ * is protective by default (its wide range reads leaner) and loosens as measurements
+ * narrow it. Null only when no estimate can be made at all.
+ */
+export function protectiveBodyFatPct(est: BodyFatEstimate | null | undefined): number | null {
+  return est ? est.low : null;
 }
 
 // Decision-time phase snapshot. The classifier itself is pure/cycle-free; this
@@ -1200,7 +1179,8 @@ export function recompositionStageAt(today = localDateISO()) {
     progress,
     remaining,
     current: validCurrent,
-    bodyFatPct: bodyFat?.body_fat_pct ?? null,
+    // Cut planning reads the leaner end: near-goal (leaning out) arrives no later than the range allows.
+    bodyFatPct: protectiveBodyFatPct(bodyFat),
     bodyFatDate: bodyFat?.date ?? null,
     goalBodyFat: Number.isFinite(Number(profile?.goal_bodyfat_pct)) ? Number(profile.goal_bodyfat_pct) : null,
     today,
@@ -1302,10 +1282,17 @@ export function computeGoalCheck(
   const lbsToLose = p.goal_weight_lb != null ? Math.max(0, p.weight_lb - p.goal_weight_lb) : 0;
 
   // lean-safe loss: early cuts can run near ~0.5-1% BW/week, but the ceiling
-  // tapers as body fat falls. A tape/Garmin body-fat estimate is an estimate, so
-  // it only narrows the ceiling; absent BF keeps the old conservative default.
+  // tapers as body fat falls. It reads the leaner end of the ONE body-fat estimate's
+  // range (protective by default), so a wide, formula-only range paces gently and loosens
+  // as a tape or scan narrows it. With no estimate at all the standard ceiling stands.
   const bodyFat = currentBodyFatEstimate(p);
-  const lossRates = leannessAwareLossRates(p.weight_lb, bodyFat?.body_fat_pct ?? null);
+  const lossRates = leannessAwareLossRates(p.weight_lb, protectiveBodyFatPct(bodyFat));
+  // A formula-only estimate says nothing about how lean the person IS: when it tapers the
+  // pace, the reason names the wide estimate, never "very lean".
+  if (bodyFat && !bodyFat.measured && lossRates.reason !== "standard lean-safe cut") {
+    lossRates.reason =
+      "pacing assumes the leaner end of a wide body-fat estimate (height, weight and age alone) — a tape measurement narrows it";
+  }
   const safeMaxRate = lossRates.safe_max_rate_lb; // upper bound (lb/wk)
   const leanIdealRate = lossRates.lean_ideal_rate_lb; // recommended (lb/wk)
 
@@ -1467,7 +1454,11 @@ export function computeGoalCheck(
     goal_mode: mode,
     safe_max_rate_lb: safeMaxRate,
     leanness_rate: {
-      body_fat_pct: lossRates.body_fat_pct,
+      // NOT the person's body fat: the leaner end of the one body-fat range, which the
+      // pacing reads (protective by default). The body fat itself is the estimate's
+      // central value, on every surface that shows one.
+      planning_body_fat_pct: lossRates.body_fat_pct,
+      planning_body_fat_note: "the leaner end of the body-fat range, used for pacing",
       body_fat_source: bodyFat?.source ?? null,
       reason: lossRates.reason,
       safe_max_rate_lb: safeMaxRate,

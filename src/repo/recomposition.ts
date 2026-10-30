@@ -1,6 +1,6 @@
 import { db } from "../db.js";
 import { estimateExpenditure, type ExpenditureEstimate } from "./expenditure.js";
-import { currentBodyFatEstimate, effectiveGoalMode, getProfile, leannessAwareLossRates } from "./profile.js";
+import { currentBodyFatEstimate, effectiveGoalMode, getProfile, leannessAwareLossRates, protectiveBodyFatPct } from "./profile.js";
 import { getProgramState, liftTrainedRecently, type ProgramState } from "./program-state.js";
 import { daysBetweenISO, localDateISO } from "./shared.js";
 import { resolvedCurrentBodyweight } from "./bodyweight.js";
@@ -155,13 +155,14 @@ export function recompositionRead(
     progress,
     remaining,
     current,
-    bodyFatPct: bodyFat?.body_fat_pct ?? null,
+    // Cut planning reads the leaner end of the one body-fat estimate (protective by default).
+    bodyFatPct: protectiveBodyFatPct(bodyFat),
     bodyFatDate: bodyFat?.date ?? null,
     goalBodyFat,
     today,
   });
   const rates =
-    current != null && mode === "lose" ? leannessAwareLossRates(current, bodyFat?.body_fat_pct ?? null) : null;
+    current != null && mode === "lose" ? leannessAwareLossRates(current, protectiveBodyFatPct(bodyFat)) : null;
   const targetRate =
     rates && rates.lean_ideal_rate_lb > 0
       ? {

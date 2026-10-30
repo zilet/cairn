@@ -275,3 +275,31 @@ test("cardiovascular risk renderer degrades to a calm empty state on missing dat
   assert.match(risk.renderCardiovascularRiskHtml(null), /Couldn't load your cardiovascular risk read right now/);
   assert.match(risk.renderCardiovascularRiskHtml(undefined), /Couldn't load your cardiovascular risk read right now/);
 });
+
+// The card's context: the ages side by side (each with what it reads and its date), what
+// is working, the imaging on file, and a calm recheck line — all escaped.
+test("cardiovascular risk renderer shows the ages, what is working, imaging and recheck lines", () => {
+  const risk = loadHealthRisk();
+  const html = risk.renderCardiovascularRiskHtml(
+    computedFixture({
+      ages: [
+        { key: "vascular", label: "Vascular age", value: 39, date: "2026-06-11", source: "AHA PREVENT (2023)", reads: "Reads cholesterol and blood pressure. It does not see fitness.", recheck: "Drawn ~20 weeks ago <x>; a fresh panel would show where you are now." },
+        { key: "bloodwork", label: "Bloodwork age", value: 37, date: "2026-06-11", source: "PhenoAge from your bloodwork", reads: "Reads nine routine blood markers.", recheck: null },
+        { key: "fitness", label: "Fitness age", value: 25, date: "2026-10-29", source: "VO2max 48.4 (Garmin estimate) against the FRIEND standards", reads: "Reads cardiorespiratory fitness (VO2max) only.", recheck: null },
+      ],
+      working_for_you: [{ key: "cac", label: "Coronary calcium", finding: "Calcium score 0 <ok>.", date: "2026-10-30", recheck: null }],
+      imaging: [{ study_id: 3, date: "2026-10-30", procedure: "CT cardiac calcium scoring", impression: "Calcium score 0 <imp>", coronary_calcium: { agatston_total: 0, percentile: "0 to 25th" }, note: "No calcified plaque was seen on that date." }],
+    })
+  );
+  assert.match(html, /It does not see fitness\./);
+  assert.match(html, /Jun 11, 2026/);
+  assert.match(html, /a fresh panel would show where you are now/);
+  assert.match(html, /bloodwork age/);
+  assert.match(html, /fitness age/);
+  assert.match(html, /FRIEND/);
+  assert.match(html, /Working for you/);
+  assert.match(html, /Imaging on file/);
+  assert.match(html, /Oct 30, 2026 · CT cardiac calcium scoring/);
+  assert.match(html, /No calcified plaque was seen on that date\./);
+  assert.doesNotMatch(html, /<x>|<ok>|<imp>/, "every string is escaped");
+});

@@ -1,5 +1,5 @@
 import { db } from "../db.js";
-import { computeGoalCheck, currentBodyFatEstimate, effectiveGoalMode, getProfile, leanGainRate, leannessAwareLossRates, projectGoalPace } from "./profile.js";
+import { computeGoalCheck, currentBodyFatEstimate, effectiveGoalMode, getProfile, leanGainRate, leannessAwareLossRates, projectGoalPace, protectiveBodyFatPct } from "./profile.js";
 import { localDateISO } from "./shared.js";
 import { withSqliteSavepoint } from "./sqlite-savepoint.js";
 import { dailyManualWeighIns } from "./bodyweight.js";
@@ -150,7 +150,11 @@ export function createJourneyPhase(input: JourneyPhaseInput) {
         input.target_weight_lb !== undefined
           ? num(input.target_weight_lb, 50, 700)
           : num(profile.goal_weight_lb, 50, 700),
-        input.start_bodyfat_pct !== undefined ? num(input.start_bodyfat_pct, 3, 70) : (bodyFat?.body_fat_pct ?? null),
+        input.start_bodyfat_pct !== undefined
+          ? num(input.start_bodyfat_pct, 3, 70)
+          : bodyFat?.measured
+            ? bodyFat.body_fat_pct
+            : null,
         input.target_bodyfat_pct !== undefined
           ? num(input.target_bodyfat_pct, 3, 70)
           : num(profile.goal_bodyfat_pct, 3, 70),
@@ -310,7 +314,9 @@ export function journeyMilestones(today = localDateISO()): JourneyMilestone[] {
     }
   }
 
-  if (bodyFat && Number.isFinite(startBf) && bodyFat.body_fat_pct < startBf) {
+  // A body-fat milestone claims a result: it needs a measured level (a scan or a tape),
+  // never the height/weight fallback alone.
+  if (bodyFat?.measured && Number.isFinite(startBf) && bodyFat.body_fat_pct < startBf) {
     const band = [35, 30, 25, 20, 15].find((x) => startBf > x && bodyFat.body_fat_pct <= x);
     if (band != null) {
       addMilestone(out, {
@@ -326,7 +332,7 @@ export function journeyMilestones(today = localDateISO()): JourneyMilestone[] {
     }
   }
 
-  if (bodyFat && Number.isFinite(targetBf) && targetBf > 0 && bodyFat.body_fat_pct <= targetBf + 0.3) {
+  if (bodyFat?.measured && Number.isFinite(targetBf) && targetBf > 0 && bodyFat.body_fat_pct <= targetBf + 0.3) {
     addMilestone(out, {
       id: "bodyfat-goal-reached",
       kind: "bodyfat_goal",
@@ -384,8 +390,10 @@ export function journeyTransitionSuggestion(today = localDateISO()): JourneyTran
 
   const reachedWeight =
     Number.isFinite(weight) && Number.isFinite(goalWeight) && goalWeight > 0 && weight <= goalWeight + 0.5;
+  // "Goal reached" needs a measured level — a formula-only number never proposes maintenance.
   const reachedBf =
-    bodyFat?.body_fat_pct != null &&
+    !!bodyFat?.measured &&
+    bodyFat.body_fat_pct != null &&
     Number.isFinite(targetBf) &&
     targetBf > 0 &&
     bodyFat.body_fat_pct <= targetBf + 0.3;
@@ -395,7 +403,7 @@ export function journeyTransitionSuggestion(today = localDateISO()): JourneyTran
       reason: "Goal reached — propose a structured maintenance phase so arrival becomes stable, not a rebound.",
       start_date: today,
       target_weight_lb: Number.isFinite(weight) ? Math.round(weight * 10) / 10 : null,
-      target_bodyfat_pct: bodyFat?.body_fat_pct ?? (Number.isFinite(targetBf) ? targetBf : null),
+      target_bodyfat_pct: (bodyFat?.measured ? bodyFat.body_fat_pct : null) ?? (Number.isFinite(targetBf) ? targetBf : null),
       planned_rate_lb_wk: 0,
     };
   }
@@ -424,14 +432,15 @@ export function journeyTransitionSuggestion(today = localDateISO()): JourneyTran
           : "Cut has run long enough to earn a planned maintenance break before pushing again.",
         start_date: today,
         target_weight_lb: Number.isFinite(weight) ? Math.round(weight * 10) / 10 : null,
-        target_bodyfat_pct: bodyFat?.body_fat_pct ?? null,
+        target_bodyfat_pct: bodyFat?.measured ? bodyFat.body_fat_pct : null,
         planned_rate_lb_wk: 0,
       };
     }
   }
 
   if (!phase && mode === "lose" && Number.isFinite(weight) && Number.isFinite(goalWeight) && goalWeight < weight) {
-    const rate = leannessAwareLossRates(weight, bodyFat?.body_fat_pct ?? null);
+    // The loss-rate cap reads the leaner end of the one body-fat estimate.
+    const rate = leannessAwareLossRates(weight, protectiveBodyFatPct(bodyFat));
     return {
       kind: "cut",
       reason: "A lean-safe cut phase matches the current goal.",
