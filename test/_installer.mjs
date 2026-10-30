@@ -222,9 +222,9 @@ export const FAKE_RAILWAY = String.raw`#!/bin/sh
 S="$FAKE_STATE"
 { printf 'railway'; for a in "$@"; do printf ' %s' "$a"; done; printf '\n'; } >>"$S/rlog"
 pwd >>"$S/rcwd"
-for a in "$@"; do
-  if printf '%s' "$a" | grep -Eq '[0-9a-f]{64}|^[a-z0-9]{48}$'; then touch "$S/secret_in_argv"; exit 99; fi
-done
+# One grep over every argument (one per line), not one per argument: the installer calls
+# this stand-in dozens of times per run, and a fork per argument was most of its cost.
+if [ $# -gt 0 ] && printf '%s\n' "$@" | grep -Eq '[0-9a-f]{64}|^[a-z0-9]{48}$'; then touch "$S/secret_in_argv"; exit 99; fi
 case "$*" in *--help*) echo "  --stdin   --from-source"; exit 0 ;; esac
 stdin_value=""
 case " $* " in

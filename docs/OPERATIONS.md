@@ -670,7 +670,7 @@ The dev loop's cost is the server `tsc` build, the per-file client transpile, th
 typecheck, and the test suite — all incremental (`.tsbuildcache/*`) and parallel
 (`scripts/run-verify.mjs` runs independent gates in staged groups; `test/run.mjs` runs test
 files off one longest-first queue across worker processes, ordered by the previous run's
-per-file times in `node_modules/.cache/cairn-test/timings.json`). Alternatives were evaluated empirically so the
+per-file times in `.tsbuildcache/cairn-test-timings.json`). Alternatives were evaluated empirically so the
 question doesn't get re-litigated:
 
 - **Turborepo / Nx** — not applicable. Cairn is a single npm package, not a monorepo, so
@@ -690,7 +690,49 @@ unwritable directory makes Node run uncached rather than fail.
 
 The real wins were structural, not tooling swaps: the suite wipes the DB before every
 test (`test/_isolate.mjs`, injected via `--import`) so correctness is independent of
-worker count and file order, and the worker default scales with cores (`min(8, cores-1)`).
+worker count and file order, and the worker default scales with cores (`min(12, cores-1)`, bounded by free memory).
+
+### Running tests
+
+`npm test` builds `dist/` and runs every file through `test/run.mjs`; `node test/run.mjs
+test/<file>.test.js …` runs a few against the current build. Each file is its own `node --test`
+process, the leader of its own process group, inside budgets the runner enforces:
+
+| Knob | Default | What happens past it |
+|---|---|---|
+| `CAIRN_TEST_HEAP_MB` | 1536 | V8 heap cap for the file's process, and (via `NODE_OPTIONS`) for any node process it starts |
+| `CAIRN_TEST_RSS_MB` | 2048 | the file's whole process group, sampled every 250 ms, is killed: "exceeded memory budget" |
+| `CAIRN_TEST_FILE_TIMEOUT_MS` | 4× the file's last time, 60–120 s (120 s unrecorded) | the group is killed, grandchildren too: "timed out after Ns" |
+| `CAIRN_TEST_WORKERS` | min(12, cores − 1), and at most available memory × 0.6 / `CAIRN_TEST_WORKER_MB` (default: 1.5× the heaviest recorded peak, 512 MB to the heap cap) | — the start line says which bound chose the count |
+| `CAIRN_TEST_WARN_MS` / `CAIRN_TEST_WARN_RSS_MB` | 5000 / 600 | listed "over budget" after a full run (a warning, not a failure) |
+
+Every run records each file's duration and peak RSS in
+`.tsbuildcache/cairn-test-timings.json` (`CAIRN_TEST_TIMINGS` moves it), which orders the
+next run longest-first and sets the timeouts; a full run ends with the five slowest and five
+heaviest files. `CAIRN_TEST_SLOWEST=<n>` prints more, on any run. The RSS sampler uses `ps`
+(`/proc` on Linux); where an OS sandbox refuses `ps` (agent and fleet sandboxes do), each test
+process watches its own RSS from a worker thread instead and the run says so — grandchildren are
+then covered only by the heap cap and the timeout. A runner killed outright (even `kill -9`) leaves
+nothing behind: each file's process notices and takes its own process group down. These are
+CPU-, memory- and IO-bound node processes — there is nothing for a GPU to do.
+
+`npm run test:changed` (build, then `node test/run.mjs --changed[=<ref>]`) runs only the files a
+change can reach: everything changed since the merge-base with `main` (or `<ref>`), plus
+uncommitted and untracked files, walked back through a static graph built from `src/`, `test/` and
+`scripts/` in under a second. Its edges (documented in `test/_select.mjs`) are imports (barrels
+followed only by the names actually used), the paths a test or script EXECUTES (a child process
+importing `dist/x.js`, a spawned script — followed on like an import), the paths it READS (a source
+read as text, a fixture, a directory), and `src/client` → the `public/js` bundle a client test
+loads. It prints `N of M files selected (why)`. The whole suite runs, and the line says why, for a
+change to the test infrastructure (`test/run.mjs`, `test/_isolate.mjs` and the offline floor,
+`package.json`, `tsconfig*`, `scripts/build-*`, `agents.json`), to the schema every test process
+loads (`src/db.ts`, `src/migrations/`), or to any file the graph cannot see at all (a CI workflow
+or ignore file no test names by path); only a doc that nothing names selects nothing. `--list`
+prints the selection without running it. It is an inner loop: `npm test`, `npm run verify` and CI
+always run the full suite.
+
+A bare `node --test` bypasses all of it — the budgets, the per-test DB wipe, the offline agents
+table — so don't use it for more than one file at a time (see CLAUDE.md).
 
 **Per-route perf budget.** `npm run perf:check` (after `npm run build`) is the browser-side
 twin of the bundle byte budget. It boots the built server on a throwaway data dir with the demo

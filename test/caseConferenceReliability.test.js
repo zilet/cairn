@@ -407,9 +407,15 @@ test("the bounded-read deadline aborts the turn it abandons instead of orphaning
 
 // ---------- against real subprocesses ----------
 
+// `sleeps` maps a seat (or "hold") to seconds of work before it answers, or to "wedge":
+// a CLI that never answers. The wedge EXECs its sleep so the CLI process IS the sleep:
+// a `sleep` forked from `sh -c` outlives the SIGKILL the leash sends to `sh`, keeps the
+// stdout pipe open, and held this file's process alive for the full 30 s after its last
+// test passed (the suite's longest file). The kill-what-you-abandon guarantee under test
+// is the leash's: the CLI it spawned is dead and its permit back.
 function fixtureAgents(logPath, sleeps) {
   const cases = Object.entries(sleeps)
-    .map(([key, sec]) => `${key}) sleep ${sec};;`)
+    .map(([key, sec]) => (sec === "wedge" ? `${key}) exec sleep 30;;` : `${key}) sleep ${sec};;`))
     .join(" ");
   const script =
     `p=$(cat); d=none; case "$p" in *HOLD_THE_PERMIT*) d=hold;; esac; ` +
@@ -477,7 +483,7 @@ async function settledSlots() {
 }
 
 test("fake CLI: a wedged seat is killed at its leash and recorded; the pool holds the cap; the rest complete", async () => {
-  await withFakeCli({ recovery: 30 }, 2, async ({ read }) => {
+  await withFakeCli({ recovery: "wedge" }, 2, async ({ read }) => {
     const started = Date.now();
     const result = await runCaseConference(
       "fixture",
