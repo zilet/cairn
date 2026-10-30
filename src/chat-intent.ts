@@ -147,7 +147,7 @@ export function foodListAnswersCoachQuestion(
   );
 }
 
-// A surface opened to log food (Fuel's composer) sends the athlete's words as they
+// A surface opened to log food (Intake's composer) sends the athlete's words as they
 // typed them, with `capture: "food"` on the request. The router needs a capture verb
 // AND a food noun to read a message as a food log, and a pasted "oats 60 g / milk
 // 250 ml" names neither, so the TURN carries the explicit form "Log food: <words>"

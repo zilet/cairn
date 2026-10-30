@@ -78,11 +78,15 @@ test("every lazy bundle's views are exactly the ones render-dispatch loads it fo
       headerTitle: { classList: { remove: stub } },
       document: { getElementById: () => null, body: { classList: { remove: stub }, dataset: {} } },
       updateHeaderCondense: stub,
-      state: { planSeg: route.tab === "plan" ? route.section : null, planJump: null },
+      state: {
+        planSeg: route.tab === "plan" ? route.section : null,
+        planJump: null,
+        progressSeg: route.tab === "progress" ? route.section : null,
+      },
       withBundle: (name) => asked.push(name),
       renderToday: stub,
       renderSession: stub,
-      renderFoodJournal: stub,
+      renderIntake: stub,
       renderMeals: stub,
       renderYou: stub,
       window: {},
@@ -283,10 +287,12 @@ test("/profile is asked early only when primeDiscipline will ask for it", () => 
   assert.ok(empty.calls.includes("/api/profile"), "an empty row does not prime");
 });
 
-test("Fuel preloads its bundle but starts no early reads (its one read carries the device's hour)", () => {
-  const { links, calls } = runBoot({ pathname: "/app/today/fuel" });
-  assert.deepEqual(links.map((l) => l.href), ["/js/bundle-22-fuel.js"]);
-  assert.deepEqual(calls, []);
+test("Intake preloads its bundle but starts no early reads (its one read carries the device's hour)", () => {
+  for (const pathname of ["/app/train/intake"]) {
+    const { links, calls } = runBoot({ pathname });
+    assert.deepEqual(links.map((l) => l.href), ["/js/bundle-22-fuel.js"], pathname);
+    assert.deepEqual(calls, [], pathname);
+  }
 });
 
 test("a bundle's stylesheet is preloaded as a style, its scripts as scripts", () => {

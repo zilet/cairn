@@ -1,6 +1,6 @@
-// Fuel — today so far (fuel-today-model/-client/-controller.ts, docs/V2-PLAN.md wave 2).
-// Protein first as the anchor, then energy and fiber, each a number with its unit and
-// never a score; a partial day reads "in progress" and never "low"; the athlete's own
+// Today · so far, the card Train › Intake opens on (fuel-today-model/-client/-controller.ts).
+// Protein then energy as slim meters beside the day's number, carbs · fat · fiber as plain
+// numbers, each with its unit and never a score; a partial day reads "in progress" and never "low"; the athlete's own
 // observed intake band in the server's words only when there is one; and, today only,
 // the big-day and carb-range lines (ported from the retired day-fuel card). Renderer,
 // model and controller all run on the shared DOM harness.
@@ -53,17 +53,36 @@ function paint(win, d, b = null) {
 
 // ---------- model + renderer ----------
 
-test("protein comes first, then energy and every macro, each number with its unit", () => {
+const text = (el) => el.textContent.replace(/\s+/g, " ").trim();
+
+test("protein then energy as slim meters beside the day's number; carbs, fat and fiber as plain numbers", () => {
   const win = load();
   const host = paint(win, day(), band());
-  const labels = host.querySelectorAll(".fuel-today-num dt").map((dt) => dt.textContent);
-  assert.deepEqual(labels, ["Protein", "Energy", "Carbs", "Fat", "Fiber"]);
-  const values = host.querySelectorAll(".fuel-today-value").map((v) => v.textContent.replace(/\s+/g, " ").trim());
-  assert.deepEqual(values, ["78 g", "844 kcal", "90 g", "25 g", "9 g"]);
-  assert.ok(host.querySelector(".fuel-today-num").classList.contains("is-anchor"));
-  assert.equal(host.querySelector(".fuel-today-sub").textContent, "of about 170 g", "the band read's anchor");
+  assert.equal(text(host.querySelector(".fuel-today-title")), "Today · so far");
+  const labels = host.querySelectorAll(".fuel-today-m dt").map((dt) => dt.textContent);
+  assert.deepEqual(labels, ["Protein", "Energy"]);
+  const values = host.querySelectorAll(".fuel-today-meters .fuel-today-value").map(text);
+  assert.deepEqual(values, ["78 / 170 g", "844 / 2,600 kcal"], "the band read's anchor, the day's energy target");
+  // Each meter's text equivalent; the bar itself is hidden from assistive tech.
+  const spoken = host.querySelectorAll(".fuel-today-meters .sr-only").map(text);
+  assert.deepEqual(spoken, ["78 g logged of the day's 170 g", "844 kcal logged of the day's 2,600 kcal"]);
+  const bars = host.querySelectorAll(".fuel-today-bar");
+  assert.equal(bars.length, 2);
+  assert.ok(bars.every((bar) => bar.getAttribute("aria-hidden") === "true"));
+  assert.match(host.querySelector(".fuel-today-fill").getAttribute("style"), /^--p:0\.459$/);
+  assert.equal(text(host.querySelector(".fuel-today-macros")), "Carbs 90 g · Fat 25 g · Fiber 9 g");
+  assert.equal(host.querySelectorAll(".fuel-today-macros .fuel-today-bar").length, 0, "no bars on the plain numbers");
   assert.equal(host.querySelector(".fuel-today-togo").textContent, "92 g protein to go");
   assert.doesNotMatch(host.textContent, /\bscore\b|\/100|%/i, "no score, no percentage");
+});
+
+test("a macro with no day's number to set it against is the value alone, with no bar", () => {
+  const win = load();
+  const host = paint(win, day({ target: { protein_g: 175 } }), band());
+  const energy = host.querySelectorAll(".fuel-today-m")[1];
+  assert.equal(text(energy.querySelector(".fuel-today-value")), "844 kcal");
+  assert.equal(energy.querySelectorAll(".fuel-today-bar").length, 0);
+  assert.equal(text(energy.querySelector(".sr-only")), "844 kcal logged");
 });
 
 test("the protein anchor is a goal, not a line: within 10 g it reads about there, never a few grams to go", () => {
@@ -82,7 +101,7 @@ test("the protein anchor is a goal, not a line: within 10 g it reads about there
     day({ totals: { kcal: 2000, protein_g: 175, carbs_g: 180, fat_g: 60, fiber_g: 30 } }),
     band()
   );
-  assert.equal(past.querySelector(".fuel-today-togo"), null, "met: nothing to say");
+  assert.equal(!!past.querySelector(".fuel-today-togo"), false, "met: nothing to say");
 });
 
 test("a day still being eaten reads in progress — never low", () => {
@@ -107,8 +126,8 @@ test("an unknown sum prints no number, never a zero standing in for it", () => {
   const unknown = host.querySelectorAll(".fuel-today-value.is-unknown");
   assert.equal(unknown.length, 5);
   assert.equal(unknown[0].querySelector(".sr-only").textContent, "not estimated yet");
-  assert.equal(host.querySelector("[data-cu]"), null);
-  assert.equal(host.querySelector(".fuel-today-togo"), null, "no 'to go' against an unknown");
+  assert.equal(!!host.querySelector("[data-cu]"), false);
+  assert.equal(!!host.querySelector(".fuel-today-togo"), false, "no 'to go' against an unknown");
   assert.match(host.querySelector(".fuel-today-pending").textContent, /One meal is still being estimated/);
 });
 
@@ -116,13 +135,13 @@ test("nothing logged today is a calm invitation, and a past day carries no verdi
   const win = load();
   const empty = paint(win, day({ count: 0, entries: [], totals: {} }));
   assert.match(empty.querySelector(".fuel-today-empty").textContent, /Nothing logged yet today/);
-  assert.equal(empty.querySelector(".fuel-today-nums"), null);
+  assert.equal(empty.querySelectorAll(".fuel-today-meters, .fuel-today-bar, .fuel-today-macros").length, 0, "no meter at zero");
   assert.doesNotMatch(empty.textContent, /\b0\b|no data/i);
 
   const past = paint(win, day({ date: "2026-04-20" }), band());
   assert.equal(past.querySelector(".fuel-today-title").textContent, "That day's food");
-  assert.equal(past.querySelector(".fuel-today-state"), null, "whether a past day read complete is the server's call");
-  assert.equal(past.querySelector(".fuel-today-togo"), null, "no 'to go' on a day already lived");
+  assert.equal(!!past.querySelector(".fuel-today-state"), false, "whether a past day read complete is the server's call");
+  assert.equal(!!past.querySelector(".fuel-today-togo"), false, "no 'to go' on a day already lived");
 });
 
 test("the observed band shows in the server's words only when there is one", () => {
@@ -132,18 +151,18 @@ test("the observed band shows in the server's words only when there is one", () 
 
   for (const status of ["too_few_days", "no_weight_response"]) {
     const none = paint(win, day(), band({ status, band: null, words: "Too few complete days yet." }));
-    assert.equal(none.querySelector(".fuel-today-band"), null, `${status}: no band, and no guessed one`);
+    assert.equal(!!none.querySelector(".fuel-today-band"), false, `${status}: no band, and no guessed one`);
   }
   // With no band read at all, the day's own target still anchors protein.
   const noBand = paint(win, day(), null);
-  assert.equal(noBand.querySelector(".fuel-today-sub").textContent, "of about 175 g");
+  assert.equal(text(noBand.querySelector(".fuel-today-value")), "78 / 175 g");
 });
 
 test("hostile text comes back as text", () => {
   const win = load();
   const host = paint(win, day(), band({ words: "<i>bold</i><img src=x>" }));
-  assert.equal(host.querySelector("i"), null);
-  assert.equal(host.querySelector("img"), null);
+  // Counted, never compared as nodes: a failing compare would inspect the harness DOM.
+  assert.equal(host.querySelectorAll(".fuel-today-band i, img").length, 0);
   assert.equal(host.querySelector(".fuel-today-band").textContent, "<i>bold</i><img src=x>");
 });
 
@@ -250,8 +269,8 @@ function harness({
 test("a warm read paints at once with no shimmer, then counts up only once", async () => {
   const h = harness({ peekDay: day(), peekBand: band() });
   h.mount();
-  assert.equal(h.host.querySelector(".skel-card"), null, "warm: no skeleton");
-  assert.equal(h.host.querySelector(".fuel-today-value").textContent.replace(/\s+/g, " ").trim(), "78 g");
+  assert.equal(!!h.host.querySelector(".skel-card"), false, "warm: no skeleton");
+  assert.equal(text(h.host.querySelector(".fuel-today-value")), "78 / 170 g");
   assert.equal(h.counted.length, 1, "the mount's first paint counts up");
   await flush();
   assert.deepEqual(h.reads.sort(), [`/nutrition/day?date=${TODAY}`, `/nutrition/intake-band?date=${TODAY}`].sort());
@@ -263,9 +282,9 @@ test("a cold start shows the shimmer, then the day; reduced motion never counts 
   h.mount();
   assert.ok(h.host.querySelector(".skel-card"), "cold: the house shimmer");
   await flush();
-  assert.equal(h.host.querySelector(".skel-card"), null);
-  assert.ok(h.host.querySelector(".fuel-today-nums"));
-  assert.equal(h.host.querySelector("[data-cu]"), null);
+  assert.equal(!!h.host.querySelector(".skel-card"), false);
+  assert.ok(h.host.querySelector(".fuel-today-meters"));
+  assert.equal(!!h.host.querySelector("[data-cu]"), false);
   assert.equal(h.counted.length, 0);
 });
 
@@ -283,7 +302,7 @@ test("a failed read says so calmly and Try again reads once more", async () => {
   fail = false;
   await h.host.querySelector("[data-fuel-today-retry]").click();
   await flush();
-  assert.ok(h.host.querySelector(".fuel-today-nums"));
+  assert.ok(h.host.querySelector(".fuel-today-meters"));
 });
 
 test("refresh re-reads the day and repaints what changed, without a second count-up", async () => {
@@ -295,7 +314,7 @@ test("refresh re-reads the day and repaints what changed, without a second count
   await handle.refresh();
   await flush();
   assert.ok(h.invalidated.includes(`food:day:${TODAY}`));
-  assert.equal(h.host.querySelector(".fuel-today-value").textContent.replace(/\s+/g, " ").trim(), "110 g");
+  assert.equal(text(h.host.querySelector(".fuel-today-value")), "110 / 170 g");
   assert.equal(h.counted.length, 1);
 });
 

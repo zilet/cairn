@@ -423,80 +423,12 @@ async function renderEnergy() {
 }
 
 // ---------- Progress: recorded intake ----------
-// Meaning-first, gap-honest multi-week macro/longevity read. The endpoint owns
-// all interpretation; this route only paints the escaped client surface.
-const _intakeWatched = new Set<number>();
-async function renderIntake() {
-  headerTitle.textContent = "Intake"; // the Intake group's landing: the header names the tab, not the leaf
-  state.progressSeg = "intake";
-  const token = ++pollToken;
-  const head = segBar("intake", PROGRESS_SEG);
-  const peek = peekCached<import("../contracts/client.js").ClientNutritionProgress>("progress:intake");
-  view.innerHTML =
-    head +
-    `<div data-train-deeper-slot></div><div id="intakeProgress">${peek ? "" : loadingState("Reading recorded intake…")}</div>`;
-  wireSeg(PROGRESS_HANDLERS);
-  const paint = (data: unknown) => {
-    if (token !== pollToken || state.progressSeg !== "intake") return;
-    const mount = view.querySelector("#intakeProgress");
-    const progress = data as import("../contracts/client.js").ClientNutritionProgress;
-    if (mount) void withBundle("fuel", () => CairnProgressIntake.render(mount, progress));
-    for (const id of progress.coverage.pending_entry_ids || []) {
-      if (_intakeWatched.has(id)) continue;
-      _intakeWatched.add(id);
-      let terminalRefreshStarted = false;
-      const refresh = () => {
-        if (terminalRefreshStarted) return;
-        terminalRefreshStarted = true;
-        swrInvalidate("progress:intake");
-        if (token !== pollToken || state.tab !== "progress" || state.progressSeg !== "intake") return;
-        api("/nutrition/progress?days=35")
-          .then((fresh) => {
-            if (token !== pollToken || state.tab !== "progress" || state.progressSeg !== "intake") return;
-            swrSet("progress:intake", fresh);
-            paint(fresh);
-          })
-          .catch(() => {});
-      };
-      pollEnrichment("/food-notes", id, {
-        tab: "progress",
-        token,
-        onUpdate: (row) => {
-          swrInvalidate("progress:intake");
-          if (!enrichmentActive(row.enrichment_status)) refresh();
-        },
-      }).then((row) => {
-        _intakeWatched.delete(id);
-        if (row && !enrichmentActive(row.enrichment_status)) refresh();
-        else if (token === pollToken && state.tab === "progress" && state.progressSeg === "intake") {
-          setTimeout(() => paint(progress), 500);
-        }
-      });
-    }
-  };
-  wireIntakeLog(token, refreshAfterLog(token, "/nutrition/progress?days=35", "intake", "progress:intake", paint));
-  if (peek) {
-    paint(peek.data);
-    if (!peek.fresh) markRefreshing(true);
-  }
-  cachedApi("/nutrition/progress?days=35", {
-    key: "progress:intake",
-    onUpgrade: (data, { changed }) => {
-      if (peek && !peek.fresh) markRefreshing(false);
-      if (changed || !peek) paint(data);
-    },
-  }).catch(() => {
-    if (peek && !peek.fresh) markRefreshing(false);
-    if (!peek && token === pollToken && state.progressSeg === "intake") {
-      const mount = view.querySelector("#intakeProgress");
-      if (mount) void withBundle("fuel", () => (mount.innerHTML = CairnProgressIntake.unavailableHtml()));
-    }
-  });
-}
+// Train › Intake (today's food, then the days before it) is the lazy fuel bundle's own
+// screen: intake-screen.ts renderIntake, reached through lazy("fuel").
 
 // Energy Balance DOM painting and durable nutrition check-in reconnect live in
-// /js/progress-energy-surface-client.js so Progress and Plan Food share one
-// implementation. This screen keeps only the route/SWR shell above.
+// /js/progress-energy-surface-client.js (eager: its check-in reconnector registers at
+// boot). This screen keeps only the route/SWR shell above.
 
 // ---------- Progress: Program (adaptive program intelligence) ----------
 // The controller owns Program SWR orchestration, conductor state, DOM composition,
@@ -508,7 +440,6 @@ async function renderProgram() {
 Object.assign(globalThis, {
   renderCalendar,
   renderEnergy,
-  renderIntake,
   renderEndurance,
   renderProgram,
   renderProgress,

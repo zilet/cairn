@@ -30,8 +30,7 @@
       home("runs", "Endurance", "Your runs and what they add up to", { tab: "progress", section: "endurance" }),
     ],
     fuel: [
-      home("fuel", "Fuel", "Log today's food and see the day so far", { tab: "plan", section: "food" }),
-      home("intake", "Intake", "What you have eaten, week over week", { tab: "progress", section: "intake" }),
+      home("intake", "Intake", "Today's food so far, then the weeks before it", { tab: "progress", section: "intake" }),
       home("energy", "Energy", "What you burn, read from your own log", { tab: "progress", section: "energy" }),
     ],
     recovery: [

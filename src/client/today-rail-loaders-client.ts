@@ -53,7 +53,7 @@ type TodayRailLoadersApi = {
     if (!(count > 0)) { slot.innerHTML = ""; return; }
     slot.innerHTML = CairnTodayAgenda.fuelCardHtml(day as TodayRailDayIntake);
     const card = slot.querySelector("#fuelCard");
-    if (card) card.addEventListener("click", () => { deps.state.planJump = "food"; deps.activateTab("plan"); });
+    if (card) card.addEventListener("click", () => openIntake());
     deps.runCountUps(slot);
   }
 

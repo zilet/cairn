@@ -6717,10 +6717,11 @@ of ordered `public/js/bundle-*.js` bundles (the `BUNDLES` manifest is the source
 order); `index.html` loads just those bundles (`/art.js` still first) while `sw.js` precaches them —
 with one exception: a bundle carrying `lazy: "<name>"` in the manifest is **not** in `index.html`.
 Only the Today / You / capture shell is eager (bundles 01–04 and 07 — 04 is now just the proposal
-controller, Fuel's frame `06-coach-meals` and the food-note words; with `art.js` and
+controller, the week menu's frame `06-coach-meals` and the food-note words; with `art.js` and
 `cairn-body-figure.js` beside them, every script `index.html` loads is held to the `eager` ceiling in
-`scripts/bundle-budget.json`). Fuel's surface (`bundle-22-fuel`: the day's fuel read, meal cards, the
-log composer, the food composer; Ask depends on it), Train (`bundle-08-train`: every Train view and
+`scripts/bundle-budget.json`). Train › Intake (`bundle-22-fuel`: today's food — the day's fuel read,
+meal cards, one idea, the log composer, the weeks' intake read — and the food composer; Ask depends on
+it; the dispatcher routes the `intake` leaf here, never through Train's bundle), Train (`bundle-08-train`: every Train view and
 the plan editor; depends on the day view, the journey reads and body metrics), Horizon
 (`bundle-09-horizon`, with the shared time objects; depends on the glance and the journey reads, not
 on Train), Ask (`bundle-10-ask`: the thread, the ripple card, Changes), Settings (`bundle-11-settings`,
@@ -6962,7 +6963,10 @@ the shell owns, defined in `src/contracts/client-routes.ts` (`homes`, `homeViews
 
 - `CairnRoutes.homeOf(view, section)` names the lit button. Plan is the one view split across
   homes: its editor is Train's (`/app/train/plan`), its race view Horizon's (`/app/horizon/race`),
-  Fuel Today's (`/app/today/fuel`) and Changes Ask's (`/app/ask/changes`).
+  the week menu Today's (`/app/today/menu`) and Changes Ask's (`/app/ask/changes`). Today's food has
+  ONE home, Train › Intake (`/app/train/intake`), which opens on today; the old Fuel view's
+  `/app/today/fuel` and v1 `/app/plan/food` parse there, and a dated one for another day opens that
+  day's own page (`/app/day/<date>`).
 - `highlightHome` (`src/client/app/tabs.ts`) lights the button on every switch AND on every route
   sync (`app/route-sync.ts`), so a section change inside a view moves the lit home with it. A tap on
   a button activates the home's landing view (`CairnRoutes.viewFor`).

@@ -101,10 +101,10 @@ type TabSwitchOptions = {
       return segSkeleton(seg, PROGRESS_SEG, seg === "endurance" ? 2 : 3);
     }
     if (tab === "plan") {
-      // Fuel, Changes and the race view (Horizon's) carry no seg bar; the editor
-      // wears Train's group nav.
+      // The week menu, Changes and the race view (Horizon's) carry no seg bar; the
+      // editor wears Train's group nav.
       const activePlan = state.planJump || state.planSeg || "edit";
-      if (activePlan === "food" || activePlan === "meals" || activePlan === "coach" || activePlan === "endurance")
+      if (activePlan === "meals" || activePlan === "coach" || activePlan === "endurance")
         return skelLines(2) + skelLines(3);
       return segSkeleton("plan", PROGRESS_SEG, 3);
     }
@@ -129,7 +129,7 @@ type TabSwitchOptions = {
     if (tab === "progress") return defaultProgressSeg() === "sessions" ? "history:sessions" : null;
     if (tab === "plan") {
       const activePlan = state.planJump || state.planSeg;
-      return activePlan === "coach" || activePlan === "food" ? null : activePlan === "meals" ? MEALS_KEY : "plan";
+      return activePlan === "coach" ? null : activePlan === "meals" ? MEALS_KEY : "plan";
     }
     return null;
   }

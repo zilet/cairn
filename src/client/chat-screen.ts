@@ -78,7 +78,7 @@ async function loadChatFuel(token: number, messages: Partial<ChatScreenMessage>[
   return chatFuelContextApi().load(token, messages, {
     currentToken: () => pollToken,
     currentTab: () => state.tab,
-    openFoodReview: () => { state.planJump = "food"; activateTab("plan"); },
+    openFoodReview: () => openIntake(),
   });
 }
 

@@ -31,7 +31,6 @@ type UiSegmentsDeps = {
   renderEnergy(): unknown;
   renderPlanEditor(): unknown;
   renderPlanEndurance(): unknown;
-  renderFoodJournal(): unknown;
   renderMeals(): unknown;
   renderCoach(): unknown;
 };
@@ -262,7 +261,7 @@ function createUiSegments(deps: UiSegmentsDeps): UiSegmentsController {
     intake: () => deps.renderIntake(),
     energy: () => deps.renderEnergy(),
     plan: () => openPlan("edit"),
-    // Train → Fuel's "This week's menu" row opens the week menu (Today's, /app/today/menu).
+    // Train › Intake's "This week's menu" row opens the week menu (Today's, /app/today/menu).
     menu: () => openPlan("meals"),
   };
   navigation(progressHandlers.plan);

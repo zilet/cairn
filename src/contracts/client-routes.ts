@@ -5,7 +5,9 @@
 // - HOMES (`homes`) are the five tab-bar buttons: Today, Train, Horizon, Ask, You.
 //   Only the shell knows about them. A view lives under one home (`viewHomes`),
 //   except the Plan view, whose home depends on its section (`planHomes`): the
-//   editor is Train's, the race view Horizon's, Fuel Today's and Changes Ask's.
+//   editor is Train's, the race view Horizon's, the week menu Today's and Changes
+//   Ask's. Today's food has one home, Train › Intake (/app/train/intake); the old
+//   Fuel view's /app/today/fuel and /app/plan/food parse there.
 //
 // The canonical URL is `/app/<home>/<section>` (src/client/route-state.ts builds
 // and parses it). Every v1 `/app/<view>/<section>` URL still parses and is
@@ -51,13 +53,12 @@ export const CLIENT_ROUTE_DEFINITIONS = {
   planHomes: {
     edit: "train",
     endurance: "horizon",
-    food: "today",
     meals: "today",
     coach: "ask",
   },
   tabs: ["today", "session", "stand", "plan", "progress", "chat", "me", "settings", "horizon", "you", "day"],
   sections: {
-    plan: ["edit", "endurance", "food", "meals", "coach"],
+    plan: ["edit", "endurance", "meals", "coach"],
     progress: ["week", "overview", "trend", "volume", "endurance", "weight", "measurements", "calendar", "sessions", "program", "intake", "energy"],
     // Health (the Stand view) is every health tool as a first-class sub-view of
     // You. "me" health sections survive only as parse targets that redirect here.

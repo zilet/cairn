@@ -106,7 +106,8 @@ const { Cdp, launchChrome, stopChrome, tail } = await import("./cdp-chrome.mjs")
 const ROUTES = [
   { name: "today", path: "/app/today", tab: "today", group: "today" },
   { name: "today-session", path: "/app/today/session", tab: "session", group: "focus" },
-  { name: "today-fuel", path: "/app/today/fuel", tab: "plan", group: "focus" },
+  // The old Fuel view's link: an alias that opens Train › Intake.
+  { name: "today-fuel", path: "/app/today/fuel", tab: "progress", group: "focus" },
   { name: "ask", path: "/app/ask", tab: "chat", group: "focus" },
   { name: "ask-changes", path: "/app/ask/changes", tab: "plan", group: "leaf" },
   { name: "train", path: "/app/train", tab: "progress", group: "leaf" },

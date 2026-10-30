@@ -45,14 +45,15 @@ const REDIRECTS = [
   ["/app/plan", "plan", "edit", "train", "/app/train/plan"],
   ["/app/plan/edit", "plan", "edit", "train", "/app/train/plan"],
   ["/app/plan/endurance", "plan", "endurance", "horizon", "/app/horizon/race"],
-  ["/app/plan/food", "plan", "food", "today", "/app/today/fuel"],
-  ["/app/plan/food?date=2026-06-28", "plan", "food", "today", "/app/today/fuel?date=2026-06-28"],
+  // v1's Plan → Food was the Fuel view: today's food has one home now, Train › Intake.
+  ["/app/plan/food", "progress", "intake", "train", "/app/train/intake"],
+  ["/app/plan/food?date=2026-06-28", "progress", "intake", "train", "/app/train/intake?date=2026-06-28"],
   // Plan → Meals is the week menu, under Today.
   ["/app/plan/meals", "plan", "meals", "today", "/app/today/menu"],
   ["/app/plan/coach", "plan", "coach", "ask", "/app/ask/changes"],
   ["/app/plan?jump=edit", "plan", "edit", "train", "/app/train/plan"],
   ["/app/plan?jump=endurance", "plan", "endurance", "horizon", "/app/horizon/race"],
-  ["/app/plan?jump=food", "plan", "food", "today", "/app/today/fuel"],
+  ["/app/plan?jump=food", "progress", "intake", "train", "/app/train/intake"],
   ["/app/plan?jump=meals", "plan", "meals", "today", "/app/today/menu"],
   ["/app/plan?jump=coach", "plan", "coach", "ask", "/app/ask/changes"],
   // Progress is Train, leaf for leaf
@@ -104,7 +105,7 @@ const REDIRECTS = [
     `/app/you/settings/${section}`,
   ]),
   // The bare /<tab>/<section> and ?tab=<tab> forms the v1 parser accepted
-  ["/plan/food", "plan", "food", "today", "/app/today/fuel"],
+  ["/plan/food", "progress", "intake", "train", "/app/train/intake"],
   ["/stand/records?id=doc_42", "stand", "records", "you", "/app/you/records?id=doc_42"],
   ["/progress/program", "progress", "program", "train", "/app/train/program"],
   ["/?tab=chat", "chat", null, "ask", "/app/ask"],
@@ -195,7 +196,6 @@ test("a canonical v2 URL parses to its surface and is never re-redirected", () =
     ["/app/today", "today", null, "today"],
     ["/app/day/2026-06-27", "day", null, "today"],
     ["/app/today/session?date=2026-06-29", "session", null, "today"],
-    ["/app/today/fuel?date=2026-06-28", "plan", "food", "today"],
     ["/app/today/menu", "plan", "meals", "today"],
     ["/app/train", "progress", null, "train"],
     ...CLIENT_ROUTE_DEFINITIONS.sections.progress.map((leaf) => [`/app/train/${leaf}`, "progress", leaf, "train"]),
@@ -244,9 +244,12 @@ test("a v2 path that names nothing valid lands on its home and is tidied", () =>
 test("route-state mirrors the route definitions and parses the full route shape", () => {
   const routes = loadRoutes();
   assert.deepEqual(plain(routes.routeDefinitions), plain(CLIENT_ROUTE_DEFINITIONS));
+  // The old Fuel view's link is an alias of Train › Intake (the router opens a dated one
+  // to another day on that day's own page).
   assert.deepEqual(plain(routes.parseRoute("/app/today/fuel?date=2026-06-29")), {
-    home: "today", tab: "plan", section: "food", healthSection: null, date: "2026-06-29", id: null, session: null, jump: null, legacy: false,
+    home: "train", tab: "progress", section: "intake", healthSection: null, date: "2026-06-29", id: null, session: null, jump: null, legacy: true,
   });
+  assert.equal(routes.routeToUrl(routes.parseRoute("/app/today/fuel")), "/app/train/intake");
   assert.deepEqual(plain(routes.parseRoute("/app/me/health/markers?id=42")), {
     home: "you", tab: "stand", section: "markers", healthSection: null, date: null, id: "42", session: null, jump: null, legacy: true,
   });
@@ -262,9 +265,7 @@ test("routeToUrl writes view-keyed routes in the v2 grammar only", () => {
     [{ tab: "session", date: "2026-06-29" }, "/app/today/session?date=2026-06-29"],
     [{ tab: "plan", section: "edit" }, "/app/train/plan"],
     [{ tab: "plan", section: "endurance" }, "/app/horizon/race"],
-    [{ tab: "plan", section: "food", date: "2026-06-28" }, "/app/today/fuel?date=2026-06-28"],
     [{ tab: "plan", section: "coach" }, "/app/ask/changes"],
-    [{ tab: "plan", jump: "food" }, "/app/today/fuel"],
     [{ tab: "plan", section: "meals" }, "/app/today/menu"],
     [{ tab: "plan", jump: "meals" }, "/app/today/menu"],
     [{ tab: "progress", section: "program" }, "/app/train/program"],
@@ -285,7 +286,7 @@ test("routeToUrl writes view-keyed routes in the v2 grammar only", () => {
   ];
   for (const [route, url] of cases) assert.equal(routes.routeToUrl(route), url, JSON.stringify(route));
   // jump never reaches a v2 URL.
-  assert.doesNotMatch(routes.routeToUrl({ tab: "plan", section: "food", jump: "food" }), /jump/);
+  assert.doesNotMatch(routes.routeToUrl({ tab: "plan", section: "meals", jump: "meals" }), /jump/);
 });
 
 test("a cold /app/you/settings/devices load applies the devices segment (boot path, settings bundle not loaded)", () => {
@@ -335,7 +336,6 @@ test("homeOf maps every view (and each Plan section) to its tab-bar home", () =>
   for (const [view, home] of Object.entries(expected)) assert.equal(routes.homeOf(view), home, view);
   assert.equal(routes.homeOf("plan", "edit"), "train");
   assert.equal(routes.homeOf("plan", "endurance"), "horizon");
-  assert.equal(routes.homeOf("plan", "food"), "today");
   assert.equal(routes.homeOf("plan", "meals"), "today");
   assert.equal(routes.homeOf("plan", "coach"), "ask");
   assert.equal(routes.homeOf("plan"), "train");

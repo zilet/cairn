@@ -1,7 +1,8 @@
 // @ts-check
 // Train's navigation is ONE level. The Progress views fold into 4 top GROUPS, and
 // each group has one LANDING leaf that wears the group bar (Train → This week, the
-// dated agenda; Program → the Program read, Fuel → Intake, Body → Weight). Every other leaf sits
+// dated agenda; Program → the Program read, Intake → today's food then the weeks,
+// Body → Weight). Every other leaf sits
 // one tap deeper: its landing lists it as a hairline row, and the leaf itself wears
 // one quiet "‹ Group" step back instead of a second row of tabs. The ROUTE stays the
 // leaf (/app/train/<leaf>), so every deep link is unchanged: the old landing, the
@@ -31,6 +32,7 @@ const TRAIN_NAV_GROUP_LEAVES: Record<string, readonly string[]> = {
   train: ["week", "overview", "sessions", "trend", "volume", "endurance", "calendar"],
   program: ["program", "plan"],
   // "menu" is a cross-view row (like Program's "plan"): it opens the week menu on Today.
+  // The landing, Intake, opens on TODAY's food (intake-screen.ts) and holds the composer.
   fuel: ["intake", "energy", "menu"],
   body: ["weight", "measurements"],
 };
@@ -63,8 +65,9 @@ function trainNavGroupLabel(group: string): string {
   return (TRAIN_NAV_GROUPS.find(([key]) => key === group) || TRAIN_NAV_GROUPS[0])[1];
 }
 
-// The Intake group carries a primary "Log a meal" action directly under the header
-// that mounts Today's Fuel composer in place via withBundle("fuel", ...).
+// Intake's deeper leaves (Energy) carry a primary "Log a meal" action directly under the
+// step back that mounts the food composer in place via the shell's mountFuelLog. The
+// landing needs none: it opens on today's food with the composer in it.
 function trainNavFuelPointerHtml(): string {
   return `<div class="train-fuel-log" data-intake-log-wrap><button class="btn btn-solid train-fuel-log-btn" type="button" data-intake-log-btn aria-expanded="false" aria-controls="intakeLogSlot">Log a meal</button><div id="intakeLogSlot" class="train-fuel-log-slot" data-intake-log-slot></div></div>`;
 }
@@ -74,12 +77,12 @@ function trainNavFuelPointerHtml(): string {
 // wears only its step back.
 function trainNavHtml(activeLeaf: string): string {
   const group = trainNavGroupOf(activeLeaf);
-  const pointer = group === "fuel" ? trainNavFuelPointerHtml() : "";
+  const pointer = group === "fuel" && !trainNavIsLanding(activeLeaf) ? trainNavFuelPointerHtml() : "";
   if (!trainNavIsLanding(activeLeaf)) {
     return `<button class="home-back linkbtn linkbtn-plain train-crumb" type="button" data-train-leaf="${escAttr(trainNavLandingOf(group))}">‹ ${escHtml(trainNavGroupLabel(group))}</button>${pointer}`;
   }
   const bar = CairnUi.segmentedHtml({ items: TRAIN_NAV_GROUPS, active: group, label: "Train sections", attr: "proggroup" });
-  return `${bar}<span hidden data-train-landing="${escAttr(activeLeaf)}"></span>${pointer}`;
+  return `${bar}<span hidden data-train-landing="${escAttr(activeLeaf)}"></span>`;
 }
 
 // Endurance is listed only for an athlete who runs (the leaf itself is always

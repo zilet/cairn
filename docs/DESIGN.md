@@ -159,7 +159,7 @@ and `CairnStone` (`src/client/ui-stone.ts`, SVG strings), CSS in `src/styles/fou
   still has more behind it (`.seg-fade-l` / `.seg-fade-r`, set by `fitSeg`), so it never looks clipped.
 - **Train is one navigation level:** the group bar (Train · Program · Intake · Body) sits only on each
   group's landing (This week — the next session opened up, then the week a `.pahead-day` row a day —,
-  the Program read, Intake, Weight). Progress (the old overview, `/app/train/overview`) is Train's
+  the Program read, Intake — today's food first, see **Intake** below —, Weight). Progress (the old overview, `/app/train/overview`) is Train's
   first deeper row. Every other leaf is one tap deeper —
   a `.train-deeper-row` (name, one muted line, chevron) on its landing — and wears a single
   `.train-crumb` step back ("‹ Train") instead of a second tab row. Routes stay
@@ -309,7 +309,7 @@ compresses worse alone (about 1.5x), so only a surface big enough to pay for its
 | `shell/` | shell | overlays, sheets, toast, save bar, tab bar, desktop nav, detail overlay, responsive, identity, five-home nav |
 | `today/` | Today | header strip, date control, Garmin strip, the Brief |
 | `session/` | Session | exercise cards, rest timer, the Session destination |
-| `fuel/` | Fuel | meal plans, planner, meal sheet, meal card, Fuel today |
+| `fuel/` | Fuel | meal plans, planner, meal sheet, meal card, Train › Intake's today |
 | `ask/` | Ask | chat, capture, changes feed, ask cards, what-if |
 | `train/` | Train | plan editor, progress, editorial progress, endurance, program, strength, overview |
 | `horizon/` | Horizon | race view, the horizon |
@@ -377,7 +377,7 @@ one start. While a session holds logged work, `.brief-live` (a `.ping`, "Now · 
 m", the last and next set as one serif line, a bar per lift in the strength hue) leads the card
 instead. The steer line follows the card; then Fuel today (`#todayFuelSlot`, `.tfuel`,
 `today-fuel-glance-client.ts`): protein and energy as slim fuel-hue meters beside the day's number
-and ONE idea for later — no meters on an unlogged day (absent, never low), every tap opens Fuel —
+and ONE idea for later — no meters on an unlogged day (absent, never low), every tap opens Train › Intake —
 which replaces the rail's `fuel` card on today's column. The slot is transplanted across the
 Brief's in-place upgrade, and carries `aria-live="off"` so the Brief's polite live region never
 announces it painting in; a failed day read removes the fuel slot, so the rail keeps its own
@@ -979,20 +979,32 @@ tapped tile (`openDetailFrom(tile, build)`) and closed by ✕ / Escape / backdro
 The art drifts idly (`@keyframes drift`, 6.5s alternate) and parallaxes on overlay
 scroll (translate + fade, JS, reduced-motion-gated). `.prbadge` is the gold PR pill.
 
+## Intake (Train › Intake · `/app/train/intake`) — the one home for food
+
+Intake opens on TODAY (`intake-screen.ts`, the lazy fuel bundle; the old Fuel view's
+`/app/today/fuel` lands here, and Today's glance, the rail's fuel card and chat's fuel card all
+open it). Top to bottom, as the day reads:
+
+- `.fuel-today` — "Today · so far": protein then energy as slim `.fuel-today-m` meters (a 6px
+  `--s-fuel` bar beside "logged / the day's number", the bar `aria-hidden`, an `.sr-only` sentence
+  its text equivalent; no number to set it against draws no bar), then carbs · fat · fiber as plain
+  numbers (`.fuel-today-macros`). Nothing logged draws no meter at all: one quiet line, "Nothing
+  logged yet today." No percentage, no tone, no verdict.
+- the meals logged today (`.fuel-meals`), each with the time the athlete stated (never one
+  synthesized from its label), opening into the meal card read-only — grams only behind its Edit.
+- ONE idea for the rest of the day (`.idea-card`, `limit: 1`), "Start from this" filling the composer.
+- the food composer (`.fuel-log`: the multi-line field and photo, the one composer chat shares).
+- the days before today (`.nprog`, "Before today · 35 days"): the spoken average, the nutrient
+  picks and the daily bars; the balance, food-quality and bloodwork reads fold under one summary.
+- the deeper rows: Energy balance, This week's menu.
+
 ## Meals planner (the week menu · `/app/today/menu`)
 
 The week menu over the current weekly meal plan (prefers an accepted/applied/kept
-plan, falls back to the newest adequate draft). It opens from Fuel's "This week's menu"
-card and from Train → Intake's "This week's menu" row, steps back "‹ Fuel", and `/app/plan/meals`
-redirects to it. A second draft (a fresh week asked for while a kept one stays current)
-waits under it for Keep/Discard; every other past week lives in Fuel's "Earlier meal plans" fold.
-
-- `.mmenu` — Fuel's card (`meal-menu-card-{client,controller}.ts`, lazy meals bundle): a
-  surface card above the day's journal listing TODAY's planned meals as hairline rows
-  (44px food plate, the slot in mono `--d-fuel`, the name, one muted line of items, plain
-  kcal), a "to look over" badge on a draft, and "See the week ›". A week whose saved
-  constraints changed lists no meals; no week shows the plate and one ask, "Ask the team
-  for a week of meals" (the existing `meal_plan` job on `#mealDraftBtn`/`#mealDraftStatus`).
+plan, falls back to the newest adequate draft). It opens from Train › Intake's "This week's
+menu" row, steps back "‹ Intake", and `/app/plan/meals` redirects to it. A second draft (a fresh
+week asked for while a kept one stays current) waits under it for Keep/Discard; every other past
+week lives in its own "Earlier meal plans" fold at the foot.
 
 - `.mealhero` — week-of label + `.mp-badge` status + agent, count-up `daily_kcal` /
   `daily_protein_g` numerals, summary line, Keep/Discard `.pillbtn` row for drafts.
@@ -1001,7 +1013,7 @@ waits under it for Keep/Discard; every other past week lives in Fuel's "Earlier 
   of `.meal-row`s (artImg food plate | name + items | kcal numeral + P/C/F caps).
 - `.meals-empty` — illustration plate + italic display title + an "Ask team to plan
   this week" CTA on the shared `.pillbtn pill-accent`, with `.meals-status` for run feedback.
-- `.mp-history` — Fuel's "Earlier meal plans" `<details>`: the `.mp-card` list of past weeks only.
+- `.mp-history` — the week menu's "Earlier meal plans" `<details>`: the `.mp-card` list of past weeks only.
 - `.shop-chips` — the plan's shopping list as cream chips.
 
 ## Timed exercises
@@ -1439,7 +1451,7 @@ in each row.
 
 **Components v2 adds** (shipped in v2.0.0; see `docs/ARCHITECTURE-HISTORY.md`): `changes-line`, `changes-feed`,
 `decision-undo`, `meal-card` (read-only portions in words; an explicit Edit opens the gram rows), `food-composer` (shared by Fuel and chat),
-`fuel-today`, `idea-card`, `mmenu` (Fuel's "This week's menu" card), `pahead` (Program's "The week ahead": today through next Sunday, a row a day, from
+`fuel-today`, `idea-card`, `pahead` (Program's "The week ahead": today through next Sunday, a row a day, from
 `program-week-{model,client,controller}.ts`), `records-search`, `packet-builder`, `visit-questions`, `race-ladder`,
 `cairn-stack`, `app-readd` (the one-time iOS re-add note) and `app-id` (Settings →
 Data's "This app" block: server build and this app's shell), both from

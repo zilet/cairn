@@ -1,6 +1,6 @@
 // @ts-check
 // Idea cards (docs/V2-PLAN.md wave 2, "idea-card"). The view: up to three ideas for
-// the rest of today from GET /api/fuel/ideas, each built from the athlete's own
+// the rest of today (Intake shows ONE, `limit`) from GET /api/fuel/ideas, each built from the athlete's own
 // staples, sized protein first, its macros in one line, with the server's own
 // sentence for why it was offered.
 // An idea is never shown as eaten and never as a plan: it is labelled an idea, has no
@@ -48,22 +48,29 @@
     </li>`;
   }
 
-  /** The set: a heading, the server's line about the ideas, and the cards. */
-  function ideasHtml(data: Ideas, opts: { reveal?: boolean } = {}): string {
-    const ideas = Array.isArray(data.ideas) ? data.ideas : [];
+  // One idea is "An idea", a set "Ideas": the heading names what is on screen.
+  function titleFor(limit: number | undefined): string {
+    return limit === 1 ? "An idea for the rest of today" : "Ideas for the rest of today";
+  }
+
+  /** The set: a heading, the server's line about the ideas, and the cards (the first `limit`). */
+  function ideasHtml(data: Ideas, opts: { reveal?: boolean; limit?: number } = {}): string {
+    const all = Array.isArray(data.ideas) ? data.ideas : [];
+    const ideas = opts.limit && opts.limit > 0 ? all.slice(0, opts.limit) : all;
     const words = data.words ? `<p class="idea-cards-words">${escHtml(data.words)}</p>` : "";
     const cards = ideas.length
       ? `<ul class="idea-cards-list">${ideas.map((idea, i) => ideaCardHtml(idea, { index: opts.reveal ? i + 1 : undefined })).join("")}</ul>`
       : "";
-    return `<section class="idea-cards" aria-label="Ideas for the rest of today">
-      <h2 class="lbl idea-cards-title">Ideas for the rest of today</h2>
+    const title = titleFor(opts.limit);
+    return `<section class="idea-cards" aria-label="${escAttr(title)}">
+      <h2 class="lbl idea-cards-title">${escHtml(title)}</h2>
       ${words}${cards}
     </section>`;
   }
 
-  function errorHtml(): string {
+  function errorHtml(limit?: number): string {
     return `<section class="idea-cards" role="status" aria-live="polite">
-      <h2 class="lbl idea-cards-title">Ideas for the rest of today</h2>
+      <h2 class="lbl idea-cards-title">${escHtml(titleFor(limit))}</h2>
       <p class="idea-cards-words">Ideas couldn't be read just now.</p>
       <button class="linkbtn linkbtn-quiet idea-cards-retry" type="button" data-idea-cards-retry>Try again</button>
     </section>`;

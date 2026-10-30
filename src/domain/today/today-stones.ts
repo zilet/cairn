@@ -77,7 +77,7 @@ export const TODAY_STONE_LABELS: Readonly<Record<TodayStoneKey, string>> = {
 const TARGETS: Record<TodayStoneKey, TodayStoneTarget> = {
   strength: { tab: "progress", section: "overview" },
   endurance: { tab: "plan", section: "endurance" },
-  fuel: { tab: "plan", section: "food" },
+  fuel: { tab: "progress", section: "intake" },
   recovery: { tab: "stand", section: "recovery" },
   body: { tab: "stand", section: "body" },
   heart: { tab: "stand", section: "markers" },

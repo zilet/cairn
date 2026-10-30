@@ -62,13 +62,12 @@ type CairnRouteRoot = typeof globalThis & { CairnRoutes?: CairnRoutesApi };
     planHomes: {
       edit: "train",
       endurance: "horizon",
-      food: "today",
       meals: "today",
       coach: "ask",
     },
     tabs: ["today", "session", "stand", "plan", "progress", "chat", "me", "settings", "horizon", "you", "day"],
     sections: {
-      plan: ["edit", "endurance", "food", "meals", "coach"],
+      plan: ["edit", "endurance", "meals", "coach"],
       progress: ["week", "overview", "trend", "volume", "endurance", "weight", "measurements", "calendar", "sessions", "program", "intake", "energy"],
       // Health (the Stand view) is every health tool as a first-class sub-view of
       // You. "me" health sections survive only as parse targets that redirect here.
@@ -172,7 +171,9 @@ type CairnRouteRoot = typeof globalThis & { CairnRoutes?: CairnRoutesApi };
     if (home === "today") {
       if (section === "session") return target("session");
       if (section === "day") return target("day");
-      if (section === "fuel") return target("plan", "food");
+      // Today's food has ONE home, Train › Intake: the old Fuel view's link lands there
+      // (and another day's food is that day's own page — the router reads ?date=).
+      if (section === "fuel") return target("progress", "intake");
       // The week menu (Plan view, meals section); v1's /app/plan/meals lands here.
       if (section === "menu") return target("plan", "meals");
       return target("today");
@@ -208,6 +209,8 @@ type CairnRouteRoot = typeof globalThis & { CairnRoutes?: CairnRoutesApi };
     id: string | null
   ): RouteTarget {
     if (tab === "plan") {
+      // v1's Plan → Food was the Fuel view: today's food lives on Train › Intake now.
+      if (section === "food" || (!section && firstParam(params, "jump") === "food")) return target("progress", "intake");
       const s = oneOf(section, PLAN_SECTIONS, null) || oneOf(firstParam(params, "jump"), PLAN_SECTIONS, null);
       return target("plan", s || DEFS.defaults.planSection);
     }
@@ -313,7 +316,6 @@ type CairnRouteRoot = typeof globalThis & { CairnRoutes?: CairnRoutesApi };
         const s =
           oneOf(section, PLAN_SECTIONS, null) || oneOf(r.jump, PLAN_SECTIONS, null) || DEFS.defaults.planSection;
         if (s === "endurance") return `${base}/horizon/race`;
-        if (s === "food") return `${base}/today/fuel`;
         if (s === "meals") return `${base}/today/menu`;
         if (s === "coach") return `${base}/ask/changes`;
         return `${base}/train/plan`;

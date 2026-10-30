@@ -145,8 +145,6 @@ const PERSISTED_KEYS = {
   restSec: ["rest-timer"],
   "cairn.fuelLogDraft": ["fuel-deps"],
   "cairn.fuelLogRetry.v1": ["fuel-deps"],
-  // Whether this viewer left Fuel's week menu open (meal-menu-card-client.ts).
-  "cairn.fuel.menuOpen": ["meal-menu-card-client"],
   "cairn.sessnotes.": ["today-session-controller"],
   "cairn.swr.v1.": ["swr-cache"],
   "cairn.brief.v1": ["today-brief-cache-client", "write-invalidation-client"],

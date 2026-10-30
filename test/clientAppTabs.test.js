@@ -245,7 +245,6 @@ test("the Plan view lights the home its section lives under", async () => {
   const cases = [
     ["edit", "train"],
     ["endurance", "horizon"],
-    ["food", "today"],
     ["meals", "today"],
     ["coach", "ask"],
   ];

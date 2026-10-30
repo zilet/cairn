@@ -273,7 +273,8 @@ test("each stone links to its homes; the decade view is Heart's and nobody else'
   assert.deepEqual(plain(Object.keys(homes)), ["strength", "endurance", "fuel", "recovery", "body", "heart"]);
   assert.deepEqual(flat("strength"), ["progress/overview", "plan/edit"]);
   assert.deepEqual(flat("endurance"), ["plan/endurance", "progress/endurance"]);
-  assert.deepEqual(flat("fuel"), ["plan/food", "progress/intake", "progress/energy"]);
+  // Today's food has one home, Train › Intake (today first, then the weeks).
+  assert.deepEqual(flat("fuel"), ["progress/intake", "progress/energy"]);
   assert.deepEqual(flat("recovery"), ["stand/recovery"]);
   assert.deepEqual(flat("body"), ["stand/body", "progress/weight", "progress/measurements"]);
   assert.deepEqual(flat("heart"), ["stand/", "stand/domain?id=heart", "stand/age"]);
@@ -312,7 +313,7 @@ test("the detail model: the server's stone verbatim, the name before the read, n
   const bare = win.CairnStoneDetailModel.model("fuel", null);
   assert.equal(bare.stone, null);
   assert.equal(bare.name, "Fuel");
-  assert.equal(bare.links.length, 3, "the homes need no read");
+  assert.equal(bare.links.length, 2, "the homes need no read");
   assert.equal(win.CairnStoneDetailModel.model("toString", read()), null);
   assert.equal(win.CairnStoneDetailModel.model("spleen", read()), null);
   assert.equal(win.CairnStoneDetailModel.isStone("heart"), true);
@@ -457,10 +458,10 @@ test("a stone route renders its detail; a home tap routes like a deep link and f
   win.renderYou();
   assert.equal(win.view.querySelector(".stone-detail-h").textContent, "Fuel");
   assert.equal(win.view.querySelector(".cairn-stack"), null);
-  await fire(win.view.querySelector('[data-stone-detail-go="fuel"]'), click());
+  await fire(win.view.querySelector('[data-stone-detail-go="intake"]'), click());
   assert.deepEqual(state.applied, {
-    tab: "plan",
-    section: "food",
+    tab: "progress",
+    section: "intake",
     healthSection: null,
     date: null,
     id: null,
@@ -469,7 +470,7 @@ test("a stone route renders its detail; a home tap routes like a deep link and f
   });
   assert.equal(state.youSeg, null);
   assert.equal(state.youStone, null);
-  assert.deepEqual(tabs, ["plan"]);
+  assert.deepEqual(tabs, ["progress"]);
 });
 
 test("an unknown stone is the landing, rewritten in place; the You tab always reopens the landing", () => {

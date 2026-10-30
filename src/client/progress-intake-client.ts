@@ -1,6 +1,7 @@
 // @ts-check
-// Progress → Fuel → Intake. Pure, escaped rendering over the deterministic
-// nutrition-progress read; missing days/nutrients remain visible gaps.
+// Train › Intake's second section, the days before today (intake-screen.ts mounts it
+// under today's card). Pure, escaped rendering over the deterministic nutrition-progress
+// read; missing days/nutrients remain visible gaps.
 
 type IntakeProgress = import("../contracts/client.js").ClientNutritionProgress;
 type IntakeNutrient = import("../contracts/client.js").ClientNutritionProgressNutrient;
@@ -245,13 +246,14 @@ type IntakeNutrient = import("../contracts/client.js").ClientNutritionProgressNu
       (nutrient) =>
         `<button class="nprog-pick${nutrient === active ? " active" : ""}" type="button" data-intake-nutrient="${nutrient}" aria-pressed="${nutrient === active ? "true" : "false"}">${SHORT[nutrient]}</button>`
     ).join("");
-    // First view: ONE spoken line about what was eaten. The coverage read, its
-    // bookkeeping and the next move are the server's careful register; they sit one
-    // tap deeper, never as the wall the screen opens on.
+    // Under today's card, the days before it: ONE spoken line about what was eaten,
+    // then the daily bars. The coverage read, its bookkeeping and the next move are the
+    // server's careful register, and the balance, food-quality and bloodwork reads are
+    // the long view; each sits one tap deeper, never as the wall Intake opens on.
     return `<div class="nprog">
-      <section class="nprog-read reveal" style="--i:0">
-        <div class="lbl">Recorded intake · ${progress.window_days} days</div>
-        <h1 class="nprog-voice">${escHtml(intakeVoiceLine(progress))}</h1>
+      <section class="nprog-read reveal" style="--i:1" aria-labelledby="intakeWeeksTitle">
+        <h2 class="lbl" id="intakeWeeksTitle">Before today · ${progress.window_days} days</h2>
+        <p class="nprog-voice">${escHtml(intakeVoiceLine(progress))}</p>
         <details class="nprog-more">
           <summary>How complete this is</summary>
           <p class="nprog-more-read">${escHtml(progress.read)}</p>
@@ -261,14 +263,23 @@ type IntakeNutrient = import("../contracts/client.js").ClientNutritionProgressNu
       </section>
       <nav class="nprog-picks rail" aria-label="Choose nutrient timeline">${selector}</nav>
       ${intakeChartHtml(progress, active)}
-      ${intakeBalanceHtml(progress)}
-      ${intakeFoodQualityHtml(progress)}
-      ${intakeHealthHtml(progress)}
+      <details class="nprog-more nprog-long">
+        <summary>Balance, food quality and bloodwork context</summary>
+        ${intakeBalanceHtml(progress)}
+        ${intakeFoodQualityHtml(progress)}
+        ${intakeHealthHtml(progress)}
+      </details>
     </div>`;
   }
 
   function render(root: Element, progress: IntakeProgress, selected: IntakeNutrient = "kcal"): void {
+    // A nutrient pick (or a fresher read) repaints in place; a fold left open stays open.
+    const folds = () => Array.from(root.querySelectorAll<HTMLElement>("details.nprog-more"));
+    const open = folds().map((fold) => fold.hasAttribute("open"));
     root.innerHTML = intakeBodyHtml(progress, selected);
+    folds().forEach((fold, i) => {
+      if (open[i]) fold.setAttribute("open", "");
+    });
     root.querySelectorAll<HTMLElement>("[data-intake-nutrient]").forEach((button) =>
       button.addEventListener("click", () => {
         const nutrient = button.dataset.intakeNutrient as IntakeNutrient;

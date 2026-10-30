@@ -200,6 +200,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/progress-energy-client.ts", output: "public/js/progress-energy-client.js" },
   { source: "src/client/progress-energy-surface-client.ts", output: "public/js/progress-energy-surface-client.js" },
   { source: "src/client/progress-intake-client.ts", output: "public/js/progress-intake-client.js" },
+  { source: "src/client/intake-screen.ts", output: "public/js/intake-screen.js" },
   { source: "src/client/progress-calendar-client.ts", output: "public/js/progress-calendar-client.js" },
   { source: "src/client/progress-muscle-trajectory-client.ts", output: "public/js/progress-muscle-trajectory-client.js" },
   { source: "src/client/progress-dexa-targeting-client.ts", output: "public/js/progress-dexa-targeting-client.js" },
@@ -330,8 +331,6 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/meal-planner-actions-controller.ts", output: "public/js/meal-planner-actions-controller.js" },
   { source: "src/client/meal-planner-controller.ts", output: "public/js/meal-planner-controller.js" },
   { source: "src/client/meal-journal-client.ts", output: "public/js/meal-journal-client.js" },
-  { source: "src/client/meal-menu-card-client.ts", output: "public/js/meal-menu-card-client.js" },
-  { source: "src/client/meal-menu-card-controller.ts", output: "public/js/meal-menu-card-controller.js" },
   { source: "src/client/coach-proposal-controller.ts", output: "public/js/coach-proposal-controller.js" },
   { source: "src/client/coach-meals-screen.ts", output: "public/js/06-coach-meals.js" },
   { source: "src/client/coach-changes-screen.ts", output: "public/js/coach-changes-screen.js" },
@@ -616,9 +615,8 @@ export const BUNDLES = [
       // The welcome's first week outside the welcome (EAGER, small): Today's "coming
       // together" card and the one-shot "ready" notice, wherever the app is open.
       "public/js/first-week-client.js",
-      // Train's energy read (and the hero it paints with) stays EAGER: Fuel paints
-      // it (#energyCard) and it owns the nutrition_checkin job reconnector, which
-      // must register at boot.
+      // Train's energy read (and the hero it paints with) stays EAGER: it owns the
+      // nutrition_checkin job reconnector, which must register at boot.
       "public/js/progress-components-client.js",
       "public/js/progress-energy-client.js",
       "public/js/progress-energy-surface-client.js",
@@ -652,47 +650,48 @@ export const BUNDLES = [
     ],
   },  {
     output: "public/js/bundle-04-coach-meals.js",
-    label: "coach proposals + the Fuel screen's frame",
+    label: "coach proposals + the week menu's frame",
     // EAGER and small: the proposal controller (its job reconnector must register at
-    // boot, and Ask, Horizon and the meal planner call into it), the Fuel screen's frame
+    // boot, and Ask, Horizon and the meal planner call into it), the week menu's frame
     // (06-coach-meals: the meal keys every surface names, the Changes controls, the
-    // dispatch into the Fuel surface) and the food-note words (ui-shell and Health
-    // format with them). The Fuel surface itself is the lazy "fuel" bundle that follows.
+    // dispatch into the week menu) and the food-note words (ui-shell and Health format
+    // with them). Today's food, Train › Intake, is the lazy "fuel" bundle that follows.
     inputs: [
       "public/js/coach-proposal-controller.js",
       "public/js/06-coach-meals.js",
       // Food-note formatting + the food detail sheet USED to head bundle-05.
-      // They are food, not health: the Fuel surface and ui-shell (bundle-01) call
-      // them from the Plan/Today surfaces, which must keep working without the
-      // lazily-loaded Me/Health bundle.
+      // They are food, not health: Intake and ui-shell (bundle-01) call them from the
+      // Train/Today surfaces, which must keep working without the lazily-loaded
+      // Me/Health bundle.
       "public/js/food-note-client.js",
       // The chat layout (viewport / keyboard geometry): chat-turn-client (Ask) reads it as
-      // it loads and the food composer (Fuel) when it mounts, so neither lazy bundle owns it.
+      // it loads and the food composer (Intake) when it mounts, so neither lazy bundle owns it.
       "public/js/chat-layout-client.js",
     ],
   },
   {
     output: "public/js/bundle-22-fuel.js",
-    label: "Fuel (the day's food, meal cards, the food composer)",
-    // LAZY: the Fuel surface (Plan → Food, /app/today/fuel) and the pieces only it and
-    // Ask's chat composer use: the meal card (and the food detail sheet that mounts it),
-    // the day's fuel read, the meals list, the log composer, the ideas card and the food
-    // composer with the chat primitives it mounts. Today never needs it until a tap
-    // opens Fuel or a food, so it is not in the first open's bytes; the idle warm-up
-    // fetches it right after Today's lower half, and a deep link preloads it. Ask
-    // depends on it (the chat composer mounts the food composer). 06-coach-meals
-    // (eager) dispatches into it only under lazy("fuel").
+    label: "Fuel (Train › Intake: today's food, meal cards, the food composer)",
+    // LAZY: Train › Intake (/app/train/intake; the old /app/today/fuel lands there), the
+    // ONE home for food, and the pieces only it and Ask's chat composer use: the meal card
+    // (and the food detail sheet that mounts it), the day's fuel read, the meals list,
+    // the log composer, the idea card, the weeks' intake read and the food composer with
+    // the chat primitives it mounts. Today never needs it until a tap opens Intake or a
+    // food, so it is not in the first open's bytes; the idle warm-up fetches it right
+    // after Today's lower half, and a deep link preloads it. Ask depends on it (the chat
+    // composer mounts the food composer). The dispatcher and the Train segment deps
+    // reach Intake only under lazy("fuel") / withLatestRender("fuel").
     lazy: "fuel",
-    views: ["plan:food"],
+    views: ["progress:intake"],
     inputs: [
       // The meal card (v2 wave 2): the food detail sheet mounts it from inside a
-      // function, and Fuel reaches it the same way.
+      // function, and Intake reaches it the same way.
       "public/js/meal-card-model.js",
       "public/js/meal-card-client.js",
       "public/js/meal-card-controller.js",
       "public/js/food-detail-controller.js",
-      // Plan → Food, the Fuel surface (v2 wave 2). renderFoodJournal mounts these
-      // only from inside a function, so they may follow the screen too.
+      // Today's food (v2 wave 2). renderIntake mounts these only from inside a
+      // function, so they may follow the screen too.
       "public/js/fuel-today-model.js",
       "public/js/fuel-today-client.js",
       "public/js/fuel-today-controller.js",
@@ -703,7 +702,7 @@ export const BUNDLES = [
       "public/js/idea-card-client.js",
       "public/js/idea-card-controller.js",
       "public/js/fuel-deps.js",
-      // The food composer (Fuel's log, Ask's chat composer) and the chat primitives it
+      // The food composer (Intake's log, Ask's chat composer) and the chat primitives it
       // mounts. The photo-compression constants they read (chat-client) ride the ask
       // bundle: compressImage awaits it on the first photo.
       "public/js/chat-attachment-client.js",
@@ -713,9 +712,9 @@ export const BUNDLES = [
       "public/js/food-composer-chips-controller.js",
       "public/js/food-composer-turn-controller.js",
       "public/js/food-composer-controller.js",
-      // Train › Intake's read: it paints beside the log composer above (renderIntake awaits
-      // this bundle), and Train's landing never needs its bytes.
+      // Train › Intake's weeks read, under today's card, and the Intake screen itself.
       "public/js/progress-intake-client.js",
+      "public/js/intake-screen.js",
     ],
   },
   {
@@ -1085,11 +1084,11 @@ export const BUNDLES = [
   },
   {
     output: "public/js/bundle-13-meals.js",
-    label: "Meal planner (the week menu, Fuel's menu card, swaps, recipes, past weeks)",
+    label: "Meal planner (the week menu, swaps, recipes, past weeks)",
     // LAZY: the weekly meal plan is ideation. Its own route is the week menu
-    // (/app/today/menu, plan:meals); Fuel (eager) mounts the "This week's menu" card
-    // and paints its past-weeks fold through withBundle("meals"); the meal_plan /
-    // meal_swap / recipe reconnectors register when this lands.
+    // (/app/today/menu, plan:meals), which paints its past-weeks fold through
+    // withBundle("meals"); the meal_plan / meal_swap / recipe reconnectors register
+    // when this lands.
     lazy: "meals",
     views: ["plan:meals"],
     inputs: [
@@ -1106,8 +1105,6 @@ export const BUNDLES = [
       "public/js/meal-planner-actions-controller.js",
       "public/js/meal-planner-controller.js",
       "public/js/meal-journal-client.js",
-      "public/js/meal-menu-card-client.js",
-      "public/js/meal-menu-card-controller.js",
     ],
   },
   {

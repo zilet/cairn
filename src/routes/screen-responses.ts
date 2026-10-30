@@ -55,7 +55,7 @@ import { getBodyMetricsSummary, normalizeUnit } from "../repo/body-metrics.js";
 import { todayPath } from "../repo/today-path.js";
 import { intakeBand } from "../repo/intake-band.js";
 import { fuelIdeas } from "../repo/fuel-ideas.js";
-import { listMealPlans } from "../domain/nutrition/index.js";
+import { nutritionProgress } from "../domain/nutrition/index.js";
 import { buildClinicalReportData, clinicalReportJson, parseReportSections } from "../report.js";
 import { directivesResponse } from "./connected-brain.js";
 import { nutritionDayResponse } from "./nutrition.js";
@@ -87,7 +87,7 @@ function trainView(value: unknown): TrainHomeView {
   return (TRAIN_HOME_VIEWS as readonly string[]).includes(String(value)) ? (value as TrainHomeView) : "overview";
 }
 
-/** The device's local hour Fuel's ideas are asked with, or null when it sent none (or a bad one). */
+/** The device's local hour Intake's idea is asked with, or null when it sent none (or a bad one). */
 function screenHour(hourQuery: unknown): number | null {
   const hour = hourQuery != null ? Number(hourQuery) : Number.NaN;
   return Number.isInteger(hour) && hour >= 0 && hour <= 23 ? hour : null;
@@ -99,9 +99,9 @@ function screenHour(hourQuery: unknown): number | null {
  * DEXA targeting) or `endurance` (the Endurance screen's week). Two screens that grew
  * out of Train's reads ride the same fan-in: `goal` (Horizon -> Goal line: the journey
  * story, its milestones, the road-ahead timeline — the cards Train's overview used to
- * fold away — and the All-goals board's today-path read) and `fuel` (Today -> Fuel's
- * first paint: the day, the intake band, the ideas for `hour`, and the meal-plan
- * journal its week-menu card reads). Dated reads key on `date` exactly as the screen
+ * fold away — and the All-goals board's today-path read) and `fuel` (Train -> Intake's
+ * first paint: today's day, the intake band, the ideas for `hour`, and the weeks'
+ * recorded-intake read under them). Dated reads key on `date` exactly as the screen
  * spells them.
  */
 export function trainHomeResponses(viewQuery: unknown, dateQuery: unknown, hourQuery?: unknown): ScreenResponses {
@@ -122,7 +122,7 @@ export function trainHomeResponses(viewQuery: unknown, dateQuery: unknown, hourQ
     put(out, `/fuel/ideas?date=${q(date)}${hour == null ? "" : `&hour=${hour}`}`, () =>
       fuelIdeas(date, { hour: hour ?? undefined, exclude: [] })
     );
-    put(out, "/mealplans?limit=12", () => listMealPlans(12));
+    put(out, "/nutrition/progress?days=35", () => nutritionProgress(35));
     return out;
   }
   if (view !== "endurance") put(out, "/coaching-focus", () => getCoachingFocus());

@@ -964,7 +964,7 @@ test("PWA route state is wired through boot, tabs, nested screens, and date-awar
   const appRouter = read("public/js/app-router.js");
   const ui = read("public/js/02-ui.js");
   const uiSegments = read("public/js/ui-segments-client.js");
-  const meals = read("public/js/06-coach-meals.js");
+  const intake = read("public/js/intake-screen.js");
   const healthTabs = read("public/js/me-health-tabs-controller.js");
   const healthComposition = read("public/js/me-health-screen-composition.js");
   const fuelTodayController = read("public/js/fuel-today-controller.js");
@@ -997,8 +997,8 @@ test("PWA route state is wired through boot, tabs, nested screens, and date-awar
   );
   assert.match(uiSegments, /deps\.syncRouteFromState\(\)/, "shared UI events should notify route sync");
   assert.match(ui, /CairnUiSegments/, "UI shell should delegate segmented navigation to the typed segments module");
-  assert.match(fuelTodayController, /\/nutrition\/day\?date=\$\{encodeURIComponent\(date\)\}/, "Plan Food must fetch the routed local day");
-  assert.match(meals, /CairnFuelTodayController\.mount\(/, "Plan Food must mount the fuel-today component");
+  assert.match(fuelTodayController, /\/nutrition\/day\?date=\$\{encodeURIComponent\(date\)\}/, "Intake must fetch the device's local day");
+  assert.match(intake, /CairnFuelTodayController\.mount\(/, "Intake must mount the fuel-today component");
   assert.match(
     healthTabs,
     /const next = normalizeHealthSeg\(b\.dataset\.hseg\)[\s\S]*setHealthSegActive\(next,\s*deps\)[\s\S]*deps\.syncRouteFromState\?\.\(\)/
@@ -5328,12 +5328,13 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(coachProposalControllerSource, /function reconnectProposal\(\): ClientAgentOpHandlers \| null/);
   assert.match(coachProposalControllerSource, /CairnCoachProposalController/);
   assert.match(coachProposalControllerSource, /CairnProposal\.coachProposalListHtml\(proposals, lastApplyClamp\)/);
-  // Ask → Changes is the lazy ask bundle's screen; the eager screen keeps Fuel and the menu.
+  // Ask → Changes is the lazy ask bundle's screen; the eager screen keeps the week menu.
+  // Today's food is Train › Intake's (intake-screen.ts, the lazy fuel bundle).
   assert.match(coachChangesScreenSource, /async function renderCoach\(\): Promise<void>/);
   assert.doesNotMatch(coachMealsScreenSource, /function renderCoach\(/);
   assert.match(coachMealsScreenSource, /function renderMeals\(\): Promise<unknown>/);
-  assert.match(coachMealsScreenSource, /function renderFoodJournal\(options: \{ history\?: boolean \} = \{\}\): Promise<unknown>/);
-  // The meal-plan journal is the lazy meals bundle's; Fuel reaches it through withBundle.
+  assert.doesNotMatch(coachMealsScreenSource, /function renderFoodJournal/);
+  // The meal-plan journal is the lazy meals bundle's; the week menu reaches it through withBundle.
   assert.match(mealJournalSource, /CairnMealPlannerController\.wireMealPlannerBody/);
   assert.match(coachMealsScreenSource, /withBundle\("meals", \(\) => CairnMealJournal\.paintMenu/);
   assert.match(coachMealsScreenSource, /withBundle\("meals", \(\) => CairnMealJournal\.paintHistory/);
@@ -6247,7 +6248,8 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   );
   assert.match(progressEnergySurfaceClient, /CairnProgressEnergy\.energyBodyHtml\(exp\)/);
   assert.match(progress, /paintEnergyBody\(exp\)/);
-  assert.match(meals, /paintEnergyBody\(exp\)/);
+  // Energy Balance has one home now, Train › Energy; the week menu never paints it.
+  assert.doesNotMatch(meals, /paintEnergyBody/);
   assert.doesNotMatch(
     progress,
     /CairnProgressEnergy\.nutritionCheckinLoadingHtml\(\)|CairnProgressEnergy\.nutritionCheckinOkHtml|CairnProgressEnergy\.nutritionCheckinFailHtml|CairnProgressEnergy\.nutritionCheckinProposalHtml/
@@ -6403,7 +6405,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
     /function\s+mealRecipeCtaHtml|function\s+mealRecipeHtml|function\s+mealRecipeLoadingHtml|function\s+openMealSheet|function\s+recipeOpOpts|function\s+reconnectRecipe|function\s+reconnectMealPlan|function\s+reconnectMealSwap|function\s+wireMealRows|recipe-ings.*ingredients\.map/s
   );
   assert.match(fuelTodayController, /CairnFuelToday\.todayHtml/);
-  assert.match(meals, /CairnFuelTodayController\.mount\(/);
+  assert.match(read("public/js/intake-screen.js"), /CairnFuelTodayController\.mount\(/);
   assert.match(mealsSource, /meal-plan-client\.js/);
   assert.match(meals, /CairnMealPlannerController\.renderMealPlans/);
   assert.match(read("public/js/meal-journal-client.js"), /CairnMealPlan\.mealPlannerBodyHtml\(current, mealPrefs/);
@@ -6857,7 +6859,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.doesNotMatch(progress, /coachingFocusCardHtml/);
   assert.match(read("public/js/coach-changes-screen.js"), /function renderCoach\(\)/);
   assert.match(meals, /function renderMeals\(\)/);
-  assert.match(meals, /function renderFoodJournal\(options = \{\}\)/);
+  assert.match(read("public/js/intake-screen.js"), /function renderIntake\(\)/);
   assert.match(mealPlannerJobsClient, /function mealPlannerJobReconnectMealPlan\(\)/);
   assert.match(mealPlannerController, /function reconnectMealPlan\(job\)/);
   assert.match(mealSwapController, /function reconnectMealSwap\(job\)/);

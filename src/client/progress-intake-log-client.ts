@@ -1,9 +1,9 @@
 // @ts-check
-// Train › Intake / Energy, the "Log a meal" button (split out of progress-screen.ts): it
+// Train › Energy, the "Log a meal" button (split out of progress-screen.ts): it
 // mounts the food composer through the shell's mountFuelLog (the lazy fuel bundle is the
 // shell's to reach, never Train's), is the ONE toggle for it, and lets the composer go
 // when the athlete leaves the screen. wireIntakeLog / refreshAfterLog stay globals for
-// renderIntake and renderEnergy.
+// renderEnergy. Intake itself holds the composer in its today card (intake-screen.ts).
 
 // After a meal is logged from the Intake/Energy composer: re-read that surface and repaint it if still on screen.
 const refreshAfterLog = (token: number, path: string, seg: string, key: string, paint: (data: unknown) => void) => () =>

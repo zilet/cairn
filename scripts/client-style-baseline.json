@@ -128,10 +128,10 @@
       "style": 1
     },
     "src/client/progress-run-plan-client.ts": {
-      "lines": 541
+      "lines": 530
     },
     "src/client/progress-screen.ts": {
-      "lines": 519,
+      "lines": 450,
       "hex": 13
     },
     "src/client/proposal-client.ts": {

@@ -1,5 +1,5 @@
 // @ts-check
-// Meal-plan renderers: the week menu (/app/today/menu) and the past weeks kept in Fuel's
+// Meal-plan renderers: the week menu (/app/today/menu) and the past weeks kept in its
 // history fold. Ideas on request, never what was eaten.
 
 type MealRecord = Record<string, unknown>;

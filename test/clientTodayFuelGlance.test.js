@@ -1,7 +1,8 @@
 // Fuel today, the glance under Today's NOW card (today-fuel-glance-client.ts): protein
 // and energy as slim meters beside the day's numbers, ONE idea for later, and the
 // laws it holds — an unlogged day is absent (no meters at zero), nothing is graded,
-// every tap opens Fuel, and the model never works a number out of thin air.
+// every tap opens Train › Intake (today's food's one home), and the model never works a
+// number out of thin air.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHost, flush, loadClientModule, renderHtml } from "./_dom.mjs";
@@ -56,7 +57,7 @@ test("a logged day shows protein then energy against the day's numbers, and one 
   assert.equal(host.querySelector(".tfuel-idea-n").textContent, "42 g protein · ~560 kcal");
   assert.equal(
     host.querySelector(".tfuel-idea").getAttribute("aria-label"),
-    "An idea for later Steak & eggs <hash> 42 g protein · ~560 kcal. Open Fuel"
+    "An idea for later Steak & eggs <hash> 42 g protein · ~560 kcal. Open Intake"
   );
   assert.doesNotMatch(win.CairnTodayFuelGlance.html(model), /<hash>/, "the idea's words are escaped");
   assert.doesNotMatch(win.CairnTodayFuelGlance.html(model), /score|%|low\b|behind/i);
@@ -87,9 +88,12 @@ test("an unknown macro is not drawn, and no target means the value alone", () =>
   assert.equal(win.CairnTodayFuelGlance.html(null), "");
 });
 
-test("Today mounts the glance under the NOW card's steer line, paints from the warm cache, and opens Fuel", async () => {
-  const calls = { loads: [], tabs: [] };
+test("Today mounts the glance under the NOW card's steer line, paints from the warm cache, and opens Intake", async () => {
+  const calls = { loads: [], tabs: [], intake: 0 };
   const win = load({
+    openIntake: () => {
+      calls.intake += 1;
+    },
     peekCached: (key) => (key === `food:day:${DATE}` ? { data: day(), fresh: true } : null),
     cachedApi: (path, options) => {
       calls.loads.push(options.key);
@@ -99,19 +103,19 @@ test("Today mounts the glance under the NOW card's steer line, paints from the w
   const view = createHost(win.document, {
     html: `<div class="today-main"><section class="brief"><div class="brief-now"></div><div class="brief-steer"></div><details class="brief-around"></details></section></div>`,
   });
-  const state = {};
-  win.CairnTodayFuelGlance.mountToday(view, { date: DATE, state, activateTab: (tab) => calls.tabs.push(tab) });
+  win.CairnTodayFuelGlance.mountToday(view, { date: DATE });
   const kids = view.querySelector(".brief").children.map((el) => el.id || el.className.split(" ")[0]);
   assert.deepEqual(kids, ["brief-now", "brief-steer", "todayFuelSlot", "brief-around"]);
   const slot = view.querySelector("#todayFuelSlot");
   assert.equal(slot.getAttribute("aria-live"), "off", "the Brief's live region never announces the card filling in");
   assert.ok(slot.querySelector(".tfuel"), "the warm day paints at once, no shimmer");
   await flush();
-  assert.deepEqual(calls.loads.sort(), [`food:day:${DATE}`, `fuel:ideas:${DATE}`], "the Fuel view's own SWR keys");
+  assert.deepEqual(calls.loads.sort(), [`food:day:${DATE}`, `fuel:ideas:${DATE}`], "Intake's own SWR keys");
   assert.ok(slot.querySelector(".tfuel-idea"), "the idea lands when its read does");
   await slot.querySelector(".tfuel-log").click();
-  assert.deepEqual(calls.tabs, ["plan"]);
-  assert.equal(state.planJump, "food");
+  assert.equal(calls.intake, 1, "Log a meal lands on Intake, where the composer is");
+  await slot.querySelector(".tfuel-idea").click();
+  assert.equal(calls.intake, 2, "the idea lands there too");
 });
 
 test("a day read that fails takes the glance off the page, so the rail keeps its own fuel card", async () => {
@@ -122,7 +126,7 @@ test("a day read that fails takes the glance off the page, so the rail keeps its
   const view = createHost(win.document, {
     html: `<div class="today-main"><section class="brief"><div class="brief-now"></div><div class="brief-steer"></div></section></div>`,
   });
-  win.CairnTodayFuelGlance.mountToday(view, { date: DATE, state: {}, activateTab: () => {} });
+  win.CairnTodayFuelGlance.mountToday(view, { date: DATE });
   assert.ok(view.querySelector("#todayFuelSlot .tfuel-skel"), "the cold start holds the card's shape");
   await flush();
   assert.equal(view.querySelector("#todayFuelSlot"), null);

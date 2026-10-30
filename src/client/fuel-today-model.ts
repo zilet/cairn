@@ -1,7 +1,7 @@
 // @ts-check
 // Fuel — the model (docs/V2-PLAN.md wave 2, "fuel-today"). Pure shaping from the
 // server's reads (GET /api/nutrition/day, GET /api/nutrition/intake-band) to what
-// the Fuel surface prints: today so far, protein first, as numbers with units; the
+// Train › Intake's today card prints: today so far, protein first, as numbers with units; the
 // logged meals as meal-card models; and the day's state in words.
 //
 // The laws it holds (CLAUDE.md "Logged intake is evidence only when the day reads
@@ -45,6 +45,10 @@
   function rounded(value: unknown): number | null {
     const n = num(value);
     return n == null ? null : Math.round(n);
+  }
+
+  function positive(value: number | null): number | null {
+    return value != null && value > 0 ? value : null;
   }
 
   function active(status: unknown): boolean {
@@ -109,7 +113,8 @@
       pending: entries.filter((e) => active(e?.enrichment_status)).length,
       state: dayState(count, isToday),
       protein: { ...protein, anchor, toGo, aboutThere },
-      energy: macro(day, "kcal", count),
+      // Energy beside the day's own number — the same target the Today glance reads.
+      energy: { ...macro(day, "kcal", count), of: positive(rounded(record(day.target).kcal)) },
       carbs: macro(day, "carbs_g", count),
       fat: macro(day, "fat_g", count),
       fiber: macro(day, "fiber_g", count),

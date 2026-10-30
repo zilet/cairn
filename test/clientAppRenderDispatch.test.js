@@ -33,7 +33,7 @@ function loadRenderDispatch(options = {}) {
     headerTitle,
     renderChat: () => calls.push(["renderChat"]),
     renderCoach: () => calls.push(["renderCoach"]),
-    renderFoodJournal: () => calls.push(["renderFoodJournal"]),
+    renderIntake: () => calls.push(["renderIntake"]),
     renderHistory: () => calls.push(["renderHistory"]),
     ensureBundle: (name) => {
       calls.push(["ensureBundle", name]);
@@ -58,6 +58,7 @@ function loadRenderDispatch(options = {}) {
     state: {
       planJump: options.planJump || null,
       planSeg: options.planSeg || null,
+      progressSeg: options.progressSeg || null,
     },
     updateHeaderCondense: () => calls.push(["updateHeaderCondense"]),
     window: {},
@@ -94,7 +95,7 @@ test("render dispatcher routes plan jumps and clears one-shot planJump", async (
   const painted = env.context.renderTab("plan");
 
   assert.equal(env.context.state.planJump, null);
-  // Plan -> Meals opens Fuel with the meal-plan journal, the lazy meals bundle's.
+  // Plan -> Meals is the week menu, the lazy meals bundle's.
   assert.deepEqual(env.calls.at(-1), ["ensureBundle", "meals"]);
   await painted;
   assert.equal(env.calls.at(-1)[0], "renderMeals");
@@ -102,6 +103,19 @@ test("render dispatcher routes plan jumps and clears one-shot planJump", async (
   const warm = loadRenderDispatch({ planJump: "meals", warm: ["meals"] });
   warm.context.renderTab("plan");
   assert.equal(warm.calls.at(-1)[0], "renderMeals", "a warm bundle renders in the same turn");
+});
+
+test("Train › Intake, today's food, is the lazy fuel bundle's screen; other Train leaves stay Train's", async () => {
+  const env = loadRenderDispatch({ progressSeg: "intake" });
+  const painted = env.context.renderTab("progress");
+  assert.deepEqual(env.calls.at(-1), ["ensureBundle", "fuel"]);
+  await painted;
+  assert.equal(env.calls.at(-1)[0], "renderIntake");
+  assert.ok(!env.calls.some(([, name]) => name === "train"), "Intake never waits on the train bundle");
+
+  const program = loadRenderDispatch({ progressSeg: "program" });
+  await program.context.renderTab("progress");
+  assert.deepEqual(program.calls.slice(-2), [["ensureBundle", "train"], ["renderProgram"]]);
 });
 
 test("render dispatcher hides the rest bar off other tabs and restores it on session/today", () => {

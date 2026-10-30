@@ -105,10 +105,16 @@ function foodDetailDeps(): FoodDetailControllerDeps {
 async function openFoodDetail(note: unknown, fromTile?: Element | null): Promise<void> {
   return withBundle("fuel", () => CairnFoodDetailController.openFoodDetail(note, fromTile, foodDetailDeps()));
 }
-// Intake's "Log a meal" mounts the food composer. The composer is the lazy fuel bundle's and the
+// Energy's "Log a meal" mounts the food composer. The composer is the lazy fuel bundle's and the
 // shell reaches it, so Train never declares (or downloads) fuel just to offer the button.
 async function mountFuelLog(host: Element, onLogged: () => void): Promise<ClientFuelLogHandle> {
   return withBundle("fuel", () => CairnFuelLogController.mount(host, CairnFuelDeps.log(onLogged)));
+}
+// Today's food has ONE home: Train › Intake opens on today. Today's glance, the rail's fuel card
+// and chat's fuel card all land there (activateTab is a later bundle's, reached at call time).
+function openIntake(): void {
+  state.progressSeg = "intake";
+  activateTab("progress");
 }
 // The header's search entry: the You home, its search field focused. You owns the field and
 // the hint (a one-shot, in memory: CairnYouSearchFocus in you-screen.ts), so a cold You or a
@@ -188,11 +194,10 @@ function uiSegmentsDeps(): UiSegmentsDeps {
     renderCalendar: () => withLatestRender("train", () => renderCalendar()),
     renderHistory: () => withLatestRender("train", () => renderHistory()),
     renderProgram: () => withLatestRender("train", () => renderProgram()),
-    renderIntake: () => withLatestRender("train", () => renderIntake()),
+    renderIntake: () => withLatestRender("fuel", () => renderIntake()),
     renderEnergy: () => withLatestRender("train", () => renderEnergy()),
     renderPlanEditor: () => withLatestRender("train", () => renderPlanEditor()),
     renderPlanEndurance: () => withLatestRender("horizon", () => renderPlanEndurance()),
-    renderFoodJournal: () => withLatestRender("fuel", () => renderFoodJournal()),
     renderMeals: () => renderMeals(),
     renderCoach: () => withLatestRender("ask", () => renderCoach()),
   };
@@ -358,6 +363,7 @@ const CAIRN_UI_SHELL_GLOBALS = {
   wireHomeBack,
   openFoodDetail,
   mountFuelLog,
+  openIntake,
   segBar,
   wireSeg,
   aboutYouSegBar,

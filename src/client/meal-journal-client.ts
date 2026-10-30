@@ -4,7 +4,8 @@
 //   - the week menu (/app/today/menu): the current plan's days and meals with swap,
 //     recipe, log and reorder, the shopping list, planning preferences, the Hold/Undo on
 //     a meal decision, and the ask for a fresh week;
-//   - Fuel's history fold: every OTHER week (earlier, set aside, a draft not offered).
+//   - the week menu's "Earlier meal plans" fold: every OTHER week (earlier, set aside, a
+//     draft not offered).
 
 type MealJournalPeek = SwrPeek<import("../contracts/client-api.js").ClientMealPlan[]> | null;
 
@@ -41,9 +42,8 @@ type MealJournalPeek = SwrPeek<import("../contracts/client-api.js").ClientMealPl
     );
   }
 
-  // The week menu. `focus: "today"` (a tap on one of today's meals on Fuel's card)
-  // brings today's day into view on the first paint only; a revalidate never scrolls.
-  function paintMealMenu(token: number, slot: HTMLElement, peek: MealJournalPeek, focus: "today" | "week" = "week"): Promise<unknown> {
+  // The week menu.
+  function paintMealMenu(token: number, slot: HTMLElement, peek: MealJournalPeek): Promise<unknown> {
     let mealPrefs = String(
       peekCached<import("../contracts/client-api.js").ClientSettingsResponse>(MEALS_SETTINGS_KEY)?.data?.settings
         ?.meal_prefs || ""
@@ -63,14 +63,11 @@ type MealJournalPeek = SwrPeek<import("../contracts/client-api.js").ClientMealPl
       render: (plansRes) => {
         if (!slot.isConnected) return;
         paintMenuBody(slot, plansRes || [], mealPrefs);
-        if (focus !== "today" || slot.dataset.focused) return;
-        slot.dataset.focused = "1";
-        slot.querySelector(".mealday-today")?.scrollIntoView?.({ block: "start", behavior: reducedMotion() ? "auto" : "smooth" });
       },
     });
   }
 
-  // Fuel's history fold: the weeks that are not the current menu.
+  // The week menu's history fold: the weeks that are not the current menu.
   function paintMealHistory(token: number, slot: HTMLElement, peek: MealJournalPeek): Promise<unknown> {
     return paintSWR({
       key: MEALS_KEY,
@@ -154,12 +151,17 @@ type MealJournalPeek = SwrPeek<import("../contracts/client-api.js").ClientMealPl
   // The week menu's page frame (the route renders only once this bundle has landed, so
   // the frame and its copy ride here rather than in the eager Fuel screen).
   function menuPageHtml(): string {
+    // It opens from Train › Intake's "This week's menu" row, so it steps back there; the
+    // past weeks wait in a fold at its foot, painted on first open.
     return `<section class="mmenu-page" id="mealMenu">
-      <button class="home-back linkbtn linkbtn-plain" type="button" data-mmenu-back>‹ Fuel</button>
+      <button class="home-back linkbtn linkbtn-plain" type="button" data-mmenu-back>‹ Intake</button>
       <h1 class="sr-only">This week's menu</h1>
       <p class="mmenu-page-lede">Ideas from the team for the week, built around your training. Swap a meal, open its recipe, or log it when you eat it.</p>
       <div id="mealMenuSlot" class="mmenu-page-body">${skelLines(3)}</div>
-      <button class="linkbtn linkbtn-quiet mmenu-page-history" type="button" data-mmenu-history>Earlier meal plans are kept in Fuel</button>
+      <details class="mp-history fuel-history" id="fuelHistory">
+        <summary class="lbl">Earlier meal plans</summary>
+        <div id="fuelHistorySlot" class="fuel-history-body"></div>
+      </details>
     </section>`;
   }
 
