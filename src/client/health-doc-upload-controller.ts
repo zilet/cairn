@@ -629,8 +629,8 @@ function wireHealthDocUpload(deps: HealthDocUploadDeps): void {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-    } catch {
-      status.textContent = "Couldn’t upload that — check your connection.";
+    } catch (err) {
+      status.textContent = ["network", "timeout"].includes(String((err as { kind?: unknown } | null)?.kind)) ? "Couldn’t upload that — check your connection." : "Couldn’t add that — try again.";
       uploadBtn.disabled = false;
       return;
     }

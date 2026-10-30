@@ -26,7 +26,7 @@ import {
   updateHealthDocFields,
   updateImagingRecommendationStatus,
 } from "../domain/health/index.js";
-import { inferHealthDocumentKind, normalizeHealthDocumentKind } from "../healthDocumentKinds.js";
+import { normalizeHealthDocumentKind } from "../healthDocumentKinds.js";
 import { UPLOADS_DIR, safeUploadPath } from "../uploadPaths.js";
 import { extForMime, isAcceptedMime, isInlineMime } from "../uploadMime.js";
 import { streamEnrichRow } from "./enrich-stream.js";
@@ -371,15 +371,10 @@ healthDocsRouter.put("/:id/imaging-recommendations/:recommendationId/status", (r
 
 healthDocsRouter.post("/", (req, res, next) => {
   const b = req.body ?? {};
-  if (
-    normalizeHealthDocumentKind(b.kind) === "imaging" ||
-    inferHealthDocumentKind({
-      kind: b.kind,
-      original_name: b.original_name,
-      summary: b.text,
-      mime: b.mime,
-    }) === "imaging"
-  ) {
+  // Only an explicit imaging kind belongs on the imaging route. A pasted or uploaded
+  // report that merely MENTIONS a CT or radiology is an ordinary record: the health
+  // ingest lifts any report it finds into imaging_studies[] (replaceDerivedImagingStudies).
+  if (normalizeHealthDocumentKind(b.kind) === "imaging") {
     return res.status(400).json({ error: "use /health-docs/imaging for imaging studies" });
   }
   const pasted = (b.text ?? "").toString().trim();

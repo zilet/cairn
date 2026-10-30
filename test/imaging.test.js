@@ -7,7 +7,7 @@ import { db, repo, resetTables } from "./_seed.js";
 import { applyHealthIngest } from "../dist/enrich.js";
 import { buildImagingStudyPrompt } from "../dist/prompt.js";
 import { UPLOADS_DIR } from "../dist/uploadPaths.js";
-import { imagingBuffer, imagingMimeMatches, publicImagingDraftInput } from "../dist/routes/health-docs.js";
+import { healthDocsRouter, imagingBuffer, imagingMimeMatches, publicImagingDraftInput } from "../dist/routes/health-docs.js";
 
 beforeEach(() => resetTables("imaging_study_files", "health_documents", "health_directives"));
 
@@ -1091,4 +1091,34 @@ test("joint imaging prompt makes written report authoritative and forbids AI fol
   assert.match(prompt, /"relative_path":"uploads\/report\.pdf"/);
   assert.match(prompt, /unconfirmed/);
   assert.match(prompt, /Never emit a span without file_id/i);
+});
+
+// A pasted radiology report (a CT calcium score) is an ordinary record: the health
+// ingest lifts it into imaging_studies[]. Guessing "imaging" from the words and
+// answering 400 read on the Records screen as "check your connection".
+test("POST /health-docs keeps a pasted radiology report as a record; only an explicit imaging kind is redirected", async () => {
+  repo.setSettings({ enrich_enabled: false });
+  const handler = healthDocsRouter.stack.find((l) => l.route?.path === "/" && l.route.methods.post).route.stack.at(-1)
+    .handle;
+  const post = (body) =>
+    new Promise((resolve, reject) => {
+      const res = { statusCode: 200 };
+      res.status = (code) => ((res.statusCode = code), res);
+      res.json = (payload) => resolve({ status: res.statusCode, body: payload });
+      handler({ body }, res, reject);
+    });
+  const pasted = await post({
+    original_name: "Pasted results",
+    text: "CT CARDIAC CALCIUM SCORING\nRadiology report\nAgatston Score: 0\nCAC-DRS A0: CAC 0; very low risk",
+  });
+  assert.equal(pasted.status, 200);
+  assert.ok(pasted.body.id, "stored");
+  assert.equal(pasted.body.enrichment_status, "skipped");
+  try {
+    fs.rmSync(db.prepare("SELECT file_path FROM health_documents WHERE id = ?").get(pasted.body.id).file_path, {
+      force: true,
+    });
+  } catch {}
+  const explicit = await post({ kind: "imaging", original_name: "Scan", text: "CT scan" });
+  assert.equal(explicit.status, 400);
 });
