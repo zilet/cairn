@@ -83,7 +83,7 @@ test("an unknown macro is not drawn, and no target means the value alone", () =>
     host.querySelectorAll(".tfuel-v").map((el) => el.textContent),
     ["42 g"]
   );
-  assert.equal(host.querySelector(".tfuel-idea"), null, "no idea, no row");
+  assert.equal(!!host.querySelector(".tfuel-idea"), false, "no idea, no row");
   assert.equal(win.CairnTodayFuelGlance.model(null, IDEAS), null);
   assert.equal(win.CairnTodayFuelGlance.html(null), "");
 });
@@ -129,5 +129,5 @@ test("a day read that fails takes the glance off the page, so the rail keeps its
   win.CairnTodayFuelGlance.mountToday(view, { date: DATE });
   assert.ok(view.querySelector("#todayFuelSlot .tfuel-skel"), "the cold start holds the card's shape");
   await flush();
-  assert.equal(view.querySelector("#todayFuelSlot"), null);
+  assert.equal(!!view.querySelector("#todayFuelSlot"), false);
 });

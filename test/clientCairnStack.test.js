@@ -177,10 +177,10 @@ test("the stack never reads as a score, and hostile server text stays text", () 
   const bad = renderHtml(win.CairnStack.html(win.CairnStackModel.model(hostile, { hrefFor })), {
     document: win.document,
   });
-  assert.equal(bad.querySelector("b"), null);
-  assert.equal(bad.querySelector("img"), null);
-  assert.equal(bad.querySelector("script"), null);
-  assert.equal(bad.querySelector("i"), null);
+  assert.equal(!!bad.querySelector("b"), false);
+  assert.equal(!!bad.querySelector("img"), false);
+  assert.equal(!!bad.querySelector("script"), false);
+  assert.equal(!!bad.querySelector("i"), false);
   assert.equal(bad.querySelector(".cairn-stack-word").textContent, "<b>bold</b>");
 });
 
@@ -231,7 +231,7 @@ test("a cold mount shows the skeleton, then the server's stack; a failed cold re
   assert.ok(host.querySelector(".cairn-stack-skel"));
   gate.resolve(read());
   await flush();
-  assert.equal(host.querySelector(".cairn-stack-skel"), null);
+  assert.equal(!!host.querySelector(".cairn-stack-skel"), false);
   assert.equal(host.querySelectorAll(".cairn-stack-row").length, 6);
 
   const cold = createHost(win.document);
@@ -331,7 +331,7 @@ test("the detail paints its name and homes before the read, then the word and li
   assert.ok(host.querySelector(".stone-detail-ghost"), "a ghost where the word will land");
   gate.resolve(read());
   await flush();
-  assert.equal(host.querySelector(".stone-detail-ghost"), null);
+  assert.equal(!!host.querySelector(".stone-detail-ghost"), false);
   assert.equal(host.querySelector(".stone-detail-word").textContent, "worth noting");
   assert.equal(host.querySelector(".stone-detail-line").textContent, "One lab finding is worth a look.");
   const article = host.querySelector(".stone-detail");
@@ -349,8 +349,8 @@ test("a failed read keeps the name and homes and says nothing; reduced motion sk
     stone: "body",
   });
   await flush();
-  assert.equal(host.querySelector(".stone-detail-ghost"), null);
-  assert.equal(host.querySelector(".stone-detail-word"), null);
+  assert.equal(!!host.querySelector(".stone-detail-ghost"), false);
+  assert.equal(!!host.querySelector(".stone-detail-word"), false);
   assert.equal(host.querySelector(".stone-detail-h").textContent, "Body");
   assert.equal(host.querySelectorAll(".stone-detail-link").length, 3);
 
@@ -457,7 +457,7 @@ test("a stone route renders its detail; a home tap routes like a deep link and f
   const { win, tabs, state } = loadYou({ youSeg: "stone", youStone: "fuel" });
   win.renderYou();
   assert.equal(win.view.querySelector(".stone-detail-h").textContent, "Fuel");
-  assert.equal(win.view.querySelector(".cairn-stack"), null);
+  assert.equal(!!win.view.querySelector(".cairn-stack"), false);
   await fire(win.view.querySelector('[data-stone-detail-go="intake"]'), click());
   assert.deepEqual(state.applied, {
     tab: "progress",

@@ -149,10 +149,10 @@ type MealJournalPeek = SwrPeek<import("../contracts/client-api.js").ClientMealPl
   }
 
   // The week menu's page frame (the route renders only once this bundle has landed, so
-  // the frame and its copy ride here rather than in the eager Fuel screen).
+  // the frame and its copy ride here rather than in the eager screen).
   function menuPageHtml(): string {
-    // It opens from Train › Intake's "This week's menu" row, so it steps back there; the
-    // past weeks wait in a fold at its foot, painted on first open.
+    // The back link steps back to whoever opened the menu (renderMeals names it "‹ Back"
+    // then), else to Intake; the past weeks wait in a fold at its foot, painted on first open.
     return `<section class="mmenu-page" id="mealMenu">
       <button class="home-back linkbtn linkbtn-plain" type="button" data-mmenu-back>‹ Intake</button>
       <h1 class="sr-only">This week's menu</h1>

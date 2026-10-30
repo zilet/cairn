@@ -79,7 +79,6 @@ const ROUTES = [
     prepare: `new Promise((resolve) => { let n = 0; const tick = () => { const b = document.querySelector('.tstrip-day:not(.is-rest):not(.is-today):not(.is-past)'); if (b) { b.click(); setTimeout(() => { document.querySelector('#todayStripSlot')?.scrollIntoView(); resolve(true); }, 900); } else if (n++ < 60) setTimeout(tick, 100); else resolve(false); }; setTimeout(tick, 2500); })`,
   },
   { name: "today-session", path: "/app/today/session", tab: "session" },
-  { name: "today-fuel", path: "/app/today/fuel", tab: "progress" },
   { name: "today-menu", path: "/app/today/menu", tab: "plan" },
   { name: "ask", path: "/app/ask", tab: "chat" },
   {

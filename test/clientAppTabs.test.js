@@ -327,6 +327,21 @@ test("a keyboard-activated tab keeps the focus ring on the landed heading", asyn
   assert.deepEqual(plain(heading.focusCalls), [{ preventScroll: true, focusVisible: true }]);
 });
 
+test("Intake opened from Today never becomes the Train button's landing", async () => {
+  // openIntake (Today's glance, chat's fuel card) sets progressSeg = "intake"; the athlete
+  // goes back to Today, then taps Train: it opens Train's own default leaf.
+  const env = loadTabs({ progressSeg: "intake", currentTab: "progress" });
+  env.context.registerTabBarHandlers();
+  env.tabs[HOMES.indexOf("today")].click();
+  await flush();
+  assert.equal(env.context.state.progressSeg, "intake", "another home leaves Train's leaf alone");
+  env.tabs[HOMES.indexOf("train")].click();
+  await flush();
+  assert.equal(env.context.state.progressSeg, undefined);
+  assert.equal(env.context.state.tab, "progress");
+  assert.equal(env.context.defaultProgressSeg(), "week", "the default leaf, not Intake");
+});
+
 test("the tab-bar Horizon button always opens the timeline, before the Horizon bundle ever loads", async () => {
   // The reset lives in the eager shell: a goal-line visit from Train must not stick
   // even when the lazy horizon bundle (which renders the section) has not loaded.

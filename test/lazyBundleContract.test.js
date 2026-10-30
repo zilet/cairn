@@ -34,10 +34,6 @@ const REVIEWED = {
   // compressImage awaits ensureBundle("ask") first when CairnChatClient is absent (it rides
   // the lazy fuel bundle, which Ask depends on, so this is the one reach the other way).
   "chat-attachment-client.js": ["CairnChatClient"],
-  // The Fuel surface's mounts: mountFuelSurface / paintFoodJournal / loadFood… run only
-  // under renderFoodJournal, which the dispatcher and the segment deps reach through
-  // lazy("fuel") / withLatestRender("fuel"); nothing else calls them.
-  "06-coach-meals.js": ["CairnFuelDeps", "CairnFuelTodayController", "CairnFuelMealsController", "CairnFuelLogController", "CairnIdeaCardController", "CairnFuelToday"],
   // Read through Array.isArray((globalThis).ME_SEG) — absent reads as "no bar yet".
   "app-tabs.js": ["ME_SEG"],
 };

@@ -88,8 +88,8 @@ test("GET /train-home answers each view's reads, each exactly as its own route d
       `/training-agenda?date=${date}`, "/program-state", `/calibration/status?date=${date}`],
     // Horizon's goal line and Train › Intake ride the same fan-in.
     goal: ["/journey", "/journey/milestones", "/journey/timeline", `/today-path?date=${date}`],
-    fuel: [`/nutrition/day?date=${date}`, `/nutrition/intake-band?date=${date}`, `/fuel/ideas?date=${date}&hour=9`,
-      "/nutrition/progress?days=35"],
+    // Only what Intake's today card paints above the fold: no week read, no meal plans.
+    fuel: [`/nutrition/day?date=${date}`, `/nutrition/intake-band?date=${date}`, `/fuel/ideas?date=${date}&hour=9`],
   };
   for (const [view, paths] of Object.entries(expected)) {
     const { body, cc } = await get(`/api/train-home?view=${view}&date=${date}${view === "fuel" ? "&hour=9" : ""}`);

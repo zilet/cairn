@@ -108,6 +108,8 @@ const lazyBundles = {
 function lazyBundlesFor(route) {
   const planSeg = route.expectedState?.planSeg;
   if (route.tab === "stand" || route.tab === "me") return ["me-health", "body"];
+  // Train › Intake (today's food) is the fuel bundle's screen, never Train's.
+  if (route.tab === "progress" && route.expectedState?.progressSeg === "intake") return ["fuel"];
   if (route.tab === "progress") return ["train"];
   if (route.tab === "horizon") return ["horizon"];
   if (route.tab === "chat") return ["ask", "fuel"];
@@ -116,7 +118,6 @@ function lazyBundlesFor(route) {
   if (route.tab === "plan" && planSeg === "edit") return ["train"];
   if (route.tab === "plan" && planSeg === "endurance") return ["horizon"];
   if (route.tab === "plan" && planSeg === "coach") return ["ask", "fuel"];
-  if (route.tab === "plan" && planSeg === "food") return ["fuel"];
   if (route.tab === "plan" && planSeg === "meals") return ["meals"];
   return [];
 }

@@ -13,7 +13,15 @@ import { createHost, flush, loadClientModule } from "./_dom.mjs";
 const TODAY = "2026-04-25";
 const WEEKS = { window_days: 35, coverage: { pending_entry_ids: [] } };
 
-function load({ firstPaint = () => null, peekWeeks = WEEKS, module = "intake-screen" } = {}) {
+function load({
+  firstPaint = () => null,
+  peekWeeks = WEEKS,
+  module = "intake-screen",
+  apiAnswer = () => new Promise(() => {}),
+  historyStub = { state: null, length: 1, back: () => {} },
+} = {}) {
+  const apiCalls = [];
+  const watches = [];
   const mounts = {};
   const events = [];
   const fakeController = (name, extra = {}) => ({
@@ -58,14 +66,20 @@ function load({ firstPaint = () => null, peekWeeks = WEEKS, module = "intake-scr
     peekCached: (key) => (key === "progress:intake" && peekWeeks ? { data: peekWeeks, fresh: true } : null),
     cachedApi: (path, options) => {
       reads.push(options?.key || path);
+      events.push(`read:${options?.key || path}`);
       return new Promise(() => {});
     },
-    api: () => new Promise(() => {}),
+    api: (path) => {
+      apiCalls.push(path);
+      return apiAnswer(path);
+    },
+    history: historyStub,
     swrInvalidate: (key) => events.push(`invalidate:${key}`),
     swrSet: () => {},
     markRefreshing: () => {},
-    pollEnrichment: () => new Promise(() => {}),
-    enrichmentActive: () => false,
+    pollEnrichment: (path, id, opts) =>
+      new Promise((resolve) => watches.push({ path, id, opts, settle: (row) => resolve(row) })),
+    enrichmentActive: (status) => status === "pending" || status === "in_progress",
     paintSWR: async () => undefined,
     MEALS_KEY: "meals:plans",
     withBundle: (name, fn) => {
@@ -110,7 +124,7 @@ function load({ firstPaint = () => null, peekWeeks = WEEKS, module = "intake-scr
   const view = createHost(win.document);
   win.view = view;
   globals.view = view;
-  return { win, view, mounts, events, state, tabs, bundles, journal, weeks, reads };
+  return { win, view, mounts, events, state, tabs, bundles, journal, weeks, reads, apiCalls, watches };
 }
 
 // Every slot's id in document order: the order the screen reads in.
@@ -126,10 +140,10 @@ test("Intake opens on today: the day so far, the meals, one idea, the composer �
   assert.ok(view.querySelector('.seg[data-active="intake"]'), "it wears Train's group bar, Intake lit");
   const ids = order(view).filter((id) => ["dayFuelSlot", "fuelMealsSlot", "fuelIdeasSlot", "fuelLogSlot", "intakeProgress", "deeper"].includes(id));
   assert.deepEqual(ids, ["dayFuelSlot", "fuelMealsSlot", "fuelIdeasSlot", "fuelLogSlot", "intakeProgress", "deeper"]);
-  assert.equal(mounts.today.host, view.querySelector("#dayFuelSlot"));
-  assert.equal(mounts.meals.host, view.querySelector("#fuelMealsSlot"));
-  assert.equal(mounts.ideas.host, view.querySelector("#fuelIdeasSlot"));
-  assert.equal(mounts.log.host, view.querySelector("#fuelLogSlot"));
+  assert.ok(mounts.today.host === view.querySelector("#dayFuelSlot"), "mounted into #dayFuelSlot");
+  assert.ok(mounts.meals.host === view.querySelector("#fuelMealsSlot"), "mounted into #fuelMealsSlot");
+  assert.ok(mounts.ideas.host === view.querySelector("#fuelIdeasSlot"), "mounted into #fuelIdeasSlot");
+  assert.ok(mounts.log.host === view.querySelector("#fuelLogSlot"), "mounted into #fuelLogSlot");
   // Today is today: every component reads the device's own date.
   for (const name of ["today", "meals", "ideas"]) assert.equal(mounts[name].deps.date, TODAY, name);
   assert.match(view.querySelector("[data-train-deeper-slot]").textContent, /Energy balance · This week's menu/);
@@ -137,12 +151,54 @@ test("Intake opens on today: the day so far, the meals, one idea, the composer �
   assert.equal(view.querySelectorAll("[data-intake-log-btn], [data-home-back], .food-journal").length, 0);
 });
 
-test("the days before today paint under today's card from the week read", () => {
-  const { win, view, weeks, reads } = load();
+test("the days before today paint under today's card from their own read, asked after the card mounts", () => {
+  const { win, view, weeks, reads, events } = load();
   win.renderIntake();
   assert.equal(weeks.length, 1, "a warm peek paints at once");
   assert.match(view.querySelector("#intakeProgress").textContent, /Before today · 35 days/);
   assert.ok(reads.includes("progress:intake"), "and revalidates through its own key");
+  const mounted = events.indexOf("wireSeg");
+  assert.ok(events.indexOf("read:progress:intake") > mounted, "the weeks read comes after the frame and today's mounts");
+});
+
+test("a pending entry in the weeks is followed until it settles, then the weeks are read once more", async () => {
+  const pending = { ...WEEKS, coverage: { pending_entry_ids: [41] } };
+  const fresh = { ...WEEKS, window_days: 36, coverage: { pending_entry_ids: [] } };
+  const { win, view, watches, apiCalls, weeks } = load({ peekWeeks: pending, apiAnswer: () => Promise.resolve(fresh) });
+  win.renderIntake();
+  assert.equal(watches.length, 1, "the pending entry is watched");
+  assert.equal(watches[0].id, 41);
+  assert.equal(watches[0].opts.tab, "progress");
+  // Still estimating: nothing re-read yet.
+  watches[0].opts.onUpdate({ enrichment_status: "in_progress" });
+  assert.deepEqual(apiCalls, []);
+  // It settles: one re-read, painted in place.
+  watches[0].opts.onUpdate({ enrichment_status: "done" });
+  watches[0].settle({ enrichment_status: "done" });
+  await flush();
+  assert.deepEqual(apiCalls, ["/nutrition/progress?days=35"], "read once, never twice");
+  assert.equal(weeks.at(-1).window_days, 36);
+  assert.match(view.querySelector("#intakeProgress").textContent, /36 days/);
+});
+
+test("a failed refresh never wipes weeks already on screen", async () => {
+  const { win, view, mounts, weeks } = load();
+  win.cachedApi = () => Promise.reject(new Error("offline"));
+  win.renderIntake();
+  await flush();
+  assert.equal(weeks.length, 1, "painted from the warm peek");
+  mounts.meals.deps.onChanged();
+  await flush();
+  assert.match(view.querySelector("#intakeProgress").textContent, /Before today/, "the weeks stay");
+  assert.doesNotMatch(view.querySelector("#intakeProgress").textContent, /unavailable/);
+});
+
+test("a cold weeks read that fails says so calmly", async () => {
+  const { win, view } = load({ peekWeeks: null });
+  win.cachedApi = () => Promise.reject(new Error("offline"));
+  win.renderIntake();
+  await flush();
+  assert.match(view.querySelector("#intakeProgress").textContent, /unavailable/);
 });
 
 test("a cold week read holds a calm loading line, never a zero", () => {
@@ -192,11 +248,11 @@ test("a cold open holds the day card's skeleton and writes the surface once the 
   const painted = win.renderIntake();
   assert.ok(view.querySelector(".fuel-today-skel"));
   assert.equal(view.querySelectorAll("#dayFuelSlot").length, 0);
-  assert.equal(mounts.today, undefined);
+  assert.ok(!mounts.today, "nothing mounted yet");
   assert.deepEqual(asked, [TODAY]);
   answer();
   await painted;
-  assert.equal(mounts.today.host, view.querySelector("#dayFuelSlot"));
+  assert.ok(mounts.today.host === view.querySelector("#dayFuelSlot"), "mounted into #dayFuelSlot");
   assert.equal(view.querySelectorAll(".fuel-today-skel").length, 0);
 });
 
@@ -207,7 +263,7 @@ test("a cold open whose person has left writes nothing when the reads answer", a
   state.tab = "today";
   answer();
   await painted;
-  assert.equal(mounts.today, undefined);
+  assert.ok(!mounts.today, "nothing mounted yet");
   assert.equal(view.querySelectorAll("#dayFuelSlot").length, 0);
 });
 
@@ -221,6 +277,18 @@ test("a second visit tears the previous mounts down first", async () => {
 });
 
 // ---------- the week menu (coach-meals-screen.ts) ----------
+
+test("opened in-app, the week menu's back link steps back to whoever opened it", async () => {
+  let backs = 0;
+  const historyStub = { state: { cairn: true, back: 1 }, length: 3, back: () => backs++ };
+  const { win, view, tabs } = load({ module: "06-coach-meals", historyStub });
+  await win.renderMeals();
+  const back = view.querySelector("[data-mmenu-back]");
+  assert.equal(back.textContent, "‹ Back");
+  back.click();
+  assert.equal(backs, 1, "in-app history steps back to the opener (Today, the coaching focus, Energy, Intake)");
+  assert.deepEqual(tabs, []);
+});
 
 test("Plan → Meals is the week menu: its own page that steps back to Intake", async () => {
   const { win, view, state, bundles, journal, tabs } = load({ module: "06-coach-meals" });
@@ -249,7 +317,7 @@ test("the week menu keeps the past weeks in its own fold, painted on first open"
   await flush();
   assert.equal(fold.dataset.painted, "1");
   assert.equal(journal.at(-1).kind, "history");
-  assert.equal(journal.at(-1).slot, view.querySelector("#fuelHistorySlot"));
+  assert.ok(journal.at(-1).slot === view.querySelector("#fuelHistorySlot"), "painted into #fuelHistorySlot");
 });
 
 test("a meal-plan action on the week menu repaints it in place, never navigates", async () => {

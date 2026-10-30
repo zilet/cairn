@@ -24,16 +24,23 @@ function intakeCurrent(token: number): boolean {
   return token === pollToken && state.tab === "progress" && state.progressSeg === "intake";
 }
 
-/** The weeks: painted from a warm peek at once, then the network answer when it changed. */
+/**
+ * The weeks: their own read, asked after today's card has painted (never part of its
+ * first-paint wait), painted from a warm peek at once, then the network answer when it
+ * changed. A failed read says so only while nothing is painted: weeks already on screen
+ * stay when a later refresh fails.
+ */
 function loadIntakeWeeks(token: number): { refresh(): void } {
   const path = CairnFuelDeps.PROGRESS_PATH;
   const key = CairnFuelDeps.PROGRESS_KEY;
   const mount = (): Element | null => view.querySelector("#intakeProgress");
+  let painted = false;
   const paint = (data: unknown): void => {
     const host = mount();
     if (!intakeCurrent(token) || !host || !data || typeof data !== "object") return;
     const weeks = data as IntakeWeeks;
     CairnProgressIntake.render(host, weeks);
+    painted = true;
     watchIntakePending(token, weeks, paint);
   };
   const read = (peek: { fresh: boolean } | null): void => {
@@ -46,7 +53,7 @@ function loadIntakeWeeks(token: number): { refresh(): void } {
     }).catch(() => {
       if (peek && !peek.fresh) markRefreshing(false);
       const host = mount();
-      if (!peek && host && intakeCurrent(token)) host.innerHTML = CairnProgressIntake.unavailableHtml();
+      if (!painted && host && intakeCurrent(token)) host.innerHTML = CairnProgressIntake.unavailableHtml();
     });
   };
   const peek = peekCached<IntakeWeeks>(key);
@@ -79,7 +86,7 @@ function watchIntakePending(token: number, weeks: IntakeWeeks, paint: (data: unk
       settled = true;
       swrInvalidate(CairnFuelDeps.PROGRESS_KEY);
       if (!intakeCurrent(token)) return;
-      api("/nutrition/progress?days=35")
+      api(CairnFuelDeps.PROGRESS_PATH)
         .then((fresh) => {
           if (!intakeCurrent(token)) return;
           swrSet(CairnFuelDeps.PROGRESS_KEY, fresh);
@@ -101,7 +108,7 @@ function watchIntakePending(token: number, weeks: IntakeWeeks, paint: (data: unk
 }
 
 /** Today's slots: the day so far, the meals, one idea, the composer. */
-function mountIntakeToday(token: number, today: string, weeks: { refresh(): void }): void {
+function mountIntakeToday(token: number, today: string, refreshWeeks: () => void): void {
   for (const teardown of intakeTeardowns) teardown();
   intakeTeardowns = [];
   const slot = (id: string): Element | null => view.querySelector(`#${id}`);
@@ -113,7 +120,7 @@ function mountIntakeToday(token: number, today: string, weeks: { refresh(): void
     swrInvalidate("progress:energy");
     void fuelToday?.refresh();
     void ideas?.refresh();
-    weeks.refresh();
+    refreshWeeks();
   };
   const mealsSlot = slot("fuelMealsSlot");
   const meals = mealsSlot ? CairnFuelMealsController.mount(mealsSlot, deps.meals(today, today, token, afterChange)) : null;
@@ -144,8 +151,10 @@ function paintIntake(token: number, today: string): void {
       <div data-train-deeper-slot></div>
     </div>`;
   wireSeg(PROGRESS_HANDLERS);
-  const weeks = loadIntakeWeeks(token);
-  mountIntakeToday(token, today, weeks);
+  let weeks: { refresh(): void } | null = null;
+  mountIntakeToday(token, today, () => weeks?.refresh());
+  // The days before today ask for themselves once today's card is up.
+  weeks = loadIntakeWeeks(token);
 }
 
 function renderIntake(): Promise<unknown> {

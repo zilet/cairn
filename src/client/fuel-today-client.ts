@@ -11,8 +11,8 @@
   // ---------- the big-day fuel line ----------
   // A flat target lands the same on a long-run day and a rest day. When the server's
   // read (repo/fuel-demand.ts) says today carries the week's bigger work, the card
-  // says ONE quiet sentence about shape. BIG DAYS ONLY, TODAY ONLY (the model drops
-  // the read on a past day), and the number never moves. Rotates per date.
+  // says ONE quiet sentence about shape. BIG DAYS ONLY, and only the day read itself (the model drops
+  // a read dated another day), and the number never moves. Rotates per date.
   const DEMAND_LONG_RUN = [
     "Today carries the long run — carbs earn their place around it. The target itself stays where it is.",
     "The long run is today's big piece; carb-forward around it tends to sit well. Same target, different shape.",
@@ -55,7 +55,7 @@
 
   function demandHtml(m: Model): string {
     const demand = m.demand;
-    if (!m.isToday || !demand || demand.demand !== "big") return "";
+    if (!demand || demand.demand !== "big") return "";
     const date = String(demand.date || m.date);
     if (date !== m.date) return "";
     const drivers = Array.isArray(demand.drivers) ? demand.drivers.map(String) : [];
@@ -72,7 +72,7 @@
   };
 
   function carbsHtml(m: Model): string {
-    const carbs = m.isToday ? m.demand?.carbs : null;
+    const carbs = m.demand?.carbs;
     if (!carbs) return "";
     const low = Math.round(Number(carbs.grams?.low));
     const high = Math.round(Number(carbs.grams?.high));
@@ -134,15 +134,10 @@
   }
 
   function headHtml(m: Model): string {
-    const title = m.isToday ? "Today · so far" : "That day's food";
-    return `<div class="fuel-today-head"><h2 class="lbl fuel-today-title" id="fuelTodayTitle">${title}</h2>${stateHtml(m)}</div>`;
+    return `<div class="fuel-today-head"><h2 class="lbl fuel-today-title" id="fuelTodayTitle">Today · so far</h2>${stateHtml(m)}</div>`;
   }
 
-  function emptyLine(m: Model): string {
-    return m.isToday
-      ? "Nothing logged yet today. Log a meal and it lands here, with the numbers worked out for you."
-      : "Nothing was logged that day.";
-  }
+  const EMPTY_LINE = "Nothing logged yet today. Log a meal and it lands here, with the numbers worked out for you.";
 
   /**
    * The whole card. Protein then energy as slim meters (logged / the day's number),
@@ -154,7 +149,7 @@
     if (!m.count) {
       return `<section class="fuel-today reveal" style="--i:0" aria-labelledby="fuelTodayTitle">
         ${headHtml(m)}
-        <p class="fuel-today-empty">${escHtml(emptyLine(m))}</p>
+        <p class="fuel-today-empty">${escHtml(EMPTY_LINE)}</p>
         ${demandHtml(m)}${carbsHtml(m)}
       </section>`;
     }

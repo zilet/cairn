@@ -85,9 +85,23 @@ type IntakeNutrient = import("../contracts/client.js").ClientNutritionProgressNu
     return `<div class="empty">The intake read isn't available right now. Your recorded food is still safe.</div>`;
   }
 
+  // The device's today: Intake's card above already shows it, so the bars stop the day before.
+  function deviceToday(progress: IntakeProgress): string {
+    const local = (globalThis as { localISO?: () => string }).localISO;
+    return typeof local === "function" ? local() : progress.through;
+  }
+
+  /** The read's days before today, oldest first: today is the card's, never a second bar. */
+  function closedSeries(progress: IntakeProgress): IntakeProgress["series"] {
+    const today = deviceToday(progress);
+    return (Array.isArray(progress.series) ? progress.series : []).filter((day) => day.date < today);
+  }
+
   function intakeChartHtml(progress: IntakeProgress, selected: IntakeNutrient): string {
     const summary = progress.nutrients.find((item) => item.nutrient === selected);
-    const points = progress.series
+    const series = closedSeries(progress);
+    const through = series.length ? series[series.length - 1].date : progress.through;
+    const points = series
       .map((day) => day.nutrients[selected])
       .filter((value): value is number => value != null && Number.isFinite(Number(value)));
     const targetFor = (day: IntakeProgress["series"][number]): number | null => {
@@ -95,9 +109,9 @@ type IntakeNutrient = import("../contracts/client.js").ClientNutritionProgressNu
       const value = day.target?.[selected as "kcal" | "protein_g" | "carbs_g" | "fat_g"];
       return value != null && Number.isFinite(Number(value)) ? Number(value) : null;
     };
-    const targets = progress.series.map(targetFor).filter((value): value is number => value != null);
+    const targets = series.map(targetFor).filter((value): value is number => value != null);
     const ceiling = Math.max(1, ...points.map(Number), ...targets);
-    const bars = progress.series
+    const bars = series
       .map((day) => {
         const value = day.nutrients[selected];
         const known = value != null && Number.isFinite(Number(value));
@@ -129,7 +143,7 @@ type IntakeNutrient = import("../contracts/client.js").ClientNutritionProgressNu
       <div class="nprog-chart" role="group" aria-label="${escAttr(`${SHORT[selected]} by day; gaps are unlogged or unknown, never zero`)}">
         <div class="nprog-bars">${bars}</div>
       </div>
-      <div class="nprog-axis"><span>${escHtml(intakeDate(progress.since))}</span><span>visible gaps = unknown</span><span>${escHtml(intakeDate(progress.through))}</span></div>
+      <div class="nprog-axis"><span>${escHtml(intakeDate(progress.since))}</span><span>visible gaps = unknown</span><span>${escHtml(intakeDate(through))}</span></div>
     </section>`;
   }
 

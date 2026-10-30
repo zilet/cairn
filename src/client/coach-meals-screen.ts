@@ -57,7 +57,8 @@ function repaintMealHistory(): Promise<unknown> {
 // Plan → Meals is the week menu (/app/today/menu; the v1 /app/plan/meals redirects
 // here): the current week's days and meals with swap, recipe and log, the shopping
 // list, the ask for a fresh week, and the past weeks in its "Earlier meal plans" fold.
-// It opens from Train › Intake's "This week's menu" row and steps back to Intake. The
+// It opens from Train › Intake's "This week's menu" row (and Today, the coaching focus,
+// Energy) and steps back to whoever opened it; a cold link steps back to Intake. The
 // planner itself is the lazy meals bundle's.
 function renderMeals(): Promise<unknown> {
   state.planSeg = "meals";
@@ -71,7 +72,12 @@ function renderMeals(): Promise<unknown> {
     withBundle("meals", () => {
       if (token !== pollToken) return;
       view.innerHTML = CairnMealJournal.menuPageHtml();
-      view.querySelector("[data-mmenu-back]")?.addEventListener("click", () => openIntake());
+      const opened = mealMenuOpenedInApp();
+      const back = view.querySelector<HTMLElement>("[data-mmenu-back]");
+      if (back) {
+        back.textContent = opened ? "‹ Back" : "‹ Intake";
+        back.addEventListener("click", () => (mealMenuOpenedInApp() ? history.back() : openIntake()));
+      }
       const fold = view.querySelector<HTMLDetailsElement>("#fuelHistory");
       fold?.addEventListener("toggle", () => {
         if (fold.open && !fold.dataset.painted) void paintMealHistory(token);
@@ -80,6 +86,17 @@ function renderMeals(): Promise<unknown> {
       return slot && CairnMealJournal.paintMenu(token, slot, peekCached<CoachMealPlan[]>(MEALS_KEY));
     })
   );
+}
+
+// The menu's own history entry carries `back: 1` when an in-app tap pushed it
+// (route-sync.ts); a cold link or a reload of one never does.
+function mealMenuOpenedInApp(): boolean {
+  try {
+    const entry = (typeof history !== "undefined" ? history.state : null) as { cairn?: boolean; back?: number } | null;
+    return !!entry && entry.cairn === true && entry.back === 1 && history.length > 1;
+  } catch {
+    return false;
+  }
 }
 
 function paintMealMenu(token: number): Promise<unknown> {

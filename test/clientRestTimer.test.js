@@ -179,7 +179,7 @@ function attachRenderDispatch(env) {
     "renderToday",
     "renderSession",
     "renderChat",
-    "renderFoodJournal",
+    "renderIntake",
     "renderMeals",
     "renderCoach",
     "renderPlanEndurance",

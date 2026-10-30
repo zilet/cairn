@@ -5,7 +5,7 @@
 // when the athlete leaves the screen. wireIntakeLog / refreshAfterLog stay globals for
 // renderEnergy. Intake itself holds the composer in its today card (intake-screen.ts).
 
-// After a meal is logged from the Intake/Energy composer: re-read that surface and repaint it if still on screen.
+// After a meal is logged from Energy's composer: re-read that surface and repaint it if still on screen.
 const refreshAfterLog = (token: number, path: string, seg: string, key: string, paint: (data: unknown) => void) => () =>
   api(path)
     .then((fresh) => {

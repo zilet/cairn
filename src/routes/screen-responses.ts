@@ -1,4 +1,4 @@
-// The Train (with Horizon's goal line and Today's Fuel) and You -> Health screen
+// The Train (with Horizon's goal line and Intake's today card) and You -> Health screen
 // fan-ins: the bodies other GET routes answer,
 // computed in ONE request and keyed by the exact path the PWA asks for them with —
 // the same contract as the Today and Horizon-race fan-ins (routes/today-responses.ts):
@@ -55,7 +55,6 @@ import { getBodyMetricsSummary, normalizeUnit } from "../repo/body-metrics.js";
 import { todayPath } from "../repo/today-path.js";
 import { intakeBand } from "../repo/intake-band.js";
 import { fuelIdeas } from "../repo/fuel-ideas.js";
-import { nutritionProgress } from "../domain/nutrition/index.js";
 import { buildClinicalReportData, clinicalReportJson, parseReportSections } from "../report.js";
 import { directivesResponse } from "./connected-brain.js";
 import { nutritionDayResponse } from "./nutrition.js";
@@ -100,8 +99,8 @@ function screenHour(hourQuery: unknown): number | null {
  * out of Train's reads ride the same fan-in: `goal` (Horizon -> Goal line: the journey
  * story, its milestones, the road-ahead timeline — the cards Train's overview used to
  * fold away — and the All-goals board's today-path read) and `fuel` (Train -> Intake's
- * first paint: today's day, the intake band, the ideas for `hour`, and the weeks'
- * recorded-intake read under them). Dated reads key on `date` exactly as the screen
+ * first paint: today's day, the intake band and the ideas for `hour` — only what the
+ * card above the fold paints; the weeks under it ask for themselves). Dated reads key on `date` exactly as the screen
  * spells them.
  */
 export function trainHomeResponses(viewQuery: unknown, dateQuery: unknown, hourQuery?: unknown): ScreenResponses {
@@ -122,7 +121,6 @@ export function trainHomeResponses(viewQuery: unknown, dateQuery: unknown, hourQ
     put(out, `/fuel/ideas?date=${q(date)}${hour == null ? "" : `&hour=${hour}`}`, () =>
       fuelIdeas(date, { hour: hour ?? undefined, exclude: [] })
     );
-    put(out, "/nutrition/progress?days=35", () => nutritionProgress(35));
     return out;
   }
   if (view !== "endurance") put(out, "/coaching-focus", () => getCoachingFocus());

@@ -131,17 +131,14 @@ test("an unknown sum prints no number, never a zero standing in for it", () => {
   assert.match(host.querySelector(".fuel-today-pending").textContent, /One meal is still being estimated/);
 });
 
-test("nothing logged today is a calm invitation, and a past day carries no verdict", () => {
+test("nothing logged today is a calm invitation: no meter at zero", () => {
   const win = load();
   const empty = paint(win, day({ count: 0, entries: [], totals: {} }));
   assert.match(empty.querySelector(".fuel-today-empty").textContent, /Nothing logged yet today/);
   assert.equal(empty.querySelectorAll(".fuel-today-meters, .fuel-today-bar, .fuel-today-macros").length, 0, "no meter at zero");
   assert.doesNotMatch(empty.textContent, /\b0\b|no data/i);
-
-  const past = paint(win, day({ date: "2026-04-20" }), band());
-  assert.equal(past.querySelector(".fuel-today-title").textContent, "That day's food");
-  assert.equal(!!past.querySelector(".fuel-today-state"), false, "whether a past day read complete is the server's call");
-  assert.equal(!!past.querySelector(".fuel-today-togo"), false, "no 'to go' on a day already lived");
+  assert.equal(empty.querySelector(".fuel-today-title").textContent, "Today · so far");
+  assert.equal(!!empty.querySelector(".fuel-today-state"), false, "an empty day has no state word");
 });
 
 test("the observed band shows in the server's words only when there is one", () => {
@@ -199,17 +196,17 @@ test("a big day gets one quiet line that shapes the day and never moves the numb
   }
 });
 
-test("a lived day never carries the big-day or carb-range line", () => {
+test("a day-shape read dated another day never speaks on this one", () => {
   const win = load();
-  const past = "2026-04-24";
   const ranged = {
     ...BIG_LONG_RUN,
-    date: past,
+    date: "2026-04-24",
     carbs: { tier: "high", g_per_kg: { low: 3.8, high: 4.2 }, grams: { low: 275, high: 305 }, basis: "within_target" },
   };
-  const { demand, carbs } = lines(win, day({ date: past, fuel_demand: ranged }));
+  const { demand, carbs, model } = lines(win, day({ fuel_demand: ranged }));
   assert.equal(demand, "");
   assert.equal(carbs, "");
+  assert.equal(model.demand, null);
 });
 
 test("today's carb range is one calm line inside the target, never set against the log", () => {

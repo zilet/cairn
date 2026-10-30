@@ -6332,12 +6332,11 @@ declare global {
     markRefreshing?(on: boolean): void;
     skeleton?(): string;
   };
-  /** "in progress" (today, food logged), "nothing logged", or no word (a past day with food). */
-  type ClientFuelDayState = "in progress" | "nothing logged" | null;
+  /** "in progress" (food logged today) or "nothing logged". */
+  type ClientFuelDayState = "in progress" | "nothing logged";
   type ClientFuelMacro = { value: number | null; known: boolean };
   type ClientFuelTodayModel = {
     date: string;
-    isToday: boolean;
     count: number;
     pending: number;
     state: ClientFuelDayState;
@@ -6418,7 +6417,7 @@ declare global {
       MEAL_LABEL: Record<string, string>;
       mealLabel(meal: unknown): string;
       mealMeta(entry: Record<string, unknown>): string;
-      dayState(count: number, isToday: boolean): ClientFuelDayState;
+      dayState(count: number): ClientFuelDayState;
       todayModel(day: unknown, band: unknown, opts: { today: string }): ClientFuelTodayModel;
       entryNote(entry: unknown): ClientFuelMealNote;
       mealModel(entry: unknown): ClientFuelMeal | null;
@@ -6473,7 +6472,7 @@ declare global {
       log(onLogged: (logged: FoodComposerLogged) => void): ClientFuelLogDeps;
       ideas(date: string, onStart: ClientIdeaCardDeps["onStart"]): ClientIdeaCardDeps;
       /** Intake's week read: its path and SWR key. */
-      PROGRESS_PATH: string;
+      PROGRESS_PATH: "/nutrition/progress?days=35";
       PROGRESS_KEY: string;
       firstPaint(date: string): Promise<void> | null;
     };

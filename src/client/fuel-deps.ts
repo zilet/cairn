@@ -157,11 +157,11 @@
   }
 
   // Intake's week read (progress-intake-client.ts paints it): the closed days behind today.
-  const PROGRESS_PATH = "/nutrition/progress?days=35";
+  const PROGRESS_PATH = "/nutrition/progress?days=35" as const;
   const PROGRESS_KEY = "progress:intake";
 
-  // The reads behind Intake's slots, as [path, SWR key]: the day, the intake band, the
-  // ideas for this hour and the week read.
+  // The reads behind Intake's today card, as [path, SWR key]: the day, the intake band
+  // and the ideas for this hour. The weeks below the fold ask for themselves afterwards.
   function slotReads(date: string, h: number): Array<[string, string]> {
     const T = CairnFuelTodayController;
     const I = CairnIdeaCardController;
@@ -169,7 +169,6 @@
       [T.dayPath(date), T.dayKey(date)],
       [T.bandPath(date), T.bandKey(date)],
       [I.path(date, h), I.key(date)],
-      [PROGRESS_PATH, PROGRESS_KEY],
     ];
   }
 

@@ -59,22 +59,6 @@
         "css": 4096
       }
     },
-    "today-fuel": {
-      "cold": {
-        "api": 6,
-        "rounds": 2,
-        "cls": 0.005,
-        "js": 260096,
-        "css": 64512
-      },
-      "warm": {
-        "api": 5,
-        "rounds": 1,
-        "cls": 0.005,
-        "js": 4096,
-        "css": 4096
-      }
-    },
     "ask": {
       "cold": {
         "api": 6,
@@ -205,14 +189,14 @@
     },
     "train-intake": {
       "cold": {
-        "api": 5,
-        "rounds": 1,
+        "api": 6,
+        "rounds": 2,
         "cls": 0.005,
-        "js": 311296,
-        "css": 66560
+        "js": 260096,
+        "css": 64512
       },
       "warm": {
-        "api": 4,
+        "api": 5,
         "rounds": 1,
         "cls": 0.005,
         "js": 4096,

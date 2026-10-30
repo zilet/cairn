@@ -43,6 +43,16 @@ export function isUiViewKey(value: unknown): value is string {
 export type UiViewCountInput = { view: string; n: number };
 
 /**
+ * Keys a shell from before a route moved still sends, counted under the screen they
+ * open now: the old Fuel view (Plan → Food, Today's fuel) is Train › Intake. Accepted
+ * from a stale shell only; a current client never emits them.
+ */
+const LEGACY_UI_VIEW_KEYS: Readonly<Record<string, string>> = {
+  "plan/food": "train/intake",
+  "today/food": "train/intake",
+};
+
+/**
  * A batch is all-or-nothing: one unknown key or one out-of-range count rejects
  * the whole body. Unknown-but-shaped keys are rejected, not dropped.
  */
@@ -54,9 +64,10 @@ export function parseUiViewBatch(body: unknown): UiViewCountInput[] | null {
   for (const value of views) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const row = value as { view?: unknown; n?: unknown };
-    if (!isUiViewKey(row.view)) return null;
+    const view = typeof row.view === "string" ? (LEGACY_UI_VIEW_KEYS[row.view] ?? row.view) : row.view;
+    if (!isUiViewKey(view)) return null;
     if (typeof row.n !== "number" || !Number.isInteger(row.n) || row.n < 1 || row.n > MAX_N) return null;
-    parsed.push({ view: row.view, n: row.n });
+    parsed.push({ view, n: row.n });
   }
   return parsed;
 }

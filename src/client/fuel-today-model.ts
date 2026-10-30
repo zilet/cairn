@@ -6,11 +6,12 @@
 //
 // The laws it holds (CLAUDE.md "Logged intake is evidence only when the day reads
 // complete"; docs/VISION.md):
-//   - a day with food on it that is still today reads "in progress", never "low";
+//   - a day with food on it reads "in progress", never "low" (it is always today:
+//     another day's food is read on that day's own page);
 //   - an unknown sum prints no number (never a zero standing in for "not estimated");
 //   - the energy range is the athlete's OWN observed band, spoken by the server,
 //     and it is shown only when it exists — never a guessed target, never a score;
-//   - no verdict on a past day: "to go" and the day-shape lines are today only.
+//   - the day-shape lines speak only of the day read itself.
 // No DOM, no fetch, no `state`.
 {
   type Day = import("../contracts/client.js").ClientDayIntake;
@@ -73,12 +74,10 @@
 
   /**
    * The day in words. Today with food on it is "in progress" and nothing else — a
-   * partial day is absent, never "low". A past day with food gets no state word:
-   * whether it read complete is the server's call (classifyIntakeDay), not ours.
+   * partial day is absent, never "low".
    */
-  function dayState(count: number, isToday: boolean): ClientFuelDayState {
-    if (!count) return "nothing logged";
-    return isToday ? "in progress" : null;
+  function dayState(count: number): ClientFuelDayState {
+    return count ? "in progress" : "nothing logged";
   }
 
   function macro(day: Partial<Day>, key: (typeof NUTRIENTS)[number], count: number): ClientFuelMacro {
@@ -96,11 +95,12 @@
     const entries = Array.isArray(day.entries) ? day.entries : [];
     const count = Number(day.count) || entries.length;
     const date = String(day.date || opts.today);
-    const isToday = date === opts.today;
     const protein = macro(day, "protein_g", count);
     // Protein comes first: the anchor the band read carries, else the day's target.
     const anchor = rounded(band.protein_anchor?.protein_g) ?? rounded(record(day.target).protein_g);
-    const short = isToday && anchor != null && protein.value != null ? anchor - protein.value : null;
+    const short = anchor != null && protein.value != null ? anchor - protein.value : null;
+    // The day-shape read belongs to the day it was read for, never another one.
+    const demand = day.fuel_demand && String(day.fuel_demand.date || date) === date ? day.fuel_demand : null;
     const toGo = short != null && short > PROTEIN_ABOUT_THERE_G ? short : null;
     const aboutThere = short != null && short > 0 && short <= PROTEIN_ABOUT_THERE_G;
     // The band's own sentence, only when there is a band. With too few complete days
@@ -108,10 +108,9 @@
     const bandWords = band.status === "ok" && band.band && typeof band.words === "string" ? band.words : null;
     return {
       date,
-      isToday,
       count,
       pending: entries.filter((e) => active(e?.enrichment_status)).length,
-      state: dayState(count, isToday),
+      state: dayState(count),
       protein: { ...protein, anchor, toGo, aboutThere },
       // Energy beside the day's own number — the same target the Today glance reads.
       energy: { ...macro(day, "kcal", count), of: positive(rounded(record(day.target).kcal)) },
@@ -119,7 +118,7 @@
       fat: macro(day, "fat_g", count),
       fiber: macro(day, "fiber_g", count),
       bandWords,
-      demand: isToday ? (day.fuel_demand ?? null) : null,
+      demand,
     };
   }
 
