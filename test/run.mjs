@@ -39,6 +39,13 @@
 //
 // Selection: `--changed[=<ref>]` (npm run test:changed) runs only the files a change can
 // affect — see test/_select.mjs. `--list` prints the files it would run and exits.
+//
+// Sharding: `--shard=<i>/<n>` (or CAIRN_TEST_SHARD) runs the i-th of n disjoint slices of
+// the selection, so n machines can split one suite (scripts/verify-fleet.mjs). The slices
+// are balanced longest-first over the recorded durations — every shard reads the same
+// timings file, so all n compute the same partition and together cover every file exactly
+// once. A shard records its own timings beside the main file (`*.shard-<i>-of-<n>.json`);
+// whoever ran the shards merges them back (mergeShardTimings).
 import { execFile, execFileSync, spawn } from "node:child_process";
 import {
   existsSync,
@@ -81,6 +88,7 @@ let requestedWorkers = Number(process.env.CAIRN_TEST_WORKERS || process.env.TEST
 let reporter = process.env.CAIRN_TEST_REPORTER || "";
 let changedRef = null;
 let listOnly = false;
+let shardSpec = process.env.CAIRN_TEST_SHARD || "";
 
 for (const arg of args) {
   if (arg.startsWith("--workers=")) {
@@ -91,6 +99,8 @@ for (const arg of args) {
     changedRef = arg.includes("=") ? arg.slice("--changed=".length) : "";
   } else if (arg === "--list") {
     listOnly = true;
+  } else if (arg.startsWith("--shard=")) {
+    shardSpec = arg.slice("--shard=".length);
   } else {
     selectedFiles.push(path.resolve(root, arg));
   }
@@ -105,7 +115,22 @@ const relOf = (file) => path.relative(root, file).split(path.sep).join("/");
 // Explicit file args are a fast local focus path:
 //   node test/run.mjs test/dayRead.test.js
 let testFiles = selectedFiles.length ? selectedFiles : allTestFiles;
+const shard = parseShard(shardSpec);
+// A shard is a slice of a full run: it prints the full run's cost report, but its timings
+// go to a shard file for the caller to merge (writeTimings).
 const fullRun = !selectedFiles.length && changedRef === null;
+
+function parseShard(spec) {
+  if (!spec) return null;
+  const match = /^(\d+)\/(\d+)$/.exec(String(spec).trim());
+  const index = match ? Number(match[1]) : 0;
+  const count = match ? Number(match[2]) : 0;
+  if (!(count >= 1 && index >= 1 && index <= count)) {
+    console.error(`--shard must be <i>/<n> with 1 ≤ i ≤ n (got "${spec}")`);
+    process.exit(2);
+  }
+  return { index, count };
+}
 
 if (changedRef !== null) {
   const { changedFiles, selectTests } = await import("./_select.mjs");
@@ -129,11 +154,6 @@ if (changedRef !== null) {
   testFiles = pick.selected;
   if (!testFiles.length) process.exit(0);
 }
-if (listOnly) {
-  for (const file of testFiles) console.log(relOf(file));
-  process.exit(0);
-}
-
 // --- Duration-aware ordering -------------------------------------------------------------
 // Durations (and peak RSS) measured by the previous run, keyed by the path relative to the
 // repo. Kept in .tsbuildcache/ (ignored, beside the incremental tsc caches) so `npm ci`
@@ -157,6 +177,59 @@ function readTimings() {
 }
 
 const previous = readTimings();
+
+// No recorded time (a fresh clone, CI): estimate. Measured over this suite, a file's size
+// barely predicts its cost (r ≈ 0.1) but the child processes it starts do — the installer
+// tests spawn the POSIX installer dozens of times each — so count the calls that start one.
+// Crude, but in a replay of measured durations it schedules within ~1 s of perfect at 12
+// workers, and at 3–4 workers (CI) the dynamic queue alone is already near the ideal.
+const PROCESS_CALL = /\b(?:spawnSync|spawn|execFileSync|execFile|execSync|fork|run)\(/g;
+function estimateMs(file) {
+  const known = previous[relOf(file)]?.ms;
+  if (Number.isFinite(known) && known > 0) return known;
+  let source = "";
+  try {
+    source = readFileSync(file, "utf8");
+  } catch {}
+  return 200 + source.length / 512 + (source.match(PROCESS_CALL)?.length ?? 0) * 100;
+}
+function timeoutFor(file) {
+  if (FIXED_TIMEOUT_MS) return FIXED_TIMEOUT_MS;
+  const known = previous[relOf(file)]?.ms;
+  if (!(Number.isFinite(known) && known > 0)) return TIMEOUT_CEILING_MS;
+  return Math.min(TIMEOUT_CEILING_MS, Math.max(TIMEOUT_FLOOR_MS, 4 * known));
+}
+function shardTimingsFile(file, { index, count }) {
+  return file.replace(/\.json$/, "") + `.shard-${index}-of-${count}.json`;
+}
+
+// Longest-first into whichever shard is lightest so far: deterministic for a given file
+// list and timings file, so every shard derives the same partition.
+function shardSlice(files, { index, count }) {
+  const loads = Array(count).fill(0);
+  const picked = [];
+  const ordered = files
+    .map((file, order) => ({ file, order, ms: estimateMs(file) }))
+    .sort((a, b) => b.ms - a.ms || relOf(a.file).localeCompare(relOf(b.file)));
+  for (const item of ordered) {
+    let bin = 0;
+    for (let i = 1; i < count; i++) if (loads[i] < loads[bin]) bin = i;
+    loads[bin] += item.ms;
+    if (bin === index - 1) picked.push(item);
+  }
+  return picked.sort((a, b) => a.order - b.order).map((item) => item.file);
+}
+
+if (shard) {
+  const all = testFiles.length;
+  testFiles = shardSlice(testFiles, shard);
+  console.log(`shard ${shard.index}/${shard.count}: ${testFiles.length} of ${all} files`);
+  if (!testFiles.length) process.exit(0);
+}
+if (listOnly) {
+  for (const file of testFiles) console.log(relOf(file));
+  process.exit(0);
+}
 
 // --- Worker count: cores, then memory -----------------------------------------------------
 const cpuCount = typeof availableParallelism === "function" ? availableParallelism() : 4;
@@ -201,27 +274,6 @@ const workerWhy =
 reporter ||= "spec";
 const printEveryFile = workers === 1 || process.env.CAIRN_TEST_VERBOSE === "1";
 
-// No recorded time (a fresh clone, CI): estimate. Measured over this suite, a file's size
-// barely predicts its cost (r ≈ 0.1) but the child processes it starts do — the installer
-// tests spawn the POSIX installer dozens of times each — so count the calls that start one.
-// Crude, but in a replay of measured durations it schedules within ~1 s of perfect at 12
-// workers, and at 3–4 workers (CI) the dynamic queue alone is already near the ideal.
-const PROCESS_CALL = /\b(?:spawnSync|spawn|execFileSync|execFile|execSync|fork|run)\(/g;
-function estimateMs(file) {
-  const known = previous[relOf(file)]?.ms;
-  if (Number.isFinite(known) && known > 0) return known;
-  let source = "";
-  try {
-    source = readFileSync(file, "utf8");
-  } catch {}
-  return 200 + source.length / 512 + (source.match(PROCESS_CALL)?.length ?? 0) * 100;
-}
-function timeoutFor(file) {
-  if (FIXED_TIMEOUT_MS) return FIXED_TIMEOUT_MS;
-  const known = previous[relOf(file)]?.ms;
-  if (!(Number.isFinite(known) && known > 0)) return TIMEOUT_CEILING_MS;
-  return Math.min(TIMEOUT_CEILING_MS, Math.max(TIMEOUT_FLOOR_MS, 4 * known));
-}
 const queue = testFiles
   .map((file, index) => ({ file, index, estimate: estimateMs(file) }))
   .sort((a, b) => b.estimate - a.estimate || a.index - b.index);
@@ -234,11 +286,22 @@ const queue = testFiles
 // names, args and capabilities are untouched, and the offline `stub` stays as it is.
 // A test that needs its own agent table still sets AGENTS_CONFIG itself.
 const heapFlag = `--max-old-space-size=${HEAP_MB}`;
+// Per machine, in its temp dir (never beside the timings, which travel with a checkout to a
+// remote runner): measured ~7% off a warm run. CAIRN_TEST_COMPILE_CACHE=0 turns it off; a
+// path moves it.
+const COMPILE_CACHE = (() => {
+  const knob = process.env.CAIRN_TEST_COMPILE_CACHE;
+  if (knob === "0") return "";
+  return knob || path.join(tmpdir(), "cairn-test-compile-cache");
+})();
 function envFor(dir) {
   return {
     ...process.env,
     // Any node process a test starts inherits the heap cap too (a flag it passes itself wins).
     NODE_OPTIONS: [process.env.NODE_OPTIONS, heapFlag].filter(Boolean).join(" "),
+    // ~900 processes load the same dist/ modules: one V8 code cache, shared by every slot
+    // (Node keys it by file content and its own version, so a rebuilt module just misses).
+    ...(COMPILE_CACHE ? { NODE_COMPILE_CACHE: COMPILE_CACHE } : {}),
     // Each node process in the file appends its own maxRSS here at exit (test/_isolate.mjs).
     CAIRN_TEST_RSS_FILE: path.join(dir, "max-rss.txt"),
     // The lifeline: the file's group leader kills its own group if this runner dies, even by
@@ -523,8 +586,11 @@ async function runSlot(slot) {
 
 function writeTimings() {
   // Merge, so a focused run (explicit file args) refines a few entries without dropping the
-  // rest; a file that no longer exists falls out on the next full run.
-  const merged = fullRun ? {} : { ...previous };
+  // rest; a file that no longer exists falls out on the next full run. A shard writes only
+  // its own files, to its own file: n shards copied back to one checkout must not race on
+  // the main one, and the main one must stay what every shard partitioned by.
+  const merged = shard ? {} : fullRun ? {} : { ...previous };
+  const target = shard ? shardTimingsFile(timingsFile, shard) : timingsFile;
   for (const result of results) {
     // A killed file's numbers describe the kill, not the file.
     if (result.failure) continue;
@@ -532,9 +598,9 @@ function writeTimings() {
   }
   try {
     mkdirSync(path.dirname(timingsFile), { recursive: true });
-    const tmp = `${timingsFile}.${process.pid}.tmp`;
+    const tmp = `${target}.${process.pid}.tmp`;
     writeFileSync(tmp, `${JSON.stringify({ version: 2, files: merged })}\n`);
-    renameSync(tmp, timingsFile);
+    renameSync(tmp, target);
   } catch {
     // A read-only checkout just falls back to the static estimate next time.
   }

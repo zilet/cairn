@@ -668,7 +668,8 @@ from an older version.
 
 The dev loop's cost is the server `tsc` build, the per-file client transpile, the client
 typecheck, and the test suite — all incremental (`.tsbuildcache/*`) and parallel
-(`scripts/run-verify.mjs` runs independent gates in staged groups; `test/run.mjs` runs test
+(`scripts/run-verify.mjs` runs its gates as one dependency graph, each the moment its inputs are
+ready; `test/run.mjs` runs test
 files off one longest-first queue across worker processes, ordered by the previous run's
 per-file times in `.tsbuildcache/cairn-test-timings.json`). Alternatives were evaluated empirically so the
 question doesn't get re-litigated:
@@ -705,6 +706,7 @@ process, the leader of its own process group, inside budgets the runner enforces
 | `CAIRN_TEST_FILE_TIMEOUT_MS` | 4× the file's last time, 60–120 s (120 s unrecorded) | the group is killed, grandchildren too: "timed out after Ns" |
 | `CAIRN_TEST_WORKERS` | min(12, cores − 1), and at most available memory × 0.6 / `CAIRN_TEST_WORKER_MB` (default: 1.5× the heaviest recorded peak, 512 MB to the heap cap) | — the start line says which bound chose the count |
 | `CAIRN_TEST_WARN_MS` / `CAIRN_TEST_WARN_RSS_MB` | 5000 / 600 | listed "over budget" after a full run (a warning, not a failure) |
+| `CAIRN_TEST_COMPILE_CACHE` | `<tmpdir>/cairn-test-compile-cache` | — every file's process shares one V8 code cache (`NODE_COMPILE_CACHE`) for `dist/`; `0` turns it off |
 
 Every run records each file's duration and peak RSS in
 `.tsbuildcache/cairn-test-timings.json` (`CAIRN_TEST_TIMINGS` moves it), which orders the
@@ -730,6 +732,17 @@ loads (`src/db.ts`, `src/migrations/`), or to any file the graph cannot see at a
 or ignore file no test names by path); only a doc that nothing names selects nothing. `--list`
 prints the selection without running it. It is an inner loop: `npm test`, `npm run verify` and CI
 always run the full suite.
+
+`--shard=<i>/<n>` (or `CAIRN_TEST_SHARD`) runs the i-th of n disjoint slices of the selection,
+balanced longest-first over the recorded timings, so n machines can split one suite; a shard writes
+its timings to `*.shard-<i>-of-<n>.json` beside the main file. `npm run verify:split` does that end
+to end: `CAIRN_SPLIT_LAUNCH="<prefix>"` is a command prefix that runs a command on another machine
+and brings its exit code and written files back (a remote runner, an `ssh` wrapper). Shard 1 runs
+the whole verify, the others only its `tests` lane and the build it waits on
+(`CAIRN_VERIFY_ONLY=tests`). Each shard starts once the one before has printed output (at most
+`CAIRN_SPLIT_STAGGER_MS`, 15 s), so a load-based placer sees the first running before it places the
+next. The returned shard timings are merged back afterwards. `--shards=<n>` sets the count
+(default 2).
 
 A bare `node --test` bypasses all of it — the budgets, the per-test DB wipe, the offline agents
 table — so don't use it for more than one file at a time (see CLAUDE.md).
@@ -779,7 +792,8 @@ Every script under `scripts/`, one line each (from its own header comment):
 | `gen-prevent-coefficients.mjs` | One-off generator that reads the validated AHA PREVENT (2023) coefficient artifact (gitignored, external) and emits the typed `src/repo/prevent-coefficients.ts`; betas are never hand-transcribed. |
 | `install-agent-cli.mjs` | Installs or updates a pinned third-party coaching CLI (npm exact version, or a checksum-verified vendor script installer) — see `SECURITY.md`. |
 | `quickstart-rpi.sh` | Guided Cairn setup for a Raspberry Pi (arm64); strongly recommends a container engine over direct Node, since the Pi's host Node is usually too old. |
-| `run-verify.mjs` | Runs `npm run verify`'s independent gates (docs, actions, launch safety, and more) in parallel staged groups. |
+| `run-verify.mjs` | Runs `npm run verify`'s gates (docs, actions, lint, typechecks, the build, the post-build checks, the tests) as one dependency graph: each lane starts once the lanes it reads from pass, so the tests wait only on the build. `CAIRN_VERIFY_ONLY=<lane>` runs one lane and what it waits on. |
+| `verify-split.mjs` | `npm run verify:split`: verify with the test suite split across `--shards=<n>` machines through `CAIRN_SPLIT_LAUNCH`, timings merged back (see "Running tests"). |
 | `setup-phone.sh` | Puts Cairn on your phone privately in one step via Tailscale Serve, degrading gracefully to manual instructions if anything is missing. |
 | `smoke-browser.mjs` | Dependency-free browser smoke test for the generated PWA app shell via local Chrome + CDP; not part of `npm run verify` (it needs Chrome), so it runs as its own CI job and in `npm run release:check`. |
 | `smoke-server.mjs` | Shared helper module (server entrypoint, `withServer`, the offline agents table and the demo race seed) imported by `test/smoke.mjs`, `smoke-browser.mjs`, `capture-screens.mjs` and `check-perf.mjs`; not run directly. |

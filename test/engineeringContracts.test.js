@@ -1801,11 +1801,16 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.equal(pkg.scripts["smoke:browser:built"], "node scripts/smoke-browser.mjs");
   assert.equal(pkg.scripts["release:check"], "npm run verify && npm run smoke:built && npm run smoke:browser:built");
   assert.equal(pkg.scripts.verify, "node scripts/run-verify.mjs");
-  assert.match(verifyRunner, /npm",\s*"run",\s*"typecheck:client"/);
-  assert.match(verifyRunner, /node",\s*"scripts\/check-client-build-output\.mjs"/);
+  // verify runs typecheck:client's two halves as their own lanes, and the client build
+  // only through check-client-build-output, after the stylesheet check reads the commit.
+  assert.match(verifyRunner, /npm",\s*"run",\s*"tsc",\s*"--",\s*"-p",\s*"tsconfig\.client\.json"/);
+  assert.match(verifyRunner, /npm",\s*"run",\s*"client:check"/);
+  assert.match(
+    verifyRunner,
+    /name: "client build",\s*after: \["stylesheet partials"\],\s*steps: \[\["node", "scripts\/check-client-build-output\.mjs"\]\]/
+  );
   assert.match(verifyRunner, /npm",\s*"run",\s*"public:check"/);
-  assert.match(verifyRunner, /const buildJobs = \[/);
-  assert.match(verifyRunner, /const postBuildJobs = \[/);
+  assert.match(verifyRunner, /name: "tests", after: \["client build", "server build"\]/);
   assert.match(smokeHttp, /from "\.\.\/scripts\/smoke-server\.mjs"/);
   assert.match(smokeServer, /export async function startBuiltServer/);
   assert.match(smokeServer, /DATA_DIR: dir/);
@@ -1849,7 +1854,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(smokeBrowser, /resetFocusAfterNativePicker/);
   assert.match(smokeBrowser, /cairn:keyboard-settle/);
   assert.match(smokeBrowser, /kb-geometry-open/);
-  assert.match(verifyRunner, /await runGroup\("build", buildJobs\);\nawait runGroup\("post-build", postBuildJobs\);/);
+  // The post-build checks read the build's outputs, so each waits on it.
+  for (const lane of ["public scripts", "service worker cache", "bundle byte budget"]) {
+    assert.match(verifyRunner, new RegExp(`name: "${lane}", after: \\["client build"\\]`));
+  }
   assert.match(rootTsconfig, /"tsBuildInfoFile": "\.tsbuildcache\/server\.tsbuildinfo"/);
   // The server compile must exclude the client sources AND the ambient client-global
   // declaration files — with those included, a server module can reference a

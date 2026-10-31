@@ -63,6 +63,7 @@
     "perf:check": "node scripts/check-perf.mjs",
     "launch:check": "node scripts/check-launch-safety.mjs",
     "verify": "node scripts/run-verify.mjs",
+    "verify:split": "node scripts/verify-split.mjs",
     "verify:full": "npm run verify && npm run smoke:built",
     "release:check": "npm run verify && npm run smoke:built && npm run smoke:browser:built"
   },
