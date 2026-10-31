@@ -58,7 +58,7 @@ export function registerHealthRecordTools(server: McpToolRegistrar) {
 
   server.tool(
     "dedupe_health_records",
-    "Fold duplicate health records — the same lab draw filed more than once (same date, agreeing readings) — into one record per draw date. Without apply:true this only reports the plan; apply:true performs the fold (twin records are deleted).",
+    "Fold duplicate health records — the same lab draw filed more than once (same date, agreeing readings) into one record per draw date, and the same imaging study filed twice (same day, procedure and impression) into one study. Without apply:true this only reports the plan; apply:true performs the fold (twin records are deleted).",
     { apply: z.boolean().optional().describe("true to perform the fold; omitted = dry run") },
     async ({ apply }) => {
       const result = dedupeHealthDocuments({ dryRun: apply !== true });

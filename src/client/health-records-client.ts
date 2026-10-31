@@ -34,53 +34,56 @@ type HealthRecordDocument = import("../contracts/client-api.js").ClientHealthDoc
       : [];
   }
 
-  // A pasted/uploaded report whose only output is its imaging studies (the ingest marks it
-  // `imaging_only`) is that study's source, not a record of its own: one thing, one card.
-  // It folds into its study card, which carries its "view file"; a source with markers or
-  // facts, or whose studies are not on the list, keeps its own card.
-  function imagingOnlySource(doc: HealthRecordDocument): boolean {
-    const parsed = doc.parsed;
-    if (doc.kind === "imaging" || !parsed || parsed.imaging_only !== true) return false;
-    const markers = Array.isArray(parsed.markers) ? parsed.markers : [];
-    const facts = Array.isArray(parsed.clinical_facts) ? parsed.clinical_facts : [];
-    return !markers.length && !facts.length;
+  function isImagingStudyDoc(doc: HealthRecordDocument): boolean {
+    return doc.kind === "imaging" && typeof CairnImaging !== "undefined" && !!CairnImaging.imagingStudy(doc);
   }
 
+  function sourceHasOwnContent(doc: HealthRecordDocument): boolean {
+    const parsed = CairnHealthDocs.parsedDoc ? CairnHealthDocs.parsedDoc(doc) : null;
+    if (!parsed) return false;
+    const markers = Array.isArray(parsed.markers) ? parsed.markers : [];
+    const facts = Array.isArray(parsed.clinical_facts) ? parsed.clinical_facts : [];
+    return markers.length > 0 || facts.length > 0;
+  }
+
+  // An upload whose every derived record is an imaging study (a pasted CT
+  // report) is shown THROUGH that study: one scan, one card. An upload that
+  // also split out lab panels, or carries markers of its own, keeps its card.
+  function foldedSources(docs: HealthRecordDocument[]): Set<string> {
+    const children = new Map<string, HealthRecordDocument[]>();
+    for (const doc of docs) {
+      if (doc.source_doc_id == null) continue;
+      const key = String(doc.source_doc_id);
+      if (!children.has(key)) children.set(key, []);
+      children.get(key)!.push(doc);
+    }
+    const folded = new Set<string>();
+    for (const doc of docs) {
+      const key = String(doc.id);
+      const derived = children.get(key);
+      if (!derived?.length || isImagingStudyDoc(doc) || sourceHasOwnContent(doc)) continue;
+      if (derived.every(isImagingStudyDoc)) folded.add(key);
+    }
+    return folded;
+  }
+
+  // Every record on one timeline, newest first, in the server's order (the
+  // effective result date): an imaging study sits beside the labs of its week,
+  // never in a section after all of them.
   function recordsListHtml(docsInput: unknown): string {
     const docs = normalizeDocuments(docsInput);
     if (!docs.length) return recordsEmptyHtml();
-    const studies = docs.filter((doc) => doc.kind === "imaging");
-    const folded = new Map<string, HealthRecordDocument>();
-    for (const doc of docs) {
-      if (imagingOnlySource(doc) && studies.some((study) => String(study.source_doc_id ?? "") === String(doc.id))) {
-        folded.set(String(doc.id), doc);
-      }
-    }
-    const ordinary = docs.filter((doc) => doc.kind !== "imaging" && !folded.has(String(doc.id)));
-    const imaging = studies.map((study) => {
-      const source = folded.get(String(study.source_doc_id ?? ""));
-      return source?.has_file ? { ...study, source_file_id: source.id } : study;
-    });
-    const grouped = new Map<string, HealthRecordDocument[]>();
-    for (const doc of imaging) {
-      const study = CairnImaging.imagingStudy(doc);
-      // One study stays one card. Prefer study-level anatomy; when it is absent,
-      // the helper labels a genuinely multi-region/system study explicitly rather
-      // than misclassifying the whole card from findings[0].
-      const { system, region, laterality } = CairnImaging.imagingStudyGrouping(study);
-      const key = [system, region, laterality].filter(Boolean).join(" · ");
-      if (!grouped.has(key)) grouped.set(key, []);
-      grouped.get(key)!.push(doc);
-    }
-    const ordinaryHtml = ordinary.map((doc, index) => CairnHealthDocs.healthDocHtml(doc, index)).join("");
-    const imagingHtml = [...grouped]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(
-        ([key, group]) =>
-          `<section class="imaging-record-group"><h3>${escHtml(key.split(" · ").map(CairnImaging.imagingLabel).join(" · "))}</h3>${group.map((doc, index) => CairnHealthDocs.healthDocHtml(doc, index)).join("")}</section>`
-      )
+    const byId = new Map(docs.map((doc) => [String(doc.id), doc]));
+    const folded = foldedSources(docs);
+    const visible = docs.filter((doc) => !folded.has(String(doc.id)));
+    return visible
+      .map((doc, index) => {
+        if (!isImagingStudyDoc(doc) || doc.source_doc_id == null) return CairnHealthDocs.healthDocHtml(doc, index);
+        const key = String(doc.source_doc_id);
+        const source = byId.get(key) || null;
+        return CairnHealthDocs.healthDocHtml(doc, index, { source, sourceHidden: !!source && folded.has(key) });
+      })
       .join("");
-    return `${ordinaryHtml}${imagingHtml}`;
   }
 
   const CAIRN_HEALTH_RECORDS = {

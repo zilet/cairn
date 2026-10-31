@@ -1019,6 +1019,9 @@ to{opacity:1;transform:none}
 .hdoc:not(.hdoc-collapsed) .hdoc-teaser{display:none}
 .hdoc-collapsed .hdoc-detail,.hdoc-collapsed .hdoc-foot{display:none}
 .hdoc-collapsed .imaging-detail{display:none}
+.imaging-headline{margin:var(--space-3) 0 0;font-size:var(--text-md);line-height:var(--leading-normal);color:var(--ink)}
+.hdoc-flash{outline:2px solid var(--accent);outline-offset:2px;transition:outline-color var(--dur-2) var(--ease)}
+.hdoc-analyzing{color:var(--muted)}
 .hmarkers{width:100%;border-collapse:collapse;margin-top:var(--space-5);font-size:var(--text-sm)}
 .hmarkers td{padding:var(--space-3);border-top:1px solid var(--line);vertical-align:top}
 .hmarkers tr:first-child td{border-top:none}

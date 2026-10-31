@@ -32,6 +32,8 @@ type HealthDocRow = {
   has_file?: unknown;
   doc_date?: unknown;
   original_name?: unknown;
+  created_at?: unknown;
+  enrich_since?: unknown;
 };
 
 const HEALTH_DOC_KINDS: Array<readonly [string, string]> = [
@@ -106,6 +108,112 @@ function docCollapsible(doc: HealthDocRow | null | undefined): boolean {
   return doc?.enrichment_status === "done" && (markers.length > 0 || !!doc.summary);
 }
 
+// A read in progress says how long it has been going once it has been a while —
+// calm, in minutes, never a progress number. The clock is the server's own
+// `enrich_since` (when this read was asked for), else the upload's created_at;
+// a stamp more than half a day old is not this read's, so it says nothing.
+const ANALYZING_ELAPSED_AFTER_MS = 60_000;
+const ANALYZING_ELAPSED_MAX_MS = 12 * 60 * 60_000;
+const ANALYZING_LEAD = "Reading the document and splitting it by date...";
+
+function analyzingSinceMs(doc: { enrich_since?: unknown; created_at?: unknown } | null | undefined): number | null {
+  const raw = String(doc?.enrich_since || doc?.created_at || "").trim();
+  if (!raw) return null;
+  // SQLite's datetime('now') is UTC without a zone mark.
+  const iso = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(raw) ? `${raw.replace(" ", "T")}Z` : raw;
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function analyzingText(lead: string, sinceMs: number | null, now: number = Date.now()): string {
+  if (sinceMs == null) return lead;
+  const elapsed = now - sinceMs;
+  if (elapsed < ANALYZING_ELAPSED_AFTER_MS || elapsed > ANALYZING_ELAPSED_MAX_MS) return lead;
+  const minutes = Math.max(1, Math.round(elapsed / 60_000));
+  const hours = Math.round(minutes / 60);
+  const span = minutes < 60 ? `${minutes} min` : `about ${hours} hour${hours === 1 ? "" : "s"}`;
+  return `Still reading — ${span} so far. The coach is busy; it'll finish on its own.`;
+}
+
+function analyzingLineHtml(
+  doc: { enrich_since?: unknown; created_at?: unknown } | null | undefined,
+  lead: string = ANALYZING_LEAD,
+  now: number = Date.now()
+): string {
+  const since = analyzingSinceMs(doc);
+  return `<div class="sess-line hdoc-analyzing"${since != null ? ` data-enr-since="${escAttr(since)}"` : ""} data-enr-lead="${escAttr(lead)}">${escHtml(analyzingText(lead, since, now))}</div>`;
+}
+
+// One quiet clock for every visible "still reading" line; it stops itself once
+// none is left on the page.
+let analyzingClock: ReturnType<typeof setInterval> | null = null;
+
+function tickAnalyzingLines(now: number = Date.now()): number {
+  if (typeof document === "undefined") return 0;
+  const lines = Array.from(document.querySelectorAll<HTMLElement>("[data-enr-since]"));
+  for (const line of lines) {
+    const since = Number(line.dataset.enrSince);
+    line.textContent = analyzingText(
+      line.dataset.enrLead || ANALYZING_LEAD,
+      Number.isFinite(since) ? since : null,
+      now
+    );
+  }
+  return lines.length;
+}
+
+function startAnalyzingClock(): void {
+  if (analyzingClock != null || typeof document === "undefined") return;
+  analyzingClock = setInterval(() => {
+    if (tickAnalyzingLines() === 0 && analyzingClock != null) {
+      clearInterval(analyzingClock);
+      analyzingClock = null;
+    }
+  }, 30_000);
+}
+
+// The record an identical upload already matched: open it, bring it into view,
+// and mark it for a moment. A pasted report folded into its study's card is
+// found through that card (data-hsource). Returns whether it was on screen.
+function highlightHealthDoc(id: unknown): boolean {
+  if (typeof document === "undefined") return false;
+  const key = String(id);
+  const target = Array.from(document.querySelectorAll<HTMLElement>("#hlist .hdoc")).find(
+    (el) => el.dataset.hdoc === key || el.dataset.hsource === key
+  );
+  if (!target) return false;
+  target.classList.remove("hdoc-collapsed");
+  target.querySelector("[data-imaging-toggle]")?.setAttribute("aria-expanded", "true");
+  target.classList.add("hdoc-flash");
+  setTimeout(() => target.classList.remove("hdoc-flash"), 2400);
+  try {
+    target.scrollIntoView({ block: "start", behavior: "smooth" });
+  } catch {
+    target.scrollIntoView?.();
+  }
+  return true;
+}
+
+// The upload box's status line once an upload answered. An upload the server
+// matched to a record already on file wrote nothing: say so calmly and show that
+// record (true — the caller stops there). Otherwise the line clears (false).
+function settleUploadStatus(
+  doc: { duplicate_of?: unknown; reanalyzing?: unknown },
+  status: Element,
+  pollDoc: (id: string | number) => void
+): boolean {
+  if (doc.duplicate_of == null) {
+    status.textContent = "";
+    return false;
+  }
+  status.textContent = doc.reanalyzing
+    ? "That report is already on file. Its earlier read didn’t finish, so it’s being read again."
+    : "That report is already on file.";
+  highlightHealthDoc(doc.duplicate_of);
+  if (doc.reanalyzing) pollDoc(Number(doc.duplicate_of));
+  return true;
+}
+
 function healthDocInner(doc: HealthDocRow): string {
   const parsed = parsedDoc(doc);
   const status = doc.enrichment_status;
@@ -126,13 +234,14 @@ function healthDocInner(doc: HealthDocRow): string {
   if (status === "done") {
     if (doc.summary) detail += `<div class="sess-line" style="margin-top:7px">${escHtml(doc.summary)}</div>`;
     detail += markersTable(parsed);
-    if (parsed && parsed.type && !doc.summary) detail += `<div class="sess-line" style="color:var(--muted)">${escHtml(parsed.type)}</div>`;
+    if (parsed && parsed.type && !doc.summary)
+      detail += `<div class="sess-line" style="color:var(--muted)">${escHtml(parsed.type)}</div>`;
     if (readFromData) {
       const why = String(readFromData.detail || "").trim();
       detail += `<div class="sess-line" style="color:var(--muted);margin-top:7px">Labs, vitals and facts were read straight from the export. The written summary is waiting for a coach${why ? ` — ${escHtml(why)}` : ""}. Re-analyze once one is available.</div>`;
     }
   } else if (enrichmentActive(status)) {
-    detail = `<div class="sess-line" style="color:var(--muted)">Reading the document and splitting it by date...</div>`;
+    detail = analyzingLineHtml(doc);
   } else if (status === "failed") {
     detail = `<div class="sess-line" style="color:var(--muted)">Couldn't extract markers automatically. The original file is still saved — try Re-analyze.</div>`;
   }
@@ -193,9 +302,12 @@ function healthDocInner(doc: HealthDocRow): string {
     </div>`;
 }
 
-function healthDocHtml(doc: HealthDocRow, index?: number): string {
-  if (doc.kind === "imaging" && CairnImaging.imagingStudy(doc as import("../contracts/client-api.js").ClientHealthDocument)) {
-    return CairnImaging.imagingCard(doc as import("../contracts/client-api.js").ClientHealthDocument, index);
+function healthDocHtml(doc: HealthDocRow, index?: number, opts?: ClientImagingCardOptions): string {
+  if (
+    doc.kind === "imaging" &&
+    CairnImaging.imagingStudy(doc as import("../contracts/client-api.js").ClientHealthDocument)
+  ) {
+    return CairnImaging.imagingCard(doc as import("../contracts/client-api.js").ClientHealthDocument, index, opts);
   }
   const reveal = typeof index === "number";
   const collapsed = docCollapsible(doc) && reveal && Number(index) > 0;
@@ -210,6 +322,12 @@ const CAIRN_HEALTH_DOCS = {
   docCollapsible,
   healthDocInner,
   healthDocHtml,
+  analyzingText,
+  analyzingLineHtml,
+  tickAnalyzingLines,
+  startAnalyzingClock,
+  highlightHealthDoc,
+  settleUploadStatus,
 };
 
 Object.assign(globalThis, {

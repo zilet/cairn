@@ -16,7 +16,7 @@ import { MAX_MARKERS_PER_PANEL, addHealthReview, cleanClinicalFacts, estimateMar
 import { dedupeHealthDocuments } from "./repo/health-dedupe.js";
 import { getHealthSynthesis } from "./repo/health-focus.js";
 import { recordHealthOutcomeEvents } from "./repo/health-outcomes.js";
-import { applyImagingAnalysisResult, imagingStudyHasContent, imagingStudyRevisionState, imagingStudySourceHash, imagingStudySourceKind, listImagingPromptFilesRaw, replaceDerivedImagingStudies } from "./repo/imaging.js";
+import { applyImagingAnalysisResult, imagingStudyHasContent, imagingStudyRevisionState, imagingStudySourceHash, imagingStudySourceKind, isImagingSourceUpload, listImagingPromptFilesRaw, replaceDerivedImagingStudies } from "./repo/imaging.js";
 import type { ImagingStudyRevisionState } from "./repo/imaging.js";
 import { isNonAnalyteMarkerName } from "./repo/marker-canon.js";
 import { addMemory } from "./repo/memory.js";
@@ -763,7 +763,7 @@ async function processJob(job: Job): Promise<void> {
   let ccdaExtraction: ReturnType<typeof extractCcdaHealthData> | null = null;
   if (job.kind === "health") {
     const row = getHealthDocumentRaw(job.id) as any;
-    if (row?.kind === "imaging") {
+    if (row?.kind === "imaging" && !isImagingSourceUpload(row)) {
       imagingBaseRevisionState = imagingStudyRevisionState(job.id);
       // Raw DICOM objects never enter an agent prompt. Only ordinary written
       // attachments and bounded server-rendered representative PNGs are eligible.
@@ -2214,7 +2214,7 @@ export function applyHealthIngestResult(
   } = {}
 ): HealthIngestApplyResult {
   const row = getHealthDocumentRaw(id) as any;
-  if (row?.kind === "imaging") {
+  if (row?.kind === "imaging" && !isImagingSourceUpload(row)) {
     const result = applyImagingAnalysisResult(id, parsed, {
       sourceKind: imagingStudySourceKind(id),
       extractor: "health-enrichment",

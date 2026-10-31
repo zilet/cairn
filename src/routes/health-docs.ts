@@ -17,9 +17,11 @@ import {
   getHealthDocumentRaw,
   getImagingStudy,
   getImagingStudyFileRaw,
+  findDuplicateHealthUpload,
   getSettings,
   IMAGING_FILE_MIMES,
   isImagingRecommendationStatus,
+  isImagingSourceUpload,
   listHealthDocuments,
   MAX_IMAGING_FILE_BYTES,
   setHealthDocEnrichStatus,
@@ -396,6 +398,24 @@ healthDocsRouter.post("/", (req, res, next) => {
   }
   if (!buf.length) return res.status(400).json({ error: "empty file" });
 
+  // The same report again is the record already on file: no second document, no
+  // second ingest. A copy whose earlier read failed gets that read retried instead.
+  const duplicateOf = findDuplicateHealthUpload(pasted ? { text: buf.toString("utf8") } : { bytes: buf });
+  const existing = duplicateOf != null ? (getHealthDocumentRaw(duplicateOf) as any) : null;
+  if (existing) {
+    let reanalyzing = false;
+    if (
+      existing.enrichment_status === "failed" &&
+      getSettings().enrich_enabled &&
+      (existing.kind !== "imaging" || isImagingSourceUpload(existing))
+    ) {
+      setHealthDocEnrichStatus(duplicateOf!, "pending");
+      import("../enrich.js").then((m) => m.enqueueEnrich("health", duplicateOf!)).catch(() => {});
+      reanalyzing = true;
+    }
+    return res.json({ ...getHealthDocument(duplicateOf!), duplicate_of: duplicateOf, reanalyzing });
+  }
+
   try {
     fs.mkdirSync(UPLOADS_DIR, { recursive: true });
     const name = `${crypto.randomUUID()}.${extForMime(mime)}`;
@@ -452,7 +472,8 @@ healthDocsRouter.put("/:id", (req, res) => {
 healthDocsRouter.post("/:id/reanalyze", (req, res) => {
   const row = getHealthDocumentRaw(Number(req.params.id)) as any;
   if (!row) return res.status(404).json({ error: "not found" });
-  if (row.kind === "imaging") {
+  // A pasted report filed as imaging is still an upload: it re-reads its file.
+  if (row.kind === "imaging" && !isImagingSourceUpload(row)) {
     const study = getImagingStudy(Number(req.params.id)) as any;
     if (!study?.study_files?.length) return res.status(400).json({ error: "no study files to re-analyze" });
     if (!getSettings().enrich_enabled) return res.status(409).json({ error: "analysis is disabled in settings" });
@@ -496,7 +517,9 @@ healthDocsRouter.post("/:id/confirm", (req, res) => {
 
 healthDocsRouter.delete("/:id", (req, res) => {
   const row = getHealthDocumentRaw(Number(req.params.id)) as any;
-  if (row?.kind === "imaging") {
+  // A study goes through the quarantine delete; a pasted report filed as imaging
+  // is an upload, and its own file (plus the study derived from it) goes with it.
+  if (row?.kind === "imaging" && !isImagingSourceUpload(row)) {
     const result = deleteImagingStudy(Number(req.params.id)) as any;
     return result.error ? res.status(500).json(result) : res.json(result);
   }

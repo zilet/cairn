@@ -3233,13 +3233,17 @@ export interface ClientHealthDocument {
   mime?: string | null;
   enrichment_status?: string | null;
   created_at?: string;
+  /** When the read in progress was asked for (present only while one is). */
+  enrich_since?: string | null;
+  /** The upload this record was read out of (null = it is the upload). */
+  source_doc_id?: number | null;
+  has_file?: boolean;
+  /** POST /health-docs: the upload matched this record's content exactly; nothing new was written. */
+  duplicate_of?: number | null;
+  reanalyzing?: boolean;
   parsed_json?: unknown;
   parsed?: ClientHealthDocumentParsed | null;
   study_files?: ClientImagingStudyFile[];
-  source_doc_id?: number | null;
-  has_file?: boolean;
-  // Records only: the imaging-only source folded into this study card, whose file it shows.
-  source_file_id?: number | null;
   [key: string]: unknown;
 }
 

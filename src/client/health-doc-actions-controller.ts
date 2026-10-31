@@ -42,11 +42,15 @@ function wireHealthDocActions(el: HTMLElement | null, deps: HealthDocActionsDeps
     cancelBtn._wired = true;
     cancelBtn.addEventListener("click", () => CairnHealthDocDateActions.cancelEditor(el, editBtn));
   }
-  const rescan = el.querySelector<HealthDocActionsWiredElement<HTMLElement>>("[data-hrescan]");
-  if (rescan && !rescan._wired) {
+  // A button names the record it re-reads: an imaging study's card also carries
+  // the re-analyze of the source upload it was read out of.
+  el.querySelectorAll<HealthDocActionsWiredElement<HTMLElement>>("[data-hrescan]").forEach((rescan) => {
+    if (rescan._wired) return;
     rescan._wired = true;
-    rescan.addEventListener("click", () => CairnHealthDocLifecycleActions.reanalyze(id, deps));
-  }
+    rescan.addEventListener("click", () =>
+      CairnHealthDocLifecycleActions.reanalyze(rescan.dataset.hrescan || id, deps)
+    );
+  });
 
   el.querySelectorAll<HealthDocActionsWiredElement<HTMLElement>>("[data-hdoc-toggle]").forEach((toggleEl) => {
     if (toggleEl._wired) return;

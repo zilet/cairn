@@ -133,6 +133,11 @@ function loadUploadController() {
     },
     CairnHealthDocs: {
       healthDocHtml: (doc) => `<article class="hdoc" data-hdoc="${String(doc.id)}"></article>`,
+      // The contract of health-docs-client's settleUploadStatus (tested there).
+      settleUploadStatus: (doc, status) => {
+        status.textContent = doc.duplicate_of == null ? "" : "That report is already on file.";
+        return doc.duplicate_of != null;
+      },
     },
   };
   context.window = context;
@@ -190,6 +195,37 @@ test("health doc upload controller uploads pasted text and inserts the new row",
   assert.equal(pictureCache.docCount, 2);
   assert.equal(pictureCache.newestDocAt, "2026-07-01T12:00:00Z");
   assert.equal(picturePaints, 1);
+});
+
+test("an upload already on file inserts nothing and says so", async () => {
+  const { context, document } = loadUploadController();
+  const shell = appendUploadShell(document);
+  const toasts = [];
+  const polls = [];
+  const wired = [];
+  let pictureCache = { review: null, docCount: 3, newestDocAt: "2026-06-20T00:00:00Z" };
+
+  context.CairnHealthDocUploadController.wireUpload({
+    api: async () => ({ id: 7, duplicate_of: 7, enrichment_status: "done" }),
+    toast: (message) => toasts.push(message),
+    enrichmentActive: (status) => status === "pending",
+    pollDoc: (id) => polls.push(id),
+    wireDoc: (row) => wired.push(row?.dataset?.hdoc || null),
+    getHealthPictureCache: () => pictureCache,
+    setHealthPictureCache: (cache) => { pictureCache = cache; return cache; },
+    paintHealthPicture: () => {},
+  });
+
+  shell.hText.value = "A1c 5.4";
+  shell.hText.dispatch("input");
+  await shell.hUpload.click();
+
+  assert.equal(shell.hStatus.textContent, "That report is already on file.");
+  assert.deepEqual(toasts, []);
+  assert.deepEqual(wired, [], "no new row");
+  assert.deepEqual(polls, []);
+  assert.equal(pictureCache.docCount, 3, "the record count is unchanged");
+  assert.equal(shell.hText.value, "", "the paste box clears");
 });
 
 test("health doc upload controller blocks oversized pasted text before upload", async () => {

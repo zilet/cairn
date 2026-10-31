@@ -76,9 +76,10 @@ test("health records fold an imaging-only source into its study card", () => {
     Map,
     CairnHealthClient: { H_FILE_PROMPT: "Share" },
     CairnHealthDocs: {
-      healthDocHtml: (doc, index) => {
+      parsedDoc: (doc) => doc.parsed ?? null,
+      healthDocHtml: (doc, index, opts = {}) => {
         calls.push(doc);
-        return `<article data-id="${String(doc.id)}" data-source-file="${String(doc.source_file_id ?? "")}"></article>`;
+        return `<article data-id="${String(doc.id)}" data-source-file="${opts.sourceHidden ? String(opts.source?.id ?? "") : ""}"></article>`;
       },
     },
     CairnImaging: {

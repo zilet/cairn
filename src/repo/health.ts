@@ -621,7 +621,24 @@ function publicHealthDoc(row: any) {
             .all(row.id) as any[]
         ).map((file) => ({ ...file, has_file: true }))
       : undefined;
-  return { ...rest, has_file: !!file_path, ...(study_files ? { study_files } : {}) };
+  const since = enrichActive(row.enrichment_status) ? enrichSince.get(Number(row.id)) : undefined;
+  return {
+    ...rest,
+    has_file: !!file_path,
+    ...(study_files ? { study_files } : {}),
+    ...(since ? { enrich_since: since } : {}),
+  };
+}
+
+// When the current read of a document was asked for — so a card can say how long
+// it has been reading. Process memory only, by design: health_documents has no
+// updated stamp, a fresh upload's own created_at covers the first read, and a
+// restart's recovery pass stamps the re-queued rows again when they go
+// in_progress. Cleared the moment a read settles.
+const enrichSince = new Map<number, string>();
+
+function enrichActive(status: unknown): boolean {
+  return status === "pending" || status === "in_progress";
 }
 
 export interface HealthDocInput {
@@ -941,6 +958,8 @@ export function updateHealthDocFields(
 }
 
 export function setHealthDocEnrichStatus(id: number, status: string) {
+  if (!enrichActive(status)) enrichSince.delete(id);
+  else if (!enrichSince.has(id)) enrichSince.set(id, new Date().toISOString());
   db.prepare(`UPDATE health_documents SET enrichment_status = ? WHERE id = ?`).run(status, id);
   const row = getHealthDocument(id); // public shape — never leaks file_path
   emitEnrichTransition("health", id, row); // wake any SSE watcher on this row

@@ -7,6 +7,7 @@ export * from "../../repo/next-checkup.js";
 export * from "../../repo/evidence.js";
 export * from "../../repo/health.js";
 export * from "../../repo/health-dedupe.js";
+export * from "../../repo/health-upload-duplicate.js";
 export * from "../../repo/imaging.js";
 export * from "../../repo/health-outcomes.js";
 export { getDailyMetrics, getRecoverySummary, recordDailyMetrics } from "../../repo/coach.js";

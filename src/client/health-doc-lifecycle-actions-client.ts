@@ -9,7 +9,7 @@ type HealthDocLifecyclePictureCache = {
 };
 
 function hdocLifecycleRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? value as Record<string, unknown> : {};
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
 function hdocLifecycleNumber(value: unknown): number | null {
@@ -23,6 +23,20 @@ function hdocLifecycleElement<T extends Element = Element>(selector: string): T 
 
 function hdocLifecycleRow(id: string | number): HTMLElement | null {
   return hdocLifecycleElement<HTMLElement>(`#hlist .hdoc[data-hdoc="${id}"]`);
+}
+
+// The card that stands for a hidden source upload (an imaging study read out of
+// a pasted report) — the source has no row of its own to find by id.
+function hdocLifecycleHostRow(sourceId: string | number): HTMLElement | null {
+  return hdocLifecycleElement<HTMLElement>(`#hlist .hdoc[data-hsource="${sourceId}"]`);
+}
+
+// A re-rendered study card keeps standing for the hidden source it stood for.
+function hdocCarriedSource(row: HTMLElement | null): ClientImagingCardOptions {
+  const sourceId = Number(row?.dataset.hsource);
+  return Number.isFinite(sourceId) && sourceId > 0
+    ? { source: { id: sourceId, has_file: true }, sourceHidden: true }
+    : {};
 }
 
 function refreshPictureAfterLifecycleHealthDocDelete(deps: ClientHealthDocActionsControllerDeps): void {
@@ -50,7 +64,7 @@ function pollLifecycleHealthDoc(id: string | number, deps: ClientHealthDocAction
       const el = hdocLifecycleRow(doc.id);
       if (el) {
         if (doc.kind === "imaging" && CairnImaging.imagingStudy(doc)) {
-          el.outerHTML = CairnImaging.imagingCard(doc);
+          el.outerHTML = CairnImaging.imagingCard(doc, undefined, hdocCarriedSource(el));
           deps.wireHealthDoc(hdocLifecycleRow(doc.id));
         } else {
           el.innerHTML = CairnHealthDocs.healthDocInner(doc);
@@ -68,6 +82,7 @@ function pollLifecycleHealthDoc(id: string | number, deps: ClientHealthDocAction
 
 async function reanalyzeHealthDoc(id: string | number, deps: ClientHealthDocActionsControllerDeps): Promise<void> {
   const row = hdocLifecycleRow(id);
+  const host = row ? null : hdocLifecycleHostRow(id);
   let updated: unknown = null;
   try {
     updated = await deps.api(`/health-docs/${id}/reanalyze`, { method: "POST" });
@@ -83,12 +98,18 @@ async function reanalyzeHealthDoc(id: string | number, deps: ClientHealthDocActi
   deps.toast("Re-analyzing…");
   if (row) {
     if (doc.kind === "imaging" && CairnImaging.imagingStudy(doc)) {
-      row.outerHTML = CairnImaging.imagingCard(doc);
+      row.outerHTML = CairnImaging.imagingCard(doc, undefined, hdocCarriedSource(row));
       deps.wireHealthDoc(hdocLifecycleRow(doc.id));
     } else {
       row.innerHTML = CairnHealthDocs.healthDocInner(doc);
       deps.wireHealthDoc(row);
     }
+  } else if (host) {
+    // The source re-reads behind its study's card: repaint so the card says so
+    // (and watches the source) instead of looking untouched for minutes.
+    swrInvalidate("health:records");
+    void deps.loadHealthDocs();
+    return;
   }
   pollLifecycleHealthDoc(id, deps);
 }
@@ -99,7 +120,15 @@ function startHealthDocDelete(btn: Element, deps: ClientHealthDocActionsControll
   const id = row.dataset.hdoc;
   if (!id) return;
   deps.armDelete(btn, () => {
-    deps.api(`/health-docs/${id}`, { method: "DELETE" })
+    // A study card standing for a hidden source upload: when it is that source's
+    // last card, delete the SOURCE — the study goes with it — so no orphan paste
+    // surfaces as a card of its own on the next paint.
+    const sourceId = row.dataset.hsource;
+    const cards = hdocLifecycleElement("#hlist")?.querySelectorAll(`.hdoc[data-hsource="${sourceId}"]`).length ?? 0;
+    const lastOfSource = !!sourceId && cards <= 1;
+    const target = lastOfSource ? sourceId : id;
+    deps
+      .api(`/health-docs/${target}`, { method: "DELETE" })
       .then(() => {
         deps.toast("Removed");
         row.remove();

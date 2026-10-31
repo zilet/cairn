@@ -30,6 +30,7 @@ function imaging() {
       context.question = value;
     },
   };
+  vm.runInNewContext(readFileSync(join(root, "public/js/imaging-words-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/imaging-client.js"), "utf8"), context);
   return context;
 }
@@ -87,7 +88,7 @@ test("imaging cards group atomic findings, distinguish AI observations, and esca
   assert.doesNotMatch(html, /TOKEN:/);
   assert.equal(CairnImaging.imagingGroups(doc.parsed.imaging_study)[0][0], "musculoskeletal");
   assert.equal(CairnImaging.imagingGroups(doc.parsed.imaging_study)[0][1][0].lateralities[0].laterality, "not stated");
-  assert.equal(CairnImaging.imagingLabel("lower_extremity.knee"), "Lower Extremity Knee");
+  assert.equal(CairnImaging.imagingLabel("lower_extremity.knee"), "Knee");
 });
 
 test("imaging groups an otherwise atomic-free study by its study-level anatomy", () => {
@@ -103,29 +104,10 @@ test("imaging groups an otherwise atomic-free study by its study-level anatomy",
   assert.match(CairnImaging.imagingInner({ id: 2, parsed: { imaging_study: study } }), /Stable/);
 });
 
-test("records grouping uses study anatomy or an explicit multi-region label, never findings[0]", () => {
-  const { CairnImaging } = imaging();
-  const explicit = CairnImaging.imagingStudyGrouping({
-    anatomy: { clinical_system: "musculoskeletal", body_region: "spine.lumbar", laterality: "midline" },
-    findings: [{ clinical_system: "neurologic", body_region: "head.brain" }],
-  });
-  assert.equal(
-    JSON.stringify(explicit),
-    JSON.stringify({ system: "musculoskeletal", region: "spine.lumbar", laterality: "midline" })
-  );
-  const multiple = CairnImaging.imagingStudyGrouping({
-    anatomy: { clinical_system: "unknown", body_region: "unknown" },
-    findings: [
-      { clinical_system: "musculoskeletal", body_region: "lower_extremity.knee", laterality: "left" },
-      { clinical_system: "neurologic", body_region: "head.brain", laterality: "midline" },
-    ],
-  });
-  assert.equal(multiple.system, "Multiple systems");
-  assert.equal(multiple.region, "Multiple regions");
-  assert.equal(multiple.laterality, "Multiple lateralities");
+test("records never section imaging away from the timeline, and never title a card from findings[0]", () => {
   const records = readFileSync(join(root, "src/client/health-records-client.ts"), "utf8");
   assert.doesNotMatch(records, /findings\?\.\[0\]/);
-  assert.match(records, /imagingStudyGrouping/);
+  assert.doesNotMatch(records, /imaging-record-group|imagingStudyGrouping/);
 });
 
 test("source-check correction covers study/report atoms while preserving server-owned state", () => {
@@ -230,7 +212,7 @@ test("retry-needed imaging shows a calm re-analyze action and keeps imaging rend
   const lifecycle = readFileSync(join(root, "src/client/health-doc-lifecycle-actions-client.ts"), "utf8");
   assert.match(lifecycle, /`\/health-docs\/\$\{id\}\/reanalyze`/);
   assert.match(lifecycle, /doc\.kind === "imaging" && CairnImaging\.imagingStudy\(doc\)/);
-  assert.match(lifecycle, /row\.outerHTML = CairnImaging\.imagingCard\(doc\)/);
+  assert.match(lifecycle, /row\.outerHTML = CairnImaging\.imagingCard\(doc, undefined, hdocCarriedSource\(row\)\)/);
   const routes = readFileSync(join(root, "src/routes/health-docs.ts"), "utf8");
   assert.match(routes, /post\("\/:id\/imaging-analyze"/);
   const mcp = readFileSync(join(root, "src/surfaces/mcp/imaging.ts"), "utf8");

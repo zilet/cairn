@@ -271,6 +271,10 @@ function loadController() {
     CairnHealthDocs: {
       healthDocHtml: (doc) => `<article class="hdoc" data-hdoc="${String(doc.id)}">${String(doc.original_name || "")}</article>`,
       healthDocInner: () => `<div data-inner="1"></div>`,
+      settleUploadStatus: (doc, status) => {
+        status.textContent = "";
+        return doc.duplicate_of != null;
+      },
     },
     CairnHealthRecords: {
       recordsTabHtml: () => `<section data-records-tab="1"></section>`,

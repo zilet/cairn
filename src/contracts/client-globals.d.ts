@@ -1138,6 +1138,15 @@ declare global {
     paintHealthPicture(): void;
   };
 
+  // The source upload an imaging study was read out of. When `sourceHidden`, the
+  // source renders no card of its own: the study card carries its file link, its
+  // re-analyze and its reading state, and deleting the source's last study card
+  // deletes the source with it.
+  type ClientImagingCardOptions = {
+    source?: ClientHealthDocument | null;
+    sourceHidden?: boolean;
+  };
+
   type ClientHealthDocActionsControllerDeps = {
     state: {
       tab?: string;
@@ -3917,7 +3926,41 @@ declare global {
       markersTable(parsed: unknown): string;
       docCollapsible(doc: unknown): boolean;
       healthDocInner(doc: unknown): string;
-      healthDocHtml(doc: unknown, index?: number): string;
+      healthDocHtml(doc: unknown, index?: number, opts?: ClientImagingCardOptions): string;
+      analyzingText(lead: string, sinceMs: number | null, now?: number): string;
+      analyzingLineHtml(
+        doc: { enrich_since?: unknown; created_at?: unknown } | null | undefined,
+        lead?: string,
+        now?: number
+      ): string;
+      tickAnalyzingLines(now?: number): number;
+      startAnalyzingClock(): void;
+      highlightHealthDoc(id: unknown): boolean;
+      settleUploadStatus(
+        doc: { duplicate_of?: unknown; reanalyzing?: unknown },
+        status: Element,
+        pollDoc: (id: string | number) => void
+      ): boolean;
+    };
+
+    CairnImagingWords: {
+      imagingSilent(value: unknown): boolean;
+      imagingLabel(value: unknown): string;
+      imagingStatusLabel(status: string): string;
+      imagingPart(value: unknown): string;
+      imagingMeasurementText(measurement: {
+        name?: string;
+        label?: string;
+        value?: number | null;
+        value_text?: string | null;
+        unit?: string | null;
+        qualifier?: string | null;
+        method?: string | null;
+      }): string;
+      imagingStudyTitle(study: import("./client-api.js").ClientImagingStudy | null): string;
+      imagingStudyLine(study: import("./client-api.js").ClientImagingStudy): string;
+      imagingHeading(tag: "h4" | "h5" | "h6", value: unknown): string;
+      imagingHeadline(study: import("./client-api.js").ClientImagingStudy | null): string;
     };
 
     CairnImaging: {
@@ -3925,17 +3968,12 @@ declare global {
       imagingHasDicomSeries(study: import("./client-api.js").ClientImagingStudy | null): boolean;
       imagingLabel(value: unknown): string;
       imagingGroups(study: import("./client-api.js").ClientImagingStudy): unknown[];
-      imagingStudyGrouping(study: import("./client-api.js").ClientImagingStudy | null): {
-        system: string;
-        region: string;
-        laterality: string | null;
-      };
       imagingCorrectionPayload(
         study: import("./client-api.js").ClientImagingStudy,
         values: Record<string, unknown>
       ): import("./client-api.js").ClientImagingStudy;
       imagingInner(doc: ClientHealthDocument): string;
-      imagingCard(doc: ClientHealthDocument, index?: number): string;
+      imagingCard(doc: ClientHealthDocument, index?: number, opts?: ClientImagingCardOptions): string;
       wireImaging(
         doc: ClientHealthDocument,
         el: HTMLElement,
@@ -6001,6 +6039,7 @@ declare global {
   declare const CairnLifeTimelineActions: Window["CairnLifeTimelineActions"];
   declare const CairnLifeController: Window["CairnLifeController"];
   declare const CairnHealthDocs: Window["CairnHealthDocs"];
+  declare const CairnImagingWords: Window["CairnImagingWords"];
   declare const CairnImaging: Window["CairnImaging"];
   declare const CairnHealthRecords: Window["CairnHealthRecords"];
   declare const CairnHealthRecordsController: Window["CairnHealthRecordsController"];

@@ -640,9 +640,9 @@ function wireHealthDocUpload(deps: HealthDocUploadDeps): void {
       uploadBtn.disabled = false;
       return;
     }
-    status.textContent = "";
-    deps.toast("Uploaded");
     clearPicker();
+    if (CairnHealthDocs.settleUploadStatus(doc, status, deps.pollDoc)) return; // already on file: nothing new
+    deps.toast("Uploaded");
     insertUploadedHealthDoc(doc, deps);
     if (deps.enrichmentActive(doc.enrichment_status)) deps.pollDoc(doc.id);
     refreshPictureAfterHealthDocUpload(doc, deps);

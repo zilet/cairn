@@ -30,12 +30,6 @@ function imagingHasDicomSeries(study: ImagingStudy | null): boolean {
   );
 }
 
-function imagingLabel(value: unknown): string {
-  return String(value || "")
-    .replace(/[._-]+/g, " ")
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
-
 function imagingGroups(study: ImagingStudy): Array<
   [
     string,
@@ -80,41 +74,6 @@ function imagingGroups(study: ImagingStudy): Array<
             .map(([laterality, items]) => ({ laterality, items })),
         })),
     ]);
-}
-
-function meaningfulImagingValue(value: unknown): string | null {
-  const out = String(value || "").trim();
-  return out && !/^(unknown|other|not[_ ]stated|not[_ ]applicable)$/i.test(out) ? out : null;
-}
-
-function imagingStudyGrouping(study: ImagingStudy | null): {
-  system: string;
-  region: string;
-  laterality: string | null;
-} {
-  const anatomy = study?.anatomy || {};
-  const explicitSystem = meaningfulImagingValue(anatomy.clinical_system);
-  const explicitRegion = meaningfulImagingValue(anatomy.body_region || anatomy.verbatim_site);
-  const explicitLaterality = meaningfulImagingValue(anatomy.laterality);
-  if (explicitSystem || explicitRegion) {
-    return {
-      system: explicitSystem || "Unsorted imaging",
-      region: explicitRegion || "Unsorted imaging",
-      laterality: explicitLaterality,
-    };
-  }
-  const findings = study?.findings || [];
-  const systems = new Set(findings.map((finding) => meaningfulImagingValue(finding.clinical_system)).filter(Boolean));
-  const regions = new Set(
-    findings.map((finding) => meaningfulImagingValue(finding.body_region || finding.verbatim_site)).filter(Boolean)
-  );
-  const lateralities = new Set(findings.map((finding) => meaningfulImagingValue(finding.laterality)).filter(Boolean));
-  return {
-    system: systems.size === 1 ? String([...systems][0]) : systems.size > 1 ? "Multiple systems" : "Unsorted imaging",
-    region: regions.size === 1 ? String([...regions][0]) : regions.size > 1 ? "Multiple regions" : "Unsorted imaging",
-    laterality:
-      lateralities.size === 1 ? String([...lateralities][0]) : lateralities.size > 1 ? "Multiple lateralities" : null,
-  };
 }
 
 function boundedEditorText(value: unknown, max: number, field: string): string {
@@ -264,12 +223,12 @@ function imagingCorrectionPayload(study: ImagingStudy, values: Record<string, un
 function imagingFindingHtml(finding: NonNullable<ImagingStudy["findings"]>[number]): string {
   const imageOnly = finding.source === "image_ai";
   const measurements = (finding.measurements || [])
-    .map(
-      (m) =>
-        `<li>${escHtml([m.name || m.label, m.qualifier, m.value_text || m.value, m.unit, m.method].filter(Boolean).join(" "))}</li>`
-    )
+    .map((m) => CairnImagingWords.imagingMeasurementText(m))
+    .filter((line) => line !== "")
+    .map((line) => `<li>${escHtml(line)}</li>`)
     .join("");
-  return `<li class="imaging-finding"><span class="imaging-source">${imageOnly ? "AI image observation · unconfirmed" : escHtml(imagingLabel(finding.source || "report"))}</span><div>${escHtml(finding.finding_text || "Finding not stated")}</div>${finding.laterality ? `<small>${escHtml(imagingLabel(finding.laterality))}</small>` : ""}${measurements ? `<ul class="imaging-measurements">${measurements}</ul>` : ""}</li>`;
+  const side = CairnImagingWords.imagingLabel(finding.laterality);
+  return `<li class="imaging-finding"><span class="imaging-source">${imageOnly ? "AI image observation · unconfirmed" : escHtml(CairnImagingWords.imagingLabel(finding.source || "report") || "Report")}</span><div>${escHtml(finding.finding_text || "Finding not stated")}</div>${side ? `<small>${escHtml(side)}</small>` : ""}${measurements ? `<ul class="imaging-measurements">${measurements}</ul>` : ""}</li>`;
 }
 
 function imagingInner(doc: ImagingDoc): string {
@@ -282,43 +241,75 @@ function imagingInner(doc: ImagingDoc): string {
   const groups = imagingGroups(study)
     .map(
       ([system, regions]) =>
-        `<section class="imaging-group"><h4>${escHtml(imagingLabel(system))}</h4>${regions.map(({ body, lateralities }) => `<div><h5>${escHtml(imagingLabel(body))}</h5>${lateralities.map(({ laterality, items }) => `<div class="imaging-laterality"><h6>${escHtml(imagingLabel(laterality))}</h6><ul>${items.map(imagingFindingHtml).join("")}</ul></div>`).join("")}</div>`).join("")}</section>`
+        `<section class="imaging-group">${CairnImagingWords.imagingHeading("h4", system)}${regions.map(({ body, lateralities }) => `<div>${CairnImagingWords.imagingHeading("h5", body)}${lateralities.map(({ laterality, items }) => `<div class="imaging-laterality">${CairnImagingWords.imagingHeading("h6", laterality)}<ul>${items.map(imagingFindingHtml).join("")}</ul></div>`).join("")}</div>`).join("")}</section>`
     )
     .join("");
   const files = (doc.study_files || [])
     .map(
       (file) =>
-        `<li><a href="${escAttr(`/api/health-docs/${doc.id}/imaging-files/${file.id}`)}" target="_blank" rel="noopener" data-resource-link>${escHtml(file.original_name)}</a> · ${escHtml(imagingLabel(file.source_kind))}</li>`
+        `<li><a href="${escAttr(`/api/health-docs/${doc.id}/imaging-files/${file.id}`)}" target="_blank" rel="noopener" data-resource-link>${escHtml(file.original_name)}</a>${CairnImagingWords.imagingLabel(file.source_kind) ? ` · ${escHtml(CairnImagingWords.imagingLabel(file.source_kind))}` : ""}</li>`
     )
     .join("");
   const confirmation = verification.user_confirmed
     ? "You checked these details against the source report."
     : "Extraction has not been checked against the source report.";
   return `<div class="imaging-detail" id="imaging-detail-${escAttr(doc.id)}">
-    <dl class="imaging-meta"><div><dt>Study</dt><dd>${escHtml([metadata.modality || metadata.raw_modality, metadata.procedure, anatomy.verbatim_site || anatomy.body_region, anatomy.laterality].filter(Boolean).join(" · ") || "Not stated")}</dd></div>${metadata.study_date ? `<div><dt>Date</dt><dd>${escHtml(absDate(String(metadata.study_date)))}</dd></div>` : ""}${metadata.facility ? `<div><dt>Facility</dt><dd>${escHtml(metadata.facility)}</dd></div>` : ""}</dl>
+    <dl class="imaging-meta"><div><dt>Study</dt><dd>${escHtml(CairnImagingWords.imagingStudyLine(study))}</dd></div>${metadata.study_date ? `<div><dt>Date</dt><dd>${escHtml(absDate(String(metadata.study_date)))}</dd></div>` : ""}${metadata.facility ? `<div><dt>Facility</dt><dd>${escHtml(metadata.facility)}</dd></div>` : ""}</dl>
     ${report.impression ? `<section><h4>Impression</h4><p>${escHtml(report.impression)}</p></section>` : ""}${report.findings ? `<section><h4>Written findings</h4><p>${escHtml(report.findings)}</p></section>` : ""}
     ${groups ? `<section><h4>Extracted findings</h4>${groups}</section>` : ""}
-    ${study.recommendations?.length ? `<section><h4>Source-stated follow-up</h4><ul>${study.recommendations.map((rec) => `<li>${escHtml(rec.recommendation_text || "Follow-up not stated")}${rec.timeframe ? ` · ${escHtml(rec.timeframe)}` : ""}${rec.id ? ` <label class="imaging-status-label">Your tracking <select data-imaging-recommendation="${escAttr(rec.id)}" aria-label="Tracking status for source-stated follow-up">${["recommended", "scheduled", "completed", "declined", "not_needed", "unknown"].map((status) => `<option value="${status}"${rec.status === status ? " selected" : ""}>${escHtml(imagingLabel(status))}</option>`).join("")}</select></label>` : ""}</li>`).join("")}</ul></section>` : ""}
+    ${study.recommendations?.length ? `<section><h4>Source-stated follow-up</h4><ul>${study.recommendations.map((rec) => `<li>${escHtml(rec.recommendation_text || "Follow-up not stated")}${rec.timeframe ? ` · ${escHtml(rec.timeframe)}` : ""}${rec.id ? ` <label class="imaging-status-label">Your tracking <select data-imaging-recommendation="${escAttr(rec.id)}" aria-label="Tracking status for source-stated follow-up">${["recommended", "scheduled", "completed", "declined", "not_needed", "unknown"].map((status) => `<option value="${status}"${rec.status === status ? " selected" : ""}>${escHtml(CairnImagingWords.imagingStatusLabel(status))}</option>`).join("")}</select></label>` : ""}</li>`).join("")}</ul></section>` : ""}
     <p class="imaging-verification">${escHtml(confirmation)}</p>${files ? `<section><h4>Source files</h4><ul>${files}</ul></section>` : ""}
     <div class="imaging-actions">${imagingHasDicomSeries(study) ? `<button class="hdoc-link" data-dicom-open="${escAttr(doc.id)}">Open image viewer</button>` : ""}<button class="hdoc-link" data-imaging-ask="${escAttr(doc.id)}">Ask Cairn</button><button class="hdoc-link" data-imaging-confirm="${escAttr(doc.id)}"${verification.user_confirmed ? " disabled" : ""}>Confirm extracted details</button><button class="hdoc-link" data-imaging-edit="${escAttr(doc.id)}">Correct details</button></div>
     <form class="imaging-edit" data-imaging-form="${escAttr(doc.id)}" hidden><p class="imaging-note">Source check editor. Keep atomic findings and recommendations as JSON arrays; attachment citations and server-owned verification are preserved.</p><div class="imaging-edit-grid"><label>Study date<input name="study_date" value="${escAttr(metadata.study_date || doc.doc_date || "")}" placeholder="YYYY-MM-DD"></label><label>Facility<input name="facility" value="${escAttr(metadata.facility || "")}"></label><label>Report status<input name="report_status" value="${escAttr(study.report_status || "unknown")}"></label><label>Modality<input name="modality" value="${escAttr(metadata.modality || "")}"></label><label>Procedure<input name="procedure" value="${escAttr(metadata.procedure || "")}"></label><label>System<input name="clinical_system" value="${escAttr(anatomy.clinical_system || "")}"></label><label>Body region<input name="body_region" value="${escAttr(anatomy.body_region || "")}"></label><label>Source anatomy wording<input name="verbatim_site" value="${escAttr(anatomy.verbatim_site || "")}"></label><label>Laterality<input name="laterality" value="${escAttr(anatomy.laterality || "")}"></label></div><label>History<textarea name="history">${escHtml(report.history || "")}</textarea></label><label>Technique<textarea name="technique">${escHtml(report.technique || "")}</textarea></label><label>Comparison<textarea name="comparison">${escHtml(report.comparison || "")}</textarea></label><label>Written findings<textarea name="report_findings">${escHtml(report.findings || "")}</textarea></label><label>Impression<textarea name="impression">${escHtml(report.impression || "")}</textarea></label><label>Addendum<textarea name="addendum">${escHtml(report.addendum || "")}</textarea></label><label>Atomic findings JSON<textarea class="imaging-json-editor" name="findings_json" spellcheck="false">${escHtml(JSON.stringify(study.findings || [], null, 2))}</textarea></label><label>Source-stated recommendations JSON<textarea class="imaging-json-editor" name="recommendations_json" spellcheck="false">${escHtml(JSON.stringify(study.recommendations || [], null, 2))}</textarea></label><button class="hdoc-link" type="submit">Save correction</button></form>
   </div>`;
 }
 
-function imagingCard(doc: ImagingDoc, index?: number): string {
+function imagingReadActive(status: unknown): boolean {
+  return status === "pending" || status === "in_progress";
+}
+
+function imagingAnalyzingLine(doc: ImagingDoc, lead: string): string {
+  if (typeof CairnHealthDocs !== "undefined" && CairnHealthDocs.analyzingLineHtml) {
+    return CairnHealthDocs.analyzingLineHtml(doc, lead);
+  }
+  return `<div class="sess-line hdoc-analyzing">${escHtml(lead)}</div>`;
+}
+
+// One study, one card: "procedure · when" over the one line it found, the long
+// read behind Details (open only on the newest record). A study read out of an
+// upload (a pasted report) carries that upload too — its file, its re-analyze,
+// its reading state — so the upload never needs a card of its own.
+function imagingCard(doc: ImagingDoc, index?: number, opts: ClientImagingCardOptions = {}): string {
   const study = imagingStudy(doc);
-  const meta = study?.study || {};
-  const anatomy = study?.anatomy || {};
-  const title = [meta.modality || meta.raw_modality || "Imaging", anatomy.body_region || anatomy.verbatim_site]
-    .filter(Boolean)
-    .join(" · ");
+  const title = CairnImagingWords.imagingStudyTitle(study);
+  const headline = CairnImagingWords.imagingHeadline(study);
   const controls = `imaging-detail-${escAttr(doc.id)}`;
   const expanded = index === 0;
+  const source = opts.source && opts.source.id != null ? opts.source : null;
+  // A source with a card of its own (an export with labs split out of it) shows
+  // its reading state and keeps its actions there.
+  const carriesSource = !source || opts.sourceHidden === true;
+  const sourceId = source ? source.id : doc.source_doc_id != null ? doc.source_doc_id : null;
+  const sourceBusy = !!source && carriesSource && imagingReadActive(source.enrichment_status);
+  const selfBusy = imagingReadActive(doc.enrichment_status);
+  const reading = sourceBusy
+    ? imagingAnalyzingLine(source!, "Re-reading the source report…")
+    : selfBusy
+      ? imagingAnalyzingLine(doc, "Reading this study…")
+      : "";
+  const pending = sourceBusy || selfBusy ? `<span class="enr enr-pending" hidden></span>` : "";
   const retry =
     doc.enrichment_status === "retry_needed"
       ? `<div class="imaging-retry" role="status"><span>Your correction was kept. Re-analyze when you’re ready to review the source files again.</span><button class="hdoc-link" data-hrescan="${escAttr(doc.id)}">Re-analyze</button></div>`
       : "";
-  return `<div class="sess hdoc imaging-card${expanded ? "" : " hdoc-collapsed"}" data-hdoc="${escAttr(doc.id)}"><div class="sess-head"><span class="sess-date">${escHtml(title)}${doc.doc_date ? ` · <span title="${escAttr(absDate(String(doc.doc_date)))}">${escHtml(relAge(String(doc.doc_date)))}</span>` : ""}</span><button class="hdoc-link" data-imaging-toggle="${escAttr(doc.id)}" aria-expanded="${String(expanded)}" aria-controls="${controls}">Details</button></div>${retry}${imagingInner(doc)}<div class="hdoc-foot"><div class="hdoc-actions">${doc.source_file_id ? `<a class="hdoc-link" href="${escAttr(`/api/health-docs/${doc.source_file_id}/file`)}" target="_blank" rel="noopener" data-resource-link>view file</a>` : ""}<button class="iconbtn hdoc-del" data-hdel="${escAttr(doc.id)}" title="Delete imaging study" aria-label="Delete imaging study">×</button></div></div></div>`;
+  const sourceActions =
+    sourceId != null && carriesSource
+      ? `${source?.has_file !== false ? `<button class="hdoc-link hdoc-rescan" data-hrescan="${escAttr(sourceId)}"${sourceBusy ? " disabled" : ""} title="Re-read the source report">↻ re-analyze</button>` : ""}<a class="hdoc-link" href="${escAttr(`/api/health-docs/${sourceId}/file`)}" target="_blank" rel="noopener" data-resource-link>view file</a>`
+      : "";
+  // data-hsource marks the hidden upload this card stands for: deleting the
+  // upload's last study card deletes the upload (and so the study) with it.
+  const attrs = `data-hdoc="${escAttr(doc.id)}"${source && opts.sourceHidden ? ` data-hsource="${escAttr(source.id)}"` : ""}${sourceBusy ? ` data-hpoll="${escAttr(source!.id)}"` : ""}`;
+  return `<div class="sess hdoc imaging-card${expanded ? "" : " hdoc-collapsed"}" ${attrs}><div class="sess-head"><span class="sess-date">${escHtml(title)}${doc.doc_date ? ` · <span title="${escAttr(absDate(String(doc.doc_date)))}">${escHtml(relAge(String(doc.doc_date)))}</span>` : ""}</span><button class="hdoc-link" data-imaging-toggle="${escAttr(doc.id)}" aria-expanded="${String(expanded)}" aria-controls="${controls}">Details</button></div>${headline ? `<p class="imaging-headline">${escHtml(headline)}</p>` : ""}${reading}${pending}${retry}${imagingInner(doc)}<div class="hdoc-foot"><div class="hdoc-actions">${sourceActions}<button class="iconbtn hdoc-del" data-hdel="${escAttr(doc.id)}" title="Delete imaging study" aria-label="Delete imaging study">×</button></div></div></div>`;
 }
 
 function wireImaging(
@@ -341,13 +332,14 @@ function wireImaging(
   el.querySelector<HTMLButtonElement>("[data-imaging-ask]")?.addEventListener("click", () => {
     const study = imagingStudy(doc);
     const s = study?.study || {};
-    const a = study?.anatomy || {};
     const unconfirmed = study?.verification?.user_confirmed
       ? ""
       : " This extraction is unconfirmed; please treat it as a starting point.";
-    CairnHealthClient.askCoach(
-      `Help me understand imaging study #${doc.id}: ${[s.study_date || doc.doc_date, s.modality, a.body_region || a.verbatim_site, study?.report?.impression].filter(Boolean).join(" · ")}.${unconfirmed}`
-    );
+    const about = [s.study_date || doc.doc_date, CairnImagingWords.imagingStudyTitle(study), study?.report?.impression]
+      .map((part) => CairnImagingWords.imagingPart(part))
+      .filter((part) => part !== "")
+      .join(" · ");
+    CairnHealthClient.askCoach(`Help me understand imaging study #${doc.id}: ${about}.${unconfirmed}`);
   });
   el.querySelector<HTMLButtonElement>("[data-imaging-confirm]")?.addEventListener("click", async () => {
     try {
@@ -413,9 +405,8 @@ function wireImaging(
 const CAIRN_IMAGING = {
   imagingStudy,
   imagingHasDicomSeries,
-  imagingLabel,
+  imagingLabel: (value: unknown) => CairnImagingWords.imagingLabel(value),
   imagingGroups,
-  imagingStudyGrouping,
   imagingCorrectionPayload,
   imagingInner,
   imagingCard,

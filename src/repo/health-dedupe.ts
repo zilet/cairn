@@ -29,6 +29,7 @@
 import { db } from "../db.js";
 import { canonicalMarkerForReading, isNonAnalyteMarkerName, normalizeMarkerName } from "./marker-canon.js";
 import { deleteHealthDocument, updateHealthDocFields } from "./health.js";
+import { dedupeImagingStudies } from "./imaging-dedupe.js";
 import { labUnitSpec, labUnitsCompatible, normalizeLabUnit, toCanonical } from "./lab-units.js";
 import { unitAnalyteZone } from "./propagation-data.js";
 
@@ -546,6 +547,33 @@ export function dedupeHealthDocuments(opts: DedupeOptions = {}): DedupeHealthDoc
       result.added_markers += fold.added;
     }
     rows = step.rows;
+  }
+  // One study per scan: the imaging twins fold by their own identity (same day,
+  // procedure and impression — src/repo/imaging-dedupe.ts), reported through the
+  // same plan so the route's dry run shows both. Only on the whole-record pass:
+  // the ingest hook runs while its own upload is still mid-read, and folding a
+  // study there could remove that very upload under the running ingest (an
+  // identical re-upload never reaches an ingest — the upload route stops it).
+  if (!result.errors.length && scope == null) {
+    const imaging = dedupeImagingStudies({ dryRun });
+    for (const fold of imaging.folds) {
+      result.clusters.push({
+        date: fold.date,
+        survivor: { id: fold.survivor.id, kind: "imaging", doc_date: fold.date, markers: 0 },
+        merged: fold.merged.map((twin) => ({
+          id: twin.id,
+          kind: "imaging",
+          doc_date: fold.date,
+          markers: 0,
+          source_doc_id: twin.source_doc_id,
+          file: twin.removed_source,
+        })),
+        added_markers: 0,
+      });
+    }
+    result.merged += imaging.merged;
+    result.deleted_files += imaging.deleted_files;
+    result.errors.push(...imaging.errors);
   }
   if (result.errors.length) result.converged = false;
   return result;

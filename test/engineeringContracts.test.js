@@ -5504,7 +5504,7 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(healthStandingControllerSource, /CairnHealthStandingController/);
   assert.match(healthDocsSource, /type HealthDocRow = \{/);
   assert.match(healthDocsSource, /function healthDocInner\(doc: HealthDocRow\): string/);
-  assert.match(healthDocsSource, /function healthDocHtml\(doc: HealthDocRow, index\?: number\): string/);
+  assert.match(healthDocsSource, /function healthDocHtml\(doc: HealthDocRow, index\?: number, opts\?: ClientImagingCardOptions\): string/);
   assert.match(healthDocsSource, /Object\.assign\(globalThis, \{/);
   assert.match(healthDocsSource, /CairnHealthDocs/);
   assert.match(healthLearnedSource, /const LEARNED_GROUPS/);

@@ -721,6 +721,17 @@ export function listImagingStudyFilesRaw(studyId: number): any[] {
     .all(studyId) as any[];
 }
 
+// An upload whose contents turned out to be an imaging report (a pasted CT
+// report, say) is filed with kind 'imaging' by the ordinary ingest, yet it is not
+// a study: it owns the uploaded file on its own row, no study attachments and no
+// imaging_study of its own — the study it carried is a derived row pointing back
+// at it. It re-reads, deletes and dedupes as the upload it is, never as a study.
+export function isImagingSourceUpload(row: any): boolean {
+  if (!row || row.kind !== "imaging" || !row.file_path) return false;
+  if (parsedImaging(row)) return false;
+  return listImagingStudyFilesRaw(Number(row.id)).length === 0;
+}
+
 export function listImagingPromptFilesRaw(studyId: number): any[] {
   const ordinary = listImagingStudyFilesRaw(studyId).filter((file) => file.source_kind !== "dicom");
   const previews = db
@@ -1866,6 +1877,9 @@ export function deleteImagingStudy(
 ) {
   const row = getHealthDocumentRaw(id) as any;
   if (!row || row.kind !== "imaging") return { deleted: 0, derived: 0, files: 0 };
+  // A pasted report filed as imaging is an upload, not a study: its own file and the
+  // study derived from it go through the upload delete (every caller: REST, MCP).
+  if (isImagingSourceUpload(row)) return deleteHealthDocument(id);
   const files = listImagingStudyFilesRaw(id);
   const previews = db
     .prepare(

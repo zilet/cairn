@@ -50,6 +50,7 @@ function imagingClient() {
   context.window = context;
   context.globalThis = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/imaging-words-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/imaging-client.js"), "utf8"), context);
   return context.CairnImaging;
 }

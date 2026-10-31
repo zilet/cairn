@@ -130,6 +130,12 @@
 .hdoc-collapsed .hdoc-detail,
 .hdoc-collapsed .hdoc-foot{display:none}
 .hdoc-collapsed .imaging-detail{display:none}
+/* An imaging card leads with what the study found, visible collapsed or open. */
+.imaging-headline{margin:var(--space-3) 0 0;font-size:var(--text-md);line-height:var(--leading-normal);color:var(--ink)}
+/* The record an identical re-upload matched, marked for a moment. */
+.hdoc-flash{outline:2px solid var(--accent);outline-offset:2px;transition:outline-color var(--dur-2) var(--ease)}
+/* A read in progress: quiet, and it says how long once it has been a while. */
+.hdoc-analyzing{color:var(--muted)}
 
 /* markers table */
 .hmarkers{width:100%;border-collapse:collapse;margin-top:var(--space-5);font-size:var(--text-sm)}

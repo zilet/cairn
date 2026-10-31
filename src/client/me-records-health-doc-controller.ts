@@ -114,12 +114,15 @@ function renderHealthDocs(deps: HealthRecordsControllerDeps, docs: HealthDocumen
   wrap.innerHTML = CairnHealthRecords.recordsListHtml(docs);
   wrap.querySelectorAll<HTMLElement>(".hdoc").forEach((el) => {
     wireHealthDoc(el, deps);
-    if (el.dataset.hdoc && el.querySelector(".enr-pending")) pollHealthDoc(Number(el.dataset.hdoc), deps);
+    // A study card reading its hidden source upload watches that source (hpoll).
+    const pollId = el.dataset.hpoll || el.dataset.hdoc;
+    if (el.dataset.hdoc && el.querySelector(".enr-pending")) pollHealthDoc(Number(pollId), deps);
   });
+  CairnHealthDocs.startAnalyzingClock?.();
   if (deps.state.pendingHealthDocId) {
     const wanted = String(deps.state.pendingHealthDocId);
     const target = [...wrap.querySelectorAll<HTMLElement>(".hdoc[data-hdoc]")]
-      .find((el) => el.dataset.hdoc === wanted);
+      .find((el) => el.dataset.hdoc === wanted || el.dataset.hsource === wanted);
     // Only consume the deep-link once the target actually renders — so a warm cached
     // paint that predates a just-uploaded doc keeps it for the revalidated paint.
     if (target) {
