@@ -1145,6 +1145,8 @@ declare global {
   type ClientImagingCardOptions = {
     source?: ClientHealthDocument | null;
     sourceHidden?: boolean;
+    // uploads kept when their own study folded into this one (the same scan filed twice)
+    copies?: ClientHealthDocument[];
   };
 
   type ClientHealthDocActionsControllerDeps = {

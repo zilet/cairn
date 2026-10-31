@@ -34,7 +34,7 @@ import {
   presentGroups,
 } from "./propagation.js";
 import { unitAnalyteZone } from "./propagation-data.js";
-import { foldsIntoStudy } from "./imaging-source.js";
+import { foldedIntoStudyId, foldsIntoStudy } from "./imaging-source.js";
 
 // A modern comprehensive panel (e.g. Function Health) lists 100+ markers. Cap
 // generously so a complete transcription is never silently clipped, while still
@@ -609,6 +609,14 @@ function publicHealthDoc(row: any) {
     };
     rest.parsed = { ...rest.parsed, imaging_study: imaging };
   }
+  // A fold's snapshots of the records it absorbed are server bookkeeping for a later
+  // restore, never part of what a client reads.
+  if (Array.isArray(rest.parsed?.merged_from)) {
+    rest.parsed = {
+      ...rest.parsed,
+      merged_from: rest.parsed.merged_from.map(({ snapshot: _snapshot, ...entry }: any) => entry),
+    };
+  }
   const study_files =
     row.kind === "imaging"
       ? (
@@ -626,12 +634,15 @@ function publicHealthDoc(row: any) {
   // Records shows a pasted imaging report THROUGH its study card. The server decides
   // (it sees every derived row); the client folds on this flag alone.
   const folds = foldsIntoStudy(row);
+  // An upload kept when its study folded into a twin is shown under THAT study's card.
+  const foldedInto = folds ? foldedIntoStudyId(row) : null;
   return {
     ...rest,
     has_file: !!file_path,
     ...(study_files ? { study_files } : {}),
     ...(since ? { enrich_since: since } : {}),
     ...(folds ? { folds_into_study: true } : {}),
+    ...(foldedInto != null ? { folded_into_study: foldedInto } : {}),
   };
 }
 
@@ -834,6 +845,12 @@ function orphanedTwinsOf(rows: any[], removedSourceId: number): OrphanedTwin[] {
 }
 
 let restoredRecordSettler: ((id: number) => void) | null = null;
+let uploadWithdrawer: ((id: number) => number) | null = null;
+// The dedupe module registers how a deleted upload's readings are taken back from
+// the records that folded them in (withdrawUploadReadings, src/repo/health-dedupe.ts).
+export function registerUploadWithdrawer(fn: ((id: number) => number) | null): void {
+  uploadWithdrawer = fn;
+}
 // The dedupe chokepoint registers itself (src/domain/health/record-dedupe.ts); the
 // repo layer must not import it.
 export function registerRestoredRecordSettler(fn: ((id: number) => void) | null): void {
@@ -1261,6 +1278,14 @@ export function deleteHealthDocument(id: number) {
     bumpMarkerHistoryVersion();
     if (affectedMeasuredRmr) syncMeasuredRmrFromHealthDocs();
     emitHealthDocumentSignals(existing ?? { id, doc_date: localDateISO() }, relatedState);
+  }
+  // what this upload brought into records owned by OTHER uploads goes back out
+  if (deleted && uploadWithdrawer) {
+    try {
+      uploadWithdrawer(id);
+    } catch {
+      /* the delete stands; a reading left behind is no worse than before */
+    }
   }
   const restored = deleted && orphans.length ? restoreOrphanedTwins(orphans, { settle: true }) : 0;
   return { deleted, derived: derivedDeleted, derived_files: derivedFilesDeleted, ...(restored ? { restored } : {}) };

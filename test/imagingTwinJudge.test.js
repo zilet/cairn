@@ -348,3 +348,55 @@ test("after an imaging ingest the settle folds a judged twin; the Records check 
   assert.deepEqual(studyIds(), [pair.first.study.id]);
   assert.ok(second, "fixture");
 });
+
+test("a twin whose own report is on file nowhere never folds by judgement (its narrative would be lost)", async () => {
+  const { second } = twins();
+  // the twin's source upload no longer holds a report (only its read survives)
+  db.prepare("UPDATE health_documents SET file_path = NULL WHERE id = ?").run(second.source.id);
+  assert.equal(imagingJudgeCandidates().length, 0, "never asked");
+  recordImagingDedupeJudgment(
+    imagingJudgeCandidatesFor(second) ?? 0,
+    second.study.id,
+    { same_study: true, confidence: "high", reason: "x" }
+  );
+  assert.equal(dedupeHealthDocuments({}).merged, 0);
+  assert.equal(studyIds().length, 2);
+});
+
+// the other study of the twins() pair
+function imagingJudgeCandidatesFor(second) {
+  return studyIds().find((id) => id !== second.study.id) ?? null;
+}
+
+test("a kept source reads under the survivor's card, and its re-read folds again without asking", async () => {
+  const { first, second } = twins();
+  await judgeImagingTwins("judge", { run: answering({ same_study: true, confidence: "high", reason: "One scan." }).run });
+  assert.equal(dedupeHealthDocuments({}).merged, 1);
+  // the kept paste is marked as folded into the survivor, and the API row says so
+  const pub = repo.listHealthDocuments(50).find((d) => d.id === second.source.id);
+  assert.equal(pub.folds_into_study, true, "never a stray card of its own");
+  assert.equal(pub.folded_into_study, first.study.id);
+
+  // a re-read of the kept paste derives its study again: folded with no new question
+  repo.replaceDerivedImagingStudies(second.source.id, [
+    {
+      imaging_study: {
+        study: { modality: "CT", procedure: "Coronary calcium scoring CT", study_date: "2026-09-14" },
+        anatomy: { clinical_system: "cardiovascular", body_region: "torso.chest", laterality: "not_applicable" },
+        report: { impression: "No coronary artery calcium (score 0)." },
+        findings: [
+          {
+            finding_text: "Coronary calcium",
+            measurements: [{ name: "Agatston score", qualifier: "total", value: 0, unit: "Agatston" }],
+          },
+        ],
+      },
+    },
+  ]);
+  assert.equal(imagingJudgeCandidates().length, 0, "the earlier verdict stands: nothing to ask");
+  const asked = answering({ same_study: false, confidence: "high", reason: "unused" });
+  const settled = await settleImagingTwins(second.source.id, { run: asked.run });
+  assert.equal(asked.calls.length, 0);
+  assert.equal(settled.merged, 1);
+  assert.deepEqual(studyIds(), [first.study.id]);
+});

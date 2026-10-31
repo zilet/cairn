@@ -76,5 +76,20 @@ export function foldsIntoStudy(row: any): boolean {
   const derived = db
     .prepare("SELECT kind, parsed_json FROM health_documents WHERE source_doc_id = ?")
     .all(Number(row.id)) as any[];
-  return derived.length > 0 && derived.every(isImagingStudyRow);
+  if (derived.length > 0) return derived.every(isImagingStudyRow);
+  // Its own study folded into a twin and the upload was kept (its text had no copy
+  // on the twin's side): it is shown under the study that absorbed it, while that
+  // study is still on file.
+  return foldedIntoStudyId(row) != null;
+}
+
+/**
+ * The study a kept imaging source was folded into (`parsed.folded_into_study`, set by
+ * the imaging dedupe), while that study is still a current imaging study; else null.
+ */
+export function foldedIntoStudyId(row: any): number | null {
+  const target = Number(parsedOf(row)?.folded_into_study);
+  if (!Number.isInteger(target) || target <= 0) return null;
+  const study = db.prepare("SELECT kind, parsed_json FROM health_documents WHERE id = ?").get(target) as any;
+  return isImagingStudyRow(study) ? target : null;
 }

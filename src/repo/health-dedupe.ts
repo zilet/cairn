@@ -40,7 +40,7 @@
 
 import { db } from "../db.js";
 import { canonicalMarkerForReading, isNonAnalyteMarkerName, normalizeMarkerName } from "./marker-canon.js";
-import { deleteHealthDocument, updateHealthDocFields } from "./health.js";
+import { deleteHealthDocument, registerUploadWithdrawer, updateHealthDocFields } from "./health.js";
 import { dedupeImagingStudies, foldJudgedImagingTwins } from "./imaging-dedupe.js";
 import type { FoldAllowList, ImagingDedupeFold, ImagingDedupeResult } from "./imaging-dedupe.js";
 import { labUnitSpec, labUnitsCompatible, normalizeLabUnit, toCanonical } from "./lab-units.js";
@@ -111,6 +111,7 @@ export interface SupersededReading {
   from_doc_id: number; // the record whose value was replaced
   replaced_by_doc_id: number; // the record whose value now stands
   from_source_doc_id: number | null; // the export the replaced value came from
+  key?: string; // the reading slot (markerReadingKey), so the value can be put back
 }
 
 // Where the value standing in one reading slot came from, kept on a survivor that
@@ -593,6 +594,7 @@ function mergedMarkers(
           from_doc_id: twinWins ? owner.id : twin.id,
           replaced_by_doc_id: twinWins ? twin.id : owner.id,
           from_source_doc_id: twinWins ? mine.source_doc_id : theirs.source_doc_id,
+          key,
         });
         if (twinWins) {
           markers[at] = marker;
@@ -604,8 +606,11 @@ function mergedMarkers(
       if (hasRefRange(marker) && !hasRefRange(markers[at])) markers[at] = marker;
     }
   }
+  // Provenance per slot whenever another upload contributes, so deleting that upload
+  // can take back exactly what it brought (withdrawUploadReadings).
+  const crossUpload = twins.some((twin) => twin.source_doc_id != null && twin.source_doc_id !== survivor.source_doc_id);
   let sources: Record<string, ReadingSource> | null = null;
-  if (anyEncounter || survivor.parsed?.reading_sources) {
+  if (anyEncounter || crossUpload || survivor.parsed?.reading_sources) {
     sources = {};
     for (const key of slot.keys()) sources[key] = sourceOf(key);
   }
@@ -634,7 +639,7 @@ function foldedParsed(
   if (facts) parsed.clinical_facts = facts;
   // a twin's own fold history travels with it, so every export behind the survivor
   // can still be filed again if the survivor's own export goes
-  parsed.merged_from = [
+  parsed.merged_from = capMergedFrom([
     ...(Array.isArray(parsed.merged_from) ? parsed.merged_from : []),
     ...twins.flatMap((row) => [
       ...(Array.isArray(row.parsed?.merged_from) ? row.parsed.merged_from : []),
@@ -646,15 +651,132 @@ function foldedParsed(
         snapshot: twinSnapshot(row),
       },
     ]),
-  ].slice(-20);
+  ]);
   if (superseded.length) {
+    // a re-read of an export folds the same replaced value again: noted once
+    const seen = new Set<string>();
+    const sig = (r: any) => JSON.stringify([r?.key ?? r?.name, r?.value, r?.unit ?? null, r?.from_source_doc_id ?? null]);
     parsed.superseded_readings = [
       ...(Array.isArray(parsed.superseded_readings) ? parsed.superseded_readings : []),
       ...superseded,
-    ].slice(-50);
+    ]
+      .filter((r) => {
+        const k = sig(r);
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      })
+      .slice(-50);
   }
   return { parsed, added, superseded };
 }
+
+const MERGED_FROM_CAP = 20;
+
+function uploadOnFile(id: unknown): boolean {
+  return id != null && !!db.prepare(`SELECT 1 FROM health_documents WHERE id = ?`).get(Number(id));
+}
+
+// The fold history a survivor keeps: ONE entry per upload, draw and summary (the
+// latest, since a re-read folds the same twin again), and never an entry a restore
+// still needs (a snapshot of an upload still on file, or of a standalone record),
+// whatever the cap: only entries nothing can restore from any more are evicted.
+function capMergedFrom(entries: any[]): any[] {
+  const byKey = new Map<string, any>();
+  for (const entry of entries) {
+    if (!entry || typeof entry !== "object") continue;
+    const snap = entry.snapshot;
+    const key = snap
+      ? `${entry.source_doc_id ?? `row${entry.id}`}|${snap.doc_date ?? entry.doc_date ?? ""}|${snap.summary ?? ""}`
+      : `id${entry.id}`;
+    byKey.delete(key); // re-insert so the latest keeps its place at the end
+    byKey.set(key, entry);
+  }
+  const deduped = [...byKey.values()];
+  if (deduped.length <= MERGED_FROM_CAP) return deduped;
+  const needed = (e: any) => !!e.snapshot && (e.source_doc_id == null || uploadOnFile(e.source_doc_id));
+  let excess = deduped.length - MERGED_FROM_CAP;
+  return deduped.filter((e) => {
+    if (excess > 0 && !needed(e)) {
+      excess--;
+      return false;
+    }
+    return true;
+  });
+}
+
+// An upload is deleted: every OTHER record that folded readings from it takes them
+// back. A slot whose standing value came from that upload gets the value it replaced
+// back (the latest export still on file, from `superseded_readings`), or, when only
+// that upload had the reading, loses it; superseded values from that upload and its
+// fold-history entries go too. Exact per slot because a cross-upload fold records
+// `reading_sources`; a fold from before that was recorded keeps its readings.
+export function withdrawUploadReadings(uploadId: number): number {
+  const id = Number(uploadId);
+  if (!Number.isInteger(id)) return 0;
+  const rows = db
+    .prepare(
+      `SELECT id, parsed_json FROM health_documents
+        WHERE kind != 'imaging' AND COALESCE(source_doc_id, -1) != ?
+          AND (parsed_json LIKE '%"reading_sources"%' OR parsed_json LIKE '%"merged_from"%')`
+    )
+    .all(id) as any[];
+  const exportedAt = (sourceId: number): string | null =>
+    ((db.prepare(`SELECT created_at FROM health_documents WHERE id = ?`).get(sourceId) as any)?.created_at as string) ?? null;
+  let changed = 0;
+  for (const row of rows) {
+    let parsed: any = null;
+    try {
+      parsed = row.parsed_json ? JSON.parse(row.parsed_json) : null;
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== "object") continue;
+    const sources: Record<string, ReadingSource> = { ...(parsed.reading_sources ?? {}) };
+    const mergedFrom: any[] = Array.isArray(parsed.merged_from) ? parsed.merged_from : [];
+    const touched =
+      Object.values(sources).some((src: any) => Number(src?.source_doc_id) === id) ||
+      mergedFrom.some((e) => Number(e?.source_doc_id) === id);
+    if (!touched) continue;
+    let superseded: any[] = Array.isArray(parsed.superseded_readings) ? [...parsed.superseded_readings] : [];
+    const markers: any[] = Array.isArray(parsed.markers) ? [...parsed.markers] : [];
+    for (let i = markers.length - 1; i >= 0; i--) {
+      const key = markerReadingKey(markers[i]);
+      if (!key || Number(sources[key]?.source_doc_id) !== id) continue;
+      const candidates = superseded
+        .filter((s) => (s?.key ?? markerReadingKey(s)) === key)
+        .filter((s) => s?.from_source_doc_id != null && Number(s.from_source_doc_id) !== id)
+        .map((s) => ({ s, at: exportedAt(Number(s.from_source_doc_id)) }))
+        .filter((c) => c.at != null);
+      candidates.sort((a, b) =>
+        a.at === b.at ? Number(b.s.from_source_doc_id) - Number(a.s.from_source_doc_id) : a.at! < b.at! ? 1 : -1
+      );
+      const back = candidates[0];
+      if (back) {
+        markers[i] = { ...markers[i], value: back.s.value, unit: back.s.unit ?? null };
+        sources[key] = { source_doc_id: Number(back.s.from_source_doc_id), exported_at: back.at };
+        superseded = superseded.filter((s) => s !== back.s);
+      } else {
+        markers.splice(i, 1);
+        delete sources[key];
+      }
+    }
+    superseded = superseded.filter((s) => Number(s?.from_source_doc_id) !== id);
+    const next: Record<string, any> = {
+      ...parsed,
+      markers,
+      reading_sources: sources,
+      merged_from: mergedFrom.filter((e) => Number(e?.source_doc_id) !== id),
+    };
+    if (superseded.length) next.superseded_readings = superseded;
+    else delete next.superseded_readings;
+    updateHealthDocFields(Number(row.id), { parsed_json: next });
+    changed++;
+  }
+  return changed;
+}
+
+registerUploadWithdrawer(withdrawUploadReadings);
 
 function recordLabel(row: { summary?: string | null; original_name?: string | null }): string | null {
   const text = String(row.summary || row.original_name || "")

@@ -75,6 +75,9 @@ interface StudyRow {
   dicom: number;
   judgments: ImagingDedupeJudgment[];
   content: string; // studyContentHash: what a verdict was given about
+  // the study this one's source upload was already folded into (a kept upload re-read)
+  folded_into: number | null;
+  source_has_file: boolean; // its source upload still holds the report it was read from
 }
 
 export interface ImagingDedupeJudgment {
@@ -88,7 +91,8 @@ export interface ImagingDedupeJudgment {
   other_hash: string | null;
 }
 
-// Restricts a fold to pairs a person approved: `${rule}:${survivorId}:${twinId}`.
+// Restricts a fold to pairs a person approved, each keyed `${survivorId}:${twinId}`
+// (the rule and the removed uploads are checked by applyPlannedDedupe against the plan).
 export type FoldAllowList = Set<string>;
 
 // The clinical content of one study a verdict speaks to: its study, anatomy, report,
@@ -171,12 +175,39 @@ function judgmentsOf(parsed: any): ImagingDedupeJudgment[] {
 
 const BUSY = new Set(["pending", "in_progress", "running", "pending_confirm"]);
 
+function foldedIntoOf(sourceParsedJson: unknown): number | null {
+  try {
+    const target = Number(JSON.parse(String(sourceParsedJson ?? "null"))?.folded_into_study);
+    return Number.isInteger(target) && target > 0 ? target : null;
+  } catch {
+    return null;
+  }
+}
+
+// A kept source remembers the study it folded into, so Records shows it under that
+// study's card and a re-read of it folds again without asking (an inherited verdict).
+function markSourceFoldedInto(sourceId: number, studyId: number): void {
+  const row = db.prepare(`SELECT parsed_json FROM health_documents WHERE id = ?`).get(sourceId) as any;
+  if (!row) return;
+  let parsed: any = {};
+  try {
+    parsed = row.parsed_json ? JSON.parse(row.parsed_json) : {};
+  } catch {
+    parsed = {};
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) parsed = {};
+  parsed.folded_into_study = studyId;
+  db.prepare(`UPDATE health_documents SET parsed_json = ? WHERE id = ?`).run(JSON.stringify(parsed), sourceId);
+}
+
 function loadStudies(): StudyRow[] {
   const rows = db
     .prepare(
       `SELECT d.id, d.doc_date, d.source_doc_id, d.parsed_json,
               (SELECT COUNT(*) FROM dicom_series s WHERE s.health_document_id = d.id) AS dicom,
-              (SELECT s.enrichment_status FROM health_documents s WHERE s.id = d.source_doc_id) AS source_status
+              (SELECT s.enrichment_status FROM health_documents s WHERE s.id = d.source_doc_id) AS source_status,
+              (SELECT s.parsed_json FROM health_documents s WHERE s.id = d.source_doc_id) AS source_parsed,
+              (SELECT s.file_path FROM health_documents s WHERE s.id = d.source_doc_id) AS source_file
          FROM health_documents d
         WHERE d.kind = 'imaging'
           AND COALESCE(d.enrichment_status, '') NOT IN ('pending', 'in_progress', 'running', 'pending_confirm')
@@ -213,6 +244,8 @@ function loadStudies(): StudyRow[] {
       dicom: Number(row.dicom ?? 0),
       judgments: judgmentsOf(parsed),
       content: studyContentHash(study),
+      folded_into: foldedIntoOf(row.source_parsed),
+      source_has_file: !!row.source_file,
     });
   }
   return out;
@@ -344,6 +377,13 @@ function foldTwins(
         break;
       }
       if (sourceId != null) result.deleted_files++;
+      // the upload stays (no copy of it on the survivor's side): it reads under the
+      // survivor's card from now on, never as a stray card of its own
+      else if (twin.source_doc_id != null && twin.source_doc_id !== survivor.source_doc_id) {
+        const source = getHealthDocumentRaw(twin.source_doc_id) as any;
+        const left = db.prepare(`SELECT 1 FROM health_documents WHERE source_doc_id = ? LIMIT 1`).get(twin.source_doc_id);
+        if (source && !left && imagingSourceFolds(source)) markSourceFoldedInto(twin.source_doc_id, survivor.id);
+      }
     }
     fold.merged.push({
       id: twin.id,
@@ -435,7 +475,22 @@ function nearTwin(a: StudyRow, b: StudyRow): boolean {
 function judgmentFor(a: StudyRow, b: StudyRow): ImagingDedupeJudgment | null {
   const holds = (j: ImagingDedupeJudgment, self: StudyRow, other: StudyRow) =>
     j.other_id === other.id && j.self_hash === self.content && j.other_hash === other.content;
-  return a.judgments.find((j) => holds(j, a, b)) ?? b.judgments.find((j) => holds(j, b, a)) ?? null;
+  const remembered = a.judgments.find((j) => holds(j, a, b)) ?? b.judgments.find((j) => holds(j, b, a)) ?? null;
+  if (remembered) return remembered;
+  // a re-read of an upload already folded into this study: the earlier verdict stands
+  // (the content guards below still apply), so it is never asked about again
+  if (a.folded_into === b.id || b.folded_into === a.id) {
+    return {
+      other_id: a.folded_into === b.id ? b.id : a.id,
+      same_study: true,
+      confidence: "high",
+      reason: "This report was merged with this study before.",
+      at: "",
+      self_hash: null,
+      other_hash: null,
+    };
+  }
+  return null;
 }
 
 // How much a study says: findings, measurements, recommendations and report sections.
@@ -502,6 +557,10 @@ function candidatePairs(studies: StudyRow[], scopeId: number | null): Array<[Stu
       if (!twinMayFold(twin, survivor)) continue;
       // a fold that would lose what only the twin says is never made, so never asked
       if (!twinContentCovered(twin.study, survivor.study)) continue;
+      // nor one that would lose its narrative: the twin's own words (impression,
+      // findings prose) live on only in its source upload, which the fold keeps or
+      // copies, so a twin with no source report on file never folds by judgement
+      if (twin.source_doc_id == null || !twin.source_has_file) continue;
       out.push(a.id < b.id ? [a, b] : [b, a]);
     }
   }

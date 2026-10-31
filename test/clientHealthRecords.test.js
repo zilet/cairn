@@ -125,3 +125,41 @@ test("health records fold a source only on the server's folds_into_study flag", 
   // A flagged source whose study is not on the list stays visible (never lost).
   assert.match(records.recordsListHtml([source]), /data-hdoc="7"/);
 });
+
+// An upload KEPT when its own copy of a scan folded into another study (its text had
+// no copy on the survivor's side) carries `folded_into_study`: it reads under THAT
+// study's card as an "other copy", never as a stray card of its own.
+test("a kept upload folded into another study reads under that study's card", () => {
+  const context = {
+    Object,
+    String,
+    Array,
+    Map,
+    Set,
+    JSON,
+    localISO: () => "2026-10-30",
+    relAge: (iso) => iso,
+    absDate: (iso) => iso,
+    stagger: (idx) => `--i:${idx}`,
+    enrichmentActive: () => false,
+    CairnHealthClient: { H_FILE_PROMPT: "Share" },
+    CairnImaging: {
+      imagingStudy: (doc) => doc.parsed?.imaging_study ?? null,
+      imagingCard: (doc, _index, opts = {}) =>
+        `<article data-id="${String(doc.id)}" data-copies="${(opts.copies ?? []).map((c) => c.id).join(",")}"></article>`,
+    },
+  };
+  context.window = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/health-docs-client.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/health-records-client.js"), "utf8"), context);
+  const records = context.CairnHealthRecords;
+  const survivorSource = { id: 1, kind: "imaging", has_file: true, parsed: {}, folds_into_study: true };
+  const survivor = { id: 2, kind: "imaging", source_doc_id: 1, parsed: { imaging_study: { study: {} } } };
+  const kept = { id: 3, kind: "imaging", has_file: true, parsed: {}, folds_into_study: true, folded_into_study: 2 };
+  const html = records.recordsListHtml([survivorSource, survivor, kept]);
+  assert.doesNotMatch(html, /data-hdoc="3"/, "the kept upload is not a card of its own");
+  assert.match(html, /data-id="2" data-copies="3"/, "it reads under the survivor's card");
+  // its study is not on this list: it keeps its own card (never lost)
+  assert.match(records.recordsListHtml([kept]), /data-hdoc="3"/);
+});

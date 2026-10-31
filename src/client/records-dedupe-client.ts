@@ -28,6 +28,7 @@ type RecordsDedupeCluster = {
   rule?: unknown;
   reason?: unknown;
   removes_note?: unknown;
+  removes?: RecordsDedupeDoc[] | null;
   superseded?: RecordsDedupeSuperseded[] | null;
 };
 
@@ -216,11 +217,15 @@ type RecordsDedupePlan = {
   }
 
   // The clusters on screen, as the server needs them to fold exactly those.
-  function plannedClusters(plan: RecordsDedupePlan): Array<{ survivor: number; merged: number[]; rule: string }> {
+  function plannedClusters(
+    plan: RecordsDedupePlan
+  ): Array<{ survivor: number; merged: number[]; rule: string; removes: number[] }> {
     return rows<RecordsDedupeCluster>(plan.clusters).map((cluster) => ({
       survivor: Number(record(cluster.survivor).id),
       merged: rows<RecordsDedupeDoc>(cluster.merged).map((doc) => Number(doc.id)),
       rule: String(cluster.rule ?? ""),
+      // the uploads the plan said it deletes: the server folds only if that still holds
+      removes: rows<RecordsDedupeDoc>(cluster.removes).map((doc) => Number(doc.id)),
     }));
   }
 

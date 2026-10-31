@@ -65,13 +65,20 @@ export function registerHealthRecordTools(server: McpToolRegistrar) {
 
   server.tool(
     "dedupe_health_records",
-    "Fold duplicate health records — the same lab draw filed more than once (same date, agreeing readings), the same clinic encounter filed by two exports (same CCDA type, date and encounter time; the later export's reading wins and the replaced one is kept as superseded), the same imaging study filed twice (same day, procedure, impression and side/region), and imaging near-twins an agent has judged the same study at high confidence. Without apply:true this only reports the plan (each cluster names its rule and reason); apply:true performs the fold (twin records are deleted); pass the dry run's clusters (each {survivor, merged, rule}) with apply:true to fold exactly those or nothing ({ok:false, changed:true} when the records moved since the plan). judge:true (dry run only) first asks an agent about unjudged imaging near-twins and returns a queued job; poll get_agent_job for the plan.",
+    "Fold duplicate health records — the same lab draw filed more than once (same date, agreeing readings), the same clinic encounter filed by two exports (same CCDA type, date and encounter time; the later export's reading wins and the replaced one is kept as superseded), the same imaging study filed twice (same day, procedure, impression and side/region), and imaging near-twins an agent has judged the same study at high confidence. Without apply:true this only reports the plan (each cluster names its rule and reason); apply:true performs the fold (twin records are deleted); pass the dry run's clusters (each {survivor, merged ids, rule, removes ids}) with apply:true to fold exactly those or nothing ({ok:false, changed:true} when the records moved since the plan). judge:true (dry run only) first asks an agent about unjudged imaging near-twins and returns a queued job; poll get_agent_job for the plan.",
     {
       apply: z.boolean().optional().describe("true to perform the fold; omitted = dry run"),
       judge: z.boolean().optional().describe("dry run only: judge imaging near-twins first (returns a job)"),
       agent: z.string().optional().describe("for judge: agent name from list_agents; omit/'auto' for the health order"),
       clusters: z
-        .array(z.object({ survivor: z.number().int(), merged: z.array(z.number().int()), rule: z.string() }))
+        .array(
+          z.object({
+            survivor: z.number().int(),
+            merged: z.array(z.number().int()),
+            rule: z.string(),
+            removes: z.array(z.number().int()).optional().describe("ids of the uploads the plan said it deletes"),
+          })
+        )
         .optional()
         .describe("with apply:true: the planned clusters to fold, exactly as the dry run returned them"),
     },

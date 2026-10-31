@@ -89,7 +89,7 @@ test("where two exports of one visit disagree the later export's reading stands,
     [27.2]
   );
   assert.deepEqual(parsed.superseded_readings, [
-    { name: "BMI", value: 29.1, unit: null, from_doc_id: first, replaced_by_doc_id: second, from_source_doc_id: older },
+    { name: "BMI", value: 29.1, unit: null, from_doc_id: first, replaced_by_doc_id: second, from_source_doc_id: older, key: "body mass index" },
   ]);
   assert.deepEqual(
     result.clusters[0].superseded.map((s) => s.value),
@@ -108,7 +108,7 @@ test("an earlier export arriving after the later one never overwrites the later 
   const parsed = parsedOf(kept);
   assert.equal(parsed.markers.find((m) => m.name === "BMI").value, 27.2);
   assert.deepEqual(parsed.superseded_readings, [
-    { name: "BMI", value: 29.1, unit: null, from_doc_id: stale, replaced_by_doc_id: kept, from_source_doc_id: earlier },
+    { name: "BMI", value: 29.1, unit: null, from_doc_id: stale, replaced_by_doc_id: kept, from_source_doc_id: earlier, key: "body mass index" },
   ]);
 });
 

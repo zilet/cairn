@@ -195,7 +195,7 @@ test("Merge these posts {apply:true} with the clusters on screen, confirms calml
   assert.equal(h.requests[0].opts.method, "POST");
   assert.deepEqual(JSON.parse(h.requests[0].opts.body), {
     apply: true,
-    clusters: [{ survivor: 10, merged: [11], rule: "same_draw" }],
+    clusters: [{ survivor: 10, merged: [11], rule: "same_draw", removes: [] }],
   });
   assert.match(h.panel().innerHTML, /Merged 1 record\./);
   assert.deepEqual(h.merges, [1]);

@@ -3244,6 +3244,8 @@ export interface ClientHealthDocument {
   reanalyzing?: boolean;
   /** A source upload Records shows through its imaging study card (decided server-side). */
   folds_into_study?: boolean;
+  // the study a kept upload was folded into: Records shows it under that study's card
+  folded_into_study?: number;
   parsed_json?: unknown;
   parsed?: ClientHealthDocumentParsed | null;
   study_files?: ClientImagingStudyFile[];

@@ -45,15 +45,31 @@ type HealthRecordDocument = import("../contracts/client-api.js").ClientHealthDoc
   // and an upload whose study is not on this list keeps its own card (never lost).
   function foldedSources(docs: HealthRecordDocument[]): Set<string> {
     const shown = new Set<string>();
+    const studies = new Set<string>();
     for (const doc of docs) {
       if (doc.source_doc_id != null && isImagingStudyDoc(doc)) shown.add(String(doc.source_doc_id));
+      if (isImagingStudyDoc(doc)) studies.add(String(doc.id));
     }
     const folded = new Set<string>();
     for (const doc of docs) {
       const key = String(doc.id);
-      if (doc.folds_into_study === true && shown.has(key) && !isImagingStudyDoc(doc)) folded.add(key);
+      if (doc.folds_into_study !== true || isImagingStudyDoc(doc)) continue;
+      // a kept upload whose own study folded into another reads under THAT study
+      const into = doc.folded_into_study != null ? String(doc.folded_into_study) : null;
+      if (shown.has(key) || (into != null && studies.has(into))) folded.add(key);
     }
     return folded;
+  }
+
+  // Uploads kept when their study folded into another, by the study they now read under.
+  function copiesByStudy(docs: HealthRecordDocument[], folded: Set<string>): Map<string, HealthRecordDocument[]> {
+    const out = new Map<string, HealthRecordDocument[]>();
+    for (const doc of docs) {
+      if (!folded.has(String(doc.id)) || doc.folded_into_study == null) continue;
+      const key = String(doc.folded_into_study);
+      out.set(key, [...(out.get(key) ?? []), doc]);
+    }
+    return out;
   }
 
   // Every record on one timeline, newest first, in the server's order (the
@@ -64,13 +80,21 @@ type HealthRecordDocument = import("../contracts/client-api.js").ClientHealthDoc
     if (!docs.length) return recordsEmptyHtml();
     const byId = new Map(docs.map((doc) => [String(doc.id), doc]));
     const folded = foldedSources(docs);
+    const copies = copiesByStudy(docs, folded);
     const visible = docs.filter((doc) => !folded.has(String(doc.id)));
     return visible
       .map((doc, index) => {
-        if (!isImagingStudyDoc(doc) || doc.source_doc_id == null) return CairnHealthDocs.healthDocHtml(doc, index);
+        const kept = copies.get(String(doc.id));
+        if (!isImagingStudyDoc(doc) || doc.source_doc_id == null) {
+          return CairnHealthDocs.healthDocHtml(doc, index, kept ? { copies: kept } : undefined);
+        }
         const key = String(doc.source_doc_id);
         const source = byId.get(key) || null;
-        return CairnHealthDocs.healthDocHtml(doc, index, { source, sourceHidden: !!source && folded.has(key) });
+        return CairnHealthDocs.healthDocHtml(doc, index, {
+          source,
+          sourceHidden: !!source && folded.has(key),
+          ...(kept ? { copies: kept } : {}),
+        });
       })
       .join("");
   }

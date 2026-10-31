@@ -116,7 +116,11 @@ function textLeaves(value: unknown, depth = 0, acc: string[] = [], budget = { le
     return acc;
   }
   if (typeof value === "object") {
-    for (const v of Object.values(value as Record<string, unknown>)) textLeaves(v, depth + 1, acc, budget);
+    for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
+      // a fold's snapshots of the records it absorbed are restore bookkeeping, not this record's text
+      if (key === "snapshot") continue;
+      textLeaves(v, depth + 1, acc, budget);
+    }
   }
   return acc;
 }

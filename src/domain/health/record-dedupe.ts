@@ -146,6 +146,8 @@ export interface PlannedCluster {
   survivor: number;
   merged: number[];
   rule: string;
+  // the uploads the plan said this merge deletes (ids, or the plan's {id} objects)
+  removes?: Array<number | { id: number }>;
 }
 
 export const RECORDS_CHANGED_MESSAGE = "Your records changed since the check. Check again to see the current plan.";
@@ -153,8 +155,8 @@ export const RECORDS_CHANGED_MESSAGE = "Your records changed since the check. Ch
 /**
  * The Records screen's "Merge these": apply EXACTLY the clusters the person was
  * shown, never whatever happens to be foldable now. The approved pairs are re-planned
- * (dry run, restricted to them); only if every one still holds, with the same rule,
- * and nothing else would ride along, are they folded, in the same synchronous call, so
+ * (dry run, restricted to them); only if every one still holds, with the same rule and
+ * the same uploads deleted with it, and nothing else would ride along, are they folded, in the same synchronous call, so
  * nothing can change in between. Otherwise nothing is folded and the answer says the
  * records changed.
  */
@@ -171,11 +173,21 @@ export function applyPlannedDedupe(
       allow.add(`${survivor}:${twin}`);
       wanted.add(`${String(cluster.rule)}:${survivor}:${twin}`);
     }
+    // the uploads it deletes are part of what the person agreed to
+    for (const removed of Array.isArray(cluster?.removes) ? cluster.removes : []) {
+      const rid = Number(typeof removed === "object" && removed ? (removed as any).id : removed);
+      if (Number.isInteger(rid)) wanted.add(`removes:${survivor}:${rid}`);
+    }
   }
   const changed = { ok: false as const, changed: true as const, error: RECORDS_CHANGED_MESSAGE };
   if (!wanted.size) return changed;
   const pairs = (result: DedupeHealthDocumentsResult) =>
-    new Set(result.clusters.flatMap((c) => c.merged.map((m) => `${c.rule}:${c.survivor.id}:${m.id}`)));
+    new Set(
+      result.clusters.flatMap((c) => [
+        ...c.merged.map((m) => `${c.rule}:${c.survivor.id}:${m.id}`),
+        ...(c.removes ?? []).map((r) => `removes:${c.survivor.id}:${r.id}`),
+      ])
+    );
   const same = (a: Set<string>, b: Set<string>) => a.size === b.size && [...a].every((key) => b.has(key));
   const plan = dedupeHealthDocuments({ dryRun: true, allow });
   if (plan.errors.length || !same(pairs(plan), wanted)) return changed;

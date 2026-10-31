@@ -6170,7 +6170,16 @@ re-read (`replaceHealthPanels`, `replaceHealthPanelsByType`) or a delete (`delet
 `restoreOrphanedTwins` (`src/repo/health.ts`) files again each twin whose upload is still on file (or that
 was a standalone record), unless that upload already carries the draw again; a delete then settles the
 re-filed rows, a re-read leaves that to its own ingest settle. So deleting the earlier export leaves the
-visit on file from the later one, and re-reading it keeps the later value standing.
+visit on file from the later one, and re-reading it keeps the later value standing. The history is kept
+one entry per upload, draw and summary (a re-read folds the same twin again; the latest stays), and its
+cap of 20 never evicts a snapshot a restore still needs (an upload still on file, or a standalone record).
+The other direction too: deleting an upload whose rows folded INTO another upload's record takes back
+exactly what it brought (`withdrawUploadReadings`, run from `deleteHealthDocument`): each slot whose
+standing value came from it gets back the value it replaced (the latest still-present export in
+`superseded_readings`), a reading only it had is dropped, and its superseded values and history entries
+go. Any cross-upload fold records `reading_sources` for this. Snapshots are server bookkeeping:
+`publicHealthDoc` strips them and the records search never indexes them. A re-read never notes the same
+replaced value twice.
 
 **When it runs: at the moment a record is added, on request, and once per rules version.** Every
 creation path ends at ONE chokepoint, `settleNewHealthRecords(id)` (`src/domain/health/record-dedupe.ts`):
@@ -6185,8 +6194,9 @@ cluster names its `rule` (`same_draw` / `same_encounter` / `same_scan` / `same_s
 plain-words `reason`, record `label`s, any `superseded` readings, and the uploads the fold deletes with a
 twin (`removes`, said in `removes_note`), which is what the Records screen's "Check for duplicates" shows.
 Its "Merge these" sends the clusters it showed back (`{apply: true, clusters: [{survivor, merged,
-rule}]}`); `applyPlannedDedupe` re-plans ONLY those pairs (the `allow` list) and folds them in the same
-synchronous call if every one still holds with the same rule, else folds nothing and answers
+rule, removes}]}`); `applyPlannedDedupe` re-plans ONLY those pairs (the `allow` list) and folds them in
+the same synchronous call if every one still holds with the same rule AND the same uploads deleted with
+it, else folds nothing and answers
 `{ok:false, changed:true}` ("check again"). And `DEDUPE_RULES_VERSION` (in `health-dedupe.ts`): at boot,
 when it differs from `app_state.health_dedupe_rules_version`, `runDedupeRulesUpgradeIfDue` folds the
 whole set once (deterministic only, before the enrichment queue resumes) and stores the version only after
@@ -6221,8 +6231,11 @@ survivor lacks, keeps the twin. A twin whose source upload is an imaging source 
 from it goes WITH that upload (`imagingSourceFolds`, `src/repo/imaging-source.ts`) ONLY when an
 equivalent copy of it stays on the survivor's side (`sourceHasCopy`: the same normalized pasted text, or
 the same bytes as the survivor's source or one of its attachments); otherwise only the study folds and the
-upload, with its report, stays (`deleteImagingStudy(..., {keepSource: true})`). A note whose markers or
-clinical facts are its own never goes. A pasted report the ordinary ingest
+upload, with its report, stays (`deleteImagingStudy(..., {keepSource: true})`) and is marked
+`parsed.folded_into_study`: the API row carries `folds_into_study` + `folded_into_study`, so Records shows
+it under the survivor's card ("other copy"), and a re-read of it folds its re-derived study into that
+survivor again on an inherited verdict, never asking (the content guards still apply). A note whose
+markers or clinical facts are its own never goes. A pasted report the ordinary ingest
 filed as kind `imaging` is still an upload (`isImagingSourceUpload`, `src/repo/imaging.ts`): it re-reads
 through the ordinary health ingest and deletes through `deleteHealthDocument` (its file and derived
 study with it), never as a study. In Records it has no card of its own: its study's card carries its
@@ -6239,7 +6252,9 @@ phrasings of one impression). `imagingJudgeCandidates` names the pairs worth ask
 on the same day, of the same modality, the same stated clinical system AND body region, laterality not
 contradicting (left / right / bilateral differ), from two different uploads, that the strict rule would
 not fold and whose twin could fold at all (the same guards: no correction, DICOM, extra attachment, note
-or tracking), and whose twin says nothing the survivor does not (`twinContentCovered`: every finding's
+or tracking), whose twin has its own source report on file (its impression and findings prose live on
+only there, and the fold keeps or copies that upload, so a twin read from nowhere never folds by
+judgement), and whose twin says nothing the survivor does not (`twinContentCovered`: every finding's
 text, every measurement by name, qualifier and value, every recommendation's text); for a judged pair the
 survivor is the FULLER study (confirmed or corrected, then attachments, then the most findings,
 measurements, recommendations and report sections, then the oldest). `judgeImagingTwins`
