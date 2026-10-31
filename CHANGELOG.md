@@ -5,6 +5,17 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [2.1.10] — 2026-10-31
+
+Train opens fast and still. No migrations.
+
+### Fixed
+
+- **Train's first load is one round with nothing moving.** "This week", the look-ahead and the
+  next session's detail arrive in one request that starts before the Train code finishes loading,
+  and the placeholder has the landing's own shape, so the page no longer jumps as data arrives.
+  The data lands in about half the time it did. CI's per-route performance budget passes again.
+
 ## [2.1.9] — 2026-10-31
 
 Your health data in one place, records that file themselves once, and scans that read as their
