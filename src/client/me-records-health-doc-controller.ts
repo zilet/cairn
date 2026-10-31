@@ -186,6 +186,7 @@ function renderHealthRecords(deps: HealthRecordsControllerDeps): Promise<HealthD
   content.innerHTML = CairnHealthRecords.recordsTabHtml();
   wireHealthUpload(deps);
   takeRecordsAdd(deps.state);
+  mountRecordsDedupe(deps);
   return loadHealthDocs(deps);
 }
 
@@ -213,6 +214,27 @@ function takeRecordsAdd(state: HealthRecordsState): void {
     } catch {}
   }
   if (add.paste) hrecElement<HTMLTextAreaElement>("#hText")?.focus();
+}
+
+// "Check for duplicates" (records-dedupe-client.ts): a merge refreshes the list the
+// way a delete does — cached-first paint invalidated, markers and picture re-read.
+function mountRecordsDedupe(deps: HealthRecordsControllerDeps): void {
+  if (typeof CairnRecordsDedupe === "undefined") return;
+  CairnRecordsDedupe.mount(hrecElement("#hDedupe"), {
+    api: deps.api,
+    runOp: (kind, body, options) => runOp(kind, body, options),
+    onMerged: (_result, merged) => {
+      swrInvalidate(RECORDS_CACHE_KEY);
+      void loadHealthDocs(deps);
+      deps.loadHealthMarkers(deps.pollToken());
+      const pictureCache = deps.getHealthPictureCache();
+      if (pictureCache && (pictureCache.docCount || 0) > 0) {
+        pictureCache.docCount = Math.max(0, (pictureCache.docCount || 0) - merged);
+        deps.setHealthPictureCache(pictureCache);
+      }
+      deps.paintHealthPicture();
+    },
+  });
 }
 
 const CAIRN_HEALTH_RECORDS_CONTROLLER = {

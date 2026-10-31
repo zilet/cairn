@@ -961,6 +961,32 @@ export const MARKER_RECONCILE_SCHEMA: JsonSchema = {
   },
 };
 
+// ---------- imaging near-twin judgement ----------
+
+// One verdict over two imaging studies the strict dedupe rule left apart: are they
+// one scan read twice? judgeImagingTwins (src/coachOps/health.ts) reads every field.
+export const IMAGING_TWIN_JUDGE_SCHEMA: JsonSchema = {
+  type: "object",
+  additionalProperties: true,
+  required: ["same_study", "confidence", "reason"],
+  properties: {
+    same_study: { type: "boolean" },
+    confidence: { type: "string", enum: ["high", "medium", "low"] },
+    reason: { type: "string" },
+  },
+};
+
+export function isImagingTwinVerdict(parsed: unknown): boolean {
+  const p = parsed as any;
+  return (
+    !!p &&
+    typeof p === "object" &&
+    typeof p.same_study === "boolean" &&
+    ["high", "medium", "low"].includes(p.confidence) &&
+    typeof p.reason === "string"
+  );
+}
+
 export const EXERCISE_RECONCILE_SCHEMA: JsonSchema = {
   type: "object",
   additionalProperties: true,

@@ -225,6 +225,8 @@ test("each new schema admits a well-formed payload (over-restriction guard)", ()
   assert.ok(
     ok(contracts.MARKER_RECONCILE_SCHEMA, { groups: [{ canonical: "eGFR", unit: "mL/min", members: ["eGFR", "Est GFR"] }] })
   );
+  assert.ok(ok(contracts.IMAGING_TWIN_JUDGE_SCHEMA, { same_study: true, confidence: "high", reason: "One scan." }));
+  assert.equal(ok(contracts.IMAGING_TWIN_JUDGE_SCHEMA, { same_study: "yes", confidence: "high", reason: "x" }), false);
   assert.ok(
     ok(contracts.EXERCISE_RECONCILE_SCHEMA, {
       groups: [{ members: ["incline db press"], canonical: "Incline DB Press", group: "chest", mode: "reps" }],
@@ -707,6 +709,11 @@ const CONSUMER_READS = [
     schema: "MARKER_RECONCILE_SCHEMA",
     consumer: "planMarkerMerges",
     fields: ["groups", "groups[].members", "groups[].canonical", "groups[].unit"],
+  },
+  {
+    schema: "IMAGING_TWIN_JUDGE_SCHEMA",
+    consumer: "judgeImagingTwins",
+    fields: ["same_study", "confidence", "reason"],
   },
   {
     schema: "MEMORY_CONSOLIDATION_SCHEMA",

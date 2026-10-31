@@ -6663,6 +6663,28 @@ declare global {
   declare const CairnEvidenceWanted: Window["CairnEvidenceWanted"];
   declare const CairnEvidenceWantedController: Window["CairnEvidenceWantedController"];
   declare const CairnRecordsSlot: Window["CairnRecordsSlot"];
+  // ---- Records › Check for duplicates ----
+  type ClientRecordsDedupeDeps = {
+    api(path: string, opts?: RequestInit & { headers?: Record<string, string> }): Promise<unknown>;
+    runOp(kind: string, body: Record<string, unknown>, options?: ClientAgentOpHandlers): Promise<unknown>;
+    /** A merge landed `merged` records: refresh the list, markers and picture. */
+    onMerged(result: Record<string, unknown>, merged: number): void;
+  };
+  interface Window {
+    CairnRecordsDedupe: {
+      PATH: string;
+      JOB_KIND: string;
+      controlHtml(): string;
+      planHtml(plan: unknown): string;
+      mergedHtml(result: unknown): string;
+      failHtml(message?: string): string;
+      mount(host: Element | null, deps: ClientRecordsDedupeDeps): void;
+      check(deps: ClientRecordsDedupeDeps): Promise<void>;
+      reconnect(job?: unknown): ClientAgentOpHandlers | null;
+    };
+  }
+  declare const CairnRecordsDedupe: Window["CairnRecordsDedupe"];
+  declare function reconnectHealthDedupeCheck(job?: unknown): ClientAgentOpHandlers | null;
   // ---- Wave 3 stream C: packet-builder, visit-questions ----
   /** The packet's two hand-overs: open the HTML packet, or download the text twin. */
   type ClientPacketShareKind = "open" | "text";

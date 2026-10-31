@@ -9,6 +9,7 @@ import {
   getSettings,
   listImagingStudiesStructured,
   setHealthDocEnrichStatus,
+  settleNewHealthRecords,
   updateImagingRecommendationStatus,
 } from "../../domain/health/index.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
@@ -94,13 +95,13 @@ export function registerImagingTools(server: McpToolRegistrar) {
       imaging_study: z.any().describe("FHIR DiagnosticReport-shaped extraction (same imaging_study structure as update_imaging_study), coerced and merged onto the study; source-authority rules decide which fields a lower-trust source is allowed to overwrite"),
       source_kind: z.enum(["report", "images", "report_and_images", "mychart", "patient"]).optional().describe("what the extraction was grounded in: a written 'report', the 'images' themselves, both, a 'mychart' export, or 'patient'-reported. Omitting it falls back to the submitted payload's own provenance.source_kind, then to 'patient' when that is absent or unrecognized — it is never left unset, and the study's existing source kind is not carried over"),
     },
-    async ({ id, imaging_study, source_kind }) =>
-      asText(
-        applyImagingAnalysis(id, imaging_study, { sourceKind: source_kind, extractor: "mcp-client" }) ?? {
-          ok: false,
-          error: "valid imaging structure required",
-        }
-      )
+    async ({ id, imaging_study, source_kind }) => {
+      const applied = applyImagingAnalysis(id, imaging_study, { sourceKind: source_kind, extractor: "mcp-client" });
+      // A study that now reads as one already on file is settled like any new record:
+      // strict twins fold and near-twins are judged, on the enrichment queue.
+      if (applied) settleNewHealthRecords(id, { label: `mcp imaging#${id}` });
+      return asText(applied ?? { ok: false, error: "valid imaging structure required" });
+    }
   );
 
   server.tool(

@@ -185,6 +185,8 @@ export function taskForOp(op: string): string {
   if (op === "case_conference" || op.startsWith("conference_")) return "brain_review";
   if (op === "evolve_program" || op === "compose_week") return "proposal";
   if (op === "marker_reconcile") return "health";
+  // the imaging near-twin judge reads clinical reports: the same faithful health order
+  if (op === "imaging_twin_judge" || op === "health_dedupe_check") return "health";
   return op;
 }
 

@@ -1084,6 +1084,25 @@ to{opacity:1;transform:none}
 .memtag{font-family:var(--font-mono);font-weight:var(--weight-regular);font-size:var(--text-2xs);letter-spacing:var(--tracking-mono)}
 .memadd select,.memadd input{background:var(--surface)}
 .memadd input:focus{outline:none;border-color:var(--dawn)}
+.hdedupe{margin-top:var(--space-7)}
+.hdedupe-bar{display:flex;justify-content:flex-end}
+.hdedupe-check{margin-top:0}
+.hdedupe-check:disabled{opacity:.5;cursor:default}
+.hdedupe-panel:empty{display:none}
+.hdedupe-card{margin-top:var(--space-5);background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:var(--space-7)}
+.hdedupe-cap{font-size:var(--text-sm);color:var(--muted)}
+.hdedupe-lead{margin:0;font-size:var(--text-md);color:var(--ink);line-height:var(--leading-normal)}
+.hdedupe-list{list-style:none;margin:var(--space-5) 0 0;padding:0}
+.hdedupe-row{border-top:1px solid var(--line);padding:var(--space-6) 0}
+.hdedupe-row:first-child{border-top:0}
+.hdedupe-date{display:block;font-family:var(--font-mono);font-size:var(--text-2xs);letter-spacing:var(--tracking-mono);text-transform:uppercase;color:var(--muted);margin-bottom:var(--space-2)}
+.hdedupe-fold{margin:0;font-size:var(--text-md);color:var(--ink-2);line-height:var(--leading-normal)}
+.hdedupe-doc{color:var(--ink);font-weight:var(--weight-semibold);overflow-wrap:anywhere}
+.hdedupe-reason,.hdedupe-kept{margin:var(--space-2) 0 0;font-size:var(--text-sm);color:var(--muted);line-height:var(--leading-normal)}
+.hdedupe-note{margin:var(--space-4) 0 0;font-size:var(--text-sm);color:var(--muted);line-height:var(--leading-normal)}
+.hdedupe-card > .hdedupe-note:first-child{margin-top:0}
+.hdedupe-actions{display:flex;gap:var(--space-4);align-items:center;flex-wrap:wrap;margin-top:var(--space-6)}
+.hdedupe-actions .ghostbtn{margin-top:0}
 .modal{position:fixed;inset:0;z-index:var(--z-modal);background:rgba(33,29,23,.45);background:color-mix(in srgb,var(--ink) 45%,transparent);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);display:flex;align-items:flex-end;justify-content:center;padding:0}
 @keyframes sheetup{from{transform:translateY(24px);opacity:.5}
 to{transform:translateY(0);opacity:1}

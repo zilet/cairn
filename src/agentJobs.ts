@@ -24,6 +24,7 @@ import {
   distillChat,
   weekAheadRead,
   reconcileMarkers,
+  checkHealthDuplicates,
   runResearch,
   reconcileExercises,
   consolidateMemory,
@@ -711,6 +712,11 @@ async function processAgentJob(id: number): Promise<void> {
       }
       case "marker_reconcile": {
         result = await reconcileMarkers(agent, hooks);
+        chosen = result?.agent ?? null;
+        break;
+      }
+      case "health_dedupe_check": {
+        result = await checkHealthDuplicates(agent, hooks);
         chosen = result?.agent ?? null;
         break;
       }

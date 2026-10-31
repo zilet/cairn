@@ -28,6 +28,7 @@ function loadJobReconnectors() {
     reconnectInsight: namedFactory("reconnectInsight"),
     reconnectProposal: namedFactory("reconnectProposal"),
     reconnectHealthReview: namedFactory("reconnectHealthReview"),
+    reconnectHealthDedupeCheck: namedFactory("reconnectHealthDedupeCheck"),
   };
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/app-job-reconnectors.js"), "utf8"), context);
@@ -52,18 +53,22 @@ test("app job reconnector module registers every factory in boot order", () => {
     { kind: "insight", factoryName: "reconnectInsight" },
     { kind: "proposal", factoryName: "reconnectProposal" },
     { kind: "health_review", factoryName: "reconnectHealthReview" },
+    { kind: "health_dedupe_check", factoryName: "reconnectHealthDedupeCheck" },
   ]);
 });
 
 test("the registration pass reports only NEW factories, so a lazy bundle's re-run knows whether to sweep", () => {
   const context = loadJobReconnectors();
   const healthReview = context.reconnectHealthReview;
+  const healthDedupe = context.reconnectHealthDedupeCheck;
   delete context.reconnectHealthReview; // lives in the lazy me-health bundle
+  delete context.reconnectHealthDedupeCheck; // so does Records' duplicate check
 
   assert.equal(context.registerAppJobReconnectors(), 8, "boot registers every eager factory");
   assert.equal(context.registerAppJobReconnectors(), 0, "a re-run with nothing new adds nothing");
 
   context.reconnectHealthReview = healthReview; // the lazy bundle lands
-  assert.equal(context.registerAppJobReconnectors(), 1, "the lazy bundle's factory is new");
+  context.reconnectHealthDedupeCheck = healthDedupe;
+  assert.equal(context.registerAppJobReconnectors(), 2, "the lazy bundle's factories are new");
   assert.equal(context.registerAppJobReconnectors(), 0);
 });

@@ -64,12 +64,12 @@
     "public/js/bundle-05-me-health.js": {
       "lazy": "me-health",
       "measured": {
-        "raw": 424303,
-        "brotli": 85805
+        "raw": 444813,
+        "brotli": 90371
       },
       "budget": {
-        "raw": 446464,
-        "brotli": 90112
+        "raw": 467968,
+        "brotli": 95232
       }
     },
     "public/js/bundle-07-boot.js": {

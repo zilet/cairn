@@ -110,6 +110,7 @@ const THINKING_SCRIPTS: Record<string, string[]> = {
   chat_distill: ["Looking back over the thread…", "Keeping what matters…", "Tidying the rest away…"],
   onboard: ["Hearing you out…", "Folding it into your picture…", "Noting what matters…", "Setting things up…"],
   insight: ["Connecting the dots…", "Crossing the domains…", "Listening for one real thread…"],
+  health_dedupe_check: ["Looking through your records…", "Matching draws and dates…", "Comparing scans that look alike…"],
 };
 
 function thinkingCaption(el: Element | null | undefined, op: unknown): () => void {

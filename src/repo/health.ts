@@ -700,6 +700,8 @@ export interface HealthPanelInput {
   markers?: any[];
   type?: string | null;
   clinical_facts?: any[];
+  // The encounter time a deterministic source states ("YYYY-MM-DD HH:MM"), when it states one.
+  recorded_at?: string | null;
 }
 
 // Replace the derived panels of a source upload with a fresh set (used by
@@ -746,6 +748,9 @@ function insertHealthPanels(sourceId: number, panels: HealthPanelInput[], origin
     if (!markers.length && !summary && !clinicalFacts.length) continue; // an empty panel is noise
     const parsed: Record<string, any> = { markers };
     if (p.type) parsed.type = String(p.type).slice(0, 80);
+    if (typeof p.recorded_at === "string" && /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}$/.test(p.recorded_at)) {
+      parsed.recorded_at = p.recorded_at.replace("T", " ");
+    }
     if (clinicalFacts.length) parsed.clinical_facts = clinicalFacts;
     const row = addHealthDocument({
       kind: inferHealthDocumentKind({

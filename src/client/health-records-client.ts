@@ -25,6 +25,7 @@ type HealthRecordDocument = import("../contracts/client-api.js").ClientHealthDoc
 
   function recordsTabHtml(filePrompt?: string): string {
     return `${recordsUploadHtml(filePrompt)}
+    <div id="hDedupe" class="hdedupe"></div>
     <div id="hlist"></div>`;
   }
 

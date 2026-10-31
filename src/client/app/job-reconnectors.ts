@@ -11,7 +11,8 @@ type AppJobReconnectKind =
   | "nutrition_checkin"
   | "insight"
   | "proposal"
-  | "health_review";
+  | "health_review"
+  | "health_dedupe_check";
 type AppJobReconnectFactory = (job?: unknown) => unknown;
 type AppJobReconnectEntry = {
   kind: AppJobReconnectKind;
@@ -29,6 +30,7 @@ const APP_JOB_RECONNECTORS: AppJobReconnectEntry[] = [
   { kind: "insight", factoryName: "reconnectInsight" },
   { kind: "proposal", factoryName: "reconnectProposal" },
   { kind: "health_review", factoryName: "reconnectHealthReview" },
+  { kind: "health_dedupe_check", factoryName: "reconnectHealthDedupeCheck" },
 ];
 
 // Factories registered so far. A lazy bundle re-runs this pass when it lands; the

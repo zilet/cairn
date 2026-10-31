@@ -8,8 +8,10 @@ import {
   deriveDirectives,
   getHealthDocument,
   listHealthDocuments,
+  settleNewHealthRecords,
 } from "../../domain/health/index.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
+import { queueMcpAgentJob } from "./background.js";
 import { labDraws } from "../../repo/lab-draws.js";
 
 export function registerHealthRecordTools(server: McpToolRegistrar) {
@@ -47,20 +49,29 @@ export function registerHealthRecordTools(server: McpToolRegistrar) {
         parsed_json: record.parsed ?? null,
         enrichment_status: "done",
       });
+      // The same draw already on file absorbs this one (the record returned is then
+      // the survivor it folded into).
+      const folded = settleNewHealthRecords(Number(doc.id), { label: `mcp health#${doc.id}` });
       try {
         deriveDirectives();
       } catch {
         /* never fail the record */
       }
-      return asText(doc);
+      const survivor = folded?.clusters.find((c) => c.merged.some((m) => m.id === Number(doc.id)))?.survivor.id;
+      return asText(survivor != null ? { ...getHealthDocument(survivor), folded_into: survivor } : doc);
     }
   );
 
   server.tool(
     "dedupe_health_records",
-    "Fold duplicate health records — the same lab draw filed more than once (same date, agreeing readings) into one record per draw date, and the same imaging study filed twice (same day, procedure, impression and side/region) into one study. Without apply:true this only reports the plan; apply:true performs the fold (twin records are deleted).",
-    { apply: z.boolean().optional().describe("true to perform the fold; omitted = dry run") },
-    async ({ apply }) => {
+    "Fold duplicate health records — the same lab draw filed more than once (same date, agreeing readings), the same clinic encounter filed by two exports (same CCDA type, date and encounter time; the later export's reading wins and the replaced one is kept as superseded), the same imaging study filed twice (same day, procedure, impression and side/region), and imaging near-twins an agent has judged the same study at high confidence. Without apply:true this only reports the plan (each cluster names its rule and reason); apply:true performs the fold (twin records are deleted). judge:true (dry run only) first asks an agent about unjudged imaging near-twins and returns a queued job; poll get_agent_job for the plan.",
+    {
+      apply: z.boolean().optional().describe("true to perform the fold; omitted = dry run"),
+      judge: z.boolean().optional().describe("dry run only: judge imaging near-twins first (returns a job)"),
+      agent: z.string().optional().describe("for judge: agent name from list_agents; omit/'auto' for the health order"),
+    },
+    async ({ apply, judge, agent }) => {
+      if (apply !== true && judge === true) return asText(queueMcpAgentJob("health_dedupe_check", {}, agent));
       const result = dedupeHealthDocuments({ dryRun: apply !== true });
       if (!result.dry_run && result.merged) {
         try {

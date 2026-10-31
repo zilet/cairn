@@ -78,3 +78,33 @@ ${JSON.stringify(safeExisting)}
 
 ${renderJsonContract(IMAGING_STUDY_SCHEMA)}`;
 }
+
+// Two imaging studies the strict dedupe rule left apart (same day, modality, system
+// and region, sides not contradicting): are they ONE scan read twice? The answer
+// folds a record only at high confidence, and a measurement that disagrees keeps
+// both whatever is said here (src/repo/imaging-dedupe.ts), so the brief is to be
+// conservative: two scans that merely look alike are two scans.
+export function buildImagingTwinPrompt(a: unknown, b: unknown): string {
+  return `You are checking ONE person's imaging records for a duplicate. Below are two imaging studies filed on the
+same day, of the same modality and body region. They came from two different uploads and were read
+separately, so the same report may have been worded differently each time.
+
+Decide: are these the SAME study (one scan whose report was filed twice) or two DIFFERENT studies?
+
+RULES:
+- Same study means one scan: the same exam and the same result. A report read twice in different words, with the
+  procedure phrased differently ("CT coronary calcium scoring" / "Coronary calcium scoring CT"), is the same study.
+- Different studies: a different side, a different exam, a follow-up or comparison scan, an addendum or amended
+  read that changes the result, or measurements that disagree.
+- Compare the impressions, findings, measurements and source excerpts. A missing excerpt is not evidence either way.
+- confidence "high" only when the two clearly describe one scan and nothing contradicts it; otherwise "medium" or "low".
+- reason: one short plain sentence a person would understand, with no scores. Do not give medical advice.
+
+STUDY A:
+${JSON.stringify(a)}
+
+STUDY B:
+${JSON.stringify(b)}
+
+${renderJsonContract(`{"same_study": true, "confidence": "high|medium|low", "reason": "<one short plain sentence>"}`)}`;
+}

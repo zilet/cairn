@@ -18,6 +18,9 @@ export const AGENT_JOB_KINDS = [
   "case_conference",
   "week_ahead",
   "marker_reconcile",
+  // The Records screen's "Check for duplicates": the imaging near-twin judge, then a
+  // dry-run plan of the whole-record fold.
+  "health_dedupe_check",
   "evidence_research",
   "exercise_reconcile",
   "memory_consolidate",

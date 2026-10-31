@@ -23,17 +23,38 @@
 // out derived panels of its own never folds. Each call iterates to a fixed
 // point, and a dry run reports that same end state without writing.
 //
-// It runs after every health ingest, scoped to what that import touched, and
-// on demand across the whole record set (the route / MCP tool).
+// One clinic encounter is identity too: two deterministic CCDA rows of one type
+// (vitals with vitals) on one date, stating the same encounter time to the minute
+// and coming from two different exports, are the same visit even when the
+// readings alone are too few to say so (a re-export that kept one vital of six).
+// Where their readings disagree the LATER export wins (an EHR amends a chart, and
+// the later export is the chart as it stands now), and the survivor keeps the
+// value it replaced in `superseded_readings`, so nothing is silently lost. Never
+// for an agent's read, and never across two encounter times.
+//
+// It runs the moment a record is added (every creation path settles through
+// src/domain/health/record-dedupe.ts, scoped to the new rows but matched against
+// the WHOLE record set), on demand across the whole set (the route / MCP tool and
+// the Records screen's check), and once at boot whenever DEDUPE_RULES_VERSION
+// moves, so better rules clean up what earlier rules left behind.
 
 import { db } from "../db.js";
 import { canonicalMarkerForReading, isNonAnalyteMarkerName, normalizeMarkerName } from "./marker-canon.js";
 import { deleteHealthDocument, updateHealthDocFields } from "./health.js";
-import { dedupeImagingStudies } from "./imaging-dedupe.js";
+import { dedupeImagingStudies, foldJudgedImagingTwins } from "./imaging-dedupe.js";
+import type { ImagingDedupeFold, ImagingDedupeResult } from "./imaging-dedupe.js";
 import { labUnitSpec, labUnitsCompatible, normalizeLabUnit, toCanonical } from "./lab-units.js";
 import { unitAnalyteZone } from "./propagation-data.js";
 
 export const CCDA_DERIVED_TYPES = new Set(["ccda_results", "ccda_vitals"]);
+
+// Bump whenever a rule here (or in imaging-dedupe.ts) learns to recognize a twin
+// it used to miss: the boot pass (src/domain/health/record-dedupe.ts) folds the
+// whole record set once under the new rules, so records filed before the rule
+// existed are cleaned up without any recurring job.
+//   1: same draw by agreeing readings; same scan by date, procedure and impression.
+//   2: same CCDA encounter across exports; agent-judged imaging near-twins.
+export const DEDUPE_RULES_VERSION = 2;
 
 // Readings any two same-day records may share WITHOUT being the same draw: the
 // athlete's body at the clinic that morning, printed on the DEXA, the vitals
@@ -60,6 +81,8 @@ interface DocRow {
   markers: any[];
   readings: Map<string, Reading>;
   children: number;
+  created_at: string | null;
+  source_created_at: string | null; // when the export this row came out of was uploaded
 }
 
 interface Reading {
@@ -72,11 +95,33 @@ interface Reading {
   marker: any; // the stored marker object
 }
 
+export type DedupeRule = "same_draw" | "same_encounter" | "same_scan" | "same_scan_judged";
+
+export interface SupersededReading {
+  name: string;
+  value: unknown;
+  unit: string | null;
+  from_doc_id: number; // the record whose value was replaced
+  replaced_by_doc_id: number; // the record whose value now stands
+}
+
 export interface DedupeClusterPlan {
   date: string;
-  survivor: { id: number; kind: string; doc_date: string; markers: number };
-  merged: Array<{ id: number; kind: string; doc_date: string; markers: number; source_doc_id: number | null; file: boolean }>;
+  survivor: { id: number; kind: string; doc_date: string; markers: number; label: string | null };
+  merged: Array<{
+    id: number;
+    kind: string;
+    doc_date: string;
+    markers: number;
+    source_doc_id: number | null;
+    file: boolean;
+    label: string | null;
+  }>;
   added_markers: number;
+  // Which rule recognized the twins, and why, in plain words for the Records screen.
+  rule: DedupeRule;
+  reason: string;
+  superseded: SupersededReading[];
 }
 
 export interface DedupeHealthDocumentsResult {
@@ -232,6 +277,41 @@ function derivedType(row: DocRow): string {
   return String(row.parsed?.type ?? "");
 }
 
+// The encounter time a deterministic CCDA row states, to the minute: the stored
+// `recorded_at`, else (rows written before it was stored) the time the vitals
+// summary prints ("MyChart vitals recorded 2026-03-10 15:52").
+export function encounterStamp(row: { parsed?: any; summary?: string | null }): string | null {
+  const read = (value: unknown): string | null => {
+    const m = String(value ?? "").match(/(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})/);
+    return m ? `${m[1]} ${m[2]}` : null;
+  };
+  const stored = read(row.parsed?.recorded_at);
+  if (stored) return stored;
+  const summary = String(row.summary ?? "").match(/\brecorded\s+(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2})/i);
+  return summary ? read(summary[1]) : null;
+}
+
+// One clinic encounter filed by two exports: the same CCDA type, the same date,
+// the same stated encounter time, two different source exports. Never an agent's
+// read (only the deterministic streams state an encounter time), never two times.
+export function sameEncounter(a: DocRow, b: DocRow): boolean {
+  const type = derivedType(a);
+  if (!CCDA_DERIVED_TYPES.has(type) || type !== derivedType(b)) return false;
+  if (a.doc_date !== b.doc_date || a.file_path || b.file_path) return false;
+  if (a.source_doc_id == null || b.source_doc_id == null || a.source_doc_id === b.source_doc_id) return false;
+  const stamp = encounterStamp(a);
+  return stamp != null && stamp === encounterStamp(b) && stamp.slice(0, 10) === a.doc_date;
+}
+
+// Which of two exports is the later one: the upload time of the export each row
+// came out of, then its id (uploads are numbered in arrival order).
+function laterExport(a: DocRow, b: DocRow): boolean {
+  const ta = a.source_created_at ?? a.created_at ?? "";
+  const tb = b.source_created_at ?? b.created_at ?? "";
+  if (ta !== tb) return ta > tb;
+  return (a.source_doc_id ?? a.id) > (b.source_doc_id ?? b.id);
+}
+
 function isAgentDerived(row: DocRow): boolean {
   return !row.file_path && !CCDA_DERIVED_TYPES.has(derivedType(row));
 }
@@ -256,6 +336,7 @@ export function sameDraw(a: DocRow, b: DocRow): boolean {
   const ta = derivedType(a);
   const tb = derivedType(b);
   if (CCDA_DERIVED_TYPES.has(ta) && CCDA_DERIVED_TYPES.has(tb) && ta !== tb) return false;
+  if (sameEncounter(a, b)) return true;
   const o = overlap(a, b);
   const smaller = Math.min(a.readings.size, b.readings.size);
   if (!smaller || o.agree * 2 < smaller) return false;
@@ -293,7 +374,8 @@ function pickSurvivor(rows: DocRow[]): DocRow {
 function loadRows(includeId: number | null): DocRow[] {
   const rows = db
     .prepare(
-      `SELECT d.id, d.kind, d.doc_date, d.source_doc_id, d.file_path, d.original_name, d.summary, d.parsed_json,
+      `SELECT d.id, d.kind, d.doc_date, d.source_doc_id, d.file_path, d.original_name, d.summary, d.parsed_json, d.created_at,
+              (SELECT s.created_at FROM health_documents s WHERE s.id = d.source_doc_id) AS source_created_at,
               (SELECT COUNT(*) FROM health_documents c WHERE c.source_doc_id = d.id) AS children
          FROM health_documents d
         WHERE d.kind != 'imaging'
@@ -324,6 +406,8 @@ function loadRows(includeId: number | null): DocRow[] {
       markers,
       readings: readingsOf(markers),
       children: Number(row.children ?? 0),
+      created_at: row.created_at ?? null,
+      source_created_at: row.source_created_at ?? null,
     });
   }
   return out;
@@ -369,10 +453,20 @@ function hasRefRange(marker: any): boolean {
   return marker && (marker.ref_low != null || marker.ref_high != null);
 }
 
+function readingOf(marker: any): Reading | null {
+  const reading = comparableMarkerReading(marker);
+  return reading ? { ...reading, marker } : null;
+}
+
 // The survivor's marker list after the twins fold in: its own readings keep
 // their place; an analyte only a twin carried is appended; where both carry the
-// same reading, the one that kept the lab's printed range wins the slot.
-function mergedMarkers(survivor: DocRow, twins: DocRow[]): { markers: any[]; added: number } {
+// same reading, the one that kept the lab's printed range wins the slot. Between
+// two exports of one encounter a reading that DISAGREES goes to the later export,
+// and the value it replaced is kept as superseded (whichever way round).
+function mergedMarkers(
+  survivor: DocRow,
+  twins: DocRow[]
+): { markers: any[]; added: number; superseded: SupersededReading[] } {
   // a fold is also the moment a survivor written before the non-analyte filter
   // sheds its "Lab Interpretation" rows
   const markers = survivor.markers.filter((marker) => markerReadingKey(marker) != null);
@@ -382,21 +476,86 @@ function mergedMarkers(survivor: DocRow, twins: DocRow[]): { markers: any[]; add
     if (key && !slot.has(key)) slot.set(key, index);
   });
   let added = 0;
+  const superseded: SupersededReading[] = [];
+  // which row each slot's reading came from, so a later export can replace it
+  const holder = new Map<number, DocRow>();
   for (const twin of twins) {
+    const encounter = sameEncounter(survivor, twin);
     for (const marker of twin.markers) {
       const key = markerReadingKey(marker);
       if (!key) continue;
       const at = slot.get(key);
       if (at == null) {
         slot.set(key, markers.length);
+        holder.set(markers.length, twin);
         markers.push(marker);
         added++;
+        continue;
+      }
+      const current = readingOf(markers[at]);
+      const incoming = readingOf(marker);
+      if (encounter && current && incoming && !readingsAgree(current, incoming)) {
+        const owner = holder.get(at) ?? survivor;
+        const twinWins = laterExport(twin, owner);
+        const lost = twinWins ? markers[at] : marker;
+        superseded.push({
+          name: String(lost?.name ?? ""),
+          value: lost?.value ?? null,
+          unit: lost?.unit ?? null,
+          from_doc_id: twinWins ? owner.id : twin.id,
+          replaced_by_doc_id: twinWins ? twin.id : owner.id,
+        });
+        if (twinWins) {
+          markers[at] = marker;
+          holder.set(at, twin);
+        }
         continue;
       }
       if (hasRefRange(marker) && !hasRefRange(markers[at])) markers[at] = marker;
     }
   }
-  return { markers, added };
+  return { markers, added, superseded };
+}
+
+// The survivor's parsed record once `twins` fold into it.
+function foldedParsed(
+  survivor: DocRow,
+  twins: DocRow[]
+): { parsed: Record<string, any>; added: number; superseded: SupersededReading[] } {
+  const { markers, added, superseded } = mergedMarkers(survivor, twins);
+  const parsed: Record<string, any> = { ...survivor.parsed, markers };
+  const facts = unionFacts(survivor, twins);
+  if (facts) parsed.clinical_facts = facts;
+  parsed.merged_from = [
+    ...(Array.isArray(parsed.merged_from) ? parsed.merged_from : []),
+    ...twins.map((row) => ({ id: row.id, source_doc_id: row.source_doc_id, original_name: row.original_name, doc_date: row.doc_date })),
+  ].slice(-20);
+  if (superseded.length) {
+    parsed.superseded_readings = [
+      ...(Array.isArray(parsed.superseded_readings) ? parsed.superseded_readings : []),
+      ...superseded,
+    ].slice(-50);
+  }
+  return { parsed, added, superseded };
+}
+
+function recordLabel(row: { summary?: string | null; original_name?: string | null }): string | null {
+  const text = String(row.summary || row.original_name || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text ? text.slice(0, 120) : null;
+}
+
+// Why these folded, in the athlete's words.
+function foldReason(rule: DedupeRule, survivor: DocRow, superseded: SupersededReading[]): string {
+  if (rule === "same_encounter") {
+    const stamp = encounterStamp(survivor);
+    const visit = stamp ? `The same clinic visit (${stamp})` : "The same clinic visit";
+    return superseded.length
+      ? `${visit} came in more than one export. Where the exports differ, the later export's reading is kept and the earlier one is noted.`
+      : `${visit} came in more than one export.`;
+  }
+  return "The same date and the same readings, filed more than once.";
 }
 
 function unionFacts(survivor: DocRow, twins: DocRow[]): any[] | undefined {
@@ -434,6 +593,7 @@ interface Fold {
   parsed: Record<string, any>;
   summary: string | null;
   added: number;
+  superseded: SupersededReading[];
 }
 
 // One pass over an in-memory record set: the folds it would make, and the set
@@ -450,22 +610,38 @@ function foldPass(rows: DocRow[], scopeSourceId: number | null): { folds: Fold[]
     const survivor = pickSurvivor(group);
     const twins = foldableTwins(survivor, group);
     if (!twins.length) continue;
-    const { markers, added } = mergedMarkers(survivor, twins);
-    const parsed: Record<string, any> = { ...survivor.parsed, markers };
-    const facts = unionFacts(survivor, twins);
-    if (facts) parsed.clinical_facts = facts;
-    const provenance = Array.isArray(parsed.merged_from) ? parsed.merged_from : [];
-    parsed.merged_from = [
-      ...provenance,
-      ...twins.map((row) => ({ id: row.id, source_doc_id: row.source_doc_id, original_name: row.original_name, doc_date: row.doc_date })),
-    ].slice(-20);
+    const { parsed, added, superseded } = foldedParsed(survivor, twins);
+    const markers = parsed.markers as any[];
     const summary = survivor.summary ?? twins.find((row) => row.summary)?.summary ?? null;
-    folds.push({ survivor, twins, parsed, summary, added });
+    folds.push({ survivor, twins, parsed, summary, added, superseded });
     for (const twin of twins) gone.add(twin.id);
     replaced.set(survivor.id, { ...survivor, parsed, markers, summary, readings: readingsOf(markers) });
   }
   const next = rows.filter((row) => !gone.has(row.id)).map((row) => replaced.get(row.id) ?? row);
   return { folds, rows: next };
+}
+
+export function imagingClusterPlan(fold: ImagingDedupeFold): DedupeClusterPlan {
+  return {
+    date: fold.date,
+    survivor: { id: fold.survivor.id, kind: "imaging", doc_date: fold.date, markers: 0, label: fold.survivor.label },
+    merged: fold.merged.map((twin) => ({
+      id: twin.id,
+      kind: "imaging",
+      doc_date: fold.date,
+      markers: 0,
+      source_doc_id: twin.source_doc_id,
+      file: twin.removed_source,
+      label: twin.label,
+    })),
+    added_markers: 0,
+    rule: fold.rule,
+    reason:
+      fold.rule === "same_scan_judged"
+        ? `The same scan, read twice in different words.${fold.judged_reason ? ` ${fold.judged_reason}` : ""}`
+        : "The same scan: same day, procedure and impression.",
+    superseded: [],
+  };
 }
 
 const MAX_PASSES = 6;
@@ -485,19 +661,32 @@ export function dedupeHealthDocuments(opts: DedupeOptions = {}): DedupeHealthDoc
     errors: [],
     converged: false,
   };
-  const clusterPlan = (fold: Fold, twins: DocRow[], added: number): DedupeClusterPlan => ({
-    date: fold.survivor.doc_date,
-    survivor: { id: fold.survivor.id, kind: fold.survivor.kind, doc_date: fold.survivor.doc_date, markers: fold.survivor.markers.length },
-    merged: twins.map((row) => ({
-      id: row.id,
-      kind: row.kind,
-      doc_date: row.doc_date,
-      markers: row.markers.length,
-      source_doc_id: row.source_doc_id,
-      file: !!row.file_path,
-    })),
-    added_markers: added,
-  });
+  const clusterPlan = (fold: Fold, twins: DocRow[], added: number, superseded: SupersededReading[]): DedupeClusterPlan => {
+    const rule: DedupeRule = twins.some((row) => sameEncounter(fold.survivor, row)) ? "same_encounter" : "same_draw";
+    return {
+      date: fold.survivor.doc_date,
+      survivor: {
+        id: fold.survivor.id,
+        kind: fold.survivor.kind,
+        doc_date: fold.survivor.doc_date,
+        markers: fold.survivor.markers.length,
+        label: recordLabel(fold.survivor),
+      },
+      merged: twins.map((row) => ({
+        id: row.id,
+        kind: row.kind,
+        doc_date: row.doc_date,
+        markers: row.markers.length,
+        source_doc_id: row.source_doc_id,
+        file: !!row.file_path,
+        label: recordLabel(row),
+      })),
+      added_markers: added,
+      rule,
+      reason: foldReason(rule, fold.survivor, superseded),
+      superseded,
+    };
+  };
   for (let pass = 0; pass < MAX_PASSES && !result.errors.length; pass++) {
     const step = foldPass(rows, scope);
     if (!step.folds.length) {
@@ -525,16 +714,9 @@ export function dedupeHealthDocuments(opts: DedupeOptions = {}): DedupeHealthDoc
         }
         if (kept.length < fold.twins.length) {
           if (kept.length) {
-            const partial = mergedMarkers(fold.survivor, kept);
-            const parsed: Record<string, any> = { ...fold.survivor.parsed, markers: partial.markers };
-            const facts = unionFacts(fold.survivor, kept);
-            if (facts) parsed.clinical_facts = facts;
-            parsed.merged_from = [
-              ...(Array.isArray(parsed.merged_from) ? parsed.merged_from : []),
-              ...kept.map((row) => ({ id: row.id, source_doc_id: row.source_doc_id, original_name: row.original_name, doc_date: row.doc_date })),
-            ].slice(-20);
-            updateHealthDocFields(fold.survivor.id, { parsed_json: parsed, summary: fold.survivor.summary ?? kept.find((row) => row.summary)?.summary ?? null });
-            result.clusters.push(clusterPlan(fold, kept, partial.added));
+            const partial = foldedParsed(fold.survivor, kept);
+            updateHealthDocFields(fold.survivor.id, { parsed_json: partial.parsed, summary: fold.survivor.summary ?? kept.find((row) => row.summary)?.summary ?? null });
+            result.clusters.push(clusterPlan(fold, kept, partial.added, partial.superseded));
             result.merged += kept.length;
             result.added_markers += partial.added;
           }
@@ -542,7 +724,7 @@ export function dedupeHealthDocuments(opts: DedupeOptions = {}): DedupeHealthDoc
         }
         updateHealthDocFields(fold.survivor.id, { parsed_json: fold.parsed, summary: fold.summary });
       }
-      result.clusters.push(clusterPlan(fold, fold.twins, fold.added));
+      result.clusters.push(clusterPlan(fold, fold.twins, fold.added, fold.superseded));
       result.merged += fold.twins.length;
       result.added_markers += fold.added;
     }
@@ -554,26 +736,24 @@ export function dedupeHealthDocuments(opts: DedupeOptions = {}): DedupeHealthDoc
   // the ingest hook runs while its own upload is still mid-read, and folding a
   // study there could remove that very upload under the running ingest (an
   // identical re-upload never reaches an ingest — the upload route stops it).
+  //
+  // Then the near-twins an agent already judged the same study (a remembered
+  // verdict, high confidence, no measurement disagreeing): deterministic given
+  // the verdicts, so a dry run and the fold it plans agree. No agent runs here.
   if (!result.errors.length && scope == null) {
-    const imaging = dedupeImagingStudies({ dryRun });
-    for (const fold of imaging.folds) {
-      result.clusters.push({
-        date: fold.date,
-        survivor: { id: fold.survivor.id, kind: "imaging", doc_date: fold.date, markers: 0 },
-        merged: fold.merged.map((twin) => ({
-          id: twin.id,
-          kind: "imaging",
-          doc_date: fold.date,
-          markers: 0,
-          source_doc_id: twin.source_doc_id,
-          file: twin.removed_source,
-        })),
-        added_markers: 0,
-      });
+    const absorb = (imaging: ImagingDedupeResult) => {
+      for (const fold of imaging.folds) result.clusters.push(imagingClusterPlan(fold));
+      result.merged += imaging.merged;
+      result.deleted_files += imaging.deleted_files;
+      result.errors.push(...imaging.errors);
+    };
+    const strict = dedupeImagingStudies({ dryRun });
+    absorb(strict);
+    if (!result.errors.length) {
+      // a dry run leaves the strict twins in place: never plan one twice
+      const exclude = new Set(strict.folds.flatMap((fold) => fold.merged.map((twin) => twin.id)));
+      absorb(foldJudgedImagingTwins({ dryRun, exclude }));
     }
-    result.merged += imaging.merged;
-    result.deleted_files += imaging.deleted_files;
-    result.errors.push(...imaging.errors);
   }
   if (result.errors.length) result.converged = false;
   return result;

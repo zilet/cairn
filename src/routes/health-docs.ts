@@ -25,6 +25,7 @@ import {
   listHealthDocuments,
   MAX_IMAGING_FILE_BYTES,
   setHealthDocEnrichStatus,
+  settleNewHealthRecords,
   updateHealthDocFields,
   updateImagingRecommendationStatus,
 } from "../domain/health/index.js";
@@ -32,6 +33,7 @@ import { normalizeHealthDocumentKind } from "../healthDocumentKinds.js";
 import { UPLOADS_DIR, safeUploadPath } from "../uploadPaths.js";
 import { extForMime, isAcceptedMime, isInlineMime } from "../uploadMime.js";
 import { streamEnrichRow } from "./enrich-stream.js";
+import { backgroundOp } from "./background-op.js";
 import { labDraws } from "../repo/lab-draws.js";
 import {
   createDicomImportJobFromStaged,
@@ -204,8 +206,18 @@ export function publicImagingDraftInput(body: any, docDate: string | null) {
 // only REPORTS the plan; the fold — which deletes twin records, and the file
 // of an identical second upload — needs an explicit `apply: true`. Ingest
 // runs the same fold scoped to its own upload.
+//
+// `judge: true` (a dry run only) is the Records screen's check: an agent first
+// judges every unjudged imaging near-twin, which is slow, so it answers with a
+// queued job (`health_dedupe_check`) whose result is the same plan. The apply
+// that follows folds from the remembered verdicts and asks no agent again.
 healthDocsRouter.post("/dedupe", (req, res) => {
   const dryRun = !truthy(req.body?.apply ?? req.query.apply);
+  if (dryRun && truthy(req.body?.judge ?? req.query.judge)) {
+    const agent = typeof req.body?.agent === "string" ? req.body.agent : null;
+    backgroundOp(res, "health_dedupe_check", {}, agent);
+    return;
+  }
   const result = dedupeHealthDocuments({ dryRun });
   if (!dryRun && result.merged) {
     // Folded panels withdraw nothing, but the survivor's series changed shape:
@@ -507,8 +519,10 @@ healthDocsRouter.post("/:id/confirm", (req, res) => {
     import("../enrich.js").then((m) => m.enqueueEnrich("health", id)).catch(() => {});
   }
   if (result.committed) {
-    // Markers landed inline (no transcriber reachable) → refresh the connected brain
+    // Markers landed inline (no transcriber reachable) → fold them into any record
+    // already on file that carries the same draw, then refresh the connected brain
     // + whole-picture review, mirroring the enrichment path's follow-ons.
+    settleNewHealthRecords(id, { label: `confirmed paste health#${id}` });
     try {
       deriveDirectives();
     } catch {

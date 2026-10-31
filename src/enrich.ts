@@ -13,7 +13,7 @@ import { applyExerciseEnrichment, ensureGarminMapping, getExercise, getExerciseD
 import { recordGarminExportOutcome } from "./repo/garmin-export-telemetry.js";
 import { getSessionGarminExport } from "./repo/garmin-strength-export.js";
 import { MAX_MARKERS_PER_PANEL, addHealthReview, cleanClinicalFacts, estimateMarkerCandidates, getHealthDocumentRaw, plausibleMarkerValue, reconcileHealthDocumentContextEvents, replaceHealthPanels, setHealthDocEnrichStatus, updateHealthDocFields } from "./repo/health.js";
-import { dedupeHealthDocuments } from "./repo/health-dedupe.js";
+import { registerImagingSettleEnqueuer, settleNewHealthRecords } from "./domain/health/record-dedupe.js";
 import { getHealthSynthesis } from "./repo/health-focus.js";
 import { recordHealthOutcomeEvents } from "./repo/health-outcomes.js";
 import { applyImagingAnalysisResult, imagingStudyHasContent, imagingStudyRevisionState, imagingStudySourceHash, imagingStudySourceKind, isImagingSourceUpload, listImagingPromptFilesRaw, replaceDerivedImagingStudies } from "./repo/imaging.js";
@@ -68,7 +68,7 @@ import {
   isHealthReviewResult,
 } from "./agent-contracts.js";
 import { buildEnrichPrompt, buildExerciseEnrichPrompt, buildFoodPhotoPrompt, buildHealthIngestPrompt, buildHealthReviewPrompt, buildGarminStrengthPrompt, buildImagingStudyPrompt } from "./prompt.js";
-import { explainExercise, exercisePoseFromExplanation, reconcileMarkers, synthesizeHealth } from "./coachOps.js";
+import { explainExercise, exercisePoseFromExplanation, reconcileMarkers, settleImagingTwins, synthesizeHealth } from "./coachOps.js";
 import { GEMINI_TEXT_MODEL, clearArtFailures, enqueueExerciseArt, imageModelFor, warmExerciseArt } from "./art.js";
 import { classifyMuscleGroup, detectImplement } from "./repo/exercise-canon.js";
 import { LB_PER_KG, localDateISO, round2_5 } from "./repo/shared.js";
@@ -136,6 +136,10 @@ const execFileP = promisify(execFile);
 // day's exercise sets (src/garminExport.ts). id is the sessions row id; like
 // garmin_strength it has no status column of its own, and every outcome — connector
 // off, Garmin owning the day, an unchanged session — is an ordinary skip.
+// 'imaging_dedupe' settles the imaging studies an ingest created once that ingest
+// has finished: strict twins fold, near-twins are judged by the health agent and
+// folded only on a high-confidence verdict (src/coachOps/health.ts). id is the
+// study or the upload it was derived from; it has no status column of its own.
 type Kind =
   | "activity"
   | "food"
@@ -146,7 +150,8 @@ type Kind =
   | "garmin_export"
   | "exercise"
   | "exercise_art"
-  | "symptom";
+  | "symptom"
+  | "imaging_dedupe";
 interface Job {
   kind: Kind;
   id: number;
@@ -543,7 +548,14 @@ async function drain(): Promise<void> {
 }
 
 function markStatus(job: Job, status: string): void {
-  if (job.kind === "review" || job.kind === "garmin_strength" || job.kind === "garmin_export" || job.kind === "exercise_art") return; // no row status of their own
+  if (
+    job.kind === "review" ||
+    job.kind === "garmin_strength" ||
+    job.kind === "garmin_export" ||
+    job.kind === "exercise_art" ||
+    job.kind === "imaging_dedupe"
+  )
+    return; // no row status of their own
   // symptom_reports.extraction_status is a narrower machine than the enrichment
   // rows' (no 'in_progress' — a report is never half-extracted, it either yielded a
   // structure or it did not), so it is set only through its own dedicated path.
@@ -696,6 +708,7 @@ async function processJob(job: Job): Promise<void> {
   if (job.kind === "exercise") return processExerciseJob(job.id);
   if (job.kind === "exercise_art") return processExerciseArtJob(job.id);
   if (job.kind === "symptom") return processSymptomJob(job.id);
+  if (job.kind === "imaging_dedupe") return processImagingDedupeJob(job.id);
 
   // A person already corrected this meal: their edit is the record, so no agent
   // turn is spent re-estimating it (and none could be written — updateFoodNoteParsed
@@ -712,6 +725,7 @@ async function processJob(job: Job): Promise<void> {
       if (backfill.wrote) {
         log.info(`[enrich] health#${job.id}: deterministic CCDA backfill wrote ${backfill.clinicalFacts} fact(s), ${backfill.resultMarkers} lab marker(s), ${backfill.vitalMarkers} vital marker(s), ${backfill.bpReadings}/${backfill.extractedBpReadings} BP row(s) (agent enrichment off).`);
         noteDeterministicIngest(job.id, "enrichment_off", "Agent analysis is switched off in Settings.");
+        foldDuplicateHealthPanels(job.id);
         markStatus(job, "done");
         try { deriveDirectives(); } catch (e: any) { log.warn(`[enrich] deriveDirectives failed: ${e?.message}`); }
         enqueueReviewRefresh();
@@ -734,6 +748,7 @@ async function processJob(job: Job): Promise<void> {
       if (backfill.wrote) {
         log.info(`[enrich] health#${job.id}: deterministic CCDA backfill wrote ${backfill.clinicalFacts} fact(s), ${backfill.resultMarkers} lab marker(s), ${backfill.vitalMarkers} vital marker(s), ${backfill.bpReadings}/${backfill.extractedBpReadings} BP row(s) (no usable agent).`);
         noteDeterministicIngest(job.id, "no_agent_enabled", "No agent is enabled — turn one on in Settings.");
+        foldDuplicateHealthPanels(job.id);
         markStatus(job, "done");
         try { deriveDirectives(); } catch (e: any) { log.warn(`[enrich] deriveDirectives failed: ${e?.message}`); }
         enqueueReviewRefresh();
@@ -2247,19 +2262,25 @@ export function applyHealthIngest(
 // One panel per draw date: an import that carries a draw the record already
 // holds (the same export uploaded twice, a re-export, the agent's read of what
 // the CCDA pass already filed) folds into the record that holds it. Scoped to
-// this upload's own rows so an ingest never rewrites what it did not touch.
+// this upload's own rows so an ingest never rewrites what it did not touch, and
+// through the one chokepoint every creation path settles through
+// (src/domain/health/record-dedupe.ts), which also queues the imaging settle.
 function foldDuplicateHealthPanels(id: number): void {
-  try {
-    const folded = dedupeHealthDocuments({ scopeSourceId: id });
-    if (folded.merged) {
-      log.info(
-        `[enrich] health#${id}: folded ${folded.merged} duplicate panel(s) into ${folded.clusters.length} existing record(s) (+${folded.added_markers} marker(s)).`
-      );
-    }
-  } catch (e: any) {
-    log.warn(`[enrich] health#${id}: duplicate fold failed: ${e?.message ?? e}`);
-  }
+  settleNewHealthRecords(id, { label: `enrich health#${id}` });
 }
+
+// After an ingest that produced imaging studies has FINISHED (this job runs behind
+// it on the serial queue): fold strict twins, ask the health agent about near-twins
+// and fold the ones judged the same study. Congestion propagates (AgentBusyError),
+// so the drain defers the job rather than judging blind; with analysis switched off
+// only the deterministic folds run and nothing is asked.
+export async function processImagingDedupeJob(id: number): Promise<void> {
+  const ask = getSettings().enrich_enabled;
+  const out = await settleImagingTwins(id, { ask });
+  if (out.errors.length) log.warn(`[enrich] imaging#${id}: duplicate fold stopped: ${out.errors.join("; ")}`);
+}
+
+registerImagingSettleEnqueuer((id) => enqueueEnrich("imaging_dedupe", id));
 
 // A pasted or uploaded report whose only output is its imaging studies is that study's
 // source, not a record of its own: it gets a short summary and the study's date (so an

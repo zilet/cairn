@@ -67,6 +67,7 @@ import {
   normalizeFoodCaptureParsed,
 } from "./foodCapture.js";
 import { recordBloodPressureReading } from "./domain/health/blood-pressure.js";
+import { settleNewHealthRecords } from "./domain/health/record-dedupe.js";
 import { pickDayVariant } from "./repo/brain/day-read-rules.js";
 import { applyProposalWithAutonomy, revertDecision } from "./domain/brain/autonomy-service.js";
 import { clinicalPlanProvenance, type ClinicalPlanProvenance } from "./domain/brain/clinical-provenance.js";
@@ -3029,15 +3030,20 @@ export function applyChatActions(
             // couldn't persist (fs error) → fall through to the immediate apply
           }
           const parsedDoc = parsedDocObject ? parsedDocObject : markers.length ? { markers } : null;
+          const created = repo.addHealthDocument({
+            kind: a.kind,
+            doc_date: stringOrNull(a.doc_date),
+            summary: stringOrNull(a.summary),
+            parsed_json: parsedDoc,
+            enrichment_status: "done",
+          }) as any;
+          // The same draw already on file absorbs this one; the action then names
+          // the record it folded into, never an id that no longer exists.
+          const folded = settleNewHealthRecords(Number(created?.id), { label: `chat health#${created?.id}` });
+          const survivorId = folded?.clusters.find((c) => c.merged.some((m) => m.id === Number(created?.id)))?.survivor.id;
           applied.push({
             type: a.type,
-            result: repo.addHealthDocument({
-              kind: a.kind,
-              doc_date: stringOrNull(a.doc_date),
-              summary: stringOrNull(a.summary),
-              parsed_json: parsedDoc,
-              enrichment_status: "done",
-            }),
+            result: survivorId != null ? (repo.getHealthDocument(survivorId) ?? created) : created,
           });
           // New markers from chat → refresh the deterministic markers→directives
           // propagation (idempotent), mirroring the enrichment path.

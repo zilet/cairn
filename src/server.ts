@@ -10,6 +10,7 @@ import { catchUpExerciseEnrichment, recoverPendingEnrich } from "./enrich.js";
 import { recoverChatTurns, abortAllTurns } from "./chatTurns.js";
 import { recoverAgentJobs, abortAllJobs } from "./agentJobs.js";
 import { recoverDicomImports } from "./dicomImports.js";
+import { runDedupeRulesUpgradeIfDue } from "./domain/health/record-dedupe.js";
 import { startBrainReviewJobSubscriber } from "./brainReviewJobs.js";
 import { REPAIRED_ART_WARM_PER_BOOT, repairMisfiledArtAliasesOnce, warmArt } from "./art.js";
 import { maybeScheduleAgentCliAutoUpdate } from "./agentCliUpdates.js";
@@ -258,6 +259,14 @@ const server = app.listen(PORT, HOST, () => {
     if (retitled.length) log.info("[boot] exercise titles normalized", { retitled });
   } catch (err) {
     log.error("[boot] normalizeExerciseTitles failed", { error: err });
+  }
+  // Better duplicate rules clean up what earlier rules left behind, once: when
+  // DEDUPE_RULES_VERSION moved, fold the whole record set (deterministic, no agent).
+  // Synchronous and ahead of the enrichment queue resuming, so no ingest is mid-write.
+  try {
+    runDedupeRulesUpgradeIfDue();
+  } catch (err) {
+    log.error("[boot] health record dedupe upgrade failed", { error: err });
   }
   // Re-process any free-text entries left 'pending' by a prior restart.
   recoverPendingEnrich();

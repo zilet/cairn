@@ -6142,11 +6142,37 @@ upload, whose file goes with it); a twin that split out derived panels of its ow
 call iterates to a fixed point, and a dry run reports that same end state.
 
 Records that merely share a date (an ECG beside a chemistry panel) or whose readings disagree (a
-morning and an evening blood pressure) stay separate. The ingest path runs the fold scoped to the
-upload it just wrote (`foldDuplicateHealthPanels` in `enrich.ts`) so an import never rewrites records
-it did not touch; `POST /api/health-docs/dedupe` and the `dedupe_health_records` MCP tool run it over
-the whole record set — a dry run unless `apply: true`. Free-text observation rows ("Lab Interpretation: Abnormal") are
+morning and an evening blood pressure) stay separate. Free-text observation rows ("Lab Interpretation: Abnormal") are
 not analytes — `isNonAnalyteMarkerName` drops them at every marker write.
+
+**One clinic encounter is identity too** (`sameEncounter`). Two deterministic CCDA rows of the SAME
+type on the same date, stating the same encounter time to the minute, from two DIFFERENT source
+exports, are one visit even when their readings are too few to prove a draw (a re-export that kept one
+vital of six). The time is `parsed.recorded_at`, written by the CCDA pass (`panelsFromVitals`, today the
+only stream that states one); rows filed before it existed fall back to the time their summary prints
+("MyChart vitals recorded 2026-03-10 15:52", `encounterStamp`). Where the two disagree the LATER export
+wins (an EHR amends a chart; the later export is the chart as it stands now: the export's upload time,
+then its id), and the survivor records the replaced value in `parsed.superseded_readings`
+(`{name, value, unit, from_doc_id, replaced_by_doc_id}`), whichever row the value came from. The survivor
+ranking is unchanged. Never for an agent's read, one export's own rows, or two encounter times.
+
+**When it runs: at the moment a record is added, on request, and once per rules version.** Every
+creation path ends at ONE chokepoint, `settleNewHealthRecords(id)` (`src/domain/health/record-dedupe.ts`):
+the fold scoped to the rows `id` created but matched against the WHOLE record set. Callers: the ingest
+(every completion of `processJob` in `enrich.ts`, deterministic-only ones included, via
+`foldDuplicateHealthPanels`), a confirmed chat paste committed inline (`POST /:id/confirm`), chat's
+direct `add_health_record` action (`src/chatTurns.ts`, which then reports the survivor), MCP
+`add_health_record` and `record_imaging_analysis`. A creation path that skipped it is how a pasted panel
+that fully duplicated one on file stayed twice. `POST /api/health-docs/dedupe` and the
+`dedupe_health_records` MCP tool run the whole-set fold, a dry run unless `apply: true`; each plan
+cluster names its `rule` (`same_draw` / `same_encounter` / `same_scan` / `same_scan_judged`), a
+plain-words `reason`, record `label`s and any `superseded` readings, which is what the Records screen's
+"Check for duplicates" shows. And `DEDUPE_RULES_VERSION` (in `health-dedupe.ts`): at boot, when it
+differs from `app_state.health_dedupe_rules_version`, `runDedupeRulesUpgradeIfDue` folds the whole set
+once (deterministic only, before the enrichment queue resumes) and stores it, so a deploy whose rules
+recognize a twin the old ones missed cleans up the existing record once, with no recurring job. Bump it
+whenever a rule learns a new twin. Concurrency: node:sqlite is synchronous and each fold is one
+synchronous call, so nothing interleaves with it on the event loop; rows still mid-read are skipped.
 
 **An identical upload never becomes a record.** `POST /api/health-docs` first asks
 `findDuplicateHealthUpload` (`src/repo/health-upload-duplicate.ts`): a paste whose whitespace-normalized
@@ -6159,7 +6185,8 @@ instead (`reanalyzing: true`). Content is necessary, never enough: a paste short
 covers every upload already on disk.
 
 **Imaging twins fold by their own identity** (`src/repo/imaging-dedupe.ts`), on the whole-record pass
-only (never the ingest-scoped one, which runs while its own upload is mid-read): two current studies
+and the `imaging_dedupe` job that runs after an imaging ingest finishes (never inside the ingest-scoped
+fold, which runs while its own upload is mid-read): two current studies
 dated the same day with the same procedure AND the same impression (case/space-insensitive) are one
 scan only when they also state the same body region and laterality, or were read out of two uploads of
 identical normalized text — a same-day left and right knee X-ray with a normal impression stay two, and
@@ -6178,6 +6205,28 @@ The SERVER decides that fold — the API row carries `folds_into_study` (`foldsI
 ones included, is an imaging study) — because the client's list is capped and hides superseded studies.
 For the same reason the card's delete always deletes the study on the card; the server
 (`deleteEmptyImagingSource`) removes the folded source with it once no derived row is left.
+
+**Near-twins the strict rule leaves apart are judged by an agent.** The same report pasted twice can be
+read twice in different words ("CT coronary calcium scoring" / "Coronary calcium scoring CT", two
+phrasings of one impression). `imagingJudgeCandidates` names the pairs worth asking: two current studies
+on the same day, of the same modality, the same stated clinical system AND body region, laterality not
+contradicting (left / right / bilateral differ), from two different uploads, that the strict rule would
+not fold and whose twin could fold at all (the same guards: no correction, DICOM, extra attachment, note
+or tracking). `judgeImagingTwins` (`src/coachOps/health.ts`, op `imaging_twin_judge` → the `health`
+task, so the faithful Claude-first order, never the rotation) sends both studies' procedure,
+impression, findings, measurements and a bounded source excerpt through `runChosen` with
+`IMAGING_TWIN_JUDGE_SCHEMA` (`{same_study, confidence, reason}`), and remembers each verdict on the
+newer study (`parsed_json.dedupe_judgments`), so a pair is never asked twice. No usable agent (or only
+the offline `stub`) judges nothing; a failed run leaves the pair unjudged; `AgentBusyError` propagates
+so the runner defers. The FOLD is deterministic given the verdicts (`foldJudgedImagingTwins`, part of
+the whole-set pass): only `same_study` at `high` confidence, and never when a numeric measurement of the
+same name and qualifier disagrees (`measurementsContradict`), through the strict fold's own survivor
+and source rules. Two triggers ask: after an ingest that created a study, the chokepoint queues an
+`imaging_dedupe` enrichment job that runs behind that ingest on the serial queue (strict fold, judge,
+judged fold, scoped to it; with analysis off only the deterministic folds run), and the Records screen's
+"Check for duplicates" (`POST /api/health-docs/dedupe {judge:true}` / MCP `judge:true` → the
+`health_dedupe_check` agent job: judge every unjudged pair, then return the dry-run plan; the person's
+`apply:true` folds from the remembered verdicts). The boot pass never asks.
 
 ### The doctor loop shows each follow-up once (`src/repo/doctor-loop-items.ts`)
 

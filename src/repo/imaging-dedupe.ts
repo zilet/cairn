@@ -19,6 +19,16 @@
 // else the oldest. A twin whose source upload exists only to carry it (a pasted
 // report with nothing else split out of it) goes WITH that upload, so no orphan
 // paste is left behind to show up as its own card.
+//
+// What the strict rule leaves apart, an agent may still judge (the same report
+// read twice, in different words): two current studies on the same day, of the
+// same modality, the same clinical system and body region, sides not
+// contradicting, from different uploads. `imagingJudgeCandidates` names those
+// pairs; the agent's verdict is remembered on the newer study
+// (`parsed_json.dedupe_judgments`, so a pair is never asked twice); and
+// `foldJudgedImagingTwins` folds a pair only on a remembered `same_study` at
+// `high` confidence with no numeric measurement of one name disagreeing — through
+// the same survivor, guard and source rules as the strict fold. No verdict, no fold.
 
 import fs from "node:fs";
 import crypto from "node:crypto";
@@ -31,8 +41,11 @@ import { imagingSourceFolds } from "./imaging-source.js";
 
 export interface ImagingDedupeFold {
   date: string;
-  survivor: { id: number };
-  merged: Array<{ id: number; source_doc_id: number | null; removed_source: boolean }>;
+  survivor: { id: number; label: string | null };
+  merged: Array<{ id: number; source_doc_id: number | null; removed_source: boolean; label: string | null }>;
+  rule: "same_scan" | "same_scan_judged";
+  // The agent's own words for a judged fold (bounded), else null.
+  judged_reason: string | null;
 }
 
 export interface ImagingDedupeResult {
@@ -53,6 +66,15 @@ interface StudyRow {
   study: any;
   hashes: Set<string>;
   dicom: number;
+  judgments: ImagingDedupeJudgment[];
+}
+
+export interface ImagingDedupeJudgment {
+  other_id: number;
+  same_study: boolean;
+  confidence: "high" | "medium" | "low";
+  reason: string | null;
+  at: string;
 }
 
 function norm(value: unknown): string {
@@ -102,6 +124,19 @@ function userTouched(study: any): boolean {
   return study?.verification?.user_confirmed === true || study?.provenance?.extraction === "corrected";
 }
 
+function judgmentsOf(parsed: any): ImagingDedupeJudgment[] {
+  const list = Array.isArray(parsed?.dedupe_judgments) ? parsed.dedupe_judgments : [];
+  return list
+    .filter((j: any) => j && Number.isInteger(Number(j.other_id)) && typeof j.same_study === "boolean")
+    .map((j: any) => ({
+      other_id: Number(j.other_id),
+      same_study: j.same_study,
+      confidence: j.confidence === "high" || j.confidence === "medium" ? j.confidence : "low",
+      reason: typeof j.reason === "string" ? j.reason.slice(0, 400) : null,
+      at: String(j.at ?? ""),
+    }));
+}
+
 function loadStudies(): StudyRow[] {
   const rows = db
     .prepare(
@@ -116,12 +151,13 @@ function loadStudies(): StudyRow[] {
   const hashes = db.prepare(`SELECT sha256 FROM imaging_study_files WHERE health_document_id = ?`);
   const out: StudyRow[] = [];
   for (const row of rows) {
-    let study: any = null;
+    let parsed: any = null;
     try {
-      study = row.parsed_json ? JSON.parse(row.parsed_json)?.imaging_study : null;
+      parsed = row.parsed_json ? JSON.parse(row.parsed_json) : null;
     } catch {
-      study = null;
+      parsed = null;
     }
+    const study = parsed?.imaging_study ?? null;
     if (!study || typeof study !== "object") continue;
     const status = study.provenance?.record_status;
     if (status && status !== "current") continue;
@@ -138,6 +174,7 @@ function loadStudies(): StudyRow[] {
       study,
       hashes: new Set((hashes.all(row.id) as any[]).map((file) => String(file.sha256))),
       dicom: Number(row.dicom ?? 0),
+      judgments: judgmentsOf(parsed),
     });
   }
   return out;
@@ -177,12 +214,18 @@ function notesLost(twin: any, survivor: any): boolean {
   return !!mine && !norm(survivor?.verification?.notes).includes(mine);
 }
 
-function foldable(twin: StudyRow, survivor: StudyRow): boolean {
+// Everything a fold asks of a twin besides being the same scan: never one the
+// athlete corrected, one carrying DICOM, an attachment the survivor lacks, notes
+// or follow-up tracking the survivor does not hold.
+function twinMayFold(twin: StudyRow, survivor: StudyRow): boolean {
   if (twin.study?.provenance?.extraction === "corrected" || twin.dicom > 0) return false;
-  if (!sameScan(twin, survivor)) return false;
   for (const hash of twin.hashes) if (!survivor.hashes.has(hash)) return false;
   if (notesLost(twin.study, survivor.study)) return false;
   return !trackingDiffers(twin.study, survivor.study);
+}
+
+function foldable(twin: StudyRow, survivor: StudyRow): boolean {
+  return sameScan(twin, survivor) && twinMayFold(twin, survivor);
 }
 
 // The twin's source upload goes with it when that upload carried nothing else:
@@ -199,13 +242,25 @@ function sourceGoesWithTwin(twin: StudyRow, survivor: StudyRow): number | null {
   return imagingSourceFolds(source) ? sourceId : null;
 }
 
+function studyLabel(row: StudyRow): string | null {
+  const procedure = String(row.study?.study?.procedure ?? "").replace(/\s+/g, " ").trim();
+  return procedure ? procedure.slice(0, 120) : null;
+}
+
 function foldTwins(
   survivor: StudyRow,
   twins: StudyRow[],
   opts: { dryRun?: boolean },
-  result: ImagingDedupeResult
+  result: ImagingDedupeResult,
+  judged: { reason: string | null } | null = null
 ): void {
-  const fold: ImagingDedupeFold = { date: survivor.date, survivor: { id: survivor.id }, merged: [] };
+  const fold: ImagingDedupeFold = {
+    date: survivor.date,
+    survivor: { id: survivor.id, label: studyLabel(survivor) },
+    merged: [],
+    rule: judged ? "same_scan_judged" : "same_scan",
+    judged_reason: judged?.reason ?? null,
+  };
   for (const twin of twins) {
     const sourceId = sourceGoesWithTwin(twin, survivor);
     if (!opts.dryRun) {
@@ -216,7 +271,12 @@ function foldTwins(
       }
       if (sourceId != null) result.deleted_files++;
     }
-    fold.merged.push({ id: twin.id, source_doc_id: twin.source_doc_id, removed_source: sourceId != null });
+    fold.merged.push({
+      id: twin.id,
+      source_doc_id: twin.source_doc_id,
+      removed_source: sourceId != null,
+      label: studyLabel(twin),
+    });
   }
   if (fold.merged.length) {
     result.folds.push(fold);
@@ -253,6 +313,244 @@ export function dedupeImagingStudies(
         foldTwins(survivor, twins, opts, result);
       }
       if (result.errors.length) break;
+    }
+  } finally {
+    sourceTextCache.clear();
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Near-twins the strict rule leaves apart, judged by an agent.
+
+const SIDES = new Set(["left", "right", "bilateral"]);
+const UNSTATED_SYSTEM = new Set(["", "unknown", "other"]);
+
+export interface ImagingJudgeCandidate {
+  older: { id: number; source_doc_id: number | null };
+  newer: { id: number; source_doc_id: number | null };
+  date: string;
+}
+
+function lateralityContradicts(a: StudyRow, b: StudyRow): boolean {
+  const la = norm(a.study?.anatomy?.laterality);
+  const lb = norm(b.study?.anatomy?.laterality);
+  return SIDES.has(la) && SIDES.has(lb) && la !== lb;
+}
+
+// Same day, same modality, same clinical system and body region (all stated),
+// sides not contradicting, from two different uploads.
+function nearTwin(a: StudyRow, b: StudyRow): boolean {
+  if (a.date !== b.date) return false;
+  if (a.source_doc_id != null && a.source_doc_id === b.source_doc_id) return false;
+  const modality = norm(a.study?.study?.modality);
+  if (!modality || modality === "unknown" || modality !== norm(b.study?.study?.modality)) return false;
+  const system = norm(a.study?.anatomy?.clinical_system);
+  if (UNSTATED_SYSTEM.has(system) || system !== norm(b.study?.anatomy?.clinical_system)) return false;
+  const region = norm(a.study?.anatomy?.body_region);
+  if (UNSTATED_ANATOMY.has(region) || region !== norm(b.study?.anatomy?.body_region)) return false;
+  return !lateralityContradicts(a, b);
+}
+
+function judgmentFor(a: StudyRow, b: StudyRow): ImagingDedupeJudgment | null {
+  return a.judgments.find((j) => j.other_id === b.id) ?? b.judgments.find((j) => j.other_id === a.id) ?? null;
+}
+
+// The pairs worth an agent's judgement: near-twins the strict rule would not fold
+// (it folds those itself) and whose twin could fold at all (a corrected study,
+// one carrying DICOM or attachments the survivor lacks, is never folded, so
+// asking about it is wasted). `scopeId` narrows to pairs touching that study or
+// the studies derived from that upload. Each pair is [older, newer].
+function candidatePairs(studies: StudyRow[], scopeId: number | null): Array<[StudyRow, StudyRow]> {
+  const out: Array<[StudyRow, StudyRow]> = [];
+  const touches = (row: StudyRow) => scopeId == null || row.id === scopeId || row.source_doc_id === scopeId;
+  for (let i = 0; i < studies.length; i++) {
+    for (let j = i + 1; j < studies.length; j++) {
+      const a = studies[i];
+      const b = studies[j];
+      if (!touches(a) && !touches(b)) continue;
+      if (!nearTwin(a, b)) continue;
+      if (a.key === b.key && sameScan(a, b)) continue;
+      const survivor = pickSurvivor([a, b]);
+      const twin = survivor === a ? b : a;
+      if (!twinMayFold(twin, survivor)) continue;
+      out.push(a.id < b.id ? [a, b] : [b, a]);
+    }
+  }
+  return out;
+}
+
+export function imagingJudgeCandidates(opts: { scopeId?: number | null } = {}): ImagingJudgeCandidate[] {
+  const scope = opts.scopeId == null ? null : Number(opts.scopeId);
+  sourceTextCache.clear();
+  try {
+    return candidatePairs(loadStudies(), scope)
+      .filter(([a, b]) => !judgmentFor(a, b))
+      .map(([older, newer]) => ({
+        older: { id: older.id, source_doc_id: older.source_doc_id },
+        newer: { id: newer.id, source_doc_id: newer.source_doc_id },
+        date: older.date,
+      }));
+  } finally {
+    sourceTextCache.clear();
+  }
+}
+
+// Remember one verdict on the newer study, so the pair is never asked again. A
+// direct write of the bookkeeping field only: nothing clinical moves, so neither
+// the marker series nor the brain signals are disturbed.
+export function recordImagingDedupeJudgment(
+  olderId: number,
+  newerId: number,
+  verdict: { same_study: boolean; confidence: "high" | "medium" | "low"; reason?: string | null }
+): boolean {
+  const row = db
+    .prepare(`SELECT parsed_json, enrichment_status FROM health_documents WHERE id = ? AND kind = 'imaging'`)
+    .get(newerId) as any;
+  // A study whose read started meanwhile is left untouched (the write would make
+  // that read stale); the pair is simply asked again on a later pass.
+  if (!row || ["pending", "in_progress", "running"].includes(String(row.enrichment_status ?? ""))) return false;
+  let parsed: any = null;
+  try {
+    parsed = row.parsed_json ? JSON.parse(row.parsed_json) : null;
+  } catch {
+    parsed = null;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+  const kept = (Array.isArray(parsed.dedupe_judgments) ? parsed.dedupe_judgments : []).filter(
+    (j: any) => Number(j?.other_id) !== olderId
+  );
+  kept.push({
+    other_id: olderId,
+    same_study: verdict.same_study === true,
+    confidence: verdict.confidence,
+    reason: verdict.reason ? String(verdict.reason).replace(/\s+/g, " ").trim().slice(0, 400) : null,
+    at: new Date().toISOString(),
+  });
+  parsed.dedupe_judgments = kept.slice(-40);
+  db.prepare(`UPDATE health_documents SET parsed_json = ? WHERE id = ?`).run(JSON.stringify(parsed), newerId);
+  return true;
+}
+
+// What an agent is shown of one study: its own words, bounded.
+export function imagingJudgeView(id: number): Record<string, unknown> | null {
+  const row = db
+    .prepare(`SELECT id, doc_date, source_doc_id, parsed_json FROM health_documents WHERE id = ?`)
+    .get(id) as any;
+  if (!row) return null;
+  let study: any = null;
+  try {
+    study = row.parsed_json ? JSON.parse(row.parsed_json)?.imaging_study : null;
+  } catch {
+    study = null;
+  }
+  if (!study || typeof study !== "object") return null;
+  const clip = (value: unknown, max: number) => {
+    const s = String(value ?? "")
+      .replace(/\s+/g, " ")
+      .trim();
+    return s ? s.slice(0, max) : null;
+  };
+  let excerpt: string | null = null;
+  try {
+    const source = row.source_doc_id == null ? null : (getHealthDocumentRaw(Number(row.source_doc_id)) as any);
+    const fp = source?.mime === "text/plain" ? safeUploadPath(source.file_path) : null;
+    if (fp && fs.existsSync(fp)) excerpt = clip(fs.readFileSync(fp, "utf8"), 3000);
+  } catch {
+    excerpt = null;
+  }
+  return {
+    study_date: study.study?.study_date ?? row.doc_date ?? null,
+    modality: study.study?.modality ?? null,
+    procedure: clip(study.study?.procedure, 240),
+    anatomy: {
+      clinical_system: study.anatomy?.clinical_system ?? null,
+      body_region: study.anatomy?.body_region ?? null,
+      laterality: study.anatomy?.laterality ?? null,
+    },
+    impression: clip(study.report?.impression, 1500),
+    findings_text: clip(study.report?.findings, 1500),
+    findings: (Array.isArray(study.findings) ? study.findings : []).slice(0, 12).map((f: any) => ({
+      text: clip(f?.finding_text, 300),
+      measurements: (Array.isArray(f?.measurements) ? f.measurements : []).slice(0, 8).map((m: any) => ({
+        name: m?.name ?? null,
+        value: m?.value ?? m?.value_text ?? null,
+        unit: m?.unit ?? null,
+        qualifier: m?.qualifier ?? null,
+      })),
+    })),
+    source_excerpt: excerpt,
+  };
+}
+
+// Numeric measurements by name and qualifier, lengths in one unit.
+const LENGTH_TO_MM: Record<string, number> = { mm: 1, cm: 10, m: 1000 };
+function measurementsOf(study: any): Map<string, Array<{ value: number; unit: string | null }>> {
+  const out = new Map<string, Array<{ value: number; unit: string | null }>>();
+  for (const finding of Array.isArray(study?.findings) ? study.findings : []) {
+    for (const m of Array.isArray(finding?.measurements) ? finding.measurements : []) {
+      const name = norm(m?.name);
+      if (!name || typeof m?.value !== "number" || !Number.isFinite(m.value)) continue;
+      let unit: string | null = norm(m?.unit) || null;
+      let value = m.value;
+      if (unit && LENGTH_TO_MM[unit] != null) {
+        value *= LENGTH_TO_MM[unit];
+        unit = "mm";
+      }
+      const key = `${name}|${norm(m?.qualifier)}`;
+      const list = out.get(key) ?? [];
+      list.push({ value, unit });
+      out.set(key, list);
+    }
+  }
+  return out;
+}
+
+function sameMeasure(x: { value: number; unit: string | null }, y: { value: number; unit: string | null }): boolean {
+  if (x.unit && y.unit && x.unit !== y.unit) return false; // units that do not convert never agree
+  const scale = Math.max(Math.abs(x.value), Math.abs(y.value));
+  return scale === 0 ? x.value === y.value : Math.abs(x.value - y.value) <= scale * 0.005;
+}
+
+// True when a measurement both studies name disagrees: whatever an agent thought,
+// two different numbers for one thing are two readings, and both are kept.
+export function measurementsContradict(a: any, b: any): boolean {
+  const ma = measurementsOf(a);
+  const mb = measurementsOf(b);
+  for (const [key, xs] of ma) {
+    const ys = mb.get(key);
+    if (!ys) continue;
+    const [small, large] = xs.length <= ys.length ? [xs, ys] : [ys, xs];
+    for (const x of small) if (!large.some((y) => sameMeasure(x, y))) return true;
+  }
+  return false;
+}
+
+// Fold the pairs an agent already judged the same study at high confidence, with
+// no measurement disagreeing, through the strict fold's own survivor, guard and
+// source rules. Deterministic given the remembered verdicts: no agent runs here.
+export function foldJudgedImagingTwins(
+  opts: { dryRun?: boolean; scopeId?: number | null; exclude?: Set<number> } = {}
+): ImagingDedupeResult {
+  const scope = opts.scopeId == null ? null : Number(opts.scopeId);
+  sourceTextCache.clear();
+  const result: ImagingDedupeResult = { scanned: 0, folds: [], merged: 0, deleted_files: 0, errors: [] };
+  try {
+    const studies = loadStudies();
+    result.scanned = studies.length;
+    // studies another fold already takes (a dry run leaves them in place)
+    const gone = new Set<number>(opts.exclude ?? []);
+    for (const [a, b] of candidatePairs(studies, scope)) {
+      if (result.errors.length) break;
+      if (gone.has(a.id) || gone.has(b.id)) continue;
+      const verdict = judgmentFor(a, b);
+      if (!verdict?.same_study || verdict.confidence !== "high") continue;
+      if (measurementsContradict(a.study, b.study)) continue;
+      const survivor = pickSurvivor([a, b]);
+      const twin = survivor === a ? b : a;
+      const before = result.merged;
+      foldTwins(survivor, [twin], opts, result, { reason: verdict.reason });
+      if (result.merged > before) gone.add(twin.id);
     }
   } finally {
     sourceTextCache.clear();

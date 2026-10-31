@@ -246,6 +246,9 @@ function panelsFromVitals(vitals: VitalRow[]): HealthPanelInput[] {
         kind: "other",
         type: CCDA_VITALS_TYPE,
         summary: `MyChart vitals recorded ${at.slice(0, 16)}`,
+        // The encounter time as the source states it, to the minute: two exports
+        // of one clinic visit are recognized by it (src/repo/health-dedupe.ts).
+        recorded_at: at.slice(0, 16),
         markers,
       } satisfies HealthPanelInput;
     })

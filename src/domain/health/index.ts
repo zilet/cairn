@@ -23,6 +23,7 @@ export * from "../../repo/symptom-links.js";
 export * from "./blood-pressure.js";
 export * from "./marker-public.js";
 export * from "./records-search.js";
+export * from "./record-dedupe.js";
 export * from "./visit-questions.js";
 export * from "./evidence-wanted.js";
 export * from "./data-coverage.js";
