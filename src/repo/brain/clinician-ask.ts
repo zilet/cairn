@@ -72,6 +72,12 @@ const SPECIALISTS = ["lipid_specialist", "cardiology", "endocrinology", "nephrol
 const SCANS = ["cac", "carotid", "dexa", "echo"];
 
 const ASK_TOPICS: readonly AskTopic[] = [
+  // A symptom the athlete carries leads: it is the one thing on the list only they can describe.
+  {
+    key: "lightheaded",
+    phrase: "my light-headedness",
+    pattern: /\blight[- ]?headed|\bdizz(?:y|iness)\b|\bhead blurr|\bnear[- ]faint|\bpre-?syncop/i,
+  },
   { key: "statin", phrase: "a statin", pattern: /\bstatins?\b/i },
   {
     key: "lipid_drug",
@@ -196,7 +202,11 @@ export function answeredScanTopics(
 }
 
 function topicQuestion(texts: readonly unknown[], answered: ReadonlySet<string> = new Set()): string | null {
-  const topics = clinicianAskTopics(texts, answered);
+  return questionFor(clinicianAskTopics(texts, answered));
+}
+
+function questionFor(phrases: readonly string[]): string | null {
+  const topics = phrases.slice(0, MAX_TOPICS);
   // One sentence, never clipped: a topic that does not fit is left off, never cut.
   while (topics.length) {
     const question = `Should we talk about ${joinList(topics)}?`;
@@ -239,6 +249,13 @@ export interface ClinicianAskDecisionLike {
   action?: unknown;
 }
 
+// Every text a decision's topics are read from: the agent's notes, its athlete sentence, its summary.
+function askTexts(decision: ClinicianAskDecisionLike): unknown[] {
+  const action = (decision.action ?? {}) as Record<string, unknown>;
+  const notes = Array.isArray(action.clinician_notes) ? action.clinician_notes.map((note) => String(note ?? "")) : [];
+  return [...notes, String(action.user_explanation ?? ""), decision.summary];
+}
+
 export interface ClinicianAskVoice {
   /** One short question for the next visit, or null when nothing athlete-facing exists. */
   question: string | null;
@@ -264,7 +281,7 @@ export function clinicianAskVoice(
   const notes = Array.isArray(action.clinician_notes) ? action.clinician_notes.map((note) => String(note ?? "")) : [];
   const agentTexts = [spoken, ...notes];
   const title = athleteTitle(decision.summary, agentTexts);
-  const texts = [...notes, spoken, decision.summary];
+  const texts = askTexts(decision);
   // Every topic the text named is answered by the record, and nothing else is left.
   const allAnswered = namedTopics(texts).length > 0 && namedTopics(texts, answered).length === 0;
   const question = allAnswered
@@ -281,4 +298,41 @@ export function clinicianAskVoice(
   // say the same thing twice.
   const line = title && athleteSentence && !normalized(athleteSentence).startsWith(normalized(title)) ? title : "";
   return { question, line, explanation };
+}
+
+export interface ClinicianNoteForFold {
+  decision: ClinicianAskDecisionLike;
+  /** Topic keys the record answers for THIS note's date (answeredScanTopics). */
+  answered: ReadonlySet<string>;
+}
+
+/**
+ * ONE visit question for a run of conference clinical notes, newest first. Every conference
+ * restates the standing clinical picture in fresh words, so seven weekly notes read as seven
+ * near-identical asks. The newest note's topics lead (it is the team's current read); topics
+ * only older notes still name follow, the most often raised first, then the most recent. A
+ * general topic stands down when the fold names a more specific one it covers, exactly as
+ * within one note. Null when no note names a topic still open.
+ */
+export function foldedClinicianQuestion(notes: readonly ClinicianNoteForFold[]): string | null {
+  const counts = new Map<string, number>();
+  const firstSeen = new Map<string, number>();
+  const lead = new Set<string>();
+  notes.forEach((note, index) => {
+    for (const topic of namedTopics(askTexts(note.decision), note.answered)) {
+      counts.set(topic.key, (counts.get(topic.key) ?? 0) + 1);
+      if (!firstSeen.has(topic.key)) firstSeen.set(topic.key, index);
+      if (index === 0) lead.add(topic.key);
+    }
+  });
+  const named = new Set(counts.keys());
+  const kept = ASK_TOPICS.filter((topic) => named.has(topic.key) && !topic.coveredBy?.some((key) => named.has(key)));
+  const leading = kept.filter((topic) => lead.has(topic.key));
+  const trailing = kept
+    .filter((topic) => !lead.has(topic.key))
+    .sort(
+      (a, b) =>
+        (counts.get(b.key) ?? 0) - (counts.get(a.key) ?? 0) || (firstSeen.get(a.key) ?? 0) - (firstSeen.get(b.key) ?? 0)
+    );
+  return questionFor([...leading, ...trailing].map((topic) => topic.phrase));
 }

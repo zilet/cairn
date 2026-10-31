@@ -15,7 +15,7 @@ import {
 } from "../brain/expectation-contract.js";
 import { withSqliteSavepoint } from "./sqlite-savepoint.js";
 import { clinicianFloorHolds } from "../brain/autonomy.js";
-import { answeredScanTopics, clinicianAskVoice } from "./brain/clinician-ask.js";
+import { answeredScanTopics, clinicianAskVoice, foldedClinicianQuestion } from "./brain/clinician-ask.js";
 import { unremarkableScanDatesOnFile } from "./scans-on-file.js";
 import { retireSupersededExpectations } from "./brain/expectation-arbitration.js";
 import { copyDeep, memoKey, requestMemo } from "./request-memo.js";
@@ -385,19 +385,32 @@ export function awaitingBrainDecisions(limit = 20): AwaitingBrainDecision[] {
     if (!decided) continue;
     out.push(awaitingEntry(d, id, explanation, String(d.effective_date ?? decided), decided, forTheDoctor(d), scansOnFile));
   }
+  // A conference's clinical note restates the standing clinical picture in fresh words every
+  // time it meets, so the window held seven near-identical asks for one doctor's visit. They
+  // are ONE thing to take to a doctor: the newest note speaks (its own sentence, its id), and
+  // its question folds in the topics older notes in the window still raise
+  // (foldedClinicianQuestion). Every note stays on the ledger as written.
   const noteFloor = addDaysISO(localDateISO(), -CLINICIAN_NOTE_WINDOW_DAYS) ?? "";
-  const seenNotes = new Set<string>();
+  const notes: { d: BrainDecision; id: number; explanation: string; decided: string }[] = [];
   for (const d of listBrainDecisions({ status: "observed", kind: "case_conference", limit: 100 })) {
     if ((d.context as any)?.for_clinician !== true) continue;
     const id = Number(d.id);
     const explanation = awaitingExplanation(d);
     const decided = stampDay(d.created_at);
     if (!Number.isFinite(id) || !explanation || !decided || decided < noteFloor) continue;
-    // The same sentence from two conferences is one thing to ask a doctor about.
-    const key = explanation.toLowerCase();
-    if (seenNotes.has(key)) continue;
-    seenNotes.add(key);
-    out.push(awaitingEntry(d, id, explanation, decided, decided, true, scansOnFile));
+    notes.push({ d, id, explanation, decided });
+  }
+  notes.sort((a, b) => b.decided.localeCompare(a.decided) || b.id - a.id);
+  const [newest] = notes;
+  if (newest) {
+    const entry = awaitingEntry(newest.d, newest.id, newest.explanation, newest.decided, newest.decided, true, scansOnFile);
+    if (notes.length > 1) {
+      const folded = foldedClinicianQuestion(
+        notes.map((note) => ({ decision: note.d, answered: answeredScanTopics(note.decided, scansOnFile()) }))
+      );
+      if (folded) entry.clinician_question = folded;
+    }
+    out.push(entry);
   }
   const cap = Math.max(1, Math.trunc(Number(limit)) || 20);
   return out.sort((a, b) => b.decided_date.localeCompare(a.decided_date) || b.id - a.id).slice(0, cap);

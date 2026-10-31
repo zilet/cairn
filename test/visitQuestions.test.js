@@ -151,6 +151,27 @@ test("a clinical ask leads as one short question in the athlete's voice, never t
   assert.match(repo.getBrainDecision(card.id).action.user_explanation, /Placeholder/);
 });
 
+test("a run of conference clinical notes folds into ONE ask, the newest leading", () => {
+  // Each conference restates the standing picture in fresh words; seven weekly notes were
+  // seven near-identical asks. Oldest first, as the conferences met.
+  recordConferenceClinicianNotes(["Recheck ferritin and the lipid panel at the next draw."], {});
+  recordConferenceClinicianNotes(["Raise the dizziness on easy walks; recheck iron and vitamin D."], {});
+  recordConferenceClinicianNotes(["Keep the November blood draw; the statin decision stays with a lipid specialist."], {});
+  const cards = repo.awaitingBrainDecisions().filter((row) => row.for_clinician);
+  assert.equal(cards.length, 1, "one card for the doctor's visit");
+  assert.match(cards[0].explanation, /statin decision stays with a lipid specialist/, "the newest note speaks");
+  // The newest note's topics lead; iron (raised twice) then the rest follow.
+  assert.equal(
+    cards[0].clinician_question,
+    "Should we talk about a statin, repeat blood work, a lipid specialist, iron, and my light-headedness?"
+  );
+  const asks = visitQuestionsRead({ asOf: localDaysAgo(0) }).questions.filter((q) => q.source === "clinical_ask");
+  assert.equal(asks.length, 1);
+  assert.equal(asks[0].text, cards[0].clinician_question);
+  // Every note stays on the ledger as written.
+  assert.equal(repo.listBrainDecisions({ status: "observed", kind: "case_conference" }).length, 3);
+});
+
 test("a clinical ask with no named topic asks by its athlete-facing title", () => {
   const decision = seedClinicalAsk(
     "Arrange the athlete's follow-up per physician recommendation.",

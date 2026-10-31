@@ -1913,13 +1913,55 @@ function pipeAgentStdin(child: ChildProcessWithoutNullStreams, text: string | nu
   else child.stdin.once("drain", () => child.stdin.end());
 }
 
+// Each agent CLI runs as the leader of its own process group, so a kill reaches what it
+// spawned too — the MCP servers, shells and tool helpers a coding CLI starts. A kill aimed
+// at the CLI alone left those running on the Pi after every timeout and Stop. A detached
+// group no longer hears the terminal's Ctrl-C, so every live group is tracked and killed on
+// shutdown (killAllAgentProcesses, server.ts) and on process exit.
+const GROUP_KILL = process.platform !== "win32";
+const liveAgentGroups = new Set<number>();
+
+function killAgentTree(child: ChildProcessWithoutNullStreams): void {
+  const pid = child.pid;
+  if (GROUP_KILL && pid) {
+    try {
+      process.kill(-pid, "SIGKILL");
+      return;
+    } catch {
+      /* the group is gone; fall through to the leader */
+    }
+  }
+  try { child.kill("SIGKILL"); } catch { /* already gone */ }
+}
+
+/** SIGKILL every live agent CLI group. Idempotent; safe inside an `exit` handler. */
+export function killAllAgentProcesses(): void {
+  for (const pid of liveAgentGroups) {
+    try { process.kill(-pid, "SIGKILL"); } catch { /* already gone */ }
+  }
+  liveAgentGroups.clear();
+}
+if (GROUP_KILL) process.on("exit", killAllAgentProcesses);
+
 function spawnAgentChild(
   command: string,
   args: string[],
   options: ReturnType<typeof buildAgentSpawnOptions>
 ): ChildProcessWithoutNullStreams {
   try {
-    return spawn(command, args, { ...options, stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(command, args, { ...options, detached: GROUP_KILL, stdio: ["pipe", "pipe", "pipe"] });
+    const pid = child.pid;
+    if (GROUP_KILL && pid) {
+      liveAgentGroups.add(pid);
+      // The CLI exiting does not end what it left behind: sweep the group once it closes.
+      // POSIX never reuses a pid while its process group still exists, so this can only
+      // reach the CLI's own leftovers.
+      child.once("close", () => {
+        liveAgentGroups.delete(pid);
+        try { process.kill(-pid, "SIGKILL"); } catch { /* nothing left */ }
+      });
+    }
+    return child;
   } catch (e: any) {
     const err = new Error(`failed to launch "${command}": ${e.message}`);
     (err as any).code = e.code;
@@ -3017,7 +3059,7 @@ function spawnAgentProcess(def: AgentDef, request: AgentSpawnRequest): Promise<A
     let killedByUs = false;
     const timer = setTimeout(() => {
       killedByUs = true;
-      child.kill("SIGKILL");
+      killAgentTree(child);
       reject(new Error(`agent "${name}" timed out after ${timeoutMs}ms`));
     }, timeoutMs);
     // A Stop on a running turn aborts the signal: SIGKILL the live subprocess so
@@ -3025,7 +3067,7 @@ function spawnAgentProcess(def: AgentDef, request: AgentSpawnRequest): Promise<A
     const onAbort = () => {
       clearTimeout(timer);
       killedByUs = true;
-      try { child.kill("SIGKILL"); } catch { /* already gone */ }
+      killAgentTree(child);
       reject(new Error(`agent "${name}" canceled`));
     };
     if (signal) signal.addEventListener("abort", onAbort, { once: true });
@@ -3305,13 +3347,13 @@ function spawnAgentStream(
     let killedByUs = false;
     const timer = setTimeout(() => {
       killedByUs = true;
-      child.kill("SIGKILL");
+      killAgentTree(child);
       reject(new Error(`agent "${name}" timed out after ${timeoutMs}ms`));
     }, timeoutMs);
     const onAbort = () => {
       clearTimeout(timer);
       killedByUs = true;
-      try { child.kill("SIGKILL"); } catch { /* already gone */ }
+      killAgentTree(child);
       reject(new Error(`agent "${name}" canceled`));
     };
     if (signal) signal.addEventListener("abort", onAbort, { once: true });

@@ -17,7 +17,7 @@ import { authGuard, authEnabled, requireAuth, authStartupError, rateLimitGuard, 
 import { clientAddress, untrustedProxyNotice } from "./authHttp.js";
 import { firstSignInNotice } from "./repo/auth-devices.js";
 import { oauthResume, oauthRouter } from "./routes/oauth.js";
-import { setAgentRunSink, loadAgents, invalidateAgentConfigured, warmAgentProbes } from "./agents.js";
+import { setAgentRunSink, loadAgents, invalidateAgentConfigured, warmAgentProbes, killAllAgentProcesses } from "./agents.js";
 import { startLoginSession, killActiveLoginSession } from "./agentLogin.js";
 import { reportScriptCspHash } from "./report.js";
 import { earlyFetchCspHash } from "./earlyFetch.js";
@@ -492,7 +492,7 @@ function shutdown(signal: string) {
     process.exit(0);
   }, 8000);
   force.unref?.();
-  try { abortAllTurns(); abortAllJobs(); killActiveLoginSession(); } catch { /* best effort */ }
+  try { abortAllTurns(); abortAllJobs(); killActiveLoginSession(); killAllAgentProcesses(); } catch { /* best effort */ }
   try {
     server.close(() => {
       clearTimeout(force);

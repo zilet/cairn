@@ -3754,7 +3754,9 @@ flag, which is what makes the failure sentence actually surface in "Waiting on y
 Progress rides an **`EventEmitter` bus** (`onTurnEvent(id, cb)`) that the SSE endpoint forwards:
 `phase` / `delta` (a live reply chunk) / `reset` (streaming fell back — clear the partial bubble) /
 terminal `done`/`error`/`canceled`. `enqueueChatTurn`/`cancelTurn`/`recoverChatTurns` are the
-lifecycle entries; `cancelTurn` flips state then SIGKILLs the live subprocess (a Stop — `agents.ts`
+lifecycle entries; `cancelTurn` flips state then SIGKILLs the live subprocess's whole process group
+(each CLI is spawned as a group leader, so its MCP servers and tool helpers die with it on a Stop or a
+timeout and are swept when it exits; shutdown kills every live group — `killAllAgentProcesses`) (a Stop — `agents.ts`
 `runAgent`/`runAgentStreaming`/`runAgentWithFallback`/`runChosen` thread an `AbortSignal`). Degrades
 like the rest of the loop (no agent → a calm error reply persists, nothing throws).
 
@@ -5328,7 +5330,10 @@ told (announce = apply-and-tell with one-tap Undo). Concretely:
   what the thaw re-reads on a parked row, `conference-clinician-notes.ts` the doctor notes;
   `autonomy-service.ts` keeps the loops and re-exports the public names.
 - **The waiting surface splits.** `awaitingBrainDecisions()` marks `for_clinician` on a clinician-floor
-  hold and lists recent (21-day) clinician notes; the Plan note and Changes screen render them under
+  hold and folds the recent (21-day) conference clinician notes into ONE entry — each conference
+  restates the standing picture in fresh words, so they are one thing to take to a visit: the newest
+  note speaks, and its `clinician_question` adds the topics older notes still raise
+  (`foldedClinicianQuestion`, `src/repo/brain/clinician-ask.ts`; the ledger keeps every note). The Plan note and Changes screen render them under
   "For you and your doctor", never "Waiting on you". That list holds HEALTH: a training-domain hold
   (`training`/`recovery` domain, or a training kind) is never `for_clinician`, even on the floor — it
   still waits, as a change to the athlete's week.
