@@ -131,6 +131,7 @@ const clusterPlan = {
       added_markers: 2,
       rule: "same_draw",
       reason: "Same draw date & the readings agree <b>exactly</b>",
+      removes_note: "Merging also removes a duplicate uploaded file <i>x</i>",
       superseded: [
         { name: "BMI", value: 24.1, unit: "kg/m2", from_doc_id: 10, replaced_by_doc_id: 11 },
         { name: "BMI", value: 24.1, unit: "kg/m2", from_doc_id: 10, replaced_by_doc_id: 11 },
@@ -173,6 +174,8 @@ test("a plan with clusters names each record, prints the reason, and escapes eve
   assert.match(html, /Bloodwork · on 2026-05-01<\/span> folds into/);
   assert.match(html, /Same draw date &amp; the readings agree &lt;b&gt;exactly&lt;\/b&gt;/);
   assert.match(html, /Keeps the later export's reading for BMI\./);
+  // what the merge deletes besides the record, said in plain words (escaped)
+  assert.match(html, /Merging also removes a duplicate uploaded file &lt;i&gt;x&lt;\/i&gt;/);
   assert.doesNotMatch(html, /BMI and BMI/);
   assert.match(html, /One record looks filed twice\./);
   assert.match(html, /that needs a connected AI/);
@@ -180,7 +183,7 @@ test("a plan with clusters names each record, prints the reason, and escapes eve
   assert.match(html, /data-hdedupe-dismiss[^>]*>Not now</);
 });
 
-test("Merge these posts {apply:true}, confirms calmly, and refreshes the records", async () => {
+test("Merge these posts {apply:true} with the clusters on screen, confirms calmly, and refreshes", async () => {
   const h = harness(clusterPlan);
   h.slot.querySelector("[data-hdedupe-check]").click();
   await Promise.resolve();
@@ -190,7 +193,10 @@ test("Merge these posts {apply:true}, confirms calmly, and refreshes the records
   assert.equal(h.requests.length, 1);
   assert.equal(h.requests[0].path, "/health-docs/dedupe");
   assert.equal(h.requests[0].opts.method, "POST");
-  assert.deepEqual(JSON.parse(h.requests[0].opts.body), { apply: true });
+  assert.deepEqual(JSON.parse(h.requests[0].opts.body), {
+    apply: true,
+    clusters: [{ survivor: 10, merged: [11], rule: "same_draw" }],
+  });
   assert.match(h.panel().innerHTML, /Merged 1 record\./);
   assert.deepEqual(h.merges, [1]);
 });
@@ -224,6 +230,18 @@ test("a failed check or merge is a quiet line, never an error dump", async () =>
   assert.match(badMerge.panel().innerHTML, /Couldn't merge them just now — your records are unchanged\./);
   assert.doesNotMatch(badMerge.panel().innerHTML, /locked/);
   assert.deepEqual(badMerge.merges, []);
+});
+
+test("records that changed since the check merge nothing and ask for a fresh check", async () => {
+  const h = harness(clusterPlan, {
+    applyResult: { ok: false, changed: true, error: "Your records changed since the check." },
+  });
+  h.slot.querySelector("[data-hdedupe-check]").click();
+  await Promise.resolve();
+  h.panel().querySelector("[data-hdedupe-apply]").click();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(h.panel().innerHTML, /Your records changed since the check — check again/);
+  assert.deepEqual(h.merges, []);
 });
 
 test("a check still running after a reload reattaches only while the slot is mounted", () => {

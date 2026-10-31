@@ -279,12 +279,15 @@ export async function judgeImagingTwins(agent: string | undefined, opts: Imaging
       break;
     }
     if (out.agent === "stub" || !isImagingTwinVerdict(parsed)) continue;
+    // Written only while both studies still hold what the agent was shown: an edit
+    // made during the call never gets a verdict about the old content.
     if (
-      recordImagingDedupeJudgment(pair.older.id, pair.newer.id, {
-        same_study: parsed.same_study,
-        confidence: parsed.confidence,
-        reason: parsed.reason,
-      })
+      recordImagingDedupeJudgment(
+        pair.older.id,
+        pair.newer.id,
+        { same_study: parsed.same_study, confidence: parsed.confidence, reason: parsed.reason },
+        { older: pair.older.content, newer: pair.newer.content }
+      )
     ) {
       out.judged++;
     }

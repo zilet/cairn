@@ -25,6 +25,7 @@ import {
   listHealthDocuments,
   MAX_IMAGING_FILE_BYTES,
   setHealthDocEnrichStatus,
+  applyPlannedDedupe,
   settleNewHealthRecords,
   updateHealthDocFields,
   updateImagingRecommendationStatus,
@@ -216,6 +217,12 @@ healthDocsRouter.post("/dedupe", (req, res) => {
   if (dryRun && truthy(req.body?.judge ?? req.query.judge)) {
     const agent = typeof req.body?.agent === "string" ? req.body.agent : null;
     backgroundOp(res, "health_dedupe_check", {}, agent);
+    return;
+  }
+  // The Records screen sends back the clusters it showed: exactly those fold, or none
+  // (`{ok:false, changed:true}` at 200 when the records moved since the check).
+  if (!dryRun && Array.isArray(req.body?.clusters)) {
+    res.json(applyPlannedDedupe(req.body.clusters));
     return;
   }
   const result = dedupeHealthDocuments({ dryRun });

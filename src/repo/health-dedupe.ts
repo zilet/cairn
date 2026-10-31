@@ -42,7 +42,7 @@ import { db } from "../db.js";
 import { canonicalMarkerForReading, isNonAnalyteMarkerName, normalizeMarkerName } from "./marker-canon.js";
 import { deleteHealthDocument, updateHealthDocFields } from "./health.js";
 import { dedupeImagingStudies, foldJudgedImagingTwins } from "./imaging-dedupe.js";
-import type { ImagingDedupeFold, ImagingDedupeResult } from "./imaging-dedupe.js";
+import type { FoldAllowList, ImagingDedupeFold, ImagingDedupeResult } from "./imaging-dedupe.js";
 import { labUnitSpec, labUnitsCompatible, normalizeLabUnit, toCanonical } from "./lab-units.js";
 import { unitAnalyteZone } from "./propagation-data.js";
 
@@ -83,7 +83,14 @@ interface DocRow {
   children: number;
   created_at: string | null;
   source_created_at: string | null; // when the export this row came out of was uploaded
+  mime: string | null;
+  status: string; // this row's own read state
+  source_status: string; // the read state of the upload it came out of
 }
+
+// A read still running on a row, or on the upload it came out of: never folded
+// (the read would rewrite or delete what the fold just merged).
+const BUSY = new Set(["pending", "in_progress", "running", "pending_confirm"]);
 
 interface Reading {
   value: string; // comparable form as printed ("n:3.2", "s:<0.5" — a qualified value stays text)
@@ -103,6 +110,15 @@ export interface SupersededReading {
   unit: string | null;
   from_doc_id: number; // the record whose value was replaced
   replaced_by_doc_id: number; // the record whose value now stands
+  from_source_doc_id: number | null; // the export the replaced value came from
+}
+
+// Where the value standing in one reading slot came from, kept on a survivor that
+// folded exports of one encounter (`parsed.reading_sources`, by reading key): the
+// next export compares itself with THIS, never with the survivor's own export.
+interface ReadingSource {
+  source_doc_id: number | null;
+  exported_at: string | null;
 }
 
 export interface DedupeClusterPlan {
@@ -122,6 +138,9 @@ export interface DedupeClusterPlan {
   rule: DedupeRule;
   reason: string;
   superseded: SupersededReading[];
+  // Uploads the fold deletes with a twin, and the same in plain words (null when none).
+  removes: Array<{ id: number; what: "file" | "paste"; label: string | null }>;
+  removes_note: string | null;
 }
 
 export interface DedupeHealthDocumentsResult {
@@ -143,6 +162,8 @@ export interface DedupeOptions {
   // upload itself is still mid-ingest when the hook runs, so it is read
   // regardless of its enrichment status.
   scopeSourceId?: number | null;
+  // Fold only these approved pairs, `${survivorId}:${twinId}` (the Records apply).
+  allow?: FoldAllowList;
 }
 
 // Numbers agree within half a percent (27.21 vs 27.2 is one BMI, 5.4 vs 5.5 is
@@ -291,25 +312,72 @@ export function encounterStamp(row: { parsed?: any; summary?: string | null }): 
   return summary ? read(summary[1]) : null;
 }
 
+// The vitals the CCDA pass writes, by the exact names it writes them under.
+const CCDA_VITAL_NAMES = new Set([
+  "Systolic BP",
+  "Diastolic BP",
+  "Pulse",
+  "Temperature",
+  "Oxygen Saturation",
+  "Respiratory Rate",
+  "Weight",
+  "Height",
+  "BMI",
+]);
+const CCDA_VITALS_SUMMARY = /^MyChart vitals recorded \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/;
+
+// A row the deterministic CCDA pass wrote. Since this round the pass marks its own
+// rows (`parsed.ccda_pass`, set only by replaceHealthPanelsByType; an agent's panel
+// cannot carry it). Rows filed before the mark are recognized by what only that pass
+// writes: a `ccda_vitals` row whose summary is exactly its "MyChart vitals recorded
+// <time>" line and whose every marker is one of its vitals, by its own name.
+export function isDeterministicCcdaRow(row: { parsed?: any; summary?: string | null; markers?: any[] }): boolean {
+  const parsed = row.parsed ?? {};
+  if (!CCDA_DERIVED_TYPES.has(String(parsed.type ?? ""))) return false;
+  if (parsed.ccda_pass === true) return true;
+  const markers = Array.isArray(row.markers) ? row.markers : Array.isArray(parsed.markers) ? parsed.markers : [];
+  return (
+    parsed.type === "ccda_vitals" &&
+    CCDA_VITALS_SUMMARY.test(String(row.summary ?? "").trim()) &&
+    markers.length > 0 &&
+    markers.every((m: any) => CCDA_VITAL_NAMES.has(String(m?.name ?? "")))
+  );
+}
+
 // One clinic encounter filed by two exports: the same CCDA type, the same date,
-// the same stated encounter time, two different source exports. Never an agent's
-// read (only the deterministic streams state an encounter time), never two times.
+// the same stated encounter time, two different source exports. Only rows the
+// deterministic CCDA pass wrote (isDeterministicCcdaRow), never an agent's read,
+// never two times.
 export function sameEncounter(a: DocRow, b: DocRow): boolean {
   const type = derivedType(a);
   if (!CCDA_DERIVED_TYPES.has(type) || type !== derivedType(b)) return false;
+  if (!isDeterministicCcdaRow(a) || !isDeterministicCcdaRow(b)) return false;
   if (a.doc_date !== b.doc_date || a.file_path || b.file_path) return false;
   if (a.source_doc_id == null || b.source_doc_id == null || a.source_doc_id === b.source_doc_id) return false;
   const stamp = encounterStamp(a);
   return stamp != null && stamp === encounterStamp(b) && stamp.slice(0, 10) === a.doc_date;
 }
 
-// Which of two exports is the later one: the upload time of the export each row
-// came out of, then its id (uploads are numbered in arrival order).
-function laterExport(a: DocRow, b: DocRow): boolean {
-  const ta = a.source_created_at ?? a.created_at ?? "";
-  const tb = b.source_created_at ?? b.created_at ?? "";
+// The export one slot's value came from: the survivor's remembered provenance for
+// that reading, else the row's own export.
+function readingSource(row: DocRow, key: string): ReadingSource {
+  const kept = row.parsed?.reading_sources?.[key];
+  if (kept && typeof kept === "object") {
+    return {
+      source_doc_id: kept.source_doc_id == null ? null : Number(kept.source_doc_id),
+      exported_at: kept.exported_at == null ? null : String(kept.exported_at),
+    };
+  }
+  return { source_doc_id: row.source_doc_id, exported_at: row.source_created_at ?? row.created_at };
+}
+
+// Which of two exports is the later one: its upload time, then its id (uploads are
+// numbered in arrival order).
+function laterSource(a: ReadingSource, b: ReadingSource): boolean {
+  const ta = a.exported_at ?? "";
+  const tb = b.exported_at ?? "";
   if (ta !== tb) return ta > tb;
-  return (a.source_doc_id ?? a.id) > (b.source_doc_id ?? b.id);
+  return (a.source_doc_id ?? 0) > (b.source_doc_id ?? 0);
 }
 
 function isAgentDerived(row: DocRow): boolean {
@@ -376,6 +444,8 @@ function loadRows(includeId: number | null): DocRow[] {
     .prepare(
       `SELECT d.id, d.kind, d.doc_date, d.source_doc_id, d.file_path, d.original_name, d.summary, d.parsed_json, d.created_at,
               (SELECT s.created_at FROM health_documents s WHERE s.id = d.source_doc_id) AS source_created_at,
+              (SELECT s.enrichment_status FROM health_documents s WHERE s.id = d.source_doc_id) AS source_status,
+              d.mime, d.enrichment_status AS status,
               (SELECT COUNT(*) FROM health_documents c WHERE c.source_doc_id = d.id) AS children
          FROM health_documents d
         WHERE d.kind != 'imaging'
@@ -408,6 +478,9 @@ function loadRows(includeId: number | null): DocRow[] {
       children: Number(row.children ?? 0),
       created_at: row.created_at ?? null,
       source_created_at: row.source_created_at ?? null,
+      mime: row.mime ?? null,
+      status: String(row.status ?? ""),
+      source_status: String(row.source_status ?? ""),
     });
   }
   return out;
@@ -449,6 +522,13 @@ function touchesSource(row: DocRow, sourceId: number): boolean {
   return row.id === sourceId || row.source_doc_id === sourceId;
 }
 
+// A row whose read (or whose upload's read) is still running is left alone, unless
+// it belongs to the upload this fold was scoped to: that ingest is the caller.
+function busy(row: DocRow, scope: number | null): boolean {
+  if (scope != null && touchesSource(row, scope)) return false;
+  return BUSY.has(row.status) || BUSY.has(row.source_status);
+}
+
 function hasRefRange(marker: any): boolean {
   return marker && (marker.ref_low != null || marker.ref_high != null);
 }
@@ -466,7 +546,7 @@ function readingOf(marker: any): Reading | null {
 function mergedMarkers(
   survivor: DocRow,
   twins: DocRow[]
-): { markers: any[]; added: number; superseded: SupersededReading[] } {
+): { markers: any[]; added: number; superseded: SupersededReading[]; sources: Record<string, ReadingSource> | null } {
   // a fold is also the moment a survivor written before the non-analyte filter
   // sheds its "Lab Interpretation" rows
   const markers = survivor.markers.filter((marker) => markerReadingKey(marker) != null);
@@ -477,8 +557,11 @@ function mergedMarkers(
   });
   let added = 0;
   const superseded: SupersededReading[] = [];
-  // which row each slot's reading came from, so a later export can replace it
-  const holder = new Map<number, DocRow>();
+  // which row, and which export, each slot's standing value came from
+  const holder = new Map<string, DocRow>();
+  const standing = new Map<string, ReadingSource>();
+  const sourceOf = (key: string): ReadingSource => standing.get(key) ?? readingSource(survivor, key);
+  const anyEncounter = twins.some((twin) => sameEncounter(survivor, twin));
   for (const twin of twins) {
     const encounter = sameEncounter(survivor, twin);
     for (const marker of twin.markers) {
@@ -487,7 +570,8 @@ function mergedMarkers(
       const at = slot.get(key);
       if (at == null) {
         slot.set(key, markers.length);
-        holder.set(markers.length, twin);
+        holder.set(key, twin);
+        standing.set(key, readingSource(twin, key));
         markers.push(marker);
         added++;
         continue;
@@ -495,8 +579,12 @@ function mergedMarkers(
       const current = readingOf(markers[at]);
       const incoming = readingOf(marker);
       if (encounter && current && incoming && !readingsAgree(current, incoming)) {
-        const owner = holder.get(at) ?? survivor;
-        const twinWins = laterExport(twin, owner);
+        // the later EXPORT wins, compared with the export of the value actually
+        // standing in this slot (which may have come from an earlier fold)
+        const owner = holder.get(key) ?? survivor;
+        const mine = sourceOf(key);
+        const theirs = readingSource(twin, key);
+        const twinWins = laterSource(theirs, mine);
         const lost = twinWins ? markers[at] : marker;
         superseded.push({
           name: String(lost?.name ?? ""),
@@ -504,17 +592,34 @@ function mergedMarkers(
           unit: lost?.unit ?? null,
           from_doc_id: twinWins ? owner.id : twin.id,
           replaced_by_doc_id: twinWins ? twin.id : owner.id,
+          from_source_doc_id: twinWins ? mine.source_doc_id : theirs.source_doc_id,
         });
         if (twinWins) {
           markers[at] = marker;
-          holder.set(at, twin);
+          holder.set(key, twin);
+          standing.set(key, theirs);
         }
         continue;
       }
       if (hasRefRange(marker) && !hasRefRange(markers[at])) markers[at] = marker;
     }
   }
-  return { markers, added, superseded };
+  let sources: Record<string, ReadingSource> | null = null;
+  if (anyEncounter || survivor.parsed?.reading_sources) {
+    sources = {};
+    for (const key of slot.keys()) sources[key] = sourceOf(key);
+  }
+  return { markers, added, superseded, sources };
+}
+
+// What it takes to file a twin again as it was, should the record it folded into
+// go away with ITS upload while the twin's own upload is still on file
+// (restoreOrphanedTwins, src/repo/health.ts). Never for a twin that owned a file
+// (its file is deleted with it, and the survivor held every reading it had).
+function twinSnapshot(row: DocRow): Record<string, any> | null {
+  if (row.file_path) return null;
+  const { merged_from: _merged, ...parsed } = row.parsed ?? {};
+  return { kind: row.kind, doc_date: row.doc_date, summary: row.summary, original_name: row.original_name, parsed };
 }
 
 // The survivor's parsed record once `twins` fold into it.
@@ -522,13 +627,25 @@ function foldedParsed(
   survivor: DocRow,
   twins: DocRow[]
 ): { parsed: Record<string, any>; added: number; superseded: SupersededReading[] } {
-  const { markers, added, superseded } = mergedMarkers(survivor, twins);
+  const { markers, added, superseded, sources } = mergedMarkers(survivor, twins);
   const parsed: Record<string, any> = { ...survivor.parsed, markers };
+  if (sources) parsed.reading_sources = sources;
   const facts = unionFacts(survivor, twins);
   if (facts) parsed.clinical_facts = facts;
+  // a twin's own fold history travels with it, so every export behind the survivor
+  // can still be filed again if the survivor's own export goes
   parsed.merged_from = [
     ...(Array.isArray(parsed.merged_from) ? parsed.merged_from : []),
-    ...twins.map((row) => ({ id: row.id, source_doc_id: row.source_doc_id, original_name: row.original_name, doc_date: row.doc_date })),
+    ...twins.flatMap((row) => [
+      ...(Array.isArray(row.parsed?.merged_from) ? row.parsed.merged_from : []),
+      {
+        id: row.id,
+        source_doc_id: row.source_doc_id,
+        original_name: row.original_name,
+        doc_date: row.doc_date,
+        snapshot: twinSnapshot(row),
+      },
+    ]),
   ].slice(-20);
   if (superseded.length) {
     parsed.superseded_readings = [
@@ -577,9 +694,11 @@ function unionFacts(survivor: DocRow, twins: DocRow[]): any[] | undefined {
 // survivor is not the survivor's draw); never when it split out derived panels
 // of its own; and, when it owns an uploaded file, only when the survivor
 // already holds every reading it has — an identical second upload.
-function foldableTwins(survivor: DocRow, group: DocRow[]): DocRow[] {
+function foldableTwins(survivor: DocRow, group: DocRow[], scope: number | null, allow?: FoldAllowList): DocRow[] {
   return group.filter((row) => {
     if (row.id === survivor.id || row.children > 0) return false;
+    if (busy(row, scope)) return false;
+    if (allow && !allow.has(`${survivor.id}:${row.id}`)) return false;
     if (!sameDraw(survivor, row)) return false;
     if (!row.file_path) return true;
     const o = overlap(survivor, row);
@@ -600,7 +719,11 @@ interface Fold {
 // as it stands after them (survivors carrying their merged readings, twins
 // gone) — so the next pass, and a dry run, see the same state a real fold
 // would leave behind.
-function foldPass(rows: DocRow[], scopeSourceId: number | null): { folds: Fold[]; rows: DocRow[] } {
+function foldPass(
+  rows: DocRow[],
+  scopeSourceId: number | null,
+  allow?: FoldAllowList
+): { folds: Fold[]; rows: DocRow[] } {
   let clusters = clustersOf(rows);
   if (scopeSourceId != null) clusters = clusters.filter((group) => group.some((row) => touchesSource(row, scopeSourceId)));
   const folds: Fold[] = [];
@@ -608,7 +731,8 @@ function foldPass(rows: DocRow[], scopeSourceId: number | null): { folds: Fold[]
   const replaced = new Map<number, DocRow>();
   for (const group of clusters) {
     const survivor = pickSurvivor(group);
-    const twins = foldableTwins(survivor, group);
+    if (busy(survivor, scopeSourceId)) continue;
+    const twins = foldableTwins(survivor, group, scopeSourceId, allow);
     if (!twins.length) continue;
     const { parsed, added, superseded } = foldedParsed(survivor, twins);
     const markers = parsed.markers as any[];
@@ -621,7 +745,21 @@ function foldPass(rows: DocRow[], scopeSourceId: number | null): { folds: Fold[]
   return { folds, rows: next };
 }
 
+// What a fold removes besides the twin record, in plain words for the plan.
+function removesNote(removes: DedupeClusterPlan["removes"]): string | null {
+  if (!removes.length) return null;
+  const pastes = removes.filter((r) => r.what === "paste").length;
+  const files = removes.length - pastes;
+  const parts: string[] = [];
+  if (files) parts.push(files === 1 ? "a duplicate uploaded file" : `${files} duplicate uploaded files`);
+  if (pastes) parts.push(pastes === 1 ? "a duplicate pasted report" : `${pastes} duplicate pasted reports`);
+  return `Merging also removes ${parts.join(" and ")}; the record that stays holds the same content.`;
+}
+
 export function imagingClusterPlan(fold: ImagingDedupeFold): DedupeClusterPlan {
+  const removes = fold.merged
+    .filter((twin) => twin.removed_source && twin.source_doc_id != null)
+    .map((twin) => ({ id: Number(twin.source_doc_id), what: (twin.pasted_source ? "paste" : "file") as "paste" | "file", label: twin.label }));
   return {
     date: fold.date,
     survivor: { id: fold.survivor.id, kind: "imaging", doc_date: fold.date, markers: 0, label: fold.survivor.label },
@@ -641,6 +779,8 @@ export function imagingClusterPlan(fold: ImagingDedupeFold): DedupeClusterPlan {
         ? `The same scan, read twice in different words.${fold.judged_reason ? ` ${fold.judged_reason}` : ""}`
         : "The same scan: same day, procedure and impression.",
     superseded: [],
+    removes,
+    removes_note: removesNote(removes),
   };
 }
 
@@ -663,6 +803,13 @@ export function dedupeHealthDocuments(opts: DedupeOptions = {}): DedupeHealthDoc
   };
   const clusterPlan = (fold: Fold, twins: DocRow[], added: number, superseded: SupersededReading[]): DedupeClusterPlan => {
     const rule: DedupeRule = twins.some((row) => sameEncounter(fold.survivor, row)) ? "same_encounter" : "same_draw";
+    const removes = twins
+      .filter((row) => !!row.file_path)
+      .map((row) => ({
+        id: row.id,
+        what: (/^text\/plain/i.test(row.mime ?? "") ? "paste" : "file") as "paste" | "file",
+        label: recordLabel(row),
+      }));
     return {
       date: fold.survivor.doc_date,
       survivor: {
@@ -685,10 +832,12 @@ export function dedupeHealthDocuments(opts: DedupeOptions = {}): DedupeHealthDoc
       rule,
       reason: foldReason(rule, fold.survivor, superseded),
       superseded,
+      removes,
+      removes_note: removesNote(removes),
     };
   };
   for (let pass = 0; pass < MAX_PASSES && !result.errors.length; pass++) {
-    const step = foldPass(rows, scope);
+    const step = foldPass(rows, scope, opts.allow);
     if (!step.folds.length) {
       result.converged = true;
       break;
@@ -747,12 +896,12 @@ export function dedupeHealthDocuments(opts: DedupeOptions = {}): DedupeHealthDoc
       result.deleted_files += imaging.deleted_files;
       result.errors.push(...imaging.errors);
     };
-    const strict = dedupeImagingStudies({ dryRun });
+    const strict = dedupeImagingStudies({ dryRun, allow: opts.allow });
     absorb(strict);
     if (!result.errors.length) {
       // a dry run leaves the strict twins in place: never plan one twice
       const exclude = new Set(strict.folds.flatMap((fold) => fold.merged.map((twin) => twin.id)));
-      absorb(foldJudgedImagingTwins({ dryRun, exclude }));
+      absorb(foldJudgedImagingTwins({ dryRun, exclude, allow: opts.allow }));
     }
   }
   if (result.errors.length) result.converged = false;

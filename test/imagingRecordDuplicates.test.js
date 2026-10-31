@@ -173,7 +173,9 @@ test("twin studies of one scan fold through the dedupe route; a dry run first", 
   assert.equal(applied.body.merged, 1);
   assert.ok(repo.getHealthDocumentRaw(a.study.id));
   assert.equal(repo.getHealthDocumentRaw(b.study.id), null);
-  assert.equal(repo.getHealthDocumentRaw(b.source.id), null, "the twin's paste goes with it — no orphan card");
+  // the twin's paste is not the survivor's text (it carries "(copy)"), so no equivalent
+  // copy of it is left on the survivor's side: the report is kept, never deleted
+  assert.ok(repo.getHealthDocumentRaw(b.source.id), "a paste with no copy left stays");
   assert.ok(repo.getHealthDocumentRaw(differs.study.id), "a different impression never folds");
 
   assert.equal(dedupeHealthDocuments({ dryRun: true }).merged, 0, "a fixed point");

@@ -28,6 +28,7 @@ import { DEDUPE_RULES_VERSION, dedupeHealthDocuments } from "../../repo/health-d
 import type { DedupeHealthDocumentsResult } from "../../repo/health-dedupe.js";
 import { db } from "../../db.js";
 import { deriveDirectives } from "../../repo/propagation.js";
+import { registerRestoredRecordSettler } from "../../repo/health.js";
 
 export const DEDUPE_RULES_VERSION_KEY = "health_dedupe_rules_version";
 
@@ -78,13 +79,41 @@ export function settleNewHealthRecords(id: number, opts: { label?: string } = {}
 /**
  * Boot: when the stored rules version differs from DEDUPE_RULES_VERSION, fold the
  * whole record set once (deterministic rules plus any agent verdict already on
- * file), then store the version. A fold that stopped on an error leaves the version
- * unstored, so the next boot tries again. Runs before the enrichment queue resumes.
+ * file), then store the version, but ONLY after a pass that converged with no
+ * error. A failing pass leaves the version unstored and counts the attempt
+ * (`health_dedupe_rules_attempts`, "<version>:<n>"); after MAX_UPGRADE_ATTEMPTS
+ * failing boots in a row it says so loudly and stops trying until the next version
+ * bump. Runs before the enrichment queue resumes.
  */
-export function runDedupeRulesUpgradeIfDue(): { ran: boolean; result?: DedupeHealthDocumentsResult } {
+export const DEDUPE_RULES_ATTEMPTS_KEY = "health_dedupe_rules_attempts";
+export const MAX_UPGRADE_ATTEMPTS = 3;
+
+export function runDedupeRulesUpgradeIfDue(): {
+  ran: boolean;
+  gave_up?: boolean;
+  result?: DedupeHealthDocumentsResult;
+} {
   const want = String(DEDUPE_RULES_VERSION);
   if (getAppState(DEDUPE_RULES_VERSION_KEY) === want) return { ran: false };
-  const result = dedupeHealthDocuments({});
+  const [attemptVersion, attemptCount] = String(getAppState(DEDUPE_RULES_ATTEMPTS_KEY) ?? "").split(":");
+  const failures = attemptVersion === want ? Number(attemptCount) || 0 : 0;
+  if (failures >= MAX_UPGRADE_ATTEMPTS) return { ran: false, gave_up: true };
+  let result: DedupeHealthDocumentsResult;
+  try {
+    result = dedupeHealthDocuments({});
+  } catch (e: any) {
+    result = {
+      dry_run: false,
+      scanned: 0,
+      passes: 0,
+      clusters: [],
+      merged: 0,
+      added_markers: 0,
+      deleted_files: 0,
+      errors: [String(e?.message ?? e)],
+      converged: false,
+    };
+  }
   if (result.merged) {
     log.info(
       `[dedupe] rules v${want}: folded ${result.merged} duplicate record(s) into ${result.clusters.length} record(s).`
@@ -95,10 +124,74 @@ export function runDedupeRulesUpgradeIfDue(): { ran: boolean; result?: DedupeHea
       log.warn(`[dedupe] re-deriving after the rules upgrade failed: ${e?.message ?? e}`);
     }
   }
-  if (result.errors.length) {
-    log.warn(`[dedupe] rules v${want}: stopped early (${result.errors.join("; ")}); will try again next boot.`);
-  } else {
+  if (result.converged && !result.errors.length) {
     setAppState(DEDUPE_RULES_VERSION_KEY, want);
+    setAppState(DEDUPE_RULES_ATTEMPTS_KEY, "");
+    return { ran: true, result };
   }
-  return { ran: true, result };
+  const n = failures + 1;
+  setAppState(DEDUPE_RULES_ATTEMPTS_KEY, `${want}:${n}`);
+  const why = result.errors.length ? result.errors.join("; ") : "it did not settle within its pass limit";
+  if (n >= MAX_UPGRADE_ATTEMPTS) {
+    log.error(
+      `[dedupe] rules v${want}: the whole-record duplicate pass failed on ${n} boots in a row (${why}). It will not run again until DEDUPE_RULES_VERSION changes; the Records screen's check still works.`
+    );
+  } else {
+    log.warn(`[dedupe] rules v${want}: stopped early (${why}); will try again next boot (${n}/${MAX_UPGRADE_ATTEMPTS}).`);
+  }
+  return { ran: true, gave_up: n >= MAX_UPGRADE_ATTEMPTS, result };
 }
+
+export interface PlannedCluster {
+  survivor: number;
+  merged: number[];
+  rule: string;
+}
+
+export const RECORDS_CHANGED_MESSAGE = "Your records changed since the check. Check again to see the current plan.";
+
+/**
+ * The Records screen's "Merge these": apply EXACTLY the clusters the person was
+ * shown, never whatever happens to be foldable now. The approved pairs are re-planned
+ * (dry run, restricted to them); only if every one still holds, with the same rule,
+ * and nothing else would ride along, are they folded, in the same synchronous call, so
+ * nothing can change in between. Otherwise nothing is folded and the answer says the
+ * records changed.
+ */
+export function applyPlannedDedupe(
+  planned: PlannedCluster[]
+): (DedupeHealthDocumentsResult & { ok: true }) | { ok: false; changed: true; error: string } {
+  const wanted = new Set<string>();
+  const allow = new Set<string>();
+  for (const cluster of Array.isArray(planned) ? planned : []) {
+    const survivor = Number(cluster?.survivor);
+    for (const id of Array.isArray(cluster?.merged) ? cluster.merged : []) {
+      const twin = Number(id);
+      if (!Number.isInteger(survivor) || !Number.isInteger(twin)) continue;
+      allow.add(`${survivor}:${twin}`);
+      wanted.add(`${String(cluster.rule)}:${survivor}:${twin}`);
+    }
+  }
+  const changed = { ok: false as const, changed: true as const, error: RECORDS_CHANGED_MESSAGE };
+  if (!wanted.size) return changed;
+  const pairs = (result: DedupeHealthDocumentsResult) =>
+    new Set(result.clusters.flatMap((c) => c.merged.map((m) => `${c.rule}:${c.survivor.id}:${m.id}`)));
+  const same = (a: Set<string>, b: Set<string>) => a.size === b.size && [...a].every((key) => b.has(key));
+  const plan = dedupeHealthDocuments({ dryRun: true, allow });
+  if (plan.errors.length || !same(pairs(plan), wanted)) return changed;
+  const applied = dedupeHealthDocuments({ allow });
+  if (applied.merged) {
+    try {
+      deriveDirectives();
+    } catch {
+      /* the fold is done; the connected brain settles on its next pass */
+    }
+  }
+  return { ok: true as const, ...applied };
+}
+
+// Twins re-filed after the record they folded into went with its upload settle
+// through the same chokepoint (src/repo/health.ts calls back; it cannot import this).
+registerRestoredRecordSettler((id) => {
+  settleNewHealthRecords(id, { label: `re-filed health#${id}` });
+});

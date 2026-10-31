@@ -14,7 +14,7 @@ import { db, repo, resetTables } from "./_seed.js";
 import { UPLOADS_DIR } from "../dist/uploadPaths.js";
 import { AgentBusyError, isAgentBusyError } from "../dist/agent-busy.js";
 import { checkHealthDuplicates, judgeImagingTwins, settleImagingTwins } from "../dist/coachOps/health.js";
-import { imagingJudgeCandidates } from "../dist/repo/imaging-dedupe.js";
+import { imagingJudgeCandidates, recordImagingDedupeJudgment } from "../dist/repo/imaging-dedupe.js";
 import { dedupeHealthDocuments } from "../dist/repo/health-dedupe.js";
 
 beforeEach(() => {
@@ -97,7 +97,7 @@ test("the strict rule leaves the reworded twin apart, so it is a candidate", () 
   assert.deepEqual([candidates[0].older.id, candidates[0].newer.id], [first.study.id, second.study.id]);
 });
 
-test("a high-confidence same-study verdict folds the twin, with its paste, on the next fold", async () => {
+test("a high-confidence same-study verdict folds the twin; its differently worded paste stays", async () => {
   const { first, second } = twins();
   const { run, calls } = answering({
     same_study: true,
@@ -120,7 +120,116 @@ test("a high-confidence same-study verdict folds the twin, with its paste, on th
   const applied = dedupeHealthDocuments({});
   assert.equal(applied.merged, 1);
   assert.deepEqual(studyIds(), [first.study.id]);
-  assert.equal(repo.getHealthDocumentRaw(second.source.id), null, "the paste that only carried the twin goes with it");
+  // the twin's paste has no equivalent copy on the survivor's side: it is kept
+  assert.ok(repo.getHealthDocumentRaw(second.source.id), "a report with no copy left is never deleted");
+  assert.equal(plan.clusters[0].removes_note, null);
+});
+
+// ---- review regressions ----
+
+function study({ procedure, impression, findings = [], recommendations = [], text }) {
+  const source = repo.addHealthDocument({
+    kind: "imaging",
+    original_name: "Pasted",
+    mime: "text/plain",
+    file_path: storedPaste(text ?? `EXAM: ${procedure}\nIMPRESSION: ${impression}`),
+    parsed_json: {},
+    summary: procedure,
+    enrichment_status: "done",
+  });
+  const [s] = repo.replaceDerivedImagingStudies(source.id, [
+    {
+      imaging_study: {
+        study: { modality: "CT", procedure, study_date: "2026-09-14" },
+        anatomy: { clinical_system: "cardiovascular", body_region: "torso.chest", laterality: "not_applicable" },
+        report: { impression },
+        findings,
+        recommendations,
+      },
+    },
+  ]);
+  return { source, study: s };
+}
+
+const NODULE = { finding_text: "RUL nodule", measurements: [{ name: "nodule diameter", value: 4, unit: "mm" }] };
+const FOLLOW_UP = { recommendation_text: "Repeat low-dose CT in 12 months", status: "recommended" };
+
+test("a judged fold keeps the fuller study and never deletes findings, measurements or a report only the twin had", async () => {
+  const older = study({ procedure: "CT chest", impression: "Small nodule." });
+  const newer = study({
+    procedure: "Chest CT",
+    impression: "4 mm RUL nodule; follow-up advised.",
+    findings: [NODULE],
+    recommendations: [FOLLOW_UP],
+  });
+  // the reviewer's repro: a remembered high-confidence verdict on the pair
+  assert.equal(
+    recordImagingDedupeJudgment(older.study.id, newer.study.id, { same_study: true, confidence: "high", reason: "Same scan." }),
+    true
+  );
+  const out = dedupeHealthDocuments({});
+  assert.equal(out.merged, 1);
+  // the NEWER (fuller) study survives with its finding, measurement and follow-up
+  assert.deepEqual(studyIds(), [newer.study.id]);
+  const kept = JSON.parse(db.prepare("SELECT parsed_json FROM health_documents WHERE id = ?").get(newer.study.id).parsed_json)
+    .imaging_study;
+  assert.equal(kept.findings[0].measurements[0].value, 4);
+  assert.equal(kept.recommendations[0].recommendation_text, FOLLOW_UP.recommendation_text);
+  // and the older study's own paste stays, since nothing on the survivor's side copies it
+  assert.ok(repo.getHealthDocumentRaw(older.source.id));
+});
+
+test("when each study holds something the other lacks, both stay (and the pair is never even asked)", async () => {
+  const a = study({ procedure: "CT chest", impression: "Nodule.", findings: [NODULE] });
+  const b = study({ procedure: "Chest CT", impression: "Nodule, follow up.", recommendations: [FOLLOW_UP] });
+  assert.equal(imagingJudgeCandidates().length, 0);
+  recordImagingDedupeJudgment(a.study.id, b.study.id, { same_study: true, confidence: "high", reason: "x" });
+  assert.equal(dedupeHealthDocuments({}).merged, 0);
+  assert.equal(studyIds().length, 2);
+});
+
+test("an identical paste goes with the twin; any other source stays", async () => {
+  const text = "EXAM: CT\nIMPRESSION: Calcium score 0.";
+  const first = study({ procedure: "CT coronary calcium scoring", impression: "Calcium score 0.", text });
+  const second = study({ procedure: "Coronary calcium scoring CT", impression: "No coronary calcium.", text });
+  recordImagingDedupeJudgment(first.study.id, second.study.id, { same_study: true, confidence: "high", reason: "x" });
+  const plan = dedupeHealthDocuments({ dryRun: true });
+  assert.match(plan.clusters[0].removes_note, /duplicate pasted report/);
+  dedupeHealthDocuments({});
+  assert.equal(repo.getHealthDocumentRaw(second.source.id), null, "an equivalent copy stays on the survivor's side");
+});
+
+test("a verdict holds only for the content it was given about", async () => {
+  const { first, second } = twins();
+  await judgeImagingTwins("judge", { run: answering({ same_study: true, confidence: "high", reason: "One scan." }).run });
+  // an edit to either study after the verdict: unjudged again, and never folded on the old verdict
+  const row = db.prepare("SELECT parsed_json FROM health_documents WHERE id = ?").get(second.study.id);
+  const parsed = JSON.parse(row.parsed_json);
+  parsed.imaging_study.report.impression = "Calcium score 0, reread.";
+  db.prepare("UPDATE health_documents SET parsed_json = ? WHERE id = ?").run(JSON.stringify(parsed), second.study.id);
+  assert.equal(dedupeHealthDocuments({ dryRun: true }).merged, 0);
+  assert.equal(imagingJudgeCandidates().length, 1, "asked again about what it says now");
+  assert.ok(first);
+});
+
+test("an edit made while the agent is answering never gets the stale verdict written", async () => {
+  const { second } = twins();
+  const run = async () => {
+    const row = db.prepare("SELECT parsed_json FROM health_documents WHERE id = ?").get(second.study.id);
+    const parsed = JSON.parse(row.parsed_json);
+    parsed.imaging_study.report.impression = "Edited mid-call.";
+    db.prepare("UPDATE health_documents SET parsed_json = ? WHERE id = ?").run(JSON.stringify(parsed), second.study.id);
+    return { agent: "judge", result: { parsed: { same_study: true, confidence: "high", reason: "x" } }, tried: [] };
+  };
+  const out = await judgeImagingTwins("judge", { run });
+  assert.equal(out.judged, 0);
+  assert.equal(dedupeHealthDocuments({}).merged, 0);
+});
+
+test("a study whose source upload is still being read is never judged or folded", async () => {
+  const { second } = twins();
+  db.prepare("UPDATE health_documents SET enrichment_status = 'in_progress' WHERE id = ?").run(second.source.id);
+  assert.equal(imagingJudgeCandidates().length, 0);
 });
 
 test("a medium verdict, a contradicting measurement, or a different side keeps both", async () => {

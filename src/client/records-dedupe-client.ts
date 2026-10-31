@@ -4,8 +4,10 @@
 // scan pasted twice). The check is a durable agent job (`health_dedupe_check`,
 // POST /api/health-docs/dedupe {judge:true}) whose result is the server's dry-run
 // plan; nothing changes until the person taps "Merge these", which posts
-// {apply:true} and folds from the verdicts the check remembered. The server writes
-// every `reason`; this module prints it verbatim (escaped) and never grades.
+// {apply:true, clusters} — the clusters on screen, so the server folds exactly those
+// or nothing ({ok:false, changed:true} when the records moved since the check). The
+// server writes every `reason` and `removes_note`; this module prints them verbatim
+// (escaped) and never grades.
 //
 // Lives in the lazy me-health bundle, mounted by the Records controller into the
 // `#hDedupe` slot that CairnHealthRecords.recordsTabHtml lays down.
@@ -23,7 +25,9 @@ type RecordsDedupeCluster = {
   date?: unknown;
   survivor?: RecordsDedupeDoc | null;
   merged?: RecordsDedupeDoc[] | null;
+  rule?: unknown;
   reason?: unknown;
+  removes_note?: unknown;
   superseded?: RecordsDedupeSuperseded[] | null;
 };
 
@@ -117,11 +121,14 @@ type RecordsDedupePlan = {
     const kept = names.length
       ? `<p class="hdedupe-kept">Keeps the later export's reading for ${escHtml(andList(names))}.</p>`
       : "";
+    const removesNote = typeof cluster.removes_note === "string" ? cluster.removes_note.trim() : "";
+    const removes = removesNote ? `<p class="hdedupe-kept">${escHtml(removesNote)}</p>` : "";
     return `<li class="hdedupe-row">
       ${date ? `<span class="hdedupe-date">${escHtml(date)}</span>` : ""}
       <p class="hdedupe-fold"><span class="hdedupe-doc">${escHtml(andList(merged))}</span> folds into <span class="hdedupe-doc">${escHtml(survivor)}</span></p>
       ${reason ? `<p class="hdedupe-reason">${escHtml(reason)}</p>` : ""}
       ${kept}
+      ${removes}
     </li>`;
   }
 
@@ -208,6 +215,17 @@ type RecordsDedupePlan = {
     });
   }
 
+  // The clusters on screen, as the server needs them to fold exactly those.
+  function plannedClusters(plan: RecordsDedupePlan): Array<{ survivor: number; merged: number[]; rule: string }> {
+    return rows<RecordsDedupeCluster>(plan.clusters).map((cluster) => ({
+      survivor: Number(record(cluster.survivor).id),
+      merged: rows<RecordsDedupeDoc>(cluster.merged).map((doc) => Number(doc.id)),
+      rule: String(cluster.rule ?? ""),
+    }));
+  }
+
+  const CHANGED_TEXT = "Your records changed since the check — check again to see what's there now.";
+
   async function applyPlan(btn: HTMLButtonElement, deps: ClientRecordsDedupeDeps): Promise<void> {
     if (!shownPlan) return;
     const restore = typeof btnBusy === "function" ? btnBusy(btn, "Merging…") : () => {};
@@ -216,7 +234,7 @@ type RecordsDedupePlan = {
       result = await deps.api(PATH, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apply: true }),
+        body: JSON.stringify({ apply: true, clusters: plannedClusters(shownPlan) }),
       });
     } catch {
       result = null;
@@ -224,6 +242,11 @@ type RecordsDedupePlan = {
     restore();
     const host = panel();
     const row = record(result);
+    if (row.ok === false && row.changed === true) {
+      if (host) host.innerHTML = failHtml(CHANGED_TEXT);
+      shownPlan = null;
+      return;
+    }
     if (!result || row.ok === false) {
       if (host) host.innerHTML = failHtml("Couldn't merge them just now — your records are unchanged.");
       shownPlan = null;

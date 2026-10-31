@@ -709,11 +709,24 @@ export interface HealthPanelInput {
 // pointing back at `sourceId`; the binary stays only on the source row. Returns
 // the rows created. `original_name` is carried through for provenance.
 export function replaceHealthPanels(sourceId: number, panels: HealthPanelInput[], originalName?: string | null) {
-  deleteDerivedHealthDocs(sourceId, false);
-  return insertHealthPanels(sourceId, panels, originalName);
+  const orphans = deleteDerivedHealthDocs(sourceId, false).orphans;
+  const created = insertHealthPanels(sourceId, panels, originalName);
+  restoreOrphanedTwins(orphans, { settle: false });
+  return created;
 }
 
-function insertHealthPanels(sourceId: number, panels: HealthPanelInput[], originalName?: string | null) {
+// The deterministic CCDA streams. Only the CCDA pass itself (replaceHealthPanelsByType)
+// may file a row under one of these types; an agent's panel that names one is filed
+// untyped, so nothing that trusts the deterministic read (the same-encounter fold, the
+// coexistence rule below) ever trusts an agent's transcription by mistake.
+const CCDA_STREAM_TYPES = new Set(["ccda_results", "ccda_vitals"]);
+
+function insertHealthPanels(
+  sourceId: number,
+  panels: HealthPanelInput[],
+  originalName?: string | null,
+  opts: { deterministic?: boolean } = {}
+) {
   const created: any[] = [];
   for (const p of Array.isArray(panels) ? panels : []) {
     if (!p || typeof p !== "object") continue;
@@ -747,15 +760,20 @@ function insertHealthPanels(sourceId: number, panels: HealthPanelInput[], origin
     const clinicalFacts = cleanClinicalFacts((p as any).clinical_facts, 80);
     if (!markers.length && !summary && !clinicalFacts.length) continue; // an empty panel is noise
     const parsed: Record<string, any> = { markers };
-    if (p.type) parsed.type = String(p.type).slice(0, 80);
-    if (typeof p.recorded_at === "string" && /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}$/.test(p.recorded_at)) {
-      parsed.recorded_at = p.recorded_at.replace("T", " ");
+    const type = p.type ? String(p.type).slice(0, 80) : null;
+    if (type && (opts.deterministic || !CCDA_STREAM_TYPES.has(type))) parsed.type = type;
+    if (opts.deterministic) {
+      // server-only provenance: this row is the deterministic CCDA pass's own read
+      parsed.ccda_pass = true;
+      if (typeof p.recorded_at === "string" && /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}$/.test(p.recorded_at)) {
+        parsed.recorded_at = p.recorded_at.replace("T", " ");
+      }
     }
     if (clinicalFacts.length) parsed.clinical_facts = clinicalFacts;
     const row = addHealthDocument({
       kind: inferHealthDocumentKind({
         kind: p.kind,
-        type: p.type,
+        type: parsed.type,
         summary,
         original_name: originalName,
         markers,
@@ -774,33 +792,123 @@ function insertHealthPanels(sourceId: number, panels: HealthPanelInput[], origin
   return created;
 }
 
-function deleteDerivedHealthDocs(sourceId: number, includeImaging = true) {
+// ---------- twins that outlive the record they folded into ----------
+// A fold keeps ONE record for a draw that several uploads carried, and that record
+// is owned by one upload (src/repo/health-dedupe.ts). When THAT upload's derived rows
+// go (a re-read replaces them, or the upload is deleted) while another upload that
+// carried the same draw is still on file, the draw must not go with them: each twin
+// the record absorbed from a still-present upload (or a standalone record, such as
+// one filed from chat) is filed again from the snapshot the fold kept of it
+// (`merged_from[].snapshot`, exactly the row that upload's read wrote), and the
+// re-filed rows settle again, so the later export still wins and nothing is lost.
+interface OrphanedTwin {
+  source_doc_id: number | null;
+  snapshot: { kind?: string; doc_date?: string; summary?: string | null; original_name?: string | null; parsed?: any };
+}
+
+function parsedOfRow(row: any): any {
+  try {
+    const parsed = row?.parsed_json ? JSON.parse(row.parsed_json) : null;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function orphanedTwinsOf(rows: any[], removedSourceId: number): OrphanedTwin[] {
+  const byKey = new Map<string, OrphanedTwin>();
+  for (const row of rows) {
+    for (const entry of Array.isArray(parsedOfRow(row).merged_from) ? parsedOfRow(row).merged_from : []) {
+      const snapshot = entry?.snapshot;
+      if (!snapshot || typeof snapshot !== "object" || !snapshot.parsed) continue;
+      const sourceId = entry.source_doc_id == null ? null : Number(entry.source_doc_id);
+      if (sourceId === removedSourceId) continue; // it goes with its own upload
+      // the latest snapshot per upload and draw wins (a re-read folds in again)
+      byKey.set(`${sourceId ?? `row${entry.id}`}|${snapshot.doc_date}|${snapshot.summary ?? ""}`, {
+        source_doc_id: sourceId,
+        snapshot,
+      });
+    }
+  }
+  return [...byKey.values()];
+}
+
+let restoredRecordSettler: ((id: number) => void) | null = null;
+// The dedupe chokepoint registers itself (src/domain/health/record-dedupe.ts); the
+// repo layer must not import it.
+export function registerRestoredRecordSettler(fn: ((id: number) => void) | null): void {
+  restoredRecordSettler = fn;
+}
+
+function restoreOrphanedTwins(orphans: OrphanedTwin[], opts: { settle: boolean }): number {
+  let restored = 0;
+  const settle = new Set<number>();
+  for (const orphan of orphans) {
+    // the upload it came from must still be on file (a standalone record has none)
+    if (orphan.source_doc_id != null && !db.prepare(`SELECT 1 FROM health_documents WHERE id = ?`).get(orphan.source_doc_id)) {
+      continue;
+    }
+    const snap = orphan.snapshot;
+    // that upload already carries the draw again (its own re-read wrote it): nothing to restore
+    if (
+      orphan.source_doc_id != null &&
+      (db.prepare(`SELECT id, summary FROM health_documents WHERE source_doc_id = ? AND doc_date IS ?`).all(orphan.source_doc_id, snap.doc_date ?? null) as any[])
+        .some((row) => (row.summary ?? null) === (snap.summary ?? null))
+    ) {
+      continue;
+    }
+    try {
+      const row = addHealthDocument({
+        kind: snap.kind ?? "other",
+        doc_date: snap.doc_date ?? null,
+        original_name: snap.original_name ?? null,
+        summary: snap.summary ?? null,
+        parsed_json: snap.parsed,
+        enrichment_status: "done",
+        source_doc_id: orphan.source_doc_id,
+      }) as any;
+      restored++;
+      settle.add(orphan.source_doc_id ?? Number(row.id));
+    } catch {
+      /* a twin that cannot be re-filed is no worse off than before the fold */
+    }
+  }
+  if (opts.settle && restoredRecordSettler) for (const id of settle) restoredRecordSettler(id);
+  return restored;
+}
+
+function deleteDerivedHealthDocs(sourceId: number, includeImaging = true): { changes: number; orphans: OrphanedTwin[] } {
   // Imaging studies imported from the same MyChart artifact are a separate
   // derived stream. Replacing dated lab panels must never erase them.
+  const doomed = (
+    includeImaging
+      ? db.prepare(`SELECT id, parsed_json FROM health_documents WHERE source_doc_id = ?`).all(sourceId)
+      : db.prepare(`SELECT id, parsed_json FROM health_documents WHERE source_doc_id = ? AND kind != 'imaging'`).all(sourceId)
+  ) as any[];
+  const orphans = orphanedTwinsOf(doomed, sourceId);
   const changes = includeImaging
     ? db.prepare(`DELETE FROM health_documents WHERE source_doc_id = ?`).run(sourceId).changes
     : db.prepare(`DELETE FROM health_documents WHERE source_doc_id = ? AND kind != 'imaging'`).run(sourceId).changes;
   if (changes) bumpMarkerHistoryVersion();
-  return changes;
+  return { changes: Number(changes), orphans };
 }
 
-function deleteDerivedHealthDocsByType(sourceId: number, type: string) {
+function deleteDerivedHealthDocsByType(sourceId: number, type: string): { changes: number; orphans: OrphanedTwin[] } {
   const rows = db
     .prepare(`SELECT id, parsed_json FROM health_documents WHERE source_doc_id = ?`)
     .all(sourceId) as any[];
   let deleted = 0;
+  const doomed: any[] = [];
   for (const row of rows) {
-    let parsed: any = null;
-    try {
-      parsed = row.parsed_json ? JSON.parse(row.parsed_json) : null;
-    } catch {
-      parsed = null;
-    }
-    if (String(parsed?.type ?? "") !== type) continue;
+    if (String(parsedOfRow(row)?.type ?? "") !== type) continue;
+    doomed.push(row);
+  }
+  const orphans = orphanedTwinsOf(doomed, sourceId);
+  for (const row of doomed) {
     deleted += Number(db.prepare(`DELETE FROM health_documents WHERE id = ?`).run(row.id).changes);
   }
   if (deleted) bumpMarkerHistoryVersion();
-  return deleted;
+  return { changes: deleted, orphans };
 }
 
 // Refresh one deterministic derived stream without disturbing the agent-split
@@ -812,9 +920,13 @@ export function replaceHealthPanelsByType(
   panels: HealthPanelInput[],
   originalName?: string | null
 ) {
-  deleteDerivedHealthDocsByType(sourceId, type);
+  const orphans = deleteDerivedHealthDocsByType(sourceId, type).orphans;
   const typed = (Array.isArray(panels) ? panels : []).map((p) => ({ ...p, type }));
-  return insertHealthPanels(sourceId, typed, originalName);
+  // the deterministic CCDA pass's own rows: the only rows that may carry its types
+  const created = insertHealthPanels(sourceId, typed, originalName, { deterministic: true });
+  // twins of another export re-filed; the re-read's own settle folds them again
+  restoreOrphanedTwins(orphans, { settle: false });
+  return created;
 }
 
 // Coexistence rule for one import that was read BOTH deterministically and by an
@@ -1130,11 +1242,15 @@ export function deleteHealthDocument(id: number) {
   }
   let derivedDeleted = 0;
   let deleted = 0;
+  let orphans: OrphanedTwin[] = [];
   db.exec("BEGIN IMMEDIATE");
   try {
     // Deleting a source upload takes its derived dated panels with it (they have
-    // no binary of their own and are meaningless without the source).
-    derivedDeleted = Number(deleteDerivedHealthDocs(id));
+    // no binary of their own and are meaningless without the source) — except the
+    // twins another upload still on file carried, which are filed again below.
+    const derivedOut = deleteDerivedHealthDocs(id);
+    derivedDeleted = derivedOut.changes;
+    orphans = derivedOut.orphans;
     deleted = Number(db.prepare(`DELETE FROM health_documents WHERE id = ?`).run(id).changes);
     db.exec("COMMIT");
   } catch (error) {
@@ -1146,7 +1262,8 @@ export function deleteHealthDocument(id: number) {
     if (affectedMeasuredRmr) syncMeasuredRmrFromHealthDocs();
     emitHealthDocumentSignals(existing ?? { id, doc_date: localDateISO() }, relatedState);
   }
-  return { deleted, derived: derivedDeleted, derived_files: derivedFilesDeleted };
+  const restored = deleted && orphans.length ? restoreOrphanedTwins(orphans, { settle: true }) : 0;
+  return { deleted, derived: derivedDeleted, derived_files: derivedFilesDeleted, ...(restored ? { restored } : {}) };
 }
 
 // ---------- marker forecasting (least-squares slope → plain-language projection) ----------

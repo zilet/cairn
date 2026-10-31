@@ -1865,6 +1865,9 @@ export function deleteImagingStudy(
     simulateCrashAfterQuarantine?: boolean;
     simulateCrashAfterCommit?: boolean;
     directorySync?: DirectorySync;
+    // The dedupe fold keeps a twin's source upload when its content has no copy on the
+    // survivor's side: the study goes, the upload (and its report text) stays.
+    keepSource?: boolean;
   } = {}
 ) {
   const row = getHealthDocumentRaw(id) as any;
@@ -1988,7 +1991,7 @@ export function deleteImagingStudy(
   } catch {
     cleanupPending = true;
   }
-  const sourceDeleted = deleteEmptyImagingSource(row.source_doc_id ?? null);
+  const sourceDeleted = opts.keepSource ? 0 : deleteEmptyImagingSource(row.source_doc_id ?? null);
   return {
     deleted,
     derived,

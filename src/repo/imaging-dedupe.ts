@@ -42,7 +42,14 @@ import { imagingSourceFolds } from "./imaging-source.js";
 export interface ImagingDedupeFold {
   date: string;
   survivor: { id: number; label: string | null };
-  merged: Array<{ id: number; source_doc_id: number | null; removed_source: boolean; label: string | null }>;
+  merged: Array<{
+    id: number;
+    source_doc_id: number | null;
+    removed_source: boolean;
+    // the removed source was a pasted report (text), not an uploaded file
+    pasted_source: boolean;
+    label: string | null;
+  }>;
   rule: "same_scan" | "same_scan_judged";
   // The agent's own words for a judged fold (bounded), else null.
   judged_reason: string | null;
@@ -67,6 +74,7 @@ interface StudyRow {
   hashes: Set<string>;
   dicom: number;
   judgments: ImagingDedupeJudgment[];
+  content: string; // studyContentHash: what a verdict was given about
 }
 
 export interface ImagingDedupeJudgment {
@@ -75,6 +83,28 @@ export interface ImagingDedupeJudgment {
   confidence: "high" | "medium" | "low";
   reason: string | null;
   at: string;
+  // the content each study had when it was judged; a verdict about other content is no verdict
+  self_hash: string | null;
+  other_hash: string | null;
+}
+
+// Restricts a fold to pairs a person approved: `${rule}:${survivorId}:${twinId}`.
+export type FoldAllowList = Set<string>;
+
+// The clinical content of one study a verdict speaks to: its study, anatomy, report,
+// findings (with measurements) and recommendations. Verification, provenance and the
+// remembered verdicts themselves are not content, so recording a verdict never moves it.
+export function studyContentHash(study: any): string {
+  const content = {
+    study: study?.study ?? null,
+    anatomy: study?.anatomy ?? null,
+    report: study?.report ?? null,
+    findings: study?.findings ?? null,
+    recommendations: (Array.isArray(study?.recommendations) ? study.recommendations : []).map(
+      ({ status: _status, ...rest }: any) => rest
+    ),
+  };
+  return crypto.createHash("sha256").update(JSON.stringify(content)).digest("hex");
 }
 
 function norm(value: unknown): string {
@@ -134,14 +164,19 @@ function judgmentsOf(parsed: any): ImagingDedupeJudgment[] {
       confidence: j.confidence === "high" || j.confidence === "medium" ? j.confidence : "low",
       reason: typeof j.reason === "string" ? j.reason.slice(0, 400) : null,
       at: String(j.at ?? ""),
+      self_hash: typeof j.self_hash === "string" ? j.self_hash : null,
+      other_hash: typeof j.other_hash === "string" ? j.other_hash : null,
     }));
 }
+
+const BUSY = new Set(["pending", "in_progress", "running", "pending_confirm"]);
 
 function loadStudies(): StudyRow[] {
   const rows = db
     .prepare(
       `SELECT d.id, d.doc_date, d.source_doc_id, d.parsed_json,
-              (SELECT COUNT(*) FROM dicom_series s WHERE s.health_document_id = d.id) AS dicom
+              (SELECT COUNT(*) FROM dicom_series s WHERE s.health_document_id = d.id) AS dicom,
+              (SELECT s.enrichment_status FROM health_documents s WHERE s.id = d.source_doc_id) AS source_status
          FROM health_documents d
         WHERE d.kind = 'imaging'
           AND COALESCE(d.enrichment_status, '') NOT IN ('pending', 'in_progress', 'running', 'pending_confirm')
@@ -159,6 +194,8 @@ function loadStudies(): StudyRow[] {
     }
     const study = parsed?.imaging_study ?? null;
     if (!study || typeof study !== "object") continue;
+    // a study whose source upload is still being read is never folded or judged
+    if (BUSY.has(String(row.source_status ?? ""))) continue;
     const status = study.provenance?.record_status;
     if (status && status !== "current") continue;
     const date = String(study.study?.study_date || row.doc_date || "").slice(0, 10);
@@ -175,6 +212,7 @@ function loadStudies(): StudyRow[] {
       hashes: new Set((hashes.all(row.id) as any[]).map((file) => String(file.sha256))),
       dicom: Number(row.dicom ?? 0),
       judgments: judgmentsOf(parsed),
+      content: studyContentHash(study),
     });
   }
   return out;
@@ -228,10 +266,37 @@ function foldable(twin: StudyRow, survivor: StudyRow): boolean {
   return sameScan(twin, survivor) && twinMayFold(twin, survivor);
 }
 
-// The twin's source upload goes with it when that upload carried nothing else:
-// its one derived row is this study, and it is an imaging source (a pasted report
-// filed as imaging, or an imaging_only upload) — never a lab panel, and never a
-// note whose markers or clinical facts (a medication, a diagnosis) are its own.
+// The raw bytes' hash of an upload's file (what an attachment's sha256 is).
+const sourceBytesCache = new Map<number, string | null>();
+function sourceBytesHash(sourceId: number | null): string | null {
+  if (sourceId == null) return null;
+  if (sourceBytesCache.has(sourceId)) return sourceBytesCache.get(sourceId)!;
+  let hash: string | null = null;
+  try {
+    const fp = safeUploadPath((getHealthDocumentRaw(sourceId) as any)?.file_path);
+    hash = fp && fs.existsSync(fp) ? crypto.createHash("sha256").update(fs.readFileSync(fp)).digest("hex") : null;
+  } catch {
+    hash = null;
+  }
+  sourceBytesCache.set(sourceId, hash);
+  return hash;
+}
+
+// An equivalent copy of the twin's source stays on the survivor's side: the same
+// pasted text, or the same bytes as the survivor's own source or one of its attachments.
+function sourceHasCopy(twin: StudyRow, survivor: StudyRow): boolean {
+  const text = sourceTextHash(twin.source_doc_id);
+  if (text != null && text === sourceTextHash(survivor.source_doc_id)) return true;
+  const bytes = sourceBytesHash(twin.source_doc_id);
+  if (bytes == null) return false;
+  return bytes === sourceBytesHash(survivor.source_doc_id) || survivor.hashes.has(bytes);
+}
+
+// The twin's source upload goes with it only when that upload carried nothing else
+// (its one derived row is this study, and it is an imaging source: a pasted report
+// filed as imaging, or an imaging_only upload, never a lab panel or a note whose
+// markers or facts are its own) AND an equivalent copy of it stays on the survivor's
+// side. Otherwise the upload stays, with its report text, and only the study folds.
 function sourceGoesWithTwin(twin: StudyRow, survivor: StudyRow): number | null {
   const sourceId = twin.source_doc_id;
   if (sourceId == null || sourceId === survivor.source_doc_id) return null;
@@ -239,7 +304,13 @@ function sourceGoesWithTwin(twin: StudyRow, survivor: StudyRow): number | null {
   if (!source?.file_path) return null;
   const children = db.prepare(`SELECT id FROM health_documents WHERE source_doc_id = ?`).all(sourceId) as any[];
   if (children.length !== 1 || Number(children[0].id) !== twin.id) return null;
-  return imagingSourceFolds(source) ? sourceId : null;
+  if (!imagingSourceFolds(source)) return null;
+  return sourceHasCopy(twin, survivor) ? sourceId : null;
+}
+
+function clearSourceCaches(): void {
+  sourceTextCache.clear();
+  sourceBytesCache.clear();
 }
 
 function studyLabel(row: StudyRow): string | null {
@@ -263,8 +334,11 @@ function foldTwins(
   };
   for (const twin of twins) {
     const sourceId = sourceGoesWithTwin(twin, survivor);
+    const pasted = sourceId != null && (getHealthDocumentRaw(sourceId) as any)?.mime === "text/plain";
     if (!opts.dryRun) {
-      const deleted = (sourceId != null ? deleteHealthDocument(sourceId) : deleteImagingStudy(twin.id)) as any;
+      const deleted = (
+        sourceId != null ? deleteHealthDocument(sourceId) : deleteImagingStudy(twin.id, { keepSource: true })
+      ) as any;
       if (deleted?.error || !deleted?.deleted) {
         result.errors.push(`imaging#${twin.id}: ${deleted?.error ?? "not deleted"}`);
         break;
@@ -275,6 +349,7 @@ function foldTwins(
       id: twin.id,
       source_doc_id: twin.source_doc_id,
       removed_source: sourceId != null,
+      pasted_source: pasted,
       label: studyLabel(twin),
     });
   }
@@ -285,7 +360,7 @@ function foldTwins(
 }
 
 export function dedupeImagingStudies(
-  opts: { dryRun?: boolean; scopeSourceId?: number | null } = {}
+  opts: { dryRun?: boolean; scopeSourceId?: number | null; allow?: FoldAllowList } = {}
 ): ImagingDedupeResult {
   const studies = loadStudies();
   const result: ImagingDedupeResult = { scanned: studies.length, folds: [], merged: 0, deleted_files: 0, errors: [] };
@@ -296,7 +371,7 @@ export function dedupeImagingStudies(
     groups.set(row.key, group);
   }
   const scope = opts.scopeSourceId == null ? null : Number(opts.scopeSourceId);
-  sourceTextCache.clear();
+  clearSourceCaches();
   try {
     for (const group of groups.values()) {
       // One date/procedure/impression group can hold several scans (a left and a
@@ -308,14 +383,17 @@ export function dedupeImagingStudies(
         const twins = rest.filter((row) => row.id !== survivor.id && foldable(row, survivor));
         const cluster = [survivor, ...twins];
         rest = rest.filter((row) => row.id !== survivor.id && !twins.includes(row));
-        if (!twins.length) continue;
+        const approved = opts.allow
+          ? twins.filter((row) => opts.allow!.has(`${survivor.id}:${row.id}`))
+          : twins;
+        if (!approved.length) continue;
         if (scope != null && !cluster.some((row) => row.id === scope || row.source_doc_id === scope)) continue;
-        foldTwins(survivor, twins, opts, result);
+        foldTwins(survivor, approved, opts, result);
       }
       if (result.errors.length) break;
     }
   } finally {
-    sourceTextCache.clear();
+    clearSourceCaches();
   }
   return result;
 }
@@ -327,8 +405,8 @@ const SIDES = new Set(["left", "right", "bilateral"]);
 const UNSTATED_SYSTEM = new Set(["", "unknown", "other"]);
 
 export interface ImagingJudgeCandidate {
-  older: { id: number; source_doc_id: number | null };
-  newer: { id: number; source_doc_id: number | null };
+  older: { id: number; source_doc_id: number | null; content: string };
+  newer: { id: number; source_doc_id: number | null; content: string };
   date: string;
 }
 
@@ -352,8 +430,56 @@ function nearTwin(a: StudyRow, b: StudyRow): boolean {
   return !lateralityContradicts(a, b);
 }
 
+// The remembered verdict on this pair, ONLY while both studies still hold the
+// content it was given about: an edit to either makes the pair unjudged again.
 function judgmentFor(a: StudyRow, b: StudyRow): ImagingDedupeJudgment | null {
-  return a.judgments.find((j) => j.other_id === b.id) ?? b.judgments.find((j) => j.other_id === a.id) ?? null;
+  const holds = (j: ImagingDedupeJudgment, self: StudyRow, other: StudyRow) =>
+    j.other_id === other.id && j.self_hash === self.content && j.other_hash === other.content;
+  return a.judgments.find((j) => holds(j, a, b)) ?? b.judgments.find((j) => holds(j, b, a)) ?? null;
+}
+
+// How much a study says: findings, measurements, recommendations and report sections.
+function contentWeight(study: any): number {
+  const findings = Array.isArray(study?.findings) ? study.findings : [];
+  const measures = findings.reduce(
+    (n: number, f: any) => n + (Array.isArray(f?.measurements) ? f.measurements.length : 0),
+    0
+  );
+  const recs = Array.isArray(study?.recommendations) ? study.recommendations.length : 0;
+  const report = Object.values(study?.report ?? {}).filter((v) => typeof v === "string" && v.trim()).length;
+  return findings.length + measures + recs + report;
+}
+
+// A judged fold keeps the FULLER study (what the athlete confirmed or corrected
+// first, then attachments, then the most content, then the oldest).
+function judgedRank(row: StudyRow): number[] {
+  return [userTouched(row.study) ? 1 : 0, row.hashes.size ? 1 : 0, contentWeight(row.study), -row.id];
+}
+
+function pickJudgedSurvivor(a: StudyRow, b: StudyRow): StudyRow {
+  const ra = judgedRank(a);
+  const rb = judgedRank(b);
+  for (let i = 0; i < ra.length; i++) if (ra[i] !== rb[i]) return ra[i] > rb[i] ? a : b;
+  return a;
+}
+
+// Everything the twin says, the survivor already says: each finding's text, each
+// measurement by name, qualifier and value, each recommendation's text. Two
+// wordings of one report fold only when nothing the twin holds would be lost.
+function twinContentCovered(twin: any, survivor: any): boolean {
+  const texts = (list: unknown, field: string) =>
+    new Set((Array.isArray(list) ? list : []).map((x: any) => norm(x?.[field])).filter(Boolean));
+  const survivorFindings = texts(survivor?.findings, "finding_text");
+  for (const text of texts(twin?.findings, "finding_text")) if (!survivorFindings.has(text)) return false;
+  const survivorRecs = texts(survivor?.recommendations, "recommendation_text");
+  for (const text of texts(twin?.recommendations, "recommendation_text")) if (!survivorRecs.has(text)) return false;
+  const mine = measurementsOf(survivor);
+  for (const [key, values] of measurementsOf(twin)) {
+    const theirs = mine.get(key);
+    if (!theirs) return false;
+    for (const value of values) if (!theirs.some((other) => sameMeasure(value, other))) return false;
+  }
+  return true;
 }
 
 // The pairs worth an agent's judgement: near-twins the strict rule would not fold
@@ -371,9 +497,11 @@ function candidatePairs(studies: StudyRow[], scopeId: number | null): Array<[Stu
       if (!touches(a) && !touches(b)) continue;
       if (!nearTwin(a, b)) continue;
       if (a.key === b.key && sameScan(a, b)) continue;
-      const survivor = pickSurvivor([a, b]);
+      const survivor = pickJudgedSurvivor(a, b);
       const twin = survivor === a ? b : a;
       if (!twinMayFold(twin, survivor)) continue;
+      // a fold that would lose what only the twin says is never made, so never asked
+      if (!twinContentCovered(twin.study, survivor.study)) continue;
       out.push(a.id < b.id ? [a, b] : [b, a]);
     }
   }
@@ -382,41 +510,57 @@ function candidatePairs(studies: StudyRow[], scopeId: number | null): Array<[Stu
 
 export function imagingJudgeCandidates(opts: { scopeId?: number | null } = {}): ImagingJudgeCandidate[] {
   const scope = opts.scopeId == null ? null : Number(opts.scopeId);
-  sourceTextCache.clear();
+  clearSourceCaches();
   try {
     return candidatePairs(loadStudies(), scope)
       .filter(([a, b]) => !judgmentFor(a, b))
       .map(([older, newer]) => ({
-        older: { id: older.id, source_doc_id: older.source_doc_id },
-        newer: { id: newer.id, source_doc_id: newer.source_doc_id },
+        older: { id: older.id, source_doc_id: older.source_doc_id, content: older.content },
+        newer: { id: newer.id, source_doc_id: newer.source_doc_id, content: newer.content },
         date: older.date,
       }));
   } finally {
-    sourceTextCache.clear();
+    clearSourceCaches();
   }
 }
 
-// Remember one verdict on the newer study, so the pair is never asked again. A
-// direct write of the bookkeeping field only: nothing clinical moves, so neither
-// the marker series nor the brain signals are disturbed.
-export function recordImagingDedupeJudgment(
-  olderId: number,
-  newerId: number,
-  verdict: { same_study: boolean; confidence: "high" | "medium" | "low"; reason?: string | null }
-): boolean {
+function currentStudy(id: number): { parsed: any; study: any; status: string } | null {
   const row = db
     .prepare(`SELECT parsed_json, enrichment_status FROM health_documents WHERE id = ? AND kind = 'imaging'`)
-    .get(newerId) as any;
-  // A study whose read started meanwhile is left untouched (the write would make
-  // that read stale); the pair is simply asked again on a later pass.
-  if (!row || ["pending", "in_progress", "running"].includes(String(row.enrichment_status ?? ""))) return false;
+    .get(id) as any;
+  if (!row) return null;
   let parsed: any = null;
   try {
     parsed = row.parsed_json ? JSON.parse(row.parsed_json) : null;
   } catch {
     parsed = null;
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || !parsed.imaging_study) return null;
+  return { parsed, study: parsed.imaging_study, status: String(row.enrichment_status ?? "") };
+}
+
+// Remember one verdict on the newer study, so the pair is never asked again, with the
+// content hash of BOTH studies as they were judged. `expected` is the content the
+// agent was shown: when either study changed meanwhile (an edit during the call) the
+// verdict is about something that no longer exists and is not written. A direct
+// write of the bookkeeping field only: nothing clinical moves, so neither the marker
+// series nor the brain signals are disturbed.
+export function recordImagingDedupeJudgment(
+  olderId: number,
+  newerId: number,
+  verdict: { same_study: boolean; confidence: "high" | "medium" | "low"; reason?: string | null },
+  expected: { older: string; newer: string } | null = null
+): boolean {
+  const older = currentStudy(olderId);
+  const newer = currentStudy(newerId);
+  if (!older || !newer) return false;
+  // A study whose read started meanwhile is left untouched (the write would make
+  // that read stale); the pair is simply asked again on a later pass.
+  if (BUSY.has(newer.status) || BUSY.has(older.status)) return false;
+  const olderHash = studyContentHash(older.study);
+  const newerHash = studyContentHash(newer.study);
+  if (expected && (expected.older !== olderHash || expected.newer !== newerHash)) return false;
+  const parsed = newer.parsed;
   const kept = (Array.isArray(parsed.dedupe_judgments) ? parsed.dedupe_judgments : []).filter(
     (j: any) => Number(j?.other_id) !== olderId
   );
@@ -426,6 +570,8 @@ export function recordImagingDedupeJudgment(
     confidence: verdict.confidence,
     reason: verdict.reason ? String(verdict.reason).replace(/\s+/g, " ").trim().slice(0, 400) : null,
     at: new Date().toISOString(),
+    self_hash: newerHash,
+    other_hash: olderHash,
   });
   parsed.dedupe_judgments = kept.slice(-40);
   db.prepare(`UPDATE health_documents SET parsed_json = ? WHERE id = ?`).run(JSON.stringify(parsed), newerId);
@@ -526,14 +672,15 @@ export function measurementsContradict(a: any, b: any): boolean {
   return false;
 }
 
-// Fold the pairs an agent already judged the same study at high confidence, with
-// no measurement disagreeing, through the strict fold's own survivor, guard and
-// source rules. Deterministic given the remembered verdicts: no agent runs here.
+// Fold the pairs an agent already judged the same study at high confidence, with no
+// measurement disagreeing and nothing only the twin says (twinContentCovered), into
+// the fuller study, through the strict fold's own guard and source rules.
+// Deterministic given the remembered verdicts: no agent runs here.
 export function foldJudgedImagingTwins(
-  opts: { dryRun?: boolean; scopeId?: number | null; exclude?: Set<number> } = {}
+  opts: { dryRun?: boolean; scopeId?: number | null; exclude?: Set<number>; allow?: FoldAllowList } = {}
 ): ImagingDedupeResult {
   const scope = opts.scopeId == null ? null : Number(opts.scopeId);
-  sourceTextCache.clear();
+  clearSourceCaches();
   const result: ImagingDedupeResult = { scanned: 0, folds: [], merged: 0, deleted_files: 0, errors: [] };
   try {
     const studies = loadStudies();
@@ -546,14 +693,15 @@ export function foldJudgedImagingTwins(
       const verdict = judgmentFor(a, b);
       if (!verdict?.same_study || verdict.confidence !== "high") continue;
       if (measurementsContradict(a.study, b.study)) continue;
-      const survivor = pickSurvivor([a, b]);
+      const survivor = pickJudgedSurvivor(a, b);
       const twin = survivor === a ? b : a;
+      if (opts.allow && !opts.allow.has(`${survivor.id}:${twin.id}`)) continue;
       const before = result.merged;
       foldTwins(survivor, [twin], opts, result, { reason: verdict.reason });
       if (result.merged > before) gone.add(twin.id);
     }
   } finally {
-    sourceTextCache.clear();
+    clearSourceCaches();
   }
   return result;
 }

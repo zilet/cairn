@@ -506,7 +506,9 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   through ONE chokepoint**, `settleNewHealthRecords` (`src/domain/health/record-dedupe.ts`) — a new path
   must call it; a same-encounter CCDA pair from two exports folds with the later export winning
   (`superseded_readings` keeps the loser), an imaging near-twin folds only on a remembered high-confidence
-  agent verdict, and bumping `DEDUPE_RULES_VERSION` re-folds the whole set once at boot.
+  agent verdict, and bumping `DEDUPE_RULES_VERSION` re-folds the whole set once at boot. A fold never
+  loses content: a twin another upload still carries is re-filed when the survivor's upload goes
+  (`restoreOrphanedTwins`), and a source upload is deleted only when an equivalent copy stays.
 - **Marker grouping**: `MARKER_GROUPS` (in `src/repo/propagation-data.ts`) matches longest-first, and its **array
   order is the display order** — conventional clinical lab-review order, mirrored by the doctor
   export and the in-app catalog. Full ordering rules and the non-clinical-marker filter live in
