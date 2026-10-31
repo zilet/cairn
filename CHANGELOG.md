@@ -5,6 +5,41 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [2.1.9] — 2026-10-31
+
+Your health data in one place, records that file themselves once, and scans that read as their
+result. No migrations.
+
+### Added
+
+- **Your data, first on You.** One card lists every source Cairn reads — labs, scans, visits,
+  Garmin, Apple Health, body measurements — with what each holds and how fresh it is, one **Add**
+  for a file, a photo or pasted text, and at most two gaps that would sharpen your reads. Sources
+  moved here from Settings (the old link still works).
+- **Duplicates settle when a record arrives.** Every way a record gets in — upload, paste, chat,
+  an AI app, a re-read — checks it against what is already on file. Two chart exports of the same
+  clinic visit fold into one, the later export's reading standing and the replaced one kept on the
+  record. A scan read twice in different words folds only when the coach is confident and nothing
+  would be lost.
+- **Check for duplicates** on Records shows what would merge and why, including any file it would
+  remove, and applies exactly that plan on a tap. Improved rules re-check your records once when
+  the new version starts.
+- **Intake opens on today** — one home for food.
+
+### Fixed
+
+- **A scan reads as its result**: the headline first, zero values shown, plain labels, newest
+  first, one card per scan, and a re-pasted report says "already on file". Lab marker tables
+  render on their cards again.
+- **Pasted radiology reports** are filed as dated records instead of failing.
+- **Deleting a merged record never drops readings another upload still carries.**
+- One doctor question from a run of conference notes; agent CLIs stop as a whole process group.
+
+### Changed
+
+- **Faster verification**: checks run as one dependency graph, the suite can split across
+  machines (`test/run.mjs --shard=i/n`, `npm run verify:split`), and tests share a compile cache.
+
 ## [2.1.8] — 2026-10-22
 
 A Node.js security update, plus a week that adapts to what you logged. One migration (130, a
