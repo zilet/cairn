@@ -85,7 +85,7 @@ const UPDATE = args.flags.has("update") || BYTES_ONLY;
 const JSON_OUT = args.json ? path.resolve(args.json) : null;
 const THROTTLE = args.flags.has("no-throttle")
   ? null
-  : { cpu: 4, latency: 150, down: (1.6 * 1024 * 1024) / 8, up: (750 * 1024) / 8 };
+  : { cpu: Number(process.env.CAIRN_PERF_CPU) || 4, latency: 150, down: (1.6 * 1024 * 1024) / 8, up: (750 * 1024) / 8 };
 const READY_TIMEOUT_MS = 30000;
 const SETTLE_MS = 1200;
 /** The rounds load (measureWaves): poll cadence, and how long the page must sit quiescent before a wave is released. */
@@ -146,7 +146,7 @@ const INSTRUMENT = `(() => {
   const untracked = ${UNTRACKED_API.toString()};
   const visibleSkel = (root) => [...root.querySelectorAll(${JSON.stringify(SKELETON_SELECTOR)})].filter((el) => el.getClientRects().length > 0);
   window.__perfVisibleSkel = visibleSkel;
-  try { new PerformanceObserver((l) => { for (const e of l.getEntries()) if (!e.hadRecentInput) { P.cls += e.value; P.shifts.push([Math.round(e.startTime), +e.value.toFixed(4)]); } }).observe({ type: "layout-shift", buffered: true }); } catch {}
+  try { new PerformanceObserver((l) => { for (const e of l.getEntries()) if (!e.hadRecentInput) { P.cls += e.value; P.shifts.push([Math.round(e.startTime), +e.value.toFixed(4), (e.sources || []).slice(0, 3).map((x) => { const n = x.node; if (!n || n.nodeType !== 1) return n ? n.nodeName : "?"; const c = typeof n.className === "string" && n.className.trim() ? "." + n.className.trim().split(/\s+/).slice(0, 2).join(".") : ""; const own = n.nodeName.toLowerCase() + (n.id ? "#" + n.id : "") + c; const up = !n.id && !c && n.parentElement ? n.parentElement.closest("[id],[class]") : null; return up ? (up.id ? "#" + up.id : "." + String(up.className).trim().split(/\\s+/)[0]) + ">" + own : own; })]); } }).observe({ type: "layout-shift", buffered: true }); } catch {}
   try { new PerformanceObserver((l) => { for (const e of l.getEntries()) P.paints[e.name] = Math.round(e.startTime); }).observe({ type: "paint", buffered: true }); } catch {}
   // The wave gate (window.__perfWaves, the rounds load only): a tracked call's response
   // is held — downloaded in full, then parked — until the driver releases the whole wave
@@ -323,7 +323,7 @@ async function measureLoad(cdp, page, base, route) {
       dupes,
       dupeUrls,
       cls: +perf.cls.toFixed(4),
-      // [ms since navigation, value] per layout shift: where a route's cls came from (--json).
+      // [ms since navigation, value, [moved elements]] per layout shift: where a route's cls came from (--json).
       shifts: perf.shifts,
       js: bytesOf("Script"),
       css: bytesOf("Stylesheet"),
@@ -464,6 +464,8 @@ function aggregate(runs) {
     apiMax: maxOf(pick("api")),
     cls: median(pick("cls")),
     clsMax: maxOf(pick("cls")),
+    // The worst run's shifts, so a cls failure can name what moved.
+    shifts: runs.reduce((a, r) => (r.cls > a.cls ? r : a), runs[0])?.shifts ?? [],
     js: median(pick("js")),
     css: median(pick("css")),
     dupes: dupesN > 0 ? runs.find((r) => r.dupes.length > 0).dupes : [],
@@ -497,7 +499,13 @@ function gate(name, mode, agg, budget) {
   if (agg.roundsSettled === false) fails.push(`${name} ${mode}: the rounds load never settled (no wave release left it ready)`);
   for (const key of ["api", "rounds", "cls", "js", "css"]) {
     if (budget[key] == null || agg[key] == null) continue;
-    if (agg[key] > budget[key]) fails.push(`${name} ${mode}: ${key} ${fmt(key, agg[key])} over budget ${fmt(key, budget[key])}`);
+    if (agg[key] > budget[key]) {
+      const moved =
+        key === "cls" && agg.shifts?.length
+          ? ` — shifts ${agg.shifts.map(([at, v, who]) => `${v}@${at}ms ${(who || []).join(" ") || "?"}`).join("; ")}`
+          : "";
+      fails.push(`${name} ${mode}: ${key} ${fmt(key, agg[key])} over budget ${fmt(key, budget[key])}${moved}`);
+    }
   }
   const known = new Set(budget.knownDupes || []);
   const dupes = agg.dupes.filter((_, i) => !known.has(agg.dupeUrls[i]));

@@ -9,6 +9,9 @@
 .fuel-slot + .fuel-slot{margin-top:var(--space-8)}
 .intake-today{margin-top:var(--space-7)}
 .intake-weeks{margin-top:var(--space-6)}
+/* The deeper rows sit under the weeks; while the weeks show their one-line loading state
+   the rows wait hidden, so the weeks landing never pushes them down (a layout shift). */
+.intake-weeks:has(>.loadstate)+[data-train-deeper-slot]{display:none}
 
 /* ---- Today · so far: one card, protein then energy as slim meters in the fuel stone's
    hue beside the day's number, carbs · fat · fiber as plain numbers ---- */

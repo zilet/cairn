@@ -8,6 +8,7 @@
 // clientIdeaCard, clientProgressIntake).
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { createHost, flush, loadClientModule } from "./_dom.mjs";
 
 const TODAY = "2026-04-25";
@@ -206,6 +207,20 @@ test("a cold week read holds a calm loading line, never a zero", () => {
   win.renderIntake();
   assert.equal(weeks.length, 0);
   assert.match(view.querySelector("#intakeProgress").textContent, /Reading the days before today/);
+});
+
+// The deeper rows sit under the weeks: shown beside the one-line loading state they would
+// be pushed down when the weeks land (a layout shift), so a style hides them while the
+// weeks are loading. That holds only while the deeper slot directly follows the weeks.
+test("the deeper rows wait hidden while the weeks load", () => {
+  const { win, view } = load({ peekWeeks: null });
+  win.renderIntake();
+  const weeks = view.querySelector("#intakeProgress");
+  assert.match(weeks.innerHTML, /class="loadstate"/);
+  const source = readFileSync(new URL("../src/client/intake-screen.ts", import.meta.url), "utf8");
+  assert.match(source, /<div id="intakeProgress" class="intake-weeks"><\/div>\s*<div data-train-deeper-slot><\/div>/);
+  const css = readFileSync(new URL("../src/styles/fuel/today.css", import.meta.url), "utf8");
+  assert.match(css, /\.intake-weeks:has\(>\.loadstate\)\+\[data-train-deeper-slot\]\{display:none\}/);
 });
 
 test("a meal logged from the composer refreshes every slot that reads the day, and the weeks", () => {

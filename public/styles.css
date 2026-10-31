@@ -4060,6 +4060,7 @@ to{background:transparent}
 .fuel-slot + .fuel-slot{margin-top:var(--space-8)}
 .intake-today{margin-top:var(--space-7)}
 .intake-weeks{margin-top:var(--space-6)}
+.intake-weeks:has(>.loadstate)+[data-train-deeper-slot]{display:none}
 .fuel-today{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:var(--space-7) var(--space-8) var(--space-8)}
 .fuel-today-skel{min-height:132px}
 .fuel-today-head{display:flex;align-items:baseline;gap:var(--space-4);margin-bottom:var(--space-5)}
