@@ -75,8 +75,9 @@ interface StudyRow {
   dicom: number;
   judgments: ImagingDedupeJudgment[];
   content: string; // studyContentHash: what a verdict was given about
-  // the study this one's source upload was already folded into (a kept upload re-read)
-  folded_into: number | null;
+  // the study this one's source upload was already folded into (a kept upload re-read),
+  // and the content the folded study had then
+  folded_into: { study: number; hash: string | null } | null;
   source_has_file: boolean; // its source upload still holds the report it was read from
 }
 
@@ -175,10 +176,12 @@ function judgmentsOf(parsed: any): ImagingDedupeJudgment[] {
 
 const BUSY = new Set(["pending", "in_progress", "running", "pending_confirm"]);
 
-function foldedIntoOf(sourceParsedJson: unknown): number | null {
+function foldedIntoOf(sourceParsedJson: unknown): { study: number; hash: string | null } | null {
   try {
-    const target = Number(JSON.parse(String(sourceParsedJson ?? "null"))?.folded_into_study);
-    return Number.isInteger(target) && target > 0 ? target : null;
+    const parsed = JSON.parse(String(sourceParsedJson ?? "null"));
+    const target = Number(parsed?.folded_into_study);
+    if (!Number.isInteger(target) || target <= 0) return null;
+    return { study: target, hash: typeof parsed?.folded_study_hash === "string" ? parsed.folded_study_hash : null };
   } catch {
     return null;
   }
@@ -186,7 +189,7 @@ function foldedIntoOf(sourceParsedJson: unknown): number | null {
 
 // A kept source remembers the study it folded into, so Records shows it under that
 // study's card and a re-read of it folds again without asking (an inherited verdict).
-function markSourceFoldedInto(sourceId: number, studyId: number): void {
+function markSourceFoldedInto(sourceId: number, studyId: number, foldedContent: string): void {
   const row = db.prepare(`SELECT parsed_json FROM health_documents WHERE id = ?`).get(sourceId) as any;
   if (!row) return;
   let parsed: any = {};
@@ -197,6 +200,8 @@ function markSourceFoldedInto(sourceId: number, studyId: number): void {
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) parsed = {};
   parsed.folded_into_study = studyId;
+  // the content of the study that folded: a re-read inherits the verdict only while it says the same
+  parsed.folded_study_hash = foldedContent;
   db.prepare(`UPDATE health_documents SET parsed_json = ? WHERE id = ?`).run(JSON.stringify(parsed), sourceId);
 }
 
@@ -370,7 +375,9 @@ function foldTwins(
     const pasted = sourceId != null && (getHealthDocumentRaw(sourceId) as any)?.mime === "text/plain";
     if (!opts.dryRun) {
       const deleted = (
-        sourceId != null ? deleteHealthDocument(sourceId) : deleteImagingStudy(twin.id, { keepSource: true })
+        sourceId != null
+          ? deleteHealthDocument(sourceId, { withdraw: false })
+          : deleteImagingStudy(twin.id, { keepSource: true })
       ) as any;
       if (deleted?.error || !deleted?.deleted) {
         result.errors.push(`imaging#${twin.id}: ${deleted?.error ?? "not deleted"}`);
@@ -382,7 +389,9 @@ function foldTwins(
       else if (twin.source_doc_id != null && twin.source_doc_id !== survivor.source_doc_id) {
         const source = getHealthDocumentRaw(twin.source_doc_id) as any;
         const left = db.prepare(`SELECT 1 FROM health_documents WHERE source_doc_id = ? LIMIT 1`).get(twin.source_doc_id);
-        if (source && !left && imagingSourceFolds(source)) markSourceFoldedInto(twin.source_doc_id, survivor.id);
+        if (source && !left && imagingSourceFolds(source)) {
+          markSourceFoldedInto(twin.source_doc_id, survivor.id, twin.content);
+        }
       }
     }
     fold.merged.push({
@@ -478,10 +487,13 @@ function judgmentFor(a: StudyRow, b: StudyRow): ImagingDedupeJudgment | null {
   const remembered = a.judgments.find((j) => holds(j, a, b)) ?? b.judgments.find((j) => holds(j, b, a)) ?? null;
   if (remembered) return remembered;
   // a re-read of an upload already folded into this study: the earlier verdict stands
-  // (the content guards below still apply), so it is never asked about again
-  if (a.folded_into === b.id || b.folded_into === a.id) {
+  // (the content guards below still apply), so it is never asked about again, but only
+  // while the re-read says exactly what the folded study said; otherwise it is unjudged
+  const inherits = (row: StudyRow, other: StudyRow) =>
+    row.folded_into?.study === other.id && row.folded_into.hash != null && row.folded_into.hash === row.content;
+  if (inherits(a, b) || inherits(b, a)) {
     return {
-      other_id: a.folded_into === b.id ? b.id : a.id,
+      other_id: inherits(a, b) ? b.id : a.id,
       same_study: true,
       confidence: "high",
       reason: "This report was merged with this study before.",

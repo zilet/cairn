@@ -400,3 +400,27 @@ test("a kept source reads under the survivor's card, and its re-read folds again
   assert.equal(settled.merged, 1);
   assert.deepEqual(studyIds(), [first.study.id]);
 });
+
+test("a re-read that says something new inherits no verdict: the pair is unjudged again", async () => {
+  const { first, second } = twins();
+  await judgeImagingTwins("judge", { run: answering({ same_study: true, confidence: "high", reason: "One scan." }).run });
+  assert.equal(dedupeHealthDocuments({}).merged, 1);
+  repo.replaceDerivedImagingStudies(second.source.id, [
+    {
+      imaging_study: {
+        study: { modality: "CT", procedure: "Coronary calcium scoring CT", study_date: "2026-09-14" },
+        anatomy: { clinical_system: "cardiovascular", body_region: "torso.chest", laterality: "not_applicable" },
+        report: { impression: "No coronary artery calcium (score 0). Addendum: reviewed." },
+        findings: [
+          {
+            finding_text: "Coronary calcium",
+            measurements: [{ name: "Agatston score", qualifier: "total", value: 0, unit: "Agatston" }],
+          },
+        ],
+      },
+    },
+  ]);
+  assert.equal(dedupeHealthDocuments({ dryRun: true }).merged, 0, "no fold on the old verdict");
+  assert.equal(imagingJudgeCandidates().length, 1, "asked again about what it says now");
+  assert.ok(first);
+});

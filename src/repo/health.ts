@@ -1194,7 +1194,10 @@ export function confirmPendingLab(id: number, opts?: { enrichOn?: boolean; hasAg
   return { ok: true, doc: getHealthDocument(id), enqueue: false, committed: true };
 }
 
-export function deleteHealthDocument(id: number) {
+// `withdraw: false` is the dedupe fold deleting a duplicate upload it absorbed: what that
+// upload brought into other records stays (the fold re-points it to the survivor), so only
+// a person's or an API's delete of an upload takes its readings back out.
+export function deleteHealthDocument(id: number, opts: { withdraw?: boolean } = {}) {
   const existingRaw = getHealthDocumentRaw(id) as any;
   const existing = getHealthDocument(id) as any;
   const derived = db.prepare(`SELECT * FROM health_documents WHERE source_doc_id = ?`).all(id) as any[];
@@ -1280,7 +1283,7 @@ export function deleteHealthDocument(id: number) {
     emitHealthDocumentSignals(existing ?? { id, doc_date: localDateISO() }, relatedState);
   }
   // what this upload brought into records owned by OTHER uploads goes back out
-  if (deleted && uploadWithdrawer) {
+  if (deleted && uploadWithdrawer && opts.withdraw !== false) {
     try {
       uploadWithdrawer(id);
     } catch {

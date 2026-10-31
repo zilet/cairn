@@ -6174,10 +6174,14 @@ visit on file from the later one, and re-reading it keeps the later value standi
 one entry per upload, draw and summary (a re-read folds the same twin again; the latest stays), and its
 cap of 20 never evicts a snapshot a restore still needs (an upload still on file, or a standalone record).
 The other direction too: deleting an upload whose rows folded INTO another upload's record takes back
-exactly what it brought (`withdrawUploadReadings`, run from `deleteHealthDocument`): each slot whose
-standing value came from it gets back the value it replaced (the latest still-present export in
-`superseded_readings`), a reading only it had is dropped, and its superseded values and history entries
-go. Any cross-upload fold records `reading_sources` for this. Snapshots are server bookkeeping:
+exactly what it brought (`withdrawUploadReadings`, run from a person's or an API's `deleteHealthDocument`,
+never from a fold's): each slot whose standing value came from it goes to the latest still-present export
+that also carried it (a value it replaced, kept WHOLE in `superseded_readings[].marker` with its flag and
+printed range, or the same reading in another on-file export's snapshot), a reading only it had is
+dropped, and its superseded values and history entries go. A fold that deletes a duplicate upload
+(`withdraw: false`) re-points every reference to it (`reading_sources`, `superseded_readings`,
+`merged_from`) to the survivor's upload instead, and an upload that still stands behind a reading in
+another record is never a file twin at all: it holds what the survivor lacks, so its file stays. Any cross-upload fold records `reading_sources` for this. Snapshots are server bookkeeping:
 `publicHealthDoc` strips them and the records search never indexes them. A re-read never notes the same
 replaced value twice.
 
@@ -6234,7 +6238,8 @@ the same bytes as the survivor's source or one of its attachments); otherwise on
 upload, with its report, stays (`deleteImagingStudy(..., {keepSource: true})`) and is marked
 `parsed.folded_into_study`: the API row carries `folds_into_study` + `folded_into_study`, so Records shows
 it under the survivor's card ("other copy"), and a re-read of it folds its re-derived study into that
-survivor again on an inherited verdict, never asking (the content guards still apply). A note whose
+survivor again on an inherited verdict, never asking, but only while the re-read's content hash equals
+the folded study's (`folded_study_hash`); a re-read that says something new is unjudged again. A note whose
 markers or clinical facts are its own never goes. A pasted report the ordinary ingest
 filed as kind `imaging` is still an upload (`isImagingSourceUpload`, `src/repo/imaging.ts`): it re-reads
 through the ordinary health ingest and deletes through `deleteHealthDocument` (its file and derived

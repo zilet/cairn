@@ -112,6 +112,7 @@ export interface SupersededReading {
   replaced_by_doc_id: number; // the record whose value now stands
   from_source_doc_id: number | null; // the export the replaced value came from
   key?: string; // the reading slot (markerReadingKey), so the value can be put back
+  marker?: Record<string, unknown>; // the replaced marker whole (flag, printed range), put back whole
 }
 
 // Where the value standing in one reading slot came from, kept on a survivor that
@@ -595,6 +596,7 @@ function mergedMarkers(
           replaced_by_doc_id: twinWins ? twin.id : owner.id,
           from_source_doc_id: twinWins ? mine.source_doc_id : theirs.source_doc_id,
           key,
+          marker: lost && typeof lost === "object" ? { ...lost } : undefined,
         });
         if (twinWins) {
           markers[at] = marker;
@@ -613,6 +615,7 @@ function mergedMarkers(
   if (anyEncounter || crossUpload || survivor.parsed?.reading_sources) {
     sources = {};
     for (const key of slot.keys()) sources[key] = sourceOf(key);
+    if (!Object.keys(sources).length) sources = null;
   }
   return { markers, added, superseded, sources };
 }
@@ -743,19 +746,34 @@ export function withdrawUploadReadings(uploadId: number): number {
     for (let i = markers.length - 1; i >= 0; i--) {
       const key = markerReadingKey(markers[i]);
       if (!key || Number(sources[key]?.source_doc_id) !== id) continue;
-      const candidates = superseded
-        .filter((s) => (s?.key ?? markerReadingKey(s)) === key)
-        .filter((s) => s?.from_source_doc_id != null && Number(s.from_source_doc_id) !== id)
-        .map((s) => ({ s, at: exportedAt(Number(s.from_source_doc_id)) }))
-        .filter((c) => c.at != null);
-      candidates.sort((a, b) =>
-        a.at === b.at ? Number(b.s.from_source_doc_id) - Number(a.s.from_source_doc_id) : a.at! < b.at! ? 1 : -1
-      );
-      const back = candidates[0];
+      // who else carried this reading: a value it replaced (superseded), or the same
+      // reading in the snapshot of another export still on file; the latest export wins
+      type Carrier = { sourceId: number; at: string; marker: any; superseded: any | null };
+      const carriers: Carrier[] = [];
+      for (const s of superseded) {
+        if ((s?.key ?? markerReadingKey(s)) !== key || s?.from_source_doc_id == null) continue;
+        const sourceId = Number(s.from_source_doc_id);
+        const at = sourceId === id ? null : exportedAt(sourceId);
+        if (at == null) continue;
+        const marker = s.marker && typeof s.marker === "object" ? { ...s.marker } : { ...markers[i], value: s.value, unit: s.unit ?? null };
+        carriers.push({ sourceId, at, marker, superseded: s });
+      }
+      for (const entry of mergedFrom) {
+        const sourceId = Number(entry?.source_doc_id);
+        if (!entry?.snapshot || !Number.isInteger(sourceId) || sourceId === id) continue;
+        const at = exportedAt(sourceId);
+        if (at == null) continue;
+        const marker = (Array.isArray(entry.snapshot.parsed?.markers) ? entry.snapshot.parsed.markers : []).find(
+          (m: any) => markerReadingKey(m) === key
+        );
+        if (marker) carriers.push({ sourceId, at, marker: { ...marker }, superseded: null });
+      }
+      carriers.sort((a, b) => (a.at === b.at ? b.sourceId - a.sourceId : a.at < b.at ? 1 : -1));
+      const back = carriers[0];
       if (back) {
-        markers[i] = { ...markers[i], value: back.s.value, unit: back.s.unit ?? null };
-        sources[key] = { source_doc_id: Number(back.s.from_source_doc_id), exported_at: back.at };
-        superseded = superseded.filter((s) => s !== back.s);
+        markers[i] = back.marker;
+        sources[key] = { source_doc_id: back.sourceId, exported_at: back.at };
+        if (back.superseded) superseded = superseded.filter((s) => s !== back.superseded);
       } else {
         markers.splice(i, 1);
         delete sources[key];
@@ -765,9 +783,10 @@ export function withdrawUploadReadings(uploadId: number): number {
     const next: Record<string, any> = {
       ...parsed,
       markers,
-      reading_sources: sources,
       merged_from: mergedFrom.filter((e) => Number(e?.source_doc_id) !== id),
     };
+    if (Object.keys(sources).length) next.reading_sources = sources;
+    else delete next.reading_sources;
     if (superseded.length) next.superseded_readings = superseded;
     else delete next.superseded_readings;
     updateHealthDocFields(Number(row.id), { parsed_json: next });
@@ -777,6 +796,66 @@ export function withdrawUploadReadings(uploadId: number): number {
 }
 
 registerUploadWithdrawer(withdrawUploadReadings);
+
+function parsedRowsReferencing(uploadId: number): Array<{ id: number; parsed: any }> {
+  return (
+    db
+      .prepare(
+        `SELECT id, parsed_json FROM health_documents
+          WHERE kind != 'imaging' AND COALESCE(source_doc_id, -1) != ?
+            AND (parsed_json LIKE '%"reading_sources"%' OR parsed_json LIKE '%"merged_from"%' OR parsed_json LIKE '%"superseded_readings"%')`
+      )
+      .all(uploadId) as any[]
+  )
+    .map((row) => {
+      try {
+        return { id: Number(row.id), parsed: JSON.parse(row.parsed_json) };
+      } catch {
+        return null;
+      }
+    })
+    .filter((row): row is { id: number; parsed: any } => !!row && !!row.parsed && typeof row.parsed === "object");
+}
+
+// Does any other record's standing reading come from this upload?
+function uploadStandsBehindReadings(uploadId: number): boolean {
+  return parsedRowsReferencing(uploadId).some((row) =>
+    Object.values(row.parsed.reading_sources ?? {}).some((src: any) => Number(src?.source_doc_id) === uploadId)
+  );
+}
+
+// A duplicate upload the fold absorbed: every reference to it in other records (who a
+// standing reading, a replaced value or a fold-history entry came from) now names the
+// survivor's upload, so nothing it brought is ever taken back on its account.
+function repointUpload(fromId: number, toId: number): void {
+  if (fromId === toId) return;
+  for (const row of parsedRowsReferencing(fromId)) {
+    const parsed = row.parsed;
+    let moved = false;
+    const sources = parsed.reading_sources && typeof parsed.reading_sources === "object" ? parsed.reading_sources : null;
+    if (sources) {
+      for (const src of Object.values(sources) as any[]) {
+        if (Number(src?.source_doc_id) === fromId) {
+          src.source_doc_id = toId;
+          moved = true;
+        }
+      }
+    }
+    for (const s of Array.isArray(parsed.superseded_readings) ? parsed.superseded_readings : []) {
+      if (Number(s?.from_source_doc_id) === fromId) {
+        s.from_source_doc_id = toId;
+        moved = true;
+      }
+    }
+    for (const e of Array.isArray(parsed.merged_from) ? parsed.merged_from : []) {
+      if (Number(e?.source_doc_id) === fromId) {
+        e.source_doc_id = toId;
+        moved = true;
+      }
+    }
+    if (moved) db.prepare(`UPDATE health_documents SET parsed_json = ? WHERE id = ?`).run(JSON.stringify(parsed), row.id);
+  }
+}
 
 function recordLabel(row: { summary?: string | null; original_name?: string | null }): string | null {
   const text = String(row.summary || row.original_name || "")
@@ -824,7 +903,10 @@ function foldableTwins(survivor: DocRow, group: DocRow[], scope: number | null, 
     if (!sameDraw(survivor, row)) return false;
     if (!row.file_path) return true;
     const o = overlap(survivor, row);
-    return o.twinOnly === 0 && o.conflict === 0;
+    if (o.twinOnly !== 0 || o.conflict !== 0) return false;
+    // an upload that still stands behind a reading in another record (its derived panel
+    // folded there and brought something) holds what the survivor lacks: its file stays
+    return !uploadStandsBehindReadings(row.id);
   });
 }
 
@@ -975,7 +1057,10 @@ export function dedupeHealthDocuments(opts: DedupeOptions = {}): DedupeHealthDoc
         // the pass stops, so the record never claims a merge it did not make.
         const kept: DocRow[] = [];
         for (const twin of fold.twins) {
-          const deleted = deleteHealthDocument(twin.id) as any;
+          // a fold's delete never withdraws: what this twin brought elsewhere stays,
+          // re-pointed to the survivor's upload
+          const deleted = deleteHealthDocument(twin.id, { withdraw: false }) as any;
+          if (deleted?.deleted) repointUpload(twin.id, fold.survivor.file_path ? fold.survivor.id : (fold.survivor.source_doc_id ?? fold.survivor.id));
           if (deleted?.error || !deleted?.deleted) {
             result.errors.push(`health#${twin.id}: ${deleted?.error ?? "not deleted"}`);
             break;
