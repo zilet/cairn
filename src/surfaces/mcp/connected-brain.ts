@@ -36,6 +36,7 @@ import {
   healthOutcomeAnnotations,
   cardiovascularRiskRead,
   doctorLoopRead,
+  dataCoverageRead,
   doctorPacketRead,
   evidenceWantedRead,
   nextCheckupRead,
@@ -320,6 +321,13 @@ export function registerConnectedBrainTools(server: McpToolRegistrar) {
     "At most ONE calm line naming the overdue recheck or rescan the team would find useful (an overdue doctor-loop follow-up, an aged body-composition scan, or an off reading past its own marker's validity window), or item:null. Pull, never push — nothing notifies and nothing waits on it. Mirrors GET /api/health/evidence-wanted.",
     { as_of: z.string().optional().describe("YYYY-MM-DD; defaults to today.") },
     async ({ as_of }) => asText(evidenceWantedRead({ asOf: as_of }))
+  );
+
+  server.tool(
+    "get_data_coverage",
+    "What Cairn reads about the athlete, one row per source (labs, scans, visit notes when present, Garmin, Apple Health, body) with its coverage and freshness in plain words, then at most two gaps where more data would most sharpen the reads (the evidence-wanted line, no blood panel on file, no wearable or every wearable quiet, a warranted never-measured workup). Counts are record counts, never a grade. Pull, never push. Mirrors GET /api/health/data-coverage.",
+    { as_of: z.string().optional().describe("YYYY-MM-DD; defaults to today.") },
+    async ({ as_of }) => asText(dataCoverageRead({ asOf: as_of }))
   );
 
   server.tool(

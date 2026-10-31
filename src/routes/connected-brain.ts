@@ -34,6 +34,7 @@ import {
   healthOutcomeAnnotations,
   cardiovascularRiskRead,
   doctorLoopRead,
+  dataCoverageRead,
   doctorPacketRead,
   evidenceWantedRead,
   nextCheckupRead,
@@ -170,6 +171,16 @@ connectedBrainRouter.get("/health/visit-questions", (req, res) => {
 connectedBrainRouter.get("/health/evidence-wanted", (req, res) => {
   const asOf = typeof req.query.as_of === "string" ? req.query.as_of : undefined;
   res.json(evidenceWantedRead({ asOf }));
+});
+
+// Your data: what Cairn reads about you, one row per source (labs, scans, visit notes,
+// Garmin, Apple Health, body) with its coverage and freshness in plain words, then at
+// most two gaps where more data would most sharpen the reads (the evidence-wanted line,
+// no panel on file, no wearable or a quiet one, a warranted never-measured workup).
+// Pull, never push; read-only. Under /health, so it is no-store like the records it reads.
+connectedBrainRouter.get("/health/data-coverage", (req, res) => {
+  const asOf = typeof req.query.as_of === "string" ? req.query.as_of : undefined;
+  res.json(dataCoverageRead({ asOf }));
 });
 
 // Intervention -> outcome annotations: compare follow-up marker readings against

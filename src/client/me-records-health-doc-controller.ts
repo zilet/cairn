@@ -8,6 +8,7 @@ type HealthRecordsState = {
   tab?: string;
   standSeg?: string | null;
   pendingHealthDocId?: string | number | null;
+  pendingRecordsAdd?: { files?: readonly Blob[]; paste?: boolean } | null;
 };
 
 type HealthRecordsPictureCache = {
@@ -184,7 +185,34 @@ function renderHealthRecords(deps: HealthRecordsControllerDeps): Promise<HealthD
   if (!content) return Promise.resolve([]);
   content.innerHTML = CairnHealthRecords.recordsTabHtml();
   wireHealthUpload(deps);
+  takeRecordsAdd(deps.state);
   return loadHealthDocs(deps);
+}
+
+// You's "Your data" Add sheet hands what the person chose to THIS upload box, which
+// does the rest exactly as if they had chosen it here: picked or dropped files ride
+// into the file input (its own change handler reads them), Paste focuses the text
+// field. One shot; a browser that cannot set an input's files still lands on the box.
+function takeRecordsAdd(state: HealthRecordsState): void {
+  const add = state.pendingRecordsAdd;
+  state.pendingRecordsAdd = null;
+  const box = hrecElement<HTMLElement>("#hUploadBox");
+  if (!add || !box) return;
+  try {
+    box.scrollIntoView({ block: "start", behavior: reducedMotion() ? "auto" : "smooth" });
+  } catch {}
+  const files = (add.files || []).filter((f): f is File => typeof File !== "undefined" && f instanceof File);
+  const input = hrecElement<HTMLInputElement>("#hFile");
+  if (files.length && input && typeof DataTransfer !== "undefined") {
+    try {
+      const transfer = new DataTransfer();
+      files.forEach((file) => transfer.items.add(file));
+      input.files = transfer.files;
+      input.dispatchEvent(new Event("change"));
+      return;
+    } catch {}
+  }
+  if (add.paste) hrecElement<HTMLTextAreaElement>("#hText")?.focus();
 }
 
 const CAIRN_HEALTH_RECORDS_CONTROLLER = {

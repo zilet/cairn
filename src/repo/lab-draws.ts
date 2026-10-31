@@ -45,14 +45,19 @@ function dayOf(doc: any): string {
 
 /**
  * The record's draws, newest first, one row per (kind, date). `through` (default today)
- * drops a future-dated document; `limit` caps the rows.
+ * drops a future-dated document; `limit` caps the rows; `docs` reads those rows instead.
  */
-export function labDraws(opts: { through?: string; limit?: number; today?: string } = {}): LabDraw[] {
+export function labDraws(
+  opts: { through?: string; limit?: number; today?: string; docs?: readonly any[] } = {}
+): LabDraw[] {
   const today = opts.today ?? localDateISO();
   const through = opts.through ?? today;
-  let docs: any[] = [];
+  // A caller that already holds the record's rows (id, kind, doc_date, created_at,
+  // source_doc_id — the only fields read here) passes them, so a light read need not
+  // hydrate every document.
+  let docs: readonly any[] = [];
   try {
-    docs = listHealthDocuments(1000) as any[];
+    docs = opts.docs ?? (listHealthDocuments(1000) as any[]);
   } catch {
     docs = [];
   }

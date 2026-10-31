@@ -227,6 +227,8 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/stone-detail-model.ts", output: "public/js/stone-detail-model.js" },
   { source: "src/client/stone-detail-client.ts", output: "public/js/stone-detail-client.js" },
   { source: "src/client/stone-detail-controller.ts", output: "public/js/stone-detail-controller.js" },
+  { source: "src/client/you-data-client.ts", output: "public/js/you-data-client.js" },
+  { source: "src/client/you-data-controller.ts", output: "public/js/you-data-controller.js" },
   { source: "src/client/you-screen.ts", output: "public/js/you-screen.js" },
   { source: "src/client/body-metrics-client.ts", output: "public/js/body-metrics-client.js" },
   { source: "src/client/health-fan-in-client.ts", output: "public/js/health-fan-in-client.js" },
@@ -634,6 +636,8 @@ export const BUNDLES = [
       "public/js/stone-detail-model.js",
       "public/js/stone-detail-client.js",
       "public/js/stone-detail-controller.js",
+      "public/js/you-data-client.js",
+      "public/js/you-data-controller.js",
       "public/js/you-screen.js",
     ],
   },  {

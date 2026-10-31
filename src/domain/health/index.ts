@@ -25,3 +25,4 @@ export * from "./marker-public.js";
 export * from "./records-search.js";
 export * from "./visit-questions.js";
 export * from "./evidence-wanted.js";
+export * from "./data-coverage.js";

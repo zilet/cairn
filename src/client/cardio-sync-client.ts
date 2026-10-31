@@ -249,7 +249,7 @@ const CARDIO_SLEEP_GAP_WINDOW = 7;
           text.textContent = result?.ok
             ? prevText
             : result
-              ? "That sync didn't go through · Settings → Sources has the details"
+              ? "That sync didn't go through · Garmin under You › Your data has the details"
               : "Garmin didn't answer just now · try again";
         }
       });

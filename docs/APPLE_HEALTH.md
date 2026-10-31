@@ -21,7 +21,7 @@ show for it.
 
 **On the phone:**
 
-1. In Cairn, open **Settings → Sources → Apple Health**.
+1. In Cairn, open **You → Your data → Apple Health** (it opens the Sources screen, `/app/settings/sources`).
 2. Tap **Install Apple Health Sync**. Apple opens the published Shortcut and
    requires you to confirm **Add Shortcut**.
 3. Return to Cairn and tap **Connect & test**. Cairn opens the installed Shortcut

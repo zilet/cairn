@@ -2,9 +2,13 @@
 // The You home (/app/you, and /app/you/stone?id=<key>): the whole cairn, then Health,
 // About you and Settings.
 //
-// - The landing leads with the full six-stone cairn-stack (cairn-stack-*.ts) off its
-//   own GET /api/today/stones read, then three quiet groups of rows into the
-//   surfaces that live under You.
+// - The landing leads with "Your data" (you-data-*.ts, GET /api/health/data-coverage):
+//   every source Cairn reads about you, how fresh it is, one "+ Add" into Records'
+//   own upload, and at most two gaps that would sharpen the reads. Records and Sources
+//   (Garmin, Apple Health) are reached from its rows, so neither has a row of its own
+//   below. Then the full six-stone cairn-stack (cairn-stack-*.ts) off its own
+//   GET /api/today/stones read, then three quiet groups of rows into the surfaces
+//   that live under You.
 // - A stone opens its detail (stone-detail-*.ts): its read, then the places that
 //   part of the picture already lives. The decade view is reached from Heart's.
 //
@@ -37,7 +41,6 @@ type YouLandingGroup = { key: string; title: string; rows: readonly YouLandingRo
           sub: "Your markers, what they connect to, and what to do next",
         },
         { view: "stand", section: "markers", title: "Markers", sub: "Every result, searchable, out of range first" },
-        { view: "stand", section: "records", title: "Records", sub: "Add labs or scans, and everything already uploaded" },
         { view: "stand", section: "share", title: "Doctor packet", sub: "Your labs in clinical order, ready for a visit" },
         { view: "stand", section: "checkup", title: "Checkup", sub: "What is worth re-checking, and when" },
       ],
@@ -56,7 +59,6 @@ type YouLandingGroup = { key: string; title: string; rows: readonly YouLandingRo
       key: "settings",
       title: "Settings",
       rows: [
-        { view: "settings", section: "sources", title: "Sources", sub: "Garmin and Apple Health" },
         { view: "settings", section: "automation", title: "Automation", sub: "How much the team does on its own" },
         { view: "settings", section: "data", title: "Data", sub: "Export, backup and this app" },
         { view: "settings", section: "agents", title: "Agents", sub: "The coaching agents and their order" },
@@ -151,6 +153,47 @@ type YouLandingGroup = { key: string; title: string; rows: readonly YouLandingRo
   }
 
   let teardown: (() => void) | null = null;
+  let dataTeardown: (() => void) | null = null;
+
+  // ---- Your data ------------------------------------------------------------------
+  // Each source opens the screen it already lives on: Records (on that source's newest
+  // record, the deep link Records already honours), Sources under Settings, Health →
+  // Body, or Train → Measurements. Add hands what was picked to Records' own upload.
+  function openRecords(docId: number | null, add: ClientAppState["pendingRecordsAdd"] = null): void {
+    state.standSeg = "records";
+    state.standDomain = null;
+    state.pendingHealthDocId = docId == null ? null : String(docId);
+    state.pendingRecordsAdd = add;
+    activateTab("stand");
+  }
+
+  function openSources(): void {
+    state.setSeg = "sources";
+    activateTab("settings");
+  }
+
+  function openDataRow(row: ClientDataCoverageRow): void {
+    if (row.opens === "records") openRecords(row.state === "absent" ? null : row.doc_id, row.state === "absent" ? {} : null);
+    else if (row.opens === "sources") openSources();
+    else if (row.opens === "measurements") openStoneHome({ tab: "progress", section: "measurements" });
+    else openStoneHome({ tab: "stand", section: "body" });
+  }
+
+  function dataDeps(): ClientYouDataDeps {
+    return {
+      peek: (key) => peekCached<ClientDataCoverageRead>(key),
+      load: (path, options) => cachedApi(path, options),
+      relTime: (iso) => (typeof relTime === "function" ? relTime(iso) : ""),
+      openRow: openDataRow,
+      openGap: (gap) => {
+        if (gap.action === "sources") openSources();
+        else openStoneHome({ tab: "stand", section: "checkup" });
+      },
+      addFiles: (files) => openRecords(null, { files }),
+      addPaste: () => openRecords(null, { paste: true }),
+      openSources,
+    };
+  }
 
   function renderStoneDetail(stone: string): void {
     // One page header, as on every You sub-page: the stone's name is the title and
@@ -184,6 +227,7 @@ type YouLandingGroup = { key: string; title: string; rows: readonly YouLandingRo
     view.innerHTML = `<div class="you-landing">
       <div class="you-lede reveal"><p class="voice voice-sm you-voice">Six parts of you, read together.</p>
         <button class="you-search" type="button" data-you-view="stand" data-you-section="markers"><span class="you-search-glyph" aria-hidden="true"></span>Search markers, records, notes…</button></div>
+      <section class="you-data reveal" id="youDataSlot" aria-labelledby="youDataH"></section>
       <div class="you-cairn" id="cairnStackSlot"></div>
       ${youLandingHtml()}
     </div>`;
@@ -195,6 +239,10 @@ type YouLandingGroup = { key: string; title: string; rows: readonly YouLandingRo
         )
       );
     if (takeSearchFocus()) view.querySelector<HTMLElement>(".you-search")?.focus({ preventScroll: true });
+    const dataSlot = view.querySelector("#youDataSlot");
+    if (dataSlot && typeof CairnYouDataController !== "undefined") {
+      dataTeardown = CairnYouDataController.mount(dataSlot, dataDeps());
+    }
     const slot = view.querySelector("#cairnStackSlot");
     if (slot) teardown = CairnStackController.mount(slot, { ...readDeps(), openStone });
   }
@@ -203,6 +251,8 @@ type YouLandingGroup = { key: string; title: string; rows: readonly YouLandingRo
     headerTitle.textContent = "You";
     teardown?.();
     teardown = null;
+    dataTeardown?.();
+    dataTeardown = null;
     const stone = state.youSeg === "stone" ? state.youStone : null;
     if (stone && CairnStoneDetailModel.isStone(stone)) {
       renderStoneDetail(stone);

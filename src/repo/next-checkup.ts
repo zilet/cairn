@@ -781,6 +781,45 @@ function visitRace(asOf: string): { date: string; event: string | null } | null 
 // The whole read. `refresh` re-runs the deterministic attention pass first (the
 // REST route passes true so an open reflects the newest data even between nightly
 // scheduler passes); the scheduler op keeps it warm on a cadence regardless.
+// The record's markers, with each derivable marker's reading filled in, and the index by
+// key the add-on rule reads. A draw that measured a derivable marker's components counts
+// as a check of it too (non-HDL-C from TC + HDL) — the same reading the doctor loop files
+// its cadence from.
+function checkupMarkerIndex(): { markers: MarkerLike[]; markerByKey: Map<string, MarkerLike> } {
+  const markers = withDerivedReadings((getMarkerHistory() as { markers: MarkerLike[] }).markers);
+  const markerByKey = new Map<string, MarkerLike>();
+  for (const m of markers) {
+    const key = String(m.key ?? m.name ?? "").toLowerCase();
+    if (key && !markerByKey.has(key)) markerByKey.set(key, m);
+  }
+  return { markers, markerByKey };
+}
+
+/** A never-measured workup that a currently-off marker warrants, with the day's line. */
+export interface WarrantedWorkup {
+  key: string;
+  label: string;
+  /** The same sentence the checkup's add-on carries today (one wording per day). */
+  line: string;
+}
+
+/**
+ * The workups the checkup lists FIRST (owner ruling R3): never measured, and a marker
+ * they help explain is off right now. Empty on the common day. Read-only.
+ */
+export function warrantedWorkups(opts: { asOf?: string } = {}): WarrantedWorkup[] {
+  const asOf = /^\d{4}-\d{2}-\d{2}$/.test(String(opts.asOf ?? "")) ? String(opts.asOf) : todayISO();
+  const keys = warrantedAddOnKeys(checkupMarkerIndex().markerByKey);
+  if (!keys.size) return [];
+  return (recommendedPanel() as any[])
+    .filter((item) => keys.has(String(item.key)))
+    .map((item) => ({
+      key: String(item.key),
+      label: String(item.label),
+      line: pickDayVariant(ADDON_WARRANTED_LINES, asOf, `next-checkup:addon:${String(item.key)}`),
+    }));
+}
+
 export function nextCheckupRead(opts: { refresh?: boolean; asOf?: string } = {}): NextCheckupRead {
   if (opts.refresh) {
     try {
@@ -791,14 +830,7 @@ export function nextCheckupRead(opts: { refresh?: boolean; asOf?: string } = {})
   }
   const asOf = /^\d{4}-\d{2}-\d{2}$/.test(String(opts.asOf ?? "")) ? String(opts.asOf) : todayISO();
 
-  // A draw that measured a derivable marker's components counts as a check of it too
-  // (non-HDL-C from TC + HDL) — the same reading the doctor loop files its cadence from.
-  const markers = withDerivedReadings((getMarkerHistory() as { markers: MarkerLike[] }).markers);
-  const markerByKey = new Map<string, MarkerLike>();
-  for (const m of markers) {
-    const key = String(m.key ?? m.name ?? "").toLowerCase();
-    if (key && !markerByKey.has(key)) markerByKey.set(key, m);
-  }
+  const { markers, markerByKey } = checkupMarkerIndex();
   // The DEXA re-scan window is derived once from the baseline scan and shared with
   // Train's timeline, so both surfaces frame the re-scan as the same suggestion window.
   // A current/future window reads as a dated suggestion ("worth considering around …");

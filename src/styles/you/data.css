@@ -1,0 +1,86 @@
+/* =====================================================================
+   Your data (you-data-*.ts): the You home's first card. One hairline row per
+   source Cairn reads — a dot in the stone hue of the part of the picture it
+   feeds, the name, what it holds, and a mono freshness date on the right. A
+   source with nothing yet wears a hollow dashed dot and a dawn "Add"/"Connect".
+   Under the rows, a soft well of at most two "would sharpen your reads" gaps.
+   "+ Add" opens a small sheet (.you-add-*): three equal ways in, then a row
+   into Sources. A file dragged over the card on a desktop lights its edge.
+   ===================================================================== */
+.you-data{margin:0 0 var(--space-11)}
+.you-data:empty{display:none}
+.you-data-head{display:flex;align-items:center;justify-content:space-between;gap:var(--space-6);
+  margin:0 0 var(--space-3) var(--space-1)}
+.you-data-h{margin:0}
+.you-data-add{display:inline-flex;align-items:center;gap:var(--space-2);min-height:32px;
+  padding:var(--btn-sm-pad);font:inherit;font-size:var(--btn-sm-text);font-weight:var(--btn-sm-weight);
+  color:var(--dawn);background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-pill);
+  cursor:pointer;-webkit-tap-highlight-color:transparent;
+  transition:border-color var(--dur-1) var(--ease),transform var(--dur-1) var(--ease)}
+.you-data-add:hover{border-color:var(--dawn)}
+.you-data-add:active{transform:var(--press)}
+
+.you-data-card{position:relative;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+  padding:var(--space-1) var(--space-7);transition:border-color var(--dur-1) var(--ease),box-shadow var(--dur-1) var(--ease)}
+.you-data-card.is-drop{border-color:var(--dawn);box-shadow:0 0 0 3px var(--dawn-wash)}
+.you-data-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.you-data-item{border-top:1px solid var(--line)}
+.you-data-item:first-child{border-top:0}
+.you-data-row{width:100%;min-height:48px;display:grid;grid-template-columns:9px minmax(0,1fr) auto;align-items:center;
+  gap:var(--space-6);padding:var(--space-5) 0;text-align:left;background:none;border:0;color:inherit;font:inherit;
+  cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform var(--dur-1) var(--ease)}
+.you-data-row:active{transform:var(--press-lg)}
+@media (hover:hover){.you-data-row:hover .you-data-label{color:var(--dawn-deep)}}
+.you-data-dot{width:9px;height:9px;border-radius:50%;background:var(--c,var(--well))}
+.you-data-row.is-absent .you-data-dot{background:none;border:1.5px dashed var(--muted)}
+.you-data-text{min-width:0;display:flex;flex-direction:column;gap:var(--space-1)}
+.you-data-label{font-weight:var(--weight-semibold);font-size:var(--text-base);line-height:var(--leading-snug);color:var(--ink);
+  transition:color var(--dur-1) var(--ease)}
+.you-data-holds{font-size:var(--text-sm);line-height:var(--leading-normal);color:var(--muted);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.you-data-when,.you-data-cta{font-family:var(--font-mono);font-size:var(--text-2xs);letter-spacing:var(--tracking-mono);
+  text-transform:uppercase;white-space:nowrap;text-align:right}
+.you-data-when{color:var(--muted)}
+.you-data-cta{color:var(--dawn)}
+.you-data-ghost{display:block;width:55%;height:var(--space-4);border-radius:var(--radius-3xs);background:var(--well)}
+.you-data-row.is-ghost{cursor:default}
+.you-data-card.is-loading .you-data-dot{background:var(--well)}
+
+/* the gaps: a soft well inside the card, each a bold subject, one sentence, a dawn link */
+.you-data-gaps{margin:var(--space-2) calc(-1 * var(--space-3)) var(--space-6);padding:var(--space-6) var(--space-7);
+  background:var(--surface2);border-radius:var(--radius-sm)}
+.you-data-gaps-h{margin:0 0 var(--space-4);font-family:var(--font-mono);font-size:var(--text-2xs);
+  letter-spacing:var(--tracking-mono);text-transform:uppercase;color:var(--muted)}
+.you-data-gap-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:var(--space-6)}
+.you-data-gap{display:flex;flex-direction:column;align-items:flex-start;gap:var(--space-1)}
+.you-data-gap-s{font-weight:var(--weight-semibold);font-size:var(--text-md);color:var(--ink)}
+.you-data-gap-why{font-size:var(--text-sm);line-height:var(--leading-normal);color:var(--ink2);max-width:60ch}
+.you-data-gap-go{margin-top:var(--space-1);padding:var(--space-2) 0;background:none;border:0;font:inherit;
+  font-size:var(--text-sm);font-weight:var(--weight-semibold);color:var(--dawn);cursor:pointer;
+  text-decoration:underline;text-decoration-color:var(--line-strong);text-underline-offset:var(--link-offset)}
+.you-data-gap-go:hover{text-decoration-color:var(--dawn)}
+.you-data-drophint{display:none;margin:0 0 var(--space-5);font-size:var(--text-xs);color:var(--dawn)}
+.you-data-card.is-drop .you-data-drophint{display:block}
+
+/* the Add sheet */
+.you-add-hd{display:flex;align-items:center;justify-content:space-between;gap:var(--space-6);margin:0 0 var(--space-3)}
+.you-add-h{margin:0;font-family:var(--font-display);font-weight:var(--weight-regular);font-size:var(--text-xl);
+  line-height:var(--leading-tight);letter-spacing:var(--tracking-tight)}
+.you-add-hd .xbtn{min-width:44px;min-height:44px;font-size:var(--text-lead)}
+.you-add-lede{margin:0 0 var(--space-9);font-size:var(--text-md);line-height:var(--leading-normal);color:var(--ink2)}
+.you-add-opts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--space-5)}
+.you-add-opt{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--space-4);
+  min-height:84px;padding:var(--space-7) var(--space-4);font:inherit;font-size:var(--text-md);font-weight:var(--weight-semibold);
+  color:var(--ink);background:var(--surface2);border:1px solid var(--line);border-radius:var(--radius-md);cursor:pointer;
+  -webkit-tap-highlight-color:transparent;transition:border-color var(--dur-1) var(--ease),transform var(--dur-1) var(--ease)}
+.you-add-opt:hover{border-color:var(--line-strong)}
+.you-add-opt:active{transform:var(--press)}
+.you-add-glyph{width:24px;height:24px;fill:none;stroke:var(--dawn);stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.you-add-src{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:var(--space-6);width:100%;
+  margin-top:var(--space-9);padding:var(--space-7) 0 var(--space-2);text-align:left;background:none;border:0;
+  border-top:1px solid var(--line);color:inherit;font:inherit;cursor:pointer;transition:transform var(--dur-1) var(--ease)}
+.you-add-src:active{transform:var(--press-lg)}
+.you-add-src-text{display:flex;flex-direction:column;gap:var(--space-1);min-width:0}
+.you-add-src-t{font-weight:var(--weight-semibold);font-size:var(--text-base)}
+.you-add-src-s{font-size:var(--text-sm);color:var(--muted)}
+.you-add-src .chev{color:var(--muted);font-size:var(--text-lead)}

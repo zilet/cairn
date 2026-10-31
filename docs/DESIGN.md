@@ -313,7 +313,7 @@ compresses worse alone (about 1.5x), so only a surface big enough to pay for its
 | `ask/` | Ask | chat, capture, changes feed, ask cards, what-if |
 | `train/` | Train | plan editor, progress, editorial progress, endurance, program, strength, overview |
 | `horizon/` | Horizon | race view, the horizon |
-| `you/` | You | records/memory/life, profile/family/brain, the cairn stack + stone detail |
+| `you/` | You | records/memory/life, profile/family/brain, the cairn stack + stone detail, Your data (`you/data`: the source rows, the gaps well, the Add sheet) |
 | `health/` | Health | health read/markers, Stand, records search, doctor packet |
 | `settings/` | Settings | settings, settings groups |
 

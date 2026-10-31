@@ -285,7 +285,7 @@ test("a sync that lands after the athlete left the surface still refreshes the r
 test("a sync Garmin turned down points to Settings; one with no answer is a retry", async () => {
   const cases = [
     // Garmin answered no (a sign-in the server could not make): a retry will not help.
-    [[RUNNING, DONE({ ok: false, error: "auth" })], /didn't go through · Settings → Sources has the details/],
+    [[RUNNING, DONE({ ok: false, error: "auth" })], /didn't go through · Garmin under You › Your data has the details/],
     // The job failed outright (a deadline, a restart): asking again is the fix.
     [[RUNNING, { ok: true, job: { id: 7, status: "error", error: "Garmin sync timed out" } }], /didn't answer just now · try again/],
   ];

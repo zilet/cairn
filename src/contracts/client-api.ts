@@ -20,6 +20,7 @@ import type {
 } from "./client.js";
 import type { ClientFuelIdeas, ClientIntakeBand } from "./fuel.js";
 import type { TodayStonesRead } from "./today-stones.js";
+import type { DataCoverageRead } from "./data-coverage.js";
 import type { DayRecord } from "./day-record.js";
 import type { DayDetail } from "./day-detail.js";
 import type { RaceCountdown, RaceDays } from "./race-days.js";
@@ -4412,6 +4413,7 @@ export interface ClientApiResponses {
   "/api/records/search": ClientRecordsSearchRead;
   "/api/health/visit-questions": ClientVisitQuestionsRead;
   "/api/health/evidence-wanted": ClientEvidenceWantedRead;
+  "/api/health/data-coverage": DataCoverageRead;
   "/api/health-report.json": ClientHealthReportJson;
 }
 

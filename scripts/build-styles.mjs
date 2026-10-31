@@ -80,6 +80,7 @@ export const STYLE_PARTIALS = [
   "today/day",
   "today/strip",
   "you/cairn",
+  "you/data",
   "shell/identity",
   "shell/nav",
   // The coach link's quiet cards on Today and Ask (eager: Today paints one), and the AI

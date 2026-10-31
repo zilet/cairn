@@ -94,10 +94,45 @@ interface Window {
   CairnStoneDetailController: {
     mount(host: Element, deps: ClientStoneDetailDeps): () => void;
   };
+  CairnYouData: {
+    /** The SWR key: `health:`, so memory-only like every health read. */
+    KEY: string;
+    PATH: "/health/data-coverage";
+    html(read: unknown, opts?: { relTime?: (iso: string) => string }): string;
+    skeletonHtml(): string;
+    addSheetHtml(): string;
+    whenWords(row: ClientDataCoverageRow, relTime?: (iso: string) => string): string;
+    normalize(read: unknown): { rows: ClientDataCoverageRow[]; gaps: ClientDataCoverageGap[] } | null;
+  };
+  CairnYouDataController: {
+    mount(host: Element, deps: ClientYouDataDeps): () => void;
+    openAddSheet(deps: ClientYouDataDeps): void;
+  };
 }
+
+type ClientDataCoverageRead = import("../contracts/data-coverage.js").DataCoverageRead;
+type ClientDataCoverageRow = import("../contracts/data-coverage.js").DataCoverageRow;
+type ClientDataCoverageGap = import("../contracts/data-coverage.js").DataCoverageGap;
+type ClientYouDataDeps = {
+  peek(key: string): { data: ClientDataCoverageRead; fresh: boolean } | null;
+  load(path: "/health/data-coverage", options: { key: string }): Promise<ClientDataCoverageRead>;
+  /** "2h ago" for a sync stamp (date-utils relTime). */
+  relTime?(iso: string): string;
+  /** Open the screen a source lives on. */
+  openRow(row: ClientDataCoverageRow): void;
+  /** Follow a gap's link (checkup, Sources); an "add" gap opens the Add sheet instead. */
+  openGap(gap: ClientDataCoverageGap): void;
+  /** Hand picked or dropped files to Records' own upload. */
+  addFiles(files: File[]): void;
+  /** Open Records with its text field ready for a paste. */
+  addPaste(): void;
+  openSources(): void;
+};
 declare const CairnStackModel: Window["CairnStackModel"];
 declare const CairnStack: Window["CairnStack"];
 declare const CairnStackController: Window["CairnStackController"];
 declare const CairnStoneDetailModel: Window["CairnStoneDetailModel"];
 declare const CairnStoneDetail: Window["CairnStoneDetail"];
 declare const CairnStoneDetailController: Window["CairnStoneDetailController"];
+declare const CairnYouData: Window["CairnYouData"];
+declare const CairnYouDataController: Window["CairnYouDataController"];

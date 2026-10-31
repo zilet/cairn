@@ -435,15 +435,18 @@ test("the You landing leads with one voice line and the search, then the whole c
   const search = landing.children[0].querySelector(".you-search");
   assert.equal(search.getAttribute("data-you-view"), "stand");
   assert.equal(search.getAttribute("data-you-section"), "markers", "the search opens the searchable markers");
-  assert.equal(landing.children[1].className, "you-cairn", "the stack follows");
-  assert.ok(landing.children[1].querySelector(".cairn-stack"));
+  assert.equal(landing.children[1].id, "youDataSlot", "Your data is the first section, above the stones");
+  assert.equal(landing.children[2].className, "you-cairn", "the stack follows");
+  assert.ok(landing.children[2].querySelector(".cairn-stack"));
   assert.equal(win.view.querySelectorAll(".cairn-stack-row").length, 6);
   assert.deepEqual(
     win.view.querySelectorAll(".you-group-h").map((h) => h.textContent),
     ["Health", "About you", "Settings"]
   );
   assert.match(win.view.textContent, /Health: where you stand/);
-  assert.match(win.view.textContent, /Add labs or scan/);
+  // Records and Sources are reached from Your data's rows, so neither keeps a row below.
+  assert.equal(win.view.querySelector('[data-you-section="records"]'), null);
+  assert.equal(win.view.querySelector('[data-you-section="sources"]'), null);
   assert.match(win.view.textContent, /Doctor packet/, "the packet is one tap from You");
   assert.doesNotMatch(win.view.textContent, /\bStand\b/, "Stand reads as Health in athlete-facing copy");
 

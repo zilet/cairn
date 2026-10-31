@@ -63,6 +63,10 @@ export type ClientAppState = {
   youSeg?: ClientYouSection | null;
   youStone?: string | null;
   pendingHealthScroll?: "hbDirectives" | string | null;
+  // A one-shot hand-off from You's "Your data" Add sheet into Records' own upload box:
+  // the files the person picked (or dropped) there, or `paste` to focus the text field.
+  // Records consumes it on its next paint (stand-screen.ts showRecords).
+  pendingRecordsAdd?: { files?: readonly Blob[]; paste?: boolean } | null;
   chatPrefill?: string | null;
   capturePrefill?: string | null;
   brief?: ClientBriefCache | null;

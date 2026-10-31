@@ -455,7 +455,7 @@ duration re-exports IN PLACE, onto the same activity id. (The re-export rewrites
 sets; the shell's own name and duration fields on Garmin are only set at CREATE time,
 since there is no verified endpoint for editing them.)
 
-**Toggle.** Settings → Sources → Garmin Connect → "Send finished strength sessions back
+**Toggle.** You → Your data → Garmin (the Sources screen) → Garmin Connect → "Send finished strength sessions back
 to Garmin" (`settings.garmin_export_strength`, default ON; also settable via MCP
 `set_settings`). Off, nothing is ever written. The work runs on the serial enrichment
 queue as the `garmin_export` kind — enqueued by `finishSession` and by `syncGarmin` for

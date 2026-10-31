@@ -884,17 +884,24 @@ export function listHealthDocuments(limit = 50) {
       )
       .all() as any[]
   )
-    .filter((row) => {
-      if (row.kind !== "imaging") return true;
-      try {
-        const study = row.parsed_json ? JSON.parse(row.parsed_json)?.imaging_study : null;
-        return !study?.provenance?.record_status || study.provenance.record_status === "current";
-      } catch {
-        return true;
-      }
-    })
+    .filter(isCurrentHealthDocRow)
     .slice(0, limit)
     .map(publicHealthDoc);
+}
+
+/**
+ * Is this stored row a current record? Every row is, except an imaging study a later
+ * correction or merge superseded (its `record_status` is no longer "current"). Reads the
+ * raw `parsed_json` column, so a light SELECT needs it only for `kind = 'imaging'` rows.
+ */
+export function isCurrentHealthDocRow(row: { kind?: unknown; parsed_json?: unknown }): boolean {
+  if (row.kind !== "imaging") return true;
+  try {
+    const study = row.parsed_json ? JSON.parse(String(row.parsed_json))?.imaging_study : null;
+    return !study?.provenance?.record_status || study.provenance.record_status === "current";
+  } catch {
+    return true;
+  }
 }
 
 // The single source of truth for "newest health document date" — the effective
