@@ -206,7 +206,9 @@ test("Train, Horizon, Ask, Settings and the week menu preload their closure and 
   const HORIZON = ["/js/bundle-18-glance.js", "/js/bundle-20-journey.js", "/js/bundle-09-horizon.js", "/css/horizon.css"];
   const cases = {
     "/app/today/menu": ["/js/bundle-13-meals.js"],
-    "/APP/Train": TRAIN,
+    // Train's deeper leaves start only the shell's reads; its landing is below.
+    "/app/train/trend": TRAIN,
+    "/app/train/sessions": TRAIN,
     "/app/horizon": HORIZON,
     "/app/horizon/race": HORIZON,
     // Fuel is the lazy fuel bundle's; Ask's chat composer mounts the food composer, so it
@@ -233,6 +235,27 @@ test("Train, Horizon, Ask, Settings and the week menu preload their closure and 
       [...SHELL_EARLY_READS, "/profile"].map((p) => `/api${p}`),
       pathname
     );
+  }
+  // Train's landing (/app/train, /app/train/week) starts its one fan-in — the week, the
+  // look-ahead and the next session's detail — beside the shell's reads.
+  for (const pathname of ["/APP/Train", "/app/train/week"]) {
+    const landing = runBoot({ pathname });
+    assert.deepEqual(
+      landing.links.map((l) => l.href),
+      TRAIN,
+      pathname
+    );
+    assert.deepEqual(
+      landing.calls,
+      [...SHELL_EARLY_READS, "/train-home?view=week&date=2026-09-26", "/profile"].map((p) => `/api${p}`),
+      pathname
+    );
+  }
+  // An endurance athlete's Train lands on Endurance: a remembered profile saying so skips it.
+  const now = Date.UTC(2026, 8, 26, 12);
+  for (const [discipline, asked] of [["endurance", false], ["hybrid", true], ["strength", true]]) {
+    const { calls } = runBoot({ pathname: "/app/train", now, profileRow: { data: { primary_discipline: discipline }, ts: now - 60_000 } });
+    assert.equal(calls.includes("/api/train-home?view=week&date=2026-09-26"), asked, discipline);
   }
   const program = runBoot({ pathname: "/app/train/program" });
   assert.deepEqual(
@@ -387,6 +410,7 @@ test("the early reads are the ones the boot and each lazy view always ask for", 
     "horizon:goal",
     "plan:edit",
     "progress:program",
+    "progress:week",
     "stand",
     "stand:markers",
     "stand:records",
@@ -401,6 +425,12 @@ test("the early reads are the ones the boot and each lazy view always ask for", 
       read("src/client/progress-program-controller.ts")
     )?.[0] || "";
   assert.match(program, /CairnTrainFanIn\.prime\("program"\)[\s\S]*?deps\s*\.api\("\/coaching-focus"\)/);
+  // Train's landing primes the same fan-in for "week" on every entry, before its reads ask —
+  // unless the athlete's Train lands on Endurance instead (defaultProgressSeg).
+  assert.deepEqual(VIEW_EARLY_READS["progress:week"], [["/train-home?view=week&date={date}", "profile", 0, "endurance"]]);
+  const landing = /async function renderTrainWeek\(\)[\s\S]*?\n\}\n/.exec(read("src/client/train-week-client.ts"))?.[0] || "";
+  assert.match(landing, /CairnTrainFanIn\.prime\("week"\)[\s\S]*?cachedApi<string>\(entry\[0\]/);
+  assert.match(read("src/client/app/tabs.ts"), /return isEndurance\(\) \? "endurance" : "week";/);
   // Horizon › Goal line primes the same fan-in for "goal" before its four reads.
   assert.deepEqual(VIEW_EARLY_READS["horizon:goal"], ["/train-home?view=goal&date={date}"]);
   const goal =

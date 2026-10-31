@@ -3,8 +3,9 @@ import { trainHomeResponses, youHealthResponses } from "./screen-responses.js";
 
 export const screensRouter = Router();
 
-// Train in ONE request (routes/screen-responses.ts): `?view=overview|program|endurance`
-// picks the screen (`goal` serves Horizon's goal line, `fuel` Train › Intake with `?hour=`),
+// Train in ONE request (routes/screen-responses.ts): `?view=week|overview|program|endurance`
+// picks the screen (`week` is the landing, with the next session's day detail; `goal` serves
+// Horizon's goal line, `fuel` Train › Intake with `?hour=`),
 // `?date=` is the device's local day its dated reads are keyed by.
 // `responses` is keyed by the path each individual route answers, with that route's
 // exact body — every one of those routes still stands on its own. Not memoized: the

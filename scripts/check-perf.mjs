@@ -323,6 +323,8 @@ async function measureLoad(cdp, page, base, route) {
       dupes,
       dupeUrls,
       cls: +perf.cls.toFixed(4),
+      // [ms since navigation, value] per layout shift: where a route's cls came from (--json).
+      shifts: perf.shifts,
       js: bytesOf("Script"),
       css: bytesOf("Stylesheet"),
       skeleton: perf.ready == null ? ["never ready", ...perf.skeleton] : perf.skeleton,

@@ -219,6 +219,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/progress-overview-snapshot-client.ts", output: "public/js/progress-overview-snapshot-client.js" },
   { source: "src/client/train-focus-card-client.ts", output: "public/js/train-focus-card-client.js" },
   { source: "src/client/progress-overview-client.ts", output: "public/js/progress-overview-client.js" },
+  { source: "src/client/train-week-frame-client.ts", output: "public/js/train-week-frame-client.js" },
   { source: "src/client/train-week-client.ts", output: "public/js/train-week-client.js" },
   // v2 wave 5 slots (stream A pre-registered them; B fills You, the stack, the stone detail).
   { source: "src/client/cairn-stack-model.ts", output: "public/js/cairn-stack-model.js" },
@@ -863,6 +864,7 @@ export const BUNDLES = [
       "public/js/train-focus-card-client.js",
       "public/js/progress-overview-client.js",
       // Train's landing, This week: the next session, the week's days, next week (over the glance rows).
+      "public/js/train-week-frame-client.js",
       "public/js/train-week-client.js",
       "public/js/progress-volume-route-client.js",
       "public/js/progress-intake-log-client.js",

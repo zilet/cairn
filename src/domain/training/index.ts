@@ -50,6 +50,7 @@ export * from "./plan-week.js";
 export * from "./week-read.js";
 export * from "./plan-look-ahead.js";
 export * from "./day-detail.js";
+export * from "./train-week-next.js";
 export * from "../../repo/training-symptoms.js";
 export { setTrainingDrive, revertTrainingStance } from "./training-drive.js";
 export { acceptPushOffer, dismissPushOffer, offerPushStanceIfEarned } from "./push-offer.js";

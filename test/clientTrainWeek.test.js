@@ -7,6 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHost, flush, loadClientModule, renderHtml } from "./_dom.mjs";
+import { trainWeekNextDate } from "../dist/domain/training/train-week-next.js";
 
 const TODAY = "2026-10-21"; // a Wednesday
 
@@ -141,6 +142,7 @@ const MODULES = [
   "day-glance-view",
   "program-week-model",
   "program-week-client",
+  "train-week-frame-client",
   "train-week-client",
 ];
 
@@ -317,6 +319,11 @@ test("renderTrainWeek paints from the cache at once, fills the next day's detail
   assert.equal(win.view.querySelector(".segwrap").getAttribute("data-active"), "week");
   assert.equal(win.view.querySelectorAll("[data-twk-days] .pahead-day").length, 7);
   assert.ok(win.view.querySelector("[data-train-deeper-slot]"), "the landing's deeper rows (Progress first) have their slot");
+  assert.equal(win.view.querySelector("[data-train-deeper-slot]").hasAttribute("hidden"), false, "held, the landing paints whole at once");
+  assert.ok(
+    !calls.some((c) => c[0] === "cachedApi" && String(c[1]).startsWith("/plan/day-detail")),
+    "the detail is asked once the week lands, riding its fan-in"
+  );
   await done;
   await flush();
   assert.ok(calls.some((c) => c[0] === "cachedApi" && c[1] === "/plan/week" && c[2] === "plan:week"), "the week Today's strip reads");
@@ -331,6 +338,95 @@ test("renderTrainWeek paints from the cache at once, fills the next day's detail
     calls.filter((c) => c[0] === "openSession").map((c) => [...c]),
     [["openSession", TODAY, "adaptive_plan", "train_week"]]
   );
+});
+
+test("the fan-in's next day is the day the landing opens up, so its detail rides the same round", () => {
+  const W = load().CairnTrainWeek;
+  const liftInRunOpen = planWeek({
+    days: planWeek().days.map((d) =>
+      d.date === TODAY
+        ? { ...d, status: "done", session: { id: 3, title: "Upper back & arms", date: TODAY, finished: true }, run: run("easy", "Easy run", 5, "open", TODAY) }
+        : d
+    ),
+  });
+  const restedRun = planWeek({
+    days: finishedToday().days.map((d) => (d.date === "2026-10-22" ? { ...d, plan_day: null, run: { ...d.run, rested: true } } : d)),
+  });
+  // Everything from today on is done or rest: next week's Monday, off the look-ahead.
+  const weekDone = planWeek({ days: planWeek().days.map((d) => (d.date >= TODAY ? { ...d, plan_day: null, run: null, session: null, status: "rest" } : d)) });
+  const cases = [
+    [planWeek(), lookAhead()],
+    [finishedToday(), lookAhead()],
+    [liftInRunOpen, lookAhead()],
+    [restedRun, lookAhead()],
+    [weekDone, lookAhead()],
+    [weekDone, null],
+    [null, lookAhead()],
+    [planWeek({ days: [] }), lookAhead()],
+  ];
+  const seen = new Set();
+  for (const [week, ahead] of cases) {
+    const client = W.nextOf(week, ahead)?.date ?? null;
+    assert.equal(trainWeekNextDate(week, ahead, TODAY), client, JSON.stringify([client]));
+    seen.add(client);
+  }
+  assert.ok(seen.size >= 4, "the cases reach different days, and none");
+});
+
+test("a cold landing paints a skeleton with nothing under it, then the whole landing from ONE fan-in round", async () => {
+  const calls = [];
+  let release;
+  const gate = new Promise((resolve) => (release = resolve));
+  const reads = { "/plan/week": planWeek(), "/plan/look-ahead": lookAhead(), [`/plan/day-detail?date=${TODAY}`]: detailToday };
+  const state = { tab: "progress", progressSeg: "week" };
+  const win = load({
+    state,
+    PROGRESS_SEG: [],
+    PROGRESS_HANDLERS: {},
+    segBar: () => `<nav class="segwrap"></nav>`,
+    wireSeg: () => {},
+    peekCached: () => null,
+    CairnTrainFanIn: { prime: (view) => calls.push(["prime", view]) },
+    cachedApi: (path) => {
+      calls.push(["cachedApi", path]);
+      return gate.then(() => reads[path] ?? null);
+    },
+  });
+  win.view = createHost(win.document);
+  win.headerTitle = createHost(win.document, { tag: "h1" });
+  const done = win.renderTrainWeek();
+  assert.ok(win.view.querySelector(".twk-skel .twk-skel-next"), "the skeleton holds the next session's card");
+  assert.equal(win.view.querySelectorAll(".pahead-skel-row").length, 7, "…over the week's seven rows");
+  assert.equal(win.view.querySelector("[data-twk-next]"), null);
+  assert.ok(win.view.querySelector("[data-train-deeper-slot]").hasAttribute("hidden"), "the deeper rows wait under the skeleton");
+  assert.deepEqual(calls.map((c) => [...c]), [["prime", "week"], ["cachedApi", "/plan/week"], ["cachedApi", "/plan/look-ahead"]], "the fan-in is primed before any read asks; the detail waits for the week");
+  release();
+  await done;
+  await flush();
+  assert.ok(calls.some((c) => c[1] === `/plan/day-detail?date=${TODAY}`), "the next day's detail is asked once the week names it");
+  assert.equal(win.view.querySelector(".twk-skel"), null);
+  assert.equal(win.view.querySelector("[data-train-deeper-slot]").hasAttribute("hidden"), false);
+  assert.equal(win.view.querySelectorAll("[data-twk-days] .pahead-day").length, 7);
+  assert.equal(win.view.querySelectorAll(".twk-ex").length, 2);
+});
+
+test("a cold landing whose reads both failed says so in place of the skeleton", async () => {
+  const state = { tab: "progress", progressSeg: "week" };
+  const win = load({
+    state,
+    PROGRESS_SEG: [],
+    PROGRESS_HANDLERS: {},
+    segBar: () => `<nav class="segwrap"></nav>`,
+    wireSeg: () => {},
+    peekCached: () => null,
+    cachedApi: () => Promise.reject(new Error("offline")),
+  });
+  win.view = createHost(win.document);
+  win.headerTitle = createHost(win.document, { tag: "h1" });
+  await win.renderTrainWeek();
+  await flush();
+  assert.equal(win.view.querySelector(".twk-skel"), null);
+  assert.match(win.view.querySelector("[data-twk-days]").textContent, /couldn't be read just now/);
 });
 
 test("a landing the athlete has left is never painted over", async () => {

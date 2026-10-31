@@ -1596,9 +1596,11 @@ declare global {
   declare const CairnHealthFanIn: { prime(seg: unknown): void; leafOf(seg: unknown): string };
   // Train's screen fan-in (train-fan-in-client.ts): one GET /train-home primes a view's reads.
   declare const CairnTrainFanIn: {
-    prime(view: "overview" | "program" | "endurance" | "goal", paths?: readonly string[]): void;
-    pathsFor(view: "overview" | "program" | "endurance" | "goal", date: string): string[];
+    prime(view: "overview" | "week" | "program" | "endurance" | "goal", paths?: readonly string[]): void;
+    pathsFor(view: "overview" | "week" | "program" | "endurance" | "goal", date: string): string[];
   };
+  // Train's landing frame (train-week-frame-client.ts): the slots, or the skeleton with the deeper rows hidden.
+  declare const CairnTrainWeekFrame: { frameHtml(held: boolean): string; slotsHtml(): string };
   // Every api() failure: `kind` says whether Cairn answered (http, invalid_json)
   // or could not be reached (network, timeout). See api-cache.ts.
   class CairnApiError extends Error {

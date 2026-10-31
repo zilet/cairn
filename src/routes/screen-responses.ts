@@ -26,6 +26,7 @@ import {
 import { getCoachingFocus, listVisibleInsights } from "../domain/brain/index.js";
 import { listSupplements } from "../domain/person/index.js";
 import {
+  dayDetail,
   getActiveBlock,
   getEnduranceGoal,
   getEndurancePRs,
@@ -36,6 +37,7 @@ import {
   muscleLoadPayload,
   performanceStanding,
   planLookAhead,
+  planWeek,
   programAdjustments,
   programBalance,
   raceBuild,
@@ -43,6 +45,7 @@ import {
   strengthJourneyRead,
   testWeekDue,
   trainingLoadBand,
+  trainWeekNextDate,
   weeklyRunPlan,
 } from "../domain/training/index.js";
 import { dexaTargeting } from "../domain/health/index.js";
@@ -79,7 +82,7 @@ function screenDate(dateQuery: unknown): string {
   return todayDateParam(dateQuery);
 }
 
-export const TRAIN_HOME_VIEWS = ["overview", "program", "endurance", "goal", "fuel"] as const;
+export const TRAIN_HOME_VIEWS = ["overview", "week", "program", "endurance", "goal", "fuel"] as const;
 export type TrainHomeView = (typeof TRAIN_HOME_VIEWS)[number];
 
 function trainView(value: unknown): TrainHomeView {
@@ -93,7 +96,8 @@ function screenHour(hourQuery: unknown): number | null {
 }
 
 /**
- * Train in one request: `view=overview` (the Train home's twelve reads), `program`
+ * Train in one request: `view=week` (Train's landing, This week: the week, the look-ahead
+ * and the next session's day detail), `view=overview` (the Progress leaf's reads), `program`
  * (Program's state, anchors, performance, block, adjustments, test week, trajectory,
  * DEXA targeting) or `endurance` (the Endurance screen's week). Two screens that grew
  * out of Train's reads ride the same fan-in: `goal` (Horizon -> Goal line: the journey
@@ -112,6 +116,18 @@ export function trainHomeResponses(viewQuery: unknown, dateQuery: unknown, hourQ
     put(out, "/journey/milestones", () => journeyMilestones(undefined));
     put(out, "/journey/timeline", () => forwardTimeline(undefined));
     put(out, `/today-path?date=${q(date)}`, () => todayPath(date));
+    return out;
+  }
+  if (view === "week") {
+    // The landing's three reads in one round: the next session's day (the card's movements)
+    // is the server's reading of the same two bodies the client picks it from, so its detail
+    // rides along instead of waiting for them (train-week-next.ts).
+    let week: ReturnType<typeof planWeek> | null = null;
+    let ahead: ReturnType<typeof planLookAhead> | null = null;
+    put(out, "/plan/week", () => (week = planWeek()));
+    put(out, "/plan/look-ahead", () => (ahead = planLookAhead()));
+    const next = trainWeekNextDate(week, ahead, date);
+    if (next) put(out, `/plan/day-detail?date=${q(next)}`, () => dayDetail(next));
     return out;
   }
   if (view === "fuel") {

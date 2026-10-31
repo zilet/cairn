@@ -1,5 +1,5 @@
 // @ts-check
-// Train in one request. Each Train screen (the home, Program, Endurance — and Horizon's
+// Train in one request. Each Train screen (the landing, the home, Program, Endurance — and Horizon's
 // goal line, whose cards grew out of the Train home's journey reads) asks for its
 // reads by their own paths, as it always has; this primes the request layer with ONE
 // GET /train-home?view=… whose `responses` carry every one of those bodies, keyed by
@@ -8,7 +8,7 @@
 // goes straight to its last-known paint (api-reach.ts). Any write clears every prime.
 // Asked once per open: the same view's same reads asked again inside a few seconds (a
 // repaint, the SWR refresh behind it) ride the first, like the Health fan-in.
-type TrainFanInView = "overview" | "program" | "endurance" | "goal";
+type TrainFanInView = "overview" | "week" | "program" | "endurance" | "goal";
 
 (() => {
   const REUSE_MS = 3000;
@@ -16,6 +16,9 @@ type TrainFanInView = "overview" | "program" | "endurance" | "goal";
 
   function pathsFor(view: TrainFanInView, date: string): string[] {
     const q = encodeURIComponent;
+    // Train's landing (train-week-client.ts): the week and the look-ahead. The server adds
+    // the next session's /plan/day-detail?date=… itself — the date is read off these two.
+    if (view === "week") return ["/plan/week", "/plan/look-ahead"];
     if (view === "program") {
       return [
         "/coaching-focus", "/program-state", "/strength-journeys", "/strength-journey", "/performance",

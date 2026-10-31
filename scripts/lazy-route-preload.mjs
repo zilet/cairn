@@ -42,6 +42,11 @@ export const VIEW_EARLY_READS = {
   "stand:records": ["/you-health?leaf=records"],
   "stand:markers": ["/you-health?leaf=markers"],
   "stand:share": ["/you-health?leaf=share"],
+  // Train's landing, This week (/app/train and /app/train/week): renderTrainWeek primes
+  // CairnTrainFanIn("week") on every entry. An endurance athlete's Train lands on
+  // Endurance instead (defaultProgressSeg), so a `[path, swrKey, 0, discipline]` entry is
+  // started unless the stored profile row's primary_discipline is that discipline.
+  "progress:week": [["/train-home?view=week&date={date}", "profile", 0, "endurance"]],
   // Train › Program: renderProgressProgram primes CairnTrainFanIn("program") first.
   "progress:program": ["/train-home?view=program&date={date}"],
   // Horizon › Goal line: renderHorizonGoal primes CairnTrainFanIn("goal") first.
@@ -59,6 +64,10 @@ export const VIEW_EARLY_READS = {
 // finish them before Intake's own read starts and make them a separate, earlier serial
 // round for nothing (they start together once the shell has run, as they always did).
 export const NO_EARLY_READS = new Set(["progress:intake"]);
+
+// The section a view's bare path lands on, where its early reads differ from the view's
+// other sections: /app/train is Train's landing, This week (tabs.ts defaultProgressSeg).
+export const VIEW_LANDINGS = { progress: "week" };
 
 export const LAZY_ROUTES_MARKER = /\/\*cairn:lazy-routes\*\/[\s\S]*?\/\*end\*\//;
 
@@ -170,8 +179,9 @@ export function lazyRoutePreloadTable(root, bundles) {
   const readsFor = (segments, lazy) => {
     if (!lazy) return null; // an eager destination paints without waiting on a bundle
     const route = routes.parseRoute(routeUrl(segments));
-    if (NO_EARLY_READS.has(`${route.tab}:${route.section}`)) return null;
-    const own = VIEW_EARLY_READS[`${route.tab}:${route.section}`] || VIEW_EARLY_READS[route.tab] || [];
+    const section = route.section ?? VIEW_LANDINGS[route.tab] ?? null;
+    if (NO_EARLY_READS.has(`${route.tab}:${section}`)) return null;
+    const own = VIEW_EARLY_READS[`${route.tab}:${section}`] || VIEW_EARLY_READS[route.tab] || [];
     const reads = [...SHELL_EARLY_READS, ...own];
     const at = q.findIndex((list) => JSON.stringify(list) === JSON.stringify(reads));
     if (at >= 0) return at;

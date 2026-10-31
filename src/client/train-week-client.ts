@@ -8,12 +8,16 @@
 // opens its day page through the app's one `data-open-day` opener. Where the training
 // stands (focus, the muscle map, what moved) is the Progress leaf, one row deeper.
 //
-// Three reads already owned elsewhere, no new endpoint: GET /api/plan/week (the week
-// Today's strip reads, so a warm Today means a warm Train), GET /api/plan/look-ahead
-// (Program's week ahead: each day's key lifts and next week), and GET
-// /api/plan/day-detail for the next session's day. Each paints from the SWR cache first
-// and repaints a slot only when its markup changed. Nothing here decides a lift, a run
-// or a rest: the reads own them, and every row is the day view's ROW variant
+// Three reads already owned elsewhere: GET /api/plan/week (the week Today's strip
+// reads, so a warm Today means a warm Train), GET /api/plan/look-ahead (Program's week
+// ahead: each day's key lifts and next week), and GET /api/plan/day-detail for the next
+// session's day — all three in ONE round, the /train-home?view=week fan-in
+// (train-fan-in-client.ts), which carries the next day's detail too; index.html's
+// inline script starts it on a cold deep link. Each paints from the SWR cache first
+// and repaints a slot only when its markup changed. A cold open paints a skeleton with
+// nothing under it, then the whole landing at once (the frame: train-week-frame-client.ts).
+// Nothing here decides a lift, a run or a rest: the reads own them, and every row is
+// the day view's ROW variant
 // (CairnDayGlanceView.rowHtml), the same component Program's week ahead draws.
 //
 // LAZY ("train" bundle; depends on day-view → glance). Every caller string goes
@@ -256,31 +260,23 @@ function twkNextWeekHtml(ahead: TwkAhead | null): string {
     <ol class="pahead-days" aria-label="Next week, day by day">${rows}</ol>`;
 }
 
-function twkSkeletonHtml(): string {
-  const rows = Array.from({ length: 7 }, () => `<div class="hshimmer pahead-skel-row"></div>`).join("");
-  return `<div class="pahead-skel" aria-busy="true" aria-label="This week"><div class="hshimmer pahead-skel-k"></div>${rows}</div>`;
-}
-
-/** The frame: the group bar, the three slots and the landing's deeper rows (Progress first). */
-function twkFrameHtml(): string {
-  return `${segBar("week", PROGRESS_SEG)}<section class="twk" aria-label="This week" data-twk>
-    <div class="twk-next-slot" data-twk-next></div>
-    <div data-twk-days>${twkSkeletonHtml()}</div>
-    <details class="twk-fold" data-twk-ahead hidden></details>
-  </section><div data-train-deeper-slot></div>`;
-}
-
 /** The view's paint over whatever has landed: each slot rewritten only on a change. */
 function twkPaint(reads: { week: TwkWeek | null; ahead: TwkAhead | null; detail: TwkDetail | null }, loaded: boolean): void {
   const root = view.querySelector<HTMLElement>("[data-twk]");
   if (!root) return;
   const { week, ahead } = reads;
+  if (!week && !ahead && !loaded) return;
+  // The skeleton gives way to the whole landing in one paint, the deeper rows with it.
+  if (!root.querySelector("[data-twk-next]")) {
+    root.innerHTML = CairnTrainWeekFrame.slotsHtml();
+    view.querySelector<HTMLElement>("[data-train-deeper-slot]")?.removeAttribute("hidden");
+  }
   const set = (sel: string, html: string): void => {
     const el = root.querySelector<HTMLElement>(sel);
     if (el && el.innerHTML !== html) el.innerHTML = html;
   };
   if (!week && !ahead) {
-    if (loaded) set("[data-twk-days]", `<p class="pahead-empty" role="status">This week couldn't be read just now.</p>`);
+    set("[data-twk-days]", `<p class="pahead-empty" role="status">This week couldn't be read just now.</p>`);
     return;
   }
   const today = twkToday(week, ahead);
@@ -320,34 +316,50 @@ function twkWire(root: HTMLElement): void {
   });
 }
 
+/** The next day's detail, keyed by its date on the wire and in the SWR tier alike. */
+function twkDetailRead(date: string): readonly [string, string] {
+  return [`/plan/day-detail?date=${encodeURIComponent(date)}`, `plan:day-detail:${date}`];
+}
+
 /**
- * The landing. Paints the frame at once (rows from the cache when Today or Program read
- * the week moments ago), then revalidates both week reads and the next day's detail;
- * guarded against painting over a view the athlete has left.
+ * The landing. Paints the frame at once — the whole landing from the cache when Today
+ * or Program read the week moments ago, else the skeleton — then revalidates both week
+ * reads and the next day's detail in ONE fan-in round; guarded against painting over a
+ * view the athlete has left.
  */
 async function renderTrainWeek(): Promise<void> {
   headerTitle.textContent = "Train";
   state.progressSeg = "week";
   const token = ++twkToken;
   const current = (): boolean => token === twkToken && state.tab === "progress" && state.progressSeg === "week";
-  view.innerHTML = twkFrameHtml();
-  wireSeg(PROGRESS_HANDLERS);
-  const root = view.querySelector<HTMLElement>("[data-twk]");
-  if (root) twkWire(root);
   const reads = {
     week: twkFresh(twkRecord<TwkWeek>(peekCached(TWK_WEEK[1])?.data)),
     ahead: twkFresh(twkRecord<TwkAhead>(peekCached(TWK_AHEAD[1])?.data)),
     detail: null as TwkDetail | null,
   };
+  const held = !!(reads.week || reads.ahead);
+  const heldNext = held ? twkNextOf(reads.week, reads.ahead) : null;
+  if (heldNext) reads.detail = twkRecord<TwkDetail>(peekCached(twkDetailRead(heldNext.date)[1])?.data);
+  view.innerHTML = CairnTrainWeekFrame.frameHtml(held);
+  wireSeg(PROGRESS_HANDLERS);
+  const root = view.querySelector<HTMLElement>("[data-twk]");
+  if (root) twkWire(root);
+  if (held) twkPaint(reads, false);
+  // ONE fan-in answers all three reads, on every entry (index.html's inline script starts it
+  // on a cold link): the next day's detail rides for the day the server reads off the same
+  // two bodies.
+  if (typeof CairnTrainFanIn !== "undefined") CairnTrainFanIn.prime("week");
   let detailFor = "";
+  // Asked only once a week read has landed, so it rides the fan-in that carried it; a day
+  // the fan-in did not carry asks for itself.
   const loadDetail = (): void => {
     const next = twkNextOf(reads.week, reads.ahead);
     if (!next || next.date === detailFor) return;
     detailFor = next.date;
-    const key = `plan:day-detail:${next.date}`;
-    const held = twkRecord<TwkDetail>(peekCached(key)?.data);
-    if (held) reads.detail = held;
-    cachedApi<string>(`/plan/day-detail?date=${encodeURIComponent(next.date)}`, { key })
+    const [path, key] = twkDetailRead(next.date);
+    const kept = twkRecord<TwkDetail>(peekCached(key)?.data);
+    if (kept) reads.detail = kept;
+    cachedApi<string>(path, { key })
       .then((value) => {
         const detail = twkRecord<TwkDetail>(value);
         if (!current() || !detail || detail.date !== detailFor) return;
@@ -356,10 +368,6 @@ async function renderTrainWeek(): Promise<void> {
       })
       .catch(() => {});
   };
-  if (reads.week || reads.ahead) {
-    loadDetail();
-    twkPaint(reads, false);
-  }
   const land = (which: "week" | "ahead", value: unknown): void => {
     if (!current()) return;
     if (which === "week") reads.week = twkRecord<TwkWeek>(value) || reads.week;

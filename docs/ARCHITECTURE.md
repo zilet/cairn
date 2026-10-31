@@ -6893,8 +6893,11 @@ guard is a no-op, exactly as before.
 - **Fan-ins** (`src/routes/today-responses.ts`, `src/routes/screen-responses.ts`):
   `/today?surface=today` carries `responses` — the exact body of every other GET a Today
   open makes, keyed by path — and `/today?surface=session` (Session), `/horizon-race?dates=`
-  (Horizon → Race), `/train-home?view=overview|program|endurance` (Train) and
+  (Horizon → Race), `/train-home?view=week|overview|program|endurance` (Train) and
   `/you-health?leaf=health|records|markers|share` (You → Health) do the same for theirs.
+  `view=week` (Train's landing) also carries `/plan/day-detail?date=` for the next session,
+  the day `trainWeekNextDate` (`src/domain/training/train-week-next.ts`) reads off the same
+  week and look-ahead the client picks it from — so the card's movements never wait a round.
   The client primes its request layer with them (`apiPrime`, `api-cache.ts` /
   `api-core.ts`; `today-prefetch.ts`, `train-fan-in-client.ts`, `stand-screen.ts`), so
   every loader keeps asking for its own path; primes clear on any write. A new GET on

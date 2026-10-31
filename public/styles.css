@@ -3244,6 +3244,11 @@ button.prow-name:hover{color:var(--accent)}
 .twk-week{display:grid;min-width:0}
 .twk-line{margin:0 0 var(--space-4);font-size:var(--text-sm);color:var(--ink-2);line-height:var(--leading-normal)}
 .pahead-day.is-past.is-done .pahead-lift-t,.pahead-day.is-past.is-done .pahead-run-t{color:var(--ink-2)}
+.twk-skel{display:grid;gap:var(--space-11);min-width:0}
+.twk-skel-next .hshimmer{margin:0}
+.twk-skel-k{width:30%}
+.twk-skel-t{height:24px;width:58%}
+.twk-skel-l{height:20px}
 .twk-fold{min-width:0;border-top:1px solid var(--line)}
 .twk-fold-sum{display:flex;align-items:center;gap:var(--space-4);min-height:44px;list-style:none;cursor:pointer;color:var(--muted);-webkit-tap-highlight-color:transparent}
 .twk-fold-sum::-webkit-details-marker{display:none}

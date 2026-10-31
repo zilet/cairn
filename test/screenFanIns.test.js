@@ -12,6 +12,7 @@ import { api, apiCacheControlFor } from "../dist/api.js";
 import { getAgentConfig } from "../dist/repo/settings.js";
 import { resetResponseMemo } from "../dist/routes/response-memo.js";
 import { localDateISO } from "../dist/repo/shared.js";
+import { trainWeekNextDate } from "../dist/domain/training/train-week-next.js";
 import { repo, isoDaysAgo, seedHealthDoc, marker } from "./_seed.js";
 
 let server = null;
@@ -97,6 +98,15 @@ test("GET /train-home answers each view's reads, each exactly as its own route d
     assert.equal(cc, "private, no-cache");
     await assertMirrorsRoutes(body.responses);
   }
+  // Train's landing: the week, the look-ahead, and the next session's day detail — the day
+  // trainWeekNextDate reads off those same two bodies. Lifting every weekday puts the week
+  // on the calendar, with today's lift still to do.
+  repo.setProfile({ strength_schedule: { days: [0, 1, 2, 3, 4, 5, 6].map((dow) => ({ dow })), source: "athlete", updated_at: date } });
+  const week =await get(`/api/train-home?view=week&date=${date}`);
+  const next = trainWeekNextDate(week.body.responses["/plan/week"], week.body.responses["/plan/look-ahead"], date);
+  assert.ok(next, "the seeded lifting day is still to do");
+  assert.deepEqual(Object.keys(week.body.responses).sort(), ["/plan/look-ahead", "/plan/week", `/plan/day-detail?date=${next}`].sort());
+  await assertMirrorsRoutes(week.body.responses);
   // Fuel without a usable hour asks its ideas without one, exactly as the card would.
   const hourless = await get(`/api/train-home?view=fuel&date=${date}&hour=25`);
   assert.ok(`/fuel/ideas?date=${date}` in hourless.body.responses);
