@@ -383,3 +383,57 @@ test("health records controller saves document date and deletes record", async (
   assert.deepEqual(harness.markerTokens, [11, 11]);
   assert.equal(harness.toasts.at(-1), "Removed");
 });
+
+// A study card standing for a hidden source upload deletes the STUDY it shows. The
+// server takes the source with it only when nothing else was derived from it — the
+// list (capped, superseded studies hidden) is never the judge of "last card".
+test("a study card's delete removes the study on the card, never its hidden source", async () => {
+  const harness = controllerHarness({ pictureCache: { review: null, docCount: 2, newestDocAt: null } });
+  const list = new FakeElement("div", { id: "hlist" });
+  const row = makeDocRow("137");
+  row.dataset.hsource = "136";
+  list.appendChild(row);
+  harness.document.body.appendChild(list);
+
+  harness.context.CairnHealthRecordsController.wireDoc(row, harness.deps);
+  await row.querySelector("[data-hdel]").click();
+  await new Promise((resolve) => setImmediate(resolve));
+  const deletes = harness.requests
+    .filter((request) => request.opts?.method === "DELETE")
+    .map((request) => request.path);
+  assert.deepEqual(deletes, ["/health-docs/137"]);
+  assert.equal(row.parentElement, null);
+});
+
+// A hidden source watched through its study card has no row to repaint in place:
+// a read that FAILS repaints the list too, or the card says "reading" forever.
+test("a hidden source's failed re-read repaints the list", () => {
+  const { context, document } = loadController();
+  const list = new FakeElement("div", { id: "hlist" });
+  const card = makeDocRow("137");
+  card.dataset.hsource = "136";
+  card.dataset.hpoll = "136";
+  list.appendChild(card);
+  document.body.appendChild(list);
+  const polls = [];
+  let loads = 0;
+  const deps = {
+    state: { tab: "stand", standSeg: "records" },
+    pollToken: () => 3,
+    pollEnrichment: (path, id, options) => polls.push({ path, id, options }),
+    loadHealthDocs: async () => {
+      loads += 1;
+      return [];
+    },
+    loadHealthMarkers: () => {},
+    paintHealthPicture: () => {},
+    wireHealthDoc: () => {},
+  };
+  context.CairnHealthDocLifecycleActions.pollDoc(136, deps);
+  assert.equal(polls.length, 1);
+  assert.equal(polls[0].id, 136);
+  polls[0].options.onUpdate({ id: 136, kind: "imaging", enrichment_status: "in_progress" });
+  assert.equal(loads, 0, "still reading: nothing to repaint");
+  polls[0].options.onUpdate({ id: 136, kind: "imaging", enrichment_status: "failed" });
+  assert.equal(loads, 1, "the failed read repaints the list");
+});

@@ -400,7 +400,11 @@ healthDocsRouter.post("/", (req, res, next) => {
 
   // The same report again is the record already on file: no second document, no
   // second ingest. A copy whose earlier read failed gets that read retried instead.
-  const duplicateOf = findDuplicateHealthUpload(pasted ? { text: buf.toString("utf8") } : { bytes: buf });
+  const duplicateOf = findDuplicateHealthUpload({
+    ...(pasted ? { text: buf.toString("utf8") } : { bytes: buf }),
+    kind: b.kind,
+    doc_date: b.doc_date,
+  });
   const existing = duplicateOf != null ? (getHealthDocumentRaw(duplicateOf) as any) : null;
   if (existing) {
     let reanalyzing = false;

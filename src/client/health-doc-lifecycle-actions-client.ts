@@ -75,6 +75,11 @@ function pollLifecycleHealthDoc(id: string | number, deps: ClientHealthDocAction
         deps.loadHealthDocs();
         deps.loadHealthMarkers(deps.pollToken());
         deps.paintHealthPicture();
+      } else if (!el && doc.enrichment_status === "failed") {
+        // A hidden source (watched through its study card's data-hpoll) has no row
+        // to repaint in place: repaint the list so the card stops saying "reading".
+        swrInvalidate("health:records");
+        void deps.loadHealthDocs();
       }
     },
   });
@@ -120,15 +125,12 @@ function startHealthDocDelete(btn: Element, deps: ClientHealthDocActionsControll
   const id = row.dataset.hdoc;
   if (!id) return;
   deps.armDelete(btn, () => {
-    // A study card standing for a hidden source upload: when it is that source's
-    // last card, delete the SOURCE — the study goes with it — so no orphan paste
-    // surfaces as a card of its own on the next paint.
-    const sourceId = row.dataset.hsource;
-    const cards = hdocLifecycleElement("#hlist")?.querySelectorAll(`.hdoc[data-hsource="${sourceId}"]`).length ?? 0;
-    const lastOfSource = !!sourceId && cards <= 1;
-    const target = lastOfSource ? sourceId : id;
+    // Always the record on this card. A study card standing for a hidden source
+    // upload deletes the STUDY; the server removes that source with it once
+    // nothing else was derived from it (deleteEmptyImagingSource), so a record
+    // this list never showed is never deleted from here.
     deps
-      .api(`/health-docs/${target}`, { method: "DELETE" })
+      .api(`/health-docs/${id}`, { method: "DELETE" })
       .then(() => {
         deps.toast("Removed");
         row.remove();

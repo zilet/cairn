@@ -13,6 +13,9 @@ import {
   setHealthDocEnrichStatus,
   updateHealthDocFields,
 } from "./health.js";
+import { imagingSourceFolds, isImagingSourceUpload } from "./imaging-source.js";
+
+export { foldsIntoStudy, imagingSourceFolds, isImagingOnlySource, isImagingSourceUpload } from "./imaging-source.js";
 
 export const IMAGING_SCHEMA_VERSION = 1;
 export const IMAGING_FILE_MIMES = new Set(["application/pdf", "image/jpeg", "image/jpg", "image/png"]);
@@ -719,17 +722,6 @@ export function listImagingStudyFilesRaw(studyId: number): any[] {
   return db
     .prepare(`SELECT * FROM imaging_study_files WHERE health_document_id = ? ORDER BY sequence, id`)
     .all(studyId) as any[];
-}
-
-// An upload whose contents turned out to be an imaging report (a pasted CT
-// report, say) is filed with kind 'imaging' by the ordinary ingest, yet it is not
-// a study: it owns the uploaded file on its own row, no study attachments and no
-// imaging_study of its own — the study it carried is a derived row pointing back
-// at it. It re-reads, deletes and dedupes as the upload it is, never as a study.
-export function isImagingSourceUpload(row: any): boolean {
-  if (!row || row.kind !== "imaging" || !row.file_path) return false;
-  if (parsedImaging(row)) return false;
-  return listImagingStudyFilesRaw(Number(row.id)).length === 0;
 }
 
 export function listImagingPromptFilesRaw(studyId: number): any[] {
@@ -2007,35 +1999,15 @@ export function deleteImagingStudy(
   };
 }
 
-/**
- * True for a source upload whose only output is the imaging studies it produced — a
- * pasted or uploaded radiology report. The health ingest marks it (`imaging_only`), and
- * Records shows it folded into its study card instead of as an empty record of its own.
- */
-export function isImagingOnlySource(row: any): boolean {
-  if (!row || row.kind === "imaging") return false;
-  let parsed: any = row.parsed ?? null;
-  if (!parsed && row.parsed_json) {
-    try {
-      parsed = typeof row.parsed_json === "string" ? JSON.parse(row.parsed_json) : row.parsed_json;
-    } catch {
-      parsed = null;
-    }
-  }
-  if (parsed?.imaging_only !== true) return false;
-  const markers = Array.isArray(parsed.markers) ? parsed.markers : [];
-  const facts = Array.isArray(parsed.clinical_facts) ? parsed.clinical_facts : [];
-  return !markers.length && !facts.length;
-}
-
-// The study card is the only door to an imaging-only source, so deleting the last record
-// it produced removes the source too — never one that still carries markers, facts or
-// another derived record (a superseded study kept for audit included).
+// The study card is the only door to a folded source upload (a pasted report shown
+// through its study), so deleting the last record it produced removes the source too.
+// Never one that carries lab markers, is not an imaging source, or still has another
+// derived record — a superseded study kept for audit included (imaging-source.ts).
 function deleteEmptyImagingSource(sourceId: unknown): number {
   const id = Number(sourceId);
   if (!Number.isInteger(id) || id <= 0) return 0;
   const source = getHealthDocumentRaw(id) as any;
-  if (!isImagingOnlySource(source)) return 0;
+  if (!imagingSourceFolds(source)) return 0;
   if (db.prepare("SELECT 1 FROM health_documents WHERE source_doc_id=? LIMIT 1").get(id)) return 0;
   try {
     return Number((deleteHealthDocument(id) as any)?.deleted ?? 0);

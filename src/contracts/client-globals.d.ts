@@ -1140,8 +1140,8 @@ declare global {
 
   // The source upload an imaging study was read out of. When `sourceHidden`, the
   // source renders no card of its own: the study card carries its file link, its
-  // re-analyze and its reading state, and deleting the source's last study card
-  // deletes the source with it.
+  // re-analyze and its reading state; deleting the study removes the source with it
+  // on the server once nothing else was derived from it.
   type ClientImagingCardOptions = {
     source?: ClientHealthDocument | null;
     sourceHidden?: boolean;

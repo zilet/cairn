@@ -67,6 +67,8 @@ const PASTE = {
   enrichment_status: "done",
   summary: "CT coronary calcium score",
   parsed: { clinical_facts: [{ text: "Calcium score 0" }] },
+  // What GET /health-docs says of a pasted CT whose only derived row is its study.
+  folds_into_study: true,
 };
 const STUDY = {
   id: 137,
@@ -173,6 +175,37 @@ test("the paste folds into its study's card, which carries its file, re-analyze 
   const mixed = CairnHealthRecords.recordsListHtml([exportDoc, derivedStudy, panel]);
   assert.match(mixed, /data-hdoc="50"/);
   assert.doesNotMatch(mixed, /data-hsource="50"/);
+});
+
+// The API strips parsed_json and sends `parsed`. A lab upload with markers and a CT
+// read out of it is two cards, and the lab card shows its markers.
+test("an API-shaped lab source with a derived CT keeps its card and its markers", () => {
+  const { CairnHealthRecords, CairnHealthDocs } = load();
+  const lab = {
+    id: 60,
+    kind: "bloodwork",
+    doc_date: "2026-10-30",
+    has_file: true,
+    enrichment_status: "done",
+    summary: "Lipid panel",
+    parsed: {
+      markers: [
+        { name: "ApoB", value: 92, unit: "mg/dL", flag: "high" },
+        { name: "LDL-C", value: 0, unit: "mg/dL", flag: "normal" },
+      ],
+    },
+  };
+  const ct = { ...STUDY, id: 61, source_doc_id: 60 };
+  const html = CairnHealthRecords.recordsListHtml([lab, ct]);
+  assert.match(html, /data-hdoc="60"/, "the lab source is its own card");
+  assert.doesNotMatch(html, /data-hsource="60"/);
+  assert.match(html, /<td class="hm-name">ApoB<\/td>/);
+  assert.match(html, /2 markers · 1 flagged/);
+  assert.equal(CairnHealthDocs.parsedDoc(lab).markers.length, 2);
+  assert.equal(
+    CairnHealthDocs.parsedDoc({ parsed_json: JSON.stringify({ markers: [{ name: "A" }] }) }).markers.length,
+    1
+  );
 });
 
 test("imaging studies interleave with every record by date, newest first", () => {

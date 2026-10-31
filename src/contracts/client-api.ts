@@ -3241,6 +3241,8 @@ export interface ClientHealthDocument {
   /** POST /health-docs: the upload matched this record's content exactly; nothing new was written. */
   duplicate_of?: number | null;
   reanalyzing?: boolean;
+  /** A source upload Records shows through its imaging study card (decided server-side). */
+  folds_into_study?: boolean;
   parsed_json?: unknown;
   parsed?: ClientHealthDocumentParsed | null;
   study_files?: ClientImagingStudyFile[];

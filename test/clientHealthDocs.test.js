@@ -136,3 +136,29 @@ test("a deterministically-read import says so instead of claiming it was analyze
   assert.match(docs.healthDocInner(analyzed), /✦ analyzed/);
   assert.doesNotMatch(docs.healthDocInner(analyzed), /read from data/);
 });
+
+// GET /health-docs strips parsed_json and sends `parsed` (publicHealthDoc). The card
+// must read that shape, or a lab record shows no markers and no teaser at all.
+test("an API-shaped row (parsed, no parsed_json) renders its markers", () => {
+  const docs = loadHealthDocs();
+  const row = {
+    id: 21,
+    kind: "bloodwork",
+    doc_date: "2026-06-01",
+    has_file: true,
+    enrichment_status: "done",
+    parsed: {
+      markers: [
+        { name: "ApoB", value: 92, unit: "mg/dL", flag: "high" },
+        { name: "HbA1c", value: 5.2, unit: "%", flag: "normal" },
+      ],
+    },
+  };
+  assert.equal(row.parsed_json, undefined);
+  const inner = docs.healthDocInner(row);
+  assert.match(inner, /<td class="hm-name">ApoB<\/td>/);
+  assert.match(inner, /92 mg\/dL/);
+  assert.match(inner, /2 markers · 1 flagged/);
+  assert.equal(docs.docCollapsible(row), true, "a summary-less lab with markers still collapses");
+  assert.equal(docs.parsedDoc(row).markers.length, 2);
+});

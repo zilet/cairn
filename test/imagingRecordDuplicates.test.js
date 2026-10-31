@@ -11,7 +11,7 @@ import path from "node:path";
 import { db, repo, resetTables } from "./_seed.js";
 import { UPLOADS_DIR } from "../dist/uploadPaths.js";
 import { healthDocsRouter } from "../dist/routes/health-docs.js";
-import { findDuplicateHealthUpload } from "../dist/repo/health-upload-duplicate.js";
+import { findDuplicateHealthUpload, MIN_DUPLICATE_TEXT_CHARS } from "../dist/repo/health-upload-duplicate.js";
 import { dedupeHealthDocuments } from "../dist/repo/health-dedupe.js";
 
 beforeEach(() => {
@@ -21,7 +21,9 @@ beforeEach(() => {
 
 const REPORT = `EXAM: CT CARDIAC CALCIUM SCORING
 DATE: 2026-10-28
-FINDINGS: Total Agatston score 0.
+HISTORY: Screening. No known coronary disease.
+TECHNIQUE: Non-contrast ECG-gated CT of the heart.
+FINDINGS: Total Agatston score 0. No coronary artery calcium in the LM, LAD, LCx or RCA.
 IMPRESSION: Calcium score 0, very low risk (CAC-DRS A0).`;
 
 function call(method, routePath, req) {
@@ -193,4 +195,291 @@ test("a study the athlete corrected is never folded away", () => {
   second.provenance.extraction = "corrected";
   repo.updateHealthDocFields(b.study.id, { parsed_json: { imaging_study: second } });
   assert.equal(dedupeHealthDocuments({ dryRun: true }).merged, 0);
+});
+
+// ---- What a re-paste may and may not call "already on file" ----
+
+test("a short reading pasted again is a new reading, never already on file", async () => {
+  assert.ok(REPORT.replace(/\s+/g, " ").trim().length >= MIN_DUPLICATE_TEXT_CHARS, "the CT fixture is report-sized");
+  const first = await call("post", "/", { body: { text: "BP 120/80" } });
+  const again = await call("post", "/", { body: { text: "BP 120/80" } });
+  assert.equal(again.body.duplicate_of, undefined);
+  assert.notEqual(again.body.id, first.body.id);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM health_documents").get().n, 2);
+  assert.equal(findDuplicateHealthUpload({ text: "BP 120/80" }), null);
+});
+
+test("a re-paste that states another date or kind is another record", async () => {
+  const first = await call("post", "/", { body: { text: REPORT, doc_date: "2026-10-28" } });
+  const sameDay = await call("post", "/", { body: { text: REPORT, doc_date: "2026-10-28" } });
+  assert.equal(sameDay.body.duplicate_of, first.body.id, "the same report on the same date is on file");
+
+  const otherDay = await call("post", "/", { body: { text: REPORT, doc_date: "2026-11-04" } });
+  assert.equal(otherDay.body.duplicate_of, undefined, "a different stated date is a new record");
+  assert.notEqual(otherDay.body.id, first.body.id);
+
+  const otherKind = await call("post", "/", { body: { text: REPORT, kind: "visit_note" } });
+  assert.equal(otherKind.body.duplicate_of, undefined, "a different stated kind is a new record");
+  assert.notEqual(findDuplicateHealthUpload({ text: REPORT, kind: "other" }), null, "'other' states nothing");
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM health_documents").get().n, 3);
+});
+
+// ---- Which studies are the same scan ----
+
+function xray({ laterality, text, region = "lower_extremity.knee" }) {
+  const source = repo.addHealthDocument({
+    kind: "imaging",
+    original_name: "Pasted results",
+    mime: "text/plain",
+    file_path: storedPaste(text),
+    parsed_json: {},
+    enrichment_status: "done",
+  });
+  const [study] = repo.replaceDerivedImagingStudies(source.id, [
+    {
+      imaging_study: {
+        study: { modality: "XR", procedure: "XR knee 3 views", study_date: "2026-10-20" },
+        anatomy: { clinical_system: "musculoskeletal", body_region: region, laterality },
+        report: { impression: "Normal." },
+      },
+    },
+  ]);
+  return { source, study };
+}
+
+test("same-day left and right knee X-rays with a normal impression stay apart", () => {
+  const left = xray({ laterality: "left", text: "XR LEFT KNEE 3 VIEWS. Impression: Normal." });
+  const right = xray({ laterality: "right", text: "XR RIGHT KNEE 3 VIEWS. Impression: Normal." });
+  assert.equal(dedupeHealthDocuments({ dryRun: true }).merged, 0);
+  dedupeHealthDocuments({});
+  assert.ok(repo.getHealthDocumentRaw(left.study.id));
+  assert.ok(repo.getHealthDocumentRaw(right.study.id));
+
+  // Unstated laterality says nothing: two such studies fold only when they were read
+  // out of two uploads of identical text.
+  const a = xray({ laterality: "unknown", text: "XR KNEE. Impression: Normal.", region: "unknown" });
+  const b = xray({ laterality: "unknown", text: "XR KNEE (outside read). Impression: Normal.", region: "unknown" });
+  assert.equal(dedupeHealthDocuments({ dryRun: true }).merged, 0, "different text, unstated anatomy");
+  const c = xray({ laterality: "unknown", text: "XR KNEE.\n\nImpression:   Normal.", region: "unknown" });
+  const plan = dedupeHealthDocuments({ dryRun: true });
+  assert.equal(plan.merged, 1, "identical normalized source text is the same scan");
+  const fold = plan.clusters.find((cluster) => cluster.survivor.kind === "imaging");
+  assert.equal(fold.survivor.id, a.study.id);
+  assert.deepEqual(
+    fold.merged.map((m) => m.id),
+    [c.study.id]
+  );
+  assert.ok(b.study.id);
+});
+
+test("two studies split out of one upload never fold, even on identical words", () => {
+  const source = repo.addHealthDocument({
+    kind: "imaging",
+    original_name: "Pasted results",
+    mime: "text/plain",
+    file_path: storedPaste("XR KNEE BILATERAL. Impression: Normal."),
+    parsed_json: {},
+    enrichment_status: "done",
+  });
+  const knee = (accession) => ({
+    imaging_study: {
+      study: { modality: "XR", procedure: "XR knee", study_date: "2026-10-20", accession },
+      anatomy: { clinical_system: "musculoskeletal", body_region: "unknown", laterality: "unknown" },
+      report: { impression: "Normal." },
+    },
+  });
+  const studies = repo.replaceDerivedImagingStudies(source.id, [knee("ACC-1"), knee("ACC-2")]);
+  assert.equal(studies.length, 2, "two studies on file");
+  assert.equal(dedupeHealthDocuments({ dryRun: true }).merged, 0);
+});
+
+test("a twin's visit-note source with a medication fact is never deleted with it", () => {
+  const a = pastedStudy();
+  const note = repo.addHealthDocument({
+    kind: "visit_note",
+    original_name: "Visit note.txt",
+    mime: "text/plain",
+    file_path: storedPaste(`Visit note. Started atorvastatin 10 mg daily.\n${REPORT}`),
+    parsed_json: { markers: [], clinical_facts: [{ kind: "medication", name: "Atorvastatin 10 mg daily" }] },
+    summary: "PCP visit",
+    enrichment_status: "done",
+  });
+  const [twin] = repo.replaceDerivedImagingStudies(note.id, [
+    { imaging_study: JSON.parse(repo.getHealthDocumentRaw(a.study.id).parsed_json).imaging_study },
+  ]);
+  const applied = dedupeHealthDocuments({});
+  assert.equal(applied.merged, 1, "the twin study folds");
+  assert.equal(repo.getHealthDocumentRaw(twin.id), null);
+  const kept = repo.getHealthDocumentRaw(note.id);
+  assert.ok(kept, "the visit note stays");
+  assert.ok(fs.existsSync(kept.file_path), "and keeps its file");
+  assert.match(kept.parsed_json, /Atorvastatin/);
+});
+
+test("a twin's confirmation note the survivor lacks keeps the twin", () => {
+  const a = pastedStudy();
+  const b = pastedStudy({ text: `${REPORT}\n(copy)` });
+  repo.confirmImagingStudy(a.study.id);
+  repo.confirmImagingStudy(b.study.id, "Discussed with Dr. Example; repeat in 5 years.");
+  assert.equal(dedupeHealthDocuments({ dryRun: true }).merged, 0);
+  dedupeHealthDocuments({});
+  assert.ok(repo.getHealthDocumentRaw(b.study.id), "the note is not lost");
+
+  // The same note on the survivor: nothing is lost, the twin folds.
+  const c = pastedStudy({ text: `${REPORT}\n(third copy)` });
+  repo.confirmImagingStudy(c.study.id, "discussed with dr. example; repeat in 5 years");
+  const plan = dedupeHealthDocuments({ dryRun: true });
+  const cluster = plan.clusters.find((entry) => entry.survivor.kind === "imaging");
+  assert.equal(cluster.survivor.id, b.study.id);
+  assert.deepEqual(
+    cluster.merged.map((m) => m.id),
+    [c.study.id]
+  );
+});
+
+// ---- One card per scan, decided on the server ----
+
+async function listed() {
+  const res = await call("get", "/", {});
+  return new Map(res.body.map((row) => [row.id, row]));
+}
+
+test("the API row says which source folds into its study card", async () => {
+  const pasted = pastedStudy(); // a pasted CT filed as imaging, carrying its own facts
+  const lab = repo.addHealthDocument({
+    kind: "bloodwork",
+    original_name: "labs.txt",
+    mime: "text/plain",
+    file_path: storedPaste("ApoB 92 mg/dL"),
+    parsed_json: { markers: [{ name: "ApoB", value: 92, unit: "mg/dL" }], imaging_only: true },
+    enrichment_status: "done",
+  });
+  repo.replaceDerivedImagingStudies(lab.id, [
+    {
+      imaging_study: {
+        study: { modality: "CT", procedure: "CT chest", study_date: "2026-09-01" },
+        report: { impression: "No nodules." },
+      },
+    },
+  ]);
+  const onlyImaging = repo.addHealthDocument({
+    kind: "other",
+    original_name: "Pasted results",
+    mime: "text/plain",
+    file_path: storedPaste("MRI lumbar spine report"),
+    parsed_json: { markers: [], imaging_only: true },
+    enrichment_status: "done",
+  });
+  repo.replaceDerivedImagingStudies(onlyImaging.id, [
+    {
+      imaging_study: {
+        study: { modality: "MR", procedure: "MRI lumbar spine", study_date: "2026-08-01" },
+        report: { impression: "Mild L4-5 disc bulge." },
+      },
+    },
+  ]);
+  const exportDoc = repo.addHealthDocument({
+    kind: "clinical_summary",
+    original_name: "export.zip",
+    mime: "application/zip",
+    file_path: storedPaste("zip"),
+    parsed_json: { markers: [] },
+    enrichment_status: "done",
+  });
+  repo.replaceDerivedImagingStudies(exportDoc.id, [
+    {
+      imaging_study: {
+        study: { modality: "US", procedure: "US abdomen", study_date: "2026-07-01" },
+        report: { impression: "Normal." },
+      },
+    },
+  ]);
+  repo.addHealthDocument({
+    kind: "bloodwork",
+    doc_date: "2026-07-01",
+    source_doc_id: exportDoc.id,
+    parsed_json: { markers: [] },
+  });
+
+  const rows = await listed();
+  assert.equal(rows.get(pasted.source.id).folds_into_study, true, "a pasted CT report with its own facts folds");
+  assert.equal(rows.get(onlyImaging.id).folds_into_study, true);
+  assert.equal(rows.get(lab.id).folds_into_study, undefined, "a lab source with markers keeps its card");
+  assert.equal(rows.get(exportDoc.id).folds_into_study, undefined, "an export that split out a panel keeps its card");
+  assert.equal(rows.get(pasted.study.id).folds_into_study, undefined, "a study is never folded");
+  assert.deepEqual(
+    rows.get(lab.id).parsed.markers.map((m) => m.name),
+    ["ApoB"],
+    "API rows carry `parsed`"
+  );
+  assert.equal(rows.get(lab.id).parsed_json, undefined);
+});
+
+test("deleting the study card's study takes its folded source, never one with another record", async () => {
+  // A pasted CT filed as imaging with its own facts: its only study's delete takes it.
+  const pasted = pastedStudy();
+  const file = repo.getHealthDocumentRaw(pasted.source.id).file_path;
+  const removed = await call("delete", "/:id", { params: { id: String(pasted.study.id) } });
+  assert.equal(removed.status, 200);
+  assert.equal(removed.body.source_deleted, 1);
+  assert.equal(repo.getHealthDocumentRaw(pasted.source.id), null, "no orphan paste left to surface as a card");
+  assert.equal(fs.existsSync(file), false);
+
+  // Two studies out of one paste: deleting one keeps the source (and the other).
+  const two = repo.addHealthDocument({
+    kind: "imaging",
+    original_name: "Pasted results",
+    mime: "text/plain",
+    file_path: storedPaste("XR LEFT and RIGHT KNEE"),
+    parsed_json: {},
+    enrichment_status: "done",
+  });
+  const knee = (laterality) => ({
+    imaging_study: {
+      study: { modality: "XR", procedure: `XR ${laterality} knee`, study_date: "2026-10-20" },
+      anatomy: { clinical_system: "musculoskeletal", body_region: "lower_extremity.knee", laterality },
+      report: { impression: "Normal." },
+    },
+  });
+  const [leftKnee, rightKnee] = repo.replaceDerivedImagingStudies(two.id, [knee("left"), knee("right")]);
+  await call("delete", "/:id", { params: { id: String(leftKnee.id) } });
+  assert.ok(repo.getHealthDocumentRaw(two.id), "the source still carries the right knee");
+  assert.ok(repo.getHealthDocumentRaw(rightKnee.id));
+
+  // A superseded study kept for audit is still a derived row: the source stays.
+  const parsed = JSON.parse(repo.getHealthDocumentRaw(rightKnee.id).parsed_json);
+  const audit = repo.addHealthDocument({
+    kind: "imaging",
+    source_doc_id: two.id,
+    doc_date: "2026-10-20",
+    parsed_json: {
+      imaging_study: {
+        ...parsed.imaging_study,
+        provenance: { ...parsed.imaging_study.provenance, record_status: "superseded" },
+      },
+    },
+  });
+  await call("delete", "/:id", { params: { id: String(rightKnee.id) } });
+  assert.ok(repo.getHealthDocumentRaw(two.id), "never delete a source that still has a derived row");
+  assert.ok(repo.getHealthDocumentRaw(audit.id));
+
+  // A lab source with markers never goes with its study.
+  const lab = repo.addHealthDocument({
+    kind: "bloodwork",
+    original_name: "labs.txt",
+    mime: "text/plain",
+    file_path: storedPaste("ApoB 92 mg/dL"),
+    parsed_json: { markers: [{ name: "ApoB", value: 92, unit: "mg/dL" }], imaging_only: true },
+    enrichment_status: "done",
+  });
+  const [ct] = repo.replaceDerivedImagingStudies(lab.id, [
+    {
+      imaging_study: {
+        study: { modality: "CT", procedure: "CT chest", study_date: "2026-09-01" },
+        report: { impression: "No nodules." },
+      },
+    },
+  ]);
+  await call("delete", "/:id", { params: { id: String(ct.id) } });
+  assert.ok(repo.getHealthDocumentRaw(lab.id), "the lab record stays");
 });

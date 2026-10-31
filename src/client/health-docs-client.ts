@@ -25,6 +25,7 @@ type HealthDocParsed = {
 type HealthDocRow = {
   id?: unknown;
   kind?: unknown;
+  parsed?: unknown;
   parsed_json?: unknown;
   enrichment_status?: unknown;
   source_doc_id?: unknown;
@@ -58,8 +59,10 @@ function healthKindLabel(kind: unknown): string {
   return match ? match[1] : String(kind || "Doc");
 }
 
+// API rows carry `parsed` (publicHealthDoc strips parsed_json); a raw row carries
+// parsed_json. Read whichever is there.
 function parsedDoc(doc: HealthDocRow | null | undefined): HealthDocParsed | null {
-  let parsed = doc?.parsed_json;
+  let parsed = doc?.parsed != null ? doc.parsed : doc?.parsed_json;
   if (typeof parsed === "string") {
     try {
       parsed = JSON.parse(parsed);

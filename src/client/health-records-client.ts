@@ -38,31 +38,19 @@ type HealthRecordDocument = import("../contracts/client-api.js").ClientHealthDoc
     return doc.kind === "imaging" && typeof CairnImaging !== "undefined" && !!CairnImaging.imagingStudy(doc);
   }
 
-  function sourceHasOwnContent(doc: HealthRecordDocument): boolean {
-    const parsed = CairnHealthDocs.parsedDoc ? CairnHealthDocs.parsedDoc(doc) : null;
-    if (!parsed) return false;
-    const markers = Array.isArray(parsed.markers) ? parsed.markers : [];
-    const facts = Array.isArray(parsed.clinical_facts) ? parsed.clinical_facts : [];
-    return markers.length > 0 || facts.length > 0;
-  }
-
-  // An upload whose every derived record is an imaging study (a pasted CT
-  // report) is shown THROUGH that study: one scan, one card. An upload that
-  // also split out lab panels, or carries markers of its own, keeps its card.
+  // An upload the server marked `folds_into_study` (a pasted imaging report whose
+  // every derived record is an imaging study) is shown THROUGH that study: one scan,
+  // one card. The server decides — it sees every derived row, the list does not —
+  // and an upload whose study is not on this list keeps its own card (never lost).
   function foldedSources(docs: HealthRecordDocument[]): Set<string> {
-    const children = new Map<string, HealthRecordDocument[]>();
+    const shown = new Set<string>();
     for (const doc of docs) {
-      if (doc.source_doc_id == null) continue;
-      const key = String(doc.source_doc_id);
-      if (!children.has(key)) children.set(key, []);
-      children.get(key)!.push(doc);
+      if (doc.source_doc_id != null && isImagingStudyDoc(doc)) shown.add(String(doc.source_doc_id));
     }
     const folded = new Set<string>();
     for (const doc of docs) {
       const key = String(doc.id);
-      const derived = children.get(key);
-      if (!derived?.length || isImagingStudyDoc(doc) || sourceHasOwnContent(doc)) continue;
-      if (derived.every(isImagingStudyDoc)) folded.add(key);
+      if (doc.folds_into_study === true && shown.has(key) && !isImagingStudyDoc(doc)) folded.add(key);
     }
     return folded;
   }

@@ -66,41 +66,62 @@ test("health records list composes typed health document cards and filters junk 
 });
 
 // A pasted report whose only output is its imaging study is ONE card: the source folds
-// into the study card, which carries its "view file". A source with markers keeps its card.
-test("health records fold an imaging-only source into its study card", () => {
+// into the study card, which carries its "view file". The SERVER decides which source
+// folds (`folds_into_study`, it sees every derived row); the list folds on that alone.
+// Rows here are API-shaped: `parsed`, never `parsed_json`, and the real parsedDoc.
+test("health records fold a source only on the server's folds_into_study flag", () => {
   const calls = [];
   const context = {
     Object,
     String,
     Array,
     Map,
+    Set,
+    JSON,
+    localISO: () => "2026-10-30",
+    relAge: (iso) => iso,
+    absDate: (iso) => iso,
+    stagger: (idx) => `--i:${idx}`,
+    enrichmentActive: () => false,
     CairnHealthClient: { H_FILE_PROMPT: "Share" },
-    CairnHealthDocs: {
-      parsedDoc: (doc) => doc.parsed ?? null,
-      healthDocHtml: (doc, index, opts = {}) => {
+    CairnImaging: {
+      imagingStudy: (doc) => doc.parsed?.imaging_study ?? null,
+      imagingCard: (doc, _index, opts = {}) => {
         calls.push(doc);
         return `<article data-id="${String(doc.id)}" data-source-file="${opts.sourceHidden ? String(opts.source?.id ?? "") : ""}"></article>`;
       },
     },
-    CairnImaging: {
-      imagingStudy: (doc) => doc.parsed?.imaging_study ?? null,
-      imagingStudyGrouping: () => ({ system: "cardiovascular", region: "heart", laterality: "" }),
-      imagingLabel: (value) => String(value),
-    },
   };
   context.window = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/health-docs-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/health-records-client.js"), "utf8"), context);
   const records = context.CairnHealthRecords;
-  const source = { id: 7, kind: "other", has_file: true, parsed: { markers: [], imaging_only: true }, summary: "CT" };
-  const mixed = { id: 8, kind: "other", has_file: true, parsed: { markers: [{ name: "ApoB" }], imaging_only: true } };
+  const source = {
+    id: 7,
+    kind: "other",
+    has_file: true,
+    enrichment_status: "done",
+    parsed: { markers: [], imaging_only: true },
+    summary: "CT",
+    folds_into_study: true,
+  };
+  // A lab source with its own markers and a CT read out of it: the server sends no flag.
+  const lab = {
+    id: 8,
+    kind: "bloodwork",
+    has_file: true,
+    enrichment_status: "done",
+    parsed: { markers: [{ name: "ApoB", value: 92, unit: "mg/dL", flag: "high" }] },
+  };
   const study = { id: 9, kind: "imaging", source_doc_id: 7, parsed: { imaging_study: { study: {} } } };
-  const mixedStudy = { id: 10, kind: "imaging", source_doc_id: 8, parsed: { imaging_study: { study: {} } } };
-  const html = records.recordsListHtml([source, mixed, study, mixedStudy]);
-  assert.doesNotMatch(html, /data-id="7"/, "the empty source is not its own card");
+  const labStudy = { id: 10, kind: "imaging", source_doc_id: 8, parsed: { imaging_study: { study: {} } } };
+  const html = records.recordsListHtml([source, lab, study, labStudy]);
+  assert.doesNotMatch(html, /data-hdoc="7"/, "the flagged source is not its own card");
   assert.match(html, /data-id="9" data-source-file="7"/, "the study card carries the source's file");
-  assert.match(html, /data-id="8"/, "a source with markers keeps its card");
+  assert.match(html, /data-hdoc="8"/, "a lab source with markers keeps its card");
+  assert.match(html, /ApoB/, "and shows its markers");
   assert.match(html, /data-id="10" data-source-file=""/);
-  // An imaging-only source whose study is not on the list stays visible (never lost).
-  assert.match(records.recordsListHtml([source]), /data-id="7"/);
+  // A flagged source whose study is not on the list stays visible (never lost).
+  assert.match(records.recordsListHtml([source]), /data-hdoc="7"/);
 });

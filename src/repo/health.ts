@@ -34,6 +34,7 @@ import {
   presentGroups,
 } from "./propagation.js";
 import { unitAnalyteZone } from "./propagation-data.js";
+import { foldsIntoStudy } from "./imaging-source.js";
 
 // A modern comprehensive panel (e.g. Function Health) lists 100+ markers. Cap
 // generously so a complete transcription is never silently clipped, while still
@@ -622,11 +623,15 @@ function publicHealthDoc(row: any) {
         ).map((file) => ({ ...file, has_file: true }))
       : undefined;
   const since = enrichActive(row.enrichment_status) ? enrichSince.get(Number(row.id)) : undefined;
+  // Records shows a pasted imaging report THROUGH its study card. The server decides
+  // (it sees every derived row); the client folds on this flag alone.
+  const folds = foldsIntoStudy(row);
   return {
     ...rest,
     has_file: !!file_path,
     ...(study_files ? { study_files } : {}),
     ...(since ? { enrich_since: since } : {}),
+    ...(folds ? { folds_into_study: true } : {}),
   };
 }
 

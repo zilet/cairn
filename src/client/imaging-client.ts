@@ -306,8 +306,8 @@ function imagingCard(doc: ImagingDoc, index?: number, opts: ClientImagingCardOpt
     sourceId != null && carriesSource
       ? `${source?.has_file !== false ? `<button class="hdoc-link hdoc-rescan" data-hrescan="${escAttr(sourceId)}"${sourceBusy ? " disabled" : ""} title="Re-read the source report">↻ re-analyze</button>` : ""}<a class="hdoc-link" href="${escAttr(`/api/health-docs/${sourceId}/file`)}" target="_blank" rel="noopener" data-resource-link>view file</a>`
       : "";
-  // data-hsource marks the hidden upload this card stands for: deleting the
-  // upload's last study card deletes the upload (and so the study) with it.
+  // data-hsource marks the hidden upload this card stands for (a re-analyze or a
+  // duplicate re-paste finds the card by it); data-hpoll watches its re-read.
   const attrs = `data-hdoc="${escAttr(doc.id)}"${source && opts.sourceHidden ? ` data-hsource="${escAttr(source.id)}"` : ""}${sourceBusy ? ` data-hpoll="${escAttr(source!.id)}"` : ""}`;
   return `<div class="sess hdoc imaging-card${expanded ? "" : " hdoc-collapsed"}" ${attrs}><div class="sess-head"><span class="sess-date">${escHtml(title)}${doc.doc_date ? ` · <span title="${escAttr(absDate(String(doc.doc_date)))}">${escHtml(relAge(String(doc.doc_date)))}</span>` : ""}</span><button class="hdoc-link" data-imaging-toggle="${escAttr(doc.id)}" aria-expanded="${String(expanded)}" aria-controls="${controls}">Details</button></div>${headline ? `<p class="imaging-headline">${escHtml(headline)}</p>` : ""}${reading}${pending}${retry}${imagingInner(doc)}<div class="hdoc-foot"><div class="hdoc-actions">${sourceActions}<button class="iconbtn hdoc-del" data-hdel="${escAttr(doc.id)}" title="Delete imaging study" aria-label="Delete imaging study">×</button></div></div></div>`;
 }

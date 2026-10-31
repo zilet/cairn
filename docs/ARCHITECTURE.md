@@ -6152,21 +6152,32 @@ not analytes — `isNonAnalyteMarkerName` drops them at every marker write.
 `findDuplicateHealthUpload` (`src/repo/health-upload-duplicate.ts`): a paste whose whitespace-normalized
 text, or a file whose bytes, match a stored upload (or an imaging attachment's `sha256`) returns that
 record with `duplicate_of` — no new row, no ingest; a matched record whose read had failed is re-read
-instead (`reanalyzing: true`). No hash column: pastes are compared only with the newest stored pastes
+instead (`reanalyzing: true`). Content is necessary, never enough: a paste shorter than
+`MIN_DUPLICATE_TEXT_CHARS` is a reading ("BP 120/80" again on a later day is a new one), and a
+`doc_date` or `kind` the request states must agree with the match (`other`, the default, states nothing). No hash column: pastes are compared only with the newest stored pastes
 (each ≤ 400 KB), files only with stored files of the same byte size, so the check is bounded and
 covers every upload already on disk.
 
 **Imaging twins fold by their own identity** (`src/repo/imaging-dedupe.ts`), on the whole-record pass
 only (never the ingest-scoped one, which runs while its own upload is mid-read): two current studies
 dated the same day with the same procedure AND the same impression (case/space-insensitive) are one
-scan. Different impressions never fold. The survivor is the study the athlete confirmed or corrected,
+scan only when they also state the same body region and laterality, or were read out of two uploads of
+identical normalized text — a same-day left and right knee X-ray with a normal impression stay two, and
+two studies split out of ONE upload never fold. Different impressions never fold. The survivor is the study the athlete confirmed or corrected,
 else the one holding attachments, else the oldest; a corrected twin, a twin with DICOM series, an
-attachment the survivor lacks, or follow-up tracking the survivor does not echo, keeps the twin. A twin
-whose source upload carried nothing else goes WITH that upload. A pasted report the ordinary ingest
+attachment the survivor lacks, follow-up tracking the survivor does not echo, or a confirmation note the
+survivor lacks, keeps the twin. A twin whose source upload is an imaging source with nothing else derived
+from it goes WITH that upload (`imagingSourceFolds`, `src/repo/imaging-source.ts`); a note whose markers
+or clinical facts are its own never does. A pasted report the ordinary ingest
 filed as kind `imaging` is still an upload (`isImagingSourceUpload`, `src/repo/imaging.ts`): it re-reads
 through the ordinary health ingest and deletes through `deleteHealthDocument` (its file and derived
 study with it), never as a study. In Records it has no card of its own: its study's card carries its
 file, its re-analyze and its reading state (`recordsListHtml`, `src/client/health-records-client.ts`).
+The SERVER decides that fold — the API row carries `folds_into_study` (`foldsIntoStudy`,
+`src/repo/imaging-source.ts`: an imaging source with no lab markers whose every derived row, superseded
+ones included, is an imaging study) — because the client's list is capped and hides superseded studies.
+For the same reason the card's delete always deletes the study on the card; the server
+(`deleteEmptyImagingSource`) removes the folded source with it once no derived row is left.
 
 ### The doctor loop shows each follow-up once (`src/repo/doctor-loop-items.ts`)
 
