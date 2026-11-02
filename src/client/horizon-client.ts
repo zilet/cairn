@@ -96,6 +96,24 @@
       : `<div class="horizon-tw">${inner}</div>`;
   }
 
+  /**
+   * The race just run, said back (server words, race-finished.ts): the result, the
+   * recovery days, and the next race it loops on to. "" with none.
+   */
+  function finishedHtml(lane: Lane): string {
+    const f = lane.finished;
+    if (!f || !f.headline) return "";
+    const line = (cls: string, words: string | null | undefined) =>
+      words ? `<p class="${cls}">${escHtml(words)}</p>` : "";
+    return `<div class="horizon-finished${f.recovering ? " is-recovering" : ""}">
+      <span class="lbl horizon-finished-k"><svg class="horizon-finished-mark" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.4 5 8.8 9.6 3.4"/></svg>Behind you</span>
+      <p class="horizon-finished-title">${escHtml(f.headline)}</p>
+      ${line("horizon-finished-result numeral", f.result_line)}
+      ${line("horizon-finished-recovery", f.recovery_line)}
+      ${line("horizon-finished-next", f.next_line)}
+    </div>`;
+  }
+
   /** A runner's closed weeks as small columns: the rhythm, with no race to build to. */
   function volumeHtml(lane: Lane): string {
     const weeks = lane.volume || [];
@@ -181,6 +199,7 @@
         </header>`;
       return `<section class="${cls}${lane.voice ? " is-build" : ""}" aria-labelledby="${id}">
         ${head}
+        ${finishedHtml(lane)}
         ${terrainHtml(lane)}
         ${thisWeekHtml(lane, opts.hrefFor)}
         ${volumeHtml(lane)}

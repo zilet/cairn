@@ -7177,6 +7177,8 @@ declare global {
     this_week?: ClientRaceThisWeek | null;
     /** The closed weeks' running, for a runner with no race (race lane only). */
     volume?: ClientHorizonVolumeWeek[];
+    /** The race just run, said back for two weeks (race lane only; server words, race-finished.ts). */
+    finished?: import("./client-api.js").ClientRaceFinished | null;
     /** The run units the lane is written in (race lane only). */
     units?: "km" | "mi";
     /** The week's frame (GET /api/week), the race lane's hero when it has a headline. */

@@ -86,6 +86,14 @@
 .horizon-tw-fill{position:absolute;inset:0 auto 0 0;width:calc(var(--frac,0) * 100%);border-radius:inherit;background:var(--d-endurance)}
 .horizon-tw-fill.is-banked{background:var(--sage)}
 .horizon-tw-focus{font-size:var(--text-sm);color:var(--ink-2);line-height:var(--leading)}
+.horizon-finished{display:grid;gap:var(--space-2);padding:var(--space-4) var(--space-5);border-radius:var(--radius-md);background:color-mix(in oklab,var(--s-endurance) 16%,var(--surface));min-width:0}
+.horizon-finished-k{display:inline-flex;align-items:center;gap:var(--space-2);color:var(--muted)}
+.horizon-finished-mark{flex:none;width:14px;height:14px;border-radius:50%;background:var(--s-endurance)}
+.horizon-finished-mark path{fill:none;stroke:var(--d-endurance);stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.horizon-finished-title{margin:0;font-family:var(--font-display);font-size:var(--text-lg);line-height:var(--leading-tight);color:var(--ink)}
+.horizon-finished-result{margin:0;font-size:var(--text-sm);font-weight:var(--weight-semibold);color:var(--ink);font-variant-numeric:lining-nums tabular-nums}
+.horizon-finished-recovery{margin:0;font-size:var(--text-sm);line-height:var(--leading);color:var(--ink-2)}
+.horizon-finished-next{margin:var(--space-1) 0 0;padding-top:var(--space-3);border-top:1px solid var(--line);font-size:var(--text-sm);line-height:var(--leading);color:var(--ink)}
 .horizon-vol{display:grid;gap:var(--space-3)}
 .horizon-vol .lbl{color:var(--muted)}
 .horizon-vol-weeks{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--space-3);align-items:end}

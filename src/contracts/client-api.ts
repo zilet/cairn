@@ -1758,6 +1758,22 @@ export interface ClientLegMapDay {
   ride: boolean;
   hard: boolean;
 }
+export interface ClientRaceFinished {
+  event: string | null;
+  date: ISODateString | string;
+  days_since: number;
+  run_km: number;
+  finish_sec: number | null;
+  pace_sec_per_km: number | null;
+  /** "Cambridge Half Marathon, done." */
+  headline: string;
+  /** "13.2 mi in 2:10:18 · 9:54 /mi · Sun, Nov 1" */
+  result_line: string;
+  recovering: boolean;
+  recovery_line: string | null;
+  /** "Next: 5K time trial, May 16 · 23:06 now, 3:06 to find for 20:00."; null with no next race. */
+  next_line: string | null;
+}
 export interface ClientRaceBuild {
   available: boolean;
   as_of: ISODateString | string;
@@ -1791,6 +1807,11 @@ export interface ClientRaceBuild {
     gap_sec: number | null;
     fit: ClientRaceFit | null;
   } | null;
+  /**
+   * The race just run (src/repo/race-finished.ts), shown for two weeks after a logged race:
+   * the result, the recovery days, and the next dated race. Server-written words only.
+   */
+  finished?: ClientRaceFinished | null;
   paces: { anchored_on: "target" | "estimate"; race_pace_sec_per_km: number; bands: ClientRacePaceBand[] } | null;
   this_week: {
     week_start: ISODateString | string;

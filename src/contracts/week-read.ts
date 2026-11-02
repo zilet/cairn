@@ -156,8 +156,8 @@ export interface WeekReadJourneyMark extends WeekReadMilestone {
 
 /** Something that has already moved toward a goal since the trail began (measures, never grades). */
 export interface WeekReadJourneyBehind {
-  key: "race" | "weight" | "strength";
-  /** "Race estimate 4 min faster", "−2.1 lb", "Deadlift up 20 lb, to 285 lb". */
+  key: "race" | "race_done" | "weight" | "strength";
+  /** "Cambridge Half Marathon run, 2:10:18", "Race estimate 4 min faster", "−2.1 lb", "Deadlift up 20 lb, to 285 lb". */
   words: string;
 }
 

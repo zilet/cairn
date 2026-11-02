@@ -272,3 +272,25 @@ export function raceRecoveryLine(date: string = localDateISO(), win = raceRecove
   const race = win.race.event || "the race";
   return pickDayVariant(RACE_RECOVERY_LINES, date, "race-recovery:line")(race, backOnWords(win.back_on, date));
 }
+
+/** How long a finished race stays named on the surfaces that celebrate it (race-finished.ts). */
+export const RACE_FINISHED_SHOWN_DAYS = 14;
+
+/**
+ * The latest race actually RUN (a matched effort, never the provisional goal date) on or
+ * before `date` and at most `withinDays` ago, with its recovery span. Fail-soft: null.
+ */
+export function latestFinishedRace(
+  date: string = localDateISO(),
+  withinDays: number = RACE_FINISHED_SHOWN_DAYS
+): (RaceEffort & { days_since: number; recovery: { from: string; to: string; back_on: string } | null }) | null {
+  const d = String(date).slice(0, 10);
+  const done = efforts(d).filter((e) => !e.provisional && e.run_date <= d);
+  const last = done.at(-1);
+  if (!last) return null;
+  const since = daysBetweenISO(d, last.run_date);
+  if (since == null || since < 0 || since > withinDays) return null;
+  const span = raceRecoverySpan(last);
+  const backOn = span ? addDaysISO(span.to, 1) : null;
+  return { ...last, days_since: since, recovery: span && backOn ? { ...span, back_on: backOn } : null };
+}

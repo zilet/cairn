@@ -186,6 +186,15 @@ export function paceClock(secPerKm: number, units: DistanceUnit = "km"): string 
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
+/** A finish clock: "2:10:18" past the hour, "23:06" under it. */
+export function clockWords(sec: number): string {
+  const s = Math.max(0, Math.round(sec));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const r = s % 60;
+  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}` : `${m}:${String(r).padStart(2, "0")}`;
+}
+
 /** "6:11/km", "9:57/mi"; `spaced` writes "6:11 /km" (a band's register). */
 export function paceWords(secPerKm: number, units: DistanceUnit = "km", opts: { spaced?: boolean } = {}): string {
   return `${paceClock(secPerKm, units)}${opts.spaced ? " " : ""}/${units}`;

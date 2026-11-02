@@ -132,6 +132,23 @@ export function pickRaceEffort(goal: RaceGoalRef, runs: readonly RaceRun[], asOf
   return [...eligible].sort((a, b) => off(a) - off(b) || b.km - a.km || a.date.localeCompare(b.date))[0] ?? null;
 }
 
+/** The logged run a race effort points at: its distance and time. Fail-soft: null. */
+export function raceRunActivity(activityId: number | null | undefined): { km: number; duration_min: number | null } | null {
+  const id = Number(activityId);
+  if (!Number.isInteger(id) || id <= 0) return null;
+  try {
+    const row = db.prepare(`SELECT distance_km, duration_min FROM activities WHERE id = ?`).get(id) as
+      | { distance_km: unknown; duration_min: unknown }
+      | undefined;
+    const km = Number(row?.distance_km);
+    if (!row || !(km > 0)) return null;
+    const min = Number(row.duration_min);
+    return { km, duration_min: min > 0 ? min : null };
+  } catch {
+    return null;
+  }
+}
+
 /** Every kept race, oldest first. Fail-soft: none. */
 export function completedRaceRows(): CompletedRaceRow[] {
   try {

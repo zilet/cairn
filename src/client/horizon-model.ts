@@ -118,15 +118,20 @@
       const thisWeek = CairnRaceViewModel.thisWeekModel(build, units);
       const volume = CairnRaceWeekModel.volumeWeeks(build, units);
       const running = !!thisWeek || volume.length > 0;
-      return lane("race", running ? "Running" : "Race", {
+      // Just after a race, the empty calendar is the next step, not an absence.
+      const finished = record(build.finished) ? build.finished : null;
+      return lane("race", running || finished ? "Running" : "Race", {
         state: "none",
-        headline: "No race on the calendar",
-        lede: reason || "Set a dated half marathon in You → Profile and the build reads from it here.",
+        headline: finished ? "What's next?" : "No race on the calendar",
+        lede: finished
+          ? "A new dated race starts the next build — set it in You → Profile."
+          : reason || "Set a dated half marathon in You → Profile and the build reads from it here.",
+        finished,
         this_week: thisWeek,
         volume,
         units: unit,
         links: [
-          { label: "Set a race", target: copyTarget(TARGETS.profile) },
+          { label: finished ? "Set the next race" : "Set a race", target: copyTarget(TARGETS.profile) },
           ...(running ? [{ label: "Your runs", target: copyTarget(TARGETS.race) }] : []),
         ],
       });
@@ -141,6 +146,7 @@
       fit_line: model.estimate.fit_line,
       terrain: model.terrain,
       this_week: model.this_week,
+      finished: record(build.finished) ? build.finished : null,
       units: unit,
       links,
     });

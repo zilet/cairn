@@ -92,6 +92,7 @@ import { STAGE_WEEK_WORD, stageKeyOf } from "./stage-words.js";
 import { planDayStrengthGroups } from "./training-read.js";
 import { registerRaceLadderPeak, type RaceLadderPlanDraft } from "./race-ladder-hook.js";
 import { raceRecoveryLine } from "./race-recovery.js";
+import { type NextRaceRef, type RaceFinished, raceFinishedRead } from "./race-finished.js";
 import { type RaceStrengthLead, raceStrengthLead, raceStrengthPrinciple } from "./race-strength.js";
 import { getTrainingIntent } from "./training-intent.js";
 import { copyFlat, memoKey, registerMemoGuard, requestMemo } from "./request-memo.js";
@@ -306,6 +307,11 @@ export interface RaceBuild {
     target_raw: string | null;
   } | null;
   prediction: RacePrediction | null;
+  /**
+   * The race just run (race-finished.ts): its result, the recovery days, and the next
+   * dated race. Read only for a surface that asked (`describeRunning`); absent/null otherwise.
+   */
+  finished?: RaceFinished | null;
   /** Pace bands, from the target pace when there is one, else the estimate. */
   paces: { anchored_on: "target" | "estimate"; race_pace_sec_per_km: number; bands: PaceBand[] } | null;
   this_week: {
@@ -1542,7 +1548,7 @@ export function weekRecap(
   return { headline, detail: `${lead}${forward}` };
 }
 
-export function raceBuild(
+function raceBuildRead(
   date?: string,
   opts?: {
     runPlan?: WeeklyRunPlan | null;
@@ -1905,6 +1911,28 @@ export function raceBuild(
     why,
     reason: null,
   };
+}
+
+/**
+ * The race build (raceBuildRead) — and, for a surface that asked (`describeRunning`), the
+ * race just run (`finished`, race-finished.ts) with the live dated race as its "next".
+ * The internal callers never pay for that read.
+ */
+export function raceBuild(date?: string, opts?: Parameters<typeof raceBuildRead>[1]): RaceBuild {
+  const out = raceBuildRead(date, opts);
+  if (!opts?.describeRunning) return out;
+  const r = out.race;
+  const next: NextRaceRef | null = r
+    ? {
+        event: r.event,
+        date: r.date,
+        distance_km: r.distance_km,
+        target_sec: r.target?.sec ?? null,
+        estimate_sec: out.prediction?.estimate_sec ?? null,
+        fit: out.prediction?.fit ?? null,
+      }
+    : null;
+  return { ...out, finished: safe(() => raceFinishedRead(out.as_of, { units: out.units, next })) ?? null };
 }
 
 const NOT_CLOSED: CurrentWeekClosed = { closed: false, reason: null, last_run_day: null };

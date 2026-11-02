@@ -29,6 +29,7 @@ import type {
 import { addDaysISO, daysBetweenISO, isoDate, mondayOf } from "../../lib/dates.js";
 import { round1 } from "../../lib/numbers.js";
 import {
+  clockWords,
   dateRangeWords,
   dateWords,
   distanceOfWords,
@@ -470,8 +471,17 @@ export function raceFasterSince(
   return since ? `Race estimate ${min} min faster since ${since}` : "";
 }
 
-function behindOf(path: TodayPath): WeekReadJourneyBehind[] {
+/** "Cambridge Half Marathon run · 2:10:18" — the race just run, first behind you while it is shown. */
+function raceDoneWords(finished: RaceBuild["finished"]): string {
+  if (!finished) return "";
+  const name = finished.event?.trim() || "Race";
+  return finished.finish_sec != null ? `${name} run · ${clockWords(finished.finish_sec)}` : `${name} run`;
+}
+
+function behindOf(path: TodayPath, finished: RaceBuild["finished"] = null): WeekReadJourneyBehind[] {
   const out: WeekReadJourneyBehind[] = [];
+  const done = raceDoneWords(finished);
+  if (done) out.push({ key: "race_done", words: done });
   const race = path.race;
   if (race && race.trend_delta_sec != null && race.trend_delta_sec <= -30 && race.since) {
     const min = Math.max(1, Math.round(-race.trend_delta_sec / 60));
@@ -529,7 +539,7 @@ function journeyLine(walked: number | null, marks: WeekReadJourneyMark[], today:
   return `${lead} Next, ${nextPart}; ${markName(summit)} ${summit.days_words}.`;
 }
 
-function journeyOf(path: TodayPath | null, today: string): WeekReadJourney | null {
+function journeyOf(path: TodayPath | null, today: string, finished: RaceBuild["finished"] = null): WeekReadJourney | null {
   if (!path) return null;
   const ahead = (path.milestones ?? []).filter((m) => m.date >= today);
   if (!ahead.length) return null;
@@ -556,7 +566,7 @@ function journeyOf(path: TodayPath | null, today: string): WeekReadJourney | nul
     start_words: dateWords(start, today),
     today,
     marks,
-    behind: behindOf(path),
+    behind: behindOf(path, finished),
     line: journeyLine(walked, marks, today),
   };
 }
@@ -636,7 +646,7 @@ export function weekRead(start?: string, opts: { today?: string; build?: RaceBui
     still_open: stillOpen,
     next_milestones: milestonesBeyond(path, weekEnd),
     goals: goalsOf(path, trend?.line ?? null),
-    journey: thisWeek ? safe(() => journeyOf(path, today), null) : null,
+    journey: thisWeek ? safe(() => journeyOf(path, today, build?.finished ?? null), null) : null,
     weight_trend: trend,
   };
 }
