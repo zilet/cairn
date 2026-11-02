@@ -874,6 +874,48 @@ export function reconcileTrainingDriveReply(
   return parts.length ? appendReceipt(reply, parts.join(" ")) : reply;
 }
 
+function replyClaimsNutritionTargetSet(reply: string): boolean {
+  return /\b(?:i(?:['’]ve| have)?\s+(?:now\s+)?(?:set|updated|changed|adjusted|lowered|raised|moved|locked(?:\s+in)?)\b[^.!?\n]{0,60}\b(?:calori\w*|kcal|target|goal)|(?:calorie|kcal|daily|nutrition)\s+(?:target|goal)\s+is\s+now\b)/i.test(
+    reply
+  );
+}
+
+const NUTRITION_TARGET_NOT_SET_VARIANTS = [
+  (reason: string) => `Your calorie target did not change: ${reason}.`,
+  (reason: string) => `For the record, the calorie target is unchanged — ${reason}.`,
+] as const;
+
+const kcalWords = (n: number): string => `${Math.round(n).toLocaleString("en-US")} kcal`;
+
+/**
+ * The truthful receipt for a chat-set calorie target: the number that LANDED (the
+ * lean-safe floor may have raised it above what was asked), or that nothing changed —
+ * replacing a reply that claimed a target it did not set.
+ */
+export function reconcileNutritionTargetReply(
+  reply: string,
+  applied: Array<{ type: ChatActionType; result?: unknown; error?: string }>
+): string {
+  const entries = applied.filter((entry) => entry.type === "set_nutrition_target");
+  if (!entries.length) return reply;
+  const last = entries[entries.length - 1];
+  const result = recordOrNull(last.result);
+  const landedKcal = Number(result?.target_kcal);
+  if (last.error || !result || !Number.isFinite(landedKcal)) {
+    const reason = String(last.error ?? "it was not stored").replace(/\.$/, "");
+    const line = pickDayVariant(NUTRITION_TARGET_NOT_SET_VARIANTS, localDateISO(), "chat-nutrition-target-not-set")(reason);
+    return replyClaimsNutritionTargetSet(reply) ? line : appendReceipt(reply, line);
+  }
+  const requested = Number(result.requested_kcal);
+  const protein = Number(result.protein_g);
+  const proteinBit = Number.isFinite(protein) && protein > 0 ? ` with ${Math.round(protein)} g protein` : "";
+  const raised =
+    Number.isFinite(requested) && landedKcal > requested
+      ? ` You asked for ${kcalWords(requested)}; the lean-safe floor for your goal holds it at ${kcalWords(landedKcal)}.`
+      : "";
+  return appendReceipt(reply, `Your daily target is now ${kcalWords(landedKcal)}${proteinBit}, from today.${raised}`);
+}
+
 export function reconcileStrengthObjectiveReply(
   reply: string,
   message: string | null | undefined,

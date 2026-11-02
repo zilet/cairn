@@ -407,6 +407,49 @@ export function hasExplicitTrainingDriveIntentInContext(
   return opts.offerOpen === true || coachOfferedPush(opts.priorCoachMessage);
 }
 
+// THE ATHLETE'S OWN CALORIE TARGET (chat `set_nutrition_target`). Only their sentence
+// sets it: one that names calories/the fuel target AND asks for a change or states a
+// number ("can you adjust my caloric goals accordingly", "set my calories to 2100",
+// "my target is 2,100 kcal") — or a plain yes right after the coach offered a number.
+// A question about what the number should be is a conversation, never a write.
+const NUTRITION_TARGET_NOUN_RE =
+  /\b(?:calori\w*|kcals?|cals|macros?|deficit|(?:calorie|nutrition|nutritional|fuel|food|daily|intake|energy)\s+(?:target|goal|ceiling|budget|number)s?)\b/i;
+const NUTRITION_TARGET_CHANGE_RE =
+  /\b(?:set|reset|change|adjust|update|lower|raise|drop|reduce|increase|bump|cut|make|move|put|switch|lock|use|go\s+with|apply)\b|\b(?:my|the)\s+(?:new\s+)?(?:calorie\s+|daily\s+|kcal\s+)?(?:target|goal)\s+(?:is|should\s+be)\b/i;
+const NUTRITION_TARGET_NUMBER_RE = /\b\d{1,2}[,.\s]?\d{3}\s*(?:kcal|cals?|calories)?\b|\b\d{4}\s*(?:kcal|cals?|calories)\b/i;
+const NUTRITION_TARGET_EXPLORE_RE =
+  /\b(?:what|which|how\s+(?:much|many|low|high))\b[^.!?\n]{0,50}\b(?:calori\w*|kcals?|cals|target|goal|deficit|eat)\b|\b(?:should|would)\s+i\b|\bis\s+\d[\d,.]*\s*(?:kcal|cals?|calories)?\s+(?:too|enough|ok(?:ay)?|right|good)\b/i;
+// A bare number is a log ("I had 2,100 calories today") unless it is named as the target.
+const NUTRITION_TARGET_NAMED_RE = /\b(?:target|goal|aim|ceiling|budget)\b|\bto\s+~?\d/i;
+
+export function hasExplicitNutritionTargetIntent(message: string | null | undefined): boolean {
+  const text = String(message ?? "").replace(/[‘’]/g, "'").replace(/\s+/g, " ").trim();
+  if (!text) return false;
+  if (!NUTRITION_TARGET_NOUN_RE.test(text)) return false;
+  if (NUTRITION_TARGET_EXPLORE_RE.test(text)) return false;
+  // "Can you set my calories to 2,100?" is a request; "Is 2,100 too low?" is not.
+  if (/\?\s*$/.test(text) && !/\b(?:can|could|would|will)\s+you\b|\bplease\b/i.test(text)) return false;
+  return (
+    NUTRITION_TARGET_CHANGE_RE.test(text) ||
+    (NUTRITION_TARGET_NUMBER_RE.test(text) && NUTRITION_TARGET_NAMED_RE.test(text))
+  );
+}
+
+/** The coach's previous message named a calorie number and asked whether to use it. */
+export function coachOfferedNutritionTarget(message: string | null | undefined): boolean {
+  const text = String(message ?? "");
+  return text.includes("?") && /\b(?:calori\w*|kcal|cals)\b/i.test(text) && NUTRITION_TARGET_NUMBER_RE.test(text);
+}
+
+export function hasExplicitNutritionTargetIntentInContext(
+  message: string | null | undefined,
+  opts: { priorCoachMessage?: string | null } = {}
+): boolean {
+  if (hasExplicitNutritionTargetIntent(message)) return true;
+  if (!(carriesDriveAffirmation(message) || carriesPlanApplyAffirmation(message))) return false;
+  return coachOfferedNutritionTarget(opts.priorCoachMessage);
+}
+
 // A question is a conversation, not an authorization. The coach may still PROPOSE the
 // change; it just doesn't carry the athlete's own word with it, so autonomy policy
 // decides on its ordinary terms instead of on `explicit_user_request`.

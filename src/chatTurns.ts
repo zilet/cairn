@@ -69,7 +69,7 @@ import {
 import { recordBloodPressureReading } from "./domain/health/blood-pressure.js";
 import { settleNewHealthRecords } from "./domain/health/record-dedupe.js";
 import { pickDayVariant } from "./repo/brain/day-read-rules.js";
-import { applyProposalWithAutonomy, revertDecision } from "./domain/brain/autonomy-service.js";
+import { applyProposalWithAutonomy, revertDecision, userSetNutritionTarget } from "./domain/brain/autonomy-service.js";
 import { clinicalPlanProvenance, type ClinicalPlanProvenance } from "./domain/brain/clinical-provenance.js";
 // The re-ask lookup that used to live here moved beside the hand-off it guards, in
 // src/domain/brain/structure-request.ts — both doors (chat and the Plan tab) have to
@@ -104,6 +104,7 @@ import {
   hasExplicitTrainingDriveIntent,
   hasExplicitTrainingDriveIntentInContext,
   carriesDriveAffirmation,
+  hasExplicitNutritionTargetIntentInContext,
   hasSelfContainedPlanEditIntent,
   isFoodOnlyTurn,
   isInstantFoodCaptureDecision,
@@ -118,6 +119,7 @@ import {
   reconcileChatRunReply,
   reconcileGoalIdentityReply,
   reconcileMisfiledActivityReply,
+  reconcileNutritionTargetReply,
   reconcileStrengthObjectiveReply,
   reconcileTrainingDriveReply,
   reconcileTrainingStructureReply,
@@ -179,6 +181,7 @@ export {
   reconcileChatRunReply,
   reconcileGoalIdentityReply,
   reconcileMisfiledActivityReply,
+  reconcileNutritionTargetReply,
   reconcileStrengthObjectiveReply,
   reconcileTrainingDriveReply,
   reconcileTrainingStructureReply,
@@ -478,7 +481,8 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
     const planReply = reconcileChatPlanReply(proposedReply, turn.message, applied, drafts, explicitPlanEdit);
     const runReply = reconcileChatRunReply(planReply, turn.message, applied);
     const driveReply = reconcileTrainingDriveReply(runReply, applied);
-    const objectiveReply = reconcileStrengthObjectiveReply(driveReply, turn.message, applied);
+    const targetReply = reconcileNutritionTargetReply(driveReply, applied);
+    const objectiveReply = reconcileStrengthObjectiveReply(targetReply, turn.message, applied);
     const goalReply = reconcileGoalIdentityReply(objectiveReply, droppedGoalFields, appliedGoalPatch);
     const structureReply = reconcileTrainingStructureReply(goalReply, applied);
     const activityReply = reconcileMisfiledActivityReply(structureReply, misfiledCaptures, applied);
@@ -2667,6 +2671,15 @@ export function applyChatActions(
         ? (ctx.priorAssistant ?? priorAssistantContext(ctx.userMessageId)).message
         : null,
     });
+  // The calorie target is the athlete's own number (the same door as the Fuel card's
+  // edit): their sentence asks for it, or their plain yes answers the coach's offer of
+  // one. A coach that decides on its own to move it is nutrition_checkin's job, not chat's.
+  const explicitNutritionTargetIntent = hasExplicitNutritionTargetIntentInContext(message, {
+    priorCoachMessage:
+      carriesDriveAffirmation(message) || carriesPlanApplyAffirmation(message)
+        ? (ctx.priorAssistant ?? priorAssistantContext(ctx.userMessageId)).message
+        : null,
+  });
   // ONE reading of this sentence for the whole turn. A message that names its own
   // instruction ("apply it to my program for today") never touches the chat log; a bare
   // go-ahead ("apply it", "go ahead") reads the coach's previous message to find out what
@@ -2823,6 +2836,29 @@ export function applyChatActions(
             via: "chat",
           });
           applied.push(result.ok ? { type: a.type, result } : { type: a.type, error: result.error ?? "not set" });
+          break;
+        }
+        case "set_nutrition_target": {
+          if (!explicitNutritionTargetIntent) {
+            applied.push({ type: a.type, error: "only your own words can set your calorie target" });
+            break;
+          }
+          // Changing the calorie number keeps the protein they already hold unless they
+          // named a new one; carbs/fat split from the OLD number would no longer add up,
+          // so those ride only when stated.
+          const previous = repo.getActiveNutritionTarget();
+          const saved = userSetNutritionTarget({
+            target_kcal: a.target_kcal,
+            protein_g: a.protein_g ?? previous?.protein_g ?? null,
+            carbs_g: a.carbs_g ?? null,
+            fat_g: a.fat_g ?? null,
+            note: `Set in chat: "${message.trim().slice(0, 200)}"`,
+          });
+          applied.push(
+            saved
+              ? { type: a.type, result: { ...saved, requested_kcal: a.target_kcal, previous_kcal: previous?.target_kcal ?? null } }
+              : { type: a.type, error: "the target could not be saved" }
+          );
           break;
         }
         case "set_strength_objective": {

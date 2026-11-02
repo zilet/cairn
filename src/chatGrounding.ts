@@ -412,6 +412,7 @@ const GOAL_TYPES: ReadonlySet<string> = new Set<string>([
   "set_endurance_goal",
   "set_training_intent",
   "set_strength_objective",
+  "set_nutrition_target",
 ]);
 
 // What a sentence NAMES decides which capture grounds it, whatever verb it uses: "Added

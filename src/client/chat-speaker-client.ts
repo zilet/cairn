@@ -9,6 +9,7 @@
   const CHAT_SPEAKER_STONES: Record<string, string> = {
     log_food: "fuel",
     update_food_note: "fuel",
+    set_nutrition_target: "fuel",
     log_set: "strength",
     plan_update: "strength",
     plan_restructure: "strength",

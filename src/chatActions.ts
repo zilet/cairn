@@ -16,6 +16,7 @@ import {
 import { parseMovementConsiderations, type MovementConsideration } from "./repo/movement-considerations.js";
 import { MAX_REDRAW_REQUEST_CHARS } from "./domain/brain/structure-request.js";
 import { classifyActivityCapture } from "./repo/activity-capture.js";
+import { USER_TARGET_MAX_KCAL, USER_TARGET_MIN_KCAL } from "./repo/nutrition.js";
 
 type ChatActionRecord = Record<string, unknown>;
 
@@ -41,6 +42,7 @@ export const CHAT_ACTION_TYPES = [
   "set_movement_considerations",
   "set_strength_objective",
   "set_training_drive",
+  "set_nutrition_target",
   "add_memory",
   "update_memory",
   "supersede_memory",
@@ -151,6 +153,16 @@ export interface SetTrainingDriveAction extends ChatActionBase {
   until?: string;
   scope?: "block" | "date";
   words?: string;
+}
+
+// The athlete's OWN calorie target, effective today (`userSetNutritionTarget`, the same
+// door as POST /api/nutrition/target and MCP set_nutrition_target).
+export interface SetNutritionTargetAction extends ChatActionBase {
+  type: "set_nutrition_target";
+  target_kcal: number;
+  protein_g?: number;
+  carbs_g?: number;
+  fat_g?: number;
 }
 
 export interface AddMemoryAction extends ChatActionBase {
@@ -422,6 +434,7 @@ export type ChatAction =
   | SetMovementConsiderationsAction
   | SetStrengthObjectiveAction
   | SetTrainingDriveAction
+  | SetNutritionTargetAction
   | AddMemoryAction
   | UpdateMemoryAction
   | SupersedeMemoryAction
@@ -613,6 +626,16 @@ export const CHAT_ACTION_PROMPT_SPECS = {
       `Emit ONLY when the athlete's own message states it — "I can push way harder than this", "push me until the block ends", "I want to push this block", "I feel ready for more", "back to steady" — or when they say yes right after YOU asked whether to push (relaying DATA.training_drive.offer: then "until" is the offer's until). A question ("should I push harder?") or your own suggestion never sets it; answer, and let them say it.`,
       `Declining a scheduled deload ("I'm not doing the deload", "skip the deload") IS a push stance: send "scope":"block". Say plainly what that does — the block's scheduled deload runs as a normal loaded week — and what it cannot do: a deload the loaded weeks have EARNED still holds.`,
       `A push is always dated: their named date goes in "until"; "this block" is "scope":"block"; with neither the server runs it four weeks. It widens the room on clean days and never overrides a rest-grade morning, a day that cost them, a symptom or anything clinical. When DATA.training_drive.held_by names something holding right now, say it in their terms — their word stands, and this is what still outranks it today — never quietly obey it and never quietly override it. The Changes feed holds a one-tap Undo.`,
+    ],
+  },
+  set_nutrition_target: {
+    type: "set_nutrition_target",
+    applyMode: "immediate",
+    shape: `{ "type": "set_nutrition_target", "target_kcal": <number, ${USER_TARGET_MIN_KCAL}-${USER_TARGET_MAX_KCAL}>,
+      "protein_g": <number — only when they named or kept a protein number; optional> }`,
+    guidance: [
+      `Emit set_nutrition_target when the athlete asks to set or change their daily calorie target — "set my calories to 2,100", "can you adjust my calorie goal accordingly" right after you discussed a number, or a yes to your own offer of one. The number is the one THEY stated or just agreed to in this conversation; never invent one, and a question ("what should my calories be?", "is 2,100 too low?") is answered in prose with no action. It lands as THEIR target (DATA's nutrition target card updates today) and supersedes any automated change still waiting; you CAN do this from chat, so never send them to the app to do it by hand.`,
+      `Do not also emit add_memory for the same number. Add protein_g only when they named or kept a protein figure. The lean-safe calorie and protein floors still apply and may raise what lands — the server says so under your reply, so state the number as set, not as an exact promise.`,
     ],
   },
   add_memory: {
@@ -1146,6 +1169,24 @@ export function normalizeChatAction(value: unknown): ChatAction | null {
         ...(nonBlank(value.until) ? { until: String(value.until).trim().slice(0, 10) } : {}),
         ...(value.scope === "block" || value.scope === "date" ? { scope: value.scope } : {}),
         ...(nonBlank(value.words) ? { words: String(value.words).slice(0, 240) } : {}),
+      };
+    }
+    case "set_nutrition_target": {
+      const kcal = Math.round(Number(value.target_kcal ?? value.kcal));
+      if (!Number.isFinite(kcal) || kcal < USER_TARGET_MIN_KCAL || kcal > USER_TARGET_MAX_KCAL) return null;
+      const grams = (raw: unknown): number | undefined => {
+        const n = Number(raw);
+        return raw != null && raw !== "" && Number.isFinite(n) && n > 0 && n < 1_000 ? Math.round(n) : undefined;
+      };
+      const protein = grams(value.protein_g);
+      const carbs = grams(value.carbs_g);
+      const fat = grams(value.fat_g);
+      return {
+        type: "set_nutrition_target",
+        target_kcal: kcal,
+        ...(protein !== undefined ? { protein_g: protein } : {}),
+        ...(carbs !== undefined ? { carbs_g: carbs } : {}),
+        ...(fat !== undefined ? { fat_g: fat } : {}),
       };
     }
     case "add_memory":
