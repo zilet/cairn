@@ -760,7 +760,9 @@ export type BrainRollbackKind =
   // The athlete's training drive / dated push stance (src/domain/training/training-drive.ts).
   | "training_stance"
   // The athlete's stated run week / quality session (src/domain/training/stated-input.ts).
-  | "endurance_schedule";
+  | "endurance_schedule"
+  // A finished race's lessons for the next build (src/repo/build-levers.ts).
+  | "build_levers";
 
 const BRAIN_ROLLBACK_KINDS: readonly BrainRollbackKind[] = [
   "training_plan",
@@ -771,6 +773,7 @@ const BRAIN_ROLLBACK_KINDS: readonly BrainRollbackKind[] = [
   "garmin_strength",
   "training_stance",
   "endurance_schedule",
+  "build_levers",
 ];
 
 export function saveBrainRollback(decisionId: number, kind: BrainRollbackKind, payload: unknown): boolean {

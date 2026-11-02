@@ -118,12 +118,12 @@
     "public/js/bundle-09-horizon.js": {
       "lazy": "horizon",
       "measured": {
-        "raw": 167834,
-        "brotli": 38885
+        "raw": 176711,
+        "brotli": 40989
       },
       "budget": {
-        "raw": 168960,
-        "brotli": 39936
+        "raw": 186368,
+        "brotli": 44032
       }
     },
     "public/js/bundle-10-ask.js": {
@@ -302,12 +302,12 @@
     "public/css/horizon.css": {
       "lazy": "horizon",
       "measured": {
-        "raw": 28202,
-        "brotli": 4936
+        "raw": 34227,
+        "brotli": 5626
       },
       "budget": {
-        "raw": 30720,
-        "brotli": 7168
+        "raw": 36864,
+        "brotli": 8192
       }
     },
     "public/css/welcome.css": {

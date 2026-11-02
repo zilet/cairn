@@ -97,7 +97,7 @@ export function registerTrainingCacheClear(clear: () => void): void {
 const COACH_CONTEXT_TABLES = [
   "activities", "attention_schedule", "belief_dispositions", "blood_pressure_readings",
   "body_measurements", "bodyweight_log", "brain_decisions", "brain_evaluations", "completed_races",
-  "brain_expectations", "brain_rollbacks", "calibration_events", "checkins", "context_events",
+  "brain_expectations", "brain_rollbacks", "build_levers", "calibration_events", "checkins", "context_events",
   "daily_metrics", "daily_session_compositions", "daily_session_decisions",
   "daily_session_outcomes", "day_reads", "exercise_aliases", "exercises", "food_notes",
   "fueling_feedback", "garmin_activities", "garmin_daily_metrics", "health_directives",

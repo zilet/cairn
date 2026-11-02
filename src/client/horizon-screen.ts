@@ -14,6 +14,9 @@
 //                      overview used to fold away.
 //   /app/horizon/race  is the Plan view's race section (plan-endurance-client.ts),
 //                      which wears "Race" and steps back here.
+//   /app/horizon/behind?id=<review>  one finished goal, looked back on (the Season's
+//                      "Behind you" rows open it; horizon-behind-client.ts): its measure,
+//                      the build, the story, what it taught, what carried forward.
 //
 // Every lab and scan row opens You's Health pages through the app's router, so the
 // lazy me-health bundle loads on arrival and never on the way to Horizon.
@@ -27,6 +30,7 @@ function horizonBackHtml(): string {
 function wireHorizonBack(root: ParentNode): void {
   root.querySelector<HTMLElement>("[data-home-back]")?.addEventListener("click", () => {
     state.horizonSeg = null;
+    state.horizonReviewId = null;
     activateTab("horizon");
   });
 }
@@ -48,7 +52,9 @@ function wireHorizonBack(root: ParentNode): void {
 
   function horizonNavigate(target: ClientHorizonTarget): void {
     if (target.tab === "horizon") {
-      state.horizonSeg = (target.section === "goal" ? "goal" : null) as ClientHorizonSection | null;
+      const review = target.section === "behind" && target.id ? String(target.id) : null;
+      state.horizonSeg = (target.section === "goal" ? "goal" : review ? "behind" : null) as ClientHorizonSection | null;
+      state.horizonReviewId = review;
       activateTab("horizon");
       return;
     }
@@ -121,7 +127,49 @@ function wireHorizonBack(root: ParentNode): void {
     CairnProgressJourney?.wire?.(body);
   }
 
+  /**
+   * One finished goal, looked back on (GET /api/goal-reviews/:id, 200 + null when it is
+   * gone). Its Undo goes through the brain decision's own revert route, then the look
+   * back is read again so the carried levers say what is still live.
+   */
+  async function renderHorizonBehind(id: string): Promise<void> {
+    headerTitle.textContent = "Behind you";
+    const token = ++pollToken;
+    view.innerHTML =
+      horizonBackHtml() +
+      `<div id="horizonBehindBody" class="horizon-behind-page">${loadingState("Reading it back…")}</div>`;
+    wireHorizonBack(view);
+    const body = view.querySelector<HTMLElement>("#horizonBehindBody");
+    if (!body) return;
+    const paint = async (): Promise<void> => {
+      const read = await api(`/goal-reviews/${encodeURIComponent(id)}`).catch(() => null);
+      if (token !== pollToken || !body.isConnected) return;
+      body.innerHTML =
+        CairnHorizonBehind.detailHtml(read) ||
+        CairnUi.emptyStateHtml({
+          title: "Nothing to look back on here",
+          body: "This finished goal isn't here any more. What is behind you stays listed at the bottom of the Season.",
+          className: "empty-state horizon-behind-empty",
+        });
+    };
+    CairnDecisionUndoController.mount(
+      body,
+      { api, toast },
+      {
+        "decision-undo": {
+          reason: "one-tap undo from a finished goal's look back",
+          success: "Put back what the next build had before",
+          stale: "This can no longer be undone.",
+          failed: "Could not undo that",
+          after: paint,
+        },
+      }
+    );
+    await paint();
+  }
+
   function renderHorizon(): unknown {
+    if (state.horizonSeg === "behind" && state.horizonReviewId) return renderHorizonBehind(state.horizonReviewId);
     return state.horizonSeg === "goal" ? renderHorizonGoal() : renderHorizonTimeline();
   }
 

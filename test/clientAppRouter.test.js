@@ -47,6 +47,23 @@ test("app router carries Horizon's and You's sub-views through state and back", 
   assert.equal(router.applyRouteState({ tab: "horizon", section: null }, { state, ...deps }), "horizon");
   assert.equal(state.horizonSeg, null);
 
+  // One finished goal's look back carries WHICH review in ?id=; without one it is the timeline.
+  assert.equal(router.applyRouteState({ tab: "horizon", section: "behind", id: "7" }, { state, ...deps }), "horizon");
+  assert.equal(state.horizonSeg, "behind");
+  assert.equal(state.horizonReviewId, "7");
+  assert.deepEqual(plain(router.currentRouteState({ state: { ...state, tab: "horizon" }, ...deps, defaultProgressSection: null })), {
+    tab: "horizon",
+    section: "behind",
+    id: "7",
+  });
+  assert.equal(router.applyRouteState({ tab: "horizon", section: "behind", id: null }, { state, ...deps }), "horizon");
+  assert.equal(state.horizonSeg, null);
+  assert.equal(state.horizonReviewId, null);
+  assert.deepEqual(
+    plain(router.currentRouteState({ state: { ...state, tab: "horizon", horizonSeg: "behind", horizonReviewId: null }, ...deps, defaultProgressSection: null })),
+    { tab: "horizon", section: null }
+  );
+
   assert.equal(router.applyRouteState({ tab: "you", section: "stone", id: "heart" }, { state, ...deps }), "you");
   assert.equal(state.youSeg, "stone");
   assert.equal(state.youStone, "heart");

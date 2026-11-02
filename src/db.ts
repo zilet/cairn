@@ -1905,6 +1905,53 @@ CREATE TABLE IF NOT EXISTS completed_races (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_completed_races_goal
   ON completed_races(goal_date, distance_km);
 
+-- A FINISHED goal, looked back on (src/repo/goal-reviews.ts). One row per goal that was
+-- actually reached — a race run (its matched effort), a strength objective completed, a
+-- weight goal first reached — snapshotted ONCE when first seen, so a later regain or a
+-- goal change never erases it. facts_json is the deterministic record of the goal and
+-- the training that led to it; review_json is the agent's words about it (headline,
+-- story, lessons, carry_forward), written once and then frozen (frozen_at).
+-- status: pending (facts kept, review not yet asked) | ready | failed (agent gave up;
+-- retried later) | waiting (a race still inside its recovery window).
+CREATE TABLE IF NOT EXISTS goal_reviews (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL CHECK (kind IN ('race','strength_objective','weight_goal')),
+  ref_key TEXT NOT NULL,        -- race: completed_races goal_date|distance_km; objective: its id; weight: goal lb|date reached
+  title TEXT NOT NULL,          -- "Cambridge Half Marathon", "Back squat 140 kg", "Goal weight 175 lb"
+  achieved_on TEXT NOT NULL,    -- the day it was reached / run
+  facts_json TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','waiting','ready','failed')),
+  review_json TEXT,
+  agent TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  reviewed_at TEXT,
+  frozen_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_goal_reviews_ref ON goal_reviews(kind, ref_key);
+
+-- Bounded, athlete-specific adjustments to the run engine, each earned by a finished
+-- race's review (src/repo/build-levers.ts). A lever is a validated number inside the
+-- engine's own safe bounds; raceRamp() and weeklyRunPlan() read the SAME resolved set
+-- (activeBuildLevers), so the ladder and the week never disagree. One active row per
+-- key: adopting a new value for a key supersedes the old one. Every adoption is a
+-- brain_decisions row (decision_id) with server-owned Undo, which sets reverted_at.
+CREATE TABLE IF NOT EXISTS build_levers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  key TEXT NOT NULL,
+  value REAL NOT NULL,
+  because TEXT NOT NULL,        -- the athlete-facing reason, from the review's lesson
+  source_review_id INTEGER REFERENCES goal_reviews(id),
+  decision_id INTEGER REFERENCES brain_decisions(id),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','superseded','reverted')),
+  adopted_on TEXT NOT NULL,
+  reverted_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_build_levers_active ON build_levers(key, status);
+
 CREATE TABLE IF NOT EXISTS belief_dispositions (
   id TEXT PRIMARY KEY,          -- e.g. 'learned_model:sleep_fuel_correlation'
   source TEXT NOT NULL,         -- learned_model | felt_signal | personal_modifier

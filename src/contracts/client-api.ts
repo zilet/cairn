@@ -1868,8 +1868,22 @@ export interface ClientRaceBuild {
   };
   /** One calm sentence (km) when the forward ladder moved because of this week; "" otherwise. */
   adapted?: string;
+  /**
+   * The lessons from a finished race shaping this build (src/repo/build-levers.ts): each
+   * adopted lever that applies to this race, with its reason in the athlete's words. []
+   * with none. `why` already says them in plain words when one moved something.
+   */
+  levers?: ClientRaceBuildLever[];
   why: string;
   reason: string | null;
+}
+
+/** One lesson from a finished race shaping the next build (src/repo/build-levers.ts). */
+export interface ClientRaceBuildLever {
+  key: "build_step" | "long_step" | "long_run_ceiling_km" | "peak_week_cap_km" | "taper_weeks" | "down_week_every";
+  value: number;
+  because: string;
+  source_review_id: number | null;
 }
 
 export type ClientFlexibleRunKind = "easy" | "quality" | "long";
@@ -4387,6 +4401,7 @@ export interface ClientApiResponses {
   "/api/journey/goal-consistency": ClientGoalConsistencyRead;
   "/api/journey/timeline": ClientForwardTimelineEntry[];
   "/api/journey/transition-suggestion": ClientJourneyTransitionSuggestion | null;
+  "/api/goal-reviews": import("./goal-reviews.js").GoalReviewListResponse;
   "/api/program/run-plan/apply": ClientProposalResult;
   "/api/coaching-focus": ClientCoachingFocus;
   "/api/health/markers": ClientHealthMarker[];

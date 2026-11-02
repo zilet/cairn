@@ -126,6 +126,7 @@ import {
 import { revertGarminReconcile } from "../../repo/activities.js";
 import { revertTrainingStance } from "../training/training-drive.js";
 import { revertStatedRunWeek } from "../training/stated-input.js";
+import { revertBuildLevers } from "../../repo/build-levers.js";
 import { afterSqliteCommit, withSqliteSavepoint } from "../../repo/sqlite-savepoint.js";
 import {
   captureNutritionProposalEvidence,
@@ -4280,6 +4281,10 @@ export function revertDecision(
         // The athlete's stated run week / quality session. Ownership-guarded inside: a
         // newer statement since this one wins, and the Undo refuses.
         revertStatedRunWeek(rollback.payload, localDateISO());
+      } else if (rollback?.kind === "build_levers" && rollback.payload?.version === 1) {
+        // A finished race's lessons for the next build. Ownership-guarded inside: only
+        // the levers this decision still holds go back, and what they replaced returns.
+        revertBuildLevers(rollback.payload, id);
       } else if (rollback?.kind === "garmin_strength" && rollback.payload?.version === 1) {
         // Ownership-guarded per session inside revertGarminReconcile itself — a
         // session touched again since the merge (re-sync, second reconcile) wins

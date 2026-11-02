@@ -34,6 +34,7 @@ import {
 import { SPECIALIST_DOMAINS } from "./brain/specialist-contract.js";
 import { FOOD_ESTIMATE_PROPERTIES } from "./foodCapture.js";
 import { type JsonSchema, matchesJsonSchema } from "./json-schema.js";
+import { goalReviewTextViolation } from "./repo/goal-review-grammar.js";
 import { assessMealPlanAdequacy } from "./repo/nutrition-safety.js";
 import { reasonHasHistoricalReference, validReasonProvenance } from "./repo/proposal-truth.js";
 import {
@@ -1937,4 +1938,48 @@ export function isWhatIfResult(value: unknown): boolean {
     const effect = object(raw);
     return !!effect && text(effect.why) && !violatesReadingGrammar(effect.why);
   });
+}
+
+// ---------- the finished-goal review ("Behind you") ----------
+
+// src/coachOps/goal-review.ts reads every field below: the four athlete-facing texts
+// and, for a race, the proposed build levers (validated server-side by
+// src/repo/build-levers.ts validateBuildLevers — the schema only shapes them).
+export const GOAL_REVIEW_SCHEMA: JsonSchema = {
+  type: "object",
+  additionalProperties: true,
+  required: ["headline", "story", "lessons", "carry_forward"],
+  properties: {
+    headline: { type: "string", minLength: 1 },
+    story: { type: "string", minLength: 1 },
+    lessons: { type: "string", minLength: 1 },
+    carry_forward: { type: "string", minLength: 1 },
+    levers: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: true,
+        required: ["key", "value", "because"],
+        properties: {
+          key: { type: "string" },
+          value: { type: "number" },
+          because: { type: "string" },
+        },
+      },
+    },
+  },
+};
+
+// Structure through the schema, then every athlete-facing sentence through the
+// reading grammar AND the no-grading rule (src/repo/goal-review-grammar.ts): a review
+// that scores, gates, leaks internals or holds the result against the target is not
+// one the athlete can be shown, so the rotation tries the next agent instead. A
+// lever's `because` is checked by the op (a bad one drops that lever, not the review).
+export function isGoalReviewResult(value: unknown): boolean {
+  if (!matchesJsonSchema(GOAL_REVIEW_SCHEMA, value, { coerce: true })) return false;
+  const p = object(value);
+  if (!p) return false;
+  return ["headline", "story", "lessons", "carry_forward"].every(
+    (key) => text(p[key]) && !goalReviewTextViolation(p[key])
+  );
 }

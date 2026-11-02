@@ -14,3 +14,4 @@ export * from "./prompt/day.js";
 export * from "./prompt/program.js";
 export * from "./prompt/verify.js";
 export * from "./prompt/whatif.js";
+export * from "./prompt/goal-review.js";

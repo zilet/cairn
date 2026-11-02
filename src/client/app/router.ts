@@ -184,7 +184,11 @@ type AppRouterRoot = typeof globalThis & { CairnAppRouter?: ClientAppRouterApi }
     } else if (tab === "chat") {
       state.pendingChatSession = route.session || null;
     } else if (tab === "horizon") {
-      state.horizonSeg = (String(route.section || "") === "goal" ? "goal" : null) as ClientHorizonSection | null;
+      // A finished goal's look back carries WHICH review in ?id=; without one it is the timeline.
+      const section = String(route.section || "");
+      const review = section === "behind" && route.id ? String(route.id) : null;
+      state.horizonSeg = (section === "goal" ? "goal" : review ? "behind" : null) as ClientHorizonSection | null;
+      state.horizonReviewId = review;
     } else if (tab === "you") {
       // A stone detail carries WHICH stone in ?id=; without one it is the landing.
       const stone = String(route.section || "") === "stone" && route.id ? route.id : null;
@@ -221,7 +225,12 @@ type AppRouterRoot = typeof globalThis & { CairnAppRouter?: ClientAppRouterApi }
     } else if (tab === "chat" && state.pendingChatSession) {
       route.session = state.pendingChatSession;
     } else if (tab === "horizon") {
-      route.section = (state.horizonSeg || null) as AppRoute["section"];
+      if (state.horizonSeg === "behind") {
+        if (state.horizonReviewId) {
+          route.section = "behind";
+          route.id = state.horizonReviewId;
+        } else route.section = null;
+      } else route.section = (state.horizonSeg || null) as AppRoute["section"];
     } else if (tab === "you" && state.youSeg === "stone" && state.youStone) {
       route.section = "stone";
       route.id = state.youStone;

@@ -62,10 +62,16 @@ import { applyPersonalResponseModifier, personalResponseModifierFor } from "./re
 import {
   acwrCeilingKm,
   capacityResumeKm,
+  capWeekToPeakKm,
   easyRunCapKm,
   isRampDownWeekOn,
+  loweredLongRunCeilingKm,
+  loweredPeakWeekCapKm,
   raceRamp,
   raceRampFitFor,
+  rampBuildStep,
+  rampLongStep,
+  type RampLevers,
   recoveryEasyCapKm,
   RESET_TAKEN_FRACTION,
   type RunWeekShape,
@@ -74,6 +80,7 @@ import {
   type RaceRamp,
   type RaceRampFit,
 } from "./run-ramp.js";
+import { rampLeversForRace } from "./build-levers.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { harmEvidenceOnDay, withMorningReadiness } from "./brain/read-adherence.js";
 import { pushStanceHarmFree, pushStanceInForce } from "./push-stance-open.js";
@@ -1976,7 +1983,17 @@ function weeklyRunPlanRead(
   // keeps the ordinary reactive anchor. Same closed-week family as above: both halves
   // of the paused week are read one week before `volumeAnchor`.
   const raceStillAhead = !(goal?.date && String(goal.date).slice(0, 10) < d);
-  if (raceStillAhead && closedWeekKm > 0 && isRampDownWeekOn(goal, mondayOf(volumeAnchor))) {
+  // A finished race's lessons for this build (build-levers.ts), resolved ONCE for the
+  // week — as of its Monday, so a plan reads the same from every morning of it — and
+  // handed to every ramp read below; the race ladder resolves the same set. Only a dated
+  // race still ahead takes them; with none, every key is the engine's own constant.
+  const buildLevers: RampLevers | null =
+    goal?.is_race && goal.date && raceStillAhead ? rampLeversForRace(goal.distance_km, week_start) : null;
+  const buildStepCeiling = rampBuildStep(buildLevers);
+  const raceDistanceKm = Number(goal?.distance_km);
+  const leverPeakCapKm = buildLevers ? loweredPeakWeekCapKm(raceDistanceKm, buildLevers) : null;
+  const leverLongCeilingKm = buildLevers ? loweredLongRunCeilingKm(raceDistanceKm, buildLevers) : null;
+  if (raceStillAhead && closedWeekKm > 0 && isRampDownWeekOn(goal, mondayOf(volumeAnchor), buildLevers)) {
     const pausedAnchor = shiftDaysISO(volumeAnchor, -7);
     const pausedKm = Math.max(
       recordedWeeklyKm(pausedAnchor, 0, RUN_SPORT_PATTERNS),
@@ -2162,7 +2179,7 @@ function weeklyRunPlanRead(
       // where a race genuinely does get one week closer, and the ask reads the same from
       // every morning in between. Deliberately mondayOf(d) and NOT volumeAnchorDate:
       // that one is the Sunday BEFORE, which would put the whole timeline a week out.
-      return raceRamp(goal, week_start, anchor, prevLongForRamp, null, rampDemonstrated);
+      return raceRamp(goal, week_start, anchor, prevLongForRamp, null, rampDemonstrated, buildLevers);
     } catch {
       return null;
     }
@@ -2230,9 +2247,12 @@ function weeklyRunPlanRead(
     // race week ~0.45 of the week before it); the flat race-week cut otherwise.
     factor = ramp && anchorKm > 0 ? ramp.required_km / anchorKm : 0.55;
     rationale.push(
-      ramp && ramp.weeks_to_race_week === 1
-        ? "The week before race week — trimming volume by about a third so the legs arrive fresh; the long run comes down with it."
-        : "Race week — tapering volume right down so you arrive fresh."
+      ramp && ramp.weeks_to_race_week >= 2
+        ? // Only a two-week taper (a lesson from the last race, build-levers.ts) reaches here.
+          "Two weeks out — the taper starts here, easing volume a touch so the legs arrive fresh; the long run comes down with it."
+        : ramp && ramp.weeks_to_race_week === 1
+          ? "The week before race week — trimming volume by about a third so the legs arrive fresh; the long run comes down with it."
+          : "Race week — tapering volume right down so you arrive fresh."
     );
   } else if (recoveryWeek) {
     factor = 0.8;
@@ -2273,7 +2293,16 @@ function weeklyRunPlanRead(
     rationale.push("Rebuilding the base back gently — steady, not a jump.");
   } else {
     standardBuild = true;
-    rationale.push("Building conservatively — about a 10% step on last week.");
+    // A gentler weekly climb learned from the last race (build_step) caps the ordinary
+    // ~10% step too, not only the race's pull.
+    if (buildStepCeiling < factor) {
+      factor = buildStepCeiling;
+      rationale.push(
+        "Building gently — a smaller step on last week than the usual 10%, the climb your last race build showed suits you."
+      );
+    } else {
+      rationale.push("Building conservatively — about a 10% step on last week.");
+    }
   }
 
   // --- the race, pulling ---
@@ -2328,7 +2357,7 @@ function weeklyRunPlanRead(
         )(block?.phase === "realization" ? "peak" : "heaviest")
       );
     } else if (pull > factor) {
-      factor = Math.min(MAX_WEEKLY_BUILD_FACTOR, pull);
+      factor = Math.min(buildStepCeiling, pull);
       raceStepLine = `Stepping up a touch more than the usual 10% — ${goal?.event ? String(goal.event).slice(0, 60) : "your race"} is ${ramp.weeks_to_race} week${ramp.weeks_to_race === 1 ? "" : "s"} out, and this is the biggest step that still sits inside a safe build.`;
       rationale.push(raceStepLine);
     }
@@ -2379,7 +2408,9 @@ function weeklyRunPlanRead(
       base: factor,
       modifier: runModifier,
       min: factor,
-      max: MAX_WEEKLY_BUILD_FACTOR,
+      // A gentler climb learned from the last race (build_step) is the ceiling here too,
+      // or the week would out-climb the ladder that walks at that step.
+      max: Math.min(MAX_WEEKLY_BUILD_FACTOR, buildStepCeiling),
     });
     if (accelerated > factor) {
       factor = accelerated;
@@ -2417,6 +2448,19 @@ function weeklyRunPlanRead(
     weeklyKm = Math.max(6, round1(Math.max(anchorKm, acwrCeiling)));
     if (raceStepLine) rationale.splice(rationale.indexOf(raceStepLine), 1);
     rationale.push(pickDayVariant(RUN_ACWR_CEILING_VARIANTS, week_start, "run-acwr-ceiling"));
+  }
+  // A peak-week ceiling learned from the last race (build-levers.ts) stops the climb
+  // there — the same ceiling the ramp and the ladder hold (capWeekToPeakKm): never past
+  // it, and never a cut under the week it steps off. Not in the taper (it steps down).
+  if (leverPeakCapKm != null && !taper && weeklyKm > leverPeakCapKm + 0.05) {
+    const capped = Math.max(6, capWeekToPeakKm(anchorKm, weeklyKm, leverPeakCapKm));
+    if (capped < weeklyKm - 0.05) {
+      weeklyKm = capped;
+      if (raceStepLine && rationale.includes(raceStepLine)) rationale.splice(rationale.indexOf(raceStepLine), 1);
+      rationale.push(
+        `Holding the week near ${Math.round(leverPeakCapKm)} km — the biggest week your last race build showed suits you.`
+      );
+    }
   }
 
   // --- run-day count ---
@@ -2720,7 +2764,12 @@ function weeklyRunPlanRead(
   // step widens to 1.15 only on the weeks the raise can happen at all; a protected
   // week keeps the tighter 1.1 it always had.
   if (prevLong > 0) {
-    longKm = round1(Math.min(longKm, prevLong * (longSuppressed ? 1.1 : SUSTAINABLE_LONG_STEP_FACTOR)));
+    longKm = round1(
+      Math.min(
+        longKm,
+        prevLong * Math.min(longSuppressed ? 1.1 : SUSTAINABLE_LONG_STEP_FACTOR, rampLongStep(buildLevers))
+      )
+    );
   }
   // A spike week is not the week to repeat the new longest: the absorb-before-adding
   // hold held a new longest at that same distance a week after it was first run. The long
@@ -2768,6 +2817,9 @@ function weeklyRunPlanRead(
   longKm = Math.max(longKm, round1(weeklyKm * 0.25));
   if (supportingConstrained && prevLong > 0) longKm = round1(Math.min(longKm, prevLong * 1.1));
   if (taper) longKm = round1(Math.min(longKm, Math.max(6, prevLong * 0.6)));
+  // A long-run ceiling learned from the last race (build-levers.ts): no long run of the
+  // build passes it — the ramp's own curve stops there too.
+  if (leverLongCeilingKm != null) longKm = round1(Math.min(longKm, leverLongCeilingKm));
 
   let easyTotal = Math.max(easyCount * 3, round1(weeklyKm - longKm - qualityKm));
   let easyEach = round1(easyTotal / easyCount);
@@ -2790,7 +2842,14 @@ function weeklyRunPlanRead(
     // A HELD week's long run never grows past its hold to absorb the remainder (a spike
     // week once handed a 13.5 km runner a 19.7 km "long run" this way): the easy runs
     // come down to meet it, and what they cannot carry stays off the card.
-    longKm = round1(Math.min(easyEach, weeklyKm * 0.55, heldLongCeilingKm ?? Number.POSITIVE_INFINITY));
+    longKm = round1(
+      Math.min(
+        easyEach,
+        weeklyKm * 0.55,
+        heldLongCeilingKm ?? Number.POSITIVE_INFINITY,
+        leverLongCeilingKm ?? Number.POSITIVE_INFINITY
+      )
+    );
     easyTotal = Math.max(easyCount * 3, round1(weeklyKm - longKm - qualityKm));
     easyEach = round1(Math.min(easyTotal / easyCount, longKm));
   }
@@ -3168,7 +3227,8 @@ function weeklyRunPlanRead(
                 priorWeeksKm: [3, 2, 1, 0].map((b) => recordedWeeklyKm(volumeAnchor, b, RUN_SPORT_PATTERNS)),
                 chronicFloorKm: ENDURANCE_CHRONIC_FLOOR_KM,
               },
-              rampDemonstrated
+              rampDemonstrated,
+              buildLevers
             );
           } catch {
             return null;
@@ -3218,7 +3278,7 @@ function weeklyRunPlanRead(
     // …and the RATE, when the rate is what the calendar broke rather than the
     // volume. Silent inside the margin, where the required step is the sustainable
     // one and the sentence above has already covered it.
-    const overshoot = ramp.needed_build_factor / SUSTAINABLE_WEEKLY_BUILD_FACTOR;
+    const overshoot = ramp.needed_build_factor / buildStepCeiling;
     if (!ramp.feasible && overshoot >= RAMP_RATE_SPEAK_MARGIN) {
       rationale.push(
         pickDayVariant(

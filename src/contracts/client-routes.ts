@@ -70,7 +70,8 @@ export const CLIENT_ROUTE_DEFINITIONS = {
     me: ["standing", "profile", "memory", "health", "life", "family"],
     health: ["read", "markers", "records", "share", "learned"],
     settings: ["sources", "automation", "data", "agents", "devices", "system"],
-    horizon: ["goal"],
+    // "behind" is one finished goal's look back; it carries the review id in ?id=.
+    horizon: ["goal", "behind"],
     // "stone" carries the stone key in ?id= (strength, endurance, fuel, ...).
     you: ["stone"],
   },

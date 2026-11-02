@@ -322,7 +322,10 @@ type TabSwitchOptions = {
         // always opens the timeline, whatever section Horizon last showed (a
         // goal-line visit from Train would otherwise stick). Reset here, in the
         // eager shell, so it holds before the lazy Horizon bundle has ever loaded.
-        if (tab.dataset.tab === "horizon") state.horizonSeg = null;
+        if (tab.dataset.tab === "horizon") {
+          state.horizonSeg = null;
+          state.horizonReviewId = null;
+        }
         // Intake is where today's food lives (openIntake: Today's glance, chat's fuel
         // card), never the Train button's landing: the button opens Train's default.
         if (tab.dataset.tab === "train" && state.progressSeg === "intake") state.progressSeg = undefined;

@@ -203,6 +203,7 @@ test("a canonical v2 URL parses to its surface and is never re-redirected", () =
     ["/app/horizon", "horizon", null, "horizon"],
     ["/app/horizon/race", "plan", "endurance", "horizon"],
     ["/app/horizon/goal", "horizon", "goal", "horizon"],
+    ["/app/horizon/behind?id=12", "horizon", "behind", "horizon"],
     ["/app/ask", "chat", null, "ask"],
     ["/app/ask?session=chat_17", "chat", null, "ask"],
     ["/app/ask/changes", "plan", "coach", "ask"],
@@ -237,6 +238,10 @@ test("a v2 path that names nothing valid lands on its home and is tidied", () =>
     view: "settings", section: null, home: "you", legacy: true, canonical: "/app/you/settings",
   });
   assert.deepEqual(landing(routes, "/app/horizon/nope"), {
+    view: "horizon", section: null, home: "horizon", legacy: true, canonical: "/app/horizon",
+  });
+  // A look back names WHICH finished goal; without an id it is the timeline.
+  assert.deepEqual(landing(routes, "/app/horizon/behind"), {
     view: "horizon", section: null, home: "horizon", legacy: true, canonical: "/app/horizon",
   });
 });
@@ -279,6 +284,8 @@ test("routeToUrl writes view-keyed routes in the v2 grammar only", () => {
     [{ tab: "settings", section: "system" }, "/app/you/settings/system"],
     [{ tab: "settings", section: "you" }, "/app/you"],
     [{ tab: "horizon", section: "goal" }, "/app/horizon/goal"],
+    [{ tab: "horizon", section: "behind", id: 12 }, "/app/horizon/behind?id=12"],
+    [{ tab: "horizon", section: "behind" }, "/app/horizon"],
     [{ tab: "you", section: "stone", id: "fuel" }, "/app/you/stone?id=fuel"],
     // A home key names its landing view.
     [{ tab: "train" }, "/app/train"],

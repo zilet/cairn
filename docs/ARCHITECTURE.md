@@ -5836,6 +5836,85 @@ the engine staying in km), and the `race_build` key in the ENDURANCE prompt bund
 ride placement) so every running prompt is shooting at the same numbers. `coach.ts` computes it
 once per context as `raceBuildView`, reusing `runPlanView` and `weekLayoutView`.
 
+## Build levers (lessons from the last race) (`src/repo/build-levers.ts`, 2026-11-02)
+
+A finished race is reviewed by an agent (`goal-reviews.ts`), and the review's lessons CHANGE the
+next race build — but only through a closed list of numbers the engine already owns, each held
+inside the engine's own safe range. The agent proposes; the server validates, records, applies
+with an announcement, and keeps one-tap Undo. The ladder and the week read one resolved set, so
+they cannot disagree.
+
+**The keys and their hard bounds** (`BUILD_LEVER_BOUNDS`). The four factor/count keys can only
+make a build MORE conservative — their risky-direction bound IS the engine constant:
+
+| key | engine | bounds |
+|---|---|---|
+| `build_step` (weekly step ceiling) | 1.12 (`SUSTAINABLE_WEEKLY_BUILD_FACTOR`) | 1.05–1.12 |
+| `long_step` (long-run step ceiling) | 1.15 (`SUSTAINABLE_LONG_STEP_FACTOR`) | 1.08–1.15 |
+| `taper_weeks` | 1 (peak 2 calendar weeks out) | 1–2 (2 = peak 3 weeks out) |
+| `down_week_every` | 4 | 3–4 |
+| `long_run_ceiling_km` | min(0.85 × distance, 20) | ≥ 0.6 × engine; above it only when the longest run was taken well, ≤ min(1.1 × that run, distance) |
+| `peak_week_cap_km` | `peakWeeklyKm(distance)` | ≥ 0.7 × engine; above it only with < 2 harmed weeks and a held week, ≤ min(1.1 × held week, the formula's clamp max 40/45) |
+
+`validateBuildLevers` parses untrusted agent output: unknown keys are rejected, the first proposal
+per key is the one considered, a value only a little out of range (within
+`BUILD_LEVER_CLAMP_MARGIN`, 10% past the bound) is clamped (`clamped_from`) while one further out is
+REJECTED (a missing value read as 0 must never become the tightest setting), only a real positive
+number is read (never null, "", false or []), a RAISE without its evidence is rejected with a plain
+reason (never clamped into a smaller raise), and `because` is required, collapsed, capped at 240
+characters, and held to `violatesReadingGrammar`. The long-run raise's evidence is POSITIVE:
+`longest_run_clean` is no harm on the day AND `nextMorningClean` (silence never vouches).
+
+**Distance scoping.** The factor/count keys carry to a next race of any distance (they describe
+how this body absorbs a build). The two km caps are facts about one distance, so a cap applies only
+to a next race in the SAME class it was learned on (`raceDistanceClass`: 10K under 15 km, half
+under 30, marathon above; under 8 km has no caps); any other distance builds to its own engine
+caps. The learned distance rides on the adopting decision (`context.race_distance_km`, read off
+the `goal_reviews` row at adoption). A cap carries as a SHARE of the learned race's own engine
+figure (`capForRace`), so its direction survives: a lowering stays a lowering on the next race
+(never below the floor share), and a raise stays a raise of at most the km validated — one that
+would not clear the next race's own figure does not apply.
+
+**Adoption** (`adoptBuildLevers`). ONE `brain_decisions` row per review — kind
+`training_structure`, domain `training`, risk `moderate`, reversible, `source_ref_type:
+'goal_review'` keyed by the review id, the tier from `decideAutonomyTier` (announce under lead
+and announce-first; under review-everything nothing is recorded or adopted — there is no approve
+door for a lever set, and a parked ask with no way to say yes helps nobody; a later call adopts). The
+review then records them as `levers_result.parked`, never as `accepted`, and the detail view shows
+nothing under the carried-forward levers.
+Idempotent per review: a second call returns the first decision. Each key keeps ONE active row;
+adopting a new value supersedes the old one. The undo snapshot is `brain_rollbacks` kind
+`build_levers` (`{lever_ids, superseded_ids}`): `revertDecision` → `revertBuildLevers` marks EVERY
+row of the decision `reverted` (a superseded one too, so it can never come back) and puts back what
+it superseded when the key is free and that row's own decision is still applied.
+An older decision whose levers were all replaced refuses its Undo in plain words. The Changes feed
+titles it from the summary and labels its Undo "Build the next race without these lessons".
+
+**Resolution and wiring.** `activeBuildLevers(asOf)` resolves every key (an engine constant with no
+lever; the caps fall back to the absolute 20 km / 45 km without a distance) TRULY as of the date:
+per key, the latest non-reverted row adopted on/before `asOf` — supersession is time-ordered, so a
+newer review never rewrites how a past week resolves. `buildLeversForRace(distance, asOf)` applies the distance scoping and the
+distance's own caps; `rampLeversForRace` hands `raceRamp` ONLY the keys a lever set, so a build with
+no lesson runs exactly the engine's constants (`test/buildLevers.test.js` proves byte identity).
+`run-ramp.ts` stays pure: `raceRamp`, `isRampDownWeekOn`, `peakTargetKm`, `longPeakTargetKm` and
+`longRunStep` take an optional `RampLevers`. Both entry points resolve as of the week's MONDAY —
+`weeklyRunPlan` (`week_start`, dated race still ahead only) and `raceLadderFor` (→
+`projectRaceBuildWeeks`, whose rung kinds follow `rampTaperWeeks`) — and the long-run-novelty harm
+exemption in `read-adherence.ts` reads the same ceiling. In the weekly plan: the ordinary ~10% step
+and the race pull are capped at `build_step`; the learned `run_volume_step` acceleration still
+applies on top but never past `build_step` (so never past the engine's own 1.12); the long-run step is capped at `long_step`;
+a LOWERED long-run ceiling / peak-week cap is a hard ceiling on every long run / week of the build
+(`capWeekToPeakKm`: never climbs past it, never cuts under the week it steps off), while a RAISED one
+replaces the engine's peak target. A two-week taper puts the first taper week at 0.85 of the peak
+and the final one still at 0.7; its first taper week's long run is min(0.6 × the long peak, 0.6 ×
+the long run before it, floor 6 km) — the same rule `weeklyRunPlan` applies to every taper week, so
+the ladder and the week agree. A two-week taper also lengthens the race's lifting trim, and the decision says so.
+
+**Visibility.** `raceBuild().levers` (and the `ClientRaceBuild` DTO) lists the lessons shaping this
+build, so the race page, MCP `get_race_build` and every prompt carrying `race_build` see them; the
+build's `why` gains one variant-set clause naming the levers that MOVED something
+(`buildLeverWhyLine`: "…a two-week taper, from what the Cambridge Half taught.").
+
 ## Server words: units, dates, the stage word, the weight trend, the week (2026-10-07, `docs/IA.md`)
 
 **One formatter, units from the athlete.** `src/repo/display-words.ts` is the only place on the
@@ -7373,3 +7452,70 @@ every landed day is the stamp's LOCAL day (`localDayOfStamp`), never a UTC slice
 (`RaceDaysWeek.changes`), never per day; the day page of a day in that week carries it after the day's
 own changes. The feed reads agent markdown as words (`plainInline`, `src/lib/plain-text.ts`) for every
 title and why, so no surface prints asterisks.
+
+## Goal reviews (Behind you)
+
+Every FINISHED goal is snapshotted once with deterministic facts, looked back on ONCE by an agent in
+its own words, and frozen. Horizon › Season lists them quietly at the bottom ("Behind you", newest
+first), each opening a detail page (`/app/horizon/behind?id=<id>`). A measure, never a grade: no
+score, no comparison against the target, never a notification.
+
+**Detection** (`detectGoalReviews`, `src/repo/goal-reviews.ts`; one row per `(kind, ref_key)` in
+`goal_reviews`, idempotent — the rows are the state):
+
+- **race** — every race kept in `completed_races` plus the live goal's matched effort
+  (`latestFinishedRace`), snapshotted as soon as the EFFORT is matched; one run is one race (two goals
+  resolving to one run day keep the one nearest the run's distance). `ref_key` `goal_date|distance_km`.
+  `waiting` while the post-race window is open (`raceRecoverySpan`, the window `raceRecoveryWindow`
+  reads), then `pending` — the facts are rebuilt once at that flip so the recovery is known.
+- **strength_objective** — a `strength_objectives` row with status `completed` (never superseded or
+  archived). If the ledger reopens it before the review froze, the unfrozen row is dropped; a frozen one
+  stays.
+- **weight_goal** — the first `goal_reached` journey milestone, snapshotted the first time it is seen,
+  so a regain never erases it. `ref_key` `goal_lb|date reached`.
+
+**Race facts** (`buildRaceFacts`). Weekly Mon–Sun run km from the build's start through race week, the
+race's own km separate (stacked on race week, never training). The start is the later of 16 weeks
+before race week (`RACE_BUILD_MAX_WEEKS`) and the run-up's first week — walking back from race week, the
+run-up ends at two consecutive weeks with no running (`RUN_UP_GAP_WEEKS`). Also: the longest training
+run before the race and whether it was taken clean (`runningHarmOnDay`), the held floor
+(`preRaceRunCapacity`), the biggest week, the set-aside weeks (`demonstratedRunCapacity` with
+`setAsideReason`), race pace against the longest run's, the taper (race week before race day against
+the week before), the recovery (the engine's window, and days to the first clean morning via
+`nextMorningClean` — silence never vouches), the stated target as CONTEXT only, a lifting summary, and
+the `BuildLeverFacts` the lever validator checks against. Strength facts: baseline → achieved
+estimated max, target, dates, exposures. Weight facts: start → goal, dates, rate, phases crossed. All
+numbers are stored canonical (km, lb); every line the athlete reads is worded at read time in their
+current units.
+
+**The op** (`reviewGoal`, `src/coachOps/goal-review.ts`; job kind `goal_review`; task class
+`goal_review`, rotation, deep/medium). Prompt site `goal_review` (`promptData`): the person and the live
+goals only — the facts are the payload. Enforced schema `GOAL_REVIEW_SCHEMA` (headline, story, lessons,
+carry_forward, levers[key,value,because]); `isGoalReviewResult` holds every text to the reading grammar
+AND the no-grading rule (`src/repo/goal-review-grammar.ts`: "missed/fell short of/beat … target",
+verdict words). The normalizer caps lengths (headline 160 chars; story and lessons 900 chars and 4
+sentences; carry-forward 600 and 3; a lever's because 240) and drops a lever whose key is unknown or
+whose reason breaks the grammar. The `stub` agent writes a canned deterministic review. Success saves
+`review_json`, status `ready`, `reviewed_at` and `frozen_at` — a frozen review is never rewritten.
+Failure: status `failed`, `attempts+1`, `last_error`; retried on a later night, at most 3 attempts.
+`AgentBusyError` records nothing (defer).
+
+**Levers.** Only the latest race, and only within 120 days of it (`raceLeversEligible`), is offered the
+lever block; `validateBuildLevers` then `adoptBuildLevers` (`src/repo/build-levers.ts`) run after the
+review is frozen, and their outcome — `{accepted, rejected, decision_id}`, or an `error` — is recorded on
+`review_json.levers_result`. A lever failure never loses the review. The detail page shows adopted
+levers with their `because` and one Undo through the brain-decision revert route.
+
+**The nightly pass** (`runGoalReviewNightly`; `runGoalReviewTick` in `src/scheduler.ts`, from
+`GOAL_REVIEW_HOUR` (2 local) until 6, inside the proactive tick): detect and snapshot, settle waiting
+races, then review AT MOST ONE row (oldest achieved first), so a backfill trickles a night at a time.
+Whether a review is due is the rows' question — a pending row, or a failed one under its cap, and no
+attempt already stamped today — never a clock slot; the in-process date only spares re-running
+detection on every tick of the window.
+
+**Serving.** `GET /api/goal-reviews`, `GET /api/goal-reviews/:id` (200 + null on absence),
+`POST /api/goal-reviews/:id/review` (queues or joins the durable job; a frozen or still-waiting row is
+`{ok:false, error, tried}` at 200) in `src/routes/goal-reviews.ts`; MCP `list_goal_reviews`,
+`get_goal_review`, `review_goal` (`src/surfaces/mcp/goal-reviews.ts`). DTOs in
+`src/contracts/goal-reviews.ts`. The PWA: `src/client/horizon-behind-client.ts` (lazy horizon bundle),
+styles in `src/styles/horizon/behind.css`.

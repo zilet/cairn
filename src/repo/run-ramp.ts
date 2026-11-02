@@ -66,7 +66,117 @@ export const RESET_TAKEN_FRACTION = 0.6;
 const LONG_PEAK_WEEKS_OUT = 3;
 /** A long run is at most this share of the race distance, and never over 20 km. */
 const LONG_PEAK_OF_DISTANCE = 0.85;
-const LONG_PEAK_CEILING_KM = 20;
+export const LONG_PEAK_CEILING_KM = 20;
+
+// ---- build levers: lessons from the last race (build-levers.ts) ----
+// A finished race's review may set a few of the numbers above for the NEXT build, from
+// a closed list, each validated into a hard range that never takes the engine past its
+// own constants in the risky direction (BUILD_LEVER_BOUNDS, build-levers.ts). This module
+// stays pure: the levers are handed in as `RampLevers`, resolved once at the entry
+// points (weeklyRunPlan, the race ladder), so the week and the ladder read one set. An
+// absent key is the engine's own constant — no levers is exactly the engine as it was.
+
+/** The race-build levers this arithmetic reads. Every key optional; absent = the engine constant. */
+export interface RampLevers {
+  /** Weekly volume step ceiling (never above SUSTAINABLE_WEEKLY_BUILD_FACTOR). */
+  build_step?: number;
+  /** Long-run step ceiling (never above SUSTAINABLE_LONG_STEP_FACTOR). */
+  long_step?: number;
+  /** The build's long-run peak, km: below the engine's own peak it is a hard ceiling. */
+  long_run_ceiling_km?: number;
+  /** The build's peak week, km: below the distance's own demand it is a hard ceiling. */
+  peak_week_cap_km?: number;
+  /** Taper weeks before race week: 1 (the engine) or 2 (peak three calendar weeks out). */
+  taper_weeks?: number;
+  /** A reset week every N weeks counted back from the peak: 4 (the engine) or 3. */
+  down_week_every?: number;
+}
+
+/** The engine's own taper length (weeks before race week) and reset cadence. */
+export const ENGINE_TAPER_WEEKS = PEAK_WEEKS_OUT - 1;
+export const ENGINE_DOWN_WEEK_EVERY = DOWN_WEEK_EVERY;
+/** With a two-week taper, the first taper week sits at this share of the peak (and the
+ * final taper week still lands at FINAL_TAPER_FRACTION of it). */
+const EARLY_TAPER_FRACTION = 0.85;
+/**
+ * …and its long run at this share of the long-run peak — and never past this share of the
+ * long run before it (floored at 6 km), the taper rule weeklyRunPlan applies to every taper
+ * week, so the ladder and the week print the same long run. The final taper week stays 0.55.
+ */
+const EARLY_TAPER_LONG_FRACTION = 0.6;
+const TAPER_LONG_OF_PREVIOUS = 0.6;
+const TAPER_LONG_FLOOR_KM = 6;
+
+const leverNumber = (v: unknown): number | null => {
+  if (v == null) return null;
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
+/** The weekly step ceiling under `levers`: the lever, never above the engine's own. */
+export function rampBuildStep(levers?: RampLevers | null): number {
+  const v = leverNumber(levers?.build_step);
+  return v == null ? SUSTAINABLE_WEEKLY_BUILD_FACTOR : Math.min(SUSTAINABLE_WEEKLY_BUILD_FACTOR, v);
+}
+
+/** The long-run step ceiling under `levers`: the lever, never above the engine's own. */
+export function rampLongStep(levers?: RampLevers | null): number {
+  const v = leverNumber(levers?.long_step);
+  return v == null ? SUSTAINABLE_LONG_STEP_FACTOR : Math.min(SUSTAINABLE_LONG_STEP_FACTOR, v);
+}
+
+/** Taper weeks before race week under `levers`: 1 (the engine) or 2. */
+export function rampTaperWeeks(levers?: RampLevers | null): number {
+  const v = leverNumber(levers?.taper_weeks);
+  return v == null ? ENGINE_TAPER_WEEKS : Math.min(2, Math.max(1, Math.round(v)));
+}
+
+/** Calendar weeks before race week the peak lands under `levers` (the engine: 2). */
+export function rampPeakWeeksOut(levers?: RampLevers | null): number {
+  return rampTaperWeeks(levers) + 1;
+}
+
+/** The reset cadence under `levers`: every 4th week (the engine) or every 3rd. */
+export function rampDownWeekEvery(levers?: RampLevers | null): number {
+  const v = leverNumber(levers?.down_week_every);
+  return v == null ? DOWN_WEEK_EVERY : Math.min(DOWN_WEEK_EVERY, Math.max(3, Math.round(v)));
+}
+
+/** The highest peak week the distance's own formula ever asks (its clamp maximum). */
+export function peakWeeklyClampMaxKm(distanceKm: number): number | null {
+  if (!Number.isFinite(distanceKm) || distanceKm < 8) return null;
+  return distanceKm >= 15 ? 45 : 40;
+}
+
+/**
+ * A LOWERED peak-week lever as a hard ceiling for this distance, or null (no lever, or
+ * one at/above the distance's own demand — a raise is a target, never a ceiling).
+ */
+export function loweredPeakWeekCapKm(distanceKm: number, levers?: RampLevers | null): number | null {
+  const cap = leverNumber(levers?.peak_week_cap_km);
+  const demand = peakWeeklyKm(distanceKm);
+  return cap != null && demand != null && cap < demand ? round1(cap) : null;
+}
+
+/**
+ * A LOWERED long-run lever as a hard ceiling for this distance, or null (no lever, or one
+ * at/above the race's own long-run peak).
+ */
+export function loweredLongRunCeilingKm(distanceKm: number, levers?: RampLevers | null): number | null {
+  const cap = leverNumber(levers?.long_run_ceiling_km);
+  if (cap == null || !Number.isFinite(distanceKm) || distanceKm <= 0) return null;
+  return cap < peakLongKm(distanceKm) ? round1(cap) : null;
+}
+
+/**
+ * A week's volume held under a lowered peak ceiling: an ask at or under it stands; one
+ * past it never climbs past the ceiling, and never cuts under the level the week steps
+ * off (`anchorKm`) either — the ceiling stops the climb, it is not a reduction.
+ */
+export function capWeekToPeakKm(anchorKm: number, askedKm: number, capKm: number | null | undefined): number {
+  if (capKm == null || !(askedKm > capKm)) return askedKm;
+  return round1(Math.max(Math.min(askedKm, Math.max(0, anchorKm)), capKm));
+}
 
 // ---- demonstrated capacity: the floor under the build, and the next milestone ----
 // A build that walks only from last week's volume forgets what the athlete has already
@@ -121,12 +231,22 @@ const positive = (v: unknown): number => {
  * `PEAK_TARGET_CEILING_OF_DEMAND` × the demand, never under the week itself). Null when
  * the distance has no volume ramp at all (`peakWeeklyKm`).
  */
-export function peakTargetKm(distanceKm: number, demonstratedWeekKm?: number | null): number | null {
+export function peakTargetKm(
+  distanceKm: number,
+  demonstratedWeekKm?: number | null,
+  levers?: RampLevers | null
+): number | null {
   const demand = peakWeeklyKm(distanceKm);
   if (demand == null) return null;
+  // A lesson that the peak was too big is the build's ceiling, whatever was shown.
+  const lowered = loweredPeakWeekCapKm(distanceKm, levers);
+  if (lowered != null) return lowered;
+  // A raise (evidence-gated in build-levers.ts) stands in for the demand as the floor.
+  const raised = leverNumber(levers?.peak_week_cap_km);
+  const base = raised != null ? Math.max(demand, raised) : demand;
   const shown = positive(demonstratedWeekKm);
   const milestone = Math.min(shown * NEW_PEAK_STEP, demand * PEAK_TARGET_CEILING_OF_DEMAND);
-  return round1(Math.max(demand, shown, milestone));
+  return round1(Math.max(base, shown, milestone));
 }
 
 /**
@@ -134,8 +254,16 @@ export function peakTargetKm(distanceKm: number, demonstratedWeekKm?: number | n
  * `NEW_LONG_PEAK_STEP` past the longest run taken well (up to the 20 km ceiling), and
  * never under that run itself.
  */
-export function longPeakTargetKm(distanceKm: number, demonstratedLongKm?: number | null): number {
-  const race = peakLongKm(distanceKm);
+export function longPeakTargetKm(
+  distanceKm: number,
+  demonstratedLongKm?: number | null,
+  levers?: RampLevers | null
+): number {
+  // A lesson that the long run went too far is the build's ceiling, whatever was shown.
+  const lowered = loweredLongRunCeilingKm(distanceKm, levers);
+  if (lowered != null) return lowered;
+  const raised = leverNumber(levers?.long_run_ceiling_km);
+  const race = raised != null ? Math.max(peakLongKm(distanceKm), raised) : peakLongKm(distanceKm);
   const shown = positive(demonstratedLongKm);
   if (!shown) return race;
   const milestone = Math.min(shown * NEW_LONG_PEAK_STEP, Math.max(race, LONG_PEAK_CEILING_KM));
@@ -424,9 +552,9 @@ export function peakLongKm(distanceKm: number): number {
  * Counted BACK from the peak week so the cadence is anchored to the race rather
  * than to an arbitrary calendar ordinal, and the peak week itself never resets.
  */
-function isRampDownWeek(weeksOut: number): boolean {
-  const stepsFromPeak = weeksOut - PEAK_WEEKS_OUT;
-  return stepsFromPeak > 0 && stepsFromPeak % DOWN_WEEK_EVERY === 0;
+function isRampDownWeek(weeksOut: number, levers?: RampLevers | null): boolean {
+  const stepsFromPeak = weeksOut - rampPeakWeeksOut(levers);
+  return stepsFromPeak > 0 && stepsFromPeak % rampDownWeekEvery(levers) === 0;
 }
 
 /**
@@ -435,12 +563,16 @@ function isRampDownWeek(weeksOut: number): boolean {
  * of LAST week, because the week after a reset steps off the level the reset paused,
  * not off the reset itself. False with no dated race to count to.
  */
-export function isRampDownWeekOn(goal: RaceRampGoal | null | undefined, dateISO: string): boolean {
+export function isRampDownWeekOn(
+  goal: RaceRampGoal | null | undefined,
+  dateISO: string,
+  levers?: RampLevers | null
+): boolean {
   if (!goal || goal.is_race === false || !goal.date) return false;
   const distance = Number(goal.distance_km);
   if (!Number.isFinite(distance) || peakWeeklyKm(distance) == null) return false;
   const weeks = weeksBetween(dateISO, goal.date);
-  return weeks != null && weeks >= 0 && isRampDownWeek(weeks);
+  return weeks != null && weeks >= 0 && isRampDownWeek(weeks, levers);
 }
 
 /**
@@ -448,21 +580,58 @@ export function isRampDownWeekOn(goal: RaceRampGoal | null | undefined, dateISO:
  * the race's long-run peak, `out` calendar weeks from race week, held to one safe
  * step. raceRamp's `required_long_km`, and the long run its fit walk carries.
  */
-function longRunStep(longBase: number, out: number, longPeak: number): number {
+function longRunStep(
+  longBase: number,
+  out: number,
+  longPeak: number,
+  levers?: RampLevers | null,
+  ceilingKm?: number | null
+): number {
+  // The taper and the long-run peak move back together with a longer taper (the long
+  // peak stays one week before the volume peak).
+  const taperWeeks = rampTaperWeeks(levers);
+  const peakOut = taperWeeks + 1;
+  const longPeakOut = LONG_PEAK_WEEKS_OUT + (peakOut - PEAK_WEEKS_OUT);
   let idealLongKm: number;
   if (out <= 0) {
     idealLongKm = round1(longPeak * 0.3);
   } else if (out === 1) {
     idealLongKm = round1(longPeak * 0.55);
-  } else if (out <= LONG_PEAK_WEEKS_OUT) {
+  } else if (out <= taperWeeks) {
+    idealLongKm = round1(
+      Math.min(longPeak * EARLY_TAPER_LONG_FRACTION, Math.max(TAPER_LONG_FLOOR_KM, longBase * TAPER_LONG_OF_PREVIOUS))
+    );
+  } else if (out <= longPeakOut) {
     idealLongKm = round1(Math.max(longBase, longPeak));
   } else if (longPeak <= longBase) {
     idealLongKm = round1(longBase);
   } else {
-    const steps = Math.max(1, out - PEAK_WEEKS_OUT);
+    const steps = Math.max(1, out - peakOut);
     idealLongKm = round1(longBase * (longPeak / longBase) ** (1 / steps));
   }
-  return out <= 1 ? idealLongKm : round1(Math.min(idealLongKm, longBase * SUSTAINABLE_LONG_STEP_FACTOR));
+  const stepped = out <= taperWeeks ? idealLongKm : round1(Math.min(idealLongKm, longBase * rampLongStep(levers)));
+  // A lowered long-run ceiling (a lesson) is a hard ceiling on every long run of the build.
+  return ceilingKm != null ? round1(Math.min(stepped, ceilingKm)) : stepped;
+}
+
+/** The share of the PEAK week a taper week `out` carries (out ≤ taper weeks; the peak week is 1). */
+function taperShareOfPeak(out: number, taperWeeks: number): number {
+  if (out <= 0) return RACE_WEEK_FRACTION;
+  if (out === 1) return FINAL_TAPER_FRACTION;
+  if (out <= taperWeeks) return EARLY_TAPER_FRACTION;
+  return 1;
+}
+
+/**
+ * A taper week's volume as a multiple of the week before it — the engine's own steps
+ * (the final taper week 0.7 of the peak, race week 0.45 of the week before it). With a
+ * two-week taper the first taper week is 0.85 of the peak and the final one still lands
+ * at 0.7 of the peak (0.7 / 0.85 of the week before it).
+ */
+function taperStepOffAnchor(out: number, taperWeeks: number): number {
+  if (out <= 0) return RACE_WEEK_FRACTION;
+  if (out === 1) return taperWeeks >= 2 ? FINAL_TAPER_FRACTION / EARLY_TAPER_FRACTION : FINAL_TAPER_FRACTION;
+  return EARLY_TAPER_FRACTION;
 }
 
 /**
@@ -503,7 +672,8 @@ export function raceRamp(
   anchorKm: number,
   prevLongKm: number,
   capacity?: RaceRampCapacity | null,
-  demonstrated?: RaceRampDemonstrated | null
+  demonstrated?: RaceRampDemonstrated | null,
+  levers?: RampLevers | null
 ): RaceRamp | null {
   if (!goal || goal.is_race === false) return null;
   const distance = Number(goal.distance_km);
@@ -511,7 +681,12 @@ export function raceRamp(
   if (peak == null) return null;
   // The peak the build aims at: the race's demand, or a new high past what the athlete
   // has run well (see peakTargetKm). `peak` stays the demand the fit is read against.
-  const target = peakTargetKm(distance, demonstrated?.week_km) ?? peak;
+  // A lesson from the last race (`levers`) may lower it (a hard ceiling) or raise it.
+  const target = peakTargetKm(distance, demonstrated?.week_km, levers) ?? peak;
+  const peakCap = loweredPeakWeekCapKm(distance, levers);
+  const buildStep = rampBuildStep(levers);
+  const taperWeeks = rampTaperWeeks(levers);
+  const peakOut = taperWeeks + 1;
 
   const fromDate = goal.date ? weeksBetween(todayISO, goal.date) : null;
   const weeks = fromDate ?? (Number.isFinite(Number(goal.weeks_to_race)) ? Number(goal.weeks_to_race) : null);
@@ -525,8 +700,9 @@ export function raceRamp(
   if (weeks < 0) return null;
 
   const anchor = Number.isFinite(anchorKm) && anchorKm > 0 ? anchorKm : 6;
-  const longPeak = longPeakTargetKm(distance, demonstrated?.long_km);
-  const downWeek = isRampDownWeek(weeks);
+  const longPeak = longPeakTargetKm(distance, demonstrated?.long_km, levers);
+  const longCeiling = loweredLongRunCeilingKm(distance, levers);
+  const downWeek = isRampDownWeek(weeks, levers);
   // The arrival — race week, the final taper week, the peak — is shaped in CALENDAR
   // weeks to race week (see weeksToRaceWeek), and so is the feasibility walk below.
   // The reset CADENCE keeps the ceil count, so a reset week never moves under an
@@ -536,19 +712,19 @@ export function raceRamp(
   // walk asks the same reset cadence the plan follows. `weeks - out` is 0 for a race
   // on a Monday and 1 on any other day.
   const stepWeeks: number[] = [];
-  for (let o = out; o >= PEAK_WEEKS_OUT; o--) stepWeeks.push(o + (weeks - out));
+  for (let o = out; o >= peakOut; o--) stepWeeks.push(o + (weeks - out));
 
   // --- the sustained weekly step arriving on time would take ---
   // Solved over the weeks that build: the resets in the span pause the build, they
   // do not take ground away (see the note above).
-  const buildSteps = Math.max(1, stepWeeks.filter((w) => !isRampDownWeek(w)).length);
+  const buildSteps = Math.max(1, stepWeeks.filter((w) => !isRampDownWeek(w, levers)).length);
   let needed = 1;
-  if (out > PEAK_WEEKS_OUT && peak > anchor) needed = (peak / anchor) ** (1 / buildSteps);
+  if (out > peakOut && peak > anchor) needed = (peak / anchor) ** (1 / buildSteps);
   // The ideal curve climbs to the TARGET (a new high when the athlete is already past
   // the race's demand); feasibility and the fit stay measured against the demand.
-  const neededToTarget = out > PEAK_WEEKS_OUT && target > anchor ? (target / anchor) ** (1 / buildSteps) : 1;
+  const neededToTarget = out > peakOut && target > anchor ? (target / anchor) ** (1 / buildSteps) : 1;
   const needed_build_factor = Math.round(needed * 1000) / 1000;
-  const feasible = needed_build_factor <= SUSTAINABLE_WEEKLY_BUILD_FACTOR + 1e-9;
+  const feasible = needed_build_factor <= buildStep + 1e-9;
 
   // --- what the IDEAL curve would ask of this week ---
   // Comparison only. Nothing downstream prescribes this number: when it is out of
@@ -558,9 +734,11 @@ export function raceRamp(
       ? round1(peak * RACE_WEEK_FRACTION)
       : out === 1
         ? round1(peak * FINAL_TAPER_FRACTION)
-        : out === PEAK_WEEKS_OUT
-          ? round1(target)
-          : round1(anchor * (downWeek ? DOWN_WEEK_FRACTION : Math.max(needed, neededToTarget)));
+        : out <= taperWeeks
+          ? round1(peak * EARLY_TAPER_FRACTION)
+          : out === peakOut
+            ? round1(target)
+            : round1(anchor * (downWeek ? DOWN_WEEK_FRACTION : Math.max(needed, neededToTarget)));
 
   // --- the CONSTRAINED trajectory: the fastest SAFE path from where they are ---
   // Every week takes the largest step the body is allowed (or a scheduled reset),
@@ -578,19 +756,19 @@ export function raceRamp(
   // week at its share of it) rather than walked forward from a taper week.
   const longBase = Number.isFinite(prevLongKm) && prevLongKm > 0 ? prevLongKm : Math.max(3, anchor * 0.3);
   const constrained_peak_km = (() => {
-    if (out <= 0) return round1(Math.min(target, anchor / FINAL_TAPER_FRACTION));
-    if (out === 1) return round1(Math.min(target, anchor));
+    // In the taper the anchor is the week before this one, read back at its share of the peak.
+    if (out <= taperWeeks) return round1(Math.min(target, anchor / taperShareOfPeak(out + 1, taperWeeks)));
     let level = anchor;
     let long = longBase;
     let shownMidweek = Number(capacity?.demonstratedMidweekKm) > 0 ? Number(capacity?.demonstratedMidweekKm) : 0;
     const history = capacity?.priorWeeksKm ? [...capacity.priorWeeksKm] : null;
     stepWeeks.forEach((w, i) => {
-      if (isRampDownWeek(w)) {
+      if (isRampDownWeek(w, levers)) {
         history?.push(round1(level * DOWN_WEEK_FRACTION));
         return;
       }
-      long = longRunStep(long, out - i, longPeak);
-      let km = Math.min(target, level * SUSTAINABLE_WEEKLY_BUILD_FACTOR);
+      long = longRunStep(long, out - i, longPeak, levers, longCeiling);
+      let km = Math.min(target, level * buildStep);
       if (history) {
         const ceiling = acwrCeilingKm(history, capacity?.chronicFloorKm ?? 0);
         if (ceiling != null) km = Math.min(km, Math.max(level, ceiling));
@@ -616,25 +794,23 @@ export function raceRamp(
   // race twenty weeks out has no business demanding the ceiling every week just
   // because the ceiling exists). Taper weeks step DOWN from the anchor, which is
   // reachable by construction.
-  const safeStepKm = round1(anchor * (downWeek ? DOWN_WEEK_FRACTION : SUSTAINABLE_WEEKLY_BUILD_FACTOR));
+  const safeStepKm = round1(anchor * (downWeek ? DOWN_WEEK_FRACTION : buildStep));
   const required_km =
-    out <= 0
-      ? round1(anchor * RACE_WEEK_FRACTION)
-      : out === 1
-        ? round1(anchor * FINAL_TAPER_FRACTION)
-        : round1(Math.min(safeStepKm, ideal_required_km));
+    out <= taperWeeks
+      ? round1(anchor * taperStepOffAnchor(out, taperWeeks))
+      : capWeekToPeakKm(anchor, round1(Math.min(safeStepKm, ideal_required_km)), peakCap);
 
   // --- this week's long run ---
   // Anchored on what the athlete has DEMONSTRATED, not on a share of the week:
   // a comfortable 9 km already run is the floor the curve climbs from. With no
   // long run on record, a conservative share of the weekly anchor seeds it. The
   // ideal curve is then held to the same one-safe-step rule as the weekly volume.
-  const required_long_km = longRunStep(longBase, out, longPeak);
+  const required_long_km = longRunStep(longBase, out, longPeak, levers, longCeiling);
 
   return {
     weeks_to_race: weeks,
     weeks_to_race_week: out,
-    taper_week: out <= 1,
+    taper_week: out <= taperWeeks,
     required_km,
     required_long_km,
     ideal_required_km,

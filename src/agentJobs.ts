@@ -31,6 +31,7 @@ import {
   growAboutMe,
   onboardFromText,
   whatIf,
+  reviewGoal,
   welcomeCoach,
   welcomeWeekFrom,
   welcomeWeekPreview,
@@ -793,6 +794,14 @@ async function processAgentJob(id: number): Promise<void> {
         // result snapshot is the answer the Ask ripple card renders.
         result = await whatIf(agent, { text: input.text, hint: input.hint }, hooks);
         chosen = result?.agent ?? null;
+        break;
+      }
+      case "goal_review": {
+        // One finished goal looked back on (src/coachOps/goal-review.ts). The row itself
+        // carries the result; a busy host arrives as agent_busy and defers below.
+        result = await reviewGoal(Number(input.id), agent, hooks);
+        chosen = result?.agent ?? null;
+        if (result?.ok) ref = { ref_table: "goal_reviews", ref_id: Number(input.id) };
         break;
       }
       case "health_review": {

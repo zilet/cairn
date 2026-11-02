@@ -66,10 +66,21 @@ import {
   capacityResumeKm,
   deliverableRunWeek,
   raceRamp,
+  rampTaperWeeks,
+  type RampLevers,
   RESET_TAKEN_FRACTION,
   type RaceRampCapacity,
   type RaceRampGoal,
 } from "./run-ramp.js";
+import {
+  type BuildLeverKey,
+  buildLeverSourceTitle,
+  buildLeverWords,
+  buildLeversForRace,
+  leverMovesBuild,
+  rampLeversForRace,
+  type ResolvedBuildLevers,
+} from "./build-levers.js";
 import { weekAsPlanned, weeklyRunPlan, type WeeklyRunPlan } from "./run-progression.js";
 import {
   capacitySetAsideLine,
@@ -373,6 +384,13 @@ export interface RaceBuild {
    * In km; a suggestion, never a verdict.
    */
   adapted: string;
+  /**
+   * The lessons from a finished race shaping THIS build (build-levers.ts): each lever a
+   * review adopted that applies to this race, with its reason. [] with none — the build
+   * is the engine's own. The race page, MCP get_race_build and every prompt carrying
+   * race_build read it; `why` says it in plain words when one moved something.
+   */
+  levers: ResolvedBuildLevers["from_levers"];
   why: string;
   reason: string | null; // why unavailable, in plain words
 }
@@ -833,6 +851,11 @@ export function projectRaceBuildWeeks(
     currentWeekHarmed?: boolean;
     /** Whose goals the lifting serves (race-strength.ts); endurance-led when absent. */
     strengthLead?: RaceStrengthLead;
+    /**
+     * The finished race's lessons for this build (build-levers.ts `rampLeversForRace`),
+     * the same set weeklyRunPlan hands raceRamp — so every rung is the engine's own.
+     */
+    levers?: RampLevers | null;
   }
 ): RaceBuildWeek[] {
   const out: RaceBuildWeek[] = [];
@@ -858,9 +881,11 @@ export function projectRaceBuildWeeks(
     week_km: Number(opts?.demonstratedWeekKm) > 0 ? Number(opts?.demonstratedWeekKm) : null,
     long_km: demonstrated || null,
   };
+  const levers = opts?.levers ?? null;
+  const taperWeeks = rampTaperWeeks(levers);
   let guard = 0;
   while (monday <= raceMonday && guard++ < 60) {
-    let r = raceRamp(goal, monday, anchor, long, null, shown);
+    let r = raceRamp(goal, monday, anchor, long, null, shown, levers);
     if (!r) break;
     const isLive =
       (monday === currentMonday && !!thisWeek && thisWeek.km > 0) ||
@@ -869,11 +894,11 @@ export function projectRaceBuildWeeks(
     // demonstrated floor, inside the ACWR ceiling of the weeks before it — the same
     // rule weeklyRunPlan anchors a real week with (capacityResumeKm).
     const afterHarm = monday === nextMonday && opts?.currentWeekHarmed === true;
-    if (!isLive && !afterHarm && r.weeks_to_race_week >= 2) {
+    if (!isLive && !afterHarm && !r.taper_week) {
       const resumed = capacityResumeKm(anchor, shown.week_km, history, ENDURANCE_CHRONIC_FLOOR_KM);
       if (resumed > anchor) {
         anchor = resumed;
-        r = raceRamp(goal, monday, anchor, long, null, shown) ?? r;
+        r = raceRamp(goal, monday, anchor, long, null, shown, levers) ?? r;
       }
     }
     // The ladder is read by CALENDAR week: the week that holds race day is race week,
@@ -884,8 +909,9 @@ export function projectRaceBuildWeeks(
     // The KIND follows the engine's arrival shape: race week, the final taper week
     // before it, the peak week before that — so a weekend half peaks ~3 weeks before
     // race day and TAPERS the week before race week, instead of peaking into it.
+    // A two-week taper (a lesson from the last race) moves the peak a week earlier.
     const kind: RaceWeekKind =
-      w <= 0 ? "race" : w === 1 ? "taper" : w === 2 ? "peak" : r.down_week ? "down" : "build";
+      w <= 0 ? "race" : w <= taperWeeks ? "taper" : w === taperWeeks + 1 ? "peak" : r.down_week ? "down" : "build";
     // THIS week is not a projection when the engine has already prescribed it. And
     // the prescription cannot just be painted over the rung afterwards: raceRamp
     // takes the PRIOR week's volume as its anchor, so a walk that carried its own
@@ -1601,6 +1627,7 @@ function raceBuildRead(
       capacity: null,
       review: { weeks: [], longest_recent_km: null, volume_word: null },
       adapted: "",
+      levers: [],
       why: "",
       reason,
     };
@@ -1870,6 +1897,10 @@ function raceBuildRead(
     .replace("{long}", distanceWords(longKm != null ? longKm : (weeks[0]?.long_km ?? 0), units))
     .replace("{estimate}", estimateSentence(prediction, target, units))
     .trim();
+  // The lessons shaping this build — resolved as the ladder and the week resolve them.
+  const levers = safe(() => buildLeversForRace(distance, mondayOf(asOf)).from_levers) ?? [];
+  const leverLine = countdown.span ? buildLeverWhyLine(levers, distance, asOf, units) : "";
+  const whyWithLessons = leverLine ? `${why} ${leverLine}`.trim() : why;
 
   return {
     available: true,
@@ -1908,9 +1939,38 @@ function raceBuildRead(
       : null,
     review,
     adapted: adaptedLine(adapt, asOf, units),
-    why,
+    levers,
+    why: whyWithLessons,
     reason: null,
   };
+}
+
+const LEVER_WHY_VARIANTS: ReadonlyArray<(list: string, race: string) => string> = [
+  (list, race) => `This build carries ${list}, from what ${race} taught.`,
+  (list, race) => `From ${race}: ${list}.`,
+  (list, race) => `${list[0].toUpperCase()}${list.slice(1)} — what ${race} taught.`,
+];
+
+/**
+ * The one plain clause naming the lessons that MOVED this build ("a two-week taper and a
+ * lighter week every third week, from what the Cambridge Half Marathon taught"). "" when
+ * no lever moves anything. Variant-safe (pickDayVariant), distances in the athlete's units,
+ * no score and no percentage.
+ */
+export function buildLeverWhyLine(
+  levers: ResolvedBuildLevers["from_levers"],
+  distanceKm: number,
+  asOf: string,
+  units: DistanceUnit = "km"
+): string {
+  const moved = levers.filter((l) => leverMovesBuild(l.key as BuildLeverKey, l.value, distanceKm));
+  if (!moved.length) return "";
+  const words = moved.map((l) => buildLeverWords(l.key as BuildLeverKey, l.value, (km) => distanceWords(km, units)));
+  const list = words.length === 1 ? words[0] : `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
+  const titles = [...new Set(moved.map((l) => safe(() => buildLeverSourceTitle(l.source_review_id)) ?? null))];
+  const race =
+    titles.length === 1 && titles[0] ? `the ${titles[0]}` : titles.length > 1 ? "your last races" : "the last race";
+  return pickDayVariant(LEVER_WHY_VARIANTS, asOf, "race-build:levers")(list, race);
 }
 
 /**
@@ -2027,6 +2087,8 @@ export function raceLadderFor(
       bestWeekKm: priorCapacity?.best_week_km ?? null,
       currentWeekHarmed,
       strengthLead: ladderOpts?.strengthLead,
+      // The same lessons weeklyRunPlan resolves for this week (as of its Monday).
+      levers: rampLeversForRace(goal.distance_km, thisMonday),
       // The engine's own run week, when its run count is fixed — so a projected rung is
       // what the engine will prescribe in those runs, not a volume they cannot carry.
       capacity: plan?.goal_feasibility?.capacity

@@ -801,6 +801,9 @@ function restoreLabel(decision: BrainDecision, what: Touched): string {
     return "Go back to your previous drive";
   if ((decision.context as Record<string, unknown> | null)?.stated_kind === "run_week")
     return "Go back to your previous run week";
+  // A finished race's lessons for the next build (src/repo/build-levers.ts).
+  if ((decision.context as Record<string, unknown> | null)?.build_levers === true)
+    return "Build the next race without these lessons";
   switch (decision.kind) {
     case "training_target":
       return what.exercises.length === 1 ? `Restore previous ${what.exercises[0]} target` : "Restore previous targets";

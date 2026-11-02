@@ -48,6 +48,8 @@ import { impactFamily, isKnownCrossTrainingDate } from "../cross-training-day.js
 import { recentEnduranceImpacts } from "../hybrid-load.js";
 import { isEnduranceHoldDirective, listActiveDirectives } from "../directives-read.js";
 import { longPeakTargetKm } from "../run-ramp.js";
+import { rampLeversForRace } from "../build-levers.js";
+import { mondayOf } from "../../lib/dates.js";
 import { readinessBand, readsRestGradeReadiness, SUPPORTIVE_READINESS } from "../readiness-bands.js";
 import {
   nightPastBand,
@@ -2629,7 +2631,11 @@ function plannedDoseOn(
     return {
       long: kinds.has("long"),
       quality: kinds.has("quality") && !qualityDropped(date),
-      long_ceiling_km: building ? longPeakTargetKm(distance, previousLongestKm) : null,
+      // The build's ceiling with the last race's lessons on it (build-levers.ts) — the
+      // same long-run peak the week and the ladder plan toward.
+      long_ceiling_km: building
+        ? longPeakTargetKm(distance, previousLongestKm, rampLeversForRace(distance, mondayOf(date)))
+        : null,
     };
   } catch {
     return none;

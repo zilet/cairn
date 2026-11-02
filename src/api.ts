@@ -22,6 +22,7 @@ import { personContextRouter } from "./routes/person-context.js";
 import { trainingLogRouter } from "./routes/training-log.js";
 import { bodyMetricsRouter } from "./routes/body-metrics.js";
 import { journeyRouter } from "./routes/journey.js";
+import { goalReviewsRouter } from "./routes/goal-reviews.js";
 import { appleHealthRouter } from "./routes/apple-health.js";
 import { authRouter } from "./routes/auth.js";
 import { mcpClientsRouter } from "./routes/mcp-clients.js";
@@ -101,6 +102,7 @@ const API_MOUNTS: ApiMount[] = [
   { name: "training-log", prefix: "/", router: trainingLogRouter },
   { name: "body-metrics", prefix: "/", router: bodyMetricsRouter },
   { name: "journey", prefix: "/", router: journeyRouter },
+  { name: "goal-reviews", prefix: "/", router: goalReviewsRouter },
   { name: "apple-health", prefix: "/", router: appleHealthRouter },
   { name: "auth", prefix: "/", router: authRouter },
   { name: "mcp-clients", prefix: "/", router: mcpClientsRouter },

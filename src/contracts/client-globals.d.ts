@@ -7519,6 +7519,19 @@ declare global {
       /** All goals (the goal line's depth view): every progress-board thread; "" with none. */
       goalsBoardHtml(path: import("./today-path.js").TodayPath | null | undefined): string;
     };
+    /** LAZY "horizon" bundle (horizon-behind-client.ts): "Behind you", finished goals said back. */
+    CairnHorizonBehind: {
+      /** What a review still waiting for its look back says on the page. */
+      SOON: string;
+      /** The route one row opens: /app/horizon/behind?id=<id>. */
+      target(id: unknown): ClientHorizonTarget;
+      /** GET /api/goal-reviews' rows, cleaned, newest first. */
+      rows(read: unknown): import("./goal-reviews.js").GoalReviewRow[];
+      /** The Season's "Behind you" section; "" with no rows. */
+      listHtml(read: unknown, opts?: { hrefFor?: (target: ClientHorizonTarget) => string | null }): string;
+      /** One look back (GET /api/goal-reviews/:id); "" when the read is not a review. */
+      detailHtml(read: unknown): string;
+    };
     CairnHorizonController: {
       mount(host: Element, deps: ClientHorizonDeps): () => void;
       /** The shell's frame: always the Week view first, and whether the race view belongs. */
@@ -7538,6 +7551,7 @@ declare global {
   declare const CairnJourneyTrail: Window["CairnJourneyTrail"];
   declare const CairnHorizonWeekController: Window["CairnHorizonWeekController"];
   declare const CairnHorizon: Window["CairnHorizon"];
+  declare const CairnHorizonBehind: Window["CairnHorizonBehind"];
   declare const CairnHorizonTerrain: Window["CairnHorizonTerrain"];
   declare const CairnHorizonChart: Window["CairnHorizonChart"];
   declare const CairnHorizonController: Window["CairnHorizonController"];

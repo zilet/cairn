@@ -274,7 +274,10 @@
         const lanes = KEYS.filter((key) => PANEL[key] === view)
           .map((key) => `<li class="horizon-lane" data-horizon-lane="${key}">${laneSkeletonHtml(key)}</li>`)
           .join("");
-        return `<div class="horizon-panel" role="tabpanel" id="horizonPanel-${view}" aria-labelledby="horizonTab-${view}" data-horizon-panel="${view}"${hidden}><ol class="horizon-lanes" aria-label="What's ahead">${lanes}</ol></div>`;
+        // The Season ends on what is behind: finished goals, filled (or left empty) when
+        // GET /api/goal-reviews lands (horizon-behind-client.ts).
+        const behind = view === "season" ? `<div class="horizon-behind-slot" data-horizon-behind></div>` : "";
+        return `<div class="horizon-panel" role="tabpanel" id="horizonPanel-${view}" aria-labelledby="horizonTab-${view}" data-horizon-panel="${view}"${hidden}><ol class="horizon-lanes" aria-label="What's ahead">${lanes}</ol>${behind}</div>`;
       })
       .join("");
     return `<div class="horizon" data-horizon data-horizon-view="${active}">

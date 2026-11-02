@@ -89,6 +89,7 @@ const routes = [
   ...parseApiRoutes(read("src/routes/day-coach.ts"), { receiver: "dayCoachRouter", prefix: "" }),
   ...parseApiRoutes(read("src/routes/exports.ts"), { receiver: "exportsRouter", prefix: "" }),
   ...parseApiRoutes(read("src/routes/garmin.ts"), { receiver: "garminRouter", prefix: "" }),
+  ...parseApiRoutes(read("src/routes/goal-reviews.ts"), { receiver: "goalReviewsRouter", prefix: "" }),
   ...parseApiRoutes(read("src/routes/health-docs.ts"), { receiver: "healthDocsRouter", prefix: "/health-docs" }),
   ...parseApiRoutes(read("src/routes/health-metrics.ts"), { receiver: "healthMetricsRouter", prefix: "" }),
   ...parseApiRoutes(read("src/routes/journey.ts"), { receiver: "journeyRouter", prefix: "" }),

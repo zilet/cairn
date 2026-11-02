@@ -670,6 +670,18 @@ export const PROMPT_CONTEXT_SITES = {
     ],
     sessions: SESSIONS_RECENT,
   },
+
+  // The finished-goal look-back (src/prompt/goal-review.ts, "Behind you"). The goal's
+  // own deterministic FACTS are the payload and lead the prompt; DATA is only who the
+  // athlete is and what they are aiming at now, for tone and for "what carries
+  // forward": the person (PERSON), the live goals the carry-forward speaks toward
+  // (endurance goal and stated run days, the strength journey, the weight journey).
+  // DROPPED: every training/fuel/health/recovery read — the review is about a goal
+  // that is DONE, and today's state would only pull the story off its facts.
+  goal_review: {
+    keys: [...PERSON, "endurance_goal", "endurance_schedule", "strength_journey", "journey"],
+    sessions: 0,
+  },
 } as const satisfies Record<string, PromptSiteSpec>;
 
 export type PromptSite = keyof typeof PROMPT_CONTEXT_SITES;

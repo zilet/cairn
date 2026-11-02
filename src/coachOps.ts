@@ -16,5 +16,6 @@ export * from "./coachOps/nutrition.js";
 export * from "./coachOps/health.js";
 export * from "./coachOps/memory.js";
 export * from "./coachOps/whatif.js";
+export * from "./coachOps/goal-review.js";
 export * from "./coachOps/welcome.js";
 export * from "./coachOps/welcome-follow-up.js";

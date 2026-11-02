@@ -75,7 +75,8 @@ type CairnRouteRoot = typeof globalThis & { CairnRoutes?: CairnRoutesApi };
       me: ["standing", "profile", "memory", "health", "life", "family"],
       health: ["read", "markers", "records", "share", "learned"],
       settings: ["sources", "automation", "data", "agents", "devices", "system"],
-      horizon: ["goal"],
+      // "behind" is one finished goal's look back; it carries the review id in ?id=.
+      horizon: ["goal", "behind"],
       // "stone" carries the stone key in ?id= (strength, endurance, fuel, ...).
       you: ["stone"],
     },
@@ -184,6 +185,8 @@ type CairnRouteRoot = typeof globalThis & { CairnRoutes?: CairnRoutesApi };
     }
     if (home === "horizon") {
       if (section === "race") return target("plan", "endurance");
+      // One look back needs WHICH review; without an id it is the timeline.
+      if (section === "behind" && !id) return target("horizon");
       return target("horizon", oneOf(section, HORIZON_SECTIONS, null));
     }
     if (home === "ask") {
@@ -326,7 +329,8 @@ type CairnRouteRoot = typeof globalThis & { CairnRoutes?: CairnRoutesApi };
       }
       case "horizon": {
         const s = oneOf(section, HORIZON_SECTIONS, null);
-        return s ? `${base}/horizon/${s}` : `${base}/horizon`;
+        if (!s || (s === "behind" && !r.id)) return `${base}/horizon`;
+        return `${base}/horizon/${s}`;
       }
       case "chat":
         return `${base}/ask`;

@@ -60,6 +60,9 @@ export const BRAIN_SOURCE_REF_TYPES = [
   "meal_plan",
   "suggestion",
   "day_read",
+  // A finished goal's review (src/repo/goal-reviews.ts); its build levers are adopted
+  // under it (src/repo/build-levers.ts).
+  "goal_review",
 ] as const;
 export type BrainSourceRefType = (typeof BRAIN_SOURCE_REF_TYPES)[number];
 

@@ -95,6 +95,8 @@ export const ROUTABLE_TASKS = [
   "insight",
   "weekly_read",
   "day_read",
+  // A finished goal looked back on once ("Behind you"): nightly, one a night.
+  "goal_review",
   // Generalizes the health-ingestion routing pattern (originally hardcoded as
   // pickHealthAgentOrder's Claude-first default) to every agentic task class:
   //   - health: raw lab/scan transcription + food-photo vision reads — accuracy-
@@ -125,6 +127,7 @@ export const ROUTABLE_TASK_LABELS: Record<RoutableTask, string> = {
   nutrition_checkin: "Nutrition check-in",
   insight: "Quiet insight",
   weekly_read: "Weekly read",
+  goal_review: "Looking back on a finished goal",
   health_review: "Health review",
   health_synthesis: "Health synthesis",
   health: "Lab & document ingestion",
@@ -156,6 +159,7 @@ export const TASK_POLICY: Record<RoutableTask, "accuracy" | "rotation"> = {
   recipe: "rotation",
   insight: "rotation",
   weekly_read: "rotation",
+  goal_review: "rotation",
   enrich: "rotation",
   proposal: "rotation",
   health: "accuracy",
@@ -278,6 +282,9 @@ export const TASK_EXECUTION_PROFILES: Record<string, AbstractExecutionProfile> =
   // CLIs: nothing that passed at medium needed high, and high fixed one constraint miss.
   health_review: { model_class: "deep", reasoning: "medium" },
   health_synthesis: { model_class: "deep", reasoning: "medium" },
+  // A finished goal looked back on ONCE and frozen, and — for a race — the levers that
+  // reshape the next build: written once, kept for good, so it gets the deep class.
+  goal_review: { model_class: "deep", reasoning: "medium" },
   proposal: { model_class: "deep", reasoning: "medium" },
   coach_draft: { model_class: "deep", reasoning: "medium" },
   brain_review: { model_class: "deep", reasoning: "medium" },

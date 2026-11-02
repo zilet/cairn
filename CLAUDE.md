@@ -347,7 +347,10 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   predictor (≤3 weeks old, Riegel-adjusted) over a Riegel off a training run, and every comparison
   is a `fits`/`stretch`/`beyond_horizon` FIT, never a grade. The weekly ride (`ride`, any non-run family)
   is the cross-training day: stated first, else observed (2 of 6 weeks); a known one the day before
-  the long run never strips the long run's date. Details in `docs/ARCHITECTURE.md`.
+  the long run never strips the long run's date. **A finished race's lessons reach the next build
+  only as bounded levers** (`src/repo/build-levers.ts`): resolved once and handed to `raceRamp` by
+  BOTH `weeklyRunPlan` and the ladder — never read a ramp constant past them. Details in
+  `docs/ARCHITECTURE.md` (and "Build levers (lessons from the last race)").
 - **The days after a race are ONE read, and the race is never training** — `raceRecoveryWindow()`
   (`src/repo/race-recovery.ts`: 2 / 4 / 7 days by distance from race day + 1) is the only source of
   the post-race window; it lightens through the stress budget's ordinary `reduced` list

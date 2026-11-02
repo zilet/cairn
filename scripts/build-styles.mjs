@@ -113,7 +113,7 @@ export const LAZY_STYLE_SHEETS = {
   // Ask's quiet ripple / pill cards.
   ask: { partials: ["ask/ask"] },
   // Horizon (Week, Season, To the race): only its bundle renders these classes.
-  horizon: { partials: ["horizon/horizon", "horizon/week", "horizon/journey"] },
+  horizon: { partials: ["horizon/horizon", "horizon/week", "horizon/journey", "horizon/behind"] },
   // The first-run welcome stage.
   welcome: { partials: ["welcome/welcome"] },
 };

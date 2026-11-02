@@ -51,6 +51,8 @@ export type ClientAppState = {
   // Horizon's sub-view (null = the one timeline) and You's (null = the landing;
   // "stone" = one stone's detail, keyed by youStone, which rides in ?id=).
   horizonSeg?: ClientHorizonSection | null;
+  // The finished goal open behind /app/horizon/behind?id=<review id> (horizonSeg="behind").
+  horizonReviewId?: string | null;
   // The day the day page shows (/app/day/<date>): any day that is not today,
   // read-only. Today itself never rides here; Today always renders today.
   dayDate?: string | null;

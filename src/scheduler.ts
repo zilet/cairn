@@ -6,8 +6,10 @@ import {
   evolveProgram,
   generateInsight,
   nutritionCheckin,
+  runGoalReviewNightly,
   synthesizeHealth,
   weekAheadServe,
+  type GoalReviewNightlyResult,
 } from "./coachOps.js";
 import { precomputeDayRead, precomputeDayReadFloor, sleepRowExistsFor, localToday, warmToday } from "./dayread.js";
 import { checkForUpdate } from "./updateCheck.js";
@@ -250,6 +252,49 @@ export function dailyWindowOperationDue(now: Date, hour: number, stateKey: strin
   // in its hour pollable after the hour has passed.
   repo.ensureSchedulerOperationRow(stateKey, slotStamp);
   return repo.schedulerOperationDue(stateKey, slotStamp, now);
+}
+
+// ---- "Behind you": the nightly finished-goal review (src/coachOps/goal-review.ts) ----
+// Snapshot what finished, settle the races whose recovery days are done, then look back
+// on AT MOST ONE goal a night. WHETHER a review is due is the goal_reviews rows'
+// question, never a clock slot's: a row pending (or failed under its attempt cap), and
+// no attempt already made today. The window below only says WHEN in the night to ask —
+// from GOAL_REVIEW_HOUR until GOAL_REVIEW_WINDOW_END, so a busy host gets later ticks —
+// and the in-process date only spares re-running detection on every tick of that window
+// (a restart simply asks the rows again: everything here is idempotent).
+export const GOAL_REVIEW_HOUR = (() => {
+  const h = Number(process.env.GOAL_REVIEW_HOUR);
+  return Number.isInteger(h) && h >= 0 && h <= 23 ? h : 2; // default 2am local, before memory + Brief
+})();
+const GOAL_REVIEW_WINDOW_END = 6;
+let goalReviewPassDate: string | null = null;
+
+/** In the night's goal-review window, and not yet passed today in this process. */
+export function goalReviewTickDue(now: Date, hour: number = GOAL_REVIEW_HOUR): boolean {
+  const h = nowContext(now).hour;
+  if (h < hour || h >= Math.max(hour + 1, GOAL_REVIEW_WINDOW_END)) return false;
+  return goalReviewPassDate !== localToday(now);
+}
+
+/**
+ * One nightly goal-review pass. A busy host (no spawn permit) leaves the date open so a
+ * later tick of the window tries again; anything else closes it for the night — the
+ * rows already say whether tomorrow has more to do.
+ */
+export async function runGoalReviewTick(
+  now: Date,
+  opts: { hour?: number; run?: typeof runGoalReviewNightly; agent?: string } = {}
+): Promise<GoalReviewNightlyResult | null> {
+  if (!goalReviewTickDue(now, opts.hour)) return null;
+  const today = localToday(now);
+  const result = await (opts.run ?? runGoalReviewNightly)(opts.agent ?? "auto", { today });
+  if (!result.reviewed?.agent_busy) goalReviewPassDate = today;
+  return result;
+}
+
+/** Tests only: forget tonight's pass. */
+export function resetGoalReviewTick(): void {
+  goalReviewPassDate = null;
 }
 
 // The small-hours hour the quiet nightly memory/learning pass prefers — an hour
@@ -965,8 +1010,11 @@ export function startScheduler() {
     // questions: that one reads the plate against the scale, this one reads five
     // independent channels for a pattern neither of them can see alone.
     const deficitWatchDue = dailySlotDue(now, "energy_deficiency_watch_date");
+    // (h) "Behind you": one finished goal looked back on a night (gated on its rows).
+    const goalReviewDue = goalReviewTickDue(now);
 
     if (
+      !goalReviewDue &&
       !insightDue &&
       !weeklyDue &&
       !weeklyHealthDue &&
@@ -1050,6 +1098,21 @@ export function startScheduler() {
           }
           return { outcome: "no_op" };
         });
+      }
+      if (goalReviewDue) {
+        try {
+          const pass = await runGoalReviewTick(now);
+          if (pass?.reviewed)
+            log.info(
+              pass.reviewed.ok
+                ? `[proactive] looked back on a finished goal (review ${pass.reviewed.id}).`
+                : pass.reviewed.agent_busy
+                  ? `[proactive] goal review deferred — every agent spawn permit was busy.`
+                  : `[proactive] no usable goal review tonight (review ${pass.reviewed.id}); retried on a later night.`
+            );
+        } catch (error) {
+          log.error(`[proactive] goal review pass failed`, { error });
+        }
       }
       if (insightDue) {
         await runScheduled("insight_last_date", localToday(now), "insight_last_date", async () => {

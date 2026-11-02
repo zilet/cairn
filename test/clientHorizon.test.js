@@ -46,6 +46,7 @@ const MODULES = [
   "horizon-chart-client",
   "horizon-week-client",
   "horizon-week-controller",
+  "horizon-behind-client",
   "horizon-client",
   "horizon-controller",
 ];

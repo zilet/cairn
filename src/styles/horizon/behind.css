@@ -1,0 +1,75 @@
+/* =====================================================================
+   Behind you (horizon-behind-client.ts): finished goals, each said back once.
+   At the foot of Horizon › Season, a quiet list: a mono date, the goal in the
+   serif, the measure, and its one sentence, on hairline rows (no card chrome).
+   Each row opens the look back (/app/horizon/behind?id=): the hero, a short
+   list of plain facts, the build's weeks as columns drawn to scale (the race
+   stacked on race week in the deep endurance hue, a week set aside quieter),
+   then the story, what it taught and what carried forward. Words and
+   distances only; no score, no grade, nothing against the target.
+   ===================================================================== */
+
+/* ---- the Season's section ---- */
+.horizon-behind-slot:empty{display:none}
+.horizon-behind-slot{margin-top:var(--space-11)}
+.hbehind{display:grid;gap:var(--space-3);min-width:0}
+.hbehind-kicker{margin:0;color:var(--muted)}
+.hbehind-rows{list-style:none;margin:0;padding:0;display:grid;border-top:1px solid var(--line)}
+.hbehind-item{min-width:0;border-bottom:1px solid var(--line)}
+.hbehind-row{display:grid;gap:var(--space-1);min-height:44px;padding:var(--space-6) 0;color:inherit;text-decoration:none;min-width:0}
+.hbehind-date{color:var(--muted)}
+.hbehind-title{font-family:var(--font-display);font-size:var(--text-lg);line-height:var(--leading-tight);color:var(--ink);overflow-wrap:anywhere}
+.hbehind-result{font-size:var(--text-sm);font-weight:var(--weight-semibold);color:var(--ink);font-variant-numeric:lining-nums tabular-nums}
+.hbehind-line{font-size:var(--text-sm);line-height:var(--leading-normal);color:var(--ink-2);text-wrap:pretty}
+.hbehind-line.is-waiting{color:var(--muted)}
+
+/* ---- the look back ---- */
+.horizon-behind-page{display:grid;gap:var(--space-6);min-width:0}
+.hb{display:grid;gap:var(--space-11);min-width:0}
+.hb-hero{display:grid;gap:var(--space-2);min-width:0}
+.hb-date{color:var(--muted)}
+.hb-title{margin:0;font-family:var(--font-display);font-weight:var(--weight-regular);font-size:var(--text-2xl);
+  line-height:var(--leading-tight);letter-spacing:var(--tracking-tight);color:var(--ink);text-wrap:balance;overflow-wrap:anywhere}
+.hb-result{margin:0;font-size:var(--text-md);font-weight:var(--weight-semibold);color:var(--ink);font-variant-numeric:lining-nums tabular-nums}
+.hb-headline{margin:var(--space-3) 0 0;font-family:var(--font-display);font-size:var(--text-lead);line-height:var(--leading-snug);
+  color:var(--ink-2);text-wrap:pretty;max-width:46ch}
+.hb-facts{list-style:none;margin:calc(-1 * var(--space-6)) 0 0;padding:0;display:grid;gap:var(--space-3)}
+.hb-facts li{position:relative;padding-left:var(--space-7);font-size:var(--text-sm);line-height:var(--leading-normal);color:var(--ink-2)}
+.hb-facts li::before{content:"";position:absolute;left:0;top:.62em;width:6px;height:6px;border-radius:50%;background:var(--line-strong)}
+.hb-soon{margin:0;font-size:var(--text-sm);line-height:var(--leading-normal);color:var(--muted)}
+.hb-section{display:grid;gap:var(--space-4);min-width:0}
+.hb-section-k{margin:0;color:var(--muted)}
+.hb-prose{margin:0;font-size:var(--text-base);line-height:var(--leading);color:var(--ink);max-width:62ch;text-wrap:pretty}
+.hb-story{font-family:var(--font-display);font-size:var(--text-lead);line-height:var(--leading-normal)}
+
+/* ---- the build: one column per week, to scale ---- */
+.hbuild-card{margin:0;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+  padding:var(--space-7) var(--space-5) var(--space-5);min-width:0}
+.hbuild-weeks{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(var(--n,8),minmax(0,1fr));
+  gap:var(--space-2);align-items:end}
+.hbuild-week{display:grid;gap:var(--space-3);justify-items:center;min-width:0}
+.hbuild-stack{display:flex;flex-direction:column;justify-content:flex-end;align-items:stretch;width:min(100%,22px);height:120px}
+.hbuild-bar,.hbuild-race{display:block;height:calc(var(--frac,0) * 120px);flex:none}
+.hbuild-bar{min-height:2px;background:var(--s-endurance);border-radius:var(--radius-3xs) var(--radius-3xs) 0 0}
+.hbuild-race{background:var(--d-endurance);border-radius:var(--radius-3xs) var(--radius-3xs) 0 0}
+.hbuild-week.is-race .hbuild-bar{border-radius:0}
+.hbuild-week.is-set-aside .hbuild-bar{background:color-mix(in oklab,var(--s-endurance) 40%,var(--surface));
+  box-shadow:inset 0 0 0 1px var(--s-endurance)}
+.hbuild-week.is-empty .hbuild-bar{background:var(--line)}
+.hbuild-label{font-family:var(--font-mono);font-size:var(--text-2xs);letter-spacing:var(--tracking-mono);text-transform:uppercase;
+  color:var(--muted);white-space:nowrap}
+.hbuild-week.is-race .hbuild-label{color:var(--ink)}
+/* many weeks at phone width: every other date, race week always named */
+.hbuild-weeks.is-dense .hbuild-week:nth-child(even):not(.is-race) .hbuild-label{visibility:hidden}
+.hbuild-keys{display:flex;flex-wrap:wrap;gap:var(--space-2) var(--space-6);margin-top:var(--space-5);font-size:var(--text-xs);color:var(--muted)}
+.hbuild-key{display:inline-flex;align-items:center;gap:var(--space-3)}
+.hbuild-key::before{content:"";width:8px;height:8px;border-radius:var(--radius-3xs);background:var(--s-endurance)}
+.hbuild-key.is-race::before{background:var(--d-endurance)}
+.hbuild-key.is-set-aside::before{background:color-mix(in oklab,var(--s-endurance) 40%,var(--surface));box-shadow:inset 0 0 0 1px var(--s-endurance)}
+
+/* ---- carried forward ---- */
+.hb-levers{list-style:none;margin:0;padding:0;display:grid;gap:var(--space-3)}
+.hb-lever{padding:var(--space-4) var(--space-6);border-left:2px solid var(--s-endurance);font-size:var(--text-sm);
+  line-height:var(--leading-normal);color:var(--ink-2)}
+.hb-lever:not(.is-active):is(.is-superseded,.is-reverted){border-left-color:var(--line);color:var(--muted)}
+.hb-undo .hb-undo-btn{min-height:44px;display:inline-flex;align-items:center}

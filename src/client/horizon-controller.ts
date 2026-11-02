@@ -137,8 +137,12 @@
       if (seg) seg.textContent = running === "runs" ? "Running" : "To the race";
     }
 
+    /** The finished goals the Season's "Behind you" drew, by review id. */
+    const behindIds = new Set<string>();
+
     function targetFor(key: string): ClientHorizonTarget | null {
       const [laneKey, kind, index] = key.split(":");
+      if (laneKey === "behind") return kind && behindIds.has(kind) ? CairnHorizonBehind.target(kind) : null;
       const lane = lanes.get(laneKey as Lane["key"]);
       const i = Number(index);
       if (!lane || !Number.isInteger(i)) return null;
@@ -155,7 +159,7 @@
     }
 
     /**
-     * The Season's reads (goal line, labs, season chart) are asked the first time Season is
+     * The Season's reads (goal line, labs, season chart, what is behind) are asked the first time Season is
      * SHOWN, like the week once was: Week is the landing, so a hidden panel's five reads
      * would be a cold open's dead weight. A failed read is that lane's calm sentence, and
      * the next visit to the Season does not ask again within this mount.
@@ -177,6 +181,16 @@
       void Promise.all([draws, checkup, timeline]).then(([drawRows, checkupRead, rows]) =>
         paint(CairnHorizonLabsModel.labsLane(drawRows, checkupRead, rows, today))
       );
+      // What is behind: finished goals, each said back once. No rows (or a failed read)
+      // leaves the section out entirely.
+      void read("/goal-reviews").then((list) => {
+        if (!live || !host.isConnected) return;
+        const slot = host.querySelector<HTMLElement>("[data-horizon-behind]");
+        if (!slot || typeof CairnHorizonBehind === "undefined") return;
+        behindIds.clear();
+        for (const row of CairnHorizonBehind.rows(list)) behindIds.add(String(row.id));
+        slot.innerHTML = CairnHorizonBehind.listHtml(list, { hrefFor: deps.hrefFor });
+      });
       void Promise.all([read("/nutrition/goal-pace?days=180"), timeline, draws, checkup]).then(
         ([pace, rows, drawRows, checkupRead]) => {
           if (!live || !host.isConnected) return;

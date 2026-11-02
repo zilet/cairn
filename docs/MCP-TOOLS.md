@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**314 tools.**
+**317 tools.**
 
 | Tool | Description |
 |---|---|
@@ -113,6 +113,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `get_garmin_summary` | Compact coach-facing Garmin summary: recent endurance load and recovery metrics. Use as context, not as plan authority. |
 | `get_goal_check` | Compute TDEE and a lean-safe feasibility check for the current goal. |
 | `get_goal_pace` | The goal-pace series behind the motivational weight-progress chart: { points:[{date,weight_lb}] (canonical weigh-ins, manual beats Garmin), trend:{lb_wk, line:[{date,weight_lb},{date,weight_lb}]\|null} (unweighted least-squares slope over the most recent ≤21 days, projected ~28 days out; null under 2 points or a <3-day span), needed:{lb_wk, line:[…]\|null} (the straight line from today's weight to goal_weight_lb by goal_date; null with no goal, a past date, or no current weight), goal:{weight_lb,date}, window_days, read }. `read` is the ONE weight-trend read every surface prints: { rate_lb_wk, needed_lb_wk (each rounded once to a tenth), rate_words / needed_words in the athlete's weight unit, verdict on_pace\|ahead\|behind\|steady, line, week_change }. Read-only, null-safe. ?days clamps to 14–365 (default 90). |
+| `get_goal_review` | Read one finished goal's review in full: the frozen look-back (headline, story, lessons, carry-forward), a race build's weekly volume bars, plain fact lines, and any build levers it adopted for the next race build with their reasons and Undo decision id. Returns null when no such review exists. |
 | `get_guidelines` | Trusted clinical-guideline statements (offline, recognized bodies — AHA/ACC, Endocrine Society, KDIGO…) for a marker/topic, or the whole pack. Grounds the connected brain's directive notes with a citation even with research disabled. |
 | `get_health_export` | Structured, FHIR-inspired health summary: a portable read-only slice of the user's markers/observations over time (latest value + unit + effective date + full history[], the OPTIMAL reference band — distinct from the lab's normal range — an optimal-zone status like within-optimal/above-optimal, and the deterministic trend), plus non-marker MyChart clinicalFacts such as medications/allergies/procedures, the understood supplement regimen, and active connected-brain directives, under a self-describing meta header (exportVersion, generated, subject). Something to hand a physician or another tool. |
 | `get_health_focus` | The deterministic TIERED health priorities (elite-coach prioritization): the flat directive flood collapsed into a handful of connected priorities — one per health group, tier (act_now/track), the markers driving it, whether they compound, and the LEAD move per domain. The basis for the whole-picture synthesis. |
@@ -220,6 +221,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `list_family` | List the household roster (kids, partner, etc.) the coach plans life around. Their recurring commitments live as context_events with kind:'family_event'. |
 | `list_food_notes` | List recent logged food notes (meal type, description, parsed macros, enrichment status). |
 | `list_garmin_sources` | List configured Garmin source records without token material. |
+| `list_goal_reviews` | List every FINISHED goal (a race run, a strength objective completed, a goal weight reached), newest first: title, date, the result as a measure in the athlete's units, the status (waiting = a race still in its recovery days; pending = not yet looked back on; ready = reviewed and frozen; failed = retried on a later night) and the one line (the review's headline once written). Read-only. No grades, no comparison against the target. |
 | `list_health_records` | List recent health documents (bloodwork / DEXA / other) with their kind, test date, summary, key markers and analysis status. Does not include the binary file. |
 | `list_imaging_studies` | List every structured imaging study with metadata, report impression, source-distinguished findings, nested measurements, source-stated recommendations, provenance, and confirmation state. No file paths or raw model output. |
 | `list_insights` | List the live stream of quiet cross-domain insights (new + seen, most recent first). The Brief surfaces ONE at a time when the app is opened; dismissed insights are hidden here but remain in the DB/exports. |
@@ -270,6 +272,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `resolve_context_event` | Close a life-timeline event as healed/over (an injury the user confirms is no longer bothering them). Closing keeps the event on the timeline and in exports while it stops gating the day-read and coach as a hard constraint. `date` defaults to today. |
 | `resolve_training_symptom` | Mark one symptom record resolved only when the athlete explicitly says to close it. This records their lifecycle choice and does not change any clinical status. |
 | `revert_brain_decision` | Undo one reversible autonomous coaching decision using its server-owned rollback snapshot. The user's word wins; returns a calm error when the decision is not reversible. |
+| `review_goal` | Queue the one look-back for a finished goal not yet reviewed (pending or failed) instead of waiting for the nightly pass. Returns a job immediately; poll get_agent_job. A frozen review is never rewritten, and a race still in its recovery days is refused until they are done ({ok:false, error}). |
 | `run_health_review` | Queue a durable whole-picture health review over the user's context and marker history. Returns a job immediately; poll get_agent_job. |
 | `save_plan_day` | Create or replace one training day and its full exercise list (manual plan edit). Unknown exercises are created. |
 | `search_chat` | Keyword-search the whole coaching history (live + archived turns). Returns matches with a snippet and the session they belong to (session_id for archived, null for live). |

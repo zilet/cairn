@@ -27,6 +27,8 @@ export const AGENT_JOB_KINDS = [
   "about_me_grow",
   "onboard",
   "what_if",
+  // A finished goal looked back on once ("Behind you", src/coachOps/goal-review.ts).
+  "goal_review",
   "welcome",
   // Not agentic: a Garmin Connect pull. It is a job so the request returns at once and
   // the PWA can follow it, and it runs on its own lane (src/agentJobs.ts), never

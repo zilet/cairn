@@ -12,7 +12,7 @@ The OAuth 2.1 doors an AI app signs in through for `/mcp` (`/.well-known/oauth-*
 [OPERATIONS.md](OPERATIONS.md) "Connect an AI app (MCP)".
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**410 routes** across 135 groups.
+**413 routes** across 136 groups.
 
 ## `/activities`
 
@@ -409,6 +409,14 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 |---|---|---|
 | POST | `/api/goal-checkin/confirm` | Gentle goal check-in (you-drive): confirm restarts the ~3-month stable clock; dismiss starts the cooldown. Neither changes the goal — that's the profile flow. |
 | POST | `/api/goal-checkin/dismiss` |  |
+
+## `/goal-reviews`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/goal-reviews` |  |
+| GET | `/api/goal-reviews/:id` |  |
+| POST | `/api/goal-reviews/:id/review` |  |
 
 ## `/guidelines`
 
