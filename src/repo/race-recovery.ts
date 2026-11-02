@@ -30,6 +30,7 @@
 //   - a race day for harm and capacity: in hindsight, the matched effort only — no
 //     effort logged, nothing is blanked.
 import { addDaysISO, daysBetweenISO } from "../lib/dates.js";
+import { raceDistanceName } from "./display-words.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { getEnduranceGoal } from "./profile.js";
 import {
@@ -235,6 +236,19 @@ export function raceRunDates(from: string | null, to: string): Set<string> {
 export function isRaceDay(date: string, asOf?: string): boolean {
   const d = String(date).slice(0, 10);
   return efforts(asOf ? String(asOf).slice(0, 10) : null).some((e) => e.run_date === d);
+}
+
+/**
+ * The day's run named for what it was: a logged race effort reads "Half marathon test",
+ * never the long run its weekday was stated for. In hindsight (matched efforts only) —
+ * a slot is never renamed for a race nothing logged. Null on any other day. Fail-soft.
+ */
+export function raceEffortRunLabel(date: string): string | null {
+  const d = String(date).slice(0, 10);
+  const e = efforts(null).find((x) => x.run_date === d && !x.provisional);
+  if (!e) return null;
+  const name = raceDistanceName(e.distance_km);
+  return /race$/.test(name) ? name.replace(/race$/, "test") : `${name} test`;
 }
 
 const WEEKDAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];

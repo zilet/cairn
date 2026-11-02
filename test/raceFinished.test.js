@@ -96,3 +96,20 @@ test("no logged effort, no finished race (the provisional goal date never celebr
   repo.addActivity({ type: "run", duration_min: 42, distance_km: 7, date: "2026-10-27" });
   assert.equal(raceFinishedRead("2026-11-02"), null);
 });
+
+test("the race day's run is named for what it was, not the long run its weekday held", async () => {
+  seed();
+  repo.setProfile({ endurance_goal: null });
+  const { raceEffortRunLabel } = await import("../dist/repo/race-recovery.js");
+  assert.equal(raceEffortRunLabel(RACE), "Half marathon test");
+  assert.equal(raceEffortRunLabel("2026-10-27"), null);
+  const { planWeek } = await import("../dist/domain/training/plan-week.js");
+  const cell = planWeek("2026-10-26").days?.find((d) => d.date === RACE);
+  if (cell?.run) assert.equal(cell.run.label, "Half marathon test");
+});
+
+test("a health hold's wording agrees in number", async () => {
+  const { enduranceHoldRecovers } = await import("../dist/repo/directives-read.js");
+  assert.equal(enduranceHoldRecovers({ marker: "Vitamin D" }), "your bloodwork recovers");
+  assert.equal(enduranceHoldRecovers({ marker: "Ferritin" }), "your iron stores recover");
+});

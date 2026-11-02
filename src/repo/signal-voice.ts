@@ -352,7 +352,7 @@ export const SIGNAL_VOICE = {
     variants: [
       "With {} still catching up, keeping the running where it is serves you better than building on it.",
       "Your recent lab work has {} still on the mend, so steady endurance suits this stretch better than more of it.",
-      "While {} recover, there's more to gain from holding the running steady than from adding to it.",
+      "Giving {} time to recover, there's more to gain from holding the running steady than from adding to it.",
       "With {} still coming back, this is a better stretch for keeping the endurance where it is than for stretching it.",
     ],
   },

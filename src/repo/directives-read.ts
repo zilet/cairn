@@ -144,6 +144,13 @@ export function enduranceHoldSubject(d: any): string {
         : "your bloodwork";
 }
 
+/** "<subject> recover(s)", agreeing in number: "your iron stores recover", "your bloodwork recovers". */
+export function enduranceHoldRecovers(d: any): string {
+  const subject = enduranceHoldSubject(d);
+  const plural = subject === "your iron stores" || subject === "your iron and hemoglobin";
+  return `${subject} ${plural ? "recover" : "recovers"}`;
+}
+
 export function directiveKey(d: any): string {
   return [
     String(d?.domain || "watch").toLowerCase(),

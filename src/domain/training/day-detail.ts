@@ -48,6 +48,7 @@ import type {
 } from "../../contracts/day-detail.js";
 import { addDaysISO, mondayOf } from "../../lib/dates.js";
 import { round1 } from "../../lib/numbers.js";
+import { raceEffortRunLabel } from "../../repo/race-recovery.js";
 import { activeBlockContext } from "../../repo/program-blocks.js";
 import { resolvedBlockPhase } from "../../repo/block-phase.js";
 import { pickDayVariant } from "../../repo/brain/day-read-rules.js";
@@ -1027,7 +1028,8 @@ function buildRun(
   const race = !!(kind === "long" && rx?.race);
   const short = kind === "quality" && rx?.dose === "short";
   const completedEv = intent?.status === "completed" ? intent.completion : null;
-  const label = text(intent?.label) || text(cellRun.label) || RUN_KIND_LABELS[kind] || "Run";
+  const label =
+    (completedEv ? raceEffortRunLabel(date) : null) || text(intent?.label) || text(cellRun.label) || RUN_KIND_LABELS[kind] || "Run";
   const km = completedEv ? positiveKm(completedEv.distance_km) : positiveKm(intent?.target_distance_km ?? cellRun.km);
   const plannedKm = positiveKm(intent?.target_distance_km) ?? positiveKm(rx?.target_distance_km) ?? km;
 

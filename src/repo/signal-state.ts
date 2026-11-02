@@ -25,7 +25,7 @@ import {
   type WearAbsenceVoiceSet,
   type WearAbsenceView,
 } from "./wear-pattern-voice.js";
-import { enduranceHoldSubject, isEnduranceHoldDirective } from "./directives-read.js";
+import { enduranceHoldRecovers, enduranceHoldSubject, isEnduranceHoldDirective } from "./directives-read.js";
 import { addDaysISO, joinList } from "./shared.js";
 import { contextEventIsRestTrade, contextEventReadsAsIllness, contextEventReadsAsLabDraw } from "./context-effect.js";
 import {
@@ -1823,9 +1823,9 @@ export function planningSignalState(input: {
         // MACHINE REGISTER: the directive itself, named as such, for the coach context
         // and the provenance trail. The athlete hears the `endurance_hold_flagged`
         // voice instead — this sentence is never rendered to them.
-        `An active${firmHold ? "" : ", uncertain"} health directive counsels holding endurance volume while ${enduranceHoldSubject(
+        `An active${firmHold ? "" : ", uncertain"} health directive counsels holding endurance volume while ${enduranceHoldRecovers(
           speakingHold
-        )} recover; a brake on endurance load, not a gate.`,
+        )}; a brake on endurance load, not a gate.`,
         {
           voice: { key: "endurance_hold_flagged", subject: enduranceHoldSubject(speakingHold) },
           // A directive is a standing statement about today, not a dated reading: it is

@@ -45,6 +45,7 @@ import { planDayStrengthGroups } from "../../repo/training-read.js";
 import { todayStrengthLine, type TodayStrengthLine } from "../../repo/today-strength-line.js";
 import { datedPlanDayFocus, legTrimFocus, legTrimNote, legTrimClause, withLegTrimClause, type LegTrim } from "../../repo/plan-day-focus.js";
 import { pickDayVariant } from "../../repo/brain/day-read-rules.js";
+import { raceEffortRunLabel } from "../../repo/race-recovery.js";
 import { planDayLegTrimOn } from "../../repo/plan-day-trim.js";
 
 export type PlanWeekStatus = "done" | "today" | "upcoming" | "rest" | "open";
@@ -571,6 +572,9 @@ export function planWeek(date?: string): PlanWeek {
           };
         }
       }
+      // A logged race effort is named as itself, never the long run its weekday held.
+      const raceLabel = run?.status === "completed" && run.completion_date === cellDate ? raceEffortRunLabel(cellDate) : null;
+      if (run && raceLabel) run = { ...run, label: raceLabel };
       // A stated run weekday whose run already happened elsewhere this week (the long
       // run landed Thursday) must not read "Up next" on Saturday. Carry the completed
       // intent so the cell can say "done Thu", and hold the cell OPEN rather than upcoming.

@@ -23,7 +23,7 @@
 import { brainSignal } from "../brain/snapshot.js";
 import { db } from "../db.js";
 import { getRecoverySummary } from "./coach.js";
-import { enduranceHoldSubject, isEnduranceHoldDirective, listActiveDirectives } from "./directives-read.js";
+import { enduranceHoldRecovers, isEnduranceHoldDirective, listActiveDirectives } from "./directives-read.js";
 import {
   activitySportWhere,
   configuredEnduranceSportKeys,
@@ -1523,7 +1523,7 @@ export function statedQualitySession(args: {
 // A plain-words citation of the hold, for the plan's why/notes ("holding running
 // volume while your iron stores recover"). Derived from the directive's markers.
 function holdMarkerPhrase(d: any): string {
-  return `holding running volume while ${enduranceHoldSubject(d)} recover`;
+  return `holding running volume while ${enduranceHoldRecovers(d)}`;
 }
 
 const DIRECTIVE_HOLD_FACTOR = 0.9; // a firm endurance-limiting directive caps the weekly build
