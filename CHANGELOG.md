@@ -5,6 +5,23 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [2.1.11] — 2026-11-02
+
+A finished race is said back, and the days after it read as recovery. No migrations.
+
+### Added
+
+- **Horizon says the race you just ran.** For two weeks after a race whose run is logged, the race
+  lane shows the result (distance, time and pace in your units), the easy days left and the day
+  full training is back, and the next dated race toward its target — or an offer to set one. The
+  Week trail keeps it under "Behind you".
+
+### Fixed
+
+- **A race day's run is named for what it was.** The logged race effort reads "Half marathon test"
+  (or 5K, 10K, Marathon) on the week strip and the day page, not the long run its weekday held.
+- **A health hold's wording agrees in number** ("while your bloodwork recovers").
+
 ## [2.1.10] — 2026-10-31
 
 Train opens fast and still. No migrations.
