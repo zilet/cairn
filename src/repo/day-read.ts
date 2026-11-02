@@ -51,7 +51,7 @@ import type { RunDayIntensity } from "./run-day-intensity.js";
 import { runDaySteerKey } from "./run-day-steer.js";
 import { statedRhythmRead } from "./stated-rhythm.js";
 import { planningContextEvents } from "./health.js";
-import { plainGroupWords } from "./exercise-canon.js";
+import { plainGroupWords, sameLiftName } from "./exercise-canon.js";
 import { acuteGates, suppressSaturatedDue } from "./hybrid-load.js";
 import {
   LAST_NIGHT_MAX_AGE_DAYS,
@@ -1976,8 +1976,57 @@ function computeDayRead(
     },
   };
 
-  // Already trained today (a logged lifting session)? Then today reads as covered.
-  const trainedToday = sessionDates.has(d);
+  // Already trained today (a logged lifting session)? Then today reads as covered —
+  // but not while the athlete is still IN it. An unfinished session whose started
+  // workout (the day's active composition) still has lifts with nothing logged and
+  // nothing skipped is someone between sets: its first logged set is not "something's
+  // already on the board, keep the rest gentle". Counting it flipped the read to
+  // easy/20 min two sets into a five-lift day (live 2026-11-02), and every surface keyed
+  // on the read re-shaped the workout under him. Finished, or every started lift
+  // touched, and the logged work is the day's fact again — a session nobody taps Finish
+  // on still closes the day once the work is in. The strength line already speaks this
+  // state as `in_progress` (today-strength-line.ts).
+  const sessionInProgress =
+    sessionDates.has(d) &&
+    signalInput(() => {
+      const open = db
+        .prepare(
+          `SELECT s.id FROM sessions s WHERE s.date = ? AND s.finished_at IS NULL
+             AND EXISTS (SELECT 1 FROM logged_sets l WHERE l.session_id = s.id)
+             AND NOT EXISTS (SELECT 1 FROM sessions f JOIN logged_sets fl ON fl.session_id = f.id
+                              WHERE f.date = s.date AND f.finished_at IS NOT NULL)
+           ORDER BY s.id DESC LIMIT 1`
+        )
+        .get(d) as { id: number } | undefined;
+      if (!open) return false;
+      const composition = db
+        .prepare(
+          `SELECT items_json FROM daily_session_compositions
+            WHERE session_id = ? AND status = 'active' AND superseded_at IS NULL
+            ORDER BY version DESC, id DESC LIMIT 1`
+        )
+        .get(open.id) as { items_json: string } | undefined;
+      if (!composition) return false;
+      const started = (JSON.parse(composition.items_json || "[]") as any[])
+        .filter((item) => item?.kind === "strength" && item?.exercise)
+        .map((item) => String(item.exercise));
+      const touched = [
+        ...(
+          db
+            .prepare(
+              `SELECT DISTINCT e.name AS name FROM logged_sets l JOIN exercises e ON e.id = l.exercise_id
+                WHERE l.session_id = ?`
+            )
+            .all(open.id) as any[]
+        ).map((r) => String(r.name)),
+        ...(db.prepare(`SELECT exercise AS name FROM session_skips WHERE session_id = ?`).all(open.id) as any[]).map(
+          (r) => String(r.name)
+        ),
+      ];
+      return started.some((name) => !touched.some((done) => sameLiftName(name, done)));
+    }, false);
+  if (sessionInProgress) (signals as any).session_in_progress = true;
+  const trainedToday = sessionDates.has(d) && !sessionInProgress;
   // …but a run is not the lifting. On a weekday the athlete lifts (stated, or observed
   // from the log), endurance alone leaves the plan day open, so it must not read as
   // "today's work is in" — a 25-minute easy run closed a stated Pull day that way.

@@ -2796,6 +2796,53 @@ test("an illness keeps its guidance through the quiet-streak escalation", () => 
   assert.notEqual(reads[3].why, reads[2].why, "the guarded escalation still rotates day over day");
 });
 
+test("a session still being logged is not 'already trained today' — the read stays on the plan day", () => {
+  // Live 2026-11-02: two sets into a five-lift Upper day, the read recomputed to
+  // "Easy does it — something's already on the board" (20 min) and the workout was
+  // re-shaped under him mid-session. An OPEN session is the athlete mid-workout.
+  repo.savePlanDay(1, "Upper", "Back & arms", [
+    { exercise: "Chest-Supported Row", sets: 3, rep_low: 8, rep_high: 12, target_weight: 130 },
+    { exercise: "Barbell Curl", sets: 2, rep_low: 8, rep_high: 12, target_weight: 80 },
+  ]);
+  const today = localDaysAgo(0);
+  const before = repo.dayRead(today, { has_data: false, recovery: {} });
+  const ex = repo.upsertExercise({ name: "Chest-Supported Row", muscle_group: "back" });
+  const session = repo.getOrCreateSession(today, repo.getPlanDay(1).id);
+  // The workout he started: the day's durable composition (Start from the Brief).
+  const items = [
+    { kind: "strength", exercise: "Chest-Supported Row", sets: 3 },
+    { kind: "strength", exercise: "Barbell Curl", sets: 2 },
+  ];
+  db.prepare(
+    `INSERT INTO daily_session_compositions (version, session_id, date, source, plan_day_id, items_json, request_fingerprint)
+     VALUES (1, ?, ?, 'adaptive_plan', ?, ?, 'test')`
+  ).run(session.id, today, repo.getPlanDay(1).id, JSON.stringify(items));
+  for (const n of [1, 2]) {
+    db.prepare(
+      `INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps, rir) VALUES (?, ?, ?, 135, 10, 2)`
+    ).run(session.id, ex.id, n);
+  }
+
+  const mid = repo.dayRead(today, { has_data: false, recovery: {} });
+  assert.notEqual(mid.decision.rule_code, "logged_light_work_today");
+  assert.equal(mid.kind, before.kind, "two sets in, the day is still what it was this morning");
+  assert.equal(mid.signals.session_in_progress, true);
+  assert.equal(mid.signals.trained_today, false);
+
+  // Every started lift touched (logged or skipped), even with no Finish tap, closes it.
+  db.prepare(`INSERT INTO session_skips (session_id, exercise) VALUES (?, 'barbell curl')`).run(session.id);
+  const touched = repo.dayRead(today, { has_data: false, recovery: {} });
+  assert.equal(touched.signals.trained_today, true);
+  assert.equal(touched.signals.session_in_progress, undefined);
+  db.prepare(`DELETE FROM session_skips WHERE session_id = ?`).run(session.id);
+
+  // Finished, the logged work is the day's fact again.
+  db.prepare(`UPDATE sessions SET finished_at = datetime('now') WHERE id = ?`).run(session.id);
+  const done = repo.dayRead(today, { has_data: false, recovery: {} });
+  assert.equal(done.signals.trained_today, true);
+  assert.equal(done.signals.session_in_progress, undefined);
+});
+
 test("an unchanged read says so plainly instead of re-deriving itself", () => {
   const [, today] = liveConsecutiveDays(2);
 
