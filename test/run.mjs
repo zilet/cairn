@@ -227,7 +227,10 @@ if (shard) {
   if (!testFiles.length) process.exit(0);
 }
 if (listOnly) {
-  for (const file of testFiles) console.log(relOf(file));
+  // Exit only once the list has drained: process.exit() straight after many console.log
+  // calls into a pipe dropped its tail on Node 26.13 (the shard test saw files go missing).
+  const list = testFiles.map((file) => `${relOf(file)}\n`).join("");
+  await new Promise((resolve) => process.stdout.write(list, resolve));
   process.exit(0);
 }
 
