@@ -5,6 +5,10 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [2.1.12] — 2026-11-03
+
+Security upkeep: dependencies, base image and pinned tools brought current, two hardening fixes. No migrations.
+
 ### Security
 
 - **Dependencies brought current; `npm audit` is clean again** (it reported 1 critical and 7 high
