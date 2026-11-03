@@ -4,7 +4,14 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { queryTokenAllowedPath, authStartupError, appleHealthTokenScopeAllows, trustProxyHops } from "../dist/auth.js";
+import {
+  queryTokenAllowedPath,
+  authStartupError,
+  appleHealthTokenScopeAllows,
+  trustProxyHops,
+  authEnabled,
+  upgradeAuthorized,
+} from "../dist/auth.js";
 
 test("query-token auth is limited to browser-only GET surfaces", () => {
   assert.equal(queryTokenAllowedPath("/api/health-docs/12/file"), true);
@@ -132,4 +139,16 @@ test("trustProxyHops: a bounded hop count, never trust-everything", () => {
   // Railway's edge proxy is always one hop in front; an explicit off still wins.
   assert.equal(trustProxyHops({ RAILWAY_ENVIRONMENT_ID: "x" }), 1);
   assert.equal(trustProxyHops({ RAILWAY_ENVIRONMENT_ID: "x", CAIRN_TRUST_PROXY: "0" }), 0);
+});
+
+test("with auth off, the WebSocket upgrade still has to come from this origin", () => {
+  // The suite runs without CAIRN_AUTH_TOKEN, so this is the open (trusted-network) mode.
+  assert.equal(authEnabled, false);
+  const upgrade = (headers) => upgradeAuthorized({ headers }, null);
+  assert.equal(upgrade({ host: "rpi:8787", origin: "http://rpi:8787" }), true, "the PWA's own terminal");
+  // Browsers skip the same-origin policy on WebSocket handshakes: a foreign page could
+  // otherwise drive the agent-login PTY and sign the CLI in to its own account.
+  assert.equal(upgrade({ host: "rpi:8787", origin: "https://evil.example" }), false);
+  assert.equal(upgrade({ host: "rpi:8787", origin: "null" }), false, "a sandboxed or file: page");
+  assert.equal(upgrade({ host: "rpi:8787" }), false, "no Origin at all");
 });

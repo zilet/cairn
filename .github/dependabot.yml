@@ -1,0 +1,23 @@
+version: 2
+updates:
+  # npm: one grouped PR a week for patch/minor bumps, majors on their own so each gets a
+  # real look. The cooldown mirrors .npmrc's min-release-age: a version must be a few days
+  # old before it is proposed, which is when hijacked releases are usually caught and
+  # pulled. Security updates (enabled in the repo settings) are not held by the schedule.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 3
+      semver-major-days: 7
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: "chore(deps)"
+  # GitHub Actions are NOT listed: every action is SHA-pinned with an
+  # '# owner/repo vX.Y.Z' comment that scripts/check-action-pins.mjs verifies, a format
+  # Dependabot does not rewrite. Bump those by hand and run `npm run actions:check -- --remote`.

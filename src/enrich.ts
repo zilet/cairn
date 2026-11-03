@@ -1,10 +1,9 @@
 import path from "node:path";
 import fs from "node:fs";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { db } from "./db.js";
 import { inferHealthDocumentKind, normalizeHealthDocumentKind } from "./healthDocumentKinds.js";
 import { getActivity, getGarminActivity, reconcileGarminStrength, setActivityEnrichStatus, updateActivityFields, updateSessionGarminNarrative } from "./repo/activities.js";
+import { extractZipSafely, HEALTH_EXPORT_ZIP_LIMITS } from "./safeUnzip.js";
 import { applyCcdaHealthBackfill, backfillCcdaHealthDocument, dateUndatedPanels, extractCcdaHealthData } from "./repo/ccda.js";
 import type { CcdaHealthExtraction } from "./repo/ccda.js";
 import { recordedClientTimeZone } from "./repo/client-tz.js";
@@ -96,7 +95,6 @@ import { isoDaysAgo } from "./lib/dates.js";
 import { getAppState, setAppState } from "./repo/app-state.js";
 import { log } from "./log.js";
 
-const execFileP = promisify(execFile);
 
 // Background, in-process enrichment engine.
 //
@@ -251,10 +249,6 @@ const GEMINI_FOOD_PHOTO_MODEL = process.env.GEMINI_FOOD_PHOTO_MODEL || GEMINI_TE
 const GEMINI_FOOD_PHOTO_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_FOOD_PHOTO_MODEL}:generateContent`;
 const FOOD_PHOTO_TIMEOUT_MS = 45_000;
 
-// Refuse pathological archives before unzipping (zip-bomb / huge export guard).
-const ZIP_MAX_UNCOMPRESSED = 200 * 1024 * 1024; // 200 MB
-const ZIP_MAX_FILES = 3000;
-
 function looksLikeZip(fp: string, mime?: string | null): boolean {
   const m = (mime || "").toLowerCase();
   return m === "application/zip" || m === "application/x-zip-compressed" || /\.zip$/i.test(fp);
@@ -275,8 +269,10 @@ export function buildHealthSourceInventory(root: string): string[] {
     if (out.length >= INVENTORY_MAX_FILES) return;
     const base = path.basename(fp);
     if (base.startsWith(".") || base.toLowerCase() === "__macosx") return;
+    // lstat, never stat: a link inside an export (e.g. one unpacked before extraction was
+    // hardened) must not hand the agent a file from outside the upload.
     let st: fs.Stats;
-    try { st = fs.statSync(fp); } catch { return; }
+    try { st = fs.lstatSync(fp); } catch { return; }
     if (st.isDirectory()) {
       let entries: string[] = [];
       try { entries = fs.readdirSync(fp).sort(); } catch { return; }
@@ -291,33 +287,20 @@ export function buildHealthSourceInventory(root: string): string[] {
   return out;
 }
 
-// Unzip an uploaded archive into an isolated sibling folder under uploads, after
-// a size/count sanity check. Returns the extraction dir, or null if unzip is
-// unavailable / the archive is unsafe / extraction fails (caller then hands the
-// agent the raw file instead). Reads happen only inside this dir.
+// Unpack an uploaded archive into an isolated sibling folder under uploads
+// (`extractZipSafely`: no symlinks, nothing outside the folder, entry and inflated-byte
+// caps). Returns the folder, or null if the archive is unsafe or unreadable (the caller
+// then hands the agent the raw file instead). A re-ingest re-extracts from scratch.
 async function unzipToFolder(zipPath: string): Promise<string | null> {
   const destDir = `${zipPath}-x`;
   try {
-    // `unzip -l` trailer: "  <total bytes>  <file count> files"
-    const { stdout } = await execFileP("unzip", ["-l", zipPath], { timeout: 30_000, maxBuffer: 16 * 1024 * 1024 });
-    const lines = stdout.trim().split("\n");
-    const last = lines[lines.length - 1] || "";
-    const mTotal = last.match(/^\s*(\d+)\s+(\d+)\s+files?/i);
-    if (mTotal) {
-      const total = Number(mTotal[1]);
-      const count = Number(mTotal[2]);
-      if (total > ZIP_MAX_UNCOMPRESSED || count > ZIP_MAX_FILES) {
-        log.warn(`[enrich] zip too large to ingest (${total} bytes, ${count} files) — skipping unpack.`);
-        return null;
-      }
-    }
-    fs.mkdirSync(destDir, { recursive: true });
-    // -o overwrite, -qq quiet; modern unzip sanitizes path traversal, and we only
-    // ever read back from destDir regardless.
-    await execFileP("unzip", ["-o", "-qq", zipPath, "-d", destDir], { timeout: 60_000, maxBuffer: 16 * 1024 * 1024 });
+    fs.rmSync(destDir, { recursive: true, force: true });
+    const out = await extractZipSafely(zipPath, destDir, HEALTH_EXPORT_ZIP_LIMITS);
+    if (out.skipped) log.info(`[enrich] unpacked ${out.files} file(s); skipped ${out.skipped} link/special entr${out.skipped === 1 ? "y" : "ies"}.`);
     return destDir;
   } catch (e: any) {
-    log.warn(`[enrich] unzip failed (${e?.code ?? e?.message ?? e}) — handing the archive to the agent as-is.`);
+    try { fs.rmSync(destDir, { recursive: true, force: true }); } catch { /* best effort */ }
+    log.warn(`[enrich] unzip refused (${e?.code ?? e?.message ?? e}) — handing the archive to the agent as-is.`);
     return null;
   }
 }
@@ -721,7 +704,7 @@ async function processJob(job: Job): Promise<void> {
   const settings = getSettings();
   if (!settings.enrich_enabled) {
     if (job.kind === "health") {
-      const backfill = backfillCcdaHealthDocument(job.id);
+      const backfill = await backfillCcdaHealthDocument(job.id);
       if (backfill.wrote) {
         log.info(`[enrich] health#${job.id}: deterministic CCDA backfill wrote ${backfill.clinicalFacts} fact(s), ${backfill.resultMarkers} lab marker(s), ${backfill.vitalMarkers} vital marker(s), ${backfill.bpReadings}/${backfill.extractedBpReadings} BP row(s) (agent enrichment off).`);
         noteDeterministicIngest(job.id, "enrichment_off", "Agent analysis is switched off in Settings.");
@@ -744,7 +727,7 @@ async function processJob(job: Job): Promise<void> {
   const order = pickAgentOrderForTask(task);
   if (!order.length) {
     if (job.kind === "health") {
-      const backfill = backfillCcdaHealthDocument(job.id);
+      const backfill = await backfillCcdaHealthDocument(job.id);
       if (backfill.wrote) {
         log.info(`[enrich] health#${job.id}: deterministic CCDA backfill wrote ${backfill.clinicalFacts} fact(s), ${backfill.resultMarkers} lab marker(s), ${backfill.vitalMarkers} vital marker(s), ${backfill.bpReadings}/${backfill.extractedBpReadings} BP row(s) (no usable agent).`);
         noteDeterministicIngest(job.id, "no_agent_enabled", "No agent is enabled — turn one on in Settings.");

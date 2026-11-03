@@ -1,6 +1,6 @@
 {
   "name": "Cairn",
-  "image": "mcr.microsoft.com/devcontainers/javascript-node:26-bookworm",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:26-trixie",
 
   "forwardPorts": [8787],
   "portsAttributes": {

@@ -1,7 +1,7 @@
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { extractZipSafely, HEALTH_EXPORT_ZIP_LIMITS } from "../safeUnzip.js";
 import { cleanClinicalFacts, dropDuplicateMarkersByDate, getHealthDocumentRaw, replaceHealthPanelsByType, updateHealthDocFields, upsertBloodPressureReading, type HealthPanelInput } from "./health.js";
 import { canonicalMarker, normalizeMarkerName } from "./marker-canon.js";
 import { localDateISO } from "./shared.js";
@@ -88,7 +88,8 @@ function readCcdaXmlFiles(rootPath: string): Array<{ file: string; xml: string }
   const visit = (fp: string) => {
     if (out.length >= MAX_CCDA_XML_FILES || totalBytes >= MAX_CCDA_XML_BYTES) return;
     let st: fs.Stats;
-    try { st = fs.statSync(fp); } catch { return; }
+    // lstat: a link inside an unpacked export is never followed out of it.
+    try { st = fs.lstatSync(fp); } catch { return; }
     if (st.isDirectory()) {
       const base = path.basename(fp).toLowerCase();
       if (base === "__macosx" || base === ".git") return;
@@ -472,7 +473,7 @@ export function applyCcdaHealthBackfill(sourceId: number, extraction: CcdaHealth
   };
 }
 
-function materializeHealthDocSource(filePath: string): { root: string; cleanup?: () => void } | null {
+async function materializeHealthDocSource(filePath: string): Promise<{ root: string; cleanup?: () => void } | null> {
   if (!filePath || !path.isAbsolute(filePath)) return null;
   try {
     if (fs.statSync(filePath).isDirectory()) return { root: filePath };
@@ -487,13 +488,20 @@ function materializeHealthDocSource(filePath: string): { root: string; cleanup?:
     /* not already extracted */
   }
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "cairn-ccda-"));
-  execFileSync("unzip", ["-o", "-qq", filePath, "-d", tmp], { timeout: 60_000, maxBuffer: 16 * 1024 * 1024 });
-  return { root: tmp, cleanup: () => fs.rmSync(tmp, { recursive: true, force: true }) };
+  const cleanup = () => fs.rmSync(tmp, { recursive: true, force: true });
+  try {
+    await extractZipSafely(filePath, tmp, HEALTH_EXPORT_ZIP_LIMITS);
+  } catch {
+    // An unsafe or unreadable archive yields no backfill — and never a leaked temp dir.
+    cleanup();
+    return null;
+  }
+  return { root: tmp, cleanup };
 }
 
-export function backfillCcdaHealthDocument(sourceId: number): CcdaBackfillResult {
+export async function backfillCcdaHealthDocument(sourceId: number): Promise<CcdaBackfillResult> {
   const row = getHealthDocumentRaw(sourceId) as any;
-  const source = materializeHealthDocSource(String(row?.file_path ?? ""));
+  const source = await materializeHealthDocSource(String(row?.file_path ?? ""));
   if (!source) {
     return EMPTY_BACKFILL(0);
   }

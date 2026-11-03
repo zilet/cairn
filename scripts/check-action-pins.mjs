@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const remote = process.argv.includes("--remote");
-const workflows = [".github/workflows/ci.yml", ".github/workflows/release-image.yml"];
+// Every workflow, not a list: a new workflow is held to the same pinning rule the moment it lands.
+const workflows = readdirSync(path.join(root, ".github/workflows"))
+  .filter((name) => /\.ya?ml$/.test(name))
+  .sort()
+  .map((name) => `.github/workflows/${name}`);
 const failures = [];
 
 function escRe(s) {

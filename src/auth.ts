@@ -294,9 +294,14 @@ export function authGuard(req: Request, res: Response, next: NextFunction) {
  * The WebSocket upgrade's own check (upgrades bypass Express): the master token on the
  * query string (the legacy path), or a live device session cookie from this very
  * origin — a browser always sends Origin on a WebSocket handshake.
+ *
+ * With no token configured the instance is open, but the upgrade still has to come from
+ * this origin: browsers do not apply the same-origin policy to WebSocket handshakes, so
+ * any page the owner opens could otherwise reach the agent-login PTY, read its device
+ * code and sign the CLI in to an account of the page's choosing.
  */
 export function upgradeAuthorized(req: IncomingMessage, queryToken: string | null | undefined): boolean {
-  if (!authEnabled) return true;
+  if (!authEnabled) return isSameOriginRequest(req.headers, trustProxyHops());
   if (queryToken && safeEqual(queryToken, TOKEN)) {
     noteMasterTokenUse();
     return true;

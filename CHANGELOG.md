@@ -5,6 +5,40 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+### Security
+
+- **Dependencies brought current; `npm audit` is clean again** (it reported 1 critical and 7 high
+  advisories). The MCP SDK moves to 1.32.2 (request-validation memory exhaustion, cross-session
+  tasks, bearer-token audience), express to 5.3.0 with body-parser 2.4.0 (a compressed-body DoS that
+  reached the sign-in doors before auth) and proxy-addr 2.0.8, zod to 4.6.7 (memory exhaustion on
+  oversized collections), plus hono, @hono/node-server, fast-uri, ip-address, qs, axios and
+  follow-redirects underneath.
+- **The image builds on Debian 13 and Node.js 26.13.0** (`node:26.13.0-trixie-slim`, the first
+  Node 26 LTS release): bookworm has moved to long-term support, which gets fewer and later fixes.
+  CI's Node 26 lane follows; the Node 24 lane stays on the supported minimum, 24.22.1.
+- **The sign-in terminal runs xterm.js 6** (`@xterm/xterm` 6.0.0 with the fit addon 0.11.0),
+  replacing 5.3.0 under the package name xterm.js has since retired.
+- **Fresh coaching-CLI installs get current builds:** Claude Code 2.1.315, Codex 0.166.0,
+  Antigravity 1.4.12 (SHA-512s from Google's release manifest) and Grok 1.0.70. Claude Code and
+  Codex grew, so their disk checks now ask for 350 MB and 480 MB.
+- **CI actions and the Dockerfile frontend are current** (checkout 7.0.1, setup-node 7.1.0, the
+  Docker build actions, action-gh-release 3.0.3; `docker/dockerfile:1.28.0`), each still pinned
+  to a full commit SHA.
+- **The sign-in terminal only answers this origin, even with auth off.** Browsers let any page
+  open a WebSocket to another origin, so with no `CAIRN_AUTH_TOKEN` a page you visited could reach
+  the agent-login terminal, read its device code and sign a coaching CLI in to an account of its
+  choosing. The upgrade now has to come from Cairn's own origin in every mode.
+- **Health-record archives unpack safely.** Uploaded exports are extracted in-process with
+  symlinks, devices and out-of-folder names refused, and entry and inflated-size caps counted on the
+  bytes actually written. Previously the `unzip` tool restored symlinks (a link could hand a file
+  from outside the upload to the reader), trusted the sizes the archive declared, and, on the
+  agentless backfill path, blocked the server while it ran and left its temp folder behind on
+  failure.
+- **Supply-chain guards.** npm never resolves a version published less than 3 days ago
+  (`.npmrc` `min-release-age`), and dependency install scripts stay off (`allowScripts`). A weekly
+  Security workflow re-audits the committed lockfile, verifies registry signatures and re-checks
+  the pinned action tags. Dependabot proposes the week's updates with the same cooldown.
+
 ## [2.1.11] — 2026-11-02
 
 A finished race is said back, and the days after it read as recovery. No migrations.

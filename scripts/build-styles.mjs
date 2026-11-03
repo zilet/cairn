@@ -153,19 +153,27 @@ function listPartials(dir = STYLES_DIR) {
  * reviewable and merge-friendly; the partials under src/styles/ keep every comment.
  */
 export function minifyCss(css) {
-  let out = "";
+  // Built as chunks joined once at the end. Reading back from a string grown by `+=` (its last
+  // character, endsWith, a slice) flattens V8's rope on every read, which made this O(n²) in
+  // the stylesheet's size (~14 s for a 57-partial build); `last` and `decl` answer those reads.
+  const parts = [];
+  let last = ""; // the last character emitted
+  let decl = ""; // what was emitted since the current declaration started
+  const push = (text) => {
+    parts.push(text);
+    decl += text;
+    last = text[text.length - 1];
+  };
   let pendingSpace = false;
-  // Custom-property state: where the current declaration started in `out`, the
-  // paren depth, and whether we are inside a `--name:` value.
-  let declStart = 0;
+  // Custom-property state: the paren depth, and whether we are inside a `--name:` value.
   let depth = 0;
   let inCustom = false;
   const n = css.length;
   const tight = (ch) => ch === "{" || ch === "}" || ch === ";" || (ch === "," && !inCustom) || ch === "\n";
   const emit = (text) => {
-    if (pendingSpace && out.length && !tight(out[out.length - 1]) && !tight(text[0])) out += " ";
+    if (pendingSpace && last && !tight(last) && !tight(text[0])) push(" ");
     pendingSpace = false;
-    out += text;
+    push(text);
   };
   let i = 0;
   while (i < n) {
@@ -176,10 +184,10 @@ export function minifyCss(css) {
       // A comment is NOT whitespace: `.a/**/.b` is the compound `.a.b`, and
       // `1px/**/solid` is two tokens. Glued between two token characters it
       // stays as an empty `/**/`; next to whitespace or punctuation it just goes.
-      const prev = pendingSpace ? " " : out[out.length - 1] || " ";
+      const prev = pendingSpace ? " " : last || " ";
       const next = css[i] || " ";
       const glue = (c) => !/[\s{};,]/.test(c);
-      if (glue(prev) && glue(next)) out += "/**/";
+      if (glue(prev) && glue(next)) push("/**/");
       continue;
     }
     if (ch === '"' || ch === "'") {
@@ -207,31 +215,33 @@ export function minifyCss(css) {
     }
     if (ch === "{" || ch === ";" || ch === ",") {
       pendingSpace = false;
-      out += ch;
+      push(ch);
       i += 1;
       if (ch !== "," && depth === 0) {
         inCustom = false;
-        declStart = out.length;
+        decl = "";
       }
       continue;
     }
     if (ch === "}") {
       pendingSpace = false;
-      if (out.endsWith(";")) out = out.slice(0, -1);
-      out += "}\n";
+      // A ";" is only ever pushed as a chunk of its own (the branch above), so the
+      // rule's trailing semicolon is exactly the last chunk.
+      if (last === ";") parts.pop();
+      push("}\n");
       i += 1;
       depth = 0;
       inCustom = false;
-      declStart = out.length;
+      decl = "";
       continue;
     }
     if (ch === "(") depth += 1;
     else if (ch === ")") depth = Math.max(0, depth - 1);
-    else if (ch === ":" && depth === 0 && !inCustom && out.slice(declStart).trimStart().startsWith("--")) inCustom = true;
+    else if (ch === ":" && depth === 0 && !inCustom && decl.trimStart().startsWith("--")) inCustom = true;
     emit(ch);
     i += 1;
   }
-  return out;
+  return parts.join("");
 }
 
 function concatPartials(names) {

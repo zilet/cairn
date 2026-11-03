@@ -51,17 +51,17 @@ test("bundled agent manifest pins every supported lazy installer", () => {
   assert.deepEqual(claude.spec, {
     method: "npm",
     package: "@anthropic-ai/claude-code",
-    version: "2.1.283",
+    version: "2.1.315",
     args: [],
-    size_mb: 260,
+    size_mb: 350,
     cleanup: [],
   });
   assert.deepEqual(codex.spec, {
     method: "npm",
     package: "@openai/codex",
-    version: "0.157.1",
+    version: "0.166.0",
     args: ["--include=optional"],
-    size_mb: 400,
+    size_mb: 480,
     cleanup: [],
   });
   // Every installable provider declares its measured size, so a small disk fails early.
@@ -106,13 +106,13 @@ test("npm CLI installs into the persistent Cairn tools root", () =>
         'printf \'%s\\n\' "$*" > "$NPM_LOG"',
         'printf \'token=%s\\n\' "${' + 'CAIRN_AUTH_TOKEN:-}" >> "$NPM_LOG"',
         'mkdir -p "$CAIRN_CLI_ROOT/bin"',
-        "printf '%s\\n' '#!/bin/sh' 'echo 2.1.283' > \"$CAIRN_CLI_ROOT/bin/claude\"",
+        "printf '%s\\n' '#!/bin/sh' 'echo 2.1.315' > \"$CAIRN_CLI_ROOT/bin/claude\"",
         'chmod +x "$CAIRN_CLI_ROOT/bin/claude"',
       ].join("\n")
     );
     const env = { ...envFor(dir, bin), NPM_LOG: log, CAIRN_AUTH_TOKEN: "must-not-reach-installer" };
     installAgentCli("claude", { manifestPath: manifest, env });
-    assert.match(fs.readFileSync(log, "utf8"), /install --global --prefix .*@anthropic-ai\/claude-code@2\.1\.283/);
+    assert.match(fs.readFileSync(log, "utf8"), /install --global --prefix .*@anthropic-ai\/claude-code@2\.1\.315/);
     assert.doesNotMatch(fs.readFileSync(log, "utf8"), /must-not-reach-installer/);
     assert.ok(fs.existsSync(path.join(env.CAIRN_CLI_ROOT, "bin", "claude")));
   }));
@@ -378,9 +378,9 @@ test("too little free disk fails before anything is downloaded, in plain words",
       (e) =>
         e.reason === "disk_full" &&
         e.free_mb === 61 &&
-        e.need_mb === 260 &&
+        e.need_mb === 350 &&
         e.message ===
-          "Your server's disk is nearly full (61 MB free; Claude needs about 260 MB). Use a bigger volume or remove a provider you don't use."
+          "Your server's disk is nearly full (61 MB free; Claude needs about 350 MB). Use a bigger volume or remove a provider you don't use."
     );
     assert.equal(fs.existsSync(log), false, "npm never ran");
   }));
@@ -403,7 +403,7 @@ test("a stub left behind on a full disk is reported as the disk, not the provide
     const freeMb = () => (calls++ === 0 ? 5_000 : 40);
     assert.throws(
       () => installAgentCli("claude", { manifestPath: manifest, env, freeMb }),
-      (e) => e.reason === "disk_full" && /^Your server's disk is nearly full \(40 MB free; Claude needs about 260 MB\)/.test(e.message)
+      (e) => e.reason === "disk_full" && /^Your server's disk is nearly full \(40 MB free; Claude needs about 350 MB\)/.test(e.message)
     );
     assert.equal(fs.existsSync(path.join(env.CAIRN_CLI_ROOT, "bin", "claude")), false);
   }));
