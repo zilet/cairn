@@ -27,7 +27,7 @@ import {
   normalizedExerciseKey,
   resolveExerciseName,
 } from "./exercise-canon.js";
-import { CARDIO_GRADE, HARD_EFFORT, sawSessionEffort } from "./heavy-load.js";
+import { CARDIO_GRADE, HARD_EFFORT, lengthNeedsEffortFamily, sawSessionEffort } from "./heavy-load.js";
 import { registeredHybridForwardProjection } from "./hybrid-forward-projection.js";
 import { activeRecoveryWeekLedger } from "./recovery-week-ledger.js";
 import type { HrModel } from "./hr-model.js";
@@ -163,6 +163,11 @@ function planDayContentTitle(planDayId: number): string | null {
   return contentTitle(bucketCounts(rows));
 }
 
+/** A session the athlete chose for the day rather than the plan's own pick. */
+function isChosenComposition(source: string): boolean {
+  return source === "athlete_override" || source === "agent_suggest";
+}
+
 // The daily COMPOSITION bound to a session — the prescription the athlete actually
 // accepted for that day, which an `athlete_override` session ("Deadlift + upper-body
 // catch-up") carries INSTEAD of a plan day, not alongside one. Without it a chosen
@@ -227,7 +232,8 @@ export function deriveSessionTitle(sessionId: number, planDayId?: number | null,
   // Nothing logged yet: the plan day, else the accepted prescription's own title —
   // a composition-only session is never a bare "Session".
   if (!rows.length) {
-    const prescribed = planDayName ? null : compositionForSession(sessionId);
+    const prescribed = compositionForSession(sessionId);
+    if (prescribed?.items.length && isChosenComposition(prescribed.source)) return prescribed.title;
     return planDayName || (prescribed?.items.length ? prescribed.title : "") || "Session";
   }
 
@@ -296,7 +302,10 @@ export function deriveSessionTitle(sessionId: number, planDayId?: number | null,
   // no prescription to measure the log against — once sets are logged, the work that
   // was done names the session, never "Rest day" over a lifted session.
   if (composition && composition.items.length && !rewritten) {
-    const named = ownDay ? (planDayName as string) : composition.title;
+    // A session the athlete CHOSE (typed, or a suggestion they accepted) keeps its own
+    // title even on its plan day — the same name today's strength line prints
+    // (today-strength-line.ts ChosenSession), so the Brief and the day never disagree.
+    const named = ownDay && !isChosenComposition(composition.source) ? (planDayName as string) : composition.title;
     const prescribed = new Set(composition.items.map(identity));
     const hits = rows.filter((r) => prescribed.has(identity(r.name))).length;
     if (hits / rows.length >= 0.5) return named;
@@ -910,10 +919,7 @@ function hardCardioDayCore(
       rpe: r.rpe,
     });
     const shortBar =
-      sport === "ride" ||
-      sport === "swim" ||
-      sport === "row" ||
-      ((family === "paddle" || family === "court" || family === "snow") && sessionEffort);
+      sport === "ride" || sport === "swim" || sport === "row" || (lengthNeedsEffortFamily(family) && sessionEffort);
     if (dur >= (shortBar ? HARD_CARDIO_MIN : CARDIO_GRADE.walkHikeModerateMin)) return true;
   }
   return false;

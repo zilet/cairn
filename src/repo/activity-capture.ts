@@ -18,6 +18,47 @@ export interface ParsedActivityText {
   pace: string | null;
 }
 
+// Everything that is not a run/ride/swim/hike, named by the sport the athlete said, so
+// the load family (endurance-sports.activityLoadFamily) can place it and the log reads
+// as what they did. Ordered: the first match wins. "other" is only for text that names
+// no sport at all.
+const OTHER_SPORT_TYPES: ReadonlyArray<[RegExp, string]> = [
+  [
+    // Never a bare "box" ("box jumps", "box squats" are legs) nor "punchy".
+    /\b(?:boxing|boxed|kickbox\w*|shadow ?box\w*|punch(?:ing|ed|es)?(?: the)? ?bag|bag punching|heavy ?bag|bag work|bag session|pad ?work|mitt ?work)\b/,
+    "boxing",
+  ],
+  [
+    /\b(?:mma|muay thai|martial arts?|karate|judo|jiu ?jitsu|bjj|taekwondo|wrestl\w*|grappl\w*|sparr?(?:ing|ed)|krav maga|kung fu)\b/,
+    "martial_arts",
+  ],
+  [/\b(?:rowing|rowed|erg|concept ?2)\b/, "row"],
+  [/\b(?:kayak\w*|canoe\w*|paddle ?board\w*|sup|paddl\w*)\b/, "paddling"],
+  [/\b(?:snowboard\w*)\b/, "snowboarding"],
+  [/\b(?:ski|skied|skiing|skin(?:ning)? up)\b/, "skiing"],
+  [/\b(?:skat\w*)\b/, "skating"],
+  [
+    /\b(?:tennis|padel|pickleball|squash|badminton|soccer|football|futsal|basketball|volleyball|hockey|rugby|ultimate)\b/,
+    "court_sport",
+  ],
+  [/\b(?:golf\w*)\b/, "golf"],
+  [/\b(?:boulder\w*|climb(?:ing|ed)?)\b/, "climbing"],
+  [/\b(?:yoga)\b/, "yoga"],
+  [/\b(?:pilates)\b/, "pilates"],
+  [/\b(?:elliptical|stair ?master|stair ?climber|stairs)\b/, "elliptical"],
+  [/\b(?:danc\w*)\b/, "dance"],
+];
+
+function otherSportType(t: string): string | null {
+  for (const [re, type] of OTHER_SPORT_TYPES) {
+    if (!re.test(t)) continue;
+    // The court words keep their own name ("tennis", "padel") so the log reads as said.
+    if (type === "court_sport") return t.match(re)?.[0] ?? type;
+    return type;
+  }
+  return null;
+}
+
 export function parseActivity(text: string): ParsedActivityText {
   const t = text.toLowerCase();
   let type = "other";
@@ -27,6 +68,7 @@ export function parseActivity(text: string): ParsedActivityText {
   else if (/\b(hike|hiked|hiking|walk|walked|fell ?run|fells)\b/.test(t)) type = "hike";
   // a /km pace strongly implies a run if nothing else matched
   if (type === "other" && /\d+:\d{2}\s*(?:\/|per)\s*km/.test(t)) type = "run";
+  if (type === "other") type = otherSportType(t) ?? "other";
 
   let duration_min: number | null = null;
   // (?![a-z]) so a word that merely starts with "h" ("2 hills", "176 home scale")
@@ -181,7 +223,7 @@ const READING_FILLER = new Set([
 // Vocabulary that marks a real movement session even when the parser found no
 // type, duration or distance ("yoga class", "played tennis", "push day done").
 const ACTIVITY_WORDS =
-  /\b(?:yoga|pilates|barre|climb(?:ed|ing)?|boulder(?:ed|ing)?|tennis|squash|padel|pickleball|badminton|golf(?:ed)?|soccer|football|basketball|volleyball|hockey|rugby|baseball|softball|row(?:ed|ing)?|erg|ski(?:ed|ing)?|snowboard(?:ed|ing)?|skat(?:e|ed|ing)|surf(?:ed|ing)?|paddl(?:e|ed|ing)|sup|kayak(?:ed|ing)?|canoe(?:d|ing)?|danc(?:e|ed|ing)|stretch(?:ed|ing)?|mobility|elliptical|stair(?:s|master)?|stepper|spin(?:ning)?|peloton|crossfit|hiit|circuit|workout|work(?:ed)?\s+out|train(?:ed|ing)|session|class|lift(?:ed|ing)?|gym|cardio|sport|game|match|practice|ruck(?:ed|ing)?|sprints?|jump\s+rope|skipping|box(?:ed|ing)|kickbox(?:ing)?|martial|bjj|jiu|judo|karate|muay|wrestl(?:e|ed|ing)|sauna|plunge|trek(?:ked|king)?|trail|commute|mow(?:ed|ing)?|yard\s*work|garden(?:ed|ing)?|shovel(?:ed|ing)?|chores|played|swam|walked|hiked|ran|rode|treadmill|zumba|tai\s*chi|qi\s*gong|frisbee|strength|core|(?:upper|lower|full)[- ]?body)\b|\b(?:push|pull|legs?|upper|lower|full[- ]body|arms?|chest|back|shoulders?)\s+day\b/i;
+  /\b(?:yoga|pilates|barre|climb(?:ed|ing)?|boulder(?:ed|ing)?|tennis|squash|padel|pickleball|badminton|golf(?:ed)?|soccer|football|basketball|volleyball|hockey|rugby|baseball|softball|row(?:ed|ing)?|erg|ski(?:ed|ing)?|snowboard(?:ed|ing)?|skat(?:e|ed|ing)|surf(?:ed|ing)?|paddl(?:e|ed|ing)|sup|kayak(?:ed|ing)?|canoe(?:d|ing)?|danc(?:e|ed|ing)|stretch(?:ed|ing)?|mobility|elliptical|stair(?:s|master)?|stepper|spin(?:ning)?|peloton|crossfit|hiit|circuit|workout|work(?:ed)?\s+out|train(?:ed|ing)|session|class|lift(?:ed|ing)?|gym|cardio|sport|game|match|practice|ruck(?:ed|ing)?|sprints?|jump\s+rope|skipping|box(?:ed|ing)|kickbox(?:ing)?|martial|bjj|jiu|judo|karate|muay|wrestl(?:e|ed|ing)|bag\s+work|heavy\s+bag|punch(?:ing)?\s+bag|spar(?:red|ring)|mma|taekwondo|grappl(?:e|ed|ing)|shadow\s*box(?:ing)?|sauna|plunge|trek(?:ked|king)?|trail|commute|mow(?:ed|ing)?|yard\s*work|garden(?:ed|ing)?|shovel(?:ed|ing)?|chores|played|swam|walked|hiked|ran|rode|treadmill|zumba|tai\s*chi|qi\s*gong|frisbee|strength|core|(?:upper|lower|full)[- ]?body)\b|\b(?:push|pull|legs?|upper|lower|full[- ]body|arms?|chest|back|shoulders?)\s+day\b/i;
 
 // The athlete (or a truncated message) talking about a session that has not
 // happened yet: future intent, or one only now beginning. Always dropped.
@@ -191,8 +233,13 @@ const INTENT_NOT_DONE =
 const REQUEST_PHRASING = /^\s*(?:should\s+i|can\s+(?:we|i|you)|could\s+(?:we|you|i)|would\s+you|will\s+you)\b/i;
 const LOG_VERB = /\b(?:log|logged|record|recorded|add|save|track|note)\b/i;
 
+// A run/ride/swim/hike verb ("ran", "rode") is itself a report of work done. The wider
+// sport names (otherSportType) only LABEL a log — "I'll do yoga later" names a sport
+// too — so they never shield intent or a question from being dropped.
+const DONE_VERB_TYPES = new Set(["run", "ride", "swim", "hike"]);
+
 function hasActivityMetrics(parsed: ParsedActivityText): boolean {
-  return parsed.type !== "other" || parsed.duration_min != null || parsed.distance_km != null;
+  return DONE_VERB_TYPES.has(parsed.type) || parsed.duration_min != null || parsed.distance_km != null;
 }
 
 /** Words left once the reading's own tokens and neutral filler are removed. */

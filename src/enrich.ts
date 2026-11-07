@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { db } from "./db.js";
 import { inferHealthDocumentKind, normalizeHealthDocumentKind } from "./healthDocumentKinds.js";
 import { getActivity, getGarminActivity, reconcileGarminStrength, setActivityEnrichStatus, updateActivityFields, updateSessionGarminNarrative } from "./repo/activities.js";
+import { isGenericActivityType } from "./repo/endurance-sports.js";
 import { extractZipSafely, HEALTH_EXPORT_ZIP_LIMITS } from "./safeUnzip.js";
 import { applyCcdaHealthBackfill, backfillCcdaHealthDocument, dateUndatedPanels, extractCcdaHealthData } from "./repo/ccda.js";
 import type { CcdaHealthExtraction } from "./repo/ccda.js";
@@ -2472,7 +2473,14 @@ function applyStructured(job: Job, structured: any): boolean {
     // Only overwrite fields the agent actually provided, coerced to the column's
     // type so a string-number or junk value can't silently corrupt the row.
     const fields: Record<string, any> = {};
-    const type = asStr(structured.type); if (type !== undefined) fields.type = type;
+    // A generic type ("other", "workout") never replaces a sport the text parse already
+    // placed; the stored key is the same shape correctActivity writes.
+    const current = getActivity(job.id) as any;
+    // A person corrected the row while this ran (correctActivity marks it skipped): theirs wins.
+    if (String(current?.enrichment_status ?? "") === "skipped") return false;
+    const type = asStr(structured.type);
+    const key = type?.trim().toLowerCase().replace(/[\s-]+/g, "_");
+    if (key && !(isGenericActivityType(key) && !isGenericActivityType(current?.type))) fields.type = key;
     const dur = asNum(structured.duration_min); if (dur !== undefined) fields.duration_min = dur;
     const dist = asNum(structured.distance_km); if (dist !== undefined) fields.distance_km = dist;
     const pace = asStr(structured.pace); if (pace !== undefined) fields.pace = pace;

@@ -38,6 +38,26 @@ test("Today render state opens the plan from a train read or existing work", () 
   assert.equal(derive({ read: { kind: "easy" } }).showPlan, false);
 });
 
+// 2026-11-07 (live): a session planned over MCP (athlete_override) on an easy-read
+// morning was invisible on Today — the Brief offered only "Train anyway", which the
+// server then refused because that very session already owned the date.
+test("a session the athlete chose opens its launch card under a quiet read", () => {
+  const items = [{ exercise: "Pull-Up" }];
+  assert.equal(derive({ read: { kind: "easy" }, dailySession: { source: "athlete_override", items } }).showPlan, true);
+  assert.equal(derive({ read: { kind: "rest" }, dailySession: { source: "agent_suggest", items } }).showPlan, true);
+  assert.equal(
+    derive({ read: { kind: "easy" }, dailySession: { source: "athlete_override", items: [] } }).showPlan,
+    true,
+    "an open session"
+  );
+  assert.equal(
+    derive({ read: { kind: "rest" }, dailySession: { source: "agent_suggest", items: [] } }).showPlan,
+    false,
+    "an empty 'Rest day' card"
+  );
+  assert.equal(derive({ read: { kind: "easy" }, dailySession: { source: "adaptive_plan", items } }).showPlan, false);
+});
+
 test("Today render state keeps finished today in done mode unless explicitly revealed", () => {
   const done = derive({ session: { finished_at: "2026-07-01T12:00:00Z", sets: [{ exercise: "Squat" }] } });
 

@@ -24,6 +24,12 @@ type TodayRenderStateInput = {
   read: Partial<TodayRenderStateDayRead> | null | undefined;
   isToday: boolean;
   planReveal?: TodayRenderStatePlanReveal | null;
+  // The accepted daily session. When the athlete CHOSE it (one they or an AI app over
+  // MCP wrote — athlete_override, even an empty "open session" — or an accepted
+  // suggestion that holds work; the server's ChosenSession, src/repo/today-strength-line.ts),
+  // that is the same commitment as "Train anyway": its launch card stands under any read.
+  // An accepted suggestion with nothing in it (a rest read's "Rest day") opens nothing.
+  dailySession?: { source?: unknown; items?: unknown[] | null } | null;
 };
 type TodayRenderStateResult = {
   hasLoggedSets: boolean;
@@ -49,7 +55,11 @@ type TodayRenderStateApi = {
     );
     const isFinished = !!(input.session && input.session.finished_at);
     const hasGarmin = !!(input.session && input.session.garmin);
-    const showPlan = !input.isToday || hasLoggedSets || hasGarmin || revealOn || input.read?.kind === "train";
+    const source = input.dailySession?.source;
+    const chosenSession =
+      source === "athlete_override" || (source === "agent_suggest" && !!input.dailySession?.items?.length);
+    const showPlan =
+      !input.isToday || hasLoggedSets || hasGarmin || revealOn || chosenSession || input.read?.kind === "train";
     const showDone = isFinished && input.isToday && !revealOn;
 
     return {

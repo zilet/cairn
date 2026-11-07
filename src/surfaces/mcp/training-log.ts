@@ -17,6 +17,7 @@ import {
   listActivities,
   logSetByName,
   removeActivity,
+  correctActivity,
   setActivityFeltEffort,
   recentTraining,
   recordExerciseSymptomObservation,
@@ -180,6 +181,19 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
   );
 
   server.tool(
+    "update_activity",
+    "Correct one hand-logged activity by id (history correction): the sport (type, one short word such as boxing, martial_arts, run, yoga), duration_min, distance_km, notes. Only provided fields change. Refuses a watch-imported activity with ok:false, since the next sync owns it.",
+    {
+      id: z.number().int().describe("the activity's id, from list_activities"),
+      type: z.string().optional().describe("the sport as one short word, e.g. boxing, martial_arts, run, ride, yoga"),
+      duration_min: z.number().nullable().optional().describe("minutes; null clears it"),
+      distance_km: z.number().nullable().optional().describe("kilometres; null clears it"),
+      notes: z.string().nullable().optional().describe("free-form notes; null clears them"),
+    },
+    async ({ id, ...fields }) => asText(correctActivity(id, fields))
+  );
+
+  server.tool(
     "update_set",
     "Edit one logged set by id (history correction): any subset of weight (lb), reps, rir, note, duration_sec (timed work). Only provided fields change. Corrections are stored exactly as given; unlike log_set, no assist-sign normalization is applied, so pass a negative weight explicitly for assisted work.",
     {
@@ -219,7 +233,12 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
     "Log a cardio/other session. Pass free text (e.g. 'ran 50 min @5:30/km') and/or structured fields.",
     {
       text: z.string().optional().describe("free-text description; structured fields below override what it states"),
-      type: z.string().optional().describe("activity type, e.g. run, ride, swim, row, walk"),
+      type: z
+        .string()
+        .optional()
+        .describe(
+          "the sport as one short word, e.g. run, ride, swim, row, walk, hike, paddling, skiing, boxing, martial_arts, climbing, yoga, tennis. Omit to let the text decide; never 'other' when the text names a sport"
+        ),
       duration_min: z.number().optional().describe("moving time in minutes; omit when text already states it"),
       distance_km: z.number().optional().describe("distance in kilometres"),
       pace: z.string().optional().describe("pace as text, e.g. '5:30/km'"),

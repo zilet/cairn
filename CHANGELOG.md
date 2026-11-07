@@ -5,6 +5,28 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+### Added
+
+- **Bag work, boxing and martial arts are their own sport.** A typed or chatted "10 min bag
+  punching session" is logged as boxing, not "other", and loads the shoulders, arms and trunk
+  (never a leg day) — ten minutes reads as a light touch. Rowing, paddling, skiing, court sports,
+  climbing, yoga and more are named from the text too, and a vague stated type ("other") yields to
+  the sport the words name. Saying a sport you have not done yet ("I'll do yoga later") still logs
+  nothing.
+- **A hand-logged activity can be corrected** — its sport, minutes, distance or notes —
+  through `PATCH /api/activities/:id` and the MCP tool `update_activity`. A watch-synced activity
+  is left to the next sync.
+
+### Fixed
+
+- **A session you planned is on Today, whatever the day read says.** A session written by you or
+  by an AI app over MCP, or a suggestion you accepted, now shows its Start card even on an easy or
+  rest morning. Before, the Brief offered only "Train anyway", which then said another session
+  owned the day — with no card to open it.
+- **The session you chose keeps its name everywhere.** The Plan day shows it before you start
+  (not "A rest day. Nothing is planned."), and once logged it keeps your title while still counting
+  as that plan day's work.
+
 ## [2.1.12] — 2026-11-03
 
 Security upkeep: dependencies, base image and pinned tools brought current, two hardening fixes. No migrations.

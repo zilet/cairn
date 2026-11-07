@@ -24,6 +24,7 @@ import {
   listActivities,
   logSetByName,
   removeActivity,
+  correctActivity,
   setActivityFeltEffort,
   recentTraining,
   recordExerciseSymptomObservation,
@@ -447,6 +448,21 @@ trainingLogRouter.delete("/activities/:id", (req, res) => {
   const result = removeActivity(Number(req.params.id));
   if (result.ok) return res.json(result);
   const status = result.code === "invalid_id" ? 400 : result.code === "not_found" ? 404 : 409;
+  res.status(status).json(result);
+});
+
+// Correct a hand-logged activity: `{ type?, duration_min?, distance_km?, notes? }` (a
+// log filed as "other", a wrong length). A watch-imported row is refused (409).
+trainingLogRouter.patch("/activities/:id", (req, res) => {
+  const b = req.body ?? {};
+  const result = correctActivity(Number(req.params.id), {
+    type: b.type,
+    duration_min: b.duration_min,
+    distance_km: b.distance_km,
+    notes: b.notes,
+  });
+  if (result.ok) return res.json(result);
+  const status = result.code === "not_found" ? 404 : result.code === "watch_imported" ? 409 : 400;
   res.status(status).json(result);
 });
 

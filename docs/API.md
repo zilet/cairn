@@ -12,7 +12,7 @@ The OAuth 2.1 doors an AI app signs in through for `/mcp` (`/.well-known/oauth-*
 [OPERATIONS.md](OPERATIONS.md) "Connect an AI app (MCP)".
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**413 routes** across 136 groups.
+**414 routes** across 136 groups.
 
 ## `/activities`
 
@@ -22,6 +22,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | POST | `/api/activities` |  |
 | DELETE | `/api/activities/:id` | Delete one hand-logged activity. A watch-imported row is refused (409), since the next sync would re-create it. |
 | GET | `/api/activities/:id` | Single activity row (poll fallback for watching enrichment_status). |
+| PATCH | `/api/activities/:id` | Correct a hand-logged activity: `{ type?, duration_min?, distance_km?, notes? }` (a log filed as "other", a wrong length). A watch-imported row is refused (409). |
 | PUT | `/api/activities/:id/effort` | State how an activity felt, after the fact: `{ rpe: 1-10 \| null, note? }`. A run stated easy (rpe ≤ 4, the talk-test band) is no longer graded hard by the watch's intensity bars — the next morning's physiology still outranks it — and, with heart rate, files a talk-test observation on the HR model's calibration ladder. |
 | GET | `/api/activities/:id/stream` | Live enrichment status for one activity (Server-Sent Events) — the SSE-first path the PWA uses instead of polling; snapshot then transitions, close on terminal. EventSource can't set headers, so the PWA reaches this with ?token=. |
 

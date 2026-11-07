@@ -18,7 +18,7 @@ import { renderJsonContract } from "./shared.js";
 
 const ENRICH_ACTIVITY_SCHEMA = `{
   "structured": {
-    "type": "ride|run|swim|hike|other",
+    "type": "<the sport, one short snake_case word: run|ride|swim|hike|walk|row|paddling|skiing|boxing|martial_arts|climbing|yoga|tennis|… — the sport they named; other only when the log names no sport>",
     "duration_min": <number|null>,
     "distance_km": <number|null>,
     "pace": <string|null>,

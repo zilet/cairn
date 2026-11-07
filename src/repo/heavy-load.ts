@@ -23,7 +23,7 @@ export const HEAVY_SETS = 4;
 export interface EnduranceModality {
   re: RegExp;
   /** The classifier's mode, or a load family that has no legacy mode of its own. */
-  mode: EnduranceSportMode | "paddle" | "court" | "snow" | "whole_body";
+  mode: EnduranceSportMode | "paddle" | "court" | "snow" | "combat" | "whole_body";
   /** The load family (endurance-sports.activityLoadFamily) this modality reads as. */
   family: LoadFamily;
   label: string;
@@ -63,6 +63,21 @@ export const SNOW_MODALITY: EnduranceModality = {
   heavyKm: 20,
   loadCharacter: "eccentric",
   regionWeights: { hamstrings: 0.6, calves: 0.6, core: 0.5 },
+};
+
+// Bag work, pads, sparring, grappling: the shoulders and arms throw, the trunk turns
+// every punch, the calves carry the footwork. A short round of bag work is a light
+// upper-body touch, never a leg day.
+export const COMBAT_MODALITY: EnduranceModality = {
+  re: /\b(boxing|kickbox\w*|punching bag|bag punching|heavy bag|mma|muay thai|martial arts?|sparring)\b/,
+  mode: "combat",
+  family: "combat",
+  label: "combat sport",
+  regions: ["shoulders", "triceps", "back", "core", "calves"],
+  heavyMin: 60,
+  heavyKm: 999,
+  loadCharacter: "full-body-aerobic",
+  regionWeights: { triceps: 0.5, back: 0.5, core: 0.6, calves: 0.4 },
 };
 
 // The GENERIC fallback: an activity whose type names no sport Cairn can place
@@ -245,6 +260,7 @@ export const ENDURANCE_MODALITIES: EnduranceModality[] = [
   },
   COURT_MODALITY,
   SNOW_MODALITY,
+  COMBAT_MODALITY,
   WHOLE_BODY_MODALITY,
 ];
 
@@ -253,6 +269,7 @@ const FAMILY_MODALITY: Partial<Record<LoadFamily, EnduranceModality>> = {
   paddle: ENDURANCE_MODALITIES.find((m) => m.mode === "paddle"),
   court: COURT_MODALITY,
   snow: SNOW_MODALITY,
+  combat: COMBAT_MODALITY,
   whole_body: WHOLE_BODY_MODALITY,
 };
 
@@ -263,6 +280,15 @@ export function modalityForLoadFamily(family: LoadFamily): EnduranceModality | n
     ENDURANCE_MODALITIES.find((m) => m.family === family && m.mode === family) ??
     null
   );
+}
+
+/**
+ * Families with no legacy endurance mode (paddle, court, snow, combat): the type key
+ * is authoritative, and their length alone never makes a session heavy — only a
+ * session that showed effort reaches the heavy bar on time.
+ */
+export function lengthNeedsEffortFamily(family: string): boolean {
+  return family === "paddle" || family === "court" || family === "snow" || family === "combat";
 }
 
 export function regionWeight(modality: Pick<EnduranceModality, "regionWeights">, group: MuscleGroup): number {
@@ -281,9 +307,9 @@ export function matchEnduranceModality(structuredType: string, supportingText = 
   if (!norm) return null;
   if (isStrengthActivityType(structuredType, supportingText)) return null;
   // A structured type in a family the classifier has no mode for (paddle, court,
-  // snow) is authoritative: a kayak named "lake run" is still a paddle.
+  // snow, combat) is authoritative: a kayak named "lake run" is still a paddle.
   const typed = activityLoadFamily(structuredType);
-  if (typed.family === "paddle" || typed.family === "court" || typed.family === "snow") {
+  if (lengthNeedsEffortFamily(typed.family)) {
     const familyModality = modalityForLoadFamily(typed.family);
     if (familyModality) return familyModality;
   }

@@ -61,6 +61,35 @@ test("the load family guesses from the type key, Garmin _v2 suffixes stripped", 
   assert.equal(activityLoadFamily("kayaking_v2").label, "Kayaking");
 });
 
+// 2026-11-07 (live): "10 min bag punching session with MMA gloves and wraps" was filed
+// as type "other" and read as nothing in particular. Combat sports are their own family.
+test("combat sports read as their own family: shoulders, arms and trunk", () => {
+  for (const type of ["boxing", "kickboxing", "martial_arts", "mma", "muay_thai", "bjj", "wrestling"]) {
+    assert.equal(activityLoadFamily(type).family, "combat", type);
+    assert.equal(activityLoadFamily(type).known, true, type);
+  }
+  assert.equal(activityLoadFamily("other", "10 min bag punching session with MMA gloves").family, "combat");
+  assert.notEqual(activityLoadFamily("other", "box jumps and burpees 20 min").family, "combat", "box jumps are legs");
+  assert.notEqual(activityLoadFamily("other", "punchy hill reps").family, "combat");
+  const modality = matchEnduranceModality("boxing", "");
+  assert.equal(modality.family, "combat");
+  assert.ok(modality.regions.includes("shoulders"));
+  assert.ok(!modality.regions.includes("quads"), "bag work is never a leg day");
+});
+
+test("ten minutes on the bag is a light touch, never heavy", () => {
+  addRow({ type: "boxing", minutes: 10, text: "bag work" });
+  const [impact] = impactsOf("boxing");
+  assert.equal(impact.family, "combat");
+  assert.equal(impact.load, "light");
+});
+
+test("an hour of combat on length alone stays below heavy without session effort", () => {
+  addRow({ type: "boxing", minutes: 75, text: "boxing class" });
+  const [impact] = impactsOf("boxing");
+  assert.notEqual(impact.load, "heavy");
+});
+
 test("the structured type outranks incidental prose; text is read only when the type places nothing", () => {
   assert.equal(activityLoadFamily("kayaking_v2", "lake run").family, "paddle");
   assert.equal(activityLoadFamily("other", "padel with friends").family, "court");

@@ -418,6 +418,7 @@ async function renderToday(opts: any = {}) {
     read,
     isToday,
     planReveal: todayState.planReveal,
+    dailySession: prep.dailySession,
   });
   // In focus mode the chrome (context banner, Brief, insight, capture) gives way to
   // the slim sticky focus header; otherwise the Brief leads as always.
@@ -1403,7 +1404,6 @@ async function renderSession(opts: any = {}): Promise<void> {
       CairnSessionSnapshot.markPainted(enteredDate);
     }
   }
-
 
   // One /today?surface=session trip answers the Session's own reads (today-prefetch).
   if (todayState.tab === "session") {

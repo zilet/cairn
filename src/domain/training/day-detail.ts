@@ -47,6 +47,7 @@ import type {
   DayDetailZoneKey,
 } from "../../contracts/day-detail.js";
 import { addDaysISO, mondayOf } from "../../lib/dates.js";
+import { getActiveDailySession } from "../../repo/adaptive-session.js";
 import { round1 } from "../../lib/numbers.js";
 import { raceEffortRunLabel } from "../../repo/race-recovery.js";
 import { activeBlockContext } from "../../repo/program-blocks.js";
@@ -60,6 +61,7 @@ import { getPlan } from "../../repo/plan.js";
 import { isoDow, WEEKDAY_NAMES } from "../../repo/profile.js";
 import { planDayProgression, type Prescription } from "../../repo/progression.js";
 import { planDayAdaptations } from "../../repo/plan-adaptations.js";
+import { planDayDisplayName } from "../../repo/plan-day-name.js";
 import { legTrimFocus, type LegTrim } from "../../repo/plan-day-focus.js";
 import { planDayLegTrimOn } from "../../repo/plan-day-trim.js";
 import { raceTrimForPlanDay } from "../../repo/race-taper-card.js";
@@ -600,6 +602,60 @@ export function planDayExercisesAhead(dayNumber: number, date: string): DayDetai
   return planDayExercisesOf(dayNumber, date, true, phase, athleteUnits().weight).exercises;
 }
 
+/**
+ * A session the athlete CHOSE for the date — one they (or an AI app over MCP) wrote, or
+ * a suggestion they accepted — before any set is logged. It owns the day exactly as it
+ * owns today's strength line (src/repo/today-strength-line.ts ChosenSession): a
+ * Saturday the calendar calls rest reads the session they planned, never "Nothing is
+ * planned". Once work is logged, the log's own record (done.session) takes over.
+ */
+type ChosenDaySession = {
+  title: string;
+  focus: string | null;
+  why: string | null;
+  items: PlanItem[];
+  /** The plan day the session was filed on, by number (null when off the plan). */
+  day_number: number | null;
+};
+
+function chosenSessionOn(date: string): ChosenDaySession | null {
+  const row = safe(() => getActiveDailySession(date) as any, null);
+  const source = text(row?.source);
+  if (!row || (source !== "athlete_override" && source !== "agent_suggest")) return null;
+  const items = (Array.isArray(row.items) ? row.items : [])
+    .filter((it: any) => text(it?.kind) !== "cardio" && text(it?.exercise))
+    .map(
+      (it: any) =>
+        ({
+          exercise: text(it.exercise),
+          sets: num(it.sets),
+          rep_low: num(it.rep_low),
+          rep_high: num(it.rep_high),
+          target_weight: num(it.target_weight),
+          target_seconds: num(it.target_seconds),
+          mode: text(it.mode) || "reps",
+          note: text(it.note) || null,
+          muscle_group: text(it.muscle_group) || null,
+        }) as unknown as PlanItem
+    );
+  // The line's own naming rule: a typed title prints as typed; a suggestion's reads
+  // through the display rule, which drops a week-count claim ("the week's one pull day").
+  const stored = text(row.title);
+  const title = source === "agent_suggest" ? planDayDisplayName(stored) : stored;
+  if (!title || !items.length) return null;
+  return {
+    title,
+    focus: text(row.focus) || null,
+    why: text(row.why) || null,
+    items,
+    day_number:
+      row.plan_day_id == null
+        ? null
+        : (safe(() => (getPlan() as any[]).find((d) => Number(d?.id) === Number(row.plan_day_id))?.day_number, null) ??
+          null),
+  };
+}
+
 function buildLift(
   date: string,
   status: DayDetailStatus,
@@ -608,10 +664,13 @@ function buildLift(
   done: DayDetailDone | null,
   phase: string | null,
   todayLine: PlanWeek["strength_line"] | null,
-  units: WeightUnit
+  units: WeightUnit,
+  chosen: ChosenDaySession | null = null
 ): { lift: DayDetailLift; watch: DayDetailWatch[] } | null {
   const plan = strengthOf(cell);
   const session = done?.session ?? null;
+  // The athlete's chosen session, not yet started: its own card, its own words.
+  if (!session && chosen) return { lift: chosenLift(date, ctx, chosen, todayLine, units), watch: [] };
   // A logged day names what was done (src/repo/session-day.ts), the same words the
   // headline's "<title> — done." and the strip say.
   const title = text(session?.title) || text(plan?.name);
@@ -663,6 +722,35 @@ function buildLift(
       ? liftWatch(date, date <= ctx.today ? date : ctx.today, exercises, byName, constraints, units)
       : [];
   return { lift, watch };
+}
+
+function chosenLift(
+  date: string,
+  ctx: DayContext,
+  chosen: ChosenDaySession,
+  todayLine: PlanWeek["strength_line"] | null,
+  units: WeightUnit
+): DayDetailLift {
+  const anchorAt = anchorIndex(chosen.items);
+  const exercises = chosen.items
+    .map((item, i) => exerciseOf(item, undefined, i === anchorAt, units, false))
+    .filter((e) => e.name);
+  const anchor = exercises.find((e) => e.anchor) ?? null;
+  return {
+    // The plan day this session was filed on — never the calendar cell's day it replaced.
+    day_number: chosen.day_number,
+    title: chosen.title,
+    focus: chosen.focus,
+    trim: null,
+    intent: liftIntent(date, exercises, anchor),
+    point: chosen.why || "The session you chose for today.",
+    anchor: anchor?.name ?? null,
+    exercises,
+    total_sets: exercises.filter((e) => e.mode !== "mobility").reduce((n, e) => n + (e.sets ?? 0), 0),
+    heavy_lower: false,
+    today_line: date === ctx.today ? text(todayLine?.text) || null : null,
+    suggestion: null,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1526,7 +1614,9 @@ export function dayDetail(date: string, opts: { today?: string } = {}): DayDetai
     ? `This week's ${lower(text(coveredRun.label) || RUN_KIND_LABELS[coveredRun.kind] || "run")} already landed ${longWeekday(String(coveredRun.completion_date))}.`
     : null;
 
-  const hasLift = !!strengthOf(cell) || !!done?.session;
+  // A chosen session only matters for a day not yet lived; a past day's record is the log.
+  const chosen = day >= today && !done?.session ? chosenSessionOn(day) : null;
+  const hasLift = !!strengthOf(cell) || !!done?.session || !!chosen;
   const hasRun = !!ownRun(cell) && ownRun(cell)?.kind !== "logged";
   const status = statusOf(day, today, cell, hasLift, hasRun, done);
 
@@ -1538,7 +1628,8 @@ export function dayDetail(date: string, opts: { today?: string } = {}): DayDetai
     done,
     weekRead.block?.phase ?? null,
     week?.strength_line ?? null,
-    units.weight
+    units.weight,
+    chosen
   );
   const lift = liftRead?.lift ?? null;
   const run = buildRun(day, cell, asOf, runUnits, build);

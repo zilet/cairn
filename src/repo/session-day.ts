@@ -88,11 +88,15 @@ function loggedSessionDayRead(
   } catch {
     raw = label ?? "";
   }
-  const named = !!day && raw === label;
+  const chosen = chosenCardOf(sessionId);
+  // A session the athlete CHOSE on a plan day keeps its own title (training-read.ts
+  // deriveSessionTitle) and is still that plan day's work: the week counts it done.
+  const chosenOnDay = !!day && !!chosen && raw === chosen.title && chosen.plan_day_id === Number(day.id);
+  const named = !!day && (raw === label || chosenOnDay);
   // A title the athlete TYPED (their own override card) is theirs, verbatim — the same
   // rule the today strength line keeps. Every other name (a plan day's, a suggestion's)
   // reads through the display rule.
-  const typed = raw && raw === athleteTypedTitle(sessionId);
+  const typed = raw && chosen?.source === "athlete_override" && raw === chosen.title;
   return {
     day_number: named && day ? day.day_number : null,
     placed_day_number: day ? day.day_number : null,
@@ -100,18 +104,24 @@ function loggedSessionDayRead(
   };
 }
 
-/** The title on the session's own athlete_override card (the one deriveSessionTitle reads), else null. */
-function athleteTypedTitle(sessionId: number): string | null {
+/**
+ * The session's own card when the athlete CHOSE it (athlete_override / agent_suggest —
+ * the card deriveSessionTitle reads): its title and the plan day it was filed on, else null.
+ */
+function chosenCardOf(sessionId: number): { source: string; title: string; plan_day_id: number | null } | null {
   try {
     const row = db
       .prepare(
-        `SELECT source, title FROM daily_session_compositions
+        `SELECT source, title, plan_day_id FROM daily_session_compositions
           WHERE session_id = ?
           ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, version DESC
           LIMIT 1`
       )
-      .get(sessionId) as { source?: unknown; title?: unknown } | undefined;
-    return row && String(row.source ?? "") === "athlete_override" ? String(row.title ?? "").trim() || null : null;
+      .get(sessionId) as { source?: unknown; title?: unknown; plan_day_id?: unknown } | undefined;
+    const source = String(row?.source ?? "");
+    const title = String(row?.title ?? "").trim();
+    if (!title || (source !== "athlete_override" && source !== "agent_suggest")) return null;
+    return { source, title, plan_day_id: row?.plan_day_id == null ? null : Number(row.plan_day_id) };
   } catch {
     return null;
   }

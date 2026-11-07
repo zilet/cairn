@@ -375,7 +375,7 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   startable. Details in `docs/ARCHITECTURE.md`.
 - **No logged activity is ever dose 0, and none needs a modality of its own.** An unmapped Garmin type
   gets a family guess off its type key (`activityLoadFamily`, `src/repo/endurance-sports.ts`: paddle,
-  court, snow, else a light whole-body read) — extend the family table, never add a one-sport branch.
+  court, snow, combat, else a light whole-body read) — extend the family table, never add a one-sport branch.
   The whole week across every sport is ONE read, `weekTrainingLoad` (`src/repo/week-training-load.ts`),
   a read over reads. Details: `docs/ARCHITECTURE.md` "Every logged activity is a dose".
 - **Garmin strength is a session, not an activity.** `upsertGarminActivity` deliberately skips the

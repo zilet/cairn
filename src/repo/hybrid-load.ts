@@ -28,6 +28,7 @@ import {
   HEAVY_SETS,
   type EnduranceModality,
   ENDURANCE_MODALITIES,
+  lengthNeedsEffortFamily,
   matchEnduranceModality,
   regionWeight,
   sawSessionEffort,
@@ -199,7 +200,7 @@ function classifyImpactLoad(
   // Paddle, court and snow reach that heavy bar on length only when the session
   // showed effort (sawSessionEffort). Time alone stays moderate: an easy paddle is
   // not a full back day, and a round of stop-start play is not a leg day by the clock.
-  const lengthNeedsEffort = region.family === "paddle" || region.family === "court" || region.family === "snow";
+  const lengthNeedsEffort = lengthNeedsEffortFamily(region.family);
   const sessionEffort = sawSessionEffort({
     aerobicTe: ate,
     zones45Sec: zones45,
@@ -259,6 +260,8 @@ function classifyImpactLoad(
     whyParts.push("stop-start court and field play loads the legs and trunk");
   } else if (region.family === "snow") {
     whyParts.push("turns, balance and braking add eccentric leg and core demand");
+  } else if (region.family === "combat") {
+    whyParts.push("punching and footwork load the shoulders, arms and trunk");
   } else if (generic) {
     whyParts.push("a general activity read across the whole body");
   }
@@ -471,10 +474,10 @@ const ENDURANCE_DOSE: Record<EnduranceImpact["load"], number> = { heavy: 1, mode
 const MAX_ENDURANCE_MAGNITUDE = 2.5;
 
 // A light effort of a family the legacy table never knew (a light whole-body
-// activity, a short snow session) still lays down its small light dose once it ran
+// activity, a short snow session, a few rounds on the bag) still lays down its small light dose once it ran
 // an ordinary length: decision 2026-10-04, no logged activity is ever nothing.
 function lightGenericCounts(impact: EnduranceImpact): boolean {
-  if (impact.family !== "whole_body" && impact.family !== "snow") return false;
+  if (impact.family !== "whole_body" && impact.family !== "snow" && impact.family !== "combat") return false;
   return (
     (impact.duration_min != null && impact.duration_min >= CARDIO_GRADE.moderateMin) ||
     (impact.distance_km != null && impact.distance_km >= CARDIO_GRADE.moderateKm)

@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**317 tools.**
+**318 tools.**
 
 | Tool | Description |
 |---|---|
@@ -305,6 +305,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `understand_supplements` | Capture supplements from plain words ('creatine daily, omega-3, some D, whey occasionally') — the system approximates each into name + typical dose + cadence + related markers and stores it (dedup by name). NOT a daily log; say it once. Returns the understood items. |
 | `undispute_belief` | Restore a disputed belief (from list_beliefs' set_aside) back to active. |
 | `unskip_exercise` | Restore a previously skipped exercise to a date's session plan. |
+| `update_activity` | Correct one hand-logged activity by id (history correction): the sport (type, one short word such as boxing, martial_arts, run, yoga), duration_min, distance_km, notes. Only provided fields change. Refuses a watch-imported activity with ok:false, since the next sync owns it. |
 | `update_block` | Update a periodization block's fields (goal/focus/phase/week_index/total_weeks/status). |
 | `update_context_event` | Update a life-timeline event by id (any subset of fields). Set archived=true to retire it. |
 | `update_directive` | Flip a directive's status (the review side of propose-review-apply — nothing auto-applies). `resolved` is the athlete's Done ('got it'): while the marker's reading still stands the directive stays in effect as `acknowledged` (still shaping coaching, no longer a new item) until a newer reading no longer calls for it; `dismissed` suppresses equivalent future advice until the marker materially changes. Returns the updated directive, or null when the id is unknown. |

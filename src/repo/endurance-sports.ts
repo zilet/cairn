@@ -301,7 +301,8 @@ function activityTypeWordsSql(alias: string): string {
 // next), and an athlete's real activity must never read as nothing just because
 // its key is new. So the load family is a GUESS from the type key: paddle sports
 // load the back, shoulders and trunk; court and ball sports load legs and trunk;
-// snow and skate sports load the legs; anything else is light whole-body activity.
+// snow and skate sports load the legs; combat sports (bag work, sparring)
+// load the shoulders, arms and trunk; anything else is light whole-body activity.
 // Strength types read `whole_body` with `known:false` for grading only: a lift is a
 // Cairn session and is never dosed as endurance (heavy-load.matchEnduranceModality).
 export type LoadFamily =
@@ -314,6 +315,7 @@ export type LoadFamily =
   | "paddle"
   | "court"
   | "snow"
+  | "combat"
   | "whole_body";
 
 export interface ActivityLoadFamily {
@@ -329,7 +331,21 @@ const COURT_TYPE =
 // A round of golf is a long walk, not stop-start court play.
 const GOLF_TYPE = /\bgolf\w*\b/;
 const SNOW_TYPE = /\b(?:snowboard\w*|skat\w*|inline\w*|snowshoe\w*|sledg\w*|sled\w*)\b/;
+// Striking and grappling: bag work, sparring, pads — shoulders, arms and trunk, with
+// footwork on the calves. Never a court game and never "other". Never a bare "box"
+// (box jumps and box squats are leg work) or "punchy".
+const COMBAT_TYPE =
+  /\b(?:boxing|boxed|boxer|kickbox\w*|shadow ?box\w*|punch(?:ing|ed|es)?(?: the)? ?bag|bag punching|heavy ?bag|bag work|mma|muay thai|thai boxing|martial arts?|karate|judo|jiu ?jitsu|bjj|taekwondo|wrestl\w*|grappl\w*|spar(?:ring|red)?|krav maga|capoeira|kung fu|savate)\b/;
 const STRENGTH_TYPE = /strength|weight|lifting/;
+
+/**
+ * A type that names no sport ("other", "workout", "cardio", empty): the text decides.
+ * The ONE generic-type rule — the writer (addActivity), enrichment's downgrade guard
+ * and the load family all ask it.
+ */
+export function isGenericActivityType(type: unknown): boolean {
+  return /^(?:|other|activity|workout|exercise|cardio)$/.test(String(type ?? "").trim().toLowerCase());
+}
 
 /** The type key as words, Garmin's version suffixes (`_v2`) dropped. */
 function loadFamilyText(input: unknown): string {
@@ -348,7 +364,7 @@ function prettySportName(text: string): string {
 export function isStrengthActivityType(type: unknown, text?: unknown): boolean {
   const t = String(type ?? "").toLowerCase();
   if (STRENGTH_TYPE.test(t)) return true;
-  const generic = !t.trim() || /^(?:other|activity|workout)$/.test(t.trim());
+  const generic = isGenericActivityType(t);
   return generic && text != null && /\b(?:strength|weights|weight training|lifting|lifted)\b/i.test(String(text));
 }
 
@@ -362,6 +378,7 @@ function familyFromText(text: string): ActivityLoadFamily | null {
   if (GOLF_TYPE.test(text)) return { family: "walk", label: prettySportName(text), known: true };
   if (COURT_TYPE.test(text)) return { family: "court", label: prettySportName(text), known: true };
   if (SNOW_TYPE.test(text)) return { family: "snow", label: prettySportName(text), known: true };
+  if (COMBAT_TYPE.test(text)) return { family: "combat", label: prettySportName(text), known: true };
   return null;
 }
 
@@ -376,7 +393,7 @@ export function activityLoadFamily(type: unknown, text?: unknown): ActivityLoadF
   if (STRENGTH_TYPE.test(typed)) return { family: "whole_body", label: prettySportName(typed), known: false };
   const fromType = familyFromText(typed);
   if (fromType) return fromType;
-  const generic = !typed || /^(?:other|activity|workout)$/.test(typed);
+  const generic = isGenericActivityType(typed);
   const fromText = text != null ? familyFromText(loadFamilyText(text)) : null;
   if (fromText && !(generic && isStrengthActivityType(type, text))) return fromText;
   return { family: "whole_body", label: generic ? "Activity" : prettySportName(typed), known: false };

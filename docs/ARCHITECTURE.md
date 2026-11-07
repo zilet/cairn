@@ -474,7 +474,12 @@ composition's decision) is a `caveat` on that plan day, never a replacement titl
 logged; a run logged today rides beside it as one calm sentence from a variant set ("Your run's in.
 Pull is still there if you want it."); an accepted session
 whose slots are mostly `substitution_for` reads "Pull, reshaped" and carries the plan day's `original`
-list. It rides on every Brief response (`attachDayReadContext`), the Today aggregate, `planWeek()`, and
+list. A session the athlete CHOSE (`athlete_override` — typed, or written by an AI app over MCP — or an
+accepted `agent_suggest`) owns the day everywhere (2026-11-07): its title names the line, the logged
+session (`deriveSessionTitle` keeps it even on its own plan day) and the Plan day before it starts
+(`chosenSessionOn`, `day-detail.ts`), and on the client it opens the launch card under ANY read
+(`chosenSession` in `today-render-state-client.ts`) — under an easy read the Brief otherwise offered only
+"Train anyway", which the server refused because the chosen session already owned the date. It rides on every Brief response (`attachDayReadContext`), the Today aggregate, `planWeek()`, and
 `GET /api/today-strength-line` (Session header, Train overview), and every client prints `text`/`caveat`
 verbatim through `CairnUiReads.strengthLineHtml` — so never derive a today state in a renderer.
 `planWeek()` reads the line BEFORE laying cells: today's calendar cell (nothing logged yet) names the
@@ -1242,8 +1247,19 @@ No Garmin type reads as dose 0 except an empty row or a strength row (a lift is 
 `activityLoadFamily(type, text?)` guesses a `LoadFamily` from the type key (Garmin `_v2` dropped; the
 type outranks the name, read only when the type is generic): paddle/row → back, shoulders, core,
 forearms (`paddle`); ball/racket → legs and core (`court sport`); snow/skate → legs and core,
-eccentric (`snow sport`); anything else → a light whole-body read (`activity`, `known_sport:false`).
-`matchEnduranceModality` tries a paddle/court/snow type, the classifier, the text regexes, then the
+eccentric (`snow sport`); boxing/bag work/martial arts → shoulders, triceps, back, core, calves, never a
+leg day (`combat sport`, 2026-11-07); anything else → a light whole-body read (`activity`,
+`known_sport:false`). Paddle, court, snow and combat reach the heavy bar on length only with session
+effort (`lengthNeedsEffortFamily`). A hand-typed log names its sport too: `parseActivity`'s
+`OTHER_SPORT_TYPES` table (boxing, martial_arts, row, paddling, skiing, a court sport's own word,
+climbing, yoga…), and a generic stated type ("other") yields to it — one generic rule,
+`isGenericActivityType`, for the writer, the load family and enrichment's downgrade guard. Never a bare
+"box" (box jumps are legs) or "punchy". Combat also has its own shadow bucket (`activity-shadow.ts`). The table only LABELS — a named sport
+alone never shields "I'll do yoga later" from the intent drop. A misfiled hand log is corrected through
+`correctActivity` (`PATCH /api/activities/:id`, `update_activity`; watch rows refused): real numbers
+above zero only, a run's pace recomputed, a pending enrichment skipped so it never lands over the
+person's word, and the next morning's read invalidated as a stated effort does.
+`matchEnduranceModality` tries a paddle/court/snow/combat type, the classifier, the text regexes, then the
 family guess, then whole-body. A whole-body activity is moderate only when the watch saw effort, and a
 light one is never load-relevant (it never moves a lift; its small dose reaches the residual from
 25 min / 4 km). Stated effort (`activities.rpe <= 4`) outranks the watch for rides and every other

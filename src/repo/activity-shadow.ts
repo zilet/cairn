@@ -51,16 +51,18 @@ export function normalizeGarminType(t: unknown): string {
 }
 
 // The modality a shadow is compared within: normalizeGarminType's coarse bucket, with
-// paddle sports folded to one stable "paddle" bucket so a hand-typed "kayak" and the
+// paddle (and combat) sports folded to one stable bucket each so a hand-typed "kayak" and the
 // watch's "kayaking_v2" read as the same outing. Shadow detection only: the STORED
 // type (normalizeGarminType) keeps the provider's own key.
 export function shadowModality(t: unknown): string {
   const bucket = normalizeGarminType(t);
   if (["run", "ride", "swim", "hike"].includes(bucket)) return bucket;
-  return activityLoadFamily(t).family === "paddle" ? "paddle" : bucket;
+  const family = activityLoadFamily(t).family;
+  return family === "paddle" || family === "combat" ? family : bucket;
 }
 
-const SHADOW_MODALITIES = ["run", "ride", "swim", "hike", "paddle"];
+// A hand-typed "boxing" beside the watch's "boxing" is one outing too (combat, 2026-11-07).
+const SHADOW_MODALITIES = ["run", "ride", "swim", "hike", "paddle", "combat"];
 
 export interface ShadowCheckActivity {
   id?: unknown;

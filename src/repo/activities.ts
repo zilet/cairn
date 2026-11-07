@@ -21,6 +21,7 @@ import {
   type ShadowCheckActivity,
 } from "./activity-shadow.js";
 import { parseActivity } from "./activity-capture.js";
+import { isGenericActivityType } from "./endurance-sports.js";
 import { copyDeep, requestMemo } from "./request-memo.js";
 
 // Re-exported for existing callers (e.g. underfueling.ts) that import the shadow
@@ -141,9 +142,11 @@ export function addActivity(input: any, defer?: GarminSyncDeferral | null) {
   }
   let { type, duration_min, distance_km, pace } = input;
   const fromText = !!(input.text && String(input.text).trim());
-  if (fromText && (!type || duration_min == null)) {
+  // A generic type ("other", "workout") names nothing; the text's sport outranks it.
+  const genericType = isGenericActivityType(type);
+  if (fromText && (genericType || duration_min == null)) {
     const p = parseActivity(input.text);
-    type = type || p.type;
+    type = genericType && p.type !== "other" ? p.type : type || p.type;
     duration_min = duration_min ?? p.duration_min;
     distance_km = distance_km ?? p.distance_km;
     pace = pace ?? p.pace;
@@ -652,6 +655,85 @@ export function removeActivity(id: number): RemoveActivityResult {
   }
   deleteActivity(id);
   return { ok: true, id, date: String(row.date) };
+}
+
+export type CorrectActivityResult =
+  | { ok: true; activity: any }
+  | { ok: false; code: "invalid_id" | "not_found" | "watch_imported" | "invalid_input"; error: string };
+
+/**
+ * Correct a hand-logged activity after the fact (the sport, its length, its notes) —
+ * a log filed as "other", or a typo in the minutes. Only the fields given change.
+ * A watch-imported row is refused like removeActivity: the next sync owns it.
+ */
+export function correctActivity(
+  id: number,
+  input: { type?: unknown; duration_min?: unknown; distance_km?: unknown; notes?: unknown }
+): CorrectActivityResult {
+  if (!Number.isInteger(id) || id <= 0) {
+    return { ok: false, code: "invalid_id", error: "activity id must be a positive integer" };
+  }
+  const row = getActivity(id) as { source?: unknown; external_id?: unknown } | null;
+  if (!row) return { ok: false, code: "not_found", error: `activity ${id} not found` };
+  const linkedToWatch = db.prepare(`SELECT 1 FROM garmin_activities WHERE activity_id = ? LIMIT 1`).get(id) != null;
+  if (row.external_id != null || String(row.source ?? "") === "garmin" || linkedToWatch) {
+    return {
+      ok: false,
+      code: "watch_imported",
+      error: "this activity was imported from a connected watch; the next sync would overwrite a correction here",
+    };
+  }
+  const fields: Record<string, any> = {};
+  if (input.type !== undefined) {
+    const type = String(input.type ?? "")
+      .trim()
+      .toLowerCase()
+      .replace(/[\s-]+/g, "_");
+    if (!/^[a-z][a-z0-9_]{0,39}$/.test(type)) {
+      return { ok: false, code: "invalid_input", error: "type must be a short sport word, e.g. boxing, run, yoga" };
+    }
+    fields.type = type;
+  }
+  // A real number (or a numeric string from a form), above zero; null clears. "" and
+  // true are not numbers here, and a zero-minute session is not a session.
+  const bounded = (value: unknown, max: number, name: string): number | null | string => {
+    if (value === null) return null;
+    const n = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : NaN;
+    return Number.isFinite(n) && n > 0 && n <= max ? n : `${name} must be a number above 0 and at most ${max}`;
+  };
+  for (const [key, max] of [
+    ["duration_min", 1440],
+    ["distance_km", 1000],
+  ] as const) {
+    if (input[key] === undefined) continue;
+    const v = bounded(input[key], max, key);
+    if (typeof v === "string") return { ok: false, code: "invalid_input", error: v };
+    fields[key] = v;
+  }
+  if (input.notes !== undefined) fields.notes = input.notes == null ? null : String(input.notes).slice(0, 2000);
+  if (!Object.keys(fields).length) {
+    return { ok: false, code: "invalid_input", error: "give at least one of type, duration_min, distance_km, notes" };
+  }
+  const current = row as {
+    type?: unknown;
+    duration_min?: unknown;
+    distance_km?: unknown;
+    date?: unknown;
+    enrichment_status?: unknown;
+  };
+  if (fields.duration_min !== undefined || fields.distance_km !== undefined || fields.type !== undefined) {
+    const duration = fields.duration_min !== undefined ? fields.duration_min : current.duration_min;
+    const distance = fields.distance_km !== undefined ? fields.distance_km : current.distance_km;
+    fields.pace = paceFrom(duration, distance, fields.type ?? (current.type as string | null)) ?? null;
+  }
+  // A person's correction wins: a still-pending enrichment never lands over it.
+  if (String(current.enrichment_status ?? "") === "pending") setActivityEnrichStatus(id, "skipped");
+  const activity = updateActivityFields(id, fields);
+  // The morning after reads this day's work (harm, the run-day floor) — the same reach
+  // as a stated effort (activity-effort.ts), once that morning has come.
+  const nextMorning = addDaysISO(String(current.date ?? "").slice(0, 10), 1);
+  if (nextMorning && nextMorning <= localDateISO()) invalidateDayRead(nextMorning);
+  return { ok: true, activity };
 }
 
 export function setActivityEnrichStatus(id: number, status: string) {

@@ -113,3 +113,40 @@ test("the delete_activity MCP tool is the near-mirror of the route", async () =>
   assert.equal((await call("delete_activity", { id: manual.id })).code, "not_found");
   assert.equal(activityCount(), 1);
 });
+
+// Correcting an activity (2026-11-07): PATCH /api/activities/:id and MCP update_activity
+// share correctActivity — a hand log's sport or length changes, a watch row is refused.
+test("PATCH /activities/:id and update_activity correct a hand log; status codes say why not", async () => {
+  const manual = repo.addActivity({
+    text: "10 min session",
+    type: "other",
+    date: "2026-06-10",
+    enrichment_status: null,
+  });
+  await withServer(async (base) => {
+    const patch = (id, body) =>
+      fetch(`${base}/api/activities/${id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    const ok = await patch(manual.id, { type: "boxing" });
+    assert.equal(ok.status, 200);
+    assert.equal((await ok.json()).activity.type, "boxing");
+    assert.equal((await patch(manual.id, { duration_min: "" })).status, 400);
+    assert.equal((await patch(999999, { type: "run" })).status, 404);
+    const garmin = repo.upsertGarminActivity({
+      external_id: "watch-fix-1",
+      date: "2026-06-10",
+      type: "run",
+      name: "Run",
+    });
+    const watchId = repo.listActivities(50).find((a) => a.external_id === "watch-fix-1")?.id ?? garmin?.activity_id;
+    assert.equal((await patch(watchId, { type: "ride" })).status, 409);
+  });
+  const call = mcpTools();
+  const viaMcp = await call("update_activity", { id: manual.id, type: "martial_arts", duration_min: 30 });
+  assert.equal(viaMcp.ok, true);
+  assert.equal(viaMcp.activity.type, "martial_arts");
+  assert.equal(viaMcp.activity.duration_min, 30);
+});

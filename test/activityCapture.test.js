@@ -20,6 +20,46 @@ beforeEach(() => {
   resetTables("activities", "bodyweight_log", "blood_pressure_readings");
 });
 
+// ---------- the sport the text names ----------
+
+test("parseActivity names the sport beyond run/ride/swim/hike", () => {
+  const cases = {
+    "10 min bag punching session with MMA gloves and wraps": "boxing",
+    "boxing class 45 min": "boxing",
+    "shadow boxing 3 rounds": "boxing",
+    "bjj open mat 60 min": "martial_arts",
+    "muay thai 1h": "martial_arts",
+    "rowing machine 20 min": "row",
+    "kayaked 40 min on the lake": "paddling",
+    "padel with friends 90 min": "padel",
+    "bouldering 1h": "climbing",
+    "yoga 30 min": "yoga",
+    "snowboarding all day": "snowboarding",
+    "something 20 min": "other",
+    // Leg work that says "box", and a punchy tempo: never boxing (review 2026-11-07).
+    "box jumps 3x10 20 min": "other",
+    "plyo box work 15 min": "other",
+    "box squats 20 min": "other",
+    "punchy session 30 min": "other",
+  };
+  for (const [text, type] of Object.entries(cases)) assert.equal(parseActivity(text).type, type, text);
+  assert.equal(parseActivity("10 min bag punching session").duration_min, 10);
+});
+
+test("a finished combat session with no minutes is still a session; a future one is not", () => {
+  for (const text of ["did some bag work", "sparred tonight", "heavy bag after work", "shadow boxing"]) {
+    assert.deepEqual(classifyActivityCapture(text), { kind: "activity" }, text);
+  }
+  assert.deepEqual(classifyActivityCapture("I'll do bag work later"), { kind: "drop", reason: "intent_not_done" });
+});
+
+test("a generic structured type yields to the sport the text names", () => {
+  const row = repo.addActivity({ text: "10 min bag punching session", type: "other" });
+  assert.equal(row.type, "boxing");
+  const kept = repo.addActivity({ text: "10 min bag punching session", type: "kickboxing" });
+  assert.equal(kept.type, "kickboxing", "a specific stated type always wins");
+});
+
 // ---------- the pure classifier ----------
 
 test("a genuine activity always stays an activity", () => {
