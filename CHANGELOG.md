@@ -5,6 +5,10 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [2.1.13] — 2026-11-07
+
+A session you plan — in the app or from an AI app over MCP — is on Today whatever the day read says, and bag work, boxing and martial arts are logged as what they are. No migrations; `npm audit` clean.
+
 ### Added
 
 - **Bag work, boxing and martial arts are their own sport.** A typed or chatted "10 min bag
