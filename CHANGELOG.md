@@ -5,6 +5,42 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [2.2.0] — 2026-11-11
+
+The coach looks things up instead of being handed everything: chat sends a small core (who you are, today, this week) and reads the rest on demand, through native tool calls where the CLI can be confined to them. Run days can be moved for one week without touching your usual week. Migrations 131–132 (additive columns); back up first.
+
+### Added
+
+- **The chat coach reads on demand.** A coach message used to carry about 200 KB of context with
+  lookups discouraged. It now carries a lean core, and the coach reads history, progression, labs,
+  nutrition, recovery, decisions and the run week when the question turns on them. Four new reads
+  (run week, health summary, strength progress, goal progress) make everything that left the prompt
+  reachable. `settings.chat_context: "full"` restores the previous prompt at runtime.
+- **Native tool calling per CLI.** One read interface, two transports: Claude and Codex call a
+  per-run, loopback, read-only tool server directly (Claude on a strict allowlist; Codex with its
+  shell removed and a read-only sandbox); Grok and Antigravity keep the JSON read loop. When no
+  agent is pinned, a coach turn tries a signed-in native-tool CLI first. Each turn records its
+  transport, reads and prompt size.
+- **A one-week run move.** "Skip tomorrow's run, do the intervals on Friday" moves this week only:
+  next week returns to your usual days, a key run you did not mention is kept, and a session you
+  state for the moved week is not shortened by a lighter week. Works for next week too, with Undo.
+- **Today's energy in chat.** The watch's active and total calories for today, and each activity's
+  own estimate, are stated plainly to the coach.
+
+### Fixed
+
+- **A long ride before the lift counts.** A ride out, a trail loop and a ride home are read as one
+  outing; a long or hard one holds the lift's load and removes the heavier top set, and the lift
+  line names the ride beside the run. The same hold now applies after a hard morning run on an
+  ordinary training read.
+- **A headline cannot name a run the week does not hold.** "Day before quality run." survived a
+  moved run because rewrites kept the earlier wording; such a sentence is now rejected.
+- **A saved run-week change is no longer followed by "no plan change was saved"**, and its receipt
+  says whether it is this week only or your standing week.
+- **Antigravity replies no longer come back blank** when the CLI reaches for a shell command.
+- **A busy server queues a chat turn** instead of failing it or trying another agent.
+- **Reconnecting an already signed-in provider** closes the blank tab and says so.
+
 ## [2.1.13] — 2026-11-07
 
 A session you plan — in the app or from an AI app over MCP — is on Today whatever the day read says, and bag work, boxing and martial arts are logged as what they are. No migrations; `npm audit` clean.
