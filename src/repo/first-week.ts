@@ -13,7 +13,7 @@ import { getAppState, setAppState } from "./app-state.js";
 import { listActiveAgentJobs } from "./chat.js";
 import { canonicalGroup, classifyMuscleGroup, type MuscleGroup } from "./exercise-canon.js";
 import { isHeavyLowerPlanDay, keyRunAwarePlacement, weekdayPlanDayMap } from "./plan-selection.js";
-import { getEnduranceSchedule, statedLiftDows } from "./profile.js";
+import { getStandingEnduranceSchedule, statedLiftDows } from "./profile.js";
 import { getSettings } from "./settings.js";
 
 const NOTICE_KEY = "first_week_notice";
@@ -68,7 +68,8 @@ function groupsFor(items: any[]): MuscleGroup[] {
 /** Quality and long run weekdays — the key runs a heavy-lower day keeps off. */
 function statedKeyRunDows(): number[] {
   try {
-    return (getEnduranceSchedule()?.days ?? [])
+    // The usual week: the welcome preview lays a first week, never a one-week move.
+    return (getStandingEnduranceSchedule()?.days ?? [])
       .filter((day) => day.kind === "quality" || day.kind === "long")
       .map((day) => day.dow);
   } catch {

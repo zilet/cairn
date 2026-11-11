@@ -448,7 +448,7 @@ function ownDoseOn(date: string, morningSignals: Record<string, unknown> | null)
   if (morningQuietWasFloor(morningSignals)) return null;
   const schedule = (() => {
     try {
-      return getEnduranceSchedule();
+      return getEnduranceSchedule(date);
     } catch {
       return null;
     }
@@ -2616,7 +2616,7 @@ function plannedDoseOn(
 ): { long: boolean; quality: boolean; long_ceiling_km: number | null } {
   const none = { long: false, quality: false, long_ceiling_km: null };
   try {
-    const days = getEnduranceSchedule()?.days ?? [];
+    const days = getEnduranceSchedule(date)?.days ?? [];
     if (!days.length) return none;
     let kinds: Set<string>;
     try {

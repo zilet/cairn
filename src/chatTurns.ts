@@ -16,6 +16,27 @@ import {
 } from "./runChosen.js";
 import { executeCoachReadTool } from "./brain/read-tool-runtime.js";
 import {
+  coachReadLaunchExtras,
+  resolveCoachReadTransport,
+  type ResolvedCoachReadTransport,
+} from "./brain/read-transport.js";
+import { NATIVE_COACH_READ_BUDGET, startCoachReadMcpListener, type CoachReadMcpListener } from "./coachReadMcp.js";
+import {
+  chatLeanPromptLoopContract,
+  chatNativeReadContract,
+  chatReadLogLine,
+  emptyChatReadTelemetry,
+  type ChatReadCall,
+  type ChatReadTelemetry,
+} from "./chat-reads.js";
+import {
+  AGENT_BUSY_RETRY_MS,
+  clearAgentBusyDeferrals,
+  isAgentBusyError,
+  noteAgentBusyDeferral,
+} from "./agent-busy.js";
+import type { ChatContextMode } from "./prompt/chat.js";
+import {
   isCoachReadQueryTurn,
   normalizeCoachReadQueryTurn,
   type CoachReadQueryTurn,
@@ -76,7 +97,8 @@ import { clinicalPlanProvenance, type ClinicalPlanProvenance } from "./domain/br
 // resolve to the ONE standing flag, so one module owns both.
 import { describeLandingDay, requestStructureRedraw } from "./domain/brain/structure-request.js";
 import { setTrainingDrive } from "./domain/training/training-drive.js";
-import { recordStatedRunWeek } from "./domain/training/stated-input.js";
+import { recordRunWeekMove, recordStatedRunWeek } from "./domain/training/stated-input.js";
+import { addDaysISO, mondayOf } from "./lib/dates.js";
 import { enqueueAgentJob } from "./agentJobs.js";
 import { diagnosticErrorName, recordAsyncFailure } from "./diagnostics.js";
 import {
@@ -382,17 +404,38 @@ export function completeInstantFoodCapture(id: number, rawMessage?: string) {
   return { ...finished, note };
 }
 
+function deferBusyChatTurn(id: number, retryMs: number): boolean {
+  if (!noteAgentBusyDeferral("chat", id).defer) return false;
+  const deferred = repo.deferChatTurn(id) as any;
+  if (!deferred || deferred.status !== "queued") return false;
+  log.warn(`[chat] turn#${id} deferred — every agent spawn permit was busy.`);
+  // The client already shows a queued turn as "Queued"; the turn and its bubble stay.
+  emit(id, { type: "phase", turn: deferred });
+  setTimeout(() => enqueueChatTurn(id), retryMs).unref?.();
+  return true;
+}
+
 async function processChatTurn(id: number): Promise<void> {
+  await runQueuedChatTurn(id);
+}
+
+/**
+ * Run one queued turn to completion — the serial worker's body. Exported with the same
+ * execution seam runChatCompletion takes (`deps`), so an offline test can drive a whole
+ * turn (prompt → reply → actions → the stored assistant message and its meta) with a
+ * fake runner and no CLI.
+ */
+export async function runQueuedChatTurn(id: number, deps: ChatCompletionDeps = {}): Promise<void> {
   const turn = repo.getChatTurn(id) as any;
   if (!turn || turn.status !== "queued") return; // canceled while queued, or already handled
   // Re-establish the device timezone captured at enqueue — the worker drains
   // AFTER the request returned, so X-Cairn-TZ is no longer in scope. With it,
   // "now", the chat-history time labels, and any day-keyed log this turn writes
   // (log_food / log_activity) all frame in the athlete's actual zone.
-  await runWithTimeZone(turn.tz, () => processChatTurnInner(id, turn));
+  await runWithTimeZone(turn.tz, () => processChatTurnInner(id, turn, deps));
 }
 
-async function processChatTurnInner(id: number, turn: any): Promise<void> {
+async function processChatTurnInner(id: number, turn: any, deps: ChatCompletionDeps = {}): Promise<void> {
   // A receipt the lane declines (completeInstantFoodCapture -> null) runs as an ordinary turn.
   if (isInstantFoodCaptureDecision(turn.routing, turn.message) && completeInstantFoodCapture(id, turn.message ?? "")) {
     return;
@@ -417,7 +460,17 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
   controllers.set(id, controller);
 
   try {
-    const { agent, raw, attempts, datedWeek: turnWeek } = await runChatCompletion(id, turn, history, controller.signal);
+    const {
+      agent,
+      raw,
+      attempts,
+      datedWeek: turnWeek,
+      reads,
+      promptBytes,
+    } = await runChatCompletion(id, turn, history, controller.signal, deps);
+    clearAgentBusyDeferrals("chat", id);
+    // Whether this turn looked anything up, and how — counts and tool names only.
+    if (reads) log.info(chatReadLogLine(id, reads, promptBytes ?? null));
     const { reply: replyText, actions } = parseChatReply(raw);
     // Clearing a hold is a claim that the provider ANSWERED, so it waits for the
     // reply to actually come out of the raw output. A run that returned only a
@@ -516,10 +569,14 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
       clinical_lineage?: ClinicalConversationLineage;
       routing?: ChatRoutingDecision;
       receipts?: ChangeReceipt[];
+      reads?: ChatReadTelemetry;
+      prompt_bytes?: number;
     } = {
       applied,
       drafts: drafts.map(proposalMeta),
     };
+    if (reads) meta.reads = reads;
+    if (promptBytes) meta.prompt_bytes = promptBytes;
     if (receipts.length) meta.receipts = receipts;
     const finalRouting = repo.getChatTurnRouting(id);
     if (finalRouting) meta.routing = finalRouting;
@@ -546,6 +603,11 @@ async function processChatTurnInner(id: number, turn: any): Promise<void> {
     // Canceled mid-run: cancelTurn already flipped status + emitted the event.
     const cur = repo.getChatTurn(id) as any;
     if (cur?.status === "canceled" || controller.signal.aborted) return;
+    // No spawn permit is the host's congestion, not this turn's failure: it goes back in
+    // line (nothing was applied — actions run only after a reply) and runs when a permit
+    // frees, a bounded number of times before it says it could not start.
+    if (isAgentBusyError(e) && deferBusyChatTurn(id, deps.busyRetryMs ?? AGENT_BUSY_RETRY_MS)) return;
+    clearAgentBusyDeferrals("chat", id);
     const failure = chatFailureReply(e);
     const assistant = repo.addChatMessage("assistant", failure.content, failure.agent, failure.meta);
     const failed = repo.failChatTurn(id, failure.error, (assistant as any).id);
@@ -1448,12 +1510,57 @@ function applyBackgroundPlanUpdate(
   };
 }
 
+// The fields a chat restructure may be written without: the lean core carries them,
+// but an item the model omits them from is the SAME lift keeping its own note and
+// warm-ups, never one silently wiped. Carried forward only when the key is ABSENT on the
+// incoming item — an explicit null or "" is the athlete's own clearing and stands.
+const CARRIED_PLAN_ITEM_FIELDS = ["note", "warmup_sets"] as const;
+
+/**
+ * Carry an existing plan item's note / warmup_sets onto a restructured item for the same
+ * exercise that omits them: the same day's item first, then the same lift on any day.
+ * Pure over its inputs; never mutates them.
+ */
+export function carryForwardPlanItemFields(days: unknown[], currentPlan: unknown): unknown[] {
+  const plan = Array.isArray(currentPlan) ? currentPlan : [];
+  const existing = plan.flatMap((day: any) =>
+    (Array.isArray(day?.items) ? day.items : []).map((item: any) => ({ day: Number(day?.day_number), item }))
+  );
+  const find = (dayNumber: number, exercise: unknown) => {
+    if (typeof exercise !== "string" || !exercise.trim()) return null;
+    const same = (row: { item: any }) => typeof row.item?.exercise === "string" && sameLiftName(row.item.exercise, exercise);
+    return existing.find((row) => row.day === dayNumber && same(row)) ?? existing.find(same) ?? null;
+  };
+  return (Array.isArray(days) ? days : []).map((day: any) => {
+    if (!day || typeof day !== "object" || !Array.isArray(day.items)) return day;
+    return {
+      ...day,
+      items: day.items.map((item: any) => {
+        if (!item || typeof item !== "object") return item;
+        const missing = CARRIED_PLAN_ITEM_FIELDS.filter((field) => !Object.hasOwn(item, field));
+        if (!missing.length) return item;
+        const match = find(Number(day.day_number), item.exercise);
+        if (!match) return item;
+        const carried: Record<string, unknown> = {};
+        for (const field of missing) if (match.item[field] != null && match.item[field] !== "") carried[field] = match.item[field];
+        return Object.keys(carried).length ? { ...item, ...carried } : item;
+      }),
+    };
+  });
+}
+
 function routeChatPlanRestructure(
   agent: string,
   summary: unknown,
-  days: unknown[],
+  rawDays: unknown[],
   clinicalProvenance: ClinicalPlanProvenance | null
 ): unknown {
+  let days = rawDays;
+  try {
+    days = carryForwardPlanItemFields(rawDays, repo.getPlan());
+  } catch {
+    days = rawDays; // the carry-forward is a protection, never a reason to drop the ask
+  }
   const proposal = repo.createProposal(agent, "chat: restructure", "", {
     summary: String(
       summary ?? "Restructure the training week around the athlete's current goals and constraints."
@@ -1672,6 +1779,10 @@ export type ChatAgentAttempt = {
   // Failed attempts only: the redacted tail of what the CLI printed (agentFailureTail.ts),
   // kept on the local agent_runs row so a failure is diagnosable after the fact.
   failure_tail?: string | null;
+  // How this attempt reached the coach reads, how many it made, and its prompt's size.
+  read_transport?: "native_mcp" | "prompt_loop" | null;
+  read_calls?: number | null;
+  prompt_bytes?: number | null;
 };
 
 class ChatCompletionError extends Error {
@@ -1848,6 +1959,9 @@ function recordChatAttempt(attempt: ChatAgentAttempt, started: number, parsed: b
       attempt_index: attempt.attempt_index ?? null,
       escalation_source: attempt.escalation_source ?? null,
       failure_tail: attempt.ok ? null : (attempt.failure_tail ?? null),
+      read_transport: attempt.read_transport ?? null,
+      read_calls: attempt.read_calls ?? null,
+      prompt_bytes: attempt.prompt_bytes ?? null,
     });
   } catch {
     /* telemetry never breaks the loop */
@@ -1892,6 +2006,17 @@ function chatFailureReply(e: any): {
       error: summarizeChatAttempts(attempts),
     };
   }
+  if (isAgentBusyError(e)) {
+    // Only after the turn's deferrals are spent (deferBusyChatTurn): the host never had a
+    // CLI slot free for it. Not a provider problem, so no "check Settings".
+    return {
+      content:
+        "The coach couldn't start on that one — every agent slot on this server stayed busy with other work. Send it again in a little while.",
+      agent: null,
+      meta: { error: true, agent_busy: true },
+      error: "agent_busy",
+    };
+  }
   const message = cleanCliLine(e?.message ?? e) || "Unknown error";
   return {
     content: `Couldn't reach a coaching agent: ${message}`,
@@ -1910,16 +2035,22 @@ function chatFailureReply(e: any): {
 // output contract, not a "final JSON"), so chat renders its own contract over the shared
 // closed read catalog rather than the job loop's coachReadContract.
 const CHAT_READ_MAX_CALLS = COACH_READ_ORDINARY_MAX_CALLS;
+// What a native attempt adds to its launch: the attach argv, the coach_reads policy, and
+// the permit hook that re-arms the listener's TTL once the run actually starts.
+type NativeLaunchExtras = { mcpConfigArgs?: string[]; tools?: "coach_reads"; onPermit?: () => void };
+const LISTENER_TTL_MARGIN_MS = 30_000;
 
 export type ChatReadState = {
   rounds: number;
   calls: number;
   bytes: number;
   completed: CompletedCoachRead[];
+  /** Every executed read as telemetry keeps it (tool, ms, bytes, ok) — never args or results. */
+  log: ChatReadCall[];
 };
 
 export function newChatReadState(): ChatReadState {
-  return { rounds: 0, calls: 0, bytes: 0, completed: [] };
+  return { rounds: 0, calls: 0, bytes: 0, completed: [], log: [] };
 }
 
 function chatReadContract(maxCalls: number): string {
@@ -1942,9 +2073,11 @@ Reads remaining: ${callsRemaining}. Now write your normal reply using the OUTPUT
 
 // The suffix appended to the chat prompt for a given read state. When reads are
 // exhausted (budget spent), the contract is dropped entirely so the agent simply replies.
-export function chatReadPromptSuffix(state: ChatReadState, exhausted: boolean): string {
+// "full" is the original contract over the full DATA block, word for word; "lean" is the
+// look-it-up contract over the lean core (src/chat-reads.ts).
+export function chatReadPromptSuffix(state: ChatReadState, exhausted: boolean, mode: ChatContextMode = "full"): string {
   if (exhausted) return "";
-  const contract = chatReadContract(CHAT_READ_MAX_CALLS);
+  const contract = mode === "lean" ? chatLeanPromptLoopContract(CHAT_READ_MAX_CALLS) : chatReadContract(CHAT_READ_MAX_CALLS);
   if (!state.completed.length) return contract;
   return `${contract}${chatReadResultsBlock(state.completed, CHAT_READ_MAX_CALLS - state.calls)}`;
 }
@@ -1996,13 +2129,19 @@ export async function runChatReadRound(
   state.rounds++;
   for (const request of query.requests) {
     if (ctx.signal.aborted) throw new Error("canceled");
+    const started = performance.now();
     const result = await execute(request, { run_id: ctx.runId, op: "chat" });
     state.calls++;
     const item = { request, result };
     const itemBytes = Buffer.byteLength(JSON.stringify(item), "utf8");
-    if (state.bytes + itemBytes > COACH_READ_ORDINARY_MAX_BYTES) return "stop";
+    const ms = Math.round(performance.now() - started);
+    if (state.bytes + itemBytes > COACH_READ_ORDINARY_MAX_BYTES) {
+      state.log?.push({ tool: request.tool, ms, bytes: 0, ok: false });
+      return "stop";
+    }
     state.bytes += itemBytes;
     state.completed.push(item);
+    state.log?.push({ tool: request.tool, ms, bytes: itemBytes, ok: true });
   }
   return "ok";
 }
@@ -2019,6 +2158,26 @@ export interface ChatCompletionDeps {
   ) => CoachReadToolResult | Promise<CoachReadToolResult>;
   /** Offline tests inject this so a fixture URL never hits the network. */
   fetchLinkedPages?: typeof fetchChatLinkedPages;
+  /** The per-run native read listener (offline tests inject a stub; no socket opens). */
+  startReadListener?: (opts: Parameters<typeof startCoachReadMcpListener>[0]) => Promise<CoachReadMcpListener>;
+  /** Which transport an agent reads over (defaults to agents.json read_tools). */
+  resolveReadTransport?: (name: string) => ResolvedCoachReadTransport;
+  /** How long a turn deferred for a busy host rests before it is re-queued (tests shorten or lengthen it). */
+  busyRetryMs?: number;
+}
+
+/**
+ * The turn's agent order once coach reads are considered: native-transport agents first
+ * (repo.orderChatForCoachReads) ONLY when the turn will actually read natively — a lean
+ * reading lane, and not a photo or current-research turn, which stay on the prompt loop.
+ * Otherwise the open order stands exactly.
+ */
+export function chatCoachReadOrder(
+  openOrder: readonly string[],
+  opts: { leanReads: boolean; nativeEligible: boolean; explicit: boolean; readsNatively: (name: string) => boolean }
+): string[] {
+  if (!opts.leanReads || !opts.nativeEligible) return [...openOrder];
+  return repo.orderChatForCoachReads(openOrder, { explicit: opts.explicit, readsNatively: opts.readsNatively });
 }
 
 export async function runChatCompletion(
@@ -2027,7 +2186,14 @@ export async function runChatCompletion(
   history: { role: string; content: string; at?: string }[],
   signal: AbortSignal,
   deps: ChatCompletionDeps = {}
-): Promise<{ agent: string; raw: string; attempts: ChatAgentAttempt[]; datedWeek?: DatedWeek | null }> {
+): Promise<{
+  agent: string;
+  raw: string;
+  attempts: ChatAgentAttempt[];
+  datedWeek?: DatedWeek | null;
+  reads?: ChatReadTelemetry;
+  promptBytes?: number;
+}> {
   const runAgentDep = deps.runAgent ?? runAgent;
   // The dated week is built ONCE per turn (two planWeek reads) and only when a lane's
   // prompt actually carries it; the same week then aims the turn's dated plan_update and
@@ -2048,6 +2214,8 @@ export async function runChatCompletion(
   const supportsStream = deps.supportsStream ?? agentSupportsStream;
   const executeCoachRead = deps.executeCoachRead ?? executeCoachReadTool;
   const fetchLinkedPages = deps.fetchLinkedPages ?? fetchChatLinkedPages;
+  const startReadListener = deps.startReadListener ?? startCoachReadMcpListener;
+  const resolveReadTransport = deps.resolveReadTransport ?? ((name: string) => resolveCoachReadTransport(name));
   const readRunId = crypto.randomUUID();
   const readState = newChatReadState();
   let readExhausted = false;
@@ -2060,21 +2228,24 @@ export async function runChatCompletion(
   const attempts: ChatAgentAttempt[] = [];
   let decision: ChatRoutingDecision | null = turn.routing ?? null;
   const wantsWeb = decision?.reason_codes.includes("current_research") === true;
-  // The CLI's own tools stay off for a coaching turn (the DATA block is the whole
-  // picture, and an autonomous CLI otherwise explores its cwd until the timeout);
-  // only a current-research turn is allowed to reach for live web search.
+  // The CLI's own tools stay off for a coaching turn (an autonomous CLI otherwise
+  // explores its cwd until the timeout); only a current-research turn is allowed to
+  // reach for live web search. A native coach-read attempt swaps in its own policy
+  // ("coach_reads": the read tools and nothing else) for that attempt only.
   const chatTools: "none" | "provider" = wantsWeb ? "provider" : "none";
   // The person's class order (settings.agent_class_order) for the lane's class: capture
   // and coach are everyday (fast), deep is deep; the legacy single path reads fast. It is
   // read for the lane the turn STARTS on — an escalation keeps the order it began with.
   const laneClass = decision ? CHAT_LANE_MODEL_CLASS[decision.lane] : "fast";
+  const classFirst = repo.getSettings().agent_class_order[laneClass];
+  const selectedFirst = Boolean(turn.agent && turn.agent !== "auto");
   const baseOrder = buildChatProviderOrder(chosen, repo.pickAgentOrder(), {
-    classFirst: repo.getSettings().agent_class_order[laneClass],
+    classFirst,
     preferWeb: wantsWeb,
     // A named provider is an explicit athlete choice. A Settings route pin is
     // still eligible as fallback, but current research starts with an enabled
     // web-capable provider whenever the turn itself was auto-routed.
-    preserveSelectedFirst: Boolean(turn.agent && turn.agent !== "auto"),
+    preserveSelectedFirst: selectedFirst,
     definitions,
   });
   // A provider that just told us it is out of quota / credit / signed out sits out
@@ -2082,10 +2253,10 @@ export async function runChatCompletion(
   // job rotation shares): never spawned, and past `hold_until` the next turn probes
   // it again. With EVERY provider held the turn fails fast with the calm reply below
   // instead of spawning each one to hear the same refusal.
-  const { open: order, held } = splitHeldProviders(orderChatProvidersByAvailability(baseOrder), (name) =>
+  const { open: openOrder, held } = splitHeldProviders(orderChatProvidersByAvailability(baseOrder), (name) =>
     repo.getAgentAvailability(name)
   );
-  if (!order.length && held.length) {
+  if (!openOrder.length && held.length) {
     throw new ChatCompletionError(
       held.map(({ agent, hold }) => ({
         agent,
@@ -2100,9 +2271,28 @@ export async function runChatCompletion(
       }))
     );
   }
-  if (!order.length) throw new Error("No agents enabled — turn one on in Settings.");
+  if (!openOrder.length) throw new Error("No agents enabled — turn one on in Settings.");
   const adaptive = !!decision;
   const chatSettings = repo.getSettings();
+  // The coach/deep lanes' DATA block (settings.chat_context): the lean core whose
+  // contract says to LOOK THINGS UP, or the whole snapshot with the original wording.
+  // The capture lane keeps its own narrow slice and the original read contract.
+  const contextMode: ChatContextMode = chatSettings.chat_context === "full" ? "full" : "lean";
+  // Per lane, because a capture turn can escalate into the coach lane mid-turn.
+  const leanReadsOn = (lane: ChatLane | null): boolean => (lane ?? "coach") !== "capture" && contextMode === "lean";
+  const leanReads = leanReadsOn(decision?.lane ?? null);
+  // Native reads need a CLI whose ONLY tools are the reads: a photo turn hands the CLI a
+  // file to open, and a current-research turn needs its web search, so both stay on the
+  // prompt loop (over the same lean core).
+  const nativeEligible = !turn.image_path && !wantsWeb;
+  // Agents that read natively go first on a reading lane — beside the routing policy,
+  // never overriding a named agent, a chat route pin, or the person's class order.
+  const order = chatCoachReadOrder(openOrder, {
+    leanReads,
+    nativeEligible,
+    explicit: selectedFirst || Boolean(chosen && chosen !== "auto") || Boolean(classFirst?.length),
+    readsNatively: (name) => resolveReadTransport(name).transport === "native_mcp",
+  });
   const bindings = adaptive ? chatSettings.chat_profile_bindings : {};
   // The person's Everyday / Deep work model choice governs chat too (one setting for
   // both); empty means every provider runs its own default model.
@@ -2113,6 +2303,11 @@ export async function runChatCompletion(
   let lastErr: any = null;
   let lanePasses = 0;
   const unsupportedSeen = new Set<string>();
+  // An agent whose native attach failed this turn reads over the prompt loop from then on.
+  const nativeFallback = new Set<string>();
+  const nativeCalls: ChatReadCall[] = [];
+  let nativeRounds = 0;
+  let lastPromptBytes = 0;
 
   // Same pattern as listing a health-export folder: fetch pasted URLs HERE so a
   // headless CLI never reaches for curl (agy auto-denies `command` and exits
@@ -2189,6 +2384,125 @@ export async function runChatCompletion(
     return true;
   };
 
+  // ---------- coach reads, per attempt ----------
+  // The transport THIS attempt reads over: native only on a reading lane, for an agent
+  // whose agents.json read_tools declares it, until its attach fails once this turn.
+  const transportFor = (name: string, lane: ChatLane | null): ResolvedCoachReadTransport => {
+    const promptLoop: ResolvedCoachReadTransport = { transport: "prompt_loop", spec: null };
+    if (!nativeEligible || !leanReadsOn(lane) || nativeFallback.has(name)) return promptLoop;
+    try {
+      return resolveReadTransport(name);
+    } catch {
+      return promptLoop;
+    }
+  };
+  // The contract appended to this attempt's prompt.
+  const readSuffix = (transport: ResolvedCoachReadTransport, lane: ChatLane | null): string => {
+    if (transport.transport === "native_mcp") return chatNativeReadContract();
+    const mode: ChatContextMode = leanReadsOn(lane) ? "lean" : "full";
+    return chatReadPromptSuffix(readState, readExhausted, mode);
+  };
+  const readTelemetry = (transport: ResolvedCoachReadTransport, prompt: string, calls: number) => ({
+    read_transport: transport.transport,
+    read_calls: calls,
+    prompt_bytes: Buffer.byteLength(prompt, "utf8"),
+  });
+  // One native attempt: start the per-run listener, launch with its attach args, close it
+  // whatever happens. `attachFailed` means the native transport itself did not work — the
+  // listener would not start, or the CLI exited without a reply having never reached it —
+  // and the caller then retries the SAME agent once on the prompt loop. A busy host, a
+  // Stop, a timeout or a provider's own refusal are not attach failures.
+  const runNative = async (
+    name: string,
+    transport: ResolvedCoachReadTransport,
+    timeoutMs: number,
+    launch: (extras: NativeLaunchExtras) => Promise<AgentResult>
+  ): Promise<{ res: AgentResult | null; error: any; attachFailed: boolean; calls: ChatReadCall[]; connected: boolean }> => {
+    let listener: CoachReadMcpListener;
+    try {
+      listener = await startReadListener({
+        run_id: readRunId,
+        op: "chat",
+        signal,
+        // The run may first wait up to its own timeout for a spawn permit, then run for
+        // its timeout: the first TTL covers both, and the permit re-arms it (below).
+        ttlMs: 2 * timeoutMs + LISTENER_TTL_MARGIN_MS,
+        budget: NATIVE_COACH_READ_BUDGET,
+      });
+    } catch (e) {
+      if (signal.aborted) throw e;
+      log.warn(`[coach-read] turn#${id} native listener failed for ${name} (${diagnosticErrorName(e)}); prompt loop`);
+      return { res: null, error: e, attachFailed: true, calls: [], connected: false };
+    }
+    let res: AgentResult | null = null;
+    let error: any = null;
+    try {
+      const ready = listener;
+      res = await launch({
+        ...coachReadLaunchExtras(transport, { url: ready.url }),
+        onPermit: () => ready.rearm(timeoutMs + LISTENER_TTL_MARGIN_MS),
+      });
+    } catch (e) {
+      error = e;
+    } finally {
+      try {
+        await listener.close();
+      } catch {
+        /* a listener that will not close is swept by its TTL */
+      }
+    }
+    const calls = listener.gate.calls.map(({ tool, ms, bytes, ok }) => ({ tool, ms, bytes, ok }));
+    const connected = listener.gate.requests > 0;
+    if (error && (signal.aborted || isAgentBusyError(error))) return { res, error, attachFailed: false, calls, connected };
+    let attachFailed = false;
+    // A thrown run is never an attach failure: it is a timeout, a CLI that is not
+    // installed (spawn ENOENT) or a sign-in error, and the prompt loop would meet the same
+    // thing — so the one fallback launch is not spent on it.
+    if (!connected && !error) {
+      if (res) {
+        const classified = classifyChatAgentResult(name, res);
+        // The CLI refused the flags or never reached the server: no reply, nothing read,
+        // and not a quota / sign-in / model refusal (those rotate like any other).
+        attachFailed =
+          !!classified && ["error", "empty_reply"].includes(classified.status) && !String(res.raw ?? "").includes(CHAT_REPLY_SENTINEL);
+      }
+    }
+    // A native run that answered in the prompt loop's JSON protocol has no loop to run it:
+    // treat it as the transport not working and re-ask over the prompt loop.
+    if (!attachFailed && res && !error && classifyChatReadTurn(String(res.raw ?? "")).kind !== "none") attachFailed = true;
+    if (attachFailed) log.warn(`[coach-read] turn#${id} native attach failed for ${name}; retrying once on the prompt loop`);
+    return { res, error, attachFailed, calls, connected };
+  };
+  // A native run's reads count against the turn's ONE read budget: a fallback to the
+  // prompt loop continues from what was already spent rather than a fresh 6 calls /
+  // 256 KB, so a single turn can never pull the native and the prompt-loop totals both.
+  const noteNative = (calls: ChatReadCall[]): void => {
+    if (!calls.length) return;
+    nativeCalls.push(...calls);
+    nativeRounds++;
+    readState.calls += calls.length;
+    readState.bytes += calls.reduce((sum, call) => sum + (call.ok ? call.bytes : 0), 0);
+    if (readState.calls >= CHAT_READ_MAX_CALLS || readState.bytes >= COACH_READ_ORDINARY_MAX_BYTES) readExhausted = true;
+  };
+  // A busy host is not this agent's failure, and every other agent would queue for the
+  // same process-wide permit: record it as what it is, stop the rotation, and hand the
+  // typed error up — the worker defers the TURN and retries it (deferBusyChatTurn).
+  const stopIfBusy = (e: any, attempt: ChatAgentAttempt): void => {
+    if (!isAgentBusyError(e)) return;
+    attempt.status = "agent_busy";
+    attempt.error_class = "agent_busy";
+    attempt.error_message = "No agent slot was free on this server";
+    throw e;
+  };
+  const turnReads = (transport: ResolvedCoachReadTransport): ChatReadTelemetry => {
+    const reads = emptyChatReadTelemetry(transport.transport);
+    reads.calls = [...nativeCalls, ...readState.log];
+    reads.rounds = nativeRounds + readState.rounds;
+    reads.total_bytes = reads.calls.reduce((sum, call) => sum + (call.ok ? call.bytes : 0), 0);
+    if (nativeFallback.size) reads.native_fallback = true;
+    return reads;
+  };
+
   laneLoop: while (true) {
     if (signal.aborted) throw new Error("canceled");
     lanePasses++;
@@ -2202,13 +2516,15 @@ export async function runChatCompletion(
         ...(lane ? { lane } : {}),
         ...(linkedPages.length ? { linkedPages } : {}),
         datedWeek: readTurnWeek,
+        context: contextMode,
       }
     );
 
     // Streaming first, exactly once for an equivalent provider/profile tuple. The
     // stream-capable primary may first request bounded reads (bare JSON, no reply marker
     // → the gate shows nothing) across up to a few rounds, then stream the reply. Read
-    // follow-ups re-stream the SAME agent, so they are gated by `seen` only ONCE.
+    // follow-ups re-stream the SAME agent, so they are gated by `seen` only ONCE. A
+    // native-transport primary reads inside its one streamed run instead.
     const first = order[0];
     const firstProfile = profileFor(first);
     noteUnsupportedProfile(first, firstProfile);
@@ -2217,7 +2533,9 @@ export async function runChatCompletion(
       seen.add(firstKey);
       // Inner loop: re-run the SAME first agent for each read follow-up, then stream the reply.
       while (true) {
-        const streamPrompt = `${prompt}${chatReadPromptSuffix(readState, readExhausted)}`;
+        const transport = transportFor(first, lane);
+        const streamPrompt = `${prompt}${readSuffix(transport, lane)}`;
+        lastPromptBytes = Buffer.byteLength(streamPrompt, "utf8");
         const started = Date.now();
         let ttft: number | null = null;
         const stream = createChatStreamFilter((event) => {
@@ -2225,11 +2543,14 @@ export async function runChatCompletion(
           emit(id, event);
         });
         streamFilters.set(id, stream);
-        try {
-          const res = await runStreamingDep(first, streamPrompt, {
+        const timeoutMs = chatTurnTimeoutMs(firstProfile);
+        const streamOnce = (extras: NativeLaunchExtras = {}) =>
+          runStreamingDep(first, streamPrompt, {
             signal,
-            timeoutMs: chatTurnTimeoutMs(firstProfile),
-            tools: chatTools,
+            timeoutMs,
+            tools: extras.tools ?? chatTools,
+            ...(extras.mcpConfigArgs ? { mcpConfigArgs: extras.mcpConfigArgs } : {}),
+            ...(extras.onPermit ? { onPermit: extras.onPermit } : {}),
             // The athlete is watching this stream: it takes the spawn cap's reserved
             // interactive permit rather than queueing behind batch lanes.
             priority: "interactive",
@@ -2238,11 +2559,76 @@ export async function runChatCompletion(
             onProgress: stream.progress,
             onDelta: stream.push,
           });
+        let nativeCallCount = 0;
+        try {
+          let res: AgentResult;
+          if (transport.transport === "native_mcp") {
+            const native = await runNative(first, transport, timeoutMs, streamOnce);
+            noteNative(native.calls);
+            nativeCallCount = native.calls.length;
+            if (native.attachFailed) {
+              stream.reset();
+              const attempt = decorate(
+                {
+                  agent: first,
+                  ok: false,
+                  status: "read_attach_failed",
+                  error_class: "read_attach_failed",
+                  error_message: "Native coach reads did not attach; retrying on the prompt loop",
+                  exit_code: native.res?.code ?? null,
+                  failure_tail: native.res?.failure_tail ?? null,
+                  ...readTelemetry(transport, streamPrompt, nativeCallCount),
+                },
+                firstProfile,
+                true,
+                ttft
+              );
+              recordChatAttempt(attempt, started, false, false);
+              attempts.push(attempt);
+              nativeFallback.add(first);
+              readPhase("Reviewing your history…");
+              continue; // the SAME agent, once, over the prompt loop
+            }
+            if (native.error) throw native.error;
+            res = native.res as AgentResult;
+            if (!String(res.raw ?? "").trim() && res.code === 0 && !signal.aborted) {
+              // Connected, then answered nothing: the run's listener is closed, so it is
+              // retried the way an attach failure is — the SAME agent, once, on the prompt loop.
+              stream.reset();
+              const attempt = decorate(
+                {
+                  agent: first,
+                  ok: false,
+                  status: "empty_reply",
+                  error_class: "empty_reply",
+                  error_message: "Agent returned no reply",
+                  exit_code: res.code,
+                  ...readTelemetry(transport, streamPrompt, nativeCallCount),
+                },
+                firstProfile,
+                true,
+                ttft
+              );
+              recordChatAttempt(attempt, started, false, false);
+              attempts.push(attempt);
+              nativeFallback.add(first);
+              continue;
+            }
+          } else {
+            res = await streamOnce();
+          }
           stream.finish();
           const raw = String(res.raw ?? "");
           if (lane && parseChatEscalationRequest(raw, lane)) {
             const attempt = decorate(
-              { agent: first, ok: true, status: "escalated", exit_code: res.code, model: res.usage?.model ?? null },
+              {
+                agent: first,
+                ok: true,
+                status: "escalated",
+                exit_code: res.code,
+                model: res.usage?.model ?? null,
+                ...readTelemetry(transport, streamPrompt, nativeCallCount),
+              },
               firstProfile,
               true,
               ttft
@@ -2253,21 +2639,33 @@ export async function runChatCompletion(
             escalate(raw, lane, stream);
             continue laneLoop;
           }
-          const readTurn = readExhausted ? ({ kind: "none" } as ChatReadTurnClass) : classifyChatReadTurn(raw);
+          const readTurn =
+            readExhausted || transport.transport === "native_mcp"
+              ? ({ kind: "none" } as ChatReadTurnClass)
+              : classifyChatReadTurn(raw);
           if (readTurn.kind === "query") {
             const attempt = decorate(
-              { agent: first, ok: true, status: "reading_data", exit_code: res.code, model: res.usage?.model ?? null },
+              {
+                agent: first,
+                ok: true,
+                status: "reading_data",
+                exit_code: res.code,
+                model: res.usage?.model ?? null,
+                ...readTelemetry(transport, streamPrompt, 0),
+              },
               firstProfile,
               true,
               ttft
             );
-            recordChatAttempt(attempt, started, true, false);
-            attempts.push(attempt);
+            const callsBefore = readState.calls;
             const outcome = await runChatReadRound(readState, readTurn.query, {
               runId: readRunId,
               signal,
               execute: executeCoachRead,
             });
+            attempt.read_calls = readState.calls - callsBefore;
+            recordChatAttempt(attempt, started, true, false);
+            attempts.push(attempt);
             stream.reset(); // the protocol turn streamed nothing (no reply marker) — clear the bubble
             readPhase("Reviewing your history…");
             if (outcome === "stop") readExhausted = true;
@@ -2285,6 +2683,7 @@ export async function runChatCompletion(
                 status: "read_malformed",
                 exit_code: res.code,
                 model: res.usage?.model ?? null,
+                ...readTelemetry(transport, streamPrompt, 0),
               },
               firstProfile,
               true,
@@ -2299,14 +2698,17 @@ export async function runChatCompletion(
           }
           const classified = classifyChatAgentResult(first, res);
           const attempt = decorate(
-            classified ?? {
-              agent: first,
-              ok: true,
-              status: "ok",
-              exit_code: res.code,
-              model: res.usage?.model ?? null,
-              input_tokens: res.usage?.input_tokens ?? null,
-              output_tokens: res.usage?.output_tokens ?? null,
+            {
+              ...(classified ?? {
+                agent: first,
+                ok: true,
+                status: "ok",
+                exit_code: res.code,
+                model: res.usage?.model ?? null,
+                input_tokens: res.usage?.input_tokens ?? null,
+                output_tokens: res.usage?.output_tokens ?? null,
+              }),
+              ...readTelemetry(transport, streamPrompt, nativeCallCount),
             },
             firstProfile,
             true,
@@ -2314,12 +2716,22 @@ export async function runChatCompletion(
           );
           recordChatAttempt(attempt, started, !classified, false);
           attempts.push(attempt);
-          if (!classified) return { agent: first, raw, attempts, datedWeek: turnWeek };
+          if (!classified)
+            return { agent: first, raw, attempts, datedWeek: turnWeek, reads: turnReads(transport), promptBytes: lastPromptBytes };
         } catch (e: any) {
           if (signal.aborted) throw e;
-          const attempt = decorate(classifyChatException(first, e), firstProfile, true, ttft);
-          recordChatAttempt(attempt, started, false, false);
+          const attempt = decorate(
+            { ...classifyChatException(first, e), ...readTelemetry(transport, streamPrompt, nativeCallCount) },
+            firstProfile,
+            true,
+            ttft
+          );
           attempts.push(attempt);
+          try {
+            stopIfBusy(e, attempt);
+          } finally {
+            recordChatAttempt(attempt, started, false, false);
+          }
           lastErr = e;
         }
         stream.reset();
@@ -2336,38 +2748,99 @@ export async function runChatCompletion(
       if (seen.has(key)) continue;
       seen.add(key);
       // A non-streaming provider can request reads too; a read follow-up re-runs the
-      // SAME agent (inner loop) without re-consulting `seen`.
-      // Inner loop: re-run the SAME agent for each read follow-up, then take its reply.
+      // SAME agent (inner loop) without re-consulting `seen`. A native-transport agent
+      // reads inside its one run; a failed attach re-runs it once on the prompt loop.
       while (true) {
-        const runPrompt = `${prompt}${chatReadPromptSuffix(readState, readExhausted)}`;
+        const transport = transportFor(name, lane);
+        const runPrompt = `${prompt}${readSuffix(transport, lane)}`;
+        lastPromptBytes = Buffer.byteLength(runPrompt, "utf8");
         const started = Date.now();
-        try {
-          emit(id, { type: "progress", text: "Asking the coach…" });
-          let res = await runAgentDep(name, runPrompt, {
+        const timeoutMs = chatTurnTimeoutMs(profile);
+        const runOnce = (promptText: string, extras: NativeLaunchExtras = {}) =>
+          runAgentDep(name, promptText, {
             signal,
-            timeoutMs: chatTurnTimeoutMs(profile),
-            tools: chatTools,
+            timeoutMs,
+            tools: extras.tools ?? chatTools,
+            ...(extras.mcpConfigArgs ? { mcpConfigArgs: extras.mcpConfigArgs } : {}),
+            ...(extras.onPermit ? { onPermit: extras.onPermit } : {}),
             priority: "interactive",
             op: lane ? `chat:${lane}` : "chat",
             ...(profile.execution ?? {}),
           });
+        let nativeCallCount = 0;
+        try {
+          emit(id, { type: "progress", text: "Asking the coach…" });
+          let res: AgentResult;
+          if (transport.transport === "native_mcp") {
+            const native = await runNative(name, transport, timeoutMs, (extras) => runOnce(runPrompt, extras));
+            noteNative(native.calls);
+            nativeCallCount = native.calls.length;
+            if (native.attachFailed) {
+              const attempt = decorate(
+                {
+                  agent: name,
+                  ok: false,
+                  status: "read_attach_failed",
+                  error_class: "read_attach_failed",
+                  error_message: "Native coach reads did not attach; retrying on the prompt loop",
+                  exit_code: native.res?.code ?? null,
+                  failure_tail: native.res?.failure_tail ?? null,
+                  ...readTelemetry(transport, runPrompt, nativeCallCount),
+                },
+                profile,
+                false,
+                null
+              );
+              recordChatAttempt(attempt, started, false, false);
+              attempts.push(attempt);
+              nativeFallback.add(name);
+              readPhase("Reviewing your history…");
+              continue; // the SAME agent, once, over the prompt loop
+            }
+            if (native.error) throw native.error;
+            res = native.res as AgentResult;
+          } else {
+            res = await runOnce(runPrompt);
+          }
           let raw = String(res.raw ?? "");
           let retriedEmpty = false;
+          if (!raw.trim() && res.code === 0 && !signal.aborted && transport.transport === "native_mcp") {
+            // The run's listener is already closed, so an empty native reply is retried the
+            // way an attach failure is: the SAME agent, once, over the prompt loop.
+            const attempt = decorate(
+              {
+                agent: name,
+                ok: false,
+                status: "empty_reply",
+                error_class: "empty_reply",
+                error_message: "Agent returned no reply",
+                exit_code: res.code,
+                ...readTelemetry(transport, runPrompt, nativeCallCount),
+              },
+              profile,
+              false,
+              null
+            );
+            recordChatAttempt(attempt, started, false, false);
+            attempts.push(attempt);
+            nativeFallback.add(name);
+            continue;
+          }
           if (!raw.trim() && res.code === 0 && !signal.aborted) {
             retriedEmpty = true;
-            res = await runAgentDep(name, runPrompt + EMPTY_CHAT_RETRY_SUFFIX, {
-              signal,
-              timeoutMs: chatTurnTimeoutMs(profile),
-              tools: chatTools,
-              priority: "interactive",
-              op: lane ? `chat:${lane}` : "chat",
-              ...(profile.execution ?? {}),
-            });
+            res = await runOnce(runPrompt + EMPTY_CHAT_RETRY_SUFFIX);
             raw = String(res.raw ?? "");
           }
           if (lane && parseChatEscalationRequest(raw, lane)) {
             const attempt = decorate(
-              { agent: name, ok: true, status: "escalated", exit_code: res.code, model: res.usage?.model ?? null },
+              {
+                agent: name,
+                ok: true,
+                status: "escalated",
+                exit_code: res.code,
+                model: res.usage?.model ?? null,
+                ...readTelemetry(transport, runPrompt, nativeCallCount),
+              },
               profile,
               false,
               null
@@ -2378,21 +2851,33 @@ export async function runChatCompletion(
             escalate(raw, lane);
             continue laneLoop;
           }
-          const readTurn = readExhausted ? ({ kind: "none" } as ChatReadTurnClass) : classifyChatReadTurn(raw);
+          const readTurn =
+            readExhausted || transport.transport === "native_mcp"
+              ? ({ kind: "none" } as ChatReadTurnClass)
+              : classifyChatReadTurn(raw);
           if (readTurn.kind === "query") {
             const attempt = decorate(
-              { agent: name, ok: true, status: "reading_data", exit_code: res.code, model: res.usage?.model ?? null },
+              {
+                agent: name,
+                ok: true,
+                status: "reading_data",
+                exit_code: res.code,
+                model: res.usage?.model ?? null,
+                ...readTelemetry(transport, runPrompt, 0),
+              },
               profile,
               false,
               null
             );
-            recordChatAttempt(attempt, started, true, retriedEmpty);
-            attempts.push(attempt);
+            const callsBefore = readState.calls;
             const outcome = await runChatReadRound(readState, readTurn.query, {
               runId: readRunId,
               signal,
               execute: executeCoachRead,
             });
+            attempt.read_calls = readState.calls - callsBefore;
+            recordChatAttempt(attempt, started, true, retriedEmpty);
+            attempts.push(attempt);
             readPhase("Reviewing your history…");
             if (outcome === "stop") readExhausted = true;
             continue; // re-run the same agent with the verified results
@@ -2402,7 +2887,14 @@ export async function runChatCompletion(
             // as the reply. Drop the read contract and re-run the SAME agent once for a
             // plain reply. Bounded: readExhausted stops the next pass detecting a read.
             const attempt = decorate(
-              { agent: name, ok: true, status: "read_malformed", exit_code: res.code, model: res.usage?.model ?? null },
+              {
+                agent: name,
+                ok: true,
+                status: "read_malformed",
+                exit_code: res.code,
+                model: res.usage?.model ?? null,
+                ...readTelemetry(transport, runPrompt, 0),
+              },
               profile,
               false,
               null
@@ -2415,14 +2907,17 @@ export async function runChatCompletion(
           }
           const classified = classifyChatAgentResult(name, res);
           const attempt = decorate(
-            classified ?? {
-              agent: name,
-              ok: true,
-              status: "ok",
-              exit_code: res.code,
-              model: res.usage?.model ?? null,
-              input_tokens: res.usage?.input_tokens ?? null,
-              output_tokens: res.usage?.output_tokens ?? null,
+            {
+              ...(classified ?? {
+                agent: name,
+                ok: true,
+                status: "ok",
+                exit_code: res.code,
+                model: res.usage?.model ?? null,
+                input_tokens: res.usage?.input_tokens ?? null,
+                output_tokens: res.usage?.output_tokens ?? null,
+              }),
+              ...readTelemetry(transport, runPrompt, nativeCallCount),
             },
             profile,
             false,
@@ -2430,14 +2925,24 @@ export async function runChatCompletion(
           );
           recordChatAttempt(attempt, started, !classified, retriedEmpty);
           attempts.push(attempt);
-          if (!classified) return { agent: name, raw, attempts, datedWeek: turnWeek };
+          if (!classified)
+            return { agent: name, raw, attempts, datedWeek: turnWeek, reads: turnReads(transport), promptBytes: lastPromptBytes };
           lastErr = new Error(`${name}: ${classified.error_message || classified.error_class || classified.status}`);
         } catch (e: any) {
           if (signal.aborted) throw e;
           lastErr = e;
-          const attempt = decorate(classifyChatException(name, e), profile, false, null);
-          recordChatAttempt(attempt, started, false, false);
+          const attempt = decorate(
+            { ...classifyChatException(name, e), ...readTelemetry(transport, runPrompt, nativeCallCount) },
+            profile,
+            false,
+            null
+          );
           attempts.push(attempt);
+          try {
+            stopIfBusy(e, attempt);
+          } finally {
+            recordChatAttempt(attempt, started, false, false);
+          }
         }
         break;
       }
@@ -2756,7 +3261,48 @@ export function applyChatActions(
           const statesQuality = Object.hasOwn(a, "quality") && a.quality !== undefined;
           // The week as it stood, so the ledger can say "You said X → the brain changed Y"
           // and Undo can put it back (src/domain/training/stated-input.ts).
-          const scheduleBefore = repo.getEnduranceSchedule();
+          const scheduleBefore = repo.getStandingEnduranceSchedule();
+          // A ONE-WEEK move ("skip tomorrow's run, move the quality run to Friday"): the
+          // days are that week's remaining run days, written as that week's move only —
+          // the standing week, quality session and cross-training days stand, and the
+          // week after is the usual one again by itself (profile.ts). `week: "next"` is a
+          // move said about next week (on a Sunday, about Monday).
+          if (a.scope === "this_week") {
+            const thisMonday = mondayOf(localDateISO());
+            const week = a.week === "next" ? "next" : "this";
+            const weekStart = week === "next" ? (addDaysISO(thisMonday, 7) ?? thisMonday) : thisMonday;
+            if (!repo.normalizeWeekMove({ week_start: weekStart, days: a.days })) {
+              applied.push({ type: a.type, error: "invalid endurance_schedule" });
+              break;
+            }
+            repo.setProfile({
+              endurance_schedule: {
+                scope: "this_week",
+                week,
+                days: a.days,
+                note: a.note,
+                skip: a.skip,
+                ...(a.quality ? { quality: a.quality } : {}),
+              },
+            });
+            const stored = repo.getWeekMove(weekStart);
+            if (!stored) {
+              applied.push({ type: a.type, error: "invalid endurance_schedule" });
+              break;
+            }
+            applied.push({
+              type: a.type,
+              result: {
+                scope: "this_week",
+                week,
+                week_start: stored.week_start,
+                days: stored.days,
+                ...(stored.quality ? { quality: stored.quality } : {}),
+              },
+            });
+            recordRunWeekMove({ before: scheduleBefore, week_start: weekStart, words: message, via: "chat" });
+            break;
+          }
           // Only the quality session was said: change it alone; the run week stands.
           if (!Array.isArray(a.days)) {
             if (!statesQuality) {

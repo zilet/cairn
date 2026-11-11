@@ -26,6 +26,7 @@
 // Never go back to a raw `JSON.stringify(ctx)` — and never trim by slicing a
 // serialized string, which would hand the agent malformed JSON.
 import type { CoachContextEnvelope, PartialCoachContext } from "../brain/coach-context-contract.js";
+import type { CoachReadToolName } from "../brain/read-tools.js";
 
 export type PromptContextKey = keyof CoachContextEnvelope;
 
@@ -192,6 +193,134 @@ const ALL_KEYS = [
   // Brief — which carries FUEL under a byte ceiling — decides the day, not a plate.
   "intake_band",
 ] as const;
+
+// ---------- chat's lean core ----------
+// Chat used to inline the whole ~79-key snapshot on every message (~140-175 KB of DATA
+// on the demo seed, `recent_sessions` alone ~40-50 KB) and still went looking for what it
+// needed inside one single-line JSON. The lean core keeps what the coach ALWAYS needs —
+// who the athlete is, today, this week's shape, and anything a chat action must name an
+// id from — and leaves the rest to the closed coach-read catalog, which it now reads for
+// the specific question (src/brain/read-transport.ts). `chat_context: "full"` in settings
+// restores the full block and the old contract wording, untouched.
+//
+// KEPT, by reason:
+//   who they are     — PERSON (profile + about_me, memory, learnings, context events,
+//                      family, check-ins, felt/learned signals), goal (compacted: the
+//                      targets the fuel guardrail names), journey (compacted), the
+//                      endurance goal, supplements (DATA.supplements is named in the
+//                      prompt), the energy-deficiency watch and symptom links (both
+//                      safety reads, tiny), typical_training_hour.
+//   today            — day_read (compacted: what the Brief said, not its signals blob),
+//                      signal_state + coaching_focus, acute_gates, day_intake,
+//                      recent_activities (activity ids), the last two sessions, active
+//                      directives (compacted — they must still shape advice). The week's
+//                      runs ride as the RECENT RUNS & CARDIO prose block above DATA
+//                      (renderRecentCardio reads the full context), so `recent_cardio`
+//                      is not repeated inside DATA.
+//   this week        — dated_week, plan (compacted: every day's lifts and targets, the
+//                      names a plan_update uses), strength/endurance schedules, run_plan
+//                      (compacted kinds per day), the agenda (compacted intents + today's
+//                      adjustment), week_training_load (the Brief's compaction).
+//   action ids       — memory ids, day_intake entry ids, activity ids, context-event ids,
+//                      recent_decisions cut to the ones still pending or undoable.
+const CHAT_CORE_SESSIONS = 2;
+const CHAT_CORE_KEYS = [
+  ...PERSON, // carries goal + goal_mode, compacted below
+  "journey",
+  "endurance_goal",
+  "endurance_schedule",
+  "strength_schedule",
+  "supplements",
+  "energy_deficiency",
+  // FUEL_CLAIM_RULE permits the protective "eating under the target" claim ONLY from
+  // DATA.underfueling.state, so the read rides inline (compacted to its verdict).
+  "underfueling",
+  // The latest health review's focus and watchlist actions (compacted): CONTEXT_GUARDRAILS
+  // asks food and training answers to fold them in. The review itself, imaging and the
+  // records are read_health_summary.
+  "health_review",
+  "symptom_links",
+  "typical_training_hour",
+  "day_read",
+  "signal_state",
+  "coaching_focus",
+  "acute_gates",
+  "day_intake",
+  "recent_activities",
+  "recent_sessions",
+  "directives",
+  "dated_week",
+  "plan",
+  "run_plan",
+  "flexible_training_agenda",
+  "week_training_load",
+  "recent_decisions",
+] as const satisfies readonly PromptContextKey[];
+
+/**
+ * Every key the FULL chat site carries that the lean core does not, and the coach read
+ * that returns it (or its detail). A contract test holds the map whole: a key added to
+ * the chat site has to be either kept in the core or given a read here.
+ */
+export const CHAT_CORE_MOVED_KEYS: Readonly<Partial<Record<PromptContextKey, CoachReadToolName>>> = Object.freeze({
+  // Printed whole above DATA as RECENT RUNS & CARDIO; older runs are read_training_window.
+  recent_cardio: "read_training_window",
+  training_signals: "read_strength_progress",
+  progression: "read_strength_progress",
+  program_block: "read_strength_progress",
+  program_state: "read_strength_progress",
+  program_balance: "read_strength_progress",
+  program_adjustments: "read_strength_progress",
+  strength_journey: "read_strength_progress",
+  groups_trajectory: "read_strength_progress",
+  test_week: "read_strength_progress",
+  performance: "read_strength_progress",
+  trajectory: "read_goal_progress",
+  road_ahead: "read_goal_progress",
+  whole_person_trajectory: "read_goal_progress",
+  next_step: "read_goal_progress",
+  insights: "read_goal_progress",
+  endurance_capacity: "read_run_week",
+  run_compliance: "read_run_week",
+  run_zones: "read_run_week",
+  race_build: "read_run_week",
+  run_variety: "read_run_week",
+  endurance_tests: "read_run_week",
+  meal_plan: "read_nutrition_window",
+  fueling: "read_nutrition_window",
+  cut_quality: "read_nutrition_window",
+  intake_band: "read_nutrition_window",
+  health: "read_health_summary",
+  imaging: "read_health_summary",
+  health_synthesis: "read_health_summary",
+  health_focus: "read_health_summary",
+  directive_feedback: "read_health_summary",
+  body_composition: "read_body_composition_history",
+  body_metrics: "read_body_composition_history",
+  dexa_targeting: "read_body_composition_history",
+  recovery: "read_recovery_window",
+  garmin: "read_recovery_window",
+});
+
+/**
+ * Keys the core keeps only IN PART, and the read that has the rest. Asserted with the
+ * map above: nothing the full block carried is out of reach.
+ */
+export const CHAT_CORE_PARTIAL_KEYS: Readonly<Partial<Record<PromptContextKey, CoachReadToolName>>> = Object.freeze({
+  recent_sessions: "read_training_window", // and read_exercise_history for one lift
+  recent_decisions: "read_decision_history",
+  day_read: "read_decision_history", // the stored read's signals; signal_state is inline
+  goal: "read_nutrition_window",
+  journey: "read_goal_progress",
+  plan: "read_current_plan_detail",
+  run_plan: "read_run_week",
+  flexible_training_agenda: "read_run_week",
+  week_training_load: "read_run_week",
+  directives: "read_health_summary",
+  coaching_focus: "read_goal_progress",
+  underfueling: "read_nutrition_window", // its channels and evidence
+  health_review: "read_health_summary", // its headline and follow-ups
+});
 
 // ---------- per-site specs ----------
 
@@ -569,6 +698,13 @@ export const PROMPT_CONTEXT_SITES = {
   // the wrong day (2026-10-19). The chat builder computes it itself (the `today_path`
   // precedent), so getCoachContext never pays for it; compact keys, no prose.
   chat: { keys: [...ALL_KEYS, "typical_training_hour", "dated_week"], sessions: SESSIONS_FULL },
+
+  // Chat's LEAN core (settings.chat_context = "lean", the default): what the coach always
+  // knows, with everything else one coach read away (CHAT_CORE_MOVED_KEYS below names the
+  // read for every key this drops). See CHAT_CORE_KEYS for what stays and why. The two
+  // last sessions ride whole (today's sets, and the one before it to compare against);
+  // older history is read_training_window / read_exercise_history.
+  chat_core: { keys: CHAT_CORE_KEYS, sessions: CHAT_CORE_SESSIONS },
 
   // The lab review. Leads with its own PRIORITY MARKERS + MARKER HISTORY blocks, and
   // reasons across labs, body composition, training, nutrition, goals and life context.
@@ -1117,6 +1253,385 @@ function compactWeekTrainingLoad(read: unknown): unknown {
   };
 }
 
+// ---------- chat-core compactions (site "chat_core" only) ----------
+// Structure, never string surgery, and each one keeps the fields the chat prompt names
+// or an action needs; the detail it sheds is the matching read's (CHAT_CORE_PARTIAL_KEYS).
+
+function pickFields(entry: unknown, fields: readonly string[]): unknown {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return entry;
+  const row = entry as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const field of fields) if (Object.hasOwn(row, field)) out[field] = row[field];
+  return out;
+}
+
+// What the Brief said today — kind, headline, why, focus — so chat never contradicts the
+// screen the athlete just read. The `signals` blob (~11 KB) is the deterministic layer's
+// working; signal_state carries the same evidence in the shape the prompt reads.
+const CHAT_DAY_READ_FIELDS = ["kind", "headline", "why", "focus", "est_minutes", "source", "decision"] as const;
+
+// Each dimension's status, confidence and reason, with its evidence as {field, date,
+// direction, summary}: the machine-register facts. Coverage maps, provenance lists and
+// the voice keys are the arbitration's bookkeeping.
+const CHAT_SIGNAL_EVIDENCE_FIELDS = ["field", "date", "direction", "summary"] as const;
+function compactChatSignalState(state: unknown): unknown {
+  const row = compactSignalState(state);
+  if (!row || typeof row !== "object" || Array.isArray(row)) return row;
+  const { provenance: _provenance, ...rest } = row as Record<string, unknown>;
+  const dimensions = rest.dimensions;
+  if (dimensions && typeof dimensions === "object" && !Array.isArray(dimensions)) {
+    rest.dimensions = Object.fromEntries(
+      Object.entries(dimensions as Record<string, unknown>).map(([key, dimension]) => {
+        if (!dimension || typeof dimension !== "object" || Array.isArray(dimension)) return [key, dimension];
+        const d = dimension as Record<string, unknown>;
+        const out: Record<string, unknown> = {};
+        for (const field of ["status", "confidence", "latest_date", "reason"]) if (Object.hasOwn(d, field)) out[field] = d[field];
+        if (Array.isArray(d.conflicts) && d.conflicts.length) out.conflicts = d.conflicts;
+        // A neutral, context-only row moves no dimension; the rows that support or brake
+        // (and any safety override) are the evidence. The full list is in the full context.
+        if (Array.isArray(d.evidence))
+          out.evidence = d.evidence
+            .filter((ev) => {
+              const row = ev as Record<string, unknown> | null;
+              return row?.safety_override === true || (row?.direction !== "neutral" && row?.context_only !== true);
+            })
+            .map((ev) => {
+            const picked = pickFields(ev, CHAT_SIGNAL_EVIDENCE_FIELDS) as Record<string, unknown>;
+            // A safety override is the one evidence flag that changes how a row reads.
+            if ((ev as Record<string, unknown> | null)?.safety_override === true) picked.safety_override = true;
+            return picked;
+          });
+        return [key, out];
+      })
+    );
+  }
+  if (rest.action && typeof rest.action === "object" && !Array.isArray(rest.action)) {
+    const { voice: _voice, reasons: _reasons, ...action } = rest.action as Record<string, unknown>;
+    rest.action = action;
+  }
+  return rest;
+}
+
+// The targets the fuel guardrail names (effective_target, then recommended) and the
+// energy read in one line each. The expenditure anchors, BMR arithmetic and coverage
+// are read_nutrition_window's.
+const CHAT_GOAL_FIELDS = [
+  "goal_mode",
+  "tdee",
+  "tdee_confidence",
+  "effective_target",
+  "recommended",
+  "requested",
+  "message",
+  "safe_max_rate_lb",
+  "trend_lb_wk",
+  "projected_goal_date",
+  "projection_text",
+] as const;
+
+// The body journey as the coach states it: the goal, the body-fat estimate, the stage,
+// the pace and the current move. The rest (proposed phases, the leanness arithmetic, the
+// recomposition evidence keys, the nested underfueling read) is read_goal_progress.
+function compactChatJourney(journey: unknown): unknown {
+  if (!journey || typeof journey !== "object" || Array.isArray(journey)) return journey;
+  const row = journey as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const field of ["profile", "body_fat", "active_phase"]) if (Object.hasOwn(row, field)) out[field] = row[field];
+  const recomposition = row.recomposition as Record<string, unknown> | null | undefined;
+  if (recomposition && typeof recomposition === "object" && !Array.isArray(recomposition)) {
+    const stage = recomposition.stage as Record<string, unknown> | undefined;
+    const progress = recomposition.progress as Record<string, unknown> | undefined;
+    out.recomposition = {
+      stage: stage && typeof stage === "object" ? (stage.label ?? stage.kind ?? null) : null,
+      ...(progress && typeof progress === "object"
+        ? { progress: pickFields(progress, ["current_weight_lb", "goal_weight_lb", "remaining_lb", "robust_trend_lb_wk", "timeline"]) }
+        : {}),
+      line: recomposition.line ?? null,
+    };
+  }
+  return out;
+}
+
+// Every plan day's lifts with their targets — the exercise names and day numbers a
+// plan_update names. Row ids, notes and the run-era columns are dropped; a day's full
+// stored prescription is read_current_plan_detail.
+const CHAT_PLAN_ITEM_FIELDS = [
+  "exercise",
+  // note and warmup_sets ride because a plan_restructure authored from this core writes
+  // the days back: a field the model was never shown must not be erasable by omission
+  // (the server also carries them forward, src/chatTurns.ts carryForwardPlanItemFields).
+  "note",
+  "warmup_sets",
+  "sets",
+  "rep_low",
+  "rep_high",
+  "target_weight",
+  "target_seconds",
+  "mode",
+  "unit",
+  "constraint_note",
+  "superset_group",
+] as const;
+function compactChatPlan(plan: unknown): unknown {
+  if (!Array.isArray(plan)) return plan;
+  return plan.map((day) => {
+    if (!day || typeof day !== "object" || Array.isArray(day)) return day;
+    const d = day as Record<string, unknown>;
+    const out: Record<string, unknown> = { day_number: d.day_number, name: d.name, focus: d.focus ?? null };
+    if (Array.isArray(d.items))
+      out.items = d.items.map((item) => {
+        const picked = pickFields(item, CHAT_PLAN_ITEM_FIELDS) as Record<string, unknown>;
+        // null is a fact for target_weight (bodyweight); for the rest it is noise, and
+        // "reps" is every item's mode unless it is timed.
+        for (const field of ["target_seconds", "constraint_note", "superset_group", "note", "warmup_sets"])
+          if (picked[field] == null || picked[field] === "") delete picked[field];
+        if (picked.mode === "reps") delete picked.mode;
+        return picked;
+      });
+    return out;
+  });
+}
+
+// The week's run kinds per day (and any adjustment), not the prose around them.
+const CHAT_RUN_FIELDS = ["day_number", "label", "kind_label", "target_distance_km", "target_duration_min", "target_zone", "interval"] as const;
+function compactChatRunPlan(plan: unknown): unknown {
+  if (!plan || typeof plan !== "object" || Array.isArray(plan)) return plan;
+  const row = plan as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const field of ["available", "week_start", "mix_summary", "today_adjustment", "adapt", "quality_focus"])
+    if (Object.hasOwn(row, field)) out[field] = row[field];
+  if (Array.isArray(row.runs)) out.runs = row.runs.map((run) => pickFields(run, CHAT_RUN_FIELDS));
+  return out;
+}
+
+// The week's run intentions: what each is, whether it is done, where it sits, and the
+// adjustment's own reason. Windows, provisional numbers and the generic rationale go.
+const CHAT_INTENT_FIELDS = ["kind", "label", "status", "suggested_date", "target_distance_km", "target_zone", "planned_label"] as const;
+function compactChatAgenda(agenda: unknown): unknown {
+  if (!agenda || typeof agenda !== "object" || Array.isArray(agenda)) return agenda;
+  const row = agenda as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const field of ["available", "week_start", "week_end", "next", "today_guidance", "why", "today_adjustment"])
+    if (Object.hasOwn(row, field)) out[field] = row[field];
+  if (Array.isArray(row.intents))
+    out.intents = row.intents.map((intent) => {
+      const i = intent as Record<string, unknown> | null;
+      const picked = pickFields(i, CHAT_INTENT_FIELDS) as Record<string, unknown>;
+      if (picked.planned_label === picked.label) delete picked.planned_label;
+      const completion = i?.completion as Record<string, unknown> | null | undefined;
+      if (completion && typeof completion === "object") picked.completion = pickFields(completion, ["activity_id", "date"]);
+      const adjustment = i?.adjustment as Record<string, unknown> | null | undefined;
+      if (adjustment && typeof adjustment === "object") picked.adjustment = pickFields(adjustment, ["date", "kind", "dose", "why"]);
+      return picked;
+    });
+  return out;
+}
+
+// What can still be acted on: a decision waiting on the athlete or announced, and any
+// reversible one (revert_decision names its id from here). The ledger's history is
+// read_decision_history.
+function compactChatDecisions(decisions: unknown): unknown {
+  if (!Array.isArray(decisions)) return decisions;
+  return decisions.filter((decision) => {
+    const d = decision as Record<string, unknown> | null;
+    if (!d || typeof d !== "object") return false;
+    return d.reversible === true || ["pending", "announced", "review"].includes(String(d.status));
+  });
+}
+
+// Active directives, as the instruction and the reading behind it. The rationale,
+// citation and storage stamps are read_health_summary's.
+const CHAT_DIRECTIVE_FIELDS = ["domain", "marker", "directive", "context_note", "role", "uncertain", "trigger_date", "stale_measurement"] as const;
+function compactChatDirectives(directives: unknown): unknown {
+  const rows = compactDirectives(directives);
+  if (!Array.isArray(rows)) return rows;
+  return rows
+    .filter((row) => {
+      const status = (row as Record<string, unknown> | null)?.status;
+      return status == null || status === "active" || status === "acknowledged";
+    })
+    .map((row) => {
+      const picked = pickFields(row, CHAT_DIRECTIVE_FIELDS) as Record<string, unknown>;
+      // The citation text is read_health_summary's; whether there IS one is what the
+      // guardrail turns on ("uncertain or uncited is a softer nudge").
+      const citation = (row as Record<string, unknown> | null)?.citation;
+      picked.cited = typeof citation === "string" ? citation.trim().length > 0 : citation != null;
+      for (const field of ["context_note", "role", "uncertain", "stale_measurement"])
+        if (picked[field] == null || picked[field] === false) delete picked[field];
+      return picked;
+    });
+}
+
+// The activity rows chat names by id (set_activity_effort) and reads as a log; storage
+// bookkeeping (external ids, enrichment status, write stamps) goes.
+const CHAT_ACTIVITY_FIELDS = ["id", "date", "type", "raw_text", "duration_min", "distance_km", "pace", "rpe", "notes"] as const;
+
+// Which muscle groups are still recovering, and from what. The gate's own load ratio is
+// its arithmetic; the band is its answer.
+const CHAT_ACUTE_GATE_FIELDS = ["group", "band", "saturated", "deep", "last_date", "days_ago", "source", "activity", "detail"] as const;
+
+// Life-context events with the id resolve_context_event names and what makes one bind
+// today (its dates, whether it is resolved, how it constrains); write stamps go.
+const CHAT_CONTEXT_EVENT_FIELDS = [
+  "id",
+  "kind",
+  "title",
+  "detail",
+  "start_date",
+  "end_date",
+  "expected_recovery_days",
+  "meta",
+  "resolved",
+  "likely_resolved",
+  "needs_recheck",
+  "constraint_level",
+] as const;
+
+// Check-ins as the day they describe: the row id and write stamp go.
+const CHAT_CHECKIN_FIELDS = ["date", "mood", "energy", "sleep_feel", "soreness", "note"] as const;
+
+// A logged session minus its row ids and write stamp (its `date` says when); empty
+// garmin / composition blobs go. Sets are already projected by compactSessions.
+function compactChatSessions(sessions: unknown): unknown {
+  if (!Array.isArray(sessions)) return sessions;
+  return sessions.map((session) => {
+    if (!session || typeof session !== "object" || Array.isArray(session)) return session;
+    const { id: _id, plan_day_id: _planDay, created_at: _created, ...rest } = session as Record<string, unknown>;
+    if (rest.garmin == null) delete rest.garmin;
+    if (rest.daily_session == null) delete rest.daily_session;
+    // A reps set's empty duration and note, and its default mode, say nothing; `weight:
+    // null` (bodyweight) and a timed set's fields always stay.
+    if (Array.isArray(rest.sets))
+      rest.sets = rest.sets.map((set) => {
+        if (!set || typeof set !== "object" || Array.isArray(set)) return set;
+        const row = { ...(set as Record<string, unknown>) };
+        if (row.mode === "reps") {
+          delete row.mode;
+          if (row.duration_sec == null) delete row.duration_sec;
+        }
+        if (row.note == null) delete row.note;
+        return row;
+      });
+    return rest;
+  });
+}
+
+// Memory rows as the coach reads them, with the id every memory action names.
+const CHAT_MEMORY_FIELDS = ["id", "kind", "content"] as const;
+
+// The profile minus its storage: the row id and write stamp, and the raw *_json columns
+// whose parsed reads ride as their own keys (training_intent, endurance_schedule, …).
+// An unset field is dropped rather than shipped as null — for a profile they say the
+// same thing ("not stated").
+function compactChatProfile(profile: unknown): unknown {
+  if (!profile || typeof profile !== "object" || Array.isArray(profile)) return profile;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(profile as Record<string, unknown>)) {
+    if (key === "id" || key === "updated_at" || key.endsWith("_json") || value == null || value === "") continue;
+    out[key] = value;
+  }
+  return out;
+}
+
+// The conductor's lead and parallel focus, today's state and what changed — the rest
+// (the evidence tiles, the later queue, the retest list) is read_goal_progress's. Its
+// day-posture prose is already stripped by compactCoachingFocus.
+const CHAT_FOCUS_FIELDS = ["available", "headline", "acts", "lead", "parallel", "day_state", "changed_since", "caveat", "caveat_cause", "block_line", "block"] as const;
+
+// The fuel read's verdict and what it rests on: state, confidence, the window, the
+// intake comparison and the correction in force. Its per-channel evidence is
+// read_nutrition_window's.
+const CHAT_UNDERFUELING_FIELDS = ["as_of", "state", "confidence", "intake", "rationale", "action"] as const;
+
+// The latest health review as the guardrail uses it: its focus areas and watchlist
+// actions, capped. The headline, follow-ups and history are read_health_summary's.
+const CHAT_HEALTH_REVIEW_FOCUS = 4;
+const CHAT_HEALTH_REVIEW_WATCH = 6;
+function compactChatHealthReview(review: unknown): unknown {
+  if (!review || typeof review !== "object" || Array.isArray(review)) return review;
+  const row = review as Record<string, unknown>;
+  return {
+    ...(row.created_at != null ? { as_of: String(row.created_at).slice(0, 10) } : {}),
+    focus: (Array.isArray(row.focus) ? row.focus : [])
+      .slice(0, CHAT_HEALTH_REVIEW_FOCUS)
+      .map((item) => pickFields(item, ["title", "action"])),
+    watchlist: (Array.isArray(row.watchlist) ? row.watchlist : [])
+      .slice(0, CHAT_HEALTH_REVIEW_WATCH)
+      .map((item) => pickFields(item, ["marker", "status", "action"])),
+  };
+}
+
+function compactChatCore(key: string, value: unknown): unknown {
+  switch (key) {
+    case "underfueling":
+      return pickFields(value, CHAT_UNDERFUELING_FIELDS);
+    case "health_review":
+      return compactChatHealthReview(value);
+    case "day_read":
+      return pickFields(value, CHAT_DAY_READ_FIELDS);
+    case "signal_state":
+      return compactChatSignalState(value);
+    case "goal":
+      return pickFields(value, CHAT_GOAL_FIELDS);
+    case "journey":
+      return compactChatJourney(value);
+    case "plan":
+      return compactChatPlan(value);
+    case "run_plan":
+      return compactChatRunPlan(value);
+    case "flexible_training_agenda":
+      return compactChatAgenda(value);
+    case "recent_decisions":
+      return compactChatDecisions(value);
+    case "directives":
+      return compactChatDirectives(value);
+    case "recent_activities":
+      return Array.isArray(value) ? value.map((row) => pickFields(row, CHAT_ACTIVITY_FIELDS)) : value;
+    case "memory":
+      return Array.isArray(value) ? value.map((row) => pickFields(row, CHAT_MEMORY_FIELDS)) : value;
+    case "acute_gates":
+      return Array.isArray(value) ? value.map((row) => pickFields(row, CHAT_ACUTE_GATE_FIELDS)) : value;
+    case "context_events":
+      return Array.isArray(value) ? value.map((row) => pickFields(row, CHAT_CONTEXT_EVENT_FIELDS)) : value;
+    case "checkins":
+      return Array.isArray(value) ? value.map((row) => pickFields(row, CHAT_CHECKIN_FIELDS)) : value;
+    case "profile":
+      return compactChatProfile(value);
+    case "coaching_focus": {
+      // The parallel items' `based_on` grounds are the conductor's working; their title,
+      // why and move are what the coach speaks to.
+      const focus = pickFields(compactCoachingFocus(value), CHAT_FOCUS_FIELDS) as Record<string, unknown>;
+      if (Array.isArray(focus?.parallel))
+        focus.parallel = focus.parallel.map((item) => {
+          if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+          const { based_on: _grounds, ...rest } = item as Record<string, unknown>;
+          return rest;
+        });
+      return focus;
+    }
+    case "training_drive": {
+      // The stance and any open offer; the static never-overrides list is prose the
+      // drive line already renders.
+      if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+      const { never_overrides: _never, ...drive } = value as Record<string, unknown>;
+      return drive;
+    }
+    case "week_training_load": {
+      // The next 48 hours' planned days are dated_week's rows; its read (legs, the
+      // implication and its line) stays.
+      const load = compactWeekTrainingLoad(value) as Record<string, unknown> | unknown;
+      if (!load || typeof load !== "object" || Array.isArray(load)) return load;
+      const row = load as Record<string, unknown>;
+      const next = row.next_48h as Record<string, unknown> | undefined;
+      if (!next || typeof next !== "object" || Array.isArray(next)) return row;
+      const { planned: _planned, ...rest } = next;
+      return { ...row, next_48h: rest };
+    }
+    default:
+      return undefined;
+  }
+}
+
 // ---------- the helper every prompt uses ----------
 
 /**
@@ -1135,6 +1650,16 @@ export function projectCoachContext(ctx: PartialCoachContext, site: PromptSite):
   for (const key of spec.keys) {
     if (!Object.hasOwn(source, key)) continue;
     const value = source[key];
+    if (site === "chat_core") {
+      const compacted =
+        key === "recent_sessions"
+          ? compactChatSessions(compactSessions(value, spec.sessions, "full"))
+          : compactChatCore(key, value);
+      if (compacted !== undefined) {
+        out[key] = compacted;
+        continue;
+      }
+    }
     out[key] =
       key === "recent_sessions"
         ? compactSessions(value, spec.sessions, spec.session_detail ?? "full")
@@ -1155,6 +1680,40 @@ export function projectCoachContext(ctx: PartialCoachContext, site: PromptSite):
                       : value;
   }
   return out as PartialCoachContext;
+}
+
+/**
+ * The named keys of the coach context, right-sized the way every prompt site sizes them
+ * (the recovery/garmin quality-map dedupe, the directive reframing, the signal-state and
+ * coaching-focus plumbing, the race build's page prose). The coach reads that return a
+ * slice of the context (src/brain/read-tool-runtime.ts) go through this, so a block a
+ * read hands back is the same block the full chat DATA carried. Absent keys stay absent.
+ */
+export function projectCoachContextKeys(
+  ctx: PartialCoachContext,
+  keys: readonly PromptContextKey[]
+): Record<string, unknown> {
+  const source = (ctx ?? {}) as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const key of keys) {
+    if (!Object.hasOwn(source, key)) continue;
+    const value = source[key];
+    out[key] =
+      key === "recovery" || key === "garmin"
+        ? compactRecovery(value)
+        : key === "coaching_focus"
+          ? compactCoachingFocus(value)
+          : key === "signal_state"
+            ? compactSignalState(value)
+            : key === "directives"
+              ? compactDirectives(value)
+              : key === "race_build"
+                ? compactRaceBuild(value)
+                : key === "recent_sessions"
+                  ? compactSessions(value, SESSIONS_FULL)
+                  : value;
+  }
+  return out;
 }
 
 /**

@@ -56,6 +56,9 @@ function providerConfig() {
   return out;
 }
 
+// agy's every coaching run carries the explicit shell deny (agents.json settings_note).
+const AGY_DENY = ["--settings", '{"permissions":{"deny":["command(*)"]}}'];
+
 function expectedArgv(name, dataDir, prompt, withProfile) {
   const profile = withProfile
     ? name === "codex"
@@ -77,6 +80,10 @@ function expectedArgv(name, dataDir, prompt, withProfile) {
       "--sandbox",
       "read-only",
       "--skip-git-repo-check",
+      // codex declares an {mcp_config_args} slot for its native coach-read attach.
+      "--mcp-config",
+      '{"mcpServers":{}}',
+      "--strict-mcp-config",
       "--cd",
       dataDir,
       "--add-dir",
@@ -87,7 +94,7 @@ function expectedArgv(name, dataDir, prompt, withProfile) {
     ];
   }
   if (name === "antigravity") {
-    return ["--add-dir", dataDir, ...profile, "-p", prompt, "--print-timeout", "5m"];
+    return [...AGY_DENY, "--add-dir", dataDir, ...profile, "-p", prompt, "--print-timeout", "5m"];
   }
   return ["--cwd", dataDir, ...profile, "-p", prompt];
 }
@@ -531,8 +538,8 @@ test("op profiles reach the spawned argv, per provider, with no caller-supplied 
       "--skip-git-repo-check",
       prompt,
     ]);
-    assert.deepEqual(argv.antigravity.day_read, ["--effort", "low", "-p", prompt, "--print-timeout", "5m"]);
-    assert.deepEqual(argv.antigravity.proposal, ["--effort", "medium", "-p", prompt, "--print-timeout", "5m"]);
+    assert.deepEqual(argv.antigravity.day_read, [...AGY_DENY, "--effort", "low", "-p", prompt, "--print-timeout", "5m"]);
+    assert.deepEqual(argv.antigravity.proposal, [...AGY_DENY, "--effort", "medium", "-p", prompt, "--print-timeout", "5m"]);
     assert.deepEqual(argv.grok.day_read, ["--reasoning-effort", "low", "-p", prompt]);
     assert.deepEqual(argv.grok.proposal, ["--reasoning-effort", "medium", "-p", prompt]);
   }));

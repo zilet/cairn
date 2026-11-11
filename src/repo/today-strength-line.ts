@@ -23,6 +23,7 @@ import { getCachedDayRead } from "./day-read-cache.js";
 import { dayRead } from "./day-read.js";
 import { activitySportWhere, RUN_SPORT_PATTERNS } from "./endurance-sports.js";
 import { withoutShadowActivities } from "./activity-shadow.js";
+import { sameDayEnduranceOutings } from "./hybrid-load.js";
 import {
   calendarDayRead,
   planDayRole,
@@ -103,6 +104,27 @@ function runLoggedOn(date: string): { km: number | null } | null {
     if (!rows.length) return null;
     const km = rows.reduce((sum, r) => sum + (Number(r.distance_km) > 0 ? Number(r.distance_km) : 0), 0);
     return { km: km > 0 ? Math.round(km * 10) / 10 : null };
+  } catch {
+    return null;
+  }
+}
+
+// The other sport already in beside the run: the day's biggest non-run outing, when it
+// was a real session (the ride out, the loop and the ride home are one outing:
+// sameDayEnduranceOutings, which grades it against the sport's own long bar). A stroll
+// or a short spin is not named, and a sport with no plain noun stays unnamed.
+const OUTING_NOUN: Readonly<Record<string, string>> = {
+  ride: "ride",
+  swim: "swim",
+  row: "row",
+  paddle: "paddle",
+  snow: "ski",
+  hike: "hike",
+};
+function otherSportLoggedOn(date: string): string | null {
+  try {
+    const outing = sameDayEnduranceOutings(date).find((o) => o.heavy || o.real_session);
+    return outing ? (OUTING_NOUN[outing.family] ?? null) : null;
   } catch {
     return null;
   }
@@ -244,6 +266,13 @@ const IN_PROGRESS_RUN_IN: ReadonlyArray<(title: string) => string> = [
   (title) => `The run's in, and ${title} is under way.`,
   (title) => `${title} is in progress, with the run already in.`,
 ];
+// …and when another sport is in beside the run, both are named: a morning run and two
+// and a half hours on the bike read as "the run's in" (2026-11-11).
+const RUN_AND_MORE_IN_LIFT_OPEN: ReadonlyArray<(name: string, also: string) => string> = [
+  (name, also) => `Your run and ${also} are in. ${name} is still there if you want it.`,
+  (name, also) => `Run and ${also} done. ${name} is still on for today, if you want it.`,
+  (name, also) => `The run and the ${also} are in; ${name} is still there if you want it.`,
+];
 const RESHAPED_TODAY: readonly string[] = ["It's reshaped for today.", "It's been shaped for today."];
 
 function lineText(
@@ -251,14 +280,17 @@ function lineText(
   state: TodayStrengthState,
   run: boolean,
   name: string | null,
-  date: string
+  date: string,
+  also: string | null = null
 ): string {
   switch (state) {
     case "not_started":
       // One sentence for the run in and the lift still open, never "Pull, reshaped still open".
       if (run) {
         const lift = String(name ?? title ?? "the lift").replace(/[.\s]+$/, "");
-        const lead = pickDayVariant(RUN_IN_LIFT_OPEN, date, "strength_line:run_in_open")(lift);
+        const lead = also
+          ? pickDayVariant(RUN_AND_MORE_IN_LIFT_OPEN, date, "strength_line:run_in_open")(lift, also)
+          : pickDayVariant(RUN_IN_LIFT_OPEN, date, "strength_line:run_in_open")(lift);
         return title !== name
           ? `${lead} ${pickDayVariant(RESHAPED_TODAY, date, "strength_line:reshaped")}`
           : lead;
@@ -380,7 +412,7 @@ function todayStrengthLineRead(d: string): TodayStrengthLine {
       run_in: run,
       reshaped: false,
       original: [],
-      text: lineText(chosen.title, state, !!run, chosen.title, d),
+      text: lineText(chosen.title, state, !!run, chosen.title, d, run ? otherSportLoggedOn(d) : null),
     };
   }
   const run = runLoggedOn(d);
@@ -458,6 +490,6 @@ function todayStrengthLineRead(d: string): TodayStrengthLine {
     run_in: run,
     reshaped,
     original: reshaped && day ? [...day.names] : [],
-    text: lineText(title, state, !!run, name, d),
+    text: lineText(title, state, !!run, name, d, run ? otherSportLoggedOn(d) : null),
   };
 }

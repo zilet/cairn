@@ -138,9 +138,10 @@ const SITES = [
     dropped: ["health", "imaging", "health_review", "garmin", "signal_state", "day_read"],
   },
   {
-    // Chat is the free-form surface — any question can land, so nothing is dropped.
+    // Chat's FULL context (settings.chat_context = "full") — any question can land, so
+    // nothing is dropped: the runtime switch back to the pre-lean block, key for key.
     site: "chat",
-    build: () => buildChatPrompt([], "how did my week go?"),
+    build: () => buildChatPrompt([], "how did my week go?", undefined, { context: "full" }),
     kept: [
       "memory",
       "supplements",
@@ -157,6 +158,33 @@ const SITES = [
       "dated_week",
     ],
     dropped: [],
+  },
+  {
+    // Chat's LEAN core (the default): who they are, today, this week, action ids; the rest
+    // is one coach read away (CHAT_CORE_MOVED_KEYS, test/chatLeanCore.test.js).
+    site: "chat_core",
+    build: () => buildChatPrompt([], "how did my week go?"),
+    kept: [
+      "profile",
+      "memory",
+      "context_events",
+      "goal",
+      "day_read",
+      "signal_state",
+      "coaching_focus",
+      "day_intake",
+      "recent_activities",
+      "recent_sessions",
+      "plan",
+      "dated_week",
+      "run_plan",
+      "flexible_training_agenda",
+      "week_training_load",
+      "recent_decisions",
+      "supplements",
+      "typical_training_hour",
+    ],
+    dropped: ["program_state", "performance", "health", "health_focus", "imaging", "recovery", "garmin", "insights", "road_ahead", "intake_band", "recent_cardio"],
   },
   {
     site: "health_review",
@@ -256,7 +284,7 @@ test("every prompt site emits well-formed JSON carrying exactly its allowlisted 
     const added =
       site === "day_read" && Object.hasOwn(parsed, "today_path")
         ? ["today_path"]
-        : site === "chat" && Object.hasOwn(parsed, "dated_week")
+        : (site === "chat" || site === "chat_core") && Object.hasOwn(parsed, "dated_week")
           ? ["dated_week"]
           : [];
     const expected = [...PROMPT_CONTEXT_SITES[site].keys.filter((key) => Object.hasOwn(full, key)), ...added];
@@ -747,8 +775,9 @@ test("only the Brief summarizes: every other site keeps its full set rows", () =
       `${site} keeps every set in its window`
     );
     // And the session-level blobs a plan-shaping site may read are untouched.
+    // (The chat core sheds an EMPTY blob only — a null garmin / composition says nothing.)
     for (const key of ["garmin", "daily_session"]) {
-      if (inWindow.length && Object.hasOwn(inWindow[0], key)) {
+      if (inWindow.length && Object.hasOwn(inWindow[0], key) && (site !== "chat_core" || inWindow[0][key] != null)) {
         assert.ok(Object.hasOwn(projected[0], key), `${site} keeps ${key}`);
       }
     }

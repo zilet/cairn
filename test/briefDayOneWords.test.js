@@ -186,3 +186,41 @@ test("an agent sentence claiming recovery on a day with nothing to read it from 
     null
   );
 });
+
+test("a key run named for tomorrow is refused when the run week holds none there", () => {
+  const base = { consecutive_training_days: 3 };
+  const stale = { kind: "train", headline: "Day before quality run.", why: "You are clear for today's back and arm work." };
+  assert.equal(dayReadProseConsistencyIssue(stale, base)?.code, "key_run_claimed_unplanned");
+  assert.equal(
+    dayReadProseConsistencyIssue({ kind: "train", headline: "Upper today.", why: "Keep the legs fresh for tomorrow's intervals." }, base)?.code,
+    "key_run_claimed_unplanned"
+  );
+  // The week does hold one on tomorrow: the sentence is true.
+  assert.equal(dayReadProseConsistencyIssue(stale, { ...base, hybrid: { protect_run_next: true } }), null);
+  // The server's own floor prose and its own stated-calendar focus are not policed.
+  assert.equal(dayReadProseConsistencyIssue({ ...stale, source: "deterministic" }, base), null);
+  assert.equal(dayReadProseConsistencyIssue(stale, base, null, "Upper. Day before the quality run."), null);
+  // …but only the SERVER's focus exempts: a focus the agent wrote back does not.
+  assert.equal(
+    dayReadProseConsistencyIssue({ ...stale, focus: "Upper, the day before intervals" }, base, null, "Upper body")?.code,
+    "key_run_claimed_unplanned"
+  );
+  assert.equal(
+    dayReadProseConsistencyIssue({ kind: "train", headline: "Upper today.", why: "Tomorrow is the quality run, so keep the legs out of it." }, base)?.code,
+    "key_run_claimed_unplanned"
+  );
+  // Ordinary sentences about running are untouched.
+  for (const why of [
+    "Your run is in; the lift is what's left.",
+    "Yesterday's long run still sits in the legs.",
+    "Easy run tomorrow if you want it.",
+    "Go hard tomorrow if the legs feel good.",
+    "You have a long day tomorrow, so keep it short.",
+    "Save a little for tomorrow's hard session.",
+    "Tomorrow's key decision is yours.",
+    "Easy spin today, speed tomorrow.",
+    "The day before a long weekend is a fine day to lift.",
+    "Tomorrow's long walk can be easy.",
+  ])
+    assert.equal(dayReadProseConsistencyIssue({ kind: "train", headline: "Upper today.", why }, base), null, why);
+});

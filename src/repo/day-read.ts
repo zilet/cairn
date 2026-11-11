@@ -2465,7 +2465,7 @@ function computeDayRead(
     if (statedDayMemo !== undefined) return statedDayMemo;
     statedDayMemo = null;
     if (trainedToday || bigActivity) return statedDayMemo;
-    const statedRuns = signalInput(() => (getEnduranceSchedule()?.days?.length ?? 0) > 0, false);
+    const statedRuns = signalInput(() => (getEnduranceSchedule(d)?.days?.length ?? 0) > 0, false);
     const schedule = signalInput(() => strengthScheduleRead(d), null);
     if (!statedRuns && schedule?.source !== "stated") return statedDayMemo;
     const run = calendarRunToday();
@@ -4191,7 +4191,7 @@ export function weekAheadPlan(date = localDateISO()): { days: WeekAheadDay[]; su
   }
   if (!statedRuns.length) {
     try {
-      statedRuns = (getEnduranceSchedule()?.days ?? []).map((day) => ({
+      statedRuns = (getEnduranceSchedule(d)?.days ?? []).map((day) => ({
         dow: Number(day.dow),
         kind: String(day.kind),
         label: null,

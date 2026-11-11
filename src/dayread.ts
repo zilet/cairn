@@ -86,7 +86,27 @@ function policyDecision(
 export type DayReadProseConsistencyIssue =
   | { code: "completed_load_understated"; classified_load: "moderate" | "hard"; evidence: string }
   | { code: "felt_quality_understated"; evidence: string }
-  | { code: "recovery_claimed_unread"; evidence: string };
+  | { code: "recovery_claimed_unread"; evidence: string }
+  | { code: "key_run_claimed_unplanned"; evidence: string };
+
+// ---- a key run promised for tomorrow that the week does not hold ----
+//
+// The deterministic read publishes `signals.hybrid.protect_run_next` only when the
+// run week has an OPEN quality or long run placed on tomorrow (the agenda's truth,
+// withFlexibleRunLookahead). A sentence that calls today "the day before the quality
+// run" on any other day states a calendar the server does not have: live (2026-11-11)
+// the athlete moved the run in chat mid-morning, and the headline written before the
+// move rode every later re-write because the agent is asked to keep its wording.
+// Deliberately narrow: the eve of a NAMED key run, or "tomorrow's" one.
+// A key run is NAMED as a run: "quality run", "long run", "tempo run", "intervals".
+// A bare "hard", "long", "key" or "speed" is not one ("go hard tomorrow", "a long day
+// tomorrow", "tomorrow's hard session" on a lifter's leg day are ordinary sentences).
+const KEY_RUN =
+  "(?:quality|long|tempo|threshold|interval|speed|key|hard)[- ](?:run|intervals?)|quality[- ](?:session|workout|work|day)|intervals|speedwork";
+const KEY_RUN_TOMORROW_CLAIM = new RegExp(
+  `\\b(?:(?:day|night|eve|evening)\\s+(?:before|ahead\\s+of)\\s+(?:the\\s+|a\\s+|your\\s+|tomorrow(?:'|’)s\\s+)?(?:${KEY_RUN})\\b|tomorrow(?:'|’)s\\s+(?:${KEY_RUN})\\b|tomorrow\\s+is\\s+(?:the\\s+|a\\s+|your\\s+)?(?:${KEY_RUN})\\b|(?:${KEY_RUN})\\s+(?:is\\s+)?tomorrow\\b)`,
+  "i"
+);
 
 // ---- a recovery vouched for with nothing current to read it from ----
 //
@@ -202,9 +222,12 @@ function checkedCompletedLoad(
 // "keep tomorrow easy"; the completed activity must be the grammatical subject
 // near the easy descriptor (or an "easy run complete" construction).
 export function dayReadProseConsistencyIssue(
-  read: { kind?: unknown; headline?: unknown; why?: unknown },
+  read: { kind?: unknown; headline?: unknown; why?: unknown; source?: unknown },
   signals: Record<string, any> | null | undefined,
-  trainingSignals?: Record<string, any> | null
+  trainingSignals?: Record<string, any> | null,
+  // The SERVER's own plan-day focus for the day (the deterministic baseline's), never
+  // the focus the agent wrote back.
+  serverFocus?: unknown
 ): DayReadProseConsistencyIssue | null {
   const prose = [read?.headline, read?.why]
     .filter((value): value is string => typeof value === "string" && !!value.trim())
@@ -220,7 +243,20 @@ export function dayReadProseConsistencyIssue(
   const recoveryIsUnread =
     signals?.recovery_unread === "nothing_on_record" || signals?.recovery_unread === "nothing_recent";
 
+  // Only where the read carries the deterministic signals at all (a bare `{}` from a
+  // caller with no baseline says nothing about the calendar).
+  // The server's own words are not policed here: floor prose, and a plan-day focus that
+  // itself names the stated run calendar (plan-day-focus.ts), which the sentence may echo.
+  const keyRunIsChecked =
+    signals != null &&
+    signals.consecutive_training_days !== undefined &&
+    signals.hybrid?.protect_run_next !== true &&
+    read?.source !== "deterministic" &&
+    !(typeof serverFocus === "string" && /\b(?:before|next day)\b/i.test(serverFocus));
+
   for (const sentence of sentences) {
+    if (keyRunIsChecked && KEY_RUN_TOMORROW_CLAIM.test(sentence))
+      return { code: "key_run_claimed_unplanned", evidence: sentence.slice(0, 240) };
     if (recoveryIsUnread) {
       const claim = RECOVERY_CLAIM.exec(sentence);
       if (claim) return { code: "recovery_claimed_unread", evidence: sentence.slice(0, 240) };
@@ -569,7 +605,7 @@ export function clampAgentEstMinutes(
 
 export function dayReadAgentRejection(
   value: any,
-  baseline?: { kind?: unknown; signals?: Record<string, any> },
+  baseline?: { kind?: unknown; focus?: unknown; signals?: Record<string, any> },
   // The trainingSignals rollup, for a caller holding it directly. Omitted (every
   // production call site), the two flags are read off `baseline.signals.signal_state`,
   // which is the same evidence by another route — see feltStrongWithNoBrake.
@@ -616,7 +652,7 @@ export function dayReadAgentRejection(
   if (headlineRule) return `grammar:${headlineRule}:headline`;
   const whyRule = violatesReadingGrammar(value.why);
   if (whyRule) return `grammar:${whyRule}:why`;
-  const proseIssue = dayReadProseConsistencyIssue(value, baseline?.signals, trainingSignals);
+  const proseIssue = dayReadProseConsistencyIssue(value, baseline?.signals, trainingSignals, baseline?.focus);
   if (proseIssue) return `prose_inconsistent:${proseIssue.code}`;
   // Whether meaningful training is already DONE is a server-owned fact, not a
   // nuance the prose layer may reinterpret. Reject a mismatch so the same agent can
@@ -632,7 +668,7 @@ export function dayReadAgentRejection(
 /** Boolean form of {@link dayReadAgentRejection}; a rejection's code is noted for telemetry. */
 export function isValidDayReadAgentResult(
   value: any,
-  baseline?: { kind?: unknown; signals?: Record<string, any> },
+  baseline?: { kind?: unknown; focus?: unknown; signals?: Record<string, any> },
   trainingSignals?: Record<string, any> | null,
   opts: { override?: boolean } = {}
 ): boolean {
@@ -679,6 +715,8 @@ const PROSE_ISSUE_WORDS: Record<string, string> = {
     "said recent work felt heavy, flat or sluggish, but their own latest rating says it came back strong. Do not contradict it.",
   recovery_claimed_unread:
     "claimed their recovery looks fine, but nothing current on record reads it. Say nothing about how recovered they are.",
+  key_run_claimed_unplanned:
+    "said a quality or long run is tomorrow, but the run week has none open on tomorrow. Do not name a run for tomorrow.",
 };
 
 /**
@@ -795,7 +833,7 @@ export function pinnedDayReadProse(date: string, baseline: any, identity: string
   if (cached.prose_identity !== identity) return null;
   // Same call, but the sentence must still not contradict the fresher signals it is
   // about to be re-stamped against (a completed hard session described as easy).
-  if (dayReadProseConsistencyIssue(cached, baseline?.signals)) return null;
+  if (dayReadProseConsistencyIssue(cached, baseline?.signals, null, (baseline as { focus?: unknown } | null | undefined)?.focus)) return null;
   // …nor may it outlive a fact readToday would have retired it for (work landed, the
   // load grade or the fuel bucket moved) — the re-warm usually beats the next open.
   if (dayReadFactsMoved(cached, baseline)) return null;

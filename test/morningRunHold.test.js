@@ -165,3 +165,64 @@ test("gather stamps run_heavy off the one source each question has", () => {
   db.prepare(`INSERT INTO activities (date, type, duration_min, distance_km) VALUES (?, 'run', 70, 12)`).run(DATE);
   assert.equal(gatherDailyDecisionSnapshot(DATE).lift_day_open?.run_heavy, "longest");
 });
+
+// ---- the same hold for any other sport, and for a read that never went quiet ----
+
+test("a long ride before the open lift holds its load and parks the reach, on a train read too", () => {
+  for (const kind of ["easy", "train"]) {
+    const env = buildDailySessionDecision(
+      snapshot({
+        stated_rhythm: CLEAN_RHYTHM,
+        signal_support: { ...STANCE_SUPPORT, backed: true, backed_by: ["training_log"] },
+        day_read: { kind, focus: null, est_minutes: 60, consecutive_training_days: 6, recovery_week: false, trained_today: true },
+        lift_day_open: { after: "ride", outing_heavy: { label: "trail MTB", minutes: 157 } },
+      }),
+      { now: NOW }
+    );
+    assert.equal(env.kind, "train", kind);
+    assert.equal(env.caps.intensity, "hold", kind);
+    assert.equal(env.reach.level, null, `${kind}: no challenge set after a long outing`);
+    const said = env.soft_preferences.find((p) => p.code === "endurance_outing_holds_load");
+    assert.match(said.detail, /About 2½ hours of trail MTB is already in today/, kind);
+  }
+  // A hard morning run on a read that stayed `train` holds the same way.
+  const run = buildDailySessionDecision(
+    snapshot({
+      stated_rhythm: CLEAN_RHYTHM,
+      day_read: { kind: "train", focus: null, est_minutes: 60, consecutive_training_days: 6, recovery_week: false, trained_today: true },
+      lift_day_open: { after: "run", run_heavy: "hard" },
+    }),
+    { now: NOW }
+  );
+  assert.equal(run.caps.intensity, "hold");
+  assert.ok(run.precedence.includes("morning_run_holds_load"));
+});
+
+test("gather reads a ride out, a trail loop and a ride home as one outing", () => {
+  const dow = new Date(`${DATE}T00:00:00Z`).getUTCDay();
+  repo.savePlanDay(1, "Upper", "Back & arms", [{ exercise: "Chest-Supported Row", sets: 3, rep_low: 8, rep_high: 12 }]);
+  repo.setProfile({ strength_schedule: { days: [{ dow }] } });
+  const src = Number(db.prepare(`INSERT INTO garmin_sources (provider, label) VALUES ('garmin', 'outing')`).run().lastInsertRowid);
+  const ride = (name, gtype, min, km, te, load) => {
+    const id = Number(
+      db
+        .prepare(`INSERT INTO activities (date, type, raw_text, duration_min, distance_km, source, external_id) VALUES (?, 'ride', ?, ?, ?, 'garmin', ?)`)
+        .run(DATE, name, min, km, name).lastInsertRowid
+    );
+    db.prepare(
+      `INSERT INTO garmin_activities (source_id, external_id, activity_id, date, type, name, duration_min, distance_km, aerobic_te, training_effect, training_load)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(src, name, id, DATE, gtype, name, min, km, te, te, load);
+  };
+  // One ordinary commute: nothing to stamp.
+  ride("Ride in", "cycling", 36, 9.5, 0.2, 2);
+  assert.equal(gatherDailyDecisionSnapshot(DATE).lift_day_open?.outing_heavy, undefined);
+  // Three legs, none long alone, that together pass the ride's own long bar.
+  ride("Trail loop", "cycling", 50, 12, 2.4, 60);
+  ride("Ride home", "cycling", 31, 8.9, 1.9, 40);
+  const open = gatherDailyDecisionSnapshot(DATE).lift_day_open;
+  assert.equal(open?.outing_heavy?.minutes, 117);
+  const env = buildDailySessionDecision(gatherDailyDecisionSnapshot(DATE), { now: NOW });
+  assert.equal(env.caps.intensity, "hold");
+  assert.ok(env.precedence.includes("endurance_outing_holds_load"));
+});

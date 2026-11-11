@@ -288,7 +288,7 @@ function plannedOn(
     const calendar = safe(() => calendarDayRead(date), null);
     const kind = calendar
       ? (calendar.run_kind ?? null)
-      : (safe(() => getEnduranceSchedule()?.days ?? [], []).find((day) => day.dow === isoDow(date))?.kind ?? null);
+      : (safe(() => getEnduranceSchedule(date)?.days ?? [], []).find((day) => day.dow === isoDow(date))?.kind ?? null);
     run_kind = kind == null ? null : kind === "any" ? "easy" : (kind as FlexibleRunKind);
   }
   const map = safe(() => thisWeekPlanDayMap(date).map, new Map());

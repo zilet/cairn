@@ -390,7 +390,7 @@ export async function readToday(options: ReadTodayOptions = {}): Promise<DayRead
         // Recheck only the deterministic temporal fact before serving the row so
         // a completed run can never show "Start session" from a stale morning read.
         const live = dayRead(readDate);
-        const proseContradiction = dayReadProseConsistencyIssue(cached, live?.signals);
+        const proseContradiction = dayReadProseConsistencyIssue(cached, live?.signals, null, live?.focus);
         const fingerprintChanged =
           typeof cached.input_fingerprint !== "string" || cached.input_fingerprint !== live.input_fingerprint;
         // A fingerprint move is NOT by itself a change of what the day is. Every input

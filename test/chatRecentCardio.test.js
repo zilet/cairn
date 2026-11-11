@@ -75,7 +75,10 @@ test("chat DATA carries this morning's watch run with its numbers", () => {
   resetCoachContextMemo();
 
   const prompt = buildChatPrompt([], "How was my run this morning?", undefined, { lane: "coach" });
-  const data = chatData(prompt);
+  // The full context carries the read inside DATA; the lean core (the default) prints it
+  // whole as the block above DATA instead of repeating it in the JSON.
+  const data = chatData(buildChatPrompt([], "How was my run this morning?", undefined, { lane: "coach", context: "full" }));
+  assert.ok(!Object.hasOwn(chatData(prompt), "recent_cardio"), "the lean core does not repeat the block in DATA");
   assert.ok(data.recent_cardio, "chat DATA carries recent_cardio");
   const row = data.recent_cardio.rows[0];
   assert.equal(row.activity_id, id);
@@ -198,4 +201,22 @@ test("the personal HR model reads the run, and the stated effort rides beside it
   const block = cardioBlock(buildChatPrompt([], "How was my run?", undefined, { lane: "coach" }));
   assert.match(block, /their stated effort rpe 3 \(easy, in their words\) · their own HR model reads it steady/);
   assert.match(block, /Their stated effort outranks the watch and the model/);
+});
+
+test("today's energy off the watch is a plain line, and each effort carries its own estimate", () => {
+  const today = localDateISO();
+  const id = watchRun({ date: today });
+  db.prepare(`UPDATE garmin_activities SET calories = 527 WHERE activity_id = ?`).run(id);
+  repo.upsertGarminDailyMetric({ date: today, steps: 8172, active_calories: 1418, total_calories: 2659 });
+  resetCoachContextMemo();
+  const prompt = buildChatPrompt([], "What did I burn today?", undefined, { lane: "coach" });
+  assert.match(cardioBlock(prompt), /watch estimate 527 kcal/);
+  assert.match(prompt, /TODAY'S ENERGY \(their watch's running total so far today[^\n]*: active 1418 kcal · total 2659 kcal/);
+  assert.ok(prompt.indexOf("TODAY'S ENERGY") < prompt.indexOf("\nDATA:\n"));
+
+  // Yesterday's total is not today's: no line rather than a wrong one.
+  resetTables("garmin_daily_metrics");
+  repo.upsertGarminDailyMetric({ date: shiftDays(today, -1), active_calories: 900, total_calories: 2800 });
+  resetCoachContextMemo();
+  assert.ok(!buildChatPrompt([], "What did I burn today?", undefined, { lane: "coach" }).includes("TODAY'S ENERGY"));
 });

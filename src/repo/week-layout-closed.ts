@@ -129,7 +129,7 @@ export function currentWeekClosedEarly(
   const open: CurrentWeekClosed = { closed: false, reason: null, last_run_day: null };
   let dows: readonly number[] = [];
   try {
-    dows = opts.statedDows ?? statedRunDows();
+    dows = opts.statedDows ?? statedRunDows(asOf);
   } catch {
     dows = [];
   }

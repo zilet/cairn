@@ -241,3 +241,18 @@ test("with no tab handle, the whole link is the button; a closed window offers a
   env.starts[0].host.emit({ t: "link", url: "https://accounts.google.com/stale" });
   assert.equal(env.slot.querySelector("a.alp-open").hidden, true);
 });
+
+test("an already signed-in Google closes its blank tab and says so", async () => {
+  const env = loadGoogle();
+  const connected = [];
+  env.win.CairnAgentLoginPanel.mount(env.slot, { name: "antigravity", label: "Google", onConnected: () => connected.push(1) });
+  await flush();
+  await env.slot.querySelector("[data-alp-launch]").click();
+  await flush();
+  assert.equal(env.tabs.length, 1);
+  // agy -p /quota answers at once when a login is already there: no link, exit 0.
+  env.starts[0].host.emit({ t: "connected" });
+  assert.equal(env.tabs[0].closed, true, "the tab that never got a sign-in page is not left blank");
+  assert.match(env.slot.querySelector(".alp-status").textContent, /Already signed in to Google/);
+  assert.deepEqual(connected, [1]);
+});

@@ -16,6 +16,7 @@ import { normalizeLocationText } from "./location-context.js";
 import { parseMovementConsiderations, serializeMovementConsiderations } from "./movement-considerations.js";
 import { copyDeep, copyFlat, requestMemo } from "./request-memo.js";
 import { keepCompletedRace } from "./race-results.js";
+import { mondayOf } from "../lib/dates.js";
 
 // ---------- profile ----------
 export function getProfile(): any {
@@ -592,6 +593,28 @@ export type EnduranceScheduleQuality = {
 };
 export const STATED_QUALITY_WORK_KM = { min: 1, max: 15 } as const;
 export const STATED_QUALITY_WARM_COOL_KM = { min: 0, max: 5 } as const;
+/**
+ * A ONE-WEEK run move ("skip tomorrow's run, move the quality run to Friday"): the run
+ * days of the Monday-first week starting `week_start`, as they should now be. Moves live
+ * beside the standing week in the same JSON as a short list keyed by week (`week_moves`)
+ * and never rewrite it; readers apply one only inside its own week
+ * (getEnduranceSchedule(asOf)), so the next week is the standing one again with nothing to
+ * undo — and a closed week keeps reading the days that were in force in it (the harm and
+ * adherence ledgers judge it by them), because a past week's move is history: never
+ * dropped by a later write, never set or cleared once its week has begun to pass... only
+ * aged out past MAX_WEEK_MOVES.
+ */
+export type EnduranceScheduleWeekMove = {
+  week_start: string;
+  days: EnduranceScheduleDay[];
+  note?: string;
+  /**
+   * The quality session the athlete stated for THAT week ("do the 5K intervals on Friday
+   * instead"). Read in place of the standing `quality` inside the week only; the standing
+   * session is never changed by a move. The engine runs it whole through a down week.
+   */
+  quality?: EnduranceScheduleQuality;
+};
 export type EnduranceSchedule = {
   days: EnduranceScheduleDay[];
   /** Stated recurring non-run days, at most one per weekday and three in all. */
@@ -601,8 +624,27 @@ export type EnduranceSchedule = {
   note?: string;
   source: EnduranceScheduleSource;
   updated_at: string;
+  /** The stored one-week moves, oldest week first (raw storage; read through the readers). */
+  week_moves?: EnduranceScheduleWeekMove[];
+  /** Standing read only: the move stored for this week / next week, when there is one. */
+  this_week?: EnduranceScheduleWeekMove;
+  next_week?: EnduranceScheduleWeekMove;
+  /**
+   * On an EFFECTIVE read inside a moved week: `days` above are that week's moved days,
+   * and this says so — the week it covers, the athlete's words, and the standing days the
+   * next week returns to.
+   */
+  week_move?: {
+    week_start: string;
+    note?: string;
+    standing_days: EnduranceScheduleDay[];
+    /** `quality` above is the session the athlete stated for this week only. */
+    quality_stated?: true;
+  };
 };
 export const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] as const;
+/** How many one-week moves are kept: enough history for every closed-week read (8 weeks). */
+export const MAX_WEEK_MOVES = 10;
 const SCHEDULE_KIND_SET = new Set<string>(ENDURANCE_SCHEDULE_KINDS);
 const SCHEDULE_SOURCE_SET = new Set<string>(["athlete", "chat"]);
 
@@ -769,6 +811,7 @@ export function normalizeEnduranceSchedule(
   const updatedRaw = typeof raw.updated_at === "string" ? raw.updated_at.trim().slice(0, 40) : "";
   const updated_at = updatedRaw || new Date().toISOString();
   const quality = normalizeStatedQuality(raw.quality);
+  const week_moves = normalizeWeekMoves(raw.week_moves);
   return {
     days,
     ...(cross.length ? { cross_training: cross } : {}),
@@ -776,7 +819,150 @@ export function normalizeEnduranceSchedule(
     ...(note ? { note } : {}),
     source,
     updated_at,
+    ...(week_moves.length ? { week_moves } : {}),
   };
+}
+
+// The stored move list: one per week (the later entry wins), oldest week first, bounded.
+function normalizeWeekMoves(input: unknown): EnduranceScheduleWeekMove[] {
+  if (!Array.isArray(input)) return [];
+  const byWeek = new Map<string, EnduranceScheduleWeekMove>();
+  for (const entry of input) {
+    const move = normalizeWeekMove(entry);
+    if (move) byWeek.set(move.week_start, move);
+  }
+  return [...byWeek.values()].sort((a, b) => a.week_start.localeCompare(b.week_start)).slice(-MAX_WEEK_MOVES);
+}
+
+/**
+ * A week's run days in words, Monday first: "Friday quality, Sunday long" (`and` joins the
+ * last; `quality` names the session on the quality day: "Friday quality (VO2 intervals 5 km)").
+ */
+export function runDayWords(
+  days: ReadonlyArray<{ dow: number; kind: string }>,
+  opts?: { and?: boolean; quality?: string | null }
+): string {
+  const list = mondayFirst(days).map(
+    (d) =>
+      `${WEEKDAY_NAMES[d.dow] ?? "a day"} ${d.kind === "any" ? "run" : d.kind}${
+        d.kind === "quality" && opts?.quality ? ` (${opts.quality})` : ""
+      }`
+  );
+  if (!opts?.and || list.length < 2) return list.join(", ");
+  return `${list.slice(0, -1).join(", ")} and ${list[list.length - 1]}`;
+}
+
+/** The days sorted Monday first (Sunday last), as a week is lived. */
+export function mondayFirst<T extends { dow: number }>(days: ReadonlyArray<T>): T[] {
+  return [...days].sort((a, b) => ((a.dow + 6) % 7) - ((b.dow + 6) % 7));
+}
+
+// The run days of a list, under the standing parser's own rules: a bad entry is dropped,
+// a duplicate weekday keeps the first kind, and a non-run sport is never a run day.
+export function normalizeRunDays(entries: unknown): EnduranceScheduleDay[] {
+  const days: EnduranceScheduleDay[] = [];
+  if (!Array.isArray(entries)) return days;
+  const seen = new Set<number>();
+  for (const entry of entries as any[]) {
+    if (!entry || typeof entry !== "object") continue;
+    const dow = Number(entry.dow);
+    if (!Number.isInteger(dow) || dow < 0 || dow > 6) continue;
+    const kind = String(entry.kind ?? "")
+      .trim()
+      .toLowerCase();
+    if (!SCHEDULE_KIND_SET.has(kind) || seen.has(dow)) continue;
+    seen.add(dow);
+    days.push({ dow: dow as EnduranceScheduleDay["dow"], kind: kind as EnduranceScheduleKind });
+  }
+  return days.sort((a, b) => a.dow - b.dow);
+}
+
+/**
+ * A one-week move, normalized, or null when nothing usable was said: a real date (moved
+ * to its week's Monday) and at least one run day. An empty week is not a move — "skip
+ * every run this week" needs no saving, since a run not taken is simply not owed.
+ */
+export function normalizeWeekMove(input: unknown): EnduranceScheduleWeekMove | null {
+  const raw: any = input;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const start = typeof raw.week_start === "string" ? raw.week_start.trim().slice(0, 10) : "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || Number.isNaN(Date.parse(`${start}T00:00:00Z`))) return null;
+  const days = normalizeRunDays(raw.days);
+  if (!days.length) return null;
+  const note = capStr(raw.note, 240);
+  const quality = normalizeStatedQuality(raw.quality);
+  return { week_start: mondayOf(start), days, ...(note ? { note } : {}), ...(quality ? { quality } : {}) };
+}
+
+// What a write states about the one-week moves: nothing (undefined), something unreadable
+// (null), a move for its week (with the day it was said, for the carry below), or the
+// clear of one week's move. `this_week: null` clears this week's.
+type WeekMoveWrite =
+  | { kind: "set"; move: EnduranceScheduleWeekMove; said_on: string; exact: boolean; skip: Set<number> }
+  | { kind: "clear"; week_start: string };
+
+function isoDayOrNull(v: unknown): string | null {
+  const day = typeof v === "string" ? v.trim().slice(0, 10) : "";
+  return /^\d{4}-\d{2}-\d{2}$/.test(day) && !Number.isNaN(Date.parse(`${day}T00:00:00Z`)) ? day : null;
+}
+
+function weekMoveWrite(raw: any): WeekMoveWrite | null | undefined {
+  if (!raw || !Object.hasOwn(raw, "this_week")) return undefined;
+  const v = raw.this_week;
+  if (v === null) return { kind: "clear", week_start: mondayOf(localDateISO()) };
+  if (v && typeof v === "object" && v.clear === true) {
+    const day = isoDayOrNull(v.week_start);
+    return day ? { kind: "clear", week_start: mondayOf(day) } : null;
+  }
+  const move = normalizeWeekMove(v);
+  if (!move) return null;
+  const skip = new Set<number>(
+    (Array.isArray(v.skip) ? v.skip : [])
+      .map((d: unknown) => Number(d && typeof d === "object" ? (d as any).dow : d))
+      .filter((d: number) => Number.isInteger(d) && d >= 0 && d <= 6)
+  );
+  return { kind: "set", move, said_on: isoDayOrNull(v.said_on) ?? localDateISO(), exact: v.exact === true, skip };
+}
+
+/**
+ * A move never silently deletes a standing KEY run the athlete did not mention: a move
+ * with no long day keeps the standing long day when it is still ahead (on or after the day
+ * it was said); likewise the standing quality day, unless the move names a quality day of
+ * its own — "move it to Friday" REPLACES Thursday — or the athlete said to skip it. A key
+ * run already behind the day it was said is never resurrected.
+ */
+function carryStandingKeyRuns(
+  move: EnduranceScheduleWeekMove,
+  standing: readonly EnduranceScheduleDay[],
+  saidOn: string,
+  skip: ReadonlySet<number>
+): EnduranceScheduleWeekMove {
+  const days = move.days.map((d) => ({ ...d }));
+  const named = (dow: number) => days.some((d) => d.dow === dow);
+  const ahead = (dow: number) => (addDaysISO(move.week_start, (dow + 6) % 7) ?? "") >= saidOn;
+  for (const kind of ["long", "quality"] as const) {
+    if (days.some((d) => d.kind === kind)) continue;
+    for (const day of standing)
+      if (day.kind === kind && !named(day.dow) && !skip.has(day.dow) && ahead(day.dow)) days.push({ ...day });
+  }
+  return { ...move, days: days.sort((a, b) => a.dow - b.dow) };
+}
+
+// The move list a write leaves stored, or null when the write must not land (a move for a
+// week that is already over: a closed week's days are history).
+function weekMovesAfter(
+  write: WeekMoveWrite | undefined,
+  stored: EnduranceScheduleWeekMove[],
+  standing: readonly EnduranceScheduleDay[]
+): EnduranceScheduleWeekMove[] | null {
+  const kept = stored.map((m) => ({ ...m, days: m.days.map((d) => ({ ...d })) }));
+  if (!write) return kept;
+  const week = write.kind === "set" ? write.move.week_start : write.week_start;
+  if (week < mondayOf(localDateISO())) return null;
+  const rest = kept.filter((m) => m.week_start !== week);
+  if (write.kind === "set")
+    rest.push(write.exact ? write.move : carryStandingKeyRuns(write.move, standing, write.said_on, write.skip));
+  return rest.sort((a, b) => a.week_start.localeCompare(b.week_start)).slice(-MAX_WEEK_MOVES);
 }
 
 function scheduleInput(input: any): any {
@@ -823,13 +1009,63 @@ function statesQuality(input: any): boolean {
   return raw.quality === null || normalizeStatedQuality(raw.quality) != null;
 }
 
+function withWeekMoves(schedule: EnduranceSchedule, moves: EnduranceScheduleWeekMove[]): EnduranceSchedule {
+  const out: EnduranceSchedule = { ...schedule };
+  delete out.week_moves;
+  delete out.this_week;
+  delete out.next_week;
+  delete out.week_move;
+  if (moves.length) out.week_moves = moves;
+  return out;
+}
+
 function serializeEnduranceSchedule(
   input: any,
   sourceDefault: EnduranceScheduleSource = "athlete",
   current?: string | null
 ): string | null {
   if (input == null) return null;
-  const raw = scheduleInput(input);
+  let raw = scheduleInput(input);
+  // A ONE-WEEK move said as {scope: "this_week", week?: "this"|"next", days, note?, skip?}:
+  // the days are that week's run days as they should now be, written as that week's move
+  // only (below). "next" is the week after this one (said on a Sunday about Monday).
+  if (raw && raw.scope === "this_week") {
+    if (!Array.isArray(raw.days)) return null;
+    const today = localDateISO();
+    const thisMonday = mondayOf(today);
+    raw = {
+      this_week: {
+        week_start:
+          typeof raw.week_start === "string"
+            ? raw.week_start
+            : raw.week === "next"
+              ? (addDaysISO(thisMonday, 7) ?? thisMonday)
+              : thisMonday,
+        days: raw.days,
+        said_on: today,
+        ...(raw.note != null ? { note: raw.note } : {}),
+        ...(Array.isArray(raw.skip) ? { skip: raw.skip } : {}),
+        // With a move, `quality` is THAT week's session; the standing one is untouched.
+        ...(raw.quality != null ? { quality: raw.quality } : {}),
+      },
+    };
+  }
+  const storedNow = normalizeEnduranceSchedule(current);
+  const moveWrite = weekMoveWrite(raw);
+  if (moveWrite === null) return null; // an unreadable move is no update at all
+  // A move-only update ({this_week: {...}} or {this_week: null}, no days[] and no
+  // quality) changes one week's move and nothing else: the standing run week, the
+  // quality session, the cross-training days and the note stand.
+  if (raw && !Array.isArray(raw.days) && !Object.hasOwn(raw, "quality") && moveWrite) {
+    const base: EnduranceSchedule = storedNow ?? {
+      days: [],
+      source: SCHEDULE_SOURCE_SET.has(String(raw.source)) ? raw.source : sourceDefault,
+      updated_at: new Date().toISOString(),
+    };
+    const moves = weekMovesAfter(moveWrite, storedNow?.week_moves ?? [], base.days);
+    if (!moves) return null;
+    return JSON.stringify({ ...withWeekMoves(base, moves), updated_at: new Date().toISOString() });
+  }
   // A quality-only update ({quality: {...}} or {quality: null}, no days[]) changes the
   // stated session and nothing else: the run week, the cross-training days and the note
   // stand. Unreadable quality with no days is no update at all (null → stored kept).
@@ -841,14 +1077,27 @@ function serializeEnduranceSchedule(
     if (raw.quality !== null) base.quality = raw.quality;
     base.source = raw.source ?? stored?.source ?? sourceDefault;
     const patched = normalizeEnduranceSchedule(base, { source: sourceDefault });
-    return patched ? JSON.stringify({ ...patched, updated_at: new Date().toISOString() }) : null;
+    const moves = patched ? weekMovesAfter(moveWrite, storedNow?.week_moves ?? [], patched.days) : null;
+    return patched && moves
+      ? JSON.stringify({ ...withWeekMoves(patched, moves), updated_at: new Date().toISOString() })
+      : null;
   }
-  const g = normalizeEnduranceSchedule(input, { source: sourceDefault });
-  if (!g) return null;
+  const parsed = normalizeEnduranceSchedule(input, { source: sourceDefault });
+  if (!parsed) return null;
+  // A standing write keeps the stored one-week moves unless it states one (`this_week:
+  // null` clears this week's): "my run days are Tue/Thu/Sun from now on" said on a
+  // Wednesday does not take back the Friday the athlete moved this week's quality to, and
+  // no write ever changes what a closed week read.
+  const moves = weekMovesAfter(moveWrite, storedNow?.week_moves ?? [], parsed.days);
+  if (!moves) return null;
+  const g = withWeekMoves(parsed, moves);
   // A run-day update that says nothing (readable) about the quality session keeps the
   // stated one, exactly as it keeps the cross-training days: "Tuesday easy, Thursday
   // quality" restated must not erase "my Thursday is a hard threshold 5k". Only an
   // explicit `quality: null` clears it.
+  // `standing_exact` (Undo's own restore) writes the standing week exactly as given: none
+  // of the keep rules below apply, only the one-week moves above are kept.
+  if (raw?.standing_exact === true) return JSON.stringify({ ...g, updated_at: new Date().toISOString() });
   if (!statesQuality(input)) {
     const kept = normalizeEnduranceSchedule(current)?.quality;
     if (kept) g.quality = kept;
@@ -872,7 +1121,7 @@ function serializeEnduranceSchedule(
   return JSON.stringify({ ...g, updated_at: new Date().toISOString() });
 }
 
-export function getEnduranceSchedule(): EnduranceSchedule | null {
+function storedEnduranceSchedule(): EnduranceSchedule | null {
   return requestMemo(
     "endurance_schedule",
     () => normalizeEnduranceSchedule(getProfile()?.endurance_schedule_json),
@@ -880,9 +1129,77 @@ export function getEnduranceSchedule(): EnduranceSchedule | null {
   );
 }
 
-/** null when no schedule is set; otherwise whether `dateISO`'s weekday is one of the stated run days. */
+/**
+ * The STANDING run week — the days the athlete runs every week — with this week's and next
+ * week's one-week moves beside it as `this_week` / `next_week` when one is stored. For a
+ * reader that means the usual week (the ledger's before/after, Undo, "are run days set"
+ * checks, the GET doors and the coach context).
+ */
+export function getStandingEnduranceSchedule(): EnduranceSchedule | null {
+  const schedule = storedEnduranceSchedule();
+  if (!schedule) return null;
+  const moves = schedule.week_moves ?? [];
+  delete schedule.week_moves;
+  const thisMonday = mondayOf(localDateISO());
+  const nextMonday = addDaysISO(thisMonday, 7);
+  const current = moves.find((m) => m.week_start === thisMonday);
+  const next = moves.find((m) => m.week_start === nextMonday);
+  if (current) schedule.this_week = current;
+  if (next) schedule.next_week = next;
+  return schedule;
+}
+
+/** Every stored one-week move, oldest week first (the history closed weeks are read by). */
+export function getWeekMoves(): EnduranceScheduleWeekMove[] {
+  return storedEnduranceSchedule()?.week_moves ?? [];
+}
+
+/** The move stored for the week starting `weekStart` (any day of it), or null. */
+export function getWeekMove(weekStart: string): EnduranceScheduleWeekMove | null {
+  const day = isoDayOrNull(weekStart);
+  if (!day) return null;
+  const monday = mondayOf(day);
+  return getWeekMoves().find((m) => m.week_start === monday) ?? null;
+}
+
+/**
+ * The run week IN FORCE for the Monday-first week containing `asOf` (default today): the
+ * standing week, or — when a one-week move covers that week — the moved days, carrying
+ * `week_move` (its week, its words, the standing days the next week returns to). Pass the
+ * date a reader already has in hand, so another week never inherits this week's move.
+ */
+export function getEnduranceSchedule(asOf?: string): EnduranceSchedule | null {
+  const day = typeof asOf === "string" && /^\d{4}-\d{2}-\d{2}/.test(asOf) ? asOf.slice(0, 10) : localDateISO();
+  const monday = mondayOf(day);
+  return requestMemo(
+    `endurance_schedule:${monday}`,
+    () => {
+      const stored = storedEnduranceSchedule();
+      if (!stored) return null;
+      // A past week reads its own move too: the days in force then are what it is judged by.
+      const move = (stored.week_moves ?? []).find((m) => m.week_start === monday);
+      delete stored.week_moves;
+      if (!move) return stored;
+      return {
+        ...stored,
+        days: move.days.map((d) => ({ ...d })),
+        // The session stated for this week, when one was; else the standing one.
+        ...(move.quality ? { quality: { ...move.quality } } : {}),
+        week_move: {
+          week_start: move.week_start,
+          ...(move.note ? { note: move.note } : {}),
+          standing_days: stored.days,
+          ...(move.quality ? { quality_stated: true as const } : {}),
+        },
+      };
+    },
+    copyDeep
+  );
+}
+
+/** null when no schedule is set; otherwise whether `dateISO`'s weekday is one of that week's run days. */
 export function isStatedRunDay(dateISO: string): boolean | null {
-  const schedule = getEnduranceSchedule();
+  const schedule = getEnduranceSchedule(dateISO);
   if (!schedule?.days.length) return null;
   const dow = isoDow(dateISO);
   return schedule.days.some((d) => d.dow === dow);
@@ -893,17 +1210,23 @@ export function formatEnduranceScheduleDays(schedule: EnduranceSchedule): string
 }
 
 export function nextScheduledRunWeekday(asOf: string, kind?: EnduranceScheduleKind): string | null {
-  const schedule = getEnduranceSchedule();
-  if (!schedule?.days.length) return null;
-  const wanted = kind ? schedule.days.filter((d) => d.kind === kind || d.kind === "any") : schedule.days;
-  const pool = wanted.length ? wanted : schedule.days;
+  // Each day ahead is read against ITS week's run days: a look past Sunday reads the
+  // next week, which a one-week move never reaches.
+  const poolOn = (date: string) => {
+    const schedule = getEnduranceSchedule(date);
+    if (!schedule?.days.length) return null;
+    const wanted = kind ? schedule.days.filter((d) => d.kind === kind || d.kind === "any") : schedule.days;
+    return wanted.length ? wanted : schedule.days;
+  };
+  const first = poolOn(asOf);
+  if (!first) return null;
   for (let ahead = 1; ahead <= 7; ahead++) {
     const date = addDaysISO(asOf, ahead);
     if (!date) continue;
     const dow = isoDow(date);
-    if (pool.some((d) => d.dow === dow)) return WEEKDAY_NAMES[dow];
+    if (poolOn(date)?.some((d) => d.dow === dow)) return WEEKDAY_NAMES[dow];
   }
-  return WEEKDAY_NAMES[pool[0].dow];
+  return WEEKDAY_NAMES[first[0].dow];
 }
 
 // ---------- stated LIFTING weekdays (v102) ----------
@@ -1016,9 +1339,9 @@ export function statedLiftDows(): number[] {
   return getStrengthSchedule()?.days.map((d) => d.dow) ?? [];
 }
 
-/** The stated RUN weekdays as dow numbers, ascending. [] when unstated. */
-export function statedRunDows(): number[] {
-  return getEnduranceSchedule()?.days.map((d) => d.dow) ?? [];
+/** The stated RUN weekdays of `asOf`'s week (default today) as dow numbers, ascending. [] when unstated. */
+export function statedRunDows(asOf?: string): number[] {
+  return getEnduranceSchedule(asOf)?.days.map((d) => d.dow) ?? [];
 }
 
 export function formatStrengthScheduleDays(schedule: StrengthSchedule): string {

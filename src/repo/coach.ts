@@ -48,7 +48,7 @@ import {
   computeGoalCheck,
   effectiveGoalMode,
   getEnduranceGoal,
-  getEnduranceSchedule,
+  getStandingEnduranceSchedule,
   getProfile,
   listWeight,
   statedRunDows,
@@ -1031,7 +1031,9 @@ function buildRunningSlice(
     endurance_goal: getEnduranceGoal(),
     // Stated run days (v101). When set, the run engine and rolling agenda honor
     // these weekdays and never propose a run off-schedule. Null when unset.
-    endurance_schedule: getEnduranceSchedule(),
+    // The STANDING week (what "resend every day they keep" is built from), with this
+    // week's one-week move beside it as `this_week` while it is in force.
+    endurance_schedule: getStandingEnduranceSchedule(),
     // The LIFTING WEEK (v102). The calendar half of the week's shape: the ring lays the
     // plan's strength days onto exactly these weekdays and the restructure prompt may
     // not put a strength session anywhere else. `source` says how we know — the
@@ -1431,7 +1433,7 @@ function getCoachContextFromSnapshot(): CoachContext {
         agenda: flexibleTrainingAgendaView,
         strengthDows: (strengthScheduleView?.days ?? []).map((d: any) => d.dow),
         liftDaysSource: strengthScheduleView?.source ?? null,
-        enduranceDows: statedRunDows(),
+        enduranceDows: statedRunDows(today),
         weekdayMap,
         closed: weekLayoutClosed(today, { agenda: flexibleTrainingAgendaView ?? undefined, runPlan: runPlanView ?? null }),
       });

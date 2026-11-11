@@ -43,7 +43,10 @@ test("coach-read query loop keeps the snapshot baseline and does no tool work wh
   assert.deepEqual(out.result.parsed, { headline: "Hold steady" });
   assert.equal(calls.length, 1);
   assert.equal(executions, 0);
-  assert.deepEqual(calls[0].opts.mcpConfigArgs, [...COACH_READ_STRICT_MCP_ARGS]);
+  // The loop no longer hands every agent Claude-shaped MCP flags (codex now has its own
+  // {mcp_config_args} slot); Claude's no_tools_args carry --strict-mcp-config instead.
+  assert.equal(calls[0].opts.mcpConfigArgs, undefined);
+  assert.ok(COACH_READ_STRICT_MCP_ARGS.includes("--strict-mcp-config"), "the old constant stays exported for callers");
   assert.match(calls[0].prompt, /^SNAPSHOT BASELINE/);
   assert.match(calls[0].prompt, /authoritative baseline/);
   assert.match(calls[0].prompt, /read_exercise_history/);

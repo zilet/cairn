@@ -1,9 +1,10 @@
 import { z } from "zod";
 import { weightTrendRead } from "../../repo/weight-trend.js";
 import {
-  getEnduranceSchedule,
+  getStandingEnduranceSchedule,
   getStrengthSchedule,
   normalizeEnduranceSchedule,
+  normalizeWeekMove,
   normalizeStatedQuality,
   normalizeStrengthSchedule,
   setProfile,
@@ -13,9 +14,12 @@ import {
   getEnduranceGoal,
   getEndurancePRs,
   getWeeklyStats,
+  recordRunWeekMove,
   recordStatedRunWeek,
   runComplianceRead,
 } from "../../domain/training/index.js";
+import { addDaysISO, mondayOf } from "../../lib/dates.js";
+import { localDateISO } from "../../repo/shared.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 
 export function registerTrainingStatusTools(server: McpToolRegistrar) {
@@ -76,15 +80,29 @@ export function registerTrainingStatusTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_endurance_schedule",
-    "The athlete's stated run days. days[] is {dow: 0-6 (0=Sunday), kind: easy|quality|long|any}. The run engine and rolling agenda honor these weekdays and never suggest a run off-schedule. `quality`, when present, is the stated quality session {type: threshold|tempo|vo2|hills, work_km?, warm_up_km?, cool_down_km?, note?}: the engine runs that type on the quality day (instead of its phase rotation) as warm-up + work + cool-down, holding the work below the stated km — and saying so — when the week or the athlete's demonstrated running cannot carry it yet. null when unset.",
+    "The athlete's stated run days. days[] is {dow: 0-6 (0=Sunday), kind: easy|quality|long|any}. The run engine and rolling agenda honor these weekdays and never suggest a run off-schedule. `quality`, when present, is the stated quality session {type: threshold|tempo|vo2|hills, work_km?, warm_up_km?, cool_down_km?, note?}: the engine runs that type on the quality day (instead of its phase rotation) as warm-up + work + cool-down, holding the work below the stated km — and saying so — when the week or the athlete's demonstrated running cannot carry it yet. days[] are always the STANDING week (what set_endurance_schedule's days replace). A one-week move the athlete made rides beside them as `this_week` / `next_week` {week_start, days, note?}: that week's run days in force, read by the engine for that week only. null when unset.",
     {},
-    async () => asText(getEnduranceSchedule())
+    async () => asText(getStandingEnduranceSchedule())
   );
 
   server.tool(
     "set_endurance_schedule",
-    "Set or clear the athlete's stated run days. Only weekdays they named — never invent a day. days is [{dow: 0-6 (0=Sunday), kind: easy|quality|long|any}]. Pass days: null to clear. A duplicate weekday keeps the first kind. A stated recurring NON-RUN day ('Saturday optional, MTB or other') goes in cross_training as {dow, sport}, never as a run day; omit cross_training to keep what is stored, [] clears it. A stated QUALITY SESSION ('Thursday is a hard threshold 5k with a few km around it') goes in quality as {type: 'threshold', work_km: 5, warm_up_km?, cool_down_km?}; omit quality to keep what is stored, quality: null clears it. To change ONLY the quality session, omit days and pass quality — the stored run week, cross-training days and note stay. Likewise omit days and pass cross_training and/or note to change only those; the stored run week stays.",
+    "Set or clear the athlete's stated run days. Only weekdays they named — never invent a day. days is [{dow: 0-6 (0=Sunday), kind: easy|quality|long|any}]. Pass days: null to clear. A duplicate weekday keeps the first kind. A stated recurring NON-RUN day ('Saturday optional, MTB or other') goes in cross_training as {dow, sport}, never as a run day; omit cross_training to keep what is stored, [] clears it. A stated QUALITY SESSION ('Thursday is a hard threshold 5k with a few km around it') goes in quality as {type: 'threshold', work_km: 5, warm_up_km?, cool_down_km?}; omit quality to keep what is stored, quality: null clears it. To change ONLY the quality session, omit days and pass quality — the stored run week, cross-training days and note stay. Likewise omit days and pass cross_training and/or note to change only those; the stored run week stays. A ONE-WEEK skip or move ('skip tomorrow's run, move this week's quality to Friday') passes scope: 'this_week' with days = this week's remaining run days as they should now be: only this week changes, and next week goes back to the standing days by itself. week: 'next' makes it next week's move instead (said on a Sunday about Monday); quality sent with a move is THAT week's session only (it runs whole even in a lighter week; the standing session is untouched); skip lists standing run weekdays they said to skip. An unmentioned standing long or quality day still ahead that week is kept in the move; a quality day named on another weekday replaces the standing one.",
     {
+      scope: z
+        .enum(["this_week", "standing"])
+        .optional()
+        .describe(
+          "'this_week' = a one-week move: days are THIS week's remaining run days (each with its kind) and the standing week, quality, cross-training and note are untouched. Omitted or 'standing' = the standing week (unchanged behaviour)"
+        ),
+      week: z
+        .enum(["this", "next"])
+        .optional()
+        .describe("with scope 'this_week': which week the move is for — 'this' (default) or 'next'"),
+      skip: z
+        .array(z.number().int().min(0).max(6))
+        .optional()
+        .describe("with scope 'this_week': standing run weekdays (0=Sunday … 6=Saturday) they said to skip"),
       days: z
         .array(
           z.object({
@@ -135,8 +153,31 @@ export function registerTrainingStatusTools(server: McpToolRegistrar) {
     async (input) => {
       // The week as it stood: the stated change is recorded in the ledger ("You said X →
       // the brain changed Y", with Undo) once the write lands (stated-input.ts).
-      const before = getEnduranceSchedule();
+      const before = getStandingEnduranceSchedule();
       const words = input.note ?? (input.quality && typeof input.quality === "object" ? input.quality.note : undefined);
+      // A one-week move writes that week's move only; the standing week is not touched.
+      if (input.scope === "this_week") {
+        const thisMonday = mondayOf(localDateISO());
+        const weekStart = input.week === "next" ? (addDaysISO(thisMonday, 7) ?? thisMonday) : thisMonday;
+        if (!normalizeWeekMove({ week_start: weekStart, days: input.days }))
+          return asText({
+            ok: false,
+            error: "a this_week move needs at least one run day (dow 0-6, kind easy|quality|long|any)",
+          });
+        const result = setProfile({
+          endurance_schedule: {
+            scope: "this_week",
+            week: input.week ?? "this",
+            days: input.days,
+            note: input.note,
+            skip: input.skip,
+            // With a move, `quality` is that week's session; the standing one is untouched.
+            ...(input.quality ? { quality: input.quality } : {}),
+          },
+        });
+        recordRunWeekMove({ before, week_start: weekStart, words, via: "mcp" });
+        return asText(result);
+      }
       const stated = (result: unknown) => {
         recordStatedRunWeek({ before, words, via: "mcp" });
         return asText(result);

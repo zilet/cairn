@@ -135,6 +135,12 @@ export function registerOperatorTools(server: McpToolRegistrar) {
           "automatic meal plans on/off (default OFF). Off: meal plans are drafted only when asked (chat, draft_meal_plan, the app). On: a weekly meal plan plus protective reshapes after a nutrition-target change or a new nutrition directive."
         ),
       art_enabled: z.boolean().optional().describe("generated artwork on/off (needs a Gemini key to do anything)"),
+      chat_context: z
+        .enum(["lean", "full"])
+        .optional()
+        .describe(
+          "chat's DATA block: lean (default) = the always-on core — who the athlete is, today, this week, action ids — with the rest reached through the coach reads (natively on CLIs that support it); full = the whole snapshot inlined and the original contract wording, the runtime switch back if lean regresses."
+        ),
       meal_prefs: z
         .string()
         .optional()

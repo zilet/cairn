@@ -20,6 +20,14 @@
     "reasoning_flag": ["--effort", "{reasoning}"],
     "file_access_args": ["--add-dir", "{data_dir}"],
     "no_tools_args": ["--tools", "", "--strict-mcp-config", "--setting-sources", "user", "--disable-slash-commands", "--no-session-persistence"],
+    "read_tools": {
+      "transport": "native_mcp",
+      "attach_args": ["--mcp-config", "{\"mcpServers\":{\"cairn-coach-read\":{\"type\":\"http\",\"url\":\"{mcp_url}\"}}}", "--strict-mcp-config", "--tools", "", "--allowedTools", "{allowed_tools}", "--setting-sources", "", "--disable-slash-commands", "--no-session-persistence"],
+      "allowed_tool_template": "mcp__cairn-coach-read__{tool}",
+      "confinement": "strict",
+      "verified": "claude 2.1.322, 2026-11-11",
+      "note": "Verified live 2026-11-11 against a throwaway loopback MCP server: --mcp-config with ONE http server + --strict-mcp-config (no ambient MCP server can widen it) + --tools \"\" (no built-in tool at all) + --allowedTools naming only the mcp__cairn-coach-read__<tool> reads + --setting-sources \"\" (no user/project settings, hooks or permissions; the OAuth login still works). One tools/call, the correct answer, ~3 s wall; told to read a local file it answered that the session has no file or shell tools, and still answered. Tool names reach the model as mcp__cairn-coach-read__<tool>. These args carry the confinement themselves: {no_tools_args} never expands when MCP args are passed — which is also why the last two flags are repeated here from no_tools_args: --disable-slash-commands, and --no-session-persistence, without which every native turn would leave a session JSONL holding the prompt and every health read under ~/.claude/projects. Streams as before: stream-json emits tool_use/tool_result as assistant/user events and input_json_delta deltas, none of which streamDelta reads as text."
+    },
     "large_prompt": { "via": "stdin" },
     "structured_output": {
       "flag": ["--json-schema", "{schema}"],
@@ -29,9 +37,9 @@
     "install": {
       "method": "npm",
       "package": "@anthropic-ai/claude-code",
-      "version": "2.1.315",
+      "version": "2.1.322",
       "size_mb": 350,
-      "size_note": "npm 2026-11-03: @anthropic-ai/claude-code-linux-x64@2.1.315 unpacks to 328.3 MB (arm64 328.5 MB); the launcher package is 0.2 MB. npm's cache lives in a deleted temp dir, not on the data volume."
+      "size_note": "npm 2026-11-11: @anthropic-ai/claude-code-linux-x64@2.1.322 unpacks to 341.9 MB (arm64 341.5 MB); the launcher package is 0.2 MB. 2.1.322 is the build the native coach-read attach (read_tools) was verified on. npm's cache lives in a deleted temp dir, not on the data volume."
     },
     "stream": {
       "format": "claude",
@@ -40,7 +48,7 @@
   },
   "codex": {
     "command": "codex",
-    "args": ["exec", "{model_args}", "{reasoning_args}", "--sandbox", "read-only", "--skip-git-repo-check", "{file_access_args}", "{schema_args}", "{prompt}", "{image_args}"],
+    "args": ["exec", "{model_args}", "{reasoning_args}", "--sandbox", "read-only", "--skip-git-repo-check", "{mcp_config_args}", "{file_access_args}", "{schema_args}", "{prompt}", "{image_args}"],
     "input": "arg",
     "description": "OpenAI Codex (Sign in with ChatGPT). Auth: ~/.codex.",
     "label": "ChatGPT",
@@ -55,6 +63,13 @@
     "capabilities": { "model": true, "reasoning": ["low", "medium", "high", "xhigh", "max"] },
     "reasoning_flag": ["-c", "model_reasoning_effort={reasoning}"],
     "file_access_args": ["--cd", "{data_dir}", "--add-dir", "{data_dir}"],
+    "read_tools": {
+      "transport": "native_mcp",
+      "attach_args": ["--ignore-user-config", "--ephemeral", "-c", "mcp_servers.cairn_coach_read.url=\"{mcp_url}\"", "-c", "mcp_servers.cairn_coach_read.default_tools_approval_mode=\"approve\"", "--disable", "shell_tool", "--disable", "apps", "--disable", "plugins", "--disable", "goals", "-c", "web_search=\"disabled\""],
+      "confinement": "sandboxed",
+      "verified": "codex 0.163.0, 2026-11-11",
+      "note": "Verified live 2026-11-11 (codex exec against a throwaway loopback MCP server): 7/7 correct, median 7 s. Without default_tools_approval_mode=approve the call fails ('MCP tool call requires approval, but approval policy is never'). --disable shell_tool is MANDATORY: with the shell left on it read a local file. --ignore-user-config keeps an ambient MCP server from ~/.codex/config.toml out of the run (auth still comes from CODEX_HOME; a model set only in config.toml is not read on these runs — a Settings model binding still is, through {model_args}). NOT a strict allowlist: apply_patch and connector tools remain, held by the --sandbox read-only already in args — hence confinement 'sandboxed'. The probe ran with --json to watch the item.started/completed mcp_tool_call events; Cairn's runs do NOT pass --json, so stdout stays the final agent message and the existing parse path (and --output-schema) is unchanged — the listener records every call server-side instead. Codex has no streaming here, so it answers one-shot. A feature name a later CLI drops fails the spawn, which the chat path treats as an attach failure and retries once on the prompt loop."
+    },
     "large_prompt": { "via": "stdin_dash" },
     "image_args": ["--image", "{image}"],
     "structured_output": {
@@ -75,10 +90,10 @@
   },
   "antigravity": {
     "command": "agy",
-    "args": ["{file_access_args}", "{model_args}", "{reasoning_args}", "{schema_args}", "-p", "{prompt}", "--print-timeout", "5m"],
+    "args": ["--settings", "{\"permissions\":{\"deny\":[\"command(*)\"]}}", "{file_access_args}", "{model_args}", "{reasoning_args}", "{schema_args}", "-p", "{prompt}", "--print-timeout", "5m"],
     "stream": {
       "format": "agy",
-      "args": ["{file_access_args}", "{model_args}", "{reasoning_args}", "-p", "{prompt}", "--print-timeout", "5m", "--output-format", "stream-json"]
+      "args": ["--settings", "{\"permissions\":{\"deny\":[\"command(*)\"]}}", "{file_access_args}", "{model_args}", "{reasoning_args}", "-p", "{prompt}", "--print-timeout", "5m", "--output-format", "stream-json"]
     },
     "input": "arg",
     "description": "Google Antigravity CLI 'agy' (the successor to the Gemini CLI; Google account). Auth: ~/.gemini.",
@@ -98,6 +113,12 @@
     "model_effort_suffix": true,
     "model_effort_suffix_note": "agy accepts both an alias plus --effort (`--model gemini-4-argon --effort high`) and a name with the effort baked in (`gemini-4-argon-low`), but refuses the two together ('--model gemini-4-argon-low conflicts with --effort', verified 2026-10-16). Bind the bare alias so server effort policy applies; a suffixed name runs WITHOUT --effort (resolveAgentExecutionProfile, src/agents.ts).",
     "file_access_args": ["--add-dir", "{data_dir}"],
+    "settings_note": "Every coaching run passes --settings '{\"permissions\":{\"deny\":[\"command(*)\"]}}' (both arg lists). Verified live 2026-11-11 on agy 1.5.5: without the explicit deny a headless shell attempt blanks the WHOLE reply (response:\"\", 'no output produced — a tool required the \"command\" permission…', which Cairn classifies permission_denied; seen live that day); with it the denial is an ordinary tool error and the model still answers. It composes with {file_access_args} (--add-dir) and with the read_url(*) grant ensureAntigravityHeadlessPermissions keeps in ~/.gemini/antigravity-cli/settings.json.",
+    "read_tools": {
+      "transport": "prompt_loop",
+      "verified": "agy 1.5.5, 2026-11-11",
+      "note": "No per-run or project MCP attach exists (2026-11-11): --settings rejects mcpServers, and only the user-level config takes a server — attaching there would widen every agy run, so agy stays on the prompt loop. ~15 s per answer when probed."
+    },
     "large_prompt": { "via": "stdin_plain" },
     "structured_output": {
       "flag": ["--json-schema", "{schema}", "--output-format", "json"],
@@ -110,18 +131,18 @@
     },
     "install": {
       "method": "binary",
-      "version": "1.4.12",
+      "version": "1.5.6",
       "artifacts": {
-        "linux-x64": { "url": "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.4.12-4768735748292608/linux-x64/cli_linux_x64.tar.gz", "sha512": "ea01c73b772187bca928852cf96235f0d846d6da5ebdac188b9ae719597465737f325540d483ee5f3f62d151029001713344972a187ddfb98cc7b97f7204b7f4", "archive": "tar.gz", "entry": "antigravity" },
-        "linux-arm64": { "url": "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.4.12-4768735748292608/linux-arm/cli_linux_arm64.tar.gz", "sha512": "7cae317fb6a02eb387982f06bfb234b366879cf9a80ad8969b571e5a55d1e37a6a5a49cd6b703c0443bb417937cf5e3b14a8c80cb26917ad79eef723a9f374c7", "archive": "tar.gz", "entry": "antigravity" },
-        "darwin-arm64": { "url": "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.4.12-4768735748292608/darwin-arm/cli_mac_arm64.tar.gz", "sha512": "e858cfc02fb5bb500a760643da270accd2847aa986b7e2973da97ad1928b99d62f62bad28c039e25b65e1ca073d27b2f30b13ed0919d0329774eb1e0ee5b4748", "archive": "tar.gz", "entry": "antigravity" },
-        "darwin-x64": { "url": "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.4.12-4768735748292608/darwin-x64/cli_mac_x64.tar.gz", "sha512": "1d78368cd5a136dc4c7cc71cfe4649d1b1e643630d79327ff3c4efd4b19a90d5603e2cf65a54f80c7eaef973dd09f854dae8a8228b4edd4c6466c679ded9babf", "archive": "tar.gz", "entry": "antigravity" }
+        "linux-x64": { "url": "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.6-6212266538958848/linux-x64/cli_linux_x64.tar.gz", "sha512": "0c67824908caf9cc3156699802b8097f2fd02c4608ae9293c9aa7f17e1bcd342c4b9c2e158388253a37804ef6bd9c6b1d25cfaca3c07bbb7587378fc91839bb4", "archive": "tar.gz", "entry": "antigravity" },
+        "linux-arm64": { "url": "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.6-6212266538958848/linux-arm/cli_linux_arm64.tar.gz", "sha512": "ed103a9e2f10d99eaf2988d2ace55ffffa08b6f9d3b2297459dc42617dfa2386ed984b1231efda4d93279a1deaab9a7e51b85ed06938527870aaec21bba27254", "archive": "tar.gz", "entry": "antigravity" },
+        "darwin-arm64": { "url": "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.6-6212266538958848/darwin-arm/cli_mac_arm64.tar.gz", "sha512": "00a4d76bfca8dcce2250805468fd31053fb4f5d340e8d6555a0233b319c30740822021ee3804f231d2a0fb96746777614e7586895e2bcba75cac564ddb765b0d", "archive": "tar.gz", "entry": "antigravity" },
+        "darwin-x64": { "url": "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.6-6212266538958848/darwin-x64/cli_mac_x64.tar.gz", "sha512": "6ce695802806c30f1191f32634b0f044ac7bda134f3052905cfc25869514bb4bcb99bf1b5385bd3c6cf420508a3024d107b6ba1c683b8863a8822605cdf5c27e", "archive": "tar.gz", "entry": "antigravity" }
       },
       "script": "https://antigravity.google/cli/install.sh",
       "update_args": ["update"],
-      "size_mb": 220,
+      "size_mb": 280,
       "cleanup": [".local/bin/agy"],
-      "note": "Pinned to Google's own release manifest (https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/<platform>.json, read 2026-11-03): each platform's versioned GCS tarball and the SHA-512 that manifest publishes for it. install.sh itself is MUTABLE — it is a bootstrapper that reads that same manifest, downloads the tarball, checks its SHA-512 and copies `antigravity` to ~/.local/bin/agy — so pinning the script's own sha256 bricked setup the day Google edited it (ee1ea43c… → 62966c07…). A versioned tarball never changes under its URL, so its pin cannot go stale; when Google prunes it, or no pin fits the host (musl), scripts/install-agent-cli.mjs runs install.sh fetched over HTTPS from antigravity.google instead. Once installed, `agy update` (and agy's own background self-update) keeps it current."
+      "note": "Pinned to Google's own release manifest (https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/<platform>.json with <platform> = linux_amd64 | linux_arm64 | darwin_arm64 | darwin_amd64, as install.sh names them; read 2026-11-11 → 1.5.6, each tarball downloaded and its SHA-512 checked against the manifest; linux-x64 unpacks to 279.5 MB, linux-arm64 262.5 MB). 1.5.6 is at or past 1.5.5, where the --settings command(*) deny on every agy run was verified. The pins are each platform's versioned GCS tarball and the SHA-512 that manifest publishes for it. install.sh itself is MUTABLE — it is a bootstrapper that reads that same manifest, downloads the tarball, checks its SHA-512 and copies `antigravity` to ~/.local/bin/agy — so pinning the script's own sha256 bricked setup the day Google edited it (ee1ea43c… → 62966c07…). A versioned tarball never changes under its URL, so its pin cannot go stale; when Google prunes it, or no pin fits the host (musl), scripts/install-agent-cli.mjs runs install.sh fetched over HTTPS from antigravity.google instead. Once installed, `agy update` (and agy's own background self-update) keeps it current."
     }
   },
   "grok": {
@@ -142,6 +163,11 @@
     "capabilities": { "model": true, "reasoning": ["low", "medium", "high"] },
     "reasoning_flag": ["--reasoning-effort", "{reasoning}"],
     "file_access_args": ["--cwd", "{data_dir}"],
+    "read_tools": {
+      "transport": "prompt_loop",
+      "verified": "grok 1.0.77, 2026-11-11",
+      "note": "Native MCP works (2026-11-11: 5/5, ~7 s) through a PROJECT ./.grok/config.toml in the run cwd ([mcp_servers.<name>] url = …) plus --trust --permission-mode dontAsk --allow 'mcp__<name>__*' --tools use_tool,search_tool --disable-web-search --max-turns 8 — but the folder must be trusted (writes ~/.grok/trusted_folders.toml), and any ambient user-level MCP server leaks into the run unless denied by name (one reached a shell). So NOT enabled in this phase: grok stays on the prompt loop. A later phase can enable it inside the container, where the home config is Cairn's own."
+    },
     "large_prompt": { "via": "file", "args": ["--prompt-file", "{prompt_file}"] },
     "structured_output": {
       "flag": ["--json-schema", "{schema}"],

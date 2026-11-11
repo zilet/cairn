@@ -1059,7 +1059,8 @@ CREATE TABLE IF NOT EXISTS settings (
   lab_units TEXT DEFAULT '',                   -- us | si | '' (automatic: as the athlete's own labs print it) — how lab values are SHOWN; comparisons stay canonical (repo/lab-units.ts)
   meal_plan_auto_draft INTEGER DEFAULT 0,      -- 1 = weekly + protective meal-plan drafts without being asked; 0 = drafted on request (see src/repo/meal-plan-auto-draft.ts)
   usage_ping_enabled INTEGER DEFAULT 0,        -- 1 = opt-in weekly anonymous usage ping (install id, version, platform, arch, Node — src/usagePing.ts); default OFF
-  coach_welcomed INTEGER DEFAULT 0             -- 1 = the first-run welcome exchange with the coach happened (src/coachOps/welcome.ts)
+  coach_welcomed INTEGER DEFAULT 0,            -- 1 = the first-run welcome exchange with the coach happened (src/coachOps/welcome.ts)
+  chat_context TEXT DEFAULT 'lean'             -- chat's DATA block: 'lean' core + coach reads (default) | 'full' = the whole snapshot and the old wording (prompt/context-projection.ts)
 );
 
 -- Generated-artwork bookkeeping (see src/art.ts). art_assets records what each
@@ -1640,6 +1641,9 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   attempt_index INTEGER,                -- monotonic attempt number inside the durable turn
   escalation_source TEXT,               -- capture | coach when this attempt followed/requested escalation
   failure_tail TEXT,                    -- failed attempts: redacted single-line tail of the CLI's output (agentFailureTail.ts)
+  read_transport TEXT,                  -- chat: native_mcp | prompt_loop — how this attempt reached the coach reads (brain/read-transport.ts)
+  read_calls INTEGER,                   -- chat: coach reads this attempt made (never their arguments or results)
+  prompt_bytes INTEGER,                 -- chat: bytes of the prompt this attempt was handed
   created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_agent_runs_created ON agent_runs(created_at);

@@ -218,7 +218,7 @@ export function weekStrengthPlacement(
       opts.keyRunDows ??
       (() => {
         try {
-          return statedKeyRunDows();
+          return statedKeyRunDows(asOf);
         } catch {
           return [];
         }

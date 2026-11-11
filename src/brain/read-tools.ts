@@ -20,6 +20,13 @@ export const COACH_READ_TOOL_NAMES = [
   "read_decision_history",
   "read_current_plan_detail",
   "read_activity_detail",
+  // The reads behind chat's lean core (src/prompt/context-projection.ts CHAT_CORE_MOVED_KEYS):
+  // each answers what the core no longer inlines, from the same coach-context reads the
+  // full DATA block carried — so a moved block is one call away, never gone.
+  "read_run_week",
+  "read_health_summary",
+  "read_strength_progress",
+  "read_goal_progress",
 ] as const;
 export type CoachReadToolName = (typeof COACH_READ_TOOL_NAMES)[number];
 
@@ -115,7 +122,7 @@ export const COACH_READ_TOOL_CATALOG: Readonly<Record<CoachReadToolName, CoachRe
   read_decision_history: {
     name: "read_decision_history",
     description:
-      "Prior brain decisions of one kind (day_read, session_suggestion, training_target, meal_plan, recovery_adjustment, and the other kinds in the args contract) or about one subject key, each with the expectations it set and the latest evaluation of each. Use it before repeating a call the system has already made, to see what was tried and whether it held. Either kind or subject_key is required; it returns no raw training or health data.",
+      "Prior brain decisions of one kind (day_read, session_suggestion, training_target, meal_plan, recovery_adjustment, and the other kinds in the args contract) or about one subject key, each with the expectations it set and the latest evaluation of each. Use it before repeating a call the system has already made, to see what was tried and whether it held — or, with neither kind nor subject_key, for the most recent decisions of every kind (\"what changed in my plan recently\"). It returns no raw training or health data.",
     effect: "read",
     launches_agent: false,
     exposes_sensitive_raw_data: false,
@@ -145,6 +152,50 @@ export const COACH_READ_TOOL_CATALOG: Readonly<Record<CoachReadToolName, CoachRe
     max_days: null,
     max_response_bytes: 65_536,
   },
+  read_run_week: {
+    name: "read_run_week",
+    description:
+      "This week's running in full: the run engine's plan for the week (each run's kind, distance, zone and note, plus its rationale), the rolling agenda of run intentions (which are done, which are open, today's adjustment and why), the stated run days and any one-week move, the resolved pace/heart-rate zones, compliance with recent prescriptions, endurance capacity and variety, the race build when a race is set, and the whole-week load across every sport. Use it for \"what's my run plan this week and why\", a moved run, or a zone question. It carries no lap detail (read_activity_detail) and no lifting prescription (read_current_plan_detail).",
+    effect: "read",
+    launches_agent: false,
+    exposes_sensitive_raw_data: false,
+    max_rows: 120,
+    max_days: 14,
+    max_response_bytes: 98_304,
+  },
+  read_health_summary: {
+    name: "read_health_summary",
+    description:
+      "The connected brain's health picture: the tiered health focus (act-now and track priorities, with their markers), every active directive with its trigger reading and date, the latest health review and synthesis, the condensed lab records and imaging reports, symptom-to-lift links, directive feedback, and the supplement regimen. Use it when a question touches labs, a finding, a directive or a supplement and needs more than the core's one-line focus. For one marker's full history use read_marker_history. Informational, never medical advice.",
+    effect: "read",
+    launches_agent: false,
+    exposes_sensitive_raw_data: false,
+    max_rows: 200,
+    max_days: null,
+    max_response_bytes: 98_304,
+  },
+  read_strength_progress: {
+    name: "read_strength_progress",
+    description:
+      "The strength program read in full: per-lift progression signals and their reasons, the program state (per-lift trend and stalls, mesocycle position, deload evidence, weekly volume), the training block, per-group trajectory and balance, program adjustments due, logged performance and capacity benchmarks, the strength journey toward stated objectives, and a scheduled test week. Use it for how a lift or the program has been moving, a stall, a deload question or what is due to progress. For one lift's raw sets over a window use read_exercise_history.",
+    effect: "read",
+    launches_agent: false,
+    exposes_sensitive_raw_data: false,
+    max_rows: 300,
+    max_days: null,
+    max_response_bytes: 98_304,
+  },
+  read_goal_progress: {
+    name: "read_goal_progress",
+    description:
+      "Where the athlete stands against their goals: the weight/body journey (body-fat estimate, recomposition stage, pace and timeline, phase), the road ahead (each goal's next milestones in priority order), the trajectory and the whole-person trajectory, the next best step, and the quiet insights already surfaced. Use it for \"am I on track\", a timeline, or what to work on next. Energy targets and intake live in read_nutrition_window.",
+    effect: "read",
+    launches_agent: false,
+    exposes_sensitive_raw_data: false,
+    max_rows: 120,
+    max_days: null,
+    max_response_bytes: 65_536,
+  },
 });
 
 export type ExerciseHistoryArgs = {
@@ -162,6 +213,8 @@ export type LifeContextWindowArgs = { start_date: string; end_date: string };
 export type DecisionHistoryArgs = { kind: BrainDecisionKind | null; subject_key: string | null; limit: number };
 export type CurrentPlanDetailArgs = { scope: "training"; day_number: number } | { scope: "meal"; day: string };
 export type ActivityDetailArgs = { activity_id: number };
+/** The no-argument reads: each is the current picture of one domain, bounded by its own budget. */
+export type EmptyArgs = Record<string, never>;
 
 export type CoachReadToolRequest =
   | { tool: "read_exercise_history"; args: ExerciseHistoryArgs }
@@ -173,7 +226,11 @@ export type CoachReadToolRequest =
   | { tool: "read_life_context_window"; args: LifeContextWindowArgs }
   | { tool: "read_decision_history"; args: DecisionHistoryArgs }
   | { tool: "read_current_plan_detail"; args: CurrentPlanDetailArgs }
-  | { tool: "read_activity_detail"; args: ActivityDetailArgs };
+  | { tool: "read_activity_detail"; args: ActivityDetailArgs }
+  | { tool: "read_run_week"; args: EmptyArgs }
+  | { tool: "read_health_summary"; args: EmptyArgs }
+  | { tool: "read_strength_progress"; args: EmptyArgs }
+  | { tool: "read_goal_progress"; args: EmptyArgs };
 
 export interface CoachReadToolResult {
   tool: CoachReadToolName;
@@ -195,7 +252,9 @@ export function normalizeCoachReadToolRequest(value: unknown): CoachReadToolRequ
   const input = asRecord(value);
   if (!input) return null;
   const tool = enumValue(input.tool, COACH_READ_TOOL_NAMES);
-  const args = asRecord(input.args);
+  // An omitted `args` is an empty object (a native MCP call to a no-argument read sends
+  // none); anything else that is not an object is refused.
+  const args = input.args == null ? {} : asRecord(input.args);
   if (!tool || !args) return null;
 
   switch (tool) {
@@ -243,7 +302,9 @@ export function normalizeCoachReadToolRequest(value: unknown): CoachReadToolRequ
       const kind = args.kind == null ? null : enumValue(args.kind, BRAIN_DECISION_KINDS);
       const subjectKey = cleanOptionalText(args.subject_key, 160);
       const limit = args.limit == null ? 20 : boundedInteger(args.limit, 1, 50);
-      if ((args.kind != null && !kind) || (!kind && !subjectKey) || !limit) return null;
+      // Neither kind nor subject_key is the RECENT read: the latest decisions of any kind
+      // (chat's "what changed recently" — the lean core keeps only the undoable ones).
+      if ((args.kind != null && !kind) || !limit) return null;
       return { tool, args: { kind, subject_key: subjectKey, limit } };
     }
     case "read_current_plan_detail": {
@@ -262,5 +323,11 @@ export function normalizeCoachReadToolRequest(value: unknown): CoachReadToolRequ
       const activityId = boundedInteger(args.activity_id, 1, Number.MAX_SAFE_INTEGER);
       return activityId ? { tool, args: { activity_id: activityId } } : null;
     }
+    case "read_run_week":
+    case "read_health_summary":
+    case "read_strength_progress":
+    case "read_goal_progress":
+      // No arguments: whatever was sent is dropped, never echoed into a query.
+      return { tool, args: {} };
   }
 }

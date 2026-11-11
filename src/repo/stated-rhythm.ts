@@ -140,7 +140,7 @@ export function statedRhythmRead(date: string, consecutive: number | null): Stat
   const yesterday = addDaysISO(date, -1);
   const yesterdayCross = yesterday ? crossFor(yesterday) : null;
   const longRunToday = safe(
-    () => (getEnduranceSchedule()?.days ?? []).some((day) => day.dow === isoDow(date) && day.kind === "long"),
+    () => (getEnduranceSchedule(date)?.days ?? []).some((day) => day.dow === isoDow(date) && day.kind === "long"),
     false
   );
   const hardRideBeforeLongRun =

@@ -636,10 +636,13 @@ export function keyRunAwarePlacement<T extends WeekdayMappablePlanDay>(
   return { map: out, swaps };
 }
 
-/** The stated quality and long run weekdays — the key runs the leg day keeps off. */
-export function statedKeyRunDows(): number[] {
+/**
+ * The stated quality and long run weekdays of `asOf`'s week (default today) — the key runs
+ * the leg day keeps off. A one-week move counts inside its own week only.
+ */
+export function statedKeyRunDows(asOf?: string): number[] {
   try {
-    return (getEnduranceSchedule()?.days ?? [])
+    return (getEnduranceSchedule(asOf)?.days ?? [])
       .filter((day) => day.kind === "quality" || day.kind === "long")
       .map((day) => day.dow);
   } catch {
@@ -688,7 +691,7 @@ function thisWeekPlanDayMapRead(date: string): {
   }
   const monday = dateIndex - ((dateIndex + EPOCH_DOW + 6) % 7);
   const mondayIso = weekDateOf(monday, 1);
-  const keyRunDows = statedKeyRunDows();
+  const keyRunDows = statedKeyRunDows(date);
   // The week is REPLAYED off its own log, oldest first. The phase starts from the last
   // session before this Monday; a logged day that matches what the week laid there
   // (the swap included) keeps the week as laid, and one that does not re-phases the
@@ -770,7 +773,7 @@ export function calendarDayRead(date: string): CalendarDayRead | null {
   if (!lift.length) return null;
   let runDays: { dow: number; kind: EnduranceScheduleKind }[] = [];
   try {
-    runDays = getEnduranceSchedule()?.days ?? [];
+    runDays = getEnduranceSchedule(d)?.days ?? [];
   } catch {
     runDays = [];
   }
@@ -1586,7 +1589,6 @@ function projectHybridForward(date: string): {
 } {
   let planned_run_next: { date: string; kind: "easy" | "long" | "quality"; km: number | null } | null = null;
   let heavy_lower_next: { date: string; focus: string | null } | null = null;
-  const runDays = getEnduranceSchedule()?.days ?? [];
   const candidates = planDayCandidates();
   const weeks = new Map<string, ReturnType<typeof thisWeekPlanDayMap>>();
   const index = dayIndexOf(date);
@@ -1595,7 +1597,8 @@ function projectHybridForward(date: string): {
     const fd = new Date((index + ahead) * 86_400_000).toISOString().slice(0, 10);
     const dow = new Date(`${fd}T00:00:00Z`).getUTCDay();
     if (!planned_run_next) {
-      const stated = runDays.find((day) => day.dow === dow);
+      // Each day ahead reads ITS week's run days (a one-week move stays in its week).
+      const stated = (getEnduranceSchedule(fd)?.days ?? []).find((day) => day.dow === dow);
       if (stated) {
         planned_run_next = {
           date: fd,

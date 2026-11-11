@@ -37,6 +37,9 @@ export function redactCliText(value: unknown): string {
     out = out.split(secret).join("[redacted]");
   }
   return out
+    // The native coach-read listener's per-run URL carries its path token: a CLI that
+    // echoes its own --mcp-config never leaves the URL (or the token) in a stored tail.
+    .replace(/\b(?:https?:\/\/)?(?:127\.0\.0\.1|localhost):\d{1,5}\/mcp\/[A-Za-z0-9_-]+/g, "[coach-read listener]")
     .replace(/\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]+/g, "[redacted]")
     .replace(/\b(Bearer|Basic)\s+[^\s,;"'`]+/gi, "$1 [redacted]")
     .replace(/\b(?:sk|pk|rk|xai|gsk)-[A-Za-z0-9_-]{8,}/g, "[redacted]")

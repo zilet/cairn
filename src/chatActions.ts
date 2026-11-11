@@ -10,6 +10,7 @@ import { localDateISO } from "./repo/shared.js";
 import {
   type EnduranceScheduleQuality,
   normalizeEnduranceSchedule,
+  normalizeRunDays,
   normalizeStatedQuality,
   normalizeStrengthSchedule,
 } from "./repo/profile.js";
@@ -124,6 +125,14 @@ export interface SetEnduranceScheduleAction extends ChatActionBase {
   note?: unknown;
   // The stated quality session (profile.ts normalizeStatedQuality); null clears it.
   quality?: EnduranceScheduleQuality | null;
+  // "this_week": `days` are THIS week's remaining run days, written as the one-week move
+  // only (profile.ts `this_week`); the standing week stands. Omitted = standing.
+  scope?: "this_week" | "standing";
+  // With scope "this_week": which week the move is for — "this" (default) or "next" (said
+  // on a Sunday about Monday) — and the standing run days the athlete said to SKIP (never
+  // carried into the move; an unmentioned standing long or quality day still ahead is).
+  week?: "this" | "next";
+  skip?: number[];
 }
 
 export interface SetStrengthScheduleAction extends ChatActionBase {
@@ -558,13 +567,19 @@ export const CHAT_ACTION_PROMPT_SPECS = {
     // around it") rides in "quality": type threshold | tempo | vo2 | hills, work_km the
     // work itself, warm_up_km / cool_down_km only when they said them. Omit "days" when
     // the turn states only the session — the stored run week stays.
-    { "type": "set_endurance_schedule",
+    // "scope": "this_week" makes it a ONE-WEEK move: "days" is then this week's run days
+    // as they should now be, and the standing week is untouched. Omitted = "standing".
+    // With it: "week": "this" | "next" (default "this"), "skip": [dow] for a standing run
+    // they said to skip.
+    { "type": "set_endurance_schedule", "scope": "standing",
       "days": [{ "dow": 2, "kind": "quality" }, { "dow": 4, "kind": "easy" }, { "dow": 0, "kind": "long" },
                { "dow": 6, "kind": "ride", "optional": true }],
       "quality": { "type": "threshold", "work_km": 5 },
       "note": "<optional short restatement of their words>" }`,
     guidance: [
       `When the athlete states WHAT their quality session is ("hard threshold 5k on Thursday", "my quality day is hill repeats", "I want tempo, 6 km of it"), send it as "quality": {"type", "work_km"} — work_km is the hard part only (the 5 of "threshold 5k"); add warm_up_km / cool_down_km only when they gave numbers ("a few km around it" gives none — leave them out and the engine picks and says so). A turn that states only the session omits "days". The engine still decides whether quality runs in a given week and holds the work below the stated km, saying so, when the week cannot carry it — never promise them the full session every week. "quality": null clears it when they ask the coach to choose again.`,
+      `A ONE-WEEK skip or move ("skip tomorrow's run", "move this week's intervals to Friday", "I'll run Saturday instead this week") is sent with "scope": "this_week", and "days" lists THIS week's run days still to come as they should now be, each with its kind (skip Thursday's quality and move it to Friday → [{"dow": 5, "kind": "quality"}, {"dow": 0, "kind": "long"}]). Only this week changes: their standing days (DATA.endurance_schedule.days) stay, and next week goes back to them by itself — say so. A standing run they say to skip goes in "skip": [dow] (an unmentioned standing long or quality day still ahead this week is kept for them, so a skip must be said). A move about a day in NEXT week (said on a Sunday about Monday: "skip tomorrow's run") adds "week": "next" and lists next week's run days instead. When they name what the moved session IS ("do the 5K intervals on Friday instead"), send it in "quality" with the move: there it is that week's session only (it runs whole even in a lighter week), and their standing session is untouched. DATA.endurance_schedule.this_week / next_week, when present, is a move already in force for that week.`,
+      `A STANDING change needs their words to make it standing ("from now on", "every week", "always", "my run days are…"). Its "days" (no scope) REPLACES the whole standing run week and stands every week, so resend every run day they keep with only the changed one different — a day you leave out is deleted, and with fewer than three run days the engine plans no quality run at all. When you cannot tell whether they mean this week or every week, ask once.`,
       `Emit set_endurance_schedule when the athlete states which days they run. Map named weekdays only; do not fill in a third day they did not mention. Duplicate weekdays keep the first kind.`,
       `A ride, swim, walk, paddle or other sport they keep on a weekday ("Saturday optional, MTB or other") is a cross-training day, NEVER a run day: send it as {"dow": 6, "kind": "ride", "optional": true} beside the run days. The engine plans the runs around it (a ride the day before the long run is a known pattern, not a conflict). Never turn it into an easy or "any" run. A cross-training day already stated is kept when you resend only the run days.`,
     ],
@@ -757,7 +772,7 @@ export const CHAT_ACTION_PROMPT_SPECS = {
       "reason": "<one line: why>" }`,
     guidance: [
       `Do NOT emit set_run to change a run's distance, time or zone: runs are not stored on the plan, and Cairn sizes each week's runs from the athlete's run days and recent running (DATA.run_plan shows this week's). Explain the week's run in words instead.`,
-      `To change WHICH days they run, or the kind of run a day carries, emit set_endurance_schedule with their full stated run week. NEVER use plan_update or plan_restructure for a run either: plan days hold lifting only, and a run sent that way is refused.`,
+      `To change WHICH days they run, or the kind of run a day carries, emit set_endurance_schedule — with "scope": "this_week" and this week's remaining run days for a one-week move, else their full standing run week. NEVER use plan_update or plan_restructure for a run either: plan days hold lifting only, and a run sent that way is refused.`,
     ],
   },
   log_health: {
@@ -1110,6 +1125,26 @@ export function normalizeChatAction(value: unknown): ChatAction | null {
       const quality = statedQuality !== undefined ? { quality: statedQuality } : {};
       // A turn that states only the quality session carries no days[]: the stored run
       // week stands (profile.ts serializeEnduranceSchedule's quality-only update).
+      // A ONE-WEEK move carries only this week's run days (a non-run sport is not a run
+      // day, and a move without one run day is no move): the standing week stands.
+      if (value.scope === "this_week") {
+        const days = normalizeRunDays(value.days);
+        if (!days.length) return null;
+        const note = typeof value.note === "string" && value.note.trim() ? value.note.trim().slice(0, 240) : null;
+        const skip = (Array.isArray(value.skip) ? value.skip : [])
+          .map((d: unknown) => Number(d && typeof d === "object" ? (d as any).dow : d))
+          .filter((d: number) => Number.isInteger(d) && d >= 0 && d <= 6);
+        return {
+          type: "set_endurance_schedule",
+          scope: "this_week",
+          ...(value.week === "next" ? { week: "next" as const } : {}),
+          days,
+          ...(skip.length ? { skip: [...new Set<number>(skip)] } : {}),
+          ...(note ? { note } : {}),
+          // With a move, `quality` is THAT week's session (the standing one is untouched).
+          ...(statedQuality ? { quality: statedQuality } : {}),
+        };
+      }
       if (!Array.isArray(value.days)) {
         return statedQuality !== undefined ? { type: "set_endurance_schedule", ...quality } : null;
       }

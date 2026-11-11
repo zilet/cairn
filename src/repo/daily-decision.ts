@@ -15,7 +15,13 @@ import { canonicalGroup, classifyMuscleGroup, resolveExerciseName } from "./exer
 import { findExercise } from "./exercises.js";
 import { flexibleTrainingAgenda } from "./flexible-training-agenda.js";
 import { getInjuryImpacts, listContextEvents } from "./health.js";
-import { type AcuteGateReading, RUN_PRIME_GROUPS, acuteGates, recentEnduranceImpacts } from "./hybrid-load.js";
+import {
+  type AcuteGateReading,
+  RUN_PRIME_GROUPS,
+  acuteGates,
+  recentEnduranceImpacts,
+  sameDayEnduranceOutings,
+} from "./hybrid-load.js";
 import { getPlanDay } from "./plan.js";
 import { type StatedRhythm, statedRhythmRead } from "./stated-rhythm.js";
 import {
@@ -156,6 +162,9 @@ export const DAILY_DECISION_REASONS = [
   // the lift's load holds whatever licenses the stack — today's run is not yet evidence
   // either way (review, 2026-10-06).
   "morning_run_holds_load",
+  // The same hold for any other sport: today's ride (paddle, ski, …) read as ONE outing
+  // was a long or hard one, and the lift is still to come.
+  "endurance_outing_holds_load",
   // No genuinely loaded lower session has landed yet this week, and today is the week's
   // next lower day: its leg work keeps its sets and its logged load (owner ruling,
   // 2026-09-23 — "heavy lower once a week").
@@ -397,7 +406,15 @@ export interface DailyDecisionSnapshot {
   // personal-model grade) or is a new longest (longestRunNovelty): today's run cannot be
   // harm evidence until tomorrow morning, so neither the rhythm license nor a push stance
   // may lift the reopened lift's intensity hold over it.
-  lift_day_open?: { after: string; rest_grade?: true; run_heavy?: "hard" | "longest" };
+  // `outing_heavy` is the same fact for every other sport: today's non-run endurance,
+  // read as one outing per load family (sameDayEnduranceOutings — the ride out, the
+  // trail loop and the ride home are one exposure), was long or hard.
+  lift_day_open?: {
+    after: string;
+    rest_grade?: true;
+    run_heavy?: "hard" | "longest";
+    outing_heavy?: { label: string; minutes: number };
+  };
   // Today is a lifting weekday whose plan day carries squat/hinge work, and no genuinely
   // loaded lower session has been logged yet in this Monday-first week
   // (plan-selection's `weeklyLowerExposure`). `last_chance`: the lifting week lays no
@@ -901,10 +918,12 @@ export function gatherDailyDecisionSnapshot(
       : safe(() => hardCardioDayIntense(d, undefined, { sport: "run" }), false)
         ? "hard"
         : null;
+    const outingHeavy = safe(() => sameDayEnduranceOutings(d).find((outing) => outing.heavy) ?? null, null);
     return {
       after: text((open as { activity?: unknown }).activity, 40) ?? "activity",
       ...(restGrade ? { rest_grade: true as const } : {}),
       ...(runHeavy ? { run_heavy: runHeavy } : {}),
+      ...(outingHeavy ? { outing_heavy: { label: outingHeavy.label, minutes: outingHeavy.minutes } } : {}),
     };
   })();
 
@@ -1777,6 +1796,14 @@ export const PUSH_STANCE_RATIONALE: ReadonlyArray<(until: string) => string> = [
 ];
 
 const MONTH_WORDS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+// "90 minutes", "2 hours", "2½ hours" — a duration said the way a person says it.
+function hoursWords(minutes: number): string {
+  if (!(minutes >= 105)) return `${Math.round(minutes / 5) * 5} minutes`;
+  const halves = Math.round(minutes / 30);
+  const whole = Math.floor(halves / 2);
+  return `${whole}${halves % 2 ? "½" : ""} hours`;
+}
+
 function monthDayWords(iso: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
   if (!m) return iso;
@@ -2102,8 +2129,29 @@ export function buildDailySessionDecision(
   // reopened after it at a held load whatever licenses the stack. The leg reduction
   // lists (today's loaded groups, the acute gate) stand exactly as before; this adds the
   // load hold on top of them, never in place of them.
-  const morningRunHeavy = liftStillDue && snapshot.lift_day_open?.run_heavy != null;
-  if (morningRunHeavy) {
+  // The hold belongs to the open lift, not to how the read got there: an ordinary
+  // morning leaves the read at `train` with the lift still open (liftStillDue is only
+  // the quiet read REOPENED), and the hard run or long ride before it is the same fact.
+  const liftOpenAfterEndurance =
+    snapshot.lift_day_open != null &&
+    snapshot.lift_day_open.rest_grade !== true &&
+    !snapshot.constraints.illness &&
+    (liftStillDue || snapshot.day_read.kind === "train");
+  const outingHeavy = liftOpenAfterEndurance ? (snapshot.lift_day_open?.outing_heavy ?? null) : null;
+  const morningRunHeavy =
+    liftOpenAfterEndurance && (snapshot.lift_day_open?.run_heavy != null || outingHeavy != null);
+  if (outingHeavy) {
+    fire(precedence, "endurance_outing_holds_load");
+    soft.push({
+      code: "endurance_outing_holds_load",
+      // A hand log with a distance and no time has no minutes to say.
+      detail:
+        outingHeavy.minutes >= 20
+          ? `About ${hoursWords(outingHeavy.minutes)} of ${outingHeavy.label} is already in today — the lifting holds its load`
+          : `A long ${outingHeavy.label} is already in today — the lifting holds its load`,
+    });
+  }
+  if (liftOpenAfterEndurance && snapshot.lift_day_open?.run_heavy != null) {
     fire(precedence, "morning_run_holds_load");
     soft.push({
       code: "morning_run_holds_load",
@@ -2752,7 +2800,8 @@ export function buildDailySessionDecision(
             // A lifting day reopened after its morning run holds its load unless the
             // same rhythm license that stops a stack from capping the day backs it —
             // and holds it regardless when that run was hard or a new longest.
-            (liftStillDue && (!stackLicensed || morningRunHeavy)) ||
+            (liftStillDue && !stackLicensed) ||
+            morningRunHeavy ||
             // The clock opens; the LOAD does not. A brake the log answered still holds
             // aggression for the day it was answered on.
             quietDayOpened ||

@@ -25,6 +25,7 @@ import { recordedClientTimeZone } from "./client-tz.js";
 import { effortRiskFor, type EffortRisk } from "./effort-risk.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { detectUnits, type UnitHint } from "./unit-system.js";
+import { agentReadsNatively } from "../brain/read-transport.js";
 import {
   normalizeChatProfileBindings,
   normalizeProfileBindings,
@@ -76,6 +77,7 @@ export interface Settings {
   usage_ping_enabled: boolean; // opt-in weekly anonymous usage ping (install id, version, platform, arch, Node); default OFF
   lead_mode: "lead" | "announce_first" | "review_everything"; // how much Cairn leads within server policy
   training_drive: "steady" | "push"; // how the athlete wants a stacked-days rest read: 'push' asks for targeted training when the evidence is green
+  chat_context: "lean" | "full"; // chat's DATA block: the lean core + coach reads (default), or the whole snapshot and the old wording
   updated_at?: string;
 }
 
@@ -576,6 +578,7 @@ const SETTINGS_COLUMN_REPAIRS: [string, string][] = [
   ["lab_units", "TEXT DEFAULT ''"],
   ["usage_ping_enabled", "INTEGER DEFAULT 0"],
   ["coach_welcomed", "INTEGER DEFAULT 0"],
+  ["chat_context", "TEXT DEFAULT 'lean'"],
 ];
 let settingsSchemaChecked = false;
 
@@ -749,6 +752,7 @@ function defaultSettings(): Settings {
     usage_ping_enabled: false, // the anonymous weekly usage ping is opt-in only
     lead_mode: "lead", // bounded background coaching is the default relationship
     training_drive: "steady", // the safety floor's own rhythm until the athlete asks otherwise
+    chat_context: "lean", // the lean core + coach reads; "full" is the runtime switch back
   };
 }
 
@@ -853,6 +857,8 @@ function rowToSettings(row: any): Settings {
     lead_mode: ["lead", "announce_first", "review_everything"].includes(String(row.lead_mode)) ? row.lead_mode : "lead",
     // NULL on old rows (column added by migration v89) reads as the steady rhythm.
     training_drive: String(row.training_drive) === "push" ? "push" : "steady",
+    // NULL/'' on old rows (column added by migration v132) reads as the lean default.
+    chat_context: String(row.chat_context) === "full" ? "full" : "lean",
     updated_at: row.updated_at,
   };
 }
@@ -1146,6 +1152,8 @@ export function setSettings(patch: any, opts: { keepStances?: boolean } = {}): S
     training_drive: ["steady", "push"].includes(String(patch.training_drive))
       ? patch.training_drive
       : cur.training_drive,
+    // Same keep-on-junk rule: only an exact "lean" | "full" changes it.
+    chat_context: ["lean", "full"].includes(String(patch.chat_context)) ? patch.chat_context : cur.chat_context,
   };
   if (!["round_robin", "random", "priority"].includes(merged.agent_strategy)) merged.agent_strategy = "round_robin";
   merged.coach_day = Number.isInteger(Number(merged.coach_day))
@@ -1167,7 +1175,7 @@ export function setSettings(patch: any, opts: { keepStances?: boolean } = {}): S
     `UPDATE settings SET agent_strategy=?, agent_order=?, disabled_agents=?, rr_cursor=?,
        coach_enabled=?, coach_day=?, coach_hour=?, onboarded=?, enrich_enabled=?, proactive_enabled=?, art_enabled=?, art_enabled_at=?, meal_prefs=?,
        garmin_username=?, garmin_password=?, garmin_password_encrypted=?, gemini_api_key=?, gemini_api_key_encrypted=?,
-       research_enabled=?, bg_ops_enabled=?, agent_routes=?, chat_routing_mode=?, chat_profile_bindings=?, agent_profile_bindings=?, model_class_bindings=?, agent_class_order=?, update_check_enabled=?, lead_mode=?, training_drive=?, garmin_export_strength=?, run_units=?, weight_units=?, meal_plan_auto_draft=?, usage_ping_enabled=?, coach_welcomed=?, updated_at=datetime('now') WHERE id = 1`
+       research_enabled=?, bg_ops_enabled=?, agent_routes=?, chat_routing_mode=?, chat_profile_bindings=?, agent_profile_bindings=?, model_class_bindings=?, agent_class_order=?, update_check_enabled=?, lead_mode=?, training_drive=?, garmin_export_strength=?, run_units=?, weight_units=?, meal_plan_auto_draft=?, usage_ping_enabled=?, coach_welcomed=?, chat_context=?, updated_at=datetime('now') WHERE id = 1`
   ).run(
     merged.agent_strategy,
     JSON.stringify(merged.agent_order),
@@ -1203,7 +1211,8 @@ export function setSettings(patch: any, opts: { keepStances?: boolean } = {}): S
     merged.weight_units,
     merged.meal_plan_auto_draft ? 1 : 0,
     merged.usage_ping_enabled ? 1 : 0,
-    merged.coach_welcomed ? 1 : 0
+    merged.coach_welcomed ? 1 : 0,
+    merged.chat_context
   );
   // A person saving a unit makes it theirs: the first-run detection never runs over it.
   // The Settings screen re-sends every field on any save, so once units were DETECTED an
@@ -1545,4 +1554,32 @@ export function pickAgentOrderForTask(
   // the ordinary rotation (round-robin/random/priority + cursor advance). The class
   // order then lifts its agents to the front; the rest stay the fallthrough tail.
   return orderForModelClass(cls, cfg ? enabled : pickAgentOrder(), classOrder);
+}
+
+// Chat's coach reads, by capability. A chat lane that reads (coach/deep on the lean core)
+// tries the agents that call the reads NATIVELY first (agents.json read_tools: one
+// process, several calls, no re-launch per round), then the rest in the order the policy
+// above already produced — a preference, never exclusive, exactly like agent_class_order.
+// The input order is the turn's OPEN order (usable, signed in, not on an availability
+// hold), so a held native agent is never lifted. It is left untouched when the person
+// chose: a named agent for the turn, a chat route pin, or a class order for the lane —
+// an explicit choice always outranks a capability preference. A native attach that fails
+// at run time falls back to the prompt loop on the same agent (src/chatTurns.ts) before
+// the rotation moves on, so this order never costs a turn its answer.
+export function orderChatForCoachReads(
+  order: readonly string[],
+  opts: { explicit: boolean; readsNatively?: (name: string) => boolean }
+): string[] {
+  const list = [...order];
+  if (opts.explicit || list.length < 2) return list;
+  const native = opts.readsNatively ?? ((name: string) => agentReadsNatively(name));
+  const first = list.filter((name) => {
+    try {
+      return native(name);
+    } catch {
+      return false;
+    }
+  });
+  if (!first.length) return list;
+  return [...first, ...list.filter((name) => !first.includes(name))];
 }

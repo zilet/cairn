@@ -59,6 +59,8 @@ export interface RecentCardioRow {
   pace: string | null;
   avg_hr: number | null;
   max_hr: number | null;
+  /** The watch's own energy estimate for this effort, kcal — null on a hand log. */
+  kcal: number | null;
   /** The athlete's own stated effort, 1-10 — never written by a watch. */
   stated_rpe: number | null;
   /** True when that stated effort is in the talk-test band (stated-effort.ts). */
@@ -132,7 +134,7 @@ export function recentCardioRead(asOf: string = localDateISO(), days: number = R
     .prepare(
       `SELECT a.id, a.date, a.type, a.raw_text, a.notes, a.duration_min, a.distance_km, a.pace, a.rpe,
               a.source, a.external_id,
-              g.start_time AS g_start, g.name AS g_name, g.avg_hr, g.max_hr,
+              g.start_time AS g_start, g.name AS g_name, g.avg_hr, g.max_hr, g.calories AS g_kcal,
               COALESCE(g.moving_min, g.duration_min, a.duration_min) AS hr_minutes,
               g.hr_zones_json AS zones, g.structure_json AS structure, g.laps_json AS laps,
               g.gap_speed AS gap_speed, g.ascent_m AS g_ascent
@@ -183,6 +185,10 @@ export function recentCardioRead(asOf: string = localDateISO(), days: number = R
           : formatPace(km, minutes, units),
       avg_hr: num(r.avg_hr),
       max_hr: num(r.max_hr),
+      kcal: (() => {
+        const kcal = num(r.g_kcal);
+        return kcal != null && kcal > 0 ? Math.round(kcal) : null;
+      })(),
       stated_rpe: rpe,
       stated_easy: isStatedEasyRpe(rpe),
       personal_effort: personal,

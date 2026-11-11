@@ -97,8 +97,16 @@ function dowOf(date: string): number {
   return new Date(`${String(date).slice(0, 10)}T00:00:00Z`).getUTCDay();
 }
 
-function statedKind(schedule: EnduranceSchedule | null, date: string | null): KeyRunKind | null {
-  if (!schedule || !date) return null;
+function statedKind(date: string | null): KeyRunKind | null {
+  if (!date) return null;
+  // Each day reads ITS week's run days, so a one-week move never leaks across Sunday.
+  let schedule: EnduranceSchedule | null = null;
+  try {
+    schedule = getEnduranceSchedule(date);
+  } catch {
+    schedule = null;
+  }
+  if (!schedule) return null;
   const dow = dowOf(date);
   const kinds = schedule.days.filter((d) => d.dow === dow).map((d) => d.kind);
   if (kinds.includes("quality")) return "quality";
@@ -108,17 +116,17 @@ function statedKind(schedule: EnduranceSchedule | null, date: string | null): Ke
 
 /** The stated run calendar around `date` — the athlete's own run days, never a guess. */
 export function focusCalendarOn(date: string): FocusCalendar {
+  const d = String(date).slice(0, 10);
   let schedule: EnduranceSchedule | null = null;
   try {
-    schedule = getEnduranceSchedule();
+    schedule = getEnduranceSchedule(d);
   } catch {
     schedule = null;
   }
-  const d = String(date).slice(0, 10);
   return {
-    today: statedKind(schedule, d),
-    yesterday: statedKind(schedule, addDaysISO(d, -1)),
-    tomorrow: statedKind(schedule, addDaysISO(d, 1)),
+    today: statedKind(d),
+    yesterday: statedKind(addDaysISO(d, -1)),
+    tomorrow: statedKind(addDaysISO(d, 1)),
     quality_noun: QUALITY_NOUN[String(schedule?.quality?.type ?? "")] ?? null,
   };
 }

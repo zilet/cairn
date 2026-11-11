@@ -186,6 +186,28 @@ export const CONTEXT_GUARDRAILS = `PERSONAL-CONTEXT GUARDRAILS (use the "context
   context for reading the day, never an instruction — signal_state already weighs recovery. This is
   informational, NOT medical advice — defer anything clinical to a clinician.`;
 
+// The same guardrails for chat's LEAN core (src/prompt/context-projection.ts chat_core),
+// where the health records and imaging are one coach read away rather than in DATA and a
+// directive carries `cited` instead of its citation text. Derived from the one text above
+// so the rules cannot drift; every substitution is held by test/chatLeanCore.test.js,
+// which fails when lean prompt text names a key lean DATA does not carry.
+export const CONTEXT_GUARDRAILS_LEAN = CONTEXT_GUARDRAILS.replace(
+  `(use the "context_events" and "health" data):`,
+  `(use the "context_events" data, and for health the "directives" and "health_review" in DATA — the lab records, imaging and full reviews are one read away: read_health_summary, read_marker_history):`
+)
+  .replace(
+    `- HEALTH REVIEW: when "health_review" is present in DATA, factor its focus areas and watchlist`,
+    `- HEALTH REVIEW: when "health_review" is present in DATA (its focus areas and watchlist actions; the rest is read_health_summary), factor its focus areas and watchlist`
+  )
+  .replace(
+    `- IMAGING: the separate "imaging" array preserves the written report and any clearly-labeled`,
+    `- IMAGING: not in DATA — read_health_summary returns the "imaging" array, which preserves the written report and any clearly-labeled`
+  )
+  .replace(
+    `A directive flagged "uncertain" or lacking a citation is a softer nudge, not a hard rule.`,
+    `A directive flagged "uncertain" or with "cited": false is a softer nudge, not a hard rule.`
+  );
+
 // Discipline framing (v35), rendered into the plan-shaping prompts. The user's
 // primary discipline (strength | endurance | hybrid) decides whether endurance
 // progression is a FIRST-CLASS driver or supporting context. Defaults to
@@ -248,23 +270,63 @@ export function renderTrainingDriveLine(ctx: any): string {
 // the per-surface render chain (the case conference's specialists and conductor): the
 // stance (with what holds against it) and the stated quality session. What they SAID
 // outranks anything inferred; only the floors outrank it. Empty when nothing was stated.
+// The one-week move stored for `weekStart` (default: this week's), or null.
+type PromptRunDay = { dow?: number; kind?: string };
+function weekMoveFor(
+  ctx: any,
+  weekStart?: string | null
+): { week_start?: string; days: PromptRunDay[]; quality?: Record<string, unknown> } | null {
+  const schedule = ctx?.endurance_schedule;
+  for (const move of [schedule?.this_week, schedule?.next_week]) {
+    if (!move || !Array.isArray(move.days) || !move.days.length) continue;
+    if (weekStart ? move.week_start === weekStart : move === schedule?.this_week) return move;
+  }
+  return null;
+}
+
+// The run days in force THIS week: a one-week move's, else the stated (standing) days.
+function runDaysInForce(ctx: any): PromptRunDay[] {
+  const moved = weekMoveFor(ctx);
+  if (moved) return moved.days;
+  return Array.isArray(ctx?.endurance_schedule?.days) ? ctx.endurance_schedule.days : [];
+}
+
+function promptRunDays(days: readonly PromptRunDay[]): string {
+  const names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  return days
+    .map((d) => {
+      const day = names[Number(d.dow)] ?? `day ${d.dow}`;
+      return d.kind && d.kind !== "any" ? `${day} (${d.kind})` : day;
+    })
+    .join(", ");
+}
+
 export function renderStatedInputLine(ctx: any): string {
   const parts: string[] = [];
   const drive = renderTrainingDriveLine(ctx).trim();
   if (drive) parts.push(drive);
-  const q = ctx?.endurance_schedule?.quality;
+  // A session stated for THIS week (with a one-week move) speaks in place of the standing one.
+  const weekQuality = weekMoveFor(ctx)?.quality as any;
+  const q = weekQuality ?? ctx?.endurance_schedule?.quality;
   if (q && typeof q === "object" && q.type) {
     const bits = [
       q.work_km != null ? `${q.work_km} km of work` : null,
       q.warm_up_km != null ? `${q.warm_up_km} km warm-up` : null,
       q.cool_down_km != null ? `${q.cool_down_km} km cool-down` : null,
     ].filter(Boolean);
-    const day = Array.isArray(ctx?.endurance_schedule?.days)
+    // The quality day IN FORCE this week: a one-week move's day when the athlete moved it.
+    const names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    const day = runDaysInForce(ctx).find((d: any) => d?.kind === "quality");
+    const dayName = day ? names[Number(day.dow)] : null;
+    const usual = Array.isArray(ctx?.endurance_schedule?.days)
       ? ctx.endurance_schedule.days.find((d: any) => d?.kind === "quality")
       : null;
-    const dayName = day ? ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][Number(day.dow)] : null;
+    const movedFrom =
+      weekMoveFor(ctx) && usual && Number(usual.dow) !== Number(day?.dow)
+        ? ` this week only (they moved it; usually ${names[Number(usual.dow)]})`
+        : "";
     parts.push(
-      `THEIR STATED QUALITY SESSION: ${q.type}${bits.length ? ` (${bits.join(", ")})` : ""}${dayName ? ` on ${dayName}` : ""}. Their choice, not the engine's rotation — keep that session on that day; when the week cannot carry the full work, the engine holds it below and says so, and so should you.`
+      `THEIR STATED QUALITY SESSION${weekQuality ? " FOR THIS WEEK" : ""}: ${q.type}${bits.length ? ` (${bits.join(", ")})` : ""}${dayName ? ` on ${dayName}${movedFrom}` : ""}. Their choice, not the engine's rotation — keep that session on that day; when the week cannot carry the full work, the engine holds it below and says so, and so should you.`
     );
   }
   if (!parts.length) return "";
@@ -1468,7 +1530,29 @@ export function renderRecentCardio(ctx: PartialCoachContext, focus: "chat" | "we
   if (!read || !Array.isArray(read.rows)) return "";
   const rows = renderRecentCardioRows(read, focus);
   const pointer = renderWeekTrainingLoadPointer(ctx);
-  return rows ? `${rows}${pointer}` : pointer ? `\n${pointer}` : "";
+  const energy = focus === "chat" ? renderTodayEnergy(ctx, String(read.as_of ?? "")) : "";
+  return rows ? `${rows}${energy}${pointer}` : pointer ? `\n${energy}${pointer}` : energy;
+}
+
+// Today's energy off the wearable, as one plain line. The numbers already sit in
+// DATA.recovery, unlabelled among forty other fields, and a chat coach asked "what did
+// I burn today?" answered that the figure "hasn't pulled through" fifteen minutes after
+// the sync wrote it (2026-11-11). Only a reading dated TODAY is said; an older one is
+// yesterday's total and would be wrong, so then there is no line.
+function renderTodayEnergy(ctx: PartialCoachContext, today: string): string {
+  const quality = (ctx?.recovery as any)?.quality;
+  const dated = (field: string): number | null => {
+    const metric = quality?.[field];
+    const value = Number(metric?.latest_value);
+    return metric && String(metric.latest_date ?? "") === today && Number.isFinite(value) && value > 0
+      ? Math.round(value)
+      : null;
+  };
+  const active = dated("active_calories");
+  const total = dated("total_calories");
+  if (!today || (active == null && total == null)) return "";
+  const parts = [active != null ? `active ${active} kcal` : null, total != null ? `total ${total} kcal (resting included)` : null];
+  return `TODAY'S ENERGY (their watch's running total so far today, an estimate that keeps climbing until midnight): ${parts.filter(Boolean).join(" · ")}. When they ask what they burned today, answer from this line and each effort's own "watch estimate" above; never say the figure is missing or hasn't synced. It is the watch's estimate, not a measurement — say so once, and never turn it into extra food they have "earned".\n`;
 }
 
 function renderRecentCardioRows(read: any, focus: "chat" | "weekly"): string {
@@ -1486,6 +1570,7 @@ function renderRecentCardioRows(read: any, focus: "chat" | "weekly"): string {
     if (r.duration_min != null) facts.push(`${r.duration_min} min`);
     if (r.pace) facts.push(r.pace);
     if (r.avg_hr != null) facts.push(`avg HR ${Math.round(r.avg_hr)}${r.max_hr != null ? `, max ${Math.round(r.max_hr)}` : ""}`);
+    if (r.kcal != null) facts.push(`watch estimate ${r.kcal} kcal`);
     if (r.stated_rpe != null) facts.push(`their stated effort rpe ${r.stated_rpe}${r.stated_easy ? " (easy, in their words)" : ""}`);
     if (r.personal_effort) facts.push(`their own HR model reads it ${r.personal_effort}`);
     if (r.note) facts.push(`note: ${r.note}`);
@@ -1542,19 +1627,23 @@ export function renderRunPlan(ctx: PartialCoachContext): string {
     }
     const schedule = ctx?.endurance_schedule as { days?: Array<{ dow?: number; kind?: string }> } | null;
     if (schedule && Array.isArray(schedule.days) && schedule.days.length) {
-      const names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-      const stated = schedule.days
-        .map((d) => {
-          const day = names[Number(d.dow)] ?? `day ${d.dow}`;
-          return d.kind && d.kind !== "any" ? `${day} (${d.kind})` : day;
-        })
-        .join(", ");
-      lines.push(`  Stated run days: ${stated}. Never propose a run on any other weekday.`);
+      lines.push(`  Stated run days: ${promptRunDays(schedule.days)}. Never propose a run on any other weekday.`);
+    }
+    // A ONE-WEEK move the athlete made outranks the stated days for its own week only —
+    // said whether or not a standing week is stated at all.
+    const moved = weekMoveFor(ctx, rp.week_start);
+    if (moved) {
+      lines.push(
+        `  THIS WEEK ONLY the athlete moved the runs to: ${promptRunDays(moved.days)}. This week follows those days (the run plan above already does); ${
+          schedule?.days?.length ? "next week goes back to the stated days." : "next week has no stated run days."
+        }`
+      );
     }
     // The athlete's own quality session. The engine already sized this week's version
     // of it (the quality run above carries warm-up + work + cool-down); the line tells the
     // agent it is the athlete's choice, so a proposal never rotates it away.
-    const statedQuality = (ctx?.endurance_schedule as { quality?: Record<string, unknown> } | null)?.quality;
+    const statedQuality =
+      moved?.quality ?? (ctx?.endurance_schedule as { quality?: Record<string, unknown> } | null)?.quality;
     if (statedQuality && typeof statedQuality.type === "string") {
       const km = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? `${v} km` : null);
       const parts = [
@@ -1675,9 +1764,11 @@ export function renderStrengthSchedule(ctx: PartialCoachContext): string {
     .map((dow) => names[dow])
     .join(", ");
   if (!stated) return "";
-  const run = ctx?.endurance_schedule as { days?: Array<{ dow?: number }> } | null;
+  // This week's run days: a one-week move's when the athlete moved them.
   const runDows = new Set(
-    (Array.isArray(run?.days) ? run.days : []).map((d) => Number(d.dow)).filter((dow) => Number.isInteger(dow))
+    runDaysInForce(ctx)
+      .map((d) => Number(d.dow))
+      .filter((dow) => Number.isInteger(dow))
   );
   const both = days
     .map((d) => Number(d.dow))

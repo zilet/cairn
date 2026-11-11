@@ -412,11 +412,12 @@ export function planWeek(date?: string): PlanWeek {
   const weekEnd = addDaysISO(weekStart, 6) ?? asOf;
 
   const lifting = strengthScheduleRead(asOf);
-  const runDows = statedRunDows();
+  // This week's run days: a one-week move the athlete made is the week this strip shows.
+  const runDows = statedRunDows(asOf);
   const statedRunKinds = new Map<number, string>(
     (() => {
       try {
-        return (getEnduranceSchedule()?.days ?? []).map((day) => [day.dow, String(day.kind)] as [number, string]);
+        return (getEnduranceSchedule(asOf)?.days ?? []).map((day) => [day.dow, String(day.kind)] as [number, string]);
       } catch {
         return [];
       }

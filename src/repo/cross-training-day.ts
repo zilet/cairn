@@ -16,7 +16,7 @@
 // after; it never adds work). This is a READ: nothing here writes a schedule.
 import { mondayOf } from "../lib/dates.js";
 import { recentEnduranceImpacts, type EnduranceImpact } from "./hybrid-load.js";
-import { dowToDayNumber, getEnduranceSchedule, isoDow, WEEKDAY_NAMES } from "./profile.js";
+import { dowToDayNumber, getEnduranceSchedule, getStandingEnduranceSchedule, isoDow, WEEKDAY_NAMES } from "./profile.js";
 import { addDaysISO, localDateISO } from "./shared.js";
 import { copyDeep, requestMemo } from "./request-memo.js";
 
@@ -174,7 +174,8 @@ function crossTrainingDaysRead(asOf: string): CrossTrainingDay[] {
   const groups = observedGroups(asOf);
   let stated: NonNullable<ReturnType<typeof getEnduranceSchedule>>["cross_training"] = [];
   try {
-    stated = getEnduranceSchedule()?.cross_training ?? [];
+    // Cross-training days are never part of a one-week run move: the standing week holds them.
+    stated = getStandingEnduranceSchedule()?.cross_training ?? [];
   } catch {
     stated = [];
   }

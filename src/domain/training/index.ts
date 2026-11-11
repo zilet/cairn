@@ -54,6 +54,6 @@ export * from "./train-week-next.js";
 export * from "../../repo/training-symptoms.js";
 export { setTrainingDrive, revertTrainingStance } from "./training-drive.js";
 export { acceptPushOffer, dismissPushOffer, offerPushStanceIfEarned } from "./push-offer.js";
-export { recordStatedRunWeek } from "./stated-input.js";
+export { recordRunWeekMove, recordStatedRunWeek } from "./stated-input.js";
 export { trainingDriveRead } from "../../repo/training-drive-read.js";
 export { effectiveTrainingDrive, pushStanceActive, trainingDriveState } from "../../repo/training-drive.js";

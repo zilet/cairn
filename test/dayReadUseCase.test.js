@@ -112,7 +112,7 @@ test("a bare fingerprint drift re-stamps the row and keeps the wording already o
   const baseline = repo.dayRead(date);
   repo.saveDayRead(date, {
     ...baseline,
-    why: "Keep the legs light because tomorrow's key run is still open.",
+    why: "Keep the legs light; the week has been a full one.",
     signals: {
       ...baseline.signals,
       hybrid: {
@@ -131,7 +131,7 @@ test("a bare fingerprint drift re-stamps the row and keeps the wording already o
   const stable = await readToday({ date });
   // The prose survives — same call, same sentence.
   assert.equal(served.source, "agent");
-  assert.equal(served.why, "Keep the legs light because tomorrow's key run is still open.");
+  assert.equal(served.why, "Keep the legs light; the week has been a full one.");
   // …but the evidence under it is the live evidence, and the row is re-stamped so the
   // next open is a plain cache hit rather than another reconciliation.
   assert.notEqual(served.input_fingerprint, stale.input_fingerprint);

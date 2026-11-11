@@ -1222,6 +1222,69 @@ prescription changed with the morning it was read on. A quality day already behi
 today's read, a day not yet lived carries no harm until it is, and the morning's own
 `runDayIntensity` read still has the final say on the day itself.
 
+### One-week run move (`endurance_schedule.week_moves`, 2026-11-11)
+
+"Skip tomorrow's run, move the quality run to Friday" is about ONE week, so it is never written into
+the standing `days[]`. Moves ride beside them in the same JSON as `week_moves` — a list keyed by
+`week_start` (ISO Monday), each `{week_start, days (run days only, the standing parser's rules, at least
+one), note?}`, oldest first, at most `MAX_WEEK_MOVES` (10) — no column, no migration. The write shape is
+`{this_week: {week_start, days, note?, said_on?, skip?}}` (`{this_week: null}` clears this week's,
+`{this_week: {week_start, clear: true}}` one week's), or `{scope: "this_week", week?: "this"|"next",
+days, note?, skip?}` from chat, MCP `set_endurance_schedule` and PUT /profile; `week: "next"` is a move
+said about next week (on a Sunday, about Monday). A move write leaves the standing days, quality and
+cross-training alone, and a standing write keeps every stored move unless it states one.
+
+A move never silently deletes a standing KEY run the athlete did not mention (`carryStandingKeyRuns`,
+at write time): a move with no long day keeps the standing long day when it is still on or after the day
+it was said (`said_on`, default today), and the same for the standing quality day unless the move names
+a quality day of its own ("move it to Friday" replaces Thursday) or lists it in `skip`. A key run
+already behind the day it was said is never resurrected. Easy days are not carried.
+
+A move may carry `quality` — the session the athlete stated for THAT week ("do the 5K intervals on
+Friday instead"; chat, MCP and PUT /profile send it as the ordinary `quality` field beside
+`scope:"this_week"`). Inside the week the effective read's `quality` is the move's and `week_move`
+says `quality_stated: true`; the standing session is never changed by a move. The engine runs a
+week-stated session `full` through a down/reset week and through the spike brake (the
+`statedThroughSpike` precedent, widened): through a spike the week's room still bounds it, through a
+down week alone the room is the session's own and the trim lands on the other runs, said by
+`WEEK_STATED_QUALITY_WHOLE_VARIANTS`. A recovery dip still shortens it, an applied recovery week, a
+health hold, a thin base or a spiking/dipping taper still drop it, the evidence hold inside
+`statedQualitySession` (first hard session in a while, a step past the hard runs on record) still
+holds the work below and says so, and the morning's `runDayIntensity` still decides.
+
+Past weeks read ONE way: a closed week's move is history. No later write drops, sets or clears a move
+whose week is already over (that write is refused), so `getEnduranceSchedule(asOf)` for a past date
+reads the days that were in force that week, and the harm, adherence, capacity and run-length reads
+judge a moved Friday quality as that week's planned run. Moves only age out past `MAX_WEEK_MOVES`.
+
+Readers in `profile.ts`. `getEnduranceSchedule(asOf?)` is the week IN FORCE for `asOf`'s Monday week
+(memo key `endurance_schedule:<monday>`): inside a moved week its `days` are the moved days and it
+carries `week_move {week_start, note?, standing_days}`; any other week reads the standing days. Every
+reader that has a date in hand passes it (`isStatedRunDay`, `nextScheduledRunWeekday` per day ahead,
+`statedRunDows`, `statedKeyRunDows`, the agenda, the run engine, plan-week, day-read, the harm and
+capacity reads), so another week never inherits the move. `getStandingEnduranceSchedule()` is the usual
+week plus this week's and next week's moves as `this_week` / `next_week`: the ledger's before/after and
+Undo, "are run days set" checks, the welcome preview, cross-training, the GET doors (MCP
+`get_endurance_schedule`, GET /profile/endurance-schedule — so a read-then-write client never stores a
+move as the standing week) and the coach context's `endurance_schedule`. The prompts speak the week in
+force: `renderRunPlan` names the move for the plan's week (with or without standing days),
+`renderStatedInputLine` puts the stated session on the moved quality day, and the lift-and-run day line
+reads this week's run days. `getWeekMoves()` / `getWeekMove(weekStart)` read the raw list.
+
+The engine (`weeklyRunPlan`) caps the week's run count at the STANDING length (or the moved one's when
+it names more), since a run already done on another day still counts toward the week; a quality day
+named in the move answers the three-run arm of `includeQuality` and nothing else — every protective
+guard stands (a down week keeps it as the short set, `dose:"short"`). A day the move names `quality` is
+never taken for the long run: a move with no other day places no long run. Easy runs come from the
+moved days; one they cannot hold is placed only on a day that already carries a logged run this week
+(`loggedRunDayNumbers`), so the agenda closes it with that run and a day the move dropped stays empty.
+The rationale swaps the stated-days line for `RUN_WEEK_MOVED_VARIANTS` (the moved days Monday first, and
+that next week returns to the usual ones — or to the coach's spacing when none are stated). The move is
+recorded by `recordRunWeekMove` (`stated-input.ts`) as an observe-tier `training_structure` row ("This
+week's runs moved: …" / "Next week's …") whose Undo restores only that week's move (the earlier move it
+replaced, when there was one) and refuses once the week is over; undoing a STANDING statement never
+touches a move. Chat's receipt says "Saved for this week only" / "next week only". `test/runWeekMove.test.js`.
+
 ### The cross-training day: stated, then observed (`src/repo/cross-training-day.ts`, 2026-10-04)
 
 A recurring non-run day lives in `endurance_schedule.cross_training` (`{dow, sport, optional:true}`, at
@@ -3634,6 +3697,37 @@ READINESS/LAST NIGHT lines to reach its own words from. A non-posture item keeps
 since there it can carry the conductor's work-around caveat verbatim — a safety instruction, not
 narration, and must not be dropped.
 
+**Chat's lean core (`chat_core`, 2026-11-11).** The `chat` site carries everything (~170 KB of DATA
+on the demo seed, `recent_sessions` alone ~38 KB) and stays as `settings.chat_context: "full"`. The
+default is `chat_core`: who the athlete is (PERSON, the goal's targets, a compacted journey, the
+endurance goal, supplements, the energy-deficiency watch, symptom links), today (what the Brief said —
+not its signals blob —, signal state, the conductor's lead, acute gates, today's food, the activity rows
+and the last two sessions whole, active directives), this week (dated_week, every plan day's lifts and
+targets, the schedules, the run plan's kinds per day, the agenda, the week's load) and every id a chat
+action names (memory, food entries, activities, context events, decisions still pending or undoable).
+Two safety reads stay inline too: `underfueling` (compacted to its verdict — `FUEL_CLAIM_RULE` permits the
+protective "eating under the target" claim only from `DATA.underfueling.state`) and `health_review`
+(its focus and watchlist actions, capped). A directive keeps `cited` (whether it has a citation; the
+citation text is in the read), and a plan item keeps its `note` and `warmup_sets` — and a chat
+restructure that omits them for the same lift has them carried forward from the stored plan
+(`carryForwardPlanItemFields`), so a field the model was never shown cannot be erased by omission.
+Lean mode reads `CONTEXT_GUARDRAILS_LEAN` (`src/prompt/shared.ts`), derived from the one guardrail text
+so the rules cannot drift, which names the read for what is not inline (imaging, the lab records);
+`test/chatLeanCore.test.js` fails whenever the lean prompt's own words name a DATA key the lean core does
+not carry, unless the sentence names its read. ~29.6 KB on the demo seed. Compaction is structural and per
+key (`compactChatCore`), like every other site's. Everything else is one coach read away, and `CHAT_CORE_MOVED_KEYS` names the read for every key
+the core drops (`CHAT_CORE_PARTIAL_KEYS` for the ones it keeps only in part); `test/chatLeanCore.test.js`
+holds the map whole and checks each read really returns its block, so a key added to the chat site has
+to be kept or given a read. The four reads behind the core — `read_run_week`, `read_health_summary`,
+`read_strength_progress`, `read_goal_progress` — and the "now" blocks added to `read_nutrition_window`
+(`current`), `read_recovery_window` (`summary`) and `read_body_composition_history` (`current`) return the
+SAME context blocks the full DATA carried, through `projectCoachContextKeys` (deep-copied before the byte
+budget trims anything; a slice that still cannot fit sheds whole blocks and names them in `omitted`).
+`read_decision_history` with neither kind nor subject is the recent ledger. When a slice is over its byte
+budget mostly because of one large non-array block, that block is shed (named in `omitted`) before any
+rows are trimmed (`finalizeCoachRead`). The week's runs ride as the
+RECENT RUNS & CARDIO prose block, so `recent_cardio` is not repeated inside the core's DATA.
+
 **Adding a prompt:** add a site to `PROMPT_CONTEXT_SITES`, point its `DATA:` block at
 `promptData(ctx, "<site>")`, and extend `test/promptContextProjection.test.js`. Never go back to a
 raw `JSON.stringify(ctx)`, and never trim by slicing a serialized string — that hands the agent
@@ -3813,7 +3907,8 @@ short ops (day read, exercise explanation) were fine; the long-prompt ops (chat,
 ahead) failed on both providers while claude and codex — which answer from the prompt — were the
 only ones that worked, until their quotas ran out and the rotation had nothing left.
 
-Nothing in the argv reliably turns the reflex off. Verified on the Pi: grok's `--max-turns 1` and
+Nothing in the argv reliably turned the reflex off *at the time* (2026-09; superseded for claude and
+codex by the 2026-11-11 facts below, kept here as history). Verified on the Pi: grok's `--max-turns 1` and
 `--permission-mode plan` *cancel* the turn the moment a tool is wanted, `--tools read_file` hung for
 the full timeout, `--disallowed-tools …` still lists and reads (and dropping every tool fails
 session init — `search_replace` requires a read tool), `--rules` was ignored; agy's `--mode plan`
@@ -3822,16 +3917,21 @@ still auto-denies and the only opt-outs it offers are a `permissions.allow` rule
 DID work, on both, was one plain sentence at the top of the prompt: each answered in a single round.
 
 So the rule travels with the prompt, provider-neutrally. **`applyToolPolicy(prompt, tools)`** runs
-at the ONE chokepoint every spawn passes through (`runAgent` and `runAgentStreaming`) and prepends
-**`NO_TOOLS_PREAMBLE`** unless: the prompt hands the CLI files it must open — the same
-`promptReferencesDataDir` test that grants `file_access_args` (uploaded panels, photos,
-`CAIRN_AGENT_DATA_FILES:` inventories) — or the caller passed `RunOpts.tools: "provider"`. It is
-idempotent, so the JSON-repair retry that re-runs a prompt never stacks a second copy. Exactly two
-call sites opt into provider tools: `src/research.ts` (cited claims need live web search) and a
-chat turn routed with the `current_research` reason code (`chatTools` in `chatTurns.ts`).
-Everything else — every `DATA:` block, the coach-read protocol (a prompt protocol, never a tool) —
-answers from the prompt. Add a new op that genuinely needs the CLI's own tools by passing
-`tools: "provider"` at its call site; never by weakening the preamble.
+at the ONE chokepoint every spawn passes through (`runAgent` and `runAgentStreaming`) and picks one
+of THREE policies, never two at once:
+- **`"none"`** (the default) prepends **`NO_TOOLS_PREAMBLE`**.
+- **`"provider"`** leaves the prompt alone. Exactly two call sites opt in: `src/research.ts` (cited
+  claims need live web search) and a chat turn routed with the `current_research` reason code
+  (`chatTools` in `chatTurns.ts`).
+- **`"coach_reads"`** (2026-11-11) prepends **`COACH_READS_PREAMBLE`** instead: the run's ONLY tools
+  are Cairn's read-only coach reads, attached natively for that run (see "Coach read transports"
+  below); no shell, files or web. A prompt that already led with `NO_TOOLS_PREAMBLE` has it swapped,
+  never stacked. Only the chat call site opts in, per attempt, for a native-transport agent.
+A prompt that hands the CLI files it must open — the same `promptReferencesDataDir` test that grants
+`file_access_args` (uploaded panels, photos, `CAIRN_AGENT_DATA_FILES:` inventories) — is left alone
+under every policy. All of it is idempotent, so the JSON-repair retry that re-runs a prompt never
+stacks a second copy. Add a new op that genuinely needs the CLI's own tools by passing
+`tools: "provider"` at its call site; never by weakening either preamble.
 
 **Claude starts lean behind the preamble.** claude is the one CLI whose flags DO switch tools off
 cleanly, so its `{no_tools_args}` slot (`agents.json` `no_tools_args`: `--tools "" --strict-mcp-config
@@ -3840,12 +3940,100 @@ prompt leads with the preamble and the run hands it no files and no MCP servers.
 2026-10-13 on a one-line reply: ~34K prompt tokens of tool schemas and user context down to ~3K, and a
 second or more off every start; `--json-schema` structured output still works with tools off. The
 preamble stays — the flags only make the CLI agree with it. `--bare` is NOT usable: it skips the
-OAuth login a Pro/Max plan runs on. `--tools` takes a list, so a flag must follow its `""`.
+OAuth login a Pro/Max plan runs on. `--tools` takes a list, so a flag must follow its `""`. The slot
+never expands beside MCP args (`mcpConfigArgs`), so a native coach-read attach carries its own
+confinement (`read_tools.attach_args`, below). The bounded job loop (`runChosenWithCoachReads`) no
+longer hands every agent Claude's empty `--mcp-config … --strict-mcp-config` pair (codex now has an
+`{mcp_config_args}` slot where those flags would be a spawn error); claude gets `--strict-mcp-config`
+with no server from this slot instead, on every turn of that loop.
+
+**agy's shell is denied explicitly** (2026-11-11, verified on agy 1.5.5; the pinned install is 1.5.6,
+from Google's release manifest with each tarball's SHA-512 checked): every agy run passes `--settings
+'{"permissions":{"deny":["command(*)"]}}'` in both arg lists. Without the explicit deny a headless shell
+attempt blanked the whole reply (`response:""`, "a tool required the \"command\" permission…",
+classified `permission_denied`, seen live that day); with it the denial is an ordinary tool error and
+the model still answers. It composes with `{file_access_args}` and with the `read_url(*)` grant
+`ensureAntigravityHeadlessPermissions` keeps in agy's own settings file.
 
 Two operational corollaries. `DATA_DIR/.agent-workspaces/<kind>` is the cwd for ordinary runs and is
 what an exploring CLI reads first — keep it empty (a stray CLI core dump or `*_output.json` there is
 fuel). And the `permission_denied` class is deliberately NOT a holding state: the CLI is healthy, that
 op was blocked, and the next prompt (now behind the preamble) is expected to succeed.
+
+## Coach read transports (`src/brain/read-transport.ts`, `src/coachReadMcp.ts`, `src/chat-reads.ts`)
+
+The closed coach-read catalog (`src/brain/read-tools.ts`, executed only by
+`executeCoachReadTool` in `read-tool-runtime.ts`: no SQL, no paths, no writes, per-read byte budgets)
+reaches a CLI one of two ways, and WHICH is config — `agents.json` `read_tools` on the agent, with the
+CLI version and date it was verified — never a branch on an agent's name:
+
+| Transport | How | Who (verified 2026-11-11) |
+|---|---|---|
+| `native_mcp` | A per-run loopback MCP server (`startCoachReadMcpListener`: 127.0.0.1, a random port, a 24-byte per-run path token) serves the catalog; the CLI calls the reads ITSELF inside one process, several per turn, in parallel if it likes. Attached through the agent's `{mcp_config_args}` slot from `read_tools.attach_args` (`{mcp_url}`, `{allowed_tools}`). | **claude 2.1.322** (the pinned install) — `--mcp-config <one http server> --strict-mcp-config --tools "" --allowedTools mcp__cairn-coach-read__<tool>,… --setting-sources "" --disable-slash-commands --no-session-persistence` (strict: only the reads exist; ~3 s for one call). The last two are repeated from `no_tools_args`, which never expands beside MCP args: without `--no-session-persistence` every native turn would leave a session JSONL holding the prompt and every health read under `~/.claude/projects`. **codex 0.163.0** — `--ignore-user-config --ephemeral -c mcp_servers.cairn_coach_read.url=… -c …default_tools_approval_mode="approve" --disable shell_tool --disable apps --disable plugins --disable goals -c web_search="disabled"` inside the existing `--sandbox read-only` (sandboxed: apply_patch and connectors remain, held by the sandbox; `--disable shell_tool` is mandatory — with the shell on it read a local file). No `--json`, so stdout stays the final message the existing parse path and `--output-schema` expect. |
+| `prompt_loop` | The provider-neutral protocol: the CLI answers with a bare `{"kind":"coach_read","requests":[…]}`, the server runs the reads and re-launches it with the verified results (up to 3 rounds). Every CLI can do it; each round is a full re-launch. | **grok 1.0.77** — native works (5/5, ~7 s) only through a project `./.grok/config.toml` in a TRUSTED folder, and an ambient user-level MCP server leaks in unless denied by name (one reached a shell), so not enabled this phase. **agy 1.5.5** — no per-run or project MCP attach (`--settings` rejects `mcpServers`; only the user config takes one). The offline `stub`. |
+
+**The budget is enforced in the listener, server-side** (`NATIVE_COACH_READ_BUDGET`): at most 12 calls
+(the prompt loop's 6 doubled — a native call costs no re-launch), at most 96 KB per result and 256 KB per
+turn (the prompt loop's total). A call past the cap, or a result past either byte budget, gets a plain
+MCP tool error telling the model to answer with what it has; a burst of parallel calls reserves its slots
+before executing, so it cannot overshoot. Every call is recorded `{tool, args_digest, ms, bytes, ok}` —
+a 12-hex sha256 of the canonical arguments, never the arguments or the result. The listener is closed in
+the attempt's `finally`, on the turn's AbortSignal, and by a TTL backstop; GET/DELETE answer 405 (a
+stateless server offers no SSE stream). Tools carry `readOnlyHint`.
+
+**Chat is the one caller** (`runChatCompletion`). Per attempt it asks the transport for the contract
+text to append (`chatNativeReadContract` — plain tool-use guidance — or the prompt-loop contract) and
+the launch extras (`coachReadLaunchExtras`: the attach argv and `tools: "coach_reads"`). Native runs
+only on a reading lane (coach/deep, or the legacy single path) with `chat_context: "lean"`, never for a
+photo turn (the CLI must open the file) or a current-research turn (it needs its web search) — those
+keep the prompt loop over the same lean core. The capture lane keeps its own slice and the original read
+contract. **A native attach that fails falls back ONCE to the prompt loop on the same agent before the
+rotation moves on**: the listener would not start, the CLI exited with no reply having never reached the
+listener (rejected flags, unreachable server), an empty native reply, or a native run that answered in
+the prompt loop's JSON. A busy host (`AgentBusyError`), a Stop, a timeout and a provider's own refusal
+(quota, sign-in, model) are not attach failures. Tool-call chatter never reaches the bubble: claude's
+stream-json carries `tool_use`/`tool_result` as `assistant`/`user` events and the tool input as
+`input_json_delta`, none of which `streamDelta` reads as text, and the chat stream gate drops everything
+before the reply marker.
+
+**A busy host defers the turn.** Chat used to read an `AgentBusyError` as a failed attempt ("Agent
+process failed") and try the next agent, which only queued for the same process-wide permit. Now the
+attempt records `agent_busy`, the rotation stops, and the worker puts the TURN back in line
+(`deferChatTurn`: status and phase `queued`, which the client already shows as "Queued") and re-enqueues it
+after `AGENT_BUSY_RETRY_MS` — nothing was applied, since actions run only after a reply. It is bounded by
+the shared ledger (`noteAgentBusyDeferral("chat", turnId)`, `AGENT_BUSY_MAX_DEFERRALS`); only when those
+are spent does the turn end with a calm "couldn't start — every agent slot stayed busy" reply.
+
+**The listener outlives the permit wait.** A run may wait up to its own timeout for a spawn permit before
+it starts, so the listener's first TTL is twice the run's timeout plus a margin, and `RunOpts.onPermit`
+(called the moment the run holds its permit, in both `runAgent` and `runAgentStreaming`) re-arms it for
+the run itself. A native run's reads count against the turn's ONE read budget, so a fallback to the prompt
+loop continues from what was spent. A CLI failure tail never keeps the listener URL or its token
+(`redactCliText` rewrites `127.0.0.1:<port>/mcp/<token>`). A thrown run (a timeout, a CLI not installed, a
+sign-in error) is never an attach failure, so the one fallback launch is not spent on it.
+
+**Routing by capability** (`orderChatForCoachReads`, `src/repo/settings.ts`, beside the task policy): on a
+reading lane the turn's OPEN order (usable, not on an availability hold) lifts the native-transport agents
+to the front, the rest following in the policy's own order. A named agent for the turn, a `chat` route pin
+or a class order (`agent_class_order`) for the lane is the person's choice and is left untouched; model
+bindings are never touched by it at all.
+
+**Telemetry.** The assistant message's meta carries `reads: {transport, calls:[{tool, ms, bytes, ok}],
+rounds, total_bytes, native_fallback?}` and `prompt_bytes`; the server log gets one
+`[coach-read] turn#N transport=… calls=… rounds=… bytes=… prompt_bytes=… tools=…` line (no athlete
+text). Every chat `agent_runs` row records `read_transport`, `read_calls` and `prompt_bytes`
+(migration 131).
+
+**Chat's lean core.** The contract that goes with the reads replaced "the DATA above is your
+authoritative baseline … do not fish": DATA is now the core the coach always has, and when the question
+turns on a specific the core does not hold (a past session, a trend, a lab, a number) it LOOKS IT UP
+before answering; it never calls something missing or "not synced" without having read for it, and it
+does not read for what the core already answers. The core is the `chat_core` projection site (see "The
+prompt-boundary context projection"); `settings.chat_context: "full"` (migration 132, `set_settings` /
+`PUT /api/settings`) restores the whole snapshot, the old wording and the prompt loop, byte for byte, as
+the runtime switch back. `scripts/chat-read-eval.mjs --agent <name> [--db <path>] [--run]` measures both
+on a copy of a DB (never the original) — prompt bytes per question, and with `--run` the transport, the
+reads, the wall time and the reply.
 
 ## Oversized prompts never travel in argv (`src/agents.ts`)
 

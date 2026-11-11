@@ -23,6 +23,8 @@ import {
   structureNote,
 } from "../repo/run-structure.js";
 import { athleteUnits } from "../repo/settings.js";
+import { getCoachContext } from "../repo/coach.js";
+import { projectCoachContextKeys, type PromptContextKey } from "../prompt/context-projection.js";
 import {
   COACH_READ_TOOL_CATALOG,
   normalizeCoachReadToolRequest,
@@ -51,11 +53,17 @@ export class CoachReadToolExecutionError extends Error {
 }
 
 type MutableRow = Record<string, unknown>;
-type RawRead = {
+export type RawRead = {
   data: Record<string, unknown>;
   /** Arrays whose elements count toward rows_returned and may be trimmed for the byte cap. */
   row_arrays: unknown[][];
   truncated?: boolean;
+  /**
+   * Keys of `data` a context-slice read may shed whole: when trimming rows alone cannot
+   * fit the budget, the largest of them is dropped and named in `data.omitted`, so the
+   * reply says what it left out instead of failing the read.
+   */
+  droppable_keys?: string[];
 };
 
 const DAY_MS = 86_400_000;
@@ -133,21 +141,75 @@ function resultBytes(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(value), "utf8");
 }
 
-function finalize(tool: CoachReadToolName, raw: RawRead): CoachReadToolResult {
+// The row arrays that live inside one droppable block (the block itself when it is an
+// array, else its arrays one level down) — counted with the block when it is shed.
+function arraysInBlock(block: unknown, rowArrays: unknown[][]): unknown[][] {
+  const candidates: unknown[] = Array.isArray(block)
+    ? [block]
+    : block && typeof block === "object"
+      ? Object.values(block as Record<string, unknown>)
+      : [];
+  return rowArrays.filter((array) => candidates.includes(array));
+}
+
+/**
+ * Hold a read to its catalog bounds. Rows are trimmed from the longest array first —
+ * EXCEPT on a context-slice read whose overflow sits mostly in one large non-array block:
+ * that block is shed whole first (and named in `omitted`), because trimming every list
+ * to empty would cost the reply its rows and still not fit. A block is shed last-resort
+ * too, once no rows are left. Exported for the budget tests.
+ */
+export function finalizeCoachRead(tool: CoachReadToolName, raw: RawRead): CoachReadToolResult {
   const catalog = COACH_READ_TOOL_CATALOG[tool];
   let rows = raw.row_arrays.reduce((sum, items) => sum + items.length, 0);
   let truncated = !!raw.truncated;
   let candidate = { tool, data: raw.data, rows_returned: rows, truncated };
+  const refresh = () => {
+    candidate = { tool, data: raw.data, rows_returned: rows, truncated };
+  };
+  const shed = (key: string) => {
+    for (const array of arraysInBlock(raw.data[key], raw.row_arrays)) {
+      rows -= array.length;
+      raw.row_arrays.splice(raw.row_arrays.indexOf(array), 1);
+    }
+    delete raw.data[key];
+    const omitted = Array.isArray(raw.data.omitted) ? (raw.data.omitted as string[]) : [];
+    raw.data.omitted = [...omitted, key];
+    truncated = true;
+    refresh();
+  };
+  const droppable = () => (raw.droppable_keys ?? []).filter((key) => Object.hasOwn(raw.data, key));
 
-  while (resultBytes(candidate) > catalog.max_response_bytes) {
+  while (rows > catalog.max_rows || resultBytes(candidate) > catalog.max_response_bytes) {
+    const over = resultBytes(candidate) - catalog.max_response_bytes;
+    if (over > 0) {
+      // The block whose own non-array bytes carry most of the overflow, if one does.
+      const heavy = droppable()
+        .map((key) => {
+          const block = raw.data[key] ?? null;
+          const inner = arraysInBlock(block, raw.row_arrays).reduce((sum, array) => sum + resultBytes(array), 0);
+          return { key, nonArray: resultBytes(block) - inner };
+        })
+        .filter((entry) => entry.nonArray * 2 >= over)
+        .sort((a, b) => b.nonArray - a.nonArray)[0];
+      if (heavy) {
+        shed(heavy.key);
+        continue;
+      }
+    }
     const longest = [...raw.row_arrays].sort((a, b) => b.length - a.length)[0];
     if (!longest?.length) {
-      throw new CoachReadToolExecutionError("execution_failed", "Coach read result could not fit its response budget");
+      const largest = droppable().sort((a, b) => resultBytes(raw.data[b] ?? null) - resultBytes(raw.data[a] ?? null))[0];
+      if (!largest) {
+        throw new CoachReadToolExecutionError("execution_failed", "Coach read result could not fit its response budget");
+      }
+      shed(largest);
+      continue;
     }
     longest.pop();
     rows--;
     truncated = true;
-    candidate = { tool, data: raw.data, rows_returned: rows, truncated };
+    refresh();
   }
 
   const data = safeJson(raw.data);
@@ -159,6 +221,98 @@ function finalize(tool: CoachReadToolName, raw: RawRead): CoachReadToolResult {
     throw new CoachReadToolExecutionError("execution_failed", "Coach read exceeded its catalog bounds");
   }
   return result;
+}
+
+// ---------- context-slice reads ----------
+// The reads behind chat's lean core return blocks of the SAME coach context the full chat
+// DATA carried (src/prompt/context-projection.ts projectCoachContextKeys), so moving a
+// block out of the prompt never changes what it says. The context is memoized per data
+// version, so a chat turn that already built it pays nothing to read from it. The slice
+// is deep-copied before the byte budget trims anything: finalizeCoachRead() pops rows in place,
+// and the memoized context must never lose one.
+function contextSlice(keys: readonly PromptContextKey[]): Record<string, unknown> {
+  try {
+    return structuredClone(projectCoachContextKeys(getCoachContext(), keys));
+  } catch {
+    return {};
+  }
+}
+
+// The arrays a slice's byte budget may trim: top-level ones and those one level down.
+function sliceArrays(slice: Record<string, unknown>): unknown[][] {
+  const arrays: unknown[][] = [];
+  for (const value of Object.values(slice)) {
+    if (Array.isArray(value)) arrays.push(value);
+    else if (value && typeof value === "object")
+      for (const inner of Object.values(value as Record<string, unknown>)) if (Array.isArray(inner)) arrays.push(inner);
+  }
+  return arrays;
+}
+
+const RUN_WEEK_KEYS: readonly PromptContextKey[] = [
+  "run_plan",
+  "flexible_training_agenda",
+  "endurance_schedule",
+  "endurance_goal",
+  "strength_schedule",
+  "run_zones",
+  "run_compliance",
+  "endurance_capacity",
+  "run_variety",
+  "endurance_tests",
+  "race_build",
+  "week_training_load",
+];
+const HEALTH_SUMMARY_KEYS: readonly PromptContextKey[] = [
+  "health_focus",
+  "directives",
+  "health_synthesis",
+  "health_review",
+  "health",
+  "imaging",
+  "symptom_links",
+  "directive_feedback",
+  "supplements",
+];
+const STRENGTH_PROGRESS_KEYS: readonly PromptContextKey[] = [
+  "training_signals",
+  "progression",
+  "program_block",
+  "program_state",
+  "program_balance",
+  "program_adjustments",
+  "acute_gates",
+  "groups_trajectory",
+  "performance",
+  "strength_journey",
+  "test_week",
+];
+const GOAL_PROGRESS_KEYS: readonly PromptContextKey[] = [
+  "coaching_focus",
+  "journey",
+  "road_ahead",
+  "trajectory",
+  "whole_person_trajectory",
+  "next_step",
+  "insights",
+];
+// The "now" reads beside a window: the energy targets and reads a fueling question
+// turns on, the body's current estimate, the recovery summary with its baselines.
+const NUTRITION_CURRENT_KEYS: readonly PromptContextKey[] = [
+  "goal",
+  "intake_band",
+  "underfueling",
+  "cut_quality",
+  "energy_deficiency",
+  "fueling",
+  "meal_plan",
+];
+const BODY_CURRENT_KEYS: readonly PromptContextKey[] = ["body_composition", "body_metrics", "dexa_targeting"];
+const RECOVERY_SUMMARY_KEYS: readonly PromptContextKey[] = ["recovery", "garmin"];
+
+function readContextSlice(keys: readonly PromptContextKey[], today: string): RawRead {
+  const slice = contextSlice(keys);
+  return { data: { as_of: today, ...slice }, row_arrays: sliceArrays(slice), droppable_keys: Object.keys(slice) };
 }
 
 // The coach read tools speak the athlete's spelling. One resolver for the whole
@@ -418,7 +572,13 @@ function readRecoveryWindow(
       skin_temp_dev_c: g.skin_temp_dev_c ?? null,
     };
   });
-  return { data: { range: { start_date: start, end_date: end, days: request.args.days }, days }, row_arrays: [days] };
+  // The recovery summary (baselines, trends, per-metric freshness) beside the raw days,
+  // as of today: "compared to normal" is answered from its baselines.
+  const summary = contextSlice(RECOVERY_SUMMARY_KEYS);
+  return {
+    data: { range: { start_date: start, end_date: end, days: request.args.days }, days, summary },
+    row_arrays: [days, ...sliceArrays(summary)],
+  };
 }
 
 function leastSquaresWeightTrend(rows: MutableRow[]): number | null {
@@ -535,6 +695,9 @@ function readNutritionWindow(
       },
       target_history: targets,
       days,
+      // As of today, whatever window was asked for: the targets in force and the
+      // deterministic fuel reads (chat's lean core keeps only goal's targets inline).
+      current: contextSlice(NUTRITION_CURRENT_KEYS),
     },
     row_arrays: [days],
     truncated: sourceTruncated,
@@ -595,7 +758,8 @@ function readBodyCompositionHistory(
   events.sort((a, b) => String(b.date).localeCompare(String(a.date)) || Number(b.id) - Number(a.id));
   const bounded = events.slice(0, request.args.limit);
   return {
-    data: { events: bounded },
+    // `current` is the one body-fat estimate and the body metrics as of today.
+    data: { events: bounded, current: contextSlice(BODY_CURRENT_KEYS) },
     row_arrays: [bounded],
     truncated:
       events.length > request.args.limit ||
@@ -653,8 +817,11 @@ function readDecisionHistory(request: Extract<CoachReadToolRequest, { tool: "rea
     );
     params.push(request.args.subject_key, request.args.subject_key);
   }
+  // Neither filter: the most recent decisions of every kind.
   const rows = db
-    .prepare(`SELECT d.id FROM brain_decisions d WHERE ${where.join(" AND ")} ORDER BY d.id DESC LIMIT ?`)
+    .prepare(
+      `SELECT d.id FROM brain_decisions d WHERE ${where.length ? where.join(" AND ") : "1 = 1"} ORDER BY d.id DESC LIMIT ?`
+    )
     .all(...params, request.args.limit + 1) as Array<{ id: number }>;
   const decisions = rows.slice(0, request.args.limit).flatMap(({ id }) => {
     const decision = getBrainDecision(id);
@@ -877,6 +1044,11 @@ function argsSummary(request: CoachReadToolRequest): string {
       return `scope=${request.args.scope}`;
     case "read_activity_detail":
       return `subject=activity`;
+    case "read_run_week":
+    case "read_health_summary":
+    case "read_strength_progress":
+    case "read_goal_progress":
+      return "current";
   }
 }
 
@@ -943,8 +1115,20 @@ export function executeCoachReadTool(
       case "read_activity_detail":
         raw = readActivityDetail(request);
         break;
+      case "read_run_week":
+        raw = readContextSlice(RUN_WEEK_KEYS, today);
+        break;
+      case "read_health_summary":
+        raw = readContextSlice(HEALTH_SUMMARY_KEYS, today);
+        break;
+      case "read_strength_progress":
+        raw = readContextSlice(STRENGTH_PROGRESS_KEYS, today);
+        break;
+      case "read_goal_progress":
+        raw = readContextSlice(GOAL_PROGRESS_KEYS, today);
+        break;
     }
-    const result = finalize(request.tool, raw);
+    const result = finalizeCoachRead(request.tool, raw);
     recordBrainToolCall({
       run_id: runId,
       op,

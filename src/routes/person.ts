@@ -9,7 +9,7 @@ import {
   computeGoalCheck,
   getCheckinByDate,
   getEnduranceCapacity,
-  getEnduranceSchedule,
+  getStandingEnduranceSchedule,
   getStrengthSchedule,
   getProfile,
   getTrainingIntent,
@@ -34,9 +34,14 @@ personRouter.get("/profile", (_req, res) => res.json(getProfile()));
 // `quality` is the stated quality session {type: threshold|tempo|vo2|hills, work_km?,
 // warm_up_km?, cool_down_km?, note?} the engine runs on the quality day. Set through
 // PUT /profile `endurance_schedule` (a body of only `{quality}` changes just the
-// session; `quality: null` clears it; omitted, the stored one stays).
-// null when unset. MCP: get_endurance_schedule.
-personRouter.get("/profile/endurance-schedule", (_req, res) => res.json(getEnduranceSchedule()));
+// session; `quality: null` clears it; omitted, the stored one stays). A ONE-WEEK move is
+// `{scope: "this_week", days, note?}` — days are this week's remaining run days — and
+// writes only that week's move, leaving the standing week as it is (`{this_week: null}`
+// clears this week's). `week: "next"` makes it next week's move; `skip: [dow]` names standing run
+// days they said to skip; `quality` beside a move is THAT week's session only. This read returns the STANDING days[] (what a write's days
+// replace), with this week's / next week's move beside them as `this_week` / `next_week`
+// {week_start, days, note?}. null when unset. MCP: get_endurance_schedule.
+personRouter.get("/profile/endurance-schedule", (_req, res) => res.json(getStandingEnduranceSchedule()));
 // The athlete's stated LIFTING weekdays. days[] is {dow: 0-6 (0=Sunday)} — no kind,
 // because which split lands on which day is the plan's business. The weekday ring lays
 // the plan's strength days onto exactly these weekdays. `split` is the split they named,

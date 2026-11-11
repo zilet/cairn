@@ -466,6 +466,15 @@ export function markChatTurnRunning(id: number) {
   return getChatTurn(id);
 }
 
+// running → queued: the host had no CLI spawn permit for this turn (AgentBusyError), so it
+// goes back in line untouched — nothing was applied (actions run only after a reply) — and
+// the worker re-drains it after a rest. Guarded so a Stop in the meantime stands.
+export function deferChatTurn(id: number) {
+  db.prepare(`UPDATE chat_turns SET status='queued', phase='queued', started_at=NULL
+              WHERE id=? AND status='running'`).run(id);
+  return getChatTurn(id);
+}
+
 export function setChatTurnPhase(id: number, phase: string) {
   db.prepare(`UPDATE chat_turns SET phase=? WHERE id=? AND status='running'`).run(phase, id);
   return getChatTurn(id);

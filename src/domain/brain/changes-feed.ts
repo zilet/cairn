@@ -801,6 +801,14 @@ function restoreLabel(decision: BrainDecision, what: Touched): string {
     return "Go back to your previous drive";
   if ((decision.context as Record<string, unknown> | null)?.stated_kind === "run_week")
     return "Go back to your previous run week";
+  // A one-week run move (stated-input.ts recordRunWeekMove): Undo takes back the move only.
+  if ((decision.context as Record<string, unknown> | null)?.stated_kind === "run_week_move") {
+    const context = decision.context as Record<string, unknown>;
+    if (context.restores_move === true) return "Go back to the runs you had moved before";
+    return context.week === "next"
+      ? "Put next week's runs back on your usual days"
+      : "Put this week's runs back on your usual days";
+  }
   // A finished race's lessons for the next build (src/repo/build-levers.ts).
   if ((decision.context as Record<string, unknown> | null)?.build_levers === true)
     return "Build the next race without these lessons";

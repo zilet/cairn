@@ -1931,11 +1931,11 @@ function computeProgramState(date?: string, recovery?: any): ProgramState {
       // getProgramState, which is this function — so the athlete's STATED run days stand
       // in for it, as weekday slots (Mon = 1): the days the engine lays its long and
       // quality runs on. With no run days stated there is nothing to collide with.
-      const stated = (getEnduranceSchedule()?.days ?? []).filter((day) => day.kind === "long" || day.kind === "quality");
+      const stated = (getEnduranceSchedule(d)?.days ?? []).filter((day) => day.kind === "long" || day.kind === "quality");
       return weekLayoutRead(d, {
         strengthDows: lifting.days.map((day) => day.dow),
         liftDaysSource: lifting.source,
-        enduranceDows: statedRunDows(),
+        enduranceDows: statedRunDows(d),
         runPlan: stated.length
           ? ({
               available: true,

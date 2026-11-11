@@ -30,6 +30,7 @@ import {
   ENDURANCE_MODALITIES,
   lengthNeedsEffortFamily,
   matchEnduranceModality,
+  modalityForLoadFamily,
   regionWeight,
   sawSessionEffort,
 } from "./heavy-load.js";
@@ -274,6 +275,59 @@ export function recentEnduranceImpacts(days = 3, date = localDateISO()): Enduran
     () => recentEnduranceImpactsRead(days, date),
     copyDeep
   );
+}
+
+/**
+ * One day's non-run endurance read as OUTINGS. A ride out to the trails, the loop and
+ * the ride home arrive as three rows, and graded alone the short legs are light and
+ * only the middle one counts. They are one exposure: every same-day effort of one load
+ * family is summed, and the outing is `heavy` when any piece is, or when the pieces
+ * together reach the family's own long bar and at least one was a real session (a
+ * string of strolls never adds up to one). Runs are not here: a run keeps its own
+ * grade and its own rules.
+ */
+export interface EnduranceOuting {
+  family: LoadFamily;
+  /** The heaviest piece's own label ("trail MTB"). */
+  label: string;
+  minutes: number;
+  pieces: number;
+  heavy: boolean;
+  /** At least one piece was a session in its own right (not every piece light). */
+  real_session: boolean;
+  regions: MuscleGroup[];
+}
+
+export function sameDayEnduranceOutings(date = localDateISO()): EnduranceOuting[] {
+  const day = String(date).slice(0, 10);
+  const byFamily = new Map<LoadFamily, EnduranceImpact[]>();
+  for (const impact of recentEnduranceImpacts(1, day)) {
+    if (String(impact.date).slice(0, 10) !== day || impact.family === "run") continue;
+    const list = byFamily.get(impact.family);
+    if (list) list.push(impact);
+    else byFamily.set(impact.family, [impact]);
+  }
+  const outings: EnduranceOuting[] = [];
+  for (const [family, pieces] of byFamily) {
+    // recentEnduranceImpacts sorts heaviest first.
+    const lead = pieces[0] as EnduranceImpact;
+    const minutes = pieces.reduce((sum, p) => sum + (p.duration_min ?? 0), 0);
+    const bar = modalityForLoadFamily(family)?.heavyMin ?? 0;
+    const realSession = pieces.some((p) => p.load !== "light");
+    const effort = pieces.some((p) => p.intensity !== "easy");
+    const summedLong =
+      pieces.length > 1 && bar > 0 && minutes >= bar && realSession && (effort || !lengthNeedsEffortFamily(family));
+    outings.push({
+      family,
+      label: lead.label,
+      minutes: Math.round(minutes),
+      pieces: pieces.length,
+      heavy: pieces.some((p) => p.load === "heavy") || summedLong,
+      real_session: realSession,
+      regions: [...new Set(pieces.flatMap((p) => p.regions))],
+    });
+  }
+  return outings.sort((a, b) => Number(b.heavy) - Number(a.heavy) || b.minutes - a.minutes);
 }
 
 function recentEnduranceImpactsRead(days: number, date: string): EnduranceImpact[] {

@@ -242,3 +242,22 @@ test("a plan-sourced composition still goes by the plan day's name", () => {
   ).run(Number(repo.getOrCreateSession(TUE).id), TUE, planDayId);
   assert.equal(todayStrengthLine(TUE).title, "Pull");
 });
+
+test("a run and a long ride on a lifting day are both named beside the open lift", () => {
+  repo.addActivity({ type: "run", date: TUE, duration_min: 42, distance_km: 7.4 });
+  repo.addActivity({ type: "ride", date: TUE, duration_min: 36, distance_km: 9.5 });
+  repo.addActivity({ type: "ride", date: TUE, duration_min: 89, distance_km: 15.4 });
+  const line = todayStrengthLine(TUE);
+  assert.equal(line.state, "not_started");
+  assert.match(
+    line.text,
+    /^(?:Your run and ride are in\. |Run and ride done\. |The run and the ride are in; )Pull is still (?:there|on for today)/
+  );
+  assert.ok(!violatesReadingGrammar(line.text), line.text);
+});
+
+test("a short spin beside the run is not named", () => {
+  repo.addActivity({ type: "run", date: TUE, duration_min: 25, distance_km: 4.1 });
+  repo.addActivity({ type: "ride", date: TUE, duration_min: 15, distance_km: 3 });
+  assert.match(todayStrengthLine(TUE).text, /^(?:Your run's in\. |Run done\. |The run's in; )/);
+});

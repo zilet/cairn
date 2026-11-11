@@ -102,10 +102,14 @@ export const COACH_READ_ORDINARY_MAX_CALLS = 6;
 const COACH_READ_CONFERENCE_MAX_CALLS = 12;
 export const COACH_READ_ORDINARY_MAX_BYTES = 256 * 1024;
 const COACH_READ_CONFERENCE_MAX_BYTES = 512 * 1024;
-// Claude otherwise inherits MCP servers configured in the user's home. The
-// provider-neutral loop below owns every read and its budget, so ambient tools
-// are explicitly disabled for these runs. Other agents ignore the args because
-// they do not declare an {mcp_config_args} slot.
+// Kept for reference and old callers: the strict EMPTY MCP config this loop used to hand
+// every agent so Claude would not inherit the user's home MCP servers. The loop no longer
+// passes it (2026-11-11): codex now declares an {mcp_config_args} slot for its native
+// coach-read attach (agents.json read_tools), where these Claude-shaped flags would be
+// a spawn error, and Claude's own `no_tools_args` already carries `--strict-mcp-config`
+// with no server at all (plus `--tools ""`) whenever the prompt leads with
+// NO_TOOLS_PREAMBLE — which every turn of this loop does. Never re-add a provider's
+// flags to a provider-neutral loop; declare them in agents.json.
 export const COACH_READ_STRICT_MCP_ARGS = Object.freeze([
   "--mcp-config",
   JSON.stringify({ mcpServers: {} }),
@@ -122,9 +126,13 @@ const COACH_READ_ARGS_CONTRACT: Readonly<Record<CoachReadToolName, string>> = Ob
   read_body_composition_history: '{"limit":"1..120"}',
   read_life_context_window: '{"start_date":"YYYY-MM-DD","end_date":"YYYY-MM-DD"} (max 366 days)',
   read_decision_history:
-    '{"kind":"day_read|session_suggestion|training_target|training_structure|exercise_rotation|nutrition_target|meal_plan|recovery_adjustment|health_directive|lifestyle_adjustment|goal_change|case_conference|null","subject_key":"specific subject|null","limit":"1..50"} (kind or subject_key required)',
+    '{"kind":"day_read|session_suggestion|training_target|training_structure|exercise_rotation|nutrition_target|meal_plan|recovery_adjustment|health_directive|lifestyle_adjustment|goal_change|case_conference|null","subject_key":"specific subject|null","limit":"1..50"} (both null = the most recent decisions of every kind)',
   read_current_plan_detail: '{"scope":"training","day_number":"1..14"} OR {"scope":"meal","day":"day name"}',
   read_activity_detail: '{"activity_id":"integer activity_id from the RECENT RUNS lines or read_training_window"}',
+  read_run_week: "{} (no arguments)",
+  read_health_summary: "{} (no arguments)",
+  read_strength_progress: "{} (no arguments)",
+  read_goal_progress: "{} (no arguments)",
 });
 
 export type CoachReadMode = "ordinary" | "conference";
@@ -434,7 +442,6 @@ export async function runChosenWithCoachReads(
         // repair names, and whether a refused final payload rotates or floors.
         contractRepairHint: opts.contractRepairHint,
         onContractRejection: opts.onContractRejection,
-        mcpConfigArgs: [...COACH_READ_STRICT_MCP_ARGS],
         model: opts.model,
         reasoning: opts.reasoning,
         profile: opts.profile,

@@ -17,6 +17,7 @@ import { renderChatLinkedPagesBlock, type ChatLinkedPage } from "../chatLinks.js
 import { promptData } from "./context-projection.js";
 import {
   CONTEXT_GUARDRAILS,
+  CONTEXT_GUARDRAILS_LEAN,
   renderActiveContext,
   renderCoachingFocus,
   renderMovementConsiderations,
@@ -140,7 +141,15 @@ export interface BuildChatPromptOptions {
   linkedPages?: ChatLinkedPage[];
   /** The turn's dated week, built once per turn by the caller (chatTurns.ts runChatCompletion). */
   datedWeek?: () => DatedWeek | null;
+  /**
+   * The coach/deep lanes' DATA block: "lean" (the default) is the chat_core projection —
+   * the always-on core, with everything else one coach read away; "full" is the whole
+   * chat site and the original wording, byte for byte (settings.chat_context).
+   */
+  context?: ChatContextMode;
 }
+
+export type ChatContextMode = "lean" | "full";
 
 const CAPTURE_ACTION_TYPES = [
   "log_activity",
@@ -341,9 +350,17 @@ ${JSON.stringify(captureContext(ctx))}`;
   // `today_path` precedent): only chat carries it, so no other build pays for it. Null
   // when the athlete has no calendar week — the plan is then a ring with no dates.
   const data = { ...ctx, dated_week: chatDatedWeek(options.datedWeek) };
+  const lean = (options.context ?? "lean") === "lean";
+  const seeLine = lean
+    ? "You're chatting with the user inside their app. DATA below is the core of their picture you always have — who they are, today and this week — and the COACH READS at the end reach the rest of their history (past sessions, trends, labs, body, fuel). You can ACT by emitting actions."
+    : "You're chatting with the user inside their app. You can SEE all their data (DATA section) and can ACT by emitting actions.";
+  const lookForIt = lean
+    ? "look for it — the blocks below, DATA, and a coach read for anything older or deeper"
+    : "look for it — the blocks below and DATA";
+  const foodPatterns = lean ? "DATA.day_intake" : "DATA.day_intake / DATA.meal_plan";
   return `${CAIRN_PERSONA}
 
-You're chatting with the user inside their app. You can SEE all their data (DATA section) and can ACT by emitting actions.
+${seeLine}
 ROUTING LANE: ${lane}
 ${escalationContract(lane)}
 ${renderNow(ctx)}
@@ -382,11 +399,11 @@ ${MECHANICS_ENCODING}
   include it yet. Do not state a day total or "what's left" at all — the server appends the true running
   total when it matters. Talk about the meal and what it means for the athlete's day, in words.
 - NEVER CLAIM DATA IS MISSING WHEN IT IS HERE. Before saying something "isn't visible", "hasn't
-  synced" or "isn't in my data", look for it — the blocks below and DATA. When it is there, say what is
+  synced" or "isn't in my data", ${lookForIt}. When it is there, say what is
   there. Only a genuine absence is said as one, plainly, with what IS on the record instead.
 - PROGRESSIVE UNDERSTANDING: CONSULT THE DATA YOU ALREADY HAVE before wondering what to ask —
   DATA.typical_training_hour (derived from session timestamps) answers "when do they usually train?",
-  and DATA.memory plus the logged meals in DATA.day_intake / DATA.meal_plan usually already show food
+  and DATA.memory plus the logged meals in ${foodPatterns} usually already show food
   likes/dislikes and patterns. NEVER re-ask a fact already present anywhere in DATA — that reads as not
   paying attention. Only when DATA shows a GENUINE gap (e.g. no profile.about_me, and nothing in
   typical_training_hour/memory/day_intake answers it) MAY you ask ONE brief, low-friction question when
@@ -407,7 +424,7 @@ ${MECHANICS_ENCODING}
   "I switched to evenings" supersedes "prefers morning training"). add_memory is only for genuinely NEW
   facts. Never invent ids — only use ids present in DATA.memory.
 
-${CONTEXT_GUARDRAILS}
+${lean ? CONTEXT_GUARDRAILS_LEAN : CONTEXT_GUARDRAILS}
 
 ${renderChatActionPromptProse()}
 ${renderSignalState(ctx)}${renderCoachingFocus(ctx, { brief: true })}${renderTrainingDriveLine(ctx)}${renderTrainingSignals(ctx)}${renderStrengthJourney(ctx)}${renderReactionModel(ctx)}${renderActiveContext(ctx)}${renderMovementConsiderations(ctx)}${renderRecentCardio(ctx, "chat")}${renderTodayFuel(ctx)}${renderAmendableMealRows(ctx)}
@@ -444,7 +461,7 @@ ${convo || "(new conversation)"}
 USER'S MESSAGE: ${message}
 
 DATA:
-${promptData(data, "chat")}`;
+${promptData(data, lean ? "chat_core" : "chat")}`;
 }
 
 function chatDatedWeek(read: () => DatedWeek | null = datedWeek): Record<string, unknown> | null {

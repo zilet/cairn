@@ -161,7 +161,8 @@ export function runLengthBars(date: string, fixed: { min: number; km: number }):
 function runLengthBarsRead(day: string, fixed: { min: number; km: number }): RunLengthBars {
   let long_dows: number[] = [];
   try {
-    long_dows = (getEnduranceSchedule()?.days ?? []).filter((d) => d.kind === "long").map((d) => d.dow);
+    // The long weekday of THIS run's week (a one-week move included).
+    long_dows = (getEnduranceSchedule(day)?.days ?? []).filter((d) => d.kind === "long").map((d) => d.dow);
   } catch {
     long_dows = [];
   }

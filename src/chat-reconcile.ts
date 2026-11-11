@@ -15,9 +15,10 @@ import {
 import { pickDayVariant } from "./repo/brain/day-read-rules.js";
 import type { StoredRun } from "./repo/run-edit.js";
 import { localDateISO } from "./repo/shared.js";
-import { isoDow, WEEKDAY_NAMES } from "./repo/profile.js";
+import { isoDow, runDayWords, WEEKDAY_NAMES } from "./repo/profile.js";
 import { describeLandingDay } from "./domain/brain/structure-request.js";
 import { brainChangeReceipt, isBrainChangeKind } from "./domain/brain/changes-feed.js";
+import { qualityWords } from "./domain/training/stated-input.js";
 import { getBrainDecision } from "./repo/brain-decisions.js";
 import type { ChangeReceipt } from "./contracts/change-receipt.js";
 
@@ -633,6 +634,10 @@ function reconcilePlanReplyCore(
     // Without this the athlete would read "No plan change was saved" directly above
     // the verified run receipt.
     if (applied.some((entry) => entry.type === "set_run")) return reply;
+    // A stated run week that LANDED is this turn's change too. Saying "no plan change
+    // was saved" under it was false (2026-11-11), and it hid the one thing the athlete
+    // needed to hear: the write is their STANDING week, not a one-week move.
+    if (runWeekLanded(applied)) return appendReceipt(reply, runWeekReceipt(applied));
     if (restructureDraft && (explicit || replyClaimsPlanSuccess(reply))) {
       return pickDayVariant(RESTRUCTURE_DRAFT_VARIANTS, today, "chat-restructure-draft");
     }
@@ -767,6 +772,39 @@ function replyClaimsRunSuccess(reply: string): boolean {
   );
 }
 
+function runWeekLanded(applied: Array<{ type: ChatActionType; result?: unknown; error?: string }>): boolean {
+  return applied.some((entry) => entry.type === "set_endurance_schedule" && !entry.error);
+}
+
+// The stored run week read back, in words, with its reach in time said plainly: a
+// one-week move says it is this week only and names the usual days next week returns
+// to; a standing write says it holds every week.
+function runWeekReceipt(applied: Array<{ type: ChatActionType; result?: unknown; error?: string }>): string {
+  const words = (days: ReadonlyArray<{ dow: number; kind: string }>) => runDayWords(days, { and: true });
+  const moved = applied.find(
+    (entry) =>
+      entry.type === "set_endurance_schedule" && !entry.error && (entry.result as any)?.scope === "this_week"
+  );
+  if (moved) {
+    const result = moved.result as { week?: string; week_start?: string };
+    const next = result.week === "next";
+    const week = repo.getEnduranceSchedule(result.week_start);
+    const usual = repo.getStandingEnduranceSchedule()?.days ?? [];
+    const session = week?.week_move?.quality_stated && week.quality ? qualityWords(week.quality) : null;
+    const moveDays = week?.week_move ? runDayWords(week.days, { and: true, quality: session }) : "";
+    const after = next ? "The week after" : "Next week";
+    const back = usual.length
+      ? `${after} goes back to your usual days (${words(usual)}).`
+      : `${after} the coach places your runs by its own spacing again.`;
+    const saved = `Saved for ${next ? "next" : "this"} week only`;
+    return moveDays ? `${saved}: ${moveDays}. ${back}` : `${saved}. ${back}`;
+  }
+  const schedule = repo.getStandingEnduranceSchedule();
+  const days = schedule?.days ?? [];
+  if (!days.length) return "Your stated run days are cleared; the coach places your runs by its own spacing again.";
+  return `Saved as your standing run week: ${words(days)}. That holds every week until you change it, not just this one.`;
+}
+
 // The run counterpart to reconcileChatPlanReply: whatever the model said it would do,
 // the athlete-facing receipt is composed from the stored run READ BACK after the
 // apply. A run that did not land — refused as ambiguous, held for review, or verified
@@ -779,6 +817,8 @@ export function reconcileChatRunReply(
   const today = localDateISO();
   const entries = applied.filter((entry) => entry.type === "set_run");
   if (!entries.length) {
+    // A landed run-week change is a run change; its receipt is already on the reply.
+    if (runWeekLanded(applied)) return reply;
     if (hasExplicitRunEditIntent(message) && replyClaimsRunSuccess(reply)) {
       return pickDayVariant(RUN_NOT_SAVED_VARIANTS, today, "chat-run-not-saved");
     }

@@ -82,6 +82,12 @@ export function recordAgentRun(r: {
   escalation_source?: string | null;
   /** Failed attempts: the redacted CLI output tail. Re-scrubbed and bounded here too. */
   failure_tail?: string | null;
+  /** Chat: how this attempt reached the coach reads (brain/read-transport.ts). */
+  read_transport?: string | null;
+  /** Chat: how many coach reads this attempt made. Never their arguments or results. */
+  read_calls?: number | null;
+  /** Chat: the bytes of prompt this attempt was handed. */
+  prompt_bytes?: number | null;
 }) {
   try {
     const status = telemetryIdentifier(r.status || (r.ok ? "ok" : "error"), 60, r.ok ? "ok" : "error");
@@ -105,8 +111,8 @@ export function recordAgentRun(r: {
          status, error_class, error_message, exit_code, model, input_tokens, output_tokens,
          lane, policy_version, reason_codes_json, requested_model, requested_reasoning,
          effective_reasoning, streaming, ttft_ms, chat_turn_id, attempt_index, escalation_source,
-         failure_tail
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         failure_tail, read_transport, read_calls, prompt_bytes
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ) as any
     ).run(
       getBuildInfo().build_id,
@@ -139,7 +145,10 @@ export function recordAgentRun(r: {
       boundedInt(r.attempt_index),
       CHAT_LANES.includes(r.escalation_source as ChatLane) ? r.escalation_source : null,
       // Local-only diagnostic: kept off every export and roll-up, never on a success.
-      !r.ok && typeof r.failure_tail === "string" ? failureTail({ stderr: r.failure_tail }) : null
+      !r.ok && typeof r.failure_tail === "string" ? failureTail({ stderr: r.failure_tail }) : null,
+      r.read_transport === "native_mcp" || r.read_transport === "prompt_loop" ? r.read_transport : null,
+      boundedInt(r.read_calls),
+      boundedInt(r.prompt_bytes)
     );
   } catch {
     /* telemetry is best-effort — never break the loop on a write error */

@@ -18,7 +18,7 @@
 import { pickDayVariant } from "../repo/brain/day-read-rules.js";
 import {
   getEnduranceGoal,
-  getEnduranceSchedule,
+  getStandingEnduranceSchedule,
   normalizeEnduranceGoal,
   setProfile,
   WEEKDAY_NAMES,
@@ -60,7 +60,7 @@ export const WELCOME_FOLLOW_UP_QUESTIONS = { both: ASK_BOTH, days: ASK_DAYS, vol
 function stillUnsaid(date: string): WelcomeFollowUpAsk[] {
   const goal = getEnduranceGoal(date);
   const asks: WelcomeFollowUpAsk[] = [];
-  if (!getEnduranceSchedule()?.days.length) asks.push("days");
+  if (!getStandingEnduranceSchedule()?.days.length) asks.push("days");
   if (goal && !(Number(goal.weekly_km) > 0)) asks.push("volume");
   return asks;
 }
@@ -279,10 +279,10 @@ export function answerWelcomeFollowUp(text: unknown, date = localDateISO()): Wel
   let daysKept = false;
   try {
     if (answer.days.length && answer.days.length < 7) {
-      if (getEnduranceSchedule()?.days.length) daysKept = true;
+      if (getStandingEnduranceSchedule()?.days.length) daysKept = true;
       else {
         setProfile({ endurance_schedule: { days: answer.days, source: "chat" } });
-        applied.run_days = getEnduranceSchedule()?.days.map((d) => d.dow) ?? [];
+        applied.run_days = getStandingEnduranceSchedule()?.days.map((d) => d.dow) ?? [];
       }
     }
   } catch (err) {

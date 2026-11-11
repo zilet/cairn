@@ -301,3 +301,22 @@ test("a removal alongside a real change never rides in as a run edit", () => {
   assert.equal(planItems().find((item) => item.exercise === "Back Squat").target_weight, 175);
   assert.equal(cardioItemCount(), 0);
 });
+
+// ---- a stated run week that landed (set_endurance_schedule) ----
+
+test("a landed run-week change is never disclaimed, and its receipt says it is the standing week", () => {
+  repo.setProfile({ endurance_schedule: { days: [{ dow: 5, kind: "quality" }, { dow: 0, kind: "long" }] } });
+  const applied = [{ type: "set_endurance_schedule", result: {} }];
+  const said = "Friday morning is your quality session now.";
+  const plan = reconcileChatPlanReply(said, "move quality run to friday", applied, []);
+  assert.doesNotMatch(plan, /no plan change was saved|didn't save/i);
+  assert.match(plan, /Friday morning is your quality session now\./, "the answer stays");
+  assert.match(plan, /standing run week: Sunday long and Friday quality|standing run week: Friday quality and Sunday long/);
+  assert.match(plan, /every week until you change it, not just this one/);
+  // …and the run reconciler does not call the same landed change unsaved.
+  const run = reconcileChatRunReply("I've moved your quality run to Friday.", "move quality run to friday", applied);
+  assert.doesNotMatch(run, /unchanged|not saved|didn't/i);
+  // A schedule write that FAILED keeps the honest note.
+  const failed = reconcileChatPlanReply(said, "move quality run to friday", [{ type: "set_endurance_schedule", error: "invalid endurance_schedule" }], []);
+  assert.match(failed, /no plan change was saved|didn't save|Nothing landed/i);
+});

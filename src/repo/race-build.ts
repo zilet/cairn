@@ -1344,7 +1344,7 @@ function estimateSentence(p: RacePrediction | null, t: RaceTarget | null, units:
  */
 function runningWithoutRace(asOf: string, goal: ReturnType<typeof getEnduranceGoal>): "runs" | "none" {
   if (goal) return "runs";
-  if ((safe(() => statedRunDows()) ?? []).length) return "runs";
+  if ((safe(() => statedRunDows(asOf)) ?? []).length) return "runs";
   return recentRuns(asOf, 42).length ? "runs" : "none";
 }
 
@@ -1849,7 +1849,7 @@ function raceBuildRead(
             runPlan: plan ?? null,
             strengthDows: lifting.days.map((d) => d.dow),
             liftDaysSource: lifting.source,
-            enduranceDows: statedRunDows(),
+            enduranceDows: statedRunDows(asOf),
             weekdayMap,
             // Only the days still ahead: never a move onto (or of) a day already trained.
             closed: weekLayoutClosed(asOf, { runPlan: plan ?? null }),

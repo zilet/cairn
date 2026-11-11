@@ -45,6 +45,9 @@ export interface CoachEnduranceScheduleDay {
 
 export interface CoachEnduranceSchedule extends CoachRecord {
   days: CoachEnduranceScheduleDay[];
+  /** A one-week run move for this / next week: that week's run days; `days` above stay the standing week. */
+  this_week?: { week_start: string; days: CoachEnduranceScheduleDay[]; note?: string };
+  next_week?: { week_start: string; days: CoachEnduranceScheduleDay[]; note?: string };
   note?: string;
   source?: "athlete" | "chat" | string;
   updated_at?: string;

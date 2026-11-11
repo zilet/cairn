@@ -363,7 +363,9 @@ function longDoseMet(observation: RunObservation, prescription: RunPlanPrescript
   if (targetKm == null && targetMin == null) {
     if (observation.distance_km == null && observation.duration_min == null) return false;
     const dow = isoDow(observation.date);
-    const onStatedLong = (getEnduranceSchedule()?.days ?? []).some((day) => day.kind === "long" && day.dow === dow);
+    const onStatedLong = (getEnduranceSchedule(observation.date)?.days ?? []).some(
+      (day) => day.kind === "long" && day.dow === dow
+    );
     if (onStatedLong) return true;
     const bars = runLengthBars(observation.date, { min: CARDIO_GRADE.hardMin, km: CARDIO_GRADE.hardKm });
     return isLongRunForAthlete(bars, {
@@ -631,8 +633,9 @@ function matchCompletions(
 // real run; a quality slot still needs positive intensity evidence. The long slot, with
 // no distance to compare against, closes only on the stated long weekday or when the run
 // is long for this athlete — a short extra never answers it.
-function statedShapePrescriptions(): RunPlanPrescription[] {
-  const days = getEnduranceSchedule()?.days ?? [];
+function statedShapePrescriptions(weekStart: string): RunPlanPrescription[] {
+  // That week's run days: a one-week move is its own week's shape, never another's.
+  const days = getEnduranceSchedule(weekStart)?.days ?? [];
   return days
     .map(
       (day) =>
@@ -670,7 +673,7 @@ export function weekRunClosures(
     earlierSlots?: Array<RunPlanPrescription | null>;
   }
 ): RunClosure[] {
-  const prescriptions = opts?.prescriptions ?? statedShapePrescriptions();
+  const prescriptions = opts?.prescriptions ?? statedShapePrescriptions(weekStart);
   const owned = [...(opts?.morningOwned ?? [])].sort((a, b) => a - b);
   const earlier = opts?.earlierSlots ?? [];
   const shapeOf = (run: RunPlanPrescription | null | undefined) =>
@@ -703,7 +706,7 @@ function weekRunClosuresRead(
 ): RunClosure[] {
   const observations = runObservations(weekStart, through);
   const statedQualityDows = new Set(
-    (getEnduranceSchedule()?.days ?? []).filter((day) => day.kind === "quality").map((day) => day.dow)
+    (getEnduranceSchedule(weekStart)?.days ?? []).filter((day) => day.kind === "quality").map((day) => day.dow)
   );
   const { completed, extras } = matchCompletions(prescriptions, observations, {
     weekStart,
@@ -938,7 +941,7 @@ function datesBetween(start: string, end: string): string[] {
 function suggestedDatesFor(run: RunPlanPrescription, asOf: string, weekEnd: string, blocked: Set<string>): string[] {
   const candidates = datesBetween(asOf, weekEnd);
   if (!candidates.length) return [];
-  const schedule = getEnduranceSchedule();
+  const schedule = getEnduranceSchedule(asOf);
   const scheduledDows = schedule?.days.length ? new Set(schedule.days.map((d) => d.dow)) : null;
   const eligible = scheduledDows ? candidates.filter((date) => scheduledDows.has(isoDow(date))) : candidates;
   if (!eligible.length) return [];
@@ -1084,7 +1087,7 @@ function flexibleTrainingAgendaRead(
     })
   );
   const longDows = new Set(
-    (getEnduranceSchedule()?.days ?? []).filter((day) => day.kind === "long").map((day) => day.dow)
+    (getEnduranceSchedule(asOf)?.days ?? []).filter((day) => day.kind === "long").map((day) => day.dow)
   );
   const blocked = blockedKeyRunDates(lowerDates, cardio, knownCross, longDows);
   const windowStart = asOf < weekStart ? weekStart : asOf;

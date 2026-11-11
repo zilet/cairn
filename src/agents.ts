@@ -106,6 +106,28 @@ export interface AgentStructuredOutput {
 }
 
 /**
+ * How a CLI reaches the closed coach-read catalog (src/brain/read-transport.ts). Config
+ * only: enabling a CLI's native tool calls is an agents.json edit, never a branch on its
+ * name. Absent (or any transport but `native_mcp`) ⇒ the provider-neutral prompt loop.
+ */
+export interface AgentReadToolsDef {
+  transport: "native_mcp" | "prompt_loop";
+  /**
+   * The argv attached at `{mcp_config_args}` for a native run. `{mcp_url}` is the per-run
+   * loopback URL; `{allowed_tools}` is the catalog's names, each through
+   * `allowed_tool_template`, comma-joined. Empty strings are meant (claude's `--tools ""`).
+   */
+  attach_args?: string[];
+  /** e.g. "mcp__cairn-coach-read__{tool}" — how this CLI names one MCP tool. */
+  allowed_tool_template?: string;
+  /** "strict": only the read tools exist. "sandboxed": other tools remain, held by a read-only sandbox. */
+  confinement?: "strict" | "sandboxed";
+  /** The CLI version and date the attach was verified live. */
+  verified?: string;
+  note?: string;
+}
+
+/**
  * A provider-neutral execution request: what KIND of model and how much effort.
  * Resolved against one agent's declared capabilities by resolveAgentProfileForClass.
  */
@@ -168,6 +190,11 @@ export interface AgentDef {
   // about 30K fewer prompt tokens and a second off every Claude Code start. The preamble
   // still leads the prompt; these flags only make the CLI agree with it.
   no_tools_args?: string[];
+  // How this CLI reaches Cairn's closed coach-read catalog (src/brain/read-transport.ts).
+  // Absent ⇒ the provider-neutral prompt loop. `native_mcp` attaches the per-run loopback
+  // MCP server (src/coachReadMcp.ts) through `attach_args`, which carry their own
+  // confinement because `{no_tools_args}` stays unexpanded whenever MCP args are passed.
+  read_tools?: AgentReadToolsDef;
   // Args repeated for every uploaded image path found in a DATA_DIR prompt.
   // Codex supports `--image <file>`, which is more reliable than asking it to
   // discover a JPEG through shell tools inside its own sandbox.
@@ -1367,8 +1394,10 @@ export interface RunOpts {
   // NO_TOOLS_PREAMBLE so an autonomous CLI answers from the prompt instead of
   // exploring its cwd; "provider" leaves the prompt alone for the one op that needs
   // live tools (cited web research). A prompt that hands the CLI uploaded files is
-  // always left alone — see applyToolPolicy.
-  tools?: "none" | "provider";
+  // always left alone — see applyToolPolicy. "coach_reads" is the native coach-read
+  // transport (src/brain/read-transport.ts): the CLI's ONLY tools are Cairn's read-only
+  // reads, attached for this run through `mcpConfigArgs`, and COACH_READS_PREAMBLE says so.
+  tools?: "none" | "provider" | "coach_reads";
   // Custom JSON extractor applied to the CLI's stdout instead of the default
   // extractJson. Needed by the prose-first (reply-marked) op contracts: their prose
   // may legitimately contain a stray `{`, which anchors extractJson's first-brace
@@ -1398,6 +1427,11 @@ export interface RunOpts {
   // (for example Claude's --mcp-config pointing at the loopback read-only coach
   // adapter). Expanded only at an explicit {mcp_config_args} slot.
   mcpConfigArgs?: string[];
+  // Called once, the moment this run holds its spawn permit (after any queue wait, before
+  // the spawn). The native coach-read listener re-arms its TTL here, so a long permit
+  // wait can never close the listener under a run that has only just started. Never
+  // allowed to break a run: a throwing callback is ignored.
+  onPermit?: () => void;
   /** Optional per-run model pin. Only agents with a {model_args} slot consume it. */
   model?: string;
   /** Provider-neutral reasoning effort; a level above the provider's max maps down. */
@@ -1769,7 +1803,9 @@ function expandAgentArgs(
       continue;
     }
     if (arg === "{mcp_config_args}") {
-      out.push(...mcpConfigArgs.filter((value) => typeof value === "string" && value.length > 0));
+      // Empty strings are kept: a native coach-read attach carries claude's `--tools ""`
+      // and `--setting-sources ""`, where the empty value IS the instruction.
+      out.push(...mcpConfigArgs.filter((value) => typeof value === "string"));
       continue;
     }
     if (arg === "{no_tools_args}") {
@@ -2577,15 +2613,31 @@ export const NO_TOOLS_PREAMBLE =
   "the reply shape this prompt asks for; if something you need is not in the prompt, say so in " +
   "your answer.";
 
+// The third policy: a run whose ONLY tools are Cairn's own read-only coach reads,
+// attached natively for this one run (src/brain/read-transport.ts, src/coachReadMcp.ts).
+// Its own sentence, never a softened NO_TOOLS_PREAMBLE: the reads are the one tool
+// family this run has, and the shell, files and web stay off exactly as before.
+export const COACH_READS_PREAMBLE =
+  "The only tools you have on this run are Cairn's read-only coach reads (the read_* tools from " +
+  "cairn-coach-read). You have no shell, no files and no web: do not read or list files, run " +
+  "commands, or search the web. Call a read when the answer turns on the athlete's own data that is " +
+  "not in this prompt; otherwise answer straight from the prompt, in exactly the reply shape it asks for.";
+
 /**
  * The prompt the CLI actually receives. Untouched when the run hands the CLI files it
  * must open (an uploaded panel or photo — the same test that grants file access) or
- * when the op asked for provider tools; otherwise NO_TOOLS_PREAMBLE leads. Idempotent,
+ * when the op asked for provider tools; a native coach-read run leads with
+ * COACH_READS_PREAMBLE; otherwise NO_TOOLS_PREAMBLE leads. Never both, and idempotent,
  * so the JSON-repair retry that re-runs a prompt never stacks a second copy.
  */
 export function applyToolPolicy(prompt: string, tools: RunOpts["tools"] = "none"): string {
   if (tools === "provider") return prompt;
   if (promptReferencesDataDir(prompt)) return prompt;
+  if (tools === "coach_reads") {
+    if (prompt.startsWith(COACH_READS_PREAMBLE)) return prompt;
+    const body = prompt.startsWith(NO_TOOLS_PREAMBLE) ? prompt.slice(NO_TOOLS_PREAMBLE.length).replace(/^\n+/, "") : prompt;
+    return `${COACH_READS_PREAMBLE}\n\n${body}`;
+  }
   if (prompt.startsWith(NO_TOOLS_PREAMBLE)) return prompt;
   return `${NO_TOOLS_PREAMBLE}\n\n${prompt}`;
 }
@@ -2606,7 +2658,8 @@ export function runAgent(name: string, rawPrompt: string, opts: RunOpts | number
   // opt-in claims the reserved interactive permit.
   const priority: AgentPriority = (typeof opts === "number" ? undefined : opts.priority) ?? "background";
   const op = typeof opts === "number" ? undefined : opts.op;
-  return runAgentImpl(name, prompt, timeoutMs, signal, extract, mcpConfigArgs, model, reasoning, schema, priority, op);
+  const onPermit = typeof opts === "number" ? undefined : opts.onPermit;
+  return runAgentImpl(name, prompt, timeoutMs, signal, extract, mcpConfigArgs, model, reasoning, schema, priority, op, onPermit);
 }
 
 // ---------- one process-wide cap on concurrent CLI subprocesses ----------
@@ -2815,6 +2868,14 @@ interface AgentSpawnRequest {
   op?: string;
 }
 
+function notePermit(onPermit: (() => void) | undefined): void {
+  try {
+    onPermit?.();
+  } catch {
+    /* a permit observer must never break the run */
+  }
+}
+
 async function runAgentImpl(
   name: string,
   prompt: string,
@@ -2826,7 +2887,8 @@ async function runAgentImpl(
   reasoning?: ReasoningLevel,
   schema?: JsonSchema,
   priority: AgentPriority = "background",
-  op?: string
+  op?: string,
+  onPermit?: () => void
 ): Promise<AgentResult> {
   const def = loadAgents()[name];
   if (!def) throw new Error(`Unknown agent "${name}"`);
@@ -2835,6 +2897,7 @@ async function runAgentImpl(
   // timeout timer, armed inside the spawn below, never counts the queue. The wait gets
   // the same budget as the run, separately from it.
   const releaseSlot = await acquireAgentSlot(name, signal, priority, timeoutMs);
+  notePermit(onPermit);
   try {
     // The refused-pin retry runs INSIDE the permit already held: a retry that queued
     // again could meet AgentBusyError, which must only ever mean "no permit", never a
@@ -3258,6 +3321,7 @@ export async function runAgentStreaming(
     opts.priority ?? "background",
     opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
   );
+  notePermit(opts.onPermit);
   try {
     // Resolved once here (not inside spawnAgentStream) so the refused-pin retry can
     // hand the spawn an explicitly EMPTY pin that a profile resolver cannot refill.

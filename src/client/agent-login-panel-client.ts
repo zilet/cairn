@@ -219,11 +219,17 @@
           if (codeRow) codeRow.hidden = false;
           if (phase === "link" || phase === "waiting" || phase === "starting") setPhase("link", linkStatus(false));
           break;
-        case "connected":
+        case "connected": {
           stopTicker();
-          setPhase("connected", `Signed in to ${label}`);
+          // The CLI answered without ever printing a link: it was signed in already
+          // (Google's sign-in is its status probe). The tab opened for it is still
+          // blank, so it closes, and the panel says why no sign-in page appeared.
+          const already = !url && !code;
+          dropTab();
+          setPhase("connected", already ? `Already signed in to ${label}. Nothing more to do.` : `Signed in to ${label}`);
           opts.onConnected?.();
           break;
+        }
         case "busy":
           stopTicker();
           dropTab();

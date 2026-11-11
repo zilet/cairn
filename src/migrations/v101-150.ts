@@ -745,4 +745,30 @@ export const MIGRATIONS_101_150: Migration[] = [
       if (hasTable(db, "plan_adaptations")) addColumn(db, "plan_adaptations", "layer TEXT");
     },
   },
+  {
+    version: 131,
+    name: "agent-run-read-telemetry",
+    // How a chat attempt reached the coach reads (native_mcp | prompt_loop), how many it
+    // made, and how many bytes of prompt it was handed (src/chatTurns.ts) — so the lean
+    // core and the native transport can be re-measured from live data. NULL on existing
+    // rows and on every non-chat op. Never arguments or results. Two-step: also in
+    // db.ts's agent_runs create block.
+    up: (db) => {
+      if (!hasTable(db, "agent_runs")) return;
+      addColumn(db, "agent_runs", "read_transport TEXT");
+      addColumn(db, "agent_runs", "read_calls INTEGER");
+      addColumn(db, "agent_runs", "prompt_bytes INTEGER");
+    },
+  },
+  {
+    version: 132,
+    name: "settings-chat-context",
+    // Chat's DATA block: 'lean' (the always-on core, the rest one coach read away) or
+    // 'full' (the whole snapshot and the original contract wording) — the runtime
+    // switch back if the lean core regresses. Existing rows take the default, 'lean'.
+    // Two-step: also in db.ts's settings create block.
+    up: (db) => {
+      if (hasTable(db, "settings")) addColumn(db, "settings", "chat_context TEXT DEFAULT 'lean'");
+    },
+  },
 ];

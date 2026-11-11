@@ -11,7 +11,7 @@ import { planWeeklyRead, storeWeeklyRead, weeklyReadGuardTexts } from "../repo/w
 import type { WeeklyReadPlan } from "../repo/weekly-read-repeat.js";
 import { addMemory, listMemory, supersedeMemory, updateMemory } from "../repo/memory.js";
 import {
-  getEnduranceSchedule,
+  getStandingEnduranceSchedule,
   getProfile,
   getStrengthSchedule,
   normalizeEnduranceGoal,
@@ -577,12 +577,12 @@ export function applyOnboardParsed(p: any, applied: OnboardApplied, opts: { raw?
         .filter((d: { dow: number }) => Number.isInteger(d.dow) && d.dow >= 0 && d.dow <= 6);
       // A run week already stated changes only when the text names EVERY day the
       // extraction read; one it cannot see in their words keeps the stored week whole.
-      const stored = getEnduranceSchedule();
+      const stored = getStandingEnduranceSchedule();
       const named = new Set(namedWeekdays(opts.raw ?? "").days.map((d) => d.dow));
       const explicit = days.every((d: { dow: number }) => named.has(d.dow));
       if (days.length && days.length < 7 && (!stored?.days.length || explicit)) {
         setProfile({ endurance_schedule: { days, source: "chat" } });
-        applied.run_days = getEnduranceSchedule()?.days.map((d) => d.dow) ?? [];
+        applied.run_days = getStandingEnduranceSchedule()?.days.map((d) => d.dow) ?? [];
       }
     } catch (err) { log.warn("[onboard] could not store the stated run days", { error: err }); }
   }

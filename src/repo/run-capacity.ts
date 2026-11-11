@@ -146,11 +146,12 @@ export function runningHarmOnDay(date: string): HarmEvidence | null {
   }
 }
 
-// The weekdays the athlete stated a long or quality run on — the week's key runs.
-function statedKeyRunDows(): Set<number> {
+// The weekdays the athlete stated a long or quality run on in `asOf`'s week — the week's
+// key runs (a one-week move included, inside its own week).
+function statedKeyRunDows(asOf?: string): Set<number> {
   try {
     return new Set(
-      (getEnduranceSchedule()?.days ?? []).filter((d) => d.kind === "long" || d.kind === "quality").map((d) => d.dow)
+      (getEnduranceSchedule(asOf)?.days ?? []).filter((d) => d.kind === "long" || d.kind === "quality").map((d) => d.dow)
     );
   } catch {
     return new Set();
@@ -190,7 +191,7 @@ function weekRunHarmRead(runDates: readonly string[]): {
   // A later key run the same week the body answered well: no running harm of its own,
   // not a confounded day, and a next morning that spoke clean.
   const answeredAfter = (date: string): string | null => {
-    keyDows ??= statedKeyRunDows();
+    keyDows ??= statedKeyRunDows(dates[0]);
     if (!keyDows.size) return null;
     for (const later of dates) {
       if (later <= date || !keyDows.has(isoDow(later))) continue;
