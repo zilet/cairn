@@ -321,7 +321,7 @@ const COMPILE_CACHE = (() => {
   return knob || path.join(tmpdir(), "cairn-test-compile-cache");
 })();
 function envFor(dir) {
-  return {
+  const env = {
     ...process.env,
     // Any node process a test starts inherits the heap cap too (a flag it passes itself wins).
     NODE_OPTIONS: [process.env.NODE_OPTIONS, heapFlag].filter(Boolean).join(" "),
@@ -368,6 +368,11 @@ function envFor(dir) {
     // test (and no scheduler tick) can POST feedback or a usage ping for real.
     CAIRN_FEEDBACK_URL: "",
   };
+  // A runner started from inside a test file inherits its NODE_TEST_CONTEXT, and a file that
+  // starts with it set would serialize its results for a parent that is not there.
+  // test/_isolate.mjs sets it for the file once the reporter is in place.
+  delete env.NODE_TEST_CONTEXT;
+  return env;
 }
 
 // --- The RSS watchdog --------------------------------------------------------------------
