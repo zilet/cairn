@@ -497,11 +497,23 @@ act (`athlete_override`, an `agent_suggest` holding items, `manual_plan`, or an 
 Today aggregate as `open_session`, and the strength line reads it: a chosen or started session owns the
 line with nothing logged (naming its own plan day, never the calendar's rest — and the week placement
 lets it name an unstated weekday), and a CHOSEN session is never "rest suggested": `suggestion` is null
-and the read survives only as a `caveat` from a "you chose to train" variant set. A prepare/discard
-ownership conflict (`daily_session_active_changed` / `daily_session_locked`) carries `owner`, an empty
-owner is superseded by `replace:true` (an adaptive request never takes the athlete's itemful chosen
-card), and `POST /api/daily-session/discard` (`discard_daily_session`) deletes an accidental empty
-session so the date is free again — never one with logged work.
+and the read survives only as a `caveat` from a "you chose to train" variant set. **There is always
+somewhere to go.** A prepare with no `replace`, no fingerprint and no `expected_active_id` is an OPEN
+and never conflicts: a date with a session answers with it (`reused`, finished included — "Log more"
+reopens a finished day; opening never mints a second session), whatever the request's source. The one
+re-take is the same adaptive request over a plain adaptive card nobody has lived on, which re-snapshots
+it on the same row. A session row logged outside any composition (sets from chat, MCP or the watch) is
+ADOPTED by a non-replace prepare — the composition binds to it and the row's own record is untouched;
+with no adaptive candidate (no plan) it is adopted as the athlete's "Open session". Every ownership
+conflict (`daily_session_active_changed` / `daily_session_changed` / `daily_session_locked`, and
+`daily_session_missing` while a session row still holds the date) carries `owner`, which resolves:
+`expected_active_id = owner.daily_session_id` opens it, and an owner with a null `daily_session_id` is
+opened by the plain prepare; `daily_session_missing` with no owner means the date is free. Conflict
+`error` text is a sentence for a person (no ids); the detail is `code`/`owner`. An empty owner is
+superseded by `replace:true` (an adaptive request never takes the athlete's itemful chosen card), a day
+finished with nothing logged is started over by a replace, and `POST /api/daily-session/discard`
+(`discard_daily_session`) deletes an accidental empty session so the date is free again — never one with
+logged work. The full outcome matrix is `test/_dailySessionMatrix.mjs`.
 
 **Plan tab week projection.** `GET /api/plan/week` (`planWeek()` in `src/domain/training/plan-week.ts`)
 assembles that same map into a connected week strip for Strength + Endurance: calendar Mon→Sun when

@@ -65,12 +65,26 @@ export function discardDailySessionUseCase(input: DiscardDailySessionInput = {})
   return discardDailySession(input);
 }
 
+/**
+ * The one error body REST and MCP both answer with. `code` is the daily-session code
+ * only for a coded refusal (`DailySessionError`); anything else that escapes these paths
+ * is a validation failure of the request (a bad date, source, plan day or payload) and
+ * reads `daily_session_invalid` — a foreign `code` (a driver's, say) never leaks out as
+ * if it were part of this contract, and neither does its message.
+ */
+const DAILY_SESSION_UNEXPECTED_ERROR = "This session couldn't be saved just now. Try again in a moment.";
+
 export function dailySessionErrorBody(error: unknown) {
   const value = error as { code?: unknown; message?: unknown; preview?: unknown; owner?: unknown };
+  const foreign = !(error instanceof DailySessionError) && value?.code != null;
   return {
     ok: false as const,
-    code: typeof value?.code === "string" ? value.code : "daily_session_invalid",
-    error: typeof value?.message === "string" ? value.message : String(error),
+    code: error instanceof DailySessionError ? error.code : "daily_session_invalid",
+    error: foreign
+      ? DAILY_SESSION_UNEXPECTED_ERROR
+      : typeof value?.message === "string"
+        ? value.message
+        : String(error),
     ...(value?.preview ? { preview: value.preview } : {}),
     // The session that owns the date, on a conflict the client resolves by opening it.
     ...(value?.owner ? { owner: value.owner } : {}),

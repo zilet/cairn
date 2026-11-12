@@ -119,6 +119,29 @@ function fail(
   throw new DailySessionError(code, message, preview, owner ?? undefined);
 }
 
+// The ownership conflicts' athlete-facing words. A conflict's `error` is printed to a
+// person as it stands, so it names no ids and no engineering ("session 12 already has
+// logged sets"); the machine detail rides on `code` and `owner`. Every one of these
+// conflicts carries the owner the client opens, or — `daily_session_missing` with no
+// owner — says plainly that the day is free.
+const OWNER_HOLDS_DAY_MESSAGE = "Another session already holds this day. Open it to carry on.";
+const OWNER_CHANGED_MESSAGE = "Your session changed since this screen loaded. Open the current one to carry on.";
+const DAY_FREE_MESSAGE = "That session was cleared, so the day is free. Start a new one whenever you like.";
+const STARTED_LOCK_MESSAGE = "You've already logged work on this session, so it stays as it is. Open it to carry on.";
+const STARTED_DISCARD_MESSAGE = "This session has logged work, so it stays. Open it to carry on.";
+
+// The PWA's own empty "Open session" door (today-screen.ts). The server reaches for it
+// in exactly one place: an OPEN request on a date whose session row already exists
+// (logged outside any composition) but which has no adaptive candidate to bind — the
+// row is adopted as the athlete's open session rather than refused.
+const OPEN_SESSION_PAYLOAD = {
+  name: "Open session",
+  focus: "Choose as you go",
+  why: "A blank session for whatever feels useful today.",
+  est_minutes: null,
+  items: [],
+} as const;
+
 // "This date has no weekly template day to build an adaptive candidate from." A routine
 // ABSENCE, not malformed input: the PWA asks for a preview on EVERY Today render, so the
 // read surfaces answer it with `200 + null` — the same absence contract the other
@@ -1027,16 +1050,60 @@ function sessionRowsForDate(date: string): any[] {
 // being replaced (they are cleared on replace, see prepareDailySession).
 function assertSessionsUnstarted(sessions: any[], date: string): void {
   for (const session of sessions) {
-    const reasons = meaningfulSessionReasons(session);
-    if (reasons.length) {
-      fail(
-        "daily_session_locked",
-        `daily session cannot be changed because session ${session.id} already has ${reasons.join(", ")}`,
-        undefined,
-        dailySessionOwner(date, Number(session.id))
-      );
+    if (meaningfulSessionReasons(session).length) {
+      fail("daily_session_locked", STARTED_LOCK_MESSAGE, undefined, dailySessionOwner(date, Number(session.id)));
     }
   }
+}
+
+// The session row a date with NO active composition is held by: the one the athlete
+// lived on (logged sets, notes, a watch activity — session-started.ts), else the first
+// row. Null when the date has no session at all.
+function sessionWithoutComposition(sessions: any[]): any | null {
+  return sessions.find((session) => meaningfulSessionReasons(session).length > 0) ?? sessions[0] ?? null;
+}
+
+function reusedResult(row: any) {
+  return { ok: true as const, daily_session: hydrate(row), session_id: row.session_id, reused: true };
+}
+
+function isNoTemplate(error: unknown): boolean {
+  return error instanceof DailySessionError && error.code === DAILY_SESSION_NO_TEMPLATE;
+}
+
+/**
+ * The assertion-only path: `expected_active_id` names the composition the caller cached.
+ * It matches → that composition, untouched. It does not → the conflict carries the
+ * CURRENT owner so the client can open it instead: `daily_session_changed` when another
+ * composition holds the date, `daily_session_missing` when none does — with the owner
+ * when a session row still holds the date (opened by a plain prepare, which adopts it),
+ * and without one when the date is simply free.
+ */
+function assertActiveDailySession(date: string, expected: unknown) {
+  const expectedId = Number(expected);
+  if (!Number.isInteger(expectedId) || expectedId <= 0) {
+    fail("daily_session_invalid", "expected_active_id must identify the cached active daily session");
+  }
+  const active = activeCompositionRow(date);
+  if (!active) {
+    const owner = dailySessionOwnerOf(null, sessionWithoutComposition(sessionRowsForDate(date)));
+    fail("daily_session_missing", owner ? OWNER_CHANGED_MESSAGE : DAY_FREE_MESSAGE, undefined, owner);
+  }
+  if (Number(active.id) !== expectedId) {
+    fail("daily_session_changed", OWNER_CHANGED_MESSAGE, undefined, compositionOwner(date, active));
+  }
+  return reusedResult(active);
+}
+
+// An OPEN request (no replace, no reviewed preview) over a plain adaptive composition
+// re-takes it from today's picture when the request is the same adaptive one — the
+// unstarted-adaptive refresh (a plan edit or a new injury lands before the athlete
+// begins). Only while nobody has lived on it and it is not finished: past that, an open
+// request hands the owner back exactly as it stands.
+function openRefreshesAdaptive(row: any, input: PrepareDailySessionInput, source: DailySessionSource, date: string) {
+  if (source !== "adaptive_plan" || !exactPlanRetry(row, input, source)) return false;
+  const session = sessionRowsForDate(date).find((candidate) => Number(candidate.id) === Number(row.session_id));
+  return !!session && !session.finished_at && meaningfulSessionReasons(session).length === 0;
 }
 
 // The owner a conflict carries: the composition row and its session (with set_count).
@@ -1150,22 +1217,48 @@ export function getActiveDailySessionForSession(sessionId: number) {
   );
 }
 
+/**
+ * Prepare (or open) a date's durable session. Every answer is one of: `ok:true` with the
+ * session to open (new, superseding, or `reused`); a conflict carrying the `owner` the
+ * client opens instead (or, `daily_session_missing` without one, a free date);
+ * `daily_session_preview_stale` with a fresh preview; or a validation refusal.
+ *
+ * An OPEN request — no `replace`, no `expected_input_fingerprint`, no
+ * `expected_active_id` — never conflicts: a date that already has a session answers
+ * with it, whatever the request's source (finished included: "Log more" reopens a
+ * finished session, and opening never mints a second one). A session row logged outside
+ * any composition is adopted, its record left as the athlete wrote it.
+ */
 export function prepareDailySession(input: PrepareDailySessionInput = {}) {
   const date = validateDate(input.date);
-  if (input.expected_active_id !== undefined) {
-    const expectedId = Number(input.expected_active_id);
-    if (!Number.isInteger(expectedId) || expectedId <= 0) {
-      fail("daily_session_changed", "expected_active_id must identify the cached active daily session");
-    }
-    const active = activeCompositionRow(date);
-    if (!active) fail("daily_session_missing", "no active daily session exists for the requested date");
-    if (Number(active.id) !== expectedId) {
-      fail("daily_session_changed", "the active daily session changed after the cached copy was read");
-    }
-    return { ok: true as const, daily_session: hydrate(active), session_id: active.session_id, reused: true };
-  }
+  // Assertion-only: null is the same as absent (the input type admits it).
+  if (input.expected_active_id != null) return assertActiveDailySession(date, input.expected_active_id);
   const source = sourceOf(input.source);
-  const adaptiveCandidate = source === "adaptive_plan" ? buildAdaptiveDailySessionCandidate(input) : null;
+  const openIntent = input.replace !== true && input.expected_input_fingerprint == null;
+  const openRow = openIntent ? activeCompositionRow(date) : null;
+  if (openRow && !openRefreshesAdaptive(openRow, input, source, date)) return reusedResult(openRow);
+  let adaptiveCandidate: AdaptiveDailySessionCandidate | null = null;
+  if (source === "adaptive_plan") {
+    try {
+      adaptiveCandidate = buildAdaptiveDailySessionCandidate(input);
+    } catch (error) {
+      // No adaptive candidate (no weekly template day). An open request still opens what
+      // the date has: its composition, or a session row logged outside one, adopted as
+      // the athlete's open session. A date with nothing keeps the honest absence.
+      if (openIntent && isNoTemplate(error)) {
+        if (openRow) return reusedResult(openRow);
+        if (sessionRowsForDate(date).length) {
+          return prepareDailySession({
+            ...input,
+            source: "athlete_override",
+            session: OPEN_SESSION_PAYLOAD,
+            train_anyway: false,
+          });
+        }
+      }
+      throw error;
+    }
+  }
   if (input.expected_input_fingerprint != null) {
     const expected = String(input.expected_input_fingerprint).trim();
     if (!adaptiveCandidate || !/^[a-f0-9]{64}$/.test(expected)) {
@@ -1197,28 +1290,14 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
       owner != null &&
       !owner.started &&
       !(source === "adaptive_plan" && compositionIsItemfulChoice(existingRow));
-    if (!replaceable) {
-      fail(
-        "daily_session_active_changed",
-        "Another accepted session now owns this date. Review that session before continuing.",
-        undefined,
-        owner
-      );
-    }
+    if (!replaceable) fail("daily_session_active_changed", OWNER_HOLDS_DAY_MESSAGE, undefined, owner);
   }
   // The same rule without a preview token: an adaptive replace never silently takes the
   // athlete's own chosen card that holds work. Once that card is lived on, the ordinary
   // lock (assertSessionsUnstarted) answers instead.
   if (existingRow && input.replace && source === "adaptive_plan" && compositionIsItemfulChoice(existingRow)) {
     const owner = compositionOwner(date, existingRow);
-    if (owner && !owner.started) {
-      fail(
-        "daily_session_active_changed",
-        "Another accepted session now owns this date. Review that session before continuing.",
-        undefined,
-        owner
-      );
-    }
+    if (owner && !owner.started) fail("daily_session_active_changed", OWNER_HOLDS_DAY_MESSAGE, undefined, owner);
   }
   if (existingRow && !input.replace && !canRefreshAdaptive) {
     return { ok: true as const, daily_session: hydrate(existingRow), session_id: existingRow.session_id, reused: true };
@@ -1390,13 +1469,25 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
     ) {
       return { ok: true as const, daily_session: hydrate(current), session_id: current.session_id, reused: true };
     }
-    assertSessionsUnstarted(sameDateSessions, date);
     let session: any;
+    // A session the athlete lived on before any composition existed (sets logged from
+    // chat, MCP or the watch, or a day from before compositions): there is no prescription
+    // to protect, so a prepare that is not a replace ADOPTS it — the composition binds to
+    // that row and the row stays exactly as the athlete left it (its plan-day link, skips
+    // and finish stamp untouched). A replace is refused with the row as the owner; the
+    // plain prepare is how a client opens it.
+    let adoptLived = false;
     if (current) {
+      assertSessionsUnstarted(sameDateSessions, date);
       session = sameDateSessions.find((candidate) => Number(candidate.id) === Number(current.session_id));
       if (!session) fail("daily_session_session_missing", "the active daily session is missing its workout session");
     } else {
-      session = sameDateSessions[0] ?? getOrCreateSessionRow(date, null);
+      const held = sessionWithoutComposition(sameDateSessions);
+      adoptLived = held != null && meaningfulSessionReasons(held).length > 0;
+      if (adoptLived && input.replace) {
+        fail("daily_session_locked", STARTED_LOCK_MESSAGE, undefined, dailySessionOwnerOf(null, held));
+      }
+      session = held ?? getOrCreateSessionRow(date, null);
     }
 
     if (current) {
@@ -1406,16 +1497,18 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
           WHERE id = ? AND status = 'active'`
       ).run(current.id);
     }
-    // A plan snapshot binds the existing session to that plan day. A custom
-    // suggestion owns no weekly-template provenance, so clear any stale link; an
-    // athlete override keeps the day it was already of (athleteOverridePlanDayId).
-    db.prepare(`UPDATE sessions SET plan_day_id = ? WHERE id = ?`).run(prepared.plan_day_id, session.id);
-    // The session has no logged sets (assertSessionsUnstarted just proved it), so
-    // any skips and finish stamp belong to the prescription being replaced: an
-    // athlete who skipped every lift of a day they then abandoned is starting
-    // over, not continuing. Clear them so the new composition opens clean.
-    db.prepare(`DELETE FROM session_skips WHERE session_id = ?`).run(session.id);
-    db.prepare(`UPDATE sessions SET finished_at = NULL WHERE id = ?`).run(session.id);
+    if (!adoptLived) {
+      // A plan snapshot binds the existing session to that plan day. A custom
+      // suggestion owns no weekly-template provenance, so clear any stale link; an
+      // athlete override keeps the day it was already of (athleteOverridePlanDayId).
+      db.prepare(`UPDATE sessions SET plan_day_id = ? WHERE id = ?`).run(prepared.plan_day_id, session.id);
+      // The session has no logged sets (assertSessionsUnstarted just proved it), so
+      // any skips and finish stamp belong to the prescription being replaced: an
+      // athlete who skipped every lift of a day they then abandoned is starting
+      // over, not continuing. Clear them so the new composition opens clean.
+      db.prepare(`DELETE FROM session_skips WHERE session_id = ?`).run(session.id);
+      db.prepare(`UPDATE sessions SET finished_at = NULL WHERE id = ?`).run(session.id);
+    }
     const nextVersion = Number(
       (
         db
@@ -1499,24 +1592,16 @@ export function discardDailySession(input: DiscardDailySessionInput = {}): Disca
   }
   return withSqliteSavepoint("discard_daily_session", () => {
     const active = activeCompositionRow(date);
-    if (!active) fail("daily_session_missing", "no active daily session exists for the requested date");
+    if (!active) {
+      const owner = dailySessionOwnerOf(null, sessionWithoutComposition(sessionRowsForDate(date)));
+      fail("daily_session_missing", owner ? OWNER_CHANGED_MESSAGE : DAY_FREE_MESSAGE, undefined, owner);
+    }
     const session = sessionRowsForDate(date).find((row) => Number(row.id) === Number(active.session_id)) ?? null;
     if (Number(active.id) !== expectedId) {
-      fail(
-        "daily_session_changed",
-        "the active daily session changed after the cached copy was read",
-        undefined,
-        dailySessionOwnerOf(active, session)
-      );
+      fail("daily_session_changed", OWNER_CHANGED_MESSAGE, undefined, dailySessionOwnerOf(active, session));
     }
-    const reasons = session ? meaningfulSessionReasons(session) : [];
-    if (reasons.length) {
-      fail(
-        "daily_session_locked",
-        `daily session cannot be discarded because session ${session.id} already has ${reasons.join(", ")}`,
-        undefined,
-        dailySessionOwnerOf(active, session)
-      );
+    if (session && meaningfulSessionReasons(session).length) {
+      fail("daily_session_locked", STARTED_DISCARD_MESSAGE, undefined, dailySessionOwnerOf(active, session));
     }
     db.prepare(
       `UPDATE daily_session_compositions

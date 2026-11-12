@@ -245,7 +245,13 @@ export function applyChatTodaySession(input: TodaySessionInput, ctx: ChatSession
     });
   } catch (error) {
     const code = errorCode(error);
-    if (code === "daily_session_locked") return failure(date, code, TODAY_SESSION_LOCKED_ERROR, before);
+    if (code === "daily_session_locked") {
+      // The refusal still points at the session that holds the logged work — a composition,
+      // or (`before` null) a session logged outside one, named by the conflict's owner.
+      const owner = (error as { owner?: { session_id?: unknown; title?: unknown } } | null)?.owner;
+      const standing = before ?? (owner?.session_id ? { session_id: owner.session_id, title: owner.title } : null);
+      return failure(date, code, TODAY_SESSION_LOCKED_ERROR, standing);
+    }
     const message = error instanceof Error ? error.message : String(error);
     return failure(date, code ?? "daily_session_invalid", message);
   }
@@ -269,7 +275,13 @@ export function applyChatTodaySession(input: TodaySessionInput, ctx: ChatSession
   });
 }
 
-/** Apply a chat `start_session`: open what today owns, else prepare the plan's day. */
+/**
+ * Apply a chat `start_session`: open what today owns, else prepare the plan's day. A day
+ * that has a session never answers with a failure: the composition that owns it comes
+ * back with `open`, a session logged outside any composition is adopted by the plain
+ * (open) prepare, and a write that lost a race re-reads the owner that won it. Only a day
+ * with no session and no plan day to open is the honest "nothing to open".
+ */
 export function applyChatStartSession(ctx: ChatSessionContext = {}): ChatSessionResult {
   const date = ctx.date ?? localDateISO();
   const active = getActiveDailySession(date) as any;
@@ -284,11 +296,11 @@ export function applyChatStartSession(ctx: ChatSessionContext = {}): ChatSession
       const preview = previewAdaptiveDailySession({ date });
       trainAnyway = preview.kind === "rest" || preview.kind === "easy";
     } catch (error) {
-      if (error instanceof DailySessionError && errorCode(error) === "daily_session_no_template") {
-        return failure(date, "daily_session_no_template", START_NO_PLAN_ERROR);
-      }
-      throw error;
+      // No plan day to preview. The open prepare below still opens a session the day
+      // already holds; with none, it answers the same absence.
+      if (!(error instanceof DailySessionError && errorCode(error) === "daily_session_no_template")) throw error;
     }
+    // An OPEN request (no replace): a session already on the day is adopted, never refused.
     const prepared = prepareDailySessionUseCase({
       date,
       source: "adaptive_plan",
@@ -300,6 +312,9 @@ export function applyChatStartSession(ctx: ChatSessionContext = {}): ChatSession
       train_anyway: trainAnyway,
     });
   } catch (error) {
+    // The day's owner as it stands now (a concurrent prepare may have won the write).
+    const standing = getActiveDailySession(date) as any;
+    if (standing) return resultFor(date, standing, standing.session_id, { reused: true });
     const code = errorCode(error);
     if (code === "daily_session_no_template") return failure(date, code, START_NO_PLAN_ERROR);
     const message = error instanceof Error ? error.message : String(error);

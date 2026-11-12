@@ -269,7 +269,10 @@ dayCoachRouter.get("/daily-session/decision", (req, res) => {
 // completed canonical job; athlete_override snapshots a user-authored payload.
 // expected_active_id is assertion-only: it returns the matching active snapshot
 // and bound session without creating/replacing anything. Different replacements
-// stop once logging begins; exact retries remain safe.
+// stop once logging begins; exact retries remain safe. A request with no replace,
+// fingerprint or expected_active_id is an OPEN and never conflicts: a date with a
+// session answers with it. Every ownership conflict carries the `owner` to open:
+// expected_active_id = owner.daily_session_id, or a plain prepare when that is null.
 dayCoachRouter.post("/daily-session/prepare", (req, res) => {
   const body = req.body ?? {};
   try {
