@@ -5,6 +5,11 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [2.3.0] — 2026-11-12
+
+Housekeeping: lighter coach prompts, quieter and quicker Garmin sync, agents that fail faster and are
+retried less, and cleanup after 2.2.0.
+
 ### Changed
 
 - **The coach looks things up in one run more often.** An everyday / deep agent order in Settings is
@@ -42,6 +47,19 @@ Versioning](https://semver.org/) for tagged releases.
   a CLI inline; each CLI's `--version` now runs once per check instead of twice.
 - **Checking whether a meal-plan refresh can run no longer advances the agent rotation.**
 - **"Say hello" on the connect step is now counted in the agent stats.**
+- **A reply cannot claim a lifting change when only the run days were saved.** "…and Thursday's
+  squats are lighter too" beside a saved run move is replaced with a plain line that the lifting plan
+  did not change; a run move that merely mentions a lift ("…so it doesn't sit on Thursday's squats")
+  is left alone.
+- **Unnamed watch sets parked on a session survive a sync**, and are dropped when their activity is
+  no longer part of that day.
+- **A refreshed Garmin sign-in token is saved**, so the next check does not refresh it again.
+- **Tests no longer fail in the hour before midnight across a daylight-saving change.**
+
+### Removed
+
+- The Garmin summary's `source` no longer carries `last_sync_at`, `sync_cursor` or `updated_at`
+  (REST and MCP); Settings and the sources list still show the last sync.
 
 ## [2.2.0] — 2026-11-11
 
