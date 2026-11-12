@@ -98,7 +98,9 @@ test("a clean stated stack does not hold intensity by its count", () => {
   assert.ok(env.precedence.includes("stated_rhythm_clean"));
   assert.ok(!env.soft_preferences.some((p) => /Longevity-leading/.test(p.detail)));
 
-  // The same count, with no rhythm, or with a recent cost, or a deciding brake, still eases.
+  // The same count, with no rhythm, or with a recent cost, or a deciding brake, still holds
+  // the load — longevity's calmer dose is a standing preference, so the plan's sets stay
+  // (owner ruling, 2026-11-12: a preference never trims volume on a train read).
   for (const over of [
     {},
     { stated_rhythm: { ...CLEAN_RHYTHM, recent_harm_free: false } },
@@ -110,11 +112,12 @@ test("a clean stated stack does not hold intensity by its count", () => {
   ]) {
     const held = buildDailySessionDecision(snapshot(over), { now: NOW });
     assert.equal(held.caps.intensity, "hold", JSON.stringify(over));
-    assert.equal(held.caps.volume, "reduced", JSON.stringify(over));
+    assert.equal(held.caps.volume, "normal", JSON.stringify(over));
+    assert.ok(held.soft_preferences.some((p) => /Longevity-leading/.test(p.detail)), "the hold still says why");
   }
 });
 
-test("under the license, hard endurance against a hard lower day eases volume, never intensity", () => {
+test("under the license, hard endurance against a hard lower day trims neither the sets nor the load", () => {
   const env = buildDailySessionDecision(
     snapshot({
       stated_rhythm: CLEAN_RHYTHM,
@@ -122,8 +125,11 @@ test("under the license, hard endurance against a hard lower day eases volume, n
     }),
     { now: NOW }
   );
-  assert.equal(env.caps.volume, "reduced");
+  // A shallow leg residual from yesterday's run holds the legs in place through the
+  // muscle lists; the longevity preference adds no whole-day trim of its own.
+  assert.equal(env.caps.volume, "normal");
   assert.equal(env.caps.intensity, "normal");
+  assert.ok(!env.soft_preferences.some((p) => /Longevity-leading/.test(p.detail)), "nothing left to say");
 });
 
 // ---------- 2. reach actually opens ----------

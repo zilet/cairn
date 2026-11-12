@@ -346,7 +346,7 @@ test("an unstarted persisted v4 adaptive composition is refreshed under v6 inste
   const refreshed = prepare({ date: DATE, source: "adaptive_plan" });
   assert.equal(refreshed.reused, false);
   assert.notEqual(refreshed.daily_session.id, Number(legacy.lastInsertRowid));
-  assert.equal(refreshed.daily_session.decision.policy_version, "daily_decision_v7");
+  assert.equal(refreshed.daily_session.decision.policy_version, "daily_decision_v8");
   assert.notEqual(refreshed.daily_session.decision.input_fingerprint, legacyFingerprint);
   assert.equal(
     db.prepare(`SELECT status FROM daily_session_compositions WHERE id = ?`).get(legacy.lastInsertRowid).status,
@@ -371,7 +371,7 @@ test("latest decision lookup ignores historical policy rows until v6 exists", ()
   seedPlan();
   const current = repo.decideDailySession(DATE).envelope;
   repo.recordDailySessionDecision(current);
-  assert.equal(repo.getLatestDailySessionDecision(DATE).policy_version, "daily_decision_v7");
+  assert.equal(repo.getLatestDailySessionDecision(DATE).policy_version, "daily_decision_v8");
   assert.equal(repo.getLatestDailySessionDecision(DATE).input_fingerprint, current.input_fingerprint);
 });
 

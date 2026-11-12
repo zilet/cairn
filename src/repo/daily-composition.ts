@@ -23,7 +23,12 @@ import { getPlanDay } from "./plan.js";
 import { focusWithoutAbsentMovements } from "./plan-day-focus.js";
 import { planDayDisplayName } from "./plan-day-name.js";
 import { classifyPattern } from "./exercise-variations.js";
-import { collapseRegionDuplicates, pairForSession, validSupersetGroup } from "./composition-pairing.js";
+import {
+  collapseRegionDuplicates,
+  pairForSession,
+  type SupersetUnpaired,
+  validSupersetGroup,
+} from "./composition-pairing.js";
 import { applyWeeklyDose, cardWorkMinutes } from "./composition-dose.js";
 import { weeklyDoseSoftLine } from "./weekly-dose-ledger.js";
 import { nextLoadStep } from "./progression.js";
@@ -66,6 +71,9 @@ export interface CompositionValidation {
   // that work stayed and was lightened as before). Absent on an ordinary day.
   substitutions?: SaturatedSubstitution[];
   substitutions_unavailable?: string[];
+  // Groupings the superset rules took apart (composition-pairing.ts enforceSupersetRules):
+  // a group of three, a pair on two fixed stations, a fourth pair. Omit-when-empty.
+  unpaired?: SupersetUnpaired[];
 }
 
 // Opt-in per call site, because the law is about the athlete's OWN template. A
@@ -1780,6 +1788,9 @@ export function normalizeComposedSession(
   // …and the dose the same way: after pairing, which still seats today's gap groups off
   // `dose.gaps`, the envelope keeps only the fills this card carries.
   reconcileEnvelopeDose(envelope, new Set(dosed.landed));
+  // What the superset rules took apart: at the payload boundary (an author's grouping)
+  // and on the final card (a grouping today's clamps reshaped), in that order.
+  const unpaired = [...(base.unpaired ?? []), ...(paired.unpaired ?? [])];
 
   let est = base.est_minutes;
   // The dose's added sets cost time; the day's own duration cap below still binds.
@@ -1832,6 +1843,7 @@ export function normalizeComposedSession(
       capped: changed,
       reach_landed: reachLanded,
       ...substitutionExtras,
+      ...(unpaired.length ? { unpaired } : {}),
     },
   };
 }

@@ -263,7 +263,7 @@ test("today's taper comes from this morning's envelope when it was composed for 
   // An envelope for today naming the key-run eve on this plan day (the morning's own rule).
   db.prepare(
     `INSERT INTO daily_session_decisions (date, composition_id, policy_version, input_fingerprint, kind, envelope_json)
-     VALUES (?, NULL, 'daily_decision_v7', 'fp-test', 'train', ?)`
+     VALUES (?, NULL, 'daily_decision_v8', 'fp-test', 'train', ?)`
   ).run(
     "2026-10-21",
     JSON.stringify({
@@ -337,7 +337,7 @@ test("today's swapped day trimmed by the morning's envelope keeps the swap and s
   assert.ok(fx);
   db.prepare(
     `INSERT INTO daily_session_decisions (date, composition_id, policy_version, input_fingerprint, kind, envelope_json)
-     VALUES (?, NULL, 'daily_decision_v7', 'fp-test', 'train', ?)`
+     VALUES (?, NULL, 'daily_decision_v8', 'fp-test', 'train', ?)`
   ).run(
     fx.today,
     JSON.stringify({

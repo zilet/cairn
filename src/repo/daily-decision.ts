@@ -63,6 +63,7 @@ import {
   type TrainingPriority,
 } from "./training-intent.js";
 import { listTrainingSymptoms } from "./training-symptoms.js";
+import { volumeToleranceRead } from "./volume-tolerance.js";
 import { hardCardioDayIntense, longestRunNovelty } from "./training-read.js";
 import { stableJson, finite } from "../lib/numbers.js";
 import { PLAN_ITEM_EFFECT_TIER, planItemEffectTier } from "../domain/training/plan-item-order.js";
@@ -115,8 +116,15 @@ import type { Prescription } from "./progression.js";
 // deferral happens at read time; reach can also be backed by the same supportive-
 // capacity path dayRead uses for the drive rule. Snapshot gained recovery_capacity
 // corroboration fields, so identity moves.
+//
+// Volume (v8, owner ruling 2026-11-12): on a train read the plan's authored sets are the
+// default. `caps.volume` reduces only for a named, current reason (see `softenVolume`); a
+// standing preference (longevity's calmer double-day dose) no longer trims sets, and a
+// precautionary trim (the learned plan-complexity ease) stands down when the athlete's own
+// log carried the planned sets at a held-or-rising load (`volume_tolerance`). Ordinary
+// days decide differently with no snapshot change, so the version moves.
 
-export const DAILY_DECISION_POLICY_VERSION = "daily_decision_v7";
+export const DAILY_DECISION_POLICY_VERSION = "daily_decision_v8";
 
 export const DAILY_DECISION_REASONS = [
   "injury_exclusion",
@@ -200,6 +208,10 @@ export const DAILY_DECISION_REASONS = [
   // readiness-only caution on the athlete's own good check-in (morning-dose.ts): the load
   // holds, and the regions yesterday's work loaded go lighter.
   "held_morning_dose",
+  // A precautionary volume trim (soft, non-floor) the athlete's own log answered: recent
+  // sessions carried every planned set at a held-or-rising load, so the plan's sets stand
+  // (volume-tolerance.ts). Never adds work.
+  "log_backs_full_sets",
 ] as const;
 
 // The run day's headline line on the envelope. Rotates like every repeating
@@ -442,6 +454,11 @@ export interface DailyDecisionSnapshot {
   weekly_dose?: WeeklyDoseSnapshot;
   // The race build / key-run read (stress-budget.ts `stressBudgetSnapshot`). Omit-when-idle.
   stress_budget?: StressBudgetSnapshot;
+  // The athlete's log carried every planned set at a held-or-rising load over their recent
+  // sessions (volume-tolerance.ts `volumeToleranceRead`). Stamped only when it does, so a
+  // morning with no such record fingerprints exactly as before. It answers a PRECAUTIONARY
+  // volume trim only — never a named current reason, never a raise.
+  volume_tolerance?: { sessions: number };
 }
 
 export interface DailyDecisionSignalSupport {
@@ -1122,6 +1139,12 @@ export function gatherDailyDecisionSnapshot(
     trainAnywayRequested && planDayType === "training" && requestDayNumber != null
       ? safe(() => sameDayAthleteRequest(requestDayNumber, d), null)
       : null;
+  // What the log says about carrying the planned sets (volume-tolerance.ts), read only on
+  // a lifting day that carries a PRECAUTIONARY trim for it to answer — today that is the
+  // learned plan-complexity ease alone (a new precautionary trim must widen this gate).
+  // Fail-soft to no record; every other morning serializes exactly as before.
+  const volumeTolerance =
+    planDayType === "training" && planComplexityScale != null ? safe(() => volumeToleranceRead(d), null) : null;
   return {
     date: d,
     request: {
@@ -1329,6 +1352,7 @@ export function gatherDailyDecisionSnapshot(
     ...(weeklyLower ? { weekly_lower: weeklyLower } : {}),
     ...(weeklyDose ? { weekly_dose: weeklyDose } : {}),
     ...(stressBudget ? { stress_budget: stressBudget } : {}),
+    ...(volumeTolerance ? { volume_tolerance: { sessions: volumeTolerance.sessions } } : {}),
   };
 }
 
@@ -1765,6 +1789,21 @@ export const LOG_BACKS_OPEN_DAY_RATIONALE: readonly string[] = [
   "The log says you've been handling this, so the clock stays the plan's rather than a short one; the load itself holds where it is.",
   "You've earned the full window here — today runs the plan's length at the usual working load, with the extra top set left off.",
   "Nothing in your recent sessions asks for a shorter day, so today keeps the plan's length; the weights stay where they were.",
+];
+
+// A precautionary trim the athlete's own log answered (volume-tolerance.ts): recent
+// sessions carried every planned set at a held-or-rising load, so today keeps the plan's
+// sets. Says what the log showed, never a number, never a promise of more work.
+export const LOG_BACKS_FULL_SETS_DETAILS: readonly string[] = [
+  "Your recent sessions carried every planned set — nothing trimmed today",
+  "The full sets have been landing lately at a steady load, so they stay",
+  "Recent sessions finished their planned sets without the weights slipping — the sets stay",
+];
+
+export const LOG_BACKS_FULL_SETS_RATIONALE: readonly string[] = [
+  "Your recent sessions carried every planned set with the load holding, so today keeps the plan's full sets.",
+  "The log shows the planned sets landing lately at a steady or rising load — today's card keeps all of them.",
+  "You've been finishing the planned sets without the weights slipping, so nothing is trimmed from today's plan.",
 ];
 
 // Train-anyway on a day the athlete asked for this session today: their sets stay, the
@@ -2815,12 +2854,13 @@ export function buildDailySessionDecision(
   // ---- Caps ----
   const deloadPhase =
     snapshot.program.mesocycle_phase === "deload" || snapshot.program.mesocycle_phase === "recovery";
-  // Longevity-leading soft ease under double-day pressure — never forces rest
-  // when dayRead already says train; only prefers reduced volume / hold intensity.
-  // A licensed stack (see `rhythmLicensed`) is not double-day pressure by its count
-  // alone; hard endurance against a hard lower day still is, and eases VOLUME. The
-  // intensity half of the ease needs a genuine signal, which the license has just
-  // said is absent.
+  // Longevity-leading soft ease under double-day pressure — never forces rest when
+  // dayRead already says train. It is a standing PREFERENCE, so it holds intensity and
+  // never trims sets (owner ruling, 2026-11-12: the plan's sets are the default; the dated
+  // evidence behind the pressure — a deep or same-day leg residual, a key run's legs —
+  // already reduces its own groups through `muscles.reduced`). A licensed stack (see
+  // `rhythmLicensed`) is not double-day pressure by its count alone, and under a license
+  // the ease has nothing left to shape, so it says nothing.
   const doubleDayPressure =
     kind === "train" &&
     ((heavyEndurance.length > 0 && hardLowerOnPlan) ||
@@ -2830,7 +2870,7 @@ export function buildDailySessionDecision(
       (consecutive >= 2 && !stackLicensed));
   const longevityEase = longevityLeads && doubleDayPressure && kind === "train";
   const longevityHoldsIntensity = longevityEase && !stackLicensed;
-  if (longevityEase) {
+  if (longevityHoldsIntensity) {
     fire(precedence, "training_intent");
     soft.push({
       code: "training_intent",
@@ -2841,36 +2881,53 @@ export function buildDailySessionDecision(
       text: "Longevity leads your priorities — today's work stays a little easier rather than stacking hard on hard.",
     });
   }
-  // A learned ease is the softest input in this list and behaves like it: it can
-  // only ever join the others in preferring the reduced shape, and on a rest day —
-  // where volume is already `minimal` — it has nothing to say and stays silent.
+  const trainAnywayFromRest = trainAnyway && baseKind === "rest";
+  const trainAnywayLiftsQuiet = trainAnyway && (baseKind === "rest" || baseKind === "easy");
+  const trainAnywayKeepsReduced = trainAnywayFromRest && !capsMayOpen;
+  // ---- VOLUME: the plan's sets are the default (owner ruling, 2026-11-12) ----
+  // On a train read the sets come down only for a NAMED, CURRENT reason — each of these
+  // is dated evidence about today, never a standing preference:
+  const namedVolumeReason =
+    kind === "easy" || // the read itself is a quiet one
+    readiness === "low" || // a fresh low-recovery brake
+    sorenessSoftensDay || // soreness reported today, not routed
+    trainAnywayKeepsReduced || // train-anyway over a rest read, caps shut
+    snapshot.day_read.recovery_week || // a recovery week in force
+    postRaceRecovery || // the days after a race
+    // A lifting day reopened after its morning run is bounded while a genuine fresh
+    // brake stands: the run is in, the brake still speaks, so the sets stay trimmed.
+    (liftStillDue && decidingBrake(snapshot));
+  // A PRECAUTIONARY trim (soft, non-floor): the learned plan-complexity default, the
+  // softest input here — it can only ever join the others in preferring the reduced
+  // shape, and on a rest day (volume already `minimal`) it stays silent. The athlete's
+  // own log answers it (`volume_tolerance`): recent sessions that carried every planned
+  // set at a held-or-rising load outvote it, and the composition says so. Learning only
+  // stops the trim; it never adds a set.
   const planComplexityEase = earnedSimplerDay(snapshot) && kind !== "rest";
-  if (planComplexityEase) {
+  const logBacksFullSets =
+    planComplexityEase && !namedVolumeReason && kind === "train" && snapshot.volume_tolerance != null;
+  if (planComplexityEase && !logBacksFullSets) {
     fire(precedence, "personal_response_ease");
     soft.push({
       code: "personal_response_ease",
       detail: pickDayVariant(PLAN_COMPLEXITY_EASE_DETAILS, snapshot.date, "plan_complexity_ease"),
     });
   }
-  const trainAnywayFromRest = trainAnyway && baseKind === "rest";
-  const trainAnywayLiftsQuiet = trainAnyway && (baseKind === "rest" || baseKind === "easy");
-  const trainAnywayKeepsReduced = trainAnywayFromRest && !capsMayOpen;
-  const softenVolume =
-    kind === "easy" ||
-    readiness === "low" ||
-    sorenessSoftensDay ||
-    trainAnywayKeepsReduced ||
-    snapshot.day_read.recovery_week ||
-    postRaceRecovery ||
-    longevityEase ||
-    planComplexityEase ||
-    // A lifting day reopened after its morning run is bounded while a genuine fresh
-    // brake stands: the run is in, the brake still speaks, so the sets stay trimmed.
-    (liftStillDue && decidingBrake(snapshot));
-  // The evidence arm keeps the sets: every input that would have softened them here
-  // is already excluded by `quietDayOpensOnEvidence` except the two soft preferences
-  // (longevity, learned plan complexity), and those are preferences the athlete's own
-  // log has just outvoted for this one day.
+  if (logBacksFullSets) {
+    fire(precedence, "log_backs_full_sets");
+    soft.push({
+      code: "log_backs_full_sets",
+      detail: pickDayVariant(LOG_BACKS_FULL_SETS_DETAILS, snapshot.date, "daily_decision:log_backs_full_sets"),
+    });
+    intentRationale.push({
+      code: "log_backs_full_sets",
+      text: pickDayVariant(LOG_BACKS_FULL_SETS_RATIONALE, snapshot.date, "daily_decision:log_backs_full_sets"),
+    });
+  }
+  const softenVolume = namedVolumeReason || (planComplexityEase && !logBacksFullSets);
+  // The quiet-day evidence arm keeps the sets: every input that would have softened them
+  // here is already excluded by `quietDayOpensOnEvidence` except the learned plan
+  // complexity, a preference the athlete's own log has just outvoted for this one day.
   const volume: DailyDecisionEnvelope["caps"]["volume"] =
     kind === "rest" ? "minimal" : quietDayOpened ? "normal" : softenVolume ? "reduced" : "normal";
   const intensity: DailyDecisionEnvelope["caps"]["intensity"] =

@@ -469,7 +469,7 @@ test("the day page and the week strip read the same leg trim: today's envelope b
   seedRaceWeek(t, `${FRIDAY}T08:00:00`, { trip: false });
   db.prepare(
     `INSERT INTO daily_session_decisions (date, composition_id, policy_version, input_fingerprint, kind, envelope_json)
-     VALUES (?, NULL, 'daily_decision_v7', 'fp-test', 'train', ?)`
+     VALUES (?, NULL, 'daily_decision_v8', 'fp-test', 'train', ?)`
   ).run(
     FRIDAY,
     JSON.stringify({ date: FRIDAY, kind: "train", template: { day_number: 1 }, stress: { code: "key_run_eve", groups: ["hamstrings"] } })

@@ -22,6 +22,7 @@
 import { db } from "../../db.js";
 import { DailySessionError, getActiveDailySession, previewAdaptiveDailySession } from "../../repo/adaptive-session.js";
 import { recordDecision, saveBrainRollback } from "../../repo/brain-decisions.js";
+import type { SupersetUnpaired } from "../../repo/composition-pairing.js";
 import { selectedPlanDayForDate } from "../../repo/plan-selection.js";
 import { localDateISO } from "../../repo/shared.js";
 import { UNDO_UNAVAILABLE, UndoRefusal } from "../brain/undo-refusal.js";
@@ -53,6 +54,12 @@ export interface ChatSessionResult {
   decision_id?: number | null;
   /** start_session only: prepared with train_anyway because the read was rest/easy. */
   train_anyway?: boolean;
+  /**
+   * today_session only: supersets the server took apart because a gym could not run them
+   * (a group of three, a pair needing two fixed stations, a fourth pair) — those lifts run
+   * as straight sets. Omitted when every pair stood.
+   */
+  unpaired?: SupersetUnpaired[];
   code?: string;
   error?: string;
 }
@@ -268,10 +275,12 @@ export function applyChatTodaySession(input: TodaySessionInput, ctx: ChatSession
           previousId,
           chatMessageId: ctx.chat_message_id ?? null,
         });
+  const unpaired = (prepared as { unpaired?: SupersetUnpaired[] }).unpaired;
   return resultFor(date, composition, prepared.session?.id ?? composition?.session_id, {
     reused: prepared.reused === true,
     replaced_composition_id: prepared.reused === true ? null : previousId,
     decision_id: decisionId,
+    ...(unpaired?.length ? { unpaired } : {}),
   });
 }
 

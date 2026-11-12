@@ -161,13 +161,14 @@ test("each pair carries exactly one calm hint, on its first item, with the partn
   }
 });
 
-test("Lower A: the leg extension pairs with the leg curl; the squat and the hinge stand alone", () => {
+test("Lower A: the leg extension and the leg curl are two machines and run straight; the squat and the hinge stand alone", () => {
   seedLowerA();
   const session = deterministicComposedSession(lowerEnvelope());
   const ext = byName(session, "Leg Extension");
   const curl = byName(session, "Lying Leg Curl");
-  assert.ok(Number.isInteger(ext.superset_group));
-  assert.equal(curl.superset_group, ext.superset_group);
+  // Antagonists, but a pair may hold one fixed station at most: no superset is seated.
+  assert.equal(ext.superset_group, null);
+  assert.equal(curl.superset_group, null);
   assert.equal(byName(session, "Back Squat").superset_group, null, "the warmed-up anchor gets its full rest");
   assert.equal(byName(session, "Romanian Deadlift").superset_group, null, "a hinge has no antagonist here");
   assert.equal(byName(session, "Ankle Rocker").superset_group, null, "prep never pairs");
@@ -195,11 +196,9 @@ test("a group the week is behind on goes first in its tier and leads its pair â€
   );
   const order = names(session);
   assert.ok(order.indexOf("Lying Leg Curl") < order.indexOf("Leg Extension"), "hamstrings short: the curl goes first");
-  assert.equal(byName(session, "Leg Extension").superset_group, byName(session, "Lying Leg Curl").superset_group);
-  assert.ok(
-    String(byName(session, "Lying Leg Curl").note ?? "").includes("Leg Extension"),
-    "the leader carries the hint"
-  );
+  // Two machines are two stations: they stay straight sets, wherever they sit.
+  assert.equal(byName(session, "Leg Extension").superset_group, null);
+  assert.equal(byName(session, "Lying Leg Curl").superset_group, null);
   assert.equal(order[1], "Back Squat", "the anchor keeps its seat");
   assert.deepEqual(
     repo.getPlanDay(1).items.map((item) => item.exercise),
@@ -352,7 +351,8 @@ test("an author's own grouping stands, and a new pair takes an unused group", ()
     {
       position: 0,
       kind: "strength",
-      exercise: "Chest Press",
+      // Dumbbells beside the row's station: a pair a shared gym can run.
+      exercise: "Dumbbell Chest Press",
       sets: 3,
       rep_low: 8,
       rep_high: 10,
@@ -624,14 +624,14 @@ test("a stored group outside 1..50, or a group of one, is no grouping â€” it nev
 
 test("plan-saved groups past the range reach the card as no grouping", () => {
   seed([
-    ["Leg Extension", "quads"],
-    ["Lying Leg Curl", "hamstrings"],
+    ["Dumbbell Bench Press", "chest"],
+    ["Chest-Supported Row", "back"],
     ["Standing Calf Raise", "calves"],
     ["Pallof Press", "core"],
   ]);
   repo.savePlanDay(1, "Lower", "Legs", [
-    { exercise: "Leg Extension", sets: 3, rep_low: 10, rep_high: 12, target_weight: 135, superset_group: 51 },
-    { exercise: "Lying Leg Curl", sets: 3, rep_low: 10, rep_high: 12, target_weight: 120, superset_group: 51 },
+    { exercise: "Dumbbell Bench Press", sets: 3, rep_low: 10, rep_high: 12, target_weight: 55, superset_group: 51 },
+    { exercise: "Chest-Supported Row", sets: 3, rep_low: 10, rep_high: 12, target_weight: 85, superset_group: 51 },
     { exercise: "Standing Calf Raise", sets: 3, rep_low: 10, rep_high: 15, target_weight: 90, superset_group: 60 },
     { exercise: "Pallof Press", sets: 3, rep_low: 10, rep_high: 12, target_weight: 45, superset_group: 60 },
   ]);
@@ -641,7 +641,10 @@ test("plan-saved groups past the range reach the card as no grouping", () => {
   for (const g of groups) assert.ok(g == null || (g >= 1 && g <= 50), JSON.stringify(groups));
   assert.equal(byName(session, "Standing Calf Raise").superset_group, null);
   assert.equal(byName(session, "Pallof Press").superset_group, null);
-  // The knee extension and flexion re-pair on their own, inside the range.
-  assert.equal(byName(session, "Leg Extension").superset_group, byName(session, "Lying Leg Curl").superset_group);
-  assert.equal(byName(session, "Leg Extension").superset_group, 1);
+  // The press and the row re-pair on their own, inside the range.
+  assert.equal(
+    byName(session, "Dumbbell Bench Press").superset_group,
+    byName(session, "Chest-Supported Row").superset_group
+  );
+  assert.equal(byName(session, "Dumbbell Bench Press").superset_group, 1);
 });

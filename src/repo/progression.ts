@@ -72,6 +72,13 @@ import {
 import * as voice from "./progression-voice.js";
 import { lightWeekExemption } from "./volume-floor-context.js";
 import {
+  affirmedCutHoldsSetCount,
+  habitualSetCount,
+  perLiftSetCeiling,
+  weeklyGroupHasRoom,
+} from "./volume-tolerance.js";
+import { weeklyGroupEffectiveSets } from "./weekly-dose-ledger.js";
+import {
   type Exposure,
   planSlotStamps,
   sessionFirstSetAt,
@@ -3227,6 +3234,12 @@ function planDayProgressionRead(
     }
     return lightWeekMemo.value;
   };
+  // An affirmed cut holds the plan's set count (volume-tolerance.ts). Lazy, once a pass.
+  let affirmedCutMemo: boolean | null = null;
+  const affirmedCut = (): boolean => {
+    affirmedCutMemo ??= affirmedCutHoldsSetCount(readDay);
+    return affirmedCutMemo;
+  };
   // When every slot was prescribed — ONE read for the pass (prescription-authorship.ts).
   const slotStamps = planSlotStamps();
   const out: Prescription[] = [];
@@ -3270,6 +3283,8 @@ function planDayProgressionRead(
           readDay
         ),
         lightWeek,
+        affirmedCut,
+        readDay,
       });
       out.push({ ...stepped, plan_item_id: it.plan_item_id, day_number: dayNumber });
     }
@@ -3387,6 +3402,11 @@ function setCatchUp(
     // or a person's set count re-stamps the slot, so older logs cannot walk it back.
     since: Pick<SlotAuthorship, "since" | "since_at">;
     lightWeek: () => string | null;
+    // An affirmed cut is running (volume-tolerance.ts affirmedCutHoldsSetCount). Optional:
+    // a caller that does not pass it is read as no cut.
+    affirmedCut?: () => boolean;
+    // The read day, for the weekly volume bound. Optional: absent, that bound is not read.
+    readDay?: string;
   }
 ): Prescription {
   if (p.mode !== "reps" || !p.current) return p;
@@ -3432,8 +3452,20 @@ function setCatchUp(
   // next, a deload-due mesocycle, the race taper — is the same exemption the plan's
   // volume floor reads (volume-floor-context.ts), read last because it is the costly one.
   if (ctx.lightWeek()) return p;
-  const to = Math.min(planned + 1, SET_STEP_CAP, ...counts);
+  // Inside an affirmed cut the plan's set count holds: more sets in a deficit are
+  // tolerated, not shown to add lean mass (volume-tolerance.ts).
+  if (ctx.affirmedCut?.()) return p;
+  // The bounds every catch-up honours (volume-tolerance.ts VOLUME_BOUNDS): about 1.2× the
+  // lift's own habitual set count, and about 20 weekly effective sets for its group,
+  // counted the weekly dose ledger's way.
+  const habitual = habitualSetCount(counts);
+  const ceiling = habitual == null ? planned : perLiftSetCeiling(habitual);
+  const to = Math.min(planned + 1, SET_STEP_CAP, ceiling, ...counts);
   if (to <= planned) return p;
+  const group = ctx.readDay ? storedGroupOf(p.exercise) : null;
+  if (group && ctx.readDay && !weeklyGroupHasRoom(weeklyGroupEffectiveSets(ctx.readDay, group), to - planned)) {
+    return p;
+  }
   const say = voice.liftVoice(voice.SET_CATCH_UP, ctx.voiceDate, "set_catch_up", p.exercise)(to, Math.min(...counts));
   return {
     ...p,
