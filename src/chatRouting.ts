@@ -482,7 +482,12 @@ function captureReasons(
 export function decideChatRouting(input: ChatRoutingInput): ChatRoutingDecision {
   const message = String(input?.message ?? "").trim();
   const hasImage = input?.has_image === true;
-  const captures = captureReasons(message, hasImage, input?.capture_confirmation === true, input?.recent_food_capture === true);
+  // Asking to open a session is coaching, whatever box it was typed into: no capture
+  // reason survives it, so neither the receipt lane nor a food log can take it.
+  const startsSession = !hasImage && chatMessageStartsSession(message);
+  const captures = startsSession
+    ? []
+    : captureReasons(message, hasImage, input?.capture_confirmation === true, input?.recent_food_capture === true);
   const reasons = new Set<ChatRoutingReasonCode>(captures);
   let lane: ChatLane = captures.length > 0 ? "capture" : "coach";
   const ambiguous = AMBIGUOUS.test(message);
@@ -534,7 +539,7 @@ export function decideChatRouting(input: ChatRoutingInput): ChatRoutingDecision 
   }
   if ((lane as ChatLane) === "coach") {
     if (hasImage && captures.length === 0) addReason(reasons, "non_food_image");
-    if (ROUTINE_COACHING.test(message)) addReason(reasons, "routine_coaching");
+    if (ROUTINE_COACHING.test(message) || startsSession) addReason(reasons, "routine_coaching");
     else if (!reasons.has("ambiguous_intent") && !reasons.has("non_food_image")) addReason(reasons, "ordinary_chat");
   }
 
@@ -543,6 +548,25 @@ export function decideChatRouting(input: ChatRoutingInput): ChatRoutingDecision 
     lane,
     reason_codes: CHAT_ROUTING_REASON_CODES.filter((reason) => reasons.has(reason)),
   };
+}
+
+// "Open my today's training day", "let's start today's session": the athlete asking to
+// open a session, never a log of one. Read with the Intake composer's "Log food:" frame
+// taken off — typed into the food box, it still is not food (2026-11-07).
+const SESSION_START_RE =
+  /\b(?:start|open|begin|kick\s+off|pull\s+up|bring\s+up|take\s+me\s+to|launch)\b[^.!?\n]{0,40}?\b(?:session|workout|training(?:\s+day)?|lifting\s+day|gym\s+day)\b/i;
+const SESSION_START_NEGATED_RE =
+  /\b(?:don'?t|do\s+not|not|never|can'?t|cannot|won'?t|didn'?t|did\s+not)\s+(?:\w+\s+)?(?:start|open|begin|kick\s+off|launch)\b/i;
+const FOOD_FRAME_RE = /^log\s+food\s*:\s*/i;
+
+/** The athlete asks to start or open a training session (today's, or the one in front of them). */
+export function chatMessageStartsSession(message: unknown): boolean {
+  const text = String(message ?? "")
+    .replace(/[‘’]/g, "'")
+    .replace(FOOD_FRAME_RE, "")
+    .trim();
+  if (!text) return false;
+  return SESSION_START_RE.test(text) && !SESSION_START_NEGATED_RE.test(text);
 }
 
 /** Independent guard shared by classification and the receipt-only bypass. */

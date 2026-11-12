@@ -60,6 +60,7 @@ const SCHEMAS: Record<CoachReadToolName, any> = {
   read_health_summary: {},
   read_strength_progress: {},
   read_goal_progress: {},
+  read_today_session: { date: nullableDate },
 };
 
 // Every tool here only reads, and only Cairn's own store.

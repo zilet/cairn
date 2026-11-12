@@ -21,6 +21,11 @@
 
 export type ChangeReceiptUndo = { kind: "brain_decision"; id: number } | { kind: "plan_adaptation"; id: number };
 
+// Where the change sends the athlete next: a button the client renders under the reply.
+// Today only a session ("Start Upper", "Continue Upper") opens that date's session.
+// Present only while it still goes somewhere (the composition still owns the day).
+export type ChangeReceiptOpen = { kind: "session"; date: string; label: string };
+
 // Where the change stands:
 //   applied    — it landed and is in force;
 //   scheduled  — decided, landing on its own ("Lands Thursday" / "Lands soon", the
@@ -31,7 +36,10 @@ export type ChangeReceiptUndo = { kind: "brain_decision"; id: number } | { kind:
 export type ChangeReceiptStatus = "applied" | "scheduled" | "undone" | "not_landed";
 
 export interface ChangeReceipt {
-  /** Stable id: "decision:<brain_decisions.id>" | "adaptation:<plan_adaptations.id>". */
+  /**
+   * Stable id: "decision:<brain_decisions.id>" | "adaptation:<plan_adaptations.id>" |
+   * "session:<daily_session_compositions.id>" (the session a chat turn built or opened).
+   */
   key: string;
   /** What changed, finished: "Back Squat adapted for the race until Nov 1". */
   what: string;
@@ -49,4 +57,6 @@ export interface ChangeReceipt {
    * "Held before it landed", "Ended", "Didn't land". Re-worded on every read.
    */
   status_words?: string | null;
+  /** Where to go next (a session receipt's Start/Continue), re-read on every read. */
+  open?: ChangeReceiptOpen | null;
 }

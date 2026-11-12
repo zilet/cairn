@@ -34,6 +34,7 @@ import {
 } from "./read-tools.js";
 import type { JsonObject, JsonValue } from "./contract-utils.js";
 import { coerceFinite as finite } from "../lib/numbers.js";
+import { todaySessionRead } from "../domain/training/chat-today-session.js";
 
 export interface CoachReadToolExecutionContext {
   run_id: string;
@@ -1022,6 +1023,16 @@ function readActivityDetail(request: Extract<CoachReadToolRequest, { tool: "read
   };
 }
 
+// The day's composed session as Today serves it (chat-today-session.ts todaySessionRead).
+function readTodaySession(
+  request: Extract<CoachReadToolRequest, { tool: "read_today_session" }>,
+  today: string
+): RawRead {
+  const read = todaySessionRead(request.args.date ?? today);
+  const items = (read.session?.items ?? []) as unknown[];
+  return { data: read as unknown as Record<string, unknown>, row_arrays: [items] };
+}
+
 function argsSummary(request: CoachReadToolRequest): string {
   switch (request.tool) {
     case "read_exercise_history":
@@ -1049,6 +1060,8 @@ function argsSummary(request: CoachReadToolRequest): string {
     case "read_strength_progress":
     case "read_goal_progress":
       return "current";
+    case "read_today_session":
+      return `date=${request.args.date ? "given" : "today"}`;
   }
 }
 
@@ -1126,6 +1139,9 @@ export function executeCoachReadTool(
         break;
       case "read_goal_progress":
         raw = readContextSlice(GOAL_PROGRESS_KEYS, today);
+        break;
+      case "read_today_session":
+        raw = readTodaySession(request, today);
         break;
     }
     const result = finalizeCoachRead(request.tool, raw);

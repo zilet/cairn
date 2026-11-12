@@ -762,7 +762,9 @@ export type BrainRollbackKind =
   // The athlete's stated run week / quality session (src/domain/training/stated-input.ts).
   | "endurance_schedule"
   // A finished race's lessons for the next build (src/repo/build-levers.ts).
-  | "build_levers";
+  | "build_levers"
+  // The session the athlete asked chat for today (src/domain/training/chat-today-session.ts).
+  | "daily_session";
 
 const BRAIN_ROLLBACK_KINDS: readonly BrainRollbackKind[] = [
   "training_plan",
@@ -774,6 +776,7 @@ const BRAIN_ROLLBACK_KINDS: readonly BrainRollbackKind[] = [
   "training_stance",
   "endurance_schedule",
   "build_levers",
+  "daily_session",
 ];
 
 export function saveBrainRollback(decisionId: number, kind: BrainRollbackKind, payload: unknown): boolean {
@@ -842,7 +845,7 @@ export const ROLLBACK_EVIDENCE_WEIGHT = 0.9;
 
 // Rollback shapes that undo the athlete's OWN statement (a push stance, a stated run
 // week) — never a change the brain made, so never evidence about the brain's calls.
-const STATED_ROLLBACK_KINDS: ReadonlySet<string> = new Set(["training_stance", "endurance_schedule"]);
+const STATED_ROLLBACK_KINDS: ReadonlySet<string> = new Set(["training_stance", "endurance_schedule", "daily_session"]);
 
 // Is this reverted row the athlete taking back their own word rather than undoing a
 // brain change? An observe-tier row records what they said (nothing was decided for

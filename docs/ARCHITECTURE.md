@@ -3760,7 +3760,8 @@ to be kept or given a read. The four reads behind the core — `read_run_week`, 
 (`current`), `read_recovery_window` (`summary`) and `read_body_composition_history` (`current`) return the
 SAME context blocks the full DATA carried, through `projectCoachContextKeys` (deep-copied before the byte
 budget trims anything; a slice that still cannot fit sheds whole blocks and names them in `omitted`).
-`read_decision_history` with neither kind nor subject is the recent ledger. When a slice is over its byte
+`read_decision_history` with neither kind nor subject is the recent ledger. `read_today_session` returns
+the day's composed session as Today serves it, and whether it is started. When a slice is over its byte
 budget mostly because of one large non-array block, that block is shed (named in `omitted`) before any
 rows are trimmed (`finalizeCoachRead`). The week's runs ride as the
 RECENT RUNS & CARDIO prose block, so `recent_cardio` is not repeated inside the core's DATA.
@@ -3815,6 +3816,22 @@ for a removal) and never written — left among the strength changes an un-kinde
 fabricated lifting movement. The strength half of a mixed turn still applies. Changing WHICH days
 they run is `set_endurance_schedule`; the chat catalog tells the model so (in that action's guidance —
 `set_run` itself is no longer in the prompt).
+
+**Today's session is its own door, never a template edit** (`src/domain/training/chat-today-session.ts`,
+2026-11-12). "Make it a full upper body today" is `today_session` (the complete item list, supersets as a
+shared `superset_group`): it goes through the same `prepareDailySessionUseCase` REST and MCP use, as an
+`athlete_override` composition with `replace:true`, bound to the plan day today's ring selects, and never
+writes the plan. A day with logged sets refuses it (`daily_session_locked`) and the reply says so. "Let's
+start today's session" is `start_session`: the assertion path over an active composition, else the
+adaptive plan day (`train_anyway` on a rest/easy read). Both are gated on the athlete's own ask
+(`chatActionGates().todaySession`) and both answer with `open: {kind:"session", date, label}` ("Start
+<title>" / "Continue <title>"), carried on the turn's receipts as `session:<composition id>` with that
+`open` re-read on every read. A `today_session` that landed records ONE observe-tier reversible
+`session_suggestion` decision with a `daily_session` rollback: Undo (`revert_decision`) puts the
+composition it replaced back — or hands the day back to the plan — only while it still owns the day and
+nothing is logged. `groundReply` holds "I've built today's session" / "your session is ready" (claim class
+`session`) to a landed one, and `read_today_session` is the coach read of what Today will serve.
+An UNDATED `plan_update` the athlete scoped to today now ends today (`until`), like a dated one.
 
 **A structure request is BUILT, not parked.** Chat has no action that rewrites the shape of a week;
 `flag_training_structure` is the hand-off, and it hands off for real (`src/domain/brain/structure-request.ts`).

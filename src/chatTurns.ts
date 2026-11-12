@@ -100,6 +100,7 @@ import { clinicalPlanProvenance, type ClinicalPlanProvenance } from "./domain/br
 import { describeLandingDay, requestStructureRedraw } from "./domain/brain/structure-request.js";
 import { setTrainingDrive } from "./domain/training/training-drive.js";
 import { recordRunWeekMove, recordStatedRunWeek } from "./domain/training/stated-input.js";
+import { applyChatStartSession, applyChatTodaySession } from "./domain/training/chat-today-session.js";
 import { addDaysISO, mondayOf } from "./lib/dates.js";
 import { enqueueAgentJob } from "./agentJobs.js";
 import { diagnosticErrorName, recordAsyncFailure } from "./diagnostics.js";
@@ -125,6 +126,7 @@ import {
   hasExplicitStrengthObjectiveIntent,
   hasExplicitSymptomReportIntent,
   hasExplicitSymptomResolveIntent,
+  hasExplicitTodaySessionIntent,
   hasExplicitTrainingDriveIntent,
   hasExplicitTrainingDriveIntentInContext,
   carriesDriveAffirmation,
@@ -133,6 +135,8 @@ import {
   isFoodOnlyTurn,
   isInstantFoodCaptureDecision,
   isLeadingQuestion,
+  readsAsSessionProposal,
+  coachOfferedTodaySession,
 } from "./chat-intent.js";
 import {
   chatChangeReceipts,
@@ -175,6 +179,7 @@ export {
   hasExplicitStrengthObjectiveIntent,
   hasExplicitSymptomReportIntent,
   hasExplicitSymptomResolveIntent,
+  hasExplicitTodaySessionIntent,
   hasSelfContainedPlanEditIntent,
   isFoodOnlyTurn,
   isInstantFoodCaptureDecision,
@@ -1036,10 +1041,23 @@ function todayPlanUpdateChanges(message: string | null | undefined, changes: unk
   // Multi-day actions are structural work. Do not silently collapse them onto one
   // session just because the prose happened to mention today.
   if (namedDays.size > 1) return changes;
-  const selected = repo.selectedPlanDayForDate(localDateISO());
+  const today = localDateISO();
+  const selected = repo.selectedPlanDayForDate(today);
   if (!selected) return changes;
-  return rows.map((change) => ({ ...change, day_number: selected.day_number }));
+  // Today's words make it today's change: it ends today, exactly as a change dated
+  // today does (normalizePlanChangeDates), and the plan is itself again tomorrow. Only
+  // their own "from now on" (or a change already scoped) keeps it open.
+  const lasting = PLAN_LASTING_WORDS_RE.test(text);
+  return rows.map((change) => {
+    const scoped = change.lasting === true || lasting || (typeof change.until === "string" && change.until !== "");
+    return { ...change, day_number: selected.day_number, ...(scoped ? {} : { until: today }) };
+  });
 }
+
+// The athlete's own words for a standing change: the one thing that keeps a change
+// they scoped to today open past today.
+const PLAN_LASTING_WORDS_RE =
+  /\b(?:from\s+now\s+on|going\s+forward|moving\s+forward|every\s+(?:time|week|session)|each\s+(?:time|week)|permanent(?:ly)?|for\s+good|always|lasting|from\s+here\s+on)\b/i;
 
 // ── plan_update addressed by date ────────────────────────────────────────────
 // The plan's day_numbers are the ring's order, not weekdays: the week deals the ring
@@ -3171,6 +3189,7 @@ export interface ChatActionGates {
   symptomResolve: boolean;
   flagTrainingStructure: boolean;
   planRestructure: boolean;
+  todaySession: boolean;
 }
 
 export function chatActionGates(inputs: ChatActionGateInputs): ChatActionGates {
@@ -3202,6 +3221,14 @@ export function chatActionGates(inputs: ChatActionGateInputs): ChatActionGates {
     symptomResolve: hasExplicitSymptomResolveIntent(message),
     flagTrainingStructure: flagTrainingStructureAuthorized(message),
     planRestructure: !foodOnly && hasExplicitPlanEditIntent(message),
+    // Today's session is built or opened only on the athlete's ask: their own sentence
+    // ("make it a full upper body today", "let's start today's session"), or their
+    // go-ahead ("set it up") right after the coach laid a session out.
+    todaySession:
+      !foodOnly &&
+      (hasExplicitTodaySessionIntent(message) ||
+        (carriesPlanApplyAffirmation(message) &&
+          (readsAsSessionProposal(priorMessage()) || coachOfferedTodaySession(priorMessage())))),
   };
 }
 
@@ -3214,6 +3241,8 @@ export const CHAT_ACTION_GATE_FOR: Readonly<Partial<Record<ChatActionType, keyof
   resolve_training_symptom: "symptomResolve",
   flag_training_structure: "flagTrainingStructure",
   plan_restructure: "planRestructure",
+  today_session: "todaySession",
+  start_session: "todaySession",
 };
 
 /** The action types this turn's coach/deep prompt renders: every prompt type whose gate holds. */
@@ -3988,6 +4017,24 @@ export function applyChatActions(
           });
           break;
         }
+        case "today_session":
+          // The session they asked for TODAY: today's own composition, never the template.
+          if (!gates.todaySession) break;
+          applied.push({
+            type: a.type,
+            result: applyChatTodaySession(
+              { title: a.title, why: a.why ?? null, est_minutes: a.est_minutes ?? null, items: a.items },
+              { chat_message_id: chatMessageIdOf(ctx.userMessageId) }
+            ),
+          });
+          break;
+        case "start_session":
+          if (!gates.todaySession) break;
+          applied.push({
+            type: a.type,
+            result: applyChatStartSession({ chat_message_id: chatMessageIdOf(ctx.userMessageId) }),
+          });
+          break;
         default: {
           const _exhaustive: never = a;
           void _exhaustive;
@@ -4007,6 +4054,12 @@ export function applyChatActions(
     explicitPlanEdit,
     misfiledCaptures: misfiled,
   };
+}
+
+// The athlete's message id as provenance; the gate inputs' "no message" sentinel is none.
+function chatMessageIdOf(value: number | null | undefined): number | null {
+  const id = Number(value);
+  return Number.isSafeInteger(id) && id > 0 && id < Number.MAX_SAFE_INTEGER ? id : null;
 }
 
 // Ordinary session asides append. A question, a pain report, and a plan edit do
