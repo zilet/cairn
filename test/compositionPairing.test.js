@@ -9,7 +9,7 @@ import { collapseRegionDuplicates, PAIRING_NOTES, pairForSession } from "../dist
 import { antagonistSide, movementRegionKey } from "../dist/repo/movement-region.js";
 import { violatesReadingGrammar } from "../dist/repo/day-read.js";
 import { isPrepPlanItem } from "../dist/domain/training/plan-item-order.js";
-import { repo, resetTables, settlePlanPrescriptions } from "./_seed.js";
+import { db, repo, resetTables, settlePlanPrescriptions } from "./_seed.js";
 
 const DATE = "2031-07-01";
 
@@ -52,8 +52,17 @@ function agentSession(items) {
   return { name: "Composed", focus: "Composed", why: "Fits the envelope today.", est_minutes: 60, items };
 }
 
+// The server never proposes a pair with a member whose implement nobody named (second
+// review, item 6), and "Chest-Supported Row" names none — so the fixture's row carries
+// the implement its exercise row would in a real library (a chest-supported DUMBBELL row).
+const FIXTURE_EQUIPMENT = { "Chest-Supported Row": "dumbbell" };
+
 function seed(exercises) {
-  for (const [name, muscle_group, mode = "reps"] of exercises) repo.upsertExercise({ name, muscle_group, mode });
+  for (const [name, muscle_group, mode = "reps"] of exercises) {
+    repo.upsertExercise({ name, muscle_group, mode });
+    if (FIXTURE_EQUIPMENT[name])
+      db.prepare(`UPDATE exercises SET equipment = ? WHERE name = ?`).run(FIXTURE_EQUIPMENT[name], name);
+  }
 }
 
 function seedUpperAndArms() {
@@ -564,6 +573,7 @@ test("a behind group never displaces the day's anchor, even when the anchor is p
 });
 
 test("a stored group outside 1..50, or a group of one, is no grouping — it never merges or collides downstream", () => {
+  seed([["Chest-Supported Row", "back"]]);
   const row = (position, exercise, superset_group, extra = {}) => ({
     position,
     kind: "strength",

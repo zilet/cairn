@@ -68,7 +68,7 @@ const NAME_STATIONS: ReadonlyArray<{ re: RegExp; implement: StationImplement }> 
   // A dip on rings hangs from the rings, and a bench (or chair) dip needs no station at
   // all — only a parallel-bar dip occupies the dip station.
   { re: /\brings?\b.*\bdips?\b|\bdips?\b.*\brings?\b/, implement: "suspension" },
-  { re: /\b(?:bench|chair|box)[ -]dips?\b|\bdips?\b.*\bbench\b/, implement: "bodyweight" },
+  { re: /\b(?:bench|chair|box)[ -]dips?\b|\bdips?\b.*\b(?:bench(?:es)?|chairs?|box(?:es)?)\b/, implement: "bodyweight" },
   { re: /\bdips?\b/, implement: "dip_station" },
   { re: /\binverted rows?\b/, implement: "rack" },
   { re: /\blandmine\b/, implement: "landmine" },
@@ -82,7 +82,7 @@ const EXTRA_IMPLEMENTS: ReadonlyArray<{ re: RegExp; implement: StationImplement 
   { re: /\bbody only\b/, implement: "bodyweight" },
   { re: /\bbands?\b/, implement: "bands" },
   { re: /\bmedicine ball\b|\bmed ball\b/, implement: "medicine_ball" },
-  { re: /\bfoam roll(?:er)?\b|\bexercise ball\b|\bmat\b/, implement: "mat" },
+  { re: /\bfoam roll(?:er)?\b|\b(?:exercise|stability|swiss) ball\b|\bmat\b/, implement: "mat" },
   { re: /\bplates?\b/, implement: "plate" },
 ];
 
@@ -90,7 +90,7 @@ const EXTRA_IMPLEMENTS: ReadonlyArray<{ re: RegExp; implement: StationImplement 
 // pushdown off a machine of its own): all of them share the one adjustable column.
 const CABLE_BY_NAME: ReadonlyArray<{ re: RegExp; implement: StationImplement }> = [
   {
-    re: /\bpush[ -]?downs?\b|\bface[ -]?pulls?\b|\bcrossovers?\b|\bstraight[ -]arm pull[ -]?downs?\b|\bpallof\b|\bwood[ -]?chops?\b|\bpull[ -]throughs?\b/,
+    re: /\bpush[ -]?downs?\b|\bface[ -]?pulls?\b|\bcrossovers?\b|\bstraight[ -]arm pull[ -]?downs?\b|\bpallof\b|\bwood[ -]?chops?\b|\bpull[ -]throughs?\b|\bbayesian\b/,
     implement: "cable",
   },
 ];
@@ -98,9 +98,26 @@ const CABLE_BY_NAME: ReadonlyArray<{ re: RegExp; implement: StationImplement }> 
 // Movements that, by name, are a selectorized machine of their own.
 const MACHINE_BY_NAME: ReadonlyArray<{ re: RegExp; implement: StationImplement }> = [
   {
-    re: /\bleg curls?\b|\bleg extensions?\b|\bpec[ -]?deck\b|\bseated calf raises?\b|\bhip (?:abduct|adduct)/,
+    re: /\bleg extensions?\b|\bpec[ -]?deck\b|\bseated calf raises?\b|\bhip (?:abduct|adduct)/,
     implement: "machine",
   },
+];
+
+// Names that are commonly a machine or station lift, or ambiguous between one and free
+// weights, when no implement is named (second review, item 6): a leg / hamstring / nordic
+// curl (lying or seated machine, a ball, a partner, a GHD), a calf raise (standing machine,
+// smith, leg press, a step, dumbbells), a kickback (glute machine, cable, dumbbell), GHD
+// and back-extension work, a captain's chair or roman chair, decline-bench sit-ups, a bare
+// fly (cable, pec deck, dumbbells), a pullover (machine, cable, dumbbell), a shrug (rack,
+// smith, machine, dumbbells), a sissy squat or donkey work. These are UNKNOWN — fixed for
+// a pair the server proposes, and never a reason to split a pair an author set. Checked
+// after the implement words, so "Dumbbell Calf Raise" or "Cable Kickback" still read.
+const AMBIGUOUS_BY_NAME: readonly RegExp[] = [
+  /\b(?:leg|hamstring|nordic)\b.*\bcurls?\b|\bnordics?\b/,
+  /\bcalf raises?\b|\bkick[ -]?backs?\b|\bdonkey\b/,
+  /\bghd\b|\bglute[ -]ham\b|\bback extensions?\b|\bhyper[ -]?extensions?\b|\breverse hypers?\b|\broman chair\b|\bcaptain'?s? chair\b/,
+  /\bdecline\b.*\b(?:sit[ -]?ups?|crunch(?:es)?)\b/,
+  /\bfl(?:y|ys|ies|yes)\b|\bpullovers?\b|\bshrugs?\b|\bsissy squats?\b/,
 ];
 
 // Free-weight and bodyweight lifts whose name, by convention, IS the implement (nobody
@@ -108,6 +125,10 @@ const MACHINE_BY_NAME: ReadonlyArray<{ re: RegExp; implement: StationImplement }
 // implement named is a dumbbell or nothing at all). Name fallback only, after every data
 // field, and never when the name itself says it is done on a station
 // (STATION_WORDS_IN_NAME): a seated, machine, smith, cable or preacher version is not this.
+// A name is here only when it is an UNAMBIGUOUS free-weight or bodyweight movement; the
+// ambiguous ones (AMBIGUOUS_BY_NAME) are read before it and stay unknown. The arm-curl
+// catch-all (`curls?`) is safe only because every leg / hamstring / nordic curl is read
+// there first.
 const STATION_WORDS_IN_NAME = /\b(?:machine|seated|smith|cable|lever|selectori[sz]ed|preacher|scott|spider)\b/;
 const PORTABLE_BY_NAME: ReadonlyArray<{ re: RegExp; implement: StationImplement }> = [
   {
@@ -116,7 +137,7 @@ const PORTABLE_BY_NAME: ReadonlyArray<{ re: RegExp; implement: StationImplement 
   },
   { re: /\bfarmer'?s? (?:carry|walk)\b|\bsuitcase carry\b/, implement: "dumbbell" },
   {
-    re: /\b(?:lateral|front|side|y)[ -]raises?\b|\brear[ -]delt (?:raises?|fl(?:y|ys|ies|yes))\b|\breverse fl(?:y|ys|ies|yes)\b|\bfl(?:y|ys|ies|yes)\b|\bbiceps? curls?\b|\bcurls?\b|\bskull[ -]?crushers?\b|\btriceps? (?:extensions?|kick[ -]?backs?)\b|\bkick[ -]?backs?\b|\bshrugs?\b|\bcalf raises?\b|\blunges?\b|\bsplit squats?\b|\bbulgarian\b|\bstep[ -]?ups?\b|\bpullovers?\b|\bsingle[ -]leg (?:rdl|romanian)\b/,
+    re: /\b(?:lateral|front|side|y)[ -]raises?\b|\brear[ -]delt raises?\b|\bbiceps? curls?\b|\bcurls?\b|\bskull[ -]?crushers?\b|\btriceps? extensions?\b|\blunges?\b|\bsplit squats?\b|\bbulgarian\b|\bstep[ -]?ups?\b|\bsingle[ -]leg (?:rdl|romanian)\b/,
     implement: "dumbbell",
   },
   {
@@ -136,6 +157,7 @@ function implementFromText(text: string, asName: boolean): StationImplement | nu
   if (!asName) return null;
   for (const row of CABLE_BY_NAME) if (row.re.test(text)) return row.implement;
   for (const row of MACHINE_BY_NAME) if (row.re.test(text)) return row.implement;
+  if (AMBIGUOUS_BY_NAME.some((re) => re.test(text))) return null;
   if (STATION_WORDS_IN_NAME.test(text)) return null;
   for (const row of PORTABLE_BY_NAME) if (row.re.test(text)) return row.implement;
   return null;
