@@ -585,7 +585,7 @@ test("a day that did not fit this week is said under the strip, verbatim and esc
 // verbatim — and only while it agrees with the line about whether work is under way.
 test("Train's start action prints the server's open_session label", () => {
   const open = { daily_session_id: 7, session_id: 9, started: true, label: "Continue Pull <day>" };
-  const win = load({ peekCached: (key) => (key === `today:open:${TODAY}` ? { data: open, fresh: true } : null) });
+  const win = load({ peekCached: (key) => (key === `today:open:${TODAY}` ? { data: open, fresh: true } : key === `today:aggregate:${TODAY}` ? { data: {}, fresh: true } : null) });
   const W = win.CairnTrainWeek;
   const underWay = planWeek({ strength_line: { ...strengthLine, state: "in_progress" } });
   const card = renderHtml(W.nextHtml(W.nextOf(underWay, lookAhead()), detailToday, TODAY, underWay.strength_line), { document: win.document });

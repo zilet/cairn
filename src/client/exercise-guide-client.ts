@@ -164,7 +164,7 @@ type ExerciseGuidePayload = {
     const name = words(exercise);
     if (!name) return "";
     const href = `https://www.youtube.com/results?search_query=${encodeURIComponent(`${name} proper form`)}`;
-    return `<div class="detail-section exguide-watch"><a class="exguide-src exguide-watch-link" href="${escAttr(href)}" target="_blank" rel="noopener noreferrer" aria-label="${escAttr(`Watch ${name} form on YouTube (opens in a new tab)`)}">Watch form on YouTube</a></div>`;
+    return `<div class="detail-section exguide-watch"><a class="exguide-src exguide-watch-link" href="${escAttr(href)}" target="_blank" rel="noopener noreferrer" aria-label="${escAttr(`Search form videos for ${name} on YouTube (opens in a new tab)`)}">Search form videos on YouTube</a></div>`;
   }
 
   /**

@@ -302,6 +302,7 @@ type ApiFetchOutcome = {
               durationMs: result.durationMs,
               requestId: result.requestId,
             });
+            if (result.body !== undefined && !result.invalidJson) error.body = result.body;
             reportApiError(error);
             throw error;
           }

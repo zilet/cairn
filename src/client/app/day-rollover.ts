@@ -70,6 +70,36 @@ function dayRolloverTarget(
   const STALE_PAINT_MS = 5 * 60 * 1000;
   let lastPaintAt = Date.now();
 
+  // visibilitychange and pageshow arrive together on a resume: one repaint, not two. And a Today
+  // being typed into (the weigh-in field) or covered by a sheet is never rebuilt under the hand.
+  const REPAINT_COALESCE_MS = 1500;
+  let lastTodayRepaintAt = 0;
+  function todayRepaintVerdict(now: number, last: number, editing: boolean): "go" | "skip" | "defer" {
+    if (now - last < REPAINT_COALESCE_MS) return "skip";
+    return editing ? "defer" : "go";
+  }
+  function editingToday(): boolean {
+    const active = document.activeElement as HTMLElement | null;
+    if (active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) return true;
+    return !!document.querySelector('dialog[open], [aria-modal="true"]:not([hidden])');
+  }
+  let repaintDeferred = false;
+  function deferTodayRepaint(): void {
+    if (repaintDeferred) return;
+    repaintDeferred = true;
+    document.addEventListener(
+      "focusout",
+      () => {
+        setTimeout(() => {
+          if (editingToday()) return;
+          repaintDeferred = false;
+          repaintStaleActiveTab();
+        }, 300);
+      },
+      { once: true },
+    );
+  }
+
   function repaintStaleActiveTab(): void {
     const s = g.state;
     const now = Date.now();
@@ -80,7 +110,12 @@ function dayRolloverTarget(
     // your hands. Every other tab keeps the long window: a phone locked between sets
     // must not rebuild the log under you.
     if (s?.tab === "today" && typeof g.renderToday === "function") {
+      const verdict = todayRepaintVerdict(now, lastTodayRepaintAt, editingToday());
+      if (verdict === "defer") deferTodayRepaint();
+      if (verdict !== "go") return;
+      repaintDeferred = false;
       lastPaintAt = now;
+      lastTodayRepaintAt = now;
       void g.renderToday({ soft: true });
       return;
     }
@@ -170,7 +205,7 @@ function dayRolloverTarget(
     armMidnightTimer();
   }
 
-  Object.assign(globalThis, { installDayRolloverWatcher, dayRolloverTarget });
+  Object.assign(globalThis, { installDayRolloverWatcher, dayRolloverTarget, todayRepaintVerdict });
 
   if (typeof window !== "undefined") {
     (window as typeof window & { installDayRolloverWatcher?: () => void }).installDayRolloverWatcher =

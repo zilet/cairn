@@ -434,6 +434,7 @@ function loadController({ apiImpl, contextOverrides } = {}) {
   vm.runInNewContext(readFileSync(join(root, "public/js/date-utils.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-session-feedback-client.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/today-session-skip-place-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-session-skip-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-session-set-model.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/session-entry-client.js"), "utf8"), context);

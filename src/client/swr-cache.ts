@@ -340,8 +340,15 @@ function swrSweep(): void {
   const CAP = 40;
   try {
     const rows: Array<{ lk: string; ts: number }> = [];
-    for (let i = 0; i < localStorage.length; i++) {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
       const lk = localStorage.key(i);
+      // The namespace before the last bump is never read again: sweep it so it stops taking space.
+      if (lk && lk.startsWith("cairn.swr.v1.")) {
+        try {
+          localStorage.removeItem(lk);
+        } catch {}
+        continue;
+      }
       if (!lk || !lk.startsWith(SWR_NS)) continue;
       let ts = 0;
       try {

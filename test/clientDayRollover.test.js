@@ -20,6 +20,16 @@ function loadRollover() {
   return context;
 }
 
+test("a foreground repaint of Today coalesces a double event and never lands on a field being edited", () => {
+  const { todayRepaintVerdict } = loadRollover();
+  assert.equal(todayRepaintVerdict(10_000, 0, false), "go");
+  // visibilitychange + pageshow arrive together: the second is dropped.
+  assert.equal(todayRepaintVerdict(10_400, 10_000, false), "skip");
+  assert.equal(todayRepaintVerdict(12_000, 10_000, false), "go");
+  // A focused weigh-in field or an open sheet defers the repaint rather than rebuilding under the athlete.
+  assert.equal(todayRepaintVerdict(20_000, 0, true), "defer");
+});
+
 test("dayRolloverTarget rolls only when the day changed and the user hasn't picked a date", () => {
   const { dayRolloverTarget } = loadRollover();
   assert.equal(typeof dayRolloverTarget, "function");
@@ -74,6 +84,8 @@ test("the rollover watcher resets the pick it just outlived", () => {
     clearTimeout: () => {},
     document: {
       visibilityState: "visible",
+      activeElement: null,
+      querySelector: () => null,
       addEventListener: (name, fn) => {
         listeners[name] = fn;
       },
@@ -236,6 +248,8 @@ test("Today revalidates on every foreground; the Session tab waits the long wind
     clearTimeout: () => {},
     document: {
       visibilityState: "visible",
+      activeElement: null,
+      querySelector: () => null,
       addEventListener: (name, fn) => {
         listeners[name] = fn;
       },
@@ -262,6 +276,9 @@ test("Today revalidates on every foreground; the Session tab waits the long wind
   listeners.visibilitychange();
   assert.deepEqual(JSON.parse(JSON.stringify(context.revalidated)), [{ soft: true }], "even a glance away revalidates Today, quietly");
   assert.equal(context.activated, undefined, "…without rebuilding the screen");
+  now += 300;
+  listeners.pageshow();
+  assert.equal(context.revalidated.length, 1, "pageshow right behind visibilitychange is one repaint, not two");
 
   now += 40 * 1000;
   listeners.pageshow();

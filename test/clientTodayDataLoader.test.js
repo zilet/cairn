@@ -38,6 +38,7 @@ function loadDataLoader() {
   };
   context.window = context;
   context.globalThis = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/today-open-session-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-data-loader.js"), "utf8"), context);
   return context.CairnTodayDataLoader;
 }

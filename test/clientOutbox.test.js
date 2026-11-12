@@ -563,3 +563,51 @@ test("enqueue reports storage quota failure and preserves the previously durable
   assert.equal(storage.getItem("cairn.outbox.v1"), durable);
   assert.deepEqual(box.list().map((item) => item.body.n), [1]);
 });
+
+test("a replayed open answered by an existing owner of another source is accepted; a real create mismatch is not", () => {
+  const { replay } = (() => {
+    const context = { Date, JSON, Math, Array, Object, String, Number, Promise };
+    context.globalThis = context;
+    runApiClientModules(context);
+    return { replay: context.CairnOutboxReplay };
+  })();
+  const date = "2026-06-30";
+  const item = {
+    kind: "daily_session_prepare",
+    body: { date, source: "adaptive_plan" },
+    prepare_intent: { date, source: "adaptive_plan", title: "Pull", items: [] },
+  };
+  const owner = { id: 9, date, source: "athlete_override", title: "Custom", items: [{ position: 1 }] };
+  const session = { id: 4, date };
+  const reused = replay.canonicalPreparedReplay(item, { ok: true, reused: true, daily_session: owner, session });
+  assert.equal(reused?.dailySession.id, 9, "a reused owner is the replay's truth");
+  assert.equal(
+    replay.canonicalPreparedReplay(item, { ok: true, reused: false, daily_session: owner, session }),
+    null,
+    "a non-reused create with another source still needs attention",
+  );
+  assert.equal(
+    replay.canonicalPreparedReplay(item, { ok: true, reused: true, daily_session: { ...owner, date: "2026-07-01" }, session }),
+    null,
+    "a reused owner on another date is never accepted",
+  );
+});
+
+test("a queued start that lost the day to a session begun elsewhere is superseded, not 'needs attention'", () => {
+  const context = { Date, JSON, Math, Array, Object, String, Number, Promise };
+  context.globalThis = context;
+  runApiClientModules(context);
+  const replay = context.CairnOutboxReplay;
+  const refused = (code = "daily_session_active_changed", status = 409) => {
+    const error = new context.CairnApiError({ kind: "http", method: "POST", route: "/daily-session/prepare", status });
+    error.body = { ok: false, code, owner: { session_id: 4, daily_session_id: 1 } };
+    return error;
+  };
+  const start = { kind: "daily_session_prepare", body: { date: "2026-06-30", source: "adaptive_plan", replace: false } };
+  assert.equal(replay.supersededByOwner(start, refused()), true);
+  assert.equal(replay.supersededByOwner({ ...start, body: { ...start.body, replace: true } }, refused()), false, "an explicit replace is the athlete's to review");
+  assert.equal(replay.supersededByOwner({ ...start, body: { date: "2026-06-30", expected_active_id: 1 } }, refused()), false, "an assertion is not a start");
+  assert.equal(replay.supersededByOwner(start, refused("daily_session_preview_stale")), false, "a stale preview still needs the athlete");
+  assert.equal(replay.supersededByOwner(start, refused("daily_session_active_changed", 500)), false);
+  assert.equal(replay.supersededByOwner({ kind: "set", body: {} }, refused()), false);
+});

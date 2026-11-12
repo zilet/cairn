@@ -9,6 +9,8 @@ type OutboxReplayApi = {
   canonicalPreparedReplay(item: OutboxItem, value: unknown): PreparedReplayTruth | null;
   replayHasSemanticFailure(item: OutboxItem, value: unknown): boolean;
   queuedAdaptivePreviewDrift(item: OutboxItem, error: unknown): boolean;
+  supersededByOwner(item: OutboxItem, error: unknown): boolean;
+  openSupersededDays(dates: string[]): void;
   storePreparedReplayTruth(truth: PreparedReplayTruth): void;
   freshenAfterSync(prepared?: PreparedReplayTruth[]): void;
 };
@@ -130,6 +132,10 @@ declare const CairnOutboxReplay: OutboxReplayApi;
     const expectedActiveId = Number(request.expected_active_id);
     if (Number.isInteger(expectedActiveId) && expectedActiveId > 0) {
       if (Number(dailySession.id) !== expectedActiveId) return null;
+    } else if (response.reused === true) {
+      // An open answers with the date's existing session (any source, any items): the
+      // athlete asked for "a session today" and has one. It is the truth, not a mismatch.
+      return { date, session, dailySession };
     } else if (String(dailySession.source || "") !== String(request.source || "")) return null;
     if (!samePrepareIntent(item, dailySession)) return null;
     return { date, session, dailySession };
@@ -163,6 +169,39 @@ declare const CairnOutboxReplay: OutboxReplayApi;
       typeof body.expected_input_fingerprint === "string" &&
       /^[a-f0-9]{64}$/.test(body.expected_input_fingerprint)
     );
+  }
+
+  const OWNER_CONFLICTS = new Set(["daily_session_active_changed", "daily_session_changed", "daily_session_locked"]);
+
+  /**
+   * A queued START (never a replace or an assertion) that lost the day to a session begun
+   * elsewhere while this device was offline: the refusal names the owner. Nothing is wrong
+   * with the athlete's data and nothing needs their attention — the owner is the day's
+   * session, so the staged copy is dropped and the owner opens (`openSupersededDays`).
+   */
+  function supersededByOwner(item: OutboxItem, error: unknown): boolean {
+    if (item.kind !== "daily_session_prepare" || !(error instanceof CairnApiError) || error.status !== 409) return false;
+    const body = item.body && typeof item.body === "object" ? (item.body as Record<string, unknown>) : {};
+    if (body.replace === true || body.expected_active_id != null) return false;
+    const refusal = error.body && typeof error.body === "object" ? (error.body as Record<string, unknown>) : {};
+    const owner = refusal.owner && typeof refusal.owner === "object" ? (refusal.owner as Record<string, unknown>) : null;
+    return OWNER_CONFLICTS.has(String(refusal.code || "")) && Number(owner?.session_id) > 0;
+  }
+
+  /** Where the athlete is looking at a date whose staged start gave way to the owner: open the owner there. */
+  function openSupersededDays(dates: string[]): void {
+    const g = globalThis as Record<string, unknown> & {
+      openSession?(date: string, options: Record<string, unknown>): unknown;
+      reshapeToday?(): unknown;
+      state?: { tab?: string; logDate?: string };
+    };
+    try {
+      for (const date of dates) {
+        if (g.state?.tab === "session" && g.state.logDate === date && typeof g.openSession === "function") {
+          void g.openSession(date, { source: "adaptive_plan", provenance: { entry: "outbox_owner" } });
+        } else if (g.state?.tab === "today" && typeof g.reshapeToday === "function") g.reshapeToday();
+      }
+    } catch {}
   }
 
   function freshenAfterSync(prepared: PreparedReplayTruth[] = []): void {
@@ -199,6 +238,8 @@ declare const CairnOutboxReplay: OutboxReplayApi;
     canonicalPreparedReplay,
     replayHasSemanticFailure,
     queuedAdaptivePreviewDrift,
+    supersededByOwner,
+    openSupersededDays,
     storePreparedReplayTruth,
     freshenAfterSync,
   };

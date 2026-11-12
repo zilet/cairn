@@ -185,7 +185,7 @@ function todayCardsCleanNote(note: unknown, hasDose: boolean): string {
 // "Pair · <partner>" for two, "Group · <n> exercises" for more. The names a card is
 // paired with come from the session renderer, which only lists partners that are on
 // screen — an empty list is a plain card. The aria-label says the same in a sentence,
-// since nothing here may lean on a hover title.
+// since nothing here may lean on a hover title or an aria-label on a plain span.
 function todayCardsPairChipHtml(partners: unknown): string {
   const names = Array.isArray(partners) ? partners.map(todayString).filter(Boolean) : [];
   if (!names.length) return "";
@@ -194,7 +194,9 @@ function todayCardsPairChipHtml(partners: unknown): string {
   const sentence = two
     ? `Paired with ${names[0]}: alternate sets.`
     : `In a group with ${names.join(", ")}: rotate sets.`;
-  return `<span class="ex-pair-chip" aria-label="${escAttr(sentence)}">${escHtml(label)}</span>`;
+  // A bare <span>'s aria-label is ignored by most screen readers, so the sentence is real
+  // (visually hidden) text and the printed label is hidden from them to avoid saying it twice.
+  return `<span class="ex-pair-chip"><span aria-hidden="true">${escHtml(label)}</span><span class="sr-only">${escHtml(sentence)}</span></span>`;
 }
 
 function exerciseCardHtml(

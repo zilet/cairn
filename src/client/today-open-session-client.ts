@@ -19,10 +19,21 @@ type OpenSessionRead = import("../contracts/client-api.js").ClientOpenSession;
 type OpenSessionOwner = import("../contracts/client-api.js").ClientDailySessionOwner;
 type OpenSessionPrepared = { current: boolean; ok: boolean; value?: unknown; error?: unknown };
 type OpenOwnedDeps = {
-  prepare(body: { date: string; expected_active_id: number }): Promise<OpenSessionPrepared>;
+  prepare(body: { date: string; expected_active_id?: number }): Promise<OpenSessionPrepared>;
   enter(date: string, response: Record<string, unknown> | null): void;
   say(message: string): void;
   refresh(): unknown;
+};
+/** What the Today screen lends this module: where a prepare goes, how a session is entered, what is said. */
+type OpenHost = {
+  api(path: string, init: Record<string, unknown>): Promise<unknown>;
+  run(date: string, task: () => Promise<unknown>): Promise<OpenSessionPrepared>;
+  enter(date: string, response: Record<string, unknown> | null): void;
+  busy(trigger: HTMLElement | null | undefined, on: boolean, message?: string): void;
+  announce(message: string): void;
+  toast(message: string): void;
+  refresh(): unknown;
+  resetPick(): void;
 };
 type DiscardDeps = {
   api?(path: string, init: Record<string, unknown>): Promise<unknown>;
@@ -30,6 +41,8 @@ type DiscardDeps = {
   done(): unknown;
 };
 type AdoptOptions = {
+  source?: string;
+  agentJobId?: unknown;
   session?: unknown;
   dayNumber?: number | null;
   replace?: boolean;
@@ -47,8 +60,11 @@ type AdoptOptions = {
   /** The SWR key the Today loader fills from each aggregate (never a hand-written value). */
   const key = (date: string): string => `today:open:${date}`;
 
+  // Freshness of the open key: it is only as good as the Today aggregate it rode in on. Every
+  // write on this device drops that aggregate (write-invalidation), so while the aggregate is
+  // gone the key may name a session that has since moved on and is never asserted by id.
   function cached(date: string): OpenSessionRead | null {
-    if (typeof peekCached !== "function") return null;
+    if (typeof peekCached !== "function" || !peekCached<unknown>(`today:aggregate:${date}`)) return null;
     const row = record(peekCached<unknown>(key(date))?.data);
     return row && Number(row.daily_session_id) > 0 ? (row as unknown as OpenSessionRead) : null;
   }
@@ -117,12 +133,40 @@ type AdoptOptions = {
     });
   }
 
+  /**
+   * A session row holding logged sets with no composition (sets from chat, MCP or a
+   * hand-typed log) has no `open_session` on the aggregate, yet it is exactly what the
+   * athlete should be able to continue. The server adopts it on a plain open prepare, so
+   * the read is built here from the aggregate's own `session` and `strength_line`; its
+   * `daily_session_id` is 0 (no composition to assert), so no one ever asserts it by id.
+   * A watch-owned day stays inbound-only and never reads as ours to continue.
+   */
+  function legacyOpen(today: Record<string, unknown> | null | undefined): OpenSessionRead | null {
+    const session = record(today?.session);
+    if (!session || Number(session.id) <= 0 || session.finished_at || session.garmin) return null;
+    const sets = Array.isArray(session.sets) ? session.sets.length : 0;
+    if (!sets) return null;
+    const title = String(record(today?.strength_line)?.title || session.title || "").trim();
+    return {
+      daily_session_id: 0,
+      session_id: Number(session.id),
+      source: "athlete_override",
+      plan_day_id: null,
+      title,
+      set_count: sets,
+      started: true,
+      chosen: true,
+      action: "continue",
+      label: title ? `Continue ${title}` : "Continue your session",
+    };
+  }
+
   /** The date's open session read fresh from the network (never the SWR cache); throws when unreachable. */
   async function freshOpen(date: string): Promise<OpenSessionRead | null> {
     const today = record(await globalApi(`/today?date=${encodeURIComponent(date)}`, {}));
     if (!today || !Array.isArray(today.plan)) throw new Error("no aggregate");
     const open = record(today.open_session);
-    const read = open && Number(open.daily_session_id) > 0 ? (open as unknown as OpenSessionRead) : null;
+    const read = open && Number(open.daily_session_id) > 0 ? (open as unknown as OpenSessionRead) : legacyOpen(today);
     swrSet(key(date), read);
     return read;
   }
@@ -156,18 +200,19 @@ type AdoptOptions = {
       if (announce) deps.say(`${nameOf(owner.title)} is already open — here it is.`);
       return true;
     };
-    if (!(id > 0)) return arrived(null);
-    const asserted = await deps.prepare({ date, expected_active_id: id });
+    // A session row with no composition is adopted by the PLAIN prepare (no replace, no
+    // fingerprint, no id): it binds a composition to the row and answers with it.
+    const asserted = await deps.prepare(id > 0 ? { date, expected_active_id: id } : { date });
     if (!asserted.current) return false;
     const response = asserted.ok ? record(asserted.value) : null;
     const daily = record(response?.daily_session);
     const session = record(response?.session);
-    if (response?.ok === true && daily && session && Number(daily.id) === id) {
+    if (response?.ok === true && daily && session && (id > 0 ? Number(daily.id) === id : Number(daily.id) > 0)) {
       return arrived({ ...response, session: { ...session, daily_session: daily } });
     }
     // Changed again between the conflict and the open: follow the new owner.
     const next = ownerOf(response);
-    if (hops < 2 && next && Number(next.daily_session_id) !== id) return openOwned(date, next, deps, true, hops + 1);
+    if (hops < 2 && next && (id > 0 ? Number(next.daily_session_id) !== id : Number(next.daily_session_id) > 0)) return openOwned(date, next, deps, true, hops + 1);
     return recover(date, deps, hops + 1);
   }
 
@@ -180,7 +225,9 @@ type AdoptOptions = {
       open = undefined;
     }
     if (open && hops < 3) return openOwned(date, asOwner(open), deps, true, hops + 1);
-    forget(date);
+    // Forget only what the server has just contradicted; unreachable, nothing was learned, and the
+    // saved copy (a staged offline session included) is what the repaint should show.
+    if (open !== undefined) forget(date);
     deps.say(open === undefined ? "Couldn't reach Cairn just now — here's what's saved." : "Today moved on — here's where things stand.");
     void deps.refresh();
     return false;
@@ -194,6 +241,50 @@ type AdoptOptions = {
   }
 
   /**
+   * Every refusal of a prepare ends somewhere true and frees the tap: an owner opens, a session
+   * conflict re-reads today, and anything else (a stale preview included) says one plain
+   * sentence and repaints. Never null, never a button left reading "Confirming...".
+   */
+  function settle(date: string, response: unknown, deps: OpenOwnedDeps): Promise<boolean> {
+    const resolved = resolveConflict(date, response, deps);
+    if (resolved) return resolved;
+    deps.say(
+      record(response)?.code === "daily_session_preview_stale"
+        ? "Today's suggestion just changed — here is the latest."
+        : "That session couldn't be opened just now. Try again in a moment.",
+    );
+    void deps.refresh();
+    return Promise.resolve(false);
+  }
+
+  /** The deps every open path shares, built over the screen's host (see `OpenHost`). */
+  function depsFor(host: OpenHost, date: string, trigger: HTMLElement | null): OpenOwnedDeps {
+    return {
+      prepare: (body) =>
+        host.run(date, () =>
+          host.api("/daily-session/prepare", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+            acceptErrorBody: true,
+          }),
+        ),
+      // An owner replaces whatever the screen had picked: a stale manual pick never shapes it.
+      enter: (d, response) => {
+        host.busy(trigger, false);
+        host.resetPick();
+        host.enter(d, response);
+      },
+      say: (message) => {
+        host.busy(trigger, false, message);
+        host.announce(message);
+        host.toast(message);
+      },
+      refresh: () => host.refresh(),
+    };
+  }
+
+  /**
    * Before a request that would make or replace the date's session: when the athlete's open
    * session is already there — a cached one, or (for a replace / reviewed-preview request)
    * one read fresh — and replacing it would discard something they chose or started, open it
@@ -204,90 +295,27 @@ type AdoptOptions = {
     date: string,
     options: AdoptOptions,
     open: (owner: OpenSessionOwner, announce: boolean) => Promise<boolean>,
+    pending?: (on: boolean) => void,
   ): Promise<boolean | null> {
-    if (options.session || options.dayNumber != null) return null;
+    // Only an UNSPECIFIC start (a plain open, Train anyway, the Brief's start) may be redirected.
+    // Anything that names what it wants — an agent job, a plan day, an authored session, a manual
+    // pick — is a deliberate change: the server decides (it refuses only a STARTED owner).
+    if (options.session || options.dayNumber != null || options.agentJobId != null || options.source === "manual_plan")
+      return null;
     const replacing = options.replace === true || options.trainAnyway === true;
     let found = cached(date);
     if (replacing || options.preview) {
+      pending?.(true);
       try {
         found = await freshOpen(date);
       } catch {
         /* unreachable: the cached one, if any, stands */
+      } finally {
+        pending?.(false);
       }
     }
     if (!found || (replacing && !found.chosen && !found.started)) return null;
     return open(asOwner(found), replacing);
-  }
-
-  /** The quiet "Discard this session" door exists only for a session nothing has been done on. */
-  const canDiscard = (open: OpenSessionRead | null | undefined): boolean => !!open && open.started === false;
-
-  /** Drop an unstarted session so the day is free again. True once it is gone. */
-  async function discard(date: string, id: number, deps: DiscardDeps): Promise<boolean> {
-    let response: Record<string, unknown> | null = null;
-    try {
-      response = record(
-        await (deps.api || globalApi)("/daily-session/discard", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ date, expected_active_id: id }),
-          acceptErrorBody: true,
-        }),
-      );
-    } catch {
-      response = null;
-    }
-    if (response?.ok === true || response?.code === "daily_session_missing") {
-      forget(date);
-      await deps.done();
-      return true;
-    }
-    deps.say(
-      response?.code === "daily_session_locked"
-        ? "This session already has work logged, so it stays. Nothing you logged is lost."
-        : "Couldn't discard this session. Try again in a moment.",
-    );
-    return false;
-  }
-
-  function wireDiscard(root: ParentNode, deps: DiscardDeps): void {
-    const button = root.querySelector<HTMLButtonElement>("#sessDiscard");
-    if (!button || button.dataset.wired) return;
-    button.dataset.wired = "1";
-    button.addEventListener("click", () => {
-      if (button.disabled) return;
-      button.disabled = true;
-      void discard(String(button.dataset.date || ""), Number(button.dataset.id), deps).then((gone) => {
-        if (!gone) button.disabled = false;
-      });
-    });
-  }
-
-  /** The quiet door itself, drawn under the session by the shell (session-snapshot-client.ts). */
-  function discardHtml(date: string, open: OpenSessionRead | null | undefined): string {
-    return canDiscard(open) && Number(open!.daily_session_id) > 0
-      ? `<div class="sess-discard-row"><button class="linkbtn sess-discard" id="sessDiscard" type="button" data-date="${escAttr(date)}" data-id="${escAttr(open!.daily_session_id)}">Discard this session</button></div>`
-      : "";
-  }
-
-  // A session minted by LOOKING at a past day ("Log a session to this day") is a door, not
-  // work: leaving the Session destination with nothing logged drops it so the day is free
-  // again. The server decides "nothing logged" (a started session answers `locked` and
-  // stays), so this never needs a fresh read — and it never says a word about it.
-  let pastDay = "";
-
-  const markPastDay = (date: string): void => {
-    pastDay = date;
-  };
-
-  async function leavePastDay(): Promise<void> {
-    const date = pastDay;
-    pastDay = "";
-    if (!date || typeof peekCached !== "function") return;
-    const daily = record(peekCached<unknown>(`today:daily-session:${date}`)?.data);
-    const session = record(peekCached<unknown>(`today:session:${date}`)?.data);
-    const id = Number((daily || record(session?.daily_session))?.id);
-    if (id > 0) await discard(date, id, { say: () => {}, done: () => {} });
   }
 
   /** The rest trade's answer: a train-anyway reply goes straight to the session. */
@@ -300,18 +328,16 @@ type AdoptOptions = {
     isConflict,
     briefRead,
     remember,
+    forget,
     freshOpen,
+    legacyOpen,
     openOwned,
     recover,
     resolveConflict,
+    settle,
+    depsFor,
     adopt,
-    canDiscard,
-    discard,
-    wireDiscard,
-    discardHtml,
     tradeOpensSession,
-    markPastDay,
-    leavePastDay,
   };
   Object.assign(globalThis, { CairnTodayOpenSession: CAIRN_TODAY_OPEN_SESSION });
 })();

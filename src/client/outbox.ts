@@ -13,6 +13,8 @@
     canonicalPreparedReplay,
     replayHasSemanticFailure,
     queuedAdaptivePreviewDrift,
+    supersededByOwner,
+    openSupersededDays,
     storePreparedReplayTruth,
     freshenAfterSync,
   } = CairnOutboxReplay;
@@ -112,6 +114,7 @@
     let blockedUntil: number | undefined;
     const canonicalByDate = new Map<string, PreparedReplayTruth>();
     const mutatedPreparedDates = new Set<string>();
+    const supersededDates = new Set<string>();
     try {
       do {
         outboxFlushAgain = false;
@@ -123,6 +126,7 @@
           if (!claim.item || claim.storageError) break;
           const item = claim.item;
           let outcome: "delivered" | "attention" | "pending" = "delivered";
+          let superseded = false;
           let failureStatus: number | undefined;
           try {
             const response = await api(item.path as string, {
@@ -145,7 +149,13 @@
             // A queued adaptive candidate is a compare-and-set request, never a
             // retry-until-it-wins write. Fingerprint drift becomes an explicit
             // attention barrier so dependent sets/finish cannot overtake it.
-            if (queuedAdaptivePreviewDrift(item, error)) {
+            if (supersededByOwner(item, error)) {
+              const date = String(item.session_date || (item.body as Record<string, unknown> | null)?.date || "");
+              clearMatchingStagedCachePair(date, item.id);
+              outboxResolveSessionPrerequisite(date);
+              supersededDates.add(date);
+              superseded = true;
+            } else if (queuedAdaptivePreviewDrift(item, error)) {
               outcome = "attention";
               failureStatus = 409;
             } else if (isTransientApiFailure(error)) outcome = "pending";
@@ -159,7 +169,7 @@
           );
           renderOutboxBar();
           if (!settled || outcome === "pending") break;
-          if (outcome === "delivered") sent++;
+          if (outcome === "delivered" && !superseded) sent++;
         }
       } while (outboxFlushAgain && box.count() > 0 && (typeof navigator === "undefined" || navigator.onLine !== false));
     } finally {
@@ -171,6 +181,7 @@
     }
     renderOutboxBar();
     scheduleOutboxClaimRetry(blockedUntil);
+    if (supersededDates.size > 0) openSupersededDays([...supersededDates]);
     if (sent > 0) {
       const prepared = [...canonicalByDate.values()].filter((truth) => !mutatedPreparedDates.has(truth.date));
       freshenAfterSync(prepared);
