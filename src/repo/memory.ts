@@ -1,4 +1,5 @@
 import { db } from "../db.js";
+import { dayTrainingTruth } from "./brain/read-adherence.js";
 import { POST_INTERVENTION_MIN_SPAN_DAYS, postInterventionWeightTrend } from "./goal-pace.js";
 import { settledPainPlaceReader } from "./injury-symptom-link.js";
 import { addDaysISO, localDateISO } from "./shared.js";
@@ -760,6 +761,28 @@ function sessionMinutesDriftLesson(
 // no lesson, rather than sitting unreconciled forever.
 const NUTRITION_CHECKIN_MAX_DEFER_DAYS = 28;
 
+// `trained` on a reconciled outcome means STRENGTH was done (a logged set): the rest-override
+// lesson and the minutes-drift lesson read it that way, and a half-marathon is neither "the
+// athlete lifted through a rest read" nor a lifting session overrunning its minutes. A day
+// with logged endurance work is recorded beside it instead: `endurance_trained` is the
+// repo's one "real activity" rule (dayTrainingTruth: >= 20 min or any distance, a hand-logged
+// shadow of a synced effort counted once), and `trained_kind` names the day.
+function enduranceOutcomeFields(
+  date: string,
+  strength: boolean
+): { endurance_trained: boolean; trained_kind: "strength" | "endurance" | "both" | "none" } {
+  let endurance = false;
+  try {
+    endurance = dayTrainingTruth(date).real_activities > 0;
+  } catch {
+    endurance = false;
+  }
+  return {
+    endurance_trained: endurance,
+    trained_kind: strength && endurance ? "both" : strength ? "strength" : endurance ? "endurance" : "none",
+  };
+}
+
 // Compare ONE suggestion to what actually happened. Returns the recorded outcome
 // blob plus an optional one-line lesson (null = nothing worth remembering — the
 // calm, common answer), the contradicting lessons that lesson retires, and whether
@@ -776,7 +799,13 @@ function reconcileOneSuggestion(
     const summary = sess ? sessionSummary(sess.id) : null;
     const trained = !!(summary && summary.sets > 0);
     const fb = sess ? { soreness: sess.soreness, performance: sess.performance, joint_pain: sess.joint_pain } : null;
-    const outcome = { read_kind: p.kind ?? null, trained, sets: summary?.sets ?? 0, feedback: fb };
+    const outcome = {
+      read_kind: p.kind ?? null,
+      trained,
+      sets: summary?.sets ?? 0,
+      ...enduranceOutcomeFields(date, trained),
+      feedback: fb,
+    };
     // The interesting cross-grain case: the Brief protected rest, the athlete
     // trained anyway, and it went fine → they tolerate higher frequency than the
     // read assumed. Suggestion-not-a-gate, learned not enforced.
@@ -805,6 +834,7 @@ function reconcileOneSuggestion(
       suggested_minutes: Number.isFinite(suggestedMin) ? suggestedMin : null,
       trained: !!(summary && summary.sets > 0),
       sets: summary?.sets ?? 0,
+      ...enduranceOutcomeFields(date, !!(summary && summary.sets > 0)),
       actual_minutes: sess?.duration_min ?? null,
     };
     // The drift read spans this outcome plus the recent reconciled ones, so it can
