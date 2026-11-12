@@ -765,6 +765,15 @@ listed as a miss on every run, so a loosened budget is never silent; raise one d
 narrow or keep a run. It needs Chrome (`CHROME_BIN` overrides discovery), so `npm run verify`
 runs it only with `CAIRN_PERF=1`, and CI runs it as its own blocking job.
 
+The loads are independent (each has its own browser context, with its own cache, storage and
+service worker, and the throttle is set per page), so a pool of `--jobs N` runs them at once
+(default: half the cores, 2 to 6; `--jobs 1` is the old serial run). The gated measures are
+counts and bytes and come out identical to a serial run; the report-only timings do not, so with
+`--jobs` above 1 they are printed as measured under load (`--jobs 1` for quiet ones). A load ends
+when the page has been quiet after ready, not after a fixed sleep. `--update-bytes` takes one cold
+load per route and rewrites only the cold js/css ceilings (the warm ones stay). It needs the
+browser directly, not a remote runner. `--phases` prints where the time went.
+
 One gotcha: the `npm run format` script hardcodes `biome format --write .` (the whole
 repo, which is not biome-clean at rest) — to format only the files you touched, run
 `./node_modules/.bin/biome format --write <files>` directly.

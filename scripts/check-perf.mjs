@@ -51,10 +51,22 @@
 // needs Chrome (CHROME_BIN overrides discovery, CAIRN_CHROME_NO_SANDBOX=1 for CI
 // containers).
 //
+// SPEED — the loads are independent (each in its own browser context: its own HTTP cache,
+// storage and service worker), so they run through a pool of `--jobs` at once (default:
+// half the cores, 2..6; `--jobs 1` is the old strictly serial run). Every (route, run) and
+// every route's rounds load is one task. The throttle (CPU 4x, slow 4G) is set per page
+// session, so it applies to each load on its own; the gated measures are counts and
+// transferred bytes, which do not depend on how busy the machine is. The report-only timings
+// DO, so with --jobs > 1 they are marked "under load"; use --jobs 1 for quiet timings.
+// A load ends when its page has been quiet (no request in flight or started, no layout
+// shift) for SETTLE_QUIET_MS after "ready", not after a fixed sleep. `--update-bytes` needs
+// one cold load per route (the js / css ceilings of the warm load stay as they are: a warm
+// visit is served by the service worker and transfers none).
+//
 // Usage: node scripts/check-perf.mjs [--runs 3] [--only today,ask] [--update | --update-bytes]
-//                                    [--json <file>] [--no-throttle]
+//                                    [--jobs N] [--json <file>] [--no-throttle] [--phases]
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { availableParallelism, tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -86,8 +98,12 @@ const JSON_OUT = args.json ? path.resolve(args.json) : null;
 const THROTTLE = args.flags.has("no-throttle")
   ? null
   : { cpu: Number(process.env.CAIRN_PERF_CPU) || 4, latency: 150, down: (1.6 * 1024 * 1024) / 8, up: (750 * 1024) / 8 };
+const JOBS = args.jobs ? Math.max(1, Math.floor(Number(args.jobs)) || 1) : Math.min(6, Math.max(2, Math.floor(availableParallelism() / 2)));
+const PHASES = args.flags.has("phases");
 const READY_TIMEOUT_MS = 30000;
-const SETTLE_MS = 1200;
+/** A load is done once the page has been quiet this long after "ready" (was a fixed 1200 ms sleep). */
+const SETTLE_QUIET_MS = 700;
+const SETTLE_MAX_MS = 5000;
 /** The rounds load (measureWaves): poll cadence, and how long the page must sit quiescent before a wave is released. */
 const WAVE_POLL_MS = 100;
 const WAVE_QUIET_MS = 300;
@@ -135,6 +151,7 @@ const ROUTES = [
 
 /** Requests that are not part of a screen's data load: art images, telemetry, streams. */
 const UNTRACKED_API = /^\/api\/(art\?|telemetry|events|chat\/stream|chat\/turns\/[^/]+\/stream)/;
+const STREAM_URL = /^\/api\/(events|chat\/stream|chat\/turns\/[^/]+\/stream)/;
 const SKELETON_SELECTOR = '[class*="skel"], .hshimmer, .skeleton, [aria-busy="true"]';
 
 // ---------- in-page instrumentation ----------
@@ -196,6 +213,18 @@ const INSTRUMENT = `(() => {
   };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start); else start();
 })();`;
+
+// ---------- phase timing ----------
+// Summed task time per phase (across all workers, so it can exceed the wall time).
+const phaseMs = {};
+async function phase(name, fn) {
+  const t0 = Date.now();
+  try {
+    return await fn();
+  } finally {
+    phaseMs[name] = (phaseMs[name] || 0) + Date.now() - t0;
+  }
+}
 
 // ---------- browser plumbing ----------
 async function evaluate(send, expression) {
@@ -261,9 +290,11 @@ async function ageSwrCache(send) {
 async function measureLoad(cdp, page, base, route) {
   const { send, sessionId } = page;
   const reqs = new Map();
+  let lastNet = Date.now();
   const off = cdp.on((msg) => {
     if (msg.sessionId !== sessionId) return;
     const p = msg.params || {};
+    if (msg.method.startsWith("Network.request") || msg.method.startsWith("Network.loading")) lastNet = Date.now();
     if (msg.method === "Network.requestWillBeSent") {
       reqs.set(p.requestId, { url: p.request.url, method: p.request.method, type: p.type, t0: p.timestamp });
     } else if (msg.method === "Network.responseReceived") {
@@ -283,11 +314,28 @@ async function measureLoad(cdp, page, base, route) {
     const deadline = Date.now() + READY_TIMEOUT_MS;
     let perf = null;
     while (Date.now() < deadline) {
-      await sleep(200);
+      await sleep(50);
       perf = await evaluate(send, `window.__perf ? { ready: window.__perf.ready } : null`).catch(() => null);
       if (perf?.ready != null) break;
     }
-    await sleep(SETTLE_MS); // let trailing requests and shifts land
+    // Let trailing requests and shifts land: done once nothing is in flight (a stream never
+    // is) and neither a request nor a layout shift has happened for SETTLE_QUIET_MS.
+    {
+      const settleDeadline = Date.now() + SETTLE_MAX_MS;
+      let lastCls = null;
+      let lastShift = Date.now();
+      while (Date.now() < settleDeadline) {
+        const clsNow = await evaluate(send, `window.__perf ? window.__perf.cls + ":" + window.__perf.shifts.length : null`).catch(() => null);
+        if (clsNow !== lastCls) {
+          lastCls = clsNow;
+          lastShift = Date.now();
+        }
+        const inflight = [...reqs.values()].some((r) => r.t1 == null && !STREAM_URL.test(r.url.replace(/^https?:\/\/[^/]+/, "")));
+        const quiet = Date.now() - Math.max(lastNet, lastShift);
+        if (!inflight && quiet >= SETTLE_QUIET_MS) break;
+        await sleep(50);
+      }
+    }
     perf = await evaluate(
       send,
       `(() => { const P = window.__perf || {}; const v = document.querySelector("#view"); return { cls: P.cls || 0, shifts: P.shifts || [], fcp: (P.paints || {})["first-contentful-paint"] ?? null, firstView: P.firstView ?? null, ready: P.ready ?? null, tab: window.state && window.state.tab, sw: !!(navigator.serviceWorker && navigator.serviceWorker.controller), skeleton: v && window.__perfVisibleSkel ? window.__perfVisibleSkel(v).map((e) => (e.className && typeof e.className === "string" ? e.className.split(" ")[0] : e.nodeName)).slice(0, 3) : [] }; })()`
@@ -396,7 +444,7 @@ async function measureWaves(cdp, page, base, route) {
           last = null;
           quietSince = null;
         }
-      } else if (s.ready != null && now - quietSince >= SETTLE_MS) {
+      } else if (s.ready != null && now - quietSince >= SETTLE_QUIET_MS) {
         timedOut = false;
         break;
       }
@@ -418,26 +466,27 @@ async function measureWaves(cdp, page, base, route) {
 async function measureRouteRounds(cdp, base, route) {
   const page = await openContextPage(cdp);
   try {
-    const cold = await measureWaves(cdp, page, base, route);
-    await waitForServiceWorker(page.send);
+    const cold = await phase("rounds (cold)", () => measureWaves(cdp, page, base, route));
+    await phase("service-worker wait", () => waitForServiceWorker(page.send));
     await ageSwrCache(page.send);
-    const warm = await measureWaves(cdp, page, base, route);
+    const warm = await phase("rounds (warm)", () => measureWaves(cdp, page, base, route));
     return { cold, warm };
   } finally {
     await cdp.command("Target.disposeBrowserContext", { browserContextId: page.browserContextId }).catch(() => {});
   }
 }
 
-async function measureRoute(cdp, base, route) {
+async function measureRoute(cdp, base, route, coldOnly = false) {
   const page = await openContextPage(cdp);
   try {
     await setThrottle(page.send, true);
-    const cold = await measureLoad(cdp, page, base, route);
+    const cold = await phase("cold load", () => measureLoad(cdp, page, base, route));
+    if (coldOnly) return { cold };
     await setThrottle(page.send, false);
-    const swReady = await waitForServiceWorker(page.send);
+    const swReady = await phase("service-worker wait", () => waitForServiceWorker(page.send));
     await ageSwrCache(page.send);
     await setThrottle(page.send, true);
-    const warm = await measureLoad(cdp, page, base, route);
+    const warm = await phase("warm load", () => measureLoad(cdp, page, base, route));
     warm.swReady = swReady;
     return { cold, warm };
   } finally {
@@ -586,6 +635,14 @@ function printTable(rows) {
   for (const l of lines) console.log(row(l));
 }
 
+function printPhases() {
+  if (!PHASES && !phaseMs["pool wall"]) return;
+  const wall = phaseMs["pool wall"];
+  const rows = Object.entries(phaseMs).filter(([k]) => k !== "pool wall");
+  console.log(`\nPhases (task time summed over ${JOBS} job${JOBS === 1 ? "" : "s"}; measuring wall ${(wall / 1000).toFixed(1)}s):`);
+  for (const [k, v] of rows) console.log(`  ${(k === "boot" ? "boot (server+chrome)" : k).padEnd(22)} ${(v / 1000).toFixed(1)}s`);
+}
+
 // ---------- main ----------
 async function main() {
   const budgetDoc = JSON.parse(readFileSync(BUDGET_FILE, "utf8"));
@@ -599,6 +656,7 @@ async function main() {
   let cdp = null;
   const results = [];
   try {
+    const tBoot = Date.now();
     server = await startBuiltServer({
       label: "perf",
       extraEnv: { AGENTS_CONFIG: writeOfflineAgentsConfig(agentsDir, "cairn-perf-offline"), CAIRN_SEED_DEMO: "1" },
@@ -608,7 +666,7 @@ async function main() {
     const version = await (await fetch(`http://127.0.0.1:${chrome.port}/json/version`)).json();
     cdp = new Cdp(version.webSocketDebuggerUrl);
     console.log(
-      `Cairn perf: ${routes.length} routes × ${RUNS} run${RUNS === 1 ? "" : "s"}, ${THROTTLE ? "CPU 4x + slow 4G" : "unthrottled"}, 390px (${server.base})`
+      `Cairn perf: ${routes.length} routes × ${BYTES_ONLY ? "1 cold load" : `${RUNS} run${RUNS === 1 ? "" : "s"}`}, ${JOBS} job${JOBS === 1 ? "" : "s"}, ${THROTTLE ? "CPU 4x + slow 4G" : "unthrottled"}, 390px (${server.base})`
     );
 
     // Warm the server's own caches once (unmeasured), as a running athlete's server is.
@@ -621,18 +679,41 @@ async function main() {
       }
     }
 
+    phaseMs.boot = Date.now() - tBoot;
+    // One task per (route, run) and one rounds load per route; a pool of JOBS runs them.
+    const tasks = [];
     for (const route of routes) {
-      const runs = [];
-      for (let i = 0; i < RUNS; i++) runs.push(await measureRoute(cdp, server.base, route));
-      const res = { cold: aggregate(runs.map((r) => r.cold)), warm: aggregate(runs.map((r) => r.warm)) };
-      // Rounds come from one wave-gated load per mode (measureWaves): a structural count,
-      // the same on every run, so it is measured once rather than per run.
-      const waves = await measureRouteRounds(cdp, server.base, route);
-      for (const mode of ["cold", "warm"]) {
-        Object.assign(res[mode], { rounds: waves[mode].rounds, roundsMax: waves[mode].rounds, roundsSettled: !waves[mode].timedOut });
+      if (BYTES_ONLY) tasks.push({ route, kind: "cold" });
+      else {
+        for (let i = 0; i < RUNS; i++) tasks.push({ route, kind: "run", i });
+        tasks.push({ route, kind: "rounds" });
+      }
+    }
+    const byRoute = new Map(routes.map((r) => [r.name, { runs: [], waves: null }]));
+    const tPool = Date.now();
+    let next = 0;
+    const worker = async () => {
+      while (next < tasks.length) {
+        const task = tasks[next++];
+        const slot = byRoute.get(task.route.name);
+        if (task.kind === "rounds") slot.waves = await measureRouteRounds(cdp, server.base, task.route);
+        else slot.runs[task.i ?? 0] = await measureRoute(cdp, server.base, task.route, task.kind === "cold");
+        if (task.kind !== "run" || slot.runs.filter(Boolean).length === RUNS) process.stdout.write(`  · ${task.route.name}\n`);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(JOBS, tasks.length) }, worker));
+    phaseMs["pool wall"] = Date.now() - tPool;
+    for (const route of routes) {
+      const { runs, waves } = byRoute.get(route.name);
+      const res = { cold: aggregate(runs.map((r) => r.cold)), warm: BYTES_ONLY ? null : aggregate(runs.map((r) => r.warm)) };
+      if (waves) {
+        // Rounds come from one wave-gated load per mode (measureWaves): a structural count,
+        // the same on every run, so it is measured once rather than per run.
+        for (const mode of ["cold", "warm"]) {
+          Object.assign(res[mode], { rounds: waves[mode].rounds, roundsMax: waves[mode].rounds, roundsSettled: !waves[mode].timedOut });
+        }
       }
       results.push({ route, res, runs, waves });
-      process.stdout.write(`  · ${route.name}\n`);
     }
   } catch (error) {
     if (server) error.serverLog = server.serverLog();
@@ -654,18 +735,24 @@ async function main() {
     const next = { ...budgetDoc, routes: { ...(budgetDoc.routes || {}) } };
     for (const { route, res } of results) {
       const prev = budgetDoc.routes?.[route.name];
-      const fresh = { cold: budgetFor(res.cold, "cold", prev?.cold), warm: budgetFor(res.warm, "warm", prev?.warm) };
+      const fresh = { cold: budgetFor(res.cold, "cold", prev?.cold), warm: res.warm ? budgetFor(res.warm, "warm", prev?.warm) : null };
       // --update-bytes keeps every non-byte budget exactly as it is.
       next.routes[route.name] =
-        BYTES_ONLY && prev
-          ? {
+        BYTES_ONLY
+          ? !prev ? (() => { throw new Error(`--update-bytes: ${route.name} has no budget yet (run --update)`); })() : {
               cold: { ...prev.cold, js: fresh.cold.js, css: fresh.cold.css },
-              warm: { ...prev.warm, js: fresh.warm.js, css: fresh.warm.css },
+              warm: prev.warm, // bytes-only measures the cold load alone: the warm ceilings stay
             }
           : fresh;
     }
     writeFileSync(BUDGET_FILE, `${JSON.stringify(next, null, 2)}\n`);
     console.log(`updated ${path.relative(process.cwd(), BUDGET_FILE)} (${results.length} routes)`);
+  }
+
+  if (BYTES_ONLY) {
+    for (const { route, res } of results) console.log(`  ${route.name.padEnd(18)} js ${(res.cold.js / 1024).toFixed(1)}K  css ${(res.cold.css / 1024).toFixed(1)}K`);
+    printPhases();
+    return;
   }
 
   const budgets = UPDATE ? JSON.parse(readFileSync(BUDGET_FILE, "utf8")).routes : budgetDoc.routes || {};
@@ -686,7 +773,10 @@ async function main() {
 
   console.log("");
   printTable(rows);
-  console.log("\nTimings are the median of the runs (ms) and report-only; the gate reads api, rounds, cls, bytes, dupes, skeleton.");
+  console.log(
+    `\nTimings are the median of the runs (ms) and report-only${JOBS > 1 ? `, measured under load (${JOBS} loads at once; --jobs 1 for quiet timings)` : ""}; the gate reads api, rounds, cls, bytes, dupes, skeleton.`
+  );
+  printPhases();
   if (misses.length) {
     console.log(`\nOver the proposed target (budgeted at today's level, see scripts/perf-budget.json "targets"):`);
     for (const m of misses) console.log(`  - ${m}`);
