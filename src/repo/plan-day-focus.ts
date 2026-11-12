@@ -270,7 +270,9 @@ function entryClaim(entry: string): { heads: string[]; qualifiers: string[] } {
   };
 }
 
-const LIST_SPLIT = /\s*(?:,|;|\/|&|\+)\s*|\s+(?:and|with|plus|then|followed by)\s+/i;
+// A dash or colon ends a descriptive lead-in ("The week's one leg day — squat, hinge"), so
+// the lead-in's own words ("leg") are never read as a qualifier of the first lift listed.
+const LIST_SPLIT = /\s*(?:,|;|\/|&|\+|[—–]|:\s)\s*|\s+-\s+|\s+(?:and|with|plus|then|followed by)\s+/i;
 const LEADING_LIST_JOINER = /^(?:and|with|plus|then)\s+/i;
 
 function joinList(entries: string[]): string {
