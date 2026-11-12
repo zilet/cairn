@@ -544,13 +544,15 @@ test("classifyRunWord: pain, illness, negation and any mixed note read DOWN; onl
   for (const note of neutral) assert.equal(classifyRunWord(note), null, JSON.stringify(note));
 });
 
-// ---------- 2. rest-grade readiness / illness / pain: rest, never a run ----------
-test("a hard floor (rest-grade readiness, illness, pain) makes ANY run day rest or optional easy movement", () => {
+// ---------- 2. illness / pain: rest, never a run ----------
+// (A rest-grade readiness reading was a hard floor until 2026-11-12: the composite score
+// alone never takes a day — morning-dose.ts, A — so it is a milder floor now, below.)
+test("a hard floor (illness, pain) makes ANY run day rest or optional easy movement", () => {
   const long = { kind_label: "long", label: "Long run", target_distance_km: 16 };
   const quality = { kind_label: "quality", label: "Hill repeats", target_distance_km: 7 };
   const easy = { kind_label: "easy", label: "Easy run", target_distance_km: 6 };
   const ev = (floors) => ({ floors, soft_brakes: [], supports: ["hrv_at_usual"], athlete_word: "up" });
-  for (const floor of ["rest_grade_readiness", "illness", "pain_or_injury"]) {
+  for (const floor of ["illness", "pain_or_injury"]) {
     for (const planned of [long, quality, easy]) {
       const adj = runDayIntensity(TODAY, planned, { evidence: ev([floor]) });
       assert.equal(adj.dose, "rest", `${floor} on ${planned.kind_label}`);
@@ -572,7 +574,13 @@ test("a hard floor (rest-grade readiness, illness, pain) makes ANY run day rest 
       "locked:race_day"
     );
   }
-  // A milder floor keeps the bounded shortening.
+  // A milder floor keeps the bounded shortening — a rest-grade reading included.
+  for (const floor of ["short_night", "rest_grade_readiness"]) {
+    const shortened = runDayIntensity(TODAY, long, { evidence: ev([floor]) });
+    assert.equal(shortened.dose, "shortened", floor);
+    assert.equal(runDayIntensity(TODAY, quality, { evidence: ev([floor]) }).kind, "easy", floor);
+    assert.equal(runDayIntensity(TODAY, easy, { evidence: ev([floor]) }).changed, false, floor);
+  }
   const mild = runDayIntensity(TODAY, long, { evidence: ev(["short_night"]) });
   assert.equal(mild.dose, "shortened");
   assert.equal(mild.target_distance_km, Math.round(16 * LONG_FLOOR_FACTOR * 10) / 10);
@@ -580,32 +588,21 @@ test("a hard floor (rest-grade readiness, illness, pain) makes ANY run day rest 
   assert.equal(runDayIntensity(TODAY, easy, { evidence: ev(["short_night"]) }).changed, false);
 });
 
-test("rest-grade readiness on a long-run morning: plan, agenda, Today line and Brief all say rest", () => {
+// Since 2026-11-12 (morning-dose.ts, A) the composite readiness score alone never takes
+// the day: the long run stays on, shortened and easy, and nothing reads rest.
+test("rest-grade readiness on a long-run morning: the long run is shortened, never rested", () => {
   longTodayAthlete();
   tonight({ ...GOOD_NIGHT, training_readiness: 10 });
   const plan = weeklyRunPlan(TODAY);
   const adj = plan.today_adjustment;
-  assert.equal(adj?.dose, "rest", JSON.stringify(adj));
-  const run = todayRun(plan);
-  assert.equal(run.target_distance_km, null, "no shortened long run on a rest-grade morning");
-  assert.equal(run.kind_label, "easy");
-  assert.doesNotMatch(run.label, /long run/i);
+  assert.equal(adj?.dose, "shortened", JSON.stringify(adj));
+  assert.equal(adj?.reason_code, "floor:rest_grade_readiness");
   const agenda = flexibleTrainingAgenda(TODAY);
   const intent = agenda.intents.find((i) => i.suggested_date === TODAY && i.status === "open");
-  assert.equal(intent?.target_distance_km, null);
-  assert.equal(intent?.adjustment?.dose, "rest");
+  assert.equal(intent?.adjustment?.dose, "shortened");
   const read = repo.dayRead(TODAY);
-  assert.equal(read.kind, "rest", `the Brief rests too (${read.decision?.rule_code})`);
-  // The plan-week line never lists the rested run as "still open", and Fuel never
-  // frames the day around a run that is not happening.
-  const week = planWeek(TODAY);
-  assert.ok(
-    !week.progress.runs_open.some((r) => r.suggested_date === TODAY),
-    JSON.stringify(week.progress.runs_open)
-  );
-  assert.doesNotMatch(String(week.progress.line), /rest or an easy walk/i);
-  const fuel = dayFuelDemand(TODAY);
-  assert.ok(!fuel.drivers.some((d) => /long run|same day/.test(d)), JSON.stringify(fuel));
+  assert.notEqual(read.kind, "rest", `the Brief never rests on the reading alone (${read.decision?.rule_code})`);
+  assert.equal(violatesReadingGrammar(read.why), null, read.why);
 });
 
 // ---------- 3. a Brief steer reaches its own read ----------

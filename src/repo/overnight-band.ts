@@ -126,3 +126,54 @@ export function overnightBrakes(tonight: NightPast, prior: NightPast): boolean {
   if (tonight === "meaningful") return true;
   return tonight === "marginal" && prior != null;
 }
+
+// ============================================================================
+// THE ROLLING READ — what a REST decision may ask of HRV (owner ruling 2026-11-12).
+//
+// One night is too noisy to decide a day: the guided-training protocols judge a rolling
+// value (about a week) against a personal band taken off the few weeks before it, and
+// need several valid nights inside the window before the value means anything. So the
+// one-night logic above stays for the uses that are not rest decisions (the harm arms),
+// and a rest decision reads THIS: the mean of the valid readings in the rolling window
+// ending on `asOf`, against the athlete's band from the baseline window before it.
+// Fewer than `minNights` valid readings in the window and the read says nothing — absent
+// data never brakes. Pure; the caller supplies the series and the window sizes (the
+// tunables live in morning-dose.ts).
+// ============================================================================
+export interface RollingBandRead {
+  /** Mean of the valid readings in the rolling window, or null below `minNights`. */
+  value: number | null;
+  /** Valid readings in the rolling window. */
+  nights: number;
+  band: PersonalBand | null;
+  /** The rolling value sits past the athlete's own line (below for HRV, above for resting HR). */
+  past_line: boolean;
+}
+
+export function rollingBandRead(
+  series: ReadonlyArray<{ date: string; value: number }>,
+  field: OvernightField,
+  asOf: string,
+  opts: { windowDays: number; minNights: number; baselineDays: number }
+): RollingBandRead {
+  const dayMs = 864e5;
+  const asOfMs = Date.parse(`${String(asOf).slice(0, 10)}T00:00:00Z`);
+  const none: RollingBandRead = { value: null, nights: 0, band: null, past_line: false };
+  if (!Number.isFinite(asOfMs)) return none;
+  const windowStart = asOfMs - (opts.windowDays - 1) * dayMs;
+  const baselineStart = windowStart - opts.baselineDays * dayMs;
+  const recent: number[] = [];
+  const baseline: number[] = [];
+  for (const point of series) {
+    const at = Date.parse(`${String(point.date).slice(0, 10)}T00:00:00Z`);
+    const value = Number(point.value);
+    if (!Number.isFinite(at) || !Number.isFinite(value) || value <= 0) continue;
+    if (at >= windowStart && at <= asOfMs) recent.push(value);
+    else if (at >= baselineStart && at < windowStart) baseline.push(value);
+  }
+  const band = personalBand(baseline, field);
+  if (recent.length < opts.minNights) return { ...none, nights: recent.length, band };
+  const value = recent.reduce((sum, v) => sum + v, 0) / recent.length;
+  const past_line = band != null && (field === "hrv_ms" ? value < band.line : value > band.line);
+  return { value, nights: recent.length, band, past_line };
+}

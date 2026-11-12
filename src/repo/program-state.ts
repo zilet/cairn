@@ -1028,7 +1028,9 @@ function decisionGradeRecoveryDrifting(recovery: any): boolean {
   return hrvDown || rhrUp;
 }
 
-function logConfirmedFatigue(
+// Exported for the morning read (morning-dose.ts): a sustained HRV decline rests the day
+// only beside THIS shortfall — the same log-confirmed one the deload read uses.
+export function logConfirmedFatigue(
   date: string,
   lifts: LiftState[]
 ): { high: boolean; reasons: string[] } {

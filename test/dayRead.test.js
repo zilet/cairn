@@ -136,7 +136,10 @@ test("uncorroborated stacked days with nothing programmed splice the caveat onto
   assert.match(r.why, /[.!?]$/);
 });
 
-test("stacked days corroborated by a current signal may still rest", () => {
+// Since 2026-11-12 (morning-dose.ts, F) REST is reserved for illness, pain, clinical and
+// safety floors, the athlete's corroborated word, and a sustained HRV decline beside a
+// shortfall: stacked days a soft current signal corroborates read EASY, same code.
+test("stacked days corroborated by a soft current signal read easy, never rest", () => {
   for (let i = 1; i <= 3; i++) seedTrainingDay(dayBefore(REF, i));
   repo.addContextEvent({
     kind: "travel",
@@ -146,7 +149,7 @@ test("stacked days corroborated by a current signal may still rest", () => {
   });
   const r = repo.dayRead(REF, { has_data: false, recovery: {} });
   assert.equal(r.signals.consecutive_training_days, 3);
-  assert.equal(r.kind, "rest");
+  assert.equal(r.kind, "easy");
   assert.equal(r.decision.rule_code, "accumulated_load_rest");
   saysOneOf(r.why, "accumulated_load_rest");
 });
@@ -535,7 +538,8 @@ test("a fresh caution anywhere shuts the wearable path, even with green readines
     .filter((item) => item.direction === "caution" || item.direction === "constraint");
   assert.ok(brakes.length > 0, "the case is only meaningful with a brake actually on the board");
   assert.equal(r.signals.signal_state.action.posture, "train", "no brake was severe enough to move the posture");
-  assert.equal(r.kind, "rest");
+  // The stacked days stay quiet — easy since 2026-11-12, a soft brake never rests (F).
+  assert.equal(r.kind, "easy");
   assert.equal(r.decision.rule_code, "accumulated_load_rest");
   assert.equal(r.signals.training_drive_push, undefined);
 });
@@ -564,7 +568,7 @@ test("the night before last does not corroborate the drive read, however good it
 // shuts BOTH halves of the green-evidence gate before the clock is ever consulted. The
 // compression the read carries for it is therefore belt-and-braces; what the athlete
 // actually gets on a committed morning is the rest, not a compressed targeted day.
-test("a commitment on the calendar keeps the stacked-days rest rather than compressing the drive read", () => {
+test("a commitment on the calendar keeps the stacked-days quiet read rather than compressing the drive read", () => {
   seedDriveMorning();
   repo.addContextEvent({
     kind: "family_event",
@@ -577,7 +581,8 @@ test("a commitment on the calendar keeps the stacked-days rest rather than compr
   const r = repo.dayRead(DRIVE_REF);
   assert.equal(r.signals.signal_state.action.directives.schedule, "compress");
   assert.equal(r.signals.signal_state.action.support, null, "the commitment is itself a brake");
-  assert.equal(r.kind, "rest");
+  // Quiet, not rest, since 2026-11-12 (F): a commitment is not a reason to take the day.
+  assert.equal(r.kind, "easy");
   assert.equal(r.decision.rule_code, "accumulated_load_rest");
 });
 
@@ -900,23 +905,37 @@ test("three caveats at once still compose into one grammatical sentence", () => 
   assert.equal(caveatRun.split(".").length, 2, `the caveat run must be one sentence: ${JSON.stringify(caveatRun)}`);
 });
 
-test("a fresh short night corroborating the short rolling average can suggest REST", () => {
+// Since 2026-11-12 (morning-dose.ts, D) one short night EASES the day — easy on a day
+// the athlete's week does not state — and two or more in a row mean easy; neither rests.
+test("one fresh short night on a short rolling average eases the day, never rests", () => {
   repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
   // Wake-day dating: the night the read has just woken from carries the read's date.
   db.prepare(`INSERT INTO daily_metrics (source, date, sleep_min) VALUES ('apple', ?, 300)`).run(REF);
 
   const r = repo.dayRead(REF, sleepMean(330));
 
-  assert.equal(r.kind, "rest");
-  assert.equal(r.decision.rule_code, "acute_sleep_corroborated");
+  assert.equal(r.kind, "easy");
+  assert.equal(r.decision.rule_code, "short_night_eased");
   assert.equal(
     r.decision.evidence.some((item) => item.date === REF),
     true
   );
+  saysOneOf(r.why, "short_night_eased");
+});
+
+test("two short nights in a row read easy under the sleep code, never rest", () => {
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  db.prepare(`INSERT INTO daily_metrics (source, date, sleep_min) VALUES ('apple', ?, 300)`).run(REF);
+  db.prepare(`INSERT INTO daily_metrics (source, date, sleep_min) VALUES ('apple', ?, 310)`).run(dayBefore(REF, 1));
+
+  const r = repo.dayRead(REF, sleepMean(330));
+
+  assert.equal(r.kind, "easy");
+  assert.equal(r.decision.rule_code, "acute_sleep_corroborated");
   saysOneOf(r.why, "acute_sleep_corroborated");
 });
 
-test("a corroborated short night on an injury day still names the work-around", () => {
+test("a short night on an injury day still names the work-around", () => {
   // The gap that let the defect through: every injury case drove LOW READINESS, so the
   // protect rule always won and the movement work-around always got spoken. A short
   // night preempts that rule — and health constraints are exactly what drive the protect
@@ -933,11 +952,12 @@ test("a corroborated short night on an injury day still names the work-around", 
 
   const r = repo.dayRead(REF, sleepMean(330));
 
-  assert.equal(r.kind, "rest");
-  assert.equal(r.decision.rule_code, "acute_sleep_corroborated");
+  // One short night eases the day (easy, since 2026-11-12 — morning-dose.ts, D).
+  assert.equal(r.kind, "easy");
+  assert.equal(r.decision.rule_code, "short_night_eased");
   // The sleep rule still leads with its own words...
   assert.ok(
-    DAY_READ_WHY_VARIANTS.acute_sleep_corroborated.some((v) => r.why.startsWith(v)),
+    DAY_READ_WHY_VARIANTS.short_night_eased.some((v) => r.why.startsWith(v)),
     `the sleep read should still lead, got ${JSON.stringify(r.why)}`
   );
   // ...and the injury is still named, in both registers.
@@ -1043,7 +1063,8 @@ test("hard cardio stacks toward earned rest REGARDLESS of discipline", () => {
     end_date: REF,
   });
   const r = repo.dayRead(REF, { has_data: false, recovery: {} });
-  assert.equal(r.kind, "rest");
+  // Corroborated by a soft signal, the stack is quiet — easy since 2026-11-12 (F).
+  assert.equal(r.kind, "easy");
   assert.equal(r.signals.consecutive_training_days, 3);
   assert.equal(r.decision.rule_code, "accumulated_load_rest");
 });
@@ -1968,6 +1989,8 @@ test("every planned-training lead is a calm capitalised opener, several per set"
       "planned_training:push_caveats",
       // …and the stated lifting day the calendar keeps at a held dose (2026-10-16).
       "stated_lift_dosed:lead",
+      // …and the single low morning dosed rather than taken (2026-11-12, morning-dose.ts).
+      "morning_dose:lead",
     ].sort()
   );
   for (const [key, variants] of sets) {
@@ -2905,13 +2928,17 @@ test("each reachable rule branch reports its own code and reason, never a generi
   const planned = record(repo.dayRead(REF, { has_data: false, recovery: {} }));
   assert.equal(planned.decision.rule_code, "planned_training");
 
-  // A corroborating fresh short night still reaches rest (dated the read day).
+  // One short night (dated the read day) eases the day; a second in a row reads easy
+  // under the sleep code (2026-11-12, morning-dose.ts, D).
   seedSleep(REF, 300);
+  const eased = record(repo.dayRead(REF, sleepMean(330)));
+  assert.equal(eased.decision.rule_code, "short_night_eased");
+  seedSleep(dayBefore(REF, 1), 300);
   const acute = record(repo.dayRead(REF, sleepMean(330)));
   assert.equal(acute.decision.rule_code, "acute_sleep_corroborated");
   resetTables("daily_metrics");
 
-  // Three stacked loading days, corroborated by a current travel brake → earned rest.
+  // Three stacked loading days, corroborated by a current travel brake → the stacked read.
   for (let i = 1; i <= 3; i++) seedTrainingDay(dayBefore(REF, i));
   repo.addContextEvent({
     kind: "travel",
@@ -3382,12 +3409,14 @@ const seedOverriddenRest = (date, performance = 4) => {
   if (performance != null) repo.setSessionFeedback(date, { performance });
 };
 
+// The witness that still makes the stacked days a REST since 2026-11-12 (morning-dose.ts,
+// F: a soft signal alone reads easy): a clinical shape starting tomorrow. Not clinical
+// TODAY, so the rest stays softenable — which is what these cases are about.
 const seedRhythmBrake = () =>
   repo.addContextEvent({
-    kind: "travel",
-    title: "Overnight trip, short sleep likely",
-    start_date: REF,
-    end_date: REF,
+    kind: "injury",
+    title: "Shoulder looked at tomorrow",
+    start_date: dayBefore(REF, -1),
   });
 
 test("three rest mornings trained through without cost soften today's earned rest to easy", () => {
@@ -3489,14 +3518,17 @@ test("an unrated session still counts — silence is not evidence of harm", () =
   assert.equal(r.decision.rule_code, "outcome_feedback_soften");
 });
 
-test("a corroborated short night is fresh evidence about TODAY — history cannot soften it", () => {
+test("short nights in a row are fresh evidence about TODAY — history cannot move them", () => {
   for (let i = 1; i <= 3; i++) seedOverriddenRest(dayBefore(REF, i));
   db.prepare(`INSERT INTO daily_metrics (source, date, sleep_min) VALUES ('apple', ?, 300)`).run(REF);
+  db.prepare(`INSERT INTO daily_metrics (source, date, sleep_min) VALUES ('apple', ?, 300)`).run(dayBefore(REF, 1));
 
   const r = repo.dayRead(REF, sleepMean(330));
-  assert.equal(r.kind, "rest");
+  // Easy, never rest (2026-11-12, morning-dose.ts, D) — and no ladder moves it.
+  assert.equal(r.kind, "easy");
   assert.equal(r.decision.rule_code, "acute_sleep_corroborated");
   assert.equal(r.signals.outcome_feedback.active, true, "the pattern is there; the rule is simply out of reach");
+  assert.equal(r.signals.outcome_feedback.applied, false);
 });
 
 test("the clinical floor is absolute — an active injury is never softened away", () => {
@@ -3761,17 +3793,18 @@ test("the prompt tells the agent the athlete CHOSE to push, on a drive day only"
 // sleep caveat speaks only for the chronic trend. What it costs is injury exposure,
 // which is exactly what the coach prompt is now told through `training_constraints`,
 // and the athlete is owed the same sentence.
-test("an acute short night keeps the session and says what it takes off it", () => {
+// Since 2026-11-12 (morning-dose.ts, D) one short night EASES an unstated day — easy,
+// never rest — and the words say what it takes off (heavy work, load jumps).
+test("an acute short night eases an unstated day and says what it takes off it", () => {
   repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
   seedCurrentNight(REF, 300); // 5h last night, and no chronic window behind it
   const r = repo.dayRead(REF, { has_data: true, recovery: {} });
 
-  assert.equal(r.kind, "train", "the session is KEPT — this is not a soft rest read");
-  assert.equal(r.focus, "Lower body");
+  assert.equal(r.kind, "easy", "one short night eases the day; it never rests it");
   assert.equal(r.signals.low_sleep, false, "there is no chronic trend here, only one night");
-  assert.equal(r.decision.rule_code, "planned_training");
-  const caveat = saysOneCaveat(r.why, "planned_training:sleep_exposure");
-  assert.doesNotMatch(caveat, /\brest\b|\bskip\b|\bshorter\b/i, "it downgrades exposure; it never cancels");
+  assert.equal(r.decision.rule_code, "short_night_eased");
+  saysOneOf(r.why, "short_night_eased");
+  assert.match(r.why, /\b(?:heavy|load)\b/i, "it says what the ease takes off");
 });
 
 test("a normal night adds no exposure caveat at all", () => {

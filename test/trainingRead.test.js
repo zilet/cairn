@@ -244,7 +244,8 @@ test("three genuinely-hard days in a row still earns rest (the streak is intact)
   });
   const corroborated = repo.dayRead(REF, { has_data: false, recovery: {} });
   assert.equal(corroborated.signals.consecutive_training_days, 3);
-  assert.equal(corroborated.kind, "rest");
+  // A soft current signal makes the stack quiet — easy, never rest (2026-11-12, F).
+  assert.equal(corroborated.kind, "easy");
   assert.equal(corroborated.decision.rule_code, "accumulated_load_rest");
 });
 

@@ -2251,8 +2251,9 @@ longer flips the day to easy: the protect rule (at posture easy, never a felt ta
 easy read on a lifting day, and a stacked-days rest corroborated only by soft signals stand aside,
 and `stated_key_run_dosed` (the run engine's own shortened-long-run sentence, or the brake's voice +
 `STATED_KEY_RUN_DOSE_WHY`) / `stated_lift_dosed` (the brake's voice + `STATED_LIFT_DOSE_LEAD`, no
-reach) speak instead. `calendarDoseFloor` keeps every floor exactly as strict: rest-grade readiness,
-a short night, a felt tap, anything clinical or a safety override, a recovery week, a
+reach) speak instead. `calendarDoseFloor` keeps every floor exactly as strict: the morning verdict's
+rest and easy patterns (a rest-grade reading or one short night alone is now the dose — see "What a
+morning's body readings may conclude"), a felt tap, anything clinical or a safety override, a recovery week, a
 doctor-governed endurance hold, a novel longest run, a dose overrun, a fueling hold, a calendar
 hold, any non-soft deciding brake (a deload-due `mesocycle` included), the hard ceiling of loading
 days, the run engine's hard / word floors plus a volume spike, legs still deep and harm yesterday,
@@ -2264,6 +2265,53 @@ soft-corroborated stacked rest. The agent may not cite a dosed board's brakes to
 (`RECORD_OPENED_CODES`). `LEARNED_TRAIN_CODES` / `SOFTENABLE_EASY_CODES` deliberately do not gain
 `stated_run_day`, `logged_light_work_today` or `template_rest_day` (see the note beside
 `CALENDAR_RUN_HARD_FLOORS`).
+
+**What a morning's body readings may conclude** (`src/repo/morning-dose.ts`, owner rulings of
+2026-11-12, revised against an evidence review). Every threshold below is a named, provisional
+tunable in `MORNING_DOSE_POLICY`; `classifyMorning` is the pure rule table, `morningFacts` gathers
+its inputs off the readings the harm test already reads (`overnightReadOn`, `morningReadinessReading`,
+`overnightSeries` in read-adherence.ts — harm evidence itself is unchanged). The review found no
+validation of composite wearable readiness scores against performance, injury or illness and material
+wrist-HRV error (Dial 2025, PMID 40834291); day-to-day Ln rMSSD varies 10–20% and HRV-guided protocols
+act on a ~7-day rolling value against a 3–4-week personal band, answering suppression with low-intensity
+work rather than mandatory rest (Buchheit 2014, PMID 24578692; Plews 2014, PMID 24334285; Kiviniemi
+2007, PMID 17849143; Vesterinen 2016, PMID 26909534; Manresa-Rocamora 2021, PMID 34639599); autonomic
+recovery takes 24–48 h after threshold work (Stanley 2013, PMID 23912805; Hynynen 2010, PMID 20419617);
+the acute cost of aerobic work falls on lower-limb strength (Schumann 2022, PMID 34757594; Markov 2022,
+PMID 34878640); resting HR above baseline marks illness (Mishra 2020, PMID 33208926) and overreaching is a
+weeks-long decline with performance loss (Meeusen 2013, PMID 23247672); sleep ≤ 6 h costs performance,
+consecutive restriction more (Craven 2022, PMID 35708888; Knowles 2018, PMID 29422383); single subjective
+items are weak alone and best combined with objective data (Saw 2016, PMID 26423706; Duignan 2020,
+PMID 32991706; Nuuttila 2022, PMID 35975912). The rules, in precedence order:
+
+| Morning | Read | Code |
+|---|---|---|
+| Resting HR past the athlete's own band (one meaningful night, or consecutive readings) with no hard day behind it, or for a second reading, or beside their low word / a symptom stated today | REST (possible illness) | `resting_hr_illness_pattern` |
+| Rolling HRV below the band on `hrv_sustained_decline_mornings` mornings AND the deload read's log-confirmed shortfall (`logConfirmedFatigue`) | REST | `hrv_decline_with_shortfall` |
+| `short_nights_for_easy` short nights in a row | easy, every day | `acute_sleep_corroborated` |
+| `low_mornings_for_easy` low readiness mornings in a row | easy, every day | `low_mornings_easy` |
+| Resting HR past band after hard endurance | stated: the dose; else easy | `stated_*_morning_dosed` / `resting_hr_after_endurance_easy` |
+| One short night | stated: the dose; else easy | `stated_*_morning_dosed` / `short_night_eased` |
+| Rest-grade readiness alone | stated: the dose; else easy | `stated_*_morning_dosed` / `rest_grade_readiness` (now easy) |
+| One low HRV night within `endurance_window_days` of hard endurance, resting HR in band | the dose, any day with a session due | `stated_lift_morning_dosed` / `overnight_dip_dosed` |
+
+"The dose" is the calendar's machinery (`calendarTakesDay`, `calendar.step.morning`): a training
+day, loads held, no reach, and — in the daily decision (`day_read.held_dose`, `held_morning_dose`) —
+the groups the acute gate reads saturated from yesterday's work join `reduced`, intensity at least
+`hold`, reach parked. These are conservative coaching defaults, not findings from HRV-guided lifting
+trials (none exist). REST is otherwise reserved: illness, pain, clinical and safety floors, the
+athlete's corroborated low word (FELT_REST_CORROBORATION, unchanged), a recovery week's dose overrun,
+the athlete's claimed day. So the protect rule's soft rest posture eases, a stacked-days rest
+corroborated only by soft signals reads easy (the ladders still treat it as the rest it was —
+`quietKind`, so the reservation never buys an extra ladder step), the composite reading no longer
+corroborates the stack, the run engine's `HARD_RUN_FLOORS` drop the rest-grade reading (it shortens
+the long run, eases quality), and the agent may not read a reserved morning to rest
+(`enforceRestReservation`, src/dayread.ts). The rolling HRV read is `rollingBandRead`
+(overnight-band.ts: fewer than `hrv_rolling_min_nights` valid nights says nothing); the one-night
+smallest-worthwhile-change logic stays for the harm arms. **Race morning** (`goal_race_day`, the
+goal's own date) reads as the race above every quiet rule except a clinical shape. Provenance:
+`signals.morning_dose` (verdict, basis, load explanations, the overnight and rolling reads,
+`applied`) and `signals.calendar_dose.morning`.
 
 `writeDayRead()`'s ledger write is now `recordDayReadDecision()` (same module), whose identity is
 the read's own decision fingerprint — kind, focus, override, and the existing
@@ -5909,8 +5957,19 @@ adds the read's own last-night row and a rest-grade reading, the protect rule up
 to rest when corroborated (and steps aside for a claimed day or the week's rest day rather than read
 louder than them), the earned-rest rule's felt arm returns `felt_low_easy` when uncorroborated, and an
 uncorroborated tap no longer corroborates the stacked-days rest (`hasFreshDecidingBrake(…, {exceptFelt})`).
-`REST_GRADE_READINESS` stays its own rule; a `3` stays neutral. The daily envelope's `muscle_saturated`
+`REST_GRADE_READINESS` stays its own rule (easy since 2026-11-12, never rest alone — see "What a
+morning's body readings may conclude"); a `3` stays neutral. The daily envelope's `muscle_saturated`
 note names only groups today's plan day trains (the full list still routes composition).
+
+**A good tap is evidence too, one step (2026-11-12).** A same-day energy at or above
+`MORNING_DOSE_POLICY.checkin_lift_energy_min` with sleep-feel not low lifts an EASY read whose
+deciding brakes are the composite readiness score (plus only the week's load arithmetic beside it)
+to a training day at a held intensity — `checkin_lifted_train`, its `why` the readiness brake's own
+voice then `CHECKIN_LIFT_WHY` ("your report and the watch disagree, so the session goes ahead held
+back"). It never lifts a short night, resting HR, a rolling HRV decline, any floor, or a read a
+ladder already moved; `signals.checkin_lift` records the lift or what held it. The check-in write
+already retires the cached read (`addCheckin` → `invalidateDayRead`), and the lift changes kind and
+code, so it is a new prose identity and the re-warm speaks it.
 
 ## Repeated entries: one weigh-in and one tape per day, one run per effort
 
