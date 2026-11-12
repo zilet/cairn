@@ -103,6 +103,8 @@ const PHASES = args.flags.has("phases");
 const READY_TIMEOUT_MS = 30000;
 /** A load is done once the page has been quiet this long after "ready" (was a fixed 1200 ms sleep). */
 const SETTLE_QUIET_MS = 700;
+/** …and never sooner than this after "ready" — the old fixed window, kept as the floor. */
+const SETTLE_MIN_MS = 1200;
 const SETTLE_MAX_MS = 5000;
 /** The rounds load (measureWaves): poll cadence, and how long the page must sit quiescent before a wave is released. */
 const WAVE_POLL_MS = 100;
@@ -321,7 +323,8 @@ async function measureLoad(cdp, page, base, route) {
     // Let trailing requests and shifts land: done once nothing is in flight (a stream never
     // is) and neither a request nor a layout shift has happened for SETTLE_QUIET_MS.
     {
-      const settleDeadline = Date.now() + SETTLE_MAX_MS;
+      const settleStart = Date.now();
+      const settleDeadline = settleStart + SETTLE_MAX_MS;
       let lastCls = null;
       let lastShift = Date.now();
       while (Date.now() < settleDeadline) {
@@ -332,7 +335,9 @@ async function measureLoad(cdp, page, base, route) {
         }
         const inflight = [...reqs.values()].some((r) => r.t1 == null && !STREAM_URL.test(r.url.replace(/^https?:\/\/[^/]+/, "")));
         const quiet = Date.now() - Math.max(lastNet, lastShift);
-        if (!inflight && quiet >= SETTLE_QUIET_MS) break;
+        // Never shorter than the fixed window it replaced: a timer-deferred request or a
+        // late shift inside SETTLE_MIN_MS of "ready" is still counted.
+        if (!inflight && quiet >= SETTLE_QUIET_MS && Date.now() - settleStart >= SETTLE_MIN_MS) break;
         await sleep(50);
       }
     }
@@ -444,7 +449,7 @@ async function measureWaves(cdp, page, base, route) {
           last = null;
           quietSince = null;
         }
-      } else if (s.ready != null && now - quietSince >= SETTLE_QUIET_MS) {
+      } else if (s.ready != null && now - quietSince >= SETTLE_MIN_MS) {
         timedOut = false;
         break;
       }

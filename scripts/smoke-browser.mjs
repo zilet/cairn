@@ -19,6 +19,9 @@ const NAV_TIMEOUT_MS = 20000;
 // This replaced a fixed 600 ms sleep: it waits for the late lazy-bundle and data
 // fetches it existed to catch, and no longer idles when there are none.
 const SETTLE_QUIET_MS = 150;
+// …and never sooner than the fixed sleep it replaced, so a timer that throws shortly after
+// hydration with no network activity is still inside the window.
+const SETTLE_MIN_MS = 600;
 const SETTLE_MAX_MS = 3000;
 const POLL_MS = 25;
 
@@ -233,9 +236,11 @@ function trackNetwork(cdp) {
 
 async function settle(cdp) {
   const net = cdp.net;
-  const deadline = Date.now() + SETTLE_MAX_MS;
+  const start = Date.now();
+  const deadline = start + SETTLE_MAX_MS;
   while (Date.now() < deadline) {
-    if (net.inflight === 0 && Date.now() - net.lastActivity >= SETTLE_QUIET_MS) return;
+    const now = Date.now();
+    if (net.inflight === 0 && now - net.lastActivity >= SETTLE_QUIET_MS && now - start >= SETTLE_MIN_MS) return;
     await sleep(POLL_MS);
   }
 }

@@ -34,6 +34,7 @@
     "rules": {
       "preset": "recommended",
       "suspicious": {
+        "noFocusedTests": "error",
         "noExplicitAny": "off",
         "noAssignInExpressions": "off",
         "useIterableCallbackReturn": "off"

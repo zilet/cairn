@@ -575,6 +575,16 @@ function runFile(file, env) {
         if (!failure && status === 0 && reporter === "spec" && !/^ℹ tests \d+$/m.test(output)) {
           failure = "exited 0 without the reporter's test summary";
         }
+        // The reporter's own verdict outranks the exit code: an exit listener can reset
+        // process.exitCode after a test has failed (the node --test parent used to judge
+        // by the event stream). The LAST count of each kind is the file's own.
+        if (!failure && status === 0 && reporter === "spec") {
+          for (const key of ["fail", "cancelled"]) {
+            const counts = [...output.matchAll(new RegExp(`^ℹ ${key} (\\d+)$`, "gm"))];
+            const n = counts.length ? Number(counts.at(-1)[1]) : 0;
+            if (n > 0) failure = `exited 0 with ${n} ${key} test(s) in the reporter's summary`;
+          }
+        }
         resolve({
           file,
           status: failure ? 1 : (status ?? 1),

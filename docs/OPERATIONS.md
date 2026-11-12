@@ -699,7 +699,9 @@ worker count and file order, and the worker default scales with cores (`min(12, 
 test/<file>.test.js …` runs a few against the current build. Each file is its own node process
 — `node --import test/_isolate.mjs <file>`, with no `node --test` parent around it (node:test
 runs a file started directly with the same harness, reporter and exit codes, and the parent cost
-~35 ms of CPU per file) — the leader of its own process group, inside budgets the runner enforces:
+~35 ms of CPU per file; two differences are closed by hand: a direct file honours `test.only`,
+so lint refuses a focused test (`noFocusedTests`), and the runner fails a file whose summary
+counts a failed or cancelled test whatever its exit code) — the leader of its own process group, inside budgets the runner enforces:
 
 | Knob | Default | What happens past it |
 |---|---|---|
