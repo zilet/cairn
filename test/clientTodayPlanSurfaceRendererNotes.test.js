@@ -24,6 +24,8 @@ function loadRenderer() {
   context.globalThis = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/decision-undo-client.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/today-pair-groups-client.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/today-session-journey-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-plan-surface-renderer.js"), "utf8"), context);
   return context.CairnTodayPlanSurfaceRenderer;
 }
@@ -213,6 +215,8 @@ test("an open change fold stays open across a soft re-render", () => {
   context.globalThis = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/decision-undo-client.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/today-pair-groups-client.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/today-session-journey-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-plan-surface-renderer.js"), "utf8"), context);
   const items = [
     { exercise: "Back Squat", brain_decision_id: 7, brain_change_summary: "Held the squat load.", brain_change_reversible: true },

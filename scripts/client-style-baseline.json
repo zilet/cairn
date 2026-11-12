@@ -178,9 +178,6 @@
     "src/client/today-plan-surface-client.ts": {
       "style": 1
     },
-    "src/client/today-plan-surface-renderer.ts": {
-      "lines": 417
-    },
     "src/client/today-screen.ts": {
       "lines": 1640
     },

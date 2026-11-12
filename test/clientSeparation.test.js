@@ -98,6 +98,8 @@ test("an old run-only day is not startable, and only a real synced run names a l
 test("the surface renderer draws lifts only, even when handed a cardio item", () => {
   const context = vmContext();
   vm.runInNewContext(read("public/js/ui-format.js"), context);
+  vm.runInNewContext(read("public/js/today-pair-groups-client.js"), context);
+  vm.runInNewContext(read("public/js/today-session-journey-client.js"), context);
   vm.runInNewContext(read("public/js/today-plan-surface-renderer.js"), context);
   const drawn = [];
   const skipped = [];

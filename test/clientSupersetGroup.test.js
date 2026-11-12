@@ -17,8 +17,11 @@ function loadRenderer() {
   context.globalThis = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/html-utils.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/decision-undo-client.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/today-pair-groups-client.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/today-session-journey-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-plan-surface-renderer.js"), "utf8"), context);
-  return context.CairnTodayPlanSurfaceRenderer;
+  // regroupPairs now lives on the pair-groups module the renderer delegates to.
+  return { ...context.CairnTodayPlanSurfaceRenderer, regroupPairs: context.CairnTodayPairGroups.regroup };
 }
 
 // Renders the session surface with a recording exCard: the card markup itself is
