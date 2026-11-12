@@ -159,7 +159,6 @@ import {
   ACUTE_SLEEP_TREND_WHY,
   ACUTE_SLEEP_WHY,
   ANTICIPATE_DELOAD_CAVEAT,
-  CHECKIN_LIFT_HRV_WHY,
   CHECKIN_LIFT_WHY,
   HRV_DECLINE_SHORTFALL_WHY,
   LOW_MORNINGS_EASY_WHY,
@@ -4361,20 +4360,17 @@ function computeDayRead(
     };
     if (ladderOutcome !== ruleOutcome || ladderRead.kind !== "easy") return null;
     if (!CHECKIN_LIFTABLE_CODES.has(ruleOutcome.code)) return held("not_a_readiness_read");
-    // HRV is liftable only as a SINGLE low night: last night alone past the band, and the
-    // rolling read not past its line (a decline is never a tap's to answer).
-    const facts = morning()?.facts;
-    const hrvSingleNight =
-      facts != null &&
-      facts.hrv_night != null &&
-      facts.hrv_night.consecutive_days <= 1 &&
-      facts.hrv_night.consecutive <= 1 &&
-      !facts.hrv_rolling.past_line;
-    if (!checkinLiftsBrakes(decidingBrakeFields, hrvSingleNight)) return held("other_brake");
+    // Only the readiness score is a tap's to answer (item 13 removed the unreachable HRV arm).
+    if (!checkinLiftsBrakes(decidingBrakeFields)) return held("other_brake");
     const verdict = morningVerdict();
     if (verdict.basis != null && verdict.basis !== "readiness_rest_grade" && verdict.basis !== "readiness_low")
       return held(verdict.basis);
     if (clinicallyDriven(signalState, healthWorkaround) || freshSafetyOverride(signalState)) return held("floor");
+    // A symptom or pain stated today blocks the lift entirely — the same hold race morning
+    // and the softening ladders use (second review, item 8). A good energy tap never
+    // outweighs the athlete's own report of pain.
+    const statement = freshStatementHold(d, checkin);
+    if (statement != null) return held(statement);
     if (recoveryWeek || holdsToday.length || tomorrowClinical) return held("calendar");
     if (lowSubjective || feltRestCorroborated) return held("athlete_word");
     const planDay = suggestedPlanDay();
@@ -4386,13 +4382,13 @@ function computeDayRead(
     const brakeVoice = calendarBrakeVoice() ?? signalState.action.voice;
     return {
       focus: planDay.focus,
-      // The disagreement is named for what it is: the readiness number when that is on the
-      // board, otherwise last night's HRV.
-      why: `${endStopped(spokenSignalVoice(brakeVoice, d, "checkin_lift:brake"))} ${
-        decidingBrakeFields.includes("training_readiness")
-          ? pickDayVariant(CHECKIN_LIFT_WHY, d, "checkin_lifted_train")
-          : pickDayVariant(CHECKIN_LIFT_HRV_WHY, d, "checkin_lifted_train:hrv")
-      }`,
+      // The disagreement is named for what it is: the readiness number (the only brake a
+      // tap may lift, checkinLiftsBrakes).
+      why: `${endStopped(spokenSignalVoice(brakeVoice, d, "checkin_lift:brake"))} ${pickDayVariant(
+        CHECKIN_LIFT_WHY,
+        d,
+        "checkin_lifted_train"
+      )}`,
     };
   })();
   const outcome = tapLift ? DAY_READ_OUTCOMES.checkin_lifted_train : ladderOutcome;

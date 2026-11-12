@@ -747,13 +747,6 @@ export const CHECKIN_LIFT_WHY: readonly string[] = [
   "Your own check-in says you feel good, which the readiness number doesn't match — so today trains, but held back.",
   "You said you feel good this morning and the watch reads otherwise, so the session goes ahead with the loads held.",
 ];
-// …and over a single low HRV night (no readiness number on the board): the disagreement
-// is with last night's HRV, so no phrasing names the readiness number.
-export const CHECKIN_LIFT_HRV_WHY: readonly string[] = [
-  "You checked in feeling good, though, and one low HRV night doesn't outweigh that — so the session goes ahead, held back, with no load jumps.",
-  "Your own check-in says you feel good, which last night's HRV doesn't match — so today trains, but held back.",
-  "You said you feel good this morning and last night's HRV reads lower, so the session goes ahead with the loads held.",
-];
 // The same words the unified signal state speaks for the same check-in, borrowed
 // rather than re-declared: a low-energy check-in reaches the athlete through BOTH
 // this rule and the protect posture below, and two literals for one trigger is
@@ -1724,7 +1717,6 @@ export const DAY_READ_WHY_VARIANTS: Readonly<Record<string, readonly string[]>> 
   "resting_hr_caution_easy:repeat": RESTING_HR_CAUTION_REPEAT_WHY,
   // A sentence appended after the readiness brake's own voice (not the whole `why`).
   checkin_lifted_train: CHECKIN_LIFT_WHY,
-  "checkin_lifted_train:hrv": CHECKIN_LIFT_HRV_WHY,
   // Sentences, not rule codes: what a morning dose is about, spoken before its lead.
   ...Object.fromEntries(Object.entries(MORNING_DOSE_CAUSE).map(([basis, set]) => [`morning_dose_cause:${basis}`, set])),
   push_drive_targeted_training: PUSH_DRIVE_WHY.map((render) => render("quads and back")),
@@ -1819,7 +1811,6 @@ export const DAY_READ_REQUIRED_CONCEPT: Readonly<Record<string, RegExp>> = {
   overnight_dip_dosed: /\b(?:HRV|dip|dipped)\b/i,
   // Whose word it was AND that the session is held back — never a claim of certainty.
   checkin_lifted_train: /\b(?:you|your own)\b[\s\S]*\b(?:held|holding)\b/i,
-  "checkin_lifted_train:hrv": /\b(?:you|your own)\b[\s\S]*\bHRV\b[\s\S]*\b(?:held|holding)\b/i,
   "morning_dose_cause:readiness_rest_grade": /\breadiness\b/i,
   "morning_dose_cause:readiness_rest_grade:unexplained": /\breadiness\b/i,
   "morning_dose_cause:readiness_low": /\breadiness\b/i,

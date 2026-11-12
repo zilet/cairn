@@ -103,11 +103,17 @@ export const MORNING_DOSE_POLICY = Object.freeze({
   checkin_lift_sleep_feel_veto_max: 2,
   /**
    * The only deciding brakes a check-in may lift over (one must be present): the composite
-   * readiness score, and HRV — only while it is a SINGLE low night (last night alone past
-   * the band, the rolling read not past its line). Never acute load, resting HR, short
-   * sleep, a rolling HRV decline, or any rest-reserved floor.
+   * readiness score. Never HRV, acute load, resting HR, short sleep, a rolling HRV decline,
+   * or any rest-reserved floor.
+   *
+   * HRV used to be here "while it is a single low night". It was unreachable (second review,
+   * item 13): one low night is `hrv_unsettled` in the signal state — a NEUTRAL observation,
+   * never a brake (signal-state.ts excursionRun: a caution needs a run of readings or a
+   * 7-day trend below the band) — so the only HRV brake a tap could ever have met was a
+   * multi-night shape, exactly the one a tap may never answer. One low night after hard
+   * endurance is already the held dose (B); without the endurance day it brakes nothing.
    */
-  checkin_liftable_brakes: Object.freeze(["training_readiness", "hrv"]) as readonly string[],
+  checkin_liftable_brakes: Object.freeze(["training_readiness"]) as readonly string[],
   /**
    * Brakes that may sit BESIDE it without blocking the lift: the legs' share of yesterday's
    * endurance and generic activity — what the held dose and the lighter regions already
@@ -296,15 +302,13 @@ export function checkinLiftsRead(checkin: { energy?: unknown; sleep_feel?: unkno
 
 /**
  * May a lifting tap (G) lift a quiet read over THESE deciding brakes? Only when at least
- * one is liftable (the readiness score, or HRV while it is a single low night) and every
- * other is a tolerated load-arithmetic brake. Acute load, resting HR, short sleep, a
- * rolling HRV decline and every floor fall outside both lists, so any of them holds the
- * read. Pure: the caller says whether the HRV brake is a single night.
+ * one is liftable (the readiness score) and every other is a tolerated load-arithmetic
+ * brake. HRV, acute load, resting HR, short sleep, a rolling HRV decline and every floor
+ * fall outside both lists, so any of them holds the read. Pure.
  */
-export function checkinLiftsBrakes(decidingBrakes: readonly string[], hrvSingleNight: boolean): boolean {
+export function checkinLiftsBrakes(decidingBrakes: readonly string[]): boolean {
   const policy = MORNING_DOSE_POLICY;
-  const liftable = (field: string) =>
-    policy.checkin_liftable_brakes.includes(field) && (field !== "hrv" || hrvSingleNight);
+  const liftable = (field: string) => policy.checkin_liftable_brakes.includes(field);
   return (
     decidingBrakes.some(liftable) &&
     decidingBrakes.every((field) => liftable(field) || policy.checkin_lift_tolerated_brakes.includes(field))

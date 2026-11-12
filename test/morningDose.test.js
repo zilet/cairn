@@ -425,20 +425,31 @@ test("the check-in lift bar is the policy's", () => {
   assert.equal(CHECKIN_LIFT_STEP.easy, "train_held");
 });
 
-test("G: a tap lifts only the readiness score or a single low HRV night — never acute load, resting HR or sleep", () => {
+test("G: a tap lifts only the readiness score — never HRV, acute load, resting HR or sleep", () => {
   const lifts = new Set([...POLICY.checkin_liftable_brakes, ...POLICY.checkin_lift_tolerated_brakes]);
-  assert.deepEqual([...POLICY.checkin_liftable_brakes].sort(), ["hrv", "training_readiness"]);
-  for (const never of ["acute_load", "resting_hr", "sleep", "sleep_trend"])
+  // Item 13: the HRV arm ("a single low HRV night") was unreachable — one low night is a
+  // neutral observation in the signal state, never a brake — so it is gone.
+  assert.deepEqual([...POLICY.checkin_liftable_brakes].sort(), ["training_readiness"]);
+  for (const never of ["hrv", "acute_load", "resting_hr", "sleep", "sleep_trend"])
     assert.equal(lifts.has(never), false, `${never} is never a tap's to lift`);
   // The comparison the read makes, exactly.
-  assert.equal(checkinLiftsBrakes(["training_readiness"], false), true);
-  assert.equal(checkinLiftsBrakes(["training_readiness", "hybrid_interference"], false), true);
-  assert.equal(checkinLiftsBrakes(["training_readiness", "acute_load"], false), false, "acute load holds the read");
-  assert.equal(checkinLiftsBrakes(["training_readiness", "resting_hr"], false), false);
-  assert.equal(checkinLiftsBrakes(["training_readiness", "sleep"], false), false);
-  assert.equal(checkinLiftsBrakes(["hrv"], true), true, "a single low HRV night lifts");
-  assert.equal(checkinLiftsBrakes(["hrv"], false), false, "a run of low HRV nights does not");
-  assert.equal(checkinLiftsBrakes(["hybrid_interference"], false), false, "something liftable must be there");
+  assert.equal(checkinLiftsBrakes(["training_readiness"]), true);
+  assert.equal(checkinLiftsBrakes(["training_readiness", "hybrid_interference"]), true);
+  assert.equal(checkinLiftsBrakes(["training_readiness", "acute_load"]), false, "acute load holds the read");
+  assert.equal(checkinLiftsBrakes(["training_readiness", "resting_hr"]), false);
+  assert.equal(checkinLiftsBrakes(["training_readiness", "sleep"]), false);
+  assert.equal(checkinLiftsBrakes(["training_readiness", "hrv"]), false, "an HRV brake holds the read");
+  assert.equal(checkinLiftsBrakes(["hrv"]), false);
+  assert.equal(checkinLiftsBrakes(["hybrid_interference"]), false, "something liftable must be there");
+});
+
+test("item 13: one low HRV night with no endurance day behind it raises no deciding HRV brake (why the HRV lift was dead)", (t) => {
+  const today = onTuesday(t);
+  athlete(today, { stated: false });
+  tonight(today, { hrv_ms: 36, resting_hr: 52, sleep_min: 460, training_readiness: 70 });
+  const r = repo.dayRead(today);
+  assert.equal(r.signals.deciding_brakes.includes("hrv"), false, JSON.stringify(r.signals.deciding_brakes));
+  assert.equal(r.kind, "train", `${r.decision.rule_code}: ${r.why}`);
 });
 
 // ══ 6: every phrasing is true of the morning it prints on ═══════════════════════════════
@@ -880,6 +891,18 @@ test("G: the check-in lifts nothing but the readiness score — a short night or
   const ill = repo.dayRead(today);
   assert.equal(ill.kind, "rest", `${ill.decision.rule_code}: ${ill.why}`);
   assert.equal(ill.decision.rule_code, "resting_hr_illness_pattern");
+});
+
+test("G (item 8): a symptom stated today blocks the check-in lift entirely", (t) => {
+  const today = onTuesday(t);
+  athlete(today, { stated: false });
+  tonight(today, { hrv_ms: 52, resting_hr: 52, sleep_min: 460, training_readiness: 12 });
+  repo.addCheckin(today, { energy: 5, sleep_feel: 4 });
+  repo.reportTrainingSymptom({ area_text: "left knee", onset_on: today, report_text: "my left knee hurts today" });
+  const r = repo.dayRead(today);
+  assert.notEqual(r.decision.rule_code, "checkin_lifted_train", `${r.decision.rule_code}: ${r.why}`);
+  assert.notEqual(r.kind, "train", `${r.decision.rule_code}: ${r.why}`);
+  assert.equal(r.signals.checkin_lift?.applied ?? false, false);
 });
 
 test("G: a neutral tap (below the lift bar) changes nothing", (t) => {
