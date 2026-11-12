@@ -378,3 +378,69 @@ test("the chip and the row read one glance: the same lift and run words, CairnFm
   const name = /data-tstrip-day[^>]*aria-label="([^"]*)"/.exec(V.chipHtml(numless, {}))[1];
   assert.equal(/\s{2,}/.test(name), false, name);
 });
+
+// ---- what a day achieved: the tick, the ring with a plus, both, or nothing (server fields, client draws) ----
+
+test("a strip chip draws the server's plan_done / extra / missed / activity, and says the same in its name", () => {
+  const w = loadViews();
+  const M = w.CairnDayDetailModel;
+  const V = w.CairnDayGlanceView;
+  const PAST = "2026-10-05";
+  const base = {
+    date: PAST,
+    weekday: "Mon",
+    dow: 1,
+    status: "open",
+    plan_day: { day_number: 1, name: "Pull", role: "strength", day_type: "training" },
+    session: null,
+    run: null,
+    hard: false,
+    plan_done: false,
+    extra: false,
+    missed: false,
+    activity: null,
+  };
+  const chip = (day) => {
+    const g = M.glanceOfWeekDay(day, TODAY, "km");
+    const html = V.chipHtml(g, {});
+    return { g, html, aria: /aria-label="([^"]*)"/.exec(html)[1] };
+  };
+  const finished = { id: 1, title: "Pull", date: PAST, finished: true };
+  // Plan done: the tick alone.
+  const done = chip({ ...base, status: "done", session: finished, plan_done: true });
+  assert.match(done.html, /tstrip-tick/);
+  assert.doesNotMatch(done.html, /tstrip-extra/);
+  assert.match(done.aria, /plan done/);
+  // Lift not done, a ride logged: the ring with a plus (no tick), the lift faded, a diamond, neutral words.
+  const off = chip({ ...base, extra: true, missed: true, activity: { family: "ride", label: "trail MTB" } });
+  assert.match(off.html, /tstrip-extra"/);
+  assert.doesNotMatch(off.html, /tstrip-tick/);
+  assert.match(off.html, /tstrip-lift is-open/);
+  assert.match(off.html, /tstrip-act/);
+  assert.match(off.html, /is-missed/);
+  assert.match(off.aria, /Pull, left open; trail MTB, logged\. the planned session was not done; extra work logged/);
+  assert.doesNotMatch(off.aria, /missed|failed|skipped/i);
+  // Plan done plus extra: the tick with the plus beside it.
+  const both = chip({ ...base, status: "done", session: finished, plan_done: true, extra: true, activity: { family: "ride", label: "ride" } });
+  assert.match(both.html, /tstrip-tick/);
+  assert.match(both.html, /tstrip-extra is-beside/);
+  assert.match(both.aria, /plan done; extra work logged/);
+  // Nothing planned, a ride: the ring and diamond, never the rest dot.
+  const ride = chip({ ...base, plan_day: null, extra: true, activity: { family: "ride", label: "ride" } });
+  assert.match(ride.html, /tstrip-extra"/);
+  assert.match(ride.html, /tstrip-act/);
+  assert.doesNotMatch(ride.html, /tstrip-rest/);
+  assert.match(ride.aria, /ride, logged\. extra work logged/);
+  // Nothing at all: no mark of either kind.
+  const none = chip({ ...base, plan_day: null });
+  assert.doesNotMatch(none.html, /tstrip-tick|tstrip-extra|tstrip-act/);
+  assert.match(none.aria, /: rest$/);
+  // A hostile activity label is escaped; the row says it in words too.
+  const evil = M.glanceOfWeekDay({ ...base, extra: true, activity: { family: "ride", label: "<i>x</i>" } }, TODAY, "km");
+  assert.doesNotMatch(V.chipHtml(evil, {}) + V.rowHtml(evil, {}), /<i>x/);
+  assert.match(V.rowHtml(evil, {}), /Extra work logged/);
+  // A week cached before the server sent these fields reads as it did.
+  const legacy = M.glanceOfWeekDay({ ...base, plan_done: undefined, extra: undefined, missed: undefined, activity: undefined, status: "done", session: finished }, TODAY, "km");
+  assert.equal(legacy.done, true);
+  assert.equal(legacy.extra, false);
+});

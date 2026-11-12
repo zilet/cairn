@@ -2183,7 +2183,14 @@ declare global {
     lift: { name: string; abbr: string; state: "done" | "live" | "planned" | "open"; words: string } | null;
     run: { label: string; kind: string; dist: string; state: "done" | "live" | "planned" | "open"; words: string } | null;
     rest: boolean;
+    /** The day's plan is all in (the tick). The server's `plan_done` when the week carries it. */
     done: boolean;
+    /** Work was logged beyond the plan (the ring with a plus). */
+    extra: boolean;
+    /** A past day's plan was not all done: a neutral fade, never a verdict. */
+    missed: boolean;
+    /** A logged non-run activity (the diamond), by load family. */
+    activity: { family: string; label: string } | null;
     swappedFrom: string;
     /** "Thursday 8: Lower B, planned; Quality run · 6.4 km, planned" */
     aria: string;

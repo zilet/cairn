@@ -220,3 +220,51 @@ test("template mode: at most one cell reads today when an unfinished session dis
     "the cell tied to the actual logged session is the one that reads today"
   );
 });
+
+// What a day achieved is the server's call (plan-week-outcome.ts): the client only draws it.
+test("a cell says whether the plan was done, work came beyond it, a past plan was missed, and the ride", () => {
+  pushDay(1, "Push", "Push", [{ exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 8 }]);
+  pushDay(2, "Pull", "Pull", [{ exercise: "Barbell Row", sets: 3, rep_low: 6, rep_high: 8 }]);
+  pushDay(3, "Legs", "Legs", [{ exercise: "Back Squat", sets: 4, rep_low: 5, rep_high: 6 }]);
+  setStrengthSchedule([1, 3, 5]);
+  const SUN = "2026-04-26";
+  // Mon: the planned lift, done. Wed: lift NOT done, a run and a ride instead. Fri: lift done plus a ride.
+  repo.logSetByName({ date: "2026-04-20", exercise: "Bench Press", weight: 135, reps: 5, day_number: 1 });
+  repo.addActivity({ type: "run", date: "2026-04-22", distance_km: 6, duration_min: 36 });
+  repo.addActivity({ type: "mountain biking", date: "2026-04-22", duration_min: 120 });
+  repo.logSetByName({ date: "2026-04-24", exercise: "Back Squat", weight: 185, reps: 5, day_number: 3 });
+  repo.addActivity({ type: "ride", date: "2026-04-24", duration_min: 90 });
+  // Tue: nothing planned, a ride. Thu: nothing at all.
+  repo.addActivity({ type: "ride", date: "2026-04-21", duration_min: 75 });
+
+  const days = Object.fromEntries(planWeek(SUN).days.map((d) => [d.date, d]));
+  const pick = (d) => ({ plan_done: d.plan_done, extra: d.extra, missed: d.missed, activity: d.activity?.family ?? null });
+  assert.deepEqual(pick(days["2026-04-20"]), { plan_done: true, extra: false, missed: false, activity: null }, "plan done");
+  assert.deepEqual(
+    pick(days["2026-04-22"]),
+    { plan_done: false, extra: true, missed: true, activity: "ride" },
+    "planned lift not done, a run and a ride logged: extra and neutral missed, never done"
+  );
+  assert.deepEqual(pick(days["2026-04-24"]), { plan_done: true, extra: true, missed: false, activity: "ride" }, "plan plus extra");
+  assert.deepEqual(pick(days["2026-04-21"]), { plan_done: false, extra: true, missed: false, activity: "ride" }, "nothing planned, a ride");
+  assert.deepEqual(pick(days["2026-04-23"]), { plan_done: false, extra: false, missed: false, activity: null }, "nothing");
+  assert.equal(days["2026-04-22"].activity.label.length > 0, true);
+
+  // A day that is not over is never missed, and a future day carries nothing.
+  const wed = Object.fromEntries(planWeek("2026-04-22").days.map((d) => [d.date, d]));
+  assert.equal(wed["2026-04-22"].missed, false, "today is not over");
+  assert.equal(wed["2026-04-22"].extra, true, "today's logged work still counts");
+  assert.deepEqual(pick(wed["2026-04-24"]), { plan_done: false, extra: false, missed: false, activity: null }, "future");
+});
+
+test("a lift on a day with no plan day is extra, never the plan done; a light walk is not an activity", () => {
+  pushDay(1, "Push", "Push", [{ exercise: "Bench Press", sets: 3, rep_low: 5, rep_high: 8 }]);
+  setStrengthSchedule([1]);
+  repo.logSetByName({ date: "2026-04-22", exercise: "Lateral Raise", weight: 20, reps: 12 });
+  repo.addActivity({ type: "walk", date: "2026-04-23", duration_min: 20 });
+  const days = Object.fromEntries(planWeek("2026-04-26").days.map((d) => [d.date, d]));
+  assert.equal(days["2026-04-22"].extra, true);
+  assert.equal(days["2026-04-22"].plan_done, false);
+  assert.equal(days["2026-04-23"].activity, null);
+  assert.equal(days["2026-04-23"].extra, false);
+});

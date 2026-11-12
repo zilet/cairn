@@ -173,11 +173,11 @@
     "public/js/bundle-18-glance.js": {
       "lazy": "glance",
       "measured": {
-        "raw": 14124,
-        "brotli": 4409
+        "raw": 15481,
+        "brotli": 4764
       },
       "budget": {
-        "raw": 15360,
+        "raw": 16384,
         "brotli": 6144
       }
     },

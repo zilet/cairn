@@ -1020,6 +1020,17 @@ export interface ClientPlanWeekDay {
   hard: boolean;
   /** Inside a trip (a context event): where he is that date, else null. */
   travel: { title: string; location: string | null } | null;
+  /**
+   * What the day achieved, decided on the server (plan-week-outcome.ts); optional because a
+   * week cached before these fields existed lacks them until it revalidates.
+   * `plan_done`: the day's plan is all in (the tick). `extra`: work logged beyond the plan.
+   * `missed`: a past day's plan not all done (a neutral fade). `activity`: a logged non-run
+   * activity (the diamond), by load family.
+   */
+  plan_done?: boolean;
+  extra?: boolean;
+  missed?: boolean;
+  activity?: { family: string; label: string } | null;
   /** Today's cell only: the day read's suggestion, from the one strength line. */
   suggestion?: { kind: "easy" | "rest"; label: string; caveat: string | null };
 }
