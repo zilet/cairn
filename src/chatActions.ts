@@ -67,6 +67,8 @@ export const CHAT_ACTION_TYPES = [
   "flag_training_structure",
   "revert_decision",
   "add_session_note",
+  "today_session",
+  "start_session",
 ] as const;
 
 export type ChatActionType = (typeof CHAT_ACTION_TYPES)[number];
@@ -441,6 +443,37 @@ export interface AddSessionNoteAction extends ChatActionBase {
   date?: string;
 }
 
+// The session the athlete asked for TODAY ("combine yesterday's and today's", "give me
+// a longer upper day"): it becomes today's own composition (an athlete_override the
+// day's Today card serves) and never touches the weekly plan template. Applied by
+// src/domain/training/chat-today-session.ts.
+export const TODAY_SESSION_ITEM_FIELDS = [
+  "exercise",
+  "sets",
+  "rep_low",
+  "rep_high",
+  "target_weight",
+  "target_seconds",
+  "mode",
+  "note",
+  "superset_group",
+] as const;
+export const TODAY_SESSION_MAX_ITEMS = 24;
+
+export interface TodaySessionAction extends ChatActionBase {
+  type: "today_session";
+  title: string;
+  why?: string | null;
+  est_minutes?: number | null;
+  items: Array<Record<string, unknown>>;
+}
+
+// "Let's start / open today's session": opens whatever today already owns, or prepares
+// the plan's day. Carries nothing — what it opens is the server's read of the day.
+export interface StartSessionAction extends ChatActionBase {
+  type: "start_session";
+}
+
 export type ChatAction =
   | LogActivityAction
   | LogSetAction
@@ -475,7 +508,9 @@ export type ChatAction =
   | SetActivityEffortAction
   | FlagTrainingStructureAction
   | RevertDecisionAction
-  | AddSessionNoteAction;
+  | AddSessionNoteAction
+  | TodaySessionAction
+  | StartSessionAction;
 
 const CHAT_ACTION_TYPE_SET = new Set<string>(CHAT_ACTION_TYPES);
 
@@ -730,9 +765,9 @@ export const CHAT_ACTION_PROMPT_SPECS = {
       { "date": "<YYYY-MM-DD>", "exercise": "<a lift on that date's session>", "sets": 2, "until": "<YYYY-MM-DD>", "reason": "race taper" },
       { "date": "<YYYY-MM-DD>", "exercise": "<a lift on that date's session>", "rep_low": 6, "rep_high": 8, "lasting": true, "reason": "..." } ] }`,
     guidance: [
-      `plan_update is a SMALL, safety-checked adjustment to the existing plan. Use it when the user explicitly asks to fix today's/next session, or when this turn supplies a material training, recovery, pain, or life-context signal that changes the next session. A change can update load AND sets/rep_low/rep_high, add an absent movement, remove one with remove:true, or atomically swap {from,to} in place. NEVER use sets:0 to mean remove. Include every requested change in ONE plan_update so the server can apply the bounded edit as a unit. NEVER emit it for a food-only log, meal photo, or a general nutrition question.`,
+      `plan_update is a SMALL, safety-checked adjustment to the existing plan. Use it when the user explicitly asks to adjust lifts on a session (a whole session they want TODAY is today_session), or when this turn supplies a material training, recovery, pain, or life-context signal that changes the next session. A change can update load AND sets/rep_low/rep_high, add an absent movement, remove one with remove:true, or atomically swap {from,to} in place. NEVER use sets:0 to mean remove. Include every requested change in ONE plan_update so the server can apply the bounded edit as a unit. NEVER emit it for a food-only log, meal photo, or a general nutrition question.`,
       `A change about a particular day carries that day's "date" ("YYYY-MM-DD", from DATA.dated_week): the server resolves which plan day that date holds and the date wins over any day_number you give. A date with no lifting session on it is skipped, and so is a change to a lift that is not on that date's session (check its lifts in DATA.plan for that day_number) — unless it is an addition marked "add": true. Never pick a day_number from a weekday — the plan's day_numbers are not weekdays.`,
-      `A dated change is a one-day adaptation of that date's session: with no "until" it ends on its own date and the plan returns to normal the next day. "until": "YYYY-MM-DD" on a change marks an adaptation that ends on that date and returns the plan to normal — use it for a race taper or any temporary change (a trip, a niggle week). "lasting": true on a dated change means a permanent change to that session going forward; use it only when the athlete asks for that. An undated change is lasting.`,
+      `A dated change is a one-day adaptation of that date's session: with no "until" it ends on its own date and the plan returns to normal the next day. "until": "YYYY-MM-DD" on a change marks an adaptation that ends on that date and returns the plan to normal — use it for a race taper or any temporary change (a trip, a niggle week). "lasting": true on a dated change means a permanent change to that session going forward; use it only when the athlete asks for that. An undated change is lasting, unless their words scope it to today.`,
     ],
   },
   plan_restructure: {
@@ -888,6 +923,25 @@ export const CHAT_ACTION_PROMPT_SPECS = {
       `Do NOT use add_session_note for a question (anything asking what to do, or any sentence with a question mark — answer in prose and emit no action), for pain, an ache, soreness, or an injury (that stays report_training_symptom), or for a change to the plan or the program (that stays plan_update, or flag_training_structure when you cannot make it from here). Do not emit it when they are not in a session, never invent a remark they did not say, and do not send the same remark twice.`,
     ],
   },
+  today_session: {
+    type: "today_session",
+    applyMode: "immediate",
+    shape: `{ "type": "today_session", "title": "Upper — push + pull", "why": "<one line, their words>", "est_minutes": 75, "items": [
+      { "exercise": "Barbell Bench Press", "sets": 3, "rep_low": 6, "rep_high": 8, "target_weight": 185, "superset_group": 1 },
+      { "exercise": "Chest-Supported Row", "sets": 3, "rep_low": 8, "rep_high": 10, "target_weight": 60, "superset_group": 1 },
+      { "exercise": "Plank", "sets": 3, "target_seconds": 45, "mode": "timed" } ] }`,
+    guidance: [
+      `today_session is a session they ask for TODAY — combine two days, build/give me a workout, longer or shorter today. Send the COMPLETE list in training order, each lift with sets, reps (or seconds) and a load from their logs; paired lifts share a superset_group number. It becomes the session Today serves and never edits the weekly plan, so never use plan_update for it; a standing change to the week is still plan_update / plan_restructure. Once today has logged sets the server refuses it and says so.`,
+    ],
+  },
+  start_session: {
+    type: "start_session",
+    applyMode: "immediate",
+    shape: `{ "type": "start_session" }`,
+    guidance: [
+      `start_session when they say to start or open today's session: the server opens what Today serves (from the plan when nothing is built yet) and puts a start button under your reply. Never answer "let's start" with prose alone.`,
+    ],
+  },
 } as const satisfies { [K in ChatActionType]: ChatActionPromptSpec<K> };
 
 export function chatActionPromptSpecs(): ChatActionPromptSpec[] {
@@ -937,6 +991,8 @@ const OMITTED_GATED_ACTION_LINES: Readonly<Partial<Record<ChatActionType, string
   resolve_training_symptom: `resolve_training_symptom: only their word closes a pain note. If it eased, offer "Say 'close my knee note' and I'll close it."`,
   flag_training_structure: `flag_training_structure: a question never asks for it. If they want a different shape of training, ask "Want me to flag that for you?"`,
   plan_restructure: `plan_restructure: a question never rebuilds the plan. Describe the new split and ask "Want me to set it up?" — their "yes, do it" lands it.`,
+  today_session: `today_session: only their ask builds a session for today. If one fits, lay it out and ask "Want me to set that up as today's session?"`,
+  start_session: `start_session: only their ask opens today's session. If it fits, ask "Want me to open today's session?"`,
 };
 
 /** The NOT ON OFFER block for the gated actions this turn's prompt leaves out ("" when none). */
@@ -1385,6 +1441,34 @@ export function normalizeChatAction(value: unknown): ChatAction | null {
       const date = chatCheckinDate(value.date);
       return date ? { type: "add_session_note", text, date } : { type: "add_session_note", text };
     }
+    case "today_session": {
+      // Only the prescription fields cross; the payload's own validator (the
+      // athlete_override boundary in adaptive-session.ts) owns their bounds.
+      const items = arrayOrEmpty(value.items)
+        .filter((item): item is ChatActionRecord => isRecord(item) && nonBlank(item.exercise))
+        .slice(0, TODAY_SESSION_MAX_ITEMS)
+        .map((item) => {
+          const out: ChatActionRecord = {};
+          for (const field of TODAY_SESSION_ITEM_FIELDS) {
+            if (item[field] != null && item[field] !== "") out[field] = item[field];
+          }
+          out.exercise = String(item.exercise).trim();
+          return out;
+        });
+      if (!items.length) return null;
+      const title = nonBlank(value.title) ? value.title.replace(/\s+/g, " ").trim().slice(0, 120) : "Today's session";
+      const why = nonBlank(value.why) ? value.why.replace(/\s+/g, " ").trim().slice(0, 600) : null;
+      const minutes = positiveNumberOrNull(value.est_minutes);
+      return {
+        type: "today_session",
+        title,
+        why,
+        est_minutes: minutes == null ? null : Math.round(minutes),
+        items,
+      };
+    }
+    case "start_session":
+      return { type: "start_session" };
   }
   const _exhaustive: never = value.type;
   return _exhaustive;

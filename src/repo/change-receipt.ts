@@ -253,6 +253,60 @@ export function receiptFromPlanAdaptation(
   };
 }
 
+// ---------- a session a chat turn built or opened ----------
+// Not a coaching change the team made: the athlete asked for today's session and chat
+// built it (today_session) or opened it (start_session). The receipt's job is the way
+// in — `open`, a Start/Continue button — plus the Undo of a session that replaced
+// another, while that Undo would still be taken (revertChatTodaySession: the composition
+// still owns the day and nothing is logged on it).
+
+/** The button's words: "Start <title>" before any set is logged, "Continue <title>" after. */
+export function sessionOpenLabel(title: unknown, started: boolean): string {
+  const text = typeof title === "string" ? title.replace(/\s+/g, " ").trim() : "";
+  return `${started ? "Continue" : "Start"} ${text || "today's session"}`;
+}
+
+function sessionHasLoggedSets(sessionId: unknown): boolean {
+  const id = Number(sessionId);
+  if (!Number.isInteger(id) || id <= 0) return false;
+  const row = db.prepare(`SELECT COUNT(*) AS n FROM logged_sets WHERE session_id = ?`).get(id) as any;
+  return Number(row?.n ?? 0) > 0;
+}
+
+/** The receipt for one daily-session composition, as it stands now; null when it is gone. */
+export function receiptFromDailySession(
+  compositionId: number,
+  opts: { decisionId?: number | null; what?: string | null } = {}
+): ChangeReceipt | null {
+  const row = db
+    .prepare(`SELECT id, date, title, status, session_id FROM daily_session_compositions WHERE id = ?`)
+    .get(compositionId) as any;
+  if (!row) return null;
+  const date = dayKeyOf(row.date);
+  const title = clipText(String(row.title ?? "").replace(/\s+/g, " ").trim(), WHAT_MAX - 20) || "today's session";
+  const active = row.status === "active";
+  const started = active && sessionHasLoggedSets(row.session_id);
+  const decisionId = Number(opts.decisionId);
+  const decision = Number.isSafeInteger(decisionId) && decisionId > 0 ? getBrainDecision(decisionId) : null;
+  const undoable =
+    active &&
+    !started &&
+    decision?.status === "applied" &&
+    decision.reversible === true &&
+    getBrainRollback(decisionId)?.kind === "daily_session";
+  return {
+    key: `session:${row.id}`,
+    what: clipText(opts.what?.trim() || `Today's session: ${title}`, WHAT_MAX),
+    when: date,
+    until: null,
+    until_words: null,
+    undo: undoable ? { kind: "brain_decision", id: decisionId } : null,
+    status: active ? "applied" : "undone",
+    status_words: active ? null : decision?.status === "reverted" ? "Put back" : "Replaced",
+    open: active && date ? { kind: "session", date, label: sessionOpenLabel(row.title, started) } : null,
+  };
+}
+
 // ---------- a stored receipt, read again ----------
 
 function storedReceipt(raw: unknown): ChangeReceipt | null {
@@ -305,6 +359,16 @@ export function refreshChangeReceipts(raw: unknown, asOf: string = localDateISO(
         }
       } else if (kind === "adaptation" && Number.isSafeInteger(id) && id > 0) {
         live = receiptFromPlanAdaptation(id);
+      } else if (kind === "session" && Number.isSafeInteger(id) && id > 0) {
+        // The Undo it was said with names the decision; whether it still stands is the
+        // ledger's and the day's answer now, and so is the way in.
+        const storedUndo = (entry as { undo?: { kind?: unknown; id?: unknown } | null })?.undo;
+        const undoId = storedUndo?.kind === "brain_decision" ? Number(storedUndo.id) : null;
+        const session = receiptFromDailySession(id, { decisionId: undoId, what: stored.what });
+        if (session) {
+          out.push(session);
+          continue;
+        }
       }
     } catch {
       live = null;

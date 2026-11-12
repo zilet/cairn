@@ -38,6 +38,7 @@ import {
   PLAN_NO_CHANGE_APPENDED_VARIANTS,
   STRENGTH_OBJECTIVE_NONE_SAVED_VARIANTS,
   STRENGTH_OBJECTIVE_NOT_SAVED_VARIANTS,
+  TODAY_SESSION_NOT_SET_VARIANTS,
 } from "./chat-reconcile.js";
 import { datedWeek, type DatedWeek, type DatedWeekDay } from "./domain/training/dated-week.js";
 import { addDaysISO, mondayOf } from "./lib/dates.js";
@@ -45,7 +46,7 @@ import { pickDayVariant } from "./repo/brain/day-read-rules.js";
 import { getDayIntake } from "./repo/nutrition.js";
 import { localDateISO } from "./repo/shared.js";
 
-export type ClaimClass = "plan" | "timeline" | "goal" | "food" | "log" | "memory";
+export type ClaimClass = "plan" | "session" | "timeline" | "goal" | "food" | "log" | "memory";
 
 // `type` is a plain string so a capture action this module does not know by name yet
 // (another stream's add_session_note) still grounds by the tables below.
@@ -90,6 +91,15 @@ export const PLAN_CLAIM_UNGROUNDED_VARIANTS = [
   "To be straight with you, nothing on your plan has moved yet. If you want that change, ask and I'll make it.",
   "That change isn't on your plan yet, so your week is as it was. Tell me to go ahead and I'll put it through.",
   "Your plan is unchanged for now — I described that change but haven't made it. Say so and I'll make it.",
+] as const;
+
+// Today's session claimed as built, set up or ready over a turn that built or opened
+// nothing (2026-11-12: a template edit and prose, under "I've built your upper session").
+export const SESSION_CLAIM_UNGROUNDED_VARIANTS = [
+  "Today's session isn't set up yet — Today still shows what it had. Say the word and I'll build it as today's session.",
+  "To be straight with you, nothing on Today changed yet. Ask and I'll set that up as today's session.",
+  "That session isn't on Today yet. Tell me to go ahead and I'll put it there.",
+  "Today is as it was for now — I described that session but haven't set it up. Say so and I'll build it.",
 ] as const;
 
 export const TIMELINE_CLAIM_UNGROUNDED_VARIANTS = [
@@ -202,6 +212,16 @@ const PLAN_CLAIM = verbForms(PLAN_PAST, PLAN_ING);
 // changed. Only a weekday after "is/are now" — "your squat is now 100 kg" stays a figure.
 const PLAN_NOW_DAY =
   /\b(?:is|are)\s+now\s+(?:on\s+)?(?:(?:this|next)\s+)?(?:mon|tues|wednes|thurs|fri|satur|sun)day\b/i;
+
+// "I've built today's upper session", "Your session is ready", "Set it up as today's
+// workout": the claim that TODAY's session exists. Only a landed today_session or
+// start_session makes it true.
+const SESSION_PAST = String.raw`built|created|set\s+up|put\s+together|prepared|prepped|loaded|queued|combined|merged|designed|opened|set`;
+const SESSION_ING = String.raw`building|creating|setting\s+up|putting\s+together|preparing|loading|queuing|combining|merging|opening`;
+const SESSION_NOUN = /\b(?:sessions?|workouts?|training\s+day)\b/i;
+const SESSION_CLAIM = verbForms(SESSION_PAST, SESSION_ING);
+const SESSION_READY =
+  /\b(?:sessions?|workouts?|training\s+day)\b[^.!?\n]{0,40}?\b(?:is|['’]s|are)\s+(?:now\s+|all\s+)?(?:ready|set(?:\s+up)?|saved|built|live|loaded|open|waiting(?:\s+(?:for\s+you|on\s+today))?|on\s+today|good\s+to\s+go)\b/i;
 
 // No bare "noted": "Noted — salmon dinner sounds great" is an acknowledgement, not a log.
 const FOOD_PAST = String.raw`logged|recorded|saved|tracked|captured|added|entered|filed|stored|updated|changed|corrected|amended|fixed|swapped|removed|took(?=[^.!?\n]{0,30}\boff\b)|adjusted|bumped|made|scaled|edited|replaced|dropped`;
@@ -459,6 +479,12 @@ export function classifySentence(sentence: string, message?: string | null): Sta
   if (FOOD_NOUN.test(text) && claimAt(text, FOOD_CLAIM, message)) classes.push("food");
   if (
     !aboutRecord &&
+    SESSION_NOUN.test(text) &&
+    (claimAt(text, SESSION_CLAIM, message) || assertedAt(text, firstMatchIndex(text, [SESSION_READY])))
+  )
+    classes.push("session");
+  if (
+    !aboutRecord &&
     PLAN_NOUN.test(text) &&
     (claimAt(text, PLAN_CLAIM, message) || assertedAt(text, firstMatchIndex(text, [PLAN_NOW_DAY])))
   )
@@ -510,6 +536,16 @@ const PLAN_TYPES: ReadonlySet<string> = new Set<string>([
   "set_movement_considerations",
 ]);
 const LIFT_PLAN_TYPES: ReadonlySet<string> = new Set<string>([...PLAN_TYPES].filter((t) => !RUN_PLAN_TYPES.has(t)));
+// The plan writes that ground a claim only when they LANDED. A refused plan_update (every
+// part refused by its date, a run-only change, a write the server would not own) changed
+// nothing, so "I've updated your plan" over it is a false claim like any other.
+const LANDED_LIFT_PLAN_TYPES: ReadonlySet<string> = new Set<string>(["plan_update"]);
+const PRESENCE_LIFT_PLAN_TYPES: ReadonlySet<string> = new Set<string>(
+  [...LIFT_PLAN_TYPES].filter((t) => !LANDED_LIFT_PLAN_TYPES.has(t))
+);
+// Today's session, built (today_session) or opened (start_session) — only when it landed.
+const SESSION_TYPES: ReadonlySet<string> = new Set<string>(["today_session", "start_session"]);
+const TODAY_WORDS = /\b(?:today(?:['’]?s)?|todays|tonight|this\s+(?:morning|afternoon|evening))\b/i;
 const TIMELINE_TYPES: ReadonlySet<string> = new Set<string>(["add_context_event", "resolve_context_event"]);
 const FOOD_TYPES: ReadonlySet<string> = new Set<string>(["log_food", "update_food_note"]);
 const MEMORY_TYPES: ReadonlySet<string> = new Set<string>(["add_memory", "update_memory", "supersede_memory"]);
@@ -600,10 +636,15 @@ function classGrounded(
   switch (cls) {
     case "plan":
       return (
-        any(LIFT_PLAN_TYPES, false) ||
+        any(PRESENCE_LIFT_PLAN_TYPES, false) ||
+        any(LANDED_LIFT_PLAN_TYPES) ||
+        // The session they asked for today IS the change a "today" plan claim describes.
+        (any(SESSION_TYPES) && TODAY_WORDS.test(text)) ||
         (ctx.drafts?.length ?? 0) > 0 ||
         (any(RUN_PLAN_TYPES, false) && !namesLifting(text))
       );
+    case "session":
+      return any(SESSION_TYPES);
     case "timeline":
       return any(TIMELINE_TYPES);
     case "food":
@@ -624,9 +665,25 @@ function classGrounded(
 
 // A reconciler upstream already said the truthful thing for this class; a second
 // honest sentence beside it would only repeat it.
-function classAlreadySpoken(cls: ClaimClass, reply: string, ctx: GroundReplyContext): boolean {
+function classAlreadySpoken(
+  cls: ClaimClass,
+  reply: string,
+  ctx: GroundReplyContext,
+  applied: readonly AppliedEntry[] = []
+): boolean {
   const has = (set: readonly string[]) => set.some((line) => reply.includes(line));
   switch (cls) {
+    case "session":
+      // The session reconciler already said why it did not land (a started day, no plan
+      // day to open, a payload that would not save).
+      return (
+        has(TODAY_SESSION_NOT_SET_VARIANTS) ||
+        applied.some((entry) => {
+          if (!SESSION_TYPES.has(entry.type) || landed(entry)) return false;
+          const error = (entry.result as Record<string, unknown> | undefined)?.error;
+          return typeof error === "string" && error !== "" && reply.includes(error);
+        })
+      );
     case "plan":
       return has(PLAN_NO_CHANGE_APPENDED_VARIANTS) || has(PLAN_LIFTING_UNCHANGED_RUN_SAVED_VARIANTS);
     case "goal":
@@ -647,6 +704,8 @@ function classAlreadySpoken(cls: ClaimClass, reply: string, ctx: GroundReplyCont
 
 function honestSentence(cls: ClaimClass, claim: StateClaim, today: string, applied: readonly AppliedEntry[]): string {
   switch (cls) {
+    case "session":
+      return pickDayVariant(SESSION_CLAIM_UNGROUNDED_VARIANTS, today, "chat-ground-session");
     case "plan":
       // An ungrounded plan claim beside a landed run write names the lifting side; the
       // run receipt is true, so the honest sentence must not say nothing moved.
@@ -668,7 +727,7 @@ function honestSentence(cls: ClaimClass, claim: StateClaim, today: string, appli
 
 // Priority when one sentence claims several things and none landed: the most specific
 // honest sentence wins.
-const CLASS_ORDER: readonly ClaimClass[] = ["goal", "timeline", "food", "plan", "log", "memory"];
+const CLASS_ORDER: readonly ClaimClass[] = ["goal", "timeline", "food", "session", "plan", "log", "memory"];
 
 // ── the stated day figure, when no food was logged this turn ─────────────────
 // Only a sentence that states where the day STANDS (so far, or what is left) is judged.
@@ -1155,7 +1214,8 @@ export function groundReply(input: { reply: string; applied: readonly AppliedEnt
             const cls = c.grounded
               ? undefined
               : CLASS_ORDER.find(
-                  (candidate) => c.claim?.classes.includes(candidate) && !classAlreadySpoken(candidate, reply, ctx)
+                  (candidate) =>
+                    c.claim?.classes.includes(candidate) && !classAlreadySpoken(candidate, reply, ctx, applied)
                 );
             lastClaimGrounded = c.grounded || !cls;
             if (!cls || !c.claim) {
@@ -1177,7 +1237,7 @@ export function groundReply(input: { reply: string; applied: readonly AppliedEnt
         }
       } else if (claim && !claimGrounded(claim, claim.sentence)) {
         const cls = CLASS_ORDER.find(
-          (candidate) => claim.classes.includes(candidate) && !classAlreadySpoken(candidate, reply, ctx)
+          (candidate) => claim.classes.includes(candidate) && !classAlreadySpoken(candidate, reply, ctx, applied)
         );
         if (cls) {
           notes.push({ kind: "claim", class: cls, sentence: claim.sentence });
@@ -1187,6 +1247,13 @@ export function groundReply(input: { reply: string; applied: readonly AppliedEnt
             corrected.add(cls);
             kept.push(honestSentence(cls, claim, today, applied));
           }
+          continue;
+        }
+        // The session receipt already says why today's session did not land (a started
+        // day, no plan day to open): the false "it's built" goes, with no second line.
+        if (claim.classes.includes("session") && classAlreadySpoken("session", reply, ctx, applied)) {
+          notes.push({ kind: "claim", class: "session", sentence: claim.sentence });
+          touched = true;
           continue;
         }
       }

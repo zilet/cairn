@@ -27,6 +27,8 @@ export const COACH_READ_TOOL_NAMES = [
   "read_health_summary",
   "read_strength_progress",
   "read_goal_progress",
+  // What Today will actually serve: the day's composed session and whether it is started.
+  "read_today_session",
 ] as const;
 export type CoachReadToolName = (typeof COACH_READ_TOOL_NAMES)[number];
 
@@ -196,6 +198,17 @@ export const COACH_READ_TOOL_CATALOG: Readonly<Record<CoachReadToolName, CoachRe
     max_days: null,
     max_response_bytes: 65_536,
   },
+  read_today_session: {
+    name: "read_today_session",
+    description:
+      "The session Today will actually serve on one date (today when no date is given): the composed session's title, why, source (the plan's day, the athlete's own, a suggestion) and every item with its sets, reps or seconds, load and superset pairing, plus whether it is started (a set is logged). found:false when nothing is composed yet — Today then builds from the plan. Use it before building, opening or describing today's session. It is not the weekly template (read_current_plan_detail) and carries no logged sets (read_training_window).",
+    effect: "read",
+    launches_agent: false,
+    exposes_sensitive_raw_data: false,
+    max_rows: 30,
+    max_days: 1,
+    max_response_bytes: 32_768,
+  },
 });
 
 export type ExerciseHistoryArgs = {
@@ -213,6 +226,7 @@ export type LifeContextWindowArgs = { start_date: string; end_date: string };
 export type DecisionHistoryArgs = { kind: BrainDecisionKind | null; subject_key: string | null; limit: number };
 export type CurrentPlanDetailArgs = { scope: "training"; day_number: number } | { scope: "meal"; day: string };
 export type ActivityDetailArgs = { activity_id: number };
+export type TodaySessionArgs = { date: string | null };
 /** The no-argument reads: each is the current picture of one domain, bounded by its own budget. */
 type EmptyArgs = Record<string, never>;
 
@@ -230,7 +244,8 @@ export type CoachReadToolRequest =
   | { tool: "read_run_week"; args: EmptyArgs }
   | { tool: "read_health_summary"; args: EmptyArgs }
   | { tool: "read_strength_progress"; args: EmptyArgs }
-  | { tool: "read_goal_progress"; args: EmptyArgs };
+  | { tool: "read_goal_progress"; args: EmptyArgs }
+  | { tool: "read_today_session"; args: TodaySessionArgs };
 
 export interface CoachReadToolResult {
   tool: CoachReadToolName;
@@ -329,5 +344,9 @@ export function normalizeCoachReadToolRequest(value: unknown): CoachReadToolRequ
     case "read_goal_progress":
       // No arguments: whatever was sent is dropped, never echoed into a query.
       return { tool, args: {} };
+    case "read_today_session": {
+      const date = optionalDate(args.date);
+      return date === undefined ? null : { tool, args: { date } };
+    }
   }
 }

@@ -20,6 +20,7 @@ import { describeLandingDay } from "./domain/brain/structure-request.js";
 import { brainChangeReceipt, isBrainChangeKind } from "./domain/brain/changes-feed.js";
 import { qualityWords } from "./domain/training/stated-input.js";
 import { getBrainDecision } from "./repo/brain-decisions.js";
+import { receiptFromDailySession } from "./repo/change-receipt.js";
 import type { ChangeReceipt } from "./contracts/change-receipt.js";
 
 export function recordOrNull(value: unknown): Record<string, unknown> | null {
@@ -548,7 +549,21 @@ export function chatChangeReceipts(
     if (entry.type === "revert_decision") undone.add(id);
     else landed.add(id);
   }
-  const out: ChangeReceipt[] = [];
+  // The session the turn built or opened leads: it is where the athlete goes next.
+  const sessions = new Map<number, ChangeReceipt>();
+  for (const entry of applied) {
+    if (entry.error || !SESSION_ACTION_TYPES.has(entry.type)) continue;
+    const result = recordOrNull(entry.result);
+    const compositionId = Number(result?.daily_session_id);
+    if (!result || result.ok !== true || !Number.isSafeInteger(compositionId) || compositionId <= 0) continue;
+    try {
+      const receipt = receiptFromDailySession(compositionId, { decisionId: Number(result.decision_id) || null });
+      if (receipt) sessions.set(compositionId, receipt);
+    } catch {
+      /* a receipt that cannot be read is left out; the reply's own words still stand */
+    }
+  }
+  const out: ChangeReceipt[] = [...sessions.values()];
   for (const id of [...new Set([...landed, ...undone])].sort((a, b) => a - b)) {
     let decision: ReturnType<typeof getBrainDecision> = null;
     try {
@@ -586,8 +601,61 @@ export function reconcileChatPlanReply(
   explicitPlanEdit?: boolean
 ): string {
   const out = reconcilePlanReplyCore(reply, message, applied, drafts, explicitPlanEdit);
-  const receipts = datedPlanChangeReceipts(applied).filter((line) => !out.includes(line));
+  const receipts = [...datedPlanChangeReceipts(applied), ...todaySessionReceipts(applied)].filter(
+    (line) => !out.includes(line)
+  );
   return receipts.length ? appendReceipt(out, receipts.join(" ")) : out;
+}
+
+// ── today's session (today_session / start_session) ──────────────────────────
+// Its own sentence, never "Saved and verified plan day N": the session is TODAY's, and
+// the weekly plan did not move. A refusal says so in the athlete's words.
+export const SESSION_ACTION_TYPES: ReadonlySet<ChatActionType> = new Set<ChatActionType>([
+  "today_session",
+  "start_session",
+]);
+
+export const TODAY_SESSION_SET_VARIANTS: ReadonlyArray<(title: string) => string> = [
+  (title) => `Today's session is set: ${title}. It's on Today, ready to start — your weekly plan is unchanged.`,
+  (title) => `${title} is now today's session, waiting on Today — the weekly plan stays as it was.`,
+];
+export const SESSION_OPENED_VARIANTS: ReadonlyArray<(title: string) => string> = [
+  (title) => `Today's session is ready: ${title}. Start it from the button below.`,
+  (title) => `${title} is open for today — the button below takes you in.`,
+];
+export const SESSION_CONTINUE_VARIANTS: ReadonlyArray<(title: string) => string> = [
+  (title) => `${title} is already underway today — pick up where you left off.`,
+  (title) => `You've started ${title} today; the button below takes you back in.`,
+];
+export const TODAY_SESSION_NOT_SET_VARIANTS = [
+  "That session didn't save, so Today is unchanged. Say the word and I'll try it again.",
+  "I couldn't set that up as today's session, so Today is as it was. Ask again and I'll retry.",
+] as const;
+
+function todaySessionReceipts(applied: Array<{ type: ChatActionType; result?: unknown; error?: string }>): string[] {
+  const today = localDateISO();
+  const lines: string[] = [];
+  for (const entry of applied) {
+    if (!SESSION_ACTION_TYPES.has(entry.type)) continue;
+    const result = recordOrNull(entry.result) ?? {};
+    const title = typeof result.title === "string" && result.title.trim() ? result.title.trim() : "Today's session";
+    let line: string;
+    if (entry.error || result.ok !== true) {
+      const code = String(result.code ?? "");
+      line =
+        (code === "daily_session_locked" || code === "daily_session_no_template") && typeof result.error === "string"
+          ? result.error
+          : pickDayVariant(TODAY_SESSION_NOT_SET_VARIANTS, today, "chat-today-session-not-set");
+    } else if (result.started === true) {
+      line = pickDayVariant(SESSION_CONTINUE_VARIANTS, today, "chat-session-continue")(title);
+    } else if (entry.type === "today_session") {
+      line = pickDayVariant(TODAY_SESSION_SET_VARIANTS, today, "chat-today-session-set")(title);
+    } else {
+      line = pickDayVariant(SESSION_OPENED_VARIANTS, today, "chat-session-opened")(title);
+    }
+    if (!lines.includes(line)) lines.push(line);
+  }
+  return lines;
 }
 
 function reconcilePlanReplyCore(
@@ -639,6 +707,10 @@ function reconcilePlanReplyCore(
     ) {
       return reply;
     }
+    // Today's session IS this turn's change, and it is not a plan change: its own
+    // receipt (todaySessionReceipts) says what happened. "No plan change was saved"
+    // above it would read as the session failing.
+    if (applied.some((entry) => SESSION_ACTION_TYPES.has(entry.type))) return reply;
     // A run edit IS this turn's plan change; reconcileChatRunReply owns its receipt.
     // Without this the athlete would read "No plan change was saved" directly above
     // the verified run receipt.

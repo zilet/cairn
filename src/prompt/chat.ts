@@ -467,7 +467,7 @@ ${MECHANICS_ENCODING}
   facts. Never invent ids — only use ids present in DATA.memory.`;
   // "Never claim a change without its action" is the action prose's own bullet; this keeps
   // what is plan-specific.
-  const claims = `Keep the reply short and human; confirm safe capture actions you logged. For plan_update/plan_restructure,
+  const claims = `Keep the reply short and human; confirm safe capture actions you logged. For plan_update/plan_restructure/today_session,
 describe the intended change only — NEVER claim it was saved, applied, updated, pushed, scheduled, or made
 live. The server runs those actions after your prose, routes structural changes through autonomy, and adds
 the truthful applied/scheduled/review receipt.

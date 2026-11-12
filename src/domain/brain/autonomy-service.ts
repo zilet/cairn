@@ -126,6 +126,7 @@ import {
 import { revertGarminReconcile } from "../../repo/activities.js";
 import { revertTrainingStance } from "../training/training-drive.js";
 import { revertStatedRunWeek } from "../training/stated-input.js";
+import { revertChatTodaySession } from "../training/chat-today-session.js";
 import { revertBuildLevers } from "../../repo/build-levers.js";
 import { afterSqliteCommit, withSqliteSavepoint } from "../../repo/sqlite-savepoint.js";
 import {
@@ -4281,6 +4282,10 @@ export function revertDecision(
         // The athlete's stated run week / quality session. Ownership-guarded inside: a
         // newer statement since this one wins, and the Undo refuses.
         revertStatedRunWeek(rollback.payload, localDateISO());
+      } else if (rollback?.kind === "daily_session" && rollback.payload?.version === 1) {
+        // The session the athlete asked chat for today. Ownership-guarded inside: a newer
+        // session or a started one stands, and the Undo refuses.
+        revertChatTodaySession(rollback.payload);
       } else if (rollback?.kind === "build_levers" && rollback.payload?.version === 1) {
         // A finished race's lessons for the next build. Ownership-guarded inside: only
         // the levers this decision still holds go back, and what they replaced returns.

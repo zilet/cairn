@@ -120,6 +120,7 @@ const COACH_READ_ARGS_CONTRACT: Readonly<Record<CoachReadToolName, string>> = Ob
   read_health_summary: "{} (no arguments)",
   read_strength_progress: "{} (no arguments)",
   read_goal_progress: "{} (no arguments)",
+  read_today_session: '{"date":"YYYY-MM-DD|null"} (null = today)',
 });
 
 export type CoachReadMode = "ordinary" | "conference";

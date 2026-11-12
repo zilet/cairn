@@ -38,6 +38,11 @@ const CASES = {
   resolve_training_symptom: ["Close the knee note, it's fine now.", "Is my knee note resolved?"],
   flag_training_structure: ["Track all six of my anchor lifts in parallel.", "Should I train all six lifts?"],
   plan_restructure: ["Move me to a two-day upper/lower split.", "What should I change about my squat?"],
+  today_session: [
+    "Make it a full upper body session today, I have time for a longer one.",
+    "Should I train upper body today?",
+  ],
+  start_session: ["Let's start today's session", "How did today's session go?"],
 };
 
 test("the gate map names exactly the server-gated types, and set_run is never offered", () => {
@@ -99,6 +104,12 @@ const SAMPLE = {
     summary: "Two-day split",
     days: [{ day_number: 1, name: "Upper", focus: "Upper", items: [{ exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 100 }] }],
   },
+  today_session: {
+    type: "today_session",
+    title: "Upper",
+    items: [{ exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 100 }],
+  },
+  start_session: { type: "start_session" },
 };
 
 const CORPUS = [

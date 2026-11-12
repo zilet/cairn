@@ -121,6 +121,9 @@ type WriteInvalidationApi = {
     revert_decision: t(DAY, PLAN, TRAINING, FOOD, BODY, GOAL, LIFE, ["meals:plans"]),
     // A remark lands on the session notes the Today card and history both read.
     add_session_note: t(["today:session:", "history:sessions"]),
+    // Today's own session, built or opened from chat: the card Today serves and its log.
+    today_session: t(DAY, TRAINING, ["today:daily-session:", "today:session:"]),
+    start_session: t(DAY, TRAINING, ["today:daily-session:", "today:session:"]),
   });
 
   // Writes the PWA makes itself, from surfaces that are not chat.

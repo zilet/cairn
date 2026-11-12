@@ -9,6 +9,7 @@
 import {
   chatMessageIsNarrative,
   chatMessageRequestsCoaching,
+  chatMessageStartsSession,
   foodIntakeNegated,
   foodLogDoubtCue,
   hasFoodEvidence,
@@ -161,6 +162,9 @@ const FOOD_CAPTURE_LOG_RE = /^log\b\s*:?\s*/i;
 
 export function frameFoodCaptureMessage(text: string | null | undefined, hasImage: boolean): string {
   const trimmed = String(text ?? "").trim();
+  // "Open my today's training day" typed into the food box is not a meal: it goes to the
+  // coach in the athlete's own words, never framed as a food log (2026-11-07).
+  if (!hasImage && chatMessageStartsSession(trimmed)) return trimmed;
   // A leading "log" / "log food" the athlete typed is not doubled.
   const words = trimmed.replace(FOOD_CAPTURE_LOG_FOOD_RE, "").replace(FOOD_CAPTURE_LOG_RE, "").trim();
   if (words) return `${FOOD_CAPTURE_FRAME}${words}`;
@@ -667,6 +671,34 @@ export function hasExplicitPlanEditIntentInContext(
   if (hasSelfContainedPlanEditIntent(message)) return true;
   if (!carriesPlanApplyAffirmation(message)) return false;
   return priorAssistantDrafted || readsAsSessionProposal(priorAssistantMessage);
+}
+
+// A session for TODAY, in the athlete's own words: "make it a full upper body today",
+// "give me a longer session today", "combine yesterday's and today's" — or "let's start
+// today's session". It only OFFERS today_session / start_session to the coach (the gate
+// in chatTurns.ts chatActionGates); a question never asks for one.
+const TODAY_SESSION_SCOPE_RE = /\b(?:today(?:'s)?|todays|tonight|this\s+(?:morning|afternoon|evening)|right\s+now)\b/i;
+const TODAY_SESSION_NOUN_RE =
+  /\b(?:sessions?|workouts?|training|lift(?:ing)?|gym|exercises?|plan|upper(?:[- ]body)?|lower(?:[- ]body)?|full[- ]body|push|pull|legs?)\b/i;
+const TODAY_SESSION_VERB_RE =
+  /\b(?:combine|merge|build|make|give|create|put\s+together|design|write|set\s+up|prep(?:are)?|turn|swap|switch|change|do|want|need|lengthen|extend|shorten|longer|lengthier|shorter|quick(?:er)?)\b/i;
+
+// The coach's own offer to set a session up as today's ("Want me to set that up as
+// today's session?") — the question a plain go-ahead ("yes, set it up") answers.
+const COACH_TODAY_SESSION_OFFER_RE =
+  /\b(?:want\s+me\s+to|shall\s+i|should\s+i|i\s+can)\b[^?\n]{0,80}\b(?:today'?s|todays|for\s+today)\b[^?\n]{0,30}?(?:\bsessions?\b|\bworkouts?\b|\?)/i;
+
+export function coachOfferedTodaySession(priorCoachMessage: string | null | undefined): boolean {
+  return COACH_TODAY_SESSION_OFFER_RE.test(String(priorCoachMessage ?? "").replace(/[‘’]/g, "'"));
+}
+
+export function hasExplicitTodaySessionIntent(message: string | null | undefined): boolean {
+  const text = String(message ?? "")
+    .replace(/[‘’]/g, "'")
+    .trim();
+  if (!text || isLeadingQuestion(text)) return false;
+  if (chatMessageStartsSession(text)) return true;
+  return TODAY_SESSION_SCOPE_RE.test(text) && TODAY_SESSION_NOUN_RE.test(text) && TODAY_SESSION_VERB_RE.test(text);
 }
 
 // A run prescription is durable training state, so the athlete's own words are what
