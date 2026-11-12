@@ -2,8 +2,9 @@
 // fake container engine / curl / Railway CLI scripts and the per-area helpers. The tests
 // themselves are split by area across test/installScript*.test.js so they run in parallel
 // (each file spawns the POSIX installer dozens of times; one file was the suite's long pole).
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -74,10 +75,48 @@ export function hermetic(env) {
   };
 }
 
-export function withTempDir(fn) {
+// Stand-in binaries that never change (they read their scenario from $FAKE_STATE) are written ONCE
+// per test process and symlinked into each rig's bin/. macOS vets every freshly written script
+// the first time it runs (~25 ms each, against ~3 ms for one it has already run), so writing a
+// new copy per test made every rig pay that for each of its stand-ins.
+let fakeDir = null;
+export function installFakes(bin, fakes) {
+  const entries = Array.isArray(fakes) ? fakes : Object.entries(fakes);
+  if (!fakeDir) {
+    fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "cairn-installer-fakes-"));
+    process.on("exit", () => fs.rmSync(fakeDir, { recursive: true, force: true }));
+  }
+  for (const [name, body] of entries) {
+    const real = path.join(
+      fakeDir,
+      `${createHash("sha1").update(`${name}\0${body}`).digest("hex").slice(0, 16)}-${name}`
+    );
+    if (!fs.existsSync(real)) fs.writeFileSync(real, body, { mode: 0o755 });
+    fs.symlinkSync(real, path.join(bin, name));
+  }
+}
+
+// Run a command without blocking the event loop, so the independent cases of one test file can
+// run side by side (each spawns the installer dozens of times; one after another they were the
+// suite's long pole). Resolves like spawnSync: { status, stdout, stderr }.
+export function execAsync(cmd, args, { env, input } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, { env, stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", (d) => (stdout += d));
+    child.stderr.setEncoding("utf8").on("data", (d) => (stderr += d));
+    child.stdin.on("error", () => {});
+    child.on("error", reject);
+    child.on("close", (status) => resolve({ status, stdout, stderr }));
+    child.stdin.end(input ?? "");
+  });
+}
+
+export async function withTempDir(fn) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cairn-installer-"));
   try {
-    return fn(dir);
+    return await fn(dir);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -87,10 +126,9 @@ export function withTempDir(fn) {
 // forced so the plan does not depend on the machine running the suite. The anonymous
 // install counter is off (CAIRN_NO_TELEMETRY) unless a test turns it on against a fake
 // curl, so no run can reach cairn.fit.
-export function run(args, { env = {}, input, viaStdin = false } = {}) {
+export async function run(args, { env = {}, input, viaStdin = false } = {}) {
   const argv = viaStdin ? ["-s", "--", ...args] : [script, ...args];
-  const res = spawnSync(SH, argv, {
-    encoding: "utf8",
+  const res = await execAsync(SH, argv, {
     input: viaStdin ? fs.readFileSync(script, "utf8") : input,
     env: hermetic({
       PATH: process.env.PATH,
@@ -135,9 +173,19 @@ export function envKeys(text) {
 export const FAKE_DOCKER = String.raw`#!/bin/sh
 S="$FAKE_STATE"
 echo "docker $*" >>"$S/log"
-key() { printf 'tag_%s' "$(printf '%s' "$1" | tr '/:@' '___')"; }
-tagid() { cat "$S/$(key "$1")" 2>/dev/null; }
-img() { sed -n 's/^CAIRN_IMAGE=//p' .env; }
+# Pure-sh helpers (no tr/cat/sed forks: the installer calls this stand-in ~100 times per scenario).
+# "@{" stands for the shell's own brace expansion, which a JS template cannot hold.
+key() {
+  k_rest=$1; k_out=
+  while [ -n "$k_rest" ]; do
+    k_c=@{k_rest%"@{k_rest#?}"}; k_rest=@{k_rest#?}
+    case $k_c in / | : | @) k_c=_ ;; esac
+    k_out=$k_out$k_c
+  done
+  KEY="tag_$k_out"
+}
+tagid() { key "$1"; [ -f "$S/$KEY" ] || return 0; t_id=; IFS= read -r t_id <"$S/$KEY" || :; printf '%s\n' "$t_id"; }
+img() { IMG=; while IFS= read -r i_l || [ -n "$i_l" ]; do case $i_l in CAIRN_IMAGE=*) IMG=@{i_l#CAIRN_IMAGE=} ;; esac; done <.env; }
 case "$1" in
   info) exit 0 ;;
   compose)
@@ -146,10 +194,10 @@ case "$1" in
     [ "$1" = -p ] && shift 2
     sub="$1"; shift
     case "$sub" in
-      pull) [ -f "$S/pull_fails" ] && exit 1; cp "$S/remote_id" "$S/$(key "$(img)")" ;;
+      pull) [ -f "$S/pull_fails" ] && exit 1; img; key "$IMG"; cp "$S/remote_id" "$S/$KEY" ;;
       up)
-        [ -f "$S/$(key "$(img)")" ] || cp "$S/remote_id" "$S/$(key "$(img)")"
-        tagid "$(img)" >"$S/running_id"; touch "$S/running" "$S/exists" ;;
+        img; key "$IMG"; [ -f "$S/$KEY" ] || cp "$S/remote_id" "$S/$KEY"
+        tagid "$IMG" >"$S/running_id"; touch "$S/running" "$S/exists" ;;
       down)
         rm -f "$S/running" "$S/exists"
         case "$*" in *--volumes*) touch "$S/volumes_removed" ;; esac ;;
@@ -163,7 +211,7 @@ case "$1" in
       "") ;;
       *State.Running*) if [ -f "$S/running" ]; then echo true; else echo false; fi ;;
       *Labels*com.docker.compose.project*) echo "$FAKE_PROJECT" ;;
-      *Image*) echo "sha256:$(cat "$S/running_id")" ;;
+      *Image*) r_id=; IFS= read -r r_id <"$S/running_id" || :; echo "sha256:$r_id" ;;
       *) echo "<no value>" ;;
     esac
     exit 0 ;;
@@ -172,7 +220,7 @@ case "$1" in
     id=$(tagid "$1"); [ -n "$id" ] || exit 1; echo "sha256:$id" ;;
   tag)
     case "$2" in *[!0-9a-f]*) id=$(tagid "$2") ;; *) id="$2" ;; esac
-    [ -n "$id" ] || exit 1; printf '%s\n' "$id" >"$S/$(key "$3")" ;;
+    [ -n "$id" ] || exit 1; key "$3"; printf '%s\n' "$id" >"$S/$KEY" ;;
   exec)
     shift
     while :; do case "$1" in -i) shift ;; -u) shift 2 ;; *) break ;; esac; done
@@ -186,7 +234,7 @@ case "$1" in
   rm) rm -f "$S/running" "$S/exists" ;;
   volume) [ "$2" = rm ] && touch "$S/volumes_removed" ;;
 esac
-`;
+`.replaceAll("@{", "${");
 
 export const FAKE_CURL = `#!/bin/sh
 S="$FAKE_STATE"
@@ -222,9 +270,12 @@ export const FAKE_RAILWAY = String.raw`#!/bin/sh
 S="$FAKE_STATE"
 { printf 'railway'; for a in "$@"; do printf ' %s' "$a"; done; printf '\n'; } >>"$S/rlog"
 pwd >>"$S/rcwd"
-# One grep over every argument (one per line), not one per argument: the installer calls
-# this stand-in dozens of times per run, and a fork per argument was most of its cost.
-if [ $# -gt 0 ] && printf '%s\n' "$@" | grep -Eq '[0-9a-f]{64}|^[a-z0-9]{48}$'; then touch "$S/secret_in_argv"; exit 99; fi
+# A secret-shaped argument (64 hex digits anywhere, or a whole 48-char [a-z0-9] word) is refused.
+# Matched with case globs, not grep: the installer calls this stand-in dozens of times per run, and
+# a fork per call was a measurable share of its cost.
+for rw_arg in "$@"; do
+  case "$rw_arg" in *__HEX64__* | __ALNUM48__) touch "$S/secret_in_argv"; exit 99 ;; esac
+done
 case "$*" in *--help*) echo "  --stdin   --from-source"; exit 0 ;; esac
 stdin_value=""
 case " $* " in
@@ -333,7 +384,9 @@ case "$cmd" in
     esac ;;
   *) echo "fake railway: unhandled $cmd" >&2; exit 64 ;;
 esac
-`;
+`
+  .replace("__HEX64__", "[0-9a-f]".repeat(64))
+  .replace("__ALNUM48__", "[a-z0-9]".repeat(48));
 
 export const FAKE_CURL_RAILWAY = String.raw`#!/bin/sh
 S="$FAKE_STATE"
@@ -365,15 +418,12 @@ export function railwayRig(dir) {
   const state = path.join(dir, "state");
   fs.mkdirSync(bin);
   fs.mkdirSync(state);
-  for (const [name, body] of [
+  installFakes(bin, [
     ["railway", FAKE_RAILWAY],
     ["curl", FAKE_CURL_RAILWAY],
     ["sleep", "#!/bin/sh\nexit 0\n"],
     ["xdg-open", '#!/bin/sh\necho "$1" >>"$FAKE_STATE/opened"\n'],
-  ]) {
-    fs.writeFileSync(path.join(bin, name), body);
-    fs.chmodSync(path.join(bin, name), 0o755);
-  }
+  ]);
   fs.writeFileSync(path.join(state, "statuses"), "BUILDING\nDEPLOYING\nSUCCESS\n");
   const env = {
     PATH: `${bin}:/usr/bin:/bin`,
@@ -384,9 +434,8 @@ export function railwayRig(dir) {
   };
   const stateDir = path.join(dir, ".cairn", "railway", "cairn");
   const read = (name) => (fs.existsSync(path.join(state, name)) ? fs.readFileSync(path.join(state, name), "utf8") : "");
-  const cairnSh = (args) => {
-    const res = spawnSync(SH, [path.join(stateDir, "cairn.sh"), ...args], {
-      encoding: "utf8",
+  const cairnSh = async (args) => {
+    const res = await execAsync(SH, [path.join(stateDir, "cairn.sh"), ...args], {
       env: hermetic({
         ...env,
         CAIRN_NO_TTY: "1",
@@ -442,10 +491,7 @@ cat "$FAKE_STATE/installbody" >"$out"
     npm: "#!/bin/sh\nexit 1\n",
     sleep: "#!/bin/sh\nexit 0\n",
   };
-  for (const [name, body] of Object.entries(files)) {
-    fs.writeFileSync(path.join(bin, name), body);
-    fs.chmodSync(path.join(bin, name), 0o755);
-  }
+  installFakes(bin, files);
   const env = {
     PATH: `${bin}:/usr/bin:/bin`,
     HOME: dir,
