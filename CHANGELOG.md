@@ -5,6 +5,8 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [2.3.3] — 2026-11-12
+
 Today's session is one fact everywhere, the coach can build and open it from chat, a single low
 morning trims the day instead of cancelling it, and the checks that guard a release run in about a
 quarter of the time.
@@ -53,6 +55,8 @@ quarter of the time.
 - **Log more lands in the session**, an offline start says so in one line, and a day logged without
   a card opens through the same path.
 - **Endurance logged before you adopted a card is not graded against that card.**
+- **A week-strip day is tidier.** A selected day shows one ring, off-plan work is a solid plus badge
+  with the plus on its centre, and a run and a ride share one line.
 - **Today's lift line names only the lifts on the day**, and the stacked-days count is stated
   truthfully.
 
