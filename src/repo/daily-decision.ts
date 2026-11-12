@@ -1990,6 +1990,18 @@ function compactTrainingIntent(
   };
 }
 
+// The caveat's words for the stacked-days count. The count (day-read.ts, `consec`) is of
+// LOADING days — a day dayLoad grades hard or moderate (a strength-led week also counts
+// moderate lifting and genuinely hard cardio); an easy or recovery day, including a short
+// easy run, breaks it BY DESIGN, one rule for every day. The lookback is bounded at ten
+// days, so a count that reached the bound is "at least" that many, never exactly it.
+const STACKED_DAYS_LOOKBACK = 10; // = the `back <= 10` walk in day-read.ts
+function consecutiveDaysDetail(days: number): string {
+  return days >= STACKED_DAYS_LOOKBACK
+    ? `${STACKED_DAYS_LOOKBACK} or more hard or moderate training days in a row`
+    : `${days} hard or moderate training days in a row`;
+}
+
 // The pure decision. A bounded snapshot in, a versioned reason-coded envelope
 // out. Deterministic apart from `generated_at` (which is excluded from the
 // fingerprint), so the same snapshot always produces the same fingerprint AND
@@ -2121,7 +2133,7 @@ export function buildDailySessionDecision(
   const consecutive = snapshot.day_read.consecutive_training_days ?? 0;
   if (consecutive >= 3) {
     fire(precedence, "consecutive_training_days");
-    soft.push({ code: "consecutive_training_days", detail: `${consecutive} training days in a row` });
+    soft.push({ code: "consecutive_training_days", detail: consecutiveDaysDetail(consecutive) });
   }
   // ---- the stack IS the week (owner ruling, 2026-09-23) ----
   // An athlete who lifts Monday to Friday and runs the weekend is "consecutive" every
