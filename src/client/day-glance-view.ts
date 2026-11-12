@@ -52,8 +52,10 @@
     const run = g.run ? `<span class="tstrip-run is-${g.run.state} is-${escAttr(g.run.kind)}"></span>` : "";
     // A logged non-run activity (a ride, a paddle) is a small filled diamond.
     const act = g.activity ? `<span class="tstrip-act"></span>` : "";
-    const marks = lift || run || act ? `${lift}${run}${act}` : `<span class="tstrip-rest">·</span>`;
-    // The tick: the plan is in. The ring with a plus: work beyond the plan, in the same place
+    // The run and the activity share one line under the lift, so a busy day stays a short cell.
+    const moved = run || act ? `<span class="tstrip-moved">${run}${act}</span>` : "";
+    const marks = lift || moved ? `${lift}${moved}` : `<span class="tstrip-rest">·</span>`;
+    // The tick: the plan is in. The disc with a plus: work beyond the plan, in the same place
     // (beside the tick when both). Shape and colour together, never colour alone.
     const tick = g.done ? `<span class="tstrip-tick">✓</span>` : "";
     const plus = g.extra ? `<span class="tstrip-extra${g.done ? " is-beside" : ""}">+</span>` : "";
