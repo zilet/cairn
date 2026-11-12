@@ -557,7 +557,17 @@ export function chatChangeReceipts(
     const compositionId = Number(result?.daily_session_id);
     if (!result || result.ok !== true || !Number.isSafeInteger(compositionId) || compositionId <= 0) continue;
     try {
-      const receipt = receiptFromDailySession(compositionId, { decisionId: Number(result.decision_id) || null });
+      // A chat session that replaced the athlete's own chosen card names that card, so the
+      // receipt says what its Undo puts back (the stored `what` survives every re-read).
+      const title = typeof result.title === "string" && result.title.trim() ? result.title.trim() : null;
+      const replaced =
+        entry.type === "today_session" && typeof result.replaced_title === "string" && result.replaced_title.trim()
+          ? result.replaced_title.trim()
+          : null;
+      const receipt = receiptFromDailySession(compositionId, {
+        decisionId: Number(result.decision_id) || null,
+        what: replaced && title ? `Today's session: ${title}, in place of ${replaced}` : null,
+      });
       if (receipt) sessions.set(compositionId, receipt);
     } catch {
       /* a receipt that cannot be read is left out; the reply's own words still stand */
@@ -623,6 +633,19 @@ export const SESSION_OPENED_VARIANTS: ReadonlyArray<(title: string) => string> =
   (title) => `Today's session is ready: ${title}. Start it from the button below.`,
   (title) => `${title} is open for today — the button below takes you in.`,
 ];
+// The athlete's own chosen card (picked or written in the app or another client) was
+// replaced because they asked: the sentence names it, and what Undo puts back.
+export const TODAY_SESSION_REPLACED_VARIANTS: ReadonlyArray<(title: string, replaced: string) => string> = [
+  (title, replaced) =>
+    `Today's session is set: ${title}, in place of ${replaced}. Undo puts ${replaced} back while nothing is logged — your weekly plan is unchanged.`,
+  (title, replaced) =>
+    `${title} is now today's session, in place of ${replaced} — Undo brings ${replaced} back until you log something. The weekly plan stays as it was.`,
+];
+// A finished day is shown as done and offered to add to — never "ready to start".
+export const SESSION_FINISHED_VARIANTS: ReadonlyArray<(title: string) => string> = [
+  (title) => `${title} is already done for today. Open it and Log more if you want to add to it.`,
+  (title) => `You've finished ${title} today — the button below opens it if you'd like to log more.`,
+];
 export const SESSION_CONTINUE_VARIANTS: ReadonlyArray<(title: string) => string> = [
   (title) => `${title} is already underway today — pick up where you left off.`,
   (title) => `You've started ${title} today; the button below takes you back in.`,
@@ -646,10 +669,16 @@ function todaySessionReceipts(applied: Array<{ type: ChatActionType; result?: un
         (code === "daily_session_locked" || code === "daily_session_no_template") && typeof result.error === "string"
           ? result.error
           : pickDayVariant(TODAY_SESSION_NOT_SET_VARIANTS, today, "chat-today-session-not-set");
+    } else if (result.finished === true) {
+      line = pickDayVariant(SESSION_FINISHED_VARIANTS, today, "chat-session-finished")(title);
     } else if (result.started === true) {
       line = pickDayVariant(SESSION_CONTINUE_VARIANTS, today, "chat-session-continue")(title);
     } else if (entry.type === "today_session") {
-      line = pickDayVariant(TODAY_SESSION_SET_VARIANTS, today, "chat-today-session-set")(title);
+      const replaced =
+        typeof result.replaced_title === "string" && result.replaced_title.trim() ? result.replaced_title.trim() : null;
+      line = replaced
+        ? pickDayVariant(TODAY_SESSION_REPLACED_VARIANTS, today, "chat-today-session-replaced")(title, replaced)
+        : pickDayVariant(TODAY_SESSION_SET_VARIANTS, today, "chat-today-session-set")(title);
     } else {
       line = pickDayVariant(SESSION_OPENED_VARIANTS, today, "chat-session-opened")(title);
     }

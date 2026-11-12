@@ -674,14 +674,40 @@ export function hasExplicitPlanEditIntentInContext(
 }
 
 // A session for TODAY, in the athlete's own words: "make it a full upper body today",
-// "give me a longer session today", "combine yesterday's and today's" — or "let's start
-// today's session". It only OFFERS today_session / start_session to the coach (the gate
-// in chatTurns.ts chatActionGates); a question never asks for one.
+// "give me a longer session today", "combine yesterday's and today's plan", "can you make
+// today's session longer?" — or "let's start today's session". It only OFFERS
+// today_session / start_session to the coach (the gate in chatTurns.ts chatActionGates),
+// and a model-emitted today_session replaces the day's unstarted card with no further
+// confirmation, so the gate opens on an ASK for a session to be BUILT or CHANGED for
+// today: a build/change verb that governs a session noun ("make today's session longer"),
+// or "I want / need a <…> session". It stays shut for rest and skip intents, how a
+// session felt, logging, and questions about what today holds (2026-11-12: "my legs are
+// sore today, I need a rest" and "push today felt heavy, I need to log it" opened it).
 const TODAY_SESSION_SCOPE_RE = /\b(?:today(?:'s)?|todays|tonight|this\s+(?:morning|afternoon|evening)|right\s+now)\b/i;
-const TODAY_SESSION_NOUN_RE =
-  /\b(?:sessions?|workouts?|training|lift(?:ing)?|gym|exercises?|plan|upper(?:[- ]body)?|lower(?:[- ]body)?|full[- ]body|push|pull|legs?)\b/i;
-const TODAY_SESSION_VERB_RE =
-  /\b(?:combine|merge|build|make|give|create|put\s+together|design|write|set\s+up|prep(?:are)?|turn|swap|switch|change|do|want|need|lengthen|extend|shorten|longer|lengthier|shorter|quick(?:er)?)\b/i;
+const TODAY_SESSION_NOUN = String.raw`(?:sessions?|workouts?|training(?:\s+day)?|lift(?:ing)?|gym\s+session|plan|day|card|upper(?:[- ]body)?|lower(?:[- ]body)?|full[- ]body|push|pull|legs?|leg\s+day|exercises?)`;
+// The verb heads its clause's object: at most a few words (no clause break) between it
+// and the session noun — "make it a full upper body", "add some arm work to today's session".
+const TODAY_SESSION_GOVERNED = String.raw`(?:\s+(?:me|us))?(?:\s+[\w'-]+){0,6}?\s+${TODAY_SESSION_NOUN}\b`;
+const TODAY_SESSION_BUILD_RE = new RegExp(
+  String.raw`\b(?:combine|merge|build|make(?!\s+sure)|give|create|put\s+together|design|write|set\s+up|prep(?:are)?|turn|swap|switch|change|lengthen|extend|shorten|add|drop|remove|lighten|trim|rework|redo|rebuild)${TODAY_SESSION_GOVERNED}`,
+  "i"
+);
+// "I want / need a longer session today", "let's do upper body today".
+const TODAY_SESSION_WANT_RE = new RegExp(
+  String.raw`\b(?:i\s+(?:want|need|'d\s+like|would\s+like)\s+(?:a|an|some)|let'?s\s+(?:do|go(?:\s+with)?))(?:\s+[\w'-]+){0,3}?\s+${TODAY_SESSION_NOUN}\b`,
+  "i"
+);
+// The polite-question form of the same ask: "can you make…?", "could I get a longer session today?".
+const TODAY_SESSION_POLITE_RE =
+  /^(?:(?:can|could|would|will)\s+you(?:\s+please)?|(?:can|could|may)\s+i\s+(?:get|have))\s+/i;
+// Not a build: rest and skip, a log, a "don't".
+const TODAY_SESSION_REST_RE =
+  /\bskip(?:s|ping|ped)?\b|\brest\s+day\b|\b(?:a|to|some)\s+rest\b(?!\s+of)|\bday\s+off\b|\bsit\s+(?:it|this|today)\s+out\b|\btake\s+it\s+easy\b/i;
+const TODAY_SESSION_LOG_RE = /\b(?:log|logged|logging|record|recorded|track|tracked)\b/i;
+// A meal plan for today is food, not a training session.
+const TODAY_SESSION_FOOD_RE = /\b(?:meals?|food|diet|nutrition|calories|macros|breakfast|lunch|dinner|snacks?)\b/i;
+const TODAY_SESSION_NEGATED_RE =
+  /\b(?:don'?t|do\s+not|never|no\s+need\s+to|stop)\s+(?:\w+\s+)?(?:combine|merge|build|make|create|change|swap|switch|add|drop|remove|shorten|lengthen|touch)\b/i;
 
 // The coach's own offer to set a session up as today's ("Want me to set that up as
 // today's session?") — the question a plain go-ahead ("yes, set it up") answers.
@@ -693,12 +719,28 @@ export function coachOfferedTodaySession(priorCoachMessage: string | null | unde
 }
 
 export function hasExplicitTodaySessionIntent(message: string | null | undefined): boolean {
-  const text = String(message ?? "")
+  const raw = String(message ?? "")
     .replace(/[‘’]/g, "'")
     .trim();
-  if (!text || isLeadingQuestion(text)) return false;
-  if (chatMessageStartsSession(text)) return true;
-  return TODAY_SESSION_SCOPE_RE.test(text) && TODAY_SESSION_NOUN_RE.test(text) && TODAY_SESSION_VERB_RE.test(text);
+  if (!raw) return false;
+  if (chatMessageStartsSession(raw)) return true;
+  // "Can you make today's session longer?" is the ask itself, politely; any other
+  // question ("what is today's session?", "why did you make it so long?") is not.
+  const polite = TODAY_SESSION_POLITE_RE.test(raw);
+  if (!polite && isLeadingQuestion(raw)) return false;
+  const text = polite
+    ? raw.replace(TODAY_SESSION_POLITE_RE, (m) => (/\bi\s+(?:get|have)\s+$/i.test(m) ? "give me " : ""))
+    : raw;
+  if (!TODAY_SESSION_SCOPE_RE.test(text)) return false;
+  if (
+    TODAY_SESSION_REST_RE.test(text) ||
+    TODAY_SESSION_LOG_RE.test(text) ||
+    TODAY_SESSION_NEGATED_RE.test(text) ||
+    TODAY_SESSION_FOOD_RE.test(text)
+  ) {
+    return false;
+  }
+  return TODAY_SESSION_BUILD_RE.test(text) || TODAY_SESSION_WANT_RE.test(text);
 }
 
 // A run prescription is durable training state, so the athlete's own words are what

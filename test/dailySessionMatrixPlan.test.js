@@ -12,11 +12,11 @@ const STATES = OWNER_STATES.filter(
 
 beforeEach(() => seedPlan());
 
-test("the whole matrix is generated: 3840 cells over 28 owner states (part 1 holds 12 of them)", () => {
+test("the whole matrix is generated: 4800 cells over 28 owner states (part 1 holds 12 of them)", () => {
   assert.equal(OWNER_STATES.length, 28);
-  assert.equal(cellCount(), 3840);
+  assert.equal(cellCount(), 4800);
   assert.equal(STATES.length, 12);
-  assert.equal(cellCount(STATES), 4 * 96 + 8 * 144);
+  assert.equal(cellCount(STATES), 4 * 120 + 8 * 180);
 });
 
 for (const state of STATES) {

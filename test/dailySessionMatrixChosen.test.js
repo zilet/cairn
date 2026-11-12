@@ -14,7 +14,7 @@ beforeEach(() => seedPlan());
 
 test("part 2 holds the 16 chosen-composition states", () => {
   assert.equal(STATES.length, 16);
-  assert.equal(cellCount(STATES), 16 * 144);
+  assert.equal(cellCount(STATES), 16 * 180);
 });
 
 for (const state of STATES) {

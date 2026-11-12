@@ -491,7 +491,8 @@ card saying "Push"). Days after today keep the map's forecast; it re-phases once
 is the date's active composition plus its unfinished session row, WHATEVER its set count (a session
 opened on one device, or a train-anyway day with nothing logged, used to vanish until a set landed).
 `started` is the one "lived on" test (`src/repo/session-started.ts`: sets, duration, notes, feedback, a
-linked activity — the same test that locks a composition against replacement); `chosen` is the athlete's
+linked activity, an answer to an exercise card's pain question — read with `SESSION_STARTED_COUNTS`; the
+same test locks a composition against replacement, refuses a discard and a chat Undo); `chosen` is the athlete's
 act (`athlete_override`, an `agent_suggest` holding items, `manual_plan`, or an adaptive
 `training_by_choice`); `label` ("Start Pull" / "Continue Pull") is printed verbatim. It rides on the
 Today aggregate as `open_session`, and the strength line reads it: a chosen or started session owns the
@@ -504,16 +505,25 @@ reopens a finished day; opening never mints a second session), whatever the requ
 re-take is the same adaptive request over a plain adaptive card nobody has lived on, which re-snapshots
 it on the same row. A session row logged outside any composition (sets from chat, MCP or the watch) is
 ADOPTED by a non-replace prepare — the composition binds to it and the row's own record is untouched;
-with no adaptive candidate (no plan) it is adopted as the athlete's "Open session". Every ownership
+with no adaptive candidate (no plan) it is adopted as the athlete's "Open session". An adopted card's
+provenance says so (`adopted_after_log`, `adopted_at`, the last set/skip id already on the row), and the
+reconciliation reads only the work after it against the card: earlier work is in no completed /
+substituted / skipped list, every dose it touched carries the per-dose reason `adopted_after_log` (never
+comparable; progression reads it as unlinked work, the dose log and trajectory drop it). Every ownership
 conflict (`daily_session_active_changed` / `daily_session_changed` / `daily_session_locked`, and
 `daily_session_missing` while a session row still holds the date) carries `owner`, which resolves:
 `expected_active_id = owner.daily_session_id` opens it, and an owner with a null `daily_session_id` is
 opened by the plain prepare; `daily_session_missing` with no owner means the date is free. Conflict
 `error` text is a sentence for a person (no ids); the detail is `code`/`owner`. An empty owner is
-superseded by `replace:true` (an adaptive request never takes the athlete's itemful chosen card), a day
-finished with nothing logged is started over by a replace, and `POST /api/daily-session/discard`
-(`discard_daily_session`) deletes an accidental empty session so the date is free again — never one with
-logged work. The full outcome matrix is `test/_dailySessionMatrix.mjs`.
+superseded by `replace:true`, and a day finished with nothing logged is started over by a replace — but
+ONE predicate, `unstartedChosenCard` (open-session.ts: an unstarted `manual_plan` / `agent_suggest` /
+`athlete_override` card holding items), is never taken by a replace that authors nothing of the
+athlete's: an adaptive replace and an EMPTY override replace (the client's outbox retry) answer
+`daily_session_active_changed` with it as the owner; an ITEMFUL override replace (the athlete writing a
+new session, chat's `today_session` included) still replaces it. `POST /api/daily-session/discard`
+(`discard_daily_session`) deletes an accidental empty session so the date is free again — never one the
+athlete lived on (a pain answer included); the inferred observations left on it go with it, so the
+null-session observation index cannot collide. The full outcome matrix is `test/_dailySessionMatrix.mjs`.
 
 **Plan tab week projection.** `GET /api/plan/week` (`planWeek()` in `src/domain/training/plan-week.ts`)
 assembles that same map into a connected week strip for Strength + Endurance: calendar Mon→Sun when
@@ -3955,16 +3965,26 @@ they run is `set_endurance_schedule`; the chat catalog tells the model so (in th
 2026-11-12). "Make it a full upper body today" is `today_session` (the complete item list, supersets as a
 shared `superset_group`): it goes through the same `prepareDailySessionUseCase` REST and MCP use, as an
 `athlete_override` composition with `replace:true`, bound to the plan day today's ring selects, and never
-writes the plan. A day with logged sets refuses it (`daily_session_locked`) and the reply says so. "Let's
-start today's session" is `start_session`: the assertion path over an active composition, else the
-adaptive plan day (`train_anyway` on a rest/easy read). Both are gated on the athlete's own ask
-(`chatActionGates().todaySession`) and both answer with `open: {kind:"session", date, label}` ("Start
-<title>" / "Continue <title>"), carried on the turn's receipts as `session:<composition id>` with that
-`open` re-read on every read. A `today_session` that landed records ONE observe-tier reversible
-`session_suggestion` decision with a `daily_session` rollback: Undo (`revert_decision`) puts the
-composition it replaced back — or hands the day back to the plan — only while it still owns the day and
-nothing is logged. `groundReply` holds "I've built today's session" / "your session is ready" (claim class
-`session`) to a landed one, and `read_today_session` is the coach read of what Today will serve.
+writes the plan. A day the athlete has lived on (session-started.ts) refuses it (`daily_session_locked`)
+and the reply names what is there (sets, notes, feedback — `todaySessionLockedError`). Over the athlete's
+own chosen card (not one this chat built) it still replaces — they asked — and the result's
+`replaced_title`, the reply and the receipt say "in place of <card>". "Let's start today's session" is
+`start_session`: the assertion path over an active composition, else the adaptive plan day
+(`train_anyway` on a rest/easy read); a FINISHED day is shown as done ("Log more on <title>"), never
+reopened. Both are gated on the athlete's own ask (`chatActionGates().todaySession`:
+`hasExplicitTodaySessionIntent` opens on a build/change verb governing a session noun, polite questions
+included, and on a start ask that heads its own clause — never on rest, skip, logging, how it felt, an
+information question, or a food log that mentions a workout) and both answer with `open: {kind:"session",
+date, label}` ("Start <title>" / "Continue <title>"), carried on the turn's receipts as
+`session:<composition id>` with that `open` re-read on every read. A `today_session` that landed records
+ONE observe-tier reversible `session_suggestion` decision with a `daily_session` rollback (including the
+skips and finish stamp the replace cleared): Undo (`revert_decision`) puts the composition it replaced
+back as it was — or hands the day back to the plan — only while it still owns the day, nobody has lived
+on it and it is not finished. `groundReply` holds an ACT on the session's content ("I've built / set up /
+lightened today's session", claim class `session`) to a landed, non-reused `today_session`, and a STATE
+claim ("your session is ready / waiting on Today", class `session_state`) to Today itself
+(`openSessionOn`) — true with no action at all when a session is open; a false one is corrected with the
+day's actual state. `read_today_session` is the coach read of what Today will serve.
 An UNDATED `plan_update` the athlete scoped to today now ends today (`until`), like a dated one.
 
 **A structure request is BUILT, not parked.** Chat has no action that rewrites the shape of a week;

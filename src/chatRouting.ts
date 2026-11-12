@@ -553,8 +553,23 @@ export function decideChatRouting(input: ChatRoutingInput): ChatRoutingDecision 
 // "Open my today's training day", "let's start today's session": the athlete asking to
 // open a session, never a log of one. Read with the Intake composer's "Log food:" frame
 // taken off — typed into the food box, it still is not food (2026-11-07).
-const SESSION_START_RE =
-  /\b(?:start|open|begin|kick\s+off|pull\s+up|bring\s+up|take\s+me\s+to|launch)\b[^.!?\n]{0,40}?\b(?:session|workout|training(?:\s+day)?|lifting\s+day|gym\s+day)\b/i;
+//
+// The ask is a CLAUSE of its own addressed to the app: an imperative or first-person-
+// intent start/open verb at the head of a clause ("start my workout", "let's start
+// today's session", "can you open today's training day", "time to start my session")
+// whose object is the session noun. A verb buried in another clause is not an ask —
+// "protein shake before I start my workout", "when I start my training", "forgot to
+// start my watch at the start of my workout" — and a message that carries food is a food
+// log, whatever it says about a workout (2026-11-12: those turned meals into coach turns).
+const SESSION_START_CLAUSE_HEAD = String.raw`(?:^|[.!?;\n]\s*|,\s*)`;
+const SESSION_START_FILLER = String.raw`(?:(?:ok(?:ay)?|so|and|now|alright|right|great|cool|yes|yeah|yep|hey|please)\b[,!.\s]*)*`;
+const SESSION_START_INTENT = String.raw`(?:(?:let'?s|let\s+us|time\s+to|i(?:'d|\s+would)\s+like\s+to|i\s+(?:want|wanna|need)\s+to|i'?m\s+(?:going\s+to|gonna|ready\s+to)|(?:can|could|would|will)\s+you(?:\s+please)?|please)\s+)?`;
+const SESSION_START_VERB = String.raw`(?:start|open|begin|kick\s+off|pull\s+up|bring\s+up|take\s+me\s+to|launch)`;
+const SESSION_START_OBJECT = String.raw`(?:up\s+)?(?:(?:my|the|today'?s|todays|this|our|a)\s+){0,2}(?:[\w-]+\s+){0,2}?(?:session|workout|training(?:\s+day)?|lifting\s+day|gym\s+day)\b`;
+const SESSION_START_RE = new RegExp(
+  `${SESSION_START_CLAUSE_HEAD}${SESSION_START_FILLER}${SESSION_START_INTENT}${SESSION_START_VERB}\\s+${SESSION_START_OBJECT}`,
+  "i"
+);
 const SESSION_START_NEGATED_RE =
   /\b(?:don'?t|do\s+not|not|never|can'?t|cannot|won'?t|didn'?t|did\s+not)\s+(?:\w+\s+)?(?:start|open|begin|kick\s+off|launch)\b/i;
 const FOOD_FRAME_RE = /^log\s+food\s*:\s*/i;
@@ -566,6 +581,8 @@ export function chatMessageStartsSession(message: unknown): boolean {
     .replace(FOOD_FRAME_RE, "")
     .trim();
   if (!text) return false;
+  // Food in the words is food-capture evidence: the meal is the message.
+  if (FOOD_NOUN.test(text) || CONCRETE_FOOD.test(text)) return false;
   return SESSION_START_RE.test(text) && !SESSION_START_NEGATED_RE.test(text);
 }
 

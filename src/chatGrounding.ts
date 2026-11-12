@@ -44,9 +44,10 @@ import { datedWeek, type DatedWeek, type DatedWeekDay } from "./domain/training/
 import { addDaysISO, mondayOf } from "./lib/dates.js";
 import { pickDayVariant } from "./repo/brain/day-read-rules.js";
 import { getDayIntake } from "./repo/nutrition.js";
+import { finishedSessionOn, openSessionOn } from "./repo/open-session.js";
 import { localDateISO } from "./repo/shared.js";
 
-export type ClaimClass = "plan" | "session" | "timeline" | "goal" | "food" | "log" | "memory";
+export type ClaimClass = "plan" | "session" | "session_state" | "timeline" | "goal" | "food" | "log" | "memory";
 
 // `type` is a plain string so a capture action this module does not know by name yet
 // (another stream's add_session_note) still grounds by the tables below.
@@ -77,7 +78,22 @@ export type GroundReplyContext = {
   readDay?: (date: string) => any;
   /** Test seam: the dated week (dated-week.ts datedWeek); null = no calendar week. */
   week?: DatedWeek | null;
+  /** Test seam: what today's session is as Today serves it (openSessionOn / finishedSessionOn). */
+  readTodaySession?: (date: string) => TodaySessionState;
 };
+
+/** Today's session as Today serves it: open (Start/Continue), finished (Log more), or none. */
+export type TodaySessionState = "open" | "finished" | "none";
+
+function readTodaySessionState(date: string): TodaySessionState {
+  try {
+    if (openSessionOn(date)) return "open";
+    if (finishedSessionOn(date)) return "finished";
+  } catch {
+    /* an unreadable day is read as having no session; the honest sentence still holds */
+  }
+  return "none";
+}
 
 // ── the honest sentences ─────────────────────────────────────────────────────
 // Athlete voice: no engineering words, no gate language, no blame. Each states the
@@ -100,6 +116,26 @@ export const SESSION_CLAIM_UNGROUNDED_VARIANTS = [
   "To be straight with you, nothing on Today changed yet. Ask and I'll set that up as today's session.",
   "That session isn't on Today yet. Tell me to go ahead and I'll put it there.",
   "Today is as it was for now — I described that session but haven't set it up. Say so and I'll build it.",
+] as const;
+
+// The same false "I've built / changed it" over a day that DOES have a session (one the
+// turn opened, or one already standing): the session is there, its content is not what
+// the sentence said. Never "nothing on Today" — that would be its own false claim.
+export const SESSION_CONTENT_UNCHANGED_VARIANTS = [
+  "I haven't changed what's in today's session — it's as it stood. Say the word and I'll build the version we talked about.",
+  "To be straight with you, today's session is as it was; what I described isn't in it yet. Ask and I'll set it up that way.",
+] as const;
+
+// A STATE claim ("your session is ready / waiting on Today") over a day with no open
+// session. Said as the state it is — never a promise of something this turn did not do.
+export const SESSION_STATE_NONE_VARIANTS = [
+  "There's no session open on Today yet. Ask whenever you'd like one set up.",
+  "Today doesn't have a session open right now — ask when you want one there.",
+] as const;
+// …and over a day whose session is already finished: done, and open to add to.
+export const SESSION_STATE_FINISHED_VARIANTS = [
+  "Today's session is already done — open it from Today and Log more if you want to add to it.",
+  "You've already finished today's session; opening it from Today lets you log more.",
 ] as const;
 
 export const TIMELINE_CLAIM_UNGROUNDED_VARIANTS = [
@@ -213,15 +249,26 @@ const PLAN_CLAIM = verbForms(PLAN_PAST, PLAN_ING);
 const PLAN_NOW_DAY =
   /\b(?:is|are)\s+now\s+(?:on\s+)?(?:(?:this|next)\s+)?(?:mon|tues|wednes|thurs|fri|satur|sun)day\b/i;
 
-// "I've built today's upper session", "Your session is ready", "Set it up as today's
-// workout": the claim that TODAY's session exists. Only a landed today_session or
-// start_session makes it true.
-const SESSION_PAST = String.raw`built|created|set\s+up|put\s+together|prepared|prepped|loaded|queued|combined|merged|designed|opened|set`;
-const SESSION_ING = String.raw`building|creating|setting\s+up|putting\s+together|preparing|loading|queuing|combining|merging|opening`;
+// Today's session, two kinds of sentence (2026-11-12):
+//   - an ACT on its content — "I've built today's upper session", "Set it up as today's
+//     workout", "your session is built": class `session`. Only a landed, NEW
+//     today_session makes it true (a reused or refused one changed nothing, and a
+//     start_session only opens what the day already had);
+//   - its STATE — "your session is ready", "today's workout is waiting on Today", "I've
+//     opened it": class `session_state`. A statement about Today, true whenever today
+//     has an open session (openSessionOn), whether or not this turn did anything.
+const SESSION_PAST = String.raw`built|created|set\s+up|put\s+together|combined|merged|designed|set|made|rebuilt|reworked`;
+const SESSION_ING = String.raw`building|creating|setting\s+up|putting\s+together|combining|merging|designing|making|rebuilding|reworking`;
 const SESSION_NOUN = /\b(?:sessions?|workouts?|training\s+day)\b/i;
 const SESSION_CLAIM = verbForms(SESSION_PAST, SESSION_ING);
+// "Your session is built / saved": the passive of the act.
+const SESSION_BUILT =
+  /\b(?:sessions?|workouts?|training\s+day)\b[^.!?\n]{0,40}?\b(?:is|['’]s|are)\s+(?:now\s+|all\s+)?(?:saved|built)\b/i;
+const SESSION_OPEN_PAST = String.raw`opened|loaded|queued|prepared|prepped|pulled\s+up|brought\s+up`;
+const SESSION_OPEN_ING = String.raw`opening|loading|queuing|preparing|pulling\s+up|bringing\s+up`;
+const SESSION_OPEN_CLAIM = verbForms(SESSION_OPEN_PAST, SESSION_OPEN_ING);
 const SESSION_READY =
-  /\b(?:sessions?|workouts?|training\s+day)\b[^.!?\n]{0,40}?\b(?:is|['’]s|are)\s+(?:now\s+|all\s+)?(?:ready|set(?:\s+up)?|saved|built|live|loaded|open|waiting(?:\s+(?:for\s+you|on\s+today))?|on\s+today|good\s+to\s+go)\b/i;
+  /\b(?:sessions?|workouts?|training\s+day)\b[^.!?\n]{0,40}?\b(?:is|['’]s|are)\s+(?:now\s+|all\s+)?(?:ready|set(?:\s+up)?|live|loaded|open|waiting(?:\s+(?:for\s+you|on\s+today))?|on\s+today|good\s+to\s+go|here)\b/i;
 
 // No bare "noted": "Noted — salmon dinner sounds great" is an acknowledgement, not a log.
 const FOOD_PAST = String.raw`logged|recorded|saved|tracked|captured|added|entered|filed|stored|updated|changed|corrected|amended|fixed|swapped|removed|took(?=[^.!?\n]{0,30}\boff\b)|adjusted|bumped|made|scaled|edited|replaced|dropped`;
@@ -477,12 +524,13 @@ export function classifySentence(sentence: string, message?: string | null): Sta
 
   const aboutRecord = NOTES_NOUN.test(text) || RECORD_DEST.test(text) || aboutBodyweight(text);
   if (FOOD_NOUN.test(text) && claimAt(text, FOOD_CLAIM, message)) classes.push("food");
-  if (
-    !aboutRecord &&
-    SESSION_NOUN.test(text) &&
-    (claimAt(text, SESSION_CLAIM, message) || assertedAt(text, firstMatchIndex(text, [SESSION_READY])))
-  )
-    classes.push("session");
+  if (!aboutRecord && SESSION_NOUN.test(text)) {
+    if (claimAt(text, SESSION_CLAIM, message) || assertedAt(text, firstMatchIndex(text, [SESSION_BUILT]))) {
+      classes.push("session");
+    } else if (claimAt(text, SESSION_OPEN_CLAIM, message) || assertedAt(text, firstMatchIndex(text, [SESSION_READY]))) {
+      classes.push("session_state");
+    }
+  }
   if (
     !aboutRecord &&
     PLAN_NOUN.test(text) &&
@@ -545,6 +593,28 @@ const PRESENCE_LIFT_PLAN_TYPES: ReadonlySet<string> = new Set<string>(
 );
 // Today's session, built (today_session) or opened (start_session) — only when it landed.
 const SESSION_TYPES: ReadonlySet<string> = new Set<string>(["today_session", "start_session"]);
+
+// Did this turn CHANGE today's session's content? Only a today_session that landed and
+// wrote a new composition (not `reused` — the same card already stood).
+function todaySessionBuilt(applied: readonly AppliedEntry[]): boolean {
+  return applied.some(
+    (entry) =>
+      entry.type === "today_session" &&
+      landed(entry) &&
+      (entry.result as Record<string, unknown> | undefined)?.reused !== true
+  );
+}
+
+// Did this turn put the athlete in front of a session — opened, built, or a refusal that
+// still points at the session standing on the day (its `open`)?
+function todaySessionShown(applied: readonly AppliedEntry[]): boolean {
+  return applied.some((entry) => {
+    if (!SESSION_TYPES.has(entry.type)) return false;
+    if (landed(entry)) return true;
+    const open = (entry.result as Record<string, unknown> | undefined)?.open;
+    return !!open && typeof open === "object";
+  });
+}
 const TODAY_WORDS = /\b(?:today(?:['’]?s)?|todays|tonight|this\s+(?:morning|afternoon|evening))\b/i;
 const TIMELINE_TYPES: ReadonlySet<string> = new Set<string>(["add_context_event", "resolve_context_event"]);
 const FOOD_TYPES: ReadonlySet<string> = new Set<string>(["log_food", "update_food_note"]);
@@ -629,7 +699,8 @@ function classGrounded(
   cls: ClaimClass,
   applied: readonly AppliedEntry[],
   ctx: GroundReplyContext,
-  text: string
+  text: string,
+  todayState: () => TodaySessionState = () => "none"
 ): boolean {
   const any = (types: ReadonlySet<string>, needLanded = true) =>
     applied.some((entry) => types.has(entry.type) && (!needLanded || landed(entry)));
@@ -638,13 +709,18 @@ function classGrounded(
       return (
         any(PRESENCE_LIFT_PLAN_TYPES, false) ||
         any(LANDED_LIFT_PLAN_TYPES) ||
-        // The session they asked for today IS the change a "today" plan claim describes.
-        (any(SESSION_TYPES) && TODAY_WORDS.test(text)) ||
+        // The session they asked for today IS the change a "today" plan claim describes —
+        // when one was BUILT. Opening the day's session changes none of its content.
+        (todaySessionBuilt(applied) && TODAY_WORDS.test(text)) ||
         (ctx.drafts?.length ?? 0) > 0 ||
         (any(RUN_PLAN_TYPES, false) && !namesLifting(text))
       );
     case "session":
-      return any(SESSION_TYPES);
+      return todaySessionBuilt(applied);
+    case "session_state":
+      // A statement about Today: true when the turn put a session in front of the athlete,
+      // or when Today holds an open one anyway.
+      return todaySessionShown(applied) || todayState() === "open";
     case "timeline":
       return any(TIMELINE_TYPES);
     case "food":
@@ -674,6 +750,7 @@ function classAlreadySpoken(
   const has = (set: readonly string[]) => set.some((line) => reply.includes(line));
   switch (cls) {
     case "session":
+    case "session_state":
       // The session reconciler already said why it did not land (a started day, no plan
       // day to open, a payload that would not save).
       return (
@@ -702,10 +779,24 @@ function classAlreadySpoken(
   }
 }
 
-function honestSentence(cls: ClaimClass, claim: StateClaim, today: string, applied: readonly AppliedEntry[]): string {
+function honestSentence(
+  cls: ClaimClass,
+  claim: StateClaim,
+  today: string,
+  applied: readonly AppliedEntry[],
+  todayState: () => TodaySessionState = () => "none"
+): string {
   switch (cls) {
     case "session":
-      return pickDayVariant(SESSION_CLAIM_UNGROUNDED_VARIANTS, today, "chat-ground-session");
+      // A session stands (opened this turn, or already on Today): its content is what
+      // did not change. With none at all, Today itself is as it was.
+      return todaySessionShown(applied) || todayState() !== "none"
+        ? pickDayVariant(SESSION_CONTENT_UNCHANGED_VARIANTS, today, "chat-ground-session-content")
+        : pickDayVariant(SESSION_CLAIM_UNGROUNDED_VARIANTS, today, "chat-ground-session");
+    case "session_state":
+      return todayState() === "finished"
+        ? pickDayVariant(SESSION_STATE_FINISHED_VARIANTS, today, "chat-ground-session-finished")
+        : pickDayVariant(SESSION_STATE_NONE_VARIANTS, today, "chat-ground-session-none");
     case "plan":
       // An ungrounded plan claim beside a landed run write names the lifting side; the
       // run receipt is true, so the honest sentence must not say nothing moved.
@@ -727,7 +818,16 @@ function honestSentence(cls: ClaimClass, claim: StateClaim, today: string, appli
 
 // Priority when one sentence claims several things and none landed: the most specific
 // honest sentence wins.
-const CLASS_ORDER: readonly ClaimClass[] = ["goal", "timeline", "food", "session", "plan", "log", "memory"];
+const CLASS_ORDER: readonly ClaimClass[] = [
+  "goal",
+  "timeline",
+  "food",
+  "session",
+  "session_state",
+  "plan",
+  "log",
+  "memory",
+];
 
 // ── the stated day figure, when no food was logged this turn ─────────────────
 // Only a sentence that states where the day STANDS (so far, or what is left) is judged.
@@ -1179,8 +1279,11 @@ export function groundReply(input: { reply: string; applied: readonly AppliedEnt
   // Within ONE clause the classes are readings of a single claim ("Logged your lunch" is
   // both a food and a log claim), so any landed reading — or a landed capture of what the
   // clause names — grounds it.
+  // Today's session as Today serves it, read once and only when a sentence asks.
+  let sessionState: TodaySessionState | undefined;
+  const todayState = (): TodaySessionState => (sessionState ??= (ctx.readTodaySession ?? readTodaySessionState)(today));
   const claimGrounded = (c: StateClaim, text: string) =>
-    c.classes.some((cls) => classGrounded(cls, applied, ctx, text)) || subjectGrounded(text, applied);
+    c.classes.some((cls) => classGrounded(cls, applied, ctx, text, todayState)) || subjectGrounded(text, applied);
   const corrected = new Set<ClaimClass>();
   let intakeDropped = false;
   let changed = false;
@@ -1225,7 +1328,7 @@ export function groundReply(input: { reply: string; applied: readonly AppliedEnt
             notes.push({ kind: "claim", class: cls, sentence: c.claim.sentence });
             if (!corrected.has(cls)) {
               corrected.add(cls);
-              honest.push(honestSentence(cls, c.claim, today, applied));
+              honest.push(honestSentence(cls, c.claim, today, applied, todayState));
             }
           }
           if (honest.length || keptClauses.length < judged.length) {
@@ -1245,14 +1348,15 @@ export function groundReply(input: { reply: string; applied: readonly AppliedEnt
           // One honest sentence per class; a second false claim of the same class goes.
           if (!corrected.has(cls)) {
             corrected.add(cls);
-            kept.push(honestSentence(cls, claim, today, applied));
+            kept.push(honestSentence(cls, claim, today, applied, todayState));
           }
           continue;
         }
         // The session receipt already says why today's session did not land (a started
         // day, no plan day to open): the false "it's built" goes, with no second line.
-        if (claim.classes.includes("session") && classAlreadySpoken("session", reply, ctx, applied)) {
-          notes.push({ kind: "claim", class: "session", sentence: claim.sentence });
+        const sessionCls = claim.classes.find((c) => c === "session" || c === "session_state");
+        if (sessionCls && classAlreadySpoken(sessionCls, reply, ctx, applied)) {
+          notes.push({ kind: "claim", class: sessionCls, sentence: claim.sentence });
           touched = true;
           continue;
         }

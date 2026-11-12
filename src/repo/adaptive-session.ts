@@ -18,9 +18,9 @@ import { findExercise, recentWorkingSeconds, recentWorkingWeight } from "./exerc
 import { getPlanDay } from "./plan.js";
 import { selectedPlanDayForDate } from "./plan-selection.js";
 import { getOrCreateSessionRow } from "./session-core.js";
-import { meaningfulSessionReasons } from "./session-started.js";
+import { meaningfulSessionReasons, SESSION_STARTED_COUNTS } from "./session-started.js";
 import {
-  compositionIsItemfulChoice,
+  unstartedChosenCard,
   dailySessionOwner,
   dailySessionOwnerOf,
   type DailySessionOwner,
@@ -1045,8 +1045,7 @@ function canonicalAgentSuggestion(jobIdRaw: unknown, date: string) {
 function sessionRowsForDate(date: string): any[] {
   return db
     .prepare(
-      `SELECT s.*,
-              (SELECT COUNT(*) FROM logged_sets ls WHERE ls.session_id = s.id) AS set_count
+      `SELECT s.*, ${SESSION_STARTED_COUNTS}
          FROM sessions s WHERE s.date = ? ORDER BY s.id`
     )
     .all(date) as any[];
@@ -1118,6 +1117,49 @@ function openRefreshesAdaptive(row: any, input: PrepareDailySessionInput, source
 function compositionOwner(date: string, row: any): DailySessionOwner | null {
   const session = sessionRowsForDate(date).find((candidate) => Number(candidate.id) === Number(row?.session_id));
   return dailySessionOwnerOf(row, session ?? null);
+}
+
+// A card ADOPTED onto a session the athlete already lived on (sets logged from chat, MCP or
+// the watch before any card existed) was never served for that earlier work. Its
+// provenance says so — when, and the last set / skip already on the row — so the
+// reconciliation (daily-reconciliation.ts) and every outcome reader treat the earlier
+// work as not comparable to this card: no skip, substitution, shortfall or overrun lesson.
+function adoptionProvenance(provenanceJson: string | null, sessionId: number): string | null {
+  // The stored provenance was already normalized; it is extended, never re-normalized
+  // (that would re-apply the key cap to a record the adoption keys just grew).
+  const parsed = parseJson(provenanceJson);
+  const base = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  const lastSet = db.prepare(`SELECT MAX(id) AS id FROM logged_sets WHERE session_id = ?`).get(sessionId) as any;
+  const lastSkip = db.prepare(`SELECT MAX(id) AS id FROM session_skips WHERE session_id = ?`).get(sessionId) as any;
+  const finished = db.prepare(`SELECT finished_at FROM sessions WHERE id = ?`).get(sessionId) as any;
+  return JSON.stringify({
+    ...base,
+    adopted_after_log: true,
+    adopted_at: new Date().toISOString(),
+    adopted_after_set_id: Number(lastSet?.id) > 0 ? Number(lastSet.id) : 0,
+    adopted_after_skip_id: Number(lastSkip?.id) > 0 ? Number(lastSkip.id) : 0,
+    adopted_finished: finished?.finished_at != null,
+  });
+}
+
+// A replace that authors nothing of the athlete's own: the plan's adaptive day, or an
+// EMPTY athlete_override (the "Open session" door, and the client's outbox retry that
+// forces replace:true on it). Neither may silently supersede the athlete's chosen card.
+// An ITEMFUL athlete_override is the athlete writing a new session (Today's editor, chat
+// today_session) and still replaces their own card.
+function replaceYieldsToChosenCard(input: PrepareDailySessionInput, source: DailySessionSource): boolean {
+  if (source === "adaptive_plan") return true;
+  if (source !== "athlete_override") return false;
+  const items = (input.session as { items?: unknown } | null | undefined)?.items;
+  return !Array.isArray(items) || items.length === 0;
+}
+
+// The owner of `row` when it is the athlete's unstarted chosen card that holds work
+// (open-session.ts unstartedChosenCard — the one predicate), else null.
+function chosenCardOwner(date: string, row: any): DailySessionOwner | null {
+  const session =
+    sessionRowsForDate(date).find((candidate) => Number(candidate.id) === Number(row?.session_id)) ?? null;
+  return unstartedChosenCard(row, session) ? dailySessionOwnerOf(row, session) : null;
 }
 
 function activeCompositionRow(date: string): any {
@@ -1297,15 +1339,16 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
       input.replace === true &&
       owner != null &&
       !owner.started &&
-      !(source === "adaptive_plan" && compositionIsItemfulChoice(existingRow));
+      !(replaceYieldsToChosenCard(input, source) && chosenCardOwner(date, existingRow));
     if (!replaceable) fail("daily_session_active_changed", OWNER_HOLDS_DAY_MESSAGE, undefined, owner);
   }
-  // The same rule without a preview token: an adaptive replace never silently takes the
-  // athlete's own chosen card that holds work. Once that card is lived on, the ordinary
-  // lock (assertSessionsUnstarted) answers instead.
-  if (existingRow && input.replace && source === "adaptive_plan" && compositionIsItemfulChoice(existingRow)) {
-    const owner = compositionOwner(date, existingRow);
-    if (owner && !owner.started) fail("daily_session_active_changed", OWNER_HOLDS_DAY_MESSAGE, undefined, owner);
+  // The same rule without a preview token: a replace that authors nothing of the
+  // athlete's (adaptive, or an empty override) never silently takes their own chosen
+  // card that holds work. Once that card is lived on, the ordinary lock
+  // (assertSessionsUnstarted) answers instead.
+  if (existingRow && input.replace && replaceYieldsToChosenCard(input, source)) {
+    const owner = chosenCardOwner(date, existingRow);
+    if (owner) fail("daily_session_active_changed", OWNER_HOLDS_DAY_MESSAGE, undefined, owner);
   }
   if (existingRow && !input.replace && !canRefreshAdaptive) {
     return { ok: true as const, daily_session: hydrate(existingRow), session_id: existingRow.session_id, reused: true };
@@ -1558,7 +1601,7 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
         prepared.payload.est_minutes,
         JSON.stringify(prepared.payload.items),
         constraintsJson,
-        provenanceJson,
+        adoptLived ? adoptionProvenance(provenanceJson, Number(session.id)) : provenanceJson,
         fingerprint
       );
     const dailySession = hydrate(
@@ -1633,6 +1676,14 @@ export function discardDailySession(input: DiscardDailySessionInput = {}): Disca
     ).run(active.id);
     if (session) {
       db.prepare(`DELETE FROM session_skips WHERE session_id = ?`).run(session.id);
+      // What is left bound to an unstarted session is only INFERRED exposure (a stated
+      // pain answer made it started, above) — inferred from sets that no longer exist.
+      // Deleting the row would null its session_id (ON DELETE SET NULL), and the same
+      // exposure already on record with no session collides on the null-session unique
+      // index; the evidence it stood for is gone, so it goes with the session.
+      db.prepare(`DELETE FROM movement_tolerance_observations WHERE session_id = ? AND evidence <> 'stated'`).run(
+        session.id
+      );
       db.prepare(`DELETE FROM sessions WHERE id = ?`).run(session.id);
     }
     return {

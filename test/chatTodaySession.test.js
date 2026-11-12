@@ -17,6 +17,7 @@ import {
   groundReply,
   PLAN_CLAIM_UNGROUNDED_VARIANTS,
   SESSION_CLAIM_UNGROUNDED_VARIANTS,
+  SESSION_STATE_NONE_VARIANTS,
 } from "../dist/chatGrounding.js";
 import { chatChangeReceipts, reconcileChatPlanReply } from "../dist/chat-reconcile.js";
 import { refreshChangeReceipts } from "../dist/repo/change-receipt.js";
@@ -303,16 +304,29 @@ test("Undo of a today_session puts the session it replaced back, while nothing i
   assert.equal(receipt.undo, null);
 });
 
-test("Undo refuses once today's session has a logged set", () => {
-  seedPlan();
-  apply([{ type: "start_session" }], START_ASK);
-  const built = entry(apply([UPPER], BUILD_ASK), "today_session").result;
-  repo.logSetByName({ exercise: "Barbell Bench Press", weight: 100, reps: 8, date: localDateISO() });
-  const undone = revertDecision(built.decision_id, "user veto");
-  assert.equal(undone.ok, false);
-  assert.equal(active().id, built.daily_session_id, "the started session stands");
-  assert.equal(repo.getBrainDecision(built.decision_id).status, "applied");
-});
+// The one "started" test (session-started.ts), not a set count alone: notes, a rating and
+// a finish each make the chat-built session the record of the day, and Undo leaves it.
+const LIVED_ON = {
+  "a logged set": () =>
+    repo.logSetByName({ exercise: "Barbell Bench Press", weight: 100, reps: 8, date: localDateISO() }),
+  "notes only": (sessionId) => repo.updateSessionNotes(sessionId, "Felt strong on the first pair."),
+  "feedback only": () => repo.setSessionFeedback(localDateISO(), { performance: 4 }),
+  "finished with nothing logged": (sessionId) => repo.finishSession(sessionId),
+};
+for (const [name, liveOn] of Object.entries(LIVED_ON)) {
+  test(`Undo refuses once today's session is lived on: ${name}`, () => {
+    seedPlan();
+    apply([{ type: "start_session" }], START_ASK);
+    const built = entry(apply([UPPER], BUILD_ASK), "today_session").result;
+    liveOn(built.session_id);
+    const undone = revertDecision(built.decision_id, "user veto");
+    assert.equal(undone.ok, false, JSON.stringify(undone));
+    assert.match(undone.error, /^Today's session|^You've finished/, undone.error);
+    assert.doesNotMatch(undone.error, /_|\bid\b|\d/, undone.error);
+    assert.equal(active().id, built.daily_session_id, "the session the record is about stands");
+    assert.equal(repo.getBrainDecision(built.decision_id).status, "applied");
+  });
+}
 
 test("the actions are offered only on the athlete's ask, and refused without it", () => {
   for (const message of [BUILD_ASK, START_ASK, "open my today's training day", "Give me a shorter workout today"]) {
@@ -326,7 +340,9 @@ test("the actions are offered only on the athlete's ask, and refused without it"
   ]) {
     assert.equal(chatActionGates({ message, priorAssistant: { message: "" } }).todaySession, false, message);
   }
-  assert.equal(hasExplicitTodaySessionIntent("Can you build me a longer session today?"), false, "a question");
+  // The polite-question form of a build is the ask itself; an information question is not.
+  assert.equal(hasExplicitTodaySessionIntent("Can you build me a longer session today?"), true, "a polite ask");
+  assert.equal(hasExplicitTodaySessionIntent("What is today's session?"), false, "a question");
   // The coach's own offer, then a plain go-ahead.
   const offer = { message: "That fits your week. Want me to set that up as today's session?" };
   assert.equal(chatActionGates({ message: "yes, set it up", priorAssistant: offer }).todaySession, true);
@@ -382,12 +398,15 @@ test("a claim that today's session is built needs a landed today_session", () =>
   });
   assert.ok(SESSION_CLAIM_UNGROUNDED_VARIANTS.includes(overPlan.reply), overPlan.reply);
   assert.equal(overPlan.notes[0].class, "session");
+  // "Ready" is a statement about Today's state: with nothing open, the correction says so
+  // (chatTodaySessionWords.test.js holds the state rules).
   const ready = groundReply({
     reply: "Your session is ready on Today.",
     applied: [],
     ctx: { message: START_ASK, today },
   });
-  assert.ok(SESSION_CLAIM_UNGROUNDED_VARIANTS.includes(ready.reply), ready.reply);
+  assert.ok(SESSION_STATE_NONE_VARIANTS.includes(ready.reply), ready.reply);
+  assert.equal(ready.notes[0].class, "session_state");
 
   const landed = [{ type: "today_session", result: { ok: true, daily_session_id: 1 } }];
   assert.equal(groundReply({ reply: claim, applied: landed, ctx: { message: BUILD_ASK, today } }).reply, claim);
@@ -411,7 +430,11 @@ test("a refused plan_update no longer grounds a plan claim", () => {
   const session = [{ type: "today_session", result: { ok: true, daily_session_id: 1 } }];
   const todayClaim = "I've swapped today's split for one upper day.";
   assert.equal(groundReply({ reply: todayClaim, applied: session, ctx: { today } }).reply, todayClaim);
-  const otherDay = groundReply({ reply: "I've moved your squat session to Thursday.", applied: session, ctx: { today } });
+  const otherDay = groundReply({
+    reply: "I've moved your squat session to Thursday.",
+    applied: session,
+    ctx: { today },
+  });
   assert.ok(PLAN_CLAIM_UNGROUNDED_VARIANTS.includes(otherDay.reply), otherDay.reply);
 });
 
@@ -452,7 +475,10 @@ test("a today-scoped plan_update beside a today_session is skipped and recorded,
   seedPlan();
   const plan = planSnapshot();
   const proposals = count("plan_proposals");
-  for (const actions of [[UPPER, SIDE_EDIT], [SIDE_EDIT, UPPER]]) {
+  for (const actions of [
+    [UPPER, SIDE_EDIT],
+    [SIDE_EDIT, UPPER],
+  ]) {
     const out = apply(actions, BUILD_ASK);
     assert.equal(entry(out, "today_session").result.ok, true);
     const skipped = entry(out, "plan_update").result;
