@@ -9,7 +9,8 @@
 //   A. A composite readiness score is an unvalidated input. Alone it never decides
 //      REST on any day: an easy day on an unstated day, a dosed training day (loads
 //      held, no reach, the regions yesterday loaded lighter) on a STATED lifting or
-//      key-run day.
+//      key-run day — the same dose in either band, rest-grade or the milder low band,
+//      and alone it never trims whole-session volume (daily-decision.ts).
 //   B. HRV decides a REST only as a ROLLING value (a ~week of valid nights against the
 //      athlete's own band, overnight-band.ts `rollingBandRead`, with at least one valid
 //      night in the last couple of days). One low night within a short window after a
@@ -20,18 +21,17 @@
 //      (heavy multi-joint work held back, no load raises), stated day or not; two or more
 //      consecutive short nights mean easy, and so does one SEVERELY short night.
 //   E. Resting HR above the athlete's band: after a hard day it is easy at most, on every
-//      day, and never a training day when HRV is past its own band the same night. On a
-//      second consecutive calendar morning, or — with an established personal band and a
-//      reading its own source vouches for — on one night with no hard day behind it or
-//      beside the athlete's own low word or a symptom report, it reads as possible
-//      illness: REST. An unvouched single reading is a caution: easy at most.
+//      day. With an established personal band and readings their own source vouches for,
+//      on a second consecutive calendar morning, or on one night with no hard day behind
+//      it or beside the athlete's own low word or a symptom report, it reads as possible
+//      illness: REST. Unvouched readings — one or several — are a caution: easy at most.
 //   F. REST is otherwise reserved for the floors the engine already owns (illness, pain,
 //      clinical, safety, the athlete's corroborated low word, a recovery week or a
 //      calendar hold) plus a SUSTAINED rolling HRV decline beside the log-confirmed
 //      performance shortfall the deload read already computes.
 //   G. A positive check-in lifts ONE step only a caution that rests on the composite
-//      readiness score or on a single low HRV night; intensity stays held. It never lifts
-//      acute load, resting HR, short sleep, a rolling HRV decline or any floor.
+//      readiness score; intensity stays held. It never lifts HRV, acute load, resting HR,
+//      short sleep, a rolling HRV decline, a symptom stated today or any floor.
 // The coaching defaults this module triggers (loads held, no load raises, the regions
 // yesterday loaded kept lighter) are conservative defaults, not trial findings.
 //
