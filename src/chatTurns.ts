@@ -3354,6 +3354,8 @@ export function applyChatActions(
     normalizeChatActions(Array.isArray(parsed) ? parsed : parsed?.actions),
     { referenceWeightLb: storedBodyweightLb() }
   );
+  // A today_session this turn will act on (the gate is open): the plan_update case reads it.
+  const todaySessionInTurn = gates.todaySession && actions.some((entry) => entry.type === "today_session");
   for (const note of misfiled) {
     log.info(`[chat] log_activity ${note.outcome === "dropped" ? "dropped" : `rerouted to ${note.outcome}`} (${note.reason})`);
   }
@@ -3951,6 +3953,40 @@ export function applyChatActions(
                   verified: false,
                   error,
                   verification: { ok: false, checks: [], days: [], runs: [], errors: [error] },
+                  ...dateResolution,
+                },
+              });
+              break;
+            }
+            // The athlete asked for TODAY's session (a `today_session` is in this turn): a
+            // plan_update beside it is not the ask, so it does not edit the plan day —
+            // whether the session landed or was refused (a locked day is reported, never
+            // answered with a template edit). Only a change that is clearly lasting, dated
+            // to another day, or aimed at a day the athlete named still applies.
+            if (
+              todaySessionInTurn &&
+              !PLAN_LASTING_WORDS_RE.test(String(message ?? "")) &&
+              !PLAN_NAMED_OTHER_DAY_RE.test(String(message ?? "")) &&
+              !(Array.isArray(a.changes) ? a.changes : []).some(
+                (change: unknown) =>
+                  (change as Record<string, unknown> | null)?.lasting === true || datedAwayFromToday(change)
+              ) &&
+              !dated.changes.some((change) => datedAwayFromToday(change))
+            ) {
+              const note = "today's session was built for you instead, so the plan itself was left as it was.";
+              applied.push({
+                type: a.type,
+                result: {
+                  ok: false,
+                  skipped: true,
+                  skip_reason: "today_session_in_turn",
+                  background: !explicitPlanEdit,
+                  explicit_user_request: explicitPlanEdit,
+                  persisted: false,
+                  committed: false,
+                  verified: false,
+                  error: note,
+                  verification: { ok: false, checks: [], days: [], runs: [], errors: [note] },
                   ...dateResolution,
                 },
               });
