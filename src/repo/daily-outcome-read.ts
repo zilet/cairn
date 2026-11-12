@@ -94,6 +94,10 @@ function learningFor(outcome: DailySessionOutcome): string {
   }
   const endurance = enduranceLearning(outcome);
   if (endurance) return endurance;
+  // Everything was logged before today's card was opened: the work stands on its own.
+  if (outcome.facts?.adoption && outcome.facts.adoption.worked_after === false) {
+    return "You logged this before today's card was opened, so it stands on its own rather than being read against the card.";
+  }
   if (isContextConfounded(outcome)) {
     return "Recovery or context shaped today’s work, so we won’t push progression from it.";
   }

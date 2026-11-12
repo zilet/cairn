@@ -18,21 +18,33 @@
 // And an OPEN request (no replace, no fingerprint, no expected_active_id) over a date
 // that has a session never conflicts: it answers with that session.
 //
+// And in every cell (2026-11-12 review):
+//   - the owner's logged sets and notes survive, and its skips too unless a replace
+//     started an UNSTARTED day over;
+//   - a replace over a started owner never comes back as a new (non-reused) session;
+//   - the athlete's unstarted chosen card that holds work (manual_plan, agent_suggest,
+//     itemful athlete_override — open-session.ts unstartedChosenCard) is never taken by
+//     an adaptive replace nor by an EMPTY override replace (the outbox retry): both answer
+//     `daily_session_active_changed` with it as the owner. An ITEMFUL override replace —
+//     the athlete writing a new session, chat's today_session included — replaces it.
+//
 // Axes (generated, not hand-listed):
 //   owner state  — none · a legacy session row (no composition) unstarted / started /
 //                  finished · a composition per source (adaptive_plan, adaptive
 //                  train-by-choice, manual_plan, agent_suggest with items, athlete_override
 //                  empty, athlete_override with items) × unstarted / started / finished /
-//                  finished-empty (every lift skipped, then finished — no logged work)
-//   request      — source (adaptive_plan / manual_plan / agent_suggest / athlete_override)
-//                  × replace × fingerprint (none / matching / stale) × train_anyway ×
-//                  expected_active_id (absent / matching / stale)
+//                  finished-empty (every lift skipped, then finished — no logged work).
+//                  "Started" carries a logged set, notes and a skip of another lift.
+//   request      — source (adaptive_plan / manual_plan / agent_suggest / athlete_override /
+//                  an EMPTY athlete_override) × replace × fingerprint (none / matching /
+//                  stale) × train_anyway × expected_active_id (absent / matching / stale)
 //
 // Pruned, and why:
 //   - expected_active_id "matching" on a state with no active composition (none and the
 //     three legacy states): there is no composition id to match.
-//   - "started" by notes / feedback / a linked watch activity rather than a logged set:
-//     session-started.ts is one test, so a logged set stands for all of them.
+//   - "started" by notes / feedback / pain answers / a linked watch activity alone rather
+//     than with a logged set: session-started.ts is one test, so a logged set stands for
+//     all of them (the chat Undo and discard edges test them one by one).
 //   - duplicate session rows on one date: a legacy anomaly with its own test
 //     (adaptiveDailySession.test.js "duplicate same-date sessions …").
 // Everything else is generated, including the cells whose outcome is fixed by an earlier
@@ -67,6 +79,11 @@ const CONFLICT_CODES = new Set([
 const OWNER_CODES = new Set(["daily_session_active_changed", "daily_session_changed", "daily_session_locked"]);
 const OWNER_KEYS = ["daily_session_id", "session_id", "source", "title", "set_count", "started"];
 const SOURCES = ["adaptive_plan", "manual_plan", "agent_suggest", "athlete_override"];
+// The request axis adds the EMPTY override — the "Open session" door, and the client's
+// outbox retry that forces replace:true on it — beside the four stored sources.
+const REQUEST_SOURCES = [...SOURCES, "athlete_override_empty"];
+// The athlete's chosen card that holds work (open-session.ts compositionIsItemfulChoice).
+const CHOSEN_ITEMFUL = new Set(["manual_plan", "agent_suggest", "override_items"]);
 
 export function chosenCard(name) {
   return {
@@ -138,6 +155,14 @@ const COMPOSITION_SOURCES = {
 const LIVES = ["unstarted", "started", "finished", "finished_empty"];
 
 const logOne = () => repo.logSetByName({ date: DATE, exercise: "Barbell Row", weight: 115, reps: 8 });
+// A started owner carries everything a lived-on session holds: a logged set, notes, and a
+// skip of another lift. Every cell must leave all three exactly as they were.
+const liveOn = () => {
+  const id = Number(logOne().session_id);
+  repo.updateSessionNotes(id, "Owner notes.");
+  repo.skipExercise("Bench Press", DATE);
+  return id;
+};
 
 export const OWNER_STATES = [
   { name: "none", composition: false, setup: () => null },
@@ -146,12 +171,12 @@ export const OWNER_STATES = [
     composition: false,
     setup: () => Number(db.prepare(`INSERT INTO sessions (date) VALUES (?)`).run(DATE).lastInsertRowid),
   },
-  { name: "legacy_started", composition: false, setup: () => Number(logOne().session_id) },
+  { name: "legacy_started", composition: false, setup: () => liveOn() },
   {
     name: "legacy_finished",
     composition: false,
     setup: () => {
-      const id = Number(logOne().session_id);
+      const id = liveOn();
       repo.finishSession(id);
       return id;
     },
@@ -165,7 +190,7 @@ export const OWNER_STATES = [
       setup: (jobs) => {
         const prepared = repo.prepareDailySession({ date: DATE, ...request(jobs) });
         const id = Number(prepared.session_id);
-        if (life === "started" || life === "finished") logOne();
+        if (life === "started" || life === "finished") liveOn();
         if (life === "finished_empty") repo.skipExercise("Barbell Row", DATE);
         if (life === "finished" || life === "finished_empty") repo.finishSession(id);
         return id;
@@ -180,11 +205,14 @@ function requestPayload(source, jobs) {
   if (source === "manual_plan") return { source, day_number: 2, provenance: PROVENANCE };
   if (source === "agent_suggest") return { source, agent_job_id: jobs.request.id };
   if (source === "athlete_override") return { source, session: chosenCard("Request card"), provenance: PROVENANCE };
+  if (source === "athlete_override_empty") {
+    return { source: "athlete_override", session: OPEN_SESSION, provenance: PROVENANCE };
+  }
   return { source, provenance: PROVENANCE };
 }
 
 export function* requestCells(state) {
-  for (const source of SOURCES) {
+  for (const source of REQUEST_SOURCES) {
     for (const replace of [false, true]) {
       for (const fingerprint of ["none", "matching", "stale"]) {
         for (const trainAnyway of [false, true]) {
@@ -294,6 +322,28 @@ export async function runOwnerState(state, { onCell, violations } = {}) {
   const ownerStarted = Number(ownerSession?.set_count ?? 0) > 0;
   const ownerFinished = ownerSession?.finished_at != null;
   const countBefore = sessionCount();
+  // The owner's own record — logged sets, notes, skips — as it stood before every cell.
+  const ownerRecord = () =>
+    ownerSessionId == null
+      ? null
+      : {
+          sets: db
+            .prepare(`SELECT id, exercise_id, weight, reps FROM logged_sets WHERE session_id = ? ORDER BY id`)
+            .all(ownerSessionId)
+            .map((row) => ({ ...row })),
+          notes: db.prepare(`SELECT notes FROM sessions WHERE id = ?`).get(ownerSessionId)?.notes ?? null,
+          skips: db
+            .prepare(`SELECT exercise FROM session_skips WHERE session_id = ? ORDER BY exercise`)
+            .all(ownerSessionId)
+            .map((row) => row.exercise),
+        };
+  const recordBefore = ownerRecord();
+  // The athlete's own chosen card holding work, nobody has lived on it (item 7 of the
+  // 2026-11-12 review): a replace that authors nothing of theirs never takes it.
+  const chosenUnstarted =
+    state.composition &&
+    CHOSEN_ITEMFUL.has(state.source) &&
+    (state.life === "unstarted" || state.life === "finished_empty");
   const previews = new Map();
   const previewFor = (trainAnyway) => {
     if (!previews.has(trainAnyway)) {
@@ -330,6 +380,38 @@ export async function runOwnerState(state, { onCell, violations } = {}) {
         res.status === 200 ? (res.body.reused ? "ok_reused" : "ok") : `${res.status}:${res.body?.code ?? "?"}`;
       tally[key] = (tally[key] ?? 0) + 1;
       onCell?.(state, cell, res);
+
+      // The owner's record survives every cell: its logged sets and notes always, its skips
+      // unless a replace started an UNSTARTED day over (that clears a walked-away card's
+      // bookkeeping by design — adaptive-session.ts).
+      if (recordBefore) {
+        const after = ownerRecord();
+        assert.deepEqual(after.sets, recordBefore.sets, `${label}: the owner's logged sets survive`);
+        assert.equal(after.notes, recordBefore.notes, `${label}: the owner's notes survive`);
+        const startedOver = res.status === 200 && res.body.reused === false && !ownerStarted;
+        if (!startedOver) assert.deepEqual(after.skips, recordBefore.skips, `${label}: the owner's skips survive`);
+      }
+      // A replace over a started owner never comes back as a NEW session.
+      if (cell.replace && ownerStarted && res.status === 200) {
+        assert.equal(res.body.reused, true, `${label}: a replace over logged work never writes a new card`);
+        assert.equal(res.body.daily_session.id, before ? Number(before.id) : res.body.daily_session.id, label);
+      }
+      // One predicate for the athlete's unstarted chosen card: an adaptive replace and an
+      // EMPTY override replace answer with it as the owner; an itemful override replaces it.
+      if (chosenUnstarted && cell.replace && cell.expected === "absent" && !malformed && cell.fingerprint !== "stale") {
+        if (cell.source === "adaptive_plan" || cell.source === "athlete_override_empty") {
+          assert.equal(
+            res.status,
+            409,
+            `${label}: never silently replaces the chosen card — ${JSON.stringify(res.body)}`
+          );
+          assert.equal(res.body.code, "daily_session_active_changed", label);
+          assert.equal(res.body.owner?.daily_session_id, Number(before.id), label);
+        } else if (cell.source === "athlete_override") {
+          assert.equal(res.status, 200, `${label}: the athlete's new session replaces — ${JSON.stringify(res.body)}`);
+          assert.equal(res.body.reused, false, label);
+        }
+      }
 
       if (res.status === 200) {
         assert.ok(!malformed, `${label}: a malformed request must not prepare`);

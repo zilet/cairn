@@ -163,7 +163,7 @@ import {
   enduranceOverlapsMovement,
   OUTCOME_FACTS_SCHEMA_VERSION,
 } from "./daily-reconciliation.js";
-import { harderLoad, loadAtOrAbove, readStoredDose } from "./outcome-comparability.js";
+import { doseAdoptedAfterLog, harderLoad, loadAtOrAbove, readStoredDose } from "./outcome-comparability.js";
 
 export {
   loadPhrase,
@@ -1070,6 +1070,13 @@ function linkedDoseEligibility(
           String(entry?.exercise ?? "").toLowerCase() === String(movement).toLowerCase()
       )
     : null;
+  // Work logged BEFORE the day's card existed (a card adopted onto it later) was never
+  // done against that card: the card is not its prescription, so it is read the way an
+  // unlinked session is — the log speaks for itself — never as a shortfall of the card.
+  const adoptedMovements: unknown[] = Array.isArray(facts?.adoption?.movement_keys) ? facts.adoption.movement_keys : [];
+  if ((dose && doseAdoptedAfterLog(dose)) || (!dose && adoptedMovements.includes(identity))) {
+    return { linked_outcome: false, eligible: true, reason: "legacy_unlinked" };
+  }
   const prescribedSets = Number(dose?.prescribed?.sets);
   const achievedSets = Number(dose?.achieved?.sets);
   // The stored numbers are re-read under the CURRENT verdict rule (a heavier set at

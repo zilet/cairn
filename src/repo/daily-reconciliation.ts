@@ -76,6 +76,19 @@ export interface DailySessionOutcomeFacts {
   substituted: string[];
   skipped: string[];
   reordered: boolean;
+  /**
+   * Present when the card was ADOPTED onto a session the athlete had already lived on
+   * (adaptive-session.ts adoptionProvenance): the work logged before `adopted_at` was
+   * never done against this card, so it is in no completed / substituted / skipped list
+   * and every dose it touched is `adopted_after_log` (not comparable). `movement_keys` /
+   * `exercises` name that earlier work, for readers keyed by movement.
+   */
+  adoption?: {
+    adopted_at: string | null;
+    worked_after: boolean;
+    movement_keys: string[];
+    exercises: string[];
+  } | null;
   achieved: Array<{
     exercise: string;
     sets: number;
@@ -221,10 +234,28 @@ function loggedSetsFor(sessionId: number): any[] {
     .all(sessionId) as any[];
 }
 
-function skipsFor(sessionId: number): string[] {
-  return (db.prepare(`SELECT exercise FROM session_skips WHERE session_id = ?`).all(sessionId) as any[]).map((r) =>
-    String(r.exercise)
-  );
+function skipsFor(sessionId: number, afterSkipId = 0): string[] {
+  const rows = db
+    .prepare(`SELECT exercise FROM session_skips WHERE session_id = ? AND id > ?`)
+    .all(sessionId, afterSkipId) as any[];
+  return rows.map((r) => String(r.exercise));
+}
+
+// The adoption cut a card carries when it was bound to a session already lived on
+// (adaptive-session.ts adoptionProvenance): sets and skips up to these ids were logged
+// before the card existed. Null for every card that was served before its work.
+function adoptionCut(
+  composition: any
+): { adopted_at: string | null; after_set_id: number; after_skip_id: number } | null {
+  const provenance = composition?.provenance;
+  if (!provenance || typeof provenance !== "object" || provenance.adopted_after_log !== true) return null;
+  const setId = Number(provenance.adopted_after_set_id);
+  const skipId = Number(provenance.adopted_after_skip_id);
+  return {
+    adopted_at: typeof provenance.adopted_at === "string" ? provenance.adopted_at : null,
+    after_set_id: Number.isFinite(setId) && setId > 0 ? setId : 0,
+    after_skip_id: Number.isFinite(skipId) && skipId > 0 ? skipId : 0,
+  };
 }
 
 function confounders(session: any, date: string, otherActivity: boolean): string[] {
@@ -749,7 +780,19 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
   const suggestedSet = new Set(suggestedExercises.map(identityOf));
 
   const sets = loggedSetsFor(id);
-  const skips = skipsFor(id);
+  // A card adopted onto work already logged was never served for that work: only the
+  // sets and skips after the adoption are read against it (adoptionCut).
+  const adoption = adoptionCut(composition);
+  const skips = skipsFor(id, adoption?.after_skip_id ?? 0);
+  const setKey = (s: any): string =>
+    s.exercise_id != null ? `exercise:${Number(s.exercise_id)}` : identityOf(s.exercise);
+  const workedAfter = adoption ? sets.filter((s) => Number(s.id) > adoption.after_set_id) : sets;
+  const beforeAdoptionKeys = new Set(
+    adoption ? sets.filter((s) => Number(s.id) <= adoption.after_set_id).map(setKey) : []
+  );
+  // Nothing done from the card at all: no part of it reads as skipped, done or swapped.
+  const cardUntouched = adoption != null && workedAfter.length === 0;
+  const beforeAdoption = (key: string): boolean => cardUntouched || beforeAdoptionKeys.has(key);
 
   // Aggregate achieved work per exercise (top weight / reps / seconds).
   const achievedMap = new Map<
@@ -769,7 +812,7 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
   >();
   const loggedOrder: string[] = [];
   for (const s of sets) {
-    const key = s.exercise_id != null ? `exercise:${Number(s.exercise_id)}` : identityOf(s.exercise);
+    const key = setKey(s);
     if (!achievedMap.has(key)) {
       achievedMap.set(key, {
         exercise: String(s.exercise),
@@ -803,17 +846,30 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
   }
 
   const loggedExercises = [...achievedMap.values()].map((a) => a.exercise);
-  const completed = suggestedExercises.filter((ex) => achievedMap.has(identityOf(ex)));
+  // Work logged before an adopted card is neither done-as-suggested, a substitution, nor
+  // the reason a card item reads as skipped: it was never done against this card.
+  const completed = suggestedExercises.filter(
+    (ex) => achievedMap.has(identityOf(ex)) && !beforeAdoption(identityOf(ex))
+  );
   const substituted = [...achievedMap.entries()]
-    .filter(([key]) => !suggestedSet.has(key))
+    .filter(([key]) => !suggestedSet.has(key) && !beforeAdoption(key))
     .map(([, value]) => value.exercise);
-  const skippedSuggested = suggestedExercises.filter((ex) => !achievedMap.has(identityOf(ex)));
-  const skipped = Array.from(new Set([...skippedSuggested, ...skips.filter((s) => suggestedSet.has(identityOf(s)))]));
+  const skippedSuggested = cardUntouched
+    ? []
+    : suggestedExercises.filter((ex) => !achievedMap.has(identityOf(ex)));
+  const skipped = Array.from(
+    new Set([
+      ...skippedSuggested,
+      ...skips.filter((s) => suggestedSet.has(identityOf(s)) && !beforeAdoption(identityOf(s))),
+    ])
+  );
 
   // Reordered: the order suggested-and-logged exercises were actually trained in
-  // differs from the composition's prescribed order.
-  const suggestedLoggedOrder = loggedOrder.filter((k) => suggestedSet.has(k));
-  const prescribedOrder = suggestedExercises.map(identityOf).filter((k) => achievedMap.has(k));
+  // differs from the composition's prescribed order (the card's own work only).
+  const suggestedLoggedOrder = loggedOrder.filter((k) => suggestedSet.has(k) && !beforeAdoption(k));
+  const prescribedOrder = suggestedExercises
+    .map(identityOf)
+    .filter((k) => achievedMap.has(k) && !beforeAdoption(k));
   const reordered = suggestedLoggedOrder.join("|") !== prescribedOrder.join("|");
 
   // Full prescribed/achieved dose. Stable identity is independent of mutable
@@ -940,8 +996,11 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
     started &&
     endurance_evidence.some((entry) => entry.completion_verdict === "unmatched");
   const reason_codes: string[] = [];
+  if (adoption) reason_codes.push("adopted_after_log");
   if (!started) {
     reason_codes.push("not_started");
+  } else if (cardUntouched) {
+    // Everything was logged before the card existed: nothing to read against it.
   } else if (substituted.length && !completed.length) {
     reason_codes.push("substituted_movements");
   } else {
@@ -1027,8 +1086,16 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
     reason_codes.includes("partial_session") ||
     enduranceDoseShortfall ||
     enduranceIncomplete ||
-    base_dose_evidence.some((dose) => dose.prescribed.sets != null && dose.achieved.sets < dose.prescribed.sets);
+    base_dose_evidence.some(
+      (dose) =>
+        !beforeAdoption(identityOf(dose.exercise)) &&
+        dose.prescribed.sets != null &&
+        dose.achieved.sets < dose.prescribed.sets
+    );
   const nonComparable = [
+    // Telemetry: the day carries work done before its card. It never blocks a lift on its
+    // own (NEVER_BLOCKS_A_LIFT) — only the doses that work touched carry it, below.
+    adoption ? "adopted_after_log" : null,
     recovery ? "recovery_dose" : null,
     athleteOverride ? "athlete_override" : null,
     travel ? "travel" : null,
@@ -1061,18 +1128,24 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
   // verdict above is kept as-is for telemetry and for every existing reader; the
   // progression engine consults these.
   const dose_evidence: MovementDoseEvidence[] = base_dose_evidence.map((dose) => {
+    // A dose the earlier work touched (or any dose of a card nothing was done from) is
+    // not comparable to the card: no shortfall or overrun is read from it.
+    const adoptedBefore = beforeAdoption(identityOf(dose.exercise));
+    const verdict = doseComparability({
+      session_reasons: nonComparable,
+      own_dose_shortfall: adoptedBefore ? false : ownDoseShortfall(dose, skipped),
+      endurance_overlap: enduranceOverlapsMovement(
+        dose.exercise,
+        achievedMap.get(identityOf(dose.exercise))?.muscle_group ?? null,
+        enduranceGroups
+      ),
+      performed_at_full_load: dose.performed_at_full_load === true,
+    });
     return {
       ...dose,
-      ...doseComparability({
-        session_reasons: nonComparable,
-        own_dose_shortfall: ownDoseShortfall(dose, skipped),
-        endurance_overlap: enduranceOverlapsMovement(
-          dose.exercise,
-          achievedMap.get(identityOf(dose.exercise))?.muscle_group ?? null,
-          enduranceGroups
-        ),
-        performed_at_full_load: dose.performed_at_full_load === true,
-      }),
+      ...(adoptedBefore
+        ? { comparable: false, non_comparable_reasons: ["adopted_after_log", ...verdict.non_comparable_reasons] }
+        : verdict),
     };
   });
 
@@ -1085,6 +1158,23 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
     substituted,
     skipped,
     reordered,
+    // Only on an adopted card, so every other outcome row is byte-identical to before.
+    ...(adoption
+      ? {
+          adoption: {
+            adopted_at: adoption.adopted_at,
+            worked_after: !cardUntouched,
+            movement_keys: [...(cardUntouched ? new Set(sets.map(setKey)) : beforeAdoptionKeys)],
+            exercises: [
+              ...new Set(
+                sets
+                  .filter((s) => cardUntouched || Number(s.id) <= adoption.after_set_id)
+                  .map((s) => String(s.exercise))
+              ),
+            ],
+          },
+        }
+      : {}),
     achieved: [...achievedMap.values()].map((value) => ({
       exercise: value.exercise,
       sets: value.sets,

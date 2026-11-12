@@ -17,7 +17,7 @@ import { recoverySessionDose } from "./training-read.js";
 import { withoutShadowActivities } from "./activities.js";
 import { dailyManualWeighIns } from "./bodyweight.js";
 import { exerciseIdentityKey } from "./exercise-canon.js";
-import { loadAtOrAbove } from "./outcome-comparability.js";
+import { doseAdoptedAfterLog, loadAtOrAbove } from "./outcome-comparability.js";
 // Called at read time only, so the program-state -> coach -> this-module cycle
 // never touches an uninitialized binding; the recency window has ONE owner.
 import { liftTrainedRecently } from "./program-state.js";
@@ -619,7 +619,10 @@ function storedDosesForSession(sessionId: number): StoredDose[] {
       .get(sessionId) as { facts_json?: string } | undefined;
     if (!row?.facts_json) return [];
     const facts = JSON.parse(String(row.facts_json));
-    return Array.isArray(facts?.dose_evidence) ? (facts.dose_evidence as StoredDose[]) : [];
+    // Work logged before its card existed had no prescription: the card never asked it for anything.
+    return Array.isArray(facts?.dose_evidence)
+      ? (facts.dose_evidence as StoredDose[]).filter((dose) => !doseAdoptedAfterLog(dose))
+      : [];
   } catch {
     return []; // an unreadable outcome is no prescription evidence
   }

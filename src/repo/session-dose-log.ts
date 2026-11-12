@@ -21,7 +21,13 @@ import { db } from "../db.js";
 // The signed load comparison and the full-load reference pick have ONE home.
 // outcome-comparability.ts imports nothing, so this costs no cycle — and a local
 // copy is how the two readings drift apart.
-import { harderLoad, loadAtOrAbove, readStoredDose, storedDoseMetLoad } from "./outcome-comparability.js";
+import {
+  doseAdoptedAfterLog,
+  harderLoad,
+  loadAtOrAbove,
+  readStoredDose,
+  storedDoseMetLoad,
+} from "./outcome-comparability.js";
 
 // The per-dose full-load reference reconciliation persists on schema-4 rows
 // (`FullLoadReference` in outcome-comparability.ts). Read structurally off
@@ -96,8 +102,10 @@ function outcomeFactsForSession(sessionId: number): OutcomeFacts | null {
   }
 }
 
+// A dose whose work was logged before its card existed (a card adopted later) says
+// nothing about how the athlete met that card — neither a short lift nor an exceeded one.
 function doseRows(facts: OutcomeFacts | null): DoseRow[] {
-  return Array.isArray(facts?.dose_evidence) ? facts.dose_evidence : [];
+  return Array.isArray(facts?.dose_evidence) ? facts.dose_evidence.filter((dose) => !doseAdoptedAfterLog(dose)) : [];
 }
 
 function skippedExercises(facts: OutcomeFacts | null): string[] {
@@ -300,9 +308,7 @@ export function completedSessionOnDate(
   const day = String(date ?? "").slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
   const row = db
-    .prepare(
-      `SELECT id, performance, finished_at FROM sessions WHERE date = ? ORDER BY id DESC LIMIT 1`
-    )
+    .prepare(`SELECT id, performance, finished_at FROM sessions WHERE date = ? ORDER BY id DESC LIMIT 1`)
     .get(day) as { id?: number; performance?: number | null; finished_at?: string | null } | undefined;
   const id = Number(row?.id);
   if (!Number.isInteger(id) || id <= 0) return null;
@@ -312,9 +318,9 @@ export function completedSessionOnDate(
 }
 
 function sessionHasLoggedWork(sessionId: number): boolean {
-  const row = db
-    .prepare(`SELECT COUNT(*) AS n FROM logged_sets WHERE session_id = ?`)
-    .get(sessionId) as { n?: number } | undefined;
+  const row = db.prepare(`SELECT COUNT(*) AS n FROM logged_sets WHERE session_id = ?`).get(sessionId) as
+    | { n?: number }
+    | undefined;
   return Number(row?.n) > 0;
 }
 
@@ -358,9 +364,7 @@ export function countComparableDoseShortfallSessions(date: string, days = 14): n
   const end = String(date).slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(end)) return 0;
   const span = Math.max(1, days);
-  const start = new Date(new Date(end + "T00:00:00Z").getTime() - (span - 1) * 864e5)
-    .toISOString()
-    .slice(0, 10);
+  const start = new Date(new Date(end + "T00:00:00Z").getTime() - (span - 1) * 864e5).toISOString().slice(0, 10);
   let rows: { session_id: number }[] = [];
   try {
     rows = db

@@ -945,11 +945,17 @@ test("replacement stays on the active composition session even with duplicate em
   seedPlan();
   const first = prepare({ date: DATE, source: "manual_plan", day_number: 1 });
   db.prepare(`INSERT INTO sessions (date) VALUES (?)`).run(DATE);
+  // An itemful session the athlete writes replaces their own plan pick (an EMPTY one
+  // would not: it authors nothing — test/_dailySessionMatrix.mjs).
   const replacement = prepare({
     date: DATE,
     source: "athlete_override",
     replace: true,
-    session: { name: "Open", why: "User chose something else.", items: [] },
+    session: {
+      name: "Open",
+      why: "User chose something else.",
+      items: [{ exercise: "Chest-Supported Row", sets: 3, rep_low: 8, rep_high: 12 }],
+    },
   });
   assert.equal(replacement.session.id, first.session.id);
   assert.equal(replacement.daily_session.session_id, first.session.id);

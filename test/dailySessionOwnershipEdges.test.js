@@ -135,7 +135,10 @@ test("chat start_session opens the owner of every state and never fails a day th
       const label = `chat · ${state.name}`;
       assert.equal(result.ok, true, `${label}: ${JSON.stringify(result)}`);
       assert.ok(result.open && result.open.kind === "session" && result.open.date === DATE, label);
-      assert.match(result.open.label, /^(Start|Continue) /, label);
+      // A finished day is shown as done and opened to add to ("Log more"), never "Start".
+      const finished = ownerId != null && sessionRow(ownerId)?.finished_at != null;
+      assert.equal(result.finished, finished, label);
+      assert.match(result.open.label, finished ? /^Log more on / : /^(Start|Continue) /, label);
       assert.ok(Number.isInteger(result.daily_session_id), label);
       assert.equal(repo.getActiveDailySession(DATE).id, result.daily_session_id, `${label}: the day's composition`);
       if (ownerId) assert.equal(result.session_id, ownerId, `${label}: the owner's session`);
@@ -146,7 +149,7 @@ test("chat start_session opens the owner of every state and never fails a day th
       if (ownerId) {
         const sets = Number(db.prepare(`SELECT COUNT(*) AS n FROM logged_sets WHERE session_id = ?`).get(ownerId).n);
         assert.equal(result.started, sets > 0, label);
-        assert.match(result.open.label, sets > 0 ? /^Continue / : /^Start /, label);
+        if (!finished) assert.match(result.open.label, sets > 0 ? /^Continue / : /^Start /, label);
       }
       assert.equal(Number(db.prepare(`SELECT COUNT(*) AS n FROM sessions WHERE date = ?`).get(DATE).n), 1, label);
     });

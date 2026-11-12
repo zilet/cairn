@@ -22,7 +22,7 @@ import type { DailySessionSource } from "./adaptive-session.js";
 import { planDayDisplayName } from "./plan-day-name.js";
 import { copyFlat, requestMemo } from "./request-memo.js";
 import { loggedSessionTitle, planDayTitle, sessionDayCandidates } from "./session-day.js";
-import { sessionStarted } from "./session-started.js";
+import { SESSION_STARTED_COUNTS, sessionStarted } from "./session-started.js";
 import { localDateISO } from "./shared.js";
 
 export type OpenSessionAction = "start" | "continue";
@@ -91,10 +91,29 @@ export function compositionChosen(row: any): boolean {
   );
 }
 
-/** An agent_suggest / athlete_override composition that holds work: the athlete's chosen card. */
+/**
+ * The athlete's chosen card that holds work: a session they wrote (`athlete_override`),
+ * a suggestion they accepted (`agent_suggest`) or a plan day they picked (`manual_plan`),
+ * with at least one item. An adaptive card, even a train-anyway one, is the plan's own
+ * day — the same adaptive request re-takes it — so it is never this.
+ */
 export function compositionIsItemfulChoice(row: any): boolean {
   const source = String(row?.source ?? "");
-  return (source === "athlete_override" || source === "agent_suggest") && itemCount(row) > 0;
+  return (
+    (source === "athlete_override" || source === "agent_suggest" || source === "manual_plan") &&
+    compositionChosen(row) &&
+    itemCount(row) > 0
+  );
+}
+
+/**
+ * THE one predicate behind "never silently replace a chosen card": an unstarted session
+ * the athlete chose that holds work (compositionIsItemfulChoice, and nobody has lived on
+ * it — session-started.ts). `session` is the composition's session row, read with
+ * SESSION_STARTED_COUNTS. A lived-on card is the ordinary lock's (daily_session_locked).
+ */
+export function unstartedChosenCard(row: any, session: any | null): boolean {
+  return !!row && compositionIsItemfulChoice(row) && !(session && sessionStarted(session));
 }
 
 // The name a person reads — the line's own naming rule: a typed title prints as typed,
@@ -130,7 +149,7 @@ function activeComposition(date: string): any {
 function sessionRow(sessionId: number): any {
   return db
     .prepare(
-      `SELECT s.*, (SELECT COUNT(*) FROM logged_sets l WHERE l.session_id = s.id) AS set_count
+      `SELECT s.*, ${SESSION_STARTED_COUNTS}
          FROM sessions s WHERE s.id = ?`
     )
     .get(sessionId);
@@ -201,6 +220,28 @@ function openSessionRead(date: string): OpenSession | null {
     action,
     label: labelFor(action, owner.title),
   };
+}
+
+/**
+ * The date's FINISHED session — the active composition whose session row carries a finish
+ * stamp — named as a person reads it, or null. Not open (openSessionOn), but not absent:
+ * "Log more" reopens it, so nothing may call it ready, nor say the day has no session.
+ */
+export function finishedSessionOn(
+  date?: string
+): { daily_session_id: number; session_id: number; title: string } | null {
+  const d = String(date || localDateISO()).slice(0, 10);
+  try {
+    const row = activeComposition(d);
+    if (!row) return null;
+    const session = sessionRow(Number(row.session_id));
+    if (!session || String(session.date ?? "") !== d || !session.finished_at) return null;
+    const owner = dailySessionOwnerOf(row, session);
+    if (!owner || owner.daily_session_id == null) return null;
+    return { daily_session_id: owner.daily_session_id, session_id: owner.session_id, title: owner.title };
+  } catch {
+    return null;
+  }
 }
 
 /**

@@ -8,11 +8,24 @@
 // produce a brake on their own. Safety floors (illness, a relevant symptom)
 // keep full authority.
 
+// `adopted_after_log` is the day's mark that some work was logged before its card
+// existed (daily-reconciliation.ts): it is a PER-DOSE reason, written on exactly the
+// doses that earlier work touched, so as a day-wide reason it blocks no lift.
 export const NEVER_BLOCKS_A_LIFT = new Set([
   "athlete_override",
   "endurance_quality_not_observed",
   "endurance_quality_unverified",
+  "adopted_after_log",
 ]);
+
+/** The per-dose reason a card adopted after the work carries on the doses that work touched. */
+export const ADOPTED_AFTER_LOG = "adopted_after_log";
+
+/** Was this stored dose's work logged before its card existed (never graded against it)? */
+export function doseAdoptedAfterLog(dose: unknown): boolean {
+  const reasons = (dose as { non_comparable_reasons?: unknown } | null | undefined)?.non_comparable_reasons;
+  return Array.isArray(reasons) && reasons.some((reason) => String(reason) === ADOPTED_AFTER_LOG);
+}
 
 // Inside a real recovery/travel window, full-load work still counts. Illness
 // and a movement-relevant symptom are safety and do not drop.
@@ -183,12 +196,21 @@ export function repairOutcomeComparability(facts: unknown, ctx: RepairOutcomeCom
     const hadStored = typeof dose.comparable === "boolean" || Array.isArray(dose.non_comparable_reasons);
     if (!hadStored) return dose;
     const storedReasons = Array.isArray(dose.non_comparable_reasons) ? dose.non_comparable_reasons.map(String) : [];
+    const adopted = doseAdoptedAfterLog(dose);
     const verdict = doseComparability({
       session_reasons: repairedSession,
-      own_dose_shortfall: ownDoseShortfall(dose, skipped),
+      own_dose_shortfall: adopted ? false : ownDoseShortfall(dose, skipped),
       endurance_overlap: storedReasons.includes("loaded_endurance"),
       performed_at_full_load: dose.performed_at_full_load === true,
     });
+    // Work logged before its card stays out of the comparable set through any repair.
+    if (adopted) {
+      return {
+        ...dose,
+        comparable: false,
+        non_comparable_reasons: [ADOPTED_AFTER_LOG, ...verdict.non_comparable_reasons],
+      };
+    }
     return { ...dose, ...verdict };
   });
   return next;
