@@ -17,7 +17,12 @@
 // rows are read here with their own tiny projection rather than adding a helper there.
 import { db } from "../db.js";
 import type { BrainDecision } from "../brain/decision-contract.js";
-import type { ChangeReceipt, ChangeReceiptStatus, ChangeReceiptUndo } from "../contracts/change-receipt.js";
+import type {
+  ChangeReceipt,
+  ChangeReceiptOpen,
+  ChangeReceiptStatus,
+  ChangeReceiptUndo,
+} from "../contracts/change-receipt.js";
 import { getBrainDecision, getBrainRollback } from "./brain-decisions.js";
 import {
   adaptationDateWords,
@@ -28,6 +33,7 @@ import {
 import { changeLandsWords, changeStatusLine } from "./change-status-words.js";
 import { clipText, localDateISO, localDayOfStamp } from "./shared.js";
 import { isoDate } from "../lib/dates.js";
+import { sessionOpenState, sessionOpenTarget, todaySessionUndoRefusal } from "../domain/training/chat-today-session.js";
 
 const WHAT_MAX = 160;
 
@@ -256,22 +262,12 @@ export function receiptFromPlanAdaptation(
 // ---------- a session a chat turn built or opened ----------
 // Not a coaching change the team made: the athlete asked for today's session and chat
 // built it (today_session) or opened it (start_session). The receipt's job is the way
-// in — `open`, a Start/Continue button — plus the Undo of a session that replaced
-// another, while that Undo would still be taken (revertChatTodaySession: the composition
-// still owns the day and nothing is logged on it).
-
-/** The button's words: "Start <title>" before any set is logged, "Continue <title>" after. */
-export function sessionOpenLabel(title: unknown, started: boolean): string {
-  const text = typeof title === "string" ? title.replace(/\s+/g, " ").trim() : "";
-  return `${started ? "Continue" : "Start"} ${text || "today's session"}`;
-}
-
-function sessionHasLoggedSets(sessionId: unknown): boolean {
-  const id = Number(sessionId);
-  if (!Number.isInteger(id) || id <= 0) return false;
-  const row = db.prepare(`SELECT COUNT(*) AS n FROM logged_sets WHERE session_id = ?`).get(id) as any;
-  return Number(row?.n ?? 0) > 0;
-}
+// in — `open`, the button — plus the Undo of a session that replaced another, offered
+// only while that Undo would be taken: the SAME test revertChatTodaySession acts on
+// (todaySessionUndoRefusal — the composition still owns the day, nobody has lived on it
+// by the one "started" test of session-started.ts, and it is not finished). The button
+// reads the same started/finished truth: "Start <title>", "Continue <title>", and
+// "Log more on <title>" once the day is finished (the chat result's own sessionOpenTarget).
 
 /** The receipt for one daily-session composition, as it stands now; null when it is gone. */
 export function receiptFromDailySession(
@@ -285,15 +281,14 @@ export function receiptFromDailySession(
   const date = dayKeyOf(row.date);
   const title = clipText(String(row.title ?? "").replace(/\s+/g, " ").trim(), WHAT_MAX - 20) || "today's session";
   const active = row.status === "active";
-  const started = active && sessionHasLoggedSets(row.session_id);
   const decisionId = Number(opts.decisionId);
   const decision = Number.isSafeInteger(decisionId) && decisionId > 0 ? getBrainDecision(decisionId) : null;
+  const rollback =
+    active && decision?.status === "applied" && decision.reversible === true ? getBrainRollback(decisionId) : null;
   const undoable =
-    active &&
-    !started &&
-    decision?.status === "applied" &&
-    decision.reversible === true &&
-    getBrainRollback(decisionId)?.kind === "daily_session";
+    rollback?.kind === "daily_session" &&
+    Number(rollback.payload?.applied_composition_id) === Number(row.id) &&
+    todaySessionUndoRefusal(rollback.payload) == null;
   return {
     key: `session:${row.id}`,
     what: clipText(opts.what?.trim() || `Today's session: ${title}`, WHAT_MAX),
@@ -303,8 +298,14 @@ export function receiptFromDailySession(
     undo: undoable ? { kind: "brain_decision", id: decisionId } : null,
     status: active ? "applied" : "undone",
     status_words: active ? null : decision?.status === "reverted" ? "Put back" : "Replaced",
-    open: active && date ? { kind: "session", date, label: sessionOpenLabel(row.title, started) } : null,
+    open: active && date ? sessionOpenButton(date, row.title, row.session_id) : null,
   };
+}
+
+// The button over the composition's session row as it stands now.
+function sessionOpenButton(date: string, title: unknown, sessionId: unknown): ChangeReceiptOpen {
+  const { started, finished } = sessionOpenState(sessionId);
+  return sessionOpenTarget(date, title, started, finished);
 }
 
 // ---------- a stored receipt, read again ----------

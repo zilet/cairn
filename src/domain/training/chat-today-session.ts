@@ -25,7 +25,12 @@ import { recordDecision, saveBrainRollback } from "../../repo/brain-decisions.js
 import type { SupersetUnpaired } from "../../repo/composition-pairing.js";
 import { compositionIsItemfulChoice, dailySessionOwner } from "../../repo/open-session.js";
 import { selectedPlanDayForDate } from "../../repo/plan-selection.js";
-import { meaningfulSessionReasons, SESSION_STARTED_COUNTS, startedReasonsPhrase } from "../../repo/session-started.js";
+import {
+  meaningfulSessionReasons,
+  SESSION_STARTED_COUNTS,
+  sessionStarted,
+  startedReasonsPhrase,
+} from "../../repo/session-started.js";
 import { localDateISO } from "../../repo/shared.js";
 import { UNDO_UNAVAILABLE, UndoRefusal } from "../brain/undo-refusal.js";
 import { prepareDailySessionUseCase } from "./adaptive-session-use-case.js";
@@ -405,34 +410,32 @@ export function applyChatStartSession(ctx: ChatSessionContext = {}): ChatSession
   }
 }
 
-/**
- * Undo a chat today_session (called inside the autonomy service's revert savepoint).
- * Acts only while the composition it wrote still owns the day, nobody has lived on it
- * (session-started.ts: sets, notes, feedback, a duration, pain answers, a watch activity)
- * and it is not finished: the earlier composition comes back as it was, with the skips
- * and finish stamp the replace cleared (or, when none stood, the day goes back to the
- * plan's own session). A newer, started or finished session stands, said in words.
- */
-export function revertChatTodaySession(payload: unknown): void {
+type UndoCheck =
+  | { refusal: string }
+  | { p: DailySessionRollback; appliedId: number; appliedSession: any | null; previous: any | null };
+
+// Whether a chat today_session's Undo would be taken right now, read-only: the one test
+// revertChatTodaySession acts on and the receipt's Undo button mirrors.
+function todaySessionUndoCheck(payload: unknown): UndoCheck {
   const p = payload as DailySessionRollback | null;
   const appliedId = Number(p?.applied_composition_id);
-  if (!p || p.version !== 1 || typeof p.date !== "string" || !(appliedId > 0)) throw new UndoRefusal(UNDO_UNAVAILABLE);
+  if (!p || p.version !== 1 || typeof p.date !== "string" || !(appliedId > 0)) return { refusal: UNDO_UNAVAILABLE };
   const active = db
     .prepare(`SELECT id, session_id FROM daily_session_compositions WHERE date = ? AND status = 'active'`)
     .get(p.date) as any;
   if (!active || Number(active.id) !== appliedId) {
-    throw new UndoRefusal("Today's session has changed since, so it stays as it is.");
+    return { refusal: "Today's session has changed since, so it stays as it is." };
   }
   // The ONE "started" test (session-started.ts): sets, a duration, notes, feedback, pain
   // answers or a watch activity on the day are a record of work on THIS session, and
   // putting another card back under it would rewrite what that record is about.
   const reasons = dayStartedReasons(p.date);
   if (reasons.length) {
-    throw new UndoRefusal(`Today's session already has ${startedReasonsPhrase(reasons)}, so it stays as you have it.`);
+    return { refusal: `Today's session already has ${startedReasonsPhrase(reasons)}, so it stays as you have it.` };
   }
   const appliedSession = sessionRowById(active.session_id);
   if (appliedSession?.finished_at != null) {
-    throw new UndoRefusal("You've finished today's session, so it stays as you have it.");
+    return { refusal: "You've finished today's session, so it stays as you have it." };
   }
   const previousId = Number(p.previous_composition_id);
   const previous =
@@ -444,7 +447,41 @@ export function revertChatTodaySession(payload: unknown): void {
           )
           .get(previousId, p.date) as any)
       : null;
-  if (previousId > 0 && !previous) throw new UndoRefusal("The earlier session is gone, so today's stays as it is.");
+  if (previousId > 0 && !previous) return { refusal: "The earlier session is gone, so today's stays as it is." };
+  return { p, appliedId, appliedSession, previous };
+}
+
+/**
+ * Why the Undo of a chat today_session (its `daily_session` rollback payload) would be
+ * refused right now, in the athlete's words — null when revertChatTodaySession would take
+ * it. Read-only; the receipt offers Undo only when this is null.
+ */
+export function todaySessionUndoRefusal(payload: unknown): string | null {
+  const check = todaySessionUndoCheck(payload);
+  return "refusal" in check ? check.refusal : null;
+}
+
+/**
+ * Where today's session stands for its button (the same truth as open-session.ts): the
+ * composition's session row read by the one "started" test, and its finish stamp.
+ */
+export function sessionOpenState(sessionId: unknown): { started: boolean; finished: boolean } {
+  const row = sessionRowById(sessionId);
+  return { started: row ? sessionStarted(row) : false, finished: row?.finished_at != null };
+}
+
+/**
+ * Undo a chat today_session (called inside the autonomy service's revert savepoint).
+ * Acts only while the composition it wrote still owns the day, nobody has lived on it
+ * (session-started.ts: sets, notes, feedback, a duration, pain answers, a watch activity)
+ * and it is not finished: the earlier composition comes back as it was, with the skips
+ * and finish stamp the replace cleared (or, when none stood, the day goes back to the
+ * plan's own session). A newer, started or finished session stands, said in words.
+ */
+export function revertChatTodaySession(payload: unknown): void {
+  const check = todaySessionUndoCheck(payload);
+  if ("refusal" in check) throw new UndoRefusal(check.refusal);
+  const { p, appliedId, appliedSession, previous } = check;
   db.prepare(
     `UPDATE daily_session_compositions SET status = 'superseded', superseded_at = datetime('now')
       WHERE id = ? AND status = 'active'`

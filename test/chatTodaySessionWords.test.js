@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { repo } from "./_seed.js";
-import { chatActionGates } from "../dist/chatTurns.js";
+import { chatActionGates, chatPromptActionTypes } from "../dist/chatTurns.js";
 import { chatMessageStartsSession, decideChatRouting } from "../dist/chatRouting.js";
 import { frameFoodCaptureMessage, hasExplicitTodaySessionIntent } from "../dist/chat-intent.js";
 import {
@@ -47,9 +47,27 @@ const ASKS = [
   "Add some arm work to today's session",
   "Make today's lift lighter",
   "let's do upper body today instead",
-  // Opening today's session is the other action this gate offers.
+];
+
+// Asks to OPEN what is there: the startSession gate (start_session only). Opening is never
+// a licence to replace the day, so the build gate stays shut.
+const START_ASKS = [
   "And let's start today's session",
   "open my today's training day",
+  "let's start today's session",
+  "Start my workout",
+  "Can you open today's session?",
+  "Time to start my session",
+  "begin today's training",
+  "ok, let's begin my workout",
+];
+
+// Both at once: a build ask and a start in one message open both gates.
+const BOTH_ASKS = [
+  "build me a longer upper session and let's start",
+  "Make it a full upper body and let's start my workout",
+  "Make today's session longer. Let's start my workout.",
+  "Give me a shorter workout today, then let's get started",
 ];
 
 // Not asks: rest and skip, how it felt, logging, information questions, other days, and
@@ -81,21 +99,75 @@ const NOT_ASKS = [
   "Make sure I log today's workout",
   "Today was a long session, I need a break",
   "I'll be at the gym today after work",
+  // A build for another day with a start beside it is not today's build.
+  "Build me a push session for tomorrow and let's start",
 ];
 
 test(`the today_session gate: ${ASKS.length} asks open it, ${NOT_ASKS.length} non-asks keep it shut`, () => {
   assert.ok(ASKS.length + NOT_ASKS.length >= 40);
   const wrong = [
-    ...ASKS.filter((message) => !hasExplicitTodaySessionIntent(message)).map((m) => `should open: ${m}`),
-    ...NOT_ASKS.filter((message) => hasExplicitTodaySessionIntent(message)).map((m) => `should stay shut: ${m}`),
+    ...[...ASKS, ...BOTH_ASKS]
+      .filter((message) => !hasExplicitTodaySessionIntent(message))
+      .map((m) => `should open: ${m}`),
+    ...[...NOT_ASKS, ...START_ASKS]
+      .filter((message) => hasExplicitTodaySessionIntent(message))
+      .map((m) => `should stay shut: ${m}`),
   ];
   assert.deepEqual(wrong, []);
-  // The chat gate reads the same answer.
-  for (const message of ASKS) {
-    assert.equal(chatActionGates({ message, priorAssistant: { message: "" } }).todaySession, true, message);
+});
+
+// Every phrasing, both gates: [startSession, todaySession].
+const GATE_TABLE = [
+  ...ASKS.map((message) => [message, false, true]),
+  ...START_ASKS.map((message) => [message, true, false]),
+  ...BOTH_ASKS.map((message) => [message, true, true]),
+  ...NOT_ASKS.map((message) => [message, false, false]),
+];
+
+test(`each of ${GATE_TABLE.length} phrasings opens exactly its own gates (startSession / todaySession)`, () => {
+  const wrong = [];
+  for (const [message, start, build] of GATE_TABLE) {
+    const gates = chatActionGates({ message, priorAssistant: { message: "" } });
+    if (gates.startSession !== start || gates.todaySession !== build) {
+      wrong.push(`${message}: got start=${gates.startSession} build=${gates.todaySession}, want ${start}/${build}`);
+    }
   }
-  for (const message of NOT_ASKS) {
-    assert.equal(chatActionGates({ message, priorAssistant: { message: "" } }).todaySession, false, message);
+  assert.deepEqual(wrong, []);
+  // What each gate offers: an open ask offers start_session alone; a build offers both.
+  const offered = (message) =>
+    new Set(chatPromptActionTypes(chatActionGates({ message, priorAssistant: { message: "" } })));
+  for (const message of START_ASKS) {
+    assert.ok(offered(message).has("start_session"), message);
+    assert.ok(!offered(message).has("today_session"), message);
+  }
+  for (const message of [...ASKS, ...BOTH_ASKS]) {
+    assert.ok(offered(message).has("start_session"), message);
+    assert.ok(offered(message).has("today_session"), message);
+  }
+});
+
+// The go-ahead reads the coach's message before it: a laid-out session or an offer to set
+// one up is a build; an offer only to open what is there is an open.
+const GO_AHEADS = [
+  // [athlete, coach before, startSession, todaySession]
+  ["yes, set it up", "That fits your week. Want me to set that up as today's session?", false, true],
+  ["go ahead", "Here's what I'd run today:\n- Squat 3x5 @ 100\n- Bench 3x8 @ 70\nWant me to set it up?", false, true],
+  ["go ahead", "Here's what I'd run today:\n- Squat 3x5 @ 100\n- Bench 3x8 @ 70\nWant me to open it?", false, true],
+  ["go ahead", "Want me to open today's session, or swap in an upper day for today?", false, true],
+  ["go ahead", "Want me to open today's session?", true, false],
+  ["yes, set it up", "Want me to open today's session?", true, false],
+  ["yes", "Want me to open today's session?", true, false],
+  ["go ahead", "Want me to pull up your workout?", true, false],
+  ["go ahead", "Want me to open it?", true, false],
+  ["yes, set it up", "Nice work.", false, false],
+  ["yes", "Want me to set that up as today's session?", false, false],
+  ["ok thanks", "Nice work today.", false, false],
+];
+
+test("a go-ahead opens the gate of what the coach offered", () => {
+  for (const [message, prior, start, build] of GO_AHEADS) {
+    const gates = chatActionGates({ message, priorAssistant: { message: prior } });
+    assert.deepEqual([gates.startSession, gates.todaySession], [start, build], `${message} after: ${prior}`);
   }
 });
 
