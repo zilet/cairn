@@ -38,6 +38,7 @@ function missingExerciseDetailHtml(name: string, svg: string, deps: ExerciseDeta
         <div class="detail-art"><div class="detail-art-zoom">${deps.artImg("exercise", name, "artile-xl", svg)}</div></div>
         <h2 class="detail-title">${deps.escapeHtml(name)}</h2>
         <div class="empty">Still putting together the guide for this one. Ask the coach for form pointers, or check back in a moment.</div>
+        ${CairnExerciseGuide.formLinkHtml(name)}
         <div class="detail-actions">
           <button class="pillbtn" id="askForm">Ask coach</button>
           <button class="pillbtn" data-close>Close</button>
@@ -62,6 +63,7 @@ function exerciseDetailModalHtml(
       ${row.constraint_note ? `<div class="ex-flag">${deps.escapeHtml(row.constraint_note)}</div>` : ""}
       ${explanationHtml}
       ${CairnExerciseGuide.sectionHtml(row.guide)}
+      ${CairnExerciseGuide.formLinkHtml(displayName)}
       ${CairnExerciseGuide.suggestionHtml(row.guide_suggestion)}
       ${row.suggested_name ? `<div class="detail-section" data-exrename>
         <div class="lbl">Name</div>

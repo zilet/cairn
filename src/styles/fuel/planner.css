@@ -92,6 +92,8 @@
 .exguide-credit{font-size:var(--text-xs);color:var(--muted)}
 .exguide-src{color:var(--muted);text-decoration:underline;text-underline-offset:var(--link-offset)}
 .exguide-src:hover{color:var(--ink-2)}
+.exguide-watch{margin-top:var(--space-4)}
+.exguide-watch-link{display:inline-block;padding:var(--space-4) 0;font-size:var(--text-xs)}
 /* credit on the left, the way back out on the right — both quiet, and both INSIDE
    the opened steps, so an athlete who never opens "How to" is never offered an undo */
 .exguide-foot{margin-top:var(--space-7);display:flex;align-items:baseline;justify-content:space-between;gap:var(--space-6)}

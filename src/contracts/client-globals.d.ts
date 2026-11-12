@@ -2904,6 +2904,8 @@ declare global {
     CairnExerciseGuide: {
       sectionHtml(guide: unknown): string;
       suggestionHtml(suggestion: unknown): string;
+      // The quiet "Watch form on YouTube" search link, for every exercise's detail.
+      formLinkHtml(exercise: unknown): string;
       wire(
         scope: ParentNode | null | undefined,
         options?: {

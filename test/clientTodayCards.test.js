@@ -91,13 +91,30 @@ test("Today exercise card helper preserves selectors, escaping, and timed mode",
   assert.doesNotMatch(html, /Press <heavy>|keep ribs <down>|elbow <quiet>|earned <move>/);
 });
 
-test("a superset partner says so quietly beside the set count; an ordinary card does not", () => {
+test("a paired card names its partner in the chip and an aria-label; a lone card has no chip", () => {
   const cards = loadTodayCards();
   const base = { exercise: "Rope Pushdown", sets: 3, rep_low: 10, rep_high: 12, fromSession: true };
-  const paired = cards.exerciseCardHtml({ ...base, superset_group: 2 }, [], {}, null, null, {});
-  assert.match(paired, /<div class="ex-meta">[\s\S]*class="ex-pair-chip"[^>]*>Pair<\/span><\/div>/);
+  const paired = cards.exerciseCardHtml({ ...base, superset_group: 2, pairPartners: ["Curl"] }, [], {}, null, null, {});
+  assert.match(paired, /<div class="ex-meta">[\s\S]*class="ex-pair-chip"[^>]*>Pair · Curl<\/span><\/div>/);
+  assert.match(paired, /class="ex-pair-chip" aria-label="Paired with Curl: alternate sets\."/);
+  assert.doesNotMatch(paired, /ex-pair-chip" title=/);
+  assert.match(paired, /class="ex ex-in-group"/);
+  const group = cards.exerciseCardHtml({ ...base, pairPartners: ["Curl", "Row"] }, [], {}, null, null, {});
+  assert.match(group, />Group · 3 exercises<\/span>/);
+  // The group id alone (partner not on screen) is no pairing.
+  const lone = cards.exerciseCardHtml({ ...base, superset_group: 2 }, [], {}, null, null, {});
+  assert.doesNotMatch(lone, /ex-pair-chip|ex-in-group/);
   const alone = cards.exerciseCardHtml({ ...base, superset_group: null }, [], {}, null, null, {});
   assert.doesNotMatch(alone, /ex-pair-chip/);
+});
+
+test("partner names in the pair chip are escaped", () => {
+  const cards = loadTodayCards();
+  const nasty = `Curl <b> & "Q"`;
+  const html = cards.exerciseCardHtml({ exercise: "Row", sets: 3, rep_low: 8, rep_high: 10, pairPartners: [nasty] }, [], {}, null, null, {});
+  assert.match(html, /Pair · Curl &lt;b&gt; &amp; "Q"<\/span>/);
+  assert.match(html, /aria-label="Paired with Curl &lt;b&gt; &amp; &quot;Q&quot;:/);
+  assert.doesNotMatch(html, /<b>/);
 });
 
 // A card asks the athlete to train. It carries NO pain widget at all any more —

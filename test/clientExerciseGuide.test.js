@@ -269,3 +269,18 @@ test("the start and finish photos sit open above the folded steps", () => {
   assert.doesNotMatch(folded, /data-exguide-shots/);
   assert.match(folded, /class="exguide-steps"/);
 });
+
+test("every exercise detail gets a quiet, escaped YouTube form-search link, guide or not", () => {
+  const guide = loadGuideClient();
+  const name = `Press <heavy> & "grip"`;
+  const html = guide.formLinkHtml(name);
+  assert.match(html, /Watch form on YouTube/);
+  const query = encodeURIComponent(`${name} proper form`);
+  assert.ok(html.includes(`href="https://www.youtube.com/results?search_query=${query}"`));
+  assert.match(html, /target="_blank" rel="noopener noreferrer"/);
+  assert.doesNotMatch(html, /<heavy>|"grip"/);
+  assert.equal(guide.formLinkHtml("  "), "");
+  // Independent of a matched guide: the section is "" with none, the link still renders.
+  assert.equal(guide.sectionHtml(null), "");
+  assert.ok(guide.formLinkHtml("Hip Thrust"));
+});

@@ -337,7 +337,7 @@ type TodayPlanSurfaceRendererApi = {
     html += brainNoticesHtml(sessionBrainLines(surfaceItems), options.isToday, surfaceDeps.escapeHtml, surfaceDeps.escapeAttr);
 
     let cardIdx = 0;
-    for (const item of surfaceItems) {
+    const cardHtml = (item: TodayPlanSurfaceRendererItem, pair: Record<string, unknown>): string => {
       const exerciseName = String(item.exercise || "");
       const carded = journeyItem(item, options.day, options.strengthJourney);
       // The card, not the exercise name, owns its sets: a peak day renders the same
@@ -346,7 +346,7 @@ type TodayPlanSurfaceRendererApi = {
       // exactly what it was.
       const attributed = options.attributionFor ? options.attributionFor(item) : null;
       const cardSets = attributed ? attributed.sets : options.loggedByEx[exerciseName] || [];
-      html += deps.exCard(
+      return deps.exCard(
         {
           ...carded,
           ...(easedSession ? { note: withoutEasedPrefix(carded.note) } : {}),
@@ -358,6 +358,7 @@ type TodayPlanSurfaceRendererApi = {
                 exerciseLogged: (options.loggedByEx[exerciseName] || []).length,
               }
             : {}),
+          ...pair,
         },
         cardSets,
         options.prefillFor(item),
@@ -365,6 +366,34 @@ type TodayPlanSurfaceRendererApi = {
         options.rxFor(exerciseName),
         options.lastSets[exerciseName],
       );
+    };
+
+    // Items that share a superset_group are ONE visible group: the members sit together
+    // (at the first member's place) under a single caption, each card naming its
+    // partner(s). Only the render order changes — the items, their names and the logged
+    // sets are untouched, and the athlete may still log in any order. A group with a
+    // single member on screen (partner skipped, swapped out) is a plain card.
+    const groups = new Map<number, TodayPlanSurfaceRendererItem[]>();
+    for (const item of surfaceItems) {
+      if (item.superset_group == null || !Number.isFinite(Number(item.superset_group))) continue;
+      const key = Number(item.superset_group);
+      groups.set(key, [...(groups.get(key) || []), item]);
+    }
+    const emitted = new Set<number>();
+    for (const item of surfaceItems) {
+      const key = Number(item.superset_group);
+      const members = (item.superset_group != null && groups.get(key)) || [];
+      if (members.length < 2) {
+        html += cardHtml(item, {});
+        continue;
+      }
+      if (emitted.has(key)) continue;
+      emitted.add(key);
+      const caption = members.length === 2 ? "Pair — alternate sets, rest after both" : "Group — rotate sets, rest after all";
+      html += `<div class="ex-group-cap">${surfaceDeps.escapeHtml(caption)}</div>`;
+      for (const member of members) {
+        html += cardHtml(member, { pairPartners: members.filter((other) => other !== member).map((other) => String(other.exercise || "")) });
+      }
     }
 
     for (const exercise of options.offPlanEx) {
