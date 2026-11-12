@@ -112,6 +112,144 @@ const tonight = (today, night) => repo.upsertGarminDailyMetric({ date: today, ..
 
 const decisionFor = (today) => buildDailySessionDecision(gatherDailyDecisionSnapshot(today));
 
+// ══ THE MORNING THAT MOTIVATED THIS WHOLE CHANGE SET ═══════════════════════════════════
+// A stated lifting week; yesterday a long run (or a long ride); last night HRV well below
+// the athlete's band, resting HR in band, an ordinary readiness reading. One low HRV night
+// inside the endurance window is a held dose on ANY day with a session due, stated or not —
+// loads held, no reach, yesterday's loaded regions lighter, the plan's sets otherwise —
+// and the read says so. (Second review, item 1: the leg-only hybrid-interference brake on
+// a pull day used to swallow the dose: planned_training, caps open, HRV never mentioned.)
+
+const assertHeldHrvDose = (today, label) => {
+  const r = repo.dayRead(today);
+  const detail = `${label}: ${r.decision.rule_code}: ${r.why} ${JSON.stringify(r.signals.morning_dose)}`;
+  assert.equal(r.kind, "train", detail);
+  assert.equal(r.signals.morning_dose.basis, "overnight_dip_after_endurance", detail);
+  assert.equal(r.signals.morning_dose.applied, true, detail);
+  assert.ok(
+    ["stated_lift_morning_dosed", "overnight_dip_dosed"].includes(r.decision.rule_code),
+    `the held dose speaks: ${detail}`
+  );
+  assert.match(r.why, /\bHRV\b/, `the read names last night's HRV: ${r.why}`);
+  assert.equal(r.signals.push_bias, undefined, "no reach on a held dose");
+  assert.equal(violatesReadingGrammar(r.why), null, r.why);
+  const snapshot = gatherDailyDecisionSnapshot(today);
+  assert.equal(snapshot.day_read.held_dose, "morning", label);
+  const decision = buildDailySessionDecision(snapshot);
+  assert.equal(decision.kind, "train", label);
+  assert.notEqual(decision.caps.intensity, "normal", `${label}: loads held — ${decision.precedence}`);
+  assert.equal(decision.caps.volume, "normal", `${label}: the plan's sets otherwise — ${decision.precedence}`);
+  assert.notEqual(decision.reach?.level, "push", label);
+  assert.ok(decision.precedence.includes("held_morning_dose"), `${label}: ${decision.precedence}`);
+  return r;
+};
+
+for (const readiness of [70, 50])
+  for (const [endurance, add] of [
+    ["a 24 km run", (today) => bigDayYesterday(today)],
+    ["a 3 h ride", (today) => repo.addActivity({ type: "ride", duration_min: 180, distance_km: 80, date: addDays(today, -1) })],
+  ])
+    test(`B, the incident morning: stated lifting week, ${endurance} yesterday, one low HRV night, readiness ${readiness} → a held dose that says HRV`, (t) => {
+      const today = onTuesday(t);
+      athlete(today);
+      add(today);
+      tonight(today, { hrv_ms: 36, resting_hr: 52, sleep_min: 460, training_readiness: readiness });
+      assertHeldHrvDose(today, `stated, ${endurance}, readiness ${readiness}`);
+    });
+
+test("B, the incident morning with NO stated week is the same held dose", (t) => {
+  const today = onTuesday(t);
+  athlete(today, { stated: false });
+  bigDayYesterday(today);
+  tonight(today, { hrv_ms: 36, resting_hr: 52, sleep_min: 460, training_readiness: 70 });
+  const r = assertHeldHrvDose(today, "unstated");
+  assert.equal(r.decision.rule_code, "overnight_dip_dosed");
+});
+
+// ══ A: a worse readiness score never buys a more permissive day (second review, item 2) ══
+// The composite score is an unvalidated input: it never cuts whole-session volume by
+// itself, in either band, and on a stated day both bands are the SAME held dose.
+
+const VOLUME_RANK = { normal: 0, reduced: 1, minimal: 2 };
+const INTENSITY_RANK = { normal: 0, hold: 1, deload: 2, easy: 3 };
+const READINESS_SWEEP = [95, 80, 66, 60, 50, 40, 39, 34, 30, 25, 20, 19, 12, 5];
+
+for (const stated of [true, false])
+  test(`A, monotone: sweeping readiness top to bottom on an otherwise identical ${stated ? "stated" : "unstated"} morning never makes the caps more permissive`, (t) => {
+    const today = onTuesday(t);
+    athlete(today, { stated });
+    let prev = null;
+    for (const readiness of READINESS_SWEEP) {
+      tonight(today, { hrv_ms: 52, resting_hr: 52, sleep_min: 460, training_readiness: readiness });
+      const r = repo.dayRead(today);
+      const decision = decisionFor(today);
+      const now = {
+        readiness,
+        code: r.decision.rule_code,
+        volume: VOLUME_RANK[decision.caps.volume],
+        intensity: INTENSITY_RANK[decision.caps.intensity],
+        caps: decision.caps,
+      };
+      if (prev) {
+        const detail = `${prev.readiness} (${prev.code} ${JSON.stringify(prev.caps)}) → ${readiness} (${now.code} ${JSON.stringify(now.caps)})`;
+        assert.ok(now.volume >= prev.volume, `volume opened as readiness fell: ${detail}`);
+        assert.ok(now.intensity >= prev.intensity, `intensity opened as readiness fell: ${detail}`);
+      }
+      prev = now;
+    }
+  });
+
+test("A, stated day: the low band and the rest-grade band are the SAME held dose — the score alone trims no sets", (t) => {
+  const today = onTuesday(t);
+  athlete(today);
+  const seen = [];
+  for (const readiness of [30, 12]) {
+    tonight(today, { hrv_ms: 52, resting_hr: 52, sleep_min: 460, training_readiness: readiness });
+    const r = repo.dayRead(today);
+    const detail = `readiness ${readiness}: ${r.decision.rule_code}: ${r.why}`;
+    assert.equal(r.kind, "train", detail);
+    assert.equal(r.decision.rule_code, "stated_lift_morning_dosed", detail);
+    assert.equal(r.signals.push_bias, undefined, detail);
+    assert.equal(violatesReadingGrammar(r.why), null, r.why);
+    assert.doesNotMatch(r.why, /\d/, r.why);
+    const decision = decisionFor(today);
+    assert.ok(decision.precedence.includes("held_morning_dose"), `${detail} ${decision.precedence}`);
+    seen.push({ volume: decision.caps.volume, intensity: decision.caps.intensity });
+    assert.equal(decision.caps.volume, "normal", `${detail}: the score alone trims no sets — ${decision.precedence}`);
+    assert.equal(decision.caps.intensity, "hold", detail);
+    assert.notEqual(decision.reach?.level, "push", detail);
+  }
+  assert.deepEqual(seen[0], seen[1], "both bands, one dose");
+});
+
+test("A: on a train read a low readiness score trims the sets only beside a corroborating deciding brake", (t) => {
+  const today = onTuesday(t);
+  athlete(today, { stated: false });
+  tonight(today, { hrv_ms: 52, resting_hr: 52, sleep_min: 460, training_readiness: 80 });
+  repo.dayRead(today);
+  const base = gatherDailyDecisionSnapshot(today);
+  assert.equal(base.day_read.kind, "train");
+  const support = {
+    training_drive: "steady",
+    backed: false,
+    backed_by: [],
+    training_directive: "proceed",
+    fresh_brake: true,
+  };
+  const low = { ...base, recovery: { ...base.recovery, readiness: "low" }, recovery_capacity: undefined };
+  // The score alone (the board's only deciding brake): the plan's sets, the load held.
+  const alone = buildDailySessionDecision({ ...low, signal_support: { ...support, readiness_brake_only: true } });
+  assert.equal(alone.caps.volume, "normal", alone.precedence.join(","));
+  assert.equal(alone.caps.intensity, "hold");
+  // …with no brake on the board at all, the raw score is alone too.
+  const raw = buildDailySessionDecision({ ...low, signal_support: undefined });
+  assert.equal(raw.caps.volume, "normal", raw.precedence.join(","));
+  // Beside a deciding brake of another kind (a short night, resting HR, the athlete's word):
+  // a named, corroborated reason — the sets come down.
+  const corroborated = buildDailySessionDecision({ ...low, signal_support: support });
+  assert.equal(corroborated.caps.volume, "reduced", corroborated.precedence.join(","));
+});
+
 // ══ the pure classifier: every rule, against the policy ══════════════════════════════
 
 const FACTS = {

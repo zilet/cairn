@@ -51,7 +51,9 @@ import { sessionLogContradictsLowRating } from "./session-dose-log.js";
 import { weekWins } from "./sessions.js";
 import { addDaysISO, localDateISO } from "./shared.js";
 import { planSlotStamps, sinceClause, slotAuthorship } from "./prescription-authorship.js";
+import { MORNING_DOSE_POLICY } from "./morning-dose.js";
 import {
+  freshDecidingBrakeFields,
   hasFreshBrake,
   hasFreshDecidingBrake,
   type SignalConfidence,
@@ -491,6 +493,11 @@ export interface DailyDecisionSignalSupport {
   // intensity caution is the usual case: a finding about runs that may inform a lift
   // day but may not decide it. Omit-when-idle, like soft_brake_only.
   advisory_brake_only?: true;
+  // Every fresh DECIDING brake on the board is the composite readiness score (beside, at
+  // most, the load-arithmetic brakes a held dose already answers — morning-dose.ts
+  // `checkin_lift_tolerated_brakes`). The score is an unvalidated input: alone it never
+  // trims whole-session volume (second review, item 2). Omit-when-idle.
+  readiness_brake_only?: true;
   // A DATED push stance covers the day (src/repo/training-drive.ts). `harm_free`: no
   // harm evidence on any of the last three days (harmEvidenceOnDay) — the stance widens
   // nothing over a day the body already paid for. Omit-when-idle, so every envelope
@@ -1559,6 +1566,14 @@ function compactSignalSupport(
     return { recovery_capacity, posture_rest };
   }
   const advisoryOnly = fresh_brake && !safe(() => hasFreshDecidingBrake(state.dimensions), true);
+  const decidingFields = safe(() => freshDecidingBrakeFields(state.dimensions), null);
+  const readinessBrakeOnly =
+    decidingFields != null &&
+    decidingFields.includes("training_readiness") &&
+    decidingFields.every(
+      (field) =>
+        field === "training_readiness" || MORNING_DOSE_POLICY.checkin_lift_tolerated_brakes.includes(field)
+    );
   return {
     recovery_capacity,
     posture_rest,
@@ -1570,6 +1585,7 @@ function compactSignalSupport(
       fresh_brake,
       ...(fresh_brake && freshBrakesAreSoft(state) ? { soft_brake_only: true as const } : {}),
       ...(advisoryOnly ? { advisory_brake_only: true as const } : {}),
+      ...(readinessBrakeOnly ? { readiness_brake_only: true as const } : {}),
       ...(pushStance ? { push_stance: pushStance } : {}),
     },
   };
@@ -2897,6 +2913,10 @@ export function buildDailySessionDecision(
       text: "Longevity leads your priorities — today's work stays a little easier rather than stacking hard on hard.",
     });
   }
+  // Is a low recovery read more than the composite score alone? Only a deciding brake of
+  // another kind corroborates it (signal_support.readiness_brake_only says the board holds
+  // nothing else); with no brake on the board at all, the raw score is alone.
+  const lowRecoveryCorroborated = decidingBrake(snapshot) && snapshot.signal_support?.readiness_brake_only !== true;
   const trainAnywayFromRest = trainAnyway && baseKind === "rest";
   const trainAnywayLiftsQuiet = trainAnyway && (baseKind === "rest" || baseKind === "easy");
   const trainAnywayKeepsReduced = trainAnywayFromRest && !capsMayOpen;
@@ -2908,8 +2928,13 @@ export function buildDailySessionDecision(
     // A fresh low-recovery brake — unless the read already answered it with a held dose
     // (`day_read.held_dose`): that dose IS the answer (intensity held, the regions
     // yesterday loaded reduced), and everything else trains at the plan's sets, exactly
-    // as the read said. One source of truth.
-    (readiness === "low" && !heldDose) ||
+    // as the read said. One source of truth. And the composite readiness score is an
+    // unvalidated input: in EITHER band it trims the whole session only beside a
+    // corroborating named reason — a deciding brake of another kind on the board (a short
+    // night, resting HR or HRV past the band, the athlete's own low word, soreness, acute
+    // load…); the others below (soreness, a recovery week) stand on their own (second
+    // review, item 2: a worse score must never buy more volume than a milder one).
+    (readiness === "low" && !heldDose && lowRecoveryCorroborated) ||
     sorenessSoftensDay || // soreness reported today, not routed
     trainAnywayKeepsReduced || // train-anyway over a rest read, caps shut
     snapshot.day_read.recovery_week || // a recovery week in force

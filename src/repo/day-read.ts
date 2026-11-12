@@ -2969,7 +2969,9 @@ function computeDayRead(
           ease?.code ??
           (verdict.basis === "short_night"
             ? DAY_READ_OUTCOMES.short_night_dosed.code
-            : DAY_READ_OUTCOMES.overnight_dip_dosed.code);
+            : verdict.basis === "readiness_low"
+              ? DAY_READ_OUTCOMES.low_readiness_rest.code
+              : DAY_READ_OUTCOMES.overnight_dip_dosed.code);
         if (verdict.kind === "dose" && calendarTakesDay(stepCode)) return null;
         // A dose with no stated calendar keeps a due session through the planned-training
         // rule (morning-dose.ts B, D): never an ease of its own here.
@@ -3730,19 +3732,26 @@ function computeDayRead(
         const calendarDosed = calendar.step != null && statedCalendarDay()?.day === "lift" && !legOnlyBrake;
         if (calendarDosed) pushVetoes.push("calendar_dose");
         // A single low morning the dose answers (morning-dose.ts): on the stated lifting day
-        // the calendar took, or — the post-endurance HRV dip alone — on any day a session
-        // is due. Never a reach, never a load raise; the regions yesterday loaded go lighter.
+        // the calendar took, or — one short night, the post-endurance HRV dip — on any day a
+        // session is due. Never a reach, never a load raise; the regions yesterday loaded go
+        // lighter. The leg-only endurance exemption above is about the soft BRAKE dose only:
+        // a morning reading is the whole body's, so a pull day after the long run whose HRV
+        // night dipped is still the held dose (second review, item 1 — the exemption used to
+        // swallow it: the calendar had stepped in, `calendarDosed` was false, and the
+        // unstated arm needed no step, so the read said nothing about the night at all).
         const unstatedDose = morningVerdict();
-        const morningBasis: MorningBasis | null =
-          calendarDosed && calendar.step?.morning
-            ? calendar.step.morning
-            : !calendar.step &&
-                !recoveryWeek &&
-                unstatedDose.kind === "dose" &&
-                unstatedDose.basis != null &&
-                UNSTATED_MORNING_DOSES.has(unstatedDose.basis)
-              ? unstatedDose.basis
-              : null;
+        const morningBasis: MorningBasis | null = calendar.step?.morning
+          ? calendar.step.morning
+          : !calendar.step &&
+              !recoveryWeek &&
+              unstatedDose.kind === "dose" &&
+              unstatedDose.basis != null &&
+              UNSTATED_MORNING_DOSES.has(unstatedDose.basis)
+            ? unstatedDose.basis
+            : null;
+        // The stated lifting day the calendar took for a morning reading speaks as the
+        // stated dose even when the leg-only exemption kept the soft-brake dose off it.
+        const statedMorningDose = morningBasis != null && calendar.step != null && statedCalendarDay()?.day === "lift";
         if (morningBasis && !calendarDosed) pushVetoes.push("morning_dose");
         const calendarVoice = calendarDosed ? calendarBrakeVoice() : null;
         // Same rule as the protect read above: the athlete hears the athlete voice,
@@ -3897,14 +3906,16 @@ function computeDayRead(
           // only when the decision's held-dose reduction lands on this card.
           const explained = (morning()?.facts.load_explained.length ?? 0) > 0;
           const causeKey =
-            morningBasis === "readiness_rest_grade" && !explained ? "readiness_rest_grade:unexplained" : morningBasis;
+            (morningBasis === "readiness_rest_grade" || morningBasis === "readiness_low") && !explained
+              ? `${morningBasis}:unexplained`
+              : morningBasis;
           const cause = MORNING_DOSE_CAUSE[causeKey];
           const said = cause ? `${pickDayVariant(cause, d, `morning_dose_cause:${causeKey}`)} ` : "";
           const lead = morningDoseLightensRegions(sd.day_number ?? null)
             ? pickDayVariant(MORNING_DOSE_LEAD, d, "morning_dose:lead")
             : pickDayVariant(MORNING_DOSE_LEAD_HELD, d, "morning_dose:lead_held");
           return {
-            outcome: calendarDosed
+            outcome: statedMorningDose
               ? DAY_READ_OUTCOMES.stated_lift_morning_dosed
               : morningBasis === "short_night"
                 ? DAY_READ_OUTCOMES.short_night_dosed
@@ -4284,7 +4295,8 @@ function computeDayRead(
       !facts.hrv_rolling.past_line;
     if (!checkinLiftsBrakes(decidingBrakeFields, hrvSingleNight)) return held("other_brake");
     const verdict = morningVerdict();
-    if (verdict.basis != null && verdict.basis !== "readiness_rest_grade") return held(verdict.basis);
+    if (verdict.basis != null && verdict.basis !== "readiness_rest_grade" && verdict.basis !== "readiness_low")
+      return held(verdict.basis);
     if (clinicallyDriven(signalState, healthWorkaround) || freshSafetyOverride(signalState)) return held("floor");
     if (recoveryWeek || holdsToday.length || tomorrowClinical) return held("calendar");
     if (lowSubjective || feltRestCorroborated) return held("athlete_word");

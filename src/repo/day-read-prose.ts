@@ -593,6 +593,18 @@ export const MORNING_DOSE_CAUSE: Readonly<Record<string, readonly string[]>> = {
     "Your readiness reading is at the bottom of its range this morning; on its own it is one input, not the whole picture.",
     "The readiness number reads very low this morning, which by itself doesn't decide the day.",
   ],
+  // The milder low band on a stated day (morning-dose.ts, A): the same dose as the
+  // rest-grade band, and never "very low" — that is the other band's word.
+  readiness_low: [
+    "Your readiness reading is on the low side this morning, most likely yesterday's work still showing.",
+    "This morning's readiness number came in low after yesterday's work, and on its own that number doesn't take the day.",
+    "The readiness reading sits low this morning, which the work the day before often leaves behind.",
+  ],
+  "readiness_low:unexplained": [
+    "This morning's readiness number came in low, and on its own that number doesn't take the day.",
+    "Your readiness reading sits on the low side this morning; on its own it is one input, not the whole picture.",
+    "The readiness number reads low this morning, which by itself doesn't decide the day.",
+  ],
   short_night: [
     "Last night came up short on sleep.",
     "Sleep was short last night.",
@@ -1695,6 +1707,8 @@ export const DAY_READ_REQUIRED_CONCEPT: Readonly<Record<string, RegExp>> = {
   "checkin_lifted_train:hrv": /\b(?:you|your own)\b[\s\S]*\bHRV\b[\s\S]*\b(?:held|holding)\b/i,
   "morning_dose_cause:readiness_rest_grade": /\breadiness\b/i,
   "morning_dose_cause:readiness_rest_grade:unexplained": /\breadiness\b/i,
+  "morning_dose_cause:readiness_low": /\breadiness\b/i,
+  "morning_dose_cause:readiness_low:unexplained": /\breadiness\b/i,
   short_night_dosed: /\b(?:short|night|sleep)\b[\s\S]*\b(?:held|hold)\b/i,
   resting_hr_caution_easy: /\bresting heart rate\b[\s\S]*\beasy\b/i,
   "morning_dose_cause:short_night": /\bshort\b/i,

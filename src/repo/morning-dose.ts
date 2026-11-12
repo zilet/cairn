@@ -141,6 +141,8 @@ export type MorningBasis =
   | "resting_hr_unconfirmed"
   // EASY on an unstated day, the DOSE on a stated one (A)
   | "readiness_rest_grade"
+  // the DOSE on a stated day; nothing here on an unstated one (A): the milder low band
+  | "readiness_low"
   // the DOSE on any day with a session due (B, D)
   | "short_night"
   | "overnight_dip_after_endurance";
@@ -250,6 +252,10 @@ export function classifyMorning(facts: MorningFacts, stated: boolean): MorningVe
     return { kind: "dose", basis: "short_night" };
   }
   if (facts.rest_grade_today) return { kind: stated ? "dose" : "easy", basis: "readiness_rest_grade" };
+  // A: the milder low band is the SAME dose on a stated day — a worse score never buys a
+  // more permissive day, nor a milder one a harsher day (second review, item 2). On an
+  // unstated day this module concludes nothing: the engine's own rules read it easy.
+  if (stated && facts.low_readiness_mornings >= 1) return { kind: "dose", basis: "readiness_low" };
   if (facts.hrv_night != null && facts.hard_endurance_recent && rhr == null)
     return { kind: "dose", basis: "overnight_dip_after_endurance" };
   return { kind: null, basis: null };
