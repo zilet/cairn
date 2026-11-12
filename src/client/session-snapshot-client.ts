@@ -107,6 +107,8 @@
       original?: string[];
       /** Offer the plan day itself when the accepted session holds no lift for it. */
       startDay?: { dayNumber: number; label: string } | null;
+      /** The quiet "Discard this session" door (CairnTodayOpenSession.discardHtml): only an unstarted session has one. */
+      discardHtml?: string;
     }
   ): string {
     const capped = Math.min(meta.exTotal, 12);
@@ -129,7 +131,7 @@
       <div class="sess-topbar-side">${prog}</div>
     </div>
     ${dots}
-    <div class="sess-body"><div id="sessionPrimerSlot" class="sess-primer-slot"></div>${inner}</div>
+    <div class="sess-body"><div id="sessionPrimerSlot" class="sess-primer-slot"></div>${inner}${meta.discardHtml || ""}</div>
   </div>`;
   }
 

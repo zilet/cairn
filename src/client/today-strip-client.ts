@@ -30,7 +30,7 @@
     const days = Array.isArray(week?.days) ? week!.days : [];
     const units = week?.run_units === "mi" ? "mi" : "km";
     const cells = days
-      .map((d) => CairnDayDetailModel.glanceOfWeekDay(d, today, units))
+      .map((d) => CairnDayDetailModel.glanceOfWeekDay(d, today, units, week?.strength_line))
       .filter((c): c is Cell => !!c);
     return cells.length === 7 ? cells : null;
   }

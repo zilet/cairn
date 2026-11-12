@@ -1860,7 +1860,7 @@ test("api() takes index.html's early response once, for its exact path only", as
   assert.equal((await loaded.context.api("/today?date=2026-09-27&surface=today")).network, true);
 });
 
-test("a 401 forgets every remembered API body (cairn.swr.v1.*) before asking for a token", async () => {
+test("a 401 forgets every remembered API body (cairn.swr.v2.*) before asking for a token", async () => {
   const loaded = loadApiClient();
   const store = loaded.storage;
   loaded.context.localStorage = {
@@ -1875,8 +1875,8 @@ test("a 401 forgets every remembered API body (cairn.swr.v1.*) before asking for
   let opened = 0;
   loaded.context.CairnTokenSheet = { open: () => opened++ };
   store.set("cairn_token", "old");
-  store.set("cairn.swr.v1.today:aggregate:2026-09-26", "{}");
-  store.set("cairn.swr.v1.profile", "{}");
+  store.set("cairn.swr.v2.today:aggregate:2026-09-26", "{}");
+  store.set("cairn.swr.v2.profile", "{}");
   store.set("cairn.unrelated", "keep");
   loaded.context.fetch = async () => ({ status: 401, json: async () => ({}) });
   void loaded.context.api("/profile");

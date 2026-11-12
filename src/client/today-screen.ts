@@ -411,6 +411,7 @@ async function renderToday(opts: any = {}) {
   // (painted with the .is-thinking filament) and the real agentic read swaps in
   // via upgradeBriefInPlace() once it lands. First paint never waits on
   // agent:"auto". (Honors an active override.)
+  const open = todayData.openSession;
   const { hasLoggedSets, hasGarmin, showPlan, showDone } = todayRenderState.derive({
     logDate: todayState.logDate,
     session,
@@ -419,57 +420,33 @@ async function renderToday(opts: any = {}) {
     isToday,
     planReveal: todayState.planReveal,
     dailySession: prep.dailySession,
+    openSession: open,
   });
-  // In focus mode the chrome (context banner, Brief, insight, capture) gives way to
-  // the slim sticky focus header; otherwise the Brief leads as always.
-  // Desktop two-column model (≥1100px): the Brief + capture + logging surface are
-  // the PRIMARY column (.today-main); the week-ahead / weekly-read / connection-
-  // insight / garmin-reconcile / "lately" are the secondary RIGHT RAIL (.today-rail).
-  // The rail slots keep their stable ids — the rail controller binds each loader to
-  // the same slot ids as before. On
-  // mobile/tablet the two wrappers stack (single column): the rail flows right after
-  // the capture row, where the week-ahead/reads naturally sat before.
-  //
-  // Era 2 — the SALIENCE ARBITER governs the rail. GET /api/today-agenda runs one
-  // deterministic ranking + budget pass and tells us which 1–2 surfaces matter most
-  // today (primary, inline) vs which collapse behind one quiet "more". We build the
-  // rail from that, reusing the rich existing cards verbatim (their slots, ordered).
-  // Best-effort: a null agenda (route not wired / offline) falls back to the CURRENT
-  // fixed rail so Today is never broken while the arbiter is half-integrated. The
-  // agenda is per-render (it reflects today's data), not SWR-cached.
-  // NOTE: the fallback rail deliberately has NO #fuelSlot — fuel surfaces ONLY
-  // through the agenda (which omits it when nothing's logged), so there is no path,
-  // even on a 404/offline fallback, that can render the old "Nothing logged yet"
-  // capture nudge. The other rail cards keep a fallback for graceful degradation.
-  // (The conductor + agenda reads were started before the prep await above and are
-  // folded in during phase two, at the end of this function.)
+  // Desktop (≥1100px): the Brief + capture + logging surface are the PRIMARY column
+  // (.today-main); the week-ahead / reads / "lately" are the RIGHT RAIL (.today-rail), which
+  // stacks under it on mobile. The rail is shaped by GET /api/today-agenda (the salience
+  // arbiter: 1–2 primary cards, the rest behind one "more"), per-render, never SWR-cached; a
+  // null agenda falls back to the fixed rail. The fallback rail deliberately has NO #fuelSlot:
+  // fuel surfaces only through the agenda. (The conductor + agenda reads started before the
+  // prep await and are folded in during phase two, at the end of this function.)
 
-  // On Today, the plan area is a calm launch card into the isolated Session
-  // destination (logging no longer lives inline here). The done card still shows
-  // inline.
-  // A launch card must have something to launch. A plan day that carries no items
-  // (an "Easy" day the plan named but never filled, a rest day surfaced by a Train-
-  // anyway override) used to render a Start button into an empty session; a read
-  // that says easy/rest already leads above, so an empty day says nothing here.
-  // (No plan at all is different: that card is the deliberate "Open session" door.)
-  // A session's own item count is one witness, not the only one: a preview that
-  // reads 0 must never overrule a plan day that actually carries lifts (or logged
-  // sets) — that used to collapse the whole plan region into nothing. Suppression
-  // requires every witness to agree the day is empty; a preview/day disagreement
-  // still has something to show, just not through the launch card (fall through
-  // to the plan surface renderer below, which walks the plan day's own items).
-  // Computed above the Brief so the SAME witness gates its "Start session" action
-  // (today-brief-client.ts) — a preview/plan disagreement must not leave the Brief
-  // offering a Start button into the empty session the launch card below hides.
+  // On Today the plan area is a calm launch card into the isolated Session destination
+  // (the done card still shows inline). A card must have something to launch: an empty plan
+  // day says nothing here (a rest/easy read already leads above), and a preview that reads 0
+  // never overrules a plan day that carries lifts. The open session (the server's one fact)
+  // always has something to start. Computed above the Brief so the SAME witness gates its
+  // start action (today-brief-client.ts).
   const previewItemCount = prep.dailySession
     ? (prep.dailySession.items || []).length
     : sessionPreview?.item_count ?? null;
-  const previewHasItems = previewItemCount == null ? null : previewItemCount > 0;
+  // An open session (the server's one fact) always has something to start, whatever its item count.
+  const previewHasItems = open ? true : previewItemCount == null ? null : previewItemCount > 0;
   const dayHasItems = !!(day?.items || []).length;
   // An unread pick (day.pick) starts nothing: the plan surface asks which day it is.
+  const unreadPick = !open && !!day.pick;
   const nothingToStart =
-    !!day.pick ||
-    (todayState.plan.length > 0 && !hasLoggedSets && exDone === 0 && !isRunDay && !dayHasItems && previewHasItems !== true);
+    unreadPick ||
+    (!open && todayState.plan.length > 0 && !hasLoggedSets && exDone === 0 && !isRunDay && !dayHasItems && previewHasItems !== true);
   // ONE ACTION, ONE BUTTON. A train read's Brief already carries the start for
   // today's session (today-brief-client.ts, gated by the same nothingToStart
   // witness), so when the launch card below would open that SAME session it is not
@@ -489,9 +466,10 @@ async function renderToday(opts: any = {}) {
     isRunDay,
     read,
     strengthJourney,
+    open,
   };
   const briefCarriesStart =
-    showPlan && !showDone && !nothingToStart && previewHasItems !== false && CairnTodayBrief.kind(read) === "train";
+    showPlan && !showDone && !nothingToStart && previewHasItems !== false && CairnTodayBrief.kind(CairnTodayOpenSession.briefRead(read, open)) === "train";
   const folded = briefCarriesStart ? sessionLaunchFacts(launchOpts) : null;
 
   // The awaits above (data load, session prep, the brief race) can outlast a tab
@@ -505,6 +483,7 @@ async function renderToday(opts: any = {}) {
   // upgradeBriefInPlace) and the Brief's start action reuse this render's exact
   // values. Assigned only after the bail so a superseded render never overwrites them.
   todayState.nothingToStart = nothingToStart;
+  todayState.openSession = open ? { date: todayState.logDate, read: open } : null;
   todayState.briefSession = folded
     ? {
         date: todayState.logDate,
@@ -529,9 +508,9 @@ async function renderToday(opts: any = {}) {
   );
 
   html +=
-    showPlan && !showDone && nothingToStart && !day.pick
+    showPlan && !showDone && nothingToStart && !unreadPick
       ? ""
-      : showPlan && !showDone && previewHasItems !== false && !day.pick
+      : showPlan && !showDone && previewHasItems !== false && !unreadPick
       ? briefCarriesStart
         ? ""
         : sessionLaunchCardHtml(launchOpts)
@@ -931,6 +910,7 @@ function sessionPrepareBusy(trigger: HTMLElement | null | undefined, busy: boole
 function cachePreparedSession(date: string, response: Record<string, unknown>): void {
   if (response.session) swrSet(`today:session:${date}`, response.session);
   if (response.daily_session) swrSet(`today:daily-session:${date}`, response.daily_session);
+  CairnTodayOpenSession.remember(date, response.daily_session, response.session);
   swrInvalidate(`today:aggregate:${date}`);
   swrInvalidate("history:sessions");
 }
@@ -961,6 +941,19 @@ function enterSession(date: string, response?: Record<string, unknown> | null): 
   } catch {}
   activateTab("session");
 }
+
+// The session-resolution deps (today-open-session-client.ts: a conflict's owner, today's open
+// session, a re-read of today): the assertion path by id, then into the Session destination.
+function openSessionDeps(date: string, trigger: HTMLElement | null): OpenOwnedDeps {
+  return {
+    prepare: (body) => sessionPrepareCoordinator.run(date, () => todayApi("/daily-session/prepare", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), acceptErrorBody: true })),
+    enter: (d, response) => { sessionPrepareBusy(trigger, false); enterSession(d, response); },
+    say: (message) => { sessionPrepareBusy(trigger, false, message); announceSessionPrepare(message); toast(message); },
+    refresh: () => renderToday({ soft: true }),
+  };
+}
+const openOwnedSession = (date: string, owner: OpenSessionOwner, trigger: HTMLElement | null, announce = false) =>
+  CairnTodayOpenSession.openOwned(date, owner, openSessionDeps(date, trigger), announce);
 
 async function openSession(date?: string | null, options: OpenSessionOptions = {}): Promise<boolean> {
   const targetDate = date || todayState.logDate || localISO();
@@ -1047,11 +1040,8 @@ async function openSession(date?: string | null, options: OpenSessionOptions = {
         // Reachable mismatch/missing truth: retire only this stale continuation.
         swrInvalidate(`today:session:${targetDate}`);
         swrInvalidate(`today:daily-session:${targetDate}`);
-        const message = String(response.error || "Today’s session changed elsewhere. Open it again to use the current version.");
-        sessionPrepareBusy(trigger, false, message);
-        announceSessionPrepare(message);
-        toast(message);
-        return false;
+        // Changed elsewhere: open its owner, or re-read today — never a bare toast.
+        return CairnTodayOpenSession.resolveConflict(targetDate, { ...response, ok: false, code: response.code || "daily_session_missing" }, openSessionDeps(targetDate, trigger))!;
       }
 
       const classify = (globalThis as {
@@ -1134,6 +1124,10 @@ async function openSession(date?: string | null, options: OpenSessionOptions = {
     enterSession(targetDate);
     return true;
   }
+
+  // The date's open session (this or another device's) is opened, never a second made or replaced.
+  const adopted = await CairnTodayOpenSession.adopt(targetDate, { ...options, replace: explicitReplacement }, (owner, announce) => openOwnedSession(targetDate, owner, trigger, announce));
+  if (adopted !== null) return adopted;
 
   let customSession = options.session || null;
   // An empty weekly plan still has a useful durable destination: an explicit,
@@ -1282,9 +1276,9 @@ async function openSession(date?: string | null, options: OpenSessionOptions = {
         return true;
       }
     }
-    const message = transient && canStageOffline
-      ? "Could not save this session on this device — free storage and try again."
-      : String(error?.message || "Could not save today’s session. Try again when you’re ready.");
+    // Not stageable offline: re-read today and open what is there, else say so calmly — never a raw error.
+    if (!(transient && canStageOffline)) return CairnTodayOpenSession.recover(targetDate, openSessionDeps(targetDate, trigger));
+    const message = "Could not save this session on this device — free storage and try again.";
     sessionPrepareBusy(trigger, false, message);
     announceSessionPrepare(message);
     toast(message);
@@ -1309,17 +1303,13 @@ async function openSession(date?: string | null, options: OpenSessionOptions = {
     await renderToday({ soft: true });
     return false;
   }
-  if (response?.ok === false && response.code === "daily_session_active_changed") {
-    const message =
-      "Another accepted session now owns today. Review the refreshed card before continuing.";
-    sessionPrepareBusy(trigger, false, message);
-    announceSessionPrepare(message);
-    toast(message);
-    await renderToday({ soft: true });
-    return false;
+  // Another session owns the date: open it (the conflict names it), or re-read today — never a dead-end toast.
+  if (response?.ok === false) {
+    const resolved = CairnTodayOpenSession.resolveConflict(targetDate, response, openSessionDeps(targetDate, trigger));
+    if (resolved) return resolved;
   }
   if (response?.ok !== true || !response.daily_session || !response.session) {
-    const message = String(response?.error || "This session could not be prepared.");
+    const message = "This session could not be prepared. Try again in a moment.";
     sessionPrepareBusy(trigger, false, message);
     announceSessionPrepare(message);
     toast(message);
@@ -1370,6 +1360,10 @@ function wireSessionDestination(): void {
       activateTab("today");
     });
   }
+  CairnTodayOpenSession.wireDiscard(view, {
+    say: toast,
+    done: () => { todayState.planReveal = undefined; activateTab("today"); },
+  });
   view.querySelectorAll<HTMLElement>(".sess-dest .daybtn").forEach((btn) => {
     if (btn.dataset.wired) return;
     btn.dataset.wired = "1";
@@ -1541,6 +1535,7 @@ async function renderSession(opts: any = {}): Promise<void> {
     dayFocus,
     why: (lineOwnsTitle && linePlanDay!.caveat) || dailySession?.why || "",
     estimate: dailySession?.est_minutes || null,
+    discardHtml: CairnTodayOpenSession.discardHtml(todayState.logDate, todayData.openSession),
     exDone: prep.exDone,
     exTotal: prep.exTotal,
     original: lineOwnsTitle && linePlanDay!.reshaped ? linePlanDay!.original : [],

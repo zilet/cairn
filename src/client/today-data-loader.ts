@@ -32,6 +32,9 @@ type TodayDataAggregate = {
   strength_journey?: unknown;
   agenda?: unknown;
   coaching_focus?: unknown;
+  // Today's open session (null when none): the one Start/Continue fact, kept under
+  // its own SWR key so a repaint can read it without the whole aggregate.
+  open_session?: unknown;
 };
 type TodayDataLoadDeps = {
   root: HTMLElement;
@@ -72,6 +75,8 @@ type TodayDataLoadResult = {
   primedProgressionDay: number | null;
   // undefined = not covered this render; the prep wave keeps its own fetch.
   strengthJourney?: unknown;
+  // The date's open session off the last aggregate to answer (null: none, or not yet known).
+  openSession: import("../contracts/client-api.js").ClientOpenSession | null;
   revalidations: Array<Promise<unknown>>;
   changed(): boolean;
 };
@@ -148,7 +153,9 @@ type TodayDataLoaderApi = {
       );
     };
     const aggregatePath = todayAggregatePath(deps.state.logDate, deps.state.tab);
+    const openKey = "today:open:" + deps.state.logDate;
     const sliceOf = (value: TodayDataAggregate) => [
+      { key: openKey, data: value.open_session ?? null },
       { key: "plan", data: value.plan },
       { key: sessKey, data: value.session },
       { key: "stats", data: value.stats },
@@ -226,9 +233,9 @@ type TodayDataLoaderApi = {
       // compare below see a mismatch that was never a genuine in-flight write and
       // silently drop a fresh aggregate slice.
       const before = new Map<string, string>();
-      for (const key of ["plan", sessKey, "stats", "profile", "exercises"]) {
+      for (const key of [openKey, "plan", sessKey, "stats", "profile", "exercises"]) {
         const peek = deps.peekCached(key);
-        before.set(key, stableJson(peek ? peek.data : undefined));
+        before.set(key, stableJson(peek ? peek.data : key === openKey ? null : undefined));
       }
       revalidations.push(
         deps.cachedApi(aggregatePath, {
@@ -238,7 +245,7 @@ type TodayDataLoaderApi = {
             if (!isTodayAggregate(data)) return;
             for (const slice of sliceOf(data)) {
               const current = deps.peekCached(slice.key);
-              const currentJson = stableJson(current ? current.data : undefined);
+              const currentJson = stableJson(current ? current.data : slice.key === openKey ? null : undefined);
               // Someone newer (a logged set, a mutation write) owns this key now.
               if (currentJson !== before.get(slice.key)) continue;
               const nextJson = stableJson(slice.data);
@@ -326,6 +333,7 @@ type TodayDataLoaderApi = {
       primedLastSets,
       primedProgressionDay,
       strengthJourney: useFreshAggregate ? aggregate!.strength_journey : undefined,
+      openSession: (deps.peekCached(openKey)?.data as TodayDataLoadResult["openSession"]) ?? null,
       revalidations,
       changed: () => anyChanged,
     };

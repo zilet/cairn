@@ -142,6 +142,7 @@ const MODULES = [
   "day-glance-view",
   "program-week-model",
   "program-week-client",
+  "today-open-session-client",
   "train-week-frame-client",
   "train-week-client",
 ];
@@ -541,7 +542,11 @@ test("the primary action follows the state as served: start, resume, log the run
   const live = planWeek({
     days: planWeek().days.map((d) => (d.date === TODAY ? { ...d, status: "today", session: { id: 3, title: "Upper back & arms", date: TODAY, finished: false } } : d)),
   });
-  assert.equal(html(live, detailToday).querySelector("[data-twk-start]").textContent, "Resume session");
+  // Liveness is the server line's word, never "a session row exists": an opened session
+  // nothing was logged on still starts; one the line says is under way continues.
+  assert.equal(html(live, detailToday).querySelector("[data-twk-start]").textContent, "Start Upper back & arms");
+  const underWay = { ...live, strength_line: { ...strengthLine, state: "in_progress" } };
+  assert.equal(html(underWay, detailToday, underWay.strength_line).querySelector("[data-twk-start]").textContent, "Continue Upper back & arms");
   const runOnly = planWeek({
     days: planWeek().days.map((d) =>
       d.date === TODAY
@@ -574,4 +579,17 @@ test("a day that did not fit this week is said under the strip, verbatim and esc
     null,
     "nothing displaced, nothing said"
   );
+});
+
+// The one wording: when Today's aggregate has told us the open session, Train prints its label
+// verbatim — and only while it agrees with the line about whether work is under way.
+test("Train's start action prints the server's open_session label", () => {
+  const open = { daily_session_id: 7, session_id: 9, started: true, label: "Continue Pull <day>" };
+  const win = load({ peekCached: (key) => (key === `today:open:${TODAY}` ? { data: open, fresh: true } : null) });
+  const W = win.CairnTrainWeek;
+  const underWay = planWeek({ strength_line: { ...strengthLine, state: "in_progress" } });
+  const card = renderHtml(W.nextHtml(W.nextOf(underWay, lookAhead()), detailToday, TODAY, underWay.strength_line), { document: win.document });
+  assert.equal(card.querySelector("[data-twk-start]").textContent, "Continue Pull <day>");
+  const idle = renderHtml(W.nextHtml(W.nextOf(planWeek(), lookAhead()), detailToday, TODAY, strengthLine), { document: win.document });
+  assert.equal(idle.querySelector("[data-twk-start]").textContent, "Start Upper back & arms", "a stale label never contradicts the line");
 });

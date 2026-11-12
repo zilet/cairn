@@ -14,6 +14,9 @@ type SessionLaunchOptions = {
   isRunDay: boolean;
   read: { est_minutes?: unknown } | null | undefined;
   strengthJourney?: import("../contracts/client-api.js").ClientStrengthJourney | null;
+  // The server's open session: its `label` is the card's one action and its `action`
+  // the one liveness fact (never a local set count).
+  open?: import("../contracts/client-api.js").ClientOpenSession | null;
 };
 
 type SessionLaunchFacts = {
@@ -38,6 +41,7 @@ type SessionLaunchFacts = {
     const planName = opts.day && opts.day.name ? String(opts.day.name) : "";
     const planLinked = !opts.dailySession || opts.dailySession.plan_day_id != null;
     const name =
+      opts.open?.title ||
       (planLinked && planName) ||
       opts.dailySession?.title ||
       opts.preview?.title ||
@@ -47,7 +51,7 @@ type SessionLaunchFacts = {
       opts.dailySession?.focus || opts.preview?.focus || (opts.day && opts.day.focus ? String(opts.day.focus) : "");
     // Say each fact once: the focus rides the title only when it adds something.
     const focus = CairnTodayBrief.distinctLine(focusText, name);
-    const started = opts.exDone > 0 || opts.hasLoggedSets;
+    const started = opts.open ? opts.open.action === "continue" : opts.exDone > 0 || opts.hasLoggedSets;
     const previewCount = !started && !opts.dailySession ? opts.preview?.item_count : null;
     const progress =
       previewCount != null
@@ -100,7 +104,7 @@ type SessionLaunchFacts = {
     const facts = sessionLaunchFacts(opts);
     const est = facts.minutes ? `~${facts.minutes} min` : "";
     const meta = [facts.progress, est].filter(Boolean).join("  ·  ");
-    const cta = facts.started ? "Continue" : "Start";
+    const cta = opts.open?.label || (facts.started ? "Continue" : "Start");
     const source =
       decisionLabel ||
       (opts.dailySession

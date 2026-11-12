@@ -29,7 +29,12 @@ type TodayRenderStateInput = {
   // suggestion that holds work; the server's ChosenSession, src/repo/today-strength-line.ts),
   // that is the same commitment as "Train anyway": its launch card stands under any read.
   // An accepted suggestion with nothing in it (a rest read's "Rest day") opens nothing.
+  // Only the fallback for a Today whose aggregate carried no `openSession`.
   dailySession?: { source?: unknown; items?: unknown[] | null } | null;
+  // The server's one fact about today's session (`open_session` on the Today aggregate).
+  // When present it is the hero under ANY read: its `label` is the one action, and
+  // `chosen` says whether the quiet read is a headline or only the caveat line.
+  openSession?: import("../contracts/client-api.js").ClientOpenSession | null;
 };
 type TodayRenderStateResult = {
   hasLoggedSets: boolean;
@@ -39,6 +44,10 @@ type TodayRenderStateResult = {
   hasGarmin: boolean;
   showPlan: boolean;
   showDone: boolean;
+  // The open session's hero; null when the date has none.
+  hero: { label: string; action: "start" | "continue"; chosen: boolean } | null;
+  // False once the athlete chose the session: the rest/easy read is then a caveat only.
+  readLeads: boolean;
 };
 type TodayRenderStateApi = {
   derive(input: TodayRenderStateInput): TodayRenderStateResult;
@@ -55,9 +64,12 @@ type TodayRenderStateApi = {
     );
     const isFinished = !!(input.session && input.session.finished_at);
     const hasGarmin = !!(input.session && input.session.garmin);
+    const open = input.openSession ?? null;
     const source = input.dailySession?.source;
     const chosenSession =
-      source === "athlete_override" || (source === "agent_suggest" && !!input.dailySession?.items?.length);
+      !!open ||
+      source === "athlete_override" ||
+      (source === "agent_suggest" && !!input.dailySession?.items?.length);
     const showPlan =
       !input.isToday || hasLoggedSets || hasGarmin || revealOn || chosenSession || input.read?.kind === "train";
     const showDone = isFinished && input.isToday && !revealOn;
@@ -70,6 +82,8 @@ type TodayRenderStateApi = {
       hasGarmin,
       showPlan,
       showDone,
+      hero: open ? { label: open.label, action: open.action, chosen: !!open.chosen } : null,
+      readLeads: !open?.chosen,
     };
   }
 

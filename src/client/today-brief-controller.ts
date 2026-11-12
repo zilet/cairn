@@ -31,14 +31,12 @@ type TodayBriefControllerState = {
   plan: TodayBriefControllerPlanDay[];
   planReveal?: { date: string; on: boolean; blank?: boolean } | null;
   progressSeg?: string;
-  // Set by today-screen.ts's renderToday alongside its own briefHtml call, so
-  // upgradeBriefInPlace can reuse the exact launch-card witness on a same-kind
-  // repaint instead of re-deriving it from the DOM.
+  // Set by renderToday beside its own briefHtml call, so upgradeBriefInPlace reuses the
+  // exact launch-card witness, the folded session facts and the server's open session
+  // (one action, one button) on a Brief-only repaint instead of re-deriving them.
   nothingToStart?: boolean;
-  // Set by renderToday when the Brief carries the start for today's session and the
-  // launch card's facts fold into it (one action, one button) — reused here so a
-  // Brief-only repaint keeps the same fold.
   briefSession?: TodayBriefSessionFold | null;
+  openSession?: { date: string; read: import("../contracts/client-api.js").ClientOpenSession } | null;
 };
 
 type TodayBriefControllerRunOptions = ClientAgentOpHandlers & {
@@ -354,7 +352,9 @@ type TodayBriefControllerDeps = {
     deps: TodayBriefControllerDeps,
   ): string {
     const activeOverride = deps.state.brief && deps.state.brief.date === deps.state.logDate ? deps.state.brief.override : "";
-    return CairnTodayBrief.briefHtml(read, {
+    const open = deps.state.openSession && deps.state.openSession.date === deps.state.logDate ? deps.state.openSession.read : null;
+    return CairnTodayBrief.briefHtml(CairnTodayOpenSession.briefRead(read, open), {
+      open,
       showPlan: !!options.showPlan,
       showDone: !!options.showDone,
       isToday: !!options.isToday,

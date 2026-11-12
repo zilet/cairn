@@ -251,7 +251,10 @@ type DayRecordDetail = import("../contracts/day-detail.js").DayDetail;
       state.day = null;
       state.dayPicked = false;
       state.dayPickedOn = null;
-      void openSession(date, { trigger: log, provenance: { entry: "day_record" } });
+      // Looking at a past day mints nothing that lasts: leaving the session unlogged drops it.
+      void openSession(date, { trigger: log, provenance: { entry: "day_record" } }).then((opened) => {
+        if (opened) CairnTodayOpenSession.markPastDay(date);
+      });
     });
     // "The coach adapted this day": its Undo is the server's own revert (decision-undo);
     // once it lands the day is read again, so the page shows the day as it now stands.

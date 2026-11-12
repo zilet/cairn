@@ -100,6 +100,7 @@ test("Today data loader uses the aggregate on a cold path and primes slice cache
   assert.deepEqual(result.profile, { name: "Aggregate" });
   assert.deepEqual(result.exercises, [{ id: 1, name: "Back Squat" }]);
   assert.deepEqual(writes.map((row) => row.key), [
+    "today:open:2026-01-02",
     "plan",
     "today:session:2026-01-02",
     "stats",
@@ -143,6 +144,7 @@ test("Today data loader lets a fresh aggregate replace warm-but-stale slices", a
   assert.deepEqual(result.profile, { name: "Aggregate" });
   assert.deepEqual(result.exercises, [{ id: 1, name: "Back Squat" }]);
   assert.deepEqual(writes.map((row) => row.key), [
+    "today:open:2026-01-02",
     "plan",
     "today:session:2026-01-02",
     "stats",
@@ -398,4 +400,62 @@ test("the Today tab asks for the widened aggregate, and its fan-in half never re
   assert.equal(calls[1][1], "/today?date=2026-01-02&surface=today");
   assert.equal("responses" in projected, false, "health reads in the fan-in stay off disk");
   assert.deepEqual(projected.plan, []);
+});
+
+// The open session rides the aggregate under its own key, so a repaint (and every other surface)
+// reads the one server fact without holding the whole aggregate.
+test("the aggregate's open_session is kept under its own key and handed to the screen", async () => {
+  const open = { daily_session_id: 7, session_id: 9, started: false, chosen: true, label: "Start Pull" };
+  const loader = loadDataLoader();
+  const cache = {};
+  const { deps, writes } = makeDeps({
+    peekCached: (key) => cache[key] || null,
+    cachedApi: async (_path, options = {}) => {
+      const payload = aggregatePayload({ open_session: open });
+      if (options.onUpgrade) options.onUpgrade(payload, { changed: true });
+      return payload;
+    },
+  });
+  deps.storeCached = (key, data) => {
+    writes.push({ key, data });
+    cache[key] = { data, fresh: true };
+  };
+  const result = await loader.load({}, deps);
+  assert.deepEqual(writes.find((row) => row.key === "today:open:2026-01-02").data, open);
+  assert.deepEqual(result.openSession, open);
+});
+
+test("a warm open learns another device's session: the open key changes and earns a repaint", async () => {
+  const open = { daily_session_id: 7, session_id: 9, started: false, chosen: false, label: "Start Pull" };
+  const loader = loadDataLoader();
+  const cache = warmPeeks();
+  const { deps, writes } = makeDeps({
+    peekCached: (key) => cache[key] || null,
+    cachedApi: async (_path, options = {}) => {
+      const payload = aggregatePayload({ open_session: open, profile: { name: "Warm" } });
+      if (options.onUpgrade) options.onUpgrade(payload, { changed: true });
+      return payload;
+    },
+  });
+  const result = await loader.load({}, deps);
+  assert.equal(result.openSession, null, "the paint itself is the cached one");
+  await Promise.all(result.revalidations);
+  assert.deepEqual(writes.find((row) => row.key === "today:open:2026-01-02").data, open);
+  assert.equal(result.changed(), true);
+});
+
+test("a warm open with no open session anywhere earns no repaint for the open key", async () => {
+  const loader = loadDataLoader();
+  const cache = warmPeeks({ profile: { data: { name: "Aggregate" }, fresh: true } });
+  const { deps, writes } = makeDeps({
+    peekCached: (key) => cache[key] || null,
+    cachedApi: async (_path, options = {}) => {
+      const payload = aggregatePayload({ open_session: null });
+      if (options.onUpgrade) options.onUpgrade(payload, { changed: true });
+      return payload;
+    },
+  });
+  const result = await loader.load({}, deps);
+  await Promise.all(result.revalidations);
+  assert.equal(writes.some((row) => row.key === "today:open:2026-01-02"), false);
 });

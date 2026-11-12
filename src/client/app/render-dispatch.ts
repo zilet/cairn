@@ -28,6 +28,8 @@
     // Leaving the session surface drops any screen wake lock it was holding;
     // renderSession retakes one on the way in.
     if (tab !== "session" && typeof releaseWakeLock === "function") void releaseWakeLock();
+    // …and a past day's empty session (opened from its record) is dropped (CairnTodayOpenSession).
+    if (tab !== "session" && typeof CairnTodayOpenSession !== "undefined") void CairnTodayOpenSession.leavePastDay();
     // The rest bar belongs on Session (where sets are logged) and Today (where
     // you land between sets). Anywhere else it would float over Chat's composer
     // (and keep body.resting padding app-wide); the deadline stays persisted so

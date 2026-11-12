@@ -316,7 +316,7 @@ test("a failed rail read releases its held card at once", async () => {
 
 function loadBriefController({ read, painted }) {
   const document = createDocument();
-  const win = loadClientModule(["today-brief-cache-client", "today-brief-controller"], {
+  const win = loadClientModule(["today-open-session-client", "today-brief-cache-client", "today-brief-controller"], {
     document,
     globals: {
       CairnTodayBrief: {

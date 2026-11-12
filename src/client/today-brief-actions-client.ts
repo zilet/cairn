@@ -164,13 +164,14 @@ type TodayBriefActionsDayRead = import("../contracts/client.js").ClientDayRead &
   async function tradeRestTomorrow(button: HTMLElement, deps: ClientTodayBriefActionsDeps): Promise<void> {
     if (button.getAttribute("aria-busy") === "true") return;
     button.setAttribute("aria-busy", "true");
-    let result: { ok?: unknown; read?: unknown } | null = null;
+    type TradeResult = { ok?: unknown; read?: unknown; train_anyway?: unknown };
+    let result: TradeResult | null = null;
     try {
       result = await deps.api("/today-read/trade-rest", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ date: deps.state.logDate }),
-      }) as { ok?: unknown; read?: unknown } | null;
+      }) as TradeResult | null;
     } catch {
       result = null;
     }
@@ -190,6 +191,11 @@ type TodayBriefActionsDayRead = import("../contracts/client.js").ClientDayRead &
     deps.state.brief = { date: deps.state.logDate, override: read.override || "", read };
     deps.toast("Tomorrow's held for rest");
     if (deps.state.tab !== "today") return;
+    // The trade also answers "train today": go straight to the session, as Train anyway does.
+    if (CairnTodayOpenSession.tradeOpensSession(result)) {
+      void openSession(undefined, { source: "adaptive_plan", trigger: button, trainAnyway: true, replace: true, provenance: { entry: "train_anyway" } });
+      return;
+    }
     await deps.withViewTransition(() => deps.renderToday());
   }
 
