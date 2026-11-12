@@ -11,6 +11,7 @@ import {
   hasExplicitPlanEditIntent,
   hasExplicitRunEditIntent,
   hasExplicitStrengthObjectiveIntent,
+  messageAsksForAnswer,
 } from "./chat-intent.js";
 import { pickDayVariant } from "./repo/brain/day-read-rules.js";
 import type { StoredRun } from "./repo/run-edit.js";
@@ -45,16 +46,36 @@ function replyClaimsPlanSuccess(reply: string): boolean {
   );
 }
 
+// Is this one sentence a claim that the PLAN moved? "I've saved your note to your health
+// record" matches the objectless "I've saved" shape, but on a turn whose non-plan write
+// (a health record, a food log, a weigh-in) landed, a sentence that never names the plan
+// is about that write and is true. Read as a plan claim, it once replaced a whole answer
+// to a lab-note question with "Nothing from that response reached the plan" (2026-11-12).
+function sentenceClaimsPlanSuccess(sentence: string, nonPlanWriteLanded: boolean): boolean {
+  if (!replyClaimsPlanSuccess(sentence)) return false;
+  return !nonPlanWriteLanded || REPLY_NAMES_THE_PLAN.test(sentence);
+}
+
 // The reply with every sentence that claims a plan write removed, everything else word
 // for word. Judged sentence by sentence inside each line, so a bulleted answer keeps its
 // shape; a line left empty goes with its claim.
 const CLAIM_SENTENCE_BREAK = /(?<=[.!?])\s+(?=\S)/;
-export function withoutPlanSuccessClaims(reply: string): string {
+
+function replyClaimsPlanSuccessGiven(reply: string, nonPlanWriteLanded: boolean): boolean {
+  if (!nonPlanWriteLanded) return replyClaimsPlanSuccess(reply);
+  return String(reply ?? "")
+    .split("\n")
+    .some((line) => line.split(CLAIM_SENTENCE_BREAK).some((sentence) => sentenceClaimsPlanSuccess(sentence, true)));
+}
+
+export function withoutPlanSuccessClaims(reply: string, nonPlanWriteLanded = false): string {
   return String(reply ?? "")
     .split("\n")
     .map((line) => {
       if (!replyClaimsPlanSuccess(line)) return line;
-      const kept = line.split(CLAIM_SENTENCE_BREAK).filter((sentence) => !replyClaimsPlanSuccess(sentence));
+      const kept = line
+        .split(CLAIM_SENTENCE_BREAK)
+        .filter((sentence) => !sentenceClaimsPlanSuccess(sentence, nonPlanWriteLanded));
       const text = kept.join(" ");
       // A list marker or heading left with nothing after it is not a line.
       return /^[\s*_>#\-–—•\d.)]*$/.test(text) ? null : text;
@@ -728,14 +749,13 @@ function reconcilePlanReplyCore(
     // for a plan edit has no plan claim to police: its "I've added…" is about that write.
     // The guard holds only while the reply says nothing about the plan itself: "Logged. I've
     // updated your plan so tomorrow is lighter" beside a lone food write is still a false claim.
-    if (
-      !explicit &&
-      !restructureDraft &&
-      !REPLY_NAMES_THE_PLAN.test(reply) &&
-      applied.some((entry) => NON_PLAN_WRITE_ACTIONS.has(entry.type) && !entry.error)
-    ) {
+    const nonPlanWriteLanded = applied.some((entry) => NON_PLAN_WRITE_ACTIONS.has(entry.type) && !entry.error);
+    if (!explicit && !restructureDraft && !REPLY_NAMES_THE_PLAN.test(reply) && nonPlanWriteLanded) {
       return reply;
     }
+    // Past that guard, a claim is judged sentence by sentence, so the true "I've saved your
+    // note" beside a landed health log never counts as a plan claim.
+    const claimsPlan = replyClaimsPlanSuccessGiven(reply, nonPlanWriteLanded);
     // Today's session IS this turn's change, and it is not a plan change: its own
     // receipt (todaySessionReceipts) says what happened. "No plan change was saved"
     // above it would read as the session failing.
@@ -748,23 +768,35 @@ function reconcilePlanReplyCore(
     // was saved" under it was false (2026-11-11), and it hid the one thing the athlete
     // needed to hear: the write is their STANDING week, not a one-week move.
     if (runWeekLanded(applied)) return appendReceipt(reply, runWeekReceipt(applied));
-    if (restructureDraft && (explicit || replyClaimsPlanSuccess(reply))) {
+    if (restructureDraft && (explicit || claimsPlan)) {
       return pickDayVariant(RESTRUCTURE_DRAFT_VARIANTS, today, "chat-restructure-draft");
     }
-    if (explicit && replyClaimsPlanSuccess(reply)) {
+    if (explicit && claimsPlan) {
+      // The athlete also ASKED something: the answer is what they came for, so only the
+      // false claim goes and the honest note follows (the same rule as a plain question
+      // below). A bare edit request answered with a false "done" is still replaced whole.
+      if (messageAsksForAnswer(message)) {
+        const kept = withoutPlanSuccessClaims(reply, nonPlanWriteLanded);
+        if (kept) {
+          return appendReceipt(
+            kept,
+            pickDayVariant(PLAN_NO_CHANGE_APPENDED_VARIANTS, today, "chat-plan-no-change-note")
+          );
+        }
+      }
       return pickDayVariant(PLAN_NOT_SAVED_VARIANTS, today, "chat-plan-not-saved");
     }
     if (explicit) {
       const note = pickDayVariant(PLAN_NO_CHANGE_APPENDED_VARIANTS, today, "chat-plan-no-change-note");
       return appendReceipt(reply, note);
     }
-    if (replyClaimsPlanSuccess(reply)) {
+    if (claimsPlan) {
       // A question answered is still an answer. Only the sentence that claims a write is
       // false; the rest of the prose is what the athlete asked for, so it stays and the
       // honest note follows it. (Replacing the whole reply threw away a first-turn
       // answer and left the athlete with one canned line, 2026-10-19.)
       const note = pickDayVariant(PLAN_UNTOUCHED_BY_QUESTION_VARIANTS, today, "chat-plan-question-no-op");
-      const kept = withoutPlanSuccessClaims(reply);
+      const kept = withoutPlanSuccessClaims(reply, nonPlanWriteLanded);
       return kept ? appendReceipt(kept, note) : note;
     }
     return reply;

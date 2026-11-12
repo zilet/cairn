@@ -562,8 +562,35 @@ export function hasSelfContainedPlanEditIntent(message: string | null | undefine
   const text = normalizePlanIntentText(message);
   if (!text) return false;
   if (isLeadingQuestion(text)) return false;
-  if (PLAN_EDIT_VERB_RE.test(text) && PLAN_EDIT_OBJECT_RE.test(text)) return true;
-  return planIntentClauses(text).some(clauseNamesPlanApply);
+  const objects = withoutPlanAsVerb(text);
+  if (PLAN_EDIT_VERB_RE.test(objects) && PLAN_EDIT_OBJECT_RE.test(objects)) return true;
+  return planIntentClauses(objects).some(clauseNamesPlanApply);
+}
+
+// "I plan on doing bloodwork next month" names no plan: there "plan" is the athlete's own
+// verb, and read as an object it turned "optimize further … I plan on …" into a plan edit
+// (2026-11-12). Only the subject-and-verb is removed, so "I plan to swap bench for dips"
+// still reads its own instruction.
+const PLAN_AS_VERB_RE =
+  /\b(?:i|we|i'm|i\s+am|we're|we\s+are|i'll|we'll|i\s+will|we\s+will)\s+(?:also\s+|still\s+|now\s+|was\s+)?plan(?:s|ned|ning)?\s+(?:on|to)\b/gi;
+function withoutPlanAsVerb(text: string): string {
+  return text.replace(PLAN_AS_VERB_RE, " ");
+}
+
+// Does the athlete's OWN writing ask for the coach's view? A question mark or an
+// opinion ask ("WDYT", "thoughts") outside anything pasted: a fenced block or a quoted
+// line is someone else's text (a doctor's note, a lab export) and its punctuation is not
+// the athlete asking. A reply to a message like this is an answer first, whatever else
+// the turn wrote.
+const OPINION_ASK_RE =
+  /\b(?:wdyt|what\s+do\s+you\s+think|what\s+would\s+you\s+(?:do|suggest|recommend)|thoughts|your\s+(?:take|view|opinion|analysis|point\s+of\s+view))\b/i;
+export function messageAsksForAnswer(message: string | null | undefined): boolean {
+  const own = String(message ?? "")
+    .replace(/```[\s\S]*?(?:```|$)/g, " ")
+    .split("\n")
+    .filter((line) => !/^\s*>/.test(line))
+    .join("\n");
+  return own.includes("?") || OPINION_ASK_RE.test(own);
 }
 
 export function hasExplicitPlanEditIntent(message: string | null | undefined): boolean {
