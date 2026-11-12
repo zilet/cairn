@@ -323,8 +323,12 @@ test("a rest read the athlete trained through reads as not aligned", () => {
 test("a train read backed by a logged session reads as aligned", () => {
   reset();
   const date = localDaysAgo(2);
-  seedTrainingDay(date);
+  // The read, then the work it called for. Seeded the other way round, this passed only
+  // while both writes shared one wall-clock second (the stamps are second-granular and a
+  // tie counts as the read coming first); crossing a second made the read commentary on
+  // finished work, and its question was canceled.
   repo.saveDayRead(date, read("train", { focus: "Lower" }));
+  seedTrainingDay(date);
 
   const { evaluation } = verdictFor(date);
   assert.equal(evaluation.verdict, "aligned");
