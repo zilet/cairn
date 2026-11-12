@@ -810,6 +810,7 @@ to{opacity:1;transform:none}
 .rcpt{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 var(--space-2);font-size:var(--text-xs);line-height:var(--leading-normal);color:var(--ink-2)}
 .rcpt-what{color:var(--ink)}
 .rcpt-until,.rcpt-state{color:var(--muted)}
+.rcpt .rcpt-open{min-height:44px;margin:var(--space-2) var(--space-3) var(--space-2) 0}
 .rcpt .rcpt-undo{min-height:44px;display:inline-flex;align-items:center;margin:calc(var(--space-4) * -1) 0;padding:0 var(--space-3)}
 .rcpt .rcpt-undo:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
 .rcpt.is-undone .rcpt-what{text-decoration:line-through;text-decoration-color:var(--line-2)}

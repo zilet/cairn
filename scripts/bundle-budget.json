@@ -129,11 +129,11 @@
     "public/js/bundle-10-ask.js": {
       "lazy": "ask",
       "measured": {
-        "raw": 129585,
+        "raw": 130580,
         "brotli": 30274
       },
       "budget": {
-        "raw": 130048,
+        "raw": 131072,
         "brotli": 31744
       }
     },

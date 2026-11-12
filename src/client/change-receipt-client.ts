@@ -25,14 +25,30 @@
       !readonly && id > 0 && r.undo?.kind === "brain_decision" && (!words || label === "Hold")
         ? `<button class="linkbtn-quiet rcpt-undo" type="button" data-rcpt-undo="${id}" aria-label="${escAttr(`${label}: ${what}`)}">${label}</button>`
         : "";
+    // The way forward (a session receipt's "Start Upper"): the server re-reads it on every
+    // read and drops it once the session no longer owns the day, so draw exactly what came.
+    const date = clean(r.open?.date);
+    const openLabel = clean(r.open?.label);
+    const go =
+      !readonly && status !== "undone" && r.open?.kind === "session" && date && openLabel
+        ? `<button class="btn btn-solid rcpt-open" type="button" data-rcpt-open="${escAttr(date)}">${escHtml(openLabel)}</button>`
+        : "";
     return `<li class="rcpt is-${status}" data-rcpt="${escAttr(key)}"><span class="rcpt-what">${escHtml(what)}</span>${
       until ? `<span class="rcpt-until"> · ${escHtml(until)}</span>` : ""
-    }${state}${act}</li>`;
+    }${state}${go}${act}</li>`;
   }
 
   function listHtml(receipts: unknown, options: { readonly?: boolean } = {}): string {
     const rows = (Array.isArray(receipts) ? receipts : []).map((r) => rowHtml(r, !!options.readonly)).join("");
     return rows ? `<ul class="rcpt-list" aria-label="Changes">${rows}</ul>` : "";
+  }
+
+  // Opens the receipt's session through the app's one entry (the assertion/reuse path: an
+  // ordinary open, never replace), so it lands on the session the receipt describes.
+  function open(button: HTMLElement): void {
+    const date = button.dataset.rcptOpen;
+    if (!date || typeof openSession !== "function") return;
+    void openSession(date, { source: "adaptive_plan", trigger: button, provenance: { entry: "chat_receipt" } });
   }
 
   function undo(button: HTMLElement): void {
@@ -48,6 +64,7 @@
       after: () => {
         if (row) row.className = "rcpt is-undone";
         row?.querySelector(".rcpt-state")?.remove();
+        row?.querySelector(".rcpt-open")?.remove();
         button.outerHTML = `<span class="rcpt-state">${done}</span>`;
       },
     });
@@ -57,7 +74,7 @@
     CairnChangeReceipt: {
       listHtml,
       mount: (host: Element): (() => void) =>
-        CairnUiActions.mount(host, "rcpt", ({ delegate }) => delegate("click", { "rcpt-undo": undo })),
+        CairnUiActions.mount(host, "rcpt", ({ delegate }) => delegate("click", { "rcpt-undo": undo, "rcpt-open": open })),
     },
   });
 }
