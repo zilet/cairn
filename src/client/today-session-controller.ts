@@ -340,6 +340,7 @@ type TodaySessionSurfaceOptions = ClientTodaySessionSurfaceOptions;
         if (!CairnTodaySessionSetModel.cacheSessionTruth(deps, actionDate, result)) return;
         deps.invalidate("history:sessions");
         deps.state.planReveal = { date: actionDate, on: true };
+        if (actionTab !== "session") return void deps.activateTab("session"); // Log more lands IN the reopened session
         deps.withViewTransition(() => Promise.resolve(deps.renderToday()).then(() => deps.viewEnter()));
       });
     }

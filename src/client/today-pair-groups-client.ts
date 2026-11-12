@@ -20,8 +20,15 @@ type TodayPairGroupsApi = {
     return count === 2 ? "Pair — alternate sets, rest after both" : "Group — rotate sets, rest after all";
   }
 
+  // The caption names its group for assistive tech: every member card is a labelled
+  // group (role + aria-labelledby, written by the card and kept right by regroup).
+  // The id is the group key, so it is stable across repaints.
+  function captionId(key: number | string): string {
+    return `ex-group-cap-${key}`;
+  }
+
   function groupCaptionHtml(count: number, key: number, esc: (value: unknown) => string): string {
-    return `<div class="ex-group-cap" data-group="${key}">${esc(groupCaptionText(count))}</div>`;
+    return `<div class="ex-group-cap" id="${captionId(key)}" data-group="${key}">${esc(groupCaptionText(count))}</div>`;
   }
 
   // The head/tail classes are set by the renderer (never inferred with :has() or a
@@ -94,6 +101,13 @@ type TodayPairGroupsApi = {
       const lone = members.length < 2;
       members.forEach((card, index) => {
         card.classList.toggle("ex-in-group", !lone);
+        if (lone) {
+          card.removeAttribute("role");
+          card.removeAttribute("aria-labelledby");
+        } else {
+          card.setAttribute("role", "group");
+          card.setAttribute("aria-labelledby", captionId(key));
+        }
         card.classList.toggle("ex-group-head", !lone && index === 0);
         card.classList.toggle("ex-group-tail", !lone && index === members.length - 1);
         const meta = card.querySelector<HTMLElement>(".ex-meta");

@@ -194,15 +194,28 @@ type AdoptOptions = {
     hops = 0,
   ): Promise<boolean> {
     const id = Number(owner.daily_session_id);
+    // A session row with no composition is adopted by the PLAIN prepare (no replace, no
+    // fingerprint, no id): it binds a composition to the row and answers with it.
+    const asserted = await deps.prepare(id > 0 ? { date, expected_active_id: id } : { date });
+    return landed(date, owner, asserted, deps, announce, hops);
+  }
+
+  /** What an owner's prepare answered: enter it, follow a newer owner, or re-read today. */
+  async function landed(
+    date: string,
+    owner: OpenSessionOwner,
+    asserted: OpenSessionPrepared,
+    deps: OpenOwnedDeps,
+    announce: boolean,
+    hops: number,
+  ): Promise<boolean> {
+    const id = Number(owner.daily_session_id);
     const arrived = (response: Record<string, unknown> | null): boolean => {
       if (response) remember(date, response.daily_session, response.session);
       deps.enter(date, response);
       if (announce) deps.say(`${nameOf(owner.title)} is already open — here it is.`);
       return true;
     };
-    // A session row with no composition is adopted by the PLAIN prepare (no replace, no
-    // fingerprint, no id): it binds a composition to the row and answers with it.
-    const asserted = await deps.prepare(id > 0 ? { date, expected_active_id: id } : { date });
     if (!asserted.current) return false;
     const response = asserted.ok ? record(asserted.value) : null;
     const daily = record(response?.daily_session);
@@ -214,6 +227,46 @@ type AdoptOptions = {
     const next = ownerOf(response);
     if (hops < 2 && next && (id > 0 ? Number(next.daily_session_id) !== id : Number(next.daily_session_id) > 0)) return openOwned(date, next, deps, true, hops + 1);
     return recover(date, deps, hops + 1);
+  }
+
+  /**
+   * A cached session row that holds logged sets but no composition (sets from chat, MCP
+   * or a hand-typed log), still open and ours (not finished, not watch-owned). Opening it
+   * with the plain prepare lets the server adopt the row, so its sets arrive as cards of a
+   * composition instead of the plan day's cards beside a bare logged total.
+   */
+  function legacyAdoptable(session: unknown): boolean {
+    const row = record(session);
+    return !!row && !row.daily_session && !row.finished_at && !row.garmin && Number(row.id) > 0 && Array.isArray(row.sets) && row.sets.length > 0;
+  }
+
+  /**
+   * Open such a row through the plain prepare. Null = not adoptable (the caller opens the
+   * saved log as it always did); `saved` is that same opening, used when Cairn is
+   * unreachable so an offline log stays usable.
+   */
+  async function adoptLegacy(
+    date: string,
+    session: unknown,
+    deps: OpenOwnedDeps,
+    saved: () => void,
+  ): Promise<boolean | null> {
+    if (!legacyAdoptable(session)) return null;
+    const row = record(session)!;
+    const owner = asOwner({
+      daily_session_id: 0,
+      session_id: Number(row.id),
+      source: "athlete_override",
+      title: String(row.title || ""),
+      set_count: (row.sets as unknown[]).length,
+      started: true,
+    } as unknown as OpenSessionRead);
+    const asserted = await deps.prepare({ date });
+    if (asserted.current && !asserted.ok) {
+      saved();
+      return true;
+    }
+    return landed(date, owner, asserted, deps, false, 0);
   }
 
   /** Nothing named an owner (or it vanished): ask the server what is open now, and open it. */
@@ -331,6 +384,8 @@ type AdoptOptions = {
     forget,
     freshOpen,
     legacyOpen,
+    legacyAdoptable,
+    adoptLegacy,
     openOwned,
     recover,
     resolveConflict,

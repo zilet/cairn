@@ -349,7 +349,7 @@ function exerciseCardHtml(
   // Only the renderer's own two position tokens ever reach the class list.
   const pairTokens = todayString(item.pairClasses).split(/\s+/).filter((t) => t === "ex-group-head" || t === "ex-group-tail");
   const pairClass = pairChip ? ` ex-in-group${pairTokens.map((t) => ` ${t}`).join("")}` : "";
-  const pairGroupAttr = pairChip && todayFinite(item.pairGroup) != null ? ` data-group="${escAttr(todayFinite(item.pairGroup))}"` : "";
+  const pairGroupAttr = pairChip && todayFinite(item.pairGroup) != null ? ` data-group="${escAttr(todayFinite(item.pairGroup))}" role="group" aria-labelledby="ex-group-cap-${escAttr(todayFinite(item.pairGroup))}"` : "";
   return `<div class="ex${complete ? " ex-complete" : ""}${pairClass}${reveal != null ? " reveal" : ""}" data-card="${escAttr(exercise)}"${pairGroupAttr}${exKeyAttr} data-mode="${timed ? "timed" : "reps"}"${inputAttr}${headlineDose ? ` data-dose="headline"` : ""}${rxSilenced ? ` data-rx="off"` : ""}${reveal != null ? ` style="${stagger(reveal)}"` : ""}>
       <div class="ex-top">
         <div class="ex-top-main">

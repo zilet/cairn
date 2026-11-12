@@ -686,3 +686,16 @@ test("Today session-suggest controller reconnects loading state and clears on fa
   assert.match(harness.slot.innerHTML, /data-sugaction="retry"/);
   assert.deepEqual(harness.captions.at(-1), { stopped: true });
 });
+
+test("an offline adaptive start stages a session with no second 'saved on this device' sentence", () => {
+  const harness = loadController();
+  const request = { date: "2026-06-30", source: "adaptive_plan", replace: false, constraints: {}, provenance: { entry: "pwa" } };
+  const staged = harness.controller.stagedPrepareResponse({
+    date: request.date,
+    request,
+    plan: [{ id: 22, day_number: 2, name: "Upper", focus: "Push", items: [{ exercise: "Bench", sets: 3, rep_low: 5, rep_high: 8 }] }],
+    selectedDay: 2,
+    localPrepareId: "outbox-prepare-2",
+  });
+  assert.equal(staged.daily_session.why, null);
+});

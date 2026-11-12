@@ -521,3 +521,39 @@ test("legacyOpen: unfinished logged sets with no composition read as a session t
   second.store.set(`today:aggregate:${DATE}`, {});
   assert.equal(second.S.cached(DATE), null);
 });
+
+// ---- a session logged without a card is adopted by the plain prepare ----
+
+const legacyRow = (extra = {}) => ({ id: 9, date: DATE, title: "Press", sets: [{ exercise: "Overhead Press" }], ...extra });
+
+test("an open row with sets and no composition opens through the plain prepare, which adopts it", async () => {
+  const { S } = load();
+  assert.equal(S.legacyAdoptable(legacyRow()), true);
+  for (const closed of [{ finished_at: "2026-11-12T15:00:00Z" }, { garmin: {} }, { daily_session: { id: 3 } }, { sets: [] }]) {
+    assert.equal(S.legacyAdoptable(legacyRow(closed)), false);
+  }
+  const { deps: d, log } = deps({
+    prepare: async (body) => {
+      log2.asked.push({ ...body });
+      return { current: true, ok: true, value: { ...prepared(31), session: { id: 9, date: DATE, sets: [{ exercise: "Overhead Press" }] } } };
+    },
+  });
+  const log2 = { asked: [] };
+  const saved = [];
+  const taken = await S.adoptLegacy(DATE, legacyRow(), d, () => saved.push("saved"));
+  assert.equal(taken, true);
+  assert.deepEqual(log2.asked, [{ date: DATE }], "plain prepare: no replace, no fingerprint, no id");
+  assert.deepEqual(log.entered, [[DATE, 31]], "entered with the adopted composition");
+  assert.deepEqual(saved, []);
+});
+
+test("an unadoptable row is left to the caller; an unreachable Cairn opens the saved log as it was", async () => {
+  const { S } = load();
+  const { deps: d } = deps();
+  assert.equal(await S.adoptLegacy(DATE, legacyRow({ finished_at: "x" }), d, () => {}), null);
+  const saved = [];
+  const { deps: down, log } = deps({ prepare: async () => ({ current: true, ok: false, error: new Error("offline") }) });
+  assert.equal(await S.adoptLegacy(DATE, legacyRow(), down, () => saved.push("saved")), true);
+  assert.deepEqual(saved, ["saved"]);
+  assert.deepEqual(log.entered, [], "nothing was learned, nothing is entered by the prepare");
+});

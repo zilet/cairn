@@ -5648,6 +5648,8 @@ declare global {
       forget(date: string): void;
       freshOpen(date: string): Promise<OpenSessionRead | null>;
       legacyOpen(today: Record<string, unknown> | null | undefined): OpenSessionRead | null;
+      legacyAdoptable(session: unknown): boolean;
+      adoptLegacy(date: string, session: unknown, deps: OpenOwnedDeps, saved: () => void): Promise<boolean | null>;
       openOwned(date: string, owner: OpenSessionOwner, deps: OpenOwnedDeps, announce?: boolean, hops?: number): Promise<boolean>;
       recover(date: string, deps: OpenOwnedDeps, hops?: number): Promise<boolean>;
       resolveConflict(date: string, response: unknown, deps: OpenOwnedDeps): Promise<boolean> | null;

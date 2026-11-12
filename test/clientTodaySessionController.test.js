@@ -2556,3 +2556,27 @@ test("Finish on a partial log asks once, softly, and the second tap finishes", a
   await flushAsync();
   assert.deepEqual(harness.requests.map((request) => request.path), ["/sessions/88/finish"], "never a gate");
 });
+
+test("Log more on Today's done card lands in the reopened session, not back on Today", async () => {
+  const harness = loadController({
+    apiImpl: async (path, opts) => {
+      if (path === "/sessions/44/reopen" && opts?.method === "POST") {
+        return { id: 44, date: "2026-06-30", finished_at: null, sets: [{ exercise: "Push-up" }] };
+      }
+      throw new Error(`unexpected request: ${opts?.method || "GET"} ${path}`);
+    },
+  });
+  harness.deps.state.tab = "today";
+  const surface = harness.rootEl.appendChild(new FakeElement("div", { className: "sessiondone" }));
+  const reopen = surface.appendChild(new FakeElement("button", { id: "reopenBtn" }));
+  harness.controller.wireSessionSurface({
+    session: { id: 44, date: "2026-06-30", finished_at: "2026-06-30T15:00:00Z", sets: [{ exercise: "Push-up" }] },
+    hasLoggedSets: true,
+  }, harness.deps);
+
+  reopen.click();
+  await flushAsync();
+  assert.equal(harness.deps.state.tab, "session", "one tap reaches the session screen");
+  assert.deepEqual(plain(harness.deps.state.planReveal), { date: "2026-06-30", on: true });
+  assert.deepEqual(harness.renders, [], "no Today repaint to tap through");
+});

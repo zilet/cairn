@@ -126,6 +126,9 @@ function fakeSurface(members) {
     const meta = { chip: { remove: () => { meta.chip = null; } }, querySelector: (sel) => (sel === ".ex-pair-chip" ? meta.chip : null), insertAdjacentHTML: () => {} };
     surface.cards.push({
       dataset: { card: name, group: "1" }, connected: true, meta, classes,
+      attrs: new Map([["role", "group"], ["aria-labelledby", "ex-group-cap-1"]]),
+      setAttribute(k, v) { this.attrs.set(k, v); },
+      removeAttribute(k) { this.attrs.delete(k); },
       classList: { toggle: (c, on) => (on ? classes.add(c) : classes.delete(c)) },
       querySelector: (sel) => (sel === ".ex-meta" ? meta : null),
       insertAdjacentHTML: () => surface.caps.push(makeCap(1, "")),
@@ -143,6 +146,8 @@ test("after one half of a pair leaves, the lone member is a plain card and the c
   assert.equal(surface.cards[0].classes.has("ex-in-group"), false);
   assert.equal(surface.cards[0].meta.chip, null, "no partner chip left");
   assert.equal(surface.caps.length, 0, "no caption left");
+  assert.equal(surface.cards[0].attrs.has("role"), false, "a lone card is not a group");
+  assert.equal(surface.cards[0].attrs.has("aria-labelledby"), false);
 });
 
 test("when the partner returns the group re-forms with its caption and position classes", () => {
@@ -155,4 +160,16 @@ test("when the partner returns the group re-forms with its caption and position 
   assert.equal(surface.caps.length, 1);
   assert.ok(surface.cards[0].classes.has("ex-group-head"));
   assert.ok(surface.cards[1].classes.has("ex-group-tail"));
+  for (const card of surface.cards) {
+    assert.equal(card.attrs.get("role"), "group", "a re-formed group is a group again");
+    assert.equal(card.attrs.get("aria-labelledby"), "ex-group-cap-1");
+  }
+});
+
+test("a group's caption carries the stable id its members are labelled by", () => {
+  const { html } = render([
+    { exercise: "A", superset_group: 4 },
+    { exercise: "B", superset_group: 4 },
+  ]);
+  assert.match(html, /<div class="ex-group-cap" id="ex-group-cap-4" data-group="4">/);
 });
