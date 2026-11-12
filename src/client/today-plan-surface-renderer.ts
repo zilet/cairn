@@ -83,7 +83,6 @@ type TodayPlanSurfaceRendererDeps = {
 };
 type TodayPlanSurfaceRendererApi = {
   buildHtml(options: TodayPlanSurfaceRendererOptions, deps: TodayPlanSurfaceRendererDeps): string;
-  regroupPairs(root: ParentNode | null | undefined): void;
 };
 
 (() => {
@@ -238,39 +237,6 @@ type TodayPlanSurfaceRendererApi = {
     return `<details class="session-brain session-brain-fold sess-line" ${foldAttrs}><summary><span class="session-brain-label">${esc(count)}</span> · ${toggle}</summary><ul class="session-brain-more">${rows}</ul></details>`;
   }
 
-  function sameJourneyExercise(left: unknown, right: unknown): boolean {
-    return String(left || "").trim().toLowerCase() === String(right || "").trim().toLowerCase();
-  }
-
-  function journeyItem(
-    item: TodayPlanSurfaceRendererItem,
-    day: TodayPlanSurfaceRendererRecord,
-    journey: TodayPlanSurfaceRendererJourney | null,
-  ): TodayPlanSurfaceRendererItem {
-    const exercise = String(item.exercise || "");
-    const objective = journey?.available ? journey.objective : null;
-    if (!objective?.exercise || !exercise) return item;
-    if (sameJourneyExercise(exercise, objective.exercise)) {
-      const current = journey?.current;
-      const gap = journey?.gap_lb;
-      const line = objective.status === "completed"
-        ? "Anchor milestone complete — keep this lift steady and consolidate it."
-        : journey?.phase === "protecting"
-          ? "Anchor lift — hold or ease today; the relevant safety signal takes priority."
-          : current
-            ? `Anchor lift — ${Number(current.est_1rm).toFixed(1)} lb estimated 1RM on ${CairnFmt.date(current.date)}${Number(gap) > 0 ? ` · ${Number(gap).toFixed(1)} lb to target` : ""}.`
-            : "Anchor lift — establish one clean exact-lift checkpoint today.";
-      return { ...item, journey_role: "anchor", journey_line: line };
-    }
-    const dayNumber = Number(day.day_number);
-    const support = (Array.isArray(journey?.planned_support) ? journey.planned_support : []).find((entry) =>
-      sameJourneyExercise(entry.exercise, exercise) && Number(entry.plan_day_number) === dayNumber
-    );
-    return support
-      ? { ...item, journey_role: "support", journey_line: `${support.role} for ${objective.exercise} — ${support.why}` }
-      : item;
-  }
-
   // The lift list is lifts only. A run is never a card here (it lives on the
   // agenda: Today's run line and Plan -> Endurance), and a cardio item an older
   // payload still carries is dropped rather than drawn.
@@ -286,61 +252,6 @@ type TodayPlanSurfaceRendererApi = {
       rir: last.rir,
       duration_sec: last.duration_sec ?? null,
     };
-  }
-
-  function groupCaptionText(count: number): string {
-    return count === 2 ? "Pair — alternate sets, rest after both" : "Group — rotate sets, rest after all";
-  }
-
-  function groupCaptionHtml(count: number, key: number, esc: (value: unknown) => string): string {
-    return `<div class="ex-group-cap" data-group="${key}">${esc(groupCaptionText(count))}</div>`;
-  }
-
-  // The head/tail classes are set by the renderer (never inferred with :has() or a
-  // sibling combinator), so an engine without :has() still draws the group right.
-  function groupClasses(position: number, size: number): string {
-    return ` ex-in-group${position === 0 ? " ex-group-head" : ""}${position === size - 1 ? " ex-group-tail" : ""}`;
-  }
-
-  // A card leaving (skip) or returning (undo) changes who is still on screen without a
-  // repaint. Re-evaluate every group from the DOM: a lone remaining member is a plain
-  // card (no rail, caption or partner chip); two or more are one group again, with the
-  // caption, chips and corners to match. Cards keep `data-group` for exactly this.
-  function regroupPairs(root: ParentNode | null | undefined): void {
-    if (!root || typeof root.querySelectorAll !== "function") return;
-    const byGroup = new Map<string, HTMLElement[]>();
-    root.querySelectorAll<HTMLElement>(".ex[data-group]").forEach((card) => {
-      const key = card.dataset.group || "";
-      byGroup.set(key, [...(byGroup.get(key) || []), card]);
-    });
-    root.querySelectorAll<HTMLElement>(".ex-group-cap[data-group]").forEach((cap) => {
-      if (!byGroup.has(cap.dataset.group || "")) cap.remove();
-    });
-    const makeChip = (names: string[]): string => {
-      const cards = typeof CairnTodayCards !== "undefined" ? CairnTodayCards : null;
-      return cards && typeof cards.pairChipHtml === "function" ? cards.pairChipHtml(names) : "";
-    };
-    for (const [key, members] of byGroup) {
-      const caption = [...root.querySelectorAll<HTMLElement>(".ex-group-cap[data-group]")].find((cap) => cap.dataset.group === key);
-      const lone = members.length < 2;
-      members.forEach((card, index) => {
-        card.classList.toggle("ex-in-group", !lone);
-        card.classList.toggle("ex-group-head", !lone && index === 0);
-        card.classList.toggle("ex-group-tail", !lone && index === members.length - 1);
-        const meta = card.querySelector<HTMLElement>(".ex-meta");
-        meta?.querySelector(".ex-pair-chip")?.remove();
-        if (lone || !meta) return;
-        const names = members.filter((other) => other !== card).map((other) => other.dataset.card || "");
-        meta.insertAdjacentHTML("beforeend", makeChip(names));
-      });
-      if (lone) {
-        caption?.remove();
-      } else if (caption) {
-        caption.textContent = groupCaptionText(members.length);
-      } else {
-        members[0].insertAdjacentHTML("beforebegin", groupCaptionHtml(members.length, Number(key), (v) => String(v ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c] as string)));
-      }
-    }
   }
 
   function buildHtml(options: TodayPlanSurfaceRendererOptions, deps: TodayPlanSurfaceRendererDeps): string {
@@ -395,7 +306,7 @@ type TodayPlanSurfaceRendererApi = {
     let cardIdx = 0;
     const cardHtml = (item: TodayPlanSurfaceRendererItem, pair: Record<string, unknown>): string => {
       const exerciseName = String(item.exercise || "");
-      const carded = journeyItem(item, options.day, options.strengthJourney);
+      const carded = CairnTodaySessionJourney.journeyItem(item, options.day, options.strengthJourney);
       // The card, not the exercise name, owns its sets: a peak day renders the same
       // lift twice and the attribution says which logged sets belong to which card.
       // With one card per exercise the attribution IS the whole pile, so this stays
@@ -424,36 +335,7 @@ type TodayPlanSurfaceRendererApi = {
       );
     };
 
-    // Items that share a superset_group are ONE visible group: the members sit together
-    // (at the first member's place) under a single caption, each card naming its
-    // partner(s). Only the render order changes — the items, their names and the logged
-    // sets are untouched, and the athlete may still log in any order. A group with a
-    // single member on screen (partner skipped, swapped out) is a plain card.
-    const groups = new Map<number, TodayPlanSurfaceRendererItem[]>();
-    for (const item of surfaceItems) {
-      if (item.superset_group == null || !Number.isFinite(Number(item.superset_group))) continue;
-      const key = Number(item.superset_group);
-      groups.set(key, [...(groups.get(key) || []), item]);
-    }
-    const emitted = new Set<number>();
-    for (const item of surfaceItems) {
-      const key = Number(item.superset_group);
-      const members = (item.superset_group != null && groups.get(key)) || [];
-      if (members.length < 2) {
-        html += cardHtml(item, {});
-        continue;
-      }
-      if (emitted.has(key)) continue;
-      emitted.add(key);
-      html += groupCaptionHtml(members.length, key, surfaceDeps.escapeHtml);
-      members.forEach((member, position) => {
-        html += cardHtml(member, {
-          pairPartners: members.filter((other) => other !== member).map((other) => String(other.exercise || "")),
-          pairGroup: key,
-          pairClasses: groupClasses(position, members.length),
-        });
-      });
-    }
+    html += CairnTodayPairGroups.html(surfaceItems, cardHtml, surfaceDeps.escapeHtml);
 
     for (const exercise of options.offPlanEx) {
       const logged = options.loggedByEx[exercise] || [];
@@ -496,7 +378,6 @@ type TodayPlanSurfaceRendererApi = {
 
   const CAIRN_TODAY_PLAN_SURFACE_RENDERER: TodayPlanSurfaceRendererApi = {
     buildHtml,
-    regroupPairs,
   };
 
   Object.assign(globalThis, { CairnTodayPlanSurfaceRenderer: CAIRN_TODAY_PLAN_SURFACE_RENDERER });

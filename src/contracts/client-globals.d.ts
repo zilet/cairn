@@ -5218,8 +5218,24 @@ declare global {
       ): string;
     };
 
+    CairnTodayPairGroups: {
+      html(
+        items: Record<string, unknown>[],
+        cardHtml: (item: Record<string, unknown>, pair: Record<string, unknown>) => string,
+        esc: (value: unknown) => string,
+      ): string;
+      regroup(root: ParentNode | null | undefined): void;
+    };
+
+    CairnTodaySessionJourney: {
+      journeyItem(
+        item: Record<string, unknown>,
+        day: Record<string, unknown>,
+        journey: import("./client-api.js").ClientStrengthJourney | null,
+      ): Record<string, unknown>;
+    };
+
     CairnTodayPlanSurfaceRenderer: {
-      regroupPairs(root: ParentNode | null | undefined): void;
       buildHtml(
         options: {
           showDone: boolean;
@@ -6179,6 +6195,8 @@ declare global {
   declare const CairnTodayHorizon: Window["CairnTodayHorizon"];
   declare const CairnTodayAhead: Window["CairnTodayAhead"];
   declare const CairnTodayPlanSurface: Window["CairnTodayPlanSurface"];
+  declare const CairnTodayPairGroups: Window["CairnTodayPairGroups"];
+  declare const CairnTodaySessionJourney: Window["CairnTodaySessionJourney"];
   declare const CairnTodayPlanSurfaceRenderer: Window["CairnTodayPlanSurfaceRenderer"];
   declare const CairnTodayPostRenderWiring: Window["CairnTodayPostRenderWiring"];
   declare const CairnTodayDependencies: Window["CairnTodayDependencies"];

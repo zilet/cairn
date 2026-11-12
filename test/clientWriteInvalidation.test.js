@@ -47,6 +47,7 @@ function load(extra = {}) {
     ...extra,
   };
   context.globalThis = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/write-invalidation-targets.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/write-invalidation-client.js"), "utf8"), context);
   return { api: context.CairnWriteInvalidation, dropped, context, apiCleared: () => apiCleared };
 }

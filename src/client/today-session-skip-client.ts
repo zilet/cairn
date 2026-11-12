@@ -190,7 +190,7 @@ type TodaySessionSkipOutboxGlobals = {
   // Skip, undo and a refused skip move cards without a repaint, so who is still paired
   // with whom is re-read from the DOM each time.
   function regroup(deps: TodaySessionSkipDeps): void {
-    if (typeof CairnTodayPlanSurfaceRenderer !== "undefined") CairnTodayPlanSurfaceRenderer.regroupPairs(deps.root);
+    if (typeof CairnTodayPairGroups !== "undefined") CairnTodayPairGroups.regroup(deps.root);
   }
 
   function removeCards(cards: HTMLElement[], exercise: string, deps: TodaySessionSkipDeps, guard: () => boolean): void {

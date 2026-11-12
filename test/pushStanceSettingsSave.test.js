@@ -39,6 +39,7 @@ test("the Settings save never carries training_drive; the drive card writes thro
 test("a stance write (chat or Undo) drops the cached Settings screen", () => {
   const context = { Object, Set, Map, Array, JSON, Number, String, Date, Promise, localStorage: null };
   context.globalThis = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/write-invalidation-targets.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/write-invalidation-client.js"), "utf8"), context);
   const api = context.CairnWriteInvalidation;
   assert.ok(api.targetsForChatAction("set_training_drive").includes("settings:screen"));

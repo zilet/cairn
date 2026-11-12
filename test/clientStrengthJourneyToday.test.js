@@ -13,6 +13,8 @@ function loadRenderer() {
   context.globalThis = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/date-utils.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/ui-format.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/today-pair-groups-client.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/today-session-journey-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-plan-surface-renderer.js"), "utf8"), context);
   return context.CairnTodayPlanSurfaceRenderer;
 }
