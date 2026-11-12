@@ -5,6 +5,17 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [2.3.1] — 2026-11-12
+
+### Fixed
+
+- **A Garmin sync with nothing new is quiet for real.** Garmin returns an activity's fields in a
+  different order on each fetch, so the stored payload looked changed and every row in the window was
+  rewritten on every full sync — re-checking each strength workout and discarding the cached Today.
+  Payloads are now stored in a stable field order.
+- **Heart-rate zone boundaries survive a re-fetch.** A later fetch of a finished activity's zones comes
+  back without boundaries and without the zones no time was spent in; the stored boundaries are kept.
+
 ## [2.3.0] — 2026-11-11
 
 Housekeeping: lighter coach prompts, quieter and quicker Garmin sync, agents that fail faster and are

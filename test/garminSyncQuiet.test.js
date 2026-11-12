@@ -180,6 +180,60 @@ test("an identical activity re-sync writes neither table and bumps nothing", () 
   assert.equal(freshness(), key);
 });
 
+// Seen live: Garmin answers the same activity with its fields in a different order on
+// every fetch, so the payload TEXT moved and each full pass rewrote every row.
+test("the same payload with its fields in another order is not a change", () => {
+  const first = repo.upsertGarminActivity(
+    run("a-order", { raw: { activityId: "a-order", distance: 8100, nested: { b: 1, a: [{ y: 2, x: 1 }] } } })
+  );
+  db.prepare(`UPDATE garmin_activities SET synced_at = ?`).run(OLD_STAMP);
+  const key = freshness();
+  const defer = repo.newGarminSyncDeferral();
+  const again = repo.upsertGarminActivity(
+    run("a-order", { raw: { nested: { a: [{ x: 1, y: 2 }], b: 1 }, distance: 8100, activityId: "a-order" } }),
+    first.source_id,
+    { defer }
+  );
+  repo.flushGarminSyncDeferral(defer);
+  assert.equal(again.synced_at, OLD_STAMP, "synced_at untouched");
+  assert.equal(defer.written.size, 0);
+  assert.equal(freshness(), key);
+
+  const d = localDaysAgo(1);
+  repo.upsertGarminDailyMetric(day(d));
+  db.prepare(`UPDATE garmin_daily_metrics SET updated_at = ?`).run(OLD_STAMP);
+  repo.upsertGarminDailyMetric(
+    day(d, { raw: { hrv: { hrvSummary: { lastNightAvg: 61 } }, sleep: { dailySleepDTO: { sleepTimeSeconds: 26880 } } } })
+  );
+  assert.equal(db.prepare(`SELECT updated_at FROM garmin_daily_metrics WHERE date = ?`).get(d).updated_at, OLD_STAMP);
+});
+
+// Seen live: a later re-fetch of a finished activity's zones carries no boundaries and
+// omits the zones no time was spent in.
+test("a zone re-fetch without boundaries keeps the stored ones", () => {
+  const zones = [
+    { zone: 1, secs: 16, low_hr: 95 },
+    { zone: 2, secs: 26, low_hr: 115 },
+    { zone: 3, secs: 0, low_hr: 135 },
+  ];
+  const first = repo.upsertGarminActivity(run("a-zones", { hr_zones: zones }));
+  db.prepare(`UPDATE garmin_activities SET synced_at = ?`).run(OLD_STAMP);
+  const again = repo.upsertGarminActivity(
+    run("a-zones", { hr_zones: [{ zone: 1, secs: 16, low_hr: null }, { zone: 2, secs: 26, low_hr: null }] }),
+    first.source_id
+  );
+  assert.equal(again.synced_at, OLD_STAMP, "the poorer re-fetch changes nothing");
+  const stored = JSON.parse(db.prepare(`SELECT hr_zones_json z FROM garmin_activities WHERE id = ?`).get(first.id).z);
+  assert.deepEqual(stored, zones);
+  // Real news still lands: the time in a zone moved.
+  repo.upsertGarminActivity(
+    run("a-zones", { hr_zones: [{ zone: 1, secs: 20, low_hr: null }, { zone: 2, secs: 26, low_hr: null }] }),
+    first.source_id
+  );
+  const moved = JSON.parse(db.prepare(`SELECT hr_zones_json z FROM garmin_activities WHERE id = ?`).get(first.id).z);
+  assert.deepEqual(moved.map((z) => [z.zone, z.secs, z.low_hr]), [[1, 20, 95], [2, 26, 115], [3, 0, 135]]);
+});
+
 test("a changed activity writes, stamps, and says so", () => {
   const first = repo.upsertGarminActivity(run("a-2"));
   db.prepare(`UPDATE garmin_activities SET synced_at = ?`).run(OLD_STAMP);

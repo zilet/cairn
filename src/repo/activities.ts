@@ -879,6 +879,49 @@ export function jsonOrNull(v: any): string | null {
   return typeof v === "string" ? v : JSON.stringify(v);
 }
 
+/**
+ * jsonOrNull with object keys in a stable (sorted) order at every depth. Garmin returns
+ * the same payload with its fields in a different order from one fetch to the next, so
+ * the plain text of an unchanged activity moved on every sync — and "did this row
+ * change" compares the stored text. A caller-supplied string is stored as given.
+ */
+export function stableJsonOrNull(v: any): string | null {
+  if (v === undefined || v === null) return null;
+  if (typeof v === "string") return v;
+  const sorted = (x: any): any => {
+    if (Array.isArray(x)) return x.map(sorted);
+    if (x && typeof x === "object" && Object.getPrototypeOf(x) === Object.prototype) {
+      const out: Record<string, any> = {};
+      for (const k of Object.keys(x).sort()) out[k] = sorted(x[k]);
+      return out;
+    }
+    return x;
+  };
+  return JSON.stringify(sorted(v));
+}
+
+/**
+ * A re-fetch of a finished activity's heart-rate zones comes back without the zone
+ * boundaries (and without the zones nothing was spent in). Keep the boundaries the
+ * first fetch stored rather than overwrite them with nothing.
+ */
+function keepStoredZoneBoundaries(incoming: unknown, storedJson: unknown): unknown {
+  if (!Array.isArray(incoming) || !incoming.length) return incoming;
+  if (incoming.some((z: any) => z?.low_hr != null)) return incoming;
+  let stored: any;
+  try {
+    stored = typeof storedJson === "string" ? JSON.parse(storedJson) : storedJson;
+  } catch {
+    return incoming;
+  }
+  if (!Array.isArray(stored) || !stored.some((z: any) => z?.low_hr != null)) return incoming;
+  const lowByZone = new Map(stored.map((z: any) => [Number(z?.zone), z?.low_hr ?? null]));
+  const merged = incoming.map((z: any) => ({ ...z, low_hr: lowByZone.get(Number(z?.zone)) ?? null }));
+  const have = new Set(merged.map((z: any) => Number(z?.zone)));
+  for (const z of stored) if (!have.has(Number(z?.zone))) merged.push({ ...z, secs: 0 });
+  return merged.sort((a: any, b: any) => Number(a?.zone) - Number(b?.zone));
+}
+
 export function hydrateJson(row: any, key = "raw_json") {
   if (!row) return row;
   let raw: any = null;
@@ -1187,8 +1230,8 @@ export function upsertGarminActivity(
     type,
     name,
     ...GARMIN_ACTIVITY_MERGE_COLS.map(([, key]) => {
-      const v = (input as any)[key];
-      return GARMIN_ACTIVITY_JSON_KEYS.has(key as string) ? jsonOrNull(v) : (v ?? null);
+      const v = key === "hr_zones" ? keepStoredZoneBoundaries(input.hr_zones, prev?.hr_zones_json) : (input as any)[key];
+      return GARMIN_ACTIVITY_JSON_KEYS.has(key as string) ? stableJsonOrNull(v) : (v ?? null);
     }),
   ];
   const info = db
@@ -1437,7 +1480,7 @@ function writeGarminDailyMetric(
   const changed = sets.map(([c, expr]) => `garmin_daily_metrics.${c} IS NOT (${expr})`).join(" OR ");
   const values: any[] = [source.id, input.date];
   for (const c of GARMIN_DAILY_COLS) values.push((input as any)[c] ?? null);
-  values.push(jsonOrNull(input.raw));
+  values.push(stableJsonOrNull(input.raw));
   const info = db
     .prepare(
       `INSERT INTO garmin_daily_metrics (${cols.join(", ")})
