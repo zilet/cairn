@@ -223,16 +223,22 @@ test("every log-backs phrasing reads clean: no grammar breach, no number", () =>
 // ---------- the log ----------
 
 // A reconciled outcome row for one session, the shape daily-reconciliation writes.
-function seedOutcome(date, doses, { skipped = [], constraints = null } = {}) {
+function seedOutcome(date, doses, { skipped = [], constraints = null, provenance = null } = {}) {
   repo.upsertExercise({ name: "Dumbbell Bench Press", muscle_group: "chest", mode: "reps" });
   const session = repo.getOrCreateSession(date, null);
   const composition = db
     .prepare(
       `INSERT INTO daily_session_compositions
-        (version, session_id, date, source, status, plan_day_id, title, items_json, request_fingerprint, constraints_json)
-       VALUES (1, ?, ?, 'athlete_override', 'active', NULL, 'Fixture', '[]', ?, ?)`
+        (version, session_id, date, source, status, plan_day_id, title, items_json, request_fingerprint, constraints_json, provenance_json)
+       VALUES (1, ?, ?, 'athlete_override', 'active', NULL, 'Fixture', '[]', ?, ?, ?)`
     )
-    .run(session.id, date, `vt-${date}`, constraints ? JSON.stringify(constraints) : null);
+    .run(
+      session.id,
+      date,
+      `vt-${date}`,
+      constraints ? JSON.stringify(constraints) : null,
+      provenance ? JSON.stringify(provenance) : null
+    );
   const facts = {
     schema_version: 4,
     dose_context: { comparable: true, non_comparable_reasons: [] },
@@ -359,6 +365,25 @@ test("a trimmed card vouches only when the athlete logged the plan's AUTHORED se
     constraints: { daily_decision: { caps: { volume: "normal", intensity: "normal" }, train_anyway: false } },
   });
   assert.equal(sessionCarriedPlannedVolume(plain), true);
+});
+
+test("item 9: a card that deferred any plan-day lift never vouches, however the lifts left on it went", () => {
+  // The day's budget deferred the curl; every lift left on the card landed its authored sets.
+  const provenance = {
+    daily_decision: { caps: { volume: "normal", intensity: "hold" }, train_anyway: false },
+    plan_day_deferred: ["Dumbbell Curl"],
+  };
+  const carriedButDeferred = seedOutcome(localDaysAgo(2), [dose("Dumbbell Bench Press", { planned: 4, authored: 4 })], {
+    provenance,
+  });
+  assert.equal(sessionCarriedPlannedVolume(carriedButDeferred), false, "the athlete did not carry the plan");
+  // The same log with nothing deferred still vouches. (The composer's own record of the
+  // deferral is pinned in test/planDayCompositionKeepsWork.test.js.)
+  resetTables("daily_session_outcomes", "daily_session_compositions", "sessions");
+  const carried = seedOutcome(localDaysAgo(2), [dose("Dumbbell Bench Press", { planned: 4, authored: 4 })], {
+    provenance: { daily_decision: provenance.daily_decision },
+  });
+  assert.equal(sessionCarriedPlannedVolume(carried), true);
 });
 
 // ---------- the bounds ----------

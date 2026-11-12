@@ -17,7 +17,7 @@ import { buildDailySessionDecision, gatherDailyDecisionSnapshot } from "../dist/
 import { activePlanAdaptations, sameDayAthleteRequest } from "../dist/repo/plan-adaptations.js";
 import { datedPlanDayFocus, focusWithoutAbsentMovements } from "../dist/repo/plan-day-focus.js";
 import { localDateISO } from "../dist/repo/shared.js";
-import { repo, resetTables, savePlanDaySettled } from "./_seed.js";
+import { db, repo, resetTables, savePlanDaySettled } from "./_seed.js";
 
 const DATE = "2031-07-01";
 const DAY = 4;
@@ -70,6 +70,9 @@ beforeEach(() => {
 
 function seedDay({ focus = STALE_FOCUS } = {}) {
   for (const [name, group, mode] of EXERCISES) repo.upsertExercise({ name, muscle_group: group, mode });
+  // The server never pairs a lift whose implement nobody named (second review, item 6):
+  // the fixture's row names the implement a real library's row would.
+  db.prepare(`UPDATE exercises SET equipment = 'dumbbell' WHERE name = 'Chest-Supported Row'`).run();
   savePlanDaySettled(DAY, DAY_NAME, focus, ITEMS);
   // Last week's plank went 68 s: the hold anchors a timed target on the log.
   repo.logSetByName({ date: "2031-06-24", exercise: "Front Plank", duration_sec: 68, day_number: null });
@@ -140,6 +143,9 @@ test("a reduced train-anyway day keeps its compounds at two sets and defers only
     DAY_BUDGET_DEFERRED_NOTES.some((render) => String(session.why).includes(render("Front Plank"))),
     `the card says what was deferred: ${session.why}`
   );
+  // …and records it on the session, which prepare persists as the composition's
+  // `plan_day_deferred` provenance (second review, item 9: such a card never vouches).
+  assert.deepEqual(session.deferred, ["Front Plank"]);
 
   // The same composition, with its validation: every reduction is on the record.
   const raw = {

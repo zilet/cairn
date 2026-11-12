@@ -60,6 +60,11 @@ export interface ComposedSession {
   why: string | null;
   est_minutes: number | null;
   items: any[];
+  // The plan-day lifts the day's set budget DEFERRED off this card (fitPlanDaySetBudget),
+  // omit-when-empty. Persisted on the composition's provenance (`plan_day_deferred`,
+  // adaptive-session.ts) so the log never reads a card that left plan lifts behind as
+  // having carried the plan (session-dose-log.ts sessionCarriedPlannedVolume).
+  deferred?: string[];
 }
 
 export interface CompositionValidation {
@@ -1667,6 +1672,7 @@ export function normalizeComposedSession(
   // every deferral is recorded, each trim said on its card and the deferrals named in one
   // line on the card. The budget still binds what follows (top sets, the dose).
   let deferredLine: string | null = null;
+  let deferredNames: string[] = [];
   if (planSourced) {
     const budget = workingSetCap(envelope);
     const requestMinutes = finite(envelope.request?.minutes);
@@ -1682,6 +1688,7 @@ export function normalizeComposedSession(
       for (const item of fit.deferred)
         rejected.push({ exercise: String(item.exercise ?? ""), reason: "day_set_budget_deferred" });
       const names = fit.deferred.map((item) => String(item.exercise ?? "")).filter(Boolean);
+      deferredNames = names;
       const listed =
         names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : (names[0] ?? "");
       deferredLine = pickDayVariant(DAY_BUDGET_DEFERRED_NOTES, envelope.date, "daily-composition:budget_deferred")(
@@ -1941,6 +1948,7 @@ export function normalizeComposedSession(
       why: hasEasyCardio ? safeEasySessionText(composedWhy, fallbackWhy) : composedWhy,
       est_minutes: est,
       items: finalItems,
+      ...(deferredNames.length ? { deferred: deferredNames } : {}),
     },
     validation: {
       ok: true,
