@@ -3,7 +3,7 @@ import { truncateAtWord } from "../brain/contract-utils.js";
 import { db } from "../db.js";
 import { getCheckinByDate, getRecoverySummary, latestSleep } from "./coach.js";
 import { cardioPlanIdentity } from "./cardio-plan-identity.js";
-import { dayPlanningSignalState, dayRead, supportiveCapacityBacksDay } from "./day-read.js";
+import { dayPlanningSignalState, dayRead, goalRaceOn, supportiveCapacityBacksDay } from "./day-read.js";
 import {
   equipmentCompatibility,
   inferExerciseEquipment,
@@ -1206,7 +1206,10 @@ export function gatherDailyDecisionSnapshot(
         : signals?.checkin_lift?.applied === true
           ? { held_dose: "checkin" as const }
           : {}),
-      ...(signals?.goal_race_day != null && read?.kind === "train" ? { race_day: true as const } : {}),
+      // The race DATE, never which read rule fired (second review, item 3): a floor on race
+      // morning (the athlete's word, pain, a clinical finding, an illness) changes what the
+      // read says, never that the day is the race — no lifting card, no substitute run.
+      ...(safe(() => goalRaceOn(d), null) != null ? { race_day: true as const } : {}),
     },
     recovery: {
       has_data: recoverySummary?.has_data === true,
@@ -1827,7 +1830,7 @@ export const LOG_BACKS_OPEN_DAY_RATIONALE: readonly string[] = [
 // sessions carried every planned set at a held-or-rising load, so today keeps the plan's
 // sets. Says what the log showed, never a number, never a promise of more work.
 export const LOG_BACKS_FULL_SETS_DETAILS: readonly string[] = [
-  "Your recent sessions carried every planned set — nothing trimmed today",
+  "Your recent sessions carried every planned set, so that is no reason to trim today",
   "The full sets have been landing lately at a steady load, so they stay",
   "Recent sessions finished their planned sets without the weights slipping — the sets stay",
 ];
@@ -1840,6 +1843,27 @@ export const LOG_BACKS_FULL_SETS_RATIONALE: readonly string[] = [
 
 // Train-anyway on a day the athlete asked for this session today: their sets stay, the
 // load holds. A preview constraint line, so a set rather than one literal.
+// The held dose's soft preference (`held_morning_dose`), one set per fact it asserts: the
+// athlete's check-in over the readiness number; a morning dose that lightened the areas
+// yesterday loaded; one that only holds the loads (nothing loaded yesterday is due).
+export const HELD_DOSE_DETAILS: Readonly<Record<"checkin" | "morning_lighter" | "morning_held", readonly string[]>> = {
+  checkin: [
+    "Your check-in and the readiness number disagree — the session goes ahead with the loads held",
+    "You feel better than the readiness number says, so the session stays on, loads held",
+    "Your own report outweighs the readiness number today — the session goes ahead, held back",
+  ],
+  morning_lighter: [
+    "This morning's readings ask for a held dose — loads stay put, yesterday's areas go lighter",
+    "A held dose for this morning's readings: the loads hold and what yesterday worked goes lighter",
+    "Loads held for this morning's readings, with the areas yesterday loaded kept lighter",
+  ],
+  morning_held: [
+    "This morning's readings ask for a held dose — the loads stay put",
+    "A held dose for this morning's readings: the loads hold where they are",
+    "Loads held for this morning's readings; the plan's sets otherwise stand",
+  ],
+};
+
 export const SAME_DAY_REQUEST_DETAILS: readonly string[] = [
   "You asked for this session today — your sets stay as you set them; the load holds",
   "Today's session is the one you asked for: every set you set stays, at the current load",
@@ -2784,12 +2808,16 @@ export function buildDailySessionDecision(
     .map((m) => m.group);
   if (heldDose) {
     fire(precedence, "held_morning_dose");
+    // Each phrasing true of its morning (second review, item 4): "yesterday's areas go
+    // lighter" only when the held dose actually lightened one.
+    const lightened = snapshot.muscle_load.some(
+      (m) => m.saturated && !weekHeldGroups.has(m.group) && m.days_ago <= 1
+    );
+    const key =
+      snapshot.day_read.held_dose === "checkin" ? "checkin" : lightened ? "morning_lighter" : "morning_held";
     soft.push({
       code: "held_morning_dose",
-      detail:
-        snapshot.day_read.held_dose === "checkin"
-          ? "Your check-in and the readiness number disagree — the session goes ahead with the loads held"
-          : "This morning's readings ask for a held dose — loads stay put, yesterday's areas go lighter",
+      detail: pickDayVariant(HELD_DOSE_DETAILS[key], snapshot.date, `daily_decision:held_morning_dose:${key}`),
     });
   }
   const baseReduced = dedupe([

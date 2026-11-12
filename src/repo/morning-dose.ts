@@ -86,19 +86,13 @@ export const MORNING_DOSE_POLICY = Object.freeze({
   /** Consecutive CALENDAR mornings past the line that make an elevated resting HR the illness pattern. */
   rhr_illness_consecutive_readings: 2,
   /**
-   * What ONE night past the line needs before it may REST a day as possible illness: the
-   * athlete's own established band (not the watch's seven-day fallback) and a reading its
-   * own row vouches for (overnight-band.ts restingHrReadingVerified). Without both it is
-   * a caution: easy at most.
+   * What resting HR past the line needs before it may REST a day as possible illness — on
+   * BOTH arms, one meaningful night and consecutive mornings (second review, item 7): the
+   * athlete's own established band (not the watch's seven-day fallback) and readings their
+   * own rows vouch for (overnight-band.ts restingHrReadingVerified) — last night's, and on
+   * the consecutive arm the morning before's too. Without them it is a caution: easy at most.
    */
-  rhr_single_night_rest_requires: Object.freeze({ established_band: true, verified_reading: true }),
-  /**
-   * After a hard endurance day, what an elevated resting HR leaves a STATED day as. The ruling
-   * is "easy at most" on every day, so the default is easy; "dosed_train" is kept only as a
-   * tunable for a revised review, and even then HRV past the band beside it (a second,
-   * independent witness) never leaves a training day.
-   */
-  rhr_after_endurance_on_stated_day: "easy" as "dosed_train" | "easy",
+  rhr_rest_requires: Object.freeze({ established_band: true, verified_reading: true }),
   // ---- F: a sustained rolling HRV decline ----
   /** Consecutive mornings the rolling HRV value must sit below the athlete's line to be SUSTAINED. */
   hrv_sustained_decline_mornings: 3,
@@ -164,6 +158,12 @@ export interface MorningFacts {
   /** Last night's HRV / resting HR against the athlete's own band. */
   hrv_night: OvernightFieldRead | null;
   rhr_night: OvernightFieldRead | null;
+  /**
+   * On the consecutive arm: the morning before's resting HR was ALSO judged against the
+   * athlete's own established band, on a reading its row vouches for (E). Absent = not
+   * shown, which never rests a day.
+   */
+  rhr_prior_trusted?: boolean;
   /** A hard or long endurance day inside the endurance window (B, E). */
   hard_endurance_recent: boolean;
   /** What about yesterday explains a low morning (provenance; A's dose is not conditional on it). */
@@ -194,6 +194,26 @@ function restingHrRepeated(facts: MorningFacts): boolean {
   return (facts.rhr_night?.consecutive_days ?? 0) >= MORNING_DOSE_POLICY.rhr_illness_consecutive_readings;
 }
 
+// The resting-HR readings a REST may stand on (E, `rhr_rest_requires`): last night judged
+// against the athlete's own established band on a reading its row vouches for — and, on
+// the consecutive arm, the morning before as well.
+function restingHrTrusted(facts: MorningFacts): boolean {
+  const rhr = facts.rhr_night;
+  const needs = MORNING_DOSE_POLICY.rhr_rest_requires;
+  if (rhr == null) return false;
+  const lastNight = (!needs.established_band || rhr.established_band) && (!needs.verified_reading || rhr.verified);
+  return lastNight && (!restingHrRepeated(facts) || facts.rhr_prior_trusted === true);
+}
+
+/**
+ * Whether the resting-HR caution (`resting_hr_unconfirmed`) stands on consecutive mornings
+ * rather than one reading — for words that are true of it (item 4): "one reading" only
+ * when it is one.
+ */
+export function restingHrCautionRepeated(facts: MorningFacts | null): boolean {
+  return facts != null && restingHrRepeated(facts);
+}
+
 /**
  * Which shape of the possible-illness pattern a morning is (E), for words that are true
  * of it: `repeat` (consecutive mornings), `unexplained` (one night, no hard day behind
@@ -218,13 +238,12 @@ export function classifyMorning(facts: MorningFacts, stated: boolean): MorningVe
   const rhrPast =
     rhr != null && (policy.rhr_single_night_min_past === "marginal" || rhr.past === "meaningful" || repeated);
   const hardDay = hardDayRecent(facts);
-  // One night may REST a day only on the athlete's own established band and a reading its
-  // own source vouches for; otherwise it is a caution (easy at most).
-  const needs = policy.rhr_single_night_rest_requires;
-  const singleNightTrusted =
-    rhr != null && (!needs.established_band || rhr.established_band) && (!needs.verified_reading || rhr.verified);
+  // Resting HR may REST a day only on the athlete's own established band and readings their
+  // own source vouches for — one night, or consecutive mornings alike (item 7); otherwise it
+  // is a caution (easy at most).
+  const trusted = restingHrTrusted(facts);
   const singleNightIllness = !hardDay || facts.low_word || facts.symptom_today;
-  if (rhrPast && (repeated || (singleNightIllness && singleNightTrusted)))
+  if (rhrPast && trusted && (repeated || singleNightIllness))
     return { kind: "rest", basis: "resting_hr_illness_pattern" };
   if (facts.hrv_rolling.mornings_below >= policy.hrv_sustained_decline_mornings && facts.performance_shortfall)
     return { kind: "rest", basis: "hrv_decline_with_shortfall" };
@@ -232,15 +251,11 @@ export function classifyMorning(facts: MorningFacts, stated: boolean): MorningVe
   if (facts.low_readiness_mornings >= policy.low_mornings_for_easy)
     return { kind: "easy", basis: "consecutive_low_mornings" };
   if (rhrPast) {
-    // A single reading nothing vouches for, with nothing hard behind it: a caution.
+    // Readings nothing vouches for, with nothing hard behind them (or beside the athlete's
+    // own word): a caution — one night or several.
     if (singleNightIllness) return { kind: "easy", basis: "resting_hr_unconfirmed" };
-    // E: resting HR past the band after a hard day is easy at most, on every day. HRV past
-    // its own band the same night is a second, independent witness: never a training day.
-    const bothWitnesses = facts.hrv_night != null;
-    return {
-      kind: stated && !bothWitnesses && policy.rhr_after_endurance_on_stated_day === "dosed_train" ? "dose" : "easy",
-      basis: "resting_hr_after_endurance",
-    };
+    // E: resting HR past the band after a hard day is easy at most, on every day.
+    return { kind: "easy", basis: "resting_hr_after_endurance" };
   }
   // D: one short night keeps a due session at a held dose, on any day — unless it was
   // severely short.
@@ -369,6 +384,16 @@ export function morningFacts(date: string, input: MorningFactInputs): MorningFac
   }
 
   const overnight = safely(() => overnightReadOn(date), { hrv: null, rhr: null });
+  // The consecutive arm's earlier morning, judged the way last night is (E, item 7).
+  const needs = policy.rhr_rest_requires;
+  const priorRhr =
+    yesterday && (overnight.rhr?.consecutive_days ?? 0) >= policy.rhr_illness_consecutive_readings
+      ? safely(() => overnightReadOn(yesterday).rhr, null)
+      : null;
+  const rhrPriorTrusted =
+    priorRhr != null &&
+    (!needs.established_band || priorRhr.established_band) &&
+    (!needs.verified_reading || priorRhr.verified);
 
   let mornings_below = 0;
   const rollingToday = safely(() => rollingHrvOn(date), { value: null, nights: 0, band: null, past_line: false });
@@ -390,6 +415,7 @@ export function morningFacts(date: string, input: MorningFactInputs): MorningFac
     short_sleep_trend: input.shortSleepTrend === true,
     hrv_night: overnight.hrv,
     rhr_night: overnight.rhr,
+    rhr_prior_trusted: rhrPriorTrusted,
     hard_endurance_recent: hardEnduranceRecent,
     load_explained,
     hrv_rolling: { past_line: rollingToday.past_line, nights: rollingToday.nights, mornings_below },

@@ -319,10 +319,23 @@ test("the classifier: every rule, read against MORNING_DOSE_POLICY", () => {
     consecutive: POLICY.rhr_illness_consecutive_readings,
     consecutive_days: POLICY.rhr_illness_consecutive_readings,
   };
+  // The consecutive arm rests only on vouched readings both mornings (item 7).
   assert.equal(
-    classifyMorning(facts({ rhr_night: twoReadings, hard_endurance_recent: true }), true).basis,
+    classifyMorning(facts({ rhr_night: twoReadings, rhr_prior_trusted: true, hard_endurance_recent: true }), true)
+      .basis,
     "resting_hr_illness_pattern"
   );
+  // …and without them it is the cautious easy, never rest — on the fallback band, on an
+  // unverified row, or when the morning before was not vouched for.
+  for (const [label, extra] of [
+    ["the morning before unvouched", { rhr_night: twoReadings }],
+    ["no band of their own", { rhr_night: { ...twoReadings, established_band: false }, rhr_prior_trusted: true }],
+    ["an unverified row", { rhr_night: { ...twoReadings, verified: false }, rhr_prior_trusted: true }],
+  ])
+    for (const hard of [true, false]) {
+      const verdict = classifyMorning(facts({ ...extra, hard_endurance_recent: hard }), true);
+      assert.equal(verdict.kind, "easy", `${label}, hard day ${hard}: ${JSON.stringify(verdict)}`);
+    }
   // "Twice running" is two consecutive CALENDAR mornings: readings days apart are not.
   const apart = { ...twoReadings, consecutive_days: 1 };
   assert.notEqual(
@@ -485,6 +498,36 @@ test("E: one high resting-HR reading its own row cannot vouch for (no floor, no 
   const r = repo.dayRead(today);
   assert.notEqual(r.kind, "rest", `${r.decision.rule_code}: ${r.why}`);
   assert.equal(r.signals.morning_dose.basis, "resting_hr_unconfirmed");
+});
+
+test("E (item 7): two consecutive resting-HR rows that cannot vouch for themselves (no night, no floor) are a caution, never rest", (t) => {
+  const today = onTuesday(t);
+  athlete(today);
+  // Yesterday's watch row gives way to a phone row, so both mornings are bare resting HR.
+  db.prepare(`DELETE FROM garmin_daily_metrics WHERE date = ?`).run(addDays(today, -1));
+  for (const date of [addDays(today, -1), today])
+    db.prepare(`INSERT INTO daily_metrics (source, date, resting_hr) VALUES ('apple', ?, 66)`).run(date);
+  const r = repo.dayRead(today);
+  assert.notEqual(r.kind, "rest", `${r.decision.rule_code}: ${r.why} ${JSON.stringify(r.signals.morning_dose)}`);
+  assert.equal(r.signals.morning_dose.basis, "resting_hr_unconfirmed", JSON.stringify(r.signals.morning_dose));
+  assert.ok(r.signals.morning_dose.rhr_night.consecutive_days >= 2, "two mornings running");
+  // Never "one reading" over two (item 4).
+  assert.ok(DAY_READ_WHY_VARIANTS["resting_hr_caution_easy:repeat"].includes(r.why), r.why);
+  assert.doesNotMatch(r.why, /\bone reading\b|\bsingle reading\b|\btwo mornings running\b/i, r.why);
+  assert.equal(violatesReadingGrammar(r.why), null, r.why);
+});
+
+test("E (item 7): a new user on the watch's seven-day fallback, high two mornings running, is a caution, never rest", (t) => {
+  const today = onTuesday(t);
+  repo.savePlanDay(1, "Pull", "Back", [{ exercise: "Lat Pulldown", sets: 3, rep_low: 8, rep_high: 12 }]);
+  for (let back = 2; back <= 6; back++)
+    repo.upsertGarminDailyMetric({ date: addDays(today, -back), resting_hr: 55, hr_7d_avg: 55, sleep_min: 460, min_hr: 50 });
+  for (const date of [addDays(today, -1), today])
+    repo.upsertGarminDailyMetric({ date, resting_hr: 63, hr_7d_avg: 55, sleep_min: 460, min_hr: 58 });
+  const r = repo.dayRead(today);
+  assert.notEqual(r.kind, "rest", `${r.decision.rule_code}: ${r.why} ${JSON.stringify(r.signals.morning_dose)}`);
+  assert.notEqual(r.decision.rule_code, "resting_hr_illness_pattern");
+  assert.doesNotMatch(r.why, /\bone reading\b|\bsingle reading\b/i, r.why);
 });
 
 // ══ A + B: the incident morning on a stated lifting day ══════════════════════════════
@@ -683,18 +726,115 @@ test("race morning: the daily decision composes no lifting card and reports no o
   assert.match(card.name, /\brace\b/i);
 });
 
-test("race morning never overrides the athlete's own low word or a symptom stated today", (t) => {
+test("race morning never talks over the athlete's own low word or a symptom stated today — it says them", (t) => {
   const today = onTuesday(t);
   athlete(today);
   raceToday(today);
   tonight(today, { hrv_ms: 52, resting_hr: 52, sleep_min: 460, training_readiness: 70 });
   repo.addCheckin(today, { energy: 1 });
   const word = repo.dayRead(today);
-  assert.notEqual(word.decision.rule_code, "goal_race_day", `${word.decision.rule_code}: ${word.why}`);
+  // Second review, item 3: the floor keeps race day's identity and is said plainly.
+  assert.equal(word.decision.rule_code, "goal_race_day_word", `${word.decision.rule_code}: ${word.why}`);
   repo.addCheckin(today, { energy: 4 });
   repo.reportTrainingSymptom({ area_text: "left calf", onset_on: today });
   const symptom = repo.dayRead(today);
-  assert.notEqual(symptom.decision.rule_code, "goal_race_day", `${symptom.decision.rule_code}: ${symptom.why}`);
+  assert.equal(symptom.decision.rule_code, "goal_race_day_pain", `${symptom.decision.rule_code}: ${symptom.why}`);
+  assert.notEqual(dayReadProseIdentity(today, symptom), dayReadProseIdentity(today, word), "each floor is its own identity");
+});
+
+test("race morning: the resting-HR sentence follows the shape that fired (item 4)", (t) => {
+  const today = onTuesday(t);
+  athlete(today);
+  raceToday(today);
+  tonight(today, { hrv_ms: 52, resting_hr: 66, sleep_min: 460, training_readiness: 60 });
+  repo.upsertGarminDailyMetric({ date: addDays(today, -1), hrv_ms: 52, resting_hr: 66, sleep_min: 460 });
+  const repeat = repo.dayRead(today);
+  assert.equal(repeat.decision.rule_code, "goal_race_day");
+  assert.ok(DAY_READ_WHY_VARIANTS["goal_race_day:resting_hr:repeat"].includes(repeat.why), repeat.why);
+  assert.doesNotMatch(repeat.why, /\bwithout a hard day\b|\bnothing hard\b/i, repeat.why);
+});
+
+// ══ race morning with a floor: still the race, and the floor said plainly (second review, item 3) ══
+// On the goal race date the day's IDENTITY is the race for the read and the decision
+// whatever floor applies: no lifting card, no substitute easy run. The read names the race,
+// says what the floor is and that whether and how to start is the athlete's call — never a
+// false all-clear. Illness keeps its rest read but still says it is race day.
+
+const RACE_FLOOR_CASES = [
+  ["sleep-feel 2", "goal_race_day_word", () => ({ checkin: { sleep_feel: 2 } })],
+  ["energy 2", "goal_race_day_word", () => ({ checkin: { energy: 2 } })],
+  [
+    "knee pain reported today",
+    "goal_race_day_pain",
+    (today) => ({
+      symptom: () =>
+        repo.reportTrainingSymptom({
+          area_text: "left knee",
+          onset_on: today,
+          report_text: "left knee pain, about an 8 out of 10 this morning",
+        }),
+    }),
+  ],
+  [
+    "a clinical finding (an endurance hold)",
+    "goal_race_day_clinical",
+    () => ({
+      directive: () =>
+        db
+          .prepare(
+            `INSERT INTO health_directives (source, domain, marker, directive, status) VALUES ('health_review', 'training', 'Ferritin', ?, 'active')`
+          )
+          .run("Hold endurance volume while ferritin recovers."),
+    }),
+  ],
+];
+
+for (const [label, code, setup] of RACE_FLOOR_CASES)
+  test(`race morning with a floor (${label}) reads as the race, says the floor plainly, and leaves the start to the athlete`, async (t) => {
+    const { deterministicComposedSession } = await import("../dist/repo/daily-composition.js");
+    const { DAY_READ_REQUIRED_CONCEPT } = await import("../dist/repo/day-read-prose.js");
+    const today = onTuesday(t);
+    athlete(today);
+    raceToday(today);
+    tonight(today, { hrv_ms: 52, resting_hr: 52, sleep_min: 460, training_readiness: 70 });
+    const fixture = setup(today);
+    if (fixture.checkin) repo.addCheckin(today, fixture.checkin);
+    fixture.symptom?.();
+    fixture.directive?.();
+    const r = repo.dayRead(today);
+    const detail = `${r.kind} ${r.decision.rule_code}: ${r.why}`;
+    assert.equal(r.decision.rule_code, code, detail);
+    assert.match(r.focus ?? "", /\bRace day\b/, detail);
+    assert.match(r.why, /\brace\b/i, `the read names the race: ${detail}`);
+    assert.match(r.why, DAY_READ_REQUIRED_CONCEPT[code], `the floor is said plainly: ${detail}`);
+    assert.match(r.why, /\bwhether\b/i, `whether and how to start is theirs: ${detail}`);
+    assert.doesNotMatch(r.why, /\bnothing'?s? holding you back\b/i, `never a false all-clear: ${detail}`);
+    assert.equal(violatesReadingGrammar(r.why), null, r.why);
+    assert.doesNotMatch(r.why, /\d/, r.why);
+    const snapshot = gatherDailyDecisionSnapshot(today);
+    assert.equal(snapshot.day_read.race_day, true, "the decision's race flag is the race DATE");
+    const decision = buildDailySessionDecision(snapshot);
+    assert.ok(decision.precedence.includes("goal_race_day"), decision.precedence.join(","));
+    const card = deterministicComposedSession(decision);
+    assert.equal(card.items.length, 0, `no lifting card and no substitute run: ${JSON.stringify(card)}`);
+    assert.match(card.name, /\brace\b/i, JSON.stringify(card));
+  });
+
+test("race morning with an illness keeps its rest read and still says it is race day", async (t) => {
+  const { deterministicComposedSession } = await import("../dist/repo/daily-composition.js");
+  const today = onTuesday(t);
+  athlete(today);
+  raceToday(today);
+  tonight(today, { hrv_ms: 52, resting_hr: 52, sleep_min: 460, training_readiness: 70 });
+  repo.addContextEvent({ kind: "illness", title: "Head cold", start_date: today });
+  const r = repo.dayRead(today);
+  assert.equal(r.kind, "rest", `${r.decision.rule_code}: ${r.why}`);
+  assert.match(r.why, /\brace\b/i, `the rest read still says it is race day: ${r.why}`);
+  assert.equal(violatesReadingGrammar(r.why), null, r.why);
+  const snapshot = gatherDailyDecisionSnapshot(today);
+  assert.equal(snapshot.day_read.race_day, true);
+  const card = deterministicComposedSession(buildDailySessionDecision(snapshot));
+  assert.equal(card.items.length, 0, JSON.stringify(card));
 });
 
 // ══ G: the athlete's own good check-in ═══════════════════════════════════════════════

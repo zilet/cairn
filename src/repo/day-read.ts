@@ -87,10 +87,12 @@ import { isRaceDay, raceRecoveryWindow } from "./race-recovery.js";
 import { getProgramState, logConfirmedFatigue, runVolumeSpikeRead, type MesocycleState } from "./program-state.js";
 import {
   CHECKIN_LIFT_STEP,
+  MORNING_DOSE_POLICY,
   checkinLiftsBrakes,
   checkinLiftsRead,
   classifyMorning,
   morningFacts,
+  restingHrCautionRepeated,
   restingHrIllnessShape,
   type MorningBasis,
   type MorningFacts,
@@ -154,6 +156,7 @@ import { tripCoversDay, type UnderfuelingRead } from "./underfueling.js";
 export * from "./day-read-grammar.js";
 export * from "./day-read-prose.js";
 import {
+  ACUTE_SLEEP_TREND_WHY,
   ACUTE_SLEEP_WHY,
   ANTICIPATE_DELOAD_CAVEAT,
   CHECKIN_LIFT_HRV_WHY,
@@ -163,11 +166,18 @@ import {
   MORNING_DOSE_CAUSE,
   MORNING_DOSE_LEAD,
   MORNING_DOSE_LEAD_HELD,
+  RACE_DAY_CLINICAL_WHY,
+  RACE_DAY_ILLNESS_ACK,
+  RACE_DAY_INJURY_WHY,
+  RACE_DAY_PAIN_WHY,
+  RACE_DAY_RHR_REPEAT_WHY,
   RACE_DAY_RHR_WHY,
   RACE_DAY_WHY,
+  RACE_DAY_WORD_WHY,
   RESTING_HR_ILLNESS_REPEAT_WHY,
   RESTING_HR_ILLNESS_REPORTED_WHY,
   RESTING_HR_CAUTION_EASY_WHY,
+  RESTING_HR_CAUTION_REPEAT_WHY,
   RESTING_HR_ILLNESS_WHY,
   RHR_AFTER_ENDURANCE_EASY_WHY,
   SHORT_NIGHT_EASED_WHY,
@@ -1364,13 +1374,6 @@ const CHECKIN_LIFTABLE_CODES: ReadonlySet<string> = new Set([
   DAY_READ_OUTCOMES.low_readiness_rest.code,
   DAY_READ_OUTCOMES.acute_signal_protection.code,
 ]);
-// The outcome each single-morning ease speaks as on a day the calendar does not take.
-// (One short night is the dose on any day with a session due now, so it has no ease
-// here; a SEVERELY short night is easy on every day and is spoken by the easy rule.)
-const MORNING_EASE_OUTCOME: Partial<Record<MorningBasis, DayReadRuleOutcome>> = {
-  resting_hr_after_endurance: DAY_READ_OUTCOMES.resting_hr_after_endurance_easy,
-  readiness_rest_grade: DAY_READ_OUTCOMES.rest_grade_readiness,
-};
 // The single low mornings whose dose keeps a due session on a day the stated week does
 // not own (morning-dose.ts B, D) — the planned-training rule speaks them.
 const UNSTATED_MORNING_DOSES: ReadonlySet<MorningBasis> = new Set<MorningBasis>([
@@ -1457,6 +1460,22 @@ export function dayReadCitableBrakes(
     return freshDecidingBrakeFields(dimensions).filter((field) => !retiredSet.has(field));
   } catch {
     return [];
+  }
+}
+
+/**
+ * The athlete's goal race when `date` is its own date, else null. ONE answer to "is today
+ * race day" for the read and the daily decision alike: the decision's race flag comes
+ * from the DATE, never from which read rule fired (second review, item 3). Fail-soft.
+ */
+export function goalRaceOn(date: string): { event: string; distance_km: number | null } | null {
+  try {
+    const goal = getEnduranceGoal(date);
+    if (!goal?.is_race || !goal.date || String(goal.date).slice(0, 10) !== date) return null;
+    const km = Number(goal.distance_km);
+    return { event: String(goal.event ?? "").trim(), distance_km: Number.isFinite(km) ? km : null };
+  } catch {
+    return null;
   }
 }
 
@@ -2613,6 +2632,30 @@ function computeDayRead(
       return pickDayVariant(RESTING_HR_ILLNESS_REPORTED_WHY, d, "resting_hr_illness_pattern:reported");
     return pickDayVariant(RESTING_HR_ILLNESS_WHY, d, "resting_hr_illness_pattern");
   }
+  // ---- race morning (owner ruling 2026-11-12; second review, item 3) ----
+  // The athlete's goal race on the read day (its own date, never the race read's rule).
+  const raceGoalToday = (): { event: string; distance_km: number | null } | null => goalRaceOn(d);
+  // The floor under race morning, if any — what the read must say plainly. In order: an
+  // illness (its own rest read stands), an open clinical shape (a health finding that holds
+  // endurance work, or a health constraint that is neither injury, illness nor pain), pain
+  // reported today or a painful joint, an injury being worked around, any other clinical
+  // shape, then the athlete's own word (a run-down / poor-sleep / sore tap, or a fresh
+  // felt safety floor such as a session they rated underpowered).
+  function raceDayFloor(): "illness" | "clinical" | "pain" | "injury" | "word" | null {
+    const health = signalState.dimensions.health_constraints.evidence.filter(
+      (item) => item.direction === "constraint" && item.freshness !== "stale"
+    );
+    const has = (field: string) => health.some((item) => item.field === field);
+    if (has("illness")) return "illness";
+    if (has("active_health_constraint")) return "clinical";
+    if (signalInput(() => listActiveDirectives().some(isEnduranceHoldDirective), false)) return "clinical";
+    const statement = freshStatementHold(d, checkin);
+    if (statement === "symptom_report" || has("joint_pain")) return "pain";
+    if (has("active_injury")) return "injury";
+    if (clinicallyDriven(signalState, healthWorkaround)) return "clinical";
+    if (lowSubjective || feltEnergyLow || statement != null || freshSafetyOverride(signalState)) return "word";
+    return null;
+  }
   const decidingBrakeFields: string[] = signalInput(() => freshDecidingBrakeFields(signalState.dimensions), []);
   // Published flat (machine register): the ledger keeps a depth-bounded copy of the
   // morning's signals, so the signal state's own evidence never survives into it, and
@@ -2700,7 +2743,8 @@ function computeDayRead(
       if (!loaded.length) return false;
       const due = dayNumber == null ? null : planDayStrengthGroups().find((day) => day.day_number === dayNumber);
       const groups = due?.groups ?? null;
-      return !groups?.length || groups.some((group) => loaded.includes(String(group).toLowerCase()));
+      // A due day whose groups are unknown promises nothing (item 4): the held lead stays true.
+      return !!groups?.length && groups.some((group) => loaded.includes(String(group).toLowerCase()));
     }, false);
   }
   // The brake the dose answers, in the athlete's register: the first deciding dimension
@@ -2751,27 +2795,64 @@ function computeDayRead(
       // morning-dose.ts E) the day still reads as the race — a read is a suggestion, never
       // a gate — but the `why` says plainly what the body is showing and that how they
       // feel at the start line decides.
+      // …and since the second review (item 3) a floor no longer takes race day's IDENTITY:
+      // the read is still the race, and it says the floor plainly — the athlete's own word,
+      // the pain they reported, the injury they are working around, an open clinical
+      // finding in the clinician register — and that whether and how to start is theirs.
+      // Never a false all-clear, never a gate. An illness keeps its own rest read (the
+      // rules below speak it) and the read still says it is race day (RACE_DAY_ILLNESS_ACK,
+      // appended after resolution).
       resolve: () => {
-        const goal = signalInput(() => getEnduranceGoal(d), null);
-        if (!goal?.is_race || !goal.date || String(goal.date).slice(0, 10) !== d) return null;
-        if (clinicallyDriven(signalState, healthWorkaround)) return null;
-        if (freshSafetyOverride(signalState)) return null;
-        if (lowSubjective || feltEnergyLow || freshStatementHold(d, checkin) != null) return null;
-        const event = String(goal.event ?? "").trim();
-        const illnessShape = morningVerdict().basis === "resting_hr_illness_pattern";
+        const goal = raceGoalToday();
+        if (!goal) return null;
+        const shape =
+          morningVerdict().basis === "resting_hr_illness_pattern"
+            ? restingHrIllnessShape(morning()?.facts ?? null)
+            : null;
+        // The `reported` shape is the athlete's own word or a symptom beside the reading —
+        // a floor of its own, spoken as one (never as "nothing hard behind it").
+        const floor = raceDayFloor() ?? (shape === "reported" ? "word" : null);
+        const event = goal.event;
         (signals as any).goal_race_day = {
           event: event || null,
-          distance_km: goal.distance_km ?? null,
-          ...(illnessShape ? { body_caveat: "resting_hr_illness_pattern" } : {}),
+          distance_km: goal.distance_km,
+          ...(floor ? { floor } : {}),
         };
+        if (floor === "illness") return null;
+        const focus = event ? `Race day — ${event}` : "Race day";
+        if (floor) {
+          const spoken = {
+            word: { outcome: DAY_READ_OUTCOMES.goal_race_day_word, set: RACE_DAY_WORD_WHY },
+            pain: { outcome: DAY_READ_OUTCOMES.goal_race_day_pain, set: RACE_DAY_PAIN_WHY },
+            injury: { outcome: DAY_READ_OUTCOMES.goal_race_day_injury, set: RACE_DAY_INJURY_WHY },
+            clinical: { outcome: DAY_READ_OUTCOMES.goal_race_day_clinical, set: RACE_DAY_CLINICAL_WHY },
+          }[floor];
+          return {
+            outcome: spoken.outcome,
+            read: {
+              kind: "train" as const,
+              focus,
+              why: pickDayVariant(spoken.set, d, spoken.outcome.code),
+              est_minutes: null,
+              signals,
+            },
+          };
+        }
+        // Over the engine's possible-illness read the words follow the SHAPE that fired, so
+        // each is true of its morning (item 4): a second morning running, or one night with
+        // nothing hard behind it. (The `reported` shape is a floor above.)
+        if (shape) (signals as any).goal_race_day.body_caveat = "resting_hr_illness_pattern";
         return {
           outcome: DAY_READ_OUTCOMES.goal_race_day,
           read: {
             kind: "train" as const,
-            focus: event ? `Race day — ${event}` : "Race day",
-            why: illnessShape
-              ? pickDayVariant(RACE_DAY_RHR_WHY, d, "goal_race_day:resting_hr")
-              : pickDayVariant(RACE_DAY_WHY, d, "goal_race_day"),
+            focus,
+            why:
+              shape === "repeat"
+                ? pickDayVariant(RACE_DAY_RHR_REPEAT_WHY, d, "goal_race_day:resting_hr:repeat")
+                : shape
+                  ? pickDayVariant(RACE_DAY_RHR_WHY, d, "goal_race_day:resting_hr")
+                  : pickDayVariant(RACE_DAY_WHY, d, "goal_race_day"),
             est_minutes: null,
             signals,
           },
@@ -2814,7 +2895,12 @@ function computeDayRead(
         const spoken: Partial<Record<MorningBasis, { outcome: DayReadRuleOutcome; why: () => string }>> = {
           consecutive_short_nights: {
             outcome: DAY_READ_OUTCOMES.acute_sleep_corroborated,
-            why: () => pickDayVariant(ACUTE_SLEEP_WHY, d, "acute_sleep_corroborated"),
+            // Keyed on the fact the words assert (item 4): back-to-back short nights, or
+            // one short night on a short rolling average.
+            why: () =>
+              (morning()?.facts.short_nights ?? 0) >= MORNING_DOSE_POLICY.short_nights_for_easy
+                ? pickDayVariant(ACUTE_SLEEP_WHY, d, "acute_sleep_corroborated")
+                : pickDayVariant(ACUTE_SLEEP_TREND_WHY, d, "acute_sleep_corroborated:trend"),
           },
           consecutive_low_mornings: {
             outcome: DAY_READ_OUTCOMES.low_mornings_easy,
@@ -2831,7 +2917,11 @@ function computeDayRead(
           },
           resting_hr_unconfirmed: {
             outcome: DAY_READ_OUTCOMES.resting_hr_caution_easy,
-            why: () => pickDayVariant(RESTING_HR_CAUTION_EASY_WHY, d, "resting_hr_caution_easy"),
+            // "One reading" only when it is one (items 4 and 7).
+            why: () =>
+              restingHrCautionRepeated(morning()?.facts ?? null)
+                ? pickDayVariant(RESTING_HR_CAUTION_REPEAT_WHY, d, "resting_hr_caution_easy:repeat")
+                : pickDayVariant(RESTING_HR_CAUTION_EASY_WHY, d, "resting_hr_caution_easy"),
           },
         };
         const said = verdict.basis ? spoken[verdict.basis] : undefined;
@@ -2952,41 +3042,28 @@ function computeDayRead(
       },
     },
     {
-      // ---- a single low morning: the DOSE on a stated day, easy otherwise (morning-dose.ts) ----
-      // One short night, resting HR up after hard endurance, one low HRV night after it (a
-      // rest-grade reading is answered by its own rule above). On a stated lifting or key-
-      // run day the calendar takes the day and the planned rules speak the dose; on any
-      // other day the ease reads easy — except the post-endurance HRV dip, which keeps any
-      // session that is due at a held dose (the planned-training rule speaks it).
+      // ---- a single low morning: the DOSE (morning-dose.ts) ----
+      // One short night, the milder low readiness band on a stated day, one low HRV night
+      // after hard endurance (a rest-grade reading is answered by its own rule above). On a
+      // stated lifting or key-run day the calendar takes the day and the planned rules speak
+      // the dose; on any other day a short night or the HRV dip keeps the session that is
+      // due at a held dose (the planned-training rule speaks it). Never a read of its own:
+      // every EASY verdict is spoken by the easy-patterns rule above (second review, item
+      // 13 — the ease branch that used to sit here was unreachable and printed the resting-HR
+      // sentence for whatever reached it).
       resolve: () => {
         const verdict = morningVerdict();
-        if (verdict.kind !== "dose" && verdict.kind !== "easy") return null;
-        if (verdict.basis === "readiness_rest_grade") return null;
+        if (verdict.kind !== "dose" || verdict.basis === "readiness_rest_grade") return null;
         // The athlete's own low word keeps its own rules (a corroborated tap rests, F).
         if (lowSubjective) return null;
-        const ease = verdict.basis ? MORNING_EASE_OUTCOME[verdict.basis] : undefined;
         const stepCode =
-          ease?.code ??
-          (verdict.basis === "short_night"
+          verdict.basis === "short_night"
             ? DAY_READ_OUTCOMES.short_night_dosed.code
             : verdict.basis === "readiness_low"
               ? DAY_READ_OUTCOMES.low_readiness_rest.code
-              : DAY_READ_OUTCOMES.overnight_dip_dosed.code);
-        if (verdict.kind === "dose" && calendarTakesDay(stepCode)) return null;
-        // A dose with no stated calendar keeps a due session through the planned-training
-        // rule (morning-dose.ts B, D): never an ease of its own here.
-        if (verdict.kind === "dose" && verdict.basis && UNSTATED_MORNING_DOSES.has(verdict.basis)) return null;
-        if (!ease) return null;
-        return {
-          outcome: ease,
-          read: {
-            kind: "easy" as const,
-            focus: null,
-            why: pickDayVariant(RHR_AFTER_ENDURANCE_EASY_WHY, d, "resting_hr_after_endurance_easy"),
-            est_minutes: 25,
-            signals,
-          },
-        };
+              : DAY_READ_OUTCOMES.overnight_dip_dosed.code;
+        calendarTakesDay(stepCode);
+        return null;
       },
     },
     {
@@ -4459,6 +4536,15 @@ function computeDayRead(
           why: `${liftOpenRead.why} ${endStopped(spokenSignalVoice(workaroundVoice, d, SIGNAL_VOICE_KEYS.injury))}`,
         }
       : liftOpenRead;
+  // Race morning under an illness keeps the illness's own rest read; it still says the day
+  // is race day and that whether to start is theirs (second review, item 3).
+  const raceIllnessAck =
+    (signals as any).goal_race_day?.floor === "illness" &&
+    base.kind !== "done" &&
+    !/\brace\b/i.test(base.why)
+      ? `${endStopped(base.why)} ${pickDayVariant(RACE_DAY_ILLNESS_ACK, d, "goal_race_day:illness_ack")}`
+      : null;
+  const withRace = raceIllnessAck ? { ...base, why: raceIllnessAck } : base;
   // Honest about the evidence itself, not just the posture: when visibly less of
   // the board is currently backing today's read than usual (a wearable gap, an
   // unlogged stretch), say so instead of letting the read project a confidence the
@@ -4487,8 +4573,8 @@ function computeDayRead(
     underfuelingSnapshot === undefined &&
     thinSignalCoverage(signalState.dimensions);
   const withThinness = thin
-    ? { ...base, why: `${base.why} ${pickDayVariant(THIN_SIGNAL_COVERAGE_WHY, d, "thin_signal_coverage")}` }
-    : base;
+    ? { ...withRace, why: `${withRace.why} ${pickDayVariant(THIN_SIGNAL_COVERAGE_WHY, d, "thin_signal_coverage")}` }
+    : withRace;
   // Cross-day memory: yesterday reached this same conclusion by this same route,
   // so today has nothing new to report and should say so rather than re-deriving
   // the sentence as though it were news.

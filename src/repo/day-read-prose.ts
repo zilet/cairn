@@ -89,14 +89,50 @@ export const DAY_READ_OUTCOMES = {
       "Your goal race is today, so the day is the race.",
     ],
   },
+  // Race day with a floor under it (second review, item 3): the day is still the race,
+  // and the read says the floor plainly and leaves whether and how to start to the
+  // athlete. One code per floor, so a floor arriving mid-morning is a new prose identity
+  // and a cached "run your own race" can never stand over it.
+  goal_race_day_word: {
+    code: "goal_race_day_word",
+    reasons: [
+      "Today is your race, and what you've said about how you feel is worth weighing before the start.",
+      "Race day, with how you've said you're feeling in the picture — whether and how you start is your call.",
+      "Your goal race is today, and your own account of how you feel comes first in deciding how to take it.",
+    ],
+  },
+  goal_race_day_pain: {
+    code: "goal_race_day_pain",
+    reasons: [
+      "Today is your race, and the pain you reported is worth weighing before the start.",
+      "Race day, with the pain you reported in the picture — whether and how you start is your call.",
+      "Your goal race is today, and the pain you reported comes first in deciding how to take it.",
+    ],
+  },
+  goal_race_day_injury: {
+    code: "goal_race_day_injury",
+    reasons: [
+      "Today is your race, and the injury you're working around is worth weighing before the start.",
+      "Race day, with an injury still in the picture — whether and how you start is your call.",
+      "Your goal race is today, and the injury you're easing around comes first in deciding how to take it.",
+    ],
+  },
+  goal_race_day_clinical: {
+    code: "goal_race_day_clinical",
+    reasons: [
+      "Today is your race, and an open health finding is worth clearing with your clinician before the start.",
+      "Race day, with a health finding still open — whether and how you start is for you and your clinician.",
+      "Your goal race is today, and a health finding you're following comes first in deciding how to take it.",
+    ],
+  },
   // Resting HR above the athlete's own band with nothing hard before it, or for a second
   // reading, or beside their own low word or a symptom: the possible-illness pattern.
   resting_hr_illness_pattern: {
     code: "resting_hr_illness_pattern",
     reasons: [
-      "Your resting heart rate is up past your usual range with nothing hard to explain it.",
-      "Resting heart rate is running above your own range, which can be the start of something.",
-      "Your resting heart rate sits above its usual range, and yesterday's work doesn't account for it.",
+      "Your resting heart rate is up past your usual range, which can be the start of something.",
+      "Resting heart rate is running above your own range, which can mean something is brewing.",
+      "Your resting heart rate sits above its usual range in a way worth resting on.",
     ],
   },
   // A sustained rolling HRV decline beside the log's own performance shortfall.
@@ -112,9 +148,9 @@ export const DAY_READ_OUTCOMES = {
   low_mornings_easy: {
     code: "low_mornings_easy",
     reasons: [
-      "This is a second low morning in a row, so today stays easy.",
-      "Another low morning on top of yesterday's, so the day keeps to easy work.",
-      "Two low mornings in a row ask for an easy day rather than a hard one.",
+      "Another low morning on top of yesterday's, so today stays easy.",
+      "Low mornings back to back, so the day keeps to easy work.",
+      "Two or more low mornings in a row ask for an easy day rather than a hard one.",
     ],
   },
   // One short night on a day the week does not put a session on: an eased day.
@@ -145,7 +181,7 @@ export const DAY_READ_OUTCOMES = {
     reasons: [
       "Your week lifts today, so the session stays on, held back for what this morning showed.",
       "The lifting day keeps its place, with the loads held where they are.",
-      "Today still lifts, at a held dose, because a single low morning is not the whole picture.",
+      "Today still lifts, at a held dose, because one morning's readings are not the whole picture.",
     ],
   },
   // …and the stated KEY RUN kept on through such a morning, at the run engine's own dose.
@@ -162,8 +198,8 @@ export const DAY_READ_OUTCOMES = {
   overnight_dip_dosed: {
     code: "overnight_dip_dosed",
     reasons: [
-      "HRV dipped for one night after hard endurance work, so the session stays on at a held dose.",
-      "One low HRV night after a big endurance day, so today trains with the loads held.",
+      "HRV dipped after hard endurance work, so the session stays on at a held dose.",
+      "A low HRV night after a big endurance day, so today trains with the loads held.",
       "The session that is due stays on, held back for last night's dip after hard endurance work.",
     ],
   },
@@ -184,8 +220,8 @@ export const DAY_READ_OUTCOMES = {
     code: "resting_hr_caution_easy",
     reasons: [
       "Resting heart rate reads above usual this morning, so today stays easy.",
-      "One resting heart rate reading above usual, so the day keeps easy.",
-      "Resting heart rate is up this morning on a reading too thin to say more, so today is an easy one.",
+      "Resting heart rate is above usual on readings too thin to say more, so the day keeps easy.",
+      "Resting heart rate is up this morning, though the reading can't say much yet, so today is an easy one.",
     ],
   },
   // The athlete's own good check-in lifted a readiness-only easy read one step.
@@ -200,9 +236,9 @@ export const DAY_READ_OUTCOMES = {
   acute_sleep_corroborated: {
     code: "acute_sleep_corroborated",
     reasons: [
-      "Last night was short, and your sleep has been running short for a while now.",
-      "A short night on top of a stretch of short nights.",
-      "Sleep came up short again last night, the way it has for a while.",
+      "Last night came up short, and it isn't the only short night lately.",
+      "A short night on top of other short sleep.",
+      "Sleep came up short again last night.",
       "Last night was thin, and it isn't a one-off right now.",
     ],
   },
@@ -447,11 +483,20 @@ export const DONE_WHY: ReadonlyArray<(label: string) => string> = [
 ];
 // Two or more consecutive short nights (morning-dose.ts, D): an easy day, never rest.
 // The code keeps its historical name so the ledger's history stays one series.
+// The count stops at the policy's number, so no phrasing says "second": it may be the third.
 export const ACUTE_SLEEP_WHY: readonly string[] = [
   "Last night was short on top of the night before, so today stays easy — heavy lifting can wait for a fuller night.",
-  "A second short night in a row, so keep today easy and low-key.",
-  "Sleep has come up short two nights running, so today is an easy day rather than a hard one.",
+  "Another short night on top of the last one, so keep today easy and low-key.",
+  "Sleep has come up short two or more nights running, so today is an easy day rather than a hard one.",
   "Short nights back to back — an easy day suits today better than a hard one.",
+];
+// …and one short night on top of a short rolling average (the read's own chronic-sleep
+// trend): the same easy day, but the night before need not have been short, so no
+// phrasing here says "back to back" or "two nights" (second review, item 4).
+export const ACUTE_SLEEP_TREND_WHY: readonly string[] = [
+  "Last night came up short on top of a stretch of short sleep, so today stays easy — heavy lifting can wait for a fuller night.",
+  "Another short night while your sleep has been running short lately, so keep today easy and low-key.",
+  "Sleep was short last night and has been on the short side for a while, so today is an easy day rather than a hard one.",
 ];
 export const DOSE_OVERRUN_WHY: readonly string[] = [
   "Yesterday's recovery session materially exceeded its reduced dose — take today to absorb it before continuing.",
@@ -470,10 +515,12 @@ export const STACKED_LOAD_WHY: readonly string[] = [
 // that picture changes.
 // The stacked days corroborated only by something that may not take the day on its own
 // (morning-dose.ts, F): easier, not off.
+// The corroboration may be yesterday's longest run or the week's load, not only this
+// morning's readings — so no phrasing says "this morning agrees" (second review, item 4).
 export const STACKED_LOAD_EASY_WHY: readonly string[] = [
-  "You've trained hard several days running and something this morning agrees — keep today easy and let it consolidate.",
-  "That's a real run of training days, with this morning backing it up, so today stays easy.",
-  "Several loading days back to back, and the morning agrees — an easy day lets the work land.",
+  "You've trained hard several days running and a current signal agrees — keep today easy and let it consolidate.",
+  "That's a real run of training days, with something recent backing it up, so today stays easy.",
+  "Several loading days back to back, and the latest signs agree — an easy day lets the work land.",
 ];
 export const STACKED_LOAD_CEILING_WHY: readonly string[] = [
   "That's a run of hard days, and you're still carrying them well — keep today easier, and tell me if that changes.",
@@ -513,12 +560,13 @@ export const REST_GRADE_READINESS_WHY: readonly string[] = [
   "Readiness is scraping the floor this morning, so today leans easy and low-key.",
 ];
 // Two low mornings in a row (morning-dose.ts, C).
+// The count stops at the policy's number, so no phrasing says "second": it may be the third.
 export const LOW_MORNINGS_EASY_WHY: readonly string[] = [
-  "This is a second low morning in a row, so today stays easy — gentle movement, nothing hard.",
+  "This morning reads low again, on top of yesterday, so today stays easy — gentle movement, nothing hard.",
   "Another low reading on top of yesterday's, so keep today easy and low-intensity.",
-  "Two low mornings back to back ask for an easy day — move, but keep it gentle.",
+  "Low mornings back to back ask for an easy day — move, but keep it gentle.",
 ];
-// One short night on an unstated day (morning-dose.ts, D).
+// One SEVERELY short night, on any day (morning-dose.ts, D, `severe_short_night_max_min`).
 export const SHORT_NIGHT_EASED_WHY: readonly string[] = [
   "Last night came up short, so today eases — keep it light and skip the heavy compound work.",
   "A short night, so today is a lighter one, with no load jumps and nothing heavy.",
@@ -541,9 +589,10 @@ export const RESTING_HR_ILLNESS_WHY: readonly string[] = [
   "Resting heart rate is up past your own range without a hard day behind it, so rest today and see how tomorrow reads.",
   "Your resting heart rate came in above its usual range with no big day to account for it, so today is better spent resting.",
 ];
+// Consecutive mornings counted to at least the policy's number — so "again", never "second".
 export const RESTING_HR_ILLNESS_REPEAT_WHY: readonly string[] = [
   "Your resting heart rate is above its usual range again, so today is better spent resting while it settles.",
-  "A second morning in a row with resting heart rate past your own range — rest today and let it come back down.",
+  "Another morning in a row with resting heart rate past your own range — rest today and let it come back down.",
   "Resting heart rate has stayed above your usual range two mornings running, which can be the start of something, so today is a rest day.",
 ];
 export const RESTING_HR_ILLNESS_REPORTED_WHY: readonly string[] = [
@@ -558,6 +607,14 @@ export const RESTING_HR_CAUTION_EASY_WHY: readonly string[] = [
   "Resting heart rate came in high this morning, though a single reading can't say much yet — an easy day fits.",
   "This morning's resting heart rate sits above usual; on one reading alone, keep today easy and see how tomorrow reads.",
 ];
+// …and the same caution on consecutive mornings whose readings nothing vouches for (no
+// band of the athlete's own yet, or rows that cannot check themselves — item 7): never
+// rest, and never "one reading" (item 4).
+export const RESTING_HR_CAUTION_REPEAT_WHY: readonly string[] = [
+  "Your resting heart rate has read above your usual more than one morning running, though these readings are too thin to lean on — keep today easy.",
+  "Resting heart rate came in high again this morning; the readings can't say much yet, so an easy day fits.",
+  "This morning's resting heart rate sits above usual again. On readings this thin, keep today easy and see how tomorrow reads.",
+];
 // A sustained rolling HRV decline beside a log-confirmed shortfall (morning-dose.ts, F).
 export const HRV_DECLINE_SHORTFALL_WHY: readonly string[] = [
   "Your HRV has sat below your usual range for days and recent sessions came in short of the plan — a rest day gives both room to turn.",
@@ -570,12 +627,58 @@ export const RACE_DAY_WHY: readonly string[] = [
   "Today is your race. The training is already in the bank; start controlled and let it come to you.",
   "It's race day: nothing left to add, just the race itself. Ease into it and run your own race.",
 ];
-// Race day over the engine's possible-illness read (resting HR past the band with
-// nothing hard to explain it): still the race — the athlete decides — said plainly.
+// Race day over the engine's possible-illness read: still the race — the athlete decides
+// — said plainly. One set per SHAPE of the pattern (morning-dose.ts
+// `restingHrIllnessShape`), so each sentence is true of the morning it prints on:
+// `unexplained` (one night, nothing hard behind it) may say "without a hard day", and
+// `repeat` (two consecutive mornings) says it is the second. The `reported` shape (the
+// athlete's own word or a symptom beside it) never reaches these: race morning speaks
+// that floor in its own words (RACE_DAY_WORD_WHY / RACE_DAY_PAIN_WHY).
 export const RACE_DAY_RHR_WHY: readonly string[] = [
-  "Race day — but your resting heart rate is sitting above your usual range this morning, which can be the start of something. How you feel at the start line decides; sitting this one out is a fair call too.",
+  "Race day — but your resting heart rate is sitting above your usual range this morning with nothing hard to explain it, which can be the start of something. How you feel at the start line decides; sitting this one out is a fair call too.",
   "Today is your race, and your resting heart rate is up past your own range without a hard day behind it. Let how you feel warming up and at the start decide whether you run it.",
-  "It's race day, though your resting heart rate came in above its usual range, which can mean something is brewing. Warm up easy and let how you feel at the start line make the call.",
+  "It's race day, though your resting heart rate came in above its usual range with no big day to account for it, which can mean something is brewing. Warm up easy and let how you feel at the start line make the call.",
+];
+export const RACE_DAY_RHR_REPEAT_WHY: readonly string[] = [
+  "Race day — but your resting heart rate has sat above your usual range two mornings running, which can be the start of something. How you feel at the start line decides; sitting this one out is a fair call too.",
+  "Today is your race, and your resting heart rate is up past your own range for more than one morning now. Let how you feel warming up and at the start decide whether you run it.",
+  "It's race day, though your resting heart rate is above its usual range again this morning, which can mean something is brewing. Warm up easy and let how you feel at the start line make the call.",
+];
+// Race day with a floor under it (second review, item 3). Every phrasing names the race,
+// says what the floor is in plain words, and says whether and how to start is the
+// athlete's own call — a suggestion, never a gate, and never a false all-clear.
+// The athlete's own word: a run-down or poor-sleep tap, high soreness, or a recent
+// session they rated as underpowered — so no phrasing claims which, or that it was today.
+export const RACE_DAY_WORD_WHY: readonly string[] = [
+  "It's race day, and you've told me you're not feeling your best. Whether and how you start is your call — if you go, start well within yourself and let how you feel warming up decide.",
+  "Today is your race, though what you've said about how you're feeling points the other way. Whether you start, and how hard, is yours to decide; an easy first stretch keeps the choice open.",
+  "Race day — and how you've said you're feeling isn't what you'd want under a race. Whether and how you run it is your decision; warm up gently and listen to what your body says.",
+];
+// Pain the athlete reported today (or joint pain from a session).
+export const RACE_DAY_PAIN_WHY: readonly string[] = [
+  "It's race day, and you've reported pain. Whether and how you start is your decision — racing on pain can make it worse, so let how it feels warming up make the call, and stopping is always a fair choice.",
+  "Today is your race, but the pain you reported is worth taking seriously. Whether and how you start is yours to decide; if it sharpens as you warm up, sitting this one out is a sound call.",
+  "Race day — with the pain you reported in the picture. Whether you start, and how, is your call; let a careful warm-up tell you, and pain that builds is a good reason to stop.",
+];
+// An injury the athlete is working around (a dated injury in their context).
+export const RACE_DAY_INJURY_WHY: readonly string[] = [
+  "It's race day, and you're working around an injury. Whether and how you start is your call — let how it feels warming up decide, and stopping is always a fair choice.",
+  "Today is your race, with an injury still in the picture. Whether and how you run it is yours to decide; if it complains as you warm up, sitting this one out is a sound call.",
+  "Race day — and the injury you've been easing around is still there. Whether you start, and how, is your decision; a careful warm-up will tell you a lot.",
+];
+// A clinical shape (a health finding that holds endurance work, or another open health
+// constraint): the clinician register — informational, never medical advice.
+export const RACE_DAY_CLINICAL_WHY: readonly string[] = [
+  "It's race day, and there's an open health finding that's worth talking over with your clinician before you start. Whether and how you race is for you and them to decide — this is information, not medical advice.",
+  "Today is your race, with a health finding you're following still open. Whether and how you start is your call with your clinician; nothing here is medical advice.",
+  "Race day — though a health finding is still open, and that's a question for you and your clinician. Whether you start, and how, is your decision; this is information, not medical advice.",
+];
+// Illness keeps its own rest read; this sentence follows it, so the read still says the
+// day is race day and that the decision is theirs.
+export const RACE_DAY_ILLNESS_ACK: readonly string[] = [
+  "It's race day, too — whether you start is yours to decide, and sitting it out while you're unwell is a sound call.",
+  "Today was meant to be race day; whether you still line up is your call, and resting through an illness is a fair one.",
+  "It's also your race day. Whether you run it is your decision — racing while unwell rarely goes well, and missing one is not lost ground.",
 ];
 // What a morning dose is ABOUT, a whole sentence spoken before the dose lead
 // (morning-dose.ts). One set per basis — and per fact a phrasing asserts: the readiness
@@ -584,9 +687,9 @@ export const RACE_DAY_RHR_WHY: readonly string[] = [
 // (`readiness_rest_grade:unexplained`). Registered in DAY_READ_WHY_VARIANTS.
 export const MORNING_DOSE_CAUSE: Readonly<Record<string, readonly string[]>> = {
   readiness_rest_grade: [
-    "Your readiness reading is very low this morning, most likely yesterday's work still showing.",
-    "This morning's readiness number came in very low after a hard day, and on its own that number doesn't take the day.",
-    "The readiness reading is at the bottom of its range this morning, which a big day before often leaves behind.",
+    "Your readiness reading is very low this morning, most likely your recent work still showing.",
+    "This morning's readiness number came in very low after your recent work, and on its own that number doesn't take the day.",
+    "The readiness reading is at the bottom of its range this morning, which recent training often leaves behind.",
   ],
   "readiness_rest_grade:unexplained": [
     "This morning's readiness number came in very low, and on its own that number doesn't take the day.",
@@ -596,9 +699,9 @@ export const MORNING_DOSE_CAUSE: Readonly<Record<string, readonly string[]>> = {
   // The milder low band on a stated day (morning-dose.ts, A): the same dose as the
   // rest-grade band, and never "very low" — that is the other band's word.
   readiness_low: [
-    "Your readiness reading is on the low side this morning, most likely yesterday's work still showing.",
-    "This morning's readiness number came in low after yesterday's work, and on its own that number doesn't take the day.",
-    "The readiness reading sits low this morning, which the work the day before often leaves behind.",
+    "Your readiness reading is on the low side this morning, most likely your recent work still showing.",
+    "This morning's readiness number came in low after your recent work, and on its own that number doesn't take the day.",
+    "The readiness reading sits low this morning, which recent training often leaves behind.",
   ],
   "readiness_low:unexplained": [
     "This morning's readiness number came in low, and on its own that number doesn't take the day.",
@@ -610,15 +713,12 @@ export const MORNING_DOSE_CAUSE: Readonly<Record<string, readonly string[]>> = {
     "Sleep was short last night.",
     "Last night's sleep fell short.",
   ],
-  resting_hr_after_endurance: [
-    "Resting heart rate is up after the recent hard work, a common answer to a big day.",
-    "Your resting heart rate is still carrying the recent hard day.",
-    "After the recent hard day your resting heart rate sits above your usual range.",
-  ],
+  // (No resting-HR cause: resting HR past the band after a hard day is easy on every day
+  // and never a dose — item 13 removed the tunable that could have made it one.)
   // A usual answer, never a guarantee: the module treats one night as provisional.
   overnight_dip_after_endurance: [
     "HRV dipped last night after the hard endurance work, a common answer to a big day.",
-    "One low HRV night after a big endurance day is common, and on its own it says little.",
+    "A low HRV reading after a big endurance day is common, and on its own it says little.",
     "Last night's HRV came in low after the hard endurance work, as it often does.",
   ],
 };
@@ -1601,11 +1701,18 @@ export const DAY_READ_WHY_VARIANTS: Readonly<Record<string, readonly string[]>> 
   ],
   logged_loading_work_today: DONE_WHY.map((render) => render("session")),
   acute_sleep_corroborated: ACUTE_SLEEP_WHY,
+  "acute_sleep_corroborated:trend": ACUTE_SLEEP_TREND_WHY,
   recovery_dose_overrun: DOSE_OVERRUN_WHY,
   accumulated_load_rest: [...STACKED_LOAD_WHY, ...STACKED_LOAD_EASY_WHY, ...STACKED_LOAD_CEILING_WHY],
   // The morning's body readings (morning-dose.ts).
   goal_race_day: RACE_DAY_WHY,
   "goal_race_day:resting_hr": RACE_DAY_RHR_WHY,
+  "goal_race_day:resting_hr:repeat": RACE_DAY_RHR_REPEAT_WHY,
+  goal_race_day_word: RACE_DAY_WORD_WHY,
+  goal_race_day_pain: RACE_DAY_PAIN_WHY,
+  goal_race_day_injury: RACE_DAY_INJURY_WHY,
+  goal_race_day_clinical: RACE_DAY_CLINICAL_WHY,
+  "goal_race_day:illness_ack": RACE_DAY_ILLNESS_ACK,
   resting_hr_illness_pattern: RESTING_HR_ILLNESS_WHY,
   "resting_hr_illness_pattern:repeat": RESTING_HR_ILLNESS_REPEAT_WHY,
   "resting_hr_illness_pattern:reported": RESTING_HR_ILLNESS_REPORTED_WHY,
@@ -1614,6 +1721,7 @@ export const DAY_READ_WHY_VARIANTS: Readonly<Record<string, readonly string[]>> 
   short_night_eased: SHORT_NIGHT_EASED_WHY,
   resting_hr_after_endurance_easy: RHR_AFTER_ENDURANCE_EASY_WHY,
   resting_hr_caution_easy: RESTING_HR_CAUTION_EASY_WHY,
+  "resting_hr_caution_easy:repeat": RESTING_HR_CAUTION_REPEAT_WHY,
   // A sentence appended after the readiness brake's own voice (not the whole `why`).
   checkin_lifted_train: CHECKIN_LIFT_WHY,
   "checkin_lifted_train:hrv": CHECKIN_LIFT_HRV_WHY,
@@ -1691,12 +1799,19 @@ export const DAY_READ_REQUIRED_CONCEPT: Readonly<Record<string, RegExp>> = {
   // The morning's body readings (morning-dose.ts). Each names what it is about.
   goal_race_day: /\brace\b/i,
   "goal_race_day:resting_hr": /\brace\b[\s\S]*\bresting heart rate\b[\s\S]*\bstart\b/i,
+  "goal_race_day:resting_hr:repeat": /\brace\b[\s\S]*\bresting heart rate\b[\s\S]*\bstart\b/i,
+  // Race day with a floor: the race, the floor in plain words, and that the start is theirs.
+  goal_race_day_word: /\brace\b[\s\S]*\bfeel(?:ing)?\b[\s\S]*\bwhether\b|\brace\b[\s\S]*\bwhether\b[\s\S]*\bfeel(?:ing)?\b/i,
+  goal_race_day_pain: /\brace\b[\s\S]*\bpain\b/i,
+  goal_race_day_injury: /\brace\b[\s\S]*\binjury\b/i,
+  goal_race_day_clinical: /\brace\b[\s\S]*\bclinician\b/i,
+  "goal_race_day:illness_ack": /\brace\b[\s\S]*\bwhether\b/i,
   "resting_hr_illness_pattern:repeat": /\bresting heart rate\b/i,
   "resting_hr_illness_pattern:reported": /\bresting heart rate\b/i,
   resting_hr_illness_pattern: /\bresting heart rate\b/i,
   // Both halves: the HRV run AND the sessions that fell short.
   hrv_decline_with_shortfall: /\bHRV\b[\s\S]*\bshort\b/i,
-  low_mornings_easy: /\b(?:second|another|two)\b/i,
+  low_mornings_easy: /\b(?:another|again|back to back)\b/i,
   short_night_eased: /\b(?:short|night|sleep)\b/i,
   resting_hr_after_endurance_easy: /\bresting heart rate\b[\s\S]*\beasy\b/i,
   stated_lift_morning_dosed: /\b(?:lift|lifting|lifts|session)\b/i,
@@ -1711,11 +1826,12 @@ export const DAY_READ_REQUIRED_CONCEPT: Readonly<Record<string, RegExp>> = {
   "morning_dose_cause:readiness_low:unexplained": /\breadiness\b/i,
   short_night_dosed: /\b(?:short|night|sleep)\b[\s\S]*\b(?:held|hold)\b/i,
   resting_hr_caution_easy: /\bresting heart rate\b[\s\S]*\beasy\b/i,
+  "resting_hr_caution_easy:repeat": /\bresting heart rate\b[\s\S]*\beasy\b/i,
   "morning_dose_cause:short_night": /\bshort\b/i,
-  "morning_dose_cause:resting_hr_after_endurance": /\bresting heart rate\b/i,
   "morning_dose_cause:overnight_dip_after_endurance": /\bHRV\b/,
   logged_loading_work_today: /\b(?:in today|done|books|covered|logged)\b/i,
   acute_sleep_corroborated: /\b(?:sleep|night|nights)\b/i,
+  "acute_sleep_corroborated:trend": /\b(?:lately|while|stretch)\b/i,
   acute_signal_protection: /\b(?:protect|protecting|protection|recovery|guarding)\b/i,
   recovery_dose_overrun: /\byesterday\b/i,
   accumulated_load_rest: /\b(?:trained|training|loading|stacked|hard days)\b/i,
