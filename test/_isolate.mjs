@@ -13,9 +13,8 @@
 // pristine floor, so correctness is independent of file order, shard count, and
 // added test files. Per-file `resetTables` calls stay valid (they just delete
 // already-empty tables) — this is the belt over their suspenders.
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync } from "node:fs";
 import { registerHooks } from "node:module";
-import path from "node:path";
 import { beforeEach } from "node:test";
 // Offline floor for a run started without test/run.mjs; must precede any dist import.
 import "./_offline.mjs";
@@ -120,39 +119,12 @@ async function resetIfLoaded(url) {
   entry.reset();
 }
 
-// A third of the suite (client, script and contract tests) never loads dist/, and
-// importing the server graph here cost each such file ~150 ms of process start. So a test
-// file that never names dist — itself or in the relative modules it imports —
-// loads only the DB; a module never loaded has no state to reset, and the hook above
-// still notices one that loads late. Every other file keeps the full, ordered graph
-// import below, so a dist test starts from the same module it always has (any cycle
-// member loading first is safe on its own — test/moduleLoadOrder.test.js holds that).
-const RELATIVE_IMPORT = /(?:\bfrom\s*|\bimport\s*\(?\s*)["'](\.{1,2}\/[^"']+)["']/g;
-function reachesDist(file, seen = new Set()) {
-  if (seen.has(file)) return false;
-  seen.add(file);
-  let source;
-  try {
-    source = readFileSync(file, "utf8");
-  } catch {
-    return true;
-  }
-  // Conservative: any mention of dist (a built path, an import by URL) counts.
-  if (/\bdist\b/.test(source)) return true;
-  for (const [, spec] of source.matchAll(RELATIVE_IMPORT)) {
-    const target = path.resolve(path.dirname(file), spec);
-    if (target.split(path.sep).includes("dist")) return true;
-    if (/\.m?js$/.test(target) && reachesDist(target, seen)) return true;
-  }
-  return false;
-}
-const testFiles = process.argv.slice(1).filter((arg) => /\.test\.m?js$/.test(arg));
-const lightweight = testFiles.length > 0 && !testFiles.some((file) => reachesDist(path.resolve(file)));
-
+// Only the DB is loaded here. A watched module is reset only once something has loaded it
+// (the hook above notices it whenever it loads, however late), so each test file enters
+// the server graph through its own imports and pays only for the part it uses — a module
+// never loaded has no state to reset. Any import cycle member may load first:
+// test/moduleLoadOrder.test.js holds that.
 const { db } = await import("../dist/db.js");
-if (!lightweight) {
-  for (const url of watched.keys()) await import(url);
-}
 
 // The schema is fixed for the life of the process, so enumerate + prepare once.
 const tables = db
