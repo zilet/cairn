@@ -549,7 +549,7 @@ export function planWeek(date?: string): PlanWeek {
       }
       // The focus as it reads on THIS date: a stored "on the threshold-run day" written
       // for another layout never rides onto a weekday it is not true of.
-      if (plan_day) plan_day.focus = datedPlanDayFocus(plan_day.focus, cellDate);
+      if (plan_day) plan_day.focus = datedPlanDayFocus(plan_day.focus, cellDate, { exercises: templateDay?.names ?? [] });
       const session = sessionRow ? toPlanWeekSession(sessionRow) : null;
       // Runs are dated by the agenda: a completion on this date, or an open intent
       // suggested for it. An intent with no date stays off the calendar — putting it

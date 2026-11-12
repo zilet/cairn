@@ -141,9 +141,15 @@ function otherSportLoggedOn(date: string): string | null {
 // Brief kept offering the swap they had already made.
 type ChosenSession = { sessionId: number | null; title: string; focus: string | null };
 
-type AcceptedComposition = { reshaped: boolean; decisionKind: string | null; chosen: ChosenSession | null };
+// `exercises` is the lifts the composition's card actually carries, so a focus is held to them.
+type AcceptedComposition = {
+  reshaped: boolean;
+  decisionKind: string | null;
+  chosen: ChosenSession | null;
+  exercises: string[];
+};
 
-const NO_COMPOSITION: AcceptedComposition = { reshaped: false, decisionKind: null, chosen: null };
+const NO_COMPOSITION: AcceptedComposition = { reshaped: false, decisionKind: null, chosen: null, exercises: [] };
 
 // The accepted composition for today: whether most of its strength slots were moved
 // off the plan day (a substitution names the slot it replaced), the decision kind
@@ -191,7 +197,8 @@ function acceptedComposition(date: string): AcceptedComposition {
             focus: String(row.focus ?? "").trim() || null,
           }
         : null;
-    return { reshaped: items.length > 0 && substituted * 2 > items.length, decisionKind, chosen };
+    const exercises = items.map((it) => String(it?.exercise ?? "").trim()).filter(Boolean);
+    return { reshaped: items.length > 0 && substituted * 2 > items.length, decisionKind, chosen, exercises };
   } catch {
     return NO_COMPOSITION;
   }
@@ -461,7 +468,7 @@ function todayStrengthLineRead(d: string): TodayStrengthLine {
       date: d,
       day_number: null,
       title: chosen.title,
-      focus: datedPlanDayFocus(chosen.focus, d),
+      focus: datedPlanDayFocus(chosen.focus, d, { exercises: composition.exercises }),
       role: "strength",
       state,
       suggestion,
@@ -537,13 +544,17 @@ function todayStrengthLineRead(d: string): TodayStrengthLine {
           }
         })()
       : null;
+  // The stored focus is free text nothing re-syncs when a slot is swapped or removed, so it
+  // is held to the lifts on today's card: the composition's items when one owns the day,
+  // else the plan day's own current items.
+  const cardLifts = composition.exercises.length ? composition.exercises : (day?.names ?? []);
   return {
     date: d,
     day_number: day ? day.day_number : null,
     title,
     // Read for today's date: a stored calendar claim never outlives the week it was written
     // for, and a trimmed day says its trim beside the focus (never instead of the title).
-    focus: legTrimFocus(day?.focus ? datedPlanDayFocus(String(day.focus).trim() || null, d) : null, trim, d),
+    focus: legTrimFocus(day?.focus ? datedPlanDayFocus(String(day.focus).trim() || null, d, { exercises: cardLifts }) : null, trim, d),
     trim,
     role,
     state,

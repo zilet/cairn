@@ -261,3 +261,17 @@ test("a short spin beside the run is not named", () => {
   repo.addActivity({ type: "ride", date: TUE, duration_min: 15, distance_km: 3 });
   assert.match(todayStrengthLine(TUE).text, /^(?:Your run's in\. |Run done\. |The run's in; )/);
 });
+
+test("a focus naming a movement no longer on the day prints without it, on the line and the week strip", () => {
+  repo.savePlanDay(2, "Pull", "Seated dumbbell press, barbell row, carry and plank", [
+    { exercise: "Landmine Press", sets: 3, rep_low: 6, rep_high: 8 },
+    { exercise: "Barbell Row", sets: 3, rep_low: 6, rep_high: 8 },
+  ]);
+  const line = todayStrengthLine(TUE);
+  assert.ok(line.focus, "some focus is left");
+  assert.doesNotMatch(line.focus, /seated dumbbell press|carry|plank/i);
+  assert.match(line.focus, /barbell row/i);
+  const cell = planWeek(TUE).days.find((d) => d.date === TUE);
+  assert.doesNotMatch(String(cell.plan_day.focus), /seated dumbbell press|carry|plank/i);
+  assert.match(String(cell.plan_day.focus), /barbell row/i);
+});
