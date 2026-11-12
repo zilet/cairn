@@ -11,21 +11,27 @@
 //      held, no reach, the regions yesterday loaded lighter) on a STATED lifting or
 //      key-run day.
 //   B. HRV decides a REST only as a ROLLING value (a ~week of valid nights against the
-//      athlete's own band, overnight-band.ts `rollingBandRead`). One low night within a
-//      short window after a hard or long endurance day, resting HR in band, is the
-//      expected answer to that day: a caveat plus the dose.
+//      athlete's own band, overnight-band.ts `rollingBandRead`, with at least one valid
+//      night in the last couple of days). One low night within a short window after a
+//      hard or long endurance day, resting HR in band, is a usual answer to that day: a
+//      caveat plus the dose.
 //   C. A second consecutive low morning means EASY (low intensity), never rest.
-//   D. One short night eases (a dosed day on a stated day, easy otherwise); two or more
-//      consecutive short nights mean easy.
-//   E. Resting HR above the athlete's band: after a hard endurance day it is expected —
-//      easy at most. Without one, on a second consecutive morning, or beside the
-//      athlete's own low word or a symptom report, it reads as possible illness — REST.
+//   D. One short night on a day with a session due keeps the session at a held dose
+//      (heavy multi-joint work held back, no load raises), stated day or not; two or more
+//      consecutive short nights mean easy, and so does one SEVERELY short night.
+//   E. Resting HR above the athlete's band: after a hard day it is easy at most, on every
+//      day, and never a training day when HRV is past its own band the same night. On a
+//      second consecutive calendar morning, or — with an established personal band and a
+//      reading its own source vouches for — on one night with no hard day behind it or
+//      beside the athlete's own low word or a symptom report, it reads as possible
+//      illness: REST. An unvouched single reading is a caution: easy at most.
 //   F. REST is otherwise reserved for the floors the engine already owns (illness, pain,
 //      clinical, safety, the athlete's corroborated low word, a recovery week or a
 //      calendar hold) plus a SUSTAINED rolling HRV decline beside the log-confirmed
 //      performance shortfall the deload read already computes.
 //   G. A positive check-in lifts ONE step only a caution that rests on the composite
-//      readiness score; intensity stays held.
+//      readiness score or on a single low HRV night; intensity stays held. It never lifts
+//      acute load, resting HR, short sleep, a rolling HRV decline or any floor.
 // The coaching defaults this module triggers (loads held, no load raises, the regions
 // yesterday loaded kept lighter) are conservative defaults, not trial findings.
 //
@@ -54,21 +60,45 @@ export const MORNING_DOSE_POLICY = Object.freeze({
   hrv_rolling_min_nights: 3,
   /** Days of baseline before the rolling window, for the athlete's own band. */
   hrv_baseline_days: 28,
+  /**
+   * The rolling read also needs a valid night inside this many days ending on the morning
+   * (2 = last night or the night before): a window of only old nights is not this morning.
+   */
+  hrv_rolling_recent_night_days: 2,
   /** Days after a hard or long endurance day inside which a low night is the expected answer to it. */
   endurance_window_days: 2,
   // ---- C: persistence ----
   /** Consecutive low mornings (this one counted) that make the day EASY, never dosed. */
   low_mornings_for_easy: 2,
   // ---- D: short nights ----
-  /** Consecutive short nights (last night counted) that make the day EASY. One short night eases. */
+  /** Consecutive short nights (last night counted) that make the day EASY. One short night is the dose. */
   short_nights_for_easy: 2,
+  /**
+   * A night shorter than this (minutes) reads EASY on its own, even on a stated day. A
+   * conservative coaching default, NOT a literature finding: the review supports a cost
+   * from sleep at or under ~6 h and more from consecutive restriction, not a specific
+   * single-night cut-off; "about four hours" is where the owner's ruling puts the floor.
+   */
+  severe_short_night_max_min: 240,
   // ---- E: resting HR above the athlete's band ----
   /** How far past the athlete's line ONE night must sit to count ("meaningful" = by the smallest worthwhile change). */
   rhr_single_night_min_past: "meaningful" as "meaningful" | "marginal",
-  /** Consecutive readings past the line that make an elevated resting HR the illness pattern. */
+  /** Consecutive CALENDAR mornings past the line that make an elevated resting HR the illness pattern. */
   rhr_illness_consecutive_readings: 2,
-  /** After a hard endurance day, what an elevated resting HR leaves a STATED day as: a dosed train, or easy. */
-  rhr_after_endurance_on_stated_day: "dosed_train" as "dosed_train" | "easy",
+  /**
+   * What ONE night past the line needs before it may REST a day as possible illness: the
+   * athlete's own established band (not the watch's seven-day fallback) and a reading its
+   * own row vouches for (overnight-band.ts restingHrReadingVerified). Without both it is
+   * a caution: easy at most.
+   */
+  rhr_single_night_rest_requires: Object.freeze({ established_band: true, verified_reading: true }),
+  /**
+   * After a hard endurance day, what an elevated resting HR leaves a STATED day as. The ruling
+   * is "easy at most" on every day, so the default is easy; "dosed_train" is kept only as a
+   * tunable for a revised review, and even then HRV past the band beside it (a second,
+   * independent witness) never leaves a training day.
+   */
+  rhr_after_endurance_on_stated_day: "easy" as "dosed_train" | "easy",
   // ---- F: a sustained rolling HRV decline ----
   /** Consecutive mornings the rolling HRV value must sit below the athlete's line to be SUSTAINED. */
   hrv_sustained_decline_mornings: 3,
@@ -77,18 +107,20 @@ export const MORNING_DOSE_POLICY = Object.freeze({
   checkin_lift_energy_min: 4,
   /** …unless sleep-feel sits at or below this: a mixed morning stays an advisory caveat. */
   checkin_lift_sleep_feel_veto_max: 2,
-  /** The only deciding brake a check-in may lift over: the composite readiness score (it must be present). */
-  checkin_liftable_brakes: Object.freeze(["training_readiness"]) as readonly string[],
   /**
-   * Brakes that may sit BESIDE it without blocking the lift: the week's own load arithmetic
-   * (yesterday's endurance on the legs, acute load, generic activity) — what the held dose
-   * and the lighter regions already answer, never a reading of the body.
+   * The only deciding brakes a check-in may lift over (one must be present): the composite
+   * readiness score, and HRV — only while it is a SINGLE low night (last night alone past
+   * the band, the rolling read not past its line). Never acute load, resting HR, short
+   * sleep, a rolling HRV decline, or any rest-reserved floor.
    */
-  checkin_lift_tolerated_brakes: Object.freeze([
-    "hybrid_interference",
-    "acute_load",
-    "generic_activity_load",
-  ]) as readonly string[],
+  checkin_liftable_brakes: Object.freeze(["training_readiness", "hrv"]) as readonly string[],
+  /**
+   * Brakes that may sit BESIDE it without blocking the lift: the legs' share of yesterday's
+   * endurance and generic activity — what the held dose and the lighter regions already
+   * answer, never a reading of the body. Acute load (acute:chronic past its bar) is NOT here:
+   * it is the week's load, not the morning's, and a tap does not answer it.
+   */
+  checkin_lift_tolerated_brakes: Object.freeze(["hybrid_interference", "generic_activity_load"]) as readonly string[],
 });
 
 /** What "one step" maps to (G): an easy read becomes a training day at a held intensity. */
@@ -101,14 +133,16 @@ export type MorningBasis =
   // REST (E, F)
   | "resting_hr_illness_pattern"
   | "hrv_decline_with_shortfall"
-  // EASY on every day (C, D)
+  // EASY on every day (C, D, E)
   | "consecutive_short_nights"
   | "consecutive_low_mornings"
-  // EASY on an unstated day, the DOSE on a stated one (A, D, E)
-  | "short_night"
+  | "severe_short_night"
   | "resting_hr_after_endurance"
+  | "resting_hr_unconfirmed"
+  // EASY on an unstated day, the DOSE on a stated one (A)
   | "readiness_rest_grade"
-  // the DOSE on any day with a session due (B)
+  // the DOSE on any day with a session due (B, D)
+  | "short_night"
   | "overnight_dip_after_endurance";
 
 export interface MorningFacts {
@@ -118,6 +152,13 @@ export interface MorningFacts {
   low_readiness_mornings: number;
   /** Consecutive short nights, last night counted, by the read's own short-night rule (D). */
   short_nights: number;
+  /** Last night's length in minutes, when known (D's severe floor). */
+  last_night_min: number | null;
+  /**
+   * The read's own chronic short-sleep trend (its rolling average under the short-night
+   * bar): a short night on top of it is consecutive restriction, not a single night (D).
+   */
+  short_sleep_trend?: boolean;
   /** Last night's HRV / resting HR against the athlete's own band. */
   hrv_night: OvernightFieldRead | null;
   rhr_night: OvernightFieldRead | null;
@@ -140,41 +181,74 @@ export interface MorningVerdict {
   basis: MorningBasis | null;
 }
 
+// "A hard day before" for the resting-HR read: hard endurance inside the window, or a day
+// the ordinary load grade called hard yesterday (heavy lifting raises it too).
+function hardDayRecent(facts: MorningFacts): boolean {
+  return facts.hard_endurance_recent || facts.load_explained.includes("hard_day_yesterday");
+}
+
+// Resting HR past the athlete's line on consecutive CALENDAR mornings (E).
+function restingHrRepeated(facts: MorningFacts): boolean {
+  return (facts.rhr_night?.consecutive_days ?? 0) >= MORNING_DOSE_POLICY.rhr_illness_consecutive_readings;
+}
+
+/**
+ * Which shape of the possible-illness pattern a morning is (E), for words that are true
+ * of it: `repeat` (consecutive mornings), `unexplained` (one night, no hard day behind
+ * it), `reported` (one night after a hard day, beside the athlete's own low word or a
+ * symptom stated today). Null when the pattern did not fire.
+ */
+export function restingHrIllnessShape(facts: MorningFacts | null): "repeat" | "unexplained" | "reported" | null {
+  if (!facts || classifyMorning(facts, false).basis !== "resting_hr_illness_pattern") return null;
+  if (restingHrRepeated(facts)) return "repeat";
+  return hardDayRecent(facts) ? "reported" : "unexplained";
+}
+
 /**
  * The pure classifier (A–F). `stated` is whether the athlete's stated week puts a lift
- * or key run on the day. Precedence: the REST patterns, then the EASY persistence
- * patterns, then the single-morning eases, then the post-endurance dip.
+ * or key run on the day. Precedence: the REST patterns, then the EASY patterns (every
+ * day), then the single-morning reads, then the post-endurance dip.
  */
 export function classifyMorning(facts: MorningFacts, stated: boolean): MorningVerdict {
   const policy = MORNING_DOSE_POLICY;
   const rhr = facts.rhr_night;
+  const repeated = restingHrRepeated(facts);
   const rhrPast =
-    rhr != null &&
-    (policy.rhr_single_night_min_past === "marginal" ||
-      rhr.past === "meaningful" ||
-      rhr.consecutive >= policy.rhr_illness_consecutive_readings);
-  // "A hard day before" for the resting-HR read: hard endurance inside the window, or a
-  // day the ordinary load grade called hard yesterday (heavy lifting raises it too).
-  const hardDayRecent = facts.hard_endurance_recent || facts.load_explained.includes("hard_day_yesterday");
-  if (
-    rhrPast &&
-    (!hardDayRecent ||
-      (rhr?.consecutive ?? 0) >= policy.rhr_illness_consecutive_readings ||
-      facts.low_word ||
-      facts.symptom_today)
-  )
+    rhr != null && (policy.rhr_single_night_min_past === "marginal" || rhr.past === "meaningful" || repeated);
+  const hardDay = hardDayRecent(facts);
+  // One night may REST a day only on the athlete's own established band and a reading its
+  // own source vouches for; otherwise it is a caution (easy at most).
+  const needs = policy.rhr_single_night_rest_requires;
+  const singleNightTrusted =
+    rhr != null && (!needs.established_band || rhr.established_band) && (!needs.verified_reading || rhr.verified);
+  const singleNightIllness = !hardDay || facts.low_word || facts.symptom_today;
+  if (rhrPast && (repeated || (singleNightIllness && singleNightTrusted)))
     return { kind: "rest", basis: "resting_hr_illness_pattern" };
   if (facts.hrv_rolling.mornings_below >= policy.hrv_sustained_decline_mornings && facts.performance_shortfall)
     return { kind: "rest", basis: "hrv_decline_with_shortfall" };
   if (facts.short_nights >= policy.short_nights_for_easy) return { kind: "easy", basis: "consecutive_short_nights" };
   if (facts.low_readiness_mornings >= policy.low_mornings_for_easy)
     return { kind: "easy", basis: "consecutive_low_mornings" };
-  if (rhrPast)
+  if (rhrPast) {
+    // A single reading nothing vouches for, with nothing hard behind it: a caution.
+    if (singleNightIllness) return { kind: "easy", basis: "resting_hr_unconfirmed" };
+    // E: resting HR past the band after a hard day is easy at most, on every day. HRV past
+    // its own band the same night is a second, independent witness: never a training day.
+    const bothWitnesses = facts.hrv_night != null;
     return {
-      kind: stated && policy.rhr_after_endurance_on_stated_day === "dosed_train" ? "dose" : "easy",
+      kind: stated && !bothWitnesses && policy.rhr_after_endurance_on_stated_day === "dosed_train" ? "dose" : "easy",
       basis: "resting_hr_after_endurance",
     };
-  if (facts.short_nights >= 1) return { kind: stated ? "dose" : "easy", basis: "short_night" };
+  }
+  // D: one short night keeps a due session at a held dose, on any day — unless it was
+  // severely short.
+  if (facts.short_nights >= 1) {
+    if (facts.last_night_min != null && facts.last_night_min < policy.severe_short_night_max_min)
+      return { kind: "easy", basis: "severe_short_night" };
+    // On top of a short rolling average the night is not a single one: easy, as two are.
+    if (facts.short_sleep_trend === true) return { kind: "easy", basis: "consecutive_short_nights" };
+    return { kind: "dose", basis: "short_night" };
+  }
   if (facts.rest_grade_today) return { kind: stated ? "dose" : "easy", basis: "readiness_rest_grade" };
   if (facts.hrv_night != null && facts.hard_endurance_recent && rhr == null)
     return { kind: "dose", basis: "overnight_dip_after_endurance" };
@@ -199,6 +273,23 @@ export function checkinLiftsRead(checkin: { energy?: unknown; sleep_feel?: unkno
   return true;
 }
 
+/**
+ * May a lifting tap (G) lift a quiet read over THESE deciding brakes? Only when at least
+ * one is liftable (the readiness score, or HRV while it is a single low night) and every
+ * other is a tolerated load-arithmetic brake. Acute load, resting HR, short sleep, a
+ * rolling HRV decline and every floor fall outside both lists, so any of them holds the
+ * read. Pure: the caller says whether the HRV brake is a single night.
+ */
+export function checkinLiftsBrakes(decidingBrakes: readonly string[], hrvSingleNight: boolean): boolean {
+  const policy = MORNING_DOSE_POLICY;
+  const liftable = (field: string) =>
+    policy.checkin_liftable_brakes.includes(field) && (field !== "hrv" || hrvSingleNight);
+  return (
+    decidingBrakes.some(liftable) &&
+    decidingBrakes.every((field) => liftable(field) || policy.checkin_lift_tolerated_brakes.includes(field))
+  );
+}
+
 function rollingHrvOn(date: string): RollingBandRead {
   const policy = MORNING_DOSE_POLICY;
   const from = addDaysISO(
@@ -211,6 +302,7 @@ function rollingHrvOn(date: string): RollingBandRead {
     windowDays: policy.hrv_rolling_window_days,
     minNights: policy.hrv_rolling_min_nights,
     baselineDays: policy.hrv_baseline_days,
+    recentNightDays: policy.hrv_rolling_recent_night_days,
   });
 }
 
@@ -220,6 +312,8 @@ export interface MorningFactInputs {
   restGradeToday: boolean;
   /** The read's own short-night rule, for a night's minutes (null minutes = no night). */
   isShortNight: (minutes: unknown) => boolean;
+  /** The read's own chronic short-sleep trend (its rolling average under the short-night bar). */
+  shortSleepTrend?: boolean;
   lowWord: boolean;
   symptomToday: boolean;
   cardioLoadMedian?: number | null;
@@ -247,9 +341,12 @@ export function morningFacts(date: string, input: MorningFactInputs): MorningFac
   }
 
   let short_nights = 0;
+  let last_night_min: number | null = null;
   for (let back = 0; back < Math.max(policy.short_nights_for_easy, 1); back++) {
     const morning = addDaysISO(date, -back);
     const night = morning ? safely(() => latestSleep(LAST_NIGHT_MAX_AGE_DAYS, morning) as any, null) : null;
+    if (back === 0 && night && Number.isFinite(Number(night.total_min)) && Number(night.total_min) > 0)
+      last_night_min = Number(night.total_min);
     if (!night || !input.isShortNight(night.total_min)) break;
     short_nights++;
   }
@@ -283,6 +380,8 @@ export function morningFacts(date: string, input: MorningFactInputs): MorningFac
     rest_grade_today: input.restGradeToday,
     low_readiness_mornings,
     short_nights,
+    last_night_min,
+    short_sleep_trend: input.shortSleepTrend === true,
     hrv_night: overnight.hrv,
     rhr_night: overnight.rhr,
     hard_endurance_recent: hardEnduranceRecent,

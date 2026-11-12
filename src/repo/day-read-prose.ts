@@ -126,24 +126,25 @@ export const DAY_READ_OUTCOMES = {
       "Sleep was short last night, so the day leans easy.",
     ],
   },
-  // Resting HR up after a hard endurance day on an unstated day: the usual answer, easy.
+  // Resting HR up after a hard day (morning-dose.ts, E): easy on every day, stated or not.
   resting_hr_after_endurance_easy: {
     code: "resting_hr_after_endurance_easy",
     reasons: [
-      "Resting heart rate is up after yesterday's hard endurance work, so today stays easy.",
-      "Your resting heart rate is still carrying yesterday's endurance work, so the day keeps easy.",
-      "After the hard endurance day, resting heart rate is up a little, so today is an easy one.",
+      "Resting heart rate is up after the recent hard work, so today stays easy.",
+      "Your resting heart rate is still carrying the recent hard day, so the day keeps easy.",
+      "After the recent hard day, resting heart rate is up past your usual range, so today is an easy one.",
     ],
   },
   // The stated LIFTING day kept on through a morning that would otherwise have read
-  // quiet — a low composite reading, one short night, resting HR up after hard endurance,
-  // or one low HRV night after it: loads held, no reach, the regions yesterday loaded
-  // lighter. Its own code, so a later analysis can tell this dose from a soft-brake dose.
+  // quiet — a low composite reading, one short night, or one low HRV night after hard
+  // endurance: loads held, no reach, the regions yesterday loaded lighter when there are
+  // any (no phrasing here promises them). Its own code, so a later analysis can tell this
+  // dose from a soft-brake dose.
   stated_lift_morning_dosed: {
     code: "stated_lift_morning_dosed",
     reasons: [
       "Your week lifts today, so the session stays on, held back for what this morning showed.",
-      "The lifting day keeps its place, with the loads held and yesterday's work kept lighter.",
+      "The lifting day keeps its place, with the loads held where they are.",
       "Today still lifts, at a held dose, because a single low morning is not the whole picture.",
     ],
   },
@@ -164,6 +165,27 @@ export const DAY_READ_OUTCOMES = {
       "HRV dipped for one night after hard endurance work, so the session stays on at a held dose.",
       "One low HRV night after a big endurance day, so today trains with the loads held.",
       "The session that is due stays on, held back for last night's dip after hard endurance work.",
+    ],
+  },
+  // One short night on a day with a session due that the week does not state: the
+  // session keeps its place at a held dose (morning-dose.ts, D).
+  short_night_dosed: {
+    code: "short_night_dosed",
+    reasons: [
+      "Last night came up short, so the session that is due stays on with the loads held.",
+      "A short night, so today trains at a held dose rather than easing off.",
+      "Sleep was short last night; one short night keeps the session, held back.",
+    ],
+  },
+  // Resting HR past the line on one night that nothing vouches for (no established band
+  // of the athlete's own, or a reading its own source cannot check), nothing hard behind
+  // it: a caution, easy at most (morning-dose.ts, E).
+  resting_hr_caution_easy: {
+    code: "resting_hr_caution_easy",
+    reasons: [
+      "Resting heart rate reads above usual this morning, so today stays easy.",
+      "One resting heart rate reading above usual, so the day keeps easy.",
+      "Resting heart rate is up this morning on a reading too thin to say more, so today is an easy one.",
     ],
   },
   // The athlete's own good check-in lifted a readiness-only easy read one step.
@@ -502,17 +524,39 @@ export const SHORT_NIGHT_EASED_WHY: readonly string[] = [
   "A short night, so today is a lighter one, with no load jumps and nothing heavy.",
   "Sleep was short last night, so keep today easy and save the heavy lifting for a fuller night.",
 ];
-// Resting HR up after hard endurance on an unstated day (morning-dose.ts, E).
+// Resting HR up after a hard day (morning-dose.ts, E): easy on every day. "A hard day"
+// is hard endurance inside the window OR a hard day yesterday of any kind, so no
+// phrasing names yesterday or endurance — each must be true of both.
 export const RHR_AFTER_ENDURANCE_EASY_WHY: readonly string[] = [
-  "Resting heart rate is up this morning after yesterday's hard endurance work — the usual answer to a big day, so keep today easy.",
-  "Your resting heart rate is still carrying the hard endurance day, so today stays easy.",
-  "After the big endurance day your resting heart rate is up a little, so an easy day fits.",
+  "Resting heart rate is up this morning after the recent hard work — a common answer to a big day, so keep today easy.",
+  "Your resting heart rate is still carrying the recent hard day, so today stays easy.",
+  "After the recent hard day your resting heart rate sits above your usual range, so an easy day fits.",
 ];
-// The possible-illness pattern (morning-dose.ts, E).
+// The possible-illness pattern (morning-dose.ts, E), one set per shape it fires on, so
+// every phrasing is true of its case: a FIRST reading with no hard day behind it, a
+// REPEATED one (two consecutive mornings, whatever came before), and a first reading
+// after a hard day that the athlete's own low word or a symptom stated today stands beside.
 export const RESTING_HR_ILLNESS_WHY: readonly string[] = [
   "Your resting heart rate is sitting above your usual range with nothing hard to explain it, which can be the start of something — today is a rest day.",
   "Resting heart rate is up past your own range without a hard day behind it, so rest today and see how tomorrow reads.",
+  "Your resting heart rate came in above its usual range with no big day to account for it, so today is better spent resting.",
+];
+export const RESTING_HR_ILLNESS_REPEAT_WHY: readonly string[] = [
   "Your resting heart rate is above its usual range again, so today is better spent resting while it settles.",
+  "A second morning in a row with resting heart rate past your own range — rest today and let it come back down.",
+  "Resting heart rate has stayed above your usual range two mornings running, which can be the start of something, so today is a rest day.",
+];
+export const RESTING_HR_ILLNESS_REPORTED_WHY: readonly string[] = [
+  "Your resting heart rate is above your usual range and what you reported today points the same way, so today is a rest day.",
+  "Resting heart rate is up past your own range alongside what you told us this morning — rest today and see how tomorrow reads.",
+  "What you reported today and a resting heart rate above its usual range say the same thing, so today is better spent resting.",
+];
+// One resting HR reading past the line that nothing vouches for (morning-dose.ts, E): a
+// caution. Every phrasing says it is one reading and asks for an easy day — never rest.
+export const RESTING_HR_CAUTION_EASY_WHY: readonly string[] = [
+  "Your resting heart rate reads above your usual this morning. One reading like this isn't enough to go on, so keep today easy.",
+  "Resting heart rate came in high this morning, though a single reading can't say much yet — an easy day fits.",
+  "This morning's resting heart rate sits above usual; on one reading alone, keep today easy and see how tomorrow reads.",
 ];
 // A sustained rolling HRV decline beside a log-confirmed shortfall (morning-dose.ts, F).
 export const HRV_DECLINE_SHORTFALL_WHY: readonly string[] = [
@@ -526,13 +570,28 @@ export const RACE_DAY_WHY: readonly string[] = [
   "Today is your race. The training is already in the bank; start controlled and let it come to you.",
   "It's race day: nothing left to add, just the race itself. Ease into it and run your own race.",
 ];
+// Race day over the engine's possible-illness read (resting HR past the band with
+// nothing hard to explain it): still the race — the athlete decides — said plainly.
+export const RACE_DAY_RHR_WHY: readonly string[] = [
+  "Race day — but your resting heart rate is sitting above your usual range this morning, which can be the start of something. How you feel at the start line decides; sitting this one out is a fair call too.",
+  "Today is your race, and your resting heart rate is up past your own range without a hard day behind it. Let how you feel warming up and at the start decide whether you run it.",
+  "It's race day, though your resting heart rate came in above its usual range, which can mean something is brewing. Warm up easy and let how you feel at the start line make the call.",
+];
 // What a morning dose is ABOUT, a whole sentence spoken before the dose lead
-// (morning-dose.ts). One set per basis; registered in DAY_READ_WHY_VARIANTS.
+// (morning-dose.ts). One set per basis — and per fact a phrasing asserts: the readiness
+// cause blames yesterday ONLY when something about yesterday explains the morning
+// (`load_explained`), and says nothing about yesterday when nothing does
+// (`readiness_rest_grade:unexplained`). Registered in DAY_READ_WHY_VARIANTS.
 export const MORNING_DOSE_CAUSE: Readonly<Record<string, readonly string[]>> = {
   readiness_rest_grade: [
     "Your readiness reading is very low this morning, most likely yesterday's work still showing.",
-    "This morning's readiness number came in very low, and on its own that number doesn't take the day.",
+    "This morning's readiness number came in very low after a hard day, and on its own that number doesn't take the day.",
     "The readiness reading is at the bottom of its range this morning, which a big day before often leaves behind.",
+  ],
+  "readiness_rest_grade:unexplained": [
+    "This morning's readiness number came in very low, and on its own that number doesn't take the day.",
+    "Your readiness reading is at the bottom of its range this morning; on its own it is one input, not the whole picture.",
+    "The readiness number reads very low this morning, which by itself doesn't decide the day.",
   ],
   short_night: [
     "Last night came up short on sleep.",
@@ -540,23 +599,33 @@ export const MORNING_DOSE_CAUSE: Readonly<Record<string, readonly string[]>> = {
     "Last night's sleep fell short.",
   ],
   resting_hr_after_endurance: [
-    "Resting heart rate is up after yesterday's hard endurance work, the usual answer to a big day.",
-    "Your resting heart rate is still carrying the hard endurance day.",
-    "After the big endurance day your resting heart rate is up a little.",
+    "Resting heart rate is up after the recent hard work, a common answer to a big day.",
+    "Your resting heart rate is still carrying the recent hard day.",
+    "After the recent hard day your resting heart rate sits above your usual range.",
   ],
+  // A usual answer, never a guarantee: the module treats one night as provisional.
   overnight_dip_after_endurance: [
-    "HRV dipped last night after the hard endurance work, the usual answer to a big day.",
-    "One low HRV night after a big endurance day is the expected response, not a warning.",
+    "HRV dipped last night after the hard endurance work, a common answer to a big day.",
+    "One low HRV night after a big endurance day is common, and on its own it says little.",
     "Last night's HRV came in low after the hard endurance work, as it often does.",
   ],
 };
 // The dose itself, a lead clause (no terminal punctuation — the caveat run follows).
-// Conservative coaching defaults, never a claim about what a study proved.
+// Conservative coaching defaults, never a claim about what a study proved. Two sets, so
+// a phrasing never promises lighter areas the decision does not reduce: MORNING_DOSE_LEAD
+// when the regions yesterday loaded are on the card and go lighter (the decision's
+// `held_morning_dose` reduction), MORNING_DOSE_LEAD_HELD when only the loads hold.
 export const MORNING_DOSE_LEAD: readonly string[] = [
   "The session stays on with the loads held and lighter work where yesterday landed",
   "Keep the session, hold the loads, and go lighter on what yesterday worked",
   "Today still trains, with no load jumps and the parts yesterday worked kept lighter",
   "The work stays, held back, with the loads where they are and yesterday's areas kept lighter",
+];
+export const MORNING_DOSE_LEAD_HELD: readonly string[] = [
+  "The session stays on with the loads held",
+  "Keep the session and hold the loads where they are",
+  "Today still trains, with no load jumps",
+  "The work stays, held back, with the loads where they are",
 ];
 // The athlete's good check-in over a readiness-only caution (morning-dose.ts, G): said
 // plainly — their report and the watch disagree, and the day goes with a held-back
@@ -565,6 +634,13 @@ export const CHECKIN_LIFT_WHY: readonly string[] = [
   "You checked in feeling good, though, and the two disagree — so the session goes ahead, held back, with no load jumps.",
   "Your own check-in says you feel good, which the readiness number doesn't match — so today trains, but held back.",
   "You said you feel good this morning and the watch reads otherwise, so the session goes ahead with the loads held.",
+];
+// …and over a single low HRV night (no readiness number on the board): the disagreement
+// is with last night's HRV, so no phrasing names the readiness number.
+export const CHECKIN_LIFT_HRV_WHY: readonly string[] = [
+  "You checked in feeling good, though, and one low HRV night doesn't outweigh that — so the session goes ahead, held back, with no load jumps.",
+  "Your own check-in says you feel good, which last night's HRV doesn't match — so today trains, but held back.",
+  "You said you feel good this morning and last night's HRV reads lower, so the session goes ahead with the loads held.",
 ];
 // The same words the unified signal state speaks for the same check-in, borrowed
 // rather than re-declared: a low-energy check-in reaches the athlete through BOTH
@@ -826,6 +902,7 @@ export const TRAIN_PUSH_CAVEAT_LEAD: readonly string[] = [
 export const DAY_READ_LEAD_VARIANTS: Readonly<Record<string, readonly string[]>> = {
   "stated_lift_dosed:lead": STATED_LIFT_DOSE_LEAD,
   "morning_dose:lead": MORNING_DOSE_LEAD,
+  "morning_dose:lead_held": MORNING_DOSE_LEAD_HELD,
   "planned_training:caveats": TRAIN_CAVEAT_LEAD,
   "planned_training:hold_lead": TRAIN_HOLD_LEAD,
   "planned_training:noted_lead": TRAIN_NOTED_LEAD,
@@ -840,6 +917,7 @@ export const DAY_READ_LEAD_CONCEPT: Readonly<Record<string, RegExp>> = {
   "stated_lift_dosed:lead": /\b(?:lifting day|session|lifts)\b[\s\S]*\b(?:lighter|held back|gentler|ease)\b/i,
   // The day still trains AND the dose is held — both halves, every phrasing.
   "morning_dose:lead": /\b(?:session|trains|work)\b[\s\S]*\b(?:held|hold|lighter)\b/i,
+  "morning_dose:lead_held": /\b(?:session|trains|work)\b[\s\S]*\b(?:held|hold|no load jumps)\b/i,
   "planned_training:caveats": /\b(?:train|session|green light)\b/i,
   "planned_training:hold_lead": /\b(?:conservative|measured|in check)\b/i,
   // A noted caution must leave the day OPEN — that is the whole difference between it
@@ -1515,13 +1593,18 @@ export const DAY_READ_WHY_VARIANTS: Readonly<Record<string, readonly string[]>> 
   accumulated_load_rest: [...STACKED_LOAD_WHY, ...STACKED_LOAD_EASY_WHY, ...STACKED_LOAD_CEILING_WHY],
   // The morning's body readings (morning-dose.ts).
   goal_race_day: RACE_DAY_WHY,
+  "goal_race_day:resting_hr": RACE_DAY_RHR_WHY,
   resting_hr_illness_pattern: RESTING_HR_ILLNESS_WHY,
+  "resting_hr_illness_pattern:repeat": RESTING_HR_ILLNESS_REPEAT_WHY,
+  "resting_hr_illness_pattern:reported": RESTING_HR_ILLNESS_REPORTED_WHY,
   hrv_decline_with_shortfall: HRV_DECLINE_SHORTFALL_WHY,
   low_mornings_easy: LOW_MORNINGS_EASY_WHY,
   short_night_eased: SHORT_NIGHT_EASED_WHY,
   resting_hr_after_endurance_easy: RHR_AFTER_ENDURANCE_EASY_WHY,
+  resting_hr_caution_easy: RESTING_HR_CAUTION_EASY_WHY,
   // A sentence appended after the readiness brake's own voice (not the whole `why`).
   checkin_lifted_train: CHECKIN_LIFT_WHY,
+  "checkin_lifted_train:hrv": CHECKIN_LIFT_HRV_WHY,
   // Sentences, not rule codes: what a morning dose is about, spoken before its lead.
   ...Object.fromEntries(Object.entries(MORNING_DOSE_CAUSE).map(([basis, set]) => [`morning_dose_cause:${basis}`, set])),
   push_drive_targeted_training: PUSH_DRIVE_WHY.map((render) => render("quads and back")),
@@ -1595,6 +1678,9 @@ export const DAY_READ_REQUIRED_CONCEPT: Readonly<Record<string, RegExp>> = {
   stated_lift_dosed: /\b(?:lift|lifting|lifts|session)\b/i,
   // The morning's body readings (morning-dose.ts). Each names what it is about.
   goal_race_day: /\brace\b/i,
+  "goal_race_day:resting_hr": /\brace\b[\s\S]*\bresting heart rate\b[\s\S]*\bstart\b/i,
+  "resting_hr_illness_pattern:repeat": /\bresting heart rate\b/i,
+  "resting_hr_illness_pattern:reported": /\bresting heart rate\b/i,
   resting_hr_illness_pattern: /\bresting heart rate\b/i,
   // Both halves: the HRV run AND the sessions that fell short.
   hrv_decline_with_shortfall: /\bHRV\b[\s\S]*\bshort\b/i,
@@ -1606,7 +1692,11 @@ export const DAY_READ_REQUIRED_CONCEPT: Readonly<Record<string, RegExp>> = {
   overnight_dip_dosed: /\b(?:HRV|dip|dipped)\b/i,
   // Whose word it was AND that the session is held back — never a claim of certainty.
   checkin_lifted_train: /\b(?:you|your own)\b[\s\S]*\b(?:held|holding)\b/i,
+  "checkin_lifted_train:hrv": /\b(?:you|your own)\b[\s\S]*\bHRV\b[\s\S]*\b(?:held|holding)\b/i,
   "morning_dose_cause:readiness_rest_grade": /\breadiness\b/i,
+  "morning_dose_cause:readiness_rest_grade:unexplained": /\breadiness\b/i,
+  short_night_dosed: /\b(?:short|night|sleep)\b[\s\S]*\b(?:held|hold)\b/i,
+  resting_hr_caution_easy: /\bresting heart rate\b[\s\S]*\beasy\b/i,
   "morning_dose_cause:short_night": /\bshort\b/i,
   "morning_dose_cause:resting_hr_after_endurance": /\bresting heart rate\b/i,
   "morning_dose_cause:overnight_dip_after_endurance": /\bHRV\b/,

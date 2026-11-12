@@ -905,9 +905,11 @@ test("three caveats at once still compose into one grammatical sentence", () => 
   assert.equal(caveatRun.split(".").length, 2, `the caveat run must be one sentence: ${JSON.stringify(caveatRun)}`);
 });
 
-// Since 2026-11-12 (morning-dose.ts, D) one short night EASES the day — easy on a day
-// the athlete's week does not state — and two or more in a row mean easy; neither rests.
-test("one fresh short night on a short rolling average eases the day, never rests", () => {
+// Since 2026-11-12 (morning-dose.ts, D) one short night alone is the dose (the session
+// due stays on, held) and two or more in a row mean easy; neither rests. A short night on
+// top of a short rolling average is consecutive restriction, not a single night: easy,
+// under the sleep code.
+test("one fresh short night on a short rolling average reads easy, never rests", () => {
   repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
   // Wake-day dating: the night the read has just woken from carries the read's date.
   db.prepare(`INSERT INTO daily_metrics (source, date, sleep_min) VALUES ('apple', ?, 300)`).run(REF);
@@ -915,12 +917,12 @@ test("one fresh short night on a short rolling average eases the day, never rest
   const r = repo.dayRead(REF, sleepMean(330));
 
   assert.equal(r.kind, "easy");
-  assert.equal(r.decision.rule_code, "short_night_eased");
+  assert.equal(r.decision.rule_code, "acute_sleep_corroborated");
   assert.equal(
     r.decision.evidence.some((item) => item.date === REF),
     true
   );
-  saysOneOf(r.why, "short_night_eased");
+  saysOneOf(r.why, "acute_sleep_corroborated");
 });
 
 test("two short nights in a row read easy under the sleep code, never rest", () => {
@@ -952,12 +954,12 @@ test("a short night on an injury day still names the work-around", () => {
 
   const r = repo.dayRead(REF, sleepMean(330));
 
-  // One short night eases the day (easy, since 2026-11-12 — morning-dose.ts, D).
+  // A short night on a short rolling average reads easy (2026-11-12 — morning-dose.ts, D).
   assert.equal(r.kind, "easy");
-  assert.equal(r.decision.rule_code, "short_night_eased");
+  assert.equal(r.decision.rule_code, "acute_sleep_corroborated");
   // The sleep rule still leads with its own words...
   assert.ok(
-    DAY_READ_WHY_VARIANTS.short_night_eased.some((v) => r.why.startsWith(v)),
+    DAY_READ_WHY_VARIANTS.acute_sleep_corroborated.some((v) => r.why.startsWith(v)),
     `the sleep read should still lead, got ${JSON.stringify(r.why)}`
   );
   // ...and the injury is still named, in both registers.
@@ -1991,6 +1993,8 @@ test("every planned-training lead is a calm capitalised opener, several per set"
       "stated_lift_dosed:lead",
       // …and the single low morning dosed rather than taken (2026-11-12, morning-dose.ts).
       "morning_dose:lead",
+      // …and its loads-held-only twin, when no region yesterday loaded is on the card.
+      "morning_dose:lead_held",
     ].sort()
   );
   for (const [key, variants] of sets) {
@@ -2928,11 +2932,16 @@ test("each reachable rule branch reports its own code and reason, never a generi
   const planned = record(repo.dayRead(REF, { has_data: false, recovery: {} }));
   assert.equal(planned.decision.rule_code, "planned_training");
 
-  // One short night (dated the read day) eases the day; a second in a row reads easy
+  // One short night alone keeps the session at a held dose; one SEVERELY short night eases
+  // the day; a short night on a short rolling average, or a second in a row, reads easy
   // under the sleep code (2026-11-12, morning-dose.ts, D).
   seedSleep(REF, 300);
-  const eased = record(repo.dayRead(REF, sleepMean(330)));
+  const dosed = record(repo.dayRead(REF, { has_data: false, recovery: {} }));
+  assert.equal(dosed.decision.rule_code, "short_night_dosed");
+  seedSleep(REF, 200);
+  const eased = record(repo.dayRead(REF, { has_data: false, recovery: {} }));
   assert.equal(eased.decision.rule_code, "short_night_eased");
+  seedSleep(REF, 300);
   seedSleep(dayBefore(REF, 1), 300);
   const acute = record(repo.dayRead(REF, sleepMean(330)));
   assert.equal(acute.decision.rule_code, "acute_sleep_corroborated");
@@ -3793,18 +3802,29 @@ test("the prompt tells the agent the athlete CHOSE to push, on a drive day only"
 // sleep caveat speaks only for the chronic trend. What it costs is injury exposure,
 // which is exactly what the coach prompt is now told through `training_constraints`,
 // and the athlete is owed the same sentence.
-// Since 2026-11-12 (morning-dose.ts, D) one short night EASES an unstated day — easy,
-// never rest — and the words say what it takes off (heavy work, load jumps).
-test("an acute short night eases an unstated day and says what it takes off it", () => {
+// One short night on a day with a session due keeps the session at a held dose
+// (morning-dose.ts, D): heavy work held back, no load raises — never cancelled, on any
+// day, stated or not. Two short nights in a row (or one severely short night) read easy.
+test("an acute short night keeps the session and says what it takes off it", () => {
   repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
   seedCurrentNight(REF, 300); // 5h last night, and no chronic window behind it
   const r = repo.dayRead(REF, { has_data: true, recovery: {} });
 
-  assert.equal(r.kind, "easy", "one short night eases the day; it never rests it");
+  assert.equal(r.kind, "train", "the session is KEPT — this is not a soft rest read");
+  assert.equal(r.focus, "Lower body");
   assert.equal(r.signals.low_sleep, false, "there is no chronic trend here, only one night");
-  assert.equal(r.decision.rule_code, "short_night_eased");
-  saysOneOf(r.why, "short_night_eased");
-  assert.match(r.why, /\b(?:heavy|load)\b/i, "it says what the ease takes off");
+  assert.equal(r.decision.rule_code, "short_night_dosed", "kept, at a held dose");
+  assert.equal(r.signals.morning_dose.applied, true);
+  assert.equal(r.signals.push_bias, undefined, "no reach on a dosed day");
+  assert.doesNotMatch(r.why, /\brest\b|\bskip\b|\bshorter\b/i, "it downgrades exposure; it never cancels");
+});
+
+test("a severely short night reads easy even with a session due", () => {
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  seedCurrentNight(REF, 200); // well under four hours
+  const r = repo.dayRead(REF, { has_data: true, recovery: {} });
+  assert.equal(r.kind, "easy", `${r.decision.rule_code}: ${r.why}`);
+  assert.equal(r.signals.morning_dose.basis, "severe_short_night");
 });
 
 test("a normal night adds no exposure caveat at all", () => {

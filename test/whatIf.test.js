@@ -550,6 +550,22 @@ test("REST and MCP queue the same what_if job, and it answers from the offline f
   assert.equal(missing.payload.ok, false);
 });
 
+test("only the athlete's own tap is their request: the app's Do it carries the mark, an MCP client's never does", async () => {
+  seedPlan();
+  const viaRest = callRoute("/what-if/do", { job_id: await answeredJob("What if I added a bench set?", AGENT_ANSWER) });
+  const viaMcp = await callTool("what_if_do", {
+    job_id: await answeredJob("What if I added a bench set?", AGENT_ANSWER),
+  });
+  const direct = whatIfDo({ job_id: await answeredJob("What if I added a bench set?", AGENT_ANSWER) });
+  const context = (proposalId) => {
+    const raw = decisionFor(proposalId)?.context;
+    return typeof raw === "string" ? JSON.parse(raw) : (raw ?? {});
+  };
+  assert.equal(context(viaRest.payload.proposal_id).explicit_user_request, true, "the app's tap is the athlete's act");
+  assert.notEqual(context(viaMcp.proposal_id).explicit_user_request, true, "an MCP caller is not the athlete");
+  assert.notEqual(context(direct.proposal_id).explicit_user_request, true, "nor is any caller that does not say so");
+});
+
 test("REST and MCP Do it are mirrors", async () => {
   const goalJob = await answeredJob("What if I aimed lower?", {
     change: { kind: "goal", summary: "Aim for a lower goal weight." },

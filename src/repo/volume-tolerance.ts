@@ -27,6 +27,14 @@ export const VOLUME_BOUNDS = Object.freeze({
   PER_LIFT_HABITUAL_FACTOR: 1.2,
   // …nor a muscle group's week past this many effective working sets.
   WEEKLY_EFFECTIVE_SETS_PER_GROUP: 20,
+  // The habit is read from an INDEPENDENT window: the sessions in this many days before
+  // the recent exposures a catch-up answers (never those exposures themselves, whose
+  // minimum already caps the step, so a habit read off them could never bind).
+  HABITUAL_WINDOW_DAYS: 56,
+  // …and only once that window holds at least this many sessions of the lift. Below it
+  // the athlete has no habit to measure against yet, and the 1.2x bound is not read
+  // (SET_STEP_CAP, the one-set step and the weekly group bound still are).
+  HABITUAL_MIN_SESSIONS: 2,
 });
 
 // The learned-tolerance window: the latest sessions with reconciled dose evidence.

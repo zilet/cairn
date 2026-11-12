@@ -87,10 +87,11 @@ import { isRaceDay, raceRecoveryWindow } from "./race-recovery.js";
 import { getProgramState, logConfirmedFatigue, runVolumeSpikeRead, type MesocycleState } from "./program-state.js";
 import {
   CHECKIN_LIFT_STEP,
-  MORNING_DOSE_POLICY,
+  checkinLiftsBrakes,
   checkinLiftsRead,
   classifyMorning,
   morningFacts,
+  restingHrIllnessShape,
   type MorningBasis,
   type MorningFacts,
   type MorningVerdict,
@@ -155,12 +156,18 @@ export * from "./day-read-prose.js";
 import {
   ACUTE_SLEEP_WHY,
   ANTICIPATE_DELOAD_CAVEAT,
+  CHECKIN_LIFT_HRV_WHY,
   CHECKIN_LIFT_WHY,
   HRV_DECLINE_SHORTFALL_WHY,
   LOW_MORNINGS_EASY_WHY,
   MORNING_DOSE_CAUSE,
   MORNING_DOSE_LEAD,
+  MORNING_DOSE_LEAD_HELD,
+  RACE_DAY_RHR_WHY,
   RACE_DAY_WHY,
+  RESTING_HR_ILLNESS_REPEAT_WHY,
+  RESTING_HR_ILLNESS_REPORTED_WHY,
+  RESTING_HR_CAUTION_EASY_WHY,
   RESTING_HR_ILLNESS_WHY,
   RHR_AFTER_ENDURANCE_EASY_WHY,
   SHORT_NIGHT_EASED_WHY,
@@ -1340,6 +1347,7 @@ const RECORD_OPENED_CODES: ReadonlySet<string> = new Set([
   DAY_READ_OUTCOMES.stated_lift_morning_dosed.code,
   DAY_READ_OUTCOMES.stated_key_run_morning_dosed.code,
   DAY_READ_OUTCOMES.overnight_dip_dosed.code,
+  DAY_READ_OUTCOMES.short_night_dosed.code,
   DAY_READ_OUTCOMES.checkin_lifted_train.code,
 ]);
 
@@ -1350,18 +1358,25 @@ const RECORD_OPENED_CODES: ReadonlySet<string> = new Set([
 const MORNING_RUN_FLOORS: ReadonlySet<string> = new Set(["rest_grade_readiness", "short_night"]);
 // The easy reads a positive check-in may lift (morning-dose.ts, G) — the ones whose only
 // deciding brake can be the composite readiness score. The brakes themselves are checked
-// against MORNING_DOSE_POLICY.checkin_liftable_brakes at the call site.
+// by morning-dose.ts `checkinLiftsBrakes` at the call site.
 const CHECKIN_LIFTABLE_CODES: ReadonlySet<string> = new Set([
   DAY_READ_OUTCOMES.rest_grade_readiness.code,
   DAY_READ_OUTCOMES.low_readiness_rest.code,
   DAY_READ_OUTCOMES.acute_signal_protection.code,
 ]);
 // The outcome each single-morning ease speaks as on a day the calendar does not take.
+// (One short night is the dose on any day with a session due now, so it has no ease
+// here; a SEVERELY short night is easy on every day and is spoken by the easy rule.)
 const MORNING_EASE_OUTCOME: Partial<Record<MorningBasis, DayReadRuleOutcome>> = {
-  short_night: DAY_READ_OUTCOMES.short_night_eased,
   resting_hr_after_endurance: DAY_READ_OUTCOMES.resting_hr_after_endurance_easy,
   readiness_rest_grade: DAY_READ_OUTCOMES.rest_grade_readiness,
 };
+// The single low mornings whose dose keeps a due session on a day the stated week does
+// not own (morning-dose.ts B, D) — the planned-training rule speaks them.
+const UNSTATED_MORNING_DOSES: ReadonlySet<MorningBasis> = new Set<MorningBasis>([
+  "short_night",
+  "overnight_dip_after_endurance",
+]);
 // The day read's own short-night rule (the `freshShortSleep` predicate below), as a
 // function the morning read can ask of earlier nights too.
 function shortNightMinutes(minutes: unknown): boolean {
@@ -2571,6 +2586,7 @@ function computeDayRead(
         lowReadinessToday: lowReadiness,
         restGradeToday: restGradeReadiness,
         isShortNight: shortNightMinutes,
+        shortSleepTrend: lowSleep,
         lowWord: lowSubjective,
         symptomToday: freshStatementHold(d, null) === "symptom_report",
         cardioLoadMedian,
@@ -2586,6 +2602,17 @@ function computeDayRead(
     return morningMemo;
   }
   const morningVerdict = (): MorningVerdict => morning()?.verdict ?? { kind: null, basis: null };
+  // The possible-illness why, chosen by the shape that fired, so each phrasing is true of
+  // its morning: "again" only on a second consecutive morning, "nothing hard" only with
+  // no hard day behind it, otherwise the athlete's own report beside it.
+  function restingHrIllnessWhy(facts: MorningFacts | null): string {
+    const shape = restingHrIllnessShape(facts);
+    if (shape === "repeat")
+      return pickDayVariant(RESTING_HR_ILLNESS_REPEAT_WHY, d, "resting_hr_illness_pattern:repeat");
+    if (shape === "reported")
+      return pickDayVariant(RESTING_HR_ILLNESS_REPORTED_WHY, d, "resting_hr_illness_pattern:reported");
+    return pickDayVariant(RESTING_HR_ILLNESS_WHY, d, "resting_hr_illness_pattern");
+  }
   const decidingBrakeFields: string[] = signalInput(() => freshDecidingBrakeFields(signalState.dimensions), []);
   // Published flat (machine register): the ledger keeps a depth-bounded copy of the
   // morning's signals, so the signal state's own evidence never survives into it, and
@@ -2649,6 +2676,33 @@ function computeDayRead(
     calendar.step = { stepped_aside: code, morning: verdict.kind === "dose" ? verdict.basis : null };
     return true;
   }
+  // …and on a day the stated week does NOT own: a single low morning whose verdict is the
+  // dose (one short night, the post-endurance HRV dip) keeps the session that is due, at
+  // a held dose, behind exactly the same floors (calendarDoseFloor). The planned-training
+  // rule speaks it. Memoized through the verdict; no ledger of its own.
+  function morningDoseTakesDay(): boolean {
+    if (statedCalendarDay()) return false;
+    const verdict = morningVerdict();
+    if (verdict.kind !== "dose" || !verdict.basis || !UNSTATED_MORNING_DOSES.has(verdict.basis)) return false;
+    if (recoveryWeek || !suggestedPlanDay()) return false;
+    return calendarDoseFloor() == null;
+  }
+  // Will the decision's held-dose reduction land on today's card? True when a group the
+  // acute gate reads saturated from the last day's work (the decision's own
+  // `held_morning_dose` reduction, daily-decision.ts) is one the due plan day trains — so
+  // the dose's words promise lighter areas only when there are some.
+  function morningDoseLightensRegions(dayNumber: number | null): boolean {
+    return signalInput(() => {
+      const gates = acuteGates(d) as Map<string, { saturated?: boolean; days_ago?: number }>;
+      const loaded = [...gates.entries()]
+        .filter(([, gate]) => gate?.saturated === true && Number(gate?.days_ago ?? 99) <= 1)
+        .map(([group]) => String(group).toLowerCase());
+      if (!loaded.length) return false;
+      const due = dayNumber == null ? null : planDayStrengthGroups().find((day) => day.day_number === dayNumber);
+      const groups = due?.groups ?? null;
+      return !groups?.length || groups.some((group) => loaded.includes(String(group).toLowerCase()));
+    }, false);
+  }
   // The brake the dose answers, in the athlete's register: the first deciding dimension
   // in the hold order, its own voice (never the machine `reason`). Null when none.
   function calendarBrakeVoice(): (typeof signalState.dimensions)[SignalDimension]["voice"] | null {
@@ -2689,21 +2743,35 @@ function computeDayRead(
     {
       // ---- race morning is the race (owner ruling 2026-11-12) ----
       // The athlete's goal race is today: the read is the race, whatever a stack of days, a
-      // low reading or the calendar would otherwise have said. Only an illness, pain or a
-      // clinical finding keeps its own read — the athlete still drives, and those are the
-      // floors no race day argues with.
+      // low reading or the calendar would otherwise have said. It never overrides a floor:
+      // a clinical finding or pain (clinicallyDriven), a fresh safety override, the
+      // athlete's own low word or a symptom they stated today (freshStatementHold) keep
+      // their own read — the athlete still drives, and those are the floors no race day
+      // argues with. Over the engine's possible-illness read (resting HR past the band,
+      // morning-dose.ts E) the day still reads as the race — a read is a suggestion, never
+      // a gate — but the `why` says plainly what the body is showing and that how they
+      // feel at the start line decides.
       resolve: () => {
         const goal = signalInput(() => getEnduranceGoal(d), null);
         if (!goal?.is_race || !goal.date || String(goal.date).slice(0, 10) !== d) return null;
         if (clinicallyDriven(signalState, healthWorkaround)) return null;
+        if (freshSafetyOverride(signalState)) return null;
+        if (lowSubjective || feltEnergyLow || freshStatementHold(d, checkin) != null) return null;
         const event = String(goal.event ?? "").trim();
-        (signals as any).goal_race_day = { event: event || null, distance_km: goal.distance_km ?? null };
+        const illnessShape = morningVerdict().basis === "resting_hr_illness_pattern";
+        (signals as any).goal_race_day = {
+          event: event || null,
+          distance_km: goal.distance_km ?? null,
+          ...(illnessShape ? { body_caveat: "resting_hr_illness_pattern" } : {}),
+        };
         return {
           outcome: DAY_READ_OUTCOMES.goal_race_day,
           read: {
             kind: "train" as const,
             focus: event ? `Race day — ${event}` : "Race day",
-            why: pickDayVariant(RACE_DAY_WHY, d, "goal_race_day"),
+            why: illnessShape
+              ? pickDayVariant(RACE_DAY_RHR_WHY, d, "goal_race_day:resting_hr")
+              : pickDayVariant(RACE_DAY_WHY, d, "goal_race_day"),
             est_minutes: null,
             signals,
           },
@@ -2725,7 +2793,7 @@ function computeDayRead(
             kind: "rest" as const,
             focus: null,
             why: illness
-              ? pickDayVariant(RESTING_HR_ILLNESS_WHY, d, "resting_hr_illness_pattern")
+              ? restingHrIllnessWhy(morning()?.facts ?? null)
               : pickDayVariant(HRV_DECLINE_SHORTFALL_WHY, d, "hrv_decline_with_shortfall"),
             est_minutes: null,
             signals,
@@ -2737,21 +2805,45 @@ function computeDayRead(
       // ---- the morning's EASY persistence patterns (morning-dose.ts, C and D) ----
       // Two or more short nights in a row, or a second low morning in a row: low-intensity
       // movement, never rest, and never dosed through on a stated day.
+      // …and resting HR past the band after a hard day (E), easy on EVERY day — spoken
+      // here, in its own voice, ahead of the readiness and protect rules that would
+      // otherwise speak the same morning as a bare low reading.
       resolve: () => {
         const verdict = morningVerdict();
         if (verdict.kind !== "easy") return null;
-        if (verdict.basis !== "consecutive_short_nights" && verdict.basis !== "consecutive_low_mornings") return null;
+        const spoken: Partial<Record<MorningBasis, { outcome: DayReadRuleOutcome; why: () => string }>> = {
+          consecutive_short_nights: {
+            outcome: DAY_READ_OUTCOMES.acute_sleep_corroborated,
+            why: () => pickDayVariant(ACUTE_SLEEP_WHY, d, "acute_sleep_corroborated"),
+          },
+          consecutive_low_mornings: {
+            outcome: DAY_READ_OUTCOMES.low_mornings_easy,
+            why: () => pickDayVariant(LOW_MORNINGS_EASY_WHY, d, "low_mornings_easy"),
+          },
+          // One SEVERELY short night (MORNING_DOSE_POLICY.severe_short_night_max_min).
+          severe_short_night: {
+            outcome: DAY_READ_OUTCOMES.short_night_eased,
+            why: () => pickDayVariant(SHORT_NIGHT_EASED_WHY, d, "short_night_eased"),
+          },
+          resting_hr_after_endurance: {
+            outcome: DAY_READ_OUTCOMES.resting_hr_after_endurance_easy,
+            why: () => pickDayVariant(RHR_AFTER_ENDURANCE_EASY_WHY, d, "resting_hr_after_endurance_easy"),
+          },
+          resting_hr_unconfirmed: {
+            outcome: DAY_READ_OUTCOMES.resting_hr_caution_easy,
+            why: () => pickDayVariant(RESTING_HR_CAUTION_EASY_WHY, d, "resting_hr_caution_easy"),
+          },
+        };
+        const said = verdict.basis ? spoken[verdict.basis] : undefined;
+        if (!said) return null;
         // The athlete's own low word, corroborated, is still the rest it always was (F).
         if (feltRestCorroborated) return null;
-        const nights = verdict.basis === "consecutive_short_nights";
         return {
-          outcome: nights ? DAY_READ_OUTCOMES.acute_sleep_corroborated : DAY_READ_OUTCOMES.low_mornings_easy,
+          outcome: said.outcome,
           read: {
             kind: "easy" as const,
             focus: null,
-            why: nights
-              ? pickDayVariant(ACUTE_SLEEP_WHY, d, "acute_sleep_corroborated")
-              : pickDayVariant(LOW_MORNINGS_EASY_WHY, d, "low_mornings_easy"),
+            why: said.why(),
             est_minutes: 25,
             signals,
           },
@@ -2838,6 +2930,9 @@ function computeDayRead(
         // posture, never a felt tap — those keep this rule.
         if (kind === "easy" && !feltLight && calendarTakesDay(DAY_READ_OUTCOMES.acute_signal_protection.code))
           return null;
+        // …and on any other day, a single low morning whose verdict is the dose (one short
+        // night) keeps the session that is due at a held dose (morning-dose.ts, D).
+        if (kind === "easy" && !feltLight && morningDoseTakesDay()) return null;
         const voice = feltRest
           ? {
               ...signalState.action.voice,
@@ -2870,18 +2965,22 @@ function computeDayRead(
         // The athlete's own low word keeps its own rules (a corroborated tap rests, F).
         if (lowSubjective) return null;
         const ease = verdict.basis ? MORNING_EASE_OUTCOME[verdict.basis] : undefined;
-        const stepCode = ease?.code ?? DAY_READ_OUTCOMES.overnight_dip_dosed.code;
+        const stepCode =
+          ease?.code ??
+          (verdict.basis === "short_night"
+            ? DAY_READ_OUTCOMES.short_night_dosed.code
+            : DAY_READ_OUTCOMES.overnight_dip_dosed.code);
         if (verdict.kind === "dose" && calendarTakesDay(stepCode)) return null;
+        // A dose with no stated calendar keeps a due session through the planned-training
+        // rule (morning-dose.ts B, D): never an ease of its own here.
+        if (verdict.kind === "dose" && verdict.basis && UNSTATED_MORNING_DOSES.has(verdict.basis)) return null;
         if (!ease) return null;
         return {
           outcome: ease,
           read: {
             kind: "easy" as const,
             focus: null,
-            why:
-              ease.code === DAY_READ_OUTCOMES.short_night_eased.code
-                ? pickDayVariant(SHORT_NIGHT_EASED_WHY, d, "short_night_eased")
-                : pickDayVariant(RHR_AFTER_ENDURANCE_EASY_WHY, d, "resting_hr_after_endurance_easy"),
+            why: pickDayVariant(RHR_AFTER_ENDURANCE_EASY_WHY, d, "resting_hr_after_endurance_easy"),
             est_minutes: 25,
             signals,
           },
@@ -3633,11 +3732,16 @@ function computeDayRead(
         // A single low morning the dose answers (morning-dose.ts): on the stated lifting day
         // the calendar took, or — the post-endurance HRV dip alone — on any day a session
         // is due. Never a reach, never a load raise; the regions yesterday loaded go lighter.
+        const unstatedDose = morningVerdict();
         const morningBasis: MorningBasis | null =
           calendarDosed && calendar.step?.morning
             ? calendar.step.morning
-            : !calendar.step && !recoveryWeek && morningVerdict().basis === "overnight_dip_after_endurance"
-              ? "overnight_dip_after_endurance"
+            : !calendar.step &&
+                !recoveryWeek &&
+                unstatedDose.kind === "dose" &&
+                unstatedDose.basis != null &&
+                UNSTATED_MORNING_DOSES.has(unstatedDose.basis)
+              ? unstatedDose.basis
               : null;
         if (morningBasis && !calendarDosed) pushVetoes.push("morning_dose");
         const calendarVoice = calendarDosed ? calendarBrakeVoice() : null;
@@ -3788,14 +3892,27 @@ function computeDayRead(
             : "";
         const caveatRun = caveats.length ? ` — ${caveats.join("; and ")}` : "";
         if (morningBasis) {
-          const cause = MORNING_DOSE_CAUSE[morningBasis];
-          const said = cause ? `${pickDayVariant(cause, d, `morning_dose_cause:${morningBasis}`)} ` : "";
+          // Each sentence true of its morning: the readiness cause blames yesterday only
+          // when something about yesterday explains it, and the lead promises lighter areas
+          // only when the decision's held-dose reduction lands on this card.
+          const explained = (morning()?.facts.load_explained.length ?? 0) > 0;
+          const causeKey =
+            morningBasis === "readiness_rest_grade" && !explained ? "readiness_rest_grade:unexplained" : morningBasis;
+          const cause = MORNING_DOSE_CAUSE[causeKey];
+          const said = cause ? `${pickDayVariant(cause, d, `morning_dose_cause:${causeKey}`)} ` : "";
+          const lead = morningDoseLightensRegions(sd.day_number ?? null)
+            ? pickDayVariant(MORNING_DOSE_LEAD, d, "morning_dose:lead")
+            : pickDayVariant(MORNING_DOSE_LEAD_HELD, d, "morning_dose:lead_held");
           return {
-            outcome: calendarDosed ? DAY_READ_OUTCOMES.stated_lift_morning_dosed : DAY_READ_OUTCOMES.overnight_dip_dosed,
+            outcome: calendarDosed
+              ? DAY_READ_OUTCOMES.stated_lift_morning_dosed
+              : morningBasis === "short_night"
+                ? DAY_READ_OUTCOMES.short_night_dosed
+                : DAY_READ_OUTCOMES.overnight_dip_dosed,
             read: {
               kind: "train",
               focus: sd.focus,
-              why: `${said}${pickDayVariant(MORNING_DOSE_LEAD, d, "morning_dose:lead")}${caveatRun}.`,
+              why: `${said}${lead}${caveatRun}.`,
               est_minutes: commitmentPressure ? 40 : 60,
               signals,
             },
@@ -4156,13 +4273,16 @@ function computeDayRead(
     };
     if (ladderOutcome !== ruleOutcome || ladderRead.kind !== "easy") return null;
     if (!CHECKIN_LIFTABLE_CODES.has(ruleOutcome.code)) return held("not_a_readiness_read");
-    const liftable = MORNING_DOSE_POLICY.checkin_liftable_brakes;
-    const tolerated = MORNING_DOSE_POLICY.checkin_lift_tolerated_brakes;
-    if (
-      !decidingBrakeFields.some((field) => liftable.includes(field)) ||
-      !decidingBrakeFields.every((field) => liftable.includes(field) || tolerated.includes(field))
-    )
-      return held("other_brake");
+    // HRV is liftable only as a SINGLE low night: last night alone past the band, and the
+    // rolling read not past its line (a decline is never a tap's to answer).
+    const facts = morning()?.facts;
+    const hrvSingleNight =
+      facts != null &&
+      facts.hrv_night != null &&
+      facts.hrv_night.consecutive_days <= 1 &&
+      facts.hrv_night.consecutive <= 1 &&
+      !facts.hrv_rolling.past_line;
+    if (!checkinLiftsBrakes(decidingBrakeFields, hrvSingleNight)) return held("other_brake");
     const verdict = morningVerdict();
     if (verdict.basis != null && verdict.basis !== "readiness_rest_grade") return held(verdict.basis);
     if (clinicallyDriven(signalState, healthWorkaround) || freshSafetyOverride(signalState)) return held("floor");
@@ -4177,11 +4297,13 @@ function computeDayRead(
     const brakeVoice = calendarBrakeVoice() ?? signalState.action.voice;
     return {
       focus: planDay.focus,
-      why: `${endStopped(spokenSignalVoice(brakeVoice, d, "checkin_lift:brake"))} ${pickDayVariant(
-        CHECKIN_LIFT_WHY,
-        d,
-        "checkin_lifted_train"
-      )}`,
+      // The disagreement is named for what it is: the readiness number when that is on the
+      // board, otherwise last night's HRV.
+      why: `${endStopped(spokenSignalVoice(brakeVoice, d, "checkin_lift:brake"))} ${
+        decidingBrakeFields.includes("training_readiness")
+          ? pickDayVariant(CHECKIN_LIFT_WHY, d, "checkin_lifted_train")
+          : pickDayVariant(CHECKIN_LIFT_HRV_WHY, d, "checkin_lifted_train:hrv")
+      }`,
     };
   })();
   const outcome = tapLift ? DAY_READ_OUTCOMES.checkin_lifted_train : ladderOutcome;
@@ -4212,7 +4334,8 @@ function computeDayRead(
       applied:
         outcome.code === DAY_READ_OUTCOMES.stated_lift_morning_dosed.code ||
         outcome.code === DAY_READ_OUTCOMES.stated_key_run_morning_dosed.code ||
-        outcome.code === DAY_READ_OUTCOMES.overnight_dip_dosed.code,
+        outcome.code === DAY_READ_OUTCOMES.overnight_dip_dosed.code ||
+        outcome.code === DAY_READ_OUTCOMES.short_night_dosed.code,
     };
   }
   // The health work-around closes EVERY protective read, whichever rule produced it

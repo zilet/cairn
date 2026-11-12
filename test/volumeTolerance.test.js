@@ -213,16 +213,16 @@ test("every log-backs phrasing reads clean: no grammar breach, no number", () =>
 // ---------- the log ----------
 
 // A reconciled outcome row for one session, the shape daily-reconciliation writes.
-function seedOutcome(date, doses, { skipped = [] } = {}) {
+function seedOutcome(date, doses, { skipped = [], constraints = null } = {}) {
   repo.upsertExercise({ name: "Dumbbell Bench Press", muscle_group: "chest", mode: "reps" });
   const session = repo.getOrCreateSession(date, null);
   const composition = db
     .prepare(
       `INSERT INTO daily_session_compositions
-        (version, session_id, date, source, status, plan_day_id, title, items_json, request_fingerprint)
-       VALUES (1, ?, ?, 'athlete_override', 'active', NULL, 'Fixture', '[]', ?)`
+        (version, session_id, date, source, status, plan_day_id, title, items_json, request_fingerprint, constraints_json)
+       VALUES (1, ?, ?, 'athlete_override', 'active', NULL, 'Fixture', '[]', ?, ?)`
     )
-    .run(session.id, date, `vt-${date}`);
+    .run(session.id, date, `vt-${date}`, constraints ? JSON.stringify(constraints) : null);
   const facts = {
     schema_version: 4,
     dose_context: { comparable: true, non_comparable_reasons: [] },
@@ -238,7 +238,12 @@ function seedOutcome(date, doses, { skipped = [] } = {}) {
 
 // One lift's dose: `planned` sets prescribed at `target`, `done` sets landed at `top` for
 // `reps` reps, against a recent working weight of `recent` (the full-load reference).
-function dose(exercise, { planned = 3, done = planned, target = 100, top = target, reps = 8, recent = target } = {}) {
+// `authored` is the plan item's own set count (the full-load reference), which a trimmed
+// card's prescription can sit under.
+function dose(
+  exercise,
+  { planned = 3, done = planned, target = 100, top = target, reps = 8, recent = target, authored = planned } = {}
+) {
   return {
     exercise,
     prescribed: { sets: planned, rep_low: 6, rep_high: 8, target_weight: target, target_seconds: null },
@@ -253,7 +258,7 @@ function dose(exercise, { planned = 3, done = planned, target = 100, top = targe
     non_comparable_reasons: [],
     challenge_verdict: "met",
     full_load_reference: {
-      sets: planned,
+      sets: authored,
       target_weight: target,
       target_seconds: null,
       rep_low: 6,
@@ -308,6 +313,42 @@ test("a planned set left undone, a skipped lift, or too few sessions withhold th
   seedOutcome(localDaysAgo(2), [dose("Dumbbell Bench Press")]);
   seedOutcome(DATE, [dose("Dumbbell Bench Press")]);
   assert.equal(volumeToleranceRead(DATE), null);
+});
+
+test("a trimmed card vouches only when the athlete logged the plan's AUTHORED sets — never its own trimmed count", () => {
+  // The plan wrote four sets; the volume-reduced card prescribed three; the athlete
+  // finished the three. That is not "every planned set", and three such sessions must not
+  // cancel the trim they were composed under.
+  const reduced = { daily_decision: { caps: { volume: "reduced", intensity: "hold" }, train_anyway: false } };
+  const trimmed = (date) =>
+    seedOutcome(date, [dose("Dumbbell Bench Press", { planned: 3, authored: 4 })], { constraints: reduced });
+  trimmed(localDaysAgo(6));
+  trimmed(localDaysAgo(4));
+  const last = trimmed(localDaysAgo(2));
+  assert.equal(sessionCarriedPlannedVolume(last), false, "the trimmed count is not the plan's");
+  assert.equal(volumeToleranceRead(DATE), null, "a trimmed log never cancels its own trim");
+
+  // The athlete logged the authored four on the trimmed card: that vouches.
+  resetTables("daily_session_outcomes", "daily_session_compositions", "sessions");
+  const full = seedOutcome(localDaysAgo(2), [dose("Dumbbell Bench Press", { planned: 3, done: 4, authored: 4 })], {
+    constraints: reduced,
+  });
+  assert.equal(sessionCarriedPlannedVolume(full), true);
+
+  // A train-anyway trimmed card with a lift whose authored count is unknown cannot vouch.
+  resetTables("daily_session_outcomes", "daily_session_compositions", "sessions");
+  const unknown = { ...dose("Dumbbell Bench Press"), full_load_reference: { ...dose("x").full_load_reference, sets: null } };
+  const anyway = seedOutcome(localDaysAgo(2), [unknown], {
+    constraints: { daily_decision: { caps: { volume: "normal", intensity: "hold" }, train_anyway: true } },
+  });
+  assert.equal(sessionCarriedPlannedVolume(anyway), false);
+
+  // An ordinary card at the plan's own count still vouches exactly as before.
+  resetTables("daily_session_outcomes", "daily_session_compositions", "sessions");
+  const plain = seedOutcome(localDaysAgo(2), [dose("Dumbbell Bench Press", { planned: 4, authored: 4 })], {
+    constraints: { daily_decision: { caps: { volume: "normal", intensity: "normal" }, train_anyway: false } },
+  });
+  assert.equal(sessionCarriedPlannedVolume(plain), true);
 });
 
 // ---------- the bounds ----------
@@ -381,6 +422,29 @@ test("the set catch-up stops at about 20 weekly sets for the group", () => {
   resetTables("logged_sets", "sessions", "plan_items", "plan_days", "exercises");
   seedCurlWeek(18);
   assert.equal(curlStep(), undefined, "20 planned biceps sets: the week is full");
+});
+
+test("the 1.2x per-lift bound reads the athlete's habit from the weeks BEFORE the exposures it answers", () => {
+  // Weeks of two-set curls, then two recent exposures of three: 1.2 x 2 is 2, so the
+  // plan does not step to three on the strength of the very exposures it would follow.
+  seedCurlWeek(6);
+  for (const back of [40, 33, 26, 19])
+    logSets("Dumbbell Curl", localDaysAgo(back), [
+      [40, 11],
+      [40, 11],
+    ]);
+  assert.equal(curlStep(), undefined, "a habit of two sets bounds the catch-up at two");
+
+  // A habit of three sets in those weeks: 1.2 x 3 is 3, so the step to three is in bounds.
+  resetTables("logged_sets", "sessions", "plan_items", "plan_days", "exercises");
+  seedCurlWeek(6);
+  for (const back of [40, 33, 26, 19])
+    logSets("Dumbbell Curl", localDaysAgo(back), [
+      [40, 11],
+      [40, 11],
+      [40, 11],
+    ]);
+  assert.deepEqual(curlStep(), { from: 2, to: 3 });
 });
 
 test("an affirmed cut never adds sets beyond the plan", () => {

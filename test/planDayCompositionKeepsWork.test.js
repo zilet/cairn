@@ -7,8 +7,10 @@ import assert from "node:assert/strict";
 import { beforeEach, test } from "node:test";
 import { applyProposalWithAutonomy } from "../dist/domain/brain/autonomy-service.js";
 import {
+  DAY_BUDGET_DEFERRED_NOTES,
   DAY_BUDGET_TRIM_NOTES,
   deterministicComposedSession,
+  deterministicSessionRawFromEnvelope,
   normalizeComposedSession,
 } from "../dist/repo/daily-composition.js";
 import { buildDailySessionDecision, gatherDailyDecisionSnapshot } from "../dist/repo/daily-decision.js";
@@ -105,33 +107,39 @@ function setsByName(session) {
   return Object.fromEntries(session.items.map((item) => [item.exercise, item.sets]));
 }
 
-test("a reduced train-anyway day keeps every one of the plan day's nine lifts, trims recorded", () => {
+// The rule (2026-11-12, revised): the budget trims sets largest-first down to two a
+// compound and one an accessory; when the day still cannot fit, the lowest-priority
+// accessory (by effect order) is DEFERRED — off today's card, recorded, and named on the
+// card — never dropped in silence. The incident day's four compounds at two sets (8) and
+// five accessories at one (5) come to 13 against a budget of 12, so it does NOT fit at
+// the minimums: the plank (core, last in effect order) is left for another day, and the
+// other eight lifts stay on — four compounds at two sets, four accessories at one.
+test("a reduced train-anyway day keeps its compounds at two sets and defers only what cannot fit, all recorded", () => {
   seedDay();
   const envelope = trainAnywayEnvelope();
   const session = deterministicComposedSession(envelope);
   assert.deepEqual(
     session.items.map((item) => item.exercise).sort(),
-    ITEMS.map((item) => item.exercise).sort(),
-    "no authored lift is deleted by the day's budget or its item cap"
+    ITEMS.map((item) => item.exercise)
+      .filter((name) => name !== "Front Plank")
+      .sort(),
+    "only the lowest-priority accessory leaves the card"
   );
   const sets = setsByName(session);
-  assert.ok(
-    Object.values(sets).every((n) => n >= 1),
-    "every lift keeps at least one working set"
-  );
   assert.equal(
     Object.values(sets).reduce((sum, n) => sum + n, 0),
     12,
     "the reduced day's twelve-set budget still binds"
   );
-  // Largest first, ties to the lift later in effect order: the compounds keep more, and
-  // the tail keeps a set rather than vanishing.
-  assert.equal(sets["Landmine Press"], 2);
-  assert.equal(sets["Dumbbell Bench Press"], 2);
-  assert.equal(sets["Wide-Grip Pulldown"], 2);
-  assert.equal(sets["Upright Row"], 1);
-  assert.equal(sets["Front Plank"], 1);
-  assert.equal(sets["Triceps Rope Pushdown"], 1);
+  for (const compound of ["Landmine Press", "Dumbbell Bench Press", "Wide-Grip Pulldown", "Chest-Supported Row"])
+    assert.equal(sets[compound], 2, `${compound} keeps two working sets`);
+  for (const accessory of ["Upright Row", "Face Pull", "Dumbbell Biceps Curl", "Triceps Rope Pushdown"])
+    assert.equal(sets[accessory], 1, `${accessory} keeps one`);
+  // The card names what was left for another day.
+  assert.ok(
+    DAY_BUDGET_DEFERRED_NOTES.some((render) => String(session.why).includes(render("Front Plank"))),
+    `the card says what was deferred: ${session.why}`
+  );
 
   // The same composition, with its validation: every reduction is on the record.
   const raw = {
@@ -142,18 +150,30 @@ test("a reduced train-anyway day keeps every one of the plan day's nine lifts, t
     items: ITEMS.map((item) => ({ ...item })),
   };
   const { session: snap, validation } = normalizeComposedSession(raw, envelope, { planSnapshot: true });
-  assert.equal(snap.items.length, ITEMS.length);
+  assert.equal(snap.items.length, ITEMS.length - 1);
   const trims = validation.rejected.filter((entry) => entry.reason === "day_set_budget");
+  const deferred = validation.rejected.filter((entry) => entry.reason === "day_set_budget_deferred");
+  assert.deepEqual(
+    deferred.map((entry) => entry.exercise),
+    ["Front Plank"]
+  );
   assert.equal(
     trims.reduce((sum, entry) => sum + (entry.sets_from - entry.sets_to), 0),
-    AUTHORED_SETS - 12,
-    "every set the budget took is recorded"
+    AUTHORED_SETS - 2 - 12,
+    "every set the budget trimmed off a lift that stayed is recorded"
   );
   assert.ok(trims.every((entry) => entry.sets_to >= 1 && entry.sets_to < entry.sets_from));
   assert.ok(
-    validation.rejected.every((entry) => entry.reason === "day_set_budget"),
-    "nothing was dropped, only trimmed"
+    validation.rejected.every((entry) => entry.reason === "day_set_budget" || entry.reason === "day_set_budget_deferred"),
+    "nothing left without a record"
   );
+  // Nothing silently: every authored lift is on the card or recorded as deferred.
+  for (const item of ITEMS)
+    assert.ok(
+      snap.items.some((card) => card.exercise === item.exercise) ||
+        deferred.some((entry) => entry.exercise === item.exercise),
+      `${item.exercise} is accounted for`
+    );
   const trimmedCard = snap.items.find((item) => item.exercise === trims[0].exercise);
   assert.ok(
     DAY_BUDGET_TRIM_NOTES.some((note) => String(trimmedCard.note).includes(note)),
@@ -161,14 +181,60 @@ test("a reduced train-anyway day keeps every one of the plan day's nine lifts, t
   );
 });
 
+test("a fourteen-lift plan day on a reduced day with a 30-minute request fits both, compounds at two sets", () => {
+  const LIFTS = [
+    ["Back Squat", "quads"],
+    ["Romanian Deadlift", "hamstrings"],
+    ["Barbell Bench Press", "chest"],
+    ["Barbell Row", "back"],
+    ["Overhead Press", "shoulders"],
+    ["Lateral Raise", "shoulders"],
+    ["Leg Extension", "quads"],
+    ["Leg Curl", "hamstrings"],
+    ["Calf Raise", "calves"],
+    ["Bicep Curl", "biceps"],
+    ["Tricep Pushdown", "triceps"],
+    ["Face Pull", "rear delts"],
+    ["Hanging Leg Raise", "core"],
+    ["Cable Crunch", "core"],
+  ];
+  for (const [name, group] of LIFTS) repo.upsertExercise({ name, muscle_group: group });
+  const items = LIFTS.map(([exercise]) => ({ exercise, sets: 3, rep_low: 8, rep_high: 12 }));
+  savePlanDaySettled(DAY, DAY_NAME, "Everything", items);
+  const envelope = { ...trainAnywayEnvelope({ minutes: 30 }), caps: { volume: "reduced", intensity: "hold", duration_min: 30 } };
+  // Exactly the deterministic plan-day path (deterministicComposedSession), with its validation.
+  const raw = deterministicSessionRawFromEnvelope(envelope);
+  const { session, validation } = normalizeComposedSession(raw, envelope, { planSourced: true });
+  assert.ok(session, JSON.stringify(validation));
+  const total = session.items.reduce((sum, item) => sum + item.sets, 0);
+  assert.ok(total <= 12, `the budget binds: ${total}`);
+  assert.ok(session.est_minutes <= 30, `the time request binds: ${session.est_minutes}`);
+  const compounds = ["Back Squat", "Romanian Deadlift", "Barbell Bench Press", "Barbell Row", "Overhead Press"];
+  for (const name of compounds) {
+    const card = session.items.find((item) => item.exercise === name);
+    assert.ok(card, `${name} stays on`);
+    assert.ok(card.sets >= 2, `${name} keeps at least two working sets`);
+  }
+  const deferred = validation.rejected.filter((entry) => entry.reason === "day_set_budget_deferred");
+  assert.ok(deferred.length > 0);
+  for (const [name] of LIFTS)
+    assert.ok(
+      session.items.some((card) => card.exercise === name) || deferred.some((entry) => entry.exercise === name),
+      `${name} is on the card or recorded as deferred`
+    );
+  for (const entry of deferred)
+    assert.ok(String(session.why).includes(entry.exercise), `the card names ${entry.exercise}: ${session.why}`);
+});
+
 test("the plan day's card is titled by its name, and its focus names only lifts it carries", () => {
   seedDay();
   const session = deterministicComposedSession(trainAnywayEnvelope());
   assert.equal(session.name, "Upper B", "the plan day's display name, never the stale focus prose");
+  // The plank is deferred on the reduced day (see above), so the focus no longer claims it.
   assert.equal(
     session.focus,
-    "Flat dumbbell bench, upright row and plank. The threshold run is the next day.",
-    "the rotated-out seated press and the removed carry are not claimed"
+    "Flat dumbbell bench and upright row. The threshold run is the next day.",
+    "the rotated-out seated press, the removed carry and the deferred plank are not claimed"
   );
 });
 
@@ -203,8 +269,10 @@ test("the session the athlete asked for today keeps its authored sets and the 70
 
 test("without the request the 68 s log still holds the plank, and est_minutes stays the clamp", () => {
   seedDay();
+  // The plank stays on a day whose budget fits it (reduced days defer it, above).
+  const open = { ...trainAnywayEnvelope(), caps: { volume: "normal", intensity: "hold", duration_min: 40 } };
+  assert.equal(deterministicComposedSession(open).items.find((item) => item.exercise === "Front Plank").target_seconds, 68);
   const session = deterministicComposedSession(trainAnywayEnvelope());
-  assert.equal(session.items.find((item) => item.exercise === "Front Plank").target_seconds, 68);
   assert.equal(session.est_minutes, 40, "twelve trimmed sets fit inside the clock");
 });
 

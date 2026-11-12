@@ -18,16 +18,17 @@
 // Synthetic fixtures only; no real data.
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
-import { repo, resetTables } from "./_seed.js";
+import { db, repo, resetTables } from "./_seed.js";
 import { localDateISO } from "../dist/repo/shared.js";
 import { violatesReadingGrammar } from "../dist/repo/day-read-grammar.js";
-import { DAY_READ_WHY_VARIANTS, dayReadProseIdentity } from "../dist/repo/day-read-prose.js";
+import { DAY_READ_WHY_VARIANTS, MORNING_DOSE_CAUSE, dayReadProseIdentity } from "../dist/repo/day-read-prose.js";
 import { buildDailySessionDecision, gatherDailyDecisionSnapshot } from "../dist/repo/daily-decision.js";
 import { getCachedDayRead } from "../dist/repo/day-read-cache.js";
 import { rollingBandRead } from "../dist/repo/overnight-band.js";
 import {
   CHECKIN_LIFT_STEP,
   MORNING_DOSE_POLICY,
+  checkinLiftsBrakes,
   checkinLiftsRead,
   classifyMorning,
 } from "../dist/repo/morning-dose.js";
@@ -117,6 +118,7 @@ const FACTS = {
   rest_grade_today: false,
   low_readiness_mornings: 0,
   short_nights: 0,
+  last_night_min: null,
   hrv_night: null,
   rhr_night: null,
   hard_endurance_recent: false,
@@ -127,7 +129,9 @@ const FACTS = {
   symptom_today: false,
 };
 const facts = (extra) => ({ ...FACTS, ...extra });
-const rhrPast = { past: "meaningful", consecutive: 1 };
+// One night past the athlete's own established band, on a reading its own row vouches for.
+const rhrPast = { past: "meaningful", consecutive: 1, consecutive_days: 1, established_band: true, verified: true };
+const hrvLow = { past: "meaningful", consecutive: 1, consecutive_days: 1, established_band: true, verified: true };
 
 test("the classifier: every rule, read against MORNING_DOSE_POLICY", () => {
   // Nothing low: nothing concluded.
@@ -141,38 +145,73 @@ test("the classifier: every rule, read against MORNING_DOSE_POLICY", () => {
   // C: the persistence count of low mornings means easy, on any day.
   const persistent = facts({ rest_grade_today: true, low_readiness_mornings: POLICY.low_mornings_for_easy });
   assert.deepEqual(classifyMorning(persistent, true), { kind: "easy", basis: "consecutive_low_mornings" });
-  // D: one short night eases; the short-night count means easy.
-  assert.equal(classifyMorning(facts({ short_nights: 1 }), true).kind, "dose");
-  assert.equal(classifyMorning(facts({ short_nights: 1 }), false).kind, "easy");
+  // D: one short night is the dose on ANY day (the session due keeps its place, held);
+  // the short-night count means easy, and so does one severely short night.
+  assert.equal(classifyMorning(facts({ short_nights: 1, last_night_min: 300 }), true).kind, "dose");
+  assert.deepEqual(classifyMorning(facts({ short_nights: 1, last_night_min: 300 }), false), {
+    kind: "dose",
+    basis: "short_night",
+  });
+  assert.deepEqual(
+    classifyMorning(facts({ short_nights: 1, last_night_min: POLICY.severe_short_night_max_min - 1 }), true),
+    { kind: "easy", basis: "severe_short_night" }
+  );
   assert.deepEqual(classifyMorning(facts({ short_nights: POLICY.short_nights_for_easy }), true), {
     kind: "easy",
     basis: "consecutive_short_nights",
   });
-  // E: resting HR past the band — after hard endurance, easy at most; without, rest.
+  // E: resting HR past the band — after hard endurance, easy at most (on EVERY day, stated
+  // or not); without, rest.
   const afterEndurance = classifyMorning(facts({ rhr_night: rhrPast, hard_endurance_recent: true }), true);
   assert.equal(afterEndurance.basis, "resting_hr_after_endurance");
-  assert.notEqual(afterEndurance.kind, "rest");
-  assert.equal(afterEndurance.kind, POLICY.rhr_after_endurance_on_stated_day === "dosed_train" ? "dose" : "easy");
+  assert.equal(afterEndurance.kind, "easy", "resting HR past the band after hard endurance is easy on a stated day too");
   assert.equal(classifyMorning(facts({ rhr_night: rhrPast, hard_endurance_recent: true }), false).kind, "easy");
+  // …and HRV past the band beside it is a second, independent witness: never a training day.
+  assert.equal(
+    classifyMorning(facts({ rhr_night: rhrPast, hrv_night: hrvLow, hard_endurance_recent: true }), true).kind,
+    "easy"
+  );
   assert.deepEqual(classifyMorning(facts({ rhr_night: rhrPast }), true), {
     kind: "rest",
     basis: "resting_hr_illness_pattern",
   });
-  const twoReadings = { past: "marginal", consecutive: POLICY.rhr_illness_consecutive_readings };
+  const twoReadings = {
+    ...rhrPast,
+    past: "marginal",
+    consecutive: POLICY.rhr_illness_consecutive_readings,
+    consecutive_days: POLICY.rhr_illness_consecutive_readings,
+  };
   assert.equal(
     classifyMorning(facts({ rhr_night: twoReadings, hard_endurance_recent: true }), true).basis,
     "resting_hr_illness_pattern"
   );
+  // "Twice running" is two consecutive CALENDAR mornings: readings days apart are not.
+  const apart = { ...twoReadings, consecutive_days: 1 };
+  assert.notEqual(
+    classifyMorning(facts({ rhr_night: apart, hard_endurance_recent: true }), true).kind,
+    "rest",
+    "two readings days apart are not a repeat"
+  );
+  // One night rests only on an established band of the athlete's own AND a vouched reading;
+  // otherwise it is a caution, easy at most.
+  for (const thin of [
+    { ...rhrPast, established_band: false },
+    { ...rhrPast, verified: false },
+  ])
+    assert.deepEqual(classifyMorning(facts({ rhr_night: thin }), true), {
+      kind: "easy",
+      basis: "resting_hr_unconfirmed",
+    });
   for (const extra of [{ low_word: true }, { symptom_today: true }])
     assert.equal(
       classifyMorning(facts({ rhr_night: rhrPast, hard_endurance_recent: true, ...extra }), true).kind,
       "rest"
     );
   // B: one low HRV night after hard endurance, resting HR in band — the dose, any day.
-  const dip = facts({ hrv_night: { past: "meaningful", consecutive: 1 }, hard_endurance_recent: true });
+  const dip = facts({ hrv_night: hrvLow, hard_endurance_recent: true });
   assert.deepEqual(classifyMorning(dip, false), { kind: "dose", basis: "overnight_dip_after_endurance" });
   // …without the endurance day behind it, one night concludes nothing here.
-  assert.equal(classifyMorning(facts({ hrv_night: { past: "meaningful", consecutive: 1 } }), false).kind, null);
+  assert.equal(classifyMorning(facts({ hrv_night: hrvLow }), false).kind, null);
   // F: a sustained rolling decline rests only beside the log-confirmed shortfall.
   const decline = facts({
     hrv_rolling: { past_line: true, nights: 7, mornings_below: POLICY.hrv_sustained_decline_mornings },
@@ -205,6 +244,27 @@ test("the rolling HRV read says nothing below its night floor (absence never bra
   assert.equal(rollingBandRead(full, "hrv_ms", asOf, opts).past_line, true);
 });
 
+test("the rolling HRV read needs a recent night: old nights alone never make a decline", () => {
+  const asOf = "2026-10-20";
+  const series = [];
+  for (let back = POLICY.hrv_rolling_window_days; back < POLICY.hrv_rolling_window_days + 24; back++)
+    series.push({ date: addDays(asOf, -back), value: [48, 50, 52, 54, 56][back % 5] });
+  const opts = {
+    windowDays: POLICY.hrv_rolling_window_days,
+    minNights: POLICY.hrv_rolling_min_nights,
+    baselineDays: POLICY.hrv_baseline_days,
+    recentNightDays: POLICY.hrv_rolling_recent_night_days,
+  };
+  // Enough low nights in the window — but every one of them older than the anchor.
+  const stale = [...series];
+  for (let back = POLICY.hrv_rolling_recent_night_days; back < POLICY.hrv_rolling_window_days; back++)
+    stale.push({ date: addDays(asOf, -back), value: 30 });
+  assert.equal(rollingBandRead(stale, "hrv_ms", asOf, opts).past_line, false, "no night in the last two days");
+  // One valid night inside the anchor and the same window speaks.
+  const anchored = [...stale, { date: asOf, value: 30 }];
+  assert.equal(rollingBandRead(anchored, "hrv_ms", asOf, opts).past_line, true);
+});
+
 test("the check-in lift bar is the policy's", () => {
   const bar = POLICY.checkin_lift_energy_min;
   assert.equal(checkinLiftsRead({ energy: bar }), true);
@@ -212,6 +272,81 @@ test("the check-in lift bar is the policy's", () => {
   assert.equal(checkinLiftsRead({ energy: bar, sleep_feel: POLICY.checkin_lift_sleep_feel_veto_max }), false);
   assert.equal(checkinLiftsRead(null), false);
   assert.equal(CHECKIN_LIFT_STEP.easy, "train_held");
+});
+
+test("G: a tap lifts only the readiness score or a single low HRV night — never acute load, resting HR or sleep", () => {
+  const lifts = new Set([...POLICY.checkin_liftable_brakes, ...POLICY.checkin_lift_tolerated_brakes]);
+  assert.deepEqual([...POLICY.checkin_liftable_brakes].sort(), ["hrv", "training_readiness"]);
+  for (const never of ["acute_load", "resting_hr", "sleep", "sleep_trend"])
+    assert.equal(lifts.has(never), false, `${never} is never a tap's to lift`);
+  // The comparison the read makes, exactly.
+  assert.equal(checkinLiftsBrakes(["training_readiness"], false), true);
+  assert.equal(checkinLiftsBrakes(["training_readiness", "hybrid_interference"], false), true);
+  assert.equal(checkinLiftsBrakes(["training_readiness", "acute_load"], false), false, "acute load holds the read");
+  assert.equal(checkinLiftsBrakes(["training_readiness", "resting_hr"], false), false);
+  assert.equal(checkinLiftsBrakes(["training_readiness", "sleep"], false), false);
+  assert.equal(checkinLiftsBrakes(["hrv"], true), true, "a single low HRV night lifts");
+  assert.equal(checkinLiftsBrakes(["hrv"], false), false, "a run of low HRV nights does not");
+  assert.equal(checkinLiftsBrakes(["hybrid_interference"], false), false, "something liftable must be there");
+});
+
+// ══ 6: every phrasing is true of the morning it prints on ═══════════════════════════════
+
+test("no morning-dose sentence states a single night as settled fact", () => {
+  for (const set of Object.values(MORNING_DOSE_CAUSE))
+    for (const line of set) assert.doesNotMatch(line, /\bexpected response\b|\bnot a warning\b/i, line);
+});
+
+test("a rest-grade reading with nothing behind it never blames yesterday, and promises no lighter areas", (t) => {
+  const today = onTuesday(t);
+  athlete(today);
+  // No work yesterday at all: the readiness number alone.
+  tonight(today, { hrv_ms: 52, resting_hr: 52, sleep_min: 460, training_readiness: 12 });
+  const r = repo.dayRead(today);
+  assert.equal(r.decision.rule_code, "stated_lift_morning_dosed", `${r.decision.rule_code}: ${r.why}`);
+  assert.deepEqual(r.signals.morning_dose.load_explained, []);
+  assert.doesNotMatch(r.why, /\byesterday\b|\bbig day\b|\bhard day\b/i, r.why);
+  assert.equal(violatesReadingGrammar(r.why), null, r.why);
+});
+
+test("E: a first resting-HR reading never says 'again'; a second consecutive morning does", (t) => {
+  const today = onTuesday(t);
+  athlete(today);
+  tonight(today, { hrv_ms: 52, resting_hr: 66, sleep_min: 460, training_readiness: 60 });
+  const first = repo.dayRead(today);
+  assert.equal(first.decision.rule_code, "resting_hr_illness_pattern");
+  assert.ok(DAY_READ_WHY_VARIANTS.resting_hr_illness_pattern.includes(first.why), first.why);
+  assert.doesNotMatch(first.why, /\bagain\b|\bin a row\b|\brunning\b/i);
+  repo.upsertGarminDailyMetric({ date: addDays(today, -1), hrv_ms: 52, resting_hr: 66, sleep_min: 460 });
+  const second = repo.dayRead(today);
+  assert.equal(second.decision.rule_code, "resting_hr_illness_pattern");
+  assert.ok(DAY_READ_WHY_VARIANTS["resting_hr_illness_pattern:repeat"].includes(second.why), second.why);
+});
+
+// ══ 11: a single-night illness REST needs a band of the athlete's own and a vouched reading ══
+
+test("E: one high resting-HR reading on the watch's fallback average (no band of their own) is a caution, never rest", (t) => {
+  const today = onTuesday(t);
+  repo.savePlanDay(1, "Pull", "Back", [{ exercise: "Lat Pulldown", sets: 3, rep_low: 8, rep_high: 12 }]);
+  // A new user: two nights of history, so no personal band; the watch's 7-day average.
+  for (let back = 1; back <= 2; back++)
+    repo.upsertGarminDailyMetric({ date: addDays(today, -back), resting_hr: 55, hr_7d_avg: 55, sleep_min: 460 });
+  tonight(today, { resting_hr: 62, hr_7d_avg: 55, sleep_min: 460, min_hr: 58 });
+  const r = repo.dayRead(today);
+  assert.notEqual(r.kind, "rest", `${r.decision.rule_code}: ${r.why}`);
+  assert.equal(r.signals.morning_dose.basis, "resting_hr_unconfirmed");
+  assert.equal(r.decision.rule_code, "resting_hr_caution_easy");
+  assert.equal(violatesReadingGrammar(r.why), null, r.why);
+});
+
+test("E: one high resting-HR reading its own row cannot vouch for (no floor, no night) is a caution, never rest", (t) => {
+  const today = onTuesday(t);
+  athlete(today);
+  // A phone row: resting HR, no min_hr and no night beside it.
+  db.prepare(`INSERT INTO daily_metrics (source, date, resting_hr) VALUES ('apple', ?, 66)`).run(today);
+  const r = repo.dayRead(today);
+  assert.notEqual(r.kind, "rest", `${r.decision.rule_code}: ${r.why}`);
+  assert.equal(r.signals.morning_dose.basis, "resting_hr_unconfirmed");
 });
 
 // ══ A + B: the incident morning on a stated lifting day ══════════════════════════════
@@ -240,6 +375,9 @@ test("stated lifting day: rest-grade reading after a big endurance day, one low 
   const decision = buildDailySessionDecision(snapshot);
   assert.equal(decision.kind, "train");
   assert.notEqual(decision.caps.intensity, "normal", "no load raises");
+  // One source of truth: the read promised the plan's sets everywhere but the regions
+  // yesterday loaded — the low readiness the dose answered is not a whole-session trim.
+  assert.equal(decision.caps.volume, "normal", `the held dose trims no whole session: ${decision.precedence}`);
   assert.notEqual(decision.reach?.level, "push");
   assert.ok(decision.precedence.includes("held_morning_dose"));
   const loaded = snapshot.muscle_load.filter((m) => m.saturated && m.days_ago <= 1).map((m) => m.group);
@@ -256,7 +394,21 @@ test("E: the same morning with resting HR also past the band after the big day i
   bigDayYesterday(today);
   tonight(today, { ...LOW_MORNING, resting_hr: 64 });
   const r = repo.dayRead(today);
-  assert.notEqual(r.kind, "rest", `${r.decision.rule_code}: ${r.why}`);
+  // A stated lifting day, HRV AND resting HR past the band, a rest-grade reading: two
+  // independent witnesses after the hard day — easy, never a training day, never rest.
+  assert.equal(r.kind, "easy", `${r.decision.rule_code}: ${r.why}`);
+  assert.equal(r.signals.morning_dose.basis, "resting_hr_after_endurance");
+  assert.equal(r.decision.rule_code, "resting_hr_after_endurance_easy", "spoken in its own voice");
+  assert.equal(violatesReadingGrammar(r.why), null, r.why);
+});
+
+test("E: resting HR alone past the band after hard endurance is easy on a stated day too", (t) => {
+  const today = onTuesday(t);
+  athlete(today);
+  bigDayYesterday(today);
+  tonight(today, { hrv_ms: 52, resting_hr: 64, sleep_min: 460, training_readiness: 60 });
+  const r = repo.dayRead(today);
+  assert.equal(r.kind, "easy", `${r.decision.rule_code}: ${r.why}`);
   assert.equal(r.signals.morning_dose.basis, "resting_hr_after_endurance");
 });
 
@@ -352,6 +504,61 @@ test("race morning never reads rest — not off a stacked week, not off a rest-g
   assert.equal(violatesReadingGrammar(r.why), null);
 });
 
+const raceToday = (today) =>
+  repo.setProfile({ endurance_goal: { mode: "race", event: "City Half", date: today, distance_km: 21.1 } });
+
+test("race morning over the resting-HR illness pattern still reads the race, says what the body shows, and lets the start line decide", (t) => {
+  const today = onTuesday(t);
+  athlete(today);
+  raceToday(today);
+  // Nothing hard in the taper; resting HR far above the athlete's band.
+  tonight(today, { hrv_ms: 52, resting_hr: 66, sleep_min: 460, training_readiness: 60 });
+  const r = repo.dayRead(today);
+  assert.equal(r.kind, "train", `${r.decision.rule_code}: ${r.why}`);
+  assert.equal(r.decision.rule_code, "goal_race_day");
+  assert.equal(r.signals.morning_dose.basis, "resting_hr_illness_pattern");
+  assert.match(r.why, /\bresting heart rate\b/i, `it says what the body is showing: ${r.why}`);
+  assert.match(r.why, /\bstart\b/i, `how they feel at the start decides: ${r.why}`);
+  assert.equal(violatesReadingGrammar(r.why), null, r.why);
+  assert.doesNotMatch(r.why, /\d/);
+});
+
+test("race morning: the daily decision composes no lifting card and reports no open lifting caps", async (t) => {
+  const { deterministicComposedSession } = await import("../dist/repo/daily-composition.js");
+  const today = onTuesday(t);
+  athlete(today);
+  raceToday(today);
+  tonight(today, { hrv_ms: 52, resting_hr: 52, sleep_min: 460, training_readiness: 70 });
+  const r = repo.dayRead(today);
+  assert.equal(r.decision.rule_code, "goal_race_day");
+  const snapshot = gatherDailyDecisionSnapshot(today);
+  assert.equal(snapshot.day_read.race_day, true);
+  const decision = buildDailySessionDecision(snapshot);
+  assert.ok(decision.precedence.includes("goal_race_day"), decision.precedence.join(","));
+  assert.ok(
+    !(decision.caps.volume === "normal" && decision.caps.intensity === "normal"),
+    `race day reports no open lifting caps: ${JSON.stringify(decision.caps)}`
+  );
+  assert.notEqual(decision.reach?.level, "push");
+  const card = deterministicComposedSession(decision);
+  assert.equal(card.items.length, 0, "no lifting card on race morning");
+  assert.match(card.name, /\brace\b/i);
+});
+
+test("race morning never overrides the athlete's own low word or a symptom stated today", (t) => {
+  const today = onTuesday(t);
+  athlete(today);
+  raceToday(today);
+  tonight(today, { hrv_ms: 52, resting_hr: 52, sleep_min: 460, training_readiness: 70 });
+  repo.addCheckin(today, { energy: 1 });
+  const word = repo.dayRead(today);
+  assert.notEqual(word.decision.rule_code, "goal_race_day", `${word.decision.rule_code}: ${word.why}`);
+  repo.addCheckin(today, { energy: 4 });
+  repo.reportTrainingSymptom({ area_text: "left calf", onset_on: today });
+  const symptom = repo.dayRead(today);
+  assert.notEqual(symptom.decision.rule_code, "goal_race_day", `${symptom.decision.rule_code}: ${symptom.why}`);
+});
+
 // ══ G: the athlete's own good check-in ═══════════════════════════════════════════════
 
 test("G: a good check-in lifts a readiness-only easy read one step, held, and says the two disagreed", (t) => {
@@ -385,9 +592,9 @@ test("G: the check-in lifts nothing but the readiness score — a short night or
   tonight(today, { hrv_ms: 52, resting_hr: 52, sleep_min: 290, training_readiness: 60 });
   repo.addCheckin(today, { energy: 5, sleep_feel: 4 });
   const short = repo.dayRead(today);
-  // The short night eases the day (through the protect posture, whose sleep constraint
-  // it is); the tap does not lift it.
-  assert.equal(short.kind, "easy", `${short.decision.rule_code}: ${short.why}`);
+  // One short night is the dose (morning-dose.ts, D): the session due keeps its place,
+  // held — the short night's own read, never the tap's.
+  assert.equal(short.decision.rule_code, "short_night_dosed", `${short.decision.rule_code}: ${short.why}`);
   assert.notEqual(short.decision.rule_code, "checkin_lifted_train");
   assert.equal(short.signals.checkin_lift?.applied ?? false, false);
 

@@ -65,6 +65,10 @@ const NAME_STATIONS: ReadonlyArray<{ re: RegExp; implement: StationImplement }> 
   { re: /\bassisted\b.*\b(?:pull[ -]?ups?|chin[ -]?ups?|dips?)\b/, implement: "machine" },
   { re: /\bplate[ -]loaded\b|\bsmith\b/, implement: "machine" },
   { re: /\b(?:pull|chin)[ -]?ups?\b|\bhanging\b|\bdead hang\b|\btoes[ -]to[ -]bar\b/, implement: "pullup_bar" },
+  // A dip on rings hangs from the rings, and a bench (or chair) dip needs no station at
+  // all — only a parallel-bar dip occupies the dip station.
+  { re: /\brings?\b.*\bdips?\b|\bdips?\b.*\brings?\b/, implement: "suspension" },
+  { re: /\b(?:bench|chair|box)[ -]dips?\b|\bdips?\b.*\bbench\b/, implement: "bodyweight" },
   { re: /\bdips?\b/, implement: "dip_station" },
   { re: /\binverted rows?\b/, implement: "rack" },
   { re: /\blandmine\b/, implement: "landmine" },
@@ -82,24 +86,58 @@ const EXTRA_IMPLEMENTS: ReadonlyArray<{ re: RegExp; implement: StationImplement 
   { re: /\bplates?\b/, implement: "plate" },
 ];
 
-// Free-weight lifts whose name, by convention, IS the implement (nobody writes "goblet
-// squat" for a machine). Name fallback only, after every data field.
+// Movements that, by name, ARE a cable-stack movement (nobody does a face pull or a
+// pushdown off a machine of its own): all of them share the one adjustable column.
+const CABLE_BY_NAME: ReadonlyArray<{ re: RegExp; implement: StationImplement }> = [
+  {
+    re: /\bpush[ -]?downs?\b|\bface[ -]?pulls?\b|\bcrossovers?\b|\bstraight[ -]arm pull[ -]?downs?\b|\bpallof\b|\bwood[ -]?chops?\b|\bpull[ -]throughs?\b/,
+    implement: "cable",
+  },
+];
+
+// Movements that, by name, are a selectorized machine of their own.
+const MACHINE_BY_NAME: ReadonlyArray<{ re: RegExp; implement: StationImplement }> = [
+  {
+    re: /\bleg curls?\b|\bleg extensions?\b|\bpec[ -]?deck\b|\bseated calf raises?\b|\bhip (?:abduct|adduct)/,
+    implement: "machine",
+  },
+];
+
+// Free-weight and bodyweight lifts whose name, by convention, IS the implement (nobody
+// writes "goblet squat" for a machine, and a lateral raise or a walking lunge with no
+// implement named is a dumbbell or nothing at all). Name fallback only, after every data
+// field, and never when the name itself says it is done on a station
+// (STATION_WORDS_IN_NAME): a seated, machine, smith, cable or preacher version is not this.
+const STATION_WORDS_IN_NAME = /\b(?:machine|seated|smith|cable|lever|selectori[sz]ed|preacher|scott|spider)\b/;
 const PORTABLE_BY_NAME: ReadonlyArray<{ re: RegExp; implement: StationImplement }> = [
   {
     re: /\bgoblet\b|\bhammer curls?\b|\bconcentration curls?\b|\barnold press\b|\brenegade rows?\b/,
     implement: "dumbbell",
   },
   { re: /\bfarmer'?s? (?:carry|walk)\b|\bsuitcase carry\b/, implement: "dumbbell" },
+  {
+    re: /\b(?:lateral|front|side|y)[ -]raises?\b|\brear[ -]delt (?:raises?|fl(?:y|ys|ies|yes))\b|\breverse fl(?:y|ys|ies|yes)\b|\bfl(?:y|ys|ies|yes)\b|\bbiceps? curls?\b|\bcurls?\b|\bskull[ -]?crushers?\b|\btriceps? (?:extensions?|kick[ -]?backs?)\b|\bkick[ -]?backs?\b|\bshrugs?\b|\bcalf raises?\b|\blunges?\b|\bsplit squats?\b|\bbulgarian\b|\bstep[ -]?ups?\b|\bpullovers?\b|\bsingle[ -]leg (?:rdl|romanian)\b/,
+    implement: "dumbbell",
+  },
+  {
+    re: /\bsit[ -]?ups?\b|\bcrunch(?:es)?\b|\bside plank\b|\bbird[ -]?dogs?\b|\brussian twists?\b|\bmountain climbers?\b|\bburpees?\b|\b(?:air|bodyweight|jump) squats?\b|\bsupermans?\b|\bhollow (?:hold|body)\b|\bv[ -]ups?\b|\bleg raises?\b|\bflutter kicks?\b|\bwall sits?\b|\binchworms?\b|\bjumping jacks?\b|\bbear crawls?\b/,
+    implement: "bodyweight",
+  },
 ];
 
 // The shared classifier first (a "barbell and plates" field is a barbell), the extra
-// implements after it, and the free-weight name conventions last of all.
+// implements after it, and — for a name — the cable, machine and free-weight name
+// conventions last of all.
 function implementFromText(text: string, asName: boolean): StationImplement | null {
   if (!text) return null;
   const inferred = asName ? inferExerciseEquipment(text, null) : inferExerciseEquipment(null, text);
   if (inferred) return inferred;
   for (const row of EXTRA_IMPLEMENTS) if (row.re.test(text)) return row.implement;
-  if (asName) for (const row of PORTABLE_BY_NAME) if (row.re.test(text)) return row.implement;
+  if (!asName) return null;
+  for (const row of CABLE_BY_NAME) if (row.re.test(text)) return row.implement;
+  for (const row of MACHINE_BY_NAME) if (row.re.test(text)) return row.implement;
+  if (STATION_WORDS_IN_NAME.test(text)) return null;
+  for (const row of PORTABLE_BY_NAME) if (row.re.test(text)) return row.implement;
   return null;
 }
 
