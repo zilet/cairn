@@ -227,7 +227,11 @@ describe("installScript", { concurrency: true }, () => {
       assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
 
       // A re-run without flags keeps the chosen exposure and port.
-      const third = await run(["--dry-run", `--dir=${target}`, "--no-updater"]);
+      // (Both dry runs write nothing: start them together.)
+      const [third, clash] = await Promise.all([
+        run(["--dry-run", `--dir=${target}`, "--no-updater"]),
+        run(["--dry-run", `--dir=${target}`, "--name=other", "--no-updater"]),
+      ]);
       assert.equal(third.code, 0, third.all);
       assert.match(third.out, /^CAIRN_BIND_HOST=0\.0\.0\.0$/m);
       assert.match(third.out, /^CAIRN_AUTH_TOKEN=<kept/m);
@@ -235,7 +239,6 @@ describe("installScript", { concurrency: true }, () => {
       assert.doesNotMatch(third.all, /user-art-key|[0-9a-f]{64}/);
 
       // Another instance name cannot silently take over this directory's volumes.
-      const clash = await run(["--dry-run", `--dir=${target}`, "--name=other", "--no-updater"]);
       assert.notEqual(clash.code, 0);
       assert.match(clash.err, /already holds the Cairn instance 'cairn'/);
     }));
@@ -244,12 +247,15 @@ describe("installScript", { concurrency: true }, () => {
     withTempDir(async (dir) => {
       const target = path.join(dir, "cairn");
       assert.equal((await run(["--no-start", "--yes", `--dir=${target}`, "--no-updater"])).code, 0);
-      const r = await run(["uninstall", "--purge", "--yes", `--dir=${target}`]);
+      // Refusals and a dry run change nothing: start the three together.
+      const [r, wrong, plan] = await Promise.all([
+        run(["uninstall", "--purge", "--yes", `--dir=${target}`]),
+        run(["uninstall", "--purge", "--yes", "--confirm-purge=nope", `--dir=${target}`]),
+        run(["uninstall", "--dry-run", `--dir=${target}`]),
+      ]);
       assert.notEqual(r.code, 0);
       assert.match(r.err, /--confirm-purge=cairn/);
-      const wrong = await run(["uninstall", "--purge", "--yes", "--confirm-purge=nope", `--dir=${target}`]);
       assert.notEqual(wrong.code, 0);
-      const plan = await run(["uninstall", "--dry-run", `--dir=${target}`]);
       assert.equal(plan.code, 0, plan.all);
       assert.match(plan.out, /keep the data volumes/);
       assert.ok(fs.existsSync(path.join(target, ".env")), "nothing was removed");
