@@ -5,15 +5,22 @@
 // and in `npm run release:check` rather than as a fast deterministic unit gate. It catches the runtime class that static checks
 // cannot: syntax errors, broken script order, missing globals, and route boot
 // failures in a real browser.
+import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { availableParallelism, tmpdir } from "node:os";
 import path from "node:path";
 import { Cdp, launchChrome, stopChrome, tail } from "./cdp-chrome.mjs";
-import { serverEntry, sleep, withServer } from "./smoke-server.mjs";
+import { serverEntry, sleep, startBuiltServer, stopServer } from "./smoke-server.mjs";
 
 const SMOKE_NAME = "browser";
 const NAV_TIMEOUT_MS = 20000;
-const SETTLE_MS = 600;
+// After hydration a page is "settled" once no request has been in flight for
+// SETTLE_QUIET_MS (capped at SETTLE_MAX_MS: a page that polls never goes quiet).
+// This replaced a fixed 600 ms sleep: it waits for the late lazy-bundle and data
+// fetches it existed to catch, and no longer idles when there are none.
+const SETTLE_QUIET_MS = 150;
+const SETTLE_MAX_MS = 3000;
+const POLL_MS = 25;
 const WORKFLOW_COUNT = 14;
 
 // Five homes (v2 wave 5): Today / Train / Horizon / Ask / You. `tab` is the VIEW
@@ -122,9 +129,18 @@ function lazyBundlesFor(route) {
   return [];
 }
 
+// Units run concurrently, so each one's output is buffered in its own list and
+// printed as one block when it finishes (live when running serially).
+const unitOutput = new AsyncLocalStorage();
+function emit(line) {
+  const sink = unitOutput.getStore();
+  if (sink) sink.lines.push(line);
+  else console.log(line);
+}
+
 function ok(cond, label, detail) {
   if (!cond) throw new Error(`assertion failed: ${label}${detail ? ` - ${detail}` : ""}`);
-  console.log(`  OK ${label}`);
+  emit(`  OK ${label}`);
 }
 
 function createSmokeAgentsConfig() {
@@ -159,11 +175,28 @@ function createSmokeAgentsConfig() {
   return { dir, file };
 }
 
-async function newPage(chrome) {
-  const res = await fetch(`http://127.0.0.1:${chrome.port}/json/new?${encodeURIComponent("about:blank")}`, { method: "PUT" });
-  ok(res.ok, "Chrome created a fresh page", `status ${res.status}`);
-  const page = await res.json();
-  const cdp = new Cdp(page.webSocketDebuggerUrl);
+// One browser context per unit: its own cookies, storage, HTTP cache and service
+// worker, so concurrent units cannot see (or poison) each other's client state.
+async function openContext(chrome) {
+  const browser = new Cdp(chrome.browserWsUrl);
+  const { browserContextId } = await browser.command("Target.createBrowserContext", { disposeOnDetach: true });
+  return {
+    browser,
+    browserContextId,
+    async dispose() {
+      try { await browser.command("Target.disposeBrowserContext", { browserContextId }); } catch {}
+      browser.close();
+    },
+  };
+}
+
+async function newPage(chrome, context) {
+  const { targetId } = await context.browser.command("Target.createTarget", {
+    url: "about:blank",
+    browserContextId: context.browserContextId,
+  });
+  if (!targetId) throw new Error("assertion failed: Chrome created a fresh page - no targetId");
+  const cdp = new Cdp(`ws://127.0.0.1:${chrome.port}/devtools/page/${targetId}`);
   await cdp.command("Page.enable");
   await cdp.command("Runtime.enable");
   await cdp.command("Network.enable");
@@ -174,7 +207,38 @@ async function newPage(chrome) {
     deviceScaleFactor: 2,
     mobile: true,
   });
+  trackNetwork(cdp);
   return cdp;
+}
+
+// Counts requests in flight (long-lived streams excluded) so a page can be awaited
+// until it goes quiet instead of slept on.
+function trackNetwork(cdp) {
+  const live = new Set();
+  const net = { inflight: 0, lastActivity: Date.now() };
+  const skip = new Set(["EventSource", "WebSocket", "Ping", "Preflight"]);
+  cdp.on((msg) => {
+    const params = msg.params || {};
+    if (msg.method === "Network.requestWillBeSent" && !skip.has(params.type)) {
+      live.add(params.requestId);
+    } else if (msg.method === "Network.loadingFinished" || msg.method === "Network.loadingFailed") {
+      live.delete(params.requestId);
+    } else if (msg.method !== "Network.responseReceived") {
+      return;
+    }
+    net.inflight = live.size;
+    net.lastActivity = Date.now();
+  });
+  cdp.net = net;
+}
+
+async function settle(cdp) {
+  const net = cdp.net;
+  const deadline = Date.now() + SETTLE_MAX_MS;
+  while (Date.now() < deadline) {
+    if (net.inflight === 0 && Date.now() - net.lastActivity >= SETTLE_QUIET_MS) return;
+    await sleep(POLL_MS);
+  }
 }
 
 async function evaluate(cdp, expression) {
@@ -202,7 +266,7 @@ async function waitForHydration(cdp, expectedTab) {
       };
     })()`);
     if (last && last.tab === expectedTab && last.viewTextLength > 0) return last;
-    await sleep(100);
+    await sleep(POLL_MS);
   }
   throw new Error(`route did not hydrate as ${expectedTab}; last state ${JSON.stringify(last)}`);
 }
@@ -216,7 +280,7 @@ async function waitForCondition(cdp, label, expression, timeoutMs = NAV_TIMEOUT_
       ok(true, label);
       return last;
     }
-    await sleep(100);
+    await sleep(POLL_MS);
   }
   throw new Error(`${label} did not complete; last state ${JSON.stringify(last)}`);
 }
@@ -354,7 +418,7 @@ async function navigateAndHydrate(cdp, base, path, tab) {
   ok(!nav.errorText, `navigate ${path}`, nav.errorText || "");
   await loaded;
   await waitForHydration(cdp, tab);
-  await sleep(SETTLE_MS);
+  await settle(cdp);
 }
 
 // The idle warm-up executes every lazy bundle ~1.5 s after load, so the route pass
@@ -1485,6 +1549,41 @@ async function smokeSettingsAgentsSourcesAutomation(cdp, base) {
   }
 }
 
+function parseArgs(argv) {
+  const args = { jobs: Number(process.env.SMOKE_JOBS) || 0, timings: process.env.SMOKE_TIMINGS === "1" };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--serial") args.jobs = 1;
+    else if (a === "--timings") args.timings = true;
+    else if (a === "--jobs") args.jobs = Number(argv[++i]);
+    else if (a.startsWith("--jobs=")) args.jobs = Number(a.slice(7));
+    else throw new Error(`unknown option ${a} (expected --jobs N, --serial, --timings)`);
+  }
+  if (!args.jobs) args.jobs = Math.min(8, Math.max(2, Math.floor(availableParallelism() / 2)));
+  if (!Number.isInteger(args.jobs) || args.jobs < 1) throw new Error("--jobs needs a positive integer");
+  return args;
+}
+
+// A unit is one route or one workflow. `server: "shared"` units only read, so they
+// all run against one server. `server: "own"` units write server state (a logged
+// set, a saved setting, a chat turn, an edited plan/record/family row), so each
+// boots its own server on its own port with its own temp DB: they can neither
+// disturb the readers nor each other, and each starts from the pristine demo seed.
+const workflows = [
+  { name: "cold tab navigation", server: "shared", run: smokeColdTabNavigation },
+  { name: "Session add-exercise", server: "own", run: smokeTodayAddExercise },
+  { name: "chat attachment focus", server: "shared", run: smokeChatAttachmentFocus },
+  { name: "chat send/stream/reconnect", server: "own", run: smokeChatSendStreamReconnect },
+  { name: "settings data controls", server: "own", run: smokeSettingsDataControls },
+  { name: "progress segment navigation", server: "shared", run: smokeProgressSegmentNavigation },
+  { name: "plan segment navigation", server: "shared", run: smokePlanSegmentNavigation },
+  { name: "health inner navigation", server: "shared", run: smokeHealthInnerNavigation },
+  { name: "family CRUD", server: "own", run: smokeFamilyCrud },
+  { name: "plan editor save and meal recipe", server: "own", run: smokePlanEditorSaveAndMealRecipe },
+  { name: "health record actions", server: "own", run: smokeHealthRecordActions },
+  { name: "settings agents/sources/automation", server: "own", run: smokeSettingsAgentsSourcesAutomation },
+];
+
 if (!existsSync(serverEntry)) {
   console.error(`x ${serverEntry} is missing - run \`npm run build\` first (presmoke:browser does this).`);
   process.exit(1);
@@ -1497,29 +1596,91 @@ if (typeof WebSocket !== "function") {
 
 let exitCode = 1;
 let chrome = null;
-let cdp = null;
 let smokeAgents = null;
+let sharedServer = null;
+const ownServers = new Set();
+const failures = [];
+const timings = [];
+const started = Date.now();
 try {
+  const args = parseArgs(process.argv.slice(2));
+  const serverEnv = () => ({ AGENTS_CONFIG: smokeAgents.file, CAIRN_SEED_DEMO: "1" });
   smokeAgents = createSmokeAgentsConfig();
-  chrome = await launchChrome();
-  console.log(`Cairn browser smoke: using ${chrome.bin}`);
-  cdp = await newPage(chrome);
-  await withServer({ label: SMOKE_NAME, authToken: "", portOffset: 2, extraEnv: { AGENTS_CONFIG: smokeAgents.file, CAIRN_SEED_DEMO: "1" } }, async (ctx) => {
-    for (const route of routes) await smokeRoute(cdp, ctx.base, route);
-    await smokeColdTabNavigation(cdp, ctx.base);
-    await smokeTodayAddExercise(cdp, ctx.base);
-    await smokeChatAttachmentFocus(cdp, ctx.base);
-    await smokeChatSendStreamReconnect(cdp, ctx.base);
-    await smokeSettingsDataControls(cdp, ctx.base);
-    await smokeProgressSegmentNavigation(cdp, ctx.base);
-    await smokePlanSegmentNavigation(cdp, ctx.base);
-    await smokeHealthInnerNavigation(cdp, ctx.base);
-    await smokeFamilyCrud(cdp, ctx.base);
-    await smokePlanEditorSaveAndMealRecipe(cdp, ctx.base);
-    await smokeHealthRecordActions(cdp, ctx.base);
-    await smokeSettingsAgentsSourcesAutomation(cdp, ctx.base);
-  });
-  console.log(`\nBrowser smoke OK - ${routes.length} route(s) and ${WORKFLOW_COUNT} workflow(s) loaded without runtime errors.`);
+  let portOffset = 2;
+  const bootServer = async (label) => {
+    const offset = portOffset;
+    portOffset += 10; // SMOKE_PORT mode: a retry walks up to 5 ports from its offset.
+    const ctx = await startBuiltServer({ label, authToken: "", portOffset: offset, extraEnv: serverEnv() });
+    emit(`Cairn smoke: ${ctx.label} server up on ${ctx.base} (temp DB at ${ctx.dir})`);
+    return ctx;
+  };
+  // Chrome and the shared server start together.
+  [chrome, sharedServer] = await Promise.all([
+    launchChrome().then(async (c) => {
+      c.browserWsUrl = (await (await fetch(`http://127.0.0.1:${c.port}/json/version`)).json()).webSocketDebuggerUrl;
+      return c;
+    }),
+    bootServer("browser"),
+  ]);
+  console.log(`Cairn browser smoke: using ${chrome.bin} (${args.jobs} job${args.jobs === 1 ? "" : "s"})`);
+  console.log("  OK Chrome created a fresh page");
+
+  const units = [
+    ...workflows.filter((w) => w.server === "own"),
+    ...workflows.filter((w) => w.server === "shared"),
+    ...routes.map((route) => ({ name: route.path, server: "shared", run: (cdp, base) => smokeRoute(cdp, base, route) })),
+  ];
+
+  const runUnit = async (unit) => {
+    const sink = { lines: [] };
+    const t0 = Date.now();
+    let own = null;
+    let context = null;
+    let cdp = null;
+    try {
+      await unitOutput.run(args.jobs === 1 ? undefined : sink, async () => {
+        own = unit.server === "own" ? await bootServer(`browser-${unit.name.replace(/[^a-z0-9]+/gi, "-").slice(0, 24)}`) : null;
+        if (own) ownServers.add(own);
+        context = await openContext(chrome);
+        cdp = await newPage(chrome, context);
+        await unit.run(cdp, (own || sharedServer).base);
+      });
+    } catch (error) {
+      error.unit = unit.name;
+      error.serverLog = (own || sharedServer).serverLog();
+      failures.push(error);
+      sink.lines.push(`  x ${unit.name}: ${error.message}`);
+      if (args.jobs === 1) console.log(`  x ${unit.name}: ${error.message}`);
+    } finally {
+      if (cdp) cdp.close();
+      if (context) await context.dispose();
+      if (own) {
+        await stopServer(own);
+        ownServers.delete(own);
+      }
+      const ms = Date.now() - t0;
+      timings.push({ name: unit.name, ms });
+      if (args.jobs !== 1) console.log(`${unit.server === "own" ? "workflow" : "check"}: ${unit.name} (${(ms / 1000).toFixed(1)}s)\n${sink.lines.join("\n")}`);
+    }
+  };
+
+  // A pool of `jobs` workers draining the queue (writers first: they are the longest).
+  const queue = units.slice();
+  await Promise.all(Array.from({ length: Math.min(args.jobs, queue.length) }, async () => {
+    for (let unit = queue.shift(); unit; unit = queue.shift()) await runUnit(unit);
+  }));
+
+  if (args.timings) {
+    console.log("\nTimings (slowest first):");
+    for (const t of timings.sort((x, y) => y.ms - x.ms)) console.log(`  ${String(t.ms).padStart(6)} ms  ${t.name}`);
+  }
+  if (failures.length) {
+    const first = failures[0];
+    const err = new Error(failures.map((f) => `${f.unit}: ${f.message}`).join("\n"));
+    err.serverLog = first.serverLog;
+    throw err;
+  }
+  console.log(`\nBrowser smoke OK - ${routes.length} route(s) and ${WORKFLOW_COUNT} workflow(s) loaded without runtime errors. (${((Date.now() - started) / 1000).toFixed(1)}s)`);
   exitCode = 0;
 } catch (error) {
   console.error(`\nx Browser smoke FAILED: ${error.message}`);
@@ -1536,7 +1697,7 @@ try {
   if (smokeAgents?.dir) {
     try { rmSync(smokeAgents.dir, { recursive: true, force: true }); } catch {}
   }
-  if (cdp) cdp.close();
+  await Promise.allSettled([...ownServers, sharedServer].filter(Boolean).map((ctx) => stopServer(ctx)));
   await stopChrome(chrome);
 }
 
