@@ -7,15 +7,20 @@
 //
 // chatTurns.ts re-exports every public name below, so existing importers are unchanged.
 import {
+  chatMessageBuildsTodaySession,
   chatMessageIsNarrative,
   chatMessageRequestsCoaching,
   chatMessageStartsSession,
+  coachMessageIsForAnotherDay,
+  coachOfferAboutTodaySession,
   foodIntakeNegated,
   foodLogDoubtCue,
   hasFoodEvidence,
   mealHeadingCount,
+  messageHasBareStart,
   messageNeedsPriorTurn,
   readsAsMealList,
+  sessionAskWithoutFood,
   type ChatRoutingDecision,
 } from "./chatRouting.js";
 import { foodRowsFromWords, mealLabelLead } from "./foodCapture.js";
@@ -163,8 +168,10 @@ const FOOD_CAPTURE_LOG_RE = /^log\b\s*:?\s*/i;
 export function frameFoodCaptureMessage(text: string | null | undefined, hasImage: boolean): string {
   const trimmed = String(text ?? "").trim();
   // "Open my today's training day" typed into the food box is not a meal: it goes to the
-  // coach in the athlete's own words, never framed as a food log (2026-11-07).
-  if (!hasImage && chatMessageStartsSession(trimmed)) return trimmed;
+  // coach in the athlete's own words, never framed as a food log (2026-11-07). A meal
+  // typed beside the ask ("chicken and rice, start my workout") is still framed: the
+  // router logs it on the coach turn that answers the ask.
+  if (!hasImage && sessionAskWithoutFood(trimmed)) return trimmed;
   // A leading "log" / "log food" the athlete typed is not doubled.
   const words = trimmed.replace(FOOD_CAPTURE_LOG_FOOD_RE, "").replace(FOOD_CAPTURE_LOG_RE, "").trim();
   if (words) return `${FOOD_CAPTURE_FRAME}${words}`;
@@ -673,58 +680,38 @@ export function hasExplicitPlanEditIntentInContext(
   return priorAssistantDrafted || readsAsSessionProposal(priorAssistantMessage);
 }
 
-// A session for TODAY, in the athlete's own words: "make it a full upper body today",
-// "give me a longer session today", "combine yesterday's and today's plan", "can you make
-// today's session longer?". It only OFFERS today_session (and start_session beside it) to
-// the coach (the `todaySession` gate in chatTurns.ts chatActionGates), and a model-emitted
-// today_session replaces the day's unstarted card with no further confirmation, so the
-// gate opens on an ASK for a session to be BUILT or CHANGED for today: a build/change verb
-// that governs a session noun ("make today's session longer"), or "I want / need a <…>
-// session". It stays shut for rest and skip intents, how a session felt, logging, and
-// questions about what today holds (2026-11-12: "my legs are sore today, I need a rest"
-// and "push today felt heavy, I need to log it" opened it). "Let's start today's session"
-// is NOT this ask: opening what is there is the `startSession` gate's alone
-// (hasExplicitStartSessionIntent), and never licenses replacing the day.
-const TODAY_SESSION_SCOPE_RE = /\b(?:today(?:'s)?|todays|tonight|this\s+(?:morning|afternoon|evening)|right\s+now)\b/i;
-const TODAY_SESSION_NOUN = String.raw`(?:sessions?|workouts?|training(?:\s+day)?|lift(?:ing)?|gym\s+session|plan|day|card|upper(?:[- ]body)?|lower(?:[- ]body)?|full[- ]body|push|pull|legs?|leg\s+day|exercises?)`;
-// The verb heads its clause's object: at most a few words (no clause break) between it
-// and the session noun — "make it a full upper body", "add some arm work to today's session".
-const TODAY_SESSION_GOVERNED = String.raw`(?:\s+(?:me|us))?(?:\s+[\w'-]+){0,6}?\s+${TODAY_SESSION_NOUN}\b`;
-const TODAY_SESSION_BUILD_RE = new RegExp(
-  String.raw`\b(?:combine|merge|build|make(?!\s+sure)|give|create|put\s+together|design|write|set\s+up|prep(?:are)?|turn|swap|switch|change|lengthen|extend|shorten|add|drop|remove|lighten|trim|rework|redo|rebuild)${TODAY_SESSION_GOVERNED}`,
-  "i"
-);
-// "I want / need a longer session today", "let's do upper body today".
-const TODAY_SESSION_WANT_RE = new RegExp(
-  String.raw`\b(?:i\s+(?:want|need|'d\s+like|would\s+like)\s+(?:a|an|some)|let'?s\s+(?:do|go(?:\s+with)?))(?:\s+[\w'-]+){0,3}?\s+${TODAY_SESSION_NOUN}\b`,
-  "i"
-);
-// The polite-question form of the same ask: "can you make…?", "could I get a longer session today?".
-const TODAY_SESSION_POLITE_RE =
-  /^(?:(?:can|could|would|will)\s+you(?:\s+please)?|(?:can|could|may)\s+i\s+(?:get|have))\s+/i;
-// Not a build: rest and skip, a log, a "don't".
-const TODAY_SESSION_REST_RE =
-  /\bskip(?:s|ping|ped)?\b|\brest\s+day\b|\b(?:a|to|some)\s+rest\b(?!\s+of)|\bday\s+off\b|\bsit\s+(?:it|this|today)\s+out\b|\btake\s+it\s+easy\b/i;
-const TODAY_SESSION_LOG_RE = /\b(?:log|logged|logging|record|recorded|track|tracked)\b/i;
-// A meal plan for today is food, not a training session.
-const TODAY_SESSION_FOOD_RE = /\b(?:meals?|food|diet|nutrition|calories|macros|breakfast|lunch|dinner|snacks?)\b/i;
-const TODAY_SESSION_NEGATED_RE =
-  /\b(?:don'?t|do\s+not|never|no\s+need\s+to|stop)\s+(?:\w+\s+)?(?:combine|merge|build|make|create|change|swap|switch|add|drop|remove|shorten|lengthen|touch)\b/i;
+// Today's session in the athlete's own words: the `startSession` gate (open what Today
+// has — "let's start today's session", "open my workout") and the `todaySession` gate
+// (build or change it — "make it a full upper body today", "can you make today's session
+// longer?"). Both are read by ONE positive reading in chatRouting.ts ("Session asks":
+// whose session, which day, what object, not negated), which the router also uses to
+// put the turn on the coach lane. "Let's start today's session" is never a build:
+// opening what is there never licenses replacing the day.
 
-// The coach's own offer about today's session ("Want me to set that up as today's
-// session?", "Want me to open today's session?") — the question a plain go-ahead ("yes,
-// set it up", "go ahead") answers. Which offer it was decides what the go-ahead opens:
-// an offer to OPEN what is there (open / start / pull up …, and nothing built or changed)
-// opens only start_session; any other offer about today's session opens today_session.
-const COACH_OFFER_HEAD_RE = /^.*?\b(?:want\s+me\s+to|shall\s+i|should\s+i|i\s+can)\b/i;
-const COACH_TODAY_SESSION_OFFER_RE =
-  /\b(?:want\s+me\s+to|shall\s+i|should\s+i|i\s+can)\b[^?\n]{0,80}\b(?:today'?s|todays|for\s+today)\b[^?\n]{0,30}?(?:\bsessions?\b|\bworkouts?\b|\?)/gi;
-const COACH_OPEN_OFFER_RE =
-  /\b(?:want\s+me\s+to|shall\s+i|should\s+i|i\s+can)\s+(?:(?:go\s+ahead\s+and|just)\s+)?(?:open|start|begin|pull\s+up|bring\s+up|launch|kick\s+off)\s+(?:up\s+)?(?:[\w'-]+\s+){0,3}?(?:sessions?|workouts?|training(?:\s+day)?)\b[^?\n]{0,60}/gi;
-const COACH_OPEN_VERB_RE =
-  /^\s*(?:(?:go\s+ahead\s+and|just)\s+)?(?:open|start|begin|pull\s+up|bring\s+up|launch|kick\s+off)\b/i;
-const COACH_BUILD_WORDS_RE =
-  /\b(?:set\s+(?:\w+\s+)?up|build|make|swap|switch|change|combine|merge|put\s+together|create|design|rework|redo|rebuild|lighten|shorten|lengthen|extend|trim|add|drop|remove|replace|turn)\b/i;
+/** The athlete asks for today's session to be BUILT or CHANGED (the `todaySession` gate). */
+export function hasExplicitTodaySessionIntent(message: string | null | undefined): boolean {
+  return chatMessageBuildsTodaySession(message);
+}
+
+/**
+ * The athlete asks to START or OPEN today's session (the `startSession` gate): "let's start
+ * today's session", "open my workout", or a bare "…and let's start" beside a build ask.
+ * Opening only — it never licenses a new session.
+ */
+export function hasExplicitStartSessionIntent(message: string | null | undefined): boolean {
+  if (chatMessageStartsSession(message)) return true;
+  return messageHasBareStart(message) && chatMessageBuildsTodaySession(message);
+}
+
+/** The coach's previous message offered to set up / build / change today's session (not merely open it). */
+export function coachOfferedTodaySession(priorCoachMessage: string | null | undefined): boolean {
+  return coachOfferAboutTodaySession(priorCoachMessage) === "build";
+}
+
+/** The coach's previous message offered only to OPEN today's session ("Want me to open today's session?"). */
+export function coachOfferedToOpenTodaySession(priorCoachMessage: string | null | undefined): boolean {
+  return coachOfferAboutTodaySession(priorCoachMessage) === "open";
+}
 
 // "Want me to open it?" — an open offer whose object is only a pronoun. It is the open
 // the go-ahead answers unless the same message laid a session out (then that session is
@@ -732,96 +719,11 @@ const COACH_BUILD_WORDS_RE =
 const COACH_OPEN_IT_OFFER_RE =
   /\b(?:want\s+me\s+to|shall\s+i|should\s+i)\s+(?:(?:go\s+ahead\s+and|just)\s+)?(?:open|start|begin|pull\s+up|bring\s+up|launch|kick\s+off)\s+(?:it|that|this)(?:\s+up)?(?:\s+for\s+you)?\s*\?/i;
 
-function coachTodaySessionOffer(priorCoachMessage: string | null | undefined): "build" | "open" | null {
-  const text = String(priorCoachMessage ?? "").replace(/[‘’]/g, "'");
-  const offers = [...text.matchAll(COACH_TODAY_SESSION_OFFER_RE), ...text.matchAll(COACH_OPEN_OFFER_RE)].map((m) =>
-    m[0].replace(COACH_OFFER_HEAD_RE, "")
-  );
-  if (!offers.length) return null;
-  const openOnly = (offered: string) => COACH_OPEN_VERB_RE.test(offered) && !COACH_BUILD_WORDS_RE.test(offered);
-  return offers.every(openOnly) ? "open" : "build";
-}
-
-/** The coach's previous message offered to set up / build / change today's session (not merely open it). */
-export function coachOfferedTodaySession(priorCoachMessage: string | null | undefined): boolean {
-  return coachTodaySessionOffer(priorCoachMessage) === "build";
-}
-
-/** The coach's previous message offered only to OPEN today's session ("Want me to open today's session?"). */
-export function coachOfferedToOpenTodaySession(priorCoachMessage: string | null | undefined): boolean {
-  return coachTodaySessionOffer(priorCoachMessage) === "open";
-}
-
-// "…and let's start", "let's get started": a start with no session noun of its own. Read
-// only BESIDE a build ask, where it says the session being built is for right now.
-const SESSION_BARE_START_RE =
-  /(?:^|[.!?;,\n]\s*|\b(?:and|then|so)\s+)(?:(?:let'?s|time\s+to|i'?m\s+ready\s+to)\s+(?:start|begin|get\s+(?:started|going)|kick\s+(?:it\s+)?off)(?:\s+(?:it|(?:my|the|this|our|today'?s)\s+(?:session|workout|training)))?|let'?s\s+go)\b\s*(?:[.!?]|$|now\b|right\s+away\b)/i;
-// A day other than today named in the same breath: the start is not the build's date.
-const OTHER_DAY_RE =
-  /\b(?:tomorrow|yesterday|tonight\s+instead|next\s+(?:week|session|time)|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
-
-// The build ask's words, before any today scope is required.
-function todaySessionBuildAsk(raw: string, opts: { requireScope: boolean }): boolean {
-  // "Can you make today's session longer?" is the ask itself, politely; any other
-  // question ("what is today's session?", "why did you make it so long?") is not.
-  const polite = TODAY_SESSION_POLITE_RE.test(raw);
-  if (!polite && isLeadingQuestion(raw)) return false;
-  const text = polite
-    ? raw.replace(TODAY_SESSION_POLITE_RE, (m) => (/\bi\s+(?:get|have)\s+$/i.test(m) ? "give me " : ""))
-    : raw;
-  if (opts.requireScope && !TODAY_SESSION_SCOPE_RE.test(text)) return false;
-  if (
-    TODAY_SESSION_REST_RE.test(text) ||
-    TODAY_SESSION_LOG_RE.test(text) ||
-    TODAY_SESSION_NEGATED_RE.test(text) ||
-    TODAY_SESSION_FOOD_RE.test(text)
-  ) {
-    return false;
-  }
-  return TODAY_SESSION_BUILD_RE.test(text) || TODAY_SESSION_WANT_RE.test(text);
-}
-
-function normalizedAsk(message: string | null | undefined): string {
-  return String(message ?? "")
-    .replace(/[‘’]/g, "'")
-    .trim();
-}
-
-// A build ask with a bare start beside it and no other day named ("build me a longer upper
-// session and let's start"): the start is the today scope.
-function buildWithBareStart(raw: string): boolean {
-  return (
-    SESSION_BARE_START_RE.test(raw) && !OTHER_DAY_RE.test(raw) && todaySessionBuildAsk(raw, { requireScope: false })
-  );
-}
-
-/** The athlete asks for today's session to be BUILT or CHANGED (the `todaySession` gate). */
-export function hasExplicitTodaySessionIntent(message: string | null | undefined): boolean {
-  const raw = normalizedAsk(message);
-  if (!raw) return false;
-  if (todaySessionBuildAsk(raw, { requireScope: true })) return true;
-  // "Make it a full upper body and let's start my workout": the start clause dates it.
-  if (chatMessageStartsSession(raw) && !OTHER_DAY_RE.test(raw) && todaySessionBuildAsk(raw, { requireScope: false })) {
-    return true;
-  }
-  return buildWithBareStart(raw);
-}
-
-/**
- * The athlete asks to START or OPEN today's session (the `startSession` gate): "let's start
- * today's session", "open my workout" (chatRouting.ts chatMessageStartsSession), or a bare
- * "…and let's start" beside a build ask. Opening only — it never licenses a new session.
- */
-export function hasExplicitStartSessionIntent(message: string | null | undefined): boolean {
-  const raw = normalizedAsk(message);
-  if (!raw) return false;
-  return chatMessageStartsSession(raw) || buildWithBareStart(raw);
-}
-
 /**
  * A go-ahead ("yes, set it up", "go ahead") read against the coach's message before it:
- * "build" after the coach laid out a session or offered to set one up as today's, "open"
- * after the coach only offered to open what is there, else null.
+ * "build" after the coach laid out a session for today or offered to set one up as
+ * today's, "open" after the coach only offered to open today's own session, else null. A
+ * coach message about another day or another person is no offer about today's session.
  */
 export function todaySessionGoAhead(
   message: string | null | undefined,
@@ -831,12 +733,15 @@ export function todaySessionGoAhead(
   // A plain "yes" is enough to OPEN what is there (nothing is built or replaced); a build
   // still needs the apply-shaped go-ahead ("yes, set it up", "go ahead").
   if (!applyShaped && !carriesDriveAffirmation(message)) return null;
-  const offer = coachTodaySessionOffer(priorCoachMessage);
+  const offer = coachOfferAboutTodaySession(priorCoachMessage);
   if (offer === "open") return "open";
   if (!applyShaped) return null;
-  if (offer === "build" || readsAsSessionProposal(priorCoachMessage)) return "build";
+  if (offer === "build") return "build";
+  if (coachMessageIsForAnotherDay(priorCoachMessage)) return null;
+  if (readsAsSessionProposal(priorCoachMessage)) return "build";
   return COACH_OPEN_IT_OFFER_RE.test(String(priorCoachMessage ?? "").replace(/[‘’]/g, "'")) ? "open" : null;
 }
+
 
 // A run prescription is durable training state, so the athlete's own words are what
 // authorize writing it directly (explicit_user_request).

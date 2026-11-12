@@ -25,8 +25,11 @@
 //   - the athlete's unstarted chosen card that holds work (manual_plan, agent_suggest,
 //     itemful athlete_override — open-session.ts unstartedChosenCard) is never taken by
 //     an adaptive replace nor by an EMPTY override replace (the outbox retry): both answer
-//     `daily_session_active_changed` with it as the owner. An ITEMFUL override replace —
-//     the athlete writing a new session, chat's today_session included — replaces it.
+//     `daily_session_active_changed` with it as the owner. The empty override also yields
+//     to an adaptive card the athlete trained on by choice (review 3); the adaptive request
+//     re-takes that one. An ITEMFUL override replace — the athlete writing a new session,
+//     chat's today_session included — replaces it.
+//   - "started" is the ONE started test (session-started.ts), never a set count alone.
 //
 // Axes (generated, not hand-listed):
 //   owner state  — none · a legacy session row (no composition) unstarted / started /
@@ -57,6 +60,7 @@
 import assert from "node:assert/strict";
 import { dayCoachRouter } from "../dist/routes/day-coach.js";
 import { previewAdaptiveDailySessionUseCase } from "../dist/domain/training/adaptive-session-use-case.js";
+import { SESSION_STARTED_COUNTS, sessionStarted } from "../dist/repo/session-started.js";
 import { db, repo } from "./_seed.js";
 
 export const DATE = "2032-06-08";
@@ -82,8 +86,13 @@ const SOURCES = ["adaptive_plan", "manual_plan", "agent_suggest", "athlete_overr
 // The request axis adds the EMPTY override — the "Open session" door, and the client's
 // outbox retry that forces replace:true on it — beside the four stored sources.
 const REQUEST_SOURCES = [...SOURCES, "athlete_override_empty"];
-// The athlete's chosen card that holds work (open-session.ts compositionIsItemfulChoice).
-const CHOSEN_ITEMFUL = new Set(["manual_plan", "agent_suggest", "override_items"]);
+// The athlete's chosen card that holds work (open-session.ts compositionIsItemfulChoice),
+// per replacer: an adaptive replace re-takes its own train-by-choice card, an EMPTY
+// override replace (authoring nothing) yields to it as to every other chosen card.
+const CHOSEN_ITEMFUL = {
+  adaptive_plan: new Set(["manual_plan", "agent_suggest", "override_items"]),
+  athlete_override_empty: new Set(["manual_plan", "agent_suggest", "override_items", "adaptive_choice"]),
+};
 
 export function chosenCard(name) {
   return {
@@ -311,15 +320,12 @@ export async function runOwnerState(state, { onCell, violations } = {}) {
     before != null
       ? Number(before.session_id)
       : Number(db.prepare(`SELECT MIN(id) AS id FROM sessions WHERE date = ?`).get(DATE).id) || null;
+  // The owner's session row with the counts the ONE started test reads (session-started.ts):
+  // sets, notes, feedback, a duration, pain answers, a linked watch activity — never sets alone.
   const ownerSession = ownerSessionId
-    ? db
-        .prepare(
-          `SELECT s.*, (SELECT COUNT(*) FROM logged_sets l WHERE l.session_id = s.id) AS set_count
-             FROM sessions s WHERE s.id = ?`
-        )
-        .get(ownerSessionId)
+    ? db.prepare(`SELECT s.*, ${SESSION_STARTED_COUNTS} FROM sessions s WHERE s.id = ?`).get(ownerSessionId)
     : null;
-  const ownerStarted = Number(ownerSession?.set_count ?? 0) > 0;
+  const ownerStarted = ownerSession ? sessionStarted(ownerSession) : false;
   const ownerFinished = ownerSession?.finished_at != null;
   const countBefore = sessionCount();
   // The owner's own record — logged sets, notes, skips — as it stood before every cell.
@@ -340,10 +346,10 @@ export async function runOwnerState(state, { onCell, violations } = {}) {
   const recordBefore = ownerRecord();
   // The athlete's own chosen card holding work, nobody has lived on it (item 7 of the
   // 2026-11-12 review): a replace that authors nothing of theirs never takes it.
-  const chosenUnstarted =
+  const chosenUnstartedFor = (requestSource) =>
     state.composition &&
-    CHOSEN_ITEMFUL.has(state.source) &&
-    (state.life === "unstarted" || state.life === "finished_empty");
+    (CHOSEN_ITEMFUL[requestSource]?.has(state.source) ?? false) &&
+    !ownerStarted;
   const previews = new Map();
   const previewFor = (trainAnyway) => {
     if (!previews.has(trainAnyway)) {
@@ -398,8 +404,18 @@ export async function runOwnerState(state, { onCell, violations } = {}) {
       }
       // One predicate for the athlete's unstarted chosen card: an adaptive replace and an
       // EMPTY override replace answer with it as the owner; an itemful override replaces it.
-      if (chosenUnstarted && cell.replace && cell.expected === "absent" && !malformed && cell.fingerprint !== "stale") {
-        if (cell.source === "adaptive_plan" || cell.source === "athlete_override_empty") {
+      const yieldsHere =
+        (cell.source === "adaptive_plan" || cell.source === "athlete_override_empty") &&
+        chosenUnstartedFor(cell.source);
+      const itemfulReplaces = cell.source === "athlete_override" && chosenUnstartedFor("adaptive_plan");
+      if (
+        (yieldsHere || itemfulReplaces) &&
+        cell.replace &&
+        cell.expected === "absent" &&
+        !malformed &&
+        cell.fingerprint !== "stale"
+      ) {
+        if (yieldsHere) {
           assert.equal(
             res.status,
             409,

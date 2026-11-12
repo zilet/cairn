@@ -482,12 +482,22 @@ function captureReasons(
 export function decideChatRouting(input: ChatRoutingInput): ChatRoutingDecision {
   const message = String(input?.message ?? "").trim();
   const hasImage = input?.has_image === true;
-  // Asking to open a session is coaching, whatever box it was typed into: no capture
-  // reason survives it, so neither the receipt lane nor a food log can take it.
-  const startsSession = !hasImage && chatMessageStartsSession(message);
-  const captures = startsSession
-    ? []
-    : captureReasons(message, hasImage, input?.capture_confirmation === true, input?.recent_food_capture === true);
+  // Asking to open, build or change today's session is coaching, whatever box it was
+  // typed into, so the turn is the coach's. What sits BESIDE the ask is still read by the
+  // capture rules (never thrown away): food named with it is a food log by the router's
+  // own food detector (hasFoodEvidence), kept as a capture reason on the coach turn — the
+  // mixed turn below — so the coach logs the meal and answers the ask together. The
+  // Intake composer's "Log food:" frame over a start ask and nothing else is no food.
+  const sessionAsk = !hasImage && chatMessageAsksForTodaySession(message);
+  const besideAsk = sessionAsk ? textBesideSessionAsk(message) : message;
+  // Nothing beside a session ask is nothing to capture (a bare photo's "" still is one).
+  const captures =
+    sessionAsk && !besideAsk
+      ? []
+      : captureReasons(besideAsk, hasImage, input?.capture_confirmation === true, input?.recent_food_capture === true);
+  if (sessionAsk && !captures.includes("explicit_food_log") && foodBesideSessionAsk(besideAsk)) {
+    captures.unshift("explicit_food_log");
+  }
   const reasons = new Set<ChatRoutingReasonCode>(captures);
   let lane: ChatLane = captures.length > 0 ? "capture" : "coach";
   const ambiguous = AMBIGUOUS.test(message);
@@ -498,7 +508,7 @@ export function decideChatRouting(input: ChatRoutingInput): ChatRoutingDecision 
   // A single message may both capture a fact and ask for useful coaching. Keep
   // the capture reason (so the normal action path can log it), but do not take
   // the receipt-only instant lane and discard the requested answer.
-  if (captures.length > 0 && (chatMessageRequestsCoaching(message) || chatMessageIsNarrative(message))) {
+  if (captures.length > 0 && (sessionAsk || chatMessageRequestsCoaching(message) || chatMessageIsNarrative(message))) {
     lane = "coach";
     addReason(reasons, "routine_coaching");
   }
@@ -539,7 +549,7 @@ export function decideChatRouting(input: ChatRoutingInput): ChatRoutingDecision 
   }
   if ((lane as ChatLane) === "coach") {
     if (hasImage && captures.length === 0) addReason(reasons, "non_food_image");
-    if (ROUTINE_COACHING.test(message) || startsSession) addReason(reasons, "routine_coaching");
+    if (ROUTINE_COACHING.test(message) || sessionAsk) addReason(reasons, "routine_coaching");
     else if (!reasons.has("ambiguous_intent") && !reasons.has("non_food_image")) addReason(reasons, "ordinary_chat");
   }
 
@@ -550,40 +560,395 @@ export function decideChatRouting(input: ChatRoutingInput): ChatRoutingDecision 
   };
 }
 
-// "Open my today's training day", "let's start today's session": the athlete asking to
-// open a session, never a log of one. Read with the Intake composer's "Log food:" frame
-// taken off — typed into the food box, it still is not food (2026-11-07).
-//
-// The ask is a CLAUSE of its own addressed to the app: an imperative or first-person-
-// intent start/open verb at the head of a clause ("start my workout", "let's start
-// today's session", "can you open today's training day", "time to start my session")
-// whose object is the session noun. A verb buried in another clause is not an ask —
-// "protein shake before I start my workout", "when I start my training", "forgot to
-// start my watch at the start of my workout" — and a message that carries food is a food
-// log, whatever it says about a workout (2026-11-12: those turned meals into coach turns).
-const SESSION_START_CLAUSE_HEAD = String.raw`(?:^|[.!?;\n]\s*|,\s*)`;
-const SESSION_START_FILLER = String.raw`(?:(?:ok(?:ay)?|so|and|now|alright|right|great|cool|yes|yeah|yep|hey|please)\b[,!.\s]*)*`;
-const SESSION_START_INTENT = String.raw`(?:(?:let'?s|let\s+us|time\s+to|i(?:'d|\s+would)\s+like\s+to|i\s+(?:want|wanna|need)\s+to|i'?m\s+(?:going\s+to|gonna|ready\s+to)|(?:can|could|would|will)\s+you(?:\s+please)?|please)\s+)?`;
-const SESSION_START_VERB = String.raw`(?:start|open|begin|kick\s+off|pull\s+up|bring\s+up|take\s+me\s+to|launch)`;
-const SESSION_START_OBJECT = String.raw`(?:up\s+)?(?:(?:my|the|today'?s|todays|this|our|a)\s+){0,2}(?:[\w-]+\s+){0,2}?(?:session|workout|training(?:\s+day)?|lifting\s+day|gym\s+day)\b`;
-const SESSION_START_RE = new RegExp(
-  `${SESSION_START_CLAUSE_HEAD}${SESSION_START_FILLER}${SESSION_START_INTENT}${SESSION_START_VERB}\\s+${SESSION_START_OBJECT}`,
+// ---- Session asks: whose session, which day, what object -------------------------------
+// Two gates hang off the athlete's words about today's session: `startSession` (open
+// what Today has — start_session) and `todaySession` (build or change it —
+// today_session, which replaces the day's unstarted card with no further confirmation).
+// Three review passes found leaks in permissive patterns with exclusions bolted on
+// ("start my Thursday workout", "open the training plan", "I'd rather not change today's
+// session", "build my wife a lower body session today"), so each ask is now read
+// POSITIVELY, one clause at a time, and the gate stays shut whenever any part is unknown
+// or contradicted:
+//   - WHAT: the verb heads its clause and its object is a training session ("my
+//     workout", "today's session", "a full upper body"), not a screen named after one
+//     ("the workout history", "the training plan", "the workout timer") and not a
+//     session of something else ("your sleep session", "tracking …");
+//   - WHOSE: the athlete's own — no other person anywhere in the clause ("for my son",
+//     "my wife's", "build my wife a …", "for my client", "the class");
+//   - WHICH DAY: today, named or implied by no day being named — never another day in
+//     the clause ("tomorrow", "Thursday", "from yesterday", "next week", a date), and
+//     never under a "not today";
+//   - NOT NEGATED: no negation ahead of the verb in its clause ("I don't want to change",
+//     "I hope you won't change", "I'd rather not change", "no need to").
+// Deterministic and offline: words only, no model.
+
+/** One clause of a message, with where it sits in that message. */
+export interface SessionClause {
+  text: string;
+  start: number;
+  end: number;
+  /** The sentence the clause sits in ends with a "?". */
+  question: boolean;
+}
+
+// A new clause starts at sentence punctuation, a comma, a colon, a dash, or a conjunction
+// that opens a NEW verb ("…upper session and let's start", "…tired so make it shorter") —
+// never between two nouns ("yesterday's and today's plan", "push and pull").
+const CLAUSE_STARTER = String.raw`(?:let'?s|let\s+us|time\s+to|i|i'm|i'd|i'll|we|you|can|could|would|will|please|now|ok(?:ay)?|then|just|start|open|begin|kick\s+off|pull\s+up|bring\s+up|take\s+me|launch|make|build|give|create|put\s+together|design|write|set\s+up|prep(?:are)?|turn|swap|switch|change|lengthen|extend|shorten|add|drop|remove|lighten|trim|rework|redo|rebuild|combine|merge)\b`;
+const CLAUSE_BREAK_RE = new RegExp(
+  String.raw`[.!?;:\n]+|,|\s[-–—]\s|[–—]|\s+(?:and|then|so|but|also|because|since)\s+(?=${CLAUSE_STARTER})`,
+  "gi"
+);
+
+function normalizeAsk(message: unknown): string {
+  return String(message ?? "")
+    .replace(/[‘’]/g, "'")
+    .trim();
+}
+
+/** The clauses of a message, each with its span, in order. */
+export function sessionAskClauses(message: unknown): SessionClause[] {
+  const text = normalizeAsk(message);
+  const out: SessionClause[] = [];
+  const push = (start: number, end: number) => {
+    const raw = text.slice(start, end);
+    const lead = raw.length - raw.trimStart().length;
+    const body = raw.trim();
+    const terminator = /[.!?\n]/.exec(text.slice(end));
+    const question = terminator?.[0] === "?";
+    if (body) out.push({ text: body, start: start + lead, end: start + lead + body.length, question });
+  };
+  let last = 0;
+  for (const m of text.matchAll(CLAUSE_BREAK_RE)) {
+    push(last, m.index ?? 0);
+    last = (m.index ?? 0) + m[0].length;
+  }
+  push(last, text.length);
+  return out;
+}
+
+// WHICH DAY. Another day named in words, a weekday, a relative week, or a date.
+const OTHER_DAY_RE = new RegExp(
+  [
+    String.raw`\b(?:tomorrow|tmrw|yesterday|(?:mon|tues|wednes|thurs|fri|satur|sun)day|weekend)(?:'?s)?\b`,
+    String.raw`\b(?:next|last|this\s+coming|the\s+following|the\s+other)\s+(?:week|month|time|day|block|cycle)\b`,
+    String.raw`\blast\s+night\b|\b(?:earlier|later)\s+this\s+week\b|\bthe\s+day\s+after\b`,
+    String.raw`\bin\s+(?:\d+|two|three|four|five|a\s+few|a\s+couple(?:\s+of)?)\s+days\b|\b\d+\s+days?\s+(?:ago|from\s+now)\b`,
+    String.raw`\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b`,
+    String.raw`\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s+\d{1,2}(?:st|nd|rd|th)?\b`,
+    String.raw`\b(?:on\s+)?the\s+\d{1,2}(?:st|nd|rd|th)\b(?!\s+(?:sets?|reps?|rounds?|exercises?|lifts?|movements?|time|week))`,
+  ].join("|"),
   "i"
 );
-const SESSION_START_NEGATED_RE =
-  /\b(?:don'?t|do\s+not|not|never|can'?t|cannot|won'?t|didn'?t|did\s+not)\s+(?:\w+\s+)?(?:start|open|begin|kick\s+off|launch)\b/i;
+const TODAY_RE = /\b(?:today(?:'?s)?|todays|tonight(?:'?s)?|this\s+(?:morning|afternoon|evening)|right\s+now|now)\b/i;
+// "not today", "isn't for today", "instead of today", "other than today".
+const NOT_TODAY_RE =
+  /\b(?:not|never|instead\s+of|other\s+than|rather\s+than)\s+(?:for\s+|on\s+)?(?:today|tonight)\b|n't\s+(?:be\s+)?(?:for\s+)?(?:today|tonight)\b/i;
+
+/** The text names a day other than today (tomorrow, a weekday, a date, next week…). */
+export function namesOtherDay(text: unknown): boolean {
+  return OTHER_DAY_RE.test(normalizeAsk(text));
+}
+/** The text names today ("today", "today's", "tonight", "this morning", "now"), not under a "not". */
+export function namesToday(text: unknown): boolean {
+  const t = normalizeAsk(text);
+  return TODAY_RE.test(t) && !NOT_TODAY_RE.test(t);
+}
+/** The text rules today out ("not today", "instead of today"). */
+export function negatesToday(text: unknown): boolean {
+  return NOT_TODAY_RE.test(normalizeAsk(text));
+}
+
+// WHOSE. Another person named as the session's owner or beneficiary. A bare pronoun is
+// read only where it is the object ("for him", "build her a …", "their workout"), so a
+// coach's "do them last" never reads as someone else's session.
+const OTHER_PERSON_NOUN = String.raw`(?:wife|husband|partner|spouse|girlfriend|boyfriend|fianc[eé]e?|sons?|daughters?|kids?|child(?:ren)?|boys|girls|baby|toddler|teen(?:ager)?s?|mom|mum|mother|dad|father|parents?|brothers?|sisters?|siblings?|grand(?:ma|pa|mother|father|parents?)|aunt|uncle|cousins?|nephew|niece|family|friends?|buddy|buddies|mates?|roommates?|flatmates?|colleagues?|co-?workers?|boss|clients?|athletes?|students?|trainees?|members|team(?:mates)?|class(?:es)?|group|squad|patients?|someone\s+else|somebody\s+else|others|everyone)`;
+const OTHER_PERSON_RE = new RegExp(
+  [
+    String.raw`\b${OTHER_PERSON_NOUN}(?:'s)?\b`,
+    String.raw`\bfor\s+(?:him|her|them)\b`,
+    String.raw`\b(?:build|make|give|create|set\s+up|start|open|design|write|put\s+together)\s+(?:him|her|them)\s+(?:a|an|the|their|his|her|some)\b`,
+    String.raw`\b(?:his|their)\s+(?:[\w-]+\s+){0,2}?(?:sessions?|workouts?|training)\b`,
+  ].join("|"),
+  "i"
+);
+// A capitalized name as owner or beneficiary ("Sarah's session", "a session for Sam"):
+// case-sensitive, and never a day, a month or a contraction.
+const NAMED_PERSON_RE = /\b(?!(?:Today|Tonight|Tomorrow|Yesterday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|January|February|March|April|May|June|July|August|September|October|November|December|Let|It|That|What|Here|There|Who|Where|How|He|She|Your|My|Our)\b)[A-Z][a-z]+'s\b|\bfor\s+(?!(?:Today|Tonight|Tomorrow|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|I|Upper|Lower|Push|Pull|Legs|Full)\b)[A-Z][a-z]+\b/;
+
+/** The text names a person other than the athlete as the session's owner or beneficiary. */
+export function namesOtherPerson(text: unknown): boolean {
+  const t = normalizeAsk(text);
+  return OTHER_PERSON_RE.test(t) || NAMED_PERSON_RE.test(t);
+}
+
+/** Today's session of the athlete's own: no other day, no "not today", no other person. */
+export function aboutTodaysOwnSession(text: unknown): boolean {
+  return !namesOtherDay(text) && !negatesToday(text) && !namesOtherPerson(text);
+}
+
+// NOT NEGATED: a negation anywhere ahead of the verb in its clause.
+const NEGATION_RE =
+  /\b(?:not|no|never|nor|stop|without|nevermind|dont|wont|cant|didnt|doesnt|wouldnt|shouldnt|isnt)\b|n't\b|\bnever\s+mind\b/i;
+
+function negatedBefore(clause: string, index: number): boolean {
+  return NEGATION_RE.test(clause.slice(0, Math.max(0, index)));
+}
+
+// WHAT. A screen named after a session, and a session of something other than training.
+const SESSION_SCREEN_HEAD_RE =
+  /^\s*(?:histor(?:y|ies)|logs?|logbook|plans?|program(?:me)?s?|timers?|clock|stopwatch|settings?|pages?|tabs?|screens?|views?|summar(?:y|ies)|stats|statistics|calendar|schedules?|list|library|notes|editor|templates?|tracker|app|charts?|graphs?|reports?|records?|data|details|playlist|music|reminders?|alarm|notifications?|feed|archive)\b/i;
+const NON_TRAINING_MODIFIER_RE =
+  /\b(?:sleep|nap|meditation|breathing|breathwork|mindfulness|chat|coaching|therapy|study|work|zoom|planning|tracking|recording|photo|video|journal(?:ing)?|call)\b/i;
+
+// ---- the start ask ----
+// An imperative or first-person-intent start/open verb at the HEAD of its clause ("start
+// my workout", "let's start today's session", "can you open today's training day", "time
+// to start my session"), whose object is a training session. A verb buried mid-clause is
+// not an ask: "protein shake before I start my workout", "forgot to start my watch",
+// "how do I start a workout?".
+const START_FILLER = String.raw`(?:(?:ok(?:ay)?|so|and|now|alright|right|great|cool|yes|yeah|yep|hey|please)\b[,!.\s]*)*`;
+const START_INTENT = String.raw`(?:(?:let'?s|let\s+us|time\s+to|i(?:'d|\s+would)\s+like\s+to|i\s+(?:want|wanna|need)\s+to|i'?m\s+(?:going\s+to|gonna|ready\s+to)|(?:can|could|would|will)\s+you(?:\s+please)?|please)\s+)?`;
+const START_VERB = String.raw`(?:start|open|begin|kick\s+off|pull\s+up|bring\s+up|take\s+me\s+to|launch)`;
+const START_HEAD_RE = new RegExp(String.raw`^${START_FILLER}${START_INTENT}${START_VERB}\s+(.*)$`, "i");
+// The object: up to two determiners, up to two modifiers, then the session noun; the
+// word after the noun decides whether it was a screen ("the workout log").
+const SESSION_OBJECT_RE =
+  /^(?:up\s+)?((?:(?:my|your|the|today'?s|todays|this|our|a|an)\s+){0,2})((?:[\w'-]+\s+){0,2}?)(sessions?|workouts?|training\s+day|training|lifting\s+day|gym\s+day)\b(.*)$/i;
+
+/** `rest` (what follows an open/start verb) is a training session of the athlete's: not a screen, not a non-training session. */
+function namesSessionObject(rest: string): boolean {
+  const object = SESSION_OBJECT_RE.exec(rest.trim());
+  if (!object) return false;
+  return !NON_TRAINING_MODIFIER_RE.test(object[2]) && !SESSION_SCREEN_HEAD_RE.test(object[4]);
+}
+
+function startAskInClause(clause: string): boolean {
+  const head = START_HEAD_RE.exec(clause);
+  return !!head && namesSessionObject(head[1]) && aboutTodaysOwnSession(clause);
+}
+
+// A start with no session noun of its own ("…and let's start", "let's get going"): read
+// only beside a build ask, where it says the session being built is for right now.
+const BARE_START_CLAUSE_RE = new RegExp(
+  String.raw`^${START_FILLER}(?:(?:let'?s|time\s+to|i'?m\s+ready\s+to)\s+(?:start|begin|get\s+(?:started|going)|kick\s+(?:it\s+)?off)(?:\s+(?:it|(?:my|the|this|our|today'?s)\s+(?:session|workout|training)))?|let'?s\s+go)\s*(?:now|right\s+away)?\s*$`,
+  "i"
+);
+
+// Any start/open in the message under a negation ("don't open today's session yet",
+// "please don't start it") contradicts a start ask elsewhere in it.
+const START_NEGATED_RE =
+  /\b(?:don'?t|do\s+not|not|never|can'?t|cannot|won'?t|didn'?t|did\s+not)\s+(?:\w+\s+){0,2}?(?:start|open|begin|kick\s+off|launch)\b/i;
 const FOOD_FRAME_RE = /^log\s+food\s*:\s*/i;
 
-/** The athlete asks to start or open a training session (today's, or the one in front of them). */
+function withoutFoodFrame(message: unknown): string {
+  return normalizeAsk(message).replace(FOOD_FRAME_RE, "").trim();
+}
+
+/** The clauses that ask to start or open the athlete's own session today. */
+function startAskClauses(message: unknown): SessionClause[] {
+  const text = withoutFoodFrame(message);
+  if (!text || START_NEGATED_RE.test(text)) return [];
+  return sessionAskClauses(text).filter((clause) => startAskInClause(clause.text));
+}
+
+/**
+ * The athlete asks to start or open THEIR OWN training session for TODAY ("let's start
+ * today's session", "open my workout"). Read with the Intake composer's "Log food:" frame
+ * taken off. Food elsewhere in the message does not undo the ask: the router logs the
+ * food and the coach opens the session in the same turn (decideChatRouting).
+ */
 export function chatMessageStartsSession(message: unknown): boolean {
-  const text = String(message ?? "")
-    .replace(/[‘’]/g, "'")
-    .replace(FOOD_FRAME_RE, "")
+  return startAskClauses(message).length > 0;
+}
+
+/** Some clause of the message is a bare start ("…and let's start", "let's go"). */
+export function messageHasBareStart(message: unknown): boolean {
+  return sessionAskClauses(withoutFoodFrame(message)).some((clause) => BARE_START_CLAUSE_RE.test(clause.text));
+}
+
+/**
+ * The message with its session-ask clauses (start and build) taken out — what the
+ * capture lane reads beside the ask. "Log food: open my today's training day" leaves
+ * nothing (the frame alone is not food); "pasta with chicken, now let's start my session"
+ * leaves "pasta with chicken".
+ */
+export function textBesideSessionAsk(message: unknown): string {
+  const text = normalizeAsk(message);
+  const framed = FOOD_FRAME_RE.exec(text);
+  const body = framed ? text.slice(framed[0].length) : text;
+  const builds = chatMessageBuildsTodaySession(body);
+  const asks = startAskClauses(body);
+  if (builds) {
+    for (const clause of sessionAskClauses(body)) {
+      if (buildAskInClause(clause) && !asks.some((a) => a.start === clause.start)) asks.push(clause);
+    }
+    asks.sort((a, b) => a.start - b.start);
+  }
+  if (!asks.length) return text;
+  let rest = "";
+  let last = 0;
+  for (const clause of asks) {
+    rest += body.slice(last, clause.start);
+    last = clause.end;
+  }
+  rest += body.slice(last);
+  rest = rest
+    .replace(/\s+(?:and|then|so|now|ok(?:ay)?)\s*$/i, "")
+    .replace(/^[\s,.;:!?–—-]+|[\s,;:–—-]+$/g, "")
     .trim();
-  if (!text) return false;
-  // Food in the words is food-capture evidence: the meal is the message.
-  if (FOOD_NOUN.test(text) || CONCRETE_FOOD.test(text)) return false;
-  return SESSION_START_RE.test(text) && !SESSION_START_NEGATED_RE.test(text);
+  if (!/[a-z0-9]/i.test(rest)) return "";
+  return framed ? `${framed[0]}${rest}` : rest;
+}
+
+/**
+ * Food named beside a session ask, by the router's own food detector (hasFoodEvidence) —
+ * never a meal NOT eaten ("had no breakfast") and never a question about food.
+ */
+export function foodBesideSessionAsk(beside: unknown): boolean {
+  const text = withoutFoodFrame(beside);
+  if (!text || text.includes("?") || NARRATIVE_QUESTION_LEAD.test(text)) return false;
+  return hasFoodEvidence(text) && !foodIntakeNegated(text);
+}
+
+/** A session ask with nothing food-shaped beside it: typed into the food box, still not food. */
+export function sessionAskWithoutFood(message: unknown): boolean {
+  if (!chatMessageAsksForTodaySession(message)) return false;
+  return !foodBesideSessionAsk(textBesideSessionAsk(message));
+}
+
+// ---- the build ask ----
+// A build/change verb governing a session noun in its own clause ("make today's session
+// longer", "add some arm work to today's session"), or "I want / need a <…> session" /
+// "let's do upper body". The polite-question form is the ask itself ("can you make
+// today's session longer?"); any other question is not.
+const BUILD_NOUN = String.raw`(?:sessions?|workouts?|training(?:\s+day)?|lift(?:ing)?|gym\s+session|plan|day|card|upper(?:[- ]body)?|lower(?:[- ]body)?|full[- ]body|push|pull|legs?|leg\s+day|exercises?)`;
+const BUILD_VERB_RE = new RegExp(
+  String.raw`\b(?:combine|merge|build|make(?!\s+sure)|give|create|put\s+together|design|write|set\s+up|prep(?:are)?|turn|swap|switch|change|lengthen|extend|shorten|add|drop|remove|lighten|trim|rework|redo|rebuild)(?:\s+(?:me|us))?(?:\s+[\w'-]+){0,6}?\s+(${BUILD_NOUN})\b`,
+  "i"
+);
+const BUILD_WANT_RE = new RegExp(
+  String.raw`\b(?:i\s+(?:want|need|'d\s+like|would\s+like)\s+(?:a|an|some)|let'?s\s+(?:do|go(?:\s+with)?))(?:\s+[\w'-]+){0,3}?\s+(${BUILD_NOUN})\b`,
+  "i"
+);
+const MERGE_VERB_RE = /\b(?:combine|merge)\b/i;
+const BUILD_POLITE_RE = /^(?:(?:can|could|would|will)\s+you(?:\s+please)?|(?:can|could|may)\s+i\s+(?:get|have))\s+/i;
+// A question that is not the polite form of the ask ("what is today's session?", "why did
+// you make it so long?") asks nothing to be built.
+const QUESTION_LEAD_RE = /^(?:should|could|would|will|can|what|how|why|is|are|was|were|do|does|did|has|when|where|which|who)\b/i;
+// Rest and skip anywhere in the message contradict a build ask.
+const BUILD_REST_RE =
+  /\bskip(?:s|ping|ped)?\b|\brest\s+day\b|\b(?:a|to|some)\s+rest\b(?!\s+of)|\bday\s+off\b|\bsit\s+(?:it|this|today)\s+out\b|\btake\s+it\s+easy\b/i;
+// A clause that logs, or that is about food (a meal plan for today is not a session).
+const BUILD_LOG_RE = /\b(?:log|logged|logging|record|recorded|track|tracked)\b/i;
+const BUILD_FOOD_RE = /\b(?:meals?|food|diet|nutrition|calories|macros|breakfast|lunch|dinner|snacks?|recipes?|menu)\b/i;
+
+/** The build ask in one clause: whether there is one, and whether its verb merges days. */
+function buildAskInClause({ text: clause, question }: SessionClause): { merge: boolean } | null {
+  const polite = BUILD_POLITE_RE.test(clause);
+  if (!polite && question && QUESTION_LEAD_RE.test(clause)) return null;
+  const text = polite ? clause.replace(BUILD_POLITE_RE, (m) => (/\bi\s+(?:get|have)\s+$/i.test(m) ? "give me " : "")) : clause;
+  const match = BUILD_VERB_RE.exec(text) ?? BUILD_WANT_RE.exec(text);
+  if (!match) return null;
+  if (negatedBefore(text, match.index)) return null;
+  if (BUILD_LOG_RE.test(text) || BUILD_FOOD_RE.test(text)) return null;
+  if (namesOtherPerson(text)) return null;
+  // The noun is a screen's name ("a workout log for today").
+  if (SESSION_SCREEN_HEAD_RE.test(text.slice(match.index + match[0].length))) return null;
+  return { merge: MERGE_VERB_RE.test(match[0]) };
+}
+
+/**
+ * The athlete asks for TODAY's own session to be BUILT or CHANGED (the `todaySession`
+ * gate). A clause that names its day decides it; a clause that names none is dated by
+ * the message — today named somewhere (never under "not today"), or a start beside it
+ * ("…and let's start") — and shut when the message names another day. Merging days
+ * ("combine yesterday's and today's plan") names its sources, and is today's when today
+ * is among them.
+ */
+export function chatMessageBuildsTodaySession(message: unknown): boolean {
+  const text = withoutFoodFrame(message);
+  if (!text || BUILD_REST_RE.test(text)) return false;
+  const clauses = sessionAskClauses(text);
+  let messageToday = false;
+  let messageOther = false;
+  let startsNow = false;
+  for (const { text: clause } of clauses) {
+    if (negatesToday(clause)) messageOther = true;
+    else if (TODAY_RE.test(clause)) messageToday = true;
+    if (!MERGE_VERB_RE.test(clause) && namesOtherDay(clause)) messageOther = true;
+    if (startAskInClause(clause) || BARE_START_CLAUSE_RE.test(clause)) startsNow = true;
+  }
+  for (const entry of clauses) {
+    const ask = buildAskInClause(entry);
+    const clause = entry.text;
+    if (!ask) continue;
+    if (negatesToday(clause)) continue;
+    const today = TODAY_RE.test(clause);
+    const other = namesOtherDay(clause);
+    if (ask.merge ? today : today && !other) return true;
+    if (other) continue;
+    if (!messageOther && (messageToday || startsNow)) return true;
+  }
+  return false;
+}
+
+/**
+ * Every session ask in one place, for the router: a start ask (open today's own
+ * session) or a build ask (build/change it). Either one makes the turn the coach's.
+ */
+export function chatMessageAsksForTodaySession(message: unknown): boolean {
+  return chatMessageStartsSession(message) || chatMessageBuildsTodaySession(message);
+}
+
+// ---- the coach's offer ----
+// The coach's own offer ("Want me to open today's session?", "Want me to set that up as
+// today's session?") read the same way, offer by offer: an OPEN offer is a start/open
+// verb whose object is a training session (or a pronoun — "open it?"), for today or no
+// day named, for the athlete; a BUILD offer names today and a build verb. An offer about
+// another day ("start tomorrow's session early?", "open your session from Tuesday?"),
+// another person, a screen ("a recovery week session plan?") or something that is not
+// training ("start tracking your sleep session?") is no offer about today's session.
+const COACH_OFFER_RE =
+  /\b(?:(?:do\s+you\s+)?want\s+me\s+to|would\s+you\s+like\s+me\s+to|shall\s+i|should\s+i|i\s+can|i\s+could)\s+([^?.!\n]*)/gi;
+const COACH_OPEN_HEAD_RE =
+  /^(?:(?:go\s+ahead\s+and|just)\s+)?(?:open|start|begin|pull\s+up|bring\s+up|launch|kick\s+off|load)\b(?:\s+up)?/i;
+const COACH_BUILD_WORDS_RE =
+  /\b(?:set\s+(?:\w+\s+)?up|build|make|swap|switch|change|combine|merge|put\s+together|create|design|rework|redo|rebuild|lighten|shorten|lengthen|extend|trim|add|drop|remove|replace|turn)\b/i;
+const COACH_TODAY_NAMED_RE = /\b(?:today'?s|todays|for\s+today|today|tonight(?:'?s)?)\b/i;
+const COACH_SESSION_WORD_RE = /\b(?:sessions?|workouts?|training(?:\s+day)?|lift(?:ing)?|it|that|this)\b/i;
+
+/** What one coach offer offers about today's session: "open", "build", or null (not about today's own). */
+function readCoachOffer(span: string): "open" | "build" | null {
+  const offer = normalizeAsk(span);
+  if (!offer || namesOtherPerson(offer) || namesOtherDay(offer) || negatesToday(offer)) return null;
+  const head = COACH_OPEN_HEAD_RE.exec(offer);
+  if (head && !COACH_BUILD_WORDS_RE.test(offer)) {
+    return namesSessionObject(offer.slice(head[0].length)) ? "open" : null;
+  }
+  if (COACH_BUILD_WORDS_RE.test(offer) && COACH_TODAY_NAMED_RE.test(offer) && COACH_SESSION_WORD_RE.test(offer)) {
+    return "build";
+  }
+  return null;
+}
+
+/**
+ * Which of today's sessions the coach's message offered: "open" when every offer about
+ * it only opens what is there, "build" when any sets up / builds / changes it, else null.
+ */
+export function coachOfferAboutTodaySession(priorCoachMessage: unknown): "open" | "build" | null {
+  const text = normalizeAsk(priorCoachMessage);
+  const offers = [...text.matchAll(COACH_OFFER_RE)]
+    .map((m) => readCoachOffer(m[1]))
+    .filter((kind): kind is "open" | "build" => kind != null);
+  if (!offers.length) return null;
+  return offers.every((kind) => kind === "open") ? "open" : "build";
+}
+
+/** The coach's message is about another day and not today (a session laid out for tomorrow). */
+export function coachMessageIsForAnotherDay(priorCoachMessage: unknown): boolean {
+  const text = normalizeAsk(priorCoachMessage);
+  return (namesOtherDay(text) && !COACH_TODAY_NAMED_RE.test(text)) || namesOtherPerson(text);
 }
 
 /** Independent guard shared by classification and the receipt-only bypass. */

@@ -12,7 +12,9 @@ import {
 } from "../dist/domain/training/chat-today-session.js";
 import { recordExerciseSymptomObservation } from "../dist/domain/training/exercise-symptom-use-case.js";
 import { chatChangeReceipts, reconcileChatPlanReply } from "../dist/chat-reconcile.js";
+import { groundReply } from "../dist/chatGrounding.js";
 import { openSessionOn } from "../dist/repo/open-session.js";
+import { captureProposalEvidence } from "../dist/repo/proposal-truth.js";
 import { DATE, assertReadable, chosenCard, prepareRoute, routerRequest, seedPlan } from "./_dailySessionMatrix.mjs";
 import { db, repo } from "./_seed.js";
 
@@ -169,6 +171,27 @@ test("an empty override replace (the outbox retry) never supersedes an itemful c
   assert.notEqual(res.body.daily_session.id, mine.daily_session.id);
 });
 
+test("an empty override replace never wipes a card the athlete trained on by choice (review 3)", async () => {
+  seedPlan();
+  const choice = repo.prepareDailySession({ date: DATE, source: "adaptive_plan", train_anyway: true });
+  assert.ok(choice.daily_session.items.length > 0, "the train-by-choice card holds work");
+  assert.equal(choice.daily_session.provenance?.choice, "training_by_choice");
+  const res = await prepareRoute({
+    date: DATE,
+    source: "athlete_override",
+    replace: true,
+    session: { name: "Open session", items: [] },
+  });
+  assert.equal(res.status, 409, JSON.stringify(res.body));
+  assert.equal(res.body.code, "daily_session_active_changed");
+  assert.equal(res.body.owner.daily_session_id, choice.daily_session.id);
+  assert.equal(active().id, choice.daily_session.id, "the card the athlete chose stands");
+  assert.ok(JSON.parse(active().items_json).length > 0, "with its work");
+  // The adaptive request itself still re-takes its own train-by-choice card.
+  const adaptive = await prepareRoute({ date: DATE, source: "adaptive_plan", replace: true, train_anyway: true });
+  assert.equal(adaptive.status, 200, JSON.stringify(adaptive.body));
+});
+
 // ---- 8. discard --------------------------------------------------------------------------
 
 test("a session the athlete answered pain questions on is lived on: never discarded, never replaced", async () => {
@@ -267,15 +290,21 @@ test("start_session over a finished day shows it as done and offers to add to it
   assert.equal(result.session_id, sessionId);
   assert.doesNotMatch(result.open.label, /^(Start|Continue) /, result.open.label);
   assert.match(result.open.label, /^Log more/);
-  const reply = reconcileChatPlanReply(
-    "Let's go.",
-    "let's start today's session",
-    [{ type: "start_session", result }],
-    [],
-    true
-  );
-  assert.doesNotMatch(reply, /ready|Start it/i, reply);
+  // The model's own words claim the day is READY to start; the turn's truth is that it is
+  // done. The reconciled reply, then the grounded one, must not leave "ready" standing
+  // (review 3: "Let's go." here hid that the claim was kept).
+  const applied = [{ type: "start_session", result }];
+  const proposed = "Your session is ready on Today — tap Start.";
+  const reconciled = reconcileChatPlanReply(proposed, "let's start today's session", applied, [], true);
+  const reply = groundReply({
+    reply: reconciled,
+    applied,
+    ctx: { message: "let's start today's session", proposedReply: proposed, today: DATE },
+  }).reply;
+  assert.doesNotMatch(reply, /\bready\b|Start it|tap Start/i, reply);
   assert.match(reply, /done|finished/i, reply);
+  // Said once: the reconciler's own "you've finished it" receipt is the correction.
+  assert.equal(reply.match(/finished|done/gi)?.length, 1, reply);
   assert.equal(Number(db.prepare(`SELECT COUNT(*) AS n FROM sessions WHERE date = ?`).get(DATE).n), 1);
   assert.ok(sessionRow(sessionId).finished_at, "opening is not reopening");
 });
@@ -303,11 +332,71 @@ test("work logged before an adopted card is not graded against it", () => {
   assert.ok(!facts.reason_codes.includes("partial_session"), facts.reason_codes.join(","));
   assert.ok(!facts.reason_codes.includes("extended_session"), facts.reason_codes.join(","));
   assert.ok(facts.dose_context.non_comparable_reasons.includes("adopted_after_log"));
+  assert.ok(facts.dose_evidence.length > 0, "the adopted card's doses are on the record to check");
   for (const dose of facts.dose_evidence) {
     assert.equal(dose.comparable, false, `${dose.exercise}: not comparable to a card served after the work`);
     assert.ok(dose.non_comparable_reasons.includes("adopted_after_log"), dose.exercise);
   }
 });
+
+test("the proposal evidence snapshot carries the adoption, so pre-card work never reads as graded (review 3)", () => {
+  seedPlan();
+  const logged = repo.logSetByName({ date: DATE, exercise: "Hammer Curl", weight: 30, reps: 10 });
+  repo.prepareDailySession({ date: DATE, source: "adaptive_plan" });
+  repo.finishSession(Number(logged.session_id));
+  const row = db.prepare(`SELECT id, facts_json FROM daily_session_outcomes WHERE date = ?`).get(DATE);
+  const facts = JSON.parse(row.facts_json);
+  assert.ok(facts.adoption, "the outcome records the adoption");
+  assert.ok(facts.dose_evidence.length > 0);
+  const withAdoption = captureProposalEvidence(DATE).training_fingerprint;
+  // The same outcome with the adoption and the per-dose flags taken away — the reading
+  // an agent would get of a card that graded the earlier work: a different snapshot.
+  const graded = {
+    ...facts,
+    adoption: undefined,
+    dose_evidence: facts.dose_evidence.map((dose) => ({ ...dose, comparable: true, non_comparable_reasons: [] })),
+  };
+  const store = (value) =>
+    db.prepare(`UPDATE daily_session_outcomes SET facts_json = ? WHERE id = ?`).run(JSON.stringify(value), row.id);
+  store(graded);
+  const gradedFingerprint = captureProposalEvidence(DATE).training_fingerprint;
+  assert.notEqual(gradedFingerprint, withAdoption);
+  // Only the adoption rides into the snapshot: every outcome without one stays
+  // byte-identical to before (no stored proposal goes stale over this change).
+  store({ ...graded, dose_evidence: graded.dose_evidence.map((dose) => ({ ...dose, comparable: false, non_comparable_reasons: ["partial"] })) });
+  assert.equal(captureProposalEvidence(DATE).training_fingerprint, gradedFingerprint);
+});
+
+// KNOWN GAP (review 3, item 7): the endurance matcher in daily-reconciliation.ts pairs
+// every run of the date with the card's cardio item, whenever it was logged, and the
+// adoption provenance records no activity cut — so a run logged BEFORE the card reads
+// as a shortfall against it. Fixing it means an activity cut in adaptive-session.ts
+// adoptionProvenance and its use in enduranceEvidenceFor; left to that owner.
+test(
+  "a run logged before an adopted card is not a shortfall against it",
+  { todo: "daily-reconciliation.ts enduranceEvidenceFor ignores the adoption cut" },
+  () => {
+    seedPlan();
+    const logged = repo.logSetByName({ date: DATE, exercise: "Hammer Curl", weight: 30, reps: 10 });
+    repo.addActivity({ date: DATE, type: "run", duration_min: 20, distance_km: 3.5, raw_text: "easy run" });
+    repo.prepareDailySession({
+      date: DATE,
+      source: "athlete_override",
+      session: {
+        name: "Mine",
+        items: [
+          { exercise: "Chest-Supported Row", sets: 3, rep_low: 8, rep_high: 12 },
+          { kind: "cardio", exercise: "Easy run", target_duration_min: 45, target_distance_km: 8 },
+        ],
+      },
+    });
+    repo.finishSession(Number(logged.session_id));
+    const facts = repo.getDailySessionOutcome(DATE).facts;
+    assert.ok(facts.adoption, "the card was adopted onto the earlier work");
+    assert.ok(!facts.reason_codes.includes("endurance_dose_shortfall"), facts.reason_codes.join(","));
+    assert.ok(!facts.reason_codes.includes("partial_session"), facts.reason_codes.join(","));
+  }
+);
 
 test("work logged after the adoption is graded against the card as usual", () => {
   seedPlan();
