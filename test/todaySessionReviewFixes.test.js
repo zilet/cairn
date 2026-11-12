@@ -367,36 +367,144 @@ test("the proposal evidence snapshot carries the adoption, so pre-card work neve
   assert.equal(captureProposalEvidence(DATE).training_fingerprint, gradedFingerprint);
 });
 
-// KNOWN GAP (review 3, item 7): the endurance matcher in daily-reconciliation.ts pairs
-// every run of the date with the card's cardio item, whenever it was logged, and the
-// adoption provenance records no activity cut — so a run logged BEFORE the card reads
-// as a shortfall against it. Fixing it means an activity cut in adaptive-session.ts
-// adoptionProvenance and its use in enduranceEvidenceFor; left to that owner.
-test(
-  "a run logged before an adopted card is not a shortfall against it",
-  { todo: "daily-reconciliation.ts enduranceEvidenceFor ignores the adoption cut" },
-  () => {
-    seedPlan();
-    const logged = repo.logSetByName({ date: DATE, exercise: "Hammer Curl", weight: 30, reps: 10 });
-    repo.addActivity({ date: DATE, type: "run", duration_min: 20, distance_km: 3.5, raw_text: "easy run" });
-    repo.prepareDailySession({
-      date: DATE,
-      source: "athlete_override",
-      session: {
-        name: "Mine",
-        items: [
-          { exercise: "Chest-Supported Row", sets: 3, rep_low: 8, rep_high: 12 },
-          { kind: "cardio", exercise: "Easy run", target_duration_min: 45, target_distance_km: 8 },
-        ],
-      },
-    });
-    repo.finishSession(Number(logged.session_id));
-    const facts = repo.getDailySessionOutcome(DATE).facts;
-    assert.ok(facts.adoption, "the card was adopted onto the earlier work");
-    assert.ok(!facts.reason_codes.includes("endurance_dose_shortfall"), facts.reason_codes.join(","));
-    assert.ok(!facts.reason_codes.includes("partial_session"), facts.reason_codes.join(","));
+// ---- 6b. the endurance side of the adoption cut ------------------------------------------
+// An activity row's id says when it entered Cairn; the adoption stamps the newest one
+// (`adopted_after_activity_id`), so a run already in Cairn when the card was bound is
+// paired with the card's run item but never graded against it.
+
+const RUN_CARD = {
+  name: "Mine",
+  items: [
+    { exercise: "Chest-Supported Row", sets: 3, rep_low: 8, rep_high: 12 },
+    { kind: "cardio", exercise: "Easy run", target_duration_min: 45, target_distance_km: 8 },
+  ],
+};
+const runEntry = (facts) => facts.endurance_evidence.find((entry) => entry.prescribed.label === "Easy run");
+const adoptRunCard = () => repo.prepareDailySession({ date: DATE, source: "athlete_override", session: RUN_CARD });
+const assertNotGraded = (entry) => {
+  assert.ok(entry.achieved, "the earlier run is still paired with the card's run (it is real work)");
+  assert.equal(entry.comparable, false, JSON.stringify(entry));
+  assert.ok(entry.non_comparable_reasons.includes("adopted_after_log"), JSON.stringify(entry));
+};
+const assertGraded = (entry) => {
+  assert.ok(entry.achieved, "the run is paired with the card's run");
+  assert.equal(entry.comparable, undefined, JSON.stringify(entry));
+  assert.equal(entry.non_comparable_reasons, undefined, JSON.stringify(entry));
+};
+
+test("a run logged before an adopted card is not a shortfall against it", () => {
+  seedPlan();
+  const logged = repo.logSetByName({ date: DATE, exercise: "Hammer Curl", weight: 30, reps: 10 });
+  const run = repo.addActivity({ date: DATE, type: "run", duration_min: 20, distance_km: 3.5, text: "easy run" });
+  const adopted = adoptRunCard();
+  assert.ok(Number(adopted.daily_session.provenance.adopted_after_activity_id) >= Number(run.id));
+  repo.finishSession(Number(logged.session_id));
+  const facts = repo.getDailySessionOutcome(DATE).facts;
+  assert.ok(facts.adoption, "the card was adopted onto the earlier work");
+  assert.equal(facts.adoption.worked_after, false, "nothing was done from the card");
+  for (const code of ["endurance_dose_shortfall", "partial_session", "endurance_matched", "completed_as_suggested"]) {
+    assert.ok(!facts.reason_codes.includes(code), `${code}: ${facts.reason_codes.join(",")}`);
   }
-);
+  assert.equal(runEntry(facts).completion_verdict, "dose_shortfall", "the fact itself is kept");
+  assertNotGraded(runEntry(facts));
+  assert.equal(facts.dose_context.partial, false);
+  assert.ok(!facts.dose_context.non_comparable_reasons.includes("partial"));
+  // The run stays real training everywhere else.
+  assert.equal(repo.getCardioForDate(DATE).length, 1);
+  assert.match(repo.dailyOutcomeRead({ date: DATE }).athlete_read.learning, /before today's card was opened/);
+});
+
+test("a run logged after the adoption is graded against the card as usual", () => {
+  seedPlan();
+  const logged = repo.logSetByName({ date: DATE, exercise: "Hammer Curl", weight: 30, reps: 10 });
+  adoptRunCard();
+  repo.addActivity({ date: DATE, type: "run", duration_min: 20, distance_km: 3.5, text: "easy run" });
+  repo.finishSession(Number(logged.session_id));
+  const facts = repo.getDailySessionOutcome(DATE).facts;
+  assert.equal(facts.adoption.worked_after, true, "the run was done from the card");
+  assertGraded(runEntry(facts));
+  assert.ok(facts.reason_codes.includes("endurance_matched"), facts.reason_codes.join(","));
+  assert.ok(facts.reason_codes.includes("endurance_dose_shortfall"), facts.reason_codes.join(","));
+  assert.ok(facts.reason_codes.includes("partial_session"), facts.reason_codes.join(","));
+  // The athlete started on the card, so its untouched lift reads as skipped.
+  assert.deepEqual(facts.skipped, ["Chest-Supported Row"]);
+});
+
+// The watch's run happened at 07:00, before the card; it reached Cairn only after it.
+// It falls on the AFTER side: the cut is what Cairn held when the card was bound (the
+// same rule as the set cut), not the watch's clock — a run synced after an ordinary,
+// served card is graded against it the same way, wherever in the day it happened.
+test("a watch run that happened before the adoption but synced after it is graded against the card", () => {
+  seedPlan();
+  const logged = repo.logSetByName({ date: DATE, exercise: "Hammer Curl", weight: 30, reps: 10 });
+  adoptRunCard();
+  repo.upsertGarminActivity({
+    external_id: "adoption-watch-run",
+    date: DATE,
+    start_time: `${DATE}T07:00:00`,
+    type: "running",
+    name: "Morning run",
+    duration_min: 20,
+    distance_km: 3.5,
+  });
+  repo.finishSession(Number(logged.session_id));
+  const facts = repo.getDailySessionOutcome(DATE).facts;
+  assertGraded(runEntry(facts));
+  assert.equal(runEntry(facts).achieved.source, "garmin");
+  assert.ok(facts.reason_codes.includes("endurance_dose_shortfall"), facts.reason_codes.join(","));
+});
+
+// ...unless the athlete had already reported that run by hand before the card: the
+// watch's mirror replaces the hand log (the soft-dedup deletes it), and the run it
+// stands for was in Cairn at the adoption.
+test("a watch mirror of a run hand-logged before the adoption stays before it", () => {
+  seedPlan();
+  const logged = repo.logSetByName({ date: DATE, exercise: "Hammer Curl", weight: 30, reps: 10 });
+  const handLog = repo.addActivity({ date: DATE, type: "run", duration_min: 20, distance_km: 3.5, text: "easy run" });
+  adoptRunCard();
+  repo.upsertGarminActivity({
+    external_id: "adoption-watch-mirror",
+    date: DATE,
+    start_time: `${DATE}T07:00:00`,
+    type: "running",
+    name: "Morning run",
+    duration_min: 20.5,
+    distance_km: 3.52,
+  });
+  assert.equal(
+    db.prepare(`SELECT id FROM activities WHERE id = ?`).get(handLog.id),
+    undefined,
+    "the mirror replaced the hand log"
+  );
+  repo.finishSession(Number(logged.session_id));
+  const facts = repo.getDailySessionOutcome(DATE).facts;
+  assert.equal(runEntry(facts).achieved.source, "garmin");
+  assertNotGraded(runEntry(facts));
+  assert.ok(!facts.reason_codes.includes("endurance_dose_shortfall"), facts.reason_codes.join(","));
+  assert.ok(!facts.reason_codes.includes("partial_session"), facts.reason_codes.join(","));
+});
+
+test("an adopted card with a lift logged before it and a run after: the lift is not graded, the run is", () => {
+  seedPlan();
+  const logged = repo.logSetByName({ date: DATE, exercise: "Chest-Supported Row", weight: 80, reps: 10 });
+  adoptRunCard();
+  repo.addActivity({ date: DATE, type: "run", duration_min: 20, distance_km: 3.5, text: "easy run" });
+  repo.finishSession(Number(logged.session_id));
+  const facts = repo.getDailySessionOutcome(DATE).facts;
+  assert.equal(facts.adoption.worked_after, true);
+  assert.deepEqual(facts.adoption.exercises, ["Chest-Supported Row"]);
+  // The lift: logged before the card, so neither done from it nor skipped.
+  assert.deepEqual(facts.completed, []);
+  assert.deepEqual(facts.skipped, []);
+  assert.deepEqual(facts.substituted, []);
+  const row = facts.dose_evidence.find((dose) => dose.exercise === "Chest-Supported Row");
+  assert.equal(row.comparable, false);
+  assert.ok(row.non_comparable_reasons.includes("adopted_after_log"));
+  // The run: done from the card and short of it.
+  assertGraded(runEntry(facts));
+  assert.ok(facts.reason_codes.includes("endurance_dose_shortfall"), facts.reason_codes.join(","));
+  assert.ok(facts.reason_codes.includes("partial_session"), facts.reason_codes.join(","));
+});
 
 test("work logged after the adoption is graded against the card as usual", () => {
   seedPlan();

@@ -1131,13 +1131,39 @@ function adoptionProvenance(provenanceJson: string | null, sessionId: number): s
   const base = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
   const lastSet = db.prepare(`SELECT MAX(id) AS id FROM logged_sets WHERE session_id = ?`).get(sessionId) as any;
   const lastSkip = db.prepare(`SELECT MAX(id) AS id FROM session_skips WHERE session_id = ?`).get(sessionId) as any;
-  const finished = db.prepare(`SELECT finished_at FROM sessions WHERE id = ?`).get(sessionId) as any;
+  const finished = db.prepare(`SELECT finished_at, date FROM sessions WHERE id = ?`).get(sessionId) as any;
+  // The endurance side of the same cut. An activity row's id says when it ENTERED
+  // Cairn (AUTOINCREMENT, never reused); its `created_at` is second-grained and a
+  // watch row's start time is when it happened, not when Cairn learned of it. So every
+  // activity at or below this id was known when the card was bound. A watch run synced
+  // after the adoption is above it and is graded like any run under a served card,
+  // except one that merely replaced a hand log of the same run made before the
+  // adoption (the soft-dedup deletes that log): the hand logs of the date are kept here
+  // so the reconciliation can tell.
+  const lastActivity = db.prepare(`SELECT MAX(id) AS id FROM activities`).get() as any;
+  const handLogs = db
+    .prepare(
+      `SELECT id, type, duration_min, distance_km FROM activities
+        WHERE date = ? AND source IS NULL AND external_id IS NULL ORDER BY id LIMIT 16`
+    )
+    .all(String(finished?.date ?? "").slice(0, 10)) as any[];
   return JSON.stringify({
     ...base,
     adopted_after_log: true,
     adopted_at: new Date().toISOString(),
     adopted_after_set_id: Number(lastSet?.id) > 0 ? Number(lastSet.id) : 0,
     adopted_after_skip_id: Number(lastSkip?.id) > 0 ? Number(lastSkip.id) : 0,
+    adopted_after_activity_id: Number(lastActivity?.id) > 0 ? Number(lastActivity.id) : 0,
+    ...(handLogs.length
+      ? {
+          adopted_activity_logs: handLogs.map((row) => ({
+            id: Number(row.id),
+            type: row.type == null ? null : String(row.type),
+            duration_min: row.duration_min == null ? null : Number(row.duration_min),
+            distance_km: row.distance_km == null ? null : Number(row.distance_km),
+          })),
+        }
+      : {}),
     adopted_finished: finished?.finished_at != null,
   });
 }

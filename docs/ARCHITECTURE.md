@@ -506,10 +506,15 @@ re-take is the same adaptive request over a plain adaptive card nobody has lived
 it on the same row. A session row logged outside any composition (sets from chat, MCP or the watch) is
 ADOPTED by a non-replace prepare — the composition binds to it and the row's own record is untouched;
 with no adaptive candidate (no plan) it is adopted as the athlete's "Open session". An adopted card's
-provenance says so (`adopted_after_log`, `adopted_at`, the last set/skip id already on the row), and the
+provenance says so (`adopted_after_log`, `adopted_at`, the last set/skip id already on the row, and
+`adopted_after_activity_id`, the newest activity id in Cairn), and the
 reconciliation reads only the work after it against the card: earlier work is in no completed /
 substituted / skipped list, every dose it touched carries the per-dose reason `adopted_after_log` (never
-comparable; progression reads it as unlinked work, the dose log and trajectory drop it). Every ownership
+comparable; progression reads it as unlinked work, the dose log and trajectory drop it). Endurance takes
+the same cut by when the row ENTERED Cairn (its id), not when it happened: a run already in Cairn pairs
+with the card's run item but that entry is `adopted_after_log` too (no shortfall, quality or partial read
+from it), while a watch run synced after the adoption is graded like any run under a served card — unless
+it replaced a hand log of the same run made before (`adopted_activity_logs`). Every ownership
 conflict (`daily_session_active_changed` / `daily_session_changed` / `daily_session_locked`, and
 `daily_session_missing` while a session row still holds the date) carries `owner`, which resolves:
 `expected_active_id = owner.daily_session_id` opens it, and an owner with a null `daily_session_id` is
