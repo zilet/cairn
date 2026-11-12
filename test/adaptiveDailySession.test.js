@@ -681,7 +681,10 @@ test("replacement supersedes history before logging and refuses after logging st
 
   repo.logSetByName(repo.resolveImplicitPlanDay({ date: DATE, exercise: "Overhead Press", weight: 95, reps: 5 }));
   assert.equal(repo.getSessionByDate(DATE).plan_day_id, null, "implicit logging preserves custom provenance");
-  assert.throws(() => prepare({ date: DATE, source: "adaptive_plan", replace: true }), /already has logged sets/);
+  assert.throws(
+    () => prepare({ date: DATE, source: "adaptive_plan", replace: true }),
+    (error) => error?.code === "daily_session_locked" && error.owner?.daily_session_id === second.daily_session.id
+  );
   assert.equal(repo.getActiveDailySession(DATE).id, second.daily_session.id);
 });
 
@@ -915,13 +918,27 @@ test("duplicate same-date sessions cannot hide meaningful state on a different r
   db.prepare(
     `INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps) VALUES (?, ?, 1, 135, 5)`
   ).run(started, exercise.id);
+  assert.ok(Number(empty) < Number(started));
 
+  // A replace is refused, naming the row that holds the logged work (no composition yet).
   assert.throws(
-    () => prepare({ date: DATE, source: "manual_plan", day_number: 1 }),
-    (error) => error?.code === "daily_session_locked" && /logged sets/.test(error.message)
+    () => prepare({ date: DATE, source: "manual_plan", day_number: 1, replace: true }),
+    (error) =>
+      error?.code === "daily_session_locked" &&
+      error.owner?.session_id === Number(started) &&
+      error.owner?.daily_session_id === null &&
+      error.owner?.set_count === 1 &&
+      !/\d/.test(error.message)
   );
   assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM daily_session_compositions`).get().n, 0);
-  assert.ok(Number(empty) < Number(started));
+
+  // The plain prepare opens it: the composition binds to the row holding the work, never
+  // the empty earlier row, and the logged row's own record is left as it was.
+  const opened = prepare({ date: DATE, source: "manual_plan", day_number: 1 });
+  assert.equal(opened.ok, true);
+  assert.equal(Number(opened.session_id), Number(started));
+  assert.equal(opened.session.plan_day_id, null, "an adopted logged session keeps its own plan-day link");
+  assert.equal(repo.getActiveDailySession(DATE).session_id, Number(started));
 });
 
 test("replacement stays on the active composition session even with duplicate empty rows", () => {
@@ -1011,7 +1028,7 @@ test("a finished or all-skipped session with no logged sets can still be replace
         replace: true,
         session: { name: "Different", why: "Changed", items: [] },
       }),
-    /session notes/
+    (error) => error?.code === "daily_session_locked" && error.owner?.started === true && error.owner?.set_count === 0
   );
 });
 

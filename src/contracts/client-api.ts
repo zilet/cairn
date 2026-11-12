@@ -1085,13 +1085,24 @@ export interface ClientDailySessionOwner {
   started: boolean;
 }
 
-/** A coded daily-session refusal (prepare/discard): `owner` rides the ownership conflicts. */
+/**
+ * A coded daily-session refusal (prepare/discard). `error` is a sentence for a person;
+ * the machine detail is `code` and `owner`. Every ownership conflict carries the owner the
+ * client opens instead: `expected_active_id = owner.daily_session_id` opens it, or — an
+ * owner with `daily_session_id: null` is a session logged outside any composition — a
+ * plain prepare (no `replace`, no fingerprint) adopts that same session.
+ */
 export interface ClientDailySessionError {
   ok: false;
   code: string;
   error: string;
+  /** daily_session_preview_stale: the fresh preview to show before Start. */
   preview?: ClientDailySessionPreview;
-  /** daily_session_active_changed / daily_session_locked (and discard's daily_session_changed). */
+  /**
+   * Always on daily_session_active_changed / daily_session_changed / daily_session_locked.
+   * On daily_session_missing only when a session row still holds the date; absent there,
+   * the date is free and a plain prepare starts a new session.
+   */
   owner?: ClientDailySessionOwner;
 }
 
@@ -1453,7 +1464,14 @@ export interface ClientDailySessionComposition {
 
 export interface ClientDailySessionPrepareRequest {
   date: ISODateString | string;
-  /** Assertion-only cached composition check; when present, no source/session payload is required and no write occurs. */
+  /**
+   * Assertion-only cached composition check; when present, no source/session payload is
+   * required and no write occurs. A stale id answers daily_session_changed (with the
+   * current owner) or daily_session_missing (with the owner when a session row holds the
+   * date, without one when the date is free). Omitted together with `replace` and
+   * `expected_input_fingerprint`, the request is an OPEN: it never conflicts, and a date
+   * that already has a session answers with that session (`reused`).
+   */
   expected_active_id?: number;
   /** Compare-and-set token from the exact adaptive preview shown before Start. */
   expected_input_fingerprint?: string;
