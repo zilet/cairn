@@ -7,6 +7,7 @@ import { addHealthReview, newestHealthDocDate } from "../repo/health.js";
 import { getHealthSynthesis, healthFocus, saveHealthSynthesis } from "../repo/health-focus.js";
 import { distinctMarkerNames, planMarkerMerges, setMarkerAlias } from "../repo/marker-canon.js";
 import { reconcileSuggestions } from "../repo/memory.js";
+import { backgroundTimeoutForOp } from "../repo/settings.js";
 import type { FallbackResult } from "../agents.js";
 import { resolveOrder, runChosen, runChosenStreaming, runChosenWithCoachReads } from "../runChosen.js";
 import { buildHealthReviewPrompt, buildHealthSynthesisPrompt, buildMarkerReconcilePrompt, buildImagingTwinPrompt } from "../prompt.js";
@@ -96,6 +97,7 @@ export async function synthesizeHealth(agent: string | undefined, hooks?: OpHook
     const run = await runChosenStreaming(agent, prompt, {
       op: "health_synthesis",
       signal: hooks?.signal,
+      timeoutMs: backgroundTimeoutForOp("health_synthesis"),
       onDelta: hooks?.onDelta,
       acceptParsed: isHealthSynthesisResult,
       boundedReads: true,
@@ -161,6 +163,7 @@ export async function reconcileMarkers(agent?: string, hooks?: OpHooks) {
     run = await runChosen(agent, prompt, {
       op: "marker_reconcile",
       signal: hooks?.signal,
+      timeoutMs: backgroundTimeoutForOp("marker_reconcile"),
       acceptParsed: isReconciliationResult,
       schema: MARKER_RECONCILE_SCHEMA,
     });

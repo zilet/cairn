@@ -5,6 +5,28 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+### Changed
+
+- **The coach looks things up in one run more often.** An everyday / deep agent order in Settings is
+  now a preference, not a pin: when a coach turn can read on demand, a signed-in CLI that calls the
+  reads natively (Claude, Codex) goes ahead of one that relaunches for every read, still in your
+  order among themselves. An agent you name for the turn, or a chat route, is never reordered.
+- **Background coaching work has a shorter leash.** Insights, meal plans, swaps and recipes, plan
+  proposals, memory passes, exercise and marker reconciles and the health synthesis stop after
+  2.5 minutes (4 for the long plan, meal-week and lab documents) instead of 5, so a stuck CLI frees
+  its slot sooner.
+
+### Fixed
+
+- **A Brief whose agent keeps failing is no longer retried on every open.** After a failed attempt,
+  that day's read waits 30 minutes before asking the agent again; a new read you ask for, a change
+  in what the day is, and the morning warm still go straight to the agent.
+- **Settings → Agents no longer stalls the server.** The agent list and each agent's info line read
+  cached sign-in and version checks (or wait briefly for one in the background) instead of running
+  a CLI inline; each CLI's `--version` now runs once per check instead of twice.
+- **Checking whether a meal-plan refresh can run no longer advances the agent rotation.**
+- **"Say hello" on the connect step is now counted in the agent stats.**
+
 ## [2.2.0] — 2026-11-11
 
 The coach looks things up instead of being handed everything: chat sends a small core (who you are, today, this week) and reads the rest on demand, through native tool calls where the CLI can be confined to them. Run days can be moved for one week without touching your usual week. Migrations 131–132 (additive columns); back up first.

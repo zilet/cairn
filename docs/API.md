@@ -60,8 +60,8 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/agents` |  |
-| GET | `/api/agents/:name/info` | Per-agent read-only visibility (subprocess probes — fetched lazily, not on every Settings open). Both return ok:false at HTTP 200, mirroring the rest of Cairn's designed failure signals. |
+| GET | `/api/agents` | The agent list. Never waits on a cold CLI probe: a sign-in check still running after a short settle reads `login_checking: true` (ask again shortly), exactly as GET /settings. |
+| GET | `/api/agents/:name/info` | Per-agent read-only visibility (subprocess probes — fetched lazily, not on every Settings open, and read off the event loop). Both return ok:false at HTTP 200, mirroring the rest of Cairn's designed failure signals. |
 | GET | `/api/agents/:name/models` |  |
 | POST | `/api/agents/:name/verify` | "Say hello": one tiny round-trip through the real spawn path for THIS agent only, no rotation. Always 200 — {ok:true, agent, ms} or {ok:false, agent, reason, message} with reason busy \| not_signed_in \| timeout \| failed \| not_installed (busy = retry, never a verdict). Success refreshes the cached login verdict (src/coachOps/welcome.ts). |
 

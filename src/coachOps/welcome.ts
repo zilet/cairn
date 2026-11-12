@@ -26,6 +26,7 @@ import {
   runAgent,
 } from "../agents.js";
 import { isAgentBusyError } from "../agent-busy.js";
+import { recordAgentRun } from "../repo/agent-telemetry.js";
 import { runChosen } from "../runChosen.js";
 import { buildOnboardPrompt } from "../prompt/program.js";
 import { ONBOARD_SCHEMA } from "../agent-contracts.js";
@@ -123,13 +124,44 @@ async function verifyAgentOnce(name: string, opts: { timeoutMs?: number }): Prom
     return { ok: false, agent: name, ...verifyFailureFrom(name, { launchFailed: true }) };
   }
   const started = Date.now();
+  const profile = executionProfileForOp("agent_hello");
+  // The hello is a real spawn, so it gets the same agent_runs row the rotation writes
+  // for every attempt (runAgentWithFallback) — busy aside, which never spawned.
+  const record = (fields: HelloRunFields) => recordHelloRun(name, started, profile, fields);
   try {
     const result = await runAgent(name, VERIFY_PROMPT, {
       timeoutMs: opts.timeoutMs ?? AGENT_VERIFY_TIMEOUT_MS,
       priority: "interactive",
-      profile: executionProfileForOp("agent_hello"),
+      profile,
     });
-    if (result.parsed && typeof result.parsed === "object" && (result.parsed as any).ok === true) {
+    const answered = !!result.parsed && typeof result.parsed === "object" && (result.parsed as any).ok === true;
+    const usage = {
+      exit_code: result.code ?? null,
+      model: result.usage?.model ?? null,
+      input_tokens: result.usage?.input_tokens ?? null,
+      output_tokens: result.usage?.output_tokens ?? null,
+    };
+    if (answered) {
+      record({ ok: true, parsed: true, status: "ok", ...usage });
+    } else {
+      const parsed = !!result.parsed;
+      const failure = parsed ? null : classifyAgentFailure(name, result, new Date());
+      const errorClass = parsed
+        ? "invalid_contract"
+        : failure && failure.state !== "invalid_output"
+          ? failure.state
+          : "invalid_json";
+      record({
+        ok: false,
+        parsed,
+        status: errorClass === "invalid_contract" || errorClass === "invalid_json" ? "invalid_output" : errorClass,
+        error_class: errorClass,
+        error_message: parsed ? "hello reply outside the requested contract" : "hello reply had no valid JSON",
+        failure_tail: result.failure_tail ?? null,
+        ...usage,
+      });
+    }
+    if (answered) {
       const ms = Date.now() - started;
       try {
         invalidateAgentConfigured(name);
@@ -159,11 +191,67 @@ async function verifyAgentOnce(name: string, opts: { timeoutMs?: number }): Prom
   } catch (error: any) {
     if (isAgentBusyError(error)) return { ok: false, agent: name, ...verifyFailureFrom(name, { busy: true }) };
     const message = String(error?.message ?? "");
+    {
+      // Same classing as the rotation's thrown-run row.
+      const timedOut = /timed out/i.test(message);
+      const thrown = timedOut ? null : classifyAgentFailure(name, { code: null, raw: "", stderr: message }, new Date());
+      const errorClass = timedOut ? "timeout" : (thrown?.state ?? "process_error");
+      record({
+        ok: false,
+        parsed: false,
+        status: errorClass === "process_error" ? "error" : errorClass,
+        error_class: errorClass,
+        error_message: message || null,
+      });
+    }
     if (/timed out/i.test(message)) return { ok: false, agent: name, ...verifyFailureFrom(name, { timedOut: true }) };
     if (/failed to launch/i.test(message))
       return { ok: false, agent: name, ...verifyFailureFrom(name, { launchFailed: true }) };
     const failure = classifyAgentFailure(name, { code: null, raw: "", stderr: message }, new Date());
     return { ok: false, agent: name, ...(await signedOutOrAsIs(name, verifyFailureFrom(name, { failure }))) };
+  }
+}
+
+type HelloRunFields = {
+  ok: boolean;
+  parsed: boolean;
+  status: string;
+  error_class?: string | null;
+  error_message?: string | null;
+  exit_code?: number | null;
+  model?: string | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  failure_tail?: string | null;
+};
+
+// One agent_runs row for a hello (op `agent_hello`), shaped like the rotation's rows so
+// the agent stats read it the same way. Telemetry never fails the hello.
+function recordHelloRun(
+  name: string,
+  started: number,
+  profile: ReturnType<typeof executionProfileForOp>,
+  fields: HelloRunFields
+): void {
+  try {
+    let requested: { model?: string; reasoning?: string } = {};
+    try {
+      requested = profile(name) ?? {};
+    } catch {
+      requested = {};
+    }
+    recordAgentRun({
+      op: "agent_hello",
+      agent: name,
+      latency_ms: Date.now() - started,
+      tried_json: false,
+      requested_model: requested.model ?? null,
+      requested_reasoning: requested.reasoning ?? null,
+      effective_reasoning: requested.reasoning ?? null,
+      ...fields,
+    });
+  } catch {
+    /* telemetry never breaks the hello */
   }
 }
 

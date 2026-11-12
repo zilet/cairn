@@ -15,7 +15,7 @@ import { db } from "../db.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { MEAL_REFRESH_INSTRUCTION_KEY, MEAL_REFRESH_REQUEST_KEY } from "./meal-refresh-retry.js";
 import { mealPlanAutoDraftEnabled } from "./meal-plan-auto-draft.js";
-import { pickAgentOrder } from "./settings.js";
+import { getAgentConfig } from "./settings.js";
 import { addDaysISO, localDateISO } from "./shared.js";
 
 const REFRESH_SIG_KEY = "meal_directive_refresh_sig";
@@ -98,9 +98,12 @@ function acceptedMealPlanCreatedMs(): number | null {
   }
 }
 
+// "Is any agent usable" — read WITHOUT rotating. pickAgentOrder() persists a new
+// `rr_cursor` under round-robin, so asking it here advanced the rotation (and wrote
+// settings) on a no-op. Same predicate as agentStatusFor / the day-read refresh gate.
 function agentsAvailable(): boolean {
   try {
-    return pickAgentOrder().length > 0;
+    return getAgentConfig({ loginProbe: "peek" }).some((agent) => agent.usable);
   } catch {
     return false;
   }

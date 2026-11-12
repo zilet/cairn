@@ -5,7 +5,7 @@
 
 import { getAgentConfig, interactiveTimeoutForOp } from "../repo/settings.js";
 import type { FloorPrecheck, FloorViolation } from "../repo/verify-floors.js";
-import { AgentFallbackError, agentInfo, listAgentModelsAsync, loadAgents } from "../agents.js";
+import { AgentFallbackError, agentInfoAsync, listAgentModelsAsync, loadAgents } from "../agents.js";
 import { agentBusyEnvelopeFields } from "../agent-busy.js";
 import type { JsonSchema } from "../json-schema.js";
 import { runChosen } from "../runChosen.js";
@@ -17,10 +17,11 @@ import { isVerifyResult, verifyResultSchema } from "../agent-contracts.js";
 export { runChosen };
 
 // "What's running" for one agent: installed version + best-effort current model.
-// ok:false (at the adapter's HTTP 200) for an unknown agent.
-export function agentInfoOp(name: string) {
+// ok:false (at the adapter's HTTP 200) for an unknown agent. Read without blocking the
+// event loop (cached, else async probes), like the model catalog below.
+export async function agentInfoOp(name: string) {
   if (!loadAgents()[name]) return { ok: false as const, error: `unknown agent "${name}"` };
-  const info = agentInfo(name);
+  const info = await agentInfoAsync(name);
   return { ok: true as const, ...info };
 }
 

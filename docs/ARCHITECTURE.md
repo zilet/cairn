@@ -1929,7 +1929,13 @@ unchanged re-stamps the row inline (same prose, live evidence) instead of writin
 arming another agent run; completion / work / load / trained / fuel / prose-contradiction remain
 fact changes. A stale-marked row takes the same two branches, and a true miss (no row at all)
 serves the deterministic floor at once and arms the self-heal re-warm — the Brief GET never
-awaits an agent; only `?reset=1` and a steered read still compute inline. (3) `precomputeDayReadFloor` + `sleepRowExistsFor` (`src/dayread.ts`): when the
+awaits an agent; only `?reset=1` and a steered read still compute inline. The self-heal backs off
+after a failed agent attempt: `computeDayRead` notes a contract rejection, timeout or process
+failure per date and prose identity (`noteDayReadAgentFailure`, `src/dayread-refresh.ts`; never for
+`AgentBusyError` or an empty rotation), and `ensureDayReadRefresh` does not re-arm that date and call
+for `DAY_READ_FAILURE_BACKOFF_MINUTES` (30) — otherwise every open of the floor paid a reply plus its
+repair. Process-local; the athlete's new read, a signal-driven refresh, the precompute and a changed
+identity are never held, and a landed agent read clears it. (3) `precomputeDayReadFloor` + `sleepRowExistsFor` (`src/dayread.ts`): when the
 small-hours precompute finds no sleep row dated that day it warms the deterministic floor only.
 The morning open is still instant, nothing is written about a night that has not synced, and the
 first agent run happens after the first sync or the first open, whichever lands first. When the
@@ -4014,9 +4020,13 @@ sign-in error) is never an attach failure, so the one fallback launch is not spe
 
 **Routing by capability** (`orderChatForCoachReads`, `src/repo/settings.ts`, beside the task policy): on a
 reading lane the turn's OPEN order (usable, not on an availability hold) lifts the native-transport agents
-to the front, the rest following in the policy's own order. A named agent for the turn, a `chat` route pin
-or a class order (`agent_class_order`) for the lane is the person's choice and is left untouched; model
-bindings are never touched by it at all.
+to the front, the rest following in the policy's own order. A named agent for the turn or a `chat` route
+pin is the person's choice for that turn and is left untouched (`chatTurnPinsAgent`, `src/chatTurns.ts`).
+A class order (`agent_class_order`) for the lane is NOT such a choice: it is a head preference among
+agents, already folded into the open order, so it still ranks the native agents among themselves, but a
+natively reading agent is lifted past a prompt-loop one the class order lists first (a prompt-loop agent
+relaunches its CLI for every read round). Capture, photo and current-research turns keep the open order
+exactly; model bindings are never touched by it at all.
 
 **Telemetry.** The assistant message's meta carries `reads: {transport, calls:[{tool, ms, bytes, ok}],
 rounds, total_bytes, native_fallback?}` and `prompt_bytes`; the server log gets one
@@ -4329,7 +4339,13 @@ but silently truncates a deliberately expensive one: the run is killed mid-think
 reads it as a failed agent. `interactiveTimeoutFor(reasoning)` scales the leash (low 90s → medium
 150s → high 240s → xhigh/max `DEFAULT_TIMEOUT_MS`), reached via `interactiveTimeoutForOp(op)` for job
 ops and `chatTurnTimeoutMs(profile)` for chat. `INTERACTIVE_TIMEOUT_MS` remains exported as the floor
-of that ladder — do not pass it directly.
+of that ladder — do not pass it directly. Background coaching ops (insight / weekly read, chat
+distill, memory consolidation, about-me growth, meal plan / swap / recipe, proposal, evolve_program,
+exercise and marker reconcile, health synthesis) pass `backgroundTimeoutForOp(op)` rather than
+falling to `DEFAULT_TIMEOUT_MS` (300 s, which a wedged CLI sat out in full): the effort leash (150 s
+at low/medium), `BACKGROUND_LEASH_MAX_MS` (240 s) for the long structured outputs, never past it. For
+a bounded-read op it is the total across its read rounds. `test/backgroundLeash.test.js` pins each
+call site.
 
 **Chat is deliberately absent from the table.** The adaptive chat router (`src/chatRouting.ts`)
 already assigns a per-message lane profile and stays authoritative for effort; only the timeout

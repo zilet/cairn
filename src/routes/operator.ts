@@ -11,7 +11,9 @@ import { loadAgents, settleAgentLoginChecks } from "../agents.js";
 import { serverDiskRead, type ServerDisk } from "../hosting.js";
 import { agentInfoOp, agentModelsOp, verifyAgent } from "../coachOps.js";
 import {
+  AGENT_PROBE_SETTLE_MS,
   getAgentConfig,
+  getAgentConfigSettled,
   getAgentStats,
   getBrainDiagnostics,
   getSettings,
@@ -28,12 +30,26 @@ import { applyDetectedUnits, athleteUnits, unitsSource } from "../repo/settings.
 
 export const operatorRouter = Router();
 
-operatorRouter.get("/agents", (_req, res) => res.json(getAgentConfig()));
+// The agent list. Never waits on a cold CLI probe: a sign-in check still running after a
+// short settle reads `login_checking: true` (ask again shortly), exactly as GET /settings.
+operatorRouter.get("/agents", async (_req, res, next) => {
+  try {
+    res.json(await getAgentConfigSettled(SETTINGS_LOGIN_WAIT_MS));
+  } catch (e) {
+    next(e);
+  }
+});
 
 // Per-agent read-only visibility (subprocess probes — fetched lazily, not on
-// every Settings open). Both return ok:false at HTTP 200, mirroring the rest of
-// Cairn's designed failure signals.
-operatorRouter.get("/agents/:name/info", (req, res) => res.json(agentInfoOp(req.params.name)));
+// every Settings open, and read off the event loop). Both return ok:false at HTTP
+// 200, mirroring the rest of Cairn's designed failure signals.
+operatorRouter.get("/agents/:name/info", async (req, res, next) => {
+  try {
+    res.json(await agentInfoOp(req.params.name));
+  } catch (e) {
+    next(e);
+  }
+});
 operatorRouter.get("/agents/:name/models", async (req, res) => res.json(await agentModelsOp(req.params.name)));
 // "Say hello": one tiny round-trip through the real spawn path for THIS agent only, no
 // rotation. Always 200 — {ok:true, agent, ms} or {ok:false, agent, reason, message}
@@ -126,7 +142,7 @@ export function settingsResponse() {
 // How long GET /settings lets a cold login probe answer before replying "checking"
 // (`login_checking`): long enough for a warm CLI, short enough that a slow one never
 // holds the welcome. The probe keeps running and the next read has its verdict.
-export const SETTINGS_LOGIN_WAIT_MS = 1500;
+export const SETTINGS_LOGIN_WAIT_MS = AGENT_PROBE_SETTLE_MS;
 
 operatorRouter.get("/settings", (_req, res) => {
   const first = settingsResponse();

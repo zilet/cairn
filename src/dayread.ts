@@ -28,6 +28,9 @@ import {
 } from "./repo/day-read.js";
 import { log } from "./log.js";
 import { noteContractRejection } from "./contractRejection.js";
+import { isAgentBusyError } from "./agent-busy.js";
+import { AgentFallbackError } from "./agents.js";
+import { clearDayReadAgentFailure, noteDayReadAgentFailure } from "./dayread-refresh.js";
 
 // The PWA drives every request with its LOCAL calendar date (state.logDate), so
 // the cache key — and the nightly precompute — must use the server's local date
@@ -798,6 +801,15 @@ export function dayReadReplyChecks(
   return `\n\nREPLY CHECKS (the server runs these on your JSON; a reply that fails one is thrown away):\n${lines.join("\n")}`;
 }
 
+// Did a thrown compute mean an agent was actually ASKED and failed (contract rejection,
+// timeout, process failure)? Host congestion is not one — the CLI never started and the
+// runner contract is defer-and-retry (src/agent-busy.ts) — and neither is an empty
+// rotation (no agent enabled), which asked nobody.
+export function dayReadAgentAttemptFailed(error: unknown): boolean {
+  if (isAgentBusyError(error)) return false;
+  return !(error instanceof AgentFallbackError && !error.order.length);
+}
+
 function agentIssueFor(error: unknown): "invalid_response" | "unreachable" {
   const message = String((error as any)?.message ?? error ?? "");
   return /outside the requested contract|no valid JSON/i.test(message) ? "invalid_response" : "unreachable";
@@ -976,8 +988,11 @@ export async function computeDayRead(
         input_fingerprint: baseline.input_fingerprint,
         computed_at: computedAt,
       };
+      if (!steered) clearDayReadAgentFailure(resolvedDate);
     } else {
       // Agent unreachable / wrong shape → the deterministic floor (still a real read).
+      // The self-heal leaves this date and call alone for the failure backoff.
+      if (!steered) noteDayReadAgentFailure(resolvedDate, identity);
       out = {
         ...baseline,
         headline: dayReadHeadline(baseline, resolvedDate),
@@ -987,6 +1002,7 @@ export async function computeDayRead(
       };
     }
   } catch (e: any) {
+    if (!steered && dayReadAgentAttemptFailed(e)) noteDayReadAgentFailure(resolvedDate, identity);
     out = {
       ...baseline,
       headline: dayReadHeadline(baseline, resolvedDate),

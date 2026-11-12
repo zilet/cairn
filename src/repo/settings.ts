@@ -3,6 +3,7 @@ import {
   listAgents,
   agentVersion,
   peekAgentVersion,
+  settleAgentLoginChecks,
   interactiveTimeoutFor,
   loadAgents,
   resolveAgentProfileForClass,
@@ -534,6 +535,34 @@ export function interactiveTimeoutForOp(op: string): number {
   // on a small host needs (a Pi's week-ahead peaks past two minutes). The Brief keeps its
   // own short one — it was always low, and it never awaits an agent on open.
   return task === "day_read" ? leash : Math.max(leash, INTERACTIVE_LEASH_FLOOR_MS, OBSERVED_LEASH_FLOOR_MS[task] ?? 0);
+}
+
+// The ceiling of every background leash below: the longest a coaching op may hold a spawn
+// permit before the rotation moves on. Well under DEFAULT_TIMEOUT_MS (300 s), which a
+// wedged CLI otherwise sat out in full while every queued op waited behind it.
+export const BACKGROUND_LEASH_MAX_MS = 240_000;
+
+// Ops whose reply is a LONG structured document (a whole plan, a meal week, a lab
+// synthesis, a marker reconciliation) — they get the ceiling, not the effort leash.
+const LONG_OUTPUT_OPS: ReadonlySet<string> = new Set([
+  "health_synthesis",
+  "marker_reconcile",
+  "proposal",
+  "evolve_program",
+  "meal_plan",
+]);
+
+/**
+ * The explicit leash for a background coaching op (a queued job or a nightly pass,
+ * nobody blocked on it). Without one a run fell to DEFAULT_TIMEOUT_MS; live, a hung
+ * exercise reconcile held its permit the full 300 s. The effort leash
+ * (interactiveTimeoutForOp: 150 s at low/medium) is the base, long structured outputs
+ * get the ceiling, and nothing goes past it. For an op that reads on demand
+ * (boundedReads) it is the TOTAL deadline across its read rounds.
+ */
+export function backgroundTimeoutForOp(op: string): number {
+  const leash = Math.max(interactiveTimeoutForOp(op), LONG_OUTPUT_OPS.has(op) ? BACKGROUND_LEASH_MAX_MS : 0);
+  return Math.min(leash, BACKGROUND_LEASH_MAX_MS);
 }
 
 const SETTINGS_COLUMN_REPAIRS: [string, string][] = [
@@ -1375,6 +1404,29 @@ export function getAgentConfig(opts: { loginProbe?: "sync" | "peek" } = {}) {
   });
 }
 
+// How long a request lets a cold login probe answer before replying "checking"
+// (`login_checking`): long enough for a warm CLI, short enough that a slow one never
+// holds the screen. GET /settings, GET /agents and MCP list_agents share it.
+export const AGENT_PROBE_SETTLE_MS = 1500;
+
+/**
+ * getAgentConfig for a request: never a synchronous CLI probe. Reads with the peek
+ * (cached verdicts, else `login_checking` while ONE background probe per agent runs),
+ * and when something is still checking gives those probes `waitMs` to land before
+ * reading once more — the same pattern GET /settings uses. A probe that is still
+ * running after that keeps going; the next read has its verdict.
+ */
+export async function getAgentConfigSettled(waitMs: number) {
+  const first = getAgentConfig({ loginProbe: "peek" });
+  if (!first.some((agent) => agent.login_checking)) return first;
+  await settleAgentLoginChecks(waitMs);
+  try {
+    return getAgentConfig({ loginProbe: "peek" });
+  } catch {
+    return first;
+  }
+}
+
 // Per-task routing resolution (pure, no side effects — safe to unit-test).
 // When a caller leaves the agent as "auto"/blank for a known task AND the user
 // pinned that task to a specific agent that is currently ENABLED, return that
@@ -1561,9 +1613,13 @@ export function pickAgentOrderForTask(
 // process, several calls, no re-launch per round), then the rest in the order the policy
 // above already produced — a preference, never exclusive, exactly like agent_class_order.
 // The input order is the turn's OPEN order (usable, signed in, not on an availability
-// hold), so a held native agent is never lifted. It is left untouched when the person
-// chose: a named agent for the turn, a chat route pin, or a class order for the lane —
-// an explicit choice always outranks a capability preference. A native attach that fails
+// hold), so a held native agent is never lifted. It is left untouched only when the turn's
+// agent was CHOSEN (`explicit`): a named agent for the turn or a chat route pin — a pin
+// always outranks a capability preference. The lane's class order is not such a choice:
+// it is a head preference the input order already carries, so it still ranks the native
+// agents among themselves (the filter keeps their order) but never holds a natively
+// reading agent behind a prompt-loop one, which relaunches its CLI for every read round.
+// A native attach that fails
 // at run time falls back to the prompt loop on the same agent (src/chatTurns.ts) before
 // the rotation moves on, so this order never costs a turn its answer.
 export function orderChatForCoachReads(

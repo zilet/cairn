@@ -383,7 +383,7 @@ export async function readToday(options: ReadTodayOptions = {}): Promise<DayRead
         // A transient all-agent failure may have cached the deterministic floor.
         // Serve it instantly, then quietly ensure one agent-gated re-warm is
         // pending so the Brief heals instead of pinning floor prose all day.
-        if (cached.source === "deterministic") ensureDayReadRefresh(readDate);
+        if (cached.source === "deterministic") ensureDayReadRefresh(readDate, cached.prose_identity ?? null);
         // The cache is a prose accelerator, never the authority on whether work
         // has happened. A Garmin/manual activity can land while an older agentic
         // warm is still in flight and re-save prospective copy after invalidation.
@@ -517,7 +517,7 @@ export async function readToday(options: ReadTodayOptions = {}): Promise<DayRead
     // it now, persisted like any floor, and let the self-heal re-warm (or a run already
     // in flight) write the agent's sentence behind it.
     const read = writeAgentlessDayRead(readDate);
-    ensureDayReadRefresh(readDate);
+    ensureDayReadRefresh(readDate, read?.prose_identity ?? null);
     if (recordOutcome) recordDayReadSuggestion(readDate, read, null);
     return attachDayReadContext(readDate, { ...read, agent_status: agentStatusFor(read) });
   } catch (e: any) {

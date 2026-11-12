@@ -10,7 +10,8 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import "./_seed.js";
 import { db, repo, resetTables } from "./_seed.js";
-import { chatCoachReadOrder, runChatCompletion, runQueuedChatTurn, onTurnEvent } from "../dist/chatTurns.js";
+import { chatCoachReadOrder, chatTurnPinsAgent, runChatCompletion, runQueuedChatTurn, onTurnEvent } from "../dist/chatTurns.js";
+import { buildChatProviderOrder } from "../dist/chat-routing-runtime.js";
 import { createCoachReadGate, gatedCoachRead } from "../dist/coachReadMcp.js";
 import {
   AGENT_BUSY_MAX_DEFERRALS,
@@ -291,7 +292,7 @@ test("routing: native-capable agents first, explicit choices untouched, nothing 
     "grok",
     "antigravity",
   ]);
-  // A named agent, a chat route pin or a class order is the person's choice.
+  // A named agent or a chat route pin is the person's choice for the turn.
   assert.deepEqual(orderChatForCoachReads(["grok", "claude"], { explicit: true, readsNatively: native }), ["grok", "claude"]);
   // The input is the open order — a held native agent is not in it and is never added.
   assert.deepEqual(orderChatForCoachReads(["grok", "antigravity"], { explicit: false, readsNatively: native }), ["grok", "antigravity"]);
@@ -456,4 +457,30 @@ test("routing reorders for native only on a native-eligible turn", () => {
   // "full" context (no lean reads) and an explicit choice leave the order alone too.
   assert.deepEqual(chatCoachReadOrder(open, { ...base, leanReads: false }), ["grok", "claude"]);
   assert.deepEqual(chatCoachReadOrder(open, { ...base, explicit: true }), ["grok", "claude"]);
+});
+
+test("a class order is a head preference: a native reader is lifted past it, a named agent or route pin is not", () => {
+  const native = (name) => name === "claude" || name === "codex";
+  // Settings → Agents class order {fast:["antigravity","claude"]}, auto-routed turn: the
+  // open order arrives class-first. On a reading lane claude reads natively, so it leads.
+  const classFirstOpen = buildChatProviderOrder("auto", ["grok", "claude", "codex", "antigravity"], {
+    classFirst: ["antigravity", "claude"],
+  });
+  assert.deepEqual(classFirstOpen, ["antigravity", "claude", "grok", "codex"]);
+  const pinned = chatTurnPinsAgent("auto", "auto");
+  assert.equal(pinned, false, "a class order alone is not a per-turn choice");
+  const base = { leanReads: true, nativeEligible: true, explicit: pinned, readsNatively: native };
+  // Among several native agents the class/policy order stands (claude before codex).
+  assert.deepEqual(chatCoachReadOrder(classFirstOpen, base), ["claude", "codex", "antigravity", "grok"]);
+  // Capture lane (no lean reads), photo and current-research turns keep the class order.
+  assert.deepEqual(chatCoachReadOrder(classFirstOpen, { ...base, leanReads: false }), classFirstOpen);
+  assert.deepEqual(chatCoachReadOrder(classFirstOpen, { ...base, nativeEligible: false }), classFirstOpen);
+
+  // A NAMED agent for the turn, or a chat route pin, still wins and is never reordered.
+  assert.equal(chatTurnPinsAgent("antigravity", "antigravity"), true, "named for the turn");
+  assert.equal(chatTurnPinsAgent("auto", "antigravity"), true, "chat route pin");
+  assert.equal(chatTurnPinsAgent(undefined, "antigravity"), true, "route pin on a blank turn");
+  assert.equal(chatTurnPinsAgent("", undefined), false);
+  const pinOpen = buildChatProviderOrder("antigravity", ["grok", "claude"], { classFirst: ["antigravity", "claude"] });
+  assert.deepEqual(chatCoachReadOrder(pinOpen, { ...base, explicit: chatTurnPinsAgent("auto", "antigravity") }), pinOpen);
 });

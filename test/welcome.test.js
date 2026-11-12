@@ -334,9 +334,26 @@ test("verify: one agent, the real spawn path — ok with a latency, or a plain r
         missing: await ops.verifyAgent("missing"),
         chatty: await ops.verifyAgent("chatty"),
         unknown: await ops.verifyAgent("nope"),
+        runs: (await import("./dist/db.js")).db
+          .prepare("SELECT agent, ok, status, error_class FROM agent_runs WHERE op = 'agent_hello' ORDER BY id")
+          .all()
+          .map((r) => ({ ...r })),
       };
     `
   );
+  // Every hello that spawned is an agent_runs row, like any rotation attempt; one that
+  // never spawned (not installed, unknown) is not.
+  assert.deepEqual(
+    out.runs.map((r) => [r.agent, r.ok]),
+    [
+      ["good", 1],
+      ["signedout", 0],
+      ["slow", 0],
+      ["chatty", 0],
+    ]
+  );
+  assert.equal(out.runs.find((r) => r.agent === "slow").error_class, "timeout");
+  assert.equal(out.runs.find((r) => r.agent === "good").status, "ok");
   assert.equal(out.good.ok, true);
   assert.equal(out.good.agent, "good");
   assert.ok(Number.isFinite(out.good.ms) && out.good.ms >= 0);

@@ -2170,7 +2170,10 @@ export interface ChatCompletionDeps {
  * The turn's agent order once coach reads are considered: native-transport agents first
  * (repo.orderChatForCoachReads) ONLY when the turn will actually read natively — a lean
  * reading lane, and not a photo or current-research turn, which stay on the prompt loop.
- * Otherwise the open order stands exactly.
+ * Otherwise the open order stands exactly. `explicit` is a PINNED agent only (see
+ * chatTurnPinsAgent): the person's class order is a head preference already folded into
+ * the open order, so it ranks the native agents among themselves but never keeps a
+ * natively-reading agent behind a prompt-loop one.
  */
 export function chatCoachReadOrder(
   openOrder: readonly string[],
@@ -2178,6 +2181,18 @@ export function chatCoachReadOrder(
 ): string[] {
   if (!opts.leanReads || !opts.nativeEligible) return [...openOrder];
   return repo.orderChatForCoachReads(openOrder, { explicit: opts.explicit, readsNatively: opts.readsNatively });
+}
+
+/**
+ * True when the turn's agent is a per-turn CHOICE the native-read lift must not reorder: an
+ * agent named for this turn, or a `chat` route pin in Settings (what resolveAgentForTask
+ * returned). The lane's class order (settings.agent_class_order) is deliberately NOT one —
+ * it is a head preference among agents, and on a reading lane a natively-reading agent
+ * outranks it, because a prompt-loop agent relaunches its CLI for every read round.
+ */
+export function chatTurnPinsAgent(turnAgent: unknown, chosen: string | null | undefined): boolean {
+  const named = typeof turnAgent === "string" && turnAgent !== "" && turnAgent !== "auto";
+  return named || Boolean(chosen && chosen !== "auto");
 }
 
 export async function runChatCompletion(
@@ -2286,11 +2301,13 @@ export async function runChatCompletion(
   // prompt loop (over the same lean core).
   const nativeEligible = !turn.image_path && !wantsWeb;
   // Agents that read natively go first on a reading lane — beside the routing policy,
-  // never overriding a named agent, a chat route pin, or the person's class order.
+  // never overriding a named agent or a chat route pin. The class order is a preference
+  // the open order already carries: it ranks the native agents among themselves, but a
+  // natively-reading agent is lifted past a prompt-loop one it lists first.
   const order = chatCoachReadOrder(openOrder, {
     leanReads,
     nativeEligible,
-    explicit: selectedFirst || Boolean(chosen && chosen !== "auto") || Boolean(classFirst?.length),
+    explicit: chatTurnPinsAgent(turn.agent, chosen),
     readsNatively: (name) => resolveReadTransport(name).transport === "native_mcp",
   });
   const bindings = adaptive ? chatSettings.chat_profile_bindings : {};

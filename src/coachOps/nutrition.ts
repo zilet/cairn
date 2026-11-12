@@ -13,6 +13,7 @@ import { computeGoalCheck, getProfile } from "../repo/profile.js";
 import { getProgramState } from "../repo/program-state.js";
 import { createProposal, getProposal } from "../repo/proposals.js";
 import { getRecentSessions } from "../repo/sessions.js";
+import { backgroundTimeoutForOp } from "../repo/settings.js";
 import { mealPlanFloorPrecheck } from "../repo/verify-floors.js";
 import { addDaysISO, localDateISO } from "../repo/shared.js";
 import { daysBetweenISO } from "../lib/dates.js";
@@ -223,6 +224,7 @@ export async function draftMealPlan(
     run = await runChosen(agent, prompt, {
       op: "meal_plan",
       signal: hooks?.signal,
+      timeoutMs: backgroundTimeoutForOp("meal_plan"),
       acceptParsed: planSane,
       // Structure only. Nutritional ADEQUACY stays a server-side judgement
       // (validateMealPlanDraftForPersistence) — a schema must never look like it
@@ -573,6 +575,7 @@ export async function swapMealAgentic(
     run = await runChosen(agent, prompt, {
       op: "meal_swap",
       signal: hooks?.signal,
+      timeoutMs: backgroundTimeoutForOp("meal_swap"),
       acceptParsed: isMealSwapResult,
       schema: MEAL_SWAP_SCHEMA,
     });
@@ -611,6 +614,7 @@ export async function generateRecipe(
     run = await runChosen(agent, prompt, {
       op: "recipe",
       signal: hooks?.signal,
+      timeoutMs: backgroundTimeoutForOp("recipe"),
       acceptParsed: isRecipeResult,
       schema: RECIPE_SCHEMA,
     });

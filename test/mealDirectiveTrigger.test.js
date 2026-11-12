@@ -12,6 +12,10 @@ import { db, repo, tsDaysAgo, localDaysAgo } from "./_seed.js";
 import { addDaysISO } from "../dist/repo/shared.js";
 import { decideAutonomyTier } from "../dist/brain/autonomy.js";
 import { roundMinutesToHalfHour } from "../dist/prompt/day.js";
+import { invalidateAgentConfigured } from "../dist/agents.js";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 const REQUEST_KEY = "meal_plan_refresh_requested";
 const INSTRUCTION_KEY = "meal_plan_refresh_instruction";
@@ -160,4 +164,33 @@ test("roundMinutesToHalfHour: nearest half hour, natural whole-number phrasing",
   // Whole numbers render without a trailing ".0" (the phrasing requirement).
   assert.equal(String(roundMinutesToHalfHour(120)), "2");
   assert.equal(String(roundMinutesToHalfHour(90)), "1.5");
+});
+
+// ---- the availability gate never rotates the agent order ----
+// "Is any agent usable" used to be answered by pickAgentOrder(), which under round-robin
+// advances and PERSISTS rr_cursor — a write (and a skipped provider) for a no-op check.
+test("the default availability gate reads the usable set without moving the round-robin cursor", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cairn-meal-gate-"));
+  const configPath = path.join(dir, "agents.json");
+  // Two present, login-undetectable (so usable) fixture agents: this very Node binary.
+  const fixture = { command: process.execPath, args: ["-e", "0"], input: "arg", description: "fixture", env_required: [] };
+  fs.writeFileSync(configPath, JSON.stringify({ alpha: fixture, beta: fixture }));
+  const previous = process.env.AGENTS_CONFIG;
+  process.env.AGENTS_CONFIG = configPath;
+  invalidateAgentConfigured();
+  try {
+    repo.setSettings({ agent_strategy: "round_robin", rr_cursor: "alpha", disabled_agents: [] });
+    assert.equal(repo.getSettings().rr_cursor, "alpha", "fixture check: the cursor is set");
+    assert.equal(repo.pickAgentOrder().length, 2, "fixture check: both fixture agents are usable");
+    repo.setSettings({ rr_cursor: "alpha" });
+    seedAcceptedPlan(3);
+    seedNutritionDirective(0);
+    assert.equal(repo.maybeRequestMealRefreshForDirectives(), true, "usable agents → the refresh is requested");
+    assert.equal(repo.getSettings().rr_cursor, "alpha", "the gate never advanced the rotation");
+  } finally {
+    if (previous == null) delete process.env.AGENTS_CONFIG;
+    else process.env.AGENTS_CONFIG = previous;
+    invalidateAgentConfigured();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

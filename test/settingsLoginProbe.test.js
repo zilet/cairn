@@ -15,6 +15,8 @@ import os from "node:os";
 import path from "node:path";
 import "./_seed.js";
 import {
+  agentVersion,
+  commandPresent,
   invalidateAgentConfigured,
   refreshAgentConfigured,
   refreshAgentVersion,
@@ -185,4 +187,109 @@ test("a binary that is not there reads absent from the peek and the probe alike"
   const missing = path.join(os.tmpdir(), "cairn-no-such-cli-" + process.pid);
   invalidateAgentConfigured();
   assert.equal(await refreshCommandPresent(missing), false);
+});
+
+function routeHandler(routePath) {
+  const layer = operatorRouter.stack.find((l) => l.route?.path === routePath && l.route.methods.get);
+  assert.ok(layer, `GET ${routePath} is on the operator router`);
+  return layer.route.stack[0].handle;
+}
+
+// GET /agents was the one agent read still on the synchronous probe: a cold (or due-for-
+// retry) login status command ran with spawnSync inside the request, up to its 20 s leash.
+test("GET /agents answers before a slow login probe, with the same row shape", async () => {
+  await withSlowLoginAgent(async (gate) => {
+    const started = Date.now();
+    const sent = await new Promise((resolve, reject) =>
+      routeHandler("/agents")({}, { json: (value) => resolve(value) }, reject)
+    );
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed < SETTINGS_LOGIN_WAIT_MS + PROMPT_MS, `GET /agents replied in ${elapsed} ms`);
+    assert.ok(Array.isArray(sent), "still the bare agent list");
+    const row = sent.find((agent) => agent.name === "claude");
+    assert.equal(row.login_checking, true);
+    assert.equal(row.configured, null);
+    assert.deepEqual(Object.keys(row).sort(), Object.keys(getAgentConfig({ loginProbe: "peek" })[0]).sort());
+
+    gate.open();
+    await refreshAgentConfigured("claude");
+    const warm = await new Promise((resolve, reject) =>
+      routeHandler("/agents")({}, { json: (value) => resolve(value) }, reject)
+    );
+    assert.equal(warm.find((agent) => agent.name === "claude").configured, true);
+  });
+});
+
+// A CLI fixture that counts its `--version` launches and prints only once the gate opens.
+function countingVersionCli(dir, gate) {
+  const counter = path.join(dir, "version-calls");
+  const cli = path.join(dir, "counting-cli");
+  fs.writeFileSync(
+    cli,
+    `#!${process.execPath}\nif (process.argv.includes("--version")) { require("fs").appendFileSync(${JSON.stringify(counter)}, "x"); ${gated(gate.gatePath, "counting-cli 4.5.6")} }\n`
+  );
+  fs.chmodSync(cli, 0o755);
+  return { cli, calls: () => (fs.existsSync(counter) ? fs.readFileSync(counter, "utf8").length : 0) };
+}
+
+async function withCountingCli(fn) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cairn-version-count-"));
+  const gate = makeGate(dir);
+  const fixture = countingVersionCli(dir, gate);
+  const configPath = path.join(dir, "agents.json");
+  fs.writeFileSync(
+    configPath,
+    JSON.stringify({ claude: { command: fixture.cli, args: [], input: "arg", description: "fixture", env_required: [] } })
+  );
+  const previous = process.env.AGENTS_CONFIG;
+  process.env.AGENTS_CONFIG = configPath;
+  invalidateAgentConfigured();
+  try {
+    return await fn({ ...fixture, gate });
+  } finally {
+    gate.open();
+    await settleAgentLoginChecks(GATE_GIVE_UP_MS);
+    if (previous == null) delete process.env.AGENTS_CONFIG;
+    else process.env.AGENTS_CONFIG = previous;
+    invalidateAgentConfigured();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("GET /agents/:name/info reads the version off the event loop, and the CLI launches --version once", async () => {
+  await withCountingCli(async ({ gate, calls }) => {
+    const started = Date.now();
+    const pending = new Promise((resolve, reject) =>
+      routeHandler("/agents/:name/info")({ params: { name: "claude" } }, { json: (value) => resolve(value) }, reject)
+    );
+    assert.ok(Date.now() - started < PROMPT_MS, "the handler returned without waiting on the gated --version");
+    // The event loop is free while the probe waits on its gate.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    gate.open();
+    const info = await pending;
+    assert.equal(info.ok, true);
+    assert.equal(info.version, "4.5.6");
+    assert.equal(info.model_current, null, "no catalog declared, no default model");
+    assert.equal(calls(), 1, "presence and version shared ONE --version launch");
+    // Warm: nothing launches again.
+    await new Promise((resolve, reject) =>
+      routeHandler("/agents/:name/info")({ params: { name: "claude" } }, { json: (value) => resolve(value) }, reject)
+    );
+    assert.equal(calls(), 1);
+  });
+});
+
+test("the presence probe's print is the version: one --version per CLI until invalidated", async () => {
+  await withCountingCli(async ({ cli, gate, calls }) => {
+    gate.open();
+    assert.equal(commandPresent(cli), true);
+    assert.equal(agentVersion("claude"), "4.5.6");
+    assert.equal(calls(), 1, "the sync presence probe answered the version too");
+    // A login / update invalidates every probe cache — the version is read afresh.
+    invalidateAgentConfigured("claude");
+    assert.equal(agentVersion("claude"), "4.5.6");
+    assert.equal(calls(), 2, "invalidation still clears the shared print");
+    assert.equal(agentVersion("claude"), "4.5.6");
+    assert.equal(calls(), 2);
+  });
 });

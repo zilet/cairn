@@ -57,10 +57,10 @@ dayCoachRouter.get("/today-read",
       // A remembered floor read still arms its self-heal on every open, exactly as
       // the cached-row path of readToday does (ensureDayReadRefresh dedupes).
       onHit: (req, read) => {
-        const row = read as { source?: unknown; curated?: unknown; date?: unknown } | null;
+        const row = read as { source?: unknown; curated?: unknown; date?: unknown; prose_identity?: unknown } | null;
         if (row?.source !== "deterministic" || row.curated) return;
         const date = typeof row.date === "string" ? row.date : req.query.date ? String(req.query.date) : undefined;
-        ensureDayReadRefresh(date);
+        ensureDayReadRefresh(date, typeof row.prose_identity === "string" ? row.prose_identity : null);
       },
     }
   )

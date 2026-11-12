@@ -24,7 +24,7 @@ import { AUTO_EVOLUTION_INSTRUCTION, createProposal, getProposal } from "../repo
 import { athleteAskedForLess } from "../repo/volume-floor.js";
 import { isAthleteRequestedRestructure, requestFromInstruction } from "../domain/brain/structure-request.js";
 import { RECOVERY_WEEK_INSTRUCTION_PREFIX, supersedeRecoveryWeekDrafts } from "../repo/recovery-week.js";
-import { interactiveTimeoutForOp } from "../repo/settings.js";
+import { backgroundTimeoutForOp, interactiveTimeoutForOp } from "../repo/settings.js";
 import { listTrainingSymptoms } from "../repo/training-symptoms.js";
 import { planDraftFloorPrecheck, sessionFloorPrecheck } from "../repo/verify-floors.js";
 import { localDateISO } from "../repo/shared.js";
@@ -427,6 +427,7 @@ export async function draftCoachProposal(agent: string | undefined, instruction:
     run = await runChosen(agent, prompt, {
       op: "proposal",
       signal: hooks?.signal,
+      timeoutMs: backgroundTimeoutForOp("proposal"),
       acceptParsed: isPlanProposalResult,
       // The SAME artifact isPlanProposalResult checks. On a CLI that can enforce it, a
       // prose-wrapped or malformed proposal becomes structurally impossible; on one
@@ -563,6 +564,7 @@ export async function evolveProgram(
     run = await runChosen(agent, prompt, {
       op: "evolve_program",
       signal: hooks?.signal,
+      timeoutMs: backgroundTimeoutForOp("evolve_program"),
       acceptParsed: isPlanProposalResult,
       schema: PLAN_PROPOSAL_SCHEMA,
     });
@@ -1477,6 +1479,7 @@ export async function reconcileExercises(
     run = await runChosen(agent, prompt, {
       op: "exercise_reconcile",
       signal: hooks?.signal,
+      timeoutMs: backgroundTimeoutForOp("exercise_reconcile"),
       acceptParsed: isReconciliationResult,
       schema: EXERCISE_RECONCILE_SCHEMA,
     });

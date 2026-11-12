@@ -19,7 +19,10 @@
 //   - NO usable agent (or a failed recompute) -> warm the DETERMINISTIC FLOOR only,
 //     so an invalidated row is never left uncached until the next open. This never
 //     spawns a CLI, which is also what keeps the offline test suite quiet; the
-//     self-heal path (ensureDayReadRefresh) still asks the agent again later.
+//     self-heal path (ensureDayReadRefresh) still asks the agent again later —
+//     except within DAY_READ_FAILURE_BACKOFF_MINUTES of a FAILED agent attempt for
+//     that date and call, so a reply that keeps breaking its contract is not paid
+//     for on every open.
 //
 // The effectful edges (the "today" comparison, the agent gate, the actual
 // recompute, the timer) are injectable so the debounce / coalesce / gating logic
@@ -30,6 +33,14 @@ import { localDateISO } from "./repo/shared.js";
 import { log } from "./log.js";
 
 const DEFAULT_DEBOUNCE_MS = 60_000;
+
+// How long a date's self-heal stays disarmed after its agent attempt FAILED (a
+// contract rejection, a timeout, a process failure). The self-heal re-arms on every
+// open of a floor row, so a day whose agent keeps breaking its contract otherwise paid
+// a two-spawn retry (the reply plus its one repair) on every single open. Same window
+// as week_ahead's failure backoff (WEEK_AHEAD_FAILURE_BACKOFF_MINUTES, repo/chat.ts).
+export const DAY_READ_FAILURE_BACKOFF_MINUTES = 30;
+const DAY_READ_FAILURE_BACKOFF_MS = DAY_READ_FAILURE_BACKOFF_MINUTES * 60_000;
 
 type TimerHandle = ReturnType<typeof setTimeout>;
 
@@ -54,6 +65,8 @@ export interface DayReadRefreshHooks {
   setTimer: (fn: () => void, ms: number) => TimerHandle;
   clearTimer: (h: TimerHandle) => void;
   debounceMs: number;
+  // The clock the failure backoff is measured on (tests move it).
+  now: () => number;
 }
 
 const DEFAULT_HOOKS: DayReadRefreshHooks = {
@@ -85,6 +98,7 @@ const DEFAULT_HOOKS: DayReadRefreshHooks = {
   },
   clearTimer: (h) => clearTimeout(h),
   debounceMs: DEFAULT_DEBOUNCE_MS,
+  now: () => Date.now(),
 };
 
 let hooks: DayReadRefreshHooks = { ...DEFAULT_HOOKS };
@@ -97,6 +111,41 @@ let inFlight: Promise<void> | null = null;
 // instead and arms exactly ONE follow-up when the run lands, which is what keeps
 // this a coalescer and not a time cooldown: nothing is ever suppressed outright.
 let armAfterFlight = false;
+// The last FAILED agent attempt per read date, with the prose identity it was asked
+// for. Process-local on purpose (Cairn is one Node process, and a restart is a fair
+// moment to try again). Only the self-heal (ensureDayReadRefresh) consults it: the
+// athlete's explicit new read, a signal-driven refresh, the 04:00 precompute and an
+// identity change all still ask the agent.
+const agentFailures = new Map<string, { at: number; identity: string | null }>();
+
+// computeDayRead reports how its agent attempt ended. A failure disarms the date's
+// self-heal for the backoff window; a success clears it. Host congestion
+// (AgentBusyError) is NOT reported here — the CLI never ran, so the next open must
+// keep its defer-and-retry.
+export function noteDayReadAgentFailure(date: string, identity?: string | null): void {
+  try {
+    agentFailures.set(date, { at: hooks.now(), identity: identity ?? null });
+  } catch {
+    /* bookkeeping is best-effort */
+  }
+}
+
+export function clearDayReadAgentFailure(date: string): void {
+  agentFailures.delete(date);
+}
+
+// Is the self-heal for this date inside its failure backoff? An identity the failed
+// attempt was NOT asked for is a genuinely new call, so it is never held back.
+export function dayReadSelfHealCoolingDown(date: string, identity?: string | null): boolean {
+  const failure = agentFailures.get(date);
+  if (!failure) return false;
+  if (hooks.now() - failure.at >= DAY_READ_FAILURE_BACKOFF_MS) {
+    agentFailures.delete(date);
+    return false;
+  }
+  if (identity && failure.identity && identity !== failure.identity) return false;
+  return true;
+}
 
 // Called from repo.invalidateDayRead the instant TODAY's cached read is cleared.
 // Synchronous + best-effort: it only (re)arms a debounce timer and returns — the
@@ -123,11 +172,18 @@ export function scheduleDayReadRefresh(invalidatedDate?: string): void {
 // transient agent outage. Ensure one background retry is armed so that floor is
 // self-healing, but do not extend an already-pending debounce on every screen
 // render/poll. Signal invalidations above intentionally reset the window.
-export function ensureDayReadRefresh(readDate?: string): void {
+// `identity` is the prose identity of the floor row being served, when the caller has
+// it: a date whose agent just failed is left alone for the backoff window unless the
+// row now answers a different call (dayReadSelfHealCoolingDown).
+export function ensureDayReadRefresh(readDate?: string, identity?: string | null): void {
   try {
     const today = hooks.today();
     const target = readDate || today;
     if (target !== today || pending != null || inFlight != null) return;
+    if (dayReadSelfHealCoolingDown(target, identity)) {
+      log.debug("[brief] self-heal held: the agent failed this read recently", { date: target });
+      return;
+    }
     pending = hooks.setTimer(fire, hooks.debounceMs);
   } catch {
     // Best-effort recovery must never disturb the instant deterministic read.
@@ -169,7 +225,8 @@ async function runRefresh(): Promise<void> {
     // still gets its own recompute. There is deliberately no time cooldown here: with
     // the decision-relevant fingerprint and the guarded invalidations upstream, a
     // signal reaching this module is rare and means something, and a blanket cooldown
-    // would drop exactly the changes worth recomputing for.
+    // would drop exactly the changes worth recomputing for. (The failure backoff above
+    // holds only the open-driven self-heal, never a signal.)
     if (armAfterFlight) {
       armAfterFlight = false;
       scheduleDayReadRefresh();
@@ -203,5 +260,6 @@ export function resetDayReadRefresh(): void {
   }
   inFlight = null;
   armAfterFlight = false;
+  agentFailures.clear();
   hooks = { ...DEFAULT_HOOKS };
 }

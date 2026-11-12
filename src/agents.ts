@@ -307,27 +307,38 @@ export function commandPresent(cmd: string): boolean {
   const cached = presenceCache.get(cmd);
   if (cached !== undefined) return cached;
   let present = false;
+  // undefined = this probe did not answer the version (a timeout or odd spawn error:
+  // agentVersion keeps its own, longer try); null = launched/absent with no usable print.
+  let version: string | null | undefined;
   try {
     // A quick `--version` spawn: ENOENT (no such binary) surfaces as r.error,
     // any actual launch (even a non-zero exit) means the binary exists. 4s is
     // ample for a CLI version print; a wedge just reports "not present" (safe).
+    // Its print IS the version (agentVersion's read), so it is kept for that cache
+    // rather than launching the same `--version` a second time.
     const r = spawnSync(cmd, ["--version"], {
       ...buildAgentSpawnOptions({ kind: "probe" }),
-      stdio: "ignore",
       timeout: 4000,
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
     });
     if (r.error) {
       const code = (r.error as NodeJS.ErrnoException).code;
       // ENOENT = not installed. A timeout/other error → fall back to a PATH scan
       // rather than wrongly declaring a slow-but-present binary absent.
       present = code === "ENOENT" ? false : lookupOnPath(cmd);
+      if (code === "ENOENT") version = null;
     } else {
       present = true;
+      version = cleanVersion(`${r.stdout || ""}${r.stderr || ""}`);
     }
   } catch {
     present = lookupOnPath(cmd);
   }
   presenceCache.set(cmd, present);
+  // The probe answered the version question too (null when it printed nothing usable or
+  // the binary is absent — what agentVersion would have read). Never overwrites a value.
+  if (version !== undefined && !versionCache.has(cmd)) versionCache.set(cmd, version);
   bumpAgentStateGeneration();
   return present;
 }
@@ -353,8 +364,12 @@ export function refreshCommandPresent(cmd: string): Promise<boolean> {
   // A login or CLI update cleared the caches mid-probe: that answer is from before it.
   const epoch = modelsEpoch;
   const run = new Promise<boolean>((resolve) => {
-    const remember = (present: boolean) => {
-      if (epoch === modelsEpoch) presenceCache.set(cmd, present);
+    const remember = (present: boolean, version?: string | null) => {
+      if (epoch === modelsEpoch) {
+        presenceCache.set(cmd, present);
+        // Same as the sync probe: its print is the version, so no second `--version`.
+        if (version !== undefined && !versionCache.has(cmd)) versionCache.set(cmd, version);
+      }
       bumpAgentStateGeneration();
       resolve(present);
     };
@@ -362,13 +377,16 @@ export function refreshCommandPresent(cmd: string): Promise<boolean> {
       execFile(
         cmd,
         ["--version"],
-        { ...buildAgentSpawnOptions({ kind: "probe" }), timeout: 4000, maxBuffer: 1024 * 1024 },
-        (error) => {
+        { ...buildAgentSpawnOptions({ kind: "probe" }), timeout: 4000, maxBuffer: 1024 * 1024, encoding: "utf8" },
+        (error, stdout, stderr) => {
           // A non-zero exit still launched the binary (a numeric code); only a spawn
           // failure (a string code) or a kill is no answer — ENOENT alone means absent.
           const err = error as (NodeJS.ErrnoException & { killed?: boolean }) | null;
-          if (!err || (typeof err.code !== "string" && !err.killed)) return remember(true);
-          remember(err.code === "ENOENT" ? false : lookupOnPath(cmd));
+          if (!err || (typeof err.code !== "string" && !err.killed)) {
+            return remember(true, cleanVersion(`${stdout || ""}${stderr || ""}`));
+          }
+          if (err.code === "ENOENT") return remember(false, null);
+          remember(lookupOnPath(cmd));
         }
       );
     } catch {
@@ -808,6 +826,7 @@ export function warmAgentProbes(): void {
       if (cmd) commandPresent(cmd);
     });
     probes.push(() => agentConfigured(name));
+    // Normally a cache hit: the presence probe above kept its `--version` print.
     probes.push(() => agentVersion(name));
   }
   const step = (index: number): void => {
@@ -847,6 +866,8 @@ export function agentVersion(name: string): string | null {
   if (versionCache.has(cmd)) return versionCache.get(cmd) ?? null;
   let version: string | null = null;
   if (commandPresent(cmd)) {
+    // A cold presence probe just ran `--version` and kept its print: no second launch.
+    if (versionCache.has(cmd)) return versionCache.get(cmd) ?? null;
     try {
       const r = spawnSync(cmd, ["--version"], {
         ...buildAgentSpawnOptions({ kind: "version", restoreEnvKeys: def.env_required || [] }),
@@ -880,7 +901,7 @@ export function refreshAgentVersion(name: string): Promise<string | null> {
   const running = versionInFlight.get(cmd);
   if (running) return running;
   const epoch = modelsEpoch;
-  const run = new Promise<string | null>((resolve) => {
+  const probe = (): Promise<string | null> => new Promise<string | null>((resolve) => {
     const remember = (version: string | null) => {
       if (epoch === modelsEpoch) versionCache.set(cmd, version);
       bumpAgentStateGeneration();
@@ -907,7 +928,16 @@ export function refreshAgentVersion(name: string): Promise<string | null> {
     } catch {
       remember(null);
     }
-  }).finally(() => versionInFlight.delete(cmd));
+  });
+  // A cold presence probe IS a `--version` launch and keeps its print (refreshCommandPresent),
+  // so wait for that one instead of launching a second `--version` beside it.
+  const run = (async () => {
+    if (!presenceCache.has(cmd)) {
+      await refreshCommandPresent(cmd);
+      if (versionCache.has(cmd)) return versionCache.get(cmd) ?? null;
+    }
+    return probe();
+  })().finally(() => versionInFlight.delete(cmd));
   versionInFlight.set(cmd, run);
   return run;
 }
@@ -922,6 +952,24 @@ export function agentInfo(name: string): { version: string | null; model_current
     model_current: agentModelCurrent(name),
     update_available: null,
   };
+}
+
+// agentInfo WITHOUT blocking the event loop: what GET /api/agents/:name/info and the MCP
+// get_agent_info serve. The version comes from the cache or ONE async `--version` (shared
+// with the presence probe), the default model from the cached / async catalog read that
+// the model dropdowns already share — never a spawnSync inside a request.
+export async function agentInfoAsync(
+  name: string
+): Promise<{ version: string | null; model_current: string | null; update_available: boolean | null }> {
+  const def = loadAgents()[name];
+  const cmd = def?.command;
+  const version = !cmd
+    ? null
+    : versionCache.has(cmd)
+      ? (versionCache.get(cmd) ?? null)
+      : await refreshAgentVersion(name);
+  const model_current = name === "codex" ? readCodexConfigModel() : parseDefaultModel(await rawModelsOutputAsync(name));
+  return { version, model_current, update_available: null };
 }
 
 // Best-effort current default model. There's no cheap universal way to read the
@@ -1044,8 +1092,14 @@ function rawModelsOutputAsync(name: string): Promise<string> {
   const pending = modelsInflight.get(name);
   if (pending) return pending;
   const epoch = modelsEpoch;
-  const run = new Promise<string>((resolve) => {
-    if (!commandPresent(def.command)) return resolve("");
+  // Presence from the cache or its async probe — a cold commandPresent here was a
+  // spawnSync inside the very read this function exists to keep off the event loop.
+  const present = (): Promise<boolean> => {
+    const cached = presenceCache.get(def.command);
+    return cached !== undefined ? Promise.resolve(cached) : refreshCommandPresent(def.command);
+  };
+  const run = present().then((isPresent) => new Promise<string>((resolve) => {
+    if (!isPresent) return resolve("");
     try {
       execFile(
         def.command,
@@ -1066,7 +1120,7 @@ function rawModelsOutputAsync(name: string): Promise<string> {
     } catch {
       resolve("");
     }
-  }).then((raw) => {
+  })).then((raw) => {
     modelsInflight.delete(name);
     if (epoch === modelsEpoch) modelsRawCache.set(name, raw);
     return raw;

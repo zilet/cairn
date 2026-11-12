@@ -2,7 +2,9 @@ import { z } from "zod";
 import { AGENT_JOB_KINDS } from "../../agentJobKinds.js";
 import { agentInfoOp, agentModelsOp } from "../../coachOps.js";
 import {
+  AGENT_PROBE_SETTLE_MS,
   getAgentConfig,
+  getAgentConfigSettled,
   getAgentStats,
   getBrainDiagnostics,
   getArtStats,
@@ -30,16 +32,17 @@ const AGENT_JOB_KIND_LIST = AGENT_JOB_KINDS.join(", ");
 export function registerOperatorTools(server: McpToolRegistrar) {
   server.tool(
     "list_agents",
-    "List coaching agents with enabled/order state, CLI presence, lazy-install availability, the tri-state login probe (configured: true|false|null), installed version, and login/model-catalog capabilities. usable rolls these up; missing or known-logged-out tools stay out of rotation.",
+    "List coaching agents with enabled/order state, CLI presence, lazy-install availability, the tri-state login probe (configured: true|false|null; login_checking: true while a cold probe is still answering — ask again shortly), installed version, and login/model-catalog capabilities. usable rolls these up; missing or known-logged-out tools stay out of rotation.",
     {},
-    async () => asText(getAgentConfig())
+    // Never a synchronous login probe inside the tool call (the same settle as /api/agents).
+    async () => asText(await getAgentConfigSettled(AGENT_PROBE_SETTLE_MS))
   );
 
   server.tool(
     "get_agent_info",
     "Read-only 'what's running' for one coaching CLI: installed version and (best-effort) the model it would use. Cheap subprocess probe — no coaching/paid call, no model pinning. ok:false for an unknown agent.",
     { name: z.string().describe("agent name from list_agents (claude, codex, grok, antigravity, ...)") },
-    async ({ name }) => asText(agentInfoOp(name))
+    async ({ name }) => asText(await agentInfoOp(name))
   );
 
   server.tool(
@@ -85,7 +88,7 @@ export function registerOperatorTools(server: McpToolRegistrar) {
       asText({
         settings: getSettings(),
         units: unitsRegistryRead(athleteUnits()),
-        agents: getAgentConfig(),
+        agents: await getAgentConfigSettled(AGENT_PROBE_SETTLE_MS),
         route_tasks: listRoutableTasks(),
       })
   );
@@ -207,7 +210,9 @@ export function registerOperatorTools(server: McpToolRegistrar) {
           "opt-in anonymous usage ping (default OFF). On: at most once a week, and only when a feedback service is configured, Cairn sends a random install id, its version, the host platform, CPU architecture and Node version — nothing else."
         ),
     },
-    async (p) => asText({ settings: setSettings(p), agents: getAgentConfig(), route_tasks: listRoutableTasks() })
+    // The same non-blocking agent read as PUT /api/settings.
+    async (p) =>
+      asText({ settings: setSettings(p), agents: getAgentConfig({ loginProbe: "peek" }), route_tasks: listRoutableTasks() })
   );
 
   server.tool(

@@ -21,7 +21,7 @@ import {
 import { namedWeekdays, statesRunningGoal } from "../repo/run-words.js";
 import { movementConsiderationsRead } from "../repo/movement-considerations.js";
 import { reactionModelForCoach, setReactionNarrative } from "../repo/reaction-model.js";
-import { interactiveTimeoutForOp, setSettings } from "../repo/settings.js";
+import { backgroundTimeoutForOp, interactiveTimeoutForOp, setSettings } from "../repo/settings.js";
 import { addSupplement, understandSupplements } from "../repo/supplements.js";
 import type { FallbackResult } from "../agents.js";
 import { runChosen, runChosenStreaming } from "../runChosen.js";
@@ -256,9 +256,11 @@ async function generateInsightOnce(
   let result: any = null;
   let tried: { agent: string; error: string }[] = [];
   try {
+    const op = k === "weekly_read" ? "weekly_read" : "insight";
     const run = await runChosenStreaming(agent, prompt, {
-      op: k === "weekly_read" ? "weekly_read" : "insight",
+      op,
       signal: hooks?.signal,
+      timeoutMs: backgroundTimeoutForOp(op),
       onDelta: hooks?.onDelta,
       boundedReads: true,
       acceptParsed: isInsightResult,
@@ -396,6 +398,7 @@ export async function distillChat(
     const { result } = await runChosen(agent, prompt, {
       op: "chat_distill",
       signal: hooks?.signal,
+      timeoutMs: backgroundTimeoutForOp("chat_distill"),
       // Without a contract ANY parseable object stopped the rotation — including
       // another op's payload from a confused CLI.
       acceptParsed: isChatDistillResult,
@@ -814,6 +817,7 @@ export async function consolidateMemory(agent: string | undefined) {
   try {
     run = await runChosen(agent, prompt, {
       op: "memory_consolidation",
+      timeoutMs: backgroundTimeoutForOp("memory_consolidation"),
       acceptParsed: isMemoryConsolidationResult,
       schema: MEMORY_CONSOLIDATION_SCHEMA,
     });
@@ -834,7 +838,11 @@ export async function growAboutMe(agent: string | undefined) {
   const prompt = buildAboutMeGrowthPrompt();
   let run: FallbackResult;
   try {
-    run = await runChosen(agent, prompt, { op: "about_me_growth", schema: ABOUT_ME_GROWTH_SCHEMA });
+    run = await runChosen(agent, prompt, {
+      op: "about_me_growth",
+      timeoutMs: backgroundTimeoutForOp("about_me_growth"),
+      schema: ABOUT_ME_GROWTH_SCHEMA,
+    });
   } catch (error) {
     return {
       ok: false as const,
