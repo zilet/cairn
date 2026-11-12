@@ -34,7 +34,6 @@
     "rules": {
       "preset": "recommended",
       "suspicious": {
-        "noFocusedTests": "error",
         "noExplicitAny": "off",
         "noAssignInExpressions": "off",
         "useIterableCallbackReturn": "off"
@@ -57,6 +56,10 @@
     }
   },
   "overrides": [
+    {
+      "includes": ["test/**"],
+      "linter": { "rules": { "suspicious": { "noFocusedTests": "error" } } }
+    },
     {
       "includes": ["public/js/**/*.js"],
       "linter": {
