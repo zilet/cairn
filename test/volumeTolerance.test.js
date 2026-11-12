@@ -415,7 +415,9 @@ function logSets(name, date, sets) {
   });
 }
 
-function seedCurlWeek(otherBicepsSets) {
+// `habit`: the working-set count of four earlier weeks of curls (the habitual baseline the
+// 1.2x bound reads), or null for no history before the recent exposures at all.
+function seedCurlWeek(otherBicepsSets, { habit = 3 } = {}) {
   for (const [name, group] of [
     ["Dumbbell Curl", "biceps"],
     ["Hammer Curl", "biceps"],
@@ -440,6 +442,17 @@ function seedCurlWeek(otherBicepsSets) {
     }))
   );
   db.prepare(`UPDATE plan_items SET prescribed_at = NULL`).run();
+  // Second review, item 10: with no habitual history the catch-up never raises above the
+  // plan, so a fixture that expects a step carries a habit the step is measured against.
+  // Spread over different weekdays, so the history never reads as an observed lifting
+  // week of its own (that would change the weekly group count the 20-set bound reads).
+  if (habit != null)
+    for (const back of [40, 32, 24, 16])
+      logSets(
+        "Dumbbell Curl",
+        localDaysAgo(back),
+        Array.from({ length: habit }, () => [40, 11])
+      );
   for (const back of [9, 5])
     logSets("Dumbbell Curl", localDaysAgo(back), [
       [40, 11],
@@ -462,24 +475,20 @@ test("the set catch-up stops at about 20 weekly sets for the group", () => {
 test("the 1.2x per-lift bound reads the athlete's habit from the weeks BEFORE the exposures it answers", () => {
   // Weeks of two-set curls, then two recent exposures of three: 1.2 x 2 is 2, so the
   // plan does not step to three on the strength of the very exposures it would follow.
-  seedCurlWeek(6);
-  for (const back of [40, 33, 26, 19])
-    logSets("Dumbbell Curl", localDaysAgo(back), [
-      [40, 11],
-      [40, 11],
-    ]);
+  seedCurlWeek(6, { habit: 2 });
   assert.equal(curlStep(), undefined, "a habit of two sets bounds the catch-up at two");
 
   // A habit of three sets in those weeks: 1.2 x 3 is 3, so the step to three is in bounds.
   resetTables("logged_sets", "sessions", "plan_items", "plan_days", "exercises");
-  seedCurlWeek(6);
-  for (const back of [40, 33, 26, 19])
-    logSets("Dumbbell Curl", localDaysAgo(back), [
-      [40, 11],
-      [40, 11],
-      [40, 11],
-    ]);
+  seedCurlWeek(6, { habit: 3 });
   assert.deepEqual(curlStep(), { from: 2, to: 3 });
+});
+
+test("item 10: with no habitual history the catch-up never raises above what the plan prescribes", () => {
+  // Only the two recent three-set exposures, nothing before them: no baseline to step
+  // against, so the plan's two sets stand (the ceiling is the planned count, never the cap).
+  seedCurlWeek(6, { habit: null });
+  assert.equal(curlStep(), undefined, "no habit, no step");
 });
 
 test("an affirmed cut never adds sets beyond the plan", () => {
