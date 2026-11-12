@@ -360,6 +360,49 @@ test("an undated change scoped to today ends today, unless their words make it l
   assert.equal(repo.getProposal(lasting.proposal_id).parsed.changes[0].until, undefined);
 });
 
+const SIDE_EDIT = {
+  type: "plan_update",
+  summary: "lighter bench",
+  changes: [{ day_number: 2, exercise: "Barbell Bench Press", sets: 2, reason: "short on time" }],
+};
+
+test("a today-scoped plan_update beside a today_session is skipped and recorded, the session lands", () => {
+  seedPlan();
+  const plan = planSnapshot();
+  const proposals = count("plan_proposals");
+  for (const actions of [[UPPER, SIDE_EDIT], [SIDE_EDIT, UPPER]]) {
+    const out = apply(actions, BUILD_ASK);
+    assert.equal(entry(out, "today_session").result.ok, true);
+    const skipped = entry(out, "plan_update").result;
+    assert.equal(skipped.ok, false);
+    assert.equal(skipped.skipped, true);
+    assert.equal(skipped.skip_reason, "today_session_in_turn");
+    assert.equal(skipped.persisted, false);
+  }
+  assert.deepEqual(planSnapshot(), plan, "the plan day was not edited");
+  assert.equal(count("plan_proposals"), proposals, "no proposal was written");
+});
+
+test("a lasting plan change beside a today_session still applies", () => {
+  seedPlan();
+  const out = apply([UPPER, SIDE_EDIT], `${BUILD_ASK} And keep bench at 2 sets from now on.`);
+  assert.equal(entry(out, "today_session").result.ok, true);
+  const edit = entry(out, "plan_update").result;
+  assert.notEqual(edit.skipped, true);
+  assert.ok(edit.proposal_id, "the lasting change went through the proposal path");
+});
+
+test("a refused today_session does not let its plan_update through in its place", () => {
+  seedPlan();
+  apply([{ type: "start_session" }], START_ASK);
+  repo.logSetByName({ exercise: "Barbell Bench Press", weight: 100, reps: 8, date: localDateISO() });
+  const plan = planSnapshot();
+  const out = apply([UPPER, SIDE_EDIT], BUILD_ASK);
+  assert.equal(entry(out, "today_session").result.code, "daily_session_locked");
+  assert.equal(entry(out, "plan_update").result.skip_reason, "today_session_in_turn");
+  assert.deepEqual(planSnapshot(), plan);
+});
+
 test("read_today_session returns what Today serves and whether it is started", () => {
   seedPlan();
   const empty = executeCoachReadTool({ tool: "read_today_session", args: {} }, { run_id: "t" });

@@ -838,6 +838,17 @@ test("consecutive training days do not soften volume by themselves", () => {
   assert.ok(env.precedence.includes("consecutive_training_days"), "the count still speaks as a caveat");
 });
 
+test("the stacked-days caveat states the real count, and 'or more' at the lookback bound", () => {
+  const detail = (n) =>
+    buildDailySessionDecision(snapshot({ day_read: { ...snapshot().day_read, consecutive_training_days: n } }), {
+      now: NOW,
+    }).soft_preferences.find((s) => s.code === "consecutive_training_days")?.detail;
+  assert.equal(detail(4), "4 hard or moderate training days in a row");
+  // The walk looks back ten days, so a longer streak (16 days here) reads "10 or more".
+  assert.equal(detail(10), "10 or more hard or moderate training days in a row");
+  assert.equal(detail(2), undefined, "below three it is not a caveat at all");
+});
+
 test("train-anyway from rest on a backed push morning still licenses reach at hold intensity", () => {
   const env = buildDailySessionDecision(
     snapshot({

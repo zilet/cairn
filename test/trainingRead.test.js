@@ -196,6 +196,28 @@ test("a recovery day BREAKS the loading streak — no forced rest the next morni
   assert.equal(r.signals.recent_load[0].load, "easy", "yesterday is graded easy in the signals");
 });
 
+test("a long streak is bounded at the ten-day lookback; an empty day resets it; a short easy run breaks it", () => {
+  repo.setProfile({ primary_discipline: "hybrid", endurance_sport: "running" });
+  repo.savePlanDay(1, "Lower", "Lower body", [{ exercise: "Squat", sets: 3, rep_low: 5, rep_high: 8 }]);
+  for (let back = 1; back <= 16; back++) seedTrainingDay(dayBefore(REF, back));
+  const long = repo.dayRead(REF, { has_data: false, recovery: {} });
+  // 16 loading days reads as the lookback bound (the caveat then says "10 or more").
+  assert.equal(long.signals.consecutive_training_days, 10);
+
+  // A genuine empty day three back resets the count to the days after it.
+  db.prepare(`DELETE FROM logged_sets WHERE session_id IN (SELECT id FROM sessions WHERE date = ?)`).run(dayBefore(REF, 3));
+  db.prepare(`DELETE FROM sessions WHERE date = ?`).run(dayBefore(REF, 3));
+  const reset = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.equal(reset.signals.consecutive_training_days, 2);
+
+  // A short easy run is not a loading day, wherever it falls (one rule: dayLoad).
+  db.prepare(`DELETE FROM logged_sets WHERE session_id IN (SELECT id FROM sessions WHERE date = ?)`).run(dayBefore(REF, 1));
+  db.prepare(`DELETE FROM sessions WHERE date = ?`).run(dayBefore(REF, 1));
+  repo.addActivity({ type: "run", date: dayBefore(REF, 1), duration_min: 20, distance_km: 3, rpe: 3 });
+  const easyRun = repo.dayRead(REF, { has_data: false, recovery: {} });
+  assert.equal(easyRun.signals.consecutive_training_days, 0);
+});
+
 test("three genuinely-hard days in a row still earns rest (the streak is intact)", () => {
   repo.setProfile({ primary_discipline: "strength" });
   seedTrainingDay(dayBefore(REF, 3));

@@ -87,8 +87,11 @@ export function planDayFocus(day: Pick<PlanDayCandidate, "name" | "focus" | "day
 // The focus as it reads on `date`: a stored calendar claim ("on the threshold-run day")
 // is dropped for the real calendar's words (src/repo/plan-day-focus.ts). Falls back to
 // the label when a claim was all the focus said.
-export function planDayFocusOn(day: Pick<PlanDayCandidate, "name" | "focus" | "day_number">, date: string): string {
-  return datedPlanDayFocus(planDayFocus(day), date) ?? planDayLabel(day);
+export function planDayFocusOn(
+  day: Pick<PlanDayCandidate, "name" | "focus" | "day_number"> & { names?: string[] },
+  date: string
+): string {
+  return datedPlanDayFocus(planDayFocus(day), date, { exercises: day.names ?? [] }) ?? planDayLabel(day);
 }
 
 // The label a plan day goes by everywhere a person reads it: its NAME ("Pull"). A
