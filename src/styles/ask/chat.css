@@ -230,6 +230,9 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
 .rcpt-what{color:var(--ink)}
 .rcpt-until,.rcpt-state{color:var(--muted)}
 .rcpt .rcpt-open{min-height:44px;margin:var(--space-2) var(--space-3) var(--space-2) 0}
+.rcpt-acts{flex:1 0 100%;display:flex;flex-wrap:wrap;align-items:center;gap:0 var(--space-3)}
+.rcpt-acts .rcpt-open{margin:var(--space-2) 0}
+.rcpt-acts .rcpt-undo{margin:0}
 .rcpt .rcpt-undo{min-height:44px;display:inline-flex;align-items:center;margin:calc(var(--space-4) * -1) 0;padding:0 var(--space-3)}
 .rcpt .rcpt-undo:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
 .rcpt.is-undone .rcpt-what{text-decoration:line-through;text-decoration-color:var(--line-2)}

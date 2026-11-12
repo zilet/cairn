@@ -5216,6 +5216,7 @@ declare global {
     };
 
     CairnTodayPlanSurfaceRenderer: {
+      regroupPairs(root: ParentNode | null | undefined): void;
       buildHtml(
         options: {
           showDone: boolean;
@@ -5442,6 +5443,7 @@ declare global {
     };
 
     CairnTodayCards: {
+      pairChipHtml(partners: unknown): string;
       exTimed(item: Record<string, unknown>, logged: unknown, exModes?: Record<string, unknown> | null): boolean;
       exerciseCardHtml(
         item: Record<string, unknown>,

@@ -99,3 +99,57 @@ test("the group caption never carries exercise text; partner names reach the car
   assert.doesNotMatch(html, /<b>/);
   assert.deepEqual(cards[1].pairPartners, [nasty]);
 });
+
+test("the renderer sets head/tail position classes and the group key, so no :has() is needed", () => {
+  const { cards } = render([
+    { exercise: "A", superset_group: 2 },
+    { exercise: "B", superset_group: 2 },
+    { exercise: "C", superset_group: 2 },
+  ]);
+  assert.deepEqual(cards.map((c) => c.pairClasses), [" ex-in-group ex-group-head", " ex-in-group", " ex-in-group ex-group-tail"]);
+  assert.deepEqual(cards.map((c) => c.pairGroup), [2, 2, 2]);
+});
+
+// A minimal DOM: just enough surface for regroupPairs (cards, captions, chips).
+function fakeSurface(members) {
+  const surface = { cards: [], caps: [] };
+  const makeCap = (group, text) => ({
+    dataset: { group: String(group) }, textContent: text,
+    remove() { surface.caps.splice(surface.caps.indexOf(this), 1); },
+  });
+  surface.caps.push(makeCap(1, "Pair — alternate sets, rest after both"));
+  for (const name of members) {
+    const classes = new Set(["ex", "ex-in-group"]);
+    const meta = { chip: { remove: () => { meta.chip = null; } }, querySelector: (sel) => (sel === ".ex-pair-chip" ? meta.chip : null), insertAdjacentHTML: () => {} };
+    surface.cards.push({
+      dataset: { card: name, group: "1" }, connected: true, meta, classes,
+      classList: { toggle: (c, on) => (on ? classes.add(c) : classes.delete(c)) },
+      querySelector: (sel) => (sel === ".ex-meta" ? meta : null),
+      insertAdjacentHTML: () => surface.caps.push(makeCap(1, "")),
+    });
+  }
+  surface.querySelectorAll = (sel) =>
+    sel === ".ex[data-group]" ? surface.cards.filter((c) => c.connected) : sel === ".ex-group-cap[data-group]" ? surface.caps : [];
+  return surface;
+}
+
+test("after one half of a pair leaves, the lone member is a plain card and the caption goes", () => {
+  const surface = fakeSurface(["Curl", "Pushdown"]);
+  surface.cards[1].connected = false;
+  loadRenderer().regroupPairs(surface);
+  assert.equal(surface.cards[0].classes.has("ex-in-group"), false);
+  assert.equal(surface.cards[0].meta.chip, null, "no partner chip left");
+  assert.equal(surface.caps.length, 0, "no caption left");
+});
+
+test("when the partner returns the group re-forms with its caption and position classes", () => {
+  const surface = fakeSurface(["Curl", "Pushdown"]);
+  const { regroupPairs } = loadRenderer();
+  surface.cards[1].connected = false;
+  regroupPairs(surface);
+  surface.cards[1].connected = true;
+  regroupPairs(surface);
+  assert.equal(surface.caps.length, 1);
+  assert.ok(surface.cards[0].classes.has("ex-group-head"));
+  assert.ok(surface.cards[1].classes.has("ex-group-tail"));
+});

@@ -344,8 +344,11 @@ function exerciseCardHtml(
   const rxSilenced = !!reachLine && !!rx && rxAction !== "overload";
   // Decision-level narration and Undo live once above the cards. A card keeps
   // only a cue unique to this movement (swap, straps, start light).
-  const pairClass = pairChip ? " ex-in-group" : "";
-  return `<div class="ex${complete ? " ex-complete" : ""}${pairClass}${reveal != null ? " reveal" : ""}" data-card="${escAttr(exercise)}"${exKeyAttr} data-mode="${timed ? "timed" : "reps"}"${inputAttr}${headlineDose ? ` data-dose="headline"` : ""}${rxSilenced ? ` data-rx="off"` : ""}${reveal != null ? ` style="${stagger(reveal)}"` : ""}>
+  // Only the renderer's own two position tokens ever reach the class list.
+  const pairTokens = todayString(item.pairClasses).split(/\s+/).filter((t) => t === "ex-group-head" || t === "ex-group-tail");
+  const pairClass = pairChip ? ` ex-in-group${pairTokens.map((t) => ` ${t}`).join("")}` : "";
+  const pairGroupAttr = pairChip && todayFinite(item.pairGroup) != null ? ` data-group="${escAttr(todayFinite(item.pairGroup))}"` : "";
+  return `<div class="ex${complete ? " ex-complete" : ""}${pairClass}${reveal != null ? " reveal" : ""}" data-card="${escAttr(exercise)}"${pairGroupAttr}${exKeyAttr} data-mode="${timed ? "timed" : "reps"}"${inputAttr}${headlineDose ? ` data-dose="headline"` : ""}${rxSilenced ? ` data-rx="off"` : ""}${reveal != null ? ` style="${stagger(reveal)}"` : ""}>
       <div class="ex-top">
         <div class="ex-top-main">
           <button class="ex-name" data-guide="${encodeURIComponent(exercise)}">${escHtml(exercise)}&nbsp;<span class="guide-i">ⓘ</span></button>
@@ -368,6 +371,7 @@ function exerciseCardHtml(
 const CAIRN_TODAY_CARDS = {
   exTimed: todayCardsExTimed,
   exerciseCardHtml,
+  pairChipHtml: todayCardsPairChipHtml,
   revealLoad: todayCardsRevealLoad,
   revealLoadForLastSet: todayCardsRevealLoadForLastSet,
 };
