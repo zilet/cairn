@@ -133,6 +133,7 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/daily-session",
   "/daily-session/preview",
   "/daily-session/prepare",
+  "/daily-session/discard",
   "/daily-session/outcome",
   "/session-primer",
   "/week-ahead",

@@ -487,6 +487,22 @@ line's `day_number`, not the weekday map's forecast, and carries the map's day a
 `plan_day.swapped_from` when the adaptive pick moved it (the strip once said "Lower B" under a Train
 card saying "Push"). Days after today keep the map's forecast; it re-phases once today is logged.
 
+**Today's open session — one Start/Continue fact.** `openSessionOn(date)` (`src/repo/open-session.ts`)
+is the date's active composition plus its unfinished session row, WHATEVER its set count (a session
+opened on one device, or a train-anyway day with nothing logged, used to vanish until a set landed).
+`started` is the one "lived on" test (`src/repo/session-started.ts`: sets, duration, notes, feedback, a
+linked activity — the same test that locks a composition against replacement); `chosen` is the athlete's
+act (`athlete_override`, an `agent_suggest` holding items, `manual_plan`, or an adaptive
+`training_by_choice`); `label` ("Start Pull" / "Continue Pull") is printed verbatim. It rides on the
+Today aggregate as `open_session`, and the strength line reads it: a chosen or started session owns the
+line with nothing logged (naming its own plan day, never the calendar's rest — and the week placement
+lets it name an unstated weekday), and a CHOSEN session is never "rest suggested": `suggestion` is null
+and the read survives only as a `caveat` from a "you chose to train" variant set. A prepare/discard
+ownership conflict (`daily_session_active_changed` / `daily_session_locked`) carries `owner`, an empty
+owner is superseded by `replace:true` (an adaptive request never takes the athlete's itemful chosen
+card), and `POST /api/daily-session/discard` (`discard_daily_session`) deletes an accidental empty
+session so the date is free again — never one with logged work.
+
 **Plan tab week projection.** `GET /api/plan/week` (`planWeek()` in `src/domain/training/plan-week.ts`)
 assembles that same map into a connected week strip for Strength + Endurance: calendar Mon→Sun when
 schedules map, otherwise template `day_number` order with `weekday:null` (never invent Mon=Day1).

@@ -6,6 +6,7 @@ import { readToday, tradeRestDay } from "../domain/brain/index.js";
 import { createAgentJob } from "../domain/person/index.js";
 import {
   dailySessionErrorBody,
+  discardDailySessionUseCase,
   isDailySessionAbsence,
   isDailySessionConflict,
   prepareDailySessionUseCase,
@@ -292,6 +293,20 @@ dayCoachRouter.post("/daily-session/prepare", (req, res) => {
     // against are all the same answer — "your copy is stale, re-read and retry" — so
     // they share one CONFLICT status instead of some of them reading as malformed
     // input. 400 stays for a genuinely bad request body.
+    res.status(isDailySessionConflict(error) ? 409 : 400).json(dailySessionErrorBody(error));
+  }
+});
+
+// Discard an accidental EMPTY session for a date: the active composition is superseded
+// and its zero-set session row deleted, so the date is free again. expected_active_id
+// (required) is the composition the caller read. A started session is refused as the
+// daily_session_locked CONFLICT with its `owner`; a moved composition is
+// daily_session_changed with the owner as it now stands — logged work is never deleted.
+dayCoachRouter.post("/daily-session/discard", (req, res) => {
+  const body = req.body ?? {};
+  try {
+    res.json(discardDailySessionUseCase({ date: body.date, expected_active_id: body.expected_active_id }));
+  } catch (error: any) {
     res.status(isDailySessionConflict(error) ? 409 : 400).json(dailySessionErrorBody(error));
   }
 });

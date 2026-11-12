@@ -1,7 +1,9 @@
 import {
   DAILY_SESSION_NO_TEMPLATE,
   DailySessionError,
+  discardDailySession,
   prepareDailySession,
+  type DiscardDailySessionInput,
   previewAdaptiveDailySession,
   type PrepareDailySessionInput,
 } from "../../repo/adaptive-session.js";
@@ -54,12 +56,23 @@ export function previewAdaptiveDailySessionUseCase(
   return previewAdaptiveDailySession(input);
 }
 
+/**
+ * Discard an accidental empty session for a date (repo `discardDailySession`): the
+ * date is free again. A started session is refused as a `daily_session_locked`
+ * conflict carrying its owner.
+ */
+export function discardDailySessionUseCase(input: DiscardDailySessionInput = {}) {
+  return discardDailySession(input);
+}
+
 export function dailySessionErrorBody(error: unknown) {
-  const value = error as { code?: unknown; message?: unknown; preview?: unknown };
+  const value = error as { code?: unknown; message?: unknown; preview?: unknown; owner?: unknown };
   return {
     ok: false as const,
     code: typeof value?.code === "string" ? value.code : "daily_session_invalid",
     error: typeof value?.message === "string" ? value.message : String(error),
     ...(value?.preview ? { preview: value.preview } : {}),
+    // The session that owns the date, on a conflict the client resolves by opening it.
+    ...(value?.owner ? { owner: value.owner } : {}),
   };
 }

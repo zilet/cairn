@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   dailySessionErrorBody,
+  discardDailySessionUseCase,
   isDailySessionAbsence,
   prepareDailySessionUseCase,
   previewAdaptiveDailySessionUseCase,
@@ -169,7 +170,7 @@ export function registerDayCoachTools(server: McpToolRegistrar) {
 
   server.tool(
     "prepare_daily_session",
-    "Explicitly persist a daily session without changing the weekly plan. Pass expected_active_id alone to assert that a cached composition still owns the date without creating or replacing anything. adaptive_plan/manual_plan snapshot a plan day; agent_suggest requires its completed session-suggest agent_job_id; athlete_override accepts a user-authored session, including an empty open session. Exact retries reuse safely; a different replace is refused after the session starts.",
+    "Explicitly persist a daily session without changing the weekly plan. Pass expected_active_id alone to assert that a cached composition still owns the date without creating or replacing anything. adaptive_plan/manual_plan snapshot a plan day; agent_suggest requires its completed session-suggest agent_job_id; athlete_override accepts a user-authored session, including an empty open session. Exact retries reuse safely; a different replace is refused after the session starts. A conflict (daily_session_active_changed / daily_session_locked) carries `owner` — the session that owns the date — so it can be opened instead; an owner nobody has logged on is superseded by replace:true, except that an adaptive_plan request never replaces the athlete's own chosen session that holds work.",
     {
       date: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
       expected_active_id: z
@@ -209,6 +210,26 @@ export function registerDayCoachTools(server: McpToolRegistrar) {
     async (input) => {
       try {
         return asText(prepareDailySessionUseCase(input));
+      } catch (error) {
+        return asText(dailySessionErrorBody(error));
+      }
+    }
+  );
+
+  server.tool(
+    "discard_daily_session",
+    "Discard an accidental EMPTY session for a date (mirror of POST /api/daily-session/discard): the active composition is superseded and its zero-set session row deleted, so the date is free again. expected_active_id is the composition you read (get_daily_session). A session with logged sets, a duration, notes or feedback is never deleted — that returns code daily_session_locked with its owner; a moved composition returns daily_session_changed with the owner as it now stands.",
+    {
+      date: z.string().optional().describe("YYYY-MM-DD; defaults to today"),
+      expected_active_id: z
+        .number()
+        .int()
+        .positive()
+        .describe("the active composition id being discarded; a different active one is a conflict"),
+    },
+    async ({ date, expected_active_id }) => {
+      try {
+        return asText(discardDailySessionUseCase({ date, expected_active_id }));
       } catch (error) {
         return asText(dailySessionErrorBody(error));
       }

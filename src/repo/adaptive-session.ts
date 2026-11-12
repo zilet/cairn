@@ -18,6 +18,13 @@ import { findExercise, recentWorkingSeconds, recentWorkingWeight } from "./exerc
 import { getPlanDay } from "./plan.js";
 import { selectedPlanDayForDate } from "./plan-selection.js";
 import { getOrCreateSessionRow } from "./session-core.js";
+import { meaningfulSessionReasons } from "./session-started.js";
+import {
+  compositionIsItemfulChoice,
+  dailySessionOwner,
+  dailySessionOwnerOf,
+  type DailySessionOwner,
+} from "./open-session.js";
 import { localDateISO } from "./shared.js";
 import { withSqliteSavepoint } from "./sqlite-savepoint.js";
 import { stableJson, finite } from "../lib/numbers.js";
@@ -94,15 +101,22 @@ export class DailySessionError extends Error {
   constructor(
     public readonly code: string,
     message: string,
-    public readonly preview?: AdaptiveDailySessionPreview
+    public readonly preview?: AdaptiveDailySessionPreview,
+    /** The session that owns the date, on a conflict a client resolves by opening it. */
+    public readonly owner?: DailySessionOwner | null
   ) {
     super(message);
     this.name = "DailySessionError";
   }
 }
 
-function fail(code: string, message: string, preview?: AdaptiveDailySessionPreview): never {
-  throw new DailySessionError(code, message, preview);
+function fail(
+  code: string,
+  message: string,
+  preview?: AdaptiveDailySessionPreview,
+  owner?: DailySessionOwner | null
+): never {
+  throw new DailySessionError(code, message, preview, owner ?? undefined);
 }
 
 // "This date has no weekly template day to build an adaptive candidate from." A routine
@@ -1005,34 +1019,27 @@ function sessionRowsForDate(date: string): any[] {
 }
 
 // What locks a day's composition against replacement: work the athlete actually
-// did, or words they wrote about it. Skips and a finish stamp on a session with no
-// logged sets are bookkeeping of the prescription being replaced, not evidence of
-// training — the athlete is allowed to walk away from a day they never lifted on
-// and pick another (they are cleared on replace, see prepareDailySession). A cardio
-// activity that happens to match a prescribed run is likewise never a lock: the
-// activity row is its own record and survives whatever the strength day becomes.
-function meaningfulSessionReasons(session: any): string[] {
-  const reasons: string[] = [];
-  if (Number(session?.set_count ?? 0) > 0) reasons.push("logged sets");
-  if (session?.duration_min != null) reasons.push("recorded duration");
-  if (boundedText(session?.notes, 1000)) reasons.push("session notes");
-  if (session?.soreness != null || session?.performance != null || boundedText(session?.joint_pain, 300)) {
-    reasons.push("session feedback");
-  }
-  if (boundedText(session?.garmin_json, 12_000)) reasons.push("linked strength activity");
-  return reasons;
-}
-
-function assertSessionsUnstarted(sessions: any[]): void {
+// did, or words they wrote about it — the one test, session-started.ts. Skips and a
+// finish stamp on a session with no logged sets are bookkeeping of the prescription
+// being replaced (they are cleared on replace, see prepareDailySession).
+function assertSessionsUnstarted(sessions: any[], date: string): void {
   for (const session of sessions) {
     const reasons = meaningfulSessionReasons(session);
     if (reasons.length) {
       fail(
         "daily_session_locked",
-        `daily session cannot be changed because session ${session.id} already has ${reasons.join(", ")}`
+        `daily session cannot be changed because session ${session.id} already has ${reasons.join(", ")}`,
+        undefined,
+        dailySessionOwner(date, Number(session.id))
       );
     }
   }
+}
+
+// The owner a conflict carries: the composition row and its session (with set_count).
+function compositionOwner(date: string, row: any): DailySessionOwner | null {
+  const session = sessionRowsForDate(date).find((candidate) => Number(candidate.id) === Number(row?.session_id));
+  return dailySessionOwnerOf(row, session ?? null);
 }
 
 function activeCompositionRow(date: string): any {
@@ -1176,10 +1183,39 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
   const canRefreshAdaptive =
     !!existingRow && source === "adaptive_plan" && exactPlanRetry(existingRow, input, source);
   if (existingRow && input.expected_input_fingerprint != null && !canRefreshAdaptive) {
-    fail(
-      "daily_session_active_changed",
-      "Another accepted session now owns this date. Review that session before continuing."
-    );
+    // An EMPTY owner never blocks: a session nobody has lived on (opened on another
+    // device, or an accidental "Open session") is superseded by an explicit replace.
+    // Two answers still come back as the conflict, carrying the owner so the client
+    // can open it instead: a session already lived on, and the athlete's own chosen
+    // card that holds work, which an adaptive request must never silently replace.
+    const owner = compositionOwner(date, existingRow);
+    const replaceable =
+      input.replace === true &&
+      owner != null &&
+      !owner.started &&
+      !(source === "adaptive_plan" && compositionIsItemfulChoice(existingRow));
+    if (!replaceable) {
+      fail(
+        "daily_session_active_changed",
+        "Another accepted session now owns this date. Review that session before continuing.",
+        undefined,
+        owner
+      );
+    }
+  }
+  // The same rule without a preview token: an adaptive replace never silently takes the
+  // athlete's own chosen card that holds work. Once that card is lived on, the ordinary
+  // lock (assertSessionsUnstarted) answers instead.
+  if (existingRow && input.replace && source === "adaptive_plan" && compositionIsItemfulChoice(existingRow)) {
+    const owner = compositionOwner(date, existingRow);
+    if (owner && !owner.started) {
+      fail(
+        "daily_session_active_changed",
+        "Another accepted session now owns this date. Review that session before continuing.",
+        undefined,
+        owner
+      );
+    }
   }
   if (existingRow && !input.replace && !canRefreshAdaptive) {
     return { ok: true as const, daily_session: hydrate(existingRow), session_id: existingRow.session_id, reused: true };
@@ -1351,7 +1387,7 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
     ) {
       return { ok: true as const, daily_session: hydrate(current), session_id: current.session_id, reused: true };
     }
-    assertSessionsUnstarted(sameDateSessions);
+    assertSessionsUnstarted(sameDateSessions, date);
     let session: any;
     if (current) {
       session = sameDateSessions.find((candidate) => Number(candidate.id) === Number(current.session_id));
@@ -1419,6 +1455,82 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
       }
     }
     return { ok: true as const, daily_session: dailySession, session_id: session.id, reused: false };
+  });
+}
+
+export interface DiscardDailySessionInput {
+  date?: string;
+  /** The active composition the caller read; a different one is a conflict, never discarded blind. */
+  expected_active_id?: unknown;
+}
+
+export interface DiscardDailySessionResult {
+  ok: true;
+  date: string;
+  discarded: true;
+  daily_session_id: number;
+  session_id: number;
+}
+
+/**
+ * Discard an accidental, EMPTY session: the date's active composition is superseded
+ * and its zero-set session row deleted in one unit, so the date is free again and
+ * `getOrCreateSessionRow` cannot hand the shell back to the next read or write.
+ *
+ * Only a session nobody has lived on (session-started.ts) may go. A started one is
+ * refused with the `daily_session_locked` conflict and its owner — deleting logged
+ * work is not this door. A stale `expected_active_id` is `daily_session_changed` with
+ * the owner as it now stands.
+ *
+ * Deleting the session row cascades what hangs off it by foreign key — its skips and
+ * every composition version bound to it (`daily_session_decisions.composition_id` is
+ * set null). An offline-outbox key already stored for this session (a prepare, a
+ * skip) keeps replaying its original answer and mints nothing; the client's next
+ * `expected_active_id` assertion then reads `daily_session_missing`.
+ */
+export function discardDailySession(input: DiscardDailySessionInput = {}): DiscardDailySessionResult {
+  const date = validateDate(input.date);
+  const expectedId = Number(input.expected_active_id);
+  if (input.expected_active_id == null || !Number.isInteger(expectedId) || expectedId <= 0) {
+    fail("daily_session_invalid", "expected_active_id must identify the active daily session to discard");
+  }
+  return withSqliteSavepoint("discard_daily_session", () => {
+    const active = activeCompositionRow(date);
+    if (!active) fail("daily_session_missing", "no active daily session exists for the requested date");
+    const session = sessionRowsForDate(date).find((row) => Number(row.id) === Number(active.session_id)) ?? null;
+    if (Number(active.id) !== expectedId) {
+      fail(
+        "daily_session_changed",
+        "the active daily session changed after the cached copy was read",
+        undefined,
+        dailySessionOwnerOf(active, session)
+      );
+    }
+    const reasons = session ? meaningfulSessionReasons(session) : [];
+    if (reasons.length) {
+      fail(
+        "daily_session_locked",
+        `daily session cannot be discarded because session ${session.id} already has ${reasons.join(", ")}`,
+        undefined,
+        dailySessionOwnerOf(active, session)
+      );
+    }
+    db.prepare(
+      `UPDATE daily_session_compositions
+          SET status = 'superseded', superseded_at = datetime('now')
+        WHERE id = ? AND status = 'active'`
+    ).run(active.id);
+    if (session) {
+      db.prepare(`DELETE FROM session_skips WHERE session_id = ?`).run(session.id);
+      db.prepare(`DELETE FROM sessions WHERE id = ?`).run(session.id);
+    }
+    return {
+      ok: true as const,
+      date,
+      discarded: true as const,
+      daily_session_id: Number(active.id),
+      session_id: Number(active.session_id),
+    };
   });
 }
 

@@ -50,6 +50,7 @@ function trackedOutboxRoute(method: string, path: string): boolean {
       "/bodyweight",
       "/food-notes",
       "/daily-session/prepare",
+      "/daily-session/discard",
       "/training-symptoms/observation",
     ].includes(path)
   ) {
