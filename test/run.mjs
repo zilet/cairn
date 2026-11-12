@@ -10,7 +10,7 @@
 // longest-first (LPT) from the per-file durations the previous run recorded
 // (.tsbuildcache/cairn-test-timings.json, never committed), falling back to a
 // static estimate for a file with no recorded time (a fresh clone, CI). Every file runs
-// in its own `node --test` process, serially within its slot; only the ORDER and the
+// in its own node process (see runFile), serially within its slot; only the ORDER and the
 // slot a file lands in change, and correctness does not depend on either (see
 // test/_isolate.mjs).
 //
@@ -26,9 +26,11 @@
 //                                  record). On expiry the whole process group is killed
 //                                  (grandchildren too) and the file fails "timed out".
 //   CAIRN_TEST_WORKERS             worker count. Default: min(12, cores − 1), and never more
-//                                  than available memory × 0.6 / CAIRN_TEST_WORKER_MB (default:
-//                                  1.5× the heaviest file's recorded peak RSS, 512 MB to the
-//                                  heap cap) — the line it prints says which bound won.
+//                                  than available memory × 0.6 holds with the n heaviest
+//                                  recorded files running at once (each 1.5× its peak RSS,
+//                                  512 MB to the heap cap; CAIRN_TEST_WORKER_MB charges every
+//                                  worker one figure instead) — the line it prints says which
+//                                  bound won.
 //   CAIRN_TEST_WARN_MS=5000        a file past either line is marked "over budget" in the
 //   CAIRN_TEST_WARN_RSS_MB=600     summary of a full run (a warning; it does not fail).
 // A bare `node --test` bypasses all of this (and the per-test DB wipe): use this runner.
@@ -243,22 +245,43 @@ const cpuCount = typeof availableParallelism === "function" ? availableParalleli
 // worker-count-independent (see test/_isolate.mjs), so this knob is purely about speed.
 const WORKER_CAP = 12;
 const cpuWorkers = Math.min(WORKER_CAP, Math.max(1, cpuCount - 1));
-// Memory: never start more workers than 60% of what is available can hold at the expected
-// peak per worker — the heaviest file the last run measured, with 50% headroom (512 MB at
-// least, the heap cap at most; 1 GB before anything is recorded). Reserving the full heap
-// cap per worker instead held a 16 GB runner to 3 workers (165 s against 101 s on 9) for a
-// suite whose heaviest file peaks near 450 MB; a runaway is the RSS budget's job, not the
-// worker count's. process.availableMemory() is the reclaimable-inclusive and cgroup-aware
+// Memory: never start more workers than 60% of what is available can hold in the worst
+// case the last run measured — the n heaviest files all running at once, each with 50%
+// headroom (512 MB at least, the heap cap at most; 1 GB each before anything is recorded).
+// Charging EVERY worker the single heaviest file's peak instead let one file that runs its
+// own parallel children (moduleLoadOrder: ~1.1 GB for its process group on 14 cores) price
+// all of them at the heap cap, holding a 48 GB machine with 22 GB available to 8 workers
+// for a suite whose next-heaviest files peak near 340 MB. Reserving the full heap cap per
+// worker held a 16 GB runner to 3 workers (165 s against 101 s on 9). A runaway is the RSS
+// budget's job, not the worker count's. CAIRN_TEST_WORKER_MB charges every worker one
+// figure instead. process.availableMemory() is the reclaimable-inclusive and cgroup-aware
 // number (a container's limit, macOS's inactive pages); os.freemem() alone counts only
 // never-used pages on macOS and reads a third low there.
-const heaviestMb = Math.max(0, ...Object.values(previous).map((t) => t.rssMb ?? 0));
-const WORKER_MB = envNumber(
-  "CAIRN_TEST_WORKER_MB",
-  heaviestMb ? Math.min(HEAP_MB, Math.max(512, Math.round(heaviestMb * 1.5))) : Math.min(HEAP_MB, 1024)
-);
+const workerMbFor = (rssMb) => Math.min(HEAP_MB, rssMb ? Math.max(512, Math.round(rssMb * 1.5)) : 1024);
+const fixedWorkerMb = envNumber("CAIRN_TEST_WORKER_MB", 0);
+const peaksMb = Object.values(previous)
+  .map((t) => t.rssMb ?? 0)
+  .filter((mb) => mb > 0)
+  .sort((a, b) => b - a);
 const availableBytes =
   typeof process.availableMemory === "function" ? Math.max(0, process.availableMemory()) || freemem() : freemem();
-const memoryWorkers = Math.max(1, Math.floor((availableBytes * 0.6) / (WORKER_MB * 2 ** 20)));
+const memoryWorkers = (() => {
+  const budgetMb = (availableBytes * 0.6) / 2 ** 20;
+  let n = 0;
+  let usedMb = 0;
+  while (n < 256) {
+    const nextMb = fixedWorkerMb || workerMbFor(peaksMb[n] ?? 0);
+    if (usedMb + nextMb > budgetMb) break;
+    usedMb += nextMb;
+    n += 1;
+  }
+  return Math.max(1, n);
+})();
+const memoryHow = fixedWorkerMb
+  ? `${fixedWorkerMb} MB each`
+  : peaksMb.length
+    ? `${workerMbFor(peaksMb[0])} MB for the heaviest file down to ${workerMbFor(peaksMb[memoryWorkers - 1] ?? 0)} MB`
+    : "1024 MB each, nothing recorded";
 const requested = Number.isFinite(requestedWorkers) && requestedWorkers > 0 ? Math.trunc(requestedWorkers) : 0;
 const workers = Math.max(1, Math.min(testFiles.length, requested || cpuWorkers, memoryWorkers));
 const gb = (bytes) => (bytes / 2 ** 30).toFixed(1);
@@ -266,10 +289,10 @@ const workerWhy =
   workers === testFiles.length && testFiles.length < Math.min(requested || cpuWorkers, memoryWorkers)
     ? "one per file"
     : memoryWorkers < (requested || cpuWorkers)
-      ? `memory-bound: ${gb(availableBytes)} GB available × 0.6 / ${WORKER_MB} MB per worker; cores allow ${requested || cpuWorkers}`
+      ? `memory-bound: ${gb(availableBytes)} GB available × 0.6 holds ${memoryWorkers} of the heaviest files at once (${memoryHow}); cores allow ${requested || cpuWorkers}`
       : requested
-        ? `requested; memory allows ${memoryWorkers} at ${WORKER_MB} MB each`
-        : `cores: ${cpuCount} − 1, cap ${WORKER_CAP}; memory allows ${memoryWorkers} at ${WORKER_MB} MB each`;
+        ? `requested; memory allows ${memoryWorkers} (${memoryHow})`
+        : `cores: ${cpuCount} − 1, cap ${WORKER_CAP}; memory allows ${memoryWorkers} (${memoryHow})`;
 
 // A per-file process reports to a buffer we print only for a failing file (or for every
 // file when one slot runs the suite serially), so `spec` costs nothing on a green run and
@@ -298,17 +321,17 @@ const COMPILE_CACHE = (() => {
   return knob || path.join(tmpdir(), "cairn-test-compile-cache");
 })();
 function envFor(dir) {
-  return {
+  const env = {
     ...process.env,
     // Any node process a test starts inherits the heap cap too (a flag it passes itself wins).
     NODE_OPTIONS: [process.env.NODE_OPTIONS, heapFlag].filter(Boolean).join(" "),
     // ~900 processes load the same dist/ modules: one V8 code cache, shared by every slot
     // (Node keys it by file content and its own version, so a rebuilt module just misses).
     ...(COMPILE_CACHE ? { NODE_COMPILE_CACHE: COMPILE_CACHE } : {}),
-    // Each node process in the file appends its own maxRSS here at exit (test/_isolate.mjs).
+    // The file's process appends its own maxRSS here at exit (test/_isolate.mjs).
     CAIRN_TEST_RSS_FILE: path.join(dir, "max-rss.txt"),
-    // The lifeline: the file's group leader kills its own group if this runner dies, even by
-    // SIGKILL, which no handler here can catch (test/_isolate.mjs).
+    // The lifeline: the file's process, its group's leader, kills its own group if this
+    // runner dies, even by SIGKILL, which no handler here can catch (test/_isolate.mjs).
     CAIRN_TEST_RUNNER_PID: String(process.pid),
     // Where the runner cannot sample processes, the file's process guards itself and
     // leaves its verdict here (see groupSampling).
@@ -345,6 +368,11 @@ function envFor(dir) {
     // test (and no scheduler tick) can POST feedback or a usage ping for real.
     CAIRN_FEEDBACK_URL: "",
   };
+  // A runner started from inside a test file inherits its NODE_TEST_CONTEXT, and a file that
+  // starts with it set would serialize its results for a parent that is not there.
+  // test/_isolate.mjs sets it for the file once the reporter is in place.
+  delete env.NODE_TEST_CONTEXT;
+  return env;
 }
 
 // --- The RSS watchdog --------------------------------------------------------------------
@@ -461,20 +489,26 @@ function readMaxRssKb(rssFile) {
   }
 }
 
-// Default (process) isolation on purpose: under `--test-isolation=none` a file that
-// throws at top level AFTER its first test() exits 0 with every later test silently
-// unregistered. One extra process start per file is the price of a crash failing.
+// One process per file, and the file IS that process: `node --import _isolate.mjs
+// --test-reporter=… <file>`, not a `node --test` parent around it. node:test runs a file
+// started directly exactly as it runs a `--test` child (same harness, same reporter), and
+// its exit code carries the same verdicts — a failed or cancelled test exits 1, so does a
+// throw at top level after the first test() (which `--test-isolation=none` would have
+// swallowed: never batch files into one process). The parent cost ~35 ms of CPU per file
+// for nothing the runner needs; the timeout, the RSS budget and the lifeline all act on
+// the file's process group, which this process now leads (test/_isolate.mjs).
 function runFile(file, env) {
   const start = performance.now();
   try {
     writeFileSync(env.CAIRN_TEST_RSS_FILE, "");
     if (env.CAIRN_TEST_RSS_GUARD_FILE) writeFileSync(env.CAIRN_TEST_RSS_GUARD_FILE, "");
   } catch {}
-  const child = spawn(
-    process.execPath,
-    [heapFlag, "--import", isolateImport, "--test", `--test-reporter=${reporter}`, file],
-    { cwd: root, env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" }
-  );
+  const child = spawn(process.execPath, [heapFlag, "--import", isolateImport, `--test-reporter=${reporter}`, file], {
+    cwd: root,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+    detached: process.platform !== "win32",
+  });
   let output = "";
   let failure = null;
   child.stdout.setEncoding("utf8");
@@ -535,6 +569,12 @@ function runFile(file, env) {
           } catch {}
           if (guarded) failure = `exceeded memory budget (${guarded} MB > ${RSS_MB} MB)`;
         }
+        // The spec reporter always ends a file with its summary. A clean exit without one
+        // means the reporter never ran as itself (a harness that read NODE_TEST_CONTEXT
+        // late — test/_isolate.mjs) or the file exited before its tests finished.
+        if (!failure && status === 0 && reporter === "spec" && !/^ℹ tests \d+$/m.test(output)) {
+          failure = "exited 0 without the reporter's test summary";
+        }
         resolve({
           file,
           status: failure ? 1 : (status ?? 1),
@@ -553,6 +593,18 @@ function runFile(file, env) {
   });
 }
 
+// The reporter's closing summary ("ℹ tests 12", "ℹ pass 12", …), summed over the run so a
+// change to the harness can show it ran every test it ran before. The LAST occurrence of
+// each line is the file's own: a nested run a test starts prints its summary earlier.
+const TALLY_KEYS = ["tests", "pass", "fail", "cancelled", "skipped", "todo"];
+const tally = Object.fromEntries(TALLY_KEYS.map((key) => [key, 0]));
+const SUMMARY_LINE = new RegExp(`^ℹ (${TALLY_KEYS.join("|")}) (\\d+)$`, "gm");
+function addTally(output) {
+  const last = {};
+  for (const [, key, count] of output.matchAll(SUMMARY_LINE)) last[key] = Number(count);
+  for (const [key, count] of Object.entries(last)) tally[key] += count;
+}
+
 const results = [];
 let next = 0;
 
@@ -565,6 +617,7 @@ async function runSlot(slot) {
     while (next < queue.length) {
       const { file } = queue[next++];
       const result = await runFile(file, env);
+      addTally(result.output);
       busyMs += result.durationMs;
       files += 1;
       if (printEveryFile) {
@@ -628,6 +681,12 @@ console.log(
   `${failures.length ? "✗" : "✓"} ${results.length} file(s) on ${workers} worker(s) in ${(wallMs / 1000).toFixed(1)}s` +
     ` (worker busy ${(idlest / 1000).toFixed(1)}–${(busiest / 1000).toFixed(1)}s)`
 );
+if (tally.tests) {
+  const rest = TALLY_KEYS.slice(1)
+    .filter((key) => key === "pass" || tally[key])
+    .map((key) => `${tally[key]} ${key}`);
+  console.log(`  ${tally.tests} tests: ${rest.join(", ")}`);
+}
 if (watchdogNote) console.log(`  ${watchdogNote}`);
 
 // What the run cost, file by file: always on a full run, on request otherwise.

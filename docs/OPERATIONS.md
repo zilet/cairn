@@ -696,15 +696,17 @@ worker count and file order, and the worker default scales with cores (`min(12, 
 ### Running tests
 
 `npm test` builds `dist/` and runs every file through `test/run.mjs`; `node test/run.mjs
-test/<file>.test.js …` runs a few against the current build. Each file is its own `node --test`
-process, the leader of its own process group, inside budgets the runner enforces:
+test/<file>.test.js …` runs a few against the current build. Each file is its own node process
+— `node --import test/_isolate.mjs <file>`, with no `node --test` parent around it (node:test
+runs a file started directly with the same harness, reporter and exit codes, and the parent cost
+~35 ms of CPU per file) — the leader of its own process group, inside budgets the runner enforces:
 
 | Knob | Default | What happens past it |
 |---|---|---|
 | `CAIRN_TEST_HEAP_MB` | 1536 | V8 heap cap for the file's process, and (via `NODE_OPTIONS`) for any node process it starts |
 | `CAIRN_TEST_RSS_MB` | 2048 | the file's whole process group, sampled every 250 ms, is killed: "exceeded memory budget" |
 | `CAIRN_TEST_FILE_TIMEOUT_MS` | 4× the file's last time, 60–120 s (120 s unrecorded) | the group is killed, grandchildren too: "timed out after Ns" |
-| `CAIRN_TEST_WORKERS` | min(12, cores − 1), and at most available memory × 0.6 / `CAIRN_TEST_WORKER_MB` (default: 1.5× the heaviest recorded peak, 512 MB to the heap cap) | — the start line says which bound chose the count |
+| `CAIRN_TEST_WORKERS` | min(12, cores − 1), and at most what available memory × 0.6 holds with the n heaviest recorded files running at once (each 1.5× its peak, 512 MB to the heap cap; `CAIRN_TEST_WORKER_MB` charges every worker one figure instead) | — the start line says which bound chose the count |
 | `CAIRN_TEST_WARN_MS` / `CAIRN_TEST_WARN_RSS_MB` | 5000 / 600 | listed "over budget" after a full run (a warning, not a failure) |
 | `CAIRN_TEST_COMPILE_CACHE` | `<tmpdir>/cairn-test-compile-cache` | — every file's process shares one V8 code cache (`NODE_COMPILE_CACHE`) for `dist/`; `0` turns it off |
 
@@ -717,6 +719,19 @@ process watches its own RSS from a worker thread instead and the run says so —
 then covered only by the heap cap and the timeout. A runner killed outright (even `kill -9`) leaves
 nothing behind: each file's process notices and takes its own process group down. These are
 CPU-, memory- and IO-bound node processes — there is nothing for a GPU to do.
+
+The closing line sums the reporter's counts (`N tests: … pass`), so a harness change can show it
+ran every test it ran before; a file that exits 0 without the reporter's summary fails ("exited 0
+without the reporter's test summary": it quit before its tests finished). Two things keep a file's
+fixed cost down, and neither loosens isolation. `test/_isolate.mjs` loads only the DB: a file
+enters the server graph through its own imports (~100 ms when it needs all of it), and a module's
+in-process memos are reset before each test only once something has loaded it. And the per-test
+wipe is skipped when the DB provably has not been written since the last one (the connection's
+`total_changes()` and `PRAGMA data_version`, which sees other connections and processes); the
+memo resets run before every test regardless. Where the time goes otherwise: the full suite is
+CPU-bound (about 470 CPU-seconds of user + system time on a 14-core Mac), so its wall time is
+roughly that over the worker count; 13 or 14 workers measured no faster than 12 on a 14-core
+(10P + 4E) machine.
 
 `npm run test:changed` (build, then `node test/run.mjs --changed[=<ref>]`) runs only the files a
 change can reach: everything changed since the merge-base with `main` (or `<ref>`), plus
