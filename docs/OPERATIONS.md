@@ -729,8 +729,9 @@ in-process memos are reset before each test only once something has loaded it. A
 wipe is skipped when the DB provably has not been written since the last one (the connection's
 `total_changes()` and `PRAGMA data_version`, which sees other connections and processes); the
 memo resets run before every test regardless. Where the time goes otherwise: the full suite is
-CPU-bound (its files' processes, about 600 CPU-seconds), so its wall time is roughly that over
-the worker count; 13 or 14 workers measured no faster than 12 on a 14-core (10P + 4E) machine.
+CPU-bound (about 470 CPU-seconds of user + system time on a 14-core Mac), so its wall time is
+roughly that over the worker count; 13 or 14 workers measured no faster than 12 on a 14-core
+(10P + 4E) machine.
 
 `npm run test:changed` (build, then `node test/run.mjs --changed[=<ref>]`) runs only the files a
 change can reach: everything changed since the merge-base with `main` (or `<ref>`), plus
