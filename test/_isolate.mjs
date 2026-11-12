@@ -173,11 +173,35 @@ const hasSqliteSequence = !!db
   .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sqlite_sequence'")
   .get();
 
+// Has anything written to the DB since the last wipe? The wipe itself (~1 ms: a statement
+// per table) is most of a test's fixed cost, and many tests never write. Two counters
+// prove a DB untouched: this connection's total_changes() (every row an INSERT, UPDATE or
+// DELETE on it changed, triggers included, rolled-back ones too — it never goes down) and
+// PRAGMA data_version, which moves whenever ANY other connection commits — another
+// DatabaseSync a test opens, a process it starts on the same file. Unchanged both ⇒ every
+// table is still exactly as the last wipe left it. Anything unreadable counts as dirty.
+const changesNow = db.prepare("SELECT total_changes() AS n");
+const versionNow = db.prepare("PRAGMA data_version");
+const odometer = () => {
+  try {
+    return `${changesNow.get().n}:${versionNow.get().data_version}`;
+  } catch {
+    return null;
+  }
+};
+let wipedAt = null; // the odometer right after the last wipe; null = never wiped here
+
 wipeDb = async () => {
+  const now = odometer();
+  if (now === null || now !== wipedAt) wipeTables();
+  await resetMemos();
+};
+
+function wipeTables() {
   // Single transaction with deferred FK checks: intermediate deletes may briefly
   // violate foreign keys, but every table is empty at COMMIT so nothing trips.
   // `DELETE FROM <t>` with no WHERE uses SQLite's truncate optimization, so an
-  // already-empty table costs almost nothing — cheap even for DB-less tests.
+  // already-empty table costs almost nothing.
   db.exec("BEGIN");
   db.exec("PRAGMA defer_foreign_keys = ON");
   try {
@@ -192,6 +216,11 @@ wipeDb = async () => {
     db.exec("ROLLBACK");
     throw err;
   }
+  wipedAt = odometer();
+}
+
+// In-process state is reset before EVERY test, wiped DB or not.
+async function resetMemos() {
   // The wipe bypasses every repo write path (and thus the getMarkerHistory write
   // counter), and rowids can collide across a wipe — so the in-process marker-history
   // memo could otherwise serve a prior test's markers. Drop it explicitly here (when loaded).
@@ -208,4 +237,4 @@ wipeDb = async () => {
   // estimateExpenditure): reset their counters to 0 and drop every registered memo so a
   // same-shape next test can't land on a colliding key and read a prior test's read.
   await resetIfLoaded(dist("../dist/repo/training-cache.js"));
-};
+}
