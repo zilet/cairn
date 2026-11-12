@@ -21,7 +21,6 @@ const NAV_TIMEOUT_MS = 20000;
 const SETTLE_QUIET_MS = 150;
 const SETTLE_MAX_MS = 3000;
 const POLL_MS = 25;
-const WORKFLOW_COUNT = 14;
 
 // Five homes (v2 wave 5): Today / Train / Horizon / Ask / You. `tab` is the VIEW
 // (window.state.tab); `home` is the lit tab-bar button. Every v1 path is rewritten
@@ -1680,7 +1679,7 @@ try {
     err.serverLog = first.serverLog;
     throw err;
   }
-  console.log(`\nBrowser smoke OK - ${routes.length} route(s) and ${WORKFLOW_COUNT} workflow(s) loaded without runtime errors. (${((Date.now() - started) / 1000).toFixed(1)}s)`);
+  console.log(`\nBrowser smoke OK - ${routes.length} route(s) and ${workflows.length} workflow(s) loaded without runtime errors. (${((Date.now() - started) / 1000).toFixed(1)}s)`);
   exitCode = 0;
 } catch (error) {
   console.error(`\nx Browser smoke FAILED: ${error.message}`);
