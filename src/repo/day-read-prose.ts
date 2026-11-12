@@ -122,7 +122,7 @@ export const DAY_READ_OUTCOMES = {
     reasons: [
       "Today is your race, and an open health finding is worth clearing with your clinician before the start.",
       "Race day, with a health finding still open — whether and how you start is for you and your clinician.",
-      "Your goal race is today, and a health finding you're following comes first in deciding how to take it.",
+      "Your goal race is today, and a health finding you and your clinician are following comes first in deciding how to take it.",
     ],
   },
   // Resting HR above the athlete's own band with nothing hard before it, or for a second
@@ -1793,7 +1793,7 @@ export const DAY_READ_REQUIRED_CONCEPT: Readonly<Record<string, RegExp>> = {
   "goal_race_day:resting_hr": /\brace\b[\s\S]*\bresting heart rate\b[\s\S]*\bstart\b/i,
   "goal_race_day:resting_hr:repeat": /\brace\b[\s\S]*\bresting heart rate\b[\s\S]*\bstart\b/i,
   // Race day with a floor: the race, the floor in plain words, and that the start is theirs.
-  goal_race_day_word: /\brace\b[\s\S]*\bfeel(?:ing)?\b[\s\S]*\bwhether\b|\brace\b[\s\S]*\bwhether\b[\s\S]*\bfeel(?:ing)?\b/i,
+  goal_race_day_word: /\brace\b[\s\S]*\bfeel(?:ing)?\b/i,
   goal_race_day_pain: /\brace\b[\s\S]*\bpain\b/i,
   goal_race_day_injury: /\brace\b[\s\S]*\binjury\b/i,
   goal_race_day_clinical: /\brace\b[\s\S]*\bclinician\b/i,
@@ -1803,7 +1803,7 @@ export const DAY_READ_REQUIRED_CONCEPT: Readonly<Record<string, RegExp>> = {
   resting_hr_illness_pattern: /\bresting heart rate\b/i,
   // Both halves: the HRV run AND the sessions that fell short.
   hrv_decline_with_shortfall: /\bHRV\b[\s\S]*\bshort\b/i,
-  low_mornings_easy: /\b(?:another|again|back to back)\b/i,
+  low_mornings_easy: /\b(?:another|again|back to back|in a row)\b/i,
   short_night_eased: /\b(?:short|night|sleep)\b/i,
   resting_hr_after_endurance_easy: /\bresting heart rate\b[\s\S]*\beasy\b/i,
   stated_lift_morning_dosed: /\b(?:lift|lifting|lifts|session)\b/i,
