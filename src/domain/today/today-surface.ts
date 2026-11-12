@@ -19,6 +19,8 @@ import {
   type TodayStrengthLine,
 } from "../training/index.js";
 import { getPlanWithPurpose } from "../../repo/day-read.js";
+import { getCachedDayRead } from "../../repo/day-read-cache.js";
+import { chosenSessionHeadline } from "../../repo/day-read-prose.js";
 import { localDateISO } from "../../repo/shared.js";
 
 export function todayDateParam(value: unknown): string {
@@ -84,7 +86,31 @@ export type TodayAggregate = {
   strength_line: TodayStrengthLine;
   /** Today's open session — the one Start/Continue fact the strength line also reads. */
   open_session: OpenSession | null;
+  /**
+   * The Brief's headline when the athlete's CHOSEN session owns today on a training read:
+   * a server-written line about that session (its title; a neutral line for the empty
+   * "Open session"), to print in place of the day read's `headline`, which names the plan
+   * day. Null when the day read's own headline stands. The read's cached prose and its
+   * identity are untouched (second review, item 14).
+   */
+  chosen_session_headline: string | null;
 };
+
+// The Brief headline a chosen session earns (see `chosen_session_headline`). Only on a
+// training read: a rest or easy read stays the suggestion it is beside a session the
+// athlete chose (the strength line already carries that choice as a caveat). The read is
+// the cached one — never a fresh agent call from the aggregate; with no read cached yet
+// the read's own headline stands. Fail-soft.
+function chosenSessionHeadlineFor(date: string, open: OpenSession | null): string | null {
+  if (!open?.chosen) return null;
+  try {
+    const read = getCachedDayRead(date);
+    if (read?.kind !== "train") return null;
+    return chosenSessionHeadline(open.title, date);
+  } catch {
+    return null;
+  }
+}
 
 export function todayAggregate(dateQuery?: unknown): TodayAggregate {
   const date = todayDateParam(dateQuery);
@@ -103,6 +129,7 @@ export function todayAggregate(dateQuery?: unknown): TodayAggregate {
   // seen exactly as GET /today-agenda does (same debounced helper, one stamp).
   const agenda = todayAgenda(date);
   markTodayAgendaSeen(date);
+  const openSession = openSessionOn(date);
   return {
     date,
     plan,
@@ -117,6 +144,7 @@ export function todayAggregate(dateQuery?: unknown): TodayAggregate {
     agenda,
     coaching_focus: getCoachingFocus(),
     strength_line: todayStrengthLine(date),
-    open_session: openSessionOn(date),
+    open_session: openSession,
+    chosen_session_headline: chosenSessionHeadlineFor(date, openSession),
   };
 }

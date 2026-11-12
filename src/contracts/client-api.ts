@@ -2773,6 +2773,12 @@ export interface ClientTodayAggregate {
   strength_line?: ClientTodayStrengthLine | null;
   /** Today's open session — the one Start/Continue fact (null when none). */
   open_session?: ClientOpenSession | null;
+  /**
+   * The Brief's headline when the athlete's chosen session owns today on a training read —
+   * server-written, printed verbatim in place of the day read's `headline` (which names the
+   * plan day). Null when the day read's own headline stands.
+   */
+  chosen_session_headline?: string | null;
 }
 
 /**

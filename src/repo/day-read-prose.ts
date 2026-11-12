@@ -1551,6 +1551,39 @@ export function dayReadHeadline(
   return pickDayVariant(variants, date, `headline:${kind || "train"}`);
 }
 
+// ---- the Brief's headline when the athlete's CHOSEN session owns today (second review, item 14) ----
+// The day read's headline names the PLAN day's content; once the athlete has chosen
+// today's session (open-session.ts `chosen`) on a training read, the hero shows THAT
+// session, and a headline about the plan day beside it contradicts it. The Today
+// aggregate serves this one instead (domain/today/today-surface.ts
+// `chosen_session_headline`), never touching the read's cached prose or its identity.
+// The session's own title leads (focusHeadlinePhrase, as a plan focus would); the empty
+// "Open session" door has no name of its own, so it gets a neutral line.
+const CHOSEN_SESSION_HEADLINE: ReadonlyArray<(title: string) => string> = [
+  (title) => `${title} today.`,
+  (title) => `${title} is on today.`,
+  (title) => `${title} is your session today.`,
+];
+const CHOSEN_OPEN_SESSION_HEADLINE: readonly string[] = [
+  "Your session today.",
+  "Today's session is yours to shape.",
+  "Your own session is on today.",
+];
+// The empty "Open session" override's stored placeholder title (open-session.ts reads the
+// same door as "your session").
+const OPEN_SESSION_PLACEHOLDER = /^open session$/i;
+export function chosenSessionHeadline(title: string, date: string): string {
+  const phrase = focusHeadlinePhrase(String(title ?? ""));
+  if (!phrase || OPEN_SESSION_PLACEHOLDER.test(phrase))
+    return pickDayVariant(CHOSEN_OPEN_SESSION_HEADLINE, date, "headline:chosen_open_session");
+  return pickDayVariant(CHOSEN_SESSION_HEADLINE, date, "headline:chosen_session")(phrase);
+}
+// Registered for the shape and constitution guards, rendered with a sample title.
+export const DAY_READ_CHOSEN_SESSION_HEADLINE_VARIANTS: readonly string[] = [
+  ...CHOSEN_SESSION_HEADLINE.map((render) => render("Upper Body & Core")),
+  ...CHOSEN_OPEN_SESSION_HEADLINE,
+];
+
 // The idea each headline must carry whichever phrasing lands, exactly as
 // DAY_READ_REQUIRED_CONCEPT does for the `why` vocabulary. (The focus form declares
 // none: its required content is the focus itself, which the guard asserts directly.)
