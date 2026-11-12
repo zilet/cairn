@@ -443,6 +443,45 @@ export function enforceNamedBrakeForCaution(out: any, baseline: any, hasOverride
   };
 }
 
+// ---------- REST is reserved (owner rulings 2026-11-12; repo/morning-dose.ts) ----------
+// A readiness number alone, a short night, a second low morning, resting HR up after a
+// hard endurance day, a soft-corroborated stack of days, a dosed stated day, a lifted
+// check-in and race morning are reads the server deliberately keeps OFF rest. The agent
+// may still read them quieter within their own kind, never all the way to rest: those
+// mornings are exactly the ones REST is no longer the answer to. The athlete's own steer
+// is exempt, as from every clamp here.
+const REST_RESERVED_BASELINE_CODES: ReadonlySet<string> = new Set([
+  "goal_race_day",
+  "rest_grade_readiness",
+  "low_readiness_rest",
+  "low_mornings_easy",
+  "acute_sleep_corroborated",
+  "short_night_eased",
+  "resting_hr_after_endurance_easy",
+  "stated_lift_morning_dosed",
+  "stated_key_run_morning_dosed",
+  "overnight_dip_dosed",
+  "checkin_lifted_train",
+]);
+
+export function enforceRestReservation(out: any, baseline: any, hasOverride = false, date?: string): any {
+  if (hasOverride || out?.kind !== "rest" || baseline?.kind === "rest" || baseline?.kind === "done") return out;
+  const code = String(baseline?.decision?.rule_code ?? "");
+  const stackEased = code === "accumulated_load_rest" && baseline?.kind === "easy";
+  if (!REST_RESERVED_BASELINE_CODES.has(code) && !stackEased) return out;
+  const resolvedDate = date || localToday();
+  const decision = policyDecision(baseline, "agent_rest_reserved", resolvedDate);
+  return {
+    ...baseline,
+    headline: dayReadHeadline(baseline, resolvedDate),
+    source: "deterministic",
+    agent: out.agent,
+    tried: out.tried,
+    decision,
+    computed_at: decision.computed_at,
+  };
+}
+
 // A recovery week is already the deterministic answer to accumulated load: seven
 // days of reduced volume, not seven consecutive days of rest. The prose layer may
 // make the day easier immediately after a real loading day, but cannot keep
@@ -1038,6 +1077,7 @@ function finishDayRead(read: any, baseline: any, opts: { override?: string; date
   let out = enforceNamedBrakeForCaution(read, baseline, !!override?.trim(), resolvedDate);
   out = enforceDayReadSafetyPosture(out, baseline, !!override?.trim(), resolvedDate);
   out = enforceRecoveryWeekCadence(out, baseline, !!override?.trim(), resolvedDate);
+  out = enforceRestReservation(out, baseline, !!override?.trim(), resolvedDate);
   out = enforceCompletionContract(out, baseline, resolvedDate);
   // The day-ahead `forward` line is NOT persisted here — it's attached fresh on every
   // /today-read response (it must reflect the current plan/balance, not a snapshot).

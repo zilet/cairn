@@ -281,7 +281,7 @@ test("the long loop never opens a floor: acute saturation, rest-grade readiness 
   seedMatureWorld({ dueDay: "lower" });
   const saturated = repo.dayRead(REF, thinSleep());
   assert.notEqual(saturated.decision.rule_code, "learned_train_anyway", "the due day's legs are saturated");
-  assert.notEqual(saturated.kind, "train");
+  assert.notEqual(saturated.kind, "train", `${saturated.decision.rule_code}: ${saturated.why} ${JSON.stringify(saturated.signals.morning_dose)} ${JSON.stringify(saturated.signals.calendar_dose)}`);
   // A held open may still take the weighted one-rung ease (rest → easy movement), never
   // the session on the saturated legs.
   assert.notEqual(saturated.signals.learned_train_anyway.step, "train");
@@ -302,7 +302,12 @@ test("the long loop never opens a floor: acute saturation, rest-grade readiness 
     quality: { ...sleepy.quality, training_readiness: { latest_date: REF, source: "garmin", sample_count: 5 } },
   });
   assert.notEqual(restGrade.decision.rule_code, "learned_train_anyway");
-  assert.notEqual(restGrade.kind, "train");
+  // On this stated lifting day the reading alone is the DOSE, never the long loop's open
+  // (2026-11-12, morning-dose.ts, A): a held session under its own code, or quieter.
+  assert.ok(
+    restGrade.kind !== "train" || restGrade.decision.rule_code === "stated_lift_morning_dosed",
+    `${restGrade.decision.rule_code}: ${restGrade.why}`
+  );
 
   resetTables("garmin_daily_metrics");
   db.prepare(`DELETE FROM day_reads WHERE date = ?`).run(REF);

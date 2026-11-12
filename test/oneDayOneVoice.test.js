@@ -283,14 +283,15 @@ test("genuine objective red flags still rest", () => {
   db.prepare(`INSERT INTO daily_metrics (source, date, sleep_min) VALUES ('apple', ?, 270)`).run(TUE);
   assert.equal(repo.dayRead(TUE).kind, "rest", "felt low, and last night agrees");
 
-  // A rest-grade readiness reading is its own rule and needs no tap at all.
+  // A rest-grade readiness reading ALONE no longer takes the day (2026-11-12,
+  // morning-dose.ts, A): on this stated lifting day it is the dose, never rest.
   db.prepare(`DELETE FROM checkins`).run();
   db.prepare(`DELETE FROM daily_metrics`).run();
   db.prepare("INSERT INTO garmin_sources (id, provider, mode) VALUES (1, 'garmin', 'unofficial')").run();
   db.prepare(`INSERT INTO garmin_daily_metrics (source_id, date, training_readiness) VALUES (1, ?, 15)`).run(TUE);
   const deep = repo.dayRead(TUE);
-  assert.equal(deep.kind, "rest");
-  assert.equal(deep.decision.rule_code, "rest_grade_readiness");
+  assert.notEqual(deep.kind, "rest", `${deep.decision.rule_code}: ${deep.why}`);
+  assert.equal(deep.decision.rule_code, "stated_lift_morning_dosed");
 
   // And the same tap with nothing objective behind it reads lighter, never rest.
   db.prepare(`DELETE FROM garmin_daily_metrics`).run();

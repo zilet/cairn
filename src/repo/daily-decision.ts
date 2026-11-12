@@ -191,6 +191,10 @@ export const DAILY_DECISION_REASONS = [
   // a preference hold lifted, a second reach host, a recovering main lift no longer
   // parking the reach. Never fires over a deciding brake or a harmed recent day.
   "push_stance",
+  // The day read kept a training day through a single low morning, or lifted a
+  // readiness-only caution on the athlete's own good check-in (morning-dose.ts): the load
+  // holds, and the regions yesterday's work loaded go lighter.
+  "held_morning_dose",
 ] as const;
 
 // The run day's headline line on the envelope. Rotates like every repeating
@@ -238,6 +242,9 @@ export interface DailyDecisionSnapshot {
     consecutive_training_days: number | null;
     recovery_week: boolean;
     trained_today: boolean;
+    // Omit-when-idle: the read kept the day at a held dose through a single low morning
+    // (`morning`), or lifted a readiness-only caution on a good check-in (`checkin`).
+    held_dose?: "morning" | "checkin";
   };
   recovery: {
     has_data: boolean;
@@ -1127,6 +1134,11 @@ export function gatherDailyDecisionSnapshot(
       consecutive_training_days: finite(signals?.consecutive_training_days),
       recovery_week: signals?.recovery_week != null && signals.recovery_week !== false,
       trained_today: signals?.trained_today === true || signals?.logged_today === true,
+      ...(signals?.morning_dose?.applied === true
+        ? { held_dose: "morning" as const }
+        : signals?.checkin_lift?.applied === true
+          ? { held_dose: "checkin" as const }
+          : {}),
     },
     recovery: {
       has_data: recoverySummary?.has_data === true,
@@ -1306,6 +1318,11 @@ export function gatherDailyDecisionSnapshot(
 // about the run itself or the stack of days, and the lifting is still due.
 const REST_GRADE_READ_RULES: ReadonlySet<string> = new Set([
   "rest_grade_readiness",
+  // The morning's body readings (morning-dose.ts): the illness pattern, a sustained HRV
+  // decline beside a shortfall, and the easy persistence patterns stand on their own too.
+  "resting_hr_illness_pattern",
+  "hrv_decline_with_shortfall",
+  "low_mornings_easy",
   "acute_sleep_corroborated",
   "day_claimed_rest",
   "day_traded_rest",
@@ -1868,6 +1885,8 @@ function resolveReach(
   const support = snapshot.signal_support;
   if (!support || kind !== "train") return { reach: EMPTY_REACH, trimmed: false };
   if (support.training_drive !== "push") return { reach: EMPTY_REACH, trimmed: false };
+  // A held morning dose (morning-dose.ts) never carries a reach.
+  if (snapshot.day_read.held_dose != null) return { reach: EMPTY_REACH, trimmed: false };
   // An advisory-only board (a finding about RUNS) informs a lifting day; it does not
   // park its reach. A deciding brake still does.
   if (decidingBrake(snapshot)) return { reach: EMPTY_REACH, trimmed: false };
@@ -2627,14 +2646,30 @@ export function buildDailySessionDecision(
   // day is not here: that area stays `saturated`, its lifts HOLD at the logged working
   // weight below, and it is neither reduced nor a reach host. It is also still never
   // `allowed` — a group carrying work is not a stand-in target.
+  // A held morning dose (the read kept the day through a single low morning): the regions
+  // yesterday's work loaded — the acute gate's own `saturated`, never a second window — go
+  // lighter too, while everything else trains at the plan's dose.
+  const heldDose = snapshot.day_read.held_dose != null && baseKind === "train";
   const acuteReduced = snapshot.muscle_load
     .filter(
       (m) =>
         m.saturated &&
         !weekHeldGroups.has(m.group) &&
-        (m.deep === true || (m.days_ago === 0 && !(statedStack && LOWER_BODY_GROUPS.has(m.group))))
+        (m.deep === true ||
+          (m.days_ago === 0 && !(statedStack && LOWER_BODY_GROUPS.has(m.group))) ||
+          (heldDose && m.days_ago <= 1))
     )
     .map((m) => m.group);
+  if (heldDose) {
+    fire(precedence, "held_morning_dose");
+    soft.push({
+      code: "held_morning_dose",
+      detail:
+        snapshot.day_read.held_dose === "checkin"
+          ? "Your check-in and the readiness number disagree — the session goes ahead with the loads held"
+          : "This morning's readings ask for a held dose — loads stay put, yesterday's areas go lighter",
+    });
+  }
   const baseReduced = dedupe([
     ...enduranceReduced,
     ...acuteReduced,
@@ -3055,7 +3090,12 @@ export function buildDailySessionDecision(
     deep: [...deepGroups],
     ...(weekHeld.length ? { week_held: weekHeld } : {}),
   };
-  const caps: DailyDecisionEnvelope["caps"] = { volume, intensity, duration_min: duration };
+  // A held morning dose never raises a load (morning-dose.ts): the intensity holds at least.
+  const caps: DailyDecisionEnvelope["caps"] = {
+    volume,
+    intensity: heldDose && kind === "train" && intensity === "normal" ? "hold" : intensity,
+    duration_min: duration,
+  };
 
   // ---- the week's dose (weekly-dose-ledger.ts) ----
   // Asked last, once the day's caps, muscle lists, candidates and reach are final, so a

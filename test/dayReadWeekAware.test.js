@@ -527,22 +527,28 @@ test("floor: a deload the loaded weeks have earned is structure, never dosed thr
   assert.equal(r.signals.calendar_dose, undefined);
 });
 
-test("floor: a rest-grade reading on the long-run morning still rests", (t) => {
+// Since 2026-11-12 (morning-dose.ts, A and D) a rest-grade reading alone and one short
+// night are the DOSE on a stated key-run morning, never the day: the run engine shortens
+// the long run and the read keeps it, under the morning-dose code.
+test("a rest-grade reading alone on the long-run morning doses the run, never rests it", (t) => {
   const today = onSunday(t);
   weekAthlete(today);
   repo.upsertGarminDailyMetric({ date: today, ...LOW_HRV_NIGHT, training_readiness: 12 });
   const r = repo.dayRead(today);
-  assert.equal(r.kind, "rest", `${r.decision.rule_code}: ${r.why}`);
-  assert.notEqual(r.decision.rule_code, "stated_key_run_dosed");
+  assert.equal(r.kind, "train", `${r.decision.rule_code}: ${r.why}`);
+  assert.equal(r.decision.rule_code, "stated_key_run_morning_dosed");
+  assert.equal(r.signals.calendar_dose?.morning, "readiness_rest_grade");
+  assert.equal(violatesReadingGrammar(r.why), null);
 });
 
-test("floor: a short night keeps the long run's quiet read", (t) => {
+test("one short night doses the long run, never takes it", (t) => {
   const today = onSunday(t);
   weekAthlete(today);
   repo.upsertGarminDailyMetric({ date: today, ...LOW_HRV_NIGHT, sleep_min: 300 });
   const r = repo.dayRead(today);
-  assert.notEqual(r.kind, "train", `${r.decision.rule_code}: ${r.why}`);
-  assert.notEqual(r.decision.rule_code, "stated_key_run_dosed");
+  assert.equal(r.kind, "train", `${r.decision.rule_code}: ${r.why}`);
+  assert.equal(r.decision.rule_code, "stated_key_run_morning_dosed");
+  assert.equal(r.signals.calendar_dose?.morning, "short_night");
 });
 
 test("floor: an injury keeps the long run's quiet read", (t) => {
@@ -616,22 +622,25 @@ test("floor: a fueling hold keeps the lifting day's quiet read", (t) => {
   assert.notEqual(r.decision.rule_code, "stated_lift_dosed", `${r.decision.rule_code}: ${r.why}`);
 });
 
-test("floor: rest-grade readiness on a lifting day still rests", (t) => {
+// The same law for the lifting day (morning-dose.ts, A and D).
+test("rest-grade readiness alone on a lifting day doses the session, never rests it", (t) => {
   const today = onTuesday(t);
   weekAthlete(today);
   repo.upsertGarminDailyMetric({ date: today, ...SUBDUED_MORNING, training_readiness: 10 });
   const r = repo.dayRead(today);
-  assert.equal(r.kind, "rest");
-  assert.equal(r.decision.rule_code, "rest_grade_readiness");
+  assert.equal(r.kind, "train", `${r.decision.rule_code}: ${r.why}`);
+  assert.equal(r.decision.rule_code, "stated_lift_morning_dosed");
+  assert.equal(r.signals.push_bias, undefined, "no reach rides on a dosed day");
 });
 
-test("floor: a short night keeps the lifting day's quiet read", (t) => {
+test("one short night doses the lifting day, never takes it", (t) => {
   const today = onTuesday(t);
   weekAthlete(today);
   repo.upsertGarminDailyMetric({ date: today, ...SUBDUED_MORNING, sleep_min: 290 });
   const r = repo.dayRead(today);
-  assert.notEqual(r.decision.rule_code, "stated_lift_dosed", `${r.decision.rule_code}: ${r.why}`);
-  assert.notEqual(r.kind, "train");
+  assert.equal(r.kind, "train", `${r.decision.rule_code}: ${r.why}`);
+  assert.equal(r.decision.rule_code, "stated_lift_morning_dosed");
+  assert.equal(r.signals.calendar_dose?.morning, "short_night");
 });
 
 // ── B2 — the stated week's own tolerance, from outcomes ──

@@ -12,11 +12,12 @@
 // So the week keeps the SHAPE (and every volume law: the spike brake, the ACWR
 // ceiling, the reset week, the taper, race week, health holds), and this read decides
 // the INTENSITY of today's run from today's evidence:
-//   • HARD FLOORS — a rest-grade readiness reading, illness, active pain or injury the
-//     run loads. On ANY run day (easy days included) and through the week's locks
-//     (race day excepted) no run is prescribed at all: rest, or optional easy movement
-//     (dose "rest"). The Brief rests on the same mornings.
-//   • FLOORS — last night's HRV below or resting HR above the athlete's OWN band (a
+//   • HARD FLOORS — illness, active pain or injury the run loads. On ANY run day (easy
+//     days included) and through the week's locks (race day excepted) no run is
+//     prescribed at all: rest, or optional easy movement (dose "rest"). The Brief rests
+//     on the same mornings. (A rest-grade readiness reading was one until 2026-11-12: the
+//     composite score alone never takes a day — morning-dose.ts — so it is a FLOOR now.)
+//   • FLOORS — a rest-grade readiness reading, last night's HRV below or resting HR above the athlete's OWN band (a
 //     VERIFIED reading only), a short night, a run-down / poorly-rested check-in, high
 //     soreness, legs still DEEP in lifting, harm evidence on yesterday's work, a
 //     running-volume spike (the Brief's own definition). Any one turns a quality
@@ -68,7 +69,7 @@ import { activeRelevantTrainingSymptoms, activeSystemicTrainingSymptoms } from "
 import { round1 } from "../lib/numbers.js";
 
 export type RunDayKind = "easy" | "quality" | "long";
-// "rest": a hard floor (rest-grade readiness, illness, pain the run loads) — no run is
+// "rest": a hard floor (illness, pain the run loads) — no run is
 // prescribed; rest, or optional easy movement. The Brief says rest on those mornings.
 export type RunDayDose = "full" | "short" | "shortened" | "rest";
 
@@ -124,13 +125,14 @@ const FLOOR_WORDS: Readonly<Record<string, string>> = {
   pain_or_injury: "that sore spot is still active",
   illness: "you're under the weather",
 };
-// The HARD floors: the morning the Brief itself rests (rest-grade readiness is rest,
-// softenable only to easy movement), a sick athlete, pain the run loads. On these no run
+// The HARD floors: a sick athlete, pain the run loads. On these no run
 // is prescribed at all — not a shortened long run, not a full-distance easy one — on ANY
 // run day (easy days included) and through the week's locks; only race day itself is the
-// athlete's own call. The milder floors (a short night, HRV/RHR past the own band, the
-// legs, a run-down check-in, a volume spike…) turn quality easy and shorten a long run.
-export const HARD_RUN_FLOORS: ReadonlySet<string> = new Set(["rest_grade_readiness", "illness", "pain_or_injury"]);
+// athlete's own call. The milder floors (a rest-grade readiness reading — the composite
+// score alone never takes a day, morning-dose.ts — a short night, HRV/RHR past the own
+// band, the legs, a run-down check-in, a volume spike…) turn quality easy and shorten a
+// long run.
+export const HARD_RUN_FLOORS: ReadonlySet<string> = new Set(["illness", "pain_or_injury"]);
 const SOFT_BRAKE_WORDS: Readonly<Record<string, string>> = {
   readiness_subdued: "readiness is on the quiet side",
   legs_carrying_lift: "the legs are still carrying the lifting",

@@ -197,7 +197,8 @@ test("a hard-graded ride the day before the long run still corroborates the stac
   );
   assert.ok(hybrid, "the precondition: the ride's dose is on the board as a caution");
   assert.equal(r.signals.stacked_on_rhythm?.own_dose_exempt, false);
-  assert.equal(r.kind, "rest", `${r.decision.rule_code}: ${r.why}`);
+  // The corroborated stack is quiet — easy, never rest, since 2026-11-12 (F).
+  assert.equal(r.kind, "easy", `${r.decision.rule_code}: ${r.why}`);
   assert.equal(r.decision.rule_code, "accumulated_load_rest");
 
   // The same Saturday ridden easy (no hard grade): the week's own dose, exempt as before.

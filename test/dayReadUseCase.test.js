@@ -882,7 +882,8 @@ test("recovery data that DOES move the decision still retires the cached read", 
   assert.equal(repo.getCachedDayRead(date), null, "a real change must still bust the Brief");
   assert.equal(armed, 1, "and arm the background re-warm");
   const after = await readToday({ date });
-  assert.equal(after.kind, "rest");
+  // Three short nights in a row: an easy day, never rest (2026-11-12, morning-dose.ts, D).
+  assert.equal(after.kind, "easy");
 });
 
 // ---------------------------------------------------------------------------

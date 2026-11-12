@@ -56,6 +56,7 @@ import {
   overnightBrakes,
   personalBand,
   restingHrContradictedByFloor,
+  type NightPast,
   type PersonalBand,
 } from "../overnight-band.js";
 import { SENSOR_MAX_AGE_DAYS, isReadDayReadiness, sensorIsCurrent } from "../sensor-freshness.js";
@@ -2299,6 +2300,66 @@ function nextMorningPhysiologyBrakeUncached(date: string, morning: string): Harm
   return onset ? { date, kind: "physiology_brake", detail: onset.detail } : null;
 }
 
+// ---------- the same mornings, asked by the morning-dose read (morning-dose.ts) ----------
+// Two read-only views over the readings the harm arms already use, so the question "is
+// this low morning corroborated, or persistent?" is answered from exactly the numbers
+// the harm test judges by — never a second band, never a second freshness rule.
+
+/** Bound on the walk back along consecutive past-the-line readings (persistence asks for a small count). */
+const OVERNIGHT_RUN_WALK_CAP = 7;
+
+export interface OvernightFieldRead {
+  /** Last night against the athlete's own line: meaningfully past, marginally past, or not. */
+  past: NightPast;
+  /** Consecutive readings past the line, last night's included. */
+  consecutive: number;
+}
+
+/**
+ * Last night's HRV and resting HR against the athlete's own band (the night dated
+ * `morning` only). Null per field when last night has no reading of it or sits inside
+ * the band. Absent data reads absent — it never corroborates and never persists.
+ */
+export function overnightReadOn(morning: string): { hrv: OvernightFieldRead | null; rhr: OvernightFieldRead | null } {
+  const read = overnightPhysiology(morning);
+  const view = (arm: OvernightArm | null): OvernightFieldRead | null =>
+    arm && arm.past != null ? { past: arm.past, consecutive: arm.consecutive } : null;
+  return { hrv: view(read.hrv), rhr: view(read.rhr) };
+}
+
+/**
+ * The readiness a morning opened with, by the same ladder the harm test reads
+ * (Cairn's own read from before the work, else the watch's wake-up reading, else the
+ * morning's own row on a day with no training) — WITHOUT the harm test's exemption for
+ * a wake-up reading that restates the prior workout's load. That exemption answers
+ * "is this evidence about the day before"; persistence asks the plainer question "was
+ * that morning low", and a low morning is low whatever explains it. Null when unknowable.
+ */
+export function morningReadinessReading(morning: string): number | null {
+  const fromLadder = ladderMorningReadiness(morning);
+  if (fromLadder != null) return fromLadder;
+  if (trainedOnDate(morning)) return null;
+  const row = morningMetricsRow(morning);
+  if (!row) return null;
+  const readingDate = row.date == null ? null : String(row.date);
+  if (!isReadDayReadiness(readingDate, morning)) return null;
+  return readingNumber(row.training_readiness);
+}
+
+/**
+ * One overnight field's readings between two dates (inclusive), Garmin preferred per
+ * date and a floor-contradicted resting HR dropped — the same nights the harm arms
+ * read (overnightNights), as a plain series for the rolling read (overnight-band.ts).
+ */
+export function overnightSeries(field: "hrv_ms" | "resting_hr", from: string, to: string): Array<{ date: string; value: number }> {
+  const out: Array<{ date: string; value: number }> = [];
+  for (const [date, night] of overnightNights(from, to)) {
+    const value = night[field];
+    if (value != null) out.push({ date, value });
+  }
+  return out.sort((a, b) => a.date.localeCompare(b.date));
+}
+
 // ---------- the overnight arms, per morning ----------
 interface OvernightArm {
   // Machine register provenance ("hrv 38 below own band 41 on …").
@@ -2311,6 +2372,12 @@ interface OvernightArm {
   // reading before it already braked: the episode started earlier, so this morning is
   // its continuation, not news about yesterday.
   onset: boolean;
+  // How far last night sits past the athlete's own line (overnight-band.ts), and how
+  // many consecutive readings — last night's included — sit past it. Read by the
+  // morning-dose question (morning-dose.ts: corroboration and persistence), never by
+  // the harm arms above, which keep `brake`/`onset` exactly as they were.
+  past: NightPast;
+  consecutive: number;
 }
 
 interface OvernightPhysiology {
@@ -2442,10 +2509,23 @@ function overnightPhysiologyUncached(morning: string): OvernightPhysiology {
     const priorPrior = prior && priorPast ? before(field, signal, prior.date) : null;
     const priorPriorPast = pastOwnBand(field, priorPrior);
     const brake = overnightBrakes(past, priorPast);
+    // The run of consecutive readings past the line, walked back reading by reading
+    // (each judged against its own morning's band), bounded — persistence asks only
+    // whether it reaches a small count.
+    let consecutive = 1;
+    let cursor = prior;
+    let cursorPast = priorPast;
+    while (cursor && cursorPast != null && consecutive < OVERNIGHT_RUN_WALK_CAP) {
+      consecutive++;
+      cursor = before(field, signal, cursor.date);
+      cursorPast = pastOwnBand(field, cursor);
+    }
     return {
       detail: detail(value, band.line),
       brake,
       onset: brake && !overnightBrakes(priorPast, priorPriorPast),
+      past,
+      consecutive,
     };
   };
 
@@ -2461,10 +2541,15 @@ function overnightPhysiologyUncached(morning: string): OvernightPhysiology {
   } else if (tonight.hrv_status && HRV_BRAKE_STATUSES.has(tonight.hrv_status)) {
     // The watch's own verdict word is already a seven-day read, so it stands as a brake.
     const prior = before("hrv_status", "hrv", morning)?.night.hrv_status ?? null;
+    const continuing = prior != null && HRV_BRAKE_STATUSES.has(prior);
     hrv = {
       detail: `hrv status ${tonight.hrv_status} on ${morning}`,
       brake: true,
-      onset: !(prior != null && HRV_BRAKE_STATUSES.has(prior)),
+      onset: !continuing,
+      // The watch's own verdict word stands in for the band: a brake word is a
+      // meaningful miss, and the word the night before continues the run.
+      past: "meaningful",
+      consecutive: continuing ? 2 : 1,
     };
   }
 
@@ -2491,6 +2576,8 @@ function overnightPhysiologyUncached(morning: string): OvernightPhysiology {
       detail: `resting hr ${Math.round(tonight.resting_hr)} vs 7-day ${Math.round(tonight.hr_7d_avg)} on ${morning}`,
       brake: true,
       onset: !continuing,
+      past: "meaningful",
+      consecutive: continuing ? 2 : 1,
     };
   }
   return { hrv, rhr };

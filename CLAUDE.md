@@ -290,7 +290,8 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   nothing about sleep — never a night before last wearing last night's words. One READINESS reading
   is the same law (`isReadDayReadiness`): a `d-1` row is yesterday's post-workout last sync. HRV
   and resting HR exist only on worn nights, so their caution BRAKES only when its reading is last
-  night's; an older one rides as context (`advice_only`, `signal-state.ts`).
+  night's; an older one rides as context (`advice_only`, `signal-state.ts`). A REST decision reads
+  HRV only as a rolling value (`rollingBandRead`, `src/repo/overnight-band.ts`); one night stays harm's.
 - **Logged intake is evidence only when the day reads complete** — `classifyIntakeDay`
   (`src/repo/intake-window.ts`) is the one credibility rule: a morning→evening span carrying at
   least `SPANNING_DAY_MIN_KCAL`, or, when NOTHING on the day could be placed in time, a whole day
@@ -406,7 +407,7 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   A low `felt_fatigue` constraint this earns closes early (within its 7-day window) the moment a later
   completed session contradicts it too (`autoregBrake`, `src/repo/progression.ts`). Readiness bands live in
   `src/repo/readiness-bands.ts` (`LOW_READINESS` 35 = subdued/easy; `REST_GRADE_READINESS` 20
-  inclusive = its own REST rule, softenable only to easy movement) — never hardcode a readiness
+  inclusive = never rest on its own: easy, or the dose on a stated day — `src/repo/morning-dose.ts`) — never hardcode a readiness
   threshold. And `trainedWithoutHarm` is `harmEvidenceOnDay(date) == null`: a hard-cardio day, a
   new-longest run (`longestRunNovelty`), or a bad next morning (rest-grade readiness, or last
   night's HRV/RHR MEANINGFULLY past the athlete's OWN band — by the smallest worthwhile change, or on
@@ -434,7 +435,8 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   observation, so a tapped-in athlete never reads as untracked) — never round it to a brake or a
   support vote. **A tap alone eases, it never rests**: a felt brake takes the whole day only with an
   objective witness about the same 24 hours (`FELT_REST_CORROBORATION`, `signal-state.ts`), and a poor
-  sleep-feel beside an energy ≥4 tap is an advisory caveat (`sleep_feel_mixed`). Details in
+  sleep-feel beside an energy ≥4 tap is an advisory caveat (`sleep_feel_mixed`); a good tap lifts a
+  readiness-only easy read one step, held (`checkin_lifted_train`). Details in
   `docs/ARCHITECTURE.md` "A check-in tap is slight input". Chat can write the same check-in via the `log_checkin` action
   (`src/chatActions.ts`), 1–5 scales only, and a free-text note there is routed through symptom
   capture only when the athlete's own words carry symptom intent — never automatically.
@@ -462,7 +464,10 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   "Composition never moves the prescription".
 - **On a STATED key-run or lifting day a soft brake is the dose, never the kind** — the read stays
   `train` (`stated_key_run_dosed` / `stated_lift_dosed`); every floor (`calendarDoseFloor`) keeps the
-  quiet read, and a learned tolerance can only hand it back. The day-read verdict judges only the
+  quiet read, and a learned tolerance can only hand it back. **REST is reserved**: a rest-grade
+  reading, one short night, RHR up after hard endurance are the dose (`stated_*_morning_dosed`), easy
+  elsewhere; the rule table and every tunable are `MORNING_DOSE_POLICY` (`src/repo/morning-dose.ts`);
+  race morning reads the race. The day-read verdict judges only the
   true morning read, and harm there can be `unknown` (`harmVerdictOnDay` — never clean, never a
   cost; `harmEvidenceOnDay` itself is unchanged). Details: `docs/ARCHITECTURE.md` "The calendar owns
   what the day is for" and "The measurement fixes of 2026-10-16".

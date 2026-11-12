@@ -301,14 +301,16 @@ test("three ordinary easy runs, nothing else, DO soften — the ladder still wor
   assert.equal(soft.overridden_and_fine.length, 3);
 });
 
-// ---------- R2: a rest-grade reading IS rest ----------
+// ---------- R2: a rest-grade reading is a quiet day, never a run ----------
+// (It read REST until 2026-11-12: the composite score alone never takes the day —
+// morning-dose.ts, A — so on a day the week does not state it reads EASY.)
 
-test("a rest-grade readiness reading reads as REST, and never suggests a run", () => {
+test("a rest-grade readiness reading reads EASY (never rest), and never suggests a run", () => {
   seedRunHistory(REF);
   seedRun(YESTERDAY, 9.85, 59);
   repo.upsertGarminDailyMetric({ date: REF, training_readiness: 1 });
   const read = dayRead(REF);
-  assert.equal(read.kind, "rest");
+  assert.equal(read.kind, "easy");
   assert.ok(
     (DAY_READ_WHY_VARIANTS.rest_grade_readiness ?? []).includes(read.why),
     `unexpected wording ${JSON.stringify(read.why)}`
@@ -475,10 +477,10 @@ test("legs_saturated alongside endurance evidence still speaks about the run", (
   assert.ok(CLAIMS_YESTERDAYS_RUN.test(String(session.items[0].note ?? "")));
 });
 
-test("the band edge itself reads as rest", () => {
+test("the band edge itself reads as the rest-grade read (easy since 2026-11-12)", () => {
   repo.upsertGarminDailyMetric({ date: REF, training_readiness: REST_GRADE_READINESS });
   const read = dayRead(REF);
-  assert.equal(read.kind, "rest");
+  assert.equal(read.kind, "easy");
   assert.equal(read.decision?.rule_code, "rest_grade_readiness");
 });
 
@@ -552,7 +554,7 @@ test("training anyway on a rest-grade morning gets movement, not a run", () => {
   seedRun(YESTERDAY, 9.85, 59);
   repo.upsertGarminDailyMetric({ date: REF, training_readiness: 1 });
   const { envelope } = decideDailySession(REF, { train_anyway: true });
-  assert.equal(envelope.baseline_kind, "rest", "the morning itself read as rest");
+  assert.equal(envelope.baseline_kind, "easy", "the morning itself read quiet (easy since 2026-11-12)");
   assert.equal(envelope.endurance_hold?.no_run, true);
   assert.ok(
     envelope.endurance_hold.reasons.includes("longest_run_yesterday") ||

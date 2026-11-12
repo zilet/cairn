@@ -320,7 +320,9 @@ test("...and are still reachable through a scoped state, which is why they stay 
     quality: { training_readiness: { latest_date: REF } },
   };
   const readiness = repo.dayRead(REF, scopedRecovery, repo.buildUnifiedSignalState(REF, []));
-  assert.equal(readiness.kind, "rest");
+  // The composite readiness number alone never takes the day (2026-11-12, morning-dose.ts,
+  // A): the code keys an EASY read now, and stays in the allowlists it was in.
+  assert.equal(readiness.kind, "easy");
   assert.equal(readiness.decision.rule_code, "low_readiness_rest");
 });
 
