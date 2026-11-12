@@ -1037,7 +1037,11 @@ export interface ClientTodayStrengthLine {
   focus: string | null;
   role: ClientPlanWeekRole | null;
   state: "not_started" | "in_progress" | "logged" | "rest_day" | "no_lift" | "none";
-  /** A rest/easy read, carried as a caveat on the plan day — never a replacement title. */
+  /**
+   * A rest/easy read, carried as a caveat on the plan day — never a replacement title.
+   * Null once the athlete chose today's session (`open_session.chosen`); the read then
+   * survives only in `caveat`, in "you chose to train" words.
+   */
   suggestion: "easy" | "rest" | null;
   /** The suggestion in a few words beside the name ("lighter today"). */
   suggestion_label?: string | null;
@@ -1048,6 +1052,58 @@ export interface ClientTodayStrengthLine {
   original: string[];
   text: string;
 }
+
+/**
+ * Today's open session (src/repo/open-session.ts): the date's active composition and its
+ * unfinished session row, whatever its set count; null when nothing is prepared or the
+ * session is finished. Every surface that offers Start/Continue prints `label` verbatim.
+ */
+export interface ClientOpenSession {
+  daily_session_id: number;
+  session_id: number;
+  source: "adaptive_plan" | "agent_suggest" | "manual_plan" | "athlete_override";
+  plan_day_id: number | null;
+  /** The session's display name (a typed title verbatim, a plan day by its NAME). */
+  title: string;
+  set_count: number;
+  /** Logged sets, a duration, notes, feedback or a linked activity. */
+  started: boolean;
+  /** The athlete picked it; a chosen session is never "rest suggested". */
+  chosen: boolean;
+  action: "start" | "continue";
+  /** "Start <title>" / "Continue <title>" ("… your session" for the empty Open session). */
+  label: string;
+}
+
+/** The session that owns a date, carried on a daily-session conflict so the client can open it. */
+export interface ClientDailySessionOwner {
+  daily_session_id: number | null;
+  session_id: number;
+  source: "adaptive_plan" | "agent_suggest" | "manual_plan" | "athlete_override" | null;
+  title: string;
+  set_count: number;
+  started: boolean;
+}
+
+/** A coded daily-session refusal (prepare/discard): `owner` rides the ownership conflicts. */
+export interface ClientDailySessionError {
+  ok: false;
+  code: string;
+  error: string;
+  preview?: ClientDailySessionPreview;
+  /** daily_session_active_changed / daily_session_locked (and discard's daily_session_changed). */
+  owner?: ClientDailySessionOwner;
+}
+
+export interface ClientDailySessionDiscardRequest {
+  date: ISODateString | string;
+  /** The active composition being discarded; a different active one is a 409 conflict. */
+  expected_active_id: number;
+}
+
+export type ClientDailySessionDiscardResponse =
+  | { ok: true; date: ISODateString | string; discarded: true; daily_session_id: number; session_id: number }
+  | ClientDailySessionError;
 
 /** Connected Plan-tab week: calendar Mon–Sun when schedules map, else template order. */
 export interface ClientPlanWeek {
@@ -1447,7 +1503,7 @@ export type ClientDailySessionPrepareResponse =
       session: ClientTrainingSession;
       reused: boolean;
     }
-  | { ok: false; code: string; error: string; preview?: ClientDailySessionPreview };
+  | ClientDailySessionError;
 
 export interface ClientActivity {
   id: number;
@@ -2686,6 +2742,8 @@ export interface ClientTodayAggregate {
   profile: ClientProfile | null;
   exercises: ClientExercise[];
   strength_line?: ClientTodayStrengthLine | null;
+  /** Today's open session — the one Start/Continue fact (null when none). */
+  open_session?: ClientOpenSession | null;
 }
 
 /**
@@ -4333,6 +4391,7 @@ export interface ClientApiResponses {
   "/api/daily-session": ClientDailySessionComposition | null;
   "/api/daily-session/preview": ClientDailySessionPreview | null;
   "/api/daily-session/prepare": ClientDailySessionPrepareResponse;
+  "/api/daily-session/discard": ClientDailySessionDiscardResponse;
   "/api/daily-session/outcome": ClientDailySessionOutcomeRead | null;
   "/api/session-primer": ClientSessionPrimer | null;
   "/api/week-ahead": ClientWeekAheadResponse;

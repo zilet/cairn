@@ -13,7 +13,9 @@ import {
   planDayProgression,
   selectedPlanDayForDate,
   strengthJourneyRead,
+  openSessionOn,
   todayStrengthLine,
+  type OpenSession,
   type TodayStrengthLine,
 } from "../training/index.js";
 import { getPlanWithPurpose } from "../../repo/day-read.js";
@@ -80,6 +82,8 @@ export type TodayAggregate = {
   agenda: unknown;
   coaching_focus: unknown;
   strength_line: TodayStrengthLine;
+  /** Today's open session — the one Start/Continue fact the strength line also reads. */
+  open_session: OpenSession | null;
 };
 
 export function todayAggregate(dateQuery?: unknown): TodayAggregate {
@@ -113,5 +117,6 @@ export function todayAggregate(dateQuery?: unknown): TodayAggregate {
     agenda,
     coaching_focus: getCoachingFocus(),
     strength_line: todayStrengthLine(date),
+    open_session: openSessionOn(date),
   };
 }

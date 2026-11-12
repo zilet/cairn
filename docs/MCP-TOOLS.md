@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**318 tools.**
+**319 tools.**
 
 | Tool | Description |
 |---|---|
@@ -51,6 +51,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `delete_supplement` | Remove one supplement from the regimen by id. |
 | `derive_directives` | Re-run the deterministic propagation engine over the latest markers: clears the 'markers' directive source and re-derives evidence-based nutrition/training/watch directives for every out-of-optimal marker, while honoring prior Done/Dismiss feedback. Idempotent; leaves agent-emitted 'health_review' directives untouched. |
 | `detach_exercise_guide` | Unlink a guide from its exercise, or dismiss a suggestion that describes the wrong movement. The refusal is remembered: a later import will not re-attach this guide on its own, though attach_exercise_guide still can. The imported text itself is kept. |
+| `discard_daily_session` | Discard an accidental EMPTY session for a date (mirror of POST /api/daily-session/discard): the active composition is superseded and its zero-set session row deleted, so the date is free again. expected_active_id is the composition you read (get_daily_session). A session with logged sets, a duration, notes or feedback is never deleted — that returns code daily_session_locked with its owner; a moved composition returns daily_session_changed with the owner as it now stands. |
 | `discard_journey_phase` | Discard a proposed or inactive journey phase. |
 | `discard_proposal` | Discard a draft proposal without applying it. |
 | `dismiss_anchor_objective_suggestion` | Quiet the anchor-lift comeback suggestion for a long while. A suggestion is never a gate; this only stops it from resurfacing until well later. |
@@ -250,7 +251,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `nutrition_checkin` | Queue a quiet adaptive-nutrition check-in. Returns a job immediately; poll get_agent_job. Meaningful drift may schedule a bounded reversible target change at the next food-day boundary under Lead mode; review posture holds it. Thin logging lowers confidence and cannot itself cut the target. |
 | `onboard` | Queue frictionless first-run setup from one free-text intro. Returns a job immediately; poll get_agent_job. It understands profile, about-me, supplements, injuries, and memories without a questionnaire and degrades to a deterministic base. |
 | `order_plan_day_for_effect` | Rewrite one plan day's exercises into effect order: primary compounds first (barbell before machine), then secondary loaded work, isolation, then core. No-op when already ordered. Returns the day, or null when that day_number is absent. |
-| `prepare_daily_session` | Explicitly persist a daily session without changing the weekly plan. Pass expected_active_id alone to assert that a cached composition still owns the date without creating or replacing anything. adaptive_plan/manual_plan snapshot a plan day; agent_suggest requires its completed session-suggest agent_job_id; athlete_override accepts a user-authored session, including an empty open session. Exact retries reuse safely; a different replace is refused after the session starts. |
+| `prepare_daily_session` | Explicitly persist a daily session without changing the weekly plan. Pass expected_active_id alone to assert that a cached composition still owns the date without creating or replacing anything. adaptive_plan/manual_plan snapshot a plan day; agent_suggest requires its completed session-suggest agent_job_id; athlete_override accepts a user-authored session, including an empty open session. Exact retries reuse safely; a different replace is refused after the session starts. A conflict (daily_session_active_changed / daily_session_locked) carries `owner` — the session that owns the date — so it can be opened instead; an owner nobody has logged on is superseded by replace:true, except that an adaptive_plan request never replaces the athlete's own chosen session that holds work. |
 | `preview_daily_session` | Preview the exact read-only adaptive session candidate Cairn would persist for this date and intent. Returns athlete-facing constraints and rationale plus an input fingerprint for compare-and-set prepare, or null when the date has no weekly template day to build one from. Never records a decision or creates a workout session. |
 | `recent_sessions` | List recent logged sessions, each with all its sets. |
 | `reconcile_exercise_groups` | Backfill and normalize the muscle_group for every exercise: null values are auto-classified from the exercise name; legacy values (e.g. 'legs' → 'quads', 'posterior' → 'hamstrings') are mapped to the canonical taxonomy. Idempotent — safe to run repeatedly. |

@@ -12,7 +12,7 @@ The OAuth 2.1 doors an AI app signs in through for `/mcp` (`/.well-known/oauth-*
 [OPERATIONS.md](OPERATIONS.md) "Connect an AI app (MCP)".
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**415 routes** across 136 groups.
+**416 routes** across 136 groups.
 
 ## `/activities`
 
@@ -253,6 +253,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 |---|---|---|
 | GET | `/api/daily-session` | Read the durable composition the athlete accepted for a day. Agent suggestions remain preview-only until the explicit prepare call below writes this snapshot. |
 | GET | `/api/daily-session/decision` | The deterministic decision envelope (Stage 2) — an explainable, reproducible read of what KIND of day today is, the movement/muscle envelope, caps, and the reason codes behind them, BEFORE any agent composes. Synchronous + agent-free. The same bounded snapshot yields the same envelope + input_fingerprint. Recorded best-effort for observability; a record failure never fails the read. |
+| POST | `/api/daily-session/discard` | Discard an accidental EMPTY session for a date: the active composition is superseded and its zero-set session row deleted, so the date is free again. expected_active_id (required) is the composition the caller read. A started session is refused as the daily_session_locked CONFLICT with its `owner`; a moved composition is daily_session_changed with the owner as it now stands — logged work is never deleted. |
 | GET | `/api/daily-session/outcome` | Stage 4 — the post-session outcome reconciliation for a date: what was suggested vs what was actually trained (completed / substituted / skipped / reordered), progression evidence, feedback, and the adherence-neutral reason codes + confounders. Deterministic, agent-free. null (200) when the date has no reconciled daily-session composition. |
 | POST | `/api/daily-session/prepare` | Prepare (or explicitly replace) today's durable session without mutating the weekly plan. Plan sources snapshot a plan day; agent_suggest resolves a completed canonical job; athlete_override snapshots a user-authored payload. expected_active_id is assertion-only: it returns the matching active snapshot and bound session without creating/replacing anything. Different replacements stop once logging begins; exact retries remain safe. |
 | GET | `/api/daily-session/preview` | Read-only, authoritative candidate shown immediately before Start. This is built by the same adaptive seam prepare persists and never records a decision or creates a workout session.  A date with no weekly template day has nothing to preview — the ordinary case on a rest/unplanned day, and the PWA asks on EVERY Today render. That absence answers `200 + null` like every other single-row read here; 400 is reserved for malformed input (a bad date or constraint). Memoized on the response freshness key; a malformed request (400) is never remembered. |

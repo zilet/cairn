@@ -37,6 +37,7 @@ import { planDayLegTrimOn } from "./plan-day-trim.js";
 import { planDayDisplayName } from "./plan-day-name.js";
 import { RUN_KIND_LABELS } from "./run-edit.js";
 import { loggedSessionDay, planDayTitle, sessionDayCandidates, type LoggedSessionDay } from "./session-day.js";
+import { openSessionOn, type OpenSession } from "./open-session.js";
 import { copyDeep, requestMemo } from "./request-memo.js";
 import { localDateISO } from "./shared.js";
 
@@ -57,7 +58,11 @@ export interface TodayStrengthLine {
   trim?: LegTrim | null;
   role: WeekdayPlanDayRole | null;
   state: TodayStrengthState;
-  /** The read's suggestion for today, carried as a caveat on the plan day. */
+  /**
+   * The read's suggestion for today, carried as a caveat on the plan day. Null once the
+   * athlete CHOSE today's session (`open_session.chosen`): a chosen session is never
+   * "rest suggested" — the read survives only as `caveat`, in "you chose to train" words.
+   */
   suggestion: "easy" | "rest" | null;
   /** The suggestion as a few words beside the plan day's name ("Pull · lighter today"). */
   suggestion_label: string | null;
@@ -244,6 +249,27 @@ function caveatFor(suggestion: "easy" | "rest", name: string, date: string): str
   return variant(name);
 }
 
+// The athlete CHOSE today's session over a quiet read. The read is still worth a word,
+// but the day is theirs: never "rest suggested" beside a session they picked, never a
+// gate. Rotated by date like every other athlete-facing string.
+const CHOSEN_CAVEAT: Record<"easy" | "rest", ((name: string) => string)[]> = {
+  easy: [
+    (name) => `The read leaned easy — you chose ${name}, so let how it feels set the pace.`,
+    (name) => `Today read easy; ${name} is your call — settle in and see how it goes.`,
+    (name) => `An easy read this morning, and you picked ${name} — take it as it comes.`,
+  ],
+  rest: [
+    (name) => `The read leaned quiet — you chose to train, so let how ${name} feels set the pace.`,
+    (name) => `A quiet read this morning; ${name} is your call, and it stands.`,
+    (name) => `You chose ${name} on a quiet read — take it as it comes.`,
+  ],
+};
+
+function chosenCaveatFor(suggestion: "easy" | "rest", name: string, date: string): string {
+  const variant = pickDayVariant(CHOSEN_CAVEAT[suggestion], date, `strength_line_chosen_caveat:${suggestion}`);
+  return variant(name);
+}
+
 // The run is in and the lift is still to come: a calm sentence, never the clipped
 // "Run in · Push B — overhead support still open" (2026-10-20, under "An easy day
 // today."). The lift stays the athlete's to take; rotated by date so a stable morning
@@ -326,6 +352,14 @@ type LineDay = {
   session: { id: number; plan_day_id: number | null; finished: boolean } | null;
   day: PlanDayCandidate | null;
   logged: LoggedSessionDay | null;
+  /** Today's open session (open-session.ts), the one fact every surface reads. */
+  open: OpenSession | null;
+  /**
+   * The open session owns the line with nothing logged yet: the athlete chose it (a
+   * train-anyway day, a picked plan day) or lived on it without a set. It names its own
+   * plan day, never the selection's, and never the calendar's rest.
+   */
+  openOwns: boolean;
 };
 
 function lineDay(d: string): LineDay {
@@ -339,12 +373,19 @@ function lineDay(d: string): LineDay {
     }
   })();
   const composition = acceptedComposition(d);
+  const open = (() => {
+    try {
+      return openSessionOn(d);
+    } catch {
+      return null;
+    }
+  })();
   // A chosen session stands in for the plan day unless a different session was logged.
   const chosen =
     composition.chosen && (!session || composition.chosen.sessionId == null || composition.chosen.sessionId === session.id)
       ? composition.chosen
       : null;
-  if (chosen) return { chosen, composition, session, day: null, logged: null };
+  if (chosen) return { chosen, composition, session, day: null, logged: null, open, openOwns: false };
   // The logged session owns the day, the same way it owns its week-strip cell — through
   // the same answer (src/repo/session-day.ts), so the line and the cell name one day.
   let day: PlanDayCandidate | null = null;
@@ -357,7 +398,14 @@ function lineDay(d: string): LineDay {
       day = null;
     }
   }
-  if (!day && !session) {
+  // Nothing logged, but a session is open that the athlete chose or lived on: it owns
+  // the day, named by the plan day it was snapshotted from (a train-anyway session under
+  // a rest read is the session, not the calendar's rest).
+  const openOwns = !session && !!open && (open.chosen || open.started);
+  if (openOwns && open?.plan_day_id != null) {
+    day = candidates.find((c) => Number(c.id) === Number(open.plan_day_id)) ?? null;
+  }
+  if (!day && !session && !openOwns) {
     try {
       const selected = selectedPlanDayForDate(d);
       day = selected ? (candidates.find((c) => c.day_number === selected.day_number) ?? null) : null;
@@ -365,7 +413,7 @@ function lineDay(d: string): LineDay {
       day = null;
     }
   }
-  return { chosen: null, composition, session, day, logged };
+  return { chosen: null, composition, session, day, logged, open, openOwns };
 }
 
 /**
@@ -394,10 +442,20 @@ export function todayStrengthLine(date?: string): TodayStrengthLine {
 }
 
 function todayStrengthLineRead(d: string): TodayStrengthLine {
-  const { chosen, composition, session, day, logged } = lineDay(d);
+  const { chosen, composition, session, day, logged, open, openOwns } = lineDay(d);
+  // The athlete chose today's session: the read is a caveat in their words, never a
+  // suggestion that the day is rest (one fact, open_session.chosen).
+  const choseToTrain = !!open?.chosen;
   if (chosen) {
-    const state: TodayStrengthState = session ? (session.finished ? "logged" : "in_progress") : "not_started";
-    const suggestion = state === "logged" ? null : suggestionFor(d, composition.decisionKind);
+    const state: TodayStrengthState = session
+      ? session.finished
+        ? "logged"
+        : "in_progress"
+      : open?.started
+        ? "in_progress"
+        : "not_started";
+    const read = state === "logged" ? null : suggestionFor(d, composition.decisionKind);
+    const suggestion = choseToTrain ? null : read;
     const run = runLoggedOn(d);
     return {
       date: d,
@@ -408,7 +466,11 @@ function todayStrengthLineRead(d: string): TodayStrengthLine {
       state,
       suggestion,
       suggestion_label: suggestion ? SUGGESTION_LABEL[suggestion] : null,
-      caveat: suggestion ? caveatFor(suggestion, chosen.title, d) : null,
+      caveat: suggestion
+        ? caveatFor(suggestion, chosen.title, d)
+        : read && choseToTrain
+          ? chosenCaveatFor(read, chosen.title, d)
+          : null,
       run_in: run,
       reshaped: false,
       original: [],
@@ -420,7 +482,7 @@ function todayStrengthLineRead(d: string): TodayStrengthLine {
   // strength only, so a weekday the athlete does not lift has no row — a stated run
   // weekday is a run day (role "endurance"), anything else is a rest day.
   const calendar: CalendarDayRead | null =
-    !day && !session
+    !day && !session && !openOwns
       ? (() => {
           try {
             return calendarDayRead(d);
@@ -440,14 +502,15 @@ function todayStrengthLineRead(d: string): TodayStrengthLine {
   })();
   const calendarRole: WeekdayPlanDayRole | null =
     calendar?.kind === "run" && !readSaysRest ? "endurance" : calendar ? (calendar.kind === "lift" ? null : "rest") : null;
-  const role = day ? planDayRole(day) : calendarRole;
-  const name = day ? planDayTitle(day) : null;
+  const role = day ? planDayRole(day) : openOwns ? "strength" : calendarRole;
+  const name = day ? planDayTitle(day) : openOwns && open ? open.title : null;
   // A run day is named for its run, the way the athlete stated it ("Long run").
   const runDayTitle =
     calendarRole === "endurance" ? (RUN_KIND_LABELS[String(calendar?.run_kind ?? "")] ?? "Run day") : null;
 
   let state: TodayStrengthState;
   if (session) state = session.finished ? "logged" : "in_progress";
+  else if (openOwns) state = open?.started ? "in_progress" : "not_started";
   else if (role === "rest") state = "rest_day";
   else if (role === "endurance") state = "no_lift";
   else if (!day) state = "none";
@@ -462,8 +525,8 @@ function todayStrengthLineRead(d: string): TodayStrengthLine {
     : session
       ? logged?.title || "Today's session"
       : runDayTitle;
-  const suggestion =
-    state === "not_started" || state === "in_progress" ? suggestionFor(d, composition.decisionKind) : null;
+  const read = state === "not_started" || state === "in_progress" ? suggestionFor(d, composition.decisionKind) : null;
+  const suggestion = choseToTrain ? null : read;
   const trim =
     day && role === "strength"
       ? (() => {
@@ -486,7 +549,12 @@ function todayStrengthLineRead(d: string): TodayStrengthLine {
     state,
     suggestion,
     suggestion_label: suggestion && name ? SUGGESTION_LABEL[suggestion] : null,
-    caveat: suggestion && name ? caveatFor(suggestion, name, d) : null,
+    caveat:
+      suggestion && name
+        ? caveatFor(suggestion, name, d)
+        : read && choseToTrain && name
+          ? chosenCaveatFor(read, name, d)
+          : null,
     run_in: run,
     reshaped,
     original: reshaped && day ? [...day.names] : [],

@@ -9,8 +9,9 @@
 // The rule, per date of the week:
 //   1. A logged session owns its date: the plan day the logged work resolves to
 //      (session-day.ts), or no plan day when nothing it lifted is on the plan.
-//   2. Today, nothing logged yet, on a mapped lifting weekday: the day today's ONE
-//      strength line names (today-strength-line.ts). The map's own day is `mapped`.
+//   2. Today, nothing logged yet, on a mapped lifting weekday — or on any weekday once
+//      the athlete chose or opened a session there (open-session.ts): the day today's
+//      ONE strength line names (today-strength-line.ts). The map's own day is `mapped`.
 //      Only for the real today (asOf === localDateISO()) unless the caller hands the line
 //      in: a week read as of a later Monday (Horizon's later rungs) is the map's forecast,
 //      and never pays for a day read of a morning that has not happened.
@@ -41,6 +42,7 @@ import { addDaysISO, mondayOf } from "../lib/dates.js";
 import { isoDow } from "./profile.js";
 import { isHeavyLowerPlanDay, statedKeyRunDows, thisWeekPlanDayMap, type PlanDayCandidate } from "./plan-selection.js";
 import { loggedSessionDay, sessionDayCandidates } from "./session-day.js";
+import { openSessionOn } from "./open-session.js";
 import { localDateISO } from "./shared.js";
 import { todayStrengthLineDay, type TodayStrengthLine } from "./today-strength-line.js";
 
@@ -210,9 +212,22 @@ export function weekStrengthPlacement(
   const weekDates: string[] = [];
   for (let d: string | null = weekStart; d && d <= weekEnd; d = addDaysISO(d, 1)) weekDates.push(d);
   const inWeek = asOf >= weekStart && asOf <= weekEnd;
-  // Today's line names today's day only on an unlogged, mapped lifting weekday (rule 2).
+  // Today's line names today's day only on an unlogged, mapped lifting weekday (rule 2) —
+  // or on an unstated weekday the athlete's own open session already owns (a plan day
+  // picked on the calendar's rest day is that day, never "rest"). An unstated weekday
+  // displaces nothing, so it moves no other day.
+  const openOwnsToday = (): boolean => {
+    try {
+      const open = openSessionOn(asOf);
+      return !!open && (open.chosen || open.started);
+    } catch {
+      return false;
+    }
+  };
   const todayLine =
-    inWeek && lineDayNumber != null && map.has(isoDow(asOf)) && !sessionForDate(sessions, asOf) ? lineDayNumber : null;
+    inWeek && lineDayNumber != null && !sessionForDate(sessions, asOf) && (map.has(isoDow(asOf)) || openOwnsToday())
+      ? lineDayNumber
+      : null;
   const keyRuns = new Set(
     (
       opts.keyRunDows ??
