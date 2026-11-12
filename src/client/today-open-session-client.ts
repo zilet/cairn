@@ -15,7 +15,7 @@
 //     what is there, else repaints so the screen says the truth;
 //   - the athlete is never shown raw server text.
 
-type OpenSessionRead = import("../contracts/client-api.js").ClientOpenSession;
+type OpenSessionRead = import("../contracts/client-api.js").ClientOpenSession & { headline?: string | null };
 type OpenSessionOwner = import("../contracts/client-api.js").ClientDailySessionOwner;
 type OpenSessionPrepared = { current: boolean; ok: boolean; value?: unknown; error?: unknown };
 type OpenOwnedDeps = {
@@ -177,6 +177,8 @@ type AdoptOptions = {
    * line's caveat (server-worded), which the train-shaped Brief prints.
    */
   function briefRead<T extends { kind?: unknown } | null | undefined>(read: T, open: OpenSessionRead | null | undefined): T {
+    // On a training read the server writes the chosen session's headline: printed verbatim.
+    if (read?.kind === "train" && open?.chosen && open.headline) return { ...read, headline: open.headline } as T;
     if (!read || !open?.chosen || (read.kind !== "rest" && read.kind !== "easy")) return read;
     return { ...read, kind: "train", headline: open.title, why: "", focus: null } as T;
   }

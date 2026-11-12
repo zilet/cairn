@@ -433,6 +433,10 @@ test("a chosen session on a quiet read is the day; anything else leaves the read
   assert.equal(S.briefRead(rest, null), rest);
   const train = { kind: "train", headline: "Go" };
   assert.equal(S.briefRead(train, open({ chosen: true })), train);
+  const said = S.briefRead(train, open({ chosen: true, headline: "Full upper is on today." }));
+  assert.equal(said.headline, "Full upper is on today.", "the server's chosen-session headline is printed verbatim");
+  assert.equal(train.headline, "Go");
+  assert.equal(S.briefRead(train, open({ chosen: false, headline: "x" })), train);
   const done = { kind: "done", headline: "Done" };
   assert.equal(S.briefRead(done, open({ chosen: true })), done);
   assert.equal(S.briefRead(null, open()), null);
