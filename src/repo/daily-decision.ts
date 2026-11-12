@@ -1154,11 +1154,12 @@ export function gatherDailyDecisionSnapshot(
     undefined
   );
   // The session the athlete asked for today, on the day this snapshot actually carries
-  // (after any train-anyway fall-through). Read only for a train-anyway request — the one
-  // composition that honours it — and fail-soft: a ledger problem never costs the day.
+  // (after any train-anyway fall-through). Carried whenever one exists, train-anyway or not
+  // (second review, item 5): every composition honours it, so it belongs in the
+  // fingerprint. Fail-soft: a ledger problem never costs the day.
   const requestDayNumber = selected?.day_number ?? null;
   const sameDayRequest =
-    trainAnywayRequested && planDayType === "training" && requestDayNumber != null
+    planDayType === "training" && requestDayNumber != null
       ? safe(() => sameDayAthleteRequest(requestDayNumber, d), null)
       : null;
   // What the log says about carrying the planned sets (volume-tolerance.ts), read only on
@@ -1869,6 +1870,12 @@ export const SAME_DAY_REQUEST_DETAILS: readonly string[] = [
   "Today's session is the one you asked for: every set you set stays, at the current load",
   "Built the way you asked today — the sets are yours, the weights stay where they are",
 ];
+// …on a day whose intensity is open: the sets stand, and nothing claims the load holds.
+export const SAME_DAY_REQUEST_OPEN_DETAILS: readonly string[] = [
+  "You asked for these lifts today — they stay on, with the sets you set",
+  "The lifts you asked for today keep their place and their sets",
+  "Built around what you asked for today — those lifts and their sets stand",
+];
 
 // A lifting weekday whose morning run is already in. Names what is done and what is
 // still due — never a verdict on the run, never a gate on the lifting.
@@ -2395,15 +2402,8 @@ export function buildDailySessionDecision(
         text: pickDayVariant(LOG_BACKS_OPEN_DAY_RATIONALE, snapshot.date, "daily_decision:log_backs_open_day"),
       });
     }
-    // The session they asked for today keeps the work they set; only the load holds.
-    // Visible beside the override, so the card's full set count is never a mystery.
-    if (snapshot.request.same_day_request) {
-      fire(precedence, "athlete_same_day_request");
-      soft.push({
-        code: "athlete_same_day_request",
-        detail: pickDayVariant(SAME_DAY_REQUEST_DETAILS, snapshot.date, "daily_decision:same_day_request"),
-      });
-    }
+    // (The session they asked for today is said below, once the caps are known — on any
+    // card, train-anyway or not.)
   } else if (override) {
     if (isTrainIntentOverride(override)) {
       kind = "train";
@@ -3283,6 +3283,21 @@ export function buildDailySessionDecision(
         intensity: heldDose && kind === "train" && intensity === "normal" ? "hold" : intensity,
         duration_min: duration,
       };
+  // The session they asked for today keeps the work they set, on any card for the date
+  // (second review, item 5). Visible, so the card's full set count is never a mystery —
+  // and "the load holds" only when the day's intensity really does (item 4).
+  if (snapshot.request.same_day_request && kind !== "rest" && !raceDay) {
+    fire(precedence, "athlete_same_day_request");
+    const held = caps.intensity !== "normal";
+    soft.push({
+      code: "athlete_same_day_request",
+      detail: pickDayVariant(
+        held ? SAME_DAY_REQUEST_DETAILS : SAME_DAY_REQUEST_OPEN_DETAILS,
+        snapshot.date,
+        held ? "daily_decision:same_day_request" : "daily_decision:same_day_request:open"
+      ),
+    });
+  }
 
   // ---- the week's dose (weekly-dose-ledger.ts) ----
   // Asked last, once the day's caps, muscle lists, candidates and reach are final, so a

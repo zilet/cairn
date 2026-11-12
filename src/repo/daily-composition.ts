@@ -1428,12 +1428,13 @@ export function normalizeComposedSession(
   // after the per-item clamps below rather than spent in plan order.
   const planSourced = opts.planSnapshot === true || opts.planSourced === true;
   // …and the session they ASKED for today (daily-decision.ts `request.same_day_request`)
-  // keeps its authored sets and timed targets on the lifts the request wrote, under a
-  // train-anyway day's caps. Only on their own plan day, and only that day: an agent's
-  // composition is never loosened by it. Area safety (excluded, reduced, substituted
-  // groups) and the day's intensity hold still apply.
-  const sameDayRequest =
-    planSourced && envelope.request?.train_anyway === true ? (envelope.request.same_day_request ?? null) : null;
+  // keeps its authored sets and timed targets on the lifts the request wrote — on ANY card
+  // composed for that date, train-anyway or not, plan-sourced or an agent's (second review,
+  // item 5): a lift the athlete explicitly asked for is never deferred, dropped by the item
+  // cap or trimmed by the day's set budget. Only on the plan day the request wrote, and only
+  // that day; an agent's other lifts are clamped as ever. Area safety (excluded, reduced,
+  // substituted groups) and the day's intensity hold still apply.
+  const sameDayRequest = envelope.request?.same_day_request ?? null;
   const requestedKeys = new Set<string>(
     sameDayRequest &&
       (envelope.template.day_number == null ||
@@ -1456,14 +1457,26 @@ export function normalizeComposedSession(
         requestedSeconds.set(key, seconds);
     }
   }
-  let changed = !planSourced && kept.length > cap;
+  // An agent's card is cut to the item cap — never through a lift asked for today: those
+  // stay, and the rest fill what is left of the cap in the agent's order.
+  const requestedCount = kept.filter(isRequestedItem).length;
+  let othersLeft = Math.max(0, cap - requestedCount);
+  const admitted = planSourced
+    ? kept
+    : kept.filter((item) => {
+        if (isRequestedItem(item)) return true;
+        if (othersLeft <= 0) return false;
+        othersLeft -= 1;
+        return true;
+      });
+  let changed = admitted.length < kept.length;
   const forceEasyCardio =
     envelope.request.train_anyway === true ||
     envelope.caps.intensity === "easy" ||
     envelope.caps.intensity === "deload";
   let hasEasyCardio = false;
   const capped: any[] = [];
-  for (const item of planSourced ? kept : kept.slice(0, cap)) {
+  for (const item of admitted) {
     const next = { ...item };
     const candidate = candidates.get(String(next.exercise ?? "").toLowerCase());
     if (next.kind === "cardio") {
@@ -1516,17 +1529,19 @@ export function normalizeComposedSession(
       : requestedToday
         ? authorizedSets
         : itemSetCap;
-    // Plan-sourced: the day budget is fitted after this loop (fitPlanDaySetBudget).
-    const boundedSets = planSourced
-      ? Math.min(authorizedSets, setCapForItem)
-      : Math.min(authorizedSets, setCapForItem, remainingSets);
+    // Plan-sourced: the day budget is fitted after this loop (fitPlanDaySetBudget). A lift
+    // asked for today is never trimmed by the running budget either (it still spends it).
+    const boundedSets =
+      planSourced || requestedToday
+        ? Math.min(authorizedSets, setCapForItem)
+        : Math.min(authorizedSets, setCapForItem, remainingSets);
     if (boundedSets < 1) {
       changed = true;
       continue;
     }
     if (boundedSets !== requestedSets || boundedSets !== authorizedSets) changed = true;
     next.sets = boundedSets;
-    if (!planSourced) remainingSets -= boundedSets;
+    if (!planSourced) remainingSets = Math.max(0, remainingSets - boundedSets);
 
     let intensityFactor = 1;
     if (envelope.caps.intensity === "easy") intensityFactor = 0.8;

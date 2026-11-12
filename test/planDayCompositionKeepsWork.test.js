@@ -276,7 +276,49 @@ test("without the request the 68 s log still holds the plank, and est_minutes st
   assert.equal(session.est_minutes, 40, "twelve trimmed sets fit inside the clock");
 });
 
-test("an agent-authored session keeps the plain clamp, request or not", () => {
+// Second review, item 5: lifts the athlete explicitly asked for today are never deferred
+// or trimmed on ANY card composed for that date — train-anyway or not.
+test("a reduced card that is NOT train-anyway keeps every lift the athlete asked for today, at its authored sets", () => {
+  seedDay();
+  const asked = ["Face Pull", "Dumbbell Biceps Curl", "Triceps Rope Pushdown"];
+  const base = trainAnywayEnvelope({
+    train_anyway: false,
+    same_day_request: { day_number: DAY, exercises: asked.map((name) => name.toLowerCase()).sort(), decision_ids: [1] },
+  });
+  const envelope = { ...base, baseline_kind: "train", precedence: [], rationale: [] };
+  const raw = deterministicSessionRawFromEnvelope(envelope);
+  const { session, validation } = normalizeComposedSession(raw, envelope, { planSourced: true });
+  assert.ok(session, JSON.stringify(validation));
+  for (const name of asked) {
+    const card = session.items.find((item) => item.exercise === name);
+    assert.ok(card, `${name}, asked for today, is on the card: ${JSON.stringify(validation.rejected)}`);
+    assert.equal(card.sets, ITEMS.find((item) => item.exercise === name).sets, `${name} keeps its authored sets`);
+    assert.ok(
+      !validation.rejected.some((entry) => entry.exercise === name),
+      `${name} is never deferred or trimmed: ${JSON.stringify(validation.rejected)}`
+    );
+  }
+});
+
+test("an agent-authored card never cuts a lift the athlete asked for today, and is otherwise clamped", () => {
+  seedDay();
+  const asked = ["Face Pull", "Dumbbell Biceps Curl", "Triceps Rope Pushdown"];
+  const agent = {
+    name: "Composed",
+    focus: "Upper",
+    why: "Fits.",
+    est_minutes: 40,
+    items: ITEMS.map((item) => ({ ...item })),
+  };
+  const request = { day_number: DAY, exercises: asked.map((name) => name.toLowerCase()).sort(), decision_ids: [1] };
+  const { session } = normalizeComposedSession(agent, trainAnywayEnvelope({ same_day_request: request }));
+  for (const name of asked) assert.ok(session.items.some((item) => item.exercise === name), `${name} stays on`);
+  const others = session.items.filter((item) => !asked.includes(item.exercise));
+  assert.ok(others.length < ITEMS.length - asked.length, "the agent's other lifts are still clamped");
+  assert.equal(session.name, "Composed");
+});
+
+test("an agent-authored session with no same-day request keeps the plain clamp", () => {
   seedDay();
   const agent = {
     name: "Composed",
@@ -285,8 +327,10 @@ test("an agent-authored session keeps the plain clamp, request or not", () => {
     est_minutes: 40,
     items: ITEMS.map((item) => ({ ...item })),
   };
-  const { session } = normalizeComposedSession(agent, trainAnywayEnvelope({ same_day_request: SAME_DAY_REQUEST }));
-  assert.ok(session.items.length <= 7, "the agent's output is never loosened by the athlete's request");
+  // Second review, item 5: a lift asked for today is never cut from ANY card, an agent's
+  // included (the test above); with no request the agent's card is clamped as ever.
+  const { session } = normalizeComposedSession(agent, trainAnywayEnvelope());
+  assert.ok(session.items.length <= 7, "the agent's output is clamped to the item cap");
   assert.ok(session.items.reduce((sum, item) => sum + item.sets, 0) <= 12);
   assert.equal(session.name, "Composed");
 });
@@ -320,9 +364,10 @@ test("a today-scoped change the athlete asked for is their same-day request; the
   assert.deepEqual(request?.exercises, ["wide-grip pulldown"], "only the lift the athlete's own request wrote");
   assert.equal(sameDayAthleteRequest(1, "2099-01-01"), null, "only the day it was scoped to");
 
-  // The decision carries it on a train-anyway request — in the fingerprint and visible.
+  // The decision carries it whenever one exists — train-anyway or not (second review,
+  // item 5) — in the fingerprint and visible.
   const plain = gatherDailyDecisionSnapshot(today);
-  assert.equal("same_day_request" in plain.request, false, "omit-when-idle without train-anyway");
+  assert.deepEqual(plain.request.same_day_request?.exercises, ["wide-grip pulldown"], "carried without train-anyway");
   const snapshot = gatherDailyDecisionSnapshot(today, { train_anyway: true });
   assert.deepEqual(snapshot.request.same_day_request?.exercises, ["wide-grip pulldown"]);
   const envelope = buildDailySessionDecision(snapshot, { now: `${today}T09:00:00.000Z` });
