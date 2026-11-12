@@ -75,6 +75,7 @@ import {
   affirmedCutHoldsSetCount,
   habitualSetCount,
   perLiftSetCeiling,
+  VOLUME_BOUNDS,
   weeklyGroupHasRoom,
 } from "./volume-tolerance.js";
 import { weeklyGroupEffectiveSets } from "./weekly-dose-ledger.js";
@@ -3385,6 +3386,60 @@ function recentGoodWorkingSetCounts(
   });
 }
 
+// The date of the oldest of the recent exposures a catch-up reads (the same sessions
+// recentGoodWorkingSetCounts takes), or null when there are none.
+function recentExposureStart(
+  name: string,
+  since: Pick<SlotAuthorship, "since" | "since_at">,
+  limit = SET_STEP_EXPOSURES
+): string | null {
+  const ids = progressionLineageIds(name);
+  if (!ids.length) return null;
+  const inIds = ids.map(() => "?").join(",");
+  const clause = sinceClause(since);
+  const rows = db
+    .prepare(
+      `SELECT MAX(s.date) AS date FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+        WHERE ls.exercise_id IN (${inIds}) AND ls.reps IS NOT NULL AND ls.reps > 0 AND ${clause.sql}
+        GROUP BY s.id ORDER BY MAX(s.date) DESC, s.id DESC LIMIT ?`
+    )
+    .all(...ids, ...clause.args, limit) as Array<{ date: string | null }>;
+  const dates = rows.map((row) => String(row.date ?? "").slice(0, 10)).filter(Boolean);
+  return dates.length ? dates[dates.length - 1] : null;
+}
+
+// The athlete's HABITUAL working-set count for a lift: the median number of working sets
+// (within SET_STEP_WORKING_FRAC of that session's top load, reps logged) per session over
+// VOLUME_BOUNDS.HABITUAL_WINDOW_DAYS strictly BEFORE `before` — the weeks before the recent
+// exposures a catch-up answers. Null below VOLUME_BOUNDS.HABITUAL_MIN_SESSIONS sessions.
+function habitualWorkingSetCountBefore(name: string, before: string | null): number | null {
+  if (!before) return null;
+  const from = addDaysISO(before, -VOLUME_BOUNDS.HABITUAL_WINDOW_DAYS);
+  if (!from) return null;
+  const ids = progressionLineageIds(name);
+  if (!ids.length) return null;
+  const inIds = ids.map(() => "?").join(",");
+  const rows = db
+    .prepare(
+      `SELECT ls.session_id AS session_id, ls.weight AS weight FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+        WHERE ls.exercise_id IN (${inIds}) AND ls.reps IS NOT NULL AND ls.reps > 0 AND s.date >= ? AND s.date < ?`
+    )
+    .all(...ids, from, before) as Array<{ session_id: number; weight: number | null }>;
+  const bySession = new Map<number, number[]>();
+  for (const row of rows) {
+    const loads = bySession.get(Number(row.session_id)) ?? [];
+    loads.push(row.weight == null ? 0 : Number(row.weight));
+    bySession.set(Number(row.session_id), loads);
+  }
+  if (bySession.size < VOLUME_BOUNDS.HABITUAL_MIN_SESSIONS) return null;
+  const counts = [...bySession.values()].map((loads) => {
+    const top = Math.max(...loads);
+    const band = top > 0 ? top * SET_STEP_WORKING_FRAC : top < 0 ? top * (2 - SET_STEP_WORKING_FRAC) : 0;
+    return loads.filter((w) => w >= band - 1e-9).length;
+  });
+  return habitualSetCount(counts);
+}
+
 function setCatchUp(
   p: Prescription,
   pre: Prescription,
@@ -3456,10 +3511,16 @@ function setCatchUp(
   // tolerated, not shown to add lean mass (volume-tolerance.ts).
   if (ctx.affirmedCut?.()) return p;
   // The bounds every catch-up honours (volume-tolerance.ts VOLUME_BOUNDS): about 1.2× the
-  // lift's own habitual set count, and about 20 weekly effective sets for its group,
-  // counted the weekly dose ledger's way.
-  const habitual = habitualSetCount(counts);
-  const ceiling = habitual == null ? planned : perLiftSetCeiling(habitual);
+  // lift's own habitual set count — read from the weeks BEFORE these exposures, so it is
+  // a baseline the step is measured against rather than the counts it already follows —
+  // and about 20 weekly effective sets for its group, counted the weekly dose ledger's way.
+  let habitual: number | null = null;
+  try {
+    habitual = habitualWorkingSetCountBefore(p.exercise, recentExposureStart(p.exercise, ctx.since));
+  } catch {
+    habitual = null;
+  }
+  const ceiling = habitual == null ? SET_STEP_CAP : perLiftSetCeiling(habitual);
   const to = Math.min(planned + 1, SET_STEP_CAP, ceiling, ...counts);
   if (to <= planned) return p;
   const group = ctx.readDay ? storedGroupOf(p.exercise) : null;

@@ -212,6 +212,10 @@ export const DAILY_DECISION_REASONS = [
   // sessions carried every planned set at a held-or-rising load, so the plan's sets stand
   // (volume-tolerance.ts). Never adds work.
   "log_backs_full_sets",
+  // The day read is the athlete's goal race (day-read.ts `goal_race_day`): the race is the
+  // day's work, so there is no lifting card and the lifting caps shut (race-strength.ts:
+  // race week's heavy leg work sits out, and race day itself carries no lift).
+  "goal_race_day",
 ] as const;
 
 // The run day's headline line on the envelope. Rotates like every repeating
@@ -221,6 +225,12 @@ const STATED_RUN_DAY_RATIONALE: readonly string[] = [
   "A run day in your week, so there's nothing to lift today.",
   "Your week puts a run here and no lift.",
   "Today belongs to your run; the lifting picks back up on your next lift day.",
+];
+// Race day's headline line: the race is the day's work, never a lifting card.
+const RACE_DAY_RATIONALE: readonly string[] = [
+  "Today is your race — no lifting on it; the race is the day's work.",
+  "Race day, so there's nothing to lift today.",
+  "The race is today's whole job; the lifting picks back up once you've recovered.",
 ];
 
 export type DailyDecisionReason = (typeof DAILY_DECISION_REASONS)[number];
@@ -266,6 +276,8 @@ export interface DailyDecisionSnapshot {
     // Omit-when-idle: the read kept the day at a held dose through a single low morning
     // (`morning`), or lifted a readiness-only caution on a good check-in (`checkin`).
     held_dose?: "morning" | "checkin";
+    // Omit-when-idle: the read is the athlete's goal race (`goal_race_day`).
+    race_day?: true;
   };
   recovery: {
     has_data: boolean;
@@ -582,10 +594,13 @@ export interface DailyDecisionEnvelope {
     focus: string | null;
     intent: "template" | "custom";
     // Present only when the CALENDAR puts no lifting here: 'rest' (a weekday the
-    // athlete neither lifts nor runs) or 'run' (a stated run weekday). Optional and
-    // omit-when-training so an ordinary envelope_json row serializes byte-identically
-    // to the ones already stored, and every historical row reads as a training day.
+    // athlete neither lifts nor runs) or 'run' (a stated run weekday, or race day).
+    // Optional and omit-when-training so an ordinary envelope_json row serializes
+    // byte-identically to the ones already stored, and every historical row reads as a
+    // training day.
     day_type?: "rest" | "run";
+    // Omit-when-idle: the run this day carries is the athlete's goal race.
+    race_day?: true;
   };
   muscles: {
     required: string[];
@@ -1184,6 +1199,7 @@ export function gatherDailyDecisionSnapshot(
         : signals?.checkin_lift?.applied === true
           ? { held_dose: "checkin" as const }
           : {}),
+      ...(signals?.goal_race_day != null && read?.kind === "train" ? { race_day: true as const } : {}),
     },
     recovery: {
       has_data: recoverySummary?.has_data === true,
@@ -2889,7 +2905,11 @@ export function buildDailySessionDecision(
   // is dated evidence about today, never a standing preference:
   const namedVolumeReason =
     kind === "easy" || // the read itself is a quiet one
-    readiness === "low" || // a fresh low-recovery brake
+    // A fresh low-recovery brake — unless the read already answered it with a held dose
+    // (`day_read.held_dose`): that dose IS the answer (intensity held, the regions
+    // yesterday loaded reduced), and everything else trains at the plan's sets, exactly
+    // as the read said. One source of truth.
+    (readiness === "low" && !heldDose) ||
     sorenessSoftensDay || // soreness reported today, not routed
     trainAnywayKeepsReduced || // train-anyway over a rest read, caps shut
     snapshot.day_read.recovery_week || // a recovery week in force
@@ -3156,8 +3176,10 @@ export function buildDailySessionDecision(
   // licensing more inside it. (`resolveReach` already refuses on `fresh_brake`; this
   // covers the directive-only shape, where nothing fresh brakes but aggression is
   // being held.)
-  // A stated run day has no lifting card for a reach to land on.
-  const runDay = snapshot.plan.day_type === "run" && !trainAnyway;
+  // A stated run day has no lifting card for a reach to land on — and neither does race
+  // day: the goal race is the day's work, whatever weekday it falls on.
+  const raceDay = snapshot.day_read.race_day === true && !trainAnyway;
+  const runDay = (snapshot.plan.day_type === "run" || raceDay) && !trainAnyway;
   // …and a lift held after this morning's hard or longest run parks its reach too: a
   // challenge top set is the opposite of the held load the card just promised.
   const { reach, trimmed: reachTrimmed } =
@@ -3199,11 +3221,15 @@ export function buildDailySessionDecision(
     ...(weekHeld.length ? { week_held: weekHeld } : {}),
   };
   // A held morning dose never raises a load (morning-dose.ts): the intensity holds at least.
-  const caps: DailyDecisionEnvelope["caps"] = {
-    volume,
-    intensity: heldDose && kind === "train" && intensity === "normal" ? "hold" : intensity,
-    duration_min: duration,
-  };
+  // Race day carries no lifting at all: the lifting caps shut (the race itself is not a
+  // lifting cap's to describe — its dose lives on the Endurance plan).
+  const caps: DailyDecisionEnvelope["caps"] = raceDay
+    ? { volume: "minimal", intensity: "easy", duration_min: null }
+    : {
+        volume,
+        intensity: heldDose && kind === "train" && intensity === "normal" ? "hold" : intensity,
+        duration_min: duration,
+      };
 
   // ---- the week's dose (weekly-dose-ledger.ts) ----
   // Asked last, once the day's caps, muscle lists, candidates and reach are final, so a
@@ -3243,7 +3269,13 @@ export function buildDailySessionDecision(
       : null;
 
   // ---- Render-safe rationale ----
-  if (runDay && kind !== "rest") {
+  if (raceDay && kind !== "rest") {
+    fire(precedence, "goal_race_day");
+    rationale.push({
+      code: "goal_race_day",
+      text: pickDayVariant(RACE_DAY_RATIONALE, snapshot.date, "daily_decision:goal_race_day"),
+    });
+  } else if (runDay && kind !== "rest") {
     fire(precedence, "stated_run_day");
     rationale.push({
       code: "stated_run_day",
@@ -3297,9 +3329,11 @@ export function buildDailySessionDecision(
       // Survives the rest-day nulling above on purpose: the day_number is cleared
       // because there is no session to compose FROM, and this field is the reason
       // there isn't one.
-      ...(snapshot.plan.day_type === "rest" || snapshot.plan.day_type === "run"
-        ? { day_type: snapshot.plan.day_type }
-        : {}),
+      ...(raceDay && kind !== "rest"
+        ? { day_type: "run" as const, race_day: true as const }
+        : snapshot.plan.day_type === "rest" || snapshot.plan.day_type === "run"
+          ? { day_type: snapshot.plan.day_type }
+          : {}),
     },
     muscles,
     caps,

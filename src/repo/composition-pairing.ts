@@ -412,9 +412,25 @@ function itemName(item: any): string {
   return String(item?.exercise ?? "").trim();
 }
 
-/** Can these two lifts run as one superset without holding two fixed stations? */
+/**
+ * Can these two lifts run as one superset without holding two fixed stations? The
+ * SERVER's test for a pair it proposes: an implement nobody named counts as fixed.
+ */
 export function pairIsDoable(a: any, b: any): boolean {
   return pairFitsOneStation(stationFootprint(itemName(a)), stationFootprint(itemName(b)));
+}
+
+/**
+ * The same question for a pair an AUTHOR set on purpose (the athlete, the plan, the
+ * coach's composed session): it is taken apart only when BOTH lifts are positively known
+ * to sit on different fixed stations. An unknown footprint never breaks an authored pair —
+ * the author knows their gym; the conservative read is for pairs the server proposes.
+ */
+export function authoredPairIsDoable(a: any, b: any): boolean {
+  const first = stationFootprint(itemName(a));
+  const second = stationFootprint(itemName(b));
+  if (first.implement === "unknown" || second.implement === "unknown") return true;
+  return pairFitsOneStation(first, second);
 }
 
 /**
@@ -443,7 +459,7 @@ export function enforceSupersetRules(items: any[]): SupersetUnpaired[] {
       unpaired.push({ exercises: rest.map((index) => itemName(items[index])), reason: "group_over_two" });
     }
     const [a, b] = members as [number, number];
-    if (!pairIsDoable(items[a], items[b])) {
+    if (!authoredPairIsDoable(items[a], items[b])) {
       items[a].superset_group = null;
       items[b].superset_group = null;
       unpaired.push({ exercises: [itemName(items[a]), itemName(items[b])], reason: "two_stations" });
@@ -492,10 +508,13 @@ export function enforceSupersetRules(items: any[]): SupersetUnpaired[] {
 export function pairForSession(items: any[], ctx: PairingContext): PairingResult {
   if (!Array.isArray(items)) return { items, changed: false };
   // The superset rules hold for every card, the athlete's own snapshot included: a
-  // plan-saved pairing that needs two machines is cleared, never served.
+  // plan-saved pairing that needs two machines is cleared, never served — and a card
+  // whose groups that clearing altered reports `changed`, on every path.
+  const groupsBefore = items.map((item) => finite(item?.superset_group) ?? null).join(",");
   const unpaired = enforceSupersetRules(items);
   const extra = unpaired.length ? { unpaired } : {};
-  if (ctx.planSnapshot || items.length < 2) return { items, changed: false, ...extra };
+  const groupsAltered = items.map((item) => finite(item?.superset_group) ?? null).join(",") !== groupsBefore;
+  if (ctx.planSnapshot || items.length < 2) return { items, changed: groupsAltered, ...extra };
   const authoredPairs = new Set(
     items.map((item) => finite(item?.superset_group)).filter((value): value is number => value != null)
   ).size;
@@ -525,7 +544,7 @@ export function pairForSession(items: any[], ctx: PairingContext): PairingResult
   const pairs = units.filter((unit) => unit.pair).map((unit) => unit.pair as [ItemRead, ItemRead]);
   // With nothing paired and no behind group reseated, the card stands exactly as it
   // came: the tier sort above is how pairs are found, not a change of its own.
-  if (!pairs.length && !reseated) return { items, changed: false, ...extra };
+  if (!pairs.length && !reseated) return { items, changed: groupsAltered, ...extra };
   const next = units.flatMap((unit) => unit.reads.map((read) => read.item));
   const used = new Set<number>(
     items.map((item) => finite(item?.superset_group)).filter((value): value is number => value != null)

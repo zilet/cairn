@@ -56,6 +56,7 @@ import {
   overnightBrakes,
   personalBand,
   restingHrContradictedByFloor,
+  restingHrReadingVerified,
   type NightPast,
   type PersonalBand,
 } from "../overnight-band.js";
@@ -2313,6 +2314,15 @@ export interface OvernightFieldRead {
   past: NightPast;
   /** Consecutive readings past the line, last night's included. */
   consecutive: number;
+  /**
+   * Consecutive CALENDAR mornings past the line, last night's included — a reading a day
+   * or more apart from the next breaks it ("twice running" means two mornings in a row).
+   */
+  consecutive_days: number;
+  /** Last night was judged against the athlete's own established band (not a fallback). */
+  established_band: boolean;
+  /** Last night's reading is one its own source vouches for (overnight-band.ts restingHrReadingVerified; HRV: true). */
+  verified: boolean;
 }
 
 /**
@@ -2323,7 +2333,15 @@ export interface OvernightFieldRead {
 export function overnightReadOn(morning: string): { hrv: OvernightFieldRead | null; rhr: OvernightFieldRead | null } {
   const read = overnightPhysiology(morning);
   const view = (arm: OvernightArm | null): OvernightFieldRead | null =>
-    arm && arm.past != null ? { past: arm.past, consecutive: arm.consecutive } : null;
+    arm && arm.past != null
+      ? {
+          past: arm.past,
+          consecutive: arm.consecutive,
+          consecutive_days: arm.consecutive_days,
+          established_band: arm.established_band,
+          verified: arm.verified,
+        }
+      : null;
   return { hrv: view(read.hrv), rhr: view(read.rhr) };
 }
 
@@ -2378,6 +2396,12 @@ interface OvernightArm {
   // the harm arms above, which keep `brake`/`onset` exactly as they were.
   past: NightPast;
   consecutive: number;
+  // The same run counted by CALENDAR morning (a gap breaks it), whether the line was the
+  // athlete's own established band, and whether last night's own row vouches for the
+  // reading — read only by the morning-dose question.
+  consecutive_days: number;
+  established_band: boolean;
+  verified: boolean;
 }
 
 interface OvernightPhysiology {
@@ -2390,6 +2414,9 @@ interface OvernightNight {
   resting_hr: number | null;
   hrv_status: string | null;
   hr_7d_avg: number | null;
+  // Whether the resting HR kept above is one its own row vouches for (a coherent same-row
+  // floor or a same-row night; overnight-band.ts restingHrReadingVerified).
+  resting_hr_verified: boolean;
 }
 
 function overnightPhysiology(morning: string): OvernightPhysiology {
@@ -2405,10 +2432,10 @@ function overnightNights(from: string, to: string): Map<string, OvernightNight> 
   try {
     rows = db
       .prepare(
-        `SELECT 0 AS pref, date, hrv_ms, resting_hr, min_hr, hrv_status, hr_7d_avg FROM garmin_daily_metrics
+        `SELECT 0 AS pref, date, hrv_ms, resting_hr, min_hr, sleep_min, hrv_status, hr_7d_avg FROM garmin_daily_metrics
           WHERE date >= ? AND date <= ?
          UNION ALL
-         SELECT 1 AS pref, date, hrv_ms, resting_hr, NULL AS min_hr, NULL AS hrv_status, NULL AS hr_7d_avg FROM daily_metrics
+         SELECT 1 AS pref, date, hrv_ms, resting_hr, NULL AS min_hr, sleep_min, NULL AS hrv_status, NULL AS hr_7d_avg FROM daily_metrics
           WHERE date >= ? AND date <= ?
          ORDER BY pref`
       )
@@ -2423,14 +2450,23 @@ function overnightNights(from: string, to: string): Map<string, OvernightNight> 
   for (const row of rows) {
     const date = String(row.date ?? "").slice(0, 10);
     if (!date) continue;
-    const night = byDate.get(date) ?? { hrv_ms: null, resting_hr: null, hrv_status: null, hr_7d_avg: null };
+    const night = byDate.get(date) ?? {
+      hrv_ms: null,
+      resting_hr: null,
+      hrv_status: null,
+      hr_7d_avg: null,
+      resting_hr_verified: false,
+    };
     night.hrv_ms ??= positive(row.hrv_ms);
     // A resting HR its own row's floor contradicts (a provisional daytime estimate on an
     // unworn night, below or far above that day's `min_hr`) is not a reading: dropped
     // both as last night and from the band, so the field falls through to the next
     // source. The one coherence rule (overnight-band.ts), shared with READING_TRUST.
     const resting = positive(row.resting_hr);
-    if (!restingHrContradictedByFloor(resting, positive(row.min_hr))) night.resting_hr ??= resting;
+    if (night.resting_hr == null && resting != null && !restingHrContradictedByFloor(resting, positive(row.min_hr))) {
+      night.resting_hr = resting;
+      night.resting_hr_verified = restingHrReadingVerified(resting, positive(row.min_hr), positive(row.sleep_min));
+    }
     night.hrv_status ??= row.hrv_status == null || row.hrv_status === "" ? null : String(row.hrv_status).toLowerCase();
     night.hr_7d_avg ??= positive(row.hr_7d_avg);
     byDate.set(date, night);
@@ -2513,10 +2549,17 @@ function overnightPhysiologyUncached(morning: string): OvernightPhysiology {
     // (each judged against its own morning's band), bounded — persistence asks only
     // whether it reaches a small count.
     let consecutive = 1;
+    // …and the same run by CALENDAR morning: it stops at the first gap between readings.
+    let consecutiveDays = 1;
+    let daysContiguous = true;
+    let previousDate = morning;
     let cursor = prior;
     let cursorPast = priorPast;
     while (cursor && cursorPast != null && consecutive < OVERNIGHT_RUN_WALK_CAP) {
       consecutive++;
+      if (daysContiguous && cursor.date === addDaysISO(previousDate, -1)) consecutiveDays++;
+      else daysContiguous = false;
+      previousDate = cursor.date;
       cursor = before(field, signal, cursor.date);
       cursorPast = pastOwnBand(field, cursor);
     }
@@ -2526,6 +2569,9 @@ function overnightPhysiologyUncached(morning: string): OvernightPhysiology {
       onset: brake && !overnightBrakes(priorPast, priorPriorPast),
       past,
       consecutive,
+      consecutive_days: consecutiveDays,
+      established_band: true,
+      verified: field === "resting_hr" ? tonight.resting_hr_verified : true,
     };
   };
 
@@ -2540,7 +2586,9 @@ function overnightPhysiologyUncached(morning: string): OvernightPhysiology {
     );
   } else if (tonight.hrv_status && HRV_BRAKE_STATUSES.has(tonight.hrv_status)) {
     // The watch's own verdict word is already a seven-day read, so it stands as a brake.
-    const prior = before("hrv_status", "hrv", morning)?.night.hrv_status ?? null;
+    const priorReading = before("hrv_status", "hrv", morning);
+    const prior = priorReading?.night.hrv_status ?? null;
+    const priorDate = priorReading?.date ?? null;
     const continuing = prior != null && HRV_BRAKE_STATUSES.has(prior);
     hrv = {
       detail: `hrv status ${tonight.hrv_status} on ${morning}`,
@@ -2550,6 +2598,10 @@ function overnightPhysiologyUncached(morning: string): OvernightPhysiology {
       // meaningful miss, and the word the night before continues the run.
       past: "meaningful",
       consecutive: continuing ? 2 : 1,
+      consecutive_days: continuing && priorDate === addDaysISO(morning, -1) ? 2 : 1,
+      // The watch's own seven-day word is its band, not the athlete's own.
+      established_band: false,
+      verified: true,
     };
   }
 
@@ -2567,7 +2619,8 @@ function overnightPhysiologyUncached(morning: string): OvernightPhysiology {
     tonight.hr_7d_avg != null &&
     tonight.resting_hr >= tonight.hr_7d_avg + RESTING_HR_BRAKE_DELTA_BPM
   ) {
-    const earlier = before("resting_hr", "resting_hr", morning)?.night ?? null;
+    const earlierReading = before("resting_hr", "resting_hr", morning);
+    const earlier = earlierReading?.night ?? null;
     const continuing =
       earlier?.resting_hr != null &&
       earlier.hr_7d_avg != null &&
@@ -2578,6 +2631,11 @@ function overnightPhysiologyUncached(morning: string): OvernightPhysiology {
       onset: !continuing,
       past: "meaningful",
       consecutive: continuing ? 2 : 1,
+      consecutive_days: continuing && earlierReading?.date === addDaysISO(morning, -1) ? 2 : 1,
+      // The watch's own seven-day average stands in for a band the athlete does not have
+      // yet: a fixed delta over it is a caution, never the athlete's own band.
+      established_band: false,
+      verified: tonight.resting_hr_verified,
     };
   }
   return { hrv, rhr };

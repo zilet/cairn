@@ -427,7 +427,8 @@ dayCoachRouter.post("/what-if", (req, res) => {
 dayCoachRouter.post("/what-if/do", (req, res, next) => {
   try {
     const b = req.body ?? {};
-    res.json(whatIfDo({ job_id: b.job_id }));
+    // The app's "Do it" tap is the athlete's own act (WhatIfDoInput.athlete_act).
+    res.json(whatIfDo({ job_id: b.job_id, athlete_act: true }));
   } catch (e) {
     next(e);
   }

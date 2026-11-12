@@ -399,17 +399,59 @@ export function sessionCarriedPlannedVolume(sessionId: number): boolean | null {
   const facts = outcomeFactsForSession(sessionId);
   if (!facts) return null;
   if (skippedExercises(facts).length > 0) return false;
+  // "Planned" is the plan's AUTHORED set count, never the composed card's: a card the day
+  // trimmed (a volume cap below normal, or a train-anyway day) prescribes fewer sets, and
+  // finishing those is not carrying the plan — counting it would let the trim vouch for
+  // its own cancellation. The authored count is the plan item's own sets as reconciliation
+  // read them (`full_load_reference.sets`, daily-reconciliation.ts).
+  const trimmedCard = compositionTrimmedVolume(sessionId);
   let carried = 0;
   for (const dose of doseRows(facts)) {
     if (!dosePrescribed(dose)) continue;
     if (dose?.relevant_symptom === true) return false;
     if (doseOwnShortfall(dose) || ownSetShortfall(dose)) return false;
+    if (authoredSetShortfall(dose, trimmedCard)) return false;
     if (doseUnderFullLoad(dose)) return false;
     if (dose?.comparable === false) continue;
     if (!isMetOrExceeded(dose)) return false;
     carried++;
   }
   return carried > 0 ? true : null;
+}
+
+// The athlete logged fewer working sets than the plan item AUTHORED. On a trimmed card a
+// lift whose authored count is unknown (no plan row: a substitute, an agent's lift) can
+// never show it carried the plan, so it answers no as well.
+function authoredSetShortfall(dose: DoseRow, trimmedCard: boolean): boolean {
+  const authored = finiteOrNull(dose?.full_load_reference?.sets);
+  const achieved = finiteOrNull(dose?.achieved?.sets) ?? 0;
+  if (authored == null || authored <= 0) return trimmedCard;
+  return achieved < authored;
+}
+
+// Was this session's card composed under a volume trim — a volume cap below normal, or a
+// train-anyway day (whose caps are the conservative ones)? Read off the composition's own
+// stored decision context (adaptive-session.ts `dailyDecisionContext`). Unknown reads no.
+function compositionTrimmedVolume(sessionId: number): boolean {
+  try {
+    const row = db
+      .prepare(
+        `SELECT c.constraints_json AS constraints_json, c.provenance_json AS provenance_json
+           FROM daily_session_outcomes o JOIN daily_session_compositions c ON c.id = o.composition_id
+          WHERE o.session_id = ? ORDER BY o.id DESC LIMIT 1`
+      )
+      .get(Number(sessionId)) as { constraints_json?: string | null; provenance_json?: string | null } | undefined;
+    for (const blob of [row?.constraints_json, row?.provenance_json]) {
+      if (!blob) continue;
+      const decision = JSON.parse(String(blob))?.daily_decision;
+      if (!decision || typeof decision !== "object") continue;
+      const volume = decision?.caps?.volume;
+      return decision.train_anyway === true || (typeof volume === "string" && volume !== "normal");
+    }
+  } catch {
+    return false;
+  }
+  return false;
 }
 
 /**

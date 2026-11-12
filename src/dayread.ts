@@ -458,6 +458,8 @@ const REST_RESERVED_BASELINE_CODES: ReadonlySet<string> = new Set([
   "acute_sleep_corroborated",
   "short_night_eased",
   "resting_hr_after_endurance_easy",
+  "resting_hr_caution_easy",
+  "short_night_dosed",
   "stated_lift_morning_dosed",
   "stated_key_run_morning_dosed",
   "overnight_dip_dosed",

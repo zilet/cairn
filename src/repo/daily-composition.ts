@@ -39,7 +39,12 @@ import { adaptBasePlanDayForRecovery } from "./recovery-cycles.js";
 import { type SaturatedSubstitution, substituteSaturatedPlanItems } from "./saturated-substitution.js";
 import { finite } from "../lib/numbers.js";
 import { daysBetweenISO } from "../lib/dates.js";
-import { orderPlanItemsForEffect, planItemsOutOfOrder } from "../domain/training/plan-item-order.js";
+import {
+  orderPlanItemsForEffect,
+  PLAN_ITEM_EFFECT_TIER,
+  planItemEffectTier,
+  planItemsOutOfOrder,
+} from "../domain/training/plan-item-order.js";
 
 // Stage 3 of the adaptive daily training plan — bounded agent composition.
 // The agent composes INSIDE the deterministic Stage 2 envelope; it never
@@ -195,38 +200,98 @@ export const DAY_BUDGET_TRIM_NOTES: readonly [string, ...string[]] = [
   "Fewer sets here today; the session keeps all its lifts",
 ];
 
-// The day's working-set budget on the athlete's OWN plan day: sets come off the largest
-// item first — a tie goes to the item later in effect order (core and isolation before
-// the compounds, then the later-written one), so the day's lead lifts keep more — never
-// below one, and never off an item `keep` protects. Mutates `sets`; returns what each
-// trimmed item lost and the strength total left. Cardio carries no sets and is untouched.
+// A plan-day card whose lowest-priority accessories were DEFERRED to fit the day: one
+// plain line on the card naming them (rendered with the lifts' names).
+export const DAY_BUDGET_DEFERRED_NOTES: readonly [(names: string) => string, ...((names: string) => string)[]] = [
+  (names) => `Left for another day so today fits: ${names}.`,
+  (names) => `Today's card is shorter — ${names} left for another day.`,
+  (names) => `To keep today inside its budget, ${names} wait for another day.`,
+];
+
+// The plan-day budget's floors (fitPlanDaySetBudget). Conservative coaching defaults:
+// a compound or anchor lift is worth at least two working sets where the budget allows
+// (one working set of a main lift is a token, not a session), every other lift one.
+export const PLAN_DAY_BUDGET_POLICY = Object.freeze({
+  /** A compound (primary/secondary effect tier) keeps at least this many working sets where the budget allows. */
+  compound_min_sets: 2,
+  /** Every other lift keeps at least this many while it stays on the card. */
+  accessory_min_sets: 1,
+});
+
+function planItemIsCompound(item: any): boolean {
+  const tier = planItemEffectTier(item);
+  return tier === PLAN_ITEM_EFFECT_TIER.primary || tier === PLAN_ITEM_EFFECT_TIER.secondary;
+}
+
+function planItemIsDeferrable(item: any): boolean {
+  const tier = planItemEffectTier(item);
+  return tier === PLAN_ITEM_EFFECT_TIER.isolation || tier === PLAN_ITEM_EFFECT_TIER.core;
+}
+
+// The day's working-set budget (and, when the athlete named one, their time) on the
+// athlete's OWN plan day — an explicit, recorded rule, never a silent one:
+//   1. sets come off the largest item first (a tie goes to the item later in effect
+//      order, so the day's lead lifts keep more), down to each lift's floor — two for a
+//      compound or anchor, one for anything else (PLAN_DAY_BUDGET_POLICY);
+//   2. still over: the lowest-priority ACCESSORIES (isolation and core, latest in effect
+//      order first) are DEFERRED — taken off today's card, each one returned so the caller
+//      records it and names it on the card — until the day fits;
+//   3. still over (compounds alone exceed it): compounds come down to one set each.
+// An item `keep` protects (a lift the athlete asked for today) is never trimmed or
+// deferred. Mutates `sets`; returns the trims, the deferred items and the strength total
+// left. Cardio carries no sets and is untouched; prep is trimmed to one, never deferred.
 function fitPlanDaySetBudget(
   items: any[],
   budget: number,
-  keep: (item: any) => boolean
-): { total: number; trims: Array<{ item: any; from: number; to: number }> } {
+  keep: (item: any) => boolean,
+  minutes: number | null = null
+): { total: number; trims: Array<{ item: any; from: number; to: number }>; deferred: any[] } {
+  const policy = PLAN_DAY_BUDGET_POLICY;
   const strength = items.filter((item) => item?.kind !== "cardio");
   const before = new Map<any, number>(strength.map((item) => [item, Math.max(1, Number(item.sets) || 1)]));
   let total = [...before.values()].reduce((sum, sets) => sum + sets, 0);
   const effectRank = new Map<any, number>(orderPlanItemsForEffect(strength).map((item, index) => [item, index]));
-  const trimmable = strength.filter((item) => !keep(item));
-  while (total > budget) {
-    let pick: any = null;
-    for (const item of trimmable) {
-      const sets = Number(item.sets) || 1;
-      if (sets <= 1) continue;
-      const pickSets = pick ? Number(pick.sets) || 1 : 0;
-      if (!pick || sets > pickSets || (sets === pickSets && (effectRank.get(item) ?? 0) > (effectRank.get(pick) ?? 0)))
-        pick = item;
+  const deferred = new Set<any>();
+  const live = () => items.filter((item) => !deferred.has(item));
+  const overTime = () => minutes != null && minutes > 0 && cardWorkMinutes(live()) > minutes;
+  const over = () => total > budget || overTime();
+  const trimTo = (floorOf: (item: any) => number) => {
+    while (over()) {
+      let pick: any = null;
+      for (const item of strength) {
+        if (deferred.has(item) || keep(item)) continue;
+        const sets = Number(item.sets) || 1;
+        if (sets <= floorOf(item)) continue;
+        const pickSets = pick ? Number(pick.sets) || 1 : 0;
+        const later = (effectRank.get(item) ?? 0) > (effectRank.get(pick) ?? 0);
+        if (!pick || sets > pickSets || (sets === pickSets && later)) pick = item;
+      }
+      if (!pick) return;
+      pick.sets = (Number(pick.sets) || 1) - 1;
+      total -= 1;
     }
-    if (!pick) break;
-    pick.sets = (Number(pick.sets) || 1) - 1;
-    total -= 1;
+  };
+  // 1. down to the floors.
+  trimTo((item) =>
+    planItemIsCompound(item)
+      ? Math.min(before.get(item) ?? 1, policy.compound_min_sets)
+      : Math.min(before.get(item) ?? 1, policy.accessory_min_sets)
+  );
+  // 2. defer the lowest-priority accessories.
+  const deferrable = strength
+    .filter((item) => !keep(item) && planItemIsDeferrable(item))
+    .sort((a, b) => (effectRank.get(b) ?? 0) - (effectRank.get(a) ?? 0));
+  for (const item of deferrable) {
+    if (!over()) break;
+    deferred.add(item);
+    total -= Number(item.sets) || 1;
   }
+  // 3. compounds alone still exceed it: down to one set each.
+  trimTo(() => policy.accessory_min_sets);
   const trims = strength
-    .filter((item) => (Number(item.sets) || 1) < (before.get(item) ?? 0))
+    .filter((item) => !deferred.has(item) && (Number(item.sets) || 1) < (before.get(item) ?? 0))
     .map((item) => ({ item, from: before.get(item) as number, to: Number(item.sets) || 1 }));
-  return { total, trims };
+  return { total, trims, deferred: strength.filter((item) => deferred.has(item)) };
 }
 
 function isPrepCompositionItem(item: { exercise?: unknown; muscle_group?: unknown }): boolean {
@@ -1580,12 +1645,35 @@ export function normalizeComposedSession(
   // ---- the day's set budget on the athlete's own plan day ----
   // Spent in plan order, the budget used to starve the tail: a reduced day's twelve sets
   // went to the first few lifts and the last four were deleted without a word
-  // (2026-11-12). Fitted here instead, across every item at once: largest first, never
-  // below one set, never off a lift the athlete asked for today. Each trim is recorded
-  // and said on its card. The budget still binds what follows (top sets, the dose).
+  // (2026-11-12). Fitted here instead, across every item at once, to the set budget and
+  // to an explicit time request: largest first down to two sets a compound and one an
+  // accessory, then the lowest-priority accessories DEFERRED, then compounds to one —
+  // never off a lift the athlete asked for today (fitPlanDaySetBudget). Every trim and
+  // every deferral is recorded, each trim said on its card and the deferrals named in one
+  // line on the card. The budget still binds what follows (top sets, the dose).
+  let deferredLine: string | null = null;
   if (planSourced) {
     const budget = workingSetCap(envelope);
-    const fit = fitPlanDaySetBudget(capped, budget, isRequestedItem);
+    const requestMinutes = finite(envelope.request?.minutes);
+    const fit = fitPlanDaySetBudget(
+      capped,
+      budget,
+      isRequestedItem,
+      requestMinutes != null && requestMinutes > 0 ? requestMinutes : null
+    );
+    if (fit.deferred.length) {
+      const gone = new Set(fit.deferred);
+      for (let index = capped.length - 1; index >= 0; index--) if (gone.has(capped[index])) capped.splice(index, 1);
+      for (const item of fit.deferred)
+        rejected.push({ exercise: String(item.exercise ?? ""), reason: "day_set_budget_deferred" });
+      const names = fit.deferred.map((item) => String(item.exercise ?? "")).filter(Boolean);
+      const listed =
+        names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : (names[0] ?? "");
+      deferredLine = pickDayVariant(DAY_BUDGET_DEFERRED_NOTES, envelope.date, "daily-composition:budget_deferred")(
+        listed
+      );
+      changed = true;
+    }
     for (const trim of fit.trims) {
       rejected.push({
         exercise: String(trim.item.exercise ?? ""),
@@ -1827,6 +1915,10 @@ export function normalizeComposedSession(
       ? `${String(composedWhy).replace(/\s+$/, "")} ${substituted.unresolved_note}`
       : substituted.unresolved_note;
   }
+  // What the day's budget deferred is said on the card, never dropped in silence.
+  if (deferredLine) {
+    composedWhy = composedWhy ? `${String(composedWhy).replace(/\s+$/, "")} ${deferredLine}` : deferredLine;
+  }
   return {
     session: {
       name: hasEasyCardio ? safeEasySessionText(composedName, "Easy session") : composedName,
@@ -2015,10 +2107,13 @@ export function deterministicComposedSession(
   // the strength day the week was about to give them (the envelope already swapped it
   // in, so template.day_type is gone by then).
   if (envelope.template.day_type === "run" && envelope.kind !== "rest" && envelope.request.train_anyway !== true) {
+    const race = envelope.template.race_day === true;
     return {
-      name: "Run day",
-      focus: "Endurance",
-      why: pickDayVariant(RUN_DAY_CARD_NOTE, envelope.date, "daily_composition:run_day"),
+      name: race ? "Race day" : "Run day",
+      focus: race ? "Race" : "Endurance",
+      why: race
+        ? pickDayVariant(RACE_DAY_CARD_NOTE, envelope.date, "daily_composition:race_day")
+        : pickDayVariant(RUN_DAY_CARD_NOTE, envelope.date, "daily_composition:run_day"),
       est_minutes: null,
       items: [],
     };
@@ -2080,4 +2175,10 @@ export const RUN_DAY_CARD_NOTE: readonly string[] = [
   "Today belongs to the run; your Endurance plan has it. The lifting picks up on your next lift day.",
   "A run day in your week, so there's nothing to lift. Find today's run on the Endurance plan.",
   "Your week puts a run here and no lift. The run's distance and effort are on the Endurance plan.",
+];
+// Race day (envelope.template.race_day): the race is the day's work, never a lifting card.
+export const RACE_DAY_CARD_NOTE: readonly string[] = [
+  "No lifting today — it's race day. The race is the whole job.",
+  "Race day, so there's nothing to lift. Everything today goes into the race.",
+  "Today belongs to the race; the lifting picks back up once you've recovered.",
 ];

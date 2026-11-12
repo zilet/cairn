@@ -485,6 +485,13 @@ export async function whatIf(
 export interface WhatIfDoInput {
   /** The what_if agent job whose stored answer is handed over. */
   job_id?: unknown;
+  /**
+   * True only when the caller IS the athlete's own explicit act in the app (the "Do it"
+   * tap, routes/day-coach.ts). It is what makes the change their request
+   * (`explicit_user_request`, which also keeps its sets as a same-day request); an MCP
+   * client or any other caller never sets it, and its draft routes as the team's.
+   */
+  athlete_act?: boolean;
 }
 
 function doResult(
@@ -590,9 +597,10 @@ export function whatIfDo(input: WhatIfDoInput): WhatIfDoResult {
   linkAgentJobRef(jobId, "plan_proposals", Number(proposal.id));
   const holdForAthlete = change.kind === "nutrition" || planMoved;
   const routed = applyProposalWithAutonomy(Number(proposal.id), {
-    // The athlete asked for this change and tapped "Do it": their decision, not a
-    // coach surprise. Every floor still applies on top.
-    explicit_user_request: true,
+    // The athlete asked for this change and tapped "Do it" in the app: their decision,
+    // not a coach surprise. Only their own act carries the mark — an MCP client or any
+    // other caller hands the change over as the team's. Every floor still applies on top.
+    ...(input?.athlete_act === true ? { explicit_user_request: true } : {}),
     // A calorie target from a what-if always waits on the athlete: the check-in's
     // protective caps did not produce it, so the team never lands it on its own. A
     // training answer whose plan has moved since is requested at ask too.

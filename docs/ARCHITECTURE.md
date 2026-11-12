@@ -747,15 +747,25 @@ bounds — every clamp, easing, hold and exclusion still applies, but nothing is
 reach, no peak single, no earned floor, and a progression target only when it does not ask for more
 load or time).
 
-**The athlete's own plan day never silently loses work (2026-11-12).** A card composed FROM a plan
-day (`deterministicComposedSession`, and every `planSnapshot`: `ComposeSessionOptions.planSourced`)
-keeps every authored item: the day's item cap (`volumeCap`) drops nothing, and the day's working-set
-budget (`workingSetCap`, 12 on a reduced day) is fitted AFTER the per-item clamps by
-`fitPlanDaySetBudget` — sets come off the largest item first (ties to the later item in effect
-order), never below one. Each trim is a `day_set_budget` entry in `validation.rejected` (with
-`sets_from`/`sets_to`) and a rotated `DAY_BUDGET_TRIM_NOTES` line on the card. Spent in plan order,
-the budget used to delete a nine-lift day's last four lifts without a word. An agent-authored session
-keeps the plain clamp. When the kept work runs longer than the duration clamp, `est_minutes` is the
+**The athlete's own plan day never SILENTLY loses work (2026-11-12, revised).** A card composed FROM
+a plan day (`deterministicComposedSession`, and every `planSnapshot`: `ComposeSessionOptions.planSourced`)
+is fitted by one explicit, recorded rule: the day's item cap (`volumeCap`) drops nothing, and the
+day's working-set budget (`workingSetCap`, 12 on a reduced day) — and an explicit time request
+(`request.minutes`, at the composition's per-set clock) — is fitted AFTER the per-item clamps by
+`fitPlanDaySetBudget`: (1) sets come off the largest item first (ties to the later item in effect
+order) down to each lift's floor, two working sets for a compound or anchor (primary/secondary effect
+tier) and one for anything else (`PLAN_DAY_BUDGET_POLICY`, conservative coaching defaults); (2) when
+the day still cannot fit, the lowest-priority ACCESSORIES (isolation and core, latest in effect order
+first) are deferred — taken off today's card; (3) only if compounds alone still exceed it do they come
+down to one set each. A lift from the athlete's explicit same-day request is never trimmed or
+deferred. Each trim is a `day_set_budget` entry in `validation.rejected` (with `sets_from`/`sets_to`)
+and a rotated `DAY_BUDGET_TRIM_NOTES` line on its card; each deferral is a `day_set_budget_deferred`
+entry, and the card's `why` names them in one rotated line (`DAY_BUDGET_DEFERRED_NOTES`, "left for
+another day: …"). Nothing leaves without a record and a word. Spent in plan order, the budget used to
+delete a nine-lift day's last four lifts without a word; fitted to one set each, a fourteen-lift day
+became fourteen single sets past a thirty-minute request. The nine-lift incident day (four compounds,
+five accessories, budget 12) now keeps eight lifts — the compounds at two sets, four accessories at
+one — and defers the plank. An agent-authored session keeps the plain clamp. When the kept work runs longer than the duration clamp, `est_minutes` is the
 work's own length (`cardWorkMinutes`, composition-dose.ts), never the clamp. The card's `name` is the
 plan day's display name (`planDayDisplayName`), never the free-text focus, and its `focus` names only
 lifts the card carries (`focusWithoutAbsentMovements`, plan-day-focus.ts — a listed movement no card
@@ -772,7 +782,10 @@ deload or an easing still does). The intensity hold stays: no raise, no reach.
 
 **Volume: the plan's sets are the default (2026-11-12, `daily_decision_v8`).** On a `train` read
 `caps.volume` reduces only for a NAMED, CURRENT reason (`namedVolumeReason`, daily-decision.ts): an
-easy read, a fresh low-recovery brake, soreness reported today (not routed), train-anyway over a rest
+easy read, a fresh low-recovery brake (unless the day read already answered it with a held dose —
+`day_read.held_dose`: then the dose IS the answer, intensity held and the regions yesterday loaded
+reduced, and everything else trains at the plan's sets, exactly as the read said), soreness reported
+today (not routed), train-anyway over a rest
 read with the caps shut, a recovery week, the days after a race, or a lift reopened after the morning
 run while a deciding brake stands. Group-level trims (a deep or same-day residual, volume-high groups,
 a key run's or a race week's legs, pain) keep speaking through `muscles.reduced`/`excluded`, and an
@@ -784,11 +797,20 @@ athlete's own log vouches (`volume_tolerance`, stamped by gather only when that 
 (session-dose-log.ts, the same per-lift dose evidence the contradiction read classifies) of the last
 four reconciled sessions inside 28 days, before today — at least three with a verdict, every one
 having landed each planned set, met its prescription, and not fallen under its own full-load
-reference (a skip, a short set count, a relevant symptom or a slipping load answers no). The card then
+reference (a skip, a short set count, a relevant symptom or a slipping load answers no). "Planned" is
+the plan item's AUTHORED set count (`full_load_reference.sets`, the plan's own row as reconciliation
+read it), never the composed card's: a card composed under a volume cap below normal or on a
+train-anyway day (the composition's stored `daily_decision` context) vouches only when the athlete
+actually logged the authored sets, and a lift on it with no authored count cannot vouch at all — so a
+trimmed card finished as trimmed never cancels its own trim. The card then
 carries `log_backs_full_sets` (soft line + rotated rationale) instead of `personal_response_ease`.
 Learning only stops trimming. The set catch-up (`setCatchUp`, progression.ts — the only path that
 raises a set count toward the log) honours `VOLUME_BOUNDS` (volume-tolerance.ts): about 1.2× the lift's
-habitual count (`perLiftSetCeiling`) and about 20 weekly effective sets per group, counted the weekly
+habitual count (`perLiftSetCeiling`) — the habit read from an INDEPENDENT window, the median
+working-set count per session in the `HABITUAL_WINDOW_DAYS` (56) before the recent exposures it
+answers (`habitualWorkingSetCountBefore`), and not read at all below `HABITUAL_MIN_SESSIONS` (a habit
+taken off the same exposures whose minimum already caps the step could never bind) — and about 20
+weekly effective sets per group, counted the weekly
 dose ledger's way (`weeklyGroupEffectiveSets`, weekly-dose-ledger.ts), and holds the plan's count
 while an affirmed cut runs (`affirmedCutHoldsSetCount`, `cutReaffirmation`). Train-anyway with no
 explicit request stays conservative, and a same-day request keeps its authored sets as before.
@@ -1214,11 +1236,20 @@ stays. New server pairs pass the same test while partners are chosen and only fi
 the three after the author's own groupings. The footprint table is `station-footprint.ts`
 (`IMPLEMENT_FOOTPRINT`): portable = dumbbell, kettlebell, band, bodyweight, plate, medicine ball, mat
 (and a standing barbell curl); fixed = machine, cable, barbell (rack/bench/platform), landmine,
-pull-up bar, dip station, rack, sled, suspension — and `unknown`, which is fixed. The implement is
-read from the exercise's `equipment`, then its linked guide's dataset `equipment`, then the name
-(`inferExerciseEquipment` plus a short table); a name that names a station (pull-up bar, dip) wins
-over a "bodyweight" field. Two fixed lifts pair only on one station: one cable stack (a seated row is
-its own station), one pull-up bar. What an author's grouping lost is reported as
+pull-up bar, dip station, rack, sled, suspension — and `unknown`. The implement is read from the
+exercise's `equipment`, then its linked guide's dataset `equipment`, then the name
+(`inferExerciseEquipment`, then name tables: a pushdown, face pull, crossover or straight-arm pulldown
+is the cable stack; a leg curl, leg extension, pec deck or seated calf raise is a machine; the common
+free-weight and bodyweight movements — raises, curls, lunges, split squats, skull crushers, calf
+raises, shrugs, sit-ups, bridges and the like — are portable unless the name says
+machine/seated/smith/cable/preacher); a name that names a station (pull-up bar, parallel-bar dip)
+wins over a "bodyweight" field, a ring dip is the rings and a bench dip needs no station. Two fixed
+lifts pair only on one station: one cable stack (a seated row is its own station), one pull-up bar.
+**Unknown is conservative only for the server**: a pair the server proposes treats an unknown
+footprint as fixed (`pairIsDoable`), but a pair an AUTHOR set (the athlete, the plan, the coach's
+composed session) is taken apart only when BOTH lifts are positively known to sit on different fixed
+stations (`authoredPairIsDoable`). `pairForSession` reports `changed` whenever the rules altered a
+card's groups, the plan-snapshot path included. What an author's grouping lost is reported as
 `unpaired: [{exercises, reason}]` — on `CompositionValidation`, on the prepare result
 (`prepareDailySession`), and on the chat `today_session` applied result — and the chat action spec
 tells the coach the same three rules.
@@ -2349,19 +2380,28 @@ PMID 32991706; Nuuttila 2022, PMID 35975912). The rules, in precedence order:
 
 | Morning | Read | Code |
 |---|---|---|
-| Resting HR past the athlete's own band (one meaningful night, or consecutive readings) with no hard day behind it, or for a second reading, or beside their low word / a symptom stated today | REST (possible illness) | `resting_hr_illness_pattern` |
-| Rolling HRV below the band on `hrv_sustained_decline_mornings` mornings AND the deload read's log-confirmed shortfall (`logConfirmedFatigue`) | REST | `hrv_decline_with_shortfall` |
-| `short_nights_for_easy` short nights in a row | easy, every day | `acute_sleep_corroborated` |
+| Resting HR past the athlete's own band on `rhr_illness_consecutive_readings` consecutive CALENDAR mornings; or ONE meaningful night with no hard day behind it, or beside their low word / a symptom stated today — the single night only on an established personal band and a reading its own row vouches for (`rhr_single_night_rest_requires`) | REST (possible illness) | `resting_hr_illness_pattern` |
+| Rolling HRV below the band on `hrv_sustained_decline_mornings` mornings (each rolling read needing a valid night inside `hrv_rolling_recent_night_days`) AND the deload read's log-confirmed shortfall (`logConfirmedFatigue`) | REST | `hrv_decline_with_shortfall` |
+| `short_nights_for_easy` short nights in a row, or a short night on a short rolling average | easy, every day | `acute_sleep_corroborated` |
 | `low_mornings_for_easy` low readiness mornings in a row | easy, every day | `low_mornings_easy` |
-| Resting HR past band after hard endurance | stated: the dose; else easy | `stated_*_morning_dosed` / `resting_hr_after_endurance_easy` |
-| One short night | stated: the dose; else easy | `stated_*_morning_dosed` / `short_night_eased` |
+| Resting HR past band after a hard day (HRV past its band too is never a training day) | easy, every day | `resting_hr_after_endurance_easy` |
+| Resting HR past band on one night nothing vouches for (no band of their own yet, or an unverified reading), nothing hard behind it | easy at most (a caution) | `resting_hr_caution_easy` |
+| One night under `severe_short_night_max_min` | easy, every day | `short_night_eased` |
+| One short night | the dose, any day with a session due | `stated_*_morning_dosed` / `short_night_dosed` |
 | Rest-grade readiness alone | stated: the dose; else easy | `stated_*_morning_dosed` / `rest_grade_readiness` (now easy) |
 | One low HRV night within `endurance_window_days` of hard endurance, resting HR in band | the dose, any day with a session due | `stated_lift_morning_dosed` / `overnight_dip_dosed` |
 
-"The dose" is the calendar's machinery (`calendarTakesDay`, `calendar.step.morning`): a training
-day, loads held, no reach, and — in the daily decision (`day_read.held_dose`, `held_morning_dose`) —
-the groups the acute gate reads saturated from yesterday's work join `reduced`, intensity at least
-`hold`, reach parked. These are conservative coaching defaults, not findings from HRV-guided lifting
+"The dose" is the calendar's machinery (`calendarTakesDay`, `calendar.step.morning`) on a stated day,
+and on any other day with a session due the planned-training rule behind the same floors
+(`morningDoseTakesDay`): a training day, loads held, no reach, and — in the daily decision
+(`day_read.held_dose`, `held_morning_dose`) — the groups the acute gate reads saturated from
+yesterday's work join `reduced`, intensity at least `hold`, reach parked, and the morning's low
+readiness is NOT a whole-session volume reason (the dose answered it). The severe short-night floor is
+a conservative coaching default, not a literature finding. Every sentence is true of its morning: the
+readiness cause blames yesterday only when `load_explained` names something, the dose lead promises
+lighter areas only when a region yesterday loaded is on the due day (`MORNING_DOSE_LEAD` vs
+`MORNING_DOSE_LEAD_HELD`), the illness why says "again" only on a repeat and "nothing hard" only with
+no hard day behind it, and a single low HRV night is "common", never a guarantee. These are conservative coaching defaults, not findings from HRV-guided lifting
 trials (none exist). REST is otherwise reserved: illness, pain, clinical and safety floors, the
 athlete's corroborated low word (FELT_REST_CORROBORATION, unchanged), a recovery week's dose overrun,
 the athlete's claimed day. So the protect rule's soft rest posture eases, a stacked-days rest
@@ -2370,9 +2410,20 @@ corroborated only by soft signals reads easy (the ladders still treat it as the 
 corroborates the stack, the run engine's `HARD_RUN_FLOORS` drop the rest-grade reading (it shortens
 the long run, eases quality), and the agent may not read a reserved morning to rest
 (`enforceRestReservation`, src/dayread.ts). The rolling HRV read is `rollingBandRead`
-(overnight-band.ts: fewer than `hrv_rolling_min_nights` valid nights says nothing); the one-night
-smallest-worthwhile-change logic stays for the harm arms. **Race morning** (`goal_race_day`, the
-goal's own date) reads as the race above every quiet rule except a clinical shape. Provenance:
+(overnight-band.ts: fewer than `hrv_rolling_min_nights` valid nights, or none inside
+`hrv_rolling_recent_night_days`, says nothing); the one-night smallest-worthwhile-change logic stays
+for the harm arms. **The athlete's good check-in** (energy at `checkin_lift_energy_min`, sleep-feel
+not low) lifts ONE step only a caution whose deciding brakes are the composite readiness score or a
+single low HRV night (`checkinLiftsBrakes`; the legs' share of yesterday's endurance may sit beside
+it) — never acute load, resting HR, short sleep, a rolling HRV decline or any rest-reserved floor —
+and names the disagreement truly (the readiness number, or last night's HRV). **Race morning**
+(`goal_race_day`, the goal's own date) reads as the race above every quiet rule — never over a
+clinical or pain floor, a fresh safety override, the athlete's own low word or a symptom stated today,
+which keep their own read. Over the engine's possible-illness read the day still reads as the race (a
+suggestion, never a gate) and its `why` says what resting HR is showing and that how they feel at the
+start line decides (`RACE_DAY_RHR_WHY`). The daily decision is race-aware: `day_read.race_day` makes
+the day a run day (`template.day_type: 'run'`, `race_day`), so no lifting card is composed (a "Race
+day" card), the lifting caps shut (`minimal`/`easy`) and reach is parked (`goal_race_day`). Provenance:
 `signals.morning_dose` (verdict, basis, load explanations, the overnight and rolling reads,
 `applied`) and `signals.calendar_dose.morning`.
 

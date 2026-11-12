@@ -73,6 +73,33 @@ export function restingHrContradictedByFloor(
   return !(r >= floor && r - floor <= Math.max(RESTING_HR_FLOOR_MARGIN, RESTING_HR_FLOOR_MARGIN_RATIO * floor));
 }
 
+// ---------- A RESTING HR ITS OWN SOURCE VOUCHES FOR ----------
+// The positive half of the same question, for a decision that may REST a day on one
+// reading (morning-dose.ts, E): the reading's OWN row shows the overnight it claims to
+// describe — a same-row `min_hr` it coheres with, or a same-row night of at least
+// RESTING_HR_SLEEP_WITNESS_MIN minutes — and the value is a possible resting HR. The
+// recovery summary's READING_TRUST (coach.ts) calls this `verified` by the same rule. A
+// row with neither (a generic phone or ring row carries no `min_hr`) is not evidence of a
+// problem; it is a reading nothing could check, so it may caution a day, never rest it.
+/** The shortest same-row night that vouches for a resting HR reading (minutes). */
+export const RESTING_HR_SLEEP_WITNESS_MIN = 120;
+/** The physiological band a resting HR must sit in before anything may vouch for it. */
+export const RESTING_HR_PLAUSIBLE_RANGE = Object.freeze({ min: 30, max: 90 });
+
+export function restingHrReadingVerified(
+  resting: number | null | undefined,
+  minHr: number | null | undefined,
+  sleepMin: number | null | undefined
+): boolean {
+  if (resting == null || !Number.isFinite(Number(resting))) return false;
+  const r = Number(resting);
+  if (r < RESTING_HR_PLAUSIBLE_RANGE.min || r > RESTING_HR_PLAUSIBLE_RANGE.max) return false;
+  const floor = minHr == null ? null : Number(minHr);
+  if (floor != null && Number.isFinite(floor) && floor > 0) return !restingHrContradictedByFloor(r, floor);
+  const night = sleepMin == null ? null : Number(sleepMin);
+  return night != null && Number.isFinite(night) && night >= RESTING_HR_SLEEP_WITNESS_MIN;
+}
+
 export interface PersonalBand {
   mean: number;
   /** The line one night has to cross to count at all. */
@@ -154,7 +181,17 @@ export function rollingBandRead(
   series: ReadonlyArray<{ date: string; value: number }>,
   field: OvernightField,
   asOf: string,
-  opts: { windowDays: number; minNights: number; baselineDays: number }
+  opts: {
+    windowDays: number;
+    minNights: number;
+    baselineDays: number;
+    /**
+     * When set, at least one valid reading must be dated within this many days ending on
+     * `asOf` (2 = last night or the night before), or the read says nothing: a window whose
+     * every night is old is not about this morning.
+     */
+    recentNightDays?: number;
+  }
 ): RollingBandRead {
   const dayMs = 864e5;
   const asOfMs = Date.parse(`${String(asOf).slice(0, 10)}T00:00:00Z`);
@@ -162,17 +199,21 @@ export function rollingBandRead(
   if (!Number.isFinite(asOfMs)) return none;
   const windowStart = asOfMs - (opts.windowDays - 1) * dayMs;
   const baselineStart = windowStart - opts.baselineDays * dayMs;
+  const anchorStart = opts.recentNightDays != null ? asOfMs - (opts.recentNightDays - 1) * dayMs : null;
   const recent: number[] = [];
   const baseline: number[] = [];
+  let anchored = anchorStart == null;
   for (const point of series) {
     const at = Date.parse(`${String(point.date).slice(0, 10)}T00:00:00Z`);
     const value = Number(point.value);
     if (!Number.isFinite(at) || !Number.isFinite(value) || value <= 0) continue;
-    if (at >= windowStart && at <= asOfMs) recent.push(value);
-    else if (at >= baselineStart && at < windowStart) baseline.push(value);
+    if (at >= windowStart && at <= asOfMs) {
+      recent.push(value);
+      if (anchorStart != null && at >= anchorStart) anchored = true;
+    } else if (at >= baselineStart && at < windowStart) baseline.push(value);
   }
   const band = personalBand(baseline, field);
-  if (recent.length < opts.minNights) return { ...none, nights: recent.length, band };
+  if (recent.length < opts.minNights || !anchored) return { ...none, nights: recent.length, band };
   const value = recent.reduce((sum, v) => sum + v, 0) / recent.length;
   const past_line = band != null && (field === "hrv_ms" ? value < band.line : value > band.line);
   return { value, nights: recent.length, band, past_line };

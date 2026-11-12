@@ -465,9 +465,10 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
 - **On a STATED key-run or lifting day a soft brake is the dose, never the kind** — the read stays
   `train` (`stated_key_run_dosed` / `stated_lift_dosed`); every floor (`calendarDoseFloor`) keeps the
   quiet read, and a learned tolerance can only hand it back. **REST is reserved**: a rest-grade
-  reading, one short night, RHR up after hard endurance are the dose (`stated_*_morning_dosed`), easy
-  elsewhere; the rule table and every tunable are `MORNING_DOSE_POLICY` (`src/repo/morning-dose.ts`);
-  race morning reads the race. The day-read verdict judges only the
+  reading is the dose on a stated day (`stated_*_morning_dosed`), easy elsewhere; one short night is
+  the dose on any day with a session due; RHR up after a hard day is easy at most on every day; the
+  rule table and every tunable are `MORNING_DOSE_POLICY` (`src/repo/morning-dose.ts`); race morning
+  reads the race (never over a floor, and no lifting card). The day-read verdict judges only the
   true morning read, and harm there can be `unknown` (`harmVerdictOnDay` — never clean, never a
   cost; `harmEvidenceOnDay` itself is unchanged). Details: `docs/ARCHITECTURE.md` "The calendar owns
   what the day is for" and "The measurement fixes of 2026-10-16".
@@ -565,9 +566,11 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
 - **Dose comparability is a per-lift question, not a per-session one** — `dose_evidence`/
   `dose_context.comparable` (`progression.ts`), and `training_drive='push'`'s bounded mechanical
   authority. Details in `docs/ARCHITECTURE.md`.
-- **A card composed from the athlete's own plan day never deletes an authored lift** — the day's set
-  budget trims largest-first to one set each (`day_set_budget`, `fitPlanDaySetBudget`), the item cap
-  drops nothing, and the title is the plan day's name, never its focus prose. A today-scoped change
+- **A card composed from the athlete's own plan day never SILENTLY loses work** — the day's set
+  budget (and an explicit time request) trims sets largest-first to two a compound and one an
+  accessory (`day_set_budget`), then defers the lowest-priority accessories (`day_set_budget_deferred`,
+  named on the card in one line), always recorded (`fitPlanDaySetBudget`); the item cap drops
+  nothing, and the title is the plan day's name, never its focus prose. A today-scoped change
   the athlete asked for rides the envelope as `request.same_day_request` and keeps its sets under
   train-anyway. Details: `docs/ARCHITECTURE.md` "The athlete's own plan day never silently loses work".
 - **Work done is evidence — a prescription is a suggestion, the log is the truth** —
@@ -588,17 +591,18 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   (muscle/strength intent only; endurance-carried groups and light weeks exempt), held by plan
   quality, the redraw precheck and `setCatchUp`. Details in `docs/ARCHITECTURE.md`.
 - **On a train read the plan's sets are the default** — `caps.volume` trims only for a named,
-  current reason (`namedVolumeReason`); a standing preference never trims, and a precautionary trim
-  yields to a log that carried every planned set at a held-or-rising load (`volume-tolerance.ts`,
-  judged on performance, never on absent complaints). Learning never adds a set: any catch-up honours
-  `VOLUME_BOUNDS` (~1.2× habitual per lift, ~20 weekly sets a group) and an affirmed cut holds the
-  count. Details in `docs/ARCHITECTURE.md` "Volume: the plan's sets are the default".
+  current reason (`namedVolumeReason`; a read's held dose is not one); a standing preference never
+  trims, and a precautionary trim yields to a log that carried every AUTHORED set at a held-or-rising
+  load (`volume-tolerance.ts`, judged on performance, never on absent complaints). Learning never adds
+  a set: any catch-up honours `VOLUME_BOUNDS` (~1.2× the habit of the weeks before, ~20 weekly sets a
+  group) and an affirmed cut holds the count. Details in `docs/ARCHITECTURE.md` "Volume: the plan's sets are the default".
 - **The weekly dose fills a group's shortfall with one extra set — never a load, never an untested
   slot, never the day's anchor or strength-range work.** `weekly-dose-ledger.ts` / `composition-dose.ts`.
   Movement REGIONS (`movement-region.ts`), not raw muscle group, decide which items collapse as
   duplicates and pair as antagonist supersets on today's card (`composition-pairing.ts`). Every
   source's supersets pass ONE gate, `enforceSupersetRules`: two lifts a group, one fixed station a
-  pair (`station-footprint.ts`; unknown is fixed), three pairs a session. Details in
+  pair (`station-footprint.ts`; unknown is fixed for a pair the server proposes, never a reason to
+  split an authored one), three pairs a session. Details in
   `docs/ARCHITECTURE.md` "Weekly dose ledger" and "Pairing and movement regions".
 - **A race build's taper/race week and the eve of a placed key run trim the legs through the ordinary
   `reduced`/`excluded` muscle lists, never a second gate** (`stress-budget.ts`); for a strength-led
