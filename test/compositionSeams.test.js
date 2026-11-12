@@ -21,6 +21,11 @@
 //
 // And one title fix (2026-11-12): a plan-day card is titled by the plan day's NAME
 // ("Lower A"), never its free-text focus, which no swap or rotation re-syncs.
+//
+// And two rule changes (2026-11-12): a superset holds at most one fixed station, so the
+// Lower A leg extension + leg curl (two machines) run straight — no group, no hint; and the
+// volume rule moved the policy to daily_decision_v8, so `lower_fingerprint` moved with it
+// (the snapshot itself is unchanged).
 // Synthetic fixtures only. Deterministic and offline (see test/run.mjs).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -264,5 +269,5 @@ test("an ordinary morning's snapshot and envelope carry none of the seam keys", 
   assert.equal(env.input_fingerprint, GOLDEN.lower_fingerprint, "the stored fingerprint is unchanged");
   assert.equal("dose" in env, false, "no dose key on an idle envelope");
   assert.equal("stress" in env, false, "no stress key on an idle envelope");
-  assert.equal(env.policy_version, "daily_decision_v7");
+  assert.equal(env.policy_version, "daily_decision_v8");
 });

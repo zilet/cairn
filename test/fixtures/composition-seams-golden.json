@@ -244,12 +244,12 @@
         "target_seconds": null,
         "warmup_sets": null,
         "mode": "reps",
-        "note": "Paired with Lying Leg Curl: alternate sets, and rest after each round.",
+        "note": null,
         "target_distance_km": null,
         "target_duration_min": null,
         "target_zone": null,
         "interval": null,
-        "superset_group": 1,
+        "superset_group": null,
         "load_basis": "loaded"
       },
       {
@@ -268,7 +268,7 @@
         "target_duration_min": null,
         "target_zone": null,
         "interval": null,
-        "superset_group": 1,
+        "superset_group": null,
         "load_basis": "loaded",
         "brain_decision_id": null,
         "brain_change_summary": null,
@@ -376,12 +376,12 @@
         "target_seconds": null,
         "warmup_sets": null,
         "mode": "reps",
-        "note": "Paired with Lying Leg Curl: alternate sets, and rest after each round.",
+        "note": null,
         "target_distance_km": null,
         "target_duration_min": null,
         "target_zone": null,
         "interval": null,
-        "superset_group": 1,
+        "superset_group": null,
         "load_basis": "loaded"
       },
       {
@@ -400,7 +400,7 @@
         "target_duration_min": null,
         "target_zone": null,
         "interval": null,
-        "superset_group": 1,
+        "superset_group": null,
         "load_basis": "loaded",
         "brain_decision_id": null,
         "brain_change_summary": null,
@@ -561,5 +561,5 @@
       }
     ]
   },
-  "lower_fingerprint": "d88851791ab921f97cc947c0c9da958495612b64bb4471a17df564cca89377ee"
+  "lower_fingerprint": "c495aa8b736a6b6cec9c9288ad6c36d8029f2c12f0e777d912da9f17693c5910"
 }

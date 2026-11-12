@@ -4,6 +4,7 @@ import { violatesReadingGrammar } from "./day-read-grammar.js";
 import { canonicalGroup, isMobility, normalizedExerciseKey } from "./exercise-canon.js";
 import { findExercise } from "./exercises.js";
 import { ANTAGONIST_OF, type AntagonistSide, antagonistSide, movementRegionKey } from "./movement-region.js";
+import { pairFitsOneStation, stationFootprint } from "./station-footprint.js";
 import { finite } from "../lib/numbers.js";
 import { isPrepPlanItem, PLAN_ITEM_EFFECT_TIER, planItemEffectTier } from "../domain/training/plan-item-order.js";
 
@@ -122,6 +123,8 @@ export interface PairingContext {
 export interface PairingResult {
   items: any[];
   changed: boolean;
+  // Authored groupings the superset rules took apart (enforceSupersetRules). Omit-when-empty.
+  unpaired?: SupersetUnpaired[];
 }
 
 // The pairing hint, one per pair, on the pair's first item (the second when the first
@@ -245,17 +248,23 @@ interface Unit {
 
 // One effect tier's units: pairs seated together at the first member's seat, a top set
 // glued to its block, everything else alone.
-function tierUnits(segment: ItemRead[]): Unit[] {
+// `budget.left` is how many new pairs the session still has room for (SESSION_MAX_PAIRS
+// less the author's own groupings): tiers are walked in effect order, so the pairs the
+// card does first are the ones seated. A partner on a second fixed station is passed
+// over for the next antagonist that shares the first one's station or carries its own.
+function tierUnits(segment: ItemRead[], budget: { left: number }): Unit[] {
   const partnerOf = new Map<ItemRead, ItemRead>();
-  for (let i = 0; i < segment.length; i++) {
+  for (let i = 0; i < segment.length && budget.left > 0; i++) {
     const a = segment[i];
     if (a.locked || !a.side || partnerOf.has(a)) continue;
     const wanted = ANTAGONIST_OF[a.side];
     for (let j = i + 1; j < segment.length; j++) {
       const b = segment[j];
       if (b.locked || partnerOf.has(b) || b.side !== wanted) continue;
+      if (!pairIsDoable(a.item, b.item)) continue;
       partnerOf.set(a, b);
       partnerOf.set(b, a);
+      budget.left -= 1;
       break;
     }
   }
@@ -377,6 +386,85 @@ function dropOrphanSupersets(items: any[]): void {
   }
 }
 
+// ---- a superset has to be doable in a shared gym (owner ruling, 2026-11-12) ----
+// "More than three is really unrealistic in the gym", and a pair that needs two machines
+// at once is not a superset anyone can run. Three rules, enforced HERE for every source:
+// the server's own pairs (pairForSession) and every session payload a person, the chat
+// coach or an MCP client authored (adaptive-session.ts normalizeSessionPayload).
+//   1. A group holds exactly two lifts; a third and later member runs as straight sets.
+//   2. A pair holds at most ONE fixed station (station-footprint.ts): two fixed lifts pair
+//      only on the same station — two movements on one cable stack.
+//   3. At most three pairs a session; the ones the effect-tier order ranks first stay.
+// A pair that fails is never an error: its members keep every prescription and run
+// straight, and the athlete-authored path says which and why (`SupersetUnpaired`).
+export const SUPERSET_MAX_MEMBERS = 2;
+export const SESSION_MAX_PAIRS = 3;
+
+export type SupersetUnpairReason = "group_over_two" | "two_stations" | "pair_limit";
+
+/** One grouping the rules took apart: the lifts that now run straight, and why. */
+export interface SupersetUnpaired {
+  exercises: string[];
+  reason: SupersetUnpairReason;
+}
+
+function itemName(item: any): string {
+  return String(item?.exercise ?? "").trim();
+}
+
+/** Can these two lifts run as one superset without holding two fixed stations? */
+export function pairIsDoable(a: any, b: any): boolean {
+  return pairFitsOneStation(stationFootprint(itemName(a)), stationFootprint(itemName(b)));
+}
+
+/**
+ * Apply the three superset rules to a card's authored groupings, in place, in card order
+ * (array order is the order the card is done). Clears `superset_group` on every lift a
+ * rule takes out of a pair and returns what it took apart. Orphan and out-of-range groups
+ * are cleared silently first (dropOrphanSupersets) — nobody authored them as a pair today.
+ */
+export function enforceSupersetRules(items: any[]): SupersetUnpaired[] {
+  const unpaired: SupersetUnpaired[] = [];
+  if (!Array.isArray(items) || !items.length) return unpaired;
+  dropOrphanSupersets(items);
+  const groups = new Map<number, number[]>();
+  items.forEach((item, index) => {
+    const group = finite(item?.superset_group);
+    if (group == null) return;
+    const members = groups.get(group) ?? [];
+    members.push(index);
+    groups.set(group, members);
+  });
+  const pairs: Array<{ members: [number, number]; first: number; tier: number }> = [];
+  for (const members of groups.values()) {
+    if (members.length > SUPERSET_MAX_MEMBERS) {
+      const rest = members.slice(SUPERSET_MAX_MEMBERS);
+      for (const index of rest) items[index].superset_group = null;
+      unpaired.push({ exercises: rest.map((index) => itemName(items[index])), reason: "group_over_two" });
+    }
+    const [a, b] = members as [number, number];
+    if (!pairIsDoable(items[a], items[b])) {
+      items[a].superset_group = null;
+      items[b].superset_group = null;
+      unpaired.push({ exercises: [itemName(items[a]), itemName(items[b])], reason: "two_stations" });
+      continue;
+    }
+    pairs.push({
+      members: [a, b],
+      first: Math.min(a, b),
+      tier: Math.min(planItemEffectTier(items[a]), planItemEffectTier(items[b])),
+    });
+  }
+  if (pairs.length > SESSION_MAX_PAIRS) {
+    pairs.sort((x, y) => (x.tier !== y.tier ? x.tier - y.tier : x.first - y.first));
+    for (const pair of pairs.slice(SESSION_MAX_PAIRS)) {
+      for (const index of pair.members) items[index].superset_group = null;
+      unpaired.push({ exercises: pair.members.map((index) => itemName(items[index])), reason: "pair_limit" });
+    }
+  }
+  return unpaired;
+}
+
 /**
  * Seat antagonist pairs as supersets on today's card. Runs on the FINAL list, after
  * `orderPlanItemsForEffect`; when `changed` is true the caller re-numbers positions.
@@ -393,6 +481,9 @@ function dropOrphanSupersets(items: any[]): void {
  *   its tier, and leads its pair. Today's card only; the plan's order is untouched.
  * - Each new pair takes the lowest `superset_group` not already on the card, and its
  *   first item one calm hint in `note`.
+ * - The superset rules (enforceSupersetRules) bind first: an author's grouping that
+ *   breaks one is taken apart and reported in `unpaired`; a new pair never seats two
+ *   fixed stations, and new pairs fill only what is left of SESSION_MAX_PAIRS.
  *
  * Identity (the same array, `changed: false`) on a plan snapshot, and whenever nothing
  * pairs and no behind group moves — except that a plan-saved group left with a single
@@ -400,8 +491,15 @@ function dropOrphanSupersets(items: any[]): void {
  */
 export function pairForSession(items: any[], ctx: PairingContext): PairingResult {
   if (!Array.isArray(items)) return { items, changed: false };
-  dropOrphanSupersets(items);
-  if (ctx.planSnapshot || items.length < 2) return { items, changed: false };
+  // The superset rules hold for every card, the athlete's own snapshot included: a
+  // plan-saved pairing that needs two machines is cleared, never served.
+  const unpaired = enforceSupersetRules(items);
+  const extra = unpaired.length ? { unpaired } : {};
+  if (ctx.planSnapshot || items.length < 2) return { items, changed: false, ...extra };
+  const authoredPairs = new Set(
+    items.map((item) => finite(item?.superset_group)).filter((value): value is number => value != null)
+  ).size;
+  const budget = { left: Math.max(0, SESSION_MAX_PAIRS - authoredPairs) };
   const reads = readItems(items, ctx.envelope);
   // Stable by tier: the card is already in effect order (the same tier read), so this
   // only groups each tier's items together for the pairing pass.
@@ -417,7 +515,7 @@ export function pairForSession(items: any[], ctx: PairingContext): PairingResult
     if (tier === PLAN_ITEM_EFFECT_TIER.prep || tier === PLAN_ITEM_EFFECT_TIER.cardio) {
       for (const read of segment) units.push({ reads: [read], fixed: true, gap: false, pair: null });
     } else {
-      const seated = tierUnits(segment);
+      const seated = tierUnits(segment, budget);
       const ordered = gapFirst(seated);
       if (ordered !== seated) reseated = true;
       units.push(...ordered);
@@ -427,7 +525,7 @@ export function pairForSession(items: any[], ctx: PairingContext): PairingResult
   const pairs = units.filter((unit) => unit.pair).map((unit) => unit.pair as [ItemRead, ItemRead]);
   // With nothing paired and no behind group reseated, the card stands exactly as it
   // came: the tier sort above is how pairs are found, not a change of its own.
-  if (!pairs.length && !reseated) return { items, changed: false };
+  if (!pairs.length && !reseated) return { items, changed: false, ...extra };
   const next = units.flatMap((unit) => unit.reads.map((read) => read.item));
   const used = new Set<number>(
     items.map((item) => finite(item?.superset_group)).filter((value): value is number => value != null)
@@ -442,5 +540,5 @@ export function pairForSession(items: any[], ctx: PairingContext): PairingResult
     follow.item.superset_group = groupId;
     placePairingNote(lead.item, follow.item, ctx.date);
   }
-  return { items: next, changed: true };
+  return { items: next, changed: true, ...extra };
 }

@@ -33,11 +33,41 @@ const UPPER = {
   why: "Two days in one, paired push with pull.",
   est_minutes: 80,
   items: [
-    { exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 100, superset_group: 1 },
+    // Each pair holds at most one fixed station: dumbbells beside a machine or a cable row.
+    { exercise: "Dumbbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 100, superset_group: 1 },
     { exercise: "Lat Pulldown", sets: 3, rep_low: 8, rep_high: 10, target_weight: 70, superset_group: 1 },
-    { exercise: "Overhead Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 50, superset_group: 2 },
+    { exercise: "Dumbbell Shoulder Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 50, superset_group: 2 },
     { exercise: "Seated Cable Row", sets: 3, rep_low: 8, rep_high: 10, target_weight: 60, superset_group: 2 },
     { exercise: "Plank", sets: 3, target_seconds: 45, mode: "timed" },
+  ],
+};
+
+// The session the owner could not run: four pairs that each need two stations at once,
+// beside four pairs a shared gym can run (one of them written as a group of three), all
+// typed the way a coach would type them.
+const FOUR_STATION_PAIRS = {
+  type: "today_session",
+  title: "Upper — everything paired",
+  why: "Push and pull, paired.",
+  est_minutes: 90,
+  items: [
+    { exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 100, superset_group: 1 },
+    { exercise: "Lat Pulldown", sets: 3, rep_low: 8, rep_high: 10, target_weight: 70, superset_group: 1 },
+    { exercise: "Machine Shoulder Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 60, superset_group: 2 },
+    { exercise: "Seated Cable Row", sets: 3, rep_low: 8, rep_high: 10, target_weight: 60, superset_group: 2 },
+    { exercise: "Machine Chest Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 90, superset_group: 3 },
+    { exercise: "Assisted Pull-Up", sets: 3, rep_low: 6, rep_high: 8, target_weight: -40, superset_group: 3 },
+    { exercise: "Leg Extension", sets: 3, rep_low: 10, rep_high: 12, target_weight: 100, superset_group: 4 },
+    { exercise: "Lying Leg Curl", sets: 3, rep_low: 10, rep_high: 12, target_weight: 80, superset_group: 4 },
+    { exercise: "Dumbbell Row", sets: 3, rep_low: 8, rep_high: 10, target_weight: 60, superset_group: 5 },
+    { exercise: "Push-Up", sets: 3, rep_low: 10, rep_high: 15, superset_group: 5 },
+    { exercise: "Cable Fly", sets: 3, rep_low: 10, rep_high: 12, target_weight: 20, superset_group: 6 },
+    { exercise: "Cable Face Pull", sets: 3, rep_low: 12, rep_high: 15, target_weight: 30, superset_group: 6 },
+    { exercise: "Dumbbell Curl", sets: 3, rep_low: 10, rep_high: 12, target_weight: 25, superset_group: 7 },
+    { exercise: "Rope Pushdown", sets: 3, rep_low: 10, rep_high: 12, target_weight: 50, superset_group: 7 },
+    { exercise: "Dumbbell Lateral Raise", sets: 3, rep_low: 12, rep_high: 15, target_weight: 15, superset_group: 7 },
+    { exercise: "Goblet Squat", sets: 3, rep_low: 8, rep_high: 10, target_weight: 60, superset_group: 8 },
+    { exercise: "Dumbbell Romanian Deadlift", sets: 3, rep_low: 8, rep_high: 10, target_weight: 60, superset_group: 8 },
   ],
 };
 
@@ -97,9 +127,9 @@ test("today_session lands as today's athlete_override, pairs kept, the weekly pl
   assert.deepEqual(
     items.map((item) => [item.exercise, item.superset_group]),
     [
-      ["Barbell Bench Press", 1],
+      ["Dumbbell Bench Press", 1],
       ["Lat Pulldown", 1],
-      ["Overhead Press", 2],
+      ["Dumbbell Shoulder Press", 2],
       ["Seated Cable Row", 2],
       ["Plank", null],
     ]
@@ -112,6 +142,58 @@ test("today_session lands as today's athlete_override, pairs kept, the weekly pl
   // Nothing on the template moved and no plan proposal was written.
   assert.deepEqual(planSnapshot(), plan);
   assert.equal(count("plan_proposals"), proposals);
+});
+
+test("a chat session of two-station pairs comes back with the pairs a gym can run, and says which ran straight and why", () => {
+  seedPlan();
+  const out = apply([FOUR_STATION_PAIRS], BUILD_ASK);
+  const result = entry(out, "today_session").result;
+  assert.equal(result.ok, true, JSON.stringify(result));
+  const items = JSON.parse(active().items_json);
+  assert.equal(items.length, FOUR_STATION_PAIRS.items.length, "every lift stays on the card");
+  const groupOf = (name) => items.find((item) => item.exercise === name).superset_group;
+  // The realistic subset: three pairs, each holding one fixed station at most.
+  assert.equal(groupOf("Dumbbell Row"), 5);
+  assert.equal(groupOf("Push-Up"), 5);
+  assert.equal(groupOf("Cable Fly"), 6, "two movements on one cable stack still pair");
+  assert.equal(groupOf("Cable Face Pull"), 6);
+  assert.equal(groupOf("Goblet Squat"), 8);
+  assert.equal(groupOf("Dumbbell Romanian Deadlift"), 8);
+  assert.equal(new Set(items.map((item) => item.superset_group).filter((g) => g != null)).size, 3);
+  for (const name of [
+    "Barbell Bench Press",
+    "Lat Pulldown",
+    "Machine Shoulder Press",
+    "Seated Cable Row",
+    "Machine Chest Press",
+    "Assisted Pull-Up",
+    "Leg Extension",
+    "Lying Leg Curl",
+    "Dumbbell Curl",
+    "Rope Pushdown",
+    "Dumbbell Lateral Raise",
+  ]) {
+    assert.equal(groupOf(name), null, `${name} runs straight`);
+  }
+  // Prescriptions are untouched by the unpairing.
+  assert.equal(items.find((item) => item.exercise === "Lat Pulldown").sets, 3);
+  // What was taken apart, and why, rides on the applied result for the reply to say.
+  assert.deepEqual(result.unpaired, [
+    { exercises: ["Barbell Bench Press", "Lat Pulldown"], reason: "two_stations" },
+    { exercises: ["Machine Shoulder Press", "Seated Cable Row"], reason: "two_stations" },
+    { exercises: ["Machine Chest Press", "Assisted Pull-Up"], reason: "two_stations" },
+    { exercises: ["Leg Extension", "Lying Leg Curl"], reason: "two_stations" },
+    { exercises: ["Dumbbell Lateral Raise"], reason: "group_over_two" },
+    // Four doable pairs remain; the one the effect-tier order ranks last runs straight.
+    { exercises: ["Dumbbell Curl", "Rope Pushdown"], reason: "pair_limit" },
+  ]);
+});
+
+test("a chat session whose pairs a gym can run carries no unpaired record", () => {
+  seedPlan();
+  const result = entry(apply([UPPER], BUILD_ASK), "today_session").result;
+  assert.equal(result.ok, true);
+  assert.equal(result.unpaired, undefined);
 });
 
 test("the receipt leads with the session and its Start button; the reply names today's session, not a plan day", () => {

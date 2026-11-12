@@ -79,7 +79,7 @@ test("same snapshot yields identical fingerprint and envelope content", () => {
   assert.equal(a.input_fingerprint, b.input_fingerprint);
   assert.equal(a.input_fingerprint, dailyDecisionFingerprint(snap));
   assert.deepEqual(a, b);
-  assert.equal(a.policy_version, "daily_decision_v7");
+  assert.equal(a.policy_version, "daily_decision_v8");
 });
 
 test("fingerprint is stable across object key insertion order", () => {
@@ -98,12 +98,12 @@ test("fingerprint changes when a load-bearing input changes", () => {
   assert.notEqual(a, b);
 });
 
-test("v7 policy identity cannot collide with the legacy snapshot-only v4 fingerprint", () => {
+test("the current policy identity cannot collide with the legacy snapshot-only v4 fingerprint", () => {
   const snap = snapshot();
   const legacyV4 = createHash("sha256").update(stableJson(snap)).digest("hex");
   const current = dailyDecisionFingerprint(snap);
   assert.notEqual(current, legacyV4);
-  assert.equal(buildDailySessionDecision(snap, { now: NOW }).policy_version, "daily_decision_v7");
+  assert.equal(buildDailySessionDecision(snap, { now: NOW }).policy_version, "daily_decision_v8");
 });
 
 test("healthy training day carries the plan with progression reason codes", () => {

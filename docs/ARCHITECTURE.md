@@ -758,6 +758,37 @@ Composition then keeps the requested lifts' authored sets (no day per-item cap, 
 reduced AREA's cap still applies) and their authored timed targets (the hold never shortens them; a
 deload or an easing still does). The intensity hold stays: no raise, no reach.
 
+**Volume: the plan's sets are the default (2026-11-12, `daily_decision_v8`).** On a `train` read
+`caps.volume` reduces only for a NAMED, CURRENT reason (`namedVolumeReason`, daily-decision.ts): an
+easy read, a fresh low-recovery brake, soreness reported today (not routed), train-anyway over a rest
+read with the caps shut, a recovery week, the days after a race, or a lift reopened after the morning
+run while a deciding brake stands. Group-level trims (a deep or same-day residual, volume-high groups,
+a key run's or a race week's legs, pain) keep speaking through `muscles.reduced`/`excluded`, and an
+explicit "short on time" through the clock. A standing preference never trims sets: longevity's
+calmer double-day dose still holds the load (and says so only when it does), but the authored sets
+stand. The one PRECAUTIONARY trim left, the learned plan-complexity ease, stands down when the
+athlete's own log vouches (`volume_tolerance`, stamped by gather only when that ease is present):
+`volumeToleranceRead` (`src/repo/volume-tolerance.ts`) asks `sessionCarriedPlannedVolume`
+(session-dose-log.ts, the same per-lift dose evidence the contradiction read classifies) of the last
+four reconciled sessions inside 28 days, before today — at least three with a verdict, every one
+having landed each planned set, met its prescription, and not fallen under its own full-load
+reference (a skip, a short set count, a relevant symptom or a slipping load answers no). The card then
+carries `log_backs_full_sets` (soft line + rotated rationale) instead of `personal_response_ease`.
+Learning only stops trimming. The set catch-up (`setCatchUp`, progression.ts — the only path that
+raises a set count toward the log) honours `VOLUME_BOUNDS` (volume-tolerance.ts): about 1.2× the lift's
+habitual count (`perLiftSetCeiling`) and about 20 weekly effective sets per group, counted the weekly
+dose ledger's way (`weeklyGroupEffectiveSets`, weekly-dose-ledger.ts), and holds the plan's count
+while an affirmed cut runs (`affirmedCutHoldsSetCount`, `cutReaffirmation`). Train-anyway with no
+explicit request stays conservative, and a same-day request keeps its authored sets as before.
+Evidence: weekly set volume has a positive dose-response with diminishing returns, flattening sooner
+for strength (Schoenfeld 2017, PMID 27433992; Pelland 2026, PMID 41343037); 12–20 weekly sets per
+muscle is the productive range and more than ~20 is not better (Baz-Valle 2022, PMID 35291645);
+individualizing to ~1.2× the athlete's own prior volume beat a fixed prescription (Scarpelli 2022,
+PMID 32108724); the reliable overreaching marker in resistance training is a sustained performance
+decrease, not next-day feelings (Grandou 2020, PMID 31820373) — so tolerance is judged on
+performance, never on the absence of complaints; in a deficit more sets are tolerated but not shown to
+add lean mass (Roth 2023, PMID 36114738; Murphy & Koehler 2022, PMID 34623696).
+
 **The composition pipeline's order is now fixed end to end (`normalizeComposedSession`,
 `daily-composition.ts`, 2026-09-24).** Saturated substitution (`substituteSaturatedPlanItems`) runs
 first, so a stand-in is itself subject to every later gate. Per-item gates (hold/deload/exclude/
@@ -1159,6 +1190,26 @@ can no longer fold into one superset at 50, nor a 0 collide with the first new p
 tracks the reseat separately — and `planItemToRaw` now carries `superset_group` through so a plan-saved
 pairing reaches the card; a stand-in substitution clears it (a substitute is not the movement its slot
 was paired for).
+
+**A superset has to be doable in a shared gym (2026-11-12).** `enforceSupersetRules`
+(`composition-pairing.ts`) is the one place every source passes through — `pairForSession` (server
+cards, the plan snapshot included) and `normalizeSessionPayload` (every prepared payload: chat's
+`today_session`, MCP/REST `athlete_override`, an agent suggestion). Rules: a group holds exactly two
+lifts (later members in card order run straight, `group_over_two`); a pair holds at most ONE fixed
+station (`two_stations`); at most `SESSION_MAX_PAIRS` (3) pairs, the effect-tier order keeping the
+first (`pair_limit`). A broken pair is never an error: `superset_group` is cleared, every prescription
+stays. New server pairs pass the same test while partners are chosen and only fill what is left of
+the three after the author's own groupings. The footprint table is `station-footprint.ts`
+(`IMPLEMENT_FOOTPRINT`): portable = dumbbell, kettlebell, band, bodyweight, plate, medicine ball, mat
+(and a standing barbell curl); fixed = machine, cable, barbell (rack/bench/platform), landmine,
+pull-up bar, dip station, rack, sled, suspension — and `unknown`, which is fixed. The implement is
+read from the exercise's `equipment`, then its linked guide's dataset `equipment`, then the name
+(`inferExerciseEquipment` plus a short table); a name that names a station (pull-up bar, dip) wins
+over a "bodyweight" field. Two fixed lifts pair only on one station: one cable stack (a seated row is
+its own station), one pull-up bar. What an author's grouping lost is reported as
+`unpaired: [{exercises, reason}]` — on `CompositionValidation`, on the prepare result
+(`prepareDailySession`), and on the chat `today_session` applied result — and the chat action spec
+tells the coach the same three rules.
 
 ### The whole-week load read (`src/repo/week-training-load.ts`, 2026-10-04)
 

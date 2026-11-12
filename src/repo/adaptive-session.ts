@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { truncateAtWord } from "../brain/contract-utils.js";
 import { normalizePrescriptionItem, SESSION_PRESCRIPTION_LIMITS } from "../contracts/session-prescription.js";
-import { validSupersetGroup } from "./composition-pairing.js";
+import { enforceSupersetRules, validSupersetGroup } from "./composition-pairing.js";
 import { deterministicComposedSession, normalizeComposedSession } from "./daily-composition.js";
 import {
   decideDailySession,
@@ -782,6 +782,11 @@ function normalizeSessionPayload(
   const items = session.items.map((item, index) =>
     normalizeItem(item, index, agentSource, athleteSource, trustedAgentNormalized)
   );
+  // Every source's supersets meet the same three rules (composition-pairing.ts): two lifts
+  // a group, one fixed station a pair, three pairs a session. What a rule took apart rides
+  // out with the payload so the prepare result can say it; server-composed cards already
+  // passed the same rules, so for them this finds nothing.
+  const unpaired = enforceSupersetRules(items);
   const title = boundedText(session.title ?? session.name, 120) ?? (allowEmpty ? "Open session" : null);
   const why = boundedProse(session.why, 600);
   if (requireSummary && (!title || !why)) throw new Error("agent session name and why are required");
@@ -797,6 +802,7 @@ function normalizeSessionPayload(
       return boundedNumber(session.est_minutes, 1, SESSION_PRESCRIPTION_LIMITS.minutes, true);
     })(),
     items,
+    ...(unpaired.length ? { unpaired } : {}),
   };
 }
 
@@ -820,6 +826,8 @@ export function normalizeSessionSuggestionResult(raw: unknown, opts?: NormalizeS
       why: payload.why,
       est_minutes: payload.est_minutes,
       items: opts?.foldTopSets ? foldConsecutiveTopSets(payload.items) : payload.items,
+      // The supersets the rules took apart (normalizeSessionPayload). Omit-when-empty.
+      ...(payload.unpaired ? { unpaired: payload.unpaired } : {}),
     };
   } catch {
     return null;
@@ -1337,6 +1345,9 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
               canonicalAgent != null
             ),
           };
+  // What the superset rules took apart in an authored session (normalizeSessionPayload),
+  // carried on every answer below so the caller (the chat reply, an MCP client) can say it.
+  const unpairedExtra = prepared.payload.unpaired ? { unpaired: prepared.payload.unpaired } : {};
   const bound = decision ? decisionBoundMetadata(input, decision.envelope, source) : null;
   const constraintsJson =
     adaptiveCandidate?.constraints_json ??
@@ -1367,13 +1378,25 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
       canonical_agent_job_id: canonicalAgent ? Number(canonicalAgent.provenance.agent_job_id) : null,
     });
   if (existingRow?.request_fingerprint === fingerprint) {
-    return { ok: true as const, daily_session: hydrate(existingRow), session_id: existingRow.session_id, reused: true };
+    return {
+      ok: true as const,
+      daily_session: hydrate(existingRow),
+      session_id: existingRow.session_id,
+      reused: true,
+      ...unpairedExtra,
+    };
   }
 
   return withSqliteSavepoint("prepare_daily_session", () => {
     const current = activeCompositionRow(date);
     if (current?.request_fingerprint === fingerprint) {
-      return { ok: true as const, daily_session: hydrate(current), session_id: current.session_id, reused: true };
+      return {
+        ok: true as const,
+        daily_session: hydrate(current),
+        session_id: current.session_id,
+        reused: true,
+        ...unpairedExtra,
+      };
     }
     if (current && !input.replace) {
       const currentCanRefresh =
@@ -1457,7 +1480,7 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
         /* observability write never blocks preparation */
       }
     }
-    return { ok: true as const, daily_session: dailySession, session_id: session.id, reused: false };
+    return { ok: true as const, daily_session: dailySession, session_id: session.id, reused: false, ...unpairedExtra };
   });
 }
 

@@ -131,6 +131,80 @@ function planItemsByDayNumber(): Map<number, readonly any[]> {
   return out;
 }
 
+// The ledger's ONE accounting of a Monday-first week, per group: effective sets logged
+// Monday through yesterday (effectiveVolumeByGroup), and what today's and the week's later
+// lift days still plan (plannedWeeklyGroupSets). Shared by the ledger and by the weekly
+// volume bound (volume-tolerance.ts), so the two can never count a week differently.
+function weekGroupAccounting(
+  d: string,
+  week: ReturnType<typeof thisWeekPlanDayMap>,
+  todayItemsIn?: readonly any[]
+): {
+  done: ReturnType<typeof effectiveVolumeByGroup>;
+  todayPlanned: ReturnType<typeof plannedWeeklyGroupSets>;
+  laterPlanned: ReturnType<typeof plannedWeeklyGroupSets>;
+} {
+  const weekStart = mondayOf(d);
+  const rows = db
+    .prepare(
+      `SELECT s.date AS date, e.name AS exercise, e.muscle_group AS muscle_group,
+              ls.weight AS weight, ls.reps AS reps, ls.rir AS rir
+         FROM logged_sets ls
+         JOIN sessions s ON s.id = ls.session_id
+         JOIN exercises e ON e.id = ls.exercise_id
+        WHERE s.date >= ? AND s.date < ?`
+    )
+    .all(weekStart, d) as any[];
+  const done = effectiveVolumeByGroup(rows as VolumeSet[]);
+
+  const byDay = planItemsByDayNumber();
+  const todayItems =
+    todayItemsIn ??
+    (() => {
+      const today = strengthPlanDayOn(d, { weekMap: week });
+      return today ? (byDay.get(today.day_number) ?? []) : [];
+    })();
+  const laterDays: PlanQualityDay[] = [];
+  for (let ahead = 1; ahead <= 6; ahead++) {
+    const iso = addDaysISO(d, ahead);
+    if (!iso || mondayOf(iso) !== weekStart) break;
+    const dow = new Date(`${iso}T00:00:00Z`).getUTCDay();
+    if (!week.lift_dows.includes(dow)) continue;
+    const planDay = week.map.get(dow);
+    if (planDay) laterDays.push({ items: [...(byDay.get(planDay.day_number) ?? [])] });
+  }
+  return {
+    done,
+    todayPlanned: plannedWeeklyGroupSets([{ items: [...todayItems] }]),
+    laterPlanned: plannedWeeklyGroupSets(laterDays),
+  };
+}
+
+/**
+ * A muscle group's week in effective working sets, counted the ledger's way: logged this
+ * week plus what today and the week's later lift days plan. With no lifting week to read
+ * (no stated or observed lift weekdays), the plan's own week — every plan day's planned
+ * sets. Null when nothing can be read. The weekly volume bound asks it
+ * (volume-tolerance.ts `weeklyGroupHasRoom`); it never decides a fill.
+ */
+export function weeklyGroupEffectiveSets(date: string, group: string): number | null {
+  const d = String(date || "").slice(0, 10);
+  const raw = String(group ?? "").toLowerCase();
+  const key = (canonicalGroup(raw) ?? raw) as any;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || !key) return null;
+  try {
+    const week = thisWeekPlanDayMap(d);
+    if (!week.lift_dows.length) {
+      const days: PlanQualityDay[] = [...planItemsByDayNumber().values()].map((items) => ({ items: [...items] }));
+      return round1(plannedWeeklyGroupSets(days).get(key) ?? 0);
+    }
+    const { done, todayPlanned, laterPlanned } = weekGroupAccounting(d, week);
+    return round1((done.get(key)?.sets ?? 0) + (todayPlanned.get(key) ?? 0) + (laterPlanned.get(key) ?? 0));
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The week's per-group dose read for `date`: floor, logged, planned today and later, and
  * what would still fall short. A pure read (no writes). Null when the athlete has no
@@ -157,36 +231,7 @@ export function weeklyDoseLedger(
   const targets = weeklySetTargets(floor);
   if (!targets.length) return { date: d, week_start: weekStart, applies: false, exempt: floor.exempt, groups: [] };
 
-  const rows = db
-    .prepare(
-      `SELECT s.date AS date, e.name AS exercise, e.muscle_group AS muscle_group,
-              ls.weight AS weight, ls.reps AS reps, ls.rir AS rir
-         FROM logged_sets ls
-         JOIN sessions s ON s.id = ls.session_id
-         JOIN exercises e ON e.id = ls.exercise_id
-        WHERE s.date >= ? AND s.date < ?`
-    )
-    .all(weekStart, d) as any[];
-  const done = effectiveVolumeByGroup(rows as VolumeSet[]);
-
-  const byDay = planItemsByDayNumber();
-  const todayItems =
-    opts.todayItems ??
-    (() => {
-      const today = strengthPlanDayOn(d, { weekMap: week });
-      return today ? (byDay.get(today.day_number) ?? []) : [];
-    })();
-  const laterDays: PlanQualityDay[] = [];
-  for (let ahead = 1; ahead <= 6; ahead++) {
-    const iso = addDaysISO(d, ahead);
-    if (!iso || mondayOf(iso) !== weekStart) break;
-    const dow = new Date(`${iso}T00:00:00Z`).getUTCDay();
-    if (!week.lift_dows.includes(dow)) continue;
-    const planDay = week.map.get(dow);
-    if (planDay) laterDays.push({ items: [...(byDay.get(planDay.day_number) ?? [])] });
-  }
-  const todayPlanned = plannedWeeklyGroupSets([{ items: [...todayItems] }]);
-  const laterPlanned = plannedWeeklyGroupSets(laterDays);
+  const { done, todayPlanned, laterPlanned } = weekGroupAccounting(d, week, opts.todayItems);
 
   const groups = targets.map((t): WeeklyDoseLedgerGroup => {
     const g = t.group as any;

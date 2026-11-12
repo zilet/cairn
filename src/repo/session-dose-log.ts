@@ -379,3 +379,73 @@ export function countComparableDoseShortfallSessions(date: string, days = 14): n
   }
   return n;
 }
+
+/**
+ * Did this session carry its PLANNED VOLUME with the load holding? The per-lift evidence
+ * the contradiction read above already classifies, asked a stricter question: every
+ * prescribed dose landed at least its planned sets (a capped-short dose is a set short —
+ * volume's fact, so it vouches for nothing here), met its prescription under the current
+ * rule (load and reps: `met`/`exceeded`), and did not land under its own stored full-load
+ * reference (load held or rising). A skipped lift, a movement-relevant symptom, or any
+ * dose short on one of those answers no. A dose another confounder made incomparable
+ * (illness, a recovery dose) neither vouches nor vetoes unless it fell short. Null when
+ * the session carries no such evidence at all: absence, never a verdict.
+ *
+ * Performance, not feelings: a sustained performance decrease is the marker resistance
+ * training can rely on; how the next morning felt is not (docs/ARCHITECTURE.md
+ * "Volume: the plan's sets are the default").
+ */
+export function sessionCarriedPlannedVolume(sessionId: number): boolean | null {
+  const facts = outcomeFactsForSession(sessionId);
+  if (!facts) return null;
+  if (skippedExercises(facts).length > 0) return false;
+  let carried = 0;
+  for (const dose of doseRows(facts)) {
+    if (!dosePrescribed(dose)) continue;
+    if (dose?.relevant_symptom === true) return false;
+    if (doseOwnShortfall(dose) || ownSetShortfall(dose)) return false;
+    if (doseUnderFullLoad(dose)) return false;
+    if (dose?.comparable === false) continue;
+    if (!isMetOrExceeded(dose)) return false;
+    carried++;
+  }
+  return carried > 0 ? true : null;
+}
+
+/**
+ * The most recent sessions BEFORE `date` (never the day's own) that carry reconciled dose
+ * evidence, newest first, each with `sessionCarriedPlannedVolume`'s answer. At most
+ * `limit` sessions inside `windowDays`; a session with no verdict (null) is left out.
+ */
+export function recentPlannedVolumeVerdicts(
+  date: string,
+  opts: { windowDays: number; limit: number }
+): Array<{ session_id: number; date: string; carried: boolean }> {
+  const end = String(date ?? "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(end)) return [];
+  const start = new Date(new Date(`${end}T00:00:00Z`).getTime() - Math.max(1, opts.windowDays) * 864e5)
+    .toISOString()
+    .slice(0, 10);
+  let rows: Array<{ session_id: number; date: string }> = [];
+  try {
+    rows = db
+      .prepare(
+        `SELECT o.session_id AS session_id, MAX(o.date) AS date
+           FROM daily_session_outcomes o
+          WHERE o.date >= ? AND o.date < ?
+          GROUP BY o.session_id
+          ORDER BY date DESC, o.session_id DESC`
+      )
+      .all(start, end) as Array<{ session_id: number; date: string }>;
+  } catch {
+    return [];
+  }
+  const out: Array<{ session_id: number; date: string; carried: boolean }> = [];
+  for (const row of rows) {
+    if (out.length >= opts.limit) break;
+    const carried = sessionCarriedPlannedVolume(Number(row.session_id));
+    if (carried == null) continue;
+    out.push({ session_id: Number(row.session_id), date: String(row.date), carried });
+  }
+  return out;
+}

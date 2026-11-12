@@ -153,7 +153,7 @@ function decideWednesday() {
   return { snapshot, envelope: buildDailySessionDecision(snapshot, { now: NOW }) };
 }
 
-test("dose + pairing: the quads-short card fills Leg Extension, pairs it with the curl and leads the pair; no load moves", () => {
+test("dose + pairing: the quads-short card fills Leg Extension and leads its tier; two machines stay unpaired; no load moves", () => {
   seedDoseWeek();
   const { snapshot, envelope } = decideWednesday();
   assert.equal(snapshot.plan.day_number, 3, "Lower A");
@@ -163,12 +163,13 @@ test("dose + pairing: the quads-short card fills Leg Extension, pairs it with th
   const ext = byName(session, "Leg Extension");
   const curl = byName(session, "Lying Leg Curl");
   assert.equal(ext.sets, 3, "one extra set on the accessory");
-  assert.ok(Number.isInteger(ext.superset_group), "the filled lift is paired");
-  assert.equal(curl.superset_group, ext.superset_group, "with its antagonist");
+  // Antagonists, but each its own machine: a pair holds one fixed station at most.
+  assert.equal(ext.superset_group, null, "the filled lift runs straight");
+  assert.equal(curl.superset_group, null);
   const order = names(session);
-  assert.equal(order.indexOf("Leg Extension") + 1, order.indexOf("Lying Leg Curl"), "the behind group leads its pair");
+  assert.ok(order.indexOf("Leg Extension") < order.indexOf("Lying Leg Curl"), "the behind group goes first in its tier");
   assert.ok(ext.note.startsWith(doseFillNote("quads", WED, "Leg Extension")), ext.note);
-  assert.ok(ext.note.includes("Lying Leg Curl"), "the leader carries the pairing hint");
+  assert.ok(!ext.note.includes("Lying Leg Curl"), "no pairing hint without a pair");
   assert.equal(order[1], "Back Squat", "the anchor keeps its seat");
   assert.equal(byName(session, "Back Squat").superset_group, null);
   assert.equal(byName(session, "Back Squat").sets, 3, "the heavy anchor never takes the week's set");

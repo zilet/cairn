@@ -582,10 +582,18 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
 - **Weekly volume has a contextual floor and the log is truth for set count** — `volume-floor.ts`
   (muscle/strength intent only; endurance-carried groups and light weeks exempt), held by plan
   quality, the redraw precheck and `setCatchUp`. Details in `docs/ARCHITECTURE.md`.
+- **On a train read the plan's sets are the default** — `caps.volume` trims only for a named,
+  current reason (`namedVolumeReason`); a standing preference never trims, and a precautionary trim
+  yields to a log that carried every planned set at a held-or-rising load (`volume-tolerance.ts`,
+  judged on performance, never on absent complaints). Learning never adds a set: any catch-up honours
+  `VOLUME_BOUNDS` (~1.2× habitual per lift, ~20 weekly sets a group) and an affirmed cut holds the
+  count. Details in `docs/ARCHITECTURE.md` "Volume: the plan's sets are the default".
 - **The weekly dose fills a group's shortfall with one extra set — never a load, never an untested
   slot, never the day's anchor or strength-range work.** `weekly-dose-ledger.ts` / `composition-dose.ts`.
   Movement REGIONS (`movement-region.ts`), not raw muscle group, decide which items collapse as
-  duplicates and pair as antagonist supersets on today's card (`composition-pairing.ts`). Details in
+  duplicates and pair as antagonist supersets on today's card (`composition-pairing.ts`). Every
+  source's supersets pass ONE gate, `enforceSupersetRules`: two lifts a group, one fixed station a
+  pair (`station-footprint.ts`; unknown is fixed), three pairs a session. Details in
   `docs/ARCHITECTURE.md` "Weekly dose ledger" and "Pairing and movement regions".
 - **A race build's taper/race week and the eve of a placed key run trim the legs through the ordinary
   `reduced`/`excluded` muscle lists, never a second gate** (`stress-budget.ts`); for a strength-led

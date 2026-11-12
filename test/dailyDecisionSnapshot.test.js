@@ -374,7 +374,7 @@ test("an idle gather omits signal_support and the envelope reach stays null", ()
   const snap = gatherDailyDecisionSnapshot(DATE);
   assert.equal(snap.signal_support, undefined);
   const env = buildDailySessionDecision(snap, { now: "2031-06-10T09:00:00.000Z" });
-  assert.equal(env.policy_version, "daily_decision_v7");
+  assert.equal(env.policy_version, "daily_decision_v8");
   assert.equal(env.reach.level, null);
   assert.deepEqual(env.reach.backed_by, []);
 });

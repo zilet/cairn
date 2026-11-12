@@ -927,11 +927,11 @@ export const CHAT_ACTION_PROMPT_SPECS = {
     type: "today_session",
     applyMode: "immediate",
     shape: `{ "type": "today_session", "title": "Upper — push + pull", "why": "<one line, their words>", "est_minutes": 75, "items": [
-      { "exercise": "Barbell Bench Press", "sets": 3, "rep_low": 6, "rep_high": 8, "target_weight": 185, "superset_group": 1 },
+      { "exercise": "Dumbbell Bench Press", "sets": 3, "rep_low": 8, "rep_high": 10, "target_weight": 70, "superset_group": 1 },
       { "exercise": "Chest-Supported Row", "sets": 3, "rep_low": 8, "rep_high": 10, "target_weight": 60, "superset_group": 1 },
       { "exercise": "Plank", "sets": 3, "target_seconds": 45, "mode": "timed" } ] }`,
     guidance: [
-      `today_session is a session they ask for TODAY — combine two days, build/give me a workout, longer or shorter today. Send the COMPLETE list in training order, each lift with sets, reps (or seconds) and a load from their logs; paired lifts share a superset_group number. It becomes the session Today serves and never edits the weekly plan, so never use plan_update for it; a standing change to the week is still plan_update / plan_restructure. Once today has logged sets the server refuses it and says so.`,
+      `today_session is a session they ask for TODAY — combine two days, build/give me a workout, longer or shorter today. Send the COMPLETE list in training order, each lift with sets, reps (or seconds) and a load from their logs; paired lifts share a superset_group number. A superset is exactly two lifts, at most three pairs a session, and never two fixed stations at once (machine, cable, rack, bar) unless both are on one cable stack — anything else runs as straight sets. It becomes the session Today serves and never edits the weekly plan, so never use plan_update for it; a standing change to the week is still plan_update / plan_restructure. Once today has logged sets the server refuses it and says so.`,
     ],
   },
   start_session: {
