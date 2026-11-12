@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import { beforeEach, test } from "node:test";
 import { normalizeComposedSession } from "../dist/repo/daily-composition.js";
 import {
+  authoredPairIsDoable,
   enforceSupersetRules,
   pairForSession,
   pairIsDoable,
@@ -117,7 +118,10 @@ test("a pair holds one fixed station at most: machine+machine no, dumbbell+machi
   assert.equal(pairIsDoable(item("Cable Fly"), item("Seated Cable Row")), false, "a seated row has its own station");
   assert.equal(pairIsDoable(item("Pull-Up"), item("Hanging Leg Raise")), true, "one pull-up bar");
   assert.equal(pairIsDoable(item("Chest-Supported Row"), item("Lat Pulldown")), false, "unknown counts as fixed");
-  assert.equal(pairIsDoable(item("Chest-Supported Row"), item("Dumbbell Bench Press")), true);
+  // Second review, item 6: the server never PROPOSES a pair with an unknown member, even
+  // beside a portable lift; an author's such pair still stands.
+  assert.equal(pairIsDoable(item("Chest-Supported Row"), item("Dumbbell Bench Press")), false);
+  assert.equal(authoredPairIsDoable(item("Chest-Supported Row"), item("Dumbbell Bench Press")), true);
 });
 
 // ---------- the three rules, in one place ----------
@@ -253,9 +257,11 @@ test("the coach is told the same three rules where it authors today's session", 
   assert.match(text, /exactly two lifts/);
   assert.match(text, /three pairs/);
   assert.match(text, /fixed stations?/);
-  // The spec's own example is a pair a shared gym can run.
+  // The spec's own example is a pair a shared gym can run — an AUTHORED pair (the coach
+  // writes it), judged as one (item 6: the server-proposal test refuses any unknown).
   const example = JSON.parse(spec.shape);
   const paired = example.items.filter((it) => it.superset_group === 1);
   assert.equal(paired.length, 2);
-  assert.equal(pairIsDoable(paired[0], paired[1]), true, JSON.stringify(paired));
+  assert.equal(authoredPairIsDoable(paired[0], paired[1]), true, JSON.stringify(paired));
+  assert.deepEqual(enforceSupersetRules(paired.map((it) => ({ ...it }))), [], "the example is never taken apart");
 });

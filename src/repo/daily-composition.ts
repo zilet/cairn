@@ -1902,9 +1902,15 @@ export function normalizeComposedSession(
   // and on the final card (a grouping today's clamps reshaped), in that order.
   const unpaired = [...(base.unpaired ?? []), ...(paired.unpaired ?? [])];
 
-  let est = base.est_minutes;
-  // The dose's added sets cost time; the day's own duration cap below still binds.
-  if (dosed.estAddMin > 0 && est != null) est += dosed.estAddMin;
+  // The card's clock is the work actually on it (second review, item 12): every card, at
+  // the composition's per-set figure plus any cardio's stated minutes (cardWorkMinutes) —
+  // never the duration cap echoed back (a reduced card of six to twelve sets used to say
+  // 60). The dose's added sets are already on the card. A card with nothing to count (an
+  // easy-movement card with no stated minutes) keeps its own estimate.
+  const work = Math.round(cardWorkMinutes(finalItems));
+  let est = work > 0 ? work : base.est_minutes;
+  if (work <= 0 && dosed.estAddMin > 0 && est != null) est += dosed.estAddMin;
+  // …bounded by the day's own duration cap.
   if (envelope.caps.duration_min != null && (est == null || est > envelope.caps.duration_min)) {
     est = envelope.caps.duration_min;
     changed = true;
@@ -1912,10 +1918,7 @@ export function normalizeComposedSession(
   // The clamp bounds what composition may ADD; it is not the length of the athlete's own
   // day. When every authored lift stays on and their work runs longer than the clock,
   // the card says the work's own length rather than a number it cannot keep.
-  if (planSourced && est != null) {
-    const work = Math.round(cardWorkMinutes(finalItems));
-    if (work > est) est = work;
-  }
+  if (planSourced && est != null && work > est) est = work;
   // A plan day's card speaks the day's NAME and a focus that names only lifts it carries
   // (plan-day-focus.ts): the stored focus is free text no swap or rotation re-syncs.
   const composedName = planSourced && base.name ? planDayDisplayName(base.name) || base.name : base.name;

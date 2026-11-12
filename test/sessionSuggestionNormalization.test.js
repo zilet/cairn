@@ -3,6 +3,7 @@ import test from "node:test";
 import { enqueueAgentJob, onJobEvent } from "../dist/agentJobs.js";
 import { sessionSuggestCacheKey, suggestSession } from "../dist/coachOps.js";
 import { repo } from "./_seed.js";
+import { cardWorkMinutes } from "../dist/repo/composition-dose.js";
 
 function cacheKey(opts) {
   return sessionSuggestCacheKey(opts);
@@ -125,7 +126,13 @@ test("cached suggestions normalize for preview and are revalidated against the c
   assert.equal(prepared.daily_session.title, done.result.session.name);
   assert.equal(prepared.daily_session.focus, done.result.session.focus);
   assert.equal(prepared.daily_session.why, done.result.session.why);
-  assert.equal(prepared.daily_session.est_minutes, 45);
+  // The card's clock is the work on it, bounded by the 45-minute request (second review,
+  // item 12) — never the cap echoed back.
+  assert.equal(
+    prepared.daily_session.est_minutes,
+    Math.min(45, Math.round(cardWorkMinutes(prepared.daily_session.items)))
+  );
+  assert.ok(prepared.daily_session.est_minutes <= 45);
   assert.notDeepEqual(prepared.daily_session.items, done.result.session.items);
   assert.ok(prepared.daily_session.items.every((item) => item.sets == null || item.sets <= 6));
   assert.ok(

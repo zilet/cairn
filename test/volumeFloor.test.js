@@ -346,8 +346,17 @@ function logSets(name, date, sets) {
   });
 }
 
+// The habit four earlier weeks carried (working sets at the plan's load), spread over
+// different weekdays so it never reads as an observed lifting week of its own. With no
+// habit at all the set catch-up never raises above the plan (second review, item 10), so a
+// fixture that expects a step carries one.
+function logHabit(name, sets, weight = 40, reps = 11) {
+  for (const back of [40, 32, 24, 16]) logSets(name, isoDaysAgo(back), Array.from({ length: sets }, () => [weight, reps]));
+}
+
 function seedCurl({
   planned = 2,
+  habit = null,
   sessions = [
     [
       [40, 11],
@@ -366,6 +375,7 @@ function seedCurl({
     { exercise: "Dumbbell Curl", sets: planned, rep_low: 10, rep_high: 12, target_weight: 40 },
   ]);
   settle();
+  if (habit != null) logHabit("Dumbbell Curl", habit);
   sessions.forEach((sets, i) => logSets("Dumbbell Curl", isoDaysAgo(9 - i * 4), sets));
 }
 
@@ -373,7 +383,7 @@ const curlOf = (day = 1) =>
   planDayProgression(day, { forNextSession: true }).find((p) => p.exercise === "Dumbbell Curl");
 
 test("two exposures each logging more good sets than prescribed raise the plan one set", () => {
-  seedCurl();
+  seedCurl({ habit: 3 });
   const p = curlOf();
   assert.deepEqual(p.set_step, { from: 2, to: 3 });
   assert.equal(p.suggested.sets, 3);
@@ -387,7 +397,7 @@ test("two exposures each logging more good sets than prescribed raise the plan o
 });
 
 test("one step at a time, never past what was logged, never past four", () => {
-  seedCurl({ planned: 1, sessions: [Array(6).fill([40, 11]), Array(6).fill([40, 11])] });
+  seedCurl({ planned: 1, habit: 2, sessions: [Array(6).fill([40, 11]), Array(6).fill([40, 11])] });
   assert.deepEqual(curlOf().set_step, { from: 1, to: 2 }, "+1 per step even when six were logged");
   resetTraining();
   seedCurl({ planned: 4, sessions: [Array(6).fill([40, 11]), Array(6).fill([40, 11])] });
@@ -587,6 +597,7 @@ test("assisted work is compared signed: less assist is the harder set", () => {
   repo.upsertExercise({ name: "Assisted Dip", muscle_group: "triceps", mode: "reps" });
   repo.savePlanDay(1, "Push", null, [{ exercise: "Assisted Dip", sets: 2, rep_low: 8, rep_high: 12, target_weight: -30 }]);
   settle();
+  logHabit("Assisted Dip", 3, -30, 9);
   for (const d of [9, 5]) logSets("Assisted Dip", isoDaysAgo(d), [[-30, 9], [-30, 9], [-30, 9]]);
   const p = planDayProgression(1, { forNextSession: true }).find((x) => x.exercise === "Assisted Dip");
   assert.ok(p.action === "hold" || p.rep_step, `a hold or rep step, got ${p.action}`);
@@ -603,7 +614,7 @@ test("assisted work is compared signed: less assist is the harder set", () => {
 
 test("a redraw's set count stands until exposures after it argue with it", () => {
   // Three sets logged twice against a written three; the redraw then cuts it to two.
-  seedCurl({ planned: 3, sessions: [Array(4).fill([40, 11]), Array(4).fill([40, 11])] });
+  seedCurl({ planned: 3, habit: 4, sessions: [Array(4).fill([40, 11]), Array(4).fill([40, 11])] });
   assert.deepEqual(curlOf().set_step, { from: 3, to: 4 }, "the fixture would step without the redraw");
   // A drafted week authors its set count on purpose: the slot is re-stamped today.
   repo.replacePlan(
@@ -628,7 +639,7 @@ test("a scheduled recovery week never adds sets", () => {
 });
 
 test("a person's set cut in the editor is never walked back by older logs", () => {
-  seedCurl({ planned: 3, sessions: [Array(4).fill([40, 11]), Array(4).fill([40, 11])] });
+  seedCurl({ planned: 3, habit: 4, sessions: [Array(4).fill([40, 11]), Array(4).fill([40, 11])] });
   assert.deepEqual(curlOf().set_step, { from: 3, to: 4 }, "the fixture would step without the save");
   savePlanDayByPerson(1, "Arms", null, [
     { exercise: "Dumbbell Curl", sets: 2, rep_low: 10, rep_high: 12, target_weight: 40 },
@@ -639,7 +650,7 @@ test("a person's set cut in the editor is never walked back by older logs", () =
 });
 
 test("a person save that leaves sets alone keeps the slot's old stamp", () => {
-  seedCurl();
+  seedCurl({ habit: 3 });
   savePlanDayByPerson(1, "Arms (renamed)", null, [
     { exercise: "Dumbbell Curl", sets: 2, rep_low: 10, rep_high: 12, target_weight: 40 },
   ]);

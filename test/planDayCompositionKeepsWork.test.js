@@ -273,13 +273,16 @@ test("the session the athlete asked for today keeps its authored sets and the 70
   assert.equal(groupOf("Dumbbell Biceps Curl"), groupOf("Triceps Rope Pushdown"));
 });
 
-test("without the request the 68 s log still holds the plank, and est_minutes stays the clamp", () => {
+test("without the request the 68 s log still holds the plank, and est_minutes is the work on the card", () => {
   seedDay();
   // The plank stays on a day whose budget fits it (reduced days defer it, above).
   const open = { ...trainAnywayEnvelope(), caps: { volume: "normal", intensity: "hold", duration_min: 40 } };
   assert.equal(deterministicComposedSession(open).items.find((item) => item.exercise === "Front Plank").target_seconds, 68);
   const session = deterministicComposedSession(trainAnywayEnvelope());
-  assert.equal(session.est_minutes, 40, "twelve trimmed sets fit inside the clock");
+  // Second review, item 12: twelve trimmed sets are thirty minutes of work, inside the
+  // 40-minute clock — the card says the thirty, never the clock echoed back.
+  assert.equal(session.est_minutes, Math.round(12 * 2.5), "twelve trimmed sets, at the composition's per-set clock");
+  assert.ok(session.est_minutes <= 40);
 });
 
 // Second review, item 5: lifts the athlete explicitly asked for today are never deferred

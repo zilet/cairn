@@ -4,7 +4,7 @@
       "name": "Upper & Arms",
       "focus": "Upper & Arms",
       "why": "Fits the envelope today.",
-      "est_minutes": 55,
+      "est_minutes": 48,
       "items": [
         {
           "position": 0,
@@ -169,7 +169,7 @@
     "name": "Lower A",
     "focus": "Squat and hinge",
     "why": "Training day.",
-    "est_minutes": 60,
+    "est_minutes": 45,
     "items": [
       {
         "position": 0,
@@ -301,7 +301,7 @@
     "name": "Lower A",
     "focus": "Squat and hinge",
     "why": "Training day.",
-    "est_minutes": 60,
+    "est_minutes": 40,
     "items": [
       {
         "position": 0,
@@ -433,7 +433,7 @@
     "name": "Lower A",
     "focus": "Squat and hinge",
     "why": "Training day.",
-    "est_minutes": 60,
+    "est_minutes": 45,
     "items": [
       {
         "position": 0,

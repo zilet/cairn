@@ -24,7 +24,17 @@ import { addDaysISO, localDateISO } from "../dist/repo/shared.js";
 import { readVolumeFloorContext } from "../dist/repo/volume-floor-context.js";
 import { weeklyDoseLedger } from "../dist/repo/weekly-dose-ledger.js";
 import { thisWeekPlanDayMap } from "../dist/repo/plan-selection.js";
-import { repo, resetTables, settlePlanPrescriptions } from "./_seed.js";
+import { db, repo, resetTables, settlePlanPrescriptions } from "./_seed.js";
+
+// The server never pairs a lift whose implement nobody named (second review, item 6), and
+// "Chest-Supported Row" names none — so the fixture's row carries the implement a real
+// library's row would (a chest-supported dumbbell row).
+const FIXTURE_EQUIPMENT = { "Chest-Supported Row": "dumbbell" };
+function upsertNamed(name, muscle_group) {
+  repo.upsertExercise({ name, muscle_group, mode: "reps" });
+  if (FIXTURE_EQUIPMENT[name])
+    db.prepare(`UPDATE exercises SET equipment = ? WHERE name = ?`).run(FIXTURE_EQUIPMENT[name], name);
+}
 
 beforeEach(() => {
   resetTables(
@@ -129,7 +139,7 @@ function log(date, exercise, weight, reps, n, day_number) {
 // Two earlier weeks trained as written (every slot TESTED), then this week's Monday Push
 // and Tuesday Pull.
 function seedDoseWeek() {
-  for (const [name, muscle_group] of DOSE_EXERCISES) repo.upsertExercise({ name, muscle_group, mode: "reps" });
+  for (const [name, muscle_group] of DOSE_EXERCISES) upsertNamed(name, muscle_group);
   repo.replacePlan(doseWeekPlan());
   settlePlanPrescriptions();
   repo.setProfile({
@@ -288,7 +298,7 @@ function seedLowerBHistory() {
     ["Seated Calf Raise", "calves", 125, 11],
     ["Pallof Press", "core", 45, 11],
   ]) {
-    repo.upsertExercise({ name, muscle_group, mode: "reps" });
+    upsertNamed(name, muscle_group);
     for (const date of ["2026-09-08", "2026-09-15"])
       repo.logSetByName({ date, exercise: name, weight, reps, day_number: null });
   }
@@ -367,7 +377,7 @@ function seedRaceAthlete(endurance_role = "supporting") {
     ["Deadlift", "hamstrings"],
     ["Bulgarian Split Squat", "quads"],
   ])
-    repo.upsertExercise({ name, muscle_group, mode: "reps" });
+    upsertNamed(name, muscle_group);
   repo.replacePlan([
     { day_number: 1, name: "Push", items: [item("Barbell Bench Press", 3, 5, 7, 135)] },
     { day_number: 2, name: "Pull", items: [item("Pendlay Row", 3, 6, 8, 150)] },
@@ -507,7 +517,7 @@ function seedArms() {
     ["Standing Calf Raise", "calves"],
     ["Leg Press Calf Raise", "calves"],
   ])
-    repo.upsertExercise({ name, muscle_group, mode: "reps" });
+    upsertNamed(name, muscle_group);
 }
 
 const WRITTEN_DAY = {
