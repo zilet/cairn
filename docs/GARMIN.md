@@ -276,7 +276,7 @@ running dynamics, default 20), `GARMIN_LAPS_LIMIT` (per-activity lap fetches, de
 **When it syncs.** The scheduler runs a full pass about every six hours; a failed
 pass retries after 30 minutes, doubling per consecutive failure up to six hours. In
 between, a **light arrival check** asks Garmin for its five newest activities — one
-list call — every `GARMIN_LIGHT_CHECK_MINUTES` (default 15; `0` turns it off) between
+list call — every `GARMIN_LIGHT_CHECK_MINUTES` (default 120; `0` turns it off) between
 `GARMIN_LIGHT_START_HOUR` and `GARMIN_LIGHT_END_HOUR` local time (default 06:00 through
 22:59). Only when that list names an activity Cairn has not stored (or one of today's
 whose duration or distance changed) does it run a small two-day pass; otherwise it

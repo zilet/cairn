@@ -5,6 +5,15 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [2.3.2] — 2026-11-12
+
+### Changed
+
+- **Cairn asks Garmin far less often.** The background check for a new activity now runs every two
+  hours in waking hours instead of every 15 minutes; opening the app still checks straight away (at
+  most every five minutes), so a finished workout is there when you look.
+  `GARMIN_LIGHT_CHECK_MINUTES` still sets the interval, and `0` turns the background check off.
+
 ## [2.3.1] — 2026-11-12
 
 ### Fixed

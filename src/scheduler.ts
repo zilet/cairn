@@ -317,7 +317,7 @@ const GARMIN_LIGHT_CHECK_MS = (() => {
   const raw = process.env.GARMIN_LIGHT_CHECK_MINUTES;
   const m = Number(raw);
   if (raw != null && raw.trim() !== "" && Number.isInteger(m) && m === 0) return 0;
-  return (Number.isInteger(m) && m >= 5 && m <= 360 ? m : 15) * 60_000;
+  return (Number.isInteger(m) && m >= 5 && m <= 360 ? m : 120) * 60_000; // default: every two hours
 })();
 const GARMIN_LIGHT_START_HOUR = (() => {
   const h = Number(process.env.GARMIN_LIGHT_START_HOUR);

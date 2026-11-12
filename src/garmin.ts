@@ -414,7 +414,7 @@ export function setGarminClientForTests(factory: (() => Promise<any> | any) | nu
 // consumer-key fetch, one OAuth exchange, then the failed call again. The refreshed
 // token lived only on that client object, and every pass (and every light check) builds
 // a new client from the token FILES — so once the stored token went stale, every
-// 15-minute light check paid a failed call + two auth calls + a retry, all day. The
+// light check paid a failed call + two auth calls + a retry, all day. The
 // refreshed pair is now written back to the same files the loader reads, atomically and
 // with the files' own mode, once per change. Tokens are never logged.
 
@@ -487,7 +487,7 @@ export function persistRefreshedGarminToken(client: any): boolean {
     return true;
   } catch (e: any) {
     // Once per token value: a read-only token dir fails every check the same way, and a
-    // warning every 15 minutes is noise. The token itself is never logged.
+    // warning on every check is noise. The token itself is never logged.
     if (tokenPersistWarnedFor !== access) {
       tokenPersistWarnedFor = access;
       log.warn(`[garmin] could not save the refreshed Garmin token: ${e?.code ?? "write failed"}`);
