@@ -20,8 +20,27 @@ import { beforeEach } from "node:test";
 // Offline floor for a run started without test/run.mjs; must precede any dist import.
 import "./_offline.mjs";
 
-// test/run.mjs records each file's peak memory: every node process of the file (the
-// `--test` runner and the file's own process) appends its maxRSS, in KB, at exit.
+// test/run.mjs starts each test file as `node --import _isolate.mjs <file>` — no `node
+// --test` parent — detached, so the file's process leads its own process group and its
+// parent is the runner, whose pid the runner hands down. That identifies it exactly: a
+// node process a TEST starts (inheriting the env) has the file's process as its parent.
+const runnerPid = Number(process.env.CAIRN_TEST_RUNNER_PID);
+const fromRunner = runnerPid > 0 && process.ppid === runnerPid;
+
+// What a `node --test` child sees: node:test marks its file processes NODE_TEST_CONTEXT,
+// and src/ reads it (dataDir.ts and agents.ts refuse the real data dir and agent table
+// under it; the guide auto-import stays off), as does every process a test starts. A file
+// the runner starts directly must see the same — but node:test reads the variable to pick
+// its reporter (child-v8 = serialize to a parent), lazily, when the first test or hook
+// bootstraps the harness. So register the per-test hook FIRST (below, its body runs only
+// once the tests do), and only then set the variable. A harness that read it late would
+// print serialized events instead of the reporter's summary, which the runner refuses.
+let wipeDb = async () => {};
+beforeEach(() => wipeDb());
+if (fromRunner) process.env.NODE_TEST_CONTEXT = "child-v8";
+
+// test/run.mjs records each file's peak memory: the file's process (and any node process
+// a test starts with this module imported) appends its maxRSS, in KB, at exit.
 const rssFile = process.env.CAIRN_TEST_RSS_FILE;
 if (rssFile) {
   process.once("exit", () => {
@@ -30,23 +49,19 @@ if (rssFile) {
     } catch {}
   });
 }
-// The lifeline. test/run.mjs starts each file's `node --test` process as the leader of its
-// own process group, so a runner killed outright (SIGKILL: no handler runs) would leave
-// every running group orphaned. The `--test` process never evaluates this module (it only
-// passes --import on to the file's process), so the FILE'S process keeps the watch: once
-// the runner is gone it takes its group — its parent, itself and whatever it started —
-// down. Only when the runner set CAIRN_TEST_RUNNER_PID, this is the file's process
-// (NODE_TEST_CONTEXT), and its parent really leads a process group (a group with the
-// parent's pid as its id exists) — so a bare `node --test`, or one a test starts inside
-// its own group, never signals a group that is not a runner's.
-const runnerPid = Number(process.env.CAIRN_TEST_RUNNER_PID);
-if (runnerPid > 0 && process.env.NODE_TEST_CONTEXT && process.platform !== "win32") {
-  let parentLeads = false;
+// The lifeline. A runner killed outright (SIGKILL: no handler runs) would leave every
+// running file's process group orphaned, so the file's process — the group's leader —
+// keeps the watch: once the runner is gone it takes its group (itself and whatever it
+// started) down. Only when the runner started this process and it really leads a group (a
+// group with its own pid as its id exists), so a bare `node --test`, or a process a test
+// starts, never signals a group that is not a runner's.
+if (fromRunner && process.platform !== "win32") {
+  let leads = false;
   try {
-    process.kill(-process.ppid, 0);
-    parentLeads = process.ppid !== runnerPid && process.ppid > 1;
+    process.kill(-process.pid, 0);
+    leads = true;
   } catch {}
-  if (parentLeads) {
+  if (leads) {
     setInterval(() => {
       try {
         process.kill(runnerPid, 0);
@@ -60,10 +75,9 @@ if (runnerPid > 0 && process.env.NODE_TEST_CONTEXT && process.platform !== "win3
 // Where the runner cannot sample other processes (an OS sandbox refusing `ps`), the test
 // file's own process watches its RSS from a worker thread — a thread, so a main thread
 // stuck in a synchronous runaway is still caught — and past the budget leaves the figure
-// for the runner and kills itself. Only the file's process (NODE_TEST_CONTEXT), not the
-// `--test` runner above it.
+// for the runner and kills itself. Only the file's process, never one a test starts.
 const guardMb = Number(process.env.CAIRN_TEST_RSS_GUARD_MB);
-if (guardMb > 0 && process.env.CAIRN_TEST_RSS_GUARD_FILE && process.env.NODE_TEST_CONTEXT) {
+if (guardMb > 0 && process.env.CAIRN_TEST_RSS_GUARD_FILE && fromRunner) {
   const { Worker } = await import("node:worker_threads");
   const guard = new Worker(
     `const { workerData } = require("node:worker_threads");
@@ -159,7 +173,7 @@ const hasSqliteSequence = !!db
   .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sqlite_sequence'")
   .get();
 
-beforeEach(async () => {
+wipeDb = async () => {
   // Single transaction with deferred FK checks: intermediate deletes may briefly
   // violate foreign keys, but every table is empty at COMMIT so nothing trips.
   // `DELETE FROM <t>` with no WHERE uses SQLite's truncate optimization, so an
@@ -194,4 +208,4 @@ beforeEach(async () => {
   // estimateExpenditure): reset their counters to 0 and drop every registered memo so a
   // same-shape next test can't land on a colliding key and read a prior test's read.
   await resetIfLoaded(dist("../dist/repo/training-cache.js"));
-});
+};

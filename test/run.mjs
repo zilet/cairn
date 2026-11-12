@@ -10,7 +10,7 @@
 // longest-first (LPT) from the per-file durations the previous run recorded
 // (.tsbuildcache/cairn-test-timings.json, never committed), falling back to a
 // static estimate for a file with no recorded time (a fresh clone, CI). Every file runs
-// in its own `node --test` process, serially within its slot; only the ORDER and the
+// in its own node process (see runFile), serially within its slot; only the ORDER and the
 // slot a file lands in change, and correctness does not depend on either (see
 // test/_isolate.mjs).
 //
@@ -305,10 +305,10 @@ function envFor(dir) {
     // ~900 processes load the same dist/ modules: one V8 code cache, shared by every slot
     // (Node keys it by file content and its own version, so a rebuilt module just misses).
     ...(COMPILE_CACHE ? { NODE_COMPILE_CACHE: COMPILE_CACHE } : {}),
-    // Each node process in the file appends its own maxRSS here at exit (test/_isolate.mjs).
+    // The file's process appends its own maxRSS here at exit (test/_isolate.mjs).
     CAIRN_TEST_RSS_FILE: path.join(dir, "max-rss.txt"),
-    // The lifeline: the file's group leader kills its own group if this runner dies, even by
-    // SIGKILL, which no handler here can catch (test/_isolate.mjs).
+    // The lifeline: the file's process, its group's leader, kills its own group if this
+    // runner dies, even by SIGKILL, which no handler here can catch (test/_isolate.mjs).
     CAIRN_TEST_RUNNER_PID: String(process.pid),
     // Where the runner cannot sample processes, the file's process guards itself and
     // leaves its verdict here (see groupSampling).
@@ -461,20 +461,26 @@ function readMaxRssKb(rssFile) {
   }
 }
 
-// Default (process) isolation on purpose: under `--test-isolation=none` a file that
-// throws at top level AFTER its first test() exits 0 with every later test silently
-// unregistered. One extra process start per file is the price of a crash failing.
+// One process per file, and the file IS that process: `node --import _isolate.mjs
+// --test-reporter=… <file>`, not a `node --test` parent around it. node:test runs a file
+// started directly exactly as it runs a `--test` child (same harness, same reporter), and
+// its exit code carries the same verdicts — a failed or cancelled test exits 1, so does a
+// throw at top level after the first test() (which `--test-isolation=none` would have
+// swallowed: never batch files into one process). The parent cost ~35 ms of CPU per file
+// for nothing the runner needs; the timeout, the RSS budget and the lifeline all act on
+// the file's process group, which this process now leads (test/_isolate.mjs).
 function runFile(file, env) {
   const start = performance.now();
   try {
     writeFileSync(env.CAIRN_TEST_RSS_FILE, "");
     if (env.CAIRN_TEST_RSS_GUARD_FILE) writeFileSync(env.CAIRN_TEST_RSS_GUARD_FILE, "");
   } catch {}
-  const child = spawn(
-    process.execPath,
-    [heapFlag, "--import", isolateImport, "--test", `--test-reporter=${reporter}`, file],
-    { cwd: root, env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" }
-  );
+  const child = spawn(process.execPath, [heapFlag, "--import", isolateImport, `--test-reporter=${reporter}`, file], {
+    cwd: root,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+    detached: process.platform !== "win32",
+  });
   let output = "";
   let failure = null;
   child.stdout.setEncoding("utf8");
@@ -534,6 +540,12 @@ function runFile(file, env) {
             guarded = readFileSync(env.CAIRN_TEST_RSS_GUARD_FILE, "utf8").trim();
           } catch {}
           if (guarded) failure = `exceeded memory budget (${guarded} MB > ${RSS_MB} MB)`;
+        }
+        // The spec reporter always ends a file with its summary. A clean exit without one
+        // means the reporter never ran as itself (a harness that read NODE_TEST_CONTEXT
+        // late — test/_isolate.mjs) or the file exited before its tests finished.
+        if (!failure && status === 0 && reporter === "spec" && !/^ℹ tests \d+$/m.test(output)) {
+          failure = "exited 0 without the reporter's test summary";
         }
         resolve({
           file,
