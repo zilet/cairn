@@ -179,7 +179,7 @@ type TodaySnapshotRecovery = {
         why:
           source === "manual_plan"
             ? pickOfflineDayVariant(SESSION_WHY_OVERRIDE, input.date, "adaptive-session:why:override")
-            : "Saved on this device; Cairn will confirm the plan when connected.",
+            : null, // the start already said "saved on this device" once
         est_minutes: null,
         items: recordArray(planDay.items),
       };

@@ -94,18 +94,20 @@ test("Today exercise card helper preserves selectors, escaping, and timed mode",
 test("a paired card names its partner in the chip and an aria-label; a lone card has no chip", () => {
   const cards = loadTodayCards();
   const base = { exercise: "Rope Pushdown", sets: 3, rep_low: 10, rep_high: 12, fromSession: true };
-  const paired = cards.exerciseCardHtml({ ...base, superset_group: 2, pairPartners: ["Curl"] }, [], {}, null, null, {});
+  const paired = cards.exerciseCardHtml({ ...base, superset_group: 2, pairGroup: 2, pairPartners: ["Curl"] }, [], {}, null, null, {});
   assert.match(paired, /<div class="ex-meta">[\s\S]*class="ex-pair-chip"><span aria-hidden="true">Pair · Curl<\/span>/);
   // The sentence is real, visually hidden text: an aria-label on a plain span is ignored by most screen readers.
   assert.match(paired, /<span class="sr-only">Paired with Curl: alternate sets\.<\/span>/);
   assert.doesNotMatch(paired, /ex-pair-chip"[^>]*(title|aria-label)=/);
   assert.match(paired, /class="ex ex-in-group"/);
+  // The grouped card is a labelled group; its caption's id is the group key.
+  assert.match(paired, /data-group="2" role="group" aria-labelledby="ex-group-cap-2"/);
   const group = cards.exerciseCardHtml({ ...base, pairPartners: ["Curl", "Row"] }, [], {}, null, null, {});
   assert.match(group, />Group · 3 exercises<\/span>/);
   assert.match(group, /In a group with Curl, Row: rotate sets\./);
   // The group id alone (partner not on screen) is no pairing.
   const lone = cards.exerciseCardHtml({ ...base, superset_group: 2 }, [], {}, null, null, {});
-  assert.doesNotMatch(lone, /ex-pair-chip|ex-in-group/);
+  assert.doesNotMatch(lone, /ex-pair-chip|ex-in-group|role="group"/);
   const alone = cards.exerciseCardHtml({ ...base, superset_group: null }, [], {}, null, null, {});
   assert.doesNotMatch(alone, /ex-pair-chip/);
 });

@@ -1107,8 +1107,7 @@ async function openSession(date?: string | null, options: OpenSessionOptions = {
       CairnOutbox?: { list?(): Array<{ id?: unknown; kind?: unknown; state?: unknown }> };
     }).CairnOutbox?.list?.().find((item) => String(item.id || "") === stagedId && item.kind === "daily_session_prepare");
     if (stagedPrerequisite?.state === "needs_attention") {
-      const message = "This saved session needs attention before you can keep logging.";
-      prepareSay(trigger, message);
+      prepareSay(trigger, "This saved session needs attention before you can keep logging.");
       return false;
     }
     // A staged cache without its queued/prepared barrier is a phantom. Retire
@@ -1119,6 +1118,9 @@ async function openSession(date?: string | null, options: OpenSessionOptions = {
     swrInvalidate(`today:daily-session:${targetDate}`);
   }
   if (todaySessionSuggestController.meaningfulLegacySession(cachedSession, explicitReplacement)) {
+    // An open log with sets and no composition is adopted by the plain prepare; offline it opens as saved.
+    const taken = await CairnTodayOpenSession.adoptLegacy(targetDate, cachedSession, openSessionDeps(targetDate, trigger), () => enterSession(targetDate));
+    if (taken !== null) return taken;
     const intent = await sessionPrepareCoordinator.run(targetDate, async () => cachedSession);
     if (!intent.current || !intent.ok) return false;
     announceSessionPrepare("Today’s session is ready.");
@@ -1189,8 +1191,7 @@ async function openSession(date?: string | null, options: OpenSessionOptions = {
   if (source === "agent_suggest") {
     const agentJobId = Number(options.agentJobId);
     if (!Number.isInteger(agentJobId) || agentJobId <= 0) {
-      const message = "This suggested session can’t be verified yet. Draft it again, then use the new result.";
-      prepareSay(trigger, message);
+      prepareSay(trigger, "This suggested session can’t be verified yet. Draft it again, then use the new result.");
       return false;
     }
     body.agent_job_id = agentJobId;
@@ -1263,8 +1264,7 @@ async function openSession(date?: string | null, options: OpenSessionOptions = {
     }
     // Not stageable offline: re-read today and open what is there, else say so calmly — never a raw error.
     if (!(transient && canStageOffline)) return CairnTodayOpenSession.recover(targetDate, openSessionDeps(targetDate, trigger));
-    const message = "Could not save this session on this device — free storage and try again.";
-    prepareSay(trigger, message);
+    prepareSay(trigger, "Could not save this session on this device — free storage and try again.");
     return false;
   }
   const response = result.value as Record<string, unknown>;
