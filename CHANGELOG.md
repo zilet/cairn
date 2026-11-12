@@ -47,6 +47,9 @@ quarter of the time.
   same-day request keeps its sets.
 - **A session the coach confirmed in chat shows up on Today.** A session turn no longer also applies
   a separate plan change for today.
+- **A pasted note plus a question gets its answer.** A message that carried a document and asked
+  for the coach's view could come back as one line saying nothing reached the plan. The note is
+  recorded and the answer stays.
 - **Log more lands in the session**, an offline start says so in one line, and a day logged without
   a card opens through the same path.
 - **Endurance logged before you adopted a card is not graded against that card.**
