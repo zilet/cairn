@@ -156,6 +156,18 @@ type ExerciseGuidePayload = {
   }
 
   /**
+   * A quiet outbound search link, on every exercise's detail whether or not a guide
+   * matched. Nothing is embedded and nothing loads from YouTube until a tap; only the
+   * exercise name travels, inside the query string.
+   */
+  function formLinkHtml(exercise: unknown): string {
+    const name = words(exercise);
+    if (!name) return "";
+    const href = `https://www.youtube.com/results?search_query=${encodeURIComponent(`${name} proper form`)}`;
+    return `<div class="detail-section exguide-watch"><a class="exguide-src exguide-watch-link" href="${escAttr(href)}" target="_blank" rel="noopener noreferrer" aria-label="${escAttr(`Watch ${name} form on YouTube (opens in a new tab)`)}">Watch form on YouTube</a></div>`;
+  }
+
+  /**
    * The one-line question behind a low-confidence match: the matcher found something
    * plausible but will not show it uninvited. A quiet ask with two quiet answers — no
    * badge, no count, no alarm, and nothing at all when there is no candidate.
@@ -280,6 +292,7 @@ type ExerciseGuidePayload = {
   const CAIRN_EXERCISE_GUIDE = {
     sectionHtml: exerciseGuideSectionHtml,
     suggestionHtml: exerciseGuideSuggestionHtml,
+    formLinkHtml,
     wire: wireExerciseGuide,
   };
 

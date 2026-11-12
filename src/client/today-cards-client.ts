@@ -182,6 +182,21 @@ function todayCardsCleanNote(note: unknown, hasDose: boolean): string {
     .trim();
 }
 
+// "Pair · <partner>" for two, "Group · <n> exercises" for more. The names a card is
+// paired with come from the session renderer, which only lists partners that are on
+// screen — an empty list is a plain card. The aria-label says the same in a sentence,
+// since nothing here may lean on a hover title.
+function todayCardsPairChipHtml(partners: unknown): string {
+  const names = Array.isArray(partners) ? partners.map(todayString).filter(Boolean) : [];
+  if (!names.length) return "";
+  const two = names.length === 1;
+  const label = two ? `Pair · ${names[0]}` : `Group · ${names.length + 1} exercises`;
+  const sentence = two
+    ? `Paired with ${names[0]}: alternate sets.`
+    : `In a group with ${names.join(", ")}: rotate sets.`;
+  return `<span class="ex-pair-chip" aria-label="${escAttr(sentence)}">${escHtml(label)}</span>`;
+}
+
 function exerciseCardHtml(
   item: TodayExerciseItem,
   loggedSets: TodayLoggedSet[],
@@ -236,12 +251,10 @@ function exerciseCardHtml(
   const exerciseLogged = todayFinite(item.exerciseLogged) ?? done;
   const goal = offPlan ? 0 : Number(item.sets) || 0;
   const complete = !!goal && done >= goal;
-  // A superset partner (server-seated antagonist pair, or the plan's own grouping) says
-  // so quietly beside the set count; the pairing hint itself rides in the note.
-  const pairChip =
-    todayFinite(item.superset_group) != null
-      ? `<span class="ex-pair-chip" title="Superset — alternate sets with its partner">Pair</span>`
-      : "";
+  // A superset partner (server-seated antagonist pair, or the plan's own grouping) names
+  // who it is paired with beside the set count. The session renderer passes `pairPartners`
+  // only when the partner is actually on the screen, so a lone member shows no chip.
+  const pairChip = todayCardsPairChipHtml(item.pairPartners);
   const progress = `<span class="ex-prog${complete ? " done" : ""}" data-prog>${done}${goal ? ` / ${goal}` : ""} <span>set${done === 1 && !goal ? "" : "s"}</span></span>`;
   const reveal = revealIdx != null ? Number(revealIdx) : null;
   // Timed rows take an optional load before the time (a carry, a weighted hold);
@@ -331,7 +344,8 @@ function exerciseCardHtml(
   const rxSilenced = !!reachLine && !!rx && rxAction !== "overload";
   // Decision-level narration and Undo live once above the cards. A card keeps
   // only a cue unique to this movement (swap, straps, start light).
-  return `<div class="ex${complete ? " ex-complete" : ""}${reveal != null ? " reveal" : ""}" data-card="${escAttr(exercise)}"${exKeyAttr} data-mode="${timed ? "timed" : "reps"}"${inputAttr}${headlineDose ? ` data-dose="headline"` : ""}${rxSilenced ? ` data-rx="off"` : ""}${reveal != null ? ` style="${stagger(reveal)}"` : ""}>
+  const pairClass = pairChip ? " ex-in-group" : "";
+  return `<div class="ex${complete ? " ex-complete" : ""}${pairClass}${reveal != null ? " reveal" : ""}" data-card="${escAttr(exercise)}"${exKeyAttr} data-mode="${timed ? "timed" : "reps"}"${inputAttr}${headlineDose ? ` data-dose="headline"` : ""}${rxSilenced ? ` data-rx="off"` : ""}${reveal != null ? ` style="${stagger(reveal)}"` : ""}>
       <div class="ex-top">
         <div class="ex-top-main">
           <button class="ex-name" data-guide="${encodeURIComponent(exercise)}">${escHtml(exercise)}&nbsp;<span class="guide-i">ⓘ</span></button>
