@@ -179,7 +179,7 @@ type DayRecordDetail = import("../contracts/day-detail.js").DayDetail;
       record.weight_lb != null
         ? `<p class="dayrec-meta dayrec-weight">Weighed ${escHtml(fmtWeightLb(record.weight_lb))}</p>`
         : "";
-    const log = `<div class="dayrec-foot"><button type="button" class="linkbtn dayrec-log" data-day-log="${escAttr(record.date)}">${record.session ? "Edit this day's session" : "Log a session to this day"}</button></div>`;
+    const log = `<div class="dayrec-foot"><button type="button" class="linkbtn dayrec-log" data-day-log="${escAttr(record.date)}"${record.session ? "" : ` data-day-new="1"`}>${record.session ? "Edit this day's session" : "Log a session to this day"}</button></div>`;
     return `${fuelHtml(record)}${readHtml(record)}${weight}${log}`;
   }
 
@@ -251,9 +251,11 @@ type DayRecordDetail = import("../contracts/day-detail.js").DayDetail;
       state.day = null;
       state.dayPicked = false;
       state.dayPickedOn = null;
-      // Looking at a past day mints nothing that lasts: leaving the session unlogged drops it.
+      // Looking at a past day mints nothing that lasts: a session THIS tap creates (the day had
+      // none) is dropped if it is left unlogged; an existing one is never marked.
+      const fresh = log.dataset.dayNew === "1" && !peekCached(`today:session:${date}`)?.data;
       void openSession(date, { trigger: log, provenance: { entry: "day_record" } }).then((opened) => {
-        if (opened) CairnTodayOpenSession.markPastDay(date);
+        if (opened) CairnTodayOpenSession.markPastDay(date, fresh);
       });
     });
     // "The coach adapted this day": its Undo is the server's own revert (decision-undo);

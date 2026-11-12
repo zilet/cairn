@@ -1610,6 +1610,7 @@ declare global {
     status: number | null;
     durationMs: number;
     requestId: string | null;
+    body?: unknown;
     constructor(options: {
       kind: "http" | "invalid_json" | "network" | "timeout";
       method: string;
@@ -2906,7 +2907,7 @@ declare global {
     CairnExerciseGuide: {
       sectionHtml(guide: unknown): string;
       suggestionHtml(suggestion: unknown): string;
-      // The quiet "Watch form on YouTube" search link, for every exercise's detail.
+      // The quiet "Search form videos on YouTube" search link, for every exercise's detail.
       formLinkHtml(exercise: unknown): string;
       wire(
         scope: ParentNode | null | undefined,
@@ -5637,21 +5638,26 @@ declare global {
       isConflict(response: unknown): boolean;
       briefRead<T extends { kind?: unknown } | null | undefined>(read: T, open: OpenSessionRead | null | undefined): T;
       remember(date: string, daily: unknown, session: unknown): void;
+      forget(date: string): void;
       freshOpen(date: string): Promise<OpenSessionRead | null>;
+      legacyOpen(today: Record<string, unknown> | null | undefined): OpenSessionRead | null;
       openOwned(date: string, owner: OpenSessionOwner, deps: OpenOwnedDeps, announce?: boolean, hops?: number): Promise<boolean>;
       recover(date: string, deps: OpenOwnedDeps, hops?: number): Promise<boolean>;
       resolveConflict(date: string, response: unknown, deps: OpenOwnedDeps): Promise<boolean> | null;
+      settle(date: string, response: unknown, deps: OpenOwnedDeps): Promise<boolean>;
+      depsFor(host: OpenHost, date: string, trigger: HTMLElement | null): OpenOwnedDeps;
       adopt(
         date: string,
         options: AdoptOptions,
-        open: (owner: OpenSessionOwner, announce: boolean) => Promise<boolean>
+        open: (owner: OpenSessionOwner, announce: boolean) => Promise<boolean>,
+        pending?: (on: boolean) => void
       ): Promise<boolean | null>;
       canDiscard(open: OpenSessionRead | null | undefined): boolean;
       discard(date: string, id: number, deps: DiscardDeps): Promise<boolean>;
       wireDiscard(root: ParentNode, deps: DiscardDeps): void;
       discardHtml(date: string, open: OpenSessionRead | null | undefined): string;
       tradeOpensSession(result: unknown): boolean;
-      markPastDay(date: string): void;
+      markPastDay(date: string, minted?: boolean): void;
       leavePastDay(): Promise<void>;
     };
 

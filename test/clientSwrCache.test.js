@@ -209,6 +209,18 @@ test("paintSWR paints a fresh peek once and asks the network nothing", async () 
   assert.deepEqual(loaded.calls, ["/profile"], "the warm paint costs no round-trip");
 });
 
+test("swrSweep drops the previous namespace's rows and keeps the current one's", () => {
+  const storage = storageFrom({
+    "cairn.swr.v1.today:aggregate:2026-07-01": JSON.stringify({ data: {}, ts: Date.now() }),
+    "cairn.swr.v1.profile": "{}",
+    "cairn.swr.v2.profile": JSON.stringify({ data: {}, ts: Date.now() }),
+    "cairn.other": "keep",
+  });
+  const loaded = loadSwrCache({ storage });
+  loaded.context.swrSweep();
+  assert.deepEqual(storage.keys().sort(), ["cairn.other", "cairn.swr.v2.profile"]);
+});
+
 test("swrSweep evicts stale rows and caps retained localStorage entries", () => {
   const now = Date.now();
   const initial = { "cairn.swr.v2.old": JSON.stringify({ data: "old", ts: now - 25 * 60 * 60 * 1000 }) };

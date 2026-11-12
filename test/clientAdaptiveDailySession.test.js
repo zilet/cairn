@@ -39,7 +39,8 @@ test("primary training entries converge on one durable prepare path", () => {
   assert.match(today, /continuation\.staged === true/);
   assert.match(today, /Number\(daily\.id\) === expectedActiveId/);
   assert.match(today, /acceptErrorBody: true/);
-  assert.match(today, /outboxEnqueue\?\.\("daily_session_prepare", "\/daily-session\/prepare", body,[\s\S]*prepareIntent/);
+  assert.match(today, /queuePrepare\(body, stagedIntent\)/);
+  assert.match(today, /outboxEnqueue\("daily_session_prepare", "\/daily-session\/prepare", body,[\s\S]*prepareIntent/);
   assert.match(today, /stagedPrepareResponse[\s\S]*enterSession\(targetDate, staged\)/);
   assert.match(today, /meaningfulLegacySession\(cachedSession, explicitReplacement\)/);
   assert.match(today, /body\.agent_job_id = agentJobId/);

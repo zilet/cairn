@@ -22,12 +22,12 @@
     },
     "public/js/bundle-02-today.js": {
       "measured": {
-        "raw": 594944,
-        "brotli": 121979
+        "raw": 602567,
+        "brotli": 123758
       },
       "budget": {
-        "raw": 640000,
-        "brotli": 132096
+        "raw": 632832,
+        "brotli": 130048
       }
     },
     "public/js/bundle-03-capture.js": {

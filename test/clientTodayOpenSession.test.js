@@ -33,7 +33,7 @@ function load(globals = {}) {
     },
   };
   const invalidated = [];
-  const win = loadClientModule(["html-utils", "today-open-session-client"], { globals: { ...swr, ...globals } });
+  const win = loadClientModule(["html-utils", "today-open-session-client", "today-open-session-discard-client"], { globals: { ...swr, ...globals } });
   return { win, store, invalidated, S: win.CairnTodayOpenSession };
 }
 
@@ -92,13 +92,15 @@ test("an owner the app opened itself says nothing; the empty Open session is 'Yo
   assert.deepEqual(named.log.said, ["Your session is already open — here it is."]);
 });
 
-test("a legacy owner with no composition opens by date, with nothing to assert", async () => {
+test("a legacy owner with no composition is opened by re-sending the PLAIN prepare, and its answer is used", async () => {
   const { S } = load();
-  const { deps: d, log } = deps();
+  const { deps: d, log } = deps({
+    prepare: async (body) => (log.asked.push({ ...body }), { current: true, ok: true, value: prepared(31) }),
+  });
   const ok = await S.openOwned(DATE, owner({ daily_session_id: null, source: null, started: true, set_count: 4 }), d, true);
   assert.equal(ok, true);
-  assert.deepEqual(log.asked, [], "no composition id to assert");
-  assert.deepEqual(log.entered, [[DATE, null]], "the session row for the date opens");
+  assert.deepEqual(log.asked, [{ date: DATE }], "no replace, no fingerprint, no expected_active_id");
+  assert.deepEqual(log.entered, [[DATE, 31]], "the adopted composition's own answer opens");
   assert.match(log.said[0], /already open/);
 });
 
@@ -149,6 +151,14 @@ test("no owner / session gone / unreachable: re-read today, open what is there, 
   assert.equal(await down.S.recover(DATE, c.deps), false);
   assert.equal(c.log.refreshed, 1);
   assert.match(c.log.said[0], /Couldn't reach/);
+  // ...and what is saved on this device stays: nothing was learned, so nothing is forgotten.
+  down.store.set(`today:session:${DATE}`, { id: 9, _staged_offline: true });
+  down.store.set(down.S.key(DATE), open());
+  down.invalidated.length = 0;
+  await down.S.recover(DATE, deps().deps);
+  assert.deepEqual(down.store.get(`today:session:${DATE}`), { id: 9, _staged_offline: true });
+  assert.ok(down.store.get(down.S.key(DATE)));
+  assert.equal(down.invalidated.length, 0);
 });
 
 test("resolveConflict: owner opens it; every other session conflict re-reads; anything else is not its business", async () => {
@@ -166,6 +176,19 @@ test("resolveConflict: owner opens it; every other session conflict re-reads; an
   assert.equal(S.resolveConflict(DATE, { ok: true }, deps().deps), null);
 });
 
+test("settle: every refusal ends somewhere true — an owner opens, anything else says one calm line and repaints", async () => {
+  const { S } = load({ api: async () => aggregate(null) });
+  const known = deps();
+  assert.equal(await S.settle(DATE, { ok: false, code: "daily_session_locked", owner: owner({ started: true }) }, known.deps), true);
+  for (const code of ["daily_session_invalid", "daily_session_session_missing", "daily_session_preview_stale", undefined]) {
+    const d = deps();
+    assert.equal(await S.settle(DATE, { ok: false, code, error: "raw <engine> text" }, d.deps), false, String(code));
+    assert.equal(d.log.said.length, 1, String(code));
+    assert.doesNotMatch(d.log.said[0], /raw|engine|daily_session/);
+    assert.equal(d.log.refreshed, 1, String(code));
+  }
+});
+
 test("ownerOf reads a real owner, with or without a composition id", () => {
   const { S } = load();
   assert.equal(S.ownerOf({ ok: false, code: "daily_session_locked", owner: owner() }).daily_session_id, 7);
@@ -179,6 +202,7 @@ test("ownerOf reads a real owner, with or without a composition id", () => {
 test("adopt: the receipt button's call shape opens the open session instead of preparing a second", async () => {
   const { S, store } = load();
   store.set(S.key(DATE), open({ started: true, action: "continue", label: "Continue Pull" }));
+  store.set(`today:aggregate:${DATE}`, { date: DATE });
   const opened = [];
   // change-receipt-client.ts: openSession(date, { source: "adaptive_plan", provenance: { entry: "chat_receipt" } })
   const receipt = { source: "adaptive_plan", provenance: { entry: "chat_receipt" } };
@@ -206,6 +230,22 @@ test("adopt: Train anyway / a replace reads the date fresh and opens a chosen or
   assert.equal(await idle.S.adopt(DATE, trainAnyway, async () => assert.fail("replaceable")), null);
 });
 
+test("adopt: a request that names what it wants (an agent job, a manual pick) is never redirected to the old owner", async () => {
+  const { S, store } = load({ api: async () => aggregate(open()) });
+  store.set(S.key(DATE), open());
+  const never = async () => assert.fail("deliberate");
+  const useThis = { source: "agent_suggest", agentJobId: 55, replace: true, provenance: { operation: "session_suggest" } };
+  assert.equal(await S.adopt(DATE, useThis, never), null, "Use this session");
+  assert.equal(await S.adopt(DATE, { source: "manual_plan", replace: true }, never), null, "a manual pick with no day yet");
+});
+
+test("adopt: pending is shown while it reads the date, and cleared however it ends", async () => {
+  const { S } = load({ api: async () => aggregate(open()) });
+  const states = [];
+  await S.adopt(DATE, { source: "adaptive_plan", replace: true, trainAnyway: true }, async () => true, (on) => states.push(on));
+  assert.deepEqual(states, [true, false]);
+});
+
 test("adopt: a pick of a plan day or a built session is a deliberate change and goes through", async () => {
   const { S, store } = load({ api: async () => aggregate(open()) });
   store.set(S.key(DATE), open());
@@ -216,6 +256,7 @@ test("adopt: a pick of a plan day or a built session is a deliberate change and 
 
 test("adopt: an unreachable read falls back to what is cached", async () => {
   const { S, store } = load({ api: async () => { throw new Error("offline"); } });
+  store.set(`today:aggregate:${DATE}`, { date: DATE });
   store.set(S.key(DATE), open({ started: true }));
   const opened = [];
   assert.equal(await S.adopt(DATE, { source: "adaptive_plan", preview: { fingerprint: "f" } }, async (own) => (opened.push(own.daily_session_id), true)), true);
@@ -334,7 +375,7 @@ test("leaving a past day's session with nothing logged drops it; a started one s
     },
   });
   win.store.set(`today:daily-session:${DATE}`, { id: 41 });
-  win.S.markPastDay(DATE);
+  win.S.markPastDay(DATE, true);
   await win.S.leavePastDay();
   assert.deepEqual(posts, [["/daily-session/discard", { date: DATE, expected_active_id: 41 }]]);
 
@@ -344,17 +385,34 @@ test("leaving a past day's session with nothing logged drops it; a started one s
 
   // A session with logged work answers `locked`: nothing is said, nothing is lost.
   win.store.set(`today:daily-session:${DATE}`, { id: 42 });
-  win.S.markPastDay(DATE);
+  win.S.markPastDay(DATE, true);
   await win.S.leavePastDay();
   assert.equal(posts.length, 2);
   assert.equal(win.store.get(`today:daily-session:${DATE}`).id, 42, "a kept session stays cached");
+});
+
+test("a past day is marked only when this tap minted its session, and never discarded while a write for it is queued", async () => {
+  const posts = [];
+  const queued = [{ kind: "set", session_date: DATE, body: { date: DATE } }];
+  const { S, store } = load({ api: async (...args) => posts.push(args), CairnOutbox: { list: () => queued } });
+  store.set(`today:daily-session:${DATE}`, { id: 41 });
+  S.markPastDay(DATE, false);
+  await S.leavePastDay();
+  assert.deepEqual(posts, [], "an existing session the tap did not create is never dropped");
+  S.markPastDay(DATE, true);
+  await S.leavePastDay();
+  assert.deepEqual(posts, [], "a queued set for the date holds the discard back");
+  queued.length = 0;
+  S.markPastDay(DATE, true);
+  await S.leavePastDay();
+  assert.equal(posts.length, 1);
 });
 
 test("leaving with no remembered past day, or no known id, asks the server nothing", async () => {
   const posts = [];
   const { S } = load({ api: async (...args) => posts.push(args) });
   await S.leavePastDay();
-  S.markPastDay(DATE);
+  S.markPastDay(DATE, true);
   await S.leavePastDay();
   assert.deepEqual(posts, []);
 });
@@ -388,8 +446,17 @@ test("a trade answer opens the session only when the server says train_anyway", 
   assert.equal(S.tradeOpensSession(null), false);
 });
 
+test("a cached open session is trusted only while the date's aggregate still stands (a write drops it)", () => {
+  const { S, store } = load();
+  store.set(S.key(DATE), open());
+  assert.equal(S.cached(DATE), null, "no aggregate: a write since means the id may be stale");
+  store.set(`today:aggregate:${DATE}`, { date: DATE });
+  assert.equal(S.cached(DATE).daily_session_id, 7);
+});
+
 test("the cached open session is the date's own, and only a real one", () => {
   const { S, store } = load();
+  store.set(`today:aggregate:${DATE}`, { date: DATE });
   assert.equal(S.cached(DATE), null);
   store.set(S.key(DATE), open());
   assert.equal(S.cached(DATE).label, "Start Pull");
@@ -419,7 +486,7 @@ test("the launch card's one action is the open session's label, and liveness is 
 });
 
 test("the session shell carries the Discard door only when it is handed one", () => {
-  const win = loadClientModule(["html-utils", "session-snapshot-client", "today-open-session-client"]);
+  const win = loadClientModule(["html-utils", "session-snapshot-client", "today-open-session-client", "today-open-session-discard-client"]);
   const meta = { fresh: false, kicker: "TODAY", dayName: "Pull", dayFocus: "", exDone: 0, exTotal: 0 };
   const withDoor = renderHtml(
     win.CairnSessionSnapshot.shellHtml("<p>list</p>", { ...meta, discardHtml: win.CairnTodayOpenSession.discardHtml(DATE, open()) }),
@@ -431,4 +498,26 @@ test("the session shell carries the Discard door only when it is handed one", ()
     { document: win.document }
   );
   assert.equal(without.querySelector("#sessDiscard"), null);
+});
+
+// ---- a session row logged outside any composition (chat, MCP, the watch) ----
+
+test("legacyOpen: unfinished logged sets with no composition read as a session to continue, never a watch-owned day", () => {
+  const { S } = load();
+  const today = (session, line = { title: "Lower A" }) => ({ session, strength_line: line, open_session: null });
+  const read = S.legacyOpen(today({ id: 5, sets: [{ id: 1 }], finished_at: null }));
+  assert.equal(read.label, "Continue Lower A");
+  assert.equal(read.daily_session_id, 0, "no composition to assert: a tap sends the plain open, which adopts the row");
+  assert.equal(read.started, true);
+  assert.equal(read.chosen, true, "logging is the athlete's own act");
+  assert.equal(S.legacyOpen(today({ id: 5, sets: [{ id: 1 }], finished_at: null }, null)).label, "Continue your session");
+  assert.equal(S.legacyOpen(today({ id: 5, sets: [] })), null, "nothing logged");
+  assert.equal(S.legacyOpen(today({ id: 5, sets: [{ id: 1 }], finished_at: "2026-11-12 10:00:00" })), null, "finished");
+  assert.equal(S.legacyOpen(today({ id: 5, sets: [{ id: 1 }], garmin: { id: 3 } })), null, "the watch's day is inbound-only");
+  assert.equal(S.legacyOpen(today(null)), null);
+  // It is never trusted as an asserted id.
+  const second = load();
+  second.store.set(second.S.key(DATE), read);
+  second.store.set(`today:aggregate:${DATE}`, {});
+  assert.equal(second.S.cached(DATE), null);
 });

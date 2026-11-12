@@ -274,7 +274,8 @@ test("every exercise detail gets a quiet, escaped YouTube form-search link, guid
   const guide = loadGuideClient();
   const name = `Press <heavy> & "grip"`;
   const html = guide.formLinkHtml(name);
-  assert.match(html, /Watch form on YouTube/);
+  assert.match(html, /Search form videos on YouTube/);
+  assert.match(html, /aria-label="Search form videos for [^"]* on YouTube \(opens in a new tab\)"/);
   const query = encodeURIComponent(`${name} proper form`);
   assert.ok(html.includes(`href="https://www.youtube.com/results?search_query=${query}"`));
   assert.match(html, /target="_blank" rel="noopener noreferrer"/);

@@ -1,6 +1,11 @@
 // @ts-check
 // Today session skip/restore and off-plan removal helpers.
 
+declare const CairnTodaySkipPlace: {
+  cardPlace(cards: HTMLElement[], root: ParentNode): CardPlace;
+  seatCards(detached: HTMLElement[], place: CardPlace, root: ParentNode): boolean;
+};
+
 type TodaySessionSkipPendingOffPlan = { name: string; mode?: string | null };
 type TodaySessionSkipState = {
   tab?: string;
@@ -211,17 +216,13 @@ type TodaySessionSkipOutboxGlobals = {
   // (their anchor is gone with the surface), which is the caller's cue to repaint.
   function restoreCards(
     cards: HTMLElement[],
-    anchor: Element | null,
+    place: CardPlace,
     exercise: string,
     deps: TodaySessionSkipDeps,
   ): boolean {
     removeSkipName(exercise, deps);
     const detached = cards.filter((el) => !el.isConnected);
-    if (detached.length) {
-      const before = anchor && anchor.isConnected ? anchor : deps.root.querySelector(".addex");
-      if (!before || !before.parentNode) return false;
-      for (const el of detached) before.parentNode.insertBefore(el, before);
-    }
+    if (detached.length && !CairnTodaySkipPlace.seatCards(detached, place, deps.root)) return false;
     for (const el of cards) deps.expandEl(el);
     regroup(deps);
     return true;
@@ -240,7 +241,7 @@ type TodaySessionSkipOutboxGlobals = {
   ): Promise<void> {
     if (!card) return;
     const cards = siblingCards(card, deps);
-    const anchor = cards[cards.length - 1].nextElementSibling;
+    const anchor = CairnTodaySkipPlace.cardPlace(cards, deps.root);
     const guard = () => surfaceStillCurrent(deps, actionDate, actionTab);
     removeCards(cards, exercise, deps, guard);
     // Undo rides on BOTH toasts: a queued skip is still a skip the athlete may want
@@ -287,7 +288,7 @@ type TodaySessionSkipOutboxGlobals = {
 
   async function undoSkip(
     cards: HTMLElement[],
-    anchor: Element | null,
+    anchor: CardPlace,
     exercise: string,
     deps: TodaySessionSkipDeps,
     actionDate: string,

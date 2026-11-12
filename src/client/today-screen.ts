@@ -907,6 +907,24 @@ function sessionPrepareBusy(trigger: HTMLElement | null | undefined, busy: boole
   if (status) status.textContent = message;
 }
 
+// Queue a prepare for replay when Cairn is back; its local id ("" when it could not be queued).
+async function queuePrepare(body: import("../contracts/client-api.js").ClientDailySessionPrepareRequest, intent: Record<string, unknown> | null): Promise<string> {
+  const recovery = todaySessionSuggestController.snapshotRecovery(intent, body);
+  const queued = await outboxEnqueue("daily_session_prepare", "/daily-session/prepare", body, {
+    prepareIntent: intent,
+    retryBody: recovery?.body,
+    retryIntent: recovery?.intent,
+  });
+  return String(queued?.id || "").trim();
+}
+
+// One calm line, said three ways: on the trigger, to a screen reader, and as a toast.
+function prepareSay(trigger: HTMLElement | null | undefined, message: string): void {
+  sessionPrepareBusy(trigger, false, message);
+  announceSessionPrepare(message);
+  toast(message);
+}
+
 function cachePreparedSession(date: string, response: Record<string, unknown>): void {
   if (response.session) swrSet(`today:session:${date}`, response.session);
   if (response.daily_session) swrSet(`today:daily-session:${date}`, response.daily_session);
@@ -942,18 +960,24 @@ function enterSession(date: string, response?: Record<string, unknown> | null): 
   activateTab("session");
 }
 
-// The session-resolution deps (today-open-session-client.ts: a conflict's owner, today's open
-// session, a re-read of today): the assertion path by id, then into the Session destination.
-function openSessionDeps(date: string, trigger: HTMLElement | null): OpenOwnedDeps {
-  return {
-    prepare: (body) => sessionPrepareCoordinator.run(date, () => todayApi("/daily-session/prepare", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), acceptErrorBody: true })),
-    enter: (d, response) => { sessionPrepareBusy(trigger, false); enterSession(d, response); },
-    say: (message) => { sessionPrepareBusy(trigger, false, message); announceSessionPrepare(message); toast(message); },
-    refresh: () => renderToday({ soft: true }),
-  };
-}
-const openOwnedSession = (date: string, owner: OpenSessionOwner, trigger: HTMLElement | null, announce = false) =>
-  CairnTodayOpenSession.openOwned(date, owner, openSessionDeps(date, trigger), announce);
+// What the open-session module (today-open-session-client.ts) borrows from this screen to resolve a
+// conflict: where a prepare goes, how a session is entered, what is said, what repaints.
+const openHost: OpenHost = {
+  api: todayApi,
+  run: (date, task) => sessionPrepareCoordinator.run(date, task),
+  enter: enterSession,
+  busy: sessionPrepareBusy,
+  announce: announceSessionPrepare,
+  toast,
+  refresh: () => rerenderTraining({ soft: true }),
+  resetPick: () => {
+    todayState.day = null;
+    todayState.dayPicked = false;
+    todayState.dayPickedOn = null;
+  },
+};
+const openSessionDeps = (date: string, trigger: HTMLElement | null): OpenOwnedDeps =>
+  CairnTodayOpenSession.depsFor(openHost, date, trigger);
 
 async function openSession(date?: string | null, options: OpenSessionOptions = {}): Promise<boolean> {
   const targetDate = date || todayState.logDate || localISO();
@@ -1040,8 +1064,8 @@ async function openSession(date?: string | null, options: OpenSessionOptions = {
         // Reachable mismatch/missing truth: retire only this stale continuation.
         swrInvalidate(`today:session:${targetDate}`);
         swrInvalidate(`today:daily-session:${targetDate}`);
-        // Changed elsewhere: open its owner, or re-read today — never a bare toast.
-        return CairnTodayOpenSession.resolveConflict(targetDate, { ...response, ok: false, code: response.code || "daily_session_missing" }, openSessionDeps(targetDate, trigger))!;
+        // Changed elsewhere: open its owner, or re-read today — never a bare toast, never a stuck button.
+        return CairnTodayOpenSession.settle(targetDate, { ...response, ok: false, code: response.code || "daily_session_missing" }, openSessionDeps(targetDate, trigger));
       }
 
       const classify = (globalThis as {
@@ -1050,24 +1074,7 @@ async function openSession(date?: string | null, options: OpenSessionOptions = {
       const transient = typeof classify !== "function" || classify(asserted.error);
       if (transient) {
         const savedDaily = continuation.daily_session;
-        const recovery = todaySessionSuggestController.snapshotRecovery(savedDaily, assertionBody);
-        const queued = await (globalThis as {
-          outboxEnqueue?: (
-            kind: string,
-            path: string,
-            body: unknown,
-            options?: {
-              prepareIntent?: Record<string, unknown> | null;
-              retryBody?: Record<string, unknown> | null;
-              retryIntent?: Record<string, unknown> | null;
-            },
-          ) => Promise<{ id?: unknown } | null>;
-        }).outboxEnqueue?.("daily_session_prepare", "/daily-session/prepare", assertionBody, {
-          prepareIntent: savedDaily,
-          retryBody: recovery?.body,
-          retryIntent: recovery?.intent,
-        });
-        const localPrepareId = String(queued?.id || "").trim();
+        const localPrepareId = await queuePrepare(assertionBody, savedDaily);
         const staged = localPrepareId
           ? todaySessionSuggestController.stageCachedContinuation(continuation, localPrepareId)
           : null;
@@ -1079,9 +1086,7 @@ async function openSession(date?: string | null, options: OpenSessionOptions = {
           swrSet(`today:session:${targetDate}`, stagedRecord.session);
           swrSet(`today:daily-session:${targetDate}`, stagedRecord.daily_session);
           const message = "Session confirmed on this device — Cairn will reconcile it when you’re back online.";
-          sessionPrepareBusy(trigger, false, message);
-          announceSessionPrepare(message);
-          toast(message);
+          prepareSay(trigger, message);
           enterSession(targetDate, staged);
           return true;
         }
@@ -1089,9 +1094,7 @@ async function openSession(date?: string | null, options: OpenSessionOptions = {
       const message = transient
         ? "Could not save this session check on this device — free storage and try again."
         : "Could not confirm today’s session. Try again when you’re ready.";
-      sessionPrepareBusy(trigger, false, message);
-      announceSessionPrepare(message);
-      toast(message);
+      prepareSay(trigger, message);
       return false;
     }
   }
@@ -1105,9 +1108,7 @@ async function openSession(date?: string | null, options: OpenSessionOptions = {
     }).CairnOutbox?.list?.().find((item) => String(item.id || "") === stagedId && item.kind === "daily_session_prepare");
     if (stagedPrerequisite?.state === "needs_attention") {
       const message = "This saved session needs attention before you can keep logging.";
-      sessionPrepareBusy(trigger, false, message);
-      announceSessionPrepare(message);
-      toast(message);
+      prepareSay(trigger, message);
       return false;
     }
     // A staged cache without its queued/prepared barrier is a phantom. Retire
@@ -1126,7 +1127,12 @@ async function openSession(date?: string | null, options: OpenSessionOptions = {
   }
 
   // The date's open session (this or another device's) is opened, never a second made or replaced.
-  const adopted = await CairnTodayOpenSession.adopt(targetDate, { ...options, replace: explicitReplacement }, (owner, announce) => openOwnedSession(targetDate, owner, trigger, announce));
+  const adopted = await CairnTodayOpenSession.adopt(
+    targetDate,
+    { ...options, replace: explicitReplacement },
+    (owner, announce) => CairnTodayOpenSession.openOwned(targetDate, owner, openSessionDeps(targetDate, trigger), announce),
+    (on) => sessionPrepareBusy(trigger, on, on ? "Checking today’s session…" : ""),
+  );
   if (adopted !== null) return adopted;
 
   let customSession = options.session || null;
@@ -1184,9 +1190,7 @@ async function openSession(date?: string | null, options: OpenSessionOptions = {
     const agentJobId = Number(options.agentJobId);
     if (!Number.isInteger(agentJobId) || agentJobId <= 0) {
       const message = "This suggested session can’t be verified yet. Draft it again, then use the new result.";
-      sessionPrepareBusy(trigger, false, message);
-      announceSessionPrepare(message);
-      toast(message);
+      prepareSay(trigger, message);
       return false;
     }
     body.agent_job_id = agentJobId;
@@ -1246,32 +1250,13 @@ async function openSession(date?: string | null, options: OpenSessionOptions = {
       const stagedIntent = canStageOffline.daily_session && typeof canStageOffline.daily_session === "object"
         ? canStageOffline.daily_session as Record<string, unknown>
         : null;
-      const recovery = todaySessionSuggestController.snapshotRecovery(stagedIntent, body);
-      const queued = await (globalThis as {
-        outboxEnqueue?: (
-          kind: string,
-          path: string,
-          body: unknown,
-          options?: {
-            prepareIntent?: Record<string, unknown> | null;
-            retryBody?: Record<string, unknown> | null;
-            retryIntent?: Record<string, unknown> | null;
-          },
-        ) => Promise<{ id?: unknown } | null>;
-      }).outboxEnqueue?.("daily_session_prepare", "/daily-session/prepare", body, {
-        prepareIntent: stagedIntent,
-        retryBody: recovery?.body,
-        retryIntent: recovery?.intent,
-      });
-      const localPrepareId = String(queued?.id || "").trim();
+      const localPrepareId = await queuePrepare(body, stagedIntent);
       const staged = localPrepareId
         ? todaySessionSuggestController.stagedPrepareResponse({ ...offlineStageInput, localPrepareId })
         : null;
       if (staged) {
         const message = "Session saved on this device — it will sync when you’re back online.";
-        sessionPrepareBusy(trigger, false, message);
-        announceSessionPrepare(message);
-        toast(message);
+        prepareSay(trigger, message);
         enterSession(targetDate, staged);
         return true;
       }
@@ -1279,9 +1264,7 @@ async function openSession(date?: string | null, options: OpenSessionOptions = {
     // Not stageable offline: re-read today and open what is there, else say so calmly — never a raw error.
     if (!(transient && canStageOffline)) return CairnTodayOpenSession.recover(targetDate, openSessionDeps(targetDate, trigger));
     const message = "Could not save this session on this device — free storage and try again.";
-    sessionPrepareBusy(trigger, false, message);
-    announceSessionPrepare(message);
-    toast(message);
+    prepareSay(trigger, message);
     return false;
   }
   const response = result.value as Record<string, unknown>;
@@ -1293,9 +1276,7 @@ async function openSession(date?: string | null, options: OpenSessionOptions = {
   ) {
     const fresh = response.preview as DailySessionPreview;
     const message = adaptiveSessionPreviewDelta(adaptivePreview, fresh);
-    sessionPrepareBusy(trigger, false, message);
-    announceSessionPrepare(message);
-    toast(message);
+    prepareSay(trigger, message);
     // Repaint from server truth instead of patching individual text nodes. This
     // replaces every displayed field (including constraints) and, crucially,
     // re-wires Start with the fresh preview fingerprint so the next click cannot
@@ -1310,9 +1291,7 @@ async function openSession(date?: string | null, options: OpenSessionOptions = {
   }
   if (response?.ok !== true || !response.daily_session || !response.session) {
     const message = "This session could not be prepared. Try again in a moment.";
-    sessionPrepareBusy(trigger, false, message);
-    announceSessionPrepare(message);
-    toast(message);
+    prepareSay(trigger, message);
     return false;
   }
   sessionPrepareBusy(trigger, false, "Today’s session is ready.");
