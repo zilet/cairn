@@ -142,3 +142,38 @@ test("a Changes feed row carries its receipt, without a second Undo beside the r
   const plain = renderHtml(win.CairnChangesFeed.rowHtml({ ...row, receipt: undefined }), { document: win.document, tag: "ul" });
   assert.equal(plain.querySelector(".rcpt"), null);
 });
+
+test("a session receipt's open target prints the server label verbatim, escaped, and opens that date's session", async () => {
+  const opened = [];
+  const win = load({ openSession: (date, options) => opened.push([date, options.source, options.replace]) });
+  const label = `Start "Upper" <b> & more`;
+  const open = { kind: "session", date: "2026-11-12", label };
+  const html = win.CairnChangeReceipt.listHtml([receipt({ key: "session:9", open })]);
+  assert.doesNotMatch(html, /<b>/);
+  const host = createHost(win.document, { html });
+  win.CairnChangeReceipt.mount(host);
+  const go = host.querySelector("button[data-rcpt-open]");
+  assert.equal(go.textContent, label);
+  assert.equal(go.getAttribute("data-rcpt-open"), "2026-11-12");
+  assert.ok(host.querySelector("button[data-rcpt-undo]"), "Undo stays on the same row as the quieter action");
+  await go.click();
+  assert.deepEqual(opened, [["2026-11-12", "adaptive_plan", undefined]], "an ordinary open: never a replace");
+});
+
+test("undone, no-open and read-only receipts draw no open button; Undo still works beside the open button", async () => {
+  const calls = [];
+  const win = load({ api: async (path) => (calls.push(path), { ok: true }), toast: () => {} });
+  const R = win.CairnChangeReceipt;
+  const open = { kind: "session", date: "2026-11-12", label: "Continue Upper" };
+  assert.doesNotMatch(R.listHtml([receipt({ status: "undone", open })]), /data-rcpt-open/);
+  assert.doesNotMatch(R.listHtml([receipt({ open: null })]), /data-rcpt-open/);
+  assert.doesNotMatch(R.listHtml([receipt()]), /data-rcpt-open/);
+  assert.doesNotMatch(R.listHtml([receipt({ open: { ...open, label: " " } })]), /data-rcpt-open/);
+  assert.doesNotMatch(R.listHtml([receipt({ open })], { readonly: true }), /data-rcpt-open/);
+  const host = createHost(win.document, { html: R.listHtml([receipt({ open })]) });
+  R.mount(host);
+  await host.querySelector("[data-rcpt-undo]").click();
+  await flush();
+  assert.deepEqual(calls, ["/brain/decisions/27849/revert"]);
+  assert.equal(host.querySelector("[data-rcpt-open]"), null, "a put-back receipt no longer offers the way forward");
+});
