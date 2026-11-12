@@ -10,11 +10,11 @@
 //   - one-step brake discipline is untouched: overload -> hold, never further
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
-import { db, repo, resetTables } from "./_seed.js";
+import { db, repo, resetTables, localDaysAgo } from "./_seed.js";
 import { nextPrescription, recentAutoregulation } from "../dist/repo/progression.js";
 import { localDateISO } from "../dist/repo/shared.js";
 
-const isoDaysAgo = (n) => localDateISO(new Date(Date.now() - n * 864e5));
+const isoDaysAgo = localDaysAgo;
 
 function reset() {
   resetTables("logged_sets", "sessions", "exercises", "plan_items", "plan_days", "activities", "program_blocks");

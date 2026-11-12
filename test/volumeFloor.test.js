@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { db, repo } from "./_seed.js";
+import { db, repo, localDaysAgo } from "./_seed.js";
 import { validateTrainingPlan, plannedWeeklyGroupSets } from "../dist/repo/plan-quality.js";
 import { weeklySetTargets } from "../dist/repo/volume-floor.js";
 import { readVolumeFloorContext, weeklySetTargetsRead } from "../dist/repo/volume-floor-context.js";
@@ -327,7 +327,7 @@ test("an evolution that starves a fed group is never shipped as clean: unresolve
 // ------------------------------------------------ 3. the log is truth for set count
 
 function isoDaysAgo(n) {
-  return localDateISO(new Date(Date.now() - n * 864e5));
+  return localDaysAgo(n);
 }
 
 // A slot authored before any of the fixture's logs (a pre-v111 row reads as settled),

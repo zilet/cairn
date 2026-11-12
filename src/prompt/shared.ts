@@ -10,6 +10,7 @@ import { extractJson } from "../agents.js";
 import type { CoachContext, PartialCoachContext } from "../repo/coach-context.js";
 import { type SensorSignal, sensorIsCurrent } from "../repo/sensor-freshness.js";
 import { RECOVERY_SAMPLE_FLOOR } from "../repo/recovery-trend.js";
+import { WEEKDAY_NAMES } from "../repo/profile.js";
 import { localDateISO } from "../repo/shared.js";
 import { pickDayVariant } from "../repo/brain/day-read-rules.js";
 import { coerceFinite } from "../lib/numbers.js";
@@ -292,10 +293,9 @@ function runDaysInForce(ctx: any): PromptRunDay[] {
 }
 
 function promptRunDays(days: readonly PromptRunDay[]): string {
-  const names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
   return days
     .map((d) => {
-      const day = names[Number(d.dow)] ?? `day ${d.dow}`;
+      const day = WEEKDAY_NAMES[Number(d.dow)] ?? `day ${d.dow}`;
       return d.kind && d.kind !== "any" ? `${day} (${d.kind})` : day;
     })
     .join(", ");
@@ -315,15 +315,14 @@ export function renderStatedInputLine(ctx: any): string {
       q.cool_down_km != null ? `${q.cool_down_km} km cool-down` : null,
     ].filter(Boolean);
     // The quality day IN FORCE this week: a one-week move's day when the athlete moved it.
-    const names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
     const day = runDaysInForce(ctx).find((d: any) => d?.kind === "quality");
-    const dayName = day ? names[Number(day.dow)] : null;
+    const dayName = day ? WEEKDAY_NAMES[Number(day.dow)] : null;
     const usual = Array.isArray(ctx?.endurance_schedule?.days)
       ? ctx.endurance_schedule.days.find((d: any) => d?.kind === "quality")
       : null;
     const movedFrom =
       weekMoveFor(ctx) && usual && Number(usual.dow) !== Number(day?.dow)
-        ? ` this week only (they moved it; usually ${names[Number(usual.dow)]})`
+        ? ` this week only (they moved it; usually ${WEEKDAY_NAMES[Number(usual.dow)]})`
         : "";
     parts.push(
       `THEIR STATED QUALITY SESSION${weekQuality ? " FOR THIS WEEK" : ""}: ${q.type}${bits.length ? ` (${bits.join(", ")})` : ""}${dayName ? ` on ${dayName}${movedFrom}` : ""}. Their choice, not the engine's rotation — keep that session on that day; when the week cannot carry the full work, the engine holds it below and says so, and so should you.`

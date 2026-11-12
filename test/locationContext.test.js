@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { beforeEach, test } from "node:test";
-import { db, repo, resetTables } from "./_seed.js";
-import { localDateISO } from "../dist/repo/shared.js";
+import { db, repo, resetTables, localDaysAgo } from "./_seed.js";
 import { projectCoachContext, PROMPT_CONTEXT_SITES } from "../dist/prompt/context-projection.js";
 import { renderDiscipline } from "../dist/prompt/shared.js";
 import {
@@ -17,7 +16,7 @@ import { MIGRATIONS } from "../dist/migrate.js";
 const MAX_VERSION = MIGRATIONS.reduce((m, x) => Math.max(m, x.version), 0);
 
 function dayOffset(days) {
-  return localDateISO(new Date(Date.now() + days * 864e5));
+  return localDaysAgo(-days);
 }
 
 function personTools() {

@@ -11,11 +11,10 @@
 // conservative starting idea from a related lift → the baseline cue.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { db, repo } from "./_seed.js";
+import { db, repo, localDaysAgo } from "./_seed.js";
 import { buildProgressionProposal, nextPrescription } from "../dist/repo/progression.js";
 import { applySwapSmart, buildAndApplySwap } from "../dist/repo/plan-swap.js";
 import { classifyLiftSlot, relatedLiftStart, RELATED_LIFT_RATIOS } from "../dist/repo/related-lift.js";
-import { localDateISO } from "../dist/repo/shared.js";
 
 function reset() {
   for (const t of ["logged_sets", "plan_items", "plan_days", "sessions", "exercises", "plan_proposals", "brain_decisions"]) {
@@ -25,7 +24,7 @@ function reset() {
 beforeEach(reset);
 
 function isoDaysAgo(n) {
-  return localDateISO(new Date(Date.now() - n * 864e5));
+  return localDaysAgo(n);
 }
 function logSet(name, date, { weight = null, reps = null, rir = null, duration_sec = null, setNum = 1 } = {}) {
   const ex = repo.findExercise(name) ?? repo.upsertExercise({ name });

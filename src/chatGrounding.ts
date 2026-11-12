@@ -34,6 +34,7 @@ import {
   ACTIVITY_NOT_LOGGED_VARIANTS,
   GOAL_NONE_SAVED_VARIANTS,
   GOAL_NOT_SAVED_VARIANTS,
+  PLAN_LIFTING_UNCHANGED_RUN_SAVED_VARIANTS,
   PLAN_NO_CHANGE_APPENDED_VARIANTS,
   STRENGTH_OBJECTIVE_NONE_SAVED_VARIANTS,
   STRENGTH_OBJECTIVE_NOT_SAVED_VARIANTS,
@@ -226,6 +227,14 @@ const LIFT_REF =
 function aboutBodyweight(text: string): boolean {
   return !LIFT_REF.test(text) && (BODYWEIGHT_REF.test(text) || WEIGHT_FIGURE.test(text));
 }
+// Whether a plan claim names the LIFTING side, for a turn whose only plan write was a run.
+// The verb "set" ("I've set your run days") and a run's training "load" are not lifts, so
+// they are read out first; everything else is LIFT_REF as it stands.
+const SET_VERB =
+  /\b(?:i(?:['’]ve|\s+have)?|is|are|been|be|now|all|get|got)\s+(?:(?:now|also|just|already)\s+)?set\b|\bset\s+(?:up|your|the|it|that|this|them|to|for|as)\b/gi;
+function namesLifting(text: string): boolean {
+  return LIFT_REF.test(text.replace(SET_VERB, " ").replace(/\bload\b/gi, " "));
+}
 const NOTE_CLAIM = verbForms(
   String.raw`added|put|noted|saved|logged|jotted|written|wrote|appended`,
   String.raw`adding|putting|noting|saving|logging|jotting|writing`
@@ -370,6 +379,9 @@ export function detectStateClaims(reply: string, message?: string | null): State
 // Plan-shaped writes. Their presence at all — landed, scheduled, held or refused —
 // means reconcileChatPlanReply / reconcileChatRunReply / the structure and drive
 // reconcilers already gave the truthful receipt, so this pass stays out of their way.
+// A run write grounds a run claim only: "I've moved your easy run to Wednesday" stands
+// over a run-days write, "…and Thursday's squats are lighter too" does not.
+const RUN_PLAN_TYPES: ReadonlySet<string> = new Set<string>(["set_run", "set_endurance_schedule"]);
 const PLAN_TYPES: ReadonlySet<string> = new Set<string>([
   "plan_update",
   "plan_restructure",
@@ -381,6 +393,7 @@ const PLAN_TYPES: ReadonlySet<string> = new Set<string>([
   "revert_decision",
   "set_movement_considerations",
 ]);
+const LIFT_PLAN_TYPES: ReadonlySet<string> = new Set<string>([...PLAN_TYPES].filter((t) => !RUN_PLAN_TYPES.has(t)));
 const TIMELINE_TYPES: ReadonlySet<string> = new Set<string>(["add_context_event", "resolve_context_event"]);
 const FOOD_TYPES: ReadonlySet<string> = new Set<string>(["log_food", "update_food_note"]);
 const MEMORY_TYPES: ReadonlySet<string> = new Set<string>(["add_memory", "update_memory", "supersede_memory"]);
@@ -456,12 +469,25 @@ function landed(entry: AppliedEntry): boolean {
   return !(result && typeof result === "object" && (result as Record<string, unknown>).ok === false);
 }
 
-function classGrounded(cls: ClaimClass, applied: readonly AppliedEntry[], ctx: GroundReplyContext): boolean {
+function runWriteLanded(applied: readonly AppliedEntry[]): boolean {
+  return applied.some((entry) => RUN_PLAN_TYPES.has(entry.type) && landed(entry));
+}
+
+function classGrounded(
+  cls: ClaimClass,
+  applied: readonly AppliedEntry[],
+  ctx: GroundReplyContext,
+  text: string
+): boolean {
   const any = (types: ReadonlySet<string>, needLanded = true) =>
     applied.some((entry) => types.has(entry.type) && (!needLanded || landed(entry)));
   switch (cls) {
     case "plan":
-      return any(PLAN_TYPES, false) || (ctx.drafts?.length ?? 0) > 0;
+      return (
+        any(LIFT_PLAN_TYPES, false) ||
+        (ctx.drafts?.length ?? 0) > 0 ||
+        (any(RUN_PLAN_TYPES, false) && !namesLifting(text))
+      );
     case "timeline":
       return any(TIMELINE_TYPES);
     case "food":
@@ -486,7 +512,7 @@ function classAlreadySpoken(cls: ClaimClass, reply: string, ctx: GroundReplyCont
   const has = (set: readonly string[]) => set.some((line) => reply.includes(line));
   switch (cls) {
     case "plan":
-      return has(PLAN_NO_CHANGE_APPENDED_VARIANTS);
+      return has(PLAN_NO_CHANGE_APPENDED_VARIANTS) || has(PLAN_LIFTING_UNCHANGED_RUN_SAVED_VARIANTS);
     case "goal":
       return (
         (ctx.droppedGoalFields?.length ?? 0) > 0 ||
@@ -503,10 +529,14 @@ function classAlreadySpoken(cls: ClaimClass, reply: string, ctx: GroundReplyCont
   }
 }
 
-function honestSentence(cls: ClaimClass, claim: StateClaim, today: string): string {
+function honestSentence(cls: ClaimClass, claim: StateClaim, today: string, applied: readonly AppliedEntry[]): string {
   switch (cls) {
     case "plan":
-      return pickDayVariant(PLAN_CLAIM_UNGROUNDED_VARIANTS, today, "chat-ground-plan");
+      // An ungrounded plan claim beside a landed run write names the lifting side; the
+      // run receipt is true, so the honest sentence must not say nothing moved.
+      return runWriteLanded(applied)
+        ? pickDayVariant(PLAN_LIFTING_UNCHANGED_RUN_SAVED_VARIANTS, today, "chat-ground-plan-lifting")
+        : pickDayVariant(PLAN_CLAIM_UNGROUNDED_VARIANTS, today, "chat-ground-plan");
     case "timeline":
       return pickDayVariant(TIMELINE_CLAIM_UNGROUNDED_VARIANTS, today, "chat-ground-timeline");
     case "food":
@@ -975,7 +1005,7 @@ export function groundReply(input: { reply: string; applied: readonly AppliedEnt
   // both a food and a log claim), so any landed reading — or a landed capture of what the
   // clause names — grounds it.
   const claimGrounded = (c: StateClaim, text: string) =>
-    c.classes.some((cls) => classGrounded(cls, applied, ctx)) || subjectGrounded(text, applied);
+    c.classes.some((cls) => classGrounded(cls, applied, ctx, text)) || subjectGrounded(text, applied);
   const corrected = new Set<ClaimClass>();
   let intakeDropped = false;
   let changed = false;
@@ -1019,7 +1049,7 @@ export function groundReply(input: { reply: string; applied: readonly AppliedEnt
             notes.push({ kind: "claim", class: cls, sentence: c.claim.sentence });
             if (!corrected.has(cls)) {
               corrected.add(cls);
-              honest.push(honestSentence(cls, c.claim, today));
+              honest.push(honestSentence(cls, c.claim, today, applied));
             }
           }
           if (honest.length || keptClauses.length < judged.length) {
@@ -1039,7 +1069,7 @@ export function groundReply(input: { reply: string; applied: readonly AppliedEnt
           // One honest sentence per class; a second false claim of the same class goes.
           if (!corrected.has(cls)) {
             corrected.add(cls);
-            kept.push(honestSentence(cls, claim, today));
+            kept.push(honestSentence(cls, claim, today, applied));
           }
           continue;
         }

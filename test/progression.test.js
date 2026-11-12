@@ -129,7 +129,7 @@ function logSet(name, date, { weight = null, reps = null, rir = null, duration_s
 }
 
 function isoDaysAgo(n) {
-  return localDateISO(new Date(Date.now() - n * 864e5));
+  return localDaysAgo(n);
 }
 
 async function callProgramTool(name, args = {}) {

@@ -8,7 +8,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import "./_seed.js";
 import { seedDemo } from "../dist/demoSeed.js";
-import { COACH_READ_TOOL_NAMES } from "../dist/brain/read-tools.js";
+import { COACH_READ_TOOL_CATALOG, COACH_READ_TOOL_NAMES } from "../dist/brain/read-tools.js";
+import { COACH_READ_ORDINARY_MAX_BYTES, COACH_READ_ORDINARY_MAX_CALLS } from "../dist/runChosen.js";
 import { CoachReadToolExecutionError } from "../dist/brain/read-tool-runtime.js";
 import {
   NATIVE_COACH_READ_BUDGET,
@@ -26,6 +27,14 @@ test("the native budget raises the call cap and keeps the prompt loop's total", 
   assert.equal(NATIVE_COACH_READ_BUDGET.maxCalls, 12);
   assert.equal(NATIVE_COACH_READ_BUDGET.maxTotalBytes, 256 * 1024);
   assert.ok(NATIVE_COACH_READ_BUDGET.maxCallBytes <= NATIVE_COACH_READ_BUDGET.maxTotalBytes);
+  // Derived from their sources, the numbers are what they always were.
+  assert.equal(NATIVE_COACH_READ_BUDGET.maxCallBytes, 96 * 1024);
+  assert.equal(NATIVE_COACH_READ_BUDGET.maxCalls, 2 * COACH_READ_ORDINARY_MAX_CALLS);
+  assert.equal(NATIVE_COACH_READ_BUDGET.maxTotalBytes, COACH_READ_ORDINARY_MAX_BYTES);
+  assert.equal(
+    NATIVE_COACH_READ_BUDGET.maxCallBytes,
+    Math.max(...Object.values(COACH_READ_TOOL_CATALOG).map((tool) => tool.max_response_bytes))
+  );
 });
 
 test("calls past the cap return the tool error and execute nothing", () => {

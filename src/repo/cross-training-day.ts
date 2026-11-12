@@ -16,7 +16,13 @@
 // after; it never adds work). This is a READ: nothing here writes a schedule.
 import { mondayOf } from "../lib/dates.js";
 import { recentEnduranceImpacts, type EnduranceImpact } from "./hybrid-load.js";
-import { dowToDayNumber, getEnduranceSchedule, getStandingEnduranceSchedule, isoDow, WEEKDAY_NAMES } from "./profile.js";
+import {
+  dowToDayNumber,
+  type getEnduranceSchedule,
+  getStandingEnduranceSchedule,
+  isoDow,
+  WEEKDAY_NAMES,
+} from "./profile.js";
 import { addDaysISO, localDateISO } from "./shared.js";
 import { copyDeep, requestMemo } from "./request-memo.js";
 

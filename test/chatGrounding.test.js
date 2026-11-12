@@ -15,7 +15,11 @@ import {
   PLAN_CLAIM_UNGROUNDED_VARIANTS,
   TIMELINE_CLAIM_UNGROUNDED_VARIANTS,
 } from "../dist/chatGrounding.js";
-import { GOAL_NONE_SAVED_VARIANTS, PLAN_NO_CHANGE_APPENDED_VARIANTS } from "../dist/chat-reconcile.js";
+import {
+  GOAL_NONE_SAVED_VARIANTS,
+  PLAN_LIFTING_UNCHANGED_RUN_SAVED_VARIANTS,
+  PLAN_NO_CHANGE_APPENDED_VARIANTS,
+} from "../dist/chat-reconcile.js";
 
 const TODAY = "2026-10-16";
 const noDay = () => {
@@ -239,6 +243,61 @@ test("a goal the goal reconciler already corrected is left alone", () => {
     droppedGoalFields: ["goal_weight_lb"],
   });
   assert.equal(out.reply, reply);
+});
+
+// ── a run write grounds a run claim, never a lifting one ─────────────────────
+const RUN_WRITES = [
+  ["set_endurance_schedule", ok("set_endurance_schedule", { ok: true, scope: "this_week" })],
+  ["set_run", ok("set_run", { ok: true, verified: true })],
+];
+
+for (const [label, write] of RUN_WRITES) {
+  test(`a lift claim beside a lone ${label} write is corrected without contradicting the run`, () => {
+    for (const reply of [
+      "I've moved your easy run to Wednesday, and Thursday's squats are lighter too.",
+      "I've also updated Thursday's squat session.",
+    ]) {
+      const out = ground(reply, [write]);
+      assert.notEqual(out.reply, reply, reply);
+      assert.doesNotMatch(out.reply, /squat/i);
+      assert.ok(isVariant(PLAN_LIFTING_UNCHANGED_RUN_SAVED_VARIANTS, out.reply), out.reply);
+      assert.ok(!isVariant(PLAN_CLAIM_UNGROUNDED_VARIANTS, out.reply), out.reply);
+      assert.equal(out.notes[0].class, "plan");
+    }
+  });
+
+  test(`a pure run claim over a ${label} write is untouched`, () => {
+    for (const reply of ["I've moved your easy run to Wednesday.", "I've set your run days to Tuesday and Thursday."]) {
+      const out = ground(reply, [write]);
+      assert.equal(out.reply, reply);
+      assert.equal(out.notes.length, 0);
+    }
+  });
+}
+
+test("a lift claim with a real plan write is untouched, run write or not", () => {
+  const reply = "I've also updated Thursday's squat session.";
+  assert.equal(ground(reply, [ok("plan_update")]).reply, reply);
+  assert.equal(ground(reply, [ok("plan_update"), ok("set_endurance_schedule")]).reply, reply);
+});
+
+test("a lift claim over a run write that did not land gets the ordinary plan line", () => {
+  const out = ground("I've also updated Thursday's squat session.", [
+    { type: "set_run", result: { ok: false, code: "ambiguous" } },
+  ]);
+  assert.ok(isVariant(PLAN_CLAIM_UNGROUNDED_VARIANTS, out.reply), out.reply);
+});
+
+test("with no applied actions a lift claim gets the ordinary plan line", () => {
+  const out = ground("I've also updated Thursday's squat session.");
+  assert.ok(isVariant(PLAN_CLAIM_UNGROUNDED_VARIANTS, out.reply), out.reply);
+  assert.ok(!isVariant(PLAN_LIFTING_UNCHANGED_RUN_SAVED_VARIANTS, out.reply), out.reply);
+});
+
+test("a lifting line already spoken is not repeated", () => {
+  const proposed = "I've also updated Thursday's squat session.";
+  const reply = `${proposed}\n\n${PLAN_LIFTING_UNCHANGED_RUN_SAVED_VARIANTS[0]}`;
+  assert.equal(ground(reply, [ok("set_endurance_schedule")], { proposedReply: proposed }).reply, reply);
 });
 
 test("detectStateClaims lists every claiming sentence with its classes", () => {

@@ -11,7 +11,7 @@
 // Deterministic, offline, temp DB (test/run.mjs).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { db, repo } from "./_seed.js";
+import { db, repo, localDaysAgo } from "./_seed.js";
 import { buildProgressionProposal, nextPrescription } from "../dist/repo/progression.js";
 import {
   bouncedOffLoadStep,
@@ -28,7 +28,7 @@ import { buildProgressionWithAutonomy, revertDecision } from "../dist/domain/bra
 import { localDateISO } from "../dist/repo/shared.js";
 
 function isoDaysAgo(n) {
-  return localDateISO(new Date(Date.now() - n * 864e5));
+  return localDaysAgo(n);
 }
 
 function makeExercise(name, muscle_group) {

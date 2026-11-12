@@ -214,7 +214,7 @@ export type DecisionHistoryArgs = { kind: BrainDecisionKind | null; subject_key:
 export type CurrentPlanDetailArgs = { scope: "training"; day_number: number } | { scope: "meal"; day: string };
 export type ActivityDetailArgs = { activity_id: number };
 /** The no-argument reads: each is the current picture of one domain, bounded by its own budget. */
-export type EmptyArgs = Record<string, never>;
+type EmptyArgs = Record<string, never>;
 
 export type CoachReadToolRequest =
   | { tool: "read_exercise_history"; args: ExerciseHistoryArgs }

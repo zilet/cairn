@@ -9,7 +9,7 @@
 //   - a caller mutating its copy never changes what the next caller reads.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { db, repo } from "./_seed.js";
+import { db, repo, localDaysAgo } from "./_seed.js";
 import { runWithBrainSnapshot } from "../dist/brain/snapshot.js";
 import {
   copyDeep,
@@ -250,7 +250,7 @@ test("daysBetweenISO's integer fast path answers exactly what the Date.parse pat
 });
 
 function daysAgo(n) {
-  return localDateISO(new Date(Date.now() - n * 864e5));
+  return localDaysAgo(n);
 }
 
 function seedPlanAndLog() {

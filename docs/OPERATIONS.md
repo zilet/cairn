@@ -385,8 +385,8 @@ backup (see Backups below) rather than trying to reverse the migration.
 ## Upgrading from 2.0.x to 2.1.x
 
 An in-place upgrade of the same image and volumes. Take a backup first, because migrations are
-forward-only (see Backups below), then pull the new image and restart. The migrations (120–128; 2.1.2 adds 128) run
-on boot. Two behaviours change:
+forward-only (see Backups below), then pull the new image and restart. The pending migrations
+run on boot. Two behaviours change:
 
 - **Models are now the CLI's own default.** If you relied on Cairn picking sonnet, opus or fable,
   choose Everyday and Deep work models in **Settings → Agents** to keep them.

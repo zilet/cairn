@@ -32,7 +32,7 @@ export interface ChatReadTelemetry {
   native_fallback?: boolean;
 }
 
-export const CHAT_NATIVE_READ_MAX_CALLS = NATIVE_COACH_READ_BUDGET.maxCalls;
+const CHAT_NATIVE_READ_MAX_CALLS = NATIVE_COACH_READ_BUDGET.maxCalls;
 
 // The guidance both lean transports share: what the core is, when to read, and the two
 // failure modes the owner named — answering without looking, and looking for what is

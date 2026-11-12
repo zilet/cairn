@@ -286,7 +286,7 @@ export function recentEnduranceImpacts(days = 3, date = localDateISO()): Enduran
  * string of strolls never adds up to one). Runs are not here: a run keeps its own
  * grade and its own rules.
  */
-export interface EnduranceOuting {
+interface EnduranceOuting {
   family: LoadFamily;
   /** The heaviest piece's own label ("trail MTB"). */
   label: string;

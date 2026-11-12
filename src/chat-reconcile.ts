@@ -113,6 +113,15 @@ export const PLAN_NO_CHANGE_APPENDED_VARIANTS = [
   "Nothing landed on the plan — no plan change was saved from this response.",
 ] as const;
 
+// A run write landed but the reply also claimed a lifting change: the run receipt beside
+// it ("Saved for this week only…") is true, so this says only what did NOT move.
+export const PLAN_LIFTING_UNCHANGED_RUN_SAVED_VARIANTS = [
+  "Your lifting plan didn't change; only the run change was saved.",
+  "To be clear, your lifting sessions are as they were — only your runs changed.",
+  "Nothing on your lifting plan moved; the running change is the only one saved.",
+  "Only your runs changed here — your lifting plan is as it was.",
+] as const;
+
 export const PLAN_UNTOUCHED_BY_QUESTION_VARIANTS = [
   "I haven't changed or scheduled your plan from that question; your current training split is unchanged.",
   "That was a question, not a change — your current training split is unchanged.",

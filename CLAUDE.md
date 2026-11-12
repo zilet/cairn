@@ -213,12 +213,9 @@ an already-applied proposal; a `parsed.days` payload instead routes to `replaceP
 hands the CLI uploaded files or the call site passed `tools:"provider"` (research, a current-research
 chat turn). Without it grok explores its cwd with tools until the timeout and agy trips a headless
 permission auto-deny (agy now also carries an explicit `command(*)` deny). Opt an op into provider tools
-at its call site, never by softening the preamble. The third policy, `tools:"coach_reads"`, is chat's
-alone: a CLI whose `agents.json` `read_tools` declares `native_mcp` (claude, codex) calls Cairn's
-read-only coach reads itself over a per-run loopback MCP listener that holds the budget; every other CLI
-keeps the prompt loop. Which CLI reads how is config, never a name check; chat's lean core
-(`chat_core`, `settings.chat_context`) depends on those reads. See `docs/ARCHITECTURE.md` "Tool policy"
-and "Coach read transports".
+at its call site, never by softening the preamble. Chat alone uses a third policy, `tools:"coach_reads"`;
+which CLI reads natively vs. by prompt loop is `agents.json` config, never a name check
+(`docs/ARCHITECTURE.md` "Tool policy" and "Coach read transports").
 
 **Autonomy is server policy, not model discretion** (Amendment 1 in `docs/VISION.md`).
 `decideAutonomyTier()` (`src/brain/autonomy.ts`, driven by `settings.lead_mode`) picks among observe
@@ -315,10 +312,10 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   `weeklyRunPlan` and `flexibleTrainingAgenda` honor those dows and never spill a suggestion onto
   an unscheduled day. A named day still fires when the hard session sits out — it becomes easy; the
   supporting-constrained drop to two runs applies only with no stated calendar. A logged run on an
-  unscheduled day still counts (the log is truth). A ONE-WEEK move is `endurance_schedule.week_moves`
-  (keyed by week, a closed week's is history), never the standing `days[]`: read the week in force with
-  `getEnduranceSchedule(asOf)` (pass the date you have), the usual week with
-  `getStandingEnduranceSchedule()` (`docs/ARCHITECTURE.md` "One-week run move"). **A moved key run is still the planned run**: which
+  unscheduled day still counts (the log is truth). A one-week move lives in `endurance_schedule.week_moves`,
+  never the standing `days[]`: read the week in force with `getEnduranceSchedule(asOf)`, the usual week
+  with `getStandingEnduranceSchedule()` (`docs/ARCHITECTURE.md` "One-week run move"). **A moved key run
+  is still the planned run**: which
   run was the quality/long one is the week's completion (`closedRunIntentOn`/`weekRunClosures`, the
   agenda's one matcher, cycle-free — never call weeklyRunPlan/agenda/harm from it), never the raw
   weekday. A recurring non-run day is `endurance_schedule.cross_training` (never in `days[]`), else

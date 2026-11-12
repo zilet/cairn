@@ -65,7 +65,7 @@ beforeEach(() => {
   repo.setSettings({ training_drive: "steady" });
 });
 
-const isoDaysAgo = (n) => localDateISO(new Date(Date.now() - n * 864e5));
+const isoDaysAgo = localDaysAgo;
 
 function makeExercise(name, muscleGroup) {
   repo.upsertExercise({ name, muscle_group: muscleGroup, mode: "reps" });

@@ -644,7 +644,7 @@ export type EnduranceSchedule = {
 };
 export const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] as const;
 /** How many one-week moves are kept: enough history for every closed-week read (8 weeks). */
-export const MAX_WEEK_MOVES = 10;
+const MAX_WEEK_MOVES = 10;
 const SCHEDULE_KIND_SET = new Set<string>(ENDURANCE_SCHEDULE_KINDS);
 const SCHEDULE_SOURCE_SET = new Set<string>(["athlete", "chat"]);
 

@@ -25,6 +25,7 @@ import {
 } from "./brain/read-tool-runtime.js";
 import { COACH_READ_TOOL_CATALOG, type CoachReadToolName, type CoachReadToolResult } from "./brain/read-tools.js";
 import { log } from "./log.js";
+import { COACH_READ_ORDINARY_MAX_BYTES, COACH_READ_ORDINARY_MAX_CALLS } from "./runChosen.js";
 import { telemetryErrorName } from "./telemetry-privacy.js";
 
 type ToolRegistrar = Pick<McpServer, "tool">;
@@ -65,7 +66,7 @@ const SCHEMAS: Record<CoachReadToolName, any> = {
 const READ_ONLY_ANNOTATIONS = Object.freeze({ readOnlyHint: true, destructiveHint: false, openWorldHint: false });
 
 /** One native read call as the turn's telemetry records it. Never its arguments or result. */
-export interface CoachReadCallRecord {
+interface CoachReadCallRecord {
   tool: string;
   /** sha256 of the canonical arguments, 12 hex chars: tells repeats apart, reveals nothing. */
   args_digest: string;
@@ -76,7 +77,7 @@ export interface CoachReadCallRecord {
   refused?: "call_budget" | "byte_budget" | "invalid_request" | "execution_failed";
 }
 
-export interface CoachReadMcpBudget {
+interface CoachReadMcpBudget {
   maxCalls: number;
   maxTotalBytes: number;
   maxCallBytes: number;
@@ -86,16 +87,16 @@ export interface CoachReadMcpBudget {
 // total stays the prompt loop's 256 KB (what a turn may pull in, however it travels),
 // and no single call may exceed the catalog's own largest response budget.
 export const NATIVE_COACH_READ_BUDGET: Readonly<CoachReadMcpBudget> = Object.freeze({
-  maxCalls: 12,
-  maxTotalBytes: 256 * 1024,
-  maxCallBytes: 96 * 1024,
+  maxCalls: 2 * COACH_READ_ORDINARY_MAX_CALLS,
+  maxTotalBytes: COACH_READ_ORDINARY_MAX_BYTES,
+  maxCallBytes: Math.max(...Object.values(COACH_READ_TOOL_CATALOG).map((tool) => tool.max_response_bytes)),
 });
 
 /**
  * The per-run budget gate every registered tool shares. Stateless MCP requests each build
  * a fresh server, so the count and the byte total live here, on the listener.
  */
-export interface CoachReadGate {
+interface CoachReadGate {
   readonly budget: CoachReadMcpBudget;
   calls: CoachReadCallRecord[];
   totalBytes: number;
@@ -215,7 +216,7 @@ export function registerCoachReadTools(
   }
 }
 
-export function buildCoachReadMcpServer(context: CoachReadToolExecutionContext, gate?: CoachReadGate): McpServer {
+function buildCoachReadMcpServer(context: CoachReadToolExecutionContext, gate?: CoachReadGate): McpServer {
   const server = new McpServer({ name: "cairn-coach-read", version: "1.0.0" });
   registerCoachReadTools(server, context, gate);
   return server;
@@ -237,7 +238,7 @@ export interface CoachReadMcpListener {
 
 // The TTL backstop's bounds: never under a second, never past half an hour (a chat turn's
 // longest leash is the 10-minute default, and the first TTL also covers a permit wait).
-export const COACH_READ_LISTENER_MAX_TTL_MS = 30 * 60_000;
+const COACH_READ_LISTENER_MAX_TTL_MS = 30 * 60_000;
 export function clampListenerTtl(ttlMs: number | undefined): number {
   return Math.max(1_000, Math.min(COACH_READ_LISTENER_MAX_TTL_MS, Math.trunc(Number(ttlMs) || 120_000)));
 }

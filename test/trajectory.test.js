@@ -15,7 +15,7 @@
 // at merge — mirrors progression.test.js).
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { db, repo } from "./_seed.js";
+import { db, repo, localDaysAgo } from "./_seed.js";
 import { getTrajectory } from "../dist/repo/trajectory.js";
 import { projectGoalPace } from "../dist/repo/profile.js";
 
@@ -32,12 +32,11 @@ function reset() {
 
 // Local frame, not UTC — logWeight's trust boundary rejects "future" dates in
 // the process zone, and a UTC slice reads as tomorrow after UTC midnight.
-import { localDateISO } from "../dist/repo/shared.js";
 function isoDaysAgo(n) {
-  return localDateISO(new Date(Date.now() - n * 864e5));
+  return localDaysAgo(n);
 }
 function isoDaysAhead(n) {
-  return localDateISO(new Date(Date.now() + n * 864e5));
+  return localDaysAgo(-n);
 }
 
 // A clean profile with enough fields for computeGoalCheck to run.

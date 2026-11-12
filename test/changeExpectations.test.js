@@ -6,7 +6,7 @@
 // had no writer at all, so their registered evaluators were dead code.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { db, repo } from "./_seed.js";
+import { db, repo, localDaysAgo } from "./_seed.js";
 import { localDateISO } from "../dist/repo/shared.js";
 import {
   buildAerobicTrendExpectation,
@@ -23,7 +23,7 @@ import { transitionBrainDecision } from "../dist/repo/brain-decisions.js";
 import { createBlock } from "../dist/repo/program-blocks.js";
 
 function isoDaysAgo(n) {
-  return localDateISO(new Date(Date.now() - n * 864e5));
+  return localDaysAgo(n);
 }
 
 function dbInsertSet(sessionId, exId, { set_number = 1, weight = null, reps = null, duration_sec = null }) {

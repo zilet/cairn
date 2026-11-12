@@ -39,12 +39,15 @@ export function completeMealWeek(parsed = {}) {
 // Local frame, NOT UTC: repo day-keys and "today" checks (localDateISO,
 // canonicalWeightLogDate) run in the process zone, so a UTC slice here makes
 // isoDaysAgo(0) read as tomorrow between UTC midnight and local midnight —
-// the midnight-UTC flake window.
-export function isoDaysAgo(n) {
-  return localDateISO(new Date(Date.now() - n * 864e5));
-}
+// the midnight-UTC flake window. Calendar arithmetic on the local Y-M-D, never
+// `Date.now() - n * 864e5`: a span that crosses a DST change is 23 or 25 hours
+// short of n days, so in the hour before local midnight that lands a day off.
 export function localDaysAgo(n) {
-  return localDateISO(new Date(Date.now() - n * 864e5));
+  const [y, m, d] = localDateISO().split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d - n)).toISOString().slice(0, 10);
+}
+export function isoDaysAgo(n) {
+  return localDaysAgo(n);
 }
 export function tsDaysAgo(n) {
   // SQLite-style "YYYY-MM-DD HH:MM:SS" timestamp n days ago (for created_at).

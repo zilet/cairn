@@ -53,7 +53,7 @@ export class CoachReadToolExecutionError extends Error {
 }
 
 type MutableRow = Record<string, unknown>;
-export type RawRead = {
+type RawRead = {
   data: Record<string, unknown>;
   /** Arrays whose elements count toward rows_returned and may be trimmed for the byte cap. */
   row_arrays: unknown[][];

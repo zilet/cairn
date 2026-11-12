@@ -3697,7 +3697,7 @@ READINESS/LAST NIGHT lines to reach its own words from. A non-posture item keeps
 since there it can carry the conductor's work-around caveat verbatim — a safety instruction, not
 narration, and must not be dropped.
 
-**Chat's lean core (`chat_core`, 2026-11-11).** The `chat` site carries everything (~170 KB of DATA
+**Chat's lean core (`chat_core`, 2026-11-11).** The `chat` site carries everything (roughly 200 KB of DATA
 on the demo seed, `recent_sessions` alone ~38 KB) and stays as `settings.chat_context: "full"`. The
 default is `chat_core`: who the athlete is (PERSON, the goal's targets, a compacted journey, the
 endurance goal, supplements, the energy-deficiency watch, symptom links), today (what the Brief said —

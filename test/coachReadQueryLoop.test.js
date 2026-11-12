@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { COACH_READ_STRICT_MCP_ARGS, runChosenWithCoachReads } from "../dist/runChosen.js";
+import { runChosenWithCoachReads } from "../dist/runChosen.js";
 import { runAgentWithFallback } from "../dist/agents.js";
 
 function chosen(parsed, agent = "terra") {
@@ -46,7 +46,6 @@ test("coach-read query loop keeps the snapshot baseline and does no tool work wh
   // The loop no longer hands every agent Claude-shaped MCP flags (codex now has its own
   // {mcp_config_args} slot); Claude's no_tools_args carry --strict-mcp-config instead.
   assert.equal(calls[0].opts.mcpConfigArgs, undefined);
-  assert.ok(COACH_READ_STRICT_MCP_ARGS.includes("--strict-mcp-config"), "the old constant stays exported for callers");
   assert.match(calls[0].prompt, /^SNAPSHOT BASELINE/);
   assert.match(calls[0].prompt, /authoritative baseline/);
   assert.match(calls[0].prompt, /read_exercise_history/);

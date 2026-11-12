@@ -102,19 +102,6 @@ export const COACH_READ_ORDINARY_MAX_CALLS = 6;
 const COACH_READ_CONFERENCE_MAX_CALLS = 12;
 export const COACH_READ_ORDINARY_MAX_BYTES = 256 * 1024;
 const COACH_READ_CONFERENCE_MAX_BYTES = 512 * 1024;
-// Kept for reference and old callers: the strict EMPTY MCP config this loop used to hand
-// every agent so Claude would not inherit the user's home MCP servers. The loop no longer
-// passes it (2026-11-11): codex now declares an {mcp_config_args} slot for its native
-// coach-read attach (agents.json read_tools), where these Claude-shaped flags would be
-// a spawn error, and Claude's own `no_tools_args` already carries `--strict-mcp-config`
-// with no server at all (plus `--tools ""`) whenever the prompt leads with
-// NO_TOOLS_PREAMBLE — which every turn of this loop does. Never re-add a provider's
-// flags to a provider-neutral loop; declare them in agents.json.
-export const COACH_READ_STRICT_MCP_ARGS = Object.freeze([
-  "--mcp-config",
-  JSON.stringify({ mcpServers: {} }),
-  "--strict-mcp-config",
-]);
 
 const COACH_READ_ARGS_CONTRACT: Readonly<Record<CoachReadToolName, string>> = Object.freeze({
   read_exercise_history:
