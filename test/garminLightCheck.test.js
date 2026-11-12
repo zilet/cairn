@@ -216,3 +216,24 @@ test("a test's fake client never writes into the real token dir", () => {
   const client = tokenGarmin({ oauth1: { oauth_token: "o1" }, oauth2: { access_token: "x" } });
   assert.equal(persistRefreshedGarminToken(client), false);
 });
+
+test("a token dir that refuses the write warns once, not every check", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cairn-garmin-token-ro-"));
+  try {
+    fs.chmodSync(dir, 0o500); // read-only for the owner
+    setGarminTokenDirForTests(dir);
+    const warn = t.mock.method(console, "warn", () => {});
+    const token = { access_token: "secret-token-value" };
+    for (let i = 0; i < 3; i++) {
+      // A new client per check, as the light check builds one each time.
+      const client = tokenGarmin({ oauth1: { oauth_token: "o1" }, oauth2: token });
+      assert.equal(persistRefreshedGarminToken(client), false, "never throws, reports false");
+    }
+    const lines = warn.mock.calls.map((c) => c.arguments.join(" ")).filter((l) => /refreshed Garmin token/.test(l));
+    assert.equal(lines.length, 1, "one warning for one token value");
+    assert.ok(!lines[0].includes("secret-token-value"), "the token is never logged");
+  } finally {
+    fs.chmodSync(dir, 0o700);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

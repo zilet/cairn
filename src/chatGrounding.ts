@@ -198,6 +198,10 @@ const PLAN_ING = String.raw`moving|swapping|adding|removing|replacing|decoupling
 const PLAN_NOUN =
   /\b(?:plans?|program(?:me)?|sessions?|workouts?|split|week|today|tomorrow|tonight|calendar|schedule|app|deload|runs?|ride|lifts?|exercises?|sets?|reps?|push|pull|legs|upper|lower|full[- ]body|(?:mon|tues|wednes|thurs|fri|satur|sun)day|day\s+\d)\b/i;
 const PLAN_CLAIM = verbForms(PLAN_PAST, PLAN_ING);
+// "Your long run is now Sunday" / "…is now on Friday": a session's day stated as just
+// changed. Only a weekday after "is/are now" — "your squat is now 100 kg" stays a figure.
+const PLAN_NOW_DAY =
+  /\b(?:is|are)\s+now\s+(?:on\s+)?(?:(?:this|next)\s+)?(?:mon|tues|wednes|thurs|fri|satur|sun)day\b/i;
 
 // No bare "noted": "Noted — salmon dinner sounds great" is an acknowledgement, not a log.
 const FOOD_PAST = String.raw`logged|recorded|saved|tracked|captured|added|entered|filed|stored|updated|changed|corrected|amended|fixed|swapped|removed|took(?=[^.!?\n]{0,30}\boff\b)|adjusted|bumped|made|scaled|edited|replaced|dropped`;
@@ -229,45 +233,118 @@ function aboutBodyweight(text: string): boolean {
 }
 // Whether a plan claim CHANGES the lifting side, for a turn whose only plan write was a run.
 // The verb "set" ("I've set your run days") and a run's training "load" are not lifts, so
-// they are read out first. A lift then counts only as the OBJECT of the claimed change:
-// "…and Thursday's squats are lighter too" or "…and swapped your bench" changes lifting,
-// while "I've moved your tempo run off your bench day" or "…so Thursday's squats stay fresh"
-// names a lift only as the reason or the timing of a run change. Conservative by
-// construction: the lift is context only when the change verb's own object is a run (or a
-// pronoun), the lift sits after a relation word ("so", "after", "off", "clear of"…), and no
-// second change predicate follows that word. A clause saying lifting did NOT change ("your
-// lift days are unchanged") is no claim at all.
+// they are read out first. A lift then counts only when the claim asserts something NEW
+// about it — "…and Thursday's squats are lighter too", "…and swapped your bench", "…and
+// your leg day with it", "…after cutting your squat sets", "…so your squats now have fewer
+// sets" — never when it only names the lift's existing place as the run move's reason or
+// timing ("off your bench day", "so it doesn't sit on top of Thursday's squats", "after
+// your deadlift session"). A clause saying lifting did NOT change ("your squat and deadlift
+// days are unchanged", "your lifts haven't moved") is no claim at all. Read clause by
+// clause; when unsure it is a lifting claim. Its wider lift nouns (leg day, lifting,
+// strength session…) live here only, so no other grounding outcome moves.
 const SET_VERB =
   /\b(?:i(?:['’]ve|\s+have)?|is|are|been|be|now|all|get|got)\s+(?:(?:now|also|just|already)\s+)?set\b|\bset\s+(?:up|your|the|it|that|this|them|to|for|as)\b/gi;
+const RUN_ONLY_LIFT = new RegExp(
+  String.raw`${LIFT_REF.source}|\blifting\b|\b(?:leg|lift|strength|upper|lower|push|pull|gym)(?:[- ]body)?\s+(?:days?|sessions?|work|training)\b`,
+  "i"
+);
 const CHANGE_PRED = new RegExp(
   String.raw`\b(?:${PLAN_PAST}|${PLAN_ING}|took|taken|taking|made|making|(?:is|are|['’]s|['’]re|been|be)\s+(?:now\s+|also\s+|a\s+(?:bit|touch|little)\s+)*(?:lighter|heavier|easier|harder|shorter|longer|gone|out|off|down|up|lower|higher|fewer|less|more|smaller|bigger|capped|halved)|lighter|heavier)\b`,
   "i"
 );
+// A change verb under a negation ("nothing changed", "haven't moved", "no change on").
+const NEGATED_CHANGE = new RegExp(
+  String.raw`(?:\b(?:nothing|not|never|no)|n['’]t)\s+(?:(?:been|be|really|yet|actually|got|get|have|has)\s+)*(?:${PLAN_PAST}|change|move|touch(?:ed)?)\b`,
+  "gi"
+);
+const LIFT_UNCHANGED =
+  /\b(?:unchanged|untouched|intact|stays?|staying|remains?|as\s+(?:is|it\s+was|they\s+were|planned)|the\s+same|in\s+place)\b/i;
 const LIFT_RELATION =
   /\b(?:so(?:\s+that)?|after|before|on\s+top\s+of|off|away\s+from|clear\s+of|around|follow(?:s|ing|ed)?|from|since|because|which|where|while|ahead\s+of|next\s+to|beside|between|alongside|to\s+(?:keep|avoid|protect|spare|leave|give|free|clear|stay))\b/gi;
 const RUN_OBJECT =
-  /\b(?:runs?|running|long|tempo|intervals?|quality|easy|strides|fartlek|hills?|track|jogs?|mileage|miles?|km|it|them|that|this)\b/i;
-const LIFT_UNCHANGED =
-  /\b(?:unchanged|untouched|intact|stays?|staying|remains?|as\s+(?:is|it\s+was|they\s+were|planned)|the\s+same|in\s+place|(?:didn['’]t|hasn['’]t|haven['’]t|did\s+not|has\s+not|have\s+not)\s+(?:change|changed|move|moved))\b/i;
-const LIFT_CLAUSE_BREAK = /,\s+|;\s*|\s*[—–]\s*|\s+-\s+|\s+and\s+/i;
+  /\b(?:runs?|running|long|tempo|intervals?|quality|easy|strides|fartlek|hills?|track|jogs?|mileage|miles?|km|\d+(?:\.\d+)?\s*k|half(?:\s+marathon)?|marathon|race|it|them|that|this)\b/i;
+// " and " starts a new clause only before a subject ("and your squats…", "and Thursday's
+// squats…"), never between two nouns ("your squat and deadlift days", "sets and reps").
+const LIFT_CLAUSE_BREAK =
+  /,\s+|;\s*|\s*[—–]\s*|\s+-\s+|\s+and\s+(?=(?:your|the|my|i|i['’]ve|it|it['’]s|they|that|this|then|now|also|[\w]+['’]s)\b)/i;
+// A verb-less clause riding on the main verb ("…and your leg day with it") shares its
+// change; one with a plain verb of its own ("…and your squats get the day to themselves")
+// is a description.
+const NEUTRAL_VERB =
+  /\b(?:get|gets|got|getting|have|has|had|keep|keeps|kept|stay|stays|stayed|remain|remains|is|are|was|were|sit|sits|land|lands|come|comes|go|goes|look|looks|feel|feels|need|needs|stand|stands|lead|leads|start|starts|can|will|should|would)\b/i;
+// What a relation tail says that is NEW about a lift: a first-person change, a change verb
+// governing it ("cutting your squat sets", "dialing back your deadlifts"), a passive change,
+// "now" attached to it, or a comparative / quantity change.
+const NOT_VERB_ING =
+  /^(?:during|following|preceding|including|regarding|morning|evening|nothing|something|anything|everything|training|running|lifting|thing|spring|string|ceiling)$/i;
+function tailChangesLift(tail: string): boolean {
+  if (CHANGE_PRED.test(tail)) return true;
+  if (
+    /\bi(?:['’](?:ve|d)|\s+have|\s+had)?\s+(?:(?:also|just|then|already)\s+)?(?:\w+ed|cut|put|set|took|made|gave)\b/i.test(
+      tail
+    )
+  )
+    return true;
+  if (/\b(?:has|have|had)\s+been\s+\w+ed\b/i.test(tail)) return true;
+  for (const m of tail.matchAll(
+    /\b(\w+ing)\s+(?:(?:back|down|up|off|out|in)\s+)?(?:your|the|my|those|these|\w+['’]s)\s+(.{0,40})/gi
+  )) {
+    if (!NOT_VERB_ING.test(m[1]) && RUN_ONLY_LIFT.test(m[2])) return true;
+  }
+  if (liftHasNow(tail)) return true;
+  return /\b(?:fewer|more|less|lighter|heavier|shorter|longer|extra)\s+(?:\w+\s+)?(?:sets?|reps?|load|weight|volume|work)\b/i.test(
+    tail
+  );
+}
+function liftHasNow(text: string): boolean {
+  const lift = new RegExp(RUN_ONLY_LIFT.source, "gi");
+  for (const m of text.matchAll(lift)) {
+    if (/^(?:\s+[\w'’]+){0,2}?\s+now\b/i.test(text.slice((m.index ?? 0) + m[0].length))) return true;
+  }
+  return false;
+}
+// A clause's own part (before its relation word) and the relation tail after it; the
+// relation word counts only after the clause's change verb.
+function splitAtRelation(clause: string): { verb: RegExpExecArray | null; own: string; tail: string | null } {
+  const verb = CHANGE_PRED.exec(clause);
+  const relation = new RegExp(LIFT_RELATION.source, LIFT_RELATION.flags);
+  relation.lastIndex = verb ? verb.index + verb[0].length : 0;
+  const rel = relation.exec(clause);
+  return rel
+    ? { verb, own: clause.slice(0, rel.index), tail: clause.slice(rel.index + rel[0].length) }
+    : { verb, own: clause, tail: null };
+}
 function namesLifting(text: string): boolean {
-  const cleaned = text
+  const clauses = text
     .replace(SET_VERB, " ")
     .replace(/\bload\b/gi, " ")
     .split(LIFT_CLAUSE_BREAK)
-    .filter((clause) => !(LIFT_REF.test(clause) && LIFT_UNCHANGED.test(clause) && !CHANGE_PRED.test(clause)))
-    .join(", ");
-  if (!LIFT_REF.test(cleaned)) return false;
-  const verb = CHANGE_PRED.exec(cleaned);
-  const from = verb ? verb.index + verb[0].length : 0;
-  const relation = new RegExp(LIFT_RELATION.source, LIFT_RELATION.flags);
-  relation.lastIndex = from;
-  const rel = relation.exec(cleaned);
-  if (!rel) return true;
-  const head = cleaned.slice(0, rel.index);
-  const tail = cleaned.slice(rel.index + rel[0].length);
-  if (LIFT_REF.test(head) || !RUN_OBJECT.test(head.slice(verb ? verb.index : 0))) return true;
-  return CHANGE_PRED.test(tail);
+    .map((clause) => clause.trim().replace(/^(?:and|but)\s+/i, ""))
+    .filter(Boolean)
+    // "…your lift days are unchanged", "…nothing changed on your squats": no claim at all.
+    .filter((clause) => {
+      if (!RUN_ONLY_LIFT.test(clause)) return true;
+      const negated = new RegExp(NEGATED_CHANGE.source, NEGATED_CHANGE.flags).test(clause);
+      if (!negated && !LIFT_UNCHANGED.test(clause)) return true;
+      return CHANGE_PRED.test(clause.replace(new RegExp(NEGATED_CHANGE.source, NEGATED_CHANGE.flags), " "));
+    });
+  if (!clauses.some((clause) => RUN_ONLY_LIFT.test(clause))) return false;
+  // The run object test reads the claim's main change: the first clause with a change verb.
+  const main = clauses.map(splitAtRelation).find((part) => part.verb) ?? splitAtRelation(clauses[0]);
+  const mainMovesRun = RUN_OBJECT.test(main.own.slice(main.verb ? main.verb.index : 0));
+  for (const clause of clauses) {
+    if (!RUN_ONLY_LIFT.test(clause)) continue;
+    const { verb, own, tail } = splitAtRelation(clause);
+    if (RUN_ONLY_LIFT.test(own)) {
+      // The change verb governs it, or it rides on the main verb with none of its own.
+      if (verb || liftHasNow(own) || tailChangesLift(own) || !NEUTRAL_VERB.test(own)) return true;
+      continue;
+    }
+    if (tail && tailChangesLift(tail)) return true;
+    const movesRun = verb ? RUN_OBJECT.test(own.slice(verb.index)) : mainMovesRun;
+    if (!movesRun) return true;
+  }
+  return false;
 }
 const NOTE_CLAIM = verbForms(
   String.raw`added|put|noted|saved|logged|jotted|written|wrote|appended`,
@@ -380,7 +457,12 @@ export function classifySentence(sentence: string, message?: string | null): Sta
 
   const aboutRecord = NOTES_NOUN.test(text) || RECORD_DEST.test(text) || aboutBodyweight(text);
   if (FOOD_NOUN.test(text) && claimAt(text, FOOD_CLAIM, message)) classes.push("food");
-  if (!aboutRecord && PLAN_NOUN.test(text) && claimAt(text, PLAN_CLAIM, message)) classes.push("plan");
+  if (
+    !aboutRecord &&
+    PLAN_NOUN.test(text) &&
+    (claimAt(text, PLAN_CLAIM, message) || assertedAt(text, firstMatchIndex(text, [PLAN_NOW_DAY])))
+  )
+    classes.push("plan");
   if (claimAt(text, LOG_CLAIM, message) || (aboutRecord && claimAt(text, NOTE_CLAIM, message))) classes.push("log");
   if (assertedAt(text, firstMatchIndex(text, [MEMORY_CLAIM]))) classes.push("memory");
 

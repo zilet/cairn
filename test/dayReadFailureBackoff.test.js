@@ -7,6 +7,9 @@
 // a signal-driven refresh and the expiry of the window all still arm; a success clears
 // it; host congestion (AgentBusyError) never counts as a failure.
 import { test, beforeEach } from "node:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import assert from "node:assert/strict";
 import { localDaysAgo, repo, resetTables } from "./_seed.js";
 import { computeCanonicalDayRead, dayReadAgentAttemptFailed } from "../dist/dayread.js";
@@ -126,14 +129,10 @@ test("host congestion and an empty rotation are not agent failures", () => {
     false,
     "no agent was asked"
   );
-  assert.equal(
-    dayReadAgentAttemptFailed(new AgentFallbackError(["claude"], [{ agent: "claude", error: "timed out" }])),
-    true
-  );
   assert.equal(dayReadAgentAttemptFailed(new Error("reply was outside the requested contract")), true);
 });
 
-test("a cancelled run and an all-held rotation are not agent failures", () => {
+test("a cancelled run is not an agent failure", () => {
   // The precompute deadline's own abort (src/scheduler.ts) surfaces as a cancel.
   assert.equal(dayReadAgentAttemptFailed(new Error("canceled")), false, "the loop's own cancel");
   assert.equal(dayReadAgentAttemptFailed(new Error('agent "claude" canceled')), false, "a cancelled spawn");
@@ -149,33 +148,88 @@ test("a cancelled run and an all-held rotation are not agent failures", () => {
     true,
     "the run's own deadline (the agent ran out of time) still counts"
   );
-  const hold = { state: "rate_limited", resets_at: null, hold_until: "2026-11-11T09:00:00Z", detail: null };
+});
+
+// The tried entries exactly as runAgentWithFallback (src/agents.ts) writes them: every
+// attempt that RAN and failed carries an `availability` classification (invalid output, a
+// crash, a quota error that only now creates a hold) with hold_until null; only a provider
+// skipped BEFORE any spawn on a live hold is marked skipped_on_hold.
+const ran = (agent, state, error) => ({
+  agent,
+  error,
+  availability: { state, resets_at: null, hold_until: null, detail: null },
+});
+const skipped = (agent, state) => ({
+  agent,
+  error: `${agent} is held`,
+  availability: { state, resets_at: null, hold_until: "2026-11-11T09:00:00Z", detail: null },
+  skipped_on_hold: true,
+});
+const fallback = (...tried) =>
+  new AgentFallbackError(
+    tried.map((t) => t.agent),
+    tried
+  );
+
+test("a real attempt that ran and failed starts the backoff; a rotation that only sat out does not", () => {
   assert.equal(
-    dayReadAgentAttemptFailed(
-      new AgentFallbackError(
-        ["claude", "codex"],
-        [
-          { agent: "claude", error: "claude is at its usage limit", availability: hold },
-          { agent: "codex", error: "codex is out of credit", availability: { ...hold, state: "out_of_credit" } },
-        ]
-      )
-    ),
+    dayReadAgentAttemptFailed(fallback(ran("claude", "invalid_output", "no valid JSON"))),
+    true,
+    "junk output"
+  );
+  assert.equal(dayReadAgentAttemptFailed(fallback(ran("claude", "process_error", "exited 1"))), true, "a crash");
+  assert.equal(
+    dayReadAgentAttemptFailed(fallback(ran("claude", "timeout", "timed out"))),
+    true,
+    "the CLI's own timeout"
+  );
+  assert.equal(
+    dayReadAgentAttemptFailed(fallback(ran("codex", "quota_exhausted", "usage limit reached"))),
+    true,
+    "a quota error from a CLI that DID spawn is a real attempt (its new hold governs the provider separately)"
+  );
+  assert.equal(
+    dayReadAgentAttemptFailed(fallback(skipped("claude", "rate_limited"), skipped("codex", "out_of_credit"))),
     false,
-    "every provider held: nothing spawned"
+    "every provider skipped on a live hold: nothing spawned"
   );
   assert.equal(
     dayReadAgentAttemptFailed(
-      new AgentFallbackError(
-        ["claude", "codex"],
-        [
-          { agent: "claude", error: "claude is at its usage limit", availability: hold },
-          { agent: "codex", error: "timed out" },
-        ]
-      )
+      fallback(skipped("claude", "rate_limited"), ran("codex", "invalid_output", "no valid JSON"))
     ),
     true,
-    "one provider held, another really ran and failed"
+    "one provider sat out, another really ran and failed"
   );
+  const aborted = new AbortController();
+  aborted.abort();
+  assert.equal(
+    dayReadAgentAttemptFailed(fallback(ran("claude", "process_error", 'agent "claude" canceled')), aborted.signal),
+    false,
+    "an aborted run"
+  );
+});
+
+test("end to end: a CLI that prints non-JSON and exits 0 starts the backoff", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cairn-dayread-junk-"));
+  const script = path.join(dir, "junk.cjs");
+  fs.writeFileSync(
+    script,
+    `process.stdin.resume();process.stdin.on("end",()=>{process.stdout.write("Sure! Here is your day.");});`
+  );
+  const config = path.join(dir, "agents.json");
+  fs.writeFileSync(config, JSON.stringify({ junk: { command: "node", args: [script], input: "stdin" } }));
+  const previous = process.env.AGENTS_CONFIG;
+  process.env.AGENTS_CONFIG = config;
+  try {
+    const date = localDaysAgo(0);
+    harness(date);
+    const read = await computeCanonicalDayRead({ date, agent: "junk" });
+    assert.equal(read.source, "deterministic", "the floor stands");
+    assert.equal(dayReadSelfHealCoolingDown(date, read.prose_identity), true, "junk output is a failed attempt");
+  } finally {
+    process.env.AGENTS_CONFIG = previous;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("an aborted compute leaves the self-heal armed", async () => {

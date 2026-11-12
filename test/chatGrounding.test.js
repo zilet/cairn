@@ -288,6 +288,16 @@ for (const [label, write] of RUN_WRITES) {
       "I've moved your long run to Sunday; your lifting days are unchanged.",
       "I've moved your long run to Sunday; your lift days are unchanged.",
       "I've moved your easy run to Wednesday and your squat day stays as it is.",
+      "I've moved your tempo run to Tuesday; your squat and deadlift days are unchanged.",
+      "I've moved your run to Tuesday, and your sets and reps are unchanged.",
+      "I've moved your run to Tuesday; nothing changed on your squats.",
+      "I've moved your run to Tuesday — your lifts haven't moved.",
+      "I've moved the 5k to Friday so it's not the day after deadlifts.",
+      "I've moved your 10k to Saturday, away from deadlifts.",
+      "I've removed Thursday's run and your squats get the day to themselves.",
+      "I've moved your easy run to Tuesday since you deadlift Thursday.",
+      "I've moved your easy run to Wednesday to give your legs a break before squats.",
+      "I've moved your long run away from deadlifts.",
     ]) {
       const out = ground(reply, [write]);
       assert.equal(out.reply, reply, reply);
@@ -303,6 +313,18 @@ for (const [label, write] of RUN_WRITES) {
       "I moved your run and swapped your bench for dumbbell press.",
       "I've moved your run off Thursday and swapped your bench for dumbbell press.",
       "I've moved your run so it doesn't clash, and trimmed a set from your squats.",
+      "I've moved your run to Friday after shortening your bench session.",
+      "I've moved your run to Friday after cutting your squat sets.",
+      "I've moved your run to Friday since I halved your squat sets.",
+      "I've moved your run to Friday so your squats now have fewer sets.",
+      "I've moved your run to Friday to free Thursday, where your squats now go.",
+      "I've moved your run to Friday while dialing back your deadlifts.",
+      "I've moved your run to Friday before deloading your squats.",
+      "I've pushed your run back a day and your leg day with it.",
+      "I've moved your run to Thursday and your lifting to Friday.",
+      "I've moved your run to Thursday and your strength session to Friday.",
+      "I've moved your run to Thursday and your leg day to Friday.",
+      "Your Saturday long run is now Sunday, and your Saturday lift is now Friday.",
     ]) {
       const out = ground(reply, [write]);
       assert.notEqual(out.reply, reply, reply);

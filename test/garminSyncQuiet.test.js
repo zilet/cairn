@@ -23,7 +23,13 @@ import {
   setGarminClientForTests,
   syncGarmin,
 } from "../dist/garmin.js";
-import { garminStrengthIdsToEnqueue, garminStrengthJobsOwed, processGarminStrengthJob, whenEnrichQueueIdle } from "../dist/enrich.js";
+import {
+  garminStrengthIdsToEnqueue,
+  garminStrengthJobsOwed,
+  offerGarminStrengthJobs,
+  processGarminStrengthJob,
+  whenEnrichQueueIdle,
+} from "../dist/enrich.js";
 import { garminFailureRetryMs, garminLightCheckHour, garminRetryLadder, GARMIN_RETRY_BASE_MS } from "../dist/scheduler.js";
 
 const TODAY = () => localDaysAgo(0);
@@ -365,6 +371,104 @@ test("a session narrated before the marker existed is settled, until its row cha
     garminStrengthIdsToEnqueue([legacy.id], new Set([Number(legacy.id)])).includes(legacy.id),
     "a row the pass changed is still offered"
   );
+});
+
+test("a legacy session whose row changed stays owed through a lost job; its untouched sibling does not", async () => {
+  repo.setSettings({ enrich_enabled: false }); // the job runs but never settles: a lost job, durably
+  const a = repo.upsertGarminActivity(strength("L-a"));
+  const b = repo.upsertGarminActivity(strength("L-b", { duration_min: 20, start_time: `${TODAY()} 19:30:00` }));
+  setOldStamp(a.id);
+  setOldStamp(b.id);
+  repo.reconcileGarminStrength(a.id);
+  repo.reconcileGarminStrength(b.id);
+  const { id: sessionId } = sessionBlob();
+  repo.updateSessionGarminNarrative(sessionId, { summary: "Pre-upgrade read.", agent: "stub" });
+  assert.equal(Object.hasOwn(sessionBlob().blob, "settled_activity_versions"), false, "a legacy session");
+
+  // A quiet pass over a legacy session offers nothing and writes nothing.
+  const quietKey = freshness();
+  assert.deepEqual(offerGarminStrengthJobs([a.id, b.id], new Set()), []);
+  assert.equal(freshness(), quietKey, "no adoption without a changed row");
+
+  // The pass revises A: the gate offers it, and the session moves onto the per-activity rule.
+  const defer = repo.newGarminSyncDeferral();
+  repo.upsertGarminActivity(strength("L-a", { calories: 360 }), a.source_id, { defer });
+  repo.reconcileGarminStrength(a.id, { defer });
+  repo.flushGarminSyncDeferral(defer);
+  assert.ok(defer.written.has(Number(a.id)));
+  assert.deepEqual(offerGarminStrengthJobs([a.id, b.id], defer.written), [a.id]);
+  await whenEnrichQueueIdle();
+  assert.deepEqual(sessionBlob().blob.settled_activity_versions, [`L-b@${OLD_STAMP}`], "B settled, A owed");
+
+  // The job never settled A (lost). Boot and the next identical pass still offer A, never B.
+  assert.ok(garminStrengthJobsOwed().includes(a.id), "boot recovery still owes A");
+  assert.ok(!garminStrengthJobsOwed().includes(b.id), "and not B");
+  assert.deepEqual(garminStrengthIdsToEnqueue([a.id, b.id]), [a.id], "the next identical pass offers A only");
+
+  // A's own job finishing settles it; nothing is owed after.
+  enableStubNarrative();
+  await processGarminStrengthJob(a.id);
+  assert.deepEqual(garminStrengthIdsToEnqueue([a.id, b.id]), []);
+  assert.equal(sessionBlob().blob.settled_activity_versions.length, 2);
+});
+
+test("a first narrative records only its own activity, in the same write", async () => {
+  enableStubNarrative();
+  const a = repo.upsertGarminActivity(strength("F-a"));
+  const b = repo.upsertGarminActivity(strength("F-b", { duration_min: 20, start_time: `${TODAY()} 19:30:00` }));
+  repo.reconcileGarminStrength(a.id);
+  repo.reconcileGarminStrength(b.id);
+  const writes = [];
+  db.exec(`CREATE TEMP TABLE IF NOT EXISTS _blob_writes (summary TEXT, list TEXT)`);
+  db.exec(`DELETE FROM _blob_writes`);
+  db.exec(
+    `CREATE TEMP TRIGGER IF NOT EXISTS _blob_writes_t AFTER UPDATE OF garmin_json ON sessions
+     WHEN json_extract(NEW.garmin_json, '$.summary') IS NOT NULL
+      AND json_extract(OLD.garmin_json, '$.summary') IS NULL
+     BEGIN INSERT INTO _blob_writes VALUES (json_extract(NEW.garmin_json, '$.summary'),
+       json_extract(NEW.garmin_json, '$.settled_activity_versions')); END`
+  );
+  try {
+    await processGarminStrengthJob(a.id);
+    for (const r of db.prepare(`SELECT * FROM _blob_writes`).all()) writes.push(r);
+  } finally {
+    db.exec(`DROP TRIGGER IF EXISTS _blob_writes_t`);
+  }
+  assert.equal(writes.length, 1, "the narrative landed in one write");
+  assert.equal(JSON.parse(writes[0].list).length, 1, "and that very write carries the marker");
+  // A fresh session is not legacy: its sibling's job is still owed.
+  assert.deepEqual(garminStrengthIdsToEnqueue([a.id, b.id]), [b.id]);
+});
+
+test("the reconcile drops parked sets and markers of activities that no longer feed the session", () => {
+  repo.logSetByName({ exercise: "Back Squat", weight: 155, reps: 8, date: TODAY() });
+  const shell = repo.upsertGarminActivity(strength("X-shell"));
+  const watch = repo.upsertGarminActivity(strength("X-watch", { duration_min: 20, start_time: `${TODAY()} 19:30:00` }));
+  repo.reconcileGarminStrength(shell.id);
+  repo.reconcileGarminStrength(watch.id);
+  const { id: sessionId } = sessionBlob();
+  for (const key of ["X-shell", "X-watch"]) {
+    repo.importGarminActivitySets({
+      session_id: sessionId,
+      date: TODAY(),
+      activity_key: key,
+      sets: [{ exercise: "Unknown", weight: 0, reps: 12 }],
+    });
+  }
+  repo.markGarminStrengthActivitySettled(sessionId, `X-shell@${OLD_STAMP}`);
+  repo.markGarminStrengthActivitySettled(sessionId, `X-watch@${OLD_STAMP}`);
+  assert.equal(sessionBlob().blob.unattributed_sets.length, 2);
+
+  // The retarget deletes the manual shell; the next reconcile of the day forgets it.
+  repo.deleteGarminActivityByExternalId("X-shell");
+  repo.reconcileGarminStrength(watch.id);
+  const { blob } = sessionBlob();
+  assert.deepEqual(
+    blob.unattributed_sets.map((u) => u.activity_key),
+    ["X-watch"],
+    "the deleted activity's parked set is gone; the linked one's stays"
+  );
+  assert.deepEqual(blob.settled_activity_versions, [`X-watch@${OLD_STAMP}`]);
 });
 
 // ---- the whole pass, against a fake Garmin -----------------------------------------

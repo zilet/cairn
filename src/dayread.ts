@@ -808,8 +808,8 @@ export function dayReadReplyChecks(
 // runner contract is defer-and-retry (src/agent-busy.ts) — and neither is an empty
 // rotation (no agent enabled), which asked nobody. A cancelled run (the caller's own
 // abort, e.g. the precompute deadline) is no verdict on the agent, and a rotation in
-// which every provider sat out on an availability hold spawned nothing: the hold's own
-// clock decides when that provider is asked again, not this backoff.
+// which every provider sat out on a live availability hold (skipped before any spawn)
+// asked nobody: the hold's own clock decides when that provider is asked again.
 export function dayReadAgentAttemptFailed(error: unknown, signal?: AbortSignal | null): boolean {
   if (signal?.aborted) return false;
   if (isAgentBusyError(error)) return false;
@@ -817,7 +817,9 @@ export function dayReadAgentAttemptFailed(error: unknown, signal?: AbortSignal |
   if (/(?:^|\s)cancell?ed$/i.test(String((error as any)?.message ?? "").trim())) return false;
   if (error instanceof AgentFallbackError) {
     if (!error.order.length) return false;
-    if (error.tried.length && error.tried.every((entry) => !!entry.availability)) return false;
+    // Only a provider skipped BEFORE any spawn sat out. One that ran and failed — junk,
+    // a crash, or a quota error that only now created its hold — was really asked.
+    if (error.tried.length && error.tried.every((entry) => entry.skipped_on_hold === true)) return false;
   }
   return true;
 }

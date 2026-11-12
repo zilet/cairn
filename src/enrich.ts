@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { db } from "./db.js";
 import { inferHealthDocumentKind, normalizeHealthDocumentKind } from "./healthDocumentKinds.js";
 import {
+  adoptPerActivityStrengthMarker,
   GARMIN_STRENGTH_ACTIVITY_SETTLED_SQL,
   garminStrengthActivityKey,
   garminStrengthActivityVersion,
@@ -1214,12 +1215,22 @@ export async function processGarminStrengthJob(garminActivityId: number): Promis
   // only while the row still carries it: a revision that landed mid-run is newer work,
   // which the sync that wrote it offers again.
   const version = garminStrengthActivityVersion(ga);
-  const settle = (): void => {
+  // The version to record now, or null when the row moved (or left this session) since.
+  const settledVersionNow = (sessionId: number): string | null => {
     try {
       const now = getGarminActivity(garminActivityId) as any;
-      if (now?.session_id && garminStrengthActivityVersion(now) === version) {
-        markGarminStrengthActivitySettled(now.session_id, version);
-      }
+      return Number(now?.session_id) === Number(sessionId) && garminStrengthActivityVersion(now) === version
+        ? version
+        : null;
+    } catch {
+      return null; // an unrecorded completion only means one more offer
+    }
+  };
+  const settle = (): void => {
+    const current = settledVersionNow(ga.session_id);
+    if (!current) return;
+    try {
+      markGarminStrengthActivitySettled(ga.session_id, current);
     } catch {
       /* an unrecorded completion only means one more offer */
     }
@@ -1336,11 +1347,12 @@ export async function processGarminStrengthJob(garminActivityId: number): Promis
     // session look extrapolated. Preserve only a pre-existing historical flag.
     extrapolated: !!session?.garmin?.extrapolated,
     agent,
+    // The narrative landed: this activity version's job is done, recorded in the SAME
+    // write as the narrative (a crash between two writes would leave a summary with no
+    // marker list — which the legacy arm reads as settled forever). Enrichment off, no
+    // agent, or no usable reply leave no marker, so the next sync (or boot) offers it again.
+    settled_activity_version: settledVersionNow(ga.session_id),
   });
-  // The narrative landed: this activity version's job is done. Enrichment off, no agent,
-  // or no usable reply leave no marker, so the next sync (or boot) offers it again —
-  // exactly as an owed narrative always was.
-  settle();
   if (logged) log.info(`[enrich] garmin_strength#${garminActivityId}: logged ${logged} detected set(s) into session ${ga.session_id} (kg→lb in code).`);
 }
 
@@ -2719,6 +2731,29 @@ export function garminStrengthIdsToEnqueue(ids: number[], changed: ReadonlySet<n
     return unique;
   }
   return unique.filter((id) => changed.has(id) || !settled.has(id));
+}
+
+/**
+ * The sync's enqueue step: offer the activities the gate above lets through, and — for
+ * a row this pass wrote whose session was narrated before the per-activity marker
+ * existed — first move that session onto the per-activity rule durably
+ * (adoptPerActivityStrengthMarker), so the offer survives a lost in-memory job. That
+ * adoption only ever runs for a row this pass already wrote, so it moves no freshness
+ * key the row's own write had not already moved.
+ */
+export function offerGarminStrengthJobs(ids: number[], changed: ReadonlySet<number> = new Set()): number[] {
+  const offered = garminStrengthIdsToEnqueue(ids, changed);
+  for (const id of offered) {
+    if (changed.has(id)) {
+      try {
+        adoptPerActivityStrengthMarker(id);
+      } catch {
+        /* the legacy arm still offers it this pass; only durability is lost */
+      }
+    }
+    enqueueEnrich("garmin_strength", id);
+  }
+  return offered;
 }
 
 // The newest health document the stored whole-picture review actually read. A

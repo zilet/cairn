@@ -1864,6 +1864,26 @@ export function reconcileGarminStrength(
   const carried: Record<string, unknown> =
     existing && typeof existing === "object" && !Array.isArray(existing) ? { ...existing } : {};
   for (const key of GARMIN_RECONCILE_OWNED_KEYS) delete carried[key];
+  // Two of those records are PER ACTIVITY, and they describe only activities that still
+  // feed this session. A manual shell the retarget deleted, or an activity that moved to
+  // another day, would otherwise leave its parked sets counted on this session's card
+  // ("N sets the watch couldn't name") and its marker riding here forever. Each parked
+  // entry names its activity (`activity_key`, the set import's key); an entry with no
+  // key is legacy shape and is kept rather than guessed about.
+  const contributingKeys = new Set(rows.map((r) => garminStrengthActivityKey(r)));
+  if (Array.isArray(carried.unattributed_sets)) {
+    const kept = (carried.unattributed_sets as any[]).filter((entry) => {
+      const key = entry && typeof entry === "object" ? String(entry.activity_key ?? "") : "";
+      return !key || contributingKeys.has(key);
+    });
+    if (kept.length) carried.unattributed_sets = kept;
+    else delete carried.unattributed_sets;
+  }
+  if (Array.isArray(carried.settled_activity_versions)) {
+    carried.settled_activity_versions = (carried.settled_activity_versions as unknown[])
+      .map((v) => String(v))
+      .filter((v) => contributingKeys.has(v.slice(0, v.lastIndexOf("@"))));
+  }
   const blob = {
     ...carried,
     // Identity fronted by the primary (longest) activity — preserves single-activity output.
@@ -2052,8 +2072,8 @@ export function garminStrengthActivityVersion(ga: {
 // A session narrated BEFORE the marker existed has a summary and no list at all. Its
 // activities were re-narrated on every pass back then, so it reads as settled rather
 // than costing one more agent run per old workout on the first pass after an upgrade;
-// a row the pass actually changes is still offered (`changed`, enrich.ts), and that
-// job's marker then puts the session on the per-activity rule.
+// a row the pass actually changes is still offered (`changed`, enrich.ts), and offering
+// it moves the session onto the per-activity rule durably (adoptPerActivityStrengthMarker).
 export const GARMIN_STRENGTH_ACTIVITY_SETTLED_SQL = `(EXISTS (
   SELECT 1 FROM json_each(
       CASE WHEN json_valid(s.garmin_json) THEN s.garmin_json ELSE '{}' END,
@@ -2073,6 +2093,70 @@ function withSettledVersion(prior: unknown, version: string): string[] {
   return [...kept, version].slice(-MAX_SETTLED_ACTIVITY_VERSIONS);
 }
 
+// ---- sessions narrated before the marker existed ----------------------------------
+// The moment a job is offered for an activity of a legacy session (summary, no list),
+// the session moves onto the per-activity rule: its OTHER linked strength activities
+// are recorded settled at their current versions and the offered one is left owed. So
+// a job lost to a restart stays owed, instead of being hidden again by the legacy arm.
+
+function parseSessionGarminBlob(raw: unknown): Record<string, any> {
+  let blob: any = {};
+  try {
+    blob = raw ? JSON.parse(String(raw)) : {};
+  } catch {
+    blob = {};
+  }
+  return blob && typeof blob === "object" && !Array.isArray(blob) ? blob : {};
+}
+
+/** The SQL legacy arm, in JS: a summary and no `settled_activity_versions` key. */
+function isLegacyNarratedBlob(blob: Record<string, any>): boolean {
+  return !Object.hasOwn(blob, "settled_activity_versions") && blob.summary != null;
+}
+
+/** Current versions of the session's linked strength activities, all but `exceptKey`. */
+function linkedStrengthVersionsExcept(sessionId: number, exceptKey: string): string[] {
+  const rows = db
+    .prepare(`SELECT id, external_id, synced_at, type FROM garmin_activities WHERE session_id = ? ORDER BY id`)
+    .all(sessionId) as any[];
+  return rows
+    .filter((r) => isStrengthGarminType(r.type) && garminStrengthActivityKey(r) !== exceptKey)
+    .map((r) => garminStrengthActivityVersion(r))
+    .slice(-MAX_SETTLED_ACTIVITY_VERSIONS);
+}
+
+/**
+ * The list after recording `version`. `stored` is the blob AS STORED (before any patch in
+ * the same write — a narrative's own new summary must not make a fresh session look
+ * legacy): a legacy session's other linked activities are seeded as settled first.
+ */
+function settledListWith(sessionId: number, stored: Record<string, any>, version: string): string[] {
+  const prior = isLegacyNarratedBlob(stored)
+    ? linkedStrengthVersionsExcept(sessionId, version.slice(0, version.lastIndexOf("@")))
+    : stored.settled_activity_versions;
+  return withSettledVersion(prior, version);
+}
+
+/**
+ * Put a legacy session (summary, no list) on the per-activity rule before a job is
+ * offered for one of its activities: every OTHER linked strength activity is recorded
+ * settled at its current version, this one stays owed. Returns whether it wrote — only
+ * ever for a legacy session, which the sync offers only for a row this pass wrote.
+ */
+export function adoptPerActivityStrengthMarker(garminActivityId: number): boolean {
+  const ga = db
+    .prepare(`SELECT id, external_id, session_id FROM garmin_activities WHERE id = ?`)
+    .get(garminActivityId) as any;
+  if (!ga?.session_id) return false;
+  const s = db.prepare(`SELECT garmin_json FROM sessions WHERE id = ?`).get(ga.session_id) as any;
+  if (!s) return false;
+  const blob = parseSessionGarminBlob(s.garmin_json);
+  if (!isLegacyNarratedBlob(blob)) return false;
+  blob.settled_activity_versions = linkedStrengthVersionsExcept(ga.session_id, garminStrengthActivityKey(ga));
+  db.prepare(`UPDATE sessions SET garmin_json = ? WHERE id = ?`).run(JSON.stringify(blob), ga.session_id);
+  return true;
+}
+
 /**
  * Record that the strength job finished for this activity version, without touching
  * anything else in the blob. A no-op (no write) when it is already recorded.
@@ -2080,16 +2164,10 @@ function withSettledVersion(prior: unknown, version: string): string[] {
 export function markGarminStrengthActivitySettled(sessionId: number, version: string): boolean {
   const s = db.prepare(`SELECT garmin_json FROM sessions WHERE id = ?`).get(sessionId) as any;
   if (!s || !version) return false;
-  let blob: any = {};
-  try {
-    blob = s.garmin_json ? JSON.parse(s.garmin_json) : {};
-  } catch {
-    blob = {};
-  }
-  if (!blob || typeof blob !== "object" || Array.isArray(blob)) blob = {};
+  const blob = parseSessionGarminBlob(s.garmin_json);
   const prior = Array.isArray(blob.settled_activity_versions) ? blob.settled_activity_versions.map(String) : [];
   if (prior.includes(version)) return false;
-  blob.settled_activity_versions = withSettledVersion(prior, version);
+  blob.settled_activity_versions = settledListWith(sessionId, blob, version);
   db.prepare(`UPDATE sessions SET garmin_json = ? WHERE id = ?`).run(JSON.stringify(blob), sessionId);
   return true;
 }
@@ -2111,12 +2189,8 @@ export function updateSessionGarminNarrative(
 ) {
   const s = db.prepare(`SELECT garmin_json FROM sessions WHERE id = ?`).get(sessionId) as any;
   if (!s) return null;
-  let blob: any = {};
-  try {
-    blob = s.garmin_json ? JSON.parse(s.garmin_json) : {};
-  } catch {
-    blob = {};
-  }
+  const blob: any = parseSessionGarminBlob(s.garmin_json);
+  const stored = { ...blob };
   if (patch.summary !== undefined) blob.summary = patch.summary;
   if (patch.intensity !== undefined) blob.intensity = patch.intensity;
   if (patch.extrapolated !== undefined) blob.extrapolated = !!patch.extrapolated;
@@ -2129,8 +2203,10 @@ export function updateSessionGarminNarrative(
       ...new Set(patch.imported_set_activity_ids.map((id) => String(id)).filter(Boolean)),
     ].slice(-32);
   }
+  // In the SAME write as the narrative: a crash between two writes would leave a
+  // summary with no marker list, which the legacy arm reads as settled forever.
   if (patch.settled_activity_version) {
-    blob.settled_activity_versions = withSettledVersion(blob.settled_activity_versions, patch.settled_activity_version);
+    blob.settled_activity_versions = settledListWith(sessionId, stored, patch.settled_activity_version);
   }
   db.prepare(`UPDATE sessions SET garmin_json = ? WHERE id = ?`).run(JSON.stringify(blob), sessionId);
   // The narrative is prose ABOUT a session, not training the day-read grades: dayLoad

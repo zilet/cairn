@@ -2215,6 +2215,8 @@ export interface AgentTriedEntry {
   error: string;
   /** Present when the agent was held (or newly observed) as unavailable. */
   availability?: AgentTriedAvailability;
+  /** True when the agent sat out on a live availability hold: it was never spawned. */
+  skipped_on_hold?: true;
 }
 
 export interface FallbackResult {
@@ -2404,6 +2406,7 @@ export async function runAgentWithFallback(
       agent: name,
       error: availabilityReason({ state: hold.state, resets_at: hold.resets_at }),
       availability: { ...hold },
+      skipped_on_hold: true,
     });
   };
 

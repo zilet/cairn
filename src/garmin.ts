@@ -421,10 +421,13 @@ export function setGarminClientForTests(factory: (() => Promise<any> | any) | nu
 /** The access token each client was loaded with (or last persisted), so a refresh is visible. */
 const persistedAccessToken = new WeakMap<object, string | null>();
 let tokenDirForTests: string | null = null;
+/** The access token whose failed write was last warned about (compared, never logged). */
+let tokenPersistWarnedFor: string | null = null;
 
 /** Point token persistence somewhere else (tests only; null restores the real dir). */
 export function setGarminTokenDirForTests(dir: string | null): void {
   tokenDirForTests = dir;
+  tokenPersistWarnedFor = null;
 }
 
 function garminTokenPair(client: any): { oauth1: any; oauth2: any } | null {
@@ -483,7 +486,12 @@ export function persistRefreshedGarminToken(client: any): boolean {
     log.info("[garmin] saved the refreshed Garmin token.");
     return true;
   } catch (e: any) {
-    log.warn(`[garmin] could not save the refreshed Garmin token: ${e?.code ?? "write failed"}`);
+    // Once per token value: a read-only token dir fails every check the same way, and a
+    // warning every 15 minutes is noise. The token itself is never logged.
+    if (tokenPersistWarnedFor !== access) {
+      tokenPersistWarnedFor = access;
+      log.warn(`[garmin] could not save the refreshed Garmin token: ${e?.code ?? "write failed"}`);
+    }
     return false;
   }
 }
@@ -1541,7 +1549,7 @@ async function syncGarminPass(window: GarminSyncWindow, signal?: AbortSignal): P
     if (strengthIds.length || exportIds.length) {
       import("./enrich.js")
         .then((m) => {
-          for (const id of m.garminStrengthIdsToEnqueue(strengthIds, changedIds)) m.enqueueEnrich("garmin_strength", id);
+          m.offerGarminStrengthJobs(strengthIds, changedIds);
           // After the strength reconcile above, so a session that just linked a watch
           // activity is exported against its new target rather than the old one.
           for (const id of exportIds) m.enqueueEnrich("garmin_export", id);
