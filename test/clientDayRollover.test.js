@@ -216,10 +216,11 @@ test("a same-day foreground event repaints the active tab once the last paint is
   assert.equal(context.activatedCount, 1);
 });
 
-// Today is where another device's change lands (a session accepted on the laptop,
-// the phone opened a minute later), so it goes stale after 30 s; the Session tab
-// keeps the long window so a phone locked between sets never rebuilds the log.
-test("Today repaints after a short absence; the Session tab waits the long window", () => {
+// Today is where another device's change lands (a session opened on the laptop, the phone
+// foregrounded a moment later), so coming back to it ALWAYS revalidates: renderToday({soft:true})
+// paints the cached Today first and lets the aggregate's answer settle in over it. Every other
+// tab keeps the long window so a phone locked between sets never rebuilds the log.
+test("Today revalidates on every foreground; the Session tab waits the long window", () => {
   const listeners = {};
   let now = 1_800_000_000_000;
   class FakeDate extends Date {
@@ -249,27 +250,32 @@ test("Today repaints after a short absence; the Session tab waits the long windo
     activateTab: (tab) => {
       context.activated = [...(context.activated || []), tab];
     },
+    renderToday: (opts) => {
+      context.revalidated = [...(context.revalidated || []), opts];
+    },
     syncRouteFromState: () => {},
   };
   vm.runInNewContext(readFileSync(join(root, "public/js/app-day-rollover.js"), "utf8"), context);
   context.window.installDayRolloverWatcher();
 
-  now += 10 * 1000;
+  now += 2 * 1000;
   listeners.visibilitychange();
-  assert.equal(context.activated, undefined, "a glance away is not stale");
+  assert.deepEqual(JSON.parse(JSON.stringify(context.revalidated)), [{ soft: true }], "even a glance away revalidates Today, quietly");
+  assert.equal(context.activated, undefined, "…without rebuilding the screen");
 
   now += 40 * 1000;
-  listeners.visibilitychange();
-  assert.deepEqual(context.activated, ["today"]);
+  listeners.pageshow();
+  assert.equal(context.revalidated.length, 2);
 
   context.state.tab = "session";
   now += 60 * 1000;
   listeners.visibilitychange();
-  assert.deepEqual(context.activated, ["today"], "the Session tab holds a minute away");
+  assert.equal(context.activated, undefined, "the Session tab holds a minute away");
+  assert.equal(context.revalidated.length, 2);
 
   now += 6 * 60 * 1000;
   listeners.visibilitychange();
-  assert.deepEqual(context.activated, ["today", "session"]);
+  assert.deepEqual(context.activated, ["session"]);
 });
 
 // Coming back to the app asks the server whether the watch sent something new

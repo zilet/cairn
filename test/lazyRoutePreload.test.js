@@ -137,8 +137,8 @@ function runBoot({ pathname, profileRow, planRow, now = Date.UTC(2026, 8, 26, 12
   const calls = [];
   const storage = {
     cairn_token: "",
-    "cairn.swr.v1.profile": profileRow == null ? null : JSON.stringify(profileRow),
-    "cairn.swr.v1.plan": planRow == null ? null : JSON.stringify(planRow),
+    "cairn.swr.v2.profile": profileRow == null ? null : JSON.stringify(profileRow),
+    "cairn.swr.v2.plan": planRow == null ? null : JSON.stringify(planRow),
   };
   const context = {
     location: { pathname },
@@ -466,9 +466,9 @@ test("the early reads are the ones the boot and each lazy view always ask for", 
     /peekCached<[^>]*>\("profile"\)[\s\S]*if \(warm && warm\.data\)[\s\S]*api\("\/profile"\)/
   );
   const swr = read("src/client/swr-cache.ts");
-  assert.match(swr, /const SWR_NS = "cairn\.swr\.v1\.";/);
+  assert.match(swr, /const SWR_NS = "cairn\.swr\.v2\.";/);
   assert.match(swr, /function swrSweep\(\): void \{\s*const MAX_AGE = 24 \* 60 \* 60 \* 1000;/);
-  assert.ok(earlyFetchScript(html).includes('localStorage.getItem("cairn.swr.v1.profile")'));
+  assert.ok(earlyFetchScript(html).includes('localStorage.getItem("cairn.swr.v2.profile")'));
   assert.ok(earlyFetchScript(html).includes("<=864e5"));
 });
 

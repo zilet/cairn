@@ -129,7 +129,12 @@
   }
 
   /** A day of GET /api/plan/week (Today's strip, Horizon's week) as its glance. */
-  function glanceOfWeekDay(day: GlanceWeekDay | null | undefined, today: string, units: unknown): ClientDayGlance | null {
+  function glanceOfWeekDay(
+    day: GlanceWeekDay | null | undefined,
+    today: string,
+    units: unknown,
+    line?: { state?: unknown } | null
+  ): ClientDayGlance | null {
     const date = day && GLANCE_ISO.test(String(day.date || "")) ? String(day.date) : "";
     if (!day || !date) return null;
     const isToday = date === today;
@@ -145,7 +150,8 @@
           ? {
               name,
               done: day.session?.finished === true || (day.status === "done" && !!day.session),
-              live: !!day.session,
+              // Today under way is the server line's word (strength_line.state), never "a session row exists".
+              live: isToday && line ? line.state === "in_progress" : !!day.session,
             }
           : null,
       run:

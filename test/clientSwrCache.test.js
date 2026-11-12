@@ -75,7 +75,7 @@ test("SWR cache stores normal payloads in memory and localStorage", async () => 
 
   assert.equal(loaded.calls[0], "/profile");
   assert.deepEqual(loaded.context.peekCached("profile").data, { ok: true });
-  assert.equal(loaded.storage.has("cairn.swr.v1.profile"), true);
+  assert.equal(loaded.storage.has("cairn.swr.v2.profile"), true);
 });
 
 test("SWR cache can be primed directly from mutation results", () => {
@@ -87,7 +87,7 @@ test("SWR cache can be primed directly from mutation results", () => {
     id: 12,
     finished_at: "2026-07-01T14:00:00Z",
   });
-  assert.equal(loaded.storage.has("cairn.swr.v1.today:session:2026-07-01"), true);
+  assert.equal(loaded.storage.has("cairn.swr.v2.today:session:2026-07-01"), true);
 });
 
 test("an older revalidate cannot overwrite a newer mutation result", async () => {
@@ -152,9 +152,9 @@ test("SWR cache keeps health-bearing and intake-progress payloads memory-only", 
   assert.deepEqual(loaded.context.peekCached("markers:priority").data, { ok: true });
   assert.deepEqual(loaded.context.peekCached("recovery:14").data, { ok: true });
   assert.deepEqual(loaded.context.peekCached("progress:intake").data, { ok: true });
-  assert.equal(loaded.storage.has("cairn.swr.v1.markers:priority"), false);
-  assert.equal(loaded.storage.has("cairn.swr.v1.recovery:14"), false);
-  assert.equal(loaded.storage.has("cairn.swr.v1.progress:intake"), false);
+  assert.equal(loaded.storage.has("cairn.swr.v2.markers:priority"), false);
+  assert.equal(loaded.storage.has("cairn.swr.v2.recovery:14"), false);
+  assert.equal(loaded.storage.has("cairn.swr.v2.progress:intake"), false);
 });
 
 test("SWR invalidation removes exact and prefix cache entries", async () => {
@@ -165,12 +165,12 @@ test("SWR invalidation removes exact and prefix cache entries", async () => {
 
   loaded.context.swrInvalidate("profile");
   assert.equal(loaded.context.peekCached("profile"), null);
-  assert.equal(loaded.storage.has("cairn.swr.v1.profile"), false);
+  assert.equal(loaded.storage.has("cairn.swr.v2.profile"), false);
 
   loaded.context.swrInvalidate("progress:");
   assert.equal(loaded.context.peekCached("progress:stats"), null);
   assert.equal(loaded.context.peekCached("progress:volume"), null);
-  assert.equal(loaded.storage.keys().some((key) => key.startsWith("cairn.swr.v1.progress:")), false);
+  assert.equal(loaded.storage.keys().some((key) => key.startsWith("cairn.swr.v2.progress:")), false);
 });
 
 test("paintSWR renders warm data first and upgrades only changed payloads", async () => {
@@ -211,16 +211,16 @@ test("paintSWR paints a fresh peek once and asks the network nothing", async () 
 
 test("swrSweep evicts stale rows and caps retained localStorage entries", () => {
   const now = Date.now();
-  const initial = { "cairn.swr.v1.old": JSON.stringify({ data: "old", ts: now - 25 * 60 * 60 * 1000 }) };
+  const initial = { "cairn.swr.v2.old": JSON.stringify({ data: "old", ts: now - 25 * 60 * 60 * 1000 }) };
   for (let i = 0; i < 45; i++) {
-    initial[`cairn.swr.v1.row-${String(i).padStart(2, "0")}`] = JSON.stringify({ data: i, ts: now - i });
+    initial[`cairn.swr.v2.row-${String(i).padStart(2, "0")}`] = JSON.stringify({ data: i, ts: now - i });
   }
   const loaded = loadSwrCache({ storage: storageFrom(initial) });
 
   loaded.context.swrSweep();
 
-  assert.equal(loaded.storage.has("cairn.swr.v1.old"), false);
-  assert.equal(loaded.storage.keys().filter((key) => key.startsWith("cairn.swr.v1.")).length, 40);
+  assert.equal(loaded.storage.has("cairn.swr.v2.old"), false);
+  assert.equal(loaded.storage.keys().filter((key) => key.startsWith("cairn.swr.v2.")).length, 40);
 });
 
 test("a FRESH cache hit answers without touching the network", async () => {

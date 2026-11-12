@@ -40,7 +40,7 @@ type ClientPaintSwrOptions<T> = {
 // content the moment you re-enter (skeleton only on a true cold start), then
 // quietly revalidate in the background and upgrade in place, generalizing the
 // Brief's `upgradeBriefInPlace`. Two tiers: an in-memory Map (this session) over
-// localStorage (`cairn.swr.v1.<key>`, survives reload/restart). JSON-only: never
+// localStorage (`cairn.swr.v2.<key>`, survives reload/restart). JSON-only: never
 // cache DOM; rendering still flows through escHtml/escAttr everywhere.
 //
 // HOW A SURFACE ADOPTS IT (4 lines):
@@ -55,7 +55,7 @@ type ClientPaintSwrOptions<T> = {
 // A MUTATING WRITE that invalidates a surface calls `swrInvalidate(key)` (or a
 // prefix) so the next paint refetches, the same role `state.brief = null` plays
 // for the Brief.
-const SWR_NS = "cairn.swr.v1."; // bump the version segment in lockstep with any payload-shape change
+const SWR_NS = "cairn.swr.v2."; // bump the version segment in lockstep with any payload-shape change
 const _swrMem = new Map<string, ClientSwrEntry<unknown>>(); // key -> { data, ts } (this-session tier, fastest)
 const _swrWriteRevision = new Map<string, number>();
 const _swrPrefixRevision = new Map<string, number>();

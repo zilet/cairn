@@ -3723,6 +3723,8 @@ body[data-tab="session"] .tabbar{display:none}
 .sess-dot.on{background:var(--s-strength)}
 .sess-body{padding-bottom:calc(env(safe-area-inset-bottom) + 44px)}
 .sess-dest .plansurface{margin-top:var(--space-1)}
+.sess-discard-row{margin-top:var(--space-6);text-align:center}
+.sess-discard{color:var(--muted);font-size:var(--text-sm);min-height:44px}
 .sess-dest .day-switch{padding:var(--space-1) 0 var(--space-6);gap:var(--space-3)}
 .sess-dest .daybtn{padding:var(--space-3) var(--space-6);font-size:var(--text-xs);font-weight:var(--weight-medium);letter-spacing:0;border-color:var(--line);background:var(--surface);color:var(--ink2)}
 .sess-dest .daybtn.active{background:var(--ink);color:var(--on-ink);border-color:var(--ink)}

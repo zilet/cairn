@@ -253,7 +253,7 @@ const SWR_AGE_MS = 10 * 60 * 1000;
 async function ageSwrCache(send) {
   return evaluate(
     send,
-    `(() => { let n = 0; for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (!k || !k.startsWith("cairn.swr.v1.")) continue; try { const o = JSON.parse(localStorage.getItem(k)); if (o && typeof o.ts === "number") { o.ts -= ${SWR_AGE_MS}; localStorage.setItem(k, JSON.stringify(o)); n++; } } catch {} } return n; })()`
+    `(() => { let n = 0; for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (!k || !k.startsWith("cairn.swr.v2.")) continue; try { const o = JSON.parse(localStorage.getItem(k)); if (o && typeof o.ts === "number") { o.ts -= ${SWR_AGE_MS}; localStorage.setItem(k, JSON.stringify(o)); n++; } } catch {} } return n; })()`
   ).catch(() => 0);
 }
 

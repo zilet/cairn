@@ -70,7 +70,7 @@
 
   let promptingAuth = false;
 
-  // Every remembered API body on this device (the SWR tiers, cairn.swr.v1.*). A 401
+  // Every remembered API body on this device (the SWR tiers, cairn.swr.v2.*). A 401
   // or a new token means the bodies were read under a credential that no longer
   // stands, so none of them may paint again — the next open reads fresh or shows
   // its skeleton. swr-cache.ts owns the memory tier; the disk sweep here also covers
@@ -82,7 +82,7 @@
     try {
       for (let i = localStorage.length - 1; i >= 0; i--) {
         const key = localStorage.key(i);
-        if (key && key.startsWith("cairn.swr.v1.")) localStorage.removeItem(key);
+        if (key && key.startsWith("cairn.swr.v2.")) localStorage.removeItem(key);
       }
     } catch {}
     try {

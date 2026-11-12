@@ -67,9 +67,10 @@ type TodayBriefHtmlOptions = {
   // The server already answered "no" to a rest-trade on this date. The offer stays
   // gone for the rest of the day rather than reappearing on the next repaint.
   tradeRefused?: boolean;
-  // Same "nothing to launch" witness the plan surface uses to hide its own launch
-  // card (today-screen.ts); undefined behaves as before (Start still offered).
+  // The plan surface's "nothing to launch" witness (undefined: Start still offered), and the
+  // server's open session, whose `label` is every start action's one wording.
   nothingToStart?: boolean;
+  open?: import("../contracts/client-api.js").ClientOpenSession | null;
   // Set only when the Brief carries the start AND the launch card below was
   // dropped for it; see TodayBriefSessionFold.
   session?: TodayBriefSessionFold | null;
@@ -516,11 +517,10 @@ type TodayBriefHtmlOptions = {
     // The live card is TODAY's alone: a past date's train read never shows a session as under way.
     const live = kind === "train" && options.isToday === true && options.session?.started && voice ? voice.liveHtml(options.session.live) : "";
     if (kind === "train" && !options.nothingToStart) {
-      // ONE ACTION, ONE BUTTON: the server's lift line (todayStrengthLine) says
-      // whether today's session already holds logged work; the folded launch facts
-      // carry the same log-derived witness for a read that has no line yet.
+      // ONE ACTION, ONE BUTTON, in the server's words (`open.label`); with no open session the
+      // lift line / folded launch facts say whether work is logged.
       const inProgress = line?.state === "in_progress" || options.session?.started === true;
-      actions.push(todayBriefRedirect("start-session", inProgress ? "Continue session" : "Start session", true));
+      actions.push(todayBriefRedirect("start-session", options.open?.label || (inProgress ? "Continue session" : "Start session"), true));
       sessionFold = todayBriefSessionFoldHtml(options.session, {
         estMinutes: foldMinutes != null ? null : estMinutes,
         lines: [read?.headline, read?.focus, read?.why, strengthLine ? line?.text : ""],
@@ -537,7 +537,7 @@ type TodayBriefHtmlOptions = {
         actions.push(
           todayBriefRedirect(
             "start-session",
-            liftOpen ? `${line!.state === "in_progress" ? "Continue" : "Start"} ${line!.title}` : "Log training",
+            options.open?.label || (liftOpen ? `${line!.state === "in_progress" ? "Continue" : "Start"} ${line!.title}` : "Log training"),
             // Never the loud button against a rest/easy suggestion.
             liftOpen && !line!.suggestion
           )

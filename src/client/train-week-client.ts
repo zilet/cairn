@@ -100,7 +100,7 @@ function twkNextOf(week: TwkWeek | null, ahead: TwkAhead | null): TwkNext | null
     const date = String(day.date);
     if (date < today) continue;
     seen.add(date);
-    const glance = CairnDayDetailModel.glanceOfWeekDay(day, today, units);
+    const glance = CairnDayDetailModel.glanceOfWeekDay(day, today, units, week?.strength_line);
     if (glance) candidates.push({ date, glance, lifts: twkLiftsFor(glance, byDate.get(date)) });
   }
   for (const day of aheadDays) {
@@ -186,9 +186,14 @@ function twkNextHtml(next: TwkNext | null, detail: TwkDetail | null, today: stri
   // session, today's open run is logged from its day, a later day only opens. A rest day says
   // so in the server's own line above the next session.
   const startName = twkText(d?.lift?.title) || g.lift?.name || "session";
+  // The wording is the server's one open_session label (the Today aggregate's), so Train, Today and
+  // the Brief print the same words; liveness is the strength line's state, never a session row.
+  const live = g.lift?.state === "live";
+  const open = CairnTodayOpenSession.cached(today);
+  const startLabel = open && open.started === live ? open.label : `${live ? "Continue" : "Start"} ${startName}`;
   const start =
     isToday && liftOpen
-      ? `<button class="btn btn-solid twk-start" type="button" data-twk-start>${g.lift!.state === "live" ? "Resume session" : `Start ${escHtml(startName)}`}</button>`
+      ? `<button class="btn btn-solid twk-start" type="button" data-twk-start>${escHtml(startLabel)}</button>`
       : isToday && runOpen
         ? `<button class="btn btn-solid twk-start" type="button" data-open-day="${escAttr(next.date)}">Log this run</button>`
         : "";
@@ -213,7 +218,7 @@ function twkDaysHtml(week: TwkWeek | null, ahead: TwkAhead | null): string {
   if (dated.length) {
     rows = dated
       .map((day) => {
-        const glance = CairnDayDetailModel.glanceOfWeekDay(day, today, units);
+        const glance = CairnDayDetailModel.glanceOfWeekDay(day, today, units, week?.strength_line);
         if (!glance) return "";
         const line = glance.today ? twkTodayLine(week?.strength_line, glance.date) : null;
         // A reshaped today names its own movements on the line; the plan's list would contradict it.

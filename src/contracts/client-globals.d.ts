@@ -1715,6 +1715,7 @@ declare global {
         exTotal: number;
         original?: string[];
         startDay?: { dayNumber: number; label: string } | null;
+        discardHtml?: string;
       }
     ): string;
   };
@@ -2064,7 +2065,8 @@ declare global {
     glanceOfWeekDay(
       day: import("./client-api.js").ClientPlanWeekDay | null | undefined,
       today: string,
-      units: unknown
+      units: unknown,
+      line?: { state?: unknown } | null
     ): ClientDayGlance | null;
     glanceOfLookAheadDay(
       day: import("./client-api.js").ClientPlanLookAheadDay | null | undefined,
@@ -4992,6 +4994,7 @@ declare global {
         primedLastSets: string[];
         primedProgressionDay: number | null;
         strengthJourney?: unknown;
+        openSession: import("./client-api.js").ClientOpenSession | null;
         revalidations: Array<Promise<unknown>>;
         changed(): boolean;
       }>;
@@ -5497,6 +5500,7 @@ declare global {
           showDone?: boolean;
           isToday?: boolean;
           nothingToStart?: boolean;
+          open?: import("./client-api.js").ClientOpenSession | null;
           activeOverride?: unknown;
           morph?: boolean;
           reducedMotion?: boolean;
@@ -5606,6 +5610,31 @@ declare global {
     CairnTodayBriefCache: {
       read(date: string): TodayBriefControllerDayRead | null;
       persist(date: string, override: string, read: TodayBriefControllerDayRead | null | undefined): void;
+    };
+
+    CairnTodayOpenSession: {
+      key(date: string): string;
+      cached(date: string): OpenSessionRead | null;
+      ownerOf(response: unknown): OpenSessionOwner | null;
+      isConflict(response: unknown): boolean;
+      briefRead<T extends { kind?: unknown } | null | undefined>(read: T, open: OpenSessionRead | null | undefined): T;
+      remember(date: string, daily: unknown, session: unknown): void;
+      freshOpen(date: string): Promise<OpenSessionRead | null>;
+      openOwned(date: string, owner: OpenSessionOwner, deps: OpenOwnedDeps, announce?: boolean, hops?: number): Promise<boolean>;
+      recover(date: string, deps: OpenOwnedDeps, hops?: number): Promise<boolean>;
+      resolveConflict(date: string, response: unknown, deps: OpenOwnedDeps): Promise<boolean> | null;
+      adopt(
+        date: string,
+        options: AdoptOptions,
+        open: (owner: OpenSessionOwner, announce: boolean) => Promise<boolean>
+      ): Promise<boolean | null>;
+      canDiscard(open: OpenSessionRead | null | undefined): boolean;
+      discard(date: string, id: number, deps: DiscardDeps): Promise<boolean>;
+      wireDiscard(root: ParentNode, deps: DiscardDeps): void;
+      discardHtml(date: string, open: OpenSessionRead | null | undefined): string;
+      tradeOpensSession(result: unknown): boolean;
+      markPastDay(date: string): void;
+      leavePastDay(): Promise<void>;
     };
 
     CairnTodaySessionLaunch: {
@@ -6160,6 +6189,7 @@ declare global {
   declare const CairnTodaySessionFeedback: Window["CairnTodaySessionFeedback"];
   declare const CairnSessionPrimer: Window["CairnSessionPrimer"];
   declare const CairnTodaySessionSkip: Window["CairnTodaySessionSkip"];
+  declare const CairnTodayOpenSession: Window["CairnTodayOpenSession"];
   declare const CairnTodaySessionSetModel: Window["CairnTodaySessionSetModel"];
   declare const CairnTodaySessionSetActions: Window["CairnTodaySessionSetActions"];
   declare const CairnTodaySessionController: Window["CairnTodaySessionController"];

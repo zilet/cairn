@@ -916,13 +916,13 @@ both generalizing proven code (`upgradeBriefInPlace` + the chat SSE client):
   / `swrSweep()`. A surface paints **real last-known content instantly** (skeleton
   only on a true cold start), then revalidates in the background and upgrades in
   place **only when the JSON payload changed**. Both tiers (in-memory Map over
-  `localStorage` `cairn.swr.v1.<key>`) are JSON-only — never cache DOM; rendering
+  `localStorage` `cairn.swr.v2.<key>`) are JSON-only — never cache DOM; rendering
   still flows through `escHtml`/`escAttr`. A stale paint flies the **`.swr-refreshing`**
   hairline (`body.swr-busy::after` — a calm low-opacity top filament, distinct from
   the `.offline-bar` warn band; reduced motion → a static tinted 1px border). A
   mutating write that changes a surface calls `swrInvalidate(key)` so the next paint
   refetches (the role `state.brief = null` plays for the Brief). **`SWR_NS`**
-  (`"cairn.swr.v1."`) is the version segment — bump it in lockstep with any
+  (`"cairn.swr.v2."`) is the version segment — bump it in lockstep with any
   payload-shape change so old cached bodies are dropped.
 - **Durable agent jobs** — the kind-agnostic counterpart to the chat-turn client:
   `enqueueJob(path,body)` / `openJobStream(id,handlers)` / `jobReconnect()` /

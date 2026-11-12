@@ -49,7 +49,8 @@ test("primary training entries converge on one durable prepare path", () => {
   assert.match(today, /never silently authorize a[\s\S]*session/);
   assert.match(today, /body\.expected_input_fingerprint = adaptivePreview\.input_fingerprint/);
   assert.match(today, /response\.code === "daily_session_preview_stale"/);
-  assert.match(today, /response\.code === "daily_session_active_changed"/);
+  // A conflict opens its owner or re-reads today (today-open-session-client.ts) — never a dead-end toast.
+  assert.match(today, /CairnTodayOpenSession\.resolveConflict\(targetDate, response, openSessionDeps\(targetDate, trigger\)\)/);
   assert.match(today, /adaptiveSessionPreviewDelta\(adaptivePreview, fresh\)/);
   assert.match(
     today,
@@ -57,7 +58,8 @@ test("primary training entries converge on one durable prepare path", () => {
     "stale recovery must replace the captured token rather than patching only visible text",
   );
   assert.match(today, /return false;[\s\S]*response\?\.ok !== true/, "stale preview never enters Session");
-  assert.match(today, /response\?\.error \|\| "This session could not be prepared\."/);
+  assert.match(today, /"This session could not be prepared\. Try again in a moment\."/);
+  assert.doesNotMatch(today, /response\?\.error/, "the athlete never reads raw server text");
   assert.doesNotMatch(today, /samePlanDay|\/daily-session\?date=/, "explicit plan starts are expressed to the server");
   assert.match(plan, /source: "athlete_override"[\s\S]*replace: true[\s\S]*entry: "empty_plan"/);
   assert.match(suggestion, /source: "agent_suggest"[\s\S]*replace: true/);
@@ -104,21 +106,21 @@ test("the launch card gate keeps a null preview's calm door open and only a posi
   // changes their shape fails here rather than silently changing which of the
   // three plan-region outcomes (suppressed / launch card / plan-surface
   // fallthrough) a given day renders into.
-  assert.match(today, /const previewHasItems = previewItemCount == null \? null : previewItemCount > 0;/);
+  assert.match(today, /const previewHasItems = open \? true : previewItemCount == null \? null : previewItemCount > 0;/);
   assert.match(today, /const dayHasItems = !!\(day\?\.items \|\| \[\]\)\.length;/);
   assert.match(
     today,
-    /const nothingToStart =\s*\n\s*!!day\.pick \|\|\s*\n\s*\(todayState\.plan\.length > 0 && !hasLoggedSets && exDone === 0 && !isRunDay && !dayHasItems && previewHasItems !== true\);/,
+    /const unreadPick = !open && !!day\.pick;\s*\n\s*const nothingToStart =\s*\n\s*unreadPick \|\|\s*\n\s*\(!open && todayState\.plan\.length > 0 && !hasLoggedSets && exDone === 0 && !isRunDay && !dayHasItems && previewHasItems !== true\);/,
   );
   assert.match(
     today,
-    /showPlan && !showDone && nothingToStart && !day\.pick\s*\n\s*\? ""\s*\n\s*: showPlan && !showDone && previewHasItems !== false && !day\.pick\s*\n\s*\? briefCarriesStart\s*\n\s*\? ""\s*\n\s*: sessionLaunchCardHtml\(launchOpts\)/,
+    /showPlan && !showDone && nothingToStart && !unreadPick\s*\n\s*\? ""\s*\n\s*: showPlan && !showDone && previewHasItems !== false && !unreadPick\s*\n\s*\? briefCarriesStart\s*\n\s*\? ""\s*\n\s*: sessionLaunchCardHtml\(launchOpts\)/,
   );
   // One action, one button: the card folds into the Brief only when the Brief
   // itself carries the start for the same session (a train read).
   assert.match(
     today,
-    /const briefCarriesStart =\s*\n\s*showPlan && !showDone && !nothingToStart && previewHasItems !== false && CairnTodayBrief\.kind\(read\) === "train";/,
+    /const briefCarriesStart =\s*\n\s*showPlan && !showDone && !nothingToStart && previewHasItems !== false && CairnTodayBrief\.kind\(CairnTodayOpenSession\.briefRead\(read, open\)\) === "train";/,
   );
 
   // A faithful reimplementation of that same formula (verified above to match

@@ -1419,3 +1419,24 @@ test("a read that carries no session keeps a bare NOW wrapper (the stones' ancho
   assert.match(train, /TRAIN DAY · 45 min/, "with no card the kicker keeps the minutes");
   assert.match(train, /class="brief-focus">Upper</, "and the focus stays under the headline");
 });
+
+// The server's open_session label is the one wording for every start action — the Brief prints
+// it verbatim (escaped), and ignores its own "session" wording once the server has spoken.
+test("the Brief's start prints the open session's label verbatim", () => {
+  const brief = loadBriefWithReads();
+  const base = { kind: "train", headline: "Good to go", why: "", signals: {} };
+  const open = (extra) => ({ daily_session_id: 1, session_id: 2, started: false, action: "start", label: "Start Pull <A>", ...extra });
+  assert.match(
+    brief.briefHtml(base, { isToday: true, showPlan: true, open: open() }),
+    /data-redirect="start-session">Start Pull &lt;A&gt;</
+  );
+  assert.match(
+    brief.briefHtml(base, { isToday: true, showPlan: true, open: open({ started: true, action: "continue", label: "Continue Pull" }) }),
+    /data-redirect="start-session">Continue Pull</
+  );
+  // A `done` read whose plan is not revealed offers the same label as its one way in.
+  assert.match(
+    brief.briefHtml({ ...base, kind: "done" }, { isToday: true, showPlan: false, showDone: false, open: open() }),
+    /data-redirect="start-session">Start Pull &lt;A&gt;</
+  );
+});

@@ -58,7 +58,7 @@ test("a #pair= link leaves the address first, is exchanged for a session, and ho
   const shell = runShell({
     search: "?utm=x",
     hash: "#pair=abcd-efgh&top",
-    storage: { "cairn.swr.v1.today": "{}", "cairn.other": "keep", cairn_token: "old" },
+    storage: { "cairn.swr.v2.today": "{}", "cairn.other": "keep", cairn_token: "old" },
   });
   assert.deepEqual(shell.replaced, [{ state: { s: 1 }, url: "/?utm=x#top" }], "only pair= leaves the fragment");
   assert.equal(shell.calls.length, 1, "no early read races the pairing");
@@ -71,7 +71,7 @@ test("a #pair= link leaves the address first, is exchanged for a session, and ho
   assert.ok(shell.context.__cairnAuthReady, "api() waits on the exchange");
   await shell.context.__cairnAuthReady;
   assert.equal(shell.localStorage.getItem("cairn_token"), null, "a stored token is forgotten once the cookie stands");
-  assert.equal(shell.localStorage.getItem("cairn.swr.v1.today"), null);
+  assert.equal(shell.localStorage.getItem("cairn.swr.v2.today"), null);
   assert.equal(shell.localStorage.getItem("cairn.other"), "keep");
   assert.equal(shell.sessionStorage.getItem("cairn.auth.offer"), "1", "the one passkey offer is armed");
 });

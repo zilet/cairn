@@ -215,6 +215,7 @@ function loadController(opts = {}) {
   if (opts.extraContext) Object.assign(context, opts.extraContext);
   context.window = context;
   context.globalThis = context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/today-open-session-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-brief-override-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-brief-actions-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-brief-cache-client.js"), "utf8"), context);
@@ -655,8 +656,8 @@ async function flush() {
   for (let i = 0; i < 20; i += 1) await Promise.resolve();
 }
 
-function tradeHarness(respond) {
-  const harness = loadController();
+function tradeHarness(respond, extra = {}) {
+  const harness = loadController(extra);
   const brief = harness.rootEl.appendChild(new FakeElement("section", { className: "brief" }));
   const button = brief.appendChild(new FakeElement("button", { dataset: { tradetomorrow: "" } }));
   const posts = [];
@@ -796,4 +797,67 @@ test("a one-tap menu row shows its own progress, holds the other rows, and ignor
   assert.equal(upper.getAttribute("aria-busy"), null);
   assert.equal(lighter.disabled, false);
   assert.equal(observers[0].on, false, "the watcher is disconnected");
+});
+
+// A rest trade is also "train today": the server answers train_anyway:true, and the app goes
+// straight to the session the way the Train anyway action does — it never stops at the repaint.
+test("a rest trade that answers train_anyway opens the session, as Train anyway does", async () => {
+  const opened = [];
+  const traded = { kind: "train", headline: "Pull day", why: "", focus: "Pull", signals: {} };
+  const { button } = tradeHarness(() => ({ ok: true, train_anyway: true, read: traded }), {
+    extraContext: { openSession: (date, options) => { opened.push({ date, options }); return Promise.resolve(true); } },
+  });
+
+  button.click();
+  await flush();
+
+  assert.equal(opened.length, 1);
+  assert.equal(opened[0].date, undefined);
+  assert.equal(opened[0].options.trainAnyway, true);
+  assert.equal(opened[0].options.replace, true);
+  assert.equal(opened[0].options.source, "adaptive_plan");
+  assert.equal(opened[0].options.provenance.entry, "train_anyway");
+});
+
+test("a rest trade without train_anyway only repaints", async () => {
+  const opened = [];
+  const traded = { kind: "train", headline: "Pull day", why: "", focus: "Pull", signals: {} };
+  const { harness, button } = tradeHarness(() => ({ ok: true, read: traded }), {
+    extraContext: { openSession: () => { opened.push(1); return Promise.resolve(true); } },
+  });
+  button.click();
+  await flush();
+  assert.equal(opened.length, 0);
+  assert.equal(harness.transitions.length, 1);
+});
+
+// The server's open_session is the Brief's one session fact: its label is every start action's
+// wording, and a day the athlete CHOSE on a quiet read is a train-shaped Brief whose caveat the
+// strength line carries — no "rest" headline.
+test("briefHtml hands the open session to the Brief and reads a chosen quiet day as the session", () => {
+  const harness = loadController();
+  const seen = [];
+  harness.context.CairnTodayBrief.briefHtml = (read, opts) => {
+    seen.push({ read, opts });
+    return "<section class=\"brief\"></section>";
+  };
+  const open = { daily_session_id: 5, session_id: 6, started: false, chosen: true, action: "start", title: "Pull", label: "Start Pull" };
+  const rest = { kind: "rest", headline: "Rest day", why: "Take it easy.", focus: "recovery", signals: {} };
+
+  harness.deps.state.openSession = { date: harness.deps.state.logDate, read: open };
+  harness.controller.briefHtml(rest, { isToday: true, showPlan: true }, harness.deps);
+  assert.equal(seen[0].opts.open.label, "Start Pull");
+  assert.equal(seen[0].read.kind, "train", "the chosen session is the day");
+  assert.equal(seen[0].read.headline, "Pull");
+  assert.equal(seen[0].read.why, "", "the quiet read survives only as the strength line's caveat");
+
+  harness.deps.state.openSession = { date: harness.deps.state.logDate, read: { ...open, chosen: false } };
+  harness.controller.briefHtml(rest, { isToday: true, showPlan: true }, harness.deps);
+  assert.equal(seen[1].read.kind, "rest", "an open session the athlete did not choose leaves the read as it is");
+  assert.equal(seen[1].opts.open.label, "Start Pull");
+
+  harness.deps.state.openSession = { date: "2020-01-01", read: open };
+  harness.controller.briefHtml(rest, { isToday: true }, harness.deps);
+  assert.equal(seen[2].opts.open, null, "another date's session is never printed");
+  assert.equal(seen[2].read.kind, "rest");
 });
