@@ -553,6 +553,18 @@ function runFile(file, env) {
   });
 }
 
+// The reporter's closing summary ("ℹ tests 12", "ℹ pass 12", …), summed over the run so a
+// change to the harness can show it ran every test it ran before. The LAST occurrence of
+// each line is the file's own: a nested run a test starts prints its summary earlier.
+const TALLY_KEYS = ["tests", "pass", "fail", "cancelled", "skipped", "todo"];
+const tally = Object.fromEntries(TALLY_KEYS.map((key) => [key, 0]));
+const SUMMARY_LINE = new RegExp(`^ℹ (${TALLY_KEYS.join("|")}) (\\d+)$`, "gm");
+function addTally(output) {
+  const last = {};
+  for (const [, key, count] of output.matchAll(SUMMARY_LINE)) last[key] = Number(count);
+  for (const [key, count] of Object.entries(last)) tally[key] += count;
+}
+
 const results = [];
 let next = 0;
 
@@ -565,6 +577,7 @@ async function runSlot(slot) {
     while (next < queue.length) {
       const { file } = queue[next++];
       const result = await runFile(file, env);
+      addTally(result.output);
       busyMs += result.durationMs;
       files += 1;
       if (printEveryFile) {
@@ -628,6 +641,12 @@ console.log(
   `${failures.length ? "✗" : "✓"} ${results.length} file(s) on ${workers} worker(s) in ${(wallMs / 1000).toFixed(1)}s` +
     ` (worker busy ${(idlest / 1000).toFixed(1)}–${(busiest / 1000).toFixed(1)}s)`
 );
+if (tally.tests) {
+  const rest = TALLY_KEYS.slice(1)
+    .filter((key) => key === "pass" || tally[key])
+    .map((key) => `${tally[key]} ${key}`);
+  console.log(`  ${tally.tests} tests: ${rest.join(", ")}`);
+}
 if (watchdogNote) console.log(`  ${watchdogNote}`);
 
 // What the run cost, file by file: always on a full run, on request otherwise.
