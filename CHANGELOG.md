@@ -5,6 +5,62 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+Today's session is one fact everywhere, the coach can build and open it from chat, a single low
+morning trims the day instead of cancelling it, and the checks that guard a release run in about a
+quarter of the time.
+
+### Added
+
+- **Build and open today's session from chat.** Ask the coach for a session and it lands on Today
+  and in Train; the reply carries a Start / Continue button beside a quiet Undo. Asking to start
+  opens today's session and never replaces one you already began.
+- **Supersets read as one named group.** Paired lifts are drawn together with the partner named,
+  instead of a bare "Pair" pill.
+- **Watch form.** An exercise's detail links to a YouTube search for its form.
+- **The week strip tells the truth about past days.** Off-plan work is marked, and a past plan day
+  that was not done fades.
+
+### Changed
+
+- **One open session, on every surface.** Today, Train, the Brief and every start path read the same
+  open-session fact, and the Brief's headline names the session you chose.
+- **A single low morning is the dose, not a rest day.** One short night, one low HRV night or a low
+  readiness reading trims the day on a stated training day; rest is reserved for readings that agree
+  with each other. A good check-in lifts a readiness-only easy read one step. The readiness score
+  alone never trims a whole session's volume.
+- **Your plan's sets are the default.** A train read keeps the plan day's sets unless there is a
+  named, current reason to trim; lifts you asked for today are never deferred or trimmed; a card that
+  had to defer lifts says so in one line.
+- **Supersets a shared gym can run.** Two lifts a group, one fixed station a pair, three pairs a
+  session. A name that could be a machine or a free weight is treated as unknown and never paired by
+  the server.
+- **Race day keeps its identity.** A caution on race morning is said plainly beside the race, never
+  as a lifting card.
+- **A session's time estimate is the work on the card.**
+
+### Fixed
+
+- **A session tap never strands you.** A session open on another device now says who holds it and
+  offers a way through; every refusal settles to somewhere you can go; an empty session can be
+  discarded.
+- **"Train anyway" keeps what you asked for.** A plan day's lifts are never silently dropped, and a
+  same-day request keeps its sets.
+- **A session the coach confirmed in chat shows up on Today.** A session turn no longer also applies
+  a separate plan change for today.
+- **Log more lands in the session**, an offline start says so in one line, and a day logged without
+  a card opens through the same path.
+- **Endurance logged before you adopted a card is not graded against that card.**
+- **Today's lift line names only the lifts on the day**, and the stacked-days count is stated
+  truthfully.
+
+### Internal
+
+- **Faster checks.** The browser smoke runs its routes and workflows side by side (about 49 s to
+  11 s) and the per-route perf budget runs through a job pool (about 12 min to under 2 min, with a
+  26 s byte-only update). Test files run as direct processes, skip the per-test database wipe when
+  nothing was written, and the runner reports test counts and fails a file that exits clean without
+  a summary.
+
 ## [2.3.2] — 2026-11-12
 
 ### Changed
