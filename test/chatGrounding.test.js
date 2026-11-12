@@ -273,6 +273,44 @@ for (const [label, write] of RUN_WRITES) {
       assert.equal(out.notes.length, 0);
     }
   });
+
+  test(`a run claim that names a lift only as its reason or timing stands over a ${label} write`, () => {
+    for (const reply of [
+      "I've moved your quality run to Friday so it doesn't sit on top of Thursday's squats.",
+      "I've moved your long run to Saturday, after your deadlift session.",
+      "Done — I've shifted your intervals to Friday so Thursday's bench session stays fresh.",
+      "I've moved it to Friday, the day after your heavy deadlifts.",
+      "That puts your tempo run two days clear of Monday's squat session.",
+      "I've moved your tempo run off your bench day.",
+      "I've moved Friday's run so it now follows your lift day.",
+      "Friday's run now follows your lift day.",
+      "Sunday long run stays; strength days unchanged.",
+      "I've moved your long run to Sunday; your lifting days are unchanged.",
+      "I've moved your long run to Sunday; your lift days are unchanged.",
+      "I've moved your easy run to Wednesday and your squat day stays as it is.",
+    ]) {
+      const out = ground(reply, [write]);
+      assert.equal(out.reply, reply, reply);
+      assert.equal(out.notes.length, 0, reply);
+    }
+  });
+
+  test(`a lift that is the object of its own change is still corrected over a ${label} write`, () => {
+    for (const reply of [
+      "Done, I moved Thursday's run to Friday and Thursday's squats are lighter too.",
+      "I've also updated Thursday's squat session.",
+      "I've lowered your squat load for Thursday.",
+      "I moved your run and swapped your bench for dumbbell press.",
+      "I've moved your run off Thursday and swapped your bench for dumbbell press.",
+      "I've moved your run so it doesn't clash, and trimmed a set from your squats.",
+    ]) {
+      const out = ground(reply, [write]);
+      assert.notEqual(out.reply, reply, reply);
+      assert.ok(isVariant(PLAN_LIFTING_UNCHANGED_RUN_SAVED_VARIANTS, out.reply), `${reply} -> ${out.reply}`);
+      assert.ok(!isVariant(PLAN_CLAIM_UNGROUNDED_VARIANTS, out.reply), out.reply);
+      assert.equal(out.notes[0].class, "plan");
+    }
+  });
 }
 
 test("a lift claim with a real plan write is untouched, run write or not", () => {

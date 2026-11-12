@@ -161,6 +161,10 @@ export interface ChatPromptParts {
   tail: string;
 }
 
+// Said once in every OUTPUT CONTRACT, every lane and mode: an action block is the athlete's
+// ask, never the model's call. A question is a conversation.
+const ACTIONS_ONLY_WHEN_ASKED = `Write actions ONLY when the athlete asked to log or change something; a question ("should I move my long run to Saturday?") gets prose only, no actions block.`;
+
 const CAPTURE_ACTION_TYPES = [
   "log_activity",
   "log_food",
@@ -366,6 +370,7 @@ OUTPUT CONTRACT — write your reply between markers so it streams cleanly:
 1. Put this exact marker on its own line immediately before user-facing prose: ${CHAT_REPLY_SENTINEL}
 2. Write only the warm confirmation or brief answer.
 3. Only when an action is needed, put ${CHAT_ACTION_SENTINEL} on its own line and then ONE {"actions":[...]} JSON object.
+   ${ACTIONS_ONLY_WHEN_ASKED}
 
 ACTION SHAPES:
 ${renderChatActionSchema(CAPTURE_ACTION_TYPES)}
@@ -389,6 +394,9 @@ ${JSON.stringify(captureContext(ctx))}`,
   // holds for THIS message (chatTurns.ts chatPromptActionTypes) — an action the server
   // would refuse is never offered. Omitted, every non-retired type.
   const actionTypes = options.actionTypes ?? CHAT_PROMPT_ACTION_TYPES;
+  // The gated actions the caller left out this turn: each gets one NOT ON OFFER line in
+  // place of its shape and guidance (renderOmittedGatedActions).
+  const omittedTypes = CHAT_PROMPT_ACTION_TYPES.filter((type) => !actionTypes.includes(type));
   const seeLine = lean
     ? "You're chatting with the user inside their app. DATA below is the core of their picture you always have — who they are, today and this week — and the COACH READS reach the rest of their history (past sessions, trends, labs, body, fuel). You can ACT by emitting actions."
     : "You're chatting with the user inside their app. You can SEE all their data (DATA section) and can ACT by emitting actions.";
@@ -478,6 +486,7 @@ ${CHAT_REPLY_SENTINEL}
 ${CHAT_ACTION_SENTINEL}
    and immediately after it ONE JSON object: {"actions": [ ... ]} drawn from the shapes below.
    If there is nothing to log or change, STOP after the prose — do NOT write the marker or any JSON.
+   ${ACTIONS_ONLY_WHEN_ASKED}
 
 ACTION SHAPES (each item inside the "actions" array):
 ${renderChatActionSchema(actionTypes)}`;
@@ -501,7 +510,7 @@ ${renderNow(ctx)}${guardrails}
 
 ${CONTEXT_GUARDRAILS}
 
-${renderChatActionPromptProse(actionTypes)}
+${renderChatActionPromptProse(actionTypes, omittedTypes)}
 ${stateBlocks}
 ${claims}
 
@@ -519,7 +528,7 @@ ${guardrails}
 
 ${CONTEXT_GUARDRAILS_LEAN}
 
-${renderChatActionPromptProse(actionTypes)}
+${renderChatActionPromptProse(actionTypes, omittedTypes)}
 ${claims}
 
 ${outputContract}`,

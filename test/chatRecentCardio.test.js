@@ -22,7 +22,8 @@ import assert from "node:assert/strict";
 import { db, repo, resetTables } from "./_seed.js";
 import { localDateISO } from "../dist/repo/shared.js";
 import { recentCardioRead } from "../dist/repo/recent-cardio.js";
-import { buildChatPrompt, buildWeeklyReadPrompt } from "../dist/prompt.js";
+import { buildChatPrompt, buildChatPromptParts, buildWeeklyReadPrompt } from "../dist/prompt.js";
+import { chatReadPromptSuffix, composeChatAttemptPrompt, newChatReadState } from "../dist/chatTurns.js";
 import { projectCoachContext, PROMPT_CONTEXT_SITES } from "../dist/prompt/context-projection.js";
 import { executeCoachReadTool } from "../dist/brain/read-tool-runtime.js";
 import { resetCoachContextMemo } from "../dist/repo/coach.js";
@@ -107,14 +108,35 @@ test("chat DATA carries this morning's watch run with its numbers", () => {
   assert.ok(!/effect 4\.5/.test(block), "Garmin's training effect never rides in the block");
   // The block sits ABOVE the DATA dump, where a reader meets it before the JSON.
   assert.ok(prompt.indexOf("RECENT RUNS & CARDIO") < prompt.indexOf("\nDATA:\n"));
-  // And the general rule: never claim data is missing when it is here. The lean prompt
-  // carries it in its look-it-up read contract (src/chat-reads.ts); the full context,
-  // which has no such contract, keeps the guardrail.
-  assert.doesNotMatch(prompt, /NEVER CLAIM DATA IS MISSING WHEN IT IS HERE/);
-  assert.match(
-    buildChatPrompt([], "How was my run this morning?", undefined, { lane: "coach", context: "full" }),
-    /NEVER CLAIM DATA IS MISSING WHEN IT IS HERE/
-  );
+  // And the general rule: never claim data is missing when it is here — exactly once in
+  // every coach/deep prompt an attempt is actually sent. The lean prompt carries it in its
+  // read contract (native, or the prompt loop's), and in its no-reads form once the reads
+  // are spent or dropped (a stop round, a malformed request, a native budget used up, a
+  // later prompt-loop agent); the full context keeps its own guardrail.
+  const RULE = /never say something is missing|never claim data is missing/gi;
+  const once = (text, name) => assert.equal((text.match(RULE) ?? []).length, 1, name);
+  const spent = { ...newChatReadState(), calls: 6 };
+  for (const lane of ["coach", "deep"]) {
+    const lean = buildChatPromptParts([], "How was my run this morning?", undefined, { lane });
+    const full = buildChatPromptParts([], "How was my run this morning?", undefined, { lane, context: "full" });
+    once(composeChatAttemptPrompt(lean, true, ""), `${lane}: lean native`);
+    once(
+      composeChatAttemptPrompt(lean, false, chatReadPromptSuffix(newChatReadState(), false, "lean")),
+      `${lane}: lean loop, reads open`
+    );
+    once(
+      composeChatAttemptPrompt(lean, false, chatReadPromptSuffix(spent, true, "lean")),
+      `${lane}: lean loop, reads spent`
+    );
+    once(
+      composeChatAttemptPrompt(full, false, chatReadPromptSuffix(newChatReadState(), false, "full")),
+      `${lane}: full, reads open`
+    );
+    once(
+      composeChatAttemptPrompt(full, false, chatReadPromptSuffix(spent, true, "full")),
+      `${lane}: full, reads spent`
+    );
+  }
 });
 
 test("the athlete's stated effort rides beside the run, and km keeps the stored pace", () => {

@@ -922,7 +922,35 @@ export function renderChatActionSchema(types: readonly ChatActionType[] = CHAT_P
 ]`;
 }
 
-export function renderChatActionPromptProse(types: readonly ChatActionType[] = CHAT_PROMPT_ACTION_TYPES): string {
+// One short line per GATED action left out of this turn's prompt (chatPromptActionTypes,
+// src/chatTurns.ts): its shape and guidance are gone, so the other bullets that name it
+// would point at nothing, and "should I eat more?" would lose the offer the athlete can
+// say yes to. Each line names the action, says only the athlete's words land it, and
+// gives an offer worded the way the server's recognizer reads the yes that follows
+// (coachOfferedPush, coachOfferedNutritionTarget, the plan go-ahead; the self-stated
+// gates get the sentence the athlete would say). Never emitted this turn.
+const OMITTED_GATED_ACTION_LINES: Readonly<Partial<Record<ChatActionType, string>>> = {
+  set_training_drive: `set_training_drive: only their own words set it. If pushing fits, ask "Want me to open the throttle for the next few weeks?"`,
+  set_nutrition_target: `set_nutrition_target: only their own words set it. If a change fits, ask "Want me to set your daily target to 2,100 kcal?" (your number).`,
+  set_strength_objective: `set_strength_objective: only their own words set it. If one fits, suggest it so they can say "set my squat goal to 140 kg".`,
+  report_training_symptom: `report_training_symptom: logged only when they ask. If pain comes up, offer "Say 'log my knee pain' and I'll record it."`,
+  resolve_training_symptom: `resolve_training_symptom: only their word closes a pain note. If it eased, offer "Say 'close my knee note' and I'll close it."`,
+  flag_training_structure: `flag_training_structure: a question never asks for it. If they want a different shape of training, ask "Want me to flag that for you?"`,
+  plan_restructure: `plan_restructure: a question never rebuilds the plan. Describe the new split and ask "Want me to set it up?" — their "yes, do it" lands it.`,
+};
+
+/** The NOT ON OFFER block for the gated actions this turn's prompt leaves out ("" when none). */
+export function renderOmittedGatedActions(omitted: readonly ChatActionType[]): string {
+  const lines = omitted.map((type) => OMITTED_GATED_ACTION_LINES[type]).filter((line): line is string => !!line);
+  if (!lines.length) return "";
+  return `NOT ON OFFER THIS TURN (the athlete's own words are needed: never emit these now, the server refuses them; offer in prose instead):
+${lines.map((line) => `- ${line}`).join("\n")}`;
+}
+
+export function renderChatActionPromptProse(
+  types: readonly ChatActionType[] = CHAT_PROMPT_ACTION_TYPES,
+  omitted: readonly ChatActionType[] = []
+): string {
   const immediateTypes = types.filter(
     (type) => (CHAT_ACTION_PROMPT_SPECS[type] as ChatActionPromptSpec).applyMode === "immediate"
   );
@@ -933,11 +961,12 @@ export function renderChatActionPromptProse(types: readonly ChatActionType[] = C
     ? `\n- ${draftTypes.join(" and ")} are saved as DRAFTS for the user to review and apply — never assume they're live.\n${renderActionGuidance(draftTypes)}`
     : "";
   // "Only when they ask; a question gets prose only" is said ONCE, by the OUTPUT CONTRACT.
+  const omittedSection = renderOmittedGatedActions(omitted);
   return `ACTIONS:
 - ${immediateTypes.join(", ")} are ROUTED immediately. Safe captures apply now; coached plan changes follow the server's apply/schedule/review autonomy result.
 - Every sentence that says you logged, moved, added, swapped, put on their timeline, or set something is checked against the actions this turn actually carries. One with no matching action is replaced with a plain "that hasn't happened yet", so a change you are only suggesting is written as a suggestion ("I'd move the easy run to your Pull day — want me to?"), never as done.
 ${renderActionGuidance(immediateTypes)}
-${draftSection}`;
+${draftSection}${omittedSection ? `\n${omittedSection}` : ""}`;
 }
 
 function isRecord(value: unknown): value is ChatActionRecord {

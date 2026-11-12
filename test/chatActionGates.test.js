@@ -12,7 +12,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { repo } from "./_seed.js";
 import { buildChatPrompt } from "../dist/prompt.js";
-import { CHAT_ACTION_TYPES, CHAT_PROMPT_ACTION_TYPES } from "../dist/chatActions.js";
+import { CHAT_ACTION_TYPES, CHAT_PROMPT_ACTION_TYPES, renderOmittedGatedActions } from "../dist/chatActions.js";
+import { coachOfferedNutritionTarget, coachOfferedPush } from "../dist/chat-intent.js";
 import {
   applyChatActions,
   CHAT_ACTION_GATE_FOR,
@@ -117,17 +118,44 @@ const CORPUS = [
 const landed = (out, type) =>
   out.applied.some((entry) => entry.type === type && !entry.error && entry.result != null && entry.result?.ok !== false);
 
+// The coach's message before the athlete's: no context, each offer the recognizers read,
+// a spelled-out session proposal, and a turn that stored a plan draft.
+const PRIORS = [
+  { message: "", drafted: false },
+  { message: "Nice session today.", drafted: false },
+  {
+    message:
+      "Your log says you're carrying this with room to spare — want me to open the throttle for the next few weeks?",
+    drafted: false,
+  },
+  { message: "Want me to set your daily target to 2,100 kcal?", drafted: false },
+  {
+    message: "Here's what I'd run tomorrow:\n- Squat 3x5 @ 100\n- Bench 3x8 @ 70\nWant me to set it up?",
+    drafted: false,
+  },
+  { message: "Want me to flag that for you?", drafted: false },
+  { message: "I've drafted the change for you to review.", drafted: true },
+];
+
 test("every omitted type is one the server refuses for that same message", () => {
-  for (const message of CORPUS) {
-    const prior = { message: "", drafted: false };
-    const offered = new Set(chatPromptActionTypes(chatActionGates({ message, priorAssistant: prior })));
-    for (const type of Object.keys(SAMPLE)) {
-      if (offered.has(type)) continue;
-      repo.savePlanDay(1, "Full Body", "strength", [
-        { exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 100 },
-      ]);
-      const out = applyChatActions({ actions: [SAMPLE[type]] }, { agent: "stub", message, priorAssistant: prior, recentAthleteMessages: [], enqueueJob: () => {} });
-      assert.equal(landed(out, type), false, `"${message}" omits ${type}, so the server must refuse it`);
+  for (const message of [...CORPUS, "yes, do it", "sounds good, go ahead", "yes please"]) {
+    for (const prior of PRIORS) {
+      const offered = new Set(chatPromptActionTypes(chatActionGates({ message, priorAssistant: prior })));
+      for (const type of Object.keys(SAMPLE)) {
+        if (offered.has(type)) continue;
+        repo.savePlanDay(1, "Full Body", "strength", [
+          { exercise: "Barbell Bench Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 100 },
+        ]);
+        const out = applyChatActions(
+          { actions: [SAMPLE[type]] },
+          { agent: "stub", message, priorAssistant: prior, recentAthleteMessages: [], enqueueJob: () => {} }
+        );
+        assert.equal(
+          landed(out, type),
+          false,
+          `"${message}" after "${prior.message.slice(0, 40)}" omits ${type}, so the server must refuse it`
+        );
+      }
     }
   }
 });
@@ -146,4 +174,84 @@ test("…and an offered gated type is one the server accepts (the gate is not me
       `${type} with "${opens}" reaches its writer: ${JSON.stringify(out.applied)}`
     );
   }
+});
+
+// ── the rule every OUTPUT CONTRACT states, and the line an omitted shape leaves ───────
+const ASKED_ONLY =
+  /Write actions ONLY when the athlete asked to log or change something; a question \("should I move my long run to Saturday\?"\) gets prose only, no actions block\./g;
+
+test("every lane and mode says actions only when asked, once", () => {
+  const prompts = {
+    capture: buildChatPrompt([], "had eggs", undefined, { lane: "capture" }),
+    "lean coach": buildChatPrompt([], "How did my week go?", undefined, { lane: "coach" }),
+    "lean deep": buildChatPrompt([], "How did my week go?", undefined, { lane: "deep" }),
+    "full coach": buildChatPrompt([], "How did my week go?", undefined, { lane: "coach", context: "full" }),
+    "full deep": buildChatPrompt([], "How did my week go?", undefined, { lane: "deep", context: "full" }),
+  };
+  for (const [name, prompt] of Object.entries(prompts)) {
+    assert.equal((prompt.match(ASKED_ONLY) ?? []).length, 1, name);
+    assert.ok(prompt.search(ASKED_ONLY) > prompt.indexOf("OUTPUT CONTRACT"), `${name}: inside the OUTPUT CONTRACT`);
+  }
+});
+
+const omittedLine = (prompt, type) => {
+  const block = prompt.slice(prompt.indexOf("NOT ON OFFER THIS TURN"));
+  return block.split("\n").find((line) => line.startsWith(`- ${type}:`)) ?? null;
+};
+
+test("an omitted gated action leaves one short NOT ON OFFER line, and an offered one leaves none", () => {
+  const closed = promptFor("How did my week go?");
+  assert.match(closed, /NOT ON OFFER THIS TURN \(the athlete's own words are needed: never emit these now/);
+  for (const type of Object.keys(CASES)) {
+    const line = omittedLine(closed, type);
+    assert.ok(line, `${type} has its line`);
+    assert.ok(Buffer.byteLength(line, "utf8") <= 160, `${type}: ${Buffer.byteLength(line)} bytes`);
+    assert.doesNotMatch(closed, shapeOf(type), `${type}: no shape`);
+  }
+  for (const [type, [opens]] of Object.entries(CASES)) {
+    assert.equal(omittedLine(promptFor(opens), type), null, `${type} is on offer for "${opens}"`);
+  }
+  // Nothing omitted, no block at all.
+  assert.equal(renderOmittedGatedActions([]), "");
+  assert.doesNotMatch(buildChatPrompt([], "How did my week go?", undefined, { lane: "coach" }), /NOT ON OFFER/);
+});
+
+test("each NOT ON OFFER line's suggested wording is one the server's gate actually accepts", () => {
+  const quoted = (type) => {
+    const line = renderOmittedGatedActions([type]);
+    return [...line.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  };
+  // The coach's offer, then the athlete's plain yes, opens the gate.
+  const yesAfter = (offer, gate, yes = "yes") =>
+    chatActionGates({ message: yes, priorAssistant: { message: offer } })[gate];
+  const [push] = quoted("set_training_drive");
+  assert.ok(coachOfferedPush(push), push);
+  assert.equal(yesAfter(push, "trainingDrive"), true);
+  const [kcal] = quoted("set_nutrition_target");
+  assert.ok(coachOfferedNutritionTarget(kcal), kcal);
+  assert.equal(yesAfter(kcal, "nutritionTarget", "yes, do it"), true);
+  const [flag] = quoted("flag_training_structure");
+  assert.equal(yesAfter(flag, "flagTrainingStructure", "yes please"), true);
+  const restructure = quoted("plan_restructure");
+  assert.equal(
+    chatActionGates({ message: restructure[1], priorAssistant: { message: restructure[0] } }).planRestructure,
+    true
+  );
+  // The self-stated gates: the sentence the coach suggests the athlete say opens its gate.
+  const said = (type) =>
+    quoted(type)
+      .at(-1)
+      .replace(/^Say '([^']+)'.*$/, "$1");
+  assert.equal(
+    chatActionGates({ message: said("report_training_symptom"), priorAssistant: { message: "" } }).symptomReport,
+    true
+  );
+  assert.equal(
+    chatActionGates({ message: said("resolve_training_symptom"), priorAssistant: { message: "" } }).symptomResolve,
+    true
+  );
+  assert.equal(
+    chatActionGates({ message: said("set_strength_objective"), priorAssistant: { message: "" } }).strengthObjective,
+    true
+  );
 });

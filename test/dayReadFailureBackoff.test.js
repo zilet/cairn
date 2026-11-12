@@ -132,3 +132,60 @@ test("host congestion and an empty rotation are not agent failures", () => {
   );
   assert.equal(dayReadAgentAttemptFailed(new Error("reply was outside the requested contract")), true);
 });
+
+test("a cancelled run and an all-held rotation are not agent failures", () => {
+  // The precompute deadline's own abort (src/scheduler.ts) surfaces as a cancel.
+  assert.equal(dayReadAgentAttemptFailed(new Error("canceled")), false, "the loop's own cancel");
+  assert.equal(dayReadAgentAttemptFailed(new Error('agent "claude" canceled')), false, "a cancelled spawn");
+  const aborted = new AbortController();
+  aborted.abort();
+  assert.equal(
+    dayReadAgentAttemptFailed(new Error("coach read run timed out"), aborted.signal),
+    false,
+    "whatever it threw, a run the caller aborted is no verdict on the agent"
+  );
+  assert.equal(
+    dayReadAgentAttemptFailed(new Error("coach read run timed out"), new AbortController().signal),
+    true,
+    "the run's own deadline (the agent ran out of time) still counts"
+  );
+  const hold = { state: "rate_limited", resets_at: null, hold_until: "2026-11-11T09:00:00Z", detail: null };
+  assert.equal(
+    dayReadAgentAttemptFailed(
+      new AgentFallbackError(
+        ["claude", "codex"],
+        [
+          { agent: "claude", error: "claude is at its usage limit", availability: hold },
+          { agent: "codex", error: "codex is out of credit", availability: { ...hold, state: "out_of_credit" } },
+        ]
+      )
+    ),
+    false,
+    "every provider held: nothing spawned"
+  );
+  assert.equal(
+    dayReadAgentAttemptFailed(
+      new AgentFallbackError(
+        ["claude", "codex"],
+        [
+          { agent: "claude", error: "claude is at its usage limit", availability: hold },
+          { agent: "codex", error: "timed out" },
+        ]
+      )
+    ),
+    true,
+    "one provider held, another really ran and failed"
+  );
+});
+
+test("an aborted compute leaves the self-heal armed", async () => {
+  const date = localDaysAgo(0);
+  const state = harness(date);
+  const bail = new AbortController();
+  bail.abort();
+  const read = await computeCanonicalDayRead({ date, agent: "stub", signal: bail.signal });
+  assert.equal(read.source, "deterministic");
+  assert.equal(dayReadSelfHealCoolingDown(date, read.prose_identity), false, "a cancel is not on the ledger");
+  ensureDayReadRefresh(date, read.prose_identity);
+  assert.equal(state.armed, 1, "the next open still heals");
+});

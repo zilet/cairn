@@ -367,14 +367,20 @@ export function getHrModel(dateISO?: string): HrModel {
   return requestMemo(`hr_model:${asOf}`, () => readPersisted(asOf) ?? computeHrModel(asOf), copyDeep);
 }
 
-/** Recompute from raw data + calibration events and persist as the current model. */
+/**
+ * Recompute from raw data + calibration events and persist as the current model. A
+ * derive that lands on the stored model for the same day writes nothing (`updated_at`
+ * is when the model last CHANGED): every Garmin pass re-derives, and an identical
+ * rewrite moved the coach-context key on every quiet sync.
+ */
 export function deriveHrModel(dateISO: string): HrModel {
   const asOf = String(dateISO || localDateISO()).slice(0, 10);
   const model = computeHrModel(asOf);
   db.prepare(
     `INSERT INTO hr_model_state (id, as_of, model_json, updated_at)
      VALUES (1, ?, ?, datetime('now'))
-     ON CONFLICT(id) DO UPDATE SET as_of = excluded.as_of, model_json = excluded.model_json, updated_at = datetime('now')`
+     ON CONFLICT(id) DO UPDATE SET as_of = excluded.as_of, model_json = excluded.model_json, updated_at = datetime('now')
+     WHERE hr_model_state.as_of IS NOT excluded.as_of OR hr_model_state.model_json IS NOT excluded.model_json`
   ).run(asOf, JSON.stringify({ ...model, updated_at: null }));
   return readPersisted(asOf) ?? model;
 }

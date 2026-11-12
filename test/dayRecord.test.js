@@ -196,3 +196,26 @@ test("where the agent layer stands NOW: the newest attempt decides, and a later 
   assert.equal(healed.state, "ok", "one good run clears it — nothing to dismiss");
   assert.equal(healed.failing_since, null);
 });
+
+test("a failed 'Say hello' probe is telemetry, never the agent layer's health", () => {
+  db.prepare(`DELETE FROM agent_runs`).run();
+  const run = (op, ok, error_class = null) =>
+    recordAgentRun({ op, agent: "codex", ok, parsed: ok, latency_ms: 10, tried_json: false, error_class });
+  run("agent_hello", false, "auth_required");
+  assert.equal(currentAgentHealth().state, "idle", "a hello alone is no coaching attempt");
+  run("day_read", true);
+  run("agent_hello", false, "auth_required");
+  const health = currentAgentHealth();
+  assert.equal(health.state, "ok", "a new CLI's failed hello does not mark the layer failing");
+  assert.equal(health.error_class, null);
+  assert.equal(
+    db.prepare(`SELECT COUNT(*) AS n FROM agent_runs WHERE op = 'agent_hello'`).get().n,
+    2,
+    "the hello rows stay for the stats"
+  );
+  run("insight", false, "timeout");
+  run("agent_hello", true);
+  const failing = currentAgentHealth();
+  assert.equal(failing.state, "failing", "and a hello that worked does not mask a coaching failure");
+  assert.equal(failing.error_class, "timeout");
+});

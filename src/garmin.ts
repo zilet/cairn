@@ -409,6 +409,85 @@ export function setGarminClientForTests(factory: (() => Promise<any> | any) | nu
   clientFactoryForTests = factory;
 }
 
+// ---- Keeping a refreshed token ------------------------------------------------------
+// garmin-connect refreshes its OAuth2 access token only after Garmin answers 401: one
+// consumer-key fetch, one OAuth exchange, then the failed call again. The refreshed
+// token lived only on that client object, and every pass (and every light check) builds
+// a new client from the token FILES — so once the stored token went stale, every
+// 15-minute light check paid a failed call + two auth calls + a retry, all day. The
+// refreshed pair is now written back to the same files the loader reads, atomically and
+// with the files' own mode, once per change. Tokens are never logged.
+
+/** The access token each client was loaded with (or last persisted), so a refresh is visible. */
+const persistedAccessToken = new WeakMap<object, string | null>();
+let tokenDirForTests: string | null = null;
+
+/** Point token persistence somewhere else (tests only; null restores the real dir). */
+export function setGarminTokenDirForTests(dir: string | null): void {
+  tokenDirForTests = dir;
+}
+
+function garminTokenPair(client: any): { oauth1: any; oauth2: any } | null {
+  if (!client || typeof client.exportToken !== "function") return null;
+  try {
+    const pair = client.exportToken();
+    return pair?.oauth1 && pair?.oauth2?.access_token ? pair : null;
+  } catch {
+    return null; // no token yet, or a failed exchange cleared it — nothing worth keeping
+  }
+}
+
+function writeTokenFileAtomically(dir: string, name: string, value: unknown): void {
+  const file = path.join(dir, name);
+  let mode = 0o600;
+  try {
+    mode = fs.statSync(file).mode & 0o777; // keep the file's own permissions
+  } catch {
+    /* a first write gets owner-only */
+  }
+  const tmp = path.join(dir, `.${name}.${process.pid}.${Date.now()}.tmp`);
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(value), { mode });
+    fs.chmodSync(tmp, mode); // writeFileSync's mode is masked by the umask
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch {
+      /* best effort */
+    }
+    throw e;
+  }
+}
+
+/**
+ * Write the client's token pair back to the token files when it differs from the one
+ * the client was loaded with (garmin-connect refreshed it mid-call). Returns whether it
+ * wrote. Never throws, and never logs a token.
+ */
+export function persistRefreshedGarminToken(client: any): boolean {
+  // A test's fake client never writes into a real token dir.
+  if (clientFactoryForTests && !tokenDirForTests) return false;
+  const pair = garminTokenPair(client);
+  if (!pair) return false;
+  const access = String(pair.oauth2.access_token);
+  if (persistedAccessToken.get(client) === access) return false;
+  const dir = tokenDirForTests ?? TOKEN_DIR;
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    // oauth2 last: a reader racing the write sees the old pair or the new one, and the
+    // oauth1 token an exchange is made with does not change on a refresh.
+    writeTokenFileAtomically(dir, "oauth1_token.json", pair.oauth1);
+    writeTokenFileAtomically(dir, "oauth2_token.json", pair.oauth2);
+    persistedAccessToken.set(client, access);
+    log.info("[garmin] saved the refreshed Garmin token.");
+    return true;
+  } catch (e: any) {
+    log.warn(`[garmin] could not save the refreshed Garmin token: ${e?.code ?? "write failed"}`);
+    return false;
+  }
+}
+
 async function makeClient() {
   if (clientFactoryForTests) return clientFactoryForTests();
   const mod = await import("garmin-connect");
@@ -424,11 +503,13 @@ async function makeClient() {
   const client = new GarminConnect(credentials);
   if (hasTokenFiles) {
     client.loadTokenByFile(TOKEN_DIR);
+    persistedAccessToken.set(client, garminTokenPair(client)?.oauth2?.access_token ?? null);
     return client;
   }
   await client.login();
   fs.mkdirSync(TOKEN_DIR, { recursive: true });
   client.exportTokenToFile(TOKEN_DIR);
+  persistedAccessToken.set(client, garminTokenPair(client)?.oauth2?.access_token ?? null);
   return client;
 }
 
@@ -1301,7 +1382,14 @@ function withLightDeadline<T>(work: Promise<T>): Promise<T> {
 async function runGarminLightCheck(): Promise<GarminLightCheckResult> {
   try {
     const client = await makeClient();
-    const rows = await withLightDeadline(Promise.resolve(client.getActivities(0, GARMIN_LIGHT_LIST_COUNT)));
+    let rows: any;
+    try {
+      rows = await withLightDeadline(Promise.resolve(client.getActivities(0, GARMIN_LIGHT_LIST_COUNT)));
+    } finally {
+      // A stale stored token is refreshed by the library inside that call; keep the
+      // refreshed one, or the next check pays the same 401 + two auth calls again.
+      persistRefreshedGarminToken(client);
+    }
     const news = garminLightCheckNews(rows || []);
     if (!news) return { checked: true, news: null };
     log.info(`[garmin] light check: ${news}; running a two-day pass.`);
@@ -1338,17 +1426,26 @@ export function requestGarminLightCheck(opts: { minIntervalMs: number }): Promis
 
 async function syncGarminPass(window: GarminSyncWindow, signal?: AbortSignal): Promise<GarminSyncResult> {
   const { days, limit } = window;
+  // Ensures the source row exists (a new one starts "not_configured") WITHOUT stating a
+  // connection state: a pass on a healthy connector used to stamp "not_configured" and
+  // then "connected" again on every run, two writes that each moved the response
+  // freshness key for nothing. The state is stated below once the client is known.
   const source = upsertGarminSource({
     label: garminSourceLabel(),
     mode: "unofficial",
-    auth_status: "not_configured",
   }) as any;
   try {
     const client = await makeClient();
     stopIfAbandoned(signal);
     upsertGarminSource({ label: source.label, mode: "unofficial", auth_status: "connected" });
     const since = isoDaysAgo(days);
-    const rows = await client.getActivities(0, limit);
+    let rows: any;
+    try {
+      rows = await client.getActivities(0, limit);
+    } finally {
+      // The first call is where a stale stored token gets refreshed: keep it.
+      persistRefreshedGarminToken(client);
+    }
     stopIfAbandoned(signal);
     let activities = 0;
     let zoneFetches = 0;

@@ -125,6 +125,30 @@ test("the lean contracts say to look it up — and never to call data missing wi
   assert.match(native, /At most \d+ reads for this reply/);
 });
 
+test("every coach/deep prompt carries the never-claim-missing rule exactly once, reads open or spent", () => {
+  seedDemo();
+  const RULE = /never say something is missing|never claim data is missing/gi;
+  const count = (text) => (text.match(RULE) ?? []).length;
+  const full = buildChatPrompt([], "did my run sync?", undefined, { context: "full" });
+  const lean = buildChatPrompt([], "did my run sync?");
+  const spent = { ...newChatReadState(), calls: 6 };
+  const exhaustedLean = chatReadPromptSuffix(spent, true, "lean");
+  const prompts = {
+    "full, reads open": full + chatReadPromptSuffix(newChatReadState(), false, "full"),
+    "full, reads spent": full + chatReadPromptSuffix(spent, true, "full"),
+    "lean prompt loop, reads open": lean + chatReadPromptSuffix(newChatReadState(), false, "lean"),
+    "lean prompt loop, reads spent": lean + exhaustedLean,
+    "lean native": lean + chatNativeReadContract(),
+  };
+  for (const [name, prompt] of Object.entries(prompts)) assert.equal(count(prompt), 1, name);
+  // Spent, the rule never asks for a read the model can no longer make.
+  assert.match(
+    exhaustedLean,
+    /Never say something is missing, "not visible" or "hasn't synced" without it being absent from DATA and the blocks in this prompt/
+  );
+  assert.doesNotMatch(exhaustedLean, /read for it|LOOK IT UP|"kind":"coach_read"/);
+});
+
 // Where in a read's result a moved key lives (the context-slice reads return it at the
 // top level; the window reads carry today's reads beside their rows).
 function readCarries(result, key) {

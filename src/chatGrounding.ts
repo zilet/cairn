@@ -227,13 +227,47 @@ const LIFT_REF =
 function aboutBodyweight(text: string): boolean {
   return !LIFT_REF.test(text) && (BODYWEIGHT_REF.test(text) || WEIGHT_FIGURE.test(text));
 }
-// Whether a plan claim names the LIFTING side, for a turn whose only plan write was a run.
+// Whether a plan claim CHANGES the lifting side, for a turn whose only plan write was a run.
 // The verb "set" ("I've set your run days") and a run's training "load" are not lifts, so
-// they are read out first; everything else is LIFT_REF as it stands.
+// they are read out first. A lift then counts only as the OBJECT of the claimed change:
+// "…and Thursday's squats are lighter too" or "…and swapped your bench" changes lifting,
+// while "I've moved your tempo run off your bench day" or "…so Thursday's squats stay fresh"
+// names a lift only as the reason or the timing of a run change. Conservative by
+// construction: the lift is context only when the change verb's own object is a run (or a
+// pronoun), the lift sits after a relation word ("so", "after", "off", "clear of"…), and no
+// second change predicate follows that word. A clause saying lifting did NOT change ("your
+// lift days are unchanged") is no claim at all.
 const SET_VERB =
   /\b(?:i(?:['’]ve|\s+have)?|is|are|been|be|now|all|get|got)\s+(?:(?:now|also|just|already)\s+)?set\b|\bset\s+(?:up|your|the|it|that|this|them|to|for|as)\b/gi;
+const CHANGE_PRED = new RegExp(
+  String.raw`\b(?:${PLAN_PAST}|${PLAN_ING}|took|taken|taking|made|making|(?:is|are|['’]s|['’]re|been|be)\s+(?:now\s+|also\s+|a\s+(?:bit|touch|little)\s+)*(?:lighter|heavier|easier|harder|shorter|longer|gone|out|off|down|up|lower|higher|fewer|less|more|smaller|bigger|capped|halved)|lighter|heavier)\b`,
+  "i"
+);
+const LIFT_RELATION =
+  /\b(?:so(?:\s+that)?|after|before|on\s+top\s+of|off|away\s+from|clear\s+of|around|follow(?:s|ing|ed)?|from|since|because|which|where|while|ahead\s+of|next\s+to|beside|between|alongside|to\s+(?:keep|avoid|protect|spare|leave|give|free|clear|stay))\b/gi;
+const RUN_OBJECT =
+  /\b(?:runs?|running|long|tempo|intervals?|quality|easy|strides|fartlek|hills?|track|jogs?|mileage|miles?|km|it|them|that|this)\b/i;
+const LIFT_UNCHANGED =
+  /\b(?:unchanged|untouched|intact|stays?|staying|remains?|as\s+(?:is|it\s+was|they\s+were|planned)|the\s+same|in\s+place|(?:didn['’]t|hasn['’]t|haven['’]t|did\s+not|has\s+not|have\s+not)\s+(?:change|changed|move|moved))\b/i;
+const LIFT_CLAUSE_BREAK = /,\s+|;\s*|\s*[—–]\s*|\s+-\s+|\s+and\s+/i;
 function namesLifting(text: string): boolean {
-  return LIFT_REF.test(text.replace(SET_VERB, " ").replace(/\bload\b/gi, " "));
+  const cleaned = text
+    .replace(SET_VERB, " ")
+    .replace(/\bload\b/gi, " ")
+    .split(LIFT_CLAUSE_BREAK)
+    .filter((clause) => !(LIFT_REF.test(clause) && LIFT_UNCHANGED.test(clause) && !CHANGE_PRED.test(clause)))
+    .join(", ");
+  if (!LIFT_REF.test(cleaned)) return false;
+  const verb = CHANGE_PRED.exec(cleaned);
+  const from = verb ? verb.index + verb[0].length : 0;
+  const relation = new RegExp(LIFT_RELATION.source, LIFT_RELATION.flags);
+  relation.lastIndex = from;
+  const rel = relation.exec(cleaned);
+  if (!rel) return true;
+  const head = cleaned.slice(0, rel.index);
+  const tail = cleaned.slice(rel.index + rel[0].length);
+  if (LIFT_REF.test(head) || !RUN_OBJECT.test(head.slice(verb ? verb.index : 0))) return true;
+  return CHANGE_PRED.test(tail);
 }
 const NOTE_CLAIM = verbForms(
   String.raw`added|put|noted|saved|logged|jotted|written|wrote|appended`,

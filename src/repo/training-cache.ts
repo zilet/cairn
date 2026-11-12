@@ -191,7 +191,19 @@ function coachContextBackstopStatements(): CoachContextBackstopStatements {
 // writes the cursor, so excluding the cursor without it would exclude nothing at all;
 // it carries no coach input of its own, because every column it summarizes is already
 // compared by VALUE here. Anything a reader can act on must NOT be listed here.
-const SETTINGS_KEY_EXCLUDED_COLUMNS = new Set(["rr_cursor", "updated_at"]);
+// `garmin_last_sync_at` / `garmin_last_sync_status` are the sync's own receipt: stamped
+// at the end of every full pass, even one that brought nothing new, and read only by
+// Settings, the cardio "synced X ago" line (both off GET /api/settings, which no memo
+// holds) and the data-coverage read (not memoized either) — never by the coach context
+// or a memoized Today/Horizon read. Keyed on them, an identical pass every six hours
+// threw away the coach context and every remembered Today. What a sync actually
+// brings moves the key through the rows it writes.
+const SETTINGS_KEY_EXCLUDED_COLUMNS = new Set([
+  "rr_cursor",
+  "updated_at",
+  "garmin_last_sync_at",
+  "garmin_last_sync_status",
+]);
 
 function withoutBookkeepingColumns(row: unknown): Record<string, unknown> {
   if (!row || typeof row !== "object") return {};

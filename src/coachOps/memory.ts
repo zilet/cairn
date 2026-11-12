@@ -21,7 +21,7 @@ import {
 import { namedWeekdays, statesRunningGoal } from "../repo/run-words.js";
 import { movementConsiderationsRead } from "../repo/movement-considerations.js";
 import { reactionModelForCoach, setReactionNarrative } from "../repo/reaction-model.js";
-import { backgroundTimeoutForOp, interactiveTimeoutForOp, setSettings } from "../repo/settings.js";
+import { backgroundTimeoutForOp, boundedReadLeashForOp, interactiveTimeoutForOp, setSettings } from "../repo/settings.js";
 import { addSupplement, understandSupplements } from "../repo/supplements.js";
 import type { FallbackResult } from "../agents.js";
 import { runChosen, runChosenStreaming } from "../runChosen.js";
@@ -260,7 +260,8 @@ async function generateInsightOnce(
     const run = await runChosenStreaming(agent, prompt, {
       op,
       signal: hooks?.signal,
-      timeoutMs: backgroundTimeoutForOp(op),
+      // A bounded-read run: 300 s across every round, the background leash per turn.
+      ...boundedReadLeashForOp(op),
       onDelta: hooks?.onDelta,
       boundedReads: true,
       acceptParsed: isInsightResult,

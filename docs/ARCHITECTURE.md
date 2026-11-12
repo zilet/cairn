@@ -1932,7 +1932,8 @@ serves the deterministic floor at once and arms the self-heal re-warm — the Br
 awaits an agent; only `?reset=1` and a steered read still compute inline. The self-heal backs off
 after a failed agent attempt: `computeDayRead` notes a contract rejection, timeout or process
 failure per date and prose identity (`noteDayReadAgentFailure`, `src/dayread-refresh.ts`; never for
-`AgentBusyError` or an empty rotation), and `ensureDayReadRefresh` does not re-arm that date and call
+`AgentBusyError`, an empty rotation, a cancelled run such as the precompute deadline's abort, or a
+rotation in which every provider sat out on an availability hold), and `ensureDayReadRefresh` does not re-arm that date and call
 for `DAY_READ_FAILURE_BACKOFF_MINUTES` (30) — otherwise every open of the floor paid a reply plus its
 repair. Process-local; the athlete's new read, a signal-driven refresh, the precompute and a changed
 identity are never held, and a landed agent read clears it. (3) `precomputeDayReadFloor` + `sleepRowExistsFor` (`src/dayread.ts`): when the
@@ -2522,10 +2523,11 @@ schema `computeDayRead` passes as `RunOpts.schema` (`dayReadSchemaFor(baseline.k
 `coach_read`; the static `DAY_READ_SCHEMA` stays the widest form the validator matches against), the
 prompt's JSON contract and the repair hints all read it, so under constrained decoding a refused `done`
 is not on offer at all (live, it was 8 of 10 refused reads in a week). A day with work logged but a
-non-done baseline (a run with the lift still open) also gets a plain THE DAY IS STILL OPEN line beside
-the output contract. The prompt's DETERMINISTIC SIGNALS blob drops the keys its own DATA already carries
-with the same content (`underfueling`, and `signal_state` in its `compactSignalState` prompt form), and
-the drive/hold blocks point at the blob (DATA has no `signals` key).
+train or easy baseline (a run with the lift still open) also gets a plain THE DAY IS STILL OPEN line
+beside the output contract; a rest baseline (a traded rest day, rest-grade readiness) hears only that what
+is logged does not make the day "done". The prompt's DETERMINISTIC SIGNALS blob drops the keys its own DATA already carries
+with the same content (`underfueling`, and `signal_state` in its `compactSignalState` prompt form) —
+its header names only the keys it actually dropped — and the drive/hold blocks point at the blob (DATA has no `signals` key).
 
 **Calibration from the athlete's own history: per SIGNAL, not per read (2026-10-17,
 `src/repo/brain/quiet-read-calibration.ts`).** The ladders and the long loop pool every quiet morning;
@@ -4053,7 +4055,10 @@ text). Every chat `agent_runs` row records `read_transport`, `read_calls` and `p
 authoritative baseline … do not fish": DATA is now the core the coach always has, and when the question
 turns on a specific the core does not hold (a past session, a trend, a lab, a number) it LOOKS IT UP
 before answering; it never calls something missing or "not synced" without having read for it, and it
-does not read for what the core already answers. The core is the `chat_core` projection site (see "The
+does not read for what the core already answers. Every coach/deep prompt carries that rule exactly once:
+once a prompt-loop turn's reads are spent or dropped, `chatReadPromptSuffix` swaps the contract for its
+no-reads form (`chatLeanNoReadsRule`: never without it being absent from DATA and the blocks in this
+prompt), so a forced plain-reply pass never loses it. The core is the `chat_core` projection site (see "The
 prompt-boundary context projection"); `settings.chat_context: "full"` (migration 132, `set_settings` /
 `PUT /api/settings`) restores the whole snapshot, the old wording and the prompt loop, byte for byte, as
 the runtime switch back. `scripts/chat-read-eval.mjs --agent <name> [--db <path>] [--run]` measures both
@@ -4358,9 +4363,12 @@ of that ladder — do not pass it directly. Background coaching ops (insight / w
 distill, memory consolidation, about-me growth, meal plan / swap / recipe, proposal, evolve_program,
 exercise and marker reconcile, health synthesis) pass `backgroundTimeoutForOp(op)` rather than
 falling to `DEFAULT_TIMEOUT_MS` (300 s, which a wedged CLI sat out in full): the effort leash (150 s
-at low/medium), `BACKGROUND_LEASH_MAX_MS` (240 s) for the long structured outputs, never past it. For
-a bounded-read op it is the total across its read rounds. `test/backgroundLeash.test.js` pins each
-call site.
+at low/medium), `BACKGROUND_LEASH_MAX_MS` (240 s) for the long structured outputs, never past it —
+unless a person bound the op to xhigh/max, whose own leash it never undercuts. It is a per-attempt
+leash. A bounded-read op (insight / weekly read, health synthesis) takes it per TURN instead
+(`boundedReadLeashForOp` → `turnTimeoutMs`): its `timeoutMs` is one deadline across every read round,
+fallback agent and permit wait, and stays at 300 s. `test/backgroundLeash.test.js` pins each call
+site.
 
 **Chat is deliberately absent from the table.** The adaptive chat router (`src/chatRouting.ts`)
 already assigns a per-message lane profile and stays authoritative for effort; only the timeout
@@ -4397,7 +4405,9 @@ as its floor whenever they are usable; the class order reorders only the agents 
 so a "deep work on agy" preference never moves a lab transcription ahead of the faithful
 transcribers. Chat applies the same order for the lane the turn starts on (capture/coach → `fast`,
 deep → `deep`; `buildChatProviderOrder`'s `classFirst`), after a selected or pinned provider and
-before the current-research web preference and the availability sort. Written via `set_settings` /
+before the current-research web preference and the availability sort — except that on the coach and
+deep lanes a natively-reading agent goes ahead of a prompt-loop one the class order lists first
+("Routing by capability"); name an agent or pin the chat route to override. Written via `set_settings` /
 `PUT /api/settings` (`normalizeAgentClassOrder`: known classes, agents named in `agents.json`,
 duplicates dropped); the Settings screen never sends it, so a UI save keeps it.
 
@@ -4464,8 +4474,14 @@ target, strength objective, symptom report and resolve, structure flag, plan res
 from `chatTurnGateInputs(turn)`, and both the prompt (`chatPromptActionTypes`, rebuilt with the same types
 on an escalation) and `applyChatActions` read that one result; `revert_decision` (its gate also reads the
 id the reply names) and every ungated type (the `add_context_event` injury path among them) always
-render, and `set_run` (retired) is never offered but still parses. `test/chatActionGates.test.js` holds
-that every omitted type is one the server refuses for that message.
+render, and `set_run` (retired) is never offered but still parses. An omitted gated type leaves one
+short NOT ON OFFER line (`renderOmittedGatedActions`, `src/chatActions.ts`): never emit it now, and the
+offer worded the way the recognizers read the yes that follows ("Want me to open the throttle…?", "Want
+me to set your daily target to 2,100 kcal?"), so other bullets naming it never point at nothing. Every
+OUTPUT CONTRACT, capture included, says actions only when the athlete asked to log or change something.
+`test/chatActionGates.test.js` holds that every omitted type is one the server refuses for that message
+(with and without a prior coach offer), and `test/chatGatedYes.test.js` drives whole stored turns: a yes
+to the coach's offer is offered AND applied, no intent is neither.
 
 The **reply-marked chat contract** (`buildChatPrompt` + `CHAT_REPLY_SENTINEL`/`CHAT_ACTION_SENTINEL`
 + `parseChatReply`) is what makes streaming clean: the model writes a `===CAIRN_REPLY===` line, then
@@ -7669,7 +7685,13 @@ the turn merely applying something. An ungrounded claim becomes a calm rotating 
 yet" sentence; offers, questions and a future "I'll" are never judged, and a server-written receipt is
 never rewritten. It leans toward NOT rewriting (a wrong rewrite of a true reply is worse than a missed
 claim), and it is also the day-total backstop on a turn that logged no food. Extend the module's
-class tables for a new claim shape; never patch one claim in another file.
+class tables for a new claim shape; never patch one claim in another file. A landed run write
+(`set_run`, `set_endurance_schedule`) grounds a plan claim unless the claim changes LIFTING — a lift as
+the object of the change ("…and Thursday's squats are lighter", "swapped your bench"), not one named as
+the run move's reason or timing ("so it doesn't sit on top of Thursday's squats", "off your bench day");
+a lifting claim gets a rotating line that keeps the run receipt true ("Your lifting plan didn't
+change; only the run change was saved.", `PLAN_LIFTING_UNCHANGED_RUN_SAVED_VARIANTS`; the rule is
+`namesLifting`).
 
 **Instant-lane precision** (`chatRouting.ts`, `chat-intent.ts`): the receipt-only lane needs a
 food-shaped OBJECT (`hasFoodEvidence`: "had a great run" and "only slept 5 hours" are not meals), reads

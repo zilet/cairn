@@ -21,17 +21,26 @@ import { addDaysISO, localDateISO } from "./shared.js";
 /** Rows older than this many days are compacted. The sync rewrites at most 14. */
 export const GARMIN_RAW_COMPACT_AFTER_DAYS = 30;
 
-/** The per-minute series stripped from an old day's payload — nothing else. */
-export const GARMIN_RAW_TIME_SERIES_PATHS = [
-  "$.sleep.sleepMovement",
-  "$.sleep.wellnessEpochSPO2DataDTOList",
-  "$.sleep.wellnessEpochRespirationDataDTOList",
-  "$.sleep.sleepHeartRate",
-  "$.sleep.sleepStress",
-  "$.sleep.sleepBodyBattery",
-  "$.sleep.hrvData",
-  "$.hrv.hrvReadings",
+// The per-minute series inside a daily-sleep payload. The sync stores that payload
+// twice over on some days: `sleep` (the package's getSleepData) and `fullSleep` (the
+// wellness-service dailySleepData read it falls back to when the first came back
+// reduced, src/garmin.ts) — the same DTO shape, so the same keys go from both.
+const SLEEP_TIME_SERIES_KEYS = [
+  "sleepMovement",
+  "wellnessEpochSPO2DataDTOList",
+  "wellnessEpochRespirationDataDTOList",
+  "sleepHeartRate",
+  "sleepStress",
+  "sleepBodyBattery",
+  "hrvData",
 ] as const;
+
+/** The per-minute series stripped from an old day's payload — nothing else. */
+export const GARMIN_RAW_TIME_SERIES_PATHS: readonly string[] = [
+  ...SLEEP_TIME_SERIES_KEYS.map((k) => `$.sleep.${k}`),
+  ...SLEEP_TIME_SERIES_KEYS.map((k) => `$.fullSleep.${k}`),
+  "$.hrv.hrvReadings",
+];
 
 /** Rows rewritten per statement, so one night's first pass never holds a huge write. */
 const COMPACT_BATCH = 50;
@@ -80,14 +89,18 @@ export function compactOldGarminRawPayloads(opts: { today?: string; olderThanDay
 }
 
 /**
- * Give the freed pages back to the filesystem: checkpoint the WAL down to nothing, then
- * VACUUM. Never throws — a failure (a reader holding the WAL, a transaction open on the
- * connection, a full disk) is reported and the next night simply tries again.
+ * Give the freed pages back to the filesystem: checkpoint the WAL down to nothing,
+ * VACUUM, then checkpoint again. In WAL mode VACUUM writes the rebuilt database INTO
+ * the WAL, so without the second TRUNCATE the -wal file stays the size of the whole
+ * database until some later checkpoint happens to reset it. Never throws — a failure (a
+ * reader holding the WAL, a transaction open on the connection, a full disk) is
+ * reported and the next night simply tries again.
  */
 export function reclaimDatabaseSpace(): { ok: boolean; error?: string } {
   try {
     db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
     db.exec("VACUUM");
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
     return { ok: true };
   } catch (e: any) {
     return { ok: false, error: e?.message ?? String(e) };

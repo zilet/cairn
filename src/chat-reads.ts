@@ -42,8 +42,23 @@ const CHAT_NATIVE_READ_MAX_CALLS = NATIVE_COACH_READ_BUDGET.maxCalls;
 function lookItUpGuidance(where: "above" | "below"): string {
   return `DATA ${where} is the core you always have: who they are, today, and this week (plus the ids your actions name). Everything older or deeper — past sessions and how a lift has moved, trends, labs and findings, body composition, fuel and recovery history and baselines, this week's run rationale, the decision ledger — is one coach read away.
 - When the question turns on a specific the core does not hold (a past session, a trend, a lab value, a number), LOOK IT UP before you answer. Answer from what the read returned.
-- Never say something is missing, "not visible" or "hasn't synced" without having read for it first.
+- ${NEVER_CLAIM_MISSING} without having read for it first.
 - Do not read for what the core or the blocks ${where} already answer — today's activities, today's food, this week's days are already here.`;
+}
+
+// The rule every coach/deep prompt carries exactly once. With the reads open it says to
+// read first (lookItUpGuidance); once they are spent — or a lean prompt-loop turn has no
+// read contract at all — it must not ask for a read the model cannot make.
+const NEVER_CLAIM_MISSING = `Never say something is missing, "not visible" or "hasn't synced"`;
+
+/**
+ * The lean prompt loop's suffix once its reads are used up (or dropped after a malformed
+ * request): the read contract goes, so the never-claim-missing rule rides alone, in its
+ * no-reads form.
+ */
+export function chatLeanNoReadsRule(): string {
+  return `\n\n=== NO MORE READS THIS TURN ===
+- ${NEVER_CLAIM_MISSING} without it being absent from DATA and the blocks in this prompt. Reply now with what you have.`;
 }
 
 /** The lean prompt-loop contract: the guidance plus the bare-JSON read protocol. */

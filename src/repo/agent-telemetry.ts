@@ -488,25 +488,31 @@ function sqliteUtcIso(value: unknown): string | null {
   return /[zZ]|[+-]\d\d:\d\d$/.test(iso) ? iso : `${iso}Z`;
 }
 
+// Connect-time probes that are telemetry, never coaching health: a "Say hello" on a new or
+// signed-out CLI fails by design until its login lands, and must not read as the whole
+// agent layer failing. The row stays in agent_runs for the stats.
+const HEALTH_EXCLUDED_OPS = "('agent_hello')";
+
 /**
- * Where the agent layer stands NOW, across builds: the newest attempt decides. It is a
- * state, not a tally, so one bad morning clears itself the moment a later attempt
+ * Where the agent layer stands NOW, across builds: the newest coaching attempt decides.
+ * It is a state, not a tally, so one bad morning clears itself the moment a later attempt
  * succeeds (Settings > Agents prints it as one quiet line; the Brief no longer does).
  */
 export function currentAgentHealth(): CurrentAgentHealth {
   try {
+    const coaching = `COALESCE(op, '') NOT IN ${HEALTH_EXCLUDED_OPS}`;
     const newest = db
-      .prepare(`SELECT ok, error_class, created_at FROM agent_runs ORDER BY id DESC LIMIT 1`)
+      .prepare(`SELECT ok, error_class, created_at FROM agent_runs WHERE ${coaching} ORDER BY id DESC LIMIT 1`)
       .get() as any;
     if (!newest) return { state: "idle", last_ok_at: null, failing_since: null, error_class: null };
     const lastOk = db
-      .prepare(`SELECT id, created_at FROM agent_runs WHERE ok = 1 ORDER BY id DESC LIMIT 1`)
+      .prepare(`SELECT id, created_at FROM agent_runs WHERE ok = 1 AND ${coaching} ORDER BY id DESC LIMIT 1`)
       .get() as any;
     if (newest.ok) {
       return { state: "ok", last_ok_at: sqliteUtcIso(lastOk?.created_at), failing_since: null, error_class: null };
     }
     const firstFail = db
-      .prepare(`SELECT created_at FROM agent_runs WHERE ok = 0 AND id > ? ORDER BY id ASC LIMIT 1`)
+      .prepare(`SELECT created_at FROM agent_runs WHERE ok = 0 AND ${coaching} AND id > ? ORDER BY id ASC LIMIT 1`)
       .get(Number(lastOk?.id) || 0) as any;
     return {
       state: "failing",

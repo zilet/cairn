@@ -19,6 +19,14 @@ Versioning](https://semver.org/) for tagged releases.
   proposals, memory passes, exercise and marker reconciles and the health synthesis stop after
   2.5 minutes (4 for the long plan, meal-week and lab documents) instead of 5, so a stuck CLI frees
   its slot sooner.
+- **Finished Garmin activities show up within minutes, and a sync with nothing new stays quiet.**
+  Between the six-hourly passes, Cairn asks Garmin for its newest few activities every 15 minutes in
+  waking hours (and when you open the app, at most every five minutes), and pulls the last two days
+  only when one is missing or today's changed. A failed pass retries after 30 minutes instead of six
+  hours. A pass that brings nothing new rewrites no rows and no longer throws away the cached Today
+  or the coach's context; only Settings' last-sync time moves. A strength activity's narrative is
+  written once per version of the activity instead of on every pass. Daily Garmin payloads older
+  than 30 days drop the per-minute series nothing reads (summaries stay), nightly.
 
 ### Fixed
 

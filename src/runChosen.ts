@@ -576,6 +576,8 @@ export async function runChosenStreaming(
     op?: string;
     onDelta?: (chunk: string) => void;
     boundedReads?: boolean;
+    /** With `boundedReads`: the leash of ONE read turn (CoachReadRunOptions.turnTimeoutMs). */
+    turnTimeoutMs?: number;
     /**
      * Hand `onDelta` the model's RAW text instead of the marker-gated prose — for a
      * JSON-only op that previews its own structure as it streams (the welcome's first

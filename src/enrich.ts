@@ -2,7 +2,18 @@ import path from "node:path";
 import fs from "node:fs";
 import { db } from "./db.js";
 import { inferHealthDocumentKind, normalizeHealthDocumentKind } from "./healthDocumentKinds.js";
-import { getActivity, getGarminActivity, reconcileGarminStrength, setActivityEnrichStatus, updateActivityFields, updateSessionGarminNarrative } from "./repo/activities.js";
+import {
+  GARMIN_STRENGTH_ACTIVITY_SETTLED_SQL,
+  garminStrengthActivityKey,
+  garminStrengthActivityVersion,
+  getActivity,
+  getGarminActivity,
+  markGarminStrengthActivitySettled,
+  reconcileGarminStrength,
+  setActivityEnrichStatus,
+  updateActivityFields,
+  updateSessionGarminNarrative,
+} from "./repo/activities.js";
 import { isGenericActivityType } from "./repo/endurance-sports.js";
 import { extractZipSafely, HEALTH_EXPORT_ZIP_LIMITS } from "./safeUnzip.js";
 import { applyCcdaHealthBackfill, backfillCcdaHealthDocument, dateUndatedPanels, extractCcdaHealthData } from "./repo/ccda.js";
@@ -1198,7 +1209,21 @@ export async function processGarminStrengthJob(garminActivityId: number): Promis
   }
   if (!ga?.session_id) return; // not a strength activity, or no session to attach to
 
-  const setImportKey = String(ga.external_id ?? `garmin-activity:${ga.id}`);
+  const setImportKey = garminStrengthActivityKey(ga);
+  // The row version this run read. The completion marker records THIS version, and
+  // only while the row still carries it: a revision that landed mid-run is newer work,
+  // which the sync that wrote it offers again.
+  const version = garminStrengthActivityVersion(ga);
+  const settle = (): void => {
+    try {
+      const now = getGarminActivity(garminActivityId) as any;
+      if (now?.session_id && garminStrengthActivityVersion(now) === version) {
+        markGarminStrengthActivitySettled(now.session_id, version);
+      }
+    } catch {
+      /* an unrecorded completion only means one more offer */
+    }
+  };
   const detectedSets = garminDetectedSetInputs(ga);
   // The repo operation re-reads authority and set count inside its savepoint. This
   // closes the reconcile→job race and commits all sets with their ledger marker.
@@ -1246,6 +1271,7 @@ export async function processGarminStrengthJob(garminActivityId: number): Promis
     log.info(
       `[enrich] garmin_strength#${garminActivityId}: Cairn authored this activity — reconciled, no narrative (own echo).`
     );
+    settle(); // an echo is never narrated: a rerun could only repeat this
     return;
   }
 
@@ -1311,6 +1337,10 @@ export async function processGarminStrengthJob(garminActivityId: number): Promis
     extrapolated: !!session?.garmin?.extrapolated,
     agent,
   });
+  // The narrative landed: this activity version's job is done. Enrichment off, no agent,
+  // or no usable reply leave no marker, so the next sync (or boot) offers it again —
+  // exactly as an owed narrative always was.
+  settle();
   if (logged) log.info(`[enrich] garmin_strength#${garminActivityId}: logged ${logged} detected set(s) into session ${ga.session_id} (kg→lb in code).`);
 }
 
@@ -2621,20 +2651,23 @@ const RECOVERY_LOOKBACK_DAYS = 7;
 /**
  * The Garmin strength activities whose agentic layer is still owed.
  *
- * `garmin_strength` has no status column, so an interrupted job left no trace and
- * a restart simply dropped it — the deterministic physiology merge had already
- * landed, but the day never got its one-line read. The durable source is the work
- * itself: a linked session (only strength activities get `session_id`) whose
- * `garmin_json` carries no narrative summary yet. Idempotent to re-run — set
- * import is keyed by activity, the narrative is an overwrite, and an activity
- * Cairn itself authored returns before any agent call.
+ * `garmin_strength` has no status column and the enrich queue lives in memory, so an
+ * interrupted job left no trace and a restart simply dropped it. The durable source is
+ * the per-activity completion marker the job itself writes on the session blob
+ * (`settled_activity_versions`, repo/activities.ts): a linked strength activity (only
+ * strength activities get `session_id`) whose CURRENT row version is not recorded
+ * there is still owed. Idempotent to re-run — set import is keyed by activity, the
+ * narrative is an overwrite, and an activity Cairn itself authored returns before any
+ * agent call.
  */
-// THE "narrative still owed" rule, over a `garmin_activities ga JOIN sessions s` row:
-// the linked session's garmin_json carries no narrative summary yet. Boot recovery and
+// THE "this activity's job is still owed" rule, over a `garmin_activities ga JOIN
+// sessions s` row. Per ACTIVITY, never per session: a session that already carries a
+// narrative from one activity says nothing about a second activity on the same day, nor
+// about a job that was queued and then lost to a restart or a throw. Boot recovery and
 // the sync's re-offer both ask exactly this — never a second rule.
-const GARMIN_STRENGTH_NARRATIVE_OWED = `(s.garmin_json IS NULL OR json_extract(s.garmin_json, '$.summary') IS NULL)`;
+const GARMIN_STRENGTH_JOB_OWED = `NOT ${GARMIN_STRENGTH_ACTIVITY_SETTLED_SQL}`;
 
-function garminStrengthJobsOwed(limit = 20): number[] {
+export function garminStrengthJobsOwed(limit = 20): number[] {
   const since = isoDaysAgo(localDateISO(), RECOVERY_LOOKBACK_DAYS);
   try {
     const rows = db
@@ -2643,7 +2676,7 @@ function garminStrengthJobsOwed(limit = 20): number[] {
            FROM garmin_activities ga
            JOIN sessions s ON s.id = ga.session_id
           WHERE ga.date >= ?
-            AND ${GARMIN_STRENGTH_NARRATIVE_OWED}
+            AND ${GARMIN_STRENGTH_JOB_OWED}
           ORDER BY ga.date DESC, ga.id DESC
           LIMIT ?`
       )
@@ -2659,11 +2692,13 @@ function garminStrengthJobsOwed(limit = 20): number[] {
  *
  * Every pass re-reads the whole sync window, so it used to re-enqueue every strength
  * activity in it — each one an agent run rewriting a narrative the session already
- * had. An activity is now SETTLED, and skipped, when its linked session already
- * carries the narrative (the owed rule above, negated) AND its row did not change in
- * this pass. A new activity, a revised one, one whose narrative is still owed, and one
- * with no session yet (the job retries the link) are all still offered. A failed read
- * offers everything, which is what the sync always did.
+ * had. An activity is now SETTLED, and skipped, only when its linked session records
+ * that the job finished for this activity's current row version (the owed rule above,
+ * negated). A new activity, a revised one (its version moved), one whose job never
+ * finished — lost to a restart, thrown, or the agent gave nothing back — and one with
+ * no session yet (the job retries the link) are all still offered; so is any id in
+ * `changed` (a row this pass wrote). A failed read offers everything, which is what
+ * the sync always did.
  */
 export function garminStrengthIdsToEnqueue(ids: number[], changed: ReadonlySet<number> = new Set()): number[] {
   const unique = [...new Set(ids.map(Number).filter((id) => Number.isFinite(id)))];
@@ -2676,7 +2711,7 @@ export function garminStrengthIdsToEnqueue(ids: number[], changed: ReadonlySet<n
            FROM garmin_activities ga
            JOIN sessions s ON s.id = ga.session_id
           WHERE ga.id IN (${unique.map(() => "?").join(",")})
-            AND NOT ${GARMIN_STRENGTH_NARRATIVE_OWED}`
+            AND NOT (${GARMIN_STRENGTH_JOB_OWED})`
       )
       .all(...unique) as any[];
     settled = new Set(rows.map((r) => Number(r.id)));

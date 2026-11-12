@@ -350,6 +350,28 @@ export function garminFailureRetryMs(consecutiveFailures: number, capMs = 6 * 60
   return Math.min(Math.max(capMs, GARMIN_RETRY_BASE_MS), GARMIN_RETRY_BASE_MS * 2 ** Math.min(n - 1, 16));
 }
 
+/**
+ * The full pass's clock: when the next attempt is due after a success (the ordinary
+ * interval, and the failure count resets) or after a failure (garminFailureRetryMs of
+ * the consecutive count). The scheduler holds one; a test drives it with a fake `now`.
+ */
+export function garminRetryLadder(intervalMs: number) {
+  let failures = 0;
+  return {
+    failed(now = Date.now()): number {
+      failures++;
+      return now + garminFailureRetryMs(failures, intervalMs);
+    },
+    succeeded(now = Date.now()): number {
+      failures = 0;
+      return now + intervalMs;
+    },
+    get failures(): number {
+      return failures;
+    },
+  };
+}
+
 // The nightly learning pass PREFERS MEMORY_HOUR but is owned by the DAY, not by the
 // minute the process happened to be alive for. It used to gate on `hour === MEMORY_HOUR`
 // with the last-run date held in process memory only, so a restart across the memory
@@ -1396,10 +1418,9 @@ export function startScheduler() {
   const GARMIN_INTERVAL_MS = 6 * 60 * 60 * 1000;
   let garminDueAt = Date.now() + 44_000; // gate opens just before the 45s boot pass fires
   let garminBusy = false;
-  let garminFailures = 0;
+  const garminLadder = garminRetryLadder(GARMIN_INTERVAL_MS);
   const garminFailed = (error: unknown) => {
-    garminFailures++;
-    garminDueAt = Date.now() + garminFailureRetryMs(garminFailures, GARMIN_INTERVAL_MS);
+    garminDueAt = garminLadder.failed();
     recordSchedulerFailure("garmin_auto_sync", error);
     log.error(`[garmin] auto-sync failed; retrying in ${Math.round((garminDueAt - Date.now()) / 60_000)} min`, {
       error,
@@ -1418,10 +1439,10 @@ export function startScheduler() {
       garminDueAt = Date.now() + GARMIN_INTERVAL_MS;
       const r = await syncGarmin(); // records garmin_last_sync_at/status itself
       if (r.ok) {
-        garminFailures = 0;
+        garminLadder.succeeded();
         log.info(`[garmin] auto-sync ok: ${r.activities} activities, ${r.daily_metrics} daily metric days.`);
-        // A sync moves the coach context's key; rebuild it here rather than on the
-        // next Today open.
+        // A sync that brought news moves the coach context's key; rebuild it here
+        // rather than on the next Today open (a quiet pass leaves it warm: a hit).
         repo.prewarmCoachContext();
       } else {
         garminFailed(new Error(String(r.error || "sync failed")));

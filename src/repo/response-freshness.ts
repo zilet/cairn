@@ -53,6 +53,16 @@ const AUX_TABLES = [
   "symptom_report_events",
 ] as const;
 
+// An UPDATE on these tables counts only when it moves a column a reader can see. A
+// garmin_sources row is restamped at the end of EVERY full pass (`last_sync_at`, and
+// `updated_at` with it) — the sync's receipt, which no memoized read shows (the coach
+// summary leaves both out; Settings reads the sync time off its own unmemoized route).
+// Its connection state (`auth_status`), mode, label and token still count.
+const AUX_UPDATE_WHEN: Partial<Record<(typeof AUX_TABLES)[number], string>> = {
+  garmin_sources: `WHEN NEW.provider IS NOT OLD.provider OR NEW.mode IS NOT OLD.mode OR NEW.label IS NOT OLD.label
+    OR NEW.auth_status IS NOT OLD.auth_status OR NEW.token_json IS NOT OLD.token_json`,
+};
+
 const AUX_ODOMETER_TABLE = "_cairn_response_aux_writes";
 
 let auxOdometer: ReturnType<typeof db.prepare> | null = null;
@@ -72,7 +82,10 @@ function installAuxOdometer(): ReturnType<typeof db.prepare> | null {
     const bump = `UPDATE ${AUX_ODOMETER_TABLE} SET n = n + 1;`;
     for (const t of AUX_TABLES) {
       for (const op of ["INSERT", "UPDATE", "DELETE"]) {
-        db.exec(`CREATE TEMP TRIGGER IF NOT EXISTS _cairn_resp_${op.toLowerCase()}_${t} AFTER ${op} ON ${t} BEGIN ${bump} END`);
+        const when = op === "UPDATE" ? (AUX_UPDATE_WHEN[t] ?? "") : "";
+        db.exec(
+          `CREATE TEMP TRIGGER IF NOT EXISTS _cairn_resp_${op.toLowerCase()}_${t} AFTER ${op} ON ${t} ${when} BEGIN ${bump} END`
+        );
       }
     }
     const ignored = APP_STATE_IGNORED_KEYS.map((k) => `'${k}'`).join(",");

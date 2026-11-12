@@ -1731,6 +1731,31 @@ function physiologyOf(row: any) {
   };
 }
 
+// The session-blob fields reconcileGarminStrength DERIVES (or normalizes) on every run.
+// Any other field in `sessions.garmin_json` belongs to another writer and is carried
+// through the rebuild as stored.
+const GARMIN_RECONCILE_OWNED_KEYS = [
+  "external_id",
+  "type",
+  "name",
+  "duration_min",
+  "avg_hr",
+  "max_hr",
+  "calories",
+  "training_effect",
+  "aerobic_te",
+  "anaerobic_te",
+  "hr_zones",
+  "activity_count",
+  "imported_set_activity_ids",
+  "cairn_sets_authoritative",
+  "summary",
+  "intensity",
+  "extrapolated",
+  "reconciled_at",
+  "agent",
+] as const;
+
 // Deterministic merge of a Garmin strength activity into the day's Cairn session:
 // attach the physiology layer (HR/zones/calories/TE) to sessions.garmin_json, link
 // garmin_activities.session_id, and drop any stale duplicate generic activity row.
@@ -1830,7 +1855,17 @@ export function reconcileGarminStrength(
     isCairnAuthoredName(primary.name) && sessionDurationMin != null && Number.isFinite(sessionDurationMin)
       ? Math.max(sessionDurationMin, Number(primary.duration_min) || 0)
       : primary.duration_min;
+  // Everything the reconcile does NOT derive is somebody else's record and rides
+  // forward untouched: the set import's parked `unattributed_sets`, the write-back's
+  // `export`, the strength job's `settled_activity_versions`, and any field a later
+  // writer adds. The blob is rebuilt on every reconcile, and since the sync stopped
+  // re-queueing settled activities nothing else re-writes those fields — a rebuild
+  // that named only what it knew about silently dropped the rest.
+  const carried: Record<string, unknown> =
+    existing && typeof existing === "object" && !Array.isArray(existing) ? { ...existing } : {};
+  for (const key of GARMIN_RECONCILE_OWNED_KEYS) delete carried[key];
   const blob = {
+    ...carried,
     // Identity fronted by the primary (longest) activity — preserves single-activity output.
     external_id: primary.external_id,
     type: primary.type,
@@ -1853,10 +1888,9 @@ export function reconcileGarminStrength(
     // Absent means pending: processGarminStrengthJob resolves it from the current
     // set state immediately before any watch-derived sets can be written.
     ...(setAuthority === undefined ? {} : { cairn_sets_authoritative: setAuthority }),
-    // What we already wrote BACK to Garmin (src/garminExport.ts). The blob is rebuilt
-    // from scratch on every reconcile, so without this a routine re-sync would forget
-    // the export and the next pass would re-write the same sets onto the watch.
-    ...(existing?.export ? { export: existing.export } : {}),
+    // `export` (what we already wrote BACK to Garmin, src/garminExport.ts) rides in
+    // `carried` above: forgetting it would make the next pass re-write the same sets
+    // onto the watch.
     // Carry the agentic narrative forward whenever the day already had one.
     summary: existing ? (existing.summary ?? null) : null,
     intensity: existing ? (existing.intensity ?? null) : null,
@@ -1981,6 +2015,85 @@ export function revertGarminReconcile(payload: GarminReconcileRollbackPayload): 
   bumpTrainingDataVersion();
 }
 
+// ---- the strength job's per-activity completion marker -----------------------------
+// The `garmin_strength` enrichment job's work is per ACTIVITY (its set import is keyed
+// by the activity, its narrative reads that activity), but a session can carry several
+// strength activities, and the enrich queue lives in memory only. So "this activity's
+// job is done" is recorded durably on the session blob as `<activity key>@<synced_at>`
+// in `settled_activity_versions`, written by the job when it reaches an outcome a rerun
+// would only repeat (the narrative landed, or the activity is Cairn's own echo). The
+// `synced_at` half is the row's version: the upsert stamps it only when a stored value
+// moves, so a revised activity no longer matches its old marker and is offered again.
+// The reconcile carries the list through its rebuild like any field it does not own.
+
+/** How many settled versions one session remembers (a day rarely holds more than two). */
+const MAX_SETTLED_ACTIVITY_VERSIONS = 32;
+
+/** The key the set import and the completion marker both name an activity by. */
+export function garminStrengthActivityKey(ga: { id?: unknown; external_id?: unknown }): string {
+  return String(ga?.external_id ?? `garmin-activity:${ga?.id}`);
+}
+
+/** This version of the activity row, as the completion marker records it. */
+export function garminStrengthActivityVersion(ga: {
+  id?: unknown;
+  external_id?: unknown;
+  synced_at?: unknown;
+}): string {
+  return `${garminStrengthActivityKey(ga)}@${String(ga?.synced_at ?? "")}`;
+}
+
+/**
+ * The SQL twin of garminStrengthActivityVersion over a `garmin_activities ga JOIN
+ * sessions s` row: TRUE when the session blob records this activity's CURRENT version as
+ * settled. A malformed blob reads as "not settled" rather than failing the query.
+ */
+//
+// A session narrated BEFORE the marker existed has a summary and no list at all. Its
+// activities were re-narrated on every pass back then, so it reads as settled rather
+// than costing one more agent run per old workout on the first pass after an upgrade;
+// a row the pass actually changes is still offered (`changed`, enrich.ts), and that
+// job's marker then puts the session on the per-activity rule.
+export const GARMIN_STRENGTH_ACTIVITY_SETTLED_SQL = `(EXISTS (
+  SELECT 1 FROM json_each(
+      CASE WHEN json_valid(s.garmin_json) THEN s.garmin_json ELSE '{}' END,
+      '$.settled_activity_versions') AS settled
+   WHERE settled.value = COALESCE(CAST(ga.external_id AS TEXT), 'garmin-activity:' || ga.id)
+                         || '@' || COALESCE(ga.synced_at, '')
+) OR (json_valid(s.garmin_json)
+      AND json_type(s.garmin_json, '$.settled_activity_versions') IS NULL
+      AND json_extract(s.garmin_json, '$.summary') IS NOT NULL))`;
+
+function withSettledVersion(prior: unknown, version: string): string[] {
+  const key = version.slice(0, version.lastIndexOf("@"));
+  // One entry per activity: a newer version of the same activity replaces its old one.
+  const kept = (Array.isArray(prior) ? prior : [])
+    .map((v) => String(v))
+    .filter((v) => v && v.slice(0, v.lastIndexOf("@")) !== key);
+  return [...kept, version].slice(-MAX_SETTLED_ACTIVITY_VERSIONS);
+}
+
+/**
+ * Record that the strength job finished for this activity version, without touching
+ * anything else in the blob. A no-op (no write) when it is already recorded.
+ */
+export function markGarminStrengthActivitySettled(sessionId: number, version: string): boolean {
+  const s = db.prepare(`SELECT garmin_json FROM sessions WHERE id = ?`).get(sessionId) as any;
+  if (!s || !version) return false;
+  let blob: any = {};
+  try {
+    blob = s.garmin_json ? JSON.parse(s.garmin_json) : {};
+  } catch {
+    blob = {};
+  }
+  if (!blob || typeof blob !== "object" || Array.isArray(blob)) blob = {};
+  const prior = Array.isArray(blob.settled_activity_versions) ? blob.settled_activity_versions.map(String) : [];
+  if (prior.includes(version)) return false;
+  blob.settled_activity_versions = withSettledVersion(prior, version);
+  db.prepare(`UPDATE sessions SET garmin_json = ? WHERE id = ?`).run(JSON.stringify(blob), sessionId);
+  return true;
+}
+
 // Merge the agentic narrative (summary / intensity / extrapolated flag / agent)
 // into a session's existing Garmin blob. Used by enrich.ts after the agent runs.
 export function updateSessionGarminNarrative(
@@ -1992,6 +2105,8 @@ export function updateSessionGarminNarrative(
     agent?: string | null;
     cairn_sets_authoritative?: boolean;
     imported_set_activity_ids?: string[];
+    /** The strength job finished for this activity version (garminStrengthActivityVersion). */
+    settled_activity_version?: string | null;
   }
 ) {
   const s = db.prepare(`SELECT garmin_json FROM sessions WHERE id = ?`).get(sessionId) as any;
@@ -2013,6 +2128,9 @@ export function updateSessionGarminNarrative(
     blob.imported_set_activity_ids = [
       ...new Set(patch.imported_set_activity_ids.map((id) => String(id)).filter(Boolean)),
     ].slice(-32);
+  }
+  if (patch.settled_activity_version) {
+    blob.settled_activity_versions = withSettledVersion(blob.settled_activity_versions, patch.settled_activity_version);
   }
   db.prepare(`UPDATE sessions SET garmin_json = ? WHERE id = ?`).run(JSON.stringify(blob), sessionId);
   // The narrative is prose ABOUT a session, not training the day-read grades: dayLoad
@@ -2050,7 +2168,14 @@ function getGarminCoachSummaryRead(days: number, asOfDate: string) {
   const windowDays = Math.max(1, Math.min(366, Math.trunc(Number(days) || 14)));
   const today = String(asOfDate || localDateISO()).slice(0, 10);
   const since = addDaysISO(today, -Math.max(0, windowDays - 1)) ?? today;
-  const source = listGarminSources()[0] ?? null;
+  // Which source, and whether it is connected — not the sync's receipt. `last_sync_at`,
+  // `sync_cursor` and `updated_at` move on every pass, including one that brought
+  // nothing, and this summary rides the coach context, whose memo is deliberately NOT
+  // keyed on them (repo/training-cache.ts). The last sync time lives in Settings.
+  const sourceRow = (listGarminSources()[0] ?? null) as Record<string, unknown> | null;
+  const source = sourceRow
+    ? (({ last_sync_at: _at, sync_cursor: _cursor, updated_at: _updated, ...rest }) => rest)(sourceRow)
+    : null;
   const activities = db
     .prepare(
       `SELECT type,

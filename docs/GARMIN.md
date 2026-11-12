@@ -100,13 +100,17 @@ record a metric) degrades that field to `null` rather than failing the sync. The
 full provider payloads are preserved in `raw_json` for re-derivation while a day is
 recent. Once a daily-metric row is older than 30 days (the sync only ever rewrites the
 last 14), the nightly maintenance pass strips the per-minute time series nothing reads
-back — `sleep.sleepMovement`, `sleep.wellnessEpochSPO2DataDTOList`,
-`sleep.wellnessEpochRespirationDataDTOList`, `sleep.sleepHeartRate`,
-`sleep.sleepStress`, `sleep.sleepBodyBattery`, `sleep.hrvData` and `hrv.hrvReadings`
-— and keeps everything else: every summary object (`sleep.dailySleepDTO`,
+back — `sleepMovement`, `wellnessEpochSPO2DataDTOList`,
+`wellnessEpochRespirationDataDTOList`, `sleepHeartRate`, `sleepStress`,
+`sleepBodyBattery` and `hrvData` under both `sleep` and `fullSleep` (the richer
+sleep read the sync falls back to; same shape), and `hrv.hrvReadings` — and keeps
+everything else: every summary object (`sleep.dailySleepDTO`, `fullSleep.dailySleepDTO`,
 `hrv.hrvSummary`, the daily `summary`, `weight`, …) and `trainingReadiness`. The
 row's `updated_at` does not move, and a manual re-sync of an old day restores the full
-payload until the next night. Activity payloads are kept whole.
+payload until the next night. Activity payloads are kept whole. When a night's pass
+compacts more than five rows it gives the space back: a WAL checkpoint, a
+`VACUUM`, and a second checkpoint (in WAL mode the `VACUUM` writes the rebuilt file
+into the WAL, which would otherwise stay that size).
 
 The internal endpoints key on the account's GUID-style **displayName**. The sync
 resolves it from the package's profile call, falling back to the social-profile
@@ -278,9 +282,26 @@ list call — every `GARMIN_LIGHT_CHECK_MINUTES` (default 15; `0` turns it off) 
 whose duration or distance changed) does it run a small two-day pass; otherwise it
 writes nothing. Opening the app asks the same question (`POST /api/garmin/check`), at
 most once every five minutes however often the app is foregrounded. A check that fails
-rests the light check for an hour. A pass that brings nothing new writes nothing either:
-an unchanged activity or day keeps its stored row and timestamps, so a quiet sync does
-not invalidate the cached Today read.
+rests the light check for an hour. The connector refreshes an expired Garmin token only
+after Garmin refuses a call; the refreshed token is written back to the token files
+(atomically, keeping their permissions), so the next check starts with a valid one
+rather than paying the refusal and the two sign-in calls again.
+
+A pass that brings nothing new changes no data: an unchanged activity or day keeps its
+stored row and timestamps, and the HR model is not rewritten when it comes out the
+same. It still records its own receipt — the last-sync time and status Settings shows,
+and the source's last-sync stamp — but the cached Today read and the coach context are
+not keyed on that receipt, so a quiet pass (full or light) leaves both warm while
+Settings and the "synced … ago" line read the true time.
+
+A strength activity is offered to the narrative job until that job has finished for
+the activity's current version: each session records, per activity, the version its
+job completed (`settled_activity_versions` on the session's Garmin blob). A new or
+revised activity, a second strength activity on a day that already has a narrative,
+and one whose job was lost to a restart or an agent that gave nothing back are offered
+again on the next pass (and at boot); an unchanged, settled one is not. With
+enrichment off nothing is ever settled, so each pass re-runs the deterministic part
+only.
 
 The coach receives a compact summary (it never sees the raw rows):
 
@@ -292,7 +313,7 @@ The coach receives a compact summary (it never sees the raw rows):
   composition where available
 - runner performance: race-time predictions, endurance score, hill score, and the
   training-load-balance phrase (latest non-null) where available
-- source status and last sync
+- source status (which source, and whether it is connected — the last-sync time lives in Settings)
 
 ## Strength Write-Back (Cairn → Garmin)
 

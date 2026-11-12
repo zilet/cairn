@@ -917,6 +917,9 @@ export function importGarminActivitySets(input: {
         : [];
       const next = [...prior, ...parked].slice(-MAX_UNATTRIBUTED_SETS);
       if (!parked.length && !Array.isArray(garmin.unattributed_sets)) return false;
+      // A re-run that parks exactly what is already parked changes nothing: say so,
+      // so the caller does not rewrite an identical blob.
+      if (next.length && JSON.stringify(next) === JSON.stringify(garmin.unattributed_sets)) return false;
       if (next.length) garmin.unattributed_sets = next;
       else delete garmin.unattributed_sets;
       return true;

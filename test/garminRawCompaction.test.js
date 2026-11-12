@@ -3,6 +3,7 @@
 // finished agent-job rows past retention are pruned (they used to go only at boot).
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { db, repo, localDaysAgo } from "./_seed.js";
 import {
   GARMIN_RAW_TIME_SERIES_PATHS,
@@ -30,6 +31,15 @@ function fatPayload() {
     hrv: {
       hrvSummary: { lastNightAvg: 61, baseline: { balancedLow: 55, balancedUpper: 70 } },
       hrvReadings: series(100),
+    },
+    // The wellness-service read the sync falls back to: the same sleep DTO shape.
+    fullSleep: {
+      dailySleepDTO: { sleepTimeSeconds: 26880, avgSleepStress: 14 },
+      sleepMovement: series(400),
+      sleepHeartRate: series(400),
+      sleepStress: series(400),
+      hrvData: series(100),
+      restlessMomentsCount: 22,
     },
     trainingReadiness: [{ score: 72, level: "HIGH" }],
     summary: { totalSteps: 9000, restingHeartRate: 49 },
@@ -61,6 +71,8 @@ test("an old day loses only the time series; summaries, readiness and updated_at
   }
   assert.equal(raw.sleep.dailySleepDTO.sleepTimeSeconds, 26880, "the sleep summary stays");
   assert.equal(raw.sleep.restingHeartRate, 49, "scalar sleep fields stay");
+  assert.deepEqual(raw.fullSleep.dailySleepDTO, { sleepTimeSeconds: 26880, avgSleepStress: 14 }, "fullSleep's summary stays");
+  assert.equal(raw.fullSleep.restlessMomentsCount, 22, "fullSleep's scalars stay");
   assert.deepEqual(raw.hrv.hrvSummary.baseline, { balancedLow: 55, balancedUpper: 70 }, "the HRV baseline stays");
   assert.deepEqual(raw.trainingReadiness, [{ score: 72, level: "HIGH" }], "training readiness stays");
   assert.equal(raw.summary.totalSteps, 9000, "the daily summary stays");
@@ -89,9 +101,17 @@ test("a large backlog drains in batches", () => {
   assert.equal(compactOldGarminRawPayloads().compacted, 0);
 });
 
-test("reclaiming space reports instead of throwing", () => {
+test("reclaiming space reports instead of throwing, and leaves no WAL behind", () => {
+  for (let i = 0; i < 20; i++) seedDay(localDaysAgo(31 + i));
+  compactOldGarminRawPayloads();
   const ok = reclaimDatabaseSpace();
-  assert.equal(typeof ok.ok, "boolean");
+  assert.equal(ok.ok, true, ok.error);
+  // VACUUM in WAL mode writes the rebuilt file into the WAL; the closing TRUNCATE
+  // checkpoint is what hands that space back.
+  const wal = `${process.env.DB_PATH}-wal`;
+  if (db.prepare("PRAGMA journal_mode").get().journal_mode === "wal" && fs.existsSync(wal)) {
+    assert.equal(fs.statSync(wal).size, 0, "the WAL was truncated after the VACUUM");
+  }
   // Inside an open transaction VACUUM cannot run: the failure comes back as a value.
   db.exec("BEGIN");
   try {

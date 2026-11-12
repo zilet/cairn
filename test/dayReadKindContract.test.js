@@ -133,6 +133,47 @@ test("the signals blob drops what DATA already carries and points nowhere DATA i
   assert.doesNotMatch(prompt, /DATA\.signals\b|DATA is in signals\./);
 });
 
+test("a rest read with a walk logged is not told its planned work is still ahead", () => {
+  seed({ blankProfile: true });
+  const base = dayRead();
+  const walk = { ...base.signals, logged_today: { sets: 0, activities: [{ type: "walking", duration_min: 25 }] } };
+  const rest = buildDayReadPrompt(undefined, { baseline: { ...base, kind: "rest", signals: walk } });
+  assert.doesNotMatch(rest, /THE DAY IS STILL OPEN|planned work is still ahead/);
+  assert.match(
+    rest,
+    /NOT "DONE": what is already logged today is context for the read and does not make the day "done"/
+  );
+  for (const kind of ["train", "easy"]) {
+    const open = buildDayReadPrompt(undefined, { baseline: { ...base, kind, signals: walk } });
+    assert.match(open, /THE DAY IS STILL OPEN: the day's planned work is still ahead/, kind);
+    assert.doesNotMatch(open, /NOT "DONE":/, kind);
+  }
+  const blank = buildDayReadPrompt(undefined, {
+    baseline: { ...base, kind: "rest", signals: { ...base.signals, logged_today: null } },
+  });
+  assert.doesNotMatch(blank, /NOT "DONE":|THE DAY IS STILL OPEN/, "nothing logged: nothing to say");
+});
+
+test("the signals header names only what it actually moved to DATA", () => {
+  seed();
+  const base = dayRead();
+  const header = (prompt) => /DETERMINISTIC SIGNALS[^\n]*/.exec(prompt)[0];
+  const blobOf = (prompt) => JSON.parse(/DETERMINISTIC SIGNALS[^\n]*\n(\{[\s\S]*?\})\nA rules-only/.exec(prompt)[1]);
+  const prompt = buildDayReadPrompt(undefined, { baseline: base });
+  for (const key of ["underfueling", "signal_state"]) {
+    const kept = Object.hasOwn(blobOf(prompt), key);
+    assert.equal(new RegExp(`\\b${key}\\b`).test(header(prompt)), !kept && Object.hasOwn(base.signals, key), key);
+  }
+  // A signal that differs from DATA's copy stays in the blob, and the header never claims it.
+  const differs = {
+    ...base,
+    signals: { ...base.signals, underfueling: { level: "kept-in-blob" }, signal_state: { dimensions: { kept: true } } },
+  };
+  const kept = buildDayReadPrompt(undefined, { baseline: differs });
+  assert.ok(Object.hasOwn(blobOf(kept), "underfueling"));
+  assert.doesNotMatch(header(kept), /underfueling|signal_state|in DATA/);
+});
+
 test("computeDayRead hands the agent the narrowed schema", async () => {
   seed({ blankProfile: true });
   fs.rmSync(schemaLog, { force: true });

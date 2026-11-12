@@ -531,6 +531,12 @@ export function buildDayReadPrompt(
   // The DATA block, projected once: rendered below and used to drop the signals the
   // DETERMINISTIC SIGNALS blob would otherwise repeat byte for byte.
   const dataProjection = projectCoachContext(context, "day_read") as Record<string, unknown>;
+  // The signals blob minus what DATA already carries, and the keys the header may say
+  // DATA holds — only those actually dropped from the blob (a key kept there is not).
+  const promptSignals = signalsForPrompt(baseline.signals as Record<string, unknown>, dataProjection);
+  const signalsInData = SIGNAL_KEYS_DATA_CARRIES.filter(
+    (key) => Object.hasOwn(baseline.signals ?? {}, key) && !Object.hasOwn(promptSignals, key)
+  );
   // ===== FELT SIGNALS block (wave/felt-signals — self-contained, delimited) =====
   // What the athlete's OWN subjective signals reveal, relevant to TODAY: a recurring
   // Brief-override rhythm on this weekday (pre-acknowledge, never gate), a persistent
@@ -734,11 +740,16 @@ export function buildDayReadPrompt(
   // Work is logged today but the server's baseline is not "done" (a run with the lift
   // still open, a short walk): the day's planned work is still ahead. Said in plain
   // words beside the output contract, because the live refusals were exactly this —
-  // a model reading "already logged" as "done" when the baseline was not.
-  const openDayLine =
-    baseline.kind !== "done" && ltBits.length
+  // a model reading "already logged" as "done" when the baseline was not. A rest read
+  // (a traded rest day, rest-grade readiness) has no planned work ahead, so it hears
+  // only that what is logged does not make the day "done".
+  const openDayLine = !ltBits.length
+    ? ""
+    : baseline.kind === "train" || baseline.kind === "easy"
       ? `\nTHE DAY IS STILL OPEN: the day's planned work is still ahead, so "kind" is train, easy or rest — what is already logged today is context for the read, not "done".`
-      : "";
+      : baseline.kind === "rest"
+        ? `\nNOT "DONE": what is already logged today is context for the read and does not make the day "done" — "kind" is train, easy or rest.`
+        : "";
   // The athlete has already read a sentence for this date today. The call has since
   // changed (that is the only reason this block is here), so a new sentence is
   // warranted — but a screen that rewords itself every few hours reads as churn, not
@@ -774,8 +785,8 @@ THE CONSTITUTION (binding):
   couple more hard days and you'll likely want a reset"). It's a kind early warning, never a brake or
   a verdict — the user still drives.
 
-DETERMINISTIC SIGNALS already computed (use them, but you make the final nuanced call; underfueling and signal_state are in DATA):
-${JSON.stringify(signalsForPrompt(baseline.signals as Record<string, unknown>, dataProjection))}
+DETERMINISTIC SIGNALS already computed (use them, but you make the final nuanced call${signalsInData.length ? `; ${signalsInData.join(" and ")} ${signalsInData.length > 1 ? "are" : "is"} in DATA` : ""}):
+${JSON.stringify(promptSignals)}
 A rules-only baseline suggested: kind="${baseline.kind}", focus=${JSON.stringify(baseline.focus)}.
 You MAY disagree with the baseline when the whole picture warrants it — it is a floor, not a ceiling${namedBrakeBlock ? " — but a train baseline is read quieter only under the NAMED BRAKE RULE below" : ""}.
 RECENT TRAINING (most recent first): ${sessionLine}.

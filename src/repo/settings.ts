@@ -557,12 +557,45 @@ const LONG_OUTPUT_OPS: ReadonlySet<string> = new Set([
  * nobody blocked on it). Without one a run fell to DEFAULT_TIMEOUT_MS; live, a hung
  * exercise reconcile held its permit the full 300 s. The effort leash
  * (interactiveTimeoutForOp: 150 s at low/medium) is the base, long structured outputs
- * get the ceiling, and nothing goes past it. For an op that reads on demand
- * (boundedReads) it is the TOTAL deadline across its read rounds.
+ * get the ceiling, and nothing goes past it — except a person's own effort: an op bound to
+ * xhigh/max (Settings → Agents) keeps that effort's leash, never a cap below it. It is a
+ * per-ATTEMPT leash; an op that reads on demand (boundedReads) takes it per turn through
+ * boundedReadLeashForOp.
  */
 export function backgroundTimeoutForOp(op: string): number {
   const leash = Math.max(interactiveTimeoutForOp(op), LONG_OUTPUT_OPS.has(op) ? BACKGROUND_LEASH_MAX_MS : 0);
-  return Math.min(leash, BACKGROUND_LEASH_MAX_MS);
+  return Math.max(Math.min(leash, BACKGROUND_LEASH_MAX_MS), effortOwnLeash(taskForOp(op)));
+}
+
+const EFFORT_ORDER: readonly ReasoningLevel[] = ["low", "medium", "high", "xhigh", "max"];
+
+// The leash of the highest effort this task can run at: its declared class, or any
+// provider a person bound it to. Unreadable settings never shorten anything.
+function effortOwnLeash(task: string): number {
+  let top = EFFORT_ORDER.indexOf(TASK_EXECUTION_PROFILES[task]?.reasoning as ReasoningLevel);
+  try {
+    for (const bound of Object.values(normalizeAgentProfileBindings(getSettings().agent_profile_bindings))) {
+      top = Math.max(top, EFFORT_ORDER.indexOf(bound?.[task]?.reasoning as ReasoningLevel));
+    }
+  } catch {
+    /* no settings yet: the declared class alone */
+  }
+  return top >= 0 ? interactiveTimeoutFor(EFFORT_ORDER[top]) : 0;
+}
+
+// The whole budget of a bounded-read run before the per-turn leash existed (the 300 s
+// default): every read round, every fallback agent and the spawn-permit wait share it.
+export const BOUNDED_READ_TOTAL_MS = 300_000;
+
+/**
+ * The leash for a background op that reads on demand (runChosenWithCoachReads). There
+ * `timeoutMs` is ONE deadline across every read round, every fallback agent and the
+ * spawn-permit wait, so the per-attempt leash would kill a healthy multi-round run and
+ * fail it. The total stays where it was (300 s); the leash applies to each turn.
+ */
+export function boundedReadLeashForOp(op: string): { timeoutMs: number; turnTimeoutMs: number } {
+  const turnTimeoutMs = backgroundTimeoutForOp(op);
+  return { timeoutMs: Math.max(BOUNDED_READ_TOTAL_MS, turnTimeoutMs), turnTimeoutMs };
 }
 
 const SETTINGS_COLUMN_REPAIRS: [string, string][] = [

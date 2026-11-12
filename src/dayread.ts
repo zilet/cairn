@@ -806,10 +806,20 @@ export function dayReadReplyChecks(
 // Did a thrown compute mean an agent was actually ASKED and failed (contract rejection,
 // timeout, process failure)? Host congestion is not one — the CLI never started and the
 // runner contract is defer-and-retry (src/agent-busy.ts) — and neither is an empty
-// rotation (no agent enabled), which asked nobody.
-export function dayReadAgentAttemptFailed(error: unknown): boolean {
+// rotation (no agent enabled), which asked nobody. A cancelled run (the caller's own
+// abort, e.g. the precompute deadline) is no verdict on the agent, and a rotation in
+// which every provider sat out on an availability hold spawned nothing: the hold's own
+// clock decides when that provider is asked again, not this backoff.
+export function dayReadAgentAttemptFailed(error: unknown, signal?: AbortSignal | null): boolean {
+  if (signal?.aborted) return false;
   if (isAgentBusyError(error)) return false;
-  return !(error instanceof AgentFallbackError && !error.order.length);
+  if ((error as any)?.name === "AbortError") return false;
+  if (/(?:^|\s)cancell?ed$/i.test(String((error as any)?.message ?? "").trim())) return false;
+  if (error instanceof AgentFallbackError) {
+    if (!error.order.length) return false;
+    if (error.tried.length && error.tried.every((entry) => !!entry.availability)) return false;
+  }
+  return true;
 }
 
 function agentIssueFor(error: unknown): "invalid_response" | "unreachable" {
@@ -1006,7 +1016,7 @@ export async function computeDayRead(
       };
     }
   } catch (e: any) {
-    if (!steered && dayReadAgentAttemptFailed(e)) noteDayReadAgentFailure(resolvedDate, identity);
+    if (!steered && dayReadAgentAttemptFailed(e, signal)) noteDayReadAgentFailure(resolvedDate, identity);
     out = {
       ...baseline,
       headline: dayReadHeadline(baseline, resolvedDate),

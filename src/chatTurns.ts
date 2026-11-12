@@ -22,6 +22,7 @@ import {
 } from "./brain/read-transport.js";
 import { NATIVE_COACH_READ_BUDGET, startCoachReadMcpListener, type CoachReadMcpListener } from "./coachReadMcp.js";
 import {
+  chatLeanNoReadsRule,
   chatLeanPromptLoopContract,
   chatNativeReadContract,
   chatReadLogLine,
@@ -2074,12 +2075,28 @@ Reads remaining: ${callsRemaining}. Now write your normal reply using the OUTPUT
 // The suffix appended to the chat prompt for a given read state. When reads are
 // exhausted (budget spent), the contract is dropped entirely so the agent simply replies.
 // "full" is the original contract over the full DATA block, word for word; "lean" is the
-// look-it-up contract over the lean core (src/chat-reads.ts).
+// look-it-up contract over the lean core (src/chat-reads.ts). The lean prompt carries its
+// never-claim-missing rule only in that contract, so an exhausted lean turn keeps the
+// rule in its no-reads form (the full prompt has its own guardrail).
 export function chatReadPromptSuffix(state: ChatReadState, exhausted: boolean, mode: ChatContextMode = "full"): string {
-  if (exhausted) return "";
+  if (exhausted) return mode === "lean" ? chatLeanNoReadsRule() : "";
   const contract = mode === "lean" ? chatLeanPromptLoopContract(CHAT_READ_MAX_CALLS) : chatReadContract(CHAT_READ_MAX_CALLS);
   if (!state.completed.length) return contract;
   return `${contract}${chatReadResultsBlock(state.completed, CHAT_READ_MAX_CALLS - state.calls)}`;
+}
+
+/**
+ * One attempt's whole prompt: the native contract sits in its slot ahead of the volatile
+ * blocks; the prompt loop's contract (and its results, or its no-reads rule) follows DATA.
+ */
+export function composeChatAttemptPrompt(
+  parts: { head: string; tail: string },
+  native: boolean,
+  promptLoopSuffix: string
+): string {
+  return native
+    ? `${parts.head}${chatNativeReadContract()}${parts.tail}`
+    : `${parts.head}${parts.tail}${promptLoopSuffix}`;
 }
 
 // A completed agent turn that is a bounded-read PROTOCOL turn (not the reply). A reply
@@ -2545,9 +2562,7 @@ export async function runChatCompletion(
     // The attempt's whole prompt: the native contract sits in its slot ahead of the
     // volatile blocks; the prompt loop's contract (and its results) follow DATA.
     const promptFor = (transport: ResolvedCoachReadTransport): string =>
-      transport.transport === "native_mcp"
-        ? `${promptParts.head}${chatNativeReadContract()}${promptParts.tail}`
-        : `${promptParts.head}${promptParts.tail}${readSuffix(transport, lane)}`;
+      composeChatAttemptPrompt(promptParts, transport.transport === "native_mcp", readSuffix(transport, lane));
 
     // Streaming first, exactly once for an equivalent provider/profile tuple. The
     // stream-capable primary may first request bounded reads (bare JSON, no reply marker
