@@ -369,6 +369,39 @@ export const DAY_READ_SCHEMA: JsonSchema = {
   },
 };
 
+const DAY_READ_FINAL_KINDS = ["train", "easy", "rest", "done"] as const;
+export type DayReadFinalKind = (typeof DAY_READ_FINAL_KINDS)[number];
+
+/**
+ * The final kinds a day read may answer for this baseline — the ONE rule the validator
+ * (src/dayread.ts dayReadAgentRejection), the per-call schema and the prompt all read.
+ * Whether real training is already done today is the server's fact: a "done" baseline
+ * admits only "done", any other known baseline admits everything but "done", and no
+ * baseline (a bare call) admits all four.
+ */
+export function dayReadFinalKinds(baselineKind: unknown): readonly DayReadFinalKind[] {
+  if (baselineKind === "done") return ["done"];
+  if (baselineKind != null) return ["train", "easy", "rest"];
+  return DAY_READ_FINAL_KINDS;
+}
+
+/**
+ * DAY_READ_SCHEMA narrowed to this baseline's kinds, for RunOpts.schema: under
+ * constrained decoding a "done" the validator would refuse is not offered at all (live,
+ * most refused day reads were exactly that). `coach_read` stays — the read protocol
+ * rides the same schema. The static DAY_READ_SCHEMA remains the widest form.
+ */
+export function dayReadSchemaFor(baselineKind: unknown): JsonSchema {
+  const properties = DAY_READ_SCHEMA.properties as Record<string, JsonSchema>;
+  return {
+    ...DAY_READ_SCHEMA,
+    properties: {
+      ...properties,
+      kind: { type: "string", enum: [...dayReadFinalKinds(baselineKind), "coach_read"] },
+    },
+  };
+}
+
 // Quiet cross-domain insight AND the weekly read (prompt/day.ts INSIGHT_SCHEMA /
 // WEEKLY_READ_SCHEMA). `connection` MUST be named: constrained decoding dropped
 // it when it wasn't, and every insight then fell back to text-only derivation.

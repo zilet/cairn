@@ -21,7 +21,8 @@ import { canonicalGroup, classifyMuscleGroup } from "../repo/exercise-canon.js";
 import { getSessionByDate, sessionSummary } from "../repo/sessions.js";
 import { hybridDayContext } from "../repo/training-read.js";
 import type { CoachContext } from "../repo/coach-context.js";
-import { promptData } from "./context-projection.js";
+import { compactSignalState, projectCoachContext, promptData } from "./context-projection.js";
+import { dayReadFinalKinds } from "../agent-contracts.js";
 import { todayPath, todayPathPromptView } from "../repo/today-path.js";
 import { localDateISO } from "../repo/shared.js";
 import { FUEL_CLAIM_RULE } from "../repo/fuel-claims.js";
@@ -65,14 +66,42 @@ import {
 
 // ---------- the day read (Phase 1A — the soul) ----------
 // Prose twin of agent-contracts.ts DAY_READ_SCHEMA — keep the named fields in lockstep.
-const DAY_READ_SCHEMA = `{
-  "kind": "train|easy|rest|done",
-  "headline": "<2-5 word plain-language state. Prospective when train/easy/rest ('Long run today.'); past-tense acknowledgement when done ('Long run done.')>",
+// The kind list is this baseline's (dayReadFinalKinds, the validator's own rule), the
+// same narrowing the per-call schema applies: a kind the server refuses is never offered.
+function dayReadSchemaProse(baselineKind: unknown): string {
+  const kinds = dayReadFinalKinds(baselineKind);
+  const headline =
+    kinds.length === 1 && kinds[0] === "done"
+      ? "<2-5 word plain-language state: a past-tense acknowledgement of the work ('Long run done.')>"
+      : kinds.includes("done")
+        ? "<2-5 word plain-language state. Prospective when train/easy/rest ('Long run today.'); past-tense acknowledgement when done ('Long run done.')>"
+        : "<2-5 word plain-language state, prospective ('Long run today.')>";
+  return `{
+  "kind": "${kinds.join("|")}",
+  "headline": "${headline}",
   "why": "<one warm, plain sentence — what you saw and why; NO numbers, NO scores>",
   "focus": "<train: the session character. For a LIFTING day this is the muscle focus ('Lower body'); for an ENDURANCE user it can be the run/ride character — 'Easy', 'Long', 'Tempo', 'Intervals', 'Recovery'. null on rest.>",
   "est_minutes": <rough minutes for the suggestion, or null>,
   "brake": "<ONLY when the baseline is train and you read today easy or rest: the field name of the fresh brake you acted on, exactly as listed under NAMED BRAKE RULE; otherwise null>"
 }`;
+}
+
+// The DETERMINISTIC SIGNALS blob, minus each key the same prompt's DATA block already
+// carries with the same content: `underfueling` rides in DATA whole, and `signal_state`
+// rides there in its prompt form (compactSignalState: the posture ladder's `deciding`
+// plumbing is deliberately never shown to a model). A key that differs — a dated read,
+// or a projection that compacts it — stays in the blob.
+const SIGNAL_KEYS_DATA_CARRIES = ["underfueling", "signal_state"] as const;
+
+function signalsForPrompt(signals: Record<string, unknown> | null | undefined, data: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...(signals ?? {}) };
+  for (const key of SIGNAL_KEYS_DATA_CARRIES) {
+    if (!Object.hasOwn(out, key) || !Object.hasOwn(data, key)) continue;
+    const prompted = key === "signal_state" ? compactSignalState(out[key]) : out[key];
+    if (JSON.stringify(prompted) === JSON.stringify(data[key])) delete out[key];
+  }
+  return out;
+}
 
 // The server rejects a headline/why that breaks the reading grammar
 // (src/repo/day-read-grammar.ts: isValidDayReadAgentResult). A brand-new user has no data,
@@ -499,6 +528,9 @@ export function buildDayReadPrompt(
   // another, and the persisted row took its `signals` and `input_fingerprint` from
   // the second. The bare fallback stays for callers that only want the prose.
   const baseline = opts.baseline ?? dayRead(opts.date, context.recovery, context.signal_state);
+  // The DATA block, projected once: rendered below and used to drop the signals the
+  // DETERMINISTIC SIGNALS blob would otherwise repeat byte for byte.
+  const dataProjection = projectCoachContext(context, "day_read") as Record<string, unknown>;
   // ===== FELT SIGNALS block (wave/felt-signals — self-contained, delimited) =====
   // What the athlete's OWN subjective signals reveal, relevant to TODAY: a recurring
   // Brief-override rhythm on this weekday (pre-acknowledge, never gate), a persistent
@@ -556,7 +588,7 @@ export function buildDayReadPrompt(
     const drive: any = (baseline.signals as any)?.training_drive_push;
     if (drive) {
       const due = Array.isArray(drive.due) && drive.due.length ? ` (what's due: ${drive.due.join(" and ")})` : "";
-      driveBlock = `\nTHEY HAVE ASKED TO PUSH (DATA.signals.training_drive_push): this is the athlete's own standing choice, not an inference — they deliberately asked for the work that's due on a day that can carry it, and every condition for that has already been checked and met today${due}. Write the read as the targeted training day it is. You MAY still disagree, but only by naming the CONCRETE thing that changed your mind — a short night, a fresh flag, something they told you — never on taste, and never by quietly softening it into an ordinary easy day. Same rules as everything else: a suggestion in a friend's voice, no score, no gate.\n`;
+      driveBlock = `\nTHEY HAVE ASKED TO PUSH (training_drive_push in DETERMINISTIC SIGNALS): this is the athlete's own standing choice, not an inference — they deliberately asked for the work that's due on a day that can carry it, and every condition for that has already been checked and met today${due}. Write the read as the targeted training day it is. You MAY still disagree, but only by naming the CONCRETE thing that changed your mind — a short night, a fresh flag, something they told you — never on taste, and never by quietly softening it into an ordinary easy day. Same rules as everything else: a suggestion in a friend's voice, no score, no gate.\n`;
     }
   } catch {
     driveBlock = "";
@@ -578,12 +610,12 @@ export function buildDayReadPrompt(
       // here themselves, so it must never be described as a commitment: there is no
       // appointment and nothing is taking their time. Told there was, the model
       // invented an obligation and handed it back to them as the reason for the day.
-      todayHoldBlock += `\nTHIS IS THE REST THEY TRADED FORWARD (DATA is in signals.today_holds): they trained through a quiet read earlier and moved that rest onto today — their own choice, not an appointment and nothing on their calendar. Speak it as the trade it was: today is the quiet half of a deal they made, and still theirs to spend however they like. Never name a commitment, never say anything is taking their time, and never argue the day back open.\n`;
+      todayHoldBlock += `\nTHIS IS THE REST THEY TRADED FORWARD (today_holds in DETERMINISTIC SIGNALS): they trained through a quiet read earlier and moved that rest onto today — their own choice, not an appointment and nothing on their calendar. Speak it as the trade it was: today is the quiet half of a deal they made, and still theirs to spend however they like. Never name a commitment, never say anything is taking their time, and never argue the day back open.\n`;
     } else if (claimed) {
-      todayHoldBlock += `\nTHE DAY IS SPOKEN FOR (their own word — DATA is in signals.today_holds): they marked "${String(claimed.title ?? "").trim() || "a commitment"}" as taking today. Honor it: lean rest or the gentlest movement, name the commitment as the reason in a friend's voice, and never argue the day back open.\n`;
+      todayHoldBlock += `\nTHE DAY IS SPOKEN FOR (their own word — today_holds in DETERMINISTIC SIGNALS): they marked "${String(claimed.title ?? "").trim() || "a commitment"}" as taking today. Honor it: lean rest or the gentlest movement, name the commitment as the reason in a friend's voice, and never argue the day back open.\n`;
     }
     if (lab) {
-      todayHoldBlock += `\nLAB DRAW TODAY (signals.today_holds): "${String(lab.title ?? "").trim() || "a blood draw"}" is on today's calendar. Sequencing matters and you should say it plainly: any movement you suggest belongs AFTER the draw, never before it — exercise beforehand can nudge the very numbers being measured, and many draws are fasted. Keep whatever follows easy, name the draw as the reason the day stays simple, and treat the appointment kindly — a normal part of looking after yourself, never a burden or a verdict.\n`;
+      todayHoldBlock += `\nLAB DRAW TODAY (today_holds in DETERMINISTIC SIGNALS): "${String(lab.title ?? "").trim() || "a blood draw"}" is on today's calendar. Sequencing matters and you should say it plainly: any movement you suggest belongs AFTER the draw, never before it — exercise beforehand can nudge the very numbers being measured, and many draws are fasted. Keep whatever follows easy, name the draw as the reason the day stays simple, and treat the appointment kindly — a normal part of looking after yourself, never a burden or a verdict.\n`;
     }
   } catch {
     todayHoldBlock = "";
@@ -699,6 +731,14 @@ export function buildDayReadPrompt(
 - "why": for a DONE day you MAY use 2-3 short sentences (the one exception to one-sentence): (1) how today fits the week's rhythm, (2) ONE forward focus — what the next session leans toward / what's DUE, (3) a brief refuel nudge ONLY if FUEL shows a real protein gap. Warm, plain, never a number-wall or a score.
 - Output "kind":"done", "focus":null, "est_minutes":null. DONE is a factual temporal state, not another easy-day recommendation.${debriefFacts(opts.date || context.now?.date || localDateISO())}`
       : "";
+  // Work is logged today but the server's baseline is not "done" (a run with the lift
+  // still open, a short walk): the day's planned work is still ahead. Said in plain
+  // words beside the output contract, because the live refusals were exactly this —
+  // a model reading "already logged" as "done" when the baseline was not.
+  const openDayLine =
+    baseline.kind !== "done" && ltBits.length
+      ? `\nTHE DAY IS STILL OPEN: the day's planned work is still ahead, so "kind" is train, easy or rest — what is already logged today is context for the read, not "done".`
+      : "";
   // The athlete has already read a sentence for this date today. The call has since
   // changed (that is the only reason this block is here), so a new sentence is
   // warranted — but a screen that rewords itself every few hours reads as churn, not
@@ -734,19 +774,19 @@ THE CONSTITUTION (binding):
   couple more hard days and you'll likely want a reset"). It's a kind early warning, never a brake or
   a verdict — the user still drives.
 
-DETERMINISTIC SIGNALS already computed (use them, but you make the final nuanced call):
-${JSON.stringify(baseline.signals)}
+DETERMINISTIC SIGNALS already computed (use them, but you make the final nuanced call; underfueling and signal_state are in DATA):
+${JSON.stringify(signalsForPrompt(baseline.signals as Record<string, unknown>, dataProjection))}
 A rules-only baseline suggested: kind="${baseline.kind}", focus=${JSON.stringify(baseline.focus)}.
 You MAY disagree with the baseline when the whole picture warrants it — it is a floor, not a ceiling${namedBrakeBlock ? " — but a train baseline is read quieter only under the NAMED BRAKE RULE below" : ""}.
 RECENT TRAINING (most recent first): ${sessionLine}.
 TRAINING RHYTHM (read the whole history, not just today): ${rhythmLine}${todayLine}${pathLine}${renderRecentReads(feltDate)}${renderReadOutcomes(context, baseline)}${renderPeriodization(feltDate)}${doneBlock}${lastNightLine}${oneNightLine}${recoveryUnreadLine}${fuelDemandLine}
 ${CONTEXT_GUARDRAILS}
 ${renderSignalState(context)}${renderCoachingFocus(context, { brief: true })}${renderDiscipline(context, "day")}${renderEnduranceGoal(context, "day")}${renderRunCompliance(context, "day")}${renderRunZones(context)}${renderRunPlan(context)}${renderStrengthSchedule(context)}${renderConnectedBrain(context, { domains: ["training", "watch"] })}${renderProgramState(context, { brief: true })}${renderMuscleGroups(context)}${renderPerformance(context, { brief: true })}${renderDexaTargeting(context, "training")}${renderBodyComp(context)}${renderHealthLead(context)}${renderReactionModel(context)}${renderTrajectory(context)}${renderActiveContext(context)}${renderTodayFuel(context)}${renderTrainingConstraints(context)}${feltBlock}${learnedBlock}${backedBlock}${driveBlock}${todayHoldBlock}${namedBrakeBlock}${currentWordingBlock}${overrideBlock}
-${DAY_READ_WORDING_RULE}
-${renderJsonContract(DAY_READ_SCHEMA)}
+${DAY_READ_WORDING_RULE}${openDayLine}
+${renderJsonContract(dayReadSchemaProse(baseline.kind))}
 
 DATA:
-${promptData(context, "day_read")}`;
+${JSON.stringify(dataProjection)}`;
 }
 
 // ---------- on-demand session ("build me a session for today" — Phase 1D) ----------

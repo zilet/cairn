@@ -90,5 +90,6 @@ test("a logged meal's numbers live on its receipt card, so the reply never resta
     assert.match(prompt, /may briefly name what changed/, lane);
   }
   assert.doesNotMatch(prompts.photo, /dish · ~kcal · protein/, "the photo path no longer asks for a macro summary");
-  assert.match(prompts.photo, /never restate kcal, grams or a macro list in the prose/);
+  // The photo block no longer repeats the receipt rule: log_food's own guidance carries it (above).
+  assert.doesNotMatch(prompts.photo, /never restate kcal, grams or a macro list in the prose/);
 });

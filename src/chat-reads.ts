@@ -36,16 +36,20 @@ const CHAT_NATIVE_READ_MAX_CALLS = NATIVE_COACH_READ_BUDGET.maxCalls;
 
 // The guidance both lean transports share: what the core is, when to read, and the two
 // failure modes the owner named — answering without looking, and looking for what is
-// already here.
-const LOOK_IT_UP_GUIDANCE = `DATA above is the core you always have: who they are, today, and this week (plus the ids your actions name). Everything older or deeper — past sessions and how a lift has moved, trends, labs and findings, body composition, fuel and recovery history and baselines, this week's run rationale, the decision ledger — is one coach read away.
+// already here. `where` is where DATA and the state blocks sit relative to the contract:
+// the prompt loop's contract follows DATA ("above"); the native contract sits in the
+// static head, before the state blocks and DATA ("below").
+function lookItUpGuidance(where: "above" | "below"): string {
+  return `DATA ${where} is the core you always have: who they are, today, and this week (plus the ids your actions name). Everything older or deeper — past sessions and how a lift has moved, trends, labs and findings, body composition, fuel and recovery history and baselines, this week's run rationale, the decision ledger — is one coach read away.
 - When the question turns on a specific the core does not hold (a past session, a trend, a lab value, a number), LOOK IT UP before you answer. Answer from what the read returned.
 - Never say something is missing, "not visible" or "hasn't synced" without having read for it first.
-- Do not read for what the core or the blocks above already answer — today's activities, today's food, this week's days are already here.`;
+- Do not read for what the core or the blocks ${where} already answer — today's activities, today's food, this week's days are already here.`;
+}
 
 /** The lean prompt-loop contract: the guidance plus the bare-JSON read protocol. */
 export function chatLeanPromptLoopContract(maxCalls: number): string {
   return `\n\n=== COACH READS: LOOK IT UP ===
-${LOOK_IT_UP_GUIDANCE}
+${lookItUpGuidance("above")}
 To look something up, return ONLY this JSON object this turn — no reply marker, no prose, nothing else:
 {"kind":"coach_read","requests":[{"tool":"read_training_window","args":{"end_date":null,"weeks":6}}]}
 Several reads may go in one request. The server runs them and calls you again with the verified results; THEN write your normal reply using the OUTPUT CONTRACT above (the reply marker, then prose). When the core already answers, just reply now.
@@ -54,23 +58,22 @@ Available reads (the server validates every name and argument against this catal
 ${JSON.stringify(coachReadToolList())}`;
 }
 
-// The first sentence of a catalog description: the CLI already receives each tool's
-// full description and argument schema over MCP, so the prompt only names what exists.
-function firstSentence(text: string): string {
-  const match = /^[\s\S]*?[.!?](?=\s|$)/.exec(text);
-  return (match ? match[0] : text).trim();
-}
-
-/** The native contract: plain tool-use guidance, no JSON protocol. */
+/**
+ * The native contract: plain tool-use guidance, no JSON protocol. The CLI already
+ * receives every tool's description and argument schema over MCP, so the prompt names
+ * the tools and states only what the descriptions do not: the budget, when to read, and
+ * never to call something missing without reading. It sits in the prompt's static head
+ * (after the OUTPUT CONTRACT, before the state blocks and DATA), so the bytes ahead of
+ * the turn's volatile blocks are the same every turn.
+ */
 export function chatNativeReadContract(maxCalls = CHAT_NATIVE_READ_MAX_CALLS): string {
   const tools = coachReadToolList()
-    .map((tool) => `- ${tool.name}: ${firstSentence(tool.description)}`)
-    .join("\n");
+    .map((tool) => tool.name)
+    .join(", ");
   return `\n\n=== COACH READS: YOUR TOOLS ===
-${LOOK_IT_UP_GUIDANCE}
-Your tools on this run are Cairn's read-only coach reads below (and nothing else). Call them directly — several at once when the question needs several — then write your reply using the OUTPUT CONTRACT above: the reply marker, then prose. Never narrate the lookups to the athlete and never paste a read's raw result; the reply starts at the marker.
-At most ${maxCalls} reads for this reply; past that a read returns an error — then answer with what you have.
-${tools}`;
+${lookItUpGuidance("below")}
+Your tools on this run are Cairn's read-only coach reads (and nothing else): ${tools}. Call them directly — several at once when the question needs several — then write your reply using the OUTPUT CONTRACT above: the reply marker, then prose. Never narrate the lookups to the athlete and never paste a read's raw result; the reply starts at the marker.
+At most ${maxCalls} reads for this reply; past that a read returns an error — then answer with what you have.`;
 }
 
 export function emptyChatReadTelemetry(transport: CoachReadTransport): ChatReadTelemetry {

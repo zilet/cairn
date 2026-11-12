@@ -5,7 +5,7 @@ import { db } from "./db.js";
 import { createProgressBus, createSerialRunner } from "./jobRunner.js";
 import * as repo from "./repo.js";
 import { UPLOADS_DIR } from "./uploadPaths.js";
-import { buildChatPrompt, parseChatEscalationRequest, parseChatReply, CHAT_REPLY_SENTINEL } from "./prompt.js";
+import { buildChatPromptParts, parseChatEscalationRequest, parseChatReply, CHAT_REPLY_SENTINEL } from "./prompt.js";
 import { extractChatHttpUrls, fetchChatLinkedPages, type ChatLinkedPage } from "./chatLinks.js";
 import {
   coachReadToolList,
@@ -72,6 +72,7 @@ import { sameLiftName } from "./repo/exercise-canon.js";
 import { isoDow, WEEKDAY_NAMES } from "./repo/profile.js";
 import type { MemoryKind } from "./repo/memory.js";
 import {
+  CHAT_PROMPT_ACTION_TYPES,
   chatCheckinDate,
   normalizeChatActions,
   rerouteMisfiledCaptures,
@@ -509,11 +510,10 @@ async function processChatTurnInner(id: number, turn: any, deps: ChatCompletionD
       { actions },
       {
         agent,
-        imagePath: turn.image_path,
-        message: turn.message,
+        // message, imagePath, userMessageId: the inputs the prompt's gates were read from.
+        ...chatTurnGateInputs(turn),
         skipLogFood: !!photoFood,
         turnId: id,
-        userMessageId: beforeId,
         ...(turnWeek !== undefined ? { datedWeek: turnWeek } : {}),
       }
     );
@@ -2288,6 +2288,9 @@ export async function runChatCompletion(
   }
   if (!openOrder.length) throw new Error("No agents enabled — turn one on in Settings.");
   const adaptive = !!decision;
+  // The action types the prompt offers: those whose server gate holds for this turn's
+  // message — the same gates, from the same inputs, applyChatActions reads after the reply.
+  const promptActionTypes = chatPromptActionTypes(chatActionGates(chatTurnGateInputs(turn)));
   const chatSettings = repo.getSettings();
   // The coach/deep lanes' DATA block (settings.chat_context): the lean core whose
   // contract says to LOOK THINGS UP, or the whole snapshot with the original wording.
@@ -2413,9 +2416,9 @@ export async function runChatCompletion(
       return promptLoop;
     }
   };
-  // The contract appended to this attempt's prompt.
+  // The prompt loop's suffix (the native contract has its own slot: promptFor).
   const readSuffix = (transport: ResolvedCoachReadTransport, lane: ChatLane | null): string => {
-    if (transport.transport === "native_mcp") return chatNativeReadContract();
+    if (transport.transport === "native_mcp") return "";
     const mode: ChatContextMode = leanReadsOn(lane) ? "lean" : "full";
     return chatReadPromptSuffix(readState, readExhausted, mode);
   };
@@ -2525,7 +2528,9 @@ export async function runChatCompletion(
     lanePasses++;
     if (lanePasses > 3) throw new ChatCompletionError(attempts, "Adaptive routing exceeded the bounded lane count");
     const lane = decision?.lane ?? null;
-    const prompt = buildChatPrompt(
+    // Rebuilt on every lane pass (an escalation re-prompts), always with the SAME action
+    // types: the gates read the turn's message, never its lane.
+    const promptParts = buildChatPromptParts(
       history,
       turn.message || "(no text — see the attached photo)",
       turn.image_path || undefined,
@@ -2534,8 +2539,15 @@ export async function runChatCompletion(
         ...(linkedPages.length ? { linkedPages } : {}),
         datedWeek: readTurnWeek,
         context: contextMode,
+        actionTypes: promptActionTypes,
       }
     );
+    // The attempt's whole prompt: the native contract sits in its slot ahead of the
+    // volatile blocks; the prompt loop's contract (and its results) follow DATA.
+    const promptFor = (transport: ResolvedCoachReadTransport): string =>
+      transport.transport === "native_mcp"
+        ? `${promptParts.head}${chatNativeReadContract()}${promptParts.tail}`
+        : `${promptParts.head}${promptParts.tail}${readSuffix(transport, lane)}`;
 
     // Streaming first, exactly once for an equivalent provider/profile tuple. The
     // stream-capable primary may first request bounded reads (bare JSON, no reply marker
@@ -2551,7 +2563,7 @@ export async function runChatCompletion(
       // Inner loop: re-run the SAME first agent for each read follow-up, then stream the reply.
       while (true) {
         const transport = transportFor(first, lane);
-        const streamPrompt = `${prompt}${readSuffix(transport, lane)}`;
+        const streamPrompt = promptFor(transport);
         lastPromptBytes = Buffer.byteLength(streamPrompt, "utf8");
         const started = Date.now();
         let ttft: number | null = null;
@@ -2769,7 +2781,7 @@ export async function runChatCompletion(
       // reads inside its one run; a failed attach re-runs it once on the prompt loop.
       while (true) {
         const transport = transportFor(name, lane);
-        const runPrompt = `${prompt}${readSuffix(transport, lane)}`;
+        const runPrompt = promptFor(transport);
         lastPromptBytes = Buffer.byteLength(runPrompt, "utf8");
         const started = Date.now();
         const timeoutMs = chatTurnTimeoutMs(profile);
@@ -3118,6 +3130,98 @@ function foodAmendment(id: number, a: { ingredients?: unknown; remove_items?: un
   return amended;
 }
 
+// ---------- the per-turn action gates ----------
+// Eight action types are refused after the reply unless the athlete's own message (or
+// their yes to the coach's own offer) authorizes them. Each predicate depends only on
+// the turn's message, its photo and the chat log BEFORE the message, so it is computed
+// ONCE, by this one function, for both doors: the prompt (chatPromptActionTypes leaves
+// out the shape and guidance of an action the server would refuse this turn) and the
+// gate in applyChatActions. Never a second copy of any predicate.
+// revert_decision is deliberately NOT here: its gate also reads the id the reply names,
+// which only exists after the reply, so its shape is always rendered.
+export interface ChatActionGateInputs {
+  message?: string | null;
+  imagePath?: string | null;
+  userMessageId?: number | null;
+  // Test seam: the coach's immediately preceding message (see applyChatActions).
+  priorAssistant?: { message?: string | null; drafted?: boolean };
+}
+
+export interface ChatActionGates {
+  foodOnly: boolean;
+  trainingDrive: boolean;
+  nutritionTarget: boolean;
+  strengthObjective: boolean;
+  symptomReport: boolean;
+  symptomResolve: boolean;
+  flagTrainingStructure: boolean;
+  planRestructure: boolean;
+}
+
+export function chatActionGates(inputs: ChatActionGateInputs): ChatActionGates {
+  const message = inputs.message ?? "";
+  const foodOnly = isFoodOnlyTurn(message, inputs.imagePath);
+  // Read only when a message needs it (a bare yes), and at most once.
+  let prior: { message?: string | null; drafted?: boolean } | null = null;
+  const priorMessage = () => (prior ??= inputs.priorAssistant ?? priorAssistantContext(inputs.userMessageId)).message;
+  return {
+    foodOnly,
+    // The training drive is the athlete's own stance: only their sentence sets it — or
+    // their plain "yes" right after the coach ASKED whether to push (the coach's previous
+    // message offering it, e.g. relaying the open push offer). A bare "yes" with no such
+    // question before it answers something else and sets nothing.
+    trainingDrive:
+      !foodOnly &&
+      hasExplicitTrainingDriveIntentInContext(message, {
+        priorCoachMessage: carriesDriveAffirmation(message) ? priorMessage() : null,
+      }),
+    // The calorie target is the athlete's own number (the same door as the Fuel card's
+    // edit): their sentence asks for it, or their plain yes answers the coach's offer of
+    // one. A coach that decides on its own to move it is nutrition_checkin's job, not chat's.
+    nutritionTarget: hasExplicitNutritionTargetIntentInContext(message, {
+      priorCoachMessage:
+        carriesDriveAffirmation(message) || carriesPlanApplyAffirmation(message) ? priorMessage() : null,
+    }),
+    strengthObjective: !foodOnly && hasExplicitStrengthObjectiveIntent(message),
+    symptomReport: hasExplicitSymptomReportIntent(message),
+    symptomResolve: hasExplicitSymptomResolveIntent(message),
+    flagTrainingStructure: flagTrainingStructureAuthorized(message),
+    planRestructure: !foodOnly && hasExplicitPlanEditIntent(message),
+  };
+}
+
+/** Which gate admits each gated action type (every other prompt type is always rendered). */
+export const CHAT_ACTION_GATE_FOR: Readonly<Partial<Record<ChatActionType, keyof ChatActionGates>>> = {
+  set_training_drive: "trainingDrive",
+  set_nutrition_target: "nutritionTarget",
+  set_strength_objective: "strengthObjective",
+  report_training_symptom: "symptomReport",
+  resolve_training_symptom: "symptomResolve",
+  flag_training_structure: "flagTrainingStructure",
+  plan_restructure: "planRestructure",
+};
+
+/** The action types this turn's coach/deep prompt renders: every prompt type whose gate holds. */
+export function chatPromptActionTypes(gates: ChatActionGates): ChatActionType[] {
+  return CHAT_PROMPT_ACTION_TYPES.filter((type) => {
+    const gate = CHAT_ACTION_GATE_FOR[type];
+    return !gate || gates[gate];
+  });
+}
+
+/** The gate inputs of a stored turn: the SAME values for the prompt and for applyChatActions. */
+export function chatTurnGateInputs(turn: {
+  message?: string | null;
+  image_path?: string | null;
+  user_message_id?: number | null;
+}): ChatActionGateInputs {
+  return {
+    message: turn.message ?? null,
+    imagePath: turn.image_path ?? null,
+    userMessageId: turn.user_message_id ?? Number.MAX_SAFE_INTEGER,
+  };
+}
+
 // ---------- action application ----------
 // Lifted verbatim from the old inline POST /api/chat handler so the worker is the
 // single place chat actions are applied. Safe actions apply immediately; plan
@@ -3170,7 +3274,9 @@ export function applyChatActions(
   // read as "nothing was applied"); reconcileChatRevertReply is their only consumer.
   const refusedReverts: number[] = [];
   const message = ctx.message ?? "";
-  const foodOnly = isFoodOnlyTurn(message, ctx.imagePath);
+  // The same gates the prompt was built from (chatActionGates), from the same inputs.
+  const gates = chatActionGates(ctx);
+  const foodOnly = gates.foodOnly;
   const explicitGoalIntent =
     !foodOnly &&
     hasExplicitGoalIntentInContext(
@@ -3181,27 +3287,6 @@ export function applyChatActions(
   // prose claiming a lock over nothing) and the goal fields that APPLIED (receipt).
   const droppedGoalFields: string[] = [];
   let appliedGoalPatch: Record<string, unknown> | null = null;
-  const explicitStrengthObjectiveIntent = !foodOnly && hasExplicitStrengthObjectiveIntent(message);
-  // The training drive is the athlete's own stance: only their sentence sets it — or
-  // their plain "yes" right after the coach ASKED whether to push (the coach's previous
-  // message offering it, e.g. relaying the open push offer). A bare "yes" with no such
-  // question before it answers something else and sets nothing.
-  const explicitTrainingDriveIntent =
-    !foodOnly &&
-    hasExplicitTrainingDriveIntentInContext(message, {
-      priorCoachMessage: carriesDriveAffirmation(message)
-        ? (ctx.priorAssistant ?? priorAssistantContext(ctx.userMessageId)).message
-        : null,
-    });
-  // The calorie target is the athlete's own number (the same door as the Fuel card's
-  // edit): their sentence asks for it, or their plain yes answers the coach's offer of
-  // one. A coach that decides on its own to move it is nutrition_checkin's job, not chat's.
-  const explicitNutritionTargetIntent = hasExplicitNutritionTargetIntentInContext(message, {
-    priorCoachMessage:
-      carriesDriveAffirmation(message) || carriesPlanApplyAffirmation(message)
-        ? (ctx.priorAssistant ?? priorAssistantContext(ctx.userMessageId)).message
-        : null,
-  });
   // ONE reading of this sentence for the whole turn. A message that names its own
   // instruction ("apply it to my program for today") never touches the chat log; a bare
   // go-ahead ("apply it", "go ahead") reads the coach's previous message to find out what
@@ -3382,7 +3467,7 @@ export function applyChatActions(
         case "set_training_drive": {
           // The athlete's own stance, never the coach's suggestion: a turn whose message
           // does not state it applies nothing (the reply cannot claim a push it did not set).
-          if (!explicitTrainingDriveIntent) {
+          if (!gates.trainingDrive) {
             applied.push({ type: a.type, error: "only your own words can set the training drive" });
             break;
           }
@@ -3402,7 +3487,7 @@ export function applyChatActions(
           break;
         }
         case "set_nutrition_target": {
-          if (!explicitNutritionTargetIntent) {
+          if (!gates.nutritionTarget) {
             applied.push({ type: a.type, error: "only your own words can set your calorie target" });
             break;
           }
@@ -3425,7 +3510,7 @@ export function applyChatActions(
           break;
         }
         case "set_strength_objective": {
-          if (!explicitStrengthObjectiveIntent) break;
+          if (!gates.strengthObjective) break;
           const objective = repo.setStrengthObjective({
             exercise: a.exercise,
             target_kind: a.target_kind,
@@ -3714,7 +3799,7 @@ export function applyChatActions(
           applied.push({ type: a.type, result: repo.applyMeasurementAction(a) });
           break;
         case "report_training_symptom":
-          if (!hasExplicitSymptomReportIntent(message)) break;
+          if (!gates.symptomReport) break;
           applied.push({
             type: a.type,
             result: repo.reportTrainingSymptom({
@@ -3732,7 +3817,7 @@ export function applyChatActions(
         case "resolve_training_symptom":
           // Parity with the surfaces and MCP: chat could open a pain note but never
           // close one, so the only way out of the loop was to open the app.
-          if (!hasExplicitSymptomResolveIntent(message)) break;
+          if (!gates.symptomResolve) break;
           applied.push({
             type: a.type,
             result: repo.resolveTrainingSymptomByArea(a.area_text, stringOrUndefined(a.on)) ?? {
@@ -3750,7 +3835,7 @@ export function applyChatActions(
           // lands. `requestStructureRedraw` owns all of that, because the Plan tab offers
           // the same door and a request typed there must resolve to the SAME standing
           // flag as the same words said here.
-          if (!flagTrainingStructureAuthorized(message)) break;
+          if (!gates.flagTrainingStructure) break;
           applied.push({
             type: a.type,
             result: requestStructureRedraw({
@@ -3774,7 +3859,7 @@ export function applyChatActions(
               mood: a.mood,
               note: a.note == null ? null : String(a.note),
               source_kind: "chat",
-              capture_note_symptom: hasExplicitSymptomReportIntent(message),
+              capture_note_symptom: gates.symptomReport,
             }),
           });
           break;
@@ -3857,7 +3942,7 @@ export function applyChatActions(
           break;
         }
         case "plan_restructure":
-          if (foodOnly || !hasExplicitPlanEditIntent(message)) break;
+          if (!gates.planRestructure) break;
           applied.push({
             type: a.type,
             result: routeChatPlanRestructure(

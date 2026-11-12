@@ -10,6 +10,7 @@ import { AGENT_JOB_KINDS } from "../dist/agentJobKinds.js";
 import {
   CHAT_ACTION_PROMPT_SPECS,
   CHAT_ACTION_TYPES,
+  CHAT_PROMPT_ACTION_TYPES,
   chatActionPromptSpecs,
   draftChatActionTypes,
   immediateChatActionTypes,
@@ -1335,13 +1336,20 @@ test("chat action write contract stays typed and prompt-aligned", () => {
 
   for (const actionType of CHAT_ACTION_TYPES) {
     assert.match(chatActions, new RegExp(`"${actionType}"`), `${actionType} should be owned by chatActions.ts`);
-    assert.match(
+    // A retired type (set_run) still parses and is still handled — with a refusal — but
+    // the prompt never offers it.
+    const offered = CHAT_PROMPT_ACTION_TYPES.includes(actionType);
+    (offered ? assert.match : assert.doesNotMatch)(
       actionSchema,
       new RegExp(`"type": "${escapeRegExp(actionType)}"`),
-      `${actionType} should be described in the generated prompt action schema`
+      `${actionType} should ${offered ? "" : "not "}be described in the generated prompt action schema`
     );
     assert.match(chatTurns, new RegExp(`case "${actionType}"`), `${actionType} should be handled by applyChatActions`);
   }
+  assert.deepEqual(
+    CHAT_ACTION_TYPES.filter((type) => !CHAT_PROMPT_ACTION_TYPES.includes(type)),
+    ["set_run"]
+  );
 });
 
 test("frontend TypeScript contract gate is dependency-light and backed by server payloads", () => {

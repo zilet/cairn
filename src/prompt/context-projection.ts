@@ -1088,7 +1088,7 @@ function compactCoachingFocus(focus: unknown): unknown {
 // "watch" next to "unknown" for one dimension on one morning can only guess which of
 // them it is meant to reason from. The prompt gets `status`/`confidence` — the pair
 // every prompt has always read — and the evidence they were computed from.
-function compactSignalState(state: unknown): unknown {
+export function compactSignalState(state: unknown): unknown {
   if (!state || typeof state !== "object" || Array.isArray(state)) return state;
   const row = state as Record<string, unknown>;
   const dimensions = row.dimensions;

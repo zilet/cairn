@@ -3,10 +3,12 @@
 import { FUEL_CLAIM_RULE } from "../repo/fuel-claims.js";
 import { extractJson } from "../agents.js";
 import {
+  CHAT_PROMPT_ACTION_TYPES,
   normalizeChatActions,
   renderChatActionPromptProse,
   renderChatActionSchema,
   type ChatAction,
+  type ChatActionType,
 } from "../chatActions.js";
 import { getCoachContext } from "../repo/coach.js";
 import { datedWeek, type DatedWeek } from "../domain/training/dated-week.js";
@@ -147,9 +149,17 @@ export interface BuildChatPromptOptions {
    * chat site and the original wording, byte for byte (settings.chat_context).
    */
   context?: ChatContextMode;
+  /** The action types this turn may emit (chatTurns.ts chatPromptActionTypes); omitted, every non-retired type. */
+  actionTypes?: readonly ChatActionType[];
 }
 
 export type ChatContextMode = "lean" | "full";
+
+/** The prompt around its read-contract slot (see buildChatPromptParts). */
+export interface ChatPromptParts {
+  head: string;
+  tail: string;
+}
 
 const CAPTURE_ACTION_TYPES = [
   "log_activity",
@@ -300,6 +310,27 @@ export function buildChatPrompt(
   imagePath?: string,
   options: BuildChatPromptOptions = {}
 ): string {
+  const parts = buildChatPromptParts(history, message, imagePath, options);
+  return parts.head + parts.tail;
+}
+
+/**
+ * The chat prompt in two halves around the read-contract slot. In the lean coach/deep
+ * prompt `head` is the static instruction bulk — persona, guardrails, the action prose,
+ * the claims rules, the OUTPUT CONTRACT and the ACTION SHAPES — and `tail` is everything
+ * that moves turn to turn: the lane, RIGHT NOW, the data-derived state blocks, a photo
+ * or linked page, the conversation, the message and DATA. The native read contract goes
+ * between them (head + contract + tail), so the bytes ahead of the volatile blocks
+ * repeat across turns; the prompt loop's contract still follows DATA (head + tail +
+ * suffix). The capture lane and the "full" context keep their single original layout
+ * (all `head`, an empty `tail`), so a contract slotted there lands at the end as before.
+ */
+export function buildChatPromptParts(
+  history: { role: string; content: string; at?: string }[],
+  message: string,
+  imagePath?: string,
+  options: BuildChatPromptOptions = {}
+): ChatPromptParts {
   const lane = options.lane ?? "coach";
   const ctx = getCoachContext();
   // Prefix each turn with its relative time (when known) so the agent sees the
@@ -309,6 +340,7 @@ export function buildChatPrompt(
   const convo = historyRows
     .map((m) => `${m.at ? `[${m.at}] ` : ""}${m.role === "user" ? "User" : "Coach"}: ${String(m.content ?? "").slice(0, lane === "capture" ? 400 : 4_000)}`)
     .join("\n");
+  // The receipt card's "never restate the numbers" rule is the log_food guidance's own.
   const photoBlock = imagePath ? `
 ATTACHED PHOTO — the user attached a photo with this message, saved locally at this ABSOLUTE path:
 ${imagePath}
@@ -316,14 +348,14 @@ Open and LOOK at that image file directly before answering.
 - If it shows food (a plate, meal, snack, packaged item): identify the dish, estimate portion sizes
   and macros from ordinary servings (rough is fine — never invent precision), emit ONE "log_food"
   action with the estimate, and in your reply name the dish and say in a sentence or two what it
-  means for their day. The food receipt card under the reply already shows the numbers and the
-  ingredients, so never restate kcal, grams or a macro list in the prose.
+  means for their day.
 - If it is not food (gym equipment, a form-check frame, a menu, a label): just use what you see to
   answer their message; only log when they clearly want something logged.
 ` : "";
   const linkedBlock = lane === "capture" ? "" : renderChatLinkedPagesBlock(options.linkedPages);
   if (lane === "capture") {
-    return `${CAIRN_PERSONA}
+    return {
+      head: `${CAIRN_PERSONA}
 
 You are handling a fast capture turn. Confirm what the athlete asked to log or correct, and stay inside food/activity/weight/blood-pressure/supplement capture. A weigh-in is log_weight and a cuff reading is log_blood_pressure — never log_activity. Food is the only supported correction target (use update_food_note with an existing id); activity, weight, blood-pressure, and supplement history cannot be edited here. Do not analyze training history, clinical records, imaging, or restructure a plan. Never invent macro precision.
 ${escalationContract(lane)}
@@ -344,28 +376,33 @@ ${convo || "(new conversation)"}
 USER'S MESSAGE: ${message}
 
 CAPTURE DATA (bounded; no training or clinical history):
-${JSON.stringify(captureContext(ctx))}`;
+${JSON.stringify(captureContext(ctx))}`,
+      tail: "",
+    };
   }
   // Which session lands on which date. Computed here rather than in getCoachContext (the
   // `today_path` precedent): only chat carries it, so no other build pays for it. Null
   // when the athlete has no calendar week — the plan is then a ring with no dates.
   const data = { ...ctx, dated_week: chatDatedWeek(options.datedWeek) };
   const lean = (options.context ?? "lean") === "lean";
+  // The action types this turn may emit: the caller passes the ones whose server gate
+  // holds for THIS message (chatTurns.ts chatPromptActionTypes) — an action the server
+  // would refuse is never offered. Omitted, every non-retired type.
+  const actionTypes = options.actionTypes ?? CHAT_PROMPT_ACTION_TYPES;
   const seeLine = lean
-    ? "You're chatting with the user inside their app. DATA below is the core of their picture you always have — who they are, today and this week — and the COACH READS at the end reach the rest of their history (past sessions, trends, labs, body, fuel). You can ACT by emitting actions."
+    ? "You're chatting with the user inside their app. DATA below is the core of their picture you always have — who they are, today and this week — and the COACH READS reach the rest of their history (past sessions, trends, labs, body, fuel). You can ACT by emitting actions."
     : "You're chatting with the user inside their app. You can SEE all their data (DATA section) and can ACT by emitting actions.";
-  const lookForIt = lean
-    ? "look for it — the blocks below, DATA, and a coach read for anything older or deeper"
-    : "look for it — the blocks below and DATA";
+  // Lean prompts carry the look-it-up contract, which says this once (src/chat-reads.ts);
+  // the full context has no such contract, so it keeps the guardrail.
+  const neverClaimMissing = lean
+    ? ""
+    : `
+- NEVER CLAIM DATA IS MISSING WHEN IT IS HERE. Before saying something "isn't visible", "hasn't
+  synced" or "isn't in my data", look for it — the blocks below and DATA. When it is there, say what is
+  there. Only a genuine absence is said as one, plainly, with what IS on the record instead.`;
   const foodPatterns = lean ? "DATA.day_intake" : "DATA.day_intake / DATA.meal_plan";
-  return `${CAIRN_PERSONA}
-
-${seeLine}
-ROUTING LANE: ${lane}
-${escalationContract(lane)}
-${renderNow(ctx)}
-GUARDRAILS:
-- Conservative progression. Respect every exercise constraint_note (e.g. injury limits); never contradict them.
+  const guardrails = `GUARDRAILS:
+- Conservative progression.
 - A cut never changes the strength objective to mere maintenance. No avoidable muscle/strength loss is
   the floor; when recovery and performance support it, keep building strength and evolving the program.
 - Fuel guidance follows the user's GOAL MODE (DATA: goal_mode). ${renderGoalTargetFallback("DATA.goal", { label: false })} Then: a
@@ -397,10 +434,7 @@ ${MECHANICS_ENCODING}
   they start it.
 - DO NOT ADD UP THE DAY. A food you log this turn lands AFTER your reply, so DATA.day_intake.totals does not
   include it yet. Do not state a day total or "what's left" at all — the server appends the true running
-  total when it matters. Talk about the meal and what it means for the athlete's day, in words.
-- NEVER CLAIM DATA IS MISSING WHEN IT IS HERE. Before saying something "isn't visible", "hasn't
-  synced" or "isn't in my data", ${lookForIt}. When it is there, say what is
-  there. Only a genuine absence is said as one, plainly, with what IS on the record instead.
+  total when it matters. Talk about the meal and what it means for the athlete's day, in words.${neverClaimMissing}
 - PROGRESSIVE UNDERSTANDING: CONSULT THE DATA YOU ALREADY HAVE before wondering what to ask —
   DATA.typical_training_hour (derived from session timestamps) answers "when do they usually train?",
   and DATA.memory plus the logged meals in ${foodPatterns} usually already show food
@@ -422,25 +456,18 @@ ${MECHANICS_ENCODING}
   emit update_memory{id,...} to correct a fact in place (a refined or now-different version of the same
   thing), or supersede_memory{id, reason, replacement?} when an old fact is simply no longer true (e.g.
   "I switched to evenings" supersedes "prefers morning training"). add_memory is only for genuinely NEW
-  facts. Never invent ids — only use ids present in DATA.memory.
-
-${lean ? CONTEXT_GUARDRAILS_LEAN : CONTEXT_GUARDRAILS}
-
-${renderChatActionPromptProse()}
-${renderSignalState(ctx)}${renderCoachingFocus(ctx, { brief: true })}${renderTrainingDriveLine(ctx)}${renderTrainingSignals(ctx)}${renderStrengthJourney(ctx)}${renderReactionModel(ctx)}${renderActiveContext(ctx)}${renderMovementConsiderations(ctx)}${renderRecentCardio(ctx, "chat")}${renderTodayFuel(ctx)}${renderAmendableMealRows(ctx)}
-Keep the reply short and human; confirm safe capture actions you logged. NEVER state that you logged,
-added, updated, or changed anything unless THIS turn emits the matching action after the action marker —
-a reply with no actions block must never claim a change was made; say what you would log and confirm, or
-just answer. For plan_update/plan_restructure,
+  facts. Never invent ids — only use ids present in DATA.memory.`;
+  // "Never claim a change without its action" is the action prose's own bullet; this keeps
+  // what is plan-specific.
+  const claims = `Keep the reply short and human; confirm safe capture actions you logged. For plan_update/plan_restructure,
 describe the intended change only — NEVER claim it was saved, applied, updated, pushed, scheduled, or made
 live. The server runs those actions after your prose, routes structural changes through autonomy, and adds
 the truthful applied/scheduled/review receipt.
 Do not narrate a background plan_update.
 When the user says a lift
-"felt easy" / "felt heavy", lean on the LOGGED-PERFORMANCE SIGNALS above to decide — only emit a
-bump for a lift that actually reads progression-ready; hold or ease one that's stalled or flagged.
-
-OUTPUT CONTRACT — write your reply between markers so it streams cleanly:
+"felt easy" / "felt heavy", lean on the LOGGED-PERFORMANCE SIGNALS ${lean ? "below" : "above"} to decide — only emit a
+bump for a lift that actually reads progression-ready; hold or ease one that's stalled or flagged.`;
+  const outputContract = `OUTPUT CONTRACT — write your reply between markers so it streams cleanly:
 1. Put this exact marker on its own line, immediately before your user-facing reply:
 ${CHAT_REPLY_SENTINEL}
    Anything before it — tool notes, "I will check the … table" step narration, private working
@@ -453,15 +480,58 @@ ${CHAT_ACTION_SENTINEL}
    If there is nothing to log or change, STOP after the prose — do NOT write the marker or any JSON.
 
 ACTION SHAPES (each item inside the "actions" array):
-${renderChatActionSchema()}
-${photoBlock}${linkedBlock}
-CONVERSATION SO FAR:
+${renderChatActionSchema(actionTypes)}`;
+  const stateBlocks = `${renderSignalState(ctx)}${renderCoachingFocus(ctx, { brief: true })}${renderTrainingDriveLine(ctx)}${renderTrainingSignals(ctx)}${renderStrengthJourney(ctx)}${renderReactionModel(ctx)}${renderActiveContext(ctx)}${renderMovementConsiderations(ctx)}${renderRecentCardio(ctx, "chat")}${renderTodayFuel(ctx)}${renderAmendableMealRows(ctx)}`;
+  const closing = `CONVERSATION SO FAR:
 ${convo || "(new conversation)"}
 
 USER'S MESSAGE: ${message}
 
 DATA:
 ${promptData(data, lean ? "chat_core" : "chat")}`;
+  if (!lean) {
+    // The "full" context: the original single layout, lane and state blocks inline.
+    return {
+      head: `${CAIRN_PERSONA}
+
+${seeLine}
+ROUTING LANE: ${lane}
+${escalationContract(lane)}
+${renderNow(ctx)}${guardrails}
+
+${CONTEXT_GUARDRAILS}
+
+${renderChatActionPromptProse(actionTypes)}
+${stateBlocks}
+${claims}
+
+${outputContract}
+${photoBlock}${linkedBlock}
+${closing}`,
+      tail: "",
+    };
+  }
+  return {
+    head: `${CAIRN_PERSONA}
+
+${seeLine}
+${guardrails}
+
+${CONTEXT_GUARDRAILS_LEAN}
+
+${renderChatActionPromptProse(actionTypes)}
+${claims}
+
+${outputContract}`,
+    // Everything that moves turn to turn, kept together just ahead of the conversation.
+    tail: `
+
+ROUTING LANE: ${lane}
+${escalationContract(lane)}
+${renderNow(ctx)}${stateBlocks}
+${photoBlock}${linkedBlock}
+${closing}`,
+  };
 }
 
 function chatDatedWeek(read: () => DatedWeek | null = datedWeek): Record<string, unknown> | null {

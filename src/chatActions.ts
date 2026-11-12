@@ -71,6 +71,15 @@ export const CHAT_ACTION_TYPES = [
 
 export type ChatActionType = (typeof CHAT_ACTION_TYPES)[number];
 
+// Retired for writing: still parsed (an old reply normalizes) and refused by the server
+// with a calm receipt, but never offered to the model.
+const RETIRED_CHAT_ACTION_TYPES: ReadonlySet<ChatActionType> = new Set(["set_run"]);
+
+/** The action types a chat prompt may offer: every type but the retired ones. */
+export const CHAT_PROMPT_ACTION_TYPES: readonly ChatActionType[] = CHAT_ACTION_TYPES.filter(
+  (type) => !RETIRED_CHAT_ACTION_TYPES.has(type)
+);
+
 export type ChatActionApplyMode = "immediate" | "draft";
 
 export type ChatActionPromptSpec<T extends ChatActionType = ChatActionType> = {
@@ -556,21 +565,10 @@ export const CHAT_ACTION_PROMPT_SPECS = {
   set_endurance_schedule: {
     type: "set_endurance_schedule",
     applyMode: "immediate",
-    shape: `// Stated RUN DAYS. Use when the athlete names the weekdays they run
-    // ("plan my strength around 3 runs — Tue/Thu and a long run on the weekend").
-    // dow: 0=Sunday … 6=Saturday. kind: easy | quality | long | any.
-    // ONLY days they named — never invent a weekday they did not say. "Weekend"
-    // without Sat/Sun → Saturday (dow 6) as the long-run day.
-    // A recurring NON-RUN day they name ("Saturday optional MTB") is an entry with
-    // kind = the sport (ride | swim | walk | row | paddle | other) and optional: true.
-    // A QUALITY SESSION they state ("Thursday is a hard threshold 5k plus a few km
-    // around it") rides in "quality": type threshold | tempo | vo2 | hills, work_km the
-    // work itself, warm_up_km / cool_down_km only when they said them. Omit "days" when
-    // the turn states only the session — the stored run week stays.
-    // "scope": "this_week" makes it a ONE-WEEK move: "days" is then this week's run days
-    // as they should now be, and the standing week is untouched. Omitted = "standing".
-    // With it: "week": "this" | "next" (default "this"), "skip": [dow] for a standing run
-    // they said to skip.
+    shape: `// dow: 0=Sunday … 6=Saturday. kind: easy | quality | long | any, or for a non-run
+    // day ride | swim | walk | row | paddle | other. "Weekend" without Sat/Sun → Saturday
+    // (dow 6) as the long-run day. quality.type: threshold | tempo | vo2 | hills. "scope":
+    // "standing" (default) | "this_week"; with this_week, "week": "this" (default) | "next".
     { "type": "set_endurance_schedule", "scope": "standing",
       "days": [{ "dow": 2, "kind": "quality" }, { "dow": 4, "kind": "easy" }, { "dow": 0, "kind": "long" },
                { "dow": 6, "kind": "ride", "optional": true }],
@@ -581,19 +579,15 @@ export const CHAT_ACTION_PROMPT_SPECS = {
       `A ONE-WEEK skip or move ("skip tomorrow's run", "move this week's intervals to Friday", "I'll run Saturday instead this week") is sent with "scope": "this_week", and "days" lists THIS week's run days still to come as they should now be, each with its kind (skip Thursday's quality and move it to Friday → [{"dow": 5, "kind": "quality"}, {"dow": 0, "kind": "long"}]). Only this week changes: their standing days (DATA.endurance_schedule.days) stay, and next week goes back to them by itself — say so. A standing run they say to skip goes in "skip": [dow] (an unmentioned standing long or quality day still ahead this week is kept for them, so a skip must be said). A move about a day in NEXT week (said on a Sunday about Monday: "skip tomorrow's run") adds "week": "next" and lists next week's run days instead. When they name what the moved session IS ("do the 5K intervals on Friday instead"), send it in "quality" with the move: there it is that week's session only (it runs whole even in a lighter week), and their standing session is untouched. DATA.endurance_schedule.this_week / next_week, when present, is a move already in force for that week.`,
       `A STANDING change needs their words to make it standing ("from now on", "every week", "always", "my run days are…"). Its "days" (no scope) REPLACES the whole standing run week and stands every week, so resend every run day they keep with only the changed one different — a day you leave out is deleted, and with fewer than three run days the engine plans no quality run at all. When you cannot tell whether they mean this week or every week, ask once.`,
       `Emit set_endurance_schedule when the athlete states which days they run. Map named weekdays only; do not fill in a third day they did not mention. Duplicate weekdays keep the first kind.`,
+      `A run's distance, time or zone is not stored anywhere: Cairn sizes each week's runs from the run days and recent running (DATA.run_plan shows this week's), so explain the week's run in words. Changing WHICH days they run, or the kind a day carries, is this action — never plan_update or plan_restructure: plan days hold lifting only, and a run sent that way is refused.`,
       `A ride, swim, walk, paddle or other sport they keep on a weekday ("Saturday optional, MTB or other") is a cross-training day, NEVER a run day: send it as {"dow": 6, "kind": "ride", "optional": true} beside the run days. The engine plans the runs around it (a ride the day before the long run is a known pattern, not a conflict). Never turn it into an easy or "any" run. A cross-training day already stated is kept when you resend only the run days.`,
     ],
   },
   set_strength_schedule: {
     type: "set_strength_schedule",
     applyMode: "immediate",
-    shape: `// The athlete's LIFTING WEEKDAYS, in their own words. This is how the
-    // lifting week gets set — there is no settings form for it, so when they say it
-    // in chat, write it. dow: 0=Sunday … 6=Saturday. NO kind: which split lands on
-    // which day is the plan's business, not the schedule's. Pass days: [] to clear
-    // (that clears the split too). "split" is the split they NAMED, in their words
-    // ("upper/lower", "push/pull/legs", "full body"); null clears it; omit it to keep
-    // the stored one. A turn that changes only the split omits "days".
+    shape: `// dow: 0=Sunday … 6=Saturday, with no kind (which split lands on which day is the
+    // plan's business). days: [] clears the days and the split; omit "split" to keep it.
     { "type": "set_strength_schedule",
       "days": [{ "dow": 1 }, { "dow": 2 }, { "dow": 3 }, { "dow": 4 }, { "dow": 5 }],
       "split": "<optional: the split they named, e.g. upper/lower>",
@@ -726,20 +720,14 @@ export const CHAT_ACTION_PROMPT_SPECS = {
     shape: `{ "type": "plan_update", "summary": "...", "changes": [
       { "day_number": 1, "exercise": "Back Squat", "target_weight": 195, "reason": "..." },
       { "day_number": 1, "exercise": "Plank", "target_seconds": 60, "reason": "timed exercises progress in seconds" },
-      // UPDATE the full bounded prescription (not just load):
       { "day_number": 1, "exercise": "Incline DB Press", "sets": 1, "rep_low": 8, "rep_high": 10, "target_weight": 40, "reason": "easy reset volume" },
-      // REMOVE one redundant movement. NEVER encode removal as sets:0.
       { "day_number": 1, "exercise": "Incline Barbell Bench Press", "remove": true, "reason": "duplicate incline pattern" },
-      // SWAP in place; supplied prescription fields configure the incoming movement.
+      // A swap's prescription fields configure the incoming movement.
       { "day_number": 1, "swap": { "from": "Incline Barbell Bench Press", "to": "Flat Barbell Bench Press" }, "sets": 2, "rep_low": 8, "rep_high": 10, "target_weight": 105, "reason": "keep one flat and one incline pattern" },
-      // ADD a movement: "add": true, with sets + rep_low/rep_high (and the starting target_weight) so it lands complete.
+      // An addition gives sets, reps and a starting target_weight so it lands complete.
       { "day_number": 1, "add": true, "exercise": "Single-Arm DB Row", "sets": 3, "rep_low": 10, "rep_high": 12, "target_weight": 55, "reason": "adds back volume" },
-      // ADDRESS BY DATE: the session on that calendar day (DATA.dated_week); the server resolves its day_number.
-      // A dated change is for THAT DAY only unless it says otherwise.
       { "date": "<YYYY-MM-DD>", "exercise": "<a lift on that date's session>", "sets": 2, "reason": "travel day" },
-      // UNTIL: an adaptation that ends on that date and returns the plan to normal.
       { "date": "<YYYY-MM-DD>", "exercise": "<a lift on that date's session>", "sets": 2, "until": "<YYYY-MM-DD>", "reason": "race taper" },
-      // LASTING: a permanent change to that session going forward.
       { "date": "<YYYY-MM-DD>", "exercise": "<a lift on that date's session>", "rep_low": 6, "rep_high": 8, "lasting": true, "reason": "..." } ] }`,
     guidance: [
       `plan_update is a SMALL, safety-checked adjustment to the existing plan. Use it when the user explicitly asks to fix today's/next session, or when this turn supplies a material training, recovery, pain, or life-context signal that changes the next session. A change can update load AND sets/rep_low/rep_high, add an absent movement, remove one with remove:true, or atomically swap {from,to} in place. NEVER use sets:0 to mean remove. Include every requested change in ONE plan_update so the server can apply the bounded edit as a unit. NEVER emit it for a food-only log, meal photo, or a general nutrition question.`,
@@ -925,9 +913,8 @@ function renderActionGuidance(types: readonly ChatActionType[]): string {
     .join("\n");
 }
 
-export function renderChatActionSchema(types: readonly ChatActionType[] = CHAT_ACTION_TYPES): string {
+export function renderChatActionSchema(types: readonly ChatActionType[] = CHAT_PROMPT_ACTION_TYPES): string {
   return `[
-    // zero or more — ONLY when the user clearly asked to log or change something.
     ${types
       .map((type) => CHAT_ACTION_PROMPT_SPECS[type] as ChatActionPromptSpec)
       .map((spec) => spec.shape)
@@ -935,7 +922,7 @@ export function renderChatActionSchema(types: readonly ChatActionType[] = CHAT_A
 ]`;
 }
 
-export function renderChatActionPromptProse(types: readonly ChatActionType[] = CHAT_ACTION_TYPES): string {
+export function renderChatActionPromptProse(types: readonly ChatActionType[] = CHAT_PROMPT_ACTION_TYPES): string {
   const immediateTypes = types.filter(
     (type) => (CHAT_ACTION_PROMPT_SPECS[type] as ChatActionPromptSpec).applyMode === "immediate"
   );
@@ -945,12 +932,12 @@ export function renderChatActionPromptProse(types: readonly ChatActionType[] = C
   const draftSection = draftTypes.length
     ? `\n- ${draftTypes.join(" and ")} are saved as DRAFTS for the user to review and apply — never assume they're live.\n${renderActionGuidance(draftTypes)}`
     : "";
-  return `ACTIONS — only when the user clearly asks to log or change something:
+  // "Only when they ask; a question gets prose only" is said ONCE, by the OUTPUT CONTRACT.
+  return `ACTIONS:
 - ${immediateTypes.join(", ")} are ROUTED immediately. Safe captures apply now; coached plan changes follow the server's apply/schedule/review autonomy result.
 - Every sentence that says you logged, moved, added, swapped, put on their timeline, or set something is checked against the actions this turn actually carries. One with no matching action is replaced with a plain "that hasn't happened yet", so a change you are only suggesting is written as a suggestion ("I'd move the easy run to your Pull day — want me to?"), never as done.
 ${renderActionGuidance(immediateTypes)}
-${draftSection}
-- If they're just asking a question, write ONLY the prose reply — no actions block at all.`;
+${draftSection}`;
 }
 
 function isRecord(value: unknown): value is ChatActionRecord {

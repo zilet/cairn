@@ -11,6 +11,10 @@ Versioning](https://semver.org/) for tagged releases.
   now a preference, not a pin: when a coach turn can read on demand, a signed-in CLI that calls the
   reads natively (Claude, Codex) goes ahead of one that relaunches for every read, still in your
   order among themselves. An agent you name for the turn, or a chat route, is never reordered.
+- **A coach message is lighter.** The coach's prompt no longer offers actions the server would refuse
+  for that message (a calorie target, a push stance, a pain note and the like are offered when your
+  words ask for them), drops the retired single-run edit and repeated rules, and names its lookup tools
+  instead of describing each one again — about 12 KB less per message, with the unchanging part first.
 - **Background coaching work has a shorter leash.** Insights, meal plans, swaps and recipes, plan
   proposals, memory passes, exercise and marker reconciles and the health synthesis stop after
   2.5 minutes (4 for the long plan, meal-week and lab documents) instead of 5, so a stuck CLI frees
@@ -18,6 +22,10 @@ Versioning](https://semver.org/) for tagged releases.
 
 ### Fixed
 
+- **The Brief stops wasting an attempt on calling an open day "done".** A day with a run logged but
+  the lift still ahead used to draw a "done" read the server then threw away (most failed Briefs in a
+  week). The agent is now only offered the kinds that can pass for that day, and is told plainly when
+  what's logged is context rather than the day's work.
 - **A Brief whose agent keeps failing is no longer retried on every open.** After a failed attempt,
   that day's read waits 30 minutes before asking the agent again; a new read you ask for, a change
   in what the day is, and the morning warm still go straight to the agent.

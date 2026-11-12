@@ -107,8 +107,14 @@ test("chat DATA carries this morning's watch run with its numbers", () => {
   assert.ok(!/effect 4\.5/.test(block), "Garmin's training effect never rides in the block");
   // The block sits ABOVE the DATA dump, where a reader meets it before the JSON.
   assert.ok(prompt.indexOf("RECENT RUNS & CARDIO") < prompt.indexOf("\nDATA:\n"));
-  // And the general rule: never claim data is missing when it is here.
-  assert.match(prompt, /NEVER CLAIM DATA IS MISSING WHEN IT IS HERE/);
+  // And the general rule: never claim data is missing when it is here. The lean prompt
+  // carries it in its look-it-up read contract (src/chat-reads.ts); the full context,
+  // which has no such contract, keeps the guardrail.
+  assert.doesNotMatch(prompt, /NEVER CLAIM DATA IS MISSING WHEN IT IS HERE/);
+  assert.match(
+    buildChatPrompt([], "How was my run this morning?", undefined, { lane: "coach", context: "full" }),
+    /NEVER CLAIM DATA IS MISSING WHEN IT IS HERE/
+  );
 });
 
 test("the athlete's stated effort rides beside the run, and km keeps the stored pace", () => {

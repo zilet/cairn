@@ -17,7 +17,7 @@ import type { AgentPriority } from "./agents.js";
 import { localDateISO } from "./repo/shared.js";
 import { isValidTimeZone } from "./tz.js";
 import { pickDayVariant } from "./repo/brain/day-read-rules.js";
-import { DAY_READ_SCHEMA } from "./agent-contracts.js";
+import { DAY_READ_SCHEMA, dayReadFinalKinds, dayReadSchemaFor } from "./agent-contracts.js";
 import { matchesJsonSchema } from "./json-schema.js";
 import {
   dayReadCitableBrakes,
@@ -660,8 +660,10 @@ export function dayReadAgentRejection(
   // Whether meaningful training is already DONE is a server-owned fact, not a
   // nuance the prose layer may reinterpret. Reject a mismatch so the same agent can
   // repair it, or the floor answers.
-  if (baseline?.kind === "done") return value.kind === "done" ? null : "kind_vs_done_baseline";
-  if (baseline?.kind != null && value.kind === "done") return "done_without_baseline";
+  // dayReadFinalKinds is the one rule — the per-call schema and the prompt offer the same.
+  if (!(dayReadFinalKinds(baseline?.kind) as readonly unknown[]).includes(value.kind)) {
+    return baseline?.kind === "done" ? "kind_vs_done_baseline" : "done_without_baseline";
+  }
   // Quieter than a train baseline only on a NAMED, FRESH brake — rejected here, like
   // the grammar, so the repair can name the citable brakes (or keep the day training).
   if (!opts.override && agentCautionLacksBrake(value, baseline)) return "caution_without_brake";
@@ -754,12 +756,12 @@ export function dayReadRepairHint(
       return 'Nothing logged today counts as the day\'s training yet, so "kind" cannot be "done". Use "train", "easy" or "rest".';
     case "coach_read_as_final":
     case "coach_read_malformed":
-      return 'Either return the final read now ("kind" one of train, easy, rest, done, with a "why"), or request a read in exactly the coach_read shape shown, with a tool from the list.';
+      return `Either return the final read now ("kind" one of ${dayReadFinalKinds(baseline?.kind).join(", ")}, with a "why"), or request a read in exactly the coach_read shape shown, with a tool from the list.`;
     case "missing_field":
     case "bad_field":
     case "schema_mismatch":
     case "bad_shape":
-      return '"kind" must be one of train, easy, rest, done; "why" must be one non-empty plain sentence; "est_minutes" a number or null.';
+      return `"kind" must be one of ${dayReadFinalKinds(baseline?.kind).join(", ")}; "why" must be one non-empty plain sentence; "est_minutes" a number or null.`;
     default:
       return null;
   }
@@ -938,7 +940,9 @@ export async function computeDayRead(
       // then the floor below — never the next CLI with the same prompt.
       contractRepairHint: (reason) => dayReadRepairHint(reason, baseline),
       onContractRejection: "stop",
-      schema: DAY_READ_SCHEMA,
+      // Narrowed to the kinds this baseline admits (the validator's own rule), so a
+      // "done" the server would refuse is never on offer under constrained decoding.
+      schema: dayReadSchemaFor(baseline.kind),
     });
     // Decoded HERE, once, before both the predicate and the write — so what is
     // validated is exactly what is stored, and the athlete never reads an entity.

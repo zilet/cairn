@@ -2514,6 +2514,19 @@ e.g. a pinned sentence whose cited brake (`decision.brake`) stopped firing — b
 train read (`agent_caution_without_brake`, empty reason). The prompt's NAMED BRAKE RULE lists the same
 fields. An athlete override is exempt; the pin and prose identity are untouched.
 
+**"done" is offered only when it is true (2026-11-11).** Whether real training is already done today
+is the server's fact, so `dayReadFinalKinds(baseline.kind)` (`src/agent-contracts.ts`) is the one rule
+for the kinds a reply may carry: a `done` baseline admits only `done`, any other baseline everything but
+`done`. The validator (`dayReadAgentRejection`: `kind_vs_done_baseline` / `done_without_baseline`), the
+schema `computeDayRead` passes as `RunOpts.schema` (`dayReadSchemaFor(baseline.kind)` — the same enum plus
+`coach_read`; the static `DAY_READ_SCHEMA` stays the widest form the validator matches against), the
+prompt's JSON contract and the repair hints all read it, so under constrained decoding a refused `done`
+is not on offer at all (live, it was 8 of 10 refused reads in a week). A day with work logged but a
+non-done baseline (a run with the lift still open) also gets a plain THE DAY IS STILL OPEN line beside
+the output contract. The prompt's DETERMINISTIC SIGNALS blob drops the keys its own DATA already carries
+with the same content (`underfueling`, and `signal_state` in its `compactSignalState` prompt form), and
+the drive/hold blocks point at the blob (DATA has no `signals` key).
+
 **Calibration from the athlete's own history: per SIGNAL, not per read (2026-10-17,
 `src/repo/brain/quiet-read-calibration.ts`).** The ladders and the long loop pool every quiet morning;
 none of them could say WHICH brake the athlete keeps outrunning, so the agent could cite the same
@@ -3782,7 +3795,8 @@ endurance-shaped `plan_update` change (a `kind:'cardio'` change, or one carrying
 zone/interval) are REFUSED in words (`RUN_EDIT_REFUSAL_VARIANTS`, `CARDIO_REMOVAL_REFUSAL_VARIANTS`
 for a removal) and never written — left among the strength changes an un-kinded run would become a
 fabricated lifting movement. The strength half of a mixed turn still applies. Changing WHICH days
-they run is `set_endurance_schedule`; the chat catalog tells the model so.
+they run is `set_endurance_schedule`; the chat catalog tells the model so (in that action's guidance —
+`set_run` itself is no longer in the prompt).
 
 **A structure request is BUILT, not parked.** Chat has no action that rewrites the shape of a week;
 `flag_training_structure` is the hand-off, and it hands off for real (`src/domain/brain/structure-request.ts`).
@@ -3988,7 +4002,8 @@ the attempt's `finally`, on the turn's AbortSignal, and by a TTL backstop; GET/D
 stateless server offers no SSE stream). Tools carry `readOnlyHint`.
 
 **Chat is the one caller** (`runChatCompletion`). Per attempt it asks the transport for the contract
-text to append (`chatNativeReadContract` — plain tool-use guidance — or the prompt-loop contract) and
+text (`chatNativeReadContract` — the tool NAMES plus the budget and when-to-read rules, since MCP already
+delivers each tool's description and schema — or the prompt-loop contract) and
 the launch extras (`coachReadLaunchExtras`: the attach argv and `tools: "coach_reads"`). Native runs
 only on a reading lane (coach/deep, or the legacy single path) with `chat_context: "lean"`, never for a
 photo turn (the CLI must open the file) or a current-research turn (it needs its web search) — those
@@ -4434,6 +4449,23 @@ Verified support:
 | Codex | no | delivers its agent message only as a complete `item.completed` event (no token deltas) |
 | Antigravity (`agy`) | no | no streaming flag |
 | non-configured / `stub` | no | one-shot |
+
+**The chat prompt's layout (2026-11-11).** `buildChatPromptParts` returns the lean coach/deep prompt
+as `{head, tail}` around the read-contract slot. `head` is the static instruction bulk — persona,
+guardrails, the action prose, the claims rules, the OUTPUT CONTRACT, the ACTION SHAPES; `tail` is
+everything that moves turn to turn — the lane and escalation line, RIGHT NOW, the data-derived state
+blocks, a photo or linked page, then CONVERSATION, the message and DATA. The native contract goes between
+them (`head + contract + tail`), so the bytes ahead of the volatile blocks repeat across turns; the prompt
+loop's contract (and its results) still follow DATA. The capture lane and `chat_context: "full"` keep
+their single original layout (`tail` empty). Positional words follow the layout ("DATA below" in the
+native contract, "above" in the loop's). **An action the server would refuse this turn is not offered**:
+`chatActionGates` (`src/chatTurns.ts`) computes the seven message-only gates — training drive, calorie
+target, strength objective, symptom report and resolve, structure flag, plan restructure — once per turn
+from `chatTurnGateInputs(turn)`, and both the prompt (`chatPromptActionTypes`, rebuilt with the same types
+on an escalation) and `applyChatActions` read that one result; `revert_decision` (its gate also reads the
+id the reply names) and every ungated type (the `add_context_event` injury path among them) always
+render, and `set_run` (retired) is never offered but still parses. `test/chatActionGates.test.js` holds
+that every omitted type is one the server refuses for that message.
 
 The **reply-marked chat contract** (`buildChatPrompt` + `CHAT_REPLY_SENTINEL`/`CHAT_ACTION_SENTINEL`
 + `parseChatReply`) is what makes streaming clean: the model writes a `===CAIRN_REPLY===` line, then

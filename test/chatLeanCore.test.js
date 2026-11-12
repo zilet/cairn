@@ -99,7 +99,7 @@ test("chat_context 'full' reproduces the previous key set and the original wordi
 
   const lean = buildChatPrompt([], "how did my week go?");
   assert.doesNotMatch(lean, /You can SEE all their data/);
-  assert.match(lean, /COACH READS at the end reach the rest/);
+  assert.match(lean, /the COACH READS reach the rest/);
 });
 
 test("the lean contracts say to look it up — and never to call data missing without reading", () => {
@@ -108,14 +108,21 @@ test("the lean contracts say to look it up — and never to call data missing wi
   for (const text of [loop, native]) {
     assert.match(text, /LOOK IT UP before you answer/);
     assert.match(text, /Never say something is missing, "not visible" or "hasn't synced" without having read for it first/);
-    assert.match(text, /Do not read for what the core or the blocks above already answer/);
+    assert.match(text, /Do not read for what the core or the blocks (?:above|below) already answer/);
     assert.doesNotMatch(text, /authoritative baseline|Do not fish/);
   }
   // The prompt loop keeps its bare-JSON protocol; the native contract is plain tool use.
   assert.match(loop, /\{"kind":"coach_read","requests":/);
   assert.doesNotMatch(native, /"kind":"coach_read"/);
   assert.match(native, /the reply marker, then prose/);
-  for (const name of COACH_READ_TOOL_NAMES) assert.match(native, new RegExp(`- ${name}: `), `native lists ${name}`);
+  // Positions: the loop's contract follows DATA; the native one sits ahead of it.
+  assert.match(loop, /DATA above is the core/);
+  assert.match(native, /DATA below is the core/);
+  // The native contract NAMES the tools: their descriptions and argument schemas reach
+  // the CLI over MCP, so the prompt does not repeat them.
+  for (const name of COACH_READ_TOOL_NAMES) assert.match(native, new RegExp(`\\b${name}\\b`), `native names ${name}`);
+  assert.doesNotMatch(native, /- read_[a-z_]+: /, "no per-tool description lines");
+  assert.match(native, /At most \d+ reads for this reply/);
 });
 
 // Where in a read's result a moved key lives (the context-slice reads return it at the
