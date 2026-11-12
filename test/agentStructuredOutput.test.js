@@ -189,13 +189,15 @@ test("an agent with no declaration silently ignores a schema", async () => {
 });
 
 test("a file-mode schema is written to disk, read by the CLI, and cleaned up", async () => {
-  const before = fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith("cairn-schema-"));
   const res = await runAgent("filed", "hello", { schema: SCHEMA });
   assert.equal(res.parsed.argv[0], "--output-schema");
   // The path must have existed and held the schema at spawn time.
   assert.deepEqual(res.parsed.schema_file_contents, SCHEMA);
-  const after = fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith("cairn-schema-"));
-  assert.deepEqual(after, before, "the per-run schema directory must not outlive the run");
+  // Judge THIS run's directory by its own path: the temp dir is shared with every other
+  // process on the machine, so a before/after listing fails whenever another run overlaps.
+  const schemaDir = path.dirname(res.parsed.argv[1]);
+  assert.match(path.basename(schemaDir), /^cairn-schema-/);
+  assert.equal(fs.existsSync(schemaDir), false, "the per-run schema directory must not outlive the run");
 });
 
 test("an enveloping provider yields the payload, never the envelope", async () => {
