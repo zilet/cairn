@@ -135,8 +135,8 @@ import {
   isFoodOnlyTurn,
   isInstantFoodCaptureDecision,
   isLeadingQuestion,
-  readsAsSessionProposal,
-  coachOfferedTodaySession,
+  hasExplicitStartSessionIntent,
+  todaySessionGoAhead,
 } from "./chat-intent.js";
 import {
   chatChangeReceipts,
@@ -179,6 +179,7 @@ export {
   hasExplicitStrengthObjectiveIntent,
   hasExplicitSymptomReportIntent,
   hasExplicitSymptomResolveIntent,
+  hasExplicitStartSessionIntent,
   hasExplicitTodaySessionIntent,
   hasSelfContainedPlanEditIntent,
   isFoodOnlyTurn,
@@ -3189,6 +3190,9 @@ export interface ChatActionGates {
   symptomResolve: boolean;
   flagTrainingStructure: boolean;
   planRestructure: boolean;
+  /** An ask to start/open today's session: admits start_session only. */
+  startSession: boolean;
+  /** An ask to build/change today's session: admits today_session (and start_session). */
   todaySession: boolean;
 }
 
@@ -3198,6 +3202,12 @@ export function chatActionGates(inputs: ChatActionGateInputs): ChatActionGates {
   // Read only when a message needs it (a bare yes), and at most once.
   let prior: { message?: string | null; drafted?: boolean } | null = null;
   const priorMessage = () => (prior ??= inputs.priorAssistant ?? priorAssistantContext(inputs.userMessageId)).message;
+  // A go-ahead ("yes, set it up") reads the coach's message before it, once: "build" after
+  // a laid-out session or an offer to set one up, "open" after an offer only to open it.
+  const goAhead =
+    !foodOnly && (carriesPlanApplyAffirmation(message) || carriesDriveAffirmation(message))
+      ? todaySessionGoAhead(message, priorMessage())
+      : null;
   return {
     foodOnly,
     // The training drive is the athlete's own stance: only their sentence sets it — or
@@ -3221,36 +3231,43 @@ export function chatActionGates(inputs: ChatActionGateInputs): ChatActionGates {
     symptomResolve: hasExplicitSymptomResolveIntent(message),
     flagTrainingStructure: flagTrainingStructureAuthorized(message),
     planRestructure: !foodOnly && hasExplicitPlanEditIntent(message),
-    // Today's session is built or opened only on the athlete's ask: their own sentence
-    // ("make it a full upper body today", "let's start today's session"), or their
-    // go-ahead ("set it up") right after the coach laid a session out.
-    todaySession:
-      !foodOnly &&
-      (hasExplicitTodaySessionIntent(message) ||
-        (carriesPlanApplyAffirmation(message) &&
-          (readsAsSessionProposal(priorMessage()) || coachOfferedTodaySession(priorMessage())))),
+    // Today's session is opened or built only on the athlete's ask, and the two asks are
+    // different licences. "Let's start today's session" opens what is there (startSession:
+    // start_session only); "make it a full upper body today" builds or changes it
+    // (todaySession: today_session, and start_session beside it). Their go-ahead right
+    // after the coach laid a session out or offered to set one up is a build; right after
+    // the coach only offered to open it, an open.
+    startSession: !foodOnly && (hasExplicitStartSessionIntent(message) || goAhead === "open"),
+    todaySession: !foodOnly && (hasExplicitTodaySessionIntent(message) || goAhead === "build"),
   };
 }
 
-/** Which gate admits each gated action type (every other prompt type is always rendered). */
-export const CHAT_ACTION_GATE_FOR: Readonly<Partial<Record<ChatActionType, keyof ChatActionGates>>> = {
-  set_training_drive: "trainingDrive",
-  set_nutrition_target: "nutritionTarget",
-  set_strength_objective: "strengthObjective",
-  report_training_symptom: "symptomReport",
-  resolve_training_symptom: "symptomResolve",
-  flag_training_structure: "flagTrainingStructure",
-  plan_restructure: "planRestructure",
-  today_session: "todaySession",
-  start_session: "todaySession",
+/**
+ * The gates that admit each gated action type, any one of them enough (every other prompt
+ * type is always rendered). start_session rides the build gate too: building a session and
+ * then opening it is one natural ask.
+ */
+export const CHAT_ACTION_GATE_FOR: Readonly<Partial<Record<ChatActionType, readonly (keyof ChatActionGates)[]>>> = {
+  set_training_drive: ["trainingDrive"],
+  set_nutrition_target: ["nutritionTarget"],
+  set_strength_objective: ["strengthObjective"],
+  report_training_symptom: ["symptomReport"],
+  resolve_training_symptom: ["symptomResolve"],
+  flag_training_structure: ["flagTrainingStructure"],
+  plan_restructure: ["planRestructure"],
+  today_session: ["todaySession"],
+  start_session: ["startSession", "todaySession"],
 };
+
+/** Does this turn's gates admit `type`? An ungated type always is. */
+export function chatActionGateOpen(type: ChatActionType, gates: ChatActionGates): boolean {
+  const admitting = CHAT_ACTION_GATE_FOR[type];
+  return !admitting || admitting.some((gate) => gates[gate]);
+}
 
 /** The action types this turn's coach/deep prompt renders: every prompt type whose gate holds. */
 export function chatPromptActionTypes(gates: ChatActionGates): ChatActionType[] {
-  return CHAT_PROMPT_ACTION_TYPES.filter((type) => {
-    const gate = CHAT_ACTION_GATE_FOR[type];
-    return !gate || gates[gate];
-  });
+  return CHAT_PROMPT_ACTION_TYPES.filter((type) => chatActionGateOpen(type, gates));
 }
 
 /** The gate inputs of a stored turn: the SAME values for the prompt and for applyChatActions. */
@@ -3355,7 +3372,8 @@ export function applyChatActions(
     { referenceWeightLb: storedBodyweightLb() }
   );
   // A today_session this turn will act on (the gate is open): the plan_update case reads it.
-  const todaySessionInTurn = gates.todaySession && actions.some((entry) => entry.type === "today_session");
+  const todaySessionInTurn =
+    chatActionGateOpen("today_session", gates) && actions.some((entry) => entry.type === "today_session");
   for (const note of misfiled) {
     log.info(`[chat] log_activity ${note.outcome === "dropped" ? "dropped" : `rerouted to ${note.outcome}`} (${note.reason})`);
   }
@@ -4055,7 +4073,9 @@ export function applyChatActions(
         }
         case "today_session":
           // The session they asked for TODAY: today's own composition, never the template.
-          if (!gates.todaySession) break;
+          // Only a build/change ask admits it — "let's start" opens what is there, and a
+          // today_session emitted beside it is dropped like any ungated action.
+          if (!chatActionGateOpen(a.type, gates)) break;
           applied.push({
             type: a.type,
             result: applyChatTodaySession(
@@ -4065,7 +4085,7 @@ export function applyChatActions(
           });
           break;
         case "start_session":
-          if (!gates.todaySession) break;
+          if (!chatActionGateOpen(a.type, gates)) break;
           applied.push({
             type: a.type,
             result: applyChatStartSession({ chat_message_id: chatMessageIdOf(ctx.userMessageId) }),

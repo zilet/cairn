@@ -17,6 +17,7 @@ import { coachOfferedNutritionTarget, coachOfferedPush } from "../dist/chat-inte
 import {
   applyChatActions,
   CHAT_ACTION_GATE_FOR,
+  chatActionGateOpen,
   chatActionGates,
   chatPromptActionTypes,
 } from "../dist/chatTurns.js";
@@ -60,9 +61,11 @@ test("the gate map names exactly the server-gated types, and set_run is never of
 
 test("each gated shape renders for a message that opens its gate and not for one that does not", () => {
   for (const [type, [opens, closes]] of Object.entries(CASES)) {
-    const gate = CHAT_ACTION_GATE_FOR[type];
-    assert.equal(chatActionGates({ message: opens, priorAssistant: { message: "" } })[gate], true, `${type}: "${opens}"`);
-    assert.equal(chatActionGates({ message: closes, priorAssistant: { message: "" } })[gate], false, `${type}: "${closes}"`);
+    const gateOpen = (message) =>
+      chatActionGateOpen(type, chatActionGates({ message, priorAssistant: { message: "" } }));
+    assert.ok(CHAT_ACTION_GATE_FOR[type].length > 0, type);
+    assert.equal(gateOpen(opens), true, `${type}: "${opens}"`);
+    assert.equal(gateOpen(closes), false, `${type}: "${closes}"`);
     assert.match(promptFor(opens), shapeOf(type), `${type} renders for "${opens}"`);
     assert.doesNotMatch(promptFor(closes), shapeOf(type), `${type} is omitted for "${closes}"`);
   }
@@ -248,6 +251,13 @@ test("each NOT ON OFFER line's suggested wording is one the server's gate actual
     chatActionGates({ message: restructure[1], priorAssistant: { message: restructure[0] } }).planRestructure,
     true
   );
+  // Today's session: the offer to set one up opens the build gate; the offer to open it
+  // opens only the start gate.
+  const [setUp] = quoted("today_session");
+  assert.equal(yesAfter(setUp, "todaySession", "yes, set it up"), true);
+  const [openIt] = quoted("start_session");
+  assert.equal(yesAfter(openIt, "startSession"), true);
+  assert.equal(yesAfter(openIt, "todaySession", "go ahead"), false);
   // The self-stated gates: the sentence the coach suggests the athlete say opens its gate.
   const said = (type) =>
     quoted(type)

@@ -23,6 +23,7 @@ import { chatChangeReceipts, reconcileChatPlanReply } from "../dist/chat-reconci
 import { refreshChangeReceipts } from "../dist/repo/change-receipt.js";
 import { executeCoachReadTool } from "../dist/brain/read-tool-runtime.js";
 import { localDateISO } from "../dist/repo/shared.js";
+import { recordExerciseSymptomObservation } from "../dist/domain/training/exercise-symptom-use-case.js";
 
 const BUILD_ASK =
   "Combine the exercise plan from yesterday and today. Make it into a full upper body session combining pull and push. I have time for a lengthier session today.";
@@ -329,8 +330,15 @@ for (const [name, liveOn] of Object.entries(LIVED_ON)) {
 }
 
 test("the actions are offered only on the athlete's ask, and refused without it", () => {
-  for (const message of [BUILD_ASK, START_ASK, "open my today's training day", "Give me a shorter workout today"]) {
-    assert.equal(chatActionGates({ message, priorAssistant: { message: "" } }).todaySession, true, message);
+  const gates = (message) => chatActionGates({ message, priorAssistant: { message: "" } });
+  for (const message of [BUILD_ASK, "Give me a shorter workout today"]) {
+    assert.equal(gates(message).todaySession, true, message);
+    assert.equal(gates(message).startSession, false, message);
+  }
+  // A start ask opens only the start gate: opening what is there never licenses a new session.
+  for (const message of [START_ASK, "open my today's training day"]) {
+    assert.equal(gates(message).startSession, true, message);
+    assert.equal(gates(message).todaySession, false, message);
   }
   for (const message of [
     "How did today's session go?",
@@ -338,7 +346,8 @@ test("the actions are offered only on the athlete's ask, and refused without it"
     "I had eggs for breakfast",
     "How was my week?",
   ]) {
-    assert.equal(chatActionGates({ message, priorAssistant: { message: "" } }).todaySession, false, message);
+    assert.equal(gates(message).todaySession, false, message);
+    assert.equal(gates(message).startSession, false, message);
   }
   // The polite-question form of a build is the ask itself; an information question is not.
   assert.equal(hasExplicitTodaySessionIntent("Can you build me a longer session today?"), true, "a polite ask");
@@ -356,6 +365,128 @@ test("the actions are offered only on the athlete's ask, and refused without it"
   assert.deepEqual(out.applied, []);
   assert.equal(count("daily_session_compositions"), 0);
 });
+
+test("a pure start ask never replaces the day: an emitted today_session is refused, the start lands", () => {
+  seedPlan();
+  const today = localDateISO();
+  const opened = entry(apply([{ type: "start_session" }], START_ASK), "start_session").result;
+  const before = active();
+  const versions = count("daily_session_compositions");
+  const decisions = count("brain_decisions");
+  for (const actions of [
+    [UPPER, { type: "start_session" }],
+    [{ type: "start_session" }, UPPER],
+  ]) {
+    const out = apply(actions, "let's start today's session");
+    // Refused exactly like an ungated action: never applied, so nothing grounds on it.
+    assert.equal(entry(out, "today_session"), undefined, JSON.stringify(out.applied));
+    const start = entry(out, "start_session").result;
+    assert.equal(start.ok, true, JSON.stringify(start));
+    assert.equal(start.reused, true);
+    assert.equal(start.daily_session_id, opened.daily_session_id);
+    // The day's session is untouched: same composition, same source, nothing recorded.
+    assert.equal(active().id, before.id);
+    assert.equal(active().source, before.source);
+    assert.equal(active().items_json, before.items_json);
+    assert.equal(count("daily_session_compositions"), versions);
+    assert.equal(count("brain_decisions"), decisions, "no session_suggestion decision");
+    // The receipt is the opened session, with no Undo of a build that never happened.
+    const [receipt, ...rest] = chatChangeReceipts(out.applied, []);
+    assert.deepEqual(rest, []);
+    assert.equal(receipt.key, `session:${before.id}`);
+    assert.equal(receipt.undo, null);
+    // A reply that claims the build is held to what landed.
+    const claim = "I've built your upper session for today.";
+    const grounded = groundReply({ reply: claim, applied: out.applied, ctx: { message: START_ASK, today } });
+    assert.notEqual(grounded.reply, claim);
+  }
+});
+
+test("a pure start ask on an empty day opens the plan's own day, never the emitted session", () => {
+  seedPlan();
+  const out = apply([UPPER, { type: "start_session" }], START_ASK);
+  assert.equal(entry(out, "today_session"), undefined);
+  assert.equal(entry(out, "start_session").result.ok, true);
+  assert.equal(active().source, "adaptive_plan");
+  assert.notEqual(active().title, UPPER.title);
+});
+
+test("a build ask lands today_session, and a start beside it opens the built session", () => {
+  seedPlan();
+  apply([{ type: "start_session" }], START_ASK);
+  const message = "Make it a full upper body session today and let's start my workout";
+  const out = apply([UPPER, { type: "start_session" }], message);
+  const built = entry(out, "today_session").result;
+  assert.equal(built.ok, true, JSON.stringify(built));
+  assert.equal(active().source, "athlete_override");
+  assert.equal(active().title, UPPER.title);
+  const opened = entry(out, "start_session").result;
+  assert.equal(opened.ok, true);
+  assert.equal(opened.daily_session_id, built.daily_session_id);
+});
+
+// The receipt's Undo and button read the SAME truth the server acts on: Undo only when
+// revertChatTodaySession would take it (the one "started" test, never sets alone, and not
+// finished), and the label from the session's started/finished state.
+const RECEIPT_STATES = {
+  unstarted: { liveOn: () => {}, undo: true, label: /^Start Upper — push \+ pull$/ },
+  "a logged set": {
+    liveOn: () => repo.logSetByName({ exercise: "Barbell Bench Press", weight: 100, reps: 8, date: localDateISO() }),
+    undo: false,
+    label: /^Continue Upper — push \+ pull$/,
+  },
+  "notes only": {
+    liveOn: (sessionId) => repo.updateSessionNotes(sessionId, "Felt strong on the first pair."),
+    undo: false,
+    label: /^Continue Upper — push \+ pull$/,
+  },
+  "feedback only": {
+    liveOn: () => repo.setSessionFeedback(localDateISO(), { performance: 4 }),
+    undo: false,
+    label: /^Continue Upper — push \+ pull$/,
+  },
+  "a pain answer only": {
+    liveOn: (sessionId) => {
+      db.prepare(`INSERT OR IGNORE INTO exercises (name) VALUES ('Lat Pulldown')`).run();
+      recordExerciseSymptomObservation({
+        date: localDateISO(),
+        movement: "Lat Pulldown",
+        session_id: sessionId,
+        area_text: "left shoulder",
+        outcome: "pain_present",
+      });
+    },
+    undo: false,
+    label: /^Continue Upper — push \+ pull$/,
+  },
+  "finished with nothing logged": {
+    liveOn: (sessionId) => repo.finishSession(sessionId),
+    undo: false,
+    label: /^Log more on Upper — push \+ pull$/,
+  },
+};
+for (const [name, state] of Object.entries(RECEIPT_STATES)) {
+  test(`the session receipt's Undo and button follow the day: ${name}`, () => {
+    seedPlan();
+    apply([{ type: "start_session" }], START_ASK);
+    const out = apply([UPPER], BUILD_ASK);
+    const built = entry(out, "today_session").result;
+    assert.ok(built.decision_id > 0);
+    const stored = JSON.parse(JSON.stringify(chatChangeReceipts(out.applied, [])));
+    assert.deepEqual(stored[0].undo, { kind: "brain_decision", id: built.decision_id });
+    state.liveOn(built.session_id);
+    // Re-read on history load, and built fresh: both say the same.
+    const [again] = refreshChangeReceipts(stored);
+    const [fresh] = chatChangeReceipts(out.applied, []);
+    for (const receipt of [again, fresh]) {
+      assert.equal(receipt.key, `session:${built.daily_session_id}`);
+      assert.match(receipt.open.label, state.label, receipt.open.label);
+      assert.deepEqual(receipt.undo, state.undo ? { kind: "brain_decision", id: built.decision_id } : null);
+    }
+    // The button offered is the Undo the server takes.
+    assert.equal(revertDecision(built.decision_id, "user veto").ok, state.undo);
+  });
+}
 
 test("the normalizer keeps only prescription fields and needs an item", () => {
   const action = normalizeChatAction({

@@ -3971,12 +3971,17 @@ own chosen card (not one this chat built) it still replaces — they asked — a
 `replaced_title`, the reply and the receipt say "in place of <card>". "Let's start today's session" is
 `start_session`: the assertion path over an active composition, else the adaptive plan day
 (`train_anyway` on a rest/easy read); a FINISHED day is shown as done ("Log more on <title>"), never
-reopened. Both are gated on the athlete's own ask (`chatActionGates().todaySession`:
-`hasExplicitTodaySessionIntent` opens on a build/change verb governing a session noun, polite questions
-included, and on a start ask that heads its own clause — never on rest, skip, logging, how it felt, an
-information question, or a food log that mentions a workout) and both answer with `open: {kind:"session",
-date, label}` ("Start <title>" / "Continue <title>"), carried on the turn's receipts as
-`session:<composition id>` with that `open` re-read on every read. A `today_session` that landed records
+reopened. Each is gated on the athlete's own ask, and the two asks are different licences:
+`chatActionGates().todaySession` (`hasExplicitTodaySessionIntent`: a build/change verb governing a session
+noun, polite questions included — never rest, skip, logging, how it felt, an information question, or a
+food log that mentions a workout) admits `today_session` and `start_session`; `startSession`
+(`hasExplicitStartSessionIntent`: a start/open ask heading its own clause) admits `start_session` ONLY, so
+"let's start today's session" never licenses replacing the day — a `today_session` beside it is dropped
+like any ungated action. A go-ahead after the coach laid a session out or offered to set one up opens
+`todaySession`; after an offer only to open it, `startSession` (`todaySessionGoAhead`). Both answer with
+`open: {kind:"session", date, label}` ("Start <title>" / "Continue <title>" / "Log more on <title>"),
+carried on the turn's receipts as `session:<composition id>` with that `open` — and its Undo, offered only
+while `todaySessionUndoRefusal` (the test Undo itself acts on) is null — re-read on every read. A `today_session` that landed records
 ONE observe-tier reversible `session_suggestion` decision with a `daily_session` rollback (including the
 skips and finish stamp the replace cleared): Undo (`revert_decision`) puts the composition it replaced
 back as it was — or hands the day back to the plan — only while it still owns the day, nobody has lived
