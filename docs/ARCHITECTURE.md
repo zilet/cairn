@@ -519,7 +519,9 @@ superseded by `replace:true`, and a day finished with nothing logged is started 
 ONE predicate, `unstartedChosenCard` (open-session.ts: an unstarted `manual_plan` / `agent_suggest` /
 `athlete_override` card holding items), is never taken by a replace that authors nothing of the
 athlete's: an adaptive replace and an EMPTY override replace (the client's outbox retry) answer
-`daily_session_active_changed` with it as the owner; an ITEMFUL override replace (the athlete writing a
+`daily_session_active_changed` with it as the owner. The EMPTY override also yields to an adaptive card the
+athlete trained on by choice (`train_anyway` / `training_by_choice`), which the adaptive request itself
+still re-takes (`ChosenCardReplacer`); an ITEMFUL override replace (the athlete writing a
 new session, chat's `today_session` included) still replaces it. `POST /api/daily-session/discard`
 (`discard_daily_session`) deletes an accidental empty session so the date is free again — never one the
 athlete lived on (a pain answer included); the inferred observations left on it go with it, so the
@@ -4024,12 +4026,21 @@ own chosen card (not one this chat built) it still replaces — they asked — a
 (`train_anyway` on a rest/easy read); a FINISHED day is shown as done ("Log more on <title>"), never
 reopened. Each is gated on the athlete's own ask, and the two asks are different licences:
 `chatActionGates().todaySession` (`hasExplicitTodaySessionIntent`: a build/change verb governing a session
-noun, polite questions included — never rest, skip, logging, how it felt, an information question, or a
-food log that mentions a workout) admits `today_session` and `start_session`; `startSession`
-(`hasExplicitStartSessionIntent`: a start/open ask heading its own clause) admits `start_session` ONLY, so
-"let's start today's session" never licenses replacing the day — a `today_session` beside it is dropped
-like any ungated action. A go-ahead after the coach laid a session out or offered to set one up opens
-`todaySession`; after an offer only to open it, `startSession` (`todaySessionGoAhead`). Both answer with
+noun, polite questions included — never rest, skip, logging, how it felt, an information question)
+admits `today_session` and `start_session`; `startSession` (`hasExplicitStartSessionIntent`: a start/open
+ask heading its own clause) admits `start_session` ONLY, so "let's start today's session" never licenses
+replacing the day — a `today_session` beside it is dropped like any ungated action. Both asks are ONE
+positive reading, clause by clause (`chatRouting.ts` "Session asks", review 3): the object is a training
+session (never a screen named after one — "the workout history / log / timer", "the training plan" — nor a
+sleep or tracking session), the athlete's OWN (no other person in the clause, nor "build Sarah a …"), for
+TODAY (named, or no day named — a build clause with no day takes the nearest clause that names one, else
+a start beside it; any other day or "not today" shuts it), and not under a negation ahead of the verb.
+Unknown or contradicted stays shut. The router reads the same asks: a session ask makes the turn the
+coach's, and food named BESIDE it (`hasFoodEvidence`, on the message less the ask's clauses) is kept as
+`explicit_food_log` on that coach turn — the mixed turn logs the meal and answers the ask; the composer's
+"Log food:" frame over a bare ask is no food. A go-ahead after the coach laid a session out for today or
+offered to set one up as today's opens `todaySession`; after an offer only to open today's own session,
+`startSession` (`todaySessionGoAhead`; an offer about another day, person or screen opens nothing). Both answer with
 `open: {kind:"session", date, label}` ("Start <title>" / "Continue <title>" / "Log more on <title>"),
 carried on the turn's receipts as `session:<composition id>` with that `open` — and its Undo, offered only
 while `todaySessionUndoRefusal` (the test Undo itself acts on) is null — re-read on every read. A `today_session` that landed records
@@ -4037,10 +4048,13 @@ ONE observe-tier reversible `session_suggestion` decision with a `daily_session`
 skips and finish stamp the replace cleared): Undo (`revert_decision`) puts the composition it replaced
 back as it was — or hands the day back to the plan — only while it still owns the day, nobody has lived
 on it and it is not finished. `groundReply` holds an ACT on the session's content ("I've built / set up /
-lightened today's session", claim class `session`) to a landed, non-reused `today_session`, and a STATE
-claim ("your session is ready / waiting on Today", class `session_state`) to Today itself
-(`openSessionOn`) — true with no action at all when a session is open; a false one is corrected with the
-day's actual state. `read_today_session` is the coach read of what Today will serve.
+lightened today's session", "today's session now has curls", claim class `session`) to a landed,
+non-reused `today_session`, and a STATE claim ("your session is ready / waiting on Today", class
+`session_state`) to an OPEN, UNFINISHED session — one the turn showed, or Today's own (`openSessionOn`);
+over a finished day the only true state is "done", and a false one is corrected with the day's actual
+state. Both classes judge only sentences about TODAY's session of the athlete: "Tomorrow's session is all
+set" and "your wife's session is ready" are not today-session claims, and "I've built tomorrow's session"
+is a `plan` claim held to a landed plan change. `read_today_session` is the coach read of what Today will serve.
 An UNDATED `plan_update` the athlete scoped to today now ends today (`until`), like a dated one.
 
 **A structure request is BUILT, not parked.** Chat has no action that rewrites the shape of a week;

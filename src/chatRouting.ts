@@ -170,7 +170,10 @@ const SUPPLEMENT_NOUN =
   /\b(?:supplement|vitamin|creatine|protein powder|electrolyte|magnesium|omega-?3|fish oil|collagen|melatonin|probiotic)\b/i;
 const FOOD_ITEM =
   /\b(?:pizza|slice(?:s)?|sandwich|tacos?|banana|oatmeal|yogurt|berries|chicken|rice|broccoli|salmon|potatoes|asparagus|latte|cookie|eggs?|pasta|smoothie)\b/i;
-const CAPTURE_VERB = /\b(?:log|track|record|add|save|enter)\b/i;
+// "log" / "record" after a determiner or a training noun is the NOUN ("open the workout
+// log", "my session record"), never a request to write a row.
+const CAPTURE_VERB =
+  /(?<!\b(?:the|my|your|a|this|that|workout|training|session|exercise|lifting|gym)\s+)\b(?:log|record)\b|\b(?:track|add|save|enter)\b/i;
 const AMENDMENT_VERB = /\b(?:add(?:ed|ing)?|include[ds]?|also|plus)\b|\b\d+(?:[.,]\d+)?\s*(?:g|gr|grams?|ml|oz|slices?|pieces?)?\s+more\b/i;
 // The other way people add to the meal they just logged: no verb at all, just "oh
 // and …", "… on the plate", "… with it", "… too". Only read as an amendment right
@@ -795,7 +798,8 @@ export function textBesideSessionAsk(message: unknown): string {
   rest += body.slice(last);
   rest = rest
     .replace(/\s+(?:and|then|so|now|ok(?:ay)?)\s*$/i, "")
-    .replace(/^[\s,.;:!?–—-]+|[\s,;:–—-]+$/g, "")
+    // The ask's own closing "?" or "." belongs to the ask, not to what is left beside it.
+    .replace(/^[\s,.;:!?–—-]+|[\s,.;:!?–—-]+$/g, "")
     .trim();
   if (!/[a-z0-9]/i.test(rest)) return "";
   return framed ? `${framed[0]}${rest}` : rest;
@@ -832,7 +836,31 @@ const BUILD_WANT_RE = new RegExp(
   "i"
 );
 const MERGE_VERB_RE = /\b(?:combine|merge)\b/i;
-const BUILD_POLITE_RE = /^(?:(?:can|could|would|will)\s+you(?:\s+please)?|(?:can|could|may)\s+i\s+(?:get|have))\s+/i;
+// The polite-question form of the ask: "can you make…", "could I get…", "would you mind
+// making…" (its gerund read as the verb).
+const BUILD_POLITE_RE =
+  /^(?:(?:can|could|would|will)\s+you(?:\s+please)?(?:\s+mind)?|(?:do|would)\s+you\s+mind|(?:can|could|may)\s+i\s+(?:get|have))\s+/i;
+const BUILD_GERUND_BASE: Readonly<Record<string, string>> = {
+  making: "make",
+  building: "build",
+  giving: "give",
+  creating: "create",
+  changing: "change",
+  swapping: "swap",
+  switching: "switch",
+  shortening: "shorten",
+  lengthening: "lengthen",
+  extending: "extend",
+  adding: "add",
+  dropping: "drop",
+  removing: "remove",
+  lightening: "lighten",
+  trimming: "trim",
+  turning: "turn",
+  designing: "design",
+  putting: "put",
+  setting: "set",
+};
 // A question that is not the polite form of the ask ("what is today's session?", "why did
 // you make it so long?") asks nothing to be built.
 const QUESTION_LEAD_RE = /^(?:should|could|would|will|can|what|how|why|is|are|was|were|do|does|did|has|when|where|which|who)\b/i;
@@ -842,55 +870,68 @@ const BUILD_REST_RE =
 // A clause that logs, or that is about food (a meal plan for today is not a session).
 const BUILD_LOG_RE = /\b(?:log|logged|logging|record|recorded|track|tracked)\b/i;
 const BUILD_FOOD_RE = /\b(?:meals?|food|diet|nutrition|calories|macros|breakfast|lunch|dinner|snacks?|recipes?|menu)\b/i;
+// WHOSE, for a build verb: the word between the verb and its article is who it is FOR —
+// "give ME a session", "make IT a full upper body"; "build Sarah a session" is not ours.
+const BUILD_FOR_RE =
+  /^(?:set\s+up|put\s+together|\w+)\s+(?!(?:me|us|it|this|that|today|tonight|myself|up|together)\b)[\w'-]+\s+(?:a|an|some|another)\b/i;
 
 /** The build ask in one clause: whether there is one, and whether its verb merges days. */
 function buildAskInClause({ text: clause, question }: SessionClause): { merge: boolean } | null {
   const polite = BUILD_POLITE_RE.test(clause);
   if (!polite && question && QUESTION_LEAD_RE.test(clause)) return null;
-  const text = polite ? clause.replace(BUILD_POLITE_RE, (m) => (/\bi\s+(?:get|have)\s+$/i.test(m) ? "give me " : "")) : clause;
-  const match = BUILD_VERB_RE.exec(text) ?? BUILD_WANT_RE.exec(text);
+  const text = polite
+    ? clause
+        .replace(BUILD_POLITE_RE, (m) => (/\bi\s+(?:get|have)\s+$/i.test(m) ? "give me " : ""))
+        .replace(/^(\w+ing)\b/i, (gerund) => BUILD_GERUND_BASE[gerund.toLowerCase()] ?? gerund)
+    : clause;
+  const verb = BUILD_VERB_RE.exec(text);
+  const match = verb ?? BUILD_WANT_RE.exec(text);
   if (!match) return null;
   if (negatedBefore(text, match.index)) return null;
   if (BUILD_LOG_RE.test(text) || BUILD_FOOD_RE.test(text)) return null;
-  if (namesOtherPerson(text)) return null;
+  if (namesOtherPerson(text) || (verb && BUILD_FOR_RE.test(text.slice(verb.index)))) return null;
   // The noun is a screen's name ("a workout log for today").
   if (SESSION_SCREEN_HEAD_RE.test(text.slice(match.index + match[0].length))) return null;
   return { merge: MERGE_VERB_RE.test(match[0]) };
 }
 
+// The day one clause names for a session: "today", "other", or null when it names none.
+// A merge names its SOURCES ("combine yesterday's and today's plan"): it is today's when
+// today is among them, and dates nothing otherwise.
+function clauseDay(clause: string): "today" | "other" | null {
+  if (negatesToday(clause)) return "other";
+  const today = TODAY_RE.test(clause);
+  if (MERGE_VERB_RE.test(clause)) return today ? "today" : null;
+  if (namesOtherDay(clause)) return "other";
+  return today ? "today" : null;
+}
+
 /**
  * The athlete asks for TODAY's own session to be BUILT or CHANGED (the `todaySession`
- * gate). A clause that names its day decides it; a clause that names none is dated by
- * the message — today named somewhere (never under "not today"), or a start beside it
- * ("…and let's start") — and shut when the message names another day. Merging days
- * ("combine yesterday's and today's plan") names its sources, and is today's when today
- * is among them.
+ * gate). The clause carrying the ask decides its day when it names one. One that names
+ * none takes the day of the NEAREST clause that does ("…, for today, can you build me a
+ * push session?"; "build me a push session, I'll do it tomorrow"), or — with no day named
+ * anywhere — a start beside it ("…and let's start"). Unknown is shut, and so is any "not
+ * today" in the message.
  */
 export function chatMessageBuildsTodaySession(message: unknown): boolean {
   const text = withoutFoodFrame(message);
-  if (!text || BUILD_REST_RE.test(text)) return false;
+  if (!text || BUILD_REST_RE.test(text) || negatesToday(text)) return false;
   const clauses = sessionAskClauses(text);
-  let messageToday = false;
-  let messageOther = false;
-  let startsNow = false;
-  for (const { text: clause } of clauses) {
-    if (negatesToday(clause)) messageOther = true;
-    else if (TODAY_RE.test(clause)) messageToday = true;
-    if (!MERGE_VERB_RE.test(clause) && namesOtherDay(clause)) messageOther = true;
-    if (startAskInClause(clause) || BARE_START_CLAUSE_RE.test(clause)) startsNow = true;
-  }
-  for (const entry of clauses) {
-    const ask = buildAskInClause(entry);
-    const clause = entry.text;
-    if (!ask) continue;
-    if (negatesToday(clause)) continue;
-    const today = TODAY_RE.test(clause);
-    const other = namesOtherDay(clause);
-    if (ask.merge ? today : today && !other) return true;
-    if (other) continue;
-    if (!messageOther && (messageToday || startsNow)) return true;
-  }
-  return false;
+  const days = clauses.map((clause) => clauseDay(clause.text));
+  const startsNow = clauses.some(
+    (clause) => startAskInClause(clause.text) || BARE_START_CLAUSE_RE.test(clause.text)
+  );
+  return clauses.some((clause, index) => {
+    if (!buildAskInClause(clause)) return false;
+    const own = days[index];
+    if (own) return own === "today";
+    let nearest: "today" | "other" | null = null;
+    for (let distance = 1; distance < clauses.length && !nearest; distance++) {
+      nearest = days[index - distance] ?? days[index + distance] ?? null;
+    }
+    return nearest ? nearest === "today" : startsNow;
+  });
 }
 
 /**
