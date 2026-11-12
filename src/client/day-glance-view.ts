@@ -18,7 +18,8 @@
       String(g.weekday || "").toUpperCase(),
       g.num,
       g.done ? "✓" : "",
-      g.lift?.abbr || (!g.lift && !g.run ? "·" : ""),
+      g.extra ? "+" : "",
+      g.lift?.abbr || (!g.lift && !g.run && !g.activity ? "·" : ""),
     ]
       .map((part) => (part == null ? "" : String(part).trim()))
       .filter((part) => part !== "")
@@ -42,18 +43,24 @@
       g.today ? "is-today" : "",
       g.past ? "is-past" : "",
       g.done ? "is-done" : "",
+      g.missed ? "is-missed" : "",
       g.rest ? "is-rest" : "",
     ]
       .filter(Boolean)
       .join(" ");
     const lift = g.lift ? `<span class="tstrip-lift is-${g.lift.state}">${escHtml(g.lift.abbr)}</span>` : "";
     const run = g.run ? `<span class="tstrip-run is-${g.run.state} is-${escAttr(g.run.kind)}"></span>` : "";
-    const marks = lift || run ? `${lift}${run}` : `<span class="tstrip-rest">·</span>`;
+    // A logged non-run activity (a ride, a paddle) is a small filled diamond.
+    const act = g.activity ? `<span class="tstrip-act"></span>` : "";
+    const marks = lift || run || act ? `${lift}${run}${act}` : `<span class="tstrip-rest">·</span>`;
+    // The tick: the plan is in. The ring with a plus: work beyond the plan, in the same place
+    // (beside the tick when both). Shape and colour together, never colour alone.
     const tick = g.done ? `<span class="tstrip-tick">✓</span>` : "";
+    const plus = g.extra ? `<span class="tstrip-extra${g.done ? " is-beside" : ""}">+</span>` : "";
     const controls = opts.controls ? ` aria-controls="${escAttr(opts.controls)}"` : "";
     return `<li class="tstrip-cell"><button type="button" class="${cls}" data-tstrip-day="${escAttr(g.date)}" aria-expanded="${open ? "true" : "false"}"${controls} aria-label="${escAttr(stripName(g))}"${g.today ? ` aria-current="date"` : ""}>
       <span class="tstrip-dow" aria-hidden="true">${escHtml(g.weekday)}</span>
-      <span class="tstrip-num" aria-hidden="true">${escHtml(g.num)}${tick}</span>
+      <span class="tstrip-num" aria-hidden="true">${escHtml(g.num)}${tick}${plus}</span>
       <span class="tstrip-marks" aria-hidden="true">${marks}</span>
     </button></li>`;
   }
@@ -92,14 +99,18 @@
     const run = g.run
       ? `<span class="pahead-item is-endurance"><span class="pahead-run-t">${escHtml(g.run.words)}${g.run.state === "done" ? `<span class="pahead-tick" aria-label="done">✓</span>` : ""}</span></span>`
       : "";
-    const rest = !lift && !run;
-    const body = rest ? `<span class="pahead-rest">Rest</span>` : `<span class="pahead-what">${lift}${run}</span>`;
+    const act = g.activity
+      ? `<span class="pahead-item is-endurance"><span class="pahead-run-t">${escHtml(g.activity.label)}</span></span>`
+      : "";
+    const rest = !lift && !run && !act;
+    const body = rest ? `<span class="pahead-rest">Rest</span>` : `<span class="pahead-what">${lift}${run}${act}</span>`;
+    const extra = g.extra ? `<span class="pahead-extra">Extra work logged</span>` : "";
     const hard = opts.hard && !rest ? `<span class="pahead-hard">A harder day</span>` : "";
     const note = opts.note ? `<span class="pahead-note">${escHtml(opts.note)}</span>` : "";
-    const cls = `pahead-day${g.today ? " is-today" : ""}${g.past ? " is-past" : ""}${g.done ? " is-done" : ""}${rest ? " is-rest" : ""}${opts.hard ? " is-hard" : ""}`;
+    const cls = `pahead-day${g.today ? " is-today" : ""}${g.past ? " is-past" : ""}${g.done ? " is-done" : ""}${g.missed ? " is-missed" : ""}${rest ? " is-rest" : ""}${opts.hard ? " is-hard" : ""}`;
     return `<li class="${cls}" data-open-day="${escAttr(g.date)}" role="link" tabindex="0"${g.today ? ` aria-current="date"` : ""}>
       <span class="pahead-when">${escHtml(g.weekday.toUpperCase())}<b>${escHtml(g.num)}</b>${g.today ? `<span class="sr-only">, today</span>` : ""}</span>
-      <span class="pahead-main">${body}${hard}${note}</span>
+      <span class="pahead-main">${body}${extra}${hard}${note}</span>
       <span class="pahead-go" aria-hidden="true">›</span>
     </li>`;
   }

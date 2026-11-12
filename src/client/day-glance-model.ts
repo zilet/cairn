@@ -29,6 +29,13 @@
     units: unknown;
     /** Today adapted to another plan day ("Lower B"). */
     swappedFrom?: string;
+    /** The server's verdict on what the day achieved (plan-week-outcome.ts); absent on an older cached week. */
+    outcome?: {
+      plan_done: boolean;
+      extra: boolean;
+      missed: boolean;
+      activity: ClientDayGlance["activity"];
+    };
   };
 
   const GLANCE_DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -107,10 +114,23 @@
       };
     }
     const rest = !lift && !run;
-    const done = !rest && (!lift || lift.state === "done") && (!run || run.state === "done");
+    // The server decides what the day achieved; a week cached before it did reads as it always did.
+    const o = input.outcome;
+    const done = o ? o.plan_done : !rest && (!lift || lift.state === "done") && (!run || run.state === "done");
+    const extra = !!o?.extra;
+    const missed = !!o?.missed;
+    const activity = o?.activity ?? null;
     const parts: string[] = [];
     if (lift) parts.push(`${lift.name}, ${MARK_WORD[lift.state]}`);
     if (run) parts.push(`${run.words}, ${MARK_WORD[run.state]}`);
+    if (activity) parts.push(`${activity.label}, logged`);
+    const said: string[] = [];
+    if (done) said.push("plan done");
+    if (missed) {
+      const partial = lift?.state === "done" || run?.state === "done";
+      said.push(partial ? "part of the plan was not done" : "the planned session was not done");
+    }
+    if (extra) said.push("extra work logged");
     const num = String(Number(date.slice(8, 10)));
     return {
       date,
@@ -123,8 +143,11 @@
       run,
       rest,
       done,
+      extra,
+      missed,
+      activity,
       swappedFrom: input.isToday ? text(input.swappedFrom) : "",
-      aria: `${GLANCE_DOW_NAME[dow] || ""} ${num}${input.isToday ? ", today" : ""}: ${parts.length ? parts.join("; ") : "rest"}`,
+      aria: `${GLANCE_DOW_NAME[dow] || ""} ${num}${input.isToday ? ", today" : ""}: ${[parts.join("; "), said.join("; ")].filter(Boolean).join(". ") || "rest"}`,
     };
   }
 
@@ -165,6 +188,15 @@
           : null,
       units,
       swappedFrom: isToday ? text(day.plan_day?.swapped_from?.name) : "",
+      outcome:
+        typeof day.plan_done === "boolean"
+          ? {
+              plan_done: day.plan_done,
+              extra: day.extra === true,
+              missed: day.missed === true,
+              activity: day.activity?.label ? { family: String(day.activity.family || ""), label: text(day.activity.label) } : null,
+            }
+          : undefined,
     });
   }
 

@@ -310,6 +310,9 @@ button.prow-name:hover{color:var(--accent)}
 .pahead-caveat{font-size:var(--text-xs);color:var(--ink-2);line-height:var(--leading-normal)}
 .pahead-lifts{font-size:var(--text-sm);color:var(--muted);line-height:var(--leading-normal);overflow-wrap:anywhere}
 .pahead-tick{margin-left:var(--space-3);font-size:var(--text-xs);font-weight:var(--weight-regular);color:var(--ink-2)}
+.pahead-extra{font-size:var(--text-xs);color:var(--sage-text);line-height:var(--leading-snug);padding-left:calc(8px + var(--space-4))}
+.pahead-day.is-missed .pahead-item::before{opacity:.4}
+.pahead-day.is-missed .pahead-lift-t,.pahead-day.is-missed .pahead-run-t{color:var(--muted)}
 .pahead-rest{font-family:var(--font-display);font-size:var(--text-lead);color:var(--muted);padding-top:1px}
 .pahead-hard{font-size:var(--text-xs);color:var(--muted);line-height:var(--leading-snug);padding-left:calc(8px + var(--space-4))}
 .pahead-go{align-self:center;color:var(--faint);font-size:var(--text-lead);line-height:var(--leading-none);padding-left:var(--space-2)}

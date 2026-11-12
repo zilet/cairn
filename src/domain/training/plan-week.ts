@@ -47,6 +47,8 @@ import { datedPlanDayFocus, legTrimFocus, legTrimNote, legTrimClause, withLegTri
 import { pickDayVariant } from "../../repo/brain/day-read-rules.js";
 import { raceEffortRunLabel } from "../../repo/race-recovery.js";
 import { planDayLegTrimOn } from "../../repo/plan-day-trim.js";
+import { recentEnduranceImpacts, type EnduranceImpact } from "../../repo/hybrid-load.js";
+import { dayActivity, dayOutcome, NO_OUTCOME, type PlanWeekOutcome } from "./plan-week-outcome.js";
 
 export type PlanWeekStatus = "done" | "today" | "upcoming" | "rest" | "open";
 
@@ -133,6 +135,16 @@ export interface PlanWeekDay {
   hard: boolean;
   /** Inside a trip (a context event): where he is that date. Absent date (template mode) is null. */
   travel: { title: string; location: string | null } | null;
+  /**
+   * What the day achieved, decided here (plan-week-outcome.ts): `plan_done` (the tick),
+   * `extra` (work logged beyond the plan), `missed` (a past day's plan not all done — a
+   * neutral fade, never a verdict) and `activity` (a logged non-run activity). Template
+   * mode has no dates, so all false / null there.
+   */
+  plan_done: boolean;
+  extra: boolean;
+  missed: boolean;
+  activity: PlanWeekOutcome["activity"];
   /**
    * TODAY's cell only: the day read's suggestion, carried from the one strength line
    * so the strip and the Brief say the same thing about one day ("Pull · lighter
@@ -520,6 +532,15 @@ export function planWeek(date?: string): PlanWeek {
   // for still happened, and belongs on that day's cell.
   const through = asOf < weekEnd ? asOf : weekEnd;
   const runLog = weekRunLog(weekStart, through);
+  // Runs that closed no intention (the agenda's own extras) and the week's non-run
+  // activities: the "work beyond the plan" evidence the cells' `extra`/`activity` read.
+  const extraRunDates = new Set((agenda?.available ? agenda.extras : []).map((e) => String(e.date)));
+  let impacts: EnduranceImpact[] = [];
+  try {
+    impacts = recentEnduranceImpacts(7, asOf).filter((i) => i.date >= weekStart && i.date <= weekEnd);
+  } catch {
+    impacts = [];
+  }
 
   // A running-only athlete (no strength template at all) still has a week: the stated
   // run days, the agenda's runs and the log sit on the calendar, and every other day is
@@ -595,10 +616,25 @@ export function planWeek(date?: string): PlanWeek {
       // including a stated run weekday the week's run did not land on ("Saturday or
       // Sunday" long run placed on Sunday).
       const restDay = !plan_day && !session && !run && !map.has(dow);
+      const planned =
+        run && run.kind !== "logged" && !run.rested && (run.completion_date === cellDate || run.suggested_date === cellDate)
+          ? run
+          : null;
+      const outcome = dayOutcome({
+        date: cellDate,
+        asOf,
+        liftPlanned: plan_day?.role === "strength",
+        liftDone: !!session && (session.finished || session.date !== asOf),
+        hasSession: !!session,
+        plannedRun: planned ? { completed: planned.status === "completed" } : null,
+        extraRun: extraRunDates.has(cellDate) || run?.kind === "logged",
+        activity: dayActivity(impacts, cellDate),
+      });
       days.push({
         date: cellDate,
         weekday: shortWeekday(dow),
         dow,
+        ...outcome,
         status: covered
           ? "open"
           : statusForCell({ date: cellDate, asOf, planDay: plan_day, session, run, todayDayNumber, restDay }),
@@ -641,6 +677,7 @@ export function planWeek(date?: string): PlanWeek {
         run,
         hard: isHard(plan_day, run),
         travel: null,
+        ...NO_OUTCOME,
       });
     }
     // A session the plan cannot place (nothing it lifted is on any plan day), or a second
@@ -660,6 +697,7 @@ export function planWeek(date?: string): PlanWeek {
         run: null,
         hard: false,
         travel: null,
+        ...NO_OUTCOME,
       });
     }
   }
