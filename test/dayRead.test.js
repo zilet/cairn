@@ -922,7 +922,9 @@ test("one fresh short night on a short rolling average reads easy, never rests",
     r.decision.evidence.some((item) => item.date === REF),
     true
   );
-  saysOneOf(r.why, "acute_sleep_corroborated");
+  // Second review, item 4: one short night on a short rolling average is spoken by the
+  // trend set — the night before need not have been short, so no "back to back".
+  saysOneOf(r.why, "acute_sleep_corroborated:trend");
 });
 
 test("two short nights in a row read easy under the sleep code, never rest", () => {
@@ -957,9 +959,9 @@ test("a short night on an injury day still names the work-around", () => {
   // A short night on a short rolling average reads easy (2026-11-12 — morning-dose.ts, D).
   assert.equal(r.kind, "easy");
   assert.equal(r.decision.rule_code, "acute_sleep_corroborated");
-  // The sleep rule still leads with its own words...
+  // The sleep rule still leads with its own words (the trend set — item 4)...
   assert.ok(
-    DAY_READ_WHY_VARIANTS.acute_sleep_corroborated.some((v) => r.why.startsWith(v)),
+    DAY_READ_WHY_VARIANTS["acute_sleep_corroborated:trend"].some((v) => r.why.startsWith(v)),
     `the sleep read should still lead, got ${JSON.stringify(r.why)}`
   );
   // ...and the injury is still named, in both registers.
@@ -3816,7 +3818,16 @@ test("an acute short night keeps the session and says what it takes off it", () 
   assert.equal(r.decision.rule_code, "short_night_dosed", "kept, at a held dose");
   assert.equal(r.signals.morning_dose.applied, true);
   assert.equal(r.signals.push_bias, undefined, "no reach on a dosed day");
-  assert.doesNotMatch(r.why, /\brest\b|\bskip\b|\bshorter\b/i, "it downgrades exposure; it never cancels");
+  // …and it SAYS what it takes off (second review, item 11): the loads held (the dose's
+  // own lead) and the risky edges a short night costs (the exposure caveat).
+  const lead = [...DAY_READ_LEAD_VARIANTS["morning_dose:lead"], ...DAY_READ_LEAD_VARIANTS["morning_dose:lead_held"]].find(
+    (variant) => r.why.includes(variant)
+  );
+  assert.ok(lead, `the read says the loads are held: ${r.why}`);
+  assert.match(lead, /\bload/i, lead);
+  const caveat = saysOneCaveat(r.why, "planned_training:sleep_exposure");
+  assert.match(caveat, /\bmax|\bexplosive\b|\bjump|\bplyometric/i, `what the short night takes off: ${caveat}`);
+  assert.doesNotMatch(r.why, /\brest\b|\bshorter\b/i, "it downgrades exposure; it never cancels");
 });
 
 test("a severely short night reads easy even with a session due", () => {

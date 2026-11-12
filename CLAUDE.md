@@ -407,7 +407,8 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   A low `felt_fatigue` constraint this earns closes early (within its 7-day window) the moment a later
   completed session contradicts it too (`autoregBrake`, `src/repo/progression.ts`). Readiness bands live in
   `src/repo/readiness-bands.ts` (`LOW_READINESS` 35 = subdued/easy; `REST_GRADE_READINESS` 20
-  inclusive = never rest on its own: easy, or the dose on a stated day — `src/repo/morning-dose.ts`) — never hardcode a readiness
+  inclusive = never rest on its own: easy, or the dose on a stated day, as is the low band — `src/repo/morning-dose.ts`; the score
+  alone never trims whole-session volume, `readiness_brake_only`) — never hardcode a readiness
   threshold. And `trainedWithoutHarm` is `harmEvidenceOnDay(date) == null`: a hard-cardio day, a
   new-longest run (`longestRunNovelty`), or a bad next morning (rest-grade readiness, or last
   night's HRV/RHR MEANINGFULLY past the athlete's OWN band — by the smallest worthwhile change, or on
@@ -464,11 +465,14 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   "Composition never moves the prescription".
 - **On a STATED key-run or lifting day a soft brake is the dose, never the kind** — the read stays
   `train` (`stated_key_run_dosed` / `stated_lift_dosed`); every floor (`calendarDoseFloor`) keeps the
-  quiet read, and a learned tolerance can only hand it back. **REST is reserved**: a rest-grade
-  reading is the dose on a stated day (`stated_*_morning_dosed`), easy elsewhere; one short night is
-  the dose on any day with a session due; RHR up after a hard day is easy at most on every day; the
-  rule table and every tunable are `MORNING_DOSE_POLICY` (`src/repo/morning-dose.ts`); race morning
-  reads the race (never over a floor, and no lifting card). The day-read verdict judges only the
+  quiet read, and a learned tolerance can only hand it back. **REST is reserved**: a low readiness
+  reading (either band) is the same dose on a stated day (`stated_*_morning_dosed`), easy elsewhere;
+  one short night or one low HRV night after hard endurance is the dose on any day with a session due;
+  RHR up after a hard day is easy at most on every day, and RHR rests only on vouched readings on an
+  established band; the rule table and every tunable are `MORNING_DOSE_POLICY`
+  (`src/repo/morning-dose.ts`); race morning is the race's identity by DATE (`goalRaceOn`) whatever
+  floor applies — a floor is said plainly in its own code, no lifting card. Every variant set is keyed
+  on the fact its sentences assert. The day-read verdict judges only the
   true morning read, and harm there can be `unknown` (`harmVerdictOnDay` — never clean, never a
   cost; `harmEvidenceOnDay` itself is unchanged). Details: `docs/ARCHITECTURE.md` "The calendar owns
   what the day is for" and "The measurement fixes of 2026-10-16".
@@ -601,8 +605,10 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   Movement REGIONS (`movement-region.ts`), not raw muscle group, decide which items collapse as
   duplicates and pair as antagonist supersets on today's card (`composition-pairing.ts`). Every
   source's supersets pass ONE gate, `enforceSupersetRules`: two lifts a group, one fixed station a
-  pair (`station-footprint.ts`; unknown is fixed for a pair the server proposes, never a reason to
-  split an authored one), three pairs a session. Details in
+  pair (`station-footprint.ts`; a name ambiguous between a machine and a free weight is unknown, the
+  server never proposes a pair with an unknown member, and unknown never splits an authored one),
+  three pairs a session. Lifts the athlete asked for today are never deferred or trimmed on any card,
+  and a card that deferred plan lifts never vouches for the plan's volume. Details in
   `docs/ARCHITECTURE.md` "Weekly dose ledger" and "Pairing and movement regions".
 - **A race build's taper/race week and the eve of a placed key run trim the legs through the ordinary
   `reduced`/`excluded` muscle lists, never a second gate** (`stress-budget.ts`); for a strength-led

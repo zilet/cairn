@@ -135,10 +135,18 @@ test("a plain train read with only a standing preference composes the plan's set
   const session = deterministicComposedSession(env);
   assert.deepEqual(strengthSets(session), [4, 4, 4, 4, 4], "every lift keeps the plan's authored sets");
 
-  // The same morning with a named, current reason (a low-recovery brake) still trims.
+  // The same morning with a named, current reason (a low-recovery brake) still trims —
+  // a brake on the board, not the readiness score alone (second review, item 2).
   const low = decide({
     plan_day_id: day.id,
     recovery: { has_data: true, readiness: "low", hrv_drift: "down", rhr_drift: "up", sleep_drift: "flat" },
+    signal_support: {
+      training_drive: "steady",
+      backed: false,
+      backed_by: [],
+      training_directive: "proceed",
+      fresh_brake: true,
+    },
   });
   assert.equal(low.caps.volume, "reduced");
   assert.ok(strengthSets(deterministicComposedSession(low)).every((sets) => sets <= 3));
@@ -156,6 +164,8 @@ test("each named, current reason still reduces volume, even with the log vouchin
   const cases = {
     "a fresh low-recovery brake": {
       recovery: { has_data: true, readiness: "low", hrv_drift: "down", rhr_drift: "up", sleep_drift: "flat" },
+      // …a brake on the board beside the score (second review, item 2).
+      signal_support: brake,
     },
     "soreness reported today": { checkin: { soreness: 5, energy: 3, sleep_feel: 3 } },
     "a recovery week": { day_read: { ...snapshot().day_read, recovery_week: true } },
@@ -213,16 +223,22 @@ test("every log-backs phrasing reads clean: no grammar breach, no number", () =>
 // ---------- the log ----------
 
 // A reconciled outcome row for one session, the shape daily-reconciliation writes.
-function seedOutcome(date, doses, { skipped = [], constraints = null } = {}) {
+function seedOutcome(date, doses, { skipped = [], constraints = null, provenance = null } = {}) {
   repo.upsertExercise({ name: "Dumbbell Bench Press", muscle_group: "chest", mode: "reps" });
   const session = repo.getOrCreateSession(date, null);
   const composition = db
     .prepare(
       `INSERT INTO daily_session_compositions
-        (version, session_id, date, source, status, plan_day_id, title, items_json, request_fingerprint, constraints_json)
-       VALUES (1, ?, ?, 'athlete_override', 'active', NULL, 'Fixture', '[]', ?, ?)`
+        (version, session_id, date, source, status, plan_day_id, title, items_json, request_fingerprint, constraints_json, provenance_json)
+       VALUES (1, ?, ?, 'athlete_override', 'active', NULL, 'Fixture', '[]', ?, ?, ?)`
     )
-    .run(session.id, date, `vt-${date}`, constraints ? JSON.stringify(constraints) : null);
+    .run(
+      session.id,
+      date,
+      `vt-${date}`,
+      constraints ? JSON.stringify(constraints) : null,
+      provenance ? JSON.stringify(provenance) : null
+    );
   const facts = {
     schema_version: 4,
     dose_context: { comparable: true, non_comparable_reasons: [] },
@@ -351,6 +367,25 @@ test("a trimmed card vouches only when the athlete logged the plan's AUTHORED se
   assert.equal(sessionCarriedPlannedVolume(plain), true);
 });
 
+test("item 9: a card that deferred any plan-day lift never vouches, however the lifts left on it went", () => {
+  // The day's budget deferred the curl; every lift left on the card landed its authored sets.
+  const provenance = {
+    daily_decision: { caps: { volume: "normal", intensity: "hold" }, train_anyway: false },
+    plan_day_deferred: ["Dumbbell Curl"],
+  };
+  const carriedButDeferred = seedOutcome(localDaysAgo(2), [dose("Dumbbell Bench Press", { planned: 4, authored: 4 })], {
+    provenance,
+  });
+  assert.equal(sessionCarriedPlannedVolume(carriedButDeferred), false, "the athlete did not carry the plan");
+  // The same log with nothing deferred still vouches. (The composer's own record of the
+  // deferral is pinned in test/planDayCompositionKeepsWork.test.js.)
+  resetTables("daily_session_outcomes", "daily_session_compositions", "sessions");
+  const carried = seedOutcome(localDaysAgo(2), [dose("Dumbbell Bench Press", { planned: 4, authored: 4 })], {
+    provenance: { daily_decision: provenance.daily_decision },
+  });
+  assert.equal(sessionCarriedPlannedVolume(carried), true);
+});
+
 // ---------- the bounds ----------
 
 test("the bounds live in one place: about 1.2x the habitual per-lift count, about 20 weekly sets a group", () => {
@@ -380,7 +415,9 @@ function logSets(name, date, sets) {
   });
 }
 
-function seedCurlWeek(otherBicepsSets) {
+// `habit`: the working-set count of four earlier weeks of curls (the habitual baseline the
+// 1.2x bound reads), or null for no history before the recent exposures at all.
+function seedCurlWeek(otherBicepsSets, { habit = 3 } = {}) {
   for (const [name, group] of [
     ["Dumbbell Curl", "biceps"],
     ["Hammer Curl", "biceps"],
@@ -405,6 +442,17 @@ function seedCurlWeek(otherBicepsSets) {
     }))
   );
   db.prepare(`UPDATE plan_items SET prescribed_at = NULL`).run();
+  // Second review, item 10: with no habitual history the catch-up never raises above the
+  // plan, so a fixture that expects a step carries a habit the step is measured against.
+  // Spread over different weekdays, so the history never reads as an observed lifting
+  // week of its own (that would change the weekly group count the 20-set bound reads).
+  if (habit != null)
+    for (const back of [40, 32, 24, 16])
+      logSets(
+        "Dumbbell Curl",
+        localDaysAgo(back),
+        Array.from({ length: habit }, () => [40, 11])
+      );
   for (const back of [9, 5])
     logSets("Dumbbell Curl", localDaysAgo(back), [
       [40, 11],
@@ -427,24 +475,20 @@ test("the set catch-up stops at about 20 weekly sets for the group", () => {
 test("the 1.2x per-lift bound reads the athlete's habit from the weeks BEFORE the exposures it answers", () => {
   // Weeks of two-set curls, then two recent exposures of three: 1.2 x 2 is 2, so the
   // plan does not step to three on the strength of the very exposures it would follow.
-  seedCurlWeek(6);
-  for (const back of [40, 33, 26, 19])
-    logSets("Dumbbell Curl", localDaysAgo(back), [
-      [40, 11],
-      [40, 11],
-    ]);
+  seedCurlWeek(6, { habit: 2 });
   assert.equal(curlStep(), undefined, "a habit of two sets bounds the catch-up at two");
 
   // A habit of three sets in those weeks: 1.2 x 3 is 3, so the step to three is in bounds.
   resetTables("logged_sets", "sessions", "plan_items", "plan_days", "exercises");
-  seedCurlWeek(6);
-  for (const back of [40, 33, 26, 19])
-    logSets("Dumbbell Curl", localDaysAgo(back), [
-      [40, 11],
-      [40, 11],
-      [40, 11],
-    ]);
+  seedCurlWeek(6, { habit: 3 });
   assert.deepEqual(curlStep(), { from: 2, to: 3 });
+});
+
+test("item 10: with no habitual history the catch-up never raises above what the plan prescribes", () => {
+  // Only the two recent three-set exposures, nothing before them: no baseline to step
+  // against, so the plan's two sets stand (the ceiling is the planned count, never the cap).
+  seedCurlWeek(6, { habit: null });
+  assert.equal(curlStep(), undefined, "no habit, no step");
 });
 
 test("an affirmed cut never adds sets beyond the plan", () => {

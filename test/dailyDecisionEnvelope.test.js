@@ -815,10 +815,13 @@ test("supportive recovery_capacity never lets a raw low readiness clamp the day"
 });
 
 test("constrained recovery_capacity reads as low readiness even if the wearable number is moderate", () => {
+  // The constraint is a deciding brake on the board (second review, item 2: a low read
+  // trims whole-session volume only beside a corroborating deciding brake).
   const env = buildDailySessionDecision(
     snapshot({
       recovery: { has_data: true, readiness: "moderate", hrv_drift: "flat", rhr_drift: "flat", sleep_drift: "flat" },
       recovery_capacity: { status: "constrained", confidence: "high" },
+      signal_support: pushSupport({ training_drive: "steady", backed: false, backed_by: [], fresh_brake: true }),
     }),
     { now: NOW }
   );

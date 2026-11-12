@@ -60,7 +60,9 @@ const FOUR_STATION_PAIRS = {
     { exercise: "Machine Chest Press", sets: 3, rep_low: 8, rep_high: 10, target_weight: 90, superset_group: 3 },
     { exercise: "Assisted Pull-Up", sets: 3, rep_low: 6, rep_high: 8, target_weight: -40, superset_group: 3 },
     { exercise: "Leg Extension", sets: 3, rep_low: 10, rep_high: 12, target_weight: 100, superset_group: 4 },
-    { exercise: "Lying Leg Curl", sets: 3, rep_low: 10, rep_high: 12, target_weight: 80, superset_group: 4 },
+    // (A bare "Lying Leg Curl" is unknown since the second review, item 6, and an unknown
+    // never splits an authored pair — so the two-station fixture names the machine.)
+    { exercise: "Machine Leg Curl", sets: 3, rep_low: 10, rep_high: 12, target_weight: 80, superset_group: 4 },
     { exercise: "Dumbbell Row", sets: 3, rep_low: 8, rep_high: 10, target_weight: 60, superset_group: 5 },
     { exercise: "Push-Up", sets: 3, rep_low: 10, rep_high: 15, superset_group: 5 },
     { exercise: "Cable Fly", sets: 3, rep_low: 10, rep_high: 12, target_weight: 20, superset_group: 6 },
@@ -170,7 +172,7 @@ test("a chat session of two-station pairs comes back with the pairs a gym can ru
     "Machine Chest Press",
     "Assisted Pull-Up",
     "Leg Extension",
-    "Lying Leg Curl",
+    "Machine Leg Curl",
     "Dumbbell Curl",
     "Rope Pushdown",
     "Dumbbell Lateral Raise",
@@ -184,7 +186,7 @@ test("a chat session of two-station pairs comes back with the pairs a gym can ru
     { exercises: ["Barbell Bench Press", "Lat Pulldown"], reason: "two_stations" },
     { exercises: ["Machine Shoulder Press", "Seated Cable Row"], reason: "two_stations" },
     { exercises: ["Machine Chest Press", "Assisted Pull-Up"], reason: "two_stations" },
-    { exercises: ["Leg Extension", "Lying Leg Curl"], reason: "two_stations" },
+    { exercises: ["Leg Extension", "Machine Leg Curl"], reason: "two_stations" },
     { exercises: ["Dumbbell Lateral Raise"], reason: "group_over_two" },
     // Four doable pairs remain; the one the effect-tier order ranks last runs straight.
     { exercises: ["Dumbbell Curl", "Rope Pushdown"], reason: "pair_limit" },

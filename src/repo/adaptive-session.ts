@@ -898,6 +898,9 @@ function adaptiveSnapshotFromDecision(envelope: DailyDecisionEnvelope) {
     fail(DAILY_SESSION_NO_TEMPLATE, "no weekly template day is available for this date");
   }
   return {
+    // The plan-day lifts the day's budget deferred off this card, for the provenance below
+    // (daily-composition.ts ComposedSession.deferred; second review, item 9).
+    deferred: Array.isArray(session.deferred) ? session.deferred : [],
     // A true rest decision intentionally severs the weekly-template link: the
     // accepted prescription is the deterministic recovery composition, not a
     // relabeled full lifting day. Train-anyway returns kind=train and keeps it.
@@ -950,6 +953,9 @@ export function buildAdaptiveDailySessionCandidate(
   const provenanceJson = normalizeOptionalJson({
     ...bound.provenance,
     daily_decision: dailyDecisionContext(decision.envelope),
+    // Omit-when-empty: a card that left plan lifts behind never vouches for the plan's
+    // volume (session-dose-log.ts sessionCarriedPlannedVolume).
+    ...(prepared.deferred.length ? { plan_day_deferred: prepared.deferred } : {}),
   });
   const requestFingerprintValue = requestFingerprint({
     date,

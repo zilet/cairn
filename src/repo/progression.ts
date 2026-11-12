@@ -3527,7 +3527,10 @@ function setCatchUp(
   } catch {
     habitual = null;
   }
-  const ceiling = habitual == null ? SET_STEP_CAP : perLiftSetCeiling(habitual);
+  // No habitual history: no baseline to measure a step against, so the catch-up never
+  // raises above what the plan already prescribes (second review, item 10 — the ceiling
+  // had become SET_STEP_CAP, an uncapped step for exactly the athlete it knows least).
+  const ceiling = habitual == null ? planned : perLiftSetCeiling(habitual);
   const to = Math.min(planned + 1, SET_STEP_CAP, ceiling, ...counts);
   if (to <= planned) return p;
   const group = ctx.readDay ? storedGroupOf(p.exercise) : null;

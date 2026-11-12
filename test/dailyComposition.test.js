@@ -13,6 +13,7 @@ import { KEY_RUN_EVE_ITEM_NOTES, RACE_TAPER_ITEM_NOTES } from "../dist/repo/stre
 import { REACH_NO_ROOM_WHY } from "../dist/repo/daily-decision.js";
 import { addDaysISO, localDateISO } from "../dist/repo/shared.js";
 import { db, repo, resetTables } from "./_seed.js";
+import { cardWorkMinutes } from "../dist/repo/composition-dose.js";
 
 const DATE = "2031-07-01";
 const DESCRIPTIVE_TEMPO_NOTE =
@@ -193,7 +194,10 @@ test("caps clamp item count and duration", () => {
   assert.ok(session.items.length <= 4);
   assert.ok(session.items.every((item) => item.sets <= 2), "minimal volume changes per-item sets");
   assert.ok(session.items.every((item) => item.target_weight === 40), "easy intensity changes known loads");
-  assert.equal(session.est_minutes, 30);
+  // The clock is the work left on the card, under the 30-minute cap — never the agent's
+  // 90, never the cap echoed back (second review, item 12).
+  assert.equal(session.est_minutes, Math.round(cardWorkMinutes(session.items)));
+  assert.ok(session.est_minutes <= 30);
   assert.equal(validation.capped, true);
 });
 

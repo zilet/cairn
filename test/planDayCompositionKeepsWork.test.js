@@ -17,7 +17,7 @@ import { buildDailySessionDecision, gatherDailyDecisionSnapshot } from "../dist/
 import { activePlanAdaptations, sameDayAthleteRequest } from "../dist/repo/plan-adaptations.js";
 import { datedPlanDayFocus, focusWithoutAbsentMovements } from "../dist/repo/plan-day-focus.js";
 import { localDateISO } from "../dist/repo/shared.js";
-import { repo, resetTables, savePlanDaySettled } from "./_seed.js";
+import { db, repo, resetTables, savePlanDaySettled } from "./_seed.js";
 
 const DATE = "2031-07-01";
 const DAY = 4;
@@ -70,6 +70,9 @@ beforeEach(() => {
 
 function seedDay({ focus = STALE_FOCUS } = {}) {
   for (const [name, group, mode] of EXERCISES) repo.upsertExercise({ name, muscle_group: group, mode });
+  // The server never pairs a lift whose implement nobody named (second review, item 6):
+  // the fixture's row names the implement a real library's row would.
+  db.prepare(`UPDATE exercises SET equipment = 'dumbbell' WHERE name = 'Chest-Supported Row'`).run();
   savePlanDaySettled(DAY, DAY_NAME, focus, ITEMS);
   // Last week's plank went 68 s: the hold anchors a timed target on the log.
   repo.logSetByName({ date: "2031-06-24", exercise: "Front Plank", duration_sec: 68, day_number: null });
@@ -140,6 +143,9 @@ test("a reduced train-anyway day keeps its compounds at two sets and defers only
     DAY_BUDGET_DEFERRED_NOTES.some((render) => String(session.why).includes(render("Front Plank"))),
     `the card says what was deferred: ${session.why}`
   );
+  // …and records it on the session, which prepare persists as the composition's
+  // `plan_day_deferred` provenance (second review, item 9: such a card never vouches).
+  assert.deepEqual(session.deferred, ["Front Plank"]);
 
   // The same composition, with its validation: every reduction is on the record.
   const raw = {
@@ -267,16 +273,61 @@ test("the session the athlete asked for today keeps its authored sets and the 70
   assert.equal(groupOf("Dumbbell Biceps Curl"), groupOf("Triceps Rope Pushdown"));
 });
 
-test("without the request the 68 s log still holds the plank, and est_minutes stays the clamp", () => {
+test("without the request the 68 s log still holds the plank, and est_minutes is the work on the card", () => {
   seedDay();
   // The plank stays on a day whose budget fits it (reduced days defer it, above).
   const open = { ...trainAnywayEnvelope(), caps: { volume: "normal", intensity: "hold", duration_min: 40 } };
   assert.equal(deterministicComposedSession(open).items.find((item) => item.exercise === "Front Plank").target_seconds, 68);
   const session = deterministicComposedSession(trainAnywayEnvelope());
-  assert.equal(session.est_minutes, 40, "twelve trimmed sets fit inside the clock");
+  // Second review, item 12: twelve trimmed sets are thirty minutes of work, inside the
+  // 40-minute clock — the card says the thirty, never the clock echoed back.
+  assert.equal(session.est_minutes, Math.round(12 * 2.5), "twelve trimmed sets, at the composition's per-set clock");
+  assert.ok(session.est_minutes <= 40);
 });
 
-test("an agent-authored session keeps the plain clamp, request or not", () => {
+// Second review, item 5: lifts the athlete explicitly asked for today are never deferred
+// or trimmed on ANY card composed for that date — train-anyway or not.
+test("a reduced card that is NOT train-anyway keeps every lift the athlete asked for today, at its authored sets", () => {
+  seedDay();
+  const asked = ["Face Pull", "Dumbbell Biceps Curl", "Triceps Rope Pushdown"];
+  const base = trainAnywayEnvelope({
+    train_anyway: false,
+    same_day_request: { day_number: DAY, exercises: asked.map((name) => name.toLowerCase()).sort(), decision_ids: [1] },
+  });
+  const envelope = { ...base, baseline_kind: "train", precedence: [], rationale: [] };
+  const raw = deterministicSessionRawFromEnvelope(envelope);
+  const { session, validation } = normalizeComposedSession(raw, envelope, { planSourced: true });
+  assert.ok(session, JSON.stringify(validation));
+  for (const name of asked) {
+    const card = session.items.find((item) => item.exercise === name);
+    assert.ok(card, `${name}, asked for today, is on the card: ${JSON.stringify(validation.rejected)}`);
+    assert.equal(card.sets, ITEMS.find((item) => item.exercise === name).sets, `${name} keeps its authored sets`);
+    assert.ok(
+      !validation.rejected.some((entry) => entry.exercise === name),
+      `${name} is never deferred or trimmed: ${JSON.stringify(validation.rejected)}`
+    );
+  }
+});
+
+test("an agent-authored card never cuts a lift the athlete asked for today, and is otherwise clamped", () => {
+  seedDay();
+  const asked = ["Face Pull", "Dumbbell Biceps Curl", "Triceps Rope Pushdown"];
+  const agent = {
+    name: "Composed",
+    focus: "Upper",
+    why: "Fits.",
+    est_minutes: 40,
+    items: ITEMS.map((item) => ({ ...item })),
+  };
+  const request = { day_number: DAY, exercises: asked.map((name) => name.toLowerCase()).sort(), decision_ids: [1] };
+  const { session } = normalizeComposedSession(agent, trainAnywayEnvelope({ same_day_request: request }));
+  for (const name of asked) assert.ok(session.items.some((item) => item.exercise === name), `${name} stays on`);
+  const others = session.items.filter((item) => !asked.includes(item.exercise));
+  assert.ok(others.length < ITEMS.length - asked.length, "the agent's other lifts are still clamped");
+  assert.equal(session.name, "Composed");
+});
+
+test("an agent-authored session with no same-day request keeps the plain clamp", () => {
   seedDay();
   const agent = {
     name: "Composed",
@@ -285,8 +336,10 @@ test("an agent-authored session keeps the plain clamp, request or not", () => {
     est_minutes: 40,
     items: ITEMS.map((item) => ({ ...item })),
   };
-  const { session } = normalizeComposedSession(agent, trainAnywayEnvelope({ same_day_request: SAME_DAY_REQUEST }));
-  assert.ok(session.items.length <= 7, "the agent's output is never loosened by the athlete's request");
+  // Second review, item 5: a lift asked for today is never cut from ANY card, an agent's
+  // included (the test above); with no request the agent's card is clamped as ever.
+  const { session } = normalizeComposedSession(agent, trainAnywayEnvelope());
+  assert.ok(session.items.length <= 7, "the agent's output is clamped to the item cap");
   assert.ok(session.items.reduce((sum, item) => sum + item.sets, 0) <= 12);
   assert.equal(session.name, "Composed");
 });
@@ -320,9 +373,10 @@ test("a today-scoped change the athlete asked for is their same-day request; the
   assert.deepEqual(request?.exercises, ["wide-grip pulldown"], "only the lift the athlete's own request wrote");
   assert.equal(sameDayAthleteRequest(1, "2099-01-01"), null, "only the day it was scoped to");
 
-  // The decision carries it on a train-anyway request — in the fingerprint and visible.
+  // The decision carries it whenever one exists — train-anyway or not (second review,
+  // item 5) — in the fingerprint and visible.
   const plain = gatherDailyDecisionSnapshot(today);
-  assert.equal("same_day_request" in plain.request, false, "omit-when-idle without train-anyway");
+  assert.deepEqual(plain.request.same_day_request?.exercises, ["wide-grip pulldown"], "carried without train-anyway");
   const snapshot = gatherDailyDecisionSnapshot(today, { train_anyway: true });
   assert.deepEqual(snapshot.request.same_day_request?.exercises, ["wide-grip pulldown"]);
   const envelope = buildDailySessionDecision(snapshot, { now: `${today}T09:00:00.000Z` });

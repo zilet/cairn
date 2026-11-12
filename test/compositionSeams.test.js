@@ -32,7 +32,7 @@ import { readFileSync } from "node:fs";
 import { beforeEach, mock, test } from "node:test";
 import { deterministicComposedSession, normalizeComposedSession } from "../dist/repo/daily-composition.js";
 import { gatherDailyDecisionSnapshot, buildDailySessionDecision } from "../dist/repo/daily-decision.js";
-import { repo, resetTables, settlePlanPrescriptions } from "./_seed.js";
+import { db, repo, resetTables, settlePlanPrescriptions } from "./_seed.js";
 
 const DATE = "2031-07-01";
 
@@ -76,6 +76,9 @@ function seedUpperExercises() {
   repo.upsertExercise({ name: "Dumbbell Bench Press", muscle_group: "chest", mode: "reps" });
   repo.upsertExercise({ name: "Incline Dumbbell Press", muscle_group: "chest", mode: "reps" });
   repo.upsertExercise({ name: "Chest-Supported Row", muscle_group: "back", mode: "reps" });
+  // The server never pairs a lift whose implement nobody named (second review, item 6):
+  // the fixture's row names the implement a real library's row would.
+  db.prepare(`UPDATE exercises SET equipment = 'dumbbell' WHERE name = 'Chest-Supported Row'`).run();
   repo.upsertExercise({ name: "Barbell Curl", muscle_group: "biceps", mode: "reps" });
   repo.upsertExercise({ name: "Rope Pushdown", muscle_group: "triceps", mode: "reps" });
   repo.upsertExercise({ name: "Farmer's Carry", muscle_group: "forearms", mode: "timed" });

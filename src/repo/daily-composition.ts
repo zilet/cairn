@@ -60,6 +60,11 @@ export interface ComposedSession {
   why: string | null;
   est_minutes: number | null;
   items: any[];
+  // The plan-day lifts the day's set budget DEFERRED off this card (fitPlanDaySetBudget),
+  // omit-when-empty. Persisted on the composition's provenance (`plan_day_deferred`,
+  // adaptive-session.ts) so the log never reads a card that left plan lifts behind as
+  // having carried the plan (session-dose-log.ts sessionCarriedPlannedVolume).
+  deferred?: string[];
 }
 
 export interface CompositionValidation {
@@ -1428,12 +1433,13 @@ export function normalizeComposedSession(
   // after the per-item clamps below rather than spent in plan order.
   const planSourced = opts.planSnapshot === true || opts.planSourced === true;
   // …and the session they ASKED for today (daily-decision.ts `request.same_day_request`)
-  // keeps its authored sets and timed targets on the lifts the request wrote, under a
-  // train-anyway day's caps. Only on their own plan day, and only that day: an agent's
-  // composition is never loosened by it. Area safety (excluded, reduced, substituted
-  // groups) and the day's intensity hold still apply.
-  const sameDayRequest =
-    planSourced && envelope.request?.train_anyway === true ? (envelope.request.same_day_request ?? null) : null;
+  // keeps its authored sets and timed targets on the lifts the request wrote — on ANY card
+  // composed for that date, train-anyway or not, plan-sourced or an agent's (second review,
+  // item 5): a lift the athlete explicitly asked for is never deferred, dropped by the item
+  // cap or trimmed by the day's set budget. Only on the plan day the request wrote, and only
+  // that day; an agent's other lifts are clamped as ever. Area safety (excluded, reduced,
+  // substituted groups) and the day's intensity hold still apply.
+  const sameDayRequest = envelope.request?.same_day_request ?? null;
   const requestedKeys = new Set<string>(
     sameDayRequest &&
       (envelope.template.day_number == null ||
@@ -1456,14 +1462,26 @@ export function normalizeComposedSession(
         requestedSeconds.set(key, seconds);
     }
   }
-  let changed = !planSourced && kept.length > cap;
+  // An agent's card is cut to the item cap — never through a lift asked for today: those
+  // stay, and the rest fill what is left of the cap in the agent's order.
+  const requestedCount = kept.filter(isRequestedItem).length;
+  let othersLeft = Math.max(0, cap - requestedCount);
+  const admitted = planSourced
+    ? kept
+    : kept.filter((item) => {
+        if (isRequestedItem(item)) return true;
+        if (othersLeft <= 0) return false;
+        othersLeft -= 1;
+        return true;
+      });
+  let changed = admitted.length < kept.length;
   const forceEasyCardio =
     envelope.request.train_anyway === true ||
     envelope.caps.intensity === "easy" ||
     envelope.caps.intensity === "deload";
   let hasEasyCardio = false;
   const capped: any[] = [];
-  for (const item of planSourced ? kept : kept.slice(0, cap)) {
+  for (const item of admitted) {
     const next = { ...item };
     const candidate = candidates.get(String(next.exercise ?? "").toLowerCase());
     if (next.kind === "cardio") {
@@ -1516,17 +1534,19 @@ export function normalizeComposedSession(
       : requestedToday
         ? authorizedSets
         : itemSetCap;
-    // Plan-sourced: the day budget is fitted after this loop (fitPlanDaySetBudget).
-    const boundedSets = planSourced
-      ? Math.min(authorizedSets, setCapForItem)
-      : Math.min(authorizedSets, setCapForItem, remainingSets);
+    // Plan-sourced: the day budget is fitted after this loop (fitPlanDaySetBudget). A lift
+    // asked for today is never trimmed by the running budget either (it still spends it).
+    const boundedSets =
+      planSourced || requestedToday
+        ? Math.min(authorizedSets, setCapForItem)
+        : Math.min(authorizedSets, setCapForItem, remainingSets);
     if (boundedSets < 1) {
       changed = true;
       continue;
     }
     if (boundedSets !== requestedSets || boundedSets !== authorizedSets) changed = true;
     next.sets = boundedSets;
-    if (!planSourced) remainingSets -= boundedSets;
+    if (!planSourced) remainingSets = Math.max(0, remainingSets - boundedSets);
 
     let intensityFactor = 1;
     if (envelope.caps.intensity === "easy") intensityFactor = 0.8;
@@ -1652,6 +1672,7 @@ export function normalizeComposedSession(
   // every deferral is recorded, each trim said on its card and the deferrals named in one
   // line on the card. The budget still binds what follows (top sets, the dose).
   let deferredLine: string | null = null;
+  let deferredNames: string[] = [];
   if (planSourced) {
     const budget = workingSetCap(envelope);
     const requestMinutes = finite(envelope.request?.minutes);
@@ -1667,6 +1688,7 @@ export function normalizeComposedSession(
       for (const item of fit.deferred)
         rejected.push({ exercise: String(item.exercise ?? ""), reason: "day_set_budget_deferred" });
       const names = fit.deferred.map((item) => String(item.exercise ?? "")).filter(Boolean);
+      deferredNames = names;
       const listed =
         names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : (names[0] ?? "");
       deferredLine = pickDayVariant(DAY_BUDGET_DEFERRED_NOTES, envelope.date, "daily-composition:budget_deferred")(
@@ -1880,9 +1902,15 @@ export function normalizeComposedSession(
   // and on the final card (a grouping today's clamps reshaped), in that order.
   const unpaired = [...(base.unpaired ?? []), ...(paired.unpaired ?? [])];
 
-  let est = base.est_minutes;
-  // The dose's added sets cost time; the day's own duration cap below still binds.
-  if (dosed.estAddMin > 0 && est != null) est += dosed.estAddMin;
+  // The card's clock is the work actually on it (second review, item 12): every card, at
+  // the composition's per-set figure plus any cardio's stated minutes (cardWorkMinutes) —
+  // never the duration cap echoed back (a reduced card of six to twelve sets used to say
+  // 60). The dose's added sets are already on the card. A card with nothing to count (an
+  // easy-movement card with no stated minutes) keeps its own estimate.
+  const work = Math.round(cardWorkMinutes(finalItems));
+  let est = work > 0 ? work : base.est_minutes;
+  if (work <= 0 && dosed.estAddMin > 0 && est != null) est += dosed.estAddMin;
+  // …bounded by the day's own duration cap.
   if (envelope.caps.duration_min != null && (est == null || est > envelope.caps.duration_min)) {
     est = envelope.caps.duration_min;
     changed = true;
@@ -1890,10 +1918,7 @@ export function normalizeComposedSession(
   // The clamp bounds what composition may ADD; it is not the length of the athlete's own
   // day. When every authored lift stays on and their work runs longer than the clock,
   // the card says the work's own length rather than a number it cannot keep.
-  if (planSourced && est != null) {
-    const work = Math.round(cardWorkMinutes(finalItems));
-    if (work > est) est = work;
-  }
+  if (planSourced && est != null && work > est) est = work;
   // A plan day's card speaks the day's NAME and a focus that names only lifts it carries
   // (plan-day-focus.ts): the stored focus is free text no swap or rotation re-syncs.
   const composedName = planSourced && base.name ? planDayDisplayName(base.name) || base.name : base.name;
@@ -1926,6 +1951,7 @@ export function normalizeComposedSession(
       why: hasEasyCardio ? safeEasySessionText(composedWhy, fallbackWhy) : composedWhy,
       est_minutes: est,
       items: finalItems,
+      ...(deferredNames.length ? { deferred: deferredNames } : {}),
     },
     validation: {
       ok: true,

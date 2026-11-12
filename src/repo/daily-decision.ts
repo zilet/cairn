@@ -3,7 +3,7 @@ import { truncateAtWord } from "../brain/contract-utils.js";
 import { db } from "../db.js";
 import { getCheckinByDate, getRecoverySummary, latestSleep } from "./coach.js";
 import { cardioPlanIdentity } from "./cardio-plan-identity.js";
-import { dayPlanningSignalState, dayRead, supportiveCapacityBacksDay } from "./day-read.js";
+import { dayPlanningSignalState, dayRead, goalRaceOn, supportiveCapacityBacksDay } from "./day-read.js";
 import {
   equipmentCompatibility,
   inferExerciseEquipment,
@@ -51,7 +51,9 @@ import { sessionLogContradictsLowRating } from "./session-dose-log.js";
 import { weekWins } from "./sessions.js";
 import { addDaysISO, localDateISO } from "./shared.js";
 import { planSlotStamps, sinceClause, slotAuthorship } from "./prescription-authorship.js";
+import { MORNING_DOSE_POLICY } from "./morning-dose.js";
 import {
+  freshDecidingBrakeFields,
   hasFreshBrake,
   hasFreshDecidingBrake,
   type SignalConfidence,
@@ -491,6 +493,11 @@ export interface DailyDecisionSignalSupport {
   // intensity caution is the usual case: a finding about runs that may inform a lift
   // day but may not decide it. Omit-when-idle, like soft_brake_only.
   advisory_brake_only?: true;
+  // Every fresh DECIDING brake on the board is the composite readiness score (beside, at
+  // most, the load-arithmetic brakes a held dose already answers — morning-dose.ts
+  // `checkin_lift_tolerated_brakes`). The score is an unvalidated input: alone it never
+  // trims whole-session volume (second review, item 2). Omit-when-idle.
+  readiness_brake_only?: true;
   // A DATED push stance covers the day (src/repo/training-drive.ts). `harm_free`: no
   // harm evidence on any of the last three days (harmEvidenceOnDay) — the stance widens
   // nothing over a day the body already paid for. Omit-when-idle, so every envelope
@@ -1147,11 +1154,12 @@ export function gatherDailyDecisionSnapshot(
     undefined
   );
   // The session the athlete asked for today, on the day this snapshot actually carries
-  // (after any train-anyway fall-through). Read only for a train-anyway request — the one
-  // composition that honours it — and fail-soft: a ledger problem never costs the day.
+  // (after any train-anyway fall-through). Carried whenever one exists, train-anyway or not
+  // (second review, item 5): every composition honours it, so it belongs in the
+  // fingerprint. Fail-soft: a ledger problem never costs the day.
   const requestDayNumber = selected?.day_number ?? null;
   const sameDayRequest =
-    trainAnywayRequested && planDayType === "training" && requestDayNumber != null
+    planDayType === "training" && requestDayNumber != null
       ? safe(() => sameDayAthleteRequest(requestDayNumber, d), null)
       : null;
   // What the log says about carrying the planned sets (volume-tolerance.ts), read only on
@@ -1199,7 +1207,10 @@ export function gatherDailyDecisionSnapshot(
         : signals?.checkin_lift?.applied === true
           ? { held_dose: "checkin" as const }
           : {}),
-      ...(signals?.goal_race_day != null && read?.kind === "train" ? { race_day: true as const } : {}),
+      // The race DATE, never which read rule fired (second review, item 3): a floor on race
+      // morning (the athlete's word, pain, a clinical finding, an illness) changes what the
+      // read says, never that the day is the race — no lifting card, no substitute run.
+      ...(safe(() => goalRaceOn(d), null) != null ? { race_day: true as const } : {}),
     },
     recovery: {
       has_data: recoverySummary?.has_data === true,
@@ -1559,6 +1570,14 @@ function compactSignalSupport(
     return { recovery_capacity, posture_rest };
   }
   const advisoryOnly = fresh_brake && !safe(() => hasFreshDecidingBrake(state.dimensions), true);
+  const decidingFields = safe(() => freshDecidingBrakeFields(state.dimensions), null);
+  const readinessBrakeOnly =
+    decidingFields != null &&
+    decidingFields.includes("training_readiness") &&
+    decidingFields.every(
+      (field) =>
+        field === "training_readiness" || MORNING_DOSE_POLICY.checkin_lift_tolerated_brakes.includes(field)
+    );
   return {
     recovery_capacity,
     posture_rest,
@@ -1570,6 +1589,7 @@ function compactSignalSupport(
       fresh_brake,
       ...(fresh_brake && freshBrakesAreSoft(state) ? { soft_brake_only: true as const } : {}),
       ...(advisoryOnly ? { advisory_brake_only: true as const } : {}),
+      ...(readinessBrakeOnly ? { readiness_brake_only: true as const } : {}),
       ...(pushStance ? { push_stance: pushStance } : {}),
     },
   };
@@ -1811,7 +1831,7 @@ export const LOG_BACKS_OPEN_DAY_RATIONALE: readonly string[] = [
 // sessions carried every planned set at a held-or-rising load, so today keeps the plan's
 // sets. Says what the log showed, never a number, never a promise of more work.
 export const LOG_BACKS_FULL_SETS_DETAILS: readonly string[] = [
-  "Your recent sessions carried every planned set — nothing trimmed today",
+  "Your recent sessions carried every planned set, so that is no reason to trim today",
   "The full sets have been landing lately at a steady load, so they stay",
   "Recent sessions finished their planned sets without the weights slipping — the sets stay",
 ];
@@ -1824,10 +1844,37 @@ export const LOG_BACKS_FULL_SETS_RATIONALE: readonly string[] = [
 
 // Train-anyway on a day the athlete asked for this session today: their sets stay, the
 // load holds. A preview constraint line, so a set rather than one literal.
+// The held dose's soft preference (`held_morning_dose`), one set per fact it asserts: the
+// athlete's check-in over the readiness number; a morning dose that lightened the areas
+// yesterday loaded; one that only holds the loads (nothing loaded yesterday is due).
+export const HELD_DOSE_DETAILS: Readonly<Record<"checkin" | "morning_lighter" | "morning_held", readonly string[]>> = {
+  checkin: [
+    "Your check-in and the readiness number disagree — the session goes ahead with the loads held",
+    "You feel better than the readiness number says, so the session stays on, loads held",
+    "Your own report outweighs the readiness number today — the session goes ahead, held back",
+  ],
+  morning_lighter: [
+    "This morning's readings ask for a held dose — loads stay put, yesterday's areas go lighter",
+    "A held dose for this morning's readings: the loads hold and what yesterday worked goes lighter",
+    "Loads held for this morning's readings, with the areas yesterday loaded kept lighter",
+  ],
+  morning_held: [
+    "This morning's readings ask for a held dose — the loads stay put",
+    "A held dose for this morning's readings: the loads hold where they are",
+    "Loads held for this morning's readings; the plan's sets otherwise stand",
+  ],
+};
+
 export const SAME_DAY_REQUEST_DETAILS: readonly string[] = [
   "You asked for this session today — your sets stay as you set them; the load holds",
   "Today's session is the one you asked for: every set you set stays, at the current load",
   "Built the way you asked today — the sets are yours, the weights stay where they are",
+];
+// …on a day whose intensity is open: the sets stand, and nothing claims the load holds.
+export const SAME_DAY_REQUEST_OPEN_DETAILS: readonly string[] = [
+  "You asked for these lifts today — they stay on, with the sets you set",
+  "The lifts you asked for today keep their place and their sets",
+  "Built around what you asked for today — those lifts and their sets stand",
 ];
 
 // A lifting weekday whose morning run is already in. Names what is done and what is
@@ -2355,15 +2402,8 @@ export function buildDailySessionDecision(
         text: pickDayVariant(LOG_BACKS_OPEN_DAY_RATIONALE, snapshot.date, "daily_decision:log_backs_open_day"),
       });
     }
-    // The session they asked for today keeps the work they set; only the load holds.
-    // Visible beside the override, so the card's full set count is never a mystery.
-    if (snapshot.request.same_day_request) {
-      fire(precedence, "athlete_same_day_request");
-      soft.push({
-        code: "athlete_same_day_request",
-        detail: pickDayVariant(SAME_DAY_REQUEST_DETAILS, snapshot.date, "daily_decision:same_day_request"),
-      });
-    }
+    // (The session they asked for today is said below, once the caps are known — on any
+    // card, train-anyway or not.)
   } else if (override) {
     if (isTrainIntentOverride(override)) {
       kind = "train";
@@ -2768,12 +2808,16 @@ export function buildDailySessionDecision(
     .map((m) => m.group);
   if (heldDose) {
     fire(precedence, "held_morning_dose");
+    // Each phrasing true of its morning (second review, item 4): "yesterday's areas go
+    // lighter" only when the held dose actually lightened one.
+    const lightened = snapshot.muscle_load.some(
+      (m) => m.saturated && !weekHeldGroups.has(m.group) && m.days_ago <= 1
+    );
+    const key =
+      snapshot.day_read.held_dose === "checkin" ? "checkin" : lightened ? "morning_lighter" : "morning_held";
     soft.push({
       code: "held_morning_dose",
-      detail:
-        snapshot.day_read.held_dose === "checkin"
-          ? "Your check-in and the readiness number disagree — the session goes ahead with the loads held"
-          : "This morning's readings ask for a held dose — loads stay put, yesterday's areas go lighter",
+      detail: pickDayVariant(HELD_DOSE_DETAILS[key], snapshot.date, `daily_decision:held_morning_dose:${key}`),
     });
   }
   const baseReduced = dedupe([
@@ -2897,6 +2941,10 @@ export function buildDailySessionDecision(
       text: "Longevity leads your priorities — today's work stays a little easier rather than stacking hard on hard.",
     });
   }
+  // Is a low recovery read more than the composite score alone? Only a deciding brake of
+  // another kind corroborates it (signal_support.readiness_brake_only says the board holds
+  // nothing else); with no brake on the board at all, the raw score is alone.
+  const lowRecoveryCorroborated = decidingBrake(snapshot) && snapshot.signal_support?.readiness_brake_only !== true;
   const trainAnywayFromRest = trainAnyway && baseKind === "rest";
   const trainAnywayLiftsQuiet = trainAnyway && (baseKind === "rest" || baseKind === "easy");
   const trainAnywayKeepsReduced = trainAnywayFromRest && !capsMayOpen;
@@ -2908,8 +2956,13 @@ export function buildDailySessionDecision(
     // A fresh low-recovery brake — unless the read already answered it with a held dose
     // (`day_read.held_dose`): that dose IS the answer (intensity held, the regions
     // yesterday loaded reduced), and everything else trains at the plan's sets, exactly
-    // as the read said. One source of truth.
-    (readiness === "low" && !heldDose) ||
+    // as the read said. One source of truth. And the composite readiness score is an
+    // unvalidated input: in EITHER band it trims the whole session only beside a
+    // corroborating named reason — a deciding brake of another kind on the board (a short
+    // night, resting HR or HRV past the band, the athlete's own low word, soreness, acute
+    // load…); the others below (soreness, a recovery week) stand on their own (second
+    // review, item 2: a worse score must never buy more volume than a milder one).
+    (readiness === "low" && !heldDose && lowRecoveryCorroborated) ||
     sorenessSoftensDay || // soreness reported today, not routed
     trainAnywayKeepsReduced || // train-anyway over a rest read, caps shut
     snapshot.day_read.recovery_week || // a recovery week in force
@@ -3230,6 +3283,21 @@ export function buildDailySessionDecision(
         intensity: heldDose && kind === "train" && intensity === "normal" ? "hold" : intensity,
         duration_min: duration,
       };
+  // The session they asked for today keeps the work they set, on any card for the date
+  // (second review, item 5). Visible, so the card's full set count is never a mystery —
+  // and "the load holds" only when the day's intensity really does (item 4).
+  if (snapshot.request.same_day_request && kind !== "rest" && !raceDay) {
+    fire(precedence, "athlete_same_day_request");
+    const held = caps.intensity !== "normal";
+    soft.push({
+      code: "athlete_same_day_request",
+      detail: pickDayVariant(
+        held ? SAME_DAY_REQUEST_DETAILS : SAME_DAY_REQUEST_OPEN_DETAILS,
+        snapshot.date,
+        held ? "daily_decision:same_day_request" : "daily_decision:same_day_request:open"
+      ),
+    });
+  }
 
   // ---- the week's dose (weekly-dose-ledger.ts) ----
   // Asked last, once the day's caps, muscle lists, candidates and reach are final, so a

@@ -414,10 +414,15 @@ function itemName(item: any): string {
 
 /**
  * Can these two lifts run as one superset without holding two fixed stations? The
- * SERVER's test for a pair it proposes: an implement nobody named counts as fixed.
+ * SERVER's test for a pair it proposes: it never proposes one with a member whose
+ * implement nobody named (second review, item 6) — an unknown lift may be a machine, a
+ * station or a free weight, and a pair the server offers must be one it knows is doable.
  */
 export function pairIsDoable(a: any, b: any): boolean {
-  return pairFitsOneStation(stationFootprint(itemName(a)), stationFootprint(itemName(b)));
+  const first = stationFootprint(itemName(a));
+  const second = stationFootprint(itemName(b));
+  if (first.implement === "unknown" || second.implement === "unknown") return false;
+  return pairFitsOneStation(first, second);
 }
 
 /**

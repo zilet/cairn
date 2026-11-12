@@ -403,6 +403,11 @@ export function sessionCarriedPlannedVolume(sessionId: number): boolean | null {
   const facts = outcomeFactsForSession(sessionId);
   if (!facts) return null;
   if (skippedExercises(facts).length > 0) return false;
+  // A card the day's budget DEFERRED plan-day lifts off never vouches (second review,
+  // item 9): the dose evidence covers only the card's own items, so the remaining lifts
+  // done at their authored sets would otherwise read as the whole plan carried. The
+  // deferral is recorded on the composition's provenance (`plan_day_deferred`).
+  if (compositionDeferredPlanLifts(sessionId)) return false;
   // "Planned" is the plan's AUTHORED set count, never the composed card's: a card the day
   // trimmed (a volume cap below normal, or a train-anyway day) prescribes fewer sets, and
   // finishing those is not carrying the plan — counting it would let the trim vouch for
@@ -431,6 +436,29 @@ function authoredSetShortfall(dose: DoseRow, trimmedCard: boolean): boolean {
   const achieved = finiteOrNull(dose?.achieved?.sets) ?? 0;
   if (authored == null || authored <= 0) return trimmedCard;
   return achieved < authored;
+}
+
+// Did this session's card leave any plan-day lift behind — the day's set budget deferring
+// it (daily-composition.ts fitPlanDaySetBudget, persisted as `plan_day_deferred` on the
+// composition's provenance by adaptive-session.ts)? Unknown reads no.
+function compositionDeferredPlanLifts(sessionId: number): boolean {
+  try {
+    const row = db
+      .prepare(
+        `SELECT c.constraints_json AS constraints_json, c.provenance_json AS provenance_json
+           FROM daily_session_outcomes o JOIN daily_session_compositions c ON c.id = o.composition_id
+          WHERE o.session_id = ? ORDER BY o.id DESC LIMIT 1`
+      )
+      .get(Number(sessionId)) as { constraints_json?: string | null; provenance_json?: string | null } | undefined;
+    for (const blob of [row?.provenance_json, row?.constraints_json]) {
+      if (!blob) continue;
+      const deferred = JSON.parse(String(blob))?.plan_day_deferred;
+      if (Array.isArray(deferred) && deferred.length > 0) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
 }
 
 // Was this session's card composed under a volume trim — a volume cap below normal, or a
