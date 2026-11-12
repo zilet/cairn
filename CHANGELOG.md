@@ -5,7 +5,7 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
-## [2.3.0] — 2026-11-12
+## [2.3.0] — 2026-11-11
 
 Housekeeping: lighter coach prompts, quieter and quicker Garmin sync, agents that fail faster and are
 retried less, and cleanup after 2.2.0.
