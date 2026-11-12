@@ -593,7 +593,10 @@ test("a stated lifting day under a subdued reading keeps the session at a held d
   repo.upsertGarminDailyMetric({ date: today, ...SUBDUED_MORNING });
   const r = repo.dayRead(today);
   assert.equal(r.kind, "train", `${r.decision.rule_code}: ${r.why}`);
-  assert.equal(r.decision.rule_code, "stated_lift_dosed");
+  // The subdued band is the same held dose as the rest-grade band (morning-dose.ts, A;
+  // second review, item 2): spoken as the morning's dose, not a soft-brake dose.
+  assert.equal(r.decision.rule_code, "stated_lift_morning_dosed");
+  assert.equal(r.signals.morning_dose?.basis, "readiness_low");
   assert.ok(r.focus, "the session that is due is named");
   assert.equal(violatesReadingGrammar(r.why), null);
   assert.equal(r.signals.push_bias, undefined, "no reach rides on a dosed day");

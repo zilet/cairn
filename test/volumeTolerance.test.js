@@ -135,10 +135,18 @@ test("a plain train read with only a standing preference composes the plan's set
   const session = deterministicComposedSession(env);
   assert.deepEqual(strengthSets(session), [4, 4, 4, 4, 4], "every lift keeps the plan's authored sets");
 
-  // The same morning with a named, current reason (a low-recovery brake) still trims.
+  // The same morning with a named, current reason (a low-recovery brake) still trims —
+  // a brake on the board, not the readiness score alone (second review, item 2).
   const low = decide({
     plan_day_id: day.id,
     recovery: { has_data: true, readiness: "low", hrv_drift: "down", rhr_drift: "up", sleep_drift: "flat" },
+    signal_support: {
+      training_drive: "steady",
+      backed: false,
+      backed_by: [],
+      training_directive: "proceed",
+      fresh_brake: true,
+    },
   });
   assert.equal(low.caps.volume, "reduced");
   assert.ok(strengthSets(deterministicComposedSession(low)).every((sets) => sets <= 3));
@@ -156,6 +164,8 @@ test("each named, current reason still reduces volume, even with the log vouchin
   const cases = {
     "a fresh low-recovery brake": {
       recovery: { has_data: true, readiness: "low", hrv_drift: "down", rhr_drift: "up", sleep_drift: "flat" },
+      // …a brake on the board beside the score (second review, item 2).
+      signal_support: brake,
     },
     "soreness reported today": { checkin: { soreness: 5, energy: 3, sleep_feel: 3 } },
     "a recovery week": { day_read: { ...snapshot().day_read, recovery_week: true } },
