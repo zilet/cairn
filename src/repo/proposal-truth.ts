@@ -510,6 +510,12 @@ function dailyOutcomeFacts(value: unknown): Record<string, unknown> {
       performance: facts.feedback?.performance ?? null,
       joint_pain: String(facts.feedback?.joint_pain ?? "").slice(0, 300) || null,
     }),
+    // Work logged BEFORE an adopted card was never done against it (daily-reconciliation.ts
+    // adoptionCut): its doses are not comparable, and a reader of this snapshot must not
+    // read their verdict as a shortfall. So the adoption and each dose it touched travel
+    // with it — only on an adopted card, so every other outcome (and every stored
+    // proposal's fingerprint over one) stays byte-identical to before.
+    ...(adoptionFacts(facts.adoption) ? { adoption: adoptionFacts(facts.adoption) } : {}),
     dose_evidence: doses.slice(0, 64).map((dose: any) => ({
       composition_item_key: String(dose?.composition_item_key ?? "").slice(0, 160),
       movement_key: String(dose?.movement_key ?? "").slice(0, 160),
@@ -517,7 +523,23 @@ function dailyOutcomeFacts(value: unknown): Record<string, unknown> {
       challenge_verdict: dose?.challenge_verdict ?? null,
       prescribed: boundedAuthoritativeJson(dose?.prescribed),
       achieved: boundedAuthoritativeJson(dose?.achieved),
+      ...(adoptedBeforeCard(dose) ? { comparable: false, adopted_after_log: true } : {}),
     })),
+  };
+}
+
+function adoptedBeforeCard(dose: any): boolean {
+  return Array.isArray(dose?.non_comparable_reasons) && dose.non_comparable_reasons.includes("adopted_after_log");
+}
+
+function adoptionFacts(value: unknown): Record<string, unknown> | null {
+  const adoption = object(value);
+  if (!adoption) return null;
+  return {
+    adopted_at: adoption.adopted_at == null ? null : String(adoption.adopted_at).slice(0, 40),
+    worked_after: adoption.worked_after === true,
+    movement_keys: boundedStrings(adoption.movement_keys),
+    exercises: boundedStrings(adoption.exercises),
   };
 }
 

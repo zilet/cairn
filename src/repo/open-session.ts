@@ -92,28 +92,42 @@ export function compositionChosen(row: any): boolean {
 }
 
 /**
+ * Who is replacing the card, for "is this the athlete's chosen card that holds work":
+ * `adaptive` — the plan's adaptive day, which re-takes its own adaptive cards (even a
+ * train-anyway one: the same adaptive request composes it again); `empty_override` — a
+ * replace that authors nothing (the "Open session" door, the client's offline-outbox
+ * retry that forces replace:true), which must yield to EVERY card the athlete chose that
+ * holds work, a train-by-choice adaptive card included (2026-11-12 review 3: it wiped one
+ * to an empty card).
+ */
+export type ChosenCardReplacer = "adaptive" | "empty_override";
+
+/**
  * The athlete's chosen card that holds work: a session they wrote (`athlete_override`),
  * a suggestion they accepted (`agent_suggest`) or a plan day they picked (`manual_plan`),
- * with at least one item. An adaptive card, even a train-anyway one, is the plan's own
- * day — the same adaptive request re-takes it — so it is never this.
+ * with at least one item — and, against an `empty_override` replace, an adaptive day
+ * they chose to train on (`training_by_choice` / train anyway) too.
  */
-export function compositionIsItemfulChoice(row: any): boolean {
+export function compositionIsItemfulChoice(row: any, replacer: ChosenCardReplacer = "adaptive"): boolean {
   const source = String(row?.source ?? "");
-  return (
-    (source === "athlete_override" || source === "agent_suggest" || source === "manual_plan") &&
-    compositionChosen(row) &&
-    itemCount(row) > 0
-  );
+  const authored = source === "athlete_override" || source === "agent_suggest" || source === "manual_plan";
+  const adaptiveChoice = replacer === "empty_override" && source === "adaptive_plan";
+  return (authored || adaptiveChoice) && compositionChosen(row) && itemCount(row) > 0;
 }
 
 /**
  * THE one predicate behind "never silently replace a chosen card": an unstarted session
- * the athlete chose that holds work (compositionIsItemfulChoice, and nobody has lived on
- * it — session-started.ts). `session` is the composition's session row, read with
- * SESSION_STARTED_COUNTS. A lived-on card is the ordinary lock's (daily_session_locked).
+ * the athlete chose that holds work (compositionIsItemfulChoice for that replacer, and
+ * nobody has lived on it — session-started.ts). `session` is the composition's session
+ * row, read with SESSION_STARTED_COUNTS. A lived-on card is the ordinary lock's
+ * (daily_session_locked).
  */
-export function unstartedChosenCard(row: any, session: any | null): boolean {
-  return !!row && compositionIsItemfulChoice(row) && !(session && sessionStarted(session));
+export function unstartedChosenCard(
+  row: any,
+  session: any | null,
+  replacer: ChosenCardReplacer = "adaptive"
+): boolean {
+  return !!row && compositionIsItemfulChoice(row, replacer) && !(session && sessionStarted(session));
 }
 
 // The name a person reads — the line's own naming rule: a typed title prints as typed,

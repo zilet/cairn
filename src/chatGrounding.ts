@@ -36,10 +36,12 @@ import {
   GOAL_NOT_SAVED_VARIANTS,
   PLAN_LIFTING_UNCHANGED_RUN_SAVED_VARIANTS,
   PLAN_NO_CHANGE_APPENDED_VARIANTS,
+  SESSION_FINISHED_VARIANTS,
   STRENGTH_OBJECTIVE_NONE_SAVED_VARIANTS,
   STRENGTH_OBJECTIVE_NOT_SAVED_VARIANTS,
   TODAY_SESSION_NOT_SET_VARIANTS,
 } from "./chat-reconcile.js";
+import { namesOtherDay, namesOtherPerson, negatesToday } from "./chatRouting.js";
 import { datedWeek, type DatedWeek, type DatedWeekDay } from "./domain/training/dated-week.js";
 import { addDaysISO, mondayOf } from "./lib/dates.js";
 import { pickDayVariant } from "./repo/brain/day-read-rules.js";
@@ -269,6 +271,27 @@ const SESSION_OPEN_ING = String.raw`opening|loading|queuing|preparing|pulling\s+
 const SESSION_OPEN_CLAIM = verbForms(SESSION_OPEN_PAST, SESSION_OPEN_ING);
 const SESSION_READY =
   /\b(?:sessions?|workouts?|training\s+day)\b[^.!?\n]{0,40}?\b(?:is|['’]s|are)\s+(?:now\s+|all\s+)?(?:ready|set(?:\s+up)?|live|loaded|open|waiting(?:\s+(?:for\s+you|on\s+today))?|on\s+today|good\s+to\s+go|here)\b/i;
+// "Today's session now has curls at the end", "…now includes a finisher", "…has lost
+// the squats", "…is now shorter": its CONTENT asserted as changed — an act, true only
+// over a landed, new today_session (opening the day changes nothing in it).
+const SESSION_CONTENT_CHANGED =
+  /\b(?:sessions?|workouts?|training\s+day)\b[^.!?\n]{0,40}?(?:\bnow\s+(?:has|have|includes?|contains?|features?|ends?|starts?|finishes?|opens?|gets?|carries|holds?)\b|\b(?:has|have|['’]s)\s+(?:now\s+)?(?:gained|lost|picked\s+up|dropped|added|got)\b|\b(?:gained|lost)\b|\b(?:is|are|['’]s)\s+now\s+(?!(?:ready|set|live|loaded|open|waiting|on\s+today|good\s+to\s+go|here)\b)(?:a|an|the|shorter|longer|lighter|heavier|easier|harder|\w+er)\b)/i;
+
+// Whether a session sentence is about TODAY's session of the ATHLETE (the only one the
+// session classes judge). Read clause by clause around the session noun: a clause that
+// names another day ("Tomorrow's session is all set", "your Thursday workout") is about
+// the plan, and one that names another person ("Your wife's session is ready") is about
+// someone else — neither is a today-session claim. Quoted text (a label, a button) is
+// not the coach's claim at all.
+type SessionScope = "today" | "other_day" | "other_person";
+const SCOPE_CLAUSE_BREAK = /[,;:]|\s[-–—]\s|[–—]|\s+(?:and|but)\s+/;
+function sessionScope(text: string): SessionScope {
+  const clause = text.split(SCOPE_CLAUSE_BREAK).find((part) => SESSION_NOUN.test(part)) ?? text;
+  if (namesOtherPerson(clause)) return "other_person";
+  if (namesOtherDay(clause) || negatesToday(clause)) return "other_day";
+  return "today";
+}
+const QUOTED = /["“][^"”\n]{1,80}["”]/g;
 
 // No bare "noted": "Noted — salmon dinner sounds great" is an acknowledgement, not a log.
 const FOOD_PAST = String.raw`logged|recorded|saved|tracked|captured|added|entered|filed|stored|updated|changed|corrected|amended|fixed|swapped|removed|took(?=[^.!?\n]{0,30}\boff\b)|adjusted|bumped|made|scaled|edited|replaced|dropped`;
@@ -524,17 +547,32 @@ export function classifySentence(sentence: string, message?: string | null): Sta
 
   const aboutRecord = NOTES_NOUN.test(text) || RECORD_DEST.test(text) || aboutBodyweight(text);
   if (FOOD_NOUN.test(text) && claimAt(text, FOOD_CLAIM, message)) classes.push("food");
-  if (!aboutRecord && SESSION_NOUN.test(text)) {
-    if (claimAt(text, SESSION_CLAIM, message) || assertedAt(text, firstMatchIndex(text, [SESSION_BUILT]))) {
-      classes.push("session");
-    } else if (claimAt(text, SESSION_OPEN_CLAIM, message) || assertedAt(text, firstMatchIndex(text, [SESSION_READY]))) {
-      classes.push("session_state");
+  // A built session on ANOTHER day ("I've built tomorrow's session as a lower day") is a
+  // plan claim, held to a landed plan change like any other.
+  let otherDayBuilt = false;
+  const unquoted = text.replace(QUOTED, " ");
+  if (!aboutRecord && SESSION_NOUN.test(unquoted)) {
+    const scope = sessionScope(unquoted);
+    const act =
+      claimAt(unquoted, SESSION_CLAIM, message) ||
+      assertedAt(unquoted, firstMatchIndex(unquoted, [SESSION_BUILT, SESSION_CONTENT_CHANGED]));
+    if (scope === "today") {
+      if (act) classes.push("session");
+      else if (
+        claimAt(unquoted, SESSION_OPEN_CLAIM, message) ||
+        assertedAt(unquoted, firstMatchIndex(unquoted, [SESSION_READY]))
+      ) {
+        classes.push("session_state");
+      }
+    } else if (scope === "other_day" && act) {
+      otherDayBuilt = true;
     }
   }
   if (
     !aboutRecord &&
-    PLAN_NOUN.test(text) &&
-    (claimAt(text, PLAN_CLAIM, message) || assertedAt(text, firstMatchIndex(text, [PLAN_NOW_DAY])))
+    (otherDayBuilt ||
+      (PLAN_NOUN.test(text) &&
+        (claimAt(text, PLAN_CLAIM, message) || assertedAt(text, firstMatchIndex(text, [PLAN_NOW_DAY])))))
   )
     classes.push("plan");
   if (claimAt(text, LOG_CLAIM, message) || (aboutRecord && claimAt(text, NOTE_CLAIM, message))) classes.push("log");
@@ -605,15 +643,33 @@ function todaySessionBuilt(applied: readonly AppliedEntry[]): boolean {
   );
 }
 
-// Did this turn put the athlete in front of a session — opened, built, or a refusal that
-// still points at the session standing on the day (its `open`)?
-function todaySessionShown(applied: readonly AppliedEntry[]): boolean {
-  return applied.some((entry) => {
-    if (!SESSION_TYPES.has(entry.type)) return false;
-    if (landed(entry)) return true;
-    const open = (entry.result as Record<string, unknown> | undefined)?.open;
-    return !!open && typeof open === "object";
+// The session this turn put in front of the athlete — opened, built, or a refusal that
+// still points at the session standing on the day (its `open`) — and whether it is
+// FINISHED. A finished day is shown as done ("Log more on …"), never as ready to start or
+// continue, so "your session is ready" over it is false (2026-11-12 review).
+function todaySessionsShown(applied: readonly AppliedEntry[]): Array<{ finished: boolean }> {
+  return applied.flatMap((entry) => {
+    if (!SESSION_TYPES.has(entry.type)) return [];
+    const result = entry.result as Record<string, unknown> | undefined;
+    const open = result?.open;
+    if (!landed(entry) && !(open && typeof open === "object")) return [];
+    return [{ finished: result?.finished === true }];
   });
+}
+
+/** The turn showed a session at all (open or finished): its content is what an act claim misstates. */
+function todaySessionShown(applied: readonly AppliedEntry[]): boolean {
+  return todaySessionsShown(applied).length > 0;
+}
+
+/** The turn showed an OPEN, unfinished session: the only one a ready/start/continue claim is true of. */
+function todaySessionShownOpen(applied: readonly AppliedEntry[]): boolean {
+  return todaySessionsShown(applied).some((shown) => !shown.finished);
+}
+
+/** The turn showed today's session as finished. */
+function todaySessionShownFinished(applied: readonly AppliedEntry[]): boolean {
+  return todaySessionsShown(applied).some((shown) => shown.finished);
 }
 const TODAY_WORDS = /\b(?:today(?:['’]?s)?|todays|tonight|this\s+(?:morning|afternoon|evening))\b/i;
 const TIMELINE_TYPES: ReadonlySet<string> = new Set<string>(["add_context_event", "resolve_context_event"]);
@@ -718,9 +774,12 @@ function classGrounded(
     case "session":
       return todaySessionBuilt(applied);
     case "session_state":
-      // A statement about Today: true when the turn put a session in front of the athlete,
-      // or when Today holds an open one anyway.
-      return todaySessionShown(applied) || todayState() === "open";
+      // A statement that today's session is ready / open / waiting: true only of an open,
+      // UNFINISHED session — one the turn put in front of the athlete, or one Today holds
+      // anyway. Over a finished day the only true state is that it is done.
+      return (
+        todaySessionShownOpen(applied) || (!todaySessionShownFinished(applied) && todayState() === "open")
+      );
     case "timeline":
       return any(TIMELINE_TYPES);
     case "food":
@@ -756,8 +815,15 @@ function classAlreadySpoken(
       return (
         has(TODAY_SESSION_NOT_SET_VARIANTS) ||
         applied.some((entry) => {
-          if (!SESSION_TYPES.has(entry.type) || landed(entry)) return false;
-          const error = (entry.result as Record<string, unknown> | undefined)?.error;
+          if (!SESSION_TYPES.has(entry.type)) return false;
+          const result = entry.result as Record<string, unknown> | undefined;
+          // …or already said the day is finished ("You've finished Pull today — …").
+          if (result?.finished === true) {
+            const title = typeof result.title === "string" && result.title.trim() ? result.title.trim() : "Today's session";
+            if (SESSION_FINISHED_VARIANTS.some((line) => reply.includes(line(title)))) return true;
+          }
+          if (landed(entry)) return false;
+          const error = result?.error;
           return typeof error === "string" && error !== "" && reply.includes(error);
         })
       );
@@ -794,7 +860,7 @@ function honestSentence(
         ? pickDayVariant(SESSION_CONTENT_UNCHANGED_VARIANTS, today, "chat-ground-session-content")
         : pickDayVariant(SESSION_CLAIM_UNGROUNDED_VARIANTS, today, "chat-ground-session");
     case "session_state":
-      return todayState() === "finished"
+      return todaySessionShownFinished(applied) || todayState() === "finished"
         ? pickDayVariant(SESSION_STATE_FINISHED_VARIANTS, today, "chat-ground-session-finished")
         : pickDayVariant(SESSION_STATE_NONE_VARIANTS, today, "chat-ground-session-none");
     case "plan":

@@ -1144,7 +1144,8 @@ function adoptionProvenance(provenanceJson: string | null, sessionId: number): s
 
 // A replace that authors nothing of the athlete's own: the plan's adaptive day, or an
 // EMPTY athlete_override (the "Open session" door, and the client's outbox retry that
-// forces replace:true on it). Neither may silently supersede the athlete's chosen card.
+// forces replace:true on it). Neither may silently supersede the athlete's chosen card
+// (for the empty override that includes a train-by-choice adaptive card; chosenCardOwner).
 // An ITEMFUL athlete_override is the athlete writing a new session (Today's editor, chat
 // today_session) and still replaces their own card.
 function replaceYieldsToChosenCard(input: PrepareDailySessionInput, source: DailySessionSource): boolean {
@@ -1155,11 +1156,14 @@ function replaceYieldsToChosenCard(input: PrepareDailySessionInput, source: Dail
 }
 
 // The owner of `row` when it is the athlete's unstarted chosen card that holds work
-// (open-session.ts unstartedChosenCard — the one predicate), else null.
-function chosenCardOwner(date: string, row: any): DailySessionOwner | null {
+// (open-session.ts unstartedChosenCard — the one predicate), else null. Which cards count
+// depends on who replaces: an adaptive replace re-takes its own train-by-choice card, an
+// empty override (authoring nothing) yields to it as to any other chosen card.
+function chosenCardOwner(date: string, row: any, source: DailySessionSource): DailySessionOwner | null {
   const session =
     sessionRowsForDate(date).find((candidate) => Number(candidate.id) === Number(row?.session_id)) ?? null;
-  return unstartedChosenCard(row, session) ? dailySessionOwnerOf(row, session) : null;
+  const replacer = source === "adaptive_plan" ? "adaptive" : "empty_override";
+  return unstartedChosenCard(row, session, replacer) ? dailySessionOwnerOf(row, session) : null;
 }
 
 function activeCompositionRow(date: string): any {
@@ -1339,7 +1343,7 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
       input.replace === true &&
       owner != null &&
       !owner.started &&
-      !(replaceYieldsToChosenCard(input, source) && chosenCardOwner(date, existingRow));
+      !(replaceYieldsToChosenCard(input, source) && chosenCardOwner(date, existingRow, source));
     if (!replaceable) fail("daily_session_active_changed", OWNER_HOLDS_DAY_MESSAGE, undefined, owner);
   }
   // The same rule without a preview token: a replace that authors nothing of the
@@ -1347,7 +1351,7 @@ export function prepareDailySession(input: PrepareDailySessionInput = {}) {
   // card that holds work. Once that card is lived on, the ordinary lock
   // (assertSessionsUnstarted) answers instead.
   if (existingRow && input.replace && replaceYieldsToChosenCard(input, source)) {
-    const owner = chosenCardOwner(date, existingRow);
+    const owner = chosenCardOwner(date, existingRow, source);
     if (owner) fail("daily_session_active_changed", OWNER_HOLDS_DAY_MESSAGE, undefined, owner);
   }
   if (existingRow && !input.replace && !canRefreshAdaptive) {
