@@ -1,5 +1,6 @@
 import { getActiveDailySessionForSession } from "./adaptive-session.js";
-import { getCardioForDate, type CardioEffort } from "./activities.js";
+import { cardioEffortRecordsForDate, type CardioEffort, type CardioEffortRecord } from "./activities.js";
+import { shadowedActivity } from "./activity-shadow.js";
 import { db } from "../db.js";
 import { canonicalEnduranceSport } from "./endurance-sports.js";
 import {
@@ -13,6 +14,8 @@ import {
 import { recentWorkingSeconds, recentWorkingWeight } from "./exercises.js";
 import { isLoadRelevantEnduranceImpact, recentEnduranceImpacts } from "./hybrid-load.js";
 import {
+  ADOPTED_AFTER_LOG,
+  doseAdoptedAfterLog,
   doseChallengeVerdict,
   doseComparability,
   evaluatePerformedAtFullLoad,
@@ -80,8 +83,9 @@ export interface DailySessionOutcomeFacts {
    * Present when the card was ADOPTED onto a session the athlete had already lived on
    * (adaptive-session.ts adoptionProvenance): the work logged before `adopted_at` was
    * never done against this card, so it is in no completed / substituted / skipped list
-   * and every dose it touched is `adopted_after_log` (not comparable). `movement_keys` /
-   * `exercises` name that earlier work, for readers keyed by movement.
+   * and every dose it touched is `adopted_after_log` (not comparable) — a lift's dose and
+   * an endurance item an earlier effort filled alike. `movement_keys` / `exercises` name
+   * that earlier strength work, for readers keyed by movement.
    */
   adoption?: {
     adopted_at: string | null;
@@ -155,6 +159,11 @@ export interface EnduranceEvidence {
     | "dose_shortfall"
     | "partial" // legacy schema-v2 value; new reconciliation emits dose_shortfall
     | "unmatched";
+  // Present only on an ADOPTED card's item an earlier effort filled (or any item of a
+  // card nothing was done from): `comparable:false` with `adopted_after_log`, the same
+  // marking a lift's dose carries. Its verdict stays as a fact; no reading is drawn from it.
+  comparable?: false;
+  non_comparable_reasons?: string[];
 }
 
 export interface MovementDoseEvidence {
@@ -241,21 +250,71 @@ function skipsFor(sessionId: number, afterSkipId = 0): string[] {
   return rows.map((r) => String(r.exercise));
 }
 
+interface AdoptionCut {
+  adopted_at: string | null;
+  after_set_id: number;
+  after_skip_id: number;
+  /** Activities at or below this id were in Cairn when the card was bound; null = no activity cut stamped. */
+  after_activity_id: number | null;
+  /** The date's hand-logged activities at adoption (a watch mirror may since have replaced one). */
+  activity_logs: Array<{ id: number; type: unknown; duration_min: unknown; distance_km: unknown }>;
+}
+
 // The adoption cut a card carries when it was bound to a session already lived on
 // (adaptive-session.ts adoptionProvenance): sets and skips up to these ids were logged
-// before the card existed. Null for every card that was served before its work.
-function adoptionCut(
-  composition: any
-): { adopted_at: string | null; after_set_id: number; after_skip_id: number } | null {
+// before the card existed, and so was every activity up to its activity id. Null for
+// every card that was served before its work.
+function adoptionCut(composition: any): AdoptionCut | null {
   const provenance = composition?.provenance;
   if (!provenance || typeof provenance !== "object" || provenance.adopted_after_log !== true) return null;
   const setId = Number(provenance.adopted_after_set_id);
   const skipId = Number(provenance.adopted_after_skip_id);
+  const activityId = provenance.adopted_after_activity_id == null ? NaN : Number(provenance.adopted_after_activity_id);
+  const logs = Array.isArray(provenance.adopted_activity_logs) ? provenance.adopted_activity_logs : [];
   return {
     adopted_at: typeof provenance.adopted_at === "string" ? provenance.adopted_at : null,
     after_set_id: Number.isFinite(setId) && setId > 0 ? setId : 0,
     after_skip_id: Number.isFinite(skipId) && skipId > 0 ? skipId : 0,
+    after_activity_id: Number.isFinite(activityId) && activityId >= 0 ? activityId : null,
+    activity_logs: logs
+      .filter((log: any) => log && Number(log.id) > 0)
+      .map((log: any) => ({
+        id: Number(log.id),
+        type: log.type,
+        duration_min: log.duration_min,
+        distance_km: log.distance_km,
+      })),
   };
+}
+
+// The day's efforts already in Cairn when an adopted card was bound — the endurance
+// side of adoptionCut, by the same rule as the set cut: an effort entered Cairn before
+// the card if its own activity row, or a hand log the count folds into it, is at or
+// under the cut. A watch mirror written after the adoption over a hand log made before
+// it (the soft-dedup deleted that log) is the same run the athlete had already
+// reported, so it stays on the earlier side. Indexes into `records`.
+function effortsBeforeAdoption(records: CardioEffortRecord[], cut: AdoptionCut | null): Set<number> {
+  const out = new Set<number>();
+  if (cut == null || cut.after_activity_id == null) return out;
+  const cutId = cut.after_activity_id;
+  const live = new Set(records.flatMap((record) => [record.activity.id, ...record.shadow_activity_ids]));
+  const replacedLogs = cut.activity_logs.filter((log) => !live.has(log.id));
+  records.forEach((record, index) => {
+    if ([record.activity.id, ...record.shadow_activity_ids].some((id) => id <= cutId)) {
+      out.add(index);
+      return;
+    }
+    const replaced = replacedLogs.findIndex(
+      (log) =>
+        shadowedActivity({ ...log, date: record.activity.date, source: null, external_id: null }, [record.activity]) !=
+        null
+    );
+    if (replaced >= 0) {
+      replacedLogs.splice(replaced, 1);
+      out.add(index);
+    }
+  });
+  return out;
 }
 
 function confounders(session: any, date: string, otherActivity: boolean): string[] {
@@ -388,11 +447,16 @@ function completionVerdict(
   return "met_or_exceeded";
 }
 
+// `beforeAdoption` names the efforts already in Cairn when an adopted card was bound
+// (effortsBeforeAdoption): a run done after the card is the one done against it, so it
+// is preferred; an item only an earlier run can fill is still paired (the run is real
+// work, and the item is not skipped), and its position lands in `matched_before_adoption`.
 function enduranceEvidenceFor(
   compositionId: number,
   cardioItems: Array<{ item: any; index: number }>,
-  efforts: CardioEffort[]
-): { evidence: EnduranceEvidence[]; matched_effort_indexes: Set<number> } {
+  efforts: CardioEffort[],
+  beforeAdoption: Set<number> = new Set()
+): { evidence: EnduranceEvidence[]; matched_effort_indexes: Set<number>; matched_before_adoption: Set<number> } {
   const used = new Set<number>();
   const matches = new Map<number, number>();
   const ordered = [...cardioItems].sort((left, right) => {
@@ -412,7 +476,12 @@ function enduranceEvidenceFor(
         // effort with at least one concrete dose fact, and remains low confidence.
         return finite(candidate.effort.duration_min) != null || finite(candidate.effort.distance_km) != null;
       })
-      .sort((left, right) => matchScore(planned.item, left.effort) - matchScore(planned.item, right.effort) || left.index - right.index);
+      .sort(
+        (left, right) =>
+          Number(beforeAdoption.has(left.index)) - Number(beforeAdoption.has(right.index)) ||
+          matchScore(planned.item, left.effort) - matchScore(planned.item, right.effort) ||
+          left.index - right.index
+      );
     const best = candidates[0];
     if (!best) continue;
     used.add(best.index);
@@ -489,7 +558,12 @@ function enduranceEvidenceFor(
       completion_verdict: completionVerdict(item, effort, summary),
     };
   });
-  return { evidence, matched_effort_indexes: used };
+  const matchedBeforeAdoption = new Set<number>();
+  cardioItems.forEach(({ index }, position) => {
+    const effortIndex = matches.get(index);
+    if (effortIndex != null && beforeAdoption.has(effortIndex)) matchedBeforeAdoption.add(position);
+  });
+  return { evidence, matched_effort_indexes: used, matched_before_adoption: matchedBeforeAdoption };
 }
 
 function effortSignature(value: { type: unknown; label?: unknown; duration_min: unknown; distance_km: unknown }): string {
@@ -759,10 +833,25 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
   const cardioItems = allItems
     .map((item: any, index: number) => ({ item, index }))
     .filter(({ item }: { item: any }) => item && item.kind === "cardio");
-  const cardioEfforts = getCardioForDate(date);
-  const enduranceMatch = enduranceEvidenceFor(Number(composition.id), cardioItems, cardioEfforts);
-  const endurance_evidence = enduranceMatch.evidence;
-  const matchedEndurance = endurance_evidence.filter((entry) => entry.completion_verdict !== "unmatched");
+  const cardioRecords = cardioEffortRecordsForDate(date);
+  const cardioEfforts = cardioRecords.map((record) => record.effort);
+  // A card adopted onto work already logged was never served for that work: only the
+  // sets, skips and efforts after the adoption are read against it (adoptionCut).
+  const adoption = adoptionCut(composition);
+  const enduranceMatch = enduranceEvidenceFor(
+    Number(composition.id),
+    cardioItems,
+    cardioEfforts,
+    effortsBeforeAdoption(cardioRecords, adoption)
+  );
+  // Every pairing of a card item with an effort — the day's real endurance work (it
+  // starts the session and loads the legs, whenever it was logged).
+  const matchedEndurance = enduranceMatch.evidence.filter((entry) => entry.completion_verdict !== "unmatched");
+  // The pairings with an effort logged after the card: the endurance work done FROM it.
+  const enduranceAfterAdoption = enduranceMatch.evidence.filter(
+    (entry, position) =>
+      entry.completion_verdict !== "unmatched" && !enduranceMatch.matched_before_adoption.has(position)
+  );
   const suggestedExercises: string[] = items.map((it: any) => String(it.exercise));
   // Suggested items and logged sets are matched on the RESOLVED identity, never on
   // the raw spelling: the composition may say "Incline DB Press" while the athlete
@@ -780,9 +869,6 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
   const suggestedSet = new Set(suggestedExercises.map(identityOf));
 
   const sets = loggedSetsFor(id);
-  // A card adopted onto work already logged was never served for that work: only the
-  // sets and skips after the adoption are read against it (adoptionCut).
-  const adoption = adoptionCut(composition);
   const skips = skipsFor(id, adoption?.after_skip_id ?? 0);
   const setKey = (s: any): string =>
     s.exercise_id != null ? `exercise:${Number(s.exercise_id)}` : identityOf(s.exercise);
@@ -791,7 +877,18 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
     adoption ? sets.filter((s) => Number(s.id) <= adoption.after_set_id).map(setKey) : []
   );
   // Nothing done from the card at all: no part of it reads as skipped, done or swapped.
-  const cardUntouched = adoption != null && workedAfter.length === 0;
+  const cardUntouched = adoption != null && workedAfter.length === 0 && enduranceAfterAdoption.length === 0;
+  // An endurance item an earlier effort filled (or any item of a card nothing was done
+  // from) is not comparable to the card, exactly as a lift's dose is below: it keeps
+  // its pairing and its facts, but no shortfall, quality or completion is read from it.
+  const endurance_evidence: EnduranceEvidence[] = enduranceMatch.evidence.map((entry, position) =>
+    adoption && (cardUntouched || enduranceMatch.matched_before_adoption.has(position))
+      ? { ...entry, comparable: false, non_comparable_reasons: [ADOPTED_AFTER_LOG] }
+      : entry
+  );
+  // The endurance evidence graded against the card.
+  const gradedEndurance = endurance_evidence.filter((entry) => !doseAdoptedAfterLog(entry));
+  const gradedMatchedEndurance = gradedEndurance.filter((entry) => entry.completion_verdict !== "unmatched");
   const beforeAdoption = (key: string): boolean => cardUntouched || beforeAdoptionKeys.has(key);
 
   // Aggregate achieved work per exercise (top weight / reps / seconds).
@@ -971,6 +1068,7 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
 
   const started = sets.length > 0 || matchedEndurance.length > 0;
   const finished = !!session.finished_at;
+  // Lifecycle, not a grade: a cardio-only day whose run is in is done, whenever it was logged.
   const cardioOnlyCompleted = items.length === 0 && cardioItems.length > 0 && matchedEndurance.length > 0;
   const status: DailySessionOutcome["status"] =
     finished || cardioOnlyCompleted ? "completed" : started ? "in_progress" : "not_started";
@@ -982,19 +1080,21 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
     enduranceImpacts
   );
   const conf = confounders(session, date, otherActivity);
+  // Every endurance reading below is of the GRADED evidence: an effort logged before an
+  // adopted card is no shortfall, quality miss, completion or missing run against it.
   const enduranceDoseShortfall =
-    matchedEndurance.length > 0 &&
-    endurance_evidence.some((entry) => entry.completion_verdict === "dose_shortfall");
-  const enduranceQualityNotObserved = endurance_evidence.some(
+    gradedMatchedEndurance.length > 0 &&
+    gradedEndurance.some((entry) => entry.completion_verdict === "dose_shortfall");
+  const enduranceQualityNotObserved = gradedEndurance.some(
     (entry) => entry.completion_verdict === "quality_not_observed"
   );
-  const enduranceQualityUnverified = endurance_evidence.some(
+  const enduranceQualityUnverified = gradedEndurance.some(
     (entry) => entry.completion_verdict === "quality_unverified"
   );
   const enduranceIncomplete =
     cardioItems.length > 0 &&
     started &&
-    endurance_evidence.some((entry) => entry.completion_verdict === "unmatched");
+    gradedEndurance.some((entry) => entry.completion_verdict === "unmatched");
   const reason_codes: string[] = [];
   if (adoption) reason_codes.push("adopted_after_log");
   if (!started) {
@@ -1014,17 +1114,17 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
       reason_codes.push("extended_session");
     }
   }
-  if (matchedEndurance.length > 0) reason_codes.push("endurance_matched");
+  if (gradedMatchedEndurance.length > 0) reason_codes.push("endurance_matched");
   if (enduranceDoseShortfall) reason_codes.push("endurance_dose_shortfall");
   if (enduranceQualityNotObserved) reason_codes.push("endurance_quality_not_observed");
   if (enduranceQualityUnverified) reason_codes.push("endurance_quality_unverified");
-  if (endurance_evidence.some((entry) => entry.completion_verdict === "quality_observed")) {
+  if (gradedEndurance.some((entry) => entry.completion_verdict === "quality_observed")) {
     reason_codes.push("endurance_quality_observed");
   }
   const enduranceCompletedAsSuggested =
     cardioItems.length > 0 &&
-    matchedEndurance.length === cardioItems.length &&
-    endurance_evidence.every((entry) =>
+    gradedMatchedEndurance.length === cardioItems.length &&
+    gradedEndurance.every((entry) =>
       ["met_or_exceeded", "quality_observed"].includes(entry.completion_verdict)
     );
   if (
@@ -1051,13 +1151,14 @@ export function reconcileDailySession(sessionId: number): DailySessionOutcome | 
   const confidence: DailySessionOutcomeFacts["confidence"] = !started
     ? "low"
     : items.length === 0 && cardioItems.length > 0
-      ? endurance_evidence.every(
+      ? gradedEndurance.length > 0 &&
+        gradedEndurance.every(
           (entry) =>
             ["met_or_exceeded", "quality_observed"].includes(entry.completion_verdict) &&
             entry.match_confidence === "high"
         )
         ? "high"
-        : endurance_evidence.some((entry) => entry.match_confidence === "moderate")
+        : gradedEndurance.some((entry) => entry.match_confidence === "moderate")
           ? "moderate"
           : "low"
       : finished && completed.length >= Math.max(1, Math.ceil(suggestedExercises.length * 0.6))

@@ -557,6 +557,22 @@ export interface CardioEffort {
 }
 
 export function getCardioForDate(date: string): CardioEffort[] {
+  return cardioEffortRecordsForDate(date).map((record) => record.effort);
+}
+
+/**
+ * One effort of getCardioForDate with the activity rows it stands for: its own row
+ * and any hand-logged shadow of it that the count dropped (activity-shadow.ts). For a
+ * reader that must know WHEN the effort entered Cairn (an adopted card's activity cut,
+ * daily-reconciliation.ts) — the effort list itself is unchanged.
+ */
+export interface CardioEffortRecord {
+  effort: CardioEffort;
+  activity: ShadowCheckActivity & { id: number };
+  shadow_activity_ids: number[];
+}
+
+export function cardioEffortRecordsForDate(date: string): CardioEffortRecord[] {
   const d = date || localDateISO();
   const rows = db
     .prepare(
@@ -569,9 +585,16 @@ export function getCardioForDate(date: string): CardioEffort[] {
     )
     .all(d) as any[];
 
-  const out: CardioEffort[] = [];
   // A hand log shadowing the synced row of the same effort is one run, not two.
-  for (const a of withoutShadowActivities(rows)) {
+  const kept = withoutShadowActivities(rows);
+  const shadowIds = new Map<any, number[]>();
+  for (const row of rows) {
+    if (kept.includes(row)) continue;
+    const of = shadowedActivity(row, rows);
+    if (of) shadowIds.set(of, [...(shadowIds.get(of) ?? []), Number(row.id)]);
+  }
+  const out: CardioEffortRecord[] = [];
+  for (const a of kept) {
     if (isStrengthGarminType(a.type)) continue; // never an endurance effort
     let zones: any = null;
     try {
@@ -580,14 +603,26 @@ export function getCardioForDate(date: string): CardioEffort[] {
       zones = null;
     }
     out.push({
-      type: String(a.type || "activity"),
-      name: String(a.raw_text || a.type || "activity"),
-      distance_km: a.distance_km != null ? Number(a.distance_km) : null,
-      duration_min: a.duration_min != null ? Number(a.duration_min) : null,
-      pace: a.pace ?? null,
-      avg_hr: a.g_avg_hr != null ? Number(a.g_avg_hr) : null,
-      source: a.g_start ? "garmin" : a.source || null,
-      zones: Array.isArray(zones) ? zones : null,
+      effort: {
+        type: String(a.type || "activity"),
+        name: String(a.raw_text || a.type || "activity"),
+        distance_km: a.distance_km != null ? Number(a.distance_km) : null,
+        duration_min: a.duration_min != null ? Number(a.duration_min) : null,
+        pace: a.pace ?? null,
+        avg_hr: a.g_avg_hr != null ? Number(a.g_avg_hr) : null,
+        source: a.g_start ? "garmin" : a.source || null,
+        zones: Array.isArray(zones) ? zones : null,
+      },
+      activity: {
+        id: Number(a.id),
+        date: a.date,
+        type: a.type,
+        source: a.source,
+        external_id: a.external_id,
+        duration_min: a.duration_min,
+        distance_km: a.distance_km,
+      },
+      shadow_activity_ids: shadowIds.get(a) ?? [],
     });
   }
   return out;

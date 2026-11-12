@@ -4,6 +4,7 @@ import {
   getDailySessionOutcomeForSession,
   type DailySessionOutcome,
 } from "./daily-reconciliation.js";
+import { doseAdoptedAfterLog } from "./outcome-comparability.js";
 import { planDayProgression } from "./progression.js";
 
 // A deliberately small athlete-facing seam over the durable reconciliation
@@ -39,7 +40,11 @@ function hasStrengthExposure(outcome: DailySessionOutcome): boolean {
 
 function enduranceLearning(outcome: DailySessionOutcome): string | null {
   const endurance = Array.isArray(outcome.facts?.endurance_evidence) ? outcome.facts.endurance_evidence : [];
-  const matched = endurance.filter((entry) => entry?.completion_verdict !== "unmatched" && entry?.achieved != null);
+  // An effort logged before an adopted card was never done against it (adopted_after_log):
+  // no endurance learning is read from it.
+  const matched = endurance.filter(
+    (entry) => entry?.completion_verdict !== "unmatched" && entry?.achieved != null && !doseAdoptedAfterLog(entry)
+  );
   if (!matched.length || hasStrengthExposure(outcome)) return null;
   if (isContextConfounded(outcome)) {
     return "Recovery or context shaped today’s endurance work, so we’ll treat it as context rather than push progression from it.";
