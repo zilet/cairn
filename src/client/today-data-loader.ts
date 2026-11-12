@@ -156,7 +156,7 @@ type TodayDataLoaderApi = {
     const aggregatePath = todayAggregatePath(deps.state.logDate, deps.state.tab);
     const openKey = "today:open:" + deps.state.logDate;
     const sliceOf = (value: TodayDataAggregate) => [
-      { key: openKey, data: (value.open_session ? { ...(value.open_session as object), headline: value.chosen_session_headline ?? null } : CairnTodayOpenSession.legacyOpen(value as Record<string, unknown>)) },
+      { key: openKey, data: (value.open_session && value.chosen_session_headline ? { ...(value.open_session as object), headline: value.chosen_session_headline } : value.open_session) ?? CairnTodayOpenSession.legacyOpen(value as Record<string, unknown>) },
       { key: "plan", data: value.plan },
       { key: sessKey, data: value.session },
       { key: "stats", data: value.stats },
