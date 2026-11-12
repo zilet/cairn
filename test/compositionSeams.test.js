@@ -18,6 +18,9 @@
 // a hinge among the compounds, and an incline dumbbell press with no stored group is a
 // press instead of an isolation lift. Those cards keep the order they were written in —
 // only the order, the positions, and which pair member carries the hint moved.
+//
+// And one title fix (2026-11-12): a plan-day card is titled by the plan day's NAME
+// ("Lower A"), never its free-text focus, which no swap or rotation re-syncs.
 // Synthetic fixtures only. Deterministic and offline (see test/run.mjs).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";

@@ -23,6 +23,7 @@ import {
   sameDayEnduranceOutings,
 } from "./hybrid-load.js";
 import { getPlanDay } from "./plan.js";
+import { type SameDayAthleteRequest, sameDayAthleteRequest } from "./plan-adaptations.js";
 import { type StatedRhythm, statedRhythmRead } from "./stated-rhythm.js";
 import {
   HEAVY_LOWER_GROUPS,
@@ -191,6 +192,10 @@ export const DAILY_DECISION_REASONS = [
   // a preference hold lifted, a second reach host, a recovering main lift no longer
   // parking the reach. Never fires over a deciding brake or a harmed recent day.
   "push_stance",
+  // Train-anyway on a day the athlete themselves asked for today's session in their own
+  // words (a today-scoped plan adaptation from an explicit request): the work they set
+  // keeps its sets and timed targets; the load still holds (request.same_day_request).
+  "athlete_same_day_request",
 ] as const;
 
 // The run day's headline line on the envelope. Rotates like every repeating
@@ -214,6 +219,10 @@ export interface DailyDecisionSnapshot {
     equipment: string | null;
     minutes: number | null;
     goal: string | null;
+    // The session the athlete ASKED for today (plan-adaptations.ts sameDayAthleteRequest),
+    // stamped only on a train-anyway request whose plan day carries one. Omit-when-idle,
+    // so every other snapshot hashes exactly as before; present, it is in the fingerprint.
+    same_day_request?: SameDayAthleteRequest;
   };
   plan: {
     day_number: number | null;
@@ -538,6 +547,10 @@ export interface DailyDecisionEnvelope {
     equipment: string | null;
     minutes: number | null;
     goal: string | null;
+    // Carried from the snapshot (omit-when-idle). Composition reads it: on the athlete's
+    // own plan day, the lifts it names keep their authored sets and timed targets under
+    // train-anyway's caps; the intensity hold still applies (daily-composition.ts).
+    same_day_request?: SameDayAthleteRequest;
   };
   template: {
     day_number: number | null;
@@ -1094,6 +1107,14 @@ export function gatherDailyDecisionSnapshot(
       }),
     undefined
   );
+  // The session the athlete asked for today, on the day this snapshot actually carries
+  // (after any train-anyway fall-through). Read only for a train-anyway request — the one
+  // composition that honours it — and fail-soft: a ledger problem never costs the day.
+  const requestDayNumber = selected?.day_number ?? null;
+  const sameDayRequest =
+    trainAnywayRequested && planDayType === "training" && requestDayNumber != null
+      ? safe(() => sameDayAthleteRequest(requestDayNumber, d), null)
+      : null;
   return {
     date: d,
     request: {
@@ -1105,6 +1126,7 @@ export function gatherDailyDecisionSnapshot(
       equipment: text(opts.equipment, 200),
       minutes: opts.minutes != null ? finite(opts.minutes) : null,
       goal: text(opts.goal, 120),
+      ...(sameDayRequest ? { same_day_request: sameDayRequest } : {}),
     },
     plan: {
       day_number: selected?.day_number ?? null,
@@ -1728,6 +1750,14 @@ export const LOG_BACKS_OPEN_DAY_RATIONALE: readonly string[] = [
   "Nothing in your recent sessions asks for a shorter day, so today keeps the plan's length; the weights stay where they were.",
 ];
 
+// Train-anyway on a day the athlete asked for this session today: their sets stay, the
+// load holds. A preview constraint line, so a set rather than one literal.
+export const SAME_DAY_REQUEST_DETAILS: readonly string[] = [
+  "You asked for this session today — your sets stay as you set them; the load holds",
+  "Today's session is the one you asked for: every set you set stays, at the current load",
+  "Built the way you asked today — the sets are yours, the weights stay where they are",
+];
+
 // A lifting weekday whose morning run is already in. Names what is done and what is
 // still due — never a verdict on the run, never a gate on the lifting.
 export const LIFT_STILL_DUE_RATIONALE: readonly string[] = [
@@ -2237,6 +2267,15 @@ export function buildDailySessionDecision(
       rationale.push({
         code: "log_backs_open_day",
         text: pickDayVariant(LOG_BACKS_OPEN_DAY_RATIONALE, snapshot.date, "daily_decision:log_backs_open_day"),
+      });
+    }
+    // The session they asked for today keeps the work they set; only the load holds.
+    // Visible beside the override, so the card's full set count is never a mystery.
+    if (snapshot.request.same_day_request) {
+      fire(precedence, "athlete_same_day_request");
+      soft.push({
+        code: "athlete_same_day_request",
+        detail: pickDayVariant(SAME_DAY_REQUEST_DETAILS, snapshot.date, "daily_decision:same_day_request"),
       });
     }
   } else if (override) {

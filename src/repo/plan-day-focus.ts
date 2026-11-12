@@ -175,21 +175,145 @@ export function calendarFocusPhrase(date: string, calendar: FocusCalendar = focu
  * A plan day's stored focus as it reads on `date`: calendar claims dropped, and — only
  * when one was — the real calendar's phrase in their place. A focus that makes no
  * calendar claim comes back exactly as stored; null in, null out; null when nothing is
- * left to say.
+ * left to say. With `exercises` (the card's own lifts), a movement the focus names that
+ * is not on the card is dropped too (`focusWithoutAbsentMovements`).
  */
 export function datedPlanDayFocus(
   focus: string | null | undefined,
   date: string | null | undefined,
-  opts: { calendar?: FocusCalendar } = {}
+  opts: { calendar?: FocusCalendar; exercises?: readonly string[] } = {}
 ): string | null {
   if (focus == null) return null;
   const raw = String(focus);
-  if (!date || !/^\d{4}-\d{2}-\d{2}/.test(String(date))) return raw;
+  const onCard = (text: string | null): string | null =>
+    opts.exercises ? focusWithoutAbsentMovements(text, opts.exercises) : text;
+  if (!date || !/^\d{4}-\d{2}-\d{2}/.test(String(date))) return onCard(raw);
   const { text, stripped } = stripCalendarClaims(raw);
-  if (!stripped) return raw;
+  if (!stripped) return onCard(raw);
   const d = String(date).slice(0, 10);
   const phrase = calendarFocusPhrase(d, opts.calendar ?? focusCalendarOn(d));
-  const out = [text, phrase].filter(Boolean).join(" ").trim();
+  const out = [onCard(text), phrase].filter(Boolean).join(" ").trim();
+  return out || null;
+}
+
+// ---- the movements a focus names, held to the card ----
+//
+// `plan_days.focus` is free text written when the day was drawn ("Seated dumbbell
+// press, flat dumbbell bench, upright row, carry and plank"). Nothing re-syncs it when a
+// slot is swapped, rotated out or removed, so weeks later it names lifts the day no
+// longer carries (2026-11-12: a press rotated out weeks before and a carry removed that
+// morning were both still on the card's focus). A focus read FOR A CARD drops each
+// listed movement that no lift on the card matches; everything it cannot read as a
+// movement (a body region, "push and pull", the calendar phrase) is left exactly as is.
+// Conservative by construction: a list entry is dropped only when it names a movement
+// noun no card lift carries, or a qualifier (equipment, angle, stance) no card lift with
+// that noun carries — "seated dumbbell press" is not the landmine press.
+
+// Movement nouns (singular stems). Category words — push, pull, upper, legs — are not
+// here: "push and pull" is a description of the day, never a claim about one lift.
+const MOVEMENT_HEADS = new Set(
+  (
+    "press bench row pulldown pullup chinup curl extension pushdown kickback raise fly squat deadlift " +
+    "lunge thrust bridge carry plank crunch dip pullover shrug stepup swing clean snatch rollout situp pushup"
+  ).split(" ")
+);
+
+// Words that tell one lift from another with the same noun. Anything else ("flat",
+// "heavy", "light") is description, never grounds to drop an entry.
+const MOVEMENT_QUALIFIERS = new Set(
+  (
+    "seated standing incline decline overhead landmine dumbbell barbell cable kettlebell machine band smith " +
+    "goblet front back romanian sumo bulgarian split upright lateral rear calf leg hip chest reverse hammer " +
+    "preacher single close wide neutral narrow face trap hex"
+  ).split(" ")
+);
+
+const TOKEN_ALIASES: Record<string, string[]> = {
+  db: ["dumbbell"],
+  bb: ["barbell"],
+  kb: ["kettlebell"],
+  rdl: ["romanian", "deadlift"],
+  ohp: ["overhead", "press"],
+  flies: ["fly"],
+  flyes: ["fly"],
+  flye: ["fly"],
+};
+
+// Hyphenated movement nouns read as one word ("pull-down" is a pulldown, not a pull).
+const JOINED = /\b(pull|push|chin|step|sit)[- ](down|up|ups|downs)\b/gi;
+
+function stemToken(token: string): string {
+  if (token.length > 3 && /(?:ss|sh|ch|x)es$/.test(token)) return token.slice(0, -2);
+  if (token.length > 3 && token.endsWith("s") && !token.endsWith("ss")) return token.slice(0, -1);
+  return token;
+}
+
+function movementTokens(text: string): Set<string> {
+  const out = new Set<string>();
+  const words = String(text ?? "")
+    .toLowerCase()
+    .replace(JOINED, "$1$2")
+    .split(/[^a-z]+/)
+    .filter(Boolean);
+  for (const word of words) {
+    for (const token of TOKEN_ALIASES[word] ?? [stemToken(word)]) out.add(token);
+  }
+  return out;
+}
+
+// A list entry's claim: its movement nouns and the qualifiers that pin which lift.
+function entryClaim(entry: string): { heads: string[]; qualifiers: string[] } {
+  const tokens = movementTokens(entry);
+  return {
+    heads: [...tokens].filter((t) => MOVEMENT_HEADS.has(t)),
+    qualifiers: [...tokens].filter((t) => MOVEMENT_QUALIFIERS.has(t)),
+  };
+}
+
+const LIST_SPLIT = /\s*(?:,|;|\/|&|\+)\s*|\s+(?:and|with|plus|then|followed by)\s+/i;
+const LEADING_LIST_JOINER = /^(?:and|with|plus|then)\s+/i;
+
+function joinList(entries: string[]): string {
+  if (entries.length <= 1) return entries.join("");
+  return `${entries.slice(0, -1).join(", ")} and ${entries[entries.length - 1]}`;
+}
+
+/**
+ * `focus` with every listed movement no card lift matches dropped. Sentences with
+ * nothing dropped come back verbatim; a sentence left with nothing is dropped; null
+ * when nothing at all is left. No exercises: the focus as given (nothing to hold it to).
+ */
+export function focusWithoutAbsentMovements(
+  focus: string | null | undefined,
+  exercises: readonly string[]
+): string | null {
+  if (focus == null) return null;
+  const clean = String(focus).replace(/\s+/g, " ").trim();
+  const cards = exercises.map((name) => movementTokens(name)).filter((tokens) => tokens.size > 0);
+  if (!clean || !cards.length) return clean || null;
+  const onCard = (claim: { heads: string[]; qualifiers: string[] }) =>
+    cards.some((tokens) => claim.heads.every((h) => tokens.has(h)) && claim.qualifiers.every((q) => tokens.has(q)));
+  const sentences = clean.split(/(?<=[.!?])\s+/);
+  const kept: string[] = [];
+  for (const sentence of sentences) {
+    const end = /[.!?]+$/.exec(sentence)?.[0] ?? "";
+    const body = sentence.replace(/[.!?]+$/, "");
+    const entries = body
+      .split(LIST_SPLIT)
+      .map((entry) => entry.replace(LEADING_LIST_JOINER, "").trim())
+      .filter(Boolean);
+    const survivors = entries.filter((entry) => {
+      const claim = entryClaim(entry);
+      return !claim.heads.length || onCard(claim);
+    });
+    if (survivors.length === entries.length) {
+      kept.push(sentence);
+      continue;
+    }
+    if (!survivors.length) continue;
+    kept.push(`${capitalize(joinList(survivors))}${end}`);
+  }
+  const out = kept.join(" ").trim();
   return out || null;
 }
 

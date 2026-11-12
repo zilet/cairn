@@ -258,6 +258,9 @@ function dailyDecisionContext(envelope: DailyDecisionEnvelope) {
     kind: envelope.kind,
     baseline_kind: envelope.baseline_kind ?? envelope.kind,
     train_anyway: request?.train_anyway === true,
+    // The athlete's own same-day request (daily-decision.ts), omit-when-idle so an
+    // ordinary row's constraints/provenance serialize exactly as before.
+    ...(request?.same_day_request ? { same_day_request: request.same_day_request } : {}),
     template: envelope.template,
     caps: envelope.caps,
     recovery_cycle: envelope.recovery_cycle,
