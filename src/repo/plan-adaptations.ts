@@ -733,6 +733,60 @@ export function activePlanAdaptations(date: string = localDateISO()): ActivePlan
   return out;
 }
 
+/** The athlete's own same-day request on one plan day (see `sameDayAthleteRequest`). */
+export interface SameDayAthleteRequest {
+  day_number: number;
+  /** The lifts the request wrote or brought in on that day, sorted, lowercased-unique. */
+  exercises: string[];
+  /** The ledger rows behind it, sorted. */
+  decision_ids: number[];
+}
+
+// The athlete's own words, as the ledger records them — the same reading
+// `decisionWasTheAthletesRequest` (domain/brain/athlete-request-outcome.ts) makes, kept
+// here so a repo read never imports the domain layer: a legacy background-chat draft
+// the orphan sweep adopted carries the flag for its boundary but was never their ask.
+function decisionIsAthleteRequest(decision: DecisionRef | null): boolean {
+  const context = (decision?.context ?? {}) as Record<string, any>;
+  if (context.orphan_sibling_cleanup?.provenance === "background_chat") return false;
+  return context.explicit_user_request === true || context.athlete_requested_restructure === true;
+}
+
+/**
+ * The session the athlete ASKED for today: the live adaptations on plan day
+ * `dayNumber` scoped to end on `date` itself (a today-only change), whose change still
+ * stands and was the athlete's own explicit request. Null when there is none. A
+ * removal names no card and a trip layer is the Brief's "Easier", not an ask to train,
+ * so neither counts. The daily decision carries this on its request so a train-anyway
+ * composition keeps the work they set (daily-decision.ts `same_day_request`).
+ */
+export function sameDayAthleteRequest(
+  dayNumber: number | null | undefined,
+  date: string = localDateISO()
+): SameDayAthleteRequest | null {
+  if (dayNumber == null || !Number.isFinite(Number(dayNumber))) return null;
+  const day = String(date).slice(0, 10);
+  const exercises = new Set<string>();
+  const decisionIds = new Set<number>();
+  for (const row of activeRowsOnDay(Number(dayNumber))) {
+    if (row.until_date !== day || row.layer || row.kind === "removed") continue;
+    const decision = decisionOf(row);
+    if (!decision || decision.status === "reverted" || !decisionIsAthleteRequest(decision)) continue;
+    const name = String(row.after?.exercise ?? row.exercise ?? "")
+      .trim()
+      .toLowerCase();
+    if (!name) continue;
+    exercises.add(name);
+    decisionIds.add(decision.id);
+  }
+  if (!exercises.size) return null;
+  return {
+    day_number: Number(dayNumber),
+    exercises: [...exercises].sort(),
+    decision_ids: [...decisionIds].sort((a, b) => a - b),
+  };
+}
+
 /**
  * THE HOOK the plan day-detail payload carries as `adaptations` (one property; the
  * builder stays the builder's): the live adaptations on that plan day.

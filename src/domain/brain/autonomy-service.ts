@@ -1659,6 +1659,10 @@ export function applyProposalWithAutonomy(
           rollback_available: true,
           coordination_key: input.coordination_key ?? null,
           coordinated_update: input.coordinated_update === true,
+          // The announced path already carries this; the immediate one lost it, so a
+          // today-scoped change the athlete asked for read as a coach change to every
+          // reader that asks (plan-adaptations.ts sameDayAthleteRequest among them).
+          ...(explicitRequest ? { explicit_user_request: true } : {}),
           ...(input.normalized_apply_payload ? { legacy_migration: input.normalized_apply_payload.migration } : {}),
         },
       });

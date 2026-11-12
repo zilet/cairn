@@ -735,6 +735,29 @@ bounds — every clamp, easing, hold and exclusion still applies, but nothing is
 reach, no peak single, no earned floor, and a progression target only when it does not ask for more
 load or time).
 
+**The athlete's own plan day never silently loses work (2026-11-12).** A card composed FROM a plan
+day (`deterministicComposedSession`, and every `planSnapshot`: `ComposeSessionOptions.planSourced`)
+keeps every authored item: the day's item cap (`volumeCap`) drops nothing, and the day's working-set
+budget (`workingSetCap`, 12 on a reduced day) is fitted AFTER the per-item clamps by
+`fitPlanDaySetBudget` — sets come off the largest item first (ties to the later item in effect
+order), never below one. Each trim is a `day_set_budget` entry in `validation.rejected` (with
+`sets_from`/`sets_to`) and a rotated `DAY_BUDGET_TRIM_NOTES` line on the card. Spent in plan order,
+the budget used to delete a nine-lift day's last four lifts without a word. An agent-authored session
+keeps the plain clamp. When the kept work runs longer than the duration clamp, `est_minutes` is the
+work's own length (`cardWorkMinutes`, composition-dose.ts), never the clamp. The card's `name` is the
+plan day's display name (`planDayDisplayName`), never the free-text focus, and its `focus` names only
+lifts the card carries (`focusWithoutAbsentMovements`, plan-day-focus.ts — a listed movement no card
+lift matches by noun and qualifier is dropped; region and calendar prose is left alone).
+**The session the athlete asked for today is not trimmed**: on a train-anyway request whose plan day
+carries a live today-scoped adaptation from their own explicit request
+(`sameDayAthleteRequest`, plan-adaptations.ts — the ledger's `explicit_user_request`, which the
+immediate autonomy apply now stamps too), the snapshot and envelope carry
+`request.same_day_request` (omit-when-idle, so it is in the fingerprint without a policy bump, and in
+the composition's `daily_decision` provenance), plus the `athlete_same_day_request` soft preference.
+Composition then keeps the requested lifts' authored sets (no day per-item cap, no budget trim; a
+reduced AREA's cap still applies) and their authored timed targets (the hold never shortens them; a
+deload or an easing still does). The intensity hold stays: no raise, no reach.
+
 **The composition pipeline's order is now fixed end to end (`normalizeComposedSession`,
 `daily-composition.ts`, 2026-09-24).** Saturated substitution (`substituteSaturatedPlanItems`) runs
 first, so a stand-in is itself subject to every later gate. Per-item gates (hold/deload/exclude/

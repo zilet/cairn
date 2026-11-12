@@ -106,7 +106,7 @@ function isCardio(item: any): boolean {
 
 // The card's own work on the clock: every strength set (warm-ups included) at the
 // per-set figure, plus any cardio's stated minutes.
-function cardWorkMinutes(items: readonly any[]): number {
+export function cardWorkMinutes(items: readonly any[]): number {
   let minutes = 0;
   for (const item of items) {
     if (isCardio(item)) {

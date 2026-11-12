@@ -20,9 +20,11 @@ import {
 } from "./exercises.js";
 import { type LongRunRamp, isQualityRunPrescription, longRunPrescription, longRunRampNote } from "./long-run-ramp.js";
 import { getPlanDay } from "./plan.js";
+import { focusWithoutAbsentMovements } from "./plan-day-focus.js";
+import { planDayDisplayName } from "./plan-day-name.js";
 import { classifyPattern } from "./exercise-variations.js";
 import { collapseRegionDuplicates, pairForSession, validSupersetGroup } from "./composition-pairing.js";
-import { applyWeeklyDose } from "./composition-dose.js";
+import { applyWeeklyDose, cardWorkMinutes } from "./composition-dose.js";
 import { weeklyDoseSoftLine } from "./weekly-dose-ledger.js";
 import { nextLoadStep } from "./progression.js";
 import { easedLoad } from "./load-grid.js";
@@ -53,7 +55,9 @@ export interface ComposedSession {
 export interface CompositionValidation {
   ok: boolean;
   reason: string | null;
-  rejected: Array<{ exercise: string; reason: string }>;
+  // A dropped item carries only `exercise` + `reason`. A plan-day item the day's set
+  // budget trimmed (`day_set_budget`) stays on the card and says what it lost.
+  rejected: Array<{ exercise: string; reason: string; sets_from?: number; sets_to?: number }>;
   novel_introduced: number;
   capped: boolean;
   reach_landed: boolean;
@@ -78,6 +82,12 @@ export interface ComposeSessionOptions {
   // raised on top of what they wrote: no reach, no peak single, no earned floor, and a
   // progression target is taken only when it does not ask for more load or time.
   planSnapshot?: boolean;
+  // Composed FROM the athlete's own plan day (the adaptive deterministic path; a
+  // `planSnapshot` implies it). Such a card never silently loses authored work: the
+  // day's item cap drops nothing, and the day's set budget trims sets largest-first
+  // down to one each — every trim recorded (`day_set_budget`) and said on the card —
+  // never an item. An agent-authored session keeps the plain clamp.
+  planSourced?: boolean;
 }
 
 function volumeCap(envelope: DailyDecisionEnvelope): number {
@@ -168,6 +178,48 @@ export const HOLD_TARGET_NOTES: readonly [string, ...string[]] = [
   "Keep this one where it is today",
   "No change on the load today; hold what you've been using",
 ];
+
+// A plan-day card the day's set budget trimmed: the lift stays, with fewer sets.
+export const DAY_BUDGET_TRIM_NOTES: readonly [string, ...string[]] = [
+  "Fewer sets today so the whole session fits",
+  "Trimmed to fewer sets today — every lift stays on, each a little shorter",
+  "A shorter look at this one today so the rest of the session keeps its place",
+  "Fewer sets here today; the session keeps all its lifts",
+];
+
+// The day's working-set budget on the athlete's OWN plan day: sets come off the largest
+// item first — a tie goes to the item later in effect order (core and isolation before
+// the compounds, then the later-written one), so the day's lead lifts keep more — never
+// below one, and never off an item `keep` protects. Mutates `sets`; returns what each
+// trimmed item lost and the strength total left. Cardio carries no sets and is untouched.
+function fitPlanDaySetBudget(
+  items: any[],
+  budget: number,
+  keep: (item: any) => boolean
+): { total: number; trims: Array<{ item: any; from: number; to: number }> } {
+  const strength = items.filter((item) => item?.kind !== "cardio");
+  const before = new Map<any, number>(strength.map((item) => [item, Math.max(1, Number(item.sets) || 1)]));
+  let total = [...before.values()].reduce((sum, sets) => sum + sets, 0);
+  const effectRank = new Map<any, number>(orderPlanItemsForEffect(strength).map((item, index) => [item, index]));
+  const trimmable = strength.filter((item) => !keep(item));
+  while (total > budget) {
+    let pick: any = null;
+    for (const item of trimmable) {
+      const sets = Number(item.sets) || 1;
+      if (sets <= 1) continue;
+      const pickSets = pick ? Number(pick.sets) || 1 : 0;
+      if (!pick || sets > pickSets || (sets === pickSets && (effectRank.get(item) ?? 0) > (effectRank.get(pick) ?? 0)))
+        pick = item;
+    }
+    if (!pick) break;
+    pick.sets = (Number(pick.sets) || 1) - 1;
+    total -= 1;
+  }
+  const trims = strength
+    .filter((item) => (Number(item.sets) || 1) < (before.get(item) ?? 0))
+    .map((item) => ({ item, from: before.get(item) as number, to: Number(item.sets) || 1 }));
+  return { total, trims };
+}
 
 function isPrepCompositionItem(item: { exercise?: unknown; muscle_group?: unknown }): boolean {
   return isMobility(item.muscle_group == null ? null : String(item.muscle_group)) || isPrepMovement(String(item.exercise ?? ""));
@@ -1059,7 +1111,7 @@ export function normalizeComposedSession(
   // Fold is suggest-only. Two consecutive same-lift rows stay two rows here so
   // the per-item authorized-target clamp can hold every card to the envelope.
   const base = normalizeSessionSuggestionResult(substituted.raw);
-  const rejected: Array<{ exercise: string; reason: string }> = [];
+  const rejected: CompositionValidation["rejected"] = [];
   const substitutionMeta = new Map<string, SaturatedSubstitution>(
     substituted.substitutions.map((entry) => [normalizedExerciseKey(entry.exercise), entry])
   );
@@ -1298,14 +1350,47 @@ export function normalizeComposedSession(
   const cap = volumeCap(envelope);
   const itemSetCap = perItemSetCap(envelope);
   let remainingSets = workingSetCap(envelope);
-  let changed = kept.length > cap;
+  // The athlete's own plan day never silently loses authored work (see
+  // ComposeSessionOptions.planSourced): no item-count cut, and the set budget is fitted
+  // after the per-item clamps below rather than spent in plan order.
+  const planSourced = opts.planSnapshot === true || opts.planSourced === true;
+  // …and the session they ASKED for today (daily-decision.ts `request.same_day_request`)
+  // keeps its authored sets and timed targets on the lifts the request wrote, under a
+  // train-anyway day's caps. Only on their own plan day, and only that day: an agent's
+  // composition is never loosened by it. Area safety (excluded, reduced, substituted
+  // groups) and the day's intensity hold still apply.
+  const sameDayRequest =
+    planSourced && envelope.request?.train_anyway === true ? (envelope.request.same_day_request ?? null) : null;
+  const requestedKeys = new Set<string>(
+    sameDayRequest &&
+      (envelope.template.day_number == null ||
+        Number(sameDayRequest.day_number) === Number(envelope.template.day_number))
+      ? sameDayRequest.exercises.map((name) => normalizedExerciseKey(String(name)))
+      : []
+  );
+  const isRequestedItem = (item: any): boolean =>
+    requestedKeys.size > 0 &&
+    item?.kind !== "cardio" &&
+    requestedKeys.has(normalizedExerciseKey(String(item?.exercise ?? "")));
+  // The timed targets the request wrote, read off the plan day it wrote them on.
+  const requestedSeconds = new Map<string, number>();
+  if (sameDayRequest && requestedKeys.size) {
+    const day = getPlanDay(Number(sameDayRequest.day_number)) as any;
+    for (const it of Array.isArray(day?.items) ? day.items : []) {
+      const key = normalizedExerciseKey(String(it?.exercise ?? ""));
+      const seconds = finite(it?.target_seconds);
+      if (requestedKeys.has(key) && it?.mode === "timed" && seconds != null && seconds > 0)
+        requestedSeconds.set(key, seconds);
+    }
+  }
+  let changed = !planSourced && kept.length > cap;
   const forceEasyCardio =
     envelope.request.train_anyway === true ||
     envelope.caps.intensity === "easy" ||
     envelope.caps.intensity === "deload";
   let hasEasyCardio = false;
   const capped: any[] = [];
-  for (const item of kept.slice(0, cap)) {
+  for (const item of planSourced ? kept : kept.slice(0, cap)) {
     const next = { ...item };
     const candidate = candidates.get(String(next.exercise ?? "").toLowerCase());
     if (next.kind === "cardio") {
@@ -1330,7 +1415,11 @@ export function normalizeComposedSession(
       continue;
     }
     const requestedSets = Math.max(1, Number(next.sets) || 1);
-    if (!(opts.planSnapshot && authorizedTargetRaises(next, candidate)) && applyAuthorizedTarget(next, candidate)) {
+    const requestedToday = isRequestedItem(next);
+    if (
+      !((opts.planSnapshot || requestedToday) && authorizedTargetRaises(next, candidate)) &&
+      applyAuthorizedTarget(next, candidate)
+    ) {
       changed = true;
     }
     if (applyRecoveryCycleTarget(next, envelope)) changed = true;
@@ -1347,15 +1436,24 @@ export function normalizeComposedSession(
     const isReduced = reducedExercises.has(String(next.exercise ?? "").toLowerCase());
     const stressOnly = isReduced && stressSoleExercises.has(String(next.exercise ?? "").toLowerCase());
     const authorizedSets = Math.max(1, Number(next.sets) || requestedSets);
-    const setCapForItem = isReduced ? Math.min(itemSetCap, REDUCED_ITEM_SET_CAP) : itemSetCap;
-    const boundedSets = Math.min(authorizedSets, setCapForItem, remainingSets);
+    // A lift the athlete asked for today is not held to the day's per-item cap; a
+    // reduced AREA still is — that is the body's answer, not the day's posture.
+    const setCapForItem = isReduced
+      ? Math.min(itemSetCap, REDUCED_ITEM_SET_CAP)
+      : requestedToday
+        ? authorizedSets
+        : itemSetCap;
+    // Plan-sourced: the day budget is fitted after this loop (fitPlanDaySetBudget).
+    const boundedSets = planSourced
+      ? Math.min(authorizedSets, setCapForItem)
+      : Math.min(authorizedSets, setCapForItem, remainingSets);
     if (boundedSets < 1) {
       changed = true;
       continue;
     }
     if (boundedSets !== requestedSets || boundedSets !== authorizedSets) changed = true;
     next.sets = boundedSets;
-    remainingSets -= boundedSets;
+    if (!planSourced) remainingSets -= boundedSets;
 
     let intensityFactor = 1;
     if (envelope.caps.intensity === "easy") intensityFactor = 0.8;
@@ -1384,6 +1482,15 @@ export function normalizeComposedSession(
     // number.
     const substitutionProven = substitution?.load_basis === "logged";
     if (hold && !substitutionProven && clampHeldTarget(next, envelope, candidate)) changed = true;
+    // The hold keeps the load where it is; it never shortens a hold the athlete set for
+    // today's session themselves (a 70 s plank is not clamped to last week's 68). A
+    // progression deload still lowers it, and so does any easing below.
+    if (requestedToday && next.mode === "timed" && candidate?.action !== "deload") {
+      const authoredSeconds = requestedSeconds.get(normalizedExerciseKey(String(next.exercise ?? "")));
+      const current = finite(next.target_seconds);
+      if (authoredSeconds != null && (current == null || current < authoredSeconds))
+        next.target_seconds = authoredSeconds;
+    }
     // A lift whose own log has earned past a shallow hold (`earned_floor`, the logged
     // working weight) is never prescribed under it on a day that is not itself eased —
     // an eased day (easy, deload, a deep or same-day reduced area) keeps its easing.
@@ -1461,6 +1568,32 @@ export function normalizeComposedSession(
     }
     if (reconcileLoadReason(next)) changed = true;
     capped.push(next);
+  }
+  // ---- the day's set budget on the athlete's own plan day ----
+  // Spent in plan order, the budget used to starve the tail: a reduced day's twelve sets
+  // went to the first few lifts and the last four were deleted without a word
+  // (2026-11-12). Fitted here instead, across every item at once: largest first, never
+  // below one set, never off a lift the athlete asked for today. Each trim is recorded
+  // and said on its card. The budget still binds what follows (top sets, the dose).
+  if (planSourced) {
+    const budget = workingSetCap(envelope);
+    const fit = fitPlanDaySetBudget(capped, budget, isRequestedItem);
+    for (const trim of fit.trims) {
+      rejected.push({
+        exercise: String(trim.item.exercise ?? ""),
+        reason: "day_set_budget",
+        sets_from: trim.from,
+        sets_to: trim.to,
+      });
+      if (!isPrepCompositionItem(trim.item)) {
+        trim.item.note = adaptationNote(
+          trim.item.note,
+          compositionNoteFor(DAY_BUDGET_TRIM_NOTES, envelope.date, "budget", trim.item.exercise)
+        );
+      }
+    }
+    if (fit.trims.length) changed = true;
+    remainingSets = Math.max(0, budget - fit.total);
   }
   // ---- the peak week's heavy single, ahead of its own back-off block ----
   // Last, so it reads every clamp above rather than racing them: the block's
@@ -1655,6 +1788,22 @@ export function normalizeComposedSession(
     est = envelope.caps.duration_min;
     changed = true;
   }
+  // The clamp bounds what composition may ADD; it is not the length of the athlete's own
+  // day. When every authored lift stays on and their work runs longer than the clock,
+  // the card says the work's own length rather than a number it cannot keep.
+  if (planSourced && est != null) {
+    const work = Math.round(cardWorkMinutes(finalItems));
+    if (work > est) est = work;
+  }
+  // A plan day's card speaks the day's NAME and a focus that names only lifts it carries
+  // (plan-day-focus.ts): the stored focus is free text no swap or rotation re-syncs.
+  const composedName = planSourced && base.name ? planDayDisplayName(base.name) || base.name : base.name;
+  const composedFocus = planSourced
+    ? focusWithoutAbsentMovements(
+        base.focus,
+        finalItems.map((item) => String(item?.exercise ?? "")).filter(Boolean)
+      )
+    : base.focus;
   const fallbackWhy = envelope.rationale[0]?.text ?? "Keep today's work light and conversational.";
   // The session's own sentence names the cause once a slot actually moved. The
   // plan-pick phrasing ("Switched by you, not the usual order.") is still true of
@@ -1669,8 +1818,8 @@ export function normalizeComposedSession(
   }
   return {
     session: {
-      name: hasEasyCardio ? safeEasySessionText(base.name, "Easy session") : base.name,
-      focus: hasEasyCardio ? safeEasySessionText(base.focus, "Easy movement") : base.focus,
+      name: hasEasyCardio ? safeEasySessionText(composedName, "Easy session") : composedName,
+      focus: hasEasyCardio ? safeEasySessionText(composedFocus, "Easy movement") : composedFocus,
       why: hasEasyCardio ? safeEasySessionText(composedWhy, fallbackWhy) : composedWhy,
       est_minutes: est,
       items: finalItems,
@@ -1738,8 +1887,12 @@ export function deterministicSessionRawFromEnvelope(envelope: DailyDecisionEnvel
   const excluded = new Set(envelope.muscles.excluded.map((g) => g.toLowerCase()));
   const equipmentCapability = parseEquipmentCapability(envelope.request.equipment);
   const items: Array<Record<string, unknown>> = [];
+  // The plan day's own name titles its card — never the free-text focus, which no swap,
+  // rotation or removal re-syncs and so can name lifts the day no longer carries.
+  let planDayName: string | null = null;
   if (envelope.template.day_number != null && envelope.kind !== "rest") {
     const baseDay = getPlanDay(envelope.template.day_number) as any;
+    planDayName = baseDay?.name ? planDayDisplayName(baseDay.name) || null : null;
     // Recovery adaptation is centralized in normalizeComposedSession after the
     // progression target is applied, so it has the final safety precedence for
     // both deterministic and agent-authored compositions.
@@ -1824,9 +1977,11 @@ export function deterministicSessionRawFromEnvelope(envelope: DailyDecisionEnvel
   const name =
     envelope.kind === "rest"
       ? "Easy recovery"
-      : envelope.template.focus
-        ? String(envelope.template.focus)
-        : "Today's session";
+      : items.length && planDayName
+        ? planDayName
+        : envelope.template.focus
+          ? String(envelope.template.focus)
+          : "Today's session";
   return {
     name,
     focus: envelope.kind === "rest" ? "Recovery" : envelope.template.focus,
@@ -1878,6 +2033,7 @@ export function deterministicComposedSession(
   const { session } = normalizeComposedSession(raw, envelope, {
     substituteSaturated: true,
     planSnapshot: opts.planSnapshot === true,
+    planSourced: true,
   });
   // The raw payload is built from safe template/plan items, so it always
   // normalizes; this null-guard is defensive only.

@@ -560,6 +560,11 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
 - **Dose comparability is a per-lift question, not a per-session one** — `dose_evidence`/
   `dose_context.comparable` (`progression.ts`), and `training_drive='push'`'s bounded mechanical
   authority. Details in `docs/ARCHITECTURE.md`.
+- **A card composed from the athlete's own plan day never deletes an authored lift** — the day's set
+  budget trims largest-first to one set each (`day_set_budget`, `fitPlanDaySetBudget`), the item cap
+  drops nothing, and the title is the plan day's name, never its focus prose. A today-scoped change
+  the athlete asked for rides the envelope as `request.same_day_request` and keeps its sets under
+  train-anyway. Details: `docs/ARCHITECTURE.md` "The athlete's own plan day never silently loses work".
 - **Work done is evidence — a prescription is a suggestion, the log is the truth** —
   `performed_at_full_load` (`src/repo/outcome-comparability.ts`). Intensity earns the load, the set
   count earns volume: one set short with every working set past the top still steps

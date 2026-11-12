@@ -166,7 +166,7 @@
     }
   },
   "lower_deterministic": {
-    "name": "Squat and hinge",
+    "name": "Lower A",
     "focus": "Squat and hinge",
     "why": "Training day.",
     "est_minutes": 60,
@@ -298,7 +298,7 @@
     ]
   },
   "lower_reduced": {
-    "name": "Squat and hinge",
+    "name": "Lower A",
     "focus": "Squat and hinge",
     "why": "Training day.",
     "est_minutes": 60,
@@ -430,7 +430,7 @@
     ]
   },
   "lower_snapshot": {
-    "name": "Squat and hinge",
+    "name": "Lower A",
     "focus": "Squat and hinge",
     "why": "Training day.",
     "est_minutes": 60,
