@@ -706,7 +706,7 @@ runs a file started directly with the same harness, reporter and exit codes, and
 | `CAIRN_TEST_HEAP_MB` | 1536 | V8 heap cap for the file's process, and (via `NODE_OPTIONS`) for any node process it starts |
 | `CAIRN_TEST_RSS_MB` | 2048 | the file's whole process group, sampled every 250 ms, is killed: "exceeded memory budget" |
 | `CAIRN_TEST_FILE_TIMEOUT_MS` | 4× the file's last time, 60–120 s (120 s unrecorded) | the group is killed, grandchildren too: "timed out after Ns" |
-| `CAIRN_TEST_WORKERS` | min(12, cores − 1), and at most available memory × 0.6 / `CAIRN_TEST_WORKER_MB` (default: 1.5× the heaviest recorded peak, 512 MB to the heap cap) | — the start line says which bound chose the count |
+| `CAIRN_TEST_WORKERS` | min(12, cores − 1), and at most what available memory × 0.6 holds with the n heaviest recorded files running at once (each 1.5× its peak, 512 MB to the heap cap; `CAIRN_TEST_WORKER_MB` charges every worker one figure instead) | — the start line says which bound chose the count |
 | `CAIRN_TEST_WARN_MS` / `CAIRN_TEST_WARN_RSS_MB` | 5000 / 600 | listed "over budget" after a full run (a warning, not a failure) |
 | `CAIRN_TEST_COMPILE_CACHE` | `<tmpdir>/cairn-test-compile-cache` | — every file's process shares one V8 code cache (`NODE_COMPILE_CACHE`) for `dist/`; `0` turns it off |
 

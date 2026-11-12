@@ -26,9 +26,11 @@
 //                                  record). On expiry the whole process group is killed
 //                                  (grandchildren too) and the file fails "timed out".
 //   CAIRN_TEST_WORKERS             worker count. Default: min(12, cores − 1), and never more
-//                                  than available memory × 0.6 / CAIRN_TEST_WORKER_MB (default:
-//                                  1.5× the heaviest file's recorded peak RSS, 512 MB to the
-//                                  heap cap) — the line it prints says which bound won.
+//                                  than available memory × 0.6 holds with the n heaviest
+//                                  recorded files running at once (each 1.5× its peak RSS,
+//                                  512 MB to the heap cap; CAIRN_TEST_WORKER_MB charges every
+//                                  worker one figure instead) — the line it prints says which
+//                                  bound won.
 //   CAIRN_TEST_WARN_MS=5000        a file past either line is marked "over budget" in the
 //   CAIRN_TEST_WARN_RSS_MB=600     summary of a full run (a warning; it does not fail).
 // A bare `node --test` bypasses all of this (and the per-test DB wipe): use this runner.
@@ -243,22 +245,43 @@ const cpuCount = typeof availableParallelism === "function" ? availableParalleli
 // worker-count-independent (see test/_isolate.mjs), so this knob is purely about speed.
 const WORKER_CAP = 12;
 const cpuWorkers = Math.min(WORKER_CAP, Math.max(1, cpuCount - 1));
-// Memory: never start more workers than 60% of what is available can hold at the expected
-// peak per worker — the heaviest file the last run measured, with 50% headroom (512 MB at
-// least, the heap cap at most; 1 GB before anything is recorded). Reserving the full heap
-// cap per worker instead held a 16 GB runner to 3 workers (165 s against 101 s on 9) for a
-// suite whose heaviest file peaks near 450 MB; a runaway is the RSS budget's job, not the
-// worker count's. process.availableMemory() is the reclaimable-inclusive and cgroup-aware
+// Memory: never start more workers than 60% of what is available can hold in the worst
+// case the last run measured — the n heaviest files all running at once, each with 50%
+// headroom (512 MB at least, the heap cap at most; 1 GB each before anything is recorded).
+// Charging EVERY worker the single heaviest file's peak instead let one file that runs its
+// own parallel children (moduleLoadOrder: ~1.1 GB for its process group on 14 cores) price
+// all of them at the heap cap, holding a 48 GB machine with 22 GB available to 8 workers
+// for a suite whose next-heaviest files peak near 340 MB. Reserving the full heap cap per
+// worker held a 16 GB runner to 3 workers (165 s against 101 s on 9). A runaway is the RSS
+// budget's job, not the worker count's. CAIRN_TEST_WORKER_MB charges every worker one
+// figure instead. process.availableMemory() is the reclaimable-inclusive and cgroup-aware
 // number (a container's limit, macOS's inactive pages); os.freemem() alone counts only
 // never-used pages on macOS and reads a third low there.
-const heaviestMb = Math.max(0, ...Object.values(previous).map((t) => t.rssMb ?? 0));
-const WORKER_MB = envNumber(
-  "CAIRN_TEST_WORKER_MB",
-  heaviestMb ? Math.min(HEAP_MB, Math.max(512, Math.round(heaviestMb * 1.5))) : Math.min(HEAP_MB, 1024)
-);
+const workerMbFor = (rssMb) => Math.min(HEAP_MB, rssMb ? Math.max(512, Math.round(rssMb * 1.5)) : 1024);
+const fixedWorkerMb = envNumber("CAIRN_TEST_WORKER_MB", 0);
+const peaksMb = Object.values(previous)
+  .map((t) => t.rssMb ?? 0)
+  .filter((mb) => mb > 0)
+  .sort((a, b) => b - a);
 const availableBytes =
   typeof process.availableMemory === "function" ? Math.max(0, process.availableMemory()) || freemem() : freemem();
-const memoryWorkers = Math.max(1, Math.floor((availableBytes * 0.6) / (WORKER_MB * 2 ** 20)));
+const memoryWorkers = (() => {
+  const budgetMb = (availableBytes * 0.6) / 2 ** 20;
+  let n = 0;
+  let usedMb = 0;
+  while (n < 256) {
+    const nextMb = fixedWorkerMb || workerMbFor(peaksMb[n] ?? 0);
+    if (usedMb + nextMb > budgetMb) break;
+    usedMb += nextMb;
+    n += 1;
+  }
+  return Math.max(1, n);
+})();
+const memoryHow = fixedWorkerMb
+  ? `${fixedWorkerMb} MB each`
+  : peaksMb.length
+    ? `${workerMbFor(peaksMb[0])} MB for the heaviest file down to ${workerMbFor(peaksMb[memoryWorkers - 1] ?? 0)} MB`
+    : "1024 MB each, nothing recorded";
 const requested = Number.isFinite(requestedWorkers) && requestedWorkers > 0 ? Math.trunc(requestedWorkers) : 0;
 const workers = Math.max(1, Math.min(testFiles.length, requested || cpuWorkers, memoryWorkers));
 const gb = (bytes) => (bytes / 2 ** 30).toFixed(1);
@@ -266,10 +289,10 @@ const workerWhy =
   workers === testFiles.length && testFiles.length < Math.min(requested || cpuWorkers, memoryWorkers)
     ? "one per file"
     : memoryWorkers < (requested || cpuWorkers)
-      ? `memory-bound: ${gb(availableBytes)} GB available × 0.6 / ${WORKER_MB} MB per worker; cores allow ${requested || cpuWorkers}`
+      ? `memory-bound: ${gb(availableBytes)} GB available × 0.6 holds ${memoryWorkers} of the heaviest files at once (${memoryHow}); cores allow ${requested || cpuWorkers}`
       : requested
-        ? `requested; memory allows ${memoryWorkers} at ${WORKER_MB} MB each`
-        : `cores: ${cpuCount} − 1, cap ${WORKER_CAP}; memory allows ${memoryWorkers} at ${WORKER_MB} MB each`;
+        ? `requested; memory allows ${memoryWorkers} (${memoryHow})`
+        : `cores: ${cpuCount} − 1, cap ${WORKER_CAP}; memory allows ${memoryWorkers} (${memoryHow})`;
 
 // A per-file process reports to a buffer we print only for a failing file (or for every
 // file when one slot runs the suite serially), so `spec` costs nothing on a green run and
