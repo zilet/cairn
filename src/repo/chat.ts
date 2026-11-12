@@ -854,6 +854,22 @@ export function cancelAgentJob(id: number) {
   return getAgentJob(id);
 }
 
+// Retention: terminal job rows are pure telemetry once read — prune anything
+// finished >30 days ago so agent_jobs never grows unbounded (mirrors the
+// ai_cache 30-day discipline; the rows are ephemeral + regenerable). Run at boot
+// (recoverAgentJobs) AND nightly (the scheduler's memory maintenance), so a process
+// that stays up for months still keeps the table bounded. Returns the rows removed.
+export function pruneFinishedAgentJobs(): number {
+  return Number(
+    db
+      .prepare(
+        `DELETE FROM agent_jobs WHERE status IN ('done','error','canceled')
+            AND finished_at IS NOT NULL AND finished_at < datetime('now','-30 days')`
+      )
+      .run().changes
+  );
+}
+
 // Crash recovery (boot): a 'running' job was interrupted mid-flight — its coachOp
 // may have PARTIALLY persisted a draft, so re-running risks a duplicate; mark it
 // 'error'. A 'queued' job never started → safe to re-enqueue. Returns the queued
@@ -867,11 +883,7 @@ export function cancelAgentJob(id: number) {
 export function recoverAgentJobs(
   resume?: (job: { id: number; kind: string; input: any; meta: any }) => any | null
 ): { requeue: number[]; interrupted: number; resumed: number[] } {
-  // Retention: terminal job rows are pure telemetry once read — prune anything
-  // finished >30 days ago so agent_jobs never grows unbounded (mirrors the
-  // ai_cache 30-day discipline; the rows are ephemeral + regenerable).
-  db.prepare(`DELETE FROM agent_jobs WHERE status IN ('done','error','canceled')
-                AND finished_at IS NOT NULL AND finished_at < datetime('now','-30 days')`).run();
+  pruneFinishedAgentJobs();
   const running = db
     .prepare(`SELECT id, kind, input_json, meta FROM agent_jobs WHERE status='running'`)
     .all() as any[];

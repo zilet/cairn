@@ -11,7 +11,7 @@ import { bumpTrainingDataVersion } from "./training-cache.js";
 import { loggedSessionTitle, sessionDayCandidates } from "./session-day.js";
 import type { PlanDayCandidate } from "./plan-selection.js";
 import { addDaysISO, localDateISO, chatHistoryTimeLabel } from "./shared.js";
-import { round1 } from "../lib/numbers.js";
+import { round1, stableJson } from "../lib/numbers.js";
 import {
   duplicateMetricError,
   isShadowActivity,
@@ -110,10 +110,16 @@ export interface GarminSyncDeferral {
   sessionDates: Set<string>;
   /** True once any deferred write asked for a training-cache bump. */
   bump: boolean;
+  /**
+   * `garmin_activities` ids whose row this pass actually WROTE (new, or a stored value
+   * moved). An identical re-sync writes nothing and is absent here — the sync uses it to
+   * tell a changed strength activity from one it merely saw again.
+   */
+  written?: Set<number>;
 }
 
 export function newGarminSyncDeferral(): GarminSyncDeferral {
-  return { readDates: new Set<string>(), sessionDates: new Set<string>(), bump: false };
+  return { readDates: new Set<string>(), sessionDates: new Set<string>(), bump: false, written: new Set<number>() };
 }
 
 /** Pay everything the pass deferred, once per date. Safe to call on an empty batch. */
@@ -944,19 +950,20 @@ export function upsertGarminSource(input: GarminSourceInput = {}) {
       );
     return db.prepare(`SELECT * FROM garmin_sources WHERE id = ?`).get(info.lastInsertRowid);
   }
+  // A write that would change nothing is not made: a sync stamps "connected" on the
+  // source several times a pass, and every UPDATE here moves the response-freshness
+  // odometer (repo/response-freshness.ts) even when the values are the same.
+  const fields: Array<[string, any]> = [
+    ["mode", mode],
+    ["auth_status", input.auth_status ?? null],
+    ["token_json", jsonOrNull(input.token_json)],
+    ["sync_cursor", input.sync_cursor ?? null],
+    ["last_sync_at", input.last_sync_at ?? null],
+  ];
   db.prepare(
-    `UPDATE garmin_sources SET mode = COALESCE(?, mode), auth_status = COALESCE(?, auth_status),
-       token_json = COALESCE(?, token_json), sync_cursor = COALESCE(?, sync_cursor),
-       last_sync_at = COALESCE(?, last_sync_at), updated_at = datetime('now')
-     WHERE id = ?`
-  ).run(
-    mode,
-    input.auth_status ?? null,
-    jsonOrNull(input.token_json),
-    input.sync_cursor ?? null,
-    input.last_sync_at ?? null,
-    cur.id
-  );
+    `UPDATE garmin_sources SET ${fields.map(([c]) => `${c} = COALESCE(?, ${c})`).join(", ")}, updated_at = datetime('now')
+     WHERE id = ? AND (${fields.map(([c]) => `${c} IS NOT COALESCE(?, ${c})`).join(" OR ")})`
+  ).run(...fields.map(([, v]) => v), cur.id, ...fields.map(([, v]) => v));
   return db.prepare(`SELECT * FROM garmin_sources WHERE id = ?`).get(cur.id);
 }
 
@@ -1043,6 +1050,34 @@ export function garminStoredFetchState(externalId: string): { detail: boolean; z
   return row ? { detail: !!row.detail, zones: !!row.zones, sets: !!row.sets } : null;
 }
 
+/**
+ * What the light arrival check compares a fresh activity list against: the stored
+ * date / duration / distance of each named external id under this install's Garmin
+ * source. A pure read — it never creates the source row (upsertGarminSource would).
+ */
+export function garminStoredActivityBriefs(
+  externalIds: string[]
+): Map<string, { date: string | null; duration_min: number | null; distance_km: number | null }> {
+  const ids = [...new Set(externalIds.map((id) => String(id)).filter(Boolean))];
+  const out = new Map<string, { date: string | null; duration_min: number | null; distance_km: number | null }>();
+  if (!ids.length) return out;
+  const rows = db
+    .prepare(
+      `SELECT ga.external_id, ga.date, ga.duration_min, ga.distance_km
+         FROM garmin_activities ga JOIN garmin_sources gs ON gs.id = ga.source_id
+        WHERE gs.provider = 'garmin' AND gs.label = ? AND ga.external_id IN (${ids.map(() => "?").join(",")})`
+    )
+    .all(garminSourceLabel(), ...ids) as any[];
+  for (const r of rows) {
+    out.set(String(r.external_id), {
+      date: r.date == null ? null : String(r.date),
+      duration_min: r.duration_min == null ? null : Number(r.duration_min),
+      distance_km: r.distance_km == null ? null : Number(r.distance_km),
+    });
+  }
+  return out;
+}
+
 // Did the caller STATE null for this key (clear it), or just not mention it (leave it)?
 // An explicitly-`undefined` key reads as "not mentioned" — that is what a spread of an
 // optional field produces, and it must not clear anything.
@@ -1122,14 +1157,27 @@ export function upsertGarminActivity(
       ? `${col} = excluded.${col}`
       : `${col} = COALESCE(excluded.${col}, garmin_activities.${col})`
   );
-  const updates = [
+  const updateSets = [
     "activity_id = COALESCE(excluded.activity_id, garmin_activities.activity_id)",
     "date = excluded.date",
     "start_time = COALESCE(excluded.start_time, garmin_activities.start_time)",
     "type = excluded.type",
     "name = COALESCE(excluded.name, garmin_activities.name)",
     ...mergeSets,
-  ].join(", ");
+  ];
+  const updates = updateSets.join(", ");
+  // The conflict branch writes ONLY when a column would actually move. A re-sync of a
+  // finished activity is the common case, and an UPDATE that changes nothing still
+  // stamped synced_at, fired the coach-context update odometer and bumped the training
+  // version — so every no-change sync threw away the memoized Today and coach context.
+  // Each SET expression is compared against the stored value it would replace, so the
+  // COALESCE rule (an incoming null keeps the stored value) reads as unchanged too.
+  const changedWhere = updateSets
+    .map((set) => {
+      const at = set.indexOf(" = ");
+      return `garmin_activities.${set.slice(0, at)} IS NOT (${set.slice(at + 3)})`;
+    })
+    .join(" OR ");
   const values: any[] = [
     source.id,
     String(input.external_id),
@@ -1143,18 +1191,24 @@ export function upsertGarminActivity(
       return GARMIN_ACTIVITY_JSON_KEYS.has(key as string) ? jsonOrNull(v) : (v ?? null);
     }),
   ];
-  db.prepare(
-    `INSERT INTO garmin_activities (${cols.join(", ")}, synced_at)
+  const info = db
+    .prepare(
+      `INSERT INTO garmin_activities (${cols.join(", ")}, synced_at)
      VALUES (${cols.map(() => "?").join(", ")}, datetime('now'))
-     ON CONFLICT(source_id, external_id) DO UPDATE SET ${updates}, synced_at = datetime('now')`
-  ).run(...values);
-  if (options.defer) options.defer.bump = true;
-  else bumpTrainingDataVersion(); // a synced effort feeds weekly-stats + endurance reads
+     ON CONFLICT(source_id, external_id) DO UPDATE SET ${updates}, synced_at = datetime('now')
+     WHERE ${changedWhere}`
+    )
+    .run(...values);
+  const wrote = Number(info.changes) > 0;
+  // Unchanged: the stored row IS the answer, so it is not read back.
   const row = hydrateJson(
-    db
-      .prepare(`SELECT * FROM garmin_activities WHERE source_id = ? AND external_id = ?`)
-      .get(source.id, String(input.external_id))
+    wrote || !prev
+      ? db
+          .prepare(`SELECT * FROM garmin_activities WHERE source_id = ? AND external_id = ?`)
+          .get(source.id, String(input.external_id))
+      : { ...prev }
   ) as Record<string, any>;
+  if (wrote && options.defer?.written && row?.id != null) options.defer.written.add(Number(row.id));
   // Keep the general activities mirror authoritative on every normalized update.
   // Date/type are safe because the sparse path above resolved them from `prev`;
   // nullable richness COALESCEs so a shell retry cannot erase duration/distance or
@@ -1165,10 +1219,13 @@ export function upsertGarminActivity(
   // REST edit) whenever any unrelated Garmin field was cleared, because `mirrorNotes`
   // is derived and reads empty unless HR/load/effect happen to be stored. So each
   // mirrored column clears only when a column it is DERIVED FROM was stated null.
+  // Like the upsert above, the mirror writes only when a mirrored value would move: it
+  // still puts a drifted calendar copy back, but an identical re-sync is not a write.
+  let mirrored = false;
   if (!strength && row?.activity_id) {
     const cleared = (...keys: Array<keyof GarminActivityInput>) =>
       !!options.nullsClear && keys.some((k) => statedNull(input, k as string));
-    const mirror = (col: string, isCleared: boolean) => (isCleared ? `${col} = ?` : `${col} = COALESCE(?, ${col})`);
+    const mirror = (col: string, isCleared: boolean) => (isCleared ? "?" : `COALESCE(?, ${col})`);
     const mirrorNotes =
       [
         row.avg_hr != null ? `avg HR ${Math.round(Number(row.avg_hr))}` : null,
@@ -1177,27 +1234,31 @@ export function upsertGarminActivity(
       ]
         .filter(Boolean)
         .join(" · ") || null;
-    db.prepare(
-      // raw_text mirrors `name`, which was already resolved from `prev` above and so
-      // is never null here — it stays on COALESCE. pace is derived from duration and
-      // distance; notes from HR, training load and training effect.
-      `UPDATE activities SET
-         date = ?, type = ?, ${mirror("raw_text", false)},
-         ${mirror("duration_min", cleared("duration_min"))}, ${mirror("distance_km", cleared("distance_km"))},
-         ${mirror("pace", cleared("duration_min", "distance_km"))},
-         ${mirror("notes", cleared("avg_hr", "training_load", "training_effect"))}
-       WHERE id = ?`
-    ).run(
-      row.date,
-      normalizeGarminType(row.type),
-      row.name ?? null,
-      row.duration_min ?? null,
-      row.distance_km ?? null,
-      paceFrom(row.duration_min, row.distance_km, row.type),
-      mirrorNotes,
-      row.activity_id
-    );
+    // raw_text mirrors `name`, which was already resolved from `prev` above and so
+    // is never null here — it stays on COALESCE. pace is derived from duration and
+    // distance; notes from HR, training load and training effect.
+    const fields: Array<[string, string, any]> = [
+      ["date", "?", row.date],
+      ["type", "?", normalizeGarminType(row.type)],
+      ["raw_text", mirror("raw_text", false), row.name ?? null],
+      ["duration_min", mirror("duration_min", cleared("duration_min")), row.duration_min ?? null],
+      ["distance_km", mirror("distance_km", cleared("distance_km")), row.distance_km ?? null],
+      ["pace", mirror("pace", cleared("duration_min", "distance_km")), paceFrom(row.duration_min, row.distance_km, row.type)],
+      ["notes", mirror("notes", cleared("avg_hr", "training_load", "training_effect")), mirrorNotes],
+    ];
+    const mirrorInfo = db
+      .prepare(
+        `UPDATE activities SET ${fields.map(([c, expr]) => `${c} = ${expr}`).join(", ")}
+          WHERE id = ? AND (${fields.map(([c, expr]) => `${c} IS NOT ${expr}`).join(" OR ")})`
+      )
+      .run(...fields.map(([, , v]) => v), row.activity_id, ...fields.map(([, , v]) => v));
+    mirrored = Number(mirrorInfo.changes) > 0;
   }
+  // Nothing moved in either table: an identical re-sync. No bump, no invalidation, no
+  // session reconcile and no event — every read keyed on this row is still true.
+  if (!wrote && !mirrored) return row;
+  if (options.defer) options.defer.bump = true;
+  else bumpTrainingDataVersion(); // a synced effort feeds weekly-stats + endurance reads
   // addActivity invalidates on first insert, but a provider re-sync can enrich an
   // existing external id from a shell row into a real duration/distance effort.
   // That material fact must also retire the morning recommendation — but ONLY on
@@ -1341,13 +1402,23 @@ function isRealIsoDate(value: unknown): value is string {
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === text;
 }
 
-export function upsertGarminDailyMetric(
+/**
+ * Write one daily-metric row and say whether anything was written. The conflict branch
+ * updates ONLY when a column would actually move — raw_json included — so a re-sync of
+ * a day Garmin has not revised leaves the row, its `updated_at`, the coach-context
+ * update odometer and every freshness key that reads them exactly where they were.
+ * Each SET expression is compared with the stored value it would replace, so the
+ * COALESCE rule (an incoming null keeps the stored value) counts as unchanged.
+ */
+function writeGarminDailyMetric(
   input: GarminDailyMetricInput,
-  sourceId?: number | null,
-  options: GarminUpsertOptions & { emitEvent?: boolean; deferInvalidation?: boolean } = {}
-) {
+  sourceId: number | null | undefined,
+  options: GarminUpsertOptions
+): { wrote: boolean; sourceId: number } {
   if (!isRealIsoDate(input.date)) throw new Error("date must be a real YYYY-MM-DD");
-  const source = sourceId ? getGarminSource(sourceId) : upsertGarminSource({ label: garminSourceLabel() });
+  const source = (
+    sourceId ? getGarminSource(sourceId) : upsertGarminSource({ label: garminSourceLabel() })
+  ) as { id: number } | null;
   if (!source) throw new Error("Garmin source not found");
   const cols = ["source_id", "date", ...GARMIN_DAILY_COLS, "raw_json"];
   const placeholders = cols.map(() => "?").join(", ");
@@ -1355,25 +1426,39 @@ export function upsertGarminDailyMetric(
   // Under nullsClear (the REST/MCP ingest boundary only) a key the caller EXPLICITLY
   // set to null overwrites instead — an omitted key still preserves — so a wrong
   // stored reading can be corrected back to empty without the sync ever losing data.
-  const updates = [...GARMIN_DAILY_COLS, "raw_json"]
-    .map((c) => {
-      const key = c === "raw_json" ? "raw" : c;
-      return options.nullsClear && statedNull(input, key)
-        ? `${c} = excluded.${c}`
-        : `${c} = COALESCE(excluded.${c}, garmin_daily_metrics.${c})`;
-    })
-    .join(", ");
+  const sets = [...GARMIN_DAILY_COLS, "raw_json"].map((c): [string, string] => {
+    const key = c === "raw_json" ? "raw" : c;
+    return [
+      c,
+      options.nullsClear && statedNull(input, key) ? `excluded.${c}` : `COALESCE(excluded.${c}, garmin_daily_metrics.${c})`,
+    ];
+  });
+  const updates = sets.map(([c, expr]) => `${c} = ${expr}`).join(", ");
+  const changed = sets.map(([c, expr]) => `garmin_daily_metrics.${c} IS NOT (${expr})`).join(" OR ");
   const values: any[] = [source.id, input.date];
   for (const c of GARMIN_DAILY_COLS) values.push((input as any)[c] ?? null);
   values.push(jsonOrNull(input.raw));
-  db.prepare(
-    `INSERT INTO garmin_daily_metrics (${cols.join(", ")})
+  const info = db
+    .prepare(
+      `INSERT INTO garmin_daily_metrics (${cols.join(", ")})
      VALUES (${placeholders})
-     ON CONFLICT(source_id, date) DO UPDATE SET ${updates}, updated_at = datetime('now')`
-  ).run(...values);
+     ON CONFLICT(source_id, date) DO UPDATE SET ${updates}, updated_at = datetime('now')
+     WHERE ${changed}`
+    )
+    .run(...values);
+  return { wrote: Number(info.changes) > 0, sourceId: Number(source.id) };
+}
+
+export function upsertGarminDailyMetric(
+  input: GarminDailyMetricInput,
+  sourceId?: number | null,
+  options: GarminUpsertOptions & { emitEvent?: boolean; deferInvalidation?: boolean } = {}
+) {
+  const { wrote, sourceId: sid } = writeGarminDailyMetric(input, sourceId, options);
   // Deferred by the batch writer below, which does BOTH exactly once for the whole
-  // pass instead of once per synced day — see upsertGarminDailyMetrics.
-  if (!options.deferInvalidation) {
+  // pass instead of once per synced day — see upsertGarminDailyMetrics. An unchanged
+  // row asks neither: nothing a read depends on moved.
+  if (wrote && !options.deferInvalidation) {
     bumpTrainingDataVersion(); // fresh recovery (HRV/RHR) shifts the program-state deload read
     // A Garmin sync brings fresh recovery, but a sync is mostly re-writing numbers that
     // drift a point or two — and it runs several times a day, per synced date. Only
@@ -1381,14 +1466,14 @@ export function upsertGarminDailyMetric(
     invalidateDayReadIfDecisionChanged();
   }
   const row = hydrateJson(
-    db.prepare(`SELECT * FROM garmin_daily_metrics WHERE source_id = ? AND date = ?`).get(source.id, input.date)
+    db.prepare(`SELECT * FROM garmin_daily_metrics WHERE source_id = ? AND date = ?`).get(sid, input.date)
   );
-  if (options.emitEvent !== false) {
+  if (wrote && options.emitEvent !== false) {
     emitBrainEvent({
       kind: "recovery_metrics_changed",
       domain: "recovery",
       date: input.date,
-      entity_id: source.id,
+      entity_id: sid,
       subject_key: "garmin",
     });
   }
@@ -1413,21 +1498,36 @@ export function upsertGarminDailyMetric(
  * only nudged numbers still leaves the athlete's warm Brief alone. It is strictly
  * more accurate than the per-row version, which could retire a Brief on an
  * intermediate state the completed pass then walked back.
+ *
+ * A pass whose every day comes back exactly as stored writes nothing and asks
+ * nothing. Each row's result is a small `{date, source_id, wrote}` note rather than
+ * the stored row: no caller reads the row back, and reading it meant pulling and
+ * parsing every day's full raw payload for nothing.
  */
 export function upsertGarminDailyMetrics(
   inputs: GarminDailyMetricInput[],
   sourceId?: number | null,
   options: GarminUpsertOptions & { emitEvent?: boolean } = {}
-) {
-  const rows: any[] = [];
+): Array<{ date: string; source_id: number; wrote: boolean }> {
+  const out: Array<{ date: string; source_id: number; wrote: boolean }> = [];
   for (const input of inputs) {
-    rows.push(upsertGarminDailyMetric(input, sourceId, { ...options, deferInvalidation: true }));
+    const { wrote, sourceId: sid } = writeGarminDailyMetric(input, sourceId, options);
+    out.push({ date: String(input.date), source_id: sid, wrote });
+    if (wrote && options.emitEvent !== false) {
+      emitBrainEvent({
+        kind: "recovery_metrics_changed",
+        domain: "recovery",
+        date: input.date,
+        entity_id: sid,
+        subject_key: "garmin",
+      });
+    }
   }
-  if (rows.length) {
+  if (out.some((r) => r.wrote)) {
     bumpTrainingDataVersion();
     invalidateDayReadIfDecisionChanged();
   }
-  return rows;
+  return out;
 }
 
 // ---- HRV status vocabulary --------------------------------------------------
@@ -1657,8 +1757,15 @@ export function reconcileGarminStrength(
 
   // Clean up any stale generic activity row this Garmin activity created before we
   // started modeling strength as a session (so it stops duplicating in RECENT).
+  // Every write below is counted, so a re-reconcile of an activity nothing has moved
+  // (the sync re-offers every strength activity in its window, every pass) writes
+  // nothing and moves no freshness key.
+  let changed = 0;
   if (row.external_id) {
-    db.prepare(`DELETE FROM activities WHERE source = 'garmin' AND external_id = ?`).run(String(row.external_id));
+    changed += Number(
+      db.prepare(`DELETE FROM activities WHERE source = 'garmin' AND external_id = ?`).run(String(row.external_id))
+        .changes
+    );
   }
 
   const session = getOrCreateSession(date) as any;
@@ -1672,7 +1779,11 @@ export function reconcileGarminStrength(
   // Link this row first, so the "all contributing rows" query below sees it (the
   // merge then reads every strength row attached to this session — including any
   // that linked on an earlier sync — and the one we're reconciling now).
-  db.prepare(`UPDATE garmin_activities SET session_id = ? WHERE id = ?`).run(session.id, garminActivityId);
+  changed += Number(
+    db
+      .prepare(`UPDATE garmin_activities SET session_id = ? WHERE id = ? AND session_id IS NOT ?`)
+      .run(session.id, garminActivityId, session.id).changes
+  );
 
   // Preserve any narrative/extrapolation a prior agentic pass wrote.
   let existing: any = null;
@@ -1753,27 +1864,35 @@ export function reconcileGarminStrength(
     reconciled_at: new Date().toISOString(),
     agent: existing ? (existing.agent ?? null) : null,
   };
-  db.prepare(`UPDATE sessions SET garmin_json = ? WHERE id = ?`).run(JSON.stringify(blob), session.id);
-  // The merge writes physiology onto sessions.garmin_json, which the day-read grades
-  // never look at (dayLoad reads logged_sets and garmin_activities). A re-sync rewrites
-  // a near-identical blob, so the guarded form keeps this idempotent — the sibling
-  // patch path below (patchSessionGarmin) has been guarded for exactly this reason.
-  if (options.defer) options.defer.readDates.add(date);
-  else invalidateDayReadIfDecisionChanged(date);
-
+  // `reconciled_at` is the one field that moves on every run, so it is left out of the
+  // "did anything change" question: a blob equal in everything else is not rewritten.
+  const { reconciled_at: _blobStamp, ...blobFacts } = blob;
+  const { reconciled_at: _storedStamp, ...storedFacts } = existing && typeof existing === "object" ? existing : ({} as any);
+  if (!existing || stableJson(blobFacts) !== stableJson(storedFacts)) {
+    db.prepare(`UPDATE sessions SET garmin_json = ? WHERE id = ?`).run(JSON.stringify(blob), session.id);
+    changed++;
+  }
   let exercise_sets: any = null;
   try {
     exercise_sets = row.exercise_sets_json ? JSON.parse(row.exercise_sets_json) : null;
   } catch {
     exercise_sets = null;
   }
-  // links a session + deletes the stale generic activity row
-  if (options.defer) {
-    options.defer.bump = true;
-    options.defer.sessionDates.add(date);
-  } else {
-    bumpTrainingDataVersion();
-    reconcileDailySessionsForDateSafe(date);
+  if (changed > 0) {
+    // The merge writes physiology onto sessions.garmin_json, which the day-read grades
+    // never look at (dayLoad reads logged_sets and garmin_activities). A re-sync rewrites
+    // a near-identical blob, so the guarded form keeps this idempotent — the sibling
+    // patch path below (patchSessionGarmin) has been guarded for exactly this reason.
+    if (options.defer) options.defer.readDates.add(date);
+    else invalidateDayReadIfDecisionChanged(date);
+    // links a session + deletes the stale generic activity row
+    if (options.defer) {
+      options.defer.bump = true;
+      options.defer.sessionDates.add(date);
+    } else {
+      bumpTrainingDataVersion();
+      reconcileDailySessionsForDateSafe(date);
+    }
   }
   // is_primary reflects whether THIS reconciled row is the day's primary (longest).
   const isPrimary = primary.external_id === (row.external_id ?? null);

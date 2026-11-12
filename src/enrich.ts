@@ -232,6 +232,34 @@ export function enqueueReviewRefresh(): void {
   if (!draining) void drain();
 }
 
+// The telemetry label each enrichment agent call records (agent_runs.op), so the
+// operator view can tell a food-photo read from a symptom capture instead of filing
+// every one under "auto". In runAgentWithFallback `op` is a log/telemetry field only:
+// WHICH agents run is the `order` each site picks (pickAgentOrderForTask) and HOW they
+// run is the `profile` each site passes explicitly (executionProfileForTask), and
+// neither reads the label — so these names change no routing and no effort. They are
+// deliberately not TASK_POLICY / TASK_EXECUTION_PROFILES keys.
+export const ENRICH_OPS = {
+  activity: "enrich_activity",
+  food: "enrich_food",
+  health_ingest: "enrich_health_ingest",
+  health_ingest_retry: "enrich_health_ingest_retry",
+  imaging: "enrich_imaging",
+  health_review: "enrich_health_review",
+  garmin_strength: "enrich_garmin_strength",
+  exercise: "enrich_exercise",
+  symptom: "enrich_symptom",
+  food_photo: "enrich_food_photo",
+} as const;
+
+/** The label of the generic processJob call, by job kind. */
+function enrichJobOp(kind: Kind, imaging: boolean): string {
+  if (kind === "health") return imaging ? ENRICH_OPS.imaging : ENRICH_OPS.health_ingest;
+  if (kind === "food") return ENRICH_OPS.food;
+  if (kind === "activity") return ENRICH_OPS.activity;
+  return `enrich_${kind}`;
+}
+
 // Enrichment is a small structuring task; cap it well under the default agent
 // timeout so one hanging agent can't block the whole serial queue for 5 minutes.
 const ENRICH_TIMEOUT_MS = 120_000;
@@ -856,6 +884,7 @@ async function processJob(job: Job): Promise<void> {
       timeoutMs,
       profile: executionProfileForTask(task),
       schema,
+      op: enrichJobOp(job.kind, !!healthSource?.imaging),
     });
     parsed = fb.result?.parsed ?? null;
     if (!parsed) agentFailure = new AgentFallbackError(order, [{ agent: fb.agent ?? "agent", error: "no usable output" }]);
@@ -942,7 +971,12 @@ async function processJob(job: Job): Promise<void> {
         const fb2 = await runAgentWithFallback(
           pickAgentOrderForTask("health"),
           buildHealthIngestPrompt(healthSource.fp, false, healthSource.kind, { emphasizeCompleteness: true, missed: { got, expected } }),
-          { timeoutMs: HEALTH_INGEST_TIMEOUT_MS, profile: executionProfileForTask("health"), schema: HEALTH_INGEST_SCHEMA },
+          {
+            timeoutMs: HEALTH_INGEST_TIMEOUT_MS,
+            profile: executionProfileForTask("health"),
+            schema: HEALTH_INGEST_SCHEMA,
+            op: ENRICH_OPS.health_ingest_retry,
+          },
         );
         const parsed2 = fb2.result?.parsed ?? null;
         const got2 = parsed2 && typeof parsed2 === "object" ? countIngestMarkers(parsed2) : 0;
@@ -1108,6 +1142,7 @@ async function processReviewJob(): Promise<void> {
       // never reach addHealthReview to be persisted as an empty review.
       acceptParsed: isHealthReviewResult,
       schema: HEALTH_REVIEW_SCHEMA,
+      op: ENRICH_OPS.health_review,
     });
     agent = fb.agent ?? null;
     raw = fb.result?.raw;
@@ -1237,6 +1272,7 @@ export async function processGarminStrengthJob(garminActivityId: number): Promis
       timeoutMs: ENRICH_TIMEOUT_MS,
       profile: executionProfileForTask("enrich"),
       schema: GARMIN_STRENGTH_SCHEMA,
+      op: ENRICH_OPS.garmin_strength,
     });
     agent = fb.agent ?? null;
     parsed = fb.result?.parsed ?? null;
@@ -1365,6 +1401,7 @@ export async function processExerciseJob(id: number): Promise<void> {
         timeoutMs: ENRICH_TIMEOUT_MS,
         profile: executionProfileForTask("enrich"),
         schema: EXERCISE_ENRICH_SCHEMA,
+        op: ENRICH_OPS.exercise,
       });
       parsed = fb.result?.parsed ?? null;
     } catch (e: any) {
@@ -1645,6 +1682,7 @@ export async function processSymptomJob(id: number): Promise<void> {
       profile: executionProfileForTask("enrich"),
       // Derived from the same vocabulary constants coerceSymptomCapture enforces.
       schema: SYMPTOM_CAPTURE_JSON_SCHEMA,
+      op: ENRICH_OPS.symptom,
     });
     parsed = fb.result?.parsed ?? null;
   } catch (e: any) {
@@ -1747,6 +1785,7 @@ export async function processFoodPhotoJob(id: number): Promise<void> {
         timeoutMs: ENRICH_TIMEOUT_MS,
         profile: executionProfileForTask("health"),
         schema: FOOD_PHOTO_SCHEMA,
+        op: ENRICH_OPS.food_photo,
       });
       parsed = fb.result?.parsed ?? null;
       wrote = !!parsed && applyFoodPhoto(id, parsed);
@@ -2590,6 +2629,11 @@ const RECOVERY_LOOKBACK_DAYS = 7;
  * import is keyed by activity, the narrative is an overwrite, and an activity
  * Cairn itself authored returns before any agent call.
  */
+// THE "narrative still owed" rule, over a `garmin_activities ga JOIN sessions s` row:
+// the linked session's garmin_json carries no narrative summary yet. Boot recovery and
+// the sync's re-offer both ask exactly this — never a second rule.
+const GARMIN_STRENGTH_NARRATIVE_OWED = `(s.garmin_json IS NULL OR json_extract(s.garmin_json, '$.summary') IS NULL)`;
+
 function garminStrengthJobsOwed(limit = 20): number[] {
   const since = isoDaysAgo(localDateISO(), RECOVERY_LOOKBACK_DAYS);
   try {
@@ -2599,7 +2643,7 @@ function garminStrengthJobsOwed(limit = 20): number[] {
            FROM garmin_activities ga
            JOIN sessions s ON s.id = ga.session_id
           WHERE ga.date >= ?
-            AND (s.garmin_json IS NULL OR json_extract(s.garmin_json, '$.summary') IS NULL)
+            AND ${GARMIN_STRENGTH_NARRATIVE_OWED}
           ORDER BY ga.date DESC, ga.id DESC
           LIMIT ?`
       )
@@ -2608,6 +2652,38 @@ function garminStrengthJobsOwed(limit = 20): number[] {
   } catch {
     return []; // recovery is best-effort — never block boot on a telemetry-shaped read
   }
+}
+
+/**
+ * Which of a sync pass's strength activities to offer the `garmin_strength` job.
+ *
+ * Every pass re-reads the whole sync window, so it used to re-enqueue every strength
+ * activity in it — each one an agent run rewriting a narrative the session already
+ * had. An activity is now SETTLED, and skipped, when its linked session already
+ * carries the narrative (the owed rule above, negated) AND its row did not change in
+ * this pass. A new activity, a revised one, one whose narrative is still owed, and one
+ * with no session yet (the job retries the link) are all still offered. A failed read
+ * offers everything, which is what the sync always did.
+ */
+export function garminStrengthIdsToEnqueue(ids: number[], changed: ReadonlySet<number> = new Set()): number[] {
+  const unique = [...new Set(ids.map(Number).filter((id) => Number.isFinite(id)))];
+  if (!unique.length) return [];
+  let settled: Set<number>;
+  try {
+    const rows = db
+      .prepare(
+        `SELECT ga.id AS id
+           FROM garmin_activities ga
+           JOIN sessions s ON s.id = ga.session_id
+          WHERE ga.id IN (${unique.map(() => "?").join(",")})
+            AND NOT ${GARMIN_STRENGTH_NARRATIVE_OWED}`
+      )
+      .all(...unique) as any[];
+    settled = new Set(rows.map((r) => Number(r.id)));
+  } catch {
+    return unique;
+  }
+  return unique.filter((id) => changed.has(id) || !settled.has(id));
 }
 
 // The newest health document the stored whole-picture review actually read. A

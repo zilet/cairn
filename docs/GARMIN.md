@@ -97,7 +97,16 @@ The sync mines the rich response Garmin already returns plus a handful of the
 connector's internal endpoints. **Every field is best-effort and null-safe** —
 each lives in its own `try/catch`, so a missing endpoint (or a device that doesn't
 record a metric) degrades that field to `null` rather than failing the sync. The
-full provider payloads are still preserved in `raw_json` for re-derivation.
+full provider payloads are preserved in `raw_json` for re-derivation while a day is
+recent. Once a daily-metric row is older than 30 days (the sync only ever rewrites the
+last 14), the nightly maintenance pass strips the per-minute time series nothing reads
+back — `sleep.sleepMovement`, `sleep.wellnessEpochSPO2DataDTOList`,
+`sleep.wellnessEpochRespirationDataDTOList`, `sleep.sleepHeartRate`,
+`sleep.sleepStress`, `sleep.sleepBodyBattery`, `sleep.hrvData` and `hrv.hrvReadings`
+— and keeps everything else: every summary object (`sleep.dailySleepDTO`,
+`hrv.hrvSummary`, the daily `summary`, `weight`, …) and `trainingReadiness`. The
+row's `updated_at` does not move, and a manual re-sync of an old day restores the full
+payload until the next night. Activity payloads are kept whole.
 
 The internal endpoints key on the account's GUID-style **displayName**. The sync
 resolves it from the package's profile call, falling back to the social-profile
@@ -259,6 +268,19 @@ default 20), `GARMIN_DETAIL_LIMIT` (per-activity detail fetches for training loa
 running dynamics, default 20), `GARMIN_LAPS_LIMIT` (per-activity lap fetches, default
 20). Daily wellness is fetched for the most recent
 `min(days, 14)` days.
+
+**When it syncs.** The scheduler runs a full pass about every six hours; a failed
+pass retries after 30 minutes, doubling per consecutive failure up to six hours. In
+between, a **light arrival check** asks Garmin for its five newest activities — one
+list call — every `GARMIN_LIGHT_CHECK_MINUTES` (default 15; `0` turns it off) between
+`GARMIN_LIGHT_START_HOUR` and `GARMIN_LIGHT_END_HOUR` local time (default 06:00 through
+22:59). Only when that list names an activity Cairn has not stored (or one of today's
+whose duration or distance changed) does it run a small two-day pass; otherwise it
+writes nothing. Opening the app asks the same question (`POST /api/garmin/check`), at
+most once every five minutes however often the app is foregrounded. A check that fails
+rests the light check for an hour. A pass that brings nothing new writes nothing either:
+an unchanged activity or day keeps its stored row and timestamps, so a quiet sync does
+not invalidate the cached Today read.
 
 The coach receives a compact summary (it never sees the raw rows):
 

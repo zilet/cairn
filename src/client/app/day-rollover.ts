@@ -128,9 +128,36 @@ function dayRolloverTarget(
     midnightTimer = t;
   }
 
+  // Coming back to the app is when a just-finished run is most wanted on screen. Ask
+  // the server (POST /api/garmin/check) whether the watch has sent something Cairn
+  // has not stored; it answers at once, holds its own five-minute floor and pulls only
+  // when there is news. Fire-and-forget through a plain fetch, never api(): this is
+  // not the person's request, so a 401 must not open sign-in and a failure says
+  // nothing. The page's own minute floor just keeps a flurry of foregrounds off the
+  // wire entirely.
+  const GARMIN_NUDGE_MIN_MS = 60 * 1000;
+  let lastGarminNudgeAt = 0;
+  function nudgeGarminArrival(): void {
+    const now = Date.now();
+    if (now - lastGarminNudgeAt < GARMIN_NUDGE_MIN_MS || typeof fetch !== "function") return;
+    lastGarminNudgeAt = now;
+    const headers: Record<string, string> = {};
+    try {
+      // The same two headers api() sends: the optional stored token and the device zone.
+      const shared = g as { authToken?: () => string; deviceTimeZone?: () => string };
+      const token = shared.authToken?.();
+      if (token) headers["X-Cairn-Token"] = token;
+      const tz = shared.deviceTimeZone?.();
+      if (tz) headers["X-Cairn-TZ"] = tz;
+      fetch("/api/garmin/check", { method: "POST", credentials: "same-origin", headers }).catch(() => {});
+    } catch {}
+  }
+
   function installDayRolloverWatcher(): void {
     document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible") checkFreshness();
+      if (document.visibilityState !== "visible") return;
+      checkFreshness();
+      nudgeGarminArrival();
     });
     window.addEventListener("pageshow", () => checkFreshness());
     armMidnightTimer();

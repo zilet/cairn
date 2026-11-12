@@ -32,6 +32,11 @@ import {
   type RequestTellBudget,
 } from "./domain/brain/autonomy-service.js";
 import { registerTrainingCacheClear } from "./repo/training-cache.js";
+import {
+  GARMIN_RAW_RECLAIM_MIN_ROWS,
+  compactOldGarminRawPayloads,
+  reclaimDatabaseSpace,
+} from "./repo/garmin-raw-compaction.js";
 import { settleAskedAdaptations } from "./repo/plan-adaptation-asks.js";
 import { enqueueAgentJob, ensureWeekAheadJob } from "./agentJobs.js";
 import {
@@ -304,6 +309,46 @@ const MEMORY_HOUR = (() => {
   return Number.isInteger(h) && h >= 0 && h <= 23 ? h : 3; // default 3am local
 })();
 export const MEMORY_MAINT_STATE_KEY = "memory_maint_last_date";
+
+// The light Garmin arrival check (garmin.ts requestGarminLightCheck): how often the
+// minute tick asks, and the owner's local waking hours it asks in (inclusive). 0
+// minutes turns the scheduled check off; the PWA's foreground check still works.
+const GARMIN_LIGHT_CHECK_MS = (() => {
+  const raw = process.env.GARMIN_LIGHT_CHECK_MINUTES;
+  const m = Number(raw);
+  if (raw != null && raw.trim() !== "" && Number.isInteger(m) && m === 0) return 0;
+  return (Number.isInteger(m) && m >= 5 && m <= 360 ? m : 15) * 60_000;
+})();
+const GARMIN_LIGHT_START_HOUR = (() => {
+  const h = Number(process.env.GARMIN_LIGHT_START_HOUR);
+  return Number.isInteger(h) && h >= 0 && h <= 23 ? h : 6; // default 06:00 local
+})();
+const GARMIN_LIGHT_END_HOUR = (() => {
+  const h = Number(process.env.GARMIN_LIGHT_END_HOUR);
+  return Number.isInteger(h) && h >= 0 && h <= 23 ? h : 22; // default through 22:59 local
+})();
+
+/** Is `hour` (local, 0–23) inside the light check's waking window? A window may wrap midnight. */
+export function garminLightCheckHour(
+  hour: number,
+  start: number = GARMIN_LIGHT_START_HOUR,
+  end: number = GARMIN_LIGHT_END_HOUR
+): boolean {
+  return start <= end ? hour >= start && hour <= end : hour >= start || hour <= end;
+}
+
+/** The first retry after a failed full Garmin pass. */
+export const GARMIN_RETRY_BASE_MS = 30 * 60_000;
+
+/**
+ * How long a failed full Garmin pass waits before the next attempt: 30 minutes after
+ * the first failure, doubling per consecutive failure, never longer than the ordinary
+ * interval — and never shorter than the base, so a failing connector cannot loop.
+ */
+export function garminFailureRetryMs(consecutiveFailures: number, capMs = 6 * 60 * 60 * 1000): number {
+  const n = Math.max(1, Math.trunc(Number(consecutiveFailures) || 1));
+  return Math.min(Math.max(capMs, GARMIN_RETRY_BASE_MS), GARMIN_RETRY_BASE_MS * 2 ** Math.min(n - 1, 16));
+}
 
 // The nightly learning pass PREFERS MEMORY_HOUR but is owned by the DAY, not by the
 // minute the process happened to be alive for. It used to gate on `hour === MEMORY_HOUR`
@@ -1341,11 +1386,31 @@ export function startScheduler() {
   // Garmin credentials in Settings starts syncing within a minute, no restart.
   // The 6h clock only advances when a sync actually runs; unconfigured passes
   // are a cheap settings read + two fs.existsSync calls.
+  //
+  // A FAILED pass does not wait the full six hours: it retries after
+  // garminFailureRetryMs (30 min, doubling per consecutive failure, capped at the
+  // interval); a success resets the ladder. Between full passes, during the owner's
+  // waking hours, the minute tick also asks the light arrival question (garmin.ts
+  // requestGarminLightCheck) every GARMIN_LIGHT_CHECK_MINUTES: one list call, and a
+  // two-day pass only when it names an activity Cairn has not stored.
   const GARMIN_INTERVAL_MS = 6 * 60 * 60 * 1000;
   let garminDueAt = Date.now() + 44_000; // gate opens just before the 45s boot pass fires
   let garminBusy = false;
+  let garminFailures = 0;
+  const garminFailed = (error: unknown) => {
+    garminFailures++;
+    garminDueAt = Date.now() + garminFailureRetryMs(garminFailures, GARMIN_INTERVAL_MS);
+    recordSchedulerFailure("garmin_auto_sync", error);
+    log.error(`[garmin] auto-sync failed; retrying in ${Math.round((garminDueAt - Date.now()) / 60_000)} min`, {
+      error,
+    });
+  };
   const garminTick = async () => {
-    if (garminBusy || Date.now() < garminDueAt) return;
+    if (garminBusy) return;
+    if (Date.now() < garminDueAt) {
+      void garminLightTick();
+      return;
+    }
     try {
       const { isGarminConfigured, syncGarmin } = await import("./garmin.js");
       if (!isGarminConfigured()) return;
@@ -1353,19 +1418,39 @@ export function startScheduler() {
       garminDueAt = Date.now() + GARMIN_INTERVAL_MS;
       const r = await syncGarmin(); // records garmin_last_sync_at/status itself
       if (r.ok) {
+        garminFailures = 0;
         log.info(`[garmin] auto-sync ok: ${r.activities} activities, ${r.daily_metrics} daily metric days.`);
         // A sync moves the coach context's key; rebuild it here rather than on the
         // next Today open.
         repo.prewarmCoachContext();
       } else {
-        recordSchedulerFailure("garmin_auto_sync", new Error(String(r.error || "sync failed")));
-        log.error("[garmin] auto-sync failed", { error: new Error(String(r.error || "sync failed")) });
+        garminFailed(new Error(String(r.error || "sync failed")));
       }
     } catch (e: any) {
-      recordSchedulerFailure("garmin_auto_sync", e);
-      log.error(`[garmin] auto-sync error`, { error: e });
+      garminFailed(e);
     } finally {
       garminBusy = false;
+    }
+  };
+  let garminLightBusy = false;
+  const garminLightTick = async () => {
+    if (garminLightBusy || GARMIN_LIGHT_CHECK_MS <= 0) return;
+    if (!garminLightCheckHour(nowContext(new Date()).hour)) return;
+    garminLightBusy = true;
+    try {
+      const { isGarminConfigured, requestGarminLightCheck } = await import("./garmin.js");
+      if (!isGarminConfigured()) return;
+      const r = await requestGarminLightCheck({ minIntervalMs: GARMIN_LIGHT_CHECK_MS });
+      if (r.result?.ok) {
+        log.info(`[garmin] light check landed ${r.result.activities} activities (${r.news}).`);
+        repo.prewarmCoachContext();
+      }
+    } catch (e: any) {
+      // requestGarminLightCheck never throws; this is the import failing. Calm: the
+      // full pass still runs on its own clock.
+      log.warn(`[garmin] light check skipped: ${e?.message ?? e}`);
+    } finally {
+      garminLightBusy = false;
     }
   };
 
@@ -1563,6 +1648,31 @@ export function startScheduler() {
         } catch (e: any) {
           recordSchedulerFailure("exercise_reconciliation", e);
           log.error(`[memory] nightly exercise tidy failed`, { error: e });
+        }
+        // 4. Storage housekeeping (deterministic). Old Garmin payloads lose the
+        //    per-minute series nothing reads back (repo/garmin-raw-compaction.ts), and
+        //    finished agent-job rows past retention go — boot used to be the only prune,
+        //    so a process up for months never ran it. A compaction that freed real
+        //    space checkpoints the WAL and VACUUMs; a failure there is logged, never
+        //    thrown into the pass.
+        try {
+          const pruned = repo.pruneFinishedAgentJobs();
+          if (pruned) log.info(`[memory] pruned ${pruned} finished agent job(s) past retention.`);
+        } catch (e: any) {
+          recordSchedulerFailure("agent_jobs_prune", e);
+          log.error(`[memory] agent-job prune failed`, { error: e });
+        }
+        try {
+          const { compacted } = compactOldGarminRawPayloads({ today: stamp });
+          if (compacted) log.info(`[memory] compacted ${compacted} old Garmin day payload(s).`);
+          if (compacted > GARMIN_RAW_RECLAIM_MIN_ROWS) {
+            const reclaimed = reclaimDatabaseSpace();
+            if (reclaimed.ok) log.info(`[memory] reclaimed database space (WAL checkpoint + VACUUM).`);
+            else log.warn(`[memory] could not reclaim database space: ${reclaimed.error}`);
+          }
+        } catch (e: any) {
+          recordSchedulerFailure("garmin_raw_compaction", e);
+          log.error(`[memory] Garmin payload compaction failed`, { error: e });
         }
         // Every step above isolates its own failure, so reaching here means the pass
         // ran. Acknowledging the day is what makes the next tick skip it — and what a

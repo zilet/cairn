@@ -38,6 +38,27 @@ garminRouter.post("/garmin/sync", async (req, res, next) => {
     next(e);
   }
 });
+// The PWA came to the foreground: has the watch sent something Cairn has not stored?
+// One Garmin list call, and a two-day pass only when the answer is yes (see
+// requestGarminLightCheck). The SERVER holds the floor — at most one check per five
+// minutes, an hour's rest after a failure — so a phone flicked open and shut all day
+// costs nothing. Answers at once; any pass it starts lands in the background.
+garminRouter.post("/garmin/check", async (_req, res, next) => {
+  try {
+    const { GARMIN_LIGHT_FOREGROUND_MIN_MS, requestGarminLightCheck } = await import("../garmin.js");
+    const run = requestGarminLightCheck({ minIntervalMs: GARMIN_LIGHT_FOREGROUND_MIN_MS });
+    // A skip resolves at once (and, listed first, wins the race); a real check is
+    // still pending, so the already-settled null answers and the check runs on.
+    const settled = await Promise.race([run, Promise.resolve(null)]);
+    if (settled && !settled.checked) {
+      res.json({ ok: true, started: false, skipped: settled.skipped ?? null });
+      return;
+    }
+    res.json({ ok: true, started: true });
+  } catch (e) {
+    next(e);
+  }
+});
 // Send FINISHED Cairn strength sessions from before the 7-day sync window back to
 // Garmin. Dry run unless {apply:true}: the preview says what each session would do
 // and which lifts the FIT catalog cannot place, and nothing is written or queued.

@@ -271,3 +271,57 @@ test("Today repaints after a short absence; the Session tab waits the long windo
   listeners.visibilitychange();
   assert.deepEqual(context.activated, ["today", "session"]);
 });
+
+// Coming back to the app asks the server whether the watch sent something new
+// (POST /api/garmin/check). The server holds the real floor; the page keeps a burst of
+// foregrounds off the wire, uses a plain fetch (a 401 must never open sign-in) and
+// says nothing when the request fails.
+test("a foreground nudges the Garmin arrival check, at most once a minute", async () => {
+  const listeners = {};
+  const calls = [];
+  let now = Date.parse("2026-07-10T12:00:00Z");
+  const FakeDate = class extends Date {
+    static now() {
+      return now;
+    }
+  };
+  const context = {
+    Date: FakeDate,
+    Math,
+    Object,
+    Intl,
+    setTimeout: () => ({ unref() {} }),
+    clearTimeout: () => {},
+    fetch: (url, init) => {
+      calls.push({ url, method: init?.method, credentials: init?.credentials });
+      return Promise.reject(new Error("offline"));
+    },
+    document: {
+      visibilityState: "visible",
+      addEventListener: (name, fn) => {
+        listeners[name] = fn;
+      },
+    },
+    window: { addEventListener: () => {} },
+    state: { tab: "train", logDate: "2026-07-10" },
+    localISO: () => "2026-07-10",
+    activateTab: () => {},
+    syncRouteFromState: () => {},
+  };
+  vm.runInNewContext(readFileSync(join(root, "public/js/app-day-rollover.js"), "utf8"), context);
+  context.window.installDayRolloverWatcher();
+  listeners.visibilitychange();
+  listeners.visibilitychange();
+  assert.equal(calls.length, 1, "a second foreground within the minute stays off the wire");
+  assert.equal(calls[0].url, "/api/garmin/check");
+  assert.equal(calls[0].method, "POST");
+  assert.equal(calls[0].credentials, "same-origin");
+  now += 61_000;
+  listeners.visibilitychange();
+  assert.equal(calls.length, 2, "a later foreground asks again");
+  context.document.visibilityState = "hidden";
+  now += 61_000;
+  listeners.visibilitychange();
+  assert.equal(calls.length, 2, "going to the background asks nothing");
+  await new Promise((resolve) => setImmediate(resolve)); // the rejected fetch is swallowed
+});

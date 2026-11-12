@@ -12,7 +12,7 @@ The OAuth 2.1 doors an AI app signs in through for `/mcp` (`/.well-known/oauth-*
 [OPERATIONS.md](OPERATIONS.md) "Connect an AI app (MCP)".
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**414 routes** across 136 groups.
+**415 routes** across 136 groups.
 
 ## `/activities`
 
@@ -388,6 +388,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 |---|---|---|
 | GET | `/api/garmin/activities` |  |
 | POST | `/api/garmin/activities` |  |
+| POST | `/api/garmin/check` | The PWA came to the foreground: has the watch sent something Cairn has not stored? One Garmin list call, and a two-day pass only when the answer is yes (see requestGarminLightCheck). The SERVER holds the floor — at most one check per five minutes, an hour's rest after a failure — so a phone flicked open and shut all day costs nothing. Answers at once; any pass it starts lands in the background. |
 | GET | `/api/garmin/daily` | `raw_json` (device wire payload, ~57 KB/row) is dropped by default; `?raw=1` includes it. Nothing on the read side uses it — only ingest writes it. |
 | POST | `/api/garmin/daily` |  |
 | POST | `/api/garmin/export-backfill` | Send FINISHED Cairn strength sessions from before the 7-day sync window back to Garmin. Dry run unless {apply:true}: the preview says what each session would do and which lifts the FIT catalog cannot place, and nothing is written or queued. Applying enqueues ordinary garmin_export jobs, oldest first, on the serial queue. |

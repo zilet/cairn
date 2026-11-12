@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { emitBrainEvent } from "./brainEvents.js";
-import { flushGarminSyncDeferral, garminLapsStored, garminStoredFetchState, garminSourceLabel, getGarminCoachSummary, isStrengthGarminType, newGarminSyncDeferral, normalizeGarminHrvStatus, reconcileGarminStrength, upsertGarminActivity, upsertGarminDailyMetrics, upsertGarminSource } from "./repo/activities.js";
+import { flushGarminSyncDeferral, garminLapsStored, garminStoredActivityBriefs, garminStoredFetchState, garminSourceLabel, getGarminCoachSummary, isStrengthGarminType, newGarminSyncDeferral, normalizeGarminHrvStatus, reconcileGarminStrength, upsertGarminActivity, upsertGarminDailyMetrics, upsertGarminSource } from "./repo/activities.js";
 import { runWithFreshBrainSnapshot } from "./brain/snapshot.js";
 import type { GarminActivityInput, GarminDailyMetricInput } from "./repo/activities.js";
 import { detectRunCalibration } from "./repo/calibration.js";
@@ -401,7 +401,16 @@ export function garminClientCredentials(username: string, password: string, hasT
   return null;
 }
 
+// The suite is offline: a test hands in a fake client and the REAL pass runs against it
+// (the single-flight, the upserts, the light check). Null restores the real connector.
+let clientFactoryForTests: (() => Promise<any> | any) | null = null;
+
+export function setGarminClientForTests(factory: (() => Promise<any> | any) | null): void {
+  clientFactoryForTests = factory;
+}
+
 async function makeClient() {
+  if (clientFactoryForTests) return clientFactoryForTests();
   const mod = await import("garmin-connect");
   const GarminConnect = (mod as any).GarminConnect || (mod as any).default;
   const { username, password } = getGarminCredentials();
@@ -1189,6 +1198,144 @@ export function syncGarmin(
   return entry.promise;
 }
 
+// ---- The light arrival check -------------------------------------------------------
+// The full pass runs every six hours, so a run finished at 07:10 could wait until the
+// next pass to show up. The light check is the cheap question in between: ONE list call
+// for the newest few activities. Only when that list names an activity Cairn has not
+// stored (or one of today's whose duration/distance moved — a watch that synced a
+// partial recording first) does it run a SMALL pass over the last two days, through the
+// same single-flight as every other sync. Otherwise it writes nothing at all.
+//
+// Two callers share one clock: the scheduler (every GARMIN_LIGHT_CHECK_MINUTES in the
+// owner's waking hours) and the PWA coming to the foreground (POST /api/garmin/check,
+// at most once per GARMIN_LIGHT_FOREGROUND_MIN_MS whatever the client does). The
+// connector has no rate-limit handling of its own, so a check that throws — or a small
+// pass that fails — backs the light check off for an hour; the full pass is untouched.
+
+/** How many of the newest activities the list call asks for. */
+export const GARMIN_LIGHT_LIST_COUNT = 5;
+/** The small pass a light check runs when it finds news: two days, daily metrics included. */
+export const GARMIN_LIGHT_SYNC_WINDOW: GarminSyncOptions = { days: 2, limit: 10, daily: true };
+/** The foreground trigger's server-side floor between checks. */
+export const GARMIN_LIGHT_FOREGROUND_MIN_MS = 5 * 60_000;
+/** After a check that threw (or a small pass that failed), the light check rests this long. */
+export const GARMIN_LIGHT_BACKOFF_MS = 60 * 60_000;
+/** The list call gets this long; garmin-connect sets no timeout of its own. */
+const GARMIN_LIGHT_LIST_DEADLINE_MS = 60_000;
+/** Below this a duration/distance difference is float noise, not a revised recording. */
+const GARMIN_LIGHT_TOLERANCE = 0.05;
+
+export type GarminLightCheckResult = {
+  /** True when the list call was actually made. */
+  checked: boolean;
+  /** Why no check was made: not configured, too soon, resting after a failure, or a sync is already running. */
+  skipped?: "not_configured" | "recent" | "backoff" | "sync_running";
+  /** What the list showed that the store lacks, or null when there was nothing new. */
+  news?: string | null;
+  /** The small pass's result, when one ran. */
+  result?: GarminSyncResult;
+  error?: string;
+};
+
+let lightLastCheckAt = 0;
+let lightBackoffUntil = 0;
+let lightInFlight: Promise<GarminLightCheckResult> | null = null;
+
+/** Forget the light check's clock and backoff (tests; nothing else needs it). */
+export function resetGarminLightCheckForTests(): void {
+  lightLastCheckAt = 0;
+  lightBackoffUntil = 0;
+  lightInFlight = null;
+}
+
+function lightDiffers(incoming: number | null | undefined, stored: number | null | undefined): boolean {
+  // An incoming null is "no information" — the upsert would keep the stored value.
+  if (incoming == null) return false;
+  if (stored == null) return true;
+  return Math.abs(Number(incoming) - Number(stored)) > GARMIN_LIGHT_TOLERANCE;
+}
+
+/**
+ * What a fresh activity list says Cairn is missing, or null when it says nothing new.
+ * Only activities the small pass would actually store count (dated inside its window):
+ * a late upload from last week is left to the full pass, or every check would re-run a
+ * pass that never stores it.
+ */
+export function garminLightCheckNews(rows: any[], today = localDateISO()): string | null {
+  const since = isoDaysAgo(Number(GARMIN_LIGHT_SYNC_WINDOW.days));
+  const inputs = (Array.isArray(rows) ? rows : [])
+    .map((row) => {
+      try {
+        return garminActivityInput(row);
+      } catch {
+        return null;
+      }
+    })
+    .filter((input): input is GarminActivityInput => !!input && !!input.external_id && input.external_id !== "undefined")
+    .filter((input) => !input.date || input.date >= since);
+  if (!inputs.length) return null;
+  const stored = garminStoredActivityBriefs(inputs.map((input) => String(input.external_id)));
+  for (const input of inputs) {
+    const have = stored.get(String(input.external_id));
+    if (!have) return `new activity ${input.external_id}`;
+    const isToday = input.date === today || have.date === today;
+    if (
+      isToday &&
+      (lightDiffers(input.duration_min, have.duration_min) || lightDiffers(input.distance_km, have.distance_km))
+    ) {
+      return `activity ${input.external_id} changed`;
+    }
+  }
+  return null;
+}
+
+function withLightDeadline<T>(work: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("Garmin activity list timed out")), GARMIN_LIGHT_LIST_DEADLINE_MS);
+    timer.unref?.();
+  });
+  return Promise.race([work, deadline]).finally(() => clearTimeout(timer));
+}
+
+async function runGarminLightCheck(): Promise<GarminLightCheckResult> {
+  try {
+    const client = await makeClient();
+    const rows = await withLightDeadline(Promise.resolve(client.getActivities(0, GARMIN_LIGHT_LIST_COUNT)));
+    const news = garminLightCheckNews(rows || []);
+    if (!news) return { checked: true, news: null };
+    log.info(`[garmin] light check: ${news}; running a two-day pass.`);
+    const result = await syncGarmin(GARMIN_LIGHT_SYNC_WINDOW);
+    if (!result.ok) lightBackoffUntil = Date.now() + GARMIN_LIGHT_BACKOFF_MS;
+    return { checked: true, news, result };
+  } catch (e: any) {
+    lightBackoffUntil = Date.now() + GARMIN_LIGHT_BACKOFF_MS;
+    const error = e?.message ?? String(e);
+    log.warn(`[garmin] light check failed; resting it for an hour: ${error}`);
+    return { checked: true, error };
+  }
+}
+
+/**
+ * Ask the light arrival question, unless it was asked within `minIntervalMs`, is
+ * resting after a failure, or a sync is already running. A call while a check is in
+ * flight joins it. Never throws.
+ */
+export function requestGarminLightCheck(opts: { minIntervalMs: number }): Promise<GarminLightCheckResult> {
+  if (lightInFlight) return lightInFlight;
+  if (!clientFactoryForTests && !isGarminConfigured()) return Promise.resolve({ checked: false, skipped: "not_configured" });
+  const now = Date.now();
+  if (now < lightBackoffUntil) return Promise.resolve({ checked: false, skipped: "backoff" });
+  if (now - lightLastCheckAt < Math.max(0, opts.minIntervalMs)) return Promise.resolve({ checked: false, skipped: "recent" });
+  if (pendingSyncs.size > 0) return Promise.resolve({ checked: false, skipped: "sync_running" });
+  lightLastCheckAt = now;
+  const run = runGarminLightCheck().finally(() => {
+    if (lightInFlight === run) lightInFlight = null;
+  });
+  lightInFlight = run;
+  return run;
+}
+
 async function syncGarminPass(window: GarminSyncWindow, signal?: AbortSignal): Promise<GarminSyncResult> {
   const { days, limit } = window;
   const source = upsertGarminSource({
@@ -1289,10 +1436,15 @@ async function syncGarminPass(window: GarminSyncWindow, signal?: AbortSignal): P
     // exports the session just finished, regardless of age.
     const exportSince = isoDaysAgo(Math.min(7, days));
     const exportIds = getSettings().garmin_export_strength ? sessionsEligibleForGarminExport(exportSince) : [];
+    // A strength activity is re-offered to the narrative only while its narrative is
+    // still owed or its row actually moved in this pass. Every pass sees the whole
+    // 30-day window again, and each re-offer used to be an agent run that rewrote the
+    // same sentence; an identical re-sync of an already-read lift costs nothing now.
+    const changedIds: ReadonlySet<number> = new Set(defer.written ?? []);
     if (strengthIds.length || exportIds.length) {
       import("./enrich.js")
         .then((m) => {
-          for (const id of strengthIds) m.enqueueEnrich("garmin_strength", id);
+          for (const id of m.garminStrengthIdsToEnqueue(strengthIds, changedIds)) m.enqueueEnrich("garmin_strength", id);
           // After the strength reconcile above, so a session that just linked a watch
           // activity is exported against its new target rather than the old one.
           for (const id of exportIds) m.enqueueEnrich("garmin_export", id);
@@ -1327,6 +1479,8 @@ async function syncGarminPass(window: GarminSyncWindow, signal?: AbortSignal): P
       last_sync_at: new Date().toISOString(),
     });
     setGarminSyncStatus(`ok: ${activities} activit${activities === 1 ? "y" : "ies"} · ${daily} daily`);
+    // A pass that just read the activity list answers the light check's question too.
+    lightLastCheckAt = Date.now();
     // A synced run is where a calibration test physically HAPPENED, so read the
     // freshly landed runs for a test signature (a 30-min threshold effort, a
     // fixed-HR benchmark) before re-deriving the personal HR model — a detected
