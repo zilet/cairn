@@ -83,6 +83,7 @@ type TodayPlanSurfaceRendererDeps = {
 };
 type TodayPlanSurfaceRendererApi = {
   buildHtml(options: TodayPlanSurfaceRendererOptions, deps: TodayPlanSurfaceRendererDeps): string;
+  regroupPairs(root: ParentNode | null | undefined): void;
 };
 
 (() => {
@@ -287,6 +288,61 @@ type TodayPlanSurfaceRendererApi = {
     };
   }
 
+  function groupCaptionText(count: number): string {
+    return count === 2 ? "Pair — alternate sets, rest after both" : "Group — rotate sets, rest after all";
+  }
+
+  function groupCaptionHtml(count: number, key: number, esc: (value: unknown) => string): string {
+    return `<div class="ex-group-cap" data-group="${key}">${esc(groupCaptionText(count))}</div>`;
+  }
+
+  // The head/tail classes are set by the renderer (never inferred with :has() or a
+  // sibling combinator), so an engine without :has() still draws the group right.
+  function groupClasses(position: number, size: number): string {
+    return ` ex-in-group${position === 0 ? " ex-group-head" : ""}${position === size - 1 ? " ex-group-tail" : ""}`;
+  }
+
+  // A card leaving (skip) or returning (undo) changes who is still on screen without a
+  // repaint. Re-evaluate every group from the DOM: a lone remaining member is a plain
+  // card (no rail, caption or partner chip); two or more are one group again, with the
+  // caption, chips and corners to match. Cards keep `data-group` for exactly this.
+  function regroupPairs(root: ParentNode | null | undefined): void {
+    if (!root || typeof root.querySelectorAll !== "function") return;
+    const byGroup = new Map<string, HTMLElement[]>();
+    root.querySelectorAll<HTMLElement>(".ex[data-group]").forEach((card) => {
+      const key = card.dataset.group || "";
+      byGroup.set(key, [...(byGroup.get(key) || []), card]);
+    });
+    root.querySelectorAll<HTMLElement>(".ex-group-cap[data-group]").forEach((cap) => {
+      if (!byGroup.has(cap.dataset.group || "")) cap.remove();
+    });
+    const makeChip = (names: string[]): string => {
+      const cards = typeof CairnTodayCards !== "undefined" ? CairnTodayCards : null;
+      return cards && typeof cards.pairChipHtml === "function" ? cards.pairChipHtml(names) : "";
+    };
+    for (const [key, members] of byGroup) {
+      const caption = [...root.querySelectorAll<HTMLElement>(".ex-group-cap[data-group]")].find((cap) => cap.dataset.group === key);
+      const lone = members.length < 2;
+      members.forEach((card, index) => {
+        card.classList.toggle("ex-in-group", !lone);
+        card.classList.toggle("ex-group-head", !lone && index === 0);
+        card.classList.toggle("ex-group-tail", !lone && index === members.length - 1);
+        const meta = card.querySelector<HTMLElement>(".ex-meta");
+        meta?.querySelector(".ex-pair-chip")?.remove();
+        if (lone || !meta) return;
+        const names = members.filter((other) => other !== card).map((other) => other.dataset.card || "");
+        meta.insertAdjacentHTML("beforeend", makeChip(names));
+      });
+      if (lone) {
+        caption?.remove();
+      } else if (caption) {
+        caption.textContent = groupCaptionText(members.length);
+      } else {
+        members[0].insertAdjacentHTML("beforebegin", groupCaptionHtml(members.length, Number(key), (v) => String(v ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c] as string)));
+      }
+    }
+  }
+
   function buildHtml(options: TodayPlanSurfaceRendererOptions, deps: TodayPlanSurfaceRendererDeps): string {
     if (options.showDone) {
       return deps.sessionDoneCard(options.session, options.day, { isToday: options.isToday });
@@ -389,11 +445,14 @@ type TodayPlanSurfaceRendererApi = {
       }
       if (emitted.has(key)) continue;
       emitted.add(key);
-      const caption = members.length === 2 ? "Pair — alternate sets, rest after both" : "Group — rotate sets, rest after all";
-      html += `<div class="ex-group-cap">${surfaceDeps.escapeHtml(caption)}</div>`;
-      for (const member of members) {
-        html += cardHtml(member, { pairPartners: members.filter((other) => other !== member).map((other) => String(other.exercise || "")) });
-      }
+      html += groupCaptionHtml(members.length, key, surfaceDeps.escapeHtml);
+      members.forEach((member, position) => {
+        html += cardHtml(member, {
+          pairPartners: members.filter((other) => other !== member).map((other) => String(other.exercise || "")),
+          pairGroup: key,
+          pairClasses: groupClasses(position, members.length),
+        });
+      });
     }
 
     for (const exercise of options.offPlanEx) {
@@ -437,6 +496,7 @@ type TodayPlanSurfaceRendererApi = {
 
   const CAIRN_TODAY_PLAN_SURFACE_RENDERER: TodayPlanSurfaceRendererApi = {
     buildHtml,
+    regroupPairs,
   };
 
   Object.assign(globalThis, { CairnTodayPlanSurfaceRenderer: CAIRN_TODAY_PLAN_SURFACE_RENDERER });

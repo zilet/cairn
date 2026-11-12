@@ -187,6 +187,12 @@ type TodaySessionSkipOutboxGlobals = {
     return `${date}|${exercise.toLowerCase()}`;
   }
 
+  // Skip, undo and a refused skip move cards without a repaint, so who is still paired
+  // with whom is re-read from the DOM each time.
+  function regroup(deps: TodaySessionSkipDeps): void {
+    if (typeof CairnTodayPlanSurfaceRenderer !== "undefined") CairnTodayPlanSurfaceRenderer.regroupPairs(deps.root);
+  }
+
   function removeCards(cards: HTMLElement[], exercise: string, deps: TodaySessionSkipDeps, guard: () => boolean): void {
     let outstanding = cards.length;
     for (const el of cards) {
@@ -195,6 +201,7 @@ type TodaySessionSkipOutboxGlobals = {
         el.remove();
         if (--outstanding > 0) return;
         addSkipName(exercise, deps);
+        regroup(deps);
       });
     }
   }
@@ -216,6 +223,7 @@ type TodaySessionSkipOutboxGlobals = {
       for (const el of detached) before.parentNode.insertBefore(el, before);
     }
     for (const el of cards) deps.expandEl(el);
+    regroup(deps);
     return true;
   }
 

@@ -35,7 +35,11 @@
         : "";
     return `<li class="rcpt is-${status}" data-rcpt="${escAttr(key)}"><span class="rcpt-what">${escHtml(what)}</span>${
       until ? `<span class="rcpt-until"> · ${escHtml(until)}</span>` : ""
-    }${state}${go}${act}</li>`;
+    }${state}${
+      // The way forward and the way back sit on their own row, so a narrow phone never
+      // splits the sentence from its "· for today" or strands Undo under the button.
+      go ? `<span class="rcpt-acts">${go}${act}</span>` : act
+    }</li>`;
   }
 
   function listHtml(receipts: unknown, options: { readonly?: boolean } = {}): string {

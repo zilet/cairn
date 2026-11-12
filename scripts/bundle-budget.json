@@ -26,8 +26,8 @@
         "brotli": 121979
       },
       "budget": {
-        "raw": 625664,
-        "brotli": 129024
+        "raw": 640000,
+        "brotli": 132096
       }
     },
     "public/js/bundle-03-capture.js": {
