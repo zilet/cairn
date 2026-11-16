@@ -629,7 +629,13 @@ export interface GroupVolume {
 }
 
 // Fold logged sets into effective working-set volume per canonical group. Pure.
-export function effectiveVolumeByGroup(sets: VolumeSet[]): Map<MuscleGroup, GroupVolume> {
+export function effectiveVolumeByGroup(
+  sets: VolumeSet[],
+  // How much one set counts at its logged reserve. Volume readers use the default;
+  // the acute-recovery residual passes its own (a far-from-failure set is a lighter
+  // stimulus on recovery than it is a stimulus for growth).
+  effortWeight: (rir: number | null | undefined) => number = setEffortWeight
+): Map<MuscleGroup, GroupVolume> {
   // The day's TOP working weight per (exercise, date), to spot ramp-up warmups.
   const topByExDate = new Map<string, number>();
   for (const s of sets) {
@@ -659,12 +665,15 @@ export function effectiveVolumeByGroup(sets: VolumeSet[]): Map<MuscleGroup, Grou
     }
     // Proximity to failure is not what limits a loaded carry — time and grip are —
     // so an RIR typed on one is not reps in reserve and must not halve the set.
-    const effort = classifyPattern(s.exercise) === "carry" ? 1 : setEffortWeight(s.rir);
+    const effort = classifyPattern(s.exercise) === "carry" ? 1 : effortWeight(s.rir);
     const tonnage = s.weight != null && s.reps != null && Number(s.weight) > 0 && Number(s.reps) > 0
       ? Number(s.weight) * Number(s.reps)
       : 0;
     bump(primary, effort, s.date, tonnage);
-    for (const g of indirectGroupsForExercise(s.exercise, s.muscle_group)) {
+    // A core movement is never a press or a row: "Flat Bench Knee Raise" matches the
+    // push rules on the word "bench", and must not lend triceps/shoulders credit.
+    const indirect = primary === "core" ? [] : indirectGroupsForExercise(s.exercise, s.muscle_group);
+    for (const g of indirect) {
       if (g === primary || isMobility(g)) continue;
       bump(g, INDIRECT_CREDIT * effort, s.date, 0); // indirect earns half a set, no tonnage
     }

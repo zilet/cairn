@@ -5454,6 +5454,11 @@ declare global {
     };
 
     CairnTodaySessionSetModel: ClientTodaySessionSetModelApi;
+    CairnTodaySetNotes: {
+      setReactionLine(result: Record<string, unknown>): string | null;
+      showSetReaction(card: HTMLElement | null, result: Record<string, unknown>): void;
+      delivered(card: HTMLElement | null, result: Record<string, unknown>, toast: (message: string) => void): void;
+    };
     CairnTodaySessionSetActions: ClientTodaySessionSetActionsApi;
 
     CairnTodaySessionController: {
@@ -6226,6 +6231,7 @@ declare global {
   declare const CairnTodaySessionSkip: Window["CairnTodaySessionSkip"];
   declare const CairnTodayOpenSession: Window["CairnTodayOpenSession"];
   declare const CairnTodaySessionSetModel: Window["CairnTodaySessionSetModel"];
+  declare const CairnTodaySetNotes: Window["CairnTodaySetNotes"];
   declare const CairnTodaySessionSetActions: Window["CairnTodaySessionSetActions"];
   declare const CairnTodaySessionController: Window["CairnTodaySessionController"];
   declare const CairnTodayCards: Window["CairnTodayCards"];

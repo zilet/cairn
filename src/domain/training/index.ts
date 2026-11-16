@@ -37,6 +37,7 @@ export * from "../../repo/exercise-preferences.js";
 export * from "../../repo/plan-swap.js";
 export * from "../../repo/support-work.js";
 export * from "../../repo/strength-objectives.js";
+export { setReactionForLoggedSet, withSetReaction, type SetReaction } from "../../repo/set-reaction.js";
 export * from "./strength-journey-read.js";
 export * from "../../repo/run-progression.js";
 export { raceBuild, type RaceBuild } from "../../repo/race-build.js";

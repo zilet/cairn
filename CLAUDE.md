@@ -458,8 +458,9 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
 - **The daily envelope's up direction is `reach`, a separate field — never a sixth posture.**
   `SignalPosture` is a five-value safety ladder. `reach.level='push'` licenses ONE challenge top set (up to `MAX_REACH_HOSTS` under an open, harm-free push stance, each on a different movement pattern)
   on the first eligible compound (`src/repo/daily-composition.ts`), computed from the LOGGED working
-  weight, never a plan target, and only on a lift the progression engine is moving and did recently;
-  composition reports back so the persisted envelope never promises a reach that is not on a card.
+  weight, never a plan target, and only on a lift the progression engine is moving and did recently
+  (the one hold that counts as moving is `top_set_earned`: its top set capped the range at the load,
+  only set completeness holds it, and its block keeps the held target); composition reports back so the persisted envelope never promises a reach that is not on a card.
   `item.reach` persists only for server-derived items. A hold keeps the progression's own target,
   never an older log, and `earned_floor` is the only composition raise — see `docs/ARCHITECTURE.md`
   "Composition never moves the prescription".

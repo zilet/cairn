@@ -28,6 +28,8 @@
 .ex-note{margin-top:var(--space-3);font-size:var(--text-sm);color:var(--ink2);line-height:var(--leading-normal)}
 .ex-lastset{margin-top:var(--space-3);font-size:var(--text-xs);color:var(--muted);transition:color var(--dur-1) var(--ease)}
 .ex-lastset.ex-lastset-beat{color:var(--d-endurance);font-weight:var(--weight-semibold)}
+/* The coach's one line about the set just logged (set-reaction.ts): calm, in place, text only. */
+.ex-reaction{margin-top:var(--space-2);font-size:var(--text-sm);color:var(--ink2);line-height:var(--leading-normal)}
 .ex-flag{margin-top:var(--space-3);background:color-mix(in srgb,var(--d-heart) 9%,transparent);border:none;
   border-radius:var(--radius-xs);padding:var(--space-4) var(--space-5);font-size:var(--text-xs);color:var(--d-heart);line-height:var(--leading-normal)}
 
@@ -190,6 +192,10 @@
 }
 .ex-skip:hover{color:var(--ink-2);background:var(--card-2)}
 .ex-skip:active{transform:var(--press-xs)}
+/* two-tap armed state — ✕ becomes a "skip?" chip (the shared destructive idiom) */
+.ex-skip.armed{width:auto;padding:0 var(--space-5);color:var(--on-accent);background:var(--warn);
+  font-family:var(--font-ui);font-size:var(--text-2xs);font-weight:var(--weight-bold);letter-spacing:var(--tracking-mono);
+  text-transform:uppercase}
 
 /* skipped exercises — one slim, muted line at the very bottom of Today */
 .skipline{display:flex;align-items:center;gap:var(--space-5);flex-wrap:wrap;margin:var(--space-2) var(--space-1) var(--space-7);padding:0 var(--space-2)}

@@ -530,9 +530,41 @@ function countAppliedProgressionChanges(
   return count;
 }
 
+// A reason that quotes specific evidence ("140 went 5 and 7 ... on 2026-10-13") is a
+// claim about THAT exposure. Once the lift has been trained on a later day the sentence
+// is history, and printing it on today's card reads as a coach that stopped watching.
+// The latest logged day per exercise, read once per plan read (one grouped query); the
+// stored decision row and its provenance are never touched — only what the plan read
+// surfaces. The card's own current why is the progression candidate's `note`.
+function latestLoggedDayByExercise(): Map<string, string> {
+  const map = new Map<string, string>();
+  try {
+    const rows = db
+      .prepare(
+        `SELECT e.name AS name, MAX(s.date) AS last_day
+           FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+           JOIN exercises e ON e.id = ls.exercise_id
+          GROUP BY ls.exercise_id`
+      )
+      .all() as Array<{ name: string; last_day: string | null }>;
+    for (const row of rows) {
+      if (!row.last_day) continue;
+      const key = normalizedExerciseKey(String(row.name ?? ""));
+      const day = String(row.last_day).slice(0, 10);
+      if (key && day > (map.get(key) ?? "")) map.set(key, day);
+    }
+  } catch {
+    /* partial migration: keep the stored reason */
+  }
+  return map;
+}
+
 function decorateAccountablePlan(days: any[]): any[] {
   const changes = accountablePlanChanges();
   if (!changes.size) return days;
+  const latestDay = [...changes.values()].some((c) => c.rationale && c.reason_provenance?.evidence_date)
+    ? latestLoggedDayByExercise()
+    : new Map<string, string>();
   return days.map((day) => ({
     ...day,
     items: (day.items ?? []).map((item: any) => {
@@ -547,13 +579,16 @@ function decorateAccountablePlan(days: any[]): any[] {
       // annotating (changeMatchesPrescription answers null). Checked here rather than in
       // the memoized map because the item side changes with the plan, and getPlan's own
       // cache key already covers plan mutations (planMutationSignature).
+      const evidenceDate = change?.reason_provenance?.evidence_date;
+      const lastTrained = latestDay.get(normalizedExerciseKey(String(item?.exercise ?? "")));
+      const reasonIsHistory = !!(change?.rationale && evidenceDate && lastTrained && lastTrained > evidenceDate);
       return change && changeMatchesPrescription(change.recorded, item) !== false
         ? {
             ...item,
             brain_decision_id: change.decision_id,
             brain_change_summary: change.summary,
-            brain_change_reason: change.rationale,
-            brain_change_reason_provenance: change.reason_provenance,
+            brain_change_reason: reasonIsHistory ? null : change.rationale,
+            brain_change_reason_provenance: reasonIsHistory ? null : change.reason_provenance,
             brain_change_reversible: change.reversible,
             brain_change_before: change.before,
           }

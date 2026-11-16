@@ -35,6 +35,7 @@ import {
   resolveTrainingSymptom,
   listTrainingSymptoms,
   resolveImplicitPlanDay,
+  withSetReaction,
   reopenSession,
   sessionHighlights,
   setSessionFeedback,
@@ -320,7 +321,8 @@ trainingLogRouter.post("/sets", (req, res) => {
     const b = req.body ?? {};
     if (!b.exercise) return res.status(400).json({ error: "exercise is required" });
     // A name the athlete typed here is the one worth cleaning up in the background.
-    res.json(logSetByName(resolveImplicitPlanDay(b), { enrich: true }));
+    // The coach answers a set that carries a real signal with one calm line (set-reaction.ts).
+    res.json(withSetReaction(logSetByName(resolveImplicitPlanDay(b), { enrich: true })));
   } catch (e: any) {
     res.status(400).json({ error: e.message });
   }

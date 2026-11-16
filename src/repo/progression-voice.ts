@@ -655,6 +655,16 @@ export const CUT_REGRESSION_HOLD: VoiceSet = [
   "Strength has softened while fueling has been light — hold the load steady and give the food side the room to catch up.",
 ];
 
+// The same slip, but the fuel read itself asks for nothing (no hold, no reduce): the
+// cut is running and strength is easing, which is all that is known. It says THAT —
+// never that food has been short, which the diary has not shown. Still a hold, since
+// cutting the load answers nothing here either. No blame, no numbers.
+export const CUT_REGRESSION_HOLD_NO_FUEL_CLAIM: VoiceSet = [
+  "This one's dipped while the cut is running — hold the load steady rather than taking weight off, and let a clean session show where it really sits.",
+  "The dip shows up alongside the deficit, and that alone doesn't say the weight is wrong — keep it here and see how the next session reads.",
+  "Strength on this lift has eased during the cut; the load holds where it is while the next session answers whether it's real.",
+];
+
 // A slip read off an estimate nothing recent has confirmed.
 export const UNVERIFIED_REGRESSION_HOLD: VoiceSet = [
   "This might be the number drifting rather than you — nothing heavy has confirmed it in a while, so hold the load and let a heavy set settle it.",
@@ -839,6 +849,7 @@ export function progressionVoicePhrases(): string[] {
     PHASE_DELOAD_HOLD,
     PHASE_PEAK_HOLD,
     CUT_REGRESSION_HOLD,
+    CUT_REGRESSION_HOLD_NO_FUEL_CLAIM,
     UNVERIFIED_REGRESSION_HOLD,
     CUT_HOLDING_WIN,
     LOG_EARNED_FUEL_PARK,

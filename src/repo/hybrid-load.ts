@@ -2,6 +2,7 @@
 // groups it actually loads. This is the shared floor for "do not squat heavy the
 // day after a long/hard run" style coaching. Plain words only, no scores.
 import { db } from "../db.js";
+import { plausibleRir } from "../lib/numbers.js";
 import { withoutShadowActivities } from "./activities.js";
 import type { HrModel } from "./hr-model.js";
 import {
@@ -547,6 +548,15 @@ export function enduranceDose(impact: EnduranceImpact): number {
   return base * Math.min(ratio, MAX_ENDURANCE_MAGNITUDE);
 }
 
+// How much one logged set loads RECOVERY, by reps in reserve. ≤3 RIR (and an absent RIR,
+// which is not ease) count in full, exactly as setEffortWeight; a set left far from
+// failure is a light stimulus, lighter here than it is for volume: RIR 4 half, RIR 5+ a quarter.
+export function acuteEffortWeight(rir: number | null | undefined): number {
+  const r = plausibleRir(rir);
+  if (r == null || r <= 3) return 1;
+  return r < 5 ? 0.5 : 0.25;
+}
+
 export type AcuteBand = "fresh" | "loaded" | "saturated";
 
 export interface MuscleResidual {
@@ -667,7 +677,7 @@ function muscleResidualRead(days: number, date: string): Map<MuscleGroup, Muscle
     }
     for (const [day, sets] of byDate) {
       // ONE effective-volume truth, per day so each day's dose decays on its own.
-      for (const [group, volume] of effectiveVolumeByGroup(sets)) {
+      for (const [group, volume] of effectiveVolumeByGroup(sets, acuteEffortWeight)) {
         if (isMobility(group)) continue;
         const halfLife = recoveryHalfLifeHours(group);
         if (halfLife == null) continue;

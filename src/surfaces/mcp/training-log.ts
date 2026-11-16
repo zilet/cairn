@@ -39,6 +39,7 @@ import {
   updateSessionNotes,
   updateSet,
   weekWins,
+  withSetReaction,
 } from "../../domain/training/index.js";
 import { weekTrainingLoad } from "../../repo/week-training-load.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
@@ -63,7 +64,7 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
       note: z.string().optional(),
     },
     // Same opt-in as POST /api/sets: a name arriving from a person gets background cleanup.
-    async (args) => asText(logSetByName(resolveImplicitPlanDay(args), { enrich: true }))
+    async (args) => asText(withSetReaction(logSetByName(resolveImplicitPlanDay(args), { enrich: true })))
   );
 
   server.tool(

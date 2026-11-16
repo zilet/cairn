@@ -548,6 +548,11 @@ export interface DailyDecisionProgressionEvidence {
     eligible: boolean;
     reason: string;
   } | null;
+  // The progression's own HOLD whose latest top set already capped the range at the
+  // current load (progression.ts `top_set_earned`): only set completeness holds it, so
+  // the lift may host the day's reach. `weight` is the heaviest logged load that capped
+  // the range (null for bodyweight). Omit-when-absent (fingerprint-stable).
+  top_set_earned?: { weight: number | null };
 }
 
 export interface DailyDecisionCandidate {
@@ -1314,6 +1319,16 @@ export function gatherDailyDecisionSnapshot(
                   reason: text(p.dose_eligibility.reason, 80) ?? "unknown",
                 }
               : null,
+          // Spread for the same reason as `top_set`: the key exists only when it is set.
+          ...(p?.top_set_earned && typeof p.top_set_earned === "object" && p?.action === "hold" && p?.autoregulated !== true
+            ? {
+                top_set_earned: {
+                  weight: Number.isFinite(Number(p.top_set_earned.weight)) && p.top_set_earned.weight != null
+                    ? Number(p.top_set_earned.weight)
+                    : null,
+                },
+              }
+            : {}),
         },
         ...(earned.has(String(p?.exercise ?? "").toLowerCase())
           ? { earned: earned.get(String(p?.exercise ?? "").toLowerCase()) as { working_weight: number } }

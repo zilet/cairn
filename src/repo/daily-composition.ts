@@ -636,7 +636,8 @@ function itemMuscleGroup(item: any): string | null {
 // top set above it contradicts the card's own verdict ("hold — holding this weight
 // counts as progress" under "you've earned a heavier look"). `carry` is a lift the
 // engine has no verdict on; it may host. No candidate at all (an agent's custom day)
-// leaves the question to the evidence gates below.
+// leaves the question to the evidence gates below. The one hold that may host is a
+// top-set-earned hold (reachHostCandidateAllows): its hold is about the sets, not the load.
 const REACH_HOST_ACTIONS: ReadonlySet<string> = new Set(["overload", "carry"]);
 
 // The heavier look is priced off RECENT work. A lift last done five weeks ago has no
@@ -667,6 +668,37 @@ function reachCandidateAllows(candidate: DailyDecisionEnvelope["candidates"][num
   return candidate.progression_evidence?.reground !== true;
 }
 
+// …with ONE hold that is not a "not ready": the progression's own hold whose latest top
+// set already capped the range at the current load (`top_set_earned`, progression.ts), so
+// only set completeness keeps the block's load. Intensity earns the load, the set count
+// earns volume — the top set has answered, the sets have not. Such a lift may host the
+// server's reach: the block keeps the held target (the plan never moves), and the one
+// heavier set is priced off the log like any other. A day-level hold (saturation,
+// recheck, underperformance — any reason code but the progression's own) never does, nor
+// a braked or re-grounded one. The agent's nested single keeps the strict gate above.
+function reachHostCandidateAllows(candidate: DailyDecisionEnvelope["candidates"][number] | undefined): boolean {
+  if (reachCandidateAllows(candidate)) return true;
+  const evidence = candidate?.progression_evidence;
+  return (
+    candidate?.action === "hold" &&
+    candidate.reason_code === "progression_hold" &&
+    !!evidence?.top_set_earned &&
+    typeof evidence.top_set_earned === "object" &&
+    evidence.reground !== true &&
+    evidence.autoregulated !== true
+  );
+}
+
+// The logged load a top-set-earned hold capped the range at. recentWorkingWeight ranks a
+// session's sets by Epley, so a lighter ramp-in set at more reps (135 × 10 ahead of
+// 140 × 8) can name the lighter load — and one step above THAT is the held block itself,
+// not a heavier look. Still the log, never the plan: the progression read the set.
+function topSetEarnedLoad(candidate: DailyDecisionEnvelope["candidates"][number] | undefined): number | null {
+  if (!reachHostCandidateAllows(candidate) || reachCandidateAllows(candidate)) return null;
+  const weight = Number(candidate?.progression_evidence?.top_set_earned?.weight);
+  return Number.isFinite(weight) && weight > 0 ? weight : null;
+}
+
 function reachEvidence(exercise: string, dateISO: string): { best_e1rm: number | null } | null {
   const evidence = recentLiftEvidence(exercise, dateISO, REACH_EXPOSURE_WINDOW_DAYS);
   if (!evidence) return null;
@@ -675,9 +707,14 @@ function reachEvidence(exercise: string, dateISO: string): { best_e1rm: number |
   return { best_e1rm: evidence.best_e1rm };
 }
 
-function reachHostLoad(exercise: string): { kind: "loaded"; weight: number } | { kind: "unloaded" } | null {
+function reachHostLoad(
+  exercise: string,
+  candidate?: DailyDecisionEnvelope["candidates"][number]
+): { kind: "loaded"; weight: number } | { kind: "unloaded" } | null {
   const working = recentWorkingWeight(exercise);
-  if (working != null && working > 0) return { kind: "loaded", weight: working };
+  const capped = topSetEarnedLoad(candidate);
+  if (working != null && working > 0)
+    return { kind: "loaded", weight: capped != null && capped > working ? capped : working };
   if (working != null && working < 0) return { kind: "unloaded" };
   if (hasUnloadedWorkingHistory(exercise)) return { kind: "unloaded" };
   return null;
@@ -705,9 +742,9 @@ function isReachHostItem(
   if (excludedGroups.has(group) || excludedGroups.has(String(group).toLowerCase())) return false;
   if (saturatedGroups.has(group) || saturatedGroups.has(String(group).toLowerCase())) return false;
   if (!REACH_COMPOUND_PATTERNS.has(String(classifyPattern(exercise, group) ?? ""))) return false;
-  if (!reachCandidateAllows(candidate)) return false;
+  if (!reachHostCandidateAllows(candidate)) return false;
   if (!reachEvidence(exercise, dateISO)) return false;
-  return reachHostLoad(exercise) != null;
+  return reachHostLoad(exercise, candidate) != null;
 }
 
 function reconcileEnvelopeReach(envelope: DailyDecisionEnvelope, landed: boolean): void {
@@ -1778,7 +1815,9 @@ export function normalizeComposedSession(
         envelope.date
       ) &&
       (reachHostsUsed === 0 || !reachPatterns.has(reachPattern(item)));
-    const hostLoad = isHost ? reachHostLoad(String(item.exercise ?? "")) : null;
+    const hostLoad = isHost
+      ? reachHostLoad(String(item.exercise ?? ""), candidates.get(String(item.exercise ?? "").toLowerCase()))
+      : null;
     // An agent's single is held to the same verdict as the server's reach: never above a
     // lift the engine is holding, deloading, re-grounding or rotating.
     const nestedAllowed = reachCandidateAllows(candidates.get(String(item.exercise ?? "").toLowerCase()));

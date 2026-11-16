@@ -175,6 +175,18 @@ on the first *eligible* compound (`classifyPattern` squat/hinge/lunge/horizontal
 pull — a curl never hosts) — never a reduced, excluded, saturated, or ungrouped item, never a
 lift whose candidate the progression engine is holding, deloading, re-grounding or rotating (only
 `overload`/`carry` host), and never one with no logged set inside `REACH_EXPOSURE_WINDOW_DAYS` (21).
+One hold is not a "not ready" and may host (2026-11-16): the progression's own fallthrough hold whose
+top set capped the range — strong by the bar the step uses, with a working set AT the card's load
+reaching the ceiling — and whose only shortfall is set completeness (the other sets, or a dose
+`under_prescribed`/`partial`). progression.ts marks it `top_set_earned: { weight }` (the heaviest
+logged load that capped the range) only on the final plain hold: never a grind, regression, plateau,
+constraint, untested slot, phase hold, re-ground, brake, `earned_hold` response, an unfinished or
+confounded dose, or a day the cut vetoes promotion. Composition accepts it only on a
+`progression_hold` candidate (a day-level hold — saturation, recheck, underperformance — never), and
+anchors the step on that logged load when `recentWorkingWeight`'s Epley ranking picked a lighter
+ramp set (135 × 10 ahead of 140 × 8), so the heavier look sits above the held block. The block keeps
+the held target; the agent's nested single keeps the strict gate; the push read's "why not more"
+no longer names that lift's hold on a reach day.
 It is priced off the log: ONE ordinary earned step above `recentWorkingWeight` (`nextLoadStep`, the
 same cap an overload takes), at the reps the best reserve-aware Epley estimate of that window
 (`recentLiftEvidence`: `reps + min(rir, 3)`) holds with one rep in hand, capped at the block's
@@ -8010,6 +8022,19 @@ the aside is not stored (`reason:"notes_full"`). A question, pain or plan change
 load with the median of each of the last 8 prior sessions' TOP same-sign working weight for the lift
 (at least 4 such sessions in the last ~10 weeks), flagging more than 60% off. Warm-ups never move the
 reference, the set is always saved, and a new lift says nothing.
+
+**The coach answers a set** (`reaction` on POST /api/sets and `log_set`; `src/repo/set-reaction.ts`).
+`setReaction` is a pure, deterministic read over this session's sets for one lift and today's card
+for it (the ONE matching active composition item; a lift on two cards has no single dose): the top of
+the range on every set at the load (`range_cleared`) › this set at the top of the range at or above
+the card's load with the reserve the hold asks for, RIR ≥ 2 or unrated (`top_of_range`) › a load
+above the card for reps inside the range (`above_card`) › a best-ever (the set write's own `pr`, and
+only with history from an earlier day) › every prescribed set in at the card's dose
+(`card_complete`). The next step it names is `nextLoadStep` / `nextAssistStep` (`progression.ts`),
+never an invented increment; bodyweight names none. A case already answered this session (same
+case, same load) is skipped, so a signal is heard once; silence is the default. Every line is a
+variant set rotated by `pickDayVariant` and held to `violatesReadingGrammar`. The client paints it as
+text under the card's logged sets (`showSetReaction`); an outbox-queued set shows none.
 
 ## Coach changes on dates: day-level vs week-level
 

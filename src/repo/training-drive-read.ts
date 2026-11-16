@@ -237,9 +237,12 @@ export function pushHolds(input: {
         }
       }
       // The lifts themselves: a compound holding its load says why in its own words.
+      // A top-set-earned hold on a reach day is not a "why not more": that lift is where
+      // the heavier look goes (daily-composition.ts reachHostCandidateAllows).
       const holds = envelope.candidates.filter(
         (c) =>
           (c.action === "hold" || c.action === "deload") &&
+          !(envelope.reach.level === "push" && !!c.progression_evidence?.top_set_earned) &&
           !!c.progression_evidence?.why &&
           COMPOUND_GROUPS.has(String(c.muscle_group ?? "").toLowerCase())
       );

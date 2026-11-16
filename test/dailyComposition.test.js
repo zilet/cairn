@@ -6,6 +6,7 @@ import {
   EASED_TODAY_NOTES,
   HOLD_TARGET_NOTES,
   normalizeComposedSession,
+  REACH_TOP_SET_NOTES,
   REDUCED_AREA_NOTES,
 } from "../dist/repo/daily-composition.js";
 import { violatesReadingGrammar } from "../dist/repo/day-read.js";
@@ -2397,6 +2398,119 @@ test("a held first lift leaves the reach to the next lift the engine is moving",
   assert.equal(rows.length, 2);
   assert.ok(rows[0].reach);
   assert.equal(validation.reach_landed, true);
+});
+
+// The 2026-11-16 push day, synthetic numbers: every compound on the card held, the bench
+// only because a lighter ramp-in set kept its last dose short of the card — its top set
+// had already capped the range at the load (progression.ts `top_set_earned`).
+function heldBenchDay(candidateOver = {}, evidenceOver = {}) {
+  repo.upsertExercise({ name: "Barbell Bench Press", muscle_group: "chest", mode: "reps" });
+  repo.upsertExercise({ name: "Barbell Overhead Press", muscle_group: "shoulders", mode: "reps" });
+  repo.logSetByName({ date: "2031-06-17", exercise: "Barbell Bench Press", weight: 135, reps: 10, rir: 1 });
+  repo.logSetByName({ date: "2031-06-17", exercise: "Barbell Bench Press", weight: 140, reps: 8, rir: 1 });
+  repo.logSetByName({ date: "2031-06-17", exercise: "Barbell Bench Press", weight: 140, reps: 6, rir: 1 });
+  repo.logSetByName({ date: "2031-06-17", exercise: "Barbell Overhead Press", weight: 70, reps: 7, rir: 1 });
+  const bench = {
+    ...reachCandidate("Barbell Bench Press", 140, { muscle_group: "chest", action: "hold", rep_low: 5, rep_high: 8 }),
+    reason_code: "progression_hold",
+    progression_evidence: {
+      delta_text: "hold 140 lb",
+      why: "Not every set landed as written — finish the range clean and it moves.",
+      reground: false,
+      autoregulated: false,
+      movement_response: "insufficient",
+      rep_step: false,
+      dose_eligibility: { linked_outcome: true, eligible: false, reason: "under_prescribed" },
+      top_set_earned: { weight: 140 },
+      ...evidenceOver,
+    },
+    ...candidateOver,
+  };
+  const ohp = {
+    ...reachCandidate("Barbell Overhead Press", 70, { muscle_group: "shoulders", action: "hold", rep_low: 6, rep_high: 8 }),
+    reason_code: "progression_hold",
+  };
+  const env = reachEnvelope({
+    muscles: { required: ["chest", "shoulders"], allowed: ["chest", "shoulders"], reduced: [], excluded: [], saturated: [] },
+    candidates: [bench, ohp],
+  });
+  const out = normalizeComposedSession(
+    agentSession([
+      { exercise: "Barbell Bench Press", sets: 3, rep_low: 5, rep_high: 8, target_weight: 140 },
+      { exercise: "Barbell Overhead Press", sets: 3, rep_low: 6, rep_high: 8, target_weight: 70 },
+    ]),
+    env
+  );
+  return { ...out, env };
+}
+
+test("a hold its top set already answered hosts the push day's reach — the block keeps the held load", () => {
+  const { session, validation, env } = heldBenchDay();
+  const benches = session.items.filter((i) => i.exercise === "Barbell Bench Press");
+  assert.equal(benches.length, 2, "one heavier set ahead of the held block");
+  assert.ok(benches[0].reach, "the top set is the day's reach");
+  assert.equal(benches[0].sets, 1);
+  // One ordinary step above the logged 140; 135 × 10 at one in hand → 184.5 holds 7 at
+  // 145 with a rep left, capped at the block's floor of 5.
+  assert.equal(benches[0].target_weight, 145);
+  assert.equal(benches[0].rep_low, 5);
+  assert.equal(benches[1].target_weight, 140, "the plan's target is untouched — composition never moves it");
+  assert.equal(benches[1].sets, 3);
+  assert.ok(REACH_TOP_SET_NOTES.includes(benches[0].note));
+  assert.equal(session.items.filter((i) => i.exercise === "Barbell Overhead Press").length, 1, "one challenge a session");
+  assert.equal(validation.reach_landed, true);
+  assert.ok(!env.soft_preferences.some((e) => e.code === "reach_no_room"));
+});
+
+test("a top-set-earned hold never hosts once a day rule, a brake or a re-ground owns the hold", () => {
+  for (const [label, candidateOver, evidenceOver] of [
+    ["saturated group", { reason_code: "muscle_saturated" }, {}],
+    ["injury recheck", { reason_code: "injury_recheck" }, {}],
+    ["autoregulated", {}, { autoregulated: true }],
+    ["re-ground", {}, { reground: true }],
+    ["no flag", {}, { top_set_earned: undefined }],
+  ]) {
+    resetTables("logged_sets", "sessions", "exercises");
+    const { session, validation, env } = heldBenchDay(candidateOver, evidenceOver);
+    assert.equal(session.items.filter((i) => i.reach).length, 0, `${label}: no reach card`);
+    assert.equal(validation.reach_landed, false, label);
+    assert.ok(REACH_NO_ROOM_WHY.includes(env.reach.why), `${label}: the envelope says the reach stays in the working sets`);
+  }
+});
+
+test("a top-set-earned hold rides gather and the decision to the card's reach, the plan target untouched", () => {
+  repo.upsertExercise({ name: "Barbell Bench Press", muscle_group: "chest", mode: "reps" });
+  repo.savePlanDay(1, "Push A", "Push", [
+    { exercise: "Barbell Bench Press", sets: 3, rep_low: 5, rep_high: 8, target_weight: 140 },
+  ]);
+  db.prepare(`UPDATE plan_items SET prescribed_at = ?`).run("2031-04-01");
+  // The top set capped the range at 140 with two in hand; the others did not — a hold
+  // for the sets, not for the load.
+  repo.logSetByName({ date: "2031-06-24", exercise: "Barbell Bench Press", weight: 140, reps: 8, rir: 2 });
+  repo.logSetByName({ date: "2031-06-24", exercise: "Barbell Bench Press", weight: 140, reps: 6, rir: 2 });
+  repo.logSetByName({ date: "2031-06-24", exercise: "Barbell Bench Press", weight: 140, reps: 6, rir: 2 });
+  const snapshot = repo.gatherDailyDecisionSnapshot(DATE);
+  const prog = snapshot.progression.find((p) => p.exercise === "Barbell Bench Press");
+  assert.equal(prog?.action, "hold", JSON.stringify(prog));
+  assert.deepEqual(prog.evidence.top_set_earned, { weight: 140 });
+  const decision = repo.buildDailySessionDecision(snapshot, { now: "2031-07-01T12:00:00.000Z" });
+  const bench = decision.candidates.find((c) => c.exercise === "Barbell Bench Press");
+  assert.equal(bench.action, "hold");
+  assert.equal(bench.reason_code, "progression_hold");
+  // The morning's backing is the decision's own business (dailyDecisionEnvelope tests);
+  // here the day reads push and the card is what is under test.
+  decision.reach = { level: "push", backed_by: ["session_quality"], why: "You've earned a heavier look at this one today" };
+  const { session, validation } = normalizeComposedSession(
+    agentSession([{ exercise: "Barbell Bench Press", sets: 3, rep_low: 5, rep_high: 8, target_weight: 140 }]),
+    decision
+  );
+  const benches = session.items.filter((i) => i.exercise === "Barbell Bench Press");
+  assert.equal(benches.length, 2);
+  assert.ok(benches[0].reach);
+  assert.ok(benches[0].target_weight > 140);
+  assert.equal(benches[1].target_weight, 140);
+  assert.equal(validation.reach_landed, true);
+  assert.equal(repo.getPlan()[0].items[0].target_weight, 140, "the plan itself never moved");
 });
 
 test("a lift last done weeks ago has no current working weight to reach from", () => {

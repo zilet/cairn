@@ -324,6 +324,34 @@ test("pushHolds names the quiet day's own reason first, then the lifts in their 
   for (const hold of [...holds, ...quiet]) assert.doesNotMatch(hold.words, /\b\d+\s*\/\s*100\b|score/i);
 });
 
+test("on a reach day a top-set-earned hold is where the heavier look goes, not a 'why not more'", () => {
+  const env = buildDailySessionDecision(snapshot({ signal_support: support() }), { now: NOW });
+  env.candidates = [
+    {
+      exercise: "Barbell Bench Press",
+      muscle_group: "chest",
+      action: "hold",
+      reason_code: "progression_hold",
+      progression_evidence: {
+        why: "Not every set landed as written — finish the range clean and it moves.",
+        top_set_earned: { weight: 140 },
+      },
+    },
+  ];
+  const input = {
+    envelope: env,
+    read: { kind: "train", why: "", decision: null },
+    brakeFields: [],
+    stanceActive: false,
+    stanceHarm: null,
+    consecutive: 2,
+  };
+  env.reach = { level: "push", backed_by: ["session_quality"], why: "x" };
+  assert.ok(!pushHolds(input).some((h) => h.code === "lift_hold"), "the reach host is not named as holding");
+  env.reach = { level: null, backed_by: [], why: "" };
+  assert.ok(pushHolds(input).some((h) => h.code === "lift_hold"), "with no reach, the hold still says why");
+});
+
 test("the read: licenses, never-overrides, stance line; steady says nothing extra", () => {
   const steady = trainingDriveRead(today(), { withToday: false });
   assert.equal(steady.drive, "steady");

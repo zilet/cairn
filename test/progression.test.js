@@ -2841,3 +2841,96 @@ test("a pain brake still applies on top of a fresh slot", () => {
   assert.ok(["hold", "deload"].includes(p.action));
   assert.ok(p.suggested.weight <= 185, "a safety brake can only take the fresh load down");
 });
+
+// ---- top_set_earned: a hold the top set already answered (the reach may host it) ----
+// Synthetic numbers. The 2026-11-16 shape: the top set capped the range at the card's
+// load, a ramp-in set at a lighter load made the stored verdict under_prescribed.
+
+function rampedBench({ topRir = 1 } = {}) {
+  makeExercise("Barbell Bench Press", { muscle_group: "chest" });
+  planWith(1, { exercise: "Barbell Bench Press", sets: 3, rep_low: 5, rep_high: 8, target_weight: 140, focus: "Push" });
+  logSet("Barbell Bench Press", isoDaysAgo(25), { weight: 135, reps: 8, setNum: 1 });
+  logSet("Barbell Bench Press", isoDaysAgo(25), { weight: 135, reps: 7, setNum: 2 });
+  const date = isoDaysAgo(17);
+  logSet("Barbell Bench Press", date, { weight: 135, reps: 10, rir: 1, setNum: 1 });
+  logSet("Barbell Bench Press", date, { weight: 140, reps: 8, rir: topRir, setNum: 2 });
+  logSet("Barbell Bench Press", date, { weight: 140, reps: 6, rir: 1, setNum: 3 });
+  return date;
+}
+
+test("a hold whose top set capped the range at the load marks top_set_earned — only completeness holds it", () => {
+  repo.setSettings({ training_drive: "push" });
+  const date = rampedBench();
+  linkLatestDoseOutcome("Barbell Bench Press", date, {
+    prescribedSets: 3,
+    achievedSets: 3,
+    challengeVerdict: "under_prescribed",
+  });
+  const p = nextPrescription("Barbell Bench Press");
+  assert.equal(p.action, "hold", `the ramp-in set keeps the dose short of the card (${p.why})`);
+  assert.equal(p.dose_eligibility.reason, "under_prescribed");
+  assert.equal(p.suggested.weight, 140, "the plan target does not move");
+  assert.deepEqual(p.top_set_earned, { weight: 140 }, `the top set owned the ceiling at 140: the hold is about the sets (${p.why})`);
+});
+
+test("a steady top-set-only hold is top_set_earned too", () => {
+  makeExercise("Barbell Bench Press", { muscle_group: "chest" });
+  planWith(1, { exercise: "Barbell Bench Press", sets: 3, rep_low: 5, rep_high: 8, target_weight: 140, focus: "Push" });
+  logSet("Barbell Bench Press", isoDaysAgo(4), { weight: 140, reps: 8, rir: 2, setNum: 1 });
+  logSet("Barbell Bench Press", isoDaysAgo(4), { weight: 140, reps: 6, rir: 2, setNum: 2 });
+  logSet("Barbell Bench Press", isoDaysAgo(4), { weight: 140, reps: 6, rir: 2, setNum: 3 });
+  const p = nextPrescription("Barbell Bench Press");
+  assert.equal(p.action, "hold");
+  assert.deepEqual(p.top_set_earned, { weight: 140 });
+});
+
+test("top_set_earned never marks a grind, an unfinished dose, an uncapped top set or a constrained lift", () => {
+  // A grind: the top set capped the range at RIR 0 on a lift with no rising trend.
+  makeExercise("Barbell Bench Press", { muscle_group: "chest" });
+  planWith(1, { exercise: "Barbell Bench Press", sets: 3, rep_low: 5, rep_high: 8, target_weight: 140, focus: "Push" });
+  for (const d of [18, 11, 4]) {
+    logSet("Barbell Bench Press", isoDaysAgo(d), { weight: 140, reps: 8, rir: 0, setNum: 1 });
+    logSet("Barbell Bench Press", isoDaysAgo(d), { weight: 140, reps: 6, rir: 0, setNum: 2 });
+  }
+  let p = nextPrescription("Barbell Bench Press");
+  assert.notEqual(p.action, "overload");
+  assert.equal(p.top_set_earned, undefined, `a grind is not an answered top set (${p.action}: ${p.why})`);
+
+  // An unfinished dose: the day cannot be read yet.
+  reset();
+  repo.setSettings({ training_drive: "push" });
+  const date = rampedBench({ topRir: 2 });
+  linkLatestDoseOutcome("Barbell Bench Press", date, { status: "planned", prescribedSets: 3, achievedSets: 3 });
+  p = nextPrescription("Barbell Bench Press");
+  assert.equal(p.action, "hold");
+  assert.equal(p.dose_eligibility.reason, "unfinished");
+  assert.equal(p.top_set_earned, undefined);
+
+  // Only a lighter ramp set capped the range: nothing at the card's load answered.
+  reset();
+  makeExercise("Barbell Bench Press", { muscle_group: "chest" });
+  planWith(1, { exercise: "Barbell Bench Press", sets: 3, rep_low: 5, rep_high: 8, target_weight: 140, focus: "Push" });
+  logSet("Barbell Bench Press", isoDaysAgo(4), { weight: 135, reps: 10, rir: 2, setNum: 1 });
+  logSet("Barbell Bench Press", isoDaysAgo(4), { weight: 140, reps: 7, rir: 2, setNum: 2 });
+  logSet("Barbell Bench Press", isoDaysAgo(4), { weight: 140, reps: 6, rir: 2, setNum: 3 });
+  p = nextPrescription("Barbell Bench Press");
+  assert.equal(p.top_set_earned, undefined, `a ramp set is not the card's load (${p.action}: ${p.why})`);
+
+  // A top set short of the ceiling: no rep chase is answered yet.
+  reset();
+  makeExercise("Barbell Bench Press", { muscle_group: "chest" });
+  planWith(1, { exercise: "Barbell Bench Press", sets: 3, rep_low: 5, rep_high: 8, target_weight: 140, focus: "Push" });
+  for (let s = 1; s <= 3; s++) logSet("Barbell Bench Press", isoDaysAgo(4), { weight: 140, reps: 6, rir: 1, setNum: s });
+  p = nextPrescription("Barbell Bench Press");
+  assert.equal(p.top_set_earned, undefined);
+
+  // A load-limiting note holds before anything else.
+  reset();
+  makeExercise("Barbell Bench Press", { muscle_group: "chest", constraint_note: "left shoulder — keep it light" });
+  planWith(1, { exercise: "Barbell Bench Press", sets: 3, rep_low: 5, rep_high: 8, target_weight: 140, focus: "Push" });
+  logSet("Barbell Bench Press", isoDaysAgo(4), { weight: 140, reps: 8, rir: 2, setNum: 1 });
+  logSet("Barbell Bench Press", isoDaysAgo(4), { weight: 140, reps: 6, rir: 2, setNum: 2 });
+  p = nextPrescription("Barbell Bench Press");
+  assert.equal(p.action, "hold");
+  assert.equal(p.top_set_earned, undefined);
+});

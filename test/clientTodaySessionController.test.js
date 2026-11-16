@@ -437,6 +437,7 @@ function loadController({ apiImpl, contextOverrides } = {}) {
   vm.runInNewContext(readFileSync(join(root, "public/js/today-session-skip-place-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-session-skip-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-session-set-model.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/today-session-set-reaction-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/session-entry-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-session-set-actions.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-session-controller.js"), "utf8"), context);
@@ -999,7 +1000,8 @@ test("focused Session finishes with the real ID created by its first skip", asyn
   }));
 
   harness.controller.wireSessionSurface({ session: null, hasLoggedSets: true }, harness.deps);
-  skip.click();
+  skip.click(); // arms
+  skip.click(); // confirms
   await flushAsync();
   finish.click();
   await flushAsync();
@@ -1186,7 +1188,9 @@ test("an in-flight skip response cannot mutate the next date's surface", async (
   }));
   harness.controller.wireSkips(harness.deps);
 
-  skip.click();
+  skip.click(); // arms
+
+  skip.click(); // confirms
   await flushAsync();
   assert.deepEqual(JSON.parse(harness.requests[0].opts.body), { date: "2026-06-30", exercise: "Squat" });
   harness.deps.state.logDate = "2026-07-01";
@@ -1768,6 +1772,34 @@ test("Today session controller restores a notes draft into an empty input and cl
   assert.equal(store.has("cairn.sessnotes.2026-06-30"), false);
 });
 
+test("one tap on skip only arms it: the lift stays and nothing is sent", async () => {
+  const harness = loadController();
+  const plan = harness.rootEl.appendChild(new FakeElement("article", { className: "ex", dataset: { card: "Squat" } }));
+  const skip = plan.appendChild(new FakeElement("button", {
+    className: "ex-skip",
+    textContent: "✕",
+    dataset: { skip: encodeURIComponent("Squat") },
+  }));
+  harness.controller.wireSkips(harness.deps);
+
+  skip.click();
+  await flushAsync();
+  assert.equal(plan.isConnected, true);
+  assert.deepEqual(harness.requests, []);
+  assert.equal(skip.textContent, "skip?");
+  assert.equal(skip.classList.contains("armed"), true);
+
+  // Looking away disarms it: the next tap is a first tap again.
+  skip.dispatch("blur");
+  assert.equal(skip.textContent, "✕");
+  assert.equal(skip.classList.contains("armed"), false);
+  skip.click();
+  await flushAsync();
+  assert.equal(plan.isConnected, true);
+  assert.deepEqual(harness.requests, []);
+  skip.dispatch("blur");
+});
+
 test("Today session controller skips, undoes, and removes off-plan cards", async () => {
   const harness = loadController();
   const plan = harness.rootEl.appendChild(new FakeElement("article", { className: "ex", dataset: { card: "Squat" } }));
@@ -1777,7 +1809,8 @@ test("Today session controller skips, undoes, and removes off-plan cards", async
   const names = line.appendChild(new FakeElement("span", { className: "skipline-names" }));
 
   harness.controller.wireSkips(harness.deps);
-  skip.click();
+  skip.click(); // arms
+  skip.click(); // confirms
   await flushAsync();
 
   assert.equal(plan.isConnected, false);
@@ -1833,7 +1866,8 @@ test("same-tab staged skip and restore queue behind preparation without a direct
   line.appendChild(new FakeElement("span", { className: "skipline-names" }));
 
   harness.controller.wireSkips(harness.deps);
-  skip.click();
+  skip.click(); // arms
+  skip.click(); // confirms
   await flushAsync();
   assert.deepEqual(harness.requests, []);
   assert.deepEqual(plain(harness.outbox), [{
@@ -1892,7 +1926,8 @@ test("cross-tab prepare states block direct skip and restore with refresh guidan
     }));
 
     harness.controller.wireSkips(harness.deps);
-    skip.click();
+    skip.click(); // arms
+    skip.click(); // confirms
     await flushAsync();
     line.dispatch("click", { target: restore });
     await flushAsync();
@@ -2096,7 +2131,8 @@ test("skipping a plan exercise collapses the card before the POST resolves", asy
   line.appendChild(new FakeElement("span", { className: "skipline-names" }));
 
   harness.controller.wireSkips(harness.deps);
-  skip.click();
+  skip.click(); // arms
+  skip.click(); // confirms
   await flushAsync();
 
   // "Not today" is the athlete's own decision — the card is gone and the name is on
@@ -2125,7 +2161,8 @@ test("a refused skip puts the card back on the surface", async () => {
   line.appendChild(new FakeElement("span", { className: "skipline-names" }));
 
   harness.controller.wireSkips(harness.deps);
-  skip.click();
+  skip.click(); // arms
+  skip.click(); // confirms
   await flushAsync();
 
   assert.equal(card.isConnected, true, "the card is re-seated where it sat");
@@ -2513,7 +2550,8 @@ test("undoing a refused skip leaves the card restored", async () => {
   line.appendChild(new FakeElement("span", { className: "skipline-names" }));
 
   harness.controller.wireSkips(harness.deps);
-  skip.click();
+  skip.click(); // arms
+  skip.click(); // confirms
   await flushAsync();
   assert.equal(card.isConnected, false);
 

@@ -35,5 +35,36 @@ type CardPlace = { prev: Element | null; next: Element | null; tail?: Element | 
     return true;
   }
 
-  Object.assign(globalThis, { CairnTodaySkipPlace: { cardPlace, seatCards } });
+  // Two taps to skip: the ✕ sits beside the Log button of the lift above it, and one stray
+  // touch mid-set used to take a lift off the session. The shared two-tap idiom (armDelete,
+  // ui-actions-client): the first tap turns the ✕ into a "skip?" chip for a few seconds, the
+  // second one skips. Returns true only on the confirming tap.
+  const SKIP_ARM_MS = 3000;
+  const skipArmTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
+
+  function disarmSkip(button: HTMLElement): void {
+    const timer = skipArmTimers.get(button);
+    if (timer != null) clearTimeout(timer);
+    skipArmTimers.delete(button);
+    if (!button.dataset.armed) return;
+    delete button.dataset.armed;
+    button.classList.remove("armed");
+    button.textContent = button.dataset.restGlyph || "✕";
+  }
+
+  function confirmSkipTap(button: HTMLElement): boolean {
+    if (button.dataset.armed) {
+      disarmSkip(button);
+      return true;
+    }
+    if (!button.dataset.restGlyph) button.dataset.restGlyph = button.textContent || "✕";
+    button.dataset.armed = "1";
+    button.classList.add("armed");
+    button.textContent = "skip?";
+    skipArmTimers.set(button, setTimeout(() => disarmSkip(button), SKIP_ARM_MS));
+    button.addEventListener("blur", () => disarmSkip(button), { once: true });
+    return false;
+  }
+
+  Object.assign(globalThis, { CairnTodaySkipPlace: { cardPlace, seatCards, confirmSkipTap } });
 }

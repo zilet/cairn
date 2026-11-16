@@ -207,7 +207,7 @@ const LOADED_HOLD_RESET_FRAC = 2 / 3; // 60s → 40s after a load step
 const DELOAD_FRAC = 0.1; // a deload backs the load off ~10%
 // Reps genuinely in hand. At RIR ≥ 2 the set was finished with room to spare; at
 // RIR ≤ 1 it was a grind. The one place the engine draws that line.
-const RIR_IN_RESERVE = 2;
+export const RIR_IN_RESERVE = 2;
 // A REPEAT deload inside this window is not another identical cut — the second one
 // escalates structurally (a lower rep window, or the movement itself rotates). See
 // the escalation branch in repsPrescription and appliedProgressionDeloads (plan.ts).
@@ -320,6 +320,16 @@ export interface Prescription {
   // is run at it. Informational for consumers that must not add to an untested slot (the
   // weekly dose). Reps path only; omit-when-false.
   untested?: true;
+  // A HOLD whose latest top set already capped the range at the current load, strong by
+  // the same bar the step uses — the load waits only on set COMPLETENESS (the other sets
+  // reaching the top, or a dose that did not land every set as written). Intensity has
+  // answered; the set count has not. Never on a protective hold (grind, regression,
+  // plateau, constraint, untested, phase, cut veto, a brake, a re-ground, an unfinished
+  // or confounded dose). Read by daily composition only: such a lift may host the day's
+  // one-set reach while its block keeps the held target. `weight` is the heaviest LOGGED
+  // load that capped the range (null for bodyweight) — the reach's anchor. Reps path
+  // only; omit-when-absent.
+  top_set_earned?: { weight: number | null };
   dose_eligibility?: {
     linked_outcome: boolean;
     eligible: boolean;
@@ -749,6 +759,12 @@ export function nextLoadStep(current: number, group: string | null): number {
   return clampedOverload(current, group);
 }
 
+// The assisted twin of nextLoadStep: one ordinary earned peel of assist (no phase
+// pacing, no learned modifier). null is bodyweight — the step that removes the assist.
+export function nextAssistStep(current: number, group: string | null): number | null {
+  return assistStepNext(current, group, null, 1);
+}
+
 // Peel assist toward bodyweight. Never crosses sign in one step — landing at or
 // past 0 is bodyweight (null), matching the earned-assist branch.
 function assistStepNext(
@@ -1036,6 +1052,12 @@ function fullLoadThroughConfound(dose: any, reasons: readonly string[]): boolean
   const top = toNum(dose.achieved?.top_weight);
   return reference != null && reference > 0 && top != null && loadAtOrAbove(top, reference);
 }
+
+// The ineligible-dose reasons that are about SET COMPLETENESS — fewer sets than the card,
+// or a set that did not land as written — rather than a day that cannot be read
+// (unfinished, confounded). Intensity earns the load, the set count earns volume: these
+// keep the load held, never the top set's own answer (`top_set_earned`).
+const COMPLETENESS_DOSE_REASONS: ReadonlySet<string> = new Set(["under_prescribed", "partial"]);
 
 function linkedDoseEligibility(
   sessionId: number | null | undefined,
@@ -1956,6 +1978,8 @@ function repsPrescription(
   // CUT_HOLDING_WIN may only replace the not-earned / top-set-only fallthrough
   // sentence — never a plan-behind catch-up or a phase hold.
   let fallthroughHold = false;
+  // The fallthrough hold whose top set already earned the load (see `top_set_earned`).
+  let topSetEarnedHold: { weight: number | null } | null = null;
   // Equipment-ranked, compound-biased, plan-deduped same-pattern candidates —
   // computed ONCE and reused by the vary + introduce branches (and the introduce guard).
   const varyCandidates = rankedVaryOptions(name, brakeCtx, plan?.day_exercises ?? []);
@@ -2220,7 +2244,13 @@ function repsPrescription(
     if (cut.any) {
       action = "hold";
       nextWeight = baseWeight;
-      why = say(voice.CUT_REGRESSION_HOLD, "cut_regression_hold");
+      // Only the fuel read's own hold/reduce licenses a food sentence. `any` is also
+      // true off the cut's loss pace or anchors sliding, which say nothing about the
+      // diary — a sparse diary is absent, never "light".
+      why =
+        cut.hold || cut.reduce
+          ? say(voice.CUT_REGRESSION_HOLD, "cut_regression_hold")
+          : say(voice.CUT_REGRESSION_HOLD_NO_FUEL_CLAIM, "cut_regression_hold_no_fuel_claim");
     } else if (estimate().holds) {
       action = "hold";
       nextWeight = baseWeight;
@@ -2443,6 +2473,32 @@ function repsPrescription(
   } else {
     action = "hold";
     nextWeight = baseWeight;
+    // The top set answered the load question; only completeness keeps the hold
+    // (`top_set_earned`, confirmed against the FINAL action at the return).
+    // The read is the engine's own top-set read (the bar `strong` uses, minus the dose's
+    // completeness), plus one guard of its own: a working set AT the card's load reached
+    // the top of the range — a lighter ramp set alone never answers for the load.
+    const cappedAtLoad = workingSets.filter(
+      (s) =>
+        s.reps != null &&
+        (s.reps as number) >= (repCeiling as number) &&
+        (baseWeight == null || (s.weight != null && Number(s.weight) + 0.1 >= baseWeight))
+    );
+    if (
+      last &&
+      current &&
+      topSetAtTop &&
+      cappedAtLoad.length > 0 &&
+      !policy?.holds_load &&
+      (status === "progressing" || topReserve == null || topReserve >= strongReserve) &&
+      (doseEligibility.eligible || COMPLETENESS_DOSE_REASONS.has(doseEligibility.reason))
+    ) {
+      // The heaviest LOGGED load that capped the range — the reach's anchor, so a lighter
+      // ramp set that out-scores it on Epley cannot price the heavier look under the block.
+      topSetEarnedHold = {
+        weight: baseWeight == null ? null : Math.max(...cappedAtLoad.map((s) => Number(s.weight))),
+      };
+    }
     if (last && !doseEligibility.eligible)
       why =
         doseEligibility.reason === "unfinished"
@@ -2820,6 +2876,25 @@ function repsPrescription(
   // is weighted work and may step up like any other loaded movement.
   if (baseWeight != null && baseWeight < 0 && nextWeight != null && nextWeight > 0) nextWeight = null;
 
+  // Confirmed against the FINAL decision: still the plain hold at the base load, nothing
+  // braked or re-grounded it, no cut would veto a promotion, and the lift's own repeated
+  // comparable doses are not asking it to wait.
+  const topSetEarnedHeld =
+    topSetEarnedHold != null &&
+    action === "hold" &&
+    !autoregulated &&
+    !planBehind &&
+    !planAhead &&
+    !loadConstrained &&
+    !untested &&
+    escalated == null &&
+    !topSet &&
+    nextWeight === baseWeight &&
+    response.verdict !== "earned_hold" &&
+    // The CUT's veto, not the lift's shortfall: a set-count shortfall is the very thing
+    // this hold is about, and it is volume's to read.
+    !cutVetoesPromotion(cutPressure, { status });
+
   // A peak week is TWO-TIER work and PrescriptionTarget only describes one tier, so
   // `suggested` carries the BULK of the session — the back-off block — and `top_set`
   // carries the heavy single the athlete works up to first (the delta text and the
@@ -2887,6 +2962,7 @@ function repsPrescription(
     escalated,
     dose_eligibility: doseEligibility,
     ...(untested ? { untested: true as const } : {}),
+    ...(topSetEarnedHeld && topSetEarnedHold ? { top_set_earned: topSetEarnedHold } : {}),
   };
 }
 

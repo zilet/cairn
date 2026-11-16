@@ -4,6 +4,7 @@
 declare const CairnTodaySkipPlace: {
   cardPlace(cards: HTMLElement[], root: ParentNode): CardPlace;
   seatCards(detached: HTMLElement[], place: CardPlace, root: ParentNode): boolean;
+  confirmSkipTap(button: HTMLElement): boolean;
 };
 
 type TodaySessionSkipPendingOffPlan = { name: string; mode?: string | null };
@@ -14,9 +15,7 @@ type TodaySessionSkipState = {
   pendingOffPlan?: Record<string, TodaySessionSkipPendingOffPlan[]>;
 };
 
-type TodaySessionSkipStatusApi = {
-  skipNameHtml(name: unknown): string;
-};
+type TodaySessionSkipStatusApi = { skipNameHtml(name: unknown): string };
 
 type TodaySessionSkipDeps = {
   root: HTMLElement;
@@ -350,6 +349,7 @@ type TodaySessionSkipOutboxGlobals = {
           removeOffPlanCard(card, deps);
           return;
         }
+        if (!CairnTodaySkipPlace.confirmSkipTap(button)) return; // two taps: the first only arms it
         void skipFromCard(card, decodeURIComponent(button.dataset.skip || ""), deps, surfaceDate, surfaceTab);
       });
     });
