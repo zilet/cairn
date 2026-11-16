@@ -1018,6 +1018,15 @@ the card whose Epley single matches the card's own floor meets it (185 × 7 agai
 work, not a miss). And `cappedShortOfSets` answers the LOAD question apart from the set count: one set
 short, with every working set at the load capping the range and one going past it, is eligible
 (`capped_short_set`) — the missing set is volume's (ledger, set catch-up), never a veto on the step.
+The mirror of the heavier-set arm is the RAMP-IN opener (`rampInSetCarriesDose` / `rampInCredit`): a
+set logged BEFORE the first set at the card's load, lighter than it but not a warm-up (≥
+`WARMUP_LOAD_FRACTION` of it, the one warm-up line `effectiveVolumeByGroup` also reads), at most
+`HEAVIER_SET_REP_SLACK` reps past the range's top, with an Epley single at least the card's floor set's,
+fills ONE missing set on a card of two or more sets — 135 × 10, 140 × 8, 140 × 6 against 3 × 5–8 @ 140
+is met. A lighter set after the load was reached is a back-off and fills nothing; two sets under the
+card, all sets light, or a card-load set under the range stay `under_prescribed`; the opener never turns
+a full card exceeded. Reps past the ceiling exceed the card only on sets AT its load (a warm-up's ten
+reps never do).
 
 The session-level `recovery` flag is now STRUCTURED, never a regex over stored decision prose.
 `structuredRecovery(date, composition)` is true only for an active/recheck `recovery_cycles` row at

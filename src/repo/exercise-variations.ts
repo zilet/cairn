@@ -2,6 +2,7 @@
 // No DB writes, no agent calls. All logic is keyword-based classification + curated data.
 import { canonicalGroup, classifyMuscleGroup, isMobility, type MuscleGroup } from "./exercise-canon.js";
 import { plausibleRir } from "../lib/numbers.js";
+import { WARMUP_LOAD_FRACTION } from "./outcome-comparability.js";
 
 export type Equipment =
   | "barbell"
@@ -611,7 +612,6 @@ export function indirectGroupsForExercise(name: string, muscleGroup?: string | n
 }
 
 const INDIRECT_CREDIT = 0.5;   // a secondary muscle earns half a working set
-const WARMUP_FRAC = 0.55;      // a set under 55% of the day's top load is a ramp-up warmup
 
 export interface VolumeSet {
   date: string;
@@ -661,7 +661,7 @@ export function effectiveVolumeByGroup(
     const w = s.weight != null ? Math.abs(Number(s.weight)) : 0;
     if (w > 0) {
       const top = topByExDate.get(`${String(s.exercise).toLowerCase()}|${s.date}`) ?? 0;
-      if (top > 0 && w < top * WARMUP_FRAC) continue; // ramp-up warmup — not working volume
+      if (top > 0 && w < top * WARMUP_LOAD_FRACTION) continue; // ramp-up warmup — not working volume (one definition: outcome-comparability.ts)
     }
     // Proximity to failure is not what limits a loaded carry — time and grip are —
     // so an RIR typed on one is not reps in reserve and must not halve the set.

@@ -275,6 +275,53 @@ export function setMeetsPrescription(set: ChallengeSet, prescribed: ChallengePre
   return epleyLoad(set.weight, set.reps) + 1e-9 >= epleyLoad(target, prescribed.rep_low);
 }
 
+/**
+ * A loaded set under this fraction of the day's top load for the lift is a ramp-up
+ * WARM-UP: never working volume (exercise-variations.ts `effectiveVolumeByGroup`) and
+ * never the card's work. ONE definition — both readers import it from here.
+ */
+export const WARMUP_LOAD_FRACTION = 0.55;
+
+/**
+ * A RAMP-IN SET carries the card's dose. Athletes often open a lift one plate step under
+ * the card for more reps and then work at (or above) the card's load: 135 × 10 at RIR 1,
+ * 140 × 8, 140 × 6 against 3 × 5–8 @ 140. That opening set is not a warm-up — it is as
+ * hard as the card's own floor set (Epley at the range's bottom rep) — so it is the
+ * missing working set, not a shortfall. It is the exact mirror of the heavier-set arm of
+ * `setMeetsPrescription`, bounded the same way:
+ *   - loaded rep work only (a positive load target, a rep range, no seconds target);
+ *   - lighter than the card, but never a warm-up (≥ WARMUP_LOAD_FRACTION of it);
+ *   - at most HEAVIER_SET_REP_SLACK reps past the top of the range (a lighter set taken
+ *     far past it is a different dose — a pump set, not the card's work);
+ *   - an estimated single at least the card's floor set's (target × rep_low, Epley).
+ * Position and count are `rampInCredit`'s: only an OPENING set counts, once.
+ */
+export function rampInSetCarriesDose(set: ChallengeSet, prescribed: ChallengePrescribed): boolean {
+  const target = prescribed.target_weight;
+  const { rep_low: low, rep_high: high } = prescribed;
+  if (prescribed.target_seconds != null || target == null || !(target > 0) || low == null || high == null) return false;
+  if (set.weight == null || !(set.weight > 0) || !(set.weight < target)) return false;
+  if (set.weight < target * WARMUP_LOAD_FRACTION) return false;
+  if (set.reps == null || set.reps < low || set.reps > high + HEAVIER_SET_REP_SLACK) return false;
+  return epleyLoad(set.weight, set.reps) + 1e-9 >= epleyLoad(target, low);
+}
+
+/**
+ * The working-set credit (0 or 1) a ramp-in opening adds to a card. Only a set logged
+ * BEFORE the first set at the card's load is a ramp-in — a lighter set after the load was
+ * reached is a back-off, and a missing card set behind it stays missing. The card must ask
+ * for at least two sets and the opening must be followed by work at the card's load, so
+ * the load itself is always carried by at least `sets − 1` sets that meet it as written:
+ * two of three under the load, or every set lighter, never reads as met.
+ */
+export function rampInCredit(prescribed: ChallengePrescribed, detail: readonly ChallengeSet[]): number {
+  const target = prescribed.target_weight;
+  if (prescribed.sets == null || !(prescribed.sets >= 2) || target == null || !(target > 0)) return 0;
+  const firstAtLoad = detail.findIndex((set) => set.weight != null && set.weight >= target);
+  if (firstAtLoad <= 0) return 0;
+  return detail.slice(0, firstAtLoad).some((set) => rampInSetCarriesDose(set, prescribed)) ? 1 : 0;
+}
+
 export function doseChallengeVerdict(
   prescribed: ChallengePrescribed,
   achieved: ChallengeAchieved
@@ -288,8 +335,27 @@ export function doseChallengeVerdict(
     prescribed.target_seconds != null;
   if (!hasTarget) return "no_target";
   if (prescribed.sets != null && achieved.sets < prescribed.sets) return "under_prescribed";
-  const qualifyingSets = (achieved.sets_detail ?? []).filter((set) => setMeetsPrescription(set, prescribed)).length;
+  const detail = achieved.sets_detail ?? [];
+  const plainQualifying = detail.filter((set) => setMeetsPrescription(set, prescribed)).length;
+  // A ramp-in opening only ever FILLS a missing set: it never makes a full card exceeded.
+  const qualifyingSets =
+    prescribed.sets != null && plainQualifying < prescribed.sets
+      ? plainQualifying + rampInCredit(prescribed, detail)
+      : plainQualifying;
   if (prescribed.sets != null && qualifyingSets < prescribed.sets) return "under_prescribed";
+  // Reps past the range EXCEED the card only at the card's load: a lighter opening set
+  // (a warm-up or a ramp-in) taken to ten reps did not out-do an 8-rep ceiling at 140.
+  const loadTarget = prescribed.target_weight;
+  const topRepsAtLoad =
+    loadTarget != null && loadTarget > 0 && detail.length
+      ? detail.reduce<number | null>(
+          (top, set) =>
+            set.weight != null && set.weight >= loadTarget && set.reps != null && (top == null || set.reps > top)
+              ? set.reps
+              : top,
+          null
+        )
+      : achieved.top_reps;
   const exceeded =
     (prescribed.sets != null && qualifyingSets > prescribed.sets) ||
     (prescribed.target_weight != null &&
@@ -298,7 +364,7 @@ export function doseChallengeVerdict(
     (prescribed.target_seconds != null &&
       achieved.top_seconds != null &&
       achieved.top_seconds > prescribed.target_seconds) ||
-    (prescribed.rep_high != null && achieved.top_reps != null && achieved.top_reps > prescribed.rep_high);
+    (prescribed.rep_high != null && topRepsAtLoad != null && topRepsAtLoad > prescribed.rep_high);
   return exceeded ? "exceeded" : "met";
 }
 
