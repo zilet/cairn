@@ -374,8 +374,11 @@ test("(h) two logged fills raise the plan a set, and the plan's quads warning cl
   seedWeek({ lowerSets: { "Leg Extension": 3 } });
   // A habit of three-set leg extensions in the weeks before (on different weekdays): with
   // no habitual history at all the set catch-up never raises above the plan (second
-  // review, item 10), so the step is measured against this baseline.
-  for (const back of [40, 32, 24, 18]) log(addDaysISO(MON, -back), "Leg Extension", 135, 11, 3, null);
+  // review, item 10), so the step is measured against this baseline. The habit sits
+  // 32+ days back: weeks are rolling 7-day windows ending on the run date, so a habit
+  // that abuts the seeded weeks strings a six-week loaded streak on some weekdays and
+  // the plan floor stands aside (deload_due), whatever day the suite happens to run.
+  for (const back of [60, 52, 44, 36]) log(addDaysISO(MON, -back), "Leg Extension", 135, 11, 3, null);
   const before = repo.getPlanQuality();
   assert.ok(
     before.warnings.some((w) => w.code === "muscle_density_low" && w.muscle_group === "quads"),
