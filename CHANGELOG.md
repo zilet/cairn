@@ -5,6 +5,40 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [2.4.0] — 2026-11-16
+
+The session listens while you train: a logged set gets a line back, an earned push day carries a
+reach on the card, and a stray tap can no longer drop a lift.
+
+### Added
+
+- **A line after a logged set.** When a set clears the range, caps it, beats the card, is your best
+  ever or completes the card, the lift's card says so in one sentence. The line survives a refresh,
+  goes when the set behind it is deleted, and a best-ever set is announced once, not twice.
+- **A reach on a lift whose top set earned it.** On a push day, a lift held only because one set was
+  short of the count can still carry the day's challenge top set, priced from what you logged.
+
+### Changed
+
+- **Skipping a lift takes two taps.** The first tap arms the skip; a second within three seconds
+  confirms it.
+- **A lighter opening set is working work.** An opener one step under the card that is as hard as
+  the card's floor set fills one missing set instead of making a strong session read as short. Reps
+  past the range count as exceeding the card only at the card's load.
+- **The step a set line names is the step the plan will take.** It asks the progression engine and
+  names a number only when the engine is stepping.
+- **Easy bodyweight work is a light dose.** Sets logged far from failure weigh less in the acute
+  muscle read, and core work no longer credits other groups.
+
+### Fixed
+
+- **A reason on the plan no longer outlives its evidence.** A change's reason is dropped once the
+  lift has been logged after the day it was written about.
+- **A hold during a cut no longer claims a fuel story it cannot back.** Only a cut that is actually
+  holding or reducing says so.
+- **A hold your log has outrun says the number the plan moves to.** The plan caught a 36 s hold up
+  to 50 s while the reason still said "add 4s".
+
 ## [2.3.3] — 2026-11-12
 
 Today's session is one fact everywhere, the coach can build and open it from chat, a single low
