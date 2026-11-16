@@ -5457,6 +5457,7 @@ declare global {
     CairnTodaySetNotes: {
       setReactionLine(result: Record<string, unknown>): string | null;
       showSetReaction(card: HTMLElement | null, result: Record<string, unknown>): void;
+      reactionHtml(loggedSets: unknown[]): string;
       delivered(card: HTMLElement | null, result: Record<string, unknown>, toast: (message: string) => void): void;
     };
     CairnTodaySessionSetActions: ClientTodaySessionSetActionsApi;

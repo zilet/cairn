@@ -65,19 +65,39 @@
     setTimeout(again, 50);
   }
 
+  // The line a repaint puts back: the session read hangs `reaction` on each lift's last
+  // set (the same {code, line} POST /sets answered). Same node the live painter makes.
+  function reactionHtml(loggedSets: unknown[]): string {
+    const last = loggedSets[loggedSets.length - 1];
+    const text = last && typeof last === "object" ? setReactionLine(last as Record<string, unknown>) : null;
+    if (!text) return "";
+    const code = String(((last as { reaction?: { code?: unknown } }).reaction || {}).code || "");
+    return `<div class="ex-reaction" data-set-reaction="${escAttr(/^[a-z_]+$/.test(code) ? code : "1")}" role="status">${escHtml(text)}</div>`;
+  }
+
+  // Deleting a set takes the line about those sets down with it, however it was painted.
+  if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+    document.addEventListener(
+      "click",
+      (event) => {
+        const target = event.target instanceof Element ? event.target.closest("[data-del]") : null;
+        target?.closest(".ex")?.querySelector("[data-set-reaction]")?.remove();
+      },
+      true
+    );
+  }
+
   // Everything a DELIVERED set says back: the weight sanity check, the coach's line on
   // the card, and the toast. A queued set never reaches here, so it shows none of them.
   function delivered(card: HTMLElement | null, result: Record<string, unknown>, toast: (message: string) => void): void {
     const model = (globalThis as unknown as { CairnTodaySessionSetModel: SetNotesModel }).CairnTodaySessionSetModel;
     if (result.weight_check) model.showWeightCheck(card, result);
-    if (result.reaction) showSetReaction(card, result);
-    if (result.pr) {
-      toast("🏆 New PR!");
-      if (typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate([60, 40, 120]);
-    } else {
-      toast("Set logged");
-    }
+    const line = setReactionLine(result);
+    if (line) showSetReaction(card, result);
+    // With a line on the card, the line IS the feedback: no toast, a record still buzzes.
+    if (!line) toast(result.pr ? "🏆 New PR!" : "Set logged");
+    if (result.pr && typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate([60, 40, 120]);
   }
 
-  Object.assign(globalThis, { CairnTodaySetNotes: { setReactionLine, showSetReaction, delivered } });
+  Object.assign(globalThis, { CairnTodaySetNotes: { setReactionLine, showSetReaction, reactionHtml, delivered } });
 }

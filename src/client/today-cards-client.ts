@@ -364,7 +364,7 @@ function exerciseCardHtml(
       ${item.journey_line ? `<div class="ex-journey" data-journey-role="${escAttr(item.journey_role || "support")}">${escHtml(item.journey_line)}</div>` : ""}
       ${!complete && !rxSilenced ? CairnTodayTraining.exRxLineHtml(rx, { supporting: headlineDose }) : ""}
       ${reachLine}
-      <div class="logged" data-logged>${loggedSets.map(todayCardsSetChip).join("")}</div>
+      <div class="logged" data-logged>${loggedSets.map(todayCardsSetChip).join("")}</div>${typeof CairnTodaySetNotes === "undefined" ? "" : CairnTodaySetNotes.reactionHtml(loggedSets)}
       ${lastSetLine}
       ${logrow}
     </div>`;

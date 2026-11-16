@@ -16,7 +16,7 @@
 import { db } from "../db.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { sameLiftName } from "./exercise-canon.js";
-import { RIR_IN_RESERVE, nextAssistStep, nextLoadStep } from "./progression.js";
+import { RIR_IN_RESERVE, nextPrescription } from "./progression.js";
 import { getActiveDailySession, getActiveDailySessionForSession } from "./adaptive-session.js";
 import { plausibleRir } from "../lib/numbers.js";
 
@@ -56,6 +56,11 @@ export interface SetReactionInput {
   // write uses) AND the lift has history from an earlier day — a first-ever session
   // has nothing to beat, so it never earns "best-ever".
   best_ever: boolean;
+  // What the progression engine would take for this lift's NEXT session, as the step
+  // words a line names (a load increment, an assist, "bodyweight"), or null when the
+  // engine would not step. Asked only when a line is about to name a step; absent
+  // (a pure read, a test) means no number is named.
+  engine_step?: (latest: ReactionSet) => string | null;
 }
 
 const LOAD_EPS = 0.1;
@@ -105,12 +110,18 @@ function capitalize(text: string): string {
   return text ? text[0].toUpperCase() + text.slice(1) : text;
 }
 
-// The next step one ordinary earned step above `load`, from the progression engine's
-// own step logic — never an invented increment. Bodyweight has no load step to name.
-function nextStepWords(load: number | null, group: string | null): string | null {
+// The step the progression engine would take next, or null when it would not step
+// (block pacing, a hold for cut pressure or an untested slot, a rep step with the load
+// held). Read as forNextSession does: no autoregulation or acute brake from today, which
+// are re-checked when that session starts. Loaded work names the increment from the load
+// just taken; assisted work names the assist it steps to. Bodyweight has no step to name.
+function engineStepWords(exercise: string, date: string, latest: ReactionSet): string | null {
+  const load = latest.weight;
   if (load == null || load === 0) return null;
-  if (load > 0) return fmtNumber(nextLoadStep(load, group));
-  return loadWords(nextAssistStep(load, group));
+  const rx = nextPrescription(exercise, undefined, { date, autoreg: null, acute: null });
+  const to = rx?.action === "overload" ? num(rx.suggested?.weight) : null;
+  if (!rx || rx.mode !== "reps" || to == null || to <= load + LOAD_EPS) return null;
+  return load > 0 ? fmtNumber(to - load) : loadWords(to);
 }
 
 // Reserve the hold asked for: RIR ≥ 2 when rated. Unrated is not weakness — it
@@ -147,12 +158,6 @@ export const SET_REACTION_VARIANTS: Record<string, readonly Template[]> = {
     (p) => `Every set at ${p.load} reached ${p.high}${p.reserve} — the range is cleared.`,
     (p) => `${p.high} on every set at ${p.load}${p.reserve}. That clears the range.`,
     (p) => `The range is yours at ${p.load}: every set at ${p.high}${p.reserve}.`,
-  ],
-  top_of_range: [
-    (p) =>
-      `${p.reps} at ${p.load}${p.reserve} reaches the top of the range. Once every set gets there, the next step is ${p.next}.`,
-    (p) => `That set capped the range at ${p.load}${p.reserve}. When the rest match it, the next step is ${p.next}.`,
-    (p) => `Top of the range at ${p.load}${p.reserve}. Bring every set to ${p.high} and the next step is ${p.next}.`,
   ],
   top_of_range_no_step: [
     (p) => `${p.reps} at ${p.load}${p.reserve} reaches the top of the range.`,
@@ -221,18 +226,18 @@ function prescribedCandidates(input: SetReactionInput, sets: ReactionSet[]): Can
       const atLoad = sets.filter((s) => s.reps != null && sameLoad(s.weight ?? null, latest.weight ?? null));
       const prescribedSets = rx.sets ?? 0;
       const everySet = prescribedSets > 0 && atLoad.length >= prescribedSets && atLoad.every((s) => capsRange(s, rx));
-      const next = nextStepWords(latest.weight, input.group);
-      const parts = { ...baseParts(input, latest), next };
+      const parts = baseParts(input, latest);
       if (everySet) {
         const allRated = atLoad.every((s) => s.rir != null && s.rir >= RIR_IN_RESERVE);
         out.push({
           code: "range_cleared",
           key: loadKey,
-          variant: next ? "range_cleared" : "range_cleared_no_step",
+          variant: "range_cleared",
           parts: { ...parts, reserve: allRated ? " with reps in hand" : "" },
         });
       }
-      out.push({ code: "top_of_range", key: loadKey, variant: next ? "top_of_range" : "top_of_range_no_step", parts });
+      // No number here: the engine steps on a COMPLETE dose, and this is one set of it.
+      out.push({ code: "top_of_range", key: loadKey, variant: "top_of_range_no_step", parts });
     }
     // 2. A load above the card, taken for reps inside the range: the log is the truth.
     const inRange =
@@ -296,6 +301,11 @@ export function setReaction(input: SetReactionInput): SetReaction | null {
   ];
   for (const candidate of ordered) {
     if (candidate.code !== "best_ever" && said(input, candidate)) continue;
+    if (candidate.code === "range_cleared") {
+      // Name a step only when the engine would take it; otherwise the no-step wording.
+      candidate.parts.next = input.engine_step?.(latest) ?? null;
+      if (!candidate.parts.next) candidate.variant = "range_cleared_no_step";
+    }
     const variants = SET_REACTION_VARIANTS[candidate.variant];
     const template = pickDayVariant(variants, input.date, `${candidate.code}:${input.exercise}:${input.sets.length}`);
     const line = capitalize(template(candidate.parts));
@@ -328,6 +338,60 @@ function cardFor(sessionId: number, date: string, exercise: string): ReactionPre
   };
 }
 
+interface LiftRow {
+  id: number;
+  name: string;
+  muscle_group: string | null;
+  mode: string | null;
+}
+
+function toReactionSet(row: Record<string, unknown>): ReactionSet {
+  return {
+    weight: num(row.weight),
+    reps: num(row.reps),
+    rir: plausibleRir(row.rir),
+    duration_sec: num(row.duration_sec),
+  };
+}
+
+// The reaction to the set `setId` of `ex` in this session: this session's sets for the
+// lift up to it, today's card, and whether it beat everything before it.
+function reactionAtSet(
+  ex: LiftRow,
+  sessionId: number,
+  date: string,
+  setId: number,
+  isBest: boolean,
+  card: ReactionPrescription | null
+): SetReaction | null {
+  const rows = db
+    .prepare(
+      `SELECT id, weight, reps, rir, duration_sec FROM logged_sets
+        WHERE session_id = ? AND exercise_id = ? AND id <= ?
+        ORDER BY id`
+    )
+    .all(sessionId, ex.id, setId) as Array<Record<string, unknown>>;
+  if (!rows.length || num(rows[rows.length - 1].id) !== setId) return null;
+  const earlierDay =
+    isBest &&
+    db
+      .prepare(
+        `SELECT 1 FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+          WHERE ls.exercise_id = ? AND s.date < ? LIMIT 1`
+      )
+      .get(ex.id, date) != null;
+  return setReaction({
+    date,
+    exercise: ex.name,
+    mode: ex.mode === "timed" ? "timed" : "reps",
+    group: ex.muscle_group ?? null,
+    sets: rows.map(toReactionSet),
+    prescription: card,
+    best_ever: isBest && earlierDay,
+    engine_step: (latest) => engineStepWords(ex.name, date, latest),
+  });
+}
+
 /**
  * The reaction for a set `logSetByName` just wrote, read from the store. Never throws:
  * a reaction is a courtesy on top of a saved set, so any failure is silence.
@@ -346,42 +410,18 @@ export function setReactionForLoggedSet(result: {
     const date = typeof result?.date === "string" ? result.date : null;
     const exercise = typeof result?.exercise === "string" ? result.exercise : null;
     if (setId == null || sessionId == null || !date || !exercise) return null;
-    const ex = db.prepare(`SELECT id, muscle_group, mode FROM exercises WHERE name = ?`).get(exercise) as
-      | { id: number; muscle_group: string | null; mode: string | null }
+    const ex = db.prepare(`SELECT id, name, muscle_group, mode FROM exercises WHERE name = ?`).get(exercise) as
+      | LiftRow
       | undefined;
     if (!ex) return null;
-    const rows = db
-      .prepare(
-        `SELECT id, weight, reps, rir, duration_sec FROM logged_sets
-          WHERE session_id = ? AND exercise_id = ? AND id <= ?
-          ORDER BY id`
-      )
-      .all(sessionId, ex.id, setId) as Array<Record<string, unknown>>;
-    if (!rows.length || num(rows[rows.length - 1].id) !== setId) return null;
-    const sets: ReactionSet[] = rows.map((row) => ({
-      weight: num(row.weight),
-      reps: num(row.reps),
-      rir: plausibleRir(row.rir),
-      duration_sec: num(row.duration_sec),
-    }));
-    const earlierDay =
-      result.pr === true
-        ? db
-            .prepare(
-              `SELECT 1 FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
-                WHERE ls.exercise_id = ? AND s.date < ? LIMIT 1`
-            )
-            .get(ex.id, date) != null
-        : false;
-    return setReaction({
+    return reactionAtSet(
+      { ...ex, mode: String(result.mode ?? ex.mode) },
+      sessionId,
       date,
-      exercise,
-      mode: (result.mode ?? ex.mode) === "timed" ? "timed" : "reps",
-      group: ex.muscle_group ?? null,
-      sets,
-      prescription: cardFor(sessionId, date, exercise),
-      best_ever: result.pr === true && earlierDay,
-    });
+      setId,
+      result.pr === true,
+      cardFor(sessionId, date, exercise)
+    );
   } catch {
     return null;
   }
@@ -391,4 +431,69 @@ export function setReactionForLoggedSet(result: {
 export function withSetReaction<T extends Record<string, unknown>>(result: T): T & { reaction?: SetReaction } {
   const reaction = setReactionForLoggedSet(result);
   return reaction ? { ...result, reaction } : result;
+}
+
+/** Whether a set beat every earlier set of its lift: the set write's own PR rule. */
+export type SetBeatsPrior = (
+  mode: "reps" | "timed",
+  set: { weight: number | null; reps: number | null; duration_sec: number | null },
+  prior: Array<{ weight: any; reps: any; duration_sec: any }>
+) => boolean;
+
+/**
+ * The reaction each lift in a session still stands on, for the session read: the line
+ * the athlete was last given on that card, which is what the card keeps showing until a
+ * newer one replaces it. Re-runs the pure read over the logged sets, newest set first,
+ * so it is the very line POST /sets answered for the latest set that earned one, and a
+ * deleted set simply stops yielding it. Keyed by the id of the lift's LAST set in the
+ * session (the row the card hangs it on). Silence is the empty map. Never throws.
+ */
+export function standingSetReactions(
+  sessionId: number,
+  date: string,
+  beatsPrior: SetBeatsPrior
+): Map<number, SetReaction> {
+  const out = new Map<number, SetReaction>();
+  try {
+    const rows = db
+      .prepare(
+        `SELECT ls.id, ls.exercise_id, ls.weight, ls.reps, ls.duration_sec,
+                e.name, e.muscle_group, e.mode
+           FROM logged_sets ls JOIN exercises e ON e.id = ls.exercise_id
+          WHERE ls.session_id = ? ORDER BY ls.id`
+      )
+      .all(sessionId) as Array<Record<string, unknown>>;
+    const byLift = new Map<number, Array<Record<string, unknown>>>();
+    for (const row of rows) {
+      const list = byLift.get(Number(row.exercise_id)) ?? [];
+      list.push(row);
+      byLift.set(Number(row.exercise_id), list);
+    }
+    for (const [exerciseId, sets] of byLift) {
+      const first = sets[0];
+      const ex: LiftRow = {
+        id: exerciseId,
+        name: String(first.name),
+        muscle_group: (first.muscle_group as string | null) ?? null,
+        mode: (first.mode as string | null) ?? null,
+      };
+      const card = cardFor(sessionId, date, ex.name);
+      const mode = ex.mode === "timed" ? "timed" : "reps";
+      for (let k = sets.length - 1; k >= 0; k--) {
+        const setId = Number(sets[k].id);
+        const prior = db
+          .prepare(`SELECT weight, reps, duration_sec FROM logged_sets WHERE exercise_id = ? AND id < ?`)
+          .all(exerciseId, setId) as Array<{ weight: any; reps: any; duration_sec: any }>;
+        const best = beatsPrior(mode, toReactionSet(sets[k]), prior);
+        const reaction = reactionAtSet(ex, sessionId, date, setId, best, card);
+        if (reaction) {
+          out.set(Number(sets[sets.length - 1].id), reaction);
+          break;
+        }
+      }
+    }
+  } catch {
+    // A courtesy on top of the read: silence.
+  }
+  return out;
 }

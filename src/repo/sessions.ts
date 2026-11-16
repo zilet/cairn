@@ -58,6 +58,7 @@ import {
 import { getActiveDailySessionForSession, listDailySessionCompositions } from "./adaptive-session.js";
 import { getAuthoritativeSessionRow, getOrCreateSessionRow } from "./session-core.js";
 import { copyDeep, memoKey, requestMemo } from "./request-memo.js";
+import { standingSetReactions } from "./set-reaction.js";
 
 // ---------- sessions ----------
 export function getOrCreateSession(date: string, planDayId?: number | null): any {
@@ -119,7 +120,7 @@ export function getSessionByDate(date: string) {
     ...hydrateSession(s),
     title: loggedSessionTitle(s.id, s.plan_day_id),
     daily_session: getActiveDailySessionForSession(s.id),
-    sets: setsForSession(s.id),
+    sets: setsWithReactions(s.id, String(s.date)),
     skips: skipsForSession(s.id),
   };
 }
@@ -136,7 +137,7 @@ export function getSessionDetail(id: number) {
     ...hydrateSession(s),
     title: loggedSessionTitle(s.id, s.plan_day_id),
     daily_session: getActiveDailySessionForSession(s.id),
-    sets: setsForSession(id),
+    sets: setsWithReactions(id, String(s.date)),
     skips: skipsForSession(id),
     strength_journey_movement: s.finished_at ? strengthJourneySessionMovement(id) : null,
   };
@@ -466,6 +467,20 @@ export function setSessionFeedback(
   // performance) — refresh the outcome so it reflects the reported signal.
   reconcileDailySessionSafe(session.id);
   return getSessionDetail(session.id);
+}
+
+// The session read's sets: each lift's LAST set carries the `reaction` the card keeps
+// showing (set-reaction.ts), so a repaint paints the line POST /sets answered. Absent
+// from every other set, and from all of them when there is nothing to say.
+function setsWithReactions(sessionId: number, date: string) {
+  const sets = setsForSession(sessionId) as Array<Record<string, unknown>>;
+  if (!sets.length) return sets;
+  const standing = standingSetReactions(sessionId, date, (mode, set, prior) => {
+    if (mode === "timed") return (set.duration_sec ?? 0) > 0 && isTimedPr({ weight: set.weight, duration_sec: set.duration_sec! }, prior);
+    return (set.weight ?? 0) > 0 && (set.reps ?? 0) > 0 && epley1RM(set.weight!, set.reps!) > bestE1rm(prior);
+  });
+  if (!standing.size) return sets;
+  return sets.map((row) => (standing.has(Number(row.id)) ? { ...row, reaction: standing.get(Number(row.id)) } : row));
 }
 
 export function setsForSession(sessionId: number) {

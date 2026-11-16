@@ -3,7 +3,6 @@
 import assert from "node:assert/strict";
 import { beforeEach, test } from "node:test";
 import { SET_REACTION_VARIANTS, setReaction, withSetReaction } from "../dist/repo/set-reaction.js";
-import { nextAssistStep, nextLoadStep } from "../dist/repo/progression.js";
 import { violatesReadingGrammar } from "../dist/repo/day-read-grammar.js";
 import { db, repo, resetTables } from "./_seed.js";
 
@@ -15,7 +14,7 @@ function set(weight, reps, rir = null, duration_sec = null) {
 }
 
 // Replays a session set by set, the way POST /sets answers each one.
-function replay(sets, { prescription = BENCH_CARD, mode = "reps", group = "chest", best = [], date = DATE } = {}) {
+function replay(sets, { prescription = BENCH_CARD, mode = "reps", group = "chest", best = [], date = DATE, step } = {}) {
   return sets.map((_, index) =>
     setReaction({
       date,
@@ -25,6 +24,7 @@ function replay(sets, { prescription = BENCH_CARD, mode = "reps", group = "chest
       sets: sets.slice(0, index + 1),
       prescription,
       best_ever: best.includes(index),
+      engine_step: step,
     })
   );
 }
@@ -34,9 +34,8 @@ test("the live bench evidence: top of the range, then the heavier load, then the
   assert.equal(first.code, "top_of_range");
   assert.match(first.line, /140/);
   assert.match(first.line, /reps in hand/);
-  // The next step is the engine's own ordinary earned step, never an invented one.
-  assert.equal(nextLoadStep(140, "chest"), 145);
-  assert.match(first.line, /next step is 145/);
+  // One set of the dose: no number is named, the engine steps on the whole dose.
+  assert.doesNotMatch(first.line, /next step/);
   assert.equal(second.code, "above_card");
   assert.match(second.line, /145/);
   assert.match(second.line, /working weight/);
@@ -46,12 +45,15 @@ test("the live bench evidence: top of the range, then the heavier load, then the
 });
 
 test("every set capped at the load clears the range once; an unrated set never claims reserve", () => {
-  const reactions = replay([set(140, 8), set(140, 8), set(140, 8), set(140, 8)]);
+  const reactions = replay([set(140, 8), set(140, 8), set(140, 8), set(140, 8)], { step: () => "5" });
   assert.equal(reactions[0].code, "top_of_range");
   assert.doesNotMatch(reactions[0].line, /in hand/);
   assert.equal(reactions[1], null, "the same top-of-range signal is not said twice");
   assert.equal(reactions[2].code, "range_cleared");
-  assert.match(reactions[2].line, /145/);
+  assert.match(reactions[2].line, /next step is 5/);
+  const held = replay([set(140, 8), set(140, 8), set(140, 8)])[2];
+  assert.equal(held.code, "range_cleared");
+  assert.doesNotMatch(held.line, /next step/, "no engine step, no number");
   assert.equal(reactions[3], null, "a fourth set at the same dose adds nothing new");
 });
 
@@ -72,8 +74,7 @@ test("assistance: less assist is harder, more assist is not the top of the range
   const [less] = replay([set(-25, 10, 2)], { prescription: card, group: "back" });
   assert.equal(less.code, "top_of_range");
   assert.match(less.line, /an assist of 25/i);
-  const next = nextAssistStep(-25, "back");
-  assert.match(less.line, new RegExp(next == null ? "bodyweight" : `an assist of ${Math.abs(next)}`));
+  assert.doesNotMatch(less.line, /next step/);
   const [more] = replay([set(-35, 10, 2)], { prescription: card, group: "back" });
   assert.equal(more, null);
   const [above] = replay([set(-25, 7)], { prescription: card, group: "back" });
@@ -201,4 +202,61 @@ test("one lift on two cards has no single dose to judge, so only a best-ever cou
   ]);
   const top = logged({ exercise: "Back Squat", weight: 250, reps: 3, rir: 2, date: DATE });
   assert.equal(top.reaction, undefined);
+});
+
+// ---- the session read keeps the line across a repaint ----
+
+const BENCH = "Barbell Bench Press";
+const benchCard = () =>
+  seedCard(DATE, [{ exercise: BENCH, sets: 3, rep_low: 5, rep_high: 8, target_weight: 140, mode: "reps" }]);
+
+test("the session read hangs the very line POST answered on the lift's last set", () => {
+  repo.logSetByName({ exercise: BENCH, weight: 135, reps: 8, rir: 2, date: "2026-11-09" });
+  benchCard();
+  const first = logged({ exercise: BENCH, weight: 140, reps: 8, rir: 2, date: DATE });
+  let sets = repo.getSessionByDate(DATE).sets;
+  assert.deepEqual(sets[0].reaction, first.reaction);
+  const second = logged({ exercise: BENCH, weight: 145, reps: 6, date: DATE });
+  sets = repo.getSessionByDate(DATE).sets;
+  assert.equal(sets[0].reaction, undefined, "only the last set carries it");
+  assert.deepEqual(sets[1].reaction, second.reaction);
+  // A silent set leaves the standing line, exactly as the card does.
+  const silent = logged({ exercise: BENCH, weight: 100, reps: 3, date: DATE });
+  assert.equal(silent.reaction, undefined);
+  sets = repo.getSessionByDate(DATE).sets;
+  assert.deepEqual(sets[2].reaction, second.reaction);
+  // Finishing the session keeps it.
+  repo.finishSession(sets[0].session_id, null);
+  assert.deepEqual(repo.getSessionByDate(DATE).sets[2].reaction, second.reaction);
+});
+
+test("a deleted set stops yielding its line; nothing to say leaves the field absent", () => {
+  repo.logSetByName({ exercise: BENCH, weight: 135, reps: 8, rir: 2, date: "2026-11-09" });
+  benchCard();
+  const only = logged({ exercise: BENCH, weight: 140, reps: 8, rir: 2, date: DATE });
+  assert.ok(only.reaction);
+  repo.deleteSet(Number(only.id));
+  assert.equal(repo.getSessionByDate(DATE)?.sets?.length ?? 0, 0);
+  const quiet = logged({ exercise: BENCH, weight: 100, reps: 3, date: DATE });
+  assert.equal(quiet.reaction, undefined);
+  const row = repo.getSessionByDate(DATE).sets[0];
+  assert.equal("reaction" in row, false);
+});
+
+test("a range cleared names the step the progression engine would take, or none", () => {
+  for (const date of ["2026-11-02", "2026-11-09"]) {
+    for (let i = 0; i < 3; i++) repo.logSetByName({ exercise: BENCH, weight: 140, reps: 8, rir: 2, date });
+  }
+  benchCard();
+  logged({ exercise: BENCH, weight: 140, reps: 8, rir: 2, date: DATE });
+  logged({ exercise: BENCH, weight: 140, reps: 8, rir: 2, date: DATE });
+  const started = process.hrtime.bigint();
+  const third = logged({ exercise: BENCH, weight: 140, reps: 8, rir: 2, date: DATE });
+  const ms = Number(process.hrtime.bigint() - started) / 1e6;
+  assert.equal(third.reaction?.code, "range_cleared");
+  const rx = repo.nextPrescription(BENCH, undefined, { date: DATE, autoreg: null, acute: null });
+  const to = rx?.action === "overload" ? rx.suggested?.weight : null;
+  if (to != null && to > 140) assert.match(third.reaction.line, new RegExp(`next step is ${to - 140}\\b`));
+  else assert.doesNotMatch(third.reaction.line, /next step/);
+  assert.ok(ms < 250, `the engine read stays cheap on the set write (${ms.toFixed(1)} ms)`);
 });

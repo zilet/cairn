@@ -279,6 +279,41 @@ test("a delivered set carrying a reaction shows its line on the card", async () 
   assert.equal(lines[0].textContent, "That set capped the range at 140 with reps in hand.");
 });
 
+test("a delivered set with a line shows no toast (the line is the feedback); a record still buzzes", async () => {
+  const buzzes = [];
+  const { context } = harness();
+  context.navigator = { vibrate: (pattern) => buzzes.push(pattern) };
+  const { card } = surface();
+  const toasts = [];
+  const reaction = { code: "best_ever", line: "That's the strongest set you've logged on this lift." };
+  context.CairnTodaySessionSetModel.showWeightCheck = () => {};
+  context.CairnTodaySetNotes.delivered(card, { id: 5, pr: true, reaction }, (t) => toasts.push(t));
+  assert.deepEqual(toasts, []);
+  assert.equal(buzzes.length, 1);
+  assert.equal(reactionLines(card).length, 1);
+  // Without a line nothing changes: the PR toast, or the plain one.
+  context.CairnTodaySetNotes.delivered(card, { id: 6, pr: true }, (t) => toasts.push(t));
+  context.CairnTodaySetNotes.delivered(card, { id: 7 }, (t) => toasts.push(t));
+  assert.deepEqual(toasts, ["🏆 New PR!", "Set logged"]);
+  assert.equal(buzzes.length, 2);
+});
+
+test("a repaint puts the standing line back from the session's last set, as escaped text", () => {
+  const { context } = harness();
+  context.escHtml = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  context.escAttr = (s) => context.escHtml(s).replace(/"/g, "&quot;");
+  const notes = context.CairnTodaySetNotes;
+  assert.equal(notes.reactionHtml([]), "");
+  assert.equal(notes.reactionHtml([{ id: 1, reps: 8 }, { id: 2, reps: 8 }]), "");
+  const html = notes.reactionHtml([
+    { id: 1 },
+    { id: 2, reaction: { code: "above_card", line: "<b>145</b> for 6" } },
+  ]);
+  assert.match(html, /^<div class="ex-reaction" data-set-reaction="above_card" role="status">/);
+  assert.ok(html.includes("&lt;b&gt;145&lt;/b&gt; for 6"));
+  assert.ok(!html.includes("<b>"));
+});
+
 test("an outbox-queued set simply shows no line", async () => {
   const { card, toasts } = await logOnce({ status: "queued", item: { id: "q-1" } });
   assert.equal(reactionLines(card).length, 0);
