@@ -5,6 +5,18 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [2.4.1] — 2026-11-16
+
+### Changed
+
+- **The weight you worked at decides the next step.** A lift's working weight is the heaviest load
+  at which a set reached the bottom of the rep range, and the reps and reserve that earn a step are
+  read at that load. A lighter set taken for more reps no longer earns a step at a heavier weight,
+  and a single heavy set under the range no longer counts as the working weight. Estimated max
+  still drives trends and records.
+- **A hold says its real reason.** When the top set capped the range but was a grind, the card says
+  that instead of naming the other sets.
+
 ## [2.4.0] — 2026-11-16
 
 The session listens while you train: a logged set gets a line back, an earned push day carries a
