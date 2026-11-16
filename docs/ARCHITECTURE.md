@@ -183,8 +183,8 @@ logged load that capped the range) only on the final plain hold: never a grind, 
 constraint, untested slot, phase hold, re-ground, brake, `earned_hold` response, an unfinished or
 confounded dose, or a day the cut vetoes promotion. Composition accepts it only on a
 `progression_hold` candidate (a day-level hold — saturation, recheck, underperformance — never), and
-anchors the step on that logged load when `recentWorkingWeight`'s Epley ranking picked a lighter
-ramp set (135 × 10 ahead of 140 × 8), so the heavier look sits above the held block. The block keeps
+anchors the step on that logged load whenever `recentWorkingWeight` reads lighter, so the heavier
+look sits above the held block (the working-load read below makes the two agree on ordinary logs). The block keeps
 the held target; the agent's nested single keeps the strict gate; the push read's "why not more"
 no longer names that lift's hold on a reach day.
 It is priced off the log: ONE ordinary earned step above `recentWorkingWeight` (`nextLoadStep`, the
@@ -1027,6 +1027,28 @@ is met. A lighter set after the load was reached is a back-off and fills nothing
 card, all sets light, or a card-load set under the range stay `under_prescribed`; the opener never turns
 a full card exceeded. Reps past the ceiling exceed the card only on sets AT its load (a warm-up's ten
 reps never do).
+
+**The working load: where the work was, not the Epley-best set** (double progression).
+`sessionWorkingLoad` (`src/repo/working-load.ts`, pure, a leaf) is the ONE definition of the weight a
+session was worked at, and `recentWorkingWeight` (best of the last few sessions' working loads),
+progression's `latestTopSet` and `latestWorkingSets` all call it. Over the session's positive-load rep
+sets: drop warm-ups (under `WARMUP_LOAD_FRACTION` of the top load); the working load is the HEAVIEST
+load among the sets that reached the rep floor — one such set is enough, since athletes climb set to
+set — where the floor is the prescription's `rep_low` when the reader knows it (the engine passes it to
+all three reads, so its base load and the reps that judge it are one read), else `MIN_WORKING_REPS` = 3.
+When NO set reached the floor, it is the `UNDER_FLOOR_SETS`-th (2nd) heaviest load left (the only one
+when one set was logged), so a lone under-floor feeler over under-floor work never names the load. Step
+readiness is then the reps and RIR AT that load only: `latestTopSet` is the most-reps set at the working
+load. So 140 × 8, 145 × 6, 145 × 5 on a 3 × 5–8 @ 140 card works at 145 with a 145 × 6 top set — the
+plan catches up to 145 and holds (`PLAN_BEHIND_HOLD`), never steps to 150 off reps done at 140; 135 ×
+10, 140 × 8, 140 × 6 works at 140 off 140 × 8 (the opener's two reps past the ceiling no longer count as
+reserve — a 140 × 8 at RIR 1 is strong only under a dated push stance, and the hold says the grind);
+140 × 8 ×3 then 155 × 1 works at 140; an OHP 75 × 4, 70 × 6, 60 × 9 on 6–8 works at 70; a top set over
+back-offs works at the top set's load. The ramp-in opener still fills a missing set in the dose verdict
+and is never evidence for the next load. Assisted (negative), bodyweight and timed work have no working load
+of this kind and keep their long-standing picks (assist ranked on `(w, reps)`, the larger signed value
+harder). Est-1RM (Epley on the best set per day) is a different question — trends, PRs, records,
+program-state status, `achievableWorkingWeight` — and stays Epley.
 
 The session-level `recovery` flag is now STRUCTURED, never a regex over stored decision prose.
 `structuredRecovery(date, composition)` is true only for an active/recheck `recovery_cycles` row at

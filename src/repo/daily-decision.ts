@@ -1490,7 +1490,11 @@ function earnedLifts(date: string, planItems: any[], progression: any[]): Map<st
       }
     }
     if (qualifying < EARNED_MIN_QUALIFYING) continue;
-    const workingWeight = workingWeightUnderPrescription(name, authorship, { sessionsBack: EARNED_EXPOSURES, before: date });
+    const workingWeight = workingWeightUnderPrescription(name, authorship, {
+      sessionsBack: EARNED_EXPOSURES,
+      before: date,
+      repLow: finite(item?.rep_low) ?? finite(prog?.current?.rep_low),
+    });
     if (workingWeight == null || workingWeight <= 0 || earnedAt == null || earnedAt <= 0) continue;
     out.set(name.toLowerCase(), { working_weight: Math.min(workingWeight, earnedAt) });
   }

@@ -34,6 +34,7 @@ import { isoDate, isoDay } from "../lib/dates.js";
 import { daysBetweenISO, localDateISO } from "./shared.js";
 import { plausibleRir } from "../lib/numbers.js";
 import { progressionLineageIds } from "./exercise-canon.js";
+import { atWorkingLoad, sessionWorkingLoad } from "./working-load.js";
 
 /** How long a freshly written prescription runs before a plateau read may judge it. */
 export const PRESCRIPTION_SETTLE_DAYS = 14;
@@ -369,13 +370,17 @@ export type WorkingSet = { weight: number | null; reps: number | null; rir: numb
 
 /**
  * The lift's latest logged session (its progression lineage) and that session's
- * WORKING sets — the sets at its hardest signed weight. Bodyweight (null) is the zero
- * of the signed scale: harder than any assist, easier than any added load — so
- * bodyweight sets beside an assisted finisher ARE the working sets (the assisted set
+ * WORKING sets. Loaded rep work: the sets AT the session's working load
+ * (`sessionWorkingLoad`, working-load.ts — the same load `recentWorkingWeight` and the
+ * engine's top-set read name), so a heavier feeler under the floor is not the session's work and
+ * a lighter ramp-in opener is not either. `repLow` is the prescription's rep floor when
+ * the caller knows it. Otherwise the sets at its hardest signed weight. Bodyweight (null)
+ * is the zero of the signed scale: harder than any assist, easier than any added load —
+ * so bodyweight sets beside an assisted finisher ARE the working sets (the assisted set
  * is the back-off), while bodyweight sets beside loaded ones are warm-ups. A session
  * with nothing weighted is a bodyweight session and every logged set counts.
  */
-export function latestWorkingSets(name: string): WorkingSet[] {
+export function latestWorkingSets(name: string, repLow?: number | null): WorkingSet[] {
   const ids = progressionLineageIds(name);
   if (!ids.length) return [];
   const inIds = ids.map(() => "?").join(",");
@@ -389,20 +394,25 @@ export function latestWorkingSets(name: string): WorkingSet[] {
   if (!latestSession?.date || latestSession?.id == null) return [];
   const rows = db
     .prepare(
-      `SELECT ls.weight AS weight, ls.reps AS reps, ls.rir AS rir
+      `SELECT ls.weight AS weight, ls.reps AS reps, ls.rir AS rir, ls.duration_sec AS duration_sec
        FROM logged_sets ls
       WHERE ls.exercise_id IN (${inIds}) AND ls.session_id = ? AND ls.reps IS NOT NULL`
     )
     .all(...ids, latestSession.id) as any[];
   if (!rows.length) return [];
+  const toWorkingSet = (r: any): WorkingSet => ({
+    weight: r.weight ?? null,
+    reps: r.reps != null ? Number(r.reps) : null,
+    rir: plausibleRir(r.rir),
+  });
+  const load = sessionWorkingLoad(rows, repLow);
+  if (load != null) return rows.filter((r) => atWorkingLoad(r, load)).map(toWorkingSet);
   const signed = (r: any): number => (r.weight == null ? 0 : Number(r.weight));
   let topW: number | null = null;
   for (const r of rows) {
     if (topW == null || signed(r) > topW) topW = signed(r);
   }
-  return rows
-    .filter((r) => signed(r) === topW)
-    .map((r) => ({ weight: r.weight ?? null, reps: r.reps != null ? Number(r.reps) : null, rir: plausibleRir(r.rir) }));
+  return rows.filter((r) => signed(r) === topW).map(toWorkingSet);
 }
 
 /** The lift's latest logged exposure (its lineage): the session's day and first set's created_at. */

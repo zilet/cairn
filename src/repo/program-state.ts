@@ -720,7 +720,7 @@ function liftStates(date: string): LiftState[] {
       slot?.prescribed_at ?? null,
       last_trained,
       { weight: slot?.weight, rep_low: slot?.rep_low, sets: slot?.sets },
-      () => latestWorkingSets(name),
+      () => latestWorkingSets(name, slot?.rep_low),
       date
     );
     const represcribed =

@@ -79,6 +79,10 @@ function composedSession(name, daysAgo, card, sets, { feedback = null } = {}) {
 }
 
 const NO_BRAKES = { autoreg: null, acute: null };
+// The 10-30 sets at the card's load were rated RIR 1. The step is read off the top set AT
+// the working load (140 × 8, working-load.ts), so it is strong under a dated push stance
+// (the bar drops to one rep in hand) — never by borrowing the 135 × 10 opener's reps.
+const PUSH_STANCE = { ...NO_BRAKES, pushStance: true };
 const BENCH = "Barbell Bench Press";
 const CARD = { sets: 3, rep_low: 5, rep_high: 8, target_weight: 140, target_seconds: null };
 
@@ -265,7 +269,7 @@ test("live: the 10-30 shape under push no longer holds on under_prescribed — t
   ]);
   assert.equal(dose.challenge_verdict, "met");
   assert.equal(readStoredDose(dose).verdict, "met");
-  const p = nextPrescription(BENCH, undefined, NO_BRAKES);
+  const p = nextPrescription(BENCH, undefined, PUSH_STANCE);
   assert.equal(p.dose_eligibility.reason, "full_comparable");
   assert.equal(p.action, "overload", p.why);
   assert.equal(p.suggested.weight, 145);
@@ -284,7 +288,7 @@ test("live: a dose stored as under_prescribed under the old rule is re-read unde
   const facts = JSON.parse(row.facts_json);
   for (const dose of facts.dose_evidence) dose.challenge_verdict = "under_prescribed";
   db.prepare(`UPDATE daily_session_outcomes SET facts_json = ? WHERE id = ?`).run(JSON.stringify(facts), row.id);
-  const p = nextPrescription(BENCH, undefined, NO_BRAKES);
+  const p = nextPrescription(BENCH, undefined, PUSH_STANCE);
   assert.notEqual(p.dose_eligibility.reason, "under_prescribed");
   assert.equal(p.action, "overload", p.why);
 });
@@ -318,7 +322,7 @@ test("live: card-load reps under the range still hold", () => {
   assert.notEqual(p.action, "overload");
 });
 
-test("live: the 11-16 shape exceeds the 140 card; push steps to the 145 the athlete already carried", () => {
+test("live: the 11-16 shape exceeds the 140 card; push catches the plan up to the 145 the athlete worked at", () => {
   repo.setSettings({ training_drive: "push" });
   benchHistory();
   const dose = composedSession(BENCH, 1, CARD, [
@@ -329,9 +333,11 @@ test("live: the 11-16 shape exceeds the 140 card; push steps to the 145 the athl
   assert.equal(dose.challenge_verdict, "exceeded");
   const p = nextPrescription(BENCH, undefined, NO_BRAKES);
   assert.equal(p.dose_eligibility.reason, "full_comparable");
-  assert.equal(p.action, "overload", p.why);
-  // The 140 × 8 top set capped the range at RIR 2: one step, onto the load the last two
-  // sets already carried — never a second step off them (they were 6 and 5, not 8).
+  // The working load is 145 (two sets there) and its top set is 145 × 6 — short of the
+  // ceiling. So it is a catch-up HOLD at 145, never a step: not off the 140 × 8 opener,
+  // and never a second step to 150 (working-load.ts).
+  assert.equal(p.action, "hold", p.why);
+  assert.equal(p.reground, true);
   assert.equal(p.suggested.weight, 145);
 });
 

@@ -689,10 +689,11 @@ function reachHostCandidateAllows(candidate: DailyDecisionEnvelope["candidates"]
   );
 }
 
-// The logged load a top-set-earned hold capped the range at. recentWorkingWeight ranks a
-// session's sets by Epley, so a lighter ramp-in set at more reps (135 × 10 ahead of
-// 140 × 8) can name the lighter load — and one step above THAT is the held block itself,
-// not a heavier look. Still the log, never the plan: the progression read the set.
+// The logged load a top-set-earned hold capped the range at. recentWorkingWeight reads each
+// session's WORKING load (working-load.ts), which is the load this set was taken at, so the
+// two agree on ordinary logs; this keeps the reach's anchor on the capped load wherever the
+// windows differ (a lighter load read off another session) — one step above a lighter load
+// is the held block itself, not a heavier look. Still the log, never the plan.
 function topSetEarnedLoad(candidate: DailyDecisionEnvelope["candidates"][number] | undefined): number | null {
   if (!reachHostCandidateAllows(candidate) || reachCandidateAllows(candidate)) return null;
   const weight = Number(candidate?.progression_evidence?.top_set_earned?.weight);

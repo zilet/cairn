@@ -29,6 +29,7 @@ import { addDaysISO } from "./shared.js";
 import { withSqliteSavepoint } from "./sqlite-savepoint.js";
 import { bumpTrainingDataVersion } from "./training-cache.js";
 import { copyFlat, memoKey, requestMemo } from "./request-memo.js";
+import { sessionWorkingLoad } from "./working-load.js";
 
 // ---------- exercises ----------
 const EXERCISE_MODES = ["reps", "timed"];
@@ -1050,21 +1051,41 @@ export function deleteExercise(name: string) {
   return { ok: changes > 0, deleted: changes, exercise: name };
 }
 
-// The athlete's actual recent WORKING weight for a lift — the hardest top-set load
-// they've handled across the last few sessions (top set per session by est-1RM, then
-// the heaviest of those). This is "what you're really lifting", which the progression
+// The athlete's actual recent WORKING weight for a lift — the heaviest load they
+// genuinely worked at across the last few sessions: each session's working load
+// (`sessionWorkingLoad`, working-load.ts — the heaviest load at which a set reached the
+// rep floor, never a lighter set taken for more reps and never an under-floor feeler), then the
+// heaviest of those. This is "what you're really lifting", which the progression
 // engine grounds in so a stale plan target can't strand a lift below reality (the bug:
 // plan says 27 lb, you log 45–50 every week, the engine kept prescribing 27). Robust to
 // a single light day (it reads the hardest of several sessions). null when no loaded
 // history. Encoding preserved: negative = assist (closer to 0 = harder), 0/bodyweight
-// is excluded (load progression doesn't apply). sessionsBack defaults to 3.
-export function recentWorkingWeight(name: string, sessionsBack = 3, beforeExclusive?: string): number | null {
-  const key = memoKey([name, sessionsBack, beforeExclusive]);
-  if (key == null) return recentWorkingWeightRead(name, sessionsBack, beforeExclusive);
-  return requestMemo(`recent_working_weight:${key}`, () => recentWorkingWeightRead(name, sessionsBack, beforeExclusive), copyFlat);
+// is excluded (load progression doesn't apply). sessionsBack defaults to 3. `repLow` is
+// the rep floor a working set must reach when the caller knows the prescription's range
+// (the progression engine passes it, so its base load and its top-set read agree);
+// without one the floor is MIN_WORKING_REPS.
+export function recentWorkingWeight(
+  name: string,
+  sessionsBack = 3,
+  beforeExclusive?: string,
+  repLow?: number | null
+): number | null {
+  const floor = repLow != null && Number(repLow) > 0 ? Number(repLow) : null;
+  const key = memoKey([name, sessionsBack, beforeExclusive, floor]);
+  if (key == null) return recentWorkingWeightRead(name, sessionsBack, beforeExclusive, floor);
+  return requestMemo(
+    `recent_working_weight:${key}`,
+    () => recentWorkingWeightRead(name, sessionsBack, beforeExclusive, floor),
+    copyFlat
+  );
 }
 
-function recentWorkingWeightRead(name: string, sessionsBack: number, beforeExclusive?: string): number | null {
+function recentWorkingWeightRead(
+  name: string,
+  sessionsBack: number,
+  beforeExclusive: string | undefined,
+  repLow: number | null
+): number | null {
   // Alias-aware: "Incline DB Press" and "Incline Dumbbell Press" are one series —
   // and a bodyweight-ladder row that REPLACED another ("Assisted Pull-Up" rotated out
   // for "Neutral-Grip Pull-Up") reads the rung history it inherited
@@ -1091,21 +1112,26 @@ function recentWorkingWeightRead(name: string, sessionsBack: number, beforeExclu
   let best: number | null = null;
   for (const d of dates) {
     const sets = db.prepare(
-      `SELECT ls.weight AS weight, ls.reps AS reps FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+      `SELECT ls.weight AS weight, ls.reps AS reps, ls.duration_sec AS duration_sec
+         FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
         WHERE ls.exercise_id IN (${inIds}) AND s.date = ? AND ls.weight IS NOT NULL AND ls.weight != 0`
     ).all(...ids, d) as any[];
-    // The session's hardest working set. Loaded (w>0): heavier and more reps
-    // ranks higher — the Epley-shaped `w * (1 + reps/30)` read. Assisted (w<0):
-    // that same multiply ranked FEWER reps higher because the weight is negative,
-    // which is the opposite of "harder". Score those on `(w, reps)` so less assist
-    // (closer to 0) AND more reps both rank higher.
-    let topW: number | null = null;
-    let bestScore = -Infinity;
-    for (const s of sets) {
-      const w = Number(s.weight);
-      const reps = Number(s.reps) || 0;
-      const score = w < 0 ? w + reps / 30 : w * (1 + reps / 30);
-      if (score > bestScore) { bestScore = score; topW = w; }
+    // The session's working load. Loaded rep work (w>0) reads the ONE working-load rule
+    // (working-load.ts): the heaviest load carrying real working sets — never a lighter
+    // set taken for more reps, never an under-floor feeler. Everything else keeps its
+    // long-standing pick: assisted (w<0) is scored on `(w, reps)` so less assist (closer
+    // to 0) AND more reps both rank higher (the Epley multiply would rank FEWER reps
+    // higher on a negative weight), and a load logged with no reps (a loaded carry or
+    // hold) reads as its weight.
+    let topW: number | null = sessionWorkingLoad(sets, repLow);
+    if (topW == null) {
+      let bestScore = -Infinity;
+      for (const s of sets) {
+        const w = Number(s.weight);
+        const reps = Number(s.reps) || 0;
+        const score = w < 0 ? w + reps / 30 : w * (1 + reps / 30);
+        if (score > bestScore) { bestScore = score; topW = w; }
+      }
     }
     // "Harder" is the larger signed value in both regimes (loaded + and assist −),
     // so a plain max picks the hardest working load they've actually handled.

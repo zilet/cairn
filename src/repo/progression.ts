@@ -166,6 +166,7 @@ import {
   OUTCOME_FACTS_SCHEMA_VERSION,
 } from "./daily-reconciliation.js";
 import { doseAdoptedAfterLog, harderLoad, loadAtOrAbove, readStoredDose } from "./outcome-comparability.js";
+import { atWorkingLoad, sessionWorkingLoad } from "./working-load.js";
 
 export {
   loadPhrase,
@@ -910,10 +911,11 @@ function currentTarget(plan: ReturnType<typeof planItemFor>, mode: "reps" | "tim
   };
 }
 
-// The latest logged TOP set for a lift (heaviest est-1RM day's top set + its
-// RIR) — the deterministic read of "what they actually did last time".
+// The latest logged TOP set for a lift (the latest session's best set at its working
+// load + its RIR) — the deterministic read of "what they actually did last time".
 function latestTopSet(
-  name: string
+  name: string,
+  repLow?: number | null
 ): {
   weight: number | null;
   reps: number | null;
@@ -928,8 +930,13 @@ function latestTopSet(
   const ids = progressionLineageIds(name);
   if (!ids.length) return null;
   const inIds = ids.map(() => "?").join(",");
-  // Most recent session that logged this lift; within it, the top set by est-1RM
-  // (reps) or by duration (timed). RIR comes off that top set when present.
+  // Most recent session that logged this lift; within it, the top set. Loaded rep work:
+  // the set with the most reps AT the session's working load (working-load.ts — the
+  // same load recentWorkingWeight names, `repLow` the prescription's floor when known),
+  // so the step is read off the reps and RIR taken at the weight the athlete actually
+  // worked at, never a lighter set taken for more reps or an under-floor feeler. Anything
+  // else (assisted, bodyweight, timed): the long-standing pick, by est-1RM (reps) or by
+  // duration (timed). RIR comes off that top set when present.
   const latestSession = (
     db
       .prepare(
@@ -944,19 +951,33 @@ function latestTopSet(
     .prepare(
       `SELECT ls.weight AS weight, ls.reps AS reps, ls.rir AS rir, ls.duration_sec AS duration_sec
        FROM logged_sets ls
-      WHERE ls.exercise_id IN (${inIds}) AND ls.session_id = ?`
+      WHERE ls.exercise_id IN (${inIds}) AND ls.session_id = ?
+      ORDER BY ls.id`
     )
     .all(...ids, latestSession.id) as any[];
   if (!sets.length) return null;
-  // Top set: max (weight×(1+reps/30)) for reps; max duration for timed.
   let top = sets[0];
-  let bestScore = -Infinity;
-  for (const s of sets) {
-    const score =
-      s.duration_sec != null ? Number(s.duration_sec) : (Number(s.weight) || 0) * (1 + (Number(s.reps) || 0) / 30);
-    if (score > bestScore) {
-      bestScore = score;
-      top = s;
+  const load = sessionWorkingLoad(sets, repLow);
+  if (load != null) {
+    // The most reps at the working load; the first such set on a tie.
+    let bestReps = -Infinity;
+    for (const s of sets) {
+      if (!atWorkingLoad(s, load)) continue;
+      if (Number(s.reps) > bestReps) {
+        bestReps = Number(s.reps);
+        top = s;
+      }
+    }
+  } else {
+    // Top set: max (weight×(1+reps/30)) for reps; max duration for timed.
+    let bestScore = -Infinity;
+    for (const s of sets) {
+      const score =
+        s.duration_sec != null ? Number(s.duration_sec) : (Number(s.weight) || 0) * (1 + (Number(s.reps) || 0) / 30);
+      if (score > bestScore) {
+        bestScore = score;
+        top = s;
+      }
     }
   }
   return {
@@ -1000,7 +1021,7 @@ function steppedUpFromReserve(
   repLow: number | undefined
 ): boolean {
   if (planWeight == null || planWeight <= 0 || repLow == null) return false;
-  const sets = latestWorkingSets(name);
+  const sets = latestWorkingSets(name, repLow);
   if (!sets.length) return false;
   const working = sets[0]?.weight;
   if (working == null || working <= 0 || planWeight <= working) return false;
@@ -1695,7 +1716,11 @@ export function nextPrescription(
   // Cardio plan items aren't progressed here (the runner loop owns those).
   if (plan && plan.kind === "cardio") return null;
   const cur = currentTarget(plan, mode);
-  const last = latestTopSet(exerciseName);
+  // The prescription's rep floor: a working set must reach it for its load to be the
+  // session's working load (working-load.ts). The same floor reaches recentWorkingWeight
+  // and latestWorkingSets below, so the base load and the reps read off it agree.
+  const repFloor = plan?.rep_low ?? cur?.rep_low ?? null;
+  const last = latestTopSet(exerciseName, repFloor);
   // Stretching / activation / mobility is prep, not a lift. It never picks up
   // load, never earns "you already lifted this", and never enters the apply path.
   if (isPrepWork(exerciseName, group) && (last || plan)) {
@@ -1797,14 +1822,15 @@ interface PrescCtx {
 // prescription (prescription-authorship.ts `sinceClause`: a later day, or on the
 // stamp's own day a set created after it). With no stamp, the usual window. Null when
 // none of those sessions carried a load. Shared by the reps path and the daily
-// decision's earned floor, so both read the same evidence.
+// decision's earned floor, so both read the same evidence. `repLow` is the slot's rep
+// floor, the bar a set must reach to count toward a session's working load.
 export function workingWeightUnderPrescription(
   name: string,
   authorship: Pick<SlotAuthorship, "since" | "since_at">,
-  opts: { sessionsBack?: number; before?: string } = {}
+  opts: { sessionsBack?: number; before?: string; repLow?: number | null } = {}
 ): number | null {
   const sessionsBack = opts.sessionsBack ?? 3;
-  if (!authorship.since) return recentWorkingWeight(name, sessionsBack, opts.before);
+  if (!authorship.since) return recentWorkingWeight(name, sessionsBack, opts.before, opts.repLow);
   const ids = progressionLineageIds(name);
   if (!ids.length) return null;
   const inIds = ids.map(() => "?").join(",");
@@ -1819,7 +1845,7 @@ export function workingWeightUnderPrescription(
     .get(...ids, ...since.args, ...(before ? [before] : [])) as { n?: number } | undefined;
   const count = Number(row?.n ?? 0);
   if (!(count > 0)) return null;
-  return recentWorkingWeight(name, Math.min(sessionsBack, count), opts.before);
+  return recentWorkingWeight(name, Math.min(sessionsBack, count), opts.before, opts.repLow);
 }
 
 // The lift's latest logged exposure as prescription-authorship reads it: the session's
@@ -1876,11 +1902,14 @@ function repsPrescription(
     plan?.prescribed_at ?? null,
     lastExposureOf(name, last),
     { weight: planWeight, rep_low: repLow, sets: plan?.sets },
-    () => latestWorkingSets(name),
+    () => latestWorkingSets(name, repLow),
     date
   );
-  const underPrescription = workingWeightUnderPrescription(name, authorship);
-  const loggedWorking = planWeight == null ? (underPrescription ?? recentWorkingWeight(name)) : underPrescription;
+  // The same rep floor the top-set read used (`last`): the base load and the reps that
+  // judge it are one session read, never 145 from one rule and 8 reps at 140 from another.
+  const underPrescription = workingWeightUnderPrescription(name, authorship, { repLow });
+  const loggedWorking =
+    planWeight == null ? (underPrescription ?? recentWorkingWeight(name, 3, undefined, repLow)) : underPrescription;
   const recentWorking = unreachable(loggedWorking) ? achievable : loggedWorking;
   // Sign is the encoding, not the name. A lift called "Assisted Pull-Up" with a
   // purely positive history is weighted work; the name must not freeze it as assist.
@@ -2034,7 +2063,7 @@ function repsPrescription(
   // the phase is spent banking work rather than stepping the bar.
   const hasRange = repLow != null && repHigh != null;
   const repCeiling = hasRange ? (repHigh as number) + (policy?.rep_saturation ?? 0) : null;
-  const workingSets = latestWorkingSets(name);
+  const workingSets = latestWorkingSets(name, repLow);
   const doseEligibility = linkedDoseEligibility(last?.session_id, name, { planBehind });
   const topReps = last?.reps != null ? Number(last.reps) : null;
   const setsAtTop = hasRange
@@ -2495,7 +2524,7 @@ function repsPrescription(
       (doseEligibility.eligible || COMPLETENESS_DOSE_REASONS.has(doseEligibility.reason))
     ) {
       // The heaviest LOGGED load that capped the range — the reach's anchor, so a lighter
-      // ramp set that out-scores it on Epley cannot price the heavier look under the block.
+      // load read elsewhere can never price the heavier look under the block.
       topSetEarnedHold = {
         weight: baseWeight == null ? null : Math.max(...cappedAtLoad.map((s) => Number(s.weight))),
       };
@@ -2510,7 +2539,19 @@ function repsPrescription(
               ? say(voice.DOSE_UNDER_HOLD, "dose_under_hold")
               : say(voice.DOSE_NON_COMPARABLE_HOLD, "dose_non_comparable_hold");
     else if (!last) why = say(voice.NO_HISTORY_HOLD, "no_history_hold");
-    else if (hasRange && topReps != null && topReps >= (repCeiling as number) && !allSetsAtTop) {
+    else if (
+      topSetEarnsLoad &&
+      topSetAtTop &&
+      topReserve != null &&
+      topReserve <= 1 &&
+      topReserve < strongReserve
+    ) {
+      // Where the top set alone earns the load (push, intensification), a capped top set
+      // that holds is held by its RATING, not by the other sets — say the grind, never
+      // "not every set got there".
+      why = say(voice.GRIND_HOLD, "grind_hold");
+      fallthroughHold = true;
+    } else if (hasRange && topReps != null && topReps >= (repCeiling as number) && !allSetsAtTop) {
       // In a volume phase the ceiling being named sits ABOVE the rep window printed
       // on the plan card — plan_items is deliberately never rewritten for a block, so
       // the card says 6–8 while the line asks for 9. The gap is real and intended;
@@ -3371,7 +3412,7 @@ function planDayProgressionRead(
           slotStamps.get(Number(it.plan_item_id)) ?? null,
           latestLiftExposure(String(it.name)),
           { weight: p.current?.weight, rep_low: p.current?.rep_low, sets: p.current?.sets },
-          () => latestWorkingSets(String(it.name)),
+          () => latestWorkingSets(String(it.name), p.current?.rep_low),
           readDay
         ),
         lightWeek,

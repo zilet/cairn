@@ -2874,7 +2874,10 @@ function rampedBench({ topRir = 1 } = {}) {
 
 test("a hold whose top set capped the range at the load marks top_set_earned — only completeness holds it", () => {
   repo.setSettings({ training_drive: "push" });
-  const date = rampedBench();
+  // The top set AT the load carries its own reserve. The step is read at the working load
+  // (working-load.ts): a 140 × 8 rated RIR 1 is under the bar, and the 135 × 10 opener's
+  // reps past the ceiling no longer stand in for reserve the load never showed.
+  const date = rampedBench({ topRir: 2 });
   linkLatestDoseOutcome("Barbell Bench Press", date, {
     prescribedSets: 3,
     achievedSets: 3,

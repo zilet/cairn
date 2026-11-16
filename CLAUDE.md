@@ -275,7 +275,10 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   ceiling first, then one load step with the seconds reset, never both (`docs/ARCHITECTURE.md`
   "Loaded timed work"). A timed item never takes reps. A mobility item never carries a load target or
   an RIR; what a log row asks for (and "/ side") is `exerciseInputFor()`, `src/repo/exercise-input.ts`.
-- Est-1RM is Epley on the best set per day.
+- Est-1RM is Epley on the best set per day — but the load a step is judged AT is not the Epley-best
+  set: a session's working load has ONE definition, `sessionWorkingLoad` (`src/repo/working-load.ts`:
+  the heaviest load at which a set reached the rep floor), read by `recentWorkingWeight` and progression's
+  top-set reads alike. Details: `docs/ARCHITECTURE.md` "The working load".
 - **Sensor age and acute muscle fatigue each have exactly one source of truth**: `src/repo/sensor-freshness.ts`
   (a stale wearable reading behaves as absent, never as current) and `hybrid-load.ts`'s `acuteGate()`
   (the one "is this muscle recovering" question — call it, never re-derive a window). Details in
@@ -454,7 +457,7 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
 - **Assist is a sign, and the sign is guarded at log time.** A positive weight typed onto a
   negative-history lift within 1.5× the recent assist band is stored negative (`assistSignContext`,
   `src/repo/sessions.ts`; Garmin imports opt out). An exercise's NAME is never a sign — only its
-  history is. `recentWorkingWeight` ranks less assist and more reps as harder.
+  history is. On assisted work `recentWorkingWeight` ranks less assist and more reps as harder.
 - **The daily envelope's up direction is `reach`, a separate field — never a sixth posture.**
   `SignalPosture` is a five-value safety ladder. `reach.level='push'` licenses ONE challenge top set (up to `MAX_REACH_HOSTS` under an open, harm-free push stance, each on a different movement pattern)
   on the first eligible compound (`src/repo/daily-composition.ts`), computed from the LOGGED working
