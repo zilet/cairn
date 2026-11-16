@@ -105,6 +105,7 @@ import {
   appliedProgressionEscalations,
   getPlan,
   pressSlotKey,
+  timedTargetWithinLog,
 } from "./plan.js";
 // PERIODIZATION. The active block's phase changes what a main lift is prescribed
 // (see the policy table in program-blocks.ts). No block active → nothing here fires.
@@ -3065,6 +3066,13 @@ function timedPrescription(
     const step = timedStep(base, brakeCtx?.personalModifier);
     nextSeconds = base + step;
     why = say(voice.TIMED_OVERLOAD, "timed_overload")(step, base);
+    // The plan sits under what the log shows: the apply clamp will lift the target to
+    // one safe step under the recent best, so say that number, not the smaller step.
+    const caughtUp = load == null ? timedTargetWithinLog(name, base + step) : base + step;
+    if (caughtUp > base + step) {
+      nextSeconds = caughtUp;
+      why = say(voice.TIMED_PLAN_BEHIND, "timed_plan_behind")(caughtUp, Math.round(recentWorkingSeconds(name) ?? caughtUp));
+    }
     if (load != null) {
       // Loaded carry/hold: seconds up to the ceiling, then one load step — never both.
       const ceiling = Math.max(LOADED_HOLD_CEILING_SEC, base);

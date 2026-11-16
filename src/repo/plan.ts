@@ -886,6 +886,14 @@ function clampStep(
   };
 }
 
+// Where the apply clamp would land a requested hold for this exercise: no more than
+// one safe step under what the log shows. The progression engine asks so its sentence
+// names the number the plan will actually carry.
+export function timedTargetWithinLog(exercise: string, requestedSeconds: number): number {
+  return clampStep("target_seconds", exercise, recentWorkingSeconds(exercise), requestedSeconds, CLAMP_SECONDS_FLOOR, false)
+    .applied;
+}
+
 type AgentPrescriptionKind = "add" | "update" | "swap";
 
 // The single load trust-boundary for agent-originated strength-plan writes. ADD,

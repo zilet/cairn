@@ -652,6 +652,20 @@ test("timed lifts progress in SECONDS, never load", () => {
   assert.equal(p.delta_text, "+5s");
 });
 
+test("a hold the log has outrun catches the plan up, and the sentence names that number", () => {
+  makeExercise("Dead Hang", { muscle_group: "forearms", mode: "timed" });
+  planWith(1, { exercise: "Dead Hang", sets: 2, target_seconds: 36, focus: "Grip" });
+  logSet("Dead Hang", isoDaysAgo(20), { duration_sec: 60 });
+  logSet("Dead Hang", isoDaysAgo(20), { duration_sec: 50, setNum: 2 });
+  logSet("Dead Hang", isoDaysAgo(1), { duration_sec: 56 });
+  logSet("Dead Hang", isoDaysAgo(1), { duration_sec: 53, setNum: 2 });
+  const p = nextPrescription("Dead Hang");
+  assert.equal(p.action, "overload");
+  assert.equal(p.suggested.seconds, 50, "one safe step under the recent best of 60s, where the apply clamp lands");
+  assert.match(p.why, /50s/, "the reason names the target the plan will carry");
+  assert.doesNotMatch(p.why, /4s/, "never the smaller step the plan will not carry");
+});
+
 test("timed progression is RELATIVE — a short and a long hold advance proportionally", () => {
   // A 20s plank and a 120s dead hang must NOT get the same flat step: the step is a
   // fraction of the current hold, clamped, so each progresses proportionally.

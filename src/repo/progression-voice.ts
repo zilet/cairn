@@ -351,6 +351,12 @@ export const TIMED_NO_HISTORY_PLANNED_HOLD: VoiceSet = [
   "Nothing recorded here yet — begin at the planned hold and log what you actually get.",
 ];
 
+export const TIMED_PLAN_BEHIND: VoiceSet2 = [
+  (next, best) => `You're holding longer than the plan says — catching it up to ${next}s, a step under your best recent ${best}s.`,
+  (next, best) => `The plan sat under your real holds — moving it to ${next}s, just short of the ${best}s you've held lately.`,
+  (next, best) => `Your holds have outrun the plan — it catches up to ${next}s, one step below your recent best of ${best}s.`,
+];
+
 export const TIMED_OVERLOAD: VoiceSet2 = [
   (step, base) => `The hold's solid — add ${step}s (a proportional step for a ${base}s hold).`,
   (step, base) => `That hold is owned — take ${step}s more; on a ${base}s hold that's the right size of step.`,
