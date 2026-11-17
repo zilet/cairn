@@ -1,6 +1,6 @@
 /* =====================================================================
    Behind you (horizon-behind-client.ts): finished goals, each said back once.
-   At the foot of Horizon › Season, a quiet list: a mono date, the goal in the
+   Horizon's own "Behind you" segment, a quiet list: a mono date, the goal in the
    serif, the measure, and its one sentence, on hairline rows (no card chrome).
    Each row opens the look back (/app/horizon/behind?id=): the hero, a short
    list of plain facts, the build's weeks as columns drawn to scale (the race
@@ -9,9 +9,8 @@
    distances only; no score, no grade, nothing against the target.
    ===================================================================== */
 
-/* ---- the Season's section ---- */
+/* ---- the segment's list ---- */
 .horizon-behind-slot:empty{display:none}
-.horizon-behind-slot{margin-top:var(--space-11)}
 .hbehind{display:grid;gap:var(--space-3);min-width:0}
 .hbehind-kicker{margin:0;color:var(--muted)}
 .hbehind-rows{list-style:none;margin:0;padding:0;display:grid;border-top:1px solid var(--line)}

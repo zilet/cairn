@@ -26,6 +26,7 @@ import { findExercise } from "./exercises.js";
 import { getProfile, listWeight } from "./profile.js";
 import { type LiftState, getProgramState, type ProgramState } from "./program-state.js";
 import { type ProgramBalance, programBalance } from "./progression.js";
+import { capacityEnvelopeAsOf, strengthObjectiveHistory } from "./strength-objectives.js";
 import { daysBetweenISO, localDateISO } from "./shared.js";
 // Running re-tests + the cadenced strength test week + the DEXA lever. Imported for
 // types + a lazy compute (called only inside performanceStanding/performanceLever,
@@ -380,13 +381,30 @@ export function liftCapacities(
 // bodyweight/sex/age — the lightweight slice of performanceStanding that callers
 // outside the Standing read (the forward timeline, anchor-lift suggestions) reuse
 // without paying for the full endurance/DEXA/lever assembly.
+// A lift's "now" has ONE definition: the capacity envelope (strength-objectives.ts — the
+// best exact-lift estimate across its latest three exposures inside 28 days), the same
+// number the strength journey and Horizon read. LiftState.est_1rm is the LATEST session
+// alone, so a deliberate light or technique day read here as lost capacity while the
+// journey still showed the higher number. A lift with no fresh exposure keeps its latest.
+export function liftsAtCapacityNow(lifts: LiftState[], today = localDateISO()): LiftState[] {
+  return (lifts || []).map((l) => {
+    if (l.mode === "timed" || l.est_1rm == null || l.est_1rm <= 0) return l;
+    try {
+      const now = capacityEnvelopeAsOf(strengthObjectiveHistory(l.exercise), today);
+      return now && now.est_1rm > 0 ? { ...l, est_1rm: Math.round(now.est_1rm) } : l;
+    } catch {
+      return l;
+    }
+  });
+}
+
 export function currentLiftCapacities(opts: { programState?: ProgramState } = {}): LiftCapacity[] {
   const profile = getProfile();
   const sex = sexOf(profile);
   const age = profile?.age != null ? Number(profile.age) : null;
   const bodyweight = currentBodyweight(profile);
   const programState = opts.programState ?? getProgramState();
-  return liftCapacities(programState.lifts || [], bodyweight, sex, age);
+  return liftCapacities(liftsAtCapacityNow(programState.lifts || []), bodyweight, sex, age);
 }
 
 // Benchmark patterns the athlete TRAINS but only through a non-standard variation
@@ -620,7 +638,11 @@ function enduranceCapacity(
   age: number | null
 ): EnduranceCapacity | null {
   if (getTrainingIntent().endurance_role === "none") return null;
-  const vo2raw = Number(recovery?.vo2max);
+  // getRecoverySummary() returns a wrapper — the current values live under `.recovery`
+  // (the same read get_recovery serves). Reading `recovery.vo2max` off the wrapper found
+  // nothing, so a watch with VO2max on every day still read "No VO2max reading yet". A
+  // caller handing in the flat inner object still works.
+  const vo2raw = Number(recovery?.recovery?.vo2max ?? recovery?.vo2max);
   const vo2 = Number.isFinite(vo2raw) && vo2raw >= 10 && vo2raw <= 100 ? vo2raw : null;
   const end = programState.endurance;
   const trend = end?.why ?? null;
@@ -778,7 +800,7 @@ export function performanceStanding(
   const balance = opts?.balance ?? programBalance();
 
   const lifts = programState.lifts || [];
-  const capacities = liftCapacities(lifts, bodyweight, sex, age);
+  const capacities = liftCapacities(liftsAtCapacityNow(lifts), bodyweight, sex, age);
   const endurance = enduranceCapacity(programState, recovery, sex, age);
   const imbalances = strengthImbalances(capacities);
   // A strong DEXA signal (low BMD, low-ALMI lean) can be the highest-leverage focus

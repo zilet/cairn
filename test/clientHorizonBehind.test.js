@@ -1,6 +1,6 @@
 // "Behind you" (horizon-behind-client.ts, src/contracts/goal-reviews.ts): every finished
-// goal said back once. The Season's quiet section at its foot (newest first, one row
-// each, absent with none) and the look back itself (/app/horizon/behind?id=): the hero,
+// goal said back once. Horizon's own "Behind you" segment (newest first, one row each;
+// the segment hidden with none) and the look back itself (/app/horizon/behind?id=): the hero,
 // the facts, the build drawn to scale with the race stacked on race week, the story, what
 // it taught, what carried forward with its one Undo. Server words are text, never markup,
 // and nothing reads as a score or a grade. Synthetic fixtures only.
@@ -37,6 +37,9 @@ const MODULES = [
   "frame-line-client",
   "week-model",
   "week-strip-client",
+  "proof-band-client",
+  "ahead-strip-client",
+  "team-seats-client",
   "horizon-model",
   "horizon-labs-model",
   "horizon-terrain-client",
@@ -92,7 +95,16 @@ function rows() {
 }
 
 function week(week_start, label, value, extra = {}) {
-  return { week_start, label, value, race_value: 0, race_week: false, set_aside: false, words: `${value} mi`, ...extra };
+  return {
+    week_start,
+    label,
+    value,
+    race_value: 0,
+    race_week: false,
+    set_aside: false,
+    words: `${value} mi`,
+    ...extra,
+  };
 }
 
 function detail(overrides = {}) {
@@ -126,7 +138,12 @@ function detail(overrides = {}) {
     carried: {
       text: "The next build starts its long runs from 11 miles.",
       levers: [
-        { key: "long_run_ceiling_km", value: 18, because: "Your long runs topped out well at 11 miles.", status: "active" },
+        {
+          key: "long_run_ceiling_km",
+          value: 18,
+          because: "Your long runs topped out well at 11 miles.",
+          status: "active",
+        },
       ],
       decision_id: 42,
       undoable: true,
@@ -141,15 +158,19 @@ function detail(overrides = {}) {
 test("Behind you: newest first, each row its date, title, measure and sentence; a pending row says nothing yet", () => {
   const win = load();
   const host = createHost(win.document);
-  host.innerHTML = win.CairnHorizonBehind.listHtml({ reviews: rows() }, {
-    hrefFor: (t) => `/app/horizon/${t.section}?id=${t.id}`,
-  });
+  host.innerHTML = win.CairnHorizonBehind.listHtml(
+    { reviews: rows() },
+    {
+      hrefFor: (t) => `/app/horizon/${t.section}?id=${t.id}`,
+    }
+  );
   assert.equal(host.querySelector(".hbehind-kicker").textContent, "Behind you");
   const items = host.querySelectorAll(".hbehind-row");
-  assert.deepEqual(
-    plain(items.map((a) => a.querySelector(".hbehind-title").textContent)),
-    ["Cambridge Half Marathon", "Back squat 315 lb", "Goal weight 175 lb"]
-  );
+  assert.deepEqual(plain(items.map((a) => a.querySelector(".hbehind-title").textContent)), [
+    "Cambridge Half Marathon",
+    "Back squat 315 lb",
+    "Goal weight 175 lb",
+  ]);
   assert.equal(items[0].querySelector(".hbehind-date").textContent, "Sun, Nov 1, 2026");
   assert.equal(items[0].querySelector(".hbehind-result").textContent, "13.2 mi in 2:10:18 · 9:54 /mi");
   assert.equal(items[0].querySelector(".hbehind-line").textContent, "Your first half, run steady from the gun.");
@@ -304,7 +325,7 @@ test("server text on the look back stays text", () => {
   assert.equal(host.querySelector(".hb-lever").textContent, evil);
 });
 
-// ---------- the Season wiring ----------
+// ---------- the "Behind you" segment's wiring ----------
 
 function reads({ fail = [], extra = {} } = {}) {
   const table = { "/goal-reviews": { reviews: rows() }, ...extra };
@@ -317,8 +338,8 @@ function reads({ fail = [], extra = {} } = {}) {
   return { load, calls };
 }
 
-async function openSeason(root) {
-  await root.querySelector('[data-horizon-seg="season"]').click();
+async function openBehind(root) {
+  await root.querySelector('[data-horizon-seg="behind"]').click();
   await flush();
   await flush();
 }
@@ -331,33 +352,47 @@ function mounted(win, deps) {
   return root;
 }
 
-test("the Season ends on Behind you once /goal-reviews lands, read only when Season opens", async () => {
+test("Behind you is its own segment once /goal-reviews has a row; the Season no longer holds it", async () => {
   const win = load();
   const { load: loader, calls } = reads();
   const went = [];
   const root = mounted(win, { load: loader, navigate: (t) => went.push(t) });
+  const seg = root.querySelector('[data-horizon-seg="behind"]');
+  assert.equal(seg.hidden, true, "hidden until the read says something is behind");
+  assert.equal(!!root.querySelector('[data-horizon-panel="season"] [data-horizon-behind]'), false);
   await flush();
-  assert.ok(!calls.includes("/goal-reviews"), "not read at the Week landing");
-  const slot = root.querySelector('[data-horizon-panel="season"] [data-horizon-behind]');
-  assert.ok(slot, "the slot sits in the Season panel");
-  assert.equal(slot.innerHTML, "");
-  await openSeason(root);
+  await flush();
+  // Read once, after the landing's own reads were asked; it decides only whether the segment shows.
   assert.equal(calls.filter((p) => p === "/goal-reviews").length, 1);
-  // At the foot of the Season, after the lanes.
-  const panel = root.querySelector('[data-horizon-panel="season"]');
-  assert.equal(panel.lastElementChild, slot);
-  const rowsShown = slot.querySelectorAll(".hbehind-row");
+  assert.ok(calls.indexOf("/race-build") < calls.indexOf("/goal-reviews"));
+  assert.equal(seg.hidden, false);
+  assert.equal(root.getAttribute("data-horizon-view"), "week", "the landing is still Week");
+  await openBehind(root);
+  assert.equal(root.getAttribute("data-horizon-view"), "behind");
+  const panel = root.querySelector('[data-horizon-panel="behind"]');
+  assert.equal(panel.hidden, false);
+  const rowsShown = panel.querySelectorAll(".hbehind-row");
   assert.equal(rowsShown.length, 3);
+  assert.equal(calls.filter((p) => p === "/goal-reviews").length, 1, "showing it asks nothing more");
+  // A row opens its look back (the same detail page), and Back returns to this segment.
   await rowsShown[0].click();
   assert.deepEqual(plain(went), [{ tab: "horizon", section: "behind", id: "1" }]);
+  win.CairnHorizonController.returnNext();
+  assert.deepEqual(plain(win.CairnHorizonController.shellOptions()).view, "behind");
+  assert.equal(win.CairnHorizonController.shellOptions().behind, true);
 });
 
-test("no rows or a failed read leaves Behind you out", async () => {
+test("no rows or a failed read keeps the Behind you segment hidden", async () => {
   for (const opts of [{ extra: { "/goal-reviews": { reviews: [] } } }, { fail: ["/goal-reviews"] }]) {
     const win = load();
     const { load: loader } = reads(opts);
     const root = mounted(win, { load: loader });
-    await openSeason(root);
+    await flush();
+    await flush();
+    assert.equal(root.querySelector('[data-horizon-seg="behind"]').hidden, true);
+    assert.equal(root.hasAttribute("data-horizon-behind-shown"), false);
+    await openBehind(root);
+    assert.equal(root.getAttribute("data-horizon-view"), "week", "a hidden segment never opens");
     assert.equal(root.querySelector(".hbehind"), null);
     assert.equal(root.querySelector("[data-horizon-behind]").innerHTML, "");
   }

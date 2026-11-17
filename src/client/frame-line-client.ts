@@ -7,7 +7,8 @@
 // can never say the stage two ways.
 //
 // Under it, a small block ribbon: one step per week of the block, the weeks behind
-// filled, this week ringed in dawn, and race day named at its end — drawn from the
+// filled, this week ringed in dawn, and race day named at its end ONLY when the server
+// says the race falls in this block's last week (`block.ends_at_race`) — drawn from the
 // frame's own block count, labelled in the server's words. No number is printed.
 //
 // LAZY ("calendar" bundle).
@@ -38,22 +39,27 @@
       const state = i + 1 < week ? "is-done" : i + 1 === week ? "is-now" : "is-ahead";
       return `<span class="frameline-step ${state}"></span>`;
     }).join("");
-    const race = frame?.countdown ? text(frame.countdown.race_date_words) : "";
+    // Race day ends the ribbon only when it falls inside this block's last week: drawn at
+    // the end of any block, a race 26 weeks out read as two weeks away. An older read
+    // without the flag draws no race end.
+    const race = frame?.countdown && block.ends_at_race === true ? text(frame.countdown.race_date_words) : "";
     const end = race ? `<span class="frameline-end">${escHtml(`Race · ${race}`)}</span>` : "";
     return `<div class="frameline-ribbon"><span class="frameline-steps" role="img" aria-label="${escAttr(cap(text(block.words)))}">${steps}</span>${end}</div>`;
   }
 
   /**
    * The hero: an optional mono kicker, the serif headline, the one line, the ribbon.
-   * "" when the frame has no headline (the caller keeps its own header then).
+   * "" when the frame has no headline (the caller keeps its own header then). With
+   * `sub`, the quiet line is the frame's `sub` (the other of countdown and purpose, said
+   * once) when the read carries one, else its `line` as before.
    */
   function heroHtml(
     frame: Frame | null | undefined,
-    opts: { kicker?: string; id?: string; ribbon?: boolean } = {}
+    opts: { kicker?: string; id?: string; ribbon?: boolean; sub?: boolean } = {}
   ): string {
     const headline = text(frame?.headline);
     if (!frame || !headline) return "";
-    const line = text(frame.line);
+    const line = (opts.sub && text(frame.sub)) || text(frame.line);
     const id = opts.id ? ` id="${escAttr(opts.id)}"` : "";
     const stage = frame.stage?.key ? ` is-${escAttr(frame.stage.key)}` : "";
     return `<header class="frameline${stage}">

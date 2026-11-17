@@ -214,6 +214,46 @@ function captureFoodTagInner(status: unknown, food: unknown, opts: FoodTagOpts =
   return `✓ ${escHtml(`${meal} · ${bits.join(" · ")}`)}`;
 }
 
+// The instant capture's receipt promises a background estimate ("I’ll fill in the
+// nutrition details in the background."). Once the note has settled that promise is
+// stale beside a chip that already shows the numbers, so the sentence is said in the
+// state the note is in. The stored message is untouched; this is display only.
+const CAPTURE_PROMISE = /I[’']ll (fill in the nutrition details|refine the photo estimate) in the background\./;
+
+function captureReplyPromises(content: unknown): boolean {
+  return CAPTURE_PROMISE.test(String(content ?? ""));
+}
+
+function captureSettledText(content: unknown, status: unknown): string {
+  const text = String(content ?? "");
+  const s = String(status || "");
+  if (!s || captureFoodActive(s)) return text;
+  const off = s === "failed" || s === "skipped";
+  return text.replace(CAPTURE_PROMISE, (_all, what: string) => {
+    const photo = /photo/.test(what);
+    if (off) return photo ? "The photo estimate could not be refined." : "The nutrition details could not be filled in.";
+    return photo ? "The photo estimate is refined below." : "The nutrition details are filled in below.";
+  });
+}
+
+// The assistant bubble body for a receipt that promised a background estimate: said in
+// the note's current state, keeping its stored words so the live settle can re-say it in
+// place. "" for every other message (the caller renders its ordinary body).
+function captureReplyBodyHtml(content: unknown, applied: unknown[]): string {
+  if (!captureReplyPromises(content)) return "";
+  const info = (applied || []).map((a) => captureFoodInfo(a)).find((x) => x && !x.missing);
+  if (!info) return "";
+  const raw = String(content ?? "");
+  return `<div class="bubble-text md" data-capture-text="${escAttr(info.id)}" data-capture-raw="${escAttr(raw)}">${mdToHtml(captureSettledText(raw, info.status))}</div>`;
+}
+
+function applyCaptureReplyText(id: number, status: unknown): void {
+  const said = document.querySelector(`.bubble-text[data-capture-text="${id}"]`);
+  if (!(said instanceof HTMLElement) || !said.dataset.captureRaw) return;
+  const html = mdToHtml(captureSettledText(said.dataset.captureRaw, status));
+  if (html !== said.innerHTML) said.innerHTML = html;
+}
+
 // One reply with several food chips has to say which entry each chip is. A lone
 // chip keeps the meal-only words. Two new logs that would both say "Breakfast
 // logged" take the item name instead.
@@ -276,6 +316,9 @@ const CAIRN_CHAT_CAPTURE_CHIPS = {
   captureFoodInfo,
   captureFoodFromRow,
   captureFoodTagInner,
+  applyCaptureReplyText,
+  captureReplyBodyHtml,
+  captureSettledText,
   captureFoodAmongLead,
   captureFoodReviewInner,
   amendedFoodRow,

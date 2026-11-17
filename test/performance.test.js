@@ -7,7 +7,7 @@
 // and — constitution — nothing leaks a 0-100 score.
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
-import { repo, resetTables } from "./_seed.js";
+import { db, localDaysAgo, repo, resetTables } from "./_seed.js";
 
 const REF = "2026-04-20";
 const back = (n) => new Date(new Date(REF + "T00:00:00Z").getTime() - n * 864e5).toISOString().slice(0, 10);
@@ -129,4 +129,22 @@ test("day one: with nothing benchmarked the rounding-out lever never affirms ben
   assert.equal(p.lever?.headline, "Round out chest");
   assert.doesNotMatch(p.lever.why, /benchmark/i);
   assert.match(p.lever.why, /^Chest is the group that's lightest in your week/);
+});
+
+test("VO2max on the watch reaches the endurance read — the recovery summary's value lives under .recovery", () => {
+  // get_recovery held VO2max on every day of the window while the performance read said
+  // "No VO2max reading yet": performanceStanding read `.vo2max` off the getRecoverySummary()
+  // WRAPPER, whose current values sit under `.recovery`.
+  repo.setProfile({ primary_discipline: "hybrid" });
+  for (const n of [0, 1, 2]) {
+    db.prepare(`INSERT INTO daily_metrics (source, date, vo2max) VALUES ('test_watch', ?, 49.1)`).run(localDaysAgo(n));
+  }
+  const p = repo.performanceStanding(localDaysAgo(0));
+  assert.ok(p.endurance, "a hybrid athlete gets an endurance block");
+  assert.equal(p.endurance.vo2max, 49, "the watch's VO2max is read");
+  assert.notEqual(p.endurance.tone, "missing");
+  assert.doesNotMatch(p.endurance.headline, /No VO2max reading yet/);
+  // A caller handing in the flat inner object still works.
+  const flat = repo.performanceStanding(localDaysAgo(0), { recovery: { vo2max: 47 } });
+  assert.equal(flat.endurance.vo2max, 47);
 });

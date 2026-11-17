@@ -154,6 +154,10 @@ function healthFocusRead(): HealthFocus {
     // unflagged one we have no optimal band for (nothing to say).
     const flagged = m?.latest?.flag === "low" || m?.latest?.flag === "high";
     if (m?.in_optimal === true) return; // clearly in optimal — clean
+    // Under a meaningful low edge only (a 55 diastolic under 60–80): truthfully not in
+    // optimal, but there is no lever to act on and it is not a drift the worse way, so it
+    // is not a health priority. The Standing read carries "on the low side".
+    if (m?.below_optimal_floor === true && !(Number(m?.distance) > 0)) return;
     if (m?.in_optimal == null && !flagged) return; // no band + not flagged — nothing to say
     const label = m.group_label || markerGroup(m?.name || "").label;
     if (!groups.has(label)) groups.set(label, { markers: [], rank: i, currentRank: Number.POSITIVE_INFINITY });

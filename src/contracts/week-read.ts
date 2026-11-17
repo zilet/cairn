@@ -29,11 +29,38 @@ export interface WeekReadFrame {
     source: "race" | "block";
   } | null;
   /** "block week 6 of 6". */
-  block: { week: number; of: number; words: string } | null;
-  countdown: { days: number; event: string; race_date: string; race_date_words: string; words: string } | null;
+  block: {
+    week: number;
+    of: number;
+    words: string;
+    /** True only when race day falls inside this block's last week: only then may a ribbon end at the race. */
+    ends_at_race?: boolean;
+  } | null;
+  countdown: {
+    days: number;
+    event: string;
+    race_date: string;
+    race_date_words: string;
+    words: string;
+    /** The far form for a secondary line: "5K time trial in 25 weeks" (the ONE weeks count every surface prints). */
+    far_words?: string;
+  } | null;
   /** A dated push stance covering the week: "push through Nov 15". */
   push: { until: string; until_words: string; words: string } | null;
-  /** "26 days to Cambridge Half" — else the stage's week word. */
+  /**
+   * The week's purpose in the coach's voice ("Build the engine. Keep the press moving."):
+   * a day-stable variant keyed on the stage and what the week holds; null when nothing names one.
+   */
+  purpose?: string | null;
+  /**
+   * What leads the hero: the countdown inside FRAME_COUNTDOWN_LEAD_DAYS (56) of a race or in a
+   * post-race recovery window, else the purpose. `headline` is ALREADY the leading one; `sub`
+   * is the other, said once as a quiet line ("One lift in of five, two key runs ahead. 5K time
+   * trial in 25 weeks.").
+   */
+  lead?: "countdown" | "purpose";
+  sub?: string | null;
+  /** The hero's serif line: the countdown or recovery line when it leads, else the purpose, else the stage's week word. */
   headline: string | null;
   /** "Sharpen · block week 6 of 6 · push through Nov 15". */
   line: string | null;
@@ -123,8 +150,24 @@ export interface WeekReadMilestone {
   end_date: string | null;
   /** "Oct 18", "Nov 17 – Nov 23". */
   date_words: string;
+  /** One plain sentence, never cut mid-word (a long one ends at a sentence or clause boundary). */
   detail: string | null;
+  /** Where the row goes (the race page, the checkup, the goal line, a day page); null when it has no page. */
+  href?: string | null;
 }
+
+/** A goal's drawn track: ONE axis, positions 0..1. The start need not sit at 0 — a thread now behind its start draws left of it. */
+export interface WeekReadGoalTrack {
+  start: number;
+  now: number;
+  goal: number;
+  /** Where the thread stood about four weeks ago; null when the history is too thin to say. */
+  ago: number | null;
+  /** "4 weeks ago" / "Oct 19" — the ring's words for a label; null with no `ago`. */
+  ago_words: string | null;
+}
+
+export type WeekReadGoalDirection = "toward" | "holding" | "back" | "reached";
 
 /** One goal, compact: the race estimate WITH its time, the weight trend, the anchor lift. */
 export interface WeekReadGoal {
@@ -140,6 +183,46 @@ export interface WeekReadGoal {
   line: string | null;
   /** The race's fit word, race goal only. */
   fit?: "fits" | "stretch" | "beyond_horizon" | null;
+  /** Stable per thread ("race", "weight", "strength:overhead-press"). */
+  id?: string;
+  /** The start mark in words: "183 lb · Jun 6", "23:33 · Oct 19"; null with no start. */
+  start_text?: string | null;
+  /** The goal mark in words WITH its date when dated: "148 lb · Feb 14". */
+  goal_words?: string | null;
+  /** The track to draw; null with no start→goal track. Never printed as a number or a percent. */
+  track?: WeekReadGoalTrack | null;
+  /** Which way the thread moved over about four weeks, in the athlete's own terms; null when unreadable. */
+  direction?: WeekReadGoalDirection | null;
+  /** "Moving toward" / "Holding" / "Drifting back" / "Reached" — the weight row speaks its one verdict ("On pace"). */
+  direction_words?: string | null;
+  /** The plain measure of that move: "43 s faster in four weeks", "0.4 lb a week, 0.5 needed", "0.7 lb a week". */
+  move_words?: string | null;
+  /** The thread's depth: the race page, the goal line, the lift's program page; null when it has none. */
+  href?: string | null;
+}
+
+/**
+ * Proof: what has measurably changed since the athlete started (a measure before and after,
+ * never a grade), each with a small picture. A race just run leads while its recovery-and-
+ * reflection window lasts (RACE_PROOF_DAYS).
+ */
+export interface WeekReadProof {
+  key: "weight" | "strength" | "race_done" | "race" | "running";
+  stone: "body" | "strength" | "endurance";
+  /** "Weight", "Bench press", "Running". */
+  label: string;
+  /** "183 lb", "115 lb × 10"; null when the row is a single fact (a race run). */
+  before_text: string | null;
+  /** "153.9 lb", "145 lb × 6", "First half marathon · 2:10:18". */
+  after_text: string;
+  /** "since Jun 6"; null when undated. */
+  since_words: string | null;
+  /** The picture's values, oldest first, each 0..1 within the series' own span (drawing only); empty or ≥ 2. */
+  series: number[];
+  /** A measured line (weight), steps (a working load), or columns (weekly run volume). */
+  series_kind: "line" | "steps" | "columns";
+  /** Where the row goes; null when it has no page. */
+  href: string | null;
 }
 
 /** One dated mark on the journey trail (a milestone, with the word the trail prints beside it). */
@@ -242,6 +325,8 @@ export interface WeekRead {
   /** The next 2–3 milestones beyond this week. */
   next_milestones: WeekReadMilestone[];
   goals: WeekReadGoal[];
+  /** Since you started: at most three measured changes, most telling first; empty when nothing has moved yet. This week only. */
+  proof?: WeekReadProof[];
   /** The journey trail: this week only, null with no dated mark ahead. */
   journey: WeekReadJourney | null;
   /** The one weight-trend read behind the weight goal row. */

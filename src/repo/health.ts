@@ -30,10 +30,10 @@ import {
   isNonClinicalMarker,
   markerGroup,
   matchOptimalZone,
-  optimalDistance,
   presentGroups,
 } from "./propagation.js";
-import { unitAnalyteZone } from "./propagation-data.js";
+import { belowOptimalFloor, optimalDistance, unitAnalyteZone, withinOptimal } from "./propagation-data.js";
+import { markSupersededMeasures, withDerivedReadings } from "./doctor-loop-derived.js";
 import { foldedIntoStudyId, foldsIntoStudy } from "./imaging-source.js";
 
 // A modern comprehensive panel (e.g. Function Health) lists 100+ markers. Cap
@@ -1388,8 +1388,14 @@ export function forecastMarker(
   if (projectedMove < width * 0.1 && projectedMove < Math.max(spread * 0.05, 1e-9)) {
     return { direction: "stable", eta_text: null, eta_weeks: null, crossing: null };
   }
-  const dist = optimalDistance(latest, zone); // 0 when inside optimal
-  const inside = dist === 0;
+  // Under a meaningful low edge (blood pressure under its band) the reading is neither
+  // inside optimal nor drifting the worse way, so there is no honest projection to make —
+  // never "holding within optimal" for a 55 diastolic, never "trending toward optimal"
+  // for one still falling. The forecast is withheld.
+  if (belowOptimalFloor(latest, zone)) {
+    return { direction: null, eta_text: null, eta_weeks: null, crossing: null };
+  }
+  const inside = withinOptimal(latest, zone);
   // Which way is the value moving, and is that toward or away from optimal?
   // dir 'high' = high is worse, 'low' = low is worse, 'band' = either side worse.
   let improving: boolean;
@@ -1492,6 +1498,150 @@ export function supportedForecast(forecast: MarkerForecast, support: ForecastSup
   if (support.nonTrending) return { direction: "stable", eta_text: null, eta_weeks: null, crossing: null };
   if (support.suppressProjection) return { direction: null, eta_text: null, eta_weeks: null, crossing: null };
   return forecast;
+}
+
+// ---------- a lab series' trend: the long-run line, held to the latest draw ----------
+// The least-squares line over years of draws is robust to one noisy reading — and that
+// same robustness made it lie about a REAL turn: LDL 135 → 155 → 175 → 175 → 186 → 129
+// read "rising, drifting away from optimal" the week it dropped 57 points. So the
+// athlete-facing direction is held to the latest draw: when the last step moved
+// MEANINGFULLY and the long-run line does not say the same thing (it runs the other way,
+// or reads flat), the direction is the recent move, the long-run line rides along as
+// context (`long_run`), and the projection is withheld — a line the newest draw just
+// contradicted has nothing honest to project. "Meaningfully" is relative to the marker
+// itself, never a per-marker constant: the larger of its own typical draw-to-draw step
+// (median of the earlier steps), a tenth of its optimal band (the same share
+// forecastMarker calls "stable"), and RECENT_MOVE_RELATIVE of the previous value (a
+// floor for an analyte with no band whose earlier draws sat still).
+export type TrendDir = "rising" | "falling" | "stable" | null;
+export interface LabTrend {
+  dir: TrendDir;
+  change: number | null; // first → last raw delta (back-compat)
+  span_days: number | null;
+  n: number;
+  slope_per_week: number | null; // least-squares slope, value/week (rounded)
+  projection: string | null; // PLAIN-LANGUAGE forecast vs optimal — words, no score
+  // Present only when the direction is the latest draw's move rather than the long-run line.
+  basis?: "recent";
+  recent?: { change: number; since: string; days: number };
+  long_run?: { dir: TrendDir; slope_per_week: number | null };
+}
+
+const RECENT_MOVE_BAND_SHARE = 0.1;
+const RECENT_MOVE_RELATIVE = 0.05;
+
+function medianOf(values: number[]): number {
+  if (!values.length) return 0;
+  const s = [...values].sort((a, b) => a - b);
+  const mid = s.length >> 1;
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+// The latest draw's move when it is meaningful against the series' own variability, else null.
+export function meaningfulRecentMove(
+  points: { date: string; value: number }[],
+  zone: OptimalZone | null
+): { change: number; dir: "rising" | "falling"; since: string; days: number } | null {
+  const n = points.length;
+  if (n < 3) return null;
+  const prev = points[n - 2];
+  const last = points[n - 1];
+  const delta = last.value - prev.value;
+  if (!Number.isFinite(delta) || delta === 0) return null;
+  const steps: number[] = [];
+  for (let i = 1; i < n - 1; i++) steps.push(Math.abs(points[i].value - points[i - 1].value));
+  const bandBar = zone ? Math.max(zone.optimal[1] - zone.optimal[0], 0) * RECENT_MOVE_BAND_SHARE : 0;
+  const bar = Math.max(medianOf(steps), bandBar, Math.abs(prev.value) * RECENT_MOVE_RELATIVE);
+  if (Math.abs(delta) < bar) return null;
+  const days = Math.round((Date.parse(last.date) - Date.parse(prev.date)) / 86_400_000) || 0;
+  return { change: Math.round(delta * 100) / 100, dir: delta > 0 ? "rising" : "falling", since: prev.date, days };
+}
+
+// Toward or away from optimal, for one step from `prev` to `last` (null with no band to judge).
+function stepDirection(prev: number, last: number, zone: OptimalZone | null): MarkerForecast["direction"] {
+  if (!zone || belowOptimalFloor(last, zone)) return null;
+  if (zone.dir === "high") return last < prev ? "improving" : "worsening";
+  if (zone.dir === "low") return last > prev ? "improving" : "worsening";
+  const dPrev = optimalDistance(prev, zone);
+  const dLast = optimalDistance(last, zone);
+  if (dLast < dPrev) return "improving";
+  if (dLast > dPrev) return "worsening";
+  return null;
+}
+
+export function labSeriesTrend(
+  points: { date: string; value: number }[],
+  zone: OptimalZone | null,
+  displayName: string
+): { trend: LabTrend; forecast: MarkerForecast } {
+  const n = points.length;
+  const none: MarkerForecast = { direction: null, eta_text: null, eta_weeks: null, crossing: null };
+  if (n < 2) {
+    return { trend: { dir: null, change: null, span_days: null, n, slope_per_week: null, projection: null }, forecast: none };
+  }
+  const first = points[0];
+  const lastP = points[n - 1];
+  // round to 2 decimals so float noise (5.6-5.8 = -0.1999…) never leaks into the JSON/agent prompt
+  const change = Math.round((lastP.value - first.value) * 100) / 100;
+  const vals = points.map((p) => p.value);
+  const range = Math.max(...vals) - Math.min(...vals);
+  const span_days = Math.round((Date.parse(lastP.date) - Date.parse(first.date)) / 86_400_000) || 0;
+  // Least-squares slope over the whole series (robust to a single noisy reading) —
+  // supersedes the two-point delta for direction. dir 'stable' when the line barely
+  // moves the value across the series' own window vs its spread.
+  const slope = lsqSlopePerDay(points);
+  const weekly = slope != null ? slope * 7 : null;
+  const projectedMove = slope != null ? Math.abs(slope) * Math.max(1, span_days) : 0;
+  const lineDir: TrendDir =
+    weekly == null
+      ? range > 0 && Math.abs(change) < range * 0.05
+        ? "stable"
+        : change > 0
+          ? "rising"
+          : change < 0
+            ? "falling"
+            : "stable"
+      : projectedMove < Math.max(range * 0.05, 1e-9)
+        ? "stable"
+        : weekly > 0
+          ? "rising"
+          : weekly < 0
+            ? "falling"
+            : "stable";
+  // Forecast vs the OPTIMAL band, then the shared honesty layer (genetically-fixed marker /
+  // too few readings / implausible slope). A lab reading is a dated event that stays true,
+  // so no staleness bound here.
+  const support = forecastSupport({ name: displayName, n, weeklySlope: weekly, latestValue: lastP.value });
+  const slopePerWeek = weekly == null ? null : Math.round(weekly * 1000) / 1000;
+  const recent = support.nonTrending ? null : meaningfulRecentMove(points, zone);
+  if (recent && recent.dir !== lineDir) {
+    return {
+      trend: {
+        dir: recent.dir,
+        change,
+        span_days,
+        n,
+        slope_per_week: slopePerWeek,
+        projection: null,
+        basis: "recent",
+        recent: { change: recent.change, since: recent.since, days: recent.days },
+        long_run: { dir: lineDir, slope_per_week: slopePerWeek },
+      },
+      forecast: { ...none, direction: stepDirection(points[n - 2].value, lastP.value, zone) },
+    };
+  }
+  const forecast = supportedForecast(forecastMarker(points, slope, zone), support);
+  return {
+    trend: {
+      dir: support.nonTrending ? "stable" : lineDir,
+      change,
+      span_days,
+      n,
+      slope_per_week: slopePerWeek,
+      projection: support.suppressProjection ? null : forecast.eta_text,
+    },
+    forecast,
+  };
 }
 
 // ---------- getMarkerHistory memoization ----------
@@ -1903,11 +2053,7 @@ function computeMarkerHistory() {
           : {}),
       }))
       .filter((p) => Number.isFinite(p.value));
-    // Deterministic trend over the numeric series (ascending by date). n<2 is
-    // unknowable; otherwise dir is 'stable' when the net change is small vs the
-    // series' own spread (so a marker that barely moved doesn't read as a trend),
-    // else 'rising'/'falling'. No score — just direction + raw change + span.
-    const n = points.length;
+    // Deterministic trend over the numeric series (labSeriesTrend, below).
     const zone = last.unit_mismatch ? null : matchOptimalZone(displayName, zoneProfile);
     const sourceReference =
       last.ref_low != null || last.ref_high != null
@@ -1928,68 +2074,7 @@ function computeMarkerHistory() {
       : curatedReference
         ? { low: curatedReference.low, high: curatedReference.high }
         : null;
-    let trend: {
-      dir: "rising" | "falling" | "stable" | null;
-      change: number | null;
-      span_days: number | null;
-      n: number;
-      slope_per_week: number | null; // least-squares slope, value/week (rounded)
-      projection: string | null; // PLAIN-LANGUAGE forecast vs optimal — words, no score
-    };
-    let forecast: MarkerForecast = { direction: null, eta_text: null, eta_weeks: null, crossing: null };
-    if (n < 2) {
-      trend = { dir: null, change: null, span_days: null, n, slope_per_week: null, projection: null };
-    } else {
-      const first = points[0];
-      const lastP = points[n - 1];
-      // round to 2 decimals so float noise (5.6-5.8 = -0.1999…) never leaks into the JSON/agent prompt
-      const change = Math.round((lastP.value - first.value) * 100) / 100;
-      const vals = points.map((p) => p.value);
-      const range = Math.max(...vals) - Math.min(...vals);
-      const span_days = Math.round((Date.parse(lastP.date) - Date.parse(first.date)) / 86_400_000) || 0;
-      // Least-squares slope over the whole series (robust to a single noisy
-      // reading) — supersedes the two-point delta for direction. `change` (the raw
-      // first→last delta) stays for back-compat. dir 'stable' when the line barely
-      // moves the value across the series' own window vs its spread.
-      const slope = lsqSlopePerDay(points);
-      const weekly = slope != null ? slope * 7 : null;
-      const projectedMove = slope != null ? Math.abs(slope) * Math.max(1, span_days) : 0;
-      const dir: "rising" | "falling" | "stable" | null =
-        weekly == null
-          ? range > 0 && Math.abs(change) < range * 0.05
-            ? "stable"
-            : change > 0
-              ? "rising"
-              : change < 0
-                ? "falling"
-                : "stable"
-          : projectedMove < Math.max(range * 0.05, 1e-9)
-            ? "stable"
-            : weekly > 0
-              ? "rising"
-              : weekly < 0
-                ? "falling"
-                : "stable";
-      // Forecast vs the OPTIMAL band — plain-language projection + eta direction,
-      // then the shared honesty layer that decides whether the series can actually
-      // support it (genetically-fixed marker / too few readings / implausible slope).
-      // A lab reading is a dated event that stays true, so no staleness bound here.
-      const support = forecastSupport({
-        name: displayName,
-        n,
-        weeklySlope: weekly,
-        latestValue: lastP.value,
-      });
-      forecast = supportedForecast(forecastMarker(points, slope, zone), support);
-      trend = {
-        dir: support.nonTrending ? "stable" : dir,
-        change,
-        span_days,
-        n,
-        slope_per_week: weekly == null ? null : Math.round(weekly * 1000) / 1000,
-        projection: support.suppressProjection ? null : forecast.eta_text,
-      };
-    }
+    const { trend, forecast } = labSeriesTrend(points, zone, displayName);
     const grp = markerGroup(displayName);
     return {
       key,
@@ -2020,6 +2105,28 @@ function computeMarkerHistory() {
       points,
     };
   });
+
+  // THE CURRENT VALUE, once, for every consumer (doctor-loop-derived.ts):
+  //  - a derivable marker (non-HDL = total − HDL) whose components were drawn on a draw
+  //    NEWER than its own last printed value reads that draw — a November panel with
+  //    total cholesterol and HDL is a non-HDL check, so June's printed non-HDL is not
+  //    "current". Its trend is re-read over the extended series.
+  //  - a series another METHOD of the same analyte measured more recently (calculated
+  //    LDL-C vs direct LDL) is stamped `superseded_by`; it keeps its own history, and
+  //    every read of the current value skips it.
+  // The doctor loop / next-checkup pass their markers through withDerivedReadings again;
+  // it is idempotent (nothing newer is left to add).
+  const derived = withDerivedReadings(markers).map((m) => {
+    if ((m.latest as any)?.kind !== "derived") return m;
+    const zone = matchOptimalZone(m.name, zoneProfile);
+    const pts = (m.points as any[]).filter((p) => Number.isFinite(Number(p?.value)));
+    const read = labSeriesTrend(pts as any, zone, m.name);
+    // eta_weeks stays internal, exactly as on every other marker.
+    const forecast = { direction: read.forecast.direction, eta_text: read.forecast.eta_text, crossing: read.forecast.crossing };
+    return { ...m, trend: read.trend, forecast };
+  });
+  const current = markSupersededMeasures(derived);
+  markers.splice(0, markers.length, ...(current as typeof markers));
 
   // Flagged-latest markers (low/high) first, then alphabetical by display name.
   markers.sort((a, b) => {

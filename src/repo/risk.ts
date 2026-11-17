@@ -67,6 +67,9 @@ function markerByZone(label: string): RiskMarker {
     }
   })();
   for (const marker of markers) {
+    // A series a newer reading of the same analyte by another method supersedes is not
+    // the current value (a June calculated LDL-C beside a November direct LDL).
+    if (marker?.superseded_by) continue;
     const zone = matchOptimalZone(marker?.name);
     const markerLabel = zone?.label ?? marker?.name;
     if (String(markerLabel || "").toLowerCase() !== label.toLowerCase()) continue;

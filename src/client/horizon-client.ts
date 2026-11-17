@@ -1,9 +1,10 @@
 // @ts-check
-// The Horizon timeline, the view (docs/IA.md "Horizon landing"): three views on one line
-// of time — this week (Week, the landing: horizon-week-client.ts), the race build (a
-// glance: the week's frame line as its hero, the terrain, this week in one row, the fit
-// word; the race page holds the depth), and the season (the goal line, and labs and
-// scans). Pure strings: the model carries every word, and each lane has its own loading
+// The Horizon timeline, the view (docs/IA.md "Horizon landing"): views on one line of time
+// — this week (Week, the landing: horizon-week-client.ts), the race build (a glance: the
+// week's frame line as its hero, the terrain, this week in one row, the fit word; the race
+// page holds the depth; a segment only inside eight weeks of a race or just after one),
+// the season (the goal line, and labs and scans), and what is behind (finished goals,
+// horizon-behind-client.ts; a segment only when something is behind). Pure strings: the model carries every word, and each lane has its own loading
 // shape. A lane's rows are milestone rows (milestone-row-client.ts, the row Week's "Next
 // up" draws) running behind → a "Today" mark → ahead. Each link carries a real href (so
 // a long-press or a new tab works) and `data-horizon-go`, the key the controller
@@ -141,9 +142,9 @@
   }
 
   /** The season line for the goal line's slot; "" when there is no line to draw. */
-  function seasonHtml(season: ClientHorizonSeason | null): string {
+  function seasonHtml(season: ClientHorizonSeason | null, weightUnit?: "lb" | "kg"): string {
     if (!season || typeof CairnHorizonChart === "undefined") return "";
-    const chart = CairnHorizonChart.seasonSvg(season);
+    const chart = CairnHorizonChart.seasonSvg(season, { weightUnit: weightUnit === "kg" ? "kg" : "lb" });
     if (!chart) return "";
     // The key names only what the chart drew: the window only beside a goal line, and
     // each diamond hue only when a mark of it is on the lane.
@@ -232,35 +233,58 @@
     </section>`;
   }
 
-  /** The three views over one line of time: this week, the race build, and the season. */
+  /**
+   * The views over one line of time: this week (the landing), the race build, the season,
+   * and what is behind. "To the race" and "Behind you" show only when they hold something
+   * (the controller decides from the reads); a hidden one keeps its panel for the lane.
+   */
   const SEGMENTS: ReadonlyArray<readonly [ClientHorizonView, string]> = [
     ["week", "Week"],
     ["race", "To the race"],
     ["season", "Season"],
+    ["behind", "Behind you"],
   ];
   /** Which view each lane sits in. The week view holds no lane: it is its own read. */
   const PANEL: Readonly<Record<Lane["key"], ClientHorizonView>> = { race: "race", goal: "season", labs: "season" };
 
-  function segHtml(active: ClientHorizonView, segments: ReadonlyArray<readonly [ClientHorizonView, string]>): string {
+  type ShellOpts = { race?: boolean; raceShown?: boolean; raceLabel?: string; behind?: boolean };
+
+  /**
+   * The switch: a sliding-thumb segmented bar (the other bars' `seg-sliding`), its thumb
+   * placed over the active one among the SHOWN segments.
+   */
+  function segHtml(
+    active: ClientHorizonView,
+    segments: ReadonlyArray<readonly [ClientHorizonView, string]>,
+    shown: (view: ClientHorizonView) => boolean
+  ): string {
+    const visible = segments.filter(([key]) => shown(key));
+    const index = Math.max(
+      0,
+      visible.findIndex(([key]) => key === active)
+    );
     const buttons = segments
       .map(
         ([key, label]) =>
-          `<button type="button" class="segbtn${key === active ? " active" : ""}" role="tab" id="horizonTab-${key}" aria-controls="horizonPanel-${key}" aria-selected="${key === active}" data-horizon-seg="${key}">${escHtml(label)}</button>`
+          `<button type="button" class="segbtn${key === active ? " active" : ""}" role="tab" id="horizonTab-${key}" aria-controls="horizonPanel-${key}" aria-selected="${key === active}" data-horizon-seg="${key}"${shown(key) ? "" : " hidden"}>${escHtml(label)}</button>`
       )
       .join("");
-    return `<div class="seg horizon-seg" role="tablist" aria-label="Horizon views">${buttons}</div>`;
+    return `<div class="seg seg-sliding horizon-seg" role="tablist" aria-label="Horizon views" style="--segn:${visible.length};--segi:${index}"><span class="seg-thumb" aria-hidden="true"></span>${buttons}</div>`;
   }
 
   /**
    * The timeline's frame: the view switch, then one tab panel per view holding its lane
-   * slots, in the timeline's order.
+   * slots, in the timeline's order. `race: false` leaves the race view out entirely (a
+   * lifting-only athlete); `raceShown` and `behind` say whether those segments show yet.
    */
-  function shellHtml(active: ClientHorizonView = "week", opts: { race?: boolean; raceLabel?: string } = {}): string {
+  function shellHtml(active: ClientHorizonView = "week", opts: ShellOpts = {}): string {
     // A lifting-only athlete has no race view at all; a runner with no race reads it as "Running".
     const segments = SEGMENTS.filter(([view]) => view !== "race" || opts.race !== false).map(
       ([view, label]) => [view, view === "race" && opts.raceLabel ? opts.raceLabel : label] as const
     );
-    if (!segments.some(([view]) => view === active)) active = segments[0][0];
+    const shown = (view: ClientHorizonView): boolean =>
+      view === "race" ? opts.raceShown === true : view === "behind" ? opts.behind === true : true;
+    if (!segments.some(([view]) => view === active && shown(view))) active = "week";
     const panels = segments
       .map(([view]) => {
         const hidden = view === active ? "" : " hidden";
@@ -271,17 +295,19 @@
           const skel = !hidden && typeof CairnHorizonWeek !== "undefined" ? CairnHorizonWeek.skeletonHtml() : "";
           return `<div class="horizon-panel" role="tabpanel" id="horizonPanel-week" aria-labelledby="horizonTab-week" data-horizon-panel="week"${hidden}><div class="horizon-weekslot" data-horizon-weekview>${skel}</div></div>`;
         }
+        if (view === "behind") {
+          // What is behind: finished goals, filled when GET /api/goal-reviews lands
+          // (horizon-behind-client.ts); the segment shows only when it holds a row.
+          return `<div class="horizon-panel" role="tabpanel" id="horizonPanel-behind" aria-labelledby="horizonTab-behind" data-horizon-panel="behind"${hidden}><div class="horizon-behind-slot" data-horizon-behind></div></div>`;
+        }
         const lanes = KEYS.filter((key) => PANEL[key] === view)
           .map((key) => `<li class="horizon-lane" data-horizon-lane="${key}">${laneSkeletonHtml(key)}</li>`)
           .join("");
-        // The Season ends on what is behind: finished goals, filled (or left empty) when
-        // GET /api/goal-reviews lands (horizon-behind-client.ts).
-        const behind = view === "season" ? `<div class="horizon-behind-slot" data-horizon-behind></div>` : "";
-        return `<div class="horizon-panel" role="tabpanel" id="horizonPanel-${view}" aria-labelledby="horizonTab-${view}" data-horizon-panel="${view}"${hidden}><ol class="horizon-lanes" aria-label="What's ahead">${lanes}</ol>${behind}</div>`;
+        return `<div class="horizon-panel" role="tabpanel" id="horizonPanel-${view}" aria-labelledby="horizonTab-${view}" data-horizon-panel="${view}"${hidden}><ol class="horizon-lanes" aria-label="What's ahead">${lanes}</ol></div>`;
       })
       .join("");
-    return `<div class="horizon" data-horizon data-horizon-view="${active}">
-      ${segHtml(active, segments)}
+    return `<div class="horizon" data-horizon data-horizon-view="${active}"${opts.behind ? " data-horizon-behind-shown" : ""}>
+      ${segHtml(active, segments, shown)}
       ${panels}
     </div>`;
   }

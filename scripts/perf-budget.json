@@ -253,14 +253,14 @@
     },
     "horizon": {
       "cold": {
-        "api": 10,
+        "api": 12,
         "rounds": 1,
         "cls": 0.005,
         "js": 296960,
         "css": 72704
       },
       "warm": {
-        "api": 9,
+        "api": 11,
         "rounds": 1,
         "cls": 0.005,
         "js": 4096,

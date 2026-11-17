@@ -119,6 +119,9 @@ test("journey milestones detect weight-loss and percent-to-goal crossings", () =
   const milestones = repo.journeyMilestones();
   assert.ok(milestones.find((m) => m.id === "weight-loss-10"), "10 lb threshold crossed");
   assert.ok(milestones.find((m) => m.id === "goal-progress-50"), "halfway-to-goal threshold crossed");
+  // Each goal-progress detail states the amount AT its mark, never the current amount.
+  assert.match(milestones.find((m) => m.id === "goal-progress-50").detail, /^10 of 20 lb is off\.$/);
+  assert.match(milestones.find((m) => m.id === "goal-progress-25").detail, /^5 of 20 lb is off\.$/);
   const top = milestones[0];
   assert.ok(top.priority > 0, "milestones carry internal priority for surfaces");
   assert.ok(top.achieved_date, "milestones carry a date for trajectory placement");

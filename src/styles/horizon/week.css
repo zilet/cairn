@@ -13,7 +13,8 @@
 .frameline-h{margin:0;font-family:var(--font-display);font-weight:var(--weight-regular);font-size:var(--text-2xl);
   line-height:var(--leading-tight);letter-spacing:var(--tracking-tight);color:var(--ink);text-wrap:balance;overflow-wrap:anywhere}
 .frameline-l{margin:0;font-size:var(--text-sm);line-height:var(--leading-normal);color:var(--ink2)}
-/* the block as steps: behind filled, this week ringed in dawn, race day named at the end */
+/* the block as steps: behind filled, this week ringed in dawn, race day named at the end
+   only when the race falls in the block's last week */
 .frameline-ribbon{display:flex;align-items:center;gap:var(--space-5);margin-top:var(--space-3);min-width:0}
 .frameline-steps{flex:1;display:flex;gap:var(--space-2);min-width:0}
 .frameline-step{flex:1;height:6px;border-radius:var(--radius-pill);background:var(--surface2);box-shadow:inset 0 0 0 1px var(--line)}
@@ -64,7 +65,7 @@ button.wkshape-day:active{transform:var(--press)}
 .wkshape-tick{position:absolute;top:-4px;right:-12px;width:12px;height:12px;border-radius:50%;display:grid;place-items:center;
   background:var(--sage-text);color:var(--on-accent);font-family:var(--font-ui);font-size:var(--text-2xs);line-height:var(--leading-none)}
 .wkshape-tag{max-width:100%;min-height:1lh;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  font-size:var(--text-2xs);font-weight:var(--weight-semibold);line-height:var(--leading-snug);color:var(--d-strength)}
+  font-size:var(--text-2xs);font-weight:var(--weight-semibold);line-height:var(--leading-snug);color:var(--cd)}
 .hwk.settle-in .wkshape-bar{animation:wkshape-rise var(--dur-3) var(--ease) both}
 @keyframes wkshape-rise{from{transform:scaleY(0)}}
 /* the peek's fold: grid rows 0fr → 1fr, never a hand-animated height */
@@ -79,16 +80,7 @@ button.wkshape-day:active{transform:var(--press)}
 .hwk-days-sum::after{content:"›";transition:transform var(--dur-1) var(--ease)}
 .hwk-days[open] .hwk-days-sum::after{transform:rotate(90deg)}
 
-/* ---- still open: at most two lines, each opening its day ---- */
-.hwk-open{list-style:none;margin:0;padding:0;display:grid}
-.hwk-open li+li{border-top:1px solid var(--line)}
-.hwk-open-row{display:grid;grid-template-columns:10px minmax(0,1fr) auto;align-items:center;gap:var(--space-5);width:100%;
-  min-height:44px;padding:var(--space-3) 0;border:0;background:none;color:var(--ink);font:inherit;font-size:var(--text-md);
-  text-align:left;-webkit-tap-highlight-color:transparent}
-button.hwk-open-row{cursor:pointer;transition:transform var(--dur-1) var(--ease)}
-button.hwk-open-row:active{transform:var(--press-lg)}
-.hwk-open-dot{width:9px;height:9px;border-radius:50%;box-shadow:inset 0 0 0 1.5px var(--cd)}
-.hwk-open-go{color:var(--muted);font-size:var(--text-lg);line-height:var(--leading-none)}
+/* "All of the season ›" / "+N more ›" */
 .hwk-season{justify-self:start;min-height:44px;display:inline-flex;align-items:center;text-decoration:none}
 
 /* ---- before the read lands ---- */
@@ -126,10 +118,12 @@ a.msrow-link:active{transform:var(--press-lg)}
 .msrow-now-label{position:relative;z-index:1;justify-self:start;padding-right:var(--space-3);background:var(--ground);
   font-family:var(--font-mono);font-size:var(--text-2xs);letter-spacing:var(--tracking-mono);text-transform:uppercase;color:var(--dawn)}
 
-/* ---- the goal row (goal-row-client.ts): the Path card's thread, with a meter in words ---- */
+/* ---- the goal row (goal-row-client.ts): the Path card's thread; its track lives in
+   horizon/landing.css, the older meter in words here ---- */
 .goalrow-list{list-style:none;margin:0;padding:0;display:grid;gap:var(--space-8)}
-.goalrow{display:grid;grid-template-columns:10px minmax(0,1fr) auto;column-gap:var(--space-5);row-gap:var(--space-3);
-  align-items:center;font-size:var(--text-md);min-width:0}
+.goalrow{min-width:0}
+.goalrow-body{display:grid;grid-template-columns:10px minmax(0,1fr) auto;column-gap:var(--space-5);row-gap:var(--space-3);
+  align-items:center;font-size:var(--text-md);min-width:0;color:inherit;text-decoration:none}
 .goalrow-dot{width:10px;height:10px;border-radius:50% 50% 45% 55%;background:var(--c)}
 .goalrow-name{min-width:0;color:var(--ink)}
 .goalrow-name small{display:block;color:var(--muted);font-size:var(--text-xs);line-height:var(--leading-snug)}
@@ -150,5 +144,5 @@ a.msrow-link:active{transform:var(--press-lg)}
 
 @media (prefers-reduced-motion:reduce){
   .hwk.settle-in .wkshape-bar,.hwk.settle-in .goalrow-fill,.hwk.settle-in{animation:none}
-  .hwk-fold,a.msrow-link,button.hwk-open-row{transition:none}
+  .hwk-fold,a.msrow-link{transition:none}
 }

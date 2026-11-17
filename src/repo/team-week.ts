@@ -25,19 +25,55 @@
 // which flips new→seen so a surfaced insight is not re-drained next week). Every
 // source is read in its own try/catch so a missing table on an old DB degrades to
 // fewer sections, never a thrown read.
+//
+// WHO MADE EACH CALL. Every change, and the `seats` summary, is attributed to one of
+// the six seats (src/repo/team-seats.ts — Strength, Run, Recovery, Fuel, Body, Heart),
+// read from the ledger row itself, so older rows are attributed too. Roles, never
+// personas.
+//
+// SPOKEN, NOT LOGGED. Every line a person reads here goes through the team-week voice
+// (src/repo/team-week-voice.ts): a progression names its lifts and the step, a landed
+// call names its subject, what was expected and what happens next, a clinician-
+// addressed directive becomes one line for the athlete and their doctor, and the lead
+// is a sentence, never a wall of counts. The ledger's machine register is untouched.
 // ============================================================================
 import { db } from "../db.js";
 import { specialistVoiceLine } from "../brain/specialist-voice.js";
 import { updateInsight } from "./insights.js";
 import { listActiveDirectives } from "./directives-read.js";
-import { getBrainDecision, listBrainDecisions, listBrainExpectations } from "./brain-decisions.js";
+import { getBrainDecision, getBrainExpectation, listBrainDecisions, listBrainExpectations } from "./brain-decisions.js";
+import type { BrainDecision } from "../brain/decision-contract.js";
+import type { BrainExpectation } from "../brain/expectation-contract.js";
+import { athleteUnits } from "./settings.js";
+import type { WeightUnit } from "./display-words.js";
+import { type TeamSeatKey, teamSeatForDecision, teamSeatRole } from "./team-seats.js";
+import {
+  composeTeamLead,
+  decisionLiftMoves,
+  decisionSubjectNoun,
+  decisionSwaps,
+  directiveForClinician,
+  doctorLine,
+  expectationClause,
+  expectsSentence,
+  landedSentence,
+  type LiftMove,
+  numberWord,
+  progressionSentence,
+  rotationSentence,
+  seatLandedSentence,
+  spokenChangeLine,
+  spokenFlagText,
+  spokenWatchReason,
+  watchingSentence,
+} from "./team-week-voice.js";
 import { listAttentionSchedule } from "./attention.js";
 import { canonicalMarker } from "./marker-canon.js";
 import { markerGroup } from "./propagation.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { vouchedRunCompliance, weeklyAerobicLoad } from "./sessions.js";
-import { addDaysISO, clipText, joinList, localDateISO, metricLabel, parseDbTime } from "./shared.js";
-import { cutQualityRead, cutQualityWeekLine } from "./cut-quality.js";
+import { addDaysISO, clipText, joinList, localDateISO, parseDbTime } from "./shared.js";
+import { type CutQualityRead, cutQualityRead, cutQualityWeekLine } from "./cut-quality.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { DAY_READ_ADHERENCE_METRIC, dayReadCallFromVerdict } from "./brain/read-adherence.js";
 import { type ConclusiveDayReadCall, DAY_READ_LANDED_VARIANTS, dayReadLandedKey } from "./brain/day-read-call.js";
@@ -46,9 +82,14 @@ import { type ConclusiveDayReadCall, DAY_READ_LANDED_VARIANTS, dayReadLandedKey 
 // (its value is the read's local day). See insightItems for why.
 const BACKLOG_DRAIN_STAMP_KEY = "team_week_backlog_drain_date";
 
+export type { TeamSeatKey } from "./team-seats.js";
+
 export interface TeamWeekChange {
-  text: string; // the plain change summary (coalesced to the latest state per thing)
-  specialist: string | null; // the attributed specialist line, when one is stored
+  text: string; // the spoken change line (coalesced to the latest state per thing)
+  // Who made the call: the conference specialist's line when one is stored
+  // ("Fuel: Hold 2,225 for two weeks."), else the seat's role word ("Strength").
+  specialist: string | null;
+  seat: TeamSeatKey; // the seat that made the call (src/repo/team-seats.ts)
   when: string; // local date the change landed / was made (YYYY-MM-DD)
 }
 export interface TeamWeekDomainGroup {
@@ -77,6 +118,7 @@ export interface TeamWeekLanded {
   // Present only where the verdict alone would mis-tone the line: a morning read the
   // athlete worked past is the TEAM learning, never a warning, so it renders "quiet".
   tone?: "good" | "quiet";
+  seat?: TeamSeatKey; // the seat whose call this was (absent on a morning-read line)
 }
 export interface TeamWeekInsight {
   id: number;
@@ -93,8 +135,29 @@ export interface TeamWeekEndurance {
 export interface TeamWeekCut {
   text: string; // one plain line — present only during a confident, active cut (verdict !== 'insufficient')
 }
+export interface TeamWeekSeat {
+  seat: TeamSeatKey;
+  /** "Strength" | "Run" | "Recovery" | "Fuel" | "Body" | "Heart" */
+  role: string;
+  /** ONE spoken sentence: the seat's most material call this week, second person, plain ("Bench moved to 145 lb today."). */
+  did: string;
+  /** What the seat expects and by when, from the decision's own expectation ("Expects every set at six or more by Nov 30."); null when none is open. */
+  expects: string | null;
+  /** How the seat's last concluded call landed, in words with its subject ("The last step on the row landed as expected."); null when none concluded. */
+  landed: string | null;
+  /** Local date of the call (YYYY-MM-DD). */
+  when: string;
+}
+/** Two seats pulling against each other, said once, with the lever and a what-if the athlete can open in chat. */
+export interface TeamWeekLink {
+  seats: TeamSeatKey[];
+  /** "Two anchor lifts are sliding while your weight drops. Worth easing the deficit a touch, or anchoring protein around the press days." */
+  text: string;
+  /** A sentence to PREFILL chat with, never sent for the athlete: "What if I ease the cut?" */
+  ask: string;
+}
 export interface TeamWeekRead {
-  lead: string; // a short deterministic summary sentence; "" on a genuinely empty week
+  lead: string; // a short spoken summary — who led the week, then the one thing that needs you; "" on a genuinely empty week
   did: TeamWeekDomainGroup[];
   flagged: TeamWeekFlag[];
   watching: TeamWeekWatch[];
@@ -102,6 +165,9 @@ export interface TeamWeekRead {
   insights: TeamWeekInsight[];
   endurance: TeamWeekEndurance | null; // present ONLY when endurance activity exists this week; never a nag/zero-shame line
   cut: TeamWeekCut | null; // present ONLY during a confident active cut — is strength holding as weight drops?
+  seats: TeamWeekSeat[]; // at most 3, most material first; [] on a quiet week
+  link: TeamWeekLink | null; // from the cut read when it says lifts are sliding during the cut; null otherwise
+  changes_count: number; // how many changes the week holds (a count is a fact, not a grade)
 }
 
 // Plain domain labels for the brain's decision domains.
@@ -118,13 +184,10 @@ const DOMAIN_LABEL: Record<string, string> = {
 // A stable display order for the domain groups (clinical-to-lifestyle-ish).
 const DOMAIN_ORDER = ["nutrition", "training", "recovery", "health", "body", "goal", "profile", "cross_domain"];
 
-// Verdict → athlete-facing words. Only CONCLUSIVE verdicts surface in "How it
-// landed" — an inconclusive/canceled read is filler, so it is dropped, and the
-// whole section is omitted when nothing conclusive closed this week.
-const VERDICT_WORDS: Record<string, string> = {
-  aligned: "landed as expected",
-  not_aligned: "didn't land the way we expected",
-};
+// Only CONCLUSIVE verdicts surface in "How it landed" — an inconclusive/canceled read
+// is filler, so it is dropped, and the whole section is omitted when nothing
+// conclusive closed this week. Each verdict is spoken with its subject, what was
+// expected and what happens next (landedSentence, team-week-voice.ts).
 const CONCLUSIVE_VERDICTS = new Set(["aligned", "not_aligned"]);
 
 // Truncate to a readable budget WITHOUT ever clipping mid-word. Prefer ending on a
@@ -244,14 +307,44 @@ function dedupeNearTwins<T>(items: T[], getText: (item: T) => string): T[] {
 
 // ---- did[]: applied/announced ledger decisions, coalesced, grouped by domain ---
 
+// The read's shared context for speaking: the day it reads as and the athlete's units.
+interface Voice {
+  asOf: string;
+  units: WeightUnit;
+}
+
 // A raw ledger change before coalescing (carries the fields coalescing keys off).
 interface RawChange {
   summary: string;
-  specialist: string | null;
+  specialist: string | null; // the conference specialist's voice line, when one is stored
+  seat: TeamSeatKey;
   when: string;
   kind: string;
   source: string;
+  decision: BrainDecision;
 }
+
+// A coalesced line plus what the seats read off it: how material it is, and the
+// decisions behind it (their expectations are what the seat expects).
+interface ChangeLine extends TeamWeekChange {
+  rank: number;
+  decisions: BrainDecision[];
+}
+
+// How material a change is, for picking each seat's one call and ordering the seats.
+// A structural change or a target retune outranks a single lift's tweak; a meal plan
+// refresh or a scoped adaptation is the lightest.
+const KIND_RANK: Readonly<Record<string, number>> = {
+  case_conference: 4,
+  training_structure: 3,
+  nutrition_target: 3,
+  goal_change: 3,
+  recovery_adjustment: 3,
+  training_target: 2,
+  exercise_rotation: 2,
+  lifestyle_adjustment: 2,
+  meal_plan: 1,
+};
 
 // A "bare update" summary carries no information ("Nutrition target updated.") and
 // is always dropped so a real change is never buried under filler. Matches only a
@@ -282,70 +375,70 @@ function isMealPlan(raw: RawChange): boolean {
   return raw.kind === "meal_plan";
 }
 
+// Who made the call: the specialist's own line when the conference stored one, else
+// the seat's role word — so attribution always shows, never a bare null.
+function lineOf(raws: RawChange[], text: string, rank: number): ChangeLine {
+  const latest = raws[0];
+  return {
+    text,
+    specialist: latest.specialist ?? teamSeatRole(latest.seat),
+    seat: latest.seat,
+    when: latest.when,
+    rank,
+    decisions: raws.map((r) => r.decision),
+  };
+}
+
 // Multiple revisions of the SAME thing collapse to ONE line reflecting the FINAL
-// (latest) state, suffixed with the revision count once there was more than one.
+// (latest) state, with how many passes it took said once there was more than one.
 // The nutrition target and the meal plan are SEPARATE things — each is coalesced by
 // its own family so a target retune and a meal-plan regeneration in the same week
 // stay two distinct lines and never cross-count.
-function latestStateLine(raws: RawChange[]): TeamWeekChange {
+function latestStateLine(raws: RawChange[]): ChangeLine {
   const latest = raws[0];
-  const suffix = raws.length >= 2 ? ` (settled after ${raws.length} revisions)` : "";
-  return { text: `${clip(latest.summary)}${suffix}`, specialist: latest.specialist, when: latest.when };
+  const line = spokenChangeLine(latest.summary, latest.kind);
+  const suffix = raws.length >= 2 ? ` It settled after ${numberWord(raws.length)} passes.` : "";
+  return lineOf(raws, `${line}${suffix}`, KIND_RANK[latest.kind] ?? 1);
 }
 
-// Exercise rotations coalesce into one compact "Rotated: A → B · C → D" line built
-// from the structured "Rotate <from> → <to> on day <d>" summaries. If none parse,
-// the latest rotation summary stands in (still one line).
-function rotationLine(raws: RawChange[]): TeamWeekChange {
-  const pairs: string[] = [];
+// Exercise rotations coalesce into one spoken line built from the swaps the rows carry
+// (their payload, else their "Rotate <from> → <to>" summary): "Swapped Hammer Curl for
+// Barbell Curl and …". If none parse, the latest rotation's own words stand in.
+function rotationLine(raws: RawChange[], voice: Voice): ChangeLine {
+  const swaps = raws.flatMap((r) => decisionSwaps(r.decision));
+  const text = rotationSentence(swaps, voice.asOf) ?? spokenChangeLine(raws[0].summary, raws[0].kind);
+  return lineOf(raws, text, KIND_RANK.exercise_rotation);
+}
+
+// Auto-progressions collapse to one line that names the lifts and the step, read off
+// each row's applied payload (latest move per lift wins) — never "across days 1, 2, 4".
+// An older row with no per-lift payload is counted from its label instead.
+function progressionLine(raws: RawChange[], voice: Voice): ChangeLine {
+  const moves: LiftMove[] = [];
   const seen = new Set<string>();
+  let counted = 0;
   for (const r of raws) {
-    const m = /^rotate\s+(.+?)\s+→\s+(.+?)(?:\s+on day\b.*)?$/i.exec(r.summary);
-    if (!m) continue;
-    const from = m[1].trim();
-    const to = m[2].trim();
-    const key = `${from.toLowerCase()}→${to.toLowerCase()}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    pairs.push(`${from} → ${to}`);
+    const own = decisionLiftMoves(r.decision);
+    if (!own.length) {
+      const m = /—\s*(\d+)\s*lift/i.exec(r.summary);
+      counted += m ? Number(m[1]) : 0;
+    }
+    for (const move of own) {
+      const key = move.name.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      moves.push(move);
+    }
   }
-  if (pairs.length) {
-    const shown = pairs.slice(0, 3);
-    const extra = pairs.length - shown.length;
-    const text = `Rotated: ${shown.join(" · ")}${extra > 0 ? ` · +${extra} more` : ""}`;
-    return { text, specialist: raws[0].specialist, when: raws[0].when };
-  }
-  return { text: clip(raws[0].summary), specialist: raws[0].specialist, when: raws[0].when };
-}
-
-// Auto-progressions collapse to one line: "Auto-progressed <N> lifts on day <D>"
-// (or "across days D1, D2"), summing the lift counts the structured summaries carry.
-function progressionLine(raws: RawChange[]): TeamWeekChange {
-  let lifts = 0;
-  const days = new Set<number>();
-  for (const r of raws) {
-    const m = /^auto-progression for day\s+(\d+)\s*—\s*(\d+)\s*lift/i.exec(r.summary);
-    if (!m) continue;
-    days.add(Number(m[1]));
-    lifts += Number(m[2]);
-  }
-  if (lifts > 0) {
-    const dayList = [...days].sort((a, b) => a - b);
-    const where = dayList.length === 1 ? `on day ${dayList[0]}` : `across days ${dayList.join(", ")}`;
-    return {
-      text: `Auto-progressed ${lifts} lift${lifts === 1 ? "" : "s"} ${where}`,
-      specialist: raws[0].specialist,
-      when: raws[0].when,
-    };
-  }
-  return { text: clip(raws[0].summary), specialist: raws[0].specialist, when: raws[0].when };
+  const text = progressionSentence(moves, { units: voice.units, asOf: voice.asOf, fallbackCount: counted });
+  return lineOf(raws, text, moves.some((m) => m.move === "raised") ? 3 : 2);
 }
 
 // Coalesce one domain's raw changes into calm, latest-state lines: the nutrition-
 // target / meal-plan / rotation / auto-progression families each collapse to one
 // line; every other change is an individual line (near-duplicate literal repeats
 // deduped). The result is sorted latest-first.
-function coalesceDomainChanges(raws: RawChange[]): TeamWeekChange[] {
+function coalesceDomainChanges(raws: RawChange[], voice: Voice): ChangeLine[] {
   const sorted = [...raws].sort(byWhenDesc);
   const targets: RawChange[] = [];
   const mealPlans: RawChange[] = [];
@@ -359,18 +452,26 @@ function coalesceDomainChanges(raws: RawChange[]): TeamWeekChange[] {
     else if (isRotation(raw)) rotations.push(raw);
     else singles.push(raw);
   }
-  const lines: TeamWeekChange[] = [];
+  const lines: ChangeLine[] = [];
   if (targets.length) lines.push(latestStateLine(targets));
   if (mealPlans.length) lines.push(latestStateLine(mealPlans));
-  if (rotations.length) lines.push(rotationLine(rotations));
-  if (progressions.length) lines.push(progressionLine(progressions));
+  if (rotations.length) lines.push(rotationLine(rotations, voice));
+  if (progressions.length) lines.push(progressionLine(progressions, voice));
   for (const s of dedupeNearTwins(singles, (r) => r.summary)) {
-    lines.push({ text: clip(s.summary), specialist: s.specialist, when: s.when });
+    lines.push(lineOf([s], spokenChangeLine(s.summary, s.kind), KIND_RANK[s.kind] ?? 1));
   }
   return lines.sort(byWhenDesc);
 }
 
-function didGroups(windowStart: string, asOf: string): TeamWeekDomainGroup[] {
+function publicChange(line: ChangeLine): TeamWeekChange {
+  return { text: line.text, specialist: line.specialist, seat: line.seat, when: line.when };
+}
+
+function didGroups(
+  windowStart: string,
+  asOf: string,
+  voice: Voice
+): { groups: TeamWeekDomainGroup[]; lines: ChangeLine[] } {
   const byDomain = new Map<string, RawChange[]>();
   try {
     const decisions = listBrainDecisions({ limit: 200 }).filter(
@@ -392,15 +493,17 @@ function didGroups(windowStart: string, asOf: string): TeamWeekDomainGroup[] {
         .replace(/\s+/g, " ")
         .trim();
       if (!summary || isFillerSummary(summary)) continue;
-      const voice = specialistVoiceLine(d.specialist, d.domain);
+      const voiceLine = specialistVoiceLine(d.specialist, d.domain);
       const domain = String(d.domain ?? "cross_domain");
       const changes = byDomain.get(domain) ?? [];
       changes.push({
         summary,
-        specialist: voice ? voice.line : null,
+        specialist: voiceLine ? voiceLine.line : null,
+        seat: teamSeatForDecision(d),
         when,
         kind: String(d.kind ?? ""),
         source: String(d.source ?? ""),
+        decision: d,
       });
       byDomain.set(domain, changes);
     }
@@ -408,14 +511,17 @@ function didGroups(windowStart: string, asOf: string): TeamWeekDomainGroup[] {
     /* ledger absent/partial — this section is simply empty */
   }
   const groups: TeamWeekDomainGroup[] = [];
+  const lines: ChangeLine[] = [];
   const order = [...DOMAIN_ORDER, ...[...byDomain.keys()].filter((k) => !DOMAIN_ORDER.includes(k))];
   for (const domain of order) {
     const raws = byDomain.get(domain);
     if (!raws || !raws.length) continue;
-    const changes = coalesceDomainChanges(raws);
-    if (changes.length) groups.push({ domain, label: domainLabel(domain), changes });
+    const changes = coalesceDomainChanges(raws, voice);
+    if (!changes.length) continue;
+    lines.push(...changes);
+    groups.push({ domain, label: domainLabel(domain), changes: changes.map(publicChange) });
   }
-  return groups;
+  return { groups, lines };
 }
 
 // ---- flagged[]: new directives + held-for-review decisions awaiting the athlete --
@@ -528,8 +634,52 @@ function collapseWatchPanelRechecks(items: TeamWeekFlag[]): TeamWeekFlag[] {
   return slots.map((s) => (s.kind === "cluster" ? s.cluster.item : s.flag));
 }
 
-function flaggedItems(windowStart: string, asOf: string): TeamWeekFlag[] {
-  const out: TeamWeekFlag[] = [];
+// A flag before it is spoken: the dedupe passes compare the STORED wording (that is
+// what makes two asks twins), and only the survivors are then put into words.
+interface RawFlag extends TeamWeekFlag {
+  decision: BrainDecision | null;
+}
+
+function spokenFlags(flags: RawFlag[], asOf: string): { items: TeamWeekFlag[]; doctor: boolean; reviews: number } {
+  // Directives written for a clinician fold into ONE line for the athlete and their
+  // doctor, placed where the newest of them sat — so the person reads one plain
+  // sentence about the results, never a stack of notes addressed to someone else.
+  const doctorMembers = flags.filter((f) => f.kind === "directive" && directiveForClinician(f.text));
+  const items: TeamWeekFlag[] = [];
+  let doctorPlaced = false;
+  let reviews = 0;
+  for (const f of flags) {
+    if (f.kind === "directive" && doctorMembers.includes(f)) {
+      if (doctorPlaced) continue;
+      doctorPlaced = true;
+      const markers = doctorMembers.map((m) => m.marker ?? "").filter(Boolean);
+      items.push({
+        kind: "directive",
+        text: doctorLine(markers, asOf),
+        domain: "watch",
+        when: f.when,
+        marker: markers[0] ?? null,
+      });
+      continue;
+    }
+    if (f.kind === "review") {
+      reviews++;
+      const noun = decisionSubjectNoun(f.decision);
+      const article = /^[aeiou]/i.test(noun) ? "An" : "A";
+      items.push({ ...publicFlag(f), text: spokenFlagText(f.text, `${article} ${noun} is waiting on your yes.`) });
+      continue;
+    }
+    items.push({ ...publicFlag(f), text: spokenFlagText(f.text, "A suggestion from your latest labs.") });
+  }
+  return { items, doctor: doctorPlaced, reviews };
+}
+
+function publicFlag(f: RawFlag): TeamWeekFlag {
+  return { kind: f.kind, text: f.text, domain: f.domain, when: f.when, marker: f.marker };
+}
+
+function flaggedItems(windowStart: string, asOf: string): { items: TeamWeekFlag[]; doctor: boolean; reviews: number } {
+  const out: RawFlag[] = [];
   try {
     for (const d of listActiveDirectives() as any[]) {
       const when = localDayKey(d?.created_at);
@@ -537,7 +687,14 @@ function flaggedItems(windowStart: string, asOf: string): TeamWeekFlag[] {
       const text = clip(d?.directive, 200);
       if (!text || isInformationalNote(text)) continue;
       const marker = d?.marker ? String(d.marker).trim() : "";
-      out.push({ kind: "directive", text, domain: String(d?.domain ?? "watch"), when, marker: marker || null });
+      out.push({
+        kind: "directive",
+        text,
+        domain: String(d?.domain ?? "watch"),
+        when,
+        marker: marker || null,
+        decision: null,
+      });
     }
   } catch {
     /* directives table absent — skip */
@@ -548,7 +705,7 @@ function flaggedItems(windowStart: string, asOf: string): TeamWeekFlag[] {
       if (!when || when < windowStart || when > asOf) continue;
       const text = clip(d.summary, 200);
       if (!text || isInformationalNote(text)) continue;
-      out.push({ kind: "review", text, domain: String(d.domain ?? "cross_domain"), when, marker: null });
+      out.push({ kind: "review", text, domain: String(d.domain ?? "cross_domain"), when, marker: null, decision: d });
     }
   } catch {
     /* ledger absent — skip */
@@ -562,34 +719,36 @@ function flaggedItems(windowStart: string, asOf: string): TeamWeekFlag[] {
   // near-twins remain by wording alone (a directive and a held-for-review
   // decision that name the same thing with the same leading verb). Each pass
   // keeps the more specific (longer) survivor. A generous safety bound only —
-  // the client applies the display cap.
-  return dedupeNearTwins(collapseWatchPanelRechecks(collapseFlagsByMarker(out)), (f) => f.text).slice(0, 12);
+  // the client applies the display cap. Then the survivors are spoken.
+  const deduped = dedupeNearTwins(
+    collapseWatchPanelRechecks(collapseFlagsByMarker(out) as RawFlag[]) as RawFlag[],
+    (f) => f.text
+  ).slice(0, 12);
+  return spokenFlags(deduped, asOf);
 }
 
 // ---- watching[]: near-due attention entries + still-maturing expectations --------
 
-// Humanize an attention-schedule reason into a short label. A follow-up reason of
-// the shape "Health review follow-up: <action> (<qualifier>)" reduces to "<action>",
-// and any trailing parenthetical is dropped. Kept LOCAL to team-week per the wave
-// brief — a shared helper is consolidated at integration.
-function humanizeWatchReason(reason: unknown): string {
-  let s = String(reason ?? "")
-    .replace(/\s+/g, " ")
-    .trim();
-  s = s.replace(/^[a-z][a-z\s-]{0,40}follow-up\s*:\s*/i, "");
-  s = s.replace(/\s*\([^)]*\)\s*\.?\s*$/g, "").trim(); // trailing "(qualifier)" — even when a period follows
-  s = s.replace(/[.\s]+$/, "");
-  return s;
-}
-
-function watchingItems(asOf: string): TeamWeekWatch[] {
+function watchingItems(asOf: string, voice: Voice): TeamWeekWatch[] {
   const out: TeamWeekWatch[] = [];
   const horizon = addDaysISO(asOf, 21) ?? asOf; // "near" — the next few weeks
+  // A change-check note names its decision; the person reads the lifts or swaps it
+  // changed. A change with no structured subject keeps the note's own words.
+  const changeNoun = (decisionId: number): string | null => {
+    try {
+      const decision = getBrainDecision(decisionId);
+      if (!decision || (!decisionLiftMoves(decision).length && !decisionSwaps(decision).length)) return null;
+      return decisionSubjectNoun(decision);
+    } catch {
+      return null;
+    }
+  };
   try {
     for (const entry of listAttentionSchedule({ includeReleased: false, limit: 100 })) {
       const due = entry.next_due ? localDayKey(entry.next_due) : "";
       if (!due || due < asOf || due > horizon) continue; // only genuinely upcoming checks
-      const text = capitalize(clip(humanizeWatchReason(entry.reason), 160));
+      const spoken = spokenWatchReason(entry, asOf, changeNoun);
+      const text = spoken ? clip(spoken, 220) : "";
       if (!text) continue;
       out.push({ text, through: due, source: "attention" });
     }
@@ -597,18 +756,26 @@ function watchingItems(asOf: string): TeamWeekWatch[] {
     /* attention_schedule absent — skip */
   }
   try {
+    // One line per question a change asked: the lifts one progression asked the same
+    // "done as written?" of read as one sentence, never a row per lift.
+    const groups = new Map<string, BrainExpectation[]>();
     for (const exp of listBrainExpectations({ status: "pending", limit: 100 })) {
       const end = localDayKey(exp.window_end);
       if (!end || end <= asOf) continue; // still maturing = window not yet closed
+      if (exp.metric_key === DAY_READ_ADHERENCE_METRIC) continue; // a same-day check, not a watch
       const decision = getBrainDecision(exp.decision_id);
       if (!decision || (decision.status !== "applied" && decision.status !== "announced")) continue;
-      out.push({
-        text: capitalize(
-          `how your ${metricLabel(exp.metric_key)} answers the ${domainLabel(decision.domain).toLowerCase()} change`
-        ),
-        through: end,
-        source: "expectation",
-      });
+      const key = `${exp.decision_id}|${exp.metric_key}|${end}`;
+      const list = groups.get(key) ?? [];
+      list.push(exp);
+      groups.set(key, list);
+    }
+    for (const exps of groups.values()) {
+      const end = localDayKey(exps[0].window_end);
+      const subjects = exps.map((e) => String(e.subject_key ?? "").trim()).filter(Boolean);
+      const clause = expectationClause(exps[0], voice.units, subjects.length > 1 ? subjects : undefined);
+      if (!clause) continue;
+      out.push({ text: watchingSentence(clause, end, asOf), through: end, source: "expectation" });
     }
   } catch {
     /* ledger absent — skip */
@@ -640,14 +807,35 @@ function dayReadLandedLine(
   };
 }
 
+// A concluded change's words: its subject, what was expected and what happens next.
+function changeLandedLine(
+  verdict: "aligned" | "not_aligned",
+  expectationId: number,
+  decisionId: number,
+  when: string,
+  voice: Voice
+): { text: string; noun: string; seat: TeamSeatKey | undefined } {
+  const exp = getBrainExpectation(expectationId);
+  const decision = getBrainDecision(decisionId);
+  const noun = decisionSubjectNoun(decision, exp);
+  const clause = exp ? expectationClause(exp, voice.units) : null;
+  const stillInForce = decision?.status === "applied" || decision?.status === "announced";
+  return {
+    text: landedSentence({ verdict, noun, clause, stillInForce, date: when }),
+    noun,
+    seat: decision ? teamSeatForDecision(decision) : undefined,
+  };
+}
+
 // ---- landed[]: evaluations that closed CONCLUSIVELY this week, verdict in words --
-function landedItems(windowStart: string, asOf: string): TeamWeekLanded[] {
+function landedItems(windowStart: string, asOf: string, voice: Voice): TeamWeekLanded[] {
   const out: TeamWeekLanded[] = [];
   try {
     const rows = db
       .prepare(
         `SELECT e.verdict AS verdict, e.evaluated_at AS evaluated_at, e.actual_json AS actual_json,
-                x.metric_key AS metric_key, x.subject_key AS subject_key, d.summary AS summary, d.domain AS domain
+                x.id AS expectation_id, x.decision_id AS decision_id,
+                x.metric_key AS metric_key, x.subject_key AS subject_key
            FROM brain_evaluations e
            JOIN brain_expectations x ON x.id = e.expectation_id
            JOIN brain_decisions d ON d.id = x.decision_id
@@ -686,20 +874,154 @@ function landedItems(windowStart: string, asOf: string): TeamWeekLanded[] {
         if (out.length >= 6) break;
         continue;
       }
-      const phrase = VERDICT_WORDS[verdict];
-      if (!phrase) continue;
-      const subject = metricLabel(row?.metric_key);
-      const text = `${capitalize(subject)} ${phrase}`;
-      const key = `${text}|${verdict}`;
+      const line = changeLandedLine(
+        verdict as "aligned" | "not_aligned",
+        Number(row?.expectation_id),
+        Number(row?.decision_id),
+        when,
+        voice
+      );
+      const key = `${line.noun}|${verdict}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      out.push({ text, verdict, when: localDayKey(row?.evaluated_at) });
+      out.push({ text: line.text, verdict, when, ...(line.seat ? { seat: line.seat } : {}) });
       if (out.length >= 6) break;
     }
   } catch {
     /* evaluations table absent — skip */
   }
   return out;
+}
+
+// ---- seats[]: who sat at the table this week, one call each ----------------------
+//
+// Each seat that made a call this week, with its most material call in one spoken
+// sentence, what it expects and by when (the call's OWN open expectation, never an
+// invented one), and how its last concluded call landed (the ledger's verdict). At most
+// three, most material first; a quiet week has none.
+const MAX_SEATS = 3;
+
+// The last CONCLUSIVE verdict per seat, newest first, over the ledger's change
+// expectations (the morning-read check is the read's calibration, not a seat's call).
+function seatLastLanded(voice: Voice): Map<TeamSeatKey, string> {
+  const out = new Map<TeamSeatKey, string>();
+  try {
+    const rows = db
+      .prepare(
+        `SELECT e.verdict AS verdict, e.evaluated_at AS evaluated_at, x.id AS expectation_id, x.decision_id AS decision_id
+           FROM brain_evaluations e
+           JOIN brain_expectations x ON x.id = e.expectation_id
+          WHERE e.verdict IN ('aligned', 'not_aligned') AND x.metric_key != ?
+          ORDER BY e.evaluated_at DESC, e.id DESC
+          LIMIT 200`
+      )
+      .all(DAY_READ_ADHERENCE_METRIC) as any[];
+    for (const row of rows) {
+      const decision = getBrainDecision(Number(row?.decision_id));
+      if (!decision) continue;
+      const seat = teamSeatForDecision(decision);
+      if (out.has(seat)) continue;
+      const exp = getBrainExpectation(Number(row?.expectation_id));
+      const when = localDayKey(row?.evaluated_at) || voice.asOf;
+      out.set(seat, seatLandedSentence(row.verdict, decisionSubjectNoun(decision, exp), when));
+    }
+  } catch {
+    /* evaluations absent — no landed words */
+  }
+  return out;
+}
+
+// The seat's open expectation: the earliest-maturing still-pending question asked by
+// the decisions behind its chosen call, else by any of its calls this week.
+function seatExpects(primary: BrainDecision[], others: BrainDecision[], voice: Voice): string | null {
+  for (const decisions of [primary, others]) {
+    const groups = new Map<string, BrainExpectation[]>();
+    for (const d of decisions) {
+      if (d.id == null) continue;
+      try {
+        for (const exp of listBrainExpectations({ decisionId: Number(d.id), status: "pending", limit: 50 })) {
+          const end = localDayKey(exp.window_end);
+          if (!end || end <= voice.asOf || exp.metric_key === DAY_READ_ADHERENCE_METRIC) continue;
+          const key = `${exp.metric_key}|${end}`;
+          const list = groups.get(key) ?? [];
+          list.push(exp);
+          groups.set(key, list);
+        }
+      } catch {
+        /* ledger absent */
+      }
+    }
+    const ordered = [...groups.values()].sort((a, b) => String(a[0].window_end).localeCompare(String(b[0].window_end)));
+    for (const exps of ordered) {
+      const subjects = [...new Set(exps.map((e) => String(e.subject_key ?? "").trim()).filter(Boolean))];
+      const clause = expectationClause(exps[0], voice.units, subjects.length > 1 ? subjects : undefined);
+      if (clause) return expectsSentence(clause, localDayKey(exps[0].window_end), voice.asOf);
+    }
+  }
+  return null;
+}
+
+function seatItems(lines: ChangeLine[], voice: Voice): TeamWeekSeat[] {
+  const bySeat = new Map<TeamSeatKey, ChangeLine[]>();
+  for (const line of lines) {
+    const list = bySeat.get(line.seat) ?? [];
+    list.push(line);
+    bySeat.set(line.seat, list);
+  }
+  if (!bySeat.size) return [];
+  const chosen = [...bySeat.entries()].map(([seat, seatLines]) => {
+    const best = [...seatLines].sort((a, b) => b.rank - a.rank || byWhenDesc(a, b))[0];
+    return { seat, best, seatLines };
+  });
+  chosen.sort(
+    (a, b) => b.best.rank - a.best.rank || b.seatLines.length - a.seatLines.length || byWhenDesc(a.best, b.best)
+  );
+  const landed = seatLastLanded(voice);
+  return chosen.slice(0, MAX_SEATS).map(({ seat, best, seatLines }) => ({
+    seat,
+    role: teamSeatRole(seat),
+    did: best.text,
+    expects: seatExpects(
+      best.decisions,
+      seatLines.filter((l) => l !== best).flatMap((l) => l.decisions),
+      voice
+    ),
+    landed: landed.get(seat) ?? null,
+    when: best.when,
+  }));
+}
+
+// ---- link: two seats pulling against each other, said once ------------------------
+//
+// Only from the existing cut read, and only when it says lifts are sliding during a
+// confident cut: Strength and Fuel are pulling against each other, so the lever is
+// named once with a what-if the athlete can open in chat (never sent for them).
+export function teamWeekLink(cut: CutQualityRead | null | undefined, asOf: string): TeamWeekLink | null {
+  if (!cut || !cut.active || cut.verdict !== "sliding") return null;
+  const sliding = cut.strength.anchors.filter((a) => a.status === "regressing").map((a) => a.name);
+  const first =
+    sliding.length >= 2
+      ? `${joinList(sliding.slice(0, 2))} are sliding while your weight drops.`
+      : sliding.length === 1
+        ? `${sliding[0]} is sliding while your weight drops.`
+        : "A couple of anchor lifts are sliding while your weight drops.";
+  const lever =
+    cut.rate.vs_lean_safe === "above"
+      ? "You're losing a little faster than the lean-safe pace, so easing the deficit a touch comes first; anchoring protein around the lifting days helps too."
+      : pickDayVariant(
+          [
+            "Worth easing the deficit a touch, or anchoring protein around the lifting days.",
+            "Easing the deficit a touch, or anchoring protein higher around the lifting days, would help you hold onto muscle.",
+          ],
+          asOf,
+          "team_week_link_lever"
+        );
+  const ask = pickDayVariant(
+    ["What if I ease the cut?", "What if I eased the deficit a little?"],
+    asOf,
+    "team_week_link_ask"
+  );
+  return { seats: ["strength", "fuel"], text: `${first} ${lever}`, ask };
 }
 
 // ---- insights[]: this week's surfaced connections + a bounded backlog drain ------
@@ -806,25 +1128,20 @@ function enduranceLine(asOf: string): TeamWeekEndurance | null {
 // The goal-aware complement to the endurance line: while the athlete is genuinely
 // leaning out, is strength holding as the weight drops? Silent off a cut and when the
 // read is too thin to call (verdict 'insufficient') — never a nag, never a zero-shame line.
-function cutLine(asOf: string): TeamWeekCut | null {
+function safeCutRead(asOf: string): CutQualityRead | null {
   try {
-    return cutQualityWeekLine(cutQualityRead(asOf));
+    return cutQualityRead(asOf);
   } catch {
     return null; // profile/training tables absent → no line
   }
 }
 
-function composeLead(read: Omit<TeamWeekRead, "lead">): string {
-  const changes = read.did.reduce((sum, group) => sum + group.changes.length, 0);
-  const parts: string[] = [];
-  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
-  if (changes) parts.push(`made ${plural(changes, "change", "changes")}`);
-  if (read.flagged.length) parts.push(`flagged ${plural(read.flagged.length, "thing", "things")} for you`);
-  if (read.watching.length) parts.push(`is watching ${plural(read.watching.length, "response", "responses")}`);
-  if (read.landed.length && !changes && !read.watching.length)
-    parts.push(`checked how ${plural(read.landed.length, "call", "calls")} landed`);
-  if (!parts.length) return "";
-  return capitalize(`this week your team ${joinList(parts)}.`);
+function safeUnits(): WeightUnit {
+  try {
+    return athleteUnits().weight;
+  } catch {
+    return "lb";
+  }
 }
 
 /**
@@ -833,19 +1150,42 @@ function composeLead(read: Omit<TeamWeekRead, "lead">): string {
  * @param opts.drainBacklog when true (the human-facing weekly card), surface and
  *                          flip new→seen the oldest 1-2 unseen backlog insights so
  *                          nothing rots; read-only surfaces (MCP) pass false.
+ * @param opts.cutRead      an already-computed cut read (the cut line and the link
+ *                          both read it); computed here when absent.
  */
-export function teamWeekRead(opts: { asOf?: string; drainBacklog?: boolean } = {}): TeamWeekRead {
+export function teamWeekRead(
+  opts: { asOf?: string; drainBacklog?: boolean; cutRead?: CutQualityRead | null } = {}
+): TeamWeekRead {
   const asOf = /^\d{4}-\d{2}-\d{2}$/.test(String(opts.asOf)) ? String(opts.asOf) : localDateISO();
   const windowStart = addDaysISO(asOf, -6) ?? asOf;
   const drainBacklog = opts.drainBacklog === true;
-  const body: Omit<TeamWeekRead, "lead"> = {
-    did: didGroups(windowStart, asOf),
-    flagged: flaggedItems(windowStart, asOf),
-    watching: watchingItems(asOf),
-    landed: landedItems(windowStart, asOf),
+  const voice: Voice = { asOf, units: safeUnits() };
+  const did = didGroups(windowStart, asOf, voice);
+  const flagged = flaggedItems(windowStart, asOf);
+  const watching = watchingItems(asOf, voice);
+  const landed = landedItems(windowStart, asOf, voice);
+  const cutRead = opts.cutRead !== undefined ? opts.cutRead : safeCutRead(asOf);
+  const seats = seatItems(did.lines, voice);
+  const lead = composeTeamLead({
+    asOf,
+    topSeat: seats[0] ? { seat: seats[0].seat, role: seats[0].role, did: seats[0].did } : null,
+    reviewAsks: flagged.reviews,
+    doctorNote: flagged.doctor,
+    suggestions: flagged.items.length - flagged.reviews - (flagged.doctor ? 1 : 0),
+    watching: watching.length,
+    landed: landed.length,
+  });
+  return {
+    lead,
+    did: did.groups,
+    flagged: flagged.items,
+    watching,
+    landed,
     insights: insightItems(windowStart, asOf, drainBacklog),
     endurance: enduranceLine(asOf),
-    cut: cutLine(asOf),
+    cut: cutRead ? cutQualityWeekLine(cutRead) : null,
+    seats,
+    link: teamWeekLink(cutRead, asOf),
+    changes_count: did.lines.length,
   };
-  return { lead: composeLead(body), ...body };
 }

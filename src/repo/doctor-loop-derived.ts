@@ -19,6 +19,10 @@
 // id: the lab never stated it, so it is read against the optimal band only.
 // Pure over the marker list it is handed (names resolve through marker-canon); idempotent —
 // a second pass finds nothing newer to add.
+//
+// The same question for the same analyte measured by another METHOD (direct vs calculated
+// LDL) lives here too: MEASURE_EQUIVALENTS / markSupersededMeasures. getMarkerHistory applies
+// both, so every read of a marker's CURRENT value sees one answer.
 
 import { isoDate } from "../lib/dates.js";
 import { canonicalMarker } from "./marker-canon.js";
@@ -38,12 +42,36 @@ export const DERIVABLE_MARKERS: readonly DerivableMarker[] = [
   },
 ];
 
+// The same analyte measured by a different METHOD. Each method keeps its own series (the
+// method stays visible in a trend: direct LDL and calculated LDL-C are not merged by
+// marker-canon, on purpose), but for what the athlete's CURRENT value is, a strictly newer
+// reading of the analyte by any listed method supersedes an older one. Without this a
+// June calculated LDL-C kept leading the health focus, the coaching focus and the risk
+// inputs as "current" beside a November direct LDL. Extend the table; never special-case
+// a marker pair at a consumer. Members are canonical display names (marker-canon).
+interface MeasureEquivalence {
+  analyte: string;
+  members: readonly string[];
+}
+
+export const MEASURE_EQUIVALENTS: readonly MeasureEquivalence[] = [
+  { analyte: "LDL cholesterol", members: ["LDL-C", "LDL-C (Direct)"] },
+];
+
+export interface SupersededBy {
+  key: string;
+  name: string;
+  value: unknown;
+  date: string;
+}
+
 interface MarkerSeriesLike {
   key?: string | null;
   name?: string | null;
   unit?: string | null;
-  latest?: { date?: unknown } | null;
+  latest?: { date?: unknown; value?: unknown; unit_mismatch?: unknown } | null;
   points?: Array<{ date?: unknown; value?: unknown; unit_mismatch?: unknown }>;
+  superseded_by?: unknown; // a SupersededBy once markSupersededMeasures stamped it
 }
 
 function canonKey(m: MarkerSeriesLike): string {
@@ -113,8 +141,18 @@ export function effectiveMarkerCheckDate(name: string, markers: MarkerSeriesLike
   const key = canonicalMarker(name).key;
   const spec = DERIVABLE_MARKERS.find((d) => canonicalMarker(d.label).key === key);
   const derived = spec ? newestDerivedReading(spec, markers) : null;
-  if (derived && (!ownDate || derived.date > ownDate)) return derived.date;
-  return ownDate;
+  let best = ownDate;
+  if (derived && (!best || derived.date > best)) best = derived.date;
+  // A newer reading of the same analyte by another method is a check of it too.
+  for (const eq of MEASURE_EQUIVALENTS) {
+    if (!eq.members.some((member) => canonicalMarker(member).key === key)) continue;
+    for (const member of eq.members) {
+      const other = findSeries(markers, member);
+      const d = other ? readingDay(other.latest?.date ?? other.points?.at(-1)?.date) : null;
+      if (d && (!best || d > best)) best = d;
+    }
+  }
+  return best;
 }
 
 /**
@@ -161,4 +199,50 @@ export function withDerivedReadings<T extends MarkerSeriesLike>(markers: T[]): T
     out[idx] = extended;
   }
   return out ?? list;
+}
+
+/**
+ * The marker history with every series that an equivalent method has measured more
+ * recently stamped `superseded_by` (MEASURE_EQUIVALENTS). Nothing is merged or dropped:
+ * the older-method series keeps its own points, latest and trend for history, and every
+ * read of the CURRENT value skips a superseded series. A same-day reading by both
+ * methods supersedes neither. Returns a new array; untouched markers pass through.
+ */
+export function markSupersededMeasures<T extends MarkerSeriesLike>(markers: T[]): T[] {
+  const list = Array.isArray(markers) ? markers : [];
+  if (!list.length) return list;
+  let out: T[] | null = null;
+  for (const spec of MEASURE_EQUIVALENTS) {
+    const keys = new Set(spec.members.map((name) => canonicalMarker(name).key));
+    const members: Array<{ idx: number; m: T; date: string }> = [];
+    list.forEach((m, idx) => {
+      if (!keys.has(canonKey(m)) && !keys.has(String(m?.key ?? "").toLowerCase())) return;
+      const date = readingDay(m?.latest?.date);
+      if (!date || m?.latest?.unit_mismatch) return;
+      if (!Number.isFinite(Number(m?.latest?.value))) return;
+      members.push({ idx, m, date });
+    });
+    if (members.length < 2) continue;
+    const newest = members.reduce((best, cur) => (cur.date > best.date ? cur : best));
+    for (const cur of members) {
+      if (cur === newest || cur.date >= newest.date) continue;
+      if (newest.m.unit && cur.m.unit && !seriesUnitsCompatible(newest.m.unit, cur.m.unit)) continue;
+      out ??= [...list];
+      out[cur.idx] = {
+        ...cur.m,
+        superseded_by: {
+          key: String(newest.m.key ?? canonKey(newest.m)),
+          name: String(newest.m.name ?? ""),
+          value: newest.m.latest?.value ?? null,
+          date: newest.date,
+        },
+      };
+    }
+  }
+  return out ?? list;
+}
+
+/** True when a newer reading of the same analyte by another method supersedes this series. */
+export function isSupersededMarker(m: { superseded_by?: unknown } | null | undefined): boolean {
+  return !!m?.superseded_by;
 }

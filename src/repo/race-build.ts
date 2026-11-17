@@ -91,11 +91,13 @@ import {
 import type { HarmEvidenceKind } from "./brain/read-adherence.js";
 import { localDateISO } from "./shared.js";
 import {
+  AWAY_IN_DAYS_MAX,
   dateWords,
   distanceWords,
   KM_PER_MI,
   paceBandWords,
   paceWords,
+  weeksAway,
   type DistanceUnit,
 } from "./display-words.js";
 import { athleteUnits } from "./settings.js";
@@ -421,10 +423,12 @@ export function raceCountdown(
   const days = race && from ? daysBetweenISO(race, from) : null;
   if (days == null) return null;
   const raceWeek = days >= 0 && mondayOf(from) === mondayOf(race);
-  const weeks = Math.floor(days / 7);
+  // The ONE weeks count (display-words.ts weeksAway): the week page's far countdown and
+  // journey trail read the same floor, so a race is one number of weeks away everywhere.
+  const weeks = weeksAway(days);
   // `byDay`: a row a day (the countdown calendar) — every row counts its own days, so
   // race week's rows are told apart ("5 days out", "Tomorrow") rather than all "Race week".
-  const inDays = opts.byDay === true ? days <= RACE_COUNTDOWN_DAY_ROWS : days <= 13;
+  const inDays = opts.byDay === true ? days <= RACE_COUNTDOWN_DAY_ROWS : days <= AWAY_IN_DAYS_MAX;
   const words =
     days < 0
       ? "Race run"
@@ -437,7 +441,7 @@ export function raceCountdown(
             : inDays
               ? `${days} days out`
               : `${weeks} wks out`;
-  const span = days <= 0 ? null : days <= 13 ? `${days} ${days === 1 ? "day" : "days"}` : `${weeks} weeks`;
+  const span = days <= 0 ? null : days <= AWAY_IN_DAYS_MAX ? `${days} ${days === 1 ? "day" : "days"}` : `${weeks} weeks`;
   return { days, words, span, race_week: raceWeek };
 }
 

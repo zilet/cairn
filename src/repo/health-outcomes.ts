@@ -15,7 +15,7 @@ import { canonicalMarker } from "./marker-canon.js";
 import { markerValidityHorizons } from "./marker-validity.js";
 import { addMemory } from "./memory.js";
 import { capStr } from "./nutrition.js";
-import { markerSide, matchOptimalZone, optimalDistance } from "./propagation-data.js";
+import { markerSide, matchOptimalZone, optimalDistance, withinOptimal } from "./propagation-data.js";
 import { round1 } from "../lib/numbers.js";
 
 export type HealthOutcome = "improving" | "unchanged" | "worsening";
@@ -181,7 +181,7 @@ function classifyOutcome(directive: any, series: MarkerSeries, baseline: number,
 function inOptimal(series: MarkerSeries, value: number): boolean | null {
   const zone = matchOptimalZone(String(series.name ?? series.key ?? ""));
   if (!zone) return null;
-  return optimalDistance(value, zone) === 0;
+  return withinOptimal(value, zone);
 }
 
 function valueText(value: number, unit: string | null): string {

@@ -474,6 +474,16 @@ test("the schema names every field the op reads; the predicate holds grammar and
   assert.ok(normalizeGoalReview({ ...GOOD, headline: "x".repeat(400) }, "race").headline.length <= 160);
 });
 
+test("sentence cap never cuts at a decimal point", () => {
+  const story = "You built up to a 22.2 mi long run. Two. Three. Four. Five.";
+  assert.equal(
+    normalizeGoalReview({ ...GOOD, story }, "race").story,
+    "You built up to a 22.2 mi long run. Two. Three. Four."
+  );
+  const short = "Peak week of 12.5 mi. Then the taper.";
+  assert.equal(normalizeGoalReview({ ...GOOD, lessons: short }, "race").lessons, short);
+});
+
 test("the prompt carries the facts and its own small context site", () => {
   seedRace();
   detectGoalReviews("2026-11-06");

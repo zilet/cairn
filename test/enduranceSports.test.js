@@ -46,4 +46,7 @@ test("canonicalEnduranceSport buckets a raw type with the right pace-relevance",
   assert.deepEqual(canonicalEnduranceSport("hiking"), { key: "walk", label: "Walking & Hiking", paced: true });
   // Unknown type → Title-Cased label, treated as a distance sport.
   assert.deepEqual(canonicalEnduranceSport("kite_surfing"), { key: "kite surfing", label: "Kite Surfing", paced: false });
+  // Garmin's version suffix is plumbing: never in the label or the bucket key.
+  assert.deepEqual(canonicalEnduranceSport("kayaking_v2"), { key: "kayaking", label: "Kayaking", paced: false });
+  assert.equal(canonicalEnduranceSport("stand_up_paddleboarding_v2").label, "Stand Up Paddleboarding");
 });

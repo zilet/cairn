@@ -1,3 +1,4 @@
+import type { BloodPressureRead } from "./blood-pressure-read.js";
 // ============================================================================
 // CONNECTED-BRAIN DATA TABLES — the pure, DB-free evidence tables + matchers.
 // Marker optimal zones, the marker→directive mapping table, and the clinical
@@ -191,6 +192,12 @@ export interface OptimalZone {
   dir: "high" | "low" | "band";
   actionable: boolean;       // we have a well-established lever (drives the score + derivation)
   label: string;             // canonical display label / marker key
+  // The band's LOW edge is part of what "optimal" means even though only the high side
+  // is ranked as the worse way (dir "high"): a reading under it is NOT in optimal and
+  // its forecast never says "holding within optimal", but it is never scored as drifting
+  // the wrong way either (optimalDistance stays 0 — no lowering lever fires for it).
+  // Blood pressure is the case: 55 diastolic under a 60–80 band is "on the low side".
+  floor?: boolean;
 }
 
 export const OPTIMAL_ZONES: OptimalZone[] = [
@@ -324,12 +331,12 @@ export const OPTIMAL_ZONES: OptimalZone[] = [
   // and %-free-PSA are DIFFERENT measures and are kept off this band by
   // zoneNameTrustworthy. Male-oriented; zone-only (no lifestyle lever), informational.
   { keys: ["psa", "prostate specific antigen", "prostate-specific antigen"], unit: "ng/mL", optimal: [0, 4.0], dir: "high", actionable: false, label: "PSA" },
-  { keys: ["systolic", "blood pressure", "bp systolic"], unit: "mmHg", optimal: [105, 120], dir: "high", actionable: true, label: "Systolic BP" },
+  { keys: ["systolic", "blood pressure", "bp systolic"], unit: "mmHg", optimal: [105, 120], dir: "high", actionable: true, label: "Systolic BP", floor: true },
   // "diastolic blood pressure" is listed explicitly so longest-match-wins beats the
   // Systolic zone's generic "blood pressure" key (14 chars) — otherwise a marker named
   // "Diastolic Blood Pressure" mis-routes to the Systolic band [105,120]. The bare
   // "diastolic" key still catches "Diastolic BP" / "Diastolic".
-  { keys: ["diastolic blood pressure", "diastolic", "bp diastolic"], unit: "mmHg", optimal: [60, 80], dir: "high", actionable: true, label: "Diastolic BP" },
+  { keys: ["diastolic blood pressure", "diastolic", "bp diastolic"], unit: "mmHg", optimal: [60, 80], dir: "high", actionable: true, label: "Diastolic BP", floor: true },
   // Endurance / cardiorespiratory fitness markers (v35). These come from wearables
   // (injected into prioritizeMarkers from the recovery summary) but also match a lab
   // VO2max test. Optimal-ZONE framing only — higher VO2max is better, lower resting
@@ -511,6 +518,18 @@ export function optimalDistance(value: number, z: OptimalZone): number {
   return Math.min(over / width, 3) / 3;                 // 0..1 (clamped at 3 band-widths out)
 }
 
+// Below a zone's meaningful low edge (OptimalZone.floor) — "on the low side", which is
+// neither in optimal nor a drift the worse way.
+export function belowOptimalFloor(value: number, z: OptimalZone): boolean {
+  return !!z.floor && Number.isFinite(value) && value < z.optimal[0];
+}
+
+// THE in-optimal test: no distance the worse way, and not under a meaningful floor.
+// `optimalDistance(...) === 0` alone read a 55 diastolic as in optimal against 60–80.
+export function withinOptimal(value: number, z: OptimalZone): boolean {
+  return optimalDistance(value, z) === 0 && !belowOptimalFloor(value, z);
+}
+
 // A single mapping from a flagged/sub-optimal marker to the domains it touches.
 // `when(value, flag)` decides whether this marker currently warrants directives;
 // `derive` returns the per-domain rows. citation is filled where the lever is a
@@ -542,6 +561,7 @@ export interface MarkerContext {
   marker: any;
   companions?: Record<string, CompanionReading | null>;  // keyed hormone companions (free_testosterone / shbg / lh)
   offZones?: Set<string>;                                 // OPTIMAL_ZONES labels off-optimal elsewhere in the same panel
+  bp?: BloodPressureRead | null;                          // blood pressure only: the reading read with the whole picture
 }
 export interface MarkerMapping {
   zone: string;            // OPTIMAL_ZONES label this keys off
@@ -838,6 +858,39 @@ export function personalizeZone(base: OptimalZone, profile?: ZoneProfile | null)
   }
 }
 
+// Blood pressure, either component. The levers LOWER pressure, so they belong to a HIGH
+// reading only. A low reading (the BP flag reads a diastolic under 60 / systolic under 90
+// as "low") once got the same DASH / "aerobic work lowers resting BP" / "discuss a
+// sustained HIGH reading" rows — asking a 55 diastolic to come down further. A low
+// reading gets only the recheck note, the same shape as a low fasting glucose.
+function bloodPressureDirectives(ctx: MarkerContext): MappingDirective[] {
+  // The read (blood-pressure-read.ts) says how many separate readings stand behind the
+  // value and what else in the person's picture bears on it. One reading is a snapshot:
+  // it earns a "repeat it properly" note, never a lifestyle lever as if it were a level.
+  const bp = ctx.bp ?? null;
+  if (ctx.side === "low") {
+    return [
+      {
+        domain: "watch",
+        directive: bp?.line ?? "A low blood-pressure reading is no reason to cut salt or add cardio, which would lower it further. Confirm it with repeated home readings, and mention dizziness, lightheadedness or fainting to your doctor.",
+        rationale: bp?.rationale ?? "Lower readings are common in aerobically fit people and are usually benign without symptoms; repeated home readings confirm the level, and symptoms are what make it worth a conversation.",
+        citation: bp ? "ACC/AHA 2017 Hypertension Guideline" : null,
+        intent: "recheck",
+      },
+    ];
+  }
+  if (bp && bp.side === "high" && bp.basis === "one_reading" && !bp.settled) {
+    return [
+      { domain: "watch", directive: bp.line, rationale: bp.rationale, citation: "ACC/AHA 2017 Hypertension Guideline", intent: "recheck" },
+    ];
+  }
+  return [
+    { domain: "nutrition", directive: "Lean toward a DASH-style pattern: more vegetables, fruit and potassium, less sodium and alcohol, to support a healthier blood pressure.", rationale: "DASH and sodium reduction are first-line, evidence-backed dietary levers for blood pressure.", citation: "ACC/AHA 2017 Hypertension Guideline" },
+    { domain: "training", directive: "Keep regular aerobic exercise in the week — it reliably lowers resting blood pressure.", rationale: "Aerobic training produces a consistent, dose-responsive reduction in resting BP.", citation: "ACC/AHA 2017 Hypertension Guideline" },
+    { domain: "watch", directive: "Confirm with repeated home readings (a single clinic value can be elevated); discuss a sustained high reading with your doctor.", rationale: "Single BP readings overstate risk; home averaging is the standard for confirmation.", citation: "ACC/AHA 2017 Hypertension Guideline" },
+  ];
+}
+
 // ---------- marker → cross-domain directive mapping table (T4 static data) ----------
 export const MARKER_MAPPINGS: MarkerMapping[] = [
   { zone: "ApoB", derive: () => [
@@ -900,16 +953,8 @@ export const MARKER_MAPPINGS: MarkerMapping[] = [
     { domain: "nutrition", directive: "Vitamin D is on the high side — do NOT add more D3; pause any supplement and confirm the dose with your doctor.", rationale: "Excess vitamin D can raise calcium and cause harm; a high level calls for backing off, not adding.", citation: "Endocrine Society 2011 Vitamin D Guideline" },
     { domain: "watch", directive: "Discuss a high vitamin D with your doctor and recheck — it usually reflects over-supplementation.", rationale: "High 25-OH vitamin D is almost always supplement-driven and worth a recheck.", citation: "Endocrine Society 2011 Vitamin D Guideline" },
   ] },
-  { zone: "Systolic BP", derive: () => [
-    { domain: "nutrition", directive: "Lean toward a DASH-style pattern: more vegetables, fruit and potassium, less sodium and alcohol, to support a healthier blood pressure.", rationale: "DASH and sodium reduction are first-line, evidence-backed dietary levers for blood pressure.", citation: "ACC/AHA 2017 Hypertension Guideline" },
-    { domain: "training", directive: "Keep regular aerobic exercise in the week — it reliably lowers resting blood pressure.", rationale: "Aerobic training produces a consistent, dose-responsive reduction in resting BP.", citation: "ACC/AHA 2017 Hypertension Guideline" },
-    { domain: "watch", directive: "Confirm with repeated home readings (a single clinic value can be elevated); discuss a sustained high reading with your doctor.", rationale: "Single BP readings overstate risk; home averaging is the standard for confirmation.", citation: "ACC/AHA 2017 Hypertension Guideline" },
-  ] },
-  { zone: "Diastolic BP", derive: () => [
-    { domain: "nutrition", directive: "Lean toward a DASH-style pattern: more vegetables, fruit and potassium, less sodium and alcohol, to support a healthier blood pressure.", rationale: "DASH and sodium reduction are first-line, evidence-backed dietary levers for blood pressure.", citation: "ACC/AHA 2017 Hypertension Guideline" },
-    { domain: "training", directive: "Keep regular aerobic exercise in the week — it reliably lowers resting blood pressure.", rationale: "Aerobic training produces a consistent, dose-responsive reduction in resting BP.", citation: "ACC/AHA 2017 Hypertension Guideline" },
-    { domain: "watch", directive: "Confirm with repeated home readings (a single clinic value can be elevated); discuss a sustained high reading with your doctor.", rationale: "Single BP readings overstate risk; home averaging is the standard for confirmation.", citation: "ACC/AHA 2017 Hypertension Guideline" },
-  ] },
+  { zone: "Systolic BP", derive: bloodPressureDirectives },
+  { zone: "Diastolic BP", derive: bloodPressureDirectives },
   { zone: "Uric acid", derive: () => [
     { domain: "nutrition", directive: "Cut back on alcohol (especially beer), sugary drinks and very high-purine foods to lower elevated uric acid.", rationale: "Uric acid responds to fructose, alcohol and purine intake; reduction lowers gout risk.", citation: "ACR 2020 Gout Management Guideline", uncertain: true },
     { domain: "watch", directive: "Discuss persistently high uric acid with your doctor, especially with any joint pain history.", rationale: "Hyperuricemia is clinically actionable when symptomatic; otherwise it's a watch item.", citation: "ACR 2020 Gout Management Guideline" },

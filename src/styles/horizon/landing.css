@@ -1,0 +1,116 @@
+/* =====================================================================
+   Horizon's Week, what the redesigned landing adds (docs/IA.md "Horizon
+   landing"): the masthead asides, "Since you started" (the proof band,
+   proof-band-client.ts), the goal row's drawn track (goal-row-client.ts),
+   the team's link note, "Ahead" (one honest strip, ahead-strip-client.ts)
+   and "Your team this week" (team-seats-client.ts). Every hue is a stone's
+   (`stone-<key>` sets --c / --cd) or the one dawn accent; state is words.
+   The proof line draws, fills grow and dots settle ONCE on a cold paint
+   (`.hwk.settle-in`, `.proof-band.is-drawing`); nothing loops, everything is
+   complete at rest, and reduced motion paints it still.
+   ===================================================================== */
+
+/* ---- masthead asides: the totals in mono, a quiet link ---- */
+.hwk-aside{font-family:var(--font-mono);font-size:var(--text-xs);letter-spacing:var(--tracking-wide);color:var(--muted);text-align:right}
+.hwk-aside-link{min-height:44px;display:inline-flex;align-items:center;margin:calc(var(--space-7) * -1) 0;white-space:nowrap}
+/* "Behind you ›" shows only while Horizon has that segment (the controller marks its root) */
+.hwk-behind-go{display:none}
+[data-horizon-behind-shown] .hwk-behind-go{display:inline-flex}
+
+/* ---- since you started: three columns on hairline rows ---- */
+.proof-band{list-style:none;margin:0;padding:0;display:grid}
+.proof-row{min-width:0;border-top:1px solid var(--line)}
+.proof-row:first-child{border-top:0}
+.proof-body{display:grid;grid-template-columns:minmax(0,7.5rem) minmax(3rem,1fr) auto;align-items:center;gap:var(--space-6);
+  min-height:48px;padding:var(--space-4) 0;color:inherit;text-decoration:none;-webkit-tap-highlight-color:transparent}
+a.proof-link{grid-template-columns:minmax(0,7.5rem) minmax(3rem,1fr) auto auto;transition:transform var(--dur-1) var(--ease)}
+a.proof-link:active{transform:var(--press-lg)}
+.proof-name{display:flex;align-items:flex-start;gap:var(--space-4);min-width:0}
+.proof-dot{flex:none;width:9px;height:9px;margin-top:var(--space-2);border-radius:50%;background:var(--c)}
+.proof-label{min-width:0;font-size:var(--text-sm);line-height:var(--leading-snug);color:var(--ink2)}
+.proof-since{display:block;font-size:var(--text-xs);color:var(--muted)}
+.proof-pic{display:block;min-width:0;height:28px}
+.proof-svg{display:block;width:100%;height:100%;overflow:visible}
+.proof-line{fill:none;stroke:var(--cd);stroke-width:1.8;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
+.proof-end{fill:none;stroke:var(--cd);stroke-width:5;stroke-linecap:round;vector-effect:non-scaling-stroke}
+.proof-col{fill:var(--c)}
+.proof-col.is-last{fill:var(--cd)}
+.proof-ba{min-width:0;max-width:13rem;font-size:var(--text-sm);line-height:var(--leading-snug);color:var(--ink2);text-align:right;text-wrap:balance}
+.proof-after{font-family:var(--font-display);font-weight:var(--weight-regular);font-size:var(--text-lead);color:var(--ink);white-space:nowrap}
+.proof-chev,.goalrow-chev{color:var(--muted);font-family:var(--font-ui);font-size:var(--text-lg);line-height:var(--leading-none)}
+.proof-band.is-drawing .proof-svg{animation:proof-draw var(--dur-3) var(--ease) both}
+@keyframes proof-draw{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}
+
+/* ---- where you stand: the goal row as a link, its words, its drawn track ---- */
+a.goalrow-link{min-height:44px;transition:transform var(--dur-1) var(--ease);-webkit-tap-highlight-color:transparent}
+a.goalrow-link:active{transform:var(--press-lg)}
+.goalrow-chev{margin-left:var(--space-3)}
+.goalrow-name .goalrow-words{color:var(--ink2)}
+.goalrow-dir{font-weight:var(--weight-semibold);color:var(--cd)}
+.goalrow-thread{grid-column:1 / -1;position:relative;display:block;height:22px;margin:0 var(--space-3)}
+.goalrow-rail{position:absolute;left:0;right:0;top:9px;height:4px;border-radius:var(--radius-3xs);background:var(--surface2);
+  box-shadow:inset 0 0 0 1px var(--line)}
+/* the fill spans start → now and grows from the start's side, toward now */
+.goalrow-tfill{position:absolute;top:9px;height:4px;left:calc(var(--l,0) * 1%);width:calc(var(--w,0) * 1%);
+  border-radius:var(--radius-3xs);background:var(--c);transform-origin:left}
+.goalrow-tfill.is-from-right{transform-origin:right}
+.goalrow-tick{position:absolute;top:4px;left:calc(var(--x,0) * 1%);width:2px;height:14px;margin-left:-1px;
+  border-radius:var(--radius-3xs);background:var(--ink2)}
+/* where it stood about four weeks ago: a hollow ring; now: a solid dot */
+.goalrow-ring{position:absolute;top:6px;left:calc(var(--x,0) * 1%);width:10px;height:10px;margin-left:-5px;box-sizing:border-box;
+  border-radius:50%;border:1.5px solid var(--cd);background:var(--ground)}
+.goalrow-now{position:absolute;top:5px;left:calc(var(--x,0) * 1%);width:12px;height:12px;margin-left:-6px;border-radius:50%;
+  background:var(--cd);box-shadow:0 0 0 2px var(--ground)}
+.goalrow-ends{grid-column:1 / -1;display:flex;justify-content:space-between;gap:var(--space-5);margin-top:calc(var(--space-2) * -1);
+  font-family:var(--font-mono);font-size:var(--text-xs);letter-spacing:var(--tracking-wide);color:var(--muted);font-variant-numeric:tabular-nums}
+.goalrow-ends span:last-child{text-align:right}
+.hwk.settle-in .goalrow-tfill{animation:goalrow-grow var(--dur-3) var(--ease) both}
+.hwk.settle-in .goalrow-now,.hwk.settle-in .goalrow-ring{animation:goalrow-settle var(--dur-2) var(--ease) both;animation-delay:var(--dur-3)}
+@keyframes goalrow-settle{from{opacity:0;transform:scale(.4)}to{opacity:1;transform:scale(1)}}
+
+/* ---- the team's link note, under the goals ---- */
+.hwk-link-slot:empty,.hwk-team-slot:empty{display:none}
+.hwk-link-slot{margin-top:calc(var(--space-11) * -1 + var(--space-6))}
+.hwk-linknote{display:grid;gap:var(--space-2);padding:var(--space-1) 0 var(--space-1) var(--space-6);border-left:2px solid var(--dawn);min-width:0}
+.hwk-linknote-k{color:var(--dawn)}
+.hwk-linknote-t{margin:0;font-size:var(--text-md);line-height:var(--leading-normal);color:var(--ink2);max-width:60ch}
+/* a 44px target around a small chip */
+.hwk-link-ask{justify-self:start;min-height:44px;display:inline-flex;align-items:center;padding:0;border:0;background:none;color:inherit;
+  font:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.hwk-link-chip{padding:var(--chip-pad);font-size:var(--chip-text);font-weight:var(--chip-weight);border:1px solid var(--line-strong);
+  border-radius:var(--radius-pill);background:var(--surface);color:var(--ink);transition:border-color var(--dur-1) var(--ease),background var(--dur-1) var(--ease)}
+@media (hover:hover){.hwk-link-ask:hover .hwk-link-chip{border-color:var(--dawn);background:var(--dawn-wash)}}
+.hwk-link-ask:active .hwk-link-chip{transform:var(--press)}
+.hwk-link-ask:focus-visible{outline:none}
+.hwk-link-ask:focus-visible .hwk-link-chip{outline:2px solid var(--dawn);outline-offset:2px}
+
+/* ---- ahead: the next four weeks on the first half, then on to the furthest mark ---- */
+.ahead{display:grid;gap:var(--space-5);min-width:0}
+.ahead-strip{position:relative;height:44px;margin:0 var(--space-3)}
+.ahead-lab{position:absolute;top:0;font-family:var(--font-mono);font-size:var(--text-2xs);letter-spacing:var(--tracking-mono);
+  text-transform:uppercase;color:var(--muted);white-space:nowrap}
+.ahead-lab.is-near{left:0}
+.ahead-lab.is-far{right:0}
+.ahead-axis{position:absolute;left:0;right:0;top:28px;height:1px;background:var(--line-strong)}
+.ahead-break{position:absolute;left:50%;top:21px;width:8px;height:15px;margin-left:-4px;box-sizing:border-box;background:var(--ground);
+  border-left:1px solid var(--line-strong);border-right:1px solid var(--line-strong);transform:skewX(-18deg)}
+.ahead-today{position:absolute;left:0;top:18px;width:2px;height:21px;margin-left:-1px;border-radius:var(--radius-3xs);background:var(--dawn)}
+.ahead-marks{position:absolute;inset:0}
+.ahead-mark{position:absolute;top:23px;left:calc(var(--x,0) * 1%);width:11px;height:11px;margin-left:-5.5px;border-radius:50%;
+  background:var(--c);box-shadow:0 0 0 2px var(--ground)}
+.ahead-mark.is-window{top:25px;width:calc((var(--x2,0) - var(--x,0)) * 1%);min-width:8px;height:7px;margin-left:0;border-radius:var(--radius-pill)}
+
+/* ---- your team this week: a seat a row ---- */
+.seat-list{list-style:none;margin:0;padding:0;display:grid}
+.seat{display:grid;grid-template-columns:10px minmax(0,1fr);column-gap:var(--space-5);row-gap:var(--space-1);
+  padding:var(--space-5) 0;border-top:1px solid var(--line);min-width:0}
+.seat:first-child{border-top:0;padding-top:var(--space-1)}
+.seat-dot{grid-row:span 3;width:9px;height:9px;margin-top:var(--space-2);border-radius:50%;background:var(--c)}
+.seat-role{color:var(--cd)}
+.seat-did{font-size:var(--text-md);line-height:var(--leading-normal);color:var(--ink)}
+.seat-tail{font-size:var(--text-sm);line-height:var(--leading-normal);color:var(--muted)}
+
+@media (prefers-reduced-motion:reduce){
+  .proof-band.is-drawing .proof-svg,.hwk.settle-in .goalrow-tfill,.hwk.settle-in .goalrow-now,.hwk.settle-in .goalrow-ring{animation:none}
+  a.proof-link,a.goalrow-link,.hwk-link-chip{transition:none}
+}

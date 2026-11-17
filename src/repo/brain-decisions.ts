@@ -15,10 +15,16 @@ import {
 } from "../brain/expectation-contract.js";
 import { withSqliteSavepoint } from "./sqlite-savepoint.js";
 import { clinicianFloorHolds } from "../brain/autonomy.js";
-import { answeredScanTopics, clinicianAskVoice, foldedClinicianQuestion } from "./brain/clinician-ask.js";
+import {
+  MACHINE_PREFIX,
+  answeredScanTopics,
+  clinicianAskVoice,
+  foldedClinicianQuestion,
+} from "./brain/clinician-ask.js";
 import { unremarkableScanDatesOnFile } from "./scans-on-file.js";
 import { retireSupersededExpectations } from "./brain/expectation-arbitration.js";
 import { copyDeep, memoKey, requestMemo } from "./request-memo.js";
+import { storedSeat, withSeatStamp } from "./team-seats.js";
 
 function json(value: unknown): string | null {
   return value == null ? null : JSON.stringify(value);
@@ -179,12 +185,46 @@ export function listReadableBrainDecisions(
 // at 700 chars by its own contract — it is agent-authored per decision, so it passes
 // through verbatim rather than rotating through a variant set. Falls back to the
 // decision's `rationale`, which is the same register, when no conference wrote one.
+//
+// HELD TO THE READING GRAMMAR. `rationale` is the machine register, and some writers
+// fill it from the draft's `instruction` — a held conference revision once read back to
+// the athlete as "case conference: Unexplained regression requires a revision:
+// recovery_wellbeing. …". So each candidate must open on no producer label
+// (MACHINE_PREFIX) and carry no snake_case machine token (see athleteExplanation); when
+// neither the conductor's sentence nor the rationale does, a plain deterministic
+// sentence for the kind of change stands in. Nothing stored is rewritten.
+const PLAIN_EXPLANATION: Readonly<Record<string, string>> = {
+  nutrition_target: "A change to your calorie and protein targets from the team's latest review.",
+  meal_plan: "A refreshed meal plan from the team's latest review.",
+  training_target: "A change to your lifting targets from the team's latest review.",
+  training_structure: "A change to how your training week is built, from the team's latest review.",
+  exercise_rotation: "An exercise swap from the team's latest review.",
+  recovery_adjustment: "An easier stretch for recovery, from the team's latest review.",
+  lifestyle_adjustment: "A change to a daily habit, from the team's latest review.",
+  health_directive: "A note from your latest labs.",
+  goal_change: "A change to a goal's timeline, from the team's latest review.",
+};
+
+function athleteExplanation(text: unknown): string | null {
+  const trimmed = typeof text === "string" ? text.trim() : "";
+  // Held to what actually leaked (a producer prefix, a snake_case machine token), NOT the whole
+  // reading grammar: that would swap a real sentence ("under your baseline five nights") for filler.
+  if (!trimmed || MACHINE_PREFIX.test(trimmed) || /\b[a-z]+_[a-z_]+\b/.test(trimmed)) return null;
+  return trimmed.slice(0, 700);
+}
+
 export function decisionExplanation(decision: BrainDecision | null | undefined): string | null {
   if (!decision) return null;
   const spoken = (decision.action as any)?.user_explanation;
-  const text = typeof spoken === "string" && spoken.trim() ? spoken : decision.rationale;
-  const trimmed = String(text ?? "").trim();
-  return trimmed ? trimmed.slice(0, 700) : null;
+  const hasSpoken = typeof spoken === "string" && !!spoken.trim();
+  const hasRationale = !!String(decision.rationale ?? "").trim();
+  if (!hasSpoken && !hasRationale) return null;
+  return (
+    athleteExplanation(spoken) ??
+    athleteExplanation(decision.rationale) ??
+    PLAIN_EXPLANATION[String(decision.kind)] ??
+    "A change from the team's latest review."
+  );
 }
 
 // A queued change the athlete will see land soon: an ANNOUNCED decision, or a
@@ -535,9 +575,24 @@ export function latestUserVetoAt(kind: string, domain?: string): string | null {
   }
 }
 
+// THE SEAT RIDES THE ROW. Every write stamps `specialist.seat` — which of the six seats
+// (src/repo/team-seats.ts) made this call — so the team's week can say "Strength" or
+// "Fuel" beside a change instead of an anonymous team. A seat the writer passed
+// explicitly wins; otherwise it is derived from the row being written (its kind,
+// domain, source and what it changed), and a patch re-derives it from the patched row
+// so a row whose kind moved never keeps a stale seat. A conference's opinions in the
+// same blob are untouched. Older rows carry no stamp; readers derive the same seat.
+function stampSeat(decision: BrainDecision, explicitSpecialist: unknown): BrainDecision {
+  return {
+    ...decision,
+    specialist: withSeatStamp(decision, storedSeat(explicitSpecialist)) as BrainDecision["specialist"],
+  };
+}
+
 export function insertBrainDecision(value: unknown): BrainDecision {
-  const normalized = normalizeBrainDecision(value);
-  if (!normalized) throw new Error("invalid brain decision");
+  const parsed = normalizeBrainDecision(value);
+  if (!parsed) throw new Error("invalid brain decision");
+  const normalized = stampSeat(parsed, parsed.specialist);
   const insert = db.prepare(
     `INSERT OR IGNORE INTO brain_decisions
       (effective_date, kind, domain, summary, rationale, source, source_ref_type, source_ref_key,
@@ -714,8 +769,9 @@ export function appliedDecisionForNewerSource(
 export function patchBrainDecision(id: number, patch: Partial<BrainDecision>): BrainDecision | null {
   const current = getBrainDecision(id);
   if (!current) return null;
-  const normalized = normalizeBrainDecision({ ...current, ...patch, id: current.id, created_at: current.created_at });
-  if (!normalized) throw new Error("invalid brain decision patch");
+  const parsed = normalizeBrainDecision({ ...current, ...patch, id: current.id, created_at: current.created_at });
+  if (!parsed) throw new Error("invalid brain decision patch");
+  const normalized = stampSeat(parsed, patch.specialist);
   db.prepare(
     `UPDATE brain_decisions SET effective_date=?, kind=?, domain=?, summary=?, rationale=?, source=?,
       source_ref_type=?, source_ref_key=?, status=?, autonomy_tier=?, risk_class=?, reversible=?,

@@ -1,25 +1,35 @@
 // @ts-check
 // Horizon's Week, the view (docs/IA.md "Horizon landing"): the designed landing, always
-// Horizon's first view. Top to bottom:
+// Horizon's first view. It answers three questions in the order they are asked — where do
+// I stand, what is this week for, what is coming — top to bottom:
 //
-//   1. the frame hero (CairnFrameLine): "26 days to Cambridge Half" over "Sharpen · block
-//      week 6 of 6 · push through Nov 15", the block ribbon under it;
-//   2. your road (CairnJourneyTrail): the trail from where this stretch began, through
-//      today, up to the furthest dated goal — what is behind, what is next, the summit;
-//      with nothing dated ahead, the starter that hands chat a first sentence;
-//   3. this week's shape (CairnWeekStrip "shape"): seven columns sized by planned dose,
-//      a fold under them a tapped column peeks into, the week's ONE sentence (Horizon
-//      owns it) and, folded, the days as rows that open each day's page;
-//   4. still open: at most two lines, each opening its day;
-//   5. next up: the next milestones beyond this week (CairnMilestoneRow, the Season's
-//      own row) and "All of the season ›";
-//   6. goals, compact (CairnGoalRow): the race estimate with its time, the weight on its
-//      one trend, the anchor lift — each with its meter in words.
+//   1. the hero (CairnFrameLine): the week's purpose (or, near a race, its countdown) as
+//      the serif line, the other said once under it (`frame.sub`; `frame.line` on an
+//      older read), the block ribbon;
+//   2. since you started (CairnProofBand): what has measurably changed, a small picture
+//      each; "Behind you ›" switches to that segment when it exists;
+//   3. where you stand (CairnGoalRow): each goal as a thread with its direction, every row
+//      a link to its depth; under them the team's link note when one exists;
+//   4. this week's shape (CairnWeekStrip "shape"): seven columns sized by planned dose, the
+//      totals in words on the masthead, a fold a tapped column peeks into, and folded, the
+//      days as rows that open each day's page;
+//   5. ahead (CairnAheadStrip): one honest strip of what is coming and a row per mark —
+//      the next milestones as rows on an older read, the starter with nothing dated;
+//   6. your team this week (CairnTeamSeats): up to three seats, filled when the team read
+//      lands (its own slot, so the landing never waits on it).
 //
 // Composes the shared components' strings; says nothing itself beyond section names and
 // empty/error lines. Every word escaped; no unit or date logic here.
 {
   const PEEK_ID = "hwkPeek";
+
+  type LandingOpts = {
+    enter?: boolean;
+    selected?: string | null;
+    seasonHref?: string;
+    changesHref?: string;
+    team?: ClientTeamSeats | null;
+  };
 
   function sectionHtml(key: string, title: string, body: string, aside = ""): string {
     if (!body) return "";
@@ -42,57 +52,75 @@
     if (!shape)
       return `<p class="hwk-empty">Nothing planned this week yet. A lifting plan in Train or run days in chat fill it in.</p>`;
     const open = !!selected;
+    // The server folds the week's count sentence into the hero's `sub` only when the PURPOSE
+    // leads; when the countdown leads, `sub` is the purpose and the summary is still said here.
+    const summary = model.summary && !(model.sub && model.frame.lead !== "countdown") ? `<p class="hwk-summary">${escHtml(model.summary)}</p>` : "";
     return `${shape}
       <div class="hwk-fold${open ? " is-open" : ""}" id="${PEEK_ID}" data-hwk-fold${open ? "" : " inert"} role="region" aria-label="The day opened"><div class="hwk-fold-in" data-hwk-peek></div></div>
-      ${model.summary ? `<p class="hwk-summary">${escHtml(model.summary)}</p>` : ""}
+      ${summary}
       ${model.layout_note ? `<p class="hwk-note">${escHtml(model.layout_note)}</p>` : ""}
       ${rowsHtml(model.glances)}`;
   }
 
-  function openHtml(rows: ReadonlyArray<ClientWeekOpenRow>): string {
-    if (!rows.length) return "";
-    const items = rows
-      .map((row) => {
-        const inner = `<span class="hwk-open-dot stone-${row.stone}" aria-hidden="true"></span><span class="hwk-open-t">${escHtml(row.words)}</span>`;
-        return row.date
-          ? `<li><button type="button" class="hwk-open-row" data-open-day="${escAttr(row.date)}">${inner}<span class="hwk-open-go" aria-hidden="true">›</span></button></li>`
-          : `<li><span class="hwk-open-row">${inner}</span></li>`;
-      })
-      .join("");
-    return `<ul class="hwk-open">${items}</ul>`;
+  /**
+   * Ahead: the strip and its rows from the journey's marks; with none, the next milestones
+   * as rows (an older shape) and the way to the season; with nothing dated at all (this
+   * week), the starter that hands chat a first sentence.
+   */
+  function aheadHtml(model: ClientWeekLanding, seasonHref: string): string {
+    if (model.ahead.length && typeof CairnAheadStrip !== "undefined") {
+      return CairnAheadStrip.aheadHtml(model.ahead, { to: model.ahead_to, seasonHref });
+    }
+    const list = CairnMilestoneRow.listHtml(model.next, { label: "Ahead, beyond this week" });
+    if (list)
+      return `${list}<a class="linkbtn linkbtn-plain hwk-season" href="${escAttr(seasonHref || "#")}" data-hwk-season>All of the season ›</a>`;
+    if (!model.this_week || typeof CairnJourneyTrail === "undefined") return "";
+    return CairnJourneyTrail.starterHtml({ hasGoals: model.goals.length > 0 });
   }
 
-  function nextHtml(model: ClientWeekLanding, seasonHref: string): string {
-    const list = CairnMilestoneRow.listHtml(model.next, { label: "Next up, beyond this week" });
-    if (!list) return "";
-    return `${list}<a class="linkbtn linkbtn-plain hwk-season" href="${escAttr(seasonHref || "#")}" data-hwk-season>All of the season ›</a>`;
+  /** The proof band, with "Behind you ›" on its masthead (shown only while that segment exists). */
+  function proofHtml(model: ClientWeekLanding, enter: boolean): string {
+    if (typeof CairnProofBand === "undefined") return "";
+    const aside = `<button type="button" class="linkbtn-quiet hwk-aside-link hwk-behind-go" data-hwk-behind>Behind you ›</button>`;
+    return sectionHtml("proof", "Since you started", CairnProofBand.listHtml(model.proof, { enter }), aside);
   }
 
-  /** Your road: the trail, else (this week, nothing dated ahead) the starter. */
-  function roadHtml(model: ClientWeekLanding, opts: { enter?: boolean; mark?: number }): string {
-    if (typeof CairnJourneyTrail === "undefined") return "";
-    if (model.journey) return CairnJourneyTrail.trailHtml(model.journey, { enter: opts.enter, selected: opts.mark });
-    return model.this_week ? CairnJourneyTrail.starterHtml({ hasGoals: model.goals.length > 0 }) : "";
+  /** The team's seats as a section; "" with none (the slot then collapses). */
+  function teamHtml(team: ClientTeamSeats | null | undefined, changesHref = ""): string {
+    if (!team || typeof CairnTeamSeats === "undefined") return "";
+    return sectionHtml(
+      "team",
+      "Your team this week",
+      CairnTeamSeats.seatsHtml(team),
+      CairnTeamSeats.changesHtml(team, changesHref)
+    );
+  }
+
+  /** The team's link note for its slot under the goals; "" with none. */
+  function linkNoteHtml(team: ClientTeamSeats | null | undefined): string {
+    return team && typeof CairnTeamSeats !== "undefined" ? CairnTeamSeats.linkHtml(team) : "";
+  }
+
+  /** The hero's kicker: the week's range, and the stage and block words when `sub` stands in for the line. */
+  function kickerOf(model: ClientWeekLanding): string {
+    const extra = model.sub ? [model.frame.stage?.word, model.frame.block?.words, model.frame.push?.words] : [];
+    return ["This week", model.range, ...extra].filter((s) => !!String(s ?? "").trim()).join(" · ");
   }
 
   /** The landing; `enter` gives it the shared settle-in once, `selected` keeps an open peek open. */
-  function landingHtml(
-    model: ClientWeekLanding,
-    opts: { enter?: boolean; selected?: string | null; seasonHref?: string; mark?: number } = {}
-  ): string {
+  function landingHtml(model: ClientWeekLanding, opts: LandingOpts = {}): string {
     const hero =
-      CairnFrameLine.heroHtml(model.frame, {
-        kicker: model.range ? `This week · ${model.range}` : "This week",
-        id: "hwkTitle",
-      }) ||
+      CairnFrameLine.heroHtml(model.frame, { kicker: kickerOf(model), id: "hwkTitle", sub: true }) ||
       `<header class="frameline"><span class="lbl frameline-k">This week</span><h2 class="frameline-h" id="hwkTitle">${escHtml(model.range || "This week")}</h2></header>`;
+    const totals = model.totals_words ? `<span class="hwk-aside num">${escHtml(model.totals_words)}</span>` : "";
     return `<div class="hwk${opts.enter ? " settle-in is-entering" : ""}">
       ${hero}
-      ${sectionHtml("road", "Your road", roadHtml(model, opts))}
-      ${sectionHtml("shape", "This week's shape", shapeHtml(model, opts.selected || null))}
-      ${sectionHtml("open", "Still open", openHtml(model.open))}
-      ${sectionHtml("next", "Next up", nextHtml(model, opts.seasonHref || ""))}
-      ${sectionHtml("goals", "Goals", CairnGoalRow.listHtml(model.goals, { label: "Goals" }))}
+      ${proofHtml(model, !!opts.enter)}
+      ${sectionHtml("goals", "Where you stand", CairnGoalRow.listHtml(model.goals, { label: "Where you stand" }))}
+      <div class="hwk-link-slot" data-hwk-link-slot>${linkNoteHtml(opts.team)}</div>
+      ${sectionHtml("shape", "This week's shape", shapeHtml(model, opts.selected || null), totals)}
+      ${sectionHtml("ahead", "Ahead", aheadHtml(model, opts.seasonHref || ""))}
+      <div class="hwk-team-slot" data-hwk-team-slot>${teamHtml(opts.team, opts.changesHref)}</div>
     </div>`;
   }
 
@@ -112,7 +140,7 @@
     return `<p class="hwk-empty" role="status">This week couldn't be read just now.</p>`;
   }
 
-  const CAIRN_HORIZON_WEEK = { landingHtml, skeletonHtml, errorHtml, PEEK_ID };
+  const CAIRN_HORIZON_WEEK = { landingHtml, teamHtml, linkNoteHtml, skeletonHtml, errorHtml, PEEK_ID };
 
   Object.assign(globalThis, { CairnHorizonWeek: CAIRN_HORIZON_WEEK });
 }

@@ -228,6 +228,12 @@ export function addActivity(input: any, defer?: GarminSyncDeferral | null) {
   return row;
 }
 
+/** A stored note may carry an unrounded Garmin float ("effect 4.300000190734863"); say it to one decimal. */
+export function tidyEffectNote(notes: unknown): unknown {
+  if (typeof notes !== "string") return notes;
+  return notes.replace(/\beffect (\d+\.\d{2,})/g, (_m, n) => `effect ${round1(Number(n))}`);
+}
+
 export function listActivities(limit = 20) {
   const rows = db.prepare(`SELECT * FROM activities ORDER BY date DESC, id DESC LIMIT ?`).all(limit) as any[];
   // The history list keeps every row — a hand log is the athlete's own words — but
@@ -255,6 +261,7 @@ export function listActivities(limit = 20) {
     const partner = shadowedActivity(r, peersByDate.get(String(r.date).slice(0, 10)) ?? []);
     return {
       ...r,
+      notes: tidyEffectNote(r.notes),
       // logged_at: a local "1:15 PM" / "yesterday 9:40 PM" so the coach can reference
       // WHEN it happened, not just that it did. created_at stays the UTC instant.
       logged_at: chatHistoryTimeLabel(r.created_at),
@@ -1217,7 +1224,7 @@ export function upsertGarminActivity(
           [
             input.avg_hr ? `avg HR ${Math.round(input.avg_hr)}` : null,
             input.training_load ? `load ${Math.round(input.training_load)}` : null,
-            input.training_effect ? `effect ${input.training_effect}` : null,
+            input.training_effect ? `effect ${round1(Number(input.training_effect))}` : null,
           ]
             .filter(Boolean)
             .join(" · ") || null,
@@ -1308,7 +1315,7 @@ export function upsertGarminActivity(
       [
         row.avg_hr != null ? `avg HR ${Math.round(Number(row.avg_hr))}` : null,
         row.training_load != null ? `load ${Math.round(Number(row.training_load))}` : null,
-        row.training_effect != null ? `effect ${row.training_effect}` : null,
+        row.training_effect != null ? `effect ${round1(Number(row.training_effect))}` : null,
       ]
         .filter(Boolean)
         .join(" · ") || null;

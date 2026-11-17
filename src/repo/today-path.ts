@@ -151,9 +151,27 @@ function weightOf(asOf: string, profile: any, units: AthleteUnits): TodayPathWei
 
 // ---------- the anchors ----------
 
-function liveJourneys(): StrengthJourney[] {
-  return attempt(() => getStrengthJourneys(), [] as StrengthJourney[]).filter(
-    (j) => j?.available && j.objective && (j.current ?? j.latest)
+/**
+ * A lift's ONE "now": the strength journey's own `current` (the best exact-lift estimate
+ * across its latest three exposures, fresh within 28 days — strength-objectives.ts),
+ * else — with no fresh exposure — its latest. The board's strength row, the anchor, the
+ * week page's strength goal and Train's program card all read this one value; never a
+ * single session's Epley (two reads once showed the same lift fifty pounds apart).
+ */
+export function strengthNow(journey: StrengthJourney | null | undefined): { est_1rm: number; date: string } | null {
+  return journey?.current ?? journey?.latest ?? null;
+}
+
+/** The board row id of a journey's lift: "strength:barbell overhead press". */
+export function strengthRowId(journey: StrengthJourney): string | null {
+  const objective = journey.objective;
+  return objective ? `strength:${objective.exercise_key || objective.exercise.toLowerCase()}` : null;
+}
+
+/** The live journeys (one per active objective with a "now"). */
+export function liveStrengthJourneys(journeys?: StrengthJourney[]): StrengthJourney[] {
+  return (journeys ?? attempt(() => getStrengthJourneys(), [] as StrengthJourney[])).filter(
+    (j) => j?.available && j.objective && strengthNow(j)
   );
 }
 
@@ -163,7 +181,7 @@ function anchorOf(journeys: StrengthJourney[]): TodayPathAnchor | null {
   // The objective with the strongest positive trend; with none rising, the primary.
   const rising = journeys.filter((j) => rate(j) > 0).sort((a, b) => rate(b) - rate(a));
   const pick = rising[0] ?? journeys[0];
-  const now = pick.current ?? pick.latest;
+  const now = strengthNow(pick);
   if (!now || !pick.objective) return null;
   const lbWk = num(pick.trend?.est_1rm_lb_per_week);
   const projection = pick.projection;
@@ -177,6 +195,24 @@ function anchorOf(journeys: StrengthJourney[]): TodayPathAnchor | null {
 }
 
 // ---------- the milestones ----------
+
+/** The longest a milestone's detail runs before it is cut. */
+export const MILESTONE_DETAIL_MAX = 200;
+
+/**
+ * A milestone's detail, never cut mid-word: a long reason ends at its last whole sentence
+ * inside the budget, else at a clause ("…"), else at a word ("…"), so a
+ * reason never ends on half a word.
+ */
+export function clipDetail(text: string): string {
+  return clipText(text, MILESTONE_DETAIL_MAX, {
+    collapseWhitespace: true,
+    ellipsis: "…",
+    wordBoundary: true,
+    sentenceBoundary: true,
+    clauseBoundary: true,
+  });
+}
 
 function nextLongRun(asOf: string, build: RaceBuild | null, units: AthleteUnits): TodayPathMilestone | null {
   const agenda = attempt(() => flexibleTrainingAgenda(asOf), null);
@@ -211,7 +247,7 @@ function peakWeek(asOf: string, build: RaceBuild | null, units: AthleteUnits): T
     end_date: addDaysISO(week.week_start, 6),
     label: `Peak week · ${distanceWords(week.km, units.distance, { whole: true })}${week.new_high ? ", a new high" : ""}`,
     kind: "peak_week",
-    detail: detail ? clipText(detail, 200, { collapseWhitespace: true, ellipsis: "…" }) : null,
+    detail: detail ? clipDetail(detail) : null,
   };
 }
 
@@ -255,7 +291,7 @@ function checkupMilestone(asOf: string, checkup: NextCheckupRead | null): TodayP
       end_date: end && end > start ? end : null,
       label: `Checkup week · blood draw${visit.dexa ? " + DEXA" : ""}`,
       kind: "checkup",
-      detail: why ? clipText(why, 200, { collapseWhitespace: true, ellipsis: "…" }) : null,
+      detail: why ? clipDetail(why) : null,
     };
   }
   const due = [...(checkup.due_now ?? [])]
@@ -268,7 +304,7 @@ function checkupMilestone(asOf: string, checkup: NextCheckupRead | null): TodayP
     end_date: null,
     label: `Checkup · ${due.label}`,
     kind: "checkup",
-    detail: due.why ? clipText(due.why, 200, { collapseWhitespace: true, ellipsis: "…" }) : null,
+    detail: due.why ? clipDetail(due.why) : null,
   };
 }
 
@@ -457,6 +493,21 @@ function raceRow(race: TodayPathRace | null, asOf: string): TodayPathBoardRow | 
   };
 }
 
+/**
+ * Where the weight journey began: the athlete's stated start weight (and its date), else
+ * the first weigh-in of the path's window. ONE answer for the board's start mark and its
+ * "29.1 lb down since Jun 6", the week page's weight goal start and its proof row.
+ */
+export function weightStart(
+  weight: Pick<TodayPathWeight, "points"> | null,
+  profile: any
+): { lb: number; date: string | null; stated: boolean } | null {
+  const startLb = num(profile?.start_weight_lb);
+  if (startLb != null && startLb > 0) return { lb: startLb, date: dayOf(profile?.start_date), stated: true };
+  const first = weight?.points?.[0];
+  return first && first.weight_lb > 0 ? { lb: first.weight_lb, date: first.date, stated: false } : null;
+}
+
 function weightRow(
   weight: TodayPathWeight | null,
   profile: any,
@@ -464,9 +515,10 @@ function weightRow(
   units: AthleteUnits
 ): TodayPathBoardRow | null {
   if (!weight || weight.goal_lb == null || weight.mode === "maintain") return null;
-  const startLb = num(profile?.start_weight_lb);
-  const startDate = dayOf(profile?.start_date);
-  const start = startLb != null && startLb > 0 ? startLb : (weight.points[0]?.weight_lb ?? null);
+  const begin = weightStart(weight, profile);
+  const startLb = begin?.stated ? begin.lb : null;
+  const startDate = begin?.stated ? begin.date : null;
+  const start = begin?.lb ?? null;
   const now = weight.current_lb;
   const goal = weight.goal_lb;
   const lose = weight.mode === "lose";
@@ -500,7 +552,7 @@ function weightRow(
 
 function strengthRow(journey: StrengthJourney, units: AthleteUnits): TodayPathBoardRow | null {
   const objective = journey.objective;
-  const nowRead = journey.current ?? journey.latest;
+  const nowRead = strengthNow(journey);
   if (!objective || !nowRead) return null;
   const now = nowRead.est_1rm;
   const goal = objective.target_est_1rm;
@@ -520,7 +572,7 @@ function strengthRow(journey: StrengthJourney, units: AthleteUnits): TodayPathBo
           : null;
   return {
     key: "strength",
-    id: `strength:${objective.exercise_key || objective.exercise.toLowerCase()}`,
+    id: strengthRowId(journey) as string,
     label: objective.exercise,
     start_text: start != null && Math.round(start) !== Math.round(now) ? load(start) : null,
     now_text: load(now),
@@ -608,7 +660,10 @@ function weekOf(build: RaceBuild | null, stageWord: string | null, units: Athlet
 
 // ---------- the read ----------
 
-export function todayPath(date?: string, opts: { build?: RaceBuild | null } = {}): TodayPath {
+export function todayPath(
+  date?: string,
+  opts: { build?: RaceBuild | null; journeys?: StrengthJourney[] } = {}
+): TodayPath {
   const asOf = dayOf(date) ?? localDateISO();
   const units = athleteUnits();
   const profile = attempt(() => getProfile(), null);
@@ -617,7 +672,8 @@ export function todayPath(date?: string, opts: { build?: RaceBuild | null } = {}
   const frame = attempt(() => weekFrameLine(asOf, { build }), null);
   const race = attempt(() => raceOf(build, asOf, units), null);
   const weight = attempt(() => weightOf(asOf, profile, units), null);
-  const journeys = liveJourneys();
+  // A caller that already read the journeys (the week read) shares them: one read, one "now".
+  const journeys = liveStrengthJourneys(opts.journeys);
   const anchor = attempt(() => anchorOf(journeys), null);
   const checkup = attempt(() => nextCheckupRead({ asOf }), null);
   const milestones = attempt(() => milestonesOf(asOf, build, race, weight, checkup, units), [] as TodayPathMilestone[]);

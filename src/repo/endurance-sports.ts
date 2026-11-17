@@ -78,8 +78,10 @@ export function canonicalEnduranceSport(type: unknown): CanonicalSport {
     return { key: "walk", label: "Walking & Hiking", paced: true };
   }
   // Unknown: a Title Case version of the raw type, treated as a distance sport.
-  const pretty = m ? m.split(" ").filter(Boolean).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ") : "Other";
-  return { key: m || "other", label: pretty || "Other", paced: false };
+  // Garmin's version suffix (`kayaking_v2`) is plumbing, not a sport word: key and label drop it.
+  const bare = m.replace(/\s+v\d+$/, "");
+  const pretty = m ? bare.split(" ").filter(Boolean).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ") : "Other";
+  return { key: bare || "other", label: pretty || "Other", paced: false };
 }
 
 export type EnduranceSportFamily = "run" | "ride" | "swim" | "row" | "walk" | "ski" | "other";

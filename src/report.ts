@@ -701,6 +701,18 @@ function applyBodyCompositionFindingPolicy(m: ReportMarker): ReportMarker {
   return m;
 }
 
+// A method series a newer reading of the same analyte by another method superseded (a
+// calculated LDL-C older than a direct LDL — MEASURE_EQUIVALENTS) stays in its panel as
+// dated history, never a headline finding over the newer reading.
+function applySupersededFindingPolicy(m: ReportMarker, raw: any): ReportMarker {
+  const by = raw?.superseded_by;
+  if (!by) return m;
+  m.findingSuppressed = true;
+  m.findingSuppressionNote = `Superseded by the newer ${String(by.name || "reading")}${by.date ? ` (${String(by.date)})` : ""}; shown as dated history.`;
+  m.methodNote = appendNote(m.methodNote, m.findingSuppressionNote);
+  return m;
+}
+
 function applyVariableMetricFindingPolicy(m: ReportMarker): ReportMarker {
   if (m.source !== "wearable") return m;
   if (!/\b(hrv|heart rate variability|vo2\s?max|resting heart rate|resting hr|\brhr\b)\b/i.test(m.name)) return m;
@@ -944,7 +956,11 @@ export interface ClinicalReportOptions {
 export function buildClinicalReportData(opts: ClinicalReportOptions = {}): ClinicalReportData {
   const sections = opts.sections ? REPORT_SECTION_IDS.filter((id) => opts.sections!.includes(id)) : [...REPORT_DEFAULT_SECTION_IDS];
   const profile = (repo.getProfile() as any) || {};
-  const { markers, groups } = repo.prioritizeMarkers() as any;
+  // The report is the record: a method series a newer equivalent superseded for the
+  // current value still prints in its panel (as dated history, never a headline finding).
+  const prioritized = repo.prioritizeMarkers() as any;
+  const groups = prioritized.groups;
+  const markers = [...(prioritized.markers ?? []), ...(prioritized.superseded ?? [])];
   const generatedDay = reportTodayISO();
   const generated = generatedDay;
   let weightAsOf = generatedDay;
@@ -983,7 +999,7 @@ export function buildClinicalReportData(opts: ClinicalReportOptions = {}): Clini
     .map((m) => {
       const groupKey = m?.group || "other";
       const groupName = m?.group_label || "Other Markers";
-      const view = applyVariableMetricFindingPolicy(
+      const view = applySupersededFindingPolicy(applyVariableMetricFindingPolicy(
         applyBodyCompositionFindingPolicy(
           applyCurrentBodyContext(
             applyBodyMetricEstimate(toMarkerView(m, generatedDay), bodyMetricRead, bodyCompRead, generatedDay),
@@ -995,7 +1011,7 @@ export function buildClinicalReportData(opts: ClinicalReportOptions = {}): Clini
             },
           ),
         ),
-      );
+      ), m);
       return { groupKey, groupName, view };
     })
     .filter(({ groupKey, view }) => reportMarkerRelevant(groupKey, view) && !duplicateProfileFieldMarker(view, profile));

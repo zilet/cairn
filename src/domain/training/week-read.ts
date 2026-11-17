@@ -11,6 +11,13 @@
 //     weight trend, the anchor lift) over the same race build;
 //   - the weight: weightTrendRead (weight-trend.ts), the one rate every surface prints.
 //
+//   - the goals' threads (start, four weeks ago, now, goal, direction): the same board
+//     rows, the strength journeys' own "now" and trend (strength-objectives.ts), the
+//     race build's estimate trend and the weight trend's one verdict;
+//   - proof: a race just run (race-recovery.ts latestFinishedRace and its goal review),
+//     the weight journey's start (today-path.ts weightStart) and the anchor lift's
+//     working load (working-load-history.ts over sessionWorkingLoad).
+//
 // Every string a person reads is in the athlete's units (athleteUnits → display-words)
 // and names its dates in words. The load shape is a dose WORD and a relative height for
 // drawing — never a number shown, never a score. Changes nothing.
@@ -22,29 +29,51 @@ import type {
   WeekDose,
   WeekRead,
   WeekReadGoal,
+  WeekReadGoalDirection,
+  WeekReadGoalTrack,
   WeekReadMilestone,
+  WeekReadMilestoneKind,
   WeekReadOpen,
+  WeekReadProof,
   WeekReadTotals,
+  WeightTrendRead,
 } from "../../contracts/week-read.js";
 import { addDaysISO, daysBetweenISO, isoDate, mondayOf } from "../../lib/dates.js";
 import { round1 } from "../../lib/numbers.js";
 import {
+  awayWords,
   clockWords,
   dateRangeWords,
   dateWords,
   distanceOfWords,
   distanceWords,
+  loadWords,
+  raceDistanceName,
+  sinceWords,
+  weightWords,
   type AthleteUnits,
 } from "../../repo/display-words.js";
 import { pickDayVariant } from "../../repo/brain/day-read-rules.js";
-import { raceBuild, type RaceBuild } from "../../repo/race-build.js";
+import { canonicalBodyweightSeries } from "../../repo/bodyweight.js";
+import { goalReviewRecords, type RaceReviewFacts } from "../../repo/goal-reviews.js";
+import { getProfile } from "../../repo/profile.js";
+import { fmtClock, raceBuild, type RaceBuild } from "../../repo/race-build.js";
+import { latestFinishedRace } from "../../repo/race-recovery.js";
+import { raceRunActivity } from "../../repo/race-results.js";
 import { RUN_KIND_LABELS } from "../../repo/run-edit.js";
 import { athleteUnits } from "../../repo/settings.js";
 import { localDateISO } from "../../repo/shared.js";
-import { todayPath } from "../../repo/today-path.js";
+import {
+  capacityEnvelopeAsOf,
+  getStrengthJourneys,
+  strengthObjectiveHistory,
+  type StrengthJourney,
+} from "../../repo/strength-objectives.js";
+import { liveStrengthJourneys, strengthNow, strengthRowId, todayPath, weightStart } from "../../repo/today-path.js";
 import { planDayStrengthGroups } from "../../repo/training-read.js";
 import { weekFrameLine } from "../../repo/week-stage.js";
-import { weightTrendRead } from "../../repo/weight-trend.js";
+import { WEIGHT_HOLDING_LB_WK, weightTrendRead } from "../../repo/weight-trend.js";
+import { workingLoadHistory } from "../../repo/working-load-history.js";
 import type { TodayPath } from "../../contracts/today-path.js";
 import { dayDetailWeekAsOf } from "./day-detail.js";
 import { planWeek, type PlanWeek, type PlanWeekDay } from "./plan-week.js";
@@ -55,6 +84,30 @@ export type { WeekRead } from "../../contracts/week-read.js";
 const STILL_OPEN_MAX = 2;
 /** The milestones beyond this week the page lists. */
 const NEXT_MILESTONES_MAX = 3;
+/** A race just run leads the proof for this many days after race day. */
+export const RACE_PROOF_DAYS = 28;
+/** The most proof rows the week carries. */
+const PROOF_MAX = 3;
+/** How far back a goal's "four weeks ago" ring looks. */
+const AGO_DAYS = 28;
+/** A weigh-in this close to the ring's day stands for it; further off, no ring. */
+const AGO_SLACK_DAYS = 7;
+/** The weeks of run volume a race's proof picture shows, through race week. */
+const RACE_PROOF_WEEKS = 10;
+/** The most points a proof picture carries (a long series is thinned evenly). */
+const PROOF_SERIES_MAX = 24;
+/** A goal track's margin past a thread that sits behind its start (drawing room only). */
+const TRACK_MARGIN = 0.06;
+
+/** The pages a thread or a milestone opens (src/contracts/client-routes.ts canonical URLs). */
+export const WEEK_HREFS = {
+  race: "/app/horizon/race",
+  goal: "/app/horizon/goal",
+  program: "/app/train/program",
+  checkup: "/app/you/checkup",
+  behind: (id: number) => `/app/horizon/behind?id=${id}`,
+  day: (date: string) => `/app/day/${date}`,
+} as const;
 
 function safe<T>(read: () => T, fallback: T): T {
   try {
@@ -330,6 +383,29 @@ function summaryOf(
 // Milestones and goals — Today's path, re-framed for the week page
 // ---------------------------------------------------------------------------
 
+/**
+ * Where a milestone goes: the race and its peak week → the race page; the checkup → the
+ * checkup under You › Health; the goal weight → the goal line; the strength checkpoint →
+ * Train's program page; a long run → its day page.
+ */
+export function milestoneHref(kind: WeekReadMilestoneKind, date: string): string | null {
+  switch (kind) {
+    case "race":
+    case "peak_week":
+      return WEEK_HREFS.race;
+    case "checkup":
+      return WEEK_HREFS.checkup;
+    case "goal":
+      return WEEK_HREFS.goal;
+    case "checkpoint":
+      return WEEK_HREFS.program;
+    case "long_run":
+      return isoDate(date) ? WEEK_HREFS.day(date) : null;
+    default:
+      return null;
+  }
+}
+
 function milestonesBeyond(path: TodayPath | null, weekEnd: string): WeekReadMilestone[] {
   return (path?.milestones ?? [])
     .filter((m) => m.date > weekEnd)
@@ -341,6 +417,7 @@ function milestonesBeyond(path: TodayPath | null, weekEnd: string): WeekReadMile
       end_date: m.end_date,
       date_words: m.date_words ?? (m.end_date ? dateRangeWords(m.date, m.end_date) : dateWords(m.date)),
       detail: m.detail,
+      href: milestoneHref(m.kind, m.date),
     }));
 }
 
@@ -350,7 +427,276 @@ const FIT_WORDS: Record<string, (target: string) => string> = {
   beyond_horizon: (t) => `${t} sits past this build`,
 };
 
-function goalsOf(path: TodayPath | null, weightLine: string | null): WeekReadGoal[] {
+const NUMBER_WORDS = ["no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"];
+
+/** "four" for 4, "12" past ten. */
+function numberWord(n: number): string {
+  return Number.isInteger(n) && n >= 0 && n < NUMBER_WORDS.length ? NUMBER_WORDS[n] : String(n);
+}
+
+const round3 = (n: number): number => Math.round(n * 1000) / 1000;
+
+/**
+ * A goal's track on ONE axis. Positions are measured as progress from start (0) toward
+ * goal (1); the axis runs from min(start, now, ago) — less a margin when that is behind
+ * the start — to max(goal, now, ago), so a thread now BEHIND its start (an overhead press
+ * below the estimate it began at) draws left of the start mark instead of pinned to it.
+ * Drawing positions only, 0..1 — never printed.
+ */
+export function goalTrack(
+  start: number | null,
+  now: number | null,
+  goal: number | null,
+  ago: number | null = null,
+  agoWords: string | null = null
+): WeekReadGoalTrack | null {
+  if (start == null || now == null || goal == null) return null;
+  if (![start, now, goal].every(Number.isFinite) || goal === start) return null;
+  const at = (v: number) => (v - start) / (goal - start);
+  const agoAt = ago != null && Number.isFinite(ago) ? at(ago) : null;
+  const marks = [0, 1, at(now), ...(agoAt != null ? [agoAt] : [])];
+  let lo = Math.min(...marks);
+  let hi = Math.max(...marks);
+  const span = hi - lo;
+  if (lo < 0) lo -= TRACK_MARGIN * span;
+  if (hi > 1) hi += TRACK_MARGIN * span;
+  const pos = (p: number) => round3(Math.max(0, Math.min(1, (p - lo) / (hi - lo))));
+  return {
+    start: pos(0),
+    now: pos(at(now)),
+    goal: pos(1),
+    ago: agoAt != null ? pos(agoAt) : null,
+    ago_words: agoAt != null ? agoWords : null,
+  };
+}
+
+/** "43 s", "1 min 12 s", "2 min". */
+function secondsWords(sec: number): string {
+  const s = Math.round(Math.abs(sec));
+  if (s < 60) return `${s} s`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return r ? `${m} min ${r} s` : `${m} min`;
+}
+
+/** A window's real length: "in four weeks", "in 10 days". */
+function windowWords(since: string, through: string): string | null {
+  const days = daysBetweenISO(through, since);
+  if (days == null || days <= 0) return null;
+  const weeks = Math.round(days / 7);
+  return weeks >= 2 ? `in ${numberWord(weeks)} weeks` : `in ${days} ${days === 1 ? "day" : "days"}`;
+}
+
+const DIRECTION_WORDS: Record<WeekReadGoalDirection, string> = {
+  toward: "Moving toward",
+  holding: "Holding",
+  back: "Drifting back",
+  reached: "Reached",
+};
+
+type GoalThread = Pick<
+  WeekReadGoal,
+  "id" | "start_text" | "goal_words" | "track" | "direction" | "direction_words" | "move_words" | "href"
+>;
+
+/**
+ * The race row's thread over the estimate's own trend window: its direction is the
+ * build's trend word (faster / steady / slower, race-build.ts), never the fit.
+ */
+function raceThread(path: TodayPath, build: RaceBuild | null, today: string): GoalThread {
+  const race = path.race!;
+  const trend = build?.prediction?.trend ?? null;
+  const now = race.estimate_sec;
+  const start = race.trend_delta_sec != null ? now - race.trend_delta_sec : null;
+  const goal = race.target_sec;
+  const since = race.since;
+  const reached = goal != null && now <= goal;
+  const direction: WeekReadGoalDirection | null = reached
+    ? "reached"
+    : trend
+      ? trend.word === "faster"
+        ? "toward"
+        : trend.word === "slower"
+          ? "back"
+          : "holding"
+      : null;
+  const through = build?.prediction?.as_of ?? today;
+  const span = since ? windowWords(since, through) : null;
+  const delta = race.trend_delta_sec;
+  const move =
+    delta == null || !span
+      ? null
+      : Math.round(Math.abs(delta)) < 1
+        ? `level ${span.replace(/^in /, "over ")}`
+        : `${secondsWords(delta)} ${delta < 0 ? "faster" : "slower"} ${span}`;
+  // The ring: where the estimate stood when its trend window opened — the only earlier
+  // reading the estimate carries — named by that date.
+  const sinceDay = since ? dateWords(since, today) : null;
+  return {
+    id: "race",
+    start_text: start != null && sinceDay ? `${fmtClock(start)} · ${sinceDay}` : null,
+    goal_words: goal != null ? `${fmtClock(goal)} · ${dateWords(race.date, today)}` : null,
+    track: goalTrack(start, now, goal, start, sinceDay),
+    direction,
+    direction_words: direction ? DIRECTION_WORDS[direction] : null,
+    move_words: move,
+    href: WEEK_HREFS.race,
+  };
+}
+
+type WeighIn = { date: string; weight_lb: number };
+
+/** The weigh-in nearest a day, within AGO_SLACK_DAYS; null when none is that close. */
+function weighInNear(points: readonly WeighIn[], day: string): WeighIn | null {
+  let best: WeighIn | null = null;
+  let bestGap = Number.POSITIVE_INFINITY;
+  for (const p of points) {
+    const gap = Math.abs(daysBetweenISO(p.date, day) ?? Number.POSITIVE_INFINITY);
+    if (gap < bestGap) {
+      best = p;
+      bestGap = gap;
+    }
+  }
+  return best && bestGap <= AGO_SLACK_DAYS ? best : null;
+}
+
+/** "−0.4 lb/wk" → "0.4 lb a week": the read's own figure, re-worded only. */
+function rateAWeek(words: string | null | undefined): string | null {
+  const w = String(words ?? "").trim();
+  return w ? w.replace(/^[−+-]/, "").replace(/\/wk$/, " a week") : null;
+}
+
+/** "−0.5 lb/wk" → "0.5": the ask's own figure, unit dropped beside the rate that names it. */
+function rateFigure(words: string | null | undefined): string | null {
+  const w = String(words ?? "").trim();
+  return w ? w.replace(/^[−+-]/, "").replace(/\s*\S+\/wk$/, "") : null;
+}
+
+/**
+ * The weight row's thread: the board's own start (weightStart), the weight trend's ONE
+ * verdict (verdict_words, capitalised) and its own rate and ask, re-worded — no rate is
+ * computed here.
+ */
+function weightThread(
+  path: TodayPath,
+  trend: WeightTrendRead | null,
+  profile: unknown,
+  today: string,
+  units: AthleteUnits
+): GoalThread {
+  const weight = path.weight!;
+  const row = (path.board ?? []).find((r) => r.key === "weight");
+  const begin = weightStart(weight, profile);
+  const goal = weight.goal_lb;
+  const agoDay = addDaysISO(today, -AGO_DAYS) ?? today;
+  const near = canonicalBodyweightSeries({
+    since: addDaysISO(agoDay, -AGO_SLACK_DAYS) ?? agoDay,
+    through: addDaysISO(agoDay, AGO_SLACK_DAYS) ?? agoDay,
+  });
+  const ago = weighInNear(near, agoDay);
+  const rate = trend?.rate_lb_wk ?? null;
+  const needed = trend?.needed_lb_wk ?? null;
+  const sign = weight.mode === "lose" ? -1 : weight.mode === "gain" ? 1 : needed ? Math.sign(needed) : 0;
+  let direction: WeekReadGoalDirection | null = null;
+  if (row?.reached) direction = "reached";
+  else if (rate != null && Math.abs(rate) < WEIGHT_HOLDING_LB_WK) direction = "holding";
+  else if (rate != null && sign !== 0) direction = rate * sign > 0 ? "toward" : "back";
+  const verdict = trend?.verdict_words
+    ? `${trend.verdict_words.charAt(0).toUpperCase()}${trend.verdict_words.slice(1)}`
+    : null;
+  const rateWords = rateAWeek(trend?.rate_words);
+  const neededWords = rateFigure(trend?.needed_words);
+  const wrongWay =
+    rate != null && needed != null && rate !== 0 && needed !== 0 && Math.sign(rate) !== Math.sign(needed);
+  const move = rateWords
+    ? neededWords
+      ? wrongWay
+        ? `${rateWords} ${(rate ?? 0) > 0 ? "up" : "down"}, ${neededWords} ${(needed ?? 0) > 0 ? "up" : "down"} needed`
+        : `${rateWords}, ${neededWords} needed`
+      : rateWords
+    : null;
+  const marked = (lb: number, date: string | null) =>
+    [weightWords(lb, units.weight), date ? dateWords(date, today) : ""].filter(Boolean).join(" · ");
+  return {
+    id: "weight",
+    start_text: begin ? marked(begin.lb, begin.date) : null,
+    goal_words: goal != null ? marked(goal, weight.goal_date) : null,
+    track: goalTrack(
+      begin?.lb ?? null,
+      weight.current_lb,
+      goal,
+      ago?.weight_lb ?? null,
+      ago ? dateWords(ago.date, today) : null
+    ),
+    direction,
+    direction_words:
+      direction === "reached" ? DIRECTION_WORDS.reached : (verdict ?? (direction ? DIRECTION_WORDS[direction] : null)),
+    move_words: move,
+    href: WEEK_HREFS.goal,
+  };
+}
+
+/**
+ * The strength row's thread over the lift's own journey: its one "now" (strengthNow),
+ * its starting estimate, the same envelope four weeks back (capacityEnvelopeAsOf), and
+ * the journey's own trend call (rising / stable / falling at the journey's thresholds,
+ * strength-objectives.ts) — no threshold of its own.
+ */
+function strengthThread(
+  row: TodayPath["board"][number],
+  journey: StrengthJourney | null,
+  today: string,
+  units: AthleteUnits
+): GoalThread {
+  const objective = journey?.objective ?? null;
+  const now = strengthNow(journey);
+  const startLb = journey?.baseline?.est_1rm ?? objective?.baseline_est_1rm ?? null;
+  const startDate = journey?.baseline?.date ?? objective?.baseline_date ?? null;
+  const goal = objective?.target_est_1rm ?? null;
+  const agoDay = addDaysISO(today, -AGO_DAYS) ?? today;
+  const ago = objective ? capacityEnvelopeAsOf(strengthObjectiveHistory(objective.exercise), agoDay) : null;
+  const lbWk = journey?.trend?.est_1rm_lb_per_week ?? null;
+  const call = journey?.trend?.direction ?? null;
+  const direction: WeekReadGoalDirection | null = row.reached
+    ? "reached"
+    : call === "rising"
+      ? "toward"
+      : call === "falling"
+        ? "back"
+        : call === "stable"
+          ? "holding"
+          : null;
+  const load = (lb: number) => weightWords(lb, units.weight, { whole: true });
+  let move: string | null = null;
+  if (lbWk != null && Number.isFinite(lbWk)) {
+    const abs = Math.abs(lbWk);
+    if (abs < 0.05) move = "level";
+    else {
+      const perWeek = `${weightWords(abs, units.weight)} a week`;
+      // Holding is the journey's call; the measure still says which way it leans.
+      move = direction === "holding" ? `${perWeek} ${lbWk > 0 ? "up" : "down"}` : perWeek;
+    }
+  }
+  return {
+    id: row.id,
+    start_text:
+      startLb != null
+        ? [load(startLb), startDate ? dateWords(startDate, today) : ""].filter(Boolean).join(" · ")
+        : null,
+    goal_words: goal != null ? load(goal) : null,
+    track: goalTrack(startLb, now?.est_1rm ?? null, goal, ago?.est_1rm ?? null, ago ? dateWords(agoDay, today) : null),
+    direction,
+    direction_words: direction ? DIRECTION_WORDS[direction] : null,
+    move_words: move,
+    href: WEEK_HREFS.program,
+  };
+}
+
+function goalsOf(
+  path: TodayPath | null,
+  trend: WeightTrendRead | null,
+  ctx: { build: RaceBuild | null; journeys: StrengthJourney[]; today: string; units: AthleteUnits }
+): WeekReadGoal[] {
   if (!path) return [];
   const out: WeekReadGoal[] = [];
   const board = path.board ?? [];
@@ -368,21 +714,31 @@ function goalsOf(path: TodayPath | null, weightLine: string | null): WeekReadGoa
       progress: raceRow.progress,
       line: `Reads ${now}${fit ? `, ${fit}` : ""}.`,
       fit: race.fit,
+      ...safe<GoalThread>(() => raceThread(path, ctx.build, ctx.today), { id: "race", href: WEEK_HREFS.race }),
     });
   }
   const weightRow = board.find((r) => r.key === "weight");
   if (weightRow) {
+    const profile = safe(() => getProfile(), null);
     out.push({
       key: "weight",
       label: weightRow.label,
       now_text: weightRow.now_text,
       goal_text: weightRow.goal_text,
       progress: weightRow.progress,
-      line: weightLine,
+      line: trend?.line ?? null,
+      ...safe<GoalThread>(
+        () =>
+          path.weight
+            ? weightThread(path, trend, profile, ctx.today, ctx.units)
+            : { id: "weight", href: WEEK_HREFS.goal },
+        { id: "weight", href: WEEK_HREFS.goal }
+      ),
     });
   }
   const strength = board.find((r) => r.key === "strength");
   if (strength) {
+    const journey = ctx.journeys.find((j) => strengthRowId(j) === strength.id) ?? null;
     out.push({
       key: "strength",
       label: strength.label,
@@ -390,9 +746,240 @@ function goalsOf(path: TodayPath | null, weightLine: string | null): WeekReadGoa
       goal_text: strength.goal_text,
       progress: strength.progress,
       line: strength.note ? `Est. 1RM ${strength.now_text}, ${strength.note}.` : `Est. 1RM ${strength.now_text}.`,
+      ...safe<GoalThread>(() => strengthThread(strength, journey, ctx.today, ctx.units), {
+        id: strength.id,
+        href: WEEK_HREFS.program,
+      }),
     });
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Proof — what has measurably changed since the athlete started. A before and an
+// after, never a grade; the series is a drawing aid (0..1), never printed.
+// ---------------------------------------------------------------------------
+
+/** Thin a long series evenly, keeping the first and the last point. */
+function thin<T>(values: readonly T[], max = PROOF_SERIES_MAX): T[] {
+  if (values.length <= max) return [...values];
+  const out: T[] = [];
+  for (let i = 0; i < max; i++) out.push(values[Math.round((i * (values.length - 1)) / (max - 1))]);
+  return out;
+}
+
+/**
+ * Values → 0..1 for drawing. A line or steps spans its own min..max; columns stand on
+ * the ground (value / max). Fewer than two values draw nothing ([]).
+ */
+export function proofSeries(values: readonly number[], kind: WeekReadProof["series_kind"]): number[] {
+  const vs = values.filter((v) => Number.isFinite(v));
+  if (vs.length < 2) return [];
+  const max = Math.max(...vs);
+  if (kind === "columns") return max > 0 ? vs.map((v) => round3(Math.max(0, v) / max)) : [];
+  const min = Math.min(...vs);
+  return vs.map((v) => (max === min ? 0.5 : round3((v - min) / (max - min))));
+}
+
+/**
+ * The race just run, while RACE_PROOF_DAYS last. The race OUTLIVES its goal (a new goal
+ * set the day after keeps it in completed_races, race-recovery.ts), so it is found by its
+ * logged effort — never through the live build's `finished`, which shows 14 days and only
+ * while the goal still points at it. The picture is the build's weekly running from its
+ * goal review, when one has been written; else no picture.
+ */
+function raceProof(today: string, units: AthleteUnits): WeekReadProof | null {
+  const race = latestFinishedRace(today, RACE_PROOF_DAYS);
+  if (!race || race.provisional) return null;
+  const review = safe(
+    () =>
+      goalReviewRecords().find((r) => {
+        const facts = r.facts as RaceReviewFacts;
+        return r.kind === "race" && facts?.kind === "race" && facts.race_date === race.run_date;
+      }) ?? null,
+    null
+  );
+  const facts = review ? (review.facts as RaceReviewFacts) : null;
+  const run = raceRunActivity(race.activity_id);
+  const finish = run?.duration_min != null ? Math.round(run.duration_min * 60) : (facts?.result?.finish_sec ?? null);
+  const name = race.event?.trim() || raceDistanceName(race.distance_km, units.distance);
+  const weeks = [...(facts?.build?.weeks ?? [])]
+    .filter((w) => w.week_start <= race.run_date)
+    .sort((a, b) => a.week_start.localeCompare(b.week_start))
+    .slice(-RACE_PROOF_WEEKS);
+  return {
+    key: "race_done",
+    stone: "endurance",
+    label: "Running",
+    before_text: null,
+    after_text: finish != null ? `${name} · ${clockWords(finish)}` : name,
+    since_words: null,
+    series: proofSeries(
+      weeks.map((w) => (Number(w.km) || 0) + (Number(w.race_km) || 0)),
+      "columns"
+    ),
+    series_kind: "columns",
+    href: review ? WEEK_HREFS.behind(review.id) : null,
+  };
+}
+
+/** Weekly means of a weigh-in series, oldest first. */
+function weeklyMeans(points: readonly WeighIn[]): number[] {
+  const byWeek = new Map<string, { sum: number; n: number }>();
+  for (const p of points) {
+    const wk = mondayOf(p.date);
+    const cell = byWeek.get(wk) ?? { sum: 0, n: 0 };
+    cell.sum += p.weight_lb;
+    cell.n += 1;
+    byWeek.set(wk, cell);
+  }
+  return [...byWeek.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([, c]) => c.sum / c.n);
+}
+
+/**
+ * The weight journey from its start (the board's own start and its "moved" rule: at
+ * least half a pound, toward the goal) to the latest weigh-in.
+ */
+function weightProof(path: TodayPath, today: string, units: AthleteUnits): WeekReadProof | null {
+  const weight = path.weight;
+  const row = (path.board ?? []).find((r) => r.key === "weight");
+  if (!weight || !row?.moved_words || !((row.progress ?? 0) > 0)) return null;
+  const begin = weightStart(
+    weight,
+    safe(() => getProfile(), null)
+  );
+  if (!begin) return null;
+  const series: readonly WeighIn[] = begin.date
+    ? canonicalBodyweightSeries({ since: begin.date, through: today })
+    : weight.points;
+  return {
+    key: "weight",
+    stone: "body",
+    label: "Weight",
+    before_text: weightWords(begin.lb, units.weight),
+    after_text: weightWords(weight.current_lb, units.weight),
+    since_words: begin.date ? sinceWords(begin.date, today) || null : null,
+    series: proofSeries(thin(weeklyMeans(series)), "line"),
+    series_kind: "line",
+    href: WEEK_HREFS.goal,
+  };
+}
+
+/**
+ * The anchor lift's working load (the ONE definition, sessionWorkingLoad) from the
+ * objective's start to its latest session — only when it rose. Assisted or bodyweight
+ * work is never spoken here (negative = assist: the load words would lie).
+ */
+function strengthProof(
+  path: TodayPath,
+  journeys: StrengthJourney[],
+  today: string,
+  units: AthleteUnits
+): WeekReadProof | null {
+  const exercise = path.anchor?.exercise;
+  if (!exercise) return null;
+  const journey = journeys.find((j) => j.objective?.exercise === exercise) ?? null;
+  const since = journey?.objective?.baseline_date ?? addDaysISO(today, -182) ?? today;
+  const history = workingLoadHistory(exercise, { since, through: today });
+  if (history.assisted || history.points.length < 2) return null;
+  const first = history.points[0];
+  const last = history.points[history.points.length - 1];
+  if (!(last.load_lb > first.load_lb)) return null;
+  const set = (p: { load_lb: number; reps: number }) => `${loadWords(p.load_lb, units.weight)} × ${p.reps}`;
+  return {
+    key: "strength",
+    stone: "strength",
+    label: exercise,
+    before_text: set(first),
+    after_text: set(last),
+    since_words: sinceWords(first.date, today) || null,
+    series: proofSeries(thin(history.points.map((p) => p.load_lb)), "steps"),
+    series_kind: "steps",
+    href: WEEK_HREFS.program,
+  };
+}
+
+/** This week's proof: a race just run first, then the weight journey, then the anchor lift. At most three. */
+function proofOf(
+  path: TodayPath | null,
+  journeys: StrengthJourney[],
+  today: string,
+  units: AthleteUnits
+): WeekReadProof[] {
+  const rows = [
+    safe(() => raceProof(today, units), null),
+    path ? safe(() => weightProof(path, today, units), null) : null,
+    path ? safe(() => strengthProof(path, journeys, today, units), null) : null,
+  ];
+  return rows.filter((r): r is WeekReadProof => !!r).slice(0, PROOF_MAX);
+}
+
+// ---------------------------------------------------------------------------
+// The hero's quiet line: the week's counts said once, then the far race.
+// ---------------------------------------------------------------------------
+
+/** "the bench", "the press": a lead lift inside a sentence. */
+export function liftShortName(exercise: string): string {
+  const n = String(exercise ?? "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+  if (/overhead|military|\bohp\b|shoulder press/.test(n)) return "the press";
+  if (/bench/.test(n)) return "the bench";
+  if (/deadlift/.test(n) && !/romanian|\brdl\b|stiff/.test(n)) return "the deadlift";
+  if (/squat/.test(n)) return "the squat";
+  if (/\brow\b/.test(n)) return "the row";
+  if (/pull-?up|chin-?up/.test(n)) return "the pull-up";
+  return `the ${n.replace(/^(barbell|dumbbell|db|bb)\s+/, "")}`;
+}
+
+/** Key runs (long, quality) still open this week from `today`, or planned in a later week. */
+function keyRunsAhead(week: PlanWeek | null, today: string, when: "past" | "this" | "future"): number {
+  if (!week || when === "past") return 0;
+  const seen = new Set<string>();
+  for (const d of week.days) {
+    const r = d.run;
+    if (!r || r.rested || r.status !== "open" || (r.kind !== "long" && r.kind !== "quality")) continue;
+    if (when === "this" && (!d.date || d.date < today)) continue;
+    seen.add(`${d.date}:${r.kind}`);
+  }
+  return seen.size;
+}
+
+/**
+ * The week's counts in one plain sentence: "One lift in of five, two key runs ahead."
+ * Counts only, never a verdict — the summary keeps the full sentence; this is the
+ * hero's quiet line when the purpose leads.
+ */
+export function weekCountSentence(
+  totals: Pick<WeekReadTotals, "lift_days_done" | "lift_days_planned">,
+  keyRuns: number,
+  when: "past" | "this" | "future"
+): string | null {
+  const done = totals.lift_days_done;
+  const planned = totals.lift_days_planned ?? 0;
+  const lifts = (n: number) => (n === 1 ? "lift" : "lifts");
+  const days = (n: number) => `lifting ${n === 1 ? "day" : "days"}`;
+  const runs = keyRuns > 0 ? `${numberWord(keyRuns)} key ${keyRuns === 1 ? "run" : "runs"}` : "";
+  let sentence: string;
+  if (when === "past") {
+    if (!done) return null;
+    sentence = planned
+      ? `${numberWord(done)} of ${numberWord(planned)} ${days(planned)} went in`
+      : `${numberWord(done)} ${days(done)} went in`;
+  } else if (when === "future" || done === 0) {
+    const parts = [planned ? `${numberWord(planned)} ${days(planned)}` : "", runs].filter(Boolean);
+    if (!parts.length) return null;
+    sentence = `${parts.join(" and ")} ahead`;
+  } else {
+    const liftPart = planned
+      ? done >= planned
+        ? `all ${numberWord(planned)} ${lifts(planned)} in`
+        : `${numberWord(done)} ${lifts(done)} in of ${numberWord(planned)}`
+      : `${numberWord(done)} ${lifts(done)} in`;
+    sentence = runs ? `${liftPart}, ${runs} ahead` : liftPart;
+  }
+  return `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -403,12 +990,9 @@ function goalsOf(path: TodayPath | null, weightLine: string | null): WeekReadGoa
 /** The most "behind you" lines the trail carries. */
 const JOURNEY_BEHIND_MAX = 3;
 
-function daysAwayWords(days: number): string {
-  if (days <= 0) return "today";
-  if (days === 1) return "tomorrow";
-  if (days >= 21) return `in ${Math.round(days / 7)} weeks`;
-  return `in ${days} days`;
-}
+// Days to a mark: the ONE away-words rule (display-words.ts awayWords) — the same floored
+// weeks count as the race build's countdown, so the trail and the race page agree.
+const daysAwayWords = awayWords;
 
 /** The trail's short word beside a mark, from the milestone's own label (already in units). */
 function markShort(m: TodayPath["milestones"][number], path: TodayPath): string {
@@ -539,7 +1123,11 @@ function journeyLine(walked: number | null, marks: WeekReadJourneyMark[], today:
   return `${lead} Next, ${nextPart}; ${markName(summit)} ${summit.days_words}.`;
 }
 
-function journeyOf(path: TodayPath | null, today: string, finished: RaceBuild["finished"] = null): WeekReadJourney | null {
+function journeyOf(
+  path: TodayPath | null,
+  today: string,
+  finished: RaceBuild["finished"] = null
+): WeekReadJourney | null {
   if (!path) return null;
   const ahead = (path.milestones ?? []).filter((m) => m.date >= today);
   if (!ahead.length) return null;
@@ -554,6 +1142,7 @@ function journeyOf(path: TodayPath | null, today: string, finished: RaceBuild["f
       end_date: m.end_date,
       date_words: m.date_words ?? (m.end_date ? dateRangeWords(m.date, m.end_date) : dateWords(m.date)),
       detail: m.detail,
+      href: milestoneHref(m.kind, m.date),
       short: markShort(m, path),
       days_away: days,
       days_words: daysAwayWords(days),
@@ -591,8 +1180,14 @@ export function weekRead(start?: string, opts: { today?: string; build?: RaceBui
   const build = opts.build !== undefined ? opts.build : safe(() => raceBuild(today, { describeRunning: true }), null);
 
   const week = safe(() => planWeek(asOf), null);
-  const frame = weekFrameLine(thisWeek ? today : weekStart, { build, asOf: today });
-  const path = safe(() => todayPath(today, { build }), null);
+  // One read of the strength journeys, shared with Today's path: one "now" per lift.
+  const journeys = safe(() => liveStrengthJourneys(getStrengthJourneys()), [] as StrengthJourney[]);
+  const path = safe(() => todayPath(today, { build, journeys }), null);
+  // The lead lift is spoken in the week's purpose only while its own journey calls it rising.
+  const anchor = path?.anchor ?? null;
+  const anchorJourney = anchor ? journeys.find((j) => j.objective?.exercise === anchor.exercise) : null;
+  const lift = anchor && anchorJourney?.trend?.direction === "rising" ? liftShortName(anchor.exercise) : null;
+  const frame = weekFrameLine(thisWeek ? today : weekStart, { build, asOf: today, lift });
   const trend = safe(() => weightTrendRead(today, { units: units.weight }), null);
 
   const cells = week?.days ?? [];
@@ -619,6 +1214,14 @@ export function weekRead(start?: string, opts: { today?: string; build?: RaceBui
         run_words: null,
       };
   const stillOpen = week && when !== "past" ? stillOpenOf(week, today) : [];
+  // The hero's quiet line: when the purpose leads, the week's counts and then the far
+  // race ("One lift in of five, two key runs ahead. 5K time trial in 25 weeks."); when
+  // the countdown leads, the purpose.
+  const count =
+    frame.lead === "purpose"
+      ? safe(() => weekCountSentence(totals, keyRunsAhead(week, today, when), when), null)
+      : null;
+  const sub = frame.lead === "purpose" ? [count, frame.sub].filter(Boolean).join(" ") || null : frame.sub;
 
   return {
     as_of: asOf,
@@ -635,6 +1238,9 @@ export function weekRead(start?: string, opts: { today?: string; build?: RaceBui
       block: frame.block,
       countdown: frame.countdown,
       push: frame.push,
+      purpose: frame.purpose,
+      ...(frame.lead ? { lead: frame.lead } : {}),
+      sub,
       headline: frame.headline,
       line: frame.line,
       glance: frame.glance,
@@ -645,7 +1251,8 @@ export function weekRead(start?: string, opts: { today?: string; build?: RaceBui
     layout_note: week && !week.layout.clean ? week.layout.suggestion : null,
     still_open: stillOpen,
     next_milestones: milestonesBeyond(path, weekEnd),
-    goals: goalsOf(path, trend?.line ?? null),
+    goals: goalsOf(path, trend, { build, journeys, today, units }),
+    proof: thisWeek ? safe(() => proofOf(path, journeys, today, units), []) : [],
     journey: thisWeek ? safe(() => journeyOf(path, today, build?.finished ?? null), null) : null,
     weight_trend: trend,
   };

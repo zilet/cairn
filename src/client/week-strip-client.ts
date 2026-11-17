@@ -46,7 +46,7 @@
     const inner = `<span class="wkshape-dow">${escHtml(day.weekday)}</span>
       ${barHtml(day)}
       <span class="wkshape-num">${escHtml(day.num)}${tick}</span>
-      <span class="wkshape-tag">${escHtml(day.tag)}</span>`;
+      <span class="wkshape-tag stone-${day.tag_stone === "endurance" ? "endurance" : "strength"}">${escHtml(day.tag)}</span>`;
     if (!day.date) {
       return `<li class="wkshape-cell"><div class="${cls}" role="img" aria-label="${escAttr(day.aria)}"><span class="wkshape-face" aria-hidden="true">${inner}</span></div></li>`;
     }

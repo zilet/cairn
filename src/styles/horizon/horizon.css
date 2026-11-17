@@ -1,6 +1,7 @@
 /* =====================================================================
    Horizon (Atelier v2): what is ahead, on one line of time, in three views.
-   A pill switch (.horizon-seg) picks this week (the landing: horizon/week.css), the race build or the season; each lane
+   A sliding-thumb switch (.horizon-seg) picks this week (the landing: horizon/week.css,
+   horizon/landing.css), the race build, the season or what is behind; each lane
    reads as a voice (mono kicker, serif line), then an instrument in a quiet
    card (.horizon-chart-card: the terrain km chart or the season weight line,
    drawn to scale by horizon-chart-client), then hairline rows. No card chrome
@@ -9,6 +10,8 @@
    ===================================================================== */
 .horizon{display:grid;gap:var(--space-7)}
 .horizon-seg{margin:0}
+/* "To the race" and "Behind you" show only when they hold something; a hidden one takes no room */
+.horizon-seg .segbtn[hidden]{display:none}
 .horizon-lanes{list-style:none;margin:0;padding:0;display:grid;gap:var(--space-11)}
 .horizon-lane{min-width:0}
 .horizon-panel[hidden]{display:none}

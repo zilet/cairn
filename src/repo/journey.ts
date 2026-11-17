@@ -10,6 +10,7 @@ import type { ProgramState } from "./program-state.js";
 import type { WholePersonTrajectory } from "./whole-person-trajectory.js";
 import { currentUnderfuelingRead } from "./underfueling-snapshot.js";
 import { goalConsistencyRead } from "./goal-consistency.js";
+import { bodyFatEstimate } from "./body-fat-estimate.js";
 
 export type JourneyPhaseKind = "cut" | "maintenance" | "diet_break" | "reverse" | "gain";
 export type JourneyPhaseStatus = "proposed" | "active" | "completed" | "discarded";
@@ -81,14 +82,39 @@ function normStatus(v: unknown): JourneyPhaseStatus {
   return STATUSES.has(s as JourneyPhaseStatus) ? (s as JourneyPhaseStatus) : "proposed";
 }
 
+// Where a phase STARTED, as a body-fat level, is read through the ONE estimate as of
+// the phase's start date (every measurement on or before it, carried by weight; height,
+// weight and age when nothing was measured) — never the snapshot stored on the row,
+// which was written once by whoever created the phase and does not follow the estimate
+// (a stored start can sit several points away from the estimate). Every reader
+// of a phase (the app, MCP, the coach context) gets the same number; the stored value
+// rides along as `start_bodyfat_stored_pct` for the record. A phase that has not started
+// yet, or a person the estimate cannot be made for, keeps the stored value.
+function phaseStartEstimate(row: any): ReturnType<typeof bodyFatEstimate> {
+  const start = iso(row?.start_date);
+  if (!start || start > localDateISO()) return null;
+  try {
+    const profile = getProfile();
+    return profile ? bodyFatEstimate(profile, start) : null;
+  } catch {
+    return null;
+  }
+}
+
 function hydratePhase(row: any) {
   if (!row) return null;
+  const stored = row.start_bodyfat_pct == null ? null : Number(row.start_bodyfat_pct);
+  const est = phaseStartEstimate(row);
   return {
     ...row,
     planned_rate_lb_wk: row.planned_rate_lb_wk == null ? null : Number(row.planned_rate_lb_wk),
     start_weight_lb: row.start_weight_lb == null ? null : Number(row.start_weight_lb),
     target_weight_lb: row.target_weight_lb == null ? null : Number(row.target_weight_lb),
-    start_bodyfat_pct: row.start_bodyfat_pct == null ? null : Number(row.start_bodyfat_pct),
+    start_bodyfat_pct: est ? est.value : stored,
+    start_bodyfat: est
+      ? { value: est.value, low: est.low, high: est.high, measured: est.measured, basis_line: est.basis_line }
+      : null,
+    start_bodyfat_stored_pct: stored,
     target_bodyfat_pct: row.target_bodyfat_pct == null ? null : Number(row.target_bodyfat_pct),
   };
 }
@@ -242,6 +268,24 @@ function addMilestone(out: JourneyMilestone[], milestone: JourneyMilestone) {
   out.push(milestone);
 }
 
+// Where the active phase STARTED, as a body-fat level — read through the ONE estimate
+// (bodyFatEstimate, as of the phase's start date), never the number stored on the phase
+// row. That stored `start_bodyfat_pct` is a snapshot written at create time (or passed in
+// by whoever created the phase) and it does not follow the estimate, so a band
+// milestone would compare the estimate against a number from another method. A band
+// milestone claims a result, so the start must be a MEASURED level too; NaN otherwise.
+function phaseStartBodyFat(p: any, phase: any, today: string): number {
+  const start = iso(phase?.start_date);
+  if (!start) return Number.NaN;
+  const at = start < today ? start : today;
+  try {
+    const est = bodyFatEstimate(p, at);
+    return est?.measured ? est.value : Number.NaN;
+  } catch {
+    return Number.NaN;
+  }
+}
+
 export function journeyMilestones(today = localDateISO()): JourneyMilestone[] {
   const p = getProfile();
   if (!p) return [];
@@ -253,7 +297,7 @@ export function journeyMilestones(today = localDateISO()): JourneyMilestone[] {
   const goalWeight = Number(p.goal_weight_lb ?? phase?.target_weight_lb);
   const startDate = iso(p.start_date) ?? iso(phase?.start_date);
   const bodyFat = currentBodyFatEstimate(p);
-  const startBf = Number(phase?.start_bodyfat_pct);
+  const startBf = phaseStartBodyFat(p, phase, today);
   const targetBf = Number(p.goal_bodyfat_pct ?? phase?.target_bodyfat_pct);
   const out: JourneyMilestone[] = [];
 
@@ -292,7 +336,7 @@ export function journeyMilestones(today = localDateISO()): JourneyMilestone[] {
         id: `goal-progress-${pct}`,
         kind: "goal_progress",
         label: `${pct}% of the way to goal weight`,
-        detail: `${Math.round((startWeight - currentWeight) * 10) / 10} of ${Math.round(total * 10) / 10} lb is off.`,
+        detail: `${Math.round(total * (pct / 100) * 10) / 10} of ${Math.round(total * 10) / 10} lb is off.`,
         achieved_date: iso(hit?.date) ?? iso(latestWeight?.date) ?? today,
         achieved_at: hit?.created_at ?? latestWeight?.created_at ?? null,
         value: pct,

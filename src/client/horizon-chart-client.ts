@@ -18,7 +18,8 @@
 {
   type Season = ClientHorizonSeason;
 
-  const { TERRAIN, terrainSvg, terrainKeyHtml, fx, dayNum, isoOf, monoDate, kmWord } = CairnHorizonTerrain;
+  const { TERRAIN, terrainSvg, terrainKeyHtml, fx, dayNum, isoOf, monoDate, kmWord: numWord } = CairnHorizonTerrain;
+  const KG_PER_LB = 0.45359237;
   /** How old the latest weigh-in may be and still anchor the projection fan. */
   const FAN_ANCHOR_DAYS = 3;
   /** How far past the season's own end (today, goal, window, race) a mark may widen it. */
@@ -30,8 +31,14 @@
 
   // ---- season -----------------------------------------------------------------
 
-  function seasonSvg(season: Season): string {
-    const points = (season?.points || []).filter((p) => Number.isFinite(dayNum(p.date)) && Number.isFinite(p.lb));
+  function seasonSvg(season: Season, opts?: { weightUnit?: "lb" | "kg" }): string {
+    // The season's weights are stored in lb; the axis, labels and aria follow the athlete's unit.
+    const unit = opts?.weightUnit === "kg" ? "kg" : "lb";
+    const conv = (lb: number): number => (unit === "kg" ? lb * KG_PER_LB : lb);
+    const points = (season?.points || [])
+      .filter((p) => Number.isFinite(dayNum(p.date)) && Number.isFinite(p.lb))
+      .map((p) => ({ ...p, lb: conv(p.lb) }));
+    const goalLb = season?.goal_lb != null ? conv(season.goal_lb) : null;
     if (points.length < 2) return "";
     const W = 340;
     const L = 28;
@@ -56,7 +63,7 @@
     const x1 = Math.max(core, ...reach) + 4;
     const X = (n: number): number => L + ((n - x0) / Math.max(1, x1 - x0)) * (R - L);
     const lbs = points.map((p) => p.lb);
-    if (season.goal_lb != null) lbs.push(season.goal_lb);
+    if (goalLb != null) lbs.push(goalLb);
     const lo = Math.floor(Math.min(...lbs) - 1.5);
     const hi = Math.ceil(Math.max(...lbs) + 1.5);
     const Y = (lb: number): number => top + ((hi - lb) / Math.max(1, hi - lo)) * (bottom - top);
@@ -90,9 +97,9 @@
     const age = Number.isFinite(today) ? today - dayNum(last.date) : Number.POSITIVE_INFINITY;
     // A weigh-in dated a day ahead of the device's today (a timezone edge) is still today's.
     const isToday = age <= 0;
-    if (season.goal_lb != null) {
-      const gy = Y(season.goal_lb);
-      const goalWord = [kmWord(season.goal_lb), season.goal_date ? CairnUiChart.dateLabel(season.goal_date) : ""]
+    if (goalLb != null) {
+      const gy = Y(goalLb);
+      const goalWord = [numWord(goalLb), season.goal_date ? CairnUiChart.dateLabel(season.goal_date) : ""]
         .filter(Boolean)
         .join(" · ");
       g += `<line class="hz-goal" x1="${L}" x2="${R}" y1="${fx(gy)}" y2="${fx(gy)}"/><text class="hz-goal-word" x="${R}" y="${fx(gy + 13)}" text-anchor="end">${escHtml(goalWord)}</text>`;
@@ -109,8 +116,8 @@
     const line = points.map((p, i) => `${i ? "L" : "M"}${fx(X(dayNum(p.date)))},${fx(Y(p.lb))}`).join("");
     g += `<path class="hz-weight" d="${line}"/>`;
     const firstP = points[0];
-    g += `<text class="hz-num" x="${fx(X(dayNum(firstP.date)) + 4)}" y="${fx(Y(firstP.lb) - 7)}">${escHtml(kmWord(firstP.lb))}</text>`;
-    const todayWord = `${kmWord(last.lb)} ${isToday ? "now" : `· ${monoDate(last.date)}`}`;
+    g += `<text class="hz-num" x="${fx(X(dayNum(firstP.date)) + 4)}" y="${fx(Y(firstP.lb) - 7)}">${escHtml(numWord(firstP.lb))}</text>`;
+    const todayWord = `${numWord(last.lb)} ${isToday ? "now" : `· ${monoDate(last.date)}`}`;
     // The label sits above and to the right of the latest dot, where the fan leaves room;
     // near the right edge it steps to the left, under the line.
     const roomRight = R - nx > 64;
@@ -136,8 +143,8 @@
       g += `<line class="hz-now" x1="${fx(tx)}" x2="${fx(tx)}" y1="${lane - 9}" y2="${lane + 9}"/>`;
     }
     const aria = [
-      `Weight from ${kmWord(firstP.lb)} to ${kmWord(last.lb)} lb${isToday ? " today" : ` on ${monoDate(last.date)}`}`,
-      season.goal_lb != null ? `goal ${kmWord(season.goal_lb)} lb` : "",
+      `Weight from ${numWord(firstP.lb)} to ${numWord(last.lb)} ${unit}${isToday ? " today" : ` on ${monoDate(last.date)}`}`,
+      goalLb != null ? `goal ${numWord(goalLb)} ${unit}` : "",
       season.marks.length ? `${season.marks.length} labs and scans on the line` : "",
     ]
       .filter(Boolean)

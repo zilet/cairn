@@ -209,8 +209,12 @@ todayRouter.post("/today-asks/answer", (req, res) => {
 // week" read that sits under the agentic weekly sentence (pull-only; words, no
 // scores). This is the human-facing surface, so it MAY drain the oldest 1-2
 // unseen backlog insights (flipping new→seen) so nothing rots unseen.
-todayRouter.get("/team-week",
-  memoizedRead("team-week", () => teamWeekRead({ drainBacklog: true }))
+// `?drain=0` is the same read WITHOUT the drain: a surface that does not render the
+// insights (Horizon's team seats) must never use up the day's drain for the one that does.
+const teamWeekDraining = memoizedRead("team-week", () => teamWeekRead({ drainBacklog: true }));
+const teamWeekQuiet = memoizedRead("team-week-quiet", () => teamWeekRead({ drainBacklog: false }));
+todayRouter.get("/team-week", (req, res, next) =>
+  (req.query.drain === "0" ? teamWeekQuiet : teamWeekDraining)(req, res, next)
 );
 
 // The legible "what Cairn has learned about you" timeline (pull-only; no scores).

@@ -54,5 +54,8 @@ export function publicPriorityMarkers(): Record<string, unknown> & { markers: Re
     ...priority,
     unit_system: system,
     markers: (priority.markers ?? []).map((m: any) => publicMarkerRow(wearableWeeklyMarkerRead(m), system)),
+    // Method series a newer equivalent superseded for the current value (each carries
+    // `superseded_by`) — history, shown through the same public row.
+    superseded: (priority.superseded ?? []).map((m: any) => publicMarkerRow(m, system)),
   };
 }

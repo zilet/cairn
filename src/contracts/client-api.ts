@@ -3830,10 +3830,33 @@ export interface ClientBeliefsView {
 }
 
 // ---- the team's-week digest (GET /api/team-week) ----------------------------
+/** The six seats at the table — one per stone, a role never a persona (src/repo/team-seats.ts). */
+export type ClientTeamSeatKey = "strength" | "endurance" | "recovery" | "fuel" | "body" | "heart";
 export interface ClientTeamWeekChange {
   text: string;
+  /** The specialist's line when the conference stored one, else the seat's role word ("Strength"). */
   specialist: string | null;
+  seat?: ClientTeamSeatKey;
   when: string;
+}
+export interface ClientTeamWeekSeat {
+  seat: ClientTeamSeatKey;
+  /** "Strength" | "Run" | "Recovery" | "Fuel" | "Body" | "Heart" */
+  role: string;
+  /** ONE spoken sentence: the seat's most material call this week. */
+  did: string;
+  /** What the seat expects and by when, from the decision's own expectation; null when none is open. */
+  expects: string | null;
+  /** How the seat's last concluded call landed, with its subject; null when none concluded. */
+  landed: string | null;
+  /** Local date of the call (YYYY-MM-DD). */
+  when: string;
+}
+/** Two seats pulling against each other, said once, with a what-if to PREFILL chat with (never sent). */
+export interface ClientTeamWeekLink {
+  seats: ClientTeamSeatKey[];
+  text: string;
+  ask: string;
 }
 export interface ClientTeamWeekDomainGroup {
   domain: string;
@@ -3856,6 +3879,7 @@ export interface ClientTeamWeekLanded {
   verdict: string;
   when: string;
   tone?: "good" | "quiet" | string;
+  seat?: ClientTeamSeatKey;
 }
 export interface ClientTeamWeekInsight {
   id: number;
@@ -3870,6 +3894,12 @@ export interface ClientTeamWeek {
   watching: ClientTeamWeekWatch[];
   landed: ClientTeamWeekLanded[];
   insights: ClientTeamWeekInsight[];
+  /** At most 3, most material first; [] on a quiet week. */
+  seats?: ClientTeamWeekSeat[];
+  /** From the cut read when lifts are sliding during a confident cut; null otherwise. */
+  link?: ClientTeamWeekLink | null;
+  /** How many changes the week holds (a count is a fact, not a grade). */
+  changes_count?: number;
 }
 
 // ---- Next checkup (the doctor-loop, surfaced) --------------------------------

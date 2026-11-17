@@ -180,8 +180,29 @@ test("body-comp arc with a projected date contributes a Goal weight milestone", 
   const goalM = t.milestones.find((m) => m.kind === "goal");
   if (pace.projected_goal_date) {
     assert.ok(goalM, "a goal-weight milestone when there's a projected date");
-    assert.equal(goalM.when, pace.projected_goal_date, "goal milestone uses the projected date");
+    assert.equal(goalM.when, prof.goal_date, "goal milestone carries the STATED goal date");
+    if (pace.projected_goal_date !== prof.goal_date) {
+      assert.ok(!goalM.label.includes(pace.projected_goal_date), "the projection is said in words, never as a raw ISO date");
+      assert.match(goalM.label, /pace points to [A-Z][a-z]{2} \d/);
+      assert.match(goalM.label, /estimate/);
+    }
   }
+});
+
+test("a block title never names a race that is no longer ahead", () => {
+  seedProfile({ weight_lb: 190, goal_weight_lb: 175, goal_date: isoDaysAhead(120) });
+  seedLosingTrend();
+  repo.createBlock({
+    goal: "Muscle first \u2014 keep Old Half Marathon as supporting work",
+    focus: "hypertrophy",
+    total_weeks: 8,
+    week_index: 2,
+  });
+  const t = getTrajectory();
+  const block = t.milestones.find((m) => m.kind === "block");
+  assert.ok(block, "block end is on the arc");
+  assert.doesNotMatch(block.label, /Old Half Marathon/);
+  assert.match(block.label, /^Muscle first/);
 });
 
 test("milestones sort ascending by date, undated lever last, capped at 4", () => {

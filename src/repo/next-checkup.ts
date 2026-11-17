@@ -127,8 +127,9 @@ interface MarkerLike {
   name?: string | null;
   unit?: string | null;
   latest?: { value?: unknown; flag?: unknown; date?: unknown; kind?: unknown } | null;
-  trend?: { dir?: unknown; span_days?: unknown; n?: unknown } | null;
+  trend?: { dir?: unknown; span_days?: unknown; n?: unknown; basis?: unknown; recent?: { days?: unknown } | null } | null;
   forecast?: { direction?: unknown } | null;
+  superseded_by?: { key?: string } | null;
 }
 
 const FRAME =
@@ -295,7 +296,10 @@ function markerDate(m: MarkerLike): string | null {
 function trendText(m: MarkerLike): string | null {
   const dir = m.trend?.dir;
   if (dir !== "rising" && dir !== "falling" && dir !== "stable") return null;
-  const span = Number(m.trend?.span_days);
+  // A direction held to the latest draw (labSeriesTrend: the last step reversed the
+  // long-run line) is spoken over that step, never over the years the line spans.
+  const recentDays = Number(m.trend?.recent?.days);
+  const span = m.trend?.basis === "recent" && Number.isFinite(recentDays) ? recentDays : Number(m.trend?.span_days);
   if (dir === "stable") return Number.isFinite(span) && span > 0 ? `holding ${humanSpan(span)}` : "holding steady";
   const word = dir === "rising" ? "rising" : "falling";
   return Number.isFinite(span) && span > 0 ? `${word} ${humanSpan(span)}` : word;
@@ -791,6 +795,15 @@ function checkupMarkerIndex(): { markers: MarkerLike[]; markerByKey: Map<string,
   for (const m of markers) {
     const key = String(m.key ?? m.name ?? "").toLowerCase();
     if (key && !markerByKey.has(key)) markerByKey.set(key, m);
+  }
+  // A series another method of the same analyte measured more recently speaks through
+  // that newer series: an "LDL-C" plan follows the November direct LDL, not June's
+  // calculated value (MEASURE_EQUIVALENTS, doctor-loop-derived.ts).
+  for (const m of markers) {
+    const key = String(m.key ?? m.name ?? "").toLowerCase();
+    const newerKey = m.superseded_by?.key;
+    const newer = newerKey ? markerByKey.get(String(newerKey).toLowerCase()) : undefined;
+    if (key && newer) markerByKey.set(key, newer);
   }
   return { markers, markerByKey };
 }

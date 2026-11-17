@@ -104,7 +104,7 @@ function clean(v: unknown, max: number): string {
 }
 
 function capSentences(s: string, n: number): string {
-  const parts = s.match(/[^.!?]+[.!?]+(?:["')\]]+)?|[^.!?]+$/g);
+  const parts = s.match(/(?:[^.!?]|(?<=\d)\.(?=\d))+[.!?]+(?:["')\]]+)?|(?:[^.!?]|(?<=\d)\.(?=\d))+$/g);
   if (!parts || parts.length <= n) return s;
   return parts.slice(0, n).join("").trim();
 }

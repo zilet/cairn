@@ -145,6 +145,7 @@ function applyCaptureFoodRow(id: number, row: unknown): void {
     food,
     among ? { among: true, preferThing: tag.dataset.capturePrefer === "1" } : undefined,
   );
+  CairnChatClient.applyCaptureReplyText(id, status);
   const review = document.querySelector(`.capture-review[data-capture-review="${id}"]`);
   if (!(review instanceof HTMLElement)) return;
   const inner = CairnChatClient.captureFoodReviewInner(status, food);
@@ -297,7 +298,7 @@ function appendMsg(
   extra += CairnChatClient.agentCheckHtml(meta.agent_attempts);
   const hideText = !!meta.image && (!m.content || m.content === "(photo)");
   const body = hideText ? "" : role === "assistant"
-    ? `<div class="bubble-text md">${mdToHtml(m.content)}</div>`
+    ? CairnChatClient.captureReplyBodyHtml(m.content, applied) || `<div class="bubble-text md">${mdToHtml(m.content)}</div>`
     : `<div class="bubble-text">${escHtml(m.content)}</div>`;
   const rawPhoto = meta.image;
   const photoSrc = rawPhoto && String(rawPhoto).startsWith("/api/chat-images/")

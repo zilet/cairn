@@ -528,7 +528,21 @@ function plannedSupportFor(exercise: string, recentPain: string | null): Strengt
 // keeps a deliberate light technique/deload session from masquerading as lost
 // capacity while still aging out quickly enough to require a new checkpoint.
 function capacityEnvelope(history: StrengthExposure[]): StrengthExposure | null {
-  const fresh = history.filter((point) => dayNumber(localDateISO()) - dayNumber(point.date) <= 28).slice(-3);
+  return bestOfLatestThree(history.filter((point) => dayNumber(localDateISO()) - dayNumber(point.date) <= 28));
+}
+
+/**
+ * The same envelope as it stood on `asOf` (exposures on or before it): the ONE
+ * definition of a lift's "now", read back in time — the week page's "four weeks ago"
+ * ring for a strength goal reads this, never a single day's Epley.
+ */
+export function capacityEnvelopeAsOf(history: StrengthExposure[], asOf: string): StrengthExposure | null {
+  const day = dayNumber(asOf);
+  return bestOfLatestThree(history.filter((point) => point.date <= asOf && day - dayNumber(point.date) <= 28));
+}
+
+function bestOfLatestThree(eligible: StrengthExposure[]): StrengthExposure | null {
+  const fresh = eligible.slice(-3);
   return fresh.reduce<StrengthExposure | null>(
     (best, point) => (!best || point.est_1rm > best.est_1rm ? point : best),
     null

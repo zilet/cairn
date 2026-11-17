@@ -237,28 +237,79 @@ Horizon's two views and Train's charts share one chart language (`horizon-chart-
 - **Space is held** at the chart's own aspect ratio while its reads land, so nothing jumps.
 
 Horizon opens on **Week**, always — a cold `/app/horizon` and a tab tap land in the same place,
-and a view picked earlier is never remembered (docs/IA.md "Horizon landing"). Week is the
-designed landing over ONE read, GET `/api/week` (`WeekRead`, `horizon-week-{client,controller}.ts`,
-SWR key `plan:week-read`), top to bottom: the **frame line** (`.frameline`,
-`frame-line-client.ts`: a mono kicker "This week · Oct 5 – Oct 11", the serif headline "26 days to
-Cambridge Half", the one line "Sharpen · block week 6 of 6 · push through Nov 15" — both verbatim —
-and a block ribbon of one step per block week, behind filled, this week ringed in dawn, "Race ·
-Nov 1" at its end); **this week's shape** (`.wkshape`, `week-strip-client.ts` variant "shape": seven
-real buttons, each a stone-coloured bar whose height is the server's relative dose
-`load.height` — strength below endurance on a day with both; done solid and ticked, a key session
-still ahead hollow in its deep hue, planned work a past day missed a quiet outline, rest a low
-stub, today outlined in dawn — labelled "Thu, Oct 8: Pull · Threshold intervals, 5 mi. Big day
-load", never a number; a tap PEEKS the day through `CairnDrill` into the fold under the shape),
-then the week's ONE summary sentence (Horizon owns it) and, folded under "Day by day", the days as
-the day view's own row variant (each opens its page); **Still open** (two lines at most, each
-opening its day); **Next up** (the next three milestones as `.msrow` milestone rows — the Season's
-own row — and "All of the season ›"); and **Goals** (`.goalrow`, the Path card's thread row lifted
-into `goal-row-client.ts`: the race estimate WITH its time, the weight on its one trend, the
-anchor lift, each over a calm meter filled from the server's `progress` and said in a word —
-"Past halfway", the race's "Fits" — never a percent). The shared objects (`week-model`,
-`week-strip`, `milestone-row`, `goal-row`, `frame-line`) ride the lazy `calendar` bundle; CSS
-`horizon/week.css`. How much running Horizon holds is the
-athlete's: a runner with no race reads the view as **Running** (this week's volume and the last
+and a view picked earlier is never remembered (docs/IA.md "Horizon landing"); the one exception is
+"‹ Horizon" from a page the timeline opened, which returns to the segment it was opened from, once
+(`CairnHorizonController.returnNext`). The segments are **Week · Season · Behind you**, on a
+sliding-thumb bar (`seg-sliding`/`seg-thumb`, `--segn`/`--segi` over the SHOWN segments, `fitSeg`
+when it is too wide). "To the race" takes its second place only inside eight weeks of a race (the
+week read's `frame.countdown.days` or the race build's `days_to_race` ≤ 56) or while a race just
+run is said back (the lane's `finished`); otherwise the race is reached through its goal row and
+its mark, which link to the race page. "Behind you" shows once GET `/api/goal-reviews` has a row
+(read after the landing's own reads): the finished-goal rows that used to close the Season, same
+rows, same look back. Week answers three questions in the order they are asked — where do I stand,
+what is this week for, what is coming — over ONE read, GET `/api/week` (`WeekRead`,
+`horizon-week-{client,controller}.ts`, SWR key `plan:week-read`), plus the team's lane, top to
+bottom:
+
+- **The hero** (`.frameline`, `frame-line-client.ts`): a mono kicker "This week · Nov 16 – Nov 22",
+  with the stage and block words when `sub` stands in for the line; the serif `frame.headline`
+  verbatim — the week's PURPOSE in the coach's voice when the race is far, the countdown when near;
+  under it `frame.sub` (the other, said once), else `frame.line` on an older read; and a block
+  ribbon of one step per block week, behind filled, this week ringed in dawn, with "Race · Apr 5"
+  at its end ONLY when `frame.block.ends_at_race` (a race 26 weeks out never ends a six-week block).
+- **Since you started** (`.proof-band`, `proof-band-client.ts`): at most three measured changes,
+  each a three-column hairline row — stone dot and the measure's name (its "since" under it), a
+  small inline SVG from the server's `series` (a measured line with an end dot, a working load as
+  steps, weekly volume as columns with the last in the deep hue; drawn to scale within its own
+  span, `aria-hidden`, colour from the row's stone class), then "183 lb → **153.9 lb**" with the
+  after in the display face (a single fact prints its after alone). A row with a page is a link.
+  The masthead's "Behind you ›" switches to that segment while it exists. Omitted with no proof.
+- **Where you stand** (`.goalrow`, `goal-row-{model,client}.ts`): each goal a row with its name, the
+  real number, and ONE words line, the direction in the stone's deep hue and the measure of the
+  move ("**Moving toward** · 43 s faster in four weeks"); under it the thread drawn from
+  `goal.track` (`.goalrow-thread`): a rail, a fill between start and now that grows from the
+  start's side toward now (leftwards when now has fallen behind the start;
+  `CairnGoalRowModel.trackGeometry`), a tick at the start and at the goal, a hollow ring where it
+  stood about four weeks ago (omitted when unknown or on the start), a solid dot at now, and the
+  two ends in mono words ("183 lb · Jun 6", "148 lb · Feb 14"). Its accessible name says it in
+  words (started at, now, goal, the direction compared with four weeks ago), never a percent.
+  Rows with a page are links with the row press and a chevron (`data-horizon-href`, routed by the
+  Horizon controller through the app's router). An older read keeps the calm meter and its place
+  word ("Past halfway", the race's fit word — now only a fallback). Under the rows, the team's
+  **link note** (`.hwk-linknote`): a dawn left rule, a mono kicker naming the two seats ("Fuel and
+  Strength, together"), the text, and "Talk it through", which prefills chat with `link.ask`
+  (`state.chatPrefill`, never sent for the athlete).
+- **This week's shape** (`.wkshape`, `week-strip-client.ts` variant "shape": seven real buttons,
+  each a stone-coloured bar whose height is the server's relative dose `load.height` — strength
+  below endurance on a day with both; done solid and ticked, a key session still ahead hollow in
+  its deep hue, planned work a past day missed a quiet outline, rest a low stub, today outlined in
+  dawn — labelled "Thu, Oct 8: Pull · Threshold intervals, 5 mi. Big day load", never a number; the
+  column's tag names the lift, or on a run-only day the run, in that day's own stone; a tap PEEKS
+  the day through `CairnDrill` into the fold under the shape). The masthead carries the totals in
+  mono ("1 of 5 lifting days · 16.6 mi planned"); the summary sentence prints only on an older read
+  without `sub` (the server folds it into `sub`); "Day by day" folds the days as the day view's
+  row variant. There is no "Still open": the hollow columns already mark the open key sessions.
+- **Ahead** (`.ahead`, `ahead-strip-client.ts`): one honest strip over the journey's marks — today a
+  dawn tick at the left, the next 28 days on the first half of the width, day 28 to the furthest
+  mark on the second, a break glyph at the midpoint and mono labels "Next four weeks" / "then to
+  May" (one linear four-week axis, no break, when everything is within four weeks); each mark a
+  dot in its stone's hue, a window a short bar. No invented height and no pulsing dot; the
+  geometry is `aheadPosition`/`aheadLayout`, which the tests read. Under it every mark is a
+  milestone row (`.msrow`, a link with a chevron when the mark has a page), five shown and "+N more
+  ›" to the Season. An older read without marks shows the next milestones as rows; with nothing
+  dated, the starter (`CairnJourneyTrail.starterHtml`) sits under "Ahead".
+- **Your team this week** (`.seat`, `team-seats-client.ts`, GET `/api/team-week`, SWR key
+  `horizon:team-week`, its own lane: it fills its slot when it lands and a failed read leaves it
+  out): up to three seats, each the stone dot, the role as a mono eyebrow in the seat's deep hue,
+  what it did as the sentence, and what it expects and how the last call landed as one muted line.
+  The masthead's "7 changes this week ›" opens Ask › Changes.
+
+Motion: bars rise, fills grow and the proof pictures draw ONCE on a cold paint (`.settle-in`,
+`.proof-band.is-drawing`); nothing loops, everything is complete at rest, reduced motion paints it
+still. The shared objects (`week-model`, `week-strip`, `milestone-row`, `goal-row`, `proof-band`,
+`ahead-strip`, `team-seats`) ride the lazy `horizon` bundle (`frame-line` the `journey` one); CSS
+`horizon/week.css` and `horizon/landing.css`. How much running Horizon holds is the
+athlete's: a runner with no race reads the race view as **Running** (this week's volume and the last
 four weeks as small columns, with the way to set a race), and a lifting-only athlete has no race
 view at all. The race view is a **glance**: the week's frame line as its hero (the same words Week
 leads with; the ladder's own serif count — "Five weeks of build, then the half." — only until the
@@ -1457,20 +1508,23 @@ in each row.
 Data's "This app" block: server build and this app's shell), both from
 `app-identity-{model,client,controller}.ts`.
 
-**The time objects** (docs/IA.md "Component architecture", lazy `calendar` bundle, CSS
-`horizon/week.css`): `wkshape` (`week-model.ts` + `week-strip-client.ts`, variant "shape": the
-week as seven dose-sized stone bars, words in every label), `msrow` (`milestone-row-{model,client}.ts`:
-one dated row, a dot or a lab/scan diamond in its stone's deep hue, filled behind today and open
-ahead, an optional "Today" mark), `goalrow` (`goal-row-{model,client}.ts`: a goal's stone dot,
-name over its one line, the real number, and a meter said in a word) and `frameline`
-(`frame-line-client.ts`: the week's frame, verbatim, with the block ribbon) and `hjour`
-(`journey-trail-client.ts`, CSS `horizon/journey.css`: "Your road", the trail to scale in time
-from where the stretch began through today to the summit goal, walked part in dawn drawn in once,
-the road ahead dotted, a peak week lit along it, each mark in its stone's hue, the summit a small
-cairn; labels are buttons that open a mark's words under it; with nothing dated ahead, the starter's
-openers hand chat a first sentence through `state.chatPrefill`). Horizon's Week
-(`hwk`, `horizon-week-{client,controller}.ts`) composes them; To the race and the Season reuse
-`frameline`, `msrow` and `goalrow`.
+**The time objects** (docs/IA.md "Component architecture", lazy `horizon` bundle, CSS
+`horizon/week.css` and `horizon/landing.css`): `wkshape` (`week-model.ts` + `week-strip-client.ts`,
+variant "shape": the week as seven dose-sized stone bars, words in every label), `msrow`
+(`milestone-row-{model,client}.ts`: one dated row, a dot or a lab/scan diamond in its stone's deep
+hue, filled behind today and open ahead, an optional "Today" mark), `goalrow`
+(`goal-row-{model,client}.ts`: a goal's stone dot, name over its words line, the real number, and
+the drawn thread — start, about four weeks ago, now, goal — or, on an older read, a meter said in
+a word), `frameline` (`frame-line-client.ts`: the week's frame, verbatim, with the block ribbon),
+`proof` (`proof-band-client.ts`: "Since you started", a measure before → after with a small
+picture), `ahead` (`ahead-strip-client.ts`: the honest strip — four weeks on its first half, then
+to the furthest mark — and a milestone row per mark), `seat` (`team-seats-client.ts`: "Your team
+this week" and the team's link note) and `hjour` (`journey-trail-client.ts`, CSS
+`horizon/journey.css`: the trail to scale in time from where the stretch began through today to
+the summit goal; no longer composed on Week, which draws `ahead` instead, and still lit with no
+loop; its starter's openers hand chat a first sentence through `state.chatPrefill` and sit under
+"Ahead" when nothing is dated). Horizon's Week (`hwk`, `horizon-week-{client,controller}.ts`)
+composes them; To the race and the Season reuse `frameline`, `msrow` and `goalrow`.
 
 **`ripple-card`** (Ask, `ripple-card-{model,client,controller}.ts`, `.ripple-*`): the what-if
 answer inline at the foot of the thread, opened by the "What if…" starter chip. The change in

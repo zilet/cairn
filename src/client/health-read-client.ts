@@ -41,6 +41,8 @@ type HealthReadMarker = {
   name?: unknown;
   unit?: unknown;
   in_optimal?: unknown;
+  below_optimal_floor?: unknown;
+  reading_note?: unknown;
   optimal?: {
     low?: unknown;
     high?: unknown;
@@ -264,6 +266,15 @@ function optimalPhrase(marker: HealthReadMarker | null | undefined): HealthReadO
   }
   if (marker?.in_optimal === true) return { word: "in your optimal range", tone: "ok" };
   if (marker?.in_optimal === false) {
+    // Blood pressure under its band: "on the low side", with how many readings stand
+    // behind it — a snapshot is a watch, never a red finding.
+    const note = typeof marker.reading_note === "string" && marker.reading_note ? `, ${marker.reading_note}` : "";
+    if (marker.below_optimal_floor === true) return { word: `on the low side${note}`, tone: "watch" };
+    if (note) {
+      const v = Number(latest.value);
+      const side = Number.isFinite(v) && v < Number(optimal.low) ? "below optimal" : "above optimal";
+      return { word: `${side}${note}`, tone: "watch" };
+    }
     const value = Number(latest.value);
     if (Number.isFinite(value)) {
       if (value > Number(optimal.high)) return { word: "above optimal", tone: "warn" };

@@ -3,7 +3,7 @@
 // strength objective completed, a goal weight reached — said back once and kept. Two
 // pure-string pieces:
 //
-//   listHtml(read)    the quiet section at the bottom of Horizon › Season: newest first,
+//   listHtml(read)    Horizon's own "Behind you" segment: newest first,
 //                     one row each (date, title, the measure, its one sentence), each a
 //                     real link to its look back. "" when nothing is behind yet.
 //   detailHtml(read)  the look back itself (/app/horizon/behind?id=<id>): the hero, the
@@ -65,7 +65,7 @@
     </a></li>`;
   }
 
-  /** The Season's "Behind you" section; "" when no goal is behind yet. */
+  /** The "Behind you" segment's list; "" when no goal is behind yet (the segment then hides). */
   function listHtml(read: unknown, opts: { hrefFor?: HrefFor } = {}): string {
     const list = rows(read);
     if (!list.length) return "";

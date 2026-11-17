@@ -40,6 +40,9 @@ const MODULES = [
   "frame-line-client",
   "week-model",
   "week-strip-client",
+  "proof-band-client",
+  "ahead-strip-client",
+  "team-seats-client",
   "horizon-model",
   "horizon-labs-model",
   "horizon-terrain-client",
@@ -365,7 +368,20 @@ test("race lane, a lifting-only athlete: no lane at all, and Horizon drops the r
   // The shell can leave the race view out entirely.
   const bare = createHost(win.document);
   bare.innerHTML = win.CairnHorizon.shellHtml("race", { race: false });
-  assert.deepEqual(plain(bare.querySelectorAll('[role="tab"]').map((t) => t.textContent)), ["Week", "Season"]);
+  assert.deepEqual(plain(bare.querySelectorAll('[role="tab"]').map((t) => t.textContent)), [
+    "Week",
+    "Season",
+    "Behind you",
+  ]);
+  assert.deepEqual(
+    plain(
+      bare
+        .querySelectorAll('[role="tab"]')
+        .filter((t) => !t.hidden)
+        .map((t) => t.textContent)
+    ),
+    ["Week", "Season"]
+  );
   assert.equal(bare.querySelector('[data-horizon-panel="race"]'), null);
   assert.equal(bare.querySelector("[data-horizon]").getAttribute("data-horizon-view"), "week");
   // Mounted, the first race read removes the view; Horizon is on the week.
@@ -380,7 +396,13 @@ test("race lane, a lifting-only athlete: no lane at all, and Horizon drops the r
   assert.equal(root.querySelector('[data-horizon-seg="race"]'), null);
   assert.equal(root.getAttribute("data-horizon-view"), "week");
   // The next open this session is framed without it from the start.
-  assert.deepEqual(plain(win.CairnHorizonController.shellOptions()), { view: "week", race: false, raceLabel: "" });
+  assert.deepEqual(plain(win.CairnHorizonController.shellOptions()), {
+    view: "week",
+    race: false,
+    raceShown: false,
+    raceLabel: "",
+    behind: false,
+  });
 });
 
 test("race lane: a failed read says so in one calm line", () => {
@@ -435,7 +457,11 @@ test("labs lane: the newest three draws and scans behind today, oldest first, ea
   // A visit note is not a draw; a draw dated after today is not behind it; one draw is one row.
   assert.deepEqual(plain(behind.map((row) => row.label)), ["Imaging", "DEXA scan", "Bloodwork"]);
   // The draw's own date words, never a date built here.
-  assert.deepEqual(plain(behind.map((row) => row.when)), ["words(2026-05-01)", "words(2026-07-10)", "words(2026-08-02)"]);
+  assert.deepEqual(plain(behind.map((row) => row.when)), [
+    "words(2026-05-01)",
+    "words(2026-07-10)",
+    "words(2026-08-02)",
+  ]);
   assert.deepEqual(plain(behind.map((row) => row.target)), [
     { tab: "stand", section: "records", id: "15" },
     { tab: "stand", section: "records", id: "13" },
@@ -572,9 +598,19 @@ test("the landing reads the race build only; the Season's reads wait until Seaso
   win.CairnHorizonController.mount(root, { today: TODAY, load: loader, navigate: () => {} });
   await flush();
   await flush();
-  const season = ["/health-docs/draws", "/health/next-checkup", "/journey", "/journey/timeline", "/nutrition/goal-pace?days=180"];
+  const season = [
+    "/health-docs/draws",
+    "/health/next-checkup",
+    "/journey",
+    "/journey/timeline",
+    "/nutrition/goal-pace?days=180",
+  ];
   assert.ok(calls.includes("/race-build"));
-  assert.deepEqual(calls.filter((p) => season.includes(p)), [], "a hidden view's reads are not asked at the landing");
+  assert.deepEqual(
+    calls.filter((p) => season.includes(p)),
+    [],
+    "a hidden view's reads are not asked at the landing"
+  );
   await openSeason(root);
   assert.deepEqual(calls.filter((p) => season.includes(p)).sort(), [...season].sort());
   await root.querySelector('[data-horizon-seg="week"]').click();
@@ -883,7 +919,31 @@ test("the views are tabs over their own panels; Week opens first", () => {
   const host = createHost(win.document);
   host.innerHTML = win.CairnHorizon.shellHtml();
   const tabs = host.querySelectorAll('[role="tab"]');
-  assert.deepEqual(plain(Array.from(tabs).map((tab) => tab.textContent)), ["Week", "To the race", "Season"]);
+  assert.deepEqual(plain(Array.from(tabs).map((tab) => tab.textContent)), [
+    "Week",
+    "To the race",
+    "Season",
+    "Behind you",
+  ]);
+  // "To the race" and "Behind you" wait until a read says they hold something.
+  assert.deepEqual(plain(tabs.filter((t) => !t.hidden).map((t) => t.textContent)), ["Week", "Season"]);
+  // The switch is a sliding-thumb bar, its thumb sized over the shown segments.
+  const bar = host.querySelector(".horizon-seg");
+  assert.ok(bar.classList.contains("seg-sliding"));
+  assert.ok(bar.querySelector(".seg-thumb[aria-hidden='true']"));
+  assert.match(bar.getAttribute("style"), /--segn:2;--segi:0/);
+  const all = createHost(win.document);
+  all.innerHTML = win.CairnHorizon.shellHtml("season", { raceShown: true, behind: true });
+  assert.equal(all.querySelectorAll('[role="tab"]').filter((t) => !t.hidden).length, 4);
+  assert.match(all.querySelector(".horizon-seg").getAttribute("style"), /--segn:4;--segi:2/);
+  assert.ok(all.querySelector("[data-horizon]").hasAttribute("data-horizon-behind-shown"));
+  // Opening on a segment that does not show falls back to Week.
+  const fallback = createHost(win.document);
+  fallback.innerHTML = win.CairnHorizon.shellHtml("behind");
+  assert.equal(fallback.querySelector("[data-horizon]").getAttribute("data-horizon-view"), "week");
+  // The Season no longer holds what is behind: that is its own panel.
+  assert.equal(!!host.querySelector('[data-horizon-panel="season"] [data-horizon-behind]'), false);
+  assert.ok(host.querySelector('[data-horizon-panel="behind"] [data-horizon-behind]'));
   for (const tab of tabs) {
     const panel = host.querySelector(`#${tab.getAttribute("aria-controls")}`);
     assert.ok(panel, "each tab controls a panel");
@@ -909,9 +969,13 @@ test("with no race set Horizon still opens on Week, and a picked view is never r
   await flush();
   assert.equal(root.getAttribute("data-horizon-view"), "week");
   assert.equal(root.querySelector('[data-horizon-seg="week"]').getAttribute("aria-selected"), "true");
-  // The athlete picks the race view; the next open is Week again.
+  // No race and no running: no "To the race" segment, and a tap on it (hidden) stays on Week.
+  assert.equal(root.querySelector('[data-horizon-seg="race"]').hidden, true);
   await root.querySelector('[data-horizon-seg="race"]').click();
-  assert.equal(root.getAttribute("data-horizon-view"), "race");
+  assert.equal(root.getAttribute("data-horizon-view"), "week");
+  // The athlete picks the Season; the next open is Week again.
+  await root.querySelector('[data-horizon-seg="season"]').click();
+  assert.equal(root.getAttribute("data-horizon-view"), "season");
   teardown();
   assert.equal(win.CairnHorizonController.shellOptions().view, "week");
   host.innerHTML = win.CairnHorizon.shellHtml(win.CairnHorizonController.shellOptions().view);
@@ -1313,4 +1377,117 @@ test("run units: the controller reads settings; there is no per-surface km/mi sw
   // No switch to flip: the lane follows settings.run_units and nothing else.
   assert.equal(root.querySelector("[data-horizon-units]"), null);
   assert.deepEqual(saved, []);
+});
+
+test("season chart: the weight unit follows the athlete, kg converts and labels", () => {
+  const win = load();
+  const season = seasonOf(win, [
+    ["2026-08-10", 191],
+    ["2026-09-16", 187],
+  ]);
+  const lb = win.CairnHorizonChart.seasonSvg(season);
+  assert.match(lb, /aria-label="Weight from 191 to 187 lb today, goal 180 lb/);
+  const kg = win.CairnHorizonChart.seasonSvg(season, { weightUnit: "kg" });
+  assert.match(kg, /aria-label="Weight from 86\.6 to 84\.8 kg today, goal 81\.6 kg/);
+  assert.match(kg, /84\.8 now</);
+  assert.doesNotMatch(kg, /aria-label="[^"]*\blb\b/);
+});
+
+// ---------- the segments: "To the race" only near a race, Back to the segment opened from ----------
+
+async function mountedWith(win, extra) {
+  const host = createHost(win.document);
+  host.innerHTML = win.CairnHorizon.shellHtml();
+  const root = host.querySelector("[data-horizon]");
+  const fits = [];
+  win.CairnHorizonController.mount(root, {
+    today: TODAY,
+    load: reads({ extra }).load,
+    navigate: () => {},
+    fitSeg: (el) => fits.push(el),
+  });
+  await flush();
+  await flush();
+  await flush();
+  return { root, fits, race: () => root.querySelector('[data-horizon-seg="race"]') };
+}
+
+test("'To the race' shows inside eight weeks of the race, else the race is reached through its rows", async () => {
+  // 53 days out (the build's own days to race): the segment shows.
+  let win = load();
+  let m = await mountedWith(win, {});
+  assert.equal(m.race().hidden, false);
+  assert.equal(m.race().textContent, "To the race");
+  assert.ok(m.fits.length > 0, "the bar is fitted when a segment shows or hides");
+  assert.match(m.root.querySelector(".horizon-seg").getAttribute("style"), /--segn:\s*3/);
+  assert.equal(win.CairnHorizonController.shellOptions().raceShown, true, "the next open frames it at once");
+  // 120 days out by the build, no week read: hidden.
+  win = load();
+  m = await mountedWith(win, { "/race-build": build({ race: { ...build().race, days_to_race: 120 } }) });
+  assert.equal(m.race().hidden, true);
+  assert.equal(win.CairnHorizonController.shellOptions().raceShown, false);
+  // The week read's countdown alone can bring it in (the race read is far or unread).
+  win = load();
+  m = await mountedWith(win, {
+    "/race-build": build({ race: { ...build().race, days_to_race: 120 } }),
+    "/week": { days: [], frame: { headline: "40 days to Riverside Half", countdown: { days: 40 } } },
+  });
+  assert.equal(m.race().hidden, false);
+  // A race just run, said back while it recovers: the segment shows whatever the next race is.
+  win = load();
+  m = await mountedWith(win, {
+    "/race-build": build({
+      race: { ...build().race, days_to_race: 160 },
+      finished: {
+        headline: "Riverside Half, run.",
+        result_line: "2:04:10",
+        recovering: true,
+        recovery_line: "Easy days through Sunday.",
+        next_line: null,
+      },
+    }),
+  });
+  assert.equal(m.race().hidden, false);
+  // A runner with no race keeps "Running".
+  win = load();
+  m = await mountedWith(win, {
+    "/race-build": {
+      available: false,
+      running: "runs",
+      race: null,
+      weeks: [],
+      leg_map: [],
+      prediction: null,
+      this_week: { week_start: "2026-09-14", km: 24, long_km: 10, logged_km: 8, quality: null, why: "" },
+      review: { weeks: [{ week_start: "2026-09-07", km: 24, runs: 3 }], longest_recent_km: 10, volume_word: "rising" },
+      reason: "No dated race yet.",
+    },
+  });
+  assert.equal(m.race().textContent, "Running");
+  assert.equal(m.race().hidden, false);
+});
+
+test("Back from a page the timeline opened returns to its segment once; a fresh open is Week", async () => {
+  const win = load();
+  const host = createHost(win.document);
+  host.innerHTML = win.CairnHorizon.shellHtml();
+  const root = host.querySelector("[data-horizon]");
+  const went = [];
+  win.CairnHorizonController.mount(root, { today: TODAY, load: reads().load, navigate: (t) => went.push(t) });
+  await openSeason(root);
+  await flush();
+  await root.querySelectorAll('[data-horizon-lane="labs"] .msrow-link')[0].click();
+  assert.equal(went.length, 1);
+  // "‹ Horizon" arms the return; the next shell is framed on the Season and opens there.
+  win.CairnHorizonController.returnNext();
+  assert.equal(win.CairnHorizonController.shellOptions().view, "season");
+  host.innerHTML = win.CairnHorizon.shellHtml(win.CairnHorizonController.shellOptions().view);
+  const back = host.querySelector("[data-horizon]");
+  win.CairnHorizonController.mount(back, { today: TODAY, load: reads().load, navigate: () => {} });
+  await flush();
+  assert.equal(back.getAttribute("data-horizon-view"), "season");
+  // Only once: the next open (a tab tap) is Week again.
+  assert.equal(win.CairnHorizonController.shellOptions().view, "week");
+  win.CairnHorizonController.returnNext();
+  assert.equal(win.CairnHorizonController.shellOptions().view, "week", "nothing was opened from the timeline since");
 });

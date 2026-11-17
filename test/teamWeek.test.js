@@ -1,8 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { db, repo, isoDaysAgo, tsDaysAgo } from "./_seed.js";
-import { recordDecision } from "../dist/repo/brain-decisions.js";
+import {
+  decisionExplanation,
+  getBrainDecision,
+  listReadableBrainDecisions,
+  patchBrainDecision,
+  recordDecision,
+} from "../dist/repo/brain-decisions.js";
 import { insertBrainEvaluation } from "../dist/repo/brain-evaluations.js";
+import { TEAM_SEATS, storedSeat, teamSeatForDecision } from "../dist/repo/team-seats.js";
+import { teamWeekLink } from "../dist/repo/team-week.js";
 
 // Read/seed everything in a single UTC basis so date-only window comparisons are
 // deterministic regardless of the machine's local zone (CURRENT_TIMESTAMP is UTC).
@@ -164,8 +172,9 @@ test("teamWeekRead composes the week: coalesced latest-state changes, attributio
   const nutrition = read.did.find((g) => g.domain === "nutrition");
   assert.ok(nutrition, "nutrition group present");
   assert.equal(nutrition.changes.length, 1, "three revisions + filler collapse to one line");
-  assert.equal(nutrition.changes[0].text, "Settle the target at 2,225 kcal. (settled after 3 revisions)");
-  assert.equal(nutrition.changes[0].specialist, "Nutrition lead: Hold 2,225 for two weeks.");
+  assert.equal(nutrition.changes[0].text, "Settle the target at 2,225 kcal. It settled after three passes.");
+  assert.equal(nutrition.changes[0].specialist, "Fuel: Hold 2,225 for two weeks.");
+  assert.equal(nutrition.changes[0].seat, "fuel");
   assert.equal(read.did[0].domain, "nutrition", "nutrition is ordered before training");
 
   // Training coalesced: one single + one rotation line + one progression line.
@@ -174,17 +183,22 @@ test("teamWeekRead composes the week: coalesced latest-state changes, attributio
   assert.equal(training.changes.length, 3, "single + coalesced rotation + coalesced progression");
   const single = training.changes.find((c) => c.text === "Add a second pull day.");
   assert.ok(single, "the attributed single change survives");
-  assert.match(String(single.specialist), /Two pull days balances the split\./);
+  assert.match(String(single.specialist), /^Strength: Two pull days balances the split\./);
   assert.ok(
-    training.changes.some(
-      (c) => c.text === "Rotated: Hammer Curl → Barbell Curl · DB Bench Press → Incline Bench Press"
+    training.changes.some((c) =>
+      [
+        "Swapped Hammer Curl for Barbell Curl and DB Bench Press for Incline Bench Press.",
+        "Brought in Barbell Curl for Hammer Curl and Incline Bench Press for DB Bench Press.",
+      ].includes(c.text)
     ),
-    "rotations coalesce into one compact line"
+    "rotations coalesce into one spoken line"
   );
-  assert.ok(
-    training.changes.some((c) => c.text === "Auto-progressed 2 lifts on day 1"),
-    "auto-progressions coalesce into one line"
-  );
+  // An older progression row with no per-lift payload is counted from its label —
+  // and never read back as a plan-day number.
+  const progression = training.changes.find((c) => /two lifts/.test(c.text));
+  assert.ok(progression, "auto-progressions coalesce into one line");
+  assert.doesNotMatch(progression.text, /\bday \d|auto-progress/i);
+  assert.equal(progression.specialist, "Strength", "an unattributed row still names its seat");
 
   // No filler line leaked anywhere.
   assert.ok(
@@ -199,16 +213,23 @@ test("teamWeekRead composes the week: coalesced latest-state changes, attributio
   const watch = read.watching.find((w) => w.source === "expectation");
   assert.ok(watch);
   assert.equal(watch.through, isoDaysAgo(-6));
-  assert.match(watch.text, /^How your weight trend/);
+  assert.match(watch.text, /[Yy]our weight coming down 0\.2–1 lb a week/, "the band the expectation holds, in words");
 
-  // landed[] — the conclusive verdict, in words.
-  assert.ok(read.landed.some((l) => l.verdict === "aligned" && /landed as expected/.test(l.text)));
+  // landed[] — the conclusive verdict, in words, with its subject.
+  const aligned = read.landed.find((l) => l.verdict === "aligned");
+  assert.ok(aligned);
+  assert.match(aligned.text, /^The calorie target change landed/);
+  assert.match(aligned.text, /your weight coming down 0\.2–1 lb a week/);
+  assert.equal(aligned.seat, "fuel");
 
   // insights[] — this week's connection.
   assert.ok(read.insights.some((i) => !i.backlog && /Sleep dipped/.test(i.text)));
 
-  // lead — a short, factual summary sentence (words, no scores).
-  assert.match(read.lead, /^This week your team made/);
+  // lead — a sentence, not a wall of counts; it names who led and the one thing waiting.
+  assert.doesNotMatch(read.lead, /\d+ (changes|things|responses)/);
+  assert.match(read.lead, /^(\w+ led the week\.|Most of this week's work sat with \w+\.)/);
+  assert.match(read.lead, /(One change is waiting on your yes|One call is waiting on you)\./);
+  assert.equal(read.changes_count, 4, "one nutrition line + three training lines");
   assert.doesNotMatch(JSON.stringify(read), /impact_score|internal_score/i);
 });
 
@@ -569,7 +590,13 @@ test('"How it landed" keeps only conclusive verdicts and omits the section other
   const withConclusive = repo.teamWeekRead({ asOf: ASOF });
   assert.equal(withConclusive.landed.length, 1, "only the conclusive verdict surfaces");
   assert.equal(withConclusive.landed[0].verdict, "not_aligned");
-  assert.match(withConclusive.landed[0].text, /didn't land the way we expected/);
+  // A subject, what was expected and what happens next — never "<metric> didn't land".
+  assert.match(
+    withConclusive.landed[0].text,
+    /^The calorie target change (didn't land as expected|hasn't paid off yet)/
+  );
+  assert.match(withConclusive.landed[0].text, /the team looked for your weight coming down/);
+  assert.match(withConclusive.landed[0].text, /second look/);
 });
 
 test("long change summaries clip on a word boundary with an ellipsis — never mid-word", () => {
@@ -605,6 +632,9 @@ test("an empty week yields a genuinely short read, never filler", () => {
   assert.deepEqual(read.watching, []);
   assert.deepEqual(read.landed, []);
   assert.deepEqual(read.insights, []);
+  assert.deepEqual(read.seats, []);
+  assert.equal(read.link, null);
+  assert.equal(read.changes_count, 0);
 });
 
 test("the backlog drain is bounded to one pair per LOCAL day and never re-drains the same items", () => {
@@ -695,7 +725,13 @@ test("teamWeekRead frames the endurance line as plan compliance when a run plan 
   // line reads as compliance against that live week.
   repo.setProfile({
     endurance_sport: "run",
-    endurance_schedule: { days: [{ dow: 2, kind: "easy" }, { dow: 4, kind: "quality" }, { dow: 6, kind: "long" }] },
+    endurance_schedule: {
+      days: [
+        { dow: 2, kind: "easy" },
+        { dow: 4, kind: "quality" },
+        { dow: 6, kind: "long" },
+      ],
+    },
   });
   repo.addActivity({ type: "run", distance_km: 6, duration_min: 34, date: ASOF });
   const comp = repo.vouchedRunCompliance(ASOF);
@@ -742,4 +778,459 @@ test('"What we did" excludes observed facts — a block that opened on its own i
     !lines.some((line) => /strength block is running/i.test(line)),
     "an observed fact is not something the team did"
   );
+});
+
+// ── The six seats: attribution, the seats summary, the link, spoken lines ─────────
+
+// An auto-progression row as the applier writes it: per-lift after-values beside the
+// `before` prescription they overwrote.
+function progression(key, lifts, overrides = {}) {
+  const day = overrides.day ?? 1;
+  const { day: _day, ...rest } = overrides;
+  return decision(key, {
+    kind: "training_target",
+    domain: "training",
+    source: "auto-progression",
+    source_ref_type: "plan_proposal",
+    summary: `Auto-progression for day ${day} — ${lifts.length} lifts`,
+    action: {
+      changes: lifts.map(([exercise, from, to]) => ({
+        day_number: day,
+        exercise,
+        target_weight: to,
+        sets: 3,
+        rep_low: 6,
+        rep_high: 8,
+        before: { sets: 3, rep_low: 6, rep_high: 8, target_weight: from, target_seconds: null },
+        change: "updated",
+      })),
+    },
+    ...rest,
+  });
+}
+
+function attention(signalKey, reason, nextDueDaysAgo, source = "test") {
+  db.prepare(
+    `INSERT INTO attention_schedule
+       (signal_key, domain, tier, next_due, last_checked, reason, release_condition, source, state_json, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`
+  ).run(
+    signalKey,
+    "training",
+    "surveillance",
+    isoDaysAgo(nextDueDaysAgo),
+    isoDaysAgo(1),
+    reason,
+    "",
+    source,
+    "{}",
+    tsDaysAgo(1)
+  );
+}
+
+test("the six seats are one table of roles, and every decision maps to exactly one", () => {
+  assert.deepEqual(
+    TEAM_SEATS.map((s) => [s.seat, s.role]),
+    [
+      ["strength", "Strength"],
+      ["endurance", "Run"],
+      ["recovery", "Recovery"],
+      ["fuel", "Fuel"],
+      ["body", "Body"],
+      ["heart", "Heart"],
+    ]
+  );
+  const cases = [
+    [{ kind: "training_target", domain: "training", source: "auto-progression" }, "strength"],
+    [{ kind: "exercise_rotation", domain: "training", source: "exercise-swap" }, "strength"],
+    [
+      {
+        kind: "training_structure",
+        domain: "training",
+        source: "mcp",
+        summary: "This week's runs moved: Friday quality (threshold 5 km), Sunday long",
+      },
+      "endurance",
+    ],
+    [
+      { kind: "training_structure", domain: "training", source: "auto-run-plan", summary: "Next week's plan" },
+      "endurance",
+    ],
+    [{ kind: "training_structure", domain: "recovery", source: "autonomy" }, "recovery"],
+    [{ kind: "nutrition_target", domain: "nutrition" }, "fuel"],
+    [{ kind: "meal_plan", domain: "nutrition" }, "fuel"],
+    [{ kind: "recovery_adjustment", domain: "recovery", source: "underfuel-brain" }, "fuel"],
+    [{ kind: "recovery_adjustment", domain: "recovery", source: "autonomy" }, "recovery"],
+    [{ kind: "health_directive", domain: "nutrition" }, "heart"],
+    [{ kind: "day_read", domain: "cross_domain" }, "recovery"],
+    [{ kind: "goal_change", domain: "cross_domain", summary: "Goal weight date moved to Feb 14." }, "body"],
+    [{ kind: "case_conference", domain: "health", source: "case_conference" }, "heart"],
+    [
+      {
+        kind: "nutrition_target",
+        domain: "nutrition",
+        source: "case_conference",
+        action: { conference_revision_type: "nutrition_target" },
+      },
+      "fuel",
+    ],
+    [
+      {
+        kind: "case_conference",
+        domain: "cross_domain",
+        specialist: { opinions: [{ domain: "endurance", recommendation: "x" }] },
+      },
+      "endurance",
+    ],
+    [{ kind: "training_target", domain: "training", specialist: { seat: "body" } }, "body"],
+  ];
+  for (const [row, seat] of cases) assert.equal(teamSeatForDecision(row), seat, JSON.stringify(row));
+});
+
+test("an auto-progression is attributed to Strength at the write, and history is attributed at the read", () => {
+  const recorded = recordDecision(
+    progression("p-attr", [
+      ["Bench Press", 135, 145],
+      ["Barbell Row", 125, 135],
+    ]),
+    []
+  );
+  assert.equal(storedSeat(recorded.decision.specialist), "strength", "the write stamps the seat");
+
+  // A patch that changes what the row IS re-derives the seat from the patched row.
+  const nutrition = recordDecision(decision("p-patch", { applied_at: tsDaysAgo(9) }), []);
+  assert.equal(storedSeat(nutrition.decision.specialist), "fuel");
+  const patched = patchBrainDecision(nutrition.decision.id, { kind: "training_target", domain: "training" });
+  assert.equal(storedSeat(patched.specialist), "strength");
+
+  // An older row stored with no seat at all is still attributed when read.
+  db.prepare(`UPDATE brain_decisions SET specialist_json = NULL WHERE id = ?`).run(recorded.decision.id);
+  assert.equal(getBrainDecision(recorded.decision.id).specialist, null);
+  const read = repo.teamWeekRead({ asOf: ASOF });
+  const training = read.did.find((g) => g.domain === "training");
+  const line = training.changes.find((c) => /Bench Press/.test(c.text));
+  assert.ok(line, "the progression names its lifts");
+  assert.equal(line.seat, "strength");
+  assert.equal(line.specialist, "Strength");
+  assert.match(line.text, /^Bench Press moved up to 145 lb and Barbell Row up to 135 lb/);
+});
+
+test("progression lines name the lifts and the step — never 'across days 1, 2, 4'", () => {
+  recordDecision(
+    progression(
+      "d1",
+      [
+        ["Bench Press", 135, 145],
+        ["Incline Press", 95, 100],
+      ],
+      { day: 1, applied_at: tsDaysAgo(5) }
+    ),
+    []
+  );
+  recordDecision(
+    progression(
+      "d2",
+      [
+        ["Back Squat", 185, 195],
+        ["Leg Curl", 70, 75],
+      ],
+      { day: 2, applied_at: tsDaysAgo(4) }
+    ),
+    []
+  );
+  recordDecision(
+    progression(
+      "d4",
+      [
+        ["Barbell Row", 125, 135],
+        ["Lat Pulldown", 100, 100],
+      ],
+      { day: 4, applied_at: tsDaysAgo(3) }
+    ),
+    []
+  );
+  const read = repo.teamWeekRead({ asOf: ASOF });
+  const texts = read.did.flatMap((g) => g.changes.map((c) => c.text));
+  assert.equal(texts.length, 1, "the week's progressions are one line");
+  assert.doesNotMatch(texts[0], /\bdays?\s+\d|auto-progress/i);
+  assert.match(texts[0], /moved up to \d+ lb/);
+  assert.match(
+    texts[0],
+    /(and four more lifts moved from your log|plus four more lifts adjusted from what you logged)\.$/
+  );
+  assert.match(JSON.stringify(read), /"seat":"strength"/);
+});
+
+test("seats: at most three, most material first, each with one spoken call", () => {
+  // Strength: a load step (material) AND a single tweak — two calls this week.
+  recordDecision(progression("s-prog", [["Bench Press", 135, 145]], { applied_at: tsDaysAgo(2) }), []);
+  recordDecision(
+    decision("s-single", {
+      kind: "training_target",
+      domain: "training",
+      summary: "Add a second pull day.",
+      applied_at: tsDaysAgo(2),
+    }),
+    []
+  );
+  // Fuel, Recovery and Run: one material call each, Fuel the newest.
+  recordDecision(decision("f-target", { summary: "Hold the target at 2,163 kcal.", applied_at: tsDaysAgo(1) }), []);
+  recordDecision(
+    decision("r-easy", {
+      kind: "recovery_adjustment",
+      domain: "recovery",
+      source: "autonomy",
+      summary: "Ease this week for recovery.",
+      applied_at: tsDaysAgo(3),
+    }),
+    []
+  );
+  recordDecision(
+    decision("e-runs", {
+      kind: "training_structure",
+      domain: "training",
+      source: "mcp",
+      summary: "This week's runs moved: Friday quality, Sunday long",
+      applied_at: tsDaysAgo(4),
+    }),
+    []
+  );
+  const read = repo.teamWeekRead({ asOf: ASOF });
+  assert.equal(read.seats.length, 3, "capped at three");
+  assert.deepEqual(
+    read.seats.map((s) => s.seat),
+    ["strength", "fuel", "recovery"],
+    "material calls first, then the seat with more calls, then the newest"
+  );
+  const [strength, fuel] = read.seats;
+  assert.equal(strength.role, "Strength");
+  assert.match(strength.did, /^Bench Press moved up to 145 lb/, "the seat's most material call, not its smallest");
+  assert.equal(strength.when, isoDaysAgo(2));
+  assert.equal(fuel.role, "Fuel");
+  assert.equal(fuel.did, "Hold the target at 2,163 kcal.");
+  assert.equal(read.changes_count, 5);
+  assert.match(
+    read.lead,
+    /^(Strength led the week\.|Most of this week's work sat with Strength\.) Bench Press moved up to 145 lb/
+  );
+});
+
+test("a seat's expects and landed come from the ledger's own expectation and verdict", () => {
+  // This week's call, with a real open expectation.
+  recordDecision(progression("x-now", [["Bench Press", 135, 145]], { applied_at: tsDaysAgo(1) }), [
+    expectation({
+      metric_key: "exercise_target_completion",
+      subject_key: "Bench Press",
+      direction: "complete",
+      baseline: null,
+      target: { exposures: 2 },
+      window_start: isoDaysAgo(1),
+      window_end: isoDaysAgo(-20),
+      minimum_data: { exposures: 2 },
+      confounder_policy: "require_exposure",
+      evaluator: "exercise_completion",
+    }),
+  ]);
+  // An earlier Strength call whose verdict came in: it missed.
+  const earlier = recordDecision(progression("x-then", [["Barbell Row", 125, 135]], { applied_at: tsDaysAgo(25) }), [
+    expectation({
+      metric_key: "exercise_target_completion",
+      subject_key: "Barbell Row",
+      direction: "complete",
+      baseline: null,
+      target: { exposures: 2 },
+      window_start: isoDaysAgo(25),
+      window_end: isoDaysAgo(3),
+      minimum_data: { exposures: 2 },
+      confounder_policy: "require_exposure",
+      evaluator: "exercise_completion",
+    }),
+  ]);
+  insertBrainEvaluation({
+    expectation_id: earlier.expectations[0].id,
+    verdict: "not_aligned",
+    actual: { exposures: 2, completed: 0 },
+    evidence_keys: ["exercise:Barbell Row"],
+    confounders: [],
+    explanation: "Neither exposure hit the written target.",
+    evaluator_version: "test-v1",
+  });
+
+  const read = repo.teamWeekRead({ asOf: ASOF });
+  const strength = read.seats.find((s) => s.seat === "strength");
+  assert.ok(strength);
+  assert.match(
+    strength.expects,
+    /^Expects to see Bench Press done as written in two sessions by [A-Z][a-z]{2} \d{1,2}(, \d{4})?\.$/
+  );
+  assert.match(
+    strength.landed,
+    /^The last step on Barbell Row (didn't land as expected, so it's getting a second look|fell short, so the team is taking a second look)\.$/
+  );
+
+  // The landed list names the subject, what was expected and what happens next.
+  const missed = read.landed.find((l) => l.verdict === "not_aligned");
+  assert.ok(missed);
+  assert.match(
+    missed.text,
+    /^The step on Barbell Row (didn't land as expected|hasn't paid off yet): the team looked for it done as written in two sessions\. /
+  );
+  assert.equal(missed.seat, "strength");
+  for (const l of read.landed) assert.doesNotMatch(l.text, /^(Exercise completion|Strength progression) didn't land/);
+
+  // The watch line for the open expectation is spoken too.
+  const watch = read.watching.find((w) => w.source === "expectation");
+  assert.match(watch.text, /Bench Press done as written in two sessions/);
+  assert.doesNotMatch(watch.text, /exercise completion answers/);
+});
+
+test("a seat with no open expectation and no concluded call says so with nulls, never filler", () => {
+  recordDecision(decision("q-fuel", { summary: "Hold the target at 2,163 kcal.", applied_at: tsDaysAgo(1) }), []);
+  const [fuel] = repo.teamWeekRead({ asOf: ASOF }).seats;
+  assert.equal(fuel.seat, "fuel");
+  assert.equal(fuel.expects, null);
+  assert.equal(fuel.landed, null);
+});
+
+function cutRead(verdict, anchors, vs = "within") {
+  return {
+    active: true,
+    verdict,
+    words: "A couple of anchor lifts are sliding while your weight drops.",
+    weight: { trend_lb_wk: -0.9, window_days: 21 },
+    strength: { considered: 4, holding: 2, regressing: 2, anchors },
+    endurance: null,
+    rate: { vs_lean_safe: vs },
+  };
+}
+
+test("the link speaks only during a confident cut with sliding lifts", () => {
+  const sliding = cutRead("sliding", [
+    { name: "Overhead Press", status: "regressing" },
+    { name: "Bench Press", status: "regressing" },
+    { name: "Back Squat", status: "progressing" },
+  ]);
+  const link = teamWeekLink(sliding, ASOF);
+  assert.deepEqual(link.seats, ["strength", "fuel"]);
+  assert.match(link.text, /^Overhead Press and Bench Press are sliding while your weight drops\. /);
+  assert.match(link.text, /deficit/);
+  assert.match(link.ask, /^What if I (ease the cut|eased the deficit a little)\?$/);
+  assert.match(teamWeekLink(cutRead("sliding", [], "above"), ASOF).text, /lean-safe pace/);
+
+  assert.equal(teamWeekLink(cutRead("preserving", []), ASOF), null);
+  assert.equal(teamWeekLink(cutRead("mixed", []), ASOF), null);
+  assert.equal(teamWeekLink(cutRead("insufficient", []), ASOF), null);
+  assert.equal(teamWeekLink({ active: false }, ASOF), null);
+  assert.equal(teamWeekLink(null, ASOF), null);
+
+  // Through the read: the link rides beside the existing cut line.
+  const read = repo.teamWeekRead({ asOf: ASOF, cutRead: sliding });
+  assert.ok(read.link);
+  assert.ok(read.cut, "the cut line still stands");
+  assert.equal(repo.teamWeekRead({ asOf: ASOF, cutRead: cutRead("insufficient", []) }).link, null);
+});
+
+test("directives written for a clinician become ONE line for you and your doctor, and the lead never counts asks", () => {
+  repo.addDirective({
+    source: "health_review",
+    domain: "watch",
+    marker: "Rheumatoid factor",
+    directive:
+      "No training or meal change for RF. Surface the 16 IU/mL result and the negative ANA for a clinician to decide on repeat.",
+    status: "active",
+  });
+  repo.addDirective({
+    source: "health_review",
+    domain: "watch",
+    marker: "Lp(a)",
+    directive:
+      "Do not chase Lp(a) with diet changes; manage ApoB and LDL, and let the clinician interpret the 102.8 nmol/L result.",
+    status: "active",
+  });
+  repo.addDirective({
+    source: "health_review",
+    domain: "nutrition",
+    marker: "Omega-3 Total",
+    directive: "Include two servings of oily fish this week (salmon, sardines, mackerel, or trout).",
+    status: "active",
+  });
+  const read = repo.teamWeekRead({ asOf: ASOF });
+  const texts = read.flagged.map((f) => f.text);
+  assert.equal(read.flagged.length, 2, "the two clinician notes fold into one line beside the food suggestion");
+  const doctor = texts.find((t) => /doctor/.test(t));
+  assert.ok(doctor);
+  assert.match(doctor, /rheumatoid factor/);
+  assert.match(doctor, /Lp\(a\)/);
+  for (const t of texts) assert.doesNotMatch(t, /clinician|^Surface|^Do not/i);
+  assert.ok(texts.includes("Include two servings of oily fish this week (salmon, sardines, mackerel, or trout)."));
+  assert.doesNotMatch(read.lead, /\d/);
+  assert.match(
+    read.lead,
+    /(One lab result is worth raising with your doctor|Your labs left one thing for you and your doctor)\./
+  );
+});
+
+test("watching speaks plateau, change-check and marker notes in plain words", () => {
+  attention(
+    "strength:benchmark:row",
+    "Barbell Bent-Over Row is plateaued ~22 wk; re-test or rotate only after a useful training response.",
+    -4,
+    "training-milestones"
+  );
+  const missed = recordDecision(progression("w-check", [["Bench Press", 135, 145]], { applied_at: tsDaysAgo(9) }), []);
+  attention(
+    `training:change-check:d${missed.decision.id}`,
+    "Auto-progression for day 1 — 1 lifts — that one hasn't played out the way we expected.",
+    -5,
+    "expectation-followup"
+  );
+  attention(
+    "marker:apob",
+    "ApoB is outside its optimal/lab range; Lipids take about three months to answer a change in food or training, so a recheck after that says the most",
+    -6,
+    "doctor-loop"
+  );
+  const texts = repo.teamWeekRead({ asOf: ASOF }).watching.map((w) => w.text);
+  const row = texts.find((t) => /Barbell Bent-Over Row/.test(t));
+  assert.match(row, /about twenty-two weeks|about 22 weeks/);
+  assert.doesNotMatch(row, /useful training response|~22 wk/);
+  const check = texts.find((t) => /Bench Press/.test(t));
+  assert.match(check, /^The step on Bench Press hasn't/);
+  assert.doesNotMatch(texts.join(" "), /Auto-progression for day|outside its optimal\/lab range/);
+  assert.ok(texts.some((t) => /ApoB/.test(t) && /Lipids take about three months/.test(t)));
+});
+
+test("a decision's explanation never leaks the machine register to the athlete", () => {
+  const leak =
+    "case conference: Unexplained regression requires a revision: recovery_wellbeing. Reconcile the next bounded revision against the standing objective: everything better.";
+  const held = recordDecision(
+    decision("leak", { status: "review", applied_at: null, rationale: leak, action: {}, source: "case_conference" }),
+    []
+  ).decision;
+  const words = decisionExplanation(held);
+  assert.equal(words, "A change to your calorie and protein targets from the team's latest review.");
+  const listed = listReadableBrainDecisions({ limit: 20 }).find((d) => d.id === held.id);
+  assert.equal(listed.user_explanation, words);
+
+  // A conductor's sentence that leaks falls back to a readable rationale.
+  const fallback = recordDecision(
+    decision("leak2", {
+      rationale: "Your recovery has lagged, so the week eases.",
+      action: { user_explanation: "Unexplained regression requires a revision: recovery_wellbeing." },
+    }),
+    []
+  ).decision;
+  assert.equal(decisionExplanation(fallback), "Your recovery has lagged, so the week eases.");
+
+  // A sentence written for the athlete passes through verbatim.
+  const clean = recordDecision(
+    decision("clean", {
+      action: { user_explanation: "Strength is moving; recovery isn't, so fuel moves onto the hard days." },
+    }),
+    []
+  ).decision;
+  assert.equal(decisionExplanation(clean), "Strength is moving; recovery isn't, so fuel moves onto the hard days.");
+
+  // Nothing written at all stays nothing.
+  assert.equal(decisionExplanation(recordDecision(decision("none", { rationale: null }), []).decision), null);
 });

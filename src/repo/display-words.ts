@@ -345,6 +345,29 @@ export function sinceWords(iso: string | null | undefined, today?: string | null
   return `since ${dateWords(String(iso), today)}`;
 }
 
+/** Days that still speak in days; from two weeks out a dated mark speaks in whole weeks. */
+export const AWAY_IN_DAYS_MAX = 13;
+
+/**
+ * THE weeks count to a dated mark `days` away: whole weeks, FLOORED, so a race is never
+ * said a week closer than it is. Every surface that counts weeks to a race reads this —
+ * the race build's countdown ("25 wks out", race-build.ts raceCountdown), the week's far
+ * countdown and the journey trail ("in 25 weeks", week-read.ts) — so 181 days is 25
+ * weeks everywhere (2026-11-16: the trail rounded it to 26 while the race page said 25).
+ */
+export function weeksAway(days: number): number {
+  return Math.floor(Math.max(0, days) / 7);
+}
+
+/** How far off a dated mark is: "today", "tomorrow", "in 12 days", "in 25 weeks". */
+export function awayWords(days: number): string {
+  if (days <= 0) return "today";
+  if (days === 1) return "tomorrow";
+  if (days <= AWAY_IN_DAYS_MAX) return `in ${days} days`;
+  const weeks = weeksAway(days);
+  return `in ${weeks} ${weeks === 1 ? "week" : "weeks"}`;
+}
+
 /** "26 days to Cambridge Half" / "1 day to …" / "Race day". */
 export function countdownWords(days: number, what: string): string {
   if (days <= 0) return `${what} is today`;

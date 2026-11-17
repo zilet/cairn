@@ -39,6 +39,7 @@ import * as intelligence from "./intelligence.js";
 import { journeyMilestones } from "./journey.js";
 import { getHealthSynthesis, presentHealthSynthesis } from "./propagation.js";
 import { localDateISO } from "./shared.js";
+import { dateWords } from "./display-words.js";
 
 // ---------------------------------------------------------------------------
 // Public contract
@@ -154,6 +155,18 @@ function deriveTodayStep(date: string): string | null {
 // ---------------------------------------------------------------------------
 // The read
 // ---------------------------------------------------------------------------
+
+/**
+ * A block's stored title may name a race ("Muscle first — keep Cambridge Half as
+ * supporting work"). Once that race is no longer the standing upcoming goal it is
+ * stale, so the clause is dropped, never printed as if the race were still ahead.
+ */
+function withoutPastRace(title: string, upcomingEvent: unknown): string {
+  const m = title.match(/\s+—\s+keep\s+(.+?)\s+as supporting work$/);
+  if (!m) return title;
+  const upcoming = typeof upcomingEvent === "string" ? upcomingEvent.trim().slice(0, 80) : "";
+  return upcoming && upcoming === m[1].trim() ? title : title.slice(0, m.index).trim();
+}
 
 /**
  * Fuse the goal-shaped signals into one forward arc. Pure + deterministic +
@@ -273,11 +286,15 @@ export function getTrajectory(
     });
   }
 
-  // Body-comp goal date (only when we have a real projected date).
-  if (hasBodyComp && bodyCompDate) {
+  // Body-comp goal: the milestone carries the STATED goal date when there is one still
+  // ahead; the projection is only an estimate, said in the label when it differs.
+  const statedGoalDate: string | null =
+    isISODate(profile?.goal_date) && String(profile.goal_date) >= today ? String(profile.goal_date) : null;
+  if (hasBodyComp && (statedGoalDate || bodyCompDate)) {
+    const estimate = statedGoalDate && bodyCompDate && bodyCompDate !== statedGoalDate ? ` (pace points to ${dateWords(bodyCompDate, today)}, an estimate)` : "";
     milestones.push({
-      label: "Goal weight",
-      when: bodyCompDate,
+      label: `Goal weight${estimate}`,
+      when: statedGoalDate ?? bodyCompDate,
       kind: "goal",
     });
   }
@@ -313,7 +330,10 @@ export function getTrajectory(
     if (total != null && weekIdx != null && isISODate(block.started_at?.slice?.(0, 10))) {
       const end = addWeeksISO(block.started_at.slice(0, 10), total);
       if (end && end > today) {
-        const goalLabel = typeof block.goal === "string" && block.goal.trim() ? block.goal.trim().slice(0, 80) : "Block";
+        const goalLabel =
+          typeof block.goal === "string" && block.goal.trim()
+            ? withoutPastRace(block.goal.trim(), isRace && goal.date >= today ? goal.event : null).slice(0, 80)
+            : "Block";
         milestones.push({ label: `${goalLabel} — block ends`, when: end, kind: "block" });
       }
     }

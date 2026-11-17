@@ -4,7 +4,9 @@
    furthest dated goal: the walked part in dawn over a soft ground wash,
    drawn in ONCE on the landing's entrance; the road ahead dotted; a peak week
    lit along the trail; each mark in its stone's hue; the summit a small
-   cairn; today breathing on the live-dot timing. The plot is a percentage
+   cairn; today a still dawn dot (the ping is reserved for something live, so
+   nothing here loops). Horizon's Week no longer composes the trail (its
+   "Ahead" strip took its place); the starter still lives here. The plot is a percentage
    box: the SVG stretches (strokes do not), and every mark and label is an
    HTML element placed at (--x, --y), so type stays crisp at token sizes.
    Reduced motion paints it still (§30's blanket rule).
@@ -37,9 +39,6 @@
 .hjour-cairn ellipse{fill:var(--c);stroke:var(--cd);stroke-width:1.2}
 .hjour-now{width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;background:var(--dawn);
   box-shadow:0 0 0 3px var(--surface)}
-.hjour-pulse{width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;box-shadow:0 0 0 1.5px var(--dawn);
-  animation:hjour-breathe var(--dur-ping) var(--ease) infinite}
-@keyframes hjour-breathe{0%{transform:scale(1);opacity:.6}100%{transform:scale(2.8);opacity:0}}
 
 /* labels: a mono "when" over the mark's short word; above or below, aligned to the edge near the ends */
 .hjour-lbl{display:grid;gap:var(--space-1);padding:var(--space-2) var(--space-3);border:0;border-radius:var(--radius-2xs);

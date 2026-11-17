@@ -383,6 +383,11 @@ export interface ClipTextOptions {
   // before falling back to the word boundary. Default false — team-week.ts is
   // the one caller that wants this; it must never become every caller's default.
   sentenceBoundary?: boolean;
+  // Opt-in on top of `wordBoundary`: when no sentence boundary qualifies, prefer
+  // ending on a clause boundary (", " / "; " / " — ") at least halfway into the
+  // budget, ellipsis after it, before falling back to the last word. Default false —
+  // Today's path milestone details use it so a long reason never reads "…The repeat DE…".
+  clauseBoundary?: boolean;
 }
 
 // The one truncation primitive behind what used to be seven independently
@@ -393,7 +398,13 @@ export interface ClipTextOptions {
 // options above cover every behavior actually observed across those seven;
 // every caller keeps its own exact prior output via the matching option set.
 export function clipText(value: unknown, max: number, opts: ClipTextOptions = {}): string {
-  const { collapseWhitespace = false, ellipsis = "…", wordBoundary = false, sentenceBoundary = false } = opts;
+  const {
+    collapseWhitespace = false,
+    ellipsis = "…",
+    wordBoundary = false,
+    sentenceBoundary = false,
+    clauseBoundary = false,
+  } = opts;
   const raw = String(value ?? "");
   const s = collapseWhitespace ? raw.replace(/\s+/g, " ").trim() : raw.trim();
   if (s.length <= max) return s;
@@ -407,6 +418,13 @@ export function clipText(value: unknown, max: number, opts: ClipTextOptions = {}
   if (sentenceBoundary) {
     const sentenceEnd = Math.max(window.lastIndexOf(". "), window.lastIndexOf("! "), window.lastIndexOf("? "));
     if (sentenceEnd >= Math.floor(max * 0.5)) return window.slice(0, sentenceEnd + 1).trim();
+  }
+  if (clauseBoundary) {
+    const clauseEnd = Math.max(window.lastIndexOf(", "), window.lastIndexOf("; "), window.lastIndexOf(" — "));
+    if (clauseEnd >= Math.floor(max * 0.5)) {
+      const clause = window.slice(0, clauseEnd).replace(/[\s,;:—]+$/, "");
+      return ellipsis ? `${clause}${ellipsis}` : clause;
+    }
   }
   const lastSpace = window.lastIndexOf(" ");
   const cut = (lastSpace > 0 ? window.slice(0, lastSpace) : window).replace(/[\s,;:.!?…]+$/, "");

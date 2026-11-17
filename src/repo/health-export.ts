@@ -104,7 +104,11 @@ export function buildHealthExport() {
   const profile = getProfile() || {};
   // prioritizeMarkers is the superset: per-marker latest + full points[] history +
   // optimal band + in_optimal + group + trend + forecast (impact_score stripped).
-  const { markers, groups, flagged_count } = prioritizeMarkers();
+  // An export is the whole record: a method series a newer equivalent superseded for the
+  // CURRENT value (calculated LDL-C beside a newer direct LDL) still exports its history.
+  const read = prioritizeMarkers();
+  const { groups, flagged_count } = read;
+  const markers = [...read.markers, ...(read.superseded ?? [])];
   // Values in the athlete's lab-unit system (src/repo/lab-display.ts); the optimal
   // status above was already read in canonical units, and conversion never flips it.
   const labSystem = labUnitSystem();

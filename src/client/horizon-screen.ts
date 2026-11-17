@@ -1,12 +1,12 @@
 // @ts-check
 // The Horizon home: what is ahead.
 //
-//   /app/horizon       the timeline, opening on WEEK always (docs/IA.md "Horizon
-//                      landing": the frame hero, the week's shape, still open, next up,
-//                      goals — horizon-week-{client,controller}), then the race build and
-//                      the season (the goal line and labs and scans)
-//                      (horizon-model / -client / -controller), each lane tapping into
-//                      its depth view.
+//   /app/horizon       the timeline, opening on WEEK (docs/IA.md "Horizon landing": the
+//                      hero, since you started, where you stand, the week's shape,
+//                      ahead, your team — horizon-week-{client,controller}), then the
+//                      race build (near a race), the season (the goal line and labs and
+//                      scans) and what is behind (horizon-model / -client / -controller),
+//                      each lane tapping into its depth view.
 //   /app/horizon/goal  the goal line in depth: All goals (every thread — race, weight,
 //                      each strength objective, the priority marker — start → now →
 //                      goal with its trend; Today's Path card links here), then the
@@ -14,8 +14,8 @@
 //                      overview used to fold away.
 //   /app/horizon/race  is the Plan view's race section (plan-endurance-client.ts),
 //                      which wears "Race" and steps back here.
-//   /app/horizon/behind?id=<review>  one finished goal, looked back on (the Season's
-//                      "Behind you" rows open it; horizon-behind-client.ts): its measure,
+//   /app/horizon/behind?id=<review>  one finished goal, looked back on (the "Behind
+//                      you" segment's rows open it; horizon-behind-client.ts): its measure,
 //                      the build, the story, what it taught, what carried forward.
 //
 // Every lab and scan row opens You's Health pages through the app's router, so the
@@ -26,11 +26,15 @@ function horizonBackHtml(): string {
   return homeBackHtml("horizon", "Horizon");
 }
 
-/** Back always lands on the timeline, never on the last section Horizon showed. */
+/**
+ * Back lands on the timeline, on the segment the page was opened from when the timeline
+ * opened it (CairnHorizonController.returnNext; a tab tap still lands on Week).
+ */
 function wireHorizonBack(root: ParentNode): void {
   root.querySelector<HTMLElement>("[data-home-back]")?.addEventListener("click", () => {
     state.horizonSeg = null;
     state.horizonReviewId = null;
+    if (typeof CairnHorizonController !== "undefined") CairnHorizonController.returnNext();
     activateTab("horizon");
   });
 }
@@ -72,10 +76,42 @@ function wireHorizonBack(root: ParentNode): void {
       : null;
   }
 
+  /**
+   * A page the server named ("/app/horizon/race", "/app/day/2026-11-22"), opened in place
+   * through the app's own router: a day through the drill, a Horizon page through
+   * horizonNavigate, anything else through the route state. False when it cannot be read.
+   */
+  function horizonOpenHref(href: string): boolean {
+    const routes = typeof routeApi === "function" ? routeApi() : null;
+    if (!routes || typeof location === "undefined") return false;
+    let route: HorizonRoute;
+    try {
+      route = routes.parseRoute(new URL(href, location.href)) as HorizonRoute;
+    } catch {
+      return false;
+    }
+    if (route.tab === "day" && route.date) {
+      const date = route.date;
+      void withBundle("calendar", () => CairnDrill.open("day", date, { mode: "page", from: "horizon" }));
+      return true;
+    }
+    if (route.tab === "horizon") {
+      horizonNavigate({ tab: "horizon", section: route.section || null, id: route.id || null });
+      return true;
+    }
+    activateTab(applyRouteState(route));
+    return true;
+  }
+
   function renderHorizonTimeline(): void {
     headerTitle.textContent = "Horizon";
     const frame = CairnHorizonController.shellOptions();
-    view.innerHTML = CairnHorizon.shellHtml(frame.view, { race: frame.race, raceLabel: frame.raceLabel });
+    view.innerHTML = CairnHorizon.shellHtml(frame.view, {
+      race: frame.race,
+      raceShown: frame.raceShown,
+      raceLabel: frame.raceLabel,
+      behind: frame.behind,
+    });
     const host = view.querySelector("[data-horizon]");
     if (!host) return;
     CairnHorizonController.mount(host, {
@@ -87,6 +123,8 @@ function wireHorizonBack(root: ParentNode): void {
         typeof cachedApi === "function" ? (cachedApi(path, options) as Promise<unknown>) : api(path),
       navigate: horizonNavigate,
       hrefFor: horizonHref,
+      openHref: horizonOpenHref,
+      fitSeg: (el: HTMLElement) => (typeof fitSeg === "function" ? fitSeg(el) : undefined),
       reducedMotion: () => (typeof reducedMotion === "function" ? reducedMotion() : false),
     });
   }
@@ -148,7 +186,7 @@ function wireHorizonBack(root: ParentNode): void {
         CairnHorizonBehind.detailHtml(read) ||
         CairnUi.emptyStateHtml({
           title: "Nothing to look back on here",
-          body: "This finished goal isn't here any more. What is behind you stays listed at the bottom of the Season.",
+          body: "This finished goal isn't here any more. What is behind you stays listed under Horizon › Behind you.",
           className: "empty-state horizon-behind-empty",
         });
     };

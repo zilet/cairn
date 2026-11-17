@@ -3,7 +3,11 @@
 // src/contracts/week-read.ts) shaped for Horizon's Week page — the frame for the hero,
 // the seven columns of the week's shape, the day-by-day glances, what is still open, the
 // next milestones and the goals. Replaces horizon-week-model (the old GET /plan/week
-// shaping).
+// shaping). It also shapes what the redesigned landing adds (docs/IA.md "Horizon landing"):
+// the proof band ("Since you started", `proof`), the ahead strip's marks (`journey.marks`,
+// ahead-strip-client.ts), the totals words for the shape's masthead and the frame's `sub`.
+// Every new field is optional on the wire: an older read (or the cached first paint)
+// leaves it empty and the view keeps today's rendering of that section.
 //
 // Pure: a DTO in, a view model out; never fetches, never touches the DOM or `state`.
 // Every word is the server's, already in the athlete's units. A column's height is the
@@ -16,12 +20,18 @@
   type WeekRead = import("../contracts/week-read.js").WeekRead;
   type DayChip = import("../contracts/week-read.js").DayChip;
   type WeekOpen = import("../contracts/week-read.js").WeekReadOpen;
+  type WeekProof = import("../contracts/week-read.js").WeekReadProof;
+  type JourneyMark = import("../contracts/week-read.js").WeekReadJourneyMark;
 
   const ISO = /^\d{4}-\d{2}-\d{2}$/;
   /** "Still open" holds two lines at most (docs/IA.md "Horizon landing" 3). */
   const OPEN_MAX = 2;
   /** "Next up" holds three milestones at most. */
   const NEXT_MAX = 3;
+  /** "Since you started" holds three measured changes at most. */
+  const PROOF_MAX = 3;
+  const PROOF_STONES: ReadonlySet<string> = new Set(["body", "strength", "endurance"]);
+  const SERIES_KINDS: ReadonlySet<string> = new Set(["line", "steps", "columns"]);
 
   function record(value: unknown): Record<string, unknown> | null {
     return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
@@ -77,7 +87,9 @@
       date,
       weekday: (text(chip.weekday) || "Day").slice(0, 3).toUpperCase(),
       num: date ? CairnFmt.date(date, { fmt: { day: "numeric" } }) : String(index + 1),
-      tag: tagOf(text(chip.lift?.title)),
+      // The tag names the lift; a run-only day names its run, in the run's own stone.
+      tag: tagOf(text(chip.lift?.title)) || (run ? tagOf(text(run.label)) : ""),
+      tag_stone: chip.lift ? "strength" : run ? "endurance" : "strength",
       today: chip.today === true,
       done,
       rest: !stones.length,
@@ -120,6 +132,76 @@
     return { kind, stone: kind === "lift" ? "strength" : "endurance", words, date: isoOf(row.date) };
   }
 
+  /** An in-app link the server named ("/app/horizon/race"); anything else is no link at all. */
+  function hrefOf(value: unknown): string | null {
+    const s = text(value);
+    return /^\/app\/[^\s"'<>\\]*$/.test(s) ? s : null;
+  }
+
+  /** One measured change since the start (the proof band); null without a label or an after. */
+  function proofRow(row: WeekProof): ClientProofRow | null {
+    const label = text(row.label);
+    const after = text(row.after_text);
+    if (!label || !after) return null;
+    const stone = PROOF_STONES.has(text(row.stone)) ? (text(row.stone) as ClientProofRow["stone"]) : "body";
+    const kind = SERIES_KINDS.has(text(row.series_kind)) ? (text(row.series_kind) as ClientProofRow["kind"]) : "line";
+    const raw = Array.isArray(row.series) ? row.series.map(Number) : [];
+    const series = raw.every((v) => Number.isFinite(v)) ? raw.map((v) => Math.max(0, Math.min(1, v))) : [];
+    return {
+      key: text(row.key) || "proof",
+      stone,
+      label,
+      before: text(row.before_text),
+      after,
+      sinceWords: text(row.since_words),
+      series: series.length >= 2 ? series : [],
+      kind,
+      href: hrefOf(row.href),
+    };
+  }
+
+  /** A journey mark as the ahead strip and its rows read it: days out, a window's end, its stone. */
+  function aheadMark(mark: JourneyMark): ClientAheadMark | null {
+    const date = isoOf(mark.date);
+    const label = text(mark.label);
+    const days = Number(mark.days_away);
+    if (!date || !label || !Number.isFinite(days)) return null;
+    const end = isoOf(mark.end_date);
+    // A window's length is geometry for the strip (how long a bar it draws), never a status.
+    const span = end && end > date ? CairnFmt.daysBetween(end, date) : 0;
+    const kind = text(mark.kind).replace(/[^a-z0-9_-]/gi, "") || "milestone";
+    const look = CairnMilestoneRowModel.KINDS[kind];
+    const from = Math.max(0, days);
+    return {
+      kind,
+      stone: look ? look.stone : "endurance",
+      label,
+      short: text(mark.short),
+      date,
+      end_date: Number.isFinite(span) && span > 0 ? end : null,
+      when: text(mark.date_words),
+      days_words: text(mark.days_words),
+      detail: text(mark.detail),
+      days: from,
+      end_days: Number.isFinite(span) && span > 0 ? from + span : null,
+      href: hrefOf(mark.href),
+    };
+  }
+
+  /** The month the furthest mark falls in ("May"), for the ahead strip's far label; "" with none. */
+  function aheadTo(marks: ReadonlyArray<ClientAheadMark>): string {
+    let far: ClientAheadMark | null = null;
+    for (const m of marks) if (!far || (m.end_days ?? m.days) > (far.end_days ?? far.days)) far = m;
+    // A window's month is its end's: the strip runs to where the bar stops.
+    return far ? CairnFmt.date(far.end_date || far.date, { fmt: { month: "short" } }) : "";
+  }
+
+  /** The shape's masthead words: "1 of 5 lifting days · 16.6 mi planned" (the server's two). */
+  function totalsWords(value: unknown): string {
+    const totals = record(value);
+    return [text(totals?.lift_words), text(totals?.run_words)].filter(Boolean).join(" · ");
+  }
+
   /** The journey trail as served, kept only when it has a dated mark to draw toward. */
   function journeyOf(value: unknown): WeekRead["journey"] {
     const j = record(value) as WeekRead["journey"];
@@ -140,6 +222,8 @@
     const today = isoOf(read.today) || "";
     const units = read.units?.distance === "mi" ? "mi" : "km";
     const frame = (record(read.frame) || {}) as unknown as WeekRead["frame"];
+    const journey = journeyOf(read.journey);
+    const ahead = (journey?.marks ?? []).map(aheadMark).filter((m): m is ClientAheadMark => !!m);
     return {
       frame,
       range: text(read.range_words),
@@ -158,8 +242,16 @@
       goals: list(read.goals)
         .map((g) => CairnGoalRowModel.fromWeekRead(g))
         .filter((r): r is ClientGoalRow => !!r),
-      journey: journeyOf(read.journey),
+      journey,
       this_week: read.this_week !== false,
+      proof: list<WeekProof>(read.proof)
+        .map(proofRow)
+        .filter((r): r is ClientProofRow => !!r)
+        .slice(0, PROOF_MAX),
+      ahead,
+      ahead_to: aheadTo(ahead),
+      totals_words: totalsWords(read.totals),
+      sub: text(frame.sub),
     };
   }
 
@@ -170,7 +262,7 @@
     return goal ? CairnGoalRowModel.fromWeekRead(goal) : null;
   }
 
-  const CAIRN_WEEK_MODEL = { landing, shapeDay, weightGoal };
+  const CAIRN_WEEK_MODEL = { landing, shapeDay, weightGoal, hrefOf };
 
   Object.assign(globalThis, { CairnWeekModel: CAIRN_WEEK_MODEL });
 }

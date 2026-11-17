@@ -16,7 +16,7 @@ type HealthMarkersRow = {
   reference?: { low?: unknown; high?: unknown } | null;
   reference_source?: unknown;
   reference_source_url?: unknown;
-  in_optimal?: unknown;
+  in_optimal?: unknown; reading_note?: unknown; // reading_note: blood pressure, how many readings stand behind it
   lab_out_of_range?: unknown; // "out of range" per the LAB, finished by the server (lab-range.ts)
   lab_out_of_range_side?: unknown;
   trend?: { dir?: unknown; span_days?: unknown } | null;
@@ -110,7 +110,7 @@ function labFlagWord(marker: HealthMarkersRow | null | undefined): string {
 // inside the band or when no band judged it. Never the lab flag.
 function offOptimalWord(marker: HealthMarkersRow | null | undefined): string {
   if (marker?.in_optimal !== false) return "";
-  return optimalSideWord(marker) || "outside optimal";
+  return `${optimalSideWord(marker) || "outside optimal"}${marker.reading_note ? `, ${String(marker.reading_note)}` : ""}`;
 }
 
 // A specific, ready-to-send question about this marker for the "ask the coach"

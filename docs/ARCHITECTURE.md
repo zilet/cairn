@@ -8087,8 +8087,8 @@ title and why, so no surface prints asterisks.
 ## Goal reviews (Behind you)
 
 Every FINISHED goal is snapshotted once with deterministic facts, looked back on ONCE by an agent in
-its own words, and frozen. Horizon › Season lists them quietly at the bottom ("Behind you", newest
-first), each opening a detail page (`/app/horizon/behind?id=<id>`). A measure, never a grade: no
+its own words, and frozen. Horizon's own "Behind you" segment lists them quietly (newest first; the
+segment shows only when one exists), each opening a detail page (`/app/horizon/behind?id=<id>`). A measure, never a grade: no
 score, no comparison against the target, never a notification.
 
 **Detection** (`detectGoalReviews`, `src/repo/goal-reviews.ts`; one row per `(kind, ref_key)` in

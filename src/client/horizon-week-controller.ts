@@ -2,44 +2,75 @@
 // Horizon's Week, the controller (docs/IA.md "Horizon landing"): `mount(slot, deps)` reads
 // GET /api/week through the SWR cache — the last-known week paints at once, the
 // revalidated read upgrades it in place only when the JSON changed — and paints the
-// landing (horizon-week-client.ts). A column tap PEEKS the day: the fold under the shape
-// opens and the drill controller (CairnDrill, the "calendar" bundle, loaded by that tap)
-// mounts the day's compact view into it, adds ?peek= to history and ends it
-// with "Open day ›" (the day's page, read under Horizon). Tapping the open column again,
-// its Close, or Back folds it. A row (the day-by-day rows, still open) opens the day's
-// page through `data-open-day` (day-open-client.ts → CairnDrill). "All of the season ›"
-// hands over to the screen. A journey label opens that mark's words under the trail (no
-// repaint); a starter opener hands chat its sentence (state.chatPrefill, the same hand-off
-// the health surfaces use) and switches to Ask — never sent for the athlete. Fetch + paint + delegate only; every word is the read's.
+// landing (horizon-week-client.ts). Beside it, as its own lane, it reads GET /api/team-week
+// (SWR key "horizon:team-week") for the team's seats and link note: they fill their two
+// slots when they land, a failed read simply leaves them out, and the landing never waits.
+//
+// A column tap PEEKS the day: the fold under the shape opens and the drill controller
+// (CairnDrill, the "calendar" bundle, loaded by that tap) mounts the day's compact view
+// into it, adds ?peek= to history and ends it with "Open day ›" (the day's page, read
+// under Horizon). Tapping the open column again, its Close, or Back folds it. A row (the
+// day-by-day rows) opens the day's page through `data-open-day` (day-open-client.ts →
+// CairnDrill). "All of the season ›" / "+N more ›", "Behind you ›" and the changes link
+// hand over to the screen. A starter opener or the link note's chip hands chat its
+// sentence (state.chatPrefill, the same hand-off the health surfaces use) and switches to
+// Ask — never sent for the athlete. Links to a thread's page carry `data-horizon-href`;
+// the Horizon controller routes them. Fetch + paint + delegate only; every word is the read's.
 {
   type Deps = {
     peek(key: string): { data: unknown; fresh: boolean } | null;
     load(path: string, options: { key: string }): Promise<unknown>;
     reducedMotion?(): boolean;
-    /** The Season view's real URL, for the "All of the season ›" link. */
+    /** The Season view's real URL, for "All of the season ›" / "+N more ›". */
     seasonHref?: string;
+    /** Ask › Changes' real URL, for the team's "n changes, each undoable ›". */
+    changesHref?: string;
     /** Every read that paints (the frame and the weight goal ride to the other views). */
     onRead?(read: unknown): void;
     /** The read failed with nothing to show: the screen asks again on the next open. */
     onFail?(): void;
     /** "All of the season ›". */
     onSeason?(): void;
+    /** "Behind you ›" on the proof band's masthead. */
+    onBehind?(): void;
+    /** The team's changes link. */
+    onChanges?(): void;
   };
 
   /** The week's read and its SWR key (under "plan:", so every plan write refreshes it). */
   const WEEK: readonly [string, string] = ["/week", "plan:week-read"];
+  /**
+   * The team's week (the read Today's weekly card draws), under "horizon:" so day writes refresh it.
+   * `drain=0`: Horizon shows no insights, so it must not use up the day's backlog drain.
+   */
+  const TEAM: readonly [string, string] = ["/team-week?drain=0", "horizon:team-week"];
 
   function modified(event: Event): boolean {
     const e = event as MouseEvent;
     return !!(e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || (typeof e.button === "number" && e.button !== 0));
   }
 
+  /** Hand chat a first sentence and open Ask; the athlete sends it, never this. */
+  function prefillChat(raw: string | null): void {
+    const prompt = String(raw || "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!prompt) return;
+    const g = globalThis as unknown as {
+      state?: { chatPrefill?: string | null };
+      activateTab?: (name: string) => unknown;
+    };
+    if (g.state) g.state.chatPrefill = prompt.slice(0, 600);
+    if (typeof g.activateTab === "function") g.activateTab("chat");
+  }
+
   function mountHorizonWeek(slot: Element, deps: Deps): () => void {
     let live = true;
     let lastRaw = "";
     let model: ClientWeekLanding | null = null;
+    let team: ClientTeamSeats | null = null;
+    let teamRaw = "";
     let selected: string | null = null;
-    let mark = 0;
     let detailTeardown: (() => void) | null = null;
     const host = slot as HTMLElement;
     const q = <T extends Element = HTMLElement>(sel: string): T | null => host.querySelector<T>(sel);
@@ -127,9 +158,32 @@
       detailTeardown = null;
       selected = null;
       const calm = typeof deps.reducedMotion === "function" ? deps.reducedMotion() : false;
-      if (!next.journey || mark >= next.journey.marks.length) mark = 0;
-      host.innerHTML = CairnHorizonWeek.landingHtml(next, { enter: enter && !calm, seasonHref: deps.seasonHref, mark });
+      host.innerHTML = CairnHorizonWeek.landingHtml(next, {
+        enter: enter && !calm,
+        seasonHref: deps.seasonHref,
+        changesHref: deps.changesHref,
+        team,
+      });
       if (keep && next.days.some((d) => d.date === keep)) openDay(keep);
+    }
+
+    /** The team's read landed: fill its two slots in place (the landing is not repainted). */
+    function paintTeam(value: unknown): void {
+      if (!live || !host.isConnected || typeof CairnTeamSeats === "undefined") return;
+      let raw = "";
+      try {
+        raw = JSON.stringify(value) ?? "";
+      } catch {}
+      if (raw && raw === teamRaw) return;
+      const next = CairnTeamSeats.model(value);
+      // A read that says nothing never clears seats already on screen.
+      if (!next && team) return;
+      teamRaw = raw;
+      team = next;
+      const linkSlot = q("[data-hwk-link-slot]");
+      if (linkSlot) linkSlot.innerHTML = CairnHorizonWeek.linkNoteHtml(team);
+      const teamSlot = q("[data-hwk-team-slot]");
+      if (teamSlot) teamSlot.innerHTML = CairnHorizonWeek.teamHtml(team, deps.changesHref || "");
     }
 
     const teardown = CairnUiActions.mount(host, "hwk", ({ delegate }) => {
@@ -140,34 +194,18 @@
           if (selected === date) foldDay();
           else openDay(date);
         },
-        "hjour-mark": (el) => {
-          const i = Number(el.getAttribute("data-hjour-mark"));
-          const marks = model?.journey?.marks ?? [];
-          if (!Number.isInteger(i) || !marks[i] || typeof CairnJourneyTrail === "undefined") return;
-          mark = i;
-          host.querySelectorAll<HTMLElement>("[data-hjour-mark]").forEach((b) => {
-            b.setAttribute("aria-pressed", b === el ? "true" : "false");
-          });
-          host.querySelectorAll<HTMLElement>("[data-hjour-node]").forEach((n) => {
-            n.classList.toggle("is-on", n.getAttribute("data-hjour-node") === String(i));
-          });
-          const detail = q("[data-hjour-detail]");
-          if (detail) detail.innerHTML = CairnJourneyTrail.detailHtml(marks[i]);
-        },
-        "hjour-ask": (el) => {
-          const prompt = (el.getAttribute("data-hjour-ask") || "").replace(/\s+/g, " ").trim();
-          if (!prompt) return;
-          const g = globalThis as unknown as {
-            state?: { chatPrefill?: string | null };
-            activateTab?: (name: string) => unknown;
-          };
-          if (g.state) g.state.chatPrefill = prompt.slice(0, 600);
-          if (typeof g.activateTab === "function") g.activateTab("chat");
-        },
+        "hjour-ask": (el) => prefillChat(el.getAttribute("data-hjour-ask")),
+        "hwk-ask": (el) => prefillChat(el.getAttribute("data-hwk-ask")),
         "hwk-season": (el, event) => {
           if (modified(event)) return;
           event.preventDefault();
           deps.onSeason?.();
+        },
+        "hwk-behind": () => deps.onBehind?.(),
+        "hwk-changes": (el, event) => {
+          if (modified(event) || !deps.onChanges) return;
+          event.preventDefault();
+          deps.onChanges();
         },
       });
       return () => {
@@ -180,6 +218,13 @@
       };
     });
 
+    const warmTeam = deps.peek(TEAM[1]);
+    if (warmTeam && typeof CairnTeamSeats !== "undefined") {
+      team = CairnTeamSeats.model(warmTeam.data);
+      try {
+        teamRaw = JSON.stringify(warmTeam.data) ?? "";
+      } catch {}
+    }
     const warm = deps.peek(WEEK[1]);
     if (warm && CairnWeekModel.landing(warm.data)) paint(warm.data, false);
     else host.innerHTML = CairnHorizonWeek.skeletonHtml();
@@ -189,10 +234,14 @@
         (value) => paint(value, !warm),
         () => paint(null, false)
       );
+    // The team lane fills on its own; a failed read leaves its sections out.
+    Promise.resolve()
+      .then(() => deps.load(TEAM[0], { key: TEAM[1] }))
+      .then(paintTeam, () => {});
     return teardown;
   }
 
-  const CAIRN_HORIZON_WEEK_CONTROLLER = { mount: mountHorizonWeek, WEEK };
+  const CAIRN_HORIZON_WEEK_CONTROLLER = { mount: mountHorizonWeek, WEEK, TEAM };
 
   Object.assign(globalThis, { CairnHorizonWeekController: CAIRN_HORIZON_WEEK_CONTROLLER });
 }

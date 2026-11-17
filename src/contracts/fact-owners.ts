@@ -58,7 +58,7 @@ export const FACT_OWNERS: Readonly<Record<FactKey, FactOwner>> = {
     owner: "horizon.frame-hero",
     screen: "horizon",
     glances: ["today.horizon-glance", "train.focus-headline"],
-    says: "days to the race and the week's stage (weekFrameLine headline + line)",
+    says: "the week's frame: the countdown inside eight weeks of a race, else the week's purpose, and its stage (weekFrameLine headline + sub/line)",
   },
   weight_trend: {
     owner: "body.goal-pace",

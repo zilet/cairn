@@ -71,7 +71,7 @@ export function liftMoveOf(
 ): TodayDigestMove | null {
   const exercise = String(change.exercise ?? "").trim();
   if (!exercise) return null;
-  const reason = athleteLine(change.reason, 90);
+  let reason = athleteLine(change.reason, 90);
   if (change.change === "added") {
     return { exercise, direction: "added", from_text: null, to_text: doseText(change), reason };
   }
@@ -98,6 +98,10 @@ export function liftMoveOf(
       direction = sAfter > sBefore ? "up" : "down";
       from = `${sBefore} s`;
       to = `${sAfter} s`;
+      // The reason may state a step ("add 4s") the apply clamp later widened to catch the
+      // plan up to the log: a stated step that is not the move on the card is dropped.
+      const stated = reason?.match(/\b(?:add|take|stretch(?: it)? by|by)\s+(\d+)\s*s\b/i);
+      if (stated && Number(stated[1]) !== Math.abs(sAfter - sBefore)) reason = null;
     } else if (lowAfter !== lowBefore || highAfter !== highBefore) {
       const step = (highAfter ?? lowAfter ?? 0) - (highBefore ?? lowBefore ?? 0);
       const sameWidth =

@@ -903,7 +903,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/team-week` | The team's-week digest — the deterministic "here's what your team did this week" read that sits under the agentic weekly sentence (pull-only; words, no scores). This is the human-facing surface, so it MAY drain the oldest 1-2 unseen backlog insights (flipping new→seen) so nothing rots unseen. |
+| GET | `/api/team-week` |  |
 
 ## `/telemetry`
 

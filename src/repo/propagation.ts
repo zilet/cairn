@@ -26,6 +26,7 @@ import {
   withFeedback,
 } from "./directive-feedback.js";
 import { getAppState, setAppState } from "./app-state.js";
+import { type BloodPressureRead, bloodPressureContext, bloodPressureRead } from "./blood-pressure-read.js";
 import { buildSafetyMarkerContext, safetyGate, verifyCitation } from "./evidence.js";
 import {
   type MarkerForecast,
@@ -47,6 +48,7 @@ import {
 } from "./marker-validity.js";
 import { invalidateDayRead } from "./intelligence.js";
 import { canonicalMarker } from "./marker-canon.js";
+import { isSupersededMarker } from "./doctor-loop-derived.js";
 import { maybeRequestMealRefreshForDirectives } from "./meal-directive-trigger.js";
 import { getProfile, listWeight } from "./profile.js";
 import { bodyFatEstimate } from "./body-fat-estimate.js";
@@ -61,6 +63,7 @@ import {
   type ZoneProfile,
   MARKER_MAPPINGS,
   WEARABLE_TREND_ZONES,
+  belowOptimalFloor,
   classifyDirectiveIntent,
   markerGroup,
   markerSide,
@@ -69,6 +72,7 @@ import {
   optimalDistance,
   presentGroups,
   wearableTrendWindow,
+  withinOptimal,
 } from "./propagation-data.js";
 import { copyDeep, requestMemo } from "./request-memo.js";
 
@@ -115,6 +119,8 @@ export {
   WEARABLE_TREND_WINDOW_DAYS,
   WEARABLE_TREND_ZONES,
   wearableTrendWindow,
+  belowOptimalFloor,
+  withinOptimal,
 } from "./propagation-data.js";
 export type { DirectiveIntent, OptimalZone, WearableTrendWindow, ZoneProfile } from "./propagation-data.js";
 // The per-marker temporal-validity classification (how long a reading keeps describing
@@ -375,39 +381,57 @@ export function prioritizeMarkers(): ReturnType<typeof prioritizeMarkersRead> {
 }
 
 function prioritizeMarkersRead() {
-  const { markers: labMarkers } = getMarkerHistory();
+  const { markers: history } = getMarkerHistory();
+  // A series another method of the same analyte has measured more recently (a June
+  // calculated LDL-C beside a November direct LDL — MEASURE_EQUIVALENTS) is history, not
+  // the current reading: it leaves the ranked list every current read walks (the health
+  // focus, the coaching focus, directive derivation, standing, risk context), and rides
+  // in `superseded` (enriched like any row) so a history surface — the clinical report,
+  // the export — still shows that method's own series. Its series stays whole in
+  // getMarkerHistory.
+  const labMarkers = history.filter((m: any) => !isSupersededMarker(m));
+  const supersededRaw = history.filter((m: any) => isSupersededMarker(m));
   // Fold in wearable fitness markers (VO2max/RHR/HRV) — a LAB reading of the same
   // marker always wins (a blood/test draw supersedes a device estimate). Dedup on
   // the canonical zone label so a lab + wearable VO2max don't BOTH come through.
   const haveKey = new Set(labMarkers.map((m: any) => foldIdentity(m)));
   const wearable = wearableFitnessMarkers().filter((m) => !haveKey.has(foldIdentity(m)));
-  const markers = [...labMarkers, ...wearable];
+  const markers = [...labMarkers, ...wearable, ...supersededRaw];
   const profile = zoneProfile(); // personalizes the sex/age-dependent optimal bands
   const directivesByMarker = activeDirectivesByMarker();
   let flagged_count = 0;
   const enriched = markers.map((m: any) => {
+    const superseded = isSupersededMarker(m);
     const flagged = m?.latest?.flag === "low" || m?.latest?.flag === "high";
-    if (flagged) flagged_count++;
+    if (flagged && !superseded) flagged_count++;
     const z = markerZone(m, profile);
     // The one line a marker row shows when it's shaping training/meals/watch
     // right now: the directive's OWN athlete-facing text, never re-derived here.
-    const directiveHit =
-      directivesByMarker.get(String(m?.name ?? "").toLowerCase().trim()) ||
-      (z ? directivesByMarker.get(String(z.label).toLowerCase().trim()) : undefined);
+    // A superseded series is not what any directive is about any more.
+    const directiveHit = superseded
+      ? undefined
+      : directivesByMarker.get(String(m?.name ?? "").toLowerCase().trim()) ||
+        (z ? directivesByMarker.get(String(z.label).toLowerCase().trim()) : undefined);
     const active_directive = directiveHit ? String(directiveHit.directive || "").trim() || null : null;
     const numericVal = typeof m?.latest?.value === "number" ? m.latest.value : Number(m?.latest?.value);
     const hasNum = Number.isFinite(numericVal);
     const comparable = m?.latest?.unit_mismatch !== true;
     let distance = 0;
     let in_optimal: boolean | null = null;
+    // Under a meaningful low edge (a 55 diastolic under 60–80): not in optimal, yet no
+    // distance the worse way — "on the low side", never ranked as a drift up the list.
+    let below_optimal_floor = false;
     let optimal: { low: number; high: number; dir: string } | null = null;
     if (z && comparable) {
       optimal = { low: z.optimal[0], high: z.optimal[1], dir: z.dir };
       if (hasNum) {
         distance = optimalDistance(numericVal, z);
-        in_optimal = distance === 0;
+        below_optimal_floor = belowOptimalFloor(numericVal, z);
+        in_optimal = withinOptimal(numericVal, z);
       }
     }
+    const bpRead = z && comparable && !superseded && in_optimal === false ? bloodPressureReadFor(z.label, markers, profile) : null;
+    const reading_note = bpRead && !bpRead.settled ? bpRead.note : null;
     const actionable = z ? z.actionable : false;
     // TRAJECTORY boost: a marker HEADING the wrong way matters more than one
     // sitting stably borderline. The forecast (from getMarkerHistory, vs the
@@ -428,7 +452,19 @@ function prioritizeMarkersRead() {
     // have a lever for it, a floor from the lab's own flag, and the trajectory
     // nudge so a marker drifting the wrong way outranks a stable borderline one.
     const impact_score = Math.max(0, distance * (actionable ? 1 : 0.55) + (flagged ? 0.5 : 0) + trajectory);
-    return { ...m, optimal, distance, in_optimal, actionable, impact_score, active_directive };
+    return {
+      ...m,
+      optimal,
+      distance,
+      in_optimal,
+      ...(below_optimal_floor ? { below_optimal_floor: true } : {}),
+      // Blood pressure outside its band says how many readings stand behind it
+      // ("one reading so far"), so a snapshot never reads as a standing level.
+      ...(reading_note ? { reading_note } : {}),
+      actionable,
+      impact_score,
+      active_directive,
+    };
   });
 
   enriched.sort((a: any, b: any) => {
@@ -445,8 +481,10 @@ function prioritizeMarkersRead() {
   // Strip the INTERNAL impact_score before it crosses the API/MCP boundary — it's
   // an ordering signal only, NEVER a user-facing grade (constitution: no scores).
   // Mirrors the eta_weeks→eta_text discipline used by getMarkerHistory.
-  const publicMarkers = enriched.map(({ impact_score, ...rest }: any) => rest);
-  return { flagged_count, markers: publicMarkers, groups: presentGroups(publicMarkers) };
+  const publicRows = enriched.map(({ impact_score, ...rest }: any) => rest);
+  const publicMarkers = publicRows.filter((m: any) => !isSupersededMarker(m));
+  const superseded = publicRows.filter((m: any) => isSupersededMarker(m));
+  return { flagged_count, markers: publicMarkers, groups: presentGroups(publicMarkers), superseded };
 }
 
 // ---------- the propagation engine: derive cross-domain directives (T4) ----------
@@ -761,7 +799,13 @@ function ageFold(markers: any[], offMarkers: Map<string, MarkerContext>, firing:
 // sex/age zone profile, active meds, a counter bumped on every user Done/Dismiss, and the
 // reading-AGE fold above. When it's unchanged since the last pass, deriveDirectives can
 // skip the whole thing.
-function deriveSignature(markers: any[], profile: ZoneProfile | null, meds: any[], ages: AgeFoldEntry[]): string {
+function deriveSignature(
+  markers: any[],
+  profile: ZoneProfile | null,
+  meds: any[],
+  ages: AgeFoldEntry[],
+  context: string[] = []
+): string {
   const snap = (Array.isArray(markers) ? markers : []).map((m) => ({
     k: canonicalMarker(String(m?.name ?? "")).key,
     v: m?.latest?.value ?? null,
@@ -782,6 +826,9 @@ function deriveSignature(markers: any[], profile: ZoneProfile | null, meds: any[
     meds: (Array.isArray(meds) ? meds : []).map((x: any) => String(x?.label ?? x?.name ?? x ?? "")).sort(),
     fb: directiveFeedbackCounter(),
     ages,
+    // Lines a derive composed from context OUTSIDE the marker snapshot (a blood-pressure
+    // read's symptoms, weight and training), so a change there re-derives too.
+    ...(context.length ? { context } : {}),
   });
 }
 
@@ -867,6 +914,16 @@ export function deriveDirectives() {
     ctx.offZones = offZones;
     ctx.companions = companions;
   }
+  // A blood-pressure reading is read with everything else known about the person (how
+  // many separate readings, weight, training, symptoms, bloods, medication) before it
+  // says anything — one reading is a snapshot, never a standing condition.
+  const bpLines: string[] = [];
+  for (const ctx of offMarkers.values()) {
+    const read = bloodPressureReadFor(ctx.zone.label, markers, profile, offMarkers, meds);
+    if (!read) continue;
+    ctx.bp = read;
+    bpLines.push(read.line);
+  }
 
   // 2. Which clusters FIRE, and which member zones a firing cluster CONSUMES — a cluster
   //    that folds its members into one synthesized read (the essential-fatty-acid story)
@@ -881,7 +938,7 @@ export function deriveDirectives() {
   // Short-circuit: nothing that drives derivation changed since the last pass — including
   // the reading-age fold, so a directive that crosses its class's horizon purely by the
   // passage of time re-derives instead of being skipped.
-  const sig = deriveSignature(markers, profile, meds, ageFold(markers, offMarkers, firing));
+  const sig = deriveSignature(markers, profile, meds, ageFold(markers, offMarkers, firing), bpLines);
   if (getAppState(DERIVE_SIG_KEY) === sig) {
     return { source: SOURCE, derived: 0, directives: listActiveDirectives() };
   }
@@ -1013,6 +1070,65 @@ export function setDirectiveStatusByUser(id: number, status: string) {
     return getDirective(id) ?? updated;
   }
   return updated;
+}
+
+// ---------- blood pressure: one read, with the whole picture ----------
+const BP_COMPONENTS: Record<string, { component: "systolic" | "diastolic"; pair: string }> = {
+  "Systolic BP": { component: "systolic", pair: "Diastolic BP" },
+  "Diastolic BP": { component: "diastolic", pair: "Systolic BP" },
+};
+// Blood findings that can travel with low pressure, and the side that counts.
+const LOW_BP_BLOOD: Array<{ label: string; side: "low" | "high" }> = [
+  { label: "Hemoglobin", side: "low" },
+  { label: "Sodium", side: "low" },
+  { label: "TSH", side: "high" },
+  { label: "Fasting glucose", side: "low" },
+];
+
+function markerPoints(m: any): Array<{ date: string; value: number }> {
+  return (Array.isArray(m?.points) ? m.points : [])
+    .map((p: any) => ({ date: String(p?.date ?? "").slice(0, 10), value: Number(p?.value) }))
+    .filter((p: any) => p.date && Number.isFinite(p.value));
+}
+
+/**
+ * The blood-pressure read for one component's marker (null for any other zone, or a
+ * reading inside its band). `offMarkers` / `meds` are optional: a caller without the
+ * directive picture (the marker list) still gets the reading count and the log context.
+ */
+function bloodPressureReadFor(
+  zoneLabel: string,
+  markers: any[],
+  profile: ZoneProfile | null,
+  offMarkers?: Map<string, MarkerContext>,
+  meds: any[] = []
+): BloodPressureRead | null {
+  const spec = BP_COMPONENTS[zoneLabel];
+  if (!spec) return null;
+  const find = (label: string) =>
+    (Array.isArray(markers) ? markers : []).find((m) => !isSupersededMarker(m) && markerZone(m, profile)?.label === label);
+  const own = find(zoneLabel);
+  const zone = own ? markerZone(own, profile) : null;
+  if (!own || !zone) return null;
+  const today = localDateISO();
+  try {
+    return bloodPressureRead({
+      component: spec.component,
+      points: markerPoints(own),
+      pair: markerPoints(find(spec.pair)),
+      band: zone.optimal,
+      today,
+      context: (anchor) => {
+        const blood = offMarkers
+          ? LOW_BP_BLOOD.filter((b) => offMarkers.get(b.label)?.side === b.side).map((b) => b.label)
+          : [];
+        const med = meds.length ? medsTreatingZone(zoneLabel, "high", meds) : null;
+        return bloodPressureContext(today, anchor, { blood, medication: med?.label ?? null });
+      },
+    });
+  } catch {
+    return null;
+  }
 }
 
 // The COMPLETE off-optimal picture: one MarkerContext per optimal-zone label (the
