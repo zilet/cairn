@@ -72,7 +72,7 @@
     const since = row.sinceWords ? `<small class="proof-since">${escHtml(row.sinceWords)}</small>` : "";
     const ba = row.before
       ? `${escHtml(row.before)}<span aria-hidden="true"> → </span><span class="sr-only"> to </span><b class="proof-after">${escHtml(row.after)}</b>`
-      : `<b class="proof-after">${escHtml(row.after)}</b>`;
+      : `<b class="proof-after is-lone">${escHtml(row.after)}</b>`;
     const inner = `<span class="proof-name"><span class="proof-dot" aria-hidden="true"></span><span class="proof-label">${escHtml(row.label)}${since}</span></span>
       <span class="proof-pic">${seriesSvg(row.series, row.kind)}</span>
       <span class="proof-ba num">${ba}</span>${row.href ? `<span class="proof-chev" aria-hidden="true">›</span>` : ""}`;

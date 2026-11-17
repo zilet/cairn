@@ -263,6 +263,7 @@ a.proof-link:active{transform:var(--press-lg)}
 .proof-col.is-last{fill:var(--cd)}
 .proof-ba{min-width:0;max-width:13rem;font-size:var(--text-sm);line-height:var(--leading-snug);color:var(--ink2);text-align:right;text-wrap:balance}
 .proof-after{font-family:var(--font-display);font-weight:var(--weight-regular);font-size:var(--text-lead);color:var(--ink);white-space:nowrap}
+.proof-after.is-lone{white-space:normal}
 .proof-chev,.goalrow-chev{color:var(--muted);font-family:var(--font-ui);font-size:var(--text-lg);line-height:var(--leading-none)}
 .proof-band.is-drawing .proof-svg{animation:proof-draw var(--dur-3) var(--ease) both}
 @keyframes proof-draw{from{clip-path:inset(0 100% 0 0)}
