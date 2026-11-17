@@ -33,6 +33,7 @@ const MODULES = [
   "milestone-row-model",
   "milestone-row-client",
   "goal-row-model",
+  "goal-lifts-client",
   "goal-row-client",
   "frame-line-client",
   "week-model",

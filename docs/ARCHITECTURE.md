@@ -6587,7 +6587,11 @@ sentence, totals in the athlete's units (this week's planned running is the race
 planned — the one figure every surface prints), a `DayChip` per day with its planned dose as a
 WORD and a relative bar height (a drawing aid, never shown), ≤2 still-open sessions, the next
 milestones beyond the week and the compact goals (the race estimate WITH its time, the weight
-trend, the anchor lift).
+trend, the lift goals). One live lift goal is its own strength row; two or more are ONE strength
+row whose `lifts` carry every lift in the board's order, each built by the same `strengthThread`
+(the journey's own trend call, no threshold of its own), the row's `move_words` counting them by
+direction. Proof (this week only): a race just run, the weight journey unless the weight goal row
+already draws its track, then up to two lifts whose working load rose, the anchor lift first.
 
 **One row per draw.** `labDraws()` (`src/repo/lab-draws.ts`, `GET /api/health-docs/draws`,
 `list_lab_draws`) is the labs-and-scans list as (kind, date) draws — an upload and the panels split

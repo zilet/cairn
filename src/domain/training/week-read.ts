@@ -14,9 +14,12 @@
 //   - the goals' threads (start, four weeks ago, now, goal, direction): the same board
 //     rows, the strength journeys' own "now" and trend (strength-objectives.ts), the
 //     race build's estimate trend and the weight trend's one verdict;
+//     Two or more live lift goals are ONE strength row that lists every lift, each the
+//     same thread a single strength row shows;
 //   - proof: a race just run (race-recovery.ts latestFinishedRace and its goal review),
-//     the weight journey's start (today-path.ts weightStart) and the anchor lift's
-//     working load (working-load-history.ts over sessionWorkingLoad).
+//     the weight journey's start (today-path.ts weightStart; left out beside a weight goal
+//     row that draws its track) and up to two lifts' working loads, the anchor lift
+//     first (working-load-history.ts over sessionWorkingLoad).
 //
 // Every string a person reads is in the athlete's units (athleteUnits → display-words)
 // and names its dates in words. The load shape is a dose WORD and a relative height for
@@ -30,6 +33,7 @@ import type {
   WeekRead,
   WeekReadGoal,
   WeekReadGoalDirection,
+  WeekReadGoalLift,
   WeekReadGoalTrack,
   WeekReadMilestone,
   WeekReadMilestoneKind,
@@ -38,6 +42,7 @@ import type {
   WeekReadTotals,
   WeightTrendRead,
 } from "../../contracts/week-read.js";
+import { WEEK_GOAL_LIFTS_MAX } from "../../contracts/week-read.js";
 import { addDaysISO, daysBetweenISO, isoDate, mondayOf } from "../../lib/dates.js";
 import { round1 } from "../../lib/numbers.js";
 import {
@@ -692,6 +697,81 @@ function strengthThread(
   };
 }
 
+/** The strength row's count words, in a fixed order; a group of none is left out. */
+const LIFT_GROUPS: ReadonlyArray<[WeekReadGoalDirection, string]> = [
+  ["toward", "rising"],
+  ["holding", "holding"],
+  ["back", "drifting back"],
+  ["reached", "reached"],
+];
+
+/**
+ * The lift goals counted by their journeys' own calls: "Two rising, one holding, two
+ * drifting back"; one group holding every lift reads "All five rising" ("Both rising" for two).
+ * A lift whose journey makes no call yet is in no group. Null when none makes a call.
+ */
+export function liftCountWords(directions: ReadonlyArray<WeekReadGoalDirection | null>): string | null {
+  const parts = LIFT_GROUPS.map(([dir, word]) => [directions.filter((d) => d === dir).length, word] as const).filter(
+    ([n]) => n > 0
+  );
+  if (!parts.length) return null;
+  if (parts.length === 1 && parts[0][0] === directions.length)
+    return directions.length === 2 ? `Both ${parts[0][1]}` : `All ${numberWord(directions.length)} ${parts[0][1]}`;
+  return cap(parts.map(([n, word]) => `${numberWord(n)} ${word}`).join(", "));
+}
+
+/**
+ * Two or more live lift goals: ONE strength row that names every one of them (in the
+ * board's order) instead of an arbitrary first. Each lift is the very thread the single
+ * row would show (strengthThread): its now, track, direction and move words.
+ */
+function strengthGoalOfMany(
+  rows: ReadonlyArray<TodayPath["board"][number]>,
+  ctx: { journeys: StrengthJourney[]; today: string; units: AthleteUnits }
+): WeekReadGoal {
+  // The count words and "N lifts" speak only of the lifts the row lists, so they always agree.
+  const lifts: WeekReadGoalLift[] = rows.slice(0, WEEK_GOAL_LIFTS_MAX).map((row) => {
+    const journey = ctx.journeys.find((j) => strengthRowId(j) === row.id) ?? null;
+    const thread = safe<Partial<GoalThread>>(() => strengthThread(row, journey, ctx.today, ctx.units), {});
+    return {
+      id: row.id,
+      label: row.label,
+      now_text: row.now_text,
+      goal_text: row.goal_text ?? null,
+      track: thread.track ?? null,
+      direction: thread.direction ?? null,
+      direction_words: thread.direction_words ?? null,
+      move_words: thread.move_words ?? null,
+    };
+  });
+  const count = liftCountWords(lifts.map((l) => l.direction));
+  const total = cap(numberWord(lifts.length));
+  // "Three lift goals: one rising, …"; one group holding them all: "Three lift goals, all rising."
+  const whole = count?.match(/^(?:All \S+|Both) (.+)$/);
+  const line = !count
+    ? `${total} lift goals.`
+    : whole
+      ? `${total} lift goals, ${lifts.length === 2 ? "both" : "all"} ${whole[1]}.`
+      : `${total} lift goals: ${count[0].toLowerCase()}${count.slice(1)}.`;
+  return {
+    key: "strength",
+    label: "Strength",
+    now_text: `${lifts.length} lifts`,
+    goal_text: null,
+    progress: null,
+    line,
+    id: "strength",
+    start_text: null,
+    goal_words: null,
+    track: null,
+    direction: null,
+    direction_words: null,
+    move_words: count,
+    href: WEEK_HREFS.program,
+    lifts,
+  };
+}
+
 function goalsOf(
   path: TodayPath | null,
   trend: WeightTrendRead | null,
@@ -736,8 +816,11 @@ function goalsOf(
       ),
     });
   }
-  const strength = board.find((r) => r.key === "strength");
-  if (strength) {
+  const strengthRows = board.filter((r) => r.key === "strength");
+  // Two or more lift goals: one row that names them all; one: that lift's own thread.
+  const strength = strengthRows.length === 1 ? strengthRows[0] : null;
+  if (strengthRows.length >= 2) out.push(strengthGoalOfMany(strengthRows, ctx));
+  else if (strength) {
     const journey = ctx.journeys.find((j) => strengthRowId(j) === strength.id) ?? null;
     out.push({
       key: "strength",
@@ -865,18 +948,20 @@ function weightProof(path: TodayPath, today: string, units: AthleteUnits): WeekR
   };
 }
 
+/** The most strength rows the proof carries: the anchor lift, then the next lift that rose. */
+const STRENGTH_PROOF_MAX = 2;
+
 /**
- * The anchor lift's working load (the ONE definition, sessionWorkingLoad) from the
- * objective's start to its latest session — only when it rose. Assisted or bodyweight
- * work is never spoken here (negative = assist: the load words would lie).
+ * A lift's working load (the ONE definition, sessionWorkingLoad) from the objective's
+ * start to its latest session — only when it rose. Assisted or bodyweight work is never
+ * spoken here (negative = assist: the load words would lie).
  */
 function strengthProof(
-  path: TodayPath,
+  exercise: string | null | undefined,
   journeys: StrengthJourney[],
   today: string,
   units: AthleteUnits
 ): WeekReadProof | null {
-  const exercise = path.anchor?.exercise;
   if (!exercise) return null;
   const journey = journeys.find((j) => j.objective?.exercise === exercise) ?? null;
   const since = journey?.objective?.baseline_date ?? addDaysISO(today, -182) ?? today;
@@ -899,17 +984,47 @@ function strengthProof(
   };
 }
 
-/** This week's proof: a race just run first, then the weight journey, then the anchor lift. At most three. */
-function proofOf(
-  path: TodayPath | null,
+/**
+ * Up to STRENGTH_PROOF_MAX lifts whose working load rose: the anchor lift first, then the
+ * live journeys in the board's order.
+ */
+function strengthProofs(
+  path: TodayPath,
   journeys: StrengthJourney[],
   today: string,
   units: AthleteUnits
 ): WeekReadProof[] {
+  const anchor = path.anchor?.exercise ?? null;
+  const rest = (path.board ?? [])
+    .filter((r) => r.key === "strength")
+    .map((r) => journeys.find((j) => strengthRowId(j) === r.id)?.objective?.exercise ?? null)
+    .filter((exercise): exercise is string => !!exercise && exercise !== anchor);
+  const out: WeekReadProof[] = [];
+  for (const exercise of [anchor, ...rest]) {
+    if (out.length >= STRENGTH_PROOF_MAX) break;
+    const row = safe(() => strengthProof(exercise, journeys, today, units), null);
+    if (row) out.push(row);
+  }
+  return out;
+}
+
+/**
+ * This week's proof: a race just run first, then the weight journey, then up to two lifts
+ * that rose. At most three. The weight journey is left out beside a weight goal row that
+ * draws its track: that row already shows its start, now and goal.
+ */
+export function proofOf(
+  path: TodayPath | null,
+  journeys: StrengthJourney[],
+  today: string,
+  units: AthleteUnits,
+  goals: readonly WeekReadGoal[] = []
+): WeekReadProof[] {
+  const weightOnGoals = goals.some((g) => g.key === "weight" && g.track != null);
   const rows = [
     safe(() => raceProof(today, units), null),
-    path ? safe(() => weightProof(path, today, units), null) : null,
-    path ? safe(() => strengthProof(path, journeys, today, units), null) : null,
+    path && !weightOnGoals ? safe(() => weightProof(path, today, units), null) : null,
+    ...(path ? safe(() => strengthProofs(path, journeys, today, units), [] as WeekReadProof[]) : []),
   ];
   return rows.filter((r): r is WeekReadProof => !!r).slice(0, PROOF_MAX);
 }
@@ -1223,6 +1338,8 @@ export function weekRead(start?: string, opts: { today?: string; build?: RaceBui
       : null;
   const sub = frame.lead === "purpose" ? [count, frame.sub].filter(Boolean).join(" ") || null : frame.sub;
 
+  const goals = goalsOf(path, trend, { build, journeys, today, units });
+
   return {
     as_of: asOf,
     today,
@@ -1251,8 +1368,8 @@ export function weekRead(start?: string, opts: { today?: string; build?: RaceBui
     layout_note: week && !week.layout.clean ? week.layout.suggestion : null,
     still_open: stillOpen,
     next_milestones: milestonesBeyond(path, weekEnd),
-    goals: goalsOf(path, trend, { build, journeys, today, units }),
-    proof: thisWeek ? safe(() => proofOf(path, journeys, today, units), []) : [],
+    goals,
+    proof: thisWeek ? safe(() => proofOf(path, journeys, today, units, goals), []) : [],
     journey: thisWeek ? safe(() => journeyOf(path, today, build?.finished ?? null), null) : null,
     weight_trend: trend,
   };

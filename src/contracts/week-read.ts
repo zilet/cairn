@@ -169,7 +169,7 @@ export interface WeekReadGoalTrack {
 
 export type WeekReadGoalDirection = "toward" | "holding" | "back" | "reached";
 
-/** One goal, compact: the race estimate WITH its time, the weight trend, the anchor lift. */
+/** One goal, compact: the race estimate WITH its time, the weight trend, the lift goals. */
 export interface WeekReadGoal {
   key: "race" | "weight" | "strength";
   /** "Half marathon", "Weight", "Deadlift". */
@@ -199,7 +199,39 @@ export interface WeekReadGoal {
   move_words?: string | null;
   /** The thread's depth: the race page, the goal line, the lift's program page; null when it has none. */
   href?: string | null;
+  /**
+   * The strength row only, and only when the athlete holds TWO OR MORE active lift goals:
+   * the first WEEK_GOAL_LIFTS_MAX of them in the board's order (most movement this month first),
+   * so no lift goal is hidden behind an arbitrary pick; the count words cover exactly the lifts listed. The row itself then reads
+   * label "Strength", now_text "5 lifts", move_words the count by direction
+   * ("Two rising, one holding, two drifting back"), track null and direction null. With one
+   * lift goal the row stays that lift's own thread and `lifts` is absent.
+   */
+  lifts?: WeekReadGoalLift[];
 }
+
+/** One lift goal inside the strength row: its own small thread. */
+export interface WeekReadGoalLift {
+  /** "strength:front squat". */
+  id: string;
+  /** "Front Squat". */
+  label: string;
+  /** The lift's one "now" (the capacity envelope): "150 lb". */
+  now_text: string;
+  /** "200 lb"; null with no target. */
+  goal_text: string | null;
+  /** start / four weeks ago / now / goal, as on a goal row; null when undrawable. */
+  track: WeekReadGoalTrack | null;
+  /** The journey's own trend call, in the goal row's vocabulary; null when unreadable. */
+  direction: WeekReadGoalDirection | null;
+  /** "Moving toward" / "Holding" / "Drifting back" / "Reached". */
+  direction_words: string | null;
+  /** "1.2 lb a week up"; null when flat or unreadable. */
+  move_words: string | null;
+}
+
+/** The most lift goals the strength row lists. */
+export const WEEK_GOAL_LIFTS_MAX = 6;
 
 /**
  * Proof: what has measurably changed since the athlete started (a measure before and after,
@@ -207,6 +239,7 @@ export interface WeekReadGoal {
  * reflection window lasts (RACE_PROOF_DAYS).
  */
 export interface WeekReadProof {
+  /** The row's kind (and its stone class), not a unique id: two lifts can both be "strength". */
   key: "weight" | "strength" | "race_done" | "race" | "running";
   stone: "body" | "strength" | "endurance";
   /** "Weight", "Bench press", "Running". */

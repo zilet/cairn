@@ -7423,6 +7423,24 @@ declare global {
     move_words: string;
     /** The thread's page ("/app/…"); null with none. */
     href: string | null;
+    /** The strength row's lift goals (two or more), each a mini thread; empty otherwise. */
+    lifts: ClientGoalLift[];
+  };
+  /** One lift goal inside the strength row (goal-row-model.ts liftOf). */
+  type ClientGoalLift = {
+    id: string;
+    label: string;
+    /** "150 lb". */
+    now: string;
+    /** "200 lb"; "" with none. */
+    goal: string;
+    track: ClientGoalTrack | null;
+    /** The track as percentages; null with no track. */
+    geometry: ClientGoalTrackGeometry | null;
+    /** "toward" | "holding" | "back" | "reached"; "" when unread. */
+    direction: string;
+    direction_words: string;
+    move_words: string;
   };
   /** A goal's track, one 0..1 axis; `ago` is null when it would sit on the start or is unknown. */
   type ClientGoalTrack = { start: number; now: number; goal: number; ago: number | null };
@@ -7635,6 +7653,11 @@ declare global {
       rowHtml(row: ClientGoalRow): string;
       listHtml(rows: ReadonlyArray<ClientGoalRow | null | undefined>, opts?: { label?: string }): string;
     };
+    /** LAZY "horizon" bundle (goal-lifts-client.ts): the strength row's stack of lift mini tracks. */
+    CairnGoalLifts: {
+      stackHtml(row: ClientGoalRow): string;
+      liftSaid(lift: ClientGoalLift): string;
+    };
     /** LAZY "calendar" bundle (frame-line-client.ts): the week's frame as one hero. */
     CairnFrameLine: {
       heroHtml(
@@ -7769,6 +7792,7 @@ declare global {
   declare const CairnMilestoneRow: Window["CairnMilestoneRow"];
   declare const CairnGoalRowModel: Window["CairnGoalRowModel"];
   declare const CairnGoalRow: Window["CairnGoalRow"];
+  declare const CairnGoalLifts: Window["CairnGoalLifts"];
   declare const CairnFrameLine: Window["CairnFrameLine"];
   declare const CairnProofBand: Window["CairnProofBand"];
   declare const CairnAheadStrip: Window["CairnAheadStrip"];

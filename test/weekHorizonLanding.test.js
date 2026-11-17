@@ -6,7 +6,9 @@
 //     build's "25 wks out" and the trail's "in 25 weeks" for the same 181 days;
 //   - a goal's track on one axis, a thread behind its start drawing left of it;
 //   - proof: a race just run leads while RACE_PROOF_DAYS last, found by its logged effort
-//     even after a new goal replaced it;
+//     even after a new goal replaced it; the weight journey only when no weight goal row
+//     draws it; up to two lifts that rose, the anchor first;
+//   - two or more lift goals are ONE strength row listing every lift;
 //   - every milestone has its page and a detail never cut mid-word.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -14,7 +16,9 @@ import { repo, seedWeight } from "./_seed.js";
 import { seedDemo } from "../dist/demoSeed.js";
 import {
   goalTrack,
+  liftCountWords,
   milestoneHref,
+  proofOf,
   proofSeries,
   RACE_PROOF_DAYS,
   weekCountSentence,
@@ -24,7 +28,8 @@ import {
 import { FRAME_COUNTDOWN_LEAD_DAYS, weekFrameLine, weekPurpose } from "../dist/repo/week-stage.js";
 import { raceCountdown } from "../dist/repo/race-build.js";
 import { awayWords, weeksAway } from "../dist/repo/display-words.js";
-import { clipDetail } from "../dist/repo/today-path.js";
+import { clipDetail, liveStrengthJourneys, todayPath } from "../dist/repo/today-path.js";
+import { athleteUnits } from "../dist/repo/settings.js";
 import { createBlock } from "../dist/repo/program-blocks.js";
 import { violatesReadingGrammar } from "../dist/repo/day-read-grammar.js";
 import { addDaysISO, daysBetweenISO } from "../dist/lib/dates.js";
@@ -201,6 +206,106 @@ test("a strength goal behind its start: the week row draws it, says the journey'
   assert.match(goal.start_text, /^100 lb · /);
   assert.equal(goal.goal_words, "105 lb");
   assert.doesNotMatch(JSON.stringify(goal), ISO);
+  // One lift goal: that lift's own row, exactly as before; no list.
+  assert.equal(goal.label, "Barbell Overhead Press");
+  assert.equal(goal.lifts, undefined);
+  assert.equal(read.goals.filter((g) => g.key === "strength").length, 1);
+});
+
+/** A lift with a start set ten weeks back, its objective, then one set a week (the last a week ago). */
+function seedLift(name, group, loads, target = 400) {
+  const today = localDateISO();
+  repo.upsertExercise({ name, muscle_group: group, mode: "reps" });
+  repo.logSetByName({ exercise: name, weight: loads[0], reps: 5, date: addDaysISO(today, -63) });
+  repo.setStrengthObjective({ exercise: name, target_kind: "explicit_est_1rm", target_est_1rm: target });
+  loads.slice(1).forEach((weight, i) => {
+    repo.logSetByName({ exercise: name, weight, reps: 5, date: addDaysISO(today, -56 + 7 * i) });
+  });
+}
+const RISING = [100, 105, 110, 115, 120, 125, 130, 135, 140];
+const FLAT = [100, 100, 100, 100, 100, 100, 100, 100, 100];
+const FALLING = [...RISING].reverse();
+
+test("the lift goals counted in words, in a fixed order, a group of none left out", () => {
+  assert.equal(liftCountWords(["toward", "back", "toward", "holding", "back"]), "Two rising, one holding, two drifting back");
+  assert.equal(liftCountWords(["toward", "toward", "toward", "toward", "toward"]), "All five rising");
+  assert.equal(liftCountWords(["holding", "holding"]), "Both holding");
+  assert.equal(liftCountWords(["reached", "toward", "toward"]), "Two rising, one reached");
+  assert.equal(liftCountWords(["toward", null, "toward"]), "Two rising", "a lift with no call yet is in no group");
+  assert.equal(liftCountWords([null, null]), null);
+});
+
+test("three lift goals: ONE strength row lists every lift, in the board's order, each its own thread", () => {
+  seedLift("Barbell Back Squat", "quads", RISING);
+  seedLift("Barbell Bench Press", "chest", FLAT);
+  seedLift("Barbell Overhead Press", "shoulders", FALLING);
+  const today = localDateISO();
+  const read = weekRead();
+  const rows = read.goals.filter((g) => g.key === "strength");
+  assert.equal(rows.length, 1, "one strength row, never an arbitrary pick");
+  const goal = rows[0];
+  assert.equal(goal.label, "Strength");
+  assert.equal(goal.id, "strength");
+  assert.equal(goal.now_text, "3 lifts");
+  assert.equal(goal.goal_text, null);
+  assert.equal(goal.progress, null);
+  assert.equal(goal.track, null);
+  assert.equal(goal.direction, null);
+  assert.equal(goal.direction_words, null);
+  assert.equal(goal.href, WEEK_HREFS.program);
+  // Every lift, in the board's own order.
+  const board = todayPath(today).board.filter((r) => r.key === "strength");
+  assert.deepEqual(
+    goal.lifts.map((l) => l.id),
+    board.map((r) => r.id)
+  );
+  assert.deepEqual(
+    goal.lifts.map((l) => l.now_text),
+    board.map((r) => r.now_text)
+  );
+  const by = Object.fromEntries(goal.lifts.map((l) => [l.label, l]));
+  assert.equal(by["Barbell Back Squat"].direction, "toward");
+  assert.equal(by["Barbell Back Squat"].direction_words, "Moving toward");
+  assert.equal(by["Barbell Bench Press"].direction, "holding");
+  assert.equal(by["Barbell Bench Press"].move_words, "level");
+  assert.equal(by["Barbell Overhead Press"].direction, "back");
+  assert.equal(by["Barbell Overhead Press"].direction_words, "Drifting back");
+  for (const lift of goal.lifts) {
+    assert.ok(lift.track, `${lift.label} draws a track`);
+    assert.equal(lift.goal_text, "400 lb");
+  }
+  assert.equal(goal.move_words, "One rising, one holding, one drifting back");
+  assert.equal(goal.line, "Three lift goals: one rising, one holding, one drifting back.");
+  assert.doesNotMatch(JSON.stringify(goal), ISO);
+  assert.doesNotMatch(JSON.stringify(read), NO_SCORE);
+  // Only the rising lift's working load rose: one strength proof row.
+  assert.deepEqual(
+    read.proof.filter((p) => p.key === "strength").map((p) => p.label),
+    ["Barbell Back Squat"]
+  );
+});
+
+test("proof: two lifts whose working load rose, the anchor lift first; never past three rows", () => {
+  seedLift("Barbell Back Squat", "quads", RISING);
+  seedLift("Barbell Bench Press", "chest", RISING.map((w) => w - 20));
+  seedLift("Barbell Overhead Press", "shoulders", RISING.map((w) => w - 40));
+  const today = localDateISO();
+  const read = weekRead();
+  const lifts = read.proof.filter((p) => p.key === "strength");
+  assert.equal(lifts.length, 2, "two strength rows at most");
+  const anchor = todayPath(today).anchor;
+  assert.ok(anchor);
+  assert.equal(lifts[0].label, anchor.exercise, "the anchor lift leads");
+  assert.notEqual(lifts[1].label, lifts[0].label);
+  for (const p of lifts) {
+    assert.equal(p.stone, "strength");
+    assert.equal(p.series_kind, "steps");
+    assert.match(p.before_text, / × 5$/);
+  }
+  assert.ok(read.proof.length <= 3);
+  const goal = read.goals.find((g) => g.key === "strength");
+  assert.equal(goal.move_words, "All three rising");
+  assert.equal(goal.line, "Three lift goals, all rising.");
 });
 
 test("the weight goal speaks its ONE verdict and the read's own rate", (t) => {
@@ -225,8 +330,16 @@ test("the weight goal speaks its ONE verdict and the read's own rate", (t) => {
   assert.equal(goal.href, WEEK_HREFS.goal);
   assert.equal(goal.track.start, 0);
   assert.ok(goal.track.ago != null, "four weeks back has a weigh-in");
-  // Proof: the journey from its start, a line to draw.
-  const proof = read.proof.find((p) => p.key === "weight");
+  // Proof: the goal row above already draws start, now and goal, so the proof does not repeat it.
+  assert.ok(goal.track);
+  assert.equal(
+    read.proof.find((p) => p.key === "weight"),
+    undefined
+  );
+  // With no weight goal row to carry it, the journey from its start is proof: a line to draw.
+  const proof = proofOf(todayPath(today), liveStrengthJourneys(), today, athleteUnits(), []).find(
+    (p) => p.key === "weight"
+  );
   assert.ok(proof);
   assert.equal(proof.before_text, "183 lb");
   assert.equal(proof.series_kind, "line");

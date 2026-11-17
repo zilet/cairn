@@ -69,6 +69,8 @@
       const dir = `<b class="goalrow-dir${row.direction ? ` is-${escAttr(row.direction)}` : ""}">${escHtml(row.direction_words)}</b>`;
       return `<small class="goalrow-words">${dir}${row.move_words ? ` · ${escHtml(row.move_words)}` : ""}</small>`;
     }
+    // The strength row over several lifts: the count by direction ("Two rising, one holding").
+    if (row.lifts?.length && row.move_words) return `<small class="goalrow-words">${escHtml(row.move_words)}</small>`;
     // With no meter and no track the goal and the word ride the muted line instead.
     const bare = row.fill == null && !row.track;
     const tail =
@@ -83,11 +85,11 @@
     const inner = `<span class="goalrow-dot" aria-hidden="true"></span>
       <div class="goalrow-name">${escHtml(row.label)}${wordsHtml(row)}</div>
       <span class="goalrow-num num">${escHtml(row.now)}${chev}</span>
-      ${row.track ? trackHtml(row) : meterHtml(row)}`;
+      ${row.lifts?.length ? CairnGoalLifts.stackHtml(row) : row.track ? trackHtml(row) : meterHtml(row)}`;
     const body = row.href
       ? `<a class="goalrow-body goalrow-link" href="${escAttr(row.href)}" data-horizon-href>${inner}</a>`
       : `<div class="goalrow-body">${inner}</div>`;
-    const cls = ["goalrow", `is-${escAttr(row.key)}`, `stone-${escAttr(row.stone)}`, row.track ? "has-track" : ""]
+    const cls = ["goalrow", `is-${escAttr(row.key)}`, `stone-${escAttr(row.stone)}`, row.track ? "has-track" : "", row.lifts?.length ? "has-lifts" : ""]
       .filter(Boolean)
       .join(" ");
     return `<li class="${cls}" data-goal-row="${escAttr(row.key)}">${body}</li>`;

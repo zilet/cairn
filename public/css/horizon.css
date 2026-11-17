@@ -288,6 +288,17 @@ a.goalrow-link:active{transform:var(--press-lg)}
 @keyframes goalrow-settle{from{opacity:0;transform:scale(.4)}
 to{opacity:1;transform:scale(1)}
 }
+.goallift-list{grid-column:2 / -1;list-style:none;margin:0;padding:0;display:grid;gap:var(--space-4);min-width:0}
+.goallift{position:relative;display:grid;grid-template-columns:minmax(0,1fr) minmax(3.5rem,32%) auto;align-items:center;column-gap:var(--space-5);min-width:0}
+.goallift-name{display:block;min-width:0;font-size:var(--text-sm);line-height:var(--leading-snug);color:var(--ink)}
+.goallift-label,.goallift-dir{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.goallift-dir{font-size:var(--text-xs);color:var(--muted)}
+.goallift-num{font-family:var(--font-mono);font-size:var(--text-sm);font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--ink)}
+.goallift-thread{position:relative;display:block;height:var(--space-8);min-width:0}
+.goallift-thread .goalrow-rail,.goallift-thread .goalrow-tfill{top:calc(50% - var(--space-1));height:var(--space-2)}
+.goallift-thread .goalrow-tick{top:calc(50% - var(--space-3));height:var(--space-6)}
+.goallift-thread .goalrow-ring{top:calc(50% - var(--space-2));width:var(--space-4);height:var(--space-4);margin-left:calc(var(--space-2) * -1)}
+.goallift-thread .goalrow-now{top:calc(50% - var(--space-3));width:var(--space-6);height:var(--space-6);margin-left:calc(var(--space-3) * -1)}
 .hwk-link-slot:empty,.hwk-team-slot:empty{display:none}
 .hwk-link-slot{margin-top:calc(var(--space-11) * -1 + var(--space-6))}
 .hwk-linknote{display:grid;gap:var(--space-2);padding:var(--space-1) 0 var(--space-1) var(--space-6);border-left:2px solid var(--dawn);min-width:0}

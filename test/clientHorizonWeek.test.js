@@ -36,6 +36,7 @@ const MODULES = [
   "milestone-row-model",
   "milestone-row-client",
   "goal-row-model",
+  "goal-lifts-client",
   "goal-row-client",
   "frame-line-client",
   "journey-trail-client",
@@ -1504,4 +1505,108 @@ test("a thread's link routes through Horizon's openHref; Behind you and To the r
   assert.equal(root.getAttribute("data-horizon-view"), "behind");
   assert.match(bar.getAttribute("style"), /--segi:\s*2/);
   assert.equal(root.querySelector('[data-horizon-panel="behind"]').hidden, false);
+});
+
+function liftsGoal() {
+  return {
+    key: "strength",
+    label: "Strength",
+    now_text: "3 lifts",
+    goal_text: null,
+    progress: null,
+    line: "",
+    move_words: "One rising, one holding, one drifting back",
+    track: null,
+    direction: null,
+    href: "/app/train/program",
+    lifts: [
+      {
+        id: "strength:deadlift",
+        label: "Deadlift",
+        now_text: "285 lb",
+        goal_text: "405 lb",
+        track: { start: 0.1, now: 0.5, goal: 1, ago: 0.4, ago_words: "4 weeks ago" },
+        direction: "toward",
+        direction_words: "Moving toward",
+        move_words: "1.2 lb a week up",
+      },
+      {
+        id: "strength:press",
+        label: "Overhead Press <b>x</b>",
+        now_text: "95 lb",
+        goal_text: "135 lb",
+        track: { start: 0.5, now: 0.3, goal: 1, ago: 0.45, ago_words: "4 weeks ago" },
+        direction: "back",
+        direction_words: "Drifting back",
+        move_words: null,
+      },
+      {
+        id: "strength:squat",
+        label: "Front Squat",
+        now_text: "150 lb",
+        goal_text: "200 lb",
+        track: null,
+        direction: null,
+        direction_words: null,
+        move_words: null,
+      },
+    ],
+  };
+}
+
+test("where you stand: a strength row with several lifts stacks one mini track per lift under one header", () => {
+  const win = load();
+  const r = newRead();
+  r.goals = [...trackedGoals().slice(0, 2), liftsGoal()];
+  const host = landing(win, r);
+  const rows = host.querySelectorAll(".hwk-sec.is-goals .goalrow");
+  assert.equal(rows.length, 3, "nested lifts are not goal rows");
+  const row = rows[2];
+  assert.equal(row.querySelector(".goalrow-num").textContent, "3 lifts›");
+  assert.equal(row.querySelector(".goalrow-words").textContent, "One rising, one holding, one drifting back");
+  assert.equal(row.querySelector("a.goalrow-link").getAttribute("href"), "/app/train/program");
+  assert.equal(!!row.querySelector(".goalrow-thread"), false, "the single track gives way to the stack");
+  const list = row.querySelector("ul.goallift-list");
+  const items = list.querySelectorAll("li.goallift");
+  assert.equal(items.length, 3);
+  assert.deepEqual(
+    items.map((li) => li.querySelector(".goallift-num").textContent),
+    ["285 lb", "95 lb", "150 lb"]
+  );
+  assert.deepEqual(
+    items.map((li) => li.querySelector(".sr-only").textContent),
+    [
+      "Deadlift, 285 lb, goal 405 lb, moving toward. ",
+      "Overhead Press <b>x</b>, 95 lb, goal 135 lb, drifting back. ",
+      "Front Squat, 150 lb, goal 200 lb. ",
+    ]
+  );
+  assert.equal(items[0].querySelector(".goallift-dir").textContent, "Moving toward");
+  assert.ok(items[1].querySelector(".goallift-dir").classList.contains("is-back"));
+  assert.equal(items[2].querySelector(".goallift-dir"), null);
+  assert.equal(items[0].querySelectorAll(".goalrow-tick").length, 2);
+  assert.ok(items[0].querySelector(".goalrow-ring"));
+  assert.ok(items[0].querySelector(".goalrow-now"));
+  assert.equal(items[0].querySelector(".goalrow-tfill").getAttribute("style"), "--l:10;--w:40");
+  assert.ok(items[0].querySelector(".goalrow-tfill").classList.contains("is-from-left"));
+  // A lift behind its start fills leftwards from the start.
+  const back = items[1].querySelector(".goalrow-tfill");
+  assert.ok(back.classList.contains("is-from-right"));
+  assert.equal(back.getAttribute("style"), "--l:30;--w:20");
+  // No track: an empty slot, no marks.
+  assert.equal(items[2].querySelector(".goalrow-now"), null);
+  assert.equal(host.querySelectorAll(".goallift-thread").length, 3);
+  // Server text stays text.
+  assert.equal(!!list.querySelector("b"), false);
+});
+
+test("a goal with no lifts, or an empty list, renders exactly as before", () => {
+  const win = load();
+  const before = landing(win, newRead()).innerHTML;
+  const empty = newRead();
+  empty.goals = empty.goals.map((g) => ({ ...g, lifts: [] }));
+  const host = landing(win, empty);
+  assert.equal(host.innerHTML, before);
+  assert.equal(!!host.querySelector(".goallift-list"), false);
+  assert.ok(host.querySelector(".goalrow-thread"));
 });

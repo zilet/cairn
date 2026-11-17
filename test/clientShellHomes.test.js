@@ -93,6 +93,7 @@ test("streams B, C and D find their file slots already registered", () => {
         "milestone-row-model",
         "milestone-row-client",
         "goal-row-model",
+        "goal-lifts-client",
         "goal-row-client",
       ],
     },

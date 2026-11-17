@@ -89,6 +89,27 @@
     return /^\/app\/[^\s"'<>\\]*$/.test(s) ? s : null;
   }
 
+  /** One lift of the strength row as its mini thread; null without a label or a now. */
+  function liftOf(value: unknown): ClientGoalLift | null {
+    const l = value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+    const label = text(l?.label);
+    const now = text(l?.now_text);
+    if (!l || !label || !now) return null;
+    const direction = DIRECTIONS.has(text(l.direction)) ? text(l.direction) : "";
+    const track = trackOf(l.track);
+    return {
+      id: text(l.id) || label,
+      label,
+      now,
+      goal: text(l.goal_text),
+      track,
+      geometry: track ? trackGeometry(track) : null,
+      direction,
+      direction_words: text(l.direction_words),
+      move_words: text(l.move_words),
+    };
+  }
+
   /** A goal of GET /api/week as its row; null without a label or a now. */
   function fromWeekRead(value: unknown): ClientGoalRow | null {
     const g = value && typeof value === "object" ? (value as WeekGoal) : null;
@@ -103,6 +124,7 @@
     // only stand in for an older read that has none.
     const word = directionWords || (fit && FIT_WORD[fit]) || progressWord(fill);
     const tone = directionWords ? direction : fit && FIT_WORD[fit] ? fit : fill != null && fill >= 1 ? "reached" : "";
+    const lifts = Array.isArray(g.lifts) ? g.lifts.map(liftOf).filter((l): l is ClientGoalLift => l != null) : [];
     return {
       key: text(g.key) || "goal",
       stone: STONE[text(g.key)] || "body",
@@ -121,6 +143,7 @@
       direction_words: directionWords,
       move_words: text(g.move_words),
       href: hrefOf(g.href),
+      lifts,
     };
   }
 
