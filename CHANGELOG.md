@@ -5,6 +5,49 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [2.4.2] — 2026-11-17
+
+Horizon opens on what the week is for and what you have already built, the team behind your plan
+is visible, and several health reads now agree with the newest evidence.
+
+### Added
+
+- **A new Horizon landing.** The page leads with the week's purpose, and with the countdown only
+  inside eight weeks of a race. "Since you started" shows up to three measured before-and-afters,
+  each with a small picture, and a race you just ran leads it for four weeks.
+- **Goals show their direction.** Each goal draws start, four weeks ago, now and goal on one track
+  with a plain direction word, and opens its detail on a tap.
+- **Your team this week.** Up to three seats (Strength, Run, Recovery, Fuel, Body, Heart) say what
+  each did, what it expects and how its last call landed. Every change the coach makes is
+  attributed to a seat.
+- **One "Ahead" strip.** The road and "Next up" are one strip: the next four weeks get half the
+  width, and every mark is listed and links to its page.
+
+### Changed
+
+- **A blood-pressure reading is a snapshot until it repeats.** One reading says "one reading so
+  far" and how to repeat it properly at home. Weight loss and regular aerobic training are named as
+  the expected reason for a lower number. It becomes worth raising with a doctor only beside a
+  symptom you logged, a related blood finding or a blood-pressure medication. A low reading no
+  longer receives advice meant to lower pressure, and a single high reading no longer triggers diet
+  and training levers.
+- **Lipids read the newest draw.** A newer direct LDL replaces an older calculated one, and non-HDL
+  is taken from the newest panel that measured its parts.
+- **A marker's direction follows a clear recent reversal** instead of a multi-year line.
+- **One number for a lift's "now".** Standing, the strength journey and Horizon all read the best
+  of the last three sessions, so a light day is not lost capacity.
+- **A phase's starting body fat is the estimate as of its start date**, from measurements when
+  there are any and from height, weight and age when there are none.
+- **One weeks count to a race** on every surface.
+- **A logged meal's receipt keeps up.** Once the nutrition details land, the chat message says so
+  instead of still promising them.
+
+### Fixed
+
+- Text cut at a decimal point or mid-word, raw decimals in activity notes, "V2" in sport labels, the
+  season chart's weight unit, a block title naming a finished race, and a VO2max read that missed
+  the current value.
+
 ## [2.4.1] — 2026-11-16
 
 ### Changed
