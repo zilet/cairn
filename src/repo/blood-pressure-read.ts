@@ -18,6 +18,21 @@
 // regular aerobic training both lower resting pressure, so a lower reading during a cut
 // or a training block is said as the expected direction, never as a problem.
 //
+// A low reading can also simply be the person's level. No guideline sets a lower limit
+// for someone who feels well (ACC/AHA 2025 keeps "normal" as anything under 120/80):
+// in adults without risk factors heart risk keeps falling with systolic pressure down to
+// about 90 (Whelton 2020), and a low diastolic travels with harm mainly beside a raised
+// systolic, a wide pulse pressure (McEvoy 2016). So a low reading is `expected`, and
+// asks for nothing, when ALL of this holds:
+//
+//   - it repeats: the same side on EXPECTED_MIN_OCCASIONS separate days, agreeing
+//     within EXPECTED_AGREEMENT_MMHG (a level, not a fall still under way)
+//   - it stays above EXPECTED_FLOOR, with an ordinary pulse pressure
+//   - the person's picture explains it: regular aerobic training (a low resting heart
+//     rate counts toward it) or weight loss
+//   - nothing argues against it: no symptom words, no related blood finding, no
+//     blood-pressure medication
+//
 // Informational, never medical advice. Pure over its inputs apart from
 // `bloodPressureContext`, which reads the log.
 import { db } from "../db.js";
@@ -45,6 +60,8 @@ export interface BloodPressureContext {
   blood: string[];
   /** A blood-pressure medication on the active list, by class label; null when none. */
   medication: string | null;
+  /** Typical resting heart rate over the last four weeks (bpm); null when unknown. */
+  resting_hr?: number | null;
 }
 
 export interface BloodPressureRead {
@@ -65,6 +82,12 @@ export interface BloodPressureRead {
   rationale: string;
   /** True when the picture (symptom, blood finding, medication) makes it worth raising. */
   raise_with_doctor: boolean;
+  /**
+   * A low reading that repeats, agrees with itself and fits the person's training or
+   * weight loss, with nothing arguing against it: their level, not a finding. It earns
+   * no watch note and no recheck.
+   */
+  expected: boolean;
   context: BloodPressureContext;
 }
 
@@ -79,6 +102,20 @@ const WEIGHT_CHANGE_NAMED_LB = 5;
 /** Aerobic sessions in four weeks that read as "regular". */
 const AEROBIC_REGULAR_SESSIONS = 8;
 const SYMPTOM_LOOKBACK_DAYS = 60;
+/** A resting heart rate at or under this, beside some aerobic work, reads as trained. */
+const TRAINED_RESTING_HR = 60;
+/** Aerobic sessions in four weeks that a low resting heart rate needs beside it. */
+const AEROBIC_SOME_SESSIONS = 4;
+/** Separate days on the low side before a low reading can read as the person's level. */
+export const EXPECTED_MIN_OCCASIONS = 2;
+/** Those readings agree within this many mmHg; a wider spread is a fall still under way. */
+export const EXPECTED_AGREEMENT_MMHG = 10;
+/** Under either of these a reading is never called expected, whatever the picture. */
+export const EXPECTED_FLOOR = { systolic: 90, diastolic: 50 } as const;
+/** Pulse pressure (systolic minus diastolic): at most this wide ... */
+const PULSE_PRESSURE_MAX = 60;
+/** ... and at least this share of systolic. */
+const PULSE_PRESSURE_MIN_SHARE = 0.25;
 
 const SYMPTOM_WORDS = /\b(dizz\w*|light[\s-]?headed\w*|faint\w*|black(?:ed|ing)?\s?out|woozy|vertigo|head\s?rush|passed out)\b/i;
 const NEGATED = /\b(no|not|never|without|none|isn't|wasn't|didn't|free of)\b[^.;,]{0,24}$/i;
@@ -92,7 +129,7 @@ export function namesLowPressureSymptom(text: unknown): boolean {
 }
 
 const HOME_PROTOCOL =
-  "To settle it, take seated readings after five minutes of rest, two a minute apart, morning and evening, for three to seven days.";
+  "To settle it, take seated readings after five minutes of rest and before coffee, food or exercise, two a minute apart, morning and evening, for three to seven days.";
 
 function sideOf(value: number, band: [number, number]): BloodPressureSide {
   if (value < band[0]) return "low";
@@ -183,8 +220,40 @@ export function bloodPressureContext(
     // the words are optional context
   }
 
+  let resting_hr: number | null = null;
+  try {
+    const from = addDaysISO(today, -27) ?? today;
+    const byDay = new Map<string, number>();
+    for (const table of ["daily_metrics", "garmin_daily_metrics"]) {
+      const rows = db
+        .prepare(`SELECT date, resting_hr FROM ${table} WHERE date >= ? AND date <= ? AND resting_hr IS NOT NULL`)
+        .all(from, today) as any[];
+      for (const r of rows) {
+        const v = Number(r?.resting_hr);
+        if (v >= 30 && v <= 120) byDay.set(String(r.date).slice(0, 10), v);
+      }
+    }
+    const values = [...byDay.values()].sort((a, b) => a - b);
+    if (values.length >= 3) {
+      resting_hr = Math.round(values[Math.floor((values.length - 1) / 2)]);
+    } else {
+      // No wearable series: the pulse taken with a recent reading is the next best thing.
+      const row = db
+        .prepare(
+          `SELECT pulse FROM blood_pressure_readings
+            WHERE pulse IS NOT NULL AND substr(measured_at, 1, 10) >= ? ORDER BY measured_at DESC, id DESC LIMIT 1`
+        )
+        .get(from) as any;
+      const v = Number(row?.pulse);
+      resting_hr = v >= 30 && v <= 120 ? Math.round(v) : null;
+    }
+  } catch {
+    resting_hr = null;
+  }
+
   return {
     weight_change_lb,
+    resting_hr,
     aerobic_sessions_28d: aerobic,
     in_cut,
     symptoms: symptoms.slice(0, 3),
@@ -274,15 +343,20 @@ export function bloodPressureRead(input: {
       rationale:
         "Blood pressure is classified on repeated readings from separate occasions, and a single clinic value often reads high; a home series is the standard way to confirm it.",
       raise_with_doctor: settled,
+      expected: false,
       context,
     };
   }
 
   // ---- low side ----
-  const causes: string[] = [];
   const lost = context.weight_change_lb != null && context.weight_change_lb <= -WEIGHT_CHANGE_NAMED_LB;
-  if (lost || context.in_cut) causes.push("losing weight");
-  if (context.aerobic_sessions_28d >= AEROBIC_REGULAR_SESSIONS) causes.push("regular aerobic training");
+  const losing = lost || context.in_cut;
+  const rhr = context.resting_hr ?? null;
+  const lowRestingHr = rhr != null && rhr <= TRAINED_RESTING_HR && context.aerobic_sessions_28d >= AEROBIC_SOME_SESSIONS;
+  const trained = context.aerobic_sessions_28d >= AEROBIC_REGULAR_SESSIONS || lowRestingHr;
+  const causes: string[] = [];
+  if (losing) causes.push("losing weight");
+  if (trained) causes.push("regular aerobic training");
   const fits = causes.length
     ? ` ${causes.length === 2 ? "Losing weight and regular aerobic training both lower" : causes[0] === "losing weight" ? "Losing weight lowers" : "Regular aerobic training lowers"} resting blood pressure, so a lower reading than before fits what you have been doing.`
     : "";
@@ -292,10 +366,54 @@ export function bloodPressureRead(input: {
   if (context.blood.length) reasons.push(`your ${joinWords(context.blood)} ${context.blood.length === 1 ? "also reads" : "also read"} off`);
   if (context.medication) reasons.push(`you are on ${context.medication}`);
   const raise = reasons.length > 0;
+
+  // The person's level, not a finding: repeated, agreeing, above the floor, explained.
+  const pairLatest = pairOn(latest.date);
+  const systolic = input.component === "systolic" ? latest.value : pairLatest;
+  const diastolic = input.component === "diastolic" ? latest.value : pairLatest;
+  const aboveFloor =
+    (systolic == null || systolic >= EXPECTED_FLOOR.systolic) && (diastolic == null || diastolic >= EXPECTED_FLOOR.diastolic);
+  const pulsePressure = systolic != null && diastolic != null ? systolic - diastolic : null;
+  const ordinaryPulsePressure =
+    pulsePressure == null ||
+    (pulsePressure <= PULSE_PRESSURE_MAX && pulsePressure >= (systolic as number) * PULSE_PRESSURE_MIN_SHARE);
+  const sameValues = sameSide.map((p) => p.value);
+  const agree = Math.max(...sameValues) - Math.min(...sameValues) <= EXPECTED_AGREEMENT_MMHG;
+  const explained = causes.length > 0;
+  const expected =
+    !raise && explained && aboveFloor && ordinaryPulsePressure && occasions >= EXPECTED_MIN_OCCASIONS && agree;
+
+  if (expected) {
+    const shown = sameSide.slice(-2).map(text);
+    const withWords: string[] = [];
+    if (trained) withWords.push("regular aerobic training");
+    if (trained && rhr != null && rhr <= TRAINED_RESTING_HR) withWords.push(`a resting heart rate near ${rhr}`);
+    if (losing) withWords.push("the weight you have lost");
+    const picture = trained ? "how a trained heart usually reads" : "the expected direction";
+    return {
+      component: input.component,
+      side,
+      basis,
+      occasions,
+      settled,
+      reading_text: text(latest),
+      latest_date: latest.date,
+      note: trained ? "expected with your training" : "expected while losing weight",
+      line: `Your ${settled ? "recent" : occasions === 2 ? "last two" : `last ${occasions}`} readings (${joinWords(shown)}${occasions > 2 ? ", most recently" : ""}) agree and sit a little under the usual band. With ${joinWords(withWords)}, that is ${picture}, not a finding to act on. Nothing to treat, repeat or change; dizziness, lightheadedness or fainting would be the reason to raise it.`,
+      rationale:
+        "No guideline sets a lower limit for blood pressure in someone who feels well; low pressure matters when it causes symptoms. In adults without risk factors heart risk keeps falling with systolic pressure down to about 90, and a low diastolic is a concern mainly beside a raised systolic. Aerobic training and weight loss both lower resting pressure.",
+      raise_with_doctor: false,
+      expected: true,
+      context,
+    };
+  }
+
   const care = raise
     ? ` Because ${joinWords(reasons)}, this is worth raising with your doctor rather than waiting.`
     : " Without dizziness, lightheadedness or fainting, a low reading is usually nothing to treat, and it is no reason to cut salt or add cardio.";
-  const next = settled ? "" : ` ${HOME_PROTOCOL}`;
+  // A reading the picture already explains needs one more look, not a week of them.
+  const lightRepeat = !raise && explained && aboveFloor && ordinaryPulsePressure && basis === "one_reading";
+  const next = settled ? "" : lightRepeat ? " One more reading on another day is enough to confirm it." : ` ${HOME_PROTOCOL}`;
 
   return {
     component: input.component,
@@ -310,6 +428,7 @@ export function bloodPressureRead(input: {
     rationale:
       "Blood pressure is classified on repeated readings from separate occasions, never one. Low readings are common in aerobically fit people and during weight loss and are usually benign; a symptom, a related blood finding or a blood-pressure medication is what makes one worth a conversation.",
     raise_with_doctor: raise,
+    expected: false,
     context,
   };
 }

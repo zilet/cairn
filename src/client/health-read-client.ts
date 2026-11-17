@@ -43,6 +43,7 @@ type HealthReadMarker = {
   in_optimal?: unknown;
   below_optimal_floor?: unknown;
   reading_note?: unknown;
+  reading_expected?: unknown;
   optimal?: {
     low?: unknown;
     high?: unknown;
@@ -269,6 +270,8 @@ function optimalPhrase(marker: HealthReadMarker | null | undefined): HealthReadO
     // Blood pressure under its band: "on the low side", with how many readings stand
     // behind it — a snapshot is a watch, never a red finding.
     const note = typeof marker.reading_note === "string" && marker.reading_note ? `, ${marker.reading_note}` : "";
+    // A low reading that is simply this person's level reads calm, never as a watch.
+    if (marker.reading_expected === true) return { word: `on the low side${note}`, tone: "ok" };
     if (marker.below_optimal_floor === true) return { word: `on the low side${note}`, tone: "watch" };
     if (note) {
       const v = Number(latest.value);

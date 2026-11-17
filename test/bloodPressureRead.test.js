@@ -1,7 +1,9 @@
 // A blood-pressure reading is read with the whole picture, and one reading is a snapshot:
 //   - one occasion says "one reading", repeated occasions say so, and neither is spoken
 //     as a standing condition until a home series settles the level;
-//   - weight loss and aerobic training are named as the expected cause of a lower reading;
+//   - weight loss and aerobic training are named as the expected cause of a lower reading,
+//     and a low reading that repeats, agrees and is explained that way is the person's
+//     level: no watch note at all;
 //   - the person's own symptom words (never a "no dizziness" note) make it worth raising;
 //   - a single HIGH reading earns the repeat-it note, not the lifestyle levers;
 //   - a phase's start body fat and a lift's "now" each read their one definition.
@@ -31,20 +33,86 @@ test("one low reading is a snapshot: said as one reading, with how to repeat it"
   assert.match(rows[0].directive, /no reason to cut salt or add cardio/);
 });
 
-test("two low readings a month apart suggest a level without settling it, and weight loss is named", () => {
+test("two low readings a month apart with nothing to explain them suggest a level without settling it", () => {
+  bp(140, 125, 75);
+  bp(35, 99, 58);
+  bp(6, 101, 55);
+  const dia = repo.prioritizeMarkers().markers.find((m) => m.name === "Diastolic BP");
+  assert.equal(dia.reading_note, "two single readings so far");
+  assert.equal(dia.reading_expected, undefined);
+  repo.deriveDirectives();
+  const row = bpDirectives().find((d) => d.domain === "watch");
+  assert.match(row.directive, /99\/58 and 101\/55/);
+  assert.match(row.directive, /they do not settle it/);
+  assert.match(row.directive, /three to seven days/);
+  assert.doesNotMatch(row.directive, /worth raising with your doctor/);
+});
+
+test("low readings that repeat, agree and fit weight loss are the person's level: no watch note, a calm marker row", () => {
   bp(140, 125, 75);
   weigh(140, 200);
   weigh(1, 186);
   bp(35, 99, 58);
   bp(6, 101, 55);
   const dia = repo.prioritizeMarkers().markers.find((m) => m.name === "Diastolic BP");
-  assert.equal(dia.reading_note, "two single readings so far");
+  assert.equal(dia.reading_expected, true);
+  assert.equal(dia.reading_note, "expected while losing weight");
   repo.deriveDirectives();
-  const row = bpDirectives().find((d) => d.domain === "watch");
-  assert.match(row.directive, /99\/58 and 101\/55/);
-  assert.match(row.directive, /they do not settle it/);
-  assert.match(row.directive, /Losing weight lowers resting blood pressure/);
-  assert.doesNotMatch(row.directive, /worth raising with your doctor/);
+  assert.equal(bpDirectives().length, 0, "nothing to watch, repeat or change");
+});
+
+test("a trained picture explains a repeated low reading, and says so in the read", () => {
+  const ctx = {
+    weight_change_lb: null,
+    aerobic_sessions_28d: 10,
+    in_cut: false,
+    symptoms: [],
+    blood: [],
+    medication: null,
+    resting_hr: 52,
+  };
+  const input = {
+    component: "diastolic",
+    band: [60, 80],
+    today: "2026-03-20",
+    points: [
+      { date: "2026-03-02", value: 55 },
+      { date: "2026-03-18", value: 56 },
+    ],
+    pair: [
+      { date: "2026-03-02", value: 101 },
+      { date: "2026-03-18", value: 101 },
+    ],
+  };
+  const read = bloodPressureRead({ ...input, context: () => ctx });
+  assert.equal(read.expected, true);
+  assert.equal(read.note, "expected with your training");
+  assert.match(read.line, /101\/55 and 101\/56/);
+  assert.match(read.line, /regular aerobic training and a resting heart rate near 52/);
+  assert.match(read.line, /Nothing to treat, repeat or change/);
+  assert.doesNotMatch(read.line, /three to seven days/);
+
+  // A low resting heart rate beside some aerobic work counts as trained too.
+  assert.equal(bloodPressureRead({ ...input, context: () => ({ ...ctx, aerobic_sessions_28d: 5 }) }).expected, true);
+  // Anything arguing against it keeps the ordinary read.
+  const not = (over, points = input.points, pair = input.pair) =>
+    bloodPressureRead({ ...input, points, pair, context: () => ({ ...ctx, ...over }) });
+  assert.equal(not({ symptoms: [{ date: "2026-03-17", text: "dizzy on standing" }] }).expected, false);
+  assert.equal(not({ blood: ["Hemoglobin"] }).expected, false);
+  assert.equal(not({ medication: "a blood-pressure medication" }).expected, false);
+  assert.equal(not({ aerobic_sessions_28d: 0, resting_hr: null }).expected, false, "nothing explains it");
+  assert.equal(not({}, [input.points[1]]).expected, false, "one reading is still a snapshot");
+  assert.match(not({}, [input.points[1]]).line, /One more reading on another day is enough/);
+  assert.equal(
+    not({}, [{ date: "2026-03-02", value: 58 }, { date: "2026-03-18", value: 46 }]).expected,
+    false,
+    "under the floor, and still falling"
+  );
+  assert.equal(
+    not({}, input.points, [{ date: "2026-03-02", value: 86 }, { date: "2026-03-18", value: 86 }]).expected,
+    false,
+    "a systolic under 90 is never called expected"
+  );
 });
 
 test("the person's own symptom words make a low reading worth raising; a denial does not", () => {

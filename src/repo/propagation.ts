@@ -399,6 +399,17 @@ function prioritizeMarkersRead() {
   const markers = [...labMarkers, ...wearable, ...supersededRaw];
   const profile = zoneProfile(); // personalizes the sex/age-dependent optimal bands
   const directivesByMarker = activeDirectivesByMarker();
+  // Read at most once, and only when a blood-pressure row sits outside its band.
+  let bpMedsMemo: any[] | null = null;
+  const bpMeds = (): any[] => {
+    if (bpMedsMemo) return bpMedsMemo;
+    try {
+      bpMedsMemo = activeMedications();
+    } catch {
+      bpMedsMemo = [];
+    }
+    return bpMedsMemo;
+  };
   let flagged_count = 0;
   const enriched = markers.map((m: any) => {
     const superseded = isSupersededMarker(m);
@@ -430,8 +441,10 @@ function prioritizeMarkersRead() {
         in_optimal = withinOptimal(numericVal, z);
       }
     }
-    const bpRead = z && comparable && !superseded && in_optimal === false ? bloodPressureReadFor(z.label, markers, profile) : null;
-    const reading_note = bpRead && !bpRead.settled ? bpRead.note : null;
+    const bpRead =
+      z && comparable && !superseded && in_optimal === false ? bloodPressureReadFor(z.label, markers, profile, bpMeds()) : null;
+    const reading_expected = bpRead?.expected === true;
+    const reading_note = bpRead && (reading_expected || !bpRead.settled) ? bpRead.note : null;
     const actionable = z ? z.actionable : false;
     // TRAJECTORY boost: a marker HEADING the wrong way matters more than one
     // sitting stably borderline. The forecast (from getMarkerHistory, vs the
@@ -461,6 +474,8 @@ function prioritizeMarkersRead() {
       // Blood pressure outside its band says how many readings stand behind it
       // ("one reading so far"), so a snapshot never reads as a standing level.
       ...(reading_note ? { reading_note } : {}),
+      // A low reading that is simply this person's level (repeated, explained, no symptom).
+      ...(reading_expected ? { reading_expected: true } : {}),
       actionable,
       impact_score,
       active_directive,
@@ -919,7 +934,7 @@ export function deriveDirectives() {
   // says anything — one reading is a snapshot, never a standing condition.
   const bpLines: string[] = [];
   for (const ctx of offMarkers.values()) {
-    const read = bloodPressureReadFor(ctx.zone.label, markers, profile, offMarkers, meds);
+    const read = bloodPressureReadFor(ctx.zone.label, markers, profile, meds);
     if (!read) continue;
     ctx.bp = read;
     bpLines.push(read.line);
@@ -1085,6 +1100,29 @@ const LOW_BP_BLOOD: Array<{ label: string; side: "low" | "high" }> = [
   { label: "Fasting glucose", side: "low" },
 ];
 
+/**
+ * The same blood findings read straight off the marker list, for a caller that has no
+ * off-optimal picture yet (the marker list itself): flagged by the lab on that side, or
+ * past that edge of its optimal band.
+ */
+function lowBpBloodFromMarkers(markers: any[], profile: ZoneProfile | null): string[] {
+  const out: string[] = [];
+  for (const b of LOW_BP_BLOOD) {
+    const m = (Array.isArray(markers) ? markers : []).find((x) => !isSupersededMarker(x) && markerZone(x, profile)?.label === b.label);
+    if (!m) continue;
+    const zone = markerZone(m, profile);
+    const value = Number(m?.latest?.value);
+    const pastEdge =
+      zone && Number.isFinite(value) && m?.latest?.unit_mismatch !== true
+        ? b.side === "low"
+          ? value < zone.optimal[0]
+          : value > zone.optimal[1]
+        : false;
+    if (m?.latest?.flag === b.side || pastEdge) out.push(b.label);
+  }
+  return out;
+}
+
 function markerPoints(m: any): Array<{ date: string; value: number }> {
   return (Array.isArray(m?.points) ? m.points : [])
     .map((p: any) => ({ date: String(p?.date ?? "").slice(0, 10), value: Number(p?.value) }))
@@ -1093,14 +1131,13 @@ function markerPoints(m: any): Array<{ date: string; value: number }> {
 
 /**
  * The blood-pressure read for one component's marker (null for any other zone, or a
- * reading inside its band). `offMarkers` / `meds` are optional: a caller without the
- * directive picture (the marker list) still gets the reading count and the log context.
+ * reading inside its band). Every caller gets the same picture: the reading count, the
+ * log context, the related bloods and any blood-pressure medication.
  */
 function bloodPressureReadFor(
   zoneLabel: string,
   markers: any[],
   profile: ZoneProfile | null,
-  offMarkers?: Map<string, MarkerContext>,
   meds: any[] = []
 ): BloodPressureRead | null {
   const spec = BP_COMPONENTS[zoneLabel];
@@ -1119,9 +1156,9 @@ function bloodPressureReadFor(
       band: zone.optimal,
       today,
       context: (anchor) => {
-        const blood = offMarkers
-          ? LOW_BP_BLOOD.filter((b) => offMarkers.get(b.label)?.side === b.side).map((b) => b.label)
-          : [];
+        // One reading of the bloods for every caller, so the marker row and the
+        // directive pass can never disagree about whether the reading is expected.
+        const blood = lowBpBloodFromMarkers(markers, profile);
         const med = meds.length ? medsTreatingZone(zoneLabel, "high", meds) : null;
         return bloodPressureContext(today, anchor, { blood, medication: med?.label ?? null });
       },

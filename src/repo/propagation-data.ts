@@ -868,6 +868,9 @@ function bloodPressureDirectives(ctx: MarkerContext): MappingDirective[] {
   // value and what else in the person's picture bears on it. One reading is a snapshot:
   // it earns a "repeat it properly" note, never a lifestyle lever as if it were a level.
   const bp = ctx.bp ?? null;
+  // A low reading that repeats and fits the person's training or weight loss is their
+  // level: nothing to watch, so no note at all (the marker row says why).
+  if (bp?.expected) return [];
   if (ctx.side === "low") {
     return [
       {
