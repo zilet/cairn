@@ -5,6 +5,26 @@ Versioning](https://semver.org/) for tagged releases.
 
 ## [Unreleased]
 
+## [2.4.3] — 2026-11-17
+
+Horizon shows every lift goal in one row, and a low blood pressure that is simply your level
+stops asking for a recheck.
+
+### Changed
+
+- **One Strength row for every lift goal.** "Where you stand" shows a single Strength row with a
+  thin track for each lift goal and one line counting how many are rising, holding or drifting
+  back, instead of only the first lift on the board.
+- **Weight no longer appears twice.** "Since you started" leaves weight out while the weight goal
+  row shows below it, and the freed place goes to up to two lifts whose working load rose.
+- **A low blood pressure can be your level.** A low reading that repeats on separate days, agrees
+  with itself, stays at or above 90/50 and fits regular aerobic training or weight loss now reads
+  "expected with your training" and raises no watch note. A symptom you logged, a related blood
+  finding or a blood-pressure medication keeps the ordinary read.
+- **A lighter recheck.** One low reading your training or weight loss already explains asks for
+  one more reading on another day, not a week of them, and the home protocol now says to measure
+  before coffee, food or exercise.
+
 ## [2.4.2] — 2026-11-17
 
 Horizon opens on what the week is for and what you have already built, the team behind your plan
