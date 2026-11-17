@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.28.0
 
-ARG NODE_IMAGE=node:26.13.0-trixie-slim
+ARG NODE_IMAGE=node:26.13.1-trixie-slim
 
 # ---- builder: compile TypeScript ----
 FROM ${NODE_IMAGE} AS builder
