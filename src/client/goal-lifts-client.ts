@@ -8,7 +8,7 @@
 // row's link reads every lift aloud (the drawn spans are hidden from assistive tech).
 // A lift may carry one quiet line under it: the measure of its move ("4 lb up since Oct 25"),
 // the goal it carries through a plan swap ("Carries your Pendlay Row goal since Nov 13") and
-// what is next ("Next: 3 × 5–8 at 145 lb").
+// what is next ("Next session: 3 × 5–8 at 145 lb").
 //
 // Deterministic strings over CairnGoalRowModel's lift rows; every word escaped, positions
 // are data-only custom properties, no colour written here (the hue is the row's stone class).
@@ -34,7 +34,7 @@
         <span class="goalrow-tfill is-from-${g.origin}" style="--l:${n(g.fill_left)};--w:${n(g.fill_width)}"></span>
         <span class="goalrow-tick is-start" style="--x:${n(g.start)}"></span>
         <span class="goalrow-tick is-goal" style="--x:${n(g.goal)}"></span>
-        ${ring}<span class="goalrow-now" style="--x:${n(g.now)}"></span>
+        ${g.mark == null ? "" : `<span class="goalrow-mark" style="--x:${n(g.mark)}"></span>`}${ring}<span class="goalrow-now" style="--x:${n(g.now)}"></span>
       </span>`;
   }
 

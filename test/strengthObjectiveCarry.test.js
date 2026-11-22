@@ -94,6 +94,18 @@ test("a swap to another movement pattern carries nothing", () => {
   assert.equal(repo.getStrengthJourney({ exercise: PENDLAY }).tracked, null);
 });
 
+test("a bodyweight lift swapped for a loaded one carries nothing: they are not one scale", () => {
+  repo.upsertExercise({ name: "Weighted Pull-Up", muscle_group: "back", mode: "reps" });
+  repo.upsertExercise({ name: "Lat Pulldown", muscle_group: "back", mode: "reps" });
+  for (const n of [40, 30, 20]) log("Weighted Pull-Up", 25, 6, n);
+  const objective = repo.setStrengthObjective({ exercise: "Weighted Pull-Up", target_kind: "explicit_est_1rm", target_est_1rm: 60 });
+  repo.savePlanDay(1, "Pull", "Back", [{ exercise: "Weighted Pull-Up", sets: 3, rep_low: 5, rep_high: 8 }]);
+  swap("Weighted Pull-Up", "Lat Pulldown", 10);
+  log("Lat Pulldown", 150, 8, 0);
+  assert.equal(strengthObjectiveCarry(objective), null);
+  assert.equal(repo.getStrengthObjective(objective.id).status, "active");
+});
+
 test("no recorded swap: nothing is guessed from the plan, and a lift gone quiet says when it was last trained", () => {
   const objective = seedRowGoal([70, 60, 50, 40]);
   // The plan day is rewritten by hand: no swap is on record.

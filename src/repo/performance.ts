@@ -407,6 +407,23 @@ export function currentLiftCapacities(opts: { programState?: ProgramState } = {}
   return liftCapacities(liftsAtCapacityNow(programState.lifts || []), bodyweight, sex, age);
 }
 
+/**
+ * The next strength standard above ONE lift's own estimate, for this person: their sex,
+ * their age band and their current bodyweight (so it moves as they do). A load in lb,
+ * rounded to 5 — a waypoint to look toward, never a level word and never a gate. Null
+ * when the lift is not an honest representative of a standard (a machine press, an
+ * assisted pull-up), when bodyweight is unknown, or when nothing sits above it.
+ */
+export function buildMarkFor(exercise: string, est1rm: number): number | null {
+  if (!(est1rm > 0)) return null;
+  const profile = getProfile();
+  const group = (findExercise(exercise) as { muscle_group?: string | null } | null)?.muscle_group ?? null;
+  const lift = { exercise, est_1rm: est1rm, mode: "reps", muscle_group: group } as unknown as LiftState;
+  const age = profile?.age != null ? Number(profile.age) : null;
+  const next = liftCapacities([lift], currentBodyweight(profile), sexOf(profile), age)[0]?.to_next;
+  return next ? Math.round((est1rm + next.lb) / 5) * 5 : null;
+}
+
 // Benchmark patterns the athlete TRAINS but only through a non-standard variation
 // (leg press but no back squat, RDLs but no conventional deadlift, assisted pull-ups
 // but no bodyweight pull) — so capacity can't be read honestly. Each becomes a gentle

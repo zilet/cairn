@@ -6594,7 +6594,11 @@ marks its track draws (now against the same envelope four weeks back, `LIFT_TOWA
 `LIFT_BACK_LB`), so word and picture cannot disagree; with no reading four weeks back it is the
 journey's own trend call, and a lift with no exposure inside the envelope's 28 days makes no call
 ("Last trained Oct 3"). Each lift may carry `next_words` (the journey's next prescription and its
-planning range) and `carried_words`.
+planning range), `carried_words`, and `mark_words` with `track.mark`: the next strength standard
+above THAT lift for the athlete's own sex, age band and current bodyweight (`buildMarkFor`,
+`src/repo/performance.ts`), said as a load ("Next mark for your build: 240 lb") and drawn as a
+quiet waypoint only while it sits between now and the goal. It is never a level word, a
+percentile or a gate, and it moves with the athlete's bodyweight.
 
 **A lift goal follows its movement through a recorded swap.** An objective is set on one exact
 exercise; when an applied proposal swapped that exercise for a same-pattern variant and the

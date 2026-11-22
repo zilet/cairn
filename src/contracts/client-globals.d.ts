@@ -7447,13 +7447,15 @@ declare global {
     note: string;
   };
   /** A goal's track, one 0..1 axis; `ago` is null when it would sit on the start or is unknown. */
-  type ClientGoalTrack = { start: number; now: number; goal: number; ago: number | null };
+  type ClientGoalTrack = { start: number; now: number; goal: number; ago: number | null; mark?: number | null };
   /** The track as percentages of its width (trackGeometry): the fill grows from the start's side. */
   type ClientGoalTrackGeometry = {
     start: number;
     now: number;
     goal: number;
     ago: number | null;
+    /** The waypoint for the athlete's build (a lift goal only); null with none. */
+    mark?: number | null;
     fill_left: number;
     fill_width: number;
     origin: "left" | "right";

@@ -59,7 +59,7 @@
         <span class="goalrow-tfill is-from-${g.origin}" style="--l:${n(g.fill_left)};--w:${n(g.fill_width)}"></span>
         <span class="goalrow-tick is-start" style="--x:${n(g.start)}"></span>
         <span class="goalrow-tick is-goal" style="--x:${n(g.goal)}"></span>
-        ${ring}<span class="goalrow-now" style="--x:${n(g.now)}"></span>
+        ${g.mark == null ? "" : `<span class="goalrow-mark" style="--x:${n(g.mark)}"></span>`}${ring}<span class="goalrow-now" style="--x:${n(g.now)}"></span>
       </span>${ends}${row.note ? `<small class="goalrow-note">${escHtml(row.note)}</small>` : ""}`;
   }
 

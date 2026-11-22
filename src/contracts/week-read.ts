@@ -165,6 +165,11 @@ export interface WeekReadGoalTrack {
   ago: number | null;
   /** "4 weeks ago" / "Oct 19" — the ring's words for a label; null with no `ago`. */
   ago_words: string | null;
+  /**
+   * A lift goal only: where the next mark for the athlete's own build sits, drawn as a
+   * quiet waypoint. Present only when it lies between now and the goal; null otherwise.
+   */
+  mark?: number | null;
 }
 
 export type WeekReadGoalDirection = "toward" | "holding" | "back" | "reached";
@@ -205,7 +210,13 @@ export interface WeekReadGoal {
    */
   carried_words?: string | null;
   /**
-   * A lift goal only: what is ahead in the journey's own terms: "Next: 3 × 5–8 at 145 lb, +1 rep",
+   * A lift goal only: the next strength standard above this lift for the athlete's own sex,
+   * age band and current bodyweight, as a load: "Next mark for your build: 240 lb". A waypoint
+   * to look toward — never a level word, a percentile or a gate. Null when there is none.
+   */
+  mark_words?: string | null;
+  /**
+   * A lift goal only: what is ahead in the journey's own terms: "Next session: 3 × 5–8 at 145 lb, +1 rep",
    * and the journey's planning range when it gives one. Null when it has neither.
    */
   next_words?: string | null;
@@ -240,8 +251,10 @@ export interface WeekReadGoalLift {
   move_words: string | null;
   /** "Carries your Pendlay Row goal since Nov 13"; null unless a recorded swap carries the goal. */
   carried_words?: string | null;
-  /** "Next: 3 × 5–8 at 145 lb, +1 rep"; null when the journey holds no next step. */
+  /** "Next session: 3 × 5–8 at 145 lb, +1 rep"; null when the journey holds no next step. */
   next_words?: string | null;
+  /** "Next mark for your build: 240 lb"; null when there is none. */
+  mark_words?: string | null;
 }
 
 /** The most lift goals the strength row lists. */

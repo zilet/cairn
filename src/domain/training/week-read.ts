@@ -68,6 +68,7 @@ import { raceRunActivity } from "../../repo/race-results.js";
 import { RUN_KIND_LABELS } from "../../repo/run-edit.js";
 import { athleteUnits } from "../../repo/settings.js";
 import { localDateISO } from "../../repo/shared.js";
+import { buildMarkFor } from "../../repo/performance.js";
 import {
   capacityEnvelopeAsOf,
   getStrengthJourneys,
@@ -453,7 +454,8 @@ export function goalTrack(
   now: number | null,
   goal: number | null,
   ago: number | null = null,
-  agoWords: string | null = null
+  agoWords: string | null = null,
+  mark: number | null = null
 ): WeekReadGoalTrack | null {
   if (start == null || now == null || goal == null) return null;
   if (![start, now, goal].every(Number.isFinite) || goal === start) return null;
@@ -472,6 +474,8 @@ export function goalTrack(
     goal: pos(1),
     ago: agoAt != null ? pos(agoAt) : null,
     ago_words: agoAt != null ? agoWords : null,
+    // A waypoint is drawn only on the way: strictly between now and the goal.
+    ...(mark != null && Number.isFinite(mark) && at(mark) > at(now) && at(mark) < 1 ? { mark: pos(at(mark)) } : {}),
   };
 }
 
@@ -511,6 +515,7 @@ type GoalThread = Pick<
   | "href"
   | "carried_words"
   | "next_words"
+  | "mark_words"
 >;
 
 /**
@@ -659,7 +664,7 @@ function weightThread(
 const LIFT_TOWARD_LB = 2;
 const LIFT_BACK_LB = 3;
 
-/** "3 × 5–8 at 145 lb": a loaded reps prescription only (never assisted, bodyweight or timed). */
+/** "Next session: 3 × 5–8 at 145 lb": a loaded reps prescription only (never assisted, bodyweight or timed). */
 function prescriptionWords(journey: StrengthJourney, units: AthleteUnits): string | null {
   const rx = journey.next_prescription;
   const t = rx?.suggested;
@@ -671,7 +676,7 @@ function prescriptionWords(journey: StrengthJourney, units: AthleteUnits): strin
   if (!(weight > 0) || !(low > 0) || !(high >= low) || !(sets > 0)) return null;
   const reps = low === high ? `${low}` : `${low}–${high}`;
   const step = /^[+−-]/.test(String(rx.delta_text ?? "")) ? `, ${rx.delta_text}` : "";
-  return `Next: ${sets} × ${reps} at ${loadWords(weight, units.weight)}${step}`;
+  return `Next session: ${sets} × ${reps} at ${loadWords(weight, units.weight)}${step}`;
 }
 
 /**
@@ -722,6 +727,11 @@ function strengthThread(
   const load = (lb: number) => weightWords(lb, units.weight, { whole: true });
   // No exposure inside the envelope's window: `now` is the last one, however old.
   const stale = !!journey && !journey.current && !!journey.latest;
+  // The next standard above this lift for the athlete's own sex, age and bodyweight: a
+  // waypoint, said as a load. Only from a fresh reading, and only while it is still ahead.
+  const trained = journey?.tracked?.exercise ?? objective?.exercise ?? null;
+  const build = !stale && !row.reached && trained && now ? safe(() => buildMarkFor(trained, now.est_1rm), null) : null;
+  const mark = build != null && now && build > now.est_1rm ? build : null;
   let direction: WeekReadGoalDirection | null = null;
   let words: string | null = null;
   let move: string | null = null;
@@ -751,13 +761,14 @@ function strengthThread(
         ? [load(startLb), startDate ? dateWords(startDate, today) : ""].filter(Boolean).join(" · ")
         : null,
     goal_words: goal != null ? load(goal) : null,
-    track: goalTrack(startLb, now?.est_1rm ?? null, goal, ago?.est_1rm ?? null, agoWords),
+    track: goalTrack(startLb, now?.est_1rm ?? null, goal, ago?.est_1rm ?? null, agoWords, mark),
     direction,
     direction_words: words ?? (direction ? DIRECTION_WORDS[direction] : null),
     move_words: move,
     href: WEEK_HREFS.program,
     carried_words: strengthCarriedWords(journey, today),
     next_words: strengthNextWords(journey, units),
+    mark_words: mark != null ? `Next mark for your build: ${load(mark)}` : null,
   };
 }
 
@@ -808,6 +819,7 @@ function strengthGoalOfMany(
       move_words: thread.move_words ?? null,
       carried_words: thread.carried_words ?? null,
       next_words: thread.next_words ?? null,
+      mark_words: thread.mark_words ?? null,
     };
   });
   const count = liftCountWords(lifts.map((l) => l.direction));

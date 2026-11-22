@@ -33,6 +33,8 @@ export interface StrengthObjectiveCarry {
   since: string;
 }
 
+const BODYWEIGHT_LIFT = /\b(?:pull|chin|push)[\s-]?ups?\b|\bdips?\b/i;
+
 type RecordedSwap = { from_key: string; to: string; to_key: string; day: string };
 
 function storedName(raw: string): string {
@@ -113,6 +115,9 @@ export function strengthObjectiveCarry(objective: {
     name = swap.to;
   }
   if (!name || !since || at === own || !planned.includes(at)) return null;
+  // A bodyweight lift and a loaded one are not one scale (a pull-up's load is the athlete,
+  // a pulldown's the stack): a swap between them carries nothing.
+  if (BODYWEIGHT_LIFT.test(objective.exercise) !== BODYWEIGHT_LIFT.test(name)) return null;
   const pattern = classifyPattern(objective.exercise);
   if (!pattern || classifyPattern(name) !== pattern) return null;
   return { exercise: name, exercise_key: at, from: objective.exercise, since };
