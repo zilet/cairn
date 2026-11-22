@@ -19,16 +19,21 @@
 //   - the athlete's own accepted carbs_g / fat_g win (`source: "yours"`).
 // Nothing here throws into a nutrition surface: each part degrades to absent.
 import { db } from "../db.js";
-import { FAT_CEILING_SHARE, FAT_FLOOR_SHARE, carbBasis, dayFuelDemand } from "./fuel-demand.js";
+import { CARB_BANDS, FAT_CEILING_SHARE, FAT_FLOOR_SHARE, carbBasis, dayFuelDemand } from "./fuel-demand.js";
 import type { CarbBasis, DayFuelDemand } from "./fuel-demand.js";
 import { fiberFloorG, FIBER_FLOOR_G } from "./fiber-floor.js";
+import { fuelGuideWhys } from "./fuel-guide-why.js";
+import type { FuelWhy } from "./fuel-guide-why.js";
+import { fuelPattern } from "./fuel-pattern.js";
+import type { FuelPattern } from "./fuel-pattern.js";
+import { athleteUnits } from "./settings.js";
 import { fuelHealthLeans } from "./fuel-ideas.js";
 import { dayIntakeCoverage, getDayIntake } from "./nutrition.js";
 import { nutritionRelevantDirectives } from "./nutrition-progress.js";
 import { matchOptimalZone } from "./propagation-data.js";
 import { prioritizeMarkers } from "./propagation.js";
 import { listSupplements } from "./supplements.js";
-import { addDaysISO, localDateISO } from "./shared.js";
+import { LB_PER_KG, addDaysISO, localDateISO } from "./shared.js";
 
 // ---------- the rules (each published source named; see the stream report) ----------
 // Fat: the ACSM / AND / DC joint position "Nutrition and Athletic Performance" (2016) band
@@ -45,7 +50,7 @@ export const FAT_FLOOR_G_PER_KG = 0.5;
 // finding leans lower.
 export const SAT_FAT_CEILING_SHARE = 0.1;
 export const SAT_FAT_LIPID_CEILING_SHARE = 0.06;
-// Omega-3: the AHA's "two servings of (oily) fish a week" (AHA Science Advisory, Rimm et
+// Omega-3: the AHA's one to two seafood meals a week (AHA Science Advisory, Rimm et
 // al., "Seafood Long-Chain n-3 Polyunsaturated Fatty Acids and Cardiovascular Disease",
 // Circulation 2018). Counted as days with an omega-3 source over the last seven days.
 export const OMEGA_3_DAYS_PER_WEEK = 2;
@@ -91,6 +96,14 @@ export interface FuelGuide {
   /** Weekly lines: the one sentence, and its counts. */
   words?: string | null;
   weekly?: { days_with: number; days_logged: number; supplement: boolean } | null;
+  /** Why this number, what it does for the goal in force, and the published basis (repo/fuel-guide-why.ts). */
+  why?: FuelWhy | null;
+}
+
+/** The same three-part explanation for the two numbers the meters carry. */
+export interface FuelExplain extends FuelWhy {
+  key: "protein" | "energy";
+  label: string;
 }
 
 export interface FuelGuides {
@@ -99,6 +112,10 @@ export interface FuelGuides {
   target_kcal: number | null;
   protein_g: number | null;
   guides: FuelGuide[];
+  /** Protein and energy explained (the guides carry their own `why`). */
+  explain?: FuelExplain[];
+  /** Today only: where the last two weeks' complete days landed, and the one lever (repo/fuel-pattern.ts). */
+  pattern?: FuelPattern | null;
 }
 
 type Intake = ReturnType<typeof getDayIntake>;
@@ -110,6 +127,8 @@ export interface FuelGuidesOpts {
   basis?: CarbBasis | null;
   /** Test injection: the active nutrition-relevant directives. */
   directives?: any[];
+  /** The gram guides alone: no weekly lines, explanations or pattern (the pattern's own per-day reads). */
+  gramsOnly?: boolean;
 }
 
 const up5 = (n: number) => Math.ceil(n / 5) * 5;
@@ -292,16 +311,18 @@ function omegaSupplement(): { name: string } | null {
   }
 }
 
-// The latest Omega-3 index reading's STANDING in words, never its value.
+// The latest omega-3 blood reading's STANDING in words, never its value. Labs report it
+// under two names (the index, and total omega-3 by weight); either one speaks.
+const OMEGA_LAB_LABELS = new Set(["Omega-3 index", "Omega-3 Total"]);
 function omegaIndexWords(): string | null {
   try {
     const marker = prioritizeMarkers().markers.find(
-      (m: any) => matchOptimalZone(String(m?.name ?? ""))?.label === "Omega-3 index"
+      (m: any) => OMEGA_LAB_LABELS.has(String(matchOptimalZone(String(m?.name ?? ""))?.label ?? ""))
     );
     if (!marker || typeof (marker as any).in_optimal !== "boolean") return null;
     return (marker as any).in_optimal
-      ? "Your last omega-3 index reads in range."
-      : "Your last omega-3 index reads below its range.";
+      ? "Your last omega-3 blood reading sits in range."
+      : "Your last omega-3 blood reading sits below its range.";
   } catch {
     return null;
   }
@@ -315,7 +336,7 @@ function weeklyGuide(key: FuelGuideKey, label: string, words: string, weekly: Fu
     low_g: null,
     high_g: null,
     eaten_g: null,
-    basis_words: key === "omega_3" ? "two servings of oily fish a week" : "your labs",
+    basis_words: key === "omega_3" ? "one to two servings of oily fish a week" : "your labs",
     source: "derived",
     lab_led: labLed,
     words,
@@ -338,10 +359,10 @@ function omegaLine(week: WeekDay[]): FuelGuide | null {
   } else if (logged >= WEEKLY_MIN_LOGGED_DAYS && known) {
     words =
       days === 0
-        ? `None of the last ${COUNT_WORDS[logged]} logged days carried an omega-3 source. Two servings of oily fish a week is the usual guide.`
+        ? `None of the last ${COUNT_WORDS[logged]} logged days carried an omega-3 source. One to two servings of oily fish a week is the usual guide.`
         : days < OMEGA_3_DAYS_PER_WEEK
-          ? `An omega-3 source on ${COUNT_WORDS[days]} of the last seven days. Two a week is the usual guide.`
-          : `An omega-3 source on ${COUNT_WORDS[days]} of the last seven days, in line with the usual two a week.`;
+          ? `An omega-3 source on ${COUNT_WORDS[days]} of the last seven days, the low end of the usual one to two servings of oily fish a week.`
+          : `An omega-3 source on ${COUNT_WORDS[days]} of the last seven days, in line with the usual one to two servings a week.`;
   }
   if (!words) return null;
   return weeklyGuide(
@@ -421,6 +442,7 @@ export function dayFuelGuides(date?: string, opts: FuelGuidesOpts = {}): FuelGui
   const ownFat = positive(target?.fat_g);
   let fat: FuelGuide | null = null;
   let fatFloorForFit: number | null = null;
+  let fatShare: { low: number; high: number } | null = null;
   if (ownFat) {
     fatFloorForFit = Math.round(ownFat);
     fat = guide({
@@ -440,6 +462,7 @@ export function dayFuelGuides(date?: string, opts: FuelGuidesOpts = {}): FuelGui
     fatFloorForFit = low;
     const high = kcal ? Math.max(low, down5((kcal * FAT_CEILING_SHARE) / 9)) : null;
     const weightLed = weightFloor > shareFloor;
+    fatShare = kcal ? { low: shareFloor, high: (kcal * FAT_CEILING_SHARE) / 9 } : null;
     fat = guide({
       key: "fat",
       label: "Fat",
@@ -522,6 +545,8 @@ export function dayFuelGuides(date?: string, opts: FuelGuidesOpts = {}): FuelGui
   }
 
   const placedGuides = guides.map((g) => placed(g, state));
+  const base = { date: d, day_state: state, target_kcal: kcal, protein_g: protein };
+  if (opts.gramsOnly) return { ...base, guides: placedGuides };
   try {
     const week = weekOfFood(d);
     const omega = omegaLine(week);
@@ -530,7 +555,59 @@ export function dayFuelGuides(date?: string, opts: FuelGuidesOpts = {}): FuelGui
   } catch {
     /* the weekly lines are context; a failed read says nothing */
   }
-  return { date: d, day_state: state, target_kcal: kcal, protein_g: protein, guides: placedGuides };
+
+  // Why each number is what it is, in the athlete's own weight and goal.
+  let explain: FuelExplain[] = [];
+  let explained = placedGuides;
+  try {
+    const unit = athleteUnits().weight === "kg" ? "kg" : "lb";
+    const carbGuide = guides.find((g) => g.key === "carbs");
+    const whys = fuelGuideWhys({
+      mode: target?.mode ? String(target.mode) : null,
+      kg,
+      weight_words: kg ? `${Math.round(unit === "kg" ? kg : kg * LB_PER_KG)} ${unit}` : null,
+      weight_unit: unit,
+      kcal,
+      protein_g: protein,
+      own_target: /accepted|user/.test(String((target as any)?.source ?? "")),
+      carbs:
+        shape && carbGuide && CARB_BANDS[shape.tier]
+          ? {
+              tier: shape.tier,
+              band: CARB_BANDS[shape.tier],
+              within_target: shape.basis === "within_target",
+              high_g: Number(shapeHigh ?? carbGuide.high_g ?? 0),
+              yours: carbGuide.source === "yours",
+            }
+          : null,
+      fat: fat
+        ? {
+            low_g: Number(fat.low_g ?? 0),
+            yours: fat.source === "yours",
+            share_low_g: fatShare?.low ?? null,
+            share_high_g: fatShare?.high ?? null,
+          }
+        : null,
+      fiber: { per_kcal: fiberLow > FIBER_FLOOR_G, lab_led: leans.more_fiber },
+      saturated_fat: kcal ? { lipid } : null,
+    });
+    explained = placedGuides.map((g) => ({ ...g, why: whys[g.key as keyof typeof whys] ?? null }));
+    if (whys.protein) explain.push({ key: "protein", label: "Protein", ...whys.protein });
+    if (whys.energy) explain.push({ key: "energy", label: "Energy", ...whys.energy });
+  } catch {
+    explain = [];
+  }
+
+  // The last two weeks, read only for the day being lived.
+  let pattern: FuelPattern | null = null;
+  if (d === today) {
+    try {
+      pattern = fuelPattern(today, { directives });
+    } catch {
+      pattern = null;
+    }
+  }
+  return { ...base, guides: explained, explain, pattern };
 }
 
 /**

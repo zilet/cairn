@@ -6483,8 +6483,17 @@ declare global {
     text: string;
     note: string;
     track: { lo: number; hi: number; mark: number | null } | null;
+    /** Why this number, what it does, the published basis; null on an older read. */
+    why: import("./fuel.js").ClientFuelWhy | null;
   };
-  type ClientFuelGuidesModel = { rows: ClientFuelGuideRow[]; weekly: string[] };
+  type ClientFuelGuidesModel = {
+    rows: ClientFuelGuideRow[];
+    weekly: string[];
+    /** Protein and energy explained. */
+    explain: import("./fuel.js").ClientFuelExplain[];
+    /** The last two weeks' complete days and the one lever; null when too thin to read. */
+    pattern: import("./fuel.js").ClientFuelPattern | null;
+  };
   type ClientFuelMealNote = { id: number; parsed: Record<string, unknown> };
   type ClientFuelMeal = {
     id: number;

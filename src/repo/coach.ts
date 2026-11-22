@@ -259,24 +259,37 @@ function dayIntakeForCoach(date = localDateISO()): CoachDayIntake {
     totals: d?.totals ?? { kcal: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0 },
     target: d?.target ?? null,
     remaining: d?.remaining ?? null,
-    guides: dayGuidesForCoach(d, date),
+    ...dayGuidesForCoach(d, date),
     entries,
   };
 }
 
 // The day's food guides in the words the Intake card prints, so chat answers "am I getting
 // enough fat / fiber" from the same read the athlete sees. Absent rather than wrong.
-function dayGuidesForCoach(intake: any, date: string): CoachDayIntake["guides"] {
+function dayGuidesForCoach(
+  intake: any,
+  date: string
+): Pick<CoachDayIntake, "guides" | "guides_pattern"> {
   try {
-    return dayFuelGuides(intake?.date ?? date, { intake }).guides.map((g) => ({
-      key: g.key,
-      label: g.label,
-      eaten_g: g.eaten_g,
-      guide: g.text || g.words || "",
-      note: g.note || g.basis_words || null,
-    }));
+    const read = dayFuelGuides(intake?.date ?? date, { intake });
+    return {
+      guides: read.guides.map((g) => ({
+        key: g.key,
+        label: g.label,
+        eaten_g: g.eaten_g,
+        guide: g.text || g.words || "",
+        note: g.note || g.basis_words || null,
+      })),
+      guides_pattern: read.pattern
+        ? {
+            title: read.pattern.title,
+            lines: read.pattern.lines.map((l) => l.words),
+            lever: read.pattern.lever ? `${read.pattern.lever.words} ${read.pattern.lever.why}` : null,
+          }
+        : null,
+    };
   } catch {
-    return undefined;
+    return {};
   }
 }
 

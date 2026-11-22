@@ -34,7 +34,9 @@ type StrengthRepsWords = { current: string; date: string | null; target: string;
     const now = reps.now ?? reps.latest;
     const assist = now && now.value === 0 && now.assist_lb != null ? Number(now.assist_lb) : null;
     const from = reps.start_assist_lb != null && assist != null && reps.start_assist_lb > assist ? reps.start_assist_lb : null;
-    const assistText = assist != null ? `${assist} lb of assist${from != null ? `, down from ${from}` : ""}` : "";
+    // The athlete's own unit (ui-format's CairnFmt.weight); a harness without it keeps pounds.
+    const load = (lb: number, bare = false) => (typeof CairnFmt === "object" ? CairnFmt.weight(lb, undefined, bare) : bare ? String(lb) : `${lb} lb`);
+    const assistText = assist != null ? `${load(assist)} of assist${from != null ? `, down from ${load(from, true)}` : ""}` : "";
     const left = now ? Math.max(0, reps.goal_value - now.value) : null;
     return {
       current: now ? `Best ${now.text} at bodyweight${assistText ? ` · ${assistText}` : ""}` : "No set at bodyweight logged yet",

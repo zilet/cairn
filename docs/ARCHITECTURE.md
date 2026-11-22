@@ -1806,10 +1806,28 @@ untouched, and the offline `stub` agent is unchanged. A test that needs its own 
   and carbs flex. The athlete's own accepted `carbs_g` / `fat_g` win. Fiber has one rule,
   `src/repo/fiber-floor.ts` (14 g per 1,000 kcal, never under 30 g), shared with the progress read.
   Saturated fat is a ceiling (10% of energy, 6% while a lipid finding leans lower), summed only when
-  every meal carries it. Omega-3 is a weekly sentence (days with a source against two a week, silent
+  every meal carries it. Omega-3 is a weekly sentence (days with a source against one to two a week, silent
   under three logged days, a daily supplement said instead of a gap), never grams. Salt and added
   sugar speak only when most logged days read high AND a lab finding makes them relevant. The guides
   carry their finished words and track geometry, never move kcal or protein, and are never a gate.
+- **Every guide explains itself, and the explanation cannot disagree with the number.**
+  `fuelGuideWhys()` (`src/repo/fuel-guide-why.ts`) is pure words over the figures
+  `dayFuelGuides()` already derived: `made_of` (the arithmetic in the athlete's own weight and
+  unit), `effect` (what the nutrient does, shaped by the goal mode and the day's carb tier) and
+  `source` (the published basis by name). Each guide carries it as `why`; protein and energy carry
+  theirs on `guides.explain`. The citations live in that file's header, each checked against its
+  primary source; change a figure there and in the rule together, never in a renderer.
+- **The last two weeks are a read over reads** — `fuelPattern()` (`src/repo/fuel-pattern.ts`), on
+  `guides.pattern` for the day being lived only. It reads the closed COMPLETE days of the last 14
+  (`completedIntakeWindow`; under five there is no read), each against its OWN day's guides
+  (`dayFuelGuides(..., {gramsOnly:true})` with the demand from one `fuelDemandWeek` call), and says
+  where they landed as information. Then ONE lever, the first that applies: energy against the
+  weight line (`weightTrendRead`: the trend and the needed rate differ by 0.3 lb a week or more and
+  energy averaged the matching side of the athlete's own number), then carbs, protein, fiber,
+  saturated fat; or none. A loss pace is set beside the 0.5–1% of body weight a week the evidence
+  recommends, so a pace faster than the athlete's own line but inside that range is said as fine.
+  It never moves a target. Chat reads the same words on `day_intake.guides_pattern`; the per-guide
+  explanations stay off the prompt (the lean DATA budget), so chat explains from the guide and its note.
 - **The profile goal is the destination.** A goal change moves the ACTIVE journey phase's
   `target_weight_lb`/`target_bodyfat_pct` with it (`setProfile`), and the journey card reads the
   profile goal ahead of any phase copy.

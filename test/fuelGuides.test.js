@@ -262,7 +262,10 @@ test("the weekly omega-3 line counts days with a source, against two a week", ()
   const omega = byKey(dbGuides(today()), "omega_3");
   assert.equal(omega.kind, "weekly");
   assert.equal(omega.eaten_g, null);
-  assert.equal(omega.words, "An omega-3 source on one of the last seven days. Two a week is the usual guide.");
+  assert.equal(
+    omega.words,
+    "An omega-3 source on one of the last seven days, the low end of the usual one to two servings of oily fish a week."
+  );
   assert.deepEqual(omega.weekly, { days_with: 1, days_logged: 4, supplement: false });
 });
 

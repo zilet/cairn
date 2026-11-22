@@ -123,7 +123,41 @@
       ? `<dd class="fuel-guide-track" aria-hidden="true"><i class="fuel-guide-band" style="--lo:${t.lo.toFixed(3)};--hi:${t.hi.toFixed(3)}"></i>${mark}</dd>`
       : "";
     const note = row.note ? `<dd class="fuel-guide-note">${escHtml(row.note)}</dd>` : "";
-    return `<div class="fuel-guide" data-guide="${escAttr(row.key)}"><dt class="fuel-today-k">${escHtml(row.label)}</dt><dd class="fuel-guide-v">${value}${text}</dd>${track}${note}</div>`;
+    const why = row.why ? `<dd>${whyHtml("Why", [row.why])}</dd>` : "";
+    return `<div class="fuel-guide" data-guide="${escAttr(row.key)}"><dt class="fuel-today-k">${escHtml(row.label)}</dt><dd class="fuel-guide-v">${value}${text}</dd>${track}${note}${why}</div>`;
+  }
+
+  // "Why": a native disclosure under a number. What the number is made of (in the
+  // athlete's own weight), what the nutrient does for the goal in force, and the published
+  // basis by name. The server finished every word (repo/fuel-guide-why.ts).
+  type Why = { label?: string; made_of: string; effect: string; source: string };
+  function whyHtml(summary: string, items: Why[]): string {
+    const body = items
+      .map((w) => {
+        const label = w.label ? `<p class="fuel-why-k">${escHtml(w.label)}</p>` : "";
+        const source = w.source ? `<p class="fuel-why-src">${escHtml(w.source)}</p>` : "";
+        return `${label}<p>${escHtml(w.made_of)}</p><p>${escHtml(w.effect)}</p>${source}`;
+      })
+      .join("");
+    return `<details class="fuel-why"><summary>${escHtml(summary)}</summary><div class="fuel-why-body">${body}</div></details>`;
+  }
+
+  function explainHtml(m: Model): string {
+    const items = m.guides?.explain || [];
+    return items.length ? whyHtml("Why these two numbers", items) : "";
+  }
+
+  // The last two weeks: where the complete days landed against each day's own guides, and
+  // the one lever with its reason. Information, never a tally of misses; absent when the
+  // complete days are too few to read.
+  function patternHtml(m: Model): string {
+    const p = m.guides?.pattern;
+    if (!p) return "";
+    const lever = p.lever
+      ? `<p class="fuel-pattern-lever">${escHtml(p.lever.words)}</p><p class="fuel-pattern-why">${escHtml(p.lever.why)}</p>`
+      : "";
+    const lines = p.lines.map((l) => `<li>${escHtml(l.words)}</li>`).join("");
+    return `<div class="fuel-pattern"><h3 class="lbl fuel-pattern-title">${escHtml(p.title)}</h3>${lever}<ul class="fuel-pattern-lines">${lines}</ul></div>`;
   }
 
   function guidesHtml(m: Model, countUp = false): string {
@@ -155,7 +189,7 @@
       return `<section class="fuel-today reveal" style="--i:0" aria-labelledby="fuelTodayTitle">
         ${headHtml(m)}
         <p class="fuel-today-empty">${escHtml(EMPTY_LINE)}</p>
-        ${demandHtml(m)}${carbsHtml(m)}
+        ${demandHtml(m)}${carbsHtml(m)}${patternHtml(m)}
       </section>`;
     }
     const pending =
@@ -176,8 +210,8 @@
         ${meterHtml("Protein", m.protein.value, m.protein.anchor, "g", countUp)}
         ${meterHtml("Energy", m.energy.value, m.energy.of, "kcal", countUp)}
       </dl>
-      ${toGo}${guidesHtml(m, countUp)}
-      ${pending}${band}${demandHtml(m)}
+      ${toGo}${explainHtml(m)}${guidesHtml(m, countUp)}
+      ${pending}${band}${demandHtml(m)}${patternHtml(m)}
     </section>`;
   }
 
@@ -200,6 +234,7 @@
     demandHtml,
     carbsHtml,
     guidesHtml,
+    patternHtml,
     skeletonHtml,
     errorHtml,
   };

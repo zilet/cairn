@@ -454,3 +454,38 @@ test("mounting twice on one host leaves one listener", async () => {
   await flush();
   assert.equal(reads - before, 1, "one tap, one read");
 });
+
+test("a guide carrying its why prints a quiet disclosure: what it is made of, what it does, the source", () => {
+  const win = load();
+  const read = guidesRead({
+    explain: [
+      { key: "protein", label: "Protein", made_of: "175 g is 2.5 g per kg at 153 lb.", effect: "Protein keeps muscle in a cut.", source: "Helms 2014." },
+    ],
+  });
+  read.guides[0].why = { made_of: "The range is 6–10 g per kg.", effect: "Carbs are what long running burns.", source: "ACSM 2016." };
+  const host = paint(win, ownerDay(read), null);
+  const whys = host.querySelectorAll(".fuel-guide .fuel-why");
+  assert.equal(whys.length, 1, "only the guide that carries a why");
+  assert.match(text(whys[0]), /Why.*6–10 g per kg.*long running burns.*ACSM 2016\./s);
+  const all = host.querySelectorAll(".fuel-why");
+  assert.equal(all.length, 2);
+  assert.match(text(all[0]), /Why these two numbers.*Protein.*2\.5 g per kg/s);
+});
+
+test("the last two weeks: the lever first, then where the complete days landed; absent when there is none", () => {
+  const win = load();
+  assert.equal(paint(win, ownerDay(), null).querySelectorAll(".fuel-pattern").length, 0);
+  const pattern = {
+    since: "2026-04-11",
+    through: "2026-04-24",
+    complete_days: 12,
+    title: "Your last 12 complete days",
+    lines: [{ key: "energy", label: "Energy", words: "Energy averaged about 1,830 kcal, about 330 under your number." }],
+    lever: { key: "energy", words: "Eating closer to your own number would bring the two together.", why: "The slower line leaves more fuel." },
+  };
+  const host = paint(win, ownerDay(guidesRead({ pattern })), null);
+  assert.equal(text(host.querySelector(".fuel-pattern-title")), "Your last 12 complete days");
+  assert.equal(text(host.querySelector(".fuel-pattern-lever")), pattern.lever.words);
+  assert.deepEqual(host.querySelectorAll(".fuel-pattern-lines li").map(text), [pattern.lines[0].words]);
+  assert.doesNotMatch(text(host.querySelector(".fuel-pattern")), /%|score|missed|failed/i);
+});

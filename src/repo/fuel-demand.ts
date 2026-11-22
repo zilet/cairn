@@ -137,7 +137,7 @@ export interface FuelDemandOpts {
 // run, quality running, a long ride. A big day made big only by strength (a heavy
 // lower day, a lift beside an easy run) is ~1 h of work, which is the moderate band,
 // as is an ordinary day.
-const CARB_BANDS: Readonly<Record<CarbTier, { low: number; high: number }>> = {
+export const CARB_BANDS: Readonly<Record<CarbTier, { low: number; high: number }>> = {
   light: { low: 3, high: 5 },
   moderate: { low: 5, high: 7 },
   high: { low: 6, high: 10 },

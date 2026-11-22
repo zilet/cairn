@@ -253,6 +253,26 @@ export interface ClientFuelGuide {
   /** Weekly lines: the one finished sentence. */
   words?: string | null;
   weekly?: { days_with: number; days_logged: number; supplement: boolean } | null;
+  /** Why this number, what it does for the goal in force, and the published basis. */
+  why?: ClientFuelWhy | null;
+}
+export interface ClientFuelWhy {
+  made_of: string;
+  effect: string;
+  source: string;
+}
+export interface ClientFuelExplain extends ClientFuelWhy {
+  key: "protein" | "energy";
+  label: string;
+}
+/** The last two weeks' complete days against each day's own guides (repo/fuel-pattern.ts). */
+export interface ClientFuelPattern {
+  since: string;
+  through: string;
+  complete_days: number;
+  title: string;
+  lines: { key: string; label: string; words: string }[];
+  lever: { key: string; words: string; why: string } | null;
 }
 export interface ClientFuelGuides {
   date: string;
@@ -260,4 +280,6 @@ export interface ClientFuelGuides {
   target_kcal: number | null;
   protein_g: number | null;
   guides: ClientFuelGuide[];
+  explain?: ClientFuelExplain[];
+  pattern?: ClientFuelPattern | null;
 }

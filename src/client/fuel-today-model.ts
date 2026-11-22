@@ -103,15 +103,20 @@
       text: String(g?.text || ""),
       note: String(g?.note || ""),
       track: g?.track || null,
+      why: g?.why?.effect ? g.why : null,
     });
     if (!read || !Array.isArray(read.guides) || String(read.date || date) !== date) {
       const bare = (key: "carbs_g" | "fat_g" | "fiber_g", label: string) =>
         row(key.slice(0, -2), label, macro(day, key, count).value);
-      return count ? { rows: [bare("carbs_g", "Carbs"), bare("fat_g", "Fat"), bare("fiber_g", "Fiber")], weekly: [] } : null;
+      return count
+        ? { rows: [bare("carbs_g", "Carbs"), bare("fat_g", "Fat"), bare("fiber_g", "Fiber")], weekly: [], explain: [], pattern: null }
+        : null;
     }
     return {
       rows: read.guides.filter((g) => g.on_card && g.text).map((g) => row(g.key, g.label, rounded(g.eaten_g), g)),
       weekly: read.guides.filter((g) => g.kind === "weekly" && g.words).map((g) => String(g.words)),
+      explain: Array.isArray(read.explain) ? read.explain.filter((e) => e?.effect) : [],
+      pattern: read.pattern && Array.isArray(read.pattern.lines) && read.pattern.lines.length ? read.pattern : null,
     };
   }
 
