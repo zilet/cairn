@@ -1,6 +1,7 @@
 // exercise-variations.ts — deterministic, pure exercise variation/alternatives library.
 // No DB writes, no agent calls. All logic is keyword-based classification + curated data.
-import { canonicalGroup, classifyMuscleGroup, isMobility, type MuscleGroup } from "./exercise-canon.js";
+import type { MuscleGroup } from "./exercise-canon.js";
+import { isCountedShare, muscleCreditsShared } from "./muscle-credit.js";
 import { plausibleRir } from "../lib/numbers.js";
 import { WARMUP_LOAD_FRACTION } from "./outcome-comparability.js";
 
@@ -74,6 +75,7 @@ const EXERCISE_MAP: Record<MovementPattern, ExerciseEntry[]> = {
     { name: "Single-Leg RDL", equipment: "dumbbell" },
     { name: "Good Morning", equipment: "barbell", injuryRisk: ["lower-back"] },
     { name: "Kettlebell Swing", equipment: "kettlebell" },
+    { name: "Nordic Curl", equipment: "bodyweight" },
   ],
   "horizontal-push": [
     { name: "Barbell Bench Press", equipment: "barbell", injuryRisk: ["shoulder"] },
@@ -131,7 +133,6 @@ const EXERCISE_MAP: Record<MovementPattern, ExerciseEntry[]> = {
     { name: "Single-Leg Hip Thrust", equipment: "bodyweight" },
     { name: "Cable Kickback", equipment: "cable" },
     { name: "Donkey Kick", equipment: "bodyweight" },
-    { name: "Nordic Curl", equipment: "bodyweight" },
   ],
   calf: [
     { name: "Standing Calf Raise", equipment: "machine" },
@@ -232,16 +233,23 @@ const PATTERN_RULES: Array<[MovementPattern, RegExp[]]> = [
   ["tibialis", [/tibialis/i, /\btib raise/i, /dorsiflex/i]],
   ["mobility", [/cat.?cow/i, /thoracic rotation/i, /90\/90 breathing/i]],
   ["abduction", [/abduction/i, /abductor/i, /hip abduct/i, /lateral (band )?walk/i, /side.?lying leg raise/i, /clamshell/i]],
-  ["hip-extension", [/hip thrust/i, /glute bridge/i, /cable kickback/i, /donkey kick/i, /nordic curl/i]],
+  // A name that also reads as another family, settled before the families it would fall
+  // into (the group classifier, exercise-canon.ts, settles the same names the same way):
+  // a chest dip is a press, a dumbbell or triceps kickback is triceps work, and every
+  // other kickback is the glutes'.
+  ["horizontal-push", [/chest dips?/i, /\b(lean|leaning|forward) dips?\b/i]],
+  ["triceps", [/triceps? kickback/i, /\b(db|dumbbells?) kickback/i]],
+  ["hip-extension", [/hip thrust/i, /glute bridge/i, /kickback/i, /donkey kick/i]],
   ["lunge", [/\blunge\b/i, /bulgarian split squat/i, /split squat/i, /step.?up/i, /lateral lunge/i]],
   ["calf", [/calf raise/i, /donkey calf/i, /calf/i]],
   ["carry", [/farmer.?s walk/i, /farmer walk/i, /suitcase carry/i, /overhead carry/i, /\bcarry\b/i]],
   // Hamstring knee-flexion (a "curl" by name) is posterior-chain, NOT a biceps
   // curl — must be matched BEFORE the biceps rule below so "Leg Curl" doesn't
   // get bicep-curl variations. Swaps to the hamstring/hinge family.
-  ["hinge", [/leg curl/i, /hamstring curl/i, /lying curl/i, /nordic ham/i]],
+  // A nordic curl is knee flexion too (it was filed as hip extension beside the hip thrust).
+  ["hinge", [/leg curl/i, /hamstring curl/i, /lying curl/i, /nordic/i, /glute.?ham/i]],
   ["curl", [/\bcurl\b/i, /preacher/i]],
-  ["triceps", [/tricep/i, /skull crusher/i, /\bdips?\b/i, /close.?grip bench/i, /pushdown/i, /kickback/i]],
+  ["triceps", [/tricep/i, /skull crusher/i, /\bdips?\b/i, /close.?grip bench/i, /pushdown/i]],
   ["lateral-raise", [/lateral raise/i, /upright row/i, /front raise/i]],
   ["core", [/\bplank\b/i, /dead bug/i, /bird dog/i, /ab wheel/i, /rollout/i, /cable crunch/i, /hanging leg raise/i, /russian twist/i, /pallof/i, /side plank/i, /\bcrunch\b/i, /leg raise/i]],
   ["vertical-pull", [/pull.?up/i, /chin.?up/i, /lat pulldown/i, /pulldown/i, /cable pullover/i]],
@@ -367,7 +375,7 @@ function buildAlternativeWhy(original: string, entry: ExerciseEntry, pattern: Mo
 
 /**
  * Classify an exercise name (and optional muscle_group hint) into one of the
- * 14 movement patterns. Returns null when the exercise cannot be mapped.
+ * MovementPattern families above. Returns null when the exercise cannot be mapped.
  */
 // Pure (constant rule tables, no global regexes): remembered per (name, group) in a
 // bounded process-wide table — one Today open asks it ~10k times over ~100 names.
@@ -578,7 +586,8 @@ export function examplesForGroup(group: string, n = 3): string[] {
 // pure aggregator is the ONE effective-volume truth they all fold onto:
 //   - WARMUPS excluded (a ramp-up set well below the day's top working weight),
 //   - proximity-to-failure WEIGHTING (a set left far from failure counts less),
-//   - INDIRECT credit (a movement's secondary muscles earn ~0.5 a set),
+//   - INDIRECT credit (muscle-credit.ts: a real second mover earns half a set; a quarter
+//     share is touched, folded in only by a `touched` read),
 //   - CANON taxonomy (stored group, else classify by name; mobility never counts).
 
 // Effort weight by reps-in-reserve: ≤3 RIR is a real working set; a set left far from
@@ -592,26 +601,25 @@ export function setEffortWeight(rir: number | null | undefined): number {
   return 0.5;
 }
 
-// Movement pattern → the secondary muscle groups it trains indirectly (a press hits
-// triceps, a row hits biceps, a squat hits glutes). Isolation/neutral patterns carry
-// no meaningful indirect load.
-const INDIRECT_BY_PATTERN: Partial<Record<MovementPattern, MuscleGroup[]>> = {
-  squat: ["glutes"],
-  hinge: ["glutes"],
-  lunge: ["glutes"],
-  "hip-extension": ["hamstrings"],
-  "horizontal-push": ["triceps", "shoulders"],
-  "vertical-push": ["triceps"],
-  "horizontal-pull": ["biceps", "rear delts"],
-  "vertical-pull": ["biceps"],
-};
+// Which groups a set credits, and at what share, is muscle-credit.ts's one answer
+// (`muscleCreditFor`): the primary at a full set, a real second mover at half a set
+// (counted), a lesser one at a quarter (touched only). This module only folds it.
 
+/** The secondary groups a set of this exercise COUNTS (half shares and up), primary excluded. */
 export function indirectGroupsForExercise(name: string, muscleGroup?: string | null): MuscleGroup[] {
-  const p = classifyPattern(name, muscleGroup ?? undefined);
-  return p && INDIRECT_BY_PATTERN[p] ? INDIRECT_BY_PATTERN[p]! : [];
+  return muscleCreditsShared(name, muscleGroup)
+    .filter((c) => c.role === "secondary" && isCountedShare(c.share))
+    .map((c) => c.group);
 }
 
-const INDIRECT_CREDIT = 0.5;   // a secondary muscle earns half a working set
+/**
+ * Which shares a volume read folds in. `counted` (the default, and what every band, the
+ * floor and the dose ledger read): the primary and half shares. `touched`: quarter shares
+ * too — the whole picture of what a set worked, never a reason to call a group covered.
+ */
+export interface VolumeShareOptions {
+  shares?: "counted" | "touched";
+}
 
 export interface VolumeSet {
   date: string;
@@ -634,8 +642,10 @@ export function effectiveVolumeByGroup(
   // How much one set counts at its logged reserve. Volume readers use the default;
   // the acute-recovery residual passes its own (a far-from-failure set is a lighter
   // stimulus on recovery than it is a stimulus for growth).
-  effortWeight: (rir: number | null | undefined) => number = setEffortWeight
+  effortWeight: (rir: number | null | undefined) => number = setEffortWeight,
+  opts: VolumeShareOptions = {}
 ): Map<MuscleGroup, GroupVolume> {
+  const touched = opts.shares === "touched";
   // The day's TOP working weight per (exercise, date), to spot ramp-up warmups.
   const topByExDate = new Map<string, number>();
   for (const s of sets) {
@@ -655,8 +665,8 @@ export function effectiveVolumeByGroup(
   };
 
   for (const s of sets) {
-    const primary = canonicalGroup(s.muscle_group) ?? classifyMuscleGroup(s.exercise);
-    if (!primary || isMobility(primary)) continue;
+    const credits = muscleCreditsShared(s.exercise, s.muscle_group);
+    if (!credits.length) continue; // nothing to tell, or mobility (never counts)
     // Warmup exclusion: a loaded set well below the day's top load for that lift.
     const w = s.weight != null ? Math.abs(Number(s.weight)) : 0;
     if (w > 0) {
@@ -669,13 +679,17 @@ export function effectiveVolumeByGroup(
     const tonnage = s.weight != null && s.reps != null && Number(s.weight) > 0 && Number(s.reps) > 0
       ? Number(s.weight) * Number(s.reps)
       : 0;
-    bump(primary, effort, s.date, tonnage);
-    // A core movement is never a press or a row: "Flat Bench Knee Raise" matches the
-    // push rules on the word "bench", and must not lend triceps/shoulders credit.
-    const indirect = primary === "core" ? [] : indirectGroupsForExercise(s.exercise, s.muscle_group);
-    for (const g of indirect) {
-      if (g === primary || isMobility(g)) continue;
-      bump(g, INDIRECT_CREDIT * effort, s.date, 0); // indirect earns half a set, no tonnage
+    // The credits are muscle-credit.ts's: a core movement credits core alone ("Flat Bench
+    // Knee Raise" lends the triceps nothing for the word "bench").
+    for (const credit of credits) {
+      if (credit.role === "primary") {
+        bump(credit.group, effort, s.date, tonnage);
+        continue;
+      }
+      // A synergist earns its share of the set and never any tonnage. A quarter share is
+      // touched, not counted: only a `touched` read folds it in.
+      if (!touched && !isCountedShare(credit.share)) continue;
+      bump(credit.group, credit.share * effort, s.date, 0);
     }
   }
   return out;

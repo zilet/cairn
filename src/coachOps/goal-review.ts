@@ -171,9 +171,10 @@ export function stubGoalReview(row: GoalReviewRecord): StoredGoalReview {
     };
   }
   if (f.kind === "strength_objective") {
-    const reached = loadWords(f.achieved_est_1rm ?? f.target_est_1rm, units.weight);
+    // A reps goal (bodyweight_reps) is said in reps; its est-1RM fields are 0/null.
+    const reached = f.reps ? null : loadWords(f.achieved_est_1rm ?? f.target_est_1rm, units.weight);
     return {
-      headline: `${f.exercise} reached an estimated max of ${reached}.`,
+      headline: reached ? `${f.exercise} reached an estimated max of ${reached}.` : `${f.exercise} reached ${f.reps!.goal_text}.`,
       story: `You set out for ${row.title} and reached it on ${dateWords(f.achieved_date)}. ${f.exposures} ${
         f.exposures === 1 ? "session" : "sessions"
       } with the lift carried you there.`,

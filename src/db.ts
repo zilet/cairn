@@ -379,8 +379,8 @@ CREATE TABLE IF NOT EXISTS strength_objectives (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   exercise TEXT NOT NULL,
   exercise_key TEXT NOT NULL,
-  target_kind TEXT NOT NULL,             -- return_to_personal_best | explicit_est_1rm
-  target_est_1rm REAL NOT NULL,           -- immutable snapshot for this objective
+  target_kind TEXT NOT NULL,             -- return_to_personal_best | explicit_est_1rm | bodyweight_reps
+  target_est_1rm REAL NOT NULL,           -- immutable snapshot for this objective; 0 on a bodyweight_reps goal (read target_kind first)
   baseline_est_1rm REAL,                  -- latest exact-lift estimate when selected
   baseline_date TEXT,
   source TEXT NOT NULL DEFAULT 'user',    -- objectives are athlete-selected only
@@ -390,7 +390,13 @@ CREATE TABLE IF NOT EXISTS strength_objectives (
   superseded_at TEXT,
   completed_at TEXT,
   achieved_est_1rm REAL,
-  achieved_date TEXT
+  achieved_date TEXT,
+  -- A bodyweight_reps goal (repo/strength-reps.ts): reps in one set at bodyweight, or
+  -- target_sets sets of target_reps in one session. NULL on an est-1RM goal (v133).
+  target_reps INTEGER,
+  target_sets INTEGER,                    -- NULL = one set
+  baseline_reps INTEGER,                  -- the goal's measure on the latest exposure when selected
+  achieved_reps INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_strength_objectives_status ON strength_objectives(status, id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_strength_objectives_one_active_per_lift
@@ -915,6 +921,23 @@ CREATE TABLE IF NOT EXISTS blood_pressure_readings (
   created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_bp_measured ON blood_pressure_readings(measured_at);
+
+-- Mobility self-checks (src/repo/mobility-checks.ts): a few short, repeatable field tests
+-- the athlete does alone (knee to wall, toe touch, back scratch, deep squat). One row per
+-- reading per side. Stored in the check's canonical unit (cm, or s for the squat hold);
+-- the athlete's own earlier readings are the only comparison, never a norm.
+CREATE TABLE IF NOT EXISTS mobility_checks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  date TEXT NOT NULL,                        -- YYYY-MM-DD (local day)
+  check_key TEXT NOT NULL,                   -- MOBILITY_CHECKS key
+  side TEXT,                                 -- NULL | 'left' | 'right'
+  value REAL,                                -- canonical unit; NULL only for an untimed deep squat reached heels-down
+  unit TEXT NOT NULL,                        -- 'cm' | 's'
+  note TEXT,
+  source TEXT DEFAULT 'user',                -- user | chat
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_mobility_checks_key_date ON mobility_checks(check_key, date);
 
 -- In-app chat with the coaching agent. Each turn is one row; assistant rows
 -- carry which agent answered and a JSON meta of applied actions / draft ids.

@@ -10,6 +10,9 @@
 //      each; "Behind you ›" switches to that segment when it exists;
 //   3. where you stand (CairnGoalRow): each goal as a thread with its direction, every row
 //      a link to its depth; under them the team's link note when one exists;
+//      then "The whole picture" (CairnStanding): one calm row per area (strength, endurance,
+//      mobility, body, blood, pressure, recovery), a direction word and a sentence, its lines
+//      folded under it; omitted with no `standing`;
 //   4. this week's shape (CairnWeekStrip "shape"): seven columns sized by planned dose, the
 //      totals in words on the masthead, a fold a tapped column peeks into, and folded, the
 //      days as rows that open each day's page;
@@ -96,6 +99,12 @@
     );
   }
 
+  /** "The whole picture": the standing rows under the goals; "" with none (no section). */
+  function standingHtml(model: ClientWeekLanding): string {
+    if (!model.standing?.length || typeof CairnStanding === "undefined") return "";
+    return sectionHtml("standing", "The whole picture", CairnStanding.listHtml(model.standing));
+  }
+
   /** The team's link note for its slot under the goals; "" with none. */
   function linkNoteHtml(team: ClientTeamSeats | null | undefined): string {
     return team && typeof CairnTeamSeats !== "undefined" ? CairnTeamSeats.linkHtml(team) : "";
@@ -118,6 +127,7 @@
       ${proofHtml(model, !!opts.enter)}
       ${sectionHtml("goals", "Where you stand", CairnGoalRow.listHtml(model.goals, { label: "Where you stand" }))}
       <div class="hwk-link-slot" data-hwk-link-slot>${linkNoteHtml(opts.team)}</div>
+      ${standingHtml(model)}
       ${sectionHtml("shape", "This week's shape", shapeHtml(model, opts.selected || null), totals)}
       ${sectionHtml("ahead", "Ahead", aheadHtml(model, opts.seasonHref || ""))}
       <div class="hwk-team-slot" data-hwk-team-slot>${teamHtml(opts.team, opts.changesHref)}</div>

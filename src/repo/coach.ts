@@ -42,6 +42,7 @@ import { memoryForCoach, recentLearnings } from "./memory.js";
 import { capStr, dayIntakeTarget, getDayIntake, mealPlanForCoach } from "./nutrition.js";
 import { listFuelingFeedback } from "./fueling.js";
 import { carbBasis, fuelDemandWeek } from "./fuel-demand.js";
+import { dayFuelGuides } from "./fuel-guides.js";
 import { bodyMetricsContextSlice } from "./body-metrics.js";
 import { getPlan } from "./plan.js";
 import {
@@ -258,8 +259,25 @@ function dayIntakeForCoach(date = localDateISO()): CoachDayIntake {
     totals: d?.totals ?? { kcal: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0 },
     target: d?.target ?? null,
     remaining: d?.remaining ?? null,
+    guides: dayGuidesForCoach(d, date),
     entries,
   };
+}
+
+// The day's food guides in the words the Intake card prints, so chat answers "am I getting
+// enough fat / fiber" from the same read the athlete sees. Absent rather than wrong.
+function dayGuidesForCoach(intake: any, date: string): CoachDayIntake["guides"] {
+  try {
+    return dayFuelGuides(intake?.date ?? date, { intake }).guides.map((g) => ({
+      key: g.key,
+      label: g.label,
+      eaten_g: g.eaten_g,
+      guide: g.text || g.words || "",
+      note: g.note || g.basis_words || null,
+    }));
+  } catch {
+    return undefined;
+  }
 }
 
 // ---------- deterministic training signals (progression-readiness + autoregulation) ----------

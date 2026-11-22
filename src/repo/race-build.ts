@@ -1060,7 +1060,8 @@ const STANDARD_DISTANCES = [
   { key: "race_predict_marathon_sec", km: 42.195 },
 ] as const;
 
-function watchPrediction(asOf: string, distanceKm: number, units: DistanceUnit = "km"): RacePrediction | null {
+/** The watch's own race predictor for `distanceKm` as of `asOf` (Riegel-adjusted from the nearest standard distance), with its four-week trend; null past three weeks old. */
+export function watchPrediction(asOf: string, distanceKm: number, units: DistanceUnit = "km"): RacePrediction | null {
   // The watch predicts four standard distances; the closest one is Riegel-adjusted
   // to the exact goal distance (a 21.1 km "half" moves by seconds, a 15 km race by
   // more — either way it is the athlete's own fitness, not a table).

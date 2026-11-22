@@ -51,6 +51,7 @@ import { loggedSessionTitle, sessionDayCandidates } from "./session-day.js";
 import { weightWords } from "./display-words.js";
 import { canonicalBodyweightSeries, resolvedCurrentBodyweight } from "./bodyweight.js";
 import {
+  completeRepsObjectiveFromLoggedSet,
   completeStrengthObjectiveFromLoggedSet,
   reconcileStrengthObjectiveFromLoggedSets,
   strengthJourneySessionMovement,
@@ -746,6 +747,9 @@ function insertSetByName(
     const prevBest = bestE1rm(prev);
     pr = est_1rm > prevBest;
     if (emitEffects) completeStrengthObjectiveFromLoggedSet({ exercise: ex.name, est_1rm, date });
+  } else if (emitEffects && (input.reps ?? 0) > 0) {
+    // A set at bodyweight (or assisted) can close only a reps goal (strength-reps.ts).
+    completeRepsObjectiveFromLoggedSet({ exercise: ex.name, date });
   }
 
   if (emitEffects) reconcileDailySessionSafe(session.id);

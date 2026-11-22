@@ -496,11 +496,19 @@ const CLASSIFY_RULES: Array<[MuscleGroup, RegExp[]]> = [
   // --- core / trunk ---
   ["core", [/\bplank/, /\bcrunch/, /\bsit up/, /\bab\b/, /\babs\b/, /\bab /, /dead bug/, /hollow/, /\bpallof/, /\bl sit/, /hanging (leg|knee) raise/, /leg raise/, /knee raise/, /russian twist/, /\bwoodchop/, /\bcable rotation/, /\boblique/, /\bbird dog/, /\bbicycle\b/, /toe touch/, /\bv up/, /\brollout/, /ab wheel/, /\bsuitcase/]],
   // --- forearms / grip / carries ---
-  ["forearms", [/dead hang/, /\bhang\b/, /farmer/, /\bcarry\b/, /\bcarries\b/, /grip/, /wrist (curl|roller|extension)/, /\bplate pinch/, /\bgripper/, /finger/]],
+  // ("grip" as a hand position — close/wide/neutral grip — names a variant of another
+  //  lift, never grip work: "Close-Grip Bench Press" is triceps, "Wide-Grip Pulldown" back.)
+  ["forearms", [/dead hang/, /\bhang\b/, /farmer/, /\bcarry\b/, /\bcarries\b/, /^(?!.*\b(?:close|wide|narrow|neutral|reverse|mixed|underhand|overhand|pronated|supinated|parallel|hammer|medium|snatch|v|single|double) grip\b).*\bgrip/, /wrist (curl|roller|extension)/, /\bplate pinch/, /\bgripper/, /finger/]],
   // --- calves + anterior tibialis (before generic legs) ---
   ["calves", [/calf/, /\bcalves/, /\btib(ialis)?\b/, /\btib raise/, /dorsiflex/, /\btoe raise/, /seated calf/, /standing calf/]],
+  // --- lifts whose NAME also reads as another group: matched before glutes ("kickback"),
+  //     chest ("bench", "dip") and the rest, so the group agrees with classifyPattern's
+  //     family. A chest dip leans forward onto the chest; every other dip, a triceps
+  //     kickback with a dumbbell, a bench dip and a close-grip bench are triceps work.
+  ["chest", [/\bchest dips?\b/, /\b(?:lean|leaning|forward) dips?\b/]],
+  ["triceps", [/\btriceps? (?:kickbacks?|dips?)\b/, /\b(?:db|dumbbells?) kickbacks?\b/, /\bdips?\b/, /close grip bench/, /\bcgbp\b/]],
   // --- hamstrings / hinge / posterior ---
-  ["hamstrings", [/leg curl/, /lying curl/, /seated curl/, /\bham(string)?\b/, /\brdl\b/, /romanian/, /stiff leg/, /stiff legged/, /good morning/, /nordic/, /\bdeadlift/, /\bglute ham/, /\bghr\b/]],
+  ["hamstrings", [/leg curl/, /lying curl/, /seated curl/, /\bham(string)?\b/, /\brdl\b/, /romanian/, /stiff leg/, /stiff legged/, /good morning/, /nordic/, /\bdeadlift/, /\bglute ham/, /\bghr\b/, /\b(?:kettlebell|kb) swings?\b/]],
   // --- glutes (incl. hip abduction) ---
   ["glutes", [/hip thrust/, /glute bridge/, /\bbridge\b/, /\bglute/, /\bkickback/, /abduction/, /abductor/, /lateral (band )?walk/, /monster walk/, /clamshell/, /\bbird dog\b/]],
   // --- quads / knee-dominant ---
@@ -508,11 +516,14 @@ const CLASSIFY_RULES: Array<[MuscleGroup, RegExp[]]> = [
   // --- rear delts (before shoulders + back) ---
   ["rear delts", [/face pull/, /rear delt/, /reverse (fly|pec|flye|delt)/, /rear (fly|flye|raise)/, /\bband pull apart/, /\bypt\b/, /\bprone y\b/, /\bprone t\b/]],
   // --- shoulders / vertical & lateral pressing ---
-  ["shoulders", [/overhead press/, /\bohp\b/, /shoulder press/, /military press/, /\barnold/, /lateral raise/, /side raise/, /front raise/, /\bdelt/, /\bshoulder\b/, /\bpike push/, /upright row/, /\bshrug/]],
+  ["shoulders", [/overhead press/, /\bohp\b/, /shoulder press/, /military press/, /\barnold/, /lateral raise/, /side raise/, /front raise/, /\bdelt/, /\bshoulder\b/, /\bpike push/, /upright row/, /\bshrug/, /\blandmine press/]],
+  // --- a SUPPORTED row is a row: the pad ("chest-supported", "incline bench row") must
+  //     not read as chest work ---
+  ["back", [/\bchest supported\b/, /\bsupported rows?\b/, /\bseal rows?\b/, /\bbench rows?\b/, /\bincline (?:db |dumbbell |bench )?rows?\b/]],
   // --- chest / horizontal pressing ---
-  ["chest", [/bench press/, /\bbench\b/, /incline (db|dumbbell|barbell|press|bench)/, /decline (press|bench)/, /chest press/, /chest fly/, /\bpec(toral)? (fly|deck)/, /\bpec deck/, /\bdip\b/, /\bpush up/, /\bpushup/, /\bcable (fly|crossover)/, /\bflye?\b/, /\bchest\b/]],
+  ["chest", [/bench press/, /\bbench\b/, /incline (db|dumbbell|barbell|press|bench)/, /decline (press|bench)/, /chest press/, /chest fly/, /\bpec(toral)? (fly|deck)/, /\bpec deck/, /\bpush up/, /\bpushup/, /\bcable (fly|crossover)/, /\bflye?\b/, /\bchest\b/]],
   // --- triceps (before generic press/pushdown) ---
-  ["triceps", [/triceps/, /\btricep/, /pushdown/, /push down/, /skull crusher/, /\bskullcrusher/, /overhead extension/, /\bkickback/, /close grip bench/, /\bcgbp\b/, /jm press/]],
+  ["triceps", [/triceps/, /\btricep/, /pushdown/, /push down/, /skull crusher/, /\bskullcrusher/, /overhead extension/, /jm press/]],
   // --- back / horizontal & vertical pulling ---
   ["back", [/pull up/, /pullup/, /chin up/, /chinup/, /pulldown/, /pull down/, /\blat\b/, /\blats\b/, /\brow\b/, /seated row/, /cable row/, /bent over row/, /\bt bar/, /\bpullover/, /\bback extension/, /hyperextension/, /\bpull/, /\bback\b/]],
   // --- biceps ---
@@ -530,7 +541,9 @@ export function classifyMuscleGroup(name: string): MuscleGroup | null {
 }
 
 // Resolve the best group for an exercise given its raw name AND any stored group:
-// a stored (canonicalized) group wins; else classify by name. Used by reconcile.
+// a stored (canonicalized) group wins; else classify by name. The PRIMARY rule: reconcile
+// and merge planning read it here, and muscle-credit.ts (`muscleCreditFor` /
+// `primaryMuscleGroup`) builds every set's credit on it. Never re-derive it inline.
 export function resolveGroup(name: string, storedGroup: string | null | undefined): MuscleGroup | null {
   return canonicalGroup(storedGroup ?? null) ?? classifyMuscleGroup(name);
 }
@@ -550,7 +563,8 @@ const AUTHORITATIVE_GROUP_RULES: Array<[MuscleGroup, RegExp[]]> = [
   ["glutes", [/hip thrust/, /glute bridge/]],
   ["quads", [/\bsquat\b/, /leg press/, /leg extension/, /hack squat/, /split squat/]],
   ["back", [/pulldown/, /pull down/, /pull up/, /pullup/, /chin up/, /chinup/, /lat pulldown/]],
-  ["chest", [/bench press/, /chest press/]],
+  // A close-grip bench is triceps work: it never overrides a stored triceps group.
+  ["chest", [/^(?!.*\bclose grip\b).*bench press/, /chest press/]],
   ["shoulders", [/overhead press/, /\bohp\b/, /shoulder press/, /military press/, /lateral raise/]],
 ];
 export function authoritativeGroup(name: string): MuscleGroup | null {
@@ -1087,7 +1101,7 @@ export function detectExerciseMode(name: string): "reps" | "timed" {
 //   - the canonical must be a real member OR a cleanExerciseName of one;
 //   - a group is accepted when it folds ≥2 variants onto one canonical OR cleans a
 //     single messy member (canonical ≠ member's raw display);
-//   - resolve group via canonicalGroup(g.group) ?? classifyMuscleGroup(canonical);
+//   - resolve group via resolveGroup(canonical, g.group);
 //   - resolve mode via (g.mode==='timed' ? 'timed' : detectExerciseMode(canonical)).
 // Returns one alias row per NON-canonical member ({rawNorm → canonical}); a member
 // whose norm equals the canonical's norm is skipped (no self-alias). Conservative:
@@ -1146,7 +1160,7 @@ export function planExerciseAliases(
     const nonCanonMembers = distinctMembers.filter((m) => normalizeExerciseName(m) !== canonNorm);
     if (nonCanonMembers.length === 0) continue; // nothing to alias (all already canonical)
 
-    const group = canonicalGroup((g as any)?.group ?? null) ?? classifyMuscleGroup(canonical);
+    const group = resolveGroup(canonical, (g as any)?.group ?? null);
     const mode: "reps" | "timed" = (g as any)?.mode === "timed" ? "timed" : detectExerciseMode(canonical);
 
     for (const m of nonCanonMembers) {
@@ -1327,8 +1341,8 @@ export function validateExerciseMergePlan(from: MergeCandidate, into: MergeCandi
     return { ok: false, reason: "both lifts have substantial independent history" };
   }
 
-  const fromGroup = canonicalGroup(from.group ?? null) ?? classifyMuscleGroup(fromName);
-  const intoGroup = canonicalGroup(into.group ?? null) ?? classifyMuscleGroup(intoName);
+  const fromGroup = resolveGroup(fromName, from.group ?? null);
+  const intoGroup = resolveGroup(intoName, into.group ?? null);
   const groupsAgree = !!fromGroup && !!intoGroup && fromGroup === intoGroup;
   const subset = isTokenSubset(fromTokens, intoTokens) || isTokenSubset(intoTokens, fromTokens);
   if (!(groupsAgree || subset || sameKey)) {

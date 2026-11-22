@@ -22,6 +22,9 @@
 //     prime movers never qualify — running keeps them busy, not stronger);
 //   - a deliberate recovery week or a deload phase is exempt outright: a light week
 //     is what it is FOR.
+// The floor is measured in COUNTED sets (muscle-credit.ts): direct work plus a real second
+// mover's half share. A quarter-share synergist is touched, never counted, so a group can
+// never read as covered off the lifts that merely brush it.
 import { MUSCLE_LANDMARKS } from "./exercise-canon.js";
 
 export interface VolumeFloorContext {

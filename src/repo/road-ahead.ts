@@ -92,6 +92,10 @@ export interface ObjectiveMilestone {
   current_est_1rm: number | null;
   fit: ObjectiveFit | null;
   basis: string;
+  // A reps goal (bodyweight_reps): the goal and its now in reps; target_est_1rm is 0 and
+  // current_est_1rm null, and no fit is claimed (a rep count has no planning range).
+  goal_text?: string | null;
+  now_text?: string | null;
 }
 
 // With no active block, "this block" is the next six weeks — the ordinary block length.
@@ -146,6 +150,20 @@ export function objectiveMilestones(
   const out: ObjectiveMilestone[] = [];
   for (const journey of journeys) {
     const objective = journey.objective!;
+    if (journey.reps) {
+      if (journey.phase === "reached") continue;
+      out.push({
+        objective_id: objective.id,
+        exercise: objective.exercise,
+        target_est_1rm: 0,
+        current_est_1rm: null,
+        fit: null,
+        basis: "a reps goal at bodyweight, so no fit is claimed",
+        goal_text: journey.reps.goal_text,
+        now_text: (journey.reps.now ?? journey.reps.latest)?.text ?? null,
+      });
+      continue;
+    }
     if (journey.phase === "reached" || (journey.gap_lb != null && journey.gap_lb <= 0)) continue;
     const fit = objectiveFit(journey, weeksLeft);
     out.push({

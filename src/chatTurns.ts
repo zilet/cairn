@@ -5,7 +5,16 @@ import { db } from "./db.js";
 import { createProgressBus, createSerialRunner } from "./jobRunner.js";
 import * as repo from "./repo.js";
 import { UPLOADS_DIR } from "./uploadPaths.js";
-import { buildChatPromptParts, parseChatEscalationRequest, parseChatReply, CHAT_REPLY_SENTINEL } from "./prompt.js";
+import {
+  buildChatPromptParts,
+  parseChatEscalationRequest,
+  parseChatReply,
+  parseChatWebSearchRequest,
+  CHAT_REPLY_SENTINEL,
+  type ChatPromptParts,
+  type ChatWebPromptMode,
+  type ChatWebSearchRequest,
+} from "./prompt.js";
 import { extractChatHttpUrls, fetchChatLinkedPages, type ChatLinkedPage } from "./chatLinks.js";
 import {
   coachReadToolList,
@@ -26,6 +35,7 @@ import {
   chatLeanPromptLoopContract,
   chatNativeReadContract,
   chatReadLogLine,
+  chatWebTurnReadNote,
   emptyChatReadTelemetry,
   type ChatReadCall,
   type ChatReadTelemetry,
@@ -66,10 +76,12 @@ import {
   type AgentResult,
 } from "./agents.js";
 import { createChatStreamFilter, type LiveReplyEvent } from "./chatStreamFilter.js";
-import { groundReply } from "./chatGrounding.js";
+import { groundReply, outsideWorldReplyNeedsWeb, type OutsideWorldMode, type OwnRaceRef } from "./chatGrounding.js";
+import { completedRaceRows } from "./repo/race-results.js";
 import { datedWeek, datedWeekDay, type DatedWeek } from "./domain/training/dated-week.js";
 import { strengthPlanDayOn, thisWeekPlanDayMap } from "./repo/plan-selection.js";
 import { sameLiftName } from "./repo/exercise-canon.js";
+import { logMobilityCheck } from "./repo/mobility-checks.js";
 import { isoDow, WEEKDAY_NAMES } from "./repo/profile.js";
 import type { MemoryKind } from "./repo/memory.js";
 import {
@@ -107,7 +119,9 @@ import { diagnosticErrorName, recordAsyncFailure } from "./diagnostics.js";
 import {
   CHAT_LANE_MODEL_CLASS,
   chatLaneBindingClass,
+  chatMessageWantsCurrentResearch,
   classBoundChatModel,
+  decideChatRouting,
   resolveChatProfile,
   type ChatLane,
   type ChatRoutingDecision,
@@ -156,6 +170,9 @@ import {
   buildChatProviderOrder,
   chatExecutionAttemptKey,
   chatTurnTimeoutMs,
+  chatWebEscalationTimeoutMs,
+  chatWebProviderOrder,
+  chatWebTurnTimeoutMs,
   cleanCliLine,
   orderChatProvidersByAvailability,
   resolveRuntimeChatProfile,
@@ -231,6 +248,9 @@ export {
   buildChatProviderOrder,
   chatExecutionAttemptKey,
   chatTurnTimeoutMs,
+  chatWebEscalationTimeoutMs,
+  chatWebProviderOrder,
+  chatWebTurnTimeoutMs,
   orderChatProvidersByAvailability,
   resolveRuntimeChatProfile,
 } from "./chat-routing-runtime.js";
@@ -475,6 +495,7 @@ async function processChatTurnInner(id: number, turn: any, deps: ChatCompletionD
       datedWeek: turnWeek,
       reads,
       promptBytes,
+      web,
     } = await runChatCompletion(id, turn, history, controller.signal, deps);
     clearAgentBusyDeferrals("chat", id);
     // Whether this turn looked anything up, and how — counts and tool names only.
@@ -560,6 +581,8 @@ async function processChatTurnInner(id: number, turn: any, deps: ChatCompletionD
         droppedGoalFields,
         appliedGoalPatch,
         ...(turnWeek !== undefined ? { week: turnWeek } : {}),
+        web: web?.mode ?? "off",
+        ownRaces: chatTurnOwnRaces(),
       },
     });
     if (grounded.notes.length) {
@@ -578,11 +601,14 @@ async function processChatTurnInner(id: number, turn: any, deps: ChatCompletionD
       receipts?: ChangeReceipt[];
       reads?: ChatReadTelemetry;
       prompt_bytes?: number;
+      web?: ChatWebOutcome;
     } = {
       applied,
       drafts: drafts.map(proposalMeta),
     };
     if (reads) meta.reads = reads;
+    // Whether the reply was written from a web search (or should have been): enums only.
+    if (web && web.mode !== "off") meta.web = web;
     if (promptBytes) meta.prompt_bytes = promptBytes;
     if (receipts.length) meta.receipts = receipts;
     const finalRouting = repo.getChatTurnRouting(id);
@@ -2231,6 +2257,35 @@ export function chatTurnPinsAgent(turnAgent: unknown, chosen: string | null | un
   return named || Boolean(chosen && chosen !== "auto");
 }
 
+/**
+ * The athlete's own races, as the turn's DATA carries them: the live endurance goal
+ * (`endurance_goal.event` / `.date`) and every race kept in `completed_races`. A reply
+ * naming these is coaching, never an outside-world claim, so neither the web escalation nor
+ * the outside-world caveat reads them (chatGrounding.ts OwnRaceRef). Fail-soft: none.
+ */
+export function chatTurnOwnRaces(today?: string): OwnRaceRef[] {
+  const out: OwnRaceRef[] = [];
+  try {
+    const goal = repo.getEnduranceGoal(today);
+    if (goal?.mode === "race" && (goal.event || goal.date)) out.push({ name: goal.event ?? null, date: goal.date ?? null });
+  } catch {
+    /* no goal read: nothing to exclude */
+  }
+  try {
+    for (const race of completedRaceRows()) out.push({ name: race.event, date: race.goal_date });
+  } catch {
+    /* no kept races: nothing to exclude */
+  }
+  return out;
+}
+
+/** How the turn's reply stood toward the web: what groundReply's outside-world pass reads. */
+export interface ChatWebOutcome {
+  mode: OutsideWorldMode;
+  /** The turn became a web turn by its one escalation. */
+  escalated: boolean;
+}
+
 export async function runChatCompletion(
   id: number,
   turn: any,
@@ -2244,6 +2299,7 @@ export async function runChatCompletion(
   datedWeek?: DatedWeek | null;
   reads?: ChatReadTelemetry;
   promptBytes?: number;
+  web?: ChatWebOutcome;
 }> {
   const runAgentDep = deps.runAgent ?? runAgent;
   // The dated week is built ONCE per turn (two planWeek reads) and only when a lane's
@@ -2278,12 +2334,30 @@ export async function runChatCompletion(
   const definitions = loadAgents();
   const attempts: ChatAgentAttempt[] = [];
   let decision: ChatRoutingDecision | null = turn.routing ?? null;
-  const wantsWeb = decision?.reason_codes.includes("current_research") === true;
+  // ---------- the web ----------
+  // A turn about the outside world runs with web search on, on an agent that can. It is
+  // a web turn from the start when the router said current_research (the single-profile
+  // path, which has no routing row, asks the same detector), or it BECOMES one exactly once
+  // when the first answer asked for the web (parseChatWebSearchRequest) or answered an
+  // outside-world question from memory (outsideWorldReplyNeedsWeb) — the one escalation.
+  // A turn whose only research signal is a pasted link is not a web turn: Cairn already
+  // fetched that page (linkedPages) and the prompt tells the CLI not to browse it.
+  const messageText = String(turn.message ?? "");
+  const routedWeb = (decision ?? decideChatRouting({ message: messageText, has_image: !!turn.image_path })).reason_codes.includes(
+    "current_research"
+  );
+  const textWithoutLinks = messageText.replace(/https?:\/\/\S+/gi, " ");
+  const webIntent = routedWeb && (textWithoutLinks === messageText || chatMessageWantsCurrentResearch(textWithoutLinks));
+  let webTurn = webIntent;
+  let webEscalated = false;
+  let webRequest: ChatWebSearchRequest | null = null;
+  const turnStartedAt = Date.now();
   // The CLI's own tools stay off for a coaching turn (an autonomous CLI otherwise
-  // explores its cwd until the timeout); only a current-research turn is allowed to
-  // reach for live web search. A native coach-read attempt swaps in its own policy
-  // ("coach_reads": the read tools and nothing else) for that attempt only.
-  const chatTools: "none" | "provider" = wantsWeb ? "provider" : "none";
+  // explores its cwd until the timeout); only a web turn on a web-capable agent may
+  // search ("web": web search and page fetch, nothing else). A native coach-read attempt
+  // swaps in its own policy ("coach_reads") for that attempt only.
+  const isWebAgent = (name: string): boolean => definitions[name]?.web_access === true;
+  const toolsFor = (name: string): "none" | "web" => (webTurn && isWebAgent(name) ? "web" : "none");
   // The person's class order (settings.agent_class_order) for the lane's class: capture
   // and coach are everyday (fast), deep is deep; the legacy single path reads fast. It is
   // read for the lane the turn STARTS on — an escalation keeps the order it began with.
@@ -2292,7 +2366,7 @@ export async function runChatCompletion(
   const selectedFirst = Boolean(turn.agent && turn.agent !== "auto");
   const baseOrder = buildChatProviderOrder(chosen, repo.pickAgentOrder(), {
     classFirst,
-    preferWeb: wantsWeb,
+    preferWeb: webIntent,
     // A named provider is an explicit athlete choice. A Settings route pin is
     // still eligible as fallback, but current research starts with an enabled
     // web-capable provider whenever the turn itself was auto-routed.
@@ -2338,16 +2412,66 @@ export async function runChatCompletion(
   // Native reads need a CLI whose ONLY tools are the reads: a photo turn hands the CLI a
   // file to open, and a current-research turn needs its web search, so both stay on the
   // prompt loop (over the same lean core).
-  const nativeEligible = !turn.image_path && !wantsWeb;
+  const nativeEligible = !turn.image_path && !webIntent;
   // Agents that read natively go first on a reading lane — beside the routing policy,
   // never overriding a named agent or a chat route pin. The class order is a preference
   // the open order already carries: it ranks the native agents among themselves, but a
   // natively-reading agent is lifted past a prompt-loop one it lists first.
-  const order = chatCoachReadOrder(openOrder, {
-    leanReads,
-    nativeEligible,
-    explicit: chatTurnPinsAgent(turn.agent, chosen),
-    readsNatively: (name) => resolveReadTransport(name).transport === "native_mcp",
+  // A web turn instead puts every web-capable agent first (chatWebProviderOrder): only
+  // those search; a non-web agent behind them runs only if all of them failed, and then
+  // says plainly it couldn't search.
+  const webOrder = (): string[] => {
+    const split = chatWebProviderOrder(openOrder, definitions);
+    return [...split.web, ...split.fallback];
+  };
+  const webAgentsOpen = openOrder.filter(isWebAgent);
+  let order = webTurn
+    ? webOrder()
+    : chatCoachReadOrder(openOrder, {
+        leanReads,
+        nativeEligible,
+        explicit: chatTurnPinsAgent(turn.agent, chosen),
+        readsNatively: (name) => resolveReadTransport(name).transport === "native_mcp",
+      });
+  // How THIS attempt stands toward the web, for its prompt (ChatWebPromptMode).
+  const webModeFor = (name: string): ChatWebPromptMode => {
+    if (webTurn) {
+      return isWebAgent(name) ? { mode: "search", query: webRequest?.query || null, why: webRequest?.why || null } : { mode: "unavailable" };
+    }
+    return !webEscalated && webAgentsOpen.length ? { mode: "offer" } : { mode: "none_available" };
+  };
+  // The leash: a web attempt gets the web leash; the escalated re-run gets what is left of
+  // it (never under the floor), so the whole turn stays near one web leash.
+  const timeoutFor = (name: string, profile: RuntimeChatProfile): number => {
+    if (!(webTurn && isWebAgent(name))) return chatTurnTimeoutMs(profile);
+    return webEscalated ? chatWebEscalationTimeoutMs(profile, Date.now() - turnStartedAt) : chatWebTurnTimeoutMs(profile);
+  };
+  const attemptKey = (lane: ChatLane | null, name: string, profile: RuntimeChatProfile): string =>
+    `${chatExecutionAttemptKey(lane, name, profile)}${webTurn ? "\0web" : ""}`;
+  // The one escalation: the first answer asked for the web (always honoured), or answered an
+  // outside-world question from memory — read off the reply's content only when the
+  // athlete's message was an outside-world one or the reply says it could not search, and
+  // never off lines naming the athlete's own races (outsideWorldReplyNeedsWeb). Only on a
+  // turn that is not already a web turn, only once, and only when some open agent can search.
+  let ownRaces: OwnRaceRef[] | undefined;
+  const webEscalationFor = (raw: string): ChatWebSearchRequest | null => {
+    if (webTurn || webEscalated || !webAgentsOpen.length) return null;
+    const asked = parseChatWebSearchRequest(raw);
+    if (asked) return asked;
+    ownRaces ??= chatTurnOwnRaces();
+    return outsideWorldReplyNeedsWeb(parseChatReply(raw).reply, { message: messageText, ownRaces }) ? { query: "", why: "" } : null;
+  };
+  const beginWebEscalation = (request: ChatWebSearchRequest): void => {
+    webEscalated = true;
+    webTurn = true;
+    webRequest = request;
+    order = webOrder();
+    emit(id, { type: "progress", text: "Searching the web…" });
+  };
+  // What the reply was written under, for groundReply's outside-world pass and telemetry.
+  const webOutcome = (name: string): ChatWebOutcome => ({
+    mode: webTurn ? (isWebAgent(name) ? "searched" : "unavailable") : "off",
+    escalated: webEscalated,
   });
   const bindings = adaptive ? chatSettings.chat_profile_bindings : {};
   // The person's Everyday / Deep work model choice governs chat too (one setting for
@@ -2445,7 +2569,7 @@ export async function runChatCompletion(
   // whose agents.json read_tools declares it, until its attach fails once this turn.
   const transportFor = (name: string, lane: ChatLane | null): ResolvedCoachReadTransport => {
     const promptLoop: ResolvedCoachReadTransport = { transport: "prompt_loop", spec: null };
-    if (!nativeEligible || !leanReadsOn(lane) || nativeFallback.has(name)) return promptLoop;
+    if (!nativeEligible || webTurn || !leanReadsOn(lane) || nativeFallback.has(name)) return promptLoop;
     try {
       return resolveReadTransport(name);
     } catch {
@@ -2455,8 +2579,19 @@ export async function runChatCompletion(
   // The prompt loop's suffix (the native contract has its own slot: promptFor).
   const readSuffix = (transport: ResolvedCoachReadTransport, lane: ChatLane | null): string => {
     if (transport.transport === "native_mcp") return "";
+    // A web turn drops the look-it-up contract: it would pull the model toward the
+    // athlete's own history on a question about the outside world.
+    if (webTurn) return chatWebTurnReadNote();
     const mode: ChatContextMode = leanReadsOn(lane) ? "lean" : "full";
     return chatReadPromptSuffix(readState, readExhausted, mode);
+  };
+  // Whether a completed run is a coach-read protocol turn. On a web turn the prompt offers
+  // no reads, so a coach_read request is never run: it is re-asked once for a plain reply,
+  // exactly like a malformed one, so its JSON can never ship as the reply.
+  const readTurnOf = (raw: string, transport: ResolvedCoachReadTransport): ChatReadTurnClass => {
+    if (readExhausted || transport.transport === "native_mcp") return { kind: "none" };
+    const cls = classifyChatReadTurn(raw);
+    return webTurn && cls.kind === "query" ? { kind: "malformed" } : cls;
   };
   const readTelemetry = (transport: ResolvedCoachReadTransport, prompt: string, calls: number) => ({
     read_transport: transport.transport,
@@ -2562,26 +2697,36 @@ export async function runChatCompletion(
   laneLoop: while (true) {
     if (signal.aborted) throw new Error("canceled");
     lanePasses++;
-    if (lanePasses > 3) throw new ChatCompletionError(attempts, "Adaptive routing exceeded the bounded lane count");
+    // Three lane passes (capture → coach → deep), plus the one web re-run when it happened.
+    if (lanePasses > 3 + (webEscalated ? 1 : 0)) {
+      throw new ChatCompletionError(attempts, "Adaptive routing exceeded the bounded lane count");
+    }
     const lane = decision?.lane ?? null;
     // Rebuilt on every lane pass (an escalation re-prompts), always with the SAME action
-    // types: the gates read the turn's message, never its lane.
-    const promptParts = buildChatPromptParts(
-      history,
-      turn.message || "(no text — see the attached photo)",
-      turn.image_path || undefined,
-      {
-        ...(lane ? { lane } : {}),
-        ...(linkedPages.length ? { linkedPages } : {}),
-        datedWeek: readTurnWeek,
-        context: contextMode,
-        actionTypes: promptActionTypes,
+    // types: the gates read the turn's message, never its lane. Within a pass, one build
+    // per web mode: on a web turn a web-capable agent gets the search block and a non-web
+    // fallback the "couldn't search" one.
+    const partsByWeb = new Map<string, ChatPromptParts>();
+    const promptPartsFor = (web: ChatWebPromptMode): ChatPromptParts => {
+      const key = JSON.stringify(web);
+      let parts = partsByWeb.get(key);
+      if (!parts) {
+        parts = buildChatPromptParts(history, turn.message || "(no text — see the attached photo)", turn.image_path || undefined, {
+          ...(lane ? { lane } : {}),
+          ...(linkedPages.length ? { linkedPages } : {}),
+          datedWeek: readTurnWeek,
+          context: contextMode,
+          actionTypes: promptActionTypes,
+          web,
+        });
+        partsByWeb.set(key, parts);
       }
-    );
+      return parts;
+    };
     // The attempt's whole prompt: the native contract sits in its slot ahead of the
     // volatile blocks; the prompt loop's contract (and its results) follow DATA.
-    const promptFor = (transport: ResolvedCoachReadTransport): string =>
-      composeChatAttemptPrompt(promptParts, transport.transport === "native_mcp", readSuffix(transport, lane));
+    const promptFor = (transport: ResolvedCoachReadTransport, name: string): string =>
+      composeChatAttemptPrompt(promptPartsFor(webModeFor(name)), transport.transport === "native_mcp", readSuffix(transport, lane));
 
     // Streaming first, exactly once for an equivalent provider/profile tuple. The
     // stream-capable primary may first request bounded reads (bare JSON, no reply marker
@@ -2591,13 +2736,13 @@ export async function runChatCompletion(
     const first = order[0];
     const firstProfile = profileFor(first);
     noteUnsupportedProfile(first, firstProfile);
-    const firstKey = chatExecutionAttemptKey(lane, first, firstProfile);
+    const firstKey = attemptKey(lane, first, firstProfile);
     if (!seen.has(firstKey) && supportsStream(first)) {
       seen.add(firstKey);
       // Inner loop: re-run the SAME first agent for each read follow-up, then stream the reply.
       while (true) {
         const transport = transportFor(first, lane);
-        const streamPrompt = promptFor(transport);
+        const streamPrompt = promptFor(transport, first);
         lastPromptBytes = Buffer.byteLength(streamPrompt, "utf8");
         const started = Date.now();
         let ttft: number | null = null;
@@ -2606,12 +2751,12 @@ export async function runChatCompletion(
           emit(id, event);
         });
         streamFilters.set(id, stream);
-        const timeoutMs = chatTurnTimeoutMs(firstProfile);
+        const timeoutMs = timeoutFor(first, firstProfile);
         const streamOnce = (extras: NativeLaunchExtras = {}) =>
           runStreamingDep(first, streamPrompt, {
             signal,
             timeoutMs,
-            tools: extras.tools ?? chatTools,
+            tools: extras.tools ?? toolsFor(first),
             ...(extras.mcpConfigArgs ? { mcpConfigArgs: extras.mcpConfigArgs } : {}),
             ...(extras.onPermit ? { onPermit: extras.onPermit } : {}),
             // The athlete is watching this stream: it takes the spawn cap's reserved
@@ -2702,10 +2847,7 @@ export async function runChatCompletion(
             escalate(raw, lane, stream);
             continue laneLoop;
           }
-          const readTurn =
-            readExhausted || transport.transport === "native_mcp"
-              ? ({ kind: "none" } as ChatReadTurnClass)
-              : classifyChatReadTurn(raw);
+          const readTurn = readTurnOf(raw, transport);
           if (readTurn.kind === "query") {
             const attempt = decorate(
               {
@@ -2760,12 +2902,13 @@ export async function runChatCompletion(
             continue;
           }
           const classified = classifyChatAgentResult(first, res);
+          const webAsk = classified ? null : webEscalationFor(raw);
           const attempt = decorate(
             {
               ...(classified ?? {
                 agent: first,
                 ok: true,
-                status: "ok",
+                status: webAsk ? "web_escalated" : "ok",
                 exit_code: res.code,
                 model: res.usage?.model ?? null,
                 input_tokens: res.usage?.input_tokens ?? null,
@@ -2779,8 +2922,13 @@ export async function runChatCompletion(
           );
           recordChatAttempt(attempt, started, !classified, false);
           attempts.push(attempt);
+          if (webAsk) {
+            stream.reset(); // a from-memory answer (or the bare request) never stays in the bubble
+            beginWebEscalation(webAsk);
+            continue laneLoop;
+          }
           if (!classified)
-            return { agent: first, raw, attempts, datedWeek: turnWeek, reads: turnReads(transport), promptBytes: lastPromptBytes };
+            return { agent: first, raw, attempts, datedWeek: turnWeek, reads: turnReads(transport), promptBytes: lastPromptBytes, web: webOutcome(first) };
         } catch (e: any) {
           if (signal.aborted) throw e;
           const attempt = decorate(
@@ -2807,7 +2955,7 @@ export async function runChatCompletion(
       if (signal.aborted) throw new Error("canceled");
       const profile = profileFor(name);
       noteUnsupportedProfile(name, profile);
-      const key = chatExecutionAttemptKey(lane, name, profile);
+      const key = attemptKey(lane, name, profile);
       if (seen.has(key)) continue;
       seen.add(key);
       // A non-streaming provider can request reads too; a read follow-up re-runs the
@@ -2815,15 +2963,15 @@ export async function runChatCompletion(
       // reads inside its one run; a failed attach re-runs it once on the prompt loop.
       while (true) {
         const transport = transportFor(name, lane);
-        const runPrompt = promptFor(transport);
+        const runPrompt = promptFor(transport, name);
         lastPromptBytes = Buffer.byteLength(runPrompt, "utf8");
         const started = Date.now();
-        const timeoutMs = chatTurnTimeoutMs(profile);
+        const timeoutMs = timeoutFor(name, profile);
         const runOnce = (promptText: string, extras: NativeLaunchExtras = {}) =>
           runAgentDep(name, promptText, {
             signal,
             timeoutMs,
-            tools: extras.tools ?? chatTools,
+            tools: extras.tools ?? toolsFor(name),
             ...(extras.mcpConfigArgs ? { mcpConfigArgs: extras.mcpConfigArgs } : {}),
             ...(extras.onPermit ? { onPermit: extras.onPermit } : {}),
             priority: "interactive",
@@ -2914,10 +3062,7 @@ export async function runChatCompletion(
             escalate(raw, lane);
             continue laneLoop;
           }
-          const readTurn =
-            readExhausted || transport.transport === "native_mcp"
-              ? ({ kind: "none" } as ChatReadTurnClass)
-              : classifyChatReadTurn(raw);
+          const readTurn = readTurnOf(raw, transport);
           if (readTurn.kind === "query") {
             const attempt = decorate(
               {
@@ -2969,12 +3114,13 @@ export async function runChatCompletion(
             continue;
           }
           const classified = classifyChatAgentResult(name, res);
+          const webAsk = classified ? null : webEscalationFor(raw);
           const attempt = decorate(
             {
               ...(classified ?? {
                 agent: name,
                 ok: true,
-                status: "ok",
+                status: webAsk ? "web_escalated" : "ok",
                 exit_code: res.code,
                 model: res.usage?.model ?? null,
                 input_tokens: res.usage?.input_tokens ?? null,
@@ -2988,8 +3134,13 @@ export async function runChatCompletion(
           );
           recordChatAttempt(attempt, started, !classified, retriedEmpty);
           attempts.push(attempt);
+          if (webAsk) {
+            emit(id, { type: "reset" });
+            beginWebEscalation(webAsk);
+            continue laneLoop;
+          }
           if (!classified)
-            return { agent: name, raw, attempts, datedWeek: turnWeek, reads: turnReads(transport), promptBytes: lastPromptBytes };
+            return { agent: name, raw, attempts, datedWeek: turnWeek, reads: turnReads(transport), promptBytes: lastPromptBytes, web: webOutcome(name) };
           lastErr = new Error(`${name}: ${classified.error_message || classified.error_class || classified.status}`);
         } catch (e: any) {
           if (signal.aborted) throw e;
@@ -3579,6 +3730,8 @@ export function applyChatActions(
             exercise: a.exercise,
             target_kind: a.target_kind,
             target_est_1rm: a.target_est_1rm,
+            target_reps: a.target_reps,
+            target_sets: a.target_sets,
           });
           // Server-owned readback of the exact immutable row. Creation may close
           // an already-reached target atomically; later verified exact-lift sets
@@ -3926,6 +4079,10 @@ export function applyChatActions(
               capture_note_symptom: gates.symptomReport,
             }),
           });
+          break;
+        case "log_mobility_check":
+          // One self-check reading, one side: the same writer REST and MCP use.
+          applied.push({ type: a.type, result: logMobilityCheck({ ...a, source: "chat" }) });
           break;
         case "set_activity_effort": {
           // The athlete's word on how a run they already did felt: lands on that

@@ -641,6 +641,38 @@ function cardAskedForLess(dose: StoredDose): boolean {
   return !loadAtOrAbove(card, prior) && loadAtOrAbove(top, card) && loadAtOrAbove(prior, top);
 }
 
+/**
+ * Was this lift's exposure in this session lighter ON PURPOSE? The same two judgements
+ * strengthRead applies, asked of one (session, lift): a recovery-dose session completed
+ * as prescribed is no strength test at all, and a card that asked for less than the
+ * lift's own prior load, met by the athlete, is the prescription's dip, not the body's
+ * (cardAskedForLess). Absence of evidence is never a set-aside. Read-only; exported so
+ * the per-movement read (movement-standing.ts) holds a lift to the same law.
+ */
+export function exposureLighterOnPurpose(sessionId: number, exercise: string): boolean {
+  try {
+    if (recoverySessionDose(sessionId).classification === "compliant") return true;
+  } catch {
+    // an unreadable session dose is no evidence of a lighter prescription
+  }
+  const doses = storedDosesForSession(sessionId);
+  if (!doses.length) return false;
+  const identity = (name: string): string => {
+    try {
+      return exerciseIdentityKey(name);
+    } catch {
+      return name.trim().toLowerCase();
+    }
+  };
+  const key = identity(String(exercise));
+  const dose = doses.find(
+    (candidate) =>
+      String(candidate.movement_key ?? "") === key ||
+      (candidate.exercise != null && identity(String(candidate.exercise)) === key)
+  );
+  return dose ? cardAskedForLess(dose) : false;
+}
+
 function strengthRead(start: string, end: string, parked: boolean): WholePersonDomainRead {
   const rows = db
     .prepare(

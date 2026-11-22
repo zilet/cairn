@@ -157,7 +157,7 @@ export const FOOD_CAPTURE_GUARDRAILS = [
   `Read everyday portion words in context: "a block", "a square", or "a piece" of a chocolate bar means ONE single square/piece broken off the bar (~10 g, ~50–55 kcal), never the whole 100 g bar, unless the athlete says "whole bar/block" or states the bar's full weight.`,
   `"confidence" and "basis" record HOW the numbers were obtained and must be honest: "label" = read off a package or menu label, "user_report" = the athlete stated the quantity or the macros, "estimated_from_foods" = inferred from ordinary serving sizes, "photo" = inferred from the picture. A stated or weighed quantity is high confidence; anything you inferred is low or medium. An estimate must never be made to look like a measurement.`,
   `Give an ingredient row its own "basis" only when it differs from the meal's — a weighed chicken breast next to an eyeballed scoop of rice is exactly the case worth recording. Otherwise leave it null.`,
-  `Use nutrition_pattern for COARSE bands, not invented micronutrient milligrams. Alcohol and caffeine stay null unless the meal actually identifies them.`,
+  `Use nutrition_pattern for COARSE bands, not invented micronutrient milligrams. Alcohol and caffeine stay null unless the meal actually identifies them. Whenever you estimate the meal's fat_g, also give saturated_fat_g (part of fat_g, from the foods' ordinary composition); null it only when the fat itself is unknown.`,
 ] as const;
 
 export function foodCaptureGuardrailLines(): string {
@@ -329,6 +329,10 @@ export function coerceNutritionPattern(
   ) {
     out.saturated_fat_g = null;
     out.unsaturated_fat_g = null;
+  }
+  // Saturated fat is PART of total fat: alone past it, the number is no estimate at all.
+  if (totalFatG !== undefined && typeof out.saturated_fat_g === "number" && out.saturated_fat_g > totalFatG * 1.15) {
+    out.saturated_fat_g = null;
   }
   if (typeof row.omega_3_source === "boolean" || row.omega_3_source === null)
     out.omega_3_source = row.omega_3_source;

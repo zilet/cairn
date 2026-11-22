@@ -1,8 +1,9 @@
 // @ts-check
 // Today · so far, the card Train › Intake opens on (docs/V2-PLAN.md wave 2,
 // "fuel-today"). The view: protein then energy as slim meters with the logged amount
-// beside the day's number, carbs · fat · fiber as plain numbers, each with its unit and
-// never a score; the day's state in words ("in progress" — never "low"); the athlete's own
+// beside the day's number, carbs · fat · fiber (and saturated fat) as guide rows when the
+// read carries the day's guides, else as plain numbers, each with its unit and never a
+// score; the day's state in words ("in progress" — never "low"); the athlete's own
 // observed intake band in the server's words when there is one; and, today only, the
 // quiet big-day and carb-range lines. Pure renderers over CairnFuelTodayModel.
 {
@@ -63,24 +64,11 @@
     return `<p class="fuel-today-line fuel-today-demand">${escHtml(line)}</p>`;
   }
 
-  // The day's carb range for its work, fitted inside the target by the server. Today
-  // only, and never set against the logged carbs: there is no "under" or "over".
-  const CARB_TIER_WORDS: Record<string, string> = {
-    light: "a lighter day",
-    moderate: "today's training",
-    high: "today's endurance work",
-  };
-
+  // The day's carb guide on a day with nothing logged yet: the guide and its basis in one
+  // calm line, never set against a log there is not.
   function carbsHtml(m: Model): string {
-    const carbs = m.demand?.carbs;
-    if (!carbs) return "";
-    const low = Math.round(Number(carbs.grams?.low));
-    const high = Math.round(Number(carbs.grams?.high));
-    const words = CARB_TIER_WORDS[String(carbs.tier || "")];
-    if (!Number.isFinite(low) || !Number.isFinite(high) || high <= 0 || !words) return "";
-    const range = low === high ? `${high}` : `${low}–${high}`;
-    const fit = carbs.basis === "within_target" ? ", inside today's target" : "";
-    return `<p class="fuel-today-line fuel-today-carbs">Carbs around <span class="numeral">${escHtml(range)}</span> g suit ${escHtml(words)}${escHtml(fit)}.</p>`;
+    const carbs = m.guides?.rows.find((row) => row.key === "carbs");
+    return carbs?.text ? `<p class="fuel-today-line fuel-today-carbs">Carbs ${escHtml([carbs.text, carbs.note].filter(Boolean).join(" · "))}</p>` : "";
   }
 
   // ---------- the numbers ----------
@@ -115,17 +103,34 @@
       </div>`;
   }
 
-  // Carbs · fat · fiber: plain numbers beside their names, no bars.
-  function macrosHtml(m: Model, countUp: boolean): string {
-    const bit = (label: string, macro: ClientFuelMacro): string => {
-      const value =
-        macro.value == null
-          ? UNKNOWN_HTML
-          : `<span class="fuel-today-value">${numeralHtml(macro.value, countUp)} <span class="fuel-today-unit">g</span></span>`;
-      return `<span class="fuel-today-macro"><span class="fuel-today-k">${escHtml(label)}</span> ${value}</span>`;
-    };
-    const dot = `<span class="fuel-today-dot" aria-hidden="true"> · </span>`;
-    return `<p class="fuel-today-macros">${[bit("Carbs", m.carbs), bit("Fat", m.fat), bit("Fiber", m.fiber)].join(dot)}</p>`;
+  // ---------- the day's food guides ----------
+  // Under the meters, carbs · fat · fiber (and saturated fat when its eaten side is known
+  // or a lab finding leads it) one row each: the eaten grams, then the guide in words
+  // ("63 g · around 230–250 g today"), a thin neutral track (the guide a band, the eaten
+  // amount a mark; hidden from assistive tech, the text is its equivalent), and one quiet
+  // note: what is left to place while the day is eaten, then where the guide comes from.
+  // No percentage, no tone, no "low". An older read with no guides keeps the bare numbers.
+  // The weekly lines (omega-3) sit below as quiet sentences.
+  function guideRowHtml(row: ClientFuelGuideRow, countUp: boolean): string {
+    const value =
+      row.eaten == null
+        ? UNKNOWN_HTML
+        : `<span class="fuel-today-value">${numeralHtml(row.eaten, countUp)} <span class="fuel-today-unit">g</span></span>`;
+    const text = row.text ? `<span class="fuel-today-dot" aria-hidden="true"> · </span>${escHtml(row.text)}` : "";
+    const t = row.track;
+    const mark = t?.mark == null ? "" : `<i class="fuel-guide-mark" style="--m:${t.mark.toFixed(3)}"></i>`;
+    const track = t
+      ? `<dd class="fuel-guide-track" aria-hidden="true"><i class="fuel-guide-band" style="--lo:${t.lo.toFixed(3)};--hi:${t.hi.toFixed(3)}"></i>${mark}</dd>`
+      : "";
+    const note = row.note ? `<dd class="fuel-guide-note">${escHtml(row.note)}</dd>` : "";
+    return `<div class="fuel-guide" data-guide="${escAttr(row.key)}"><dt class="fuel-today-k">${escHtml(row.label)}</dt><dd class="fuel-guide-v">${value}${text}</dd>${track}${note}</div>`;
+  }
+
+  function guidesHtml(m: Model, countUp = false): string {
+    const g = m.guides;
+    if (!g) return "";
+    const rows = g.rows.length ? `<dl class="fuel-guides">${g.rows.map((row) => guideRowHtml(row, countUp)).join("")}</dl>` : "";
+    return rows + g.weekly.map((line) => `<p class="fuel-today-line fuel-guide-week">${escHtml(line)}</p>`).join("");
   }
 
   function stateHtml(m: Model): string {
@@ -141,7 +146,7 @@
 
   /**
    * The whole card. Protein then energy as slim meters (logged / the day's number),
-   * carbs · fat · fiber as plain numbers. A day with nothing on it draws no meter at
+   * carbs · fat · fiber as guide rows. A day with nothing on it draws no meter at
    * all — absent, never low. `countUp` marks the numerals for the cold-paint count-up.
    */
   function todayHtml(m: Model, opts: { countUp?: boolean } = {}): string {
@@ -164,14 +169,15 @@
           ? `<p class="fuel-today-togo">About there</p>`
           : "";
     const band = m.bandWords ? `<p class="fuel-today-line fuel-today-band">${escHtml(m.bandWords)}</p>` : "";
+    // The carbs are said once, in their row: no separate carb sentence beside it.
     return `<section class="fuel-today reveal" style="--i:0" aria-labelledby="fuelTodayTitle">
       ${headHtml(m)}
       <dl class="fuel-today-meters">
         ${meterHtml("Protein", m.protein.value, m.protein.anchor, "g", countUp)}
         ${meterHtml("Energy", m.energy.value, m.energy.of, "kcal", countUp)}
       </dl>
-      ${toGo}${macrosHtml(m, countUp)}
-      ${pending}${band}${demandHtml(m)}${carbsHtml(m)}
+      ${toGo}${guidesHtml(m, countUp)}
+      ${pending}${band}${demandHtml(m)}
     </section>`;
   }
 
@@ -193,6 +199,7 @@
     todayHtml,
     demandHtml,
     carbsHtml,
+    guidesHtml,
     skeletonHtml,
     errorHtml,
   };

@@ -38,6 +38,8 @@ const MODULES = [
   "goal-row-model",
   "goal-lifts-client",
   "goal-row-client",
+  "standing-model",
+  "standing-client",
   "frame-line-client",
   "journey-trail-client",
   "week-model",
@@ -1609,4 +1611,17 @@ test("a goal with no lifts, or an empty list, renders exactly as before", () => 
   assert.equal(host.innerHTML, before);
   assert.equal(!!host.querySelector(".goallift-list"), false);
   assert.ok(host.querySelector(".goalrow-thread"));
+});
+
+test("the landing draws 'The whole picture' under the goals and above the shape, and nothing without standing", () => {
+  const win = load();
+  assert.equal(landing(win).querySelector(".hwk-sec.is-standing"), null);
+  const standing = [
+    { key: "recovery", stone: "recovery", label: "Recovery", direction: "holding", direction_words: "Holding", words: "Steady.", since_words: "since Nov 1", lines: [], invite: null, href: null },
+  ];
+  const host = landing(win, { ...weekRead(), standing });
+  const secs = host.querySelectorAll(".hwk-sec").map((s) => s.className);
+  const at = (k) => secs.findIndex((c) => c.includes(`is-${k}`));
+  assert.ok(at("goals") < at("standing") && at("standing") < at("shape"));
+  assert.equal(host.querySelector("#hwkH-standing").textContent, "The whole picture");
 });

@@ -81,6 +81,8 @@ type WriteInvalidationTargetsApi = {
     report_training_symptom: t(DAY, PLAN, ["today:session:"]),
     resolve_training_symptom: t(DAY, PLAN, ["today:session:"]),
     log_checkin: t(DAY, ["recovery:"]),
+    // A mobility self-check feeds Horizon's standing row (under "horizon:").
+    log_mobility_check: t(DAY),
     set_training_drive: t(DAY, GOAL, PLAN),
     // The fuel line, the Intake target card and the goal pace all read the active target.
     set_nutrition_target: t(DAY, FOOD, GOAL),

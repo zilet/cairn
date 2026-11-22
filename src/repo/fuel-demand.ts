@@ -150,8 +150,9 @@ export function carbTierFor(demand: FuelDemandLevel, enduranceDriven: boolean): 
 // protein fixed, fat is the only other lever, so these two ends bound how far carbs
 // may flex inside the target: fat at its floor is the most carbohydrate the day can
 // hold, fat at its ceiling the least.
-const FAT_FLOOR_SHARE = 0.2;
-const FAT_CEILING_SHARE = 0.35;
+// Exported so the day's fat guide (repo/fuel-guides.ts) reads the SAME band.
+export const FAT_FLOOR_SHARE = 0.2;
+export const FAT_CEILING_SHARE = 0.35;
 // Where each tier sits inside that in-target span: a big day takes the top third (fat
 // at its floor), a light day the bottom third, an ordinary one the middle.
 const TIER_SPAN: Readonly<Record<CarbTier, [number, number]>> = {

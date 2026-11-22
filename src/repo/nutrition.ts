@@ -2391,6 +2391,14 @@ export interface DayIntakeTarget {
   protein_g: number;
   mode: string;
   source: string;
+  /**
+   * The accepted target's own carbohydrate / fat grams, present ONLY when the accepted
+   * row carries them (an athlete's set_nutrition_target, a check-in that named them).
+   * Absent on the formula path, so that payload is unchanged. The day's food guides
+   * (repo/fuel-guides.ts) read these as the athlete's own numbers.
+   */
+  carbs_g?: number;
+  fat_g?: number;
 }
 
 // The day's target in force, off a goal check. Prefer the ACCEPTED target
@@ -2402,11 +2410,21 @@ export function dayIntakeTarget(goal: any): DayIntakeTarget | null {
   const eff = goal?.effective_target;
   const tk = Number(eff?.target_kcal ?? goal?.recommended?.target_intake_kcal);
   if (!goal?.ok || !Number.isFinite(tk)) return null;
+  const own = (value: unknown): number | null => {
+    if (value == null || value === "") return null;
+    const n = Number(value);
+    return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+  };
+  const accepted = eff?.source === "accepted";
+  const carbs = accepted ? own(eff?.carbs_g) : null;
+  const fat = accepted ? own(eff?.fat_g) : null;
   return {
     kcal: Math.round(tk),
     protein_g: Math.round(Number(eff?.protein_g ?? goal.recommended?.protein_g) || 0),
     mode: String(goal.goal_mode || "maintain"),
     source: String(eff?.source ?? "formula"),
+    ...(carbs != null ? { carbs_g: carbs } : {}),
+    ...(fat != null ? { fat_g: fat } : {}),
   };
 }
 

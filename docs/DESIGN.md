@@ -1038,9 +1038,16 @@ open it). Top to bottom, as the day reads:
 
 - `.fuel-today` — "Today · so far": protein then energy as slim `.fuel-today-m` meters (a 6px
   `--s-fuel` bar beside "logged / the day's number", the bar `aria-hidden`, an `.sr-only` sentence
-  its text equivalent; no number to set it against draws no bar), then carbs · fat · fiber as plain
-  numbers (`.fuel-today-macros`). Nothing logged draws no meter at all: one quiet line, "Nothing
-  logged yet today." No percentage, no tone, no verdict.
+  its text equivalent; no number to set it against draws no bar). Under the meters, carbs, fat and
+  fiber (and saturated fat when its eaten amount is known or a lab finding leads it) are one guide
+  row each (`.fuel-guides` / `.fuel-guide`): the eaten grams, then the server's guide in words
+  ("63 g · around 230–250 g today", "30 g or more", "under 14 g"), a thin neutral track (the guide
+  as a grey band, the eaten amount as a tick in the fuel colour) and one quiet note. While the day
+  is in progress the note speaks only of what is left to place, never a shortfall; a closed complete
+  day may say where it landed, a partial day says nothing about landing. Carbs are said once, in
+  their row. A weekly omega-3 sentence sits below (`.fuel-guide-week`). A payload with no guides
+  falls back to bare numbers. Nothing logged draws no meter at all: one quiet line, "Nothing
+  logged yet today.", and the carbs guide in words. No percentage, no colour state, no verdict.
 - the meals logged today (`.fuel-meals`), each with the time the athlete stated (never one
   synthesized from its label), opening into the meal card read-only — grams only behind its Edit.
 - ONE idea for the rest of the day (`.idea-card`, `limit: 1`), "Start from this" filling the composer.
@@ -1524,7 +1531,7 @@ this week" and the team's link note) and `hjour` (`journey-trail-client.ts`, CSS
 the summit goal; no longer composed on Week, which draws `ahead` instead, and still lit with no
 loop; its starter's openers hand chat a first sentence through `state.chatPrefill` and sit under
 "Ahead" when nothing is dated). Horizon's Week (`hwk`, `horizon-week-{client,controller}.ts`)
-composes them; To the race and the Season reuse `frameline`, `msrow` and `goalrow`.
+composes them; To the race and the Season reuse `frameline`, `msrow` and `goalrow`. `standing` (`standing-{model,client}.ts`, lazy `horizon` bundle, `horizon/landing.css`: "Where you stand", one collapsed row per area under the goal rows, a native disclosure when it has lines, its dot the `goalrow-dot`) rides the same bundle.
 
 **`ripple-card`** (Ask, `ripple-card-{model,client,controller}.ts`, `.ripple-*`): the what-if
 answer inline at the foot of the thread, opened by the "What if…" starter chip. The change in

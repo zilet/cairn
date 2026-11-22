@@ -971,8 +971,27 @@ export function renderStrengthJourney(ctx: any): string {
   const journey = ctx?.strength_journey;
   const objective = journey?.objective;
   if (!journey?.available || !objective?.exercise) return "";
-  const current = journey.current?.est_1rm != null ? `${journey.current.est_1rm} lb` : "not established yet";
-  const target = `${objective.target_est_1rm} lb`;
+  // A REPS goal (target_kind bodyweight_reps, src/repo/strength-reps.ts): counted in reps
+  // at bodyweight, never an est-1RM (its target_est_1rm is a stored 0, never a target).
+  const reps = journey.reps;
+  const assisted =
+    reps?.now && reps.now.value === 0 && reps.now.assist_lb != null
+      ? ` (no unassisted reps yet; lightest recent assist ${reps.now.assist_lb} lb${
+          reps.start_assist_lb != null && reps.start_assist_lb !== reps.now.assist_lb
+            ? `, from ${reps.start_assist_lb} lb at the start`
+            : ""
+        }; less assist is progress)`
+      : "";
+  const current = reps
+    ? reps.now
+      ? `${reps.now.text}${assisted}`
+      : "not established yet"
+    : journey.current?.est_1rm != null
+      ? `${journey.current.est_1rm} lb`
+      : "not established yet";
+  const target = reps
+    ? `${reps.goal_text} at bodyweight (a reps goal: assisted sets never count, added load counts as its reps; never speak of it as an estimated max)`
+    : `${objective.target_est_1rm} lb`;
   const support = Array.isArray(journey.planned_support)
     ? journey.planned_support.slice(0, 3).map((item: any) => `${item.role}: ${item.exercise} (${item.why})`).join("; ")
     : "";

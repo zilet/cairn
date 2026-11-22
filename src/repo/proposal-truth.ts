@@ -628,7 +628,7 @@ function contextFacts(windowStart: string, throughDate: string): Record<string, 
   const strengthObjectives = db
     .prepare(
       `SELECT id, exercise, exercise_key, target_kind, target_est_1rm,
-              baseline_est_1rm, baseline_date, source, status
+              baseline_est_1rm, baseline_date, source, status, target_reps, target_sets
          FROM strength_objectives
         WHERE status = 'active' AND source = 'user'
         ORDER BY id DESC LIMIT 1`

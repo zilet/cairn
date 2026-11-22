@@ -88,6 +88,23 @@ a.goalrow-link:active{transform:var(--press-lg)}
 .goallift-thread .goalrow-mark{top:calc(50% - 3px)}
 .goallift-thread .goalrow-now{top:calc(50% - var(--space-3));width:var(--space-6);height:var(--space-6);margin-left:calc(var(--space-3) * -1)}
 
+/* ---- the whole picture: a row per area (standing-client.ts); the dot is the goal row's ---- */
+.standing-list{list-style:none;margin:0;padding:0}
+.standing+.standing{border-top:1px solid var(--line)}
+.standing-head{display:flex;gap:var(--space-5);min-height:44px;padding:var(--space-4) 0;list-style:none}
+summary.standing-head{cursor:pointer}
+summary.standing-head::-webkit-details-marker{display:none}
+summary.standing-head::after{content:"\25B8";margin-left:auto;color:var(--muted)}
+[open]>summary.standing-head::after{content:"\25BE"}
+.standing-head .goalrow-dot{flex:none;margin-top:var(--space-3)}
+.standing-main{min-width:0;line-height:var(--leading-snug)}
+.standing-dir{color:var(--cd)}
+.standing-since,.standing-tail,.standing-invite{font-size:var(--text-xs);color:var(--muted)}
+.standing-words{display:block;font-size:var(--text-sm);color:var(--ink2)}
+.standing-lines{list-style:none;margin:0;padding:0 0 var(--space-4) var(--space-9);display:grid;gap:var(--space-4);font-size:var(--text-sm)}
+.standing-tail{display:block}
+.standing-invite{margin:0;padding:0 0 var(--space-4) var(--space-9)}
+
 /* ---- the team's link note, under the goals ---- */
 .hwk-link-slot:empty,.hwk-team-slot:empty{display:none}
 .hwk-link-slot{margin-top:calc(var(--space-11) * -1 + var(--space-6))}

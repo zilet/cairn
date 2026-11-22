@@ -9,11 +9,13 @@
 // through a plateau" — and the program needs a cadenced moment to actually
 // re-TEST capacity. This module does exactly two deterministic, additive things:
 //
-//   1) muscleGroupTrajectory() folds each canonical group's member lifts' status
-//      + the group's volume band/trend into ONE plain verdict
-//      (advancing | stalling | building | maintaining), and — when a group is
-//      stalling — names the lead stalled lift plus a MENU of 2-3 concrete
-//      same-pattern variations to rotate in (not one forced swap).
+//   1) muscleGroupTrajectory() folds the status of EVERY trained lift crediting a
+//      canonical group (muscle-credit.ts shares, compounds weighted above
+//      accessories) + the group's volume band/trend into ONE plain verdict
+//      (advancing | stalling | building | maintaining). A group is led by its
+//      heaviest-credited compound and stalls only when that compound does or the
+//      weighted majority does; when it stalls it names the stalled lift plus a
+//      MENU of 2-3 variations from that lift's own region (not one forced swap).
 //
 //   2) testWeekDue() is a strength test-week cadence — tied to the active
 //      periodization block's 'realization' phase OR ~6-8 weeks since the last
@@ -29,20 +31,24 @@
 // the program state — mirroring performanceStanding(date, { programState, ... }).
 // ============================================================================
 import { db } from "../db.js";
-import { daysBetweenISO, localDateISO } from "./shared.js";
+import { daysBetweenISO, joinList, localDateISO } from "./shared.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { getAttentionSchedule } from "./attention.js";
 import {
   canonicalGroup,
-  classifyMuscleGroup,
   isMobility,
   MUSCLE_GROUPS,
   type MuscleGroup,
+  normalizedExerciseKey,
 } from "./exercise-canon.js";
 import { suggestAlternatives } from "./exercise-variations.js";
+import { isPressRegion, movementRegionKey } from "./movement-region.js";
+import { isCompoundLift, liftLeadTier } from "./movement-standing.js";
+import { isCountedShare, type MuscleCredit, muscleCreditFor } from "./muscle-credit.js";
 import { getActiveBlock, type ProgramBlock } from "./program-blocks.js";
 import {
   getProgramState,
+  liftTrainedRecently,
   type LiftState,
   type MuscleVolumeState,
   type ProgramState,
@@ -72,6 +78,16 @@ export interface MuscleGroupRead {
   volume_band: MuscleVolumeState["band"] | null;
   trend: MuscleVolumeState["trend"];
   note: string;                  // one plain sentence
+  /** Whether the lead lift is a compound or an accessory; null with no lead. */
+  lead_role?: "compound" | "accessory" | null;
+  /** How many trained lifts the verdict weighed (every lift crediting the group a counted share). */
+  lifts_read?: number;
+  /**
+   * Whether any of those lifts trains the group as its prime mover. A group read only
+   * through other groups' lifts (triceps off a bench press) is not named in the headline:
+   * the lift's own group already speaks for it. Absent reads as direct.
+   */
+  direct?: boolean;
 }
 
 export interface MuscleGroupTrajectory {
@@ -86,6 +102,9 @@ export interface MuscleTrajectoryOpts {
   // excluded from the vary menu too, so a lift the brain just rotated away from is
   // never offered straight back. Defaults to reading them live; injectable for tests.
   recentRotations?: { from: string }[];
+  // Which groups a lift credits and at what share. Defaults to muscleCreditFor (the one
+  // answer); injectable so a test can pin synergist shares.
+  creditFor?: (exercise: string, storedGroup?: string | null) => MuscleCredit[];
 }
 
 // Active-injury free-text areas, so the variation MENU skips a movement that
@@ -131,12 +150,46 @@ export function planExerciseNames(): string[] {
   }
 }
 
-// Resolve a lift's canonical group (stored group wins, else classify by name).
-function liftGroup(l: LiftState): MuscleGroup | null {
-  return canonicalGroup(l.muscle_group) ?? classifyMuscleGroup(l.exercise);
+// ---------- who trains a group, and how much ----------
+//
+// A group's verdict is read from EVERY trained lift that credits it (muscle-credit.ts:
+// the primary at a full share, synergists at a part share), weighted by that share and
+// by the lift's role. The group is led by its heaviest-credited trained COMPOUND, never
+// by whichever accessory has been stuck longest: quads read off the squat before the leg
+// extension, back off the rows and pulls before a pulldown variation.
+
+// An accessory's vote counts half a compound's at the same credit share: a compound
+// loads the group heavily across a whole movement and is where its strength is read;
+// an isolation lift moves on coarse steps and stalls for reasons local to itself.
+export const GROUP_ACCESSORY_WEIGHT = 0.5;
+
+// A compound leads a group only when it trains the group at least this much. A
+// synergist credited at a small share (a squat's calves) grazes the group; it does not
+// speak for it, so the group is then read from its own lifts.
+export const GROUP_LEAD_MIN_SHARE = 0.5;
+
+type CreditFor = (exercise: string, storedGroup?: string | null) => MuscleCredit[];
+
+interface GroupMember {
+  lift: LiftState;
+  share: number;
+  /** The group is this lift's prime mover. */
+  primary: boolean;
+  compound: boolean;
+  tier: number;
+  weight: number;
 }
 
 const TITLE = (g: string) => (g ? g.charAt(0).toUpperCase() + g.slice(1) : g);
+
+const isStalled = (l: LiftState) => l.status === "plateaued" || l.status === "regressing";
+
+// A lift injected without a recency stamp (an older caller's ProgramState) counts as
+// trained; a stamped one must sit inside the current window.
+function trainedNow(l: LiftState, asOf: string): boolean {
+  if (typeof l.last_trained !== "string") return l.last_trained === undefined;
+  return liftTrainedRecently(l, asOf);
+}
 
 // Rank a stalled lift so the lead is the most-stuck one: longest weeks_static,
 // then plateaued before regressing (a true plateau is the cleaner "rotate" case),
@@ -147,6 +200,73 @@ function stallRank(l: LiftState): number {
   return wk * 10 + statusBonus + l.stall_signals.length;
 }
 
+const byWeight = (a: GroupMember, b: GroupMember) =>
+  b.weight - a.weight || a.tier - b.tier || (b.lift.sessions ?? 0) - (a.lift.sessions ?? 0);
+
+// ---------- the vary menu stays inside the stalled lift's own region ----------
+//
+// suggestAlternatives answers by swap family, and that table files a leg curl as a hinge,
+// so a stalled leg curl used to be offered a deadlift. A rotation must load the same
+// region: an isolation lift (or a dip) swaps only within its region family (a curl for a
+// curl, a pushdown for another triceps extension), and a compound only for a compound of
+// the same movement (never an isolation lift, never a fly).
+const regionFamily = (region: string | null) => (region ? region.split(":")[0] : null);
+
+export function sameVaryRegion(lift: string, candidate: string): boolean {
+  const lr = movementRegionKey(lift);
+  const cr = movementRegionKey(candidate);
+  if (lr && !isPressRegion(lr)) return regionFamily(cr) === regionFamily(lr);
+  if (cr && !isPressRegion(cr)) return false;
+  if (lr && cr && regionFamily(lr) !== regionFamily(cr)) return false;
+  return isCompoundLift(lift) === isCompoundLift(candidate);
+}
+
+function varyMenu(lift: string, injuryAreas: string[], excludeNames: string[]): GroupVaryOption[] {
+  const own = normalizedExerciseKey(lift);
+  return suggestAlternatives(lift, { limit: 12, injuryAreas, excludeNames })
+    .filter((v) => normalizedExerciseKey(v.name) !== own && sameVaryRegion(lift, v.name))
+    .slice(0, 3)
+    .map((v) => ({ name: v.name, why: v.why }));
+}
+
+// ---------- the headline names what leads, never a tally ----------
+
+const NUMBER_WORDS = ["no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
+const numberWord = (n: number) => NUMBER_WORDS[n] ?? String(n);
+
+function namedGroups(list: MuscleGroupRead[]): string {
+  return list.length <= 3 ? joinList(list.map((g) => g.label.toLowerCase())) : `${numberWord(list.length)} groups`;
+}
+// "Chest is flat", "quads are advancing": most group names are plural nouns.
+const SINGULAR_GROUPS = new Set(["chest", "back", "core"]);
+const isAre = (list: MuscleGroupRead[]) =>
+  list.length === 1 && SINGULAR_GROUPS.has(String(list[0].group)) ? "is" : "are";
+
+export function trajectoryHeadline(all: MuscleGroupRead[]): string {
+  // Only groups with direct work of their own are named: three groups "flat" off one
+  // stalled bench press would say the same thing three times.
+  const direct = all.filter((g) => g.direct !== false);
+  const groups = direct.length ? direct : all;
+  const total = groups.length;
+  const adv = groups.filter((g) => g.verdict === "advancing");
+  const flat = groups.filter((g) => g.verdict === "stalling");
+  const building = groups.filter((g) => g.verdict === "building");
+  let lead: string;
+  let flatSaid = false;
+  if (adv.length === total) lead = total === 1 ? `${namedGroups(adv)} ${isAre(adv)} advancing` : "every group is advancing";
+  else if (adv.length * 2 > total) lead = "most groups are advancing";
+  else if (adv.length > 0) lead = `${namedGroups(adv)} ${isAre(adv)} advancing`;
+  else if (flat.length * 2 > total) {
+    lead = flat.length <= 3 ? `${namedGroups(flat)} ${isAre(flat)} flat` : "most groups are flat";
+    flatSaid = true;
+  } else if (building.length * 2 > total) lead = "most groups are building a base";
+  else lead = "your groups are holding steady";
+  const parts = [lead];
+  if (flat.length && !flatSaid) parts.push(`${namedGroups(flat)} ${isAre(flat)} flat`);
+  const sentence = parts.join("; ");
+  return `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}.`;
+}
+
 export function muscleGroupTrajectory(
   date?: string,
   opts: MuscleTrajectoryOpts = {},
@@ -155,18 +275,46 @@ export function muscleGroupTrajectory(
   const ps = opts.programState ?? getProgramState(d);
   const lifts = Array.isArray(ps.lifts) ? ps.lifts : [];
   const volume = Array.isArray(ps.volume) ? ps.volume : [];
+  const creditFor: CreditFor = opts.creditFor ?? muscleCreditFor;
 
-  // Index volume by canonical group, and bucket member lifts by canonical group.
+  // Index volume by canonical group, and every lift under each group it credits.
   const volByGroup = new Map<string, MuscleVolumeState>();
   for (const v of volume) {
     if (!v?.muscle_group || isMobility(v.muscle_group)) continue;
     volByGroup.set(v.muscle_group, v);
   }
-  const liftsByGroup = new Map<string, LiftState[]>();
+  const membersByGroup = new Map<string, GroupMember[]>();
   for (const l of lifts) {
-    const g = liftGroup(l);
-    if (!g || isMobility(g)) continue;
-    (liftsByGroup.get(g) ?? liftsByGroup.set(g, []).get(g)!).push(l);
+    if (!l?.exercise || isMobility(l.muscle_group)) continue;
+    let credits: MuscleCredit[] = [];
+    try {
+      credits = creditFor(l.exercise, l.muscle_group);
+    } catch {
+      credits = [];
+    }
+    const compound = isCompoundLift(l.exercise, l.muscle_group);
+    const tier = liftLeadTier(l.exercise, l.muscle_group);
+    const seen = new Set<string>();
+    for (const c of credits) {
+      const group = canonicalGroup(c?.group ?? null);
+      const share = Number(c?.share);
+      if (!group || isMobility(group) || seen.has(group) || !(share > 0)) continue;
+      // A touched (quarter) share grazes the group: it never makes the group appear,
+      // never votes stalled or progressing, never leads. Only the primary and counted
+      // shares are members (the same line the weekly-volume reads draw).
+      const primary = c?.role === "primary";
+      if (!primary && !isCountedShare(share)) continue;
+      seen.add(group);
+      const member: GroupMember = {
+        lift: l,
+        share,
+        primary,
+        compound,
+        tier,
+        weight: share * (compound ? 1 : GROUP_ACCESSORY_WEIGHT),
+      };
+      (membersByGroup.get(group) ?? membersByGroup.set(group, []).get(group)!).push(member);
+    }
   }
 
   const injuryAreas = activeInjuryAreas();
@@ -185,25 +333,19 @@ export function muscleGroupTrajectory(
   const groups: MuscleGroupRead[] = [];
 
   // Walk the canonical taxonomy order so the strip reads in a stable, sensible
-  // order. Include a group only when there's something to say (members or volume).
+  // order. Include a group only when there's something current to say: a lift
+  // trained inside the current window, or volume.
   for (const group of MUSCLE_GROUPS) {
     if (group === "mobility") continue;
-    const members = liftsByGroup.get(group) ?? [];
     const vol = volByGroup.get(group) ?? null;
+    const members = (membersByGroup.get(group) ?? []).filter((m) => trainedNow(m.lift, d));
     if (members.length === 0 && !vol) continue;
 
-    const stalled = members
-      .filter((l) => l.status === "plateaued" || l.status === "regressing")
-      .sort((a, b) => stallRank(b) - stallRank(a));
-    const progressing = members.filter((l) => l.status === "progressing");
-    const fresh = members.filter((l) => l.status === "new");
-
-    let verdict: GroupVerdict;
-    let lead_lift: string | null = null;
-    let stalled_signal: string | null = null;
-    let vary_options: GroupVaryOption[] = [];
-    let note: string;
-
+    const label = TITLE(group);
+    const singular = SINGULAR_GROUPS.has(group);
+    const is = singular ? "is" : "are";
+    const has = singular ? "has" : "have";
+    const its = singular ? "its" : "their";
     const band = vol?.band ?? null;
     const trend = vol?.trend ?? null;
     const bandWord =
@@ -212,73 +354,120 @@ export function muscleGroupTrajectory(
       : band === "productive" ? "in a productive volume range"
       : null;
 
-    if (stalled.length > 0) {
+    const leadCompound =
+      [...members].filter((m) => m.compound && m.share >= GROUP_LEAD_MIN_SHARE).sort(byWeight)[0] ?? null;
+    const stalled = members.filter((m) => isStalled(m.lift));
+    const progressing = members.filter((m) => m.lift.status === "progressing");
+    const fresh = members.filter((m) => m.lift.status === "new");
+    const weightOf = (list: GroupMember[]) => list.reduce((sum, m) => sum + m.weight, 0);
+    // Every trained lift is in the denominator, a lift still building its baseline too:
+    // a brand-new squat beside one stuck leg extension is not a stalled group.
+    const total = weightOf(members);
+    const stalledWeight = weightOf(stalled);
+    const progressingWeight = weightOf(progressing);
+    const holdingWeight = weightOf(members.filter((m) => m.lift.status === "maintaining"));
+    // A lead is contested when another compound trains the group at least as heavily and
+    // moves the other way (a stalled row beside a climbing pull-up, both full back
+    // shares; or both at a half biceps share). A tie in weight never lets one of them
+    // speak for the group: the weighted majority decides instead.
+    const leadContested =
+      !!leadCompound &&
+      members.some(
+        (m) =>
+          m !== leadCompound &&
+          m.compound &&
+          m.share >= GROUP_LEAD_MIN_SHARE &&
+          m.weight >= leadCompound.weight - 1e-9 &&
+          (isStalled(leadCompound.lift)
+            ? m.lift.status === "progressing"
+            : leadCompound.lift.status === "progressing" && isStalled(m.lift))
+      );
+    const leadStalled = !!leadCompound && !leadContested && isStalled(leadCompound.lift);
+    const leadClimbing = !!leadCompound && !leadContested && leadCompound.lift.status === "progressing";
+    // The group's prime movers: with none, it is read only through other groups' lifts.
+    // A volume-only group (no current lift) keeps its old standing in the headline.
+    const direct = members.length === 0 || members.some((m) => m.primary);
+
+    let verdict: GroupVerdict;
+    let lead: GroupMember | null = null;
+    let stalled_signal: string | null = null;
+    let vary_options: GroupVaryOption[] = [];
+    let note: string;
+
+    if (leadStalled || (total > 0 && stalledWeight * 2 > total)) {
       verdict = "stalling";
-      const lead = stalled[0];
-      lead_lift = lead.exercise;
-      stalled_signal = lead.stall_signals[0] ?? lead.why ?? null;
-      vary_options = suggestAlternatives(lead.exercise, { limit: 3, injuryAreas, excludeNames })
-        .map((v) => ({ name: v.name, why: v.why }));
-      const wk = lead.weeks_static ? ` (flat ~${lead.weeks_static} wk)` : "";
-      note = vary_options.length
-        ? `${TITLE(group)} has stalled — ${lead.exercise}${wk} isn't moving; rotate one of these same-pattern options in to unstick it.`
-        : `${TITLE(group)} has stalled — ${lead.exercise}${wk} isn't moving; a close variation or a light deload usually unsticks it.`;
-    } else if (progressing.length > 0) {
+      lead = leadStalled
+        ? leadCompound
+        : [...stalled].sort((a, b) => b.weight - a.weight || stallRank(b.lift) - stallRank(a.lift))[0];
+      const l = lead!.lift;
+      stalled_signal = l.stall_signals[0] ?? l.why ?? null;
+      const wk = l.weeks_static ? ` (flat about ${l.weeks_static} weeks)` : "";
+      // A climbing compound beside the stall is said, never hidden by it.
+      const stillClimbing = [...progressing].filter((m) => m.compound).sort(byWeight)[0];
+      const climbingNote = stillClimbing ? ` ${stillClimbing.lift.exercise} is still climbing.` : "";
+      if (!direct) {
+        // Read only through another group's lift: that group's card carries the menu.
+        const names = joinList([...new Set(stalled.map((m) => m.lift.exercise))]);
+        const gets = singular ? "gets" : "get";
+        const flatVerb = new Set(stalled.map((m) => m.lift.exercise)).size === 1 ? "is" : "are";
+        note = `${label} ${gets} ${its} work from ${names}, which ${flatVerb} flat for now.${climbingNote}`;
+      } else {
+        vary_options = varyMenu(l.exercise, injuryAreas, excludeNames);
+        const head = leadStalled
+          ? `${label} ${has} gone flat: ${l.exercise}${wk} is not moving.`
+          : `${label} ${has} gone flat: most of ${its} lifts are not moving, ${l.exercise}${wk} among them.`;
+        note = vary_options.length
+          ? `${head}${climbingNote} Rotating in one of these close variations could unstick it.`
+          : `${head}${climbingNote} A close variation or a lighter week usually unsticks it.`;
+      }
+    } else if (leadClimbing || (progressingWeight > 0 && progressingWeight >= holdingWeight)) {
       verdict = "advancing";
-      lead_lift = progressing[0].exercise;
-      const others = progressing.length > 1 ? ` (+${progressing.length - 1} more climbing)` : "";
-      note = `${TITLE(group)} is advancing — ${progressing[0].exercise} climbing${others}${bandWord ? `, ${bandWord}` : ""} — keep the progression going.`;
-    } else if (fresh.length > 0 || (band === "low" && trend === "rising") || trend === "rising") {
+      lead = leadClimbing ? leadCompound : [...progressing].sort(byWeight)[0];
+      const others = progressing.filter((m) => m !== lead).length;
+      const climbing = others > 0 ? `, with ${numberWord(others)} more climbing` : "";
+      // A stalled accessory under an advancing group is named, never the verdict.
+      const flatOne = [...stalled].sort(byWeight)[0];
+      note = `${label} ${is} advancing: ${lead!.lift.exercise} is climbing${climbing}${bandWord ? `, ${bandWord}` : ""}.`;
+      if (flatOne) note += ` ${flatOne.lift.exercise} is flat for now.`;
+    } else if (fresh.length > 0 || trend === "rising") {
       verdict = "building";
-      lead_lift = (fresh[0] ?? members[0])?.exercise ?? null;
+      lead = leadCompound ?? [...fresh].sort(byWeight)[0] ?? [...members].sort(byWeight)[0] ?? null;
       note = fresh.length
-        ? `${TITLE(group)} is building a baseline — a couple more sessions and its trend will read clearly.`
-        : `${TITLE(group)} is building — volume's ramping${band === "low" ? " up off a light base" : ""}; keep it steady.`;
+        ? `${label} ${is} building a baseline. A couple more sessions and ${its} trend will read clearly.`
+        : `${label} ${is} building: volume is ramping${band === "low" ? " up off a light base" : ""}. Keep it steady.`;
     } else {
       verdict = "maintaining";
-      lead_lift = members[0]?.exercise ?? null;
+      lead = leadCompound ?? [...members].sort(byWeight)[0] ?? null;
       note = members.length
-        ? `${TITLE(group)} is holding steady${bandWord ? `, ${bandWord}` : ""} — room for a deliberate push.`
-        : `${TITLE(group)} is ticking over${bandWord ? ` (${bandWord})` : ""}.`;
+        ? `${label} ${is} holding steady${bandWord ? `, ${bandWord}` : ""}. There is room for a deliberate push.`
+        : `${label} ${is} ticking over${bandWord ? `, ${bandWord}` : ""}.`;
     }
 
     groups.push({
       group,
-      label: TITLE(group),
+      label,
       verdict,
-      lead_lift,
+      lead_lift: lead?.lift.exercise ?? null,
       stalled_signal,
       vary_options,
       volume_band: band,
       trend,
       note,
+      lead_role: lead ? (lead.compound ? "compound" : "accessory") : null,
+      lifts_read: members.length,
+      direct,
     });
   }
 
   if (groups.length === 0) {
     return {
       available: false,
-      headline: "Not enough logged yet to read your muscle groups — keep training and they'll come into focus.",
+      headline: "Not enough logged yet to read your muscle groups. Keep training and they will come into focus.",
       groups: [],
     };
   }
 
-  const counts = {
-    advancing: groups.filter((g) => g.verdict === "advancing").length,
-    stalling: groups.filter((g) => g.verdict === "stalling").length,
-    building: groups.filter((g) => g.verdict === "building").length,
-    maintaining: groups.filter((g) => g.verdict === "maintaining").length,
-  };
-  const parts: string[] = [];
-  if (counts.advancing) parts.push(`${counts.advancing} advancing`);
-  if (counts.stalling) parts.push(`${counts.stalling} stalling`);
-  if (counts.building) parts.push(`${counts.building} building`);
-  if (counts.maintaining && !parts.length) parts.push(`${counts.maintaining} holding steady`);
-  const headline = parts.length
-    ? `Muscle groups: ${parts.join(", ")}.`
-    : "Your muscle groups are all holding steady.";
-
-  return { available: true, headline, groups };
+  return { available: true, headline: trajectoryHeadline(groups), groups };
 }
 
 // ============================================================================

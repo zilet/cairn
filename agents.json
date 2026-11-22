@@ -1,7 +1,7 @@
 {
   "claude": {
     "command": "claude",
-    "args": ["{file_access_args}", "{mcp_config_args}", "{no_tools_args}", "{model_args}", "{reasoning_args}", "{schema_args}", "-p", "{prompt}"],
+    "args": ["{file_access_args}", "{mcp_config_args}", "{no_tools_args}", "{web_args}", "{model_args}", "{reasoning_args}", "{schema_args}", "-p", "{prompt}"],
     "input": "arg",
     "description": "Claude Code (Anthropic Pro/Max). Auth: ~/.claude.",
     "label": "Claude",
@@ -9,6 +9,10 @@
     "env_required": [],
     "web_access": true,
     "research_note": "Headless `claude -p` has WebSearch/WebFetch available, so it can do live evidence research for the grounding layer (settings.research_enabled). Extra fields here are informational only — runAgent reads just command/args/input/env_required.",
+    "web_args": ["--allowedTools", "WebSearch,WebFetch"],
+    "web_turn_args": ["--tools", "WebSearch,WebFetch", "--allowedTools", "WebSearch,WebFetch", "--strict-mcp-config", "--setting-sources", "user", "--disable-slash-commands", "--no-session-persistence"],
+    "web_turn_note": "Expanded at {web_args} IN PLACE OF web_args on a chat web turn (the prompt leads with WEB_TOOLS_PREAMBLE, tools \"web\"), with no files and no MCP attach. It mirrors no_tools_args with the toolset narrowed to the two web tools instead of none, so a web turn never starts with the shell, file tools, user MCP servers, skills or a saved session holding the prompt's DATA. claude 2.1.330 --help: '--tools <tools...>  Built-in tools to make available: \"\" for none, \"default\" for the default set, or tool names (e.g. \"Bash,Edit,Read\")'; '--allowedTools, --allowed-tools <tools...>' (still needed: the web tools are permission-gated and -p cannot answer a prompt); '--strict-mcp-config', '--setting-sources <sources>', '--disable-slash-commands', '--no-session-persistence' all present. Both variadic lists are closed by the next arg, always a flag. Not live-verified from this change: a real headless search under this toolset.",
+    "web_note": "Expanded at {web_args} only on a web-allowed run (a chat web turn, tools \"web\"; or research, tools \"provider\") with no files and no MCP attach. WebSearch and WebFetch are permission-gated tools in Claude Code, and a headless -p run cannot answer a permission prompt, so they are allowed by name (claude 2.1.x --help: '--allowedTools, --allowed-tools <tools...>  Comma or space-separated list of tool names to allow'). The list is closed by the next arg, which is always a flag (--model / --effort / -p). On research the toolset is left as is so the op keeps its tools; a chat web turn takes web_turn_args instead, which narrow the toolset itself to the two web tools. Not live-verified from this change: whether a given account's plan serves WebSearch headless.",
     "login": ["auth", "login"],
     "status_check": ["auth", "status"],
     "auth_state": [".claude/.credentials.json"],
@@ -43,17 +47,20 @@
     },
     "stream": {
       "format": "claude",
-      "args": ["{file_access_args}", "{mcp_config_args}", "{no_tools_args}", "{model_args}", "{reasoning_args}", "-p", "{prompt}", "--output-format", "stream-json", "--include-partial-messages", "--verbose"]
+      "args": ["{file_access_args}", "{mcp_config_args}", "{no_tools_args}", "{web_args}", "{model_args}", "{reasoning_args}", "-p", "{prompt}", "--output-format", "stream-json", "--include-partial-messages", "--verbose"]
     }
   },
   "codex": {
     "command": "codex",
-    "args": ["exec", "{model_args}", "{reasoning_args}", "--sandbox", "read-only", "--skip-git-repo-check", "{mcp_config_args}", "{file_access_args}", "{schema_args}", "{prompt}", "{image_args}"],
+    "args": ["{web_args}", "exec", "{model_args}", "{reasoning_args}", "--sandbox", "read-only", "--skip-git-repo-check", "{mcp_config_args}", "{file_access_args}", "{schema_args}", "{prompt}", "{image_args}"],
     "input": "arg",
     "description": "OpenAI Codex (Sign in with ChatGPT). Auth: ~/.codex.",
     "label": "ChatGPT",
     "plan": "Sign in with ChatGPT",
     "env_required": [],
+    "web_access": true,
+    "web_args": ["--search"],
+    "web_note": "codex-cli 0.169.0 `codex --help`: '--search  Enable live web search. When enabled, the native Responses web_search tool is available to the model (no per-call approval)'. It is a TOP-LEVEL option: `codex --search exec --help` parses (exit 0) and `codex exec --search` is refused (exit 2), so {web_args} sits before `exec`. Expanded only on a web-allowed run with no files and no MCP attach (the native coach-read attach sets web_search=\"disabled\" itself). Not live-verified from this change: an actual headless search answering with sources.",
     "login": ["login", "--device-auth"],
     "status_check": ["login", "status"],
     "auth_state": [".codex/auth.json"],
@@ -153,6 +160,8 @@
     "label": "Grok",
     "plan": "SuperGrok or an xAI key",
     "env_required": [],
+    "web_access": true,
+    "web_note": "grok 1.0.88 --help lists '--disable-web-search  Disable web search and web fetch tools', so web search and fetch are DEFAULT tools of a headless run; no flag is needed to turn them on (hence no web_args). On every no-tools run NO_TOOLS_PREAMBLE keeps them unused; a web turn's WEB_TOOLS_PREAMBLE invites them. Not live-verified from this change: a headless search answering with sources.",
     "login": ["login", "--device-auth"],
     "status_check": ["models"],
     "login_note": "Re-verified on grok 1.0.46 (2026-10-07): `grok login --device-auth` (alias --device-code) still exists and needs no TTY. It prints 'To sign in, open this URL in your browser:' + https://accounts.x.ai/oauth2/device?user_code=XXXX-XXXX, then 'Confirm this code in your browser:' + the bare code, then waits ('Waiting for authorization...'). Tokens land in ~/.grok/auth.json.",

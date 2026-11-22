@@ -60,6 +60,140 @@ export function parseChatEscalationRequest(text: string, lane: ChatLane): ChatLa
   return null;
 }
 
+// ---- the one web escalation a turn may ask for ----
+// A non-web turn whose good answer needs current outside-world facts (an event, a race,
+// a registration, a price, opening hours, the weather) must not answer from memory and
+// must not say it cannot search. It returns ONLY {"web_search":{"query","why"}} — no
+// reply marker, so the stream gate shows nothing — and the turn re-runs ONCE with web
+// search on, on an agent that can (src/chatTurns.ts runChatCompletion). The shape sits
+// beside the coach_read request (src/chat-reads.ts): bare JSON, before any reply.
+export interface ChatWebSearchRequest {
+  query: string;
+  why: string;
+}
+
+const WEB_REQUEST_TEXT_MAX = 200;
+
+/** What the athlete reads when a web search was asked for and could not run. */
+export const CHAT_WEB_SEARCH_UNAVAILABLE_REPLY =
+  "I couldn't search the web just now, so I can't confirm current details. Ask me again in a little while and I'll look it up.";
+
+function webRequestText(value: unknown): string {
+  return String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, WEB_REQUEST_TEXT_MAX);
+}
+
+/** The model's web-search request, or null: bare JSON with a `web_search` object and no reply marker. */
+export function parseChatWebSearchRequest(text: string): ChatWebSearchRequest | null {
+  const raw = String(text ?? "");
+  if (!raw.trim() || raw.includes(CHAT_REPLY_SENTINEL)) return null;
+  const obj = extractJson(raw);
+  const request = obj && typeof obj === "object" && !Array.isArray(obj) ? (obj as any).web_search : null;
+  if (!request || typeof request !== "object" || Array.isArray(request)) return null;
+  return { query: webRequestText(request.query), why: webRequestText(request.why) };
+}
+
+/**
+ * How a turn stands toward the web, for its prompt:
+ *   - "search": this attempt runs with web search on — search now, cite, date, separate
+ *     verified from unconfirmed (`query` is the first pass's own request, when there was one);
+ *   - "unavailable": the question needs the web but this attempt cannot search — say so
+ *     plainly and never present memory as current fact;
+ *   - "offer": an ordinary turn on which a web-capable agent exists — the model may ask
+ *     for the one web re-run (CHAT_WEB_SEARCH_REQUEST) instead of answering from memory;
+ *   - "none_available": an ordinary turn with no web-capable agent at all — the same
+ *     honesty rule, with nothing to ask for.
+ */
+export type ChatWebPromptMode =
+  | { mode: "search"; query?: string | null; why?: string | null }
+  | { mode: "unavailable" }
+  | { mode: "offer" }
+  | { mode: "none_available" };
+
+const MONTHS = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+/** "Sunday, 22 November 2026" from DATA.now, or null when the clock is absent. */
+export function chatTodayInWords(ctx: any): string | null {
+  const date = String(ctx?.now?.date ?? "");
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  if (!m) return null;
+  const month = MONTHS[Number(m[2]) - 1];
+  if (!month) return null;
+  const weekday = typeof ctx?.now?.weekday === "string" && ctx.now.weekday ? `${ctx.now.weekday}, ` : "";
+  return `${weekday}${Number(m[3])} ${month} ${m[1]}`;
+}
+
+function chatPlaceLine(ctx: any): string {
+  const loc = ctx?.location;
+  const home = typeof loc?.home === "string" && loc.home.trim() ? loc.home.trim() : null;
+  const here = typeof loc?.effective === "string" && loc.effective.trim() ? loc.effective.trim() : null;
+  if (loc?.source === "trip" && here) return ` They are travelling, currently in ${here}${home ? ` (home: ${home})` : ""}.`;
+  if (here || home) return ` Their home area: ${here ?? home}.`;
+  return "";
+}
+
+/**
+ * What a web search query may carry. The search provider is an outside service: the query
+ * names the outside-world thing, the place and the time, and nothing from DATA about the
+ * person (their name, health, labs, body data or injuries).
+ */
+export const CHAT_WEB_QUERY_PRIVACY_LINE =
+  "Search queries name only the outside-world thing, the place and the time; never the athlete's name, health, labs, body data or injuries.";
+
+/** The CHAT_WEB_SEARCH_REQUEST contract an ordinary turn carries ("" when it may not ask). */
+export function chatWebEscalationContract(web: ChatWebPromptMode | undefined): string {
+  if (web?.mode === "offer") {
+    return `\nOUTSIDE-WORLD FACTS: if a good answer needs current facts about the outside world that DATA cannot hold (events and races, registration, dates, prices, opening hours, weather, news, what is on near a place), do not answer from memory and do not say you cannot search. Return ONLY this JSON object this turn, with no reply marker and no prose:
+{"web_search":{"query":"<what to search for, with the place and the time>","why":"<a few words>"}}
+The server then runs this turn again with web search on. ${CHAT_WEB_QUERY_PRIVACY_LINE} Never use it for the athlete's own data (their sessions, runs, food, labs): that is in DATA or a coach read away.\n`;
+  }
+  if (web?.mode === "none_available") {
+    return `\nOUTSIDE-WORLD FACTS: you cannot search the web on this turn. If a good answer needs current facts about the outside world (events, registration, dates, prices, opening hours, weather), say plainly that you couldn't check them just now, and mark anything you add from memory as unconfirmed.\n`;
+  }
+  return "";
+}
+
+/** The block that leads a web turn's prompt ("" on an ordinary turn). */
+export function renderChatWebBlock(ctx: any, web: ChatWebPromptMode | undefined): string {
+  if (web?.mode !== "search" && web?.mode !== "unavailable") return "";
+  const today = chatTodayInWords(ctx);
+  const when = `${today ? `Today is ${today}.` : ""}${chatPlaceLine(ctx)}`.trim();
+  if (web.mode === "unavailable") {
+    return `=== THIS QUESTION NEEDS THE WEB, AND YOU CANNOT SEARCH ON THIS RUN ===
+${when ? `${when}\n` : ""}Say plainly, in one short sentence, that you couldn't search just now. Do not present remembered dates, prices, registration status or listings as current fact: anything you add from memory is said to be unconfirmed, and point them to the organiser's own page to check. Still answer the coaching part of their message from DATA.
+
+`;
+  }
+  const asked = web.query ? `\nSearch for: ${JSON.stringify(web.query)}${web.why ? ` (${web.why})` : ""}.` : "";
+  return `=== WEB SEARCH TURN ===
+${when ? `${when}\n` : ""}This question turns on current facts about the outside world. Search the web now; do not answer from memory.${asked}
+${CHAT_WEB_QUERY_PRIVACY_LINE}
+HOW TO ANSWER IT:
+- Every outside-world fact that matters (a date, a place, a price, whether registration is open) carries its source as a plain link at the end of the item it supports, and says when that source was dated or checked ("per the race site, checked today").
+- Prefer the primary source (the organiser's own page) over listings and aggregators. When sources disagree, say so.
+- Keep what you verified apart from what you could not confirm, and say plainly which is which. Never invent a URL: link only pages your search actually returned.
+- If the search fails or finds nothing current, say "I couldn't confirm this just now" rather than filling in from memory.
+- Keep it calm and short: a few items, each link at the end of the item it supports, no footnote list.
+- Fit the answer to the athlete from DATA (their goals, their schedule), and write it between the reply markers of the OUTPUT CONTRACT.
+
+`;
+}
+
 function stripChatEscalationSentinels(text: string): string {
   let out = text;
   for (const sentinel of CHAT_ESCALATION_SENTINELS) out = out.replaceAll(sentinel, "");
@@ -89,11 +223,17 @@ function stripLeadingNarration(s: string): string {
   // data-plumbing NOUNS an agent narrates a lookup with ("pull up your data",
   // "get the context", "check your metrics"). Deliberately NOT "log"/"record" — those
   // double as coaching verbs ("I'll log that", "I'll record it"), which must survive.
-  const tech = /(\/\w|\.json\b|\.db\b|\.js\b|\.ts\b|\bsqlite|\bnode\b|\bnpm\b|\btable\b|\bdatabase\b|\bschema\b|\bdirectory\b|\bcommand\b|\bquery\b|\bfile\b|\bfiles\b|\brepo\b|\bworkspace\b|\bdata\b|\bcontext\b|\bmetrics?\b|node_modules|package\.json|cairn\.db|chat_messages|chat_turns|\/app\b|\/home\b|\/data\b)/i;
+  // Web-search steps count too ("Let me search the web for…", "Searching online for…"):
+  // a web turn's model narrates them, and they are steps, never the answer.
+  const tech = /(\bthe web\b|\bweb search\b|\bsearch(?:ing)?\s+(?:the\s+web|online|for)\b|\bonline\b|\/\w|\.json\b|\.db\b|\.js\b|\.ts\b|\bsqlite|\bnode\b|\bnpm\b|\btable\b|\bdatabase\b|\bschema\b|\bdirectory\b|\bcommand\b|\bquery\b|\bfile\b|\bfiles\b|\brepo\b|\bworkspace\b|\bdata\b|\bcontext\b|\bmetrics?\b|node_modules|package\.json|cairn\.db|chat_messages|chat_turns|\/app\b|\/home\b|\/data\b)/i;
+  // A web link is never a technical token: "Looking at what's on this spring:
+  // https://www.baa.org/…" is the answer's first line, and its URL's "/w" must not
+  // make it read as tool-step narration.
+  const probe = (line: string) => line.replace(/https?:\/\/\S+/gi, "");
   let i = 0;
   while (i < lines.length) {
     if (lines[i].trim() === "") { i++; continue; }                      // blanks between narration
-    if (verb.test(lines[i]) && tech.test(lines[i])) { i++; continue; }  // a tool-step line — drop it
+    if (verb.test(lines[i]) && tech.test(probe(lines[i]))) { i++; continue; }  // a tool-step line — drop it
     break;
   }
   return lines.slice(i).join("\n").trim();
@@ -123,6 +263,11 @@ export function parseChatReply(text: string): { reply: string; actions: ChatActi
     // No actions sentinel: pure prose — UNLESS the model emitted the legacy
     // {reply,actions} JSON, which we salvage so older agents keep working.
     const obj = extractJson(raw);
+    // A web-search request that reached the parser (no re-run was possible) is protocol,
+    // never prose: the athlete hears plainly that the search did not happen.
+    if (!hadMarker && obj && typeof obj === "object" && !Array.isArray(obj) && obj.web_search && typeof obj.reply !== "string") {
+      return { reply: CHAT_WEB_SEARCH_UNAVAILABLE_REPLY, actions: [] };
+    }
     if (obj && typeof obj === "object" && (typeof obj.reply === "string" || Array.isArray(obj.actions))) {
       return {
         reply: ((obj.reply ?? "").toString().trim()) || clean(raw),
@@ -151,6 +296,8 @@ export interface BuildChatPromptOptions {
   context?: ChatContextMode;
   /** The action types this turn may emit (chatTurns.ts chatPromptActionTypes); omitted, every non-retired type. */
   actionTypes?: readonly ChatActionType[];
+  /** How this attempt stands toward the web (ChatWebPromptMode); omitted, an ordinary turn with no web wording. */
+  web?: ChatWebPromptMode;
 }
 
 export type ChatContextMode = "lean" | "full";
@@ -357,11 +504,16 @@ Open and LOOK at that image file directly before answering.
   answer their message; only log when they clearly want something logged.
 ` : "";
   const linkedBlock = lane === "capture" ? "" : renderChatLinkedPagesBlock(options.linkedPages);
+  // A web turn's block leads, right after the persona; an ordinary turn's one-line web
+  // contract (ask for the re-run, or say plainly it cannot check) rides beside the lane's
+  // escalation contract. The capture lane is never offered the re-run: it escalates to coach.
+  const webBlock = renderChatWebBlock(ctx, options.web);
+  const webContract = lane === "capture" ? "" : chatWebEscalationContract(options.web);
   if (lane === "capture") {
     return {
       head: `${CAIRN_PERSONA}
 
-You are handling a fast capture turn. Confirm what the athlete asked to log or correct, and stay inside food/activity/weight/blood-pressure/supplement capture. A weigh-in is log_weight and a cuff reading is log_blood_pressure — never log_activity. Food is the only supported correction target (use update_food_note with an existing id); activity, weight, blood-pressure, and supplement history cannot be edited here. Do not analyze training history, clinical records, imaging, or restructure a plan. Never invent macro precision.
+${webBlock}You are handling a fast capture turn. Confirm what the athlete asked to log or correct, and stay inside food/activity/weight/blood-pressure/supplement capture. A weigh-in is log_weight and a cuff reading is log_blood_pressure — never log_activity. Food is the only supported correction target (use update_food_note with an existing id); activity, weight, blood-pressure, and supplement history cannot be edited here. Do not analyze training history, clinical records, imaging, or restructure a plan. Never invent macro precision.
 ${escalationContract(lane)}
 ${renderChatActionPromptProse(CAPTURE_ACTION_TYPES)}
 Keep the reply short and human. Manual corrections to an existing food id are authoritative; use update_food_note with an id from CAPTURE DATA.
@@ -503,9 +655,9 @@ ${promptData(data, lean ? "chat_core" : "chat")}`;
     return {
       head: `${CAIRN_PERSONA}
 
-${seeLine}
+${webBlock}${seeLine}
 ROUTING LANE: ${lane}
-${escalationContract(lane)}
+${escalationContract(lane)}${webContract}
 ${renderNow(ctx)}${guardrails}
 
 ${CONTEXT_GUARDRAILS}
@@ -523,7 +675,7 @@ ${closing}`,
   return {
     head: `${CAIRN_PERSONA}
 
-${seeLine}
+${webBlock}${seeLine}
 ${guardrails}
 
 ${CONTEXT_GUARDRAILS_LEAN}
@@ -536,7 +688,7 @@ ${outputContract}`,
     tail: `
 
 ROUTING LANE: ${lane}
-${escalationContract(lane)}
+${escalationContract(lane)}${webContract}
 ${renderNow(ctx)}${stateBlocks}
 ${photoBlock}${linkedBlock}
 ${closing}`,

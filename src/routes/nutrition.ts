@@ -8,7 +8,6 @@ import {
   deleteFoodNote,
   estimateExpenditure,
   frequentFoods,
-  getDayIntake,
   getFoodNote,
   getMealPlan,
   nutritionProgress,
@@ -24,7 +23,7 @@ import {
 import { userSetNutritionTarget } from "../domain/brain/autonomy-service.js";
 import { goalPace } from "../repo/goal-pace.js";
 import { weightTrendRead } from "../repo/weight-trend.js";
-import { carbBasis, dayFuelDemand } from "../repo/fuel-demand.js";
+import { nutritionDayRead } from "../repo/fuel-guides.js";
 import { fuelingFollowThroughDue, listFuelingFeedback, setFuelingFeedback } from "../repo/fueling.js";
 import { ACCEPTED_MIME } from "../uploadMime.js";
 import { UPLOADS_DIR } from "../uploadPaths.js";
@@ -104,9 +103,11 @@ export function goalPaceResponse(days = 90) {
 }
 
 // GET /nutrition/day's body, shared with the /today fan-in (routes/today-responses.ts).
+// The day's food guides (`guides`, repo/fuel-guides.ts) ride beside it: carbs, fat, fiber
+// and saturated fat as ranges/floors/ceilings derived from the same target, and the
+// weekly omega-3 line. The MCP get_day_intake tool returns the same body.
 export function nutritionDayResponse(date: string | undefined) {
-  const intake = getDayIntake(date);
-  return { ...intake, fuel_demand: dayFuelDemand(date, { carbBasis: carbBasis(intake.target) }) };
+  return nutritionDayRead(date);
 }
 
 // A calm review of ONE day's logged food: entries stay nullable while legacy

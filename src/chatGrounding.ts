@@ -41,10 +41,11 @@ import {
   STRENGTH_OBJECTIVE_NOT_SAVED_VARIANTS,
   TODAY_SESSION_NOT_SET_VARIANTS,
 } from "./chat-reconcile.js";
-import { namesOtherDay, namesOtherPerson, negatesToday } from "./chatRouting.js";
+import { chatMessageWantsCurrentResearch, namesOtherDay, namesOtherPerson, negatesToday } from "./chatRouting.js";
 import { datedWeek, type DatedWeek, type DatedWeekDay } from "./domain/training/dated-week.js";
 import { addDaysISO, mondayOf } from "./lib/dates.js";
 import { pickDayVariant } from "./repo/brain/day-read-rules.js";
+import { isPlausibleSourceUrl } from "./evidenceGovernance.js";
 import { getDayIntake } from "./repo/nutrition.js";
 import { finishedSessionOn, openSessionOn } from "./repo/open-session.js";
 import { localDateISO } from "./repo/shared.js";
@@ -65,7 +66,15 @@ export type StateClaim = {
 export type GroundingNote =
   | { kind: "claim"; class: ClaimClass; sentence: string }
   | { kind: "intake"; sentence: string; server_kcal: number }
-  | { kind: "schedule"; sentence: string; date: string; said: string; plan: string };
+  | { kind: "schedule"; sentence: string; date: string; said: string; plan: string }
+  | { kind: "outside_world"; web: OutsideWorldMode; specifics: number };
+
+/**
+ * How the turn stood toward the web when the reply was written: "searched" (a web turn
+ * ran on a web-capable agent with its search on), "unavailable" (the question needed the
+ * web and no attempt could search), "off" (an ordinary turn). Absent reads "off".
+ */
+export type OutsideWorldMode = "searched" | "unavailable" | "off";
 
 export type GroundReplyContext = {
   /** The athlete's message this turn (anchors a goal acknowledgement to their number). */
@@ -76,6 +85,10 @@ export type GroundReplyContext = {
   droppedGoalFields?: readonly string[];
   appliedGoalPatch?: Record<string, unknown> | null;
   today?: string;
+  /** How the turn stood toward the web (runChatCompletion's `web`); absent reads "off". */
+  web?: OutsideWorldMode;
+  /** The athlete's own races from the turn's DATA (chatTurnOwnRaces); never outside-world items. */
+  ownRaces?: readonly OwnRaceRef[];
   /** Test seam: the day's intake as the server reads it (repo getDayIntake). */
   readDay?: (date: string) => any;
   /** Test seam: the dated week (dated-week.ts datedWeek); null = no calendar week. */
@@ -687,6 +700,7 @@ const CAPTURE_TYPES: ReadonlySet<string> = new Set<string>([
   "log_supplement",
   "log_measurement",
   "log_checkin",
+  "log_mobility_check",
   "log_context_tag",
   "set_activity_effort",
   "report_training_symptom",
@@ -726,6 +740,10 @@ const SUBJECT_TYPES: ReadonlyArray<readonly [RegExp, readonly string[]]> = [
   [/\b(?:sessions?|workouts?)\b/i, ["add_session_note", "log_set"]],
   [/\b(?:blood\s+pressure|bp)\b/i, ["log_blood_pressure"]],
   [/\b(?:waist|chest|hips?|measurements?)\b/i, ["log_measurement"]],
+  [
+    /\b(?:mobility|knee[- ]to[- ]wall|toe[- ]touch|back[- ]scratch|deep\s+squat|ankles?|hamstrings?|shoulders?)\b/i,
+    ["log_mobility_check"],
+  ],
   [/\b(?:supplements?|creatine|vitamin|omega|whey)\b/i, ["log_supplement"]],
   [/\b(?:labs?|markers?|bloodwork|panel|results)\b/i, ["log_health"]],
   [
@@ -1317,6 +1335,248 @@ function readWeek(ctx: GroundReplyContext, today: string): DatedWeek | null {
 
 const MAX_SCHEDULE_CORRECTIONS = 3;
 
+// ── outside-world claims ─────────────────────────────────────────────────────
+// The chat can now be asked about the world beyond the athlete's data ("is there a cool
+// spring half around Boston?"). A reply that names dated real-world specifics — events
+// with dates, a registration status, an entry price — is only as good as where those came
+// from. So the same last-word pass reads the reply for them, cheaply and conservatively:
+//   - an ITEM is one line that pairs a named event ("B.A.A. Half Marathon", "Cape Cod
+//     Marathon") with a calendar date, or names a registration status or an entry price
+//     beside a named event;
+//   - specifics need two items, or one carrying registration/price — a single named race
+//     with its date is most often the athlete's own goal race, from DATA;
+//   - sourced = at least one plausible http(s) link in the reply (isPlausibleSourceUrl,
+//     the evidence firewall's own check: no placeholder domains, no localhost).
+// A reply with specifics and no source gets ONE calm line under it saying the details were
+// not verified — on a web turn because it did not cite, off one because it is memory. An
+// ordinary coaching reply (the athlete's sessions, runs, food) has no named outside event
+// and is never touched. The runtime asks the same question BEFORE shipping a non-web
+// reply (outsideWorldReplyNeedsWeb) and prefers the one web re-run over the caveat.
+const MONTH_WORD =
+  "(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)";
+const OUTSIDE_DATE_RE = new RegExp(
+  [
+    String.raw`\b${MONTH_WORD}\.?\s+\d{1,2}(?:st|nd|rd|th)?\b`,
+    String.raw`\b\d{1,2}(?:st|nd|rd|th)?\s+(?:of\s+)?${MONTH_WORD}\b`,
+    String.raw`\b(?:early|mid|late)[- ]${MONTH_WORD}\b`,
+    String.raw`\b${MONTH_WORD}\s+20\d\d\b`,
+    String.raw`\b20\d\d-\d{2}-\d{2}\b`,
+  ].join("|")
+);
+// Case-sensitive: one to five capitalized words before an event noun.
+const NAMED_EVENT_RE =
+  /\b((?:[A-Z][\w'.&-]*\s+){1,5})(Half[- ]Marathon|Marathon|Half|10K|5K|10k|5k|15K|Race|Run|Classic|Challenge|Festival|Triathlon|Ultra|Relay|Expo|Championships?)\b/g;
+// Names that are training, not an event: "Long Run", "Easy Run", "Tempo Run", "Your Race".
+const TRAINING_NAME_WORD =
+  /^(?:long|easy|tempo|recovery|quality|key|upper|lower|push|pull|legs?|day|session|workout|your|my|our|the|a|an|this|next|last|interval|threshold|shakeout|steady|progression|fartlek|hill|base|zone|goal|race|weekend|morning|evening|sunday|monday|tuesday|wednesday|thursday|friday|saturday|today'?s?|tomorrow'?s?|easy-pace|aerobic|strides?)$/i;
+const REGISTRATION_OR_PRICE_RE =
+  /\bregistration\s+(?:is\s+|was\s+)?(?:open|opens?|closes?|closed|sold\s+out|fills?|filled|full)\b|\bsold\s+out\b|\b(?:entry|registration)\s+fees?\b|[$€£]\s?\d{2,4}\b/i;
+const MEMORY_DISCLAIMER_RE = new RegExp(
+  [
+    String.raw`\bfrom\s+(?:my\s+)?memory\b`,
+    String.raw`\b(?:can(?:no|['’])t|cannot|unable\s+to|not\s+able\s+to|no\s+way\s+to|don['’]?t\s+have\s+(?:a\s+way|the\s+ability|access)\s+to)\b[^.!?\n]{0,48}\b(?:web\s+search|search\s+(?:the\s+web|online|the\s+internet)|browse|the\s+internet|online|live\s+search|look\s+up\s+(?:\S+\s+){0,2}listings|current\s+listings)\b`,
+    String.raw`\b(?:i\s+)?(?:don['’]?t|do\s+not)\s+have\s+(?:live|real[- ]time|internet|web|current)\s+access\b`,
+    String.raw`\bas\s+of\s+my\s+(?:last\s+)?(?:knowledge|training|update)\b`,
+    String.raw`\bmy\s+(?:training\s+data|knowledge\s+cutoff)\b`,
+  ].join("|"),
+  "i"
+);
+const LINK_RE = /https?:\/\/[^\s<>()\]]+/gi;
+
+/**
+ * A race the athlete already owns, from the turn's DATA: the live endurance goal
+ * (`endurance_goal.event` / `.date`) and every race kept in `completed_races`. A reply
+ * naming THESE ("Nice work closing out the Hartford Marathon on Nov 1… then we build toward
+ * the Boston Half on Apr 12") is coaching, never an outside-world claim. The caller passes
+ * them in (chatTurns.ts chatTurnOwnRaces) so this module stays a pure read of the reply.
+ */
+export interface OwnRaceRef {
+  name?: string | null;
+  /** YYYY-MM-DD. */
+  date?: string | null;
+}
+
+// Generic words carry no identity: "Boston Half Marathon" and "the Boston Half" are one race.
+const EVENT_GENERIC_WORD =
+  /^(?:the|a|an|of|and|marathon|race|run|classic|challenge|festival|championships?|series|annual|presented|by|official|road|city|international|intl)$/;
+// Distance words that must agree: the Boston Half is not the Boston Marathon.
+const EVENT_DISTANCE_WORD = /^(?:half|5k|10k|15k|ultra|relay|triathlon|50k|100k|mile)$/;
+
+function eventTokens(name: string): { key: string[]; distance: string[] } {
+  const words = name
+    .toLowerCase()
+    .replace(/[.'’]/g, "")
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  return {
+    key: words.filter((w) => !EVENT_GENERIC_WORD.test(w) && !EVENT_DISTANCE_WORD.test(w)),
+    distance: words.filter((w) => EVENT_DISTANCE_WORD.test(w)).sort(),
+  };
+}
+
+function sameEventName(replyName: string, ownName: string): boolean {
+  const a = eventTokens(replyName);
+  const b = eventTokens(ownName);
+  if (!a.key.length || !b.key.length) return false;
+  if (a.distance.join(" ") !== b.distance.join(" ")) return false;
+  // The reply may shorten the name ("Hartford Marathon" for "Eversource Hartford Marathon").
+  return a.key.every((w) => b.key.includes(w));
+}
+
+const MONTH_INDEX: Record<string, number> = {
+  jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
+};
+// Month/day pairs a line names ("Nov 1", "12 April", "2027-04-12"), as "M-D".
+function lineMonthDays(line: string): string[] {
+  const out: string[] = [];
+  const monthOf = (word: string) => MONTH_INDEX[word.slice(0, 3).toLowerCase()];
+  for (const m of line.matchAll(new RegExp(String.raw`\b(${MONTH_WORD})\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b`, "g"))) {
+    const month = monthOf(m[1] ?? "");
+    if (month) out.push(`${month}-${Number(m[2])}`);
+  }
+  for (const m of line.matchAll(new RegExp(String.raw`\b(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?(${MONTH_WORD})\b`, "g"))) {
+    const month = monthOf(m[2] ?? "");
+    if (month) out.push(`${month}-${Number(m[1])}`);
+  }
+  for (const m of line.matchAll(/\b20\d\d-(\d{2})-(\d{2})\b/g)) out.push(`${Number(m[1])}-${Number(m[2])}`);
+  return out;
+}
+
+function ownMonthDay(date: string | null | undefined): string | null {
+  const m = /^\d{4}-(\d{2})-(\d{2})/.exec(String(date ?? ""));
+  return m ? `${Number(m[1])}-${Number(m[2])}` : null;
+}
+
+function outsideEventNames(line: string): string[] {
+  const names: string[] = [];
+  for (const match of line.matchAll(NAMED_EVENT_RE)) {
+    const words = String(match[1] ?? "").trim().split(/\s+/);
+    if (words.some((word) => !TRAINING_NAME_WORD.test(word.replace(/[^\w'-]/g, "")))) names.push(match[0]);
+  }
+  return names;
+}
+
+/**
+ * The line names an outside event that is not one of the athlete's own races. A line whose
+ * every named event is an own race by name, or whose every date is an own race's date, is
+ * the athlete's own calendar.
+ */
+function namesOutsideEvent(line: string, ownRaces: readonly OwnRaceRef[] = []): boolean {
+  const names = outsideEventNames(line);
+  if (!names.length) return false;
+  if (!ownRaces.length) return true;
+  const ownNames = ownRaces.map((race) => String(race.name ?? "").trim()).filter(Boolean);
+  if (names.every((name) => ownNames.some((own) => sameEventName(name, own)))) return false;
+  const ownDays = new Set(ownRaces.map((race) => ownMonthDay(race.date)).filter((d): d is string => d != null));
+  const days = lineMonthDays(line);
+  if (ownDays.size && days.length && days.every((day) => ownDays.has(day))) return false;
+  return true;
+}
+
+export interface OutsideWorldReplyRead {
+  /** Lines pairing a named outside event with a date, a registration status or a price. */
+  items: number;
+  /** The reply makes dated outside-world claims (two items, or one with registration/price). */
+  specifics: boolean;
+  /** At least one plausible http(s) source link. */
+  sourced: boolean;
+  /** The reply says it answered from memory or could not search ("I can't run a live web search"). */
+  memory_disclaimer: boolean;
+}
+
+/** What the outside-world reads know about the turn beyond the reply itself. */
+export interface OutsideWorldTurn {
+  /** The athlete's message this turn: an outside-world one (the routing detector) licenses a content read. */
+  message?: unknown;
+  /** The athlete's own races from the turn's DATA: never counted as outside-world items. */
+  ownRaces?: readonly OwnRaceRef[];
+}
+
+/**
+ * Read a reply for dated outside-world claims, their sources, and a from-memory disclaimer.
+ * Lines naming only the athlete's own races (`ownRaces`) are not items.
+ */
+export function readOutsideWorldReply(reply: unknown, turn: OutsideWorldTurn = {}): OutsideWorldReplyRead {
+  const text = String(reply ?? "");
+  const ownRaces = turn.ownRaces ?? [];
+  let items = 0;
+  let priced = false;
+  for (const line of text.split("\n")) {
+    if (!line.trim() || !namesOutsideEvent(line, ownRaces)) continue;
+    const reg = REGISTRATION_OR_PRICE_RE.test(line);
+    if (OUTSIDE_DATE_RE.test(line) || reg) items++;
+    if (reg) priced = true;
+  }
+  const links = [...text.matchAll(LINK_RE)].map((m) => m[0].replace(/[.,;:!?'"]+$/, ""));
+  return {
+    items,
+    specifics: items >= 2 || (items >= 1 && priced),
+    sourced: links.some((url) => isPlausibleSourceUrl(url)),
+    memory_disclaimer: MEMORY_DISCLAIMER_RE.test(text),
+  };
+}
+
+/**
+ * The athlete's message asked about the outside world: the routing detector
+ * (chatMessageWantsCurrentResearch), read over the text without its links, since a pasted
+ * link alone is a page Cairn already fetched.
+ */
+function messageAsksOutsideWorld(message: unknown): boolean {
+  const text = String(message ?? "").replace(/https?:\/\/\S+/gi, " ");
+  return chatMessageWantsCurrentResearch(text);
+}
+
+/**
+ * On a turn that did NOT search: does this reply want the one web re-run instead of being
+ * shipped? It said it answered from memory / could not search, or, on a turn whose MESSAGE
+ * was about the outside world, it states dated outside-world specifics with no source. A
+ * coaching reply that names the athlete's own races ("closing out the Hartford Marathon on
+ * Nov 1, then the Boston Half on Apr 12") is never re-run: the message gate keeps an
+ * ordinary turn's reply content out of it, and `ownRaces` keeps those lines from counting.
+ * (The model's explicit `{"web_search":…}` request is read separately and always honoured.)
+ */
+export function outsideWorldReplyNeedsWeb(reply: unknown, turn: OutsideWorldTurn = {}): boolean {
+  const read = readOutsideWorldReply(reply, turn);
+  if (read.memory_disclaimer) return true;
+  return read.specifics && !read.sourced && messageAsksOutsideWorld(turn.message);
+}
+
+export const OUTSIDE_WORLD_UNSOURCED_VARIANTS: readonly string[] = [
+  "I couldn't attach sources to these details, so treat the dates and details as unconfirmed until you check the organiser's own page.",
+  "These details came without a source, so please confirm the dates and registration on the organiser's own page before you plan around them.",
+  "I couldn't link a source for these, so take the dates as unconfirmed and check the organiser's own page first.",
+];
+export const OUTSIDE_WORLD_UNVERIFIED_VARIANTS: readonly string[] = [
+  "I couldn't check these details online just now, so treat the dates and names as unconfirmed until you see them on the organiser's own page.",
+  "These details are from memory, not a live search, so please confirm them on the organiser's own page before you plan around them.",
+  "I couldn't verify these online just now, so take the dates and details as unconfirmed and check the organiser's own page first.",
+];
+
+/**
+ * One calm line under a reply that states dated outside-world specifics with no source; null
+ * when none is owed. Owed only where the turn was about the outside world: it ran (or
+ * wanted to run) on the web, the athlete's message asked about the world, or the reply
+ * itself says it answered from memory. Lines naming the athlete's own races never count.
+ */
+export function outsideWorldCaveat(
+  reply: unknown,
+  web: OutsideWorldMode = "off",
+  today: string = localDateISO(),
+  turn: OutsideWorldTurn = {}
+): { line: string; note: GroundingNote } | null {
+  const read = readOutsideWorldReply(reply, turn);
+  if (!read.specifics || read.sourced) return null;
+  if (web === "off" && !read.memory_disclaimer && !messageAsksOutsideWorld(turn.message)) return null;
+  const set = web === "searched" ? OUTSIDE_WORLD_UNSOURCED_VARIANTS : OUTSIDE_WORLD_UNVERIFIED_VARIANTS;
+  // Said once: a reply that already carries one of the lines is not told twice.
+  const text = String(reply ?? "");
+  if ([...OUTSIDE_WORLD_UNSOURCED_VARIANTS, ...OUTSIDE_WORLD_UNVERIFIED_VARIANTS].some((line) => text.includes(line))) return null;
+  return {
+    line: pickDayVariant(set, today, "chat-ground-outside-world"),
+    note: { kind: "outside_world", web, specifics: read.items },
+  };
+}
+
 // ── the pass ─────────────────────────────────────────────────────────────────
 const RECEIPT_JOIN = "\n\n";
 
@@ -1455,6 +1715,15 @@ export function groundReply(input: { reply: string; applied: readonly AppliedEnt
   if (schedule.notes.length) {
     notes.push(...schedule.notes);
     out = out ? `${out}${RECEIPT_JOIN}${schedule.line}` : schedule.line;
+    changed = true;
+  }
+  // Dated outside-world specifics with no source: one calm line under the prose.
+  const outside = out
+    ? outsideWorldCaveat(out, ctx.web ?? "off", today, { message: ctx.message, ownRaces: ctx.ownRaces ?? [] })
+    : null;
+  if (outside) {
+    notes.push(outside.note);
+    out = `${out}${RECEIPT_JOIN}${outside.line}`;
     changed = true;
   }
   return changed ? { reply: out, notes } : { reply, notes };

@@ -125,6 +125,45 @@ export function chatTurnTimeoutMs(profile: Pick<RuntimeChatProfile, "execution" 
 
 const CHAT_LEASH_FLOOR_MS = 150_000;
 
+// A web turn searches, opens pages and then writes: several network round trips on top
+// of the thinking the lane asked for. So its leash is the effort ladder's own "high" rung
+// at least (240 s), and the lane's own leash when that is longer (300 s at xhigh/max) —
+// never past interactiveTimeoutFor's ceiling. The athlete watches it stream and has Stop.
+export function chatWebTurnTimeoutMs(profile: Pick<RuntimeChatProfile, "execution" | "requested">): number {
+  return Math.max(chatTurnTimeoutMs(profile), interactiveTimeoutFor("high"));
+}
+
+// The ONE web re-run a turn may get after its first attempt asked for the web (or answered
+// from memory). The whole turn aims to fit inside the web leash: the re-run gets what is
+// left of it, but never less than CHAT_WEB_ESCALATION_FLOOR_MS — a search cut off before
+// it can read a page would leave the athlete with nothing at all.
+export const CHAT_WEB_ESCALATION_FLOOR_MS = 120_000;
+export function chatWebEscalationTimeoutMs(
+  profile: Pick<RuntimeChatProfile, "execution" | "requested">,
+  elapsedMs: number
+): number {
+  const leash = chatWebTurnTimeoutMs(profile);
+  const left = leash - Math.max(0, Number.isFinite(elapsedMs) ? elapsedMs : 0);
+  return Math.min(leash, Math.max(CHAT_WEB_ESCALATION_FLOOR_MS, left));
+}
+
+/**
+ * A web turn's provider order: every agent that declares `web_access` (in the open
+ * order's own ranking) ahead of every agent that does not. Only the web-capable ones
+ * browse; a non-web agent left behind them runs only when all of them failed, with the
+ * "couldn't search just now" prompt and its tools off, so it never presents memory as a
+ * search. `webOnly` drops the non-web tail entirely.
+ */
+export function chatWebProviderOrder(
+  order: readonly string[],
+  definitions: Record<string, Pick<AgentDef, "web_access"> | undefined>,
+  opts: { webOnly?: boolean } = {}
+): { web: string[]; fallback: string[] } {
+  const web = order.filter((name) => definitions[name]?.web_access === true);
+  const fallback = opts.webOnly ? [] : order.filter((name) => !web.includes(name));
+  return { web, fallback };
+}
+
 export function chatExecutionAttemptKey(
   lane: ChatLane | null,
   agent: string,

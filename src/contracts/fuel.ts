@@ -212,3 +212,52 @@ export interface ClientFuelIdeas {
   /** Spoken line about the ideas as a set (e.g. there were no staples to build from). */
   words: string;
 }
+
+/**
+ * The day's food GUIDES (src/repo/fuel-guides.ts), served as `guides` on
+ * `GET /api/nutrition/day` and `get_day_intake`. Each is a range, floor or ceiling in
+ * grams derived from the day's target, bodyweight, the day's work and active lab findings
+ * — never a single must-hit number — or a WEEKLY line in words (omega-3; salt and added
+ * sugar only when a lab finding makes them relevant). `eaten_g` null means unknown, never
+ * zero. `room` is set only while the day is in progress (what is left to place, never a
+ * shortfall); `landing` only on a closed complete day; a partial day carries neither.
+ */
+export type ClientFuelGuideKey = "carbs" | "fat" | "fiber" | "saturated_fat" | "omega_3" | "sodium" | "added_sugar";
+export type ClientFuelGuideKind = "range" | "floor" | "ceiling" | "weekly";
+export interface ClientFuelGuide {
+  key: ClientFuelGuideKey;
+  label: string;
+  kind: ClientFuelGuideKind;
+  low_g: number | null;
+  high_g: number | null;
+  eaten_g: number | null;
+  /** A few words on where the guide comes from ("for today's endurance work, inside your target"). */
+  basis_words: string;
+  /** "yours" when the athlete's accepted target names this number. */
+  source: "yours" | "derived";
+  lab_led: boolean;
+  room?: { low_g: number | null; high_g: number | null } | null;
+  landing?: { where: "inside" | "under" | "over"; by_g: number } | null;
+  /** Carbs with the athlete's own number: the day-shape range said beside it. */
+  day_shape?: { low_g: number; high_g: number } | null;
+  /** Saturated fat with no grams on every meal: the day's coarse band. */
+  eaten_band?: "low" | "moderate" | "high" | null;
+  /** A row on the Intake card: carbs, fat and fiber always; saturated fat when its eaten side is known or a lab finding leads it. */
+  on_card?: boolean;
+  /** The guide in words ("around 230–250 g today", "30 g or more", "under 24 g"). */
+  text?: string;
+  /** What is left to place (in progress) or where it landed (a closed complete day), then the basis. */
+  note?: string;
+  /** The picture's geometry, 0–1: the guide's band and the eaten amount's mark (null when unknown). */
+  track?: { lo: number; hi: number; mark: number | null } | null;
+  /** Weekly lines: the one finished sentence. */
+  words?: string | null;
+  weekly?: { days_with: number; days_logged: number; supplement: boolean } | null;
+}
+export interface ClientFuelGuides {
+  date: string;
+  day_state: "in_progress" | "complete" | "partial" | "nothing_logged";
+  target_kcal: number | null;
+  protein_g: number | null;
+  guides: ClientFuelGuide[];
+}

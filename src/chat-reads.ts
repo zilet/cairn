@@ -61,6 +61,18 @@ export function chatLeanNoReadsRule(): string {
 - ${NEVER_CLAIM_MISSING} without it being absent from DATA and the blocks in this prompt. Reply now with what you have.`;
 }
 
+/**
+ * A web turn's slot where the read contract would go. The look-it-up contract pulls the
+ * model toward the athlete's own history, which on a question about the outside world
+ * is the wrong place to look: so a web turn drops it. DATA still carries the core, and
+ * the rule against calling data missing rides along in its no-reads form.
+ */
+export function chatWebTurnReadNote(): string {
+  return `\n\n=== THIS TURN IS ABOUT THE OUTSIDE WORLD ===
+- There are no coach reads this turn. DATA above is the athlete's core: use it to fit the answer to them (their goals, their schedule, where they are).
+- ${NEVER_CLAIM_MISSING} about their own data without it being absent from DATA and the blocks in this prompt.`;
+}
+
 /** The lean prompt-loop contract: the guidance plus the bare-JSON read protocol. */
 export function chatLeanPromptLoopContract(maxCalls: number): string {
   return `\n\n=== COACH READS: LOOK IT UP ===

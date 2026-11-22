@@ -163,6 +163,16 @@ function benchmarkEligible(spec: StrengthSpec, exerciseName: string): boolean {
   return true;
 }
 
+/**
+ * Is this lift a genuine representative of the benchmark STANDARD for its movement
+ * pattern (benchmarkEligible against the matching STRENGTH_SPECS entry)? False for a
+ * pattern no benchmark covers. Read-only; exported for the per-movement read.
+ */
+export function isBenchmarkLiftForPattern(pattern: MovementPattern, exerciseName: string): boolean {
+  const spec = STRENGTH_SPECS.find((s) => s.pattern === pattern);
+  return spec ? benchmarkEligible(spec, exerciseName) : false;
+}
+
 function buildStrengthCurve(spec: StrengthSpec): ReferenceCurve {
   const bands: Record<Sex, Record<number, PercentilePoint[]>> = { male: {}, female: {} };
   for (const sex of ["male", "female"] as Sex[]) {
@@ -307,6 +317,15 @@ function currentBodyweight(profile: any): number | null {
     const latest = (w || []).slice().sort((a, b) => String(b.date).localeCompare(String(a.date)))[0];
     const n = Number(latest?.weight_lb);
     return Number.isFinite(n) && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The athlete's current bodyweight in lb (profile, else the latest weigh-in), or null. */
+export function athleteBodyweightLb(): number | null {
+  try {
+    return currentBodyweight(getProfile());
   } catch {
     return null;
   }

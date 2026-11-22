@@ -361,6 +361,47 @@ export interface WeightTrendRead {
   } | null;
 }
 
+/** Which way a standing row or line has moved over its own window; null while it cannot be told. */
+export type WeekReadStandingDirection = "better" | "holding" | "worse";
+
+/** One line inside a standing row: a movement, a marker family, a mobility check. */
+export interface WeekReadStandingLine {
+  id: string;
+  /** "Squat", "Lipids", "Ankle, left". */
+  label: string;
+  /** The lead fact, already in the athlete's units ("234 lb", "In range", "9 cm"); null when there is no reading. */
+  now_text: string | null;
+  direction: WeekReadStandingDirection | null;
+  /** "Building" / "Holding" / "Slipping": a direction, never a grade or a level word. */
+  direction_words: string | null;
+  /** The measure of the move in words ("3% up since Oct 25", "two of five back in range since June"). */
+  move_words: string | null;
+  /** One quiet clause of context ("led by Back Squat", "next draw Dec 22"). */
+  note: string | null;
+}
+
+/**
+ * Where the athlete stands, whole person: one row per area a coach would look at. Words and
+ * directions only: no score, no percentile, no level word, no raw lab value, and never a gate.
+ * A row with nothing measured still appears when it carries an `invite` (what would let it speak).
+ */
+export interface WeekReadStandingRow {
+  key: "strength" | "endurance" | "mobility" | "body" | "blood" | "pressure" | "recovery";
+  /** The stone whose hue the row wears (docs/DESIGN.md): identity, never state. */
+  stone: "strength" | "endurance" | "recovery" | "fuel" | "body" | "heart";
+  label: string;
+  direction: WeekReadStandingDirection | null;
+  direction_words: string | null;
+  /** The row's one sentence. */
+  words: string;
+  /** "since Oct 25": the window the direction is read over; null when no direction is read. */
+  since_words: string | null;
+  lines: WeekReadStandingLine[];
+  /** What would sharpen or open this row, as an offer ("Four two-minute checks would let this row speak."); null when nothing is missing. */
+  invite: string | null;
+  href: string | null;
+}
+
 export interface WeekRead {
   /** The day the week is read as of (today for this week, else the week's own Monday or Sunday). */
   as_of: string;
@@ -387,6 +428,8 @@ export interface WeekRead {
   goals: WeekReadGoal[];
   /** Since you started: at most three measured changes, most telling first; empty when nothing has moved yet. This week only. */
   proof?: WeekReadProof[];
+  /** Where you stand, whole person: this week only, omitted or empty when nothing can be said. */
+  standing?: WeekReadStandingRow[];
   /** The journey trail: this week only, null with no dated mark ahead. */
   journey: WeekReadJourney | null;
   /** The one weight-trend read behind the weight goal row. */

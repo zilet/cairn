@@ -58,23 +58,23 @@ function sjourneyWhenHtml(iso: string): string {
 
 function strengthJourneyCardHtml(value: unknown): string {
   const journey = value && typeof value === "object" ? (value as Partial<ProgressStrengthJourney>) : null;
-  const objective = journey?.objective;
+  const objective = journey?.objective, reps = CairnTodaySessionJourney.repsWords(journey); // reps: a bodyweight goal
   if (!journey?.available || !objective?.exercise || !Number.isFinite(Number(objective.target_est_1rm))) {
     return journey?.suggestion ? strengthSuggestionCardHtml(journey.suggestion) : "";
   }
   const current = journey.current?.est_1rm;
-  const currentDate = journey.current?.date ? String(journey.current.date) : null;
+  const currentDate = reps ? reps.date : journey.current?.date ? String(journey.current.date) : null;
   // Recency reads relative, precise on hover — never a bare YYYY-MM-DD (DESIGN.md).
-  const currentText = Number.isFinite(Number(current))
+  const currentText = reps ? reps.current : Number.isFinite(Number(current))
     ? `${Number(current).toFixed(1)} lb estimated 1RM`
     : "Estimated 1RM not established yet";
   const currentWhen = currentDate ? ` · ${sjourneyWhenHtml(currentDate)}` : "";
-  const targetText = `${Number(objective.target_est_1rm).toFixed(1)} lb estimated 1RM target`;
+  const targetText = reps ? reps.target : `${Number(objective.target_est_1rm).toFixed(1)} lb estimated 1RM target`;
   const gap = journey.gap_lb;
   const completed = objective.status === "completed";
   const gapText = completed
     ? "milestone complete"
-    : Number.isFinite(Number(gap)) && Number(gap) > 0
+    : reps ? reps.gap : Number.isFinite(Number(gap)) && Number(gap) > 0
       ? `${Number(gap).toFixed(1)} lb to rebuild`
       : "at the target";
   const phase = String(journey.phase || "establishing").replace(/_/g, " ");
@@ -123,7 +123,7 @@ function sjourneyRowState(journey: ProgressStrengthJourney): string {
   if (Number.isFinite(gap) && gap > 0) return `${gap.toFixed(1)} lb to go`;
   // No exposure yet means there is no estimate to compare — an anchor chosen
   // this morning must not read as one already standing at its target.
-  if (!Number.isFinite(Number(journey.current?.est_1rm))) return "no exposure logged yet";
+  if (!Number.isFinite(Number(journey.current?.est_1rm))) return CairnTodaySessionJourney.repsWords(journey)?.gap ?? "no exposure logged yet";
   return "at the target";
 }
 
@@ -147,7 +147,7 @@ function sjourneyAnchorRowHtml(journey: ProgressStrengthJourney): string {
   if (!objective?.exercise) return "";
   const current = Number(journey.current?.est_1rm);
   const target = Number(objective.target_est_1rm);
-  const route =
+  const route = journey.reps ? (CairnTodaySessionJourney.repsWords(journey)?.route ?? "") :
     Number.isFinite(current) && Number.isFinite(target)
       ? `${current.toFixed(1)} → ${target.toFixed(1)} lb`
       : Number.isFinite(target)

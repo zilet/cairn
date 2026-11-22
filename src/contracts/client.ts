@@ -443,6 +443,9 @@ export interface ClientNutritionTarget {
   protein_g: number;
   mode: string;
   source?: string;
+  /** The accepted target's own carbs / fat grams, only when it names them. */
+  carbs_g?: number;
+  fat_g?: number;
 }
 
 /**
@@ -474,6 +477,8 @@ export interface ClientDayIntake {
   // Present on GET /nutrition/day; never on an optimistically patched local copy's
   // recompute path, which only touches entries/totals. Additive and always optional.
   fuel_demand?: ClientDayFuelDemand | null;
+  // The day's food guides (src/repo/fuel-guides.ts) on GET /nutrition/day. Additive.
+  guides?: import("./fuel.js").ClientFuelGuides | null;
 }
 
 export interface ClientNutritionTargetProvenance {

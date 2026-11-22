@@ -15,6 +15,11 @@
 // replacement's sets from the swap day onward join the objective's own (see
 // `strengthObjectiveTrackedHistory`, strength-objectives.ts).
 //
+// A REPS goal (`bodyweight_reps`, strength-reps.ts) never carries. Two bodyweight lifts of
+// one pattern are still not one rep scale (ten chin-ups are not ten pull-ups), and
+// deciding which pairs are would be a guess, so a swap simply leaves a reps goal on its
+// own lift.
+//
 // Depends only on the DB, the name resolver and the pattern classifier, so the set-logging
 // ledger can read it without importing the coaching graph.
 import { db } from "../db.js";
@@ -99,7 +104,9 @@ function carryInputs(): { swaps: RecordedSwap[]; planned: string[] } {
 export function strengthObjectiveCarry(objective: {
   exercise: string;
   exercise_key: string;
+  target_kind?: string | null;
 }): StrengthObjectiveCarry | null {
+  if (objective.target_kind === "bodyweight_reps") return null;
   const own = objective.exercise_key || normalizedExerciseKey(objective.exercise);
   if (!own) return null;
   const { swaps, planned } = carryInputs();
@@ -124,6 +131,10 @@ export function strengthObjectiveCarry(objective: {
 }
 
 /** The exercise an objective is tracked on today: the lift carrying it, else its own. */
-export function strengthObjectiveTrackedExercise(objective: { exercise: string; exercise_key: string }): string {
+export function strengthObjectiveTrackedExercise(objective: {
+  exercise: string;
+  exercise_key: string;
+  target_kind?: string | null;
+}): string {
   return strengthObjectiveCarry(objective)?.exercise ?? objective.exercise;
 }

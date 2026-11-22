@@ -43,6 +43,7 @@ import { fmtClock, raceBuild, type RaceBuild } from "./race-build.js";
 import { SENSOR_MAX_AGE_DAYS } from "./sensor-freshness.js";
 import { addDaysISO, clipText, daysBetweenISO, localDateISO } from "./shared.js";
 import { getStrengthJourneys, type StrengthJourney } from "./strength-objectives.js";
+import { assistWords, repsValueText } from "./strength-reps.js";
 import { isoDate } from "../lib/dates.js";
 import { round1 } from "../lib/numbers.js";
 import {
@@ -162,6 +163,14 @@ export function strengthNow(journey: StrengthJourney | null | undefined): { est_
   return journey?.current ?? journey?.latest ?? null;
 }
 
+/**
+ * A REPS goal's one "now" (strength-reps.ts): the journey's envelope, else its latest
+ * exposure however old. Null on an est-1RM goal, which reads strengthNow instead.
+ */
+export function strengthRepsNow(journey: StrengthJourney | null | undefined) {
+  return journey?.reps ? (journey.reps.now ?? journey.reps.latest ?? null) : null;
+}
+
 /** The board row id of a journey's lift: "strength:barbell overhead press". */
 export function strengthRowId(journey: StrengthJourney): string | null {
   const objective = journey.objective;
@@ -171,11 +180,13 @@ export function strengthRowId(journey: StrengthJourney): string | null {
 /** The live journeys (one per active objective with a "now"). */
 export function liveStrengthJourneys(journeys?: StrengthJourney[]): StrengthJourney[] {
   return (journeys ?? attempt(() => getStrengthJourneys(), [] as StrengthJourney[])).filter(
-    (j) => j?.available && j.objective && strengthNow(j)
+    (j) => j?.available && j.objective && (strengthNow(j) || strengthRepsNow(j))
   );
 }
 
-function anchorOf(journeys: StrengthJourney[]): TodayPathAnchor | null {
+function anchorOf(all: StrengthJourney[]): TodayPathAnchor | null {
+  // The anchor speaks in estimated-1RM pounds: a reps goal is never the anchor.
+  const journeys = all.filter((j) => !j.reps);
   if (!journeys.length) return null;
   const rate = (j: StrengthJourney) => num(j.trend?.est_1rm_lb_per_week) ?? Number.NEGATIVE_INFINITY;
   // The objective with the strongest positive trend; with none rising, the primary.
@@ -550,7 +561,53 @@ function weightRow(
   };
 }
 
+/**
+ * A reps goal's board row: the measure in reps from its start to the goal; while every
+ * set is assisted, the note is the assist ("25 lb of assist, down from 40").
+ */
+function repsRow(journey: StrengthJourney, units: AthleteUnits): TodayPathBoardRow | null {
+  const objective = journey.objective;
+  const reps = journey.reps;
+  const now = strengthRepsNow(journey);
+  if (!objective || !reps || !now) return null;
+  const goal = reps.goal_value;
+  const start = reps.baseline?.value ?? null;
+  const reached = objective.status === "completed" || now.value >= goal;
+  const span = start != null ? goal - start : goal;
+  const base = start ?? 0;
+  const progress = reached ? 1 : span > 0 ? clamp01((now.value - base) / span) : null;
+  const load = (lb: number) => weightWords(lb, units.weight, { whole: true });
+  const ago = reps.four_weeks_ago;
+  const assist = now.value === 0 ? assistWords(now.assist_lb, ago?.assist_lb ?? reps.start_assist_lb, load) : null;
+  const note =
+    assist ??
+    (reps.direction === "toward"
+      ? "Rising"
+      : reps.direction === "back"
+        ? "Drifting back"
+        : journey.phase === "rebuilding"
+          ? "Rebuilding"
+          : reps.direction === "holding"
+            ? "Holding"
+            : null);
+  const monthMove = ago && now.value > 0 ? Math.abs(now.value - ago.value) : 0;
+  return {
+    key: "strength",
+    id: strengthRowId(journey) as string,
+    label: objective.exercise,
+    start_text: start != null && start !== now.value ? repsValueText(start, reps) : null,
+    now_text: now.text,
+    goal_text: reps.goal_text,
+    progress,
+    reached,
+    note,
+    direction: null,
+    movement: span > 0 ? monthMove / span : 0,
+  };
+}
+
 function strengthRow(journey: StrengthJourney, units: AthleteUnits): TodayPathBoardRow | null {
+  if (journey.reps) return repsRow(journey, units);
   const objective = journey.objective;
   const nowRead = strengthNow(journey);
   if (!objective || !nowRead) return null;

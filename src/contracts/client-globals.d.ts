@@ -5244,6 +5244,10 @@ declare global {
         day: Record<string, unknown>,
         journey: import("./client-api.js").ClientStrengthJourney | null,
       ): Record<string, unknown>;
+      /** A reps goal's words (journey.reps); null on an est-1RM goal. */
+      repsWords(
+        journey: Partial<import("./client-api.js").ClientStrengthJourney> | null | undefined,
+      ): { current: string; date: string | null; target: string; gap: string; route: string } | null;
     };
 
     CairnTodayPlanSurfaceRenderer: {
@@ -6468,7 +6472,19 @@ declare global {
     fiber: ClientFuelMacro;
     bandWords: string | null;
     demand: import("./client.js").ClientDayFuelDemand | null;
+    /** The day's food guides as rows and weekly lines; null when the read carries none. */
+    guides: ClientFuelGuidesModel | null;
   };
+  /** One guide row: eaten grams (null = unknown), the guide in words, the note, the track geometry (0-1). */
+  type ClientFuelGuideRow = {
+    key: string;
+    label: string;
+    eaten: number | null;
+    text: string;
+    note: string;
+    track: { lo: number; hi: number; mark: number | null } | null;
+  };
+  type ClientFuelGuidesModel = { rows: ClientFuelGuideRow[]; weekly: string[] };
   type ClientFuelMealNote = { id: number; parsed: Record<string, unknown> };
   type ClientFuelMeal = {
     id: number;
@@ -6548,6 +6564,7 @@ declare global {
       todayHtml(model: ClientFuelTodayModel, opts?: { countUp?: boolean }): string;
       demandHtml(model: ClientFuelTodayModel): string;
       carbsHtml(model: ClientFuelTodayModel): string;
+      guidesHtml(model: ClientFuelTodayModel, countUp?: boolean): string;
       skeletonHtml(): string;
       errorHtml(): string;
     };
@@ -7318,6 +7335,8 @@ declare global {
     this_week: boolean;
     /** Since you started (GET /api/week `proof`); empty on an older read. */
     proof: ClientProofRow[];
+    /** The whole-person read (GET /api/week `standing`, raw contract rows); empty on an older read. */
+    standing: import("./week-read.js").WeekReadStandingRow[];
     /** Every dated mark ahead (the journey's marks), for the ahead strip and its rows. */
     ahead: ClientAheadMark[];
     /** The month the furthest mark falls in ("May"); "" with no marks. */
@@ -7326,6 +7345,31 @@ declare global {
     totals_words: string;
     /** The hero's quiet second line (`frame.sub`); "" on an older read, which keeps `frame.line`. */
     sub: string;
+  };
+  /** One line inside a standing row (standing-model.ts); text fields are "" when absent. */
+  type ClientStandingLine = {
+    id: string;
+    label: string;
+    now: string;
+    direction: "better" | "holding" | "worse" | null;
+    direction_words: string;
+    /** "move words · note". */
+    tail: string;
+  };
+  /** One "whole picture" row (standing-model.ts): a word and a sentence, never a score. */
+  type ClientStandingRow = {
+    key: string;
+    stone: ClientRowStone;
+    label: string;
+    direction: "better" | "holding" | "worse" | null;
+    direction_words: string;
+    words: string;
+    since_words: string;
+    invite: string;
+    href: string | null;
+    lines: ClientStandingLine[];
+    /** The row's one spoken sentence. */
+    said: string;
   };
   /** One measured change since the start (the proof band, proof-band-client.ts). */
   type ClientProofRow = {
@@ -7664,6 +7708,16 @@ declare global {
       stackHtml(row: ClientGoalRow): string;
       liftSaid(lift: ClientGoalLift): string;
     };
+    /** LAZY "horizon" bundle (standing-model.ts): the week read's `standing` as render rows. */
+    CairnStandingModel: {
+      rows(standing: unknown): ClientStandingRow[];
+      said(row: Pick<ClientStandingRow, "label" | "direction_words" | "since_words" | "words">): string;
+    };
+    /** LAZY "horizon" bundle (standing-client.ts): "The whole picture" rows. */
+    CairnStanding: {
+      listHtml(standing: unknown, opts?: { label?: string }): string;
+      rowHtml(row: ClientStandingRow): string;
+    };
     /** LAZY "calendar" bundle (frame-line-client.ts): the week's frame as one hero. */
     CairnFrameLine: {
       heroHtml(
@@ -7799,6 +7853,8 @@ declare global {
   declare const CairnGoalRowModel: Window["CairnGoalRowModel"];
   declare const CairnGoalRow: Window["CairnGoalRow"];
   declare const CairnGoalLifts: Window["CairnGoalLifts"];
+  declare const CairnStandingModel: Window["CairnStandingModel"];
+  declare const CairnStanding: Window["CairnStanding"];
   declare const CairnFrameLine: Window["CairnFrameLine"];
   declare const CairnProofBand: Window["CairnProofBand"];
   declare const CairnAheadStrip: Window["CairnAheadStrip"];

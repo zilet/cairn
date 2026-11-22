@@ -5,7 +5,6 @@ import {
   deleteFoodNote,
   estimateExpenditure,
   frequentFoods,
-  getDayIntake,
   getMealPlan,
   listFoodNotes,
   listMealPlans,
@@ -18,7 +17,7 @@ import {
 } from "../../domain/nutrition/index.js";
 import { goalPace } from "../../repo/goal-pace.js";
 import { weightTrendRead } from "../../repo/weight-trend.js";
-import { carbBasis, dayFuelDemand } from "../../repo/fuel-demand.js";
+import { nutritionDayRead } from "../../repo/fuel-guides.js";
 import { setFuelingFeedback } from "../../repo/fueling.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 import { queueMcpAgentJob } from "./background.js";
@@ -108,15 +107,12 @@ export function registerNutritionTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_day_intake",
-    "A calm review of ONE day's logged food: { date, totals:{kcal,protein_g,carbs_g,fat_g,fiber_g}, known:{kcal,protein_g,carbs_g,fat_g,fiber_g}, entries:[{id,meal,summary,kcal,protein_g,carbs_g,fat_g,fiber_g,enrichment_status,created_at}], count, target, remaining, fuel_demand }. fuel_demand ({date, demand: light|standard|big, drivers, evidence, carbs}) is how much work the day carries, from the training plan, the week's run intentions and any long ride already logged — a reason to bias carbohydrate toward a big day, NEVER a change to the target and never a judgement about a day already lived. carbs ({tier: light|moderate|high, g_per_kg:{low,high}, grams:{low,high}, basis: within_target|band}) is that day's carbohydrate range from the ACSM/IOC sports-nutrition bands, fitted inside the day's target with protein held (basis within_target) — informational, never compared against what was eaten. Totals and remaining stay numeric for compatibility and entries with unknown nutrients contribute zero, so read the known flags before presenting a total or comparing against a target. target ({kcal,protein_g,mode}) and remaining are present ONLY when the profile can derive one — else null. 'remaining', never 'consumed'. ?date defaults to the user's local today.",
+    "A calm review of ONE day's logged food: { date, totals:{kcal,protein_g,carbs_g,fat_g,fiber_g}, known:{kcal,protein_g,carbs_g,fat_g,fiber_g}, entries:[{id,meal,summary,kcal,protein_g,carbs_g,fat_g,fiber_g,enrichment_status,created_at}], count, target, remaining, fuel_demand, guides }. fuel_demand ({date, demand: light|standard|big, drivers, evidence, carbs}) is how much work the day carries, from the training plan, the week's run intentions and any long ride already logged — a reason to bias carbohydrate toward a big day, NEVER a change to the target and never a judgement about a day already lived. carbs ({tier: light|moderate|high, g_per_kg:{low,high}, grams:{low,high}, basis: within_target|band}) is that day's carbohydrate range from the ACSM/IOC sports-nutrition bands, fitted inside the day's target with protein held (basis within_target) — informational, never compared against what was eaten. Totals and remaining stay numeric for compatibility and entries with unknown nutrients contribute zero, so read the known flags before presenting a total or comparing against a target. target ({kcal,protein_g,mode}) and remaining are present ONLY when the profile can derive one — else null. 'remaining', never 'consumed'. target carries carbs_g / fat_g only when the accepted target names them (the athlete's own numbers). guides ({date, day_state: in_progress|complete|partial|nothing_logged, target_kcal, protein_g, guides:[{key: carbs|fat|fiber|saturated_fat|omega_3|sodium|added_sugar, label, kind: range|floor|ceiling|weekly, low_g, high_g, eaten_g (null = unknown, never zero), basis_words, source: yours|derived, lab_led, room, landing, day_shape, eaten_band, words, weekly}]}) are the day's food guides derived from the target, bodyweight, the day's work and active lab findings: a range, floor or ceiling in grams, never a must-hit number; protein + the fat floor + the top of the carb range fit inside the kcal target. room is set only while the day is in progress (what is left to place, never a shortfall); landing only on a closed complete day; a partial day says neither. Weekly lines (omega_3 always when readable; sodium / added_sugar only when they lean high on most logged days AND a lab finding makes them relevant) speak in words, never milligrams. ?date defaults to the user's local today.",
     { date: z.string().optional().describe("YYYY-MM-DD; defaults to today") },
     // The same shape the REST route returns — MCP ⊆ REST, so the demand read rides
     // alongside the log here too rather than being folded into getDayIntake (which
     // also feeds the coach context, the Brief's fuel signal and the pace gauge).
-    async ({ date }) => {
-      const intake = getDayIntake(date);
-      return asText({ ...intake, fuel_demand: dayFuelDemand(date, { carbBasis: carbBasis(intake.target) }) });
-    }
+    async ({ date }) => asText(nutritionDayRead(date))
   );
 
   server.tool(

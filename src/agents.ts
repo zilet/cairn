@@ -190,6 +190,17 @@ export interface AgentDef {
   // about 30K fewer prompt tokens and a second off every Claude Code start. The preamble
   // still leads the prompt; these flags only make the CLI agree with it.
   no_tools_args?: string[];
+  // Args expanded at `{web_args}` only on a run allowed to reach the live web (tools
+  // "web", a chat web turn, or "provider", the research op) that hands the CLI no files
+  // and no MCP servers: the CLI's own documented switch for web search (codex `--search`,
+  // claude's web tools allowed by name). Absent ⇒ the CLI's defaults decide, which is
+  // why `web_access` must only be declared where those defaults or these flags make it true.
+  web_args?: string[];
+  // Expanded at `{web_args}` IN PLACE OF `web_args` on a chat web turn (the prompt leads with
+  // WEB_TOOLS_PREAMBLE): the CLI's own confinement to web search and page fetch and nothing
+  // else, the web turn's analog of `no_tools_args` (claude: `--tools WebSearch,WebFetch`,
+  // strict MCP, no slash commands, no saved session). Absent ⇒ `web_args` as for research.
+  web_turn_args?: string[];
   // How this CLI reaches Cairn's closed coach-read catalog (src/brain/read-transport.ts).
   // Absent ⇒ the provider-neutral prompt loop. `native_mcp` attaches the per-run loopback
   // MCP server (src/coachReadMcp.ts) through `attach_args`, which carry their own
@@ -1451,7 +1462,9 @@ export interface RunOpts {
   // always left alone — see applyToolPolicy. "coach_reads" is the native coach-read
   // transport (src/brain/read-transport.ts): the CLI's ONLY tools are Cairn's read-only
   // reads, attached for this run through `mcpConfigArgs`, and COACH_READS_PREAMBLE says so.
-  tools?: "none" | "provider" | "coach_reads";
+  // "web" is a chat web turn (src/chatTurns.ts): the CLI may search and fetch web pages
+  // and nothing else, WEB_TOOLS_PREAMBLE says so, and `{web_args}` turns its search on.
+  tools?: "none" | "provider" | "coach_reads" | "web";
   // Custom JSON extractor applied to the CLI's stdout instead of the default
   // extractJson. Needed by the prose-first (reply-marked) op contracts: their prose
   // may legitimately contain a stray `{`, which anchors extractJson's first-brace
@@ -1831,7 +1844,7 @@ function expandAgentArgs(
   mcpConfigArgs: string[] = [],
   requestedProfile: Pick<RunOpts, "model" | "reasoning"> = {},
   structuredArgs: string[] = [],
-  extra: { dropPromptFlag?: boolean; promptFile?: string; extraArgs?: string[] } = {}
+  extra: { dropPromptFlag?: boolean; promptFile?: string; extraArgs?: string[]; webTools?: boolean } = {}
 ): string[] {
   const profile = resolveAgentExecutionProfile(def, requestedProfile).effective;
   const dataDir = path.resolve(agentDataDir(process.env));
@@ -1866,6 +1879,19 @@ function expandAgentArgs(
       const toolless = prompt.startsWith(NO_TOOLS_PREAMBLE) && !needsFileAccess && mcpConfigArgs.length === 0;
       // Pushed verbatim: `--tools ""` is how claude says "no tools", so an empty value is meant.
       if (toolless && Array.isArray(def.no_tools_args)) out.push(...def.no_tools_args);
+      continue;
+    }
+    if (arg === "{web_args}") {
+      // Only on a web-allowed run that opens no files and attaches no MCP server, so a
+      // file-reading or native coach-read run is never widened to the web.
+      // A chat web turn (WEB_TOOLS_PREAMBLE leads, as NO_TOOLS_PREAMBLE does for
+      // no_tools_args) takes the CLI's confined web set when it declares one, so it never
+      // starts with its full default toolset, user MCP servers or a saved session.
+      const webTurn = prompt.startsWith(WEB_TOOLS_PREAMBLE) && Array.isArray(def.web_turn_args);
+      const webArgs = webTurn ? def.web_turn_args : def.web_args;
+      if (extra.webTools && !needsFileAccess && mcpConfigArgs.length === 0 && Array.isArray(webArgs)) {
+        out.push(...webArgs.map((x) => replaceCommon(x)));
+      }
       continue;
     }
     if (arg === "{schema_args}") {
@@ -1939,6 +1965,8 @@ export function buildAgentLaunch(
     reasoning?: ReasoningLevel;
     structuredArgs?: string[];
     forceLarge?: boolean;
+    /** The run may reach the live web (tools "web" or "provider"): `{web_args}` expands. */
+    webTools?: boolean;
   } = {}
 ): AgentLaunch {
   const profile = { model: opts.model, reasoning: opts.reasoning };
@@ -1979,7 +2007,7 @@ export function buildAgentLaunch(
     opts.mcpConfigArgs,
     profile,
     opts.structuredArgs,
-    { dropPromptFlag, promptFile, extraArgs }
+    { dropPromptFlag, promptFile, extraArgs, webTools: opts.webTools === true }
   );
   return { args, stdin, promptDir, via };
 }
@@ -2680,16 +2708,35 @@ export const COACH_READS_PREAMBLE =
   "commands, or search the web. Call a read when the answer turns on the athlete's own data that is " +
   "not in this prompt; otherwise answer straight from the prompt, in exactly the reply shape it asks for.";
 
+// The fourth policy: a chat web turn. The CLI's web search and page fetch are the tools
+// this run is FOR; the shell and files stay off exactly as on a no-tools run. Its own
+// sentence, never a softened NO_TOOLS_PREAMBLE (which forbids searching the web).
+export const WEB_TOOLS_PREAMBLE =
+  "On this run you may use web search and web page fetch, and nothing else: do not read or list " +
+  "files or run commands. Search the live web for the outside-world facts the question turns on, " +
+  "then answer in exactly the reply shape this prompt asks for.";
+
+/** The run may reach the live web: a chat web turn ("web") or the research op ("provider"). */
+export function runsWithWebTools(tools: RunOpts["tools"]): boolean {
+  return tools === "web" || tools === "provider";
+}
+
 /**
  * The prompt the CLI actually receives. Untouched when the run hands the CLI files it
  * must open (an uploaded panel or photo — the same test that grants file access) or
  * when the op asked for provider tools; a native coach-read run leads with
- * COACH_READS_PREAMBLE; otherwise NO_TOOLS_PREAMBLE leads. Never both, and idempotent,
- * so the JSON-repair retry that re-runs a prompt never stacks a second copy.
+ * COACH_READS_PREAMBLE; a chat web turn with WEB_TOOLS_PREAMBLE; otherwise
+ * NO_TOOLS_PREAMBLE leads. Never two, and idempotent, so the JSON-repair retry that
+ * re-runs a prompt never stacks a second copy.
  */
 export function applyToolPolicy(prompt: string, tools: RunOpts["tools"] = "none"): string {
   if (tools === "provider") return prompt;
   if (promptReferencesDataDir(prompt)) return prompt;
+  if (tools === "web") {
+    if (prompt.startsWith(WEB_TOOLS_PREAMBLE)) return prompt;
+    const body = prompt.startsWith(NO_TOOLS_PREAMBLE) ? prompt.slice(NO_TOOLS_PREAMBLE.length).replace(/^\n+/, "") : prompt;
+    return `${WEB_TOOLS_PREAMBLE}\n\n${body}`;
+  }
   if (tools === "coach_reads") {
     if (prompt.startsWith(COACH_READS_PREAMBLE)) return prompt;
     const body = prompt.startsWith(NO_TOOLS_PREAMBLE) ? prompt.slice(NO_TOOLS_PREAMBLE.length).replace(/^\n+/, "") : prompt;
@@ -2716,7 +2763,8 @@ export function runAgent(name: string, rawPrompt: string, opts: RunOpts | number
   const priority: AgentPriority = (typeof opts === "number" ? undefined : opts.priority) ?? "background";
   const op = typeof opts === "number" ? undefined : opts.op;
   const onPermit = typeof opts === "number" ? undefined : opts.onPermit;
-  return runAgentImpl(name, prompt, timeoutMs, signal, extract, mcpConfigArgs, model, reasoning, schema, priority, op, onPermit);
+  const webTools = typeof opts !== "number" && runsWithWebTools(opts.tools);
+  return runAgentImpl(name, prompt, timeoutMs, signal, extract, mcpConfigArgs, model, reasoning, schema, priority, op, onPermit, webTools);
 }
 
 // ---------- one process-wide cap on concurrent CLI subprocesses ----------
@@ -2923,6 +2971,8 @@ interface AgentSpawnRequest {
   reasoning?: ReasoningLevel;
   schema?: JsonSchema;
   op?: string;
+  /** The run may reach the live web (tools "web" or "provider"). */
+  webTools?: boolean;
 }
 
 function notePermit(onPermit: (() => void) | undefined): void {
@@ -2945,7 +2995,8 @@ async function runAgentImpl(
   schema?: JsonSchema,
   priority: AgentPriority = "background",
   op?: string,
-  onPermit?: () => void
+  onPermit?: () => void,
+  webTools = false
 ): Promise<AgentResult> {
   const def = loadAgents()[name];
   if (!def) throw new Error(`Unknown agent "${name}"`);
@@ -2971,6 +3022,7 @@ async function runAgentImpl(
         reasoning: pin.reasoning,
         schema,
         op,
+        webTools,
       })
     );
   } finally {
@@ -3061,7 +3113,7 @@ function logFailedAttempt(
 }
 
 function spawnAgentProcess(def: AgentDef, request: AgentSpawnRequest): Promise<AgentResult> {
-  const { name, prompt, timeoutMs, signal, extract, mcpConfigArgs, model, reasoning, schema, op } = request;
+  const { name, prompt, timeoutMs, signal, extract, mcpConfigArgs, model, reasoning, schema, op, webTools } = request;
   const startedAt = Date.now();
   // Enforced structured output, when BOTH the caller supplied a schema and this agent
   // declares how to take one. Everything below is best-effort by design: an agent with
@@ -3103,7 +3155,7 @@ function spawnAgentProcess(def: AgentDef, request: AgentSpawnRequest): Promise<A
   }
 
   const openLaunch = (forceLarge = false): AgentLaunch =>
-    buildAgentLaunch(def, def.args, prompt, { mcpConfigArgs, model, reasoning, structuredArgs, forceLarge });
+    buildAgentLaunch(def, def.args, prompt, { mcpConfigArgs, model, reasoning, structuredArgs, forceLarge, webTools });
 
   let launch = openLaunch();
   // A provider whose schema flag rewrites stdout into an envelope needs unwrapping
@@ -3416,6 +3468,7 @@ function spawnAgentStream(
       model,
       reasoning,
       forceLarge,
+      webTools: runsWithWebTools(opts.tools),
     });
   let launch = openLaunch();
   const MAX_OUT = 4 * 1024 * 1024;

@@ -21,6 +21,7 @@
   type DayChip = import("../contracts/week-read.js").DayChip;
   type WeekOpen = import("../contracts/week-read.js").WeekReadOpen;
   type WeekProof = import("../contracts/week-read.js").WeekReadProof;
+  type WeekStanding = import("../contracts/week-read.js").WeekReadStandingRow;
   type JourneyMark = import("../contracts/week-read.js").WeekReadJourneyMark;
 
   const ISO = /^\d{4}-\d{2}-\d{2}$/;
@@ -248,6 +249,7 @@
         .map(proofRow)
         .filter((r): r is ClientProofRow => !!r)
         .slice(0, PROOF_MAX),
+      standing: list<WeekStanding>(read.standing),
       ahead,
       ahead_to: aheadTo(ahead),
       totals_words: totalsWords(read.totals),

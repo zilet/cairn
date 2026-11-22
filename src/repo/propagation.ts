@@ -1168,6 +1168,49 @@ function bloodPressureReadFor(
   }
 }
 
+export interface BloodPressureComponentNow {
+  /** The component's series, oldest first (one point a reading day). */
+  points: Array<{ date: string; value: number }>;
+  /** Its optimal band, personalized. */
+  band: [number, number];
+  /** The read when the latest reading sits outside the band (bloodPressureReadFor); null inside it. */
+  read: BloodPressureRead | null;
+}
+
+/**
+ * Blood pressure as it stands, for a reader outside the marker rows (the Horizon standing
+ * read): each component's series, band and read, built off the same ranked marker list
+ * with the same bloods and medications the marker row and the directive pass use, so the
+ * three can never disagree about a reading. Null for a component with no reading.
+ */
+export function bloodPressureNow(): { systolic: BloodPressureComponentNow | null; diastolic: BloodPressureComponentNow | null } {
+  const markers = (prioritizeMarkers().markers ?? []) as any[];
+  const profile = zoneProfile();
+  let meds: any[] | null = null;
+  const component = (label: "Systolic BP" | "Diastolic BP"): BloodPressureComponentNow | null => {
+    const own = markers.find((m) => !isSupersededMarker(m) && markerZone(m, profile)?.label === label);
+    const zone = own ? markerZone(own, profile) : null;
+    if (!own || !zone) return null;
+    const points = markerPoints(own).sort((a, b) => a.date.localeCompare(b.date));
+    if (!points.length) return null;
+    const latest = points[points.length - 1];
+    const inBand = withinOptimal(latest.value, zone);
+    if (!inBand && meds == null) {
+      try {
+        meds = activeMedications();
+      } catch {
+        meds = [];
+      }
+    }
+    return {
+      points,
+      band: [zone.optimal[0], zone.optimal[1]],
+      read: inBand ? null : bloodPressureReadFor(label, markers, profile, meds ?? []),
+    };
+  };
+  return { systolic: component("Systolic BP"), diastolic: component("Diastolic BP") };
+}
+
 // The COMPLETE off-optimal picture: one MarkerContext per optimal-zone label (the
 // highest-priority marker for that zone wins, since `markers` arrives priority-sorted),
 // for every marker that's flagged low/high OR sits outside its optimal band the worse

@@ -94,15 +94,17 @@ export function registerTrainingLogTools(server: McpToolRegistrar) {
 
   server.tool(
     "set_strength_objective",
-    "Set one athlete-explicit anchor-lift objective. Supersedes the prior active objective ON THAT LIFT ONLY — call it once per lift to hold several anchors in parallel — and snapshots either the exact exercise's current personal best or an explicit estimated-1RM target.",
+    "Set one athlete-explicit anchor-lift objective. Supersedes the prior active objective ON THAT LIFT ONLY — call it once per lift to hold several anchors in parallel — and snapshots either the exact exercise's current personal best, an explicit estimated-1RM target, or, for a lift done at bodyweight (pull-up, chin-up, push-up, dip), a reps goal. A reps goal on a loaded lift, or an est-1RM goal on a lift only ever done at bodyweight, is refused with the reason.",
     {
       exercise: z.string().min(1).describe("exact reps-based exercise name; timed exercises are refused"),
       target_kind: z
-        .enum(["return_to_personal_best", "explicit_est_1rm"])
+        .enum(["return_to_personal_best", "explicit_est_1rm", "bodyweight_reps"])
         .describe(
-          "'return_to_personal_best' targets this exercise's own logged all-time-best est-1RM (requires history for it); 'explicit_est_1rm' targets target_est_1rm"
+          "'return_to_personal_best' targets this exercise's own logged all-time-best est-1RM (requires history for it); 'explicit_est_1rm' targets target_est_1rm; 'bodyweight_reps' targets target_reps unassisted reps in one set, or target_sets sets of target_reps in one session (assisted sets never count)"
         ),
       target_est_1rm: z.number().positive().max(5000).optional().describe("estimated 1RM in pounds; required only when target_kind is explicit_est_1rm"),
+      target_reps: z.number().int().positive().max(100).optional().describe("reps per set; required only when target_kind is bodyweight_reps"),
+      target_sets: z.number().int().positive().max(10).optional().describe("sets in one session at target_reps; bodyweight_reps only (omit for one set)"),
     },
     async (input) => {
       const objective = setStrengthObjective(input);

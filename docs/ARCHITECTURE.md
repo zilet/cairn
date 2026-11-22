@@ -299,7 +299,7 @@ only ever lands a card the athlete's own numbers back.
 fresh at an arbitrary midnight. `src/repo/hybrid-load.ts`'s `muscleResidual()` replaces it with
 `residual(group) = Σ_days dose(day) × 0.5^(hours_since / half_life(group))`: strength dose reuses
 the shared effective-volume read (`effectiveVolumeByGroup` — warmups excluded, RIR-weighted,
-indirect credit at half; a loaded carry always counts as a full set, since an RIR typed on one is
+counted muscle-credit shares; a loaded carry always counts as a full set, since an RIR typed on one is
 not reps in reserve) rather than re-counting rows, and endurance dose reuses the modality regions,
 scaled by each modality's `regionWeights` (`heavy-load.ts`: a run steadies the trunk at 0.3, a trail
 ride braces back and forearms at ~0.35), and past each modality's own heavy bar (`heavy_ratio`, capped
@@ -1253,6 +1253,10 @@ more than the plan's own count), and `reconcileEnvelopeDose` (`daily-composition
 soft line for them (`weeklyDoseSoftLine`); when none landed — a plan snapshot, the clock or a cap, an
 agent card whose set count moved — `dose` and its precedence, soft and rationale entries are removed.
 
+### Muscle credit (`src/repo/muscle-credit.ts`)
+
+`muscleCreditFor` is the one answer to "which muscles does this set train". The primary is the stored group, else the name classifier (`resolveGroup`), at a full set, and it alone carries tonnage. Mobility credits nothing; a core movement credits core alone. Synergists come from the ordered `NAMED_LIFTS` table first, because one pattern hides different lifts: a deadlift credits the back at half, a leg curl lends the glutes nothing, a fly lends no triceps. A row applies only when the classifier agrees on its prime mover; with no named lift, the long-standing pattern half shares apply. Two shares exist. A half share is **counted**: it feeds `effectiveVolumeByGroup`, `plannedWeeklyGroupSets`, the volume bands, the contextual floor, the weekly dose ledger and the acute residual. A quarter share is **touched**: it is folded in only on `{shares: "touched"}`, so a group can never read covered, high or due off lifts that merely brush it. Extend the table; never re-derive a group inline. A grip word that names a hand position (close, wide, neutral, reverse) is not grip work, and dips classify (chest dip to chest, every other dip to triceps).
+
 ### Pairing and movement regions (`src/repo/movement-region.ts`, `src/repo/composition-pairing.ts`, 2026-09-24)
 
 `movementRegionKey(name)` answers which narrow REGION a lift occupies — narrower than a movement
@@ -1794,6 +1798,18 @@ untouched, and the offline `stub` agent is unchanged. A test that needs its own 
   moves inside its 20–35%-of-energy band, so the tier takes its third of what the target holds (never
   above the band). Surfaces: the Fuel card's one line (today only), the check-in / swap block and the
   meal plan's `DATA.fuel_demand`. Informational: never a new target, never compared with what was eaten.
+- **The day's food guides are one read** — `dayFuelGuides()` (`src/repo/fuel-guides.ts`), served as
+  `guides` on `GET /api/nutrition/day` and `get_day_intake` through `nutritionDayRead()`, and handed
+  to chat in words on `day_intake.guides`. Every figure comes from the day's target, bodyweight, the
+  day-shape carb range and active lab findings. Protein, the fat floor and the top of the carb range
+  always fit inside the kcal target: fat holds its floor (the higher of 20% of energy or 0.5 g/kg)
+  and carbs flex. The athlete's own accepted `carbs_g` / `fat_g` win. Fiber has one rule,
+  `src/repo/fiber-floor.ts` (14 g per 1,000 kcal, never under 30 g), shared with the progress read.
+  Saturated fat is a ceiling (10% of energy, 6% while a lipid finding leans lower), summed only when
+  every meal carries it. Omega-3 is a weekly sentence (days with a source against two a week, silent
+  under three logged days, a daily supplement said instead of a gap), never grams. Salt and added
+  sugar speak only when most logged days read high AND a lab finding makes them relevant. The guides
+  carry their finished words and track geometry, never move kcal or protein, and are never a gate.
 - **The profile goal is the destination.** A goal change moves the ACTIVE journey phase's
   `target_weight_lb`/`target_bodyfat_pct` with it (`setProfile`), and the journey card reads the
   profile goal ahead of any phase copy.
@@ -4245,8 +4261,9 @@ injects a LINKED PAGE block that tells the agent not to curl. Capture stays rece
 the network. Independently, `ensureAntigravityHeadlessPermissions` merges `read_url(*)` into
 `~/.gemini/antigravity-cli/settings.json` on every agy spawn — the scoped grant Google documents,
 never `--dangerously-skip-permissions` (that would auto-approve writes and shell against a pasted
-page's prompt injection). A coaching turn that contains an http(s) URL also picks up
-`current_research`, so `preferWeb` can start with Claude when it is actually available.
+page's prompt injection). A coaching turn that contains an http(s) URL still carries the
+`current_research` reason code, but a turn whose only research signal is the pasted link is not a web
+turn: Cairn already fetched the page.
 
 ---
 
@@ -4273,11 +4290,19 @@ DID work, on both, was one plain sentence at the top of the prompt: each answere
 
 So the rule travels with the prompt, provider-neutrally. **`applyToolPolicy(prompt, tools)`** runs
 at the ONE chokepoint every spawn passes through (`runAgent` and `runAgentStreaming`) and picks one
-of THREE policies, never two at once:
+of FOUR policies, never two at once:
 - **`"none"`** (the default) prepends **`NO_TOOLS_PREAMBLE`**.
-- **`"provider"`** leaves the prompt alone. Exactly two call sites opt in: `src/research.ts` (cited
-  claims need live web search) and a chat turn routed with the `current_research` reason code
-  (`chatTools` in `chatTurns.ts`).
+- **`"provider"`** leaves the prompt alone. Exactly one call site opts in: `src/research.ts` (cited
+  claims need live web search). A chat turn about the outside world uses `"web"` instead.
+- **`"web"`** prepends **`WEB_TOOLS_PREAMBLE`** (web search and page fetch, no files or commands) and
+  expands the CLI's own documented switch at `{web_args}` (`agents.json`: codex top-level `--search`,
+  grok has web on by default). A CLI that declares `web_turn_args` takes those instead on a web turn
+  (the prompt leads with the web preamble, as `no_tools_args` keys on the no-tools one): claude's
+  mirror `no_tools_args` with the toolset narrowed to `--tools WebSearch,WebFetch` (plus
+  `--allowedTools` for the permission gate, strict MCP, user settings only, no slash commands, no saved
+  session), so a web turn never starts with the shell, file tools or user MCP servers. Research
+  (`"provider"`) keeps plain `web_args` (claude `--allowedTools WebSearch,WebFetch`). Only a chat web
+  turn on an agent with `web_access: true` runs `"web"` (see "Chat routing" below).
 - **`"coach_reads"`** (2026-11-11) prepends **`COACH_READS_PREAMBLE`** instead: the run's ONLY tools
   are Cairn's read-only coach reads, attached natively for that run (see "Coach read transports"
   below); no shell, files or web. A prompt that already led with `NO_TOOLS_PREAMBLE` has it swapped,
@@ -6612,6 +6637,14 @@ week rows are labelled by the lift trained. Only recorded swaps count (a plan da
 carries nothing), and never across movement patterns. Proof (this week only): a race just run, the weight journey unless the weight goal row
 already draws its track, then up to two lifts whose working load rose, the anchor lift first.
 
+**A bodyweight lift's goal counts reps.** A strength objective is an est-1RM target (`return_to_personal_best` | `explicit_est_1rm`) or, for a lift done at bodyweight, a reps goal (`bodyweight_reps`, `src/repo/strength-reps.ts`, its own migration): `target_reps` in one set, or `target_sets` x `target_reps` in one session. A set at bodyweight counts its reps, a loaded set counts as at least its reps, and an assisted set (negative weight) never counts. It is kept only as the assist it took, so a goal the athlete can only do assisted reads 0 reps with "25 lb of assist, down from 40", and less assist is progress. The measure is the best set (one-set goal) or the best N sets of one session, each up to the target (sets goal); "now" is the same envelope every lift goal uses. The goal is met when one session has N sets at or above the target, and it completes through the same ledger reconcile (`strength-objective-ledger.ts`), which `logSet` also reaches for unloaded sets. A reps goal stores `target_est_1rm = 0` (SQLite cannot drop the NOT NULL), so every reader branches on `target_kind`, or on `journey.reps`, before reading it. It has no projection, no build mark and no carry, and is never the Today anchor. On the Horizon its four-week move is +1 rep toward / -2 back (`REPS_TOWARD` / `REPS_BACK`), or, while nothing counts yet, 5 lb less / 10 lb more assist. `set_strength_objective` (REST, MCP, chat) refuses a reps goal on a loaded lift and an est-1RM goal on a lift only ever done at bodyweight, each with a plain reason.
+
+**Strength by movement and by muscle group.** `movementStanding()` (`src/repo/movement-standing.ts`) reads the six big patterns (squat, hinge, push, press, row, pull) from their compound lifts; isolation lifts are never members, whatever the swap-family table says. Each lift's "now" is the strength journey's capacity envelope (`capacityEnvelopeAsOf`), compared with the same envelope four weeks earlier. The pattern's direction is the working-set and tier weighted mean of the lifts comparable in both windows, so a lift rotated in has no earlier reading and adds nothing, and a lift dropped has no "now". An exposure lighter on purpose (a recovery-dose session, a met card that asked for less) is set aside through `exposureLighterOnPurpose`, the same law as the whole-person strength read. Bodyweight lifts read reps and assist through effective load at today's bodyweight. Thresholds are +1% / -1.5% (`MOVEMENT_BETTER_CHANGE` / `MOVEMENT_WORSE_CHANGE`), the lift row's +2 / -3 lb. `muscleGroupTrajectory()` credits every trained lift to every group `muscleCreditFor` names, weighted by share and role; a group is led by its heaviest-credited compound and stalls only when that compound does or the weighted majority does. Its vary menu stays inside the stalled lift's own region (`sameVaryRegion`), so a leg curl is never offered a deadlift.
+
+**Where you stand (whole person).** `standingRead(today, units, deps)` (`src/domain/training/standing-read.ts`, builders in `standing/*.ts`; `GET /api/week` `standing`) gives Horizon's Week landing one row per area a coach reads: strength, endurance, mobility, body, blood, blood pressure, recovery. It is a read over reads, never a second engine. Strength is `movementStanding()`; mobility is `mobilityStanding()`. Endurance is the race build's or the watch's predictor trend, rolling weekly run distance against four weeks back, the longest run taken well (`demonstratedRunCapacity`) and VO2max as a reading; a week a race's taper or recovery touches is not compared for volume, and the whole-person endurance verdict is never echoed. Body is the one `bodyFatEstimate` (central value, likely range, basis; lean mass and bone in words only off a DEXA). Blood is panel counts over `prioritizeMarkers()` and `healthFocus()`, with bands gated by `markerOptimalTrusted`. Blood pressure is `bloodPressureNow()` (`propagation.ts`), the same read the marker row uses. Recovery is `getRecoverySummary`'s 7-day median against its 30-day median, judged by `recoveryTrendBars` and gated by sensor freshness. Directions come from one table (`STANDING_DIRECTION_WORDS`: Building/Holding/Slipping for capacity, Improving/Steady/Drifting for health), and `better` always means better for the athlete. Every string passes `violatesReadingGrammar`; nothing shows a score, percentile, level word or lab value. Each row is guarded on its own and omitted when it has nothing honest to say; a row with nothing measured still appears when it carries an invite.
+
+**Mobility self-checks.** Mobility is measured by a few short, repeatable field tests the athlete does alone with a wall and a tape: knee to wall (ankle), fingertip to floor (hamstrings), back scratch (shoulders) and a heels-down deep squat hold. They live in one catalog, `MOBILITY_CHECKS` in `src/repo/mobility-checks.ts`: key, unit, side rule, which way is more range, a one-sentence how-to and a smallest meaningful change. Readings land in `mobility_checks`, one row per side, in canonical units (cm, or s for the squat); lengths are said in inches when the athlete reads distances in miles. There are no norms, bands or age comparisons: `mobilityStanding()` reads the latest reading per check and side and compares it only with the athlete's own first reading, and only when that is at least three weeks older. A move under the check's smallest change reads holding. It also counts days with logged mobility sets in the last four weeks. With no checks, or a latest over eight weeks old, it carries a quiet invite that sits on Horizon; nothing notifies and nothing is gated on it. Chat is the setter (`log_mobility_check`, one action per side, with the catalog's how-to lines in its guidance). REST (`/api/mobility-checks`, `/api/mobility-standing`) and MCP (`log_mobility_check`, `list_mobility_checks`, `delete_mobility_check`, `get_mobility_standing`) wrap the same repo functions.
+
 **One row per draw.** `labDraws()` (`src/repo/lab-draws.ts`, `GET /api/health-docs/draws`,
 `list_lab_draws`) is the labs-and-scans list as (kind, date) draws — an upload and the panels split
 out of it are one row — so the Season never shows one draw three times.
@@ -8029,6 +8062,8 @@ big steak I had and felt flat" is a training narrative, not a snack. The receipt
 (`isInstantFoodCaptureDecision`, `src/chat-intent.ts`) additionally refuses any narrative and any message
 placed in time ("today", "in the afternoon", "2 hours after"). `test/chatNarrativeRouting.test.js` is the
 decision matrix (lane, instant, effort per message); extend it with every misroute.
+
+**Outside-world turns run on the web.** A chat turn about the outside world runs with web search on, on an agent that can. `chatMessageWantsCurrentResearch` (`src/chatRouting.ts`) is the deterministic layer, shared by the adaptive router (`current_research`) and the single-profile path. It catches an explicit ask to search, and a dated real-world question (an event asked about as a discovery or at a place; a gym, pool, class, camp or clinic only under an explicit "find / are there any / where can I … near <place>"; registration, prices or hours beside a place, a time or an event; weather, forecast or news only in a question about the world). Precision beats recall, because a false positive drops the athlete's own data reads and puts a coaching question on the web leash: it never fires on a noun the athlete owns ("my race", "my latest run"), a noun pointed at as known ("during the race", "at the hotel gym"), or a statement about their own day ("the weather was brutal on my run, legs felt dead"). What it misses, the model escalates: an ordinary coach or deep prompt offers `{"web_search":{"query","why"}}` (bare JSON, no reply marker), always honoured. A reply's content escalates (`outsideWorldReplyNeedsWeb`) only when it says it answered from memory ("I can't browse", "I don't have live access", "as of my knowledge"), or when the athlete's MESSAGE was an outside-world one and the reply states unsourced dated specifics; lines naming the athlete's own races (the live race goal and `completed_races`, passed in by `chatTurnOwnRaces`) never count, so a coaching reply about their own goal race is never thrown away. Either re-runs the turn exactly once as a web turn. A web turn orders `web_access` agents first (`chatWebProviderOrder`) and runs them with `tools:"web"` (see "Tool policy"). Its prompt leads with today's date, the athlete's area and the sourcing rules (`renderChatWebBlock`), and it drops the coach_read contract (`chatWebTurnReadNote`). A non-web agent reached only after every web agent failed says plainly it couldn't search. The leash is `chatWebTurnTimeoutMs` (at least 240 s); the escalated re-run gets what is left of it, with a 120 s floor. A turn whose only research signal is a pasted link stays off the web: Cairn fetched the page. `groundReply`'s outside-world pass appends one calm caveat line to a reply that states dated outside-world specifics with no plausible source link, under the same gate (a web turn, an outside-world message, or a from-memory disclaimer) and the same own-race exclusion. The web block and the escalation offer both tell the model that a search query names only the outside-world thing, the place and the time, never the athlete's name, health, labs, body data or injuries (`CHAT_WEB_QUERY_PRIVACY_LINE`).
 
 **The meal-list lane.** A verbless or label-led meal list ("breakfast 30g rolled oats 15g chia 180g skyr 20
 grapes") is a food log, not a question: `readsAsMealList` (`src/chatRouting.ts`) adds `explicit_food_log`, so it

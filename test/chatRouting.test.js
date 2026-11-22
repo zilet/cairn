@@ -4,6 +4,8 @@ import { db, repo } from "./_seed.js";
 import {
   CHAT_ROUTING_POLICY_VERSION,
   CHAT_ROUTING_REASON_CODES,
+  chatMessageNeedsCurrentInfo,
+  chatMessageWantsCurrentResearch,
   decideChatRouting,
   escalateChatRouting,
   normalizeChatProfileBindings,
@@ -246,4 +248,128 @@ test("other logging domains keep priority over the recent-capture amendment bran
   const supplement = decideChatRouting({ message: "Add 400mg magnesium tonight", recent_food_capture: true });
   assert.ok(!supplement.reason_codes.includes("explicit_food_log"));
   assert.ok(supplement.reason_codes.includes("explicit_supplement_log"));
+});
+
+// ---- current outside-world information (2026-11-22) ----------------------------------
+// The two real messages from the live chat log, as the brief quotes them ("…" marks
+// text the log elided). Both rode beside a fresh food note and were read as a food-log
+// capture correction; neither carried current_research, so both ran with web search off.
+const REAL_SPRING_HALF =
+  "…maybe I can add some spring half marathon race to my goals? Is there something cool happening around Boston area?";
+const REAL_DO_THE_SEARCH =
+  "Do the actual search and find what is happening. I am not looking to do a 5k race…Races I apply for half marathons.";
+
+test("the two real 2026-11-22 messages are current research, never a food-log capture correction", () => {
+  for (const message of [REAL_SPRING_HALF, REAL_DO_THE_SEARCH]) {
+    for (const recent_food_capture of [true, false]) {
+      const decision = decideChatRouting({ message, recent_food_capture });
+      assert.ok(decision.reason_codes.includes("current_research"), `${message} (recent=${recent_food_capture})`);
+      assert.equal(decision.lane, "deep", message);
+      assert.equal(decision.reason_codes.includes("explicit_food_log"), false, message);
+      assert.equal(decision.reason_codes.includes("capture_correction"), false, message);
+    }
+  }
+});
+
+test("explicit asks to search, and questions about dated real-world things, need the web", () => {
+  for (const message of [
+    "Do the actual search",
+    "Can you google when registration opens for the Boston half?",
+    "Look it up please",
+    "check online if the Rome marathon is sold out",
+    "Search for 10k races in April 2027",
+    "Are there any half marathons in the spring near me?",
+    "What's on in Cambridge this weekend?",
+    "Is the weather going to be hot tomorrow for my long run?",
+    "What are the latest qualifying times for Boston?",
+    "Any cool trail races around Denver area next summer?",
+    "What races are happening in Chicago in May?",
+    "When does registration close for the NYC half 2027?",
+    "Find me a good climbing gym near me",
+  ]) {
+    assert.ok(chatMessageNeedsCurrentInfo(message), message);
+    assert.ok(decideChatRouting({ message }).reason_codes.includes("current_research"), message);
+  }
+});
+
+test("questions about the athlete's own data are never sent to the web", () => {
+  for (const message of [
+    "What is my latest run?",
+    "How was my last race?",
+    "Show my current weight trend",
+    "What's on my plan this week?",
+    "How should I taper for my race next month?",
+    "Is my half marathon pace realistic for spring?",
+    "Plan my runs for next week",
+    "What did I eat yesterday?",
+    "Compare my current squat to last month",
+    "What's my upcoming schedule?",
+    "How many races have I done this year?",
+    "Find me a workout I can do in 30 minutes",
+    "How does hot weather affect recovery?",
+    "What's the latest you'd recommend I eat before a race?",
+    "Is a 5k in April too soon after my marathon?",
+    "What race pace should I target for my half?",
+    "Good news, I PR'd my deadlift today!",
+    "What's happening with my knee?",
+    "My race in Chicago is in 3 weeks, how should I taper?",
+    "Should I add 5ks to my plan before the marathon?",
+    "What is my weekly volume in Zone 2?",
+  ]) {
+    assert.equal(chatMessageNeedsCurrentInfo(message), false, message);
+    assert.equal(decideChatRouting({ message }).reason_codes.includes("current_research"), false, message);
+  }
+});
+
+// Review of the detector (2026-11-22): each of these returned current_research. A false
+// positive drops the athlete's own data reads (a web turn has no coach_read) and puts a
+// coaching question on the 240 s web leash, so precision beats recall: what the detector
+// misses, the model can still escalate.
+test("ordinary coaching messages that mention a place, a race, the weather or news stay coaching", () => {
+  for (const message of [
+    "The weather in Austin was brutal on my run today, legs felt dead",
+    "I'm at the hotel gym in Denver, what should I do today?",
+    "My knee hurt during the race in Boston, should I rest?",
+    "Good news: next month I start a new job, how should I adjust training?",
+    "The forecast says rain tomorrow, swap my long run?",
+    "How should I taper for the upcoming race?",
+    "The local race was rough, legs felt heavy",
+    "Should I race the Boston one?",
+  ]) {
+    assert.equal(chatMessageNeedsCurrentInfo(message), false, message);
+    for (const recent_food_capture of [true, false]) {
+      assert.equal(
+        decideChatRouting({ message, recent_food_capture }).reason_codes.includes("current_research"),
+        false,
+        `${message} (recent=${recent_food_capture})`
+      );
+    }
+    assert.equal(chatMessageWantsCurrentResearch(message), false, message);
+  }
+});
+
+test("asks about the world still reach the web after the precision pass", () => {
+  for (const message of [
+    "any half marathons around Boston in spring?",
+    "Do the actual search",
+    "search the web for 10k races near me in April",
+    "what's the weather in Boston on Saturday?",
+    "when does registration open for the Boston Half?",
+    "is there a 5k in Cambridge next month?",
+    "are there any pools in Denver?",
+    "I'm in Boston in April, any half marathons?",
+  ]) {
+    assert.ok(chatMessageNeedsCurrentInfo(message), message);
+    assert.ok(decideChatRouting({ message }).reason_codes.includes("current_research"), message);
+  }
+});
+
+test("a food log at a named place stays a food log; the single-profile path asks the same detector", () => {
+  const log = decideChatRouting({ message: "Log my dinner at a restaurant in Boston: steak and fries" });
+  assert.ok(log.reason_codes.includes("explicit_food_log"));
+  assert.equal(log.reason_codes.includes("current_research"), false);
+  // An explicit search ask is research even beside a capture.
+  assert.ok(chatMessageWantsCurrentResearch("Log lunch and search for the cafe's menu online", { captured: true }));
+  assert.equal(chatMessageWantsCurrentResearch("Log my dinner at a restaurant in Boston", { captured: true }), false);
+  assert.ok(chatMessageWantsCurrentResearch(REAL_SPRING_HALF));
 });

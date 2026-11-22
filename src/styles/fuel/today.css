@@ -14,7 +14,7 @@
 .intake-weeks:has(>.loadstate)+[data-train-deeper-slot]{display:none}
 
 /* ---- Today · so far: one card, protein then energy as slim meters in the fuel stone's
-   hue beside the day's number, carbs · fat · fiber as plain numbers ---- */
+   hue beside the day's number, carbs · fat · fiber as guide rows ---- */
 .fuel-today{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
   padding:var(--space-7) var(--space-8) var(--space-8)}
 .fuel-today-skel{min-height:132px}
@@ -33,10 +33,22 @@
 .fuel-today-value .numeral{font-family:var(--font-ui);font-size:inherit;font-weight:var(--weight-semibold);color:var(--ink)}
 .fuel-today-of,.fuel-today-unit{color:var(--muted)}
 .fuel-today-value.is-unknown{color:var(--muted)}
-.fuel-today-macros{display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--space-1) var(--space-2);margin:var(--space-6) 0 0;
-  padding-top:var(--space-5);border-top:1px solid var(--line);font-size:var(--text-sm)}
-.fuel-today-macro .fuel-today-k{color:var(--ink2)}
 .fuel-today-dot{color:var(--muted)}
+/* The day's food guides: one row per nutrient, the eaten grams then the guide in words, a
+   thin neutral track (the guide a band, the eaten amount a mark in the fuel stone's hue —
+   identity, never state), and one quiet note. No red, no green, no percentage. */
+.fuel-guides{display:flex;flex-direction:column;gap:var(--space-5);margin:var(--space-6) 0 0;padding-top:var(--space-5);
+  border-top:1px solid var(--line)}
+.fuel-guide{display:grid;grid-template-columns:4.4rem minmax(0,1fr);align-items:baseline;gap:var(--space-2) var(--space-6)}
+.fuel-guide dd{grid-column:2;margin:0}
+.fuel-guide-v{font-size:var(--text-sm);color:var(--ink2)}
+.fuel-guide-track{position:relative;height:4px;border-radius:var(--radius-pill);background:var(--well)}
+.fuel-guide-band{position:absolute;top:0;bottom:0;left:calc(var(--lo,0) * 100%);width:calc((var(--hi,0) - var(--lo,0)) * 100%);
+  border-radius:var(--radius-pill);background:var(--line-strong)}
+.fuel-guide-mark{position:absolute;top:-3px;bottom:-3px;left:calc(var(--m,0) * 100%);width:2px;margin-left:-1px;
+  border-radius:var(--radius-pill);background:var(--s-fuel)}
+.fuel-guide-note{font-size:var(--text-xs);color:var(--muted);line-height:var(--leading-normal)}
+.fuel-guide-week{font-size:var(--text-xs);color:var(--muted)}
 @media (prefers-reduced-motion:reduce){.fuel-today-fill{animation:none}}
 .fuel-today-line{margin:var(--space-5) 0 0;font-size:var(--text-sm);color:var(--ink2);line-height:var(--leading)}
 .fuel-today-togo{margin:var(--space-3) 0 0;font-size:var(--text-xs);color:var(--d-fuel);font-weight:var(--weight-semibold)}

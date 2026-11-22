@@ -24,6 +24,7 @@
 // Every string a person reads is in the athlete's units (athleteUnits → display-words)
 // and names its dates in words. The load shape is a dose WORD and a relative height for
 // drawing — never a number shown, never a score. Changes nothing.
+import { standingRead } from "./standing-read.js";
 import type {
   WeekReadJourney,
   WeekReadJourneyBehind,
@@ -75,7 +76,23 @@ import {
   strengthObjectiveTrackedHistory,
   type StrengthJourney,
 } from "../../repo/strength-objectives.js";
-import { liveStrengthJourneys, strengthNow, strengthRowId, todayPath, weightStart } from "../../repo/today-path.js";
+import {
+  assistWords,
+  repsDirection,
+  repsEnvelopeAsOf,
+  repsGoalOf,
+  repsValueText,
+  strengthRepsHistory,
+  type RepsGoal,
+} from "../../repo/strength-reps.js";
+import {
+  liveStrengthJourneys,
+  strengthNow,
+  strengthRepsNow,
+  strengthRowId,
+  todayPath,
+  weightStart,
+} from "../../repo/today-path.js";
 import { planDayStrengthGroups } from "../../repo/training-read.js";
 import { weekFrameLine } from "../../repo/week-stage.js";
 import { WEIGHT_HOLDING_LB_WK, weightTrendRead } from "../../repo/weight-trend.js";
@@ -131,6 +148,10 @@ function text(value: unknown): string {
 
 function cap(s: string): string {
   return s ? s[0].toUpperCase() + s.slice(1) : s;
+}
+
+function lowerFirst(s: string): string {
+  return s ? s[0].toLowerCase() + s.slice(1) : s;
 }
 
 /** A valid YYYY-MM-DD for `?start=`, or null (the route answers 400). Absent → today. */
@@ -714,6 +735,8 @@ function strengthThread(
   today: string,
   units: AthleteUnits
 ): GoalThread {
+  const repsGoal = journey?.objective ? repsGoalOf(journey.objective) : null;
+  if (journey && repsGoal) return repsThread(row, journey, repsGoal, today, units);
   const objective = journey?.objective ?? null;
   const now = strengthNow(journey);
   const startLb = journey?.baseline?.est_1rm ?? objective?.baseline_est_1rm ?? null;
@@ -769,6 +792,83 @@ function strengthThread(
     carried_words: strengthCarriedWords(journey, today),
     next_words: strengthNextWords(journey, units),
     mark_words: mark != null ? `Next mark for your build: ${load(mark)}` : null,
+  };
+}
+
+/**
+ * "Next session: 3 × 8–10", at bodyweight; "… with 25 lb assist" or "… with 10 lb added"
+ * when the prescription carries one. Reps work only (never timed).
+ */
+function repsPrescriptionWords(journey: StrengthJourney, units: AthleteUnits): string | null {
+  const rx = journey.next_prescription;
+  const t = rx?.suggested;
+  if (!rx || rx.mode !== "reps" || !t) return null;
+  const low = Number(t.rep_low);
+  const high = Number(t.rep_high);
+  const sets = Number(t.sets);
+  if (!(low > 0) || !(high >= low) || !(sets > 0)) return null;
+  const reps = low === high ? `${low}` : `${low}–${high}`;
+  const weight = t.weight == null ? 0 : Number(t.weight);
+  const load = (lb: number) => weightWords(lb, units.weight, { whole: true });
+  const at = weight < 0 ? ` with ${load(-weight)} assist` : weight > 0 ? ` with ${load(weight)} added` : "";
+  return `Next session: ${sets} × ${reps}${at}`;
+}
+
+/**
+ * A REPS goal's thread (strength-reps.ts): the measure from the goal's start to its goal
+ * in reps, the same envelope four weeks back as the ring, and the move between the two in
+ * reps (REPS_TOWARD up = toward, REPS_BACK down = back). While no set counts yet (every
+ * set assisted), the move is the assist in words and less assist is toward. No standard
+ * and no build mark: a rep count has no load to compare.
+ */
+function repsThread(
+  row: TodayPath["board"][number],
+  journey: StrengthJourney,
+  goal: RepsGoal,
+  today: string,
+  units: AthleteUnits
+): GoalThread {
+  const reps = journey.reps!;
+  const objective = journey.objective!;
+  const now = strengthRepsNow(journey);
+  const start = reps.baseline?.value ?? 0;
+  const startDate = reps.baseline?.date ?? objective.baseline_date ?? null;
+  const agoDay = addDaysISO(today, -AGO_DAYS) ?? today;
+  const ago = repsEnvelopeAsOf(strengthRepsHistory(objective.exercise), goal, agoDay);
+  const agoWords = ago ? dateWords(agoDay, today) : null;
+  const stale = !reps.now && !!reps.latest;
+  const load = (lb: number) => weightWords(lb, units.weight, { whole: true });
+  let direction: WeekReadGoalDirection | null = null;
+  let words: string | null = null;
+  let move: string | null = null;
+  if (row.reached) direction = "reached";
+  else if (stale) words = `Last trained ${dateWords(reps.latest?.date, today)}`;
+  else if (now && ago) {
+    direction = repsDirection(now, ago);
+    if (now.value === 0 && ago.value === 0) move = assistWords(now.assist_lb, ago.assist_lb, load);
+    else {
+      const delta = now.value - ago.value;
+      const abs = Math.abs(delta);
+      move =
+        abs === 0
+          ? `level since ${agoWords}`
+          : `${abs} ${abs === 1 ? "rep" : "reps"} ${delta > 0 ? "up" : "down"} since ${agoWords}`;
+    }
+  } else if (now && now.value === 0) move = assistWords(now.assist_lb, reps.start_assist_lb, load);
+  return {
+    id: row.id,
+    start_text: reps.baseline
+      ? [repsValueText(start, goal), startDate ? dateWords(startDate, today) : ""].filter(Boolean).join(" · ")
+      : null,
+    goal_words: reps.goal_text,
+    track: goalTrack(start, now?.value ?? null, reps.goal_value, ago?.value ?? null, agoWords),
+    direction,
+    direction_words: words ?? (direction ? DIRECTION_WORDS[direction] : null),
+    move_words: move,
+    href: WEEK_HREFS.program,
+    carried_words: null,
+    next_words: objective.status === "completed" ? null : repsPrescriptionWords(journey, units),
+    mark_words: null,
   };
 }
 
@@ -906,7 +1006,11 @@ function goalsOf(
       now_text: strength.now_text,
       goal_text: strength.goal_text,
       progress: strength.progress,
-      line: strength.note ? `Est. 1RM ${strength.now_text}, ${strength.note}.` : `Est. 1RM ${strength.now_text}.`,
+      line: journey?.reps
+        ? `Best ${strength.now_text} at bodyweight${strength.note ? `, ${lowerFirst(strength.note)}` : ""}.`
+        : strength.note
+          ? `Est. 1RM ${strength.now_text}, ${strength.note}.`
+          : `Est. 1RM ${strength.now_text}.`,
       ...safe<GoalThread>(() => strengthThread(strength, journey, ctx.today, ctx.units), {
         id: strength.id,
         href: WEEK_HREFS.program,
@@ -1042,6 +1146,8 @@ function strengthProof(
 ): WeekReadProof | null {
   if (!exercise) return null;
   const journey = journeys.find((j) => j.objective?.exercise === exercise) ?? null;
+  // A reps goal's proof is its own row's reps, never a working load.
+  if (journey?.reps) return null;
   const since = journey?.objective?.baseline_date ?? addDaysISO(today, -182) ?? today;
   const history = workingLoadHistory(exercise, { since, through: today });
   if (history.assisted || history.points.length < 2) return null;
@@ -1448,6 +1554,7 @@ export function weekRead(start?: string, opts: { today?: string; build?: RaceBui
     next_milestones: milestonesBeyond(path, weekEnd),
     goals,
     proof: thisWeek ? safe(() => proofOf(path, journeys, today, units, goals), []) : [],
+    standing: thisWeek ? safe(() => standingRead(today, units, { build, path }), []) : [],
     journey: thisWeek ? safe(() => journeyOf(path, today, build?.finished ?? null), null) : null,
     weight_trend: trend,
   };
