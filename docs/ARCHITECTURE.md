@@ -1794,13 +1794,24 @@ untouched, and the offline `stub` agent is unchanged. A test that needs its own 
   (`src/repo/day-energy.ts`). `dayEnergyTarget(date, average)` costs the planned work of each day of
   the current or a future ISO week: a planned run at its planned distance on the day the agenda
   places it (about 1 kcal per kg per km), a lifting weekday (`calendarDayRead`, about an hour at
-  3.5 MET net of rest) and a known cross-training day or a long session already logged (the demand
-  read's drivers). `DAY_SHIFT_SHARE` (half) of each day's difference from the week's mean moves,
+  3.5 MET net of rest) and the known cross-training day as it stood before this week
+  (`crossTrainingDays`). None of those reads looks at the day's own log, so logging never re-plans
+  the other days; a light session (yoga, mobility, an easy walk) carries no cost. `DAY_SHIFT_SHARE` (half) of each day's difference from the week's mean moves,
   never past `DAY_SHIFT_CAP_SHARE` (15% of the average) and never under the absolute floor; a
   clamped day's remainder goes to the days with room, so the week still sums to seven averages, and
   a week whose largest move is under `DAY_SHIFT_MIN_KCAL` is left flat. Protein never moves. A week
-  already over keeps the average (its plan is gone). PLAN-based on purpose: a watch's burned
-  calories never enter it. `withDayEnergy(intake)` lays the number over a day read (`target.kcal`
+  already over has no plan left, so it is shaped the same way from what was LOGGED (runs at their
+  logged km, a logged lifting session as an hour, other sessions by their logged time). On today
+  and the lived days of the current week a clear departure from the plan moves that ONE day
+  (`outcome_shift_kcal`, never rebalanced): a session the plan did not carry adds half its cost, a
+  planned run clearly longer or shorter (`RUN_DISTANCE_CHANGE_*`) is costed at its logged distance,
+  and planned work not logged never lowers a day. A watch's burned calories never enter it. **The
+  weekly meal plan follows the same numbers** (`src/repo/meal-plan-day-energy.ts`, `-compute.ts`):
+  the split is computed server-side once per draft, stored as `parsed.day_energy`, rebuilt onto each
+  day on every write (a model's or client's copy is discarded), and a moved day is verified against
+  its own number and `mealPlanDayFloor` while `daily_kcal` stays the weekly average for every weekly
+  reader; a plan with no split verifies exactly as before. Meal ideas may name one carb side from
+  the athlete's own log and say what the day still has open (`src/repo/fuel-ideas-day.ts`). `withDayEnergy(intake)` lays the number over a day read (`target.kcal`
   the day's, `target.average_kcal` the accepted number, `target.day_words` the sentence that says
   why) for exactly the day-scoped readers: `nutritionDayRead` (REST, MCP, the Today glance, the
   Intake card), the day's food guides and their carb fit, `fuelIdeas`' energy room and chat's

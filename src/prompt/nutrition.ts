@@ -5,6 +5,8 @@ import { getCoachContext } from "../repo/coach.js";
 import { estimateExpenditure } from "../repo/expenditure.js";
 import { listFuelingFeedback } from "../repo/fueling.js";
 import { frequentFoods } from "../repo/nutrition.js";
+import { mealPlanDayKcalTargets, type MealPlanDayEnergy } from "../repo/meal-plan-day-energy.js";
+import { draftMealPlanDayEnergy } from "../repo/meal-plan-day-energy-compute.js";
 import { computeGoalCheck, getProfile } from "../repo/profile.js";
 import { weeklyAerobicLoad } from "../repo/sessions.js";
 import { getSettings } from "../repo/settings.js";
@@ -590,8 +592,57 @@ function foodPatternIsCurrent(lastAt: unknown, maxAgeDays = 42): boolean {
   return Number.isFinite(time) && Date.now() - time <= maxAgeDays * 86_400_000;
 }
 
-// Goal-aware weekly meal-plan prompt.
-export function buildMealPlanPrompt(userInstruction?: string): string {
+const WEEKDAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+// The plan's target line for one of its days, as the swap and recipe prompts print it: the
+// day's own number when the plan's stored split moved it, else the flat daily target.
+function planDayTargetLine(parsed: any, dayObj: any): string {
+  const days = Array.isArray(parsed?.days) ? parsed.days : [];
+  const index = days.indexOf(dayObj);
+  const own = index >= 0 ? mealPlanDayKcalTargets(parsed)[index] : null;
+  const protein = `${parsed?.daily_protein_g ?? "?"}g protein`;
+  return own != null
+    ? `THIS DAY'S TARGET: ${own} kcal / ${protein} (the plan's weekly average is ${parsed?.daily_kcal ?? "?"} kcal a day; this day carries its own number from the week's training — keep the day at it).`
+    : `PLAN DAILY TARGET: ${parsed?.daily_kcal ?? "?"} kcal / ${protein} per day.`;
+}
+
+// The server's per-day split of the weekly target (repo/meal-plan-day-energy.ts), as the
+// table the meal plan is sized to. Empty when nothing moves: the week is planned flat.
+// Only the moved days are listed; every other day sits at the weekly target.
+export function renderMealPlanDayEnergy(energy: MealPlanDayEnergy | null | undefined): string {
+  if (!energy || !Array.isArray(energy.days) || !energy.days.length) return "";
+  const kcal = (n: number) => Math.round(n).toLocaleString("en-US");
+  const rows = [...energy.days]
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map((day) => {
+      const t = Date.parse(`${day.date}T00:00:00Z`);
+      const weekday = Number.isFinite(t) ? WEEKDAY_SHORT[new Date(t).getUTCDay()] : "";
+      return `  - ${weekday} ${day.date}: ${kcal(day.kcal)} kcal (${day.shift_kcal > 0 ? "+" : "−"}${kcal(Math.abs(day.shift_kcal))}) — ${day.why}`;
+    })
+    .join("\n");
+  return `
+EACH DAY'S OWN NUMBER (computed by Cairn from this week's planned training; the accepted target of ${kcal(energy.average_kcal)} kcal is the week's AVERAGE):
+${rows}
+  Every day not listed sits at ${kcal(energy.average_kcal)} kcal.
+- daily_kcal stays ${kcal(energy.average_kcal)}, the accepted weekly average — never set it to any one day's number.
+- Size each listed day's meals to ITS number: at it or a little above, never under it and never more than about
+  100 kcal over. Every other day sits at or a little above daily_kcal, never under it. Protein stays the same on
+  every day, and fiber keeps its floor on every day.
+- Label the days with their weekday ("Mon", "Tue", …): the server matches each label to its date in the seven days
+  from ${energy.from} and checks that day's meals against its own number.
+- This split is Cairn's, made from the planned training, and the weekly target is unchanged by it — use the numbers
+  as given and never move energy between days on your own.
+`;
+}
+
+// Goal-aware weekly meal-plan prompt. `dayEnergy` is the drafting op's own per-day split
+// (computed once, so the stored plan is checked against exactly these numbers); left
+// out, it is computed here.
+export function buildMealPlanPrompt(
+  userInstruction?: string,
+  opts: { dayEnergy?: MealPlanDayEnergy | null } = {}
+): string {
+  const dayEnergyBlock = renderMealPlanDayEnergy("dayEnergy" in opts ? opts.dayEnergy : draftMealPlanDayEnergy());
   const ctx = getCoachContext();
   const planningMemory = memoryForMealPlanning((ctx as any)?.memory);
   const planningCtx = { ...ctx, memory: planningMemory };
@@ -663,7 +714,7 @@ HARD RULES:
   strength+run double, a long ride). Bias carbohydrate toward the big days and say so in that day's note.
   Each day's \`carbs\` (when present) is its carbohydrate range in grams and g/kg — ACSM/IOC bands for that
   day's work fitted inside the accepted target — so a big day's meals land near its range and a light day's
-  lower, at the same daily kcal.
+  lower, ${dayEnergyBlock ? "at each day's own number (EACH DAY'S OWN NUMBER below)" : "at the same daily kcal"}.
   ${FUEL_DEMAND_RULE}
   ${CARB_RANGE_RULE}
 - Evaluate PRACTICALITY as part of adequacy: preparation time, household fit, ordinary cost/availability,
@@ -679,7 +730,7 @@ ${longevityGuardrails(plantForward, true)}
 ${MEAL_TIMING_RULES}
 
 TRAINING SPLIT (plan the week's meals around these training days): ${split || "(no plan days)"}
-${
+${dayEnergyBlock}${
   prefs
     ? `
 USER SCHEDULE & MEAL PREFERENCES (follow these — they override generic templates):
@@ -871,7 +922,7 @@ to SWAP one meal in their drafted meal plan for a different dish. Propose exactl
 THE DAY (${dayObj?.day ?? day}) — its meals, with the one to replace marked:
 ${dayMeals || "(no meals found)"}
 
-PLAN DAILY TARGET: ${parsed.daily_kcal ?? "?"} kcal / ${parsed.daily_protein_g ?? "?"}g protein per day.
+${planDayTargetLine(parsed, dayObj)}
 
 REPLACEMENT RULES:
 - Keep the new meal within ±10% of the replaced meal's kcal (${current?.kcal ?? "?"}) and protein
@@ -945,7 +996,7 @@ home-cook recipe for ONE meal from the user's drafted meal plan.
 THE MEAL (${dayObj?.day ?? day}, meal [${mealIndex}]):
 ${current ? `${current?.name ?? "?"} — ${current?.items ?? ""} (${current?.kcal ?? "?"} kcal, ${current?.protein_g ?? "?"}g protein, ${current?.carbs_g ?? "?"}g carbs, ${current?.fat_g ?? "?"}g fat)` : "(meal not found)"}
 
-PLAN DAILY TARGET: ${parsed.daily_kcal ?? "?"} kcal / ${parsed.daily_protein_g ?? "?"}g protein per day.
+${planDayTargetLine(parsed, dayObj)}
 
 RECIPE RULES:
 - Use EXACTLY the meal's listed items as the base of the recipe (plus pantry staples: oil,

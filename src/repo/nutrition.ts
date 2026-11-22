@@ -22,6 +22,13 @@ import {
   MEAL_PLAN_FIBER_FLOOR_G,
 } from "./nutrition-safety.js";
 import { getSettings } from "./settings.js";
+import {
+  mealPlanDayFloorKcal,
+  mealPlanDayKcalFor,
+  mealPlanDayKcalTargets,
+  projectMealPlanDayEnergy,
+} from "./meal-plan-day-energy.js";
+import { mealPlanDayFloor } from "./meal-plan-day-energy-compute.js";
 import { classifyIntakeDay, completedIntakeRange, type IntakeDayShape } from "./intake-window.js";
 import { canonicalHardDietKeys, mealPlanHardDietKeys, stampInstructionHardDiets } from "./dietary-constraints.js";
 import {
@@ -788,7 +795,7 @@ export type MealPlanPersistenceCheck =
   | { ok: true; parsed: any; adequacy_checked: boolean; fiber_checked: boolean }
   | { ok: false; error: string; parsed: any; adequacy_checked: boolean; fiber_checked: boolean };
 
-const MEAL_PLAN_TARGET_TOLERANCE_KCAL = 100;
+export const MEAL_PLAN_TARGET_TOLERANCE_KCAL = 100;
 
 function normalizeMealPlanFiber(parsed: any): any {
   if (!parsed || typeof parsed !== "object") return parsed;
@@ -1015,12 +1022,24 @@ export function mealPlanFloorReference(): { goal: any; floorGoal: any; coordinat
 
 export function validateMealPlanForPersistence(
   parsed: any,
-  opts: { dietary_instruction?: unknown } = {}
+  // `day_floor_kcal` overrides the live day floor (tests only); absent, it is read live.
+  opts: { dietary_instruction?: unknown; day_floor_kcal?: number } = {}
 ): MealPlanPersistenceCheck {
   const { floorGoal, coordinatedTarget } = mealPlanFloorReference();
+  // Each day's own number is re-derived from the server's stored split before anything
+  // is checked, so a day's `target_kcal` written by a client edit or a model never counts.
+  // The split is held to the LIVE day floor, not only the one it was drafted under: a cut
+  // that started since raises the lighter days (and the bigger days pay it back) before
+  // accepting, editing or swapping checks anything against them.
+  const liveDayFloor = Number.isFinite(Number(opts.day_floor_kcal))
+    ? Number(opts.day_floor_kcal)
+    : mealPlanDayFloor();
   const floored = normalizeMealPlanFiber(
     parsed && typeof parsed === "object"
-      ? clampNutritionFloors(parsed, { kcal: "daily_kcal", protein: "daily_protein_g" }, floorGoal)
+      ? projectMealPlanDayEnergy(
+          clampNutritionFloors(parsed, { kcal: "daily_kcal", protein: "daily_protein_g" }, floorGoal),
+          { floor: liveDayFloor, today: localDateISO() }
+        )
       : parsed
   );
   const headline = Number(floored?.daily_kcal);
@@ -1057,17 +1076,44 @@ export function validateMealPlanForPersistence(
     };
   }
   if (Number.isFinite(coordinatedTarget) && coordinatedTarget > 0) {
-    const mismatch = adequacy.days.find(
-      (day) => Math.abs(day.kcal - coordinatedTarget) > MEAL_PLAN_TARGET_TOLERANCE_KCAL
-    );
-    if (mismatch) {
+    // A moved day is held to its own number with the same rounding tolerance, never under
+    // the day floor; every other day (and every day of an old plan) to the coordinated
+    // target as before. The week's mean stays on the coordinated target.
+    const dayTargets = mealPlanDayKcalTargets(floored);
+    const dayFloor = mealPlanDayFloorKcal(floored);
+    const mismatchIndex = adequacy.days.findIndex((day, index) => {
+      const own = dayTargets[index];
+      if (own == null) return Math.abs(day.kcal - coordinatedTarget) > MEAL_PLAN_TARGET_TOLERANCE_KCAL;
+      return (
+        day.kcal < Math.max(own - MEAL_PLAN_TARGET_TOLERANCE_KCAL, dayFloor) ||
+        day.kcal > own + MEAL_PLAN_TARGET_TOLERANCE_KCAL
+      );
+    });
+    if (mismatchIndex >= 0) {
+      const mismatch = adequacy.days[mismatchIndex];
+      const own = dayTargets[mismatchIndex];
       return {
         ok: false,
-        error: `Meal plan rejected: ${mismatch.day} totals ${mismatch.kcal} kcal, outside the ±${MEAL_PLAN_TARGET_TOLERANCE_KCAL} kcal rounding tolerance around the coordinated ${Math.round(coordinatedTarget)} kcal target.`,
+        error:
+          own != null
+            ? `Meal plan rejected: ${mismatch.day} totals ${mismatch.kcal} kcal, outside the ±${MEAL_PLAN_TARGET_TOLERANCE_KCAL} kcal rounding tolerance around that day's own ${own} kcal (the week averages the coordinated ${Math.round(coordinatedTarget)} kcal target).`
+            : `Meal plan rejected: ${mismatch.day} totals ${mismatch.kcal} kcal, outside the ±${MEAL_PLAN_TARGET_TOLERANCE_KCAL} kcal rounding tolerance around the coordinated ${Math.round(coordinatedTarget)} kcal target.`,
         parsed: floored,
         adequacy_checked: true,
         fiber_checked: adequacy.fiber_checked,
       };
+    }
+    if (dayTargets.some((target) => target != null) && adequacy.days.length) {
+      const mean = adequacy.days.reduce((sum, day) => sum + day.kcal, 0) / adequacy.days.length;
+      if (Math.abs(mean - coordinatedTarget) > MEAL_PLAN_TARGET_TOLERANCE_KCAL) {
+        return {
+          ok: false,
+          error: `Meal plan rejected: the week averages ${Math.round(mean)} kcal a day, outside the ±${MEAL_PLAN_TARGET_TOLERANCE_KCAL} kcal rounding tolerance around the coordinated ${Math.round(coordinatedTarget)} kcal target.`,
+          parsed: floored,
+          adequacy_checked: true,
+          fiber_checked: adequacy.fiber_checked,
+        };
+      }
     }
   }
   const dietWarnings = assertPlanDietarySafe(floored, athleteDietaryDeclarations(opts.dietary_instruction, floored));
@@ -1225,7 +1271,16 @@ export function mealPlanForCoach() {
       protein_g: m?.protein_g ?? null,
       fiber_g: m?.fiber_g ?? null,
     }));
-    return { label, day: String(d.day ?? "").trim(), note: d?.note ? capStr(d.note, 200) : null, meals };
+    // The day's own number when the plan's split moved this exact date; null means the
+    // day plans at daily_kcal.
+    const target = mealPlanDayKcalFor(parsed, iso);
+    return {
+      label,
+      day: String(d.day ?? "").trim(),
+      note: d?.note ? capStr(d.note, 200) : null,
+      target_kcal: target,
+      meals,
+    };
   };
   const freshness = mealPlanFreshness(plan);
   return {
@@ -1260,7 +1315,8 @@ export function mealPlanForCoach() {
 // persisted plan is validated to keep every day inside a tight tolerance of its
 // headline `daily_kcal`/`daily_protein_g` (validateMealPlanForPersistence), so those
 // two numbers ARE the plan's daily band and no weekday matching is needed to compare
-// against them.
+// against them — except on the dates a plan drafted with a per-day split moved
+// (meal-plan-day-energy.ts), where that date's own number is the band's centre.
 //
 // ADHERENCE-NEUTRAL, like every nutrition read here. It classifies days and lowers
 // CONFIDENCE when the logging is thin; it never scores, never blames, and its prose
@@ -1435,7 +1491,10 @@ export function mealPlanAdherence(windowStart: string, windowEnd: string): MealP
       // Too little logged to say anything about the day — explicitly NOT a divergence.
       return { date: day.date, kcal: day.kcal, protein_g: protein, classification: "too_thin" as const };
     }
-    const kcalInBand = Math.abs(day.kcal - targetKcal) <= kcalTolerance;
+    // A plan drafted with a per-day split is read against that date's own number (same
+    // band width); every other day, and every day of an old plan, against the headline.
+    const dayKcal = mealPlanDayKcalFor(plan.parsed, day.date) ?? targetKcal;
+    const kcalInBand = Math.abs(day.kcal - dayKcal) <= kcalTolerance;
     // A day whose protein was never estimated cannot fail the protein floor; the
     // calorie band decides it alone.
     const proteinOk = proteinFloor == null || protein == null ? true : protein >= proteinFloor;
@@ -2770,6 +2829,12 @@ export function hydrate(row: any) {
     parsed = row.parsed_json ? JSON.parse(row.parsed_json) : null;
   } catch {
     parsed = null;
+  }
+  // A meal plan's per-day display fields are re-derived on every read, so a plan whose
+  // split's week has passed reads flat (meal-plan-day-energy.ts); a row with no split is
+  // returned exactly as stored.
+  if (parsed && typeof parsed === "object" && parsed.day_energy && Array.isArray(parsed.days)) {
+    parsed = projectMealPlanDayEnergy(parsed, { today: localDateISO() });
   }
   return { ...row, parsed };
 }

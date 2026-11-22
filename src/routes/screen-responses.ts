@@ -57,7 +57,7 @@ import { journeyMilestones, journeyRead } from "../repo/journey.js";
 import { getBodyMetricsSummary, normalizeUnit } from "../repo/body-metrics.js";
 import { todayPath } from "../repo/today-path.js";
 import { intakeBand } from "../repo/intake-band.js";
-import { fuelIdeas } from "../repo/fuel-ideas.js";
+import { fuelIdeasForDay as fuelIdeas } from "../repo/fuel-ideas-day.js";
 import { buildClinicalReportData, clinicalReportJson, parseReportSections } from "../report.js";
 import { directivesResponse } from "./connected-brain.js";
 import { nutritionDayResponse } from "./nutrition.js";

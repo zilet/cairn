@@ -155,6 +155,8 @@
 .idea-card-title{margin:var(--space-1) 0 0;font-family:var(--font-display);font-weight:var(--weight-regular);font-size:var(--text-lead);line-height:var(--leading-snug);color:var(--ink)}
 .idea-card-nums{margin:0;font-size:var(--text-xs);color:var(--muted);font-variant-numeric:tabular-nums}
 .idea-card-why{flex:1 1 auto;margin:0;font-size:var(--text-sm);color:var(--ink2);line-height:var(--leading-normal)}
+.idea-card-with{margin:0;font-size:var(--text-sm);color:var(--ink2);line-height:var(--leading-normal)}
+.idea-cards-room{margin:var(--space-2) 0 0;font-size:var(--text-xs);color:var(--muted);line-height:var(--leading)}
 .idea-card-actions{display:flex;align-items:center;flex-wrap:wrap;gap:var(--space-2) var(--space-6);margin-top:var(--space-3)}
 .idea-card-start{padding:var(--space-4) var(--space-7);font-size:var(--text-sm)}
 .idea-card-start,.idea-card-another{min-height:44px}

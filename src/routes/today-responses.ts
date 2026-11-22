@@ -44,7 +44,7 @@ import { flexibleTrainingAgenda, sessionPrimer } from "../repo.js";
 import { contextTagVocab } from "../repo/context-tag-effects.js";
 import { todayPath } from "../repo/today-path.js";
 import { getRecoveryBaselineRead } from "../repo/baseline-bands.js";
-import { fuelIdeas } from "../repo/fuel-ideas.js";
+import { fuelIdeasForDay as fuelIdeas } from "../repo/fuel-ideas-day.js";
 import { localDateISO, localHourFraction } from "../repo/shared.js";
 import { directivesResponse } from "./connected-brain.js";
 import { weekAheadResponse } from "./day-coach.js";

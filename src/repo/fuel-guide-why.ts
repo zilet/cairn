@@ -31,7 +31,11 @@
 //   - saturated fat under 10% of energy (DGA 2020-2025), 5-6% to lower LDL (Eckel et al.,
 //     2013 AHA/ACC lifestyle guideline, Circulation 2014;129(25 Suppl 2):S76-99);
 //   - seafood 1-2 meals a week: Rimm et al., AHA science advisory, Circulation 2018;
-//     138(1):e35-e47.
+//     138(1):e35-e47;
+//   - unsaturated fat in place of saturated lowers LDL and heart risk, refined carbohydrate
+//     in its place does not lower heart risk: Sacks et al., AHA Presidential Advisory,
+//     Circulation 2017;136(3):e1-e23; fish omega-3s act on triglycerides, not LDL:
+//     Skulas-Ray et al., AHA science advisory, Circulation 2019;140(12):e673-e691.
 // Every string holds the reading grammar (no score, no gate, no engineering words).
 import { LB_PER_KG } from "./display-words.js";
 import type { CarbTier } from "./fuel-demand.js";
@@ -87,7 +91,7 @@ const TIER_DAY: Record<CarbTier, string> = {
 function energyWhy(i: FuelWhyInput): FuelWhy | null {
   if (!i.kcal) return null;
   const lose = i.mode === "lose";
-  const base = `${i.own_target ? "Your own number is the week's average" : "The week's average is worked out from your weight, your activity and your goal"}; each day's number moves around it with the planned work, by about half of what that work costs.`;
+  const base = `${i.own_target ? "Your own number is the week's average" : "The week's average is worked out from your weight, your activity and your goal"}; each day's number moves around it with the day's work, planned or logged, by about half of what that work costs.`;
   let pace = "";
   if (lose && i.kg) {
     const perKgUnit = i.weight_unit === "lb" ? LB_PER_KG : 1;
@@ -159,8 +163,8 @@ function fatWhy(i: FuelWhyInput): FuelWhy | null {
   return {
     made_of: made,
     effect:
-      "Fat is not one thing. Unsaturated fat (olive oil, avocado, nuts) and the omega-3s in oily fish are the kinds to favour: in place of saturated fat they lower LDL cholesterol. Saturated fat (butter, cheese, fatty meat, coconut) is the one with a ceiling of its own. All of it carries vitamins A, D, E and K and is raw material for hormones, and diets held under a fifth of energy lowered testosterone in men in a small set of trials.",
-    source: "ACSM joint position 2016; AHA/ACC lifestyle guideline 2013; Whittaker and Wu 2021; Ruiz-Castellano 2021.",
+      "Fat is not one thing. Unsaturated fat (olive oil, avocado, nuts) is the kind to favour: in place of saturated fat it lowers LDL cholesterol. The omega-3s in oily fish are worth having for the heart too, though they act on triglycerides more than on LDL. Saturated fat (butter, cheese, fatty meat, coconut) is the one with a ceiling of its own. All of it carries vitamins A, D, E and K and is raw material for hormones, and diets held under a fifth of energy lowered testosterone in men in a small set of trials.",
+    source: "ACSM joint position 2016; AHA/ACC lifestyle guideline 2013; AHA omega-3 advisory 2019; Whittaker and Wu 2021; Ruiz-Castellano 2021.",
   };
 }
 
@@ -176,11 +180,11 @@ function saturatedWhy(i: FuelWhyInput): FuelWhy | null {
   if (!i.saturated_fat) return null;
   return {
     made_of: i.saturated_fat.lipid
-      ? "6% of today's energy, the level heart guidelines use when LDL or ApoB is worth lowering. The general ceiling is 10% of energy."
+      ? "6% of today's energy, the level the AHA/ACC lifestyle guideline uses when LDL is worth lowering. The general ceiling is 10% of energy."
       : "A tenth of today's energy.",
     effect:
-      "Saturated fat raises LDL and ApoB in most people. Swapping it for unsaturated fat (olive oil, nuts, fish) lowers them. Swapping it for sugar does not.",
-    source: "AHA/ACC lifestyle guideline 2013; Dietary Guidelines for Americans 2020–2025.",
+      "Saturated fat raises LDL cholesterol in most people, and ApoB counts the particles that carry it. Swapping it for unsaturated fat (olive oil, nuts, seeds) lowers LDL and lowers heart risk. Swapping it for sugar or refined starch does not lower heart risk.",
+    source: "AHA/ACC lifestyle guideline 2013; AHA advisory on dietary fats 2017; Dietary Guidelines for Americans 2020–2025.",
   };
 }
 

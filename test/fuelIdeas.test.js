@@ -804,3 +804,144 @@ test("today so far is never read as the whole day: partial until complete, unest
   assert.equal(none.words, "2 meals are logged, with no numbers yet, so there is no sum to show.");
   assert.doesNotMatch(`${complete.words} ${holey.words} ${none.words}`, /\blow\b|score|%/);
 });
+
+// ---- the "with" pairing and the room words (bigger days) ----
+import { fuelRoomWords, pairCarbSide, FUEL_WITH_MIN_KCAL } from "../dist/repo/fuel-ideas.js";
+import { violatesReadingGrammar } from "../dist/repo/day-read-grammar.js";
+import { fuelIdeasForDay } from "../dist/repo/fuel-ideas-day.js";
+import { localDateISO } from "../dist/repo/shared.js";
+
+// A carb food the athlete keeps eating, logged inside meals that are each one-off
+// (so it is a recurring COMPONENT, never a staple meal of its own).
+function seedRice(over = {}) {
+  const item = { item: "Rice (cooked)", kcal: 200, protein_g: 4, carbs_g: 44, fat_g: 0.4, ...over };
+  [60, 61, 62].forEach((daysAgo, i) => {
+    repo.addFoodNote("meal", "", { summary: `Side plate ${i}`, kcal: item.kcal, protein_g: 4, ingredients: [item] }, undefined, {
+      date: localDaysAgo(daysAgo),
+    });
+  });
+}
+
+test("a clear leftover and carb room pair the idea with one carb staple from the athlete's own log", () => {
+  seedStaples();
+  seedRice();
+  seedBand();
+  const out = fuelIdeas(undefined, { hour: 19, carbsRoomG: 120 });
+  assert.ok(out.ideas.length > 0);
+  const paired = out.ideas.filter((i) => i.with);
+  assert.ok(paired.length > 0, "an evening with room carries a pairing");
+  for (const idea of out.ideas) {
+    assert.ok(idea.portion <= 1, "never above the usual portion");
+    if (!idea.with) continue;
+    assert.equal(idea.with.title, "Rice", "only food from their own log");
+    assert.equal(idea.with.kcal, 200);
+    assert.equal(idea.with.carbs_g, 44);
+    assert.match(idea.with.words, /^With rice, about 200 kcal more/);
+    assert.ok(out.room.meal_share.energy_kcal - idea.kcal - idea.with.kcal >= -1, "the pair still fits this meal's share");
+    assert.equal(violatesReadingGrammar(idea.with.words), null, idea.with.words);
+    assert.doesNotMatch(idea.prefill, /rice/i, "the prefill is the idea alone");
+  }
+});
+
+test("no pairing without carb room, with little energy left, or with nothing carb-leaning in the log", () => {
+  seedStaples();
+  seedRice();
+  seedBand();
+  for (const carbsRoomG of [null, undefined, 20]) {
+    const out = fuelIdeas(undefined, { hour: 19, carbsRoomG });
+    assert.ok(out.ideas.every((i) => i.with == null), `carbs room ${carbsRoomG}`);
+  }
+  // Little energy left: lunch took nearly all of the room.
+  seedIntake(0, 1650, { protein_g: 10 }, { eatenAt: "12:00" });
+  const tight = fuelIdeas(undefined, { hour: 19, carbsRoomG: 120 });
+  assert.ok(tight.ideas.every((i) => i.with == null), "crumbs of room pair nothing");
+});
+
+test("no pairing when no staple is mostly carbohydrate or small enough", () => {
+  seedStaples();
+  seedBand();
+  assert.ok(fuelIdeas(undefined, { hour: 19, carbsRoomG: 120 }).ideas.every((i) => i.with == null), "no carb food logged");
+  seedRice({ kcal: 3000, carbs_g: 600 });
+  assert.ok(fuelIdeas(undefined, { hour: 19, carbsRoomG: 900 }).ideas.every((i) => i.with == null), "too big to fit");
+});
+
+test("pairCarbSide holds its thresholds and never repeats the idea's own food", () => {
+  const sides = [{ key: "rice", title: "Rice", kcal: 200, carbs_g: 44, days: 3 }];
+  const idea = { title: "Chicken", kcal: 400, carbs_g: 10 };
+  assert.ok(pairCarbSide(idea, 700, 100, sides), "300 left of 700");
+  assert.equal(pairCarbSide(idea, 700, 100, [{ ...sides[0], kcal: 301 }]), null, "does not fit the leftover");
+  assert.equal(pairCarbSide({ ...idea, kcal: 600 }, 700, 100, sides), null, `under ${FUEL_WITH_MIN_KCAL} kcal left`);
+  assert.equal(pairCarbSide({ ...idea, kcal: 1200 }, 1500, 100, sides), null, "a leftover of 300 is under a quarter of 1,500");
+  assert.equal(pairCarbSide(idea, 700, 40, sides), null, "carbs room after the idea's own carbs is 30 g");
+  assert.equal(pairCarbSide({ ...idea, title: "Chicken and rice" }, 700, 100, sides), null, "already in the idea");
+  assert.equal(pairCarbSide(idea, null, 100, sides), null, "no energy claim");
+});
+
+test("room words speak only on a bigger day, say about, and pass the reading grammar", () => {
+  const big = fuelRoomWords({ shiftKcal: 300, work: ["the long run"], openKcal: 1013, carbsRoomG: 90 });
+  assert.equal(big, "Today's number is bigger for the long run; after one of these about 1,010 kcal is still open, and it suits carbs.");
+  assert.equal(violatesReadingGrammar(big), null);
+  const noCarbs = fuelRoomWords({ shiftKcal: 300, work: ["lifting"], openKcal: 400, carbsRoomG: 10 });
+  assert.doesNotMatch(noCarbs, /carbs/);
+  assert.equal(violatesReadingGrammar(noCarbs), null);
+  assert.equal(fuelRoomWords({ shiftKcal: 0, work: [], openKcal: 1000, carbsRoomG: 90 }), null, "ordinary day");
+  assert.equal(fuelRoomWords({ shiftKcal: -200, work: [], openKcal: 1000, carbsRoomG: 90 }), null, "lighter day");
+  assert.equal(fuelRoomWords({ shiftKcal: 300, work: ["lifting"], openKcal: 100, carbsRoomG: 90 }), null, "little open");
+  assert.equal(fuelRoomWords({ shiftKcal: 300, work: ["lifting"], openKcal: null, carbsRoomG: 90 }), null);
+});
+
+test("on a bigger day the ideas carry the room words; on a lighter day the ideas respect the smaller room", () => {
+  seedStaples();
+  seedBand();
+  const dow = new Date(`${localDateISO()}T12:00:00`).getDay();
+  const setLiftDays = (days) =>
+    repo.setProfile({ strength_schedule: { days: days.map((d) => ({ dow: d })), source: "athlete", updated_at: localDateISO() } });
+  repo.savePlanDay(1, "Full body", "strength", [{ exercise: "Back Squat", sets: 3, reps: "5" }], { day_type: "training" });
+
+  setLiftDays([(dow + 2) % 7, (dow + 4) % 7]);
+  const light = fuelIdeas(undefined, { hour: 19, carbsRoomG: 120 });
+  setLiftDays([dow, (dow + 3) % 7]);
+  const big = fuelIdeas(undefined, { hour: 19, carbsRoomG: 120 });
+
+  assert.ok(big.room.energy_kcal > light.room.energy_kcal, "a lifting day has more room than a rest day");
+  assert.equal(light.room_words, null);
+  assert.match(big.room_words ?? "", /^Today's number is bigger for lifting; after one of these about [\d,]+ kcal is still open/);
+  assert.equal(violatesReadingGrammar(big.room_words), null);
+  for (const out of [light, big]) {
+    for (const idea of out.ideas) {
+      assert.ok(idea.portion <= 1);
+      if (idea.fits_band) assert.ok(idea.kcal <= out.room.meal_share.energy_kcal + 1, "inside this meal's share");
+    }
+  }
+});
+
+test("fuelIdeasForDay reads the carbs room from the day's guide and mirrors fuelIdeas", () => {
+  seedStaples();
+  seedBand();
+  const out = fuelIdeasForDay(undefined, { hour: 19 });
+  assert.equal(out.kind, "ideas");
+  const same = fuelIdeas(undefined, { hour: 19, carbsRoomG: null });
+  assert.deepEqual(out.ideas.map((i) => i.key), same.ideas.map((i) => i.key));
+});
+
+test("room words name the day: another date, logged work, and no named work", () => {
+  const base = { shiftKcal: 300, work: ["the long run"], openKcal: 800, carbsRoomG: 10 };
+  assert.match(fuelRoomWords({ ...base, isToday: false }), /^That day's number is bigger for the long run;/);
+  const logged = fuelRoomWords({ ...base, outcomeShiftKcal: 200, outcomeWork: ["the ride"] });
+  assert.match(logged, /^Today's number is bigger for the ride you logged;/);
+  const plain = fuelRoomWords({ shiftKcal: 120, work: [], openKcal: 800, carbsRoomG: null });
+  assert.match(plain, /^Today's number is bigger than your average; after one of these/);
+  for (const text of [logged, plain]) assert.equal(violatesReadingGrammar(text), null, text);
+  assert.equal(fuelRoomWords({ shiftKcal: 0, work: [], outcomeShiftKcal: 0, openKcal: 800, carbsRoomG: null }), null);
+});
+
+test("before the first log of the day the carbs guide's whole high is still open", async () => {
+  const { dayCarbsRoomG } = await import("../dist/repo/fuel-ideas-day.js");
+  seedStaples();
+  seedBand();
+  const morning = dayCarbsRoomG(localDateISO());
+  assert.ok(morning != null && morning > 0, "the whole day is open before the first log");
+  if (morning != null) assert.ok(morning >= 30, `carbs room before any log: ${morning}`);
+  const out = fuelIdeasForDay(undefined, { hour: 7 });
+  assert.equal(out.kind, "ideas");
+});

@@ -115,7 +115,17 @@ type MealRowPlannerContext = {
     const totals = kcal || protein
       ? `<div class="mealday-total"><span class="numeral" data-cu="${kcal}">0</span><span class="lbl"> cal${protein ? ` · ${protein}g protein` : ""}</span></div>`
       : "";
-    const targetKcal = Number(context.targetKcal) || 0;
+    // A plan drafted with a per-day split carries the server's own number on each day that
+    // moved (`target_kcal`, with what the day carries in `target_why`); the bar and a small
+    // label follow it. The server leaves it off once the split's week has passed, so a plan
+    // viewed from its second week reads flat. Every other day, and an older plan, uses daily_kcal.
+    const ownKcal = Number(d.target_kcal);
+    const hasOwn = Number.isFinite(ownKcal) && ownKcal > 0;
+    const targetKcal = hasOwn ? ownKcal : Number(context.targetKcal) || 0;
+    const ownWhy = hasOwn && typeof d.target_why === "string" ? d.target_why.trim() : "";
+    const ownLabel = hasOwn
+      ? `<div class="lbl mealday-own">This day's number: ${escHtml(Math.round(ownKcal).toLocaleString("en-US"))} kcal${ownWhy ? ` · ${escHtml(ownWhy)}` : ""}</div>`
+      : "";
     // The bar's track can't overflow, but the ratio it renders can — capping the
     // width alone would make a 130%-of-target day look identical to on-target,
     // erasing the only thing this bar is meant to answer. A distinct over-target
@@ -128,10 +138,11 @@ type MealRowPlannerContext = {
       : "";
     return `<section class="mealday${isToday ? " mealday-today" : ""} reveal" style="${stagger(dayIndex + 2)}" data-mday="${dayIndex}">
       <div class="mealday-head">
-        <div><div class="lbl">${isToday ? `<span class="mealday-now">Today</span> · ` : ""}${escHtml(dayDateText(d.day, String(context.weekOf ?? "")))}</div><h2 class="mealday-name">${escHtml(d.day || `Day ${dayIndex + 1}`)}</h2></div>
+        <div><div class="lbl">${isToday ? `<span class="mealday-now">Today</span> · ` : ""}${escHtml(typeof d.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d.date) ? weekOfText(d.date) : dayDateText(d.day, String(context.weekOf ?? "")))}</div><h2 class="mealday-name">${escHtml(d.day || `Day ${dayIndex + 1}`)}</h2></div>
         ${totals}
       </div>
       ${bar}
+      ${ownLabel}
       <div class="mealday-card">${meals.map((meal, mealIndex) => mealRowHtml(meal, mealIndex, { di: dayIndex, count: meals.length })).join("") || `<div class="empty">No meals</div>`}</div>
       ${d.note ? `<div class="mealday-note">${escHtml(d.note)}</div>` : ""}
     </section>`;

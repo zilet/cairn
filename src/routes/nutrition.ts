@@ -33,7 +33,7 @@ import { streamEnrichRow } from "./enrich-stream.js";
 import { currentUnderfuelingRead } from "../domain/brain/underfueling-service.js";
 import { cutQualityRead } from "../repo/cut-quality.js";
 import { intakeBand } from "../repo/intake-band.js";
-import { fuelIdeas } from "../repo/fuel-ideas.js";
+import { fuelIdeasForDay as fuelIdeas } from "../repo/fuel-ideas-day.js";
 
 export const nutritionRouter = Router();
 

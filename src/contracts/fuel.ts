@@ -164,6 +164,20 @@ export interface ClientFuelIdea {
   last_logged: string | null;
   /** "staple" = a whole meal that repeats; "components" = built from items logged often. */
   source: "staple" | "components";
+  /**
+   * One carb-leaning food from the athlete's own log that fits what this idea leaves of
+   * the meal's share, when that room is clear and the day's carbs have room; else null.
+   * A suggestion beside the idea: the prefill never includes it.
+   */
+  with?: ClientFuelIdeaWith | null;
+}
+
+export interface ClientFuelIdeaWith {
+  title: string;
+  kcal: number;
+  carbs_g: number;
+  /** "With rice, about 200 kcal more, it still fits this meal's share." */
+  words: string;
 }
 
 export interface ClientFuelIdeas {
@@ -211,6 +225,8 @@ export interface ClientFuelIdeas {
   ideas: ClientFuelIdea[];
   /** Spoken line about the ideas as a set (e.g. there were no staples to build from). */
   words: string;
+  /** On a day whose number is above the weekly average: what is still open after one idea and what it suits. Null otherwise. */
+  room_words?: string | null;
 }
 
 /**
