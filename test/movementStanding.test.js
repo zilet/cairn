@@ -306,3 +306,15 @@ test("facts only: no score, no level word, no sentence", () => {
   const json = JSON.stringify(movementStanding(TODAY));
   assert.ok(!/score|percentile|beginner|novice|intermediate|advanced|elite/i.test(json));
 });
+
+test("between two lifts of one tier, the lift the athlete holds a goal on leads the line", () => {
+  resetTables("strength_objectives");
+  // The dumbbell bench collects more sets; the barbell bench carries the goal.
+  logLift("Dumbbell Bench Press", "chest", [...THEN, ...NOW].map((d) => [d, 70, 8]), 4);
+  logLift("Barbell Bench Press", "chest", [...THEN, ...NOW].map((d) => [d, 145, 6]), 2);
+  const before = movementStanding(TODAY).lines.find((l) => l.key === "push");
+  assert.equal(before.lead_lift, "Dumbbell Bench Press", "with no goal, the sets decide");
+  repo.setStrengthObjective({ exercise: "Barbell Bench Press", target_kind: "explicit_est_1rm", target_est_1rm: 200 });
+  const after = movementStanding(TODAY).lines.find((l) => l.key === "push");
+  assert.equal(after.lead_lift, "Barbell Bench Press");
+});

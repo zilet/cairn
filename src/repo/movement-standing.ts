@@ -32,7 +32,14 @@ import { isKnownBodyweightMovement, isMobility, isPlaceholderExerciseName } from
 import { classifyPattern, inferEquipment, type MovementPattern } from "./exercise-variations.js";
 import { isAccessoryRegion, movementRegionKey } from "./movement-region.js";
 import { athleteBodyweightLb, isBenchmarkLiftForPattern } from "./performance.js";
-import { capacityEnvelopeAsOf, type StrengthExposure, strengthObjectiveHistory } from "./strength-objectives.js";
+import {
+  capacityEnvelopeAsOf,
+  listStrengthObjectives,
+  type StrengthExposure,
+  strengthObjectiveHistory,
+} from "./strength-objectives.js";
+import { strengthObjectiveTrackedExercise } from "./strength-objective-carry.js";
+import { normalizedExerciseKey } from "./exercise-canon.js";
 import { exposureLighterOnPurpose } from "./whole-person-trajectory.js";
 import { PLAN_ITEM_EFFECT_TIER, planItemEffectTier } from "../domain/training/plan-item-order.js";
 
@@ -348,16 +355,29 @@ export function movementStanding(today?: string): MovementStanding {
   }
 
   const bodyweight = athleteBodyweightLb();
+  const goalKeys = new Set<string>();
+  try {
+    for (const objective of listStrengthObjectives()) {
+      if (objective.status !== "active") continue;
+      goalKeys.add(normalizedExerciseKey(strengthObjectiveTrackedExercise(objective)));
+    }
+  } catch {
+    // no goals read: the tier and the sets decide
+  }
   const lines: MovementStandingLine[] = [];
   for (const movement of MOVEMENTS) {
     const members = [...(byMovement.get(movement.key)?.values() ?? [])];
     if (!members.length) continue;
     for (const member of members) member.bodyweight = isBodyweightMember(member);
     const trained = members.filter((member) => member.setsNow > 0);
+    // Between lifts of one tier, the one the athlete holds a goal on leads: the bench they
+    // named speaks for Push ahead of a dumbbell bench that happened to collect more sets.
+    const goal = (member: Member) => (goalKeys.has(normalizedExerciseKey(member.name)) ? 0 : 1);
     const lead =
       [...trained].sort(
         (a, b) =>
           a.tier - b.tier ||
+          goal(a) - goal(b) ||
           b.setsNow - a.setsNow ||
           b.lastDate.localeCompare(a.lastDate) ||
           a.name.localeCompare(b.name)
