@@ -927,8 +927,8 @@ test("fuelIdeasForDay reads the carbs room from the day's guide and mirrors fuel
 test("room words name the day: another date, logged work, and no named work", () => {
   const base = { shiftKcal: 300, work: ["the long run"], openKcal: 800, carbsRoomG: 10 };
   assert.match(fuelRoomWords({ ...base, isToday: false }), /^That day's number is bigger for the long run;/);
-  const logged = fuelRoomWords({ ...base, outcomeShiftKcal: 200, outcomeWork: ["the ride"] });
-  assert.match(logged, /^Today's number is bigger for the ride you logged;/);
+  const logged = fuelRoomWords({ ...base, outcomeShiftKcal: 200, outcomeWork: ["the ride you logged"] });
+  assert.match(logged, /^Today's number is bigger for the long run and the ride you logged;/);
   const plain = fuelRoomWords({ shiftKcal: 120, work: [], openKcal: 800, carbsRoomG: null });
   assert.match(plain, /^Today's number is bigger than your average; after one of these/);
   for (const text of [logged, plain]) assert.equal(violatesReadingGrammar(text), null, text);

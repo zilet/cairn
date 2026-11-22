@@ -254,6 +254,8 @@ export interface FuelCarbSide {
   kcal: number;
   carbs_g: number;
   days: number;
+  /** Usually eaten around this hour. */
+  usual_now?: boolean;
 }
 
 // A side is "mostly carbohydrate" when carbs carry at least this share of its kcal.
@@ -466,6 +468,7 @@ function readStaples(asOf: string, hour?: number): { staples: FuelStaple[]; carb
       kcal: c.macros!.kcal,
       carbs_g: c.macros!.carbs_g!,
       days: c.days.size,
+      usual_now: [...usualNow].some((k) => k.includes(key)),
     }));
   return { staples: out, carbSides };
 }
@@ -725,13 +728,10 @@ export function fuelRoomWords(input: {
   const outcomeShift = Math.max(0, input.outcomeShiftKcal ?? 0);
   if (input.shiftKcal + outcomeShift < FUEL_ROOM_WORDS_MIN_SHIFT_KCAL) return null;
   if (input.openKcal == null || input.openKcal < FUEL_ROOM_WORDS_MIN_OPEN_KCAL) return null;
-  // Logged work is named first (it is what happened); else the plan's work; else plainly bigger.
-  const work =
-    outcomeShift > 0 && input.outcomeWork?.length
-      ? ` for ${input.outcomeWork.join(" and ")} you logged`
-      : input.work.length
-        ? ` for ${input.work.join(" and ")}`
-        : " than your average";
+  // The plan's work and any logged work are both named; with neither, plainly bigger.
+  // day-energy's outcome words already say "you logged".
+  const named = [...input.work, ...(outcomeShift > 0 ? (input.outcomeWork ?? []) : [])];
+  const work = named.length ? ` for ${named.join(" and ")}` : " than your average";
   const lead = input.isToday === false ? "That day's" : "Today's";
   const suits = input.carbsRoomG != null && input.carbsRoomG >= FUEL_SUITS_CARBS_MIN_G ? ", and it suits carbs" : "";
   return `${lead} number is bigger${work}; after one of these about ${kcalWords(input.openKcal)} kcal is still open${suits}.`;
@@ -757,10 +757,14 @@ export function pairCarbSide(
     .filter(
       (c) => c.kcal <= left && c.carbs_g <= carbsLeft && c.key !== idea.lead_key && !title.includes(c.title.toLowerCase())
     )
-    .sort((a, b) => b.days - a.days || b.kcal - a.kcal || a.key.localeCompare(b.key));
+    // A food usually eaten at this time of day comes first (oats are not a dinner side).
+    .sort(
+      (a, b) =>
+        Number(!!b.usual_now) - Number(!!a.usual_now) || b.days - a.days || b.kcal - a.kcal || a.key.localeCompare(b.key)
+    );
   const pick = fits[0];
   if (!pick) return null;
-  const kcal = Math.round(pick.kcal);
+  const kcal = Math.round(pick.kcal / 10) * 10;
   return {
     title: pick.title,
     kcal,
