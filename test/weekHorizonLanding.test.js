@@ -267,7 +267,15 @@ test("three lift goals: ONE strength row lists every lift, in the board's order,
   assert.equal(by["Barbell Back Squat"].direction, "toward");
   assert.equal(by["Barbell Back Squat"].direction_words, "Moving toward");
   assert.equal(by["Barbell Bench Press"].direction, "holding");
-  assert.equal(by["Barbell Bench Press"].move_words, "level");
+  assert.match(by["Barbell Bench Press"].move_words, /^level since /);
+  // The word is read off the two marks the track draws: it can never disagree with them.
+  for (const lift of goal.lifts) {
+    if (lift.track.ago == null) continue;
+    if (lift.direction === "toward") assert.ok(lift.track.now > lift.track.ago, `${lift.label}: now right of the ring`);
+    if (lift.direction === "back") assert.ok(lift.track.now < lift.track.ago, `${lift.label}: now left of the ring`);
+  }
+  assert.match(by["Barbell Back Squat"].move_words, /^\d+ lb up since /);
+  assert.match(by["Barbell Overhead Press"].move_words, /^\d+ lb down since /);
   assert.equal(by["Barbell Overhead Press"].direction, "back");
   assert.equal(by["Barbell Overhead Press"].direction_words, "Drifting back");
   for (const lift of goal.lifts) {

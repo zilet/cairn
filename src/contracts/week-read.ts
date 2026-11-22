@@ -200,6 +200,16 @@ export interface WeekReadGoal {
   /** The thread's depth: the race page, the goal line, the lift's program page; null when it has none. */
   href?: string | null;
   /**
+   * A lift goal only, while a recorded plan swap carries it on a same-pattern variant: "Carries
+   * your Pendlay Row goal since Nov 13". The row's label is then the lift now trained.
+   */
+  carried_words?: string | null;
+  /**
+   * A lift goal only: what is ahead in the journey's own terms: "Next: 3 × 5–8 at 145 lb, +1 rep",
+   * and the journey's planning range when it gives one. Null when it has neither.
+   */
+  next_words?: string | null;
+  /**
    * The strength row only, and only when the athlete holds TWO OR MORE active lift goals:
    * the first WEEK_GOAL_LIFTS_MAX of them in the board's order (most movement this month first),
    * so no lift goal is hidden behind an arbitrary pick; the count words cover exactly the lifts listed. The row itself then reads
@@ -224,10 +234,14 @@ export interface WeekReadGoalLift {
   track: WeekReadGoalTrack | null;
   /** The journey's own trend call, in the goal row's vocabulary; null when unreadable. */
   direction: WeekReadGoalDirection | null;
-  /** "Moving toward" / "Holding" / "Drifting back" / "Reached". */
+  /** "Moving toward" / "Holding" / "Drifting back" / "Reached"; "Last trained Oct 3" (direction null) with no fresh exposure. */
   direction_words: string | null;
-  /** "1.2 lb a week up"; null when flat or unreadable. */
+  /** "4 lb up since Oct 25"; "1.2 lb a week up" with no reading four weeks back; null when unreadable. */
   move_words: string | null;
+  /** "Carries your Pendlay Row goal since Nov 13"; null unless a recorded swap carries the goal. */
+  carried_words?: string | null;
+  /** "Next: 3 × 5–8 at 145 lb, +1 rep"; null when the journey holds no next step. */
+  next_words?: string | null;
 }
 
 /** The most lift goals the strength row lists. */

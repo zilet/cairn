@@ -60,7 +60,7 @@
         <span class="goalrow-tick is-start" style="--x:${n(g.start)}"></span>
         <span class="goalrow-tick is-goal" style="--x:${n(g.goal)}"></span>
         ${ring}<span class="goalrow-now" style="--x:${n(g.now)}"></span>
-      </span>${ends}`;
+      </span>${ends}${row.note ? `<small class="goalrow-note">${escHtml(row.note)}</small>` : ""}`;
   }
 
   /** The row's one words line: the direction in the stone's deep hue and its measure; else the older line. */

@@ -101,8 +101,8 @@ function strengthJourneyCardHtml(value: unknown): string {
     : "";
   return `<section class="sjourney-card reveal" aria-label="Strength comeback journey">
     <div class="sjourney-head"><span class="lbl">Anchor lift · ${escHtml(phase)}</span><span>${escHtml(gapText)}</span></div>
-    <h2>${escHtml(objective.exercise)}</h2>
-    <div class="sjourney-route"><span>${escHtml(currentText)}${currentWhen}</span><i aria-hidden="true">→</i><span>${escHtml(targetText)}</span></div>
+    <h2>${escHtml(journey.tracked?.exercise || objective.exercise)}</h2>
+    ${journey.tracked ? `<div class="sjourney-trend">Carries your ${escHtml(journey.tracked.from)} goal · swapped in ${sjourneyWhenHtml(String(journey.tracked.since))}</div>` : ""}<div class="sjourney-route"><span>${escHtml(currentText)}${currentWhen}</span><i aria-hidden="true">→</i><span>${escHtml(targetText)}</span></div>
     <div class="sjourney-trend">${escHtml(trendText)}</div>
     ${checkpoint}${supportHtml}${projection}
   </section>`;
@@ -155,7 +155,7 @@ function sjourneyAnchorRowHtml(journey: ProgressStrengthJourney): string {
         : "";
   return `<button class="sjourney-other" type="button" data-sjanchor="${escAttr(objective.exercise)}">
     <span class="sjourney-other-main">
-      <span class="sjourney-other-name">${escHtml(objective.exercise)}</span>
+      <span class="sjourney-other-name">${escHtml(journey.tracked?.exercise || objective.exercise)}</span>
       <span class="sjourney-other-state">${escHtml(sjourneyRowState(journey))} · ${escHtml(sjourneyRowTrend(journey))}</span>
     </span>
     ${route ? `<span class="sjourney-other-route">${escHtml(route)}</span>` : ""}

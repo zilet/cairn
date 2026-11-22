@@ -6,6 +6,9 @@
 // dot, the goal mark; a lift behind its start fills leftwards), and its now on the right.
 // No start/goal captions (too dense): each line carries one hidden sentence instead, so the
 // row's link reads every lift aloud (the drawn spans are hidden from assistive tech).
+// A lift may carry one quiet line under it: the measure of its move ("4 lb up since Oct 25"),
+// the goal it carries through a plan swap ("Carries your Pendlay Row goal since Nov 13") and
+// what is next ("Next: 3 × 5–8 at 145 lb").
 //
 // Deterministic strings over CairnGoalRowModel's lift rows; every word escaped, positions
 // are data-only custom properties, no colour written here (the hue is the row's stone class).
@@ -16,8 +19,9 @@
 
   /** A line's spoken sentence: the lift, its now, its goal and where it is heading, in words. */
   function liftSaid(lift: ClientGoalLift): string {
-    const parts = [lift.now, lift.goal ? `goal ${lift.goal}` : "", lift.direction_words.toLowerCase()];
-    return `${lift.label}, ${parts.filter(Boolean).join(", ")}`;
+    const dir = lift.direction_words ? `${lift.direction_words.charAt(0).toLowerCase()}${lift.direction_words.slice(1)}` : "";
+    const parts = [lift.now, lift.goal ? `goal ${lift.goal}` : "", dir, lift.direction_words ? lift.move_words : ""];
+    return `${lift.label}, ${parts.filter(Boolean).join(", ")}${lift.note ? `. ${lift.note}` : ""}`;
   }
 
   /** The thin thread: rail, fill toward now, start and goal ticks, the ring a month back, the now dot. */
@@ -38,11 +42,14 @@
     const dir = lift.direction_words
       ? `<small class="goallift-dir${lift.direction ? ` is-${escAttr(lift.direction)}` : ""}">${escHtml(lift.direction_words)}</small>`
       : "";
+    // The quiet line under the thread, full width: the measure of the move, then the note.
+    const under = [lift.direction_words ? lift.move_words : "", lift.note].filter(Boolean).join(" · ");
     return `<li class="goallift" data-goal-lift="${escAttr(lift.id)}">
       <span class="sr-only">${escHtml(liftSaid(lift))}. </span>
       <span class="goallift-name" aria-hidden="true"><span class="goallift-label">${escHtml(lift.label)}</span>${dir}</span>
       ${threadHtml(lift)}
       <span class="goallift-num num" aria-hidden="true">${escHtml(lift.now)}</span>
+      ${under ? `<small class="goallift-note" aria-hidden="true">${escHtml(under)}</small>` : ""}
     </li>`;
   }
 

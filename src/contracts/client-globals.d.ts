@@ -7421,6 +7421,8 @@ declare global {
     direction_words: string;
     /** "43 s faster in four weeks"; "" with none. */
     move_words: string;
+    /** A lift goal's carried goal and next step, joined; "" with neither. */
+    note: string;
     /** The thread's page ("/app/…"); null with none. */
     href: string | null;
     /** The strength row's lift goals (two or more), each a mini thread; empty otherwise. */
@@ -7441,6 +7443,8 @@ declare global {
     direction: string;
     direction_words: string;
     move_words: string;
+    /** The carried goal and the next step, joined; "" with neither. */
+    note: string;
   };
   /** A goal's track, one 0..1 axis; `ago` is null when it would sit on the start or is unknown. */
   type ClientGoalTrack = { start: number; now: number; goal: number; ago: number | null };

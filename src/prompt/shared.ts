@@ -983,7 +983,11 @@ export function renderStrengthJourney(ctx: any): string {
   const projection = journey.projection
     ? ` Evidence-supported planning range: ${journey.projection.earliest_weeks}-${journey.projection.latest_weeks} weeks (${journey.projection.caveat})`
     : ` Do not invent a date or timeline: ${journey.projection_withheld_reason || "the evidence gate is not met"}`;
-  return `\nSTRENGTH COMEBACK JOURNEY (athlete-selected anchor; exact exercise only): ${objective.exercise}, current ${current}, snapped target ${target}, phase ${journey.phase || "establishing"}.${nextLine}${support ? ` Support roles (max three; assistance, not extra competing main presses): ${support}.` : ""}${projection}
+  // A goal carried through a recorded plan swap: the lift now trained counts toward it.
+  const tracked = journey.tracked?.exercise
+    ? ` The plan swapped ${journey.tracked.from} for ${journey.tracked.exercise} on ${journey.tracked.since}; the goal FOLLOWS THE MOVEMENT, so ${journey.tracked.exercise} sets count toward it from that day and it is not stranded. Never tell the athlete to move or re-set this goal because of the swap.`
+    : "";
+  return `\nSTRENGTH COMEBACK JOURNEY (athlete-selected anchor; exact exercise only, except a goal carried through a recorded same-pattern swap): ${objective.exercise}, current ${current}, snapped target ${target}, phase ${journey.phase || "establishing"}.${tracked}${nextLine}${support ? ` Support roles (max three; assistance, not extra competing main presses): ${support}.` : ""}${projection}
 BOUNDARY: Recovery, active pain/injury, load constraints, and the unified daily planning posture outrank this journey. Use it to organize the anchor plus support work; never chase the target through pain, add a duplicate same-angle press, promise an outcome, or create a numeric score.\n`;
 }
 

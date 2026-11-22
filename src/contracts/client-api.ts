@@ -2590,6 +2590,8 @@ export interface ClientStrengthJourney {
     span_days: number;
   };
   phase: ClientStrengthJourneyPhase | null;
+  /** Set only while a recorded plan swap carries the goal: the lift now trained and counted. */
+  tracked?: { exercise: string; from: string; since: ISODateString | string } | null;
   next_prescription: {
     exercise: string;
     action: "overload" | "hold" | "deload" | "vary" | "introduce";

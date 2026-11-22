@@ -5,6 +5,12 @@
 // selection time, and every trend/projection reads that exact exercise (never movementKey). Barbell and dumbbell histories therefore
 // remain separate even when they train the same movement pattern.
 //
+// ONE EXCEPTION, AND IT IS RECORDED, NOT GUESSED: when the plan swapped the objective's
+// exercise for a same-pattern variant, the goal follows the movement (the carry,
+// strength-objective-carry.ts). The journey then reads the replacement's sets from the
+// swap day on, says so in `tracked`, and takes its prescription, lift state and support
+// from the lift actually trained.
+//
 // SEVERAL ANCHORS MAY BE ACTIVE AT ONCE. Rebuilding six lifts in parallel is one
 // goal, not six competing ones, so the invariant is one active row PER exercise_key
 // (schema v98) — never one active row overall. `getStrengthJourney()` still reads the
@@ -20,6 +26,7 @@ import { nextPrescription, recentAutoregulation, type Prescription } from "./pro
 import { painAreaLoadsExercise } from "./pain-relevance.js";
 import { getProgramState, type LiftState, type ProgramState } from "./program-state.js";
 import { localDateISO } from "./shared.js";
+import { strengthObjectiveCarry, type StrengthObjectiveCarry } from "./strength-objective-carry.js";
 import { round1, round5 } from "../lib/numbers.js";
 
 export type StrengthObjectiveTargetKind = "return_to_personal_best" | "explicit_est_1rm";
@@ -93,6 +100,10 @@ export interface StrengthJourney {
     stalled_or_regressing: boolean;
   };
   capacity_basis: string | null;
+  // Set only while the goal is CARRIED: the plan swapped the objective's exercise for a
+  // same-pattern variant, so `exercise` is the lift now trained and counted, `from` the
+  // objective's own, `since` the swap day. Null (or absent) while the goal reads its own lift.
+  tracked?: { exercise: string; from: string; since: string } | null;
   // Every anchor the athlete currently holds, newest first — the journey above reads
   // ONE of them (the primary), and this is the parallel set the coach context and the
   // prompt sites need so a six-anchor rebuild never reads as a single-lift goal.
@@ -235,6 +246,26 @@ export function strengthObjectiveHistory(exercise: string): StrengthExposure[] {
       top_reps: reps,
       est_1rm: epley(weight, reps),
     };
+    const current = byDate.get(point.date);
+    if (!current || point.est_1rm > current.est_1rm) byDate.set(point.date, point);
+  }
+  return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+}
+
+/**
+ * The history an objective is judged on: its own exact lift, plus — while the goal is
+ * carried through a recorded swap — the replacement's sets from the swap day onward.
+ * One point per day (the better estimate). With no carry this IS the exact-lift history.
+ */
+export function strengthObjectiveTrackedHistory(
+  objective: Pick<StrengthObjective, "exercise" | "exercise_key">,
+  carry: StrengthObjectiveCarry | null = strengthObjectiveCarry(objective)
+): StrengthExposure[] {
+  const own = strengthObjectiveHistory(objective.exercise);
+  if (!carry) return own;
+  const byDate = new Map(own.map((point) => [point.date, point]));
+  for (const point of strengthObjectiveHistory(carry.exercise)) {
+    if (point.date < carry.since) continue;
     const current = byDate.get(point.date);
     if (!current || point.est_1rm > current.est_1rm) byDate.set(point.date, point);
   }
@@ -617,7 +648,10 @@ export function getStrengthJourney(
     };
   }
 
-  const history = strengthObjectiveHistory(objective.exercise);
+  const carry = strengthObjectiveCarry(objective);
+  // The lift actually trained: the one carrying the goal, else the objective's own.
+  const trained = carry?.exercise ?? objective.exercise;
+  const history = strengthObjectiveTrackedHistory(objective, carry);
   const latestPoint = history.at(-1) ?? null;
   let currentPoint = capacityEnvelope(history);
   // Completion is a durable milestone, not a claim that every later set must be
@@ -650,10 +684,10 @@ export function getStrengthJourney(
   const direction =
     trendPerWeek == null ? null : trendPerWeek >= 0.5 ? "rising" : trendPerWeek <= -0.75 ? "falling" : "stable";
   const state = opts.programState ?? getProgramState();
-  const liftState = exactLiftState(objective.exercise, state);
+  const liftState = exactLiftState(trained, state);
   const ex = (db
     .prepare(`SELECT name, muscle_group, constraint_note FROM exercises WHERE name=? COLLATE NOCASE`)
-    .get(objective.exercise) as any) ?? { name: objective.exercise, muscle_group: null, constraint_note: null };
+    .get(trained) as any) ?? { name: trained, muscle_group: null, constraint_note: null };
   const loadConstraint = classifyConstraint(ex?.constraint_note) === "load";
   const autoreg = recentAutoregulation();
   const recentPain = autoreg.joint_pain?.trim() || null;
@@ -734,11 +768,11 @@ export function getStrengthJourney(
   const next =
     phase === "protecting" || objective.status === "completed"
       ? null
-      : nextPrescription(objective.exercise, states, { autoreg });
+      : nextPrescription(trained, states, { autoreg });
   const plannedSupport =
     loadConstraint || relevantPain || activeInjuryLabels.length
       ? []
-      : plannedSupportFor(objective.exercise, recentPain);
+      : plannedSupportFor(trained, recentPain);
   return {
     available: true,
     objective,
@@ -765,8 +799,11 @@ export function getStrengthJourney(
       stalled_or_regressing: stalledOrRegressing,
     },
     capacity_basis: currentPoint
-      ? "Best exact-lift estimated 1RM across the latest three exposures, refreshed within 28 days."
+      ? carry
+        ? `Best estimated 1RM across the latest three exposures within 28 days; ${carry.exercise} carries this goal since the plan swapped it in for ${carry.from} on ${carry.since}.`
+        : "Best exact-lift estimated 1RM across the latest three exposures, refreshed within 28 days."
       : null,
+    tracked: carry ? { exercise: carry.exercise, from: carry.from, since: carry.since } : null,
     active_objectives: activeObjectives,
   };
 }

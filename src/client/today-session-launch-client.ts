@@ -74,20 +74,22 @@ type SessionLaunchFacts = {
     const guardrails =
       !opts.dailySession && opts.preview?.constraints?.length ? opts.preview.constraints.slice(0, 2).join(" · ") : "";
     const objective = opts.strengthJourney?.available ? opts.strengthJourney.objective : null;
+    // The lift the goal rides today: the one carrying it through a plan swap, else its own.
+    const anchorName = opts.strengthJourney?.tracked?.exercise || objective?.exercise || "";
     const hasAnchor =
       !!objective?.exercise &&
       (opts.day?.items || []).some(
         (item) =>
           String(item.exercise || "")
             .trim()
-            .toLowerCase() === String(objective.exercise).trim().toLowerCase()
+            .toLowerCase() === String(anchorName).trim().toLowerCase()
       );
     const journey = hasAnchor
       ? objective?.status === "completed"
         ? "Anchor milestone rebuilt · consolidate it calmly today."
         : opts.strengthJourney?.phase === "protecting"
           ? "Anchor day · hold or ease; the relevant safety signal leads."
-          : `Anchor day · ${String(objective?.exercise ?? "")}${Number(opts.strengthJourney?.gap_lb) > 0 ? ` · ${Number(opts.strengthJourney?.gap_lb).toFixed(1)} lb estimated 1RM gap` : ""}`
+          : `Anchor day · ${String(anchorName)}${Number(opts.strengthJourney?.gap_lb) > 0 ? ` · ${Number(opts.strengthJourney?.gap_lb).toFixed(1)} lb estimated 1RM gap` : ""}`
       : "";
     // How many lifts the session holds, for the NOW card's idle bars (one per lift).
     const count = previewCount != null ? Number(previewCount) || 0 : Number(opts.exTotal) || 0;

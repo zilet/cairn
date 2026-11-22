@@ -71,7 +71,7 @@ import { localDateISO } from "../../repo/shared.js";
 import {
   capacityEnvelopeAsOf,
   getStrengthJourneys,
-  strengthObjectiveHistory,
+  strengthObjectiveTrackedHistory,
   type StrengthJourney,
 } from "../../repo/strength-objectives.js";
 import { liveStrengthJourneys, strengthNow, strengthRowId, todayPath, weightStart } from "../../repo/today-path.js";
@@ -501,7 +501,16 @@ const DIRECTION_WORDS: Record<WeekReadGoalDirection, string> = {
 
 type GoalThread = Pick<
   WeekReadGoal,
-  "id" | "start_text" | "goal_words" | "track" | "direction" | "direction_words" | "move_words" | "href"
+  | "id"
+  | "start_text"
+  | "goal_words"
+  | "track"
+  | "direction"
+  | "direction_words"
+  | "move_words"
+  | "href"
+  | "carried_words"
+  | "next_words"
 >;
 
 /**
@@ -642,10 +651,57 @@ function weightThread(
 }
 
 /**
+ * A lift's move over the track's own four weeks, in lb of estimated 1RM: the journey's
+ * weekly thresholds (rising at +0.5 lb a week, falling at -0.75, strength-objectives.ts)
+ * over AGO_DAYS. The word is read off the SAME two marks the track draws (the ring and
+ * the now dot), so a ring left of the dot can never sit under "Drifting back".
+ */
+const LIFT_TOWARD_LB = 2;
+const LIFT_BACK_LB = 3;
+
+/** "3 × 5–8 at 145 lb": a loaded reps prescription only (never assisted, bodyweight or timed). */
+function prescriptionWords(journey: StrengthJourney, units: AthleteUnits): string | null {
+  const rx = journey.next_prescription;
+  const t = rx?.suggested;
+  if (!rx || rx.mode !== "reps" || !t) return null;
+  const weight = Number(t.weight);
+  const low = Number(t.rep_low);
+  const high = Number(t.rep_high);
+  const sets = Number(t.sets);
+  if (!(weight > 0) || !(low > 0) || !(high >= low) || !(sets > 0)) return null;
+  const reps = low === high ? `${low}` : `${low}–${high}`;
+  const step = /^[+−-]/.test(String(rx.delta_text ?? "")) ? `, ${rx.delta_text}` : "";
+  return `Next: ${sets} × ${reps} at ${loadWords(weight, units.weight)}${step}`;
+}
+
+/**
+ * What is ahead for a lift goal, in the journey's own terms: the next prescription the
+ * progression engine holds for the lift now trained, and the journey's planning range
+ * when it gives one (it withholds it while the lift is flat). Null when it has neither.
+ */
+function strengthNextWords(journey: StrengthJourney | null, units: AthleteUnits): string | null {
+  if (!journey || journey.objective?.status === "completed") return null;
+  const p = journey.projection;
+  const range = p ? `the goal in about ${p.earliest_weeks} to ${p.latest_weeks} weeks at this pace` : null;
+  return [prescriptionWords(journey, units), range].filter(Boolean).join(" · ") || null;
+}
+
+/** "Carries your Pendlay Row goal since Nov 13": only while a recorded swap carries the goal. */
+function strengthCarriedWords(journey: StrengthJourney | null, today: string): string | null {
+  const tracked = journey?.tracked;
+  if (!tracked) return null;
+  const since = dateWords(tracked.since, today);
+  return `Carries your ${tracked.from} goal${since ? ` since ${since}` : ""}`;
+}
+
+/**
  * The strength row's thread over the lift's own journey: its one "now" (strengthNow),
- * its starting estimate, the same envelope four weeks back (capacityEnvelopeAsOf), and
- * the journey's own trend call (rising / stable / falling at the journey's thresholds,
- * strength-objectives.ts) — no threshold of its own.
+ * its starting estimate and the same envelope four weeks back (capacityEnvelopeAsOf).
+ * The direction is the move between those two drawn marks (LIFT_TOWARD_LB / LIFT_BACK_LB);
+ * with no reading four weeks back it is the journey's own trend call. A lift with no
+ * exposure inside the envelope's window makes no call: it says when it was last trained.
+ * History is the objective's TRACKED history, so a goal carried through a swap reads the
+ * lift now trained.
  */
 function strengthThread(
   row: TodayPath["board"][number],
@@ -659,27 +715,33 @@ function strengthThread(
   const startDate = journey?.baseline?.date ?? objective?.baseline_date ?? null;
   const goal = objective?.target_est_1rm ?? null;
   const agoDay = addDaysISO(today, -AGO_DAYS) ?? today;
-  const ago = objective ? capacityEnvelopeAsOf(strengthObjectiveHistory(objective.exercise), agoDay) : null;
+  const ago = objective ? capacityEnvelopeAsOf(strengthObjectiveTrackedHistory(objective), agoDay) : null;
+  const agoWords = ago ? dateWords(agoDay, today) : null;
   const lbWk = journey?.trend?.est_1rm_lb_per_week ?? null;
   const call = journey?.trend?.direction ?? null;
-  const direction: WeekReadGoalDirection | null = row.reached
-    ? "reached"
-    : call === "rising"
-      ? "toward"
-      : call === "falling"
-        ? "back"
-        : call === "stable"
-          ? "holding"
-          : null;
   const load = (lb: number) => weightWords(lb, units.weight, { whole: true });
+  // No exposure inside the envelope's window: `now` is the last one, however old.
+  const stale = !!journey && !journey.current && !!journey.latest;
+  let direction: WeekReadGoalDirection | null = null;
+  let words: string | null = null;
   let move: string | null = null;
-  if (lbWk != null && Number.isFinite(lbWk)) {
-    const abs = Math.abs(lbWk);
-    if (abs < 0.05) move = "level";
-    else {
-      const perWeek = `${weightWords(abs, units.weight)} a week`;
-      // Holding is the journey's call; the measure still says which way it leans.
-      move = direction === "holding" ? `${perWeek} ${lbWk > 0 ? "up" : "down"}` : perWeek;
+  if (row.reached) direction = "reached";
+  else if (stale) words = `Last trained ${dateWords(journey?.latest?.date, today)}`;
+  else if (ago && now) {
+    const delta = now.est_1rm - ago.est_1rm;
+    direction = delta >= LIFT_TOWARD_LB ? "toward" : delta <= -LIFT_BACK_LB ? "back" : "holding";
+    const abs = Math.abs(delta);
+    move = abs < 0.5 ? `level since ${agoWords}` : `${load(abs)} ${delta > 0 ? "up" : "down"} since ${agoWords}`;
+  } else {
+    direction = call === "rising" ? "toward" : call === "falling" ? "back" : call === "stable" ? "holding" : null;
+    if (lbWk != null && Number.isFinite(lbWk)) {
+      const abs = Math.abs(lbWk);
+      if (abs < 0.05) move = "level";
+      else {
+        const perWeek = `${weightWords(abs, units.weight)} a week`;
+        // Holding is the journey's call; the measure still says which way it leans.
+        move = direction === "holding" ? `${perWeek} ${lbWk > 0 ? "up" : "down"}` : perWeek;
+      }
     }
   }
   return {
@@ -689,11 +751,13 @@ function strengthThread(
         ? [load(startLb), startDate ? dateWords(startDate, today) : ""].filter(Boolean).join(" · ")
         : null,
     goal_words: goal != null ? load(goal) : null,
-    track: goalTrack(startLb, now?.est_1rm ?? null, goal, ago?.est_1rm ?? null, ago ? dateWords(agoDay, today) : null),
+    track: goalTrack(startLb, now?.est_1rm ?? null, goal, ago?.est_1rm ?? null, agoWords),
     direction,
-    direction_words: direction ? DIRECTION_WORDS[direction] : null,
+    direction_words: words ?? (direction ? DIRECTION_WORDS[direction] : null),
     move_words: move,
     href: WEEK_HREFS.program,
+    carried_words: strengthCarriedWords(journey, today),
+    next_words: strengthNextWords(journey, units),
   };
 }
 
@@ -742,6 +806,8 @@ function strengthGoalOfMany(
       direction: thread.direction ?? null,
       direction_words: thread.direction_words ?? null,
       move_words: thread.move_words ?? null,
+      carried_words: thread.carried_words ?? null,
+      next_words: thread.next_words ?? null,
     };
   });
   const count = liftCountWords(lifts.map((l) => l.direction));

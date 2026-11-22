@@ -6,6 +6,7 @@
 import { db } from "../db.js";
 import { normalizedExerciseKey } from "./exercise-canon.js";
 import { localDateISO } from "./shared.js";
+import { strengthObjectiveCarry } from "./strength-objective-carry.js";
 import { round1 } from "../lib/numbers.js";
 
 type LedgerExposure = { date: string; est_1rm: number };
@@ -46,6 +47,24 @@ function exactHistory(exerciseKey: string): LedgerExposure[] {
   return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
 }
 
+/**
+ * The history an objective is judged on (the ledger's mirror of
+ * strengthObjectiveTrackedHistory): its own exact lift, plus the sets of the lift carrying
+ * the goal from the swap day onward while a recorded swap holds it out of the plan.
+ */
+function trackedHistory(objective: { exercise: string; exercise_key: string }): LedgerExposure[] {
+  const own = exactHistory(objective.exercise_key);
+  const carry = strengthObjectiveCarry(objective);
+  if (!carry) return own;
+  const byDate = new Map(own.map((point) => [point.date, point]));
+  for (const point of exactHistory(carry.exercise_key)) {
+    if (point.date < carry.since) continue;
+    const current = byDate.get(point.date);
+    if (!current || point.est_1rm > current.est_1rm) byDate.set(point.date, point);
+  }
+  return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+}
+
 function capacityEnvelope(history: LedgerExposure[], today = localDateISO()): LedgerExposure | null {
   const fresh = history.filter((point) => dayNumber(today) - dayNumber(point.date) <= 28).slice(-3);
   return fresh.reduce<LedgerExposure | null>(
@@ -56,6 +75,7 @@ function capacityEnvelope(history: LedgerExposure[], today = localDateISO()): Le
 
 type TrackedObjective = {
   id: number;
+  exercise: string;
   exercise_key: string;
   target_kind: "return_to_personal_best" | "explicit_est_1rm";
   target_est_1rm: number;
@@ -75,12 +95,12 @@ function currentTrackedObjective(exerciseKey: string): TrackedObjective | null {
   return (
     (db
       .prepare(
-        `SELECT id, exercise_key, target_kind, target_est_1rm, baseline_est_1rm, baseline_date,
+        `SELECT id, exercise, exercise_key, target_kind, target_est_1rm, baseline_est_1rm, baseline_date,
                 status, achieved_est_1rm, achieved_date
        FROM strength_objectives
       WHERE status='active' AND exercise_key=?
       UNION ALL
-     SELECT id, exercise_key, target_kind, target_est_1rm, baseline_est_1rm, baseline_date,
+     SELECT id, exercise, exercise_key, target_kind, target_est_1rm, baseline_est_1rm, baseline_date,
             status, achieved_est_1rm, achieved_date
        FROM strength_objectives
       WHERE status='completed' AND exercise_key=? AND NOT EXISTS (
@@ -92,16 +112,38 @@ function currentTrackedObjective(exerciseKey: string): TrackedObjective | null {
   );
 }
 
+// The objective whose goal this lift CARRIES (the plan swapped the objective's own
+// exercise for it): a set on the replacement reconciles the goal it now holds. An
+// objective's own lift always wins; a completed row only when no active one shares its lift.
+function carriedObjectiveFor(exerciseKey: string): TrackedObjective | null {
+  if (!exerciseKey) return null;
+  const rows = db
+    .prepare(
+      `SELECT id, exercise, exercise_key, target_kind, target_est_1rm, baseline_est_1rm, baseline_date,
+              status, achieved_est_1rm, achieved_date
+         FROM strength_objectives WHERE status IN ('active','completed') ORDER BY id DESC`
+    )
+    .all() as TrackedObjective[];
+  const activeKeys = new Set(rows.filter((row) => row.status === "active").map((row) => row.exercise_key));
+  const seen = new Set<string>();
+  for (const row of rows) {
+    if (row.status === "completed" && (activeKeys.has(row.exercise_key) || seen.has(row.exercise_key))) continue;
+    seen.add(row.exercise_key);
+    if (strengthObjectiveCarry(row)?.exercise_key === exerciseKey) return row;
+  }
+  return null;
+}
+
 /** Reconcile the current exact-lift objective after an in-place set correction. */
 export function reconcileStrengthObjectiveFromLoggedSets(input: { exercise: string; preferred_date?: string | null }): {
   completed: boolean;
   reopened: boolean;
 } {
   const key = normalizedExerciseKey(input.exercise);
-  const objective = currentTrackedObjective(key);
+  const objective = currentTrackedObjective(key) ?? carriedObjectiveFor(key);
   if (!objective) return { completed: false, reopened: false };
 
-  const history = exactHistory(key);
+  const history = trackedHistory(objective);
   const eligible = !objective.baseline_date
     ? history
     : history.filter(
@@ -184,7 +226,8 @@ export function strengthJourneySessionMovement(sessionId: number): StrengthJourn
     )
     .all() as Array<{ exercise: string; exercise_key: string; target_est_1rm: number }>;
   for (const objective of objectives) {
-    const ids = exactExerciseIds(objective.exercise_key);
+    const carry = strengthObjectiveCarry(objective);
+    const ids = [...exactExerciseIds(objective.exercise_key), ...(carry ? exactExerciseIds(carry.exercise_key) : [])];
     if (!ids.length) continue;
     const hit = db
       .prepare(
@@ -192,7 +235,7 @@ export function strengthJourneySessionMovement(sessionId: number): StrengthJourn
       )
       .get(sessionId, ...ids);
     if (!hit) continue;
-    const history = exactHistory(objective.exercise_key);
+    const history = trackedHistory(objective);
     const current = capacityEnvelope(history, session.date);
     const before = capacityEnvelope(
       history.filter((point) => point.date !== session.date),
@@ -204,7 +247,7 @@ export function strengthJourneySessionMovement(sessionId: number): StrengthJourn
     const priorGap = Math.max(0, Number(objective.target_est_1rm) - before.est_1rm);
     const currentGap = Math.max(0, Number(objective.target_est_1rm) - current.est_1rm);
     return {
-      exercise: objective.exercise,
+      exercise: carry?.exercise ?? objective.exercise,
       current_est_1rm: current.est_1rm,
       current_date: current.date,
       capacity_delta_lb: delta,

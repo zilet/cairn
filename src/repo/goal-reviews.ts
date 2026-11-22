@@ -69,7 +69,8 @@ import { completedRaceRows, pickRaceEffort, raceLikeRuns, raceRunActivity } from
 import { demonstratedRunCapacity, preRaceRunCapacity, runningHarmOnDay, setAsideReason } from "./run-capacity.js";
 import { athleteUnits } from "./settings.js";
 import { localDateISO } from "./shared.js";
-import { strengthObjectiveHistory } from "./strength-objectives.js";
+import { strengthObjectiveTrackedHistory } from "./strength-objectives.js";
+import { normalizedExerciseKey } from "./exercise-canon.js";
 
 /** The most weeks a race build's bars reach back from race week. */
 export const RACE_BUILD_MAX_WEEKS = 16;
@@ -513,7 +514,11 @@ export function buildStrengthFacts(o: any): StrengthReviewFacts {
   const started = isoOf(o.created_at) ?? isoOf(o.baseline_date);
   let history: { date: string; top_weight: number; top_reps: number; est_1rm: number }[] = [];
   try {
-    history = strengthObjectiveHistory(String(o.exercise));
+    // The history the objective was judged on: its own lift, plus the lift carrying it.
+    history = strengthObjectiveTrackedHistory({
+      exercise: String(o.exercise),
+      exercise_key: String(o.exercise_key || normalizedExerciseKey(String(o.exercise))),
+    });
   } catch {
     history = [];
   }

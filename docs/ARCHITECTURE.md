@@ -6588,9 +6588,24 @@ planned — the one figure every surface prints), a `DayChip` per day with its p
 WORD and a relative bar height (a drawing aid, never shown), ≤2 still-open sessions, the next
 milestones beyond the week and the compact goals (the race estimate WITH its time, the weight
 trend, the lift goals). One live lift goal is its own strength row; two or more are ONE strength
-row whose `lifts` carry every lift in the board's order, each built by the same `strengthThread`
-(the journey's own trend call, no threshold of its own), the row's `move_words` counting them by
-direction. Proof (this week only): a race just run, the weight journey unless the weight goal row
+row whose `lifts` carry every lift in the board's order, each built by the same `strengthThread`,
+the row's `move_words` counting them by direction. A lift's direction word is read off the two
+marks its track draws (now against the same envelope four weeks back, `LIFT_TOWARD_LB` /
+`LIFT_BACK_LB`), so word and picture cannot disagree; with no reading four weeks back it is the
+journey's own trend call, and a lift with no exposure inside the envelope's 28 days makes no call
+("Last trained Oct 3"). Each lift may carry `next_words` (the journey's next prescription and its
+planning range) and `carried_words`.
+
+**A lift goal follows its movement through a recorded swap.** An objective is set on one exact
+exercise; when an applied proposal swapped that exercise for a same-pattern variant and the
+original is out of the plan, `strengthObjectiveCarry()` (`src/repo/strength-objective-carry.ts`)
+names the replacement as the lift carrying the goal. It is a read, never a write: the objective
+row is untouched, and bringing the original back ends the carry. While carried,
+`strengthObjectiveTrackedHistory()` adds the replacement's sets from the swap day onward, the
+journey reports `tracked {exercise, from, since}` and takes lift state, prescription and support
+from the lift trained, the ledger lets a set on the replacement complete the goal, and board and
+week rows are labelled by the lift trained. Only recorded swaps count (a plan day rewritten by hand
+carries nothing), and never across movement patterns. Proof (this week only): a race just run, the weight journey unless the weight goal row
 already draws its track, then up to two lifts whose working load rose, the anchor lift first.
 
 **One row per draw.** `labDraws()` (`src/repo/lab-draws.ts`, `GET /api/health-docs/draws`,

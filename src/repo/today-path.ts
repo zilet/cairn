@@ -573,7 +573,8 @@ function strengthRow(journey: StrengthJourney, units: AthleteUnits): TodayPathBo
   return {
     key: "strength",
     id: strengthRowId(journey) as string,
-    label: objective.exercise,
+    // The lift now trained: a goal carried through a recorded swap is named by its carrier.
+    label: journey.tracked?.exercise ?? objective.exercise,
     start_text: start != null && Math.round(start) !== Math.round(now) ? load(start) : null,
     now_text: load(now),
     goal_text: load(goal),

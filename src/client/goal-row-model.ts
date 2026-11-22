@@ -89,6 +89,11 @@
     return /^\/app\/[^\s"'<>\\]*$/.test(s) ? s : null;
   }
 
+  /** A lift goal's quiet second line: what carries the goal, then what is next. */
+  function noteOf(carried: unknown, next: unknown): string {
+    return [text(carried), text(next)].filter(Boolean).join(" · ");
+  }
+
   /** One lift of the strength row as its mini thread; null without a label or a now. */
   function liftOf(value: unknown): ClientGoalLift | null {
     const l = value && typeof value === "object" ? (value as Record<string, unknown>) : null;
@@ -107,6 +112,7 @@
       direction,
       direction_words: text(l.direction_words),
       move_words: text(l.move_words),
+      note: noteOf(l.carried_words, l.next_words),
     };
   }
 
@@ -142,6 +148,7 @@
       direction,
       direction_words: directionWords,
       move_words: text(g.move_words),
+      note: noteOf(g.carried_words, g.next_words),
       href: hrefOf(g.href),
       lifts,
     };

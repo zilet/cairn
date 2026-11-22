@@ -1576,7 +1576,7 @@ test("where you stand: a strength row with several lifts stacks one mini track p
   assert.deepEqual(
     items.map((li) => li.querySelector(".sr-only").textContent),
     [
-      "Deadlift, 285 lb, goal 405 lb, moving toward. ",
+      "Deadlift, 285 lb, goal 405 lb, moving toward, 1.2 lb a week up. ",
       "Overhead Press <b>x</b>, 95 lb, goal 135 lb, drifting back. ",
       "Front Squat, 150 lb, goal 200 lb. ",
     ]

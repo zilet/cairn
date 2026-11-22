@@ -31,7 +31,8 @@ type TodaySessionJourneyApi = {
     const exercise = String(item.exercise || "");
     const objective = journey?.available ? journey.objective : null;
     if (!objective?.exercise || !exercise) return item;
-    if (sameJourneyExercise(exercise, objective.exercise)) {
+    // A goal carried through a plan swap is anchored on the lift now trained.
+    if (sameJourneyExercise(exercise, journey?.tracked?.exercise || objective.exercise)) {
       const current = journey?.current;
       const gap = journey?.gap_lb;
       const line =

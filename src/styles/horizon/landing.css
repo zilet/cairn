@@ -65,6 +65,7 @@ a.goalrow-link:active{transform:var(--press-lg)}
 .goalrow-ends{grid-column:1 / -1;display:flex;justify-content:space-between;gap:var(--space-5);margin-top:calc(var(--space-2) * -1);
   font-family:var(--font-mono);font-size:var(--text-xs);letter-spacing:var(--tracking-wide);color:var(--muted);font-variant-numeric:tabular-nums}
 .goalrow-ends span:last-child{text-align:right}
+.goalrow-note{grid-column:1 / -1;font-size:var(--text-xs);line-height:var(--leading-snug);color:var(--muted)}
 .hwk.settle-in .goalrow-tfill{animation:goalrow-grow var(--dur-3) var(--ease) both}
 .hwk.settle-in .goalrow-now,.hwk.settle-in .goalrow-ring{animation:goalrow-settle var(--dur-2) var(--ease) both;animation-delay:var(--dur-3)}
 @keyframes goalrow-settle{from{opacity:0;transform:scale(.4)}to{opacity:1;transform:scale(1)}}
@@ -75,6 +76,7 @@ a.goalrow-link:active{transform:var(--press-lg)}
 .goallift-name{display:block;min-width:0;font-size:var(--text-sm);line-height:var(--leading-snug);color:var(--ink)}
 .goallift-label,.goallift-dir{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .goallift-dir{font-size:var(--text-xs);color:var(--muted)}
+.goallift-note{grid-column:1 / -1;margin-top:var(--space-1);font-size:var(--text-xs);line-height:var(--leading-snug);color:var(--muted)}
 .goallift-num{font-family:var(--font-mono);font-size:var(--text-sm);font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--ink)}
 .goallift-thread{position:relative;display:block;height:var(--space-8);min-width:0}
 .goallift-thread .goalrow-rail,.goallift-thread .goalrow-tfill{top:calc(50% - var(--space-1));height:var(--space-2)}
