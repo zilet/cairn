@@ -203,7 +203,7 @@ function roomWords(g: FuelGuide): string {
   const soft = fatSoft(g);
   // Fat past the day's shape but inside the published range is still fine; the day's
   // remaining room is simply better spent on carbs.
-  if (soft != null && e != null && g.low_g != null && e >= g.low_g) {
+  if (soft != null && e != null && g.low_g != null && e >= g.low_g - tolerance(g.low_g)) {
     if (e <= (g.high_g as number)) return `in range · ${FAT_ROOM_TO_CARBS}`;
     if (e <= soft + tolerance(soft)) return `inside the healthy range, which runs to ${gram(soft)} g · ${FAT_ROOM_TO_CARBS}`;
     return `past the healthy range, which runs to ${gram(soft)} g`;

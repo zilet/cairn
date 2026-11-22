@@ -753,13 +753,21 @@ export function fuelIdeas(date: string = localDateISO(), opts: FuelIdeasOptions 
   let target: ReturnType<typeof dayIntakeTarget> = null;
   try {
     target = dayIntakeTarget(goal);
-    // Ideas are sized to the DAY's number (repo/day-energy.ts), so a long-run day's
-    // dinner is offered more room and a rest day's less.
-    if (target) target = { ...target, kcal: dayEnergyTarget(date, target.kcal).kcal };
   } catch {
     target = null;
   }
-  const bound = fuelEnergyBound(band, target);
+  // Ideas are sized to the DAY's number (repo/day-energy.ts): whichever bound holds the
+  // room (the accepted target, the loss edge, the observed ceiling) is a weekly figure, so
+  // the day's planned shift moves it — a long-run day's dinner is offered more room and a
+  // rest day's less, and the week's total is unchanged.
+  const weekly = fuelEnergyBound(band, target);
+  let dayShift = 0;
+  try {
+    if (target && weekly.kcal != null) dayShift = dayEnergyTarget(date, target.kcal).shift_kcal;
+  } catch {
+    dayShift = 0;
+  }
+  const bound = weekly.kcal != null ? { ...weekly, kcal: weekly.kcal + dayShift } : weekly;
   const energyRoom = bound.kcal != null && kcalKnown ? Math.round(bound.kcal - totals.kcal) : null;
 
   // One meal's share of what is left.

@@ -155,7 +155,10 @@ export function dayEnergyTarget(date: string, averageKcal: number, opts: { today
   }
   const day = shape.days[date];
   if (!day) return flat;
-  const kcal = Math.max(ABSOLUTE_KCAL_FLOOR, average + day.shift);
+  if (!day.shift) return { ...flat, work: day.work };
+  // A moved number is said to the ten everywhere it is printed, so the meter and the
+  // sentence can never show two different figures.
+  const kcal = Math.max(ABSOLUTE_KCAL_FLOOR, Math.round((average + day.shift) / 10) * 10);
   const shift = kcal - average;
   if (!shift) return { ...flat, work: day.work };
   // A few tens of kcal either way is the same number in words.
