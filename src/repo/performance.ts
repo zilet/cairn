@@ -417,11 +417,22 @@ export function currentLiftCapacities(opts: { programState?: ProgramState } = {}
 export function buildMarkFor(exercise: string, est1rm: number): number | null {
   if (!(est1rm > 0)) return null;
   const profile = getProfile();
-  const group = (findExercise(exercise) as { muscle_group?: string | null } | null)?.muscle_group ?? null;
-  const lift = { exercise, est_1rm: est1rm, mode: "reps", muscle_group: group } as unknown as LiftState;
-  const age = profile?.age != null ? Number(profile.age) : null;
-  const next = liftCapacities([lift], currentBodyweight(profile), sexOf(profile), age)[0]?.to_next;
-  return next ? Math.round((est1rm + next.lb) / 5) * 5 : null;
+  const bodyweight = currentBodyweight(profile);
+  if (!bodyweight || bodyweight <= 0) return null;
+  const group = (findExercise(exercise) as { muscle_group?: string | null } | null)?.muscle_group ?? undefined;
+  const pattern = classifyPattern(exercise, group ?? undefined);
+  const spec = STRENGTH_SPECS.find((s) => s.pattern === pattern && benchmarkEligible(s, exercise));
+  if (!spec) return null;
+  const sex = sexOf(profile);
+  const age = Number(profile?.age) || 40;
+  const curve = STRENGTH_CURVES[spec.key];
+  const here = compareCurve(curve, est1rm / bodyweight, sex, age, REFERENCE_AGE);
+  const next = nextLevelThreshold(levelForPercentile(here.percentile));
+  const ratio = next ? ratioAtPercentile(curve, sex, age, next.pct) : null;
+  if (ratio == null) return null;
+  // The first whole 5 lb at or past the standard, and always ahead of where the lift stands.
+  const mark = Math.ceil((ratio * bodyweight) / 5) * 5;
+  return mark > est1rm ? mark : mark + 5;
 }
 
 // Benchmark patterns the athlete TRAINS but only through a non-standard variation
