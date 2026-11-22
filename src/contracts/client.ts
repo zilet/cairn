@@ -446,6 +446,11 @@ export interface ClientNutritionTarget {
   /** The accepted target's own carbs / fat grams, only when it names them. */
   carbs_g?: number;
   fat_g?: number;
+  /** On the day read: `kcal` is the DAY's number, this the accepted weekly average. */
+  average_kcal?: number;
+  day_shift_kcal?: number;
+  /** "Today's number is about 2,480 kcal: your 2,160 average plus about 320 for the long run. …" */
+  day_words?: string | null;
 }
 
 /**

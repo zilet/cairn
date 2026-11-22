@@ -21,6 +21,7 @@
 import { db } from "../db.js";
 import { CARB_BANDS, FAT_CEILING_SHARE, FAT_FLOOR_SHARE, carbBasis, dayFuelDemand } from "./fuel-demand.js";
 import type { CarbBasis, DayFuelDemand } from "./fuel-demand.js";
+import { withDayEnergy } from "./day-energy.js";
 import { fiberFloorG, FIBER_FLOOR_G } from "./fiber-floor.js";
 import { fuelGuideWhys } from "./fuel-guide-why.js";
 import type { FuelWhy } from "./fuel-guide-why.js";
@@ -80,6 +81,12 @@ export interface FuelGuide {
   landing?: { where: "inside" | "under" | "over"; by_g: number } | null;
   /** Carbs with the athlete's own number: the day-shape range said beside it. */
   day_shape?: { low_g: number; high_g: number } | null;
+  /**
+   * Fat only: the top of the published healthy range (a third of the day's energy). The
+   * guide's own `high_g` is narrower because the day's carbs take room; between the two a
+   * day reads inside the healthy range, never over.
+   */
+  soft_high_g?: number | null;
   /** Saturated fat: the day's coarse band in words when grams are unknown. */
   eaten_band?: "low" | "moderate" | "high" | null;
   /**
@@ -158,15 +165,26 @@ function roomFor(kind: FuelGuideKind, low: number | null, high: number | null, e
   return null;
 }
 
+// The log is estimates (and cooking oil and small bites are often not in it), so a line is
+// only called crossed when the day is clearly past it: by more than a tenth of the line,
+// and never by less than 2 g.
+export const LANDING_TOLERANCE_SHARE = 0.1;
+export const LANDING_TOLERANCE_MIN_G = 2;
+const tolerance = (line: number) => Math.max(LANDING_TOLERANCE_MIN_G, line * LANDING_TOLERANCE_SHARE);
+
 function landingFor(kind: FuelGuideKind, low: number | null, high: number | null, eaten: number) {
-  if (low != null && kind !== "ceiling" && eaten < low) return { where: "under" as const, by_g: low - eaten };
-  if (high != null && kind !== "floor" && eaten > high) return { where: "over" as const, by_g: eaten - high };
+  if (low != null && kind !== "ceiling" && eaten < low - tolerance(low)) return { where: "under" as const, by_g: low - eaten };
+  if (high != null && kind !== "floor" && eaten > high + tolerance(high)) return { where: "over" as const, by_g: eaten - high };
   return { where: "inside" as const, by_g: 0 };
 }
 
 // ---------- the words (finished here; the card frames them) ----------
 const gram = (n: number) => Math.round(n).toLocaleString("en-US");
 const span = (low: number, high: number) => (low === high ? gram(high) : `${gram(low)}–${gram(high)}`);
+// What is left to place is said roundly: the meals behind it are estimates.
+const round = (n: number) => (n >= 50 ? Math.round(n / 10) * 10 : n >= 15 ? Math.round(n / 5) * 5 : Math.round(n));
+const FAT_ROOM_TO_CARBS = "today's remaining room suits carbs";
+const fatSoft = (g: FuelGuide) => (g.key === "fat" && g.soft_high_g != null && g.high_g != null && g.soft_high_g > g.high_g ? g.soft_high_g : null);
 
 function guideText(g: FuelGuide): string {
   const { low_g: low, high_g: high } = g;
@@ -181,14 +199,28 @@ function guideText(g: FuelGuide): string {
 // While the day is eaten: what is left to place, never a shortfall.
 function roomWords(g: FuelGuide): string {
   const room = g.room;
-  if (!room) return g.kind === "floor" && g.eaten_g != null && g.low_g != null && g.eaten_g >= g.low_g ? "reached" : "";
-  if (g.kind === "range" && room.high_g != null) {
-    return room.low_g != null && room.low_g > 0 && room.low_g !== room.high_g
-      ? `room for about ${span(room.low_g, room.high_g)} g more`
-      : `room for up to ${gram(room.high_g)} g more`;
+  const e = g.eaten_g;
+  const soft = fatSoft(g);
+  // Fat past the day's shape but inside the published range is still fine; the day's
+  // remaining room is simply better spent on carbs.
+  if (soft != null && e != null && g.low_g != null && e >= g.low_g) {
+    if (e <= (g.high_g as number)) return `in range · ${FAT_ROOM_TO_CARBS}`;
+    if (e <= soft + tolerance(soft)) return `inside the healthy range, which runs to ${gram(soft)} g · ${FAT_ROOM_TO_CARBS}`;
+    return `past the healthy range, which runs to ${gram(soft)} g`;
   }
-  if (g.kind === "floor" && room.low_g != null) return `about ${gram(room.low_g)} g more reaches it`;
-  if (g.kind === "ceiling" && room.high_g != null) return `${gram(room.high_g)} g of room under it`;
+  if (!room) {
+    if (g.kind === "floor" && e != null && g.low_g != null && e >= g.low_g) return "reached";
+    if (g.kind === "ceiling" && e != null && g.high_g != null) return e <= g.high_g + tolerance(g.high_g) ? "about at it" : `about ${gram(round(e - g.high_g))} g past it`;
+    return "";
+  }
+  if (g.kind === "range" && room.high_g != null) {
+    return room.low_g != null && room.low_g > 0 && round(room.low_g) !== round(room.high_g)
+      ? `room for about ${span(round(room.low_g), round(room.high_g))} g more`
+      : `room for about ${gram(round(room.high_g))} g more`;
+  }
+  if (g.kind === "floor" && room.low_g != null) return `about ${gram(round(room.low_g))} g more reaches it`;
+  if (g.kind === "ceiling" && room.high_g != null)
+    return room.high_g <= tolerance(g.high_g ?? 0) ? "about at it" : `about ${gram(round(room.high_g))} g of room under it`;
   return "";
 }
 
@@ -196,9 +228,14 @@ function roomWords(g: FuelGuide): string {
 function landingWords(g: FuelGuide): string {
   const l = g.landing;
   if (!l) return "";
-  if (l.where === "inside") return g.kind === "floor" ? "reached" : "landed inside";
-  if (l.where === "under") return g.kind === "floor" ? `under the floor by ${gram(l.by_g)} g` : `${gram(l.by_g)} g under the range`;
-  return g.kind === "ceiling" ? `over by ${gram(l.by_g)} g` : `${gram(l.by_g)} g over the range`;
+  const soft = fatSoft(g);
+  if (l.where === "inside") {
+    if (soft != null && g.eaten_g != null && g.eaten_g > (g.high_g as number)) return `inside the healthy range, which runs to ${gram(soft)} g`;
+    if (g.kind === "floor") return g.eaten_g != null && g.low_g != null && g.eaten_g < g.low_g ? "about at the floor" : "reached";
+    return g.kind === "ceiling" ? "under it, or about at it" : "landed inside";
+  }
+  if (l.where === "under") return g.kind === "floor" ? `under the floor by about ${gram(round(l.by_g))} g` : `about ${gram(round(l.by_g))} g under the range`;
+  return g.kind === "ceiling" ? `over by about ${gram(round(l.by_g))} g` : `about ${gram(round(l.by_g))} g over the range`;
 }
 
 function noteFor(g: FuelGuide, state: FuelGuideDayState): string {
@@ -228,7 +265,7 @@ function placed(guide: FuelGuide, state: FuelGuideDayState): FuelGuide {
   const g: FuelGuide = {
     ...guide,
     room: e != null && state === "in_progress" ? roomFor(guide.kind, guide.low_g, guide.high_g, e) : null,
-    landing: e != null && state === "complete" ? landingFor(guide.kind, guide.low_g, guide.high_g, e) : null,
+    landing: e != null && state === "complete" ? landingFor(guide.kind, guide.low_g, fatSoft(guide) ?? guide.high_g, e) : null,
   };
   const onCard = g.key !== "saturated_fat" || g.eaten_g != null || g.lab_led;
   return { ...g, text: guideText(g), note: noteFor(g, state), track: trackFor(g), on_card: onCard };
@@ -409,6 +446,72 @@ function bandLines(week: WeekDay[], directives: any[], leans: ReturnType<typeof 
   return out;
 }
 
+// ---------- where the eaten grams came from ----------
+// The top contributors to a nutrient, from the athlete's own log, so a number can be
+// checked at a glance: "eggs 14 g, chicken kebab 15 g (a rough estimate)". Ingredient rows
+// when the meal carries them, else the meal itself; saturated fat is known per meal only.
+const SOURCE_FIELD: Partial<Record<FuelGuideKey, "carbs_g" | "fat_g" | "fiber_g">> = { carbs: "carbs_g", fat: "fat_g", fiber: "fiber_g" };
+const SOURCES_SHOWN = 3;
+const SOURCE_MIN_G = 1;
+
+function sourceName(text: unknown): string {
+  const name = String(text ?? "")
+    .replace(/\s*\([^)]*\)/g, "")
+    .trim();
+  return name.length > 36 ? `${name.slice(0, 35).trimEnd()}…` : name;
+}
+
+export function eatenSources(entries: any[], key: FuelGuideKey): string | null {
+  const rows: { name: string; grams: number; rough: boolean }[] = [];
+  const field = SOURCE_FIELD[key];
+  for (const entry of entries) {
+    const rough = entry?.confidence === "low";
+    if (key === "saturated_fat") {
+      rows.push({ name: sourceName(entry?.summary), grams: Number(entry?.nutrition_pattern?.saturated_fat_g), rough });
+      continue;
+    }
+    if (!field) return null;
+    const parts = Array.isArray(entry?.ingredients) && entry.ingredients.length ? entry.ingredients : null;
+    if (parts) for (const part of parts) rows.push({ name: sourceName(part?.item), grams: Number(part?.[field]), rough: rough || part?.confidence === "low" });
+    else rows.push({ name: sourceName(entry?.summary), grams: Number(entry?.[field]), rough });
+  }
+  // The same food logged twice (or on several days) is one source.
+  const merged = new Map<string, { name: string; grams: number; rough: boolean }>();
+  for (const r of rows) {
+    if (!r.name || !Number.isFinite(r.grams) || r.grams <= 0) continue;
+    const key = r.name.toLowerCase();
+    const seen = merged.get(key);
+    if (seen) {
+      seen.grams += r.grams;
+      seen.rough = seen.rough || r.rough;
+    } else merged.set(key, { ...r });
+  }
+  const top = [...merged.values()]
+    .filter((r) => r.grams >= SOURCE_MIN_G)
+    .sort((a, b) => b.grams - a.grams)
+    .slice(0, SOURCES_SHOWN);
+  if (!top.length) return null;
+  return `Mostly from ${top.map((r) => `${r.name} ${gram(r.grams)} g${r.rough ? " (a rough estimate)" : ""}`).join(", ")}.`;
+}
+
+// Fat is not one thing: the split of the logged fat into unsaturated and saturated grams,
+// summed only over meals that carry both. Null when no meal does.
+export function fatKinds(entries: any[]): { unsaturated_g: number; saturated_g: number; meals: number; of: number } | null {
+  let unsat = 0;
+  let sat = 0;
+  let meals = 0;
+  for (const entry of entries) {
+    const u = Number(entry?.nutrition_pattern?.unsaturated_fat_g);
+    const s = Number(entry?.nutrition_pattern?.saturated_fat_g);
+    if (entry?.nutrition_pattern?.unsaturated_fat_g == null || entry?.nutrition_pattern?.saturated_fat_g == null) continue;
+    if (!Number.isFinite(u) || !Number.isFinite(s)) continue;
+    unsat += u;
+    sat += s;
+    meals++;
+  }
+  return meals && unsat + sat > 0 ? { unsaturated_g: Math.round(unsat), saturated_g: Math.round(sat), meals, of: entries.length } : null;
+}
+
 // ---------- the day's gram guides ----------
 function guide(fields: Omit<FuelGuide, "source" | "lab_led"> & Partial<Pick<FuelGuide, "source" | "lab_led">>): FuelGuide {
   return { source: "derived", lab_led: false, ...fields };
@@ -421,7 +524,9 @@ function guide(fields: Omit<FuelGuide, "source" | "lab_led"> & Partial<Pick<Fuel
 export function dayFuelGuides(date?: string, opts: FuelGuidesOpts = {}): FuelGuides {
   const today = opts.today || localDateISO();
   const d = date || today;
-  const intake = opts.intake ?? getDayIntake(d);
+  // Read on its own, the day carries the DAY's energy number (repo/day-energy.ts); a caller
+  // that hands an intake over has already decided which number it holds.
+  const intake = opts.intake ?? withDayEnergy(getDayIntake(d), { today });
   const target = intake.target ?? null;
   const kcal = positive(target?.kcal);
   const protein = positive(target?.protein_g);
@@ -469,6 +574,7 @@ export function dayFuelGuides(date?: string, opts: FuelGuidesOpts = {}): FuelGui
       kind: high != null ? "range" : "floor",
       low_g: low,
       high_g: high,
+      soft_high_g: high,
       eaten_g: eatenOf(intake, "fat_g"),
       basis_words: !kcal
         ? "at least half a gram per kg of your weight"
@@ -505,6 +611,8 @@ export function dayFuelGuides(date?: string, opts: FuelGuidesOpts = {}): FuelGui
   if (fat && fat.source === "derived" && fat.high_g != null && kcal && protein && shapeLow != null) {
     const roomForFat = down5((kcal - protein * 4 - shapeLow * 4) / 9);
     fat = { ...fat, high_g: Math.max(fat.low_g ?? 0, Math.min(fat.high_g, roomForFat)) };
+    // A day shape with no carb floor to protect leaves the two tops equal: no soft band.
+    if (fat.soft_high_g != null && fat.high_g != null && fat.soft_high_g <= fat.high_g) fat = { ...fat, soft_high_g: null };
   }
   if (fat) guides.push(fat);
 
@@ -591,7 +699,20 @@ export function dayFuelGuides(date?: string, opts: FuelGuidesOpts = {}): FuelGui
       fiber: { per_kcal: fiberLow > FIBER_FLOOR_G, lab_led: leans.more_fiber },
       saturated_fat: kcal ? { lipid } : null,
     });
-    explained = placedGuides.map((g) => ({ ...g, why: whys[g.key as keyof typeof whys] ?? null }));
+    const entries = Array.isArray(intake.entries) ? intake.entries : [];
+    explained = placedGuides.map((g) => {
+      const why = whys[g.key as keyof typeof whys] ?? null;
+      let from = why ? eatenSources(entries, g.key) : null;
+      if (why && g.key === "fat") {
+        const kinds = fatKinds(entries);
+        const split =
+          kinds && kinds.meals === kinds.of
+            ? `About ${gram(kinds.unsaturated_g)} g of it unsaturated and ${gram(kinds.saturated_g)} g saturated.`
+            : null;
+        from = [split, from].filter(Boolean).join(" ") || null;
+      }
+      return { ...g, why: why ? { ...why, ...(from ? { from } : {}) } : null };
+    });
     if (whys.protein) explain.push({ key: "protein", label: "Protein", ...whys.protein });
     if (whys.energy) explain.push({ key: "energy", label: "Energy", ...whys.energy });
   } catch {
@@ -615,8 +736,8 @@ export function dayFuelGuides(date?: string, opts: FuelGuidesOpts = {}): FuelGui
  * the day-shape demand read and the guides, each derived once.
  */
 export function nutritionDayRead(date?: string, opts: { today?: string } = {}) {
-  const intake = getDayIntake(date);
   const today = opts.today || localDateISO();
+  const intake = withDayEnergy(getDayIntake(date), { today });
   const basis = carbBasis(intake.target, undefined, today);
   const fuel_demand = dayFuelDemand(date, { carbBasis: basis, ...(opts.today ? { today } : {}) });
   let guides: FuelGuides | null = null;

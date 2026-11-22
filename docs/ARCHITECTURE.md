@@ -1790,6 +1790,24 @@ untouched, and the offline `stub` agent is unchanged. A test that needs its own 
   `CUT_DEFICIT_MAX_KCAL` — so a gap a raise alone created never votes as strain for the next raise or
   a recovery week; and its strain needs the low days to outnumber the on-reference days (a pattern,
   not three noisy days among nine ordinary ones).
+- **The accepted calorie target is the WEEK'S AVERAGE; each day's number is prepared from the plan**
+  (`src/repo/day-energy.ts`). `dayEnergyTarget(date, average)` costs the planned work of each day of
+  the current or a future ISO week: a planned run at its planned distance on the day the agenda
+  places it (about 1 kcal per kg per km), a lifting weekday (`calendarDayRead`, about an hour at
+  3.5 MET net of rest) and a known cross-training day or a long session already logged (the demand
+  read's drivers). `DAY_SHIFT_SHARE` (half) of each day's difference from the week's mean moves,
+  never past `DAY_SHIFT_CAP_SHARE` (15% of the average) and never under the absolute floor; a
+  clamped day's remainder goes to the days with room, so the week still sums to seven averages, and
+  a week whose largest move is under `DAY_SHIFT_MIN_KCAL` is left flat. Protein never moves. A week
+  already over keeps the average (its plan is gone). PLAN-based on purpose: a watch's burned
+  calories never enter it. `withDayEnergy(intake)` lays the number over a day read (`target.kcal`
+  the day's, `target.average_kcal` the accepted number, `target.day_words` the sentence that says
+  why) for exactly the day-scoped readers: `nutritionDayRead` (REST, MCP, the Today glance, the
+  Intake card), the day's food guides and their carb fit, `fuelIdeas`' energy room and chat's
+  `day_intake`. Every weekly reader (the adaptive check-in, expenditure, under-fueling, the cut
+  floors, `nutritionProgress`, the meal plan's `daily_kcal` and its verify floors, the two-week
+  pattern's energy line) keeps reading the accepted number through `getDayIntake` /
+  `computeGoalCheck`; never lay the day's number over one of those.
 - **Carbohydrate is periodised to the day's work, inside the target** (`src/repo/fuel-demand.ts`).
   With a carb basis (canonical bodyweight + the target in force, `dayIntakeTarget`), each demand day
   carries `carbs {tier, g_per_kg, grams, basis}`: the ACSM/IOC g/kg bands (light 3–5, moderate 5–7,
@@ -1826,7 +1844,15 @@ untouched, and the offline `stub` agent is unchanged. A test that needs its own 
   energy averaged the matching side of the athlete's own number), then carbs, protein, fiber,
   saturated fat; or none. A loss pace is set beside the 0.5–1% of body weight a week the evidence
   recommends, so a pace faster than the athlete's own line but inside that range is said as fine.
-  It never moves a target. Chat reads the same words on `day_intake.guides_pattern`; the per-guide
+  A lab-led saturated-fat guide landing clearly past its ceiling on most days is said beside the
+  lever (`also`), with where it came from across the window, so it is never hidden behind another
+  lever. The log is estimates: a line is crossed only past `LANDING_TOLERANCE_SHARE` (a tenth, never
+  under 2 g), what is left to place is said roundly, every pattern carries `LOG_CAVEAT`, and the
+  energy lever says the gap is smaller if oil and small bites went unlogged. Fat is a SOFT range:
+  the day's own top is narrowed by the carb fit, `soft_high_g` is the published third of energy,
+  and between the two a day reads inside the healthy range. A guide's `why.from` names the top
+  contributors from the athlete's own log (`eatenSources`; `fatKinds` splits fat into unsaturated
+  and saturated). It never moves a target. Chat reads the same words on `day_intake.guides_pattern`; the per-guide
   explanations stay off the prompt (the lean DATA budget), so chat explains from the guide and its note.
 - **The profile goal is the destination.** A goal change moves the ACTIVE journey phase's
   `target_weight_lb`/`target_bodyfat_pct` with it (`setProfile`), and the journey card reads the

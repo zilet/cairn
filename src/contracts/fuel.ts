@@ -242,6 +242,8 @@ export interface ClientFuelGuide {
   day_shape?: { low_g: number; high_g: number } | null;
   /** Saturated fat with no grams on every meal: the day's coarse band. */
   eaten_band?: "low" | "moderate" | "high" | null;
+  /** Fat: the top of the published healthy range, wider than the day's own `high_g`. */
+  soft_high_g?: number | null;
   /** A row on the Intake card: carbs, fat and fiber always; saturated fat when its eaten side is known or a lab finding leads it. */
   on_card?: boolean;
   /** The guide in words ("around 230–250 g today", "30 g or more", "under 24 g"). */
@@ -257,6 +259,8 @@ export interface ClientFuelGuide {
   why?: ClientFuelWhy | null;
 }
 export interface ClientFuelWhy {
+  /** "Mostly from eggs 14 g, chicken kebab 15 g (a rough estimate)." */
+  from?: string;
   made_of: string;
   effect: string;
   source: string;
@@ -273,6 +277,8 @@ export interface ClientFuelPattern {
   title: string;
   lines: { key: string; label: string; words: string }[];
   lever: { key: string; words: string; why: string } | null;
+  also?: { key: string; words: string; why: string } | null;
+  caveat?: string;
 }
 export interface ClientFuelGuides {
   date: string;

@@ -37,6 +37,8 @@ import { LB_PER_KG } from "./display-words.js";
 import type { CarbTier } from "./fuel-demand.js";
 
 export interface FuelWhy {
+  /** Where the eaten grams came from, off the athlete's own log (set by fuel-guides.ts). */
+  from?: string;
   made_of: string;
   effect: string;
   source: string;
@@ -85,7 +87,7 @@ const TIER_DAY: Record<CarbTier, string> = {
 function energyWhy(i: FuelWhyInput): FuelWhy | null {
   if (!i.kcal) return null;
   const lose = i.mode === "lose";
-  const base = i.own_target ? "Your own number." : "Worked out from your weight, your activity and your goal.";
+  const base = `${i.own_target ? "Your own number is the week's average" : "The week's average is worked out from your weight, your activity and your goal"}; each day's number moves around it with the planned work, by about half of what that work costs.`;
   let pace = "";
   if (lose && i.kg) {
     const perKgUnit = i.weight_unit === "lb" ? LB_PER_KG : 1;
@@ -94,11 +96,12 @@ function energyWhy(i: FuelWhyInput): FuelWhy | null {
     pace = ` About 0.5–1% of body weight a week is the pace recommended for keeping muscle while cutting; at ${i.weight_words} that is ${low}–${high} ${i.weight_unit} a week.`;
   }
   const effect = lose
-    ? "A cut runs on the week's average, so the number is the same on a rest day and a long-run day, and the carbs move between them. Eating well under it speeds the loss and leaves less fuel for training. In the one trial that compared two paces, the slower group gained lean mass and the faster one did not."
+    ? "A cut runs on the week's average, so a long-run day can hold more and a rest day less without changing the pace of the loss. Eating well under it speeds the loss and leaves less fuel for training. In the one trial that compared two paces, the slower group gained lean mass and the faster one did not."
     : i.mode === "gain"
       ? "A small surplus is what lets training turn into muscle. A large one mostly adds fat."
       : "Eating at about what you burn gives training its full fuel and holds your weight where it is.";
-  return { made_of: base + pace, effect, source: lose ? "Garthe 2011; Helms, Aragon and Fitschen 2014." : "" };
+  const cost = "Running costs about 1 kcal per kg per km (Margaria 1963).";
+  return { made_of: base + pace, effect, source: lose ? `Garthe 2011; Helms, Aragon and Fitschen 2014. ${cost}` : cost };
 }
 
 function proteinWhy(i: FuelWhyInput): FuelWhy | null {
@@ -156,8 +159,8 @@ function fatWhy(i: FuelWhyInput): FuelWhy | null {
   return {
     made_of: made,
     effect:
-      "Fat carries vitamins A, D, E and K and is the raw material for hormones. Diets held under a fifth of energy lowered testosterone in men in a small set of trials. Above the range it mostly takes room from the carbs training uses.",
-    source: "ACSM joint position 2016; Whittaker and Wu 2021; Ruiz-Castellano 2021.",
+      "Fat is not one thing. Unsaturated fat (olive oil, avocado, nuts) and the omega-3s in oily fish are the kinds to favour: in place of saturated fat they lower LDL cholesterol. Saturated fat (butter, cheese, fatty meat, coconut) is the one with a ceiling of its own. All of it carries vitamins A, D, E and K and is raw material for hormones, and diets held under a fifth of energy lowered testosterone in men in a small set of trials.",
+    source: "ACSM joint position 2016; AHA/ACC lifestyle guideline 2013; Whittaker and Wu 2021; Ruiz-Castellano 2021.",
   };
 }
 

@@ -10,10 +10,11 @@
 //   - a line says where days landed, as information; it never counts a streak or a miss;
 //   - the lever is ONE suggestion with its reason, or none. It never moves a target.
 // Every string holds the reading grammar.
+import { withDayEnergy } from "./day-energy.js";
 import { carbBasis, fuelDemandWeek } from "./fuel-demand.js";
 import type { DayFuelDemand } from "./fuel-demand.js";
 import { LEAN_SAFE_LOSS_SHARE } from "./fuel-guide-why.js";
-import { dayFuelGuides } from "./fuel-guides.js";
+import { dayFuelGuides, eatenSources, fatKinds } from "./fuel-guides.js";
 import type { FuelGuide, FuelGuideKey } from "./fuel-guides.js";
 import { completedIntakeWindow } from "./intake-window.js";
 import { getDayIntake } from "./nutrition.js";
@@ -28,7 +29,7 @@ const PROTEIN_CLOSE_G = 10;
 /** The weight line and the trend differ by at least this much before the lever names it, lb a week. */
 const PACE_GAP_LB_WK = 0.3;
 
-export type FuelPatternKey = "energy" | "protein" | "carbs" | "fat" | "fiber" | "saturated_fat";
+export type FuelPatternKey = "energy" | "protein" | "carbs" | "fat" | "fat_quality" | "fiber" | "saturated_fat";
 
 export interface FuelPatternLine {
   key: FuelPatternKey;
@@ -45,7 +46,14 @@ export interface FuelPattern {
   lines: FuelPatternLine[];
   /** The one thing most worth a look, with its reason; null when nothing asks for a change. */
   lever: { key: FuelPatternKey; words: string; why: string } | null;
+  /** A lab-led guide landing past its line on most days, said beside the lever so it is never hidden behind it. */
+  also: { key: FuelPatternKey; words: string; why: string } | null;
+  /** The standing caveat about what a food log leaves out. */
+  caveat: string;
 }
+
+/** Said under every pattern: the log is the evidence, and it is never the whole day. */
+export const LOG_CAVEAT = "This reads what was logged. Cooking oil and small bites usually are not, so the real figures sit a little higher.";
 
 export interface FuelPatternOpts {
   directives?: any[];
@@ -126,9 +134,12 @@ export function fuelPattern(today: string, opts: FuelPatternOpts = {}): FuelPatt
   const protein: number[] = [];
   const proteinTarget: number[] = [];
   const byGuide = new Map<string, FuelGuide[]>();
+  const windowEntries: any[] = [];
   for (const date of dates) {
-    const intake = getDayIntake(date);
-    const kcal = Number(intake.target?.kcal);
+    const plain = getDayIntake(date);
+    // The guides are judged against the DAY's number, the energy line against the average.
+    const intake = withDayEnergy(plain, { today });
+    const kcal = Number(plain.target?.kcal);
     if (intake.known?.kcal && kcal > 0) {
       energy.push(Number(intake.totals.kcal));
       energyTarget.push(kcal);
@@ -147,6 +158,7 @@ export function fuelPattern(today: string, opts: FuelPatternOpts = {}): FuelPatt
       gramsOnly: true,
     });
     if (guides.day_state !== "complete") continue;
+    if (Array.isArray(intake.entries)) windowEntries.push(...intake.entries);
     for (const g of guides.guides) byGuide.set(g.key, [...(byGuide.get(g.key) ?? []), g]);
   }
 
@@ -161,8 +173,8 @@ export function fuelPattern(today: string, opts: FuelPatternOpts = {}): FuelPatt
       key: "energy",
       label: "Energy",
       words: close
-        ? `Energy averaged about ${kcalWords(eAvg)} kcal, close to your number.`
-        : `Energy averaged about ${kcalWords(eAvg)} kcal, about ${kcalWords(Math.abs(energyGap))} ${energyGap < 0 ? "under" : "over"} your number.`,
+        ? `Logged energy averaged about ${kcalWords(eAvg)} kcal, close to your weekly number.`
+        : `Logged energy averaged about ${kcalWords(eAvg)} kcal, about ${kcalWords(Math.abs(energyGap))} ${energyGap < 0 ? "under" : "over"} your weekly number.`,
     });
     if (close) energyGap = 0;
   }
@@ -176,8 +188,8 @@ export function fuelPattern(today: string, opts: FuelPatternOpts = {}): FuelPatt
       key: "protein",
       label: "Protein",
       words: close
-        ? `Protein averaged ${Math.round(pAvg)} g, about on your number.`
-        : `Protein averaged ${Math.round(pAvg)} g, ${Math.round(Math.abs(proteinGap))} ${proteinGap < 0 ? "under" : "over"} your number.`,
+        ? `Logged protein averaged ${Math.round(pAvg)} g, about on your number.`
+        : `Logged protein averaged ${Math.round(pAvg)} g, ${Math.round(Math.abs(proteinGap))} ${proteinGap < 0 ? "under" : "over"} your number.`,
     });
   }
   const landed = new Map<string, Landed>();
@@ -190,16 +202,43 @@ export function fuelPattern(today: string, opts: FuelPatternOpts = {}): FuelPatt
     if (line) lines.push(line);
   }
   if (!lines.length) return null;
+  // Which kinds of fat, across the meals that carry the split.
+  const kinds = fatKinds(windowEntries);
+  if (kinds && kinds.meals * 2 > kinds.of) {
+    const tenths = Math.round((kinds.unsaturated_g / (kinds.unsaturated_g + kinds.saturated_g)) * 10);
+    const at = lines.findIndex((l) => l.key === "fat");
+    lines.splice(at < 0 ? lines.length : at + 1, 0, {
+      key: "fat_quality",
+      label: "Kinds of fat",
+      words: `About ${tenths} of every 10 g of logged fat were unsaturated, the kind in olive oil, avocado, nuts and fish.`,
+    });
+  }
 
+  const lipidLed = (byGuide.get("saturated_fat") ?? []).some((g) => g.lab_led);
+  const lever = leverFor({ today, energyGap, proteinGap, pTarget, landed, lipidLed });
+  const sat = landed.get("saturated_fat");
+  // Where it came from across these days, so the pattern is something to act on.
+  const satFrom = eatenSources(windowEntries, "saturated_fat");
+  const satSources = satFrom ? ` Across these days: ${satFrom.charAt(0).toLowerCase()}${satFrom.slice(1)}` : "";
+  if (lever?.key === "saturated_fat") lever.why += satSources;
+  const also =
+    lipidLed && lever?.key !== "saturated_fat" && sat && sat.n >= PATTERN_MIN_DAYS && mostly(sat.over, sat.n)
+      ? { key: "saturated_fat" as const, words: SAT_OVER_WORDS, why: `${SAT_SWAP_WHY} Your lipids are why the ceiling sits lower for you.${satSources}` }
+      : null;
   return {
     since: dates[0],
     through: dates[dates.length - 1],
     complete_days: dates.length,
     title: `Your last ${dates.length} complete days`,
     lines,
-    lever: leverFor({ today, energyGap, proteinGap, pTarget, landed, lipidLed: (byGuide.get("saturated_fat") ?? []).some((g) => g.lab_led) }),
+    lever,
+    also,
+    caveat: LOG_CAVEAT,
   };
 }
+
+const SAT_OVER_WORDS = "Saturated fat has landed clearly over its ceiling on most of these days.";
+const SAT_SWAP_WHY = "Olive oil, nuts and fish in place of butter, cheese and fatty meat lowers it without changing the energy.";
 
 interface LeverInput {
   today: string;
@@ -239,7 +278,11 @@ function leverFor(i: LeverInput): FuelPattern["lever"] {
           : share <= LEAN_SAFE_LOSS_SHARE.high
             ? `That pace is ${pct}% of your weight a week, inside the 0.5–1% of body weight a week recommended for keeping muscle while cutting, so nothing is going wrong. The slower line you chose leaves more fuel for training.`
             : `That pace is ${pct}% of your weight a week, past the 0.5–1% of body weight a week recommended for keeping muscle while cutting.`;
-      return { key: "energy", words: `${paceWords} Eating closer to your own number would bring the two together.`, why: why + carbRoom };
+      return {
+        key: "energy",
+        words: `${paceWords} Eating closer to your own number would bring the two together.`,
+        why: `${why}${carbRoom} If the log misses oil and small bites, the gap is smaller than it reads.`,
+      };
     }
     if (trend.mode === "gain" && i.energyGap < 0 && rate <= needed - PACE_GAP_LB_WK) {
       return {
@@ -282,8 +325,8 @@ function leverFor(i: LeverInput): FuelPattern["lever"] {
   if (sat && sat.n >= PATTERN_MIN_DAYS && mostly(sat.over, sat.n)) {
     return {
       key: "saturated_fat",
-      words: "Saturated fat has landed over its ceiling on most of these days.",
-      why: `Olive oil, nuts and fish in place of butter, cheese and fatty meat lowers it without changing the energy.${i.lipidLed ? " Your lipids are why the ceiling sits lower for you." : ""}`,
+      words: SAT_OVER_WORDS,
+      why: `${SAT_SWAP_WHY}${i.lipidLed ? " Your lipids are why the ceiling sits lower for you." : ""}`,
     };
   }
   return null;

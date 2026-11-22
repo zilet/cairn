@@ -43,6 +43,7 @@ import { capStr, dayIntakeTarget, getDayIntake, mealPlanForCoach } from "./nutri
 import { listFuelingFeedback } from "./fueling.js";
 import { carbBasis, fuelDemandWeek } from "./fuel-demand.js";
 import { dayFuelGuides } from "./fuel-guides.js";
+import { withDayEnergy } from "./day-energy.js";
 import { bodyMetricsContextSlice } from "./body-metrics.js";
 import { getPlan } from "./plan.js";
 import {
@@ -238,7 +239,9 @@ function healthReviewForCoach() {
 }
 
 function dayIntakeForCoach(date = localDateISO()): CoachDayIntake {
-  const d: any = getDayIntake(date);
+  // The DAY's energy number (repo/day-energy.ts): `target.kcal` is today's, `average_kcal`
+  // the accepted weekly average, `day_words` why they differ.
+  const d: any = withDayEnergy(getDayIntake(date));
   const entries = (Array.isArray(d?.entries) ? d.entries : []).slice(0, 12).map((e: any) => ({
     id: e.id,
     meal: e.meal ?? null,
@@ -284,7 +287,10 @@ function dayGuidesForCoach(
         ? {
             title: read.pattern.title,
             lines: read.pattern.lines.map((l) => l.words),
-            lever: read.pattern.lever ? `${read.pattern.lever.words} ${read.pattern.lever.why}` : null,
+            lever: [read.pattern.lever, read.pattern.also]
+              .filter((x): x is NonNullable<typeof x> => !!x)
+              .map((x) => x.words)
+              .join(" ") || null,
           }
         : null,
     };

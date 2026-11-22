@@ -51,6 +51,7 @@ import type { ClientFuelEnergyBound, ClientFuelIdea, ClientFuelIdeas, ClientInta
 import { db } from "../db.js";
 import { intakeBand } from "./intake-band.js";
 import { dayIntakeCoverage, dayIntakeTarget, frequentFoodKey, frequentFoods, getDayIntake } from "./nutrition.js";
+import { dayEnergyTarget } from "./day-energy.js";
 import { nutritionRelevantDirectives } from "./nutrition-progress.js";
 import { computeGoalCheck } from "./profile.js";
 import { supplementFoodKind } from "./supplements.js";
@@ -752,6 +753,9 @@ export function fuelIdeas(date: string = localDateISO(), opts: FuelIdeasOptions 
   let target: ReturnType<typeof dayIntakeTarget> = null;
   try {
     target = dayIntakeTarget(goal);
+    // Ideas are sized to the DAY's number (repo/day-energy.ts), so a long-run day's
+    // dinner is offered more room and a rest day's less.
+    if (target) target = { ...target, kcal: dayEnergyTarget(date, target.kcal).kcal };
   } catch {
     target = null;
   }

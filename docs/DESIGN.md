@@ -1048,8 +1048,12 @@ open it). Top to bottom, as the day reads:
   their row. Under a guide's note sits "Why", a native disclosure (`.fuel-why`): what the number
   is made of, what it does for the goal, and the source, all the server's words; protein and
   energy share one under the meters. A weekly omega-3 sentence sits below (`.fuel-guide-week`).
+  Under the meters, `.fuel-today-left` says what is left of the day's number roundly ("About 900
+  kcal left for today."), and `.fuel-today-daynum` is the server's sentence on why today's number
+  differs from the weekly average. A "Why" opens with where the grams came from (`.fuel-why-from`).
   Last on the card, when there are enough complete days, is the two-week read (`.fuel-pattern`):
-  a label, the one lever and its reason, then one quiet line per nutrient. A payload with no guides
+  a label, the one lever and its reason, a second lab-led note when there is one, one quiet line
+  per nutrient, and the standing caveat about what a log leaves out (`.fuel-pattern-caveat`). A payload with no guides
   falls back to bare numbers. Nothing logged draws no meter at all: one quiet line, "Nothing
   logged yet today.", and the carbs guide in words. No percentage, no colour state, no verdict.
 - the meals logged today (`.fuel-meals`), each with the time the athlete stated (never one

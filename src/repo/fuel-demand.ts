@@ -9,7 +9,9 @@
 // is exactly where a flat target quietly underfuels the work.
 //
 // What this is NOT: it never moves a calorie target. The accepted `nutrition_targets`
-// number stays authoritative; this read only says which days carry the big work, so a
+// number stays authoritative (it is the week's average; how that average is laid across
+// the week's days is repo/day-energy.ts, a separate read that also consults this one);
+// this read only says which days carry the big work, so a
 // surface can bias CARBS toward them and a meal-plan agent can shape the week. It is a
 // suggestion, never a gate, and it is adherence-NEUTRAL by construction: it reads
 // forward-looking demand only and never grades a day that has already happened (there

@@ -2399,6 +2399,15 @@ export interface DayIntakeTarget {
    */
   carbs_g?: number;
   fat_g?: number;
+  /**
+   * Present once the DAY's energy number has been laid over the read (repo/day-energy.ts,
+   * `withDayEnergy`): `kcal` is then the day's number, `average_kcal` the accepted target
+   * (the week's average), `day_shift_kcal` their difference and `day_words` the sentence
+   * that says why. Absent on the plain read, whose `kcal` is the accepted target.
+   */
+  average_kcal?: number;
+  day_shift_kcal?: number;
+  day_words?: string | null;
 }
 
 // The day's target in force, off a goal check. Prefer the ACCEPTED target

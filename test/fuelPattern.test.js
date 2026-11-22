@@ -37,7 +37,8 @@ test("each number is explained in the athlete's own weight, with its effect and 
   assert.match(whys.carbs.made_of, /6–10 g per kg, 415–695 g at 153 lb\. Your target holds less than that while you cut, so this is the top third/);
   assert.match(whys.carbs.effect, /30–60 g an hour/);
   assert.match(whys.fat.made_of, /is 48–84 g, with a fallback minimum of half a gram per kg \(35 g at 153 lb\)/);
-  assert.match(whys.energy.made_of, /^Your own number\. .*at 153 lb that is 0\.8–1\.5 lb a week\.$/);
+  assert.match(whys.energy.made_of, /^Your own number is the week's average; each day's number moves around it.*at 153 lb that is 0\.8–1\.5 lb a week\.$/);
+  assert.match(whys.fat.effect, /^Fat is not one thing\. Unsaturated fat \(olive oil, avocado, nuts\)/);
   assert.match(whys.saturated_fat.made_of, /^6% of today's energy/);
   for (const [key, why] of Object.entries(whys)) {
     for (const part of [why.made_of, why.effect, why.source]) {
@@ -61,7 +62,7 @@ test("the explanation follows the goal and the day: no cut words outside a cut, 
   assert.match(whys.carbs.made_of, /a lighter day is 3–5 g per kg, 210–350 g at 70 kg\.$/);
   assert.match(whys.carbs.effect, /fewer carbs/);
   assert.equal(whys.saturated_fat.made_of, "A tenth of today's energy.");
-  assert.equal(whys.energy.source, "");
+  assert.doesNotMatch(whys.energy.source, /Garthe|Helms/);
   assert.equal(fuelGuideWhys(whyInput({ kcal: null, protein_g: null, carbs: null, fat: null, saturated_fat: null })).energy, undefined);
 });
 
@@ -109,13 +110,15 @@ test("complete days landing under the athlete's own number, with weight falling 
   assert.equal(pattern.complete_days, 10);
   assert.equal(pattern.title, "Your last 10 complete days");
   const line = (key) => pattern.lines.find((l) => l.key === key)?.words;
-  assert.equal(line("energy"), "Energy averaged about 1,800 kcal, about 360 under your number.");
-  assert.equal(line("protein"), "Protein averaged 170 g, about on your number.");
+  assert.equal(line("energy"), "Logged energy averaged about 1,800 kcal, about 360 under your weekly number.");
+  assert.equal(line("protein"), "Logged protein averaged 170 g, about on your number.");
+  assert.match(pattern.lever.why, /If the log misses oil and small bites, the gap is smaller than it reads\.$/);
+  assert.match(pattern.caveat, /Cooking oil and small bites/);
   assert.match(line("fiber"), /^Fiber reached its floor on 10 of 10 days\.$/);
   assert.equal(pattern.lever.key, "energy");
   assert.match(pattern.lever.words, /^Your weight is moving about 1 lb a week, and the line you set needs 0\.\d\. Eating closer to your own number/);
   assert.match(pattern.lever.why, /% of your weight a week, inside the 0\.5–1% of body weight a week/);
-  for (const words of [...pattern.lines.map((l) => l.words), pattern.lever.words, pattern.lever.why]) {
+  for (const words of [...pattern.lines.map((l) => l.words), pattern.lever.words, pattern.lever.why, pattern.caveat]) {
     assert.equal(violatesReadingGrammar(words), null, words);
     assert.doesNotMatch(words, /missed|failed|should|must|low\b/i, words);
   }
@@ -125,7 +128,7 @@ test("days landing on the number ask for no change", () => {
   cutting();
   for (let n = 1; n <= 7; n++) fullDay(ago(n), { kcal: 2150, protein: 176, carbs: 235, fat: 55, fiber: 34 });
   const pattern = fuelPattern(today());
-  assert.equal(pattern.lines.find((l) => l.key === "energy").words, "Energy averaged about 2,150 kcal, close to your number.");
+  assert.equal(pattern.lines.find((l) => l.key === "energy").words, "Logged energy averaged about 2,150 kcal, close to your weekly number.");
   assert.equal(pattern.lever, null);
 });
 

@@ -120,6 +120,18 @@
     };
   }
 
+  // Energy beside the DAY's number (the server lays it over the weekly average and says
+  // why in `day_words`), and what is left of it, rounded to ten because the meals behind
+  // it are estimates. `left` is null with nothing to set it against, or an unknown sum.
+  function energyModel(day: Partial<Day>, count: number): ClientFuelTodayModel["energy"] {
+    const m = macro(day, "kcal", count);
+    const target = record(day.target);
+    const of = positive(rounded(target.kcal));
+    const eaten = count ? m.value : 0;
+    const left = of != null && eaten != null ? Math.round((of - eaten) / 10) * 10 : null;
+    return { ...m, of, dayWords: typeof target.day_words === "string" && target.day_words ? target.day_words : null, left };
+  }
+
   /**
    * Today so far. `band` is the observed intake band read (may be null or absent);
    * `today` is the device's local ISO date.
@@ -148,7 +160,7 @@
       state: dayState(count),
       protein: { ...protein, anchor, toGo, aboutThere },
       // Energy beside the day's own number — the same target the Today glance reads.
-      energy: { ...macro(day, "kcal", count), of: positive(rounded(record(day.target).kcal)) },
+      energy: energyModel(day, count),
       carbs: macro(day, "carbs_g", count),
       fat: macro(day, "fat_g", count),
       fiber: macro(day, "fiber_g", count),

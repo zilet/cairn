@@ -176,7 +176,7 @@ function lines(win, d, today = TODAY) {
   return { demand: win.CairnFuelToday.demandHtml(model), carbs: win.CairnFuelToday.carbsHtml(model), model };
 }
 
-test("a big day gets one quiet line that shapes the day and never moves the number", () => {
+test("a big day gets one quiet line that shapes the day and carries no number of its own", () => {
   const drivers = [
     "long run on this day",
     "quality run on this day",
@@ -189,7 +189,8 @@ test("a big day gets one quiet line that shapes the day and never moves the numb
   for (const date of ["2026-04-25", "2026-04-26", "2026-04-27", "2026-04-28"]) {
     for (const driver of drivers) {
       const { demand } = lines(win, day({ date, fuel_demand: { date, demand: "big", drivers: [driver] } }), date);
-      assert.match(demand, /target|number stays as it is/i, `${driver} on ${date}`);
+      assert.match(demand, /carb/i, `${driver} on ${date}`);
+      assert.doesNotMatch(demand, /target|number stays/i, "the day's number is the server's sentence, not this line's");
       assert.doesNotMatch(demand, /\d/, "the line never carries a number of its own");
       if (driver === "long run on this day") seen.add(demand);
     }
@@ -488,4 +489,35 @@ test("the last two weeks: the lever first, then where the complete days landed; 
   assert.equal(text(host.querySelector(".fuel-pattern-lever")), pattern.lever.words);
   assert.deepEqual(host.querySelectorAll(".fuel-pattern-lines li").map(text), [pattern.lines[0].words]);
   assert.doesNotMatch(text(host.querySelector(".fuel-pattern")), /%|score|missed|failed/i);
+});
+
+test("what is left of the day's number is said roundly, with the server's sentence on why the number moved", () => {
+  const win = load();
+  const d = ownerDay();
+  d.target = { kcal: 2480, protein_g: 175, average_kcal: 2160, day_shift_kcal: 320, day_words: "Today's number is about 2,480 kcal: your 2,160 average plus about 320 for the long run. The week still averages 2,160." };
+  const host = paint(win, d, null);
+  assert.equal(text(host.querySelector(".fuel-today-left")), "About 1,690 kcal left for today.");
+  assert.equal(text(host.querySelector(".fuel-today-daynum")), d.target.day_words);
+  d.totals = { ...d.totals, kcal: 2500 };
+  assert.equal(text(paint(win, d, null).querySelector(".fuel-today-left")), "About at today's number.");
+  d.totals = { ...d.totals, kcal: 2700 };
+  assert.equal(text(paint(win, d, null).querySelector(".fuel-today-left")), "About 220 kcal past today's number.");
+});
+
+test("a guide's why leads with where the grams came from, and the pattern carries its second note and caveat", () => {
+  const win = load();
+  const read = guidesRead({
+    pattern: {
+      since: "2026-04-11", through: "2026-04-24", complete_days: 12, title: "Your last 12 complete days",
+      lines: [{ key: "energy", label: "Energy", words: "Logged energy averaged about 1,950 kcal." }],
+      lever: { key: "energy", words: "Lever.", why: "Reason." },
+      also: { key: "saturated_fat", words: "Saturated fat has landed clearly over its ceiling on most of these days.", why: "Swap." },
+      caveat: "This reads what was logged.",
+    },
+  });
+  read.guides[1].why = { from: "Mostly from eggs 14 g, chicken kebab 15 g (a rough estimate).", made_of: "m", effect: "Fat is not one thing.", source: "s" };
+  const host = paint(win, ownerDay(read), null);
+  assert.equal(text(host.querySelector(".fuel-why-from")), "Mostly from eggs 14 g, chicken kebab 15 g (a rough estimate).");
+  assert.deepEqual(host.querySelectorAll(".fuel-pattern-lever").map(text), ["Lever.", "Saturated fat has landed clearly over its ceiling on most of these days."]);
+  assert.equal(text(host.querySelector(".fuel-pattern-caveat")), "This reads what was logged.");
 });

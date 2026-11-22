@@ -10,39 +10,39 @@
   type Model = ClientFuelTodayModel;
 
   // ---------- the big-day fuel line ----------
-  // A flat target lands the same on a long-run day and a rest day. When the server's
-  // read (repo/fuel-demand.ts) says today carries the week's bigger work, the card
-  // says ONE quiet sentence about shape. BIG DAYS ONLY, and only the day read itself (the model drops
-  // a read dated another day), and the number never moves. Rotates per date.
+  // When the server's read (repo/fuel-demand.ts) says today carries the week's bigger
+  // work, the card says ONE quiet sentence about shape. BIG DAYS ONLY, and only the day
+  // read itself (the model drops a read dated another day). The day's NUMBER and why it
+  // moved is a separate sentence, the server's (`dayNumberHtml`). Rotates per date.
   const DEMAND_LONG_RUN = [
-    "Today carries the long run — carbs earn their place around it. The target itself stays where it is.",
-    "The long run is today's big piece; carb-forward around it tends to sit well. Same target, different shape.",
-    "Long run today — a good day for carbs to lead, with the daily target unchanged.",
-    "Today's long run is the work that asks for fuel; carbs around it, and the number stays as it is.",
+    "Today carries the long run, so carbs earn their place around it.",
+    "The long run is today's big piece; carb-forward around it tends to sit well.",
+    "Long run today, a good day for carbs to lead.",
+    "Today's long run is the work that asks for fuel; carbs around it.",
   ];
   const DEMAND_QUALITY_RUN = [
-    "There's quality running in today — carbs around it tend to make it feel better. The target itself doesn't move.",
-    "Today's fast work asks a little more of fuel; carb-forward around it, same daily target.",
-    "Quality run today — a good day for carbs to lead, with the target unchanged.",
-    "Hard running lands today; carbs around it is the natural shape, and the number stays as it is.",
+    "There's quality running in today; carbs around it tend to make it feel better.",
+    "Today's fast work asks a little more of fuel; carb-forward around it.",
+    "Quality run today, a good day for carbs to lead.",
+    "Hard running lands today; carbs around it is the natural shape.",
   ];
   const DEMAND_HEAVY_LOWER = [
-    "Heavy lower work today — carbs around it are the easy win. The target stays where it is.",
-    "Today leans heavy through the legs; carb-forward around the session, same daily target.",
-    "Legs carry today's load — a good day for carbs to lead, with the target unchanged.",
-    "Today's the heavier leg day; carbs around it, and the number stays as it is.",
+    "Heavy lower work today; carbs around it are the easy win.",
+    "Today leans heavy through the legs; carb-forward around the session.",
+    "Legs carry today's load, a good day for carbs to lead.",
+    "Today's the heavier leg day; carbs around it.",
   ];
   const DEMAND_DOUBLE = [
-    "Lifting and running both land today — carbs around them, with the target unchanged.",
-    "Today's a double; carb-forward around both pieces, same daily target.",
-    "Two sessions share today — a good day for carbs to lead. The target stays where it is.",
-    "Strength and a run in one day; carbs around the work, and the number stays as it is.",
+    "Lifting and running both land today; carbs around them.",
+    "Today's a double; carb-forward around both pieces.",
+    "Two sessions share today, a good day for carbs to lead.",
+    "Strength and a run in one day; carbs around the work.",
   ];
   const DEMAND_GENERIC = [
-    "Today carries more work than an ordinary day — a good day for carbs to lead, with the target unchanged.",
-    "Bigger day than usual; carb-forward around the work, same daily target.",
-    "There's real work in today — carbs around it. The target stays where it is.",
-    "Today asks a bit more of fuel; carbs toward the work, and the number stays as it is.",
+    "Today carries more work than an ordinary day, a good day for carbs to lead.",
+    "Bigger day than usual; carb-forward around the work.",
+    "There's real work in today; carbs around it.",
+    "Today asks a bit more of fuel; carbs toward the work.",
   ];
 
   function demandVariants(drivers: string[]): string[] {
@@ -130,16 +130,37 @@
   // "Why": a native disclosure under a number. What the number is made of (in the
   // athlete's own weight), what the nutrient does for the goal in force, and the published
   // basis by name. The server finished every word (repo/fuel-guide-why.ts).
-  type Why = { label?: string; made_of: string; effect: string; source: string };
+  type Why = { label?: string; from?: string; made_of: string; effect: string; source: string };
   function whyHtml(summary: string, items: Why[]): string {
     const body = items
       .map((w) => {
         const label = w.label ? `<p class="fuel-why-k">${escHtml(w.label)}</p>` : "";
         const source = w.source ? `<p class="fuel-why-src">${escHtml(w.source)}</p>` : "";
-        return `${label}<p>${escHtml(w.made_of)}</p><p>${escHtml(w.effect)}</p>${source}`;
+        const from = w.from ? `<p class="fuel-why-from">${escHtml(w.from)}</p>` : "";
+        return `${label}${from}<p>${escHtml(w.made_of)}</p><p>${escHtml(w.effect)}</p>${source}`;
       })
       .join("");
     return `<details class="fuel-why"><summary>${escHtml(summary)}</summary><div class="fuel-why-body">${body}</div></details>`;
+  }
+
+  // What is left of the day's number, said roundly: the dinner budget. Never a shortfall
+  // and never a verdict; past the number it says so in the same plain way.
+  const ABOUT_AT_KCAL = 50;
+  function leftHtml(m: Model): string {
+    const left = m.energy.left;
+    if (left == null) return "";
+    const words =
+      left > ABOUT_AT_KCAL
+        ? `About ${grouped(left)} kcal left for today.`
+        : left >= -ABOUT_AT_KCAL
+          ? "About at today's number."
+          : `About ${grouped(-left)} kcal past today's number.`;
+    return `<p class="fuel-today-left">${escHtml(words)}</p>`;
+  }
+
+  // The day's number and why it differs from the weekly average, in the server's words.
+  function dayNumberHtml(m: Model): string {
+    return m.energy.dayWords ? `<p class="fuel-today-line fuel-today-daynum">${escHtml(m.energy.dayWords)}</p>` : "";
   }
 
   function explainHtml(m: Model): string {
@@ -153,11 +174,11 @@
   function patternHtml(m: Model): string {
     const p = m.guides?.pattern;
     if (!p) return "";
-    const lever = p.lever
-      ? `<p class="fuel-pattern-lever">${escHtml(p.lever.words)}</p><p class="fuel-pattern-why">${escHtml(p.lever.why)}</p>`
-      : "";
+    const said = (x: { words: string; why: string } | null | undefined) =>
+      x ? `<p class="fuel-pattern-lever">${escHtml(x.words)}</p><p class="fuel-pattern-why">${escHtml(x.why)}</p>` : "";
     const lines = p.lines.map((l) => `<li>${escHtml(l.words)}</li>`).join("");
-    return `<div class="fuel-pattern"><h3 class="lbl fuel-pattern-title">${escHtml(p.title)}</h3>${lever}<ul class="fuel-pattern-lines">${lines}</ul></div>`;
+    const caveat = p.caveat ? `<p class="fuel-pattern-caveat">${escHtml(p.caveat)}</p>` : "";
+    return `<div class="fuel-pattern"><h3 class="lbl fuel-pattern-title">${escHtml(p.title)}</h3>${said(p.lever)}${said(p.also)}<ul class="fuel-pattern-lines">${lines}</ul>${caveat}</div>`;
   }
 
   function guidesHtml(m: Model, countUp = false): string {
@@ -189,7 +210,7 @@
       return `<section class="fuel-today reveal" style="--i:0" aria-labelledby="fuelTodayTitle">
         ${headHtml(m)}
         <p class="fuel-today-empty">${escHtml(EMPTY_LINE)}</p>
-        ${demandHtml(m)}${carbsHtml(m)}${patternHtml(m)}
+        ${leftHtml(m)}${dayNumberHtml(m)}${demandHtml(m)}${carbsHtml(m)}${patternHtml(m)}
       </section>`;
     }
     const pending =
@@ -210,7 +231,7 @@
         ${meterHtml("Protein", m.protein.value, m.protein.anchor, "g", countUp)}
         ${meterHtml("Energy", m.energy.value, m.energy.of, "kcal", countUp)}
       </dl>
-      ${toGo}${explainHtml(m)}${guidesHtml(m, countUp)}
+      ${leftHtml(m)}${toGo}${dayNumberHtml(m)}${explainHtml(m)}${guidesHtml(m, countUp)}
       ${pending}${band}${demandHtml(m)}${patternHtml(m)}
     </section>`;
   }

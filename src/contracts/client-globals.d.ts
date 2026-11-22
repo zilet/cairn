@@ -6466,7 +6466,7 @@ declare global {
     state: ClientFuelDayState;
     protein: ClientFuelMacro & { anchor: number | null; toGo: number | null; aboutThere: boolean };
     /** `of`: the day's own energy number (the target the Today glance reads), when there is one. */
-    energy: ClientFuelMacro & { of: number | null };
+    energy: ClientFuelMacro & { of: number | null; dayWords: string | null; left: number | null };
     carbs: ClientFuelMacro;
     fat: ClientFuelMacro;
     fiber: ClientFuelMacro;

@@ -4113,6 +4113,11 @@ to{background:transparent}
 .fuel-why-body p{margin:0 0 var(--space-3);color:var(--ink2)}
 .fuel-why-body .fuel-why-k{margin-top:var(--space-4);font-weight:var(--weight-semibold);color:var(--ink)}
 .fuel-why-body .fuel-why-src{color:var(--muted)}
+.fuel-why-body .fuel-why-from{color:var(--ink)}
+.fuel-today-left{margin:var(--space-4) 0 0;font-size:var(--text-md);color:var(--ink);font-weight:var(--weight-semibold);line-height:var(--leading)}
+.fuel-today-daynum{margin-top:var(--space-2);font-size:var(--text-xs);color:var(--muted)}
+.fuel-pattern-why + .fuel-pattern-lever{margin-top:var(--space-5)}
+.fuel-pattern-caveat{margin:var(--space-4) 0 0;font-size:var(--text-xs);color:var(--muted);line-height:var(--leading-normal)}
 .fuel-today-meters + .fuel-why,.fuel-today-togo + .fuel-why{margin-top:var(--space-3)}
 .fuel-pattern{margin:var(--space-6) 0 0;padding-top:var(--space-5);border-top:1px solid var(--line)}
 .fuel-pattern-title{margin:0 0 var(--space-4)}

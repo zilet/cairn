@@ -203,14 +203,14 @@ test("the words arrive finished: the guide, then what is left to place, then the
   const words = Object.fromEntries(read.guides.filter((g) => g.text).map((g) => [g.key, [g.text, g.note]]));
   assert.deepEqual(words.carbs, [
     "around 230–250 g today",
-    "room for about 167–187 g more · for today's endurance work, inside your target",
+    "room for about 170–190 g more · for today's endurance work, inside your target",
   ]);
-  assert.deepEqual(words.fat, ["50–60 g", "room for about 17–27 g more · a fifth to a third of today's energy"]);
+  assert.deepEqual(words.fat, ["50–60 g", "room for about 15–25 g more · a fifth to a third of today's energy"]);
   assert.deepEqual(words.fiber, [
     "30 g or more",
     "about 20 g more reaches it · the everyday floor for long-term health; your lipids ask for more of it, oats and beans especially",
   ]);
-  assert.deepEqual(words.saturated_fat, ["under 14 g", "5 g of room under it · kept lower, as your lipids ask"]);
+  assert.deepEqual(words.saturated_fat, ["under 14 g", "about 5 g of room under it · kept lower, as your lipids ask"]);
   for (const g of read.guides) {
     if (g.kind === "weekly") continue;
     assert.doesNotMatch(`${g.text} ${g.note}`, /%|\blow\b|short|behind|missed|must|should/i, g.key);
@@ -221,7 +221,7 @@ test("the words arrive finished: the guide, then what is left to place, then the
     intake: { target: { kcal: KCAL, protein_g: PROTEIN, mode: "lose", source: "accepted", carbs_g: 200 } },
   });
   assert.equal(byKey(own, "carbs").text, "around 200 g, your number");
-  assert.match(byKey(own, "carbs").note, /^room for up to 137 g more · today's work suits 230–250 g · your own number$/);
+  assert.match(byKey(own, "carbs").note, /^room for about 140 g more · today's work suits 230–250 g · your own number$/);
 });
 
 // ---------- against the database ----------
@@ -251,7 +251,7 @@ test("a partial closed day says nothing about landing; a complete one says where
   const complete = dbGuides(ago(3));
   assert.equal(complete.day_state, "complete");
   assert.deepEqual(byKey(complete, "fiber").landing, { where: "under", by_g: 8 });
-  assert.match(byKey(complete, "fiber").note, /^under the floor by 8 g · /);
+  assert.match(byKey(complete, "fiber").note, /^under the floor by about 8 g · /);
 });
 
 test("the weekly omega-3 line counts days with a source, against two a week", () => {

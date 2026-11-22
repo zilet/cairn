@@ -1212,6 +1212,11 @@ export function renderTodayFuel(ctx: any): string {
   ];
 
   const rem = intake.remaining || null;
+  // The day read's target is the DAY's number (repo/day-energy.ts); say so once, so the
+  // model never reads it as a changed target.
+  const dayNumber = intake.target?.day_words ? String(intake.target.day_words) : "";
+  if (dayNumber)
+    lines.push(`- TODAY'S NUMBER: ${dayNumber} "Remaining" below is against today's number; the accepted target is the weekly average and has not changed.`);
   if (intake.target && rem) {
     const remBits: string[] = [];
     const kcal = num(rem.kcal);
