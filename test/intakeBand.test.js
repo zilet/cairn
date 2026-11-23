@@ -134,9 +134,10 @@ test("REST and MCP serve the same read, and every fuel prompt site carries it", 
   assert.equal(rest.status, "ok");
 
   const ctx = { intake_band: rest, day_intake: { entries: [] } };
-  for (const site of ["chat", "meal_plan"]) {
-    assert.deepEqual(projectCoachContext(ctx, site).intake_band, rest, `${site} carries intake_band`);
-  }
+  assert.deepEqual(projectCoachContext(ctx, "chat").intake_band, rest, "chat carries intake_band");
+  // The meal plan carries the band's answer without the per-week rows it was pooled from.
+  const { weeks: _weeks, ...answer } = rest;
+  assert.deepEqual(projectCoachContext(ctx, "meal_plan").intake_band, answer, "meal_plan carries intake_band");
 });
 
 // Deterministic noise: a seeded PRNG and a Box-Muller normal, so a noisy scale is

@@ -4124,6 +4124,18 @@ budget mostly because of one large non-array block, that block is shed (named in
 rows are trimmed (`finalizeCoachRead`). The week's runs ride as the
 RECENT RUNS & CARDIO prose block, so `recent_cardio` is not repeated inside the core's DATA.
 
+**The weekly meal plan is a dietitian's brief (`meal_plan`).** It carries the targets and pace, body
+size, the week's layout (`dated_week`, added by `buildMealPlanPrompt`, plus `fuel_demand`, the stated
+schedules and the race), what the athlete eats (today's food with the guides and the two-week pattern,
+the current plan, fueling feedback, planning memory), every allergy/diet/household source, the health
+reads with a food lever (records, review, synthesis, supplements, the directives minus training rows
+and wearable recovery context, the focus without its training moves), the underfueling and
+energy-deficiency reads, life context and recovery's recent-vs-baseline. Set logs, lift reads,
+readiness detail and the run engine's working are not carried; signal state, the conductor, the
+trajectory and body measurements reach it as rendered prose. Per-key cuts are `compactMealPlanKey`.
+`test/promptContextProjection.test.js` pins the key set and a byte ceiling (~31 KB on the demo seed,
+from ~121 KB).
+
 **Adding a prompt:** add a site to `PROMPT_CONTEXT_SITES`, point its `DATA:` block at
 `promptData(ctx, "<site>")`, and extend `test/promptContextProjection.test.js`. Never go back to a
 raw `JSON.stringify(ctx)`, and never trim by slicing a serialized string — that hands the agent
@@ -5084,9 +5096,16 @@ conflated with "clean"); and no badge at all when `verified` is `null` (nothing 
 
 `meal_plan_verify` gets its own `PROMPT_CONTEXT_SITES` entry (`src/prompt/context-projection.ts`):
 since the arithmetic is gone from the prompt, the site carries only what the judgement half needs —
-`PERSON` + `HEALTH_CORE` for allergies/dietary declarations/context events/directives — and drops
-the whole training/endurance/fuel key set and `recent_sessions`, since the pass re-judges no
-programming and re-derives no target.
+the declaration sources (profile, family, memory, learnings, context events) plus directives, the
+health focus and supplements, compacted as at `meal_plan` — and drops the targets, the training/
+endurance/fuel key set and `recent_sessions`, since the pass re-judges no programming and re-derives
+no target.
+
+**A new day split is not a rotation.** `mealPlanRefreshShape` (`src/repo/meal-plan-refresh.ts`) reads
+a refresh as routine only when the weekly targets, the shape of the eating day AND each day's own
+number hold: a day whose number (the stored split's, else `daily_kcal`) sits more than 50 kcal off
+the current plan's same weekday (by position when the days carry no weekday labels) makes the draft
+structural even with `daily_kcal` unchanged.
 
 **Plan drafts go through the same pass** (`verifyPlanDraftVolume`, `src/coachOps/training.ts`, for
 `draftCoachProposal` and `evolveProgram` — so every redraw). `planDraftFloorPrecheck` measures the

@@ -20,9 +20,10 @@
 import { getAppState } from "./app-state.js";
 import { TODAY_LAST_SEEN_KEY } from "./since-last.js";
 import { finite as num } from "../lib/numbers.js";
+import { mealPlanDayKcalTargets, weekdayKeyOfLabel } from "./meal-plan-day-energy.js";
 
 export interface MealRefreshShape {
-  /** True only when the week's targets AND its structure are unchanged. */
+  /** True only when the week's targets (each day's own number included) AND its structure are unchanged. */
   bounded: boolean;
   /** MACHINE register: what made it structural. Empty when bounded. */
   reasons: string[];
@@ -34,9 +35,41 @@ export interface MealRefreshShape {
 // make every refresh structural and this module pointless.
 const SAME_KCAL_TOLERANCE = 40;
 const SAME_PROTEIN_TOLERANCE = 8;
+// The same question for ONE day's own number (the server's per-day split,
+// meal-plan-day-energy.ts). The split is said in coarse steps, so a day within this of
+// the last plan's same day is the same day; past it, the athlete's long-run day (or
+// lighter day) now eats differently, which is news even when the weekly average holds.
+const SAME_DAY_KCAL_TOLERANCE = 50;
 
 function days(parsed: any): any[] {
   return Array.isArray(parsed?.days) ? parsed.days : [];
+}
+
+// Each day's own number: the stored split's for a moved day, else the plan's weekly
+// average. Keyed by weekday when every day carries a weekday label (two weeks are
+// compared Monday to Monday, whatever order they list their days in), else by position.
+function dayKcalMap(parsed: any, byWeekday: boolean): Map<string, number> {
+  const out = new Map<string, number>();
+  const average = num(parsed?.daily_kcal);
+  const targets = mealPlanDayKcalTargets(parsed);
+  days(parsed).forEach((day, i) => {
+    const kcal = targets[i] ?? average;
+    if (kcal == null) return;
+    out.set(byWeekday ? String(weekdayKeyOfLabel(day?.day)) : `#${i}`, kcal);
+  });
+  return out;
+}
+
+function daySplitMoved(next: any, current: any): boolean {
+  const labelled = (parsed: any) => days(parsed).every((day) => weekdayKeyOfLabel(day?.day) != null);
+  const byWeekday = labelled(next) && labelled(current);
+  const a = dayKcalMap(next, byWeekday);
+  const b = dayKcalMap(current, byWeekday);
+  for (const [key, kcal] of a) {
+    const other = b.get(key);
+    if (other != null && Math.abs(kcal - other) > SAME_DAY_KCAL_TOLERANCE) return true;
+  }
+  return false;
 }
 
 /**
@@ -63,6 +96,9 @@ export function mealPlanRefreshShape(next: any, current: any): MealRefreshShape 
   const currentProtein = num(current?.daily_protein_g);
   if (nextProtein != null && currentProtein != null && Math.abs(nextProtein - currentProtein) > SAME_PROTEIN_TOLERANCE)
     reasons.push("the daily protein target moved");
+
+  // Only worth asking when the headline held: a moved weekly target already says it.
+  if (!reasons.length && daySplitMoved(next, current)) reasons.push("a day's own calorie number moved");
 
   if (nextDays.length !== currentDays.length) reasons.push("the week has a different number of days");
   else {
