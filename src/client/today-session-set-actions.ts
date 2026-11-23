@@ -8,6 +8,8 @@ type TodaySessionSetActionsApi = {
   captureExDrafts(root: ParentNode | null | undefined): ClientTodayExDraftSnapshot | null;
   restoreExDrafts(root: ParentNode | null | undefined, snapshot: ClientTodayExDraftSnapshot | null): void;
   reprojectPendingSets(deps: ClientTodaySessionControllerDeps): void;
+  reattachSavedSets(deps: ClientTodaySessionControllerDeps): void;
+  markRepeats(deps: ClientTodaySessionControllerDeps, session: unknown): void;
 };
 
 (() => {
@@ -58,10 +60,12 @@ type TodaySessionSetActionsApi = {
     bumpProgress(card);
     refreshFinishStat(deps);
     CairnTodaySessionSetModel.invalidateSetTruth(deps);
+    const held = CairnSessionSetLedger.forget(id); // a repaint mid-delete must not put it back
     try {
       const result = CairnTodaySessionSetModel.responseRecord(await deps.api(`/sets/${id}`, { method: "DELETE" }));
       if (result.error) throw new Error(String(result.error));
     } catch {
+      if (held) CairnSessionSetLedger.remember(held, { seen: held.seen });
       if (parent) {
         if (anchor && anchor.parentElement === parent) parent.insertBefore(chip, anchor);
         else parent.appendChild(chip);
@@ -231,197 +235,94 @@ type TodaySessionSetActionsApi = {
     }
   }
 
-  type OutboxSetItem = {
-    id?: string;
-    kind?: string;
-    session_date?: unknown;
-    body?: unknown;
-    state?: "pending" | "sending" | "prepared" | "needs_attention";
-  };
-
-  // claimNext / drain replay rows with no `state` (the queued default after
-  // enqueue and after settle("pending")), explicit `pending`, and `sending`.
-  // `needs_attention` stays in the review sheet; `prepared` is a prepare barrier.
-  function outboxSetWillReplay(item: OutboxSetItem): boolean {
-    const state = item.state;
-    return state == null || state === "pending" || state === "sending";
-  }
-
-  function setBodyRecord(body: unknown): Record<string, unknown> {
-    return body && typeof body === "object" ? body as Record<string, unknown> : {};
-  }
-
-  function cardForQueuedSet(
-    cards: HTMLElement[],
-    body: Record<string, unknown>,
-  ): HTMLElement | undefined {
-    const exercise = String(body.exercise || "").toLowerCase();
-    if (!exercise) return undefined;
-    const matches = cards.filter((el) => (el.dataset.card || "").toLowerCase() === exercise);
-    if (!matches.length) return undefined;
-    // Peak-day duplicate names share data-card; queued sets for a lift rendered twice land on the first card.
-    return matches[0];
-  }
-
-  function undeliveredSetItems(date: string): OutboxSetItem[] {
-    const runtime = globalThis as { CairnOutbox?: { list?: () => OutboxSetItem[] } };
-    const items = typeof runtime.CairnOutbox?.list === "function" ? runtime.CairnOutbox.list() : [];
-    return items.filter((item) => {
-      if (item.kind !== "set" || !outboxSetWillReplay(item)) return false;
-      const body = setBodyRecord(item.body);
-      return String(item.session_date || body.date || "") === date;
-    });
-  }
-
   // A full innerHTML swap drops any chip that only existed on the card. Queued
   // writes still live in the outbox, so after the new markup is wired we put
   // those sets back as data-pending chips — the same shape appendPendingChip
-  // painted on the original tap.
+  // painted on the original tap. (An off-plan lift keeps its card for them through
+  // CairnSessionSetLedger.merge, run on the read the surface was built from.)
   function reprojectPendingSets(deps: ClientTodaySessionControllerDeps): void {
-    const items = undeliveredSetItems(deps.state.logDate);
+    const ledger = CairnSessionSetLedger;
+    const items = ledger.undeliveredSets(deps.state.logDate);
     if (!items.length) return;
     const cards = [...deps.root.querySelectorAll<HTMLElement>(".ex[data-card]")];
+    const cardOf = (item: { body?: unknown }) => ledger.cardFor(cards, ledger.bodyOf(item.body).exercise);
     for (const item of items) {
-      const body = setBodyRecord(item.body);
-      const card = cardForQueuedSet(cards, body);
+      const card = cardOf(item);
       if (!card) continue;
       const pendingCount = card.querySelectorAll("[data-pending]").length;
-      const queuedForCard = items.filter((candidate) => cardForQueuedSet(cards, setBodyRecord(candidate.body)) === card).length;
-      if (pendingCount >= queuedForCard) continue;
+      if (pendingCount >= items.filter((candidate) => cardOf(candidate) === card).length) continue;
       const mutationId = item.id == null ? "" : String(item.id);
-      appendPendingChip(card, body, deps, mutationId || undefined);
+      appendPendingChip(card, ledger.bodyOf(item.body), deps, mutationId || undefined);
     }
     refreshFinishStat(deps, { repaint: false });
   }
 
-  type TimedStopwatch = {
-    pause(): void;
-    reset(): void;
-  };
-
-  const activeTimedStopwatchBySurface = new WeakMap<HTMLElement, TimedStopwatch>();
-
-  // Keep the source of truth as a clock anchor, rather than incrementing a
-  // counter. Browsers throttle background timers, but Date.now() still gives the
-  // right whole-second elapsed time when the row wakes up again.
-  function wireTimedStopwatch(row: HTMLElement, deps: ClientTodaySessionControllerDeps): TimedStopwatch | null {
-    if (row.dataset.mode !== "timed") return null;
-    const duration = row.querySelector<HTMLInputElement>(".in-dur");
-    const button = row.querySelector<HTMLButtonElement>(".timerbtn");
-    if (!duration || !button) return null;
-    const durationEl = duration;
-    const timerButton = button;
-
-    let elapsedMs = 0;
-    let startedAt: number | null = null;
-    let interval: ReturnType<typeof setInterval> | null = null;
-    let stopwatch: TimedStopwatch;
-
-    function clearTick(): void {
-      if (interval != null) clearInterval(interval);
-      interval = null;
-    }
-
-    function render(state: "idle" | "running" | "paused"): void {
-      timerButton.dataset.stopwatchState = state;
-      timerButton.textContent = state === "running" ? "Stop" : state === "paused" ? "Resume" : "Start";
-      const exercise = decodeURIComponent(row.dataset.ex || "exercise");
-      timerButton.ariaLabel = state === "running"
-        ? `Stop ${exercise} stopwatch`
-        : state === "paused"
-          ? `Resume ${exercise} stopwatch`
-          : `Start ${exercise} stopwatch`;
-      timerButton.ariaPressed = state === "running" ? "true" : "false";
-    }
-
-    function elapsedNowMs(): number {
-      return elapsedMs + (startedAt == null ? 0 : Math.max(0, Date.now() - startedAt));
-    }
-
-    function renderDuration(): void {
-      const formatted = deps.fmtDur(Math.floor(elapsedNowMs() / 1000));
-      if (durationEl.value === formatted) return;
-      durationEl.value = formatted;
-      durationEl.dispatchEvent(new Event("input", { bubbles: true }));
-    }
-
-    function sync(): void {
-      if (startedAt == null) return;
-      renderDuration();
-    }
-
-    function rowDetached(): boolean {
-      // The parent check keeps the small test DOM supported, while real detached
-      // cards report false for both the row and its parent via isConnected.
-      return row.isConnected === false && (!row.parentElement || row.parentElement.isConnected === false);
-    }
-
-    function pause(): void {
-      if (startedAt == null) return;
-      elapsedMs = elapsedNowMs();
-      startedAt = null;
-      renderDuration();
-      clearTick();
-      if (activeTimedStopwatchBySurface.get(deps.root) === stopwatch) activeTimedStopwatchBySurface.delete(deps.root);
-      render("paused");
-    }
-
-    function takeActiveStopwatch(): void {
-      const active = activeTimedStopwatchBySurface.get(deps.root);
-      if (active && active !== stopwatch) active.pause();
-      activeTimedStopwatchBySurface.set(deps.root, stopwatch);
-      deps.stopRest();
-    }
-
-    function start(): void {
-      // A new run deliberately ignores any prescribed / last-set prefill.
-      elapsedMs = 0;
-      startedAt = Date.now();
-      takeActiveStopwatch();
-      renderDuration();
-      render("running");
-      clearTick();
-      interval = setInterval(() => {
-        if (rowDetached()) {
-          clearTick();
-          return;
+  // A set whose POST answered AFTER the read this surface was built from began: the outbox
+  // has let it go and the read never had it. The server's own answer puts it back, with its
+  // real id (so its × deletes). No card for it yet (an off-plan lift): one more read draws it.
+  const repaintAskedFor = new Set<string>();
+  function reattachSavedSets(deps: ClientTodaySessionControllerDeps): void {
+    const cards = [...deps.root.querySelectorAll<HTMLElement>(".ex[data-card]")];
+    let added = false;
+    for (const entry of CairnSessionSetLedger.saved(deps.state.logDate)) {
+      if (deps.root.querySelector(`.chip[data-set="${entry.id}"]`)) continue;
+      const card = CairnSessionSetLedger.cardFor(cards, entry.exercise);
+      const wrap = card?.querySelector("[data-logged]");
+      if (!card || !wrap) {
+        if (!repaintAskedFor.has(entry.id)) {
+          repaintAskedFor.add(entry.id);
+          void deps.renderToday({ soft: true });
         }
-        sync();
-      }, 250);
+        continue;
+      }
+      const tpl = document.createElement("template");
+      tpl.innerHTML = deps.sessionStatus.setChipHtml({ ...entry }).trim();
+      const chip = tpl.content.firstElementChild;
+      if (!(chip instanceof HTMLElement)) continue;
+      wrap.appendChild(chip);
+      card.querySelector(".ex-skip")?.remove();
+      bumpProgress(card);
+      added = true;
     }
+    if (!added) return;
+    wireDeletes(deps);
+    refreshFinishStat(deps, { repaint: false });
+  }
 
-    function resume(): void {
-      startedAt = Date.now();
-      takeActiveStopwatch();
-      render("running");
-      clearTick();
-      interval = setInterval(() => {
-        if (rowDetached()) {
-          clearTick();
-          return;
+  // The last line against a set logged twice: a set entered while the screen was missing
+  // saved sets of that lift, matching one of them, is marked — one tap removes it, one
+  // keeps it. Never a dialog, never in the way of the next set.
+  function markRepeats(deps: ClientTodaySessionControllerDeps, session: unknown): void {
+    deps.root.querySelectorAll("[data-repeat-line]").forEach((line) => line.remove());
+    const byCard = new Map<HTMLElement, HTMLElement[]>();
+    for (const id of CairnSessionSetLedger.repeats(deps.state.logDate, session)) {
+      const chip = deps.root.querySelector<HTMLElement>(`.chip[data-set="${id}"]`);
+      const card = chip?.closest<HTMLElement>(".ex");
+      if (!chip || !card) continue;
+      chip.dataset.repeat = "1";
+      byCard.set(card, [...(byCard.get(card) || []), chip]);
+    }
+    for (const [card, chips] of byCard) {
+      const one = chips.length === 1;
+      const tpl = document.createElement("template");
+      tpl.innerHTML = `<div class="ex-reaction ex-repeat" data-repeat-line role="status">${escHtml(one ? "This set matches one already saved that the screen had missed." : `These ${chips.length} sets match ones already saved that the screen had missed.`)} <button type="button" class="ghostbtn" data-repeat-remove>${one ? "Remove the repeat" : "Remove the repeats"}</button> <button type="button" class="ghostbtn" data-repeat-keep>Keep</button></div>`;
+      const line = tpl.content.firstElementChild;
+      const logged = card.querySelector("[data-logged]");
+      if (!(line instanceof HTMLElement) || !logged?.parentElement) continue;
+      logged.parentElement.insertBefore(line, logged.nextSibling);
+      line.querySelector("[data-repeat-remove]")?.addEventListener("click", () => {
+        line.remove();
+        for (const chip of chips) {
+          const del = chip.querySelector<HTMLElement>("[data-del]");
+          if (del) void deleteSet(del, deps);
         }
-        sync();
-      }, 250);
+      });
+      line.querySelector("[data-repeat-keep]")?.addEventListener("click", () => {
+        line.remove();
+        CairnSessionSetLedger.keep(chips.map((chip) => String(chip.dataset.set || "")));
+        for (const chip of chips) delete chip.dataset.repeat;
+      });
     }
-
-    timerButton.addEventListener("click", () => {
-      if (startedAt != null) pause();
-      else if (elapsedMs > 0) resume();
-      else start();
-    });
-    render("idle");
-
-    stopwatch = {
-      pause,
-      reset() {
-        clearTick();
-        elapsedMs = 0;
-        startedAt = null;
-        if (activeTimedStopwatchBySurface.get(deps.root) === stopwatch) activeTimedStopwatchBySurface.delete(deps.root);
-        render("idle");
-      },
-    };
-    return stopwatch;
   }
 
   function wireLogRow(row: Element | null | undefined, deps: ClientTodaySessionControllerDeps): void {
@@ -430,7 +331,7 @@ type TodaySessionSetActionsApi = {
     if (!logBtn || logBtn.dataset.wired) return;
     const surfaceDate = deps.state.logDate;
     const surfaceTab = deps.state.tab;
-    const stopwatch = wireTimedStopwatch(row, deps);
+    const stopwatch = CairnTodaySessionStopwatch.wire(row, deps);
     logBtn.dataset.wired = "1";
     row.querySelectorAll("input").forEach((input) => {
       if (!(input instanceof HTMLElement) || input.dataset.draftWired) return;
@@ -497,6 +398,7 @@ type TodaySessionSetActionsApi = {
       // STAYS — the set is durably held in the outbox, and blanking it there is
       // what read as "the app ate my set".
       const card = row.closest<HTMLElement>(".ex");
+      const seen = CairnSessionSetLedger.seenOnScreen(deps.root, String(payload.body.exercise || ""));
       const pending = appendPendingChip(card, payload.body, deps);
       stopwatch?.reset();
       deps.startRest();
@@ -571,6 +473,11 @@ type TodaySessionSetActionsApi = {
       // `session_id` may seed Finish; older responses without that field recover
       // via GET /sessions?date= instead of adopting the set ID.
       CairnTodaySessionSetModel.rememberMutationSessionId(deps, actionDate, result);
+      CairnSessionSetLedger.remember(result, { seen });
+      // Dropped again now the row exists: a read that began before it landed (the drop on
+      // the tap only covers reads begun after) is never kept as this day's session.
+      deps.invalidate("today:aggregate:" + actionDate);
+      deps.invalidate("today:session:" + actionDate);
       commitPendingChip(pending, result, deps);
       if (!surfaceStillCurrent(deps, actionDate, actionTab)) return;
       // The Finish block only exists once the session has a set, so bringing it in
@@ -655,6 +562,8 @@ type TodaySessionSetActionsApi = {
     captureExDrafts,
     restoreExDrafts,
     reprojectPendingSets,
+    reattachSavedSets,
+    markRepeats,
   };
 
   Object.assign(globalThis, { CairnTodaySessionSetActions: CAIRN_TODAY_SESSION_SET_ACTIONS });

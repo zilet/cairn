@@ -415,6 +415,8 @@ a.li:active,button.li:active{transform:var(--press-lg)}
 .chip[data-pending="1"]{opacity:.62;border-style:dashed}
 .logged .chip[data-pending="1"]{border-style:solid}
 .chip[data-pending="1"] .chip-x,.chip[data-pending="1"] [data-del]{display:none}
+.logged .chip[data-repeat="1"]{background:var(--warn-bg)}
+.ex-repeat .ghostbtn{width:auto;min-height:36px;margin:var(--space-2) var(--space-2) 0 0;padding:0 var(--space-6)}
 .chip-n{color:var(--accent);font-weight:var(--weight-semibold);margin-right:1px}
 .logged .chip-n{flex:0 0 24px;font-family:var(--font-mono);font-size:var(--text-2xs);color:var(--muted);font-weight:var(--weight-regular);margin:0}
 .chip-x{color:var(--faint);font-size:var(--text-lead);padding:0 0 0 var(--space-2)}

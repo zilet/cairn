@@ -1390,12 +1390,21 @@ async function renderSession(opts: any = {}): Promise<void> {
           import("../contracts/client-api.js").ClientTodayStrengthLine | null
         >).catch(() => null)
       : Promise.resolve(null);
-  const todayData = await todayDataLoader.load(opts, todayDeps().dataLoad());
+  const paintSeq = CairnSessionSnapshot.claimPaint();
+  let todayData: TodayDataLoadResult;
+  let prep: any;
+  try {
+    todayData = await todayDataLoader.load(opts, todayDeps().dataLoad());
+    prep = await todayPlanSessionPreparation.preparePlanSession(todayDeps().planSession(todayData.session as any, todayData.isToday, todayData));
+  } catch (err) {
+    // A failed read never replaces a live log, and never leaves a workout looking un-logged.
+    // api() already reported an outage; anything else is a fault worth its own row.
+    if (!(err instanceof CairnApiError) && (err as Error)?.message !== "swr-offline") window.CairnClientDiagnostics?.reportError?.("render_error", err, { tab: "session", level: "error" });
+    if (todayState.tab === "session" && todayState.logDate === enteredDate) CairnSessionSnapshot.keepOnFailedRead(todayView, enteredDate, () => renderSession({ fresh: true }));
+    return;
+  }
   const { isToday } = todayData;
   const session: any = todayData.session;
-  const prep: any = await todayPlanSessionPreparation.preparePlanSession(
-    todayDeps().planSession(session, isToday, todayData)
-  );
 
   // The primer sits ABOVE the lift list: asked once the plan day is settled, handed to
   // the primer only if it names the same day (see the wait below).
@@ -1505,7 +1514,7 @@ async function renderSession(opts: any = {}): Promise<void> {
 
   // Same stale-render bail as renderToday: the loads above can outlast leaving
   // the Session destination, and this paint must never land on another tab.
-  if (todayState.tab !== "session" || todayState.logDate !== enteredDate) return;
+  if (todayState.tab !== "session" || todayState.logDate !== enteredDate || !CairnSessionSnapshot.mayPaint(paintSeq)) return;
   const sessionDrafts = CairnTodaySessionSetActions.captureExDrafts(todayView);
   todayView.innerHTML = CairnSessionSnapshot.shellHtml(surface, {
     fresh,

@@ -368,6 +368,8 @@ type TodaySessionSurfaceOptions = ClientTodaySessionSurfaceOptions;
       CairnTodaySessionSetModel.wireLastSetLine(row, lastSets[exercise] ?? null, deps);
     });
     CairnTodaySessionSetActions.reprojectPendingSets(deps);
+    CairnTodaySessionSetActions.reattachSavedSets(deps);
+    CairnTodaySessionSetActions.markRepeats(deps, session);
     // The Pain & injury panel is the ONLY surface that can close a note, so gating
     // the whole feedback slot on logged sets made it unreachable exactly when it is
     // wanted — on a rest day, or before the first set. With no sets there is no
@@ -375,10 +377,8 @@ type TodaySessionSurfaceOptions = ClientTodaySessionSurfaceOptions;
     CairnTodaySessionFeedback.renderFeedback(deps.root.querySelector("#feedbackSlot"), session, deps, {
       hasLoggedSets: !!options.hasLoggedSets,
     });
-    // Same gate as renderSession: a finished session's re-render (the 300ms
-    // settle after FINISH, tab still "session") must not retake the lock.
-    // Reopen clears finished_at and the next wire acquires again. Today also
-    // wires this surface, but the lock is a Session-destination concern.
+    // Same gate as renderSession: a finished session's re-render must not retake the lock
+    // (Reopen clears finished_at). Today wires this surface too; the lock is Session's.
     if (deps.state.tab === "session" && !session.finished_at && typeof acquireWakeLock === "function") {
       void acquireWakeLock();
     }

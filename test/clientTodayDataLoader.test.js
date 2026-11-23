@@ -40,7 +40,7 @@ function loadDataLoader() {
   context.globalThis = context;
   vm.runInNewContext(readFileSync(join(root, "public/js/today-open-session-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-data-loader.js"), "utf8"), context);
-  return context.CairnTodayDataLoader;
+  return Object.assign(Object.create(context.CairnTodayDataLoader), { __context: context });
 }
 
 function makeDeps(overrides = {}) {
@@ -507,4 +507,19 @@ test("a warm open with no open session anywhere earns no repaint for the open ke
   const result = await loader.load({}, deps);
   await Promise.all(result.revalidations);
   assert.equal(writes.some((row) => row.key === "today:open:2026-01-02"), false);
+});
+
+test("a network read that predates the sets this page saw saved still hands the screen every one", async () => {
+  const loader = loadDataLoader();
+  const context = loader.__context;
+  vm.runInNewContext(readFileSync(join(root, "public/js/session-set-ledger.js"), "utf8"), context);
+  // The POST answers the page saw (an off-plan lift among them)…
+  context.CairnSessionSetLedger.remember({ id: 51, session_id: 7, date: "2026-01-02", exercise: "Back Squat", set_number: 1, weight: 225, reps: 5 });
+  context.CairnSessionSetLedger.remember({ id: 52, session_id: 7, date: "2026-01-02", exercise: "Machine Chest Press", set_number: 1, weight: 90, reps: 10 });
+  // …and an aggregate the server answered from before they landed (its session is empty).
+  const { deps, writes } = makeDeps();
+  const result = await loader.load({}, deps);
+  assert.equal(result.aggregateFresh, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.session.sets.map((set) => set.id))), [51, 52]);
+  assert.equal(writes.find((row) => row.key === "today:session:2026-01-02").data.sets.length, 0, "the cache keeps the server's word; the ledger rides on the screen only");
 });

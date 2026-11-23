@@ -126,6 +126,52 @@ test("the rollover watcher resets the pick it just outlived", () => {
   assert.equal(context.synced, "replace");
 });
 
+test("a workout running past midnight keeps its day while its log is on screen, and rolls once left", () => {
+  const listeners = {};
+  const timers = [];
+  let logOnScreen = true;
+  const context = {
+    Date,
+    Math,
+    Object,
+    setTimeout: (fn, ms) => {
+      timers.push({ fn, ms });
+      return { unref() {} };
+    },
+    clearTimeout: () => {},
+    document: {
+      visibilityState: "visible",
+      activeElement: null,
+      querySelector: (sel) => (logOnScreen && sel === ".sess-dest .ex [data-logged] .chip" ? {} : null),
+      addEventListener: (name, fn) => {
+        listeners[name] = fn;
+      },
+    },
+    window: { addEventListener: (name, fn) => { listeners[name] = fn; } },
+    state: { tab: "session", logDate: "2026-07-09", day: 3, dayPicked: false, dayPickedOn: null },
+    localISO: () => "2026-07-10",
+    activateTab: (tab, opts) => {
+      context.activated = { tab, opts };
+    },
+    syncRouteFromState: () => {},
+  };
+  vm.runInNewContext(readFileSync(join(root, "public/js/app-day-rollover.js"), "utf8"), context);
+  context.window.installDayRolloverWatcher();
+  listeners.visibilitychange();
+  listeners.visibilitychange();
+  assert.equal(context.state.logDate, "2026-07-09", "the sets on screen keep their day");
+  assert.equal(context.activated, undefined, "no tab re-entry over the log");
+  const retries = timers.filter((t) => t.ms === 60 * 1000);
+  assert.equal(retries.length, 1, "one re-check pending, however many foregrounds");
+
+  // The athlete leaves the Session: the next check rolls the day.
+  logOnScreen = false;
+  context.state.tab = "today";
+  retries[0].fn();
+  assert.equal(context.state.logDate, "2026-07-10");
+  assert.equal(context.activated.tab, "today");
+});
+
 test("the rollover watcher leaves a deliberately opened past day alone", () => {
   const listeners = {};
   const context = {

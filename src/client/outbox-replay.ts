@@ -216,6 +216,8 @@ declare const CairnOutboxReplay: OutboxReplayApi;
       g.swrInvalidate?.("plan");
       g.swrInvalidate?.("today:session:");
       g.swrInvalidate?.("today:daily-session:");
+      // Each day's aggregate carries a copy of its session from before the replay.
+      g.swrInvalidate?.("today:aggregate:");
       g.swrInvalidate?.("history:sessions");
       g.swrInvalidate?.("progress:volume");
       g.swrInvalidate?.("progress:volume-balance");

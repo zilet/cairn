@@ -150,12 +150,51 @@
    * until the primer's hydrate replaces it — so the list below never jumps. */
   function painted(root: ParentNode, date: string, carried: string): void {
     markPainted(date);
+    live = { node: root.querySelector(".sess-dest"), date };
     if (!carried) return;
     const slot = root.querySelector(".sess-dest #sessionPrimerSlot");
     if (slot && !slot.innerHTML) slot.innerHTML = carried;
   }
 
+  // The surface a REAL render painted and wired (never the inert snapshot): the athlete's
+  // live log. Nothing may paint over it with less — no skeleton on a re-entry of the same
+  // tab, no error screen when a read fails.
+  let live: { node: Element | null; date: string } | null = null;
+  function liveSurface(root: ParentNode, date: string): boolean {
+    const node = live?.node;
+    return !!node && live!.date === date && node.isConnected !== false && root.querySelector(".sess-dest") === node;
+  }
+
+  // Session paints in the order they were ASKED: one whose reads began before another's
+  // painted never lands after it (a slow resume read over an outbox replay's fresher one).
+  let asked = 0;
+  let paintedSeq = 0;
+  const claimPaint = (): number => ++asked;
+  function mayPaint(seq: number): boolean {
+    if (seq < paintedSeq) return false;
+    paintedSeq = seq;
+    return true;
+  }
+
+  /**
+   * A session read failed. A live log stays exactly as it is (api() has already lit the
+   * quiet offline signal). With nothing live, an honest load state and a retry — never a
+   * workout that looks un-logged, which only invites the sets to be entered again.
+   */
+  function keepOnFailedRead(root: HTMLElement, date: string, retry: () => unknown): void {
+    if (liveSurface(root, date)) return;
+    root.innerHTML = `<div class="loadstate" role="alert">
+    <div class="loadstate-label">Couldn't load this session — check your connection. Sets you've already logged are kept; there's no need to log them again.</div>
+    <button class="ghostbtn" type="button" data-sessretry>Try again</button>
+  </div>`;
+    root.querySelector("[data-sessretry]")?.addEventListener("click", () => void retry());
+  }
+
   const CAIRN_SESSION_SNAPSHOT = {
+    liveSurface,
+    claimPaint,
+    mayPaint,
+    keepOnFailedRead,
     KEY,
     stamp,
     save,

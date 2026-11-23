@@ -131,6 +131,24 @@ test("tab controller switches tabs with skeleton-first paint and route sync", as
   ]);
 });
 
+test("re-entering the Session on its own live log never paints a skeleton over the sets", async () => {
+  const live = { innerHTML: "<div class=\"sess-dest\">6 sets logged</div>", setAttribute() {} };
+  const env = loadTabs({ view: live, currentTab: "session" });
+  env.context.state.logDate = "2026-06-30";
+  env.context.CairnSessionSnapshot = { liveSurface: (root, date) => root === live && date === "2026-06-30" };
+  // Back/Forward or a route sync lands on the same Session.
+  env.context.activateTab("session", { syncRoute: false });
+  await flush();
+  assert.equal(live.innerHTML, "<div class=\"sess-dest\">6 sets logged</div>", "the log stays until the refresh lands in place");
+  assert.ok(env.calls.some((call) => call[0] === "renderTab" && call[1] === "session"), "and is refreshed");
+
+  // Nothing live (the inert snapshot, another date): the cold skeleton as before.
+  env.context.CairnSessionSnapshot = { liveSurface: () => false };
+  env.context.activateTab("session", { syncRoute: false });
+  await flush();
+  assert.equal(live.innerHTML, "today-skeleton");
+});
+
 test("tab controller skips warm skeletons and tears down chat when leaving", async () => {
   const env = loadTabs({ cachedKeys: new Set(["history:sessions"]), currentTab: "chat", progressSeg: "sessions" });
 

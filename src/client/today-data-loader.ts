@@ -87,9 +87,8 @@ type TodayDataLoaderApi = {
   aggregatePath(date: string, tab: string | undefined): string;
 };
 (() => {
-  // Same "did this payload actually change?" test the SWR layer uses: these are
-  // small API bodies we already serialize. A value that will not serialize is
-  // treated as its own, never-equal identity.
+  // Same "did this payload actually change?" test the SWR layer uses. A value that
+  // will not serialize is treated as its own, never-equal identity.
   let unstable = 0;
   function stableJson(value: unknown): string {
     if (value === undefined) return "~absent";
@@ -327,7 +326,8 @@ type TodayDataLoaderApi = {
       soft,
       token,
       isToday,
-      session,
+      // Every set this page saw saved rides along until a read carries it (session-set-ledger.ts).
+      session: (globalThis as { CairnSessionSetLedger?: SessionSetLedgerApi }).CairnSessionSetLedger?.merge(session, deps.state) ?? session,
       stats,
       profile,
       exercises,

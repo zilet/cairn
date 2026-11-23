@@ -242,6 +242,28 @@ test("successful runtime prepare replay replaces staged caches with canonical se
   assert.equal(runtime.requests[0].init.headers["X-Idempotency-Key"].length > 0, true);
 });
 
+test("an outbox replay never repaints older truth: the replayed set is held and every day copy dropped", async () => {
+  const date = "2026-06-30";
+  const saved = { id: 311, session_id: 44, date, exercise: "Machine Chest Press", set_number: 1, weight: 90, reps: 10, rir: null, duration_sec: null };
+  const runtime = loadOutboxRuntime({ responses: [{ status: 200, body: saved }] });
+  vm.runInNewContext(readFileSync(join(root, "public/js/session-set-ledger.js"), "utf8"), runtime.context);
+  const repaints = [];
+  runtime.context.state = { tab: "session", logDate: date };
+  runtime.context.renderSession = (opts) => repaints.push(opts ?? null);
+  runtime.cache.set(`today:aggregate:${date}`, { session: { id: 44, date, sets: [] } });
+  await runtime.context.outboxEnqueue("set", "/sets", { exercise: "Machine Chest Press", weight: 90, reps: 10, date }, { sessionDate: date });
+
+  await runtime.context.flushOutbox();
+
+  assert.equal(runtime.context.CairnOutbox.count(), 0);
+  assert.ok(runtime.invalidations.includes("today:aggregate:"), "the day's aggregate copy predates the replay");
+  assert.equal(runtime.cache.has(`today:aggregate:${date}`), false);
+  assert.equal(repaints.length, 1, "the session repaints once, through its (gated) global");
+  // Whatever that repaint reads, the replayed set is on it — the off-plan lift included.
+  const merged = runtime.context.CairnSessionSetLedger.merge({ id: 44, date, sets: [] }, { logDate: date });
+  assert.deepEqual(plain(merged.sets.map((set) => [set.id, set.exercise])), [[311, "Machine Chest Press"]]);
+});
+
 test("offline agent suggestion reconciles against its canonical job context without false drift", async () => {
   const date = "2026-06-30";
   const constraints = { minutes: 35, equipment: "barbell", constraints: "easy shoulder" };

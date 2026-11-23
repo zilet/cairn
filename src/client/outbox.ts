@@ -145,6 +145,9 @@
             } else if (item.depends_on) {
               if (item.session_date) mutatedPreparedDates.add(item.session_date);
             }
+            // A replayed set is saved: the session screen keeps it even if its next read predates it.
+            if (outcome === "delivered" && item.kind === "set")
+              (globalThis as { CairnSessionSetLedger?: SessionSetLedgerApi }).CairnSessionSetLedger?.remember(response);
           } catch (error) {
             // A queued adaptive candidate is a compare-and-set request, never a
             // retry-until-it-wins write. Fingerprint drift becomes an explicit

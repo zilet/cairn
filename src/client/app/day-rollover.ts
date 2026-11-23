@@ -51,6 +51,7 @@ function dayRolloverTarget(
   };
 
   let midnightTimer: ReturnType<typeof setTimeout> | null = null;
+  let heldRetry: ReturnType<typeof setTimeout> | null = null;
 
   // ms until just AFTER the next local midnight (a small cushion so we fire on the
   // new day, never a hair before the boundary).
@@ -142,6 +143,19 @@ function dayRolloverTarget(
     if (!s || typeof g.localISO !== "function") return false;
     const target = dayRolloverTarget(s.logDate, g.localISO(), !!s.dayPicked, s.dayPickedOn ?? null);
     if (!target) return false;
+    // A workout running past midnight stays on its own day while its log is on screen:
+    // rolling would swap the logged sets for an empty new day (and point the next set at
+    // it). It rolls once the Session is left — checked again each minute until then.
+    if (s.tab === "session" && document.querySelector(".sess-dest .ex [data-logged] .chip")) {
+      if (!heldRetry) {
+        heldRetry = setTimeout(() => {
+          heldRetry = null;
+          checkRollover();
+        }, 60 * 1000);
+        (heldRetry as { unref?: () => void }).unref?.();
+      }
+      return false;
+    }
     lastPaintAt = Date.now();
     s.logDate = target;
     // Landing on the new day is the same arrival as "Back to today": the pick that

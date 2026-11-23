@@ -220,6 +220,11 @@ type TabSwitchOptions = {
   }
 
   function paintTabSkeleton(tab: ClientTabName): void {
+    // Re-entering the Session on its own live log (Back/Forward, a route sync, a reload
+    // of the view) refreshes it in place: a skeleton over logged sets, then a slow or
+    // failed read, left the athlete looking at a workout with nothing logged.
+    const snapshot = (globalThis as { CairnSessionSnapshot?: { liveSurface?(root: ParentNode, date: string): boolean } }).CairnSessionSnapshot;
+    if (tab === "session" && snapshot?.liveSurface?.(view, state.logDate)) return;
     const cacheKey = primaryKeyFor(tab);
     const warm = cacheKey ? !!peekCached(cacheKey) : false;
     const skel = warm ? "" : tabSkeleton(tab);

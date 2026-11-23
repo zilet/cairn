@@ -439,6 +439,8 @@ declare global {
     captureExDrafts(root: ParentNode | null | undefined): ClientTodayExDraftSnapshot | null;
     restoreExDrafts(root: ParentNode | null | undefined, snapshot: ClientTodayExDraftSnapshot | null): void;
     reprojectPendingSets(deps: ClientTodaySessionControllerDeps): void;
+    reattachSavedSets(deps: ClientTodaySessionControllerDeps): void;
+    markRepeats(deps: ClientTodaySessionControllerDeps, session: unknown): void;
   };
 
   type ClientTodayBriefControllerDeps = {
@@ -1703,6 +1705,10 @@ declare global {
     markPainted(date: string): void;
     primerCarry(root: ParentNode, date: string): string;
     painted(root: ParentNode, date: string, carried: string): void;
+    liveSurface(root: ParentNode, date: string): boolean;
+    claimPaint(): number;
+    mayPaint(seq: number): boolean;
+    keepOnFailedRead(root: HTMLElement, date: string, retry: () => unknown): void;
     shellHtml(
       inner: string,
       meta: {

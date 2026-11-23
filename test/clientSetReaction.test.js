@@ -160,6 +160,8 @@ function harness() {
   for (const file of [
     "public/js/today-session-set-model.js",
     "public/js/today-session-set-reaction-client.js",
+    "public/js/session-set-ledger.js",
+    "public/js/today-session-stopwatch.js",
     "public/js/today-session-set-actions.js",
   ]) {
     vm.runInNewContext(readFileSync(join(root, file), "utf8"), context);

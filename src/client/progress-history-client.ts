@@ -86,6 +86,7 @@ async function openSessionEdit(sess: HistorySession, fromEl: Element) {
     // then the row collapses out (deletion is committed on the confirming tap).
     el.querySelectorAll<HTMLElement>("[data-eddel]").forEach((b) => b.addEventListener("click", () => armDelete(b, async () => {
       try { await api(`/sets/${b.dataset.eddel}`, { method: "DELETE" }); } catch { toast("Couldn't delete set"); return; }
+      (globalThis as { CairnSessionSetLedger?: SessionSetLedgerApi }).CairnSessionSetLedger?.forget(b.dataset.eddel); // the session screen lets it go too
       const row = b.closest(".edset"); if (row) collapseEl(row, () => row.remove());
     })));
     const save = el.querySelector<HTMLButtonElement>("#edSave");

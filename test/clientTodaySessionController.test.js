@@ -309,6 +309,17 @@ class FakeTemplate {
 
   set innerHTML(value) {
     const html = String(value || "");
+    if (html.includes("data-repeat-line")) {
+      const line = new FakeElement("div", {
+        className: "ex-reaction ex-repeat",
+        dataset: { repeatLine: "" },
+        textContent: html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(),
+      });
+      line.appendChild(new FakeElement("button", { dataset: { repeatRemove: "" } }));
+      line.appendChild(new FakeElement("button", { dataset: { repeatKeep: "" } }));
+      this.content.firstElementChild = line;
+      return;
+    }
     if (html.includes("data-unskip")) {
       this.content.firstElementChild = new FakeElement("button", {
         className: "skip-name",
@@ -439,6 +450,8 @@ function loadController({ apiImpl, contextOverrides } = {}) {
   vm.runInNewContext(readFileSync(join(root, "public/js/today-session-set-model.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-session-set-reaction-client.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/session-entry-client.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/session-set-ledger.js"), "utf8"), context);
+  vm.runInNewContext(readFileSync(join(root, "public/js/today-session-stopwatch.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-session-set-actions.js"), "utf8"), context);
   vm.runInNewContext(readFileSync(join(root, "public/js/today-session-controller.js"), "utf8"), context);
 
@@ -716,7 +729,8 @@ test("Today session controller logs a set optimistically and wires delete once t
   assert.equal(JSON.parse(harness.requests[0].opts.body).exercise, "Push-up");
   assert.equal(logged.children.length, 1);
   assert.equal(card.querySelector(".ex-skip"), null);
-  assert.deepEqual(harness.invalidations, ["today:aggregate:2026-06-30", "today:session:2026-06-30", "stats", "history:sessions", "progress:volume", "progress:volume-balance", "progress:1rm:", "progression"]);
+  // Dropped on the tap, and the day's session copies dropped again once the row exists.
+  assert.deepEqual(harness.invalidations, ["today:aggregate:2026-06-30", "today:session:2026-06-30", "stats", "history:sessions", "progress:volume", "progress:volume-balance", "progress:1rm:", "progression", "today:aggregate:2026-06-30", "today:session:2026-06-30"]);
   assert.deepEqual(harness.toasts.map((toast) => toast.message), ["Set logged"]);
   assert.equal(harness.starts.length, 1);
   assert.equal(harness.rxRefreshes.length, 1);
@@ -1166,7 +1180,7 @@ test("an in-flight set response stays scoped to its request date after navigatio
   // happened on that surface, before the navigation. What must NOT follow the
   // athlete to the new date is anything the late response triggers.
   assert.equal(logged.children.length, 1);
-  assert.deepEqual(harness.invalidations, ["today:aggregate:2026-06-30", "today:session:2026-06-30", "stats", "history:sessions", "progress:volume", "progress:volume-balance", "progress:1rm:", "progression"]);
+  assert.deepEqual(harness.invalidations, ["today:aggregate:2026-06-30", "today:session:2026-06-30", "stats", "history:sessions", "progress:volume", "progress:volume-balance", "progress:1rm:", "progression", "today:aggregate:2026-06-30", "today:session:2026-06-30"]);
   assert.deepEqual(harness.toasts, [], "the late response never toasts onto the next date");
   assert.deepEqual(harness.starts, [true], "rest started with the set, not with the response");
 });
@@ -2617,4 +2631,233 @@ test("Log more on Today's done card lands in the reopened session, not back on T
   assert.equal(harness.deps.state.tab, "session", "one tap reaches the session screen");
   assert.deepEqual(plain(harness.deps.state.planReveal), { date: "2026-06-30", on: true });
   assert.deepEqual(harness.renders, [], "no Today repaint to tap through");
+});
+
+// ---- The resume incident (2026-11-23): sets the server saved never leave the screen ----
+// Three sets each on two lifts, one of them off-plan (Machine Chest Press in for a skipped
+// bench), then the surface rebuilt from a read that began before those writes landed.
+
+// A server that answers POST /sets like logSetByName (its own id, set number, date).
+function setServer(seed = []) {
+  const rows = [...seed];
+  let nextId = Math.max(100, ...rows.map((row) => row.id));
+  const apiImpl = async (path, opts) => {
+    if (path === "/sets" && opts?.method === "POST") {
+      const body = JSON.parse(opts.body);
+      const row = {
+        id: ++nextId,
+        session_id: 77,
+        date: body.date,
+        exercise: body.exercise,
+        set_number: rows.filter((r) => r.exercise === body.exercise).length + 1,
+        weight: body.weight,
+        reps: body.reps,
+        rir: body.rir,
+        duration_sec: null,
+      };
+      rows.push(row);
+      return row;
+    }
+    if (path.startsWith("/sets/") && opts?.method === "DELETE") {
+      const id = Number(path.slice("/sets/".length));
+      const index = rows.findIndex((row) => row.id === id);
+      if (index >= 0) rows.splice(index, 1);
+      return { deleted: index >= 0 ? 1 : 0 };
+    }
+    return { ok: true };
+  };
+  return { rows, apiImpl, truth: () => ({ id: 77, date: "2026-06-30", sets: rows.map((row) => ({ ...row })) }) };
+}
+
+// What renderSession does with a read: the loader lays the ledger over it
+// (CairnSessionSetLedger.merge), the renderer draws a card per planned lift, per logged
+// off-plan lift and per pending off-plan lift (prunePendingOffPlan), each with its chips,
+// and wireSessionSurface wires the result.
+function paintSession(harness, read, plan = ["Push-up"]) {
+  const { context, deps, rootEl } = harness;
+  const session = context.CairnSessionSetLedger.merge(read, deps.state);
+  rootEl.children = [];
+  const sets = (session && session.sets) || [];
+  const has = (list, name) => list.some((other) => other.toLowerCase() === String(name).toLowerCase());
+  const names = [...plan];
+  for (const set of sets) if (!has(names, set.exercise)) names.push(set.exercise);
+  deps.state.pendingOffPlan ??= {};
+  const pending = deps.state.pendingOffPlan[deps.state.logDate] || [];
+  deps.state.pendingOffPlan[deps.state.logDate] = pending.filter((p) => !has(names, p.name));
+  for (const p of deps.state.pendingOffPlan[deps.state.logDate]) names.push(p.name);
+  const cards = {};
+  for (const name of names) {
+    const { card, logged } = addLoggingCard(rootEl, name);
+    for (const set of sets.filter((s) => String(s.exercise).toLowerCase() === name.toLowerCase())) {
+      const tpl = new FakeTemplate();
+      tpl.innerHTML = deps.sessionStatus.setChipHtml(set);
+      logged.appendChild(tpl.content.firstElementChild);
+    }
+    cards[name] = card;
+  }
+  harness.controller.wireSessionSurface({ session, hasLoggedSets: sets.length > 0 }, deps);
+  return { session, cards };
+}
+
+const chipIds = (card) => card.querySelectorAll("[data-logged] .chip").map((chip) => chip.dataset.set);
+
+async function logOn(card, times = 1) {
+  for (let i = 0; i < times; i++) {
+    card.querySelector(".logbtn").click();
+    await flushAsync();
+  }
+}
+
+test("the resume incident: a rebuild from a read older than the sets still shows all six, the off-plan lift's too", async () => {
+  const server = setServer();
+  const harness = loadController({ apiImpl: server.apiImpl });
+  harness.deps.state.tab = "session";
+  harness.deps.state.pendingOffPlan = { "2026-06-30": [{ name: "Machine Chest Press" }] };
+  const stale = { id: 77, date: "2026-06-30", sets: [] };
+  let { cards } = paintSession(harness, stale);
+  await logOn(cards["Push-up"], 3);
+  await logOn(cards["Machine Chest Press"], 3);
+  assert.equal(server.rows.length, 6, "the server holds all six");
+
+  // A read that carries them prunes the off-plan lift's pending card (it is logged now)…
+  ({ cards } = paintSession(harness, server.truth()));
+  assert.deepEqual(plain(harness.deps.state.pendingOffPlan["2026-06-30"]), []);
+  // …then the phone comes back and the surface is rebuilt from a read that predates them.
+  ({ cards } = paintSession(harness, stale));
+  assert.deepEqual(chipIds(cards["Push-up"]), ["101", "102", "103"]);
+  assert.deepEqual(chipIds(cards["Machine Chest Press"]), ["104", "105", "106"], "the off-plan lift keeps its card and its sets");
+  assert.equal(harness.renders.length, 0, "no extra read was needed");
+  // Each chip carries its real id, so its × still deletes the row.
+  assert.equal(cards["Push-up"].querySelector("[data-del]").dataset.del, "101");
+});
+
+test("a set POST answering AFTER the rebuild's read began still ends with its chip", async () => {
+  let resolveSet;
+  const server = setServer();
+  const harness = loadController({
+    apiImpl: (path, opts) => (path === "/sets" && opts?.method === "POST"
+      ? new Promise((resolve) => { resolveSet = () => resolve(server.apiImpl(path, opts)); })
+      : server.apiImpl(path, opts)),
+  });
+  harness.deps.state.tab = "session";
+  const { cards } = paintSession(harness, { id: 77, date: "2026-06-30", sets: [] });
+  cards["Push-up"].querySelector(".logbtn").click();
+  await flushAsync();
+  // The rebuild's read is taken now (the ledger is laid over it before the POST answers)…
+  const read = harness.context.CairnSessionSetLedger.merge({ id: 77, date: "2026-06-30", sets: [] }, harness.deps.state);
+  // …the POST answers and the outbox lets it go…
+  resolveSet();
+  await flushAsync();
+  // …and only then does the rebuilt surface paint, from that read.
+  harness.rootEl.children = [];
+  const { card } = addLoggingCard(harness.rootEl, "Push-up");
+  harness.controller.wireSessionSurface({ session: read, hasLoggedSets: false }, harness.deps);
+  assert.deepEqual(chipIds(card), ["101"], "the server's answer puts the chip back with its id");
+  assert.equal(card.querySelector(".chip").dataset.pending, undefined, "a saved set, not a pending one");
+});
+
+test("a saved set whose lift has no card yet asks for one more read, once", async () => {
+  const server = setServer();
+  const harness = loadController({ apiImpl: server.apiImpl });
+  harness.deps.state.tab = "session";
+  harness.deps.state.pendingOffPlan = { "2026-06-30": [{ name: "Machine Chest Press" }] };
+  const { cards } = paintSession(harness, { id: 77, date: "2026-06-30", sets: [] });
+  await logOn(cards["Machine Chest Press"], 1);
+  harness.deps.state.pendingOffPlan["2026-06-30"] = [];
+  // A surface drawn from a read taken before the set saved: no card for the off-plan lift.
+  harness.rootEl.children = [];
+  addLoggingCard(harness.rootEl, "Push-up");
+  harness.controller.wireSessionSurface({ session: { id: 77, date: "2026-06-30", sets: [] }, hasLoggedSets: false }, harness.deps);
+  harness.controller.wireSessionSurface({ session: { id: 77, date: "2026-06-30", sets: [] }, hasLoggedSets: false }, harness.deps);
+  assert.deepEqual(plain(harness.renders.filter((opts) => opts.soft)), [{ soft: true }], "one soft repaint draws the card");
+});
+
+test("a pending set on an off-plan lift keeps its card and chip through a repaint", async () => {
+  const harness = loadController();
+  harness.deps.state.tab = "session";
+  // The set waits in the outbox (offline); no read has ever listed the lift.
+  harness.outbox.push({
+    id: "m-1",
+    kind: "set",
+    session_date: "2026-06-30",
+    body: { exercise: "Machine Chest Press", weight: 90, reps: 10, date: "2026-06-30" },
+  });
+  harness.deps.state.pendingOffPlan = {};
+  const { cards } = paintSession(harness, { id: 77, date: "2026-06-30", sets: [] });
+  const card = cards["Machine Chest Press"];
+  assert.ok(card, "the off-plan lift still has a card");
+  const chips = card.querySelectorAll("[data-logged] .chip");
+  assert.equal(chips.length, 1);
+  assert.equal(chips[0].dataset.pending, "1");
+  assert.equal(chips[0].dataset.mutationId, "m-1");
+});
+
+test("a re-entered set the screen had missed is flagged, with one tap to remove the repeats", async () => {
+  // Sets 1–3 were saved, but the screen showed an empty card; the athlete logs them again.
+  const seed = [1, 2, 3].map((n) => ({
+    id: 100 + n, session_id: 77, date: "2026-06-30", exercise: "Push-up", set_number: n, weight: 20, reps: 8, rir: 2, duration_sec: null,
+  }));
+  const server = setServer(seed);
+  const harness = loadController({ apiImpl: server.apiImpl });
+  harness.deps.state.tab = "session";
+  let { cards } = paintSession(harness, { id: 77, date: "2026-06-30", sets: [] });
+  await logOn(cards["Push-up"], 3);
+  assert.equal(server.rows.length, 6);
+
+  // The true session arrives: sets 104–106 repeat 101–103.
+  ({ cards } = paintSession(harness, server.truth()));
+  const card = cards["Push-up"];
+  const flagged = card.querySelectorAll("[data-logged] .chip").filter((chip) => chip.dataset.repeat === "1");
+  assert.deepEqual(flagged.map((chip) => chip.dataset.set), ["104", "105", "106"]);
+  const line = card.querySelector("[data-repeat-line]");
+  assert.match(line.textContent, /These 3 sets match ones already saved/);
+
+  line.querySelector("[data-repeat-remove]").click();
+  await flushAsync();
+  assert.deepEqual(
+    harness.requests.filter((r) => r.opts?.method === "DELETE").map((r) => r.path),
+    ["/sets/104", "/sets/105", "/sets/106"],
+  );
+  assert.deepEqual(chipIds(card), ["101", "102", "103"]);
+  assert.deepEqual(server.rows.map((row) => row.id), [101, 102, 103]);
+  ({ cards } = paintSession(harness, server.truth()));
+  assert.equal(cards["Push-up"].querySelector("[data-repeat-line]"), null, "nothing left to flag");
+  assert.deepEqual(chipIds(cards["Push-up"]), ["101", "102", "103"], "a removed repeat never comes back");
+});
+
+test("an ordinary run of identical sets is never flagged, and Keep sticks", async () => {
+  const seed = [{ id: 101, session_id: 77, date: "2026-06-30", exercise: "Push-up", set_number: 1, weight: 20, reps: 8, rir: 2, duration_sec: null }];
+  const server = setServer(seed);
+  const harness = loadController({ apiImpl: server.apiImpl });
+  harness.deps.state.tab = "session";
+  // Shown: the saved set is on screen, and two more identical sets follow it.
+  let { cards } = paintSession(harness, server.truth());
+  await logOn(cards["Push-up"], 2);
+  ({ cards } = paintSession(harness, server.truth()));
+  assert.equal(cards["Push-up"].querySelector("[data-repeat-line]"), null, "every set was on screen when the next was entered");
+
+  // Now the screen misses all three and a fourth identical one is entered — then kept.
+  ({ cards } = paintSession(harness, { id: 77, date: "2026-06-30", sets: [] }));
+  harness.context.CairnSessionSetLedger.reset();
+  ({ cards } = paintSession(harness, { id: 77, date: "2026-06-30", sets: [] }));
+  await logOn(cards["Push-up"], 1);
+  ({ cards } = paintSession(harness, server.truth()));
+  const line = cards["Push-up"].querySelector("[data-repeat-line]");
+  assert.ok(line, "the fourth set matches one the screen had missed");
+  line.querySelector("[data-repeat-keep]").click();
+  ({ cards } = paintSession(harness, server.truth()));
+  assert.equal(cards["Push-up"].querySelector("[data-repeat-line]"), null, "Keep is remembered");
+});
+
+test("a saved set leaves the ledger only when this device deletes it", async () => {
+  const server = setServer();
+  const harness = loadController({ apiImpl: server.apiImpl });
+  harness.deps.state.tab = "session";
+  let { cards } = paintSession(harness, { id: 77, date: "2026-06-30", sets: [] });
+  await logOn(cards["Push-up"], 2);
+  ({ cards } = paintSession(harness, { id: 77, date: "2026-06-30", sets: [] }));
+  cards["Push-up"].querySelector('.chip[data-set="102"]').querySelector("[data-del]").click();
+  await flushAsync();
+  ({ cards } = paintSession(harness, { id: 77, date: "2026-06-30", sets: [] }));
+  assert.deepEqual(chipIds(cards["Push-up"]), ["101"]);
 });
