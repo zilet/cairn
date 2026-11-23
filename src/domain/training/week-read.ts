@@ -1431,7 +1431,14 @@ export function journeyLine(
   const lead = fresh?.leads.length
     ? pickDayVariant(fresh.leads, today, `week:journey:stone:${fresh.kind}`)
     : share >= 0.8
-      ? pickDayVariant(["Most of this road is behind you.", "The summit is in sight."], today, "week:journey:far")
+      ? // "In sight" is said only when the summit is weeks away, not just a large share of a long road.
+        pickDayVariant(
+          summit.days_away <= 21
+            ? ["Most of this road is behind you.", "The summit is in sight."]
+            : ["Most of this road is behind you."],
+          today,
+          "week:journey:far"
+        )
       : share >= 0.5
         ? pickDayVariant(
             ["Past halfway on this road.", "More of this road is behind you than ahead."],
@@ -1474,7 +1481,8 @@ function roadStartOf(path: TodayPath, today: string, ground: JourneyGround): { s
   const w = path.weight;
   if (w?.goal_date && (w.mode === "lose" || w.mode === "gain")) {
     const begin = safe(() => weightStart(w, getProfile()), null);
-    if (begin?.stated) candidates.push(begin.date);
+    // Stated or not, it is the start the weight row itself shows, so the road agrees with it.
+    if (begin?.date) candidates.push(begin.date);
   }
   for (const j of ground.journeys ?? [])
     if (j.objective) candidates.push(j.baseline?.date ?? j.objective.baseline_date ?? null);

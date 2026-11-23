@@ -3,7 +3,7 @@
    ------------------------------------------------------------------- */
 /* Under today's energy meter: the seven days of the week the day's number belongs to.
    Each column's bar is drawn from ONE quiet average line, up for a day given more, down
-   for a day given less, all to one scale and never a number on the bar. Lived days are
+   for a day given less, all to one scale, with the day's number set quietly under it. Lived days are
    solid in the fuel stone's hue, days ahead an outline, today ringed in dawn. A logged
    amount on a complete lived day is a short neutral tick: identity hues only, never a
    red/green state, never a percentage. The chosen column sits on the quiet well. */
@@ -11,7 +11,7 @@
 .fuel-week-words{margin:0 0 var(--space-4);font-size:var(--text-sm);color:var(--ink2);line-height:var(--leading)}
 /* The strip reaches a little into the card's padding so each of the seven columns keeps a
    44px tap target at a 360px phone width (16px gutter, 16px card padding). */
-.fuel-week-strip{--fw-plot:44px;--fw-pad:var(--space-3);position:relative;display:grid;grid-template-columns:repeat(7,minmax(0,1fr));
+.fuel-week-strip{--fw-plot:72px;--fw-pad:var(--space-3);position:relative;display:grid;grid-template-columns:repeat(7,minmax(0,1fr));
   margin:0 calc(-1 * var(--space-3))}
 .fuel-week-avg{position:absolute;left:0;right:0;top:calc(var(--fw-pad) + var(--fw-plot) / 2);height:1px;background:var(--line-strong);
   z-index:1;pointer-events:none}
@@ -22,16 +22,18 @@
 .fuel-week-day[aria-pressed="true"]{background:var(--surface2)}
 .fuel-week-day.is-today{box-shadow:inset 0 0 0 1px var(--dawn)}
 .fuel-week-plot{position:relative;display:block;width:100%;height:var(--fw-plot)}
-.fuel-week-bar{position:absolute;left:50%;width:10px;margin-left:-5px;height:calc(var(--h,0) * var(--fw-plot) / 2);
+.fuel-week-bar{position:absolute;left:calc(50% - min(22%,12px));width:min(44%,24px);height:calc(var(--h,0) * var(--fw-plot) / 2);
   border-radius:var(--radius-3xs);background:var(--s-fuel);z-index:2}
 .fuel-week-bar.is-up{bottom:50%;transform-origin:bottom}
 .fuel-week-bar.is-down{top:50%;transform-origin:top}
-.fuel-week-bar.is-flat{top:50%;width:14px;height:2px;margin:-1px 0 0 -7px}
+.fuel-week-bar.is-flat{top:50%;height:2px;margin-top:-1px}
 /* A day ahead is planned, not lived: its bar is an outline in the stone's deep hue. */
 .fuel-week-day.is-ahead .fuel-week-bar{background:none;box-shadow:inset 0 0 0 1px var(--d-fuel)}
 .fuel-week-day.is-ahead .fuel-week-bar.is-flat{background:var(--d-fuel);box-shadow:none}
 .fuel-week-tick{position:absolute;left:50%;top:calc(50% - var(--t,0) * 50%);width:18px;height:2px;margin:-1px 0 0 -9px;
   border-radius:var(--radius-pill);background:var(--ink2);z-index:3}
+.fuel-week-kcal{font-size:var(--text-2xs);font-variant-numeric:tabular-nums;color:var(--ink2);white-space:nowrap}
+.fuel-week-day.is-today .fuel-week-kcal,.fuel-week-day[aria-pressed="true"] .fuel-week-kcal{color:var(--ink);font-weight:var(--weight-semibold)}
 .fuel-week-dow{font-family:var(--font-mono);font-size:var(--text-2xs);letter-spacing:var(--tracking-mono);text-transform:uppercase;
   color:var(--muted)}
 .fuel-week-day.is-today .fuel-week-dow{color:var(--dawn);font-weight:var(--weight-semibold)}

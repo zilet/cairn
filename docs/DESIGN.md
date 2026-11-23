@@ -1092,8 +1092,9 @@ open it). Top to bottom, as the day reads:
   `.fuel-week-tick` (`--ink2`, at `--t`), never a colour state. `.fuel-week-detail` (`aria-live`)
   says the chosen day's number and its sentence, and "About 2,240 kcal logged." on a complete lived
   day; a tap patches only it and the pressed state, so focus stays put. The bars grow out of the
-  line once on a cold paint (`.is-entering`, `--dur-3`), never under reduced motion. No number on a
-  bar, no percentage, no over/under, no red or green.
+  line once on a cold paint (`.is-entering`, `--dur-3`), never under reduced motion. Each day's number sits
+  under its bar in `--text-2xs` (`.fuel-week-kcal`), never on it; no percentage, no over/under, no
+  red or green.
   Last on the card, when there are enough complete days, is the two-week read (`.fuel-pattern`):
   a label, the one lever and its reason, a second lab-led note when there is one, one quiet line
   per nutrient, and the standing caveat about what a log leaves out (`.fuel-pattern-caveat`). A payload with no guides

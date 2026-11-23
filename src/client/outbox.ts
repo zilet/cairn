@@ -126,6 +126,7 @@
           if (!claim.item || claim.storageError) break;
           const item = claim.item;
           let outcome: "delivered" | "attention" | "pending" = "delivered";
+          let savedSet: unknown = null;
           let superseded = false;
           let failureStatus: number | undefined;
           try {
@@ -145,9 +146,7 @@
             } else if (item.depends_on) {
               if (item.session_date) mutatedPreparedDates.add(item.session_date);
             }
-            // A replayed set is saved: the session screen keeps it even if its next read predates it.
-            if (outcome === "delivered" && item.kind === "set")
-              (globalThis as { CairnSessionSetLedger?: SessionSetLedgerApi }).CairnSessionSetLedger?.remember(response);
+            if (item.kind === "set") savedSet = response;
           } catch (error) {
             // A queued adaptive candidate is a compare-and-set request, never a
             // retry-until-it-wins write. Fingerprint drift becomes an explicit
@@ -170,6 +169,11 @@
           const settled = await withOutboxRuntimeLock(() =>
             box.settle(item.id, item.claim_token, outcome, failureStatus)
           );
+          // A replayed set is saved: the session screen keeps it even if its next read
+          // predates it. Remembered only once the item is settled, so a paint in between
+          // never draws both its pending chip and its saved one.
+          if (outcome === "delivered" && savedSet)
+            (globalThis as { CairnSessionSetLedger?: SessionSetLedgerApi }).CairnSessionSetLedger?.remember(savedSet);
           renderOutboxBar();
           if (!settled || outcome === "pending") break;
           if (outcome === "delivered" && !superseded) sent++;

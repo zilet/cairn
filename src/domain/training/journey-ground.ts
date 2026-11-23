@@ -498,9 +498,9 @@ function fullWeekStone(days: StatedWeekDays | null | undefined, start: string, t
     const week = dateWords(wk, today);
     return stoneOf("full_week", L ? "strength" : "endurance", doneOn, today, {
       short: "Full week",
-      words: `The week of ${week} was the first on this road to hold every day you set: ${joinWords(parts)}.`,
+      words: `The week of ${week} was the first on this road with every day of your set week done: ${joinWords(parts)}.`,
       href: WEEK_HREFS.day(doneOn),
-      leads: [`The week of ${week} held every day you set.`, `Every day you set was done the week of ${week}.`],
+      leads: [`The week of ${week} had every day of your set week done.`, `Every day of your set week was done the week of ${week}.`],
     });
   }
   return null;

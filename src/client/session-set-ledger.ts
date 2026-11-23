@@ -25,6 +25,8 @@ type SessionSetLedgerEntry = {
   seen: number | null;
   /** The athlete answered "Keep" to the repeat line. */
   kept: boolean;
+  /** When this page saw it saved (ms). */
+  at: number;
 };
 type SessionSetLedgerOutboxItem = {
   id?: string;
@@ -42,6 +44,7 @@ type SessionSetLedgerApi = {
   forget(id: unknown): SessionSetLedgerEntry | undefined;
   keep(ids: string[]): void;
   saved(date: string): SessionSetLedgerEntry[];
+  recent(date: string): SessionSetLedgerEntry[];
   merge<T>(session: T, state: SessionSetLedgerState): T;
   repeats(date: string, session: unknown): string[];
   seenOnScreen(root: ParentNode, exercise: string): number;
@@ -79,6 +82,7 @@ declare const CairnSessionSetLedger: SessionSetLedgerApi;
       duration_sec: row.duration_sec ?? null,
       seen: typeof opts.seen === "number" ? opts.seen : null,
       kept: false,
+      at: Date.now(),
     });
     while (entries.size > MAX_ENTRIES) entries.delete(entries.keys().next().value as string);
   }
@@ -98,15 +102,22 @@ declare const CairnSessionSetLedger: SessionSetLedgerApi;
   }
 
   /**
-   * Every set this page saw saved for `date`, oldest first. An entry leaves only when this
-   * device deletes it: a read that lacks it is far likelier to predate it (a resume, a
-   * replay, a slow aggregate) than to follow a delete made on another device, and a set
-   * deleted elsewhere costs one tap on its × (the DELETE of a gone row is a no-op).
+   * Every set this page saw saved for `date`, oldest first (see `recent` for the ones a
+   * read is still allowed to be behind on).
    */
   function saved(date: string): SessionSetLedgerEntry[] {
     return [...entries.values()]
       .filter((entry) => entry.date === date)
       .sort((a, b) => numericId(a.id) - numericId(b.id));
+  }
+
+  // A read that lacks a saved set predates it only for a while (a resume, a replay, a slow
+  // aggregate: seconds to minutes). Past this window a read without it is the newer truth,
+  // so a set deleted from another device or an AI app does not stay on this screen.
+  const TRUST_MS = 20 * 60 * 1000;
+  function recent(date: string): SessionSetLedgerEntry[] {
+    const since = Date.now() - TRUST_MS;
+    return saved(date).filter((entry) => entry.at >= since);
   }
 
   function rowOf(entry: SessionSetLedgerEntry): Record<string, unknown> {
@@ -153,7 +164,7 @@ declare const CairnSessionSetLedger: SessionSetLedgerApi;
         list.push({ name: String(body.exercise), mode: body.exercise_mode === "timed" ? "timed" : null });
       }
     }
-    const kept = saved(date);
+    const kept = recent(date);
     if (!kept.length) return session;
     const read = record(session);
     const readSets = Array.isArray(read.sets) ? (read.sets as unknown[]) : [];
@@ -209,6 +220,7 @@ declare const CairnSessionSetLedger: SessionSetLedgerApi;
     forget,
     keep,
     saved,
+    recent,
     merge,
     repeats,
     seenOnScreen,

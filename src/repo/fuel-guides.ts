@@ -750,6 +750,7 @@ export function nutritionDayRead(date?: string, opts: { today?: string } = {}) {
   }
   // The week the day's number belongs to (repo/fuel-week.ts): the seven days around the
   // accepted average, for the strip under Intake's energy meter. Additive; null with no target.
-  const fuel_week = intake.target ? fuelWeekRead(intake.date, intake.target.average_kcal ?? intake.target.kcal, { today }) : null;
+  // No average on the target means no week to draw: the day's own (shifted) number is never the average.
+  const fuel_week = intake.target?.average_kcal != null ? fuelWeekRead(intake.date, intake.target.average_kcal, { today }) : null;
   return { ...intake, fuel_demand, guides, fuel_week };
 }

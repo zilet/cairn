@@ -138,6 +138,7 @@ function dayRolloverTarget(
 
   // Returns whether a day rollover actually repainted, so callers can skip the
   // separate stale-paint repaint above (a rollover already repaints fresh).
+  const MIDNIGHT_HOLD_UNTIL_HOUR = 4;
   function checkRollover(): boolean {
     const s = g.state;
     if (!s || typeof g.localISO !== "function") return false;
@@ -145,8 +146,11 @@ function dayRolloverTarget(
     if (!target) return false;
     // A workout running past midnight stays on its own day while its log is on screen:
     // rolling would swap the logged sets for an empty new day (and point the next set at
-    // it). It rolls once the Session is left — checked again each minute until then.
-    if (s.tab === "session" && document.querySelector(".sess-dest .ex [data-logged] .chip")) {
+    // it). It rolls once the Session is left — checked again each minute until then — and
+    // never past the small hours: a phone left on the log overnight wakes on the new day,
+    // so a morning's sets are not filed under yesterday.
+    const lateNight = new Date().getHours() < MIDNIGHT_HOLD_UNTIL_HOUR;
+    if (lateNight && s.tab === "session" && document.querySelector(".sess-dest .ex [data-logged] .chip")) {
       if (!heldRetry) {
         heldRetry = setTimeout(() => {
           heldRetry = null;

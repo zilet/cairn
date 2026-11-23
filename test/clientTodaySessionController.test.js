@@ -2861,3 +2861,20 @@ test("a saved set leaves the ledger only when this device deletes it", async () 
   ({ cards } = paintSession(harness, { id: 77, date: "2026-06-30", sets: [] }));
   assert.deepEqual(chipIds(cards["Push-up"]), ["101"]);
 });
+
+// A read may be BEHIND a saved set for a while (a resume, a replay), never forever: once the
+// trust window has passed, a read that lacks the set is the newer truth (it was deleted from
+// another device or an AI app), and the screen follows the server.
+test("a saved set a read still lacks is kept for the trust window, then the read wins", async () => {
+  const server = setServer();
+  const harness = loadController({ apiImpl: server.apiImpl });
+  harness.deps.state.tab = "session";
+  let { cards } = paintSession(harness, { id: 77, date: "2026-06-30", sets: [] });
+  await logOn(cards["Push-up"], 1);
+  ({ cards } = paintSession(harness, { id: 77, date: "2026-06-30", sets: [] }));
+  assert.deepEqual(chipIds(cards["Push-up"]), ["101"], "minutes later the stale read still shows it");
+  // The page's own clock (its realm's Date), moved past the window.
+  vm.runInContext("{ const now = Date.now; Date.now = () => now() + 21 * 60 * 1000; }", harness.context);
+  ({ cards } = paintSession(harness, { id: 77, date: "2026-06-30", sets: [] }));
+  assert.deepEqual(chipIds(cards["Push-up"]), [], "past the window the server's read is the truth");
+});

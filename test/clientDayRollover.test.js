@@ -130,8 +130,14 @@ test("a workout running past midnight keeps its day while its log is on screen, 
   const listeners = {};
   const timers = [];
   let logOnScreen = true;
+  let hour = 0;
+  class NightDate extends Date {
+    getHours() {
+      return hour;
+    }
+  }
   const context = {
-    Date,
+    Date: NightDate,
     Math,
     Object,
     setTimeout: (fn, ms) => {
@@ -170,6 +176,16 @@ test("a workout running past midnight keeps its day while its log is on screen, 
   retries[0].fn();
   assert.equal(context.state.logDate, "2026-07-10");
   assert.equal(context.activated.tab, "today");
+
+  // The hold is for a workout running late, never for a phone left on the log overnight:
+  // by the small hours' end the day rolls even with the log on screen, so a morning's
+  // sets are not filed under yesterday.
+  logOnScreen = true;
+  context.state.tab = "session";
+  context.state.logDate = "2026-07-09";
+  hour = 7;
+  listeners.visibilitychange();
+  assert.equal(context.state.logDate, "2026-07-10", "morning: the day has rolled");
 });
 
 test("the rollover watcher leaves a deliberately opened past day alone", () => {

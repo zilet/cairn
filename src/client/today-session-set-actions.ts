@@ -264,7 +264,7 @@ type TodaySessionSetActionsApi = {
   function reattachSavedSets(deps: ClientTodaySessionControllerDeps): void {
     const cards = [...deps.root.querySelectorAll<HTMLElement>(".ex[data-card]")];
     let added = false;
-    for (const entry of CairnSessionSetLedger.saved(deps.state.logDate)) {
+    for (const entry of CairnSessionSetLedger.recent(deps.state.logDate)) {
       if (deps.root.querySelector(`.chip[data-set="${entry.id}"]`)) continue;
       const card = CairnSessionSetLedger.cardFor(cards, entry.exercise);
       const wrap = card?.querySelector("[data-logged]");

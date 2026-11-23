@@ -3,7 +3,7 @@
 // GET /api/nutrition/day `fuel_week`, shaped by CairnFuelTodayModel). Seven columns, one
 // per day of the Monday-to-Sunday week the day's number belongs to: a bar drawn from ONE
 // quiet average line, up for a day given more, down for a day given less, to one scale
-// (never a number on the bar); days already lived solid, days ahead an outline; today
+// (the day's number under it, never on it); days already lived solid, days ahead an outline; today
 // ringed in dawn; the day's work as one small word beneath (Long, Lift, Rest). A logged
 // amount on a complete lived day is a small neutral tick across its column — a fact
 // beside the number, never a verdict: no red or green, no over or under, no percentage.
@@ -29,7 +29,7 @@
 
   function dayHtml(day: Day, selected: Day): string {
     const cls = ["fuel-week-day", `is-${day.when}`].join(" ");
-    return `<button type="button" class="${cls}" data-fuel-week-day="${escAttr(day.date)}" aria-pressed="${day.date === selected.date}" aria-label="${escAttr(day.label)}">${barHtml(day)}<span class="fuel-week-dow" aria-hidden="true">${escHtml(day.weekday)}</span><span class="fuel-week-tag" aria-hidden="true">${escHtml(day.tag)}</span></button>`;
+    return `<button type="button" class="${cls}" data-fuel-week-day="${escAttr(day.date)}" aria-pressed="${day.date === selected.date}" aria-label="${escAttr(day.label)}">${barHtml(day)}<span class="fuel-week-kcal" aria-hidden="true">${escHtml(day.kcal.toLocaleString("en-US"))}</span><span class="fuel-week-dow" aria-hidden="true">${escHtml(day.weekday)}</span><span class="fuel-week-tag" aria-hidden="true">${escHtml(day.tag)}</span></button>`;
   }
 
   /** The selected day's number and its sentence; what was logged on a complete lived day. */

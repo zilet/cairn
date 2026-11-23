@@ -146,6 +146,8 @@ export function bloodMarkerMoves(
       // Under a meaningful low edge with no distance is "on the low side" (statusOf), not back in.
       const lowEdgeOnly = m?.below_optimal_floor === true && !(Number(m?.distance) > 0);
       if (after === 0 && !lowEdgeOnly) out.push({ name, date, prev_date: prevDate, kind: "back", down });
+      // A reading that went through the band and out the other side moved past it, not toward it.
+      else if ((a > zone.optimal[1] && b < zone.optimal[0]) || (a < zone.optimal[0] && b > zone.optimal[1])) continue;
       else if (after > 0 && after < before && Math.abs(b - a) > meaningful(a, name))
         out.push({ name, date, prev_date: prevDate, kind: "toward", down });
       continue;

@@ -464,7 +464,7 @@ test("consistency as fact: the most recent block finished, and the first week th
         "full_week",
         "2026-09-19",
         "Full week",
-        "The week of Sep 14 was the first on this road to hold every day you set: three lifting days and two runs.",
+        "The week of Sep 14 was the first on this road with every day of your set week done: three lifting days and two runs.",
       ],
     ]
   );
