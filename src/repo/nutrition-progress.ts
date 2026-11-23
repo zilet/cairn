@@ -4,6 +4,7 @@ import { listActiveDirectives } from "./directives-read.js";
 import { getDayIntake, hydrateNutritionTarget } from "./nutrition.js";
 import { addDaysISO, localDateISO } from "./shared.js";
 import { fiberFloorG } from "./fiber-floor.js";
+import { copyDeep, requestMemo } from "./request-memo.js";
 
 export type NutritionProgressNutrient = "kcal" | "protein_g" | "carbs_g" | "fat_g" | "fiber_g";
 type TargetNutrient = Exclude<NutritionProgressNutrient, "fiber_g">;
@@ -343,8 +344,15 @@ function currentReference(targetRow: any): {
 // micronutrients). Exported so callers outside this file (meal-plan validation)
 // identify nutrition-relevant directives the same way, rather than re-deriving
 // the domain/marker check themselves.
+// A pure read the food screen asks for several times in one open (the day's guides, the
+// ideas' health leans, the two-week pattern), so it is read once per request and day.
 export function nutritionRelevantDirectives(): any[] {
-  return annotateDirectiveFreshness(listActiveDirectives(), localDateISO()).filter((directive: any) => {
+  const today = localDateISO();
+  return requestMemo(`nutrition_relevant_directives:${today}`, () => nutritionRelevantDirectivesRead(today), copyDeep);
+}
+
+function nutritionRelevantDirectivesRead(today: string): any[] {
+  return annotateDirectiveFreshness(listActiveDirectives(), today).filter((directive: any) => {
     if (directive?.domain === "nutrition") return true;
     return (
       directive?.domain === "watch" &&

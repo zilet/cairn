@@ -44,7 +44,7 @@ import { flexibleTrainingAgenda, sessionPrimer } from "../repo.js";
 import { contextTagVocab } from "../repo/context-tag-effects.js";
 import { todayPath } from "../repo/today-path.js";
 import { getRecoveryBaselineRead } from "../repo/baseline-bands.js";
-import { fuelIdeasForDay as fuelIdeas } from "../repo/fuel-ideas-day.js";
+import { dayCarbsRoom, fuelIdeasForDay as fuelIdeas } from "../repo/fuel-ideas-day.js";
 import { localDateISO, localHourFraction } from "../repo/shared.js";
 import { directivesResponse } from "./connected-brain.js";
 import { weekAheadResponse } from "./day-coach.js";
@@ -173,9 +173,12 @@ export function todaySurfaceResponses(
     // (today-fuel-glance-client.ts): the day's intake and the ideas for the device's
     // hour, spelled as the glance asks. The hour is the local one in the device zone
     // this request runs in; a glance that reads another hour just asks its own.
-    put(out, `/nutrition/day?date=${q(date)}`, () => nutritionDayResponse(date));
+    let day: ReturnType<typeof nutritionDayResponse> | null = null;
+    put(out, `/nutrition/day?date=${q(date)}`, () => (day = nutritionDayResponse(date)));
     const hour = Math.floor(localHourFraction());
-    put(out, `/fuel/ideas?date=${q(date)}&hour=${hour}`, () => fuelIdeas(date, { hour, exclude: [] }));
+    put(out, `/fuel/ideas?date=${q(date)}&hour=${hour}`, () =>
+      fuelIdeas(date, { hour, exclude: [], ...dayCarbsRoom(date, day) })
+    );
   }
   // The rail: only the cards this agenda names (see the header).
   const cards = agendaCards(opts.agenda);

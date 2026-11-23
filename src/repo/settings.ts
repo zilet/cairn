@@ -25,6 +25,7 @@ import { getAgentAvailability } from "./agent-availability.js";
 import { recordedClientTimeZone } from "./client-tz.js";
 import { effortRiskFor, type EffortRisk } from "./effort-risk.js";
 import { getAppState, setAppState } from "./app-state.js";
+import { copyDeep, requestMemo } from "./request-memo.js";
 import { detectUnits, type UnitHint } from "./unit-system.js";
 import { agentReadsNatively } from "../brain/read-transport.js";
 import {
@@ -929,7 +930,15 @@ function rowToSettings(row: any): Settings {
   };
 }
 
+// Read by nearly every surface (the athlete's units alone ask for it a dozen times in one
+// week read), and its row → settings step is not free, so it is read once per request
+// while nothing is written (request-memo.ts). A read that seals a legacy secret or seeds
+// the row writes, and the memo then never serves what it read before that write.
 export function getSettings(): Settings {
+  return requestMemo("settings", getSettingsRead, copyDeep);
+}
+
+function getSettingsRead(): Settings {
   ensureSettingsSchema();
   let row = db.prepare(`SELECT * FROM settings WHERE id = 1`).get() as any;
   if (row) row = sealLegacySettingsSecrets(row);

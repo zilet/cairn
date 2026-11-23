@@ -612,7 +612,13 @@ function finiteLoad(value: unknown): number | null {
   return Number.isFinite(n) && n !== 0 ? n : null;
 }
 
+// Asked once per (session, lift) by the per-movement read (movement-standing.ts), so one
+// session's outcome row is parsed once per request rather than once per lift it logged.
 function storedDosesForSession(sessionId: number): StoredDose[] {
+  return requestMemo(`stored_doses:${String(sessionId)}`, () => storedDosesForSessionRead(sessionId), copyDeep);
+}
+
+function storedDosesForSessionRead(sessionId: number): StoredDose[] {
   try {
     const row = db
       .prepare(`SELECT facts_json FROM daily_session_outcomes WHERE session_id = ? ORDER BY id DESC LIMIT 1`)

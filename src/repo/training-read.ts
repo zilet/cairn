@@ -352,11 +352,15 @@ interface DoseSet {
   note: string | null;
 }
 
-function doseExerciseIdentity(name: string): {
-  rawKey: string;
-  canonicalKey: string;
-  aliasCanonicalKey: string | null;
-} {
+type DoseExerciseIdentity = { rawKey: string; canonicalKey: string; aliasCanonicalKey: string | null };
+
+// Every session's dose reads its lifts' alias rows, and a request grades a few weeks of
+// sessions over the same handful of lifts: one alias read per lift per request.
+function doseExerciseIdentity(name: string): DoseExerciseIdentity {
+  return requestMemo(`dose_exercise_identity:${name}`, () => doseExerciseIdentityRead(name), copyFlat);
+}
+
+function doseExerciseIdentityRead(name: string): DoseExerciseIdentity {
   const norm = normalizeExerciseName(name);
   const alias = norm ? (db.prepare(`SELECT canonical FROM exercise_aliases WHERE alias = ?`).get(norm) as any) : null;
   const aliasCanonicalKey = alias?.canonical ? normalizedExerciseKey(String(alias.canonical)) : null;

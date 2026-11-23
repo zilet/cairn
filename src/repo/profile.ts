@@ -1541,10 +1541,19 @@ export function leannessAwareLossRates(weightLb: number, bodyFatPct?: number | n
   };
 }
 
-export function computeGoalCheck(
-  prof?: any,
-  opts: { expenditure?: ExpenditureEstimate | null; syncMeasuredRmr?: boolean } = {}
-) {
+type GoalCheckOpts = { expenditure?: ExpenditureEstimate | null; syncMeasuredRmr?: boolean };
+
+// The plain call — the stored profile, today, the expenditure read itself — is asked for
+// by every day intake a request reads (getDayIntake frames each day against TODAY's goal),
+// so a two-week food window asked for it a dozen times over. It is read once per request
+// while nothing is written; a call that hands in a profile or an expenditure computes.
+export function computeGoalCheck(prof?: any, opts: GoalCheckOpts = {}): ReturnType<typeof computeGoalCheckRead> {
+  if (prof === undefined && opts.expenditure === undefined && opts.syncMeasuredRmr === undefined)
+    return requestMemo(`goal_check:${localDateISO()}`, () => computeGoalCheckRead(undefined, opts), copyDeep);
+  return computeGoalCheckRead(prof, opts);
+}
+
+function computeGoalCheckRead(prof: any, opts: GoalCheckOpts) {
   const storedProfile = prof ?? getProfile();
   const currentWeight = resolvedCurrentBodyweight(storedProfile);
   const p = currentWeight ? { ...storedProfile, weight_lb: currentWeight.weight_lb } : storedProfile;

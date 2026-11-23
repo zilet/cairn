@@ -531,13 +531,26 @@ const CLASSIFY_RULES: Array<[MuscleGroup, RegExp[]]> = [
 ];
 
 // Classify an exercise NAME → a canonical primary group, or null when unknown.
+// Pure name → group over a fixed rule table, asked for the same few hundred names again
+// and again by every read that groups a plan or a log: remembered like the names above.
+const classifiedGroups = new Map<string, MuscleGroup | null>();
+
 export function classifyMuscleGroup(name: string): MuscleGroup | null {
   const norm = normalizeExerciseName(name);
   if (!norm) return null;
-  for (const [group, regexes] of CLASSIFY_RULES) {
-    for (const re of regexes) if (re.test(norm)) return group;
+  const hit = classifiedGroups.get(norm);
+  if (hit !== undefined) return hit;
+  let found: MuscleGroup | null = null;
+  outer: for (const [group, regexes] of CLASSIFY_RULES) {
+    for (const re of regexes)
+      if (re.test(norm)) {
+        found = group;
+        break outer;
+      }
   }
-  return null;
+  if (classifiedGroups.size >= PURE_NAME_CACHE_MAX) classifiedGroups.clear();
+  classifiedGroups.set(norm, found);
+  return found;
 }
 
 // Resolve the best group for an exercise given its raw name AND any stored group:

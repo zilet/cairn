@@ -24,7 +24,7 @@ import { programBalance } from "./progression.js";
 import { liftDows } from "./strength-schedule.js";
 import { registerHybridForwardProjection } from "./hybrid-forward-projection.js";
 import { daysBetweenISO, joinList, localDateISO } from "./shared.js";
-import { copyDeep, copyRows, memoKey, requestMemo } from "./request-memo.js";
+import { copyDeep, memoKey, requestMemo } from "./request-memo.js";
 
 export interface PlanDayCandidate {
   id: number;
@@ -102,7 +102,13 @@ export function planDayLabel(day: Pick<PlanDayCandidate, "name" | "focus" | "day
   return planDayFocus(day);
 }
 
+// Read by every plan-day resolution a request makes (each recent session's anchor, each
+// day of a fuel or run window), so it is read once per request while nothing is written.
 export function planDayCandidates(): PlanDayCandidate[] {
+  return requestMemo("plan_day_candidates", planDayCandidatesRead, copyDeep);
+}
+
+function planDayCandidatesRead(): PlanDayCandidate[] {
   // STRENGTH days only — the ring is the lifting days. A legacy rest row or a run item
   // (both retired by migration 110) is never a candidate, so nothing downstream can
   // land a session on one even on a database that has not migrated yet.
@@ -141,11 +147,18 @@ export function planDayCandidates(): PlanDayCandidate[] {
   return [...map.values()].sort((a, b) => a.day_number - b.day_number);
 }
 
-function sessionGroups(sessionId: number): MuscleGroup[] {
-  return requestMemo(`session_groups:${String(sessionId)}`, () => sessionGroupsRead(sessionId), copyRows);
+type SessionLifts = { names: string[]; groups: MuscleGroup[] };
+
+// What one session logged — the lifts' names, lowercased as SQLite's LOWER() does (ASCII
+// only), and the muscle groups they train — read in ONE statement and once per request:
+// every anchor, plan-day resolution and window that touches a session asks for both.
+function sessionLifts(sessionId: number): SessionLifts {
+  return requestMemo(`session_lifts:${String(sessionId)}`, () => sessionLiftsRead(sessionId), copyDeep);
 }
 
-function sessionGroupsRead(sessionId: number): MuscleGroup[] {
+const asciiLower = (s: string) => s.replace(/[A-Z]+/g, (m) => m.toLowerCase());
+
+function sessionLiftsRead(sessionId: number): SessionLifts {
   const rows = db
     .prepare(
       `SELECT DISTINCT e.name AS exercise, e.muscle_group AS muscle_group
@@ -153,12 +166,19 @@ function sessionGroupsRead(sessionId: number): MuscleGroup[] {
       WHERE ls.session_id = ?`
     )
     .all(sessionId) as any[];
+  const names: string[] = [];
   const groups: MuscleGroup[] = [];
   for (const r of rows) {
+    const name = asciiLower(String(r.exercise));
+    if (!names.includes(name)) names.push(name);
     const group = canonicalGroup(r.muscle_group) ?? classifyMuscleGroup(r.exercise);
     if (group && group !== "mobility" && !groups.includes(group)) groups.push(group);
   }
-  return groups;
+  return { names, groups };
+}
+
+function sessionGroups(sessionId: number): MuscleGroup[] {
+  return sessionLifts(sessionId).groups;
 }
 
 // Core never decides which day to train. It is loaded by nearly everything (every
@@ -173,18 +193,9 @@ export function resolveSessionPlanDay(
   planDayId: number | null,
   candidates: PlanDayCandidate[]
 ): ResolvedSessionPlanDay | null {
-  const loggedNames = new Set(
-    (
-      db
-        .prepare(
-          `SELECT DISTINCT LOWER(e.name) AS name
-         FROM logged_sets ls JOIN exercises e ON e.id = ls.exercise_id
-        WHERE ls.session_id = ?`
-        )
-        .all(sessionId) as any[]
-    ).map((r) => String(r.name))
-  );
-  const groups = sessionGroups(sessionId);
+  const lifts = sessionLifts(sessionId);
+  const loggedNames = new Set(lifts.names);
+  const groups = lifts.groups;
 
   if (planDayId != null) {
     const linked = candidates.find((d) => d.id === Number(planDayId));

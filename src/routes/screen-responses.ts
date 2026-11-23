@@ -57,7 +57,7 @@ import { journeyMilestones, journeyRead } from "../repo/journey.js";
 import { getBodyMetricsSummary, normalizeUnit } from "../repo/body-metrics.js";
 import { todayPath } from "../repo/today-path.js";
 import { intakeBand } from "../repo/intake-band.js";
-import { fuelIdeasForDay as fuelIdeas } from "../repo/fuel-ideas-day.js";
+import { dayCarbsRoom, fuelIdeasForDay as fuelIdeas } from "../repo/fuel-ideas-day.js";
 import { buildClinicalReportData, clinicalReportJson, parseReportSections } from "../report.js";
 import { directivesResponse } from "./connected-brain.js";
 import { nutritionDayResponse } from "./nutrition.js";
@@ -132,10 +132,11 @@ export function trainHomeResponses(viewQuery: unknown, dateQuery: unknown, hourQ
   }
   if (view === "fuel") {
     const hour = screenHour(hourQuery);
-    put(out, `/nutrition/day?date=${q(date)}`, () => nutritionDayResponse(date));
+    let day: ReturnType<typeof nutritionDayResponse> | null = null;
+    put(out, `/nutrition/day?date=${q(date)}`, () => (day = nutritionDayResponse(date)));
     put(out, `/nutrition/intake-band?date=${q(date)}`, () => intakeBand(date));
     put(out, `/fuel/ideas?date=${q(date)}${hour == null ? "" : `&hour=${hour}`}`, () =>
-      fuelIdeas(date, { hour: hour ?? undefined, exclude: [] })
+      fuelIdeas(date, { hour: hour ?? undefined, exclude: [], ...dayCarbsRoom(date, day) })
     );
     return out;
   }

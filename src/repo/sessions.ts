@@ -2266,7 +2266,8 @@ function getProgressRead(exerciseName: string, opts: { through?: string }) {
 
   // For assisted lifts (negative weight = assist), we need the athlete's bodyweight
   // to compute effective load = bodyweight - assist. Fetch it once.
-  const profRow = db.prepare("SELECT weight_lb FROM profile WHERE id = 1").get() as any;
+  // (The request's one profile read — the same row, every lift asked about shares it.)
+  const profRow = getProfile();
   const bodyweightLb: number | null = profRow?.weight_lb != null ? Number(profRow.weight_lb) : null;
 
   // Full, UNBOUNDED history on purpose: an all-time est-1RM and PR detection are only

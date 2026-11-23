@@ -7723,8 +7723,10 @@ guard is a no-op, exactly as before.
   between (so no zone's midnight); a steered Brief read never takes from or adds to that shared store.
   Outside a snapshot (scheduler, tests, scripts) it computes every time. `memoNeutralWrite` keeps TWO
   bookkeeping writes off the counter (`memory.last_referenced_at`, and the week-ahead card's queued
-  `agent_jobs` row, a table no memoized read consults) — a write any memoized read can see must never
-  go through it.
+  `agent_jobs` row, a table no memoized read consults), plus the plan odometers' first-use seeding of
+  their TEMP counter rows (`src/repo/plan.ts`, a table nothing read before it existed) — a write any
+  memoized read can see must never go through it. The Intake and Today fan-ins hand the day read's
+  guides to the ideas (`dayCarbsRoom`, `src/repo/fuel-ideas-day.ts`), so one open derives them once.
 - **Fan-ins** (`src/routes/today-responses.ts`, `src/routes/screen-responses.ts`):
   `/today?surface=today` carries `responses` — the exact body of every other GET a Today
   open makes, keyed by path — and `/today?surface=session` (Session), `/horizon-race?dates=`
