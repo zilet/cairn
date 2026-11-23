@@ -15,7 +15,7 @@
 //   - an hour of steady riding or other cross-training: about 7 MET (2024 code 01014,
 //     bicycling, general), 6 kcal per kg net. Margaria's running figure is net of rest too,
 //     the right reading here: the weekly average already holds resting energy;
-//   - an hour of brisk walking or hiking: roughly 4.5 MET (the Compendium's walking and
+//   - an hour of brisk walking or hiking: roughly 4.5 MET (the Compendium's walking
 //     entries run about 3.5-5.5 MET and cross-country hiking 6.0), taken as about 3.5 kcal per
 //     kg net: right for a brisk level walk, low for a hill hike. Approximate.
 // A session the load read calls light (yoga, mobility, an easy stroll) carries no cost:
