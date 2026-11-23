@@ -258,7 +258,7 @@ function guidesRead(overrides = {}) {
   const list = [
     guide("carbs", { kind: "range", low_g: 230, high_g: 250, eaten_g: 63, text: "around 230–250 g today", note: "room for about 167–187 g more · for today's endurance work, inside your target", track: { lo: 0.8, hi: 0.87, mark: 0.219 } }),
     guide("fat", { kind: "range", low_g: 50, high_g: 60, eaten_g: 33, text: "50–60 g", note: "room for about 17–27 g more · a fifth to a third of today's energy", track: { lo: 0.725, hi: 0.87, mark: 0.478 } }),
-    guide("fiber", { kind: "floor", low_g: 30, eaten_g: 10, lab_led: true, text: "30 g or more", note: "about 20 g more reaches it · the everyday floor for long-term health; your lipids ask for more of it, oats and beans especially", track: { lo: 0.58, hi: 1, mark: 0.193 } }),
+    guide("fiber", { kind: "floor", low_g: 30, eaten_g: 10, lab_led: true, text: "30 g or more", note: "about 20 g more reaches it · a good everyday aim for long-term health; your lipids ask for more of it, oats and beans especially", track: { lo: 0.58, hi: 1, mark: 0.193 } }),
     guide("saturated_fat", { kind: "ceiling", high_g: 14, eaten_g: 9, lab_led: true, text: "under 14 g", note: "5 g of room under it · kept lower, as your lipids ask", track: { lo: 0, hi: 0.87, mark: 0.559 } }),
     guide("omega_3", { kind: "weekly", words: "An omega-3 source on one of the last seven days. Two a week is the usual guide." }),
   ];

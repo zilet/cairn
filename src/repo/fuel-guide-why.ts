@@ -16,7 +16,7 @@
 //     Rowlands & Brown, Int J Sport Nutr Exerc Metab 2014;24(2):127-138. The ISSN position
 //     stand (Jäger et al., J Int Soc Sports Nutr 2017;14:20) gives 1.4-2.0 g per kg of body
 //     weight for most exercising people and 2.3-3.1 g per kg a day in hypocaloric periods.
-//     About four meals: Schoenfeld & Aragon, J Int Soc Sports Nutr 2018;15:10;
+//     Three to four meals: Schoenfeld & Aragon, J Int Soc Sports Nutr 2018;15:10;
 //   - rate of loss: about 0.5-1% of body weight a week (Helms, Aragon & Fitschen, J Int
 //     Soc Sports Nutr 2014;11:20). Of two target rates, 0.7% and 1.4% a week, the slower
 //     group GAINED lean mass and the faster one's was unchanged, all while lifting (Garthe
@@ -26,7 +26,8 @@
 //     base: Whittaker & Wu, J Steroid Biochem Mol Biol 2021;210:105878. The 0.5 g per kg
 //     figure is the FALLBACK minimum of a narrative review whose first recommendation is
 //     20-30% of energy: Ruiz-Castellano et al., Nutrients 2021;13(9):3255;
-//   - fiber 14 g per 1,000 kcal (Dietary Guidelines for Americans 2020-2025); 25-29 g a
+//   - fiber 14 g per 1,000 kcal (Institute of Medicine, Dietary Reference Intakes, 2005;
+//     soluble fiber lowers LDL: Brown et al., Am J Clin Nutr 1999;69(1):30-42); 25-29 g a
 //     day and above: Reynolds et al., Lancet 2019;393(10170):434-445;
 //   - saturated fat under 10% of energy (DGA 2020-2025), 5-6% to lower LDL (Eckel et al.,
 //     2013 AHA/ACC lifestyle guideline, Circulation 2014;129(25 Suppl 2):S76-99);
@@ -34,7 +35,7 @@
 //     138(1):e35-e47;
 //   - unsaturated fat in place of saturated lowers LDL and heart risk, refined carbohydrate
 //     in its place does not lower heart risk: Sacks et al., AHA Presidential Advisory,
-//     Circulation 2017;136(3):e1-e23; fish omega-3s act on triglycerides, not LDL:
+//     Circulation 2017;136(3):e1-e23; fish omega-3s at prescription doses lower triglycerides more than LDL:
 //     Skulas-Ray et al., AHA science advisory, Circulation 2019;140(12):e673-e691.
 // Every string holds the reading grammar (no score, no gate, no engineering words).
 import { LB_PER_KG } from "./display-words.js";
@@ -97,10 +98,10 @@ function energyWhy(i: FuelWhyInput): FuelWhy | null {
     const perKgUnit = i.weight_unit === "lb" ? LB_PER_KG : 1;
     const low = one(i.kg * perKgUnit * LEAN_SAFE_LOSS_SHARE.low);
     const high = one(i.kg * perKgUnit * LEAN_SAFE_LOSS_SHARE.high);
-    pace = ` About 0.5–1% of body weight a week is the pace recommended for keeping muscle while cutting; at ${i.weight_words} that is ${low}–${high} ${i.weight_unit} a week.`;
+    pace = ` About 0.5–1% of body weight a week is the pace usually suggested for keeping muscle while cutting, the slower end the leaner you are; at ${i.weight_words} that is ${low}–${high} ${i.weight_unit} a week.`;
   }
   const effect = lose
-    ? "A cut runs on the week's average, so a long-run day can hold more and a rest day less without changing the pace of the loss. Eating well under it speeds the loss and leaves less fuel for training. In the one trial that compared two paces, the slower group gained lean mass and the faster one did not."
+    ? "A cut runs on the week's average, so a long-run day can hold more and a rest day less without changing the pace of the loss. Eating well under it speeds the loss and leaves less fuel for training. In a trial of 24 elite athletes who all lifted, those losing about 0.7% of body weight a week gained lean mass, and those losing about 1.4% a week held theirs."
     : i.mode === "gain"
       ? "A small surplus is what lets training turn into muscle. A large one mostly adds fat."
       : "Eating at about what you burn gives training its full fuel and holds your weight where it is.";
@@ -116,7 +117,7 @@ function proteinWhy(i: FuelWhyInput): FuelWhy | null {
       : "Your protein number.";
   const effect =
     i.mode === "lose"
-      ? "In a cut, protein and lifting together are what keep muscle while the fat goes, and protein is the most filling part of a meal. Spread over about four meals is the usual advice."
+      ? "In a cut, protein and lifting together are what keep muscle while the fat goes, and protein is the most filling part of a meal. Spread across three to four meals, each with a solid serving of protein, is the usual advice."
       : "Protein is the material training turns into muscle. Past about 1.6 g per kg a day, more adds little while energy is plentiful.";
   const source =
     i.mode === "lose"
@@ -163,16 +164,16 @@ function fatWhy(i: FuelWhyInput): FuelWhy | null {
   return {
     made_of: made,
     effect:
-      "Fat is not one thing. Unsaturated fat (olive oil, avocado, nuts) is the kind to favour: in place of saturated fat it lowers LDL cholesterol. The omega-3s in oily fish are worth having for the heart too, though they act on triglycerides more than on LDL. Saturated fat (butter, cheese, fatty meat, coconut) is the one with a ceiling of its own. All of it carries vitamins A, D, E and K and is raw material for hormones, and diets held under a fifth of energy lowered testosterone in men in a small set of trials.",
+      "Fat is not one thing. Unsaturated fat (olive oil, avocado, nuts) is the kind to favour: in place of saturated fat it lowers LDL cholesterol. The omega-3s in oily fish are worth having for the heart too, though at supplement doses they mainly lower triglycerides, not LDL. Saturated fat (butter, cheese, fatty meat, coconut) is the one with a ceiling of its own. All of it carries vitamins A, D, E and K and is raw material for hormones, and diets held under a fifth of energy lowered testosterone in men in a small set of trials.",
     source: "ACSM joint position 2016; AHA/ACC lifestyle guideline 2013; AHA omega-3 advisory 2019; Whittaker and Wu 2021; Ruiz-Castellano 2021.",
   };
 }
 
 function fiberWhy(i: FuelWhyInput): FuelWhy {
   return {
-    made_of: i.fiber.per_kcal ? "14 g for each 1,000 kcal of your target." : "14 g for each 1,000 kcal of your target, and never under 30 g.",
+    made_of: i.fiber.per_kcal ? "14 g for each 1,000 kcal of your target." : "14 g for each 1,000 kcal of your target, with 30 g as a good everyday aim; studies see the most benefit from about 25 to 30 g a day.",
     effect: `Fiber keeps a meal filling, feeds the gut, and the soluble kind (oats, beans, psyllium) lowers LDL cholesterol.${i.fiber.lab_led ? " Your labs are why it is marked here." : ""}`,
-    source: "Dietary Guidelines for Americans 2020–2025; Reynolds 2019.",
+    source: "Institute of Medicine Dietary Reference Intakes 2005; Reynolds 2019; soluble fiber and LDL: Brown 1999.",
   };
 }
 
@@ -183,7 +184,7 @@ function saturatedWhy(i: FuelWhyInput): FuelWhy | null {
       ? "6% of today's energy, the level the AHA/ACC lifestyle guideline uses when LDL is worth lowering. The general ceiling is 10% of energy."
       : "A tenth of today's energy.",
     effect:
-      "Saturated fat raises LDL cholesterol in most people, and ApoB counts the particles that carry it. Swapping it for unsaturated fat (olive oil, nuts, seeds) lowers LDL and lowers heart risk. Swapping it for sugar or refined starch does not lower heart risk.",
+      "Saturated fat raises LDL cholesterol in most people. ApoB, a blood test on some lab reports, counts the cholesterol-carrying particles, and it tends to move the same way. Swapping saturated fat for unsaturated fat, especially the polyunsaturated kind (sunflower or soy oil, walnuts, seeds), lowers LDL and heart risk; olive oil and nuts fit the same pattern. Swapping it for sugar or refined starch does not lower heart risk.",
     source: "AHA/ACC lifestyle guideline 2013; AHA advisory on dietary fats 2017; Dietary Guidelines for Americans 2020–2025.",
   };
 }

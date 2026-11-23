@@ -276,8 +276,8 @@ function leverFor(i: LeverInput): FuelPattern["lever"] {
         share == null
           ? "The slower line leaves more fuel for training."
           : share <= LEAN_SAFE_LOSS_SHARE.high
-            ? `That pace is ${pct}% of your weight a week, inside the 0.5–1% of body weight a week recommended for keeping muscle while cutting, so nothing is going wrong. The slower line you chose leaves more fuel for training.`
-            : `That pace is ${pct}% of your weight a week, past the 0.5–1% of body weight a week recommended for keeping muscle while cutting.`;
+            ? `That pace is ${pct}% of your weight a week, inside the 0.5–1% of body weight a week usually suggested for keeping muscle while cutting, so nothing is going wrong. The slower line you chose leaves more fuel for training.`
+            : `That pace is ${pct}% of your weight a week, past the 0.5–1% of body weight a week usually suggested for keeping muscle while cutting.`;
       return {
         key: "energy",
         words: `${paceWords} Eating closer to your own number would bring the two together.`,

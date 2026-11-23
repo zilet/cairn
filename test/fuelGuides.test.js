@@ -208,7 +208,7 @@ test("the words arrive finished: the guide, then what is left to place, then the
   assert.deepEqual(words.fat, ["50–60 g", "room for about 15–25 g more · a fifth to a third of today's energy"]);
   assert.deepEqual(words.fiber, [
     "30 g or more",
-    "about 20 g more reaches it · the everyday floor for long-term health; your lipids ask for more of it, oats and beans especially",
+    "about 20 g more reaches it · a good everyday aim for long-term health; your lipids ask for more of it, oats and beans especially",
   ]);
   assert.deepEqual(words.saturated_fat, ["under 14 g", "about 5 g of room under it · kept lower, as your lipids ask"]);
   for (const g of read.guides) {

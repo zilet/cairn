@@ -148,7 +148,7 @@
     const pts: string[] = [];
     for (let x = 0; x <= 100; x += 2.5) {
       const t = x / 100;
-      const y = 62 - 30 * t ** 1.6 + 5 * Math.sin(t * Math.PI * 3.3 + 1.1) + 2.5 * Math.sin(t * Math.PI * 7.1);
+      const y = 62 - 30 * t ** 1.7 + 5 * Math.sin(t * Math.PI * 3.3 + 1.1) + 2.5 * Math.sin(t * Math.PI * 7.1);
       pts.push(`${x ? "L" : "M"}${r1(x)} ${r1(y)}`);
     }
     return `${pts.join(" ")} L100 100 L0 100 Z`;

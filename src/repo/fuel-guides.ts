@@ -619,7 +619,7 @@ export function dayFuelGuides(date?: string, opts: FuelGuidesOpts = {}): FuelGui
   // Fiber: the one fiber rule; labs lean more, said in words, no second number.
   const fiberLow = fiberFloorG(kcal);
   const lipid = leans.lower_saturated_fat;
-  const fiberBase = fiberLow > FIBER_FLOOR_G ? "14 g per 1,000 kcal of today's target" : "the everyday floor for long-term health";
+  const fiberBase = fiberLow > FIBER_FLOOR_G ? "14 g per 1,000 kcal of today's target" : "a good everyday aim for long-term health";
   guides.push(
     guide({
       key: "fiber",

@@ -7,9 +7,10 @@
 //     "Dietary Reference Intakes for Energy, Carbohydrate, Fiber, Fat, Fatty Acids,
 //     Cholesterol, Protein, and Amino Acids" (2002/2005), restated by the Dietary
 //     Guidelines for Americans 2020-2025.
-//   - 30 g is the longevity floor Cairn already held (MEAL_PLAN_FIBER_FLOOR_G): the
-//     WHO-commissioned meta-analyses (Reynolds et al., "Carbohydrate quality and human
-//     health", Lancet 2019) found the lowest risk from about 25-29 g a day upward.
+//   - 30 g is Cairn's own aim (MEAL_PLAN_FIBER_FLOOR_G), not a figure any reference
+//     calls a floor: the WHO-commissioned meta-analyses (Reynolds et al., "Carbohydrate
+//     quality and human health", Lancet 2019) found the largest risk reduction at about
+//     25-29 g a day, with more benefit suggested above 30 g. Said to the athlete as an aim.
 // So on a cut's smaller target the floor stays 30 g; a bigger target scales it up.
 import { MEAL_PLAN_FIBER_FLOOR_G } from "./nutrition-safety.js";
 
