@@ -3,7 +3,8 @@ import { mondayOf } from "../lib/dates.js";
 import { finite, round1 } from "../lib/numbers.js";
 import { PLAN_ITEM_EFFECT_TIER, isPrepPlanItem, planItemEffectTier } from "../domain/training/plan-item-order.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
-import { canonicalGroup, classifyMuscleGroup, normalizedExerciseKey } from "./exercise-canon.js";
+import { canonicalGroup, normalizedExerciseKey } from "./exercise-canon.js";
+import { primaryMuscleGroup } from "./muscle-credit.js";
 import { effectiveVolumeByGroup, type VolumeSet } from "./exercise-variations.js";
 import type { AcuteGateReading } from "./hybrid-load.js";
 import type {
@@ -40,7 +41,8 @@ import { type VolumeFloorContext, weeklySetTargets } from "./volume-floor.js";
 //
 // The log is the truth for what the week has done: `done` is effectiveVolumeByGroup over
 // the sets logged Monday through yesterday — the ONE honest counter (warm-ups out,
-// reps-in-reserve weighted, half credit for indirect work) — never a second tally, and
+// reps-in-reserve weighted, half credit for a real second mover; a quarter-share synergist
+// is touched, never counted, so it can never stand in for direct work here) — never a second tally, and
 // never today's own sets, so the read stands still all day. What the week still PLANS
 // is read the plan compiler's way (plannedWeeklyGroupSets), so the ledger and the plan
 // quality warning can never disagree about the same week.
@@ -290,8 +292,10 @@ function dayAnchorIndex(items: readonly any[]): number {
   );
 }
 
+// The item's primary group: the one resolver (muscle-credit.ts). A fill tops up the group
+// an item trains in full, never one it only lends a share to.
 function itemGroup(item: any): string | null {
-  return canonicalGroup(item?.muscle_group ?? null) ?? classifyMuscleGroup(String(item?.exercise ?? ""));
+  return primaryMuscleGroup(String(item?.exercise ?? ""), item?.muscle_group ?? null);
 }
 
 // Is this raw prescription one a set may be added to? Tested, reps work, taking no

@@ -165,6 +165,11 @@ export interface WeekReadGoalTrack {
   ago: number | null;
   /** "4 weeks ago" / "Oct 19" — the ring's words for a label; null with no `ago`. */
   ago_words: string | null;
+  /**
+   * A lift goal only: where the next mark for the athlete's own build sits, drawn as a
+   * quiet waypoint. Present only when it lies between now and the goal; null otherwise.
+   */
+  mark?: number | null;
 }
 
 export type WeekReadGoalDirection = "toward" | "holding" | "back" | "reached";
@@ -200,6 +205,22 @@ export interface WeekReadGoal {
   /** The thread's depth: the race page, the goal line, the lift's program page; null when it has none. */
   href?: string | null;
   /**
+   * A lift goal only, while a recorded plan swap carries it on a same-pattern variant: "Carries
+   * your Pendlay Row goal since Nov 13". The row's label is then the lift now trained.
+   */
+  carried_words?: string | null;
+  /**
+   * A lift goal only: the next strength standard above this lift for the athlete's own sex,
+   * age band and current bodyweight, as a load: "Next mark for your build: 240 lb". A waypoint
+   * to look toward — never a level word, a percentile or a gate. Null when there is none.
+   */
+  mark_words?: string | null;
+  /**
+   * A lift goal only: what is ahead in the journey's own terms: "Next session: 3 × 5–8 at 145 lb, +1 rep",
+   * and the journey's planning range when it gives one. Null when it has neither.
+   */
+  next_words?: string | null;
+  /**
    * The strength row only, and only when the athlete holds TWO OR MORE active lift goals:
    * the first WEEK_GOAL_LIFTS_MAX of them in the board's order (most movement this month first),
    * so no lift goal is hidden behind an arbitrary pick; the count words cover exactly the lifts listed. The row itself then reads
@@ -224,10 +245,16 @@ export interface WeekReadGoalLift {
   track: WeekReadGoalTrack | null;
   /** The journey's own trend call, in the goal row's vocabulary; null when unreadable. */
   direction: WeekReadGoalDirection | null;
-  /** "Moving toward" / "Holding" / "Drifting back" / "Reached". */
+  /** The direction finished with the goal: "Moving toward 200 lb" / "Holding, 200 lb is the goal" / "Drifting back from 200 lb" / "Reached 200 lb" (a reps goal: "Moving toward 3 × 8"); "Last trained Oct 3, goal 200 lb" (direction null) with no fresh exposure. */
   direction_words: string | null;
-  /** "1.2 lb a week up"; null when flat or unreadable. */
+  /** "4 lb up since Oct 25"; "1.2 lb a week up" with no reading four weeks back; null when unreadable. */
   move_words: string | null;
+  /** "Carries your Pendlay Row goal since Nov 13"; null unless a recorded swap carries the goal. */
+  carried_words?: string | null;
+  /** "Next session: 3 × 5–8 at 145 lb, +1 rep"; null when the journey holds no next step. */
+  next_words?: string | null;
+  /** "Next mark for your build: 240 lb"; null when there is none. */
+  mark_words?: string | null;
 }
 
 /** The most lift goals the strength row lists. */
@@ -278,6 +305,31 @@ export interface WeekReadJourneyBehind {
 }
 
 /**
+ * A stone set on the WALKED part of the trail: something the athlete actually did between
+ * `start_date` and today, read from the source that owns it (a race run, a lift's new best,
+ * the longest run taken well, a bodyweight waypoint crossed). A logged event, never an
+ * estimate of the future and never a grade.
+ */
+export interface WeekReadJourneyStone {
+  kind: "race_done" | "best" | "longest_run" | "weight";
+  stone: "strength" | "endurance" | "body" | "heart";
+  date: string;
+  /** "Nov 3". */
+  date_words: string;
+  /** Days from the stone to today (0 = today). */
+  days_ago: number;
+  /** The trail's short word: "285 lb", "14 km", "175 lb", "Half". */
+  short: string;
+  /** One full sentence: "A new best on the squat on Nov 12, an estimated 285 lb max." */
+  words: string;
+  /** The day it happened (or the goal page); null when it has no page. */
+  href: string | null;
+}
+
+/** The most stones the walked part carries, so the trail stays calm. */
+export const JOURNEY_STONES_MAX = 6;
+
+/**
  * The journey trail Horizon's Week draws: to scale in time from `start_date` through today to
  * the furthest dated goal. Built over Today's path (src/repo/today-path.ts), re-deriving
  * nothing; null when no dated mark lies ahead or the week is not this week.
@@ -291,6 +343,12 @@ export interface WeekReadJourney {
   marks: WeekReadJourneyMark[];
   /** What moved toward a goal since `start_date` (at most three); empty when nothing did. */
   behind: WeekReadJourneyBehind[];
+  /**
+   * What the athlete has already done on this stretch, as dated stones on the walked part,
+   * ascending (at most JOURNEY_STONES_MAX). Absent on an older read; when it holds stones the
+   * trail's "Behind you" list prints their sentences instead of `behind`.
+   */
+  walked?: WeekReadJourneyStone[];
   /** One calm line of where the athlete stands on the trail ("31 days walked, 10 to the race."). */
   line: string;
 }
@@ -334,6 +392,47 @@ export interface WeightTrendRead {
   } | null;
 }
 
+/** Which way a standing row or line has moved over its own window; null while it cannot be told. */
+export type WeekReadStandingDirection = "better" | "holding" | "worse";
+
+/** One line inside a standing row: a movement, a marker family, a mobility check. */
+export interface WeekReadStandingLine {
+  id: string;
+  /** "Squat", "Lipids", "Ankle, left". */
+  label: string;
+  /** The lead fact, already in the athlete's units ("234 lb", "In range", "9 cm"); null when there is no reading. */
+  now_text: string | null;
+  direction: WeekReadStandingDirection | null;
+  /** "Building" / "Holding" / "Slipping": a direction, never a grade or a level word. */
+  direction_words: string | null;
+  /** The measure of the move in words ("3% up since Oct 25", "two of five back in range since June"). */
+  move_words: string | null;
+  /** One quiet clause of context ("led by Back Squat", "next draw Dec 22"). */
+  note: string | null;
+}
+
+/**
+ * Where the athlete stands, whole person: one row per area a coach would look at. Words and
+ * directions only: no score, no percentile, no level word, no raw lab value, and never a gate.
+ * A row with nothing measured still appears when it carries an `invite` (what would let it speak).
+ */
+export interface WeekReadStandingRow {
+  key: "strength" | "endurance" | "mobility" | "body" | "blood" | "pressure" | "recovery";
+  /** The stone whose hue the row wears (docs/DESIGN.md): identity, never state. */
+  stone: "strength" | "endurance" | "recovery" | "fuel" | "body" | "heart";
+  label: string;
+  direction: WeekReadStandingDirection | null;
+  direction_words: string | null;
+  /** The row's one sentence. */
+  words: string;
+  /** "since Oct 25": the window the direction is read over; null when no direction is read. */
+  since_words: string | null;
+  lines: WeekReadStandingLine[];
+  /** What would sharpen or open this row, as an offer ("Four two-minute checks would let this row speak."); null when nothing is missing. */
+  invite: string | null;
+  href: string | null;
+}
+
 export interface WeekRead {
   /** The day the week is read as of (today for this week, else the week's own Monday or Sunday). */
   as_of: string;
@@ -360,6 +459,8 @@ export interface WeekRead {
   goals: WeekReadGoal[];
   /** Since you started: at most three measured changes, most telling first; empty when nothing has moved yet. This week only. */
   proof?: WeekReadProof[];
+  /** Where you stand, whole person: this week only, omitted or empty when nothing can be said. */
+  standing?: WeekReadStandingRow[];
   /** The journey trail: this week only, null with no dated mark ahead. */
   journey: WeekReadJourney | null;
   /** The one weight-trend read behind the weight goal row. */

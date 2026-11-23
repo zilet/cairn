@@ -40,6 +40,7 @@
       <h3 class="idea-card-title">${escHtml(idea.title)}</h3>
       ${nums ? `<p class="idea-card-nums">${escHtml(nums)}</p>` : ""}
       ${idea.why ? `<p class="idea-card-why">${escHtml(idea.why)}</p>` : ""}
+      ${idea.with && idea.with.words ? `<p class="idea-card-with">${escHtml(idea.with.words)}</p>` : ""}
       <div class="idea-card-actions">
         <button class="pillbtn idea-card-start" type="button" data-idea-card-start>Start from this</button>
         <button class="linkbtn linkbtn-quiet idea-card-another" type="button" data-idea-card-another>Another idea</button>
@@ -61,10 +62,11 @@
     const cards = ideas.length
       ? `<ul class="idea-cards-list">${ideas.map((idea, i) => ideaCardHtml(idea, { index: opts.reveal ? i + 1 : undefined })).join("")}</ul>`
       : "";
+    const room = data.room_words && ideas.length ? `<p class="idea-cards-room">${escHtml(data.room_words)}</p>` : "";
     const title = titleFor(opts.limit);
     return `<section class="idea-cards" aria-label="${escAttr(title)}">
       <h2 class="lbl idea-cards-title">${escHtml(title)}</h2>
-      ${words}${cards}
+      ${words}${cards}${room}
     </section>`;
   }
 

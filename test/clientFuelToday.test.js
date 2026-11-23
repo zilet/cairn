@@ -55,7 +55,10 @@ function paint(win, d, b = null) {
 
 const text = (el) => el.textContent.replace(/\s+/g, " ").trim();
 
-test("protein then energy as slim meters beside the day's number; carbs, fat and fiber as plain numbers", () => {
+// Changed deliberately with the day's food guides: carbs · fat · fiber are rows now. A read
+// with no guides (this fixture, like an older cached payload) keeps the bare numbers, one
+// row each, with no guide and no track.
+test("protein then energy as slim meters beside the day's number; carbs, fat and fiber as bare rows without a guides read", () => {
   const win = load();
   const host = paint(win, day(), band());
   assert.equal(text(host.querySelector(".fuel-today-title")), "Today · so far");
@@ -70,8 +73,9 @@ test("protein then energy as slim meters beside the day's number; carbs, fat and
   assert.equal(bars.length, 2);
   assert.ok(bars.every((bar) => bar.getAttribute("aria-hidden") === "true"));
   assert.match(host.querySelector(".fuel-today-fill").getAttribute("style"), /^--p:0\.459$/);
-  assert.equal(text(host.querySelector(".fuel-today-macros")), "Carbs 90 g · Fat 25 g · Fiber 9 g");
-  assert.equal(host.querySelectorAll(".fuel-today-macros .fuel-today-bar").length, 0, "no bars on the plain numbers");
+  assert.deepEqual(host.querySelectorAll(".fuel-guide dt").map(text), ["Carbs", "Fat", "Fiber"]);
+  assert.deepEqual(host.querySelectorAll(".fuel-guide-v").map(text), ["90 g", "25 g", "9 g"]);
+  assert.equal(host.querySelectorAll(".fuel-guides .fuel-guide-track, .fuel-guides .fuel-today-bar").length, 0, "no track without a guide");
   assert.equal(host.querySelector(".fuel-today-togo").textContent, "92 g protein to go");
   assert.doesNotMatch(host.textContent, /\bscore\b|\/100|%/i, "no score, no percentage");
 });
@@ -135,7 +139,7 @@ test("nothing logged today is a calm invitation: no meter at zero", () => {
   const win = load();
   const empty = paint(win, day({ count: 0, entries: [], totals: {} }));
   assert.match(empty.querySelector(".fuel-today-empty").textContent, /Nothing logged yet today/);
-  assert.equal(empty.querySelectorAll(".fuel-today-meters, .fuel-today-bar, .fuel-today-macros").length, 0, "no meter at zero");
+  assert.equal(empty.querySelectorAll(".fuel-today-meters, .fuel-today-bar, .fuel-guides").length, 0, "no meter at zero");
   assert.doesNotMatch(empty.textContent, /\b0\b|no data/i);
   assert.equal(empty.querySelector(".fuel-today-title").textContent, "Today · so far");
   assert.equal(!!empty.querySelector(".fuel-today-state"), false, "an empty day has no state word");
@@ -172,7 +176,7 @@ function lines(win, d, today = TODAY) {
   return { demand: win.CairnFuelToday.demandHtml(model), carbs: win.CairnFuelToday.carbsHtml(model), model };
 }
 
-test("a big day gets one quiet line that shapes the day and never moves the number", () => {
+test("a big day gets one quiet line that shapes the day and carries no number of its own", () => {
   const drivers = [
     "long run on this day",
     "quality run on this day",
@@ -185,7 +189,8 @@ test("a big day gets one quiet line that shapes the day and never moves the numb
   for (const date of ["2026-04-25", "2026-04-26", "2026-04-27", "2026-04-28"]) {
     for (const driver of drivers) {
       const { demand } = lines(win, day({ date, fuel_demand: { date, demand: "big", drivers: [driver] } }), date);
-      assert.match(demand, /target|number stays as it is/i, `${driver} on ${date}`);
+      assert.match(demand, /carb/i, `${driver} on ${date}`);
+      assert.doesNotMatch(demand, /target|number stays/i, "the day's number is the server's sentence, not this line's");
       assert.doesNotMatch(demand, /\d/, "the line never carries a number of its own");
       if (driver === "long run on this day") seen.add(demand);
     }
@@ -209,20 +214,125 @@ test("a day-shape read dated another day never speaks on this one", () => {
   assert.equal(model.demand, null);
 });
 
-test("today's carb range is one calm line inside the target, never set against the log", () => {
+// Changed deliberately with the day's food guides: the carb range is said ONCE. With food
+// logged it is the carbs row (the next section); with nothing logged it is one calm line
+// built from the carbs guide's own words, never set against a log there is not.
+test("today's carb range is one calm line on an empty day, never set against the log", () => {
   const win = load();
-  const ranged = {
-    ...BIG_LONG_RUN,
-    carbs: { tier: "high", g_per_kg: { low: 3.8, high: 4.2 }, grams: { low: 275, high: 305 }, basis: "within_target" },
+  const guides = {
+    date: TODAY,
+    day_state: "nothing_logged",
+    target_kcal: 2163,
+    protein_g: 175,
+    guides: [
+      { key: "carbs", label: "Carbs", kind: "range", low_g: 230, high_g: 250, eaten_g: null, source: "derived", lab_led: false, on_card: true, text: "around 230–250 g today", note: "for today's endurance work, inside your target", track: { lo: 0.8, hi: 0.87, mark: null } },
+    ],
   };
-  const host = paint(win, day({ fuel_demand: ranged }));
-  const line = host.querySelector(".fuel-today-carbs").textContent;
-  assert.equal(line, "Carbs around 275–305 g suit today's endurance work, inside today's target.");
+  const empty = paint(win, day({ count: 0, entries: [], fuel_demand: BIG_LONG_RUN, guides }));
+  const line = empty.querySelector(".fuel-today-carbs").textContent;
+  assert.equal(line, "Carbs around 230–250 g today · for today's endurance work, inside your target");
   assert.doesNotMatch(line, /\b(?:under|over|short|behind|left)\b/i);
-  // The empty card still shows the day's shape without turning it into a nudge.
-  const empty = paint(win, day({ count: 0, entries: [], fuel_demand: BIG_LONG_RUN }));
+  // The empty card still shows the day's shape without turning it into a nudge, and no row.
   assert.ok(empty.querySelector(".fuel-today-demand"));
+  assert.equal(empty.querySelectorAll(".fuel-guide").length, 0);
   assert.doesNotMatch(empty.textContent, /you should have|behind|missed/i);
+  // With food logged and no guides read, there is no carb sentence at all.
+  assert.equal(paint(win, day({ fuel_demand: BIG_LONG_RUN })).querySelectorAll(".fuel-today-carbs").length, 0);
+});
+
+// ---------- the day's food guides (repo/fuel-guides.ts) ----------
+// With a guides read, carbs · fat · fiber become guide rows (the plain macros line and
+// the carb sentence give way, so the carbs are said once). The words and the track
+// arrive finished from the server (test/fuelGuides.test.js pins them); the card frames
+// them. The two cases above that assert the plain line and the carb sentence still hold
+// for a read that carries no guides (an older cached payload): that fallback is deliberate.
+
+function guide(key, fields) {
+  const labels = { carbs: "Carbs", fat: "Fat", fiber: "Fiber", saturated_fat: "Saturated fat", omega_3: "Omega-3" };
+  return { key, label: labels[key], source: "derived", lab_led: false, low_g: null, high_g: null, eaten_g: null, on_card: key !== "omega_3", ...fields };
+}
+
+// The owner's in-progress day as the server words it (the strings fuel-guides.ts produces
+// for 2,163 kcal, 175 g protein, 80 kg, a long-run day and an ApoB finding).
+function guidesRead(overrides = {}) {
+  const list = [
+    guide("carbs", { kind: "range", low_g: 230, high_g: 250, eaten_g: 63, text: "around 230–250 g today", note: "room for about 167–187 g more · for today's endurance work, inside your target", track: { lo: 0.8, hi: 0.87, mark: 0.219 } }),
+    guide("fat", { kind: "range", low_g: 50, high_g: 60, eaten_g: 33, text: "50–60 g", note: "room for about 17–27 g more · a fifth to a third of today's energy", track: { lo: 0.725, hi: 0.87, mark: 0.478 } }),
+    guide("fiber", { kind: "floor", low_g: 30, eaten_g: 10, lab_led: true, text: "30 g or more", note: "about 20 g more reaches it · a good everyday aim for long-term health; your lipids ask for more of it, oats and beans especially", track: { lo: 0.58, hi: 1, mark: 0.193 } }),
+    guide("saturated_fat", { kind: "ceiling", high_g: 14, eaten_g: 9, lab_led: true, text: "under 14 g", note: "5 g of room under it · kept lower, as your lipids ask", track: { lo: 0, hi: 0.87, mark: 0.559 } }),
+    guide("omega_3", { kind: "weekly", words: "An omega-3 source on one of the last seven days. Two a week is the usual guide." }),
+  ];
+  return { date: TODAY, day_state: "in_progress", target_kcal: 2163, protein_g: 175, guides: list, ...overrides };
+}
+
+function ownerDay(guides = guidesRead()) {
+  return day({
+    totals: { kcal: 794, protein_g: 62, carbs_g: 63, fat_g: 33, fiber_g: 10 },
+    target: { kcal: 2163, protein_g: 175 },
+    fuel_demand: {
+      ...BIG_LONG_RUN,
+      carbs: { tier: "high", g_per_kg: { low: 2.9, high: 3.1 }, grams: { low: 230, high: 260 }, basis: "within_target" },
+    },
+    guides,
+  });
+}
+
+test("guide rows replace the plain macros line, and the carbs are said once", () => {
+  const win = load();
+  const host = paint(win, ownerDay(), null);
+  assert.equal(host.querySelectorAll(".fuel-today-carbs").length, 0, "the carb sentence folds into the carbs row");
+  const labels = host.querySelectorAll(".fuel-guide dt").map((dt) => dt.textContent);
+  assert.deepEqual(labels, ["Carbs", "Fat", "Fiber", "Saturated fat"]);
+  const values = host.querySelectorAll(".fuel-guide-v").map(text);
+  assert.deepEqual(values, ["63 g · around 230–250 g today", "33 g · 50–60 g", "10 g · 30 g or more", "9 g · under 14 g"]);
+  const notes = host.querySelectorAll(".fuel-guide-note").map(text);
+  assert.equal(notes[0], "room for about 167–187 g more · for today's endurance work, inside your target");
+  assert.equal(
+    host.querySelector(".fuel-guide-week").textContent,
+    "An omega-3 source on one of the last seven days. Two a week is the usual guide."
+  );
+  // The track is a picture of the text: hidden from assistive tech, geometry only.
+  const tracks = host.querySelectorAll(".fuel-guide-track");
+  assert.equal(tracks.length, 4);
+  assert.ok(tracks.every((t) => t.getAttribute("aria-hidden") === "true"));
+  assert.equal(host.querySelector(".fuel-guide-band").getAttribute("style"), "--lo:0.800;--hi:0.870");
+  assert.equal(host.querySelector(".fuel-guide-mark").getAttribute("style"), "--m:0.219");
+  assert.doesNotMatch(host.textContent, /%|\bscore\b|\blow\b|behind|short|missed/i, "no percent, no score, no shortfall");
+  // The big-day sentence still stands; only the carb sentence folded.
+  assert.ok(host.querySelector(".fuel-today-demand"));
+});
+
+test("saturated fat earns a row only when its eaten side is known or a lab finding leads it", () => {
+  const win = load();
+  const quiet = guidesRead();
+  quiet.guides[3] = guide("saturated_fat", { kind: "ceiling", high_g: 24, eaten_g: null, eaten_band: "low", on_card: false, text: "under 24 g", note: "today's meals so far read mostly low in it · under a tenth of today's energy" });
+  const hidden = paint(win, ownerDay(quiet), null);
+  assert.equal(hidden.querySelectorAll('[data-guide="saturated_fat"]').length, 0);
+
+  const led = guidesRead();
+  led.guides[3] = guide("saturated_fat", { kind: "ceiling", high_g: 14, eaten_g: null, lab_led: true, text: "under 14 g", note: "today's meals so far read mostly moderate in it · kept lower, as your lipids ask", track: { lo: 0, hi: 0.87, mark: null } });
+  const shown = paint(win, ownerDay(led), null);
+  const row = shown.querySelector('[data-guide="saturated_fat"]');
+  assert.ok(row.querySelector(".fuel-today-value.is-unknown"), "an unknown eaten side prints no number");
+  assert.match(text(row.querySelector(".fuel-guide-note")), /^today's meals so far read mostly moderate in it/);
+  assert.equal(row.querySelectorAll(".fuel-guide-mark").length, 0, "no mark for an unknown amount");
+});
+
+test("hostile guide words come back as text", () => {
+  const win = load();
+  const read = guidesRead();
+  read.guides[0] = { ...read.guides[0], note: "<img src=x>", label: "<b>Carbs</b>" };
+  read.guides[4] = { ...read.guides[4], words: "<i>x</i>" };
+  const host = paint(win, ownerDay(read), null);
+  assert.equal(host.querySelectorAll(".fuel-guides img, .fuel-guides dt b, .fuel-guide-week i").length, 0);
+  assert.equal(host.querySelector(".fuel-guide-note").textContent, "<img src=x>");
+});
+
+test("a guides read dated another day never speaks on this one", () => {
+  const win = load();
+  const host = paint(win, ownerDay(guidesRead({ date: "2026-04-24" })), null);
+  assert.deepEqual(host.querySelectorAll(".fuel-guide-v").map(text), ["63 g", "33 g", "10 g"]);
+  assert.equal(host.querySelectorAll(".fuel-guide-note, .fuel-guide-track, .fuel-guide-week").length, 0);
 });
 
 // ---------- controller ----------
@@ -344,4 +454,70 @@ test("mounting twice on one host leaves one listener", async () => {
   await h.host.querySelector("[data-fuel-today-retry]").click();
   await flush();
   assert.equal(reads - before, 1, "one tap, one read");
+});
+
+test("a guide carrying its why prints a quiet disclosure: what it is made of, what it does, the source", () => {
+  const win = load();
+  const read = guidesRead({
+    explain: [
+      { key: "protein", label: "Protein", made_of: "175 g is 2.5 g per kg at 153 lb.", effect: "Protein keeps muscle in a cut.", source: "Helms 2014." },
+    ],
+  });
+  read.guides[0].why = { made_of: "The range is 6–10 g per kg.", effect: "Carbs are what long running burns.", source: "ACSM 2016." };
+  const host = paint(win, ownerDay(read), null);
+  const whys = host.querySelectorAll(".fuel-guide .fuel-why");
+  assert.equal(whys.length, 1, "only the guide that carries a why");
+  assert.match(text(whys[0]), /Why.*6–10 g per kg.*long running burns.*ACSM 2016\./s);
+  const all = host.querySelectorAll(".fuel-why");
+  assert.equal(all.length, 2);
+  assert.match(text(all[0]), /Why these two numbers.*Protein.*2\.5 g per kg/s);
+});
+
+test("the last two weeks: the lever first, then where the complete days landed; absent when there is none", () => {
+  const win = load();
+  assert.equal(paint(win, ownerDay(), null).querySelectorAll(".fuel-pattern").length, 0);
+  const pattern = {
+    since: "2026-04-11",
+    through: "2026-04-24",
+    complete_days: 12,
+    title: "Your last 12 complete days",
+    lines: [{ key: "energy", label: "Energy", words: "Energy averaged about 1,830 kcal, about 330 under your number." }],
+    lever: { key: "energy", words: "Eating closer to your own number would bring the two together.", why: "The slower line leaves more fuel." },
+  };
+  const host = paint(win, ownerDay(guidesRead({ pattern })), null);
+  assert.equal(text(host.querySelector(".fuel-pattern-title")), "Your last 12 complete days");
+  assert.equal(text(host.querySelector(".fuel-pattern-lever")), pattern.lever.words);
+  assert.deepEqual(host.querySelectorAll(".fuel-pattern-lines li").map(text), [pattern.lines[0].words]);
+  assert.doesNotMatch(text(host.querySelector(".fuel-pattern")), /%|score|missed|failed/i);
+});
+
+test("what is left of the day's number is said roundly, with the server's sentence on why the number moved", () => {
+  const win = load();
+  const d = ownerDay();
+  d.target = { kcal: 2480, protein_g: 175, average_kcal: 2160, day_shift_kcal: 320, day_words: "Today's number is about 2,480 kcal: your 2,160 average plus about 320 for the long run. The week still averages 2,160." };
+  const host = paint(win, d, null);
+  assert.equal(text(host.querySelector(".fuel-today-left")), "About 1,690 kcal left for today.");
+  assert.equal(text(host.querySelector(".fuel-today-daynum")), d.target.day_words);
+  d.totals = { ...d.totals, kcal: 2500 };
+  assert.equal(text(paint(win, d, null).querySelector(".fuel-today-left")), "About at today's number.");
+  d.totals = { ...d.totals, kcal: 2700 };
+  assert.equal(text(paint(win, d, null).querySelector(".fuel-today-left")), "About 220 kcal past today's number.");
+});
+
+test("a guide's why leads with where the grams came from, and the pattern carries its second note and caveat", () => {
+  const win = load();
+  const read = guidesRead({
+    pattern: {
+      since: "2026-04-11", through: "2026-04-24", complete_days: 12, title: "Your last 12 complete days",
+      lines: [{ key: "energy", label: "Energy", words: "Logged energy averaged about 1,950 kcal." }],
+      lever: { key: "energy", words: "Lever.", why: "Reason." },
+      also: { key: "saturated_fat", words: "Saturated fat has landed clearly over its ceiling on most of these days.", why: "Swap." },
+      caveat: "This reads what was logged.",
+    },
+  });
+  read.guides[1].why = { from: "Mostly from eggs 14 g, chicken kebab 15 g (a rough estimate).", made_of: "m", effect: "Fat is not one thing.", source: "s" };
+  const host = paint(win, ownerDay(read), null);
+  assert.equal(text(host.querySelector(".fuel-why-from")), "Mostly from eggs 14 g, chicken kebab 15 g (a rough estimate).");
+  assert.deepEqual(host.querySelectorAll(".fuel-pattern-lever").map(text), ["Lever.", "Saturated fat has landed clearly over its ceiling on most of these days."]);
+  assert.equal(text(host.querySelector(".fuel-pattern-caveat")), "This reads what was logged.");
 });

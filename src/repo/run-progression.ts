@@ -111,7 +111,7 @@ import {
 import { isStatedEasyRpe } from "./stated-effort.js";
 import { getRunCompliance, type RunCompliance } from "./sessions.js";
 import { isReadDayReadiness, sensorIsCurrent } from "./sensor-freshness.js";
-import { daysBetweenISO, localDateISO } from "./shared.js";
+import { addDaysISO, daysBetweenISO, localDateISO } from "./shared.js";
 import { heavyLowerWeekdaySlots } from "./plan-selection.js";
 import { getTrainingIntent, type ResolvedTrainingIntent } from "./training-intent.js";
 import type { CoachPersonalModifier } from "../brain/coach-context-contract.js";
@@ -1856,7 +1856,9 @@ function weeklyRunPlanRead(
   // and it changes only WHICH day, never how far.)
   let lowerDays: Set<number>;
   try {
-    lowerDays = heavyLowerWeekdaySlots(week_start);
+    // The lifting weekdays as of the day BEFORE the week: an observed pattern read on the
+    // Monday itself would count that Monday's own session and re-place the week's runs.
+    lowerDays = heavyLowerWeekdaySlots(week_start, { liftAsOf: addDaysISO(week_start, -1) ?? week_start });
   } catch {
     lowerDays = new Set();
   }

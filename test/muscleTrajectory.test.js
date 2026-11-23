@@ -63,7 +63,183 @@ test("muscleGroupTrajectory yields per-group verdicts — a climbing group advan
   assert.equal(chest.lead_lift, "Bench Press");
   assert.ok(chest.stalled_signal && chest.stalled_signal.length > 0, "names the stall tell");
 
+  // The headline says what leads in plain words, never a tally of verdicts. Shoulders and
+  // triceps ride only on the bench (half shares): they read flat on their own cards but
+  // are not named again in the headline, where chest already speaks for that lift.
+  assert.equal(t.headline, "Quads are advancing; chest is flat.");
+  const triceps = t.groups.find((g) => g.group === "triceps");
+  assert.equal(triceps.verdict, "stalling");
+  assert.equal(triceps.direct, false);
+  assert.deepEqual(triceps.vary_options, [], "the chest card carries the bench's menu");
+  assert.ok(!/\d/.test(t.headline), "no counts in the headline");
+
   NO_SCORE(t, "muscleGroupTrajectory");
+});
+
+// ── the group is read from ALL its lifts, led by its compound ─────────────────
+
+const rising = (name, start, step, rir = 2) =>
+  [28, 21, 14, 7, 0].forEach((d, i) => repo.logSetByName({ exercise: name, weight: start + i * step, reps: 5, rir, date: back(d) }));
+const stuck = (name, weight, reps = 5) =>
+  [28, 21, 14, 7, 0].forEach((d) => repo.logSetByName({ exercise: name, weight, reps, rir: 1, date: back(d) }));
+
+test("the compound leads the group: one stalled accessory under an advancing squat reads advancing", () => {
+  rising("Back Squat", 225, 10);
+  stuck("Leg Extension", 100, 10);
+  const quads = repo.muscleGroupTrajectory(REF).groups.find((g) => g.group === "quads");
+  assert.ok(quads, "quads are read");
+  assert.equal(quads.verdict, "advancing", "a stuck leg extension does not stall the quads");
+  assert.equal(quads.lead_lift, "Back Squat", "the squat leads, never the accessory");
+  assert.equal(quads.lead_role, "compound");
+  assert.equal(quads.lifts_read, 2);
+  assert.deepEqual(quads.vary_options, []);
+  assert.match(quads.note, /Leg Extension is flat/, "the accessory is named in the note at most");
+});
+
+test("a stalled lead compound stalls the group even when an accessory climbs", () => {
+  stuck("Back Squat", 275);
+  rising("Leg Extension", 100, 10);
+  const quads = repo.muscleGroupTrajectory(REF).groups.find((g) => g.group === "quads");
+  assert.equal(quads.verdict, "stalling");
+  assert.equal(quads.lead_lift, "Back Squat");
+  assert.ok(quads.vary_options.every((o) => !/extension|curl|lunge/i.test(o.name)), "a squat is varied with a squat");
+});
+
+test("synergist credit counts: a climbing row leads biceps over a stuck curl, unless it only grazes them", () => {
+  rising("Barbell Row", 135, 10);
+  stuck("Barbell Curl", 75, 8);
+  const credits = (bicepsShare) => (name) =>
+    name === "Barbell Row"
+      ? [
+          { group: "back", share: 1, role: "primary" },
+          { group: "biceps", share: bicepsShare, role: "secondary" },
+        ]
+      : name === "Barbell Curl"
+        ? [{ group: "biceps", share: 1, role: "primary" }]
+        : [];
+  const strong = repo.muscleGroupTrajectory(REF, { creditFor: credits(0.5) }).groups.find((g) => g.group === "biceps");
+  assert.equal(strong.verdict, "advancing");
+  assert.equal(strong.lead_lift, "Barbell Row");
+  assert.equal(strong.lifts_read, 2);
+  const graze = repo.muscleGroupTrajectory(REF, { creditFor: credits(0.25) }).groups.find((g) => g.group === "biceps");
+  assert.equal(graze.verdict, "stalling", "a lift crediting a sliver never speaks for the group");
+  assert.equal(graze.lead_lift, "Barbell Curl");
+  // The back reads the row either way.
+  const backRead = repo.muscleGroupTrajectory(REF, { creditFor: credits(0.5) }).groups.find((g) => g.group === "back");
+  assert.equal(backRead.verdict, "advancing");
+  assert.equal(backRead.lead_lift, "Barbell Row");
+});
+
+// A program state with these lifts and statuses, nothing else (no volume).
+const liftState = (exercise, muscle_group, status) => ({
+  exercise,
+  muscle_group,
+  mode: "reps",
+  sessions: 6,
+  est_1rm: 200,
+  best_seconds: null,
+  trend_per_wk: status === "progressing" ? 3 : 0,
+  status,
+  stall_signals: status === "plateaued" ? ["same top load 4 sessions running"] : [],
+  weeks_static: status === "plateaued" ? 4 : null,
+  suggested_action: status === "plateaued" ? "vary" : "overload",
+  why: status === "plateaued" ? "Flat." : "Climbing.",
+});
+const stateOf = (lifts) => ({
+  generated_for: REF,
+  discipline: "strength",
+  lifts,
+  volume: [],
+  mesocycle: { weeks_since_deload: null, phase: null, acute_chronic_ratio: null, note: "" },
+  endurance: null,
+  hybrid: null,
+  headline: "",
+  adaptations_due: [],
+});
+
+test("touched (quarter) shares are never members: a deadlift does not make forearms or core flat", () => {
+  // Deadlift, bent-over row and back squat plateaued; pull-ups climbing.
+  const t = repo.muscleGroupTrajectory(REF, {
+    programState: stateOf([
+      liftState("Deadlift", "hamstrings", "plateaued"),
+      liftState("Barbell Bent Over Row", "back", "plateaued"),
+      liftState("Back Squat", "quads", "plateaued"),
+      liftState("Pull-Up", "back", "progressing"),
+    ]),
+    recentRotations: [],
+  });
+  const by = (g) => t.groups.find((x) => x.group === g);
+  assert.equal(by("forearms"), undefined, "every forearm credit here is a touched share");
+  assert.equal(by("core"), undefined, "every core credit here is a touched share");
+  assert.ok(!/Forearms|Core/.test(t.headline), t.headline);
+  // Biceps: the row and the pull-up each lend a half share and move opposite ways, so
+  // neither speaks for the group alone; the climbing pull-up is not outvoted.
+  assert.equal(by("biceps").verdict, "advancing");
+  assert.equal(by("biceps").lead_lift, "Pull-Up");
+  assert.equal(by("biceps").direct, false, "biceps are read only through pulls here");
+  // Back: the row (full) and the deadlift (half) are flat against one climbing pull-up,
+  // so the weighted majority genuinely stalls, and the note still names the climber.
+  assert.equal(by("back").verdict, "stalling");
+  assert.equal(by("back").lead_lift, "Barbell Bent Over Row");
+  assert.match(by("back").note, /Pull-Up is still climbing/);
+  // Rear delts ride only on the row: flat, no menu of their own, never in the headline.
+  assert.equal(by("rear delts").verdict, "stalling");
+  assert.deepEqual(by("rear delts").vary_options, []);
+  assert.match(by("rear delts").note, /work from Barbell Bent Over Row, which is flat for now/);
+  // The headline names only groups with direct work of their own.
+  assert.equal(t.headline, "Back, quads, and hamstrings are flat.");
+  // Fewer lifts read than the old count that let quarter shares vote.
+  assert.equal(by("glutes").lifts_read, 2, "deadlift and squat each lend glutes a counted half");
+});
+
+test("one climbing pull-up leads the back over a half-share deadlift that stalled", () => {
+  const t = repo.muscleGroupTrajectory(REF, {
+    programState: stateOf([liftState("Deadlift", "hamstrings", "plateaued"), liftState("Pull-Up", "back", "progressing")]),
+    recentRotations: [],
+  });
+  const backRead = t.groups.find((g) => g.group === "back");
+  assert.equal(backRead.verdict, "advancing");
+  assert.equal(backRead.lead_lift, "Pull-Up");
+});
+
+test("the vary menu stays in the stalled lift's own region: never a deadlift for a leg curl", () => {
+  stuck("Leg Curl", 100, 10);
+  const hams = repo.muscleGroupTrajectory(REF).groups.find((g) => g.group === "hamstrings");
+  assert.ok(hams, "hamstrings are read");
+  assert.equal(hams.verdict, "stalling");
+  assert.equal(hams.lead_lift, "Leg Curl");
+  assert.ok(
+    hams.vary_options.every((o) => !/deadlift|rdl|good morning|swing/i.test(o.name)),
+    `no hinge offered for a leg curl: ${hams.vary_options.map((o) => o.name).join(", ")}`
+  );
+  assert.ok(hams.vary_options.every((o) => repo.sameVaryRegion("Leg Curl", o.name)));
+  assert.match(hams.note, /close variation or a lighter week/, "an empty menu still reads as a suggestion");
+});
+
+test("sameVaryRegion: region family for isolation lifts, compound-for-compound otherwise", () => {
+  assert.equal(repo.sameVaryRegion("Leg Curl", "Romanian Deadlift"), false);
+  assert.equal(repo.sameVaryRegion("Barbell Curl", "Hammer Curl"), true);
+  assert.equal(repo.sameVaryRegion("Barbell Curl", "Leg Curl"), false);
+  assert.equal(repo.sameVaryRegion("Tricep Pushdown", "Skull Crusher"), true);
+  assert.equal(repo.sameVaryRegion("Tricep Pushdown", "Dips"), false);
+  assert.equal(repo.sameVaryRegion("Bench Press", "DB Bench Press"), true);
+  assert.equal(repo.sameVaryRegion("Bench Press", "Incline DB Press"), true);
+  assert.equal(repo.sameVaryRegion("Bench Press", "DB Chest Fly"), false);
+  assert.equal(repo.sameVaryRegion("Conventional Deadlift", "Romanian Deadlift"), true);
+});
+
+test("the headline names what leads, and names the flat groups", () => {
+  const g = (group, verdict) => ({ group, label: group.charAt(0).toUpperCase() + group.slice(1), verdict });
+  assert.equal(
+    repo.trajectoryHeadline([g("chest", "advancing"), g("back", "advancing"), g("quads", "advancing"), g("triceps", "stalling"), g("calves", "stalling")]),
+    "Most groups are advancing; triceps and calves are flat."
+  );
+  assert.equal(repo.trajectoryHeadline([g("chest", "advancing"), g("back", "advancing")]), "Every group is advancing.");
+  assert.equal(repo.trajectoryHeadline([g("chest", "maintaining"), g("back", "maintaining")]), "Your groups are holding steady.");
+  assert.equal(
+    repo.trajectoryHeadline([g("chest", "stalling"), g("back", "stalling"), g("quads", "maintaining")]),
+    "Chest and back are flat."
+  );
 });
 
 test("a stalled group offers a MENU of same-pattern vary options to break the plateau", () => {

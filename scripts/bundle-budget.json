@@ -57,7 +57,7 @@
         "brotli": 26064
       },
       "budget": {
-        "raw": 114688,
+        "raw": 118784,
         "brotli": 28672
       }
     },
@@ -118,12 +118,12 @@
     "public/js/bundle-09-horizon.js": {
       "lazy": "horizon",
       "measured": {
-        "raw": 197303,
-        "brotli": 45536
+        "raw": 210091,
+        "brotli": 47971
       },
       "budget": {
-        "raw": 207872,
-        "brotli": 48128
+        "raw": 221184,
+        "brotli": 52224
       }
     },
     "public/js/bundle-10-ask.js": {
@@ -306,7 +306,7 @@
         "brotli": 6468
       },
       "budget": {
-        "raw": 43008,
+        "raw": 45056,
         "brotli": 9216
       }
     },

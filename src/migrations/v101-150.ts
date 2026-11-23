@@ -771,4 +771,19 @@ export const MIGRATIONS_101_150: Migration[] = [
       if (hasTable(db, "settings")) addColumn(db, "settings", "chat_context TEXT DEFAULT 'lean'");
     },
   },
+  {
+    version: 133,
+    name: "strength-objectives-bodyweight-reps",
+    // A second objective kind, 'bodyweight_reps' (a pull-up goal counts reps, never an
+    // estimated max — repo/strength-reps.ts). SQLite cannot drop target_est_1rm's NOT
+    // NULL by ALTER, so a reps goal stores 0 there and every reader branches on
+    // target_kind first. NULL on existing rows. Two-step: also in db.ts's create block.
+    up: (db) => {
+      if (!hasTable(db, "strength_objectives")) return;
+      addColumn(db, "strength_objectives", "target_reps INTEGER");
+      addColumn(db, "strength_objectives", "target_sets INTEGER");
+      addColumn(db, "strength_objectives", "baseline_reps INTEGER");
+      addColumn(db, "strength_objectives", "achieved_reps INTEGER");
+    },
+  },
 ];

@@ -12,7 +12,7 @@ The OAuth 2.1 doors an AI app signs in through for `/mcp` (`/.well-known/oauth-*
 [OPERATIONS.md](OPERATIONS.md) "Connect an AI app (MCP)".
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**416 routes** across 136 groups.
+**420 routes** across 138 groups.
 
 ## `/activities`
 
@@ -601,6 +601,20 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | PUT | `/api/memory/:id` |  |
 | POST | `/api/memory/:id/supersede` | Supersede (mark, never hard-delete): optionally provide a replacement content (a new row is created) or replacement_id (point at an existing row). |
 | POST | `/api/memory/consolidate` | Quiet memory consolidation: merge near-duplicates, supersede contradictions, promote recurring observations. Marks, never hard-deletes. On demand here; also scheduled nightly. Designed ok:false at 200 when the agent returns nothing usable. |
+
+## `/mobility-checks`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/mobility-checks` | Mobility self-checks (src/repo/mobility-checks.ts): a few short field tests the athlete repeats, compared only with their own earlier readings. GET lists the readings (newest first) with the catalog of how-to lines; `?check=` narrows to one check, `?days=` bounds it. |
+| POST | `/api/mobility-checks` | Log one reading (one side). A refused reading answers 400 with { ok:false, error }. |
+| DELETE | `/api/mobility-checks/:id` |  |
+
+## `/mobility-standing`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/mobility-standing` | Where mobility stands: latest per check and side, its direction over at least three weeks, practice days in the last four, and the quiet invite when there is nothing (or nothing recent) to read. |
 
 ## `/muscle-load`
 

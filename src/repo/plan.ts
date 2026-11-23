@@ -12,6 +12,7 @@ import { findOrCreateExercise, getExercise, recentWorkingSeconds, recentWorkingW
 import { relatedLiftStart } from "./related-lift.js";
 import { invalidateDayRead } from "./intelligence.js";
 import { localDateISO, localDayOfStamp } from "./shared.js";
+import { memoNeutralWrite } from "./request-memo.js";
 import {
   bumpTrainingDataVersion,
   currentTrainingDataVersion,
@@ -98,17 +99,22 @@ function installOdometer(
   tables: readonly string[],
   events: readonly ("INSERT" | "UPDATE" | "DELETE")[]
 ): void {
-  db.exec(`CREATE TEMP TABLE IF NOT EXISTS ${counterTable} (n INTEGER NOT NULL)`);
-  const seeded = db.prepare(`SELECT COUNT(*) AS c FROM ${counterTable}`).get() as any;
-  if (!seeded?.c) db.exec(`INSERT INTO ${counterTable} (n) VALUES (0)`);
-  for (const t of tables) {
-    for (const event of events) {
-      db.exec(
-        `CREATE TEMP TRIGGER IF NOT EXISTS ${triggerPrefix}_${event.toLowerCase()}_${t} AFTER ${event} ON ${t}
-         BEGIN UPDATE ${counterTable} SET n = n + 1; END`
-      );
+  // Seeding the counter row is a write no request-memoized read can have seen (the table
+  // did not exist a statement ago), so it runs memo-neutral: the first plan read after a
+  // boot no longer throws away every read the request memoized before it.
+  memoNeutralWrite(() => {
+    db.exec(`CREATE TEMP TABLE IF NOT EXISTS ${counterTable} (n INTEGER NOT NULL)`);
+    const seeded = db.prepare(`SELECT COUNT(*) AS c FROM ${counterTable}`).get() as any;
+    if (!seeded?.c) db.exec(`INSERT INTO ${counterTable} (n) VALUES (0)`);
+    for (const t of tables) {
+      for (const event of events) {
+        db.exec(
+          `CREATE TEMP TRIGGER IF NOT EXISTS ${triggerPrefix}_${event.toLowerCase()}_${t} AFTER ${event} ON ${t}
+           BEGIN UPDATE ${counterTable} SET n = n + 1; END`
+        );
+      }
     }
-  }
+  });
 }
 
 let accountableBackstop: ReturnType<typeof db.prepare> | null = null;

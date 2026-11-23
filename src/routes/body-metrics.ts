@@ -11,6 +11,12 @@ import {
   updateBodyMeasurement,
   validateBodyMeasurementInput,
 } from "../repo/body-metrics.js";
+import {
+  deleteMobilityCheck,
+  listMobilityChecks,
+  logMobilityCheck,
+  mobilityStanding,
+} from "../repo/mobility-checks.js";
 import { setProfile } from "../repo/profile.js";
 
 export const bodyMetricsRouter = Router();
@@ -97,4 +103,35 @@ bodyMetricsRouter.delete("/body-metrics/:id", (req, res) => {
 // too: "waist 34, chest 42" style free-field body → one clean logged session.
 bodyMetricsRouter.post("/body-metrics/log", (req, res) => {
   res.json(applyMeasurementAction(req.body ?? {}));
+});
+
+// Mobility self-checks (src/repo/mobility-checks.ts): a few short field tests the athlete
+// repeats, compared only with their own earlier readings. GET lists the readings (newest
+// first) with the catalog of how-to lines; `?check=` narrows to one check, `?days=` bounds it.
+bodyMetricsRouter.get("/mobility-checks", (req, res) => {
+  res.json(
+    listMobilityChecks({
+      check_key: req.query.check ?? req.query.check_key,
+      days: req.query.days != null ? Number(req.query.days) : null,
+      limit: req.query.limit != null ? Number(req.query.limit) : null,
+    })
+  );
+});
+
+// Log one reading (one side). A refused reading answers 400 with { ok:false, error }.
+bodyMetricsRouter.post("/mobility-checks", (req, res) => {
+  const result = logMobilityCheck({ ...(req.body ?? {}), source: "user" });
+  if (!result.ok) res.status(400);
+  res.json(result);
+});
+
+bodyMetricsRouter.delete("/mobility-checks/:id", (req, res) => {
+  res.json(deleteMobilityCheck(Number(req.params.id)));
+});
+
+// Where mobility stands: latest per check and side, its direction over at least three
+// weeks, practice days in the last four, and the quiet invite when there is nothing (or
+// nothing recent) to read.
+bodyMetricsRouter.get("/mobility-standing", (_req, res) => {
+  res.json(mobilityStanding());
 });

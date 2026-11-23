@@ -389,6 +389,8 @@ trainingLogRouter.post("/strength-objectives", (req, res) => {
       exercise: body.exercise,
       target_kind: body.target_kind,
       target_est_1rm: body.target_est_1rm,
+      target_reps: body.target_reps,
+      target_sets: body.target_sets,
     });
     res.json({ objective, journey: getStrengthJourney({ exercise: objective.exercise }) });
   } catch (error: any) {
@@ -403,6 +405,8 @@ trainingLogRouter.put("/strength-journey", (req, res) => {
       exercise: body.exercise,
       target_kind: body.target_kind,
       target_est_1rm: body.target_est_1rm,
+      target_reps: body.target_reps,
+      target_sets: body.target_sets,
     });
     res.json({ objective, journey: getStrengthJourney() });
   } catch (error: any) {

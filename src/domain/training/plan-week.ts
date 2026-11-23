@@ -34,7 +34,7 @@ import {
 } from "../../repo/week-strength-placement.js";
 import { activitySportWhere, RUN_SPORT_PATTERNS } from "../../repo/endurance-sports.js";
 import { withoutShadowActivities } from "../../repo/activity-shadow.js";
-import { weekWins } from "../../repo/sessions.js";
+import { weekBests, type WeekBest } from "../../repo/sessions.js";
 import { getPlanWithPurpose } from "../../repo/day-read.js";
 import { strengthScheduleRead } from "../../repo/strength-schedule.js";
 import { weekLayoutClosed } from "../../repo/week-layout-closed.js";
@@ -120,6 +120,11 @@ export interface PlanWeekProgress {
   runs_open: { kind: string; label: string; suggested_date: string | null; weekday: string | null }[];
   /** New bests in the trailing seven days (weekWins' window). */
   prs: number;
+  /**
+   * Those bests, one per lift, newest first (sessions.ts weekBests, its pound-only label
+   * left behind): Horizon's road sets them as stones.
+   */
+  bests?: Omit<WeekBest, "label">[];
   line: string | null;
 }
 
@@ -708,12 +713,15 @@ export function planWeek(date?: string): PlanWeek {
     (best, r) => (r.km != null && (best == null || r.km > best) ? r.km : best),
     null
   );
-  let prs = 0;
+  // The bests alone (weekBests), not the whole weekWins rollup: the strip counts them and
+  // Horizon's road names them, and neither needs the week's volume or pace reads.
+  let bests: WeekBest[] = [];
   try {
-    prs = weekWins(asOf).prs.length;
+    bests = weekBests(asOf);
   } catch {
-    prs = 0;
+    bests = [];
   }
+  const prs = bests.length;
   const liftDows = lifting.days.map((d) => d.dow);
   const counts: Omit<PlanWeekProgress, "line"> = {
     // A lifting day is "in" when its cell reads done: a finished session, or any
@@ -736,6 +744,7 @@ export function planWeek(date?: string): PlanWeek {
         weekday: i.suggested_date ? (WEEKDAY_NAMES[isoDow(String(i.suggested_date))] ?? null) : null,
       })),
     prs,
+    bests: bests.map(({ label: _label, ...best }) => best),
   };
   const runUnits = weekRunUnits();
   const progress: PlanWeekProgress = {

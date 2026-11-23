@@ -86,6 +86,7 @@ import {
   capacitySetAsideLine,
   closedWeekRunHarm,
   demonstratedLongKm,
+  demonstratedLongRun,
   demonstratedRunCapacity,
 } from "./run-capacity.js";
 import type { HarmEvidenceKind } from "./brain/read-adherence.js";
@@ -377,6 +378,11 @@ export interface RaceBuild {
   review: {
     weeks: { week_start: string; km: number; runs: number }[];
     longest_recent_km: number | null;
+    /**
+     * The longest run of the last 28 days taken well (`demonstratedLongRun`, the ladder's
+     * own read) and its day; null when none. Absent on a read with no dated race.
+     */
+    longest_well?: { km: number; date: string } | null;
     volume_word: "rising" | "steady" | "easing" | null;
     /** The current week closed early and is the last of the four (see `this_week.closed`). */
     includes_this_week?: boolean;
@@ -1060,7 +1066,8 @@ const STANDARD_DISTANCES = [
   { key: "race_predict_marathon_sec", km: 42.195 },
 ] as const;
 
-function watchPrediction(asOf: string, distanceKm: number, units: DistanceUnit = "km"): RacePrediction | null {
+/** The watch's own race predictor for `distanceKm` as of `asOf` (Riegel-adjusted from the nearest standard distance), with its four-week trend; null past three weeks old. */
+export function watchPrediction(asOf: string, distanceKm: number, units: DistanceUnit = "km"): RacePrediction | null {
   // The watch predicts four standard distances; the closest one is Riegel-adjusted
   // to the exact goal distance (a 21.1 km "half" moves by seconds, a 15 km race by
   // more — either way it is the athlete's own fitness, not a table).
@@ -2073,6 +2080,7 @@ export function raceLadderFor(
   // banked) and the ACWR ceiling the walk already applies over the logged weeks, so the
   // ladder read on the Sunday a week closes is the ladder Monday's engine walks.
   const priorKms = priorReview.weeks.map((w) => w.km);
+  const longWell = demonstratedLongRun(asOf, logRuns);
   const weeks = projectRaceBuildWeeks(
     goal,
     asOf,
@@ -2083,7 +2091,7 @@ export function raceLadderFor(
     {
       priorWeekKm,
       closedWeeksKm: priorKms,
-      demonstratedLongKm: demonstratedLongKm(asOf, logRuns),
+      demonstratedLongKm: longWell?.km ?? null,
       demonstratedWeekKm: shownCapacity?.floor_km ?? null,
       // A new weekly high is said against the biggest week BEFORE this one: a closed
       // current week that passed it is itself the new high, and the peak is then read
@@ -2110,7 +2118,7 @@ export function raceLadderFor(
   }
   return {
     weeks,
-    review,
+    review: { ...review, longest_well: longWell },
     shownCapacity,
     adapt: {
       closed: !!closed,

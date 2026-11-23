@@ -243,11 +243,20 @@ export function closedWeekRunHarm(dateISO: string): HarmEvidence | null {
  * counted; the next-longest that it took well is. Null when none.
  */
 export function demonstratedLongKm(asOf: string, runs: { date: string; km: number }[], days = 28): number | null {
+  return demonstratedLongRun(asOf, runs, days)?.km ?? null;
+}
+
+/** The same run (demonstratedLongKm) with its day: Horizon's road sets it as a stone. */
+export function demonstratedLongRun(
+  asOf: string,
+  runs: { date: string; km: number }[],
+  days = 28
+): { km: number; date: string } | null {
   const recent = runs
     .filter((r) => r.km > 0 && r.date <= asOf && (daysBetweenISO(asOf, r.date) ?? 99) <= days)
     .sort((a, b) => b.km - a.km);
   for (const r of recent) {
-    if (runningHarmOnDay(r.date) == null) return round1(r.km);
+    if (runningHarmOnDay(r.date) == null) return { km: round1(r.km), date: r.date };
   }
   return null;
 }

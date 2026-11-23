@@ -1,12 +1,6 @@
-import {
-  MUSCLE_LANDMARKS,
-  canonicalGroup,
-  classifyMuscleGroup,
-  normalizeExerciseName,
-  normalizedExerciseKey,
-  type MuscleGroup,
-} from "./exercise-canon.js";
-import { classifyPattern, indirectGroupsForExercise, type MovementPattern } from "./exercise-variations.js";
+import { MUSCLE_LANDMARKS, normalizeExerciseName, normalizedExerciseKey, type MuscleGroup } from "./exercise-canon.js";
+import { classifyPattern, type MovementPattern, type VolumeShareOptions } from "./exercise-variations.js";
+import { isCountedShare, muscleCreditsShared } from "./muscle-credit.js";
 import { finite } from "../lib/numbers.js";
 import { type VolumeFloorContext, weeklySetTargets } from "./volume-floor.js";
 import { statedSplitIssues } from "./stated-split.js";
@@ -86,9 +80,14 @@ export interface PlanQualityOptions {
   statedSplit?: string | null;
 }
 
-/** Effective planned weekly sets per canonical group — direct sets plus half credit for indirect work. */
-export function plannedWeeklyGroupSets(days: PlanQualityDay[]): Map<MuscleGroup, number> {
-  return validateTrainingPlanInternal(days, {}).groupSets;
+/**
+ * Effective planned weekly sets per canonical group — direct sets plus the counted (half)
+ * synergist shares (muscle-credit.ts). `{ shares: "touched" }` folds the quarter shares in
+ * too: the whole picture, never what the floor, the bands or the ledger count.
+ */
+export function plannedWeeklyGroupSets(days: PlanQualityDay[], opts: VolumeShareOptions = {}): Map<MuscleGroup, number> {
+  const read = validateTrainingPlanInternal(days, {});
+  return opts.shares === "touched" ? read.touchedSets : read.groupSets;
 }
 
 /** Pure structural/quality compiler for a candidate training week. */
@@ -99,12 +98,13 @@ export function validateTrainingPlan(days: PlanQualityDay[], opts: PlanQualityOp
 function validateTrainingPlanInternal(
   days: PlanQualityDay[],
   opts: PlanQualityOptions
-): { report: PlanQualityReport; groupSets: Map<MuscleGroup, number> } {
+): { report: PlanQualityReport; groupSets: Map<MuscleGroup, number>; touchedSets: Map<MuscleGroup, number> } {
   const errors: PlanQualityIssue[] = [];
   const warnings: PlanQualityIssue[] = [];
   const seenDays = new Set<number>();
   const patterns = new Set<MovementPattern>();
   const groupSets = new Map<MuscleGroup, number>();
+  const touchedSets = new Map<MuscleGroup, number>();
   let strengthItems = 0;
   let strengthDays = 0;
 
@@ -250,13 +250,19 @@ function validateTrainingPlanInternal(
         );
       }
 
-      const group = canonicalGroup(item.muscle_group) ?? classifyMuscleGroup(exercise);
-      const pattern = classifyPattern(exercise, group ?? undefined);
+      // Which groups the item's sets credit is muscle-credit.ts's one answer — the same
+      // shares the logged-volume read (effectiveVolumeByGroup) folds, so a planned set and
+      // a logged one count alike. Quarter shares are touched, never counted here.
+      const stored = item.muscle_group == null ? null : String(item.muscle_group);
+      const credits = muscleCreditsShared(exercise, stored);
+      const pattern = classifyPattern(exercise, stored ?? undefined) ?? classifyPattern(exercise, credits[0]?.group);
       if (pattern) patterns.add(pattern);
-      if (sets != null && sets > 0 && group) {
-        groupSets.set(group, (groupSets.get(group) ?? 0) + sets);
-        for (const secondary of indirectGroupsForExercise(exercise, group)) {
-          groupSets.set(secondary, (groupSets.get(secondary) ?? 0) + sets * 0.5);
+      if (sets != null && sets > 0) {
+        for (const credit of credits) {
+          const share = credit.role === "primary" ? 1 : credit.share;
+          touchedSets.set(credit.group, (touchedSets.get(credit.group) ?? 0) + sets * share);
+          if (credit.role === "primary" || isCountedShare(credit.share))
+            groupSets.set(credit.group, (groupSets.get(credit.group) ?? 0) + sets * share);
         }
       }
     }
@@ -359,7 +365,7 @@ function validateTrainingPlanInternal(
       );
     }
   }
-  return { report: { ok: errors.length === 0, errors, warnings }, groupSets };
+  return { report: { ok: errors.length === 0, errors, warnings }, groupSets, touchedSets };
 }
 
 export function qualityIssueKey(value: PlanQualityIssue): string {

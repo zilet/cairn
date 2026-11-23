@@ -205,24 +205,49 @@ const SITES = [
     dropped: ["health", "imaging", "health_review", "garmin", "day_read", "day_intake"],
   },
   {
-    // Plan-shaping and constitution-bound: the allergen/diet sources, the nutrition
-    // directives and the training split all have to survive.
+    // A sports dietitian's brief: the allergen/diet sources, the nutrition directives and
+    // lab findings, the targets and the week's dated layout all survive; set logs, lift
+    // reads, readiness detail and the run engine's working do not.
     site: "meal_plan",
     build: () => buildMealPlanPrompt(),
     kept: [
       "training_intent",
-      "endurance_capacity",
       "profile",
       "family",
       "memory",
       "directives",
       "health_focus",
-      "plan",
+      "health",
+      "health_review",
       "goal",
       "meal_plan",
+      "day_intake",
+      "underfueling",
       "recovery",
+      "fuel_demand",
+      "intake_band",
+      "dated_week",
+      "context_events",
     ],
-    dropped: ["garmin", "day_read", "recent_decisions", "insights", "program_balance", "groups_trajectory"],
+    dropped: [
+      "garmin",
+      "day_read",
+      "recent_decisions",
+      "insights",
+      "program_balance",
+      "groups_trajectory",
+      "recent_sessions",
+      "plan",
+      "progression",
+      "training_signals",
+      "performance",
+      "signal_state",
+      "coaching_focus",
+      "run_plan",
+      "flexible_training_agenda",
+      "imaging",
+      "checkins",
+    ],
   },
   {
     // The safety checker: every contraindication source stays reachable.
@@ -238,7 +263,18 @@ const SITES = [
     site: "meal_plan_verify",
     build: () => buildPlanVerifyPrompt({ daily_kcal: 2200, daily_protein_g: 170, days: [] }),
     kept: ["profile", "family", "memory", "learnings", "context_events", "directives"],
-    dropped: ["plan", "recent_sessions", "meal_plan", "day_intake", "fueling", "coaching_focus", "garmin"],
+    dropped: [
+      "plan",
+      "recent_sessions",
+      "meal_plan",
+      "day_intake",
+      "fueling",
+      "coaching_focus",
+      "garmin",
+      "goal",
+      "checkins",
+      "body_composition",
+    ],
   },
   {
     // The plan-draft volume repair. Its breach is the server's arithmetic, so it
@@ -281,10 +317,11 @@ test("every prompt site emits well-formed JSON carrying exactly its allowlisted 
     // `today_path` is the one key a builder adds itself (buildDayReadPrompt computes
     // the Brief's path; getCoachContext never does), so it rides only the Brief.
     // `dated_week` is chat's own (buildChatPrompt computes it) for the same reason.
+    // The meal plan's builder adds `dated_week` too (the week's layout its meals follow).
     const added =
       site === "day_read" && Object.hasOwn(parsed, "today_path")
         ? ["today_path"]
-        : (site === "chat" || site === "chat_core") && Object.hasOwn(parsed, "dated_week")
+        : (site === "chat" || site === "chat_core" || site === "meal_plan") && Object.hasOwn(parsed, "dated_week")
           ? ["dated_week"]
           : [];
     const expected = [...PROMPT_CONTEXT_SITES[site].keys.filter((key) => Object.hasOwn(full, key)), ...added];
@@ -444,6 +481,127 @@ test("the Brief's DATA payload stays under its byte ceiling", () => {
     `day-read DATA (${payload.length}) should stay well under the raw snapshot (${full.length})`
   );
   assert.ok(dataBlock(buildDailyCompositionPrompt(ENVELOPE)).length < full.length * 0.4, "a narrow site cuts far more");
+});
+
+// The weekly meal plan is a sports dietitian's brief. On the demo seed its DATA was
+// ~121 KB of 64 keys (the whole coach picture: set logs, lift reads, readiness detail)
+// and a real draft ran close to its leash; it is ~31 KB now. The key set is pinned
+// whole, so a key reaches the meal plan only by being added here on purpose, and the
+// ceiling (measured + headroom for the seed's rolling dates) catches a compaction
+// quietly coming undone.
+const MEAL_PLAN_DATA_KEYS = [
+  "body_composition",
+  "context_events",
+  "context_today",
+  "cut_quality",
+  "dated_week",
+  "day_intake",
+  "dexa_targeting",
+  "directive_feedback",
+  "directives",
+  "discipline",
+  "endurance_goal",
+  "endurance_schedule",
+  "energy_deficiency",
+  "family",
+  "felt_signals",
+  "fuel_demand",
+  "fueling",
+  "goal",
+  "goal_mode",
+  "health",
+  "health_focus",
+  "health_review",
+  "health_synthesis",
+  "intake_band",
+  "journey",
+  "learned_models",
+  "learnings",
+  "location",
+  "meal_plan",
+  "memory",
+  "movement_considerations",
+  "now",
+  "profile",
+  "program_block",
+  "program_state",
+  "race_build",
+  "reaction_model",
+  "recent_activities",
+  "recovery",
+  "strength_schedule",
+  "supplements",
+  "symptom_links",
+  "training_intent",
+  "underfueling",
+  "what_works_for_you",
+];
+const MEAL_PLAN_DATA_CEILING_BYTES = 36_000;
+const MEAL_PLAN_VERIFY_DATA_CEILING_BYTES = 18_000;
+
+test("the meal plan's DATA is a dietitian's brief: pinned keys, under its byte ceiling", () => {
+  seedDemo();
+  assert.deepEqual([...PROMPT_CONTEXT_SITES.meal_plan.keys].sort(), MEAL_PLAN_DATA_KEYS);
+  const payload = dataBlock(buildMealPlanPrompt());
+  const parsed = JSON.parse(payload);
+  assert.deepEqual(Object.keys(parsed).sort(), MEAL_PLAN_DATA_KEYS, "the demo seed carries every pinned key");
+  assert.ok(
+    payload.length <= MEAL_PLAN_DATA_CEILING_BYTES,
+    `meal-plan DATA is ${payload.length} bytes, over the ${MEAL_PLAN_DATA_CEILING_BYTES} ceiling`
+  );
+  const verify = dataBlock(buildPlanVerifyPrompt({ daily_kcal: 2200, daily_protein_g: 170, days: [] }));
+  assert.ok(
+    verify.length <= MEAL_PLAN_VERIFY_DATA_CEILING_BYTES,
+    `meal-verify DATA is ${verify.length} bytes, over the ${MEAL_PLAN_VERIFY_DATA_CEILING_BYTES} ceiling`
+  );
+});
+
+test("the meal plan's compactions keep every food lever and shed the working", () => {
+  seedDemo();
+  repo.setProfile({ allergies: "peanuts", dietary_restrictions: "no cilantro" });
+  const full = repo.getCoachContext();
+  const data = JSON.parse(dataBlock(buildMealPlanPrompt()));
+
+  // Safety: allergies and restrictions ride in the profile, untouched.
+  assert.equal(data.profile.allergies, "peanuts");
+  assert.equal(data.profile.dietary_restrictions, "no cilantro");
+
+  // The week's layout: one row per date, with what it carries.
+  assert.ok(Array.isArray(data.dated_week?.days) && data.dated_week.days.length >= 7, "the dated week rides");
+  assert.ok(data.dated_week.days.some((day) => day.lift || day.run), "and names the training on its dates");
+
+  // Health with a dietary lever: every priority group stays, with its nutrition move; the
+  // training move and the duplicated lead/surfaced copies go.
+  const groups = full.health_focus.priorities.map((p) => p.group);
+  assert.deepEqual(data.health_focus.priorities.map((p) => p.group), groups);
+  assert.ok(data.health_focus.priorities.some((p) => /iron/i.test(p.group) && p.moves.nutrition), "iron's food move");
+  assert.ok(data.health_focus.priorities.some((p) => /lipid/i.test(p.group) && p.moves.nutrition), "the lipid food move");
+  assert.ok(data.health_focus.priorities.every((p) => !Object.hasOwn(p.moves ?? {}, "training")));
+  assert.ok(!Object.hasOwn(data.health_focus, "surfaced") && !Object.hasOwn(data.health_focus, "lead"));
+  assert.equal(data.health_focus.lead_group, full.health_focus.lead.group);
+
+  // Directives: every nutrition and watch row stays (watch rows carry dietary guards);
+  // training rows and the wearable recovery context do not.
+  const kept = full.directives.filter((d) => d.domain !== "training" && d.role !== "recovery_context");
+  assert.equal(data.directives.length, kept.length);
+  assert.ok(data.directives.some((d) => d.domain === "nutrition" && /ApoB/.test(d.marker)), "the ApoB food directive");
+  assert.ok(data.directives.every((d) => d.domain !== "training" && typeof d.cited === "boolean"));
+  // The raw lab records stay whole: lipids, iron, glucose, vitamin D.
+  assert.deepEqual(data.health, full.health);
+
+  // The working goes: the goal keeps its targets without the expenditure arithmetic, the
+  // program read keeps only its fuel risk and block phase, recovery its recent/baseline.
+  assert.ok(!Object.hasOwn(data.goal, "expenditure"));
+  assert.deepEqual(data.goal.effective_target, full.goal.effective_target);
+  assert.deepEqual(Object.keys(data.program_state).sort(), ["hybrid", "mesocycle", "recovery_week"]);
+  assert.deepEqual(data.program_state.hybrid.fuel, full.program_state.hybrid.fuel);
+  assert.ok(!Object.hasOwn(data.recovery, "quality") && Object.hasOwn(data.recovery, "delta"));
+  assert.ok(!Object.hasOwn(data.intake_band, "weeks") && Object.hasOwn(data.intake_band, "protein_anchor"));
+  assert.ok(!Object.hasOwn(data.journey, "underfueling"), "the underfueling read rides once, as its own key");
+  assert.equal(data.underfueling.state, full.underfueling.state);
+  assert.ok(!Object.hasOwn(data.underfueling, "channels"));
+  // The two-week pattern read keeps every line.
+  assert.deepEqual(data.day_intake.guides_pattern, full.day_intake.guides_pattern);
 });
 
 test("a wearable metric that never reported stays out of the prompt; a stale one stays in", () => {

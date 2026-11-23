@@ -15,6 +15,8 @@ import { createProposal, getProposal } from "../repo/proposals.js";
 import { getRecentSessions } from "../repo/sessions.js";
 import { backgroundTimeoutForOp } from "../repo/settings.js";
 import { mealPlanFloorPrecheck } from "../repo/verify-floors.js";
+import { applyMealPlanDayEnergy } from "../repo/meal-plan-day-energy.js";
+import { draftMealPlanDayEnergy } from "../repo/meal-plan-day-energy-compute.js";
 import { addDaysISO, localDateISO } from "../repo/shared.js";
 import { daysBetweenISO } from "../lib/dates.js";
 import { sessionNoteSuggestsFatigue, sessionNoteSuggestsRapidFade } from "../repo/training-fatigue.js";
@@ -215,7 +217,12 @@ export async function draftMealPlan(
   opts: { coordinated_update?: boolean } = {}
 ) {
   hooks?.onPhase?.("drafting your week of meals");
-  const prompt = buildMealPlanPrompt(instruction);
+  // Each day's own energy number, computed ONCE from the server's reads: the prompt shows
+  // it, and every draft this op handles (the model's, the verifier's fix, the persisted
+  // plan) carries exactly this split — never one a model wrote. Null plans flat.
+  const dayEnergy = draftMealPlanDayEnergy();
+  const withDayEnergy = (draft: any) => applyMealPlanDayEnergy(draft, dayEnergy);
+  const prompt = buildMealPlanPrompt(instruction, { dayEnergy });
   // Accept the useful weekly shape into the optional verifier pass, then make
   // actual meal totals authoritative at the deterministic server boundary below.
   const planSane = (m: any) => isMealPlanStructureResult(m);
@@ -261,15 +268,15 @@ export async function draftMealPlan(
   hooks?.onPhase?.("checking it against your floors", { frac: { done: 1, total: 2 } });
   const { draft: verifiedParsed, verified } = await runVerify(
     agent,
-    p,
-    (d) => mealPlanFloorPrecheck(d, { dietary_instruction: instruction }),
-    (d, violations) => buildPlanVerifyPrompt(d, violations, { dietary_instruction: instruction }),
+    withDayEnergy(p),
+    (d) => mealPlanFloorPrecheck(d, { dietary_instruction: instruction, day_energy: dayEnergy }),
+    (d, violations) => buildPlanVerifyPrompt(withDayEnergy(d), violations, { dietary_instruction: instruction }),
     planSane,
     "meal_plan_verify",
     hooks,
     MEAL_PLAN_STRUCTURE_SCHEMA
   );
-  const safety = validateMealPlanDraftForPersistence(verifiedParsed, instruction);
+  const safety = validateMealPlanDraftForPersistence(withDayEnergy(verifiedParsed), instruction);
   if (!safety.ok) {
     return {
       ok: false as const,

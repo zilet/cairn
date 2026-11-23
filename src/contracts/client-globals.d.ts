@@ -5244,6 +5244,10 @@ declare global {
         day: Record<string, unknown>,
         journey: import("./client-api.js").ClientStrengthJourney | null,
       ): Record<string, unknown>;
+      /** A reps goal's words (journey.reps); null on an est-1RM goal. */
+      repsWords(
+        journey: Partial<import("./client-api.js").ClientStrengthJourney> | null | undefined,
+      ): { current: string; date: string | null; target: string; gap: string; route: string } | null;
     };
 
     CairnTodayPlanSurfaceRenderer: {
@@ -6462,12 +6466,33 @@ declare global {
     state: ClientFuelDayState;
     protein: ClientFuelMacro & { anchor: number | null; toGo: number | null; aboutThere: boolean };
     /** `of`: the day's own energy number (the target the Today glance reads), when there is one. */
-    energy: ClientFuelMacro & { of: number | null };
+    energy: ClientFuelMacro & { of: number | null; dayWords: string | null; left: number | null };
     carbs: ClientFuelMacro;
     fat: ClientFuelMacro;
     fiber: ClientFuelMacro;
     bandWords: string | null;
     demand: import("./client.js").ClientDayFuelDemand | null;
+    /** The day's food guides as rows and weekly lines; null when the read carries none. */
+    guides: ClientFuelGuidesModel | null;
+  };
+  /** One guide row: eaten grams (null = unknown), the guide in words, the note, the track geometry (0-1). */
+  type ClientFuelGuideRow = {
+    key: string;
+    label: string;
+    eaten: number | null;
+    text: string;
+    note: string;
+    track: { lo: number; hi: number; mark: number | null } | null;
+    /** Why this number, what it does, the published basis; null on an older read. */
+    why: import("./fuel.js").ClientFuelWhy | null;
+  };
+  type ClientFuelGuidesModel = {
+    rows: ClientFuelGuideRow[];
+    weekly: string[];
+    /** Protein and energy explained. */
+    explain: import("./fuel.js").ClientFuelExplain[];
+    /** The last two weeks' complete days and the one lever; null when too thin to read. */
+    pattern: import("./fuel.js").ClientFuelPattern | null;
   };
   type ClientFuelMealNote = { id: number; parsed: Record<string, unknown> };
   type ClientFuelMeal = {
@@ -6548,6 +6573,7 @@ declare global {
       todayHtml(model: ClientFuelTodayModel, opts?: { countUp?: boolean }): string;
       demandHtml(model: ClientFuelTodayModel): string;
       carbsHtml(model: ClientFuelTodayModel): string;
+      guidesHtml(model: ClientFuelTodayModel, countUp?: boolean): string;
       skeletonHtml(): string;
       errorHtml(): string;
     };
@@ -7318,14 +7344,39 @@ declare global {
     this_week: boolean;
     /** Since you started (GET /api/week `proof`); empty on an older read. */
     proof: ClientProofRow[];
-    /** Every dated mark ahead (the journey's marks), for the ahead strip and its rows. */
+    /** The whole-person read (GET /api/week `standing`, raw contract rows); empty on an older read. */
+    standing: import("./week-read.js").WeekReadStandingRow[];
+    /** Every dated mark ahead (the journey's marks), for the rows folded under the trail. */
     ahead: ClientAheadMark[];
-    /** The month the furthest mark falls in ("May"); "" with no marks. */
-    ahead_to: string;
     /** "1 of 5 lifting days · 16.6 mi planned": the shape's masthead (the server's two totals words). */
     totals_words: string;
     /** The hero's quiet second line (`frame.sub`); "" on an older read, which keeps `frame.line`. */
     sub: string;
+  };
+  /** One line inside a standing row (standing-model.ts); text fields are "" when absent. */
+  type ClientStandingLine = {
+    id: string;
+    label: string;
+    now: string;
+    direction: "better" | "holding" | "worse" | null;
+    direction_words: string;
+    /** "move words · note". */
+    tail: string;
+  };
+  /** One "whole picture" row (standing-model.ts): a word and a sentence, never a score. */
+  type ClientStandingRow = {
+    key: string;
+    stone: ClientRowStone;
+    label: string;
+    direction: "better" | "holding" | "worse" | null;
+    direction_words: string;
+    words: string;
+    since_words: string;
+    invite: string;
+    href: string | null;
+    lines: ClientStandingLine[];
+    /** The row's one spoken sentence. */
+    said: string;
   };
   /** One measured change since the start (the proof band, proof-band-client.ts). */
   type ClientProofRow = {
@@ -7343,7 +7394,7 @@ declare global {
     /** An in-app page ("/app/…"); null with none. */
     href: string | null;
   };
-  /** One dated mark ahead (the ahead strip, ahead-strip-client.ts). */
+  /** One dated mark ahead (its row under the trail, ahead-strip-client.ts). */
   type ClientAheadMark = {
     kind: string;
     stone: ClientRowStone;
@@ -7361,12 +7412,6 @@ declare global {
     days: number;
     end_days: number | null;
     href: string | null;
-  };
-  /** The ahead strip's geometry (aheadLayout): positions 0..1 of the strip's width. */
-  type ClientAheadLayout = {
-    broken: boolean;
-    furthest: number;
-    items: Array<{ kind: string; stone: ClientRowStone; x: number; x2: number | null }>;
   };
   /** One seat's row in "Your team this week" (team-seats-client.ts). */
   type ClientTeamSeatRow = { seat: ClientRowStone; role: string; did: string; tail: string };
@@ -7421,6 +7466,8 @@ declare global {
     direction_words: string;
     /** "43 s faster in four weeks"; "" with none. */
     move_words: string;
+    /** A lift goal's carried goal and next step, joined; "" with neither. */
+    note: string;
     /** The thread's page ("/app/…"); null with none. */
     href: string | null;
     /** The strength row's lift goals (two or more), each a mini thread; empty otherwise. */
@@ -7441,15 +7488,19 @@ declare global {
     direction: string;
     direction_words: string;
     move_words: string;
+    /** The carried goal and the next step, joined; "" with neither. */
+    note: string;
   };
   /** A goal's track, one 0..1 axis; `ago` is null when it would sit on the start or is unknown. */
-  type ClientGoalTrack = { start: number; now: number; goal: number; ago: number | null };
+  type ClientGoalTrack = { start: number; now: number; goal: number; ago: number | null; mark?: number | null };
   /** The track as percentages of its width (trackGeometry): the fill grows from the start's side. */
   type ClientGoalTrackGeometry = {
     start: number;
     now: number;
     goal: number;
     ago: number | null;
+    /** The waypoint for the athlete's build (a lift goal only); null with none. */
+    mark?: number | null;
     fill_left: number;
     fill_width: number;
     origin: "left" | "right";
@@ -7603,15 +7654,10 @@ declare global {
       seriesSvg(series: ReadonlyArray<number>, kind: ClientProofRow["kind"]): string;
       seriesPoints(series: ReadonlyArray<number>): Array<{ x: number; y: number }>;
     };
-    /** LAZY "horizon" bundle (ahead-strip-client.ts): "Ahead", the strip and its rows. */
+    /** LAZY "horizon" bundle (ahead-strip-client.ts): the marks ahead as rows, folded under the trail. */
     CairnAheadStrip: {
-      NEAR_DAYS: number;
       ROWS_MAX: number;
-      aheadPosition(days: number, furthest: number): number;
-      aheadLayout(marks: ReadonlyArray<ClientAheadMark>): ClientAheadLayout;
-      stripHtml(marks: ReadonlyArray<ClientAheadMark>, opts?: { to?: string }): string;
       rowsHtml(marks: ReadonlyArray<ClientAheadMark>, opts?: { seasonHref?: string }): string;
-      aheadHtml(marks: ReadonlyArray<ClientAheadMark>, opts?: { to?: string; seasonHref?: string }): string;
     };
     /** LAZY "horizon" bundle (team-seats-client.ts): "Your team this week" and the link note. */
     CairnTeamSeats: {
@@ -7658,6 +7704,16 @@ declare global {
       stackHtml(row: ClientGoalRow): string;
       liftSaid(lift: ClientGoalLift): string;
     };
+    /** LAZY "horizon" bundle (standing-model.ts): the week read's `standing` as render rows. */
+    CairnStandingModel: {
+      rows(standing: unknown): ClientStandingRow[];
+      said(row: Pick<ClientStandingRow, "label" | "direction_words" | "since_words" | "words">): string;
+    };
+    /** LAZY "horizon" bundle (standing-client.ts): "The whole picture" rows. */
+    CairnStanding: {
+      listHtml(standing: unknown, opts?: { label?: string }): string;
+      rowHtml(row: ClientStandingRow): string;
+    };
     /** LAZY "calendar" bundle (frame-line-client.ts): the week's frame as one hero. */
     CairnFrameLine: {
       heroHtml(
@@ -7667,11 +7723,25 @@ declare global {
       ribbonHtml(frame: import("./week-read.js").WeekReadFrame | null | undefined): string;
     };
     /** LAZY "horizon" bundle (horizon-week-client.ts): Horizon's Week landing. */
-    /** LAZY "calendar" bundle (journey-trail-client.ts): the road to the furthest dated goal. */
+    /** LAZY "horizon" bundle (journey-ground-client.ts): what the walked stones say, the card, "Behind you". */
+    CairnJourneyGround: {
+      walkedOf(
+        journey: import("./week-read.js").WeekReadJourney,
+        start: number,
+        today: number
+      ): Array<import("./week-read.js").WeekReadJourneyStone | null>;
+      hueOf(stone: import("./week-read.js").WeekReadJourneyStone): string;
+      cardHtml(hue: string, name: string, when: string, why: string | null | undefined, href: unknown): string;
+      stoneDetailHtml(stone: import("./week-read.js").WeekReadJourneyStone | null | undefined): string;
+      behindHtml(
+        journey: import("./week-read.js").WeekReadJourney,
+        stones: import("./week-read.js").WeekReadJourneyStone[]
+      ): string;
+    };
     CairnJourneyTrail: {
       trailHtml(
         journey: import("./week-read.js").WeekReadJourney | null | undefined,
-        opts?: { selected?: number; enter?: boolean }
+        opts?: { selected?: number; stone?: number | null; enter?: boolean; below?: string }
       ): string;
       detailHtml(mark: import("./week-read.js").WeekReadJourneyMark | null | undefined): string;
       starterHtml(opts?: { hasGoals?: boolean }): string;
@@ -7683,6 +7753,10 @@ declare global {
         opts?: {
           enter?: boolean;
           selected?: string | null;
+          /** The trail mark whose words are open (default: the next one). */
+          mark?: number;
+          /** …or the walked stone whose words are open. */
+          stone?: number | null;
           seasonHref?: string;
           changesHref?: string;
           team?: ClientTeamSeats | null;
@@ -7793,11 +7867,14 @@ declare global {
   declare const CairnGoalRowModel: Window["CairnGoalRowModel"];
   declare const CairnGoalRow: Window["CairnGoalRow"];
   declare const CairnGoalLifts: Window["CairnGoalLifts"];
+  declare const CairnStandingModel: Window["CairnStandingModel"];
+  declare const CairnStanding: Window["CairnStanding"];
   declare const CairnFrameLine: Window["CairnFrameLine"];
   declare const CairnProofBand: Window["CairnProofBand"];
   declare const CairnAheadStrip: Window["CairnAheadStrip"];
   declare const CairnTeamSeats: Window["CairnTeamSeats"];
   declare const CairnHorizonWeek: Window["CairnHorizonWeek"];
+  declare const CairnJourneyGround: Window["CairnJourneyGround"];
   declare const CairnJourneyTrail: Window["CairnJourneyTrail"];
   declare const CairnHorizonWeekController: Window["CairnHorizonWeekController"];
   declare const CairnHorizon: Window["CairnHorizon"];

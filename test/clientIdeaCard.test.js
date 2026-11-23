@@ -214,3 +214,21 @@ test("refresh re-reads after a log", async () => {
     ["Salmon rice"]
   );
 });
+
+test("a pairing and the room words are said once, escaped, and only when present", () => {
+  const win = load();
+  const data = ideas([
+    idea("Chicken", { with: { title: "Rice", kcal: 200, carbs_g: 44, words: "With rice <b>, about 200 kcal more." } }),
+    idea("Yogurt"),
+  ]);
+  data.room_words = "Today's number is bigger for the long run; after one of these about 1,010 kcal is still open.";
+  const host = renderHtml(win.CairnIdeaCard.ideasHtml(data), { document: win.document });
+  const withs = host.querySelectorAll(".idea-card-with");
+  assert.equal(withs.length, 1);
+  assert.equal(withs[0].textContent, "With rice <b>, about 200 kcal more.");
+  assert.equal(host.querySelectorAll(".idea-card-with b").length, 0, "escaped, never markup");
+  assert.match(host.querySelector(".idea-cards-room").textContent, /about 1,010 kcal is still open/);
+  const plain = renderHtml(win.CairnIdeaCard.ideasHtml(ideas()), { document: win.document });
+  assert.equal(plain.querySelector(".idea-card-with"), null);
+  assert.equal(plain.querySelector(".idea-cards-room"), null);
+});

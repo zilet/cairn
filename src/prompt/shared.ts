@@ -971,8 +971,27 @@ export function renderStrengthJourney(ctx: any): string {
   const journey = ctx?.strength_journey;
   const objective = journey?.objective;
   if (!journey?.available || !objective?.exercise) return "";
-  const current = journey.current?.est_1rm != null ? `${journey.current.est_1rm} lb` : "not established yet";
-  const target = `${objective.target_est_1rm} lb`;
+  // A REPS goal (target_kind bodyweight_reps, src/repo/strength-reps.ts): counted in reps
+  // at bodyweight, never an est-1RM (its target_est_1rm is a stored 0, never a target).
+  const reps = journey.reps;
+  const assisted =
+    reps?.now && reps.now.value === 0 && reps.now.assist_lb != null
+      ? ` (no unassisted reps yet; lightest recent assist ${reps.now.assist_lb} lb${
+          reps.start_assist_lb != null && reps.start_assist_lb !== reps.now.assist_lb
+            ? `, from ${reps.start_assist_lb} lb at the start`
+            : ""
+        }; less assist is progress)`
+      : "";
+  const current = reps
+    ? reps.now
+      ? `${reps.now.text}${assisted}`
+      : "not established yet"
+    : journey.current?.est_1rm != null
+      ? `${journey.current.est_1rm} lb`
+      : "not established yet";
+  const target = reps
+    ? `${reps.goal_text} at bodyweight (a reps goal: assisted sets never count, added load counts as its reps; never speak of it as an estimated max)`
+    : `${objective.target_est_1rm} lb`;
   const support = Array.isArray(journey.planned_support)
     ? journey.planned_support.slice(0, 3).map((item: any) => `${item.role}: ${item.exercise} (${item.why})`).join("; ")
     : "";
@@ -983,7 +1002,11 @@ export function renderStrengthJourney(ctx: any): string {
   const projection = journey.projection
     ? ` Evidence-supported planning range: ${journey.projection.earliest_weeks}-${journey.projection.latest_weeks} weeks (${journey.projection.caveat})`
     : ` Do not invent a date or timeline: ${journey.projection_withheld_reason || "the evidence gate is not met"}`;
-  return `\nSTRENGTH COMEBACK JOURNEY (athlete-selected anchor; exact exercise only): ${objective.exercise}, current ${current}, snapped target ${target}, phase ${journey.phase || "establishing"}.${nextLine}${support ? ` Support roles (max three; assistance, not extra competing main presses): ${support}.` : ""}${projection}
+  // A goal carried through a recorded plan swap: the lift now trained counts toward it.
+  const tracked = journey.tracked?.exercise
+    ? ` The plan swapped ${journey.tracked.from} for ${journey.tracked.exercise} on ${journey.tracked.since}; the goal FOLLOWS THE MOVEMENT, so ${journey.tracked.exercise} sets count toward it from that day and it is not stranded. Never tell the athlete to move or re-set this goal because of the swap.`
+    : "";
+  return `\nSTRENGTH COMEBACK JOURNEY (athlete-selected anchor; exact exercise only, except a goal carried through a recorded same-pattern swap): ${objective.exercise}, current ${current}, snapped target ${target}, phase ${journey.phase || "establishing"}.${tracked}${nextLine}${support ? ` Support roles (max three; assistance, not extra competing main presses): ${support}.` : ""}${projection}
 BOUNDARY: Recovery, active pain/injury, load constraints, and the unified daily planning posture outrank this journey. Use it to organize the anchor plus support work; never chase the target through pain, add a duplicate same-angle press, promise an outcome, or create a numeric score.\n`;
 }
 
@@ -1189,6 +1212,11 @@ export function renderTodayFuel(ctx: any): string {
   ];
 
   const rem = intake.remaining || null;
+  // The day read's target is the DAY's number (repo/day-energy.ts); say so once, so the
+  // model never reads it as a changed target.
+  const dayNumber = intake.target?.day_words ? String(intake.target.day_words) : "";
+  if (dayNumber)
+    lines.push(`- TODAY'S NUMBER: ${dayNumber} "Remaining" below is against today's number; the accepted target is the weekly average and has not changed.`);
   if (intake.target && rem) {
     const remBits: string[] = [];
     const kcal = num(rem.kcal);

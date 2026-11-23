@@ -39,13 +39,14 @@ test("everyday work is low; depth is kept for the special items", () => {
     "session_suggest",
     "meal_swap",
     "recipe",
+    "meal_plan",
     "enrich",
     "research",
   ]) {
     assert.equal(TASK_EXECUTION_PROFILES[task].reasoning, "low", task);
   }
   for (const task of [
-    "session_verify", "meal_plan_verify", "plan_verify", "meal_plan", "health", "insight", "nutrition_checkin", "what_if",
+    "session_verify", "meal_plan_verify", "plan_verify", "health", "insight", "nutrition_checkin", "what_if",
     // The special items run medium and earn ONE step to high only on a server-seen risk.
     "health_review", "health_synthesis", "proposal", "coach_draft", "brain_review",
   ]) {

@@ -116,6 +116,10 @@ export interface CoachDayIntake {
   totals: CoachRecord;
   target: CoachRecord | null;
   remaining: CoachRecord | null;
+  /** The day's food guides (fuel-guides.ts), said in words: carbs, fat, fiber, saturated fat, weekly omega-3. Suggestions, never targets to enforce. */
+  guides?: Array<{ key: string; label: string; eaten_g: number | null; guide: string; note: string | null }>;
+  /** The last two weeks' complete days against each day's own guides, and the one lever (fuel-pattern.ts). Information, never a verdict. */
+  guides_pattern?: { title: string; lines: string[]; lever: string | null } | null;
   entries: CoachDayIntakeEntry[];
 }
 

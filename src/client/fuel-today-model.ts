@@ -11,12 +11,17 @@
 //   - an unknown sum prints no number (never a zero standing in for "not estimated");
 //   - the energy range is the athlete's OWN observed band, spoken by the server,
 //     and it is shown only when it exists — never a guessed target, never a score;
-//   - the day-shape lines speak only of the day read itself.
+//   - the day-shape lines speak only of the day read itself;
+//   - the food guides (carbs, fat, fiber, saturated fat) are the server's ranges, floors
+//     and ceilings (repo/fuel-guides.ts), never a must-hit number: while the day is eaten
+//     they speak of what is left to place, never a shortfall; only a closed complete day
+//     says where it landed; a partial day says nothing about landing.
 // No DOM, no fetch, no `state`.
 {
   type Day = import("../contracts/client.js").ClientDayIntake;
   type Entry = import("../contracts/client.js").ClientFoodEntry;
   type Band = import("../contracts/fuel.js").ClientIntakeBand;
+  type Guide = import("../contracts/fuel.js").ClientFuelGuide;
 
   const MEAL_LABEL: Record<string, string> = {
     breakfast: "Breakfast",
@@ -85,6 +90,48 @@
     return { value: known ? rounded(day.totals?.[key]) : null, known };
   }
 
+  // ---------- the day's food guides ----------
+  // The words, the track and which guides the card shows (`on_card`) arrive finished from
+  // the server (repo/fuel-guides.ts). A read with no guides (an older cached payload)
+  // keeps the bare numbers as rows with no guide.
+  function guidesModel(day: Partial<Day>, date: string, count: number): ClientFuelGuidesModel | null {
+    const read = day.guides;
+    const row = (key: string, label: string, eaten: number | null, g?: Guide): ClientFuelGuideRow => ({
+      key,
+      label,
+      eaten,
+      text: String(g?.text || ""),
+      note: String(g?.note || ""),
+      track: g?.track || null,
+      why: g?.why?.effect ? g.why : null,
+    });
+    if (!read || !Array.isArray(read.guides) || String(read.date || date) !== date) {
+      const bare = (key: "carbs_g" | "fat_g" | "fiber_g", label: string) =>
+        row(key.slice(0, -2), label, macro(day, key, count).value);
+      return count
+        ? { rows: [bare("carbs_g", "Carbs"), bare("fat_g", "Fat"), bare("fiber_g", "Fiber")], weekly: [], explain: [], pattern: null }
+        : null;
+    }
+    return {
+      rows: read.guides.filter((g) => g.on_card && g.text).map((g) => row(g.key, g.label, rounded(g.eaten_g), g)),
+      weekly: read.guides.filter((g) => g.kind === "weekly" && g.words).map((g) => String(g.words)),
+      explain: Array.isArray(read.explain) ? read.explain.filter((e) => e?.effect) : [],
+      pattern: read.pattern && Array.isArray(read.pattern.lines) && read.pattern.lines.length ? read.pattern : null,
+    };
+  }
+
+  // Energy beside the DAY's number (the server lays it over the weekly average and says
+  // why in `day_words`), and what is left of it, rounded to ten because the meals behind
+  // it are estimates. `left` is null with nothing to set it against, or an unknown sum.
+  function energyModel(day: Partial<Day>, count: number): ClientFuelTodayModel["energy"] {
+    const m = macro(day, "kcal", count);
+    const target = record(day.target);
+    const of = positive(rounded(target.kcal));
+    const eaten = count ? m.value : 0;
+    const left = of != null && eaten != null ? Math.round((of - eaten) / 10) * 10 : null;
+    return { ...m, of, dayWords: typeof target.day_words === "string" && target.day_words ? target.day_words : null, left };
+  }
+
   /**
    * Today so far. `band` is the observed intake band read (may be null or absent);
    * `today` is the device's local ISO date.
@@ -113,12 +160,13 @@
       state: dayState(count),
       protein: { ...protein, anchor, toGo, aboutThere },
       // Energy beside the day's own number — the same target the Today glance reads.
-      energy: { ...macro(day, "kcal", count), of: positive(rounded(record(day.target).kcal)) },
+      energy: energyModel(day, count),
       carbs: macro(day, "carbs_g", count),
       fat: macro(day, "fat_g", count),
       fiber: macro(day, "fiber_g", count),
       bandWords,
       demand,
+      guides: guidesModel(day, date, count),
     };
   }
 

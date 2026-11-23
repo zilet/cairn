@@ -58,12 +58,32 @@ type MealPlannerPaint = {
       return false;
     const kcalTolerance = Math.max(100, Math.round(targetKcal * 0.1));
     const proteinTolerance = Math.max(10, Math.round(targetProtein * 0.1));
-    return days.every((day) => {
+    // A day the server's per-day split moved is held to its own number (`planned_kcal`,
+    // which the server projects for the life of the plan), the week's mean to the headline;
+    // every other day to the headline, as before.
+    const totals = days.map((day) => {
       const meals = Array.isArray(day.meals) ? day.meals.map((meal) => mealRecord(meal)) : [];
-      const kcal = Math.round(meals.reduce((sum, meal) => sum + (Number(meal.kcal) || 0), 0));
-      const protein = Math.round(meals.reduce((sum, meal) => sum + (Number(meal.protein_g) || 0), 0));
-      return Math.abs(kcal - targetKcal) <= kcalTolerance && Math.abs(protein - targetProtein) <= proteinTolerance;
+      return {
+        own: Number(day.planned_kcal) > 0 ? Number(day.planned_kcal) : null,
+        kcal: Math.round(meals.reduce((sum, meal) => sum + (Number(meal.kcal) || 0), 0)),
+        protein: Math.round(meals.reduce((sum, meal) => sum + (Number(meal.protein_g) || 0), 0)),
+      };
     });
+    const daysOk = totals.every(
+      (day) =>
+        Math.abs(day.kcal - (day.own ?? targetKcal)) <= kcalTolerance &&
+        Math.abs(day.protein - targetProtein) <= proteinTolerance
+    );
+    if (!daysOk) return false;
+    if (!totals.some((day) => day.own != null)) return true;
+    const mean = totals.reduce((sum, day) => sum + day.kcal, 0) / totals.length;
+    return Math.abs(mean - targetKcal) <= kcalTolerance;
+  }
+
+  // A plan carrying the server's per-day split states daily_kcal as the week's average.
+  function kcalHeadlineUnit(parsed: MealRecord): string {
+    const days = Array.isArray(parsed.days) ? parsed.days : [];
+    return days.some((day) => Number(mealRecord(day).planned_kcal) > 0) ? "kcal a day, on average" : "kcal per day";
   }
 
   function currentMealPlan(plans: unknown): MealRecord | null {
@@ -149,7 +169,7 @@ type MealPlannerPaint = {
           <div class="mp-hero-nums">
             <div class="mp-hero-kcal">
               <span class="numeral numeral-xl">${escHtml(String(parsed.daily_kcal ?? "?"))}</span>
-              <span class="lbl">kcal per day</span>
+              <span class="lbl">${escHtml(kcalHeadlineUnit(parsed))}</span>
             </div>
             <div class="mp-hero-protein">
               <span class="numeral numeral-lg">${escHtml(String(parsed.daily_protein_g ?? "?"))}g</span>
@@ -265,7 +285,7 @@ type MealPlannerPaint = {
           ${mealRows.planBadge(visibleStatus)}
         </div>
         <div class="mp-hero-nums">
-          <div><span class="numeral numeral-xl" data-cu="${Number(parsed.daily_kcal) || 0}">0</span><span class="lbl mp-hero-unit">kcal per day</span></div>
+          <div><span class="numeral numeral-xl" data-cu="${Number(parsed.daily_kcal) || 0}">0</span><span class="lbl mp-hero-unit">${escHtml(kcalHeadlineUnit(parsed))}</span></div>
           <div><span class="numeral numeral-lg" data-cu="${Number(parsed.daily_protein_g) || 0}">0</span><span class="lbl mp-hero-unit">g protein</span></div>
         </div>
         ${parsed.summary ? `<div class="sess-line">${escHtml(parsed.summary)}</div>` : ""}

@@ -26,6 +26,12 @@ import type { DayDetail } from "./day-detail.js";
 import type { RaceCountdown, RaceDays } from "./race-days.js";
 import type { WeekRead } from "./week-read.js";
 import type {
+  MobilityCheckDeleteResult,
+  MobilityCheckLogResult,
+  MobilityChecksList,
+  MobilityStanding,
+} from "./mobility.js";
+import type {
   ClientPushOfferAnswerResponse,
   ClientSetTrainingDriveResponse,
   ClientTrainingDriveRead,
@@ -2537,7 +2543,7 @@ export interface ClientProgramState {
   adaptations_due: string[];
 }
 
-export type ClientStrengthObjectiveTargetKind = "return_to_personal_best" | "explicit_est_1rm";
+export type ClientStrengthObjectiveTargetKind = "return_to_personal_best" | "explicit_est_1rm" | "bodyweight_reps";
 export type ClientStrengthJourneyPhase =
   | "establishing"
   | "rebuilding"
@@ -2562,6 +2568,35 @@ export interface ClientStrengthObjective {
   completed_at: string | null;
   achieved_est_1rm: number | null;
   achieved_date: ISODateString | string | null;
+  /** bodyweight_reps only (target_est_1rm is then 0): reps per set, and sets (null = one). */
+  target_reps?: number | null;
+  target_sets?: number | null;
+  baseline_reps?: number | null;
+  achieved_reps?: number | null;
+}
+
+/** A bodyweight lift's reps goal, read by the server (src/repo/strength-reps.ts). */
+export interface ClientStrengthRepsPoint {
+  value: number;
+  sets: number[];
+  date: ISODateString | string;
+  assist_lb: number | null;
+  text: string;
+}
+
+export interface ClientStrengthRepsJourney {
+  target_reps: number;
+  target_sets: number | null;
+  goal_value: number;
+  /** "12 reps" | "3 × 10". */
+  goal_text: string;
+  now: ClientStrengthRepsPoint | null;
+  latest: ClientStrengthRepsPoint | null;
+  best: ClientStrengthRepsPoint | null;
+  baseline: { value: number; date: ISODateString | string | null } | null;
+  four_weeks_ago: (Omit<ClientStrengthRepsPoint, "text"> & { as_of: ISODateString | string }) | null;
+  direction: "toward" | "holding" | "back" | null;
+  start_assist_lb: number | null;
 }
 
 export interface ClientAnchorObjectiveSuggestion {
@@ -2590,6 +2625,10 @@ export interface ClientStrengthJourney {
     span_days: number;
   };
   phase: ClientStrengthJourneyPhase | null;
+  /** Set only while a recorded plan swap carries the goal: the lift now trained and counted. */
+  tracked?: { exercise: string; from: string; since: ISODateString | string } | null;
+  /** Set only on a bodyweight_reps goal; every est-1RM field above is then null. */
+  reps?: ClientStrengthRepsJourney | null;
   next_prescription: {
     exercise: string;
     action: "overload" | "hold" | "deload" | "vary" | "introduce";
@@ -4399,6 +4438,10 @@ export interface ClientApiResponses {
   "/api/body-metrics": ClientBodyMetricsSummary;
   "/api/body-metrics/trends": ClientBodyMetricTrends;
   "/api/blood-pressure": ClientBloodPressureReading[];
+  // GET lists readings with the catalog; POST logs one reading and answers with it.
+  "/api/mobility-checks": MobilityChecksList | MobilityCheckLogResult;
+  "/api/mobility-checks/:id": MobilityCheckDeleteResult;
+  "/api/mobility-standing": MobilityStanding;
   "/api/checkins": ClientCheckin[] | ClientCheckin | null;
   "/api/plan": ClientPlanDay[];
   "/api/plan/week": ClientPlanWeek;

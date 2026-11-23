@@ -5,6 +5,13 @@ import {
   getBodyMetricTrends,
   getBodyMetricsSummary,
 } from "../../repo/body-metrics.js";
+import {
+  deleteMobilityCheck,
+  listMobilityChecks,
+  logMobilityCheck,
+  MOBILITY_CHECKS,
+  mobilityStanding,
+} from "../../repo/mobility-checks.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 
 export function registerBodyMetricsTools(server: McpToolRegistrar) {
@@ -76,5 +83,55 @@ export function registerBodyMetricsTools(server: McpToolRegistrar) {
     "Per-site least-squares trends across the window (waist, hips, chest, arms, …) plus bodyweight — each in plain language ('waist down 0.8 in over 6 weeks') with the raw points for a sparkline. Null-safe: a site with one reading reports no trend yet.",
     { days: z.number().int().optional(), unit: z.enum(["in", "cm"]).optional() },
     async ({ days, unit }) => asText(getBodyMetricTrends(days ?? 365, unit))
+  );
+  // Mobility self-checks: the same repo functions GET/POST /api/mobility-checks,
+  // DELETE /api/mobility-checks/:id and GET /api/mobility-standing call.
+  const checkKeys = MOBILITY_CHECKS.map((c) => c.key) as [string, ...string[]];
+  server.tool(
+    "log_mobility_check",
+    "Log one mobility self-check reading (one side): ankle_knee_to_wall (knee-to-wall distance, cm, per side, higher = more range), toe_touch (fingertip to floor, cm, lower = more range, past the floor is negative), shoulder_back_scratch (fingertip gap as negative or overlap as positive, cm, per side, side = the hand over the top), deep_squat_hold (seconds held heels-down, or reached:true|false untimed). list_mobility_checks returns each check's how-to. Lengths are stored in cm (pass unit:'in' to give inches). Compared only with the athlete's own earlier readings; no norms, no grade. Two sides are two calls.",
+    {
+      check: z.enum(checkKeys).describe("the catalog key"),
+      side: z.enum(["left", "right"]).optional().describe("required for per-side checks (ankle, shoulder); ignored otherwise"),
+      value: z
+        .number()
+        .optional()
+        .describe(
+          "the reading: cm (or `unit`) for lengths; seconds for deep_squat_hold. toe_touch past the floor and a back-scratch gap are negative"
+        ),
+      unit: z.enum(["cm", "in", "mm", "s", "min"]).optional().describe("unit of `value`; cm for lengths and s for the squat hold by default"),
+      reached: z
+        .boolean()
+        .optional()
+        .describe("deep_squat_hold only, when no seconds were given: true = heels stayed down at the bottom, false = they lifted"),
+      date: z.string().optional().describe("YYYY-MM-DD on or before today; defaults to today"),
+      note: z.string().optional().describe("free-text note stored with the reading"),
+    },
+    async (a) => asText(logMobilityCheck({ ...a, source: "chat" }))
+  );
+
+  server.tool(
+    "list_mobility_checks",
+    "Read logged mobility self-check readings, newest first, with the catalog (each check's how-to, unit, side rule, which way is more range). Values are in the athlete's display units in `value_text`.",
+    {
+      check: z.enum(checkKeys).optional().describe("only this check"),
+      days: z.number().int().optional().describe("only readings from the last N days"),
+      limit: z.number().int().optional(),
+    },
+    async ({ check, days, limit }) => asText(listMobilityChecks({ check_key: check, days, limit }))
+  );
+
+  server.tool(
+    "get_mobility_standing",
+    "Where mobility stands: the latest reading per check and side in words, its direction against the first reading at least three weeks older (a move under the check's smallest meaningful change reads holding), days with logged mobility work in the last four weeks, and a quiet invite when no checks (or only old ones) exist. Words and directions only, never a score.",
+    {},
+    async () => asText(mobilityStanding())
+  );
+
+  server.tool(
+    "delete_mobility_check",
+    "Delete one mobility self-check reading by id (a mis-entry).",
+    { id: z.number().int() },
+    async ({ id }) => asText(deleteMobilityCheck(id))
   );
 }

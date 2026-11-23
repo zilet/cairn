@@ -25,13 +25,26 @@
 import { listActiveDirectives } from "./directives-read.js";
 import { findExercise } from "./exercises.js";
 import { listContextEvents } from "./health.js";
-import { athleteAllergies, athleteDietaryDeclarations, mealPlanFloorReference } from "./nutrition.js";
 import {
+  MEAL_PLAN_TARGET_TOLERANCE_KCAL,
+  athleteAllergies,
+  athleteDietaryDeclarations,
+  mealPlanFloorReference,
+} from "./nutrition.js";
+import {
+  ABSOLUTE_KCAL_FLOOR,
   MEAL_PLAN_FIBER_FLOOR_G,
   MEAL_PLAN_FIBER_MIN_DAY_FRACTION,
   mealPlanDayTotals,
   nutritionFloorsFor,
 } from "./nutrition-safety.js";
+import {
+  type MealPlanDayEnergy,
+  applyMealPlanDayEnergy,
+  mealPlanDayFloorKcal,
+  mealPlanDayKcalTargets,
+} from "./meal-plan-day-energy.js";
+import { mealPlanDayFloor } from "./meal-plan-day-energy-compute.js";
 import { coerceFinite as num } from "../lib/numbers.js";
 import { normalizedExerciseKey } from "./exercise-canon.js";
 import { clampSetReductionStep, getPlan } from "./plan.js";
@@ -78,6 +91,12 @@ export interface MealPlanFloorRefs {
   proteinFloor: number | null;
   /** The 30 g/day fiber floor, raised by the plan's own higher declared target. */
   fiberFloor: number;
+  /**
+   * The lowest number any single day may total on a plan carrying a per-day split: the
+   * absolute floor, raised by a running cut's intake floor. Optional — absent reads as the
+   * absolute floor. A day with no number of its own is still held to `kcalFloor`.
+   */
+  dayKcalFloor?: number;
 }
 
 /**
@@ -114,8 +133,45 @@ export function mealPlanFloorViolations(draft: any, refs: MealPlanFloorRefs): Fl
     });
   }
 
-  for (const day of days) {
-    if (day.kcal < refs.kcalFloor) {
+  // A plan drafted with the server's per-day split (meal-plan-day-energy.ts): a day that
+  // moved is held to ITS number (as strictly as a flat day is held to the headline), and
+  // never under the day floor; a day at the average keeps the headline check below.
+  const dayTargets = mealPlanDayKcalTargets(draft);
+  const dayFloor = Math.max(ABSOLUTE_KCAL_FLOOR, num(refs.dayKcalFloor) ?? 0, mealPlanDayFloorKcal(draft));
+  const split = dayTargets.some((target) => target != null);
+
+  days.forEach((day, index) => {
+    const own = dayTargets[index];
+    if (own != null) {
+      if (day.kcal < dayFloor) {
+        out.push({
+          code: "meal_plan_day_kcal_below_floor",
+          field: "days[].meals[].kcal",
+          day: day.day,
+          observed: day.kcal,
+          floor: dayFloor,
+          message: `${day.day} totals ${day.kcal} kcal, below the lean-safe floor of ${dayFloor} kcal.`,
+        });
+      } else if (day.kcal < own) {
+        out.push({
+          code: "meal_plan_day_kcal_below_day_number",
+          field: "days[].meals[].kcal",
+          day: day.day,
+          observed: day.kcal,
+          floor: own,
+          message: `${day.day} totals ${day.kcal} kcal, below that day's own number of ${own} kcal; the week still averages the daily target.`,
+        });
+      } else if (day.kcal > own + MEAL_PLAN_TARGET_TOLERANCE_KCAL) {
+        out.push({
+          code: "meal_plan_day_kcal_above_day_number",
+          field: "days[].meals[].kcal",
+          day: day.day,
+          observed: day.kcal,
+          floor: own,
+          message: `${day.day} totals ${day.kcal} kcal, more than ${MEAL_PLAN_TARGET_TOLERANCE_KCAL} kcal over that day's own number of ${own} kcal; that room belongs to the week's bigger days.`,
+        });
+      }
+    } else if (day.kcal < refs.kcalFloor) {
       out.push({
         code: "meal_plan_day_kcal_below_floor",
         field: "days[].meals[].kcal",
@@ -133,6 +189,20 @@ export function mealPlanFloorViolations(draft: any, refs: MealPlanFloorRefs): Fl
         observed: day.protein_g,
         floor: refs.proteinFloor,
         message: `${day.day} totals ${day.protein_g} g protein, below the ${refs.proteinFloor} g target.`,
+      });
+    }
+  });
+
+  // The week's mean is still the headline: a split moves energy between days, never adds it.
+  if (split && headlineKcal != null && days.length) {
+    const mean = days.reduce((sum, day) => sum + day.kcal, 0) / days.length;
+    if (Math.abs(mean - headlineKcal) > MEAL_PLAN_TARGET_TOLERANCE_KCAL) {
+      out.push({
+        code: "meal_plan_week_kcal_off_average",
+        field: "days[].meals[].kcal",
+        observed: Math.round(mean),
+        floor: Math.round(headlineKcal),
+        message: `The week averages ${Math.round(mean)} kcal a day, more than ${MEAL_PLAN_TARGET_TOLERANCE_KCAL} kcal from its ${Math.round(headlineKcal)} kcal daily target.`,
       });
     }
   }
@@ -174,7 +244,7 @@ export function mealPlanFloorViolations(draft: any, refs: MealPlanFloorRefs): Fl
 export function mealPlanFloorRefs(): MealPlanFloorRefs {
   const { floorGoal } = mealPlanFloorReference();
   const { kcalFloor, proteinFloor } = nutritionFloorsFor(floorGoal);
-  return { kcalFloor, proteinFloor, fiberFloor: MEAL_PLAN_FIBER_FLOOR_G };
+  return { kcalFloor, proteinFloor, fiberFloor: MEAL_PLAN_FIBER_FLOOR_G, dayKcalFloor: mealPlanDayFloor() };
 }
 
 /**
@@ -221,8 +291,18 @@ function mealPlanJudgmentReasons(draft: any, dietaryInstruction?: unknown): stri
   return [...new Set(reasons)];
 }
 
-export function mealPlanFloorPrecheck(draft: any, opts: { dietary_instruction?: unknown } = {}): FloorPrecheck {
-  const violations = mealPlanFloorViolations(draft, mealPlanFloorRefs());
+/**
+ * `day_energy`, when the key is passed, is the drafting op's own per-day split: it replaces
+ * whatever split the draft carries (a model's fix is constrained to the structure schema,
+ * which drops it) before anything is checked, so the floors are always judged against the
+ * server's numbers. Without the key the draft is judged as it stands.
+ */
+export function mealPlanFloorPrecheck(
+  draft: any,
+  opts: { dietary_instruction?: unknown; day_energy?: MealPlanDayEnergy | null } = {}
+): FloorPrecheck {
+  const judged = "day_energy" in opts ? applyMealPlanDayEnergy(draft, opts.day_energy ?? null) : draft;
+  const violations = mealPlanFloorViolations(judged, mealPlanFloorRefs());
   const judgment_reasons = mealPlanJudgmentReasons(draft, opts.dietary_instruction);
   return { violations, judgment_applies: judgment_reasons.length > 0, judgment_reasons };
 }

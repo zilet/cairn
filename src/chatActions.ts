@@ -18,6 +18,13 @@ import { parseMovementConsiderations, type MovementConsideration } from "./repo/
 import { MAX_REDRAW_REQUEST_CHARS } from "./domain/brain/structure-request.js";
 import { classifyActivityCapture } from "./repo/activity-capture.js";
 import { USER_TARGET_MAX_KCAL, USER_TARGET_MIN_KCAL } from "./repo/nutrition.js";
+import {
+  mobilityCatalogPromptLines,
+  mobilityCheckEntry,
+  normalizeMobilitySide,
+  resolveMobilityCheckKey,
+} from "./repo/mobility-checks.js";
+import type { MobilityCheckKey, MobilityCheckSide } from "./contracts/mobility.js";
 
 type ChatActionRecord = Record<string, unknown>;
 
@@ -63,6 +70,7 @@ export const CHAT_ACTION_TYPES = [
   "report_training_symptom",
   "resolve_training_symptom",
   "log_checkin",
+  "log_mobility_check",
   "set_activity_effort",
   "flag_training_structure",
   "revert_decision",
@@ -163,8 +171,11 @@ export interface SetMovementConsiderationsAction extends ChatActionBase {
 export interface SetStrengthObjectiveAction extends ChatActionBase {
   type: "set_strength_objective";
   exercise: string;
-  target_kind: "return_to_personal_best" | "explicit_est_1rm";
+  target_kind: "return_to_personal_best" | "explicit_est_1rm" | "bodyweight_reps";
   target_est_1rm?: unknown;
+  /** bodyweight_reps only: reps in one set, or per set with target_sets. */
+  target_reps?: unknown;
+  target_sets?: unknown;
 }
 
 export interface SetTrainingDriveAction extends ChatActionBase {
@@ -404,6 +415,20 @@ export interface LogCheckinAction extends ChatActionBase {
   date?: unknown;
 }
 
+// One mobility self-check reading, one side (src/repo/mobility-checks.ts): "knee to wall is
+// 9 cm left, 11 right" is two of these. Normalized to the catalog key and a stated side;
+// the repo converts units, bounds the number and stores it.
+export interface LogMobilityCheckAction extends ChatActionBase {
+  type: "log_mobility_check";
+  check_key: MobilityCheckKey;
+  side: MobilityCheckSide | null;
+  value: number | null;
+  unit?: string;
+  reached?: boolean;
+  date?: string;
+  note?: string | null;
+}
+
 // How a run (or other cardio effort) they ALREADY did felt — "kept it conversational,
 // no toll". Lands on that activity's own felt effort (`setActivityFeltEffort`,
 // src/repo/activity-effort.ts): a stated-easy run is not graded hard by the watch's
@@ -505,6 +530,7 @@ export type ChatAction =
   | ReportTrainingSymptomAction
   | ResolveTrainingSymptomAction
   | LogCheckinAction
+  | LogMobilityCheckAction
   | SetActivityEffortAction
   | FlagTrainingStructureAction
   | RevertDecisionAction
@@ -654,10 +680,12 @@ export const CHAT_ACTION_PROMPT_SPECS = {
     type: "set_strength_objective",
     applyMode: "immediate",
     shape: `{ "type": "set_strength_objective", "exercise": "Barbell Bench Press",
-      "target_kind": "return_to_personal_best|explicit_est_1rm", "target_est_1rm": <number — required only for explicit_est_1rm> }`,
+      "target_kind": "return_to_personal_best|explicit_est_1rm|bodyweight_reps", "target_est_1rm": <number — required only for explicit_est_1rm>,
+      "target_reps": <whole number — required only for bodyweight_reps>, "target_sets": <optional whole number, bodyweight_reps only> }`,
     guidance: [
       `Set a strength objective ONLY when the athlete explicitly chooses ONE named anchor lift and states that they want to return to its personal best or reach a specific estimated-1RM. A question like "what should my bench goal be?", comparing exercises, or general comeback talk is exploratory and MUST NOT write an objective — ask one brief clarifying question instead.`,
       `return_to_personal_best snapshots that exact exercise's logged all-time est-1RM now. explicit_est_1rm snapshots the athlete's stated number. Barbell and dumbbell variants are different objectives; never silently merge or substitute them.`,
+      `bodyweight_reps is the goal for a lift done at bodyweight (pull-ups, chin-ups, push-ups, dips): "12 pull-ups" is target_reps 12; "3 sets of 10" is target_reps 10 with target_sets 3. It counts unassisted reps only. Never use it for a loaded lift, and never give a bodyweight lift an est-1RM goal; the server refuses both with a plain reason you pass on.`,
     ],
   },
   set_training_drive: {
@@ -885,6 +913,14 @@ export const CHAT_ACTION_PROMPT_SPECS = {
     shape: `{ "type": "log_checkin", "energy": 1-5, "sleep_feel": 1-5, "soreness": 1-5, "mood": 1-5, "note": "<optional>", "date": "YYYY-MM-DD|omit" }`,
     guidance: [
       `Use log_checkin when the athlete tells you how they feel today or how a session felt — "I feel great", "I feel rough", "that session was hard". energy, sleep_feel, soreness, and mood are all 1 (low) to 5 (great) — the same scale the app writes. Omit any field they did not speak to; never guess a missing rating. A note is optional free text and is stored verbatim. date must be a real YYYY-MM-DD on or before today; omit it rather than inventing "yesterday" or a future day. This writes the same check-in the app does — absence of a check-in is silence.`,
+    ],
+  },
+  log_mobility_check: {
+    type: "log_mobility_check",
+    applyMode: "immediate",
+    shape: `{ "type": "log_mobility_check", "check": "ankle_knee_to_wall|toe_touch|shoulder_back_scratch|deep_squat_hold", "side": "left|right|omit", "value": <number>, "unit": "cm|in|s", "reached": true|false|omit, "date": "YYYY-MM-DD|omit", "note": "<optional>" }`,
+    guidance: [
+      `log_mobility_check records one mobility self-check reading the athlete measured ("knee to wall is 9 cm left, 11 right" is TWO actions, one per side). Log only the number they gave, in the unit they gave it; never estimate one. Per-side checks need the side. deep_squat_hold takes seconds, or "reached" true/false when they only say whether their heels stayed down. Readings are compared only with their own earlier ones: never grade them or compare them with other people. When they ask how to check their mobility, walk them through these, one sentence each: ${mobilityCatalogPromptLines().join(" | ")}`,
     ],
   },
   set_activity_effort: {
@@ -1260,9 +1296,13 @@ export function normalizeChatAction(value: unknown): ChatAction | null {
     }
     case "set_strength_objective":
       return nonBlank(value.exercise) &&
-        (value.target_kind === "return_to_personal_best" || value.target_kind === "explicit_est_1rm") &&
+        (value.target_kind === "return_to_personal_best" ||
+          value.target_kind === "explicit_est_1rm" ||
+          value.target_kind === "bodyweight_reps") &&
         (value.target_kind !== "explicit_est_1rm" ||
-          (Number.isFinite(Number(value.target_est_1rm)) && Number(value.target_est_1rm) > 0))
+          (Number.isFinite(Number(value.target_est_1rm)) && Number(value.target_est_1rm) > 0)) &&
+        (value.target_kind !== "bodyweight_reps" ||
+          (Number.isInteger(Number(value.target_reps)) && Number(value.target_reps) > 0))
         ? { ...value, type: "set_strength_objective", exercise: value.exercise, target_kind: value.target_kind }
         : null;
     case "set_training_drive": {
@@ -1408,6 +1448,30 @@ export function normalizeChatAction(value: unknown): ChatAction | null {
         mood,
         note,
         date: chatCheckinDate(value.date),
+      };
+    }
+    case "log_mobility_check": {
+      // The check by key or plain name, the side a per-side check needs, and a number
+      // (or, for the squat hold only, a stated reached/not). Bounds and units are the repo's.
+      const checkKey = resolveMobilityCheckKey(value.check ?? value.check_key);
+      if (!checkKey) return null;
+      const entry = mobilityCheckEntry(checkKey);
+      const side = entry.per_side ? normalizeMobilitySide(value.side) : null;
+      if (entry.per_side && !side) return null;
+      const n = value.value == null || value.value === "" ? Number.NaN : Number(value.value);
+      const reached = checkKey === "deep_squat_hold" && typeof value.reached === "boolean" ? value.reached : undefined;
+      if (!Number.isFinite(n) && reached === undefined) return null;
+      const note = nonBlank(value.note) ? value.note.trim().slice(0, 280) : null;
+      const date = chatCheckinDate(value.date);
+      return {
+        type: "log_mobility_check",
+        check_key: checkKey,
+        side,
+        value: Number.isFinite(n) ? n : null,
+        ...(nonBlank(value.unit) ? { unit: value.unit.trim() } : {}),
+        ...(reached !== undefined ? { reached } : {}),
+        ...(date ? { date } : {}),
+        note,
       };
     }
     case "set_activity_effort": {

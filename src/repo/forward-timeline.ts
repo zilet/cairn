@@ -386,9 +386,12 @@ export function forwardTimeline(today = localDateISO(), opts: ForwardTimelineOpt
       id: `objective:${objective.objective_id}`,
       kind: "objective",
       when: {},
-      label: `${clip(objective.exercise, 60)} toward ${objective.target_est_1rm} lb`,
-      detail:
-        objective.current_est_1rm != null
+      label: `${clip(objective.exercise, 60)} toward ${objective.goal_text ?? `${objective.target_est_1rm} lb`}`,
+      detail: objective.goal_text
+        ? objective.now_text
+          ? `Best ${objective.now_text} at bodyweight now.`
+          : "No recent read of this lift yet."
+        : objective.current_est_1rm != null
           ? `Around ${objective.current_est_1rm} lb estimated 1RM now.`
           : "No recent read of this lift yet.",
       basis: objective.basis,

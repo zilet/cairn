@@ -4,7 +4,7 @@
 // the seven columns of the week's shape, the day-by-day glances, what is still open, the
 // next milestones and the goals. Replaces horizon-week-model (the old GET /plan/week
 // shaping). It also shapes what the redesigned landing adds (docs/IA.md "Horizon landing"):
-// the proof band ("Since you started", `proof`), the ahead strip's marks (`journey.marks`,
+// the proof band ("Since you started", `proof`), the marks ahead as rows (`journey.marks`,
 // ahead-strip-client.ts), the totals words for the shape's masthead and the frame's `sub`.
 // Every new field is optional on the wire: an older read (or the cached first paint)
 // leaves it empty and the view keeps today's rendering of that section.
@@ -21,6 +21,7 @@
   type DayChip = import("../contracts/week-read.js").DayChip;
   type WeekOpen = import("../contracts/week-read.js").WeekReadOpen;
   type WeekProof = import("../contracts/week-read.js").WeekReadProof;
+  type WeekStanding = import("../contracts/week-read.js").WeekReadStandingRow;
   type JourneyMark = import("../contracts/week-read.js").WeekReadJourneyMark;
 
   const ISO = /^\d{4}-\d{2}-\d{2}$/;
@@ -188,14 +189,6 @@
     };
   }
 
-  /** The month the furthest mark falls in ("May"), for the ahead strip's far label; "" with none. */
-  function aheadTo(marks: ReadonlyArray<ClientAheadMark>): string {
-    let far: ClientAheadMark | null = null;
-    for (const m of marks) if (!far || (m.end_days ?? m.days) > (far.end_days ?? far.days)) far = m;
-    // A window's month is its end's: the strip runs to where the bar stops.
-    return far ? CairnFmt.date(far.end_date || far.date, { fmt: { month: "short" } }) : "";
-  }
-
   /** The shape's masthead words: "1 of 5 lifting days · 16.6 mi planned" (the server's two). */
   function totalsWords(value: unknown): string {
     const totals = record(value);
@@ -208,7 +201,14 @@
     if (!j || !isoOf(j.start_date) || !isoOf(j.today)) return null;
     const marks = list<NonNullable<WeekRead["journey"]>["marks"][number]>(j.marks).filter((m) => isoOf(m.date));
     if (!marks.length) return null;
-    return { ...j, marks, behind: list(j.behind), line: text(j.line) };
+    // `walked` stays index for index (a tapped stone is named by its place); absent on an older read.
+    return {
+      ...j,
+      marks,
+      behind: list(j.behind),
+      ...(j.walked !== undefined ? { walked: list(j.walked) } : {}),
+      line: text(j.line),
+    };
   }
 
   /**
@@ -248,8 +248,8 @@
         .map(proofRow)
         .filter((r): r is ClientProofRow => !!r)
         .slice(0, PROOF_MAX),
+      standing: list<WeekStanding>(read.standing),
       ahead,
-      ahead_to: aheadTo(ahead),
       totals_words: totalsWords(read.totals),
       sub: text(frame.sub),
     };

@@ -151,6 +151,177 @@ const PLAN_RESTRUCTURE =
   /\b(?:restructure|overhaul|redesign|rebuild|rewrite|replace)\s+(?:my\s+)?(?:whole\s+)?(?:training\s+)?(?:plan|program|split|week|meals?)|\b(?:change|switch)\s+(?:my\s+)?(?:training\s+)?(?:split|plan|program)\b|\bswitch me from\b|\bmove\s+(?:all|my)\s+.*\bday(?:s)?\b/i;
 const CURRENT_RESEARCH =
   /\b(?:research|look up|browse|current (?:evidence|nutrition|race weather|weather|guidance|guidelines|menu)|latest (?:evidence|research|guidance|guidelines|studies)|systematic review|meta-analysis|find\s+(?:the\s+)?current|nearby (?:cafe|restaurant)|(?:restaurant|airport)\s+(?:menu|tonight)|menu at|where\s+(?:should|can)\s+(?:we|i)\s+(?:go|eat)\b|find\s+(?:a\s+)?(?:good\s+)?restaurant\s+(?:near|nearby)|where\s+(?:should|can)\s+i\s+eat\s+nearby)\b/i;
+// ---- Current outside-world information ------------------------------------------------
+// The narrow CURRENT_RESEARCH list above names a few phrasings. Most asks for what is
+// happening in the world do not use them ("is there something cool happening around
+// Boston area?", "do the actual search"), and on 2026-11-22 two such turns ran with web
+// search off and answered from memory. So the deterministic layer reads two shapes:
+//   1. an explicit ask to search or look something up online, whatever else it says;
+//   2. a question about a dated real-world thing the app cannot know: an event, race or
+//      venue asked about as a DISCOVERY ("any", "some", "which", "happening") or at a
+//      PLACE ("around Boston", "near me"), a world fact (registration, prices, opening
+//      hours, weather, news) with a place, a time or an event beside it, or
+//      "latest/upcoming <world thing>".
+// It stays conservative about the athlete's own data: a noun after "my/our" ("my race",
+// "my latest run", "my upcoming schedule") or a question about what they did ("how many
+// races have I done") is never the web, nor a noun pointed at as known ("during the race",
+// "at the hotel gym"), nor a statement about their own day ("the weather was brutal on my
+// run"), and weather/forecast/news count only asked about ("what's the weather in Boston
+// on Saturday?"). Precision over recall: a false positive costs the athlete their own data
+// reads and puts a coaching question on the web leash, while what this misses the model
+// escalates (prompt/chat.ts CHAT_WEB_SEARCH_REQUEST), once per turn.
+const EXPLICIT_SEARCH_ASK = new RegExp(
+  [
+    // "do the actual search", "run a quick web search", "try a search"
+    String.raw`\b(?:do|run|try|make)\s+(?:(?:the|a|an|some)\s+)?(?:(?:actual|real|proper|quick|live|fresh|new)\s+)?(?:(?:web|online|internet|google)\s+)?search(?:es)?\b`,
+    String.raw`\bsearch\s+(?:for|the\s+web|online|the\s+internet|google|around|it|that|this|again)\b`,
+    String.raw`\b(?:web|online|internet|google)\s+search\b`,
+    String.raw`\bgoogle\s+(?:it|that|this|for|what|when|where|whether|if)\b`,
+    String.raw`\blook\s+(?:it|that|this|them|those)\s+up\b`,
+    String.raw`\bcheck\s+(?:it\s+|that\s+|this\s+)?(?:online|on\s+the\s+(?:web|internet)|the\s+(?:web|internet)|their\s+(?:site|website|page))\b`,
+    String.raw`\b(?:find|look)\s+(?:it\s+|that\s+)?(?:online|on\s+the\s+(?:web|internet))\b`,
+    String.raw`\bfind\s+out\s+what(?:'s|\s+is|\s+are)\s+(?:happening|on|going\s+on|available|coming\s+up)\b`,
+    String.raw`\bfind\s+what(?:'s|\s+is)\s+(?:happening|going\s+on)\b`,
+  ].join("|"),
+  "i"
+);
+// The kinds of real-world things that have dates, places and listings. Venues the athlete
+// trains AT (gyms, pools, classes, camps, clinics) are not here: "I'm at the hotel gym in
+// Denver" is a coaching turn. They count only under an explicit discovery ask (VENUE_ASK).
+const WORLD_EVENT_NOUN = String.raw`(?:half[- ]marathons?|marathons?|races?|5ks?|10ks?|15ks?|ultras?|triathlons?|duathlons?|fun\s+runs?|park\s*runs?|trail\s+runs?|gran\s+fondos?|sportives?|events?|festivals?|expos?|meetups?|run(?:ning)?\s+clubs?|restaurants?|cafes?|caf[eé]s?|bakeries|stores?|shops?)`;
+// Facts with listings: registration, prices, hours, course maps. Weather, forecast and
+// news are AMBIENT: people mention them about their own day ("the weather was brutal on
+// my run", "good news: I start a new job"), so they count only in a question about the
+// world (AMBIENT_QUESTION_RE).
+const LISTING_FACT_NOUN = String.raw`(?:registration|sign[- ]?ups?|entry\s+fees?|entries|tickets?|opening\s+hours|hours\s+of\s+operation|prices?|pricing|release\s+date|course\s+maps?|start\s+times?|race\s+calendar|calendar\s+of\s+(?:races|events)|lottery|qualifying\s+times?|cutoffs?)`;
+const AMBIENT_FACT_NOUN = String.raw`(?:weather|forecast|news)`;
+// A discovery word close before the noun ("any half marathons", "cool races", "which
+// events are", "is there a 5k"). Deliberately not "good/fast/some/what" + noun: "a good
+// 10k time", "a fast 5k", "some 5ks in my plan", "what race pace" are coaching questions.
+const DISCOVERY_BEFORE_NOUN = new RegExp(
+  String.raw`\b(?:any|cool|local|nearby|popular|scenic|upcoming|recommended)\s+(?:[\w'-]+\s+){0,2}?${WORLD_EVENT_NOUN}\b|\bis\s+there\s+an?\s+(?:[\w'-]+\s+){0,2}?${WORLD_EVENT_NOUN}\b|\b(?:what|which)\s+(?:half[- ]marathons|marathons|races|events|5ks|10ks|ultras|triathlons)\s+(?:are|is|happen|run|take|should|could|would|can|do)\b`,
+  "gi"
+);
+const EVENT_NOUN_RE = new RegExp(String.raw`\b${WORLD_EVENT_NOUN}\b`, "gi");
+const LISTING_FACT_RE = new RegExp(String.raw`\b${LISTING_FACT_NOUN}\b`, "gi");
+const LATEST_EVENT_RE = new RegExp(
+  String.raw`\b(?:latest|newest|current|upcoming|this\s+year'?s|next\s+year'?s)\s+(?:[\w'-]+\s+)?${WORLD_EVENT_NOUN}\b`,
+  "gi"
+);
+const LATEST_FACT_RE = new RegExp(
+  String.raw`\b(?:latest|newest|current|upcoming|this\s+year'?s|next\s+year'?s)\s+(?:[\w'-]+\s+)?${LISTING_FACT_NOUN}\b`,
+  "gi"
+);
+// Weather / forecast / news asked ABOUT: a question word close before the noun ("what's
+// the weather", "is the weather going to be", "any news on"). "The forecast says rain
+// tomorrow, swap my long run?" has no question word before it and stays coaching.
+const AMBIENT_QUESTION_RE = new RegExp(
+  String.raw`\b(?:what(?:'s|\s+is|\s+will|\s+does)?|how(?:'s|\s+is|\s+will)|will|is|are|any)\s+(?:[\w'-]+\s+){0,3}?${AMBIENT_FACT_NOUN}\b`,
+  "gi"
+);
+const QUESTION_SHAPE_RE = /\?|^\s*(?:what|when|where|which|who|how|will|is|are|does|do|can|could|any)\b/i;
+// An explicit ask to find a venue at a place ("find me a climbing gym near me", "are there
+// any pools in Denver", "where can I swim in Boston"). Needs a place beside it.
+const VENUE_ASK_RE =
+  /\b(?:find|any|are\s+there|is\s+there|where\s+(?:can|could|should|do)\s+(?:i|we))\b[^.?!]{0,40}?\b(?:climbing\s+gyms?|gyms?|pools?|classes|camps?|clinics?|studios?|tracks?)\b|\bwhere\s+(?:can|could|should|do)\s+(?:i|we)\s+(?:go\s+)?(?:run|swim|lift|train|climb|ride|hike|work\s+out)\b/i;
+// A named event ("the Boston Half", "NYC Marathon"): capitalized words before an event word.
+// Case-sensitive; read only beside a listing fact ("when does registration open for the
+// Boston Half?").
+const NAMED_EVENT_ROUTING_RE =
+  /\b(?!(?:My|Our|Your|The|This|That|Long|Easy|Tempo|Recovery|Key|Goal)\s)[A-Z][\w.'&-]*(?:\s+[A-Z][\w.'&-]*){0,3}\s+(?:Half(?:[- ]Marathon)?|Marathon|10[Kk]|5[Kk]|Ultra|Triathlon|half|marathon)\b/;
+// A statement about the athlete's own day or body is never research: "the weather in
+// Austin was brutal on my run, legs felt dead", "my knee hurt during the race in Boston".
+const OWN_EXPERIENCE_RE = new RegExp(
+  [
+    String.raw`\b(?:i|we)\s+(?:was|were|felt|had|got|went|hurt|tweaked|strained|struggled|crushed|walked|rode|swam|lifted|trained|missed|skipped|bonked|cramped)\b`,
+    String.raw`\bmy\s+(?:[\w'-]+\s+){0,2}?(?:was|were|felt|feel|feels|hurt|hurts|ached|aches|is\s+(?:sore|tight|achy|hurting|killing)|are\s+(?:sore|tight|dead|heavy|toast))\b`,
+    String.raw`\b(?:legs?|knees?|back|hips?|calves|feet|ankles?|hamstrings?|quads?|shins?)\s+(?:felt|feel|were|was|hurt|ached)\b`,
+    String.raw`\b(?:was|were)\s+(?:brutal|rough|awful|tough|terrible|great|amazing|hot|cold|humid|windy|miserable)\b`,
+    String.raw`\bi'?m\s+(?:at|in)\s+(?:the|a|my)\s`,
+  ].join("|"),
+  "i"
+);
+const HAPPENING_RE = /\b(?:happening|going\s+on|taking\s+place)\b/i;
+const WHATS_ON_RE = /\bwhat(?:'s|\s+is)\s+on\b/i;
+const TIME_ANCHOR_RE =
+  /\b(?:this|next|coming|upcoming)\s+(?:spring|summer|fall|autumn|winter|weekend|month|year|season)\b|\b(?:spring|summer|fall|autumn|winter)\s+(?:of\s+)?20\d\d\b|\b20\d\d\b|\btonight\b|\btomorrow\b|\bthis\s+weekend\b/i;
+// A place: "near me", "nearby", "locally", "around boston area", or a capitalized place
+// name after near/around/in/at ("in Boston", "around New York"). The capitalized arm is
+// case-sensitive and never a month, a weekday, or a training word.
+const PLACE_PLAIN_RE =
+  /\b(?:near|around|close\s+to)\s+(?:me|here|us|town|home|the\s+city|where\s+i\s+live)\b|\bnearby\b|\blocal(?:ly)?\b|\bin\s+(?:my|the|our)\s+(?:area|city|town|region|neighbou?rhood)\b|\b(?:around|near|in)\s+(?:the\s+)?[a-z][\w.'-]+(?:\s+[a-z][\w.'-]+)?\s+area\b/i;
+const PLACE_NAME_RE =
+  /\b(?:near|around|in|at|close to|outside)\s+(?:the\s+)?(?!(?:January|February|March|April|May|June|July|August|September|October|November|December|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|I|The|My|A|An|Zone|Z\d|RPE|RIR|Week|Day|Phase|Block)\b)[A-Z][a-zA-Z.'-]{2,}(?:\s+[A-Z][a-zA-Z.'-]+){0,2}/;
+// "my race", "our upcoming schedule", "her latest event": the athlete's (or someone's) own.
+const POSSESSED_BEFORE = /\b(?:my|our|your|his|her|their)\s+(?:[\w'-]+\s+){0,2}$/i;
+// A question about what the athlete has done is their history, not the world.
+const OWN_HISTORY_RE =
+  /\b(?:have|did|had)\s+i\b|\bi(?:'ve|\s+have)\s+(?:done|run|raced|finished|completed|entered)\b|\bi\s+(?:ran|raced|finished|completed|did)\b/i;
+
+// "the race", "during the race", "at the hotel gym", "this event": a noun led by a
+// determiner that points at a known one (with only lowercase words between) is the
+// athlete's own context, not a discovery. Case-sensitive between, so "the Boston
+// Marathon" (a named event) still counts.
+const LED_BEFORE = /(?:^|[^\w])(?:[Dd]uring\s+(?:(?:the|a|an|this|that)\s+)?|(?:[Tt]he|[Tt]his|[Tt]hat)\s+)(?:[a-z][\w'-]*\s+){0,2}$/;
+
+function hasUnpossessed(re: RegExp, text: string, opts: { led?: boolean } = {}): boolean {
+  re.lastIndex = 0;
+  for (const match of text.matchAll(re)) {
+    const before = text.slice(Math.max(0, (match.index ?? 0) - 40), match.index ?? 0);
+    if (POSSESSED_BEFORE.test(before)) continue;
+    if (opts.led && LED_BEFORE.test(before)) continue;
+    return true;
+  }
+  return false;
+}
+
+/** The message names a place: near me, nearby, around <place>, in <Place>. */
+export function messageNamesPlace(message: unknown): boolean {
+  const text = String(message ?? "").replace(/[‘’]/g, "'");
+  return PLACE_PLAIN_RE.test(text) || PLACE_NAME_RE.test(text);
+}
+
+/** An explicit ask to search, look it up or check online ("do the actual search", "google it"). */
+export function chatMessageAsksToSearch(message: unknown): boolean {
+  return EXPLICIT_SEARCH_ASK.test(String(message ?? "").replace(/[‘’]/g, "'"));
+}
+
+/**
+ * The message needs current information about the outside world: an explicit ask to
+ * search, or a question about dated real-world things (events, races, registrations,
+ * prices, opening hours, weather, news) the app cannot know. Never the athlete's own data.
+ */
+export function chatMessageNeedsCurrentInfo(message: unknown): boolean {
+  const text = String(message ?? "").replace(/[‘’]/g, "'").trim();
+  if (!text) return false;
+  if (chatMessageAsksToSearch(text)) return true;
+  if (OWN_HISTORY_RE.test(text)) return false;
+  const place = messageNamesPlace(text);
+  // A discovery ask wins over a statement beside it ("I'm in Boston in April, any halves?").
+  if (hasUnpossessed(DISCOVERY_BEFORE_NOUN, text, { led: true })) return true;
+  if (place && VENUE_ASK_RE.test(text)) return true;
+  // Precision first: a statement about the athlete's own day or body is never research,
+  // and what this misses the model can still escalate (CHAT_WEB_SEARCH_REQUEST).
+  if (OWN_EXPERIENCE_RE.test(text)) return false;
+  const event = hasUnpossessed(EVENT_NOUN_RE, text, { led: true });
+  const time = TIME_ANCHOR_RE.test(text);
+  if (event && place) return true;
+  if (HAPPENING_RE.test(text) && (place || time || event)) return true;
+  if (WHATS_ON_RE.test(text) && place) return true;
+  if (
+    hasUnpossessed(LISTING_FACT_RE, text) &&
+    (place || time || event || NAMED_EVENT_ROUTING_RE.test(text))
+  )
+    return true;
+  if (QUESTION_SHAPE_RE.test(text) && hasUnpossessed(AMBIENT_QUESTION_RE, text) && (place || time || event)) return true;
+  return hasUnpossessed(LATEST_EVENT_RE, text, { led: true }) || hasUnpossessed(LATEST_FACT_RE, text);
+}
+
+// Topics that are never an amendment to the meal just logged, however a sentence
+// reads ("maybe I can add some spring half marathon race to my goals?").
+const NOT_A_MEAL_TOPIC =
+  /\b(?:races?|racing|marathons?|half[- ]marathons?|5ks?|10ks?|ultras?|triathlons?|goals?|events?|registration|sign(?:ed)?[- ]?up|search(?:ing)?|google|online|web(?:site)?|internet|happening|weather|news)\b/i;
+
 const EXPLICIT_DEEP =
   /\b(?:think deeply|deep dive|go deep|use (?:the )?deep(?: mode)?|deep (?:analysis|review|mode)|analy[sz]e (?:this )?(?:thoroughly|deeply)|comprehensive analysis|reason (?:this )?through)\b/i;
 const AMBIGUOUS =
@@ -445,8 +616,14 @@ function captureReasons(
   // never rides this branch. A bare list with no meal label of its own ("150g rice")
   // is the same question: right after a capture it may be more of that meal, so the
   // agent reads it; "lunch 150g rice" names its meal and stays a new entry.
+  // A message about races, goals, events or a search, with no food in it, is never an
+  // amendment to the meal ("…maybe I can add some spring half marathon race to my goals?",
+  // "Do the actual search and find what is happening", 2026-11-22: both were read as a
+  // capture correction because "add" and "that" rode beside a fresh food note).
+  const notAMeal = !hasFoodEvidence(message) && (NOT_A_MEAL_TOPIC.test(message) || chatMessageNeedsCurrentInfo(message));
   if (
     recentFoodCapture &&
+    !notAMeal &&
     (AMENDMENT_VERB.test(message) ||
       ADDITION_PHRASE.test(message) ||
       hasCorrectionVerb ||
@@ -476,6 +653,21 @@ function captureReasons(
     addReason(reasons, "photo_food_default");
   }
   return CHAT_ROUTING_REASON_CODES.filter((reason) => reasons.has(reason));
+}
+
+/**
+ * The turn needs live web research: the narrow CURRENT_RESEARCH list, an explicit ask to
+ * search (always), the outside-world detector (only beside no capture: "log my dinner at
+ * a restaurant in Boston" is a food log), or a pasted http(s) URL on a coaching turn
+ * (capture-only logs stay capture even if a menu URL rode along). One answer for both
+ * routing modes: the adaptive router and the single-profile path read this.
+ */
+export function chatMessageWantsCurrentResearch(message: unknown, opts: { captured?: boolean } = {}): boolean {
+  const text = String(message ?? "").trim();
+  if (!text) return false;
+  if (CURRENT_RESEARCH.test(text) || chatMessageAsksToSearch(text)) return true;
+  if (opts.captured) return false;
+  return chatMessageNeedsCurrentInfo(text) || /https?:\/\/[^\s]+/i.test(text);
 }
 
 /**
@@ -535,11 +727,7 @@ export function decideChatRouting(input: ChatRoutingInput): ChatRoutingDecision 
   if (MEDICATION.test(message)) deep("medication_interaction");
   if (GOAL_IDENTITY.test(message)) deep("goal_identity");
   if (PLAN_RESTRUCTURE.test(message)) deep("plan_restructure");
-  // A pasted http(s) URL on a coaching turn is a request to look at that page.
-  // Capture-only logs stay capture even if a menu URL rode along.
-  if (CURRENT_RESEARCH.test(message) || (captures.length === 0 && /https?:\/\/[^\s]+/i.test(message))) {
-    deep("current_research");
-  }
+  if (chatMessageWantsCurrentResearch(message, { captured: captures.length > 0 })) deep("current_research");
   if (constrainedInMultipleWays(message)) deep("multi_constraint");
   if (EXPLICIT_DEEP.test(message)) deep("explicit_deep_request");
 

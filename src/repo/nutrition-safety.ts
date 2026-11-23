@@ -4,14 +4,17 @@ import {
   type HardDietKey,
   normalizeHardDietKeys,
 } from "./dietary-constraints.js";
+import { ABSOLUTE_KCAL_FLOOR } from "./kcal-floor.js";
+import { mealPlanDayFloorKcal, mealPlanDayKcalTargets } from "./meal-plan-day-energy.js";
 
 // Deterministic nutrition safety checks shared by every meal/target write path.
 // Prompt instructions are useful guidance, but are not an authorization boundary.
 
 // The universal floor: never advise a daily target below this, whatever the math
 // says. Exported so the verify pre-check states the SAME number the clamp enforces
-// instead of a prose approximation of it.
-export const ABSOLUTE_KCAL_FLOOR = 1500;
+// instead of a prose approximation of it. Defined in kcal-floor.ts (a leaf module, so
+// meal-plan-day-energy.ts can read it without an import cycle back to this file).
+export { ABSOLUTE_KCAL_FLOOR };
 
 // A weekly plan is an actionable prescription, so its headline target must be
 // true in the meals themselves. Ten percent accommodates ordinary recipe and
@@ -114,19 +117,49 @@ export function assessMealPlanAdequacy(parsed: any): MealPlanAdequacy {
     MEAL_PLAN_MIN_PROTEIN_TOLERANCE,
     Math.round(targetProtein * MEAL_PLAN_PROTEIN_TOLERANCE_FRACTION)
   );
-  const mismatch = days.find(
-    (day) =>
-      Math.abs(day.kcal - targetKcal) > kcalTolerance || Math.abs(day.protein_g - targetProtein) > proteinTolerance
+  // A plan drafted with the server's per-day split (meal-plan-day-energy.ts) holds each
+  // moved day to ITS number, with the same tolerance width the headline gets, and never
+  // under the day floor; a day at the average (and every day of an old plan) is held to
+  // the headline exactly as before. Protein never moves, so it is checked as before.
+  const dayTargets = mealPlanDayKcalTargets(parsed);
+  const dayFloor = mealPlanDayFloorKcal(parsed);
+  const expectedKcal = (index: number) => dayTargets[index] ?? targetKcal;
+  const kcalOff = (day: MealPlanAdequacyDay, index: number) => {
+    const expected = expectedKcal(index);
+    const low = dayTargets[index] != null ? Math.max(expected - kcalTolerance, dayFloor) : expected - kcalTolerance;
+    return day.kcal < low || day.kcal > expected + kcalTolerance;
+  };
+  const mismatchIndex = days.findIndex(
+    (day, index) => kcalOff(day, index) || Math.abs(day.protein_g - targetProtein) > proteinTolerance
   );
-  if (mismatch) {
+  if (mismatchIndex >= 0) {
+    const mismatch = days[mismatchIndex];
+    const own = dayTargets[mismatchIndex];
     return {
       ok: false,
       checked: true,
       fiber_checked: false,
       macros_ok: false,
-      error: `Meal plan rejected: ${mismatch.day} totals ${mismatch.kcal} kcal and ${mismatch.protein_g} g protein, outside the daily target tolerance around ${Math.round(targetKcal)} kcal and ${Math.round(targetProtein)} g protein.`,
+      error:
+        own != null
+          ? `Meal plan rejected: ${mismatch.day} totals ${mismatch.kcal} kcal and ${mismatch.protein_g} g protein, outside the tolerance around that day's own ${own} kcal and the ${Math.round(targetProtein)} g protein target.`
+          : `Meal plan rejected: ${mismatch.day} totals ${mismatch.kcal} kcal and ${mismatch.protein_g} g protein, outside the daily target tolerance around ${Math.round(targetKcal)} kcal and ${Math.round(targetProtein)} g protein.`,
       days,
     };
+  }
+  // The week's mean is still the headline: a split moves energy between days, never adds it.
+  if (dayTargets.some((target) => target != null)) {
+    const mean = days.reduce((sum, day) => sum + day.kcal, 0) / days.length;
+    if (Math.abs(mean - targetKcal) > kcalTolerance) {
+      return {
+        ok: false,
+        checked: true,
+        fiber_checked: false,
+        macros_ok: false,
+        error: `Meal plan rejected: the week averages ${Math.round(mean)} kcal a day, outside the tolerance around its ${Math.round(targetKcal)} kcal weekly target.`,
+        days,
+      };
+    }
   }
 
   // Legacy plans without fiber estimates remain readable and explicitly marked

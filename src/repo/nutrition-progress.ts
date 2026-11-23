@@ -3,6 +3,8 @@ import { annotateDirectiveFreshness } from "./propagation.js";
 import { listActiveDirectives } from "./directives-read.js";
 import { getDayIntake, hydrateNutritionTarget } from "./nutrition.js";
 import { addDaysISO, localDateISO } from "./shared.js";
+import { fiberFloorG } from "./fiber-floor.js";
+import { copyDeep, requestMemo } from "./request-memo.js";
 
 export type NutritionProgressNutrient = "kcal" | "protein_g" | "carbs_g" | "fat_g" | "fiber_g";
 type TargetNutrient = Exclude<NutritionProgressNutrient, "fiber_g">;
@@ -80,7 +82,8 @@ const LABELS: Record<NutritionProgressNutrient, string> = {
 };
 const WATCH_NUTRITION_RE =
   /\b(apo\s?b|ldl|cholesterol|lipoprotein|triglycer|glucose|a1c|vitamin d|omega-?3|homocysteine|ferritin|iron)\b/i;
-const FIBER_REFERENCE_G = 30;
+// The fiber reference is the ONE fiber rule (src/repo/fiber-floor.ts): 14 g per 1,000 kcal
+// of the day's target, never under 30 g, so this read and the day's food guides agree.
 
 function clampDays(value: number): number {
   const n = Number(value);
@@ -328,7 +331,7 @@ function currentReference(targetRow: any): {
     protein_g: today.target?.protein_g ?? null,
     carbs_g: accepted?.carbs_g ?? null,
     fat_g: accepted?.fat_g ?? null,
-    fiber_g: FIBER_REFERENCE_G,
+    fiber_g: fiberFloorG(today.target?.kcal),
     source: sources.size === 1 ? [...sources][0] : "mixed",
     effective_date: effectiveDates.size === 1 ? [...effectiveDates][0] : null,
     provenance,
@@ -341,8 +344,15 @@ function currentReference(targetRow: any): {
 // micronutrients). Exported so callers outside this file (meal-plan validation)
 // identify nutrition-relevant directives the same way, rather than re-deriving
 // the domain/marker check themselves.
+// A pure read the food screen asks for several times in one open (the day's guides, the
+// ideas' health leans, the two-week pattern), so it is read once per request and day.
 export function nutritionRelevantDirectives(): any[] {
-  return annotateDirectiveFreshness(listActiveDirectives(), localDateISO()).filter((directive: any) => {
+  const today = localDateISO();
+  return requestMemo(`nutrition_relevant_directives:${today}`, () => nutritionRelevantDirectivesRead(today), copyDeep);
+}
+
+function nutritionRelevantDirectivesRead(today: string): any[] {
+  return annotateDirectiveFreshness(listActiveDirectives(), today).filter((directive: any) => {
     if (directive?.domain === "nutrition") return true;
     return (
       directive?.domain === "watch" &&
@@ -492,7 +502,7 @@ export function nutritionProgress(windowDays = 35) {
             : nutrient === "fat_g"
               ? reference.fat_g
               : nutrient === "fiber_g"
-                ? FIBER_REFERENCE_G
+                ? reference.fiber_g
                 : null;
     return {
       nutrient,
@@ -588,7 +598,7 @@ export function nutritionProgress(windowDays = 35) {
         Number(alignment.protein_g.recorded_to_target) >= 0.88 &&
         Number(alignment.fat_g.recorded_to_target) >= 0.8;
       const proteinNear = protein != null && reference.protein_g != null && protein >= reference.protein_g * 0.9;
-      const fiberNear = fiber != null && fiber >= FIBER_REFERENCE_G * 0.9;
+      const fiberNear = fiber != null && fiber >= reference.fiber_g * 0.9;
       read = carbLedGap
         ? `${condition}, recorded energy and carbohydrate are running below the accepted references for those days, while protein and fat are closer.`
         : proteinNear && fiberNear
@@ -600,7 +610,7 @@ export function nutritionProgress(windowDays = 35) {
               : `${condition}, the recorded pattern suggests protein and fiber are the most useful anchors to review.`;
       nextMove = carbLedGap
         ? `${condition}, close a modest amount of energy with carbohydrate around training.`
-        : fiber != null && fiber < FIBER_REFERENCE_G * 0.9
+        : fiber != null && fiber < reference.fiber_g * 0.9
           ? `${condition}, keep the rest steady and make one regular meal a little more fiber-rich.`
           : protein != null && reference.protein_g != null && protein < reference.protein_g * 0.9
             ? `${condition}, keep the day flexible and strengthen one dependable protein anchor.`

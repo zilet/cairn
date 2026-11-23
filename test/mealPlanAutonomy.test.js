@@ -120,6 +120,80 @@ test("the refresh classifier is conservative about what it cannot compare", () =
   assert.equal(repo.mealPlanRefreshShape(week("Next", 2400), week("Current", 2200)).bounded, false);
 });
 
+// A week labelled by weekday and carrying the server's per-day split
+// (meal-plan-day-energy.ts): `shifts` maps a weekday label to that day's move off the
+// weekly average, laid onto the seven food days from `from`.
+const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+function splitWeek(summary, kcal, shifts, from = "2026-11-30") {
+  const plan = week(summary, kcal);
+  // Each moved day's meals are sized to its own number, as the server holds them to it.
+  plan.days = plan.days.map((day, index) => {
+    const shift = shifts[WEEKDAYS[index]] ?? 0;
+    const meals = day.meals.map((meal, i) =>
+      i === day.meals.length - 1 ? { ...meal, kcal: meal.kcal + shift } : meal
+    );
+    return { ...day, day: WEEKDAYS[index], meals };
+  });
+  const moved = Object.entries(shifts).map(([label, shift]) => {
+    const offset = WEEKDAYS.indexOf(label); // `from` is a Monday
+    const date = new Date(Date.parse(`${from}T00:00:00Z`) + offset * 86_400_000).toISOString().slice(0, 10);
+    return { date, kcal: kcal + shift, why: shift > 0 ? "the long run" : "a lighter day" };
+  });
+  if (moved.length) plan.day_energy = { version: 1, average_kcal: kcal, floor_kcal: 1500, from, days: moved };
+  return plan;
+}
+
+test("a new per-day split under the same weekly target is a change, not a rotation", () => {
+  const current = splitWeek("Current", 2200, { Sat: 300, Mon: -150, Tue: -150 });
+  // Next week's plan, the same split on the same weekdays: still a rotation.
+  const same = splitWeek("Next", 2200, { Sat: 300, Mon: -150, Tue: -150 }, "2026-12-07");
+  assert.deepEqual(repo.mealPlanRefreshShape(same, current), { bounded: true, reasons: [] });
+
+  // The long run moved to Sunday: the headline is unchanged, two days now eat differently.
+  const moved = splitWeek("Next", 2200, { Sun: 300, Mon: -150, Tue: -150 }, "2026-12-07");
+  const shape = repo.mealPlanRefreshShape(moved, current);
+  assert.equal(shape.bounded, false);
+  assert.deepEqual(shape.reasons, ["a day's own calorie number moved"]);
+
+  // A flat week replaced by a split one (and back) is news too.
+  assert.equal(repo.mealPlanRefreshShape(same, week("Current", 2200)).bounded, false, "flat to split");
+  assert.equal(repo.mealPlanRefreshShape(week("Next", 2200), current).bounded, false, "split to flat");
+});
+
+test("a day's number within 50 kcal of last week's same day is rounding, not news", () => {
+  const current = splitWeek("Current", 2200, { Sat: 300, Mon: -150, Tue: -150 });
+  const noise = splitWeek("Next", 2200, { Sat: 340, Mon: -170, Tue: -170 }, "2026-12-07");
+  assert.equal(repo.mealPlanRefreshShape(noise, current).bounded, true, "40 and 20 kcal apart");
+  const exactlyFifty = splitWeek("Next", 2200, { Sat: 350, Mon: -175, Tue: -175 }, "2026-12-07");
+  assert.equal(repo.mealPlanRefreshShape(exactlyFifty, current).bounded, true, "50 kcal is still the same day");
+  const past = splitWeek("Next", 2200, { Sat: 360, Mon: -180, Tue: -180 }, "2026-12-07");
+  assert.equal(repo.mealPlanRefreshShape(past, current).bounded, false, "60 kcal is a different day");
+  // Days listed in another order are still compared Monday to Monday.
+  const reordered = splitWeek("Next", 2200, { Sat: 300, Mon: -150, Tue: -150 }, "2026-12-07");
+  reordered.days = [...reordered.days.slice(3), ...reordered.days.slice(0, 3)];
+  assert.equal(repo.mealPlanRefreshShape(reordered, current).bounded, true);
+});
+
+test("a refresh that moves the day split announces under lead, with its reason recorded", () => {
+  repo.setSettings({ lead_mode: "lead" });
+  const current = repo.createMealPlan("stub", "", splitWeek("Current", 2200, { Sat: 300, Mon: -150, Tue: -150 }));
+  repo.acceptMealPlan(current.id);
+  const next = repo.createMealPlan(
+    "stub",
+    "",
+    splitWeek("Next", 2200, { Sun: 300, Mon: -150, Tue: -150 }, "2026-12-07")
+  );
+
+  const scheduled = applyMealPlanWithAutonomy(next.id);
+  assert.equal(scheduled.tier, "announce");
+  const context = repo.getBrainDecision(scheduled.decision.id).context;
+  assert.equal(context.refresh_bounded, false);
+  assert.ok(
+    context.refresh_reasons.includes("a day's own calorie number moved"),
+    JSON.stringify(context.refresh_reasons)
+  );
+});
+
 test("a bounded weekly refresh quiet-applies under lead, and Undo restores the prior week", () => {
   repo.setSettings({ lead_mode: "lead" });
   const current = repo.createMealPlan("stub", "", week("Current", 2200));

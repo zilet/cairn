@@ -47,10 +47,11 @@
 //   - No agent turn. An agent refinement, if one is ever layered on, must never block
 //     this response.
 
-import type { ClientFuelEnergyBound, ClientFuelIdea, ClientFuelIdeas, ClientIntakeBand } from "../contracts/fuel.js";
+import type { ClientFuelEnergyBound, ClientFuelIdea, ClientFuelIdeaWith, ClientFuelIdeas, ClientIntakeBand } from "../contracts/fuel.js";
 import { db } from "../db.js";
 import { intakeBand } from "./intake-band.js";
 import { dayIntakeCoverage, dayIntakeTarget, frequentFoodKey, frequentFoods, getDayIntake } from "./nutrition.js";
+import { dayEnergyTarget } from "./day-energy.js";
 import { nutritionRelevantDirectives } from "./nutrition-progress.js";
 import { computeGoalCheck } from "./profile.js";
 import { supplementFoodKind } from "./supplements.js";
@@ -243,6 +244,26 @@ interface MealAcc {
  * tie-break only; it never makes a one-off meal a staple.
  */
 export function fuelStaples(asOf: string = localDateISO(), hour?: number): FuelStaple[] {
+  return readStaples(asOf, hour).staples;
+}
+
+/** A recurring food that is mostly carbohydrate and small enough to sit beside a meal. */
+export interface FuelCarbSide {
+  key: string;
+  title: string;
+  kcal: number;
+  carbs_g: number;
+  days: number;
+  /** Usually eaten around this hour. */
+  usual_now?: boolean;
+}
+
+// A side is "mostly carbohydrate" when carbs carry at least this share of its kcal.
+const CARB_SIDE_MIN_SHARE = 0.6;
+// Below this a side is a bite, not something worth naming.
+const CARB_SIDE_MIN_KCAL = 60;
+
+function readStaples(asOf: string, hour?: number): { staples: FuelStaple[]; carbSides: FuelCarbSide[] } {
   const since = addDaysISO(asOf, -FUEL_STAPLE_WINDOW_DAYS) ?? asOf;
   const rows = db
     .prepare(
@@ -430,7 +451,26 @@ export function fuelStaples(asOf: string = localDateISO(), hour?: number): FuelS
       lead_key: leadKey,
     });
   }
-  return out;
+  // Carb-leaning foods the athlete keeps eating: only what is in their own log.
+  const carbSides: FuelCarbSide[] = [...recurring]
+    .filter(([, c]) => {
+      const m = c.macros!;
+      return (
+        !c.protein_supplement &&
+        m.carbs_g != null &&
+        m.kcal >= CARB_SIDE_MIN_KCAL &&
+        (m.carbs_g * 4) / m.kcal >= CARB_SIDE_MIN_SHARE
+      );
+    })
+    .map(([key, c]) => ({
+      key,
+      title: capIdeaTitle(stripQualifiers(c.title) || c.title),
+      kcal: c.macros!.kcal,
+      carbs_g: c.macros!.carbs_g!,
+      days: c.days.size,
+      usual_now: [...usualNow].some((k) => k.includes(key)),
+    }));
+  return { staples: out, carbSides };
 }
 
 interface Sized {
@@ -648,6 +688,89 @@ export interface FuelIdeasOptions {
   hour?: number;
   /** Idea keys or staple keys to skip ("Another idea"). */
   exclude?: string[];
+  /**
+   * Grams of carbohydrate the day's carb guide still has room for (fuel-guides.ts, which
+   * imports this module, so the caller hands it over: see fuel-ideas-day.ts). Null or
+   * absent: no pairing and no "suits carbs" is said.
+   */
+  carbsRoomG?: number | null;
+}
+
+// A "with" pairing is offered when the idea leaves at least this much of THIS meal's
+// energy share (and at least a quarter of the share): clear room, not crumbs.
+export const FUEL_WITH_MIN_KCAL = 150;
+export const FUEL_WITH_MIN_SHARE = 0.25;
+// Room words speak only on a day whose number is this far above the weekly average
+// (day-energy's own smallest shift), with at least this much still open after one idea
+// and at least this much carb room to say the room suits carbs.
+export const FUEL_ROOM_WORDS_MIN_SHIFT_KCAL = 50;
+export const FUEL_ROOM_WORDS_MIN_OPEN_KCAL = 150;
+export const FUEL_SUITS_CARBS_MIN_G = 30;
+
+const kcalWords = (n: number): string => (Math.round(n / 10) * 10).toLocaleString("en-US");
+
+/**
+ * The line that reads the day's open room after one idea. PURE. Null on an ordinary or
+ * lighter day, or when little is open. `openKcal` is what is left AFTER one idea.
+ */
+export function fuelRoomWords(input: {
+  shiftKcal: number;
+  work: string[];
+  /** Extra kcal on the day from work already logged (day-energy's outcome shift), when it reports one. */
+  outcomeShiftKcal?: number;
+  /** What that logged work is, in words ("the ride"). */
+  outcomeWork?: string[];
+  openKcal: number | null;
+  carbsRoomG: number | null;
+  /** False for another date: the line then opens "That day's number". Default true. */
+  isToday?: boolean;
+}): string | null {
+  const outcomeShift = Math.max(0, input.outcomeShiftKcal ?? 0);
+  if (input.shiftKcal + outcomeShift < FUEL_ROOM_WORDS_MIN_SHIFT_KCAL) return null;
+  if (input.openKcal == null || input.openKcal < FUEL_ROOM_WORDS_MIN_OPEN_KCAL) return null;
+  // The plan's work and any logged work are both named; with neither, plainly bigger.
+  // day-energy's outcome words already say "you logged".
+  const named = [...input.work, ...(outcomeShift > 0 ? (input.outcomeWork ?? []) : [])];
+  const work = named.length ? ` for ${named.join(" and ")}` : " than your average";
+  const lead = input.isToday === false ? "That day's" : "Today's";
+  const suits = input.carbsRoomG != null && input.carbsRoomG >= FUEL_SUITS_CARBS_MIN_G ? ", and it suits carbs" : "";
+  return `${lead} number is bigger${work}; after one of these about ${kcalWords(input.openKcal)} kcal is still open${suits}.`;
+}
+
+/**
+ * One carb-leaning food from the athlete's own log that fits what an idea leaves of this
+ * meal's share. PURE. Null when the room is not clear, carbs room is gone, or nothing
+ * qualifies: then nothing is added.
+ */
+export function pairCarbSide(
+  idea: { title: string; kcal: number; carbs_g: number | null; lead_key?: string },
+  shareKcal: number | null,
+  carbsRoomG: number | null,
+  sides: FuelCarbSide[]
+): ClientFuelIdeaWith | null {
+  if (shareKcal == null || carbsRoomG == null) return null;
+  const left = shareKcal - idea.kcal;
+  if (left < FUEL_WITH_MIN_KCAL || left < shareKcal * FUEL_WITH_MIN_SHARE) return null;
+  const carbsLeft = carbsRoomG - (idea.carbs_g ?? 0);
+  const title = idea.title.toLowerCase();
+  const fits = sides
+    .filter(
+      (c) => c.kcal <= left && c.carbs_g <= carbsLeft && c.key !== idea.lead_key && !title.includes(c.title.toLowerCase())
+    )
+    // A food usually eaten at this time of day comes first (oats are not a dinner side).
+    .sort(
+      (a, b) =>
+        Number(!!b.usual_now) - Number(!!a.usual_now) || b.days - a.days || b.kcal - a.kcal || a.key.localeCompare(b.key)
+    );
+  const pick = fits[0];
+  if (!pick) return null;
+  const kcal = Math.round(pick.kcal / 10) * 10;
+  return {
+    title: pick.title,
+    kcal,
+    carbs_g: Math.round(pick.carbs_g),
+    words: `With ${sideWord(pick.title)}, about ${kcal} kcal more, it still fits this meal's share.`,
+  };
 }
 
 // A meal with no numbers at all: still being estimated, or never estimated.
@@ -755,7 +878,31 @@ export function fuelIdeas(date: string = localDateISO(), opts: FuelIdeasOptions 
   } catch {
     target = null;
   }
-  const bound = fuelEnergyBound(band, target);
+  // Ideas are sized to the DAY's number (repo/day-energy.ts): whichever bound holds the
+  // room (the accepted target, the loss edge, the observed ceiling) is a weekly figure, so
+  // the day's planned shift moves it — a long-run day's dinner is offered more room and a
+  // rest day's less, and the week's total is unchanged.
+  const weekly = fuelEnergyBound(band, target);
+  let dayShift = 0;
+  let dayWork: string[] = [];
+  let outcomeShift = 0;
+  let outcomeWork: string[] = [];
+  try {
+    if (target && weekly.kcal != null) {
+      const dayEnergy = dayEnergyTarget(date, target.kcal);
+      dayShift = dayEnergy.shift_kcal;
+      dayWork = dayEnergy.work;
+      // Logged work moves the day too, on trees where day-energy reports it: read defensively.
+      outcomeShift = Number((dayEnergy as any).outcome_shift_kcal) || 0;
+      outcomeWork = Array.isArray((dayEnergy as any).outcome_work) ? (dayEnergy as any).outcome_work : [];
+    }
+  } catch {
+    dayShift = 0;
+    dayWork = [];
+    outcomeShift = 0;
+    outcomeWork = [];
+  }
+  const bound = weekly.kcal != null ? { ...weekly, kcal: weekly.kcal + dayShift } : weekly;
   const energyRoom = bound.kcal != null && kcalKnown ? Math.round(bound.kcal - totals.kcal) : null;
 
   // One meal's share of what is left.
@@ -775,7 +922,8 @@ export function fuelIdeas(date: string = localDateISO(), opts: FuelIdeasOptions 
 
   const excluded = new Set((opts.exclude ?? []).map((k) => safeKey(String(k).split("@")[0])));
   const eatenToday = new Set(day.entries.map((e: any) => foodKey(String(e.summary ?? ""))));
-  const staples = fuelStaples(date, opts.hour).filter((s) => !excluded.has(s.key) && !eatenToday.has(s.key));
+  const read = readStaples(date, opts.hour);
+  const staples = read.staples.filter((s) => !excluded.has(s.key) && !eatenToday.has(s.key));
 
   const fitRank = (f: boolean | null) => (f === true ? 2 : f === null ? 1 : 0);
   const ranked = staples
@@ -826,8 +974,33 @@ export function fuelIdeas(date: string = localDateISO(), opts: FuelIdeasOptions 
       times_logged: s.staple.times_logged,
       last_logged: s.staple.last_logged,
       source: s.staple.source ?? "staple",
+      with: pairCarbSide(
+        {
+          title: s.staple.title,
+          kcal: s.kcal,
+          carbs_g: s.staple.carbs_g == null ? null : s.staple.carbs_g * s.portion,
+          lead_key: s.staple.lead_key,
+        },
+        share.energy_kcal,
+        opts.carbsRoomG ?? null,
+        read.carbSides
+      ),
     };
   });
+  // The room after the biggest idea, so the line holds whichever one is picked.
+  const biggest = ideas.reduce((m, i) => Math.max(m, i.kcal ?? 0), 0);
+  const room_words =
+    ideas.length && energyRoom != null
+      ? fuelRoomWords({
+          shiftKcal: dayShift,
+          work: dayWork,
+          outcomeShiftKcal: outcomeShift,
+          outcomeWork,
+          isToday: date === localDateISO(),
+          openKcal: energyRoom - biggest,
+          carbsRoomG: opts.carbsRoomG ?? null,
+        })
+      : null;
 
   return {
     kind: "ideas",
@@ -844,5 +1017,6 @@ export function fuelIdeas(date: string = localDateISO(), opts: FuelIdeasOptions 
     band_status: band.status,
     ideas,
     words: setWords(ideas.length),
+    room_words,
   };
 }

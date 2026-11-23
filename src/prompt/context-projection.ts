@@ -551,30 +551,73 @@ export const PROMPT_CONTEXT_SITES = {
     sessions: SESSIONS_MINIMAL,
   },
 
-  // The weekly meal plan. Plan-shaping and constitution-bound, so it keeps everything
-  // its guardrails read: the longevity block + hard-diet scan (profile allergies /
-  // dietary_restrictions), the household read (family), the nutrition strategy block
-  // (recent_activities, context_events, goal, recovery, performance, program_state's
-  // hybrid fuel, fueling), the connected brain's NUTRITION directives + prioritized
-  // health focus, the training split (plan) and endurance fueling. `coaching_focus`
-  // rides along beyond the strict rule — it is the one-focus spine the meals should
-  // serve (buildMealPlanPrompt renders it via renderCoachingFocus(ctx, {brief:true}),
-  // e.g. a caveat easing around an injury, or a fueling emphasis). DROPPED: garmin,
-  // day_read, recent_decisions, insights, whole_person_trajectory, and the
-  // strength-programming read layer meals never touch (balance/adjustments/
-  // week_training_load/strength_journey/groups_trajectory/test_week).
+  // The weekly meal plan: a sports dietitian's brief, not the coach's whole picture.
+  // KEPT — targets and pace (goal minus its expenditure arithmetic, which the strategy
+  // block renders itself; goal_mode; journey compacted to the goal, body fat, stage,
+  // pace and goal-consistency report; cut_quality; intake_band minus its per-week rows), body size (profile,
+  // body_composition, dexa_targeting), the week's LAYOUT (dated_week: which date lifts,
+  // runs, long-runs or travels, added by buildMealPlanPrompt; fuel_demand with each
+  // day's drivers and carb range; the stated strength/endurance weekdays; the race and
+  // this week's km off race_build; program_state cut to its hybrid fuel risk and block
+  // phase; recent_activities as date/type/length), what they eat (day_intake with the
+  // fuel guides and the two-week pattern read, the current meal_plan, fueling feedback,
+  // planning-scoped memory, learnings, the learned patterns), every safety and lever
+  // source (profile allergies and restrictions, family, health records, health_review,
+  // health_synthesis, supplements, symptom_links, directive_feedback, the directives
+  // minus training-domain rows and wearable recovery context, health_focus without its
+  // duplicated lead/surfaced copies or its training moves), the underfueling and
+  // energy-deficiency reads, life context (context_events, context_today, location),
+  // and recovery cut to its recent/baseline/delta (the strategy rule's "low recovery may
+  // hold or raise fuel").
+  // DROPPED — set-by-set logs and lift reads (recent_sessions, plan's items, progression,
+  // training_signals, program_state's per-lift rows, performance), readiness detail
+  // (signal_state and coaching_focus ride as rendered prose above DATA; checkins and
+  // training_drive likewise), the run engine's working (run_plan, the agenda, run_zones,
+  // run_compliance, run_variety, endurance_tests, endurance_capacity, recent_cardio —
+  // dated_week and fuel_demand carry the week they produce), trajectory and body_metrics
+  // (rendered as prose), imaging (no meal lever; body composition rides on its own), and
+  // garmin, day_read, recent_decisions, insights, whole_person_trajectory.
+  // Compactions: compactMealPlanKey below.
   meal_plan: {
     keys: [
-      ...PERSON,
-      ...TRAINING_CORE,
-      ...ENDURANCE,
+      "now",
+      "profile",
+      "movement_considerations",
+      "location",
+      "discipline",
+      "training_intent",
+      "goal",
+      "goal_mode",
+      "memory",
+      "learnings",
+      "context_events",
+      "context_today",
+      "family",
+      "reaction_model",
+      "felt_signals",
+      "learned_models",
+      "what_works_for_you",
+      // Which date carries which lift / run / trip — the week's layout in ~1 KB.
+      "dated_week",
+      "strength_schedule",
+      "endurance_goal",
+      "endurance_schedule",
+      "race_build",
+      "recent_activities",
+      "program_block",
+      "program_state",
       ...FUEL,
-      ...HEALTH_FULL,
+      "directives",
+      "health_focus",
+      "body_composition",
+      "dexa_targeting",
+      "supplements",
+      "health",
+      "health_review",
+      "health_synthesis",
+      "symptom_links",
+      "directive_feedback",
       ...RECOVERY,
-      "performance",
-      "trajectory",
-      "signal_state",
-      "coaching_focus",
       // The week's demand map — which days carry the long run, the quality session,
       // the heavy lower work or a double. This is the one site that plans SEVEN days
       // of food at once, so it is the site where "time more carbs around training"
@@ -584,7 +627,7 @@ export const PROMPT_CONTEXT_SITES = {
       // weigh-ins showed — the observed bound meals are sized within, never a target.
       "intake_band",
     ],
-    sessions: SESSIONS_RECENT,
+    sessions: 0,
   },
 
   // The session SAFETY CHECKER (a bounded second pass over a drafted session). It
@@ -615,8 +658,25 @@ export const PROMPT_CONTEXT_SITES = {
   // and re-derives no target; the week's numbers already arrived as findings.
   // `sessions: 0` because `recent_sessions` is not in the key set at all — this
   // site reads no logged training, so it carries no session window either.
+  // Of the person it keeps only the declaration sources above (plus `now`), and of the
+  // condensed health reads only the ones a food can collide with: directives and the
+  // prioritized focus (compacted as at meal_plan) and supplements. The targets, the
+  // check-ins, the learned training patterns and body composition judge no meal.
   meal_plan_verify: {
-    keys: [...PERSON, ...HEALTH_CORE],
+    keys: [
+      "now",
+      "profile",
+      // Where they are eating this week — every person-aware site carries it.
+      "location",
+      "memory",
+      "learnings",
+      "context_events",
+      "context_today",
+      "family",
+      "directives",
+      "health_focus",
+      "supplements",
+    ],
     sessions: 0,
   },
 
@@ -1561,8 +1621,37 @@ function compactChatHealthReview(review: unknown): unknown {
   };
 }
 
+// Today's food for chat: totals, target, what is left and the entries stay whole (actions
+// name entry ids). The guides keep their range in words; the label repeats the key and the
+// note repeats the directives already inline. The two-week read keeps its energy and
+// protein lines (the first two, fuel-pattern.ts's order) and the one lever.
+function compactChatDayIntake(intake: unknown): unknown {
+  if (!intake || typeof intake !== "object" || Array.isArray(intake)) return intake;
+  const row = { ...(intake as Record<string, unknown>) };
+  if (Array.isArray(row.guides)) {
+    row.guides = row.guides.map((g) => {
+      const guide = (g ?? {}) as Record<string, unknown>;
+      return {
+        key: guide.key,
+        ...(typeof guide.eaten_g === "number" ? { eaten_g: guide.eaten_g } : {}),
+        guide: guide.guide,
+      };
+    });
+  }
+  const pattern = row.guides_pattern as Record<string, unknown> | null | undefined;
+  if (pattern && typeof pattern === "object") {
+    row.guides_pattern = {
+      lines: Array.isArray(pattern.lines) ? pattern.lines.slice(0, 2) : [],
+      lever: pattern.lever ?? null,
+    };
+  }
+  return row;
+}
+
 function compactChatCore(key: string, value: unknown): unknown {
   switch (key) {
+    case "day_intake":
+      return compactChatDayIntake(value);
     case "underfueling":
       return pickFields(value, CHAT_UNDERFUELING_FIELDS);
     case "health_review":
@@ -1632,6 +1721,192 @@ function compactChatCore(key: string, value: unknown): unknown {
   }
 }
 
+// ---------- meal-plan compactions (sites "meal_plan" and "meal_plan_verify") ----------
+// A dietitian's cut of each kept key. Structure, never string surgery; every field a
+// food decision turns on stays, and what goes is either the deterministic layer's
+// arithmetic or a duplicate of something else in the payload.
+
+// The goal minus `expenditure` (the anchors, coverage and fusion weights behind the
+// TDEE). The meal prompt's strategy block renders maintenance from the same estimate,
+// so the payload kept a second copy of it; tdee, the targets and the pace all stay.
+// A target row's id and write stamp are storage.
+function compactMealGoal(goal: unknown): unknown {
+  if (!goal || typeof goal !== "object" || Array.isArray(goal)) return goal;
+  const { expenditure: _expenditure, ...rest } = goal as Record<string, unknown>;
+  for (const field of ["accepted_target", "expired_target"]) {
+    const target = rest[field];
+    if (target && typeof target === "object" && !Array.isArray(target)) {
+      const { id: _id, created_at: _created, ...row } = target as Record<string, unknown>;
+      rest[field] = row;
+    }
+  }
+  return rest;
+}
+
+// The program read's two fuel-relevant facts: the hybrid fuel risk (the strategy rule
+// names it) and where the block sits (a deload or recovery week is a lighter week to
+// fuel). Per-lift rows, volume and the next strength day are the strength coach's.
+function compactMealProgramState(state: unknown): unknown {
+  if (!state || typeof state !== "object" || Array.isArray(state)) return state;
+  const row = state as Record<string, unknown>;
+  const hybrid = row.hybrid as Record<string, unknown> | null | undefined;
+  const mesocycle = row.mesocycle as Record<string, unknown> | null | undefined;
+  return {
+    hybrid: hybrid && typeof hybrid === "object" ? { fuel: hybrid.fuel ?? null } : null,
+    mesocycle: mesocycle && typeof mesocycle === "object" ? { phase: mesocycle.phase ?? null } : null,
+    recovery_week: row.recovery_week ?? null,
+  };
+}
+
+// The race and this week's running volume: race week and a long-run week are fuel
+// decisions. The ladder, pace bands, leg map and capacity read are the run engine's.
+const MEAL_RACE_FIELDS = ["event", "date", "distance_km", "days_to_race", "weeks_to_race", "phase"] as const;
+function compactMealRaceBuild(build: unknown): unknown {
+  if (!build || typeof build !== "object" || Array.isArray(build)) return build;
+  const row = build as Record<string, unknown>;
+  const out: Record<string, unknown> = { available: row.available ?? null };
+  if (row.race && typeof row.race === "object") out.race = pickFields(row.race, MEAL_RACE_FIELDS);
+  if (row.this_week && typeof row.this_week === "object")
+    out.this_week = pickFields(row.this_week, ["week_start", "km", "long_km", "logged_km"]);
+  if (row.finished != null) out.finished = row.finished;
+  return out;
+}
+
+// Recovery as the strategy rule reads it — recent against baseline, and how many hard
+// sessions the window held. The per-metric quality maps, verified series and the
+// hard sessions' Garmin rows are the readiness read's.
+function compactMealRecovery(view: unknown): unknown {
+  if (!view || typeof view !== "object" || Array.isArray(view)) return view;
+  const row = view as Record<string, unknown>;
+  const out = pickFields(row, ["has_data", "days", "recent", "baseline", "delta"]) as Record<string, unknown>;
+  if (Array.isArray(row.hard_sessions)) out.hard_sessions = row.hard_sessions.length;
+  return out;
+}
+
+// Today's food with the guides cut to their words (chat's cut) and the two-week
+// pattern read whole: every line of it — energy, protein, carbs, fat — is a meal fact.
+function compactMealDayIntake(intake: unknown): unknown {
+  if (!intake || typeof intake !== "object" || Array.isArray(intake)) return intake;
+  const row = intake as Record<string, unknown>;
+  const chat = compactChatDayIntake(intake) as Record<string, unknown>;
+  return Object.hasOwn(row, "guides_pattern") ? { ...chat, guides_pattern: row.guides_pattern } : chat;
+}
+
+// The fuel read's verdict, its window and correction, and which channels agree. The
+// per-channel evidence, uncertainty notes and signature are its working.
+const MEAL_UNDERFUELING_FIELDS = [
+  "as_of",
+  "state",
+  "confidence",
+  "window",
+  "intake",
+  "correction",
+  "agreeing_channels",
+  "conflicting_channels",
+  "rationale",
+  "action",
+] as const;
+
+// The observed band's answer — protein anchor, band, ceiling, its words — without the
+// per-week rows it was pooled from.
+function compactMealIntakeBand(band: unknown): unknown {
+  if (!band || typeof band !== "object" || Array.isArray(band)) return band;
+  const { weeks: _weeks, ...rest } = band as Record<string, unknown>;
+  return rest;
+}
+
+// The connected brain's directives a meal can act on or must respect: nutrition rows,
+// the watch rows (several are dietary guards — "a low reading is no reason to cut
+// salt", "low glucose is not a carb-cutting signal") and any other domain a review
+// emitted. Training-domain rows and the wearable recovery context go. The rationale
+// and citation text are rendered in the prose block above DATA; whether a row IS cited
+// is what the guardrail turns on.
+const MEAL_DIRECTIVE_DROPPED_FIELDS = ["rationale", "citation", "rescan_reason"] as const;
+function compactMealDirectives(directives: unknown): unknown {
+  const rows = compactDirectives(directives);
+  if (!Array.isArray(rows)) return rows;
+  return rows
+    .filter((row) => {
+      const r = row as Record<string, unknown> | null;
+      if (!r || typeof r !== "object") return false;
+      if (r.domain === "training" || r.role === "recovery_context") return false;
+      return r.status == null || r.status === "active" || r.status === "acknowledged";
+    })
+    .map((row) => {
+      const r = { ...(row as Record<string, unknown>) };
+      const citation = r.citation;
+      for (const field of MEAL_DIRECTIVE_DROPPED_FIELDS) delete r[field];
+      r.cited = typeof citation === "string" ? citation.trim().length > 0 : citation != null;
+      return r;
+    });
+}
+
+// The prioritized health focus: every priority group with its readings and its
+// nutrition / watch moves (the training move is the coach's). `surfaced` and `lead` are
+// copies of priorities already in the list; the lead rides as its group name.
+function compactMealHealthFocus(focus: unknown): unknown {
+  if (!focus || typeof focus !== "object" || Array.isArray(focus)) return focus;
+  const { surfaced: _surfaced, lead, ...rest } = focus as Record<string, unknown>;
+  if (Array.isArray(rest.priorities))
+    rest.priorities = rest.priorities.map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+      const p = item as Record<string, unknown>;
+      const moves = p.moves as Record<string, unknown> | null | undefined;
+      if (!moves || typeof moves !== "object" || Array.isArray(moves)) return p;
+      const { training: _training, ...kept } = moves;
+      return { ...p, moves: kept };
+    });
+  const leadGroup = lead && typeof lead === "object" ? (lead as Record<string, unknown>).group : null;
+  if (leadGroup != null) rest.lead_group = leadGroup;
+  return rest;
+}
+
+const MEAL_ACTIVITY_FIELDS = ["date", "type", "duration_min", "distance_km", "rpe"] as const;
+
+// The body journey as chat states it (goal, body fat, stage, pace, the current move),
+// plus the goal-consistency report: when the stated goal weight and the active phase
+// disagree, the meals must know which number they are fuelling toward. The nested
+// underfueling read rides once, as its own key.
+function compactMealJourney(journey: unknown): unknown {
+  const out = compactChatJourney(journey);
+  if (!out || typeof out !== "object" || Array.isArray(out)) return out;
+  const consistency = (journey as Record<string, unknown>).goal_consistency;
+  return consistency === undefined ? out : { ...(out as Record<string, unknown>), goal_consistency: consistency };
+}
+
+function compactMealPlanKey(key: string, value: unknown): unknown {
+  switch (key) {
+    case "profile":
+      return compactChatProfile(value);
+    case "goal":
+      return compactMealGoal(value);
+    case "context_events":
+      return Array.isArray(value) ? value.map((row) => pickFields(row, CHAT_CONTEXT_EVENT_FIELDS)) : value;
+    case "recent_activities":
+      return Array.isArray(value) ? value.map((row) => pickFields(row, MEAL_ACTIVITY_FIELDS)) : value;
+    case "program_state":
+      return compactMealProgramState(value);
+    case "race_build":
+      return compactMealRaceBuild(value);
+    case "recovery":
+      return compactMealRecovery(value);
+    case "day_intake":
+      return compactMealDayIntake(value);
+    case "underfueling":
+      return pickFields(value, MEAL_UNDERFUELING_FIELDS);
+    case "journey":
+      return compactMealJourney(value);
+    case "intake_band":
+      return compactMealIntakeBand(value);
+    case "directives":
+      return compactMealDirectives(value);
+    case "health_focus":
+      return compactMealHealthFocus(value);
+    default:
+      return undefined;
+  }
+}
+
 // ---------- the helper every prompt uses ----------
 
 /**
@@ -1655,6 +1930,13 @@ export function projectCoachContext(ctx: PartialCoachContext, site: PromptSite):
         key === "recent_sessions"
           ? compactChatSessions(compactSessions(value, spec.sessions, "full"))
           : compactChatCore(key, value);
+      if (compacted !== undefined) {
+        out[key] = compacted;
+        continue;
+      }
+    }
+    if (site === "meal_plan" || site === "meal_plan_verify") {
+      const compacted = compactMealPlanKey(key, value);
       if (compacted !== undefined) {
         out[key] = compacted;
         continue;

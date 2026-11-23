@@ -117,8 +117,10 @@ test("Today launch integration stays inside the existing card and checks exact a
   );
   assert.match(
     source,
-    /String\(item\.exercise\s*\|\|\s*""\)[\s\S]*?\.trim\(\)[\s\S]*?\.toLowerCase\(\)\s*===\s*String\(objective\.exercise\)\.trim\(\)\.toLowerCase\(\)/,
+    /String\(item\.exercise\s*\|\|\s*""\)[\s\S]*?\.trim\(\)[\s\S]*?\.toLowerCase\(\)\s*===\s*String\(anchorName\)\.trim\(\)\.toLowerCase\(\)/,
   );
+  // The anchor is the lift carrying the goal through a plan swap, else the objective's own.
+  assert.match(source, /const\s+anchorName\s*=\s*opts\.strengthJourney\?\.tracked\?\.exercise\s*\|\|\s*objective\?\.exercise/);
   assert.match(source, /Anchor day · hold or ease/);
   assert.doesNotMatch(source, /strength-journey-card|sjourney-card/);
 });

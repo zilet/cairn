@@ -1,47 +1,48 @@
 // @ts-check
 // Today · so far, the card Train › Intake opens on (docs/V2-PLAN.md wave 2,
 // "fuel-today"). The view: protein then energy as slim meters with the logged amount
-// beside the day's number, carbs · fat · fiber as plain numbers, each with its unit and
-// never a score; the day's state in words ("in progress" — never "low"); the athlete's own
+// beside the day's number, carbs · fat · fiber (and saturated fat) as guide rows when the
+// read carries the day's guides, else as plain numbers, each with its unit and never a
+// score; the day's state in words ("in progress" — never "low"); the athlete's own
 // observed intake band in the server's words when there is one; and, today only, the
 // quiet big-day and carb-range lines. Pure renderers over CairnFuelTodayModel.
 {
   type Model = ClientFuelTodayModel;
 
   // ---------- the big-day fuel line ----------
-  // A flat target lands the same on a long-run day and a rest day. When the server's
-  // read (repo/fuel-demand.ts) says today carries the week's bigger work, the card
-  // says ONE quiet sentence about shape. BIG DAYS ONLY, and only the day read itself (the model drops
-  // a read dated another day), and the number never moves. Rotates per date.
+  // When the server's read (repo/fuel-demand.ts) says today carries the week's bigger
+  // work, the card says ONE quiet sentence about shape. BIG DAYS ONLY, and only the day
+  // read itself (the model drops a read dated another day). The day's NUMBER and why it
+  // moved is a separate sentence, the server's (`dayNumberHtml`). Rotates per date.
   const DEMAND_LONG_RUN = [
-    "Today carries the long run — carbs earn their place around it. The target itself stays where it is.",
-    "The long run is today's big piece; carb-forward around it tends to sit well. Same target, different shape.",
-    "Long run today — a good day for carbs to lead, with the daily target unchanged.",
-    "Today's long run is the work that asks for fuel; carbs around it, and the number stays as it is.",
+    "Today carries the long run, so carbs earn their place around it.",
+    "The long run is today's big piece; carb-forward around it tends to sit well.",
+    "Long run today, a good day for carbs to lead.",
+    "Today's long run is the work that asks for fuel; carbs around it.",
   ];
   const DEMAND_QUALITY_RUN = [
-    "There's quality running in today — carbs around it tend to make it feel better. The target itself doesn't move.",
-    "Today's fast work asks a little more of fuel; carb-forward around it, same daily target.",
-    "Quality run today — a good day for carbs to lead, with the target unchanged.",
-    "Hard running lands today; carbs around it is the natural shape, and the number stays as it is.",
+    "There's quality running in today; carbs around it tend to make it feel better.",
+    "Today's fast work asks a little more of fuel; carb-forward around it.",
+    "Quality run today, a good day for carbs to lead.",
+    "Hard running lands today; carbs around it is the natural shape.",
   ];
   const DEMAND_HEAVY_LOWER = [
-    "Heavy lower work today — carbs around it are the easy win. The target stays where it is.",
-    "Today leans heavy through the legs; carb-forward around the session, same daily target.",
-    "Legs carry today's load — a good day for carbs to lead, with the target unchanged.",
-    "Today's the heavier leg day; carbs around it, and the number stays as it is.",
+    "Heavy lower work today; carbs around it are the easy win.",
+    "Today leans heavy through the legs; carb-forward around the session.",
+    "Legs carry today's load, a good day for carbs to lead.",
+    "Today's the heavier leg day; carbs around it.",
   ];
   const DEMAND_DOUBLE = [
-    "Lifting and running both land today — carbs around them, with the target unchanged.",
-    "Today's a double; carb-forward around both pieces, same daily target.",
-    "Two sessions share today — a good day for carbs to lead. The target stays where it is.",
-    "Strength and a run in one day; carbs around the work, and the number stays as it is.",
+    "Lifting and running both land today; carbs around them.",
+    "Today's a double; carb-forward around both pieces.",
+    "Two sessions share today, a good day for carbs to lead.",
+    "Strength and a run in one day; carbs around the work.",
   ];
   const DEMAND_GENERIC = [
-    "Today carries more work than an ordinary day — a good day for carbs to lead, with the target unchanged.",
-    "Bigger day than usual; carb-forward around the work, same daily target.",
-    "There's real work in today — carbs around it. The target stays where it is.",
-    "Today asks a bit more of fuel; carbs toward the work, and the number stays as it is.",
+    "Today carries more work than an ordinary day, a good day for carbs to lead.",
+    "Bigger day than usual; carb-forward around the work.",
+    "There's real work in today; carbs around it.",
+    "Today asks a bit more of fuel; carbs toward the work.",
   ];
 
   function demandVariants(drivers: string[]): string[] {
@@ -63,24 +64,11 @@
     return `<p class="fuel-today-line fuel-today-demand">${escHtml(line)}</p>`;
   }
 
-  // The day's carb range for its work, fitted inside the target by the server. Today
-  // only, and never set against the logged carbs: there is no "under" or "over".
-  const CARB_TIER_WORDS: Record<string, string> = {
-    light: "a lighter day",
-    moderate: "today's training",
-    high: "today's endurance work",
-  };
-
+  // The day's carb guide on a day with nothing logged yet: the guide and its basis in one
+  // calm line, never set against a log there is not.
   function carbsHtml(m: Model): string {
-    const carbs = m.demand?.carbs;
-    if (!carbs) return "";
-    const low = Math.round(Number(carbs.grams?.low));
-    const high = Math.round(Number(carbs.grams?.high));
-    const words = CARB_TIER_WORDS[String(carbs.tier || "")];
-    if (!Number.isFinite(low) || !Number.isFinite(high) || high <= 0 || !words) return "";
-    const range = low === high ? `${high}` : `${low}–${high}`;
-    const fit = carbs.basis === "within_target" ? ", inside today's target" : "";
-    return `<p class="fuel-today-line fuel-today-carbs">Carbs around <span class="numeral">${escHtml(range)}</span> g suit ${escHtml(words)}${escHtml(fit)}.</p>`;
+    const carbs = m.guides?.rows.find((row) => row.key === "carbs");
+    return carbs?.text ? `<p class="fuel-today-line fuel-today-carbs">Carbs ${escHtml([carbs.text, carbs.note].filter(Boolean).join(" · "))}</p>` : "";
   }
 
   // ---------- the numbers ----------
@@ -115,17 +103,89 @@
       </div>`;
   }
 
-  // Carbs · fat · fiber: plain numbers beside their names, no bars.
-  function macrosHtml(m: Model, countUp: boolean): string {
-    const bit = (label: string, macro: ClientFuelMacro): string => {
-      const value =
-        macro.value == null
-          ? UNKNOWN_HTML
-          : `<span class="fuel-today-value">${numeralHtml(macro.value, countUp)} <span class="fuel-today-unit">g</span></span>`;
-      return `<span class="fuel-today-macro"><span class="fuel-today-k">${escHtml(label)}</span> ${value}</span>`;
-    };
-    const dot = `<span class="fuel-today-dot" aria-hidden="true"> · </span>`;
-    return `<p class="fuel-today-macros">${[bit("Carbs", m.carbs), bit("Fat", m.fat), bit("Fiber", m.fiber)].join(dot)}</p>`;
+  // ---------- the day's food guides ----------
+  // Under the meters, carbs · fat · fiber (and saturated fat when its eaten side is known
+  // or a lab finding leads it) one row each: the eaten grams, then the guide in words
+  // ("63 g · around 230–250 g today"), a thin neutral track (the guide a band, the eaten
+  // amount a mark; hidden from assistive tech, the text is its equivalent), and one quiet
+  // note: what is left to place while the day is eaten, then where the guide comes from.
+  // No percentage, no tone, no "low". An older read with no guides keeps the bare numbers.
+  // The weekly lines (omega-3) sit below as quiet sentences.
+  function guideRowHtml(row: ClientFuelGuideRow, countUp: boolean): string {
+    const value =
+      row.eaten == null
+        ? UNKNOWN_HTML
+        : `<span class="fuel-today-value">${numeralHtml(row.eaten, countUp)} <span class="fuel-today-unit">g</span></span>`;
+    const text = row.text ? `<span class="fuel-today-dot" aria-hidden="true"> · </span>${escHtml(row.text)}` : "";
+    const t = row.track;
+    const mark = t?.mark == null ? "" : `<i class="fuel-guide-mark" style="--m:${t.mark.toFixed(3)}"></i>`;
+    const track = t
+      ? `<dd class="fuel-guide-track" aria-hidden="true"><i class="fuel-guide-band" style="--lo:${t.lo.toFixed(3)};--hi:${t.hi.toFixed(3)}"></i>${mark}</dd>`
+      : "";
+    const note = row.note ? `<dd class="fuel-guide-note">${escHtml(row.note)}</dd>` : "";
+    const why = row.why ? `<dd>${whyHtml("Why", [row.why])}</dd>` : "";
+    return `<div class="fuel-guide" data-guide="${escAttr(row.key)}"><dt class="fuel-today-k">${escHtml(row.label)}</dt><dd class="fuel-guide-v">${value}${text}</dd>${track}${note}${why}</div>`;
+  }
+
+  // "Why": a native disclosure under a number. What the number is made of (in the
+  // athlete's own weight), what the nutrient does for the goal in force, and the published
+  // basis by name. The server finished every word (repo/fuel-guide-why.ts).
+  type Why = { label?: string; from?: string; made_of: string; effect: string; source: string };
+  function whyHtml(summary: string, items: Why[]): string {
+    const body = items
+      .map((w) => {
+        const label = w.label ? `<p class="fuel-why-k">${escHtml(w.label)}</p>` : "";
+        const source = w.source ? `<p class="fuel-why-src">${escHtml(w.source)}</p>` : "";
+        const from = w.from ? `<p class="fuel-why-from">${escHtml(w.from)}</p>` : "";
+        return `${label}${from}<p>${escHtml(w.made_of)}</p><p>${escHtml(w.effect)}</p>${source}`;
+      })
+      .join("");
+    return `<details class="fuel-why"><summary>${escHtml(summary)}</summary><div class="fuel-why-body">${body}</div></details>`;
+  }
+
+  // What is left of the day's number, said roundly: the dinner budget. Never a shortfall
+  // and never a verdict; past the number it says so in the same plain way.
+  const ABOUT_AT_KCAL = 50;
+  function leftHtml(m: Model): string {
+    const left = m.energy.left;
+    if (left == null) return "";
+    const words =
+      left > ABOUT_AT_KCAL
+        ? `About ${grouped(left)} kcal left for today.`
+        : left >= -ABOUT_AT_KCAL
+          ? "About at today's number."
+          : `About ${grouped(-left)} kcal past today's number.`;
+    return `<p class="fuel-today-left">${escHtml(words)}</p>`;
+  }
+
+  // The day's number and why it differs from the weekly average, in the server's words.
+  function dayNumberHtml(m: Model): string {
+    return m.energy.dayWords ? `<p class="fuel-today-line fuel-today-daynum">${escHtml(m.energy.dayWords)}</p>` : "";
+  }
+
+  function explainHtml(m: Model): string {
+    const items = m.guides?.explain || [];
+    return items.length ? whyHtml("Why these two numbers", items) : "";
+  }
+
+  // The last two weeks: where the complete days landed against each day's own guides, and
+  // the one lever with its reason. Information, never a tally of misses; absent when the
+  // complete days are too few to read.
+  function patternHtml(m: Model): string {
+    const p = m.guides?.pattern;
+    if (!p) return "";
+    const said = (x: { words: string; why: string } | null | undefined) =>
+      x ? `<p class="fuel-pattern-lever">${escHtml(x.words)}</p><p class="fuel-pattern-why">${escHtml(x.why)}</p>` : "";
+    const lines = p.lines.map((l) => `<li>${escHtml(l.words)}</li>`).join("");
+    const caveat = p.caveat ? `<p class="fuel-pattern-caveat">${escHtml(p.caveat)}</p>` : "";
+    return `<div class="fuel-pattern"><h3 class="lbl fuel-pattern-title">${escHtml(p.title)}</h3>${said(p.lever)}${said(p.also)}<ul class="fuel-pattern-lines">${lines}</ul>${caveat}</div>`;
+  }
+
+  function guidesHtml(m: Model, countUp = false): string {
+    const g = m.guides;
+    if (!g) return "";
+    const rows = g.rows.length ? `<dl class="fuel-guides">${g.rows.map((row) => guideRowHtml(row, countUp)).join("")}</dl>` : "";
+    return rows + g.weekly.map((line) => `<p class="fuel-today-line fuel-guide-week">${escHtml(line)}</p>`).join("");
   }
 
   function stateHtml(m: Model): string {
@@ -141,7 +201,7 @@
 
   /**
    * The whole card. Protein then energy as slim meters (logged / the day's number),
-   * carbs · fat · fiber as plain numbers. A day with nothing on it draws no meter at
+   * carbs · fat · fiber as guide rows. A day with nothing on it draws no meter at
    * all — absent, never low. `countUp` marks the numerals for the cold-paint count-up.
    */
   function todayHtml(m: Model, opts: { countUp?: boolean } = {}): string {
@@ -150,7 +210,7 @@
       return `<section class="fuel-today reveal" style="--i:0" aria-labelledby="fuelTodayTitle">
         ${headHtml(m)}
         <p class="fuel-today-empty">${escHtml(EMPTY_LINE)}</p>
-        ${demandHtml(m)}${carbsHtml(m)}
+        ${leftHtml(m)}${dayNumberHtml(m)}${demandHtml(m)}${carbsHtml(m)}${patternHtml(m)}
       </section>`;
     }
     const pending =
@@ -164,14 +224,15 @@
           ? `<p class="fuel-today-togo">About there</p>`
           : "";
     const band = m.bandWords ? `<p class="fuel-today-line fuel-today-band">${escHtml(m.bandWords)}</p>` : "";
+    // The carbs are said once, in their row: no separate carb sentence beside it.
     return `<section class="fuel-today reveal" style="--i:0" aria-labelledby="fuelTodayTitle">
       ${headHtml(m)}
       <dl class="fuel-today-meters">
         ${meterHtml("Protein", m.protein.value, m.protein.anchor, "g", countUp)}
         ${meterHtml("Energy", m.energy.value, m.energy.of, "kcal", countUp)}
       </dl>
-      ${toGo}${macrosHtml(m, countUp)}
-      ${pending}${band}${demandHtml(m)}${carbsHtml(m)}
+      ${leftHtml(m)}${toGo}${dayNumberHtml(m)}${explainHtml(m)}${guidesHtml(m, countUp)}
+      ${pending}${band}${demandHtml(m)}${patternHtml(m)}
     </section>`;
   }
 
@@ -193,6 +254,8 @@
     todayHtml,
     demandHtml,
     carbsHtml,
+    guidesHtml,
+    patternHtml,
     skeletonHtml,
     errorHtml,
   };

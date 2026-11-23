@@ -1,10 +1,13 @@
 // Nutrition prompts: the weekly meal plan, the adaptive check-in retarget, the
 // single-meal swap, and the per-meal recipe. Owns the household-diet renderer.
 import { todayISO } from "../db.js";
+import { datedWeek } from "../domain/training/dated-week.js";
 import { getCoachContext } from "../repo/coach.js";
 import { estimateExpenditure } from "../repo/expenditure.js";
 import { listFuelingFeedback } from "../repo/fueling.js";
 import { frequentFoods } from "../repo/nutrition.js";
+import { mealPlanDayKcalTargets, type MealPlanDayEnergy } from "../repo/meal-plan-day-energy.js";
+import { draftMealPlanDayEnergy } from "../repo/meal-plan-day-energy-compute.js";
 import { computeGoalCheck, getProfile } from "../repo/profile.js";
 import { weeklyAerobicLoad } from "../repo/sessions.js";
 import { getSettings } from "../repo/settings.js";
@@ -425,9 +428,9 @@ function renderHolisticNutritionStrategy(
         life_context: compactEvents,
       };
   const where = opts.contextInData
-    ? " (the goal, recovery, performance, hybrid-fuel, recent-training, fueling-feedback and life-context evidence for these rules is in the DATA block below)"
+    ? " (the evidence for these rules is in the DATA block below: goal, recovery, program_state.hybrid.fuel, recent_activities, fueling, underfueling, energy_deficiency and context_events)"
     : "";
-  return `\nWHOLE-PERSON NUTRITION STRATEGY${where}:\n${JSON.stringify(strategy)}\n- Baseline maintenance comes ONLY from the completed-day expenditure evidence above. Training/recovery/performance/life signals tune deficit aggressiveness, carb timing, and protective fueling; they do not increase baseline TDEE.\n- Low recovery, performance fade, rising hybrid load, illness, or explicit under-fueling may HOLD or RAISE fuel. They can never justify lowering calories.\n`;
+  return `\nWHOLE-PERSON NUTRITION STRATEGY${where}:\n${JSON.stringify(strategy)}\n- Baseline maintenance comes ONLY from the completed-day expenditure evidence above. Training/recovery/life signals tune deficit aggressiveness, carb timing, and protective fueling; they do not increase baseline TDEE.\n- Low recovery, rising hybrid load, illness, or explicit under-fueling may HOLD or RAISE fuel. They can never justify lowering calories.\n`;
 }
 
 // Recognized whole-diet identities that are HARD constraints — as firm as an
@@ -590,11 +593,79 @@ function foodPatternIsCurrent(lastAt: unknown, maxAgeDays = 42): boolean {
   return Number.isFinite(time) && Date.now() - time <= maxAgeDays * 86_400_000;
 }
 
-// Goal-aware weekly meal-plan prompt.
-export function buildMealPlanPrompt(userInstruction?: string): string {
+const WEEKDAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+// The plan's target line for one of its days, as the swap and recipe prompts print it: the
+// day's own number when the plan's stored split moved it, else the flat daily target.
+function planDayTargetLine(parsed: any, dayObj: any): string {
+  const days = Array.isArray(parsed?.days) ? parsed.days : [];
+  const index = days.indexOf(dayObj);
+  const own = index >= 0 ? mealPlanDayKcalTargets(parsed)[index] : null;
+  const protein = `${parsed?.daily_protein_g ?? "?"}g protein`;
+  return own != null
+    ? `THIS DAY'S TARGET: ${own} kcal / ${protein} (the plan's weekly average is ${parsed?.daily_kcal ?? "?"} kcal a day; this day carries its own number from the week's training — keep the day at it).`
+    : `PLAN DAILY TARGET: ${parsed?.daily_kcal ?? "?"} kcal / ${protein} per day.`;
+}
+
+// The server's per-day split of the weekly target (repo/meal-plan-day-energy.ts), as the
+// table the meal plan is sized to. Empty when nothing moves: the week is planned flat.
+// Only the moved days are listed; every other day sits at the weekly target.
+export function renderMealPlanDayEnergy(energy: MealPlanDayEnergy | null | undefined): string {
+  if (!energy || !Array.isArray(energy.days) || !energy.days.length) return "";
+  const kcal = (n: number) => Math.round(n).toLocaleString("en-US");
+  const rows = [...energy.days]
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map((day) => {
+      const t = Date.parse(`${day.date}T00:00:00Z`);
+      const weekday = Number.isFinite(t) ? WEEKDAY_SHORT[new Date(t).getUTCDay()] : "";
+      return `  - ${weekday} ${day.date}: ${kcal(day.kcal)} kcal (${day.shift_kcal > 0 ? "+" : "−"}${kcal(Math.abs(day.shift_kcal))}) — ${day.why}`;
+    })
+    .join("\n");
+  return `
+EACH DAY'S OWN NUMBER (computed by Cairn from this week's planned training; the accepted target of ${kcal(energy.average_kcal)} kcal is the week's AVERAGE):
+${rows}
+  Every day not listed sits at ${kcal(energy.average_kcal)} kcal.
+- daily_kcal stays ${kcal(energy.average_kcal)}, the accepted weekly average — never set it to any one day's number.
+- Size each listed day's meals to ITS number: at it or a little above, never under it and never more than about
+  100 kcal over. Every other day sits at or a little above daily_kcal, never under it. Protein stays the same on
+  every day, and fiber keeps its floor on every day.
+- Label the days with their weekday ("Mon", "Tue", …): the server matches each label to its date in the seven days
+  from ${energy.from} and checks that day's meals against its own number.
+- This split is Cairn's, made from the planned training, and the weekly target is unchanged by it — use the numbers
+  as given and never move energy between days on your own.
+`;
+}
+
+function mealPlanDatedWeek(): Record<string, unknown> | null {
+  try {
+    return datedWeek() as unknown as Record<string, unknown> | null;
+  } catch {
+    return null;
+  }
+}
+
+// The personal-context guardrails as the meal plan's DATA carries them: imaging is not
+// in this DATA (a scan report carries no meal decision; body composition rides as its
+// own keys), so its bullet says so instead of pointing at an absent array.
+const MEAL_IMAGING_BULLET = /- IMAGING: [\s\S]*?(?=\n- HEALTH DIRECTIVES)/;
+export const MEAL_PLAN_CONTEXT_GUARDRAILS = CONTEXT_GUARDRAILS.replace(
+  MEAL_IMAGING_BULLET,
+  "- IMAGING: not in this DATA — a scan report carries no meal decision; body composition rides as\n  body_composition / dexa_targeting."
+);
+
+// Goal-aware weekly meal-plan prompt. `dayEnergy` is the drafting op's own per-day split
+// (computed once, so the stored plan is checked against exactly these numbers); left
+// out, it is computed here.
+export function buildMealPlanPrompt(
+  userInstruction?: string,
+  opts: { dayEnergy?: MealPlanDayEnergy | null } = {}
+): string {
+  const dayEnergyBlock = renderMealPlanDayEnergy("dayEnergy" in opts ? opts.dayEnergy : draftMealPlanDayEnergy());
   const ctx = getCoachContext();
   const planningMemory = memoryForMealPlanning((ctx as any)?.memory);
-  const planningCtx = { ...ctx, memory: planningMemory };
+  // Which date carries which lift, run or trip — the week's layout the meals follow,
+  // computed here (the chat builder's precedent) so getCoachContext never pays for it.
+  const planningCtx = { ...ctx, memory: planningMemory, dated_week: mealPlanDatedWeek() };
   const prefs = (getSettings().meal_prefs || "").trim();
   const split = (ctx.plan as any[])
     .map((d: any) => `Day ${d.day_number}: ${d.name}${d.focus ? ` (${d.focus})` : ""}`)
@@ -634,8 +705,9 @@ export function buildMealPlanPrompt(userInstruction?: string): string {
 
 Right now you're the nutritionist — goal-aware and longevity-focused — building a 7-day
 meal plan that fuels the user's CURRENT goal (see GOAL MODE below) while eating for healthspan. The
-user's profile, goal check (with computed TDEE and a mode-correct recommended intake), training
-plan, recent activities, and purpose-scoped durable planning memory are in the DATA section.
+user's profile, goal check (with computed TDEE and a mode-correct recommended intake), the dated
+training week (DATA.dated_week: which date lifts, runs or travels), recent activities, and
+purpose-scoped durable planning memory are in the DATA section.
 ${renderGoalMode(ctx)}${hardDiet}
 ${renderGoalTargetFallback()}
 
@@ -663,7 +735,7 @@ HARD RULES:
   strength+run double, a long ride). Bias carbohydrate toward the big days and say so in that day's note.
   Each day's \`carbs\` (when present) is its carbohydrate range in grams and g/kg — ACSM/IOC bands for that
   day's work fitted inside the accepted target — so a big day's meals land near its range and a light day's
-  lower, at the same daily kcal.
+  lower, ${dayEnergyBlock ? "at each day's own number (EACH DAY'S OWN NUMBER below)" : "at the same daily kcal"}.
   ${FUEL_DEMAND_RULE}
   ${CARB_RANGE_RULE}
 - Evaluate PRACTICALITY as part of adequacy: preparation time, household fit, ordinary cost/availability,
@@ -678,8 +750,8 @@ ${longevityGuardrails(plantForward, true)}
 
 ${MEAL_TIMING_RULES}
 
-TRAINING SPLIT (plan the week's meals around these training days): ${split || "(no plan days)"}
-${
+TRAINING SPLIT (plan the week's meals around these training days; DATA.dated_week says which date each lands on): ${split || "(no plan days)"}
+${dayEnergyBlock}${
   prefs
     ? `
 USER SCHEDULE & MEAL PREFERENCES (follow these — they override generic templates):
@@ -687,7 +759,7 @@ ${prefs}
 `
     : ""
 }
-${CONTEXT_GUARDRAILS}
+${MEAL_PLAN_CONTEXT_GUARDRAILS}
 - TRIPS specifically: for weeks overlapping a trip, lean on portable, travel-friendly meals and
   flag that the user will be eating out.
 - HEALTH MARKERS specifically: make the ACT-NOW nutrition priorities in the PRIORITIZED HEALTH FOCUS
@@ -871,7 +943,7 @@ to SWAP one meal in their drafted meal plan for a different dish. Propose exactl
 THE DAY (${dayObj?.day ?? day}) — its meals, with the one to replace marked:
 ${dayMeals || "(no meals found)"}
 
-PLAN DAILY TARGET: ${parsed.daily_kcal ?? "?"} kcal / ${parsed.daily_protein_g ?? "?"}g protein per day.
+${planDayTargetLine(parsed, dayObj)}
 
 REPLACEMENT RULES:
 - Keep the new meal within ±10% of the replaced meal's kcal (${current?.kcal ?? "?"}) and protein
@@ -945,7 +1017,7 @@ home-cook recipe for ONE meal from the user's drafted meal plan.
 THE MEAL (${dayObj?.day ?? day}, meal [${mealIndex}]):
 ${current ? `${current?.name ?? "?"} — ${current?.items ?? ""} (${current?.kcal ?? "?"} kcal, ${current?.protein_g ?? "?"}g protein, ${current?.carbs_g ?? "?"}g carbs, ${current?.fat_g ?? "?"}g fat)` : "(meal not found)"}
 
-PLAN DAILY TARGET: ${parsed.daily_kcal ?? "?"} kcal / ${parsed.daily_protein_g ?? "?"}g protein per day.
+${planDayTargetLine(parsed, dayObj)}
 
 RECIPE RULES:
 - Use EXACTLY the meal's listed items as the base of the recipe (plus pantry staples: oil,

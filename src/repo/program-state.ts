@@ -19,8 +19,6 @@ import { withoutShadowActivities } from "./activity-shadow.js";
 import { getRecoverySummary } from "./coach.js";
 import { currentTrainingDataVersion, registerTrainingCacheClear, trainingBackstopSignature } from "./training-cache.js";
 import {
-  canonicalGroup,
-  classifyMuscleGroup,
   isPlaceholderExerciseName,
   movementKey,
   MUSCLE_LANDMARKS,
@@ -29,6 +27,7 @@ import {
   resolveExerciseName,
 } from "./exercise-canon.js";
 import { effectiveVolumeByGroup, type VolumeSet } from "./exercise-variations.js";
+import { primaryMuscleGroup } from "./muscle-credit.js";
 import {
   dowToDayNumber,
   effectiveGoalMode,
@@ -1637,8 +1636,8 @@ function plannedStrengthDays(): PlannedStrengthDay[] {
     .all() as any[];
   const byDay = new Map<number, PlannedStrengthDay>();
   for (const row of rows) {
-    const group = canonicalGroup(row.muscle_group) ?? classifyMuscleGroup(String(row.exercise || ""));
-    if (!group || group === "mobility") continue;
+    const group = primaryMuscleGroup(String(row.exercise || ""), row.muscle_group);
+    if (!group) continue;
     const dayNumber = Number(row.day_number);
     if (!Number.isFinite(dayNumber)) continue;
     const cur = byDay.get(dayNumber) ?? {

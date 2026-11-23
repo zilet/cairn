@@ -40,6 +40,7 @@ import { createHash } from "node:crypto";
 // barrel ../repo.js) — repo modules do this to avoid a circular import, since the
 // barrel re-exports this very file.
 import { getDayIntake, getMealPlan } from "./nutrition.js";
+import { mealPlanDayKcalTargets } from "./meal-plan-day-energy.js";
 import { estimateExpenditure } from "./expenditure.js";
 import { computeGoalCheck } from "./profile.js";
 import { cutQualityRead, type CutQualityActive } from "./cut-quality.js";
@@ -432,14 +433,21 @@ function mealPlanAnnouncement(decision: any, asOf: string): Pick<TodayAgendaCand
   }
   const kcal = Number(plan?.parsed?.daily_kcal);
   const protein = Number(plan?.parsed?.daily_protein_g);
+  // A plan carrying a per-day split still states the weekly average as its headline; it
+  // just says the days follow the training instead of claiming one flat number.
+  const split = mealPlanDayKcalTargets(plan?.parsed).some((target) => target != null);
   const specifics = [
-    Number.isFinite(kcal) && kcal > 0 ? `${Math.round(kcal).toLocaleString("en-US")} kcal` : null,
+    Number.isFinite(kcal) && kcal > 0
+      ? `${split ? "about " : ""}${Math.round(kcal).toLocaleString("en-US")} kcal${split ? " on average" : ""}`
+      : null,
     Number.isFinite(protein) && protein > 0 ? `${Math.round(protein)} g protein` : null,
   ].filter(Boolean);
   return {
     kicker: "COMING UP",
     title: `${effective} — your meal plan refreshes automatically`,
-    body: specifics.length ? `Daily plan: ${specifics.join(" · ")}.` : "Your next week of meals is ready.",
+    body: specifics.length
+      ? `Daily plan: ${specifics.join(" · ")}.${split && Number.isFinite(kcal) && kcal > 0 ? " Bigger training days get more, lighter days less." : ""}`
+      : "Your next week of meals is ready.",
   };
 }
 

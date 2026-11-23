@@ -69,7 +69,9 @@ import { completedRaceRows, pickRaceEffort, raceLikeRuns, raceRunActivity } from
 import { demonstratedRunCapacity, preRaceRunCapacity, runningHarmOnDay, setAsideReason } from "./run-capacity.js";
 import { athleteUnits } from "./settings.js";
 import { localDateISO } from "./shared.js";
-import { strengthObjectiveHistory } from "./strength-objectives.js";
+import { strengthObjectiveTrackedHistory } from "./strength-objectives.js";
+import { repsGoalOf, repsGoalText, repsValueText, strengthRepsHistory } from "./strength-reps.js";
+import { normalizedExerciseKey } from "./exercise-canon.js";
 
 /** The most weeks a race build's bars reach back from race week. */
 export const RACE_BUILD_MAX_WEEKS = 16;
@@ -155,6 +157,11 @@ export interface StrengthReviewFacts {
   weeks: number | null;
   first: { date: string; top_weight: number; top_reps: number; est_1rm: number } | null;
   last: { date: string; top_weight: number; top_reps: number; est_1rm: number } | null;
+  /**
+   * Set only on a bodyweight_reps goal (strength-reps.ts): then every est-1RM field above
+   * is 0/null and first/last are null; the goal and its start are said in reps.
+   */
+  reps?: { goal_text: string; baseline_text: string | null } | null;
 }
 
 export interface WeightReviewFacts {
@@ -511,9 +518,49 @@ function isoOf(v: unknown): string | null {
 export function buildStrengthFacts(o: any): StrengthReviewFacts {
   const achieved = isoOf(o.achieved_date) ?? isoOf(o.completed_at) ?? localDateISO();
   const started = isoOf(o.created_at) ?? isoOf(o.baseline_date);
+  const repsGoal = repsGoalOf({
+    target_kind: o.target_kind,
+    target_reps: o.target_reps == null ? null : Number(o.target_reps),
+    target_sets: o.target_sets == null ? null : Number(o.target_sets),
+  });
+  if (repsGoal) {
+    // A reps goal: its days at bodyweight, said in reps — never an estimated max.
+    let days: { date: string }[] = [];
+    try {
+      days = strengthRepsHistory(String(o.exercise));
+    } catch {
+      days = [];
+    }
+    const span = days.filter((p) => (!started || p.date >= started) && p.date <= achieved);
+    return {
+      kind: "strength_objective",
+      v: 1,
+      objective_id: Number(o.id),
+      exercise: String(o.exercise),
+      target_kind: String(o.target_kind),
+      target_est_1rm: 0,
+      baseline_est_1rm: null,
+      baseline_date: isoOf(o.baseline_date),
+      started_on: started,
+      achieved_est_1rm: null,
+      achieved_date: achieved,
+      exposures: span.length,
+      weeks: started ? Math.max(0, Math.round((daysBetweenISO(achieved, started) ?? 0) / 7)) : null,
+      first: null,
+      last: null,
+      reps: {
+        goal_text: repsGoalText(repsGoal),
+        baseline_text: o.baseline_reps == null ? null : repsValueText(Number(o.baseline_reps), repsGoal),
+      },
+    };
+  }
   let history: { date: string; top_weight: number; top_reps: number; est_1rm: number }[] = [];
   try {
-    history = strengthObjectiveHistory(String(o.exercise));
+    // The history the objective was judged on: its own lift, plus the lift carrying it.
+    history = strengthObjectiveTrackedHistory({
+      exercise: String(o.exercise),
+      exercise_key: String(o.exercise_key || normalizedExerciseKey(String(o.exercise))),
+    });
   } catch {
     history = [];
   }
@@ -696,7 +743,9 @@ export function detectGoalReviews(today: string = localDateISO()): GoalReviewDet
       const key = String(o.id);
       if (findRow("strength_objective", key)) continue;
       const facts = buildStrengthFacts(o);
-      const title = `${String(o.exercise)} ${loadWords(Number(o.target_est_1rm), units.weight)}`;
+      const title = `${String(o.exercise)} ${
+        facts.reps ? facts.reps.goal_text : loadWords(Number(o.target_est_1rm), units.weight)
+      }`;
       if (insertRow({ kind: "strength_objective", ref_key: key, title, achieved_on: facts.achieved_date, facts, status: "pending" }))
         created++;
     }
@@ -893,6 +942,11 @@ function resultLine(row: GoalReviewRecord, units: AthleteUnits): string {
       f.result.finish_sec != null ? `${dist} in ${clockWords(f.result.finish_sec)}` : dist,
       f.result.pace_sec_per_km != null ? paceWords(f.result.pace_sec_per_km, units.distance, { spaced: true }) : "",
     ]
+      .filter(Boolean)
+      .join(" · ");
+  }
+  if (f.kind === "strength_objective" && f.reps) {
+    return [`Reached ${f.reps.goal_text}`, f.reps.baseline_text ? `from ${f.reps.baseline_text}` : ""]
       .filter(Boolean)
       .join(" · ");
   }

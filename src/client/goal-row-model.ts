@@ -59,7 +59,9 @@
     const goal = fraction(t.goal);
     if (start == null || now == null || goal == null) return null;
     const ago = fraction(t.ago);
-    return { start, now, goal, ago: ago == null || Math.abs(ago - start) < SAME ? null : ago };
+    const mark = fraction(t.mark);
+    const track: ClientGoalTrack = { start, now, goal, ago: ago == null || Math.abs(ago - start) < SAME ? null : ago };
+    return mark == null ? track : { ...track, mark };
   }
 
   const pct = (v: number): number => Math.round(v * 1000) / 10;
@@ -77,6 +79,7 @@
       now: pct(track.now),
       goal: pct(track.goal),
       ago: track.ago == null ? null : pct(track.ago),
+      ...(track.mark == null ? {} : { mark: pct(track.mark) }),
       fill_left: pct(lo),
       fill_width: pct(hi - lo),
       origin: track.now < track.start ? "right" : "left",
@@ -87,6 +90,11 @@
   function hrefOf(value: unknown): string | null {
     const s = text(value);
     return /^\/app\/[^\s"'<>\\]*$/.test(s) ? s : null;
+  }
+
+  /** A lift goal's quiet second line: what carries the goal, what is next, the mark for their build. */
+  function noteOf(carried: unknown, next: unknown, mark: unknown): string {
+    return [text(carried), text(next), text(mark)].filter(Boolean).join(" · ");
   }
 
   /** One lift of the strength row as its mini thread; null without a label or a now. */
@@ -107,6 +115,7 @@
       direction,
       direction_words: text(l.direction_words),
       move_words: text(l.move_words),
+      note: noteOf(l.carried_words, l.next_words, l.mark_words),
     };
   }
 
@@ -142,6 +151,7 @@
       direction,
       direction_words: directionWords,
       move_words: text(g.move_words),
+      note: noteOf(g.carried_words, g.next_words, g.mark_words),
       href: hrefOf(g.href),
       lifts,
     };

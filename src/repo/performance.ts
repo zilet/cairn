@@ -163,6 +163,16 @@ function benchmarkEligible(spec: StrengthSpec, exerciseName: string): boolean {
   return true;
 }
 
+/**
+ * Is this lift a genuine representative of the benchmark STANDARD for its movement
+ * pattern (benchmarkEligible against the matching STRENGTH_SPECS entry)? False for a
+ * pattern no benchmark covers. Read-only; exported for the per-movement read.
+ */
+export function isBenchmarkLiftForPattern(pattern: MovementPattern, exerciseName: string): boolean {
+  const spec = STRENGTH_SPECS.find((s) => s.pattern === pattern);
+  return spec ? benchmarkEligible(spec, exerciseName) : false;
+}
+
 function buildStrengthCurve(spec: StrengthSpec): ReferenceCurve {
   const bands: Record<Sex, Record<number, PercentilePoint[]>> = { male: {}, female: {} };
   for (const sex of ["male", "female"] as Sex[]) {
@@ -312,6 +322,15 @@ function currentBodyweight(profile: any): number | null {
   }
 }
 
+/** The athlete's current bodyweight in lb (profile, else the latest weigh-in), or null. */
+export function athleteBodyweightLb(): number | null {
+  try {
+    return currentBodyweight(getProfile());
+  } catch {
+    return null;
+  }
+}
+
 // ---- per-pattern capacity benchmark -----------------------------------------
 // For each benchmark movement, pick the athlete's heaviest representative lift in
 // that pattern (max est-1RM naturally selects the main compound — a fly never
@@ -405,6 +424,34 @@ export function currentLiftCapacities(opts: { programState?: ProgramState } = {}
   const bodyweight = currentBodyweight(profile);
   const programState = opts.programState ?? getProgramState();
   return liftCapacities(liftsAtCapacityNow(programState.lifts || []), bodyweight, sex, age);
+}
+
+/**
+ * The next strength standard above ONE lift's own estimate, for this person: their sex,
+ * their age band and their current bodyweight (so it moves as they do). A load in lb,
+ * rounded to 5 — a waypoint to look toward, never a level word and never a gate. Null
+ * when the lift is not an honest representative of a standard (a machine press, an
+ * assisted pull-up), when bodyweight is unknown, or when nothing sits above it.
+ */
+export function buildMarkFor(exercise: string, est1rm: number): number | null {
+  if (!(est1rm > 0)) return null;
+  const profile = getProfile();
+  const bodyweight = currentBodyweight(profile);
+  if (!bodyweight || bodyweight <= 0) return null;
+  const group = (findExercise(exercise) as { muscle_group?: string | null } | null)?.muscle_group ?? undefined;
+  const pattern = classifyPattern(exercise, group ?? undefined);
+  const spec = STRENGTH_SPECS.find((s) => s.pattern === pattern && benchmarkEligible(s, exercise));
+  if (!spec) return null;
+  const sex = sexOf(profile);
+  const age = Number(profile?.age) || 40;
+  const curve = STRENGTH_CURVES[spec.key];
+  const here = compareCurve(curve, est1rm / bodyweight, sex, age, REFERENCE_AGE);
+  const next = nextLevelThreshold(levelForPercentile(here.percentile));
+  const ratio = next ? ratioAtPercentile(curve, sex, age, next.pct) : null;
+  if (ratio == null) return null;
+  // The first whole 5 lb at or past the standard, and always ahead of where the lift stands.
+  const mark = Math.ceil((ratio * bodyweight) / 5) * 5;
+  return mark > est1rm ? mark : mark + 5;
 }
 
 // Benchmark patterns the athlete TRAINS but only through a non-standard variation

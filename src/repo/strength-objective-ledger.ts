@@ -6,6 +6,8 @@
 import { db } from "../db.js";
 import { normalizedExerciseKey } from "./exercise-canon.js";
 import { localDateISO } from "./shared.js";
+import { strengthObjectiveCarry } from "./strength-objective-carry.js";
+import { repsGoalMet, repsGoalOf, repsMeasure, strengthRepsHistory } from "./strength-reps.js";
 import { round1 } from "../lib/numbers.js";
 
 type LedgerExposure = { date: string; est_1rm: number };
@@ -46,6 +48,24 @@ function exactHistory(exerciseKey: string): LedgerExposure[] {
   return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
 }
 
+/**
+ * The history an objective is judged on (the ledger's mirror of
+ * strengthObjectiveTrackedHistory): its own exact lift, plus the sets of the lift carrying
+ * the goal from the swap day onward while a recorded swap holds it out of the plan.
+ */
+function trackedHistory(objective: { exercise: string; exercise_key: string }): LedgerExposure[] {
+  const own = exactHistory(objective.exercise_key);
+  const carry = strengthObjectiveCarry(objective);
+  if (!carry) return own;
+  const byDate = new Map(own.map((point) => [point.date, point]));
+  for (const point of exactHistory(carry.exercise_key)) {
+    if (point.date < carry.since) continue;
+    const current = byDate.get(point.date);
+    if (!current || point.est_1rm > current.est_1rm) byDate.set(point.date, point);
+  }
+  return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+}
+
 function capacityEnvelope(history: LedgerExposure[], today = localDateISO()): LedgerExposure | null {
   const fresh = history.filter((point) => dayNumber(today) - dayNumber(point.date) <= 28).slice(-3);
   return fresh.reduce<LedgerExposure | null>(
@@ -56,15 +76,24 @@ function capacityEnvelope(history: LedgerExposure[], today = localDateISO()): Le
 
 type TrackedObjective = {
   id: number;
+  exercise: string;
   exercise_key: string;
-  target_kind: "return_to_personal_best" | "explicit_est_1rm";
+  target_kind: "return_to_personal_best" | "explicit_est_1rm" | "bodyweight_reps";
+  // 0 on a bodyweight_reps goal; that kind reads target_reps/target_sets instead.
   target_est_1rm: number;
   baseline_est_1rm: number | null;
   baseline_date: string | null;
   status: "active" | "completed";
   achieved_est_1rm: number | null;
   achieved_date: string | null;
+  target_reps: number | null;
+  target_sets: number | null;
+  baseline_reps: number | null;
+  achieved_reps: number | null;
 };
+
+const TRACKED_COLUMNS = `id, exercise, exercise_key, target_kind, target_est_1rm, baseline_est_1rm, baseline_date,
+                status, achieved_est_1rm, achieved_date, target_reps, target_sets, baseline_reps, achieved_reps`;
 
 // The tracked objective FOR ONE LIFT. Several anchors may be active at once (one
 // active row per exercise_key, schema v98), so a logged squat must reconcile the
@@ -75,13 +104,11 @@ function currentTrackedObjective(exerciseKey: string): TrackedObjective | null {
   return (
     (db
       .prepare(
-        `SELECT id, exercise_key, target_kind, target_est_1rm, baseline_est_1rm, baseline_date,
-                status, achieved_est_1rm, achieved_date
+        `SELECT ${TRACKED_COLUMNS}
        FROM strength_objectives
       WHERE status='active' AND exercise_key=?
       UNION ALL
-     SELECT id, exercise_key, target_kind, target_est_1rm, baseline_est_1rm, baseline_date,
-            status, achieved_est_1rm, achieved_date
+     SELECT ${TRACKED_COLUMNS}
        FROM strength_objectives
       WHERE status='completed' AND exercise_key=? AND NOT EXISTS (
         SELECT 1 FROM strength_objectives WHERE status='active' AND exercise_key=?
@@ -92,16 +119,38 @@ function currentTrackedObjective(exerciseKey: string): TrackedObjective | null {
   );
 }
 
+// The objective whose goal this lift CARRIES (the plan swapped the objective's own
+// exercise for it): a set on the replacement reconciles the goal it now holds. An
+// objective's own lift always wins; a completed row only when no active one shares its lift.
+function carriedObjectiveFor(exerciseKey: string): TrackedObjective | null {
+  if (!exerciseKey) return null;
+  const rows = db
+    .prepare(
+      `SELECT ${TRACKED_COLUMNS}
+         FROM strength_objectives WHERE status IN ('active','completed') ORDER BY id DESC`
+    )
+    .all() as TrackedObjective[];
+  const activeKeys = new Set(rows.filter((row) => row.status === "active").map((row) => row.exercise_key));
+  const seen = new Set<string>();
+  for (const row of rows) {
+    if (row.status === "completed" && (activeKeys.has(row.exercise_key) || seen.has(row.exercise_key))) continue;
+    seen.add(row.exercise_key);
+    if (strengthObjectiveCarry(row)?.exercise_key === exerciseKey) return row;
+  }
+  return null;
+}
+
 /** Reconcile the current exact-lift objective after an in-place set correction. */
 export function reconcileStrengthObjectiveFromLoggedSets(input: { exercise: string; preferred_date?: string | null }): {
   completed: boolean;
   reopened: boolean;
 } {
   const key = normalizedExerciseKey(input.exercise);
-  const objective = currentTrackedObjective(key);
+  const objective = currentTrackedObjective(key) ?? carriedObjectiveFor(key);
   if (!objective) return { completed: false, reopened: false };
+  if (objective.target_kind === "bodyweight_reps") return reconcileRepsObjective(objective, input.preferred_date ?? null);
 
-  const history = exactHistory(key);
+  const history = trackedHistory(objective);
   const eligible = !objective.baseline_date
     ? history
     : history.filter(
@@ -149,6 +198,60 @@ export function reconcileStrengthObjectiveFromLoggedSets(input: { exercise: stri
   return { completed: false, reopened: false };
 }
 
+/**
+ * The reps-goal arm of the reconcile (strength-reps.ts): a session that met the goal (N
+ * sets at or above the target reps; assisted sets never count) completes it; a
+ * correction that removed every such session reopens it. Exposures count from the goal's
+ * baseline day on, exactly as the est-1RM arm does: the baseline day only when it beat
+ * the measure the goal was set at.
+ */
+function reconcileRepsObjective(
+  objective: TrackedObjective,
+  preferredDate: string | null
+): { completed: boolean; reopened: boolean } {
+  const goal = repsGoalOf(objective);
+  if (!goal) return { completed: false, reopened: false };
+  const history = strengthRepsHistory(objective.exercise);
+  const eligible = !objective.baseline_date
+    ? history
+    : history.filter(
+        (point) =>
+          point.date > objective.baseline_date! ||
+          (point.date === objective.baseline_date && repsMeasure(point, goal) > Number(objective.baseline_reps ?? 0)) ||
+          (objective.status === "completed" && point.date === objective.achieved_date)
+      );
+  const supporting = eligible.filter((point) => repsGoalMet(point, goal));
+  if (objective.status === "active") {
+    if (!supporting.length) return { completed: false, reopened: false };
+    const evidence = supporting.find((point) => point.date === preferredDate) ?? supporting.at(-1)!;
+    db.prepare(
+      `UPDATE strength_objectives
+          SET status='completed', completed_at=COALESCE(completed_at, datetime('now')),
+              achieved_reps=?, achieved_date=?, updated_at=datetime('now')
+        WHERE id=? AND status='active'`
+    ).run(repsMeasure(evidence, goal), evidence.date, objective.id);
+    return { completed: true, reopened: false };
+  }
+  if (!supporting.length) {
+    db.prepare(
+      `UPDATE strength_objectives
+          SET status='active', completed_at=NULL, achieved_reps=NULL,
+              achieved_date=NULL, updated_at=datetime('now')
+        WHERE id=? AND status='completed'`
+    ).run(objective.id);
+    return { completed: false, reopened: true };
+  }
+  const evidence = supporting.find((point) => point.date === objective.achieved_date) ?? supporting[0];
+  const value = repsMeasure(evidence, goal);
+  if (objective.achieved_reps !== value || objective.achieved_date !== evidence.date) {
+    db.prepare(
+      `UPDATE strength_objectives SET achieved_reps=?, achieved_date=?, updated_at=datetime('now')
+        WHERE id=? AND status='completed'`
+    ).run(value, evidence.date, objective.id);
+  }
+  return { completed: false, reopened: false };
+}
+
 /** Mark the one active exact-lift objective complete after a verified set write. */
 export function completeStrengthObjectiveFromLoggedSet(input: {
   exercise: string;
@@ -160,6 +263,16 @@ export function completeStrengthObjectiveFromLoggedSet(input: {
     exercise: input.exercise,
     preferred_date: input.date,
   }).completed;
+}
+
+/**
+ * A set logged WITHOUT added load (bodyweight, or assisted) can close only a reps goal:
+ * reconcile the lift's objective when it is one, and touch nothing otherwise.
+ */
+export function completeRepsObjectiveFromLoggedSet(input: { exercise: string; date: string }): boolean {
+  const objective = currentTrackedObjective(normalizedExerciseKey(input.exercise));
+  if (objective?.target_kind !== "bodyweight_reps" || objective.status !== "active") return false;
+  return reconcileRepsObjective(objective, input.date).completed;
 }
 
 export interface StrengthJourneySessionMovement {
@@ -179,12 +292,15 @@ export function strengthJourneySessionMovement(sessionId: number): StrengthJourn
   // unconditionally would report silence on a session that moved a different anchor.
   const objectives = db
     .prepare(
-      `SELECT exercise, exercise_key, target_est_1rm FROM strength_objectives
+      `SELECT exercise, exercise_key, target_kind, target_est_1rm FROM strength_objectives
       WHERE status IN ('active','completed') ORDER BY id DESC`
     )
-    .all() as Array<{ exercise: string; exercise_key: string; target_est_1rm: number }>;
+    .all() as Array<{ exercise: string; exercise_key: string; target_kind: string; target_est_1rm: number }>;
   for (const objective of objectives) {
-    const ids = exactExerciseIds(objective.exercise_key);
+    // This read is in estimated-1RM pounds; a reps goal has no such movement to report.
+    if (objective.target_kind === "bodyweight_reps") continue;
+    const carry = strengthObjectiveCarry(objective);
+    const ids = [...exactExerciseIds(objective.exercise_key), ...(carry ? exactExerciseIds(carry.exercise_key) : [])];
     if (!ids.length) continue;
     const hit = db
       .prepare(
@@ -192,7 +308,7 @@ export function strengthJourneySessionMovement(sessionId: number): StrengthJourn
       )
       .get(sessionId, ...ids);
     if (!hit) continue;
-    const history = exactHistory(objective.exercise_key);
+    const history = trackedHistory(objective);
     const current = capacityEnvelope(history, session.date);
     const before = capacityEnvelope(
       history.filter((point) => point.date !== session.date),
@@ -204,7 +320,7 @@ export function strengthJourneySessionMovement(sessionId: number): StrengthJourn
     const priorGap = Math.max(0, Number(objective.target_est_1rm) - before.est_1rm);
     const currentGap = Math.max(0, Number(objective.target_est_1rm) - current.est_1rm);
     return {
-      exercise: objective.exercise,
+      exercise: carry?.exercise ?? objective.exercise,
       current_est_1rm: current.est_1rm,
       current_date: current.date,
       capacity_delta_lb: delta,

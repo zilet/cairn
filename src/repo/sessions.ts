@@ -51,6 +51,7 @@ import { loggedSessionTitle, sessionDayCandidates } from "./session-day.js";
 import { weightWords } from "./display-words.js";
 import { canonicalBodyweightSeries, resolvedCurrentBodyweight } from "./bodyweight.js";
 import {
+  completeRepsObjectiveFromLoggedSet,
   completeStrengthObjectiveFromLoggedSet,
   reconcileStrengthObjectiveFromLoggedSets,
   strengthJourneySessionMovement,
@@ -746,6 +747,9 @@ function insertSetByName(
     const prevBest = bestE1rm(prev);
     pr = est_1rm > prevBest;
     if (emitEffects) completeStrengthObjectiveFromLoggedSet({ exercise: ex.name, est_1rm, date });
+  } else if (emitEffects && (input.reps ?? 0) > 0) {
+    // A set at bodyweight (or assisted) can close only a reps goal (strength-reps.ts).
+    completeRepsObjectiveFromLoggedSet({ exercise: ex.name, date });
   }
 
   if (emitEffects) reconcileDailySessionSafe(session.id);
@@ -2262,7 +2266,8 @@ function getProgressRead(exerciseName: string, opts: { through?: string }) {
 
   // For assisted lifts (negative weight = assist), we need the athlete's bodyweight
   // to compute effective load = bodyweight - assist. Fetch it once.
-  const profRow = db.prepare("SELECT weight_lb FROM profile WHERE id = 1").get() as any;
+  // (The request's one profile read — the same row, every lift asked about shares it.)
+  const profRow = getProfile();
   const bodyweightLb: number | null = profRow?.weight_lb != null ? Number(profRow.weight_lb) : null;
 
   // Full, UNBOUNDED history on purpose: an all-time est-1RM and PR detection are only
@@ -2774,17 +2779,26 @@ export function sessionHighlights(sessionId: number) {
 
 // The week's motivational rollup ending at `date` (default today, local day). Every
 // field is null-safe: an empty log yields empty arrays / zeros / null pace.
-export function weekWins(date?: string) {
+/** One lift's newest best in the trailing seven days (weekBests). */
+export interface WeekBest {
+  exercise: string;
+  label: string;
+  /** The session day the best was set. */
+  date: string;
+  weight_lb?: number;
+  reps?: number;
+}
+
+/**
+ * New bests in the seven days ending `date`, DEDUPED to one entry per exercise (the latest
+ * supersedes an earlier one — events arrive oldest-first, so the last write is the newest
+ * label), sorted newest-first: a calm display list, not a raw event stream. The one window
+ * weekWins, the plan strip's "new bests" count and Horizon's walked stones all read.
+ */
+export function weekBests(date?: string): WeekBest[] {
   const end = /^\d{4}-\d{2}-\d{2}$/.test(String(date || "")) ? String(date) : localDateISO();
   const { start } = window7(end);
-
-  // New bests this week, DEDUPED to one entry per exercise (the latest supersedes an
-  // earlier one — events arrive oldest-first, so the last write is the newest label),
-  // sorted newest-first: a calm display list, not a raw event stream.
-  const byExercise = new Map<
-    string,
-    { exercise: string; label: string; date: string; weight_lb?: number; reps?: number }
-  >();
+  const byExercise = new Map<string, WeekBest>();
   for (const e of prEventsInWindow(start, end))
     byExercise.set(e.exercise, {
       exercise: e.exercise,
@@ -2792,9 +2806,13 @@ export function weekWins(date?: string) {
       date: e.date,
       ...(e.weight_lb != null ? { weight_lb: e.weight_lb, reps: e.reps } : {}),
     });
-  const prs = [...byExercise.values()]
-    .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
-    .map(({ date: _date, ...pr }) => pr);
+  return [...byExercise.values()].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+}
+
+export function weekWins(date?: string) {
+  const end = /^\d{4}-\d{2}-\d{2}$/.test(String(date || "")) ? String(date) : localDateISO();
+  const { start } = window7(end);
+  const prs = weekBests(end).map(({ date: _date, ...pr }) => pr);
 
   const ws = getWeeklyStats(end);
   return {

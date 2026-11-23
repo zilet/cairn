@@ -212,6 +212,26 @@ test("a strength goal behind its start: the week row draws it, says the journey'
   assert.equal(read.goals.filter((g) => g.key === "strength").length, 1);
 });
 
+test("a lift goal carries a waypoint for the athlete's own build: a load, drawn only between now and the goal", () => {
+  repo.setProfile({ sex: "male", age: 44, weight_lb: 153 });
+  seedLift("Back Squat", "quads", [185, 185, 185, 185, 185, 185, 185, 190, 195], 300);
+  const goal = weekRead().goals.find((g) => g.key === "strength");
+  assert.match(goal.mark_words, /^Next mark for your build: \d+ lb$/);
+  const lb = Number(goal.mark_words.match(/(\d+) lb/)[1]);
+  assert.equal(lb % 5, 0);
+  assert.ok(lb > 227 && lb < 300, `${lb} sits between now and the goal`);
+  assert.ok(goal.track.mark > goal.track.now && goal.track.mark < goal.track.goal);
+  assert.doesNotMatch(JSON.stringify(goal), /beginner|novice|intermediate|advanced|elite|percentile/i);
+  // A goal nearer than the mark: the words stay, nothing is drawn past the goal.
+  repo.setStrengthObjective({ exercise: "Back Squat", target_kind: "explicit_est_1rm", target_est_1rm: 230 });
+  const near = weekRead().goals.find((g) => g.key === "strength");
+  assert.ok(near.mark_words);
+  assert.equal(near.track.mark, undefined);
+  // With no bodyweight there is no build to speak of.
+  assert.equal(goalTrack(100, 120, 200, null, null, 150).mark, 0.5);
+  assert.equal(goalTrack(100, 120, 200, null, null, 110).mark, undefined);
+});
+
 /** A lift with a start set ten weeks back, its objective, then one set a week (the last a week ago). */
 function seedLift(name, group, loads, target = 400) {
   const today = localDateISO();
@@ -265,11 +285,19 @@ test("three lift goals: ONE strength row lists every lift, in the board's order,
   );
   const by = Object.fromEntries(goal.lifts.map((l) => [l.label, l]));
   assert.equal(by["Barbell Back Squat"].direction, "toward");
-  assert.equal(by["Barbell Back Squat"].direction_words, "Moving toward");
+  assert.equal(by["Barbell Back Squat"].direction_words, `Moving toward ${by["Barbell Back Squat"].goal_text}`);
   assert.equal(by["Barbell Bench Press"].direction, "holding");
-  assert.equal(by["Barbell Bench Press"].move_words, "level");
+  assert.match(by["Barbell Bench Press"].move_words, /^level since /);
+  // The word is read off the two marks the track draws: it can never disagree with them.
+  for (const lift of goal.lifts) {
+    if (lift.track.ago == null) continue;
+    if (lift.direction === "toward") assert.ok(lift.track.now > lift.track.ago, `${lift.label}: now right of the ring`);
+    if (lift.direction === "back") assert.ok(lift.track.now < lift.track.ago, `${lift.label}: now left of the ring`);
+  }
+  assert.match(by["Barbell Back Squat"].move_words, /^\d+ lb up since /);
+  assert.match(by["Barbell Overhead Press"].move_words, /^\d+ lb down since /);
   assert.equal(by["Barbell Overhead Press"].direction, "back");
-  assert.equal(by["Barbell Overhead Press"].direction_words, "Drifting back");
+  assert.equal(by["Barbell Overhead Press"].direction_words, `Drifting back, ${by["Barbell Overhead Press"].goal_text} is the goal`);
   for (const lift of goal.lifts) {
     assert.ok(lift.track, `${lift.label} draws a track`);
     assert.equal(lift.goal_text, "400 lb");

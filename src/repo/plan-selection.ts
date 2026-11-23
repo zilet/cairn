@@ -24,7 +24,7 @@ import { programBalance } from "./progression.js";
 import { liftDows } from "./strength-schedule.js";
 import { registerHybridForwardProjection } from "./hybrid-forward-projection.js";
 import { daysBetweenISO, joinList, localDateISO } from "./shared.js";
-import { copyDeep, copyRows, memoKey, requestMemo } from "./request-memo.js";
+import { copyDeep, memoKey, requestMemo } from "./request-memo.js";
 
 export interface PlanDayCandidate {
   id: number;
@@ -102,7 +102,13 @@ export function planDayLabel(day: Pick<PlanDayCandidate, "name" | "focus" | "day
   return planDayFocus(day);
 }
 
+// Read by every plan-day resolution a request makes (each recent session's anchor, each
+// day of a fuel or run window), so it is read once per request while nothing is written.
 export function planDayCandidates(): PlanDayCandidate[] {
+  return requestMemo("plan_day_candidates", planDayCandidatesRead, copyDeep);
+}
+
+function planDayCandidatesRead(): PlanDayCandidate[] {
   // STRENGTH days only — the ring is the lifting days. A legacy rest row or a run item
   // (both retired by migration 110) is never a candidate, so nothing downstream can
   // land a session on one even on a database that has not migrated yet.
@@ -141,11 +147,18 @@ export function planDayCandidates(): PlanDayCandidate[] {
   return [...map.values()].sort((a, b) => a.day_number - b.day_number);
 }
 
-function sessionGroups(sessionId: number): MuscleGroup[] {
-  return requestMemo(`session_groups:${String(sessionId)}`, () => sessionGroupsRead(sessionId), copyRows);
+type SessionLifts = { names: string[]; groups: MuscleGroup[] };
+
+// What one session logged — the lifts' names, lowercased as SQLite's LOWER() does (ASCII
+// only), and the muscle groups they train — read in ONE statement and once per request:
+// every anchor, plan-day resolution and window that touches a session asks for both.
+function sessionLifts(sessionId: number): SessionLifts {
+  return requestMemo(`session_lifts:${String(sessionId)}`, () => sessionLiftsRead(sessionId), copyDeep);
 }
 
-function sessionGroupsRead(sessionId: number): MuscleGroup[] {
+const asciiLower = (s: string) => s.replace(/[A-Z]+/g, (m) => m.toLowerCase());
+
+function sessionLiftsRead(sessionId: number): SessionLifts {
   const rows = db
     .prepare(
       `SELECT DISTINCT e.name AS exercise, e.muscle_group AS muscle_group
@@ -153,12 +166,19 @@ function sessionGroupsRead(sessionId: number): MuscleGroup[] {
       WHERE ls.session_id = ?`
     )
     .all(sessionId) as any[];
+  const names: string[] = [];
   const groups: MuscleGroup[] = [];
   for (const r of rows) {
+    const name = asciiLower(String(r.exercise));
+    if (!names.includes(name)) names.push(name);
     const group = canonicalGroup(r.muscle_group) ?? classifyMuscleGroup(r.exercise);
     if (group && group !== "mobility" && !groups.includes(group)) groups.push(group);
   }
-  return groups;
+  return { names, groups };
+}
+
+function sessionGroups(sessionId: number): MuscleGroup[] {
+  return sessionLifts(sessionId).groups;
 }
 
 // Core never decides which day to train. It is loaded by nearly everything (every
@@ -173,18 +193,9 @@ export function resolveSessionPlanDay(
   planDayId: number | null,
   candidates: PlanDayCandidate[]
 ): ResolvedSessionPlanDay | null {
-  const loggedNames = new Set(
-    (
-      db
-        .prepare(
-          `SELECT DISTINCT LOWER(e.name) AS name
-         FROM logged_sets ls JOIN exercises e ON e.id = ls.exercise_id
-        WHERE ls.session_id = ?`
-        )
-        .all(sessionId) as any[]
-    ).map((r) => String(r.name))
-  );
-  const groups = sessionGroups(sessionId);
+  const lifts = sessionLifts(sessionId);
+  const loggedNames = new Set(lifts.names);
+  const groups = lifts.groups;
 
   if (planDayId != null) {
     const linked = candidates.find((d) => d.id === Number(planDayId));
@@ -658,14 +669,25 @@ export function statedKeyRunDows(asOf?: string): number[] {
  * leg day kept off the key runs. Empty `map` when no lift schedule is known — callers
  * then fall back to template order rather than inventing Mon=Day1 weekdays.
  */
-export function thisWeekPlanDayMap(date = localDateISO()): {
+export function thisWeekPlanDayMap(
+  date = localDateISO(),
+  // The date the lifting WEEKDAYS are read at, when it is not `date` itself: a caller that
+  // asks about a week as a whole passes the day before it opens, so the observed pattern
+  // never counts a session of the week it is laying out.
+  opts: { liftAsOf?: string } = {}
+): {
   map: Map<number, PlanDayCandidate>;
   lift_dows: number[];
   strength_start: number;
   /** Heavy-lower days the week moved off a key run (omitted when none moved). */
   key_run_swaps?: KeyRunSwap[];
 } {
-  return requestMemo(`this_week_plan_day_map:${date}`, () => thisWeekPlanDayMapRead(date), copyDeep);
+  const liftAsOf = opts.liftAsOf || date;
+  return requestMemo(
+    `this_week_plan_day_map:${date}:${liftAsOf}`,
+    () => thisWeekPlanDayMapRead(date, liftAsOf),
+    copyDeep
+  );
 }
 
 /** The ISO date of a dow inside the Monday-first week starting at day-index `monday`. */
@@ -673,14 +695,17 @@ function weekDateOf(monday: number, dow: number): string {
   return new Date((monday + weekdayOrder(dow)) * 86_400_000).toISOString().slice(0, 10);
 }
 
-function thisWeekPlanDayMapRead(date: string): {
+function thisWeekPlanDayMapRead(
+  date: string,
+  liftAsOf: string
+): {
   map: Map<number, PlanDayCandidate>;
   lift_dows: number[];
   strength_start: number;
   key_run_swaps?: KeyRunSwap[];
 } {
   const candidates = planDayCandidates();
-  const lift = normalizeDows(liftDows(date));
+  const lift = normalizeDows(liftDows(liftAsOf));
   if (!lift.length || !candidates.length) {
     return { map: new Map(), lift_dows: [], strength_start: 0 };
   }
@@ -1566,11 +1591,11 @@ export function resolveImplicitPlanDay<T extends object>(input: T): T & { day_nu
  * lifting week known it is the weekday map's answer (a run or rest weekday never lifts);
  * with none, the template convention the engine has always used: plan day N is weekday N.
  */
-export function heavyLowerWeekdaySlots(date: string): Set<number> {
+export function heavyLowerWeekdaySlots(date: string, opts: { liftAsOf?: string } = {}): Set<number> {
   const out = new Set<number>();
   const candidates = planDayCandidates();
   if (!candidates.length) return out;
-  const week = thisWeekPlanDayMap(date);
+  const week = thisWeekPlanDayMap(date, opts);
   if (!week.lift_dows.length) {
     for (const day of candidates) {
       if (day.day_number >= 1 && day.day_number <= 7 && isHeavyLowerPlanDay(day)) out.add(day.day_number);

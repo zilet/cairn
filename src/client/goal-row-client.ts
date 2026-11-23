@@ -37,7 +37,8 @@
   /** The track's accessible name: start, about four weeks ago, now, goal and direction, in words. */
   function trackSaid(row: ClientGoalRow): string {
     const start = row.start_text ? `started at ${row.start_text}` : "";
-    const goal = row.goal_words ? `goal ${row.goal_words}` : "";
+    // A direction that already names the goal ("Moving toward 200 lb") is not told twice.
+    const goal = row.goal_words && !row.direction_words.includes(row.goal_words) ? `goal ${row.goal_words}` : "";
     const since = row.track?.ago != null && row.ago_words ? ` compared with ${row.ago_words}` : "";
     const dir = row.direction_words ? `${row.direction_words.toLowerCase()}${since}` : row.word.toLowerCase();
     const move = row.direction_words && row.move_words ? `, ${row.move_words}` : "";
@@ -59,8 +60,8 @@
         <span class="goalrow-tfill is-from-${g.origin}" style="--l:${n(g.fill_left)};--w:${n(g.fill_width)}"></span>
         <span class="goalrow-tick is-start" style="--x:${n(g.start)}"></span>
         <span class="goalrow-tick is-goal" style="--x:${n(g.goal)}"></span>
-        ${ring}<span class="goalrow-now" style="--x:${n(g.now)}"></span>
-      </span>${ends}`;
+        ${g.mark == null ? "" : `<span class="goalrow-mark" style="--x:${n(g.mark)}"></span>`}${ring}<span class="goalrow-now" style="--x:${n(g.now)}"></span>
+      </span>${ends}${row.note ? `<small class="goalrow-note">${escHtml(row.note)}</small>` : ""}`;
   }
 
   /** The row's one words line: the direction in the stone's deep hue and its measure; else the older line. */

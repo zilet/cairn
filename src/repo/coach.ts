@@ -42,6 +42,8 @@ import { memoryForCoach, recentLearnings } from "./memory.js";
 import { capStr, dayIntakeTarget, getDayIntake, mealPlanForCoach } from "./nutrition.js";
 import { listFuelingFeedback } from "./fueling.js";
 import { carbBasis, fuelDemandWeek } from "./fuel-demand.js";
+import { dayFuelGuides } from "./fuel-guides.js";
+import { withDayEnergy } from "./day-energy.js";
 import { bodyMetricsContextSlice } from "./body-metrics.js";
 import { getPlan } from "./plan.js";
 import {
@@ -237,7 +239,9 @@ function healthReviewForCoach() {
 }
 
 function dayIntakeForCoach(date = localDateISO()): CoachDayIntake {
-  const d: any = getDayIntake(date);
+  // The DAY's energy number (repo/day-energy.ts): `target.kcal` is today's, `average_kcal`
+  // the accepted weekly average, `day_words` why they differ.
+  const d: any = withDayEnergy(getDayIntake(date));
   const entries = (Array.isArray(d?.entries) ? d.entries : []).slice(0, 12).map((e: any) => ({
     id: e.id,
     meal: e.meal ?? null,
@@ -258,8 +262,41 @@ function dayIntakeForCoach(date = localDateISO()): CoachDayIntake {
     totals: d?.totals ?? { kcal: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: 0 },
     target: d?.target ?? null,
     remaining: d?.remaining ?? null,
+    ...dayGuidesForCoach(d, date),
     entries,
   };
+}
+
+// The day's food guides in the words the Intake card prints, so chat answers "am I getting
+// enough fat / fiber" from the same read the athlete sees. Absent rather than wrong.
+function dayGuidesForCoach(
+  intake: any,
+  date: string
+): Pick<CoachDayIntake, "guides" | "guides_pattern"> {
+  try {
+    const read = dayFuelGuides(intake?.date ?? date, { intake });
+    return {
+      guides: read.guides.map((g) => ({
+        key: g.key,
+        label: g.label,
+        eaten_g: g.eaten_g,
+        guide: g.text || g.words || "",
+        note: g.note || g.basis_words || null,
+      })),
+      guides_pattern: read.pattern
+        ? {
+            title: read.pattern.title,
+            lines: read.pattern.lines.map((l) => l.words),
+            lever: [read.pattern.lever, read.pattern.also]
+              .filter((x): x is NonNullable<typeof x> => !!x)
+              .map((x) => x.words)
+              .join(" ") || null,
+          }
+        : null,
+    };
+  } catch {
+    return {};
+  }
 }
 
 // ---------- deterministic training signals (progression-readiness + autoregulation) ----------

@@ -9,7 +9,9 @@
 // is exactly where a flat target quietly underfuels the work.
 //
 // What this is NOT: it never moves a calorie target. The accepted `nutrition_targets`
-// number stays authoritative; this read only says which days carry the big work, so a
+// number stays authoritative (it is the week's average; how that average is laid across
+// the week's days is repo/day-energy.ts, a separate read that also consults this one);
+// this read only says which days carry the big work, so a
 // surface can bias CARBS toward them and a meal-plan agent can shape the week. It is a
 // suggestion, never a gate, and it is adherence-NEUTRAL by construction: it reads
 // forward-looking demand only and never grades a day that has already happened (there
@@ -137,7 +139,7 @@ export interface FuelDemandOpts {
 // run, quality running, a long ride. A big day made big only by strength (a heavy
 // lower day, a lift beside an easy run) is ~1 h of work, which is the moderate band,
 // as is an ordinary day.
-const CARB_BANDS: Readonly<Record<CarbTier, { low: number; high: number }>> = {
+export const CARB_BANDS: Readonly<Record<CarbTier, { low: number; high: number }>> = {
   light: { low: 3, high: 5 },
   moderate: { low: 5, high: 7 },
   high: { low: 6, high: 10 },
@@ -150,8 +152,9 @@ export function carbTierFor(demand: FuelDemandLevel, enduranceDriven: boolean): 
 // protein fixed, fat is the only other lever, so these two ends bound how far carbs
 // may flex inside the target: fat at its floor is the most carbohydrate the day can
 // hold, fat at its ceiling the least.
-const FAT_FLOOR_SHARE = 0.2;
-const FAT_CEILING_SHARE = 0.35;
+// Exported so the day's fat guide (repo/fuel-guides.ts) reads the SAME band.
+export const FAT_FLOOR_SHARE = 0.2;
+export const FAT_CEILING_SHARE = 0.35;
 // Where each tier sits inside that in-target span: a big day takes the top third (fat
 // at its floor), a light day the bottom third, an ordinary one the middle.
 const TIER_SPAN: Readonly<Record<CarbTier, [number, number]>> = {

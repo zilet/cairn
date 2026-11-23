@@ -387,6 +387,7 @@ const NON_PLAN_WRITE_ACTIONS: ReadonlySet<ChatActionType> = new Set<ChatActionTy
   "log_supplement",
   "log_measurement",
   "log_checkin",
+  "log_mobility_check",
   "log_health",
   "add_memory",
   "update_memory",
@@ -1126,9 +1127,15 @@ export function reconcileStrengthObjectiveReply(
   const objective = results.at(-1)?.objective as any;
   const exercise = String(objective?.exercise ?? "the anchor lift");
   const target = Number(objective?.target_est_1rm);
-  const receipt = Number.isFinite(target)
-    ? `Strength objective saved and verified: ${exercise} to ${target} lb estimated 1RM.`
-    : `Strength objective saved and verified: ${exercise}.`;
+  // A reps goal stores 0 in target_est_1rm: say its reps, never "0 lb".
+  const repsTarget = Number(objective?.target_reps);
+  const repsSets = Number(objective?.target_sets);
+  const receipt =
+    objective?.target_kind === "bodyweight_reps" && repsTarget > 0
+      ? `Strength objective saved and verified: ${exercise}, ${repsSets > 1 ? `${repsSets} × ${repsTarget}` : `${repsTarget} reps`} at bodyweight.`
+      : Number.isFinite(target) && target > 0
+        ? `Strength objective saved and verified: ${exercise} to ${target} lb estimated 1RM.`
+        : `Strength objective saved and verified: ${exercise}.`;
   return appendReceipt(reply, receipt);
 }
 

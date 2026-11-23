@@ -23,6 +23,7 @@
     set_endurance_schedule: "endurance",
     set_activity_effort: "endurance",
     log_checkin: "recovery",
+    log_mobility_check: "recovery",
     set_training_drive: "strength",
     report_training_symptom: "recovery",
     resolve_training_symptom: "recovery",
