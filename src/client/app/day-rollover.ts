@@ -46,6 +46,7 @@ function dayRolloverTarget(
     localISO?: (d?: Date) => string;
     activateTab?: (name: unknown, opts?: { syncRoute?: boolean }) => void;
     renderToday?: (opts?: { soft?: boolean }) => unknown;
+    renderSession?: (opts?: Record<string, unknown>) => unknown;
     syncRouteFromState?: (mode?: "push" | "replace") => void;
   };
 
@@ -121,7 +122,16 @@ function dayRolloverTarget(
     }
     const stale = now - lastPaintAt >= STALE_PAINT_MS;
     lastPaintAt = now;
-    if (!stale || !s || typeof g.activateTab !== "function") return;
+    if (!stale || !s) return;
+    // A log that is on screen is refreshed IN PLACE, through the same gate every other
+    // session repaint takes (a focused field or a finger down holds it). Re-activating the
+    // tab would paint a skeleton over it first, and a slow or failed read then leaves the
+    // athlete looking at a workout with nothing logged.
+    if (s.tab === "session" && typeof g.renderSession === "function" && document.querySelector(".sess-dest")) {
+      void g.renderSession();
+      return;
+    }
+    if (typeof g.activateTab !== "function") return;
     g.activateTab(s.tab, { syncRoute: false });
   }
 

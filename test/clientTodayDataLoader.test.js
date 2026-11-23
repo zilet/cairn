@@ -207,6 +207,39 @@ test("Today data loader falls back to independent reads when the aggregate is un
   assert.deepEqual(deps.state.plan, [{ day_number: 1, name: "Fallback", items: [] }]);
 });
 
+// The live failure: sets were logged (each write empties the session slot), the phone slept,
+// and on resume the aggregate read failed, so the cache answered with its older copy (no
+// onUpgrade: the network did not answer). That copy predates the sets and must never stand
+// in for the session.
+test("an aggregate the network did not answer never fills an emptied session slot", async () => {
+  const loader = loadDataLoader();
+  const logged = { id: 7, date: "2026-01-02", sets: [{ id: 1, set_number: 1 }] };
+  const { deps, calls, writes } = makeDeps({
+    cachedApi: async () => ({
+      date: "2026-01-02",
+      plan: [{ day_number: 1, name: "Aggregate", items: [] }],
+      session: { id: 7, date: "2026-01-02", sets: [] },
+      stats: { week_sets: 3 },
+      profile: { name: "Aggregate" },
+      exercises: [],
+    }),
+  });
+  const api = deps.api;
+  deps.api = async (path) => {
+    if (path === "/sessions?date=2026-01-02") {
+      calls.push(["api", path]);
+      return logged;
+    }
+    return api(path);
+  };
+
+  const result = await loader.load({}, deps);
+
+  assert.deepEqual(result.session, logged, "the session is read from the server, sets and all");
+  assert.equal(writes.some((row) => row.key === "today:session:2026-01-02" && !row.data.sets.length), false);
+  assert.ok(calls.some((call) => call[0] === "api" && call[1] === "/sessions?date=2026-01-02"));
+});
+
 // ---- the fan-in: one aggregate on the warm path too, and its prep slices ----
 
 function aggregatePayload(extra = {}) {

@@ -126,12 +126,15 @@ type TodaySessionSetModelApi = {
   }
 
   function invalidateSessionTruth(deps: ClientTodaySessionControllerDeps): void {
+    deps.invalidate("today:aggregate:" + deps.state.logDate);
     deps.invalidate(sessionCacheKey(deps.state.logDate));
     deps.invalidate("history:sessions");
   }
 
   function invalidateSetTruth(deps: ClientTodaySessionControllerDeps): void {
     deps.state.brief = null;
+    // The day's aggregate holds a copy of the session; left cached it can answer a failed read.
+    deps.invalidate("today:aggregate:" + deps.state.logDate);
     deps.invalidate(sessionCacheKey(deps.state.logDate));
     deps.invalidate("stats");
     deps.invalidate("history:sessions");

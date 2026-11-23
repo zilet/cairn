@@ -716,7 +716,7 @@ test("Today session controller logs a set optimistically and wires delete once t
   assert.equal(JSON.parse(harness.requests[0].opts.body).exercise, "Push-up");
   assert.equal(logged.children.length, 1);
   assert.equal(card.querySelector(".ex-skip"), null);
-  assert.deepEqual(harness.invalidations, ["today:session:2026-06-30", "stats", "history:sessions", "progress:volume", "progress:volume-balance", "progress:1rm:", "progression"]);
+  assert.deepEqual(harness.invalidations, ["today:aggregate:2026-06-30", "today:session:2026-06-30", "stats", "history:sessions", "progress:volume", "progress:volume-balance", "progress:1rm:", "progression"]);
   assert.deepEqual(harness.toasts.map((toast) => toast.message), ["Set logged"]);
   assert.equal(harness.starts.length, 1);
   assert.equal(harness.rxRefreshes.length, 1);
@@ -773,7 +773,7 @@ test("Today session controller rolls the card back when the set POST is refused"
   assert.equal(card.querySelector("[data-prog]").innerHTML, "0 / 3 <span>sets</span>");
   // The optimistic pass already dropped the set-truth caches; a refused write just
   // means the next read re-fetches, which is harmless and still correct.
-  assert.deepEqual(harness.invalidations, ["today:session:2026-06-30", "stats", "history:sessions", "progress:volume", "progress:volume-balance", "progress:1rm:", "progression"]);
+  assert.deepEqual(harness.invalidations, ["today:aggregate:2026-06-30", "today:session:2026-06-30", "stats", "history:sessions", "progress:volume", "progress:volume-balance", "progress:1rm:", "progression"]);
   assert.deepEqual(harness.toasts.map((toast) => toast.message), ["bad set"]);
   assert.equal(button.disabled, false);
   assert.equal(harness.starts.length, 1);
@@ -1166,7 +1166,7 @@ test("an in-flight set response stays scoped to its request date after navigatio
   // happened on that surface, before the navigation. What must NOT follow the
   // athlete to the new date is anything the late response triggers.
   assert.equal(logged.children.length, 1);
-  assert.deepEqual(harness.invalidations, ["today:session:2026-06-30", "stats", "history:sessions", "progress:volume", "progress:volume-balance", "progress:1rm:", "progression"]);
+  assert.deepEqual(harness.invalidations, ["today:aggregate:2026-06-30", "today:session:2026-06-30", "stats", "history:sessions", "progress:volume", "progress:volume-balance", "progress:1rm:", "progression"]);
   assert.deepEqual(harness.toasts, [], "the late response never toasts onto the next date");
   assert.deepEqual(harness.starts, [true], "rest started with the set, not with the response");
 });

@@ -293,6 +293,17 @@ test("Today revalidates on every foreground; the Session tab waits the long wind
   now += 6 * 60 * 1000;
   listeners.visibilitychange();
   assert.deepEqual(context.activated, ["session"]);
+
+  // With the log on screen the long window refreshes it in place: no tab re-activation,
+  // so no skeleton is painted over sets already logged.
+  context.document.querySelector = (sel) => (sel === ".sess-dest" ? {} : null);
+  context.renderSession = () => {
+    context.sessionRepaints = (context.sessionRepaints || 0) + 1;
+  };
+  now += 6 * 60 * 1000;
+  listeners.visibilitychange();
+  assert.equal(context.sessionRepaints, 1, "the live log repaints in place");
+  assert.deepEqual(context.activated, ["session"], "…and the tab is not rebuilt");
 });
 
 // Coming back to the app asks the server whether the watch sent something new
