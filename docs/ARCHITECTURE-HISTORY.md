@@ -4,6 +4,32 @@ The append-only, per-round changelog of Cairn's schema migrations and feature bu
 
 ---
 
+## 2026-11-23 — strength goals follow the movement, the week's fuel, the road covers the journey
+
+- **Schema:** migration **v133** adds four columns to `strength_objectives` (a goal follows its
+  movement through a plan swap); `mobility_checks` is a new table.
+- **Day calories** (`src/repo/day-energy.ts`): the accepted target is the week's average; a day's
+  number is the average plus a zero-sum plan shift in fifties (15% cap) and that day's own outcome.
+  The week's shape is read as of the eve of the week, so nothing logged during it moves a lived day;
+  the run engine reads the lifting weekdays as of the same eve. `fuel_week` on the day read carries
+  the seven days for Intake's strip (`fuel-week-client.ts`), and the meal plan settles its window in
+  the same fifties, so one date reads one number.
+- **Your road** (`journey-ground.ts`, `journey-*-client.ts`): the road starts at the earliest start a
+  live goal or the last race names (a year back at most), and its walked part carries dated stones
+  from evidence: a race run, a lab draw that moved markers into or toward their optimal bands, weight
+  waypoints, a lift's best, a finished block, the first full week, a measured waist or body-fat
+  change, the longest run. Kinds claim a stone in `STONE_PICK_ORDER`, at most
+  `JOURNEY_STONES_MAX`. A race day is never the long-run ladder (`demonstratedLongRun`).
+- **The session log keeps what was saved**: a resume refreshes a live log in place (no skeleton), a
+  day aggregate that is not current never fills an emptied session slot, the page's own ledger of
+  confirmed sets (`session-set-ledger.ts`) is laid over a read that is behind for up to 20 minutes,
+  paints land in the order asked, a workout past midnight keeps its day until 04:00, and a re-entered
+  set the screen had missed is flagged with one tap to remove.
+- **Meal-plan prompt**: the `meal_plan` projection site is a dietitian's brief (a pinned key set and a
+  byte ceiling); the op runs at low effort; a refreshed plan whose day numbers moved is material.
+- **Reads**: per-request memos fold the repeated reads behind `GET /api/week` and the Intake fan-in;
+  `test/readStatementBudget.test.js` pins the statement counts.
+
 ## 2026-10-08 — your road, units that follow the athlete, one lab unit per analyte
 
 - **Your road** (Horizon → Week, `journey-trail-client.ts`, `GET /api/week` `journey`): the Path
