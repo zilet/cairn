@@ -16,7 +16,8 @@
 //     bicycling, general), 6 kcal per kg net. Margaria's running figure is net of rest too,
 //     the right reading here: the weekly average already holds resting energy;
 //   - an hour of brisk walking or hiking: roughly 4.5 MET (the Compendium's walking and
-//     hiking entries run about 3.5-7 MET), taken as about 3.5 kcal per kg net. Approximate.
+//     entries run about 3.5-5.5 MET and cross-country hiking 6.0), taken as about 3.5 kcal per
+//     kg net: right for a brisk level walk, low for a hill hike. Approximate.
 // A session the load read calls light (yoga, mobility, an easy stroll) carries no cost:
 // that kind of day is already in the activity level the average is worked out from.
 // Because those are rough (about ±20-30%), only DAY_SHIFT_SHARE of each day's difference
