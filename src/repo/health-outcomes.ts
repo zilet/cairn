@@ -163,6 +163,11 @@ function meaningfulThreshold(baseline: number, series: MarkerSeries): number {
   return Math.max(pct, width, 0.01);
 }
 
+/** The smallest change of a marker from `baseline` that counts as material (the outcome read's own size). */
+export function markerMeaningfulChange(baseline: number, marker: string): number {
+  return meaningfulThreshold(baseline, { name: marker });
+}
+
 function classifyOutcome(directive: any, series: MarkerSeries, baseline: number, followUp: number): HealthOutcome | null {
   const zone = matchOptimalZone(String(series.name ?? directive?.marker ?? ""));
   let side = ["low", "high"].includes(String(directive?.trigger_side)) ? String(directive.trigger_side) : null;

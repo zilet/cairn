@@ -229,6 +229,18 @@ export function raceRunDates(from: string | null, to: string): Set<string> {
 }
 
 /**
+ * Every race actually RUN in [from, to] (matched efforts in hindsight, never a provisional
+ * goal date), oldest first. Unlike latestFinishedRace it has no shown-days window and
+ * outlives the goal: a race kept in `completed_races` after a new goal was set is still a
+ * race run. Horizon's road sets each as a stone. Fail-soft: none.
+ */
+export function finishedRacesBetween(from: string, to: string): RaceEffort[] {
+  const lo = String(from).slice(0, 10);
+  const hi = String(to).slice(0, 10);
+  return efforts(null).filter((e) => !e.provisional && e.run_date >= lo && e.run_date <= hi);
+}
+
+/**
  * Whether `date`'s run was the race. In hindsight (no `asOf`): a matched effort only —
  * the harm read's question. As of a day (`asOf`): the window's rules, so in the slow-sync
  * grace the goal date stands in — the next morning's novelty brake asks this way.

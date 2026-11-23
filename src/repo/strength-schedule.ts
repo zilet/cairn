@@ -71,6 +71,37 @@ function observedWindow(asOf: string): { weeks: string[]; start: string } {
 }
 
 /**
+ * The days in [from, to] a real strength session happened on (see observedLiftDows),
+ * ascending, memoized for the request. Horizon's road reads the stretch's lifting days
+ * from here for the weeks every stated day was done.
+ */
+export function liftDatesBetween(from: string, to: string): string[] {
+  return requestMemo(
+    `lift_dates_between:${from}:${to}`,
+    () => {
+      try {
+        return (
+          db
+            .prepare(
+              `SELECT DISTINCT s.date AS date
+                 FROM sessions s
+                WHERE s.date >= ? AND s.date <= ?
+                  AND COALESCE(s.kind, 'strength') = 'strength'
+                  AND (s.finished_at IS NOT NULL
+                       OR EXISTS (SELECT 1 FROM logged_sets l WHERE l.session_id = s.id))
+                ORDER BY s.date`
+            )
+            .all(from, to) as { date: string }[]
+        ).map((r) => String(r.date).slice(0, 10));
+      } catch {
+        return [];
+      }
+    },
+    copyDeep
+  );
+}
+
+/**
  * The weekdays a real strength session actually landed on, 3-of-6-weeks.
  *
  * "Real" means a session that happened, not a row that exists: `kind = 'strength'` plus
@@ -81,21 +112,7 @@ export function observedLiftDows(asOf?: string): { dows: number[]; weeks_seen: n
   const date = asOf || localDateISO();
   const { weeks, start } = observedWindow(date);
   const inWindow = new Set(weeks);
-  let rows: { date: string }[] = [];
-  try {
-    rows = db
-      .prepare(
-        `SELECT DISTINCT s.date AS date
-           FROM sessions s
-          WHERE s.date >= ? AND s.date <= ?
-            AND COALESCE(s.kind, 'strength') = 'strength'
-            AND (s.finished_at IS NOT NULL
-                 OR EXISTS (SELECT 1 FROM logged_sets l WHERE l.session_id = s.id))`
-      )
-      .all(start, date) as { date: string }[];
-  } catch {
-    return { dows: [], weeks_seen: 0 };
-  }
+  const rows = liftDatesBetween(start, date).map((d) => ({ date: d }));
   const weeksByDow = new Map<number, Set<string>>();
   for (const row of rows) {
     const week = mondayOf(row.date);

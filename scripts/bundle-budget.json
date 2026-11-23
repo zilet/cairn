@@ -302,11 +302,11 @@
     "public/css/horizon.css": {
       "lazy": "horizon",
       "measured": {
-        "raw": 40879,
-        "brotli": 6468
+        "raw": 45384,
+        "brotli": 7105
       },
       "budget": {
-        "raw": 45056,
+        "raw": 50176,
         "brotli": 9216
       }
     },

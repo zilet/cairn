@@ -49,17 +49,19 @@
 .hjour-step{position:absolute;left:var(--x);top:var(--y);width:5px;height:5px;margin:-2.5px 0 0 -2.5px;border-radius:50%;
   background:var(--surface);box-shadow:inset 0 0 0 1.5px var(--dawn);pointer-events:none}
 .hjour-node[data-hjour-mark]{cursor:pointer}
-.hjour-node[data-hjour-mark]::after{content:"";position:absolute;inset:-12px}
+/* a dot's (and a stone's) own tap area reaches 44 px; the label beside it is the named target */
+.hjour-node[data-hjour-mark]::after{content:"";position:absolute;inset:-17px}
 /* what was done on the walked part: a small set stone, filled (the marks ahead are hollow) */
 .hjour-stone{position:absolute;left:var(--x);top:var(--y);width:11px;height:8px;margin:-4px 0 0 -5.5px;cursor:pointer;
   border-radius:50% 50% 46% 54% / 58% 62% 42% 38%;background:var(--c);box-shadow:inset 0 0 0 1.2px var(--cd),0 0 0 2px var(--surface);
   transition:transform var(--dur-1) var(--ease)}
-.hjour-stone::after{content:"";position:absolute;inset:-12px}
+.hjour-stone::after{content:"";position:absolute;inset:-18px -17px}
 .hjour-stone.is-on{transform:scale(1.35)}
 .hjour-pulse{width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;box-shadow:0 0 0 2px var(--dawn);opacity:0;pointer-events:none}
 
 /* labels: a mono "when" over the mark's short word; above or below, aligned to the edge near the ends */
-.hjour-lbl{display:grid;gap:var(--space-1);padding:var(--space-2) var(--space-3);border:0;border-radius:var(--radius-2xs);
+/* a label is the mark's tap target: at least 44 px tall (two lines and its padding), never squeezed — one that does not fit is left off */
+.hjour-lbl{display:grid;gap:var(--space-1);align-content:center;min-height:44px;min-width:44px;padding:var(--space-3);border:0;border-radius:var(--radius-2xs);
   background:none;color:var(--ink);font:inherit;text-align:center;cursor:pointer;white-space:nowrap;
   -webkit-tap-highlight-color:transparent;--tx:-50%;--ty:0px}
 .hjour-lbl small,.hjour-today,.hjour-from{font-family:var(--font-mono);font-size:var(--text-2xs);
@@ -96,7 +98,7 @@ a.hjour-d-link:focus-visible{outline:2px solid var(--dawn);outline-offset:2px}
 @media (hover:hover){a.hjour-d-link:hover{background:var(--surface2)}}
 .hjour-d-go{margin-left:auto;align-self:center;color:var(--muted);font-size:var(--text-md)}
 .hjour-d-dot{flex:none;width:10px;height:10px;margin-top:var(--space-2);border-radius:50% 50% 45% 55%;background:var(--c)}
-.hjour-d-body{display:grid;gap:var(--space-1);min-width:0}
+.hjour-d-body{display:grid;gap:var(--space-1);min-width:0;overflow-wrap:anywhere}
 .hjour-d-name{font-size:var(--text-md);font-weight:var(--weight-semibold);color:var(--ink)}
 .hjour-d-when{font-family:var(--font-mono);font-size:var(--text-2xs);letter-spacing:var(--tracking-mono);text-transform:uppercase;color:var(--muted)}
 .hjour-d-why{margin-top:var(--space-2);font-size:var(--text-sm);line-height:var(--leading-normal);color:var(--ink2)}
@@ -108,8 +110,14 @@ a.hjour-d-link:focus-visible{outline:2px solid var(--dawn);outline-offset:2px}
 .hjour-b{display:flex;gap:var(--space-4);align-items:flex-start;font-size:var(--text-sm);line-height:var(--leading-snug);color:var(--ink2)}
 .hjour-b-mark{flex:none;width:13px;height:9px;margin-top:var(--space-2);border-radius:50% 50% 46% 54% / 58% 62% 42% 38%;
   background:var(--c);box-shadow:inset 0 0 0 1.2px var(--cd)}
+/* under the stones, what has moved since the road began: one muted kicker, the lines run on one wrapping row */
+.hjour-sum{display:grid;gap:var(--space-2);padding-top:var(--space-3);border-top:1px solid var(--line);
+  font-size:var(--text-sm);line-height:var(--leading-snug);color:var(--ink2)}
+.hjour-sum-k{margin:0;font-size:var(--text-xs);color:var(--muted)}
+.hjour-sum-l{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:var(--space-1) var(--space-4)}
+.hjour-s::before{content:"";display:inline-block;width:6px;height:6px;margin-right:var(--space-2);border-radius:50%;background:var(--c)}
 .hjour-all{min-width:0}
-.hjour-all-sum{cursor:pointer;list-style:none}
+.hjour-all-sum{cursor:pointer;list-style:none;display:inline-flex;align-items:center;min-height:44px}
 .hjour-all-sum::-webkit-details-marker{display:none}
 
 /* the entrance: the walked part draws in once, then the marks settle onto it */

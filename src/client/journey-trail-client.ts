@@ -14,7 +14,7 @@
 // like a mark ahead; what they say, the card and "Behind you" are journey-ground-client.ts.
 //
 // What makes the road read as ground covered: a small step on the walked part for every
-// week since the start (every other week past six months), a far ridge behind the trail,
+// week since the start (fewer when the weeks would crowd), a far ridge behind the trail,
 // and first light behind the summit. Height is the trail's own shape, not a measure: the
 // only things the plot encodes are time (left to right) and which side of today a day is.
 //
@@ -23,14 +23,15 @@
 //
 // Pure strings over GET /api/week `journey` (week-read.ts journeyOf). Every server word
 // is escaped; positions are percentages of the plot, hues come from stone classes in
-// src/styles/horizon/journey.css. No score, no percent printed.
+// src/styles/horizon/journey.css. Which labels fit, the month ticks and the week steps
+// are measured against the plot's width in pixels (journey-layout-client.ts; a phone's
+// when the width is not known). No score, no percent printed.
 //
 // LAZY ("horizon" bundle).
 {
   type Journey = import("../contracts/week-read.js").WeekReadJourney;
   type Mark = import("../contracts/week-read.js").WeekReadJourneyMark;
   type Stone = import("../contracts/week-read.js").WeekReadJourneyStone;
-  type Side = "above" | "below";
 
   // The plot, in percent of its box: the trail runs X0→X1 and climbs from Y_LOW to Y_HIGH,
   // leaving room above and below for labels.
@@ -38,18 +39,19 @@
   const X1 = 95;
   const Y_LOW = 76;
   const Y_HIGH = 34;
-  /** Two labels on one side closer than this (percent of width) would collide. */
-  const LABEL_GAP = 21;
   /** Today never sits flush on the start: the walked part always reads. */
   const NOW_MIN_X = 11;
-  /** The most week steps drawn on the walked part; past it, every other week. */
-  const STEPS_MAX = 26;
   /** With stones to carry, the walked part takes this much more room per stone… */
   const NOW_PER_STONE = 4;
   /** …up to here. */
   const NOW_STONES_MAX_X = 30;
-  /** Two stones closer than this (percent of width) would sit on one another; the older gives way. */
-  const STONE_GAP = 3.2;
+  /**
+   * However long the road walked, the road ahead keeps this much room for its labels: the
+   * summit's alone, or the summit's and the next mark's. A long walked part is drawn to a
+   * shorter scale than the road ahead, never the other way round.
+   */
+  const AHEAD_ROOM_ONE = 18;
+  const AHEAD_ROOM_MANY = 34;
   /** A week step this close to a stone gives way to it. */
   const STEP_STONE_GAP = 2;
   /** A stone never sits on today's dot. */
@@ -110,52 +112,16 @@
               : 5;
   }
 
-  /**
-   * Which spots get a label, and on which side, in `order` (each takes the first side with
-   * room); `taken` carries the room already spoken for, so the walked stones' labels fill
-   * only what the marks ahead left.
-   */
-  function placeLabels(order: Array<{ index: number; x: number }>, taken: Record<Side, number[]>): Map<number, Side> {
-    const out = new Map<number, Side>();
-    for (const p of order) {
-      const fits = (side: Side) => taken[side].every((x) => Math.abs(x - p.x) >= LABEL_GAP);
-      const side: Side | null = fits("above") ? "above" : fits("below") ? "below" : null;
-      if (!side) continue;
-      taken[side].push(p.x);
-      out.set(p.index, side);
-    }
-    return out;
-  }
-
-  /** "left" near the start, "right" near the summit, else centred on its mark. */
-  function alignOf(x: number): string {
-    return x < 14 ? "is-l" : x > 84 ? "is-r" : "is-c";
-  }
-
   function cairnGlyph(): string {
     return `<svg class="hjour-cairn" viewBox="0 0 20 22" aria-hidden="true"><ellipse cx="10" cy="18.5" rx="8" ry="3.3"/><ellipse cx="10.6" cy="12.6" rx="5.8" ry="2.9"/><ellipse cx="9.8" cy="7.4" rx="4" ry="2.4"/><ellipse cx="10.4" cy="3.2" rx="2.4" ry="1.8"/></svg>`;
   }
 
-  /** The month ticks along the ground, every month (every other on a long road). */
-  function axisHtml(start: number, end: number, xOf: (d: number) => number): string {
-    const s = new Date(start * 864e5);
-    const months = (end - start) / 30.4;
-    const step = months > 8 ? 2 : 1;
-    const ticks: string[] = [];
-    let y = s.getUTCFullYear();
-    let m = s.getUTCMonth() + 1;
-    for (let guard = 0; guard < 24; guard++) {
-      if (m > 11) {
-        m -= 12;
-        y += 1;
-      }
-      const d = Date.UTC(y, m, 1) / 864e5;
-      if (d > end) break;
-      const x = xOf(d);
-      if (x > X0 + 6 && x < X1 - 3) ticks.push(`<span class="hjour-tick" style="--x:${r1(x)}%">${MONTHS[m]}</span>`);
-      m += step;
-    }
-    return `<div class="hjour-axis" aria-hidden="true">${ticks.join("")}</div>`;
+  /** The month ticks along the ground: every month that has room (journey-layout-client.ts ticksOf). */
+  function axisHtml(start: number, end: number, xOf: (d: number) => number, width?: number | null): string {
+    const ticks = CairnJourneyLayout.ticksOf(start, end, xOf, width)
+      .map((t) => `<span class="hjour-tick" style="--x:${r1(t.x)}%">${MONTHS[t.month]}</span>`)
+      .join("");
+    return `<div class="hjour-axis" aria-hidden="true">${ticks}</div>`;
   }
 
   /** The far ridge behind the trail: a low line of hills rising toward the summit (decoration only). */
@@ -171,17 +137,17 @@
     return `${pts.join(" ")} L100 100 L0 100 Z`;
   }
 
-  /** One small step on the walked part per week since the start; none within a week of either end, none under a stone. */
+  /** One small step on the walked part per week since the start (fewer when they would crowd); none under today or a stone. */
   function stepsHtml(
     start: number,
     today: number,
     xOf: (d: number) => number,
-    enter: boolean,
-    stones: number[]
+    opts: { enter: boolean; stones: number[]; width?: number | null }
   ): string {
+    const { enter, stones } = opts;
     const weeks = Math.floor((today - start) / 7);
     if (weeks < 1) return "";
-    const every = weeks > STEPS_MAX ? 2 : 1;
+    const every = CairnJourneyLayout.stepEvery(weeks, xOf(today) - X0, opts.width);
     const out: string[] = [];
     for (let w = every; w <= weeks; w += every) {
       const d = start + w * 7;
@@ -209,7 +175,7 @@
    */
   function trailHtml(
     journey: Journey | null | undefined,
-    opts: { selected?: number; stone?: number | null; enter?: boolean; below?: string } = {}
+    opts: { selected?: number; stone?: number | null; enter?: boolean; below?: string; width?: number | null } = {}
   ): string {
     const marks = journey?.marks ?? [];
     if (!journey || !marks.length) return "";
@@ -218,14 +184,16 @@
     const end = Math.max(...marks.map((m) => dayNumber(m.end_date || m.date)));
     if (!Number.isFinite(start) || !Number.isFinite(today) || !(end > start)) return "";
     const said = CairnJourneyGround;
+    const lay = CairnJourneyLayout;
     const walked = said.walkedOf(journey, start, today);
     const count = walked.filter(Boolean).length;
     // To scale in time; when today sits at the very start the walked part still reads, and
     // with stones to carry it takes the room they need.
     const lin = (d: number) => X0 + ((d - start) / (end - start)) * (X1 - X0);
     const rawNow = lin(today);
-    const nowMin = count ? Math.min(NOW_STONES_MAX_X, NOW_MIN_X + NOW_PER_STONE * count) : NOW_MIN_X;
-    const xNow = Math.max(nowMin, Math.min(X1 - 4, rawNow));
+    const perStone = Math.max(NOW_PER_STONE, lay.stoneGap(opts.width) + 0.5);
+    const nowMin = count ? Math.min(NOW_STONES_MAX_X, NOW_MIN_X + perStone * count) : NOW_MIN_X;
+    const xNow = Math.max(nowMin, Math.min(X1 - (marks.length > 1 ? AHEAD_ROOM_MANY : AHEAD_ROOM_ONE), rawNow));
     const xOf = (d: number) =>
       d <= today
         ? X0 + ((d - start) / Math.max(1, today - start)) * (xNow - X0)
@@ -242,18 +210,28 @@
       const stone = walked[i];
       if (!stone) continue;
       const x = Math.max(X0 + 2, Math.min(xNow - STONE_NOW_GAP, xOf(dayNumber(stone.date))));
-      if (stones.some((s) => Math.abs(s.x - x) < STONE_GAP)) continue;
+      if (stones.some((s) => Math.abs(s.x - x) < lay.stoneGap(opts.width))) continue;
       stones.push({ stone, index: i, x, y: trailY(x), hue: said.hueOf(stone) });
     }
     // The start's date sits under the start only when today is far enough along not to crowd it.
     const showFrom = xNow - X0 >= 22;
-    const taken: Record<Side, number[]> = { above: [], below: showFrom ? [xNow, X0] : [xNow] };
-    const sides = placeLabels(
-      [...placed].sort((a, b) => markRank(a) - markRank(b) || a.x - b.x),
-      taken
+    // "Today" and the start's date hold their room under the trail first.
+    const below = [lay.boxOf(xNow, lay.labelPx("Today", "") - 8, opts.width)];
+    if (showFrom) below.push(lay.boxOf(X0, lay.labelPx(journey.start_words, "") - 8, opts.width));
+    const taken = { above: [] as ReturnType<typeof lay.boxOf>[], below };
+    const sides = lay.placeLabels(
+      [...placed]
+        .sort((a, b) => markRank(a) - markRank(b) || a.x - b.x)
+        .map((p) => ({ index: p.index, x: p.x, px: lay.labelPx(p.mark.days_words, p.mark.short, p.mark.summit) })),
+      taken,
+      opts.width
     );
     // Then the walked stones, newest first, wherever the marks ahead left room.
-    const stoneSides = placeLabels(stones, taken);
+    const stoneSides = lay.placeLabels(
+      stones.map((p) => ({ index: p.index, x: p.x, px: lay.labelPx(p.stone.date_words, p.stone.short) })),
+      taken,
+      opts.width
+    );
     const stoneOn = opts.stone != null && walked[opts.stone] ? opts.stone : null;
     const selected = stoneOn != null ? -1 : Math.max(0, Math.min(marks.length - 1, opts.selected ?? 0));
 
@@ -299,7 +277,7 @@
       .map((p) => {
         const side = sides.get(p.index) === "above" ? "is-above" : "is-below";
         const aria = `${p.mark.label}, ${p.mark.date_words}, ${p.mark.days_words}`;
-        return `<button type="button" class="hjour-lbl ${side} ${alignOf(p.x)}${p.mark.summit ? " is-summit" : ""}" style="--x:${r1(p.x)}%;--y:${r1(p.y)}%;--i:${p.index}" data-hjour-mark="${p.index}" aria-pressed="${p.index === selected}" aria-controls="hjourDetail" aria-label="${escAttr(aria)}"><small>${escHtml(p.mark.days_words)}</small><b>${escHtml(p.mark.short)}</b></button>`;
+        return `<button type="button" class="hjour-lbl ${side} ${lay.alignOf(p.x)}${p.mark.summit ? " is-summit" : ""}" style="--x:${r1(p.x)}%;--y:${r1(p.y)}%;--i:${p.index}" data-hjour-mark="${p.index}" aria-pressed="${p.index === selected}" aria-controls="hjourDetail" aria-label="${escAttr(aria)}"><small>${escHtml(p.mark.days_words)}</small><b>${escHtml(p.mark.short)}</b></button>`;
       })
       .join("");
     // Each stone settles once the walked line has reached it, oldest first.
@@ -314,7 +292,7 @@
       .filter((p) => stoneSides.has(p.index))
       .map((p) => {
         const side = stoneSides.get(p.index) === "above" ? "is-above" : "is-below";
-        return `<button type="button" class="hjour-lbl is-walked ${side} ${alignOf(p.x)}" style="--x:${r1(p.x)}%;--y:${r1(p.y)}%;--d:${settle(p.x)}" data-hjour-mark="s${p.index}" aria-pressed="${p.index === stoneOn}" aria-controls="hjourDetail" aria-label="${escAttr(p.stone.words)}"><small>${escHtml(p.stone.date_words)}</small><b>${escHtml(p.stone.short)}</b></button>`;
+        return `<button type="button" class="hjour-lbl is-walked ${side} ${lay.alignOf(p.x)}" style="--x:${r1(p.x)}%;--y:${r1(p.y)}%;--d:${settle(p.x)}" data-hjour-mark="s${p.index}" aria-pressed="${p.index === stoneOn}" aria-controls="hjourDetail" aria-label="${escAttr(p.stone.words)}"><small>${escHtml(p.stone.date_words)}</small><b>${escHtml(p.stone.short)}</b></button>`;
       })
       .join("");
     const summit = marks.find((m) => m.summit) ?? marks[marks.length - 1];
@@ -325,24 +303,18 @@
       <div class="hjour-plot" role="img" aria-label="${escAttr(aria)}">
         ${svg}
         <span class="hjour-dawn" style="--x:${r1(summitAt.x)}%;--y:${r1(summitAt.y)}%" aria-hidden="true"></span>
-        ${stepsHtml(
-          start,
-          today,
-          xOf,
-          !!opts.enter,
-          stones.map((p) => p.x)
-        )}
+        ${stepsHtml(start, today, xOf, { enter: !!opts.enter, stones: stones.map((p) => p.x), width: opts.width })}
         <span class="hjour-node is-start" style="--x:${X0}%;--y:${r1(trailY(X0))}%" aria-hidden="true"></span>
         ${nodes}
         ${stoneNodes}
         <span class="hjour-pulse" style="--x:${r1(xNow)}%;--y:${r1(yNow)}%" aria-hidden="true"></span>
         <span class="hjour-now" style="--x:${r1(xNow)}%;--y:${r1(yNow)}%" aria-hidden="true"></span>
-        <span class="hjour-today ${alignOf(xNow)}" style="--x:${r1(xNow)}%;--y:${r1(yNow)}%" aria-hidden="true">Today</span>
+        <span class="hjour-today ${lay.alignOf(xNow)}" style="--x:${r1(xNow)}%;--y:${r1(yNow)}%" aria-hidden="true">Today</span>
         ${showFrom ? `<span class="hjour-from" style="--x:${X0}%;--y:${r1(trailY(X0))}%" aria-hidden="true">${escHtml(journey.start_words)}</span>` : ""}
         ${labels}
         ${stoneLabels}
       </div>
-      ${axisHtml(start, end, xOf)}
+      ${axisHtml(start, end, xOf, opts.width)}
       <div class="hjour-detail" id="hjourDetail" role="status" aria-live="polite" data-hjour-detail>${stoneOn != null ? said.stoneDetailHtml(walked[stoneOn]) : detailHtml(marks[selected])}</div>
       ${said.behindHtml(
         journey,

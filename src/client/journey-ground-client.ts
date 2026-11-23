@@ -1,11 +1,14 @@
 // @ts-check
 // Your road, the ground covered (docs/IA.md "Horizon landing" 6): what the athlete has
 // actually done on this stretch (GET /api/week `journey.walked`: a race run, a lift's new
-// best, the longest run, a weight waypoint crossed — week-read.ts journeyGround), the card
-// under the axis that opens a mark's or a stone's words, and "Behind you", which lists the
-// stones' own sentences so the list and the trail never disagree (an older read without
-// stones keeps `behind`). The trail (journey-trail-client.ts) places the stones; this
-// module owns what they say.
+// best, the longest run, a weight waypoint crossed, a lab marker a newer draw moved the
+// right way, a block finished, the first full week, a measured body change —
+// journey-ground.ts), the card under the axis that opens a mark's or a stone's words, and
+// "Behind you": the stones' own sentences, so the list and the trail never disagree, and
+// under them what has moved since the road began (`behind`, with how long it has been
+// walked, `walked_words`), so distance covered is never hidden by dated events. With no
+// stones, the moved lines are the list. The trail (journey-trail-client.ts) places the
+// stones; this module owns what they say.
 //
 // Pure strings; every server word escaped, only an in-app page links. No score, no percent.
 //
@@ -21,6 +24,11 @@
     best: "A new best",
     longest_run: "Longest run",
     weight: "Weight waypoint",
+    health: "Lab draw",
+    block: "Block finished",
+    full_week: "A full week",
+    waist: "Waist",
+    body_fat: "Body fat",
   };
   /** A "Behind you" item's stone on an older read, by what moved. */
   const BEHIND_STONE: Readonly<Record<string, string>> = {
@@ -73,19 +81,39 @@
     return cardHtml(hueOf(stone), STONE_TITLE[stone.kind] || stone.short, stone.date_words, stone.words, stone.href);
   }
 
-  /** What is behind: the walked stones' sentences, newest first, when the read has them; else `behind`. */
+  function rowHtml(hue: string, words: string): string {
+    return `<li class="hjour-b stone-${hue}"><span class="hjour-b-mark" aria-hidden="true"></span><span>${escHtml(words)}</span></li>`;
+  }
+
+  /**
+   * What is behind: the walked stones' sentences, newest first, then what has moved since
+   * the road began as a short summary under them (how long it has been walked, and the
+   * moved lines; a race's own line gives way to its stone). With no stones, the moved lines
+   * are the list, under how long the road has been walked. "" with nothing true to say.
+   */
   function behindHtml(journey: Journey, stones: Stone[]): string {
-    const rows: Array<[string, string]> = stones.length
-      ? [...stones].reverse().map((s) => [hueOf(s), s.words])
-      : (journey.behind ?? []).map((b) => [BEHIND_STONE[b.key] || "endurance", b.words]);
-    if (!rows.length) return "";
-    const items = rows
-      .map(
-        ([hue, words]) =>
-          `<li class="hjour-b stone-${hue}"><span class="hjour-b-mark" aria-hidden="true"></span><span>${escHtml(words)}</span></li>`
-      )
+    const raced = stones.some((s) => s.kind === "race_done");
+    const moved = (journey.behind ?? []).filter((b) => b?.words && !(raced && b.key === "race_done"));
+    const span = typeof journey.walked_words === "string" ? journey.walked_words.trim() : "";
+    if (!stones.length && !moved.length && !span) return "";
+    const head = `<span class="lbl hjour-behind-k">Behind you</span>`;
+    const spanHtml = span ? `<p class="hjour-sum-k">${escHtml(span)}</p>` : "";
+    if (!stones.length) {
+      const rows = moved.map((b) => rowHtml(BEHIND_STONE[b.key] || "endurance", b.words)).join("");
+      return `<div class="hjour-behind">${head}${spanHtml}${rows ? `<ul class="hjour-bs">${rows}</ul>` : ""}</div>`;
+    }
+    const rows = [...stones]
+      .reverse()
+      .map((s) => rowHtml(hueOf(s), s.words))
       .join("");
-    return `<div class="hjour-behind"><span class="lbl hjour-behind-k">Behind you</span><ul class="hjour-bs">${items}</ul></div>`;
+    const lines = moved
+      .map((b) => `<li class="hjour-s stone-${BEHIND_STONE[b.key] || "endurance"}">${escHtml(b.words)}</li>`)
+      .join("");
+    const sum =
+      span || lines
+        ? `<div class="hjour-sum">${spanHtml || `<p class="hjour-sum-k">So far</p>`}${lines ? `<ul class="hjour-sum-l">${lines}</ul>` : ""}</div>`
+        : "";
+    return `<div class="hjour-behind">${head}<ul class="hjour-bs">${rows}</ul>${sum}</div>`;
   }
 
   const CAIRN_JOURNEY_GROUND = { walkedOf, hueOf, cardHtml, stoneDetailHtml, behindHtml };

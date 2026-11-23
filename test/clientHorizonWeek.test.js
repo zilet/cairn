@@ -42,6 +42,7 @@ const MODULES = [
   "standing-client",
   "frame-line-client",
   "journey-ground-client",
+  "journey-layout-client",
   "journey-trail-client",
   "week-model",
   "week-strip-client",
@@ -1432,7 +1433,8 @@ function walkedJourney() {
 
 test("your road: what was done sits on the walked part as filled stones; Behind you says the same sentences", () => {
   const win = load();
-  const road = trail(win, walkedJourney());
+  // A tablet's plot: room for a label on the walked side (a phone's is held below).
+  const road = trail(win, walkedJourney(), { width: 700 });
   const stones = road.querySelectorAll(".hjour-stone");
   assert.deepEqual(
     stones.map((s) => s.getAttribute("class")),
@@ -1455,16 +1457,28 @@ test("your road: what was done sits on the walked part as filled stones; Behind 
   assert.ok(labels.length >= 1);
   assert.deepEqual(
     labels.map((l) => [l.querySelector("small").textContent, l.querySelector("b").textContent, l.getAttribute("aria-pressed")]),
-    [["Sep 13", "10K", "false"]]
+    [
+      ["Sep 27", "160 lb", "false"],
+      ["Sep 13", "10K", "false"],
+    ]
   );
-  assert.equal(labels[0].getAttribute("aria-label"), "Riverside 10K run in 48:20 on Sep 13.");
-  // Behind you: the stones' own sentences, newest first, never the older list beside them.
+  assert.equal(labels[1].getAttribute("aria-label"), "Riverside 10K run in 48:20 on Sep 13.");
+  // Behind you: the stones' own sentences, newest first; then what has moved since the road
+  // began, as the summary under them (never hidden by the dated events).
   assert.deepEqual(
     road.querySelectorAll(".hjour-b").map((b) => [b.getAttribute("class"), b.textContent]),
     [
       ["hjour-b stone-strength", "A new best on the squat on Oct 4, an estimated 285 lb max."],
       ["hjour-b stone-body", "Your weight trend went under 160 lb on Sep 27."],
       ["hjour-b stone-endurance", "Riverside 10K run in 48:20 on Sep 13."],
+    ]
+  );
+  assert.equal(road.querySelector(".hjour-sum-k").textContent, "So far");
+  assert.deepEqual(
+    road.querySelectorAll(".hjour-sum-l .hjour-s").map((b) => [b.getAttribute("class"), b.textContent]),
+    [
+      ["hjour-s stone-endurance", "Race estimate 4 min faster since Sep 8"],
+      ["hjour-s stone-body", "−2.1 lb since Aug 30"],
     ]
   );
   // The plot still says one sentence; the next mark's words stay open by default.
@@ -1491,6 +1505,7 @@ test("your road: a tapped stone opens its sentence in the card; a mark tap retur
   const win = load({ CairnDrill: drillStub() });
   const read = () => ({ ...newRead(), journey: walkedJourney() });
   const slot = createHost(win.document);
+  Object.defineProperty(slot, "clientWidth", { value: 732 });
   win.CairnHorizonWeekController.mount(slot, { peek: () => null, load: () => Promise.resolve(read()) });
   await flush();
   await flush();
@@ -1519,14 +1534,14 @@ test("your road: a tapped stone opens its sentence in the card; a mark tap retur
 test("your road: a stone's server words stay text", () => {
   const win = load();
   const j = walkedJourney();
-  j.walked[0].short = "<img src=x>";
+  j.walked[1].short = "<img src=x>";
   j.walked[0].words = "<script>x</script>";
   j.walked[1].stone = "<b>";
   j.walked[2].href = "javascript:alert(1)";
-  const road = trail(win, j);
+  const road = trail(win, j, { width: 700 });
   assert.equal(!!road.querySelector("img"), false);
   assert.equal(!!road.querySelector("script"), false);
-  assert.equal(road.querySelector(".hjour-lbl.is-walked b").textContent, "<img src=x>");
+  assert.equal(road.querySelector('.hjour-lbl.is-walked[data-hjour-mark="s1"] b').textContent, "<img src=x>");
   assert.ok(road.querySelector(".hjour-stone.stone-endurance[data-hjour-node='s1']"), "an unknown hue falls back");
   const opened = trail(win, j, { stone: 2 });
   assert.equal(!!opened.querySelector(".hjour-detail a"), false, "only an in-app page links");
@@ -1836,4 +1851,191 @@ test("the landing draws 'The whole picture' under the goals and above the shape,
   const at = (k) => secs.findIndex((c) => c.includes(`is-${k}`));
   assert.ok(at("goals") < at("standing") && at("standing") < at("shape"));
   assert.equal(host.querySelector("#hwkH-standing").textContent, "The whole picture");
+});
+
+test("your road: Behind you keeps the dated stones AND the ground covered since the road began", () => {
+  const win = load();
+  const j = {
+    ...walkedJourney(),
+    walked_words: "Five and a half months since Jun 6",
+    behind: [
+      { key: "race_done", words: "Riverside 10K run · 48:20" },
+      { key: "weight", words: "29.4 lb down since Jun 6" },
+      { key: "strength", words: "Squat 225 lb → 265 lb" },
+    ],
+  };
+  const road = trail(win, j);
+  const behind = road.querySelector(".hjour-behind");
+  assert.equal(behind.querySelector(".hjour-behind-k").textContent, "Behind you");
+  assert.equal(behind.querySelectorAll(".hjour-bs .hjour-b").length, 3, "every stone's sentence");
+  assert.equal(behind.querySelector(".hjour-sum .hjour-sum-k").textContent, "Five and a half months since Jun 6");
+  assert.deepEqual(
+    behind.querySelectorAll(".hjour-sum-l .hjour-s").map((li) => li.textContent),
+    ["29.4 lb down since Jun 6", "Squat 225 lb → 265 lb"],
+    "the race's own line gives way to its stone; the cumulative lines stay"
+  );
+  // The summary sits under the stones, never above them.
+  const markup = win.CairnJourneyGround.behindHtml(j, j.walked);
+  assert.ok(markup.indexOf("hjour-bs") < markup.indexOf("hjour-sum"), "stones first");
+  // Escaped.
+  const bad = { ...j, walked_words: "<img src=x>", behind: [{ key: "weight", words: "<script>x</script>" }] };
+  const out = renderHtml(win.CairnJourneyGround.behindHtml(bad, bad.walked), { document: win.document });
+  assert.equal(!!out.querySelector("img"), false);
+  assert.equal(!!out.querySelector("script"), false);
+  assert.equal(out.querySelector(".hjour-sum-k").textContent, "<img src=x>");
+  assertClean(road, "behind you with its summary");
+});
+
+test("your road: an empty walked road still says what is true (how long, and what moved), never filler", () => {
+  const win = load();
+  const empty = { ...journey(), walked: [], walked_words: "Seven weeks since Aug 1" };
+  const road = trail(win, empty);
+  assert.equal(road.querySelectorAll(".hjour-stone").length, 0);
+  const behind = road.querySelector(".hjour-behind");
+  assert.equal(behind.querySelector(".hjour-sum-k").textContent, "Seven weeks since Aug 1");
+  assert.deepEqual(
+    behind.querySelectorAll(".hjour-b").map((b) => b.textContent),
+    ["Race estimate 4 min faster since Sep 8", "−2.1 lb since Aug 30"],
+    "the cumulative lines are the list"
+  );
+  // Nothing moved and no named start: no section at all, never an invented line.
+  const bare = trail(win, { ...journey(), walked: [], walked_words: null, behind: [] });
+  assert.equal(!!bare.querySelector(".hjour-behind"), false);
+  // Only how long: one true line.
+  const span = trail(win, { ...journey(), walked: [], walked_words: "Three weeks since Sep 15", behind: [] });
+  assert.equal(span.querySelector(".hjour-behind .hjour-sum-k").textContent, "Three weeks since Sep 15");
+  assert.equal(span.querySelectorAll(".hjour-behind li").length, 0);
+});
+
+test("your road at phone width: labels never overlap one another, Today or the start's date", () => {
+  const win = load();
+  const lay = win.CairnJourneyLayout;
+  // A label's box at 360 px: two centred labels 21% apart (the old fixed gap) collide on a phone.
+  const a = lay.boxOf(40, lay.labelPx("in 10 weeks", "154 lb"), 328);
+  const b = lay.boxOf(61, lay.labelPx("in 4 weeks", "Half"), 328);
+  assert.ok(a.hi > b.lo, "the old 21% gap is too tight at 328 px");
+  const placed = lay.placeLabels(
+    [
+      { index: 0, x: 40, px: lay.labelPx("in 10 weeks", "154 lb") },
+      { index: 1, x: 61, px: lay.labelPx("in 4 weeks", "Half") },
+      { index: 2, x: 50, px: lay.labelPx("in 6 days", "48 km") },
+    ],
+    { above: [], below: [] },
+    328
+  );
+  assert.equal(placed.get(0), "above");
+  assert.equal(placed.get(1), "below", "the second takes the other side");
+  assert.equal(placed.has(2), false, "a third with no room on either side is left off, never squeezed");
+  // At a tablet's width the same two sit side by side above.
+  const wide = lay.placeLabels(
+    [
+      { index: 0, x: 40, px: lay.labelPx("in 10 weeks", "154 lb") },
+      { index: 1, x: 61, px: lay.labelPx("in 4 weeks", "Half") },
+    ],
+    { above: [], below: [] },
+    700
+  );
+  assert.deepEqual([wide.get(0), wide.get(1)], ["above", "above"]);
+  // Edge alignment keeps a label on the plot: left-aligned near the start, right near the summit.
+  assert.equal(lay.alignOf(5), "is-l");
+  assert.equal(lay.alignOf(95), "is-r");
+  assert.ok(lay.boxOf(95, 90, 328).hi <= 100, "the summit's label ends inside the plot");
+  assert.ok(lay.boxOf(4, 90, 328).lo >= 0, "the start's label begins inside the plot");
+
+  // The whole trail at 360 px: no two labels on one side overlap, and none sits on "Today".
+  for (const width of [328, 358]) {
+    for (const j of [journey(), walkedJourney(), longRoad()]) {
+      const road = trail(win, j, { width });
+      const pct = (el, re) => Number(re.exec(el.getAttribute("style"))[1]);
+      const boxes = { above: [], below: [] };
+      const today = road.querySelector(".hjour-today");
+      boxes.below.push({ ...lay.boxOf(pct(today, /--x:([\d.]+)%/), lay.labelPx("Today", "") - 8, width), name: "Today" });
+      for (const l of road.querySelectorAll(".hjour-lbl")) {
+        const side = l.getAttribute("class").includes("is-above") ? "above" : "below";
+        const x = pct(l, /--x:([\d.]+)%/);
+        const summit = l.getAttribute("class").includes("is-summit");
+        const box = lay.boxOf(x, lay.labelPx(l.querySelector("small").textContent, l.querySelector("b").textContent, summit), width);
+        for (const o of boxes[side])
+          assert.ok(box.hi <= o.lo || box.lo >= o.hi, `${width}px: "${l.textContent}" overlaps "${o.name}"`);
+        boxes[side].push({ ...box, name: l.textContent });
+      }
+      // Month ticks never crowd one another.
+      const ticks = road.querySelectorAll(".hjour-tick").map((t) => pct(t, /--x:([\d.]+)%/));
+      for (let i = 1; i < ticks.length; i++) assert.ok(ticks[i] - ticks[i - 1] >= (40 / width) * 100 - 0.1);
+    }
+  }
+});
+
+/** Five and a half months walked toward a summit eleven weeks out: six stones spread along it. */
+function longRoad() {
+  const stone = (date, kind, hue, short, words) => ({
+    kind,
+    stone: hue,
+    date,
+    date_words: date.slice(5),
+    days_ago: 0,
+    short,
+    words,
+    href: null,
+  });
+  return {
+    start_date: "2026-06-06",
+    start_words: "Jun 6",
+    today: "2026-11-23",
+    marks: [
+      {
+        kind: "race",
+        label: "5K time trial",
+        date: "2026-12-20",
+        end_date: null,
+        date_words: "Dec 20",
+        detail: null,
+        short: "5K",
+        days_away: 27,
+        days_words: "in 3 weeks",
+        summit: false,
+        href: null,
+      },
+      {
+        kind: "goal",
+        label: "Goal weight · 148 lb",
+        date: "2027-02-07",
+        end_date: null,
+        date_words: "Feb 7, 2027",
+        detail: null,
+        short: "148 lb",
+        days_away: 76,
+        days_words: "in 10 weeks",
+        summit: true,
+        href: null,
+      },
+    ],
+    behind: [{ key: "weight", words: "29.4 lb down since Jun 6" }],
+    walked_words: "Five and a half months since Jun 6",
+    walked: [
+      stone("2026-06-30", "weight", "body", "180 lb", "Your weight trend went under 180 lb on Jun 30."),
+      stone("2026-08-02", "weight", "body", "170 lb", "Your weight trend went under 170 lb on Aug 2."),
+      stone("2026-09-10", "health", "heart", "LDL", "LDL came down into its optimal band on the Sep 10 draw."),
+      stone("2026-10-05", "weight", "body", "160 lb", "Your weight trend went under 160 lb on Oct 5."),
+      stone("2026-11-01", "race_done", "endurance", "Half", "Cambridge Half Marathon run in 2:10:18 on Nov 1."),
+      stone("2026-11-16", "best", "strength", "245 lb", "A new best on the squat on Nov 16, an estimated 245 lb max."),
+    ],
+    line: "Five and a half months on this road so far. Next, the 5K time trial in 3 weeks; your goal weight in 10 weeks.",
+  };
+}
+
+test("your road: a long walked part keeps room ahead, and its week steps never crowd", () => {
+  const win = load();
+  const road = trail(win, longRoad(), { width: 328 });
+  const xOf = (el) => Number(/--x:([\d.]+)%/.exec(el.getAttribute("style"))[1]);
+  const now = xOf(road.querySelector(".hjour-now"));
+  assert.ok(now <= 95 - 34 + 0.1, `today leaves the road ahead room for two labels (today at ${now}%)`);
+  const steps = road.querySelectorAll(".hjour-step").map(xOf);
+  for (let i = 1; i < steps.length; i++) assert.ok(steps[i] - steps[i - 1] >= (9 / 328) * 100 - 0.1, "steps stay apart");
+  assert.ok(steps.length >= 6 && steps.length < 24, `fewer steps than weeks on a phone: ${steps.length}`);
+  const stones = road.querySelectorAll(".hjour-stone").map(xOf);
+  assert.ok(stones.length >= 4, `most of the six stones keep their place: ${stones.length}`);
+  for (const x of stones) assert.ok(x < now);
+  assert.equal(road.querySelector(".hjour-sum-k").textContent, "Five and a half months since Jun 6");
+  assertClean(road, "a long road");
 });

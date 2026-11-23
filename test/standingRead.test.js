@@ -188,13 +188,14 @@ test("the injected movement and mobility reads render in words, in the athlete's
   assert.equal(squat.now_text, "234 lb");
   assert.equal(squat.note, "led by Back Squat");
   assert.equal(squat.direction_words, "Building");
-  assert.equal(squat.move_words, `up 3 percent since ${dateWords("2026-10-25", today)}`);
+  assert.equal(squat.move_words, `up since ${dateWords("2026-10-25", today)}`, "a blended move says its direction, never a percent");
   const hinge = s.lines.find((l) => l.id === "movement:hinge");
-  assert.match(hinge.move_words, /^level since /, "under 1 percent is level");
+  assert.match(hinge.move_words, /^level since /, "a move under the read's own threshold is level");
   const pull = s.lines.find((l) => l.id === "movement:pull");
   assert.equal(pull.now_text, "10 reps", "a bodyweight lead reads in reps");
   assert.equal(pull.direction_words, "Slipping");
-  assert.match(pull.move_words, /^down 5 percent since /);
+  assert.match(pull.move_words, /^down since /);
+  for (const l of s.lines) assert.doesNotMatch(l.move_words ?? "", /percent|%/, `no figure in a movement's move: ${l.move_words}`);
 
   const m = rows[1];
   assert.equal(m.stone, "recovery");
@@ -232,7 +233,7 @@ test("a weighted or assisted bodyweight lead reads its set in words, never a per
 
   const weighted = pullOf(line({ now_added_lb: 25, now_added_reps: 6, direction: "better", change: 0.079, since: "2026-10-25" }));
   assert.equal(weighted.now_text, "bodyweight + 25 lb for 6");
-  assert.match(weighted.move_words, /^up 8 percent since /, "the move is the effective load's");
+  assert.match(weighted.move_words, /^up since /, "the move is the effective load's, said as a direction");
   assert.equal(pullOf(line({ now_added_lb: 25, now_added_reps: 6 }), KG).now_text, "bodyweight + 11.5 kg for 6");
 
   // All assisted: the line still appears, the assist said in words.
@@ -271,6 +272,10 @@ test("count words, the direction rule and the vocabulary table", () => {
   assert.equal(combineDirections([null, null]), null);
   assert.equal(relativeMoveWords(null, "2026-10-25", "2026-11-22"), null);
   assert.equal(relativeMoveWords(0.009, "2026-10-25", "2026-11-22"), "level since Oct 25");
+  assert.equal(relativeMoveWords(0.04, "2026-10-25", "2026-11-22"), "up since Oct 25");
+  assert.equal(relativeMoveWords(-0.04, "2026-10-25", "2026-11-22"), "down since Oct 25");
+  assert.equal(relativeMoveWords(-0.012, "2026-10-25", "2026-11-22"), "level since Oct 25", "inside the read's slide threshold");
+  for (const c of [0.011, 0.2, -0.5, -0.016]) assert.doesNotMatch(relativeMoveWords(c, "2026-10-25", "2026-11-22"), /percent|%/);
   assert.deepEqual(STANDING_DIRECTION_WORDS, {
     capacity: { better: "Building", holding: "Holding", worse: "Slipping" },
     health: { better: "Improving", holding: "Steady", worse: "Drifting" },

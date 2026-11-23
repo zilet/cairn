@@ -94,6 +94,69 @@ function statusOf(m: any): MarkerStatus {
   return { judged, off, prevDate, step, direction, date: m?.latest?.date ? String(m.latest.date).slice(0, 10) : null };
 }
 
+/**
+ * One blood marker a newer draw moved the right way against the draw before it: back inside
+ * its optimal band (the Blood row's own "back in range" step), materially toward it (the
+ * health outcomes' meaningful-change size), or — for a band the surfaces may not speak
+ * about — back inside the lab's own range by its flag. Never a worsening, never a forecast.
+ */
+export interface BloodMarkerMove {
+  name: string;
+  /** The newer draw's day, and the draw it is compared with. */
+  date: string;
+  prev_date: string;
+  kind: "back" | "toward" | "lab_back";
+  /** True when the reading came down (the band sits below the earlier value). */
+  down: boolean;
+}
+
+/**
+ * The markers whose latest draw moved the right way against the previous draw, on the same
+ * ranked list and the same panels the Blood row reads (prioritizeMarkers, memoized for the
+ * request). `meaningful(prev, name)` is the smallest move that counts as material.
+ */
+export function bloodMarkerMoves(
+  meaningful: (prev: number, name: string) => number,
+  ranked: any[] = (prioritizeMarkers().markers ?? []) as any[]
+): BloodMarkerMove[] {
+  const out: BloodMarkerMove[] = [];
+  for (const m of ranked) {
+    if (m?.source === "wearable") continue;
+    const key = String(m?.group ?? "");
+    if (!key || NOT_BLOOD.has(key) || !PANEL_LABELS[key]) continue;
+    const points = (Array.isArray(m?.points) ? m.points : []).filter(
+      (p: any) => Number.isFinite(Number(p?.value)) && /^\d{4}-\d{2}-\d{2}/.test(String(p?.date ?? ""))
+    );
+    if (points.length < 2) continue;
+    const prev = points[points.length - 2];
+    const now = points[points.length - 1];
+    const date = String(now.date).slice(0, 10);
+    const prevDate = String(prev.date).slice(0, 10);
+    if (!(prevDate < date)) continue;
+    const name = String(m?.name ?? "").trim();
+    if (!name) continue;
+    const a = Number(prev.value);
+    const b = Number(now.value);
+    const down = b < a;
+    if (markerOptimalTrusted(m) && m?.optimal) {
+      const zone = { optimal: [Number(m.optimal.low), Number(m.optimal.high)], dir: m.optimal.dir } as OptimalZone;
+      const before = optimalDistance(a, zone);
+      const after = optimalDistance(b, zone);
+      if (!(before > 0)) continue;
+      // Under a meaningful low edge with no distance is "on the low side" (statusOf), not back in.
+      const lowEdgeOnly = m?.below_optimal_floor === true && !(Number(m?.distance) > 0);
+      if (after === 0 && !lowEdgeOnly) out.push({ name, date, prev_date: prevDate, kind: "back", down });
+      else if (after > 0 && after < before && Math.abs(b - a) > meaningful(a, name))
+        out.push({ name, date, prev_date: prevDate, kind: "toward", down });
+      continue;
+    }
+    const flagged = (p: any) => p?.flag === "high" || p?.flag === "low";
+    if (flagged(prev) && !flagged(now) && now?.flag != null && (prev.flag === "high") === down)
+      out.push({ name, date, prev_date: prevDate, kind: "lab_back", down });
+  }
+  return out;
+}
+
 /** The checkup the path already read ("next draw Dec 22–26"); null with none dated. */
 function nextDrawWords(path: TodayPath | null | undefined, today: string): string | null {
   const m = (path?.milestones ?? []).find((x) => x.kind === "checkup" && x.date);

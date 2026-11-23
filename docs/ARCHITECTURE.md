@@ -6725,6 +6725,31 @@ week rows are labelled by the lift trained. Only recorded swaps count (a plan da
 carries nothing), and never across movement patterns. Proof (this week only): a race just run, the weight journey unless the weight goal row
 already draws its track, then up to two lifts whose working load rose, the anchor lift first.
 
+**The road (`journey`).** `journeyOf` draws Horizon's road from ONE start rule, `roadStart`
+(`src/domain/training/journey-ground.ts`): the earliest start a live goal or the last race run names
+(a dated weight goal's stated start, each lift goal's baseline, the dated race's trend window, the
+most recent finished race's build start from its goal review), at most `ROAD_BACK_MAX_DAYS` (a year)
+back; with none it falls back to Today's path's look-back window, which is never spoken as days
+walked (`walked_words` null). The walked stones are `journeyGround` in the same module: pure over
+reads `groundReads` gathers once, each in its own guard, and each source wrapped alone so one that
+throws sets no stone and takes no other with it. Sources: every race RUN on the stretch
+(`finishedRacesBetween`, race-recovery.ts — it outlives the goal, so a half run under an old goal is
+still its race after a new goal is set); a lift's new best; the longest run taken well (the race
+build's `review.longest_well`, else, with no dated race, `demonstratedLongRun` over the stretch's
+`stretchRunDays`) — never on a race's day, and `demonstratedLongRun` itself now leaves race days out,
+so the build's own read can no longer hand back the race effort; each weight waypoint the week-mean
+trend crossed over the whole stretch's canonical weigh-ins; one heart stone per lab draw from
+`bloodMarkerMoves` (`standing/blood.ts`, the Blood row's own read: a marker the newer draw moved back
+inside its trusted optimal band, materially toward it by `markerMeaningfulChange`, or back inside the
+lab's flagged range); the most recent completed program block; the FIRST week that held as many
+lifting days and runs as the stated schedules set (`liftDatesBetween` and the stretch's run days; a
+moved day counts); and a waist or body-fat change only while `bodyFatEstimate` is `measured` (a
+waist ≥ 0.5 in down across two weeks or more; a body-fat range clear of the one before). Every
+sentence passes `violatesReadingGrammar` or the stone is not set. `pickJourneyStones` keeps variety
+first, then spreads the rest along the walked part (farthest-first), spaced by 3 days or 3% of the
+walked span, at most `JOURNEY_STONES_MAX`. The extra reads cost about a dozen statements on the
+seeded demo (`test/readStatementBudget.test.js`).
+
 **A bodyweight lift's goal counts reps.** A strength objective is an est-1RM target (`return_to_personal_best` | `explicit_est_1rm`) or, for a lift done at bodyweight, a reps goal (`bodyweight_reps`, `src/repo/strength-reps.ts`, its own migration): `target_reps` in one set, or `target_sets` x `target_reps` in one session. A set at bodyweight counts its reps, a loaded set counts as at least its reps, and an assisted set (negative weight) never counts. It is kept only as the assist it took, so a goal the athlete can only do assisted reads 0 reps with "25 lb of assist, down from 40", and less assist is progress. The measure is the best set (one-set goal) or the best N sets of one session, each up to the target (sets goal); "now" is the same envelope every lift goal uses. The goal is met when one session has N sets at or above the target, and it completes through the same ledger reconcile (`strength-objective-ledger.ts`), which `logSet` also reaches for unloaded sets. A reps goal stores `target_est_1rm = 0` (SQLite cannot drop the NOT NULL), so every reader branches on `target_kind`, or on `journey.reps`, before reading it. It has no projection, no build mark and no carry, and is never the Today anchor. On the Horizon its four-week move is +1 rep toward / -2 back (`REPS_TOWARD` / `REPS_BACK`), or, while nothing counts yet, 5 lb less / 10 lb more assist. `set_strength_objective` (REST, MCP, chat) refuses a reps goal on a loaded lift and an est-1RM goal on a lift only ever done at bodyweight, each with a plain reason.
 
 **Strength by movement and by muscle group.** `movementStanding()` (`src/repo/movement-standing.ts`) reads the six big patterns (squat, hinge, push, press, row, pull) from their compound lifts; isolation lifts are never members, whatever the swap-family table says. Each lift's "now" is the strength journey's capacity envelope (`capacityEnvelopeAsOf`), compared with the same envelope four weeks earlier. The pattern's direction is the working-set and tier weighted mean of the lifts comparable in both windows, so a lift rotated in has no earlier reading and adds nothing, and a lift dropped has no "now". An exposure lighter on purpose (a recovery-dose session, a met card that asked for less) is set aside through `exposureLighterOnPurpose`, the same law as the whole-person strength read. Bodyweight lifts read reps and assist through effective load at today's bodyweight. Thresholds are +1% / -1.5% (`MOVEMENT_BETTER_CHANGE` / `MOVEMENT_WORSE_CHANGE`), the lift row's +2 / -3 lb. `muscleGroupTrajectory()` credits every trained lift to every group `muscleCreditFor` names, weighted by share and role; a group is led by its heaviest-credited compound and stalls only when that compound does or the weighted majority does. Its vary menu stays inside the stalled lift's own region (`sameVaryRegion`), so a leg curl is never offered a deadlift.

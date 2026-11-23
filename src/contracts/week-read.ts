@@ -307,11 +307,22 @@ export interface WeekReadJourneyBehind {
 /**
  * A stone set on the WALKED part of the trail: something the athlete actually did between
  * `start_date` and today, read from the source that owns it (a race run, a lift's new best,
- * the longest run taken well, a bodyweight waypoint crossed). A logged event, never an
- * estimate of the future and never a grade.
+ * the longest run taken well, a bodyweight waypoint crossed, a blood marker a newer draw
+ * moved back inside or toward its optimal band, a training block finished, the first week
+ * that held every day the athlete set, a measured waist or body-fat change). A logged or
+ * measured event, never an estimate of the future and never a grade.
  */
 export interface WeekReadJourneyStone {
-  kind: "race_done" | "best" | "longest_run" | "weight";
+  kind:
+    | "race_done"
+    | "best"
+    | "longest_run"
+    | "weight"
+    | "health"
+    | "block"
+    | "full_week"
+    | "waist"
+    | "body_fat";
   stone: "strength" | "endurance" | "body" | "heart";
   date: string;
   /** "Nov 3". */
@@ -341,12 +352,20 @@ export interface WeekReadJourney {
   today: string;
   /** Every dated mark ahead, ascending; the last is the summit. */
   marks: WeekReadJourneyMark[];
-  /** What moved toward a goal since `start_date` (at most three); empty when nothing did. */
+  /**
+   * What moved toward a goal since `start_date` (at most three); empty when nothing did. The
+   * cumulative lines: "Behind you" keeps them under the stones as the "since you started" summary.
+   */
   behind: WeekReadJourneyBehind[];
+  /**
+   * How long this road has been walked, when a goal named its start: "Five and a half months
+   * since Jun 6". Null on a look-back window no goal named; absent on an older read.
+   */
+  walked_words?: string | null;
   /**
    * What the athlete has already done on this stretch, as dated stones on the walked part,
    * ascending (at most JOURNEY_STONES_MAX). Absent on an older read; when it holds stones the
-   * trail's "Behind you" list prints their sentences instead of `behind`.
+   * trail's "Behind you" list prints their sentences, then `behind` as the summary beneath.
    */
   walked?: WeekReadJourneyStone[];
   /** One calm line of where the athlete stands on the trail ("31 days walked, 10 to the race."). */

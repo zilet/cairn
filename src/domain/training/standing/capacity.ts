@@ -7,7 +7,11 @@ import type {
   WeekReadStandingRow,
 } from "../../../contracts/week-read.js";
 import { loadWords, sinceWords, dateWords, type AthleteUnits } from "../../../repo/display-words.js";
-import type { MovementStanding } from "../../../repo/movement-standing.js";
+import {
+  MOVEMENT_BETTER_CHANGE,
+  MOVEMENT_WORSE_CHANGE,
+  type MovementStanding,
+} from "../../../repo/movement-standing.js";
 import type { MobilityStanding } from "../../../repo/mobility-checks.js";
 import { cap, mostCommon, numberWord, standingLine, standingRow } from "./words.js";
 
@@ -50,14 +54,20 @@ export function countWords(
   return `${cap(parts.join(", "))}.`;
 }
 
-/** "up 3 percent since Oct 25", "level since Oct 25"; null when the move is not comparable. */
+/**
+ * "up since Oct 25", "down since Oct 25", "level since Oct 25"; null when the move is not
+ * comparable. A movement's change is a blend of every comparable lift of the pattern (a
+ * relative figure, weighted by rank and sets), so no one load measures it honestly: the
+ * line says the direction only, on the read's own thresholds — never a percent, which on
+ * this surface reads as a grade.
+ */
 export function relativeMoveWords(change: number | null, since: string | null, today: string): string | null {
   if (change == null || !Number.isFinite(change) || !since) return null;
   const when = sinceWords(since, today);
   if (!when) return null;
-  if (Math.abs(change) < 0.01) return `level ${when}`;
-  const pct = Math.max(1, Math.round(Math.abs(change) * 100));
-  return `${change > 0 ? "up" : "down"} ${pct} percent ${when}`;
+  if (change >= MOVEMENT_BETTER_CHANGE) return `up ${when}`;
+  if (change <= MOVEMENT_WORSE_CHANGE) return `down ${when}`;
+  return `level ${when}`;
 }
 
 type MovementLine = MovementStanding["lines"][number];

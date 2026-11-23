@@ -169,6 +169,8 @@
         seasonHref: deps.seasonHref,
         changesHref: deps.changesHref,
         team,
+        // The plot inside the page's two 16 px gutters (an over-count would claim room a label does not have).
+        width: host.clientWidth > 64 ? host.clientWidth - 32 : null,
       });
       if (keep && next.days.some((d) => d.date === keep)) openDay(keep);
     }

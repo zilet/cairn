@@ -291,23 +291,38 @@ bottom:
   row variant. There is no "Still open": the hollow columns already mark the open key sessions.
 - **Your road** (`.hjour`, `journey-trail-client.ts`, GET `/api/week` `journey`; directly under the
   hero when there is a journey to draw, last on the page as "Ahead" when there is not): the trail to scale
-  in time from where this stretch began, through today, up to the furthest dated mark. Above it the
-  server's one line of where the athlete stands (a stone set in the last week leads it). The walked
-  part is solid dawn over a soft ground wash, with a small step for each week since the start (every
-  other week past six months) and what was actually done on it as small FILLED stones in their
-  area's hue (`journey.walked`, week-read.ts `journeyGround`: a race run, a lift's new best, the
-  longest run taken well, a weight waypoint crossed; at most six, spaced; an older stone too close
-  to a newer one gives way, and a week step under a stone is dropped); the walked part widens a
-  little to carry them; the road ahead is dotted; a peak week is a lit stretch; each mark sits on the trail in its stone's
+  in time from where this stretch began (the earliest start a live goal names, at most a year back),
+  through today, up to the furthest dated mark. Above it the server's one line of where the athlete
+  stands (a stone set in the last week leads it; a long road is said in weeks or months). The walked
+  part is solid dawn over a soft ground wash, with a small step for each week since the start (fewer
+  when they would sit closer than ~9 px) and what was actually done on it as small FILLED stones in
+  their area's hue (`journey.walked`, `journey-ground.ts`: a race run, a lift's new best, the
+  longest run taken well, a weight waypoint crossed, a lab draw that moved a marker back inside or
+  toward its optimal band in heart, a block finished, the first week that held every day set, a
+  measured waist or body-fat change; at most six, the hues first and then spread along the road; an
+  older stone too close to a newer one gives way, and a week step under a stone is dropped); the
+  walked part widens a little to carry them, and however long it is the road ahead keeps room for
+  the summit's label and the next mark's (today sits no further right than 34% short of the end with
+  two marks, 18% with one); the road ahead is dotted; a peak week is a lit stretch; each mark sits on the trail in its stone's
   hue; the summit is a small cairn with first light behind it, and a far ridge sits behind it all.
   Height is the trail's own shape, never a measure: the plot encodes time, left to right, and which
   side of today a day is. A tap on a labelled mark or its dot opens that mark's words in the card
   under the axis (the next mark by default), and a mark with a page makes the card a link; a stone,
-  or its label where one fits on the walked side, opens its sentence there the same way. "Behind
-  you" lists the stones' own sentences, newest first (an older read without stones: what has
-  already moved), each a stone in its area's hue, so the list and the trail never disagree. Under it "Every mark ahead"
+  or its label where one fits on the walked side, opens its sentence there the same way. Which
+  labels fit is measured in pixels against the plot's width (`journey-layout-client.ts`; a 360 px
+  phone's when the page has not been measured): a label is as wide as its longer line, two on one
+  side never overlap, nor sit on "Today" or the start's date, and a label with no room on either
+  side is left off rather than squeezed. A label is the mark's tap target, at least 44 px tall; a
+  dot's or a stone's own tap area reaches 44 px too. Month ticks keep ~40 px apart. "Behind you"
+  lists the stones' own sentences, newest first, each a stone in its area's hue, so the list and the
+  trail never disagree; under them, behind a hairline, a short summary of the ground covered: one
+  muted line of how long the road has been walked ("Five and a half months since Jun 6", else "So
+  far") and the cumulative lines (`journey.behind`: "29.4 lb down since Jun 6", "Race estimate 4 min
+  faster…") running on one wrapping row, each after a small dot in its hue (a race's own line gives
+  way to its stone). With no stones the cumulative lines are the list, under how long it has been
+  walked; with nothing moved and no named start there is no "Behind you" at all, never filler. Under it "Every mark ahead"
   folds the marks as milestone rows (`.msrow`, five shown and "+N more ›" to the Season) when there
-  are two or more, and "All of the season ›". The walked part draws in ONCE on a cold paint, the
+  are two or more (its summary a 44 px target), and "All of the season ›". The walked part draws in ONCE on a cold paint, the
   steps, stones (each once the line has reached it) and marks settle onto it, first light comes up and today rings once; nothing loops. An
   older read without a journey shows the next milestones as rows under "Ahead"; with nothing dated,
   the starter (`CairnJourneyTrail.starterHtml`) sits there.

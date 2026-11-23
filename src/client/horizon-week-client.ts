@@ -39,6 +39,8 @@
     seasonHref?: string;
     changesHref?: string;
     team?: ClientTeamSeats | null;
+    /** The page's width in pixels, for what fits on the road (a phone's when unknown). */
+    width?: number | null;
   };
 
   function sectionHtml(key: string, title: string, body: string, aside = ""): string {
@@ -100,6 +102,7 @@
         selected: opts.mark,
         stone: opts.stone,
         below: marksFoldHtml(model, seasonHref),
+        width: opts.width,
       });
       if (road) return road;
     }

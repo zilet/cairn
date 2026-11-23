@@ -151,7 +151,9 @@ export function runningHarmOnDay(date: string): HarmEvidence | null {
 function statedKeyRunDows(asOf?: string): Set<number> {
   try {
     return new Set(
-      (getEnduranceSchedule(asOf)?.days ?? []).filter((d) => d.kind === "long" || d.kind === "quality").map((d) => d.dow)
+      (getEnduranceSchedule(asOf)?.days ?? [])
+        .filter((d) => d.kind === "long" || d.kind === "quality")
+        .map((d) => d.dow)
     );
   } catch {
     return new Set();
@@ -246,15 +248,35 @@ export function demonstratedLongKm(asOf: string, runs: { date: string; km: numbe
   return demonstratedLongRun(asOf, runs, days)?.km ?? null;
 }
 
+/**
+ * The running days of [from, to], race days left out (runDays), memoized for the request:
+ * Horizon's road reads the stretch's runs once for its longest run taken well (an athlete
+ * with no dated race) and for the weeks every stated day was done.
+ */
+export function stretchRunDays(from: string, to: string): Array<{ date: string; km: number }> {
+  return requestMemo(`stretch_run_days:${from}:${to}`, () => runDays(from, to), copyDeep);
+}
+
 /** The same run (demonstratedLongKm) with its day: Horizon's road sets it as a stone. */
 export function demonstratedLongRun(
   asOf: string,
   runs: { date: string; km: number }[],
   days = 28
 ): { km: number; date: string } | null {
-  const recent = runs
-    .filter((r) => r.km > 0 && r.date <= asOf && (daysBetweenISO(asOf, r.date) ?? 99) <= days)
-    .sort((a, b) => b.km - a.km);
+  const inWindow = runs.filter((r) => r.km > 0 && r.date <= asOf && (daysBetweenISO(asOf, r.date) ?? 99) <= days);
+  if (!inWindow.length) return null;
+  // The RACE is never training (race-recovery.ts): a race day's run is not the longest
+  // run taken well, whichever caller's log it came in on (the race build hands its own
+  // recent-runs read, which still holds the race).
+  const from = inWindow.map((r) => r.date).sort()[0];
+  const races = (() => {
+    try {
+      return raceRunDates(from, asOf);
+    } catch {
+      return new Set<string>();
+    }
+  })();
+  const recent = inWindow.filter((r) => !races.has(r.date)).sort((a, b) => b.km - a.km);
   for (const r of recent) {
     if (runningHarmOnDay(r.date) == null) return { km: round1(r.km), date: r.date };
   }
