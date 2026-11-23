@@ -132,6 +132,87 @@
     return { ...m, of, dayWords: typeof target.day_words === "string" && target.day_words ? target.day_words : null, left };
   }
 
+  // ---------- the week's fuel ----------
+  // The seven days the day's number belongs to (GET /nutrition/day `fuel_week`,
+  // repo/fuel-week.ts), shaped for the strip under the energy meter. Each bar is the day's
+  // move from the average, drawn from the average line up (more) or down (less) on ONE
+  // scale: the larger of the cap a day can move (15% of the average), the week's largest
+  // move and the furthest a complete logged day sat from it, so nothing is ever clipped. A
+  // logged amount is a fact beside the bar (`tick`), never a grade: no tone, no percentage.
+  // Absent on an older read, a read dated another week, or a malformed one.
+  const WEEKDAY_LONG: Record<string, string> = {
+    Mon: "Monday",
+    Tue: "Tuesday",
+    Wed: "Wednesday",
+    Thu: "Thursday",
+    Fri: "Friday",
+    Sat: "Saturday",
+    Sun: "Sunday",
+  };
+  const WEEK_SCALE_SHARE = 0.15;
+
+  const kcalText = (n: number): string => (Math.round(n / 10) * 10).toLocaleString("en-US");
+
+  function fuelWeekModel(day: Partial<Day>, date: string): ClientFuelWeekModel | null {
+    const read = day.fuel_week;
+    const average = positive(rounded(read?.average_kcal));
+    if (!read || average == null || !Array.isArray(read.days) || read.days.length !== 7) return null;
+    if (!read.days.some((d) => String(d?.date) === date)) return null;
+    const rows = read.days.map((d) => ({
+      d,
+      kcal: rounded(d?.kcal) ?? average,
+      logged: d?.when === "ahead" ? null : rounded(d?.logged_kcal),
+    }));
+    const scale = Math.max(
+      average * WEEK_SCALE_SHARE,
+      ...rows.map((r) => Math.abs(r.kcal - average)),
+      ...rows.map((r) => (r.logged == null ? 0 : Math.abs(r.logged - average)))
+    );
+    const frac = (n: number): number => Math.max(-1, Math.min(1, (n - average) / scale));
+    const avg = kcalText(average);
+    const days = rows.map(({ d, kcal, logged }): ClientFuelWeekDayModel => {
+      const when: ClientFuelWeekDayModel["when"] = d.when === "past" || d.when === "today" ? d.when : "ahead";
+      const name = WEEKDAY_LONG[String(d.weekday)] || String(d.weekday || "");
+      const work = [...(Array.isArray(d.work) ? d.work : []), ...(Array.isArray(d.outcome_work) ? d.outcome_work : [])]
+        .map(String)
+        .filter(Boolean);
+      // At the average the server says nothing; the strip still says where the day sits.
+      const fallback =
+        when === "today"
+          ? `Today sits at the week's ${avg} average.`
+          : when === "past"
+            ? `That day sat at the week's ${avg} average.`
+            : `This day sits at the week's ${avg} average.`;
+      const label = [
+        `${name}${when === "today" ? ", today" : when === "ahead" ? ", ahead" : ""}: ${kcal.toLocaleString("en-US")} kcal`,
+        work.length ? `for ${work.join(" and ")}` : "",
+        logged != null ? `about ${kcalText(logged)} logged` : "",
+      ]
+        .filter(Boolean)
+        .join(", ");
+      return {
+        date: String(d.date),
+        weekday: String(d.weekday || ""),
+        name,
+        tag: String(d.tag || ""),
+        kcal,
+        when,
+        bar: frac(kcal),
+        tick: logged == null ? null : frac(logged),
+        words: typeof d.words === "string" && d.words ? d.words : fallback,
+        logged: logged == null ? null : `About ${kcalText(logged)} kcal logged.`,
+        label,
+      };
+    });
+    return {
+      average,
+      words: String(read.words || ""),
+      sumWords: String(read.sum_words || ""),
+      today: days.find((d) => d.when === "today")?.date ?? date,
+      days,
+    };
+  }
+
   /**
    * Today so far. `band` is the observed intake band read (may be null or absent);
    * `today` is the device's local ISO date.
@@ -167,6 +248,7 @@
       bandWords,
       demand,
       guides: guidesModel(day, date, count),
+      week: fuelWeekModel(day, date),
     };
   }
 

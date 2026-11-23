@@ -71,6 +71,7 @@ export const STYLE_PARTIALS = [
   "ask/changes",
   "fuel/meal-card",
   "fuel/today",
+  "fuel/week",
   "health/records",
   "health/packet",
   "horizon/race",

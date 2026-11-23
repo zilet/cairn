@@ -53,12 +53,12 @@
     "public/js/bundle-22-fuel.js": {
       "lazy": "fuel",
       "measured": {
-        "raw": 108727,
-        "brotli": 26064
+        "raw": 123236,
+        "brotli": 29522
       },
       "budget": {
-        "raw": 118784,
-        "brotli": 28672
+        "raw": 130048,
+        "brotli": 33792
       }
     },
     "public/js/bundle-05-me-health.js": {

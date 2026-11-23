@@ -59,6 +59,7 @@ import { resolvedCurrentBodyweight } from "./bodyweight.js";
 import { withMorningReadiness } from "./brain/read-adherence.js";
 import { getRecoverySummary } from "./coach.js";
 import { crossTrainingDays, crossTrainingNoun } from "./cross-training-day.js";
+import { DAY_SHIFT_STEP_KCAL, inSteps } from "./day-energy-step.js";
 import type { CrossTrainingDay } from "./cross-training-day.js";
 import type { LoadFamily } from "./endurance-sports.js";
 import { weekRunClosures } from "./flexible-training-agenda.js";
@@ -88,8 +89,9 @@ export const DAY_SHIFT_SHARE = 0.5;
 export const DAY_SHIFT_CAP_SHARE = 0.15;
 /** A week whose largest shift is smaller than this is not worth different numbers; so is a smaller outcome move. */
 export const DAY_SHIFT_MIN_KCAL = 50;
-/** Every shift, plan and outcome, is a multiple of this: the costs are too rough to say a day to the ten. */
-export const DAY_SHIFT_STEP_KCAL = 50;
+// Every shift, plan and outcome, is a multiple of DAY_SHIFT_STEP_KCAL (day-energy-step.ts,
+// shared with the meal plan's split so a plan day lands on the same number).
+export { DAY_SHIFT_STEP_KCAL };
 /** A planned run done this much longer or shorter (as a share of the planned distance)… */
 export const RUN_DISTANCE_CHANGE_SHARE = 0.25;
 /** …and by at least this many km is costed at its logged distance. */
@@ -151,8 +153,7 @@ const crossWords = (i: ImpactLike) =>
   i.family === "snow" ? (/ski/i.test(String(i.type ?? "")) ? "the skiing" : "the session") : (CROSS_WORDS[i.family] ?? "the session");
 const crossRate = (family: LoadFamily) => (family === "walk" ? WALK_NET_KCAL_PER_KG : CROSS_NET_KCAL_PER_KG);
 const kcalWords = (n: number) => (Math.round(n / 10) * 10).toLocaleString("en-US");
-// `|| 0` folds a rounded -0 into 0.
-const fifties = (n: number) => Math.round(n / DAY_SHIFT_STEP_KCAL) * DAY_SHIFT_STEP_KCAL || 0;
+const fifties = inSteps;
 /** The cap as a multiple of the step, so a rounded day never passes it. */
 const capInSteps = (average: number) =>
   Math.floor((average * DAY_SHIFT_CAP_SHARE) / DAY_SHIFT_STEP_KCAL) * DAY_SHIFT_STEP_KCAL;
@@ -496,26 +497,45 @@ function shapeWeek(week: string, today: string, average: number): WeekShape {
 export function dayEnergyTarget(date: string, averageKcal: number, opts: { today?: string } = {}): DayEnergy {
   const today = opts.today || localDateISO();
   const average = Math.round(Number(averageKcal));
-  const flat: DayEnergy = {
-    date,
-    average_kcal: average,
-    kcal: average,
-    shift_kcal: 0,
-    outcome_shift_kcal: 0,
-    work: [],
-    outcome_work: [],
-    words: null,
-  };
-  if (!Number.isFinite(average) || average <= ABSOLUTE_KCAL_FLOOR) return flat;
-  let shape: WeekShape;
+  if (!Number.isFinite(average) || average <= ABSOLUTE_KCAL_FLOOR) return flatDay(date, average);
+  return dayFromShape(weekShapeOf(date, today, average), date, today, average);
+}
+
+/**
+ * The seven days of the Monday-to-Sunday week holding `date`, each exactly as
+ * `dayEnergyTarget` reads it, from ONE shape of the week (repo/fuel-week.ts lays them out).
+ * Never throws: a week that cannot be shaped answers the average on every day.
+ */
+export function dayEnergyWeek(date: string, averageKcal: number, opts: { today?: string } = {}): DayEnergy[] {
+  const today = opts.today || localDateISO();
+  const average = Math.round(Number(averageKcal));
+  const monday = mondayOf(date);
+  const dates = Array.from({ length: 7 }, (_, i) => (i === 0 ? monday : (addDaysISO(monday, i) ?? monday)));
+  if (!Number.isFinite(average) || average <= ABSOLUTE_KCAL_FLOOR) return dates.map((d) => flatDay(d, average));
+  const shape = weekShapeOf(date, today, average);
+  return dates.map((d) => dayFromShape(shape, d, today, average));
+}
+
+function flatDay(date: string, average: number): DayEnergy {
+  return { date, average_kcal: average, kcal: average, shift_kcal: 0, outcome_shift_kcal: 0, work: [], outcome_work: [], words: null };
+}
+
+/** The shape of the week holding `date`, or null when it cannot be shaped. */
+function weekShapeOf(date: string, today: string, average: number): WeekShape | null {
   try {
     const week = mondayOf(date);
     // Memoized per request: requestMemo serves an entry only while no row has been written
     // since, so a session or activity logged in between is always read.
-    shape = requestMemo(`day_energy_week:${week}|${today}|${average}`, () => shapeWeek(week, today, average), copyDeep);
+    return requestMemo(`day_energy_week:${week}|${today}|${average}`, () => shapeWeek(week, today, average), copyDeep);
   } catch {
-    return flat;
+    return null;
   }
+}
+
+/** One day's energy read off its week's shape. */
+function dayFromShape(shape: WeekShape | null, date: string, today: string, average: number): DayEnergy {
+  const flat = flatDay(date, average);
+  if (!shape) return flat;
   const day = shape.days[date];
   if (!day) return flat;
   if (!day.shift && !day.outcome) return { ...flat, work: day.work };

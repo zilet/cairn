@@ -446,6 +446,7 @@ export const CLIENT_OUTPUTS = [
   { source: "src/client/ask-card-client.ts", output: "public/js/ask-card-client.js" },
   { source: "src/client/ask-card-controller.ts", output: "public/js/ask-card-controller.js" },
   { source: "src/client/fuel-today-model.ts", output: "public/js/fuel-today-model.js" },
+  { source: "src/client/fuel-week-client.ts", output: "public/js/fuel-week-client.js" },
   { source: "src/client/fuel-today-client.ts", output: "public/js/fuel-today-client.js" },
   { source: "src/client/fuel-today-controller.ts", output: "public/js/fuel-today-controller.js" },
   { source: "src/client/fuel-meals-client.ts", output: "public/js/fuel-meals-client.js" },
@@ -727,6 +728,7 @@ export const BUNDLES = [
       // Today's food (v2 wave 2). renderIntake mounts these only from inside a
       // function, so they may follow the screen too.
       "public/js/fuel-today-model.js",
+      "public/js/fuel-week-client.js",
       "public/js/fuel-today-client.js",
       "public/js/fuel-today-controller.js",
       "public/js/fuel-meals-client.js",

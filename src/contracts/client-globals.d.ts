@@ -6480,6 +6480,29 @@ declare global {
     demand: import("./client.js").ClientDayFuelDemand | null;
     /** The day's food guides as rows and weekly lines; null when the read carries none. */
     guides: ClientFuelGuidesModel | null;
+    /** The week the day's number belongs to (fuel-week-client.ts); null on an older read. */
+    week: ClientFuelWeekModel | null;
+  };
+  /** One day of the week strip: `bar`/`tick` are -1..1 of the half-height from the average line. */
+  type ClientFuelWeekDayModel = {
+    date: string;
+    weekday: string;
+    name: string;
+    tag: string;
+    kcal: number;
+    when: "past" | "today" | "ahead";
+    bar: number;
+    tick: number | null;
+    words: string;
+    logged: string | null;
+    label: string;
+  };
+  type ClientFuelWeekModel = {
+    average: number;
+    words: string;
+    sumWords: string;
+    today: string;
+    days: ClientFuelWeekDayModel[];
   };
   /** One guide row: eaten grams (null = unknown), the guide in words, the note, the track geometry (0-1). */
   type ClientFuelGuideRow = {
@@ -6576,12 +6599,16 @@ declare global {
       mealNumsText(totals: { kcal?: unknown; protein_g?: unknown }): string;
     };
     CairnFuelToday: {
-      todayHtml(model: ClientFuelTodayModel, opts?: { countUp?: boolean }): string;
+      todayHtml(model: ClientFuelTodayModel, opts?: { countUp?: boolean; selected?: string | null }): string;
       demandHtml(model: ClientFuelTodayModel): string;
       carbsHtml(model: ClientFuelTodayModel): string;
       guidesHtml(model: ClientFuelTodayModel, countUp?: boolean): string;
       skeletonHtml(): string;
       errorHtml(): string;
+    };
+    CairnFuelWeek: {
+      weekHtml(week: ClientFuelWeekModel, opts?: { selected?: string | null; enter?: boolean }): string;
+      detailHtml(week: ClientFuelWeekModel, selected?: string | null): string;
     };
     CairnFuelTodayController: {
       dayKey(date: string): string;
@@ -6636,6 +6663,7 @@ declare global {
   }
   declare const CairnFuelTodayModel: Window["CairnFuelTodayModel"];
   declare const CairnFuelToday: Window["CairnFuelToday"];
+  declare const CairnFuelWeek: Window["CairnFuelWeek"];
   declare const CairnFuelTodayController: Window["CairnFuelTodayController"];
   declare const CairnFuelMeals: Window["CairnFuelMeals"];
   declare const CairnFuelMealsController: Window["CairnFuelMealsController"];

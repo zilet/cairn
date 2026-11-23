@@ -388,7 +388,7 @@ compresses worse alone (about 1.5x), so only a surface big enough to pay for its
 | `shell/` | shell | overlays, sheets, toast, save bar, tab bar, desktop nav, detail overlay, responsive, identity, five-home nav |
 | `today/` | Today | header strip, date control, Garmin strip, the Brief |
 | `session/` | Session | exercise cards, rest timer, the Session destination |
-| `fuel/` | Fuel | meal plans, planner, meal sheet, meal card, Train › Intake's today |
+| `fuel/` | Fuel | meal plans, planner, meal sheet, meal card, Train › Intake's today and the week's fuel strip |
 | `ask/` | Ask | chat, capture, changes feed, ask cards, what-if |
 | `train/` | Train | plan editor, progress, editorial progress, endurance, program, strength, overview |
 | `horizon/` | Horizon | race view, the horizon |
@@ -1079,6 +1079,21 @@ open it). Top to bottom, as the day reads:
   Under the meters, `.fuel-today-left` says what is left of the day's number roundly ("About 900
   kcal left for today."), and `.fuel-today-daynum` is the server's sentence on why today's number
   differs from the weekly average. A "Why" opens with where the grams came from (`.fuel-why-from`).
+  When the read carries the week (`fuel_week`), that sentence moves under **the week's fuel**
+  (`.fuel-week`, `fuel-week-client.ts`, `fuel/week.css`): one `.fuel-week-words` line of the
+  server's words, then `.fuel-week-strip`, seven `.fuel-week-day` buttons (`aria-pressed`, a full
+  sentence as `aria-label`) over one hairline `.fuel-week-avg` in `--line-strong`. Each column's
+  `.fuel-week-bar` grows up (`.is-up`) or down (`.is-down`) from that line by `--h` (the day's move on
+  one scale: the larger of 15% of the average, the week's largest move and the furthest a logged day
+  sat from it), a day at the average a short mark on the line (`.is-flat`); lived days solid
+  `--s-fuel`, days ahead a `--d-fuel` outline, today ringed in `--dawn` with its weekday in dawn, the
+  chosen day on `--surface2`; under it the weekday in mono and the work as one `--text-2xs` word
+  (`.fuel-week-tag`: Long, Run, Lift, Ride, Rest). A complete logged day carries a short neutral
+  `.fuel-week-tick` (`--ink2`, at `--t`), never a colour state. `.fuel-week-detail` (`aria-live`)
+  says the chosen day's number and its sentence, and "About 2,240 kcal logged." on a complete lived
+  day; a tap patches only it and the pressed state, so focus stays put. The bars grow out of the
+  line once on a cold paint (`.is-entering`, `--dur-3`), never under reduced motion. No number on a
+  bar, no percentage, no over/under, no red or green.
   Last on the card, when there are enough complete days, is the two-week read (`.fuel-pattern`):
   a label, the one lever and its reason, a second lab-led note when there is one, one quiet line
   per nutrient, and the standing caveat about what a log leaves out (`.fuel-pattern-caveat`). A payload with no guides

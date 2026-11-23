@@ -159,7 +159,11 @@
   }
 
   // The day's number and why it differs from the weekly average, in the server's words.
-  function dayNumberHtml(m: Model): string {
+  // With the week's strip (fuel-week-client.ts) the sentence lives under the strip instead,
+  // as the selected day's (today's until a tap), so it is said once.
+  type DayOpts = { selected?: string | null; enter?: boolean };
+  function dayNumberHtml(m: Model, opts: DayOpts = {}): string {
+    if (m.week) return CairnFuelWeek.weekHtml(m.week, { selected: opts.selected, enter: opts.enter });
     return m.energy.dayWords ? `<p class="fuel-today-line fuel-today-daynum">${escHtml(m.energy.dayWords)}</p>` : "";
   }
 
@@ -204,13 +208,15 @@
    * carbs · fat · fiber as guide rows. A day with nothing on it draws no meter at
    * all — absent, never low. `countUp` marks the numerals for the cold-paint count-up.
    */
-  function todayHtml(m: Model, opts: { countUp?: boolean } = {}): string {
+  function todayHtml(m: Model, opts: { countUp?: boolean; selected?: string | null } = {}): string {
     const countUp = !!opts.countUp;
+    // The week's strip enters once, with the cold paint's count-up (never under reduced motion).
+    const dayOpts: DayOpts = { selected: opts.selected, enter: countUp };
     if (!m.count) {
       return `<section class="fuel-today reveal" style="--i:0" aria-labelledby="fuelTodayTitle">
         ${headHtml(m)}
         <p class="fuel-today-empty">${escHtml(EMPTY_LINE)}</p>
-        ${leftHtml(m)}${dayNumberHtml(m)}${demandHtml(m)}${carbsHtml(m)}${patternHtml(m)}
+        ${leftHtml(m)}${dayNumberHtml(m, dayOpts)}${demandHtml(m)}${carbsHtml(m)}${patternHtml(m)}
       </section>`;
     }
     const pending =
@@ -231,7 +237,7 @@
         ${meterHtml("Protein", m.protein.value, m.protein.anchor, "g", countUp)}
         ${meterHtml("Energy", m.energy.value, m.energy.of, "kcal", countUp)}
       </dl>
-      ${leftHtml(m)}${toGo}${dayNumberHtml(m)}${explainHtml(m)}${guidesHtml(m, countUp)}
+      ${leftHtml(m)}${toGo}${dayNumberHtml(m, dayOpts)}${explainHtml(m)}${guidesHtml(m, countUp)}
       ${pending}${band}${demandHtml(m)}${patternHtml(m)}
     </section>`;
   }

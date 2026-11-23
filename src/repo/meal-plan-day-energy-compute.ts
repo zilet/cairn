@@ -7,6 +7,7 @@ import { type MealPlanDayEnergy, mealPlanWeekDates, shapeMealPlanDayEnergy } fro
 import { mealPlanFloorReference } from "./nutrition.js";
 import { ABSOLUTE_KCAL_FLOOR } from "./nutrition-safety.js";
 import { localDateISO } from "./shared.js";
+import { addDaysISO, mondayOf } from "../lib/dates.js";
 
 /**
  * The lowest number a plan day may carry: the absolute calorie floor, raised to a running
@@ -43,7 +44,15 @@ export function computeMealPlanDayEnergy(opts: {
       const day = dayEnergyTarget(date, average, { today });
       return { date, kcal: day.kcal, work: day.work };
     });
-    return shapeMealPlanDayEnergy({ from: dates[0], average, floor: mealPlanDayFloor(today), days });
+    // Each day is that date's own number (the one Intake shows); a window straddling two
+    // weeks settles on the week not yet opened first, whose numbers are still provisional.
+    return shapeMealPlanDayEnergy({
+      from: dates[0],
+      average,
+      floor: mealPlanDayFloor(today),
+      days,
+      settleFirstFrom: addDaysISO(mondayOf(today), 7),
+    });
   } catch {
     return null;
   }

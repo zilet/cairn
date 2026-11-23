@@ -484,6 +484,8 @@ export interface ClientDayIntake {
   fuel_demand?: ClientDayFuelDemand | null;
   // The day's food guides (src/repo/fuel-guides.ts) on GET /nutrition/day. Additive.
   guides?: import("./fuel.js").ClientFuelGuides | null;
+  // The week the day's number belongs to (src/repo/fuel-week.ts). Additive.
+  fuel_week?: import("./fuel.js").ClientFuelWeek | null;
 }
 
 export interface ClientNutritionTargetProvenance {

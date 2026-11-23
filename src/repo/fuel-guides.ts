@@ -26,6 +26,7 @@ import { fiberFloorG, FIBER_FLOOR_G } from "./fiber-floor.js";
 import { fuelGuideWhys } from "./fuel-guide-why.js";
 import type { FuelWhy } from "./fuel-guide-why.js";
 import { fuelPattern } from "./fuel-pattern.js";
+import { fuelWeekRead } from "./fuel-week.js";
 import type { FuelPattern } from "./fuel-pattern.js";
 import { athleteUnits } from "./settings.js";
 import { fuelHealthLeans } from "./fuel-ideas.js";
@@ -733,7 +734,8 @@ export function dayFuelGuides(date?: string, opts: FuelGuidesOpts = {}): FuelGui
 
 /**
  * GET /nutrition/day's body and the MCP get_day_intake tool's (MCP ⊆ REST): the day's log,
- * the day-shape demand read and the guides, each derived once.
+ * the day-shape demand read, the guides and the week the day's number belongs to, each
+ * derived once.
  */
 export function nutritionDayRead(date?: string, opts: { today?: string } = {}) {
   const today = opts.today || localDateISO();
@@ -746,5 +748,8 @@ export function nutritionDayRead(date?: string, opts: { today?: string } = {}) {
   } catch {
     guides = null;
   }
-  return { ...intake, fuel_demand, guides };
+  // The week the day's number belongs to (repo/fuel-week.ts): the seven days around the
+  // accepted average, for the strip under Intake's energy meter. Additive; null with no target.
+  const fuel_week = intake.target ? fuelWeekRead(intake.date, intake.target.average_kcal ?? intake.target.kcal, { today }) : null;
+  return { ...intake, fuel_demand, guides, fuel_week };
 }

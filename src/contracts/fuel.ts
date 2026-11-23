@@ -305,3 +305,34 @@ export interface ClientFuelGuides {
   explain?: ClientFuelExplain[];
   pattern?: ClientFuelPattern | null;
 }
+
+/**
+ * The week the day's energy number belongs to (src/repo/fuel-week.ts), served as `fuel_week`
+ * on `GET /api/nutrition/day` and `get_day_intake`: the seven days of the Monday-to-Sunday
+ * week, each with its own number around the accepted average. `logged_kcal` is present only
+ * on a lived day whose log reads complete — a partial or unlogged day is null (absent, never
+ * low) — and is a fact beside the day's number, never a grade against it.
+ */
+export interface ClientFuelWeekDay {
+  date: string;
+  weekday: string;
+  kcal: number;
+  shift_kcal: number;
+  outcome_shift_kcal: number;
+  work: string[];
+  outcome_work: string[];
+  /** One short word for the strip's column ("Long", "Run", "Lift", "Ride", "Rest"). */
+  tag: string;
+  words: string | null;
+  when: "past" | "today" | "ahead";
+  logged_kcal: number | null;
+}
+export interface ClientFuelWeek {
+  week_of: string;
+  average_kcal: number;
+  week_kcal: number;
+  logged_extra_kcal: number;
+  days: ClientFuelWeekDay[];
+  words: string;
+  sum_words: string;
+}

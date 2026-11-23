@@ -2176,7 +2176,11 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(clientGlobals, /CairnFuelToday:/);
   assert.match(clientGlobals, /CairnFuelTodayController:/);
   assert.match(clientGlobals, /mount\(host: Element, deps: ClientFuelTodayDeps\): ClientFuelRefreshHandle/);
-  assert.match(clientGlobals, /todayHtml\(model: ClientFuelTodayModel, opts\?: \{ countUp\?: boolean \}\): string/);
+  assert.match(
+    clientGlobals,
+    /todayHtml\(model: ClientFuelTodayModel, opts\?: \{ countUp\?: boolean; selected\?: string \| null \}\): string/
+  );
+  assert.match(clientGlobals, /CairnFuelWeek:/);
   assert.match(clientGlobals, /CairnIdeaCardController:/);
   assert.match(clientGlobals, /CairnMealRows: ClientMealRowsApi/);
   assert.match(clientGlobals, /declare const mealRowHtml: Window\["mealRowHtml"\]/);
@@ -5271,7 +5275,10 @@ test("frontend TypeScript contract gate is dependency-light and backed by server
   assert.match(planEditorControllerSource, /mountSaveBar\(\{/);
   assert.match(planEditorControllerSource, /api\("\/plan",\s*\{ method: "PUT"/);
   assert.match(planEditorControllerSource, /CairnPlanEditorController/);
-  assert.match(fuelTodaySource, /function todayHtml\(m: Model, opts: \{ countUp\?: boolean \} = \{\}\): string/);
+  assert.match(
+    fuelTodaySource,
+    /function todayHtml\(m: Model, opts: \{ countUp\?: boolean; selected\?: string \| null \} = \{\}\): string/
+  );
   assert.match(fuelTodaySource, /CairnFuelToday/);
   assert.match(fuelTodayControllerSource, /function mountFuelToday\(host: Element, deps: Deps\): ClientFuelRefreshHandle/);
   assert.match(fuelTodayControllerSource, /CairnUiActions\.mount\(host, "fuel-today"/);

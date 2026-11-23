@@ -622,7 +622,7 @@ export function renderMealPlanDayEnergy(energy: MealPlanDayEnergy | null | undef
     })
     .join("\n");
   return `
-EACH DAY'S OWN NUMBER (computed by Cairn from this week's planned training; the accepted target of ${kcal(energy.average_kcal)} kcal is the week's AVERAGE):
+EACH DAY'S OWN NUMBER (computed by Cairn from this week's planned training, in steps of 50 kcal — normally the same number the athlete sees for that date on Intake; the accepted target of ${kcal(energy.average_kcal)} kcal is the week's AVERAGE):
 ${rows}
   Every day not listed sits at ${kcal(energy.average_kcal)} kcal.
 - daily_kcal stays ${kcal(energy.average_kcal)}, the accepted weekly average — never set it to any one day's number.

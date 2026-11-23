@@ -29,6 +29,10 @@
     let painted = "";
     let counted = false;
     let refreshing = false;
+    // The week strip's chosen day (null: today) and the week it was chosen in, kept across
+    // repaints so a refresh never jumps the strip back.
+    let selected: string | null = null;
+    let week: ClientFuelWeekModel | null = null;
 
     const live = (gen: number): boolean => gen === generation && host.isConnected;
     const setRefreshing = (on: boolean): void => {
@@ -45,8 +49,10 @@
       const sig = JSON.stringify(model);
       if (sig === painted) return;
       painted = sig;
+      week = model.week;
+      if (selected && !week?.days.some((d) => d.date === selected)) selected = null;
       const countUp = !counted && !deps.reducedMotion();
-      host.innerHTML = CairnFuelToday.todayHtml(model, { countUp });
+      host.innerHTML = CairnFuelToday.todayHtml(model, { countUp, selected });
       if (countUp) deps.runCountUps?.(host);
       counted = true;
     }
@@ -91,13 +97,27 @@
       return Promise.all([bandRead, dayRead]).then(() => undefined);
     }
 
+    // A tap on a day of the week strip: that day's number and sentence in place. Only the
+    // pressed state and the detail change, so focus stays on the tapped column.
+    function selectDay(el: HTMLElement): void {
+      const date = el.getAttribute("data-fuel-week-day") || "";
+      const strip = host.querySelector("[data-fuel-week]");
+      if (!week || !strip || !week.days.some((d) => d.date === date)) return;
+      selected = date;
+      for (const button of strip.querySelectorAll("[data-fuel-week-day]")) {
+        button.setAttribute("aria-pressed", String(button.getAttribute("data-fuel-week-day") === date));
+      }
+      const detail = strip.querySelector("[data-fuel-week-detail]");
+      if (detail) detail.innerHTML = CairnFuelWeek.detailHtml(week, date);
+    }
+
     function refresh(): Promise<void> {
       deps.swrInvalidate(dayKey(deps.date));
       return load();
     }
 
     const teardown = CairnUiActions.mount(host, "fuel-today", ({ delegate }) => {
-      delegate("click", { "fuel-today-retry": () => void load() });
+      delegate("click", { "fuel-today-retry": () => void load(), "fuel-week-day": selectDay });
       void load();
       return () => {
         generation++;

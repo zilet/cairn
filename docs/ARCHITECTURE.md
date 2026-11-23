@@ -1824,7 +1824,14 @@ untouched, and the offline `stub` agent is unchanged. A test that needs its own 
   the split is computed server-side once per draft, stored as `parsed.day_energy`, rebuilt onto each
   day on every write (a model's or client's copy is discarded), and a moved day is verified against
   its own number and `mealPlanDayFloor` while `daily_kcal` stays the weekly average for every weekly
-  reader; a plan with no split verifies exactly as before. Meal ideas may name one carb side from
+  reader; a plan with no split verifies exactly as before. **One number for one date**: a plan day
+  carries the number Intake shows for that date, in the same fifties (`DAY_SHIFT_STEP_KCAL`, shared
+  through `day-energy-step.ts`); only the day floor (raised to the lowest such number at or above
+  it) or the window's balance moves a day off it. The plan's seven food days start the day after the
+  draft, so they can straddle two weeks that each balance only over their own days; whatever the
+  window carries over or under seven times the average is settled one step at a time on the days on
+  that side, furthest out first and never past the average, the week not yet opened first
+  (`settleFirstFrom`: its numbers are still provisional and not on Intake's strip). Meal ideas may name one carb side from
   the athlete's own log and say what the day still has open (`src/repo/fuel-ideas-day.ts`). `withDayEnergy(intake)` lays the number over a day read (`target.kcal`
   the day's, `target.average_kcal` the accepted number, `target.day_words` the sentence that says
   why) for exactly the day-scoped readers: `nutritionDayRead` (REST, MCP, the Today glance, the
@@ -1833,6 +1840,20 @@ untouched, and the offline `stub` agent is unchanged. A test that needs its own 
   floors, `nutritionProgress`, the meal plan's `daily_kcal` and its verify floors, the two-week
   pattern's energy line) keeps reading the accepted number through `getDayIntake` /
   `computeGoalCheck`; never lay the day's number over one of those.
+- **The week's fuel** (`src/repo/fuel-week.ts`, `fuel_week` on `nutritionDayRead`, so GET
+  `/api/nutrition/day`, `get_day_intake`, the Intake fan-in and Today's all carry it) lays out the
+  Monday-to-Sunday week the day's number belongs to, so a bigger long-run day or a lighter rest day
+  reads as part of one week. It is a read over `dayEnergyWeek` (one shape of the week, the same
+  request memo `dayEnergyTarget` uses), never a second split: each day is exactly its own day read's
+  number, shift, work and sentence, with `when` (past / today / ahead) and a one-word `tag` for the
+  strip's column; `average_kcal` and `week_kcal` (seven times it, what the plan's seven numbers add
+  up to; `logged_extra_kcal` is what logged work added on its own days) and `sum_words` say so
+  plainly. What was eaten rides along only as `logged_kcal` on a lived day whose log reads complete
+  (`completedIntakeRange` → `classifyIntakeDay`, today included once it is): a partial or unlogged
+  day is null, absent and never low, and nothing is ever graded against the day's number. The line
+  above the strip (`words`) is composed from the numbers — the average, the day given most (with its
+  work) and the day given least — and rotates through `pickDayVariant`. It costs the Intake open one
+  statement (the week's food notes, read once).
 - **Carbohydrate is periodised to the day's work, inside the target** (`src/repo/fuel-demand.ts`).
   With a carb basis (canonical bodyweight + the target in force, `dayIntakeTarget`), each demand day
   carries `carbs {tier, g_per_kg, grams, basis}`: the ACSM/IOC g/kg bands (light 3–5, moderate 5–7,

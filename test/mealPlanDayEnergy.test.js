@@ -17,7 +17,8 @@ import {
   shapeMealPlanDayEnergy,
 } from "../dist/repo/meal-plan-day-energy.js";
 import { validateMealPlanForPersistence } from "../dist/repo/nutrition.js";
-import { draftMealPlanDayEnergy } from "../dist/repo/meal-plan-day-energy-compute.js";
+import { computeMealPlanDayEnergy, draftMealPlanDayEnergy } from "../dist/repo/meal-plan-day-energy-compute.js";
+import { dayEnergyTarget } from "../dist/repo/day-energy.js";
 import { mealPlanFloorPrecheck, mealPlanFloorViolations } from "../dist/repo/verify-floors.js";
 import { assessMealPlanAdequacy } from "../dist/repo/nutrition-safety.js";
 import { buildMealPlanPrompt, renderMealPlanDayEnergy } from "../dist/prompt.js";
@@ -456,4 +457,69 @@ test("a lifting week drafts with its own split, and the prompt shows it", () => 
   const prompt = buildMealPlanPrompt();
   assert.match(prompt, /EACH DAY'S OWN NUMBER/);
   for (const day of split.days) assert.ok(prompt.includes(day.date), `the prompt lists ${day.date}`);
+});
+
+// ------------------------------------------------------------- one number for one date
+
+test("for a seeded week every plan day carries the number Intake shows for that date, and the window keeps its average", () => {
+  const today = localDateISO();
+  repo.setProfile({
+    age: 44,
+    height_cm: 170,
+    weight_lb: 153,
+    sex: "male",
+    activity_factor: 1.55,
+    goal_mode: "maintain",
+    strength_schedule: { days: [{ dow: 1 }, { dow: 4 }], source: "athlete", updated_at: today },
+  });
+  repo.logWeight(153, today);
+  repo.savePlanDay(1, "Full body", "strength", [{ exercise: "Back Squat", sets: 3, reps: "5" }], {
+    day_type: "training",
+  });
+  // An average that is not a round ten: a day said "to the ten" would read 2,260 where
+  // Intake says 2,263.
+  for (const average of [2200, 2213]) {
+    for (const draftDate of [today, addDaysISO(today, 3)]) {
+      const split = computeMealPlanDayEnergy({ average, draftDate, today });
+      assert.ok(split, `a lifting week moves (draft ${draftDate}, average ${average})`);
+      const dates = datesFrom(addDaysISO(draftDate, 1));
+      const kcalOn = (date) => split.days.find((d) => d.date === date)?.kcal ?? average;
+      for (const date of dates) {
+        assert.equal(kcalOn(date), dayEnergyTarget(date, average, { today }).kcal, `${date} is Intake's number for it`);
+      }
+      const total = dates.reduce((sum, date) => sum + kcalOn(date), 0);
+      assert.ok(Math.abs(total - 7 * average) <= 50, `the window keeps its average to within one step (${total - 7 * average})`);
+    }
+  }
+});
+
+test("a window straddling two weeks that do not balance settles on the week not yet opened, in fifties", () => {
+  const from = "2026-11-19"; // a Thursday: Thu–Sun this week, Mon–Wed the next
+  const dates = datesFrom(from);
+  // Over by 100: this week's long run and lighter Sunday, then a lifting Tuesday ahead.
+  const raw = [0, 0, 300, -100, -100, 100, -100].map((shift, i) => ({
+    date: dates[i],
+    kcal: AVERAGE + shift,
+    work: shift > 0 ? ["the long run"] : [],
+  }));
+  const split = shapeMealPlanDayEnergy({ from, average: AVERAGE, floor: 1500, days: raw, settleFirstFrom: dates[4] });
+  const kcalOn = (date) => split.days.find((d) => d.date === date)?.kcal ?? AVERAGE;
+  assert.deepEqual(
+    dates.map(kcalOn),
+    [2200, 2200, 2500, 2100, 2100, 2200, 2100],
+    "this week's days keep their numbers; next Tuesday gives back what the window carried over"
+  );
+  for (const day of split.days) assert.equal(Math.abs(day.shift_kcal) % 50, 0, `${day.date} moves in fifties`);
+  // With no room in the later week, the visible week settles, furthest out first.
+  const tight = shapeMealPlanDayEnergy({
+    from,
+    average: AVERAGE,
+    floor: 1500,
+    days: [0, 0, 100, -200, 0, 50, 0].map((shift, i) => ({ date: dates[i], kcal: AVERAGE + shift })),
+    settleFirstFrom: dates[4],
+  });
+  const tightOn = (date) => tight.days.find((d) => d.date === date)?.kcal ?? AVERAGE;
+  assert.equal(dates.reduce((sum, date) => sum + tightOn(date), 0), 7 * AVERAGE, "the window still keeps its average");
+  assert.equal(tightOn(dates[3]), 2050, "the lighter day of the visible week takes the step back up");
+  assert.equal(tightOn(dates[5]), 2250, "a later day above the average is never pushed further out");
 });

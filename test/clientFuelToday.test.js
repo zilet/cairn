@@ -12,7 +12,15 @@ const TODAY = "2026-04-25";
 
 function load(globals = {}) {
   const win = loadClientModule(
-    ["html-utils", "date-utils", "ui-actions-client", "fuel-today-model", "fuel-today-client", "fuel-today-controller"],
+    [
+      "html-utils",
+      "date-utils",
+      "ui-actions-client",
+      "fuel-today-model",
+      "fuel-week-client",
+      "fuel-today-client",
+      "fuel-today-controller",
+    ],
     { globals }
   );
   return win;

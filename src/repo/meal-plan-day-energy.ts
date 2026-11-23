@@ -6,9 +6,10 @@
 // is SERVER-OWNED end to end:
 //
 //   - `computeMealPlanDayEnergy` (meal-plan-day-energy-compute.ts) asks `dayEnergyTarget`
-//     for each date of the plan's week, raises any day under the day floor to that floor and
-//     takes what that cost back off the week's bigger days, and keeps only the days that
-//     moved. A week that does not move (nothing planned, a week the read cannot shape)
+//     for each date of the plan's week, so a plan day carries the SAME number Intake shows
+//     for that date (`shapeMealPlanDayEnergy`: in the same fifties; only the day floor, or
+//     a window straddling two weeks that do not balance, moves a day off it, the later
+//     week's days first), and keeps only the days that moved. A week that does not move (nothing planned, a week the read cannot shape)
 //     yields nothing, and the plan is planned and checked flat, exactly as before.
 //   - The result is stored once, at the drafting op, as `parsed.day_energy` — never taken
 //     from model output (the drafting op strips any `day_energy` the model wrote and
@@ -31,6 +32,7 @@
 // Everything here is PURE (no database, no clock) so the persistence gate, the verify
 // pre-check and the readers share one mapping.
 import { ABSOLUTE_KCAL_FLOOR } from "./kcal-floor.js";
+import { DAY_SHIFT_STEP_KCAL, inSteps } from "./day-energy-step.js";
 import { addDaysISO } from "../lib/dates.js";
 
 export const MEAL_PLAN_DAY_ENERGY_VERSION = 1;
@@ -61,8 +63,6 @@ export interface MealPlanDayEnergy {
 const WEEKDAY_KEYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
 
-const round10 = (n: number) => Math.round(n / 10) * 10;
-const ceil10 = (n: number) => Math.ceil(n / 10) * 10;
 
 /** "mon" … "sun" for a weekday label, or null when the label names no weekday. */
 export function weekdayKeyOfLabel(label: unknown): string | null {
@@ -102,19 +102,29 @@ function datesFrom(from: string): string[] {
 /**
  * Shape the week from each date's raw day number. PURE.
  *
- * A day under `floor` is raised to it; then the whole window is re-centred on the
- * average: whatever it carries over seven times the average (a floor raise, or two partial
- * weeks that do not mirror each other) is taken back off the days above the average, and
- * whatever it falls short is given to the days below, in proportion and never past the
- * average. The stored days sum to within 10 kcal of seven times the average. An average at
- * or under the floor plans flat (null). Only days whose number ends up off the average are
- * kept; nothing moved is null.
+ * ONE NUMBER FOR ONE DATE: a plan day carries the number Intake shows for that date
+ * (`dayEnergyTarget`), said in the same fifties (DAY_SHIFT_STEP_KCAL: the average plus a
+ * multiple of the step). Only two things move a day off it:
+ *   - the day floor: a day under `floor` is raised to the lowest such number at or above it;
+ *   - the window's balance: the seven days run from the day after the draft, so they can
+ *     straddle two Monday-to-Sunday weeks, each balanced only over its own days, and a
+ *     floor raise adds energy too. Whatever the window carries over (or under) seven times
+ *     the average is settled one step at a time on the days on that side, the day furthest
+ *     out first, never past the average itself (days above only come down toward it, days
+ *     below only come up, so no day is pushed under the floor). Days from
+ *     `settleFirstFrom` on — a week that has not opened yet, whose own numbers are still
+ *     provisional and are not on Intake's strip — settle first, so the week the athlete
+ *     can see keeps its numbers wherever the later days have room.
+ * The stored days then sum to seven times the average (within one step when no day has
+ * room). An average at or under the floor plans flat (null). Only days whose number ends
+ * up off the average are kept; nothing moved is null.
  */
 export function shapeMealPlanDayEnergy(input: {
   from: string;
   average: number;
   floor: number;
   days: Array<{ date: string; kcal: number; work?: string[] }>;
+  settleFirstFrom?: string | null;
 }): MealPlanDayEnergy | null {
   const average = Math.round(Number(input.average));
   const floor = Math.max(ABSOLUTE_KCAL_FLOOR, Math.round(Number(input.floor) || 0));
@@ -123,52 +133,32 @@ export function shapeMealPlanDayEnergy(input: {
     (d) => ISO.test(String(d?.date)) && Number.isFinite(Number(d?.kcal)) && Number(d.kcal) > 0
   );
   if (!rows.length) return null;
-  const kcal = rows.map((d) => Number(d.kcal));
-  const n = kcal.length;
-  const sum = (list: number[]) => list.reduce((a, b) => a + b, 0);
-  for (let i = 0; i < n; i++) if (kcal[i] < floor) kcal[i] = floor;
-  // Re-centre the window on the average. The raw numbers come from up to two
-  // Monday-to-Sunday weeks, each balanced only over its own seven days, and a floor raise
-  // adds energy too; whatever the window carries over (or under) seven times the average
-  // goes back to the days on that side, in proportion to how far out they sit and never
-  // past the average itself. Days above the average only come down toward it, days below
-  // only come up toward it, so no day is ever pushed under the floor.
-  const residual = sum(kcal) - n * average;
-  if (residual > 0) {
-    const excess = kcal.map((k) => Math.max(0, k - average));
-    const room = sum(excess);
-    if (room > 0) {
-      const take = Math.min(residual, room);
-      for (let i = 0; i < n; i++) if (excess[i] > 0) kcal[i] -= (take * excess[i]) / room;
-    }
-  } else if (residual < 0) {
-    const deficit = kcal.map((k) => Math.max(0, average - k));
-    const room = sum(deficit);
-    if (room > 0) {
-      const give = Math.min(-residual, room);
-      for (let i = 0; i < n; i++) if (deficit[i] > 0) kcal[i] += (give * deficit[i]) / room;
-    }
-  }
-  // Each moved day is said to the ten; a day within a few kcal of the average IS the
-  // average (an average that is not a round ten must not read as a 3 kcal move).
-  const floorTen = ceil10(floor);
-  const values = kcal.map((k) => (Math.abs(k - average) < 5 ? average : Math.max(floorTen, round10(k))));
-  // Rounding can leave the window a few tens off; settle it ten at a time on the day
-  // farthest out on the drift's side, so the stored days sum to within 10 kcal of
-  // seven times the average.
-  let drift = sum(values) - n * average;
-  for (let guard = 0; Math.abs(drift) > 5 && guard < 200; guard++) {
-    let pick = -1;
-    for (let i = 0; i < n; i++) {
-      if (drift > 0) {
-        if (values[i] - 10 < floorTen) continue;
-        if (pick < 0 || values[i] > values[pick]) pick = i;
-      } else if (pick < 0 || values[i] < values[pick]) pick = i;
-    }
-    if (pick < 0) break;
-    const step = drift > 0 ? -10 : 10;
-    values[pick] += step;
-    drift += step;
+  const step = DAY_SHIFT_STEP_KCAL;
+  // The lowest number in the step at or above the floor.
+  const floorValue = average + Math.ceil((floor - average) / step) * step;
+  // Each day in the step around the average (a day's own number already is), raised to the floor.
+  const shift = rows.map((d) => inSteps(Number(d.kcal) - average));
+  const values = shift.map((s) => Math.max(floorValue, average + s));
+  const first = ISO.test(String(input.settleFirstFrom ?? "")) ? String(input.settleFirstFrom) : null;
+  let residual = values.reduce((a, b) => a + b, 0) - rows.length * average;
+  for (let guard = 0; residual !== 0 && guard < rows.length * 40; guard++) {
+    // Over: a day above the average gives a step; under: a day below takes one.
+    const side = residual > 0 ? 1 : -1;
+    const pool = rows.map((_, i) => i).filter((i) => (values[i] - average) * side >= step);
+    if (!pool.length) break;
+    const early = (i: number) => (first && rows[i].date >= first ? 0 : 1);
+    // A later, provisional week first; then the day furthest out; a tie goes to the day that
+    // started closer in (so the bigger day stays the bigger), then the earlier date.
+    pool.sort(
+      (a, b) =>
+        early(a) - early(b) ||
+        Math.abs(values[b] - average) - Math.abs(values[a] - average) ||
+        Math.abs(shift[a]) - Math.abs(shift[b]) ||
+        a - b
+    );
+    const i = pool[0];
+    values[i] -= side * step;
+    residual -= side * step;
   }
   const days: MealPlanEnergyDay[] = [];
   rows.forEach((row, i) => {
