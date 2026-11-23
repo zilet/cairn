@@ -8,6 +8,7 @@ user-facing guide is [`docs/HOSTING.md`](../../docs/HOSTING.md).
 |---|---|
 | [`template.json`](template.json) | The source of truth: image, service name, volume, health check, port, image auto updates, every variable with its description, and the marketplace name, category and description. |
 | [`overview.md`](overview.md) | The template page's overview text (the marketplace readme). |
+| [`icon.png`](icon.png) · [`icon.svg`](icon.svg) | The template's icon and the `cairn` service's icon: square, transparent background, toned to read on Railway's dark and light themes. |
 
 The template is the no-terminal path. The main path is the one-command installer
 (`curl -fsSL https://cairn.fit/install | sh`, choice 1, or `--target=railway`), which builds the same
@@ -60,12 +61,16 @@ Checked live on 2026-10-08 with Railway CLI 5.64:
 | Image auto updates | Dropped. |
 | Variable descriptions | Dropped (a project has nowhere to keep them). |
 
-Railway's public API has no call that edits a template's configuration, so the last two are a
+Railway's public API has no call that edits a template's configuration, so the last two, and the icons, are a
 one-time step in the template editor (the link the command prints):
 
 - **Auto updates:** the service → **Settings → Source → Auto Updates**: on, maintenance window
   **Night** (02:00–06:00 UTC).
 - **Descriptions:** each variable's description, copied from `template.json`.
+- **Icons:** the template's icon and the `cairn` service's icon (the service → **Settings**), both
+  set to the address of [`icon.png`](icon.png):
+  `https://raw.githubusercontent.com/zilet/cairn/main/deploy/railway/icon.png`. Railway requires the
+  template icon to publish and asks for a service icon on every service.
 
 Then **Save**.
 
