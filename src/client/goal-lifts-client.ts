@@ -20,7 +20,9 @@
   /** A line's spoken sentence: the lift, its now, its goal and where it is heading, in words. */
   function liftSaid(lift: ClientGoalLift): string {
     const dir = lift.direction_words ? `${lift.direction_words.charAt(0).toLowerCase()}${lift.direction_words.slice(1)}` : "";
-    const parts = [lift.now, lift.goal ? `goal ${lift.goal}` : "", dir, lift.direction_words ? lift.move_words : ""];
+    // A read that already names the goal in its direction words is not told twice.
+    const goalSaid = lift.goal && !(lift.direction_words || "").includes(lift.goal) ? `goal ${lift.goal}` : "";
+    const parts = [lift.now, goalSaid, dir, lift.direction_words ? lift.move_words : ""];
     return `${lift.label}, ${parts.filter(Boolean).join(", ")}${lift.note ? `. ${lift.note}` : ""}`;
   }
 

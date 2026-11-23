@@ -245,7 +245,7 @@ export interface WeekReadGoalLift {
   track: WeekReadGoalTrack | null;
   /** The journey's own trend call, in the goal row's vocabulary; null when unreadable. */
   direction: WeekReadGoalDirection | null;
-  /** "Moving toward" / "Holding" / "Drifting back" / "Reached"; "Last trained Oct 3" (direction null) with no fresh exposure. */
+  /** The direction finished with the goal: "Moving toward 200 lb" / "Holding, 200 lb is the goal" / "Drifting back from 200 lb" / "Reached 200 lb" (a reps goal: "Moving toward 3 × 8"); "Last trained Oct 3, goal 200 lb" (direction null) with no fresh exposure. */
   direction_words: string | null;
   /** "4 lb up since Oct 25"; "1.2 lb a week up" with no reading four weeks back; null when unreadable. */
   move_words: string | null;

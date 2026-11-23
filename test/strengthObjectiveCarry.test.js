@@ -115,7 +115,7 @@ test("no recorded swap: nothing is guessed from the plan, and a lift gone quiet 
   const goal = weekRead().goals.find((g) => g.key === "strength");
   assert.equal(goal.label, PENDLAY);
   assert.equal(goal.direction, null, "no call from a reading that old");
-  assert.match(goal.direction_words, /^Last trained /);
+  assert.match(goal.direction_words, /^Last trained .+, goal \d+ lb$/);
   assert.equal(goal.move_words, null);
   assert.equal(goal.carried_words, null);
 });

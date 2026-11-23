@@ -7739,6 +7739,7 @@ declare global {
         opts?: {
           enter?: boolean;
           selected?: string | null;
+          mark?: number;
           seasonHref?: string;
           changesHref?: string;
           team?: ClientTeamSeats | null;

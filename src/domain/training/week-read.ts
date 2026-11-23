@@ -524,6 +524,31 @@ const DIRECTION_WORDS: Record<WeekReadGoalDirection, string> = {
   reached: "Reached",
 };
 
+/**
+ * A lift goal's direction word finished with the goal itself, so the row says what the lift
+ * is moving toward: "Moving toward 200 lb", "Holding, 200 lb is the goal", "Drifting back
+ * from 200 lb", "Reached 200 lb". No goal text: the bare direction word.
+ */
+function liftDirectionWords(direction: WeekReadGoalDirection | null, goal: string | null): string | null {
+  if (!direction) return null;
+  if (!goal) return DIRECTION_WORDS[direction];
+  switch (direction) {
+    case "toward":
+      return `${DIRECTION_WORDS.toward} ${goal}`;
+    case "holding":
+      return `${DIRECTION_WORDS.holding}, ${goal} is the goal`;
+    case "back":
+      return `${DIRECTION_WORDS.back} from ${goal}`;
+    case "reached":
+      return `${DIRECTION_WORDS.reached} ${goal}`;
+  }
+}
+
+/** A lift with no fresh exposure: "Last trained Oct 3, goal 200 lb" (no direction is claimed). */
+function lastTrainedWords(date: string | null | undefined, goal: string | null, today: string): string {
+  return `Last trained ${dateWords(date, today)}${goal ? `, goal ${goal}` : ""}`;
+}
+
 type GoalThread = Pick<
   WeekReadGoal,
   | "id"
@@ -759,7 +784,7 @@ function strengthThread(
   let words: string | null = null;
   let move: string | null = null;
   if (row.reached) direction = "reached";
-  else if (stale) words = `Last trained ${dateWords(journey?.latest?.date, today)}`;
+  else if (stale) words = lastTrainedWords(journey?.latest?.date, goal != null ? load(goal) : null, today);
   else if (ago && now) {
     const delta = now.est_1rm - ago.est_1rm;
     direction = delta >= LIFT_TOWARD_LB ? "toward" : delta <= -LIFT_BACK_LB ? "back" : "holding";
@@ -786,7 +811,7 @@ function strengthThread(
     goal_words: goal != null ? load(goal) : null,
     track: goalTrack(startLb, now?.est_1rm ?? null, goal, ago?.est_1rm ?? null, agoWords, mark),
     direction,
-    direction_words: words ?? (direction ? DIRECTION_WORDS[direction] : null),
+    direction_words: words ?? liftDirectionWords(direction, goal != null ? load(goal) : null),
     move_words: move,
     href: WEEK_HREFS.program,
     carried_words: strengthCarriedWords(journey, today),
@@ -842,7 +867,7 @@ function repsThread(
   let words: string | null = null;
   let move: string | null = null;
   if (row.reached) direction = "reached";
-  else if (stale) words = `Last trained ${dateWords(reps.latest?.date, today)}`;
+  else if (stale) words = lastTrainedWords(reps.latest?.date, reps.goal_text ?? null, today);
   else if (now && ago) {
     direction = repsDirection(now, ago);
     if (now.value === 0 && ago.value === 0) move = assistWords(now.assist_lb, ago.assist_lb, load);
@@ -863,7 +888,7 @@ function repsThread(
     goal_words: reps.goal_text,
     track: goalTrack(start, now?.value ?? null, reps.goal_value, ago?.value ?? null, agoWords),
     direction,
-    direction_words: words ?? (direction ? DIRECTION_WORDS[direction] : null),
+    direction_words: words ?? liftDirectionWords(direction, reps.goal_text ?? null),
     move_words: move,
     href: WEEK_HREFS.program,
     carried_words: null,

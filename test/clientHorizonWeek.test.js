@@ -1607,6 +1607,44 @@ test("where you stand: a strength row with several lifts stacks one mini track p
   assert.equal(!!list.querySelector("b"), false);
 });
 
+test("a lift goal row says its goal in words, once, in the track's name and the stack's", () => {
+  const win = load();
+  const r = newRead();
+  const lift = (over) => ({
+    key: "strength",
+    stone: "strength",
+    label: "Barbell Bent-Over Row",
+    now_text: "176 lb",
+    goal_text: "200 lb",
+    progress: 0.6,
+    line: "Est. 1RM 176 lb.",
+    id: "strength:row",
+    start_text: "150 lb · Aug 3",
+    goal_words: "200 lb",
+    track: { start: 0, now: 0.5, goal: 1, ago: 0.4, ago_words: "Oct 26" },
+    direction: "toward",
+    direction_words: "Moving toward 200 lb",
+    move_words: "7 lb up since Oct 26",
+    href: null,
+    ...over,
+  });
+  r.goals = [lift({}), lift({ id: "strength:pull", label: "Pull-up", now_text: "10, 10, 7", goal_text: "3 × 8", goal_words: "3 × 8", direction_words: "Moving toward 3 × 8" })];
+  const rows = landing(win, r).querySelectorAll(".hwk-sec.is-goals .goalrow");
+  assert.equal(rows[0].querySelector(".goalrow-dir").textContent, "Moving toward 200 lb");
+  assert.equal(
+    rows[0].querySelector(".goalrow-thread").getAttribute("aria-label"),
+    "Barbell Bent-Over Row: started at 150 lb · Aug 3; now 176 lb; moving toward 200 lb compared with Oct 26, 7 lb up since Oct 26"
+  );
+  assert.equal(rows[1].querySelector(".goalrow-dir").textContent, "Moving toward 3 × 8");
+  // The stack: the goal rides in the lift's own direction words, not repeated in its spoken line.
+  const stacked = liftsGoal();
+  stacked.lifts[0].direction_words = "Moving toward 405 lb";
+  r.goals = [stacked];
+  const item = landing(win, r).querySelector("li.goallift");
+  assert.equal(item.querySelector(".sr-only").textContent, "Deadlift, 285 lb, moving toward 405 lb, 1.2 lb a week up. ");
+  assert.equal(item.querySelector(".goallift-dir").textContent, "Moving toward 405 lb");
+});
+
 test("a goal with no lifts, or an empty list, renders exactly as before", () => {
   const win = load();
   const before = landing(win, newRead()).innerHTML;

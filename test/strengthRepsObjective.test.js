@@ -83,6 +83,7 @@ test("a 3 × 10 pull-up goal reads now, goal and direction from bodyweight sets"
   assert.equal(goal.goal_words, "3 × 10");
   assert.equal(goal.direction, "toward");
   assert.match(goal.move_words, /^11 reps up since /);
+  assert.equal(goal.direction_words, "Moving toward 3 × 10", "the reps goal is said in words");
   assert.equal(goal.mark_words, null, "no standard and no build mark for a rep count");
   assert.equal(goal.carried_words, null);
   assert.ok(goal.track, "a track from start to goal");
@@ -131,6 +132,7 @@ test("a logged session that meets the goal completes it, and a correction below 
   assert.equal(done.achieved_reps, 30);
   assert.equal(done.achieved_date, back(0));
   assert.equal(weekRead().goals.find((g) => g.key === "strength").direction, "reached");
+  assert.match(weekRead().goals.find((g) => g.key === "strength").direction_words, /^Reached \d+ × \d+$/);
 
   repo.updateSet(Number(third.id), { reps: 8 });
   const reopened = repo.getStrengthObjective(objective.id);

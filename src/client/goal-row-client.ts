@@ -37,7 +37,8 @@
   /** The track's accessible name: start, about four weeks ago, now, goal and direction, in words. */
   function trackSaid(row: ClientGoalRow): string {
     const start = row.start_text ? `started at ${row.start_text}` : "";
-    const goal = row.goal_words ? `goal ${row.goal_words}` : "";
+    // A direction that already names the goal ("Moving toward 200 lb") is not told twice.
+    const goal = row.goal_words && !row.direction_words.includes(row.goal_words) ? `goal ${row.goal_words}` : "";
     const since = row.track?.ago != null && row.ago_words ? ` compared with ${row.ago_words}` : "";
     const dir = row.direction_words ? `${row.direction_words.toLowerCase()}${since}` : row.word.toLowerCase();
     const move = row.direction_words && row.move_words ? `, ${row.move_words}` : "";
