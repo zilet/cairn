@@ -61,7 +61,7 @@
         ${why ? `<span class="hjour-d-why">${escHtml(why)}</span>` : ""}
       </span>`;
     // The Horizon controller routes the link.
-    const to = typeof href === "string" && href.startsWith("/") ? href : "";
+    const to = typeof href === "string" && href.startsWith("/") && !href.startsWith("//") ? href : "";
     return to
       ? `<a class="hjour-d-link" href="${escAttr(to)}" data-horizon-href>${body}<span class="hjour-d-go" aria-hidden="true">›</span></a>`
       : `<span class="hjour-d-link">${body}</span>`;

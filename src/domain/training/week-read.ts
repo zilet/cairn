@@ -541,7 +541,7 @@ function liftDirectionWords(direction: WeekReadGoalDirection | null, goal: strin
     case "holding":
       return `${DIRECTION_WORDS.holding}, ${goal} is the goal`;
     case "back":
-      return `${DIRECTION_WORDS.back} from ${goal}`;
+      return `${DIRECTION_WORDS.back}, ${goal} is the goal`;
     case "reached":
       return `${DIRECTION_WORDS.reached} ${goal}`;
   }
@@ -1631,7 +1631,10 @@ function weightStones(
   const lose = weight.mode === "lose";
   const step = WEIGHT_WAYPOINT[units.weight];
   const goal = unit(weight.goal_lb);
-  const first = trend[0].v;
+  // Where the stretch began is the first week of weigh-ins averaged, never one morning: a
+  // single heavy day must not mint a crossing the trend never made.
+  const opening = trend.filter((p) => (daysBetweenISO(p.date, trend[0].date) ?? 99) < WEIGHT_TREND_DAYS);
+  const first = opening[opening.length - 1].v;
   const last = trend[trend.length - 1].v;
   const out: StoneCandidate[] = [];
   for (let w = Math.ceil(Math.min(first, last) / step) * step; w <= Math.max(first, last); w += step) {

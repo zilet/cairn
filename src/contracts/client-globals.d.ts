@@ -7723,7 +7723,6 @@ declare global {
       ribbonHtml(frame: import("./week-read.js").WeekReadFrame | null | undefined): string;
     };
     /** LAZY "horizon" bundle (horizon-week-client.ts): Horizon's Week landing. */
-    /** LAZY "calendar" bundle (journey-trail-client.ts): the road to the furthest dated goal. */
     /** LAZY "horizon" bundle (journey-ground-client.ts): what the walked stones say, the card, "Behind you". */
     CairnJourneyGround: {
       walkedOf(

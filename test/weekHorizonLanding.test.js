@@ -297,7 +297,7 @@ test("three lift goals: ONE strength row lists every lift, in the board's order,
   assert.match(by["Barbell Back Squat"].move_words, /^\d+ lb up since /);
   assert.match(by["Barbell Overhead Press"].move_words, /^\d+ lb down since /);
   assert.equal(by["Barbell Overhead Press"].direction, "back");
-  assert.equal(by["Barbell Overhead Press"].direction_words, `Drifting back from ${by["Barbell Overhead Press"].goal_text}`);
+  assert.equal(by["Barbell Overhead Press"].direction_words, `Drifting back, ${by["Barbell Overhead Press"].goal_text} is the goal`);
   for (const lift of goal.lifts) {
     assert.ok(lift.track, `${lift.label} draws a track`);
     assert.equal(lift.goal_text, "400 lb");

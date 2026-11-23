@@ -669,14 +669,25 @@ export function statedKeyRunDows(asOf?: string): number[] {
  * leg day kept off the key runs. Empty `map` when no lift schedule is known — callers
  * then fall back to template order rather than inventing Mon=Day1 weekdays.
  */
-export function thisWeekPlanDayMap(date = localDateISO()): {
+export function thisWeekPlanDayMap(
+  date = localDateISO(),
+  // The date the lifting WEEKDAYS are read at, when it is not `date` itself: a caller that
+  // asks about a week as a whole passes the day before it opens, so the observed pattern
+  // never counts a session of the week it is laying out.
+  opts: { liftAsOf?: string } = {}
+): {
   map: Map<number, PlanDayCandidate>;
   lift_dows: number[];
   strength_start: number;
   /** Heavy-lower days the week moved off a key run (omitted when none moved). */
   key_run_swaps?: KeyRunSwap[];
 } {
-  return requestMemo(`this_week_plan_day_map:${date}`, () => thisWeekPlanDayMapRead(date), copyDeep);
+  const liftAsOf = opts.liftAsOf || date;
+  return requestMemo(
+    `this_week_plan_day_map:${date}:${liftAsOf}`,
+    () => thisWeekPlanDayMapRead(date, liftAsOf),
+    copyDeep
+  );
 }
 
 /** The ISO date of a dow inside the Monday-first week starting at day-index `monday`. */
@@ -684,14 +695,17 @@ function weekDateOf(monday: number, dow: number): string {
   return new Date((monday + weekdayOrder(dow)) * 86_400_000).toISOString().slice(0, 10);
 }
 
-function thisWeekPlanDayMapRead(date: string): {
+function thisWeekPlanDayMapRead(
+  date: string,
+  liftAsOf: string
+): {
   map: Map<number, PlanDayCandidate>;
   lift_dows: number[];
   strength_start: number;
   key_run_swaps?: KeyRunSwap[];
 } {
   const candidates = planDayCandidates();
-  const lift = normalizeDows(liftDows(date));
+  const lift = normalizeDows(liftDows(liftAsOf));
   if (!lift.length || !candidates.length) {
     return { map: new Map(), lift_dows: [], strength_start: 0 };
   }
@@ -1577,11 +1591,11 @@ export function resolveImplicitPlanDay<T extends object>(input: T): T & { day_nu
  * lifting week known it is the weekday map's answer (a run or rest weekday never lifts);
  * with none, the template convention the engine has always used: plan day N is weekday N.
  */
-export function heavyLowerWeekdaySlots(date: string): Set<number> {
+export function heavyLowerWeekdaySlots(date: string, opts: { liftAsOf?: string } = {}): Set<number> {
   const out = new Set<number>();
   const candidates = planDayCandidates();
   if (!candidates.length) return out;
-  const week = thisWeekPlanDayMap(date);
+  const week = thisWeekPlanDayMap(date, opts);
   if (!week.lift_dows.length) {
     for (const day of candidates) {
       if (day.day_number >= 1 && day.day_number <= 7 && isHeavyLowerPlanDay(day)) out.add(day.day_number);

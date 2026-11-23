@@ -101,7 +101,7 @@ function energyWhy(i: FuelWhyInput): FuelWhy | null {
     pace = ` About 0.5–1% of body weight a week is the pace usually suggested for keeping muscle while cutting, the slower end the leaner you are; at ${i.weight_words} that is ${low}–${high} ${i.weight_unit} a week.`;
   }
   const effect = lose
-    ? "A cut runs on the week's average, so a long-run day can hold more and a rest day less without changing the pace of the loss. Eating well under it speeds the loss and leaves less fuel for training. In a trial of 24 elite athletes who all lifted, the group losing weight at half the pace of the other gained lean mass, and the faster group held theirs."
+    ? "A cut runs on the week's average, so a long-run day can hold more and a rest day less without changing the pace of the loss. Eating well under it speeds the loss and leaves less fuel for training. In a trial of 24 elite athletes who all lifted, the group set the slower of two paces gained lean mass, and the faster group held theirs."
     : i.mode === "gain"
       ? "A small surplus is what lets training turn into muscle. A large one mostly adds fat."
       : "Eating at about what you burn gives training its full fuel and holds your weight where it is.";
@@ -164,14 +164,14 @@ function fatWhy(i: FuelWhyInput): FuelWhy | null {
   return {
     made_of: made,
     effect:
-      "Fat is not one thing. Unsaturated fat (olive oil, avocado, nuts) is the kind to favour: in place of saturated fat it lowers LDL cholesterol. The omega-3s in oily fish are worth having for the heart too, though at supplement doses they mainly lower triglycerides, not LDL. Saturated fat (butter, cheese, fatty meat, coconut) is the one with a ceiling of its own. All of it carries vitamins A, D, E and K and is raw material for hormones, and diets held under a fifth of energy lowered testosterone in men in a small set of trials.",
+      "Fat is not one thing. Unsaturated fat (olive oil, avocado, nuts) is the kind to favour: in place of saturated fat it lowers LDL cholesterol. The omega-3s in oily fish are worth having for the heart too, though at the high doses used in trials they mainly lower triglycerides, not LDL. Saturated fat (butter, cheese, fatty meat, coconut) is the one with a ceiling of its own. All of it carries vitamins A, D, E and K and is raw material for hormones, and diets held under a fifth of energy lowered testosterone in men in a small set of trials.",
     source: "ACSM joint position 2016; AHA/ACC lifestyle guideline 2013; AHA omega-3 advisory 2019; Whittaker and Wu 2021; Ruiz-Castellano 2021.",
   };
 }
 
 function fiberWhy(i: FuelWhyInput): FuelWhy {
   return {
-    made_of: i.fiber.per_kcal ? "14 g for each 1,000 kcal of your target." : "14 g for each 1,000 kcal of your target, with 30 g as a good everyday aim; studies see the most benefit from about 25 to 30 g a day.",
+    made_of: i.fiber.per_kcal ? "14 g for each 1,000 kcal of your target." : "14 g for each 1,000 kcal of your target, with 30 g as a good everyday aim; studies see a clear benefit by about 25 to 30 g a day, and more may help further.",
     effect: `Fiber keeps a meal filling, feeds the gut, and the soluble kind (oats, beans, psyllium) lowers LDL cholesterol.${i.fiber.lab_led ? " Your labs are why it is marked here." : ""}`,
     source: "Institute of Medicine Dietary Reference Intakes 2005; Reynolds 2019; soluble fiber and LDL: Brown 1999.",
   };
@@ -184,7 +184,7 @@ function saturatedWhy(i: FuelWhyInput): FuelWhy | null {
       ? "6% of today's energy, the level the AHA/ACC lifestyle guideline uses when LDL is worth lowering. The general ceiling is 10% of energy."
       : "A tenth of today's energy.",
     effect:
-      "Saturated fat raises LDL cholesterol in most people. ApoB, a blood test on some lab reports, counts the cholesterol-carrying particles, and it tends to move the same way. Swapping saturated fat for unsaturated fat, especially the polyunsaturated kind (sunflower or soy oil, walnuts, seeds), lowers LDL and heart risk; olive oil and nuts fit the same pattern. Swapping it for sugar or refined starch does not lower heart risk.",
+      "Saturated fat raises LDL cholesterol in most people. ApoB, a blood test on some lab reports, counts the cholesterol-carrying particles, and it tends to move the same way. Swapping saturated fat for unsaturated fat, especially the polyunsaturated kind (sunflower or soy oil, walnuts, seeds), lowers LDL and heart risk; olive oil and nuts lower LDL too. Swapping it for sugar or refined starch does not lower heart risk.",
     source: "AHA/ACC lifestyle guideline 2013; AHA advisory on dietary fats 2017; Dietary Guidelines for Americans 2020–2025.",
   };
 }

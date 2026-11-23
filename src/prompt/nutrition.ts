@@ -430,7 +430,7 @@ function renderHolisticNutritionStrategy(
   const where = opts.contextInData
     ? " (the evidence for these rules is in the DATA block below: goal, recovery, program_state.hybrid.fuel, recent_activities, fueling, underfueling, energy_deficiency and context_events)"
     : "";
-  return `\nWHOLE-PERSON NUTRITION STRATEGY${where}:\n${JSON.stringify(strategy)}\n- Baseline maintenance comes ONLY from the completed-day expenditure evidence above. Training/recovery/performance/life signals tune deficit aggressiveness, carb timing, and protective fueling; they do not increase baseline TDEE.\n- Low recovery, performance fade, rising hybrid load, illness, or explicit under-fueling may HOLD or RAISE fuel. They can never justify lowering calories.\n`;
+  return `\nWHOLE-PERSON NUTRITION STRATEGY${where}:\n${JSON.stringify(strategy)}\n- Baseline maintenance comes ONLY from the completed-day expenditure evidence above. Training/recovery/life signals tune deficit aggressiveness, carb timing, and protective fueling; they do not increase baseline TDEE.\n- Low recovery, rising hybrid load, illness, or explicit under-fueling may HOLD or RAISE fuel. They can never justify lowering calories.\n`;
 }
 
 // Recognized whole-diet identities that are HARD constraints — as firm as an

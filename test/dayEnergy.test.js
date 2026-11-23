@@ -561,3 +561,51 @@ test("a lift logged on a new weekday this week does not change which weekdays co
   assert.equal(after[wednesday].shift_kcal - after[wednesday].outcome_shift_kcal, before[wednesday].shift_kcal);
   assert.deepEqual(after[wednesday].outcome_work, ["the lifting you logged"]);
 });
+
+test("with an observed lifting week, a lift logged on the week's Monday does not re-place the runs", () => {
+  const MONDAY = "2026-06-15";
+  const at = (i) => addDaysISO(MONDAY, i);
+  const wednesday = at(2);
+  const week = () =>
+    Object.fromEntries(
+      Array.from({ length: 7 }, (_, i) => [at(i), dayEnergyTarget(at(i), AVERAGE, { today: wednesday })])
+    );
+  const lift = (exercise) => ({ exercise, sets: 3, rep_low: 6, rep_high: 8, target_weight: 100 });
+  repo.setProfile({ age: 44, height_cm: 170, weight_lb: 153, sex: "male", activity_factor: 1.55, goal_mode: "lose" });
+  repo.logWeight(153, at(-10));
+  for (const [name, group] of [
+    ["Barbell Bench Press", "chest"],
+    ["Barbell Row", "back"],
+    ["Back Squat", "quads"],
+    ["Deadlift", "hamstrings"],
+  ])
+    repo.upsertExercise({ name, muscle_group: group, mode: "reps" });
+  repo.savePlanDay(1, "Upper", "Upper", [lift("Barbell Bench Press"), lift("Barbell Row")]);
+  repo.savePlanDay(2, "Lower", "Legs", [lift("Back Squat"), lift("Deadlift")]);
+  // Tuesday and Friday lifted three weeks running; Monday two, one short of the pattern, so
+  // a third Monday is exactly what would turn it into a lifting weekday.
+  for (const w of [-7, -14, -21]) {
+    repo.logSetByName({ exercise: "Barbell Bench Press", weight: 135, reps: 5, date: at(w + 1) });
+    repo.logSetByName({ exercise: "Back Squat", weight: 185, reps: 5, date: at(w + 4) });
+  }
+  for (const w of [-7, -14]) repo.logSetByName({ exercise: "Barbell Row", weight: 135, reps: 5, date: at(w) });
+  repo.addActivity({ date: at(-6), type: "running", distance_km: 6, duration_min: 36 });
+  repo.addActivity({ date: at(-4), type: "running", distance_km: 8, duration_min: 45 });
+  repo.addActivity({ date: at(-2), type: "running", distance_km: 12, duration_min: 72 });
+
+  const before = week();
+  assert.ok(
+    Object.values(before).some((d) => d.work.some((w) => /run/.test(w))),
+    "the engine placed a run week"
+  );
+  repo.logSetByName({ exercise: "Back Squat", weight: 185, reps: 5, date: MONDAY });
+  const after = week();
+  for (const date of Object.keys(before)) {
+    assert.deepEqual(after[date].work, before[date].work, `${date} keeps the work the week planned`);
+    assert.equal(
+      after[date].shift_kcal - after[date].outcome_shift_kcal,
+      before[date].shift_kcal - before[date].outcome_shift_kcal,
+      `${date} keeps its plan number`
+    );
+  }
+});

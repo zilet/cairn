@@ -55,8 +55,10 @@ test("Train › Intake's fan-in prepares a bounded number of statements and answ
   const date = localDateISO();
   const { value, count } = request(() => trainHomeResponses("fuel", date, "12"));
   assert.ok(value[`/nutrition/day?date=${date}`], "the day rode the fan-in");
-  // 329 measured (777 before); about a fifth of headroom.
-  assert.ok(count <= 400, `GET /api/train-home?view=fuel prepared ${count} statements (budget 400)`);
+  // 479 measured (777 before the repeated reads were folded). About 150 of them are the
+  // week's shape read as of the eve of the week, a second run-plan read by design: the
+  // day numbers hold still while the week is lived. About a sixth of headroom.
+  assert.ok(count <= 560, `GET /api/train-home?view=fuel prepared ${count} statements (budget 560)`);
   const alone = runWithBrainSnapshot(() => fuelIdeasForDay(date, { hour: 12, exclude: [] }));
   assert.deepEqual(value[`/fuel/ideas?date=${date}&hour=12`], alone, "the fan-in's ideas are the route's own");
 });
