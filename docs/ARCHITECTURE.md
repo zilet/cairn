@@ -1792,20 +1792,34 @@ untouched, and the offline `stub` agent is unchanged. A test that needs its own 
   not three noisy days among nine ordinary ones).
 - **The accepted calorie target is the WEEK'S AVERAGE; each day's number is prepared from the plan**
   (`src/repo/day-energy.ts`). `dayEnergyTarget(date, average)` costs the planned work of each day of
-  the current or a future ISO week: a planned run at its planned distance on the day the agenda
-  places it (about 1 kcal per kg per km), a lifting weekday (`calendarDayRead`, about an hour at
-  3.5 MET net of rest) and the known cross-training day as it stood before this week
-  (`crossTrainingDays`). None of those reads looks at the day's own log, so logging never re-plans
-  the other days; a light session (yoga, mobility, an easy walk) carries no cost. `DAY_SHIFT_SHARE` (half) of each day's difference from the week's mean moves,
-  never past `DAY_SHIFT_CAP_SHARE` (15% of the average) and never under the absolute floor; a
-  clamped day's remainder goes to the days with room, so the week still sums to seven averages, and
-  a week whose largest move is under `DAY_SHIFT_MIN_KCAL` is left flat. Protein never moves. A week
-  already over has no plan left, so it is shaped the same way from what was LOGGED (runs at their
-  logged km, a logged lifting session as an hour, other sessions by their logged time). On today
-  and the lived days of the current week a clear departure from the plan moves that ONE day
-  (`outcome_shift_kcal`, never rebalanced): a session the plan did not carry adds half its cost, a
-  planned run clearly longer or shorter (`RUN_DISTANCE_CHANGE_*`) is costed at its logged distance,
-  and planned work not logged never lowers a day. A watch's burned calories never enter it. **The
+  the current or a future ISO week, **read as the week stood the day before it opened**: each run of
+  the engine's week as planned at its boundary (`weeklyRunPlan` with last week's actuals, the closed
+  week's volume anchor, the legs, recovery and program state of that eve, no morning re-decision) at
+  its planned distance on the day the WEEK placed it (about 1 kcal per kg per km), never the day it
+  was run or the agenda's current suggestion; the lifting weekdays of that eve (`liftDows`: a stated
+  strength schedule at once, the observed pattern without this week's sessions; about an hour at
+  3.5 MET net of rest); the known cross-training day of that eve (`crossTrainingDays`); the
+  bodyweight of that eve. So nothing logged this week, and no morning read (a run turned to rest
+  keeps its planned cost), moves any day's PLAN number; a week the engine had no run plan for at its
+  start carries no run cost. A light session (yoga, mobility, an easy walk) carries no cost.
+  `DAY_SHIFT_SHARE` (half) of each day's difference from the week's mean moves, never past
+  `DAY_SHIFT_CAP_SHARE` (15% of the average) and never under the absolute floor; a clamped day's
+  remainder goes to the days with room, and a week whose largest move is under `DAY_SHIFT_MIN_KCAL`
+  is left flat. **Every shift is said in fifties** (`DAY_SHIFT_STEP_KCAL`; the costs are rough to
+  about ±20–30%): a day is the unrounded average plus a multiple of 50, the plan's shifts are kept
+  exactly zero-sum after rounding (`fiftiesZeroSum`: largest rounding error first, never past the
+  cap), and the sentence's parts add up to the day's number. Protein never moves. A week already
+  over has no plan left, so it is shaped the same way from what was LOGGED (runs at their logged km,
+  a logged lifting session as an hour, other sessions by their logged time). On today and the lived
+  days of the current week a clear departure from the plan moves that ONE day
+  (`outcome_shift_kcal`, never rebalanced): logged runs are matched against the week as planned
+  (`weekRunClosures`); a session the plan did not carry adds half its cost, a planned run clearly
+  longer or shorter on its placed day (`RUN_DISTANCE_CHANGE_*`) is costed at its logged distance, a
+  planned run done on another day is extra on the day it was run (its placed day keeps the plan
+  number), and planned work not logged never lowers a day. **There is no reserve for unlogged
+  food**: the adaptive expenditure estimate is worked out from logged intake against the weight
+  trend, so a steady under-log is already inside the accepted average, and a reserve on top would
+  count it twice. A watch's burned calories never enter it. **The
   weekly meal plan follows the same numbers** (`src/repo/meal-plan-day-energy.ts`, `-compute.ts`):
   the split is computed server-side once per draft, stored as `parsed.day_energy`, rebuilt onto each
   day on every write (a model's or client's copy is discarded), and a moved day is verified against

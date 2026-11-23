@@ -19,18 +19,25 @@
 //     hiking entries run about 3.5-7 MET), taken as about 3.5 kcal per kg net. Approximate.
 // A session the load read calls light (yoga, mobility, an easy stroll) carries no cost:
 // that kind of day is already in the activity level the average is worked out from.
-// Because those are rough, only DAY_SHIFT_SHARE of each day's difference from the week's
-// mean moves, and never more than DAY_SHIFT_CAP_SHARE of the average either way. A day
-// never drops under the absolute calorie floor.
+// Because those are rough (about ±20-30%), only DAY_SHIFT_SHARE of each day's difference
+// from the week's mean moves, never more than DAY_SHIFT_CAP_SHARE of the average either
+// way, and every move is said in fifties (DAY_SHIFT_STEP_KCAL): a day's number is the
+// average plus a multiple of 50, so its sentence's parts add up exactly and claim no
+// precision the costs do not have. A day never drops under the absolute calorie floor.
 //
 // Which work, by where the day sits:
-//   - a day of this week or a later one is shaped by the PLAN: a run the agenda planned is
-//     costed at its planned distance on the day it is placed (or the day it was run), never
-//     at what a watch said was burned; a lift weekday (the calendar's) as an hour of
-//     lifting; the known cross-training day (stated, else the usual one, read as of the
-//     day before this week so nothing logged this week can move it) as an hour of it. None
-//     of those three reads what was logged on the day itself, so logging a session never
-//     re-plans the week and never moves another day's number;
+//   - a day of this week or a later one is shaped by the PLAN, read as the week stood the
+//     day before it opened (`weekEve`): the run engine's week as planned at its boundary
+//     (last week's actuals, the legs, the recovery read and the program state of that
+//     eve, never this morning's re-decision), each run costed at its planned distance on
+//     the day the WEEK placed it, never on the day it was run or the day the agenda now
+//     suggests; the lifting weekdays as of that eve (a stated strength schedule applies at
+//     once, the observed pattern never sees this week's log) as an hour of lifting each;
+//     the known cross-training day as of that eve as an hour of it; the bodyweight as of
+//     that eve. So nothing logged this week, and no morning read, moves a day's PLAN
+//     number: a morning that turns a run to rest leaves its day the planned cost. A week
+//     the engine had no run plan for at its start carries no run cost; its logged runs are
+//     outcomes on their own days;
 //   - a week already over has no plan left (fuel-demand.ts holds the same law), so it is
 //     shaped by what was LOGGED, with the same costs and the same rules: runs at their
 //     logged distance, a day with a logged lifting session as an hour of lifting, other
@@ -38,25 +45,35 @@
 //   - today and the days already lived this week keep their plan number, and a clear
 //     departure from the plan moves that ONE day by DAY_SHIFT_SHARE of the difference
 //     (`outcome_shift_kcal`), never handed to the other days: a session the plan did not
-//     carry adds its cost, and a planned run done clearly longer or shorter is costed at
-//     its logged distance. Planned work not logged never lowers a day and is never taken
-//     back from another day; a lived day keeps its plan number. The day's whole move
-//     (plan and outcome) stays inside the cap and above the floor.
+//     carry adds its cost, a planned run done clearly longer or shorter on its placed day
+//     is costed at its logged distance, and a planned run done on another day is extra
+//     work on the day it was run (its placed day keeps the plan number). Planned work not
+//     logged never lowers a day and is never taken back from another day. The day's whole
+//     move (plan and outcome) stays inside the cap and above the floor.
+// There is deliberately no reserve for food left unlogged: the adaptive expenditure
+// estimate is worked out from logged intake against the weight trend, so a steady
+// under-log is already inside the accepted average.
 // Watch calories are never read anywhere here.
 import { resolvedCurrentBodyweight } from "./bodyweight.js";
+import { withMorningReadiness } from "./brain/read-adherence.js";
+import { getRecoverySummary } from "./coach.js";
 import { crossTrainingDays, crossTrainingNoun } from "./cross-training-day.js";
 import type { CrossTrainingDay } from "./cross-training-day.js";
 import type { LoadFamily } from "./endurance-sports.js";
-import { flexibleTrainingAgenda } from "./flexible-training-agenda.js";
-import type { FlexibleRunIntent, FlexibleRunKind } from "./flexible-training-agenda.js";
-import { recentEnduranceImpacts } from "./hybrid-load.js";
+import { weekRunClosures } from "./flexible-training-agenda.js";
+import type { FlexibleRunKind, RunClosure } from "./flexible-training-agenda.js";
+import { recentEnduranceImpacts, strengthLegLoad } from "./hybrid-load.js";
 import type { EnduranceImpact } from "./hybrid-load.js";
 import { ABSOLUTE_KCAL_FLOOR } from "./nutrition-safety.js";
-import { calendarDayRead } from "./plan-selection.js";
 import { isoDow } from "./profile.js";
+import { getProgramState } from "./program-state.js";
 import { copyDeep, requestMemo } from "./request-memo.js";
+import { weekAsPlanned, weeklyRunPlan } from "./run-progression.js";
+import type { RunPlanPrescription } from "./run-progression.js";
 import { completedSessionOnDate } from "./session-dose-log.js";
+import { getRunCompliance } from "./sessions.js";
 import { LB_PER_KG, addDaysISO, localDateISO } from "./shared.js";
+import { liftDows } from "./strength-schedule.js";
 import { mondayOf } from "../lib/dates.js";
 
 export const RUN_KCAL_PER_KG_KM = 1;
@@ -70,6 +87,8 @@ export const DAY_SHIFT_SHARE = 0.5;
 export const DAY_SHIFT_CAP_SHARE = 0.15;
 /** A week whose largest shift is smaller than this is not worth different numbers; so is a smaller outcome move. */
 export const DAY_SHIFT_MIN_KCAL = 50;
+/** Every shift, plan and outcome, is a multiple of this: the costs are too rough to say a day to the ten. */
+export const DAY_SHIFT_STEP_KCAL = 50;
 /** A planned run done this much longer or shorter (as a share of the planned distance)… */
 export const RUN_DISTANCE_CHANGE_SHARE = 0.25;
 /** …and by at least this many km is costed at its logged distance. */
@@ -83,7 +102,10 @@ export interface DayEnergy {
   date: string;
   /** The accepted target: the week's average. */
   average_kcal: number;
-  /** The day's number, rounded to ten. Equal to the average when nothing moves it. */
+  /**
+   * The day's number: the average plus a multiple of DAY_SHIFT_STEP_KCAL (the average itself
+   * is never rounded). Equal to the average when nothing moves it; never under the floor.
+   */
   kcal: number;
   /** kcal minus the average: the plan's move and the outcome's together. */
   shift_kcal: number;
@@ -128,7 +150,11 @@ const crossWords = (i: ImpactLike) =>
   i.family === "snow" ? (/ski/i.test(String(i.type ?? "")) ? "the skiing" : "the session") : (CROSS_WORDS[i.family] ?? "the session");
 const crossRate = (family: LoadFamily) => (family === "walk" ? WALK_NET_KCAL_PER_KG : CROSS_NET_KCAL_PER_KG);
 const kcalWords = (n: number) => (Math.round(n / 10) * 10).toLocaleString("en-US");
-const tens = (n: number) => Math.round(n / 10) * 10;
+// `|| 0` folds a rounded -0 into 0.
+const fifties = (n: number) => Math.round(n / DAY_SHIFT_STEP_KCAL) * DAY_SHIFT_STEP_KCAL || 0;
+/** The cap as a multiple of the step, so a rounded day never passes it. */
+const capInSteps = (average: number) =>
+  Math.floor((average * DAY_SHIFT_CAP_SHARE) / DAY_SHIFT_STEP_KCAL) * DAY_SHIFT_STEP_KCAL;
 const finitePositive = (v: unknown): number | null => {
   const n = Number(v);
   return Number.isFinite(n) && n > 0 ? n : null;
@@ -164,14 +190,24 @@ function crossCostOn(impacts: ImpactLike[], date: string, kg: number): { kcal: n
   return { kcal, words: uniq(pieces.map(crossWords)) };
 }
 
+/** One run the week planned, as the outcome read sees it. */
+export interface PlannedRunOutcome {
+  /** The day the WEEK placed the run (its plan cost sits there). */
+  placed_date: string;
+  /** The planned distance, km. */
+  planned_km: number | null;
+  /** The logged run that closed this intention, when one did. */
+  completion: { date: string; distance_km: number | null } | null;
+}
+
 export interface DayOutcomeInput {
   date: string;
   kg: number;
-  /** The week's run intentions (the agenda's). */
-  intents: Array<Pick<FlexibleRunIntent, "status" | "suggested_date" | "planned_distance_km" | "target_distance_km" | "completion">>;
-  /** Runs logged this week that closed no intention (the agenda's `extras`). */
+  /** The week's planned runs, each with the logged run that closed it (weekRunClosures). */
+  intents: PlannedRunOutcome[];
+  /** Runs logged this week that closed no intention. */
   extras: Array<{ date: string; distance_km: number | null }>;
-  /** The logged non-run sessions (runs among them are ignored here: the agenda owns runs). */
+  /** The logged non-run sessions (runs among them are ignored here: the run week owns runs). */
   impacts: ImpactLike[];
   /** A lifting session is logged on the day. */
   lifted: boolean;
@@ -181,11 +217,13 @@ export interface DayOutcomeInput {
 
 /**
  * How far what was DONE on one day departs from what its plan carried, in kcal of cost
- * (before DAY_SHIFT_SHARE), with the words for it. A run that closed an intention is the
- * planned run (costed again only when its logged distance is clearly different); a run
- * that closed none is extra, unless an open run is still placed on that day (then it is
- * read as that run, and the plan's cost stands). Planned work not logged adds nothing and
- * takes nothing away.
+ * (before DAY_SHIFT_SHARE), with the words for it. A run that closed an intention ON ITS
+ * PLACED DAY is the planned run, costed again only when its logged distance is clearly
+ * different (RUN_DISTANCE_CHANGE_*). A run that closed an intention placed on ANOTHER day
+ * is extra work on the day it was run, at its logged distance; its placed day keeps the
+ * plan's cost and gets nothing from it. A run that closed none is extra, unless a still-open
+ * run is placed on that day (then it is read as that run, and the plan's cost stands).
+ * Planned work not logged adds nothing and takes nothing away.
  */
 export function dayOutcomeCost(input: DayOutcomeInput): { kcal: number; words: string[] } {
   const { date, kg } = input;
@@ -194,15 +232,23 @@ export function dayOutcomeCost(input: DayOutcomeInput): { kcal: number; words: s
   for (const intent of input.intents) {
     const done = intent.completion;
     if (!done || String(done.date) !== date) continue;
-    const planned = finitePositive(intent.planned_distance_km) ?? finitePositive(intent.target_distance_km);
+    const planned = finitePositive(intent.planned_km);
     const ran = finitePositive(done.distance_km);
+    if (String(intent.placed_date) !== date) {
+      // Done on another day than the week placed it: extra on the day it was run.
+      const km = ran ?? planned;
+      if (km == null) continue;
+      kcal += km * kg * RUN_KCAL_PER_KG_KM;
+      words.push("the run you logged");
+      continue;
+    }
     if (planned == null || ran == null) continue;
     const diff = ran - planned;
     if (Math.abs(diff) < Math.max(planned * RUN_DISTANCE_CHANGE_SHARE, RUN_DISTANCE_CHANGE_MIN_KM)) continue;
     kcal += diff * kg * RUN_KCAL_PER_KG_KM;
     words.push(diff > 0 ? "the longer run you logged" : "the shorter run you logged");
   }
-  const openRunHere = input.intents.some((i) => i.status === "open" && i.suggested_date === date);
+  const openRunHere = input.intents.some((i) => !i.completion && String(i.placed_date) === date);
   if (!openRunHere) {
     for (const extra of input.extras) {
       if (String(extra.date) !== date) continue;
@@ -229,12 +275,13 @@ export function dayOutcomeCost(input: DayOutcomeInput): { kcal: number; words: s
 /**
  * The week's costs laid across its days: DAY_SHIFT_SHARE of each day's difference from
  * the mean, inside the cap, the remainder of a clamped day handed to the days with room,
- * and a week whose biggest move is small left flat. Sums to about zero.
+ * and a week whose biggest move is small left flat. Each shift is then said in fifties
+ * and the week kept exactly zero-sum (fiftiesZeroSum).
  */
 function distribute(costs: number[], average: number): number[] {
   const mean = costs.reduce((a, b) => a + b, 0) / costs.length;
   if (!(mean > 0)) return costs.map(() => 0);
-  const cap = average * DAY_SHIFT_CAP_SHARE;
+  const cap = capInSteps(average);
   const clamp = (n: number) => Math.max(-cap, Math.min(cap, n));
   let shifts = costs.map((c) => clamp((c - mean) * DAY_SHIFT_SHARE));
   // A clamped day leaves the week off its average; hand the remainder to the days with room.
@@ -247,7 +294,33 @@ function distribute(costs: number[], average: number): number[] {
   // A week whose biggest move is small is left flat as a whole; zeroing single days would
   // take the week off its average.
   if (Math.max(...shifts.map(Math.abs)) < DAY_SHIFT_MIN_KCAL) return costs.map(() => 0);
-  return shifts.map(tens);
+  return fiftiesZeroSum(shifts, cap);
+}
+
+/**
+ * Each shift rounded to the nearest DAY_SHIFT_STEP_KCAL, then the rounding residual
+ * removed one step at a time from the day whose rounding moved it furthest in the
+ * residual's direction, never past `cap` (a multiple of the step) and, while any other
+ * day can take it, never onto a day whose unrounded shift was zero. Sums to exactly zero
+ * when the unrounded shifts did (to within a few kcal) and any day has room.
+ */
+export function fiftiesZeroSum(shifts: number[], cap: number): number[] {
+  const step = DAY_SHIFT_STEP_KCAL;
+  const out = shifts.map((s) => Math.max(-cap, Math.min(cap, fifties(s))));
+  let residual = out.reduce((a, b) => a + b, 0);
+  for (let guard = 0; residual !== 0 && guard < shifts.length * 4; guard++) {
+    const move = residual > 0 ? -step : step;
+    const fits = (i: number) => Math.abs(out[i] + move) <= cap;
+    // Rounding error in the residual's direction: the day rounded up most gives the step back first.
+    const error = (i: number) => (out[i] - shifts[i]) * Math.sign(-move);
+    const pick = (pool: number[]) => pool.filter(fits).sort((a, b) => error(b) - error(a) || a - b)[0];
+    const all = shifts.map((_, i) => i);
+    const i = pick(all.filter((j) => shifts[j] !== 0)) ?? pick(all);
+    if (i == null) break;
+    out[i] = out[i] + move || 0;
+    residual += move;
+  }
+  return out;
 }
 
 function bodyweightKg(through: string, fallback?: string): number | null {
@@ -293,38 +366,61 @@ function loggedWeek(dates: string[], today: string, average: number): WeekShape 
   return { days, logged: true };
 }
 
+/**
+ * The run week as PLANNED at its boundary: the engine's week for `week`, read the way
+ * run-compliance reads the prescription a week is judged against (last week's actuals, the
+ * closed week's volume anchor, no morning re-decision), with the legs, the recovery read and
+ * the program state taken as of `eve`, the day before the week opens, so a run, a lift or a
+ * morning sync this week cannot move where the runs sit or how long they are. [] when the
+ * engine had no run week for it.
+ */
+function plannedRunWeek(week: string, eve: string): RunPlanPrescription[] {
+  const recovery = safe(() => withMorningReadiness(getRecoverySummary(14, undefined, eve), eve), null);
+  const plan = weeklyRunPlan(week, {
+    compliance: getRunCompliance(addDaysISO(week, -7) ?? eve),
+    volumeAnchorDate: eve,
+    adjustToday: false,
+    legLoad: strengthLegLoad(eve),
+    ...(recovery ? { recovery, programState: getProgramState(eve, recovery) } : {}),
+  });
+  return plan?.available ? weekAsPlanned(plan).filter((run) => run.day_number >= 1 && run.day_number <= 7) : [];
+}
+
 function shapeWeek(week: string, today: string, average: number): WeekShape {
   const dates: string[] = [];
   for (let i = 0; i < 7; i++) dates.push(i === 0 ? week : (addDaysISO(week, i) ?? week));
   const thisWeek = mondayOf(today);
   if (week < thisWeek) return loggedWeek(dates, today, average);
+  const current = week === thisWeek;
   const empty: WeekShape = { days: {}, logged: false };
-  const kg = bodyweightKg(today);
+  // The day before the week opens: everything the plan reads, it reads as of then.
+  const eve = addDaysISO(week, -1) ?? week;
+  const kg = current ? bodyweightKg(eve, today) : bodyweightKg(today);
   if (kg == null) return empty;
   const cost = new Map<string, { kcal: number; work: string[]; run: boolean; lift: boolean; cross: boolean }>(
     dates.map((d) => [d, { kcal: 0, work: [], run: false, lift: false, cross: false }])
   );
 
-  const agenda = safe(() => flexibleTrainingAgenda(week === thisWeek ? today : week), null);
-  if (agenda?.available) {
-    for (const intent of agenda.intents) {
-      if (intent.status === "open" && intent.adjustment?.dose === "rest") continue;
-      const day = cost.get(String(intent.completion?.date ?? intent.suggested_date ?? ""));
-      const km = Number(intent.planned_distance_km ?? intent.target_distance_km ?? intent.completion?.distance_km);
-      if (!day || !Number.isFinite(km) || km <= 0) continue;
-      day.kcal += km * kg * RUN_KCAL_PER_KG_KM;
-      day.work.push(RUN_WORDS[intent.kind] ?? "the run");
-      day.run = true;
-    }
+  // Each run on the day the WEEK placed it, at its planned distance.
+  const runs = safe(() => plannedRunWeek(week, eve), [] as RunPlanPrescription[]);
+  for (const run of runs) {
+    const day = cost.get(dates[run.day_number - 1]);
+    const km = finitePositive(run.target_distance_km);
+    if (!day || km == null) continue;
+    day.kcal += km * kg * RUN_KCAL_PER_KG_KM;
+    day.work.push(RUN_WORDS[run.kind_label as FlexibleRunKind] ?? "the run");
+    day.run = true;
   }
+  // The lifting weekdays as of the eve, applied to all seven days: a stated strength
+  // schedule applies at once, the observed pattern never counts this week's own sessions.
+  const lift = new Set(safe(() => liftDows(eve), [] as number[]).map((dow) => Number(dow) % 7));
   // The known cross-training days, read as of the day before this week: a ride logged this
   // week can neither add a weekday to the usual pattern nor take one away.
   const crossDays = safe(() => crossTrainingDays(addDaysISO(thisWeek, -1) ?? thisWeek), [] as CrossTrainingDay[]);
   for (const date of dates) {
     const day = cost.get(date)!;
-    // The calendar's lift weekday is the plan, whatever this morning's read suggests and
-    // whether or not the lift was logged yet: the plan never changes when the log does.
-    if (safe(() => calendarDayRead(date)?.kind === "lift", false)) {
+    // A lifting weekday is the plan whether or not the lift was logged yet.
+    if (lift.has(isoDow(date))) {
       day.kcal += kg * LIFT_NET_KCAL_PER_KG;
       day.work.push("lifting");
       day.lift = true;
@@ -344,13 +440,21 @@ function shapeWeek(week: string, today: string, average: number): WeekShape {
   }
 
   const shifts = distribute(dates.map((d) => cost.get(d)!.kcal), average);
-  const cap = average * DAY_SHIFT_CAP_SHARE;
-  const lived = week === thisWeek ? dates.filter((d) => d <= today) : [];
+  const cap = capInSteps(average);
+  const lived = current ? dates.filter((d) => d <= today) : [];
   const impacts = lived.length ? safe(() => recentEnduranceImpacts(lived.length, today), [] as EnduranceImpact[]) : [];
-  // With no run week to read, nothing planned a run: every logged run is extra.
-  const extras = agenda?.available
-    ? (agenda.extras ?? [])
-    : impacts.filter((i) => i.family === "run").map((i) => ({ date: String(i.date).slice(0, 10), distance_km: i.distance_km }));
+  // This week's logged runs matched against the week as planned (the one week matcher);
+  // with no run week every logged run is an extra.
+  const closures = lived.length ? safe(() => weekRunClosures(week, today, { prescriptions: runs }), [] as RunClosure[]) : [];
+  const intents: PlannedRunOutcome[] = runs.map((run, index) => {
+    const closed = closures.find((c) => c.slot_index === index);
+    return {
+      placed_date: dates[run.day_number - 1],
+      planned_km: finitePositive(run.target_distance_km),
+      completion: closed ? { date: closed.date, distance_km: closed.evidence.distance_km } : null,
+    };
+  });
+  const extras = closures.filter((c) => c.closed == null).map((c) => ({ date: c.date, distance_km: c.evidence.distance_km }));
   const days: WeekShape["days"] = {};
   dates.forEach((date, i) => {
     const day = cost.get(date)!;
@@ -362,7 +466,7 @@ function shapeWeek(week: string, today: string, average: number): WeekShape {
           dayOutcomeCost({
             date,
             kg,
-            intents: agenda?.available ? agenda.intents : [],
+            intents,
             extras,
             impacts,
             lifted: !!completedSessionOnDate(date),
@@ -370,11 +474,11 @@ function shapeWeek(week: string, today: string, average: number): WeekShape {
           }),
         { kcal: 0, words: [] as string[] }
       );
-      const move = tens(found.kcal * DAY_SHIFT_SHARE);
-      if (Math.abs(move) >= DAY_SHIFT_MIN_KCAL) {
+      const half = found.kcal * DAY_SHIFT_SHARE;
+      if (Math.abs(half) >= DAY_SHIFT_MIN_KCAL) {
         // The day's whole move stays inside the cap: the outcome takes only the room the plan left.
-        const total = Math.max(-cap, Math.min(cap, shifts[i] + move));
-        outcome = tens(total) - shifts[i];
+        const total = Math.max(-cap, Math.min(cap, shifts[i] + fifties(half)));
+        outcome = total - shifts[i] || 0;
         // Kept even when the cap took all of it, so the sentence still names it.
         outcomeWork = found.words;
       }
@@ -414,18 +518,20 @@ export function dayEnergyTarget(date: string, averageKcal: number, opts: { today
   const day = shape.days[date];
   if (!day) return flat;
   if (!day.shift && !day.outcome) return { ...flat, work: day.work };
-  // A moved number is said to the ten everywhere it is printed, so the meter and the
-  // sentence can never show two different figures.
-  const kcal = Math.max(ABSOLUTE_KCAL_FLOOR, tens(average + day.shift + day.outcome));
-  const shift = kcal - average;
-  if (!shift) return { ...flat, work: day.work };
+  // Every move is a multiple of the step; the floor holds the lowest such move that keeps
+  // the day at or above it, so a floored day still reads as the average plus fifties.
+  const lowest = Math.ceil((ABSOLUTE_KCAL_FLOOR - average) / DAY_SHIFT_STEP_KCAL) * DAY_SHIFT_STEP_KCAL;
+  const shift = Math.max(lowest, day.shift + day.outcome) || 0;
+  const kcal = average + shift;
   // The plan's part as it would land alone; the rest of the move is the outcome's. When the
   // cap or the floor took all of the outcome, the whole move is the plan's, and the
   // sentence still names what was logged (`held`).
-  const planKcal = Math.max(ABSOLUTE_KCAL_FLOOR, tens(average + day.shift));
-  const plan = day.shift ? planKcal - average : 0;
+  const plan = day.shift ? Math.max(lowest, day.shift) : 0;
   let outcome = day.outcome ? shift - plan : 0;
   if (outcome && Math.sign(outcome) !== Math.sign(day.outcome)) outcome = 0;
+  // An outcome that brought the day back to the average: the number says nothing, the parts
+  // still say what moved it.
+  if (!shift) return { ...flat, work: day.work, outcome_shift_kcal: outcome, outcome_work: outcome ? day.outcome_work : [] };
   const base = {
     date,
     average_kcal: average,
@@ -466,6 +572,7 @@ export function dayWords(i: {
   held: boolean;
   logged: boolean;
 }): string {
+  // A day already lived reads in the past tense throughout, a week over or not.
   const past = i.date < i.today;
   const head = i.date === i.today ? "Today's number is about" : past ? "That day's number was about" : "This day's number is about";
   const avg = kcalWords(i.average);
@@ -476,7 +583,7 @@ export function dayWords(i: {
     const named = [planned, i.outcomeWork.join(" and ")].filter(Boolean).join(" and ");
     const tail =
       i.plan > 0
-        ? `${i.date === i.today ? "That is" : "That was"} as far up as a day's number goes.`
+        ? `${past ? "That was" : "That is"} as far up as a day's number goes.`
         : "A day's number does not go lower than that.";
     return i.plan > 0
       ? `${head} ${kcalWords(i.kcal)} kcal: your ${avg} average plus about ${kcalWords(i.plan)} for ${named}. ${tail}`
@@ -497,14 +604,14 @@ export function dayWords(i: {
         ? `and about ${kcalWords(i.outcome)} for ${did}`
         : `${i.outcome > 0 ? "plus" : "less"} about ${kcalWords(Math.abs(i.outcome))} for ${did}`;
     const joined = planPart ? `${planPart}${i.plan > 0 && i.outcome > 0 ? " " : ", "}${outPart}` : outPart;
-    return `${head} ${kcalWords(i.kcal)} kcal: your ${avg} average ${joined}. The rest of the week keeps its numbers.`;
+    return `${head} ${kcalWords(i.kcal)} kcal: your ${avg} average ${joined}. The rest of the week ${past ? "kept" : "keeps"} its numbers.`;
   }
   const weekLine =
     i.plan > 0
-      ? i.logged
+      ? past
         ? ` The week still averaged ${avg}.`
         : ` The week still averages ${avg}.`
-      : i.logged
+      : past
         ? " That room went to the week's bigger days."
         : " That room goes to the week's bigger days.";
   return `${head} ${kcalWords(i.kcal)} kcal: your ${avg} average ${planPart}.${weekLine}`;
