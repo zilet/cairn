@@ -1561,8 +1561,37 @@ function compactChatHealthReview(review: unknown): unknown {
   };
 }
 
+// Today's food for chat: totals, target, what is left and the entries stay whole (actions
+// name entry ids). The guides keep their range in words; the label repeats the key and the
+// note repeats the directives already inline. The two-week read keeps its energy and
+// protein lines (the first two, fuel-pattern.ts's order) and the one lever.
+function compactChatDayIntake(intake: unknown): unknown {
+  if (!intake || typeof intake !== "object" || Array.isArray(intake)) return intake;
+  const row = { ...(intake as Record<string, unknown>) };
+  if (Array.isArray(row.guides)) {
+    row.guides = row.guides.map((g) => {
+      const guide = (g ?? {}) as Record<string, unknown>;
+      return {
+        key: guide.key,
+        ...(typeof guide.eaten_g === "number" ? { eaten_g: guide.eaten_g } : {}),
+        guide: guide.guide,
+      };
+    });
+  }
+  const pattern = row.guides_pattern as Record<string, unknown> | null | undefined;
+  if (pattern && typeof pattern === "object") {
+    row.guides_pattern = {
+      lines: Array.isArray(pattern.lines) ? pattern.lines.slice(0, 2) : [],
+      lever: pattern.lever ?? null,
+    };
+  }
+  return row;
+}
+
 function compactChatCore(key: string, value: unknown): unknown {
   switch (key) {
+    case "day_intake":
+      return compactChatDayIntake(value);
     case "underfueling":
       return pickFields(value, CHAT_UNDERFUELING_FIELDS);
     case "health_review":

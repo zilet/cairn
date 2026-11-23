@@ -150,9 +150,12 @@ test("an outcome under the smallest move is left alone", () => {
   athlete();
   repo.addActivity({ date: today(), type: "running", distance_km: 1.2, duration_min: 8 });
   const day = dayEnergyTarget(today(), AVERAGE, { today: today() });
+  // Only the outcome is asserted: early in a week one logged run lets the agenda suggest
+  // runs on the days still ahead, and that plan moves today's number on its own.
   assert.equal(day.outcome_shift_kcal, 0);
-  assert.equal(day.kcal, AVERAGE);
-  assert.equal(day.words, null);
+  assert.deepEqual(day.outcome_work, []);
+  assert.equal(day.kcal, AVERAGE + day.shift_kcal);
+  assert.doesNotMatch(day.words ?? "", /you logged/);
 });
 
 test("what was done against what was planned: a clearly different planned run, and no double count", () => {
