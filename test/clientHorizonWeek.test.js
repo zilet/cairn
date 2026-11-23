@@ -831,7 +831,7 @@ function trail(win, j, opts = {}) {
   return renderHtml(win.CairnJourneyTrail.trailHtml(j, opts), { document: win.document });
 }
 
-test("the journey trail module still draws to scale; Week no longer composes it", () => {
+test("your road: the trail draws to scale and Week composes it, every mark a row folded under it", () => {
   const win = load();
   const road = trail(win, journey());
   assert.equal(road.querySelector(".hjour-line").textContent, journey().line);
@@ -844,11 +844,34 @@ test("the journey trail module still draws to scale; Week no longer composes it"
     road.querySelector(".hjour-plot").getAttribute("aria-label"),
     /from Sep 8 through today to Goal weight · 154 lb, Dec 15/
   );
-  // Week shows the Ahead strip in its place.
+  // What makes it read as ground covered: a step per full week walked, a far ridge, first
+  // light at the summit; "Behind you" as stones in each area's hue.
+  assert.equal(road.querySelectorAll(".hjour-step").length, 3, "28 days walked: a step a week, none under today");
+  assert.ok(road.querySelector(".hjour-ridge"));
+  assert.ok(road.querySelector(".hjour-dawn"));
+  assert.deepEqual(
+    road.querySelectorAll(".hjour-b").map((b) => b.getAttribute("class")),
+    ["hjour-b stone-endurance", "hjour-b stone-body"]
+  );
+  // The opened mark's words; a mark with a page makes the card a link the controller routes.
+  assert.equal(road.querySelector(".hjour-detail .hjour-d-name").textContent, journey().marks[0].label);
+  const linked = journey();
+  linked.marks[0].href = "/app/horizon/race";
+  const card = trail(win, linked).querySelector(".hjour-detail a.hjour-d-link");
+  assert.equal(card.getAttribute("href"), "/app/horizon/race");
+  assert.ok(card.hasAttribute("data-horizon-href"));
+  linked.marks[0].href = "javascript:alert(1)";
+  assert.equal(!!trail(win, linked).querySelector(".hjour-detail a"), false, "only an in-app page links");
+  // Week composes it under "Your road".
   const host = landing(win, { ...weekRead(), journey: journey() });
-  assert.equal(!!host.querySelector(".hjour-plot"), false, "the trail is not on Week");
-  assert.ok(host.querySelector(".hwk-sec.is-ahead .ahead-strip"));
+  const sec = host.querySelector(".hwk-sec.is-ahead");
+  assert.equal(sec.querySelector(".hwk-k").textContent, "Your road");
+  assert.ok(sec.querySelector(".hjour-plot"));
+  assert.equal(sec.querySelector(".hjour-all summary").textContent, "Every mark ahead");
+  assert.equal(sec.querySelectorAll(".hjour-all .msrow").length, journey().marks.length);
+  assert.equal(sec.querySelector("[data-hwk-season]").textContent, "All of the season ›");
   assertClean(road, "the trail");
+  assertClean(host, "your road on Week");
 });
 
 test("the journey trail: server words stay text; the summit is the mark the road ends at", () => {
@@ -1096,10 +1119,10 @@ test("the hero leads with the purpose, says the other once under it, and the rib
   // The summary is folded into `sub` by the server: never said twice.
   assert.equal(!!host.querySelector(".hwk-summary"), false);
   assert.equal(host.querySelector(".hwk-sec.is-shape .hwk-aside").textContent, "1 of 4 lifting days · 3.7 of 19.3 mi");
-  // Section order: stand, week, ahead.
+  // Section order: the road first when there is one, then stand and week.
   assert.deepEqual(
     host.querySelectorAll(".hwk-sec").map((s) => s.querySelector(".hwk-k").textContent),
-    ["Since you started", "Where you stand", "This week's shape", "Ahead"]
+    ["Your road", "Since you started", "Where you stand", "This week's shape"]
   );
   // An older frame (no sub) keeps its line and plain kicker; the race end needs the flag.
   const old = landing(win, weekRead());
@@ -1309,44 +1332,13 @@ test("an older read keeps the meter and its place word; the Season's goal row st
   );
 });
 
-test("ahead: the next four weeks take half the strip, then to the furthest mark; every mark a row", () => {
-  const win = load();
-  const { aheadPosition, aheadLayout } = win.CairnAheadStrip;
-  // The broken axis: day 14 at a quarter, day 28 at the middle, the furthest at the end.
-  for (const far of [70, 181]) {
-    assert.equal(aheadPosition(14, far), 0.25);
-    assert.equal(aheadPosition(28, far), 0.5);
-    assert.equal(aheadPosition(far, far), 1);
-    assert.equal(aheadPosition(0, far), 0);
-  }
-  assert.equal(aheadPosition(49, 70), 0.75);
-  // All within four weeks: one linear four-week axis, no break.
-  assert.equal(aheadPosition(14, 20), 0.5);
-  assert.equal(aheadPosition(7, 20), 0.25);
+test("your road: every mark is a milestone row under the trail; a tapped mark opens its words", async () => {
+  const win = load({ CairnDrill: drillStub() });
   const host = landing(win, newRead());
   const sec = host.querySelector(".hwk-sec.is-ahead");
-  const strip = sec.querySelector(".ahead-strip");
-  assert.ok(strip.classList.contains("is-broken"));
-  assert.ok(strip.querySelector(".ahead-break"));
-  assert.ok(strip.querySelector(".ahead-today"));
-  assert.equal(strip.querySelector(".ahead-lab.is-near").textContent, "Next four weeks");
-  assert.equal(strip.querySelector(".ahead-lab.is-far").textContent, "then to Dec");
-  // A window draws as a bar from its start to its end; marks wear their kind's stone.
-  const marks = strip.querySelectorAll(".ahead-mark");
-  assert.equal(marks.length, 3);
-  assert.ok(marks[0].classList.contains("is-window") && marks[0].classList.contains("stone-endurance"));
-  assert.match(marks[0].getAttribute("style"), /--x:10\.7;--x2:21\.4/);
-  assert.match(marks[2].getAttribute("style"), /--x:100/);
-  assert.ok(marks[2].classList.contains("stone-body"));
-  assert.equal(
-    strip.getAttribute("aria-label"),
-    "Ahead: Peak week · 48 km in 6 days; Cambridge Half in 4 weeks; Goal weight · 154 lb in 10 weeks"
-  );
-  const layout = aheadLayout(win.CairnWeekModel.landing(newRead()).ahead);
-  assert.equal(layout.broken, true);
-  assert.equal(layout.furthest, 70);
+  assert.ok(sec.querySelector(".hjour-plot"));
   // Every mark a milestone row; a mark with a page is a link with a chevron, one without stays plain.
-  const rows = sec.querySelectorAll(".msrow");
+  const rows = sec.querySelectorAll(".hjour-all .msrow");
   assert.deepEqual(
     rows.map((r) => r.querySelector(".msrow-label").textContent),
     ["Peak week · 48 km", "Cambridge Half", "Goal weight · 154 lb"]
@@ -1354,12 +1346,27 @@ test("ahead: the next four weeks take half the strip, then to the furthest mark;
   assert.equal(rows[1].querySelector("a").getAttribute("data-horizon-href"), "/app/horizon/race");
   assert.equal(rows[1].querySelector(".msrow-arw").textContent, "›");
   assert.equal(!!rows[2].querySelector("a"), false);
-  assert.equal(!!sec.querySelector("[data-hwk-season]"), false, "five or fewer: nothing hidden, no more link");
-  assert.equal(!!host.querySelector(".hwk-sec.is-next"), false, "Next up merged into Ahead");
-  assertClean(host, "ahead");
+  assert.equal(!!host.querySelector(".hwk-sec.is-next"), false, "Next up merged into the road");
+  assertClean(host, "your road");
+  // Mounted, a tap on a mark's label (or its dot) opens that mark's words in the card.
+  const slot = createHost(win.document);
+  win.CairnHorizonWeekController.mount(slot, {
+    peek: () => null,
+    load: () => Promise.resolve(newRead()),
+  });
+  await flush();
+  await flush();
+  const name = () => slot.querySelector(".hjour-detail .hjour-d-name").textContent;
+  assert.equal(name(), "Peak week · 48 km");
+  const buttons = slot.querySelectorAll("button[data-hjour-mark]");
+  const race = buttons.find((b) => b.getAttribute("data-hjour-mark") === "1");
+  await race.click();
+  assert.equal(name(), "Cambridge Half");
+  assert.equal(race.getAttribute("aria-pressed"), "true");
+  assert.equal(slot.querySelector(".hjour-detail a.hjour-d-link").getAttribute("href"), "/app/horizon/race");
 });
 
-test("ahead: more than five marks show five and '+N more ›'; a near-only road is one unbroken axis", () => {
+test("your road: more than five marks show five rows and '+N more ›'", () => {
   const win = load();
   const r = newRead();
   const base = journey().marks[1];
@@ -1376,12 +1383,10 @@ test("ahead: more than five marks show five and '+N more ›'; a near-only road 
   const host = landing(win, r);
   const sec = host.querySelector(".hwk-sec.is-ahead");
   assert.equal(sec.querySelectorAll(".msrow").length, 5);
-  assert.equal(sec.querySelectorAll(".ahead-mark").length, 7, "the strip shows every mark");
-  assert.equal(sec.querySelector("[data-hwk-season]").textContent, "+2 more ›");
-  const strip = sec.querySelector(".ahead-strip");
-  assert.equal(strip.classList.contains("is-broken"), false);
-  assert.equal(!!strip.querySelector(".ahead-break"), false);
-  assert.equal(!!strip.querySelector(".ahead-lab.is-far"), false);
+  assert.equal(sec.querySelectorAll(".hjour-node").length, 8, "the trail shows every mark, and the start");
+  const season = sec.querySelectorAll("[data-hwk-season]");
+  assert.equal(season.length, 1);
+  assert.equal(season[0].textContent, "+2 more ›");
 });
 
 test("your team: up to three seats fill their own slot when the team read lands; the link note sits under the goals", async () => {

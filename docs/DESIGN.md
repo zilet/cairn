@@ -289,15 +289,22 @@ bottom:
   mono ("1 of 5 lifting days · 16.6 mi planned"); the summary sentence prints only on an older read
   without `sub` (the server folds it into `sub`); "Day by day" folds the days as the day view's
   row variant. There is no "Still open": the hollow columns already mark the open key sessions.
-- **Ahead** (`.ahead`, `ahead-strip-client.ts`): one honest strip over the journey's marks — today a
-  dawn tick at the left, the next 28 days on the first half of the width, day 28 to the furthest
-  mark on the second, a break glyph at the midpoint and mono labels "Next four weeks" / "then to
-  May" (one linear four-week axis, no break, when everything is within four weeks); each mark a
-  dot in its stone's hue, a window a short bar. No invented height and no pulsing dot; the
-  geometry is `aheadPosition`/`aheadLayout`, which the tests read. Under it every mark is a
-  milestone row (`.msrow`, a link with a chevron when the mark has a page), five shown and "+N more
-  ›" to the Season. An older read without marks shows the next milestones as rows; with nothing
-  dated, the starter (`CairnJourneyTrail.starterHtml`) sits under "Ahead".
+- **Your road** (`.hjour`, `journey-trail-client.ts`, GET `/api/week` `journey`; directly under the
+  hero when there is a journey to draw, last on the page as "Ahead" when there is not): the trail to scale
+  in time from where this stretch began, through today, up to the furthest dated mark. Above it the
+  server's one line of where the athlete stands. The walked part is solid dawn over a soft ground
+  wash, with a small step for each week since the start (every other week past six months); the
+  road ahead is dotted; a peak week is a lit stretch; each mark sits on the trail in its stone's
+  hue; the summit is a small cairn with first light behind it, and a far ridge sits behind it all.
+  Height is the trail's own shape, never a measure: the plot encodes time, left to right, and which
+  side of today a day is. A tap on a labelled mark or its dot opens that mark's words in the card
+  under the axis (the next mark by default), and a mark with a page makes the card a link. "Behind
+  you" lists what has already moved, each a stone in its area's hue. Under it "Every mark ahead"
+  folds the marks as milestone rows (`.msrow`, five shown and "+N more ›" to the Season) when there
+  are two or more, and "All of the season ›". The walked part draws in ONCE on a cold paint, the
+  steps and marks settle onto it, first light comes up and today rings once; nothing loops. An
+  older read without a journey shows the next milestones as rows under "Ahead"; with nothing dated,
+  the starter (`CairnJourneyTrail.starterHtml`) sits there.
 - **Your team this week** (`.seat`, `team-seats-client.ts`, GET `/api/team-week`, SWR key
   `horizon:team-week`, its own lane: it fills its slot when it lands and a failed read leaves it
   out): up to three seats, each the stone dot, the role as a mono eyebrow in the seat's deep hue,
@@ -1532,12 +1539,10 @@ hue, filled behind today and open ahead, an optional "Today" mark), `goalrow`
 the drawn thread — start, about four weeks ago, now, goal — or, on an older read, a meter said in
 a word), `frameline` (`frame-line-client.ts`: the week's frame, verbatim, with the block ribbon),
 `proof` (`proof-band-client.ts`: "Since you started", a measure before → after with a small
-picture), `ahead` (`ahead-strip-client.ts`: the honest strip — four weeks on its first half, then
-to the furthest mark — and a milestone row per mark), `seat` (`team-seats-client.ts`: "Your team
+picture), `ahead` (`ahead-strip-client.ts`: a milestone row per mark ahead, folded under the trail), `seat` (`team-seats-client.ts`: "Your team
 this week" and the team's link note) and `hjour` (`journey-trail-client.ts`, CSS
 `horizon/journey.css`: the trail to scale in time from where the stretch began through today to
-the summit goal; no longer composed on Week, which draws `ahead` instead, and still lit with no
-loop; its starter's openers hand chat a first sentence through `state.chatPrefill` and sit under
+the summit goal, composed on Week as "Your road" and lit with no loop; its starter's openers hand chat a first sentence through `state.chatPrefill` and sit under
 "Ahead" when nothing is dated). Horizon's Week (`hwk`, `horizon-week-{client,controller}.ts`)
 composes them; To the race and the Season reuse `frameline`, `msrow` and `goalrow`. `standing` (`standing-{model,client}.ts`, lazy `horizon` bundle, `horizon/landing.css`: "Where you stand", one collapsed row per area under the goal rows, a native disclosure when it has lines, its dot the `goalrow-dot`) rides the same bundle.
 

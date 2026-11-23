@@ -312,6 +312,7 @@ summary.standing-head::after{content:"\25B8";margin-left:auto;color:var(--muted)
 [open]>summary.standing-head::after{content:"\25BE"}
 .standing-head .goalrow-dot{flex:none;margin-top:var(--space-3)}
 .standing-main{min-width:0;line-height:var(--leading-snug)}
+a.standing-label{color:inherit;text-decoration:underline;text-decoration-color:var(--line-strong);text-underline-offset:3px}
 .standing-dir{color:var(--cd)}
 .standing-since,.standing-tail,.standing-invite{font-size:var(--text-xs);color:var(--muted)}
 .standing-words{display:block;font-size:var(--text-sm);color:var(--ink2)}
@@ -330,17 +331,6 @@ summary.standing-head::after{content:"\25B8";margin-left:auto;color:var(--muted)
 .hwk-link-ask:active .hwk-link-chip{transform:var(--press)}
 .hwk-link-ask:focus-visible{outline:none}
 .hwk-link-ask:focus-visible .hwk-link-chip{outline:2px solid var(--dawn);outline-offset:2px}
-.ahead{display:grid;gap:var(--space-5);min-width:0}
-.ahead-strip{position:relative;height:44px;margin:0 var(--space-3)}
-.ahead-lab{position:absolute;top:0;font-family:var(--font-mono);font-size:var(--text-2xs);letter-spacing:var(--tracking-mono);text-transform:uppercase;color:var(--muted);white-space:nowrap}
-.ahead-lab.is-near{left:0}
-.ahead-lab.is-far{right:0}
-.ahead-axis{position:absolute;left:0;right:0;top:28px;height:1px;background:var(--line-strong)}
-.ahead-break{position:absolute;left:50%;top:21px;width:8px;height:15px;margin-left:-4px;box-sizing:border-box;background:var(--ground);border-left:1px solid var(--line-strong);border-right:1px solid var(--line-strong);transform:skewX(-18deg)}
-.ahead-today{position:absolute;left:0;top:18px;width:2px;height:21px;margin-left:-1px;border-radius:var(--radius-3xs);background:var(--dawn)}
-.ahead-marks{position:absolute;inset:0}
-.ahead-mark{position:absolute;top:23px;left:calc(var(--x,0) * 1%);width:11px;height:11px;margin-left:-5.5px;border-radius:50%;background:var(--c);box-shadow:0 0 0 2px var(--ground)}
-.ahead-mark.is-window{top:25px;width:calc((var(--x2,0) - var(--x,0)) * 1%);min-width:8px;height:7px;margin-left:0;border-radius:var(--radius-pill)}
 .seat-list{list-style:none;margin:0;padding:0;display:grid}
 .seat{display:grid;grid-template-columns:10px minmax(0,1fr);column-gap:var(--space-5);row-gap:var(--space-1);padding:var(--space-5) 0;border-top:1px solid var(--line);min-width:0}
 .seat:first-child{border-top:0;padding-top:var(--space-1)}
@@ -353,10 +343,11 @@ a.proof-link,a.goalrow-link,.hwk-link-chip{transition:none}
 }
 .hjour{display:grid;gap:var(--space-6);min-width:0}
 .hjour-line{margin:0;font-family:var(--font-display);font-size:var(--text-lead);line-height:var(--leading-snug);color:var(--ink);text-wrap:pretty;max-width:46ch}
-.hjour-plot{position:relative;height:172px;min-width:0}
+.hjour-plot{position:relative;height:196px;min-width:0}
 .hjour-svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
 .hjour-svg path{vector-effect:non-scaling-stroke}
 .hjour-ground{stroke:none}
+.hjour-ridge{stroke:none;fill:var(--well);opacity:.55}
 .hjour-g0{stop-color:var(--dawn);stop-opacity:.13}
 .hjour-g1{stop-color:var(--dawn);stop-opacity:0}
 .hjour-ahead{fill:none;stroke:var(--line-strong);stroke-width:2;stroke-dasharray:1 7;stroke-linecap:round}
@@ -373,6 +364,11 @@ a.proof-link,a.goalrow-link,.hwk-link-chip{transition:none}
 .hjour-cairn{display:block;width:100%;height:100%;overflow:visible}
 .hjour-cairn ellipse{fill:var(--c);stroke:var(--cd);stroke-width:1.2}
 .hjour-now{width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;background:var(--dawn);box-shadow:0 0 0 3px var(--surface)}
+.hjour-dawn{position:absolute;left:var(--x);top:var(--y);width:120px;height:120px;margin:-74px 0 0 -60px;border-radius:50%;pointer-events:none;background:radial-gradient(closest-side,color-mix(in srgb,var(--dawn) 26%,transparent),transparent)}
+.hjour-step{position:absolute;left:var(--x);top:var(--y);width:5px;height:5px;margin:-2.5px 0 0 -2.5px;border-radius:50%;background:var(--surface);box-shadow:inset 0 0 0 1.5px var(--dawn);pointer-events:none}
+.hjour-node[data-hjour-mark]{cursor:pointer}
+.hjour-node[data-hjour-mark]::after{content:"";position:absolute;inset:-12px}
+.hjour-pulse{width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;box-shadow:0 0 0 2px var(--dawn);opacity:0;pointer-events:none}
 .hjour-lbl{display:grid;gap:var(--space-1);padding:var(--space-2) var(--space-3);border:0;border-radius:var(--radius-2xs);background:none;color:var(--ink);font:inherit;text-align:center;cursor:pointer;white-space:nowrap;-webkit-tap-highlight-color:transparent;--tx:-50%;--ty:0px}
 .hjour-lbl small,.hjour-today,.hjour-from{font-family:var(--font-mono);font-size:var(--text-2xs);letter-spacing:var(--tracking-mono);text-transform:uppercase;color:var(--muted);line-height:var(--leading-snug)}
 .hjour-lbl b{font-family:var(--font-display);font-weight:var(--weight-regular);font-size:var(--text-md);line-height:var(--leading-tight)}
@@ -394,8 +390,14 @@ a.proof-link,a.goalrow-link,.hwk-link-chip{transition:none}
 .hjour-axis{position:relative;height:16px;margin-top:calc(var(--space-4) * -1);border-top:1px solid var(--line)}
 .hjour-tick{position:absolute;left:var(--x);top:0;transform:translateX(-50%);padding-top:var(--space-2);font-family:var(--font-mono);font-size:var(--text-2xs);letter-spacing:var(--tracking-mono);text-transform:uppercase;color:var(--muted)}
 .hjour-tick::before{content:"";position:absolute;left:50%;top:-1px;width:1px;height:4px;background:var(--line-strong)}
-.hjour-detail{display:flex;gap:var(--space-5);align-items:flex-start;padding:var(--space-6) var(--space-7);border-radius:var(--radius-sm);background:var(--surface);border:1px solid var(--line);min-width:0}
+.hjour-detail{border-radius:var(--radius-sm);background:var(--surface);border:1px solid var(--line);min-width:0}
 .hjour-detail:empty{display:none}
+.hjour-d-link{display:flex;gap:var(--space-5);align-items:flex-start;padding:var(--space-6) var(--space-7);min-width:0;color:inherit;text-decoration:none;border-radius:inherit}
+a.hjour-d-link:active{transform:var(--press)}
+a.hjour-d-link:focus-visible{outline:2px solid var(--dawn);outline-offset:2px}
+@media (hover:hover){a.hjour-d-link:hover{background:var(--surface2)}
+}
+.hjour-d-go{margin-left:auto;align-self:center;color:var(--muted);font-size:var(--text-md)}
 .hjour-d-dot{flex:none;width:10px;height:10px;margin-top:var(--space-2);border-radius:50% 50% 45% 55%;background:var(--c)}
 .hjour-d-body{display:grid;gap:var(--space-1);min-width:0}
 .hjour-d-name{font-size:var(--text-md);font-weight:var(--weight-semibold);color:var(--ink)}
@@ -405,8 +407,10 @@ a.proof-link,a.goalrow-link,.hwk-link-chip{transition:none}
 .hjour-behind-k{color:var(--muted)}
 .hjour-bs{list-style:none;margin:0;padding:0;display:grid;gap:var(--space-3)}
 .hjour-b{display:flex;gap:var(--space-4);align-items:flex-start;font-size:var(--text-sm);line-height:var(--leading-snug);color:var(--ink2)}
-.hjour-b-mark{flex:none;width:14px;height:14px;margin-top:var(--space-1);border-radius:50%;background:var(--s-endurance)}
-.hjour-b-mark path{fill:none;stroke:var(--d-endurance);stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.hjour-b-mark{flex:none;width:13px;height:9px;margin-top:var(--space-2);border-radius:50% 50% 46% 54% / 58% 62% 42% 38%;background:var(--c);box-shadow:inset 0 0 0 1.2px var(--cd)}
+.hjour-all{min-width:0}
+.hjour-all-sum{cursor:pointer;list-style:none}
+.hjour-all-sum::-webkit-details-marker{display:none}
 .hjour.is-drawing .hjour-walked,.hjour.is-drawing .hjour-ground{animation:hjour-walk 1.4s var(--ease) both .15s}
 @keyframes hjour-walk{from{clip-path:inset(0 100% 0 0)}
 to{clip-path:inset(0 0 0 0)}
@@ -414,6 +418,12 @@ to{clip-path:inset(0 0 0 0)}
 .hjour.is-drawing .hjour-node,.hjour.is-drawing .hjour-lbl{animation:hjour-settle var(--dur-3) var(--ease) both;animation-delay:calc(.6s + var(--i,0) * 90ms)}
 @keyframes hjour-settle{from{opacity:0}
 to{opacity:1}
+}
+.hjour.is-drawing .hjour-step{animation:hjour-settle var(--dur-2) var(--ease) both;animation-delay:calc(.35s + var(--i,0) * 60ms)}
+.hjour.is-drawing .hjour-dawn{animation:hjour-settle 1.2s var(--ease) both 1.1s}
+.hjour.is-drawing .hjour-pulse{animation:hjour-ring 1.1s var(--ease) both 1.5s}
+@keyframes hjour-ring{from{opacity:.7;transform:scale(1)}
+to{opacity:0;transform:scale(3.2)}
 }
 .hjour.is-starter{gap:var(--space-5)}
 .hjour-start-plot{position:relative;height:64px}

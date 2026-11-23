@@ -2,8 +2,7 @@
    Horizon's Week, what the redesigned landing adds (docs/IA.md "Horizon
    landing"): the masthead asides, "Since you started" (the proof band,
    proof-band-client.ts), the goal row's drawn track (goal-row-client.ts),
-   the team's link note, "Ahead" (one honest strip, ahead-strip-client.ts)
-   and "Your team this week" (team-seats-client.ts). Every hue is a stone's
+   the team's link note and "Your team this week" (team-seats-client.ts). Every hue is a stone's
    (`stone-<key>` sets --c / --cd) or the one dawn accent; state is words.
    The proof line draws, fills grow and dots settle ONCE on a cold paint
    (`.hwk.settle-in`, `.proof-band.is-drawing`); nothing loops, everything is
@@ -98,6 +97,8 @@ summary.standing-head::after{content:"\25B8";margin-left:auto;color:var(--muted)
 [open]>summary.standing-head::after{content:"\25BE"}
 .standing-head .goalrow-dot{flex:none;margin-top:var(--space-3)}
 .standing-main{min-width:0;line-height:var(--leading-snug)}
+/* A row with a page keeps its label as the link: the row's own ink, a quiet underline. */
+a.standing-label{color:inherit;text-decoration:underline;text-decoration-color:var(--line-strong);text-underline-offset:3px}
 .standing-dir{color:var(--cd)}
 .standing-since,.standing-tail,.standing-invite{font-size:var(--text-xs);color:var(--muted)}
 .standing-words{display:block;font-size:var(--text-sm);color:var(--ink2)}
@@ -120,22 +121,6 @@ summary.standing-head::after{content:"\25B8";margin-left:auto;color:var(--muted)
 .hwk-link-ask:active .hwk-link-chip{transform:var(--press)}
 .hwk-link-ask:focus-visible{outline:none}
 .hwk-link-ask:focus-visible .hwk-link-chip{outline:2px solid var(--dawn);outline-offset:2px}
-
-/* ---- ahead: the next four weeks on the first half, then on to the furthest mark ---- */
-.ahead{display:grid;gap:var(--space-5);min-width:0}
-.ahead-strip{position:relative;height:44px;margin:0 var(--space-3)}
-.ahead-lab{position:absolute;top:0;font-family:var(--font-mono);font-size:var(--text-2xs);letter-spacing:var(--tracking-mono);
-  text-transform:uppercase;color:var(--muted);white-space:nowrap}
-.ahead-lab.is-near{left:0}
-.ahead-lab.is-far{right:0}
-.ahead-axis{position:absolute;left:0;right:0;top:28px;height:1px;background:var(--line-strong)}
-.ahead-break{position:absolute;left:50%;top:21px;width:8px;height:15px;margin-left:-4px;box-sizing:border-box;background:var(--ground);
-  border-left:1px solid var(--line-strong);border-right:1px solid var(--line-strong);transform:skewX(-18deg)}
-.ahead-today{position:absolute;left:0;top:18px;width:2px;height:21px;margin-left:-1px;border-radius:var(--radius-3xs);background:var(--dawn)}
-.ahead-marks{position:absolute;inset:0}
-.ahead-mark{position:absolute;top:23px;left:calc(var(--x,0) * 1%);width:11px;height:11px;margin-left:-5.5px;border-radius:50%;
-  background:var(--c);box-shadow:0 0 0 2px var(--ground)}
-.ahead-mark.is-window{top:25px;width:calc((var(--x2,0) - var(--x,0)) * 1%);min-width:8px;height:7px;margin-left:0;border-radius:var(--radius-pill)}
 
 /* ---- your team this week: a seat a row ---- */
 .seat-list{list-style:none;margin:0;padding:0;display:grid}

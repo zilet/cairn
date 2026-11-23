@@ -40,6 +40,9 @@
 .fuel-guides{display:flex;flex-direction:column;gap:var(--space-5);margin:var(--space-6) 0 0;padding-top:var(--space-5);
   border-top:1px solid var(--line)}
 .fuel-guide{display:grid;grid-template-columns:4.4rem minmax(0,1fr);align-items:baseline;gap:var(--space-2) var(--space-6)}
+/* A label that wraps ("Saturated fat") spans the rows beside it, so it never opens a gap
+   between the row's value and its track. */
+.fuel-guide dt{grid-row:1 / span 3}
 .fuel-guide dd{grid-column:2;margin:0}
 .fuel-guide-v{font-size:var(--text-sm);color:var(--ink2)}
 .fuel-guide-track{position:relative;height:4px;border-radius:var(--radius-pill);background:var(--well)}

@@ -7346,10 +7346,8 @@ declare global {
     proof: ClientProofRow[];
     /** The whole-person read (GET /api/week `standing`, raw contract rows); empty on an older read. */
     standing: import("./week-read.js").WeekReadStandingRow[];
-    /** Every dated mark ahead (the journey's marks), for the ahead strip and its rows. */
+    /** Every dated mark ahead (the journey's marks), for the rows folded under the trail. */
     ahead: ClientAheadMark[];
-    /** The month the furthest mark falls in ("May"); "" with no marks. */
-    ahead_to: string;
     /** "1 of 5 lifting days · 16.6 mi planned": the shape's masthead (the server's two totals words). */
     totals_words: string;
     /** The hero's quiet second line (`frame.sub`); "" on an older read, which keeps `frame.line`. */
@@ -7396,7 +7394,7 @@ declare global {
     /** An in-app page ("/app/…"); null with none. */
     href: string | null;
   };
-  /** One dated mark ahead (the ahead strip, ahead-strip-client.ts). */
+  /** One dated mark ahead (its row under the trail, ahead-strip-client.ts). */
   type ClientAheadMark = {
     kind: string;
     stone: ClientRowStone;
@@ -7414,12 +7412,6 @@ declare global {
     days: number;
     end_days: number | null;
     href: string | null;
-  };
-  /** The ahead strip's geometry (aheadLayout): positions 0..1 of the strip's width. */
-  type ClientAheadLayout = {
-    broken: boolean;
-    furthest: number;
-    items: Array<{ kind: string; stone: ClientRowStone; x: number; x2: number | null }>;
   };
   /** One seat's row in "Your team this week" (team-seats-client.ts). */
   type ClientTeamSeatRow = { seat: ClientRowStone; role: string; did: string; tail: string };
@@ -7662,15 +7654,10 @@ declare global {
       seriesSvg(series: ReadonlyArray<number>, kind: ClientProofRow["kind"]): string;
       seriesPoints(series: ReadonlyArray<number>): Array<{ x: number; y: number }>;
     };
-    /** LAZY "horizon" bundle (ahead-strip-client.ts): "Ahead", the strip and its rows. */
+    /** LAZY "horizon" bundle (ahead-strip-client.ts): the marks ahead as rows, folded under the trail. */
     CairnAheadStrip: {
-      NEAR_DAYS: number;
       ROWS_MAX: number;
-      aheadPosition(days: number, furthest: number): number;
-      aheadLayout(marks: ReadonlyArray<ClientAheadMark>): ClientAheadLayout;
-      stripHtml(marks: ReadonlyArray<ClientAheadMark>, opts?: { to?: string }): string;
       rowsHtml(marks: ReadonlyArray<ClientAheadMark>, opts?: { seasonHref?: string }): string;
-      aheadHtml(marks: ReadonlyArray<ClientAheadMark>, opts?: { to?: string; seasonHref?: string }): string;
     };
     /** LAZY "horizon" bundle (team-seats-client.ts): "Your team this week" and the link note. */
     CairnTeamSeats: {
@@ -7740,7 +7727,7 @@ declare global {
     CairnJourneyTrail: {
       trailHtml(
         journey: import("./week-read.js").WeekReadJourney | null | undefined,
-        opts?: { selected?: number; enter?: boolean }
+        opts?: { selected?: number; enter?: boolean; below?: string }
       ): string;
       detailHtml(mark: import("./week-read.js").WeekReadJourneyMark | null | undefined): string;
       starterHtml(opts?: { hasGoals?: boolean }): string;

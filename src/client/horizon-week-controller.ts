@@ -71,6 +71,8 @@
     let team: ClientTeamSeats | null = null;
     let teamRaw = "";
     let selected: string | null = null;
+    /** The trail mark whose words are open; kept across a repaint while that mark still exists. */
+    let mark = 0;
     let detailTeardown: (() => void) | null = null;
     const host = slot as HTMLElement;
     const q = <T extends Element = HTMLElement>(sel: string): T | null => host.querySelector<T>(sel);
@@ -160,6 +162,7 @@
       const calm = typeof deps.reducedMotion === "function" ? deps.reducedMotion() : false;
       host.innerHTML = CairnHorizonWeek.landingHtml(next, {
         enter: enter && !calm,
+        mark: mark < (next.journey?.marks.length ?? 0) ? mark : (mark = 0),
         seasonHref: deps.seasonHref,
         changesHref: deps.changesHref,
         team,
@@ -193,6 +196,20 @@
           if (!date) return;
           if (selected === date) foldDay();
           else openDay(date);
+        },
+        "hjour-mark": (el) => {
+          const i = Number(el.getAttribute("data-hjour-mark"));
+          const marks = model?.journey?.marks ?? [];
+          if (!Number.isInteger(i) || !marks[i] || typeof CairnJourneyTrail === "undefined") return;
+          mark = i;
+          host.querySelectorAll<HTMLElement>("button[data-hjour-mark]").forEach((b) => {
+            b.setAttribute("aria-pressed", String(b.getAttribute("data-hjour-mark") === String(i)));
+          });
+          host.querySelectorAll<HTMLElement>("[data-hjour-node]").forEach((n) => {
+            n.classList.toggle("is-on", n.getAttribute("data-hjour-node") === String(i));
+          });
+          const detail = q("[data-hjour-detail]");
+          if (detail) detail.innerHTML = CairnJourneyTrail.detailHtml(marks[i]);
         },
         "hjour-ask": (el) => prefillChat(el.getAttribute("data-hjour-ask")),
         "hwk-ask": (el) => prefillChat(el.getAttribute("data-hwk-ask")),

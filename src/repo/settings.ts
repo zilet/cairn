@@ -257,8 +257,12 @@ export const TASK_EXECUTION_PROFILES: Record<string, AbstractExecutionProfile> =
   meal_swap: { model_class: "deep", reasoning: "low" },
   recipe: { model_class: "deep", reasoning: "low" },
   onboard: { model_class: "deep", reasoning: "low" },
-  // A whole week of meals holds many constraints at once; medium until measured.
-  meal_plan: { model_class: "deep", reasoning: "medium" },
+  // A whole week of meals. Measured: at medium the draft alone outran the background
+  // leash on two providers; at low the draft and its verify pass finish in about three
+  // minutes with every day close to its own number. The numbers are held in code
+  // (verify-floors' day and week checks), and the verify pass below still reads the
+  // draft at medium.
+  meal_plan: { model_class: "deep", reasoning: "low" },
   // The connect step's "say hello": a one-line round-trip that proves the CLI answers.
   agent_hello: { model_class: "fast", reasoning: "low" },
   // The welcome's first week (src/coachOps/welcome.ts → composeWeek, op "welcome_week"):

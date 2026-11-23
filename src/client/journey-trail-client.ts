@@ -6,7 +6,13 @@
 // a peak week as a lit stretch of trail, and the summit (the furthest goal) as a small
 // cairn. Above it, the server's one line of where the athlete stands; under it, the
 // month ticks, the opened mark's own words (the next one by default — tap any labelled
-// mark to read it) and what has already moved toward a goal ("Behind you").
+// mark, or its dot, to read it; the opened mark links to its own page) and what has
+// already moved toward a goal ("Behind you"), each a stone set in its area's hue.
+//
+// What makes the road read as ground covered: a small step on the walked part for every
+// week since the start (every other week past six months), a far ridge behind the trail,
+// and first light behind the summit. Height is the trail's own shape, not a measure: the
+// only things the plot encodes are time (left to right) and which side of today a day is.
 //
 // With no dated mark ahead, the starter: a short trail into open ground and a few
 // one-tap openers that hand chat a sentence to start from (never sent for the athlete).
@@ -15,7 +21,7 @@
 // is escaped; positions are percentages of the plot, hues come from stone classes in
 // src/styles/horizon/journey.css. No score, no percent printed.
 //
-// LAZY ("calendar" bundle).
+// LAZY ("horizon" bundle).
 {
   type Journey = import("../contracts/week-read.js").WeekReadJourney;
   type Mark = import("../contracts/week-read.js").WeekReadJourneyMark;
@@ -30,6 +36,16 @@
   const LABEL_GAP = 21;
   /** Today never sits flush on the start: the walked part always reads. */
   const NOW_MIN_X = 11;
+  /** The most week steps drawn on the walked part; past it, every other week. */
+  const STEPS_MAX = 26;
+
+  /** A "Behind you" item's stone, by what moved. */
+  const BEHIND_STONE: Readonly<Record<string, string>> = {
+    race: "endurance",
+    race_done: "endurance",
+    weight: "body",
+    strength: "strength",
+  };
 
   const STONE: Readonly<Record<string, string>> = {
     race: "endurance",
@@ -127,17 +143,48 @@
     return `<div class="hjour-axis" aria-hidden="true">${ticks.join("")}</div>`;
   }
 
+  /** The far ridge behind the trail: a low line of hills rising toward the summit (decoration only). */
+  function ridgeD(): string {
+    const pts: string[] = [];
+    for (let x = 0; x <= 100; x += 2.5) {
+      const t = x / 100;
+      const y = 62 - 30 * t ** 1.6 + 5 * Math.sin(t * Math.PI * 3.3 + 1.1) + 2.5 * Math.sin(t * Math.PI * 7.1);
+      pts.push(`${x ? "L" : "M"}${r1(x)} ${r1(y)}`);
+    }
+    return `${pts.join(" ")} L100 100 L0 100 Z`;
+  }
+
+  /** One small step on the walked part per week since the start; none within a week of either end. */
+  function stepsHtml(start: number, today: number, xOf: (d: number) => number, enter: boolean): string {
+    const weeks = Math.floor((today - start) / 7);
+    if (weeks < 1) return "";
+    const every = weeks > STEPS_MAX ? 2 : 1;
+    const out: string[] = [];
+    for (let w = every; w <= weeks; w += every) {
+      const d = start + w * 7;
+      if (today - d < 3) break;
+      const x = xOf(d);
+      out.push(`<span class="hjour-step" style="--x:${r1(x)}%;--y:${r1(trailY(x))}%${enter ? `;--i:${out.length}` : ""}" aria-hidden="true"></span>`);
+    }
+    return out.join("");
+  }
+
   /** The opened mark's own words: what it is, when, and why it matters. */
   function detailHtml(mark: Mark | null | undefined): string {
     if (!mark) return "";
     const stone = STONE[mark.kind] || "endurance";
     const when = [mark.date_words, mark.days_words].filter(Boolean).join(" · ");
-    return `<span class="hjour-d-dot stone-${stone}" aria-hidden="true"></span>
+    const body = `<span class="hjour-d-dot stone-${stone}" aria-hidden="true"></span>
       <span class="hjour-d-body">
         <b class="hjour-d-name">${escHtml(mark.label)}</b>
         <span class="hjour-d-when">${escHtml(when)}</span>
         ${mark.detail ? `<span class="hjour-d-why">${escHtml(mark.detail)}</span>` : ""}
       </span>`;
+    // A mark with a page opens it from here (the Horizon controller routes the link).
+    const href = typeof mark.href === "string" && mark.href.startsWith("/") ? mark.href : "";
+    return href
+      ? `<a class="hjour-d-link" href="${escAttr(href)}" data-horizon-href>${body}<span class="hjour-d-go" aria-hidden="true">›</span></a>`
+      : `<span class="hjour-d-link">${body}</span>`;
   }
 
   function behindHtml(journey: Journey): string {
@@ -145,7 +192,7 @@
     const items = journey.behind
       .map(
         (b) =>
-          `<li class="hjour-b"><svg class="hjour-b-mark" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.4 5 8.8 9.6 3.4"/></svg><span>${escHtml(b.words)}</span></li>`
+          `<li class="hjour-b stone-${BEHIND_STONE[b.key] || "endurance"}"><span class="hjour-b-mark" aria-hidden="true"></span><span>${escHtml(b.words)}</span></li>`
       )
       .join("");
     return `<div class="hjour-behind"><span class="lbl hjour-behind-k">Behind you</span><ul class="hjour-bs">${items}</ul></div>`;
@@ -155,7 +202,10 @@
    * The trail; "" with nothing ahead to draw. `selected` is the mark index whose words
    * are open (default: the next mark); `enter` draws the walked part in once.
    */
-  function trailHtml(journey: Journey | null | undefined, opts: { selected?: number; enter?: boolean } = {}): string {
+  function trailHtml(
+    journey: Journey | null | undefined,
+    opts: { selected?: number; enter?: boolean; below?: string } = {}
+  ): string {
     const marks = journey?.marks ?? [];
     if (!journey || !marks.length) return "";
     const start = dayNumber(journey.start_date);
@@ -203,6 +253,7 @@
       .join("");
     const svg = `<svg class="hjour-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
       <defs><linearGradient id="hjourGround" x1="0" y1="0" x2="1" y2="0">${stops}</linearGradient></defs>
+      <path class="hjour-ridge" d="${ridgeD()}"/>
       <path class="hjour-ground" d="${ground}" fill="url(#hjourGround)"/>
       <path class="hjour-ahead" d="${pathD(xNow, X1)}"/>
       ${bands}
@@ -213,8 +264,8 @@
       .map((p) => {
         const stone = STONE[p.mark.kind] || "endurance";
         return p.mark.summit
-          ? `<span class="hjour-node is-summit stone-${stone}" style="--x:${r1(p.x)}%;--y:${r1(p.y)}%;--i:${p.index}" aria-hidden="true">${cairnGlyph()}</span>`
-          : `<span class="hjour-node is-${escAttr(p.mark.kind)} stone-${stone}${p.index === selected ? " is-on" : ""}" style="--x:${r1(p.x)}%;--y:${r1(p.y)}%;--i:${p.index}" data-hjour-node="${p.index}" aria-hidden="true"></span>`;
+          ? `<span class="hjour-node is-summit stone-${stone}" style="--x:${r1(p.x)}%;--y:${r1(p.y)}%;--i:${p.index}" data-hjour-mark="${p.index}" aria-hidden="true">${cairnGlyph()}</span>`
+          : `<span class="hjour-node is-${escAttr(p.mark.kind)} stone-${stone}${p.index === selected ? " is-on" : ""}" style="--x:${r1(p.x)}%;--y:${r1(p.y)}%;--i:${p.index}" data-hjour-node="${p.index}" data-hjour-mark="${p.index}" aria-hidden="true"></span>`;
       })
       .join("");
     const labels = placed
@@ -226,11 +277,14 @@
       })
       .join("");
     const summit = marks.find((m) => m.summit) ?? marks[marks.length - 1];
+    const summitAt = placed.find((p) => p.mark === summit) ?? placed[placed.length - 1];
     const aria = `Your road from ${journey.start_words} through today to ${summit.label}, ${summit.date_words}`;
     return `<div class="hjour${opts.enter ? " is-drawing" : ""}" data-hjour>
       ${journey.line ? `<p class="hjour-line">${escHtml(journey.line)}</p>` : ""}
       <div class="hjour-plot" role="img" aria-label="${escAttr(aria)}">
         ${svg}
+        <span class="hjour-dawn" style="--x:${r1(summitAt.x)}%;--y:${r1(summitAt.y)}%" aria-hidden="true"></span>
+        ${stepsHtml(start, today, xOf, !!opts.enter)}
         <span class="hjour-node is-start" style="--x:${X0}%;--y:${r1(trailY(X0))}%" aria-hidden="true"></span>
         ${nodes}
         <span class="hjour-pulse" style="--x:${r1(xNow)}%;--y:${r1(yNow)}%" aria-hidden="true"></span>
@@ -242,6 +296,7 @@
       ${axisHtml(start, end, xOf)}
       <div class="hjour-detail" id="hjourDetail" role="status" aria-live="polite" data-hjour-detail>${detailHtml(marks[selected])}</div>
       ${behindHtml(journey)}
+      ${opts.below || ""}
     </div>`;
   }
 
