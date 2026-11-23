@@ -240,6 +240,21 @@ test("an aggregate the network did not answer never fills an emptied session slo
   assert.ok(calls.some((call) => call[0] === "api" && call[1] === "/sessions?date=2026-01-02"));
 });
 
+// …while a copy the cache read moments ago (a prefetch on the way in) is current, and a cold
+// open must not spend a second request on the session it already holds.
+test("an aggregate read moments ago still answers the session without a second request", async () => {
+  const loader = loadDataLoader();
+  const { deps, calls } = makeDeps({
+    cachedApi: async () => aggregatePayload(),
+    peekCached: (key) => (key === "today:aggregate:2026-01-02" ? { data: aggregatePayload(), fresh: true } : null),
+  });
+
+  const result = await loader.load({}, deps);
+
+  assert.deepEqual(result.session, { id: 7, date: "2026-01-02", sets: [] });
+  assert.equal(calls.some((call) => call[0] === "api" && call[1].startsWith("/sessions")), false);
+});
+
 // ---- the fan-in: one aggregate on the warm path too, and its prep slices ----
 
 function aggregatePayload(extra = {}) {

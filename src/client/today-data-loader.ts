@@ -201,6 +201,7 @@ type TodayDataLoaderApi = {
     const aggregateKey = "today:aggregate:" + deps.state.logDate;
     let aggregate: TodayDataAggregate | null = null;
     let aggregateFresh = false;
+    let aggregateCurrent = false; // answered just now, or read moments ago: never a failed read's old copy
     if (!warm) {
       try {
         const value = await deps.cachedApi(aggregatePath, {
@@ -212,14 +213,11 @@ type TodayDataLoaderApi = {
         });
         if (isTodayAggregate(value)) {
           aggregate = value;
+          aggregateCurrent = aggregateFresh || !!deps.peekCached(aggregateKey, 3000)?.fresh;
           // Re-check each slice now: a preparation mutation may have primed a
           // newer session while the aggregate GET was in flight.
           for (const slice of sliceOf(value)) {
-            // An aggregate the network did not just answer (a cached copy, or the fallback
-            // of a failed read) never fills an EMPTY session slot: a slot is empty because a
-            // write dropped it, so that copy predates the write and would repaint the log
-            // without the sets just saved.
-            if (!aggregateFresh && slice.key === sessKey) continue;
+            if (!aggregateCurrent && slice.key === sessKey) continue; // an emptied slot was dropped by a write this copy predates
             if (aggregateFresh || !deps.peekCached(slice.key)) deps.storeCached(slice.key, slice.data);
           }
           primePrepSlices(value, !aggregateFresh);
@@ -282,7 +280,9 @@ type TodayDataLoaderApi = {
       ? Promise.resolve(latestSessionPeek.data)
       : peeks.session
       ? Promise.resolve(peeks.session.data)
-      : deps.api("/sessions?date=" + deps.state.logDate);
+      : aggregate && aggregateCurrent
+        ? Promise.resolve(aggregate.session)
+        : deps.api("/sessions?date=" + deps.state.logDate);
     const statsPromise = useFreshAggregate
       ? Promise.resolve(aggregate!.stats)
       : peeks.stats
