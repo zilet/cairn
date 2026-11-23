@@ -201,7 +201,14 @@
     if (!j || !isoOf(j.start_date) || !isoOf(j.today)) return null;
     const marks = list<NonNullable<WeekRead["journey"]>["marks"][number]>(j.marks).filter((m) => isoOf(m.date));
     if (!marks.length) return null;
-    return { ...j, marks, behind: list(j.behind), line: text(j.line) };
+    // `walked` stays index for index (a tapped stone is named by its place); absent on an older read.
+    return {
+      ...j,
+      marks,
+      behind: list(j.behind),
+      ...(j.walked !== undefined ? { walked: list(j.walked) } : {}),
+      line: text(j.line),
+    };
   }
 
   /**

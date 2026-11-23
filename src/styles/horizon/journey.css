@@ -5,7 +5,8 @@
    drawn in ONCE on the landing's entrance; the road ahead dotted; a peak week
    lit along the trail; each mark in its stone's hue; the summit a small
    cairn with first light behind it; a small step on the walked part for each
-   week since the start; a far ridge behind it all; today a still dawn dot
+   week since the start; what was done set on the walked part as small filled
+   stones; a far ridge behind it all; today a still dawn dot
    that rings once when the trail has drawn (the ping is reserved for
    something live, so nothing here loops). The plot is a percentage
    box: the SVG stretches (strokes do not), and every mark and label is an
@@ -49,6 +50,12 @@
   background:var(--surface);box-shadow:inset 0 0 0 1.5px var(--dawn);pointer-events:none}
 .hjour-node[data-hjour-mark]{cursor:pointer}
 .hjour-node[data-hjour-mark]::after{content:"";position:absolute;inset:-12px}
+/* what was done on the walked part: a small set stone, filled (the marks ahead are hollow) */
+.hjour-stone{position:absolute;left:var(--x);top:var(--y);width:11px;height:8px;margin:-4px 0 0 -5.5px;cursor:pointer;
+  border-radius:50% 50% 46% 54% / 58% 62% 42% 38%;background:var(--c);box-shadow:inset 0 0 0 1.2px var(--cd),0 0 0 2px var(--surface);
+  transition:transform var(--dur-1) var(--ease)}
+.hjour-stone::after{content:"";position:absolute;inset:-12px}
+.hjour-stone.is-on{transform:scale(1.35)}
 .hjour-pulse{width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;box-shadow:0 0 0 2px var(--dawn);opacity:0;pointer-events:none}
 
 /* labels: a mono "when" over the mark's short word; above or below, aligned to the edge near the ends */
@@ -111,6 +118,9 @@ a.hjour-d-link:focus-visible{outline:2px solid var(--dawn);outline-offset:2px}
 .hjour.is-drawing .hjour-node,.hjour.is-drawing .hjour-lbl{animation:hjour-settle var(--dur-3) var(--ease) both;
   animation-delay:calc(.6s + var(--i,0) * 90ms)}
 @keyframes hjour-settle{from{opacity:0}to{opacity:1}}
+/* a walked stone (and its label) settles once the walked line has reached it */
+.hjour.is-drawing .hjour-stone{animation:hjour-settle var(--dur-3) var(--ease) both var(--d,.6s)}
+.hjour.is-drawing .hjour-lbl.is-walked{animation-delay:var(--d,.6s)}
 .hjour.is-drawing .hjour-step{animation:hjour-settle var(--dur-2) var(--ease) both;animation-delay:calc(.35s + var(--i,0) * 60ms)}
 .hjour.is-drawing .hjour-dawn{animation:hjour-settle 1.2s var(--ease) both 1.1s}
 .hjour.is-drawing .hjour-pulse{animation:hjour-ring 1.1s var(--ease) both 1.5s}

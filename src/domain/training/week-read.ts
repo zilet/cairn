@@ -29,6 +29,7 @@ import type {
   WeekReadJourney,
   WeekReadJourneyBehind,
   WeekReadJourneyMark,
+  WeekReadJourneyStone,
   DayChip,
   WeekDose,
   WeekRead,
@@ -43,7 +44,7 @@ import type {
   WeekReadTotals,
   WeightTrendRead,
 } from "../../contracts/week-read.js";
-import { WEEK_GOAL_LIFTS_MAX } from "../../contracts/week-read.js";
+import { JOURNEY_STONES_MAX, WEEK_GOAL_LIFTS_MAX } from "../../contracts/week-read.js";
 import { addDaysISO, daysBetweenISO, isoDate, mondayOf } from "../../lib/dates.js";
 import { round1 } from "../../lib/numbers.js";
 import {
@@ -53,6 +54,7 @@ import {
   dateWords,
   distanceOfWords,
   distanceWords,
+  LB_PER_KG,
   loadWords,
   raceDistanceName,
   sinceWords,
@@ -94,6 +96,7 @@ import {
   weightStart,
 } from "../../repo/today-path.js";
 import { planDayStrengthGroups } from "../../repo/training-read.js";
+import type { WeekBest } from "../../repo/sessions.js";
 import { weekFrameLine } from "../../repo/week-stage.js";
 import { WEIGHT_HOLDING_LB_WK, weightTrendRead } from "../../repo/weight-trend.js";
 import { workingLoadHistory } from "../../repo/working-load-history.js";
@@ -1411,19 +1414,339 @@ function behindOf(path: TodayPath, finished: RaceBuild["finished"] = null): Week
   return out.slice(0, JOURNEY_BEHIND_MAX);
 }
 
+// ---------------------------------------------------------------------------
+// The walked stones — what the athlete has actually done on this stretch, set on the
+// trail behind today. Each is a logged event read from the source that owns it, off the
+// reads weekRead already holds (no history scan of its own):
+//   - a race run: the race build's `finished` (race-finished.ts);
+//   - a lift's new best: a lift goal's own journey `best` against its baseline
+//     (strength-objectives.ts); with no lift goal, the week's new bests on a main lift
+//     (sessions.ts weekBests, the plan strip's own read);
+//   - the longest run taken well: the race build's `review.longest_well`
+//     (run-capacity.ts demonstratedLongRun, the ladder's own read);
+//   - a bodyweight waypoint crossed toward a dated weight goal: each whole 5 lb / 2 kg on
+//     the week-mean of Today's path canonical weigh-ins (bodyweight.ts via goal-pace).
+// ---------------------------------------------------------------------------
+
+/** A stone the line can name: its wire shape plus the line's own lead variants. */
+type StoneCandidate = WeekReadJourneyStone & { leads: string[] };
+
+/** Two stones closer than this many days would sit on one another. */
+const STONE_MIN_GAP_DAYS = 3;
+/** …or closer than this share of the whole road. */
+const STONE_MIN_GAP_SHARE = 0.03;
+/** A stone this recent may lead the trail's one line. */
+const STONE_FRESH_DAYS = 7;
+/** A waypoint on the way to a weight goal, in the athlete's unit. */
+const WEIGHT_WAYPOINT: Record<AthleteUnits["weight"], number> = { lb: 5, kg: 2 };
+/** The weigh-ins a trend point averages: the week ending on it. */
+const WEIGHT_TREND_DAYS = 7;
+/** When two stones share a day, the one kept. */
+const STONE_PRIORITY: Record<WeekReadJourneyStone["kind"], number> = {
+  race_done: 0,
+  best: 1,
+  longest_run: 2,
+  weight: 3,
+};
+
+/** "today", "yesterday", "on Tuesday", "a week ago", "on Nov 3": when, inside the line. */
+function stoneWhen(date: string, today: string): string {
+  const ago = daysBetweenISO(today, date) ?? 99;
+  if (ago <= 0) return "today";
+  if (ago === 1) return "yesterday";
+  if (ago < 7) return `on ${dateWords(date, today, "day")}`;
+  if (ago === 7) return "a week ago";
+  return `on ${dateWords(date, today)}`;
+}
+
+function stoneOf(
+  kind: WeekReadJourneyStone["kind"],
+  stone: WeekReadJourneyStone["stone"],
+  date: string,
+  today: string,
+  said: { short: string; words: string; href: string | null; leads: string[] }
+): StoneCandidate {
+  return {
+    kind,
+    stone,
+    date,
+    date_words: dateWords(date, today),
+    days_ago: Math.max(0, daysBetweenISO(today, date) ?? 0),
+    ...said,
+  };
+}
+
+const inStretch = (date: string | null | undefined, start: string, today: string): date is string =>
+  !!date && date >= start && date <= today;
+
+/** The race just run, while it lies on this stretch. */
+function raceStone(
+  finished: RaceBuild["finished"],
+  start: string,
+  today: string,
+  units: AthleteUnits
+): StoneCandidate | null {
+  if (!finished || !inStretch(finished.date, start, today)) return null;
+  const distance = raceDistanceName(finished.run_km, units.distance);
+  const name = finished.event?.trim() || distance;
+  const on = dateWords(finished.date, today);
+  const when = stoneWhen(finished.date, today);
+  return stoneOf("race_done", "endurance", finished.date, today, {
+    short: distance === "Half marathon" ? "Half" : / race$/.test(distance) ? "Race" : distance,
+    words:
+      finished.finish_sec != null
+        ? `${name} run in ${clockWords(finished.finish_sec)} on ${on}.`
+        : `${name} run on ${on}.`,
+    href: WEEK_HREFS.day(finished.date),
+    leads: [`${name}, run ${when}.`, `${name} is behind you, run ${when}.`],
+  });
+}
+
+function bestLeads(lift: string, date: string, today: string): string[] {
+  const when = stoneWhen(date, today);
+  return [`A new best on ${lift} ${when}.`, `You set a new best on ${lift} ${when}.`];
+}
+
+/**
+ * A lift goal's new best on this stretch: the journey's own best (its whole tracked
+ * history) dated inside the stretch and past where the goal began. Never a projection.
+ */
+function goalBestStones(
+  journeys: readonly StrengthJourney[],
+  start: string,
+  today: string,
+  units: AthleteUnits
+): StoneCandidate[] {
+  const out: StoneCandidate[] = [];
+  for (const j of journeys) {
+    const exercise = j.tracked?.exercise ?? j.objective?.exercise;
+    if (!exercise) continue;
+    const lift = liftShortName(exercise);
+    if (j.reps) {
+      const best = j.reps.best;
+      const base = j.reps.baseline;
+      if (!best || !(best.value > 0) || !base || best.value <= base.value) continue;
+      if (!inStretch(best.date, start, today) || (base.date && base.date >= best.date)) continue;
+      const sets = best.text.includes(",");
+      out.push(
+        stoneOf("best", "strength", best.date, today, {
+          short: sets ? `${Math.max(...best.sets)} reps` : best.text,
+          words: `A new best on ${lift} on ${dateWords(best.date, today)}: ${sets ? `sets of ${best.text}` : best.text}.`,
+          href: WEEK_HREFS.day(best.date),
+          leads: bestLeads(lift, best.date, today),
+        })
+      );
+      continue;
+    }
+    const best = j.best;
+    const base = j.baseline;
+    if (!best || !base || best.est_1rm < base.est_1rm + 1) continue;
+    if (!inStretch(best.date, start, today) || (base.date && base.date >= best.date)) continue;
+    const load = weightWords(best.est_1rm, units.weight, { whole: true });
+    out.push(
+      stoneOf("best", "strength", best.date, today, {
+        short: load,
+        words: `A new best on ${lift} on ${dateWords(best.date, today)}, an estimated ${load} max.`,
+        href: WEEK_HREFS.day(best.date),
+        leads: bestLeads(lift, best.date, today),
+      })
+    );
+  }
+  return out;
+}
+
+/** The main lifts a road names when the athlete holds no lift goal. */
+const MAIN_LIFTS = new Set(["the press", "the bench", "the deadlift", "the squat", "the row", "the pull-up"]);
+
+/** With no lift goal, the week's new bests on a main lift (weekBests, the strip's own read). */
+function weekBestStones(
+  bests: readonly Omit<WeekBest, "label">[],
+  start: string,
+  today: string,
+  units: AthleteUnits
+): StoneCandidate[] {
+  const out: StoneCandidate[] = [];
+  for (const b of bests) {
+    const lift = liftShortName(b.exercise);
+    if (!MAIN_LIFTS.has(lift) || !inStretch(b.date, start, today)) continue;
+    if (!(Number(b.weight_lb) > 0) || !(Number(b.reps) > 0)) continue;
+    const set = `${loadWords(Number(b.weight_lb), units.weight)} × ${Number(b.reps)}`;
+    out.push(
+      stoneOf("best", "strength", b.date, today, {
+        short: set,
+        words: `A new best on ${lift} on ${dateWords(b.date, today)}: ${set}.`,
+        href: WEEK_HREFS.day(b.date),
+        leads: bestLeads(lift, b.date, today),
+      })
+    );
+  }
+  return out;
+}
+
+/** The longest run of the last four weeks taken well (the race build's own read). */
+function longRunStone(
+  build: RaceBuild | null,
+  start: string,
+  today: string,
+  units: AthleteUnits
+): StoneCandidate | null {
+  const run = build?.review?.longest_well;
+  if (!run || !(run.km > 0) || !inStretch(run.date, start, today)) return null;
+  const dist = distanceWords(run.km, units.distance);
+  const when = stoneWhen(run.date, today);
+  return stoneOf("longest_run", "endurance", run.date, today, {
+    short: dist,
+    words: `${dist} on ${dateWords(run.date, today)}, the longest run of the last four weeks.`,
+    href: WEEK_HREFS.day(run.date),
+    leads: [
+      `${dist} ${when}, your longest run in four weeks.`,
+      `Your longest run in four weeks came ${when}: ${dist}.`,
+    ],
+  });
+}
+
+/**
+ * Each whole waypoint (5 lb / 2 kg) the weight TREND crossed on the way to a dated weight
+ * goal and stayed past: the trend is the mean of the week of canonical weigh-ins ending on
+ * each one (Today's path points), so one light morning never sets a stone. Only toward the
+ * goal, never past it.
+ */
+function weightStones(
+  weight: TodayPath["weight"],
+  start: string,
+  today: string,
+  units: AthleteUnits
+): StoneCandidate[] {
+  if (!weight || weight.goal_lb == null || !weight.goal_date) return [];
+  if (weight.mode !== "lose" && weight.mode !== "gain") return [];
+  const points = [...(weight.points ?? [])]
+    .filter((p) => p.weight_lb > 0 && p.date <= today)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  if (points.length < 3) return [];
+  const unit = (lb: number) => (units.weight === "kg" ? lb / LB_PER_KG : lb);
+  const trend = points.map((p, i) => {
+    const week = points.slice(0, i + 1).filter((q) => (daysBetweenISO(p.date, q.date) ?? 99) < WEIGHT_TREND_DAYS);
+    return { date: p.date, v: unit(week.reduce((sum, q) => sum + q.weight_lb, 0) / week.length) };
+  });
+  const lose = weight.mode === "lose";
+  const step = WEIGHT_WAYPOINT[units.weight];
+  const goal = unit(weight.goal_lb);
+  const first = trend[0].v;
+  const last = trend[trend.length - 1].v;
+  const out: StoneCandidate[] = [];
+  for (let w = Math.ceil(Math.min(first, last) / step) * step; w <= Math.max(first, last); w += step) {
+    const crossed = lose ? first >= w && last < w && w >= goal : first <= w && last > w && w <= goal;
+    if (!crossed) continue;
+    // The first day of the run the trend has stayed past the waypoint through today.
+    let k = trend.length - 1;
+    while (k > 0 && (lose ? trend[k - 1].v < w : trend[k - 1].v > w)) k--;
+    const date = trend[k].date;
+    if (!inStretch(date, start, today)) continue;
+    const said = weightWords(units.weight === "kg" ? w * LB_PER_KG : w, units.weight, { whole: true });
+    const side = lose ? "under" : "over";
+    const when = stoneWhen(date, today);
+    out.push(
+      stoneOf("weight", "body", date, today, {
+        short: said,
+        words: `Your weight trend went ${side} ${said} on ${dateWords(date, today)}.`,
+        href: WEEK_HREFS.goal,
+        leads: [
+          `Your weight trend went ${side} ${said} ${when}.`,
+          `${lose ? "Under" : "Over"} ${said} on the weight trend ${when}.`,
+        ],
+      })
+    );
+  }
+  return out;
+}
+
+/**
+ * The stones the road carries: variety first (the newest of each stone hue, then of each
+ * kind), then the newest; never two closer than a few days (or ~3% of the road), and at
+ * most JOURNEY_STONES_MAX. Ascending by date.
+ */
+export function pickJourneyStones<T extends WeekReadJourneyStone>(
+  candidates: readonly T[],
+  start: string,
+  end: string
+): T[] {
+  const newest = [...candidates].sort(
+    (a, b) => b.date.localeCompare(a.date) || STONE_PRIORITY[a.kind] - STONE_PRIORITY[b.kind]
+  );
+  const order: T[] = [];
+  const hues = new Set<string>();
+  const kinds = new Set<string>();
+  for (const c of newest) {
+    if (hues.has(c.stone)) continue;
+    hues.add(c.stone);
+    kinds.add(c.kind);
+    order.push(c);
+  }
+  for (const c of newest) {
+    if (kinds.has(c.kind)) continue;
+    kinds.add(c.kind);
+    order.push(c);
+  }
+  for (const c of newest) if (!order.includes(c)) order.push(c);
+  const gap = Math.max(STONE_MIN_GAP_DAYS, Math.round((daysBetweenISO(end, start) ?? 0) * STONE_MIN_GAP_SHARE));
+  const kept: T[] = [];
+  for (const c of order) {
+    if (kept.length >= JOURNEY_STONES_MAX) break;
+    if (kept.some((k) => Math.abs(daysBetweenISO(k.date, c.date) ?? 0) < gap)) continue;
+    kept.push(c);
+  }
+  return kept.sort((a, b) => a.date.localeCompare(b.date) || STONE_PRIORITY[a.kind] - STONE_PRIORITY[b.kind]);
+}
+
+/** The reads the stones come from — every one already held by weekRead. */
+export interface JourneyGroundInput {
+  start: string;
+  today: string;
+  /** The day the road ends (the summit's last day). */
+  end: string;
+  units: AthleteUnits;
+  finished?: RaceBuild["finished"];
+  build?: RaceBuild | null;
+  journeys?: readonly StrengthJourney[];
+  bests?: readonly Omit<WeekBest, "label">[];
+  weight?: TodayPath["weight"];
+}
+
+/** Every stone on the walked part, picked (pickJourneyStones), each with its line leads. */
+export function journeyGround(input: JourneyGroundInput): StoneCandidate[] {
+  const { start, today, units } = input;
+  const journeys = input.journeys ?? [];
+  const goalLifts = journeys.some((j) => j.objective);
+  const candidates: StoneCandidate[] = [
+    raceStone(input.finished ?? null, start, today, units),
+    ...goalBestStones(journeys, start, today, units),
+    ...(goalLifts ? [] : weekBestStones(input.bests ?? [], start, today, units)),
+    longRunStone(input.build ?? null, start, today, units),
+    ...weightStones(input.weight ?? null, start, today, units),
+  ].filter((c): c is StoneCandidate => !!c);
+  return pickJourneyStones(candidates, start, input.end);
+}
+
 /**
  * One calm line of where the athlete stands. `walked` counts only from a real start (the
  * race trend's own window); a default look-back window is never spoken as days walked.
+ * A stone set within the last week leads it instead ("A new best on the squat yesterday.").
  */
-function journeyLine(walked: number | null, marks: WeekReadJourneyMark[], today: string): string {
+export function journeyLine(
+  walked: number | null,
+  marks: WeekReadJourneyMark[],
+  today: string,
+  fresh: Pick<StoneCandidate, "kind" | "leads"> | null = null
+): string {
   const next = marks[0];
   // The summit is the mark the road ends at (latest end), the same one journeyOf flags.
   const summit = marks.find((m) => m.summit) ?? marks[marks.length - 1];
   const nextPart = `${markName(next)} ${next.days_words}`;
   const total = (walked ?? 0) + summit.days_away;
   const share = walked != null && total > 0 ? walked / total : 0;
-  const lead =
-    share >= 0.8
+  const lead = fresh?.leads.length
+    ? pickDayVariant(fresh.leads, today, `week:journey:stone:${fresh.kind}`)
+    : share >= 0.8
       ? pickDayVariant(["Most of this road is behind you.", "The summit is in sight."], today, "week:journey:far")
       : share >= 0.5
         ? pickDayVariant(
@@ -1450,7 +1773,8 @@ function journeyLine(walked: number | null, marks: WeekReadJourneyMark[], today:
 function journeyOf(
   path: TodayPath | null,
   today: string,
-  finished: RaceBuild["finished"] = null
+  finished: RaceBuild["finished"] = null,
+  ground: Pick<JourneyGroundInput, "units" | "build" | "journeys" | "bests"> | null = null
 ): WeekReadJourney | null {
   if (!path) return null;
   const ahead = (path.milestones ?? []).filter((m) => m.date >= today);
@@ -1474,13 +1798,20 @@ function journeyOf(
     };
   });
   const walked = path.race?.since === start ? Math.max(0, daysBetweenISO(today, start) ?? 0) : null;
+  const end = last.end_date ?? last.date;
+  const stones = ground
+    ? safe(() => journeyGround({ ...ground, start, today, end, finished, weight: path.weight }), [] as StoneCandidate[])
+    : [];
+  const newest = stones[stones.length - 1];
+  const fresh = newest && newest.days_ago <= STONE_FRESH_DAYS ? newest : null;
   return {
     start_date: start,
     start_words: dateWords(start, today),
     today,
     marks,
     behind: behindOf(path, finished),
-    line: journeyLine(walked, marks, today),
+    ...(ground ? { walked: stones.map(({ leads: _leads, ...stone }) => stone) } : {}),
+    line: journeyLine(walked, marks, today, fresh),
   };
 }
 
@@ -1580,7 +1911,13 @@ export function weekRead(start?: string, opts: { today?: string; build?: RaceBui
     goals,
     proof: thisWeek ? safe(() => proofOf(path, journeys, today, units, goals), []) : [],
     standing: thisWeek ? safe(() => standingRead(today, units, { build, path }), []) : [],
-    journey: thisWeek ? safe(() => journeyOf(path, today, build?.finished ?? null), null) : null,
+    journey: thisWeek
+      ? safe(
+          () =>
+            journeyOf(path, today, build?.finished ?? null, { units, build, journeys, bests: week?.progress?.bests }),
+          null
+        )
+      : null,
     weight_trend: trend,
   };
 }

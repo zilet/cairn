@@ -73,6 +73,8 @@
     let selected: string | null = null;
     /** The trail mark whose words are open; kept across a repaint while that mark still exists. */
     let mark = 0;
+    /** …or the walked stone whose words are open (null: a mark's). */
+    let stone: number | null = null;
     let detailTeardown: (() => void) | null = null;
     const host = slot as HTMLElement;
     const q = <T extends Element = HTMLElement>(sel: string): T | null => host.querySelector<T>(sel);
@@ -163,6 +165,7 @@
       host.innerHTML = CairnHorizonWeek.landingHtml(next, {
         enter: enter && !calm,
         mark: mark < (next.journey?.marks.length ?? 0) ? mark : (mark = 0),
+        stone: stone != null && stone < (next.journey?.walked?.length ?? 0) ? stone : (stone = null),
         seasonHref: deps.seasonHref,
         changesHref: deps.changesHref,
         team,
@@ -198,18 +201,30 @@
           else openDay(date);
         },
         "hjour-mark": (el) => {
-          const i = Number(el.getAttribute("data-hjour-mark"));
+          // A mark ahead is "2"; a walked stone is "s2".
+          const key = el.getAttribute("data-hjour-mark") || "";
+          const walked = /^s\d+$/.test(key);
+          const i = Number(walked ? key.slice(1) : key);
           const marks = model?.journey?.marks ?? [];
-          if (!Number.isInteger(i) || !marks[i] || typeof CairnJourneyTrail === "undefined") return;
-          mark = i;
+          const stones = model?.journey?.walked ?? [];
+          if (!Number.isInteger(i) || !(walked ? stones[i] : marks[i]) || typeof CairnJourneyTrail === "undefined")
+            return;
+          if (walked) stone = i;
+          else {
+            mark = i;
+            stone = null;
+          }
           host.querySelectorAll<HTMLElement>("button[data-hjour-mark]").forEach((b) => {
-            b.setAttribute("aria-pressed", String(b.getAttribute("data-hjour-mark") === String(i)));
+            b.setAttribute("aria-pressed", String(b.getAttribute("data-hjour-mark") === key));
           });
           host.querySelectorAll<HTMLElement>("[data-hjour-node]").forEach((n) => {
-            n.classList.toggle("is-on", n.getAttribute("data-hjour-node") === String(i));
+            n.classList.toggle("is-on", n.getAttribute("data-hjour-node") === key);
           });
           const detail = q("[data-hjour-detail]");
-          if (detail) detail.innerHTML = CairnJourneyTrail.detailHtml(marks[i]);
+          if (detail)
+            detail.innerHTML = walked
+              ? CairnJourneyGround.stoneDetailHtml(stones[i])
+              : CairnJourneyTrail.detailHtml(marks[i]);
         },
         "hjour-ask": (el) => prefillChat(el.getAttribute("data-hjour-ask")),
         "hwk-ask": (el) => prefillChat(el.getAttribute("data-hwk-ask")),

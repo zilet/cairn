@@ -41,6 +41,7 @@ const MODULES = [
   "standing-model",
   "standing-client",
   "frame-line-client",
+  "journey-ground-client",
   "journey-trail-client",
   "week-model",
   "week-strip-client",
@@ -1387,6 +1388,174 @@ test("your road: more than five marks show five rows and '+N more ›'", () => {
   const season = sec.querySelectorAll("[data-hwk-season]");
   assert.equal(season.length, 1);
   assert.equal(season[0].textContent, "+2 more ›");
+});
+
+/** The road with what was done on it: three stones on the walked part (week-read.ts journeyGround). */
+function walkedJourney() {
+  return {
+    ...journey(),
+    walked: [
+      {
+        kind: "race_done",
+        stone: "endurance",
+        date: "2026-09-13",
+        date_words: "Sep 13",
+        days_ago: 23,
+        short: "10K",
+        words: "Riverside 10K run in 48:20 on Sep 13.",
+        href: "/app/day/2026-09-13",
+      },
+      {
+        kind: "weight",
+        stone: "body",
+        date: "2026-09-27",
+        date_words: "Sep 27",
+        days_ago: 9,
+        short: "160 lb",
+        words: "Your weight trend went under 160 lb on Sep 27.",
+        href: "/app/horizon/goal",
+      },
+      {
+        kind: "best",
+        stone: "strength",
+        date: "2026-10-04",
+        date_words: "Oct 4",
+        days_ago: 2,
+        short: "285 lb",
+        words: "A new best on the squat on Oct 4, an estimated 285 lb max.",
+        href: "/app/day/2026-10-04",
+      },
+    ],
+    line: "A new best on the squat on Sunday. Next, the peak week in 6 days; your goal weight in 10 weeks.",
+  };
+}
+
+test("your road: what was done sits on the walked part as filled stones; Behind you says the same sentences", () => {
+  const win = load();
+  const road = trail(win, walkedJourney());
+  const stones = road.querySelectorAll(".hjour-stone");
+  assert.deepEqual(
+    stones.map((s) => s.getAttribute("class")),
+    ["hjour-stone stone-strength", "hjour-stone stone-body", "hjour-stone stone-endurance"],
+    "newest first, each in its area's hue"
+  );
+  assert.ok(stones.every((s) => s.getAttribute("data-hjour-mark")?.startsWith("s")), "each is tappable");
+  // The marks ahead keep their own count; a stone is never a hollow mark.
+  assert.equal(road.querySelectorAll(".hjour-node[data-hjour-node]").length, 2);
+  // Stones sit behind today, never on it.
+  const xOf = (el) => Number(/--x:([\d.]+)%/.exec(el.getAttribute("style"))[1]);
+  const now = xOf(road.querySelector(".hjour-now"));
+  for (const s of stones) assert.ok(xOf(s) < now, "on the walked part");
+  // A week step that a stone sits on gives way: of three steps, one is left.
+  const steps = road.querySelectorAll(".hjour-step");
+  assert.equal(steps.length, 1);
+  for (const st of steps) for (const s of stones) assert.ok(Math.abs(xOf(st) - xOf(s)) >= 2);
+  // A label on the walked side only where it fits (the marks ahead take their room first).
+  const labels = road.querySelectorAll(".hjour-lbl.is-walked");
+  assert.ok(labels.length >= 1);
+  assert.deepEqual(
+    labels.map((l) => [l.querySelector("small").textContent, l.querySelector("b").textContent, l.getAttribute("aria-pressed")]),
+    [["Sep 13", "10K", "false"]]
+  );
+  assert.equal(labels[0].getAttribute("aria-label"), "Riverside 10K run in 48:20 on Sep 13.");
+  // Behind you: the stones' own sentences, newest first, never the older list beside them.
+  assert.deepEqual(
+    road.querySelectorAll(".hjour-b").map((b) => [b.getAttribute("class"), b.textContent]),
+    [
+      ["hjour-b stone-strength", "A new best on the squat on Oct 4, an estimated 285 lb max."],
+      ["hjour-b stone-body", "Your weight trend went under 160 lb on Sep 27."],
+      ["hjour-b stone-endurance", "Riverside 10K run in 48:20 on Sep 13."],
+    ]
+  );
+  // The plot still says one sentence; the next mark's words stay open by default.
+  assert.match(road.querySelector(".hjour-plot").getAttribute("aria-label"), /^Your road from Sep 8 through today to Goal weight · 154 lb, Dec 15$/);
+  assert.equal(road.querySelector(".hjour-detail .hjour-d-name").textContent, "Peak week · 48 km");
+  // A stone opened by default (a repaint keeping it) opens its own words.
+  const opened = trail(win, walkedJourney(), { stone: 2 });
+  assert.equal(opened.querySelector(".hjour-detail .hjour-d-name").textContent, "A new best");
+  assert.equal(opened.querySelector(".hjour-detail .hjour-d-why").textContent, walkedJourney().walked[2].words);
+  assert.equal(opened.querySelector(".hjour-detail a").getAttribute("href"), "/app/day/2026-10-04");
+  assert.ok(opened.querySelector('.hjour-stone[data-hjour-node="s2"]').getAttribute("class").includes("is-on"));
+  assert.equal(opened.querySelectorAll(".hjour-node.is-on").length, 0, "no mark ahead is open beside it");
+  // Drawn in: each stone settles after the walked line reaches it, oldest first.
+  const drawn = trail(win, walkedJourney(), { enter: true });
+  const delays = drawn
+    .querySelectorAll(".hjour-stone")
+    .map((s) => Number(/--d:([\d.]+)s/.exec(s.getAttribute("style"))[1]))
+    .reverse();
+  assert.deepEqual(delays, [...delays].sort((a, b) => a - b));
+  assertClean(road, "the walked stones");
+});
+
+test("your road: a tapped stone opens its sentence in the card; a mark tap returns to the marks", async () => {
+  const win = load({ CairnDrill: drillStub() });
+  const read = () => ({ ...newRead(), journey: walkedJourney() });
+  const slot = createHost(win.document);
+  win.CairnHorizonWeekController.mount(slot, { peek: () => null, load: () => Promise.resolve(read()) });
+  await flush();
+  await flush();
+  const card = () => slot.querySelector(".hjour-detail");
+  assert.equal(card().querySelector(".hjour-d-name").textContent, "Peak week · 48 km");
+  await slot.querySelector('.hjour-stone[data-hjour-mark="s1"]').click();
+  assert.equal(card().querySelector(".hjour-d-name").textContent, "Weight waypoint");
+  assert.equal(card().querySelector(".hjour-d-when").textContent, "Sep 27");
+  assert.equal(card().querySelector(".hjour-d-why").textContent, "Your weight trend went under 160 lb on Sep 27.");
+  assert.equal(card().querySelector("a.hjour-d-link").getAttribute("href"), "/app/horizon/goal");
+  assert.ok(slot.querySelector('.hjour-stone[data-hjour-node="s1"]').classList.contains("is-on"));
+  // The labelled stone is a button and opens the same way.
+  const label = slot.querySelector('button.hjour-lbl.is-walked[data-hjour-mark="s0"]');
+  await label.click();
+  assert.equal(card().querySelector(".hjour-d-why").textContent, "Riverside 10K run in 48:20 on Sep 13.");
+  assert.equal(label.getAttribute("aria-pressed"), "true");
+  assert.equal(slot.querySelector('.hjour-stone[data-hjour-node="s1"]').classList.contains("is-on"), false);
+  // A mark ahead takes the card back.
+  const race = slot.querySelectorAll("button[data-hjour-mark]").find((b) => b.getAttribute("data-hjour-mark") === "1");
+  await race.click();
+  assert.equal(card().querySelector(".hjour-d-name").textContent, "Cambridge Half");
+  assert.equal(label.getAttribute("aria-pressed"), "false");
+  assert.equal(slot.querySelectorAll(".hjour-stone.is-on").length, 0);
+});
+
+test("your road: a stone's server words stay text", () => {
+  const win = load();
+  const j = walkedJourney();
+  j.walked[0].short = "<img src=x>";
+  j.walked[0].words = "<script>x</script>";
+  j.walked[1].stone = "<b>";
+  j.walked[2].href = "javascript:alert(1)";
+  const road = trail(win, j);
+  assert.equal(!!road.querySelector("img"), false);
+  assert.equal(!!road.querySelector("script"), false);
+  assert.equal(road.querySelector(".hjour-lbl.is-walked b").textContent, "<img src=x>");
+  assert.ok(road.querySelector(".hjour-stone.stone-endurance[data-hjour-node='s1']"), "an unknown hue falls back");
+  const opened = trail(win, j, { stone: 2 });
+  assert.equal(!!opened.querySelector(".hjour-detail a"), false, "only an in-app page links");
+  // A stone off the stretch (before the start, or after today) is never drawn.
+  const off = walkedJourney();
+  off.walked[0].date = "2026-09-01";
+  off.walked[2].date = "2026-10-09";
+  assert.deepEqual(
+    trail(win, off).querySelectorAll(".hjour-stone").map((s) => s.getAttribute("data-hjour-mark")),
+    ["s1"]
+  );
+});
+
+test("your road: an older read without stones renders exactly as before", () => {
+  const win = load();
+  const older = win.CairnJourneyTrail.trailHtml(journey());
+  assert.equal(win.CairnJourneyTrail.trailHtml({ ...journey(), walked: [] }), older, "an empty set changes nothing");
+  const road = renderHtml(older, { document: win.document });
+  assert.equal(road.querySelectorAll(".hjour-stone").length, 0);
+  assert.equal(road.querySelectorAll(".hjour-lbl.is-walked").length, 0);
+  assert.equal(road.querySelectorAll(".hjour-step").length, 3);
+  assert.deepEqual(
+    road.querySelectorAll(".hjour-b").map((b) => b.textContent),
+    ["Race estimate 4 min faster since Sep 8", "−2.1 lb since Aug 30"]
+  );
+  // Through the Week model too: an older read keeps no `walked` at all.
+  const model = win.CairnWeekModel.landing({ ...newRead(), journey: journey() });
+  assert.equal("walked" in model.journey, false);
+  assert.equal(win.CairnWeekModel.landing({ ...newRead(), journey: walkedJourney() }).journey.walked.length, 3);
 });
 
 test("your team: up to three seats fill their own slot when the team read lands; the link note sits under the goals", async () => {

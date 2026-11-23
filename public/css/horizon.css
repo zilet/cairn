@@ -368,6 +368,9 @@ a.proof-link,a.goalrow-link,.hwk-link-chip{transition:none}
 .hjour-step{position:absolute;left:var(--x);top:var(--y);width:5px;height:5px;margin:-2.5px 0 0 -2.5px;border-radius:50%;background:var(--surface);box-shadow:inset 0 0 0 1.5px var(--dawn);pointer-events:none}
 .hjour-node[data-hjour-mark]{cursor:pointer}
 .hjour-node[data-hjour-mark]::after{content:"";position:absolute;inset:-12px}
+.hjour-stone{position:absolute;left:var(--x);top:var(--y);width:11px;height:8px;margin:-4px 0 0 -5.5px;cursor:pointer;border-radius:50% 50% 46% 54% / 58% 62% 42% 38%;background:var(--c);box-shadow:inset 0 0 0 1.2px var(--cd),0 0 0 2px var(--surface);transition:transform var(--dur-1) var(--ease)}
+.hjour-stone::after{content:"";position:absolute;inset:-12px}
+.hjour-stone.is-on{transform:scale(1.35)}
 .hjour-pulse{width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;box-shadow:0 0 0 2px var(--dawn);opacity:0;pointer-events:none}
 .hjour-lbl{display:grid;gap:var(--space-1);padding:var(--space-2) var(--space-3);border:0;border-radius:var(--radius-2xs);background:none;color:var(--ink);font:inherit;text-align:center;cursor:pointer;white-space:nowrap;-webkit-tap-highlight-color:transparent;--tx:-50%;--ty:0px}
 .hjour-lbl small,.hjour-today,.hjour-from{font-family:var(--font-mono);font-size:var(--text-2xs);letter-spacing:var(--tracking-mono);text-transform:uppercase;color:var(--muted);line-height:var(--leading-snug)}
@@ -419,6 +422,8 @@ to{clip-path:inset(0 0 0 0)}
 @keyframes hjour-settle{from{opacity:0}
 to{opacity:1}
 }
+.hjour.is-drawing .hjour-stone{animation:hjour-settle var(--dur-3) var(--ease) both var(--d,.6s)}
+.hjour.is-drawing .hjour-lbl.is-walked{animation-delay:var(--d,.6s)}
 .hjour.is-drawing .hjour-step{animation:hjour-settle var(--dur-2) var(--ease) both;animation-delay:calc(.35s + var(--i,0) * 60ms)}
 .hjour.is-drawing .hjour-dawn{animation:hjour-settle 1.2s var(--ease) both 1.1s}
 .hjour.is-drawing .hjour-pulse{animation:hjour-ring 1.1s var(--ease) both 1.5s}

@@ -7724,10 +7724,25 @@ declare global {
     };
     /** LAZY "horizon" bundle (horizon-week-client.ts): Horizon's Week landing. */
     /** LAZY "calendar" bundle (journey-trail-client.ts): the road to the furthest dated goal. */
+    /** LAZY "horizon" bundle (journey-ground-client.ts): what the walked stones say, the card, "Behind you". */
+    CairnJourneyGround: {
+      walkedOf(
+        journey: import("./week-read.js").WeekReadJourney,
+        start: number,
+        today: number
+      ): Array<import("./week-read.js").WeekReadJourneyStone | null>;
+      hueOf(stone: import("./week-read.js").WeekReadJourneyStone): string;
+      cardHtml(hue: string, name: string, when: string, why: string | null | undefined, href: unknown): string;
+      stoneDetailHtml(stone: import("./week-read.js").WeekReadJourneyStone | null | undefined): string;
+      behindHtml(
+        journey: import("./week-read.js").WeekReadJourney,
+        stones: import("./week-read.js").WeekReadJourneyStone[]
+      ): string;
+    };
     CairnJourneyTrail: {
       trailHtml(
         journey: import("./week-read.js").WeekReadJourney | null | undefined,
-        opts?: { selected?: number; enter?: boolean; below?: string }
+        opts?: { selected?: number; stone?: number | null; enter?: boolean; below?: string }
       ): string;
       detailHtml(mark: import("./week-read.js").WeekReadJourneyMark | null | undefined): string;
       starterHtml(opts?: { hasGoals?: boolean }): string;
@@ -7739,7 +7754,10 @@ declare global {
         opts?: {
           enter?: boolean;
           selected?: string | null;
+          /** The trail mark whose words are open (default: the next one). */
           mark?: number;
+          /** …or the walked stone whose words are open. */
+          stone?: number | null;
           seasonHref?: string;
           changesHref?: string;
           team?: ClientTeamSeats | null;
@@ -7857,6 +7875,7 @@ declare global {
   declare const CairnAheadStrip: Window["CairnAheadStrip"];
   declare const CairnTeamSeats: Window["CairnTeamSeats"];
   declare const CairnHorizonWeek: Window["CairnHorizonWeek"];
+  declare const CairnJourneyGround: Window["CairnJourneyGround"];
   declare const CairnJourneyTrail: Window["CairnJourneyTrail"];
   declare const CairnHorizonWeekController: Window["CairnHorizonWeekController"];
   declare const CairnHorizon: Window["CairnHorizon"];

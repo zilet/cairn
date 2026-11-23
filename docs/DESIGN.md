@@ -292,17 +292,23 @@ bottom:
 - **Your road** (`.hjour`, `journey-trail-client.ts`, GET `/api/week` `journey`; directly under the
   hero when there is a journey to draw, last on the page as "Ahead" when there is not): the trail to scale
   in time from where this stretch began, through today, up to the furthest dated mark. Above it the
-  server's one line of where the athlete stands. The walked part is solid dawn over a soft ground
-  wash, with a small step for each week since the start (every other week past six months); the
-  road ahead is dotted; a peak week is a lit stretch; each mark sits on the trail in its stone's
+  server's one line of where the athlete stands (a stone set in the last week leads it). The walked
+  part is solid dawn over a soft ground wash, with a small step for each week since the start (every
+  other week past six months) and what was actually done on it as small FILLED stones in their
+  area's hue (`journey.walked`, week-read.ts `journeyGround`: a race run, a lift's new best, the
+  longest run taken well, a weight waypoint crossed; at most six, spaced; an older stone too close
+  to a newer one gives way, and a week step under a stone is dropped); the walked part widens a
+  little to carry them; the road ahead is dotted; a peak week is a lit stretch; each mark sits on the trail in its stone's
   hue; the summit is a small cairn with first light behind it, and a far ridge sits behind it all.
   Height is the trail's own shape, never a measure: the plot encodes time, left to right, and which
   side of today a day is. A tap on a labelled mark or its dot opens that mark's words in the card
-  under the axis (the next mark by default), and a mark with a page makes the card a link. "Behind
-  you" lists what has already moved, each a stone in its area's hue. Under it "Every mark ahead"
+  under the axis (the next mark by default), and a mark with a page makes the card a link; a stone,
+  or its label where one fits on the walked side, opens its sentence there the same way. "Behind
+  you" lists the stones' own sentences, newest first (an older read without stones: what has
+  already moved), each a stone in its area's hue, so the list and the trail never disagree. Under it "Every mark ahead"
   folds the marks as milestone rows (`.msrow`, five shown and "+N more ›" to the Season) when there
   are two or more, and "All of the season ›". The walked part draws in ONCE on a cold paint, the
-  steps and marks settle onto it, first light comes up and today rings once; nothing loops. An
+  steps, stones (each once the line has reached it) and marks settle onto it, first light comes up and today rings once; nothing loops. An
   older read without a journey shows the next milestones as rows under "Ahead"; with nothing dated,
   the starter (`CairnJourneyTrail.starterHtml`) sits there.
 - **Your team this week** (`.seat`, `team-seats-client.ts`, GET `/api/team-week`, SWR key

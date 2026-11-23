@@ -305,6 +305,31 @@ export interface WeekReadJourneyBehind {
 }
 
 /**
+ * A stone set on the WALKED part of the trail: something the athlete actually did between
+ * `start_date` and today, read from the source that owns it (a race run, a lift's new best,
+ * the longest run taken well, a bodyweight waypoint crossed). A logged event, never an
+ * estimate of the future and never a grade.
+ */
+export interface WeekReadJourneyStone {
+  kind: "race_done" | "best" | "longest_run" | "weight";
+  stone: "strength" | "endurance" | "body" | "heart";
+  date: string;
+  /** "Nov 3". */
+  date_words: string;
+  /** Days from the stone to today (0 = today). */
+  days_ago: number;
+  /** The trail's short word: "285 lb", "14 km", "175 lb", "Half". */
+  short: string;
+  /** One full sentence: "A new best on the squat on Nov 12, an estimated 285 lb max." */
+  words: string;
+  /** The day it happened (or the goal page); null when it has no page. */
+  href: string | null;
+}
+
+/** The most stones the walked part carries, so the trail stays calm. */
+export const JOURNEY_STONES_MAX = 6;
+
+/**
  * The journey trail Horizon's Week draws: to scale in time from `start_date` through today to
  * the furthest dated goal. Built over Today's path (src/repo/today-path.ts), re-deriving
  * nothing; null when no dated mark lies ahead or the week is not this week.
@@ -318,6 +343,12 @@ export interface WeekReadJourney {
   marks: WeekReadJourneyMark[];
   /** What moved toward a goal since `start_date` (at most three); empty when nothing did. */
   behind: WeekReadJourneyBehind[];
+  /**
+   * What the athlete has already done on this stretch, as dated stones on the walked part,
+   * ascending (at most JOURNEY_STONES_MAX). Absent on an older read; when it holds stones the
+   * trail's "Behind you" list prints their sentences instead of `behind`.
+   */
+  walked?: WeekReadJourneyStone[];
   /** One calm line of where the athlete stands on the trail ("31 days walked, 10 to the race."). */
   line: string;
 }

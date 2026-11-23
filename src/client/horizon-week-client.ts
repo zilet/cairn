@@ -34,6 +34,8 @@
     selected?: string | null;
     /** The trail mark whose words are open (default: the next one). */
     mark?: number;
+    /** …or the walked stone whose words are open. */
+    stone?: number | null;
     seasonHref?: string;
     changesHref?: string;
     team?: ClientTeamSeats | null;
@@ -96,6 +98,7 @@
       const road = CairnJourneyTrail.trailHtml(model.journey, {
         enter: !!opts.enter,
         selected: opts.mark,
+        stone: opts.stone,
         below: marksFoldHtml(model, seasonHref),
       });
       if (road) return road;
