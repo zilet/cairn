@@ -207,7 +207,7 @@ test("the walked stones: capped, spaced and varied so the trail stays calm", () 
   const old = stone("2026-09-01", "best", "strength");
   const crowd = stone("2026-09-28", "longest_run", "endurance");
   const picked = pickJourneyStones([...weights, old, crowd], "2026-09-01", "2026-12-15");
-  assert.ok(picked.length <= 6, `at most six, got ${picked.length}`);
+  assert.ok(picked.length <= JOURNEY_STONES_MAX, `at most ${JOURNEY_STONES_MAX}, got ${picked.length}`);
   assert.ok(picked.includes(old), "a stone of another hue is kept even when older");
   assert.equal(picked.includes(crowd), false, "a stone a day from a newer one would sit on it: it gives way");
   const apart = stone("2026-09-12", "longest_run", "endurance");
@@ -649,4 +649,31 @@ test("a race run under an old goal, a new race goal set: one race stone on race 
     j.walked.some((s) => s.kind === "longest_run" && s.date === RACE),
     false
   );
+});
+
+// Seen on a real road: a weight waypoint four days from a routine long run lost its place to
+// it, and five and a half months of weight lost left no stone at all. The goals' own ground
+// claims its stone before the supporting facts do.
+test("the goals' own ground and a lab draw are never lost to a routine stone logged the same week", () => {
+  const stone = (kind, hue, date) => ({ kind, stone: hue, date, date_words: date, days_ago: 0, short: kind, words: kind, href: null });
+  const picked = pickJourneyStones(
+    [
+      stone("longest_run", "endurance", "2026-11-15"),
+      stone("weight", "body", "2026-11-11"),
+      stone("health", "heart", "2026-11-10"),
+      stone("race_done", "endurance", "2026-11-01"),
+      stone("best", "strength", "2026-10-14"),
+      stone("block", "strength", "2026-10-06"),
+      stone("weight", "body", "2026-09-20"),
+      stone("weight", "body", "2026-08-25"),
+      stone("full_week", "strength", "2026-08-02"),
+      stone("weight", "body", "2026-07-15"),
+    ],
+    "2026-06-06",
+    "2026-11-23"
+  );
+  const kinds = picked.map((s) => s.kind);
+  assert.ok(kinds.includes("race_done") && kinds.includes("best") && kinds.includes("health"));
+  assert.ok(kinds.filter((k) => k === "weight").length >= 2, "earlier waypoints spread along the road");
+  assert.ok(picked.length <= JOURNEY_STONES_MAX);
 });

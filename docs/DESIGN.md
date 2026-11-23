@@ -299,7 +299,7 @@ bottom:
   their area's hue (`journey.walked`, `journey-ground.ts`: a race run, a lift's new best, the
   longest run taken well, a weight waypoint crossed, a lab draw that moved a marker back inside or
   toward its optimal band in heart, a block finished, the first week that held every day set, a
-  measured waist or body-fat change; at most six, the hues first and then spread along the road; an
+  measured waist or body-fat change; at most eight, one of each kind first (a race and the goals' own ground leading) and then spread along the road; an
   older stone too close to a newer one gives way, and a week step under a stone is dropped); the
   walked part widens a little to carry them, and however long it is the road ahead keeps room for
   the summit's label and the next mark's (today sits no further right than 34% short of the end with

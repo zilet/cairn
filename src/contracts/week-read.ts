@@ -338,7 +338,7 @@ export interface WeekReadJourneyStone {
 }
 
 /** The most stones the walked part carries, so the trail stays calm. */
-export const JOURNEY_STONES_MAX = 6;
+export const JOURNEY_STONES_MAX = 8;
 
 /**
  * The journey trail Horizon's Week draws: to scale in time from `start_date` through today to

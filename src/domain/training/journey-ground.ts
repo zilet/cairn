@@ -76,6 +76,23 @@ const STONE_PRIORITY: Record<WeekReadJourneyStone["kind"], number> = {
   full_week: 8,
 };
 
+/**
+ * The order kinds claim their first stone in: the race, then a lab draw (one date, no other
+ * to offer), then the goals' own ground (a weight goal has many waypoints and gives its next
+ * one when the newest sits on a kept stone), the supporting facts last.
+ */
+const STONE_PICK_ORDER: ReadonlyArray<WeekReadJourneyStone["kind"]> = [
+  "race_done",
+  "health",
+  "weight",
+  "best",
+  "body_fat",
+  "waist",
+  "block",
+  "full_week",
+  "longest_run",
+];
+
 /** How far back the road may start: a year of ground is a whole journey; past it, the start is history. */
 export const ROAD_BACK_MAX_DAYS = 365;
 
@@ -556,8 +573,8 @@ function bodyFatStone(body: BodyMeasured | null | undefined, start: string, toda
 }
 
 /**
- * The stones the road carries: variety first (the newest of each stone hue, then of each
- * kind), then the rest spread along the road (each next the one farthest from those
+ * The stones the road carries: one of each kind first (STONE_PICK_ORDER, the newest that
+ * fits), then the rest spread along the road (each next the one farthest from those
  * already chosen, the newer on a tie), so six waypoints over five months read as the
  * journey rather than its last weeks; never two closer than a few days (or ~3% of the
  * road), and at most JOURNEY_STONES_MAX. Ascending by date.
@@ -570,28 +587,21 @@ export function pickJourneyStones<T extends WeekReadJourneyStone>(
   const newest = [...candidates].sort(
     (a, b) => b.date.localeCompare(a.date) || STONE_PRIORITY[a.kind] - STONE_PRIORITY[b.kind]
   );
-  const order: T[] = [];
-  const hues = new Set<string>();
-  const kinds = new Set<string>();
-  for (const c of newest) {
-    if (hues.has(c.stone)) continue;
-    hues.add(c.stone);
-    kinds.add(c.kind);
-    order.push(c);
-  }
-  for (const c of newest) {
-    if (kinds.has(c.kind)) continue;
-    kinds.add(c.kind);
-    order.push(c);
-  }
   const gap = Math.max(STONE_MIN_GAP_DAYS, Math.round((daysBetweenISO(end, start) ?? 0) * STONE_MIN_GAP_SHARE));
   const near = (a: T, b: T) => Math.abs(daysBetweenISO(a.date, b.date) ?? 0);
   const kept: T[] = [];
-  const keep = (c: T) => {
-    if (kept.length >= JOURNEY_STONES_MAX || kept.some((k) => near(k, c) < gap)) return;
-    kept.push(c);
-  };
-  for (const c of order) keep(c);
+  // One of each kind first, in the order the stones matter to the road: a race run and the
+  // goals' own ground (weight, a lift's best) before the supporting facts. A kind whose
+  // newest stone sits too close to one already kept offers its next newest, so a weight
+  // waypoint is never lost to a routine long run logged the same week.
+  const order: T[] = [];
+  for (const kind of STONE_PICK_ORDER) {
+    if (kept.length >= JOURNEY_STONES_MAX) break;
+    const fit = newest.find((c) => c.kind === kind && !kept.some((k) => near(k, c) < gap));
+    if (!fit) continue;
+    kept.push(fit);
+    order.push(fit);
+  }
   // The rest, spread: the candidate farthest from every stone kept, until the cap.
   let rest = newest.filter((c) => !order.includes(c));
   while (kept.length < JOURNEY_STONES_MAX && rest.length) {
