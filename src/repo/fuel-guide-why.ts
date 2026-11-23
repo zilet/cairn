@@ -101,7 +101,7 @@ function energyWhy(i: FuelWhyInput): FuelWhy | null {
     pace = ` About 0.5–1% of body weight a week is the pace usually suggested for keeping muscle while cutting, the slower end the leaner you are; at ${i.weight_words} that is ${low}–${high} ${i.weight_unit} a week.`;
   }
   const effect = lose
-    ? "A cut runs on the week's average, so a long-run day can hold more and a rest day less without changing the pace of the loss. Eating well under it speeds the loss and leaves less fuel for training. In a trial of 24 elite athletes who all lifted, those losing about 0.7% of body weight a week gained lean mass, and those losing about 1.4% a week held theirs."
+    ? "A cut runs on the week's average, so a long-run day can hold more and a rest day less without changing the pace of the loss. Eating well under it speeds the loss and leaves less fuel for training. In a trial of 24 elite athletes who all lifted, the group losing weight at half the pace of the other gained lean mass, and the faster group held theirs."
     : i.mode === "gain"
       ? "A small surplus is what lets training turn into muscle. A large one mostly adds fat."
       : "Eating at about what you burn gives training its full fuel and holds your weight where it is.";
