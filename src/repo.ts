@@ -118,6 +118,7 @@ export * from "./repo/flexible-training-agenda.js"; // rolling run intentions: a
 export * from "./repo/hybrid-run-lookahead.js"; // hybrid planned_run_next override from flexible agenda (cycle-safe; not in training-read)
 export * from "./repo/dexa-targeting.js"; // DEXA regional read → training + nutrition targets
 export * from "./repo/muscle-trajectory.js"; // per-muscle-group advance/stall + strength test-week cadence
+export * from "./repo/strength-capability.js"; // progress per movement unit and muscle, the lift as evidence
 export * from "./repo/coaching-focus.js"; // THE CONDUCTOR — one sequenced whole-athlete focus across all domains
 export * from "./repo/signal-state.js"; // unified daily evidence dimensions + one deterministic planning posture
 export * from "./repo/attention.js"; // adaptive attention cadence kernel
