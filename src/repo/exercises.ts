@@ -7,6 +7,7 @@ import {
   classifyMuscleGroup,
   cleanExerciseName,
   detectExerciseMode,
+  expandedExerciseKey,
   getExerciseAlias,
   implementRelaxedExerciseKey,
   isPlaceholderExerciseName,
@@ -16,6 +17,7 @@ import {
   resolveExerciseName,
   resolveGroup,
   setExerciseAlias,
+  shouldAutoApplyMerge,
   validateExerciseMergePlan,
 } from "./exercise-canon.js";
 import {
@@ -379,17 +381,14 @@ export function upsertExercise(
 ): any {
   const name = String(input.name ?? "").trim();
   if (!name) throw new Error("name required");
+  // Canonicalize the supplied group before passing it through. Undefined (omitted) leaves
+  // the stored group AND its source alone; only a supplied value is the person's.
+  const mg = input.muscle_group !== undefined
+    ? (input.muscle_group != null ? (canonicalGroup(input.muscle_group) ?? input.muscle_group) : null)
+    : undefined;
+  const patch = { muscle_group: mg, mode: input.mode ?? undefined };
   const existing = findExerciseExact(name);
-  if (existing) {
-    // Canonicalize the supplied group before passing it through.
-    const mg = input.muscle_group !== undefined
-      ? (input.muscle_group != null ? (canonicalGroup(input.muscle_group) ?? input.muscle_group) : null)
-      : undefined;
-    return updateExercise(existing.id, {
-      muscle_group: mg,
-      mode: input.mode ?? undefined,
-    });
-  }
+  if (existing) return updateExercise(existing.id, patch);
   // findOrCreateExercise may still resolve to an EXISTING row (alias/key/clean-dupe
   // match) rather than inserting. AUTOINCREMENT ids are monotonic, so an id above
   // the pre-call max is the reliable "a new row was inserted" signal.
@@ -400,7 +399,45 @@ export function upsertExercise(
     queueExerciseEnrichment(Number(row.id));
     return getExercise(Number(row.id)); // re-read so enrichment_status rides along
   }
-  return row;
+  if (created || !row) return row;
+  // The spelling resolved onto a lift already stored ("DB Bicep Curl" is the stored
+  // "Dumbbell Biceps Curl"): the supplied fields are an edit of THAT row, exactly as an
+  // exact match's would be, and the receipt names the row written and the spelling given.
+  return withResolvedFrom(updateExercise(Number(row.id), patch), name);
+}
+
+// The receipt of a write addressed by a name that is not the stored spelling: the row
+// that was written, plus `resolved_from` — the spelling the caller sent — whenever it
+// differs from the stored name by more than letter case. An exact (case-insensitive)
+// hit carries nothing extra.
+export function withResolvedFrom<T extends { name?: unknown } | null | undefined>(row: T, given: string): T {
+  if (!row || typeof row !== "object") return row;
+  const stored = String((row as any).name ?? "");
+  const sent = String(given ?? "").trim();
+  if (!sent || sent.toLowerCase() === stored.toLowerCase()) return row;
+  return { ...(row as any), resolved_from: sent };
+}
+
+// Edit an existing exercise addressed BY NAME (MCP update_exercise). The target goes
+// through the one resolver (findExercise), so "DB Bicep Curl" edits the stored
+// "Dumbbell Biceps Curl" — and the receipt says so (`resolved_from`). The TARGET is never
+// a rename: a `name` equal to the spelling the caller addressed the row by is that
+// spelling echoed back, not a request to retitle the stored lift to it, and is dropped
+// (`rename_ignored`). A genuine rename still goes through renameExercise via
+// updateExercise. Null when the name resolves to nothing.
+export function updateExerciseByName(
+  target: string,
+  patch: Parameters<typeof updateExercise>[1]
+): any {
+  const row = findExercise(String(target ?? "").trim());
+  if (!row) return null;
+  const sent = String(target ?? "").trim();
+  const resolved = sent.toLowerCase() !== String(row.name).toLowerCase();
+  const wanted = String(patch.name ?? "").trim();
+  const echoed = resolved && !!wanted && normalizeExerciseName(wanted) === normalizeExerciseName(sent);
+  const updated = updateExercise(Number(row.id), echoed ? { ...patch, name: undefined } : patch);
+  const receipt = withResolvedFrom(updated, sent);
+  return echoed && receipt ? { ...receipt, rename_ignored: wanted } : receipt;
 }
 
 // AUTOINCREMENT ids are monotonic, so an id above the pre-call max is the reliable
@@ -436,6 +473,20 @@ function exerciseReferenceCount(id: number): { logs: number; plan: number } {
   const logs = Number((db.prepare(`SELECT COUNT(*) AS c FROM logged_sets WHERE exercise_id = ?`).get(id) as any)?.c ?? 0);
   const plan = Number((db.prepare(`SELECT COUNT(*) AS c FROM plan_items WHERE exercise_id = ?`).get(id) as any)?.c ?? 0);
   return { logs, plan };
+}
+
+// Distinct days a lift was logged on — the "how well-trained" input the merge guard reads.
+export function loggedDayCount(id: number): number {
+  return Number(
+    (
+      db
+        .prepare(
+          `SELECT COUNT(DISTINCT s.date) AS c FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+            WHERE ls.exercise_id = ?`
+        )
+        .get(id) as any
+    )?.c ?? 0
+  );
 }
 
 // ---------- retitling ----------
@@ -508,6 +559,17 @@ function sameLiftRespelling(row: any, into: string): boolean {
   return validateExerciseMergePlan(side(name), side(into)).ok;
 }
 
+// Is `into` a LESS canonical spelling of the stored `name`? Either the alias table already
+// maps `into` onto this name (the canonical side wins), or the two are the same lift once
+// abbreviations are spelled out and `into` is the one that abbreviates ("DB" where the
+// stored name says "Dumbbell").
+function lessCanonicalSpelling(name: string, into: string): boolean {
+  const alias = getExerciseAlias(into)?.canonical;
+  if (alias && normalizeExerciseName(alias) === normalizeExerciseName(name)) return true;
+  const abbreviates = (n: string) => normalizedExerciseKey(n) !== expandedExerciseKey(n);
+  return expandedExerciseKey(into) === expandedExerciseKey(name) && abbreviates(into) && !abbreviates(name);
+}
+
 export type ExerciseRenameSource = "agent" | "person";
 export interface ExerciseRenameResult {
   ok: boolean;
@@ -549,6 +611,41 @@ export function renameExercise(
   const resolved = resolveExerciseName(into);
   const other = resolved.exercise_id != null && resolved.exercise_id !== id ? getExercise(resolved.exercise_id) : null;
   if (other) {
+    // An AGENT naming another stored lift is proposing a merge, and a merge deletes a row
+    // for good: it is held to exactly the guards Tidy's merge list is (validateExerciseMergePlan
+    // over the stored rows and their own history, then a structural relation). A pair the
+    // guards refuse is rejected; one that only shares a muscle group is parked for a
+    // person's yes, never folded on the agent's word. A person's rename folds as before.
+    if (!byPerson) {
+      if (cur.refused_name && normalizeExerciseName(String(cur.refused_name)) === intoNorm) {
+        return { ok: false, id, name, outcome: "refused", reason: "declined before" };
+      }
+      const verdict = validateExerciseMergePlan(
+        { name, group: cur.muscle_group ?? null, mode: cur.mode ?? null, days: loggedDayCount(id) },
+        {
+          name: String(other.name),
+          group: other.muscle_group ?? null,
+          mode: other.mode ?? null,
+          days: loggedDayCount(Number(other.id)),
+        }
+      );
+      // Only STRUCTURAL evidence (the same key, or one name's tokens inside the other's)
+      // folds on an agent's word — even for a row nothing references yet, because the
+      // alias a fold writes sends every future log of that spelling into the other lift's
+      // history ("Nordic Curl" into "Leg Curl"). A pair that merely shares a group, or a
+      // fresh row with no group evidence either way, waits on suggested_name for a yes; a
+      // pair the guards call different movements (or two trained lifts) is rejected.
+      const refs = exerciseReferenceCount(id);
+      const unreferenced = refs.logs === 0 && refs.plan === 0;
+      const softRefusal = !verdict.ok && verdict.reason === "different muscle groups";
+      if (!verdict.ok && !(unreferenced && softRefusal)) {
+        return { ok: false, id, name, outcome: "rejected", reason: verdict.reason ?? "merge refused" };
+      }
+      if (!shouldAutoApplyMerge(verdict, "high")) {
+        db.prepare(`UPDATE exercises SET suggested_name = ? WHERE id = ?`).run(String(other.name), id);
+        return { ok: false, id, name, outcome: "suggested", reason: "may be the same lift as one you have — waiting for a yes" };
+      }
+    }
     const merged = mergeExercises(name, String(other.name));
     if (!merged.ok) return { ok: false, id, name, outcome: "rejected", reason: merged.error ?? "merge refused" };
     setExerciseAlias(fromNorm, String(other.name), byPerson ? "person" : "agent");
@@ -562,6 +659,12 @@ export function renameExercise(
   if (!byPerson) {
     if (cur.refused_name && normalizeExerciseName(String(cur.refused_name)) === intoNorm) {
       return { ok: false, id, name, outcome: "refused", reason: "declined before" };
+    }
+    // A display name never gets LESS canonical on an agent's word: a proposal that is the
+    // alias side of this row ("DB Bicep Curl" → "Dumbbell Biceps Curl" in exercise_aliases)
+    // or an abbreviated spelling of the same name is a step backwards, not a cleanup.
+    if (lessCanonicalSpelling(name, into)) {
+      return { ok: true, id, name, outcome: "unchanged", reason: "already the fuller spelling" };
     }
     const refs = exerciseReferenceCount(id);
     const unreferenced = refs.logs === 0 && refs.plan === 0;

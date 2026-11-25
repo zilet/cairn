@@ -1,4 +1,5 @@
 import { db } from "../../db.js";
+import { findExercise } from "../../repo/exercises.js";
 import { painAreaLoadsExercise } from "../../repo/pain-relevance.js";
 import { getAuthoritativeSessionRow } from "../../repo/session-core.js";
 import { afterSqliteCommit, withSqliteSavepoint } from "../../repo/sqlite-savepoint.js";
@@ -55,9 +56,9 @@ function canonicalExercise(movement: unknown): {
   const requested = String(movement ?? "").trim();
   if (!requested) throw new Error("movement required");
   if (requested.length > 120) throw new Error("movement must be 120 characters or fewer");
-  const row = db
-    .prepare(`SELECT id, name, muscle_group FROM exercises WHERE name = ? COLLATE NOCASE`)
-    .get(requested) as any;
+  // Through the one resolver (exact first): "DB Bicep Curl" is the stored "Dumbbell Biceps
+  // Curl", and the observation lands on that row under its stored name.
+  const row = findExercise(requested) as any;
   if (!row) throw new Error("movement must identify an existing exercise");
   return {
     id: Number(row.id),

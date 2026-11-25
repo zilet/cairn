@@ -19,7 +19,7 @@ import { DatabaseSync } from "node:sqlite";
 import { db, repo, localDaysAgo } from "./_seed.js";
 import { MIGRATIONS } from "../dist/migrate.js";
 import { curatedMuscleGroup } from "../dist/repo/muscle-credit.js";
-import { programBalanceRead } from "../dist/repo/program-balance-read.js";
+import { programBalanceRead, ungroupedNote } from "../dist/repo/program-balance-read.js";
 import { reconcileExercises } from "../dist/coachOps.js";
 
 const TODAY = localDaysAgo(0);
@@ -222,4 +222,12 @@ test("the balance read carries no note when every lift was counted", () => {
   const read = programBalanceRead(2, TODAY);
   assert.deepEqual(read.ungrouped, []);
   assert.equal(read.ungrouped_note, null);
+});
+
+test("the ungrouped note names a few lifts, then 'and N more'", () => {
+  const lifts = ["A", "B", "C", "D", "E"].map((exercise, i) => ({ exercise, sets: 5 - i, last_date: TODAY }));
+  const note = ungroupedNote(lifts);
+  assert.match(note, /A \(5 sets\), B \(4 sets\), C \(3 sets\), and 2 more\.$/);
+  assert.doesNotMatch(note, /D \(|E \(/);
+  assert.equal(ungroupedNote([]), null);
 });

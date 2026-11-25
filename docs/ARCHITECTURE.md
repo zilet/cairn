@@ -5497,6 +5497,32 @@ delete). Composed card items carry the stored spelling (adaptive-session `normal
 Suggestion lists go through `liftAlternatives`/`liftVariations` (`src/repo/exercise-suggestions.ts`),
 never the raw table, and progression's rotation never offers a lift its own other spelling. A swap
 into the slot's own lift is `action:'unchanged'`: nothing is written and no expectation is recorded.
+A write addressed by a resolved spelling SAYS which row it wrote: `upsertExercise` (REST
+`POST /api/exercises`, MCP `upsert_exercise`) on "DB Bicep Curl" edits the stored "Dumbbell Biceps
+Curl" with the supplied fields and returns that row plus `resolved_from`; MCP `update_exercise` goes
+through `updateExerciseByName`, whose receipt does the same, and a `name` that only echoes the target
+spelling is dropped as `rename_ignored` (the target is never a rename; a real rename still goes
+through `renameExercise`). A write with no group never touches `muscle_group_source`. The old
+spelling-rotation bug's leftovers are repaired once per database at boot, before the server listens
+(`src/repo/self-rotation-repair.ts`): the ledger is walked back through every self-rotation the slot
+took to the state before the earliest; the false "Rotated in for <its own lift>" sentence is replaced
+by that state's note (or removed), keeping anything appended since, and `prescribed_at` returns to the
+pre-rotation stamp only when the newest self-rotation wrote the current stamp AND the slot's
+prescription (sets, reps, target load/seconds) is exactly what it was before the first one — Undo's
+`withRestoredStamps` rule. Otherwise the stamp stays.
+
+**An agent's spelling is only a pointer to a stored row.** Tidy keys every merge decision by the
+stored row (id, stored name, the stored rows' own logged days for the both-well-trained guard),
+auto-applies a merge only when the agent quoted both stored names verbatim (a pair it reached
+through the resolver is offered as a suggestion under the stored names), applies an agent's group
+only to a row its cluster named, and echoes stored names in every receipt. An AGENT rename onto
+another stored row is a merge and passes the same guards first (`validateExerciseMergePlan` then
+a structural relation). Only structural evidence (same key, a token subset) folds on an agent's
+word, even for a row nothing references yet, since the fold's alias routes every future log of that
+spelling into the other lift; a group-only pair, or a fresh row with no group evidence, is parked on
+`suggested_name`. An agent never makes a display name LESS canonical: a proposal that is the alias
+side of the row, or an abbreviation of its spelled-out name ("DB" for "Dumbbell"), is `unchanged`.
+A person's rename still folds directly.
 
 **A lift's muscle group carries who set it** — `exercises.muscle_group_source`
 (`user|table|classifier|agent|legacy`, `src/repo/exercises.ts`). An agent fills an empty group or
@@ -5504,16 +5530,35 @@ corrects a `classifier` guess, never a person's, a unanimous table's or its own 
 deterministic re-check (`recheckExerciseGroups`, run by Tidy) follows `curatedMuscleGroup`
 (`muscle-credit.ts`: named lift, classifier and pattern unanimous) and corrects a legacy/agent group
 only when the lift does not train it at all. A person's edit goes through `updateExercise`; system
-writers never do. Work no group can count is named in the balance read (`programBalanceRead`,
+writers never do. The seed catalog stores canonical groups and stamps the source a fresh insert of
+that name would get (`seedGroupSource`: `table` where the curated tables settle the lift, else
+`classifier`); `test/seedExerciseGroups.test.js` holds every seed row to that. Work no group can count is named in the balance read (`programBalanceRead`,
 `src/repo/program-balance-read.ts`: `ungrouped`, `ungrouped_note`), never dropped.
 
 **A standing coverage gap is one ask** (`src/repo/plan-coverage.ts`,
 `src/domain/brain/coverage-ask.ts`) — a floored group under its floor or a missing movement family
 in the plan of record is raised after a person's plan save and by a daily pass
-(`plan_coverage_check_date`) as ONE server-derived draft held on the refused-floor ask. It is deduped
-per gap fingerprint (gap, intent, the lifts that count toward it); an applied or set-aside answer
-holds until those change. Floors and thresholds are unchanged, and the same-lift-twice check keys on
-`resolveExerciseName` identity.
+(`plan_coverage_check_date`) as ONE server-derived draft held on the refused-floor ask (in-app only:
+nothing notifies). The gap is judged on the STANDING plan as written against the intent alone
+(`readPlanCoverage`); everything that varies week to week is a HOLD instead — a light window the
+floor stands aside for, a block's realization week, the post-race window, a trip, an affirmed cut, and per element an
+endurance-carried group (two OR six weeks) or a strength-led taper's legs. Under a hold nothing new
+is raised and nothing open is withdrawn; an open ask is withdrawn only when the plan itself closed its
+gap, its offer no longer fits the plan (`coverageOfferStillFits`: the slots it bumps changed, a lift
+it adds is already there, an injury now loads one), or a new gap folds into one ask. An answer is
+keyed by fingerprint (gap + intent) with the planned count at the time, and holds until the plan
+gives that group `COVERAGE_REASK_WORSE_BY` (2) fewer counted sets; a lift swap at the same volume is
+not news. The ask reads only open and answered rows, never withdrawn ones; a read that FAILED is
+`unavailable` and raises and withdraws nothing. "Under the floor" has ONE definition,
+`weeklyFloorShortfalls` (`plan-quality.ts`, both coverage answers off one arithmetic pass in
+`planCoverageShortfalls`), read by the compiler's warning, the redraw precheck and this ask. The
+standing gaps reach the plan-shaping prompts as `DATA.coverage_gaps`, built from the coach slice's own
+plan and floor context and agreeing with what the floor enforces now: a gap the week holds, one the
+endurance work carries or the taper trims, and one an open injury loads carry `held` (the reason in
+plain words, and the prompt leaves it alone); a declined one carries `declined:true` (left unless the
+athlete asks). Its declined lookup is bounded (`declinedCoverage`: answered rows only, newest first,
+stopping once every gap met its newest answer). Floors and thresholds are unchanged,
+and the same-lift-twice check keys on `resolveExerciseName` identity.
 
 ## Exercise guides (`src/repo/exercise-guide.ts`, `src/domain/training/exercise-guide-use-case.ts`)
 

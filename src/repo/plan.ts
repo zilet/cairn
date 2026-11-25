@@ -1456,16 +1456,28 @@ export function applyPlanChange(
   // the day matches is this treated as an ADD.
   const dayItems = db
     .prepare(
-      `SELECT e.name AS ex_name
+      `SELECT e.name AS ex_name, pi.exercise_id AS exercise_id
        FROM plan_items pi JOIN exercises e ON e.id = pi.exercise_id
       WHERE pi.plan_day_id = ? AND (pi.kind IS NULL OR pi.kind != 'cardio')`
     )
     .all(day.id) as any[];
   const norm = normalizeExerciseName(name);
   const key = normalizedExerciseKey(name);
+  // Last, THE resolver: a change naming the slot's lift by another spelling ("DB Bicep
+  // Curl" for a slot holding "Dumbbell Biceps Curl") updates that slot. Without this tier
+  // it fell through to the ADD below, whose create chokepoint resolves to the SAME row —
+  // one lift twice on one day.
+  const resolvedId = (() => {
+    try {
+      return resolveExerciseName(name).exercise_id;
+    } catch {
+      return null;
+    }
+  })();
   const match =
     dayItems.find((r) => normalizeExerciseName(r.ex_name) === norm) ??
-    dayItems.find((r) => normalizedExerciseKey(r.ex_name) === key);
+    dayItems.find((r) => normalizedExerciseKey(r.ex_name) === key) ??
+    (resolvedId == null ? undefined : dayItems.find((r) => Number(r.exercise_id) === Number(resolvedId)));
 
   // REMOVE: exact/canonical matching keeps a model spelling drift from leaving the
   // duplicate behind. It deletes only the plan prescription; session history remains.
@@ -1623,6 +1635,12 @@ export function applyPlanChange(
     throw new Error(`rep_low cannot exceed rep_high for "${name}"`);
   }
   const ex = findOrCreateExercise(name, undefined, undefined, c.mode ?? (timed ? "timed" : "reps"));
+  // The create chokepoint has tiers past the resolver (a cleaned spelling, a station word);
+  // one that lands on a lift ALREADY on this day is an update of that slot under its stored
+  // name, never a second copy of it.
+  if (ex && dayItems.some((r) => Number(r.exercise_id) === Number(ex.id))) {
+    return applyPlanChange({ ...c, exercise: String(ex.name) }, opts);
+  }
   const requestedMode = c.mode === "timed" || c.mode === "reps" ? c.mode : null;
   if (requestedMode && ex.mode !== requestedMode) {
     throw new Error(`Exercise "${ex.name}" already uses ${ex.mode ?? "an unknown"} mode, not ${requestedMode}`);

@@ -48,7 +48,7 @@ import { mealPlanDayFloor } from "./meal-plan-day-energy-compute.js";
 import { coerceFinite as num } from "../lib/numbers.js";
 import { normalizedExerciseKey } from "./exercise-canon.js";
 import { clampSetReductionStep, getPlan } from "./plan.js";
-import { plannedWeeklyGroupSets, type PlanQualityDay } from "./plan-quality.js";
+import { plannedWeeklyGroupSets, type PlanQualityDay, weeklyFloorShortfalls } from "./plan-quality.js";
 import { RECOVERY_WEEK_INSTRUCTION_PREFIX } from "./recovery-week-ledger.js";
 import { type VolumeFloorContext, weeklySetTargets } from "./volume-floor.js";
 import { readVolumeFloorContext } from "./volume-floor-context.js";
@@ -467,22 +467,17 @@ export function planVolumeFloorViolations(
   current: PlanQualityDay[],
   ctx: VolumeFloorContext | null | undefined
 ): FloorViolation[] {
-  const targets = weeklySetTargets(ctx);
-  if (!targets.length) return [];
-  const strengthDays = (Array.isArray(candidate) ? candidate : []).filter(
-    (day: any) =>
-      Array.isArray(day?.items) &&
-      day.items.some((item: any) => item && String(item.kind ?? "strength").toLowerCase() !== "cardio")
-  ).length;
-  if (strengthDays < 2) return [];
-  const after = plannedWeeklyGroupSets(candidate);
+  // Which groups the draft leaves under their floor is plan-quality.ts's ONE definition
+  // (weeklyFloorShortfalls — the compiler's warning and the coverage ask read the same);
+  // only the grandfathering against the current week is this precheck's own question.
+  const shortfalls = weeklyFloorShortfalls(candidate, ctx);
+  if (!shortfalls.length) return [];
   const before = plannedWeeklyGroupSets(current);
   const round = (value: number) => Math.round(value * 10) / 10;
   const out: FloorViolation[] = [];
-  for (const target of targets) {
-    const drafted = after.get(target.group as any) ?? 0;
+  for (const target of shortfalls) {
+    const drafted = target.planned;
     const held = before.get(target.group as any) ?? 0;
-    if (drafted >= target.low) continue;
     if (held < target.low && drafted >= held) continue;
     out.push({
       code: "plan_group_below_volume_floor",

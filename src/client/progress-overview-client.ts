@@ -481,7 +481,7 @@ function tovRowHtml(row: TovRow, i: number, showPill = true): string {
 
 // The groups that ask for a look (due, running high, stalling) lead, at least three;
 // the rest fold under one quiet line, one tap away, never a wall of thirteen rows.
-function tovRowsHtml(rows: TovRow[]): string {
+function tovRowsHtml(rows: TovRow[], ungroupedNote?: unknown): string {
   const visible = rows.filter((r) => r.tone !== "none" || TOV_GROUP_ORDER.includes(r.group));
   if (!visible.length) return "";
   const summary = tovGroupVerdictSummary(visible);
@@ -492,7 +492,7 @@ function tovRowsHtml(rows: TovRow[]): string {
   const more = rest.length ? `<details class="tov-more"><summary class="tov-more-sum"><span>${rest.length} more muscle group${rest.length === 1 ? "" : "s"}</span><span class="tov-more-hint">${escHtml(hint)}</span></summary><div class="tov-rows">${rest.map((row, i) => tovRowHtml(row, lead.length + i, summary.showRowPill(row))).join("")}</div></details>` : "";
   const noteHtml = summary.note ? `<p class="tov-rows-note reveal" style="${stagger(2)}" data-tov-verdict-summary="${escAttr(summary.majorityVerdict || "")}">${escHtml(summary.note)}</p>` : "";
   return `<div class="tov-kicker lbl reveal" style="${stagger(2)}">Working sets per week, against your productive range</div>
-    ${noteHtml}<div class="tov-rows">${lead.map((row, i) => tovRowHtml(row, i, summary.showRowPill(row))).join("")}</div>${more}`;
+    ${noteHtml}<div class="tov-rows">${lead.map((row, i) => tovRowHtml(row, i, summary.showRowPill(row))).join("")}</div>${more}${typeof ungroupedNote === "string" && ungroupedNote.trim() ? `<p class="vol-ungrouped">${escHtml(ungroupedNote.trim())}</p>` : ""}`;
 }
 
 /** A muscle's row, with its fold opened when it sits among the quiet groups. */
@@ -656,7 +656,7 @@ function paintTrainOverview(data: TovData): void {
     tovMastHtml(data, rows) +
     tovLoadBandHtml(data) +
     tovMapHtml(rows) +
-    tovRowsHtml(rows) +
+    tovRowsHtml(rows, data.balance?.ungrouped_note) +
     tovMovesHtml(data) +
     tovSessionsHtml(data) +
     `<div data-train-deeper-slot></div>` +

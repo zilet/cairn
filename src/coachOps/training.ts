@@ -13,7 +13,7 @@ import { getDailySessionOutcome } from "../repo/daily-reconciliation.js";
 import { dayRead, weekAheadPlan } from "../repo/day-read.js";
 import { weekAheadRaceLine } from "../repo/day-read-prose.js";
 import { MUSCLE_GROUPS, cleanExerciseName, normalizeExerciseName, normalizedExerciseKey, planExerciseAliases, resolveExerciseName, planExerciseRenames, setExerciseAlias, shouldAutoApplyMerge, validateExerciseMergePlan } from "../repo/exercise-canon.js";
-import { applyAgentMuscleGroup, correctExerciseGroups, distinctExerciseNames, findExercise, getExerciseDetail, mergeExercises, normalizeExerciseTitles, renameExercise } from "../repo/exercises.js";
+import { applyAgentMuscleGroup, correctExerciseGroups, distinctExerciseNames, findExercise, findExerciseExact, getExerciseDetail, loggedDayCount, mergeExercises, normalizeExerciseTitles, renameExercise } from "../repo/exercises.js";
 import { listContextEvents } from "../repo/health.js";
 import { getLocationContext } from "../repo/location-context.js";
 import { recordSuggestion } from "../repo/memory.js";
@@ -1524,13 +1524,24 @@ export async function reconcileExercises(
   // for is PARKED on the row for a one-tap yes/no, never dropped, never forced. ----
   const renamed: Array<{ from: string; into: string }> = [];
   const rename_suggested: Array<{ id: number; from: string; into: string }> = [];
+  // planExerciseRenames hands back only VERBATIM stored names, so the exact lookup is the
+  // row the agent named; the receipts echo the stored spelling, never the agent's.
+  // The planner collapses whitespace, so its name is mapped back to the stored spelling
+  // (a stored "Seated  Row" with a double space would otherwise miss the exact lookup).
+  const storedByNorm = new Map<string, string>();
+  for (const it of items) {
+    const norm = normalizeExerciseName(String(it.name));
+    if (norm && !storedByNorm.has(norm)) storedByNorm.set(norm, String(it.name));
+  }
+  const listedRow = (spelled: string): any =>
+    findExerciseExact(storedByNorm.get(normalizeExerciseName(spelled)) ?? spelled);
   for (const r of planExerciseRenames(items.map((i) => ({ name: i.name })), p.groups)) {
-    const row: any = findExercise(r.from);
+    const row: any = listedRow(r.from);
     if (!row) continue;
     try {
       const res = renameExercise(Number(row.id), r.into, { source: "agent" });
-      if (res.ok && res.outcome !== "unchanged") renamed.push({ from: r.from, into: res.name });
-      else if (res.outcome === "suggested") rename_suggested.push({ id: Number(row.id), from: r.from, into: r.into });
+      if (res.ok && res.outcome !== "unchanged") renamed.push({ from: String(row.name), into: res.name });
+      else if (res.outcome === "suggested") rename_suggested.push({ id: Number(row.id), from: String(row.name), into: r.into });
     } catch {
       /* one bad row never stops the pass */
     }
@@ -1540,7 +1551,12 @@ export async function reconcileExercises(
   // (repo agentMayWriteGroup): it fills an empty group and corrects the classifier's guess,
   // never a person's group, a unanimous table answer, or an earlier agent answer. Only an
   // exact taxonomy value counts; never throw on a bad row.
+  // The group lands on a row the cluster actually NAMED: the canonical must resolve to
+  // one of the cluster's verbatim members (or what a member was just renamed to, through
+  // its alias). A canonical that resolves to some other stored lift is the agent naming
+  // a row it was not talking about, and is skipped.
   const validGroups = new Set<string>([...MUSCLE_GROUPS]);
+  const listedNorms = new Set(items.map((i) => normalizeExerciseName(i.name)));
   for (const g of p.groups) {
     const canonical = String(g?.canonical ?? "")
       .replace(/\s+/g, " ")
@@ -1551,8 +1567,15 @@ export async function reconcileExercises(
       .toLowerCase();
     if (!canonical || !validGroups.has(suggestedGroup)) continue;
     try {
+      const memberIds = new Set<number>();
+      for (const member of Array.isArray(g?.members) ? g.members : []) {
+        const spelled = String(member ?? "").replace(/\s+/g, " ").trim();
+        if (!spelled || !listedNorms.has(normalizeExerciseName(spelled))) continue;
+        const row: any = findExercise(spelled);
+        if (row) memberIds.add(Number(row.id));
+      }
       const ex: any = findExercise(canonical);
-      if (ex && applyAgentMuscleGroup(Number(ex.id), suggestedGroup)) groups_fixed++;
+      if (ex && memberIds.has(Number(ex.id)) && applyAgentMuscleGroup(Number(ex.id), suggestedGroup)) groups_fixed++;
     } catch {
       /* skip a bad row, keep going */
     }
@@ -1564,8 +1587,16 @@ export async function reconcileExercises(
   // rests only on a shared muscle group is irreversible and ambiguous, so it's demoted
   // to a suggestion for one-tap confirmation. Everything else (medium/low, group-only)
   // returns as a suggestion; a validator rejection is skipped. ----
-  const daysByNorm = new Map<string, number>();
-  for (const it of items) daysByNorm.set(normalizeExerciseName(it.name), it.days);
+  // Every agent-supplied name is only a POINTER to a stored row: the bookkeeping below is
+  // keyed by the row (its id, its stored name), never by the agent's spelling. A merge
+  // deletes a row and cannot be undone, so it is AUTO-applied only when the agent quoted
+  // both stored names (the list it was handed); a pair it reached through the resolver
+  // (an alias, a key) is offered as a suggestion under the stored names instead, and a
+  // pair whose resolved row this pass already merged is not offered at all.
+  // Each row's OWN logged days, read now: a row renamed earlier in this pass is no longer
+  // under the name the pre-pass list carried.
+  const daysOf = (row: any): number => loggedDayCount(Number(row?.id));
+  const touched = new Set<number>(); // rows this pass already merged, either side
   const seenPair = new Set<string>();
   for (const m of Array.isArray(p.merges) ? p.merges : []) {
     const from = String(m?.from ?? "").trim();
@@ -1575,32 +1606,38 @@ export async function reconcileExercises(
     const intoNorm = normalizeExerciseName(into);
     if (!fromNorm || !intoNorm || fromNorm === intoNorm) continue;
     if (mergedFrom.has(fromNorm)) continue; // already folded deterministically
-    const pairKey = `${fromNorm}=>${intoNorm}`;
-    if (seenPair.has(pairKey)) continue;
-    seenPair.add(pairKey);
-    const fromRow: any = findExercise(from);
-    const intoRow: any = findExercise(into);
+    const fromExact: any = listedRow(from);
+    const intoExact: any = listedRow(into);
+    const fromRow: any = fromExact ?? findExercise(from);
+    const intoRow: any = intoExact ?? findExercise(into);
     if (!fromRow || !intoRow) {
       skipped.push({ from, into, reason: "exercise not found" });
       continue;
     }
     // Both spellings already name one stored lift (an alias resolved): nothing to merge.
-    if (fromRow.id === intoRow.id) continue;
+    if (Number(fromRow.id) === Number(intoRow.id)) continue;
+    const quoted = !!fromExact && !!intoExact;
+    if (!quoted && (touched.has(Number(fromRow.id)) || touched.has(Number(intoRow.id)))) continue;
+    const pairKey = `${Number(fromRow.id)}=>${Number(intoRow.id)}`;
+    if (seenPair.has(pairKey)) continue;
+    seenPair.add(pairKey);
     const verdict = validateExerciseMergePlan(
-      { name: fromRow.name, group: fromRow.muscle_group, mode: fromRow.mode, days: daysByNorm.get(fromNorm) ?? 0 },
-      { name: intoRow.name, group: intoRow.muscle_group, mode: intoRow.mode, days: daysByNorm.get(intoNorm) ?? 0 }
+      { name: fromRow.name, group: fromRow.muscle_group, mode: fromRow.mode, days: daysOf(fromRow) },
+      { name: intoRow.name, group: intoRow.muscle_group, mode: intoRow.mode, days: daysOf(intoRow) }
     );
     if (!verdict.ok) {
-      skipped.push({ from, into, reason: verdict.reason ?? "rejected" });
+      skipped.push({ from: String(fromRow.name), into: String(intoRow.name), reason: verdict.reason ?? "rejected" });
       continue;
     }
-    if (shouldAutoApplyMerge(verdict, confidence)) {
+    if (quoted && shouldAutoApplyMerge(verdict, confidence)) {
       const res = mergeExercises(fromRow.name, intoRow.name);
       if (res.ok) {
         merged.push({ from: fromRow.name, into: intoRow.name });
-        mergedFrom.add(fromNorm);
+        mergedFrom.add(normalizeExerciseName(String(fromRow.name)));
+        touched.add(Number(fromRow.id));
+        touched.add(Number(intoRow.id));
       } else {
-        skipped.push({ from, into, reason: res.error ?? "merge refused" });
+        skipped.push({ from: String(fromRow.name), into: String(intoRow.name), reason: res.error ?? "merge refused" });
       }
     } else {
       suggested.push({

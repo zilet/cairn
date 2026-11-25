@@ -107,7 +107,8 @@ function paintVolumeBody(data: ProgressRecord, balance: unknown) {
     hero +
     `<div id="volBalanceSlot" class="vol-balance-slot reveal" style="${stagger(1)}"></div>` +
     `<div class="vol-kicker lbl reveal" style="${stagger(2)}">Last ${CairnProgressData.number(data.days, 30)} days · ranked by sets</div>` +
-    rows;
+    rows +
+    `<div id="volUngroupedSlot"></div>`;
   wireSeg(PROGRESS_HANDLERS);
   runCountUps(view);
   // The balance read sits above the numbers — the engine reads your volume per
@@ -128,6 +129,9 @@ function paintVolumeBalance(bal: unknown) {
   const slot = view.querySelector("#volBalanceSlot");
   if (!slot || state.tab !== "progress" || state.progressSeg !== "volume") return;
   slot.innerHTML = volBalanceHtml(bal as never) || "";
+  // The server's own sentence about lifts no group counted: a footnote under the bars.
+  const note = view.querySelector("#volUngroupedSlot");
+  if (note) note.innerHTML = ungroupedNoteHtml(bal as never);
 }
 
 

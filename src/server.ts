@@ -11,6 +11,7 @@ import { recoverChatTurns, abortAllTurns } from "./chatTurns.js";
 import { recoverAgentJobs, abortAllJobs } from "./agentJobs.js";
 import { recoverDicomImports } from "./dicomImports.js";
 import { runDedupeRulesUpgradeIfDue } from "./domain/health/record-dedupe.js";
+import { repairSelfRotationNotesOnce } from "./repo/self-rotation-repair.js";
 import { startBrainReviewJobSubscriber } from "./brainReviewJobs.js";
 import { REPAIRED_ART_WARM_PER_BOOT, repairMisfiledArtAliasesOnce, warmArt } from "./art.js";
 import { maybeScheduleAgentCliAutoUpdate } from "./agentCliUpdates.js";
@@ -217,6 +218,17 @@ const startupAuthError = authStartupError({ requireAuth, authEnabled });
 if (startupAuthError) {
   log.error(`SECURITY: ${startupAuthError}`);
   process.exit(1);
+}
+
+// Once per database, BEFORE the server takes a request or the scheduler ticks (both read
+// the plan): a slot the old alias self-rotation "rotated in" for its own lift loses the
+// false "Rotated in for <itself>" sentence and, where the decision ledger shows it, gets
+// its pre-rotation prescribed_at back (self-rotation-repair.ts).
+try {
+  const repaired = repairSelfRotationNotesOnce();
+  if (repaired?.length) log.info("[boot] self-rotation notes repaired", { repaired });
+} catch (err) {
+  log.error("[boot] repairSelfRotationNotes failed", { error: err });
 }
 
 const server = app.listen(PORT, HOST, () => {

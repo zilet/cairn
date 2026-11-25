@@ -166,6 +166,9 @@ body.chat-mode{padding-bottom:var(--vvb,0px)}
 .bubble-text.md blockquote{border-left:3px solid var(--line-2);padding-left:var(--space-5);margin:0 0 var(--space-4);color:var(--ink-2)}
 .bubble-text.md hr{border:none;border-top:1px solid var(--line);margin:var(--space-5) 0}
 .md-tablewrap{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 0 var(--space-4);max-width:100%}
+.md-math{font-variant-numeric:lining-nums}
+.md-math sub,.md-math sup{font-size:.75em;line-height:0}
+.md-math-block{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 0 var(--space-4);max-width:100%}
 .bubble-text.md table{border-collapse:collapse;font-size:var(--text-sm);min-width:max-content}
 .bubble-text.md th,.bubble-text.md td{border:1px solid var(--line-2);padding:var(--space-3) var(--space-5);text-align:left;vertical-align:top}
 .bubble-text.md th{background:var(--card-2);font-family:var(--font-ui);font-weight:var(--weight-bold);

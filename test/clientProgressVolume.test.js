@@ -42,3 +42,14 @@ test("progress volume balance stays quiet with no meaningful read", () => {
   assert.equal(volume.volBalanceHtml({ groups: [] }), "");
   assert.equal(volume.volBalanceHtml({ groups: [{ group: "core" }, { group: "forearms" }] }), "");
 });
+
+test("progress volume footnote prints the server's sentence, escaped, only when present", () => {
+  const volume = loadVolume();
+  const html = volume.ungroupedNoteHtml({ ungrouped_note: "Sled Push (5 sets) is not filed yet." });
+  assert.match(html, /class="vol-ungrouped"/);
+  assert.match(html, /Sled Push \(5 sets\) is not filed yet\./);
+  assert.match(volume.ungroupedNoteHtml({ ungrouped_note: "<b>x</b>" }), /&lt;b&gt;x&lt;\/b&gt;/);
+  assert.equal(volume.ungroupedNoteHtml({ ungrouped_note: null }), "");
+  assert.equal(volume.ungroupedNoteHtml({}), "");
+  assert.equal(volume.ungroupedNoteHtml(null), "");
+});

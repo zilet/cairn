@@ -117,8 +117,13 @@ export interface WeeklySetTargetsRead {
  * the same arithmetic the plan compiler and the redraw precheck hold a draft to, so
  * the agent can check its own week instead of being corrected after the fact.
  */
-export function weeklySetTargetsRead(date = localDateISO(), plan?: PlanQualityDay[]): WeeklySetTargetsRead {
-  const ctx = readVolumeFloorContext(date);
+export function weeklySetTargetsRead(
+  date = localDateISO(),
+  plan?: PlanQualityDay[],
+  context?: VolumeFloorContext | null
+): WeeklySetTargetsRead {
+  // A caller that already read the live context (the coach slice) hands it in.
+  const ctx = context !== undefined ? context : readVolumeFloorContext(date);
   const targets = weeklySetTargets(ctx);
   const base: WeeklySetTargetsRead = {
     applies: targets.length > 0,

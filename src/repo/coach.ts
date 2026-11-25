@@ -37,7 +37,8 @@ import { muscleGroupTrajectory, planExerciseNames, testWeekDue } from "./muscle-
 import { coachingFocus, type FocusItem } from "./coaching-focus.js";
 import { type AcuteGateReading, acuteGates } from "./hybrid-load.js";
 import { planDayProgression, programAdjustments, programBalance, recentMuscleLoad } from "./progression.js";
-import { weeklySetTargetsRead } from "./volume-floor-context.js";
+import { readVolumeFloorContext, weeklySetTargetsRead } from "./volume-floor-context.js";
+import { coverageGapFacts } from "./plan-coverage.js";
 import { memoryForCoach, recentLearnings } from "./memory.js";
 import { capStr, dayIntakeTarget, getDayIntake, mealPlanForCoach } from "./nutrition.js";
 import { listFuelingFeedback } from "./fueling.js";
@@ -891,6 +892,7 @@ function buildTrainingSlice(
   | "performance"
   | "program_balance"
   | "weekly_set_targets"
+  | "coverage_gaps"
   | "recent_load"
   | "acute_gates"
   | "week_training_load"
@@ -921,8 +923,18 @@ function buildTrainingSlice(
     trainingSignalsView,
     flexibleTrainingAgendaView,
   } = signals;
+  // Read once and shared by the plan, the floor read and the coverage read below, so the
+  // coverage facts add no second floor-context or plan read to a context build.
+  const planDays = getPlan();
+  const floorCtx = (() => {
+    try {
+      return readVolumeFloorContext(today);
+    } catch {
+      return null;
+    }
+  })();
   return {
-    plan: getPlan(),
+    plan: planDays,
     recent_sessions: recentSessions,
     recent_activities: listActivities(15),
     // The same runs read the way a coach reads one — display units, pace, heart rate
@@ -962,7 +974,20 @@ function buildTrainingSlice(
     // the redraw precheck hold a draft to exactly these numbers (volume-floor.ts).
     weekly_set_targets: (() => {
       try {
-        return weeklySetTargetsRead(today) as any;
+        return weeklySetTargetsRead(today, planDays as any, floorCtx ?? undefined) as any;
+      } catch {
+        return null;
+      }
+    })(),
+    // The plan's standing COVERAGE gaps (plan-coverage.ts): a floored group the week as
+    // written leaves under its floor, or a movement family it leaves out — the same read
+    // the server's coverage ask makes, so a redraw or an evolution can close the hole
+    // instead of shipping a new program with it. Plain words; `held` says why a gap is set
+    // aside this week (the same holds the floor and the ask honour), declined:true marks
+    // one the athlete chose to keep. Built from the plan and floor context read above.
+    coverage_gaps: (() => {
+      try {
+        return coverageGapFacts(today, { plan: planDays as any, context: floorCtx }) as any;
       } catch {
         return null;
       }

@@ -52,6 +52,9 @@ export function ungroupedLoggedWork(weeks = 2, date = localDateISO()): Ungrouped
   return out.sort((a, b) => b.sets - a.sets || a.exercise.localeCompare(b.exercise));
 }
 
+// The note names this many lifts, then "and N more"; `ungrouped` carries them all.
+const UNGROUPED_NAMED_MAX = 3;
+
 const setWord = (n: number) => `${n} ${n === 1 ? "set" : "sets"}`;
 
 export function ungroupedNote(lifts: UngroupedLift[]): string | null {
@@ -60,7 +63,9 @@ export function ungroupedNote(lifts: UngroupedLift[]): string | null {
     const [one] = lifts;
     return `${one.exercise} (${setWord(one.sets)}) isn't filed under a muscle group yet, so its work isn't in the counts above.`;
   }
-  const list = lifts.map((l) => `${l.exercise} (${setWord(l.sets)})`).join(", ");
+  const named = lifts.slice(0, UNGROUPED_NAMED_MAX).map((l) => `${l.exercise} (${setWord(l.sets)})`);
+  const more = lifts.length - named.length;
+  const list = more > 0 ? `${named.join(", ")}, and ${more} more` : named.join(", ");
   return `Not filed under a muscle group yet, so not in the counts above: ${list}.`;
 }
 

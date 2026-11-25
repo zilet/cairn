@@ -8,7 +8,6 @@ import {
   deletePlanDay,
   detachGuide,
   exerciseGuideStatus,
-  findExercise,
   getExerciseDetail,
   getExerciseGuide,
   getPlanDay,
@@ -27,7 +26,7 @@ import {
   reconcileExerciseGroups,
   replacePlanByPerson,
   savePlanDayByPerson,
-  updateExercise,
+  updateExerciseByName,
   updateTarget,
   upsertExercise,
 } from "../../domain/training/index.js";
@@ -292,7 +291,7 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
       name: z
         .string()
         .describe(
-          "exercise name; matched against the catalog (exact/alias/key). A match updates that exercise's fields, anything else creates a new one and queues background enrichment (canonicalize + classify + how-to guide + art)"
+          "exercise name; matched against the catalog (exact/alias/key). A match updates that exercise's fields (the receipt is the stored row, with resolved_from when the spelling sent differs), anything else creates a new one and queues background enrichment (canonicalize + classify + how-to guide + art)"
         ),
       muscle_group: z
         .string()
@@ -311,7 +310,11 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
     "update_exercise",
     "Update an existing exercise by name: mode (reps|timed), muscle_group, cues, constraint_note, input_profile / per_side (what its log row asks for), or rename it with `name` (a person's rename always lands; if the new name already exists the two fold into one). `keep_name` declines a parked `suggested_name` and remembers the no. Logged numbers never move.",
     {
-      exercise: z.string().describe("exact exercise name"),
+      exercise: z
+        .string()
+        .describe(
+          "the exercise to edit; resolved like every name (exact, alias, key). The receipt names the stored row it edited, with resolved_from when the spelling sent differs"
+        ),
       name: z.string().optional().describe("the new display name (cleaned; the old spelling keeps resolving as an alias)"),
       keep_name: z.boolean().optional().describe("true to decline the parked suggested_name and keep the current one"),
       mode: z.enum(["reps", "timed"]).optional(),
@@ -329,10 +332,13 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
         .optional()
         .describe("true when the dose is each side's (\"2 × 6 / side\"); null returns it to the name-based read"),
     },
+    // The target resolves through the one resolver; the receipt names the row written and,
+    // when the spelling sent is not the stored one, says so (resolved_from). A `name` that
+    // only echoes the target spelling is not a rename (rename_ignored).
     async ({ exercise, ...patch }) => {
-      const row = findExercise(exercise);
-      if (!row) return asText({ error: "not found", exercise });
-      return asText(updateExercise(row.id, patch));
+      const updated = updateExerciseByName(exercise, patch);
+      if (!updated) return asText({ error: "not found", exercise });
+      return asText(updated);
     }
   );
 

@@ -316,18 +316,57 @@ test("the boot catch-up queues only never-enriched movements the athlete trains 
 });
 
 
-test("applyExerciseEnrichment merges into an existing canonical duplicate, repointing logged sets", () => {
-  const canonical = repo.findOrCreateExercise("Move Alpha");
-  const dup = repo.findOrCreateExercise("Move Beta");
-  assert.notEqual(canonical.id, dup.id, "two distinct rows to start");
-  repo.logSetByName({ exercise: "Move Beta", weight: 55, reps: 8, date: "2026-07-02" });
+// Rows inserted raw, so the create chokepoint cannot fold them on the way in.
+const rawExercise = (name, group = null) =>
+  Number(db.prepare("INSERT INTO exercises (name, muscle_group, mode) VALUES (?, ?, 'reps')").run(name, group).lastInsertRowid);
 
-  const r = repo.applyExerciseEnrichment(dup.id, { canonical: "Move Alpha" });
+test("applyExerciseEnrichment folds a fresh duplicate into an existing canonical on structural evidence", () => {
+  const canonical = repo.findOrCreateExercise("Move Alpha");
+  const dup = rawExercise("Move Alpha Cable");
+  // Nothing references the fresh row and its tokens contain the canonical's: folding it loses nothing.
+  const r = repo.applyExerciseEnrichment(dup, { canonical: "Move Alpha" });
   assert.equal(r.id, canonical.id, "the duplicate merged INTO the existing canonical");
   assert.equal(r.name, "Move Alpha");
-  assert.equal(repo.findExerciseExact("Move Beta"), undefined, "the duplicate row is gone");
-  const detail = repo.getExerciseDetail("Move Alpha");
-  assert.ok(detail.recent.length >= 1, "the logged set was repointed to the canonical, never lost");
+  assert.equal(repo.findExerciseExact("Move Alpha Cable"), undefined, "the duplicate row is gone");
+});
+
+test("a fresh row with no structural relation is parked, never folded on the agent's word", () => {
+  repo.findOrCreateExercise("Leg Curl");
+  const nordic = rawExercise("Nordic Curl");
+  const r = repo.applyExerciseEnrichment(nordic, { canonical: "Leg Curl" });
+  assert.equal(r.id, nordic, "the row stands");
+  assert.ok(repo.findExerciseExact("Nordic Curl"), "Nordic Curl is still its own lift");
+  assert.equal(repo.findExerciseExact("Nordic Curl").suggested_name, "Leg Curl", "waiting for a person's yes");
+  assert.equal(repo.findExercise("Nordic Curl")?.id, nordic, "no alias sends its future logs into Leg Curl");
+});
+
+test("a LOGGED duplicate with the same key still folds on the agent's word, its sets repointed", () => {
+  const canonical = repo.findOrCreateExercise("Move Alpha");
+  const dup = rawExercise("Move Alphas");
+  const session = repo.getOrCreateSession("2026-07-02");
+  db.prepare("INSERT INTO logged_sets (session_id, exercise_id, set_number, weight, reps) VALUES (?, ?, 1, 55, 8)").run(
+    session.id,
+    dup
+  );
+  const r = repo.applyExerciseEnrichment(dup, { canonical: "Move Alpha" });
+  assert.equal(r.id, canonical.id, "folded into the canonical");
+  assert.equal(repo.findExerciseExact("Move Alphas"), undefined);
+  assert.equal(repo.getExerciseDetail("Move Alpha").recent.length, 1, "the logged set moved with it, never lost");
+});
+
+test("applyExerciseEnrichment never folds a LOGGED lift into another on the agent's word alone", () => {
+  const canonical = repo.findOrCreateExercise("Move Alpha");
+  const dup = repo.findOrCreateExercise("Move Beta");
+  repo.logSetByName({ exercise: "Move Beta", weight: 55, reps: 8, date: "2026-07-02" });
+
+  // The merge guards (the same ones Tidy's merge list passes) see no evidence the two are
+  // one lift, so the logged row and its history stand where they are.
+  const r = repo.applyExerciseEnrichment(dup.id, { canonical: "Move Alpha" });
+  assert.equal(r.id, dup.id, "the logged row was not folded away");
+  assert.ok(repo.findExerciseExact("Move Beta"), "the logged row stands");
+  assert.ok(repo.findExerciseExact("Move Alpha"), "and so does the other");
+  assert.equal(repo.getExerciseDetail("Move Beta").recent.length, 1, "its set is where it was");
+  assert.notEqual(canonical.id, dup.id);
 });
 
 test("processExerciseJob degrades to 'skipped' offline (no agent), the row stands intact", async () => {

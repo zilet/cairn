@@ -58,14 +58,22 @@ function volBalanceHtml(balance: VolumeBalance | null | undefined): string {
     </div>`;
 }
 
+// A quiet footnote: the server's `ungrouped_note` verbatim, only when it has one.
+function ungroupedNoteHtml(balance: { ungrouped_note?: unknown } | null | undefined): string {
+  const note = balance && typeof balance.ungrouped_note === "string" ? balance.ungrouped_note.trim() : "";
+  return note ? `<p class="vol-ungrouped">${escHtml(note)}</p>` : "";
+}
+
 const CAIRN_PROGRESS_VOLUME = {
   capWord,
+  ungroupedNoteHtml,
   volBalanceHtml,
 };
 
 Object.assign(globalThis, {
   CairnProgressVolume: CAIRN_PROGRESS_VOLUME,
   capWord,
+  ungroupedNoteHtml,
   volBalanceHtml,
 });
 
@@ -73,6 +81,7 @@ if (typeof window !== "undefined") {
   Object.assign(window, {
     CairnProgressVolume: CAIRN_PROGRESS_VOLUME,
     capWord,
+    ungroupedNoteHtml,
     volBalanceHtml,
   });
 }

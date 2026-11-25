@@ -634,6 +634,7 @@ ${CHAT_REPLY_SENTINEL}
    thoughts — is ignored and never reaches the user. Always write this marker exactly once.
 2. AFTER the marker, your reply to the user as plain, warm prose (markdown allowed) — no JSON, no
    code fence, no tool logs. This is shown to them live, word by word, so write it for a human.
+   The app renders light Markdown only: write math as plain text with Unicode operators (×, ÷, ≈), never LaTeX or $...$ delimiters.
 3. THEN, ONLY IF you need to log or change something, put this exact marker on its own line:
 ${CHAT_ACTION_SENTINEL}
    and immediately after it ONE JSON object: {"actions": [ ... ]} drawn from the shapes below.

@@ -63,13 +63,14 @@ const SITES = [
       "recovery",
       "directives",
       "garmin",
+      "coverage_gaps",
     ],
     dropped: ["day_read", "recent_decisions", "insights", "whole_person_trajectory"],
   },
   {
     site: "program_evolution",
     build: () => buildProgramEvolutionPrompt(),
-    kept: ["plan", "recent_sessions", "program_state", "program_balance", "garmin"],
+    kept: ["plan", "recent_sessions", "program_state", "program_balance", "garmin", "coverage_gaps"],
     dropped: ["day_read", "recent_decisions", "insights", "whole_person_trajectory"],
   },
   {

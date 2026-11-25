@@ -99,6 +99,59 @@ export function plannedWeeklyGroupSets(days: PlanQualityDay[], opts: VolumeShare
   return opts.shares === "touched" ? read.touchedSets : read.groupSets;
 }
 
+export interface WeeklyFloorShortfall {
+  group: string;
+  /** Effective weekly sets the week gives the group (direct 1, counted secondary half). */
+  planned: number;
+  /** The group's weekly floor (volume-floor.ts weeklySetTargets low). */
+  low: number;
+}
+
+// THE definition of "a group under its weekly floor": the week's counted sets for the
+// group below its landmark low, for every group the floor context lists, in a week with
+// at least two lifting days (a one-day plan is a fragment, not a week). The plan
+// compiler's `muscle_density_low` warning, the redraw precheck
+// (verify-floors.ts planVolumeFloorViolations) and the coverage ask (plan-coverage.ts)
+// all read it here, so they can never disagree about what a gap is.
+function floorShortfallsFrom(
+  groupSets: Map<MuscleGroup, number>,
+  strengthDays: number,
+  ctx: VolumeFloorContext | null | undefined
+): WeeklyFloorShortfall[] {
+  if (strengthDays < 2) return [];
+  const out: WeeklyFloorShortfall[] = [];
+  for (const target of weeklySetTargets(ctx)) {
+    const planned = groupSets.get(target.group as MuscleGroup) ?? 0;
+    if (planned < target.low) out.push({ group: target.group, planned, low: target.low });
+  }
+  return out;
+}
+
+/** Every floored group a week leaves under its weekly floor (see floorShortfallsFrom). Pure. */
+export function weeklyFloorShortfalls(
+  days: PlanQualityDay[],
+  ctx: VolumeFloorContext | null | undefined
+): WeeklyFloorShortfall[] {
+  const read = validateTrainingPlanInternal(days, {}, { resolveIdentity: false });
+  return floorShortfallsFrom(read.groupSets, read.strengthDays, ctx);
+}
+
+/**
+ * Both coverage answers off ONE arithmetic pass (no catalog reads): the floored groups under
+ * their floor (floorShortfallsFrom) and the movement families a broad week leaves out (the
+ * compiler's `movement_pattern_gap`). Pure.
+ */
+export function planCoverageShortfalls(
+  days: PlanQualityDay[],
+  ctx: VolumeFloorContext | null | undefined
+): { groups: WeeklyFloorShortfall[]; patterns: MovementPatternFamily[] } {
+  const read = validateTrainingPlanInternal(days, {}, { resolveIdentity: false });
+  const patterns = read.report.warnings
+    .filter((w) => w.code === "movement_pattern_gap" && w.pattern)
+    .map((w) => w.pattern as MovementPatternFamily);
+  return { groups: floorShortfallsFrom(read.groupSets, read.strengthDays, ctx), patterns };
+}
+
 /** Pure structural/quality compiler for a candidate training week. */
 export function validateTrainingPlan(days: PlanQualityDay[], opts: PlanQualityOptions = {}): PlanQualityReport {
   return validateTrainingPlanInternal(days, opts).report;
@@ -168,7 +221,12 @@ function validateTrainingPlanInternal(
   days: PlanQualityDay[],
   opts: PlanQualityOptions,
   internal: { resolveIdentity?: boolean } = {}
-): { report: PlanQualityReport; groupSets: Map<MuscleGroup, number>; touchedSets: Map<MuscleGroup, number> } {
+): {
+  report: PlanQualityReport;
+  groupSets: Map<MuscleGroup, number>;
+  touchedSets: Map<MuscleGroup, number>;
+  strengthDays: number;
+} {
   const errors: PlanQualityIssue[] = [];
   const warnings: PlanQualityIssue[] = [];
   const seenDays = new Set<number>();
@@ -401,19 +459,15 @@ function validateTrainingPlanInternal(
   // no deliberate light window is in force, and a group their endurance work already
   // carries is not listed at all (volume-floor.ts). A one-day plan is a fragment, not
   // a week, so it is not measured as one.
-  if (strengthDays >= 2) {
-    for (const target of weeklySetTargets(opts.volumeFloor)) {
-      const sets = groupSets.get(target.group as MuscleGroup) ?? 0;
-      if (sets < target.low)
-        warnings.push(
-          issue(
-            "warning",
-            "muscle_density_low",
-            `${target.group} volume is below the low weekly landmark (${sets.toFixed(1)} effective planned sets against ${target.low}); for a muscle and strength priority it needs more working sets across the week.`,
-            { muscle_group: target.group }
-          )
-        );
-    }
+  for (const short of floorShortfallsFrom(groupSets, strengthDays, opts.volumeFloor)) {
+    warnings.push(
+      issue(
+        "warning",
+        "muscle_density_low",
+        `${short.group} volume is below the low weekly landmark (${short.planned.toFixed(1)} effective planned sets against ${short.low}); for a muscle and strength priority it needs more working sets across the week.`,
+        { muscle_group: short.group }
+      )
+    );
   }
   if (opts.statedSplit) {
     const liftingDays = (Array.isArray(days) ? days : []).filter(
@@ -428,7 +482,7 @@ function validateTrainingPlanInternal(
       );
     }
   }
-  return { report: { ok: errors.length === 0, errors, warnings }, groupSets, touchedSets };
+  return { report: { ok: errors.length === 0, errors, warnings }, groupSets, touchedSets, strengthDays };
 }
 
 export function qualityIssueKey(value: PlanQualityIssue): string {

@@ -98,7 +98,14 @@ const VOLUME_FLOOR_RULE = `- WEEKLY VOLUME FLOOR: DATA.weekly_set_targets lists,
   means no floor this week, and "exempt" says why: a recovery or deload week (in force, scheduled or
   due) or the race taper. No muscle/strength priority also reads applies:false. If the athlete's own
   words in the TASK explicitly ask for a lighter or smaller week, you may go under a low for them —
-  say so in the rationale. Cairn re-checks this arithmetic on every draft.`;
+  say so in the rationale. Cairn re-checks this arithmetic on every draft.
+- COVERAGE: DATA.coverage_gaps names what the plan as written leaves out (a group under its weekly
+  floor, or a movement family the week has none of). Close each one that carries neither "held" nor
+  "declined" with the smallest change that fits (sets on a movement already there, else one movement the
+  athlete knows; never one an open injury loads), so the new week does not ship the same hole. One that
+  carries "held" is set aside this week for the reason it gives (a light or race week, endurance already
+  carrying the group, the taper trimming the legs, an open injury): leave it alone. One marked
+  declined:true is a gap the athlete chose to keep: leave it unless the athlete asks for it in the TASK.`;
 
 // The active periodization block (goal / phase / week N of M), so the coach
 // periodizes toward it. "" when no block is running (the program-state mesocycle

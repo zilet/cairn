@@ -378,6 +378,11 @@ const PLAN_SITE: PromptSiteSpec = {
     // its own week, and the server's redraw precheck holds the draft to the same
     // numbers afterwards.
     "weekly_set_targets",
+    // The plan's standing coverage gaps (plan-coverage.ts coverageGapFacts) — a floored
+    // group the week as written leaves under its floor, or a movement family it leaves
+    // out. Earned under rule 1: the prompt's COVERAGE line names DATA.coverage_gaps and
+    // tells the draft to close each one it can, so a new week never ships the same hole.
+    "coverage_gaps",
   ],
   sessions: SESSIONS_FULL,
 };

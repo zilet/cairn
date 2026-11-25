@@ -1816,6 +1816,7 @@ declare global {
   ): string;
   declare function capWord(input: unknown): string;
   declare function volBalanceHtml(balance: unknown): string;
+  declare function ungroupedNoteHtml(balance: unknown): string;
   declare const CONF_WORD: Record<string, string>;
   declare function kcalFmt(value: unknown): string;
   declare function energyRead(exp: unknown): { lead: string; body: string; tone: string; dir?: string | null };

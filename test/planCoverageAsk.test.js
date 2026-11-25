@@ -3,8 +3,8 @@
 //      exactly as before, and records exactly ONE held draft (the smallest change that
 //      covers the group), waiting for the athlete's yes on "Waiting on you";
 //   2. saving again unchanged, or the daily pass after a save, never adds a second ask;
-//   3. an ask the athlete set aside stays quiet until the lifts bearing on that gap
-//      change, and then it is asked afresh;
+//   3. an ask the athlete set aside stays quiet — through a swap of one chest lift for
+//      another — until the gap materially worsens, and then it is asked afresh;
 //   4. every existing exemption yields no ask (intent, light weeks, an affirmed cut,
 //      endurance-carried groups, the race taper's leg trim);
 //   5. a gap that arose without a save (an intent change) is said by the daily pass;
@@ -153,7 +153,7 @@ test("a gap that arose without a save — an intent change — is said by the da
   assert.deepEqual(raised.gaps, ["group:chest"]);
 });
 
-test("a declined ask stays quiet until the lifts bearing on that gap change", () => {
+test("a declined ask stays quiet until the gap materially worsens", () => {
   const first = setUpShortChest();
   repo.setProposalStatus(first.coverage_ask.proposal_id, "discarded");
   assert.equal(liveHolds(first.coverage_ask.proposal_id).length, 0, "the answer closes the hold");
@@ -170,15 +170,22 @@ test("a declined ask stays quiet until the lifts bearing on that gap change", ()
   );
   assert.equal(openRows().length, 0);
 
-  // A changed chest lift is a different gap: asked once, afresh.
-  const changed = savePlanDayByPerson(
+  // Swapping one chest lift for another at the same volume is the same gap, not news.
+  const swapped = shortChestUpper().map((item) =>
+    item.exercise === "Incline Dumbbell Press" ? { ...item, exercise: "Cable Chest Press" } : item
+  );
+  assert.equal(savePlanDayByPerson(1, "Upper", null, swapped).coverage_ask.status, "answered");
+  assert.equal(openRows().length, 0);
+
+  // Taking chest lower still — two fewer counted sets than when it was declined — is.
+  const worse = savePlanDayByPerson(
     1,
     "Upper",
     null,
-    shortChestUpper().map((item) => (item.exercise === "Incline Dumbbell Press" ? { ...item, exercise: "Cable Chest Press" } : item))
+    swapped.filter((item) => item.exercise !== "Cable Chest Press")
   );
-  assert.equal(changed.coverage_ask.status, "raised");
-  assert.notEqual(changed.coverage_ask.proposal_id, first.coverage_ask.proposal_id);
+  assert.equal(worse.coverage_ask.status, "raised");
+  assert.notEqual(worse.coverage_ask.proposal_id, first.coverage_ask.proposal_id);
   assert.equal(openRows().length, 1);
 });
 

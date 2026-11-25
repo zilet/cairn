@@ -105,6 +105,7 @@
 
 /* ---- Progress → Volume: the balance read (due / high / missing patterns) ---- */
 .vol-balance-slot:empty{display:none}
+.vol-ungrouped{margin:var(--space-6) var(--space-1) 0;font-size:var(--text-xs);color:var(--muted);line-height:var(--leading-normal)}
 .vbal{
   background:var(--surface);border:1px solid var(--line);box-shadow:none;border-radius:var(--radius);
   padding:var(--space-7) var(--space-8);margin:0 0 var(--space-9);

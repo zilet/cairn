@@ -133,8 +133,8 @@
         "brotli": 30274
       },
       "budget": {
-        "raw": 134144,
-        "brotli": 31744
+        "raw": 138240,
+        "brotli": 33792
       }
     },
     "public/js/bundle-17-agent-login.js": {

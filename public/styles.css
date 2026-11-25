@@ -780,6 +780,9 @@ to{opacity:1;transform:none}
 .bubble-text.md blockquote{border-left:3px solid var(--line-2);padding-left:var(--space-5);margin:0 0 var(--space-4);color:var(--ink-2)}
 .bubble-text.md hr{border:none;border-top:1px solid var(--line);margin:var(--space-5) 0}
 .md-tablewrap{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 0 var(--space-4);max-width:100%}
+.md-math{font-variant-numeric:lining-nums}
+.md-math sub,.md-math sup{font-size:.75em;line-height:0}
+.md-math-block{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 0 var(--space-4);max-width:100%}
 .bubble-text.md table{border-collapse:collapse;font-size:var(--text-sm);min-width:max-content}
 .bubble-text.md th,.bubble-text.md td{border:1px solid var(--line-2);padding:var(--space-3) var(--space-5);text-align:left;vertical-align:top}
 .bubble-text.md th{background:var(--card-2);font-family:var(--font-ui);font-weight:var(--weight-bold);font-size:var(--text-2xs);letter-spacing:var(--tracking-mono);text-transform:uppercase;color:var(--ink-2)}
@@ -3321,6 +3324,7 @@ button.prow-name:hover{color:var(--accent)}
 .adjust-more{display:block;width:100%;text-align:left;cursor:pointer;background:none;border:none;border-top:1px solid var(--line);padding:var(--space-5) 0;color:var(--muted);font:inherit;letter-spacing:inherit;text-transform:inherit}
 .adjust-more:hover{color:var(--accent)}
 .vol-balance-slot:empty{display:none}
+.vol-ungrouped{margin:var(--space-6) var(--space-1) 0;font-size:var(--text-xs);color:var(--muted);line-height:var(--leading-normal)}
 .vbal{background:var(--surface);border:1px solid var(--line);box-shadow:none;border-radius:var(--radius);padding:var(--space-7) var(--space-8);margin:0 0 var(--space-9)}
 .vbal-head{color:var(--muted);margin-bottom:var(--space-4)}
 .vbal-summary{font-size:var(--text-body);line-height:var(--leading);color:var(--ink);margin-bottom:var(--space-6)}

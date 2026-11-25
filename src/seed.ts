@@ -1,9 +1,12 @@
 import { db, todayISO } from "./db.js";
 import { installSeedArt } from "./art.js";
+import { deterministicGroupFor } from "./repo/exercises.js";
 
-// [name, muscle_group, constraint_note, form_cues, mode?]
+// [name, muscle_group, constraint_note, form_cues, mode?]. Groups are canonical taxonomy
+// values and agree with the curated tables wherever those settle the lift
+// (test/seedExerciseGroups.test.js holds every row to that).
 const exercises: [string, string, string | null, string, ("reps" | "timed")?][] = [
-  ["Back Squat", "legs", null, "Brace on a big breath, sit between the hips, knees track over toes, drive the floor away. Hip crease below the knee."],
+  ["Back Squat", "quads", null, "Brace on a big breath, sit between the hips, knees track over toes, drive the floor away. Hip crease below the knee."],
   ["Leg Extension", "quads", null, "Toes neutral, pause at lockout, control the negative, no swinging from the seat."],
   ["Leg Curl", "hamstrings", null, "Hips pinned down, curl with the hamstrings not the lower back, squeeze, slow eccentric."],
   ["Standing Calf Raise", "calves", null, "Full stretch at the bottom, pause, drive up onto the big toe, no bouncing."],
@@ -16,9 +19,9 @@ const exercises: [string, string, string | null, string, ("reps" | "timed")?][] 
   ["Lat Pulldown", "back", "Neutral/close grip.", "Neutral or close grip, drive the elbows down and back, chest up, control the stretch."],
   ["Face Pull", "rear delts", null, "High elbows, pull toward the eyes, externally rotate at the end, light and controlled."],
   ["Hammer Curl", "biceps", null, "Neutral grip, elbows pinned to the sides, no swing or supination."],
-  ["Romanian Deadlift", "posterior", "New lift — start light; add straps if grip is the limiter.", "Soft knees, push the hips back, bar dragging the legs, feel the hamstring stretch, neutral spine."],
+  ["Romanian Deadlift", "hamstrings", "New lift — start light; add straps if grip is the limiter.", "Soft knees, push the hips back, bar dragging the legs, feel the hamstring stretch, neutral spine."],
   ["Seated Cable Row", "back", "Neutral handle, straps from set 2, no chest pad.", "Neutral handle, tall chest, pull to the navel, no torso rock. Straps from set 2."],
-  ["Bulgarian Split Squat", "legs", null, "Weight on the front foot, slight torso lean, knee tracks the toes, controlled depth. Per leg."],
+  ["Bulgarian Split Squat", "quads", null, "Weight on the front foot, slight torso lean, knee tracks the toes, controlled depth. Per leg."],
   ["Seated Calf Raise", "calves", null, "Full stretch at the bottom, pause at the top, slow tempo, knees over toes."],
   // A small, generic SUPPORTIVE set — trunk, one-side-at-a-time, hip and prep work — so a
   // program that should be balanced (or an athlete with a stated movement consideration)
@@ -76,12 +79,27 @@ const days: [number, string, string, Item[]][] = [
   ]],
 ];
 
+// The honest provenance of a seeded group (repo/exercises.ts MuscleGroupSource): the
+// source the deterministic read would stamp when it reaches the SAME group — 'table'
+// where the curated tables settle the lift, 'classifier' where only the name classifier
+// does — so a seed row carries exactly the authority a fresh insert of that name would.
+// A group neither agrees with is an authored choice nothing derived vouches for:
+// 'legacy', which no agent overwrites.
+export function seedGroupSource(name: string, group: string): "table" | "classifier" | "legacy" {
+  const derived = deterministicGroupFor(name);
+  if (derived && derived.group === group) return derived.source === "table" ? "table" : "classifier";
+  return "legacy";
+}
+
+/** The seed catalog as data, one row per exercise (the agreement test reads it). */
+export function seedExerciseGroups(): Array<{ name: string; group: string }> {
+  return exercises.map(([name, group]) => ({ name, group }));
+}
+
 export function seed(options: { blankProfile?: boolean } = {}) {
   const blankProfile = !!options.blankProfile;
-  // The seed catalog's groups are authored, so they carry the curated-table provenance: an
-  // agent never re-files them (repo/exercises.ts MuscleGroupSource).
   const insertEx = db.prepare(
-    `INSERT INTO exercises (name, muscle_group, muscle_group_source, constraint_note, cues, mode) VALUES (?, ?, 'table', ?, ?, ?)`
+    `INSERT INTO exercises (name, muscle_group, muscle_group_source, constraint_note, cues, mode) VALUES (?, ?, ?, ?, ?, ?)`
   );
   const exId: Record<string, number> = {};
   const dayIdByNumber: Record<number, number> = {};
@@ -97,7 +115,9 @@ export function seed(options: { blankProfile?: boolean } = {}) {
   db.exec("BEGIN");
   try {
     for (const [name, mg, note, cues, mode] of exercises) {
-      exId[name] = Number(insertEx.run(name, mg, blankProfile ? null : note, cues, mode ?? "reps").lastInsertRowid);
+      exId[name] = Number(
+        insertEx.run(name, mg, seedGroupSource(name, mg), blankProfile ? null : note, cues, mode ?? "reps").lastInsertRowid
+      );
     }
     if (!blankProfile) {
       for (const [num, name, focus, items] of days) {

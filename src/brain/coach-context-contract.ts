@@ -406,6 +406,11 @@ export interface CoachContextEnvelope {
   // athlete's intent does not prioritize muscle/strength or a light week is in force.
   // Optional so partial context builders and imported DBs never synthesize it.
   weekly_set_targets?: CoachRecord | null;
+  // The standing coverage gaps in the plan as written (plan-coverage.ts coverageGapFacts):
+  // a floored group under its weekly floor or a movement family left out, in plain words,
+  // with declined:true where the athlete already set the server's ask aside. Optional for
+  // the same reason as weekly_set_targets.
+  coverage_gaps?: CoachRecord[] | null;
   recent_load: CoachRecord[];
   // Saturated groups from acuteGates() — the decision input the "do NOT program
   // these" prompt block reads. `recent_load` stays the descriptive recency list
