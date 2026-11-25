@@ -589,9 +589,20 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   `performed_at_full_load` (`src/repo/outcome-comparability.ts`). Intensity earns the load, the set
   count earns volume: one set short with every working set past the top still steps
   (`cappedShortOfSets`). Details in `docs/ARCHITECTURE.md`.
-- **Cut pressure has three shapes, and only two veto an earned promotion** — `CutPressure`
-  (`progression.ts`): `hold` never vetoes, `reduce` vetoes unless `near_goal`, `sliding` always
-  vetoes, `fast_loss` never vetoes a load step. Details in `docs/ARCHITECTURE.md`.
+- **Cut pressure vetoes only a step earned on less than every set capped** — `CutPressure`
+  (`progression.ts`): full double progression steps under any cut; a lesser step (push or
+  intensification top set, the repetition pair, a partial re-ground) is held by `sliding` always
+  and `reduce` unless `near_goal`; `hold` and `fast_loss` never veto. Every load step passes ONE
+  gate, where a failed heavier attempt in the latest session also holds it. Details in
+  `docs/ARCHITECTURE.md`.
+- **Progress is judged per movement unit and muscle; the single lift is evidence.** A lift off the
+  plan and untrained for `LIFT_CURRENT_WINDOW_DAYS` is `resting` (`liftStates`, program-state.ts):
+  it makes no claim on any surface, prompt, trigger or protective read. `capabilityRead`
+  (`src/repo/strength-capability.ts`) is the read per unit, muscle and overall; variants keep their
+  own numbers and only relative change carries across a swap. An agent-filled `exercise_profile`
+  fills gaps only: a person, then the curated tables, always win, and its pattern/region fill is
+  opt-in (`{profile:true}`) for progress reads, never today's card. Details in
+  `docs/ARCHITECTURE.md` "Progress by movement unit and muscle".
 - **RIR is optional, and its absence is not weakness** — with no RIR logged, capping the prescribed
   rep range on every working set IS the strength signal (`program-state.ts`/`progression-voice.ts`).
   Details in `docs/ARCHITECTURE.md`.

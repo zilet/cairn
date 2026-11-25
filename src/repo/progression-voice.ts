@@ -177,6 +177,14 @@ export const LIGHTER_SESSION_HOLD: VoiceSet1 = [
   (load) => `The reps were there at a lighter load; ${load} is where they need to land next, then it moves.`,
 ];
 
+// A heavier set in the last session came up short of the range's floor: he reached for
+// more and it was not there yet, so the load stays. Argument: the load held (with unit).
+export const FAILED_HEAVIER_ATTEMPT_HOLD: VoiceSet1 = [
+  (load) => `You tried a heavier set and the reps weren't there yet — stay at ${load} and own the range before it moves.`,
+  (load) => `The heavier set came up short of the range, so ${load} stays the weight for now; cap it again and the step follows.`,
+  (load) => `That heavier try fell under the bottom of the range — keep ${load} this time and let the next clean session move it.`,
+];
+
 export const EARNED_RANGE_OVERLOAD: VoiceSet2 = [
   (high, low) =>
     `Every set hit ${high} at RIR 2+ — take the earned step up, then reset to ${low} reps and build the range back up.`,
@@ -942,6 +950,7 @@ export function progressionVoicePhrases(): string[] {
     [PLAN_BEHIND_OVERLOAD, "50 lb"],
     [PLAN_BEHIND_HOLD, "50 lb"],
     [LIGHTER_SESSION_HOLD, "150 lb"],
+    [FAILED_HEAVIER_ATTEMPT_HOLD, "140 lb"],
     [PLAN_UNSET_OVERLOAD, "95 lb"],
     [PLAN_UNSET_HOLD, "95 lb"],
     [STRAIN_BRAKE_HOLD, "recent soreness is running high"],

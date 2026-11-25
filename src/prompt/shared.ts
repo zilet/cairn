@@ -1411,7 +1411,9 @@ export function renderProgramState(ctx: PartialCoachContext, opts: { brief?: boo
 
   // Per-lift trajectory — lead with what needs action (stalled / slipping), so the
   // coach's changes target the lifts that earned them.
-  const lifts = Array.isArray(st?.lifts) ? st.lifts : [];
+  // A resting lift (off the plan, not trained lately) is out of the rotation — never one
+  // to act on or push.
+  const lifts = (Array.isArray(st?.lifts) ? st.lifts : []).filter((l: any) => l?.resting !== true);
   const needsAction = lifts.filter((l: any) => l.status === "plateaued" || l.status === "regressing");
   const climbing = lifts.filter((l: any) => l.status === "progressing");
   if (needsAction.length) {

@@ -22,6 +22,7 @@ import type { ClientFuelIdeas, ClientIntakeBand } from "./fuel.js";
 import type { TodayStonesRead } from "./today-stones.js";
 import type { DataCoverageRead } from "./data-coverage.js";
 import type { DayRecord } from "./day-record.js";
+import type { StrengthCapabilityRead } from "./strength-capability.js";
 import type { DayDetail } from "./day-detail.js";
 import type { RaceCountdown, RaceDays } from "./race-days.js";
 import type { WeekRead } from "./week-read.js";
@@ -1246,6 +1247,30 @@ export interface ClientExerciseDetail extends ClientExercise {
   // written; `explanation_stale` asks the sheet to revalidate it in the background.
   explanation?: { setup: string; move: string; feel: string; avoid?: string } | null;
   explanation_stale?: boolean;
+  /** An agent's read of what the lift is (pull-only; null before the first read). Informs no card. */
+  profile?: ClientExerciseProfile | null;
+}
+
+/**
+ * The agent's profile of one lift (repo/exercise-profile.ts). It fills gaps the curated tables
+ * leave and never overrides them: `disagrees_with_curated` is true where it contradicts a
+ * curated answer, in which case it is stored but not applied.
+ */
+export interface ClientExerciseProfile {
+  pattern: string | null;
+  region: string | null;
+  primary_group: string | null;
+  secondary: Array<{ group: string; share: number }>;
+  length_bias: "lengthened" | "mid" | "shortened" | null;
+  compound: boolean | null;
+  confidence: "high" | "medium" | "low";
+  source: "agent" | "user";
+  agent: string | null;
+  rules_version: number;
+  classified_at: string | null;
+  disagrees_with_curated: boolean;
+  disagreements: Array<"pattern" | "region" | "primary_group" | "secondary">;
+  stored_group_differs: boolean;
 }
 
 /** One imported instruction guide (free-exercise-db, public domain). */
@@ -2468,6 +2493,10 @@ export interface ClientProgramLiftState {
   family_key: string;
   family_label: string;
   last_trained: string | null;
+  /** On the plan (optional: older reads do not carry it). */
+  in_plan?: boolean;
+  /** Off the plan and untrained for weeks: status "new" with no claim, listed quietly as "resting". */
+  resting?: boolean;
 }
 
 export interface ClientProgramVolumeState {
@@ -4574,6 +4603,7 @@ export interface ClientApiResponses {
   "/api/training-agenda": ClientFlexibleTrainingAgenda;
   "/api/run-zones": ClientRunZones;
   "/api/muscle-trajectory": ClientMuscleGroupTrajectory;
+  "/api/strength-capability": StrengthCapabilityRead;
   "/api/test-week": ClientTestWeekDue;
   "/api/dexa-targeting": ClientDexaTargeting;
   "/api/journey": ClientJourneyRead;

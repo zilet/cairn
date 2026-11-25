@@ -12,7 +12,7 @@ The OAuth 2.1 doors an AI app signs in through for `/mcp` (`/.well-known/oauth-*
 [OPERATIONS.md](OPERATIONS.md) "Connect an AI app (MCP)".
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**422 routes** across 138 groups.
+**423 routes** across 139 groups.
 
 ## `/activities`
 
@@ -864,6 +864,12 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/stats` |  |
+
+## `/strength-capability`
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/strength-capability` | Strength progress per movement unit and per muscle group, the single lift as evidence. Directional words only, never a score; {available:false} when the read could not be made. |
 
 ## `/strength-journey`
 

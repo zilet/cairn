@@ -153,7 +153,8 @@ function strengthPlateauPlays(ps: any, date: string): PlateauPlay[] {
   const lifts = Array.isArray(ps?.lifts) ? ps.lifts : [];
   const mode = effectiveGoalMode();
   return lifts
-    .filter((l: any) => l && (l.status === "plateaued" || l.status === "regressing"))
+    // A resting lift (off the plan, not trained lately) is out of the rotation: no play.
+    .filter((l: any) => l && l.resting !== true && (l.status === "plateaued" || l.status === "regressing"))
     .map((l: any): PlateauPlay => {
       const name = String(l.exercise || "this lift");
       const grinding = Array.isArray(l.stall_signals) && l.stall_signals.some((s: any) => /grind|rir|same top/i.test(String(s)));

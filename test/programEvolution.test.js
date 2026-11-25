@@ -8,17 +8,19 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { repo, resetTables } from "./_seed.js";
 import { buildProgramEvolutionPrompt, buildCoachPrompt } from "../dist/prompt.js";
-
-const REF = "2026-05-01";
-const back = (n) => new Date(new Date(REF + "T00:00:00Z").getTime() - n * 864e5).toISOString().slice(0, 10);
+import { localDateISO } from "../dist/repo/shared.js";
 
 beforeEach(() => {
   resetTables("logged_sets", "session_skips", "sessions", "activities", "plan_items", "plan_days", "program_blocks", "daily_metrics", "checkins");
 });
 
 test("the evolution prompt carries the program-state, the schema, and variation candidates for a stalled lift", () => {
-  // A clearly plateaued lift: same load, 5 sessions, taken near failure.
-  [28, 21, 14, 7, 0].forEach((d) => repo.logSetByName({ exercise: "Bench Press", weight: 185, reps: 5, rir: 1, date: back(d) }));
+  // A clearly plateaued lift: same load, 5 sessions, taken near failure. The prompt reads
+  // TODAY's program state, so the stall has to be current — a lift last trained months
+  // ago and off the plan is resting, never a stall to rotate.
+  const today = localDateISO();
+  const fromToday = (n) => new Date(new Date(today + "T00:00:00Z").getTime() - n * 864e5).toISOString().slice(0, 10);
+  [28, 21, 14, 7, 0].forEach((d) => repo.logSetByName({ exercise: "Bench Press", weight: 185, reps: 5, rir: 1, date: fromToday(d) }));
   const p = buildProgramEvolutionPrompt();
   assert.match(p, /PROGRAM-STATE/i, "embeds the deterministic program-state read");
   assert.match(p, /VARIATION CANDIDATES/, "offers concrete same-pattern variations to break the plateau");

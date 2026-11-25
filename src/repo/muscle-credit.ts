@@ -26,8 +26,9 @@
 //     whole picture (the muscle trajectory, a "what got worked" view) ask for touched shares.
 //
 // Pure and deterministic: no schema, no agent, remembered per (name, stored group).
-import { classifyMuscleGroup, expandExerciseAbbreviations, type MuscleGroup, resolveGroup } from "./exercise-canon.js";
-import { classifyPattern, type MovementPattern } from "./exercise-variations.js";
+import { canonicalGroup, classifyMuscleGroup, expandExerciseAbbreviations, type MuscleGroup, resolveGroup } from "./exercise-canon.js";
+import { appliedProfileFor, type AppliedExerciseProfile, exerciseProfileEpoch } from "./exercise-profile-lookup.js";
+import { classifyPattern, classifyPatternCurated, type MovementPattern } from "./exercise-variations.js";
 
 export interface MuscleCredit {
   group: MuscleGroup;
@@ -461,22 +462,51 @@ function namedLift(text: string, nameGroup: MuscleGroup | null): NamedLift | nul
   return null;
 }
 
-function patternSynergists(name: string, storedGroup: string | null, primary: MuscleGroup): Synergists {
-  // The stored group's own spelling first ("lats" reads as a vertical pull), then the
-  // resolved primary — the hint the plan compiler always gave an unrecognized name.
-  const pattern = classifyPattern(name, storedGroup ?? undefined) ?? classifyPattern(name, primary);
-  return (pattern && PATTERN_SYNERGISTS[pattern]) || [];
+// The agent's profile as a credit source, GAP-FILLING only. It speaks in exactly two places,
+// both where the tables answer nothing: the primary of a lift with no stored group and no name
+// classification, and the synergists of a lift no named-lift row and no movement pattern
+// describes. A named lift or a known pattern is the curated answer, even when it lends nothing
+// (a leg extension lends nothing on purpose); a person's stored group is never moved.
+function profileSecondaries(profile: AppliedExerciseProfile | null, primary: MuscleGroup): Synergists {
+  if (!profile) return [];
+  const out: Array<readonly [MuscleGroup, number]> = [];
+  for (const [rawGroup, share] of profile.secondary) {
+    const group = canonicalGroup(rawGroup);
+    if (!group || group === primary || group === "mobility") continue;
+    if (share !== H && share !== Q) continue;
+    if (!out.some(([g]) => g === group)) out.push([group, share] as const);
+  }
+  return out;
 }
 
-function creditsRead(exercise: string, storedGroup: string | null): readonly MuscleCredit[] {
+function creditsRead(exercise: string, storedGroup: string | null, useProfile = true): readonly MuscleCredit[] {
+  return creditsDetail(exercise, storedGroup, useProfile).credits;
+}
+
+export interface CreditsDetail {
+  credits: readonly MuscleCredit[];
+  /** The tables settled this lift's mechanics (a named lift or a movement pattern), even if they lend nothing. */
+  settled: boolean;
+}
+
+function creditsDetail(exercise: string, storedGroup: string | null, useProfile: boolean): CreditsDetail {
   const name = String(exercise ?? "");
   const nameGroup = classifyMuscleGroup(name);
-  const primary = resolveGroup(name, storedGroup);
-  if (!primary || primary === "mobility") return [];
+  const profile = useProfile ? appliedProfileFor(name) : null;
+  let primary = resolveGroup(name, storedGroup);
+  let primaryFromProfile = false;
+  if (!primary && profile) {
+    const filled = canonicalGroup(profile.primary_group);
+    if (filled) {
+      primary = filled;
+      primaryFromProfile = true;
+    }
+  }
+  if (!primary || primary === "mobility") return { credits: [], settled: false };
   const credits: MuscleCredit[] = [{ group: primary, share: 1, role: "primary" }];
   // A core movement is never a press or a row: "Flat Bench Knee Raise" matches the push
   // rules on the word "bench" and must not lend triceps or shoulders anything.
-  if (primary === "core") return credits;
+  if (primary === "core") return { credits, settled: true };
 
   const add = (group: MuscleGroup, share: number) => {
     if (group === primary || group === "mobility" || !(share > 0)) return;
@@ -485,16 +515,37 @@ function creditsRead(exercise: string, storedGroup: string | null): readonly Mus
     else credits.push({ group, share, role: "secondary" });
   };
 
+  let settled = false;
   const lift = namedLift(expandExerciseAbbreviations(name), nameGroup);
   if (lift) {
+    settled = true;
     // A stored group that files the lift elsewhere ("Dips" kept under chest) still leaves
     // the lift's own prime mover working: it earns the counted half set.
     if (lift.primary !== primary) add(lift.primary, H);
     for (const [group, share] of lift.synergists) add(group, share);
   } else {
-    for (const [group, share] of patternSynergists(name, storedGroup, primary)) add(group, share);
+    // The stored group's own spelling first ("lats" reads as a vertical pull), then the
+    // resolved primary — the hint the plan compiler always gave an unrecognized name. A primary
+    // the AGENT supplied is no hint: only the name's own pattern speaks then.
+    const pattern = primaryFromProfile
+      ? classifyPatternCurated(name)
+      : (classifyPatternCurated(name, storedGroup ?? undefined) ?? classifyPatternCurated(name, primary));
+    if (pattern) {
+      settled = true;
+      for (const [group, share] of PATTERN_SYNERGISTS[pattern] ?? []) add(group, share);
+    } else {
+      for (const [group, share] of profileSecondaries(profile, primary)) add(group, share);
+    }
   }
-  return credits;
+  return { credits, settled };
+}
+
+/**
+ * The credit the CURATED tables give alone (no profile read), and whether they settled the lift's
+ * mechanics. For the exercise detail's "does the agent disagree" read; not a hot path.
+ */
+export function curatedMuscleCredit(exercise: string, storedGroup?: string | null): CreditsDetail {
+  return creditsDetail(String(exercise ?? ""), storedGroup == null ? null : String(storedGroup), false);
 }
 
 // Pure (constant tables, no global regexes): remembered per (stored group, name) in a
@@ -502,6 +553,8 @@ function creditsRead(exercise: string, storedGroup: string | null): readonly Mus
 // times over a hundred names.
 const CREDIT_CACHE_MAX = 4096;
 const creditCache = new Map<string, readonly MuscleCredit[]>();
+// The profile index the cache was filled under; a changed profile set drops every entry.
+let creditCacheEpoch = -1;
 
 /**
  * The cached credit list, shared and read-only. For hot internal readers (the volume
@@ -510,6 +563,11 @@ const creditCache = new Map<string, readonly MuscleCredit[]>();
 export function muscleCreditsShared(exercise: string, storedGroup?: string | null): readonly MuscleCredit[] {
   const stored = storedGroup == null ? null : String(storedGroup);
   if (typeof exercise !== "string") return creditsRead(String(exercise ?? ""), stored);
+  const epoch = exerciseProfileEpoch();
+  if (epoch !== creditCacheEpoch) {
+    creditCache.clear();
+    creditCacheEpoch = epoch;
+  }
   const key = `${stored ?? ""}\u0000${exercise}`;
   const hit = creditCache.get(key);
   if (hit) return hit;

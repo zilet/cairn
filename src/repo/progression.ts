@@ -147,7 +147,7 @@ import { coachContextBackstopSignature, registerTrainingCacheClear } from "./tra
 import { addDaysISO, daysBetweenISO, localDateISO, localDayOfStamp, round2_5 } from "./shared.js";
 import { sessionCountsTowardLiftTrajectory } from "./lift-comparability.js";
 import { USER_VETO_SQL } from "./brain-decisions.js";
-import { easedLoad, isIsolationGroup, STEP_CEIL_COMPOUND, STEP_CEIL_ISOLATION } from "./load-grid.js";
+import { easedLoad, isIsolationGroup, loadIncrement, STEP_CEIL_COMPOUND, STEP_CEIL_ISOLATION } from "./load-grid.js";
 import { supportWorkRead } from "./support-work.js";
 // Run-plan / DEXA / test-week digest producers. Imported for their types + a lazy
 // compute when programAdjustments is called standalone (Today/Progress). The module
@@ -341,6 +341,11 @@ export interface Prescription {
   // (repeatedTopSetEvidence). Carried onto the proposal change as its audit trail.
   // Reps path only; omit-when-absent.
   earned_by?: "repeated_top_set";
+  // A HOLD that is a load step the log earned, held only by the cut's veto (`sliding`, or
+  // `reduce` away from goal — cutVetoesPromotion). The load stays; the work was there, so
+  // a push athlete's fuel `reduce` keeps the full set count on it exactly as it would on
+  // the step itself (applyFuelProtection). Reps path only; omit-when-absent.
+  cut_held?: true;
   dose_eligibility?: {
     linked_outcome: boolean;
     eligible: boolean;
@@ -1303,6 +1308,100 @@ function liftSessionRepSets(name: string, sessionId: number): RepSetRow[] {
   }
 }
 
+// A heavier set the session's own card ASKED for at fewer reps than the range's floor — the
+// reach's challenge top set, a peak single, an agent's nested top set — as load and reps.
+// Read off the session's composed card; nothing composed, nothing asked. Fail-soft.
+type HeavierAsk = { weight: number; reps: number };
+function cardHeavierAsks(name: string, sessionId: number | null | undefined): HeavierAsk[] {
+  if (sessionId == null) return [];
+  // The card's item and the lift are matched through the one resolver, so a card that
+  // spelled the lift by an alias still asked for its own heavier set.
+  const key = resolveExerciseName(String(name ?? "")).key;
+  if (!key) return [];
+  try {
+    const row = db
+      .prepare(
+        `SELECT items_json FROM daily_session_compositions WHERE session_id = ?
+          ORDER BY (status = 'active') DESC, version DESC LIMIT 1`
+      )
+      .get(sessionId) as { items_json?: string | null } | undefined;
+    const items = JSON.parse(String(row?.items_json ?? "[]"));
+    if (!Array.isArray(items)) return [];
+    const out: HeavierAsk[] = [];
+    for (const item of items) {
+      if (resolveExerciseName(String(item?.exercise ?? "")).key !== key) continue;
+      const weight = Number(item?.target_weight);
+      const reps = Number(item?.rep_low);
+      if (item?.target_weight == null || !Number.isFinite(weight) || weight === 0) continue;
+      if (!Number.isFinite(reps) || reps <= 0) continue;
+      out.push({ weight, reps });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+// A set ABOVE `load` that fell under the rep floor is a failed attempt at more — he tried
+// the heavier weight and the reps were not there, so that exposure is evidence AGAINST
+// stepping to it. The working load (working-load.ts) never sees such a set, since it reads
+// only sets that reached the floor, so it is asked here. For assisted work "above" is less
+// assistance, the harder direction, the same comparison. Two heavier short sets are not
+// misses: one the card itself asked for at fewer reps (`asked` — the reach, a peak single),
+// done as written, and one logged with RIR_IN_RESERVE or more left (a feeler single at
+// RIR 2 was stopped by choice; the reps were there). ONE test, read by the repetition pair
+// (nearCappedAtLoad) and by every load step.
+//
+// Loads are compared within half the lift's own load-grid step (at least a pound), so a
+// kg/lb rounding difference or a reach done a small plate off is never read as a miss.
+// A Garmin-owned day (`cairn_sets_authoritative === false`) is never a failed attempt:
+// the watch's auto-detected rep counts are not his word.
+type HeavierAttemptContext = { tolerance: number; garminOwned: boolean };
+const DEFAULT_ATTEMPT_CONTEXT: HeavierAttemptContext = { tolerance: 1, garminOwned: false };
+
+function heavierAttemptContext(name: string, sessionId: number | null | undefined): HeavierAttemptContext {
+  let tolerance = DEFAULT_ATTEMPT_CONTEXT.tolerance;
+  try {
+    tolerance = Math.max(1, loadIncrement(name, findExercise(name)?.muscle_group ?? null) / 2);
+  } catch {
+    tolerance = DEFAULT_ATTEMPT_CONTEXT.tolerance;
+  }
+  let garminOwned = false;
+  if (sessionId != null) {
+    try {
+      const row = db.prepare(`SELECT garmin_json FROM sessions WHERE id = ?`).get(Number(sessionId)) as
+        | { garmin_json?: string | null }
+        | undefined;
+      const blob = row?.garmin_json ? JSON.parse(String(row.garmin_json)) : null;
+      garminOwned = !!blob && typeof blob === "object" && blob.cairn_sets_authoritative === false;
+    } catch {
+      garminOwned = false;
+    }
+  }
+  return { tolerance, garminOwned };
+}
+
+function failedHeavierAttempt(
+  rows: readonly RepSetRow[],
+  load: number,
+  repLow: number | undefined,
+  asked: readonly HeavierAsk[] = [],
+  context: HeavierAttemptContext = DEFAULT_ATTEMPT_CONTEXT
+): boolean {
+  if (context.garminOwned) return false;
+  const floor = repLow ?? 1;
+  const tol = context.tolerance;
+  return rows.some(
+    (r) =>
+      r.weight != null &&
+      r.weight > load + tol &&
+      r.reps != null &&
+      r.reps < floor &&
+      !(r.rir != null && r.rir >= RIR_IN_RESERVE) &&
+      !asked.some((a) => Math.abs(a.weight - (r.weight as number)) <= tol && (r.reps as number) >= a.reps)
+  );
+}
+
 // Pure. One exposure, read against the card: no failed attempt above `load` (a heavier
 // set under the rep floor), worked AT `load` (the session's working load — working-load.ts
 // — for loaded work; no harder set reaching the floor for assisted work), the card's full
@@ -1312,14 +1411,11 @@ function liftSessionRepSets(name: string, sessionId: number): RepSetRow[] {
 function nearCappedAtLoad(
   rows: readonly RepSetRow[],
   load: number,
-  opts: { repLow: number | undefined; ceiling: number; sets: number; strongReserve: number; progressing: boolean }
+  opts: { repLow: number | undefined; ceiling: number; sets: number; strongReserve: number; progressing: boolean },
+  asked: readonly HeavierAsk[] = [],
+  attempt: HeavierAttemptContext = DEFAULT_ATTEMPT_CONTEXT
 ): boolean {
-  // A set ABOVE the card's load that fell under the rep floor is a failed attempt at more
-  // — evidence against the step. The working load (working-load.ts) never sees it, since
-  // it reads only sets that reached the floor, so it is asked here. For assisted work
-  // "above" is less assistance, the harder direction, the same comparison.
-  const floor = opts.repLow ?? 1;
-  if (rows.some((r) => r.weight != null && r.weight > load + 0.1 && r.reps != null && r.reps < floor)) return false;
+  if (failedHeavierAttempt(rows, load, opts.repLow, asked, attempt)) return false;
   if (load > 0) {
     const worked = sessionWorkingLoad(rows, opts.repLow);
     if (worked == null || Math.abs(worked - load) > 0.1) return false;
@@ -1429,7 +1525,16 @@ function repeatedTopSetEvidence(args: {
     progressing: args.progressing,
   };
   for (const exposure of counted) {
-    if (!nearCappedAtLoad(liftSessionRepSets(args.name, exposure.id), args.load, shape)) return null;
+    if (
+      !nearCappedAtLoad(
+        liftSessionRepSets(args.name, exposure.id),
+        args.load,
+        shape,
+        cardHeavierAsks(args.name, exposure.id),
+        heavierAttemptContext(args.name, exposure.id)
+      )
+    )
+      return null;
   }
   if (!linkedDoseEligibility(previous.id, args.name).eligible) return null;
   // Undo is a remembered no: blocked until the slot carries a prescription written
@@ -2941,13 +3046,26 @@ function repsPrescription(
   // Catch-up framing: when the plan target was BEHIND the real working weight, say so
   // plainly — the step is "from where you actually are", and even a hold re-grounds the
   // plan onto reality (the suggested weight = baseWeight, so applying lands it there).
+  // The re-ground's HOLD sentence, or null when the card is not a re-ground. Shared with
+  // the load-step gate below, which can turn a re-ground's step back into this hold.
+  const loadLabel = (w: number): string => (w < 0 ? `${Math.abs(w)} lb assist` : `${w} lb`);
+  const regroundHoldWhy = (): string | null => {
+    if (loadConstrained) return null;
+    if (assistRetired && planBehind) return say(voice.ASSIST_RETIRED_HOLD, "assist_retired_hold");
+    if (planBehind && baseWeight != null)
+      return planUnset
+        ? say(voice.PLAN_UNSET_HOLD, "plan_unset_hold")(loadLabel(baseWeight))
+        : say(voice.PLAN_BEHIND_HOLD, "plan_behind_hold")(loadLabel(baseWeight));
+    if (planAhead && baseWeight != null) return say(voice.PLAN_AHEAD_HOLD, "plan_ahead_hold")(`${baseWeight} lb`);
+    return null;
+  };
   if (assistRetired && planBehind && !loadConstrained) {
     // The catch-up here is the assist coming off, not a load to name.
     if (action === "overload" && !repStep && !topSet)
       why = say(voice.ASSIST_RETIRED_OVERLOAD, "assist_retired_overload");
-    else if (action === "hold") why = say(voice.ASSIST_RETIRED_HOLD, "assist_retired_hold");
+    else if (action === "hold") why = regroundHoldWhy() ?? why;
   } else if (planBehind && baseWeight != null) {
-    const lbl = baseWeight < 0 ? `${Math.abs(baseWeight)} lb assist` : `${baseWeight} lb`;
+    const lbl = loadLabel(baseWeight);
     // "The plan said a lighter number" and "the plan said nothing at all" are
     // different facts, and the athlete can tell them apart on the card.
     // …except in peak week, where the sentence IS the protocol — a catch-up line
@@ -2956,12 +3074,9 @@ function repsPrescription(
       why = planUnset
         ? say(voice.PLAN_UNSET_OVERLOAD, "plan_unset_overload")(lbl)
         : say(voice.PLAN_BEHIND_OVERLOAD, "plan_behind_overload")(lbl);
-    else if (action === "hold" && !loadConstrained)
-      why = planUnset
-        ? say(voice.PLAN_UNSET_HOLD, "plan_unset_hold")(lbl)
-        : say(voice.PLAN_BEHIND_HOLD, "plan_behind_hold")(lbl);
+    else if (action === "hold" && !loadConstrained) why = regroundHoldWhy() ?? why;
   } else if (planAhead && baseWeight != null && action === "hold" && !loadConstrained) {
-    why = say(voice.PLAN_AHEAD_HOLD, "plan_ahead_hold")(`${baseWeight} lb`);
+    why = regroundHoldWhy() ?? why;
   }
 
   // Cut-pressure voice follows the consequence that actually landed.
@@ -3147,6 +3262,71 @@ function repsPrescription(
     }
   }
 
+  // ONE GATE FOR A LOAD STEP. Every path above that adds load — every working set capped,
+  // the top set alone (push, or an intensification phase), push's single met exposure,
+  // the repetition pair, a re-ground's catch-up plus step, less assist — lands here, and
+  // only here is the step confirmed. Two things turn it back into a hold at the base load:
+  //   - a failed attempt at more in the latest exposure (failedHeavierAttempt): he tried a
+  //     heavier set and the reps were not there, so that session does not buy the step.
+  //     A plan sitting AHEAD of the log is the re-ground's to answer, not this test's;
+  //   - the cut's veto (cutVetoesPromotion): `sliding` always, `reduce` unless near goal,
+  //     on every step earned on LESS than full double progression — the top set alone
+  //     (push or intensification), push's single met exposure, the repetition pair, a
+  //     re-ground whose sets were not all capped. A step earned by EVERY working set
+  //     capping the range is not a cut question: the work was done and the log is the
+  //     truth, so it stands under every cut shape (`fullDoubleProgression`).
+  //     `hold` and `fast_loss` never veto a load step.
+  // A rep advance inside the range, a rep-range move, a peak protocol, a deload and every
+  // protective change are not load steps and never reach this gate.
+  // Read at most once, and only when a step or a top-set-earned hold asks.
+  let failedAttemptRead: boolean | null = null;
+  const failedAttemptAtBase = (): boolean =>
+    (failedAttemptRead ??=
+      !planAhead &&
+      last != null &&
+      baseWeight != null &&
+      baseWeight !== 0 &&
+      failedHeavierAttempt(
+        liftSessionRepSets(name, last.session_id),
+        baseWeight,
+        repLow,
+        cardHeavierAsks(name, last.session_id),
+        heavierAttemptContext(name, last.session_id)
+      ));
+  const loadStepUp =
+    action === "overload" &&
+    !repStep &&
+    !topSet &&
+    baseWeight != null &&
+    baseWeight !== 0 &&
+    (nextWeight == null ? baseWeight < 0 : nextWeight > baseWeight + 0.01);
+  // Every working set capped the range at the load, and the step is not the top set's.
+  // With NO rep range there is no cap to reach: an open-earned step whose exposure met
+  // its full prescribed dose (`full_comparable`) is the same complete work; one earned
+  // only on a rating or a trend, or with no card to have met, is a lesser step.
+  const fullDoubleProgression =
+    (allSetsAtTop && !pushEarnedTopSet) ||
+    (!hasRange && openEarned && doseEligibility.reason === "full_comparable");
+  let cutHeld = false;
+  if (loadStepUp) {
+    const failedAttempt = failedAttemptAtBase();
+    const cutVeto = !fullDoubleProgression && cutVetoesPromotion(cutPressure, liftCut);
+    if (failedAttempt || cutVeto) {
+      action = "hold";
+      nextWeight = baseWeight;
+      earnedBy = undefined;
+      cutHeld = !failedAttempt;
+      // A re-ground keeps its own sentence: the catch-up is still the card's change.
+      why =
+        regroundHoldWhy() ??
+        (failedAttempt
+          ? say(voice.FAILED_HEAVIER_ATTEMPT_HOLD, "failed_heavier_attempt_hold")(loadLabel(baseWeight as number))
+          : cutPressure.reduce || cutPressure.sliding
+            ? say(voice.CUT_HOLDING_WIN, "cut_holding_win")
+            : say(voice.DOSE_UNDER_HOLD, "dose_under_hold"));
+    }
+  }
+
   // A LOAD STEP IS TAKEN FROM THE WEIGHT THAT WAS WORKED. When the latest session
   // capped the range at a lighter load than the base (a reduced card, a lighter day),
   // that session proves the lighter load, not the base — stepping past the base off
@@ -3328,7 +3508,10 @@ function repsPrescription(
     response.verdict !== "earned_hold" &&
     // The CUT's veto, not the lift's shortfall: a set-count shortfall is the very thing
     // this hold is about, and it is volume's to read.
-    !cutVetoesPromotion(cutPressure, { status });
+    !cutVetoesPromotion(cutPressure, { status }) &&
+    // A heavier set that fell short in the same session answered the load question the
+    // other way: the top set has not earned a heavier look.
+    !failedAttemptAtBase();
 
   // A peak week is TWO-TIER work and PrescriptionTarget only describes one tier, so
   // `suggested` carries the BULK of the session — the back-off block — and `top_set`
@@ -3401,6 +3584,8 @@ function repsPrescription(
     // Only while the step it names still stands (a brake or the lighter-load guard
     // that turned it back into a hold took the claim with it).
     ...(earnedBy && action === "overload" ? { earned_by: earnedBy } : {}),
+    // Only while the cut's hold is still the card (a brake that reshaped it owns it).
+    ...(cutHeld && action === "hold" && !autoregulated && nextWeight === baseWeight ? { cut_held: true as const } : {}),
   };
 }
 
@@ -3526,6 +3711,9 @@ function timedPrescription(
         nextSeconds = base;
         why = say(voice.TIMED_UNPLANNED_LOAD_HOLD, "timed_unplanned_load_hold");
       } else if (everySetOwned) {
+        // The cut's veto never reaches this step: it is only ever earned by EVERY set
+        // owning the seconds ceiling at the load (full progression — the reps path's
+        // `fullDoubleProgression`), which stands under every cut shape. Nor a seconds step.
         nextLoad =
           load > 0
             ? clampedOverload(load, group, brakeCtx?.personalModifier)
@@ -4171,7 +4359,10 @@ function applyFuelProtection(
   // safety floor: a pain-braked prescription falls through to the reduction below, and
   // illness/symptom floors never reach this function at all.
   const rangeStep = prescription.escalated === "rep_range";
-  const earnedStep = ["overload", "vary", "introduce"].includes(prescription.action) || rangeStep;
+  // A load step the log earned and the cut held (`cut_held`) is still a step the log
+  // earned: the load waits, the push athlete's set count stays.
+  const earnedStep =
+    ["overload", "vary", "introduce"].includes(prescription.action) || rangeStep || prescription.cut_held === true;
   const keepsFullVolume = !prescription.pain_protected && (atNearGoal || (drive === "push" && earnedStep));
   if (keepsFullVolume && (earnedStep || prescription.action === "hold")) {
     const parkedSingle = Boolean(prescription.top_set);
@@ -4188,7 +4379,10 @@ function applyFuelProtection(
             ? say(voice.LOG_EARNED_FUEL_PARK_SINGLE, "log_earned_fuel_park_single")
             : prescription.why
           : prescription.action === "hold"
-            ? say(voice.AT_GOAL_FUEL_KEEP_VOLUME, "at_goal_fuel_keep_volume")
+            ? // A cut-held step keeps the cut's own sentence; an at-goal hold says the goal.
+              prescription.cut_held === true && !atNearGoal
+              ? prescription.why
+              : say(voice.AT_GOAL_FUEL_KEEP_VOLUME, "at_goal_fuel_keep_volume")
             : // vary / introduce. WHY the rotation stands has to match why it was
               // actually kept: a push athlete asked for it, an at-goal athlete did
               // not. `keepsFullVolume` admits both, so naming the push declaration
@@ -5112,8 +5306,12 @@ export function programEvolutionTrigger(
   const hasHistory = lifts.some((l: any) => (l?.sessions ?? 0) >= 4);
 
   // (1) A lift that has truly plateaued and wants a variation, or is regressing —
-  //     the strongest "the plan should change" signal (load isn't the lever).
+  //     the strongest "the plan should change" signal (load isn't the lever). Only a
+  //     lift ON the plan arms it: a lift he is not doing is not the plan's to change, and
+  //     a resting one is out of the rotation (program-state.ts `in_plan`/`resting`; an
+  //     injected state that predates the fields reads as on the plan).
   const wantsVary = lifts
+    .filter((l: any) => l?.in_plan !== false && l?.resting !== true)
     .filter((l: any) => l?.suggested_action === "vary" || l?.status === "regressing")
     .map((l: any) => l?.exercise)
     .filter(Boolean)
@@ -5215,11 +5413,20 @@ export function programEvolutionTrigger(
     }
   }
   const plays = Array.isArray(playbook?.plateau_plays) ? playbook!.plateau_plays : [];
+  // The same plan-only rule as (1): a plateau play on a lift off the plan is advice for
+  // the gym floor, never a reason to redraw the plan.
+  const offPlan = new Set(
+    lifts
+      .filter((l: any) => l?.in_plan === false || l?.resting === true)
+      .map((l: any) => String(l?.exercise ?? "").toLowerCase())
+      .filter(Boolean)
+  );
   for (const play of plays) {
     if (!play?.kind) continue;
     if (play.kind === "strength_plateau" && wantsVary.includes(String(play.exercise || ""))) {
       continue; // the older vary trigger already names this exact lift
     }
+    if (play.kind === "strength_plateau" && offPlan.has(String(play.exercise || "").toLowerCase())) continue;
     reasons.push(`${play.title}: ${play.adaptations?.[0] || play.why}`);
     sigParts.push(`playbook:${play.kind}:${play.exercise || play.title}`);
   }

@@ -208,6 +208,7 @@ export const CLIENT_API_CONTRACT_PATHS = [
   "/training-agenda",
   "/run-zones",
   "/muscle-trajectory",
+  "/strength-capability",
   "/test-week",
   "/dexa-targeting",
   "/program/run-plan/apply",

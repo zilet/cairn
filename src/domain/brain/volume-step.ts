@@ -690,9 +690,10 @@ interface LiftRead {
   grinding: boolean;
 }
 
-// The program-state lift grades by identity, and the group's lifts.
+// The program-state lift grades by identity, and the group's lifts. A resting lift (off the
+// plan, not trained lately) is out of the rotation and never blocks a group.
 function liftReads(date: string): Array<{ identity: string; group: string | null; read: LiftRead }> {
-  return (getProgramState(date).lifts ?? []).map((lift: any) => ({
+  return (getProgramState(date).lifts ?? []).filter((lift: any) => lift?.resting !== true).map((lift: any) => ({
     identity: liftIdentity(String(lift.exercise)),
     group: primaryMuscleGroup(String(lift.exercise), lift.muscle_group == null ? null : String(lift.muscle_group)),
     read: {

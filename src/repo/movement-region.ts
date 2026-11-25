@@ -1,4 +1,5 @@
 import { normalizeExerciseName } from "./exercise-canon.js";
+import { appliedProfileFor } from "./exercise-profile-lookup.js";
 import { classifyPattern } from "./exercise-variations.js";
 import { pressSlotKey } from "./plan-quality.js";
 
@@ -57,7 +58,59 @@ const REAR_DELT =
   /\brear delt\b|\breverse (?:pec deck|pec|fly|flye|flyes|flies|delt)\b|\brear (?:fly|flye|flyes|flies)\b|\bface pulls?\b/;
 const NOT_REAR_DELT = /\bpull aparts?\b/;
 
-export function movementRegionKey(name: string, _group?: string | null): MovementRegion | null {
+// Every key movementRegionKey can answer, as a value list: the vocabulary an agent's exercise
+// profile is held to (repo/exercise-profile.ts). A new key added above belongs here too; the
+// profile test asserts every curated answer is a member.
+export const MOVEMENT_REGIONS: readonly MovementRegion[] = [
+  "horizontal-press:flat",
+  "horizontal-press:incline",
+  "horizontal-press:decline",
+  "vertical-press",
+  "dip",
+  "knee-extension",
+  "knee-flexion",
+  "calf:straight",
+  "calf:bent",
+  "curl:supinated",
+  "curl:neutral",
+  "curl:pronated",
+  "triceps:overhead",
+  "triceps:pushdown",
+  "triceps:lying",
+  "triceps:kickback",
+  "triceps:extension",
+  "lateral-raise",
+  "rear-delt",
+];
+
+export function isMovementRegion(value: unknown): value is MovementRegion {
+  return typeof value === "string" && MOVEMENT_REGIONS.includes(value);
+}
+
+/** How movementRegionKey may be asked. */
+export interface MovementRegionOptions {
+  /**
+   * Fill a name no region rule answers from the agent's exercise profile. OFF by default: a
+   * newly placed region folds items together on a composed card (one of two same-region items
+   * is dropped), pairs supersets and reorders a plan day, so only a progress/credit read opts
+   * in. A curated region is never replaced either way.
+   */
+  profile?: boolean;
+}
+
+export function movementRegionKey(
+  name: string,
+  group?: string | null,
+  opts?: MovementRegionOptions,
+): MovementRegion | null {
+  const curated = movementRegionKeyCurated(name, group);
+  if (curated !== null || !opts?.profile) return curated;
+  const region = appliedProfileFor(name)?.region;
+  return isMovementRegion(region) ? region : null;
+}
+
+/** The curated answer alone: never reads a profile. */
+export function movementRegionKeyCurated(name: string, _group?: string | null): MovementRegion | null {
   const n = normalizeExerciseName(name);
   if (!n) return null;
   // A dip before the press test: "Bench Dip" is a dip, never a flat bench press.

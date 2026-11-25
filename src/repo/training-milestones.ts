@@ -194,7 +194,9 @@ export function refreshTrainingBenchmarkAttention(
   const d = date || localDateISO();
   const ps = opts.programState ?? getProgramState(d);
   const out: AttentionScheduleEntry[] = [];
-  const lifts = Array.isArray(ps.lifts) ? ps.lifts : [];
+  // A resting lift (off the plan, not trained lately) is out of the rotation: it holds no
+  // benchmark checkpoint and never re-activates the test week.
+  const lifts = (Array.isArray(ps.lifts) ? ps.lifts : []).filter((l) => l.resting !== true);
   for (const lift of lifts.filter((l) => l.sessions >= 3).slice(0, 12)) {
     out.push(
       applyAttentionObservation({

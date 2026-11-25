@@ -27,6 +27,7 @@ import {
 } from "./exercise-guide.js";
 import { isValidGarminRef, mapExerciseToGarmin, sameExerciseIdentity } from "./garmin-exercise-map.js";
 import { type ExerciseInput, validInputProfile, withExerciseInputs } from "./exercise-input.js";
+import { exerciseProfileRead } from "./exercise-profile.js";
 import { curatedMuscleGroup, muscleCreditsShared } from "./muscle-credit.js";
 import { getProgress } from "./sessions.js";
 import { addDaysISO } from "./shared.js";
@@ -1674,5 +1675,8 @@ export function getExerciseDetail(name: string) {
     appears,
     guide,
     guide_suggestion,
+    // What an agent read of this lift (pattern, region, synergists) and whether it disagrees with
+    // the curated tables. Pull-only: it informs nothing else and is null before the first read.
+    profile: exerciseProfileRead(ex),
   };
 }

@@ -513,7 +513,11 @@ function liftStallArm(asOf: string): EnergyDeficiencyArm {
   } catch {
     lifts = [];
   }
-  const graded = (Array.isArray(lifts) ? lifts : []).filter((lift) => lift?.status && lift.status !== "new");
+  // A resting lift (off the plan, not trained lately) is in neither the numerator nor the
+  // denominator: a lift he is not doing is no evidence about how he is coping now.
+  const graded = (Array.isArray(lifts) ? lifts : []).filter(
+    (lift) => lift?.status && lift.status !== "new" && lift.resting !== true
+  );
   if (graded.length === 0) {
     return {
       key: "lift_stall",

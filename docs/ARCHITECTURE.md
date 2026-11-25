@@ -7174,6 +7174,72 @@ and at the boundary, so sessions logged in between never park a server draft; a 
   group until the intent changes or six weeks pass. Quiet with Undo under lead, announced under
   announce_first, one held draft under review_everything.
 
+## Progress by movement unit and muscle (2026-11-25)
+
+The owner's rule: progress is judged per muscle group, movement pattern and overall strength,
+independent of the specific exercise; the single lift is evidence; a lift he is not doing is not
+stalled.
+
+- **A lift he is not doing is not stalled.** `liftStates` (`src/repo/program-state.ts`) stamps every
+  lift row with `in_plan` (its row, a resolver alias, or a plan item sharing its movement key; plan
+  items resolve through `resolveExerciseName`) and `resting` = not on the plan AND not trained
+  inside `LIFT_CURRENT_WINDOW_DAYS` (`liftRotation`). A resting lift keeps its row but makes no
+  claim: status `new`, `hold`, no stall signals, `weeks_static: null`, and a day-picked why saying
+  it is out of the rotation. A plan read that fails makes every stale lift resting (toward
+  silence). An on-plan lift whose stall or slide is stale reads as waiting for its next session; a
+  stale climb keeps its grade. The headline tally, `adaptations_due`, the deload's fatigue arm, the
+  under-fuelling `lift_stall` arm, the program-evolution trigger (plan lifts only), plateau plays,
+  support work, benchmark attention, the volume step's group block, the coach context
+  (`programStateForCoach`) and the coach/evolution prompts' act-on lists all ignore resting lifts.
+  The fatigue arm counts *independent* slides: `regressionWitnessCount` folds lifts sharing a
+  movement key or a movement region into one, so two noisy pushdown variants never earn a deload.
+- **The capability read.** `capabilityRead(date)` (`src/repo/strength-capability.ts`, contract
+  `src/contracts/strength-capability.ts`; `GET /api/strength-capability`, MCP
+  `get_strength_capability`) judges strength by movement unit and muscle group, so a swap between
+  variants never silences or splits the read. A compound's unit is its movement pattern (horizontal
+  push split by press slot); an isolation lift's unit is its movement region (every pushdown is one
+  unit). Each variant keeps its own estimate (best Epley per comparable session, effective load for
+  bodyweight work, lighter-on-purpose / recovery-week / post-race exposures set aside), and only
+  its relative change carries across: its own two 28-day envelopes, else its last three exposures
+  against its first three, else a ratio to a sibling's earlier envelope (`variant-transfer.ts`) —
+  learned from at least two bridge pairs that agree within five percent, or the conservative
+  `RELATED_LIFT_RATIOS`, downward only and never as a climb. Histories are never merged and a ratio
+  is never stored or printed. A unit's verdict is the hard-set- and tier-weighted mean of those
+  changes; slipping needs two honest exposures below the earlier value in the current window.
+  `cut`, `run_build` (lower-body units while the running load ramps) and `recovery` qualifiers
+  explain a flat unit. Muscles fold unit verdicts by credit share times hard sets (quarter shares
+  never vote) beside weekly hard sets banded against `MUSCLE_LANDMARKS`. Read-only, deterministic,
+  no score anywhere; a failed read is `available:false`. Nothing consumes it for a decision yet.
+- **The exercise profile (agent-filled, gap-filling only).** `exercise_profile` stores an agent's
+  read of what a lift is: pattern, region, primary group, synergists (share 0.5 counted or 0.25
+  touched), length bias, compound, confidence. One writer, `writeExerciseProfile`
+  (`src/repo/exercise-profile.ts`), from the same single call as the 'exercise' enrichment for a
+  new lift and from an `exercise_profile` job on the enrichment queue for existing ones. Every value
+  is held to the engine's own vocabularies; an unknown one is dropped. The order of authority is a
+  person's value, then the curated tables, then the profile, then the name classifier.
+  `classifyPattern` and `movementRegionKey` consult the profile only on `{profile:true}`, which only
+  progress reads pass (the capability read), because a newly classified lift would otherwise change
+  reach hosts, supersets, region de-duplication and hold progression. `muscleCreditFor` consults it
+  where the tables answer nothing. A profile that disagrees with a curated answer is stored, never
+  applied, and shown on the exercise detail as `disagrees_with_curated`. The backfill queries "no
+  row at the current `EXERCISE_PROFILE_RULES_VERSION`", so it is idempotent and resumable; it
+  defers on `AgentBusyError`, does nothing without an agent, and touches nothing but the profile.
+- **On Progress.** The Program landing holds an empty `#progCapSlot`;
+  `progress-capability-client.ts` fills it when the read is available: the overall line as hero,
+  the on-plan units (each expanding to its contributor lifts), the muscles, and off-plan units
+  behind "Also trained lately". The curated lift list stays underneath as "Lift by lift". An
+  unavailable read leaves the page exactly as it was. Verdicts are words, never scores.
+- **One gate for every load step** (`src/repo/progression.ts`). A step earned by every working set
+  capping the range at the card's load (full double progression, in any phase) is not a cut
+  question and stands under every cut shape; a step earned on less — the push top set alone, an
+  intensification top set, push's single met exposure, the repetition pair, a re-ground whose sets
+  were not all capped — is vetoed by `cutVetoesPromotion` (sliding always, reduce off goal) and
+  held with the cut's sentence, marked `cut_held` so a push athlete under a fuel `reduce` keeps the
+  full set count at the held load. On every path a heavier set under the rep floor in the latest
+  session (`failedHeavierAttempt`) holds the step, unless the card asked for it at those reps or it
+  was logged at RIR two or more. A timed load step needs every set at the seconds ceiling, so it is
+  full progression and never vetoed.
+
 ## Background enrichment (`src/enrich.ts`)
 
 Free-text activity logs and food notes save **instantly** via the offline regex parser

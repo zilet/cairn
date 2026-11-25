@@ -23,7 +23,7 @@ function liftStatusWord(lift: ProgramLift | null | undefined): string {
   }
   if (status === "regressing") return "trending down";
   if (status === "maintaining") return "holding";
-  if (status === "new") return "building baseline";
+  if (status === "new") return row.resting === true ? "resting" : "building baseline"; // resting: a lift off the plan and untrained for weeks
   return "";
 }
 

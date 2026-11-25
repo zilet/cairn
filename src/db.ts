@@ -77,6 +77,25 @@ CREATE TABLE IF NOT EXISTS exercises (
   input_profile TEXT,                     -- stated log-row profile: loaded | bodyweight | mobility; NULL = derived (repo/exercise-input.ts) (v119)
   per_side INTEGER                        -- 1 = the dose is each side's ("2 × 6 / side"), 0 = not; NULL = read from the name (v119)
 );
+-- An agent's reading of what a lift IS: its movement pattern, region, primary group and
+-- synergists. GAP-FILLING ONLY (repo/exercise-profile.ts): the curated tables and a
+-- person's own group always win, and a field an agent names outside the engine's
+-- vocabularies is dropped at write time. A row is current while rules_version matches
+-- EXERCISE_PROFILE_RULES_VERSION; a bump re-classifies at the next boot.
+CREATE TABLE IF NOT EXISTS exercise_profile (
+  exercise_id INTEGER PRIMARY KEY REFERENCES exercises(id) ON DELETE CASCADE,
+  pattern TEXT,                            -- a MovementPattern (exercise-variations.ts) or NULL
+  region TEXT,                             -- a movement region key (movement-region.ts) or NULL
+  primary_group TEXT,                      -- a canonical muscle group or NULL
+  secondary_json TEXT,                     -- [{group, share}], share 0.5 (counted) or 0.25 (touched)
+  length_bias TEXT,                        -- lengthened | mid | shortened | NULL
+  compound INTEGER,                        -- 1 = multi-joint, 0 = single-joint, NULL = unsaid
+  confidence TEXT NOT NULL DEFAULT 'low',  -- high | medium | low (low is stored, never applied)
+  source TEXT NOT NULL DEFAULT 'agent',    -- agent | user (an agent never overwrites a user row)
+  agent TEXT,                              -- which agent wrote it (agent source only)
+  rules_version INTEGER NOT NULL DEFAULT 1,
+  classified_at TEXT DEFAULT (datetime('now'))
+);
 -- Imported instructional guides for a movement: step-by-step text, muscles worked,
 -- equipment and two demonstration photos, from the public-domain free-exercise-db
 -- dataset. Entirely OPTIONAL — the table is empty until the athlete runs the import,

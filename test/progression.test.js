@@ -2611,6 +2611,39 @@ test("planDayProgression: push keeps the full set count on an earned step under 
   assert.equal(violatesReadingGrammar(p.why), null);
 });
 
+// The same day, but the step was earned by the top set ALONE (push's own authority): a
+// reduce away from goal vetoes that step, and push still keeps the full set count at the
+// held load (`cut_held`, applyFuelProtection) — nothing comes off, nothing is owed back.
+test("planDayProgression: push + reduce holds a top-set-only step at full sets", () => {
+  makeExercise("Back Squat", { muscle_group: "quads" });
+  planWith(1, { exercise: "Back Squat", sets: 3, rep_low: 6, rep_high: 8, target_weight: 185, focus: "Legs" });
+  logSet("Back Squat", isoDaysAgo(28), { weight: 175, reps: 8, rir: 2 });
+  logSet("Back Squat", isoDaysAgo(21), { weight: 180, reps: 8, rir: 2 });
+  [8, 7, 6].forEach((reps, i) => logSet("Back Squat", isoDaysAgo(10), { weight: 185, reps, rir: 2, setNum: i + 1 }));
+  repo.setProfile({
+    name: "Athlete",
+    sex: "male",
+    age: 36,
+    height_cm: 183,
+    weight_lb: 195,
+    start_weight_lb: 210,
+    start_date: isoDaysAgo(60),
+    goal_weight_lb: 180,
+    goal_mode: "lose",
+    activity_factor: 1.5,
+  });
+  repo.setSettings({ training_drive: "push" });
+  seedPersistentStrain();
+  assert.equal(currentUnderfuelingRead(localDateISO()).action.training, "reduce");
+  const p = planDayProgression(1, { forNextSession: true }).find((row) => row.exercise === "Back Squat");
+  assert.equal(p.action, "hold", p.why);
+  assert.equal(p.cut_held, true, "the top set earned it; the cut held it");
+  assert.equal(p.suggested.weight, 185, "nothing comes off the load");
+  assert.equal(p.suggested.sets, 3, "and the full set count stays");
+  assert.equal(p.fuel_protected, undefined, "no volume came off, so nothing is owed back");
+  assert.equal(violatesReadingGrammar(p.why), null);
+});
+
 test("planDayProgression: a seeded fast_loss cut promotes and does not half volume", () => {
   earnedOverload("Back Squat", "quads");
   const date = isoDaysAgo(10);

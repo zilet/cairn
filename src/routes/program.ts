@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { composeWeek, draftCoachProposal, evolveProgram } from "../coachOps.js";
 import { localToday } from "../dayread.js";
+import { capabilityRead } from "../repo.js";
 import {
   applyProposalWithAutonomy,
   buildProgressionWithAutonomy,
@@ -347,6 +348,11 @@ programRouter.get("/calibration/status", (req, res) => {
 // test-week read. Plain words, no scores; quiet to {available:false}/{due:false}.
 programRouter.get("/muscle-trajectory", (req, res) =>
   res.json(muscleGroupTrajectory(req.query.date ? String(req.query.date) : undefined))
+);
+// Strength progress per movement unit and per muscle group, the single lift as evidence.
+// Directional words only, never a score; {available:false} when the read could not be made.
+programRouter.get("/strength-capability", (req, res) =>
+  res.json(capabilityRead(req.query.date ? String(req.query.date) : undefined))
 );
 programRouter.get("/test-week", (req, res) =>
   res.json(testWeekDue(req.query.date ? String(req.query.date) : undefined))

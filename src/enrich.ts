@@ -22,6 +22,7 @@ import type { CcdaHealthExtraction } from "./repo/ccda.js";
 import { recordedClientTimeZone } from "./repo/client-tz.js";
 import { refreshDoctorLoopAttention } from "./repo/doctor-loop.js";
 import { applyExerciseEnrichment, ensureGarminMapping, getExercise, getExerciseDetail, queueExerciseEnrichment, setExerciseEnrichStatus } from "./repo/exercises.js";
+import { exerciseIdsNeedingProfile, exerciseNeedsProfile, sanitizeExerciseProfile, writeExerciseProfile } from "./repo/exercise-profile.js";
 import { recordGarminExportOutcome } from "./repo/garmin-export-telemetry.js";
 import { getSessionGarminExport } from "./repo/garmin-strength-export.js";
 import { MAX_MARKERS_PER_PANEL, addHealthReview, cleanClinicalFacts, estimateMarkerCandidates, getHealthDocumentRaw, plausibleMarkerValue, reconcileHealthDocumentContextEvents, replaceHealthPanels, setHealthDocEnrichStatus, updateHealthDocFields } from "./repo/health.js";
@@ -37,11 +38,11 @@ import { foodNoteEditedByPerson, getFoodNote, setFoodNoteEnrichStatus, updateFoo
 import { deriveDirectives } from "./repo/propagation.js";
 import { getRecentSessions, getSessionDetail, importGarminActivitySets } from "./repo/sessions.js";
 import type { GarminSetImportInput } from "./repo/sessions.js";
-import { executionProfileForTask, getGeminiApiKey, getSettings, pickAgentOrderForTask } from "./repo/settings.js";
+import { executionProfileForTask, getAgentConfig, getGeminiApiKey, getSettings, pickAgentOrderForTask } from "./repo/settings.js";
 import { registerSymptomExtractionHook } from "./repo/symptom-extraction-hooks.js";
 import { attachSymptomReportEvent, getSymptomReport, listPendingSymptomReports, setSymptomReportExtraction } from "./repo/symptom-reports.js";
 import { getTrainingSymptom, listTrainingSymptoms, recordMovementTolerance, recurTrainingSymptom, reportTrainingSymptom, resolveTrainingSymptomByArea } from "./repo/training-symptoms.js";
-import { AgentFallbackError, extractJson, runAgentWithFallback } from "./agents.js";
+import { AgentFallbackError, extractJson, runAgent, runAgentWithFallback } from "./agents.js";
 import {
   AGENT_BUSY_RETRY_MS,
   clearAgentBusyDeferrals,
@@ -71,6 +72,7 @@ import type { JsonSchema } from "./json-schema.js";
 import {
   ACTIVITY_ENRICH_SCHEMA,
   EXERCISE_ENRICH_SCHEMA,
+  EXERCISE_PROFILE_SCHEMA,
   FOOD_ENRICH_SCHEMA,
   FOOD_PHOTO_SCHEMA,
   GARMIN_STRENGTH_SCHEMA,
@@ -79,10 +81,10 @@ import {
   IMAGING_STUDY_JSON_SCHEMA,
   isHealthReviewResult,
 } from "./agent-contracts.js";
-import { buildEnrichPrompt, buildExerciseEnrichPrompt, buildFoodPhotoPrompt, buildHealthIngestPrompt, buildHealthReviewPrompt, buildGarminStrengthPrompt, buildImagingStudyPrompt } from "./prompt.js";
+import { buildEnrichPrompt, buildExerciseEnrichPrompt, buildExerciseProfilePrompt, buildFoodPhotoPrompt, buildHealthIngestPrompt, buildHealthReviewPrompt, buildGarminStrengthPrompt, buildImagingStudyPrompt } from "./prompt.js";
 import { explainExercise, exercisePoseFromExplanation, reconcileMarkers, settleImagingTwins, synthesizeHealth } from "./coachOps.js";
 import { GEMINI_TEXT_MODEL, clearArtFailures, enqueueExerciseArt, imageModelFor, warmExerciseArt } from "./art.js";
-import { classifyMuscleGroup, detectImplement } from "./repo/exercise-canon.js";
+import { classifyMuscleGroup, detectImplement, isPlaceholderExerciseName } from "./repo/exercise-canon.js";
 import { LB_PER_KG, localDateISO, round2_5 } from "./repo/shared.js";
 import { diagnosticErrorName, recordAsyncFailure, recordDegradedOperation } from "./diagnostics.js";
 import { safeUploadPath } from "./uploadPaths.js";
@@ -160,6 +162,7 @@ type Kind =
   | "garmin_strength"
   | "garmin_export"
   | "exercise"
+  | "exercise_profile"
   | "exercise_art"
   | "symptom"
   | "imaging_dedupe";
@@ -178,6 +181,21 @@ interface HealthSource {
 }
 
 const queue: Job[] = [];
+
+// The library's profile backfill is housekeeping: it must never delay real work. Every job that
+// is not an `exercise_profile` job goes in AHEAD of the first queued profile job (FIFO among
+// the others), and a profile job goes last, so a food note, a session's Garmin export, a
+// strength narrative or a new lift's enrichment never waits behind it. A deferred profile job
+// the drain put back at the head is "the first profile job", so work still passes it.
+function pushAheadOfProfileJobs(job: Job): void {
+  if (job.kind === "exercise_profile") {
+    queue.push(job);
+    return;
+  }
+  const at = queue.findIndex((queued) => queued.kind === "exercise_profile");
+  if (at < 0) queue.push(job);
+  else queue.splice(at, 0, job);
+}
 let draining = false;
 const idleWaiters: Array<() => void> = [];
 
@@ -194,7 +212,7 @@ export function settleStaleImagingJob(
   id: number,
   reason: "attachments_changed" | "user_state_changed",
   schedule: (job: Job) => void = (job) => {
-    if (!queue.some((queued) => queued.kind === job.kind && queued.id === job.id)) queue.push(job);
+    if (!queue.some((queued) => queued.kind === job.kind && queued.id === job.id)) pushAheadOfProfileJobs(job);
   }
 ): { status: "pending" | "retry_needed"; requeued: boolean } {
   const action = staleImagingWorkerAction(reason);
@@ -240,7 +258,7 @@ export function shouldRegenerateSynthesis(existingSynthesis: unknown): boolean {
 export function enqueueReviewRefresh(): void {
   if (!shouldEnqueueReviewRefresh(reviewQueued, healthWorkPending())) return;
   reviewQueued = true;
-  queue.push({ kind: "review", id: 0 });
+  pushAheadOfProfileJobs({ kind: "review", id: 0 });
   if (!draining) void drain();
 }
 
@@ -260,6 +278,7 @@ export const ENRICH_OPS = {
   health_review: "enrich_health_review",
   garmin_strength: "enrich_garmin_strength",
   exercise: "enrich_exercise",
+  exercise_profile: "enrich_exercise_profile",
   symptom: "enrich_symptom",
   food_photo: "enrich_food_photo",
 } as const;
@@ -455,7 +474,7 @@ function agentGarminSetInputs(parsed: any): GarminSetImportInput[] {
 export function enqueueEnrich(kind: Kind, id: number, opts: { front?: boolean } = {}): void {
   if (queue.some((job) => job.kind === kind && job.id === id)) return;
   if (!opts.front) {
-    queue.push({ kind, id });
+    pushAheadOfProfileJobs({ kind, id });
   } else {
     let at = 0;
     while (at < queue.length && queue[at].front) at++;
@@ -577,6 +596,7 @@ function markStatus(job: Job, status: string): void {
     job.kind === "garmin_strength" ||
     job.kind === "garmin_export" ||
     job.kind === "exercise_art" ||
+    job.kind === "exercise_profile" ||
     job.kind === "imaging_dedupe"
   )
     return; // no row status of their own
@@ -730,6 +750,7 @@ async function processJob(job: Job): Promise<void> {
   if (job.kind === "garmin_export") return processGarminExportJob(job.id);
   if (job.kind === "food_photo") return processFoodPhotoJob(job.id);
   if (job.kind === "exercise") return processExerciseJob(job.id);
+  if (job.kind === "exercise_profile") return processExerciseProfileJob(job.id);
   if (job.kind === "exercise_art") return processExerciseArtJob(job.id);
   if (job.kind === "symptom") return processSymptomJob(job.id);
   if (job.kind === "imaging_dedupe") return processImagingDedupeJob(job.id);
@@ -1403,6 +1424,9 @@ export function catchUpExerciseEnrichment(): number {
     )
     .all() as Array<{ id: number }>;
   for (const row of rows) queueExerciseEnrichment(Number(row.id));
+  // The library's profile backfill rides the same boot hook, after the lifts above, so the
+  // queue's own lifts are enriched (and profiled in that one call) before the rest are asked.
+  try { enqueueExerciseProfileBackfill(); } catch (e: any) { log.warn(`[enrich] exercise profile backfill not queued: ${e?.message ?? e}`); }
   return rows.length;
 }
 
@@ -1438,6 +1462,7 @@ export async function processExerciseJob(id: number): Promise<void> {
     // route keeps deferring name-only generation while the job runs.
     setExerciseEnrichStatus(id, "in_progress");
     let parsed: any = null;
+    let agentName: string | null = null;
     try {
       const fb = await runAgentWithFallback(order, buildExerciseEnrichPrompt(getExerciseDetail(ex.name)), {
         timeoutMs: ENRICH_TIMEOUT_MS,
@@ -1446,16 +1471,21 @@ export async function processExerciseJob(id: number): Promise<void> {
         op: ENRICH_OPS.exercise,
       });
       parsed = fb.result?.parsed ?? null;
+      agentName = fb.agent ?? null;
     } catch (e: any) {
       if (isAgentBusyError(e)) throw e; // the drain defers this job rather than classifying blind
       parsed = null;
     }
     if (parsed && typeof parsed === "object") {
+      // The agent's read of what the lift IS, held to the engine's vocabularies. A high-confidence
+      // primary group is offered to the same fill-only group rule below when the agent named no
+      // `muscle_group` of its own; that rule alone decides whether it lands.
+      const profile = sanitizeExerciseProfile(parsed.profile);
       // Apply the classification safely (canonical merge/rename, fill-only group/
       // equipment/mode); the returned id/name reflect any merge or rename.
       const applied = applyExerciseEnrichment(id, {
         canonical: asStr(parsed.canonical),
-        muscle_group: asStr(parsed.muscle_group ?? parsed.group),
+        muscle_group: asStr(parsed.muscle_group ?? parsed.group) ?? (profile.confidence === "high" ? profile.primary_group : null),
         mode: asStr(parsed.mode),
         equipment: asStr(parsed.equipment),
         // The FIT pair the agent chose from the candidate shortlist. applyExerciseEnrichment
@@ -1466,6 +1496,11 @@ export async function processExerciseJob(id: number): Promise<void> {
         per_side: typeof parsed.per_side === "boolean" ? parsed.per_side : null,
       });
       finalName = applied.name || finalName;
+      // After the apply: a merge or rename may have moved the row, and the profile belongs to
+      // the row that survived. A reply with no `profile` node writes nothing (the backfill asks).
+      if (parsed.profile && typeof parsed.profile === "object") {
+        try { writeExerciseProfile(applied.id, parsed.profile, { source: "agent", agent: agentName }); } catch { /* the profile is best-effort */ }
+      }
       const updated = getExercise(applied.id) as any;
       group = updated?.muscle_group ?? group;
       equipment = updated?.equipment ?? equipment;
@@ -1501,6 +1536,85 @@ export async function processExerciseJob(id: number): Promise<void> {
   // even a soft agent miss leaves a usable exercise — the guide hydrates lazily and
   // art was attempted); 'skipped' only when there was no agent at all.
   setExerciseEnrichStatus(id, order.length ? "done" : "skipped");
+}
+
+// ---- the library's exercise profiles --------------------------------------------
+// The profile (pattern, region, primary group, synergists — repo/exercise-profile.ts) is read
+// once per lift. A NEW lift gets it from the one 'exercise' call above; every lift that already
+// exists gets its own `exercise_profile` job here. The job changes NOTHING but the profile row:
+// no rename, no merge, no group, no art — an agent never rewrites the athlete's library from a
+// backfill.
+//
+// One job per lift on the same serial queue, FIFO behind everything urgent. The resume point is
+// the table itself (exerciseIdsNeedingProfile: no row at the current rules version), so the
+// backfill is idempotent (a classified lift is never listed), survives a restart (boot lists the
+// rest) and re-arms itself when EXERCISE_PROFILE_RULES_VERSION moves (boot lists every older row).
+// A lift the agent could not answer leaves no row and is offered again next boot, never failed.
+export async function processExerciseProfileJob(id: number, opts: { timeoutMs?: number } = {}): Promise<void> {
+  const ex = getExercise(id) as any;
+  if (!ex) return; // deleted while queued
+  if (!getSettings().enrich_enabled) return;
+  // A legacy placeholder row is not a movement (the writer would refuse it anyway).
+  if (isPlaceholderExerciseName(ex.name)) return;
+  // Already current (an 'exercise' enrichment landed it while this job waited): nothing to ask.
+  if (!exerciseNeedsProfile(id)) return;
+  const order = pickAgentOrderForTask("enrich");
+  if (!order.length) return; // no agent: nothing changes, boot offers it again
+  let parsed: any = null;
+  const agentName = order[0];
+  try {
+    // ONE attempt with the picked agent, on a short leash, straight through runAgent: no
+    // rotation to the other agents, no JSON-repair re-spawn, and none of the shared breaker's
+    // bookkeeping. This is housekeeping, so a prompt a provider dislikes must not trip the
+    // breaker real work depends on, nor hold a spawn permit for minutes. A failure leaves the
+    // lift without a row and a later boot offers it again.
+    const result = await runAgent(agentName, buildExerciseProfilePrompt(getExerciseDetail(ex.name)), {
+      timeoutMs: opts.timeoutMs ?? PROFILE_TIMEOUT_MS,
+      profile: executionProfileForTask("enrich"),
+      schema: EXERCISE_PROFILE_SCHEMA,
+      op: ENRICH_OPS.exercise_profile,
+    });
+    parsed = result.parsed ?? null;
+  } catch (e: any) {
+    // Congestion, never a bad job: the drain puts it back and rests the lane.
+    if (isAgentBusyError(e)) throw e;
+    log.warn(`[enrich] exercise_profile#${id}: the agent did not answer.`);
+    return;
+  }
+  if (!parsed || typeof parsed !== "object") return;
+  // The reply may carry the profile at the top level (this prompt) or under `profile` (the
+  // 'exercise' reply's shape); either is read the same way.
+  const raw = parsed.profile && typeof parsed.profile === "object" ? parsed.profile : parsed;
+  writeExerciseProfile(id, raw, { source: "agent", agent: agentName });
+}
+
+/** How many lifts one boot queues. The rest wait for a later boot: the library is never profiled in one burst. */
+export const EXERCISE_PROFILE_BACKFILL_PER_BOOT = 12;
+// A housekeeping call gets a short leash, well under the 120 s the user-facing enrichment has.
+const PROFILE_TIMEOUT_MS = 60_000;
+
+/**
+ * Queue profile jobs for the lifts the athlete trains or plans that lack a current profile, the
+ * plan first and then the most recently trained, at most EXERCISE_PROFILE_BACKFILL_PER_BOOT of
+ * them. Idempotent (a queued lift is not queued twice; a classified one is not listed) and
+ * silent when there is nothing to do: with enrichment off or no usable agent it queues nothing
+ * and changes nothing. Returns the number newly queued. Called once at boot after the queue is
+ * up (catchUpExerciseEnrichment); profile jobs always queue BEHIND every other kind
+ * (pushAheadOfProfileJobs).
+ */
+export function enqueueExerciseProfileBackfill(limit: number = EXERCISE_PROFILE_BACKFILL_PER_BOOT): number {
+  if (!getSettings().enrich_enabled) return 0;
+  // Asked BEFORE queueing, without picking an order: pickAgentOrderForTask advances the
+  // round-robin cursor, which a boot with no agent must not burn for a phantom invocation.
+  if (!getAgentConfig({ loginProbe: "peek" }).some((a: any) => a.usable)) return 0;
+  let queued = 0;
+  for (const id of exerciseIdsNeedingProfile(undefined, limit)) {
+    if (queue.some((job) => job.kind === "exercise_profile" && job.id === id)) continue;
+    enqueueEnrich("exercise_profile", id);
+    queued += 1;
+  }
+  if (queued) log.info(`[enrich] exercise profile backfill: ${queued} lift(s) queued.`);
+  return queued;
 }
 
 // Light producer: pose-aware art for an existing movement, no agent, no rename.

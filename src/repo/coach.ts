@@ -580,7 +580,11 @@ function programStateForCoach(st: ProgramState): CoachProgramState {
   return {
     headline: st.headline,
     discipline: st.discipline,
-    lifts: (Array.isArray(st.lifts) ? st.lifts : []).slice(0, 14).map((l: any) => ({
+    // A lift out of the rotation makes no claim, so it is not handed to the coach at all.
+    lifts: (Array.isArray(st.lifts) ? st.lifts : [])
+      .filter((l: any) => l?.resting !== true)
+      .slice(0, 14)
+      .map((l: any) => ({
       exercise: l.exercise,
       muscle_group: l.muscle_group,
       mode: l.mode,

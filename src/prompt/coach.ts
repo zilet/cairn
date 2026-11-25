@@ -206,8 +206,10 @@ export function buildProgramEvolutionPrompt(userInstruction?: string, state?: an
   // Concrete variation candidates for any stalled lift, so "rotate a variation"
   // is actionable — the agent gets real same-pattern options to choose from
   // (it still respects constraint_notes/injuries and starts light).
+  // A resting lift (off the plan, not trained lately) is out of the rotation: never a
+  // stall to rotate away from.
   const stalled = (Array.isArray(state.lifts) ? state.lifts : []).filter(
-    (l: any) => l.status === "plateaued" || l.suggested_action === "vary"
+    (l: any) => l.resting !== true && (l.status === "plateaued" || l.suggested_action === "vary")
   );
   const injuryAreas = activeInjuryAreas(ctx);
   // Rank candidates by the user's available equipment + a bias toward heavier

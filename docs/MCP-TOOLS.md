@@ -6,7 +6,7 @@ Cairn serves an MCP server at **`/mcp`** (Streamable HTTP). These tools are thin
 wrappers over the same `src/repo.ts` layer the REST API uses. When `CAIRN_AUTH_TOKEN`
 is set, `/mcp` requires the token (`Authorization: Bearer …`).
 
-**325 tools.**
+**326 tools.**
 
 | Tool | Description |
 |---|---|
@@ -178,6 +178,7 @@ is set, `/mcp` requires the token (`Authorization: Bearer …`).
 | `get_session_highlights` | Evidence of forward motion for one logged session: any PRs set (a new best est-1RM, or a longer timed hold), how each exercise compares to its previous session (delta + direction), and a small trailing-7-day rollup (new bests, days trained). Read-only and factual. An unknown session id returns null. |
 | `get_session_primer` | Read the deterministic pre-session primer for a day — why today's session is what it is (from the Brief), what changed since last time, what to watch, and what's deliberately fresh. Returns immediately (no agent). null when there's nothing worth saying beyond the Brief. |
 | `get_settings` | Get app settings: agent selection strategy (round_robin/random/priority), agent order, disabled agents, per-task route metadata, the timezone-aware weekly background-review cadence, and Garmin sync status (garmin_last_sync_at/garmin_last_sync_status). `units` is the units registry (distance km\|mi as run_units, weight lb\|kg as weight_units) with the current choice. `settings.lab_units` is the explicit lab-value system (us\|si, null = automatic) and `settings.lab_units_effective` the system lab values are shown in right now. `settings.model_class_bindings` is the model per provider and class (fast\|deep\|coach) and `settings.agent_class_order` the agents tried first per class (except on chat's coach/deep lanes, where a natively-reading agent goes first; name an agent or pin the chat route to override). Includes the merged agent list. |
+| `get_strength_capability` | How strength is moving, per MOVEMENT (squat, hinge, press, pull, isolation regions) and per MUSCLE group, with the single lifts as the evidence underneath. Directional words only (climbing / holding / slipping / not enough yet) plus one plain sentence each, never a score or a grade; a flat movement during a cut, a run build or a recovery week says so. {available:false} when the read could not be made. |
 | `get_strength_journey` | Read the athlete-selected anchor-lift comeback journey: exact-lift history, current/best/baseline/gap/trend, safe next prescription, support roles, and a conditional wide projection. When no objective exists yet, folds in a reachable anchor suggestion. Read-only; never selects a goal. |
 | `get_strength_journeys` | Read EVERY anchor-lift comeback journey the athlete currently holds, one per active objective. An athlete rebuilding several lifts in parallel has several active anchors (one per lift); get_strength_journey answers only for the most recently chosen one. Read-only. |
 | `get_strength_schedule` | The athlete's stated LIFTING weekdays. days[] is {dow: 0-6 (0=Sunday)} — no kind, because which split lands on which day is the plan's business, not the schedule's. When set, the weekday ring lays the plan's strength days onto exactly these weekdays and never puts one on an unstated weekday. null when unset. |

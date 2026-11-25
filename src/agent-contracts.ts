@@ -1632,10 +1632,44 @@ export const GARMIN_STRENGTH_SCHEMA: JsonSchema = {
 // garmin_category / garmin_exercise must be copied VERBATIM from the shortlist the
 // prompt supplies, so they stay open strings — the candidate set is per-call and an
 // enum here would have to be built per prompt.
+//
+// The `profile` node is the agent's reading of what the lift IS (repo/exercise-profile.ts).
+// Its vocabularies stay open strings here on purpose: the prose twin lists them, the writer
+// (sanitizeExerciseProfile) drops anything outside the engine's own tables, and a nullable enum
+// is the construct an enforcing backend is most likely to reject (see CONFIDENCE_SCHEMA). Every
+// field the writer reads is named, because constrained decoding drops what a schema omits.
+const EXERCISE_PROFILE_PROPERTIES: Record<string, JsonSchema> = {
+  pattern: { type: ["string", "null"] },
+  region: { type: ["string", "null"] },
+  primary_group: { type: ["string", "null"] },
+  secondary: {
+    type: ["array", "null"],
+    items: {
+      type: "object",
+      additionalProperties: true,
+      properties: {
+        group: { type: "string" },
+        share: { type: "number" },
+      },
+    },
+  },
+  length_bias: { type: ["string", "null"] },
+  compound: { type: ["boolean", "null"] },
+  confidence: { type: ["string", "null"] },
+};
+
+/** The profile alone: what the profile-only backfill job asks for. */
+export const EXERCISE_PROFILE_SCHEMA: JsonSchema = {
+  type: "object",
+  additionalProperties: true,
+  properties: EXERCISE_PROFILE_PROPERTIES,
+};
+
 export const EXERCISE_ENRICH_SCHEMA: JsonSchema = {
   type: "object",
   additionalProperties: true,
   properties: {
+    profile: { type: ["object", "null"], additionalProperties: true, properties: EXERCISE_PROFILE_PROPERTIES },
     canonical: { type: ["string", "null"] },
     // The applier reads `muscle_group ?? group`; both spellings are named so
     // whichever the model reaches for lands in a slot the decoder keeps.

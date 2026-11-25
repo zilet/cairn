@@ -28,6 +28,7 @@ import {
 } from "./exercise-canon.js";
 import { effectiveVolumeByGroup, type VolumeSet } from "./exercise-variations.js";
 import { primaryMuscleGroup } from "./muscle-credit.js";
+import { movementRegionKey } from "./movement-region.js";
 import {
   dowToDayNumber,
   effectiveGoalMode,
@@ -150,12 +151,21 @@ export interface LiftState {
   family_key: string; // movementKey — re-implemented siblings ("Barbell/DB Bench Press") share it
   family_label: string; // title-cased family_key, for grouping the read
   last_trained: string | null; // ISO date of the most recent loaded session for this lift
+  // On the plan now: the lift's own row, a resolver alias of it, or a sibling sharing its
+  // movement key (a gym-floor swap of implement keeps the family on the plan). False when
+  // the plan could not be read.
+  in_plan: boolean;
+  // Out of the rotation: not on the plan AND not trained inside LIFT_CURRENT_WINDOW_DAYS.
+  // A resting lift keeps its row (history is history) but makes no claim: status "new",
+  // a hold, no stall tells. Nothing that counts lifts as evidence counts it.
+  resting: boolean;
 }
 
-// The grade functions produce everything EXCEPT the family/recency fields, which
-// liftStates stitches on afterward (it holds the source name + last date). Keeping
-// the split here means the graders never have to know how the read is grouped.
-type GradedLift = Omit<LiftState, "family_key" | "family_label" | "last_trained">;
+// The grade functions produce everything EXCEPT the family/recency/rotation fields,
+// which liftStates stitches on afterward (it holds the source name + last date + the
+// plan read). Keeping the split here means the graders never have to know how the
+// read is grouped.
+type GradedLift = Omit<LiftState, "family_key" | "family_label" | "last_trained" | "in_plan" | "resting">;
 
 // Placeholder exercise names a legacy import once wrote (a Garmin strength set with
 // no detected movement landed as "Unknown"; today's importer parks such a set instead).
@@ -707,6 +717,75 @@ export function liftTrainedRecently(lift: { last_trained?: string | null } | nul
   return age != null && age <= LIFT_CURRENT_WINDOW_DAYS;
 }
 
+// The rotation's voice for a lift that makes no present claim — variant sets, rotated by
+// calendar day and keyed by lift, so a long-resting lift never prints one literal for weeks.
+export const RESTING_LIFT_WHY_VARIANTS = [
+  "Not in the rotation now — off the plan and not trained lately, so there is nothing current to read.",
+  "Resting: not on the plan and not trained lately. It gets a fresh read if it comes back.",
+  "Not part of the current rotation, so no call on it — it reads again once it is back in the work.",
+  "Off the plan and not trained lately — a lift you are not doing is not stalling.",
+] as const;
+
+export const AWAITING_EXPOSURE_WHY_VARIANTS = [
+  "On the plan but not trained lately — its next session sets a fresh starting point before any trend is read.",
+  "Not trained lately — no current trend to read; the next session sets where it stands now.",
+  "Back in the rotation soon — it reads again from its next session, not the old ones.",
+  "On the plan, not trained in a while: the next session is the fresh read, the older ones are history.",
+] as const;
+
+interface PlanLiftIndex {
+  ids: Set<number>; // plan items' exercise rows, and the rows their names resolve to
+  keys: Set<string>; // resolver identity keys (resolveExerciseName(...).key)
+  families: Set<string>; // movement keys — the same family the read groups by
+}
+
+// What is on the plan NOW, as identities — resolved through the one exercise resolver,
+// never compared as raw names. null when the plan cannot be read: the caller then fails
+// toward silence (a stale lift rests rather than being graded off old evidence).
+function planLiftIndex(): PlanLiftIndex | null {
+  try {
+    const rows = db
+      .prepare(
+        `SELECT DISTINCT e.id AS id, e.name AS name
+           FROM plan_items pi JOIN exercises e ON e.id = pi.exercise_id
+          WHERE pi.exercise_id IS NOT NULL AND COALESCE(pi.kind, 'strength') != 'cardio'`
+      )
+      .all() as Array<{ id: number; name: string }>;
+    const index: PlanLiftIndex = { ids: new Set(), keys: new Set(), families: new Set() };
+    for (const row of rows) {
+      const name = String(row.name ?? "");
+      index.ids.add(Number(row.id));
+      const resolved = resolveExerciseName(name);
+      if (resolved.exercise_id != null) index.ids.add(Number(resolved.exercise_id));
+      if (resolved.key) index.keys.add(resolved.key);
+      for (const n of [name, resolved.canonical]) {
+        const family = movementKey(n) || normalizeExerciseName(n);
+        if (family) index.families.add(family);
+      }
+    }
+    return index;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Where a lift sits in the rotation. Not currently trained is never a trend: the lift
+ * has no present slope, and its next session is where it stands now (`stale`). Off the
+ * plan as well, it is RESTING — out of the rotation, counted by nothing that reads lifts
+ * as evidence. On the plan, a stall or slide awaits a fresh exposure. `onPlan` null means the plan
+ * could not be read: that fails toward silence — in_plan false, so a stale lift rests.
+ */
+export function liftRotation(
+  lastTrained: string | null,
+  onPlan: boolean | null,
+  asOf: string
+): { in_plan: boolean; resting: boolean; stale: boolean } {
+  const in_plan = onPlan === true;
+  const stale = !liftTrainedRecently({ last_trained: lastTrained }, asOf);
+  return { in_plan, resting: stale && !in_plan, stale };
+}
+
 function liftStates(date: string): LiftState[] {
   // Lifts with real logged history (a reps lift needs logged reps; a timed lift
   // needs duration). One row per exercise, newest activity first. A bodyweight rep
@@ -729,6 +808,9 @@ function liftStates(date: string): LiftState[] {
 
   // When each movement's plan slot was prescribed — ONE read (prescription-authorship.ts).
   const slots = newestSlotByExercise();
+  // What the athlete is doing now. He substitutes freely at the gym, so a lift that is
+  // neither on the plan nor trained lately is out of the rotation — not "stalled".
+  const plan = planLiftIndex();
   const out: LiftState[] = [];
   for (const e of exs) {
     const name = String(e.name);
@@ -737,9 +819,18 @@ function liftStates(date: string): LiftState[] {
     if (!graded) continue;
     const family_key = movementKey(name) || normalizeExerciseName(name);
     const last_trained = e.last_date ? String(e.last_date) : null;
-    // Not currently trained is never "regressing": the lift has no present trend,
-    // and it re-baselines when it comes back into the rotation.
-    const dormant = graded.status === "regressing" && !liftTrainedRecently({ last_trained }, date);
+    const resolved = resolveExerciseName(name);
+    // A stale lift reads no plateau or slide off old sessions (liftRotation says why).
+    const { in_plan, resting, stale } = liftRotation(
+      last_trained,
+      plan == null
+        ? null
+        : plan.ids.has(Number(e.id)) ||
+            (resolved.exercise_id != null && plan.ids.has(Number(resolved.exercise_id))) ||
+            plan.keys.has(resolved.key) ||
+            plan.families.has(family_key),
+      date
+    );
     // A stall or a slide measured across a RE-PRESCRIPTION is not this prescription's
     // trend: a slot written after the lift was last trained has nothing of its own to
     // read yet, and a freshly written one is not "flat" on weeks of the old one. (A
@@ -755,16 +846,24 @@ function liftStates(date: string): LiftState[] {
       date
     );
     const represcribed =
-      !dormant &&
+      !stale &&
       ((authorship.untested && (graded.status === "plateaued" || graded.status === "regressing")) ||
         (authorship.fresh && graded.status === "plateaued"));
+    // On the plan but stale: a stall or a slide read off old sessions is no present
+    // claim, so it awaits a fresh exposure. (A stale climb keeps its grade — the
+    // prescription already re-bases a lift that left the rotation, progression.ts.)
+    const awaiting = stale && !resting && (graded.status === "plateaued" || graded.status === "regressing");
     out.push({
       ...graded,
-      ...(dormant
+      ...(resting || awaiting
         ? {
             status: "new" as const,
             suggested_action: "hold" as const,
-            why: "Not trained lately — no current trend to read; it re-baselines when it's back in the rotation.",
+            stall_signals: [],
+            weeks_static: null,
+            why: resting
+              ? pickDayVariant(RESTING_LIFT_WHY_VARIANTS, date, `lift-resting:${family_key}`)
+              : pickDayVariant(AWAITING_EXPOSURE_WHY_VARIANTS, date, `lift-awaiting:${family_key}`),
           }
         : {}),
       ...(represcribed
@@ -778,6 +877,8 @@ function liftStates(date: string): LiftState[] {
       family_key,
       family_label: familyLabelFromKey(family_key),
       last_trained,
+      in_plan,
+      resting,
     });
   }
   return out;
@@ -1059,13 +1160,49 @@ function decisionGradeRecoveryDrifting(recovery: any): boolean {
   return hrvDown || rhrUp;
 }
 
+// How many INDEPENDENT lifts a set of lifts is. Two lifts sharing a movement family
+// (family_key — "Cable / Rope Pushdown") or a movement region (movement-region.ts — a rope
+// and a bar pushdown, a flat dumbbell and barbell bench) are the same stimulus, so they
+// are one witness; the grouping is transitive. A big compound with no region still folds
+// with its own family.
+export function regressionWitnessCount(
+  lifts: ReadonlyArray<Pick<LiftState, "exercise"> & Partial<Pick<LiftState, "family_key" | "muscle_group">>>
+): number {
+  const parent = lifts.map((_, i) => i);
+  const find = (i: number): number => {
+    while (parent[i] !== i) {
+      parent[i] = parent[parent[i]];
+      i = parent[i];
+    }
+    return i;
+  };
+  const owner = new Map<string, number>();
+  lifts.forEach((lift, i) => {
+    const name = String(lift?.exercise ?? "");
+    const family = String(lift?.family_key || movementKey(name) || normalizeExerciseName(name));
+    const region = movementRegionKey(name, lift?.muscle_group ?? null);
+    for (const key of [family ? `family:${family}` : null, region ? `region:${region}` : null]) {
+      if (!key) continue;
+      const seen = owner.get(key);
+      if (seen == null) owner.set(key, i);
+      else parent[find(i)] = find(seen);
+    }
+  });
+  return new Set(lifts.map((_, i) => find(i))).size;
+}
+
 // Exported for the morning read (morning-dose.ts): a sustained HRV decline rests the day
 // only beside THIS shortfall — the same log-confirmed one the deload read uses.
 export function logConfirmedFatigue(
   date: string,
   lifts: LiftState[]
 ): { high: boolean; reasons: string[] } {
-  const regressing = (Array.isArray(lifts) ? lifts : []).filter((lift) => lift?.status === "regressing");
+  // A resting lift is no witness (it is out of the rotation), and near-variants of one
+  // movement are ONE witness: two noisy pressdowns slipping together are one slide.
+  const regressing = (Array.isArray(lifts) ? lifts : []).filter(
+    (lift) => lift?.status === "regressing" && lift?.resting !== true
+  );
+  const witnesses = regressionWitnessCount(regressing);
   let shortfallSessions = 0;
   try {
     shortfallSessions = countComparableDoseShortfallSessions(date, 14);
@@ -1073,7 +1210,7 @@ export function logConfirmedFatigue(
     shortfallSessions = 0;
   }
   const reasons: string[] = [];
-  if (regressing.length >= 2) reasons.push("a couple of lifts are drifting down");
+  if (witnesses >= 2) reasons.push("a couple of lifts are drifting down");
   if (shortfallSessions >= 2) reasons.push("recent sessions came in short of what was prescribed");
   return { high: reasons.length > 0, reasons };
 }
@@ -1907,6 +2044,15 @@ function getProgramStateCached(date?: string, recovery?: any): ProgramState {
   return structuredClone(value);
 }
 
+// The headline when lifts are on record but none was trained inside the current window:
+// there is no present trend to tally, and "everything's holding steady" would be a claim.
+export const NOTHING_CURRENT_HEADLINE_VARIANTS = [
+  "Nothing has been trained lately — the next sessions set where each lift stands now.",
+  "No lift has been trained lately, so there is no current trend to read yet.",
+  "The lifts read again from their next sessions — nothing recent to go on right now.",
+  "Nothing current on the log — the read picks up as soon as training does.",
+] as const;
+
 function computeProgramState(date?: string, recovery?: any): ProgramState {
   const d = date || localDateISO();
   const discipline = getPrimaryDiscipline();
@@ -1926,9 +2072,13 @@ function computeProgramState(date?: string, recovery?: any): ProgramState {
   const adaptations: string[] = [];
   if (recoveryWeek)
     adaptations.push("Continue the reduced recovery-week sessions; resume progression after the week has absorbed.");
-  const plateaued = lifts.filter((l) => l.status === "plateaued");
-  const progressing = lifts.filter((l) => l.status === "progressing");
-  const regressing = lifts.filter((l) => l.status === "regressing");
+  // Only lifts in the rotation speak here: a resting lift (off the plan, not trained
+  // lately) is neither a stall to rotate nor a slide to back off, and it never counts
+  // in the headline's tally.
+  const active = lifts.filter((l) => !l.resting);
+  const plateaued = active.filter((l) => l.status === "plateaued");
+  const progressing = active.filter((l) => l.status === "progressing");
+  const regressing = active.filter((l) => l.status === "regressing");
   for (const l of plateaued) {
     adaptations.push(
       l.suggested_action === "vary"
@@ -2014,9 +2164,11 @@ function computeProgramState(date?: string, recovery?: any): ProgramState {
     ? "Recovery week is active — keep the training rhythm and let the reduced dose absorb."
     : parts.length
       ? `${parts.join(", ")}${meso.phase === "deload-due" ? "; a deload's about due" : ""}.`
-      : lifts.length
+      : active.some((l) => liftTrainedRecently(l, d) || l.status !== "new")
         ? "Everything's holding steady — room for a deliberate push."
-        : "Not enough logged yet to read your program — keep training and it'll come into focus.";
+        : lifts.length
+          ? pickDayVariant(NOTHING_CURRENT_HEADLINE_VARIANTS, d, "program-nothing-current")
+          : "Not enough logged yet to read your program — keep training and it'll come into focus.";
 
   return {
     generated_for: d,

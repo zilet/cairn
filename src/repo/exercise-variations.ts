@@ -1,6 +1,7 @@
 // exercise-variations.ts — deterministic, pure exercise variation/alternatives library.
 // No DB writes, no agent calls. All logic is keyword-based classification + curated data.
 import type { MuscleGroup } from "./exercise-canon.js";
+import { appliedProfileFor } from "./exercise-profile-lookup.js";
 import { isCountedShare, muscleCreditsShared } from "./muscle-credit.js";
 import { plausibleRir } from "../lib/numbers.js";
 import { WARMUP_LOAD_FRACTION } from "./outcome-comparability.js";
@@ -37,6 +38,35 @@ export type MovementPattern =
   // Prep — never working volume (canon's `mobility` group is non-counting), but a
   // cat-cow still has close relatives to swap to.
   | "mobility";
+
+// Every pattern the engine knows, as a value list (the profile's vocabulary check). A Record
+// keyed by the union makes a pattern added to the union without a row here a compile error.
+const PATTERN_VOCABULARY: Record<MovementPattern, true> = {
+  squat: true,
+  hinge: true,
+  "horizontal-push": true,
+  "vertical-push": true,
+  "horizontal-pull": true,
+  "vertical-pull": true,
+  lunge: true,
+  "hip-extension": true,
+  calf: true,
+  core: true,
+  carry: true,
+  curl: true,
+  triceps: true,
+  "lateral-raise": true,
+  "rear-delt": true,
+  shrug: true,
+  tibialis: true,
+  abduction: true,
+  mobility: true,
+};
+export const MOVEMENT_PATTERNS: readonly MovementPattern[] = Object.keys(PATTERN_VOCABULARY) as MovementPattern[];
+
+export function isMovementPattern(value: unknown): value is MovementPattern {
+  return typeof value === "string" && Object.hasOwn(PATTERN_VOCABULARY, value);
+}
 
 export interface ExerciseVariation {
   name: string;
@@ -383,6 +413,34 @@ const CLASSIFIED_CACHE_MAX = 4096;
 const classifiedPatterns = new Map<string, MovementPattern | null>();
 
 export function classifyPattern(
+  exerciseName: string,
+  muscleGroup?: string,
+  opts?: ClassifyPatternOptions,
+): MovementPattern | null {
+  const curated = classifyPatternCurated(exerciseName, muscleGroup);
+  if (curated !== null || !opts?.profile) return curated;
+  return profilePattern(exerciseName);
+}
+
+/** How classifyPattern may be asked. */
+export interface ClassifyPatternOptions {
+  /**
+   * Fill a name the curated rules and the group hint leave unclassified from the agent's exercise
+   * profile (repo/exercise-profile.ts). OFF by default: a newly classified lift changes which
+   * reads include it (reach hosts, supersets, hold progression, plan checks), so only a
+   * progress/credit read opts in. A curated answer is never replaced either way.
+   */
+  profile?: boolean;
+}
+
+function profilePattern(exerciseName: string): MovementPattern | null {
+  if (typeof exerciseName !== "string") return null;
+  const pattern = appliedProfileFor(exerciseName)?.pattern;
+  return isMovementPattern(pattern) ? pattern : null;
+}
+
+/** The curated answer alone: name rules, then the stored-group hint. Never reads a profile. */
+export function classifyPatternCurated(
   exerciseName: string,
   muscleGroup?: string,
 ): MovementPattern | null {

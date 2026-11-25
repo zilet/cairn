@@ -3,6 +3,7 @@
 // Imported from the module, not the repo barrel: the mapper is pure (a static FIT
 // catalog + token math, no db), so the prompt layer can ask it directly.
 import { garminCandidatesForPrompt, mapExerciseToGarmin } from "../repo/garmin-exercise-map.js";
+import { PROFILE_VOCABULARY } from "../repo/exercise-profile.js";
 import { localDateISO } from "../repo/shared.js";
 import { CAIRN_PERSONA, renderJsonContract } from "./shared.js";
 
@@ -130,7 +131,32 @@ ${JSON.stringify(ex)}`;
 // tidies metadata — it NEVER touches logged numbers, and it must NOT turn the
 // movement into a different exercise (a different implement/angle/grip IS a
 // different exercise). The apply path is conservative (fills gaps, never clobbers).
+const EXERCISE_PROFILE_FIELDS = `{
+  "pattern": "<ONE movement pattern from PATTERNS that this lift belongs to — or null if none fits>",
+  "region": "<ONE region from REGIONS when the lift sits in one (a press angle, a curl grip, a triceps position, a calf type…) — or null when it sits in none>",
+  "primary_group": "<ONE group from GROUPS: the muscle that does most of the work — or null if genuinely unclear>",
+  "secondary": [{"group": "<ONE group from GROUPS that works as a synergist>", "share": <0.5 for a real second mover, 0.25 for a muscle that is only touched>}],
+  "length_bias": "<lengthened when the hardest part of the rep loads the muscle stretched, shortened when it loads the muscle contracted, mid otherwise — or null>",
+  "compound": <true for a multi-joint lift, false for a single-joint one, null if unclear>,
+  "confidence": "<high when you are sure of this exact movement, medium when likely, low when guessing>"
+}`;
+
+// The vocabularies and rules the profile is held to. The lists come from the engine's own
+// tables, so the prompt can never offer a value the writer would drop.
+function exerciseProfileRules(): string {
+  return `PROFILE (what this lift IS, so the app can credit the right muscles and read its progress):
+- "pattern" must be ONE of PATTERNS, "region" ONE of REGIONS, every group ONE of GROUPS. NEVER invent a value; an unknown one is discarded. null is a good answer where nothing fits.
+- Describe THIS exact movement (its implement, angle, grip), not the family it resembles. A close-grip bench press is a triceps-led press, not a chest fly.
+- "secondary": at most four muscles, never the primary, each with share 0.5 or 0.25 only. Single-joint lifts usually have none.
+- "confidence" is honest: low is a fine answer and is never applied; only medium and high are.
+
+PATTERNS: ${PROFILE_VOCABULARY.patterns.join(", ")}
+REGIONS: ${PROFILE_VOCABULARY.regions.join(", ")}
+GROUPS: ${PROFILE_VOCABULARY.groups.join(", ")}`;
+}
+
 const EXERCISE_ENRICH_SCHEMA = `{
+  "profile": ${EXERCISE_PROFILE_FIELDS.replace(/\n/g, "\n  ")},
   "canonical": "<the clean, canonical Title-Case name of THIS SAME movement (fix casing/typos/junk, keep the implement + angle); return it unchanged if already clean>",
   "muscle_group": "<primary muscle group, ONE of: chest, back, shoulders, biceps, triceps, quads, hamstrings, glutes, calves, core, forearms, rear delts, mobility — or null if genuinely unclear>",
   "mode": "reps|timed",
@@ -180,7 +206,10 @@ RULES:
   • Pick the candidate that is the SAME movement. A different implement or angle is a different movement: prefer the candidate whose implement matches, and if only the general family matches, return that candidate's category with "garmin_exercise": null.
   • If NONE of the candidates is this movement, return null for BOTH. That is a perfectly good answer — a wrong match is worse than no match.
 ${suggestion.confidence === "none" ? "  • The offline mapper could not place this one, so your read matters here." : `  • The offline mapper already suggests {"category":${JSON.stringify(suggestion.category)},"exercise":${JSON.stringify(suggestion.exercise)}} (${suggestion.confidence} match). Confirm it, or choose a better candidate.`}
+- "profile": the lift's movement pattern, region, primary muscle and synergists — see PROFILE below.
 - Plain words, no scores. Informational only; never diagnose or make clinical claims.
+
+${exerciseProfileRules()}
 
 ${renderJsonContract(EXERCISE_ENRICH_SCHEMA)}
 
@@ -189,6 +218,29 @@ ${JSON.stringify(ex)}
 
 GARMIN_CANDIDATES:
 ${JSON.stringify(candidates)}`;
+}
+
+// The profile alone, for the backfill of lifts that already exist (src/enrich.ts
+// `exercise_profile` job). Nothing here may rename, merge or regroup a lift: the one thing it
+// returns is the profile, and the writer holds it to the engine's vocabularies.
+export function buildExerciseProfilePrompt(detail: any): string {
+  const ex = {
+    name: detail?.name ?? "",
+    muscle_group: detail?.muscle_group ?? null,
+    mode: detail?.mode ?? "reps",
+    equipment: detail?.equipment ?? null,
+    // Deliberately no constraint_note: it can hold pain or injury text, and a lift's mechanics
+    // do not depend on it.
+  };
+  return `You are a strength-training data librarian. Describe ONE exercise from a user's log so the app can credit the right muscles and read their strength progress. Do NOT rename it or substitute a different exercise.
+
+${exerciseProfileRules()}
+- Plain words, no scores. Informational only; never diagnose or make clinical claims.
+
+${renderJsonContract(EXERCISE_PROFILE_FIELDS)}
+
+EXERCISE:
+${JSON.stringify(ex)}`;
 }
 
 // Agentic exercise reconciliation — the clean-naming layer over the deterministic

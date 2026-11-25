@@ -218,3 +218,22 @@ test("progress program summary renders volume, mesocycle, and adaptations safely
   assert.match(adaptations, /Add core &lt;carry&gt;/);
   assert.doesNotMatch(`${volume}${meso}${adaptations}`, /<push>|<script>|<then deload>|<carry>|<angle>/);
 });
+
+test("a resting lift is labelled resting, never 'building baseline', and stays out of the highlight sections", () => {
+  const summary = loadProgramSummaryClient();
+  assert.equal(summary.liftStatusWord({ status: "new", resting: true }), "resting");
+  assert.equal(summary.liftStatusWord({ status: "new", resting: false }), "building baseline");
+  assert.equal(summary.liftStatusWord({ status: "new" }), "building baseline", "an older read without the flag is unchanged");
+
+  const lifts = [
+    liftFixture({ exercise: "Climber", status: "progressing", trend_per_wk: 2, family_key: "climber", family_label: "Climber" }),
+    liftFixture({ exercise: "Dormant Row", status: "new", resting: true, in_plan: false, family_key: "dormant", family_label: "Dormant Row", last_trained: "2026-05-01" }),
+  ];
+  assert.deepEqual(summary.needsLookLifts(lifts), []);
+  assert.deepEqual(summary.climbingLifts(lifts).map((l) => l.exercise), ["Climber"]);
+  const html = summary.curatedLiftsHtml(lifts);
+  assert.match(html, /Dormant Row/);
+  assert.match(html, /resting/);
+  assert.doesNotMatch(html, /building baseline/);
+  assert.ok(html.indexOf("Everything you train") < html.indexOf("Dormant Row"), "it lives under everything he trains");
+});

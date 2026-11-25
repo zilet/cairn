@@ -178,6 +178,7 @@ export function supportWorkRead(date?: string, opts: { programState?: any } = {}
   const out: SupportWorkEntry[] = [];
   for (const lift of lifts) {
     if (lift?.status !== "plateaued" && lift?.status !== "regressing") continue;
+    if (lift?.resting === true) continue; // out of the rotation: no weak link to build for it
     const support = matchSupport(String(lift.exercise ?? ""));
     if (!support) continue;
 

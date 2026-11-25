@@ -1722,6 +1722,14 @@ export function startScheduler() {
           recordSchedulerFailure("exercise_reconciliation", e);
           log.error(`[memory] nightly exercise tidy failed`, { error: e });
         }
+        // 3b. The exercise-profile backfill takes its next few lifts (capped, idempotent, and
+        //     it never queues ahead of other enrichment work).
+        try {
+          const { enqueueExerciseProfileBackfill } = await import("./enrich.js");
+          enqueueExerciseProfileBackfill();
+        } catch (e: any) {
+          log.error(`[memory] nightly exercise-profile backfill failed to queue`, { error: e });
+        }
         // 4. Storage housekeeping (deterministic). Old Garmin payloads lose the
         //    per-minute series nothing reads back (repo/garmin-raw-compaction.ts), and
         //    finished agent-job rows past retention go — boot used to be the only prune,

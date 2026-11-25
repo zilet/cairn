@@ -39,7 +39,7 @@ import {
 import { raceDays } from "../../domain/training/race-days.js";
 import { programBalanceRead } from "../../repo/program-balance-read.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
-import { flexibleTrainingAgenda } from "../../repo.js";
+import { capabilityRead, flexibleTrainingAgenda } from "../../repo.js";
 
 export function registerProgramTools(server: McpToolRegistrar) {
   server.tool(
@@ -359,6 +359,13 @@ export function registerProgramTools(server: McpToolRegistrar) {
     "Per-canonical-muscle-group ADVANCING vs STALLING read (the user's own mental model) — folds each group's member-lift statuses + its volume band/trend into one plain verdict (advancing/stalling/building/maintaining), and for a stalling group names the lead stalled lift + a MENU of same-pattern variations to rotate in. {available:false} when nothing's logged.",
     { date: z.string().optional() },
     async ({ date }) => asText(muscleGroupTrajectory(date))
+  );
+
+  server.tool(
+    "get_strength_capability",
+    "How strength is moving, per MOVEMENT (squat, hinge, press, pull, isolation regions) and per MUSCLE group, with the single lifts as the evidence underneath. Directional words only (climbing / holding / slipping / not enough yet) plus one plain sentence each, never a score or a grade; a flat movement during a cut, a run build or a recovery week says so. {available:false} when the read could not be made.",
+    { date: z.string().optional() },
+    async ({ date }) => asText(capabilityRead(date))
   );
 
   server.tool(

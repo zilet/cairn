@@ -504,11 +504,11 @@ function paintProgressProgramBody(data: ProgressProgramState, deps: ClientProgre
 
   // The lift count ("Fifteen lifts, all climbing.") reads under the week, over the lifts it counts.
   const heroVoice = programHeroVoice(lifts, deps.countWord);
-  const liftsVoiceHtml = heroVoice
+  const liftsVoiceHtml = `<div id="progCapSlot"></div>` + (heroVoice
     ? `<div class="prog-lifts-voice reveal" style="${stagger(3)}"><h2 class="prog-lifts-line">${escHtml(heroVoice.line)}</h2>${
         heroVoice.fact ? `<div class="prog-lifts-fact lbl">${escHtml(heroVoice.fact)}</div>` : ""
       }</div>`
-    : "";
+    : "");
 
   const conductor = CairnProgressFocus.cardHtml();
   const hasConductor = !!conductor;
@@ -613,7 +613,7 @@ function paintProgressProgramBody(data: ProgressProgramState, deps: ClientProgre
   wireGuides(deps.view);
 
   void loadStrengthJourney(deps);
-
+  if (typeof loadCapability === "function") void loadCapability();
   const evolveBtn = deps.view.querySelector("#progEvolveBtn");
   if (evolveBtn)
     evolveBtn.addEventListener("click", () => {
