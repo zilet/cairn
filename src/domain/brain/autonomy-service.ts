@@ -135,6 +135,12 @@ import { getSessionByDate } from "../../repo/sessions.js";
 import { activeCompositionPlanDayNumber, refreshPreparedDayForPlanChange } from "../../repo/adaptive-session.js";
 import { COVERAGE_AGENT, coverageAddsLift, coverageChangeStillFits } from "../../repo/plan-coverage.js";
 import {
+  fuelRecoveryWeekStillStands,
+  isFuelRecoveryWeek,
+  isServerRecoveryWeek,
+  recoveryWeekStillEarned,
+} from "../../repo/recovery-week-earned.js";
+import {
   isTripVersionProposal,
   TRIP_VERSION_AGENT,
   tripVersionDate,
@@ -392,7 +398,7 @@ function liveReviewHoldsForProposal(proposalId: number): ParkedDecision[] {
 function volumeFloorHoldReason(proposal: any): string | null {
   // A coverage change (coverage-change.ts) held for a yes FIXES a gap rather than opening
   // one, so it carries its own sentence in the asking register.
-  const coverage = proposal?.parsed?.coverage_gap?.explanation;
+  const coverage = proposal?.parsed?.coverage_gap?.explanation ?? registeredOwner(proposal)?.explanation?.(proposal);
   if (typeof coverage === "string" && coverage.trim()) return coverage.trim().slice(0, 700);
   const unresolved = Array.isArray(proposal?.parsed?.volume_floor_unresolved)
     ? proposal.parsed.volume_floor_unresolved.map(String)
@@ -480,7 +486,8 @@ function holdProposalForReview(
       // The waiting surface speaks a hold's own sentence; a volume-floor hold has one, and
       // so does a coverage change — but only when the hold IS the coverage review (policy
       // asked for the person's yes), never a hold for an unrelated reason.
-      ...((input.code === "safety_floor" || (isCoverageChange(proposal) && COVERAGE_REVIEW_CODES.has(input.code))) &&
+      ...((input.code === "safety_floor" ||
+        ((isCoverageChange(proposal) || !!registeredOwner(proposal)?.explanation) && COVERAGE_REVIEW_CODES.has(input.code))) &&
       volumeFloorHoldReason(proposal)
         ? { user_explanation: volumeFloorHoldReason(proposal) }
         : {}),
@@ -831,12 +838,61 @@ function isCoverageChange(proposal: any): boolean {
 // other draft, which keeps the ordinary gates.
 type ServerPremise = "fits" | "gone" | "held" | "unknown";
 
+// One entry per kind of server-computed draft: `owns` recognizes the draft, `premise`
+// reads it. The first entry that owns a draft answers; a draft none owns keeps the
+// ordinary evidence gates (null). A new server-written change adds its entry here.
+const SERVER_PREMISES: ReadonlyArray<{
+  owns: (proposal: any) => boolean;
+  premise: (proposal: any, asOf: string) => ServerPremise;
+}> = [
+  { owns: isCoverageChange, premise: (proposal, asOf) => coverageChangeStillFits(proposal.parsed, asOf) },
+  {
+    owns: (proposal) => String(proposal?.agent ?? "") === TRIP_VERSION_AGENT && isTripVersionProposal(proposal),
+    premise: (proposal, asOf) => tripVersionStillFits(proposal.parsed, asOf),
+  },
+  { owns: isAdaptationReturn, premise: adaptationReturnPremise },
+  // The recovery week the server wrote (the earned week, or the person's one-tap week):
+  // still earned, held, gone with its evidence, or unknown (recovery-week-earned.ts).
+  {
+    owns: (proposal) => isServerRecoveryWeek(proposal),
+    premise: (proposal, asOf) => recoveryWeekStillEarned(proposal.parsed, asOf, Number(proposal?.id) || null),
+  },
+  // The fuel package's recovery week: still asked for by the under-fuelling read that
+  // minted it (recovery-week-earned.ts). It is its own proposal — the package's calorie
+  // step is a separate draft and is never read or withdrawn here.
+  {
+    owns: (proposal) => isFuelRecoveryWeek(proposal),
+    premise: (proposal, asOf) => fuelRecoveryWeekStillStands(proposal, asOf),
+  },
+];
+
+// A server-written change whose module itself routes through this service (the volume
+// step) registers its entry at load instead of being imported here, which would close an
+// import cycle. Unregistered, its drafts keep the ordinary evidence gates: stricter, safe.
+type RegisteredPremise = (typeof SERVER_PREMISES)[number] & { waits_for_composed_day?: boolean; explanation?: (proposal: any) => unknown };
+const REGISTERED_PREMISES: RegisteredPremise[] = [];
+export function registerServerPremise(entry: RegisteredPremise): void {
+  if (!REGISTERED_PREMISES.includes(entry)) REGISTERED_PREMISES.push(entry);
+}
+const registeredOwner = (proposal: any): RegisteredPremise | null =>
+  REGISTERED_PREMISES.find((entry) => {
+    try {
+      return entry.owns(proposal);
+    } catch {
+      return false;
+    }
+  }) ?? null;
+
 function serverPremise(proposal: any, asOf: string): ServerPremise | null {
-  if (isCoverageChange(proposal)) return coverageChangeStillFits(proposal.parsed, asOf);
-  if (String(proposal?.agent ?? "") === TRIP_VERSION_AGENT && isTripVersionProposal(proposal)) {
-    return tripVersionStillFits(proposal.parsed, asOf);
+  for (const entry of [...SERVER_PREMISES, ...REGISTERED_PREMISES]) {
+    if (!entry.owns(proposal)) continue;
+    try {
+      return entry.premise(proposal, asOf);
+    } catch {
+      // A premise read that throws is a read that failed: wait, never land on it.
+      return "unknown";
+    }
   }
-  if (isAdaptationReturn(proposal)) return adaptationReturnPremise(proposal, asOf);
   return null;
 }
 
@@ -889,7 +945,7 @@ function coverageRequestedTier(proposal: any, requested: AutonomyTier | undefine
 // athlete who lifts that plan day at home on the eve gets the plan as written.
 function coverageMustWait(proposal: any): boolean {
   const tripVersion = String(proposal?.agent ?? "") === TRIP_VERSION_AGENT;
-  if (!isCoverageChange(proposal) && !tripVersion) return false;
+  if (!isCoverageChange(proposal) && !tripVersion && !registeredOwner(proposal)?.waits_for_composed_day) return false;
   if (tripVersion) {
     const day = tripVersionDate(proposal?.parsed);
     if (!day || day > localDateISO()) return true;
@@ -4092,17 +4148,14 @@ export function applyDueAnnouncedDecisions(
         announced.context.proposal_evidence.version === 1
           ? announced.context.proposal_evidence
           : null;
-      const boundaryFreshness = proposalNeedsEvidenceFreshness(shape)
-        ? decisionEvidence
-          ? verifyProposalEvidenceSnapshot(decisionEvidence as any, asOf)
-          : verifyProposalEvidenceFreshness(proposal.parsed, asOf)
-        : null;
       // A coverage change is held to its own premise at the boundary too, holds included:
       // a gap that closed, or a week that is held (a light window, a trip, a protective
       // reduction in force), withdraws it quietly — the daily pass re-reads the plan once
       // the hold passes, and nothing becomes a question. A read that failed waits a day.
       // Standing and unheld, a logged set or a context note since it was made is no reason
-      // to hold it.
+      // to hold it. The same for every server-computed draft (SERVER_PREMISES): the
+      // premise is read FIRST, and a premise that fits replaces the evidence fingerprint,
+      // so that fingerprint is not even read for it (a read that could only park it).
       const coveragePremise = serverPremise(proposal, asOf);
       if (coveragePremise === "gone" || coveragePremise === "held") {
         setProposalStatus(proposalId, "superseded", { recordDecision: false });
@@ -4117,6 +4170,12 @@ export function applyDueAnnouncedDecisions(
         delayed.push(announced.id!);
         continue;
       }
+      const boundaryFreshness =
+        proposalNeedsEvidenceFreshness(shape) && coveragePremise !== "fits"
+          ? decisionEvidence
+            ? verifyProposalEvidenceSnapshot(decisionEvidence as any, asOf)
+            : verifyProposalEvidenceFreshness(proposal.parsed, asOf)
+          : null;
       // AN ATHLETE'S REQUEST IS HONOURED, NOT HELD. The compare-and-set gate below exists
       // so an AUTOMATIC change is never applied over a picture it was not drafted
       // against. A restructure the athlete asked for is different in kind:

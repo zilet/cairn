@@ -50,7 +50,8 @@ export function isTripVersionProposal(proposal: any): boolean {
 
 export type TripVersionPremise = "fits" | "gone" | "unknown";
 
-function tripCovers(date: string): boolean | null {
+/** A bounded trip covers `date` (tripIsBounded); null when the read failed. */
+export function tripCovers(date: string): boolean | null {
   try {
     const rows = db
       .prepare(

@@ -30,6 +30,7 @@ import {
 import { CARDIO_GRADE, HARD_EFFORT, lengthNeedsEffortFamily, sawSessionEffort } from "./heavy-load.js";
 import { registeredHybridForwardProjection } from "./hybrid-forward-projection.js";
 import { activeRecoveryWeekLedger } from "./recovery-week-ledger.js";
+import { recoveryCycleAt } from "./recovery-cycles.js";
 import type { HrModel } from "./hr-model.js";
 import {
   isLongRunForAthlete,
@@ -434,6 +435,30 @@ function workingDoseSets(rows: DoseSet[]): DoseSet[] {
   });
 }
 
+// The reduced prescription in force on `date`: the legacy recovery-week stamp's applied
+// proposal, else the running recovery overlay (recovery-cycles.ts) and the `days`
+// snapshot its source proposal carries — the snapshot the shared recovery-week builder
+// (recovery-week.ts recoveryWeekPlanDays) writes at the overlay's own dose. `stamped_at`
+// is when it took hold, so a session created before it is never graded against it.
+function recoveryPrescriptionOn(date: string): { stamped_at: string | null; parsed: any } | null {
+  const ledger = activeRecoveryWeekLedger(date);
+  if (ledger) return ledger;
+  try {
+    const cycle = recoveryCycleAt(date);
+    if (!cycle || cycle.legacy || !(cycle.effective_status === "active" || cycle.effective_status === "recheck"))
+      return null;
+    const proposalId = Number(cycle.overlay?.source_proposal_id);
+    if (!(proposalId > 0)) return null;
+    const row = db
+      .prepare(`SELECT parsed_json FROM plan_proposals WHERE id = ? AND status = 'applied'`)
+      .get(proposalId) as { parsed_json?: string | null } | undefined;
+    if (!row?.parsed_json) return null;
+    return { stamped_at: cycle.created_at, parsed: JSON.parse(String(row.parsed_json)) };
+  } catch {
+    return null;
+  }
+}
+
 // Read a strength session against the deliberately reduced plan it was linked to.
 // This does not mutate or delete noisy source rows. It creates a conservative,
 // canonical decision view for recovery-week coaching only; global historical
@@ -492,7 +517,7 @@ function recoverySessionDoseRead(sessionId: number): RecoverySessionDose {
   });
   const canonical = canonicalDoseSets(raw, hasProviderImportProvenance(session?.garmin_json));
   const working = workingDoseSets(canonical.sets);
-  const ledger = session?.date ? activeRecoveryWeekLedger(String(session.date)) : null;
+  const ledger = session?.date ? recoveryPrescriptionOn(String(session.date)) : null;
   const createdAt = String(session?.created_at ?? "")
     .replace("T", " ")
     .slice(0, 19);

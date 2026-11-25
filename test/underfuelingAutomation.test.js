@@ -312,8 +312,11 @@ test("persistent strain links a reversible recovery week and fuel step, applies 
   assert.equal(first.recovery.package_link.action.recovery_decision_id, first.recovery.decision.id);
   assert.equal(first.recovery.package_link.action.nutrition_decision_id, first.nutrition.decision.id);
 
-  const due = applyDueAnnouncedDecisions("2099-01-01");
-  assert.equal(due.applied.length, 2);
+  // The recovery week lands on ITS Monday (never mid-week), on the loop's read that day
+  // still asking for less (recovery-week-earned.ts fuelRecoveryWeekStillStands).
+  repo.setAppState("underfuel_training_read", JSON.stringify({ date: first.recovery.effective_date, training: "reduce" }));
+  const due = applyDueAnnouncedDecisions(first.recovery.effective_date);
+  assert.equal(due.applied.length, 2, JSON.stringify(due));
   assert.equal(repo.getActiveNutritionTarget().target_kcal, 2450, "fuel moves no more than 250 kcal toward maintenance");
   assert.deepEqual(planShape(repo.getPlan()), priorPlan, "the stable weekly plan remains unchanged");
   const recoveryCycle = repo.recoveryCycleAt(first.recovery.effective_date);

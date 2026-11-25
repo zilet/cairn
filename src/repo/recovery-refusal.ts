@@ -36,15 +36,47 @@ function one(sql: string, ...params: unknown[]): boolean {
   }
 }
 
+// The day the athlete last UNDID a landed recovery week (revertDecision is only ever the
+// person's tap) or set aside one held for their yes (their discard writes a `rejected`
+// row carrying `proposal_status: 'discarded'`; a system retirement is `superseded`).
+// Fail-soft: a read problem is "nothing on record".
+function latestUndoOrSetAsideOn(): string | null {
+  try {
+    const row = db
+      .prepare(
+        `SELECT MAX(on_date) AS on_date FROM (
+           SELECT COALESCE(date(reverted_at), date(created_at)) AS on_date FROM brain_decisions
+            WHERE kind = 'training_structure' AND domain = 'recovery' AND status = 'reverted'
+           UNION ALL
+           SELECT date(created_at) AS on_date FROM brain_decisions
+            WHERE kind = 'training_structure' AND domain = 'recovery' AND status = 'rejected'
+              AND json_extract(action_json, '$.proposal_status') = 'discarded'
+         )`
+      )
+      .get() as { on_date?: string | null } | undefined;
+    const on = String(row?.on_date ?? "").slice(0, 10);
+    return isDate(on) ? on : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The date of the athlete's own refusal of a recovery week, when one stands
  * inside the current block. `null` means nothing is on record to respect.
  */
 export function recoveryWeekRefusedOn(today = localDateISO()): string | null {
   try {
-    const at = latestUserVetoAt("training_structure", "recovery");
-    const refusedOn = String(at ?? "").slice(0, 10);
-    if (!isDate(refusedOn)) return null;
+    // Three shapes of the same "no": an announced week held before it landed (a
+    // `canceled` row the athlete marked), a landed week undone (`reverted`), and a week
+    // held for their yes that they set aside (`rejected` from their discard). The newest
+    // one is the refusal on record.
+    const refusedOn = [latestUserVetoAt("training_structure", "recovery"), latestUndoOrSetAsideOn()]
+      .map((at) => String(at ?? "").slice(0, 10))
+      .filter(isDate)
+      .sort()
+      .at(-1);
+    if (!refusedOn || !isDate(refusedOn)) return null;
     const startedAt = String(getActiveBlock()?.started_at ?? "").slice(0, 10);
     const floor = isDate(startedAt) ? startedAt : (addDaysISO(today, -RECOVERY_REFUSAL_FALLBACK_DAYS) ?? today);
     return refusedOn >= floor ? refusedOn : null;

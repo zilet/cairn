@@ -740,7 +740,8 @@ function recoveryCandidate(inp: CoachingFocusInput): Candidate | null {
         title: pickDayVariant(RECOVERY_WEEK_ACTIVE_TITLES, date, "cfocus:recovery-active:title"),
         why: pickDayVariant(RECOVERY_WEEK_ACTIVE_WHYS, date, "cfocus:recovery-active:why"),
         recovery_active: true,
-        based_on: ["You applied the recovery week", "Back to building when the week is done"],
+        // Not "you applied": an earned week lands by itself at its Monday.
+        based_on: ["The lighter week is in place", "Back to building when the week is done"],
       },
     };
   }
@@ -770,13 +771,13 @@ function recoveryCandidate(inp: CoachingFocusInput): Candidate | null {
   // decision is already scheduled. Off lead mode, the athlete drives it: a waiting
   // draft points at the review, an un-drafted one leaves the button to the surface.
   let move: string | undefined;
+  // Only a decision STRUCTURALLY marked recovery may claim "lands Monday" — the
+  // domain is stamped at write time (proposalShape recognizes the canonical
+  // recovery-week instruction), never inferred from agent prose, so an unrelated
+  // restructure whose summary happens to say "lighter" can't trip it.
+  const soon = inputArray<UpcomingDecisionInput>(inp.upcoming).find((d) => lc(d?.domain) === "recovery");
+  const weekday = soon ? weekdayOf(soon.effective_date) : null;
   if (leads) {
-    // Only a decision STRUCTURALLY marked recovery may claim "lands Monday" — the
-    // domain is stamped at write time (proposalShape recognizes the canonical
-    // recovery-week instruction), never inferred from agent prose, so an unrelated
-    // restructure whose summary happens to say "lighter" can't trip it.
-    const soon = inputArray<UpcomingDecisionInput>(inp.upcoming).find((d) => lc(d?.domain) === "recovery");
-    const weekday = soon ? weekdayOf(soon.effective_date) : null;
     if (draftPending) {
       move = weekday
         ? `Recovery week is queued — it lands ${weekday}. Undo any time from Plan.`
@@ -789,6 +790,10 @@ function recoveryCandidate(inp: CoachingFocusInput): Candidate | null {
         ? `A lighter recovery week lands ${weekday} — your coach set it up; undo any time from Plan.`
         : "Your coach sets this up automatically at the week boundary.";
     }
+  } else if (draftPending && soon && weekday) {
+    // Announced for its Monday (announce_first sets the earned week up by itself too,
+    // recovery-week-change.ts): it lands on its own, so the line says when, not "apply it".
+    move = `Recovery week is queued — it lands ${weekday}. Undo any time from Plan.`;
   } else if (draftPending) {
     // Off lead mode, once the one-tap draft has landed the lead speaks STATE
     // ("drafted, review it") instead of re-offering the same action.

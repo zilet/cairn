@@ -526,7 +526,14 @@ export function advanceBlockWeek(id?: number): ProgramBlock | null {
   if (!block) return null;
   if (block.status !== "active") return block; // nothing to advance
   const recovery = recoveryCycleAt();
-  if (recovery && (recovery.effective_status === "active" || recovery.effective_status === "recheck")) {
+  if (
+    recovery &&
+    (recovery.effective_status === "active" || recovery.effective_status === "recheck") &&
+    // The block's OWN deload week made lighter (recovery-week-change.ts, arm
+    // `scheduled`) is that week of the block, not a week inserted into it: the block
+    // keeps its calendar through it, or its deload week would run twice.
+    recovery.overlay?.arm !== "scheduled"
+  ) {
     // The structural block stays put while a temporary overlay is active. No
     // training log is required to end the overlay; its calendar exit remains
     // authoritative, so this pause cannot become an inactivity feedback loop.

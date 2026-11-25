@@ -23,7 +23,10 @@ import { getProgramState } from "../repo/program-state.js";
 import { AUTO_EVOLUTION_INSTRUCTION, createProposal, getProposal } from "../repo/proposals.js";
 import { athleteAskedForLess } from "../repo/volume-floor.js";
 import { isAthleteRequestedRestructure, requestFromInstruction } from "../domain/brain/structure-request.js";
-import { RECOVERY_WEEK_INSTRUCTION_PREFIX, supersedeRecoveryWeekDrafts } from "../repo/recovery-week.js";
+import { RECOVERY_WEEK_AGENT, RECOVERY_WEEK_INSTRUCTION_PREFIX, supersedeRecoveryWeekDrafts } from "../repo/recovery-week.js";
+import { recoveryWeekProposalPayload } from "../repo/recovery-week-earned.js";
+import { recoveryCycleCooldown } from "../repo/recovery-cycles.js";
+import { nextNaturalBoundary } from "../brain/autonomy.js";
 import { backgroundTimeoutForOp, interactiveTimeoutForOp } from "../repo/settings.js";
 import { listTrainingSymptoms } from "../repo/training-symptoms.js";
 import { planDraftFloorPrecheck, sessionFloorPrecheck } from "../repo/verify-floors.js";
@@ -544,12 +547,79 @@ function volumeFloorAutonomy(
 // that routes through the shared autonomy policy: Lead mode lands bounded changes
 // at natural boundaries; explicit review posture keeps a proposal.
 // Returns the program-state snapshot alongside so the surface can show "why this".
+// The person's one-tap "plan me a lighter week" (the Program surface's recovery lead, or
+// any evolve call carrying the recovery-week instruction). No agent: applying a recovery
+// week schedules the recovery overlay over the plan as it stands (proposals.ts), so an
+// agent-written `days` payload was only ever quality-checked and thrown away. The draft is
+// the ONE shared builder's snapshot (recovery-week.ts), marked `asked` — the person's word
+// is its premise, so sessions logged before Monday never park it as a question
+// (recovery-week-earned.ts) — and it routes through the same autonomy path.
+function askedRecoveryWeek(instruction: string, hooks?: OpHooks) {
+  hooks?.onPhase?.("laying out your lighter week");
+  const state = getProgramState();
+  const date = localDateISO();
+  const landsOn = nextNaturalBoundary("training_structure", date);
+  // Refused at the tap, in words, when the overlay could never land on that Monday (a
+  // cycle open over it, or the cooldown after the last) — never a draft that fails later.
+  const cooldown = recoveryCycleCooldown(landsOn);
+  if (!cooldown.allowed) {
+    return {
+      proposal: null,
+      state,
+      autonomy: null,
+      ok: false as const,
+      agent: RECOVERY_WEEK_AGENT,
+      tried: [] as { agent: string; error: string }[],
+      agent_status: "ok" as const,
+      exit_code: 0,
+      stderr: "",
+      error:
+        cooldown.reason === "cycle_open"
+          ? "A lighter week is already running or on its way, so there is nothing to add."
+          : "Your last lighter week ended less than three weeks ago, so another one now would come too soon.",
+    };
+  }
+  const payload = recoveryWeekProposalPayload({
+    arm: "asked",
+    loaded_weeks: null,
+    date,
+    lands_on: landsOn,
+    plan: getPlan() as any[],
+  });
+  const proposal = payload ? createProposal(RECOVERY_WEEK_AGENT, instruction, "", payload) : null;
+  // A fresh tap retires the prior recovery draft (the newest read wins), so repeated taps
+  // never stack drafts — and an earned week already on its way is replaced by theirs.
+  if (proposal?.id != null) supersedeRecoveryWeekDrafts(Number(proposal.id));
+  let autonomy: any = null;
+  if (proposal?.id != null) {
+    try {
+      autonomy = applyProposalWithAutonomy(Number(proposal.id), {});
+    } catch {
+      autonomy = null;
+    }
+  }
+  return {
+    proposal,
+    state,
+    autonomy,
+    ok: proposal != null,
+    agent: RECOVERY_WEEK_AGENT,
+    tried: [] as { agent: string; error: string }[],
+    agent_status: "ok" as const,
+    exit_code: 0,
+    stderr: "",
+    ...(proposal ? {} : { error: "There is no lifting day on the plan to make lighter yet." }),
+  };
+}
+
 export async function evolveProgram(
   agent: string | undefined,
   instruction: string | undefined,
   hooks?: OpHooks,
   opts?: { task?: string }
 ) {
+  if (String(instruction ?? "").startsWith(RECOVERY_WEEK_INSTRUCTION_PREFIX))
+    return askedRecoveryWeek(String(instruction), hooks);
   hooks?.onPhase?.("reading how your lifts are trending");
   // Compute the program-state ONCE and thread it into the prompt + the response
   // (it's a few dozen DB queries — don't run it twice).
@@ -584,11 +654,6 @@ export async function evolveProgram(
   const { agent: chosen, result, tried } = run;
   const { parsed, verified } = await verifyPlanDraftVolume(agent, result.parsed, instruction, hooks);
   const proposal = createProposal(chosen, instruction ?? "evolve program", result.raw, parsed);
-  // A fresh recovery-week draft retires the prior one (same one-tap ask — the newest
-  // read wins), so repeated taps never stack duplicate drafts in the Coach list.
-  if (proposal?.id != null && String(instruction ?? "").startsWith(RECOVERY_WEEK_INSTRUCTION_PREFIX)) {
-    supersedeRecoveryWeekDrafts(Number(proposal.id));
-  }
   // Route the fresh draft through the autonomy layer (the same machinery the brain-review
   // and case-conference paths use). Under lead_mode='lead' a bounded, reversible evolution
   // (target/volume nudges → kind 'training_target') quiet-applies at its natural boundary

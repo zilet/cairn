@@ -7,10 +7,11 @@
 // program-state deterministic-floor pattern; the agentic plan-evolution loop
 // (buildProgramEvolutionPrompt) sits on TOP of this, never replaces it.
 //
-// Constitution: everything here is a SUGGESTION the athlete drives. Nothing
-// auto-applies — a prescription becomes a plan change only through the existing
-// propose→apply path. Plain words only ("+5 lb", "hold 50", "−10%"), never a
-// 0-100 score. Encoding honored: weight null = bodyweight, negative = assist
+// Constitution: everything here is a SUGGESTION the athlete drives. Nothing here
+// writes the plan — a prescription becomes a plan change only through the existing
+// propose→apply path, where the autonomy layer decides how it lands (under lead a
+// bounded step quiet-applies at the session's finish, with Undo). Plain words only
+// ("+5 lb", "hold 50", "−10%"), never a 0-100 score. Encoding honored: weight null = bodyweight, negative = assist
 // (e.g. −30 = 30 lb assist); timed lifts progress in seconds, never load.
 // ============================================================================
 import { db } from "../db.js";
@@ -143,7 +144,9 @@ import {
 } from "./volume-guard.js";
 import { type LiftState, getProgramState, LIFT_CURRENT_WINDOW_DAYS } from "./program-state.js";
 import { coachContextBackstopSignature, registerTrainingCacheClear } from "./training-cache.js";
-import { addDaysISO, daysBetweenISO, localDateISO, round2_5 } from "./shared.js";
+import { addDaysISO, daysBetweenISO, localDateISO, localDayOfStamp, round2_5 } from "./shared.js";
+import { sessionCountsTowardLiftTrajectory } from "./lift-comparability.js";
+import { USER_VETO_SQL } from "./brain-decisions.js";
 import { easedLoad, isIsolationGroup, STEP_CEIL_COMPOUND, STEP_CEIL_ISOLATION } from "./load-grid.js";
 import { supportWorkRead } from "./support-work.js";
 // Run-plan / DEXA / test-week digest producers. Imported for their types + a lazy
@@ -332,6 +335,12 @@ export interface Prescription {
   // load that capped the range (null for bodyweight) — the reach's anchor. Reps path
   // only; omit-when-absent.
   top_set_earned?: { weight: number | null };
+  // The load step was earned BY REPETITION rather than by every set capping the range:
+  // the last two comparable exposures under the current prescription each capped the
+  // range on the top set at the load with every other set within a rep of it
+  // (repeatedTopSetEvidence). Carried onto the proposal change as its audit trail.
+  // Reps path only; omit-when-absent.
+  earned_by?: "repeated_top_set";
   dose_eligibility?: {
     linked_outcome: boolean;
     eligible: boolean;
@@ -968,6 +977,18 @@ function latestTopSet(
         top = s;
       }
     }
+  } else if (sets.every((s) => s.duration_sec == null && !(Number(s.weight) > 0))) {
+    // Rep work with no positive load — assisted or bodyweight. The top set is the
+    // HARDEST one: the larger signed load (less assist), then the most reps. An Epley
+    // score inverts on a negative load (−40 × 7 out-scores −40 × 8), which named an
+    // assisted session's FEWEST-reps set its top and read a capped top set as a rep
+    // still to win.
+    const signed = (s: any): number => (s.weight == null ? 0 : Number(s.weight) || 0);
+    for (const s of sets) {
+      const w = signed(s);
+      const tw = signed(top);
+      if (w > tw + 1e-9 || (Math.abs(w - tw) <= 1e-9 && (Number(s.reps) || 0) > (Number(top.reps) || 0))) top = s;
+    }
   } else {
     // Top set: max (weight×(1+reps/30)) for reps; max duration for timed.
     let bestScore = -Infinity;
@@ -1214,6 +1235,208 @@ function linkedDoseEligibility(
     return { linked_outcome: true, eligible: false, reason: "under_prescribed" };
   }
   return { linked_outcome: true, eligible: true, reason: "full_comparable" };
+}
+
+// ---- earned by repetition ------------------------------------------------------
+// The exit from a `top_set_earned` hold, under EITHER drive (the hold is set whatever the
+// drive, and so is this exit; push's own top-set authority still steps first where it
+// applies). The ordinary step needs EVERY working set at the ceiling, so a lift whose top
+// set caps the range while a back-off set lands a rep short holds on completeness alone —
+// and can hold there indefinitely. The conservative double-progression answer: when the last TWO
+// comparable exposures under the current prescription each capped the range on the
+// top set at the card's load, strong by the engine's own bar, with every working set
+// within REPEATED_TOP_SET_REP_SLACK of the ceiling and the card's full set count at
+// the load, the load takes ONE ordinary step from the worked load. Earned by
+// repetition, never by one good day.
+const REPEATED_TOP_SET_REP_SLACK = 1;
+// How far back the pair is looked for — enough to step over a recovery week's
+// sessions, which are never a test of the load (lift-comparability.ts).
+const REPEATED_TOP_SET_LOOKBACK_SESSIONS = 6;
+
+type RepSetRow = { weight: number | null; reps: number | null; rir: number | null };
+
+// This lift's sessions logged under the slot's current prescription (prescription-
+// authorship.ts `sinceClause`), newest first.
+function liftSessionsUnderPrescription(
+  name: string,
+  authorship: Pick<SlotAuthorship, "since" | "since_at">,
+  limit: number
+): Array<{ id: number; date: string }> {
+  const ids = progressionLineageIds(name);
+  if (!ids.length) return [];
+  const inIds = ids.map(() => "?").join(",");
+  const since = sinceClause(authorship);
+  try {
+    return (
+      db
+        .prepare(
+          `SELECT DISTINCT s.id AS id, s.date AS date FROM logged_sets ls JOIN sessions s ON s.id = ls.session_id
+            WHERE ls.exercise_id IN (${inIds}) AND ls.reps IS NOT NULL AND ${since.sql}
+            ORDER BY s.date DESC, s.id DESC LIMIT ?`
+        )
+        .all(...ids, ...since.args, limit) as Array<{ id: number; date: string }>
+    ).map((row) => ({ id: Number(row.id), date: String(row.date).slice(0, 10) }));
+  } catch {
+    return [];
+  }
+}
+
+function liftSessionRepSets(name: string, sessionId: number): RepSetRow[] {
+  const ids = progressionLineageIds(name);
+  if (!ids.length) return [];
+  const inIds = ids.map(() => "?").join(",");
+  try {
+    return (
+      db
+        .prepare(
+          `SELECT weight, reps, rir FROM logged_sets
+            WHERE exercise_id IN (${inIds}) AND session_id = ? AND reps IS NOT NULL ORDER BY id`
+        )
+        .all(...ids, sessionId) as any[]
+    ).map((r) => ({
+      weight: r.weight == null ? null : Number(r.weight),
+      reps: r.reps == null ? null : Number(r.reps),
+      rir: plausibleRir(r.rir),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+// Pure. One exposure, read against the card: no failed attempt above `load` (a heavier
+// set under the rep floor), worked AT `load` (the session's working load — working-load.ts
+// — for loaded work; no harder set reaching the floor for assisted work), the card's full
+// set count there, every one of those sets within a
+// rep of the ceiling, and the top set ON the ceiling and strong — no rating logged
+// means capping the range is the signal; a logged one is read at the ceiling.
+function nearCappedAtLoad(
+  rows: readonly RepSetRow[],
+  load: number,
+  opts: { repLow: number | undefined; ceiling: number; sets: number; strongReserve: number; progressing: boolean }
+): boolean {
+  // A set ABOVE the card's load that fell under the rep floor is a failed attempt at more
+  // — evidence against the step. The working load (working-load.ts) never sees it, since
+  // it reads only sets that reached the floor, so it is asked here. For assisted work
+  // "above" is less assistance, the harder direction, the same comparison.
+  const floor = opts.repLow ?? 1;
+  if (rows.some((r) => r.weight != null && r.weight > load + 0.1 && r.reps != null && r.reps < floor)) return false;
+  if (load > 0) {
+    const worked = sessionWorkingLoad(rows, opts.repLow);
+    if (worked == null || Math.abs(worked - load) > 0.1) return false;
+  } else if (
+    rows.some(
+      (r) => r.weight != null && r.weight > load + 0.1 && r.reps != null && r.reps >= (opts.repLow ?? 1)
+    )
+  ) {
+    return false;
+  }
+  const atLoad = rows.filter((r) => r.weight != null && Math.abs(r.weight - load) < 0.1 && r.reps != null);
+  if (atLoad.length < Math.max(1, opts.sets)) return false;
+  if (!atLoad.every((r) => (r.reps as number) >= opts.ceiling - REPEATED_TOP_SET_REP_SLACK)) return false;
+  let top = atLoad[0];
+  for (const r of atLoad) if ((r.reps as number) > (top.reps as number)) top = r;
+  if ((top.reps as number) < opts.ceiling) return false;
+  if (opts.progressing || top.rir == null) return true;
+  return top.rir + Math.max(0, (top.reps as number) - opts.ceiling) >= opts.strongReserve;
+}
+
+// The athlete's latest "no" to an auto-progression change on this lift: an applied
+// `auto-progression` proposal that touched it, whose brain decision was undone,
+// rejected or held — USER_VETO_SQL, the same predicate the rep-range ledger reads
+// (lift-response.ts). Its local day and its instant, or null. Fail-soft.
+function lastVetoedAutoProgression(name: string, asOf: string): { date: string; first_at: string } | null {
+  const key = normalizedExerciseKey(String(name ?? ""));
+  if (!key) return null;
+  let rows: Array<{ parsed_json: string | null; created_at: string }> = [];
+  try {
+    rows = db
+      .prepare(
+        `SELECT p.parsed_json, p.created_at FROM plan_proposals p
+          WHERE p.agent = 'auto-progression' AND p.status = 'applied'
+            AND EXISTS (SELECT 1 FROM brain_decisions
+                         WHERE source_ref_type = 'plan_proposal'
+                           AND source_ref_key = CAST(p.id AS TEXT)
+                           AND ${USER_VETO_SQL})
+          ORDER BY p.created_at DESC, p.id DESC`
+      )
+      .all() as Array<{ parsed_json: string | null; created_at: string }>;
+  } catch {
+    return null;
+  }
+  for (const row of rows) {
+    const day = localDayOfStamp(row?.created_at);
+    if (!day || day > asOf) continue;
+    let parsed: any = null;
+    try {
+      parsed = JSON.parse(String(row?.parsed_json ?? ""));
+    } catch {
+      continue;
+    }
+    const changes = Array.isArray(parsed?.changes) ? parsed.changes : [];
+    const touched = changes.some(
+      (change: any) => normalizedExerciseKey(String(change?.exercise ?? change?.swap?.from ?? "")) === key
+    );
+    if (touched) return { date: day, first_at: String(row.created_at) };
+  }
+  return null;
+}
+
+// Two exposures in a row earned the load. Returns the worked load to step from, or
+// null. `last` is the lift's latest exposure (the engine's own read); the pair is the
+// two latest sessions under the current prescription that COUNT as a test of the lift
+// — a compliant recovery-week session never does (lift-comparability.ts), so neither
+// member of the pair is recovery-week work. The pair CAN straddle a recovery week (one
+// session before it, one after, the week's compliant sessions skipped): that is intended
+// — the lighter week between them is no test of the load either way. Each exposure has to be a
+// comparable dose (the current one is held to that by the caller). An athlete's Undo
+// of an auto-progression change on this lift is remembered: the rule stays quiet until
+// a NEWER prescription stands on the slot and has been trained (the caller only asks
+// on a tested slot).
+function repeatedTopSetEvidence(args: {
+  name: string;
+  authorship: SlotAuthorship;
+  slotStamp: string | null;
+  lastSessionId: number;
+  load: number;
+  repLow: number | undefined;
+  ceiling: number;
+  sets: number;
+  strongReserve: number;
+  progressing: boolean;
+  date: string;
+}): { worked: number } | null {
+  const counted: Array<{ id: number; date: string }> = [];
+  for (const session of liftSessionsUnderPrescription(args.name, args.authorship, REPEATED_TOP_SET_LOOKBACK_SESSIONS)) {
+    let counts = true;
+    try {
+      counts = sessionCountsTowardLiftTrajectory(session.id);
+    } catch {
+      counts = true;
+    }
+    if (counts) counted.push(session);
+    if (counted.length === 2) break;
+  }
+  if (counted.length < 2 || counted[0].id !== args.lastSessionId) return null;
+  const [latest, previous] = counted;
+  // A pair is CURRENT work: the earlier one inside the window a lift stays in rotation.
+  const gap = daysBetweenISO(latest.date, previous.date);
+  if (gap == null || gap < 0 || gap > LIFT_CURRENT_WINDOW_DAYS) return null;
+  const shape = {
+    repLow: args.repLow,
+    ceiling: args.ceiling,
+    sets: args.sets,
+    strongReserve: args.strongReserve,
+    progressing: args.progressing,
+  };
+  for (const exposure of counted) {
+    if (!nearCappedAtLoad(liftSessionRepSets(args.name, exposure.id), args.load, shape)) return null;
+  }
+  if (!linkedDoseEligibility(previous.id, args.name).eligible) return null;
+  // Undo is a remembered no: blocked until the slot carries a prescription written
+  // AFTER the vetoed change (an Undo restores the slot's old stamp, which predates it).
+  const veto = lastVetoedAutoProgression(args.name, args.date);
+  if (veto && !slotAuthorship(args.slotStamp, veto, args.date).untested) return null;
+  return { worked: args.load };
 }
 
 // Pull the per-lift program-state read (status/trend/stall) for ONE exercise —
@@ -2052,6 +2275,8 @@ function repsPrescription(
   let fallthroughHold = false;
   // The fallthrough hold whose top set already earned the load (see `top_set_earned`).
   let topSetEarnedHold: { weight: number | null } | null = null;
+  // Set when the load step was earned by repetition (repeatedTopSetEvidence).
+  let earnedBy: Prescription["earned_by"];
   // Equipment-ranked, compound-biased, plan-deduped same-pattern candidates —
   // computed ONCE and reused by the vary + introduce branches (and the introduce guard).
   const varyCandidates = rankedVaryOptions(name, brakeCtx, plan?.day_exercises ?? []);
@@ -2145,6 +2370,18 @@ function repsPrescription(
   const recencyRef = latestLoggedSessionDate(date) ?? date;
   const lastAge = last?.date ? daysBetweenISO(recencyRef, last.date) : null;
   const current = lastAge == null || lastAge <= LIFT_CURRENT_WINDOW_DAYS;
+  // A compliant RECOVERY-WEEK session is not a test of this load (lift-comparability.ts:
+  // deliberately reduced work that stayed inside its reduced prescription, kept out of
+  // the lift's trajectory). Nothing is earned from it — a lighter card capped is not the
+  // base load capped — and nothing is cut off it: the card stays where the work was.
+  let recoveryExposure = false;
+  if (last) {
+    try {
+      recoveryExposure = !sessionCountsTowardLiftTrajectory(last.session_id);
+    } catch {
+      recoveryExposure = false;
+    }
+  }
   // A DATED push stance lowers the bar by one rep: a top set finished with a rep in hand
   // at the ceiling is strong enough to count (src/repo/training-drive.ts). RIR 0 is still
   // a grind under any stance, and the bar stays two for everyone else.
@@ -2152,6 +2389,7 @@ function repsPrescription(
     brakeCtx?.pushStance === true && brakeCtx?.drive === "push" ? PUSH_STANCE_RIR_RESERVE : RIR_IN_RESERVE;
   const strong =
     current &&
+    !recoveryExposure &&
     doseEligibility.eligible &&
     (status === "progressing" || (topReserve != null ? topReserve >= strongReserve : true));
   // The card must not tell an athlete who never logs RIR to come back at "RIR 2+".
@@ -2289,6 +2527,12 @@ function repsPrescription(
     action = "hold";
     nextWeight = planWeight;
     why = say(voice.UNTESTED_PRESCRIPTION_HOLD, "untested_prescription_hold");
+  } else if (recoveryExposure) {
+    // See `recoveryExposure` above: the recovery week was the easing. The card picks up
+    // at the base load, and the next full session is the one that can move it.
+    action = "hold";
+    nextWeight = baseWeight;
+    why = say(voice.RECOVERY_WEEK_RESUME_HOLD, "recovery_week_resume_hold");
   } else if (peakProtocol) {
     // PEAK WEEK. The block's last week on a main lift is not another small step —
     // it is the week the work gets expressed: up to one heavy top set derived from
@@ -2498,9 +2742,39 @@ function repsPrescription(
     // (or no range + a strong top set) → the small earned step up, then reset to the bottom.
     action = "overload";
     if (baseWeight == null) {
-      // Bodyweight reps lift — no load to add; progression is reps/sets.
+      // Bodyweight reps lift — no load to add. "Take another rep or set" was a standing
+      // suggestion the apply path could not write (a null target onto a null target), so
+      // the capped range never moved. The real lever is the RANGE: it moves up once at
+      // bodyweight through the same rep-range move an isolation lift takes (lift-
+      // response.ts — both ends up, written as a target change, re-stamping the slot,
+      // remembered on the ledger so it never loops, and an Undo is its answer). Never a
+      // set: the set count is the plan's (and held through a cut). Once the move is
+      // spent, the card holds and names the next lever plainly.
+      const bodyweightRange =
+        hasRange && !planBehind && !planAhead && !untested && !assistRetired
+          ? movedRepRange(repLow as number, repHigh as number)
+          : null;
       nextWeight = null;
-      why = say(voice.BODYWEIGHT_OVERLOAD, "bodyweight_overload");
+      if (
+        bodyweightRange != null &&
+        topReps != null &&
+        topReps >= bodyweightRange.rep_low - 1 &&
+        rangeMoveUnspent()
+      ) {
+        action = "hold";
+        waveRepLow = bodyweightRange.rep_low;
+        waveRepHigh = bodyweightRange.rep_high;
+        escalated = "rep_range";
+        rangeMoveEarned = true;
+        why = say(voice.BODYWEIGHT_REP_RANGE_EARNED, "bodyweight_rep_range_earned");
+      } else {
+        action = "hold";
+        why = say(voice.BODYWEIGHT_RANGE_OWNED_HOLD, "bodyweight_range_owned_hold");
+        // The range is answered and there is no load to wait for: the same hold the top
+        // set has already earned, so a push day may still host its reach here (an AMRAP
+        // note on the last working set — daily-composition.ts), never another set.
+        topSetEarnedHold = { weight: null };
+      }
     } else if (baseWeight < 0) {
       // Assisted — reduce the assist toward bodyweight (a smaller absolute value).
       nextWeight = assistStepNext(baseWeight, group, brakeCtx?.personalModifier, phaseStepScale);
@@ -2759,7 +3033,8 @@ function repsPrescription(
       // The peak protocol is a near-maximal effort; a braked week is not the week for it.
       topSet = undefined;
       why = say(voice.MOVEMENT_RESPONSE_HOLD, "movement_response_hold");
-    } else if (action === "hold" && last && doseEligibility.eligible) {
+    } else if (action === "hold" && last && doseEligibility.eligible && !recoveryExposure) {
+      // (Never off a recovery-week session: the week WAS the easing.)
       action = "deload";
       brakedDeload = true;
       nextWeight = baseWeight != null && baseWeight > 0 ? round5(baseWeight * (1 - DELOAD_FRAC)) : baseWeight;
@@ -2779,7 +3054,9 @@ function repsPrescription(
     (doseEligibility.reason === "full_comparable" || doseEligibility.reason === "capped_short_set") &&
     (response.latest_verdict === "met" || response.latest_verdict === "exceeded") &&
     hasRange &&
-    allSetsAtTop
+    allSetsAtTop &&
+    // A bodyweight lift has no load to step — its capped range is answered above.
+    (baseWeight != null || assistRetired)
   ) {
     // One full comparable met/exceeded is enough under push: take the step from
     // the logged working weight rather than waiting for a second exposure.
@@ -2794,6 +3071,80 @@ function repsPrescription(
           repLow as number
         )
       : sayCredit(voice.EARNED_OPEN_OVERLOAD, voice.EARNED_OPEN_OVERLOAD_REPS, "earned_open_overload");
+  } else if (
+    // EARNED BY REPETITION (repeatedTopSetEvidence). A `top_set_earned` hold whose answer
+    // has now come TWICE: the step is taken. It sits behind everything that already
+    // stops a promotion, in the same order — an untested slot never reaches the
+    // fallthrough that marks the hold, a load-limiting note or a holds-load phase never
+    // marks it either, `earned_hold` is the branch above, the cut's veto and the dose's
+    // comparability ride `mayPromoteLoad`, a re-ground is the catch-up's, and the
+    // lighter-load guard and the autoregulation and pain brakes all run after it.
+    action === "hold" &&
+    topSetEarnedHold != null &&
+    escalated == null &&
+    !loadConstrained &&
+    !untested &&
+    !policy?.holds_load &&
+    status !== "regressing" &&
+    !planBehind &&
+    !planAhead &&
+    hasRange &&
+    baseWeight != null &&
+    baseWeight !== 0 &&
+    last != null &&
+    mayPromoteLoad
+  ) {
+    const repeated = repeatedTopSetEvidence({
+      name,
+      authorship,
+      slotStamp: plan?.prescribed_at ?? null,
+      lastSessionId: last.session_id,
+      load: baseWeight,
+      repLow,
+      ceiling: repCeiling as number,
+      sets,
+      strongReserve,
+      progressing: status === "progressing",
+      date,
+    });
+    if (repeated) {
+      const worked = repeated.worked;
+      // The step is the lift's own load grid. A jump this lift does not take cleanly —
+      // the isolation coarse step, or a log that shows it bouncing off this load's last
+      // step — answers with the existing rep-range move instead (once, from the same
+      // ledger), and holds when that move is spent.
+      const coarse =
+        worked > 0 &&
+        (coarseLoadStep(name, worked, group) ||
+          (isIsolationLift(name, group) && bouncedOffLoadStep(name, worked, repLow as number)));
+      if (coarse) {
+        if (!policy && repRangeCandidate != null && rangeMoveReaches && rangeMoveUnspent()) {
+          waveRepLow = repRangeCandidate.rep_low;
+          waveRepHigh = repRangeCandidate.rep_high;
+          escalated = "rep_range";
+          rangeMoveEarned = true;
+          why = say(voice.REPEATED_TOP_SET_REP_RANGE, "repeated_top_set_rep_range");
+        }
+      } else {
+        action = "overload";
+        repStep = false;
+        earnedBy = "repeated_top_set";
+        if (worked > 0) {
+          nextWeight = clampedOverload(worked, group, brakeCtx?.personalModifier, phaseStepScale);
+          why = say(voice.REPEATED_TOP_SET_OVERLOAD, "repeated_top_set_overload")(
+            repCeiling as number,
+            repLow as number
+          );
+        } else {
+          // Assisted work: the step is less assist, never past bodyweight.
+          nextWeight = assistStepNext(worked, group, brakeCtx?.personalModifier, phaseStepScale);
+          why =
+            nextWeight == null
+              ? say(voice.ASSIST_TO_BODYWEIGHT, "assist_to_bodyweight")
+              : say(voice.REPEATED_TOP_SET_ASSIST_PEEL, "repeated_top_set_assist_peel")(repCeiling as number);
+        }
+      }
+    }
   }
 
   // A LOAD STEP IS TAKEN FROM THE WEIGHT THAT WAS WORKED. When the latest session
@@ -3047,6 +3398,9 @@ function repsPrescription(
     dose_eligibility: doseEligibility,
     ...(untested ? { untested: true as const } : {}),
     ...(topSetEarnedHeld && topSetEarnedHold ? { top_set_earned: topSetEarnedHold } : {}),
+    // Only while the step it names still stands (a brake or the lighter-load guard
+    // that turned it back into a hold took the claim with it).
+    ...(earnedBy && action === "overload" ? { earned_by: earnedBy } : {}),
   };
 }
 
@@ -3931,7 +4285,14 @@ function planTargetsForDay(day: number): Map<string, number | null> {
 }
 
 // Turn a day's per-lift prescriptions into a DRAFT plan proposal (the one-tap
-// auto-progression apply), via the existing propose→apply path — never auto-applied.
+// auto-progression apply), via the existing propose→apply path. Nothing is applied
+// HERE: the caller routes the draft through the autonomy layer (at a finished
+// session, executeBrainReviewAction; on request, buildProgressionWithAutonomy), which
+// quiet-applies it under lead, announces it under announce_first and asks under
+// review_everything. Every step the engine EARNED and the plan can carry lands
+// through this one draft: a load step, less assist, a seconds step, a rep-range move,
+// a set catch-up, a re-ground. A rep step within the range is not a plan change (the
+// range already prescribes it), and a peak-week top set is a session protocol.
 // THE ONE shared builder for REST + MCP so they never drift. A `vary` prescription
 // becomes a real {swap:{from,to}} change (rotating the stalled lift out for the lead
 // same-pattern option) — it used to map to a target change on the SAME exercise at
@@ -4026,6 +4387,9 @@ export function buildProgressionProposal(
       // …and the rep-range move's own trail: read back by lastAppliedRepRangeMove
       // (lift-response.ts), so a lift is moved up a range once, never in a loop.
       ...(rangeMove ? { progression_escalation: "rep_range" } : {}),
+      // …and the step that came from two near-capped exposures rather than one fully
+      // capped one: history, like the markers above — nothing on the apply path reads it.
+      ...(p.earned_by === "repeated_top_set" ? { progression_rule: "repeated_top_set" } : {}),
     };
     if (p.mode === "timed") {
       if (p.suggested.seconds != null) c.target_seconds = p.suggested.seconds;
@@ -4040,6 +4404,21 @@ export function buildProgressionProposal(
       c.target_weight =
         suggestedWeight != null && suggestedWeight > 0 && planned != null && planned < 0 ? null : suggestedWeight;
     }
+    // A null target written onto a slot that already holds null moves nothing: a
+    // bodyweight "step" the plan cannot carry is not a change, and listing it made the
+    // draft claim a progression that applied as a no-op.
+    const bodyweightNoOp =
+      p.mode === "reps" &&
+      c.target_weight === null &&
+      planTargets.has(p.exercise.toLowerCase()) &&
+      planned == null &&
+      !setStep &&
+      !rangeMove &&
+      p.current != null &&
+      Number(c.sets) === Number(p.current.sets) &&
+      (c.rep_low ?? null) === (p.current.rep_low ?? null) &&
+      (c.rep_high ?? null) === (p.current.rep_high ?? null);
+    if (bodyweightNoOp) delete c.target_weight;
     // Only a change that moves a target, the range or the set count (or is a swap) is a real change.
     if (c.target_weight !== undefined || c.target_seconds !== undefined || setStep || rangeMove) changes.push(c);
   }
@@ -4427,7 +4806,9 @@ function computeProgramAdjustments(
           why: p.why,
           exercise: p.exercise,
         });
-      else if (p.action === "overload")
+      // A rep-range move is a hold at the load that still changes the card (the range
+      // climbs), so it is listed with the earned steps rather than silently dropped.
+      else if (p.action === "overload" || (p.action === "hold" && p.escalated === "rep_range"))
         overloads.push({
           kind: "progression",
           title: `${p.exercise} — ${p.delta_text}`,

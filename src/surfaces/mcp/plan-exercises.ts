@@ -38,6 +38,7 @@ import {
 import { liftAlternatives, liftVariations } from "../../repo/exercise-suggestions.js";
 import { getPlanWithPurpose } from "../../repo.js";
 import { previewPlanCoverageChange } from "../../domain/brain/coverage-change.js";
+import { previewEarnedRecoveryWeek } from "../../domain/brain/recovery-week-change.js";
 import { PlanQualityError } from "../../repo/plan-quality.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 import { queueMcpAgentJob } from "./background.js";
@@ -137,6 +138,13 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
     "What the daily plan-coverage pass WOULD change next, read-only (nothing is drafted or written): { status, gaps, changes, summary, explanation, partial, hold }. status would_change carries the exact changes; held / settling / declined / standing / none / unavailable say why nothing would. Mirrors GET /api/plan/coverage-preview.",
     {},
     async () => asText(previewPlanCoverageChange())
+  );
+
+  server.tool(
+    "get_recovery_week_preview",
+    "What the daily earned-recovery-week pass WOULD set up next, read-only (nothing is drafted or written): { status, arm, loaded_weeks, lands_on, summary, explanation, hold, days }. arm is streak / fatigue (the loaded weeks earned a deload) or scheduled (the block's own deload week, made lighter). status would_change carries the week at the recovery dose; held / declined / standing / none / unavailable say why nothing would. Mirrors GET /api/plan/recovery-week-preview.",
+    {},
+    async () => asText(previewEarnedRecoveryWeek())
   );
 
   server.tool(

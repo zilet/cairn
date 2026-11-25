@@ -47,6 +47,31 @@ import { weekLayoutRead } from "../domain/training/week-layout.js";
 import { blockEndsInDeload, getActiveBlock, previousCompletedBlock } from "./program-blocks.js";
 import { effectiveTrainingDrive } from "./training-drive.js";
 import { completedRecoveryWeekLedger, type CompletedRecoveryWeekLedger } from "./recovery-week-ledger.js";
+import { completedRecoveryCycleBefore } from "./recovery-cycles.js";
+
+// The most recent finished recovery week, legacy ledger or overlay.
+function latestCompletedRecoveryWeek(date: string): CompletedRecoveryWeekLedger | null {
+  const legacy = completedRecoveryWeekLedger(date);
+  const overlay = completedOverlayWeek(date);
+  if (!legacy || !overlay) return legacy ?? overlay;
+  return overlay.days_since_completion < legacy.days_since_completion ? overlay : legacy;
+}
+
+// A finished recovery overlay week in the legacy ledger's shape (the mesocycle reads only
+// its completion count and its presence).
+function completedOverlayWeek(date: string): CompletedRecoveryWeekLedger | null {
+  const cycle = completedRecoveryCycleBefore(date);
+  if (!cycle) return null;
+  return {
+    applied_on: cycle.effective_on,
+    until: cycle.exit_on,
+    proposal_id: cycle.source_proposal_id ?? 0,
+    stamped_at: null,
+    parsed: null,
+    days_since_completion: cycle.days_since_completion,
+    weeks_since_completion: cycle.weeks_since_completion,
+  };
+}
 import { getProgress } from "./sessions.js";
 import { comparableLiftDates, sessionCountsTowardLiftTrajectory } from "./lift-comparability.js";
 import {
@@ -177,6 +202,13 @@ export interface MesocycleState {
    * scheduled week is also an EARNED one. Omit-when-false.
    */
   deload_evidence?: true;
+  /**
+   * WHICH evidence earned it, beside `deload_evidence`: a long loaded streak, or four
+   * loaded weeks plus a log-confirmed shortfall plus physiology (`fatigue`), with the
+   * loaded weeks counted. The earned recovery week (recovery-week-change.ts) says this
+   * in words. Omit-when-false, like `deload_evidence`.
+   */
+  deload_basis?: { arm: "streak" | "fatigue"; loaded_weeks: number };
 }
 
 export interface EnduranceState {
@@ -1346,7 +1378,12 @@ function mesocycle(
     phase,
     acute_chronic_ratio: acwr,
     note,
-    ...(fatigueDeload || deloadDueByStreak ? { deload_evidence: true as const } : {}),
+    ...(fatigueDeload || deloadDueByStreak
+      ? {
+          deload_evidence: true as const,
+          deload_basis: { arm: fatigueDeload ? ("fatigue" as const) : ("streak" as const), loaded_weeks: loadedStreak },
+        }
+      : {}),
   };
 }
 
@@ -1877,7 +1914,10 @@ function computeProgramState(date?: string, recovery?: any): ProgramState {
   const lifts = liftStates(d);
   const volume = muscleVolume(d);
   const recoveryWeek = activeRecoveryWeek(d);
-  const completedRecoveryWeek = recoveryWeek ? null : completedRecoveryWeekLedger(d);
+  // The finished recovery week resets the loaded-weeks count: the legacy ledger's, or a
+  // finished overlay week (recovery-cycles.ts) — the overlay is how every recovery week
+  // lands now, and an over-performed lighter week must not let the old streak stand.
+  const completedRecoveryWeek = recoveryWeek ? null : latestCompletedRecoveryWeek(d);
   const meso = mesocycle(d, recovery, recoveryWeek, completedRecoveryWeek, lifts);
   const endurance = enduranceConfigured ? enduranceState(d) : null;
   const hybrid = hybridState(d, endurance, enduranceConfigured, meso);

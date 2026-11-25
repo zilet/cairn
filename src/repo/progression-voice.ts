@@ -780,6 +780,62 @@ export const ISOLATION_REP_RANGE_EARNED: VoiceSet = [
   "Every set reached the top, and the next weight up is a big jump for this lift, so the load stays and the reps climb into a higher range.",
 ];
 
+// ---- earned by repetition ---------------------------------------------------
+// Double progression's patient exit. The top set capped the range at the card's load in
+// two sessions running, and every other set landed within a rep of it: the load has
+// answered twice, so it takes one step. Arguments: the range's ceiling, then its floor.
+// Spoken in reps on purpose — it credits the work, never a rating that may not exist.
+export const REPEATED_TOP_SET_OVERLOAD: VoiceSet2 = [
+  (high, low) =>
+    `Two sessions running your top set reached ${high} and every other set landed within a rep of it — that's earned; take the small step and reset to ${low} reps.`,
+  (high, low) =>
+    `${high} on the top set twice in a row, with the rest no more than a rep behind — the weight moves now; build back up from ${low}.`,
+  (high, low) =>
+    `You've topped out at ${high} two sessions in a row and the other sets are right behind it — step the load up and climb again from ${low}.`,
+];
+
+// The same fact on assisted work: the step is less assist. Argument: the ceiling.
+export const REPEATED_TOP_SET_ASSIST_PEEL: VoiceSet1 = [
+  (high) =>
+    `Two sessions running your top set reached ${high} and the rest were within a rep — peel a little assist off.`,
+  (high) => `${high} on the top set twice in a row, the other sets right behind — take a little assist away next time.`,
+  (high) => `You've reached ${high} on the top set two sessions running with every set close — a little less assist now.`,
+];
+
+// …and on a lift whose next weight is too big a jump: the range moves up first, at the
+// held load, the same way a fully capped range would.
+export const REPEATED_TOP_SET_REP_RANGE: VoiceSet = [
+  "Two sessions running the top set capped the range with every set close behind — the next weight is a big jump here, so the load holds and the range moves up first.",
+  "You've reached the top two sessions in a row and the other sets are within a rep. Rather than a leap in weight, keep the load and take the range higher.",
+  "The top set has owned the range twice now with the rest right behind; the next weight up is too big a step for this lift, so the reps climb into a higher range first.",
+];
+
+// ---- bodyweight work: the range is the lever --------------------------------
+// A bodyweight movement whose range is capped has no load to add. The range itself
+// moves up, once, at bodyweight — never another set (the set count is the plan's).
+export const BODYWEIGHT_REP_RANGE_EARNED: VoiceSet = [
+  "You own this range at bodyweight and there's no load to add, so the range moves up and the reps climb from there.",
+  "Every set reached the top and there's no weight to put on — the rep range steps up instead.",
+  "The range is yours at bodyweight; with nothing to load, the next step is a higher rep range.",
+];
+
+// The range has already moved up once (or the move was turned down): the card holds,
+// and it says plainly what the next lever is without asking for more sets.
+export const BODYWEIGHT_RANGE_OWNED_HOLD: VoiceSet = [
+  "You own this range at bodyweight — hold it here; a harder version of the movement or a little weight in hand is the next step, whenever you want it.",
+  "The range is capped at bodyweight. It stays as written; when you want more, a tougher version or a light weight in hand is the way up.",
+  "Every set reached the top at bodyweight — keep the range as it is, and take a harder variation or a little added weight when you're ready.",
+];
+
+// ---- after a recovery week --------------------------------------------------
+// The latest session was the recovery week's lighter dose. It is not a test of this
+// load, so nothing is stepped or cut off it; the card stays where the work was.
+export const RECOVERY_WEEK_RESUME_HOLD: VoiceSet = [
+  "Last time was the recovery week's lighter work — it isn't a test of this load, so the weight stays where it was before the week.",
+  "That session was the easier recovery work, so it doesn't move anything — the load stays where your last full sessions had it.",
+  "The recovery week's lighter sessions don't count for or against this lift — pick up at the weight you were working before it.",
+];
+
 // ---- the log is truth for set count ---------------------------------------
 
 // The plan's set count can catch up to what the athlete has been doing. Arguments:
@@ -871,6 +927,10 @@ export function progressionVoicePhrases(): string[] {
     GRIND_HOLD,
     UNTESTED_PRESCRIPTION_HOLD,
     CARRY_LOGGED_AS_REPS_HOLD,
+    REPEATED_TOP_SET_REP_RANGE,
+    BODYWEIGHT_REP_RANGE_EARNED,
+    BODYWEIGHT_RANGE_OWNED_HOLD,
+    RECOVERY_WEEK_RESUME_HOLD,
   ];
   const one: Array<[VoiceSet1, string | number]> = [
     [PLATEAU_VARY_OPEN, 4],
@@ -888,6 +948,7 @@ export function progressionVoicePhrases(): string[] {
     [ACCUMULATION_REP_STAGE, 13],
     [ACCUMULATION_TOP_SET_ONLY_HOLD, 13],
     [ESCALATE_VARIATION, "Front Squat"],
+    [REPEATED_TOP_SET_ASSIST_PEEL, 8],
   ];
   const two: Array<[VoiceSet2, string | number, string | number]> = [
     [PLATEAU_VARY_TO, 4, "Front Squat"],
@@ -899,6 +960,7 @@ export function progressionVoicePhrases(): string[] {
     [REALIZATION_TOP_SET, "205 lb", "single"],
     [ESCALATE_REP_WAVE, 3, 5],
     [SET_CATCH_UP, 3, 3],
+    [REPEATED_TOP_SET_OVERLOAD, 8, 6],
   ];
   const three: Array<[VoiceSet3, string | number, string | number, string | number]> = [
     [INTRODUCE_VARIATION, "Back Squat", 13, "Front Squat"],

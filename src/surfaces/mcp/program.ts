@@ -263,7 +263,7 @@ export function registerProgramTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_program_adjustments",
-    "The handful of concrete adaptations due right now — lifts to push/hold/deload, groups that are due, missing core/grip/mobility gaps — as a plain-language digest. Most-actionable first. The user reviews these; nothing auto-applies.",
+    "The handful of concrete adaptations due right now — lifts to push/hold/deload, groups that are due, missing core/grip/mobility gaps — as a plain-language digest. Most-actionable first. This digest is the read: earned load, assist, seconds and rep-range steps land by themselves through the auto-progression proposal under the autonomy policy (quiet under lead, with Undo).",
     {},
     async () => asText(programAdjustments())
   );

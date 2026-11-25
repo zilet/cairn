@@ -6253,9 +6253,10 @@ THAW only (the first apply gate keeps its hold), an agent-authored draft that is
 re-stamped once against current evidence (`rebaseProducer`, producer key `rebase:<agent>`) — the plan
 rows it edits have not moved — and earns its tier fresh through every floor. `plan` drift is the real
 premise change and still sets it aside. The receipt says "re-checked", never "a fresh read"
-(`regenerationRebaseRationale`). The athlete's own `no` to a recovery week binds the lead-mode
-auto-draft too: `shouldAutoDraftRecoveryWeek` asks `recoveryWeekMayBeAnnounced` (one rule, with its
-safety-grade reopen).
+(`regenerationRebaseRationale`). The athlete's own `no` to a recovery week binds the earned
+recovery week too: its hold read (`recoveryWeekHold`, `src/repo/recovery-week-earned.ts`) asks
+`recoveryWeekMayBeAnnounced` (one rule — a Hold, an Undo after it landed, or a held one set aside —
+with its safety-grade reopen).
 
 **The road ahead (`road_ahead`, 2026-09-22).** `roadAhead()` (`src/repo/forward-timeline.ts`) puts the
 block's goal priority order (`blockPriority`, `src/repo/road-ahead.ts`) over the forward timeline and
@@ -7096,6 +7097,82 @@ you and your doctor"), the person's own lock or review posture, the protective-f
 - **Coverage never adds a lift whose removal was for pain or an injury** (`droppedForPainReader`,
   `src/repo/plan-coverage.ts`: an applied removal or swap whose reason, provenance, clinical stamp or
   decision ties to pain); returning it is the pain-adaptation return's job.
+
+## Autonomous deload and overload (2026-11-25)
+
+Three server-written changes, each routed through `applyProposalWithAutonomy` with its own premise
+(`SERVER_PREMISES` in `autonomy-service.ts`, or `registerServerPremise` for a module that itself
+routes through the service). A premise that fits stands in for the evidence fingerprint at routing
+and at the boundary, so sessions logged in between never park a server draft; a read that throws is
+`unknown` and lands nothing.
+
+- **The earned recovery week is the server's, not an agent's.** Once a day (the scheduler's
+  recovery slot) `settleEarnedRecoveryWeek` (`src/domain/brain/recovery-week-change.ts`) reads
+  whether the week starting next Monday has earned a lighter one: the mesocycle reads `deload-due`
+  (arm `streak` or `fatigue`, `mesocycle.deload_basis`), or the block's own deload week falls on it
+  and will really run (`scheduled`, block-phase.ts — a push athlete without loaded-weeks evidence
+  gets nothing). It writes ONE draft with no agent: agent `recovery-week`, the canonical
+  recovery-week instruction, and `days` from the one shared builder `recoveryWeekPlanDays`
+  (recovery-week.ts — the recovery overlay laid over the plan, so the snapshot is what the week
+  prescribes; the fuel package and the one-tap "plan me a lighter week" use it too). Policy is
+  untouched: lead and announce_first announce it for next Monday with the overlay's Undo,
+  review_everything holds one draft. Its premise (`recoveryWeekStillEarned`,
+  `src/repo/recovery-week-earned.ts`): a broken streak or an opened cycle withdraws it quietly, a
+  hold arriving withdraws it quietly, a failed read waits a day, and a passed Monday withdraws it —
+  never a mid-week landing. Holds: a race taper, race week or post-race window on the landing week,
+  a bounded trip over three or more of its days, any recovery week drafted, coming or running
+  (never two), the 21-day cooldown, and the athlete's refusal in the block (a Hold, an Undo after
+  landing, or a held draft set aside — recovery-refusal.ts), reopened only by something
+  safety-grade; pain, the cut and untested slots are not holds. The dose is about half the working
+  sets with intensity kept: load ×0.9 (`RECOVERY_INTENSITY_FACTOR`; assist ×1.1, a timed hold's
+  seconds ×0.9). Its expectations open at the week's `exit_on` against pre-week baselines. A
+  `scheduled` overlay is the block's deload week itself, so the block keeps advancing through it;
+  any other overlay pauses the block. An earned week that lands ON the block's own deload week is
+  stamped `scheduled` (its sentence keeps the loaded-weeks reason), so that deload never runs
+  twice; one landing on a new block's first week, or on no block, is an inserted week the block
+  pauses through and starts after. A finished overlay week resets the loaded-weeks count exactly as
+  the legacy ledger does (`completedRecoveryCycleBefore`, `latestCompletedRecoveryWeek`), however
+  heavy it ran. The fuel package's recovery week has its own premise (`fuelRecoveryWeekStillStands`):
+  the under-fuelling loop's own last read still saying `reduce`, its Monday not passed, no other
+  cycle over it; its calorie step is a separate draft and is never touched. The one-tap week is
+  refused at the tap when a cycle or the cooldown would stop it landing. Sessions inside a running overlay grade against its source
+  snapshot (`recoveryPrescriptionOn`, training-read.ts), so a compliant one is never a comparable
+  strength exposure.
+- **Earned by repetition, and the levers that never wrote** (`src/repo/progression.ts`; either
+  drive — push's own top-set authority steps first where it applies). Under steady drive the load step needs every working set at the ceiling, so a lift whose top set capped
+  the range while one back-off landed a rep short held as `top_set_earned` indefinitely.
+  `repeatedTopSetEvidence` is the conservative double-progression exit: when the two latest
+  sessions under the current prescription that count as a test of the lift
+  (`sessionCountsTowardLiftTrajectory`, so a recovery week is stepped over, never paired) were each
+  worked at the card's load (`sessionWorkingLoad`), with the card's full set count there, every set
+  within one rep of the ceiling and the top set on it and strong, the earlier one inside
+  `LIFT_CURRENT_WINDOW_DAYS`, and neither held a heavier set under the rep floor (a failed attempt
+  at more rejects the pair; the pair may straddle a recovery week), the lift takes one ordinary step from the worked load (less assist on
+  assisted work), `earned_by:"repeated_top_set"`. It runs only off the fallthrough hold, after the
+  `earned_hold` and push branches, so the untested slot, a holds-load phase, a load-limiting note,
+  the cut's veto, dose comparability, the lighter-load guard and the autoregulation and pain brakes
+  all still win; a coarse isolation jump takes the existing rep-range move instead; an Undo of an
+  auto-progression change on the lift blocks it until a newer prescription has been trained. A
+  capped bodyweight range moves up once through the same rep-range move, never another set. A
+  compliant recovery-week session is never evidence: the card resumes at the pre-week load
+  (`RECOVERY_WEEK_RESUME_HOLD`). For assisted and bodyweight work `latestTopSet` names the hardest
+  set (signed load, then reps), never an Epley score, which inverts on a negative load.
+- **The volume step** (`src/domain/brain/volume-step.ts`, its own daily slot after the recovery
+  week's): the other half of the volume bound. Coverage and the set catch-up only restore toward
+  what the athlete already does. When muscle or strength is a stated priority, the log has carried
+  every authored set at a held-or-rising load (`volumeToleranceRead`), the group's lifts are
+  progressing or maintaining, and the last fortnight is harm-free on the days the group was trained
+  (`harmEvidenceOnDay`), the pass adds ONE set to ONE lift already in the plan, in the group furthest
+  below its bound (`rankVolumeStepGroups`), at most one group a calendar week. A lift may rise one
+  set above its own habit (`min(5, habit + 1)`); the proportional bound is held at the group: its
+  planned weekly sets stay within `ceil(1.2 ×` its habitual weekly effective sets over the 56 days
+  before`)` and within twenty. The next step waits until the last was trained twice with every
+  written set carried at a held-or-risen load (`step_not_carried` otherwise). It is held by
+  everything coverage holds for — an affirmed cut above all: in a deficit volume is never added —
+  plus a recovery week drafted, coming or running, deload-due, pain, an injury, a constraint note,
+  an untested slot or a session composed on the day; a no (Undo, Hold, discard) is remembered per
+  group until the intent changes or six weeks pass. Quiet with Undo under lead, announced under
+  announce_first, one held draft under review_everything.
 
 ## Background enrichment (`src/enrich.ts`)
 

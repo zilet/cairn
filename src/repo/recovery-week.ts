@@ -1,9 +1,9 @@
 import { db } from "../db.js";
 import { getProposal, proposalSummary, setProposalStatus } from "./proposals.js";
 import {
+  adaptBasePlanDayForRecovery,
   cancelRecoveryCycleForProposal,
   recoveryCycleAt,
-  recoveryCycleCooldown,
 } from "./recovery-cycles.js";
 import {
   activeRecoveryWeekLedger,
@@ -12,7 +12,6 @@ import {
   RECOVERY_WEEK_ACTIVE_DAYS,
   RECOVERY_WEEK_INSTRUCTION_PREFIX,
 } from "./recovery-week-ledger.js";
-import { recoveryWeekMayBeAnnounced } from "./recovery-refusal.js";
 import { localDateISO } from "./shared.js";
 
 // Keep these public through recovery-week/repo without duplicating the ledger's
@@ -25,43 +24,55 @@ export { RECOVERY_WEEK_ACTIVE_DAYS, RECOVERY_WEEK_INSTRUCTION_PREFIX };
 // pendingRecoveryDraft() flips the Program button into a "Review your recovery
 // week →" link while a draft waits, and supersedeRecoveryWeekDrafts() retires the
 // prior draft when a fresh one lands so repeated taps never pile up drafts.
-// The canonical full recovery-week instruction — shared by the lead-mode auto-draft
-// (scheduler) and kept prefix-compatible with the PWA's one-tap draft so the
-// drafted/active state machine (pendingRecoveryDraft, supersedeRecoveryWeekDrafts)
-// treats both sources as the same thing.
+// The canonical full recovery-week instruction — stored on the earned week the daily
+// pass writes (recovery-week-change.ts) and on the fuel package's week, and kept
+// prefix-compatible with the PWA's one-tap draft so the drafted/active state machine
+// (pendingRecoveryDraft, supersedeRecoveryWeekDrafts) treats every source as the same thing.
 export const RECOVERY_WEEK_INSTRUCTION =
   "Reshape next week into a RECOVERY (deload) week: cut working-set volume roughly in half, " +
   "keep every movement pattern, keep efforts easy and crisp (3-4 reps in reserve), no new " +
   "exercises and no load PRs — an earned reset after sustained loading, so the athlete comes back stronger.";
 
-// Whether the lead-mode coach should draft the recovery week ITSELF right now: the
-// conductor is asking for one (a recovery lead that is neither running nor already
-// drafted), the athlete has chosen the lead posture, and no open/cooldown cycle
-// already owns the recovery window. The scheduler owns the ≤1×/day cadence stamp.
-// This is what keeps the conductor's "your coach sets
-// this up automatically" copy honest: the same read that makes the promise is the
-// read that triggers the draft.
-export function shouldAutoDraftRecoveryWeek(opts: {
-  lead_mode?: unknown;
-  focus_lead_domain?: unknown;
-  recovery_active?: unknown;
-  status: unknown;
-  deload_due?: unknown;
-  mesocycle_phase?: unknown;
-}): boolean {
-  const deloadDue =
-    opts.deload_due === true || String(opts.mesocycle_phase ?? "") === "deload-due";
-  const requested =
-    String(opts.lead_mode) === "lead" &&
-    String(opts.focus_lead_domain) === "recovery" &&
-    opts.recovery_active !== true &&
-    opts.status == null &&
-    deloadDue;
-  if (!requested) return false;
-  const today = localDateISO();
-  // The athlete's "no" to a recovery week stands for the block unless something
-  // safety-grade has arrived since — the same one rule the announcement asks.
-  return recoveryCycleCooldown(today).allowed && recoveryWeekMayBeAnnounced(today).allowed;
+// The author of every server-written recovery week (the earned week the daily pass
+// settles, recovery-week-change.ts, and the person's one-tap "plan me a lighter week").
+// Neither is an agent: the week is the plan as it stands, at the recovery dose.
+export const RECOVERY_WEEK_AGENT = "recovery-week";
+
+export interface RecoveryWeekPlanDay {
+  day_number: number;
+  name: string;
+  focus: string | null;
+  items: any[];
+}
+
+/**
+ * The plan's lifting week at the recovery dose — THE one builder every recovery-week
+ * draft's `days` comes from (the earned week, the one-tap week, the fuel package's week).
+ * It is the overlay itself (recovery-cycles.ts adaptBasePlanDayForRecovery) laid over each
+ * plan day, so the snapshot a draft carries says exactly what the week will prescribe:
+ * every movement kept in order, about half the working sets, the load eased by a tenth,
+ * easy effort. The plan itself is never written — applying a recovery week schedules the
+ * overlay (proposals.ts), and the snapshot is what the quality check and the receipt read.
+ * Days with nothing on them are left out.
+ */
+export function recoveryWeekPlanDays(plan: readonly any[] | null | undefined): RecoveryWeekPlanDay[] {
+  return (Array.isArray(plan) ? plan : [])
+    .filter((day) => Array.isArray(day?.items) && day.items.length > 0)
+    .map((day) => {
+      const adapted = adaptBasePlanDayForRecovery(day);
+      return {
+        day_number: Number(day.day_number),
+        name: String(day.name ?? "Recovery"),
+        focus: day.focus == null ? null : String(day.focus),
+        // The overlay's own bookkeeping stays on the overlay; the snapshot is plan items.
+        items: adapted.items.map((raw: any) => {
+          const item = { ...raw };
+          delete item.recovery_overlay;
+          delete item.effort;
+          return item;
+        }),
+      };
+    });
 }
 
 export function pendingRecoveryDraft(): { id: number } | null {

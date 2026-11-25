@@ -454,6 +454,10 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   last-week deload holds nothing unless that loaded-weeks evidence earns it (`scheduled_deload`) —
   every surface that names the week reads ONE resolution (`src/repo/block-phase.ts`), and a fresh
   block after such a skip does not hide a deload the loaded weeks call for.
+- **An earned recovery week, an earned load step and an earned set are the server's own changes**
+  (`recovery-week-change.ts`, `repeatedTopSetEvidence` in `progression.ts`, `volume-step.ts`): no
+  agent writes them, each has its own premise in `SERVER_PREMISES`/`registerServerPremise`, and a
+  running cut never adds a set. Details: `docs/ARCHITECTURE.md` "Autonomous deload and overload".
 - **Assist is a sign, and the sign is guarded at log time.** A positive weight typed onto a
   negative-history lift within 1.5× the recent assist band is stored negative (`assistSignContext`,
   `src/repo/sessions.ts`; Garmin imports opt out). An exercise's NAME is never a sign — only its

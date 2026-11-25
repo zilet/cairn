@@ -6,6 +6,7 @@ import {
   revertDecision,
 } from "../dist/domain/brain/autonomy-service.js";
 import { addDaysISO, localDateISO } from "../dist/repo/shared.js";
+import { recoveryWeekHold } from "../dist/repo/recovery-week-earned.js";
 import { repo, resetTables, savePlanDaySettled } from "./_seed.js";
 
 beforeEach(() => {
@@ -105,8 +106,8 @@ test("an active cycle adapts the selected plan day and snapshots durable cycle p
   assert.equal(prepared.daily_session.items[0].sets, 2);
   assert.equal(
     prepared.daily_session.items[0].target_weight,
-    // The overlay's 190 (225 × 0.85 on the grid) eased ×0.9 is 171, down onto the 5 lb grid.
-    170,
+    // The overlay's 200 (225 × 0.9 on the grid) eased ×0.9 is 180, already on the 5 lb grid.
+    180,
     "the recovery overlay is retained inside the stricter day-level easy cap, on a loadable number"
   );
   assert.equal(prepared.daily_session.provenance.daily_decision.recovery_cycle.id, cycle.id);
@@ -129,16 +130,13 @@ test("open cycles and cooldown suppress duplicate recovery drafts and applies", 
   const today = localDateISO();
   const open = repo.scheduleRecoveryCycle({ effective_on: today, exit_on: addDaysISO(today, 7) });
   repo.activateRecoveryCycle(open.id, today);
-  assert.equal(
-    repo.shouldAutoDraftRecoveryWeek({
-      lead_mode: "lead",
-      focus_lead_domain: "recovery",
-      recovery_active: false,
-      status: null,
-    }),
-    false
-  );
-  assert.throws(() => repo.applyProposal(recoveryProposal("Duplicate").id), /recovery cycle blocked: cycle_open/);
+  // The earned recovery week's hold read (recovery-week-earned.ts) for a week landing
+  // while this one still runs.
+  assert.equal(recoveryWeekHold(today, addDaysISO(today, 3)).reason, "open");
+  const duplicate = recoveryProposal("Duplicate");
+  assert.throws(() => repo.applyProposal(duplicate.id), /recovery cycle blocked: cycle_open/);
+  // The refused duplicate is retired, so the reads below are about the cycles alone.
+  repo.setProposalStatus(duplicate.id, "superseded");
 
   repo.cancelRecoveryCycle(open.id, today);
   const effectiveOn = addDaysISO(today, -17);
@@ -147,15 +145,7 @@ test("open cycles and cooldown suppress duplicate recovery drafts and applies", 
   repo.activateRecoveryCycle(completed.id, effectiveOn);
   repo.completeRecoveryCycle(completed.id, exitOn);
   assert.equal(repo.recoveryCycleCooldown(today).reason, "cooldown");
-  assert.equal(
-    repo.shouldAutoDraftRecoveryWeek({
-      lead_mode: "lead",
-      focus_lead_domain: "recovery",
-      recovery_active: false,
-      status: null,
-    }),
-    false
-  );
+  assert.equal(recoveryWeekHold(today, addDaysISO(today, 3)).reason, "cooldown");
 });
 
 function acceptDose(date, { setsLogged, rir, targetOffset = 0 }) {

@@ -52,6 +52,8 @@ import { addDaysISO, localDayOfStamp, nowContext } from "./repo/shared.js";
 import { runUnderfuelingControlLoop } from "./domain/brain/underfueling-service.js";
 import { runEnergyDeficiencyWatch } from "./domain/brain/energy-deficiency-service.js";
 import { closePlanCoverageGap } from "./domain/brain/coverage-change.js";
+import { settleEarnedRecoveryWeek } from "./domain/brain/recovery-week-change.js";
+import { settleVolumeStep } from "./domain/brain/volume-step.js";
 import { routeTripVersions } from "./domain/today/brief-asks.js";
 import {
   MEAL_REFRESH_INSTRUCTION_KEY,
@@ -1085,12 +1087,14 @@ export function startScheduler() {
     //      opening the doctor-loop / next-checkup endpoint. The next-checkup read then
     //      reflects the same persisted attention state on the very next open.
     const checkupAttnDue = dailySlotDue(now, "checkup_attention_date");
-    // (g) LEAD-MODE recovery auto-draft (≤1×/day). When the conductor's lead is the
-    //     recovery-deload ASK (due, not running, nothing drafted) and the athlete has
-    //     chosen lead posture, the coach drafts the recovery week ITSELF — the draft
-    //     rides the exact one-tap path (evolveProgram → autonomy → announce → lands
-    //     at the week boundary, Undo from Plan). This is the mechanism behind the
-    //     conductor's "your coach sets this up automatically" line.
+    // (g) The EARNED recovery week (≤1×/day, deterministic, no agent). When the loaded
+    //     weeks earn a deload (mesocycle deload-due) or the block's own deload week will
+    //     really run next week, the coach sets the lighter week up itself
+    //     (recovery-week-change.ts) through the ordinary autonomy path: lead and
+    //     announce_first announce it for next Monday with Undo, review_everything holds
+    //     one draft. Its premise is its own read, so sessions logged before Monday never
+    //     park it. This is the mechanism behind the conductor's "your coach sets this up
+    //     automatically" line. The stored slot key keeps its historical name.
     const recoveryAutoDue = dailySlotDue(now, "recovery_auto_draft_date");
     // The fuel-protection read is deterministic and cheap enough for one daily
     // pass. It normally holds; only multi-channel agreement schedules a bounded
@@ -1109,6 +1113,9 @@ export function startScheduler() {
     //     the lead mode says so) asked, with Undo. This is the only caller that acts; a
     //     person's save never edits the plan back. One change at a time, never doubled.
     const coverageCheckDue = dailySlotDue(now, "plan_coverage_check_date");
+    // The volume step: one earned set on one group a week, never during a cut or beside
+    // a recovery week (its own holds decide; volume-step.ts).
+    const volumeStepDue = dailySlotDue(now, "volume_step_check_date");
     // (h) "Behind you": one finished goal looked back on a night (gated on its rows).
     const goalReviewDue = goalReviewTickDue(now);
 
@@ -1127,7 +1134,8 @@ export function startScheduler() {
       !recoveryAutoDue &&
       !underfuelDue &&
       !deficitWatchDue &&
-      !coverageCheckDue
+      !coverageCheckDue &&
+      !volumeStepDue
     )
       return;
     proactiveBusy = true;
@@ -1371,24 +1379,25 @@ export function startScheduler() {
         });
       }
       if (recoveryAutoDue) {
-        await runScheduled("recovery_auto_draft_date", localToday(now), "recovery_auto_draft_date", async () => {
-          const focus: any = repo.getCoachingFocus();
-          const mesoPhase = repo.getProgramState()?.mesocycle?.phase;
-          const draft = repo.shouldAutoDraftRecoveryWeek({
-            lead_mode: s.lead_mode,
-            focus_lead_domain: focus?.available ? focus?.lead?.domain : null,
-            recovery_active: focus?.lead?.recovery_active,
-            status: repo.recoveryWeekStatus(),
-            deload_due: mesoPhase === "deload-due",
-          });
-          if (draft) {
-            const r: any = await evolveProgram("auto", repo.RECOVERY_WEEK_INSTRUCTION);
-            if (!r.ok)
-              throw schedulerTaskError("recovery_auto_draft_date", r, "recovery auto-draft provider unavailable");
-            log.info(`[proactive] lead mode: auto-drafted the recovery week (lands at the boundary; Undo from Plan).`);
-            return { outcome: "succeeded", value: r };
-          }
-          return { outcome: "no_op" };
+        await runScheduled("recovery_auto_draft_date", localToday(now), "recovery_auto_draft_date", () => {
+          const result = settleEarnedRecoveryWeek({ date: localToday(now), act: true });
+          if (result.status === "changed")
+            log.info(
+              `[proactive] an earned recovery week (${result.arm ?? "?"}) was set up for ${result.lands_on ?? "?"} (${result.tier ?? "?"}).`
+            );
+          if (result.status === "asked") log.info(`[proactive] an earned recovery week is held for a yes.`);
+          const acted = result.status === "changed" || result.status === "asked" || result.withdrawn.length > 0;
+          return { outcome: acted ? "succeeded" : "no_op", value: result };
+        });
+      }
+      // (g') The daily volume step runs after the recovery week it must never stack on;
+      //      a week drafted, coming or running is one of its own holds.
+      if (volumeStepDue) {
+        await runScheduled("volume_step_check_date", localToday(now), "volume_step_check_date", () => {
+          const result = settleVolumeStep({ date: localToday(now), act: true });
+          if (result.status === "routed")
+            log.info(`[proactive] the log earned a set; a volume step was routed (${result.tier ?? "?"}).`);
+          return { outcome: result.status === "routed" ? "succeeded" : "no_op", value: result };
         });
       }
       if (triggerCheckDue) {

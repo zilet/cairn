@@ -12,7 +12,7 @@ The OAuth 2.1 doors an AI app signs in through for `/mcp` (`/.well-known/oauth-*
 [OPERATIONS.md](OPERATIONS.md) "Connect an AI app (MCP)".
 See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 
-**421 routes** across 138 groups.
+**422 routes** across 138 groups.
 
 ## `/activities`
 
@@ -679,6 +679,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | GET | `/api/plan/look-ahead` | The Program landing's look-ahead: today through the end of next week, a row a day (the lift day's name and key movements, the calendar's runs and rest), with the week's context (race-build rung, recovery or deload week). Read-only; registered ahead of /plan/:day, which would otherwise take "look-ahead" for a day number. |
 | GET | `/api/plan/quality` |  |
 | GET | `/api/plan/recovery-status` | The recovery-week story for the Plan surface: a waiting draft ('drafted'), the applied lighter week in flight ('applied', ~a week from the apply stamp), or null. The Plan tab's banner reads this so a reshaped week announces itself — heads-up + what changed — instead of arriving silently. |
+| GET | `/api/plan/recovery-week-preview` | What the daily earned-recovery-week pass WOULD set up next, read-only: nothing is drafted. |
 | GET | `/api/plan/redraw` | What is standing right now, so a reload repaints the in-flight state instead of losing it, and a build the coach could not do is visible rather than silent. |
 | POST | `/api/plan/redraw` | REDRAW MY WEEK — the Plan tab's own door to the structure hand-off. Chat's `flag_training_structure` used to be the only one, which meant the athlete had to know the magic words; this is the same function, so the same ask typed here or said there resolves to ONE standing flag and ONE built week. What comes back is the server's own readback of what is genuinely in flight, never a claim made at the door.  ok:false at HTTP 200 is the designed failure signal (the PWA's api() helper resolves to the body regardless of status), not an HTTP error. |
 | GET | `/api/plan/upcoming` | A calm forward look for the Plan surface: the training/recovery changes the brain will land soon (a recovery week landing Monday, a bounded target change), so a reshaped week announces itself instead of arriving silently. Deduped against the recovery banner's draft; null when nothing is waiting. |

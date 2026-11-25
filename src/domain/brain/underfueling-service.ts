@@ -1,5 +1,6 @@
 import { applyProposalWithAutonomy } from "./autonomy-service.js";
-import { getAppState, setAppStateStrict } from "../../repo/app-state.js";
+import { getAppState, setAppState, setAppStateStrict } from "../../repo/app-state.js";
+import { UNDERFUEL_TRAINING_READ_KEY } from "../../repo/recovery-week-earned.js";
 import {
   getBrainDecision,
   getBrainRollback,
@@ -14,7 +15,12 @@ import { getActiveNutritionTarget } from "../../repo/nutrition.js";
 import { getPlan } from "../../repo/plan.js";
 import { recompositionStageAt } from "../../repo/profile.js";
 import { createProposal, getProposal, setProposalStatus } from "../../repo/proposals.js";
-import { RECOVERY_WEEK_INSTRUCTION, RECOVERY_WEEK_INSTRUCTION_PREFIX, recoveryWeekStatus } from "../../repo/recovery-week.js";
+import {
+  RECOVERY_WEEK_INSTRUCTION,
+  RECOVERY_WEEK_INSTRUCTION_PREFIX,
+  recoveryWeekPlanDays,
+  recoveryWeekStatus,
+} from "../../repo/recovery-week.js";
 import { buildVolumeRestoreProposal } from "../../repo/progression.js";
 import { activeRecoveryWeekLedger } from "../../repo/recovery-week-ledger.js";
 import { recoveryWeekMayBeAnnounced } from "../../repo/recovery-refusal.js";
@@ -24,7 +30,6 @@ import { currentUnderfuelingRead } from "../../repo/underfueling-snapshot.js";
 import type { UnderfuelingRead } from "../../repo/underfueling.js";
 import { applyPersonalResponseModifier, personalResponseModifierFor } from "../../repo/reaction-model.js";
 import { withSqliteSavepoint } from "../../repo/sqlite-savepoint.js";
-import { easedLoad } from "../../repo/load-grid.js";
 
 export { currentUnderfuelingRead } from "../../repo/underfueling-snapshot.js";
 
@@ -308,51 +313,10 @@ function nutritionProposal(
   });
 }
 
-function recoveryItems(items: any[]): any[] {
-  return (Array.isArray(items) ? items : []).map((item: any) => {
-    if (item?.kind === "cardio") {
-      return {
-        ...item,
-        target_duration_min: Number.isFinite(Number(item.target_duration_min))
-          ? Math.max(10, Math.round(Number(item.target_duration_min) * 0.7))
-          : item.target_duration_min,
-        target_distance_km: Number.isFinite(Number(item.target_distance_km))
-          ? Math.max(1, Math.round(Number(item.target_distance_km) * 0.7 * 10) / 10)
-          : item.target_distance_km,
-        target_zone: "Z1-Z2",
-        note: [item.note, "Recovery week: easy conversational work; no hard intervals."].filter(Boolean).join(" "),
-      };
-    }
-    const targetWeight = Number(item?.target_weight);
-    const targetSeconds = Number(item?.target_seconds);
-    return {
-      ...item,
-      sets: Number.isFinite(Number(item?.sets)) ? Math.max(1, Math.ceil(Number(item.sets) / 2)) : item?.sets,
-      target_weight:
-        Number.isFinite(targetWeight) && targetWeight > 0
-          ? // Onto the lift's own load grid (load-grid.ts), never a half-pound no bar loads.
-            easedLoad(targetWeight, 0.9, item?.exercise, item?.muscle_group == null ? null : String(item.muscle_group))
-          : item?.target_weight,
-      target_seconds:
-        Number.isFinite(targetSeconds) && targetSeconds > 0
-          ? Math.max(10, Math.round(targetSeconds * 0.8))
-          : item?.target_seconds,
-      note: [item?.note, "Recovery week: easy, crisp work with 3-4 reps in reserve; no PR attempts."]
-        .filter(Boolean)
-        .join(" "),
-    };
-  });
-}
-
 function recoveryProposal(read: UnderfuelingRead, coordinationKey: string): any | null {
-  const days = (getPlan() as any[])
-    .filter((day) => Array.isArray(day?.items) && day.items.length)
-    .map((day) => ({
-      day_number: Number(day.day_number),
-      name: String(day.name ?? "Recovery"),
-      focus: day.focus == null ? null : String(day.focus),
-      items: recoveryItems(day.items),
-    }));
+  // The ONE recovery-week builder (recovery-week.ts): the plan at the overlay's own dose,
+  // so the snapshot says what the week will actually prescribe.
+  const days = recoveryWeekPlanDays(getPlan() as any[]);
   if (!days.length) return null;
   return createProposal(UNDERFUEL_BRAIN_AGENT, `${RECOVERY_WEEK_INSTRUCTION} Coordinated key: ${coordinationKey}.`, "", {
     summary: "A coordinated recovery week is scheduled so strength and recovery can absorb the current block.",
@@ -607,6 +571,15 @@ export function runUnderfuelingControlLoop(
   opts: { read?: UnderfuelingRead } = {}
 ): UnderfuelingControlResult {
   const read = opts.read ?? currentUnderfuelingRead(today);
+  // What this pass's read asks of training, remembered: the premise of the package's
+  // recovery week (recovery-week-earned.ts fuelRecoveryWeekStillStands) is this loop's own
+  // read, never a second derivation of it. Fail-soft: a lost stamp only means the premise
+  // reads the fuel read itself.
+  try {
+    setAppState(UNDERFUEL_TRAINING_READ_KEY, JSON.stringify({ date: today, training: read.action.training }));
+  } catch {
+    /* bookkeeping only */
+  }
   // Volume only comes back once the fuel read has actually settled, not merely
   // because training is allowed to proceed. A waist-only prescription_strain
   // still raises calories with `training: "proceed"`; climbing volume back on

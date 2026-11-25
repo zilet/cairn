@@ -15,6 +15,7 @@ import {
   buildTrainingFeedbackExpectations,
   liftProgressionSubjects,
   rebaseDeferredExpectations,
+  sessionFeedbackBaseline,
 } from "./brain/change-expectations.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { estimateExpenditure } from "./expenditure.js";
@@ -35,7 +36,11 @@ import {
 import { PlanQualityError, type PlanQualityReport, qualityIssueKey, validateTrainingPlan } from "./plan-quality.js";
 import { statedLiftSplit } from "./stated-split.js";
 import { readVolumeFloorContext } from "./volume-floor-context.js";
-import { orderPlanDaysForEffect } from "../domain/training/plan-item-order.js";
+import {
+  orderPlanDaysForEffect,
+  PLAN_ITEM_EFFECT_TIER,
+  planItemEffectTier,
+} from "../domain/training/plan-item-order.js";
 import { computeGoalCheck, KCAL_ABSOLUTE_FLOOR, KCAL_PER_LB, recompositionStageAt } from "./profile.js";
 import { volumeRestoreLedger } from "./volume-guard.js";
 import { localDateISO, parseDbTime } from "./shared.js";
@@ -48,7 +53,7 @@ import {
   stampRecoveryWeekApplied,
   stampRecoveryWeekAppliedStrict,
 } from "./recovery-week-ledger.js";
-import { activateRecoveryCycle, scheduleRecoveryCycle } from "./recovery-cycles.js";
+import { activateRecoveryCycle, RECOVERY_OVERLAY_ARMS, scheduleRecoveryCycle } from "./recovery-cycles.js";
 import { afterSqliteCommit, withSqliteSavepoint } from "./sqlite-savepoint.js";
 // Call-time only (a cycle through progression.ts is harmless): a person's own direct
 // edit records any coverage gap it makes as theirs.
@@ -568,6 +573,21 @@ function datePlusDays(date: string, days: number): string {
   return localDateISO(new Date(Date.parse(`${date}T00:00:00Z`) + days * 864e5));
 }
 
+// The plan's main lifts (the primary effect tier, plan-item-order.ts) — the lifts a
+// recovery week's "you come back at least as strong" prediction is made about.
+function recoveryAnchorLifts(): string[] {
+  const out: string[] = [];
+  for (const day of getPlan() as any[]) {
+    for (const item of Array.isArray(day?.items) ? day.items : []) {
+      if (!item?.exercise || item.kind === "cardio") continue;
+      if (planItemEffectTier(item) !== PLAN_ITEM_EFFECT_TIER.primary) continue;
+      const name = String(item.exercise);
+      if (!out.some((seen) => seen.toLowerCase() === name.toLowerCase())) out.push(name);
+    }
+  }
+  return out.slice(0, 6);
+}
+
 function proposalDecisionShape(p: any): {
   kind: "nutrition_target" | "training_structure" | "training_target" | "exercise_rotation";
   domain: "nutrition" | "training" | "recovery";
@@ -826,6 +846,12 @@ function recordAppliedProposalDecision(
         evaluator_version: nutritionEvaluatorVersion,
       });
     }
+    // A recovery week is judged by what comes AFTER it: its windows open the day the
+    // lighter week ends (exit_on), never the day it is applied, and its baselines are read
+    // from before the week began — so the lighter week itself is never held against it.
+    const recoveryExit = recoveryCycle ? String(recoveryCycle.exit_on ?? "").slice(0, 10) || null : null;
+    const recoveryStart = recoveryCycle ? String(recoveryCycle.effective_on ?? "").slice(0, 10) || today : today;
+    const judgedFrom = recoveryExit ?? today;
     if (!nutrition && !expectations.length) {
       const plannedDays = Math.max(
         1,
@@ -837,8 +863,8 @@ function recordAppliedProposalDecision(
         direction: "complete",
         baseline: null,
         target: { rate: 0.75, planned_sessions: plannedDays * 4 },
-        window_start: today,
-        window_end: datePlusDays(today, 28),
+        window_start: judgedFrom,
+        window_end: datePlusDays(judgedFrom, 28),
         minimum_data: { sessions: Math.min(2, plannedDays) },
         confounder_policy: "exclude_context_events",
         confidence: "tentative",
@@ -855,7 +881,19 @@ function recordAppliedProposalDecision(
     // a quiet logger collects no predictions rather than a drawer of permanently
     // inconclusive ones. Placed AFTER the adherence fallback above so it keeps
     // owning the "nothing else to say" case exactly as before.
-    if (!nutrition) {
+    if (!nutrition && recoveryExit) {
+      // A recovery week predicts that the main lifts come back at or above where they
+      // stood before it, and that sessions do not feel worse — both read from the week's
+      // exit, against the picture from before it started.
+      try {
+        expectations.push(...buildTrainingFeedbackExpectations(recoveryExit, sessionFeedbackBaseline(recoveryStart)));
+        expectations.push(
+          ...buildLiftProgressionExpectations(liftProgressionSubjects(recoveryAnchorLifts(), recoveryStart), recoveryExit)
+        );
+      } catch {
+        // Learning telemetry is never allowed to sink an authoritative apply.
+      }
+    } else if (!nutrition) {
       try {
         expectations.push(...buildTrainingFeedbackExpectations(today));
         expectations.push(...buildLiftProgressionExpectations(liftProgressionSubjects(exercises, today), today));
@@ -1372,11 +1410,15 @@ function applyProposalUnit(id: number, opts: ProposalApplyOptions = {}) {
     const effectiveOn = String(
       decision?.effective_date ?? opts.freshnessCheckedAt ?? localDateISO()
     ).slice(0, 10);
+    // Why the week is lighter rides on the overlay: the block's own deload made lighter
+    // (`scheduled`) keeps the block's calendar through it (program-blocks.ts).
+    const arm = String(parsed?.recovery_week?.arm ?? "");
     const cycle = scheduleRecoveryCycle({
       effective_on: effectiveOn,
       overlay: {
         source_proposal_id: Number(p.id),
         source_decision_id: decision?.id == null ? null : Number(decision.id),
+        ...((RECOVERY_OVERLAY_ARMS as readonly string[]).includes(arm) ? { arm } : {}),
       },
       reason: proposalSummary(p) ?? "An earned recovery week",
     });

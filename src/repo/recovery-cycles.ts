@@ -6,6 +6,15 @@ import {
 } from "./recovery-week-ledger.js";
 import { addDaysISO, daysBetweenISO, localDateISO } from "./shared.js";
 import { easedLoad } from "./load-grid.js";
+import { afterSqliteCommit } from "./sqlite-savepoint.js";
+import { bumpTrainingDataVersion } from "./training-cache.js";
+
+// A cycle opening, starting, ending or being undone changes what the program read says
+// (the mesocycle reads a running recovery week as `deload`), so every write moves the
+// training-data version the memoized reads key on.
+function cycleWritten(): void {
+  afterSqliteCommit(bumpTrainingDataVersion);
+}
 
 export const RECOVERY_CYCLE_COOLDOWN_DAYS = 21;
 export const RECOVERY_OVERLAY_MAX_BYTES = 1024;
@@ -19,7 +28,25 @@ export const RECOVERY_OVERLAY_KEYS = [
   "effort",
   "preserves_movements",
   "mutates_plan",
+  "arm",
 ] as const;
+
+// The recovery week as a DOSE: about half the working sets for a week, intensity kept
+// largely intact. A deload that cuts volume roughly in half while holding the load near
+// where it was keeps the strength the block built (the taper/deload literature); in a
+// calorie deficit intensity is also what tells the body to keep its muscle, so the load
+// eases by a tenth, not more. Every recovery week reads these numbers — the
+// server-authored one, the fuel package's and an older agent-written one alike.
+export const RECOVERY_WORKING_SET_FRACTION = 0.5;
+export const RECOVERY_INTENSITY_FACTOR = 0.9;
+// Assisted work takes a tenth more assistance — the same tenth, in the easier direction.
+export const RECOVERY_ASSIST_FACTOR = 1.1;
+
+// Why the overlay exists. `scheduled` is the block's own deload week made lighter, so the
+// block keeps its calendar through it (program-blocks.ts advanceBlockWeek); every other
+// arm is a week inserted into the block, which pauses while it runs.
+export const RECOVERY_OVERLAY_ARMS = ["streak", "fatigue", "scheduled", "asked"] as const;
+export type RecoveryOverlayArm = (typeof RECOVERY_OVERLAY_ARMS)[number];
 
 export type RecoveryCycleStatus = "scheduled" | "active" | "recheck" | "exit_review" | "completed" | "canceled";
 
@@ -150,10 +177,14 @@ export function normalizeRecoveryOverlay(value: unknown): Record<string, unknown
   if (input.mutates_plan != null && input.mutates_plan !== false) {
     throw new Error("recovery overlay cannot mutate the plan");
   }
-  const fractionInput = input.working_set_fraction == null ? 0.5 : Number(input.working_set_fraction);
+  const fractionInput =
+    input.working_set_fraction == null ? RECOVERY_WORKING_SET_FRACTION : Number(input.working_set_fraction);
   if (!Number.isFinite(fractionInput)) throw new Error("working_set_fraction must be numeric");
   const effort = input.effort == null ? "easy" : String(input.effort);
   if (effort !== "easy" && effort !== "deload") throw new Error("recovery overlay effort must be easy or deload");
+  const arm = input.arm == null ? null : String(input.arm);
+  if (arm != null && !(RECOVERY_OVERLAY_ARMS as readonly string[]).includes(arm))
+    throw new Error("recovery overlay arm is not recognized");
   const normalized: Record<string, unknown> = {
     version: 1,
     base_plan_day_id: optionalPositiveInteger(input.base_plan_day_id, "base_plan_day_id"),
@@ -164,6 +195,8 @@ export function normalizeRecoveryOverlay(value: unknown): Record<string, unknown
     effort,
     preserves_movements: true,
     mutates_plan: false,
+    // Omitted when absent, so an overlay written before arms existed reads the same.
+    ...(arm ? { arm } : {}),
   };
   const serialized = JSON.stringify(normalized);
   if (Buffer.byteLength(serialized, "utf8") > RECOVERY_OVERLAY_MAX_BYTES) {
@@ -243,6 +276,7 @@ export function scheduleRecoveryCycle(input: RecoveryCycleSchedule): RecoveryCyc
       input.reason == null ? null : String(input.reason).trim().slice(0, 500) || null,
       input.legacy ? 1 : 0
     );
+  cycleWritten();
   return getRecoveryCycle(Number(result.lastInsertRowid), effectiveOn)!;
 }
 
@@ -280,6 +314,7 @@ export function activateRecoveryCycle(id: number, on = localDateISO()): Recovery
   if (activationOn < existing.effective_on) throw new Error("cannot activate recovery before effective_on");
   if (activationOn >= existing.exit_on) throw new Error("cannot activate recovery on or after exit_on");
   db.prepare(`UPDATE recovery_cycles SET status = 'active', updated_at = datetime('now') WHERE id = ?`).run(Number(id));
+  cycleWritten();
   return getRecoveryCycle(id, activationOn);
 }
 
@@ -293,6 +328,7 @@ export function completeRecoveryCycle(id: number, on = localDateISO()): Recovery
        SET status = 'completed', completed_at = ?, updated_at = datetime('now')
      WHERE id = ? AND status != 'canceled'`
   ).run(completedOn, Number(id));
+  cycleWritten();
   return getRecoveryCycle(id, completedOn);
 }
 
@@ -305,6 +341,7 @@ export function cancelRecoveryCycle(id: number, on = localDateISO()): RecoveryCy
        SET status = 'canceled', canceled_at = ?, updated_at = datetime('now')
      WHERE id = ? AND status != 'completed'`
   ).run(canceledOn, Number(id));
+  cycleWritten();
   return getRecoveryCycle(id, canceledOn);
 }
 
@@ -320,6 +357,41 @@ export function cancelRecoveryCycleForProposal(proposalId: number, on = localDat
     )
     .get(owner) as any;
   return row?.id != null ? cancelRecoveryCycle(Number(row.id), on) : null;
+}
+
+/**
+ * The latest recovery OVERLAY week that finished on or before `on` (not canceled): its
+ * calendar exit has passed, whether or not anything has marked it completed yet. The
+ * program read (program-state.ts mesocycle) counts it as the reset exactly as it counts
+ * the legacy ledger's completed week, so the loaded-weeks streak restarts after it however
+ * heavy the lighter week turned out. Null when none; a read problem is "none".
+ */
+export function completedRecoveryCycleBefore(
+  on = localDateISO()
+): { effective_on: string; exit_on: string; days_since_completion: number; weeks_since_completion: number; source_proposal_id: number | null } | null {
+  try {
+    const readOn = date(on, "on");
+    const row = db
+      .prepare(
+        `SELECT * FROM recovery_cycles
+          WHERE legacy_flag = 0 AND exit_on <= ? AND status != 'canceled'
+          ORDER BY exit_on DESC, id DESC LIMIT 1`
+      )
+      .get(readOn) as any;
+    if (!row) return null;
+    const daysSince = daysBetweenISO(readOn, String(row.exit_on));
+    if (daysSince == null || daysSince < 0) return null;
+    const source = Number(parseObject(row.overlay_json).source_proposal_id);
+    return {
+      effective_on: String(row.effective_on),
+      exit_on: String(row.exit_on),
+      days_since_completion: daysSince,
+      weeks_since_completion: Math.floor(daysSince / 7),
+      source_proposal_id: Number.isInteger(source) && source > 0 ? source : null,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function recoveryCycleCooldown(
@@ -381,14 +453,25 @@ function reducedPositive(value: unknown, fraction: number): number | null {
   return Math.max(1, Math.round(number * fraction));
 }
 
-// Known positive load eases by 15% and assisted load takes 10% more assistance, both
-// onto the lift's own load grid (load-grid.ts) — a 225 squat reads 190, never 191.5.
+// Known positive load eases by a tenth and assisted load takes a tenth more assistance,
+// both onto the lift's own load grid (load-grid.ts) — a 225 squat reads 200, never 202.5.
 function recoveryLoad(value: unknown, item: { exercise?: unknown; muscle_group?: unknown }): number | null {
   if (value == null || value === "") return null;
   const load = Number(value);
   if (!Number.isFinite(load)) return null;
   const group = item.muscle_group == null ? null : String(item.muscle_group);
-  return easedLoad(load, 0.85, item.exercise, group, { assistFactor: 1.1 });
+  return easedLoad(load, RECOVERY_INTENSITY_FACTOR, item.exercise, group, { assistFactor: RECOVERY_ASSIST_FACTOR });
+}
+
+// A timed hold's seconds are its intensity, the way a load is a lift's: the set count
+// carries the volume cut, and the hold eases by the same tenth (a short hold keeps its length
+// down to ten seconds, never less).
+function recoverySeconds(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds)) return null;
+  if (seconds <= 0) return seconds;
+  return Math.max(Math.min(seconds, 10), Math.round(seconds * RECOVERY_INTENSITY_FACTOR));
 }
 
 // Build a temporary prescription from a base plan-day snapshot. The input is
@@ -412,11 +495,11 @@ export function adaptBasePlanDayForRecovery<T extends Record<string, any>>(
     } else {
       item.sets = reducedSets(item.sets, workingSetFraction);
       if (item.mode === "timed" || item.target_seconds != null) {
-        item.target_seconds = reducedPositive(item.target_seconds, workingSetFraction);
+        item.target_seconds = recoverySeconds(item.target_seconds);
       }
-      // A one-set prescription cannot reduce volume further, so known positive
-      // load eases by 15%. Negative assisted encoding becomes more assisted,
-      // never harder; bodyweight/null remains athlete-selected.
+      // Volume comes off the set count; intensity eases by a tenth, so even a one-set
+      // prescription that cannot lose a set is lighter. Negative assisted encoding
+      // becomes more assisted, never harder; bodyweight/null remains athlete-selected.
       item.target_weight = recoveryLoad(item.target_weight, item);
     }
     item.effort = "easy";
@@ -438,6 +521,7 @@ export function adaptBasePlanDayForRecovery<T extends Record<string, any>>(
       effort: "easy",
       preserves_movements: true,
       mutates_plan: false,
+      ...(overlay.arm ? { arm: overlay.arm } : {}),
     },
   };
 }

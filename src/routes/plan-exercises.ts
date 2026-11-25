@@ -47,6 +47,7 @@ import {
 } from "../domain/brain/structure-request.js";
 import { getPlanWithPurpose } from "../repo.js";
 import { previewPlanCoverageChange } from "../domain/brain/coverage-change.js";
+import { previewEarnedRecoveryWeek } from "../domain/brain/recovery-week-change.js";
 import { liftAlternatives, liftVariations } from "../repo/exercise-suggestions.js";
 
 export const planExercisesRouter = Router();
@@ -87,6 +88,8 @@ planExercisesRouter.get("/plan/day-detail", (req, res) => {
 planExercisesRouter.get("/plan/quality", (_req, res) => res.json(getPlanQuality()));
 // What the daily coverage pass WOULD change next, read-only: nothing is drafted or written.
 planExercisesRouter.get("/plan/coverage-preview", (_req, res) => res.json(previewPlanCoverageChange()));
+// What the daily earned-recovery-week pass WOULD set up next, read-only: nothing is drafted.
+planExercisesRouter.get("/plan/recovery-week-preview", (_req, res) => res.json(previewEarnedRecoveryWeek()));
 
 // The recovery-week story for the Plan surface: a waiting draft ('drafted'), the
 // applied lighter week in flight ('applied', ~a week from the apply stamp), or
