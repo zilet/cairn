@@ -21,7 +21,8 @@
 // ============================================================================
 import { db } from "../db.js";
 import { getRecoverySummary } from "./coach.js";
-import { classifyPattern, type MovementPattern, suggestVariations } from "./exercise-variations.js";
+import { classifyPattern, type MovementPattern } from "./exercise-variations.js";
+import { liftVariations } from "./exercise-suggestions.js";
 import { findExercise } from "./exercises.js";
 import { getProfile, listWeight } from "./profile.js";
 import { type LiftState, getProgramState, type ProgramState } from "./program-state.js";
@@ -670,7 +671,7 @@ export function varietyRead(date: string): { note: string; suggestions: string[]
     }
   }
   if (!worst) return null;
-  const alts = suggestVariations(worst.name, { limit: 3 }).map((v) => v.name);
+  const alts = liftVariations(worst.name, { limit: 3 }).map((v) => v.name);
   return {
     note: `You've run ${worst.name} as your only ${worst.pat.replace(/-/g, " ")} for ${Math.round(worst.sessions)} sessions — rotating a close variation now and then builds the pattern more completely and gives a fresh stimulus.`,
     suggestions: alts,

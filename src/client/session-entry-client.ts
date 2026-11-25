@@ -33,6 +33,12 @@
     });
   }
 
+  // A field of the surface has focus: the athlete is typing into it.
+  function typing(host: HTMLElement, surfaceSelector: string): boolean {
+    const active = typeof document !== "undefined" ? document.activeElement : null;
+    return !!active?.matches?.("input, textarea, select") && !!active.closest?.(surfaceSelector) && host.contains(active);
+  }
+
   // Wraps a surface's full repaint so one landing mid-entry waits until the
   // athlete is between entries — focus off the surface's fields, no finger down —
   // then lands at once. Requests that pile up merge: any full or fresh request
@@ -50,8 +56,7 @@
 
     const entering = (): boolean => {
       if (pointerDownAt && Date.now() - pointerDownAt < 4000) return true;
-      const active = typeof document !== "undefined" ? document.activeElement : null;
-      return !!active?.matches?.("input, textarea, select") && !!active.closest?.(surfaceSelector) && host.contains(active);
+      return typing(host, surfaceSelector);
     };
     const flush = () => {
       if (!queued || entering()) return;
@@ -102,6 +107,6 @@
     return gated;
   }
 
-  const CAIRN_SESSION_ENTRY = { tapWithoutBlur, gate };
+  const CAIRN_SESSION_ENTRY = { tapWithoutBlur, gate, typing };
   Object.assign(globalThis, { CairnSessionEntry: CAIRN_SESSION_ENTRY });
 }

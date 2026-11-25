@@ -66,6 +66,27 @@ test("a repaint waits while a field on the surface is focused, then lands once w
   assert.equal(painted[0].keepScroll, true);
 });
 
+test("typing: true only while a field of the surface has focus", () => {
+  const { entry, document } = load();
+  const host = fakeHost(document);
+  assert.equal(entry.typing(host, ".sess-dest"), false);
+  document.activeElement = fakeField(host);
+  assert.equal(entry.typing(host, ".sess-dest"), true);
+  document.activeElement = fakeField(fakeHost(document));
+  assert.equal(entry.typing(host, ".sess-dest"), false, "a field elsewhere is not this surface's entry");
+});
+
+// The gate holds a repaint asked for mid-entry; one asked for BEFORE the athlete tapped a
+// field, whose reads answered after, must not swap the nodes under the raised keyboard.
+test("the Session paint re-checks for a field being typed into before it replaces the log", () => {
+  const today = readFileSync(join(root, "src/client/today-screen.ts"), "utf8");
+  const held = today.indexOf('CairnSessionEntry.typing(todayView, ".sess-dest")');
+  const swap = today.indexOf("todayView.innerHTML = CairnSessionSnapshot.shellHtml(");
+  assert.ok(held > 0 && swap > held, "the typing check runs ahead of the swap");
+  assert.match(today.slice(held, swap), /CairnSessionEntry\.gate\(todayView, "\.sess-dest", renderSession\)\(\{ soft: !!opts\?\.soft \}\);\s*return;/);
+  assert.match(today, /window\.scrollTo\(0, paintY\)/, "scroll is restored from paint time, not from before the reads");
+});
+
 test("a repaint waits for a finger to lift, and a fresh entry never waits", async () => {
   const { entry, document } = load();
   const host = fakeHost(document);

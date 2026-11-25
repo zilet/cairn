@@ -30,7 +30,7 @@ export interface DiagnosticEventInput {
 
 export interface ClientDiagnosticEvent {
   source: "client";
-  kind: "api_failure" | "render_error" | "unhandled_error" | "unhandled_rejection";
+  kind: "api_failure" | "render_error" | "unhandled_error" | "unhandled_rejection" | "viewport_anomaly";
   level: DiagnosticLevel;
   message: string;
   stack?: string | null;
@@ -42,6 +42,8 @@ export interface ClientDiagnosticEvent {
   tab?: string | null;
   online?: boolean | null;
   release?: string | null;
+  /** Viewport-probe geometry (allowlisted keys, bounded scalars); never user content. */
+  viewport?: Record<string, string | number | boolean> | null;
   /** Welcome-flow failure taxonomy (validated against fixed allowlists); never free text. */
   welcome?: WelcomeFailure | null;
   fingerprint: string;
@@ -89,7 +91,14 @@ const CLIENT_KINDS = new Set<ClientDiagnosticEvent["kind"]>([
   "render_error",
   "unhandled_error",
   "unhandled_rejection",
+  "viewport_anomaly",
 ]);
+// Numbers in a fixed order, written by the client probe (app/mobile-viewport.ts):
+// vv = width height offsetTop pageTop scale*100; win = innerHeight scrollY scrollHeight --vvb --vvt;
+// flags = space-separated state tokens; sess/rest = top bottom left right; since = ms since the app was last visible.
+const VIEWPORT_PROBE_KEYS = ["codes", "vv", "win", "flags", "hit", "sess", "rest", "since"] as const;
+const VIEWPORT_PROBE_CODES = new Set(["blank_surface", "viewport_stuck", "rest_bar_adrift", "kb_up_stale"]);
+const VIEWPORT_PROBE_TEXT = /^[A-Za-z0-9 .,:#=+_-]{0,80}$/;
 const CLIENT_TABS = new Set(["today", "progress", "stand", "plan", "chat", "settings", "session", "me"]);
 const DIAGNOSTIC_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 const DIAGNOSTIC_RETENTION_DAYS = 30;
@@ -108,6 +117,7 @@ function clientDiagnosticMessage(kind: ClientDiagnosticEvent["kind"]): string {
   if (kind === "api_failure") return "Client API request failed";
   if (kind === "render_error") return "Client render failed";
   if (kind === "unhandled_rejection") return "Unhandled client rejection";
+  if (kind === "viewport_anomaly") return "Client viewport anomaly";
   return "Unhandled client error";
 }
 
@@ -429,6 +439,22 @@ function parseWelcomeFailure(value: unknown, providers: ReadonlySet<string>): We
   return { step, code, provider: providers.has(provider) ? provider : "other" };
 }
 
+/** Geometry and flags only: a known key, a bounded scalar, and at least one known anomaly code. */
+function parseViewportProbe(value: unknown): Record<string, string | number | boolean> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  const out: Record<string, string | number | boolean> = {};
+  for (const key of VIEWPORT_PROBE_KEYS) {
+    const v = row[key];
+    if (typeof v === "string" && VIEWPORT_PROBE_TEXT.test(v)) out[key] = v;
+    else if (typeof v === "boolean" || (typeof v === "number" && Number.isFinite(v))) out[key] = v;
+  }
+  const codes = typeof out.codes === "string" ? out.codes.split(" ").filter((c) => VIEWPORT_PROBE_CODES.has(c)) : [];
+  if (!codes.length) return null;
+  out.codes = codes.join(" ");
+  return out;
+}
+
 export function parseClientDiagnosticBatch(
   body: unknown,
   options: { providers?: ReadonlySet<string> } = {},
@@ -463,13 +489,19 @@ export function parseClientDiagnosticBatch(
     const status = event.status == null ? null : finiteInteger(event.status, 100, 599);
     const welcome = event.welcome == null ? null : parseWelcomeFailure(event.welcome, providers);
     if (event.welcome != null && !welcome) continue;
+    // A viewport anomaly with nothing recognisable in it is dropped, never stored as free text.
+    const viewport = event.kind === "viewport_anomaly" ? parseViewportProbe(event.viewport) : null;
+    if (event.kind === "viewport_anomaly" && !viewport) continue;
     parsed.push({
       source: "client",
       kind: event.kind as ClientDiagnosticEvent["kind"],
       level: event.level as DiagnosticLevel,
       message: welcome ? "Welcome step failed" : clientDiagnosticMessage(event.kind as ClientDiagnosticEvent["kind"]),
       welcome,
-      fingerprint: welcome
+      viewport,
+      fingerprint: viewport
+        ? `client:viewport_anomaly:${String(viewport.codes).split(" ")[0]}`
+        : welcome
         ? `client:welcome:${welcome.step}:${welcome.provider}:${welcome.code}:${status ?? "none"}`.slice(0, 120)
         : resolveClientFingerprint(event.fingerprint, {
         kind: event.kind as ClientDiagnosticEvent["kind"],
@@ -505,7 +537,9 @@ export function ingestClientDiagnosticEvents(events: ClientDiagnosticEvent[], re
       fingerprint: event.fingerprint,
       message: event.welcome ? "Welcome step failed" : clientDiagnosticMessage(event.kind),
       stack: clientStackFrames(event.stack),
-      metadata: event.welcome
+      metadata: event.viewport
+        ? { tab: event.tab, online: event.online, ...event.viewport }
+        : event.welcome
         ? { tab: event.tab, online: event.online, welcome_step: event.welcome.step, welcome_provider: event.welcome.provider, welcome_code: event.welcome.code }
         : { tab: event.tab, online: event.online },
       release: releaseFallback,

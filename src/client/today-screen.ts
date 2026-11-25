@@ -1514,7 +1514,20 @@ async function renderSession(opts: any = {}): Promise<void> {
 
   // Same stale-render bail as renderToday: the loads above can outlast leaving
   // the Session destination, and this paint must never land on another tab.
-  if (todayState.tab !== "session" || todayState.logDate !== enteredDate || !CairnSessionSnapshot.mayPaint(paintSeq)) return;
+  if (todayState.tab !== "session" || todayState.logDate !== enteredDate) return;
+  // The gate held this repaint only if a field had focus when it was ASKED. The reads
+  // above take seconds on a phone just woken (the resume repaint), long enough to tap a
+  // weight field and start typing: swapping every node under the raised keyboard is what
+  // left an iPhone on a blank page with its rest bar adrift. A live log being typed into
+  // keeps its nodes; the repaint goes back through the gate and lands on the way out.
+  if (!fresh && CairnSessionSnapshot.liveSurface(todayView, enteredDate) && CairnSessionEntry.typing(todayView, ".sess-dest")) {
+    void CairnSessionEntry.gate(todayView, ".sess-dest", renderSession)({ soft: !!opts?.soft });
+    return;
+  }
+  // Where the page is NOW, not where it was when the reads began: a scroll made while
+  // they were in flight is the athlete's, and the repaint must not pull it back.
+  const paintY = typeof window !== "undefined" ? window.scrollY : prevY;
+  if (!CairnSessionSnapshot.mayPaint(paintSeq)) return;
   const sessionDrafts = CairnTodaySessionSetActions.captureExDrafts(todayView);
   todayView.innerHTML = CairnSessionSnapshot.shellHtml(surface, {
     fresh,
@@ -1593,7 +1606,7 @@ async function renderSession(opts: any = {}): Promise<void> {
     } catch {}
   } else {
     try {
-      window.scrollTo(0, prevY);
+      window.scrollTo(0, paintY);
     } catch {}
   }
 }

@@ -10,7 +10,13 @@
 //      (refreshPreparedDayForPlanChange), so Today never serves the prescription the
 //      athlete just replaced. A session with logged work, or one the athlete composed
 //      themselves (athlete_override / agent_suggest), is never touched.
+//
+// And after the write it reads the saved week for a coverage gap (coverage-ask.ts): a
+// floored group left under its floor, or a movement family left out, is said ONCE as a
+// calm ask with the smallest change that covers it. The save itself is untouched by
+// that read — it has already committed, and a failed read only skips the ask.
 import { recordAsyncFailure } from "../../diagnostics.js";
+import { type CoverageAskOutcome, raisePlanCoverageAsk } from "../brain/coverage-ask.js";
 import { activeCompositionPlanDayNumber, refreshPreparedDayForPlanChange } from "../../repo/adaptive-session.js";
 import {
   type PlanPrescription,
@@ -94,6 +100,16 @@ function changedItemDays(before: Map<number, string>, after: Map<number, string>
 // re-take clears the session's skips and re-runs the adaptive decision, so a rename or
 // an untouched day must never trigger one. When the save REMOVED the day today's
 // snapshot came from, the unstarted snapshot is retired instead.
+// The coverage ask rides AFTER the save commits and can never undo or fail it.
+function coverageAfterSave(date: string): CoverageAskOutcome | null {
+  try {
+    return raisePlanCoverageAsk({ date });
+  } catch (err) {
+    recordAsyncFailure("plan_save", "coverage_ask", err);
+    return null;
+  }
+}
+
 function refreshToday(changedDays: number[], todayDayBefore: number | null, date: string): void {
   if (!changedDays.length) return;
   try {
@@ -125,8 +141,9 @@ export function savePlanDayByPerson(
     return { result: saved, changed: changedItemDays(itemsBefore, dayItemSignatures()) };
   });
   refreshToday(changed, todayDayBefore, date);
+  const coverage_ask = coverageAfterSave(date);
   // Re-read: the day handed back must not carry the annotations just released.
-  return { ...result, day: getPlanDay(day_number) };
+  return { ...result, day: getPlanDay(day_number), coverage_ask };
 }
 
 export function replacePlanByPerson(
@@ -147,5 +164,6 @@ export function replacePlanByPerson(
     return { result: saved, changed: changedItemDays(itemsBefore, dayItemSignatures()) };
   });
   refreshToday(changed, todayDayBefore, date);
-  return { ...result, plan: getPlan() };
+  const coverage_ask = coverageAfterSave(date);
+  return { ...result, plan: getPlan(), coverage_ask };
 }

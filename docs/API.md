@@ -699,7 +699,7 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) and [SANDBOX.md](SANDBOX.md).
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/program/adjustments` | The handful of concrete adaptations due right now — lifts to push/hold/deload, groups that are due, missing-pattern gaps. Plain words, most-actionable first. |
-| GET | `/api/program/balance` | Volume balance per canonical muscle group over the last N weeks (default 2). Plain words: which groups are due, which are over, and an adherence-skew summary. No scores — band labels (low/productive/high) are the output. |
+| GET | `/api/program/balance` | Volume balance per canonical muscle group over the last N weeks (default 2). Plain words: which groups are due, which are over, and an adherence-skew summary. No scores — band labels (low/productive/high) are the output. Lifts no group could count are named in `ungrouped` rather than silently dropped. |
 | GET | `/api/program/blocks` | Periodization blocks (the mesocycle model the coach periodizes toward). |
 | POST | `/api/program/blocks` |  |
 | PUT | `/api/program/blocks/:id` |  |

@@ -529,6 +529,50 @@ export function primaryMuscleGroup(exercise: string, storedGroup?: string | null
   return muscleCreditsShared(exercise, storedGroup)[0]?.group ?? null;
 }
 
+// Which prime movers a movement-pattern family can honestly have. Only a CHECK on the
+// named-lift answer below (a "Plank to Push-Up" reads as core by pattern, so the push-up
+// row's chest is not unanimous); never a source of a group by itself.
+const PATTERN_PRIMARIES: Partial<Record<MovementPattern, readonly MuscleGroup[]>> = {
+  squat: ["quads"],
+  hinge: ["hamstrings", "glutes", "back"],
+  lunge: ["quads", "glutes"],
+  "hip-extension": ["glutes", "hamstrings"],
+  "horizontal-push": ["chest", "triceps", "shoulders"],
+  "vertical-push": ["shoulders", "triceps"],
+  "horizontal-pull": ["back", "rear delts"],
+  "vertical-pull": ["back"],
+  calf: ["calves"],
+  tibialis: ["calves"],
+  core: ["core"],
+  carry: ["forearms", "core", "shoulders"],
+  curl: ["biceps", "forearms"],
+  triceps: ["triceps"],
+  "lateral-raise": ["shoulders"],
+  "rear-delt": ["rear delts"],
+  shrug: ["shoulders"],
+  abduction: ["glutes"],
+};
+
+/**
+ * The group the repo's curated knowledge settles for this exact lift, or null when it
+ * does not settle one. Unanimous or nothing: the FIRST named-lift row the name matches
+ * (the most specific lift it is), the name classifier, and the name's movement pattern
+ * (when it has one) must all agree on the prime mover. A name the tables read two ways
+ * ("Suitcase Carry": a carry row, a core classifier rule) is left to the agent or the
+ * person; this never guesses.
+ */
+export function curatedMuscleGroup(exercise: string): MuscleGroup | null {
+  const name = String(exercise ?? "");
+  const text = expandExerciseAbbreviations(name);
+  if (!text) return null;
+  const row = NAMED_LIFTS.find((r) => r.match.test(text) && !r.unless?.test(text));
+  if (!row) return null;
+  if (classifyMuscleGroup(name) !== row.primary) return null;
+  const pattern = classifyPattern(name);
+  if (pattern && !PATTERN_PRIMARIES[pattern]?.includes(row.primary)) return null;
+  return row.primary;
+}
+
 /** Does a weekly-volume read count this share? Primary and half shares count; quarter shares are touched only. */
 export function isCountedShare(share: number): boolean {
   return share >= COUNTED_SHARE_MIN - 1e-9;

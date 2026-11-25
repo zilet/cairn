@@ -12,8 +12,8 @@ import { decideDailySession } from "../repo/daily-decision.js";
 import { getDailySessionOutcome } from "../repo/daily-reconciliation.js";
 import { dayRead, weekAheadPlan } from "../repo/day-read.js";
 import { weekAheadRaceLine } from "../repo/day-read-prose.js";
-import { MUSCLE_GROUPS, authoritativeGroup, canonicalGroup, cleanExerciseName, normalizeExerciseName, normalizedExerciseKey, planExerciseAliases, resolveExerciseName, planExerciseRenames, setExerciseAlias, shouldAutoApplyMerge, validateExerciseMergePlan } from "../repo/exercise-canon.js";
-import { distinctExerciseNames, findExercise, getExerciseDetail, listExercises, mergeExercises, normalizeExerciseTitles, renameExercise, updateExercise } from "../repo/exercises.js";
+import { MUSCLE_GROUPS, cleanExerciseName, normalizeExerciseName, normalizedExerciseKey, planExerciseAliases, resolveExerciseName, planExerciseRenames, setExerciseAlias, shouldAutoApplyMerge, validateExerciseMergePlan } from "../repo/exercise-canon.js";
+import { applyAgentMuscleGroup, correctExerciseGroups, distinctExerciseNames, findExercise, getExerciseDetail, mergeExercises, normalizeExerciseTitles, renameExercise } from "../repo/exercises.js";
 import { listContextEvents } from "../repo/health.js";
 import { getLocationContext } from "../repo/location-context.js";
 import { recordSuggestion } from "../repo/memory.js";
@@ -1375,8 +1375,8 @@ export function weekAheadServe(date = localDateISO()): {
 // clusters same-movement names; repo.planExerciseAliases validates each member→
 // canonical decision (pure guards) and we persist them as exercise_aliases rows
 // (source 'agent'), so findOrCreateExercise / the canon resolve them from then on.
-// Conservatively, when a cluster's canonical movement has a missing/"other" group
-// and the agent gave a confident group, we IMPROVE it (never overwrite a real one).
+// A cluster's group lands only under the one agent rule (repo agentMayWriteGroup): it
+// fills a missing group or corrects the classifier's guess, never a person's group.
 // Fail-open: no agent / bad shape → nothing persisted, the deterministic floor stands.
 export async function reconcileExercises(
   agent?: string,
@@ -1444,29 +1444,17 @@ export async function reconcileExercises(
     }
   }
 
-  // ---- 2. DETERMINISTIC group correction: fill an empty group; optionally override ----
-  // authoritativeGroup fires ONLY for unambiguous movements (a "pulldown" imported as
-  // forearms → back), skipping the contested single-token cases (dip/pullover/curl).
-  // An empty/unknown group is ALWAYS filled. OVERRIDING a valid-but-wrong non-null group
-  // happens only when the caller opts in (`authoritativeGroups`) — the user-initiated
-  // "Tidy" fixes a wrong group on demand, while the nightly pass never re-litigates a
-  // group the athlete may have set (no background tug-of-war).
-  const overrideGroups = opts.authoritativeGroups === true;
-  for (const ex of listExercises()) {
-    const auth = authoritativeGroup(ex.name);
-    if (!auth) continue;
-    const cur = canonicalGroup(ex.muscle_group ?? null);
-    if (cur === auth) continue;
-    if (cur == null || overrideGroups) {
-      // cur == null means the stored group is empty/"other"/unknown (fill), else it's a
-      // recognized-but-wrong group we only touch under an explicit override.
-      try {
-        updateExercise(Number(ex.id), { muscle_group: auth });
-        groups_fixed++;
-      } catch {
-        /* skip a bad row, keep going */
-      }
-    }
+  // ---- 2. DETERMINISTIC group correction (repo correctExerciseGroups) ----
+  // Where the curated tables settle a lift unanimously, a classifier guess follows them and
+  // a group the lift does not train at all ("Close-Grip Bench Press" under forearms) is
+  // corrected. The high-precision override table always fills an empty group; it REPLACES a
+  // stored one only when the caller opts in (`authoritativeGroups`, the person's own Tidy),
+  // so the nightly pass never re-litigates a defensible group. A person's group is never
+  // touched by either.
+  try {
+    groups_fixed += correctExerciseGroups({ override: opts.authoritativeGroups === true }).updated;
+  } catch {
+    /* the deterministic pass never stops the name tidy */
   }
 
   // Re-read after the deterministic merges/corrections so the agent sees the tidied
@@ -1548,16 +1536,11 @@ export async function reconcileExercises(
     }
   }
 
-  // Conservatively IMPROVE a canonical movement's muscle group only when it's
-  // currently null/"other" AND the agent supplied a confident group for the cluster.
-  // Never overwrite a good group; never throw on a bad row.
-  const validGroups = (() => {
-    try {
-      return new Set<string>([...MUSCLE_GROUPS]);
-    } catch {
-      return null;
-    }
-  })();
+  // The agent's group for a cluster's canonical movement lands under the one agent rule
+  // (repo agentMayWriteGroup): it fills an empty group and corrects the classifier's guess,
+  // never a person's group, a unanimous table answer, or an earlier agent answer. Only an
+  // exact taxonomy value counts; never throw on a bad row.
+  const validGroups = new Set<string>([...MUSCLE_GROUPS]);
   for (const g of p.groups) {
     const canonical = String(g?.canonical ?? "")
       .replace(/\s+/g, " ")
@@ -1566,17 +1549,10 @@ export async function reconcileExercises(
       .replace(/\s+/g, " ")
       .trim()
       .toLowerCase();
-    if (!canonical || !suggestedGroup || suggestedGroup === "other") continue;
-    if (validGroups && !validGroups.has(suggestedGroup)) continue; // only a recognized canonical group
+    if (!canonical || !validGroups.has(suggestedGroup)) continue;
     try {
       const ex: any = findExercise(canonical);
-      const cur = String(ex?.muscle_group ?? "")
-        .trim()
-        .toLowerCase();
-      if (ex && (!cur || cur === "other") && cur !== suggestedGroup) {
-        updateExercise(Number(ex.id), { muscle_group: suggestedGroup });
-        groups_fixed++;
-      }
+      if (ex && applyAgentMuscleGroup(Number(ex.id), suggestedGroup)) groups_fixed++;
     } catch {
       /* skip a bad row, keep going */
     }
@@ -1608,6 +1584,8 @@ export async function reconcileExercises(
       skipped.push({ from, into, reason: "exercise not found" });
       continue;
     }
+    // Both spellings already name one stored lift (an alias resolved): nothing to merge.
+    if (fromRow.id === intoRow.id) continue;
     const verdict = validateExerciseMergePlan(
       { name: fromRow.name, group: fromRow.muscle_group, mode: fromRow.mode, days: daysByNorm.get(fromNorm) ?? 0 },
       { name: intoRow.name, group: intoRow.muscle_group, mode: intoRow.mode, days: daysByNorm.get(intoNorm) ?? 0 }

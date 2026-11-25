@@ -78,7 +78,11 @@ const days: [number, string, string, Item[]][] = [
 
 export function seed(options: { blankProfile?: boolean } = {}) {
   const blankProfile = !!options.blankProfile;
-  const insertEx = db.prepare(`INSERT INTO exercises (name, muscle_group, constraint_note, cues, mode) VALUES (?, ?, ?, ?, ?)`);
+  // The seed catalog's groups are authored, so they carry the curated-table provenance: an
+  // agent never re-files them (repo/exercises.ts MuscleGroupSource).
+  const insertEx = db.prepare(
+    `INSERT INTO exercises (name, muscle_group, muscle_group_source, constraint_note, cues, mode) VALUES (?, ?, 'table', ?, ?, ?)`
+  );
   const exId: Record<string, number> = {};
   const dayIdByNumber: Record<number, number> = {};
   const insertDay = db.prepare(`INSERT INTO plan_days (day_number, name, focus) VALUES (?, ?, ?)`);

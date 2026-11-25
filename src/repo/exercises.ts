@@ -2,6 +2,7 @@ import { db } from "../db.js";
 import { emitEnrichTransition } from "../enrichBus.js";
 import { getSettings } from "./settings.js";
 import {
+  authoritativeGroup,
   canonicalGroup,
   classifyMuscleGroup,
   cleanExerciseName,
@@ -24,6 +25,7 @@ import {
 } from "./exercise-guide.js";
 import { isValidGarminRef, mapExerciseToGarmin, sameExerciseIdentity } from "./garmin-exercise-map.js";
 import { type ExerciseInput, validInputProfile, withExerciseInputs } from "./exercise-input.js";
+import { curatedMuscleGroup, muscleCreditsShared } from "./muscle-credit.js";
 import { getProgress } from "./sessions.js";
 import { addDaysISO } from "./shared.js";
 import { withSqliteSavepoint } from "./sqlite-savepoint.js";
@@ -38,6 +40,8 @@ export interface ExerciseRow {
   id: number;
   name: string;
   muscle_group: string | null;
+  /** Who set `muscle_group` (see MuscleGroupSource); null while there is no group. */
+  muscle_group_source?: string | null;
   constraint_note: string | null;
   mode: string | null;
   created_at?: string;
@@ -61,6 +65,129 @@ function validMode(mode: any): string | undefined {
   return typeof mode === "string" && EXERCISE_MODES.includes(mode) ? mode : undefined;
 }
 
+// ---------- muscle-group provenance ----------
+// Who decided a lift's group decides who may change it:
+//   user        a person set it (REST, MCP, the exercise sheet). Nothing else ever overwrites it.
+//   table       the curated tables agree on this exact lift (muscle-credit.ts curatedMuscleGroup).
+//   classifier  the name regex guessed it at insert. The agent may correct it.
+//   agent       enrichment or Tidy named it. Final for agents: a later agent pass never flips it.
+//   legacy      set before provenance existed, by anyone. Treated as possibly a person's choice.
+// An agent writes only over an empty/unreadable group or a classifier guess. The deterministic
+// re-check (recheckExerciseGroups) re-derives classifier/table rows and corrects legacy/agent
+// rows only where the stored group is not a mover of that lift at all.
+export type MuscleGroupSource = "user" | "table" | "classifier" | "agent" | "legacy";
+
+// The group a name earns with no agent and no person: the curated answer when the tables
+// are unanimous, else the classifier's guess, else nothing.
+export function deterministicGroupFor(name: string): { group: string; source: MuscleGroupSource } | null {
+  const curated = curatedMuscleGroup(name);
+  if (curated) return { group: curated, source: "table" };
+  const guess = classifyMuscleGroup(name);
+  return guess ? { group: guess, source: "classifier" } : null;
+}
+
+// The one system writer for a group (a person's edit goes through updateExercise). A changed
+// group re-grades lifts in program-state, exactly as a person's edit does.
+function writeMuscleGroup(id: number, group: string | null, source: MuscleGroupSource | null): void {
+  db.prepare(`UPDATE exercises SET muscle_group = ?, muscle_group_source = ? WHERE id = ?`).run(group, source, id);
+  bumpTrainingDataVersion();
+}
+
+// May an agent's answer replace this row's group? Never a person's; always an empty or
+// unreadable group; otherwise only the classifier's guess. An agent's own earlier answer, a
+// unanimous table answer and a legacy value all stand.
+export function agentMayWriteGroup(row: { muscle_group?: string | null; muscle_group_source?: string | null }): boolean {
+  const source = row.muscle_group_source ?? null;
+  if (source === "user") return false;
+  if (canonicalGroup(row.muscle_group ?? null) == null) return true;
+  return source === "classifier";
+}
+
+// Apply an agent's group to one row under that rule. True when the stored group changed.
+export function applyAgentMuscleGroup(id: number, proposed: string | null | undefined): boolean {
+  const group = canonicalGroup(String(proposed ?? "").trim() || null);
+  if (!group) return false;
+  const row = getExercise(id);
+  if (!row || !agentMayWriteGroup(row)) return false;
+  if (row.muscle_group === group) return false;
+  writeMuscleGroup(id, group, "agent");
+  return true;
+}
+
+// Is `group` a mover of this lift at all (any credited share, touched included)? A legacy or
+// agent group that is not is a filing error, not a defensible choice: "Close-Grip Bench Press"
+// under forearms. Dips under chest IS defensible (the chest is a real second mover).
+function groupTrainedByLift(name: string, liftPrimary: string, group: string): boolean {
+  return muscleCreditsShared(name, liftPrimary).some((c) => c.group === group);
+}
+
+export interface GroupRecheckChange {
+  id: number;
+  name: string;
+  from: string | null;
+  into: string;
+  source_was: string | null;
+}
+
+// The deterministic re-check: where the curated tables settle a lift unanimously, a
+// classifier/table/empty group follows them, and a legacy or agent group follows them only
+// when it names a group the lift does not train at all. A person's group is never touched,
+// and a name the tables do not settle is left as it is. Idempotent.
+export function recheckExerciseGroups(): { updated: number; changes: GroupRecheckChange[] } {
+  const rows = db.prepare(`SELECT id, name, muscle_group, muscle_group_source FROM exercises`).all() as Array<{
+    id: number;
+    name: string;
+    muscle_group: string | null;
+    muscle_group_source: string | null;
+  }>;
+  const changes: GroupRecheckChange[] = [];
+  for (const row of rows) {
+    const source = row.muscle_group_source ?? null;
+    if (source === "user") continue;
+    const curated = curatedMuscleGroup(row.name);
+    if (!curated) continue;
+    const stored = canonicalGroup(row.muscle_group ?? null);
+    if (stored === curated) continue;
+    const derived = source === "classifier" || source === "table";
+    if (stored != null && !derived && groupTrainedByLift(row.name, curated, stored)) continue;
+    writeMuscleGroup(Number(row.id), curated, "table");
+    changes.push({ id: Number(row.id), name: row.name, from: row.muscle_group ?? null, into: curated, source_was: source });
+  }
+  return { updated: changes.length, changes };
+}
+
+// Tidy's whole deterministic group pass: the unanimous re-check above, then the
+// high-precision override table (exercise-canon.ts authoritativeGroup), which always fills
+// an empty group and replaces a stored one only when `override` (the person's own Tidy).
+// Neither ever touches a person's group, and the override table never argues with a
+// unanimous curated answer (it would flip the row back and forth on every Tidy).
+export function correctExerciseGroups(opts: { override?: boolean } = {}): {
+  updated: number;
+  changes: GroupRecheckChange[];
+} {
+  const changes = [...recheckExerciseGroups().changes];
+  const rows = db.prepare(`SELECT id, name, muscle_group, muscle_group_source FROM exercises`).all() as Array<{
+    id: number;
+    name: string;
+    muscle_group: string | null;
+    muscle_group_source: string | null;
+  }>;
+  for (const row of rows) {
+    const source = row.muscle_group_source ?? null;
+    if (source === "user") continue;
+    const auth = authoritativeGroup(row.name);
+    if (!auth) continue;
+    const curated = curatedMuscleGroup(row.name);
+    if (curated && curated !== auth) continue;
+    const stored = canonicalGroup(row.muscle_group ?? null);
+    if (stored === auth) continue;
+    if (stored != null && opts.override !== true) continue;
+    writeMuscleGroup(Number(row.id), auth, "table");
+    changes.push({ id: Number(row.id), name: row.name, from: row.muscle_group ?? null, into: auth, source_was: source });
+  }
+  return { updated: changes.length, changes };
+}
+
 export function listExercises(): ExerciseRow[] {
   const rows = db
     .prepare(
@@ -74,7 +201,23 @@ export function listExercises(): ExerciseRow[] {
   return withExerciseInputs(rows as any[]) as ExerciseRow[];
 }
 
+// The stored row a name means. An exact spelling (COLLATE NOCASE) wins; on a miss the
+// name goes through THE resolver (resolveExerciseName: one alias hop, then the key
+// tiers), so "DB Bicep Curl" finds the stored "Dumbbell Biceps Curl" — its constraint
+// note, its mode, its group — instead of reading as a lift nobody has trained. A name
+// that resolves to nothing is still a miss.
 export function findExercise(name: string): any {
+  const exact = findExerciseExact(name);
+  if (exact || typeof name !== "string" || !name.trim()) return exact;
+  const resolved = resolveExerciseName(name);
+  return resolved.exercise_id != null ? (getExercise(resolved.exercise_id) ?? undefined) : undefined;
+}
+
+// The exact spelling only. For the writers whose MISS must mean "this spelling is not
+// stored": the create chokepoint (which runs the resolver itself and records the
+// alias), upsert, merge and delete — a delete or merge must never land on a row the
+// caller did not name.
+export function findExerciseExact(name: string): any {
   return db.prepare(`SELECT * FROM exercises WHERE name = ? COLLATE NOCASE`).get(name);
 }
 
@@ -84,7 +227,7 @@ export function getExercise(id: number): any {
 
 export function findOrCreateExercise(name: string, muscle_group?: string, constraint_note?: string, mode?: string): any {
   // Exact name already exists — reuse it (and land its casing while we are here).
-  const existing = findExercise(name);
+  const existing = findExerciseExact(name);
   if (existing) return retitleCasing(existing);
 
   const norm = normalizeExerciseName(name);
@@ -158,13 +301,16 @@ export function findOrCreateExercise(name: string, muscle_group?: string, constr
       }
     }
   }
-  const resolvedGroup = muscle_group != null
-    ? (canonicalGroup(muscle_group) ?? muscle_group)
-    : classifyMuscleGroup(cleanName);
+  // A group the caller supplied is a person's (only the REST/MCP upsert passes one). Else
+  // the curated tables when they settle this exact lift, else the classifier's guess —
+  // stamped so a later agent knows which of the two it may correct.
+  const derived = muscle_group != null ? null : deterministicGroupFor(cleanName);
+  const resolvedGroup = muscle_group != null ? (canonicalGroup(muscle_group) ?? muscle_group) : (derived?.group ?? null);
+  const groupSource: MuscleGroupSource | null = muscle_group != null ? "user" : (derived?.source ?? null);
   const resolvedMode = validMode(mode) ?? detectExerciseMode(cleanName);
   const info = db
-    .prepare(`INSERT INTO exercises (name, muscle_group, constraint_note, mode) VALUES (?, ?, ?, ?)`)
-    .run(cleanName, resolvedGroup ?? null, constraint_note ?? null, resolvedMode);
+    .prepare(`INSERT INTO exercises (name, muscle_group, muscle_group_source, constraint_note, mode) VALUES (?, ?, ?, ?, ?)`)
+    .run(cleanName, resolvedGroup, groupSource, constraint_note ?? null, resolvedMode);
   // Every genuinely-new movement gets its deterministic Garmin FIT mapping right
   // here, on the INSERT — so seed, plan import and a hand-logged set all resolve one
   // the same way, with no agent involved. The agentic layer only ever refines the
@@ -233,7 +379,7 @@ export function upsertExercise(
 ): any {
   const name = String(input.name ?? "").trim();
   if (!name) throw new Error("name required");
-  const existing = findExercise(name);
+  const existing = findExerciseExact(name);
   if (existing) {
     // Canonicalize the supplied group before passing it through.
     const mg = input.muscle_group !== undefined
@@ -433,6 +579,14 @@ export function renameExercise(
   ).run(into, id);
   repointNameReferences(name, into);
   setExerciseAlias(fromNorm, into, byPerson ? "person" : "agent");
+  // A group the deterministic read derived from the OLD name is re-read from the new one;
+  // a person's or an agent's group is about the lift, not the spelling, and stays.
+  if (cur.muscle_group_source === "classifier" || cur.muscle_group_source === "table") {
+    const derived = deterministicGroupFor(into);
+    if (derived && (derived.group !== cur.muscle_group || derived.source !== cur.muscle_group_source)) {
+      writeMuscleGroup(id, derived.group, derived.source);
+    }
+  }
   if (opts.remap !== false) ensureGarminMapping(id);
   bumpTrainingDataVersion();
   return { ok: true, id, name: into, outcome: "renamed" };
@@ -460,7 +614,8 @@ export function refuseSuggestedName(id: number): any {
 //     (sameExerciseIdentity — "DB Incline Press" → "Incline Dumbbell Press") →
 //     rename by id + record the alias. Otherwise leave the name and just record the
 //     alias so a future re-add resolves cleanly.
-//   - muscle_group: only fills a null/"other" group with a recognized value.
+//   - muscle_group: fills an empty/"other" group, or corrects a classifier-sourced guess,
+//     with a recognized value; never a person's group or an earlier agent/table answer.
 //   - equipment: only fills an empty equipment tag.
 //   - mode: only when there are no logged sets yet (mode drives logging shape).
 //   - garmin_category/garmin_exercise: validated against the FIT catalog, fill-only.
@@ -504,14 +659,9 @@ export function applyExerciseEnrichment(
   const ex = getExercise(workingId);
   if (!ex) return { id: workingId, name };
 
-  const group = String(fields.muscle_group ?? "").trim();
-  const canonGroup = group ? canonicalGroup(group) : null;
-  if (canonGroup) {
-    const curGroup = String(ex.muscle_group ?? "").trim().toLowerCase();
-    if (!curGroup || curGroup === "other") {
-      db.prepare(`UPDATE exercises SET muscle_group = ? WHERE id = ?`).run(canonGroup, workingId);
-    }
-  }
+  // Fills an empty group and corrects the classifier's guess; a person's, a unanimous
+  // table's or an earlier agent answer stands (agentMayWriteGroup).
+  applyAgentMuscleGroup(workingId, fields.muscle_group);
 
   const equip = String(fields.equipment ?? "").trim().slice(0, 60);
   if (equip && !String(ex.equipment ?? "").trim()) {
@@ -567,17 +717,30 @@ export function reconcileExerciseGroups(): {
   updated: number;
   changes: Array<{ name: string; from: string | null; into: string }>;
 } {
-  const rows = db.prepare("SELECT id, name, muscle_group FROM exercises").all() as Array<{
+  const rows = db.prepare("SELECT id, name, muscle_group, muscle_group_source FROM exercises").all() as Array<{
     id: number;
     name: string;
     muscle_group: string | null;
+    muscle_group_source: string | null;
   }>;
   const changes: Array<{ name: string; from: string | null; into: string }> = [];
   for (const ex of rows) {
     const resolved = resolveGroup(ex.name, ex.muscle_group);
     if (!resolved || resolved === ex.muscle_group) continue;
-    db.prepare("UPDATE exercises SET muscle_group = ? WHERE id = ?").run(resolved, ex.id);
-    changes.push({ name: ex.name, from: ex.muscle_group, into: resolved });
+    const folded = canonicalGroup(ex.muscle_group ?? null);
+    // A legacy spelling folded onto the taxonomy ("legs" → "quads") is the same choice,
+    // so it keeps its source. A FILL replaces what was there, which a person's value
+    // (even an empty or unreadable one) never is.
+    if (folded) {
+      db.prepare("UPDATE exercises SET muscle_group = ? WHERE id = ?").run(folded, ex.id);
+      changes.push({ name: ex.name, from: ex.muscle_group, into: folded });
+      continue;
+    }
+    if (ex.muscle_group_source === "user") continue;
+    const derived = deterministicGroupFor(ex.name);
+    if (!derived) continue;
+    db.prepare("UPDATE exercises SET muscle_group = ?, muscle_group_source = ? WHERE id = ?").run(derived.group, derived.source, ex.id);
+    changes.push({ name: ex.name, from: ex.muscle_group, into: derived.group });
   }
   return { updated: changes.length, changes };
 }
@@ -836,9 +999,9 @@ export function mergeExercises(
     moved_observations: 0,
     folded_observations: 0,
   };
-  const into = findExercise(intoName);
+  const into = findExerciseExact(intoName);
   if (!into) return { ok: false, ...empty, error: `target exercise "${intoName}" not found` };
-  const from = findExercise(fromName);
+  const from = findExerciseExact(fromName);
   if (!from) return { ok: true, ...empty }; // already gone — idempotent
   if (from.id === into.id) return { ok: true, ...empty }; // same exercise
 
@@ -950,6 +1113,21 @@ export function mergeExercises(
     // to the lift is gone and unrecoverable.
     const tolerance = repointMovementToleranceOnMerge(from, into);
 
+    // The survivor keeps its own group. Only when it has none to keep (and no person
+    // cleared it) does the merged row's group and its provenance come across, so the
+    // moved sets never land on a lift that earns no volume.
+    if (
+      canonicalGroup(into.muscle_group ?? null) == null &&
+      into.muscle_group_source !== "user" &&
+      canonicalGroup(from.muscle_group ?? null) != null
+    ) {
+      db.prepare("UPDATE exercises SET muscle_group = ?, muscle_group_source = ? WHERE id = ?").run(
+        from.muscle_group,
+        from.muscle_group_source ?? "legacy",
+        into.id
+      );
+    }
+
     // Remove the now-empty exercise row, then record the from-name → survivor alias so
     // a future log/plan of the old name self-aligns (findOrCreateExercise path (a)).
     // setExerciseAlias is an UPSERT, so only count it when it actually adds/changes a
@@ -1008,7 +1186,13 @@ export function updateExercise(
     if (!m) throw new Error(`mode must be one of: ${EXERCISE_MODES.join(", ")}`);
     sets.push("mode = ?"); vals.push(m);
   }
-  if (patch.muscle_group !== undefined) { sets.push("muscle_group = ?"); vals.push(patch.muscle_group ?? null); }
+  // This is a person's edit (REST/MCP/the exercise sheet): their group, even a cleared one,
+  // is never overwritten by an agent or a deterministic pass. System writers use
+  // writeMuscleGroup, never this.
+  if (patch.muscle_group !== undefined) {
+    sets.push("muscle_group = ?", "muscle_group_source = 'user'");
+    vals.push(patch.muscle_group ?? null);
+  }
   if (patch.cues !== undefined) { sets.push("cues = ?"); vals.push(patch.cues ?? null); }
   if (patch.constraint_note !== undefined) { sets.push("constraint_note = ?"); vals.push(patch.constraint_note ?? null); }
   if (patch.input_profile !== undefined) {
@@ -1035,7 +1219,7 @@ export function updateExercise(
 // (remove it from the plan / delete the logged sets first). A clean delete returns
 // ok:true so the UI can drop the row.
 export function deleteExercise(name: string) {
-  const ex = findExercise(name);
+  const ex = findExerciseExact(name);
   if (!ex) return { ok: false, deleted: 0, error: "not found", exercise: name };
   const inPlan = (db.prepare(`SELECT COUNT(*) AS c FROM plan_items WHERE exercise_id = ?`).get(ex.id) as any)?.c ?? 0;
   const inLogs = (db.prepare(`SELECT COUNT(*) AS c FROM logged_sets WHERE exercise_id = ?`).get(ex.id) as any)?.c ?? 0;

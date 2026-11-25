@@ -1573,6 +1573,11 @@ function rankedVaryOptions(
       excludeNames: exclude.length ? exclude : undefined,
     }) as ExerciseVariation[]
   ).filter((candidate) => {
+    // The lift itself under another spelling is no rotation: the table's "DB Bicep
+    // Curl" resolves to a stored "Dumbbell Biceps Curl", so "rotating" into it changed
+    // only the card's name — and its sets, saved under the stored name, opened a
+    // second card beside it. Identity is the resolver's, never the spelling.
+    if (sameLiftName(candidate.name, name)) return false;
     const candidateKey = normalizedExerciseKey(candidate.name);
     const candidateMove = movementKey(candidate.name);
     const candidatePress = pressSlotKey(candidate.name);
@@ -1580,6 +1585,7 @@ function rankedVaryOptions(
       (planned) =>
         normalizedExerciseKey(planned) === candidateKey ||
         movementKey(planned) === candidateMove ||
+        sameLiftName(planned, candidate.name) ||
         (candidatePress != null && pressSlotKey(planned) === candidatePress)
     );
   });
@@ -1594,11 +1600,24 @@ function rankedVaryOptions(
     (candidate) =>
       !dayKeys.has(normalizedExerciseKey(candidate.name)) &&
       !dayMoves.has(movementKey(candidate.name)) &&
+      !dayNames.some((planned) => sameLiftName(planned, candidate.name)) &&
       !(dayPresses && horizontalPressFamily(candidate.name))
   );
-  return riskRerank(historyRerank(preferenceRerank(onDay, name, prefs)), ctx?.date)
-    .slice(0, 3)
-    .map((v) => ({ name: v.name, why: v.why }));
+  // A candidate the athlete already has on file is offered under its STORED name, the
+  // one its sets are saved and read back under; two table spellings of one stored lift
+  // are one option.
+  const offered = new Set<string>();
+  const options: { name: string; why: string }[] = [];
+  for (const v of riskRerank(historyRerank(preferenceRerank(onDay, name, prefs)), ctx?.date)) {
+    const resolved = resolveExerciseName(v.name);
+    const stored = resolved.exercise_id != null ? resolved.canonical : v.name;
+    const key = resolved.key || stored.toLowerCase();
+    if (offered.has(key)) continue;
+    offered.add(key);
+    options.push({ name: stored, why: v.why });
+    if (options.length === 3) break;
+  }
+  return options;
 }
 
 // Prefer a variation the athlete has actually loaded: its card opens on their own

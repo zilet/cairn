@@ -1,4 +1,10 @@
-import { MUSCLE_LANDMARKS, normalizeExerciseName, normalizedExerciseKey, type MuscleGroup } from "./exercise-canon.js";
+import {
+  MUSCLE_LANDMARKS,
+  normalizeExerciseName,
+  normalizedExerciseKey,
+  resolveExerciseName,
+  type MuscleGroup,
+} from "./exercise-canon.js";
 import { classifyPattern, type MovementPattern, type VolumeShareOptions } from "./exercise-variations.js";
 import { isCountedShare, muscleCreditsShared } from "./muscle-credit.js";
 import { finite } from "../lib/numbers.js";
@@ -14,6 +20,8 @@ export interface PlanQualityIssue {
   day_number?: number;
   exercises?: string[];
   muscle_group?: string;
+  /** On a `movement_pattern_gap`: which family is missing (MOVEMENT_PATTERN_FAMILIES key). */
+  pattern?: MovementPatternFamily;
 }
 
 export interface PlanQualityReport {
@@ -86,7 +94,8 @@ export interface PlanQualityOptions {
  * too: the whole picture, never what the floor, the bands or the ledger count.
  */
 export function plannedWeeklyGroupSets(days: PlanQualityDay[], opts: VolumeShareOptions = {}): Map<MuscleGroup, number> {
-  const read = validateTrainingPlanInternal(days, {});
+  // Only the arithmetic is wanted here, so the same-lift check skips the catalog reads.
+  const read = validateTrainingPlanInternal(days, {}, { resolveIdentity: false });
   return opts.shares === "touched" ? read.touchedSets : read.groupSets;
 }
 
@@ -95,9 +104,70 @@ export function validateTrainingPlan(days: PlanQualityDay[], opts: PlanQualityOp
   return validateTrainingPlanInternal(days, opts).report;
 }
 
+// The movement families a broad strength week is expected to touch. Coverage is
+// contextual, never a hard rule (see the gap check below); the key is what a reader
+// that has to NAME the missing family (plan-coverage.ts) keys on.
+export type MovementPatternFamily = "knee-dominant" | "hinge" | "horizontal-push" | "upper-pull" | "trunk";
+export const MOVEMENT_PATTERN_FAMILIES: ReadonlyArray<{
+  key: MovementPatternFamily;
+  label: string;
+  patterns: readonly MovementPattern[];
+}> = [
+  { key: "knee-dominant", label: "knee-dominant lower body", patterns: ["squat", "lunge"] },
+  { key: "hinge", label: "hip hinge / posterior chain", patterns: ["hinge", "hip-extension"] },
+  { key: "horizontal-push", label: "horizontal push", patterns: ["horizontal-push"] },
+  { key: "upper-pull", label: "upper-body pull", patterns: ["horizontal-pull", "vertical-pull"] },
+  { key: "trunk", label: "trunk / anti-movement", patterns: ["core", "carry"] },
+];
+
+// The stored lift a name resolves to, or "" when the resolver cannot be read.
+function resolvedLiftKey(name: string): string {
+  try {
+    return resolveExerciseName(name).key;
+  } catch {
+    return "";
+  }
+}
+
+// ONE LIFT, TWICE ON A DAY. Two names are the same lift when the resolver
+// (exercise-canon.ts resolveExerciseName — exact, one alias hop, key, unique expanded
+// key) lands them on the same stored exercise: "DB Bicep Curl" through its alias row and
+// "Dumbbell Biceps Curl" stored are one lift, which the conservative key alone never saw.
+// The conservative key still joins two names on its own, so a name the resolver cannot
+// place keeps exactly the behaviour it had. Groups come back in first-appearance order.
+function sameLiftGroups(names: readonly string[], resolveIdentity: boolean): string[][] {
+  const parent = names.map((_, index) => index);
+  const find = (index: number): number => {
+    while (parent[index] !== index) {
+      parent[index] = parent[parent[index]];
+      index = parent[index];
+    }
+    return index;
+  };
+  const firstByKey = new Map<string, number>();
+  const join = (key: string, index: number) => {
+    const first = firstByKey.get(key);
+    if (first == null) firstByKey.set(key, index);
+    else parent[find(index)] = find(first);
+  };
+  names.forEach((name, index) => {
+    join(`key:${normalizedExerciseKey(name)}`, index);
+    if (!resolveIdentity) return;
+    const resolved = resolvedLiftKey(name);
+    if (resolved) join(`lift:${resolved}`, index);
+  });
+  const groups = new Map<number, string[]>();
+  names.forEach((name, index) => {
+    const root = find(index);
+    groups.set(root, [...(groups.get(root) ?? []), name]);
+  });
+  return [...groups.values()];
+}
+
 function validateTrainingPlanInternal(
   days: PlanQualityDay[],
-  opts: PlanQualityOptions
+  opts: PlanQualityOptions,
+  internal: { resolveIdentity?: boolean } = {}
 ): { report: PlanQualityReport; groupSets: Map<MuscleGroup, number>; touchedSets: Map<MuscleGroup, number> } {
   const errors: PlanQualityIssue[] = [];
   const warnings: PlanQualityIssue[] = [];
@@ -146,7 +216,7 @@ function validateTrainingPlanInternal(
     );
     if (strength.length) strengthDays += 1;
     strengthItems += strength.length;
-    const byCanonical = new Map<string, string[]>();
+    const dayExercises: string[] = [];
     const byPressSlot = new Map<string, string[]>();
     let daySets = 0;
 
@@ -158,8 +228,7 @@ function validateTrainingPlanInternal(
         );
         continue;
       }
-      const key = normalizedExerciseKey(exercise);
-      byCanonical.set(key, [...(byCanonical.get(key) ?? []), exercise]);
+      dayExercises.push(exercise);
       const slot = pressSlotKey(exercise);
       if (slot) byPressSlot.set(slot, [...(byPressSlot.get(slot) ?? []), exercise]);
 
@@ -267,7 +336,7 @@ function validateTrainingPlanInternal(
       }
     }
 
-    for (const exercises of byCanonical.values()) {
+    for (const exercises of sameLiftGroups(dayExercises, internal.resolveIdentity !== false)) {
       if (exercises.length > 1)
         errors.push(
           issue(
@@ -303,20 +372,14 @@ function validateTrainingPlanInternal(
   // Coverage is contextual, never a hard rule: a specialist, rehab, travel, or race
   // week may intentionally omit a pattern. Only flag conspicuous gaps in a broad week.
   if (strengthDays >= 3 && strengthItems >= 6) {
-    const families: Array<[string, MovementPattern[]]> = [
-      ["knee-dominant lower body", ["squat", "lunge"]],
-      ["hip hinge / posterior chain", ["hinge", "hip-extension"]],
-      ["horizontal push", ["horizontal-push"]],
-      ["upper-body pull", ["horizontal-pull", "vertical-pull"]],
-      ["trunk / anti-movement", ["core", "carry"]],
-    ];
-    for (const [label, options] of families) {
-      if (!options.some((pattern) => patterns.has(pattern)))
+    for (const family of MOVEMENT_PATTERN_FAMILIES) {
+      if (!family.patterns.some((pattern) => patterns.has(pattern)))
         warnings.push(
           issue(
             "warning",
             "movement_pattern_gap",
-            `This broad strength week has no clear ${label} pattern; confirm that the omission matches the athlete's goal, recovery, and constraints.`
+            `This broad strength week has no clear ${family.label} pattern; confirm that the omission matches the athlete's goal, recovery, and constraints.`,
+            { pattern: family.key }
           )
         );
     }

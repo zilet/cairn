@@ -1684,6 +1684,7 @@ declare global {
       surfaceSelector: string,
       paint: (opts: O) => Promise<void>,
     ): (opts?: O) => Promise<void>;
+    typing(host: HTMLElement, surfaceSelector: string): boolean;
   };
   declare const CairnSessionSnapshot: {
     KEY: string;

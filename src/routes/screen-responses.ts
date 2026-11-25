@@ -52,6 +52,7 @@ import { dexaTargeting } from "../domain/health/index.js";
 import { todayDateParam } from "../domain/today/index.js";
 import { flexibleTrainingAgenda } from "../repo.js";
 import { calibrationStatus, dueCalibrations } from "../repo/calibration.js";
+import { programBalanceRead } from "../repo/program-balance-read.js";
 import { forwardTimeline } from "../repo/forward-timeline.js";
 import { journeyMilestones, journeyRead } from "../repo/journey.js";
 import { getBodyMetricsSummary, normalizeUnit } from "../repo/body-metrics.js";
@@ -143,7 +144,7 @@ export function trainHomeResponses(viewQuery: unknown, dateQuery: unknown, hourQ
   if (view !== "endurance") put(out, "/coaching-focus", () => getCoachingFocus());
   if (view === "overview") {
     put(out, "/stats", () => weeklyStatsResponse());
-    put(out, "/program/balance", () => programBalance());
+    put(out, "/program/balance", () => programBalanceRead());
     put(out, "/muscle-trajectory", () => muscleGroupTrajectory(undefined));
     put(out, "/muscle-load", () => muscleLoadPayload(2));
     put(out, "/training-load", () => ({ band: trainingLoadBand() }));

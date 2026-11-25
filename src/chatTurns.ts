@@ -1356,6 +1356,21 @@ function verifyPlanUpdateReadback(changes: unknown[], result: any): any {
     const remove = change.remove === true || Number(change.sets) === 0;
     if (change.swap && typeof change.swap === "object") {
       const swap = change.swap as Record<string, unknown>;
+      // A swap into the slot's own lift (another spelling of it) changes nothing by
+      // design: the slot standing as it was IS the landed result.
+      const selfSwap = receipts.find(
+        (entry: any) =>
+          entry?.action === "unchanged" &&
+          entry?.unchanged === "same_lift" &&
+          Number(entry?.day) === Number(change.day_number) &&
+          !!planItemMatch(items, entry?.from ?? swap.from) &&
+          (repo.normalizeExerciseName(String(entry?.swap?.to ?? "")) === repo.normalizeExerciseName(String(swap.to ?? "")) ||
+            repo.normalizeExerciseName(String(entry?.swap?.from ?? entry?.from ?? "")) ===
+              repo.normalizeExerciseName(String(swap.from ?? "")))
+      );
+      if (selfSwap) {
+        return { day_number: Number(change.day_number), kind: "swap", ok: true, from: swap.from, to: swap.to, mismatches: [] };
+      }
       const receipt = receipts.find(
         (entry: any) =>
           entry?.action === "swapped" &&

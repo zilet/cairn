@@ -37,7 +37,8 @@ test("mergeExercises repoints sets + plan items, records an alias, and deletes t
   assert.ok(res.moved_plan_items >= 1, "plan items repointed");
 
   // the from-row is gone; exactly one Back Squat remains carrying both sets
-  assert.equal(repo.findExercise("Squat"), undefined);
+  assert.equal(repo.findExerciseExact("Squat"), undefined, "the from-row is gone");
+  assert.equal(repo.findExercise("Squat")?.name, "Back Squat", "the old spelling finds the survivor");
   const survivor = repo.findExercise("Back Squat");
   const setCount = db.prepare("SELECT COUNT(*) AS n FROM logged_sets WHERE exercise_id = ?").get(survivor.id).n;
   assert.equal(setCount, 2, "both lifts' sets now belong to the survivor");

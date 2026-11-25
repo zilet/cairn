@@ -25,7 +25,6 @@ import {
   performanceStanding,
   planDayProgression,
   programAdjustments,
-  programBalance,
   muscleLoadPayload,
   raceBuild,
   runZones,
@@ -38,6 +37,7 @@ import {
   weeklyRunPlan,
 } from "../../domain/training/index.js";
 import { raceDays } from "../../domain/training/race-days.js";
+import { programBalanceRead } from "../../repo/program-balance-read.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
 import { flexibleTrainingAgenda } from "../../repo.js";
 
@@ -226,9 +226,9 @@ export function registerProgramTools(server: McpToolRegistrar) {
 
   server.tool(
     "get_program_balance",
-    "Working-set volume per canonical muscle group over the last 2 weeks, banded against productive-range landmarks (low/productive/high) with a plain-language adherence-skew summary. Tells which groups are due and which are over.",
+    "Working-set volume per canonical muscle group over the last 2 weeks, banded against productive-range landmarks (low/productive/high) with a plain-language adherence-skew summary. Tells which groups are due and which are over. `ungrouped` names lifts with logged sets in the window that no muscle group could count (exercise, sets, last_date), with a plain `ungrouped_note`.",
     {},
-    async () => asText(programBalance())
+    async () => asText(programBalanceRead())
   );
 
   server.tool(

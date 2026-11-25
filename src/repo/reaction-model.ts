@@ -24,7 +24,7 @@ import { getMarkerHistory } from "./health.js";
 import { labValueText, renderLabQuantities } from "./lab-display.js";
 import { labUnitSystem } from "./settings.js";
 import { activitySportWhere, RUN_SPORT_PATTERNS } from "./endurance-sports.js";
-import { normalizedExerciseKey, canonicalGroup, isMobility, sameLiftName } from "./exercise-canon.js";
+import { normalizedExerciseKey, canonicalGroup, isMobility, resolveExerciseName, sameLiftName } from "./exercise-canon.js";
 import { getAppState, setAppState } from "./app-state.js";
 import { addMemory } from "./memory.js";
 import { addDaysISO, localDateISO, metricLabel } from "./shared.js";
@@ -485,11 +485,24 @@ function adherence(): ReactionPattern | null {
   } catch {
     skips = [];
   }
+  // One lift is one count whatever spelling each skip was written in: the resolver's
+  // identity key ("DB Bicep Curl" and "Dumbbell Biceps Curl" are one stored row), and
+  // the stored name is what the statement says.
   const skipCount = new Map<string, { display: string; n: number }>();
+  const identities = new Map<string, { key: string; display: string }>();
   for (const row of skips) {
-    const name = String(row.exercise ?? "").trim();
-    if (!name) continue;
-    const key = normalizedExerciseKey(name) || name.toLowerCase();
+    const written = String(row.exercise ?? "").trim();
+    if (!written) continue;
+    let identity = identities.get(written.toLowerCase());
+    if (!identity) {
+      const resolved = resolveExerciseName(written);
+      identity = {
+        key: resolved.key || normalizedExerciseKey(written) || written.toLowerCase(),
+        display: resolved.exercise_id != null && resolved.canonical ? resolved.canonical : written,
+      };
+      identities.set(written.toLowerCase(), identity);
+    }
+    const { key, display: name } = identity;
     const cur = skipCount.get(key);
     if (cur) cur.n++;
     else skipCount.set(key, { display: name, n: 1 });

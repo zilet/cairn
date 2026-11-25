@@ -41,7 +41,7 @@ import {
   type MuscleGroup,
   normalizedExerciseKey,
 } from "./exercise-canon.js";
-import { suggestAlternatives } from "./exercise-variations.js";
+import { liftAlternatives } from "./exercise-suggestions.js";
 import { isPressRegion, movementRegionKey } from "./movement-region.js";
 import { isCompoundLift, liftLeadTier } from "./movement-standing.js";
 import { isCountedShare, type MuscleCredit, muscleCreditFor } from "./muscle-credit.js";
@@ -223,7 +223,7 @@ export function sameVaryRegion(lift: string, candidate: string): boolean {
 
 function varyMenu(lift: string, injuryAreas: string[], excludeNames: string[]): GroupVaryOption[] {
   const own = normalizedExerciseKey(lift);
-  return suggestAlternatives(lift, { limit: 12, injuryAreas, excludeNames })
+  return liftAlternatives(lift, { limit: 12, injuryAreas, excludeNames })
     .filter((v) => normalizedExerciseKey(v.name) !== own && sameVaryRegion(lift, v.name))
     .slice(0, 3)
     .map((v) => ({ name: v.name, why: v.why }));

@@ -36,8 +36,6 @@ import {
   recoveryWeekStatus,
   replacePlanByPerson,
   savePlanDayByPerson,
-  suggestAlternatives,
-  suggestVariations,
   updateExercise,
   updateTarget,
   upsertExercise,
@@ -48,6 +46,7 @@ import {
   structureRedrawStatus,
 } from "../domain/brain/structure-request.js";
 import { getPlanWithPurpose } from "../repo.js";
+import { liftAlternatives, liftVariations } from "../repo/exercise-suggestions.js";
 
 export const planExercisesRouter = Router();
 
@@ -425,10 +424,10 @@ planExercisesRouter.get("/program/variations", (req, res) => {
   if (!exercise) return res.status(400).json({ error: "exercise required" });
   if (String(req.query.mode) === "alternatives") {
     const avoid = req.query.avoid ? String(req.query.avoid).split(",").map((s) => s.trim()).filter(Boolean) : undefined;
-    return res.json(suggestAlternatives(exercise, {
+    return res.json(liftAlternatives(exercise, {
       bodyweightOnly: req.query.bodyweight === "1",
       avoidEquipment: avoid as any,
     }));
   }
-  res.json(suggestVariations(exercise));
+  res.json(liftVariations(exercise));
 });

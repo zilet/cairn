@@ -3,7 +3,8 @@
 // policy decides whether each result lands, announces, or waits for review.
 import { getCoachContext } from "../repo/coach.js";
 import { normalizedExerciseKey } from "../repo/exercise-canon.js";
-import { examplesForGroup, suggestAlternatives } from "../repo/exercise-variations.js";
+import { examplesForGroup } from "../repo/exercise-variations.js";
+import { liftAlternatives } from "../repo/exercise-suggestions.js";
 import { pressSlotKey } from "../repo/plan-quality.js";
 import { getProgramState } from "../repo/program-state.js";
 import { availableEquipment } from "../repo/equipment.js";
@@ -215,7 +216,7 @@ export function buildProgramEvolutionPrompt(userInstruction?: string, state?: an
     .map((l: any) => {
       // Injury-aware: the candidate list must not include movements that load an
       // injured area (else it contradicts the "never load an injured area" rule).
-      const names = (suggestAlternatives(l.exercise, {
+      const names = (liftAlternatives(l.exercise, {
         limit: 20,
         injuryAreas,
         preferCompound: true,

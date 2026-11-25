@@ -5490,6 +5490,31 @@ pull-up stored as a TIMED movement, two muscle groups naming the wrong region, a
 Garmin category said `SHOULDER_PRESS` (the catalog's own enum is `SQUAT`/`LEG_PRESS`; leg extensions
 really do live under `CRUNCH` and a dip under `TRICEPS_EXTENSION`, so those were left alone).
 
+**Callers, 2026-11-25.** `findExercise` resolves through the ladder on an exact miss;
+`findExerciseExact` is for writers whose miss must mean "not stored" (create, upsert, merge,
+delete). Composed card items carry the stored spelling (adaptive-session `normalizeItem`, and
+`hydrate` for older cards), as do skips, so the client's exact-name card matching sees one lift.
+Suggestion lists go through `liftAlternatives`/`liftVariations` (`src/repo/exercise-suggestions.ts`),
+never the raw table, and progression's rotation never offers a lift its own other spelling. A swap
+into the slot's own lift is `action:'unchanged'`: nothing is written and no expectation is recorded.
+
+**A lift's muscle group carries who set it** — `exercises.muscle_group_source`
+(`user|table|classifier|agent|legacy`, `src/repo/exercises.ts`). An agent fills an empty group or
+corrects a `classifier` guess, never a person's, a unanimous table's or its own earlier answer; the
+deterministic re-check (`recheckExerciseGroups`, run by Tidy) follows `curatedMuscleGroup`
+(`muscle-credit.ts`: named lift, classifier and pattern unanimous) and corrects a legacy/agent group
+only when the lift does not train it at all. A person's edit goes through `updateExercise`; system
+writers never do. Work no group can count is named in the balance read (`programBalanceRead`,
+`src/repo/program-balance-read.ts`: `ungrouped`, `ungrouped_note`), never dropped.
+
+**A standing coverage gap is one ask** (`src/repo/plan-coverage.ts`,
+`src/domain/brain/coverage-ask.ts`) — a floored group under its floor or a missing movement family
+in the plan of record is raised after a person's plan save and by a daily pass
+(`plan_coverage_check_date`) as ONE server-derived draft held on the refused-floor ask. It is deduped
+per gap fingerprint (gap, intent, the lifts that count toward it); an applied or set-aside answer
+holds until those change. Floors and thresholds are unchanged, and the same-lift-twice check keys on
+`resolveExerciseName` identity.
+
 ## Exercise guides (`src/repo/exercise-guide.ts`, `src/domain/training/exercise-guide-use-case.ts`)
 
 The optional instructional layer behind a movement: ordered step-by-step text, primary/secondary
@@ -8017,6 +8042,15 @@ What the build emits, and what a deploy ships:
   (focus with `preventScroll`, then one settled reveal); a repaint that restores focus dispatches
   `cairn:reveal-focused`. A new fixed or sticky bar that can cover content declares
   `data-occludes`; never add a `scrollIntoView` for a focused field.
+
+**Viewport probe (report-only).** `app/mobile-viewport.ts` samples the visual viewport after focus,
+resume and resize (debounced) on soft-keyboard devices. When `viewportAnomalies()` finds
+`blank_surface`, `viewport_stuck`, `rest_bar_adrift` or `kb_up_stale`, it sends one warning-level
+`viewport_anomaly` event through `CairnClientDiagnostics`; the server allowlists the payload
+(`parseViewportProbe`, `src/repo/diagnostics.ts`) into `diagnostic_events.metadata_json`. One report
+per code per 60 s, 6 per page life. The probe never changes layout, scroll, focus, classes or styles.
+A Session repaint requested while a field is being typed in is held at PAINT time
+(`CairnSessionEntry.typing`), not only when it was requested.
 
 ### Runs are not plan items (client)
 

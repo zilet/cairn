@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS exercises (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL UNIQUE COLLATE NOCASE,
   muscle_group TEXT,
+  muscle_group_source TEXT,               -- who set muscle_group: user|table|classifier|agent|legacy; NULL = no group (repo/exercises.ts MuscleGroupSource) (v134)
   unit TEXT DEFAULT 'lb',
   constraint_note TEXT,
   cues TEXT,

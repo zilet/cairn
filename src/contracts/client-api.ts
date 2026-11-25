@@ -2100,12 +2100,22 @@ export interface ClientProgramGroupBalance {
   status: "due" | "ok" | "high";
 }
 
+// A lift with logged sets in the balance window that no muscle group could count.
+export interface ClientUngroupedLift {
+  exercise: string;
+  sets: number;
+  last_date: ISODateString | string;
+}
+
 export interface ClientProgramBalance {
   groups: ClientProgramGroupBalance[];
   due: string[];
   over: string[];
   summary: string;
   broad_low: boolean;
+  // Named, never dropped: lifts the counts above could not include (repo/program-balance-read.ts).
+  ungrouped?: ClientUngroupedLift[];
+  ungrouped_note?: string | null;
 }
 
 export type ClientAcuteBand = "fresh" | "loaded" | "saturated";

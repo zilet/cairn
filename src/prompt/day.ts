@@ -10,7 +10,7 @@ import {
   recentDayReads,
 } from "../repo/day-read.js";
 import type { DayRead } from "../repo/day-read.js";
-import { suggestAlternatives } from "../repo/exercise-variations.js";
+import { liftAlternatives } from "../repo/exercise-suggestions.js";
 import { feltSignalDayLines } from "../repo/felt-signals.js";
 import { dayFuelDemand } from "../repo/fuel-demand.js";
 import { dayFuelState } from "../repo/fuel-state.js";
@@ -870,7 +870,7 @@ export function buildSessionPrompt(
         seen.add(name);
         // Injury-aware swaps so "easier on the legs" with a bad knee never offers a
         // knee-loading alternative.
-        const alts = (suggestAlternatives(name, { limit: 3, injuryAreas }) as any[]).map((v) => v.name);
+        const alts = (liftAlternatives(name, { limit: 3, injuryAreas }) as any[]).map((v) => v.name);
         if (alts.length) lines.push(`- ${name} → ${alts.join(", ")}`);
         if (lines.length >= 12) break;
       }

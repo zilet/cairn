@@ -628,10 +628,11 @@ function recordAppliedProposalDecision(
     const nutrition = p.parsed?.kind === "nutrition_target";
     const recoveryCycle = result?.recovery_cycle ?? null;
     const restructure = Array.isArray(p.parsed?.days) && !recoveryCycle;
+    // A swap into the slot's own lift wrote nothing: it earns no expectation.
     const affected = [
       ...(Array.isArray(result?.applied) ? result.applied : []),
       ...(Array.isArray(result?.added) ? result.added : []),
-    ];
+    ].filter((item: any) => item?.action !== "unchanged");
     const exercises: string[] = [
       ...new Set<string>(affected.map((item: any) => String(item?.exercise || "").trim()).filter(Boolean)),
     ];

@@ -325,7 +325,7 @@ test("applyExerciseEnrichment merges into an existing canonical duplicate, repoi
   const r = repo.applyExerciseEnrichment(dup.id, { canonical: "Move Alpha" });
   assert.equal(r.id, canonical.id, "the duplicate merged INTO the existing canonical");
   assert.equal(r.name, "Move Alpha");
-  assert.equal(repo.findExercise("Move Beta"), undefined, "the duplicate row is gone");
+  assert.equal(repo.findExerciseExact("Move Beta"), undefined, "the duplicate row is gone");
   const detail = repo.getExerciseDetail("Move Alpha");
   assert.ok(detail.recent.length >= 1, "the logged set was repointed to the canonical, never lost");
 });

@@ -12,7 +12,7 @@ import {
 import { db } from "../db.js";
 import { pickDayVariant } from "./brain/day-read-rules.js";
 import { getAgentJob } from "./chat.js";
-import { isKnownBodyweightMovement, normalizedExerciseKey } from "./exercise-canon.js";
+import { isKnownBodyweightMovement, normalizedExerciseKey, resolveExerciseName } from "./exercise-canon.js";
 import { exerciseInputFor } from "./exercise-input.js";
 import { findExercise, recentWorkingSeconds, recentWorkingWeight } from "./exercises.js";
 import { getPlanDay } from "./plan.js";
@@ -701,6 +701,17 @@ function normalizeInterval(value: unknown): unknown {
   return normalizeJsonValue(value);
 }
 
+// A card names a lift by its STORED spelling whenever the name resolves to one. Sets
+// are saved under the stored name (findOrCreateExercise resolves) and the client pairs
+// sets with cards by exact name, so an item left as "DB Bicep Curl" over a stored
+// "Dumbbell Biceps Curl" opened a second card for the same lift. A name that resolves
+// to nothing is a new lift and keeps its spelling.
+function storedExerciseName(name: string): string {
+  if (!name || !name.trim()) return name;
+  const resolved = resolveExerciseName(name);
+  return resolved.exercise_id != null && resolved.canonical ? resolved.canonical : name;
+}
+
 function normalizeItem(
   raw: unknown,
   position: number,
@@ -717,7 +728,8 @@ function normalizeItem(
     clampBounds: true,
     strictShape: agentSource,
   });
-  const { exercise, kind } = core;
+  const { kind } = core;
+  const exercise = kind === "cardio" ? core.exercise : storedExerciseName(core.exercise);
   // Only server-derived plan items or an already verified agent normalization may
   // carry accountability metadata. Athlete-authored payloads must never be able
   // to forge an Undo control for an unrelated brain decision.
@@ -1237,7 +1249,13 @@ function hydrate(row: any) {
     ? rawItems.map((item) =>
         item && typeof item === "object" && !Array.isArray(item)
           ? (() => {
-              const record = item as Record<string, unknown>;
+              // A card written before items carried the stored spelling reads back under it
+              // too (storedExerciseName), so an open session pairs with its own sets.
+              const written = item as Record<string, unknown>;
+              const record =
+                written.kind !== "cardio" && typeof written.exercise === "string"
+                  ? { ...written, exercise: storedExerciseName(written.exercise) }
+                  : written;
               const decisionId = boundedNumber(record.brain_decision_id, 1, Number.MAX_SAFE_INTEGER, true);
               const decisionStillApplied = decisionId == null || appliedDecisionIds.has(decisionId);
               // What the card's log row asks for, read live (a stated override made

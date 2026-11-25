@@ -781,10 +781,11 @@ test("a lift logged under its alias counts as the composed lift, not a substitut
   repo.finishSession(prepared.session_id, null);
 
   const outcome = getDailySessionOutcome(DATE);
-  assert.deepEqual(outcome.facts.completed, ["Incline DB Press"], "the composed lift reads as completed");
+  // The card itself now carries the stored spelling (adaptive-session normalizeItem).
+  assert.deepEqual(outcome.facts.completed, ["Incline Dumbbell Press"], "the composed lift reads as completed");
   assert.deepEqual(outcome.facts.skipped, [], "nothing was skipped");
   assert.deepEqual(outcome.facts.substituted, [], "the same lift under another spelling is not a substitute");
-  const dose = outcome.facts.dose_evidence.find((entry) => entry.exercise === "Incline DB Press");
+  const dose = outcome.facts.dose_evidence.find((entry) => entry.exercise === "Incline Dumbbell Press");
   assert.equal(dose.achieved.sets, 3, "the logged sets attach to the composed item");
   assert.equal(dose.full_load_reference.sets, 3, "the plan row is found through the alias");
   assert.equal(dose.full_load_reference.target_weight, 50);

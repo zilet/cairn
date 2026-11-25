@@ -786,4 +786,24 @@ export const MIGRATIONS_101_150: Migration[] = [
       addColumn(db, "strength_objectives", "achieved_reps INTEGER");
     },
   },
+  {
+    version: 134,
+    name: "exercises-muscle-group-source",
+    // Who set a lift's muscle_group (repo/exercises.ts MuscleGroupSource): an agent may
+    // correct the insert-time classifier's guess, never a person's group. Nobody recorded
+    // who set an EXISTING group, and a person may have, so every one is stamped 'legacy':
+    // an agent never overwrites it, and only the deterministic re-check corrects one whose
+    // group the lift does not train at all. NULL stays NULL where there is no group.
+    // Idempotent: only unstamped rows are touched. Two-step: also in db.ts's create block.
+    up: (db) => {
+      if (!hasTable(db, "exercises")) return;
+      addColumn(db, "exercises", "muscle_group_source TEXT");
+      const columns = db.prepare("PRAGMA table_info(exercises)").all() as Array<{ name: string }>;
+      if (!columns.some((c) => c.name === "muscle_group")) return;
+      db.exec(
+        `UPDATE exercises SET muscle_group_source = 'legacy'
+          WHERE muscle_group IS NOT NULL AND TRIM(muscle_group) <> '' AND muscle_group_source IS NULL`
+      );
+    },
+  },
 ];

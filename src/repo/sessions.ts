@@ -20,6 +20,7 @@ import {
   MUSCLE_LANDMARKS,
   progressionLineageIds,
   resolveExerciseName,
+  sameLiftName,
 } from "./exercise-canon.js";
 import { effectiveVolumeByGroup, type VolumeSet } from "./exercise-variations.js";
 import {
@@ -500,10 +501,25 @@ export function setsForSession(sessionId: number) {
 // count against completion, and weekly stats are untouched (those join
 // logged_sets only). The exercise column is COLLATE NOCASE, so lookups and the
 // UNIQUE(session_id, exercise) guard are case-insensitive.
+//
+// A skip names the lift by its stored spelling (skipExercise resolves through
+// findExercise), and the client matches a skip to its card by exact name. A skip written
+// under another spelling before that reads back under the stored one too, once.
 function skipsForSession(sessionId: number): string[] {
-  return (
-    db.prepare(`SELECT exercise FROM session_skips WHERE session_id = ? ORDER BY id`).all(sessionId) as any[]
-  ).map((r) => r.exercise);
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const r of db
+    .prepare(`SELECT exercise FROM session_skips WHERE session_id = ? ORDER BY id`)
+    .all(sessionId) as any[]) {
+    const written = String(r.exercise ?? "");
+    const resolved = written.trim() ? resolveExerciseName(written) : null;
+    const name = resolved?.exercise_id != null && resolved.canonical ? resolved.canonical : written;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(name);
+  }
+  return out;
 }
 
 export function skipExercise(exercise: string, date?: string) {
@@ -558,7 +574,13 @@ export function unskipExercise(exercise: string, date?: string) {
       skips: [] as string[],
     };
   }
-  const removed = db.prepare(`DELETE FROM session_skips WHERE session_id = ? AND exercise = ?`).run(s.id, name).changes;
+  // Un-skip the LIFT, whichever spelling the skip or the request was written in.
+  const ids = (db.prepare(`SELECT id, exercise FROM session_skips WHERE session_id = ?`).all(s.id) as any[])
+    .filter((r) => sameLiftName(String(r.exercise ?? ""), name))
+    .map((r) => Number(r.id));
+  const removed = ids.length
+    ? Number(db.prepare(`DELETE FROM session_skips WHERE id IN (${ids.map(() => "?").join(",")})`).run(...ids).changes)
+    : 0;
   if (removed) reconcileDailySessionSafe(s.id);
   return {
     ok: true as const,

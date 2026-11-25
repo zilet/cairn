@@ -3,7 +3,7 @@
 // a direct guarded fetch instead of api(): a failure in reporting must be
 // invisible and can never report itself recursively.
 
-type ClientDiagnosticKind = "api_failure" | "render_error" | "unhandled_error" | "unhandled_rejection";
+type ClientDiagnosticKind = "api_failure" | "render_error" | "unhandled_error" | "unhandled_rejection" | "viewport_anomaly";
 type ClientDiagnosticLevel = "warning" | "error";
 // Taxonomy only: which welcome step failed, for which provider, in what class.
 // Never a message, a reply, a prompt or CLI output (the server re-validates it).
@@ -22,6 +22,7 @@ type ClientDiagnosticEvent = {
   online?: boolean;
   release?: string;
   welcome?: ClientDiagnosticWelcome;
+  viewport?: Record<string, string | number | boolean>;
   fingerprint: string;
 };
 type ClientDiagnosticInput = Omit<ClientDiagnosticEvent, "fingerprint" | "message"> & {
@@ -95,6 +96,16 @@ function clientDiagnosticNormalizeRoute(value: unknown): string {
   } catch {
     return "";
   }
+}
+
+// A viewport anomaly carries geometry, flags and tag names only; the server keeps just its own
+// allowlisted keys and scalar shapes, so this only bounds each string.
+function clientDiagnosticViewport(value: unknown): Record<string, string | number | boolean> {
+  const out: Record<string, string | number | boolean> = {};
+  for (const [key, v] of Object.entries(value && typeof value === "object" ? value : {}).slice(0, 12))
+    if (typeof v === "string") out[key] = clientDiagnosticBound(v, 80);
+    else if (typeof v === "boolean" || typeof v === "number") out[key] = v;
+  return out;
 }
 
 const CLIENT_WELCOME_STEPS = new Set(["hello", "connect.install", "connect.signin", "connect.verify", "meet"]);
@@ -196,6 +207,7 @@ function createClientDiagnosticReporter(
     const route = clientDiagnosticNormalizeRoute(input.route);
     const method = clientDiagnosticBound(input.method, 12).toUpperCase();
     const welcome = clientDiagnosticWelcome(input.welcome);
+    const viewport = input.kind === "viewport_anomaly" ? clientDiagnosticViewport(input.viewport) : null;
     // A welcome event's message is built from its tokens, never taken from the caller.
     const message = welcome
       ? `welcome ${welcome.step} ${welcome.code}`
@@ -213,6 +225,7 @@ function createClientDiagnosticReporter(
       fingerprint: clientDiagnosticBound(input.fingerprint, 100) || `${input.kind}:${clientDiagnosticHash(seed)}`,
     };
     if (welcome) event.welcome = welcome;
+    if (viewport) event.viewport = viewport;
     if (stack) event.stack = stack;
     if (route) event.route = route;
     if (method) event.method = method;

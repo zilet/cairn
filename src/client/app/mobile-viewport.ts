@@ -307,7 +307,9 @@
       applyVvb();
       syncChatViewport();
     };
-    vv.addEventListener("resize", sync);
+    // Report-only evidence for a blank Session (app/viewport-probe.ts); absent, nothing changes.
+    const probeResize = (typeof CairnViewportProbe !== "undefined" ? CairnViewportProbe : undefined)?.install(vv, { softKeyboard, vvMax: () => vvMax, threshold: keyboardThreshold, visibleTop, textInput: textInputEl }) ?? (() => {});
+    vv.addEventListener("resize", () => { sync(); probeResize(); });
     vv.addEventListener("scroll", sync); // keyboard open/close shifts offsetTop
     window.addEventListener("orientationchange", () => { vvMax = vv.height; sync(); });
     // Focus/tap is an early intent signal, not proof that the keyboard is open.

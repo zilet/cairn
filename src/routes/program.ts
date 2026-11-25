@@ -27,7 +27,6 @@ import {
   performanceStanding,
   planDayProgression,
   programAdjustments,
-  programBalance,
   muscleLoadPayload,
   runZones,
   setEquipmentProfile,
@@ -40,6 +39,7 @@ import {
   weeklyRunPlan,
 } from "../domain/training/index.js";
 import { calibrationStatus, dueCalibrations } from "../repo/calibration.js";
+import { programBalanceRead } from "../repo/program-balance-read.js";
 import { backgroundOp } from "./background-op.js";
 import { memoizedRead } from "./response-memo.js";
 import { horizonRaceResponses } from "./today-responses.js";
@@ -148,8 +148,9 @@ programRouter.post("/program/blocks/:id/complete", (req, res) => {
 // ---- program intelligence (progression engine + balance + adjustments) --------
 // Volume balance per canonical muscle group over the last N weeks (default 2).
 // Plain words: which groups are due, which are over, and an adherence-skew
-// summary. No scores — band labels (low/productive/high) are the output.
-programRouter.get("/program/balance", (_req, res) => res.json(programBalance()));
+// summary. No scores — band labels (low/productive/high) are the output. Lifts no
+// group could count are named in `ungrouped` rather than silently dropped.
+programRouter.get("/program/balance", (_req, res) => res.json(programBalanceRead()));
 
 // Acute per-muscle freshness over the last ~2 days — recent strength sets AND
 // endurance sessions folded onto the regions they fatigue (a long ride loads the

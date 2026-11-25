@@ -139,6 +139,28 @@ test("C5: a long-tenure STEADY lift reaches the 'introduce' action with same-pat
   assert.ok(prop.proposal.parsed.changes.some((c) => c.swap && /Back Squat/i.test(c.swap.from)), "introduce → a swap change");
 });
 
+test("C5: a lift is never rotated into its own other spelling", async () => {
+  const { suggestAlternatives } = await import("../dist/repo/exercise-variations.js");
+  const { sameLiftName } = await import("../dist/repo/exercise-canon.js");
+  makeExercise("Dumbbell Biceps Curl", { muscle_group: "biceps" });
+  db.prepare(`INSERT INTO exercise_aliases (alias, canonical, source) VALUES (?, ?, 'auto')`).run("db bicep curl", "Dumbbell Biceps Curl");
+  assert.ok(
+    suggestAlternatives("Dumbbell Biceps Curl", { limit: 20 }).some((v) => v.name === "DB Bicep Curl"),
+    "the variation table lists the alias spelling as a different movement",
+  );
+  assert.ok(sameLiftName("DB Bicep Curl", "Dumbbell Biceps Curl"), "the resolver knows they are one lift");
+  planWith(1, { exercise: "Dumbbell Biceps Curl", sets: 3, rep_low: 8, rep_high: 8, target_weight: 43, focus: "Arms" });
+  const plan = [[98, 40], [70, 40], [42, 40], [21, 40], [0, 43]];
+  for (const [d, w] of plan) logSet("Dumbbell Biceps Curl", isoDaysAgo(d), { weight: w, reps: 8, rir: 2 });
+
+  const p = nextPrescription("Dumbbell Biceps Curl");
+  assert.equal(p.action, "introduce");
+  assert.ok(p.vary_options.length > 0, "real variations are still offered");
+  for (const option of [p.vary_to, ...p.vary_options.map((o) => o.name)]) {
+    assert.ok(!sameLiftName(option, "Dumbbell Biceps Curl"), `${option} is the same lift, not a rotation`);
+  }
+});
+
 // ── Prescriptions follow what the log proves ──────────────────────────────────
 // A swap that mints a new row on a bodyweight ladder keeps the lift's history; an
 // assist the log no longer needs comes off; a handicapped day that still cleared

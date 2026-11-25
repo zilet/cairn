@@ -360,8 +360,12 @@ function liveReviewHoldsForProposal(proposalId: number): ParkedDecision[] {
 // The athlete-facing reason a volume-floor hold carries: the groups the draft would
 // leave under their weekly set floor (verify-floors.ts writes one message per group,
 // each leading with the group), in plain words — never the set arithmetic. Null when
-// the draft carries no unresolved volume finding.
+// the draft carries no unresolved volume finding and no coverage sentence of its own.
 function volumeFloorHoldReason(proposal: any): string | null {
+  // A standing coverage ask (coverage-ask.ts) is held on the same floor, but its draft
+  // FIXES the gap rather than opening one, so it carries its own sentence.
+  const coverage = proposal?.parsed?.coverage_gap?.explanation;
+  if (typeof coverage === "string" && coverage.trim()) return coverage.trim().slice(0, 700);
   const unresolved = Array.isArray(proposal?.parsed?.volume_floor_unresolved)
     ? proposal.parsed.volume_floor_unresolved.map(String)
     : [];

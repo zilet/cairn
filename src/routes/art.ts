@@ -84,7 +84,10 @@ artRouter.get("/art", (req, res) => {
 
   if (kind === "exercise") {
     if (exerciseArtPending(q)) return res.status(204).end();
-    const row = findExercise(q);
+    // Only the lift stored under THIS spelling: an alias would queue art for another
+    // row's name, never land under `q`, and re-queue on every request.
+    const found = findExercise(q);
+    const row = found && String(found.name).toLowerCase() === q.toLowerCase() ? found : null;
     if (row?.id) {
       import("../enrich.js")
         .then((m) => m.enqueueEnrich("exercise_art", Number(row.id)))

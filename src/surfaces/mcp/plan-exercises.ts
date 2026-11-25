@@ -27,8 +27,6 @@ import {
   reconcileExerciseGroups,
   replacePlanByPerson,
   savePlanDayByPerson,
-  suggestAlternatives,
-  suggestVariations,
   updateExercise,
   updateTarget,
   upsertExercise,
@@ -38,6 +36,7 @@ import {
   requestStructureRedraw,
   structureRedrawStatus,
 } from "../../domain/brain/structure-request.js";
+import { liftAlternatives, liftVariations } from "../../repo/exercise-suggestions.js";
 import { getPlanWithPurpose } from "../../repo.js";
 import { PlanQualityError } from "../../repo/plan-quality.js";
 import { asText, type McpToolRegistrar } from "./shared.js";
@@ -374,12 +373,12 @@ export function registerPlanExerciseTools(server: McpToolRegistrar) {
     async ({ exercise, mode, bodyweight_only, avoid_equipment, injury_areas }) =>
       asText(
         mode === "alternatives"
-          ? suggestAlternatives(exercise, {
+          ? liftAlternatives(exercise, {
               bodyweightOnly: bodyweight_only,
               avoidEquipment: avoid_equipment as any,
               injuryAreas: injury_areas,
             })
-          : suggestVariations(exercise)
+          : liftVariations(exercise)
       )
   );
 

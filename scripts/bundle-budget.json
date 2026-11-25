@@ -74,12 +74,12 @@
     },
     "public/js/bundle-07-boot.js": {
       "measured": {
-        "raw": 65693,
-        "brotli": 15614
+        "raw": 72285,
+        "brotli": 17389
       },
       "budget": {
-        "raw": 69632,
-        "brotli": 18432
+        "raw": 76800,
+        "brotli": 19456
       }
     },
     "public/js/bundle-08-train.js": {

@@ -51,6 +51,7 @@ import { runWithTimeZone } from "./tz.js";
 import { addDaysISO, localDayOfStamp, nowContext } from "./repo/shared.js";
 import { runUnderfuelingControlLoop } from "./domain/brain/underfueling-service.js";
 import { runEnergyDeficiencyWatch } from "./domain/brain/energy-deficiency-service.js";
+import { raisePlanCoverageAsk } from "./domain/brain/coverage-ask.js";
 import {
   MEAL_REFRESH_INSTRUCTION_KEY,
   MEAL_REFRESH_REQUEST_KEY,
@@ -1077,6 +1078,12 @@ export function startScheduler() {
     // questions: that one reads the plate against the scale, this one reads five
     // independent channels for a pattern neither of them can see alone.
     const deficitWatchDue = dailySlotDue(now, "energy_deficiency_watch_date");
+    // (i) The plan's COVERAGE, read once a day (deterministic, no agent): a floored group
+    //     left under its floor or a movement family left out of the plan as written is
+    //     said once as a calm ask (coverage-ask.ts). A person's save raises the same ask
+    //     on the spot; this pass catches the gap that arose without one (an intent change,
+    //     a lift a retired draft took away), and never doubles an ask already open.
+    const coverageCheckDue = dailySlotDue(now, "plan_coverage_check_date");
     // (h) "Behind you": one finished goal looked back on a night (gated on its rows).
     const goalReviewDue = goalReviewTickDue(now);
 
@@ -1094,7 +1101,8 @@ export function startScheduler() {
       !checkupAttnDue &&
       !recoveryAutoDue &&
       !underfuelDue &&
-      !deficitWatchDue
+      !deficitWatchDue &&
+      !coverageCheckDue
     )
       return;
     proactiveBusy = true;
@@ -1112,6 +1120,13 @@ export function startScheduler() {
           if (result.action !== "none")
             log.info(`[proactive] low-energy-availability watch scheduled ${result.action}.`);
           return { outcome: result.action === "none" ? "no_op" : "succeeded", value: result };
+        });
+      }
+      if (coverageCheckDue) {
+        await runScheduled("plan_coverage_check_date", localToday(now), "plan_coverage_check_date", () => {
+          const result = raisePlanCoverageAsk({ date: localToday(now) });
+          if (result.status === "raised") log.info(`[proactive] the plan leaves a gap; one calm ask is waiting.`);
+          return { outcome: result.status === "raised" ? "succeeded" : "no_op", value: result };
         });
       }
       if (benchmarkAttnDue) {

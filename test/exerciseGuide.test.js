@@ -637,9 +637,11 @@ test("a merged-away exercise hands its guide to the survivor", () => {
   // And the vanished name still reaches the survivor's guide: the merge recorded
   // "barbell curl" as an alias, and getExerciseGuide resolves through the shared
   // identity ladder, so the old spelling reads the how-to it was merged into rather
-  // than answering "no guide". The exercise ROW itself is genuinely gone.
+  // than answering "no guide". The exercise ROW itself is genuinely gone; the detail
+  // asked by the old spelling reads the survivor, the same way.
   assert.equal(getExerciseGuide("Barbell Curl").guide_id, "Barbell_Curl");
-  assert.equal(getExerciseDetail("Barbell Curl").found, false);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM exercises WHERE name = ? COLLATE NOCASE").get("Barbell Curl").n, 0);
+  assert.equal(getExerciseDetail("Barbell Curl").name, "Bicep Curl");
   assert.equal(getExerciseDetail("Bicep Curl").guide.guide_id, "Barbell_Curl");
 });
 

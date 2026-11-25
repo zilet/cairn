@@ -1419,11 +1419,12 @@ export function applyPlanChange(
     revision_baseline?: Map<string, PlanPrescription>;
   } = {}
 ): {
-  action: "updated" | "added" | "swapped" | "removed";
+  action: "updated" | "added" | "swapped" | "removed" | "unchanged";
   day: number;
   exercise: string;
   from?: string;
   updated?: number;
+  unchanged?: "same_lift";
   sets?: number | null;
   prior_sets?: number | null;
   rep_low?: number | null;
@@ -1809,11 +1810,12 @@ function applyPlanSwap(
   change: PlanChange,
   opts: { clamp?: boolean } = {}
 ): {
-  action: "swapped";
+  action: "swapped" | "unchanged";
   day: number;
   exercise: string;
   from: string;
   updated: number;
+  unchanged?: "same_lift";
   sets: number | null;
   rep_low: number | null;
   rep_high: number | null;
@@ -1832,7 +1834,7 @@ function applyPlanSwap(
     .prepare(
       `SELECT pi.id AS id, pi.target_weight AS target_weight, pi.target_seconds AS target_seconds,
             pi.sets AS sets, pi.rep_low AS rep_low, pi.rep_high AS rep_high,
-            e.name AS ex_name, e.mode AS mode
+            pi.exercise_id AS exercise_id, e.name AS ex_name, e.mode AS mode
        FROM plan_items pi JOIN exercises e ON e.id = pi.exercise_id
       WHERE pi.plan_day_id = ? AND (pi.kind IS NULL OR pi.kind != 'cardio')`
     )
@@ -1850,11 +1852,36 @@ function applyPlanSwap(
     dayItems.find((r) => movementKey(r.ex_name) === fromMove);
   if (!match) throw new Error(`"${fromName}" is not on day ${dayNumber} to swap out`);
 
+  // A swap into the lift's own other spelling ("DB Bicep Curl" for a slot holding
+  // "Dumbbell Biceps Curl") is not a rotation: rewriting the slot would stamp it fresh,
+  // replace its note with "Rotated in for <itself>" and re-ground its target. The slot
+  // stays exactly as it is and the apply reports it unchanged (updated 0), so a lone
+  // self-swap reads as nothing to change and one inside a larger proposal never fails it.
+  const sameLift = (id: unknown): boolean => id != null && Number(id) === Number(match.exercise_id);
+  const unchanged = (exercise: string) => ({
+    action: "unchanged" as const,
+    day: dayNumber,
+    exercise,
+    from: match.ex_name,
+    updated: 0,
+    unchanged: "same_lift" as const,
+    sets: match.sets ?? null,
+    rep_low: match.rep_low ?? null,
+    rep_high: match.rep_high ?? null,
+    target_weight: match.target_weight ?? null,
+    target_seconds: match.target_seconds ?? null,
+    mode: match.mode ?? null,
+  });
+  if (sameLift(resolveExerciseName(toName).exercise_id)) return unchanged(match.ex_name);
+
   // Resolve (or create) the incoming movement — its group + mode auto-classify from
   // the name (findOrCreateExercise applies detectExerciseMode when mode is omitted).
   assertNoRedundantPress(dayItems, toName, match.ex_name);
   const requestedMode = change.mode === "timed" || change.mode === "reps" ? change.mode : undefined;
   const toEx = findOrCreateExercise(toName, undefined, undefined, requestedMode);
+  // The create chokepoint has tiers past the resolver (a cleaned spelling, a station
+  // word); one of them landing on the slot's own row is the same no-op.
+  if (sameLift(toEx?.id)) return unchanged(String(toEx.name));
   if (requestedMode && toEx.mode !== requestedMode) {
     throw new Error(`Exercise "${toEx.name}" already uses ${toEx.mode ?? "an unknown"} mode, not ${requestedMode}`);
   }

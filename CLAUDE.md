@@ -629,6 +629,10 @@ optionally `===CAIRN_ACTIONS===` + `{"actions":[…]}`. Everything before the re
   a same-lift respelling may land from an agent, a rewording is PARKED on `suggested_name` for a
   person's yes/no (never dropped, never forced), and "keep" is remembered on `refused_name`.
   Details in `docs/ARCHITECTURE.md` "Exercise identity: one resolver".
+- **A lift's muscle group carries who set it** (`exercises.muscle_group_source`): an agent may fill an
+  empty group or correct a `classifier` guess, never a person's. A swap into a slot's own lift is a
+  no-op, and a standing coverage gap is one declinable ask (`plan-coverage.ts`), never a new floor.
+  Details in `docs/ARCHITECTURE.md` "Exercise identity: one resolver".
 - **The exercise-guide matcher only auto-links a UNIQUE hit**; an implement-only match instead parks
   as a suggestion for a human yes/no, and a hand-confirmed link or refusal both survive re-import.
   Details in `docs/ARCHITECTURE.md`.
